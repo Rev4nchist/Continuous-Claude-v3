@@ -37,23 +37,62 @@ export async function listFiles({ id, sha }, { fetchFn = fetch } = {}) {
   return rows.filter((r) => r.type === 'file').map((r) => ({ path: r.path, size: r.size }));
 }
 
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
 /**
- * Pulls one file. Returns { dir, filePath, manifest }. Throws PullRefusal for an unpinned id or a file over maxBytes.
+ * The HEAD answer of the pinned URL, checked. Returns { declared, linked }.
+ * HEAD runs with redirect 'manual'. Hugging Face answers an LFS or xet file with a 3xx whose x-linked-size is the true size;
+ * its content-length is the redirect body (about 355 bytes), so it is never used on a 3xx. A 200 uses content-length.
+ * A 3xx with no x-repo-commit is allowed: the request URL holds the 40-hex pin, so the server already resolved that commit.
+ */
+async function headPinned(url, { sha, file, maxBytes }, fetchFn) {
+  const head = await fetchFn(url, { method: 'HEAD', redirect: 'manual' });
+  const linked = REDIRECTS.has(head.status);
+  if (!head.ok && !linked) throw new Error(`HEAD ${url} failed: HTTP ${head.status}`);
+  const commit = head.headers.get('x-repo-commit');
+  if (commit && commit !== sha) throw new PullRefusal(`${file}: the server answered for commit ${commit}, not the pinned ${sha}. Refusing.`);
+  const declared = Number(head.headers.get(linked ? 'x-linked-size' : 'content-length'));
+  if (!Number.isFinite(declared) || declared <= 0) throw new PullRefusal(`no ${linked ? 'x-linked-size' : 'Content-Length'} for ${file}: size unknown, refusing. Dave must approve.`);
+  if (declared > maxBytes) throw new PullRefusal(`${file} is ${declared} bytes, over the ${maxBytes} byte limit. Dave must approve a bigger file.`);
+  return { declared, linked };
+}
+
+const overLimit = (file, n, maxBytes) => new PullRefusal(`${file} arrived as ${n} bytes, over the ${maxBytes} byte limit.`); // HEAD lied
+
+/** Reads a body. With getReader the limit is enforced while reading; else arrayBuffer, then the check. */
+async function readBody(res, file, maxBytes) {
+  if (typeof res.body?.getReader !== 'function') {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > maxBytes) throw overLimit(file, buf.length, maxBytes);
+    return buf;
+  }
+  const rd = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (let c = await rd.read(); !c.done; c = await rd.read()) {
+    total += c.value.length;
+    if (total > maxBytes) { await rd.cancel?.(); throw overLimit(file, total, maxBytes); }
+    chunks.push(c.value);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Pulls one file. Returns { dir, filePath, manifest }. Throws PullRefusal for an unpinned id, a file over maxBytes,
+ * or a body whose size differs from the x-linked-size of a redirect answer.
  * deps: { fetchFn, root, now }. Tests inject fetchFn and root; nothing else reaches the network.
  */
 export async function pullPinned({ id, sha, file, maxBytes = MAX_BYTES }, { fetchFn = fetch, root = DEFAULT_ROOT, now = Date.now } = {}) {
   assertPinned({ id, sha, file });
   const url = resolveUrl(id, sha, file);
-  const head = await fetchFn(url, { method: 'HEAD', redirect: 'follow' });
-  if (!head.ok) throw new Error(`HEAD ${url} failed: HTTP ${head.status}`);
-  const declared = Number(head.headers.get('content-length'));
-  if (!Number.isFinite(declared) || declared <= 0) throw new PullRefusal(`no Content-Length for ${file}: size unknown, refusing. Dave must approve.`);
-  if (declared > maxBytes) throw new PullRefusal(`${file} is ${declared} bytes, over the ${maxBytes} byte limit. Dave must approve a bigger file.`);
+  const { declared, linked } = await headPinned(url, { sha, file, maxBytes }, fetchFn);
 
   const res = await fetchFn(url, { redirect: 'follow' });
   if (!res.ok) throw new Error(`GET ${url} failed: HTTP ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > maxBytes) throw new PullRefusal(`${file} arrived as ${buf.length} bytes, over the ${maxBytes} byte limit.`); // HEAD lied
+  const buf = await readBody(res, file, maxBytes);
+  // x-linked-size is the exact file size, so a body of another size is refused. The 200 path keeps the old rule (only the limit):
+  // external-judge.test.mjs F1 declares 5 MB, sends 10 bytes and must still pass.
+  if (linked && buf.length !== declared) throw new PullRefusal(`${file} arrived as ${buf.length} bytes but the server declared ${declared}. Refusing.`);
 
   const dir = path.join(root, datasetDirName(id, sha));
   const filePath = path.join(dir, ...file.split('/'));
@@ -81,7 +120,8 @@ export async function main(argv, { stdout = (s) => console.log(s), stderr = (s) 
       for (const r of await listFiles(f, { fetchFn })) stdout(`${r.size}\t${r.path}`);
       return 0;
     }
-    const { filePath, manifest } = await pullPinned(f, { fetchFn, root });
+    // Only these three flags reach pullPinned: a --maxBytes flag (NaN or a huge number) must never lift the size cap.
+    const { filePath, manifest } = await pullPinned({ id: f.id, sha: f.sha, file: f.file }, { fetchFn, root });
     stdout(`pulled ${manifest.id}@${manifest.sha} ${manifest.file}: ${manifest.bytes} bytes sha256 ${manifest.sha256}`);
     stdout(`stored ${filePath}`);
     return 0;
