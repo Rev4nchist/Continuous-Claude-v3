@@ -391,6 +391,7 @@ export function parseArgs(argv) {
     else throw new Error(`unknown argument ${a}`);
   }
   for (const k of ['sample', 'seed', 'dailyShare', 'showPrompts', 'cap']) if (k in o && !Number.isInteger(o[k])) throw new Error(`--${k} needs an integer`);
+  if ('cap' in o && o.cap < 1) throw new Error('--cap needs an integer of 1 or more');
   return o;
 }
 

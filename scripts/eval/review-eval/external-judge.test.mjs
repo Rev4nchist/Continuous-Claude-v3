@@ -438,6 +438,8 @@ test('H2 parseArgs takes --model opus|sonnet, --cap N and --stop-on-error, and r
   assert.equal(parseArgs(['--stop-on-error']).stopOnError, true);
   assert.throws(() => parseArgs(['--model', 'haiku']), /--model/);
   assert.throws(() => parseArgs(['--cap', 'x']), /integer/);
+  assert.throws(() => parseArgs(['--cap', '0']), /1 or more/);
+  assert.throws(() => parseArgs(['--cap', '-5']), /1 or more/);
   assert.equal(parseArgs(['--out-dir', 'o']).outDir, 'o');
 });
 
