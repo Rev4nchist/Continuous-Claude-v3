@@ -7,10 +7,17 @@
  * (run d7e5b3f1, PR 523, voided by epistemic-reminder). SessionStart text can reach the review
  * model with no trace in the audit, so the session hooks stay silent too.
  *
- * Callers print `{}` (identity-probe prints nothing) and return when it is true:
- * epistemic-reminder, periodic-extract, tldr-read-enforcer (PR 529); session-register,
- * session-start-init-check, session-start-memory-loaders, identity-probe, and the Tier B
- * SessionStart hooks of card engine-run-hook-silence-2.
+ * Callers print `{}` or the hook's own no-op output and return when it is true. The own no-op is
+ * `{"result":"continue"}` for session-start-docker, session-start-continuity and hook-health-monitor;
+ * identity-probe prints nothing. The callers are: epistemic-reminder, periodic-extract,
+ * tldr-read-enforcer (PR 529); session-register, session-start-init-check,
+ * session-start-memory-loaders, identity-probe, and the Tier B SessionStart hooks of card
+ * engine-run-hook-silence-2.
+ *
+ * tldr-read-enforcer is the one caller that has a deny branch. It may import this module because
+ * seat ruling 1 made it ALLOW a Read under the engine host: its deny text would be hook text in
+ * the tool call and void the engine run. It is an exception by ruling, not a guard that keeps its
+ * behaviour (see the rule below).
  *
  * Signal: the payload `hook_event_name`. cursor-agent sends camelCase names; Claude Code sends
  * PascalCase only (headless baseline of card engine-run-hook-silence).
@@ -32,7 +39,7 @@
  *
  * NO DENY GUARD MAY IMPORT THIS (seat ruling C3): destructive-command-guard, decision-gate,
  * file-claims, package-install-guard, pre-pr-gate, rule-router and any other guard keep their
- * behaviour under the engine.
+ * behaviour under the engine. The one exception is tldr-read-enforcer (seat ruling 1, above).
  */
 
 const ENGINE_EVENT_NAMES: ReadonlySet<string> = new Set(['sessionStart', 'postToolUse', 'sessionEnd', 'preToolUse']);

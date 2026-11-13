@@ -26,7 +26,7 @@ describe('isEngineHost', () => {
     expect(isEngineHost({ hook_event_name: name })).toBe(true);
   });
 
-  it.each(['SessionStart', 'PostToolUse', 'SessionEnd', 'PreToolUse', 'posttooluse', 'POSTTOOLUSE'])(
+  it.each(['SessionStart', 'PostToolUse', 'SessionEnd', 'PreToolUse', 'UserPromptSubmit', 'Stop', 'posttooluse', 'POSTTOOLUSE'])(
     'Claude Code or other-case name %s gives false',
     (name) => {
       expect(isEngineHost({ hook_event_name: name })).toBe(false);

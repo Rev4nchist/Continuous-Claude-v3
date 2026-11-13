@@ -54,6 +54,10 @@ const ENV_INHERITED_MARKERS = [
   'BRAINTRUST_SPAN_ID',
 ];
 
+/** Markers whose value can hold a secret: the row records only that they are set. */
+const SECRET_MARKERS = new Set(['DATABASE_URL']);
+const MASKED = '[set]';
+
 function readStdin(): string {
   try {
     // fd 0, sync — hooks get a complete payload up front, no streaming needed.
@@ -102,15 +106,18 @@ function main(): void {
     payload = {};
   }
 
-  // Under a Cursor host (the review engine) write no row: the row holds the raw DATABASE_URL
-  // value and can land in the reviewed tree, which the review model reads.
+  // Under a Cursor host (the review engine) write no row: the row can land in the reviewed tree,
+  // which the review model reads. The DATABASE_URL value is masked in every session (SECRET_MARKERS).
   if (isEngineHost(payload)) return;
 
   const cwd = (payload.cwd as string) || process.cwd();
 
   const env: Record<string, string | null> = {};
   for (const k of ENV_INHERITED_MARKERS) {
-    env[k] = process.env[k] ?? null;
+    const v = process.env[k] ?? null;
+    // A database address can hold a user, a password and a host name. The row needs presence only
+    // (seat ruling 2026-11-12): write the fixed text for a non-empty value, null for unset or empty.
+    env[k] = SECRET_MARKERS.has(k) ? (v ? MASKED : null) : v;
   }
 
   const row = {

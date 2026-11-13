@@ -383,6 +383,8 @@ var ENV_INHERITED_MARKERS = [
   // exported by the user profile -> proxy for Q2
   "BRAINTRUST_SPAN_ID"
 ];
+var SECRET_MARKERS = /* @__PURE__ */ new Set(["DATABASE_URL"]);
+var MASKED = "[set]";
 function readStdin() {
   try {
     return readFileSync(0, "utf-8");
@@ -418,7 +420,8 @@ function main() {
   const cwd = payload.cwd || process.cwd();
   const env = {};
   for (const k of ENV_INHERITED_MARKERS) {
-    env[k] = process.env[k] ?? null;
+    const v = process.env[k] ?? null;
+    env[k] = SECRET_MARKERS.has(k) ? v ? MASKED : null : v;
   }
   const row = {
     ts: (/* @__PURE__ */ new Date()).toISOString(),
