@@ -73,7 +73,11 @@ export function isHarnessPath(filePath: string): boolean {
   // others (the same split that put one repo under two project keys and cost
   // 5,737 rows). Normalize before matching, and lowercase because Windows paths
   // are case-insensitive.
-  const p = filePath.replace(/\\/g, '/').toLowerCase();
+  //
+  // A claim key is repo-relative (shared/claim-target.ts), so a harness file can arrive as
+  // `.claude/hooks/x.ts` with no leading slash. The segment test below needs a slash before
+  // `.claude`: put one there. An absolute path still matches, and so does the settings basename.
+  const p = `/${filePath.replace(/\\/g, '/')}`.toLowerCase();
 
   for (const dir of HARNESS_DIRS) {
     if (p.includes(`/.claude/${dir}/`)) return true;

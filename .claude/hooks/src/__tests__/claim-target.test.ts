@@ -23,6 +23,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { resolveClaimKey } from '../shared/claim-target.js';
 import { canonicalProject } from '../shared/session-id.js';
+import { leaseFor } from '../shared/leases.js';
 
 let root: string;
 
@@ -154,6 +155,16 @@ describe('resolveClaimKey', () => {
     const viaShort = resolveClaimKey(join(short, 'src', 'x.ts'));
     expect(viaShort).toEqual(resolveClaimKey(join(a, 'src', 'x.ts')));
     expect(viaShort?.project).toBe(canonicalProject(a));
+  });
+
+  it('11. gives a claim the same lease class as the absolute path did (harness files keep the long lease)', () => {
+    const a = makeRepo('a');
+    for (const rel of ['.claude/hooks/src/x.ts', '.claude/rules/r.md', '.claude/skills/s/SKILL.md', '.claude/settings.json', 'src/app/page.tsx']) {
+      const abs = join(a, ...rel.split('/'));
+      const key = resolveClaimKey(abs);
+      expect(key).not.toBeNull();
+      expect(leaseFor(key!.filePath)).toEqual(leaseFor(abs));
+    }
   });
 
   it('9. returns null for a broken .git file and does not throw', () => {

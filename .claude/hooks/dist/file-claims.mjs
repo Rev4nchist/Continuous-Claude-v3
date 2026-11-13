@@ -5995,7 +5995,7 @@ var FILE_LEASE_MS = 10 * 60 * 1e3;
 var HARNESS_LEASE_MS = 60 * 60 * 1e3;
 var HARNESS_DIRS = ["hooks", "rules", "skills"];
 function isHarnessPath(filePath) {
-  const p = filePath.replace(/\\/g, "/").toLowerCase();
+  const p = `/${filePath.replace(/\\/g, "/")}`.toLowerCase();
   for (const dir of HARNESS_DIRS) {
     if (p.includes(`/.claude/${dir}/`)) return true;
   }
