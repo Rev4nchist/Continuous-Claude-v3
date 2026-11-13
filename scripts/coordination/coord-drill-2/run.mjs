@@ -346,9 +346,18 @@ async function main() {
   console.log(`coord-drill-2 run ${runId}, rows ${opts.rows.join(',')}, node ${process.version}, repo HEAD ${head}`);
   try {
     sandbox = makeSandbox(runId);
+    RUN_STATE.sandbox = sandbox;
+    RUN_STATE.opts = opts;
     let dbError = null;
     if (needDb) {
-      try { scratch = createScratch(); console.log(`scratch database ${scratch.name} (${maskUrl(scratch.url)})`); } catch (e) { dbError = e; }
+      try { scratch = createScratch(); RUN_STATE.scratch = scratch; console.log(`scratch database ${scratch.name} (${maskUrl(scratch.url)})`); } catch (e) { dbError = e; }
+    }
+    // Test of the signal handler: Windows cannot send a SIGINT that a handler sees, so the test asks the runner to
+    // raise it here, at the point where a database and a sandbox exist. main then waits; the handler exits.
+    const testSignal = process.env.COORD_DRILL_TEST_SIGNAL;
+    if (testSignal === 'SIGINT' || testSignal === 'SIGTERM') {
+      process.emit(testSignal, testSignal);
+      await new Promise(() => {});
     }
     const url = scratch?.url ?? null;
     const ctx = {
@@ -361,6 +370,7 @@ async function main() {
       },
       log: (line) => console.error(`  [drill] ${line}`),
     };
+    RUN_STATE.ctx = ctx;
     for (const id of opts.rows) {
       if (ctx.aborted) { // an earlier scenario timed out and may still be running: no row may run against the shared state
         rows.push(errorRow(id, '(scenario not run)', 'skipped after timeout', 'drill not aborted'));
@@ -374,7 +384,10 @@ async function main() {
     harnessFailed = true;
     console.log(`HARNESS ERROR: ${errText(e)}`);
   } finally {
-    harnessFailed = (await cleanUp(scratch, sandbox, opts)) || harnessFailed;
+    if (!RUN_STATE.cleaning) {
+      RUN_STATE.cleaning = true; // a signal from here on finds the clean-up started and does not run it twice
+      harnessFailed = (await cleanUp(scratch, sandbox, opts)) || harnessFailed;
+    }
   }
   // Both checks run before any ROW line prints. A failed check makes the run invalid: say so first.
   const report = [];
@@ -408,6 +421,29 @@ function writeSummary(file, summary) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(summary, null, 2)}\n`);
 }
+
+// ---------------------------------------------------------------- Ctrl-C and SIGTERM
+
+// What a signal handler must clean up: set by main as each part comes to exist.
+const RUN_STATE = { scratch: null, sandbox: null, opts: null, ctx: null, cleaning: false };
+
+/**
+ * On SIGINT or SIGTERM: stop new children (abortDrill), drop the scratch database, remove the sandbox, exit 130
+ * (SIGINT) or 143 (SIGTERM). A child that runs now (spawnSync) gets the console Ctrl-C too; the handler runs when
+ * it returns. When main's clean-up has started, the handler only exits. A second signal exits at once.
+ */
+async function onSignal(signal) {
+  const code = signal === 'SIGINT' ? 130 : 143;
+  if (RUN_STATE.cleaning) { console.log(`INTERRUPTED (${signal}): clean-up already running; exit ${code}`); process.exit(code); }
+  RUN_STATE.cleaning = true;
+  process.once(signal, () => process.exit(code));
+  abortDrill(RUN_STATE.ctx, `interrupted by ${signal}`);
+  console.log(`INTERRUPTED (${signal}): dropping the scratch database and removing the sandbox`);
+  const failed = await cleanUp(RUN_STATE.scratch, RUN_STATE.sandbox, RUN_STATE.opts ?? { keepDb: false });
+  console.log(`INTERRUPTED: clean-up ${failed ? 'FAILED (see HARNESS ERROR above)' : 'done'}; no verdict; exit ${code}`);
+  process.exit(code);
+}
+for (const s of ['SIGINT', 'SIGTERM']) process.once(s, () => { onSignal(s); });
 
 main().then((code) => { process.exitCode = code; }).catch((e) => {
   console.log(`HARNESS ERROR: ${errText(e)}`);

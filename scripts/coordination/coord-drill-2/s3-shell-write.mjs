@@ -73,7 +73,8 @@ function classify(r) {
 }
 
 function callHook(ctx, hook, body) {
-  const r = runNode(hook, [], { env: ctx.env, input: body });
+  // cwd in the sandbox, as in s2: a cwd-relative write by the hook lands there, never in the repo.
+  const r = runNode(hook, [], { env: ctx.env, input: body, cwd: ctx.sandbox.dir });
   return { ...r, ...classify(r), text: r.out.trim() };
 }
 

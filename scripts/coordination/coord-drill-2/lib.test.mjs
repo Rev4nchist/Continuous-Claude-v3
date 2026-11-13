@@ -9,6 +9,13 @@
  *   1. gainedText returns '' on a read error again: diffRealHome then reports nothing for a changed, unreadable file.
  *   2. tailText returns '' on a read error again: scanRealHomeChanged counts the file as scanned, not unreadable.
  *   3. scanIncomplete is not set when a changed file is unreadable: run.mjs would print "SANDBOX: 0 writes".
+ * childEnv, the guard that keeps every child off the live database (seat review 2026-11-13):
+ *   4. one of the three database variables keeps the inherited (live) url, or is missing.
+ *   5. childEnv accepts a url that is not a scratch database.
+ *   6. a caller's `extra` (any letter case) moves a sandbox or database key.
+ *   7. a sandbox key (HOME, USERPROFILE, trace dir, guard log) is not the sandbox path.
+ * result(), the row object:
+ *   8. a broken or missing positive control lets a PASS or FAIL through instead of ERROR.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +23,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { diffRealHome, scanRealHomeChanged, snapshotRealHome } from './lib.mjs';
+import { HarnessError, childEnv, diffRealHome, makeSandbox, result, scanRealHomeChanged, snapshotRealHome } from './lib.mjs';
 
 const MARKER = 'drill-test-marker-0001';
 const isWin = process.platform === 'win32';
@@ -92,4 +99,68 @@ test('scanRealHomeChanged on readable files is complete (control for the test ab
   assert.equal(scan.scanned, 1);
   assert.equal(scan.hits.length, 1);
   assert.equal(scan.scanIncomplete, false);
+});
+
+// ---------------------------------------------------------------- childEnv
+
+const SCRATCH = 'postgresql://u:p@localhost:5432/lanes_pr1_deadbeef';
+const LIVE = 'postgresql://u:p@localhost:5432/continuous_claude';
+const DB_VARS = ['CONTINUOUS_CLAUDE_DB_URL', 'DATABASE_URL', 'OPC_POSTGRES_URL'];
+
+/** Run fn with the three database variables set to the live-looking url, then restore them. */
+function withLiveEnv(fn) {
+  const saved = Object.fromEntries(DB_VARS.map((k) => [k, process.env[k]]));
+  for (const k of DB_VARS) process.env[k] = LIVE;
+  try { return fn(); } finally {
+    for (const k of DB_VARS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+}
+
+function sandboxFor(t) {
+  const sb = makeSandbox(`t${process.pid}`);
+  t.after(() => sb.cleanup());
+  return sb;
+}
+
+test('childEnv sets all three database variables to the scratch url, over an inherited live url', (t) => {
+  const sb = sandboxFor(t);
+  const env = withLiveEnv(() => childEnv(SCRATCH, sb));
+  for (const k of DB_VARS) assert.equal(env[k], SCRATCH, `${k} is not the scratch url`);
+});
+
+test('childEnv refuses a url that is not a scratch database, and a missing url', (t) => {
+  const sb = sandboxFor(t);
+  assert.throws(() => childEnv(LIVE, sb), HarnessError);
+  assert.throws(() => childEnv(null, sb), HarnessError);
+});
+
+test('childEnv refuses an extra that names a sandbox or database key, in any letter case', (t) => {
+  const sb = sandboxFor(t);
+  for (const k of ['DATABASE_URL', 'database_url', 'Home', 'USERPROFILE', 'ccv3_guard_decisions_log']) {
+    assert.throws(() => childEnv(SCRATCH, sb, { [k]: LIVE }), HarnessError, `extra ${k} was accepted`);
+  }
+});
+
+test('childEnv points the home and the hook logs into the sandbox', (t) => {
+  const sb = sandboxFor(t);
+  const env = childEnv(SCRATCH, sb);
+  assert.equal(env.HOME, sb.homeDir);
+  assert.equal(env.USERPROFILE, sb.homeDir);
+  assert.equal(env.CCV3_GUARD_DECISIONS_LOG, sb.guardLog);
+  assert.equal(env.CCV3_HOOK_TRACE_DIR, sb.traceDir);
+  for (const k of ['HOME', 'CCV3_GUARD_DECISIONS_LOG', 'CCV3_HOOK_TRACE_DIR']) {
+    assert.ok(path.resolve(env[k]).startsWith(path.resolve(sb.dir)), `${k} is outside the sandbox`);
+  }
+});
+
+// ---------------------------------------------------------------- result()
+
+test('a broken or missing positive control makes the row ERROR, whatever verdict was asked', () => {
+  for (const verdict of ['PASS', 'FAIL']) {
+    const broken = result({ id: 't', verdict, reason: 'r', control: { name: 'c', ok: false, detail: 'd' } });
+    assert.equal(broken.verdict, 'ERROR', `${verdict} with a broken control`);
+    const none = result({ id: 't', verdict, reason: 'r' });
+    assert.equal(none.verdict, 'ERROR', `${verdict} with no control`);
+  }
+  assert.equal(result({ id: 't', verdict: 'FAIL', reason: 'r', control: { name: 'c', ok: true } }).verdict, 'FAIL');
 });
