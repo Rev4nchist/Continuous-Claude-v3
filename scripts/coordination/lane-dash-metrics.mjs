@@ -12,8 +12,8 @@
  * Flat long format. One row is one value or one string. Every row has exactly these seven columns, in this order:
  *   id     unique key, "<prefix>.<name>". Lists: "<prefix>.row.<rank>.<field>". Bars: "<prefix>.bar.<rank>[.<series>]".
  *          Days: "<prefix>.day.<rank>". Ticks: "<prefix>.tick.<rank>". One tile is the rows that share one prefix:
- *          1 wait, 2 pile, 3 never, 4 wip, 5 p0, 6 proj, 7 assign, page.
- *   tile   1 to 7 (a number), or "page" for the takeaway and the data-age lines.
+ *          1 wait, 2 pile, 3 never, 4 wip, 5 p0, 6 proj, 7 assign, 8 verdict, 9 cat, 10 daily, page.
+ *   tile   1 to 10 (a number), or "page" for the takeaway and the data-age lines.
  *   kind   figure  a number the page prints big; value is the number, text its display form ("+3", "2 of 5").
  *          text    a label, note or sentence; text is the string (value may repeat a number inside it).
  *          chip    a status word with a tone; text is the word.
@@ -32,6 +32,13 @@
  * log_rows), so the page can size its loading boxes without reading targets.json. Tile 3 and tile 2 and tile 7
  * write axis ticks (<prefix>.tick.<rank>) for their charts. The tile column mixes numbers and the string "page":
  * compare it as a string, or use the id prefix.
+ * Tiles 8 to 10 (the progress page, 2026-11-13) leave out cards on track "reminders", so the category nets sum to
+ * verdict.net and the daily rows sum to the verdict week. Tile 2 still counts them. Names and counts only: no lane
+ * title or id. 8 verdict: verdict.net, .growth, .sentence, .week, .waited, .prior, .share (only while the net and the
+ * top category net are above 0), .note (reminders left out). 9 cat: cat.row.<k>.name|closed|total|meta|bands and
+ * .chip.growth (net not 0), one row per category with cards, "No category yet" (key unassigned) always last, cap
+ * category_rows (page.rows.cat), cat.more, cat.note. 10 daily: daily.row.<k>.label|created|closed|net, 7 days oldest
+ * first, the last "today so far"; daily.note. The page no longer draws tiles 2 and 6, but their rows stay.
  * Stale text needs the browser clock, so page.stale.* and page.fresh.sentence are templates with the slot
  * "{h}" (HOURS_TOKEN). The page fills the slot with hoursOld. The Node functions staleChipText, staleSentence
  * and freshSentence are the tested source of the wording.
@@ -45,6 +52,9 @@ const HOUR_MS = 3_600_000;
 
 export const DEFAULT_SHOW_ROWS = 4;
 export const DEFAULT_PROJECT_ROWS = 4;
+export const DEFAULT_CATEGORY_ROWS = 9;
+export const NO_CATEGORY_KEY = 'unassigned';
+export const NO_CATEGORY_NAME = 'No category yet';
 export const HOURS_TOKEN = '{h}';
 export const TILE_COLUMNS = ['id', 'tile', 'kind', 'rank', 'value', 'text', 'tone'];
 
@@ -198,6 +208,12 @@ function flow(lanes, w) {
   return { created, done, net: created - done };
 }
 
+/** Lanes done in the window whose first claim came edgeDays or more after creation (the pull-rate count). */
+function waitedIn(lanes, w, edgeDays) {
+  return lanes.filter((l) => inWindow(l.done_day, w) && l.first_claim_at != null
+    && Date.parse(l.first_claim_at) - Date.parse(l.created_at) >= edgeDays * DAY_MS).length;
+}
+
 export function pileTile(lanes, meta, targets) {
   const days = num(targets, 'window_days', 7);
   const w = windowOf(meta.today, days);
@@ -205,8 +221,7 @@ export function pileTile(lanes, meta, targets) {
   const { created, done, net } = flow(lanes, w);
   const before = addDays(w.start, -1);
   const openStart = lanes.filter((l) => l.created_day <= before && !(l.done_day != null && l.done_day <= before)).length;
-  const waited = lanes.filter((l) => inWindow(l.done_day, w) && l.first_claim_at != null
-    && Date.parse(l.first_claim_at) - Date.parse(l.created_at) >= edgeDays * DAY_MS).length;
+  const waited = waitedIn(lanes, w, edgeDays);
   const prior = hasPriorWindow(meta.history_start, meta.today, days) ? flow(lanes, priorWindowOf(meta.today, days)) : null;
   return {
     created, done, net, openStart, openNow: meta.open_check, waited, edgeDays, windowDays: days, prior, totalLanes: lanes.length,
@@ -355,6 +370,89 @@ export function assignmentTile(assignments, meta, targets) {
     prior,
     windowDays: days,
   };
+}
+
+// ---------------------------------------------------------------- tiles 8 to 10: verdict, categories, days
+
+/*
+ * One lane set for all three: every lane except the cards on track `reminders` (they recur and never close).
+ * So the category nets sum to the verdict net, and the day table sums to the verdict week.
+ * Tile 2 keeps its own count with reminders in it.
+ */
+const isReminder = (l) => l.track === 'reminders';
+const workLanes = (lanes) => lanes.filter((l) => !isReminder(l));
+const categoryKey = (l) => l.project ?? NO_CATEGORY_KEY;
+
+export function verdictTile(lanes, meta, targets) {
+  const days = num(targets, 'window_days', 7);
+  const work = workLanes(lanes);
+  const w = windowOf(meta.today, days);
+  const edgeDays = num(targets, 'age_edge_1', 1);
+  const prior = hasPriorWindow(meta.history_start, meta.today, days) ? flow(work, priorWindowOf(meta.today, days)) : null;
+  return {
+    ...flow(work, w), waited: waitedIn(work, w, edgeDays), edgeDays, prior, windowDays: days,
+    reminders: lanes.length - work.length, empty: work.length === 0,
+  };
+}
+
+function categoryOf(key, name, mine, w, edgeDays) {
+  const open = mine.filter(isOpen);
+  const done = mine.filter((l) => !isOpen(l));
+  const { created, done: closedWindow, net } = flow(mine, w);
+  const days = done.map((l) => l.done_day).filter(Boolean).sort();
+  const bands = { P0: 0, P1: 0, P2: 0, none: 0 };
+  for (const l of open) bands[bands[l.band] === undefined ? 'none' : l.band]++;
+  return {
+    key, name, total: mine.length, closed: done.length, open: open.length,
+    blocked: open.filter((l) => l.state === 'blocked').length, created, closedWindow, net,
+    waited: waitedIn(mine, w, edgeDays), lastClose: days.length ? days[days.length - 1] : null, bands,
+  };
+}
+
+/**
+ * One row per category. Every project counts, Done or not (no visible_until filter), plus any project key a lane
+ * carries that the list lacks. A category with no card is left out, except "No category yet" (key unassigned):
+ * always shown, always last. Order: open cards, most first; a tie keeps the project-list order.
+ * The cap (category_rows) cuts from the end of the sorted list and never cuts "No category yet".
+ */
+export function categoryRows(projects, lanes, meta, targets) {
+  const days = num(targets, 'window_days', 7);
+  const w = windowOf(meta.today, days);
+  const edgeDays = num(targets, 'age_edge_1', 1);
+  const cap = num(targets, 'category_rows', DEFAULT_CATEGORY_ROWS);
+  const work = workLanes(lanes);
+  const byKey = new Map(projects.map((p) => [p.key, p]));
+  // Same rule as tile 6: a Parked chip says it, so " (parked)" leaves the name.
+  const nameOf = (p) => (p.parked ? String(p.name ?? p.key).replace(/\s*\(parked\)\s*$/i, '') : String(p.name ?? p.key));
+  const keys = [...new Set([...projects.map((p) => p.key), ...work.map(categoryKey)])].filter((k) => k !== NO_CATEGORY_KEY);
+  const of = (k, name) => categoryOf(k, name, work.filter((l) => categoryKey(l) === k), w, edgeDays);
+  const sorted = keys
+    .map((k) => ({ ...of(k, byKey.has(k) ? nameOf(byKey.get(k)) : k), parked: Boolean(byKey.get(k)?.parked) }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.open - a.open);
+  const none = of(NO_CATEGORY_KEY, NO_CATEGORY_NAME);
+  const keep = Math.max(0, cap - 1);
+  return {
+    rows: [...sorted.slice(0, keep), none],
+    all: [...sorted, none],
+    hidden: Math.max(0, sorted.length - keep),
+    cap,
+    priorKnown: hasPriorWindow(meta.history_start, meta.today, days),
+    windowDays: days,
+  };
+}
+
+/** The window's days, oldest first, with created and closed counts. The last day is today, still running. */
+export function dailyRows(lanes, meta, targets) {
+  const days = num(targets, 'window_days', 7);
+  const w = windowOf(meta.today, days);
+  const work = workLanes(lanes);
+  return Array.from({ length: days }, (_, i) => {
+    const day = addDays(w.start, i);
+    const created = work.filter((l) => l.created_day === day).length;
+    const closed = work.filter((l) => l.done_day === day).length;
+    return { day, label: i === days - 1 ? 'today so far' : formatDay(day), created, closed, net: created - closed };
+  });
 }
 
 // ---------------------------------------------------------------- the tiles document rows
@@ -587,11 +685,102 @@ function tile7(add, c) {
   });
 }
 
+function verdictSentence(v) {
+  if (v.empty) return 'No cards in this export.';
+  const tail = `net ${sign(v.net)} in ${v.windowDays} days.`;
+  if (v.net > 0) return `We create more cards than we close: ${tail}`;
+  if (v.net < 0) return `We close more cards than we create: ${tail}`;
+  return `We create and close the same number of cards: ${tail}`;
+}
+
+/**
+ * The category with the largest net gain, only while the page net and that net are both above 0. It names the
+ * category and its own net, never "N of the page net": other categories can shrink, so a part can pass the whole.
+ */
+function shareLine(v, all) {
+  if (v.net <= 0) return null;
+  const top = all.reduce((best, r) => (best === null || r.net > best.net ? r : best), null);
+  return top && top.net > 0 ? `Largest net gain: ${cleanText(top.name)}, ${sign(top.net)}.` : null;
+}
+
+function tile8(add, c, cats) {
+  const v = verdictTile(c.lanes, c.meta, c.targets);
+  const g = growthState(v.net, v.prior !== null);
+  const w = v.windowDays;
+  const sentence = verdictSentence(v);
+  add('verdict.net', 'figure', { value: v.net, text: sign(v.net) });
+  add('verdict.growth', 'chip', { text: g.word, tone: g.tone });
+  add('verdict.sentence', 'text', { text: sentence });
+  const week = `In the ${w} days to ${formatDay(c.meta.today)}, today so far: ${v.created} created, ${v.done} closed.`;
+  const waited = v.done === 0 ? `No cards closed in the last ${w} days.`
+    : `${v.waited} of ${v.done} closed ${pluralize(v.done, 'card')} waited ${v.edgeDays} ${pluralize(v.edgeDays, 'day')} or more.`;
+  if (!v.empty) {
+    add('verdict.week', 'text', { text: week });
+    add('verdict.waited', 'text', { value: v.waited, text: waited });
+  }
+  if (v.prior) add('verdict.prior', 'text', { text: `Earlier ${w} days: ${v.prior.created} created, ${v.prior.done} closed, net ${sign(v.prior.net)}.` });
+  const share = shareLine(v, cats.all);
+  if (share) add('verdict.share', 'text', { text: share });
+  if (v.reminders > 0) {
+    add('verdict.note', 'text', { value: v.reminders, text: `${v.reminders} reminder ${pluralize(v.reminders, 'card')} ${v.reminders === 1 ? 'is' : 'are'} left out.` });
+  }
+  add('verdict.summary', 'text', { text: sentence });
+  add('verdict.detail', 'text', { text: v.empty ? sentence : [sentence, week, waited, share].filter(Boolean).join(' ') });
+}
+
+function categoryMeta(r, windowDays) {
+  return [
+    r.blocked > 0 ? `${r.open} open, ${r.blocked} blocked` : `${r.open} open`,
+    `${windowDays} days: ${r.created} created, ${r.closedWindow} closed, net ${sign(r.net)}`,
+    r.closedWindow > 0 ? `${r.waited} waited` : null,
+    r.lastClose ? `last close ${formatDay(r.lastClose)}` : null,
+  ].filter(Boolean).join(' · ');
+}
+
+function tile9(add, c, cats) {
+  cats.rows.forEach((r, i) => {
+    const k = i + 1;
+    const pre = `cat.row.${k}`;
+    add(`${pre}.name`, 'row', { rank: k, text: cleanText(r.name) });
+    add(`${pre}.closed`, 'row', { rank: k, value: r.closed, text: `${r.closed} of ${r.total} closed` });
+    add(`${pre}.total`, 'row', { rank: k, value: r.total });
+    if (r.parked) add(`${pre}.chip.parked`, 'chip', { rank: k, text: 'Parked', tone: 'neutral' });
+    if (r.net !== 0) add(`${pre}.chip.growth`, 'chip', { rank: k, value: r.net, text: growthState(r.net, cats.priorKnown).word, tone: growthState(r.net, cats.priorKnown).tone });
+    add(`${pre}.meta`, 'row', { rank: k, value: r.open, text: categoryMeta(r, cats.windowDays) });
+    const b = r.bands;
+    add(`${pre}.bands`, 'row', { rank: k, text: `Open by band: P0 ${b.P0} · P1 ${b.P1} · P2 ${b.P2} · none ${b.none}` });
+  });
+  if (cats.hidden > 0) add('cat.more', 'text', { value: cats.hidden, text: `${cats.hidden} more ${cats.hidden === 1 ? 'category' : 'categories'} not shown` });
+  add('cat.note', 'text', { text: 'Closed includes dropped cards. Reopened cards count as open. Reminder cards are left out.' });
+  const n = cats.rows.length;
+  add('cat.summary', 'text', { text: `${n} ${n === 1 ? 'category' : 'categories'}, most open cards first, ${NO_CATEGORY_NAME} last.` });
+  add('cat.detail', 'text', {
+    text: cats.rows.map((r) => `${cleanText(r.name)}: ${r.closed} of ${r.total} closed, ${r.open} open.`).join(' '),
+  });
+}
+
+function tile10(add, c) {
+  const days = dailyRows(c.lanes, c.meta, c.targets);
+  days.forEach((d, i) => {
+    const k = i + 1;
+    add(`daily.row.${k}.label`, 'row', { rank: k, text: d.label });
+    add(`daily.row.${k}.created`, 'row', { rank: k, value: d.created, text: String(d.created) });
+    add(`daily.row.${k}.closed`, 'row', { rank: k, value: d.closed, text: String(d.closed) });
+    add(`daily.row.${k}.net`, 'row', { rank: k, value: d.net, text: sign(d.net) });
+  });
+  const beat = days.filter((d) => d.closed > d.created).length;
+  add('daily.note', 'text', { text: "Rebuilt from today's card states." });
+  add('daily.summary', 'text', { text: `In the ${days.length} days to ${formatDay(c.meta.today)}, closed beat created on ${beat} of ${days.length} days.` });
+}
+
 function pageRows(add, c, q, p) {
   add('page.takeaway', 'text', { text: takeaway(q, p) });
   add('page.data_from', 'text', { text: c.stamp });
   // Row limits, so the page can size its loading boxes without reading targets.json.
-  for (const [id, key, fallback] of [['wait', 'show_rows', DEFAULT_SHOW_ROWS], ['proj', 'project_rows', DEFAULT_PROJECT_ROWS], ['log', 'log_rows', 12]]) {
+  for (const [id, key, fallback] of [
+    ['wait', 'show_rows', DEFAULT_SHOW_ROWS], ['proj', 'project_rows', DEFAULT_PROJECT_ROWS], ['log', 'log_rows', 12],
+    ['cat', 'category_rows', DEFAULT_CATEGORY_ROWS],
+  ]) {
     const n = num(c.targets, key, fallback);
     add(`page.rows.${id}`, 'figure', { value: n, text: String(n) });
   }
@@ -624,6 +813,10 @@ export function buildTileRows(input) {
   tile5(mk(5), c);
   tile6(mk(6), c);
   tile7(mk(7), c);
+  const cats = categoryRows(c.projects, c.lanes, c.meta, c.targets);
+  tile8(mk(8), c, cats);
+  tile9(mk(9), c, cats);
+  tile10(mk(10), c);
   pageRows(mk('page'), c, q, p);
   return rows;
 }

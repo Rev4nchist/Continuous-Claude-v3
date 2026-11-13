@@ -88,6 +88,19 @@
       "battery": true,
       "hidden": true,
       "wake": false
+    },
+    {
+      "name": "CCv3-Open-PRs",
+      "script": ".claude/scripts/scheduled/scheduled-open-prs.ps1",
+      "trigger": "every 15m",
+      "execLimitMin": 10,
+      "allowedExit": [0],
+      "warnExit": [10],
+      "maxAgeHours": 1,
+      "llm": false,
+      "battery": true,
+      "hidden": true,
+      "wake": false
     }
   ]
 }
