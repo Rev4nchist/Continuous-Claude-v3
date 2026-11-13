@@ -6,8 +6,9 @@
       "key": "review-engine",
       "name": "Review engine (retire CodeRabbit)",
       "goal": "Replace CodeRabbit with the CCv3 local review engine (lane map line 3).",
+      "next_goal": "Finish the backfill of reviewed pull requests, then compare the engine with CodeRabbit on the answer key.",
       "done": "re-cr-retire-gate is decided per band (pre-pr CLI, then HIGH, then CRITICAL) and every wave 1-10 lane it depends on is done.",
-      "idRe": "^(re-|review-engine-|review-eval-|review-matrix-|review-factory-|review-sota-|review-capacity-|review-budget-|review-merge-gate|review-status-|local-review|engine-|hf-|seeded-vuln|prepr-(?!coord)|pre-pr-|scanner-|gate-|coderabbit-|ready-outside-diff|force-high-security|reviews-7d|autoconfirm-|cli-spend)",
+      "idRe": "^(re-|review-engine-|review-eval-|review-matrix-|review-factory-|review-sota-|review-capacity-|review-budget-|review-merge-gate|review-status-|local-review|engine-|hf-|seeded-vuln|prepr-(?!coord)|pre-pr-|scanner-|gate-|coderabbit-|ready-outside-diff|force-high-security|reviews-7d|autoconfirm-|cli-spend|sweep-|gold-|test-globs)",
       "ids": [],
       "tracks": [
         "review-engine"
@@ -23,8 +24,9 @@
       "key": "guard-hardening",
       "name": "Guards and security",
       "goal": "Close the known bypass and false-positive classes of the destructive-command, package-install and scoped-cleanup guards.",
+      "next_goal": "Stop two sessions from writing the same file through the shell.",
       "done": "Every finding listed in the open guard lanes has a failing-then-passing test and a built-hook payload proof; the 3 live false-positive repros stop firing.",
-      "idRe": "^(?:.*-)?guard(?:-|$)|^destructive-|^package-guard|^scoped-cleanup|^dc-config-guard|^agent-self-approve|^security-|^cf-|^cloudflare-",
+      "idRe": "^(?:.*-)?guard(?:-|$)|^destructive-|^package-guard|^scoped-cleanup|^dc-config-guard|^agent-self-approve|^security-|^cf-|^cloudflare-|^guards-|^identity-probe",
       "ids": [
         "guard-prompt-text-fp"
       ],
@@ -43,8 +45,9 @@
       "key": "lane-board",
       "name": "Lane board and reminders",
       "goal": "Dave plans and reads the work from his phone: bands, kanban, timed reminders, Done column, dashboard.",
+      "next_goal": "Build real timed reminders on the lane board.",
       "done": "Reminders fire and sync to Notion (PR-E), band page shows the cap, and the dashboard hub is published and refreshed.",
-      "idRe": "^(lane-|timed-reminders|desktop-board|pr-f-test|per-project-lanes|render-board)",
+      "idRe": "^(lane-|timed-reminders|desktop-board|pr-f-test|per-project-lanes|render-board|board-|kanban-)",
       "ids": [],
       "tracks": [],
       "terminalLanes": [
@@ -57,11 +60,26 @@
       "focus": false
     },
     {
+      "key": "coordination",
+      "name": "Multi-session coordination",
+      "goal": "Several sessions share one tree without stepping on each other: lanes, claims, file guards and messages.",
+      "next_goal": "Land the answer-key guard and the file guard for every writer, then run the second coordination drill.",
+      "done": "The coordination drill passes every row, and the file guard covers every writer.",
+      "idRe": "^(coord-|std-coordination|say-|keeper-)",
+      "ids": [],
+      "tracks": [],
+      "terminalLanes": [],
+      "parked": false,
+      "proposed": true,
+      "focus": false
+    },
+    {
       "key": "pr-flow",
       "name": "PR, pathway and landing flow",
       "goal": "A PR goes from branch to landed with one clear question per decision, on a phone, with no manual retries.",
+      "next_goal": "Make a push to the wrong remote a real block, then take the routine questions out of the pull request flow.",
       "done": "pathway flow v2 and the ship-ask push gate are live and proven on a phone; land-pr and land-recheck have no known false refusals.",
-      "idRe": "^(pathway-|bare-pathway|pr-|prd-|push-gate|ship-|grant-|land-|slot-|free-slot|checkpoint-|summary-change|decision-gate|enforce-flag|ledger-flag|prepr-coord)",
+      "idRe": "^(pathway-|bare-pathway|pr-|prd-|push-gate|ship-|grant-|land-|slot-|free-slot|checkpoint-|summary-change|decision-gate|enforce-flag|ledger-flag|prepr-coord|prflow-|ready-|create-land)",
       "ids": [
         "pathway-bridge-polish"
       ],
@@ -78,6 +96,7 @@
       "key": "memory-and-skills",
       "name": "Memory, compaction and skill quality",
       "goal": "Sessions keep what they learned across compaction, and skills load when they should.",
+      "next_goal": "Finish the debug skill evaluation.",
       "done": "Compact quick wins landed and checked with a real /compact; memory extractor gaps and skill misfires measured and fixed or dropped.",
       "idRe": "^(compact-|memory-|tool-error-|store-receipt|skill-|tdd-|debug-skill|style-ab|p4-|p4b-|always-loaded|precompact|keepwarm|prompt-hook)",
       "ids": [],
@@ -93,8 +112,9 @@
       "key": "toolchain-gates",
       "name": "Harness health, toolchain and type gates",
       "goal": "tsc, hooks build and tests block bad changes at pre-pr and CI; the repo has no stale type errors.",
+      "next_goal": "Fix the scheduled tasks that fail, so the harness doctor shows no failure.",
       "done": "hooks-205-type-errors is 0, ts-gates-prepr-ci blocks a planted type error, and worktrees start with working deps.",
-      "idRe": "^(ts-|ts7-|hooks-|post-edit-ts|worktree-|rust-|smoke-|scratch-db|daemon-|active-register|ci-|harness-health|opc-dep|dependabot|file-lock|reap-|codemap|model-id|remove-nia|gitleaks|health-tasks|doctor-|scheduler-|claude-|grok-)",
+      "idRe": "^(ts-|ts7-|hooks-|post-edit-ts|worktree-|rust-|smoke-|scratch-db|daemon-|active-register|ci-|harness-health|opc-dep|dependabot|file-lock|reap-|codemap|model-id|remove-nia|gitleaks|health-tasks|doctor-|scheduler-|claude-|grok-|system-|sync-|dist-|hook-|setup-|sched-|pre-plan|health-|dead-|context-md)",
       "ids": [],
       "tracks": [],
       "terminalLanes": [
@@ -109,6 +129,7 @@
       "key": "trex",
       "name": "TREX (parked)",
       "goal": "Local review-finding verification bench (TREX). Verify P1 was KILLED 11-04; lanes parked on Dave's yes.",
+      "next_goal": "Parked. No next goal.",
       "done": "Dave decides: revive or close. Close the 3 open lanes if he says close.",
       "idRe": "^trex-",
       "ids": [],
@@ -124,8 +145,9 @@
       "key": "agentic-os-bridge",
       "name": "Agentic OS, fleet and Notion bridge",
       "goal": "Fleet page, session identity and the CTO bot bridge work as one SDLC operating system.",
+      "next_goal": "Keep the FleetOps data file under its size limit, then design the harness and factory dashboard.",
       "done": "sdlc-os board and P2 hardening finished; team-bridge phase 1 approved or dropped.",
-      "idRe": "^(sdlc-|team-bridge|scrubber-|fleet-|session-|sid-)",
+      "idRe": "^(sdlc-|team-bridge|scrubber-|fleet-|session-|sid-|fleetops-|notion-|harness-factory|harness-price|agentic-)",
       "ids": [],
       "tracks": [
         "session-identity"

@@ -152,3 +152,11 @@ describe('the committed lane-projects.json', () => {
     assert.throws(() => loadProjectRules(tmp), /r\.json/);
   });
 });
+
+describe('compileRules: next_goal (fleetops-category-expand)', () => {
+  it('keeps a next_goal string and turns anything else into an empty string', () => {
+    // Breaks if the rules reader drops next_goal: it never reaches projects.json.
+    const r = compile([{ key: 'a', next_goal: 'Ship it.' }, { key: 'b', next_goal: 7 }, { key: 'c' }]);
+    assert.deepEqual(r.projects.map((p) => p.next_goal), ['Ship it.', '', '']);
+  });
+});

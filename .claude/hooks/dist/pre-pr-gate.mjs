@@ -1130,8 +1130,12 @@ function stampProblem(raw, head, now, body) {
   if (o.cr_skipped === true && reason === "docs-only" && !docsOnlyEarned) {
     return `the stamp skipped the CodeRabbit CLI review as docs-only, but it lacks cr_docs_only: true or docs_verified: true (cr_docs_only: ${String(o.cr_docs_only ?? "none")}, docs_verified: ${String(o.docs_verified ?? "none")}). A docs-only skip is allowed only when pre-pr.mjs confirmed every changed file is docs. Run pre-pr.mjs again`;
   }
-  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned && !docsOnlyEarned) {
-    return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || "none"}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), a docs-only branch (docs-only, with cr_docs_only and docs_verified true), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
+  const answerKeyEarned = reason === "answer-key" && o.cr_answer_key === true && Number.isInteger(o.answer_key_paths) && o.answer_key_paths >= 1;
+  if (o.cr_skipped === true && reason === "answer-key" && !answerKeyEarned) {
+    return `the stamp skipped the CodeRabbit CLI review as answer-key, but it lacks cr_answer_key: true or answer_key_paths: a whole number of 1 or more (cr_answer_key: ${String(o.cr_answer_key ?? "none")}, answer_key_paths: ${String(o.answer_key_paths ?? "none")}). An answer-key skip is allowed only when pre-pr.mjs found an answer-key path in the diff. Run pre-pr.mjs again`;
+  }
+  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned && !docsOnlyEarned && !answerKeyEarned) {
+    return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || "none"}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), a docs-only branch (docs-only, with cr_docs_only and docs_verified true), a diff with an answer-key path (answer-key, with cr_answer_key true and answer_key_paths 1 or more), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
     if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~ or $env: paths. A Git Bash /c/ path is turned into C:/ on Windows`;

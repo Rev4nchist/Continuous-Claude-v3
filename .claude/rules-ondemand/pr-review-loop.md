@@ -100,6 +100,7 @@ name an event that runs it, or give `na` with the reason.
      That count holds only runs that finished with a PASS.
    - `rate-limited`: no included review is left. It needs a positive `cr_retry_minutes` in the stamp.
    - `docs-only`: every changed file is docs, so the CLI had no file to review. It needs `cr_docs_only` and `docs_verified` both true in the stamp.
+   - `answer-key`: the diff holds an answer-key path (old or new side), so no CLI review may read it. It needs `cr_answer_key` true and `answer_key_paths` a whole number of 1 or more in the stamp.
    - `cli-cap`: today's paid CLI spend reached `coderabbit.cli_daily_cap_usd`. No run is spent. The
      script logs each billed CLI run in the paid ledger (`coderabbit-cli.md` "Billing facts").
 

@@ -16,8 +16,10 @@ const tmp = () => mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir
 const rows = (file) => readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
 
 // A stub `claude`: reads stdin, reports env KEY NAMES (never values), argv and the stdin length inside a result line.
-function stubClaude(dir, { sleepMs = 0 } = {}) {
+// served: model names for the modelUsage of the result line (the served model); none gives no modelUsage.
+function stubClaude(dir, { sleepMs = 0, served = [], isError = false } = {}) {
   const file = path.join(dir, 'stub-claude.mjs');
+  const modelUsage = served.length ? Object.fromEntries(served.map((n) => [n, { inputTokens: 1 }])) : undefined;
   writeFileSync(file, `
 let input = '';
 process.stdin.setEncoding('utf8');
@@ -25,7 +27,7 @@ process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', () => {
   const report = { envKeys: Object.keys(process.env).sort(), argv: process.argv.slice(2), stdinLen: input.length, stdinHead: input.slice(0, 40), cwd: process.cwd() };
   setTimeout(() => {
-    process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(report), total_cost_usd: 0.0123, usage: { input_tokens: 5, output_tokens: 7 } }) + '\\n');
+    process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: ${isError}, result: JSON.stringify(report), total_cost_usd: 0.0123, usage: { input_tokens: 5, output_tokens: 7 }, modelUsage: ${JSON.stringify(modelUsage)} }) + '\\n');
   }, ${sleepMs});
 });
 `);
@@ -142,15 +144,40 @@ test('runClaude at the cap starts no process and writes no end row', async () =>
   assert.equal(rows(file).length, 1);
 });
 
-test('runJudge is runClaude with purpose eval-judge and the judge model', async () => {
-  // Breaks when: runJudge uses another purpose (the ledger would no longer show judge runs) or an Opus model.
+test('runJudge is runClaude with purpose eval-judge and the judge model, Opus at effort high', async () => {
+  // Breaks when: runJudge uses another purpose (the ledger would no longer show judge runs), goes back to Sonnet,
+  // or drops effort high (Dave 2026-11-13: the judge is Opus 5.5 at effort high).
   const dir = tmp();
   const file = path.join(dir, 'ledger.jsonl');
-  const stub = stubClaude(dir);
-  await runJudge('hello', { ledgerPath: file, command: process.execPath, prefixArgs: [stub], timeoutMs: 20_000, skipConfigFiles: true });
+  const stub = stubClaude(dir, { served: ['claude-opus-5-5'] });
+  const res = await runJudge('hello', { ledgerPath: file, command: process.execPath, prefixArgs: [stub], timeoutMs: 20_000, skipConfigFiles: true });
   const [start] = rows(file);
   assert.equal(start.purpose, 'eval-judge');
-  assert.equal(start.model, 'sonnet');
+  assert.equal(start.model, 'opus');
+  const { argv } = JSON.parse(res.result);
+  assert.equal(argv[argv.indexOf('--model') + 1], 'opus');
+  assert.equal(argv[argv.indexOf('--effort') + 1], 'high');
+  assert.equal(res.ok, true);
+  assert.equal(res.servedModel, 'claude-opus-5-5');
+});
+
+test('runJudge turns a served model other than Opus 5.5, or none, into an error result, after one call only', async () => {
+  // Breaks when: runJudge passes the answer of another model (the 'opus' alias is not version-pinned),
+  // treats a missing served model as a pass, or retries (a second call spends the shared cap).
+  for (const [served, want] of [[['claude-sonnet-5-5'], 'claude-sonnet-5-5'], [['claude-opus-4-1'], 'claude-opus-4-1'], [[], null], [['claude-opus-5-5', 'claude-haiku-5-5'], 'claude-opus-5-5,claude-haiku-5-5']]) {
+    const dir = tmp();
+    const file = path.join(dir, 'ledger.jsonl');
+    const res = await runJudge('hello', { ledgerPath: file, command: process.execPath, prefixArgs: [stubClaude(dir, { served })], timeoutMs: 20_000, skipConfigFiles: true });
+    assert.deepEqual([res.ok, res.reason, res.servedModel], [false, 'served-model', want], JSON.stringify(served));
+    assert.equal(rows(file).filter((r) => r.phase === 'start').length, 1, 'one call');
+  }
+  // A failed run that still reports another model is a served-model fault too; a failed run with no model stays as it is.
+  const dir = tmp();
+  const failedOther = await runJudge('hello', { ledgerPath: path.join(dir, 'l1.jsonl'), command: process.execPath, prefixArgs: [stubClaude(dir, { served: ['claude-opus-4-1'], isError: true })], timeoutMs: 20_000, skipConfigFiles: true });
+  assert.deepEqual([failedOther.ok, failedOther.reason, failedOther.servedModel], [false, 'served-model', 'claude-opus-4-1']);
+  const dir2 = tmp();
+  const failedNone = await runJudge('hello', { ledgerPath: path.join(dir2, 'l2.jsonl'), command: process.execPath, prefixArgs: [stubClaude(dir2, { isError: true })], timeoutMs: 20_000, skipConfigFiles: true });
+  assert.deepEqual([failedNone.ok, failedNone.reason], [false, undefined]);
 });
 
 test('a time-out ends the run with timedOut in the end row', async () => {
