@@ -12,7 +12,8 @@
  *   Test mode = SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE set to a path other than the default real store.
  *   Outside test mode both are ignored, with one warning on stderr, and the real data path runs.
  * The recommended option is first and its label ends with " (Recommended)". The question has at most 3 lines (land: at most 5).
- * land starts with the Problem, Change and You will see lines of the pre-pr summary, only when the summary's stamp binds to the PR head.
+ * land starts with three lines, "Why:", "What it does:" and "You will see:" (the Problem, Change and You will see fields of the pre-pr
+ * summary), only when the summary's stamp binds to the PR head. Then one line that starts with "State:".
  * The store step of commit-and-push is `ship`. An open offer is what lets the AskUserQuestion hook record Dave's tap.
  * Exit 0 = the offer is written and the spec printed. 1 = no question can be asked (the reason is on stderr, nothing written).
  * 2 = bad usage. 3 = internal error.
@@ -104,17 +105,31 @@ const SUMMARY_MAX = 200;
 
 const WITHHELD = 'text withheld (it reads like the state line or an option). Read the PR body.';
 
+// Control, format, private-use and lone surrogate characters, and the line and paragraph separators. None may reach the question:
+// a zero-width or bidi character can hide the start of a field, and a separator can add a line.
+const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/gu;
+/** Text in one plain form: NFKC (full-width letters become ASCII), no unsafe character, one line, single spaces. */
+const plainOf = (text) => one(String(text ?? '').normalize('NFKC').replace(UNSAFE_CHARS, ' '));
+// READY or NOT READY as the first word, after any run of characters that are not letters or digits ("**READY**", "- NOT READY").
+const STARTS_AS_STATE = /^[^\p{L}\p{N}]*(?:not[^\p{L}\p{N}]+ready|ready)(?![\p{L}\p{N}])/iu;
+/** clip by code point: a cut never leaves half a character (the ledger needs the question word for word). */
+function clipPoints(text, n) {
+  const points = [...text];
+  return points.length > n ? `${points.slice(0, n - 1).join('')}…` : text;
+}
+
 /**
  * One summary field as one line of at most SUMMARY_MAX characters, or null when the field is empty. The text comes from a file the building
  * session wrote and shows above the machine facts. A field that could pose as them is not shown: one that holds an option label, or starts
- * with READY, NOT READY or State:. Its line says WITHHELD, so Dave sees that a text was there.
+ * with READY, NOT READY (also behind punctuation, an invisible character or full-width letters), or holds "state:" anywhere.
+ * Its line says WITHHELD, so Dave sees that a text was there.
  */
 function summaryLine(text) {
-  const t = one(text);
+  const t = plainOf(text);
   if (!t) return null;
   const low = t.toLowerCase();
-  const poses = /^(?:not\s+ready|ready)\b/i.test(t) || /^state\s*:/i.test(t) || LAND_LABELS.some((l) => low.includes(l.toLowerCase()));
-  return poses ? WITHHELD : clip(t, SUMMARY_MAX);
+  const poses = STARTS_AS_STATE.test(t) || /state\s*:/i.test(t) || LAND_LABELS.some((l) => low.includes(l.toLowerCase()));
+  return poses ? WITHHELD : clipPoints(t, SUMMARY_MAX);
 }
 
 /** The description lines of the Land question: Why, What it does, You will see. With no field at all: the one NO_SUMMARY line. */
@@ -225,11 +240,17 @@ function checkedSummaryText(stamp, root = topOf()) {
 const readChange = (stamp) => changeOf(checkedSummaryText(stamp));
 
 const SHA = /^[0-9a-f]{7,40}$/i;
-const gitOk = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).status === 0;
+// The summary lookup must never stop the question: each of its git calls ends after this time, and a call that did not end is a failure.
+const SUMMARY_GIT_MS = 10000;
+const gitQuick = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: SUMMARY_GIT_MS });
+const gitOk = (args, cwd) => gitQuick(args, cwd).status === 0;
+/** stdout of a git call inside the time limit, or null. */
+const gitText = (args, cwd) => { const r = gitQuick(args, cwd); return r.status === 0 ? r.stdout.trim() : null; };
 
 /**
  * True when a summary that pre-pr checked at stampHead still describes the PR at prHead:
  * the two are the same commit, or stampHead is an ancestor and every commit after it that is not on main is a merge commit.
+ * Named limit (seat ruling): a merge commit that carries new code still binds. The gate does not use this text.
  * A fix commit after pre-pr does not bind: pre-pr never saw it. Any git failure (a commit this repo does not hold, no main ref) does not bind.
  */
 function bindsTo(stampHead, prHead, cwd) {
@@ -237,15 +258,16 @@ function bindsTo(stampHead, prHead, cwd) {
   const to = String(prHead ?? '').toLowerCase();
   if (!SHA.test(from) || !SHA.test(to)) return false;
   if (from.length === 40 && from === to) return true;
-  const mains = ['refs/remotes/fork/main', 'refs/heads/main'].filter((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], cwd));
-  if (mains.length === 0 || !gitOk(['merge-base', '--is-ancestor', from, to], cwd)) return false;
-  return git(['rev-list', '--no-merges', `${from}..${to}`, ...mains.map((ref) => `^${ref}`)], cwd) === '';
+  // fork/main when this repo has it; the local main only when it does not. Both together would hide a fix commit that reached the local main only.
+  const main = ['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], cwd));
+  if (!main || !gitOk(['merge-base', '--is-ancestor', from, to], cwd)) return false;
+  return gitText(['rev-list', '--no-merges', `${from}..${to}`, `^${main}`], cwd) === '';
 }
 
 /** This checkout first, then every other worktree of the repo. */
 function checkoutRoots() {
   const here = topOf();
-  const listed = (git(['worktree', 'list', '--porcelain'], here) ?? '').split(/\r?\n/).filter((l) => l.startsWith('worktree ')).map((l) => l.slice('worktree '.length).trim());
+  const listed = (gitText(['worktree', 'list', '--porcelain'], here) ?? '').split(/\r?\n/).filter((l) => l.startsWith('worktree ')).map((l) => l.slice('worktree '.length).trim());
   const seen = new Set();
   return [here, ...listed].filter((root) => { const k = path.resolve(root).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
 }

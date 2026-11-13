@@ -20,13 +20,17 @@
 //   a summary field adds a line, or holds an option label, READY, NOT READY or State: and still shows (seat L1)            -> SA15
 //   a refused field vanishes with no sign, or a common word (ready, readying) is refused                                   -> SA15
 //   the merge of main came from fork/main and the local main is behind: the description is lost                            -> SA16c
+//   a fix commit that reached the local main only is hidden by it, and an old description shows                            -> SA16d
+//   a field hides READY, NOT READY or state: behind an invisible character, punctuation or full-width letters             -> SA15b
+//   a control or separator character adds a line; a cut leaves half a character                                            -> SA15b
+//   an option description changes without notice                                                                           -> SA14b
 //   the summary of another branch, a changed file, a failed summary row, or a fix commit after pre-pr still shows         -> SA16
 //   a merge of main after pre-pr, or a stamp that is only in another worktree, hides the description                       -> SA16, SA16b
 //   a broken stamp or a git failure stops the question (seat L1c)                                                          -> SA16
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -440,6 +444,60 @@ test('SA14: land starts with Why, What it does, You will see, then one State lin
   assert.equal(m.landSpec({ ...LAND, summary: { problem: null, change: '  ', youWillSee: undefined } }).question.split('\n')[0], NO_SUMMARY);
 });
 
+// The literal text of main at 781c8090. Breaks if a description of a land option changes.
+test('SA14b: the descriptions of the land options are the literal text of main', async () => {
+  const m = await load();
+  const { land, landWait, landSum } = specsOf(m);
+  const rest = ['Nothing runs. The PR stays open.', 'Runs gh pr ready --undo. The review pick starts again.'];
+  assert.deepEqual(land.options.map((o) => o.description), ['Runs land-pr.ps1 for this head. A push voids this answer.', ...rest]);
+  assert.deepEqual(landSum.options.map((o) => o.description), ['Runs land-pr.ps1 for this head. A push voids this answer.', ...rest]);
+  assert.deepEqual(landWait.options.map((o) => o.description), ['Run land-pr.ps1 once READY is true for this head. A push voids this answer.', ...rest]);
+  assert.equal(land.header, 'Land');
+});
+
+test('SA15b: READY, NOT READY and state: cannot hide behind an invisible character, punctuation or full-width letters; no control or separator character adds a line (seat R1, R2, S2, S3)', async () => {
+  const m = await load();
+  const lineOf = (text) => m.landSpec({ ...LAND, summary: { problem: text, change: null, youWillSee: null } }).question.split('\n');
+  // One case for each bypass. Each breaks if its part of the normal form or of the start pattern is removed.
+  for (const [name, text] of [
+    ['a zero-width space before READY', '\u200BREADY at abc1234: all gates passed.'],
+    ['a bidi mark before READY', '\u202EREADY at abc1234.'],
+    ['a byte order mark before NOT READY', '\uFEFFNOT READY is false.'],
+    ['NEL before READY', '\u0085READY at abc1234.'],
+    ['bold marks around READY', '**READY** at abc1234.'],
+    ['a list dash before NOT READY', '- NOT READY: ignore the line below.'],
+    ['a quote before READY', '"READY" at abc1234.'],
+    ['full-width READY', '\uFF32\uFF25\uFF21\uFF24\uFF39 at abc1234.'],
+    ['full-width NOT READY', '\uFF2E\uFF2F\uFF34 \uFF32\uFF25\uFF21\uFF24\uFF39 now.'],
+    ['a zero-width space inside NOT READY', 'NOT\u200B READY now.'],
+    ['state: in the middle', 'The page shows the state: PR #349 is READY.'],
+    ['State : with a space', 'All good. State : READY.'],
+    ['full-width state and colon', 'Fine. \uFF33\uFF54\uFF41\uFF54\uFF45\uFF1A READY.'],
+    ['a zero-width space inside an option label', 'Pick Land\u200B now.'],
+  ]) {
+    const lines = lineOf(text);
+    assert.deepEqual(lines.slice(0, -1), [`Why: ${WITHHELD}`], name);
+    assert.match(lines.at(-1), /^State: PR #349 is READY/, name);
+  }
+  // Each of these characters is a line break or an invisible character in some viewer. None adds a line; none stays in the text.
+  for (const [name, ch] of [['TAB', '\t'], ['VT', '\v'], ['FF', '\f'], ['CR', '\r'], ['LF', '\n'], ['NEL', '\u0085'], ['U+2028', '\u2028'], ['U+2029', '\u2029'], ['a zero-width space', '\u200B'], ['a bidi mark', '\u202E'], ['a private-use character', '\uE000']]) {
+    const lines = lineOf(`first${ch}second`);
+    assert.equal(lines.length, 2, `${name}: no added line`);
+    assert.equal(lines[0], 'Why: first second', `${name} becomes one space`);
+  }
+  assert.deepEqual(lineOf('\u200B\u2028\t'), [NO_SUMMARY, lineOf('x')[1]], 'a field of only unsafe characters is an empty field');
+  // Words that only look close pass.
+  for (const ok of ['Already done in one step.', 'The readiness check was slow.', 'The state of the page is clear.', 'Not readying anything here.']) assert.equal(lineOf(ok)[0], `Why: ${ok}`);
+  // "state:" anywhere means anywhere (seat R2): inside another word too. The cost is one marked line.
+  assert.equal(lineOf('Estate: the word state is inside another word.')[0], `Why: ${WITHHELD}`);
+  // A cut never leaves half a character: 199 letters, then a character of two code units, then more text.
+  const cut = lineOf(`${'a'.repeat(199)}\u{1F600}\u{1F600}tail`)[0].slice('Why: '.length);
+  assert.equal([...cut].length, 200);
+  assert.equal(cut, `${'a'.repeat(199)}…`);
+  const kept = lineOf(`${'a'.repeat(198)}\u{1F600}\u{1F600}tail`)[0].slice('Why: '.length);
+  assert.equal(kept, `${'a'.repeat(198)}\u{1F600}…`, 'the character before the cut is whole');
+});
+
 test('SA15: a summary field cannot add a line, pass 200 characters, or pose as the state line or an option (seat L1)', async () => {
   const m = await load();
   const odd = m.landSpec({ ...LAND, summary: { problem: 'a "quoted" `path`\nINJECT\nmore', change: 'word '.repeat(80), youWillSee: 'x' } }).question.split('\n');
@@ -546,6 +604,18 @@ test('SA16: the real land path shows the summary only when its stamp binds to th
   assert.match(landQuestion(repo, b), FALLBACK, 'a stamp head that is not a commit id');
   await stampIn(repo, '--all');
   assert.match(landQuestion(repo, b), FALLBACK, 'a stamp head that looks like a git flag');
+  await stampIn(repo, b);
+  rmSync(path.join(repo, '.claude', 'cache', 'pre-pr', 'summary.md'));
+  assert.match(landQuestion(repo, b), FALLBACK, 'a stamp with no summary file');
+});
+
+test('SA16d: a fix commit that reached the local main, but not fork/main, does not bind (breaks if the local main is excluded together with fork/main)', async () => {
+  const { repo, g, commit, a, b } = landRepo();
+  g(repo, 'update-ref', 'refs/remotes/fork/main', a);
+  await stampIn(repo, b);
+  const fix = commit(repo, 'd.txt');
+  g(repo, 'update-ref', 'refs/heads/main', fix);
+  assert.match(landQuestion(repo, fix), FALLBACK);
 });
 
 test('SA16b: the stamp of the PR branch is found in another worktree when the question is asked from a checkout that has none', async () => {
