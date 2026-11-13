@@ -216,3 +216,89 @@ export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string 
   const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
   return ccv3 ? CCV3_REPO : null;
 }
+
+/**
+ * Any REST path `repos/<o>/<r>` (pulls, issues, merge, labels or the repo itself) at the start of an argument (after a space, a
+ * quote or `=`, with or without a leading /) or after api.github.com. A folder path such as `~/repos/a/b` is not read.
+ * A `{owner}` placeholder is not a name.
+ */
+const ANY_REPOS_PATH = /(?:^|[\s"'=]|api\.github\.com)\/?repos\/([\w.-]+\/[\w.-]+)(?=[/\s"'?#]|$)/gi;
+
+/** The first gh call of a segment and its first two words, read with every quote deleted (`gh pr "merge"` is a merge). */
+const GH_SUB = /\bgh\s+(\S+)(?:\s+(\S+))?/i;
+/** One shell word that is a quoted string with no blank in it: a quoted argument (`"repos/o/r/pulls"`), not prose. */
+const QUOTED_WORD = /^(["'])[^\s"']+\1$/;
+
+/** True when `at` sits outside quotes, or inside a quoted word with no blank (an argument, never prose). */
+function argAt(seg: string, mseg: string, at: number): boolean {
+  if (mseg[at] === seg[at]) return true;
+  const from = seg.slice(0, at).search(/\S*$/);
+  const end = seg.slice(at).search(/\s|$/);
+  return QUOTED_WORD.test(seg.slice(from, at + end));
+}
+
+/** Values of a flag or assignment regex whose first character is outside quotes (the value itself is read raw, quotes and all). */
+function flagValues(re: RegExp, seg: string, mseg: string, after: number): string[] {
+  return [...seg.matchAll(re)].filter((m) => {
+    const at = m.index! + m[0].search(/\S/);
+    return at >= after && mseg[at] === seg[at];
+  }).map((m) => m[1]);
+}
+
+/** The repos gh reads from its path argument: a repos/<o>/<r> path of gh api, a PR URL of gh pr merge, view or ready. */
+function pathRepos(seg: string, mseg: string): string[] {
+  const sub = GH_SUB.exec(squashQuotes(seg));
+  const verb = sub?.[1].toLowerCase();
+  const re = verb === 'api' ? ANY_REPOS_PATH : verb === 'pr' && /^(?:merge|view|ready)$/i.test(sub?.[2] ?? '') ? PR_URL : null;
+  if (re === null) return [];
+  return [...seg.matchAll(re)].filter((m) => argAt(seg, mseg, m.index! + m[0].length - m[1].length)).map((m) => ownerRepo(m[1]));
+}
+
+/**
+ * The lowercased owner/repo that a gh command names, or null when it names none (the folder decides). F1: only the first command segment
+ * of `text` is read (the gate passes each gh shape its own segment), and only where gh takes a repo: -R / --repo after the gh word, a
+ * GH_REPO= assignment in the segment, env GH_REPO, the repos/<o>/<r> path of gh api, the PR URL of gh pr merge, view or ready.
+ * `mtext` is `text` with its quoted strings blanked (maskQuoted, same length): a flag inside quotes, a --body, a --title or a heredoc
+ * names no repo. A flag value is read raw (`-R "o/r"`), and a path or URL in a quoted word with no blank counts.
+ * When the segment names two or more different repos, the result is every slug, sorted, joined by one space: it never equals one key
+ * repo, so a compare with the key repo refuses it. A variable value (`-R $R`) is not read: pair this with hasNonLiteralRepo.
+ * `env` defaults to {}, never process.env. `prior`: the repos of a GH_REPO set in an earlier segment (priorGhRepo, fix round 2, fixer G);
+ * this function reads only the segment it is given.
+ */
+export function commandRepo(text: string, mtext: string, env: NodeJS.ProcessEnv = {}, prior: readonly string[] = []): string | null {
+  // The & of a redirect (2>&1, &>file) ends no command: a -R after it still goes to gh.
+  const cut = mtext.replace(/>&|&>/g, '  ').search(/[;&|\r\n]/);
+  const seg = cut < 0 ? text : text.slice(0, cut);
+  const mseg = cut < 0 ? mtext : mtext.slice(0, cut);
+  const gh = /\bgh\s/i.exec(mseg);
+  if (gh === null) return null;
+  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
+  const values = [...flagValues(REPO_FLAG, seg, mseg, gh.index), ...flagValues(GH_REPO_ASSIGN, seg, mseg, 0)];
+  const explicits = [...values, ...(envRepo ? [envRepo] : [])].map(ownerRepo);
+  const slugs = [...new Set([...explicits, ...prior, ...pathRepos(seg, mseg)])].sort();
+  return slugs.length === 0 ? null : slugs.join(' ');
+}
+
+/** A GH_REPO assignment at any place (bare, export, env, $env:), value raw up to a blank, a quote or a break. */
+const GH_REPO_ANY = /(?:^|[\s;&|(])(?:\$env:)?GH_REPO\s*=\s*["']?([^\s"';&|)]*)/gi;
+
+/**
+ * The GH_REPO assignments of the text BEFORE a gh call's segment (fix round 2, fixer G, item 5; fixer A open issue): `GH_REPO=x;`,
+ * `export GH_REPO=x &&`, `env GH_REPO=x;`, `$env:GH_REPO='x';`. gh reads the variable, so each names the repo of the later gh call (an
+ * unexported one too: fail closed). An assignment counts where `mtext` (maskQuoted of `text`, same length) keeps it, so a quoted mention
+ * (echo "GH_REPO=x") is text; the value is read raw. `repos`: the lowercased owner/repo values. `nonLiteral`: a value the shell expands.
+ */
+export function priorGhRepo(text: string, mtext: string): { repos: string[]; nonLiteral: boolean } {
+  // Built here, not at module level (fix round 3, fixer H, item 5): esbuild keeps a module-level `new RegExp(...)` in every bundle that
+  // imports this module (pre-pr-gate, checkpoint-shapes-cli), so a const there changed bundles outside the card.
+  const REPO_ONLY = new RegExp(`^${REPO_VALUE}$`);
+  const repos: string[] = [];
+  let nonLiteral = false;
+  for (const m of text.matchAll(GH_REPO_ANY)) {
+    const at = m.index! + m[0].search(/\S/);
+    if (mtext[at] !== text[at]) continue;
+    if (REPO_ONLY.test(m[1])) repos.push(ownerRepo(m[1]));
+    else if (/[$`%]/.test(m[1])) nonLiteral = true;
+  }
+  return { repos: [...new Set(repos)], nonLiteral };
+}
