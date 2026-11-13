@@ -47,7 +47,7 @@ describe('classifyShellText: real writes to a held file', () => {
     ['Move-Item x src/a.ts'],
     ['Copy-Item x src/a.ts'],
   ])('denies: %s', (text) => {
-    expect(verdict(text)).toEqual({ kind: 'deny', filePath: 'src/a.ts' });
+    expect(verdict(text)).toMatchObject({ kind: 'deny', filePath: 'src/a.ts' });
   });
 });
 
@@ -89,7 +89,70 @@ describe('classifyShellText: whole-word cues and path boundaries', () => {
       { filePath: 'src/b.ts', forms: ['src/b.ts'] },
       { filePath: 'src/a.ts', forms: ['src/a.ts'] },
     ];
-    expect(classifyShellText('cat src/b.ts; echo x > src/a.ts', two, false)).toEqual({ kind: 'deny', filePath: 'src/a.ts' });
+    expect(classifyShellText('cat src/b.ts; echo x > src/a.ts', two, false)).toMatchObject({ kind: 'deny', filePath: 'src/a.ts' });
+  });
+});
+
+describe('review round 1 (seat reviewer, 2026-11-13 11:21)', () => {
+  it.each([
+    ['echo x | bin/rm src/a.ts'],
+    ['node cp.mjs src/a.ts'],
+    ['node tee.ts src/a.ts'],
+    ['echo a -> src/a.ts'],
+    ['echo a => src/a.ts'],
+    ['cp src/a.ts out.txt'],
+    ['cp -r src/a.ts out.txt'],
+    ['Copy-Item src/a.ts out.txt'],
+    ['Copy-Item -Force -LiteralPath src/a.ts out.txt'],
+  ])('F4 F5 F1a: a mention, never a deny: %s', (text) => {
+    expect(verdict(text).kind).toBe('mention');
+  });
+
+  it.each([
+    ['sed -E -i s/a/b/ src/a.ts', 'sed'],
+    ['sed -e x -i src/a.ts', 'sed'],
+    ['Tee-Object -FilePath src/a.ts', 'tee-object'],
+    ['copy x src/a.ts', 'copy'],
+    ['move x src/a.ts', 'move'],
+    ['del src/a.ts', 'del'],
+    ['erase src/a.ts', 'erase'],
+    ['ri src/a.ts', 'ri'],
+    ['Clear-Content src/a.ts', 'clear-content'],
+    ['node scripts/tools/safe-replace.mjs src/a.ts old new', 'safe-replace'],
+    ['rm -f out.log; cat src/a.ts', 'rm'],
+    ['cp x src/a.ts', 'cp'],
+    ['echo x &>src/a.ts', '>'],
+    ['echo x 2>src/a.ts', '>'],
+  ])('F3 F1: denies and names the cue: %s', (text, cue) => {
+    const v = verdict(text);
+    expect(v.kind).toBe('deny');
+    expect(v.kind === 'deny' && v.cue.toLowerCase().startsWith(cue)).toBe(true);
+  });
+
+  it('F5: a ">" after - or = is not a redirect, a ">" after a space or a digit is', () => {
+    expect(verdict('echo a ->src/a.ts').kind).toBe('mention');
+    expect(verdict('echo a =>src/a.ts').kind).toBe('mention');
+    expect(verdict('echo a >src/a.ts').kind).toBe('deny');
+    expect(verdict('>src/a.ts').kind).toBe('deny');
+  });
+
+  it('F8: a long flag run does not backtrack, and text above the size cap is skipped', () => {
+    const t0 = Date.now();
+    expect(verdict(`sed ${'-ab '.repeat(10000)}src/a.ts`).kind).toBe('mention');
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(verdict(`${'x '.repeat(40000)} > src/a.ts`)).toEqual({ kind: 'none' });
+  });
+
+  it('F2: a form that came from the lower-cased project key matches in any case, even where case is kept', () => {
+    const claims = [{ filePath: 'src/a.ts', forms: [], ciForms: ['/tmp/abc/repo/src/a.ts'] }];
+    expect(classifyShellText('echo x > /tmp/AbC/Repo/src/a.ts', claims, false).kind).toBe('deny');
+    expect(classifyShellText('echo x > /tmp/AbC/Repo/src/b.ts', claims, false)).toEqual({ kind: 'none' });
+  });
+
+  it('a verdict carries the holder and the project for the message and the warn key', () => {
+    const claims = [{ filePath: 'src/a.ts', holder: 'h1', project: 'p1', forms: ['src/a.ts'] }];
+    expect(classifyShellText('cat src/a.ts', claims, false)).toEqual({ kind: 'mention', filePath: 'src/a.ts', holder: 'h1', project: 'p1' });
+    expect(classifyShellText('rm src/a.ts', claims, false)).toEqual({ kind: 'deny', filePath: 'src/a.ts', holder: 'h1', project: 'p1', cue: 'rm' });
   });
 });
 
@@ -125,8 +188,8 @@ describe('directWritePaths (group A)', () => {
     expect(directWritePaths({ tool_name: `${DC}write_file`, tool_input: { path: 'w' } })).toEqual(['w']);
     expect(directWritePaths({ tool_name: `${DC}edit_block`, tool_input: { file_path: 'e' } })).toEqual(['e']);
   });
-  it('move_file gives both paths', () => {
-    expect(directWritePaths({ tool_name: `${DC}move_file`, tool_input: { source: 's', destination: 'd' } })).toEqual(['s', 'd']);
+  it('move_file gives both paths, the destination first (review F9)', () => {
+    expect(directWritePaths({ tool_name: `${DC}move_file`, tool_input: { source: 's', destination: 'd' } })).toEqual(['d', 's']);
   });
   it('gives an empty list for a missing or non-string field, and null for any other tool', () => {
     expect(directWritePaths({ tool_name: 'NotebookEdit', tool_input: {} })).toEqual([]);

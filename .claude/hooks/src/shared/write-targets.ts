@@ -6,12 +6,19 @@
  *
  * Group B: the tool input is shell text. There is NO lexer here (memory guard-shell-lexer-arms-race).
  * The match is a needle search built from a path that another live session HOLDS:
- *   (a) a redirect: ">" or ">>", optional spaces, an optional quote, then the path. A ">" that is not directly
- *       before the path is no cue (`2>&1`, `> scratch.txt`, `2>/dev/null`).
+ *   (a) a redirect: ">" or ">>", optional spaces, an optional quote, then the path. The ">" must not follow
+ *       "-" or "=" (so `->` and `=>` are no redirect). A ">" that is not directly before the path is no cue
+ *       (`2>&1`, `> scratch.txt`, `2>/dev/null`).
  *   (b) a command cue as a whole word (tee, Set-Content, mv, git checkout ...) with the path LATER in the text.
+ *       "/" and "." count as word characters, so `bin/rm`, `cp.mjs` and `tee.ts` are no cue.
+ *       The text-wide cue is the seat's ruling 2026-11-13 11:21: a split on ";" or "&&" would miss
+ *       `sed -i 's/a;b/c/' <held>`. So `rm -f out.log; cat <held>` DENIES. That is a known false deny.
+ *       Exception: cp or Copy-Item with the held path as its FIRST operand only reads it: a mention.
  *   Anything else that holds the path is a mention. A mention never denies.
- * Not seen: a path built at run time (variable, glob, a script that writes the file, `cd` then a bare
- * name), and git stash, reset, merge and rebase, which change files without naming them.
+ * Not seen (Known limits): a path built at run time (variable, glob, `cd` then a bare name outside the cwd,
+ * a script that writes the file, `node -e`), `perl -pi`, `prettier --write`, `git -C`, `../x`, `~/`, `$HOME`,
+ * `/mnt/c/...`, and git stash, reset, merge and rebase, which change files without naming them.
+ * Text above SIZE_CAP is not scanned (the call continues).
  *
  * Two gates: the matcher in settings.json.template and the runtime gate in file-claims.ts must name the same
  * tools (guard: hook-matcher-runtime-consistency.test.ts). `SHELL_WRITERS` and `DIRECT_WRITERS` are the list.
@@ -20,14 +27,14 @@ import { SHELL_TOOLS } from './shell-tools.js';
 
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
 
-/** Tool name -> the tool_input fields that hold a path the tool writes. */
+/** Tool name -> the tool_input fields that hold a path the tool writes. move_file: destination FIRST (review F9). */
 export const DIRECT_WRITERS: ReadonlyMap<string, readonly string[]> = new Map([
   ['Edit', ['file_path']],
   ['Write', ['file_path']],
   ['NotebookEdit', ['notebook_path']],
   [`${DC}write_file`, ['path']],
   [`${DC}edit_block`, ['file_path']],
-  [`${DC}move_file`, ['source', 'destination']],
+  [`${DC}move_file`, ['destination', 'source']],
 ]);
 
 /** The shell tools (same list the other command guards use). */
@@ -59,54 +66,122 @@ export interface HeldClaim {
   filePath: string;
   /** The session that holds it, for the message. Not read by the match. */
   holder?: string;
+  /** The claim's project key, for the warn-once key. Not read by the match. */
+  project?: string;
+  /** Spellings whose case is exact (folded only when the file system folds case). */
   forms: string[];
+  /** Spellings that came from the LOWER-CASED project key: always matched in any case. */
+  ciForms?: string[];
 }
 
 export type ShellVerdict =
   | { kind: 'none' }
-  | { kind: 'mention'; filePath: string; holder?: string }
-  | { kind: 'deny'; filePath: string; holder?: string };
+  | { kind: 'mention'; filePath: string; holder?: string; project?: string }
+  | { kind: 'deny'; filePath: string; holder?: string; project?: string; cue: string };
 
-// Whole-word command cues. A hyphen or word character on either side means a longer word ("cpu", "form").
-const CUES =
-  '(?:tee|set-content|add-content|out-file|mv|cp|rm|move-item|copy-item|remove-item|' +
-  'sed\\s+(?:-[a-z]*i[a-z]*|--in-place)|git\\s+(?:checkout|restore|apply))';
-const CUE_RE = new RegExp(`(?<![\\w-])${CUES}(?![\\w-])`, 'gi');
+/** Above this the text is not scanned: a huge pasted script is not a write by name, and the scan stays cheap. */
+export const SIZE_CAP = 64 * 1024;
+
+interface CueDef { name: string; src: string; firstOperandReads?: boolean }
+
+// "/" and "." are word characters for the boundary: `bin/rm`, `cp.mjs`, `tee.ts` are no cue.
+const B_START = '(?<![\\w./-])';
+const B_END = '(?![\\w./-])';
+const CUE_DEFS: readonly CueDef[] = [
+  { name: 'tee', src: 'tee' },
+  { name: 'tee-object', src: 'tee-object' },
+  { name: 'set-content', src: 'set-content' },
+  { name: 'add-content', src: 'add-content' },
+  { name: 'clear-content', src: 'clear-content' },
+  { name: 'out-file', src: 'out-file' },
+  { name: 'mv', src: 'mv' },
+  { name: 'move', src: 'move' },
+  { name: 'move-item', src: 'move-item' },
+  { name: 'cp', src: 'cp', firstOperandReads: true },
+  { name: 'copy', src: 'copy', firstOperandReads: true },
+  { name: 'copy-item', src: 'copy-item', firstOperandReads: true },
+  { name: 'rm', src: 'rm' },
+  { name: 'del', src: 'del' },
+  { name: 'erase', src: 'erase' },
+  { name: 'ri', src: 'ri' },
+  { name: 'remove-item', src: 'remove-item' },
+  // Flags before -i are allowed (`sed -E -i`, `sed -e x -i`). [a-hj-z] leaves out "i", so the run of flags cannot backtrack.
+  { name: 'sed -i', src: 'sed\\s+(?:(?:-e\\s+\\S+|-f\\s+\\S+|-[a-hj-z]+)\\s+)*(?:-[a-z]*i[a-z]*(?:\\.\\w+)?|--in-place(?:=\\S+)?)' },
+  { name: 'git checkout', src: 'git\\s+checkout' },
+  { name: 'git restore', src: 'git\\s+restore' },
+  { name: 'git apply', src: 'git\\s+apply' },
+  { name: 'safe-replace', src: 'node\\s+\\S*safe-replace\\.mjs' },
+];
+const CUE_RE = new RegExp(
+  `${B_START}(?:${CUE_DEFS.map((d, i) => `(?<c${i}>${d.src})`).join('|')})${B_END}`,
+  'gi',
+);
+
+interface CueHit { index: number; end: number; def: CueDef }
+
+function cuesIn(t: string): CueHit[] {
+  const hits: CueHit[] = [];
+  CUE_RE.lastIndex = 0;
+  for (let m = CUE_RE.exec(t); m; m = CUE_RE.exec(t)) {
+    const g = m.groups ?? {};
+    const i = CUE_DEFS.findIndex((_, k) => g[`c${k}`] !== undefined);
+    hits.push({ index: m.index, end: m.index + m[0].length, def: CUE_DEFS[Math.max(i, 0)] });
+    if (m[0].length === 0) CUE_RE.lastIndex++;
+  }
+  return hits;
+}
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** A path must end at a non-path character: `src/a.ts` is not `src/a.tsx` or `src/a.ts.bak`. */
-const END = '(?![\\w.\\-/])';
+const PATH_END = '(?![\\w.\\-/])';
 /** And start at one: `src/a.ts` is not `other/src/a.ts`. */
-const START = '(?<![\\w.\\-/])';
+const PATH_START = '(?<![\\w.\\-/])';
+/** Between a cp-style cue and its first operand: flags, spaces, an optional quote. */
+const FIRST_OPERAND_GAP = /\s+(?:-\S+\s+)*['"]?/y;
+
+/** The index where the first operand of a cue starts (after flags and a quote), or -1. */
+function firstOperandAt(t: string, cueEnd: number): number {
+  FIRST_OPERAND_GAP.lastIndex = cueEnd;
+  const m = FIRST_OPERAND_GAP.exec(t);
+  return m ? cueEnd + m[0].length : -1;
+}
 
 /**
  * Classify shell text against the claims other sessions hold. The text is read as a whole: backslashes
  * are folded to slashes, and case is folded when the file system folds it (`fold`).
  */
 export function classifyShellText(text: string, claims: readonly HeldClaim[], fold: boolean): ShellVerdict {
-  if (!text || claims.length === 0) return { kind: 'none' };
+  if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: 'none' };
   let t = text.replace(/\\/g, '/');
   if (fold) t = t.toLowerCase();
+  const tl = t.toLowerCase();
+  const cues = cuesIn(t);
   let mention: HeldClaim | null = null;
-  const cueIndexes: number[] = [];
-  CUE_RE.lastIndex = 0;
-  for (let m = CUE_RE.exec(t); m; m = CUE_RE.exec(t)) cueIndexes.push(m.index);
-  const firstCue = cueIndexes.length ? Math.min(...cueIndexes) : -1;
 
   for (const claim of claims) {
-    const forms = claim.forms.map((f) => f.replace(/\\/g, '/')).map((f) => (fold ? f.toLowerCase() : f)).filter(Boolean);
-    if (forms.length === 0) continue;
-    const alt = forms.map(escapeRe).join('|');
-    // (a) a redirect directly before the path
-    if (new RegExp(`>>?\\s*['"]?(?:\\./)?(?:${alt})${END}`).test(t)) return { kind: 'deny', filePath: claim.filePath, holder: claim.holder };
-    // (b) a command cue, then the path later in the same text
-    const at = new RegExp(`${START}(?:\\./)?(?:${alt})${END}`, 'g');
-    let sawPath = false;
-    for (let m = at.exec(t); m; m = at.exec(t)) {
-      sawPath = true;
-      if (firstCue >= 0 && m.index > firstCue) return { kind: 'deny', filePath: claim.filePath, holder: claim.holder };
+    const exact = claim.forms.map((f) => f.replace(/\\/g, '/')).map((f) => (fold ? f.toLowerCase() : f)).filter(Boolean);
+    const ci = (claim.ciForms ?? []).map((f) => f.replace(/\\/g, '/').toLowerCase()).filter(Boolean);
+    for (const [hay, forms] of [[t, exact], [tl, ci]] as Array<[string, string[]]>) {
+      if (forms.length === 0) continue;
+      const alt = forms.map(escapeRe).join('|');
+      // (a) a redirect directly before the path, not after - or =
+      if (new RegExp(`(?<![-=])>>?\\s*['"]?(?:\\./)?(?:${alt})${PATH_END}`).test(hay)) {
+        return { kind: 'deny', filePath: claim.filePath, holder: claim.holder, project: claim.project, cue: '>' };
+      }
+      // (b) a command cue, then the path later in the same text
+      const at = new RegExp(`${PATH_START}(?:\\./)?(?:${alt})${PATH_END}`, 'g');
+      let sawPath = false;
+      for (let m = at.exec(hay); m; m = at.exec(hay)) {
+        sawPath = true;
+        const armed = cues.find((c) => c.index < m.index && !(c.def.firstOperandReads && firstOperandAt(t, c.end) === m.index));
+        if (armed) {
+          return { kind: 'deny', filePath: claim.filePath, holder: claim.holder, project: claim.project, cue: armed.def.name };
+        }
+      }
+      if (sawPath && mention === null) mention = claim;
     }
-    if (sawPath && mention === null) mention = claim;
   }
-  return mention === null ? { kind: 'none' } : { kind: 'mention', filePath: mention.filePath, holder: mention.holder };
+  return mention === null
+    ? { kind: 'none' }
+    : { kind: 'mention', filePath: mention.filePath, holder: mention.holder, project: mention.project };
 }

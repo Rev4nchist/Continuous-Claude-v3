@@ -16,7 +16,7 @@
  */
 
 import { readFileSync } from 'fs';
-import { isAbsolute, relative, resolve as resolvePath } from 'path';
+import { basename, isAbsolute, relative, resolve as resolvePath } from 'path';
 import { resolveFileClaim, listBlockingClaims } from './shared/db-utils-pg.js';
 import { resolveSessionId, canonicalProject } from './shared/session-id.js';
 import { resolveClaimKey, resolveRepoContext, listWorktreeTops } from './shared/claim-target.js';
@@ -125,15 +125,22 @@ async function mainDirect(input: PreToolUseInput, paths: string[]): Promise<void
 }
 
 /** The deny output of a shell call that would write a held file. */
-function shellDeny(input: PreToolUseInput, filePath: string, holder: string): any {
+/** A stored absolute path (a cache claim, PR 544) or a drive path. */
+const isStoredAbsolute = (filePath: string): boolean => isAbsolute(filePath) || /^[a-z]:[\\/]/i.test(filePath);
+
+/** What a message shows for a stored path: a cache claim is an absolute path, so only its base name. */
+const shown = (filePath: string): string => (isStoredAbsolute(filePath) ? basename(filePath) : filePath);
+
+function shellDeny(input: PreToolUseInput, filePath: string, holder: string, cue: string): any {
   const reason = `⚠️ FILE CONFLICT BLOCKED
 
-This command writes "${filePath}", which is held by session ${holder}.
+This command may write "${shown(filePath)}", which is held by session ${holder}. It holds the write cue "${cue}".
 The claim is live: their lease runs, or that session is still alive.
+This check reads the command text and does not run it, so it can be wrong. If you only read the file, split the command.
 
 Coordinate with that session, or work on something else.
 To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
-  logGuardDecision('file-claims', input, 'deny', `file-conflict-shell: held by ${holder}`);
+  logGuardDecision('file-claims', input, 'deny', `file-conflict-shell: cue=${cue} held by ${holder}`);
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } };
 }
 
@@ -182,12 +189,14 @@ async function mainShell(input: PreToolUseInput, cmd: ReturnType<typeof readShel
     console.log(JSON.stringify(cont));
     return;
   }
+  // Real-case tops: the cwd repo (when it is this project) and the linked worktrees named by .git/worktrees.
+  // The project key is the primary top folder LOWER-CASED (session-id.ts), so it can only be matched in any
+  // case (ciForms): on Linux an upper-case folder would otherwise never hit (review F2).
   const tops = new Map<string, string[]>();
   const topsOf = (project: string): string[] => {
     let t = tops.get(project);
     if (!t) {
-      // The project key is the primary checkout's top folder (lower case). Its worktrees come from .git/worktrees.
-      t = [...new Set([...(ctx && ctx.project === project ? [ctx.top] : []), project, ...listWorktreeTops(project)])];
+      t = [...new Set([...(ctx && ctx.project === project ? [ctx.top] : []), ...listWorktreeTops(project)])];
       tops.set(project, t);
     }
     return t;
@@ -199,24 +208,26 @@ async function mainShell(input: PreToolUseInput, cmd: ReturnType<typeof readShel
     // path is NOT a spelling by itself: `src/a.ts` in another repo is another file.
     // A stored absolute path is a claim local to ONE checkout (PR 544: .claude/cache): only that path matches.
     // A repo-relative path is one key for every checkout of the repo: spell it under each known top.
-    forms: isAbsolute(c.filePath) || /^[a-z]:[\\/]/i.test(c.filePath)
+    project: c.project,
+    forms: isStoredAbsolute(c.filePath)
       ? [c.filePath]
       : [...new Set(topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath)))],
+    ciForms: isStoredAbsolute(c.filePath) ? [] : formsOf(c.project, cwd, c.filePath),
   }));
   const verdict = classifyShellText(cmd.text, held, FOLDS_CASE);
   if (verdict.kind === 'deny' && !BREAK_GLASS) {
-    console.log(JSON.stringify(shellDeny(input, verdict.filePath, verdict.holder ?? 'another session')));
+    console.log(JSON.stringify(shellDeny(input, verdict.filePath, verdict.holder ?? 'another session', verdict.cue)));
     return;
   }
   if (verdict.kind === 'deny') {
-    logGuardDecision('file-claims', input, 'override', `break-glass: shell write to a file held by ${verdict.holder}`);
-    console.log(JSON.stringify({ result: 'continue', message: `[WARN] BREAK-GLASS: this command writes "${verdict.filePath}", held by session ${verdict.holder}. This was logged.` }));
+    logGuardDecision('file-claims', input, 'override', `break-glass: shell cue=${verdict.cue} on a file held by ${verdict.holder}`);
+    console.log(JSON.stringify({ result: 'continue', message: `[WARN] BREAK-GLASS: this command may write "${shown(verdict.filePath)}" (cue "${verdict.cue}"), held by session ${verdict.holder}. This was logged.` }));
     return;
   }
-  if (verdict.kind === 'mention' && firstWarning(sessionId, verdict.filePath)) {
+  if (verdict.kind === 'mention' && firstWarning(sessionId, verdict.project ?? '', verdict.filePath)) {
     console.log(JSON.stringify({
       result: 'continue',
-      message: `[WARN] "${verdict.filePath}" is held by session ${verdict.holder}. This command names it but shows no write, so it is not stopped. This warning shows once per file.`,
+      message: `[WARN] "${shown(verdict.filePath)}" is held by session ${verdict.holder}. This command names it but shows no write, so it is not stopped. This warning shows once per file.`,
     }));
     return;
   }

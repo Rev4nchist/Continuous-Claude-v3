@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync, existsSync, readdirSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync, existsSync, readdirSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { resolveRepoContext } from '../shared/claim-target.js';
@@ -42,7 +42,8 @@ vi.mock('../shared/db-utils-pg.js', () => ({
   },
   listBlockingClaims: async () => {
     seen.listCalls++;
-    return { claims: seen.listDegraded ? [] : seen.held, degraded: seen.listDegraded };
+    // Degraded WITH claims: only the degraded flag may keep the hook from denying (review F13).
+    return { claims: seen.held, degraded: seen.listDegraded };
   },
 }));
 vi.mock('fs', async (importOriginal) => {
@@ -247,6 +248,78 @@ describe('group B: a tracked file is one claim across worktrees, a .claude/cache
     expect(denied(await run('Bash', { command: `echo x > '${inP}'` }, { cwd: wt }))).toBe(true);
     // a bare relative name from the cwd in W is W's file, not the claimed one
     expect(denied(await run('Bash', { command: 'echo x > .claude/cache/pre-pr/summary.md' }, { cwd: wt }))).toBe(false);
+  });
+});
+
+describe('review round 1 (seat reviewer, 2026-11-13 11:21)', () => {
+  const guardRows = (): Array<Record<string, string>> =>
+    (existsSync(join(root, 'guard.jsonl')) ? readFileSync(join(root, 'guard.jsonl'), 'utf8').split('\n').filter(Boolean) : [])
+      .map((l) => JSON.parse(l) as Record<string, string>);
+
+  it('F1 b c: the deny says "may write", names the cue it saw, and the guard log keeps the cue', async () => {
+    const o = await run('Bash', { command: 'rm -f out.log; cat src/held.ts' });
+    expect(denied(o)).toBe(true);
+    const text = o.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(text).toContain('may write');
+    expect(text).not.toMatch(/ writes "/);
+    expect(text).toContain('"rm"');
+    const row = guardRows().find((r) => r.hook === 'file-claims' && r.decision === 'deny');
+    expect(row?.reason).toContain('cue=rm');
+  });
+
+  it('F13: break-glass on a shell write continues with a warning and logs an override', async () => {
+    process.env.COORDINATION_BREAK_GLASS = '1';
+    try {
+      const o = await run('Bash', { command: 'echo x > src/held.ts' });
+      expect(denied(o)).toBe(false);
+      expect(o.message ?? '').toMatch(/^\[WARN\] BREAK-GLASS/);
+      expect(guardRows().some((r) => r.decision === 'override')).toBe(true);
+    } finally {
+      delete process.env.COORDINATION_BREAK_GLASS;
+    }
+  });
+
+  it('F13: the database-down branch is decided by the degraded flag alone (the mock returns claims)', async () => {
+    seen.listDegraded = true;
+    expect(seen.held.length).toBeGreaterThan(0);
+    expect(await run('Bash', { command: 'echo x > src/held.ts' })).toEqual({ result: 'continue' });
+  });
+
+  it('F9: move_file checks the destination first, so a held destination leaves no claim on the source', async () => {
+    seen.claimCalls = [];
+    const o = await run(`${DC}move_file`, { source: abs('src/free.ts'), destination: abs('src/held.ts') });
+    expect(denied(o)).toBe(true);
+    expect(seen.claimCalls).toEqual(['src/held.ts']);
+  });
+
+  it('F10: a message about a cache claim prints the base name, not the stored absolute path', async () => {
+    const inP = abs('.claude/cache/pre-pr/summary.md');
+    seen.held = [{ filePath: inP, sessionId: 'other-session', project }];
+    const deny = (await run('Bash', { command: `echo x > '${inP}'` })).hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(deny).toContain('summary.md');
+    expect(deny).not.toContain(root.split('\\').join('/'));
+    const warn = (await run('Bash', { command: `cat '${inP}'` })).message ?? '';
+    expect(warn).toContain('summary.md');
+    expect(warn).not.toContain(root.split('\\').join('/'));
+  });
+
+  it('F2: where case is kept (Linux) and the cwd is outside the repo, an absolute path with upper case still hits', async () => {
+    const mixed = join(root, 'MixedCase');
+    mkdirSync(join(mixed, 'src'), { recursive: true });
+    git(mixed, 'init', '-q');
+    writeFileSync(join(mixed, 'src', 'held.ts'), 'x');
+    const p2 = resolveRepoContext(mixed)!.project;
+    seen.held = [{ filePath: 'src/held.ts', sessionId: 'other-session', project: p2 }];
+    const outside = join(root, 'elsewhere2');
+    mkdirSync(outside, { recursive: true });
+    const real = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const o = await run('Bash', { command: `echo x > '${mixed.split('\\').join('/')}/src/held.ts'` }, { cwd: outside });
+      expect(denied(o)).toBe(true);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: real });
+    }
   });
 });
 

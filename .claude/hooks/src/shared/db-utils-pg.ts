@@ -1877,12 +1877,31 @@ export interface BlockingClaim {
 }
 
 /**
- * The claims, in EVERY project, that a session other than `sessionId` holds right now: the lease is live OR the holder
- * is alive. This is the exact negation of the reclaim rule in RESOLVE_CLAIM_SQL (reclaim needs an
- * expired lease AND a stale holder). Read only: it changes no row and takes no lock. File-claims
- * uses it for shell text, where no path is named (card coord-file-claims-all-writers). Every
- * project, because a command can name a file in a repo other than the one of its cwd.
- * `degraded: true` means the query did not run; the caller continues silently.
+ * The claims, in EVERY project, that a session other than $1 holds right now: the lease is live OR the
+ * holder is alive. The exact negation of the reclaim rule in RESOLVE_CLAIM_SQL (reclaim needs an expired
+ * lease AND a stale holder). Newest first, capped at 500. Read only: no row changes, no lock.
+ * Probe: scripts/coordination/list-claims-sql-probe.mjs reads this text out of this file.
+ */
+export const LIST_BLOCKING_CLAIMS_SQL = `
+SELECT fc.file_path, fc.session_id, fc.project
+  FROM file_claims fc
+ WHERE fc.session_id <> $1
+   AND ( (fc.expires_at IS NOT NULL AND fc.expires_at > NOW())
+         OR EXISTS (SELECT 1 FROM sessions s
+                     WHERE s.id = fc.session_id
+                       AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $2)) )
+ ORDER BY fc.claimed_at DESC
+ LIMIT 500
+`;
+
+/** Budget for the shell path of file-claims: connect plus query, in total (review F4). */
+const LIST_BLOCKING_CLAIMS_BUDGET_MS = 1000;
+
+/**
+ * Run LIST_BLOCKING_CLAIMS_SQL. File-claims uses it for shell text, where no path is named (card
+ * coord-file-claims-all-writers). Every project, because a command can name a file in a repo other than
+ * the one of its cwd. Quiet (no stderr line) and capped at one second in total: it runs on every shell
+ * call. `degraded: true` means the query did not run; the caller continues silently.
  */
 export async function listBlockingClaims(
   sessionId: string,
@@ -1891,21 +1910,12 @@ export async function listBlockingClaims(
   const staleSeconds = Math.floor(staleThresholdMs / 1000);
   const { value, degraded } = await withPgClientOrFallback<BlockingClaim[]>(
     async (client) => {
-      const res = await client.query(
-        `SELECT fc.file_path, fc.session_id, fc.project
-           FROM file_claims fc
-          WHERE fc.session_id <> $1
-            AND ( (fc.expires_at IS NOT NULL AND fc.expires_at > NOW())
-                  OR EXISTS (SELECT 1 FROM sessions s
-                              WHERE s.id = fc.session_id
-                                AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $2)) )
-          LIMIT 500`,
-        [sessionId, staleSeconds],
-      );
+      const res = await client.query(LIST_BLOCKING_CLAIMS_SQL, [sessionId, staleSeconds]);
       return res.rows.map((r: { file_path: string; session_id: string; project: string }) => ({ filePath: r.file_path, sessionId: r.session_id, project: r.project }));
     },
     [] as BlockingClaim[],
     'listBlockingClaims',
+    { quiet: true, totalMs: LIST_BLOCKING_CLAIMS_BUDGET_MS },
   );
   return { claims: value, degraded };
 }
