@@ -14,6 +14,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GAP_PATTERNS, fixtureGap } from './fixture-gap.mjs';
+import { REGISTRY } from './parser-fixtures/registry.mjs';
 
 const REG = [{ id: 'x.parse', file: 'scripts/x/known-parser.mjs' }];
 const gap = (files, registry = REG) => fixtureGap(files, registry).files;
@@ -61,6 +62,13 @@ test('G8: GAP_PATTERNS is an exported list of regular expressions that names par
   for (const word of ['parser', 'guard', 'lexer', 'sanitize', 'scrub', 'tokenize']) assert.ok(hit(`x-${word}.mjs`), word);
 });
 
-test('a missing registry argument uses the real registry (breaks if the default is dropped)', () => {
+test('the default registry is the real REGISTRY: its entries are not listed, and an entry added to it is honoured (breaks if the default is an empty list or a copy)', () => {
+  assert.ok(REGISTRY.length > 0, 'the real registry is not empty');
+  for (const entry of REGISTRY) assert.ok(!fixtureGap([entry.file]).files.includes(entry.file), entry.file);
+  // No real entry has a parser or guard name, so a name that is on the list is added to the real array for this test only.
+  const file = 'scripts/x/zz-registered-parser.mjs';
+  assert.deepEqual(fixtureGap([file]).files, [file], 'unregistered: listed');
+  REGISTRY.push({ id: 'zz.test', file });
+  try { assert.deepEqual(fixtureGap([file]).files, [], 'registered in the real array: not listed'); } finally { REGISTRY.pop(); }
   assert.deepEqual(fixtureGap(['scripts/x/brand-new-guard.mjs']).files, ['scripts/x/brand-new-guard.mjs']);
 });

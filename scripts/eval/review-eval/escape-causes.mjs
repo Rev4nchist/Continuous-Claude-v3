@@ -161,8 +161,9 @@ export async function main(argv, deps = {}) {
   try {
     const fromRun = args.fromJson ? JSON.parse(readFileSync(args.fromJson, 'utf8')) : null;
     const dir = stateDirOf(args.stateDir, deps.env ?? process.env);
-    const rows = fromRun?.rows ?? readEscapeRows(dir);
-    if (!fromRun && !existsSync(path.join(dir, ESCAPES_FILE))) stdout(`0 escape rows (no ${ESCAPES_FILE} in ${dir})`);
+    if (args.fromJson && !Array.isArray(fromRun?.rows)) throw new Error(`${args.fromJson} has no rows array: it is not a fix-chains --json file`);
+    const rows = args.fromJson ? fromRun.rows : readEscapeRows(dir);
+    if (!args.fromJson && !existsSync(path.join(dir, ESCAPES_FILE))) stdout(`0 escape rows (no ${ESCAPES_FILE} in ${dir})`);
     const cut = args.since ? since(rows, args.since) : { kept: rows, undated: null };
     stdout(report(cut.kept, { noTarget: fromRun?.totals?.noTarget }));
     if (cut.undated !== null) stdout(`undated rows left out: ${cut.undated}`);

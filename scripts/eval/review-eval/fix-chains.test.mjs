@@ -44,7 +44,7 @@
 //   F3b/F3c  no-newline marks, deleted file, rename, CRLF, tab suffix, C-quoted paths -> change removedRanges or oldPathOf
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,9 +89,11 @@ function build(steps) {
   const prs = {};
   const byBranchSha = {};
   for (const s of steps) {
+    if (s.config) { sh(dir, ['config', ...s.config], '2025-12-01T00:00:00Z'); continue; }
     if (s.direct) { put(dir, s.direct.files); sh(dir, ['add', '-A'], s.direct.at); sh(dir, ['commit', '-q', '-m', s.direct.subject], s.direct.at); continue; }
     sh(dir, ['checkout', '-q', '-b', `pr${s.n}`, 'main'], s.at);
     const shas = s.commits.map((c) => {
+      for (const gone of c.remove ?? []) rmSync(path.join(dir, gone));
       put(dir, c.files);
       sh(dir, ['add', '-A'], s.at);
       sh(dir, ['commit', '-q', '-m', c.subject], s.at);
@@ -479,14 +481,33 @@ const row = (mergeSha, blamedPr, band = 'LOW') => ({ mergeSha, pr: 9, band, blam
 
 test('F16: writeRows appends new rows once, creates the dir, and survives a damaged line (breaks if the key, the reader or the newline guard changes)', () => {
   const dir = path.join(tmp('state'), 'deep', 'er');
-  assert.deepEqual(writeRows(dir, [row('m1', 1), row('m1', 2)]), { added: 2, skipped: 0 });
-  assert.deepEqual(writeRows(dir, [row('m1', 1), row('m1', 2)]), { added: 0, skipped: 2 });
-  assert.deepEqual(writeRows(dir, [row('m2', 1)]), { added: 1, skipped: 0 }, 'same blamed PR, other fix merge: a new key');
+  assert.deepEqual(writeRows(dir, [row('m1', 1), row('m1', 2)]), { added: 2, skipped: 0, updated: 0, removed: 0 });
+  assert.deepEqual(writeRows(dir, [row('m1', 1), row('m1', 2)]), { added: 0, skipped: 2, updated: 0, removed: 0 });
+  assert.deepEqual(writeRows(dir, [row('m2', 1)]), { added: 1, skipped: 0, updated: 0, removed: 0 }, 'same blamed PR, other fix merge: a new key');
   const file = path.join(dir, 'escapes.jsonl');
   writeFileSync(file, `${readFileSync(file, 'utf8')}{damaged`); // no newline at the end
-  assert.deepEqual(writeRows(dir, [row('m1', 1), row('m3', 3)]), { added: 1, skipped: 1 });
-  assert.equal(readFileSync(file, 'utf8').trim().split('\n').length, 5);
-  assert.deepEqual(writeRows(dir, [row('m4', 4), row('m4', 4)]), { added: 1, skipped: 1 }, 'a duplicate inside one call counts once');
+  // m1 is read again with only blamed PR 1: the old m1 row for PR 2 goes. The damaged line stays where it is.
+  assert.deepEqual(writeRows(dir, [row('m1', 1), row('m3', 3)]), { added: 1, skipped: 1, updated: 0, removed: 1 });
+  assert.equal(readFileSync(file, 'utf8').trim().split('\n').length, 4);
+  assert.deepEqual(writeRows(dir, [row('m4', 4), row('m4', 4)]), { added: 1, skipped: 1, updated: 0, removed: 0 }, 'a duplicate inside one call counts once');
+});
+
+test('F37: writeRows replaces the rows of a fix PR instead of appending beside them; other rows stay byte-identical and in order; no temp file is left (breaks if a re-run adds a second primary row, rows move, or the rewrite is not tmp plus rename)', () => {
+  const dir = tmp('state');
+  const file = path.join(dir, 'escapes.jsonl');
+  const other1 = '{"mergeSha":"y",  "pr":5,"blamedPr":1,"cause":"unclassified"}'; // odd spacing: must survive byte for byte
+  const other2 = JSON.stringify({ mergeSha: 'z', pr: 6, blamedPr: 2, cause: 'unclassified', primary: true });
+  const rowP = (blamedPr, primary) => ({ ...row('x', blamedPr), primary });
+  writeFileSync(file, [other1, JSON.stringify(rowP(1, true)), JSON.stringify(rowP(3, false)), other2].join('\n') + '\n');
+  const r = writeRows(dir, [rowP(1, false), rowP(3, true)]);
+  assert.deepEqual(r, { added: 0, skipped: 0, updated: 2, removed: 0 });
+  const lines2 = readFileSync(file, 'utf8').split('\n');
+  assert.deepEqual(lines2.slice(0, 2), [other1, other2], 'rows of other fix PRs: same bytes, same order');
+  const mine = lines2.filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.mergeSha === 'x');
+  assert.equal(mine.length, 2);
+  assert.deepEqual(mine.filter((x) => x.primary === true).map((x) => x.blamedPr), [3], 'exactly one primary row for the fix PR');
+  assert.deepEqual(readdirSync(dir), ['escapes.jsonl'], 'the temp file was renamed away');
+  assert.deepEqual(writeRows(dir, [rowP(1, false), rowP(3, true)]), { added: 0, skipped: 2, updated: 0, removed: 0 }, 'the same rows again: no change');
 });
 
 test('F17: buildBaseline has one row per band of the window PRs; escapes are distinct window PRs with a row, in the band of the window PR, and escapes never pass prsMerged (breaks if rows are counted, the row band is used, or an outside PR is counted)', () => {
@@ -660,6 +681,103 @@ test('F36: the CLI baseline line prints the all-row count next to the primary co
   const r = await cli(['--range', '3..4', '--repo', 'o/r', '--baseline'], { git: b.git, gh: fakeGh(b) });
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /baseline \(primary rows: a rule of thumb, not a proven cause\): .*1\/3 \(1 primary row\(s\), 2 all\)/);
+});
+
+/** PR 1 wrote the top lines, PR 3 the bottom lines, fix PR 4 changes all four: PR 3 (the later merge) is the true primary. */
+const partialRepo = () => build([
+  { n: 1, at: '2026-01-08T12:00:00Z', commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('c1', 'c2') } }] },
+  { n: 3, at: '2026-01-09T12:00:00Z', commits: [{ subject: 'feat: g', files: { 'src/f.txt': lines('c1', 'c2', 'a1', 'a2') } }] },
+  { n: 4, at: B_DAY, commits: [{ subject: 'fix: both', files: { 'src/f.txt': lines('X1', 'X2', 'Y1', 'Y2') } }] },
+]);
+/** A gh that fails for the one sha of PR 3 and answers for the rest. */
+const flakyGh = (b) => fakeGh(b, { override: (sha) => { if (sha === b.prs[3].shas[0]) throw new Error('gh: 502'); return b.byBranchSha[sha] ?? []; } });
+const primaryRows = (file) => readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.primary === true);
+
+test('F38: a diff, blame or gh failure sets failed:true with its steps, also when rows exist (breaks if the failure is dropped once a row is found)', async () => {
+  const b = partialRepo();
+  const r = await run(b, 4, { gh: flakyGh(b) });
+  assert.equal(r.failed, true);
+  assert.deepEqual(r.failures, ['gh']);
+  assert.equal(r.rows.length, 1, 'PR 1 still gives a row, and it holds the wrong primary flag');
+  const clean = await run(b, 4);
+  assert.equal(clean.failed, undefined, 'a clean run has no failed flag');
+  const noBlame = await run(b, 4, { git: failOn(b, (a) => a[0] === 'blame') });
+  assert.equal(noBlame.failed, true);
+  assert.ok(noBlame.failures.includes('blame'));
+  const noDiff = await run(b, 4, { git: failOn(b, (a) => a[0] === 'diff' && a.includes('--unified=0')) });
+  assert.deepEqual([noDiff.failed, noDiff.failures], [true, ['diff']]);
+});
+
+test('F39: the CLI writes no rows for a fix PR whose run had a failure, counts it as partial-failure and prints it; a later clean run leaves exactly one primary row; a later failed run changes nothing (breaks if a partial row is written or kept beside the true one)', async () => {
+  const b = partialRepo();
+  const dir = path.join(tmp('state'), 'partial');
+  const file = path.join(dir, 'escapes.jsonl');
+  const args = ['--range', '1..4', '--repo', 'o/r', '--write', '--state-dir', dir];
+  const jsonFile = path.join(tmp('out'), 'run.json');
+  const bad = await cli([...args, '--json', jsonFile], { git: b.git, gh: flakyGh(b) });
+  assert.equal(bad.code, 0, bad.err);
+  assert.match(bad.out, /PR #4: .*partial-failure/);
+  assert.match(bad.out, /no blame target: 1 \(partial-failure 1\)/);
+  assert.equal(existsSync(file), false, 'nothing written for a partial run');
+  const j = JSON.parse(readFileSync(jsonFile, 'utf8'));
+  assert.deepEqual(j.rows, []);
+  assert.deepEqual(j.totals.noTarget.byReason, { 'partial-failure': 1 });
+  const good = await cli(args, { git: b.git, gh: fakeGh(b) });
+  assert.match(good.out, /rows written: 2 added/);
+  assert.deepEqual(primaryRows(file).map((x) => x.blamedPr), [3], 'the true primary only');
+  const before = readFileSync(file, 'utf8');
+  await cli(args, { git: b.git, gh: flakyGh(b) });
+  assert.equal(readFileSync(file, 'utf8'), before, 'a failed run does not touch the file');
+});
+
+test('F40: the earliest main merge of a commit is picked before the window test, so a commit under two main merges is not blamed on the newer one (breaks if the window filter runs first)', async () => {
+  const b = build([
+    { n: 1, at: '2026-01-01T12:00:00Z', commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('alpha', 'buggy') } }] },
+    { n: 3, at: '2026-01-31T12:00:00Z', commits: [{ subject: 'feat: h', files: { 'src/h.txt': lines('h') } }] },
+    { n: 2, at: '2026-02-10T12:00:00Z', commits: [{ subject: 'fix: f', files: { 'src/f.txt': lines('alpha', 'fixed') } }] },
+  ]);
+  const info = (n, at) => ({ number: n, merged_at: at, merge_commit_sha: b.prs[n].mergeSha });
+  const both = await run(b, 2, { gh: fakeGh(b, { override: () => [info(3, '2026-01-31T12:00:00Z'), info(1, '2026-01-01T12:00:00Z')] }) });
+  assert.deepEqual(both.rows, [], 'the earliest merge is 40 days old: outside the window');
+  assert.equal(both.noTarget, 'outside-window');
+  const only = await run(b, 2, { gh: fakeGh(b, { override: () => [info(3, '2026-01-31T12:00:00Z')] }) });
+  assert.deepEqual(only.rows.map((x) => x.blamedPr), [3], 'control: the 10-day merge alone is in the window');
+});
+
+test('F41: a git call that times out is a failure (breaks if makeGit has no timeout, so a hung git hangs the run)', () => {
+  const b = planted();
+  assert.equal(makeGit(b.dir)(['log', '--oneline']).status, 0, 'control: the default timeout is long');
+  const slow = makeGit(b.dir, { timeoutMs: 1 })(['log', '--oneline']);
+  assert.notEqual(slow.status, 0);
+});
+
+test('F42: --json may not resolve inside the state dir, also for a dry run; another place is fine, also a folder that only shares the name prefix (breaks if --json can overwrite a state file)', async () => {
+  const b = twoPrRepo();
+  const dir = path.join(tmp('state'), 'se');
+  const deps = () => ({ git: b.git, gh: fakeGh(b) });
+  for (const inside of [path.join(dir, 'escapes.jsonl'), path.join(dir, 'sub', 'run.json'), dir, path.join(dir, '..', 'se', 'x.json')]) {
+    const r = await cli([...rangeArgs, '--state-dir', dir, '--json', inside], deps());
+    assert.equal(r.code, 2, inside);
+    assert.match(r.err, /--json/);
+    assert.equal(existsSync(dir), false, 'nothing was made');
+  }
+  const viaEnv = await cli([...rangeArgs, '--json', path.join(dir, 'run.json')], { ...deps(), env: { REVIEW_ENGINE_STATE_DIR: dir } });
+  assert.equal(viaEnv.code, 2, 'the env state dir counts too');
+  const near = path.join(`${dir}-near`, 'run.json');
+  assert.equal((await cli([...rangeArgs, '--state-dir', dir, '--json', near], deps())).code, 0);
+  assert.equal(existsSync(near), true);
+  assert.equal(existsSync(dir), false, 'a dry run still writes no state dir');
+});
+
+test('F43: the fix diff pins rename detection with -M, so a user diff.renames=false cannot turn a rename into a whole-file removal (breaks if -M is dropped)', async () => {
+  const b = build([
+    { n: 1, at: '2026-01-08T12:00:00Z', commits: [{ subject: 'feat: f', files: { 'old.txt': lines('a1', 'a2') } }] },
+    { n: 3, at: '2026-01-09T12:00:00Z', commits: [{ subject: 'feat: g', files: { 'old.txt': lines('a1', 'a2', 'a3', 'a4') } }] },
+    { config: ['diff.renames', 'false'] },
+    { n: 4, at: B_DAY, commits: [{ subject: 'fix: move and change', remove: ['old.txt'], files: { 'new.txt': lines('a1', 'a2', 'a3', 'A4') } }] },
+  ]);
+  const r = await run(b, 4);
+  assert.deepEqual(r.rows.map((x) => x.blamedPr), [3], 'only the changed line of the renamed file is blamed');
 });
 
 test('F20: the CLI with --state-dir leaves the live escapes file as it was, also when it does not exist (breaks if the default dir is read or written)', async () => {

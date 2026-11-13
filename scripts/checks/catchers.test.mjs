@@ -217,6 +217,7 @@ test('C9: a smoke TIMEOUT is shown as a fact and does not fail the gate; fixture
 
 // ---------- fixture gap (fact) ----------
 
+const NL = String.fromCharCode(10);
 const QUIET = { smoke: async () => ({ results: [], failed: 0, timeouts: 0, checked: 0 }), fixtures: async () => ({ results: [], skipped: [], errors: [], failed: 0 }), typecheck: async () => ({ errors: [], skipped: null }) };
 const GAP_LINE = /^fixture-gap \(fact\): \d+ changed parser\/guard file\(s\) with no parser-fixtures entry: .+$/m;
 // The real registry holds no file named like a parser or guard, so a registered parser needs a registry of its own.
@@ -229,7 +230,7 @@ test('C10: an unregistered guard file gives one gap fact line; a registered pars
   const lines = factsBody(gapped).split('\n').filter((l) => l.startsWith('fixture-gap'));
   assert.deepEqual(lines, ['fixture-gap (fact): 1 changed parser/guard file(s) with no parser-fixtures entry: scripts/x/foo-guard.mjs']);
   const registered = await catchersOn(FILES('scripts/x/known-parser.mjs'), { ...QUIET, ...withRegistry([{ id: 'k', file: 'scripts/x/known-parser.mjs' }]) });
-  assert.deepEqual(registered.fixtureGap.files, []);
+  assert.equal(registered.fixtureGap, undefined, 'no gap: the result has no fixtureGap key');
   assert.ok(!factsBody(registered).includes('fixture-gap'));
   const mixed = await catchersOn(FILES('scripts/x/known-parser.mjs', 'scripts/x/new-lexer.mjs'), { ...QUIET, ...withRegistry([{ id: 'k', file: 'scripts/x/known-parser.mjs' }]) });
   assert.deepEqual(mixed.fixtureGap.files, ['scripts/x/new-lexer.mjs']);
@@ -249,13 +250,59 @@ test('C11: a gap never changes gateFailed, and a crash of the gap tool is an err
   assert.equal(real.fixtureGap.files.length, 1);
 });
 
-test('C12: with no gap the facts text is byte-identical to a result that has no fixtureGap field (breaks if an empty gap prints a line)', async () => {
-  const clean = await catchersOn(CLEAN_CLI, QUIET);
-  assert.deepEqual(clean.fixtureGap, { files: [] });
-  const without = { ...clean };
-  delete without.fixtureGap;
-  assert.equal(factsBody(clean), factsBody(without));
-  assert.equal(factsBody({ ...clean, fixtureGap: { files: [] } }), factsBody(without));
+test('C12: with no gap the three outputs are the text main produced: the summary line, the facts and the --json key set, with no fixtureGap key (breaks if a no-gap run adds a key or a line)', async () => {
+  const dir = tmp('c12');
+  put(dir, { 'docs/x.md': 'text' + NL });
+  const diffFile = path.join(dir, 'change.diff');
+  writeFileSync(diffFile, addDiff({ 'docs/x.md': 'text' + NL }));
+  const out = [];
+  const code = await main(['--root', dir, '--diff', diffFile, '--json', path.join(dir, 'r.json'), '--md', path.join(dir, 'r.md')], { stdout: (l) => out.push(l), stderr: () => {}, runOpts: QUIET });
+  assert.equal(code, 0);
+  assert.deepEqual(out, ['catchers: ok: smoke 0 failed of 0, fixtures 0 failed, tsc 0 error(s), 0 mapped test gate(s)']);
+  assert.equal(readFileSync(path.join(dir, 'r.md'), 'utf8'), [
+    'cli-smoke GATE: 0 failed of 0 script(s) run',
+    'parser-fixtures GATE: 0 failure(s) in 0 parser(s) run',
+    'tsc (fact, changed lines only): 0 error(s)',
+    'mapped tests (fact): none map to the changed files',
+    '',
+  ].join(NL));
+  const json = [
+    '{',
+    '  "files": [',
+    '    "docs/x.md"',
+    '  ],',
+    '  "typecheck": {',
+    '    "errors": [],',
+    '    "skipped": null',
+    '  },',
+    '  "smoke": {',
+    '    "results": [],',
+    '    "failed": 0,',
+    '    "timeouts": 0,',
+    '    "checked": 0',
+    '  },',
+    '  "fixtures": {',
+    '    "results": [],',
+    '    "skipped": [],',
+    '    "errors": [],',
+    '    "failed": 0',
+    '  },',
+    '  "mappedTests": [],',
+    '  "gateFailed": false,',
+    '  "errors": []',
+    '}',
+    '',
+  ].join(NL);
+  assert.equal(readFileSync(path.join(dir, 'r.json'), 'utf8'), json);
+});
+
+test('C12b: a gap result carries the fixtureGap key and the gap line, in --json and in the facts (breaks if the key is never added)', async () => {
+  const r = await catchersOn(FILES('scripts/x/foo-guard.mjs'), QUIET);
+  assert.deepEqual(r.fixtureGap, { files: ['scripts/x/foo-guard.mjs'] });
+  assert.deepEqual(Object.keys(r), ['files', 'typecheck', 'smoke', 'fixtures', 'fixtureGap', 'mappedTests', 'gateFailed', 'errors']);
+  assert.match(JSON.stringify(r, null, 2), /"fixtureGap": {/);
+  const boom = await catchersOn(FILES('docs-only.md'), { ...QUIET, fixtureGap: () => { throw new Error('x'); } });
+  assert.ok('fixtureGap' in boom, 'a crash of the gap tool keeps the key, with its error');
 });
 
 test('C13: the gap line lists at most 5 files and stays on one line (breaks if the slice or oneLine is dropped)', () => {

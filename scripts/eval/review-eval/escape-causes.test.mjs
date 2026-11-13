@@ -19,6 +19,7 @@
 //   E16 the primary flag is ignored, or the all-rows line or the rule-of-thumb wording is missing -> change report()
 //   E17 a capitalised Mock file is not a mock                               -> drop toLowerCase in the mock rule
 //   E18 the share loses a caveat line, changes its wording or order, or keeps path-only rows in the third share -> change shareLines()
+//   E19 --from-json with no rows array reads the state dir instead of failing -> change the rows fallback in main()
 //   E14 --help is an error                                                 -> change main()
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -212,6 +213,21 @@ test('E13b: --from-json takes rows and the no-target count from a fix-chains --j
   const r = await run(['--from-json', file, '--state-dir', path.join(dir, 'none')]);
   assert.match(r.text, /mocked-fixture: 1/);
   assert.match(r.text, /fixes with no blame target: 2/);
+});
+
+test('E19: --from-json with no rows array exits 2 with a message and never falls back to the state dir (breaks if a missing rows array reads escapes.jsonl)', async () => {
+  const dir = tmp();
+  rowsFile(dir, [JSON.stringify({ mergeSha: 'a', pr: 2, blamedPr: 1, cause: 'unclassified' })]);
+  const bad = { 'no-rows.json': '{"totals":{}}', 'array.json': '[]', 'null.json': 'null', 'rows-string.json': '{"rows":"x"}', 'broken.json': '{not json' };
+  for (const [name, text] of Object.entries(bad)) {
+    const file = path.join(dir, name);
+    writeFileSync(file, text);
+    const r = await run(['--from-json', file, '--state-dir', dir]);
+    assert.equal(r.code, 2, name);
+    assert.doesNotMatch(r.text, /escape rows/, `${name}: the state dir rows must not be read`);
+    assert.match(r.text, /ERR escape-causes: /);
+  }
+  assert.match((await run(['--from-json', path.join(dir, 'nope.json'), '--state-dir', dir])).text, /ERR escape-causes: /);
 });
 
 test('E14: --help prints usage and exits 0; a bad flag exits 2 (breaks if main treats help as an error)', async () => {

@@ -7,7 +7,7 @@
 // A fix of the PR's own new lines (a review round) is no escape and no "no target": it has its own count.
 // Usage: see USAGE below. No args and --help print it and touch neither git nor gh.
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_REPO } from '../../github/cursor-review.mjs';
@@ -23,11 +23,11 @@ const FIELD = '\x1f';
 
 // ---------- git and gh ----------
 
-/** git(args) => { status, stdout, stderr } in cwd. No shell. */
-export function makeGit(cwd) {
+/** git(args) => { status, stdout, stderr } in cwd. No shell. A call that runs past timeoutMs is killed and reads as a failure (status 1). */
+export function makeGit(cwd, { timeoutMs = 120_000 } = {}) {
   return (args) => {
-    const r = spawnSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.quotePath=false', ...args], { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: GIT_BUFFER });
-    return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    const r = spawnSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.quotePath=false', ...args], { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: GIT_BUFFER, timeout: timeoutMs, killSignal: 'SIGKILL' });
+    return { status: r.error ? 1 : r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr || (r.error ? String(r.error.message) : '') };
   };
 }
 
@@ -204,7 +204,7 @@ function blameShas(git, parent, file, [from, to]) {
 
 /** Blames the removed lines of one fix commit. Updates stats; returns the foreign shas (not in the PR itself). */
 function blameCommit(c, ctx, stats) {
-  const diff = ctx.git(['diff', '--unified=0', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', `${c.sha}^`, c.sha]);
+  const diff = ctx.git(['diff', '--unified=0', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '-M', `${c.sha}^`, c.sha]);
   if (diff.status !== 0) { stats.diffFailed += 1; return []; }
   stats.diffOk += 1;
   const found = new Set();
@@ -235,8 +235,9 @@ async function collectHits(c, shas, ctx, stats, hits) {
     stats.foreign.add(sha);
     const prs = await prsOf(sha, ctx);
     if (prs === null) { stats.ghFailed.add(sha); continue; }
-    const p = earliest(prs.filter((x) => inWindow(x, ctx.prInfo, ctx.windowDays) && ctx.mergeShas.has(x.merge_commit_sha)));
-    if (!p) continue;
+    // The earliest main merge first, then the window: a commit under two main merges belongs to the older one.
+    const p = earliest(prs.filter((x) => x.number !== ctx.prInfo.pr && ctx.mergeShas.has(x.merge_commit_sha)));
+    if (!p || !inWindow(p, ctx.prInfo, ctx.windowDays)) continue;
     const h = hits.get(p.number) ?? { p, fixSha: c.sha, fixFiles: new Set() };
     hits.set(p.number, h);
     files ??= filesOf(ctx.git, c.sha);
@@ -266,6 +267,11 @@ function reasonOf(stats) {
   return { noTarget: 'partial-failure' };
 }
 
+/** The steps that failed in this run: 'diff', 'blame', 'gh'. Empty when every call worked. */
+function failuresOf(stats) {
+  return [stats.diffFailed > 0 && 'diff', stats.blameOk < stats.blameTried && 'blame', stats.ghFailed.size > 0 && 'gh'].filter(Boolean);
+}
+
 function rowOf(h, ctx) {
   const { p, fixSha, fixFiles } = h;
   const files = filesOfMerge(ctx.git, p.merge_commit_sha);
@@ -287,12 +293,16 @@ async function walkPr(prInfo, opts) {
   for (const c of fixes) await collectHits(c, blameCommit(c, ctx, stats), ctx, stats, hits);
   const primary = pickPrimary([...hits.values()].map((h) => h.p))?.number;
   const rows = [...hits.values()].map((h) => ({ ...rowOf(h, ctx), primary: h.p.number === primary }));
-  return rows.length ? { rows, noTarget: null, fix: true } : { rows: [], fix: true, ...reasonOf(stats) };
+  const failures = failuresOf(stats);
+  const flag = failures.length > 0 ? { failed: true, failures } : {};
+  return rows.length ? { rows, noTarget: null, fix: true, ...flag } : { rows: [], fix: true, ...reasonOf(stats), ...flag };
 }
 
 /**
  * The escape rows of one merged PR. prInfo: an item of listMergedPrs. Never throws.
  * Returns { rows, noTarget, fix } (and inPrOnly: true when every fix only changed the PR's own new lines).
+ * failed: true, with failures (a list of 'diff', 'blame', 'gh'), is set when any call failed, also when rows exist: the rows may
+ * miss a blamed PR, so the primary flag may sit on the wrong one. A caller must not store the rows of a failed result.
  * A PR that git cannot read at all gives { rows: [], noTarget: 'git-failed', fix: null }: it is not known to be a fix PR.
  * Each row has `primary`: true for the most recently merged blamed PR of the fix PR (tie: the higher PR number), false for the
  * others. That is a rule of thumb (right in 4 of 4 doc cases), not a proven cause.
@@ -311,24 +321,47 @@ export async function escapesForPr(prInfo, { git, gh, repo = DEFAULT_REPO, windo
 
 const keyOf = (r) => `${r.mergeSha}:${r.blamedPr}`;
 
-/** True when the file ends in a half line (a damaged last line): the next row must start on a new line. */
-function needsNewline(file) {
-  if (!existsSync(file)) return false;
-  const text = readFileSync(file, 'utf8');
-  return text !== '' && !text.endsWith('\n');
+/** The mergeSha of one raw line of escapes.jsonl, or null for a line that is not a row (kept as it is). */
+function mergeShaOfLine(line) {
+  try { const row = JSON.parse(line); return row && typeof row === 'object' ? row.mergeSha ?? null : null; } catch { return null; }
 }
 
-/** Appends the rows whose mergeSha:blamedPr key is not in escapes.jsonl yet. A re-run adds nothing. */
+/**
+ * Stores the rows of the fix PRs in `rows`. The rows of a fix PR (one mergeSha) REPLACE every row the file has for that mergeSha:
+ * a re-run that finds another primary must not leave the old one beside it. Rows of other mergeShas, and lines that are not
+ * rows, stay byte for byte and in order; the new rows go at the end. The file is written to a temp file and renamed.
+ * Returns { added, skipped, updated, removed }: new keys, rows equal to the old ones, same key with other content, old rows dropped.
+ */
 export function writeRows(stateDir, rows) {
   mkdirSync(stateDir, { recursive: true });
   const file = path.join(stateDir, ESCAPES_FILE);
-  const seen = new Set(readEscapeRows(stateDir).map(keyOf));
-  const fresh = [];
-  for (const r of rows) if (!seen.has(keyOf(r))) { seen.add(keyOf(r)); fresh.push(r); }
-  if (fresh.length > 0) {
-    appendFileSync(file, `${needsNewline(file) ? '\n' : ''}${fresh.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  const old = existsSync(file) ? readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => l !== '') : [];
+  const mine = new Set(rows.map((r) => r.mergeSha));
+  const oldByKey = new Map(old.filter((l) => mine.has(mergeShaOfLine(l))).map((l) => [keyOf(JSON.parse(l)), l]));
+  const fresh = new Map(rows.map((r) => [keyOf(r), JSON.stringify(r)]));
+  const stats = tally(oldByKey, fresh, rows.length);
+  const next = [...old.filter((l) => !mine.has(mergeShaOfLine(l))), ...fresh.values()];
+  if (next.join('\n') !== old.join('\n')) atomicWrite(file, `${next.join('\n')}\n`);
+  return stats;
+}
+
+function tally(oldByKey, fresh, rowCount) {
+  let added = 0;
+  let skipped = rowCount - fresh.size; // a duplicate inside one call
+  let updated = 0;
+  for (const [key, line] of fresh) {
+    if (!oldByKey.has(key)) added += 1;
+    else if (oldByKey.get(key) === line) skipped += 1;
+    else updated += 1;
   }
-  return { added: fresh.length, skipped: rows.length - fresh.length };
+  return { added, skipped, updated, removed: [...oldByKey.keys()].filter((k) => !fresh.has(k)).length };
+}
+
+/** Writes text to a temp file next to the target and renames it over the target: a reader never sees half a file. */
+function atomicWrite(file, text) {
+  const tmpFile = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmpFile, text);
+  renameSync(tmpFile, file);
 }
 
 /** True when the row blames this window PR: by merge sha, or by PR number. */
@@ -416,7 +449,17 @@ function totalsOf(results, rows) {
   };
 }
 
-const prLine = (r) => r.noTarget === 'git-failed' ? `PR #${r.pr}: git could not read it` : `PR #${r.pr}: ${r.rows.length ? `${r.rows.length} escape row(s) (blamed ${r.rows.map((x) => `#${x.blamedPr}`).join(', ')})` : r.inPrOnly ? 'fix of its own lines only' : `no blame target (${r.noTarget})`}`;
+/**
+ * A fix PR whose run had a failure is not stored: its rows may miss a blamed PR, so the primary flag may be wrong. The PR is
+ * counted as partial-failure (its own noTarget) and the rows are dropped from the run; droppedRows says how many.
+ */
+function settle(result) {
+  if (!result.failed || result.rows.length === 0) return result;
+  return { ...result, rows: [], droppedRows: result.rows.length, noTarget: 'partial-failure' };
+}
+
+const droppedNote = (r) => (r.droppedRows ? `, ${r.droppedRows} row(s) not stored; failed steps: ${r.failures.join(', ')}` : '');
+const prLine = (r) => r.noTarget === 'git-failed' ? `PR #${r.pr}: git could not read it` : `PR #${r.pr}: ${r.rows.length ? `${r.rows.length} escape row(s) (blamed ${r.rows.map((x) => `#${x.blamedPr}`).join(', ')})` : r.inPrOnly ? 'fix of its own lines only' : `no blame target (${r.noTarget}${droppedNote(r)})`}`;
 
 function totalsLines(t) {
   const detail = Object.entries(t.noTarget.byReason).map(([k, n]) => `${k} ${n}`).join(', ');
@@ -426,7 +469,7 @@ function totalsLines(t) {
 async function mineAll(prs, deps) {
   const cache = new Map();
   const results = [];
-  for (const pr of prs) results.push({ pr: pr.pr, ...(await escapesForPr(pr, { ...deps, prOfSha: cache })) });
+  for (const pr of prs) results.push(settle({ pr: pr.pr, ...(await escapesForPr(pr, { ...deps, prOfSha: cache })) }));
   return results;
 }
 
@@ -447,6 +490,12 @@ function emitFiles(args, run, stdout, dir) {
   const w = writeRows(dir, run.rows);
   stdout(`rows written: ${w.added} added, ${w.skipped} skipped (${path.join(dir, ESCAPES_FILE)})`);
   if (run.baseline) { writeBaseline(dir, run.baseline); stdout(`baseline written: ${path.join(dir, BASELINE_FILE)}`); }
+}
+
+/** True when file resolves to the folder dir or to a path below it. A folder that only shares the name prefix is outside. */
+function isInside(dir, file) {
+  const rel = path.relative(path.resolve(dir), path.resolve(file));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 /** Walks the PRs of the range. Returns { rows, perPr, totals, baseline?, baselineRowsLeftOut? }. */
@@ -482,10 +531,12 @@ export async function main(argv, deps = {}) {
   const args = argv.length === 0 ? { help: true } : parseArgs(argv);
   if (args.help) { stdout(USAGE); return 0; }
   if (args.error) { stderr(`fix-chains: ${args.error}\n${USAGE}`); return 2; }
+  const dir = stateDirOf(args.stateDir, deps.env ?? process.env);
+  if (args.json && isInside(dir, args.json)) { stderr(`fix-chains: --json ${args.json} is inside the state dir ${dir}: it could overwrite a state file`); return 2; }
   try {
     const run = await mine(args, deps);
     printRun(run, stdout);
-    emitFiles(args, run, stdout, stateDirOf(args.stateDir, deps.env ?? process.env));
+    emitFiles(args, run, stdout, dir);
     return 0;
   } catch (err) {
     stderr(`fix-chains: ${String(err?.message ?? err).split('\n')[0]}`);

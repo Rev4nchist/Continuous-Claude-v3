@@ -111,7 +111,7 @@ async function guarded(name, fn, fallback) {
  * @param {{ root: string, diffText: string, files?: string[] }} input
  * @param {{ runTests?: boolean, exec?: Function, smoke?: Function, fixtures?: Function, typecheck?: Function, fixtureGap?: Function }} [opts]
  * opts: { runTests, exec(gate, root) } and tool overrides { smoke, fixtures, typecheck, fixtureGap } for tests.
- * Returns { files, typecheck, smoke, fixtures, fixtureGap, mappedTests, gateFailed, errors }. fixtureGap is a fact: it never sets gateFailed.
+ * Returns { files, typecheck, smoke, fixtures, fixtureGap, mappedTests, gateFailed, errors }. fixtureGap is a fact: it never sets gateFailed, and the key is there only with a gap or an error.
  */
 export async function runCatchers({ root, diffText, files }, opts = {}) {
   const tree = path.resolve(root);
@@ -127,7 +127,9 @@ export async function runCatchers({ root, diffText, files }, opts = {}) {
   const errors = [smoke, fixtures, typecheck, fixtureGapResult].map((r) => r.error).filter(Boolean);
   // tsc is a fact, not a gate, except when it cannot run at all: a missing compiler is the environment, and a green without it is wrong.
   const gateFailed = smoke.failed > 0 || fixtures.failed > 0 || Boolean(smoke.error) || Boolean(fixtures.error) || typecheck.env === true;
-  return { files: list, typecheck, smoke, fixtures, fixtureGap: fixtureGapResult, mappedTests, gateFailed, errors };
+  // The key is a fact for the reviewer: with no gap and no error the result has the same keys as before the gap fact existed.
+  const gapKey = fixtureGapResult.files?.length > 0 || fixtureGapResult.error ? { fixtureGap: fixtureGapResult } : {};
+  return { files: list, typecheck, smoke, fixtures, ...gapKey, mappedTests, gateFailed, errors };
 }
 
 // ---------- facts for the reviewer ----------
