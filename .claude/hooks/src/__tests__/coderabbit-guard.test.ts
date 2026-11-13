@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -18,6 +18,12 @@ import {
 
 const HOOK = resolve(__dirname, '../../dist/coderabbit-guard.mjs');
 
+// A folder outside any git repo. The guard checks a review run against the git repo it runs in (answer-key check), and these tests are
+// about parsing and counting: they run in a folder where that check has nothing to read, so it never depends on this checkout.
+const OTHER_REMOTE = 'https://github.com/someone/other-repo.git';
+const NEUTRAL_CWD = mkdtempSync(join(tmpdir(), 'cr-guard-neutral-'));
+afterAll(() => rmSync(NEUTRAL_CWD, { recursive: true, force: true }));
+
 function runHook(
   input: Record<string, unknown>,
   extraEnv: Record<string, string> = {},
@@ -30,6 +36,7 @@ function runHook(
     encoding: 'utf8',
     timeout: 15000,
     env,
+    cwd: NEUTRAL_CWD,
   });
   return { stdout: res.stdout.trim(), status: res.status };
 }
@@ -39,8 +46,8 @@ function deny(stdout: string): boolean {
   return o.hookSpecificOutput?.permissionDecision === 'deny';
 }
 
-const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command } });
-const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command } });
+const bash = (command: string) => ({ tool_name: 'Bash', cwd: NEUTRAL_CWD, tool_input: { command } });
+const pwsh = (command: string) => ({ tool_name: 'PowerShell', cwd: NEUTRAL_CWD, tool_input: { command } });
 
 // Built at runtime so no source line holds the billing flag followed by a value (secret scanners flag that).
 const KEY_FLAG = ['--api', 'key'].join('-');
@@ -651,8 +658,9 @@ describe('coderabbit-guard: run counter key', { timeout: 180_000 }, () => {
   });
 
   it('reads the payload cwd, not the hook process cwd', () => {
-    const a = makeRepo('a', 'feat/a');
-    const b = makeRepo('b', 'feat/b');
+    // A repo with no remote is unknown to the answer-key check, which then needs main refs: give these repos another repo's remote.
+    const a = makeRepo('a', 'feat/a', OTHER_REMOTE);
+    const b = makeRepo('b', 'feat/b', OTHER_REMOTE);
     const stateFile = join(dir, 'state.json');
     const env = { CCV3_CODERABBIT_GUARD_STATE: stateFile };
     expect(decide({ ...bash('cr review --agent'), cwd: a }, env).allow).toBe(true);
@@ -661,8 +669,8 @@ describe('coderabbit-guard: run counter key', { timeout: 180_000 }, () => {
   });
 
   it('follows a leading cd, because subagents run every command as cd <worktree> && ...', () => {
-    const a = makeRepo('a', 'feat/a');
-    const b = makeRepo('b', 'feat/b');
+    const a = makeRepo('a', 'feat/a', OTHER_REMOTE);
+    const b = makeRepo('b', 'feat/b', OTHER_REMOTE);
     const stateFile = join(dir, 'state.json');
     const env = { CCV3_CODERABBIT_GUARD_STATE: stateFile };
     expect(decide({ ...bash(`cd "${b}" && cr review --agent`), cwd: a }, env).allow).toBe(true);

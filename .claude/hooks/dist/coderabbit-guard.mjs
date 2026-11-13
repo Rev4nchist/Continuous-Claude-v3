@@ -435,7 +435,7 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 
 // src/coderabbit-guard.ts
 import { execFileSync, spawnSync } from "child_process";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname as dirname2, join as join3, resolve as resolve2 } from "path";
 
@@ -1040,7 +1040,9 @@ function classifyCommand(source, ps = false, depth = 0) {
   let runs = 0;
   let allowed = false;
   const plainCall = depth === 0 && isPlainCommand(source, joined, lexed, ps);
-  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
+  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false, invs: [] }));
+  const counted = [];
+  let unaccounted = false;
   for (const { start, end, text: seg } of segmentSpans(lexed, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
@@ -1052,14 +1054,21 @@ function classifyCommand(source, ps = false, depth = 0) {
     else c = { verdict: "ignore" };
     if (c.verdict === "block") return c;
     if (c.verdict === "allow") allowed = true;
+    const calls = inv.nested === void 0 ? (c.runs ?? 0) > 0 ? [inv] : [] : c.invocations ?? [];
+    counted.push(...calls);
+    if (c.unaccounted) unaccounted = true;
     if (!owner) runs += c.runs ?? 0;
     else {
+      owner.invs.push(...calls);
       owner.parsed += c.runs ?? 0;
       owner.covered ||= c.reviewHelp === true && seg.trim() === text.slice(owner.start, owner.end).trim();
     }
   }
-  for (const h of hidden) runs += h.parsed > 0 ? h.parsed : h.covered ? 0 : 1;
-  if (runs > 0) return { verdict: "allow", countsRun: true, runs };
+  for (const h of hidden) {
+    runs += h.parsed > 0 ? h.parsed : h.covered ? 0 : 1;
+    if (rawOptionCount(h.raw) > parsedOptionCount(h.invs)) unaccounted = true;
+  }
+  if (runs > 0) return { verdict: "allow", countsRun: true, runs, invocations: counted, unaccounted };
   return { verdict: allowed ? "allow" : "ignore", reviewHelp: hidden.some((h) => h.covered) };
 }
 function classifyShellSegment(segment, ps = false) {
@@ -1107,7 +1116,7 @@ function repoBranchKey(cwd = process.cwd(), env = process.env) {
     return `cwd#${cwd}`;
   }
 }
-var CD_SEGMENT = /^(?:cd|chdir|pushd|set-location|sl)\s+(?:(?:-\w+|\/d)\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))/i;
+var CD_SEGMENT = /^(?:cd|chdir|pushd|push-location|set-location|sl)\s+(?:(?:-\w+|\/d)\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))/i;
 function effectiveCwd(command, cwd, ps = false) {
   let dir = cwd;
   for (const seg of segmentize(command, ps)) {
@@ -1117,41 +1126,215 @@ function effectiveCwd(command, cwd, ps = false) {
   }
   return dir;
 }
-var CCV3_KEY = /^[^/#]+\/(?:rev4nchist|parcadei)\/continuous-claude(?:-v3)?#/i;
-var ANSWER_BASES = ["main", "refs/remotes/fork/main"];
+var CCV3_REMOTE = /(?:rev4nchist|parcadei)\/continuous-claude(?:-v3)?/i;
+var ANSWER_BASES = ["refs/heads/main", "refs/remotes/fork/main"];
 var ANSWER_GIT_TIMEOUT_MS = 1e4;
+var ANSWER_BUDGET_MS = 3e4;
+var gitDeadline = 0;
 var DENY_PREFIX = "CodeRabbit guard:";
-function isCcv3Key(key) {
-  return CCV3_KEY.test(key);
+var cannotCheck = (why) => `${DENY_PREFIX} ${why}: no CLI review runs on a diff it cannot check for answer-key`;
+function gitRun(cwd, args) {
+  const left = gitDeadline - Date.now();
+  if (left <= 0) return { ok: false, status: null, stdout: "", stderr: "budget" };
+  const env = { ...process.env };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[name];
+  const r = spawnSync("git", args, { cwd, env, encoding: "utf8", timeout: Math.min(ANSWER_GIT_TIMEOUT_MS, left), windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  return {
+    ok: !r.error && r.status === 0,
+    status: r.status,
+    stdout: typeof r.stdout === "string" ? r.stdout : "",
+    stderr: typeof r.stderr === "string" ? r.stderr : ""
+  };
 }
-function diffPaths(root, base) {
-  const r = spawnSync("git", ["-c", "core.quotepath=false", "diff", "--name-only", "--no-renames", "-z", `${base}...HEAD`], {
-    cwd: root,
-    encoding: "utf8",
-    timeout: ANSWER_GIT_TIMEOUT_MS,
-    windowsHide: true,
-    maxBuffer: 64 * 1024 * 1024
-  });
-  if (r.error || r.status !== 0 || typeof r.stdout !== "string") return null;
-  return r.stdout.split("\0").filter(Boolean);
+function diffPaths(root, range) {
+  const r = gitRun(root, ["-c", "core.quotepath=false", "diff", "--name-only", "--no-renames", "-z", range, "--"]);
+  return r.ok ? r.stdout.split("\0").filter(Boolean) : null;
 }
-function answerKeyDeny(cwd) {
-  try {
-    const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", timeout: ANSWER_GIT_TIMEOUT_MS, windowsHide: true });
-    const root = top.status === 0 && typeof top.stdout === "string" ? top.stdout.trim() : "";
-    if (!root) return `${DENY_PREFIX} the git root is unknown: no CLI review runs on a diff it cannot check for answer-key`;
-    const union = /* @__PURE__ */ new Set();
-    for (const base of ANSWER_BASES) {
-      const paths = diffPaths(root, base);
-      if (paths === null) return `${DENY_PREFIX} git diff failed: no CLI review runs on a diff it cannot check for answer-key`;
-      for (const p of paths) union.add(p);
+function statusPaths(root) {
+  const r = gitRun(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  if (!r.ok) return null;
+  const fields = r.stdout.split("\0");
+  const out = [];
+  for (let i = 0; i < fields.length; i++) {
+    const rec = fields[i];
+    if (!rec) continue;
+    if (rec.length < 4 || rec[2] !== " ") return null;
+    out.push(rec.slice(3));
+    if (/[RC]/.test(rec.slice(0, 2))) {
+      const old = fields[++i];
+      if (!old) return null;
+      out.push(old);
     }
-    const check = answerKeyCheck({ root, paths: [...union] });
-    if (check === null) return null;
-    if ("closed" in check) return `${DENY_PREFIX} the REVIEW.md skip list is not usable: no CLI review runs on a diff it cannot check for answer-key`;
-    return `${DENY_PREFIX} no CLI review may read the paths in the diff (${check.hits.length}) that are answer-key`;
+  }
+  return out;
+}
+var REVIEW_OPTION = /(?:^|[\s"'`(=,{])(?:--base-commit|--base|--dir|--remote|--config|-c[^\s"'`)=,}]*)(?=$|[\s"'`)=,}])/gi;
+function optionCount(text) {
+  return [...text.matchAll(REVIEW_OPTION)].length;
+}
+function parsedOptionCount(invs) {
+  return invs.reduce((n, inv) => n + optionCount(` ${inv.args.join(" ")}`), 0);
+}
+function rawOptionCount(raw) {
+  const first = [...raw.matchAll(CR_WORD)][0];
+  return first ? optionCount(` ${raw.slice((first.index ?? 0) + first[0].length)}`) : 0;
+}
+var VALUE_OPTIONS = /* @__PURE__ */ new Set(["--base", "--base-commit", "--dir", "--remote"]);
+function readReviewOptions(invs) {
+  const o = { bases: [], baseCommits: [], dirs: [], configs: [], remotes: [], bad: false };
+  const slot = { "--base": o.bases, "--base-commit": o.baseCommits, "--dir": o.dirs, "--remote": o.remotes, "--config": o.configs };
+  for (const inv of invs) {
+    const a = optionArgs(inv.args);
+    for (let i = 0; i < a.length; i++) {
+      const tok = a[i].toLowerCase();
+      const eq = /^(--base-commit|--base|--dir|--remote|--config)=(.*)$/.exec(tok);
+      if (eq) {
+        const value = a[i].slice(eq[1].length + 1);
+        if (value) slot[eq[1]].push(value);
+        else o.bad = true;
+      } else if (VALUE_OPTIONS.has(tok)) {
+        const value = a[i + 1];
+        if (value === void 0 || value.startsWith("-")) o.bad = true;
+        else {
+          slot[tok].push(value);
+          i++;
+        }
+      } else if (tok === "-c" || tok === "--config") {
+        let n = 0;
+        while (a[i + 1] !== void 0 && !a[i + 1].startsWith("-")) {
+          o.configs.push(a[++i]);
+          n++;
+        }
+        if (n === 0) o.bad = true;
+      } else if (/^-c./.test(tok) && !tok.startsWith("--")) {
+        o.configs.push(a[i].slice(2));
+      }
+    }
+  }
+  return o;
+}
+function namesAnswerKey(path2) {
+  const segs = slashLower(path2).split("/");
+  for (let i = 0; i < segs.length; i++) {
+    const tail = segs.slice(i).join("/");
+    if (ANSWER_KEY_GLOBS.some((g) => matchGlob(slashLower(g), tail) || matchGlob(slashLower(g), `${tail}/_`))) return true;
+  }
+  return false;
+}
+function configDeny(cwd, files) {
+  for (const file of files) {
+    const abs = resolve2(cwd, file);
+    let real;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      return cannotCheck("a --config file cannot be read");
+    }
+    if (namesAnswerKey(abs) || namesAnswerKey(real)) return `${DENY_PREFIX} a --config file is sent to the service and it is answer-key`;
+  }
+  return null;
+}
+function remoteKind(url) {
+  if (CCV3_REMOTE.test(url)) return "ccv3";
+  if (/^file:/i.test(url)) return "unknown";
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^/\s]+\//i.test(url)) return "other";
+  if (/^[^/\\:@\s]+@[^/\\:\s]+:/.test(url)) return "other";
+  return "unknown";
+}
+function ccv3Root(dir) {
+  const top = gitRun(dir, ["rev-parse", "--show-toplevel"]);
+  if (!top.ok) return top.status === 128 && /not a git repository/i.test(top.stderr) ? { skip: true } : null;
+  const root = top.stdout.trim();
+  if (!root) return null;
+  const remotes = gitRun(root, ["config", "--get-regexp", "^remote\\..*\\.url$"]);
+  if (remotes.status === 1) return { root };
+  if (!remotes.ok) return null;
+  const urls = remotes.stdout.split("\n").map((l) => l.trim().split(/\s+/).slice(1).join(" ")).filter(Boolean);
+  return urls.every((u) => remoteKind(u) === "other") ? { skip: true } : { root };
+}
+function rangesFor(root, opts) {
+  const ranges = ANSWER_BASES.map((b) => `${b}...HEAD`);
+  const named = [...opts.bases.map((v) => [v, false]), ...opts.baseCommits.map((v) => [v, true])];
+  for (const [value, commit] of named) {
+    if (value.startsWith("-") || !gitRun(root, ["rev-parse", "--verify", "--quiet", `${value}^{commit}`]).ok) {
+      return cannotCheck("a --base or --base-commit value does not resolve to a commit");
+    }
+    ranges.push(`${value}...HEAD`);
+    if (commit) ranges.push(`${value}..HEAD`);
+  }
+  return ranges;
+}
+function dirDeny(dir, opts) {
+  const found = ccv3Root(dir);
+  if (found === null) return cannotCheck("the git root or the remotes cannot be read");
+  if ("skip" in found) return null;
+  const ranges = rangesFor(found.root, opts);
+  if (typeof ranges === "string") return ranges;
+  const union = /* @__PURE__ */ new Set();
+  for (const range of ranges) {
+    const paths = diffPaths(found.root, range);
+    if (paths === null) return cannotCheck("git diff failed");
+    for (const p of paths) union.add(p);
+  }
+  const tree = statusPaths(found.root);
+  if (tree === null) return cannotCheck("git status failed");
+  for (const p of tree) union.add(p);
+  const check = answerKeyCheck({ root: found.root, paths: [...union] });
+  if (check === null) return null;
+  if ("closed" in check) return cannotCheck("the REVIEW.md skip list is not usable");
+  return `${DENY_PREFIX} no CLI review may read the paths in the diff (${check.hits.length}) that are answer-key`;
+}
+var CD_WORD = /^(?:cd|chdir|pushd|popd|push-location|pop-location|set-location|sl)(?=\s|$)/i;
+function nestedHasCd(text, ps, depth) {
+  if (depth > MAX_NESTING) return true;
+  for (const seg of segmentize(text, ps)) {
+    if (CD_WORD.test(seg.trim())) return true;
+    const inv = parseInvocation(seg);
+    if (inv?.nested !== void 0 && nestedHasCd(inv.nested, ps, depth + 1)) return true;
+  }
+  return false;
+}
+function folderDeny(command, ps, cwd) {
+  let seenCr = false;
+  for (const seg of segmentize(command, ps)) {
+    const text = seg.trim();
+    if (CD_WORD.test(text)) {
+      const m = CD_SEGMENT.exec(text);
+      const target = m?.[1] ?? m?.[2] ?? m?.[3];
+      if (!target || target === "-" || /[~$%`]/.test(target)) return cannotCheck("a cd target cannot be read");
+      if (seenCr) return cannotCheck("a cd comes after the review");
+    }
+    if ([...text.matchAll(CR_WORD)].length > 0) seenCr = true;
+    const inv = parseInvocation(seg);
+    if (inv?.nested !== void 0 && nestedHasCd(inv.nested, ps, 0)) return cannotCheck("a cd sits inside a wrapper string");
+  }
+  try {
+    if (!statSync(cwd).isDirectory()) return cannotCheck("the folder the review runs in is not a folder");
   } catch {
-    return `${DENY_PREFIX} the check failed with an error: no CLI review runs on a diff it cannot check for answer-key`;
+    return cannotCheck("the folder the review runs in does not exist");
+  }
+  return null;
+}
+function answerKeyDeny(run) {
+  try {
+    gitDeadline = Date.now() + ANSWER_BUDGET_MS;
+    if (run.unaccounted) return cannotCheck("a CLI option in the command cannot be read");
+    const folder = folderDeny(run.command, run.ps, run.cwd);
+    if (folder) return folder;
+    const opts = readReviewOptions(run.invocations);
+    if (opts.bad) return cannotCheck("a CLI option has no value");
+    if (opts.remotes.some((r) => CCV3_REMOTE.test(r))) {
+      return `${DENY_PREFIX} --remote names the CCv3 repo, so the service reads it, answer-key included`;
+    }
+    const config = configDeny(run.cwd, opts.configs);
+    if (config) return config;
+    for (const dir of [run.cwd, ...opts.dirs.map((d) => resolve2(run.cwd, d))]) {
+      const reason = dirDeny(dir, opts);
+      if (reason) return reason;
+    }
+    return null;
+  } catch {
+    return cannotCheck("the check failed with an error");
   }
 }
 function checkRunCap(state, key, runs = 1) {
@@ -1184,10 +1367,27 @@ function classifyDelegate(input) {
   if (cmd) return classifyCommand(cmd);
   return { verdict: "ignore" };
 }
-function decide(input, env = process.env) {
+function rawReview(command) {
+  const first = [...command.matchAll(CR_WORD)][0];
+  return !!first && REVIEW_WORD.test(command.slice((first.index ?? 0) + first[0].length));
+}
+function answerKeyResult(input, command, ps, verdict, seam) {
+  const blockedReview = (verdict.runs ?? 0) === 0 && verdict.verdict === "block" && rawReview(command);
+  if ((verdict.runs ?? 0) === 0 && !blockedReview) return null;
+  const cwd = (seam.cwdOf ?? effectiveCwd)(command, input.cwd || process.cwd(), ps);
+  const unaccounted = verdict.unaccounted === true || blockedReview && rawOptionCount(command) > 0;
+  const reason = answerKeyDeny({ command, ps, cwd, invocations: verdict.invocations ?? [], unaccounted });
+  return reason ? { allow: false, reason, answerKey: true } : null;
+}
+function decideChecked(input, env, seam) {
   const tool = input.tool_name || "";
   const command = input.tool_input?.command || "";
+  const ps = tool === "PowerShell";
+  const classify = seam.classify ?? classifyCommand;
+  const runsCommand = BASH_TOOLS.has(tool) || DELEGATE_TOOLS.has(tool) && tool !== "Skill" && command !== "";
   if (OVERRIDE.test(command)) {
+    const denied2 = runsCommand ? answerKeyResult(input, command, ps, classify(command, ps), seam) : null;
+    if (denied2) return denied2;
     logGuardDecision("coderabbit-guard", input, "override", "SKIP_CODERABBIT_GUARD=1", { command, env });
     return { allow: true };
   }
@@ -1199,20 +1399,17 @@ function decide(input, env = process.env) {
   if (DELEGATE_TOOLS.has(tool)) {
     const d = classifyDelegate(input);
     if (d.verdict === "block") return { allow: false, reason: d.reason };
-    return { allow: true };
+    return (command ? answerKeyResult(input, command, false, classify(command, false), seam) : null) ?? { allow: true };
   }
   if (!BASH_TOOLS.has(tool)) return { allow: true };
-  const ps = tool === "PowerShell";
-  const verdict = classifyCommand(command, ps);
+  const verdict = classify(command, ps);
   if (verdict.verdict === "block") return { allow: false, reason: verdict.reason };
   const runs = verdict.runs ?? 0;
   if (runs === 0) return { allow: true };
-  const cwd = effectiveCwd(command, input.cwd || process.cwd(), ps);
+  const denied = answerKeyResult(input, command, ps, verdict, seam);
+  if (denied) return denied;
+  const cwd = (seam.cwdOf ?? effectiveCwd)(command, input.cwd || process.cwd(), ps);
   const key = repoBranchKey(cwd, env);
-  if (isCcv3Key(key)) {
-    const reason = answerKeyDeny(cwd);
-    if (reason) return { allow: false, reason };
-  }
   const path2 = statePath(env);
   const state = readState(path2);
   const cap = checkRunCap(state, key, runs);
@@ -1225,8 +1422,26 @@ function decide(input, env = process.env) {
   writeState(path2, recordRun(state, key, runs));
   return { allow: true, increment: true };
 }
+function failClosed(input) {
+  const command = input.tool_input?.command || "";
+  const reviewTool = BASH_TOOLS.has(input.tool_name || "") || DELEGATE_TOOLS.has(input.tool_name || "") && input.tool_name !== "Skill";
+  if (reviewTool && command && rawReview(command)) {
+    return { allow: false, reason: cannotCheck("the command could not be read"), answerKey: true };
+  }
+  return { allow: true };
+}
+function decide(input, env = process.env, seam = {}) {
+  try {
+    return decideChecked(input, env, seam);
+  } catch {
+    return failClosed(input);
+  }
+}
 function readStdin() {
   return readFileSync2(0, "utf-8");
+}
+function logDeny(input, result, env = process.env) {
+  logGuardDecision("coderabbit-guard", input, "deny", result.reason || "blocked", result.answerKey ? { env } : { command: input.tool_input?.command, env });
 }
 function main() {
   let input;
@@ -1238,9 +1453,7 @@ function main() {
   }
   const result = decide(input);
   if (!result.allow) {
-    logGuardDecision("coderabbit-guard", input, "deny", result.reason || "blocked", {
-      command: input.tool_input?.command
-    });
+    logDeny(input, result);
     outputDeny(result.reason || "CodeRabbit guard: blocked");
     return;
   }
@@ -1264,7 +1477,6 @@ export {
   decide,
   effectiveCwd,
   hasForbiddenFlags,
-  isCcv3Key,
   isCodeWorkspace,
   isCrExecutable,
   isReadOnlyAutofixDelegate,
@@ -1273,10 +1485,14 @@ export {
   isSkillInstall,
   joinContinuations,
   lexShell,
+  logDeny,
   normalizeRemote,
   parseInvocation,
+  parsedOptionCount,
   rawBilling,
+  rawOptionCount,
   rawScan,
+  readReviewOptions,
   readState,
   recordRun,
   repoBranchKey,
