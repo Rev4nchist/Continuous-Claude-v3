@@ -5,7 +5,8 @@
  * placeholders filled from the deny's own note); its JSON goes to AskUserQuestion through the REAL decision-ledger hook with the first label;
  * then the same command must pass the gate. No key, tree or head is built by hand.
  * Every path is in one temp folder: the registry (LANE_REGISTRY_PATH), the store (CCV3_DECISIONS_FILE, under the temp folder, so the merge
- * facts seam of app-ask is on) and the router config (found from each repo upward). Nothing in a payload runs; no network.
+ * facts seam of app-ask is on) and the router config (one copy above the repos, one under the gate's home, which is the temp folder too:
+ * deps()), so the real home config is never read. Nothing in a payload runs; no network.
  * Fixer E (Dave 11-13): every remote's HEAD names feat, so each push row pushes a default branch and needs the tap.
  *
  * Each row names the source change that turns it red:
@@ -62,13 +63,16 @@ function makeRepo(name: string, remotes: Record<string, string>, github?: string
 
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), 'dg-rt-')).replace(/\\/g, '/');
-  if (/\s/.test(home)) throw new Error(`the temp folder path has a space (${home}): set TEMP to a path without spaces`);
   for (const k of ENV_KEYS) saved[k] = process.env[k];
   delete process.env.CLAUDE_AGENT_ID;
   delete process.env.APP_ASK_TEST;
   process.env.CCV3_DECISIONS_FILE = `${home}/decisions.json`;
   process.env.LANE_REGISTRY_PATH = `${home}/project-registry.json`;
-  writeFileSync(`${home}/review-router.config.json`, JSON.stringify({ decisions: { enforce: true } }));
+  // Two copies: the one above the repos (read from the cwd upward) and the home copy (a create or merge deny reads only that one).
+  const cfg = JSON.stringify({ decisions: { enforce: true } });
+  writeFileSync(`${home}/review-router.config.json`, cfg);
+  mkdirSync(`${home}/continuous-claude`, { recursive: true });
+  writeFileSync(`${home}/continuous-claude/review-router.config.json`, cfg);
 });
 afterAll(() => {
   for (const k of ENV_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
@@ -76,11 +80,14 @@ afterAll(() => {
 });
 
 const bash = (cwd: string, command: string) => ({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-rt' });
-const verdict = (cwd: string, command: string) => decide(bash(cwd, command), realDeps());
+/** The real Deps with the temp folder as home, so the gate never reads the developer's home config (absent on a CI runner). */
+const deps = () => ({ ...realDeps(), home });
+const verdict = (cwd: string, command: string) => decide(bash(cwd, command), deps());
 
 /** The words of the app-ask command in a deny text (sub-command to the last flag). Fixer G: no placeholder to fill in. */
 function askWords(reason: string): string[] {
-  const m = /node \S*app-ask\.mjs (.*?) --json/.exec(reason);
+  // .*? and not \S*: the home path (the temp folder here) may hold a space.
+  const m = /node .*?app-ask\.mjs (.*?) --json/.exec(reason);
   if (!m) throw new Error(`no app-ask command in: ${reason}`);
   return (m[1].match(/'[^']*'|\S+/g) ?? []).map((w) => w.replace(/^'(.*)'$/, '$1'));
 }

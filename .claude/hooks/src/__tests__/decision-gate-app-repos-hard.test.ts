@@ -93,7 +93,7 @@ function deps(f: Partial<Folder> = {}, config: string = OFF): Deps {
     },
   };
 }
-const bash = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: APP, ...extra });
+const bash = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: APP, session_id: 's-hard', ...extra });
 const verdict = (input: object, f?: Partial<Folder>): Decision => decide(input, deps(f));
 const unsafe = { action: 'deny', pattern: 'push-unsafe', scope: 'app-push' };
 const unresolved = { action: 'deny', pattern: 'push-target-unresolved', scope: 'app-push' };

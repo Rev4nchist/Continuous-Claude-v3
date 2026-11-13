@@ -275,7 +275,7 @@ function tap(step: Step, key: string, head: string, label: string, tree?: string
   expect(offerWrite({ step, key, head, tree, spec: { header: 'T', question: 'Q?', options: [{ label }, { label: 'Another option' }] } }).ok).toBe(true);
   expect(decisionRecord({ step, key, head, label })).toEqual({ ok: true });
 }
-const bash = (command: string, cwd = '/work/app-x', extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd, ...extra });
+const bash = (command: string, cwd = '/work/app-x', extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-app', ...extra });
 const verdict = (input: object, w?: World): Decision => decide(input, deps(w));
 const denyOf = (input: object, w?: World): { pattern: string; scope: string; reason: string } | null => {
   const d = verdict(input, w);
@@ -832,7 +832,7 @@ describe('C16 a push -C path with backslashes is the folder it names (report of 
     return { ...d, git: (cwd, args) => { if (!(slash(cwd) in w.folders!)) throw new MissingCwdError(cwd); return d.git(cwd, args); } };
   };
   const run = (tool: string, command: string, calls: string[] = []) =>
-    JSON.parse(handle(JSON.stringify({ tool_name: tool, tool_input: { command }, cwd: '/work/app-y' }), realCwd(calls)));
+    JSON.parse(handle(JSON.stringify({ tool_name: tool, tool_input: { command }, cwd: '/work/app-y', session_id: 's-app' }), realCwd(calls)));
   // Change that breaks it: squashQuotes on the -C value (it deletes the backslashes: C:workbs), or a squashed-view shape that keeps that path.
   for (const [name, tool, command] of cases) {
     it(name, () => {
@@ -1397,7 +1397,7 @@ const tapCc = (): void => {
 const baseOpenPr = (branch: string, head: string): string =>
   `BLOCKED (decision-gate): no "open-pr" decision from Dave for ${branch} at ${head.slice(0, 7)}. Ask him first: run node scripts/github/ship-ask.mjs open-pr --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then open the PR only if he taps "Open draft PR".`;
 const STOP = 'cannot be passed safely in a command; tell Dave.';
-const pwsh = (command: string, cwd = '/work/app-x') => ({ tool_name: 'PowerShell', tool_input: { command }, cwd });
+const pwsh = (command: string, cwd = '/work/app-x') => ({ tool_name: 'PowerShell', tool_input: { command }, cwd, session_id: 's-app' });
 
 describe('C24 item 1: in a CCv3 checkout a gh segment that names another repo is denied before any CCv3 signal of the whole text', () => {
   // Change that breaks it: routeOf takes the CCv3 rule when namedRepo of the whole text names CCv3, before it tests cmd.foreign.

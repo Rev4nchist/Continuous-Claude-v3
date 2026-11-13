@@ -3,7 +3,8 @@
  * Per row: the gate (decide with realDeps, real git) denies; the app-ask command is parsed out of the deny text; the REAL scripts/github/app-ask.mjs
  * runs under node with --json (APP_ASK_TEST seam, store under os.tmpdir(), for the gh facts of a merge); its offer goes to the REAL decision-ledger
  * hook as an AskUserQuestion answer (the first label); then the same command must pass the gate. No key, tree or head is built by hand.
- * Everything lives in one temp folder: registry (LANE_REGISTRY_PATH), store (CCV3_DECISIONS_FILE), router config. No network.
+ * Everything lives in one temp folder: registry (LANE_REGISTRY_PATH), store (CCV3_DECISIONS_FILE), router config. The gate's home is that
+ * folder too (deps()), so the real home config is never read. No network.
  * Two negative rows prove that a tap is bound to its repo and to its pushed branch.
  *
  * Each row names the source change that turns it red:
@@ -75,20 +76,25 @@ function makeRepo(name: string, remotes: Record<string, string>, body = name, re
 
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), 'dg-ch-')).replace(/\\/g, '/');
-  if (/\s/.test(home)) throw new Error(`the temp folder path has a space (${home}): set TEMP to a path without spaces`);
   for (const k of ENV_KEYS) saved[k] = process.env[k];
   delete process.env.CLAUDE_AGENT_ID;
   delete process.env.APP_ASK_TEST;
   process.env.CCV3_DECISIONS_FILE = `${home}/decisions.json`;
   process.env.LANE_REGISTRY_PATH = `${home}/project-registry.json`;
-  writeFileSync(`${home}/review-router.config.json`, JSON.stringify({ decisions: { enforce: true } }));
+  // Two copies: the one above the repos (read from the cwd upward) and the home copy (a create or merge deny reads only that one).
+  const cfg = JSON.stringify({ decisions: { enforce: true } });
+  writeFileSync(`${home}/review-router.config.json`, cfg);
+  mkdirSync(`${home}/continuous-claude`, { recursive: true });
+  writeFileSync(`${home}/continuous-claude/review-router.config.json`, cfg);
 });
 afterAll(() => {
   for (const k of ENV_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   rmSync(home, { recursive: true, force: true });
 });
 
-const verdict = (cwd: string, command: string) => decide({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-ch' }, realDeps());
+/** The real Deps with the temp folder as home, so the gate never reads the developer's home config (absent on a CI runner). */
+const deps = () => ({ ...realDeps(), home });
+const verdict = (cwd: string, command: string) => decide({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-ch' }, deps());
 type Verdict = ReturnType<typeof verdict>;
 const denied = (v: Verdict): { reason: string; pattern: string } => {
   if (v.action !== 'deny') throw new Error(`not denied: ${JSON.stringify(v)}`);
@@ -97,7 +103,8 @@ const denied = (v: Verdict): { reason: string; pattern: string } => {
 
 /** The words of the app-ask command in a deny text (sub-command to the last flag). Fixer G: no placeholder to fill in. */
 function askWords(reason: string): string[] {
-  const m = /node \S*app-ask\.mjs (.*?) --json/.exec(reason);
+  // .*? and not \S*: the home path (the temp folder here) may hold a space.
+  const m = /node .*?app-ask\.mjs (.*?) --json/.exec(reason);
   if (!m) throw new Error(`no app-ask command in: ${reason}`);
   return (m[1].match(/'[^']*'|\S+/g) ?? []).map((w) => w.replace(/^'(.*)'$/, '$1'));
 }
@@ -252,7 +259,7 @@ describe('gate deny -> parsed app-ask command -> real app-ask -> real ledger -> 
     git(d, 'config', `branch.${odd}.merge`, `refs/heads/${odd}`);
     git(d, 'update-ref', `refs/remotes/up/${odd}`, 'main');
     const before = denied(verdict(d, 'git push'));
-    expect(/node \S*app-ask\.mjs (.*?) --json/.exec(before.reason)?.[1], before.reason).toBe(`push --remote up --src HEAD --dir '${d}'`);
+    expect(/node .*?app-ask\.mjs (.*?) --json/.exec(before.reason)?.[1], before.reason).toBe(`push --remote up --src HEAD --dir '${d}'`);
     expect(before.reason).toContain('app-ask reads the branch itself');
     chain(d, 'git push', 'ship');
   });

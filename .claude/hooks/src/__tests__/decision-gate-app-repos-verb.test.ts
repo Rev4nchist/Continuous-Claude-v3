@@ -119,8 +119,8 @@ function tap(step: Step, key: string, label: string, tree?: string): void {
   expect(offerWrite({ step, key, head: HEAD, tree, spec: { header: 'T', question: 'Q?', options: [{ label }, { label: 'Another option' }] } }).ok).toBe(true);
   expect(decisionRecord({ step, key, head: HEAD, label })).toEqual({ ok: true });
 }
-const bash = (command: string, cwd = APP, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd, ...extra });
-const pwsh = (command: string, cwd = APP) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd });
+const bash = (command: string, cwd = APP, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-verb', ...extra });
+const pwsh = (command: string, cwd = APP) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd, session_id: 's-verb' });
 const verdict = (input: object, d: Deps = deps()): Decision => decide(input, d);
 type Out = { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string };
 const hookOut = (input: object, d: Deps = deps()): Out => JSON.parse(handle(JSON.stringify(input), d)).hookSpecificOutput ?? {};

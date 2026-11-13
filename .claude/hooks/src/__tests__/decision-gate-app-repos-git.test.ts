@@ -1,7 +1,8 @@
 /**
  * decision-gate in app folders, with real git and the REAL Deps (realDeps): card coord-decision-gate-app-repos, section 6 items 2 to 4.
  * Every path is in one temp folder: the registry (LANE_REGISTRY_PATH), the decision store (CCV3_DECISIONS_FILE) and the router
- * config (found from each repo upward, so the real home copy is never reached). Nothing in a payload runs.
+ * config (one copy above the repos, read from each repo upward; one under the gate's home, which is the temp folder too: deps()), so the
+ * real home config is never read. Nothing in a payload runs.
  *
  * Folders: X and Y are covered app repos with the SAME branch, tree and head (fixed commit dates); WT is a worktree of X; X/nested is a
  * repo of its own with an inactive entry; OLD is inactive, OFF has tapGate off, STRAY is not registered; CC is a CCv3 checkout whose
@@ -57,11 +58,14 @@ const store = (): string => `${home}/decisions.json`;
 
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), 'dg-app-git-')).replace(/\\/g, '/');
-  if (/\s/.test(home)) throw new Error(`the temp folder path has a space (${home}): set TEMP to a path without spaces`);
   for (const k of ENV_KEYS) saved[k] = process.env[k];
   delete process.env.CLAUDE_AGENT_ID;
   process.env.CCV3_DECISIONS_FILE = store();
-  writeFileSync(`${home}/review-router.config.json`, JSON.stringify({ decisions: { enforce: true } }));
+  // Two copies: the one above the repos (read from the cwd upward) and the home copy (a create or merge deny reads only that one).
+  const cfg = JSON.stringify({ decisions: { enforce: true } });
+  writeFileSync(`${home}/review-router.config.json`, cfg);
+  mkdirSync(`${home}/continuous-claude`, { recursive: true });
+  writeFileSync(`${home}/continuous-claude/review-router.config.json`, cfg);
   R.x = makeRepo(`${home}/app-x`, { up: 'https://github.com/acme/app-x.git' });
   R.y = makeRepo(`${home}/app-y`, { up: 'https://github.com/acme/app-y.git' });
   R.nested = makeRepo(`${home}/app-x/nested`, { up: 'https://github.com/acme/nested.git' });
@@ -92,11 +96,13 @@ afterAll(() => {
 });
 
 const bash = (cwd: string, command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-app-git', ...extra });
+/** The real Deps with the temp folder as home, so the gate never reads the developer's home config (absent on a CI runner). */
+const deps = (opts?: Parameters<typeof realDeps>[0]) => ({ ...realDeps(opts), home });
 const verdict = (input: object): string => {
-  const d = decide(input, realDeps());
+  const d = decide(input, deps());
   return d.action === 'deny' ? `deny:${d.pattern}` : d.warn ? `warn:${d.warn.split(':')[0]}` : 'allow';
 };
-const handleGate = (input: object): string => gateHandle(JSON.stringify(input), realDeps());
+const handleGate = (input: object): string => gateHandle(JSON.stringify(input), deps());
 const clearStore = (): void => { rmSync(store(), { force: true }); };
 const tapShip = (key: string): void => {
   expect(offerWrite({ step: 'ship', key, head, tree, spec: { header: 'T', question: `Q ${key}?`, options: [{ label: 'Commit and push' }, { label: 'Stop here' }] } }).ok).toBe(true);
@@ -221,8 +227,9 @@ describe('U1 remotes with real git', () => {
   });
   it('F7: a push from inside the .git folder of a covered repo is judged (git -C <root>/.git, cd <root>/.git)', () => {
     clearStore();
-    expect(verdict(bash(R.stray, `git -C ${R.x}/.git push up feat`))).toBe('deny:ship');
-    expect(verdict(bash(R.stray, `cd ${R.x}/.git && git push up feat`))).toBe('deny:ship');
+    // Quoted: the temp folder may hold a space.
+    expect(verdict(bash(R.stray, `git -C '${R.x}/.git' push up feat`))).toBe('deny:ship');
+    expect(verdict(bash(R.stray, `cd '${R.x}/.git' && git push up feat`))).toBe('deny:ship');
     expect(verdict(bash(`${R.x}/.git`, 'git push up feat'))).toBe('deny:ship');
     tapShip('acme/app-x@feat');
     expect(verdict(bash(`${R.x}/.git`, 'git push up feat'))).toBe('allow');
@@ -236,7 +243,7 @@ describe('U1 remotes with real git', () => {
   it('item 5: the real Deps stops git at 7 s from the hook start: a late call is denied unjudgeable, not run', () => {
     clearStore();
     tapShip('acme/app-x@feat');
-    const late = gateHandle(JSON.stringify(bash(R.x, 'git push up feat')), realDeps({ start: Date.now() - 8000 }));
+    const late = gateHandle(JSON.stringify(bash(R.x, 'git push up feat')), deps({ start: Date.now() - 8000 }));
     const out = JSON.parse(late);
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/time limit/);
