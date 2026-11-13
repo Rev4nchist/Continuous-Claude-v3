@@ -9,6 +9,12 @@
 // - --model opus|sonnet (default JUDGE_MODEL, opus, effort high). Ledger rows carry the model; each model has its own verdicts and score.
 //   A call whose served model does not match is an error row and stops the run. --cap N raises the shared headless cap for this run only.
 //   --stop-on-error stops after the first error row. The report is <day>-hf-judge-precheck-<model>.json and names the head SHA.
+// - --prompt v0|v1 (default v0). v0 is the judge.mjs prompt, called through judgePair exactly as before. v1 is judge-prompt-v1.mjs.
+//   Ledger rows carry promptVersion (a row with none is v0). A score is one per (model, promptVersion); the other prompt's rows are pending.
+// - --set sample|outside (default sample). sample is the seeded sample (--sample N, default 50). outside is every decisive pair that is not in
+//   the default 50-pair sample for the seed, in the seeded order; --sample does not move it. Ledger rows carry set (none reads as sample).
+// - The report is <day>-hf-judge-precheck-<model>.json for v0 + sample, else <day>-hf-judge-precheck-<model>-<prompt>-<set>.json. Its header holds
+//   promptSha256 and passRule. The v1 text is frozen: a v1 run whose sha differs from the sha on existing v1 rows (same model and set) is refused (code 2).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -16,7 +22,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chicagoDay, runClaude } from '../../lib/headless.mjs';
 import { cohenKappa } from './agreement.mjs';
-import { judgePair, judgePrompt } from './judge.mjs';
+import { judgePair, judgePrompt, parseVerdict } from './judge.mjs';
+import { JUDGE_PROMPT_V1_SHA256, judgePromptV1 } from './judge-prompt-v1.mjs';
 import { assertPinned, datasetDirName, DEFAULT_ROOT, PullRefusal } from './external-pull.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +42,62 @@ const SERVED = { opus: /^claude-opus-5-5\b/, sonnet: /^claude-sonnet-/ };
 // Ledger rows written before 2026-11-13 have no model field. All of them are Sonnet runs (the model was hard-coded), in this ledger only.
 const LEGACY_MODEL = 'sonnet';
 const rowModel = (r) => r.model ?? LEGACY_MODEL;
+
+// The judge prompts. A ledger row written before --prompt existed has no promptVersion: it is a v0 row. One with no set is a sample row.
+export const PROMPTS = { v0: judgePrompt, v1: judgePromptV1 };
+const SETS = ['sample', 'outside'];
+export const DEFAULT_SAMPLE = 50;
+export const PASS_RULE = 'pass = kappa >= 0.60 on this set for this model and prompt; written before the run; no second prompt on the outside set after a fail';
+const EMPTY_PAIR = { cr: null, eng: null, hunk: '' };
+const SHA_V0 = createHash('sha256').update(judgePrompt(EMPTY_PAIR)).digest('hex');
+const PROMPT_SHA = { v0: SHA_V0, v1: JUDGE_PROMPT_V1_SHA256 };
+const rowPrompt = (r) => r.promptVersion ?? 'v0';
+const rowSet = (r) => r.set ?? 'sample';
+
+/** The v1 judge: the same call shape and error mapping as judgePair in judge.mjs, with the v1 prompt. Never throws. */
+export async function judgeV1(pair, { runJudge }) {
+  let res;
+  try { res = await runJudge(judgePromptV1(pair)); } catch { return { ok: false, error: 'timeout' }; }
+  if (!res?.ok) return { ok: false, error: res?.reason === 'cap' ? 'cap' : 'timeout' };
+  return parseVerdict(res.stdout);
+}
+const JUDGES = { v0: judgePair, v1: judgeV1 };
+
+/**
+ * The pair ids of a set, from the decisive ids. sample: the seeded sample of n. outside: every id the default sample (DEFAULT_SAMPLE, same seed)
+ * does not hold, in the seeded order of the sample code (a larger n extends a smaller sample, so the order is the one full shuffle).
+ */
+export function selectIds(decisiveIds, { set, sample, seed }) {
+  if (set !== 'outside') return sampleIds(decisiveIds, sample, seed);
+  const inSample = new Set(sampleIds(decisiveIds, DEFAULT_SAMPLE, seed));
+  return sampleIds(decisiveIds, decisiveIds.length, seed).filter((i) => !inSample.has(i));
+}
+
+/** The prompt sha256 values on the paid rows (start or end) of one dataset, model, prompt and set. */
+export function paidShas(rows, dataset, model, promptVersion, set) {
+  const same = (r) => r.dataset === dataset && rowModel(r) === model && rowPrompt(r) === promptVersion && rowSet(r) === set;
+  return new Set(rows.filter((r) => (r.phase === 'start' || r.phase === 'end') && same(r) && r.promptSha256).map((r) => r.promptSha256));
+}
+
+/** True when this run's prompt sha differs from a sha already paid for under the same model, prompt and set. Only v1 is frozen. */
+export function frozenMismatch(rows, dataset, model, promptVersion, set, sha256) {
+  if (promptVersion !== 'v1') return false;
+  return [...paidShas(rows, dataset, model, promptVersion, set)].some((s) => s !== sha256);
+}
+
+/** The usage message for a model, prompt or set that is not allowed; null when all three are. */
+export function usageError(model, promptVersion, set) {
+  if (!MODELS.includes(model)) return `--model must be one of ${MODELS.join(', ')}`;
+  if (!Object.hasOwn(PROMPTS, promptVersion)) return `--prompt must be one of ${Object.keys(PROMPTS).join(', ')}`;
+  if (!SETS.includes(set)) return `--set must be one of ${SETS.join(', ')}`;
+  return null;
+}
+
+/** <day>-hf-judge-precheck-<model>.json for v0 + sample (the name before --prompt and --set existed), else with -<prompt>-<set>. */
+export function reportName(day, model, promptVersion, set) {
+  const tail = promptVersion === 'v0' && set === 'sample' ? '' : `-${promptVersion}-${set}`;
+  return `${day}-hf-judge-precheck-${model}${tail}.json`;
+}
 
 /** The model names in the modelUsage of the claude -p result line, joined by comma; null when there is none. */
 export function servedModelOf(stdout) {
@@ -177,10 +240,10 @@ export function usedToday(rows, ms) {
   return rows.filter((r) => r.phase === 'start' && (Number.isNaN(Date.parse(r.ts)) || chicagoDay(Date.parse(r.ts)) === day)).length;
 }
 
-/** pairId -> judged end row, for one dataset and one model. An end row with an error is not judged, so the pair is retried. */
-export function judgedMap(rows, dataset, model = JUDGE_MODEL) {
+/** pairId -> judged end row, for one dataset, one model and one prompt version. An end row with an error is not judged, so the pair is retried. */
+export function judgedMap(rows, dataset, model = JUDGE_MODEL, promptVersion = 'v0') {
   const m = new Map();
-  for (const r of rows) if (r.phase === 'end' && r.dataset === dataset && r.judge && !r.error && rowModel(r) === model) m.set(r.pairId, r);
+  for (const r of rows) if (r.phase === 'end' && r.dataset === dataset && r.judge && !r.error && rowModel(r) === model && rowPrompt(r) === promptVersion) m.set(r.pairId, r);
   return m;
 }
 
@@ -233,6 +296,7 @@ export function pairedCounts(thisRecs, otherRecs) {
 }
 
 const fmt3 = (x) => (x === null || x === undefined ? 'undefined' : x.toFixed(3));
+const comparePromptLine = (c, thisPrompt) => `compare prompt ${c.promptVersion}: n ${c.summary.n}; agreement ${c.summary.agree}/${c.summary.n} (${fmt3(c.summary.agreement)}); kappa: ${fmt3(c.summary.kappa)}; paired n ${c.paired.n}: both agree ${c.paired.bothAgree}, only ${thisPrompt} ${c.paired.onlyThis}, only ${c.promptVersion} ${c.paired.onlyOther}, both wrong ${c.paired.bothWrong}`;
 const splitLine = (by) => `by source: ${Object.entries(by).map(([s, g]) => `${s} n=${g.n} agree ${g.agree} (${fmt3(g.agreement)})`).join('; ') || 'none'}. kappa by source: not defined (each source holds one human label).${by.picked ? ' Note: picked negatives are built cases, not human-paired cases (the action with the most words in common with the finding).' : ''}`;
 
 // ---- rows from disk ------------------------------------------------------------------------------------------------
@@ -264,8 +328,9 @@ export function loadRows({ id, sha, file }, { root = DEFAULT_ROOT } = {}) {
  * Returns { code, ... }. Code 2 is a refusal.
  */
 export async function run(opts, deps = {}) {
-  const { id, sha, file, sample = 50, seed = DEFAULT_SEED, dailyShare = 10, dryRun = false, showPrompts = 3, model = JUDGE_MODEL, cap = null, stopOnError = false } = opts;
-  if (!MODELS.includes(model)) { (deps.stderr ?? console.error)(`external-judge: --model must be one of ${MODELS.join(', ')}`); return { code: 1 }; }
+  const { id, sha, file, sample = DEFAULT_SAMPLE, seed = DEFAULT_SEED, dailyShare = 10, dryRun = false, showPrompts = 3, model = JUDGE_MODEL, cap = null, stopOnError = false, prompt: promptVersion = 'v0', set = 'sample' } = opts;
+  const bad = usageError(model, promptVersion, set);
+  if (bad) { (deps.stderr ?? console.error)(`external-judge: ${bad}`); return { code: 1 }; }
   const otherModel = MODELS.find((m) => m !== model);
   const stdout = deps.stdout ?? ((s) => console.log(s));
   const stderr = deps.stderr ?? ((s) => console.error(s));
@@ -285,22 +350,27 @@ export async function run(opts, deps = {}) {
     const noCandidateByLabel = { yes: 0, no: 0 };
     for (const p of labelled) if (p.candidateSource === 'none') noCandidateByLabel[p.human] += 1;
     const byId = new Map(decisive.map((p) => [p.pairId, p]));
-    const ids = sampleIds([...byId.keys()], sample, seed);
+    const ids = selectIds([...byId.keys()], { set, sample, seed });
 
     const ledger = readOwnLedger(ledgerPath);
+    const promptSha256 = PROMPT_SHA[promptVersion];
+    if (frozenMismatch(ledger, dataset, model, promptVersion, set, promptSha256)) {
+      stderr(`external-judge refused: the ${promptVersion} prompt text changed since paid ${promptVersion} calls for ${model} on set ${set} (sha256 ${promptSha256} is not the frozen one). No call made.`);
+      return { code: 2, reason: 'prompt-frozen' };
+    }
     // An end row counts only when it was judged on the candidate the pair has now.
     const fresh = (m) => new Map([...m].filter(([i, r]) => byId.get(i)?.candidateSource === r.candidateSource));
-    const judgedAny = judgedMap(ledger, dataset, model);
+    const judgedAny = judgedMap(ledger, dataset, model, promptVersion);
     const judged = fresh(judgedAny);
     const staleRejudged = ids.filter((i) => judgedAny.has(i) && !judged.has(i)).length;
     const pending = ids.filter((i) => !judged.has(i));
     const used = usedToday(ledger, now());
     const allowed = Math.max(0, Math.min(dailyShare - used, pending.length));
-    stdout(`plan: model ${model} effort ${JUDGE_EFFORT}${cap ? ` cap ${cap} (this run)` : ''}; dataset ${dataset} file ${file}; rows ${all.length}, decisive ${decisive.length}, uncertain excluded ${uncertain}, no candidate ${noCandidate} (yes ${noCandidateByLabel.yes}, no ${noCandidateByLabel.no}); sample ${ids.length} seed ${seed}; already judged ${ids.length - pending.length}, pending ${pending.length}, stale ${staleRejudged} (judged on another prompt, judged again); external calls today ${used}/${dailyShare}, this run ${dryRun ? 0 : allowed} (dry-run would allow ${allowed}); headless calls made: ${dryRun ? 0 : 'see below'}`);
+    stdout(`plan: model ${model} effort ${JUDGE_EFFORT} prompt ${promptVersion} set ${set}${cap ? ` cap ${cap} (this run)` : ''}; dataset ${dataset} file ${file}; rows ${all.length}, decisive ${decisive.length}, uncertain excluded ${uncertain}, no candidate ${noCandidate} (yes ${noCandidateByLabel.yes}, no ${noCandidateByLabel.no}); sample ${ids.length} seed ${seed}; pairs in set ${ids.length}; already judged ${ids.length - pending.length}, pending ${pending.length}, stale ${staleRejudged} (judged on another prompt, judged again); external calls today ${used}/${dailyShare}, this run ${dryRun ? 0 : allowed} (dry-run would allow ${allowed}); headless calls made: ${dryRun ? 0 : 'see below'}`);
 
     if (dryRun) {
-      for (const i of pending.slice(0, showPrompts)) stdout(`--- prompt for pair ${i} (human: ${byId.get(i).human}, candidate: ${byId.get(i).candidateSource}) ---\n${judgePrompt(byId.get(i).pair)}`);
-      return { code: 0, dryRun: true, planned: allowed, pending: pending.length, headlessCalls: 0 };
+      for (const i of pending.slice(0, showPrompts)) stdout(`--- prompt for pair ${i} (human: ${byId.get(i).human}, candidate: ${byId.get(i).candidateSource}) ---\n${PROMPTS[promptVersion](byId.get(i).pair)}`);
+      return { code: 0, dryRun: true, planned: allowed, pending: pending.length, headlessCalls: 0, ids, pairsInSet: ids.length, judged: ids.length - pending.length };
     }
     if (pending.length > 0 && allowed === 0) {
       stderr(`external-judge refused: ${used} external judge calls already started today (daily share ${dailyShare}). Run again tomorrow (Chicago time).`);
@@ -316,15 +386,16 @@ export async function run(opts, deps = {}) {
       return res;
     };
     const headSha = deps.headSha ?? headOf();
+    const rowTags = { promptVersion, set, promptSha256 };
     let calls = 0;
     let stopped = null;
     for (const pairId of pending.slice(0, allowed)) {
       const p = byId.get(pairId);
-      append(ledgerPath, { ts: new Date(now()).toISOString(), day: chicagoDay(now()), phase: 'start', dataset, pairId, sessionId: SESSION_ID, model });
+      append(ledgerPath, { ts: new Date(now()).toISOString(), day: chicagoDay(now()), phase: 'start', dataset, pairId, sessionId: SESSION_ID, model, ...rowTags });
       calls += 1;
       lastServed = null;
-      const res = await judgePair(p.pair, { runJudge });
-      const endBase = { ts: new Date(now()).toISOString(), phase: 'end', dataset, pairId, model, servedModel: lastServed, headSha };
+      const res = await JUDGES[promptVersion](p.pair, { runJudge });
+      const endBase = { ts: new Date(now()).toISOString(), phase: 'end', dataset, pairId, model, ...rowTags, servedModel: lastServed, headSha };
       if (lastServed && !servedMatches(model, lastServed)) {
         // Another model answered: a stop, whether its answer parsed or not.
         append(ledgerPath, { ...endBase, error: 'served-model' });
@@ -347,23 +418,26 @@ export async function run(opts, deps = {}) {
     }
 
     const after = readOwnLedger(ledgerPath);
-    const recordsOf = (m) => { const final = fresh(judgedMap(after, dataset, m)); return ids.filter((i) => final.has(i)).map((i) => {
+    const recordsOf = (m, v = promptVersion) => { const final = fresh(judgedMap(after, dataset, m, v)); return ids.filter((i) => final.has(i)).map((i) => {
       const r = final.get(i);
       return { pairId: i, human: r.human, judge: r.judge, agree: r.human === r.judge, candidateSource: r.candidateSource, confidence: r.confidence ?? null, headSha: r.headSha ?? null };
     }); };
     const records = recordsOf(model);
     const otherRecs = recordsOf(otherModel);
+    const otherPrompt = Object.keys(PROMPTS).find((v) => v !== promptVersion);
+    const promptRecs = recordsOf(model, otherPrompt);
     // The heads that made the counted verdicts (an end row before the head field has none: key "unknown").
     const verdictHeads = {};
     for (const r of records) { const k = r.headSha ?? 'unknown'; verdictHeads[k] = (verdictHeads[k] ?? 0) + 1; }
     const out = {
-      model, effort: JUDGE_EFFORT, headSha, verdictHeads,
+      model, effort: JUDGE_EFFORT, promptVersion, set, promptSha256, passRule: PASS_RULE, headSha, verdictHeads,
       dataset, file, seed, sampleRequested: sample, sampleIds: ids, uncertainExcluded: uncertain, noCandidate, noCandidateByLabel, staleRejudged, pendingAfterRun: ids.length - records.length,
       generatedAt: new Date(now()).toISOString(), pairs: records, summary: summarize(records),
       compare: { model: otherModel, summary: summarize(otherRecs), paired: pairedCounts(records, otherRecs) },
+      comparePrompt: promptRecs.length ? { promptVersion: otherPrompt, summary: summarize(promptRecs), paired: pairedCounts(records, promptRecs) } : null,
     };
     mkdirSync(outDir, { recursive: true });
-    const outPath = path.join(outDir, `${chicagoDay(now())}-hf-judge-precheck-${model}.json`);
+    const outPath = path.join(outDir, reportName(chicagoDay(now()), model, promptVersion, set));
     writeFileSync(outPath, `${JSON.stringify(out, null, 2)}\n`);
     const s = out.summary;
     const o = out.compare.summary;
@@ -372,6 +446,7 @@ export async function run(opts, deps = {}) {
     stdout(splitLine(s.bySource));
     stdout(`tpr ${s.tpr.k}/${s.tpr.n} (${fmt3(s.tpr.rate)}); tnr ${s.tnr.k}/${s.tnr.n} (${fmt3(s.tnr.rate)}); confidence 4+: n ${s.highConfidence.n}, agree ${s.highConfidence.agree}, human yes ${s.highConfidence.humanYes}`);
     stdout(`compare ${otherModel}: n ${o.n}; agreement ${o.agree}/${o.n} (${fmt3(o.agreement)}); kappa: ${fmt3(o.kappa)}; paired n ${pc.n}: both agree ${pc.bothAgree}, only ${model} ${pc.onlyThis}, only ${otherModel} ${pc.onlyOther}, both wrong ${pc.bothWrong}`);
+    if (out.comparePrompt) stdout(comparePromptLine(out.comparePrompt, promptVersion));
     stdout(`external-judge [${model} @ ${String(headSha ?? 'unknown').slice(0, 8)}]: ${calls} judge calls this run; ${records.length}/${ids.length} judged; n ${s.n}; agreement ${s.agree}/${s.n} (${fmt3(s.agreement)}); kappa: ${fmt3(s.kappa)}; hard (not picked): n ${s.hard.n}; agreement ${s.hard.agree}/${s.hard.n} (${fmt3(s.hard.agreement)}); kappa: ${fmt3(s.hard.kappa)}; real: not measured${stopped ? `; stopped: ${stopped}` : ''}`);
     return { code: stopped ? 2 : 0, calls, outPath, out };
   } catch (e) {
@@ -393,6 +468,8 @@ export function parseArgs(argv) {
     else if (a === '--show-prompts') o.showPrompts = Number(next());
     else if (a === '--model') { o.model = next(); if (!MODELS.includes(o.model)) throw new Error(`--model must be one of ${MODELS.join(', ')}`); }
     else if (a === '--cap') o.cap = Number(next());
+    else if (a === '--prompt') { o.prompt = next(); if (!Object.hasOwn(PROMPTS, o.prompt)) throw new Error(`--prompt must be one of ${Object.keys(PROMPTS).join(', ')}`); }
+    else if (a === '--set') { o.set = next(); if (!SETS.includes(o.set)) throw new Error(`--set must be one of ${SETS.join(', ')}`); }
     else if (a === '--stop-on-error') o.stopOnError = true;
     else if (a === '--root') o.root = next();
     else if (a === '--out-dir') o.outDir = next();
