@@ -94,7 +94,10 @@ const SPECS: Spec[] = [
     cursor: [() => ({ hook_event_name: 'userPromptSubmit', prompt: PROMPT })],
     claude: () => ({ hook_event_name: 'UserPromptSubmit', prompt: PROMPT }),
     expect: { created: BUS } },
+  // Seeded compiler stub: the hook starts a child only when it finds typescript/bin/tsc under the project.
+  // Without the seed the Claude control spawns nothing on CI (Linux) and the child count proves nothing.
   { hook: 'post-edit-diagnostics', neutral: '{}',
+    seed: (proj) => { mkdirSync(join(proj, 'node_modules', 'typescript', 'bin'), { recursive: true }); writeFileSync(join(proj, 'node_modules', 'typescript', 'bin', 'tsc'), '// stub\n'); },
     cursor: [...CURSOR_TOOLS('Write', (p) => ({ file_path: F(p) }), { tool_result: { success: true } }), ...CURSOR_TOOLS('Edit', (p) => ({ file_path: F(p) }), { tool_result: { success: true } })],
     claude: (p) => ({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: F(p) }, tool_result: { success: true } }),
     expect: { created: BUS, spawns: true } },
