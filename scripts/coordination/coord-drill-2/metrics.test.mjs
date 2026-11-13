@@ -1259,3 +1259,182 @@ test('R11: metric 6 with no --since/--until does not judge the idle count; a fai
   const fail = find(computeMetrics([mkFacts(1000)], {}), 6);
   assert.equal(fail.meets, false);
 });
+
+// ---- CodeRabbit round 2 (60844ef5): every fixture is invented --------------
+const askQ = (id) => use('AskUserQuestion', { questions: [{ question: 'alpha?', header: 'h', options: [] }] }, id);
+
+// CR1 (:536): a question still open at the window end reported zero open time.
+test('CR1: a question still pending at the window end counts its open time and can breach 6 h', () => {
+  const f = ingestEntries([asst(SEAT, 0, [askQ('p1')]), asst(SEAT, 7 * 3600, [])], {});
+  const m = find(computeMetrics([f], {}), 7);
+  assert.equal(m.value.unpaired, 1);
+  assert.equal(m.value.unionOpenHours, 7);
+  assert.equal(m.value.waitsOver300s, 1);
+  assert.equal(m.meets, false);
+  // With --until the open time stops at the window end, not at the 2 h tail.
+  const opts = { until: BASE + 2 * 3600 * 1000 };
+  const g = ingestEntries([asst(SEAT, 0, [askQ('p2')]), asst(SEAT, 3 * 3600, [])], opts);
+  const mg = find(computeMetrics([g], opts), 7);
+  assert.equal(mg.value.unionOpenHours, 2);
+  assert.equal(mg.value.waitsOver300s, 1);
+});
+
+// CR2 (:238): a say inside a shell comment is not a send.
+test('CR2: a say inside a shell comment is not a send; a real send on the next line still is', () => {
+  const inner = `node C:/x/lane.mjs say --to bbbbbbbb ${T1}`;
+  assert.equal(parseLaneSays(`node C:/x/lane.mjs note alpha "x" # ${inner}`, 'Bash').length, 0);
+  assert.equal(parseLaneSays(`# ${inner}`, 'PowerShell').length, 0);
+  assert.equal(parseLaneSays(`# it's a note\nnode C:/x/lane.mjs say --to bbbbbbbb "${T1}"`, 'Bash').length, 1);
+  assert.equal(parseLaneSays(`node C:/x/lane.mjs say --to bbbbbbbb "${T1} #5 done"`, 'Bash').length, 1);
+  const f = ingestEntries([asst(SEAT, 10, [use('Bash', { command: `echo ok # ${inner}` }, 'cm1')])], {});
+  assert.equal(f.sends.length, 0);
+});
+
+// CR3 (:650): an exact msg_id match ignored r.used; a probe match could take the same arrival first.
+test('CR3: one arrival matches one send: an exact msg_id is reserved before probe fallback, and a repeated id is not matched twice', () => {
+  const body = `${T1} ${T2}`;
+  const names = saySend(5, 'e0', 'bbbbbbbb', T3);
+  const noId = [asst(SEAT, 10, [use('SendMessage', { to: 'zorblat', message: body }, 'e1')]), result(SEAT, 11, 'e1', 'ok', { toolUseResult: { success: true } })];
+  const peerBody = (sec, msgId) => ({ type: 'user', sessionId: BLD, timestamp: iso(sec), origin: { kind: 'peer', msg_id: msgId, body }, message: { content: 'wrapper' } });
+  const recv = ingestEntries([sys(BLD, 1, 'turn_duration'), peerBody(21, 'm-x'), asst(BLD, 600, [])], {});
+  const a = ingestEntries([...names, ...noId, ...smSend(20, 'e2', body, 'm-x')], {});
+  const recA = analyzeDirected([a, recv], {}).records.filter((r) => r.channel === 'sendmessage');
+  assert.deepEqual(recA.map((r) => r.status), ['lost', 'matched']);
+  const b = ingestEntries([...names, ...smSend(10, 'e3', body, 'm-x'), ...smSend(20, 'e4', body, 'm-x')], {});
+  const recB = analyzeDirected([b, recv], {}).records.filter((r) => r.channel === 'sendmessage');
+  assert.deepEqual(recB.map((r) => r.status).sort(), ['lost', 'matched']);
+});
+
+// CR4 (:1127): an event DM row with an invalid time is skipped; a pass must be withheld.
+test('CR4: with --events a DM row whose time does not parse withholds the pass in metrics 2 and 3', () => {
+  const rows = [
+    { kind: 'note', session_id: SEAT, to_session_id: BLD, body: T1, occurred_at: iso(10) },
+    { kind: 'note', session_id: SEAT, to_session_id: BLD, body: T2, occurred_at: 'not a time' },
+  ];
+  const ev = M.eventSendsDetailed(rows, {});
+  assert.equal(ev.unparsed, 1);
+  const sender = ingestEntries([asst(SEAT, 1, [])], {});
+  const banner = `## 1 lane update(s) since you last looked\n- (direct to you) ${T1}`;
+  const recv = ingestEntries([sys(BLD, 1, 'turn_duration'), hook(BLD, 15, 'UserPromptSubmit', [banner]), asst(BLD, 50, [])], {});
+  const clean = { eventSends: ev.sends, eventStats: { rows: 1, unparsed: 0 } };
+  assert.equal(find(computeMetrics([sender, recv], clean), 2).meets, true);
+  assert.equal(find(computeMetrics([sender, recv], clean), 3).meets, true);
+  const dirty = { eventSends: ev.sends, eventStats: { rows: ev.rows, unparsed: ev.unparsed } };
+  const m2 = find(computeMetrics([sender, recv], dirty), 2);
+  const m3 = find(computeMetrics([sender, recv], dirty), 3);
+  assert.equal(m2.meets, null);
+  assert.equal(m3.meets, null);
+  assert.equal(m2.unparsed, 1);
+  assert.ok(m2.caveats.some((c) => /withheld/.test(c) && /events/i.test(c)));
+});
+
+// CR5 (:817, :850, :902): verdicts compared ROUNDED values with the targets.
+test('CR5: metric 3 judges the raw loss rate: 1 lost of 201 is 0.4975 percent, under 0.5', () => {
+  const entries = [...saySend(5, 'v0', 'bbbbbbbb', T3)];
+  const recvEntries = [sys(BLD, 1, 'turn_duration'), hook(BLD, 8, 'UserPromptSubmit', [`## 1 lane update(s) since you last looked\n- (direct to you) ${T3}`]), asst(BLD, 5600, [])];
+  for (let i = 0; i < 200; i++) {
+    entries.push(...smSend(100 + i * 10, `v${i + 1}`, `alpha ${i}`, `mv-${i}`));
+    recvEntries.push(peerIn(BLD, 101 + i * 10, `mv-${i}`));
+  }
+  entries.push(...smSend(5000, 'vl', T2, 'mv-lost'));
+  const m = find(computeMetrics([ingestEntries(entries, {}), ingestEntries(recvEntries, {})], {}), 3);
+  assert.equal(m.value.sendmessage.evaluable, 201);
+  assert.equal(m.value.sendmessage.unexplainedLoss, 1);
+  assert.equal(m.value.sendmessage.rate, 0.005);
+  assert.equal(m.meets, true);
+});
+
+test('CR5: metric 4 judges the raw double-send rate: 200 of 2001 is under 10 percent', () => {
+  const e = [];
+  for (let i = 0; i < 2001; i++) {
+    e.push(...smSend(1000 + i * 300, `w${i}`, 'alpha ping', `mw-${i}`));
+    if (i < 200) e.push(...saySend(1010 + i * 300, `wl${i}`, 'cccccccc', 'alpha ping'));
+  }
+  const m = find(computeMetrics([ingestEntries(e, {})], { seat: 'aaaaaaaa' }), 4);
+  assert.equal(m.value.smCalls, 2001);
+  assert.equal(m.value.doubleSent, 200);
+  assert.equal(m.value.rate, 0.1);
+  assert.equal(m.meets, true);
+});
+
+test('CR5: metric 6 judges the raw idle checks per 3 days: 14.9955 is under 15', () => {
+  const fire = (sec) => ({ type: 'user', sessionId: SEAT, timestamp: iso(sec), isMeta: true, scheduledTaskId: 't', wakeupSource: 'schedule_wakeup', message: { content: 'Seat check for lane alpha' } });
+  const opts = { since: BASE, until: BASE + 86425920 };
+  const e = [];
+  for (let i = 0; i < 5; i++) {
+    e.push(fire(100 + i * 100), asst(SEAT, 101 + i * 100, [use('Bash', { command: 'node lane.mjs board' })], `ck${i}`, { input_tokens: 1, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 }), sys(SEAT, 102 + i * 100, 'turn_duration'));
+  }
+  e.push(asst(SEAT, 900, [], 'ckx', { input_tokens: 1, cache_read_input_tokens: 200000, cache_creation_input_tokens: 0 }));
+  const m = find(computeMetrics([ingestEntries(e, opts)], opts), 6);
+  assert.equal(m.value.idleChecks, 5);
+  assert.equal(m.value.idleChecksPer3Days, 15);
+  assert.equal(m.meets, true);
+});
+
+// CR6 (:843): metric 4 used transcript lane sends only; metrics 1 to 3 use the event rows when given.
+test('CR6: metric 4 takes its lane side from the same send collection as metrics 1 to 3 (event rows)', () => {
+  const f = ingestEntries([
+    ...smSend(100, 'x1', 'alpha ping', 'mx-1'),
+    // far from the SendMessage: only here to teach the name map (zorblat = cccccccc); dropped when events are given
+    ...saySend(5000, 'x2', 'cccccccc', 'alpha ping'),
+  ], {});
+  const rows = [{ kind: 'note', session_id: SEAT, to_session_id: 'cccccccc-0000-4000-8000-000000000003', body: 'alpha ping', occurred_at: iso(150) }];
+  const opts = { seat: 'aaaaaaaa', eventSends: eventSends(rows) };
+  const m = find(computeMetrics([f], opts), 4);
+  assert.equal(m.value.smCalls, 1);
+  assert.equal(m.value.doubleSent, 1);
+  // an event row sent by another session is not the seat's lane DM
+  const other = [{ ...rows[0], session_id: BLD }];
+  const mo = find(computeMetrics([f], { seat: 'aaaaaaaa', eventSends: eventSends(other) }), 4);
+  assert.equal(mo.value.doubleSent, 0);
+});
+
+// CR7 (:690): two identical lane sends both matched one DM occurrence in a banner.
+test('CR7: two identical lane DMs match one banner occurrence once; two occurrences match both', () => {
+  const sender = ingestEntries([...saySend(10, 'i1', 'bbbbbbbb', T1), ...saySend(20, 'i2', 'bbbbbbbb', T1)], {});
+  const one = ingestEntries([hook(BLD, 40, 'UserPromptSubmit', [`## 1 lane update(s) since you last looked\n- (direct to you) ${T1}`]), asst(BLD, 50, [])], {});
+  assert.deepEqual(analyzeDirected([sender, one], {}).records.map((r) => r.status), ['matched', 'lost']);
+  const two = ingestEntries([hook(BLD, 40, 'UserPromptSubmit', [`## 2 lane update(s) since you last looked\n- (direct to you) ${T1}\n- (direct to you) ${T1}`]), asst(BLD, 50, [])], {});
+  assert.deepEqual(analyzeDirected([sender, two], {}).records.map((r) => r.status), ['matched', 'matched']);
+});
+
+// CR8 (:1150): stdout echoed the --out file name, which can hold a session handle.
+test('CR8: stdout prints a fixed confirmation and never the --out file name', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cd2-metrics-out-'));
+  try {
+    const inDir = path.join(dir, 'in');
+    const outDir = path.join(dir, 'out');
+    fs.mkdirSync(inDir);
+    fs.mkdirSync(outDir);
+    fs.writeFileSync(path.join(inDir, 'a.jsonl'), `${JSON.stringify(asst(SEAT, 10, []))}\n`);
+    const out = path.join(outDir, `${SEAT.slice(0, 8)}-report.json`);
+    const r = run(['--transcripts', inDir, '--out', out]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(fs.existsSync(out));
+    assert.ok(!r.stdout.includes(SEAT.slice(0, 8)), 'out file name leaked to stdout');
+    assert.ok(!r.stdout.includes('report.json'), 'out file name leaked to stdout');
+    assert.match(r.stdout, /Report written\./);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// CR9 (:749): a body cut with no lane banner in the input gave meets null.
+test('CR9: a positive body-cut count fails metric 1 even when no lane banner was seen', () => {
+  const sender = ingestEntries(saySend(10, 'b1', 'bbbbbbbb', LONG_BODY), {});
+  const recv = ingestEntries([hook(BLD, 40, 'PostToolUse', [`## Direct message from another session\n${LONG_BODY.slice(0, 400)}${CUT_TAIL}`]), asst(BLD, 50, [])], {});
+  const m = find(computeMetrics([sender, recv], {}), 1);
+  assert.equal(m.value.totalBanners, 0);
+  assert.equal(m.value.dmsCutBody, 1);
+  assert.equal(m.meets, false);
+});
+
+// CR10 (:661): more than half of the probes hit a cut DM, so it was accepted as matched and the cut was missed.
+test('CR10: a DM that is more than half delivered before the hook cut marker is cut; a whole DM beside it stays matched', () => {
+  const sender = ingestEntries([...saySend(10, 'k1', 'bbbbbbbb', LONG_BODY), ...saySend(12, 'k2', 'bbbbbbbb', T1)], {});
+  const banner = `## 2 lane update(s) since you last looked\n- (direct to you) ${T1}\n- (direct to you) ${LONG_BODY.slice(0, 900)}${CUT_TAIL}`;
+  const recv = ingestEntries([hook(BLD, 40, 'UserPromptSubmit', [banner]), asst(BLD, 50, [])], {});
+  assert.deepEqual(analyzeDirected([sender, recv], {}).records.map((r) => r.status), ['cut', 'matched']);
+  const m1 = find(computeMetrics([sender, recv], {}), 1);
+  assert.equal(m1.value.dmsCutBody, 1);
+});

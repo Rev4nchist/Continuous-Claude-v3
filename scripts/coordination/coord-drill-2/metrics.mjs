@@ -213,7 +213,8 @@ function cutCommand(s, shell) {
   return s;
 }
 
-// Same length as the input; every quoted span (quotes included) becomes MASK characters.
+// Same length as the input; every quoted span (quotes included) and every shell comment (a # that starts a
+// word, up to the line end) becomes MASK characters.
 function maskQuoted(s, shell) {
   const esc = escapesOf(shell);
   let q = null;
@@ -223,7 +224,10 @@ function maskQuoted(s, shell) {
     if (q) {
       out += MASK;
       if (q === '"' && esc.includes(c) && i + 1 < s.length) { out += MASK; i++; } else if (c === q) q = null;
-    } else if (c === '"' || c === "'") { q = c; out += MASK; } else out += c;
+    } else if (c === '"' || c === "'") { q = c; out += MASK; } else if (c === '#' && (i === 0 || /[\s;|&(]/.test(s[i - 1]))) {
+      while (i < s.length && s[i] !== '\n' && s[i] !== '\r') { out += MASK; i++; }
+      i--;
+    } else out += c;
   }
   return out;
 }
@@ -257,7 +261,7 @@ function newFacts(id) {
   return {
     id, id8: null, lines: 0, badLines: 0, noTime: 0, sidechain: 0, firstT: null, lastT: null,
     flips: [], activity: [], requests: 0, cacheReadTotal: 0, maxCtx: 0, compactions: [],
-    asks: [], askCalls: 0, askUnpaired: 0, humanPrompts: 0,
+    asks: [], openAsks: [], askCalls: 0, askUnpaired: 0, humanPrompts: 0,
     sends: [], arrivals: [], banners: [], stubs: { rule: 0, other: 0 }, nameToId8: new Map(), smCalls: 0, smNotSuccess: 0, smToAgents: 0,
     hook: { blocks: 0, bytes: 0, repeatBlocks: 0, repeatBytes: 0, ruleBlocks: 0, ruleRepeats: 0, ruleFiles: new Map(), seen: new Set(), ruleSeen: new Set() },
     checks: [], calls: 0, bkForward: 0, bkReviewFirst: 0, publishDays: {}, publishes: 0, results429: 0,
@@ -274,6 +278,7 @@ class Ingestor {
     this.pending = new Map();
     this.reqSeen = new Set();
     this.seg = null;
+    this.maxT = -Infinity;
     this.f = newFacts(opts.id || null);
   }
 
@@ -286,6 +291,7 @@ class Ingestor {
     const t = Date.parse(e.timestamp);
     if (!Number.isFinite(t)) { f.noTime++; return; }
     if (t < this.since || t > this.ext) return;
+    if (t > this.maxT) this.maxT = t;
     const inWin = t <= this.until;
     if (inWin) {
       f.firstT = f.firstT === null ? t : Math.min(f.firstT, t);
@@ -533,7 +539,14 @@ class Ingestor {
   finish() {
     const f = this.f;
     this.closeSeg();
-    for (const p of this.pending.values()) if (p.k === 'ask') f.askUnpaired++;
+    // A question with no answer in the input stays open to the observed window end: the --until time, or the
+    // last entry of the session when that is earlier. Its open time is kept, not dropped to zero.
+    const end = Math.min(this.until, this.maxT);
+    for (const p of this.pending.values()) {
+      if (p.k !== 'ask') continue;
+      f.askUnpaired++;
+      if (end > p.t) f.openAsks.push([p.t, end]);
+    }
     f.activity.sort((a, b) => a - b);
     f.banners.sort((a, b) => a.t - b.t);
     f.id = validId(f.id) ? f.id : 'unknown';
@@ -645,20 +658,50 @@ function collectSends(list, opts) {
 }
 
 // A lane arrival (one banner, one "## Direct messages" block) holds many DMs, so it can match
-// many sends. A peer arrival is one message: it matches one send.
+// many sends, but each DM occurrence in it once: windows already taken by an earlier send (r.taken)
+// do not count again. A peer arrival is one message: it matches one send.
+function laneHits(s, r) {
+  const need = new Map();
+  for (const k of s.probes) need.set(k, (need.get(k) || 0) + 1);
+  let hit = 0;
+  const take = new Map();
+  for (const [k, c] of need) {
+    const free = lowerBound(r.a.keys, k + 1) - lowerBound(r.a.keys, k) - (r.taken.get(k) || 0);
+    const got = Math.max(0, Math.min(c, free));
+    if (got) { hit += got; take.set(k, got); }
+  }
+  return { hit, take };
+}
+
+function consumeLane(s, r) {
+  for (const [k, c] of laneHits(s, r).take) r.taken.set(k, (r.taken.get(k) || 0) + c);
+}
+
+// The hook cut this arrival's body and the DM opens here: a partial match is a cut, not a delivery.
+const cutCovers = (s, r) => r.a.kind === 'lane' && r.a.bodyCut && r.a.t <= s.t + TWO_H && hasKey(r.a.keys, s.probes[0]);
+
 function findArrival(s, sender, hex, ctx) {
-  if (s.msgId && ctx.peerByMsg.has(s.msgId)) return ctx.peerByMsg.get(s.msgId);
+  if (s.msgId) {
+    const exact = ctx.peerByMsg.get(s.msgId);
+    if (exact && !exact.used) return exact;
+  }
   if (!s.probes.length) return null;
   const kind = s.channel === 'lane' ? 'lane' : 'peer';
   for (const r of ctx.refs) {
     if (r.used || r.a.kind !== kind || r.f === sender || r.a.t < s.t - 5000) continue;
-    // An arrival of another message (both ids set, not equal) is not this send. No id on the arrival: probes decide.
-    if (s.msgId && r.a.msgId && r.a.msgId !== s.msgId) continue;
+    // An arrival of another message is not this send: its id differs from the send's id, or another send
+    // reserved it. No id on the arrival: probes decide.
+    if (r.a.msgId && r.a.msgId !== s.msgId && (s.msgId || ctx.reserved.has(r.a.msgId))) continue;
     if (hex && !r.f.id.toLowerCase().startsWith(hex)) continue;
-    const hit =s.probes.filter((k) => hasKey(r.a.keys, k)).length;
-    // A lane arrival holds many DMs, and DMs share template text: one shared window is not a match.
-    // At least half of the probes must hit. A peer arrival is one message: one hit is enough.
-    if (kind === 'lane' ? hit * 2 >= s.probes.length : hit > 0) return r;
+    if (kind === 'peer') {
+      if (s.probes.some((k) => hasKey(r.a.keys, k))) return r;
+      continue;
+    }
+    // DMs share template text: one shared window is not a match. At least half of the probes must hit.
+    const { hit } = laneHits(s, r);
+    if (hit * 2 < s.probes.length) continue;
+    if (hit < s.probes.length && cutCovers(s, r)) continue; // findCutArrival decides
+    return r;
   }
   return null;
 }
@@ -671,9 +714,9 @@ function findArrival(s, sender, hex, ctx) {
 function findCutArrival(s, sender, hex, ctx) {
   if (s.channel !== 'lane' || !s.probes.length) return null;
   for (const r of ctx.refs) {
-    if (r.a.kind !== 'lane' || !r.a.bodyCut || r.f === sender || r.a.t < s.t - 5000 || r.a.t > s.t + TWO_H) continue;
+    if (r.f === sender || r.a.t < s.t - 5000 || !cutCovers(s, r)) continue;
     if (hex && !r.f.id.toLowerCase().startsWith(hex)) continue;
-    if (hasKey(r.a.keys, s.probes[0])) return r;
+    return r;
   }
   return null;
 }
@@ -687,7 +730,8 @@ function analyzeOne({ s, f }, ctx) {
   const rf = hex ? ctx.list.find((x) => x.id.toLowerCase().startsWith(hex)) || null : null;
   const ref = findArrival(s, f, hex, ctx);
   if (ref) {
-    if (ref.a.kind === 'peer') ref.used = true; // a lane arrival stays open for the other DMs in it
+    if (ref.a.kind === 'peer') ref.used = true;
+    else consumeLane(s, ref); // a lane arrival stays open for the other DMs in it
     return { ...rec, status: 'matched', latencyMs: Math.max(0, ref.a.t - s.t), state: stateAt(ref.f, s.t) };
   }
   if (!s.probes.length && !s.msgId) return { ...rec, status: 'untestable' };
@@ -704,12 +748,15 @@ export function analyzeDirected(list, opts = {}) {
   const names = new Map();
   for (const f of list) for (const [k, v] of f.nameToId8) names.set(k, v);
   const refs = [];
-  for (const f of list) for (const a of f.arrivals) refs.push({ a, f, used: false });
+  for (const f of list) for (const a of f.arrivals) refs.push({ a, f, used: false, taken: new Map() });
   refs.sort((x, y) => x.a.t - y.a.t);
   const peerByMsg = new Map();
   for (const r of refs) if (r.a.kind === 'peer' && r.a.msgId && !peerByMsg.has(r.a.msgId)) peerByMsg.set(r.a.msgId, r);
-  const ctx = { list, names, refs, peerByMsg };
-  return { records: collectSends(list, opts).map((x) => analyzeOne(x, ctx)), names };
+  const sends = collectSends(list, opts);
+  // An arrival whose msg_id belongs to a send is that send's: no other send takes it by probe.
+  const reserved = new Set(sends.filter((x) => x.s.msgId).map((x) => x.s.msgId));
+  const ctx = { list, names, refs, peerByMsg, reserved };
+  return { records: sends.map((x) => analyzeOne(x, ctx)), names };
 }
 
 // ---- metric builders ------------------------------------------------------
@@ -731,6 +778,8 @@ function mk(id, list, value, n, meets, caveats) {
   const d = DEFS[id];
   return { id, name: d.name, value, n, target: d.target, meets, method: d.method, caveats, unparsed: sumUnparsed(list, id) };
 }
+// Event DM rows whose time did not parse were skipped: the lane channel has a hole, so no pass.
+const eventSkipped = (opts) => (opts.eventStats && Number.isFinite(opts.eventStats.unparsed) ? opts.eventStats.unparsed : 0);
 const allOf = (flags) => (flags.length === 0 ? null : flags.every(Boolean));
 const seatFacts = (list, opts) => (opts.seat ? list.filter((f) => f.id.toLowerCase().startsWith(String(opts.seat).toLowerCase())) : []);
 
@@ -746,7 +795,7 @@ export function metric1(list, opts = {}, an = analyzeDirected(list, opts)) {
   caveats.push('A cut SessionStart lane board is counted in cutSessionStartBoards and is not judged here.');
   if (!banners.length) caveats.push('No lane banner was seen in the input.');
   return mk(1, list, { totalBanners: banners.length, cutBanners: cut, dmsBehindCut: behind, dmsBehindCutBanner: behindBanner, dmsCutBody: bodyCut, sessionStartBoards: sum(list.map((f) => f.boards.total)), cutSessionStartBoards: sum(list.map((f) => f.boards.cut)), cutRuleRouterStubs: sum(list.map((f) => f.stubs.rule)), otherStubs: sum(list.map((f) => f.stubs.other)) },
-    banners.length, banners.length ? cut === 0 && behind === 0 : null, caveats);
+    banners.length, cut > 0 || behind > 0 ? false : banners.length ? true : null, caveats);
 }
 
 // A send with no arrival, to a receiver that was or could have been reached, is a wait with no end.
@@ -804,7 +853,14 @@ export function metric2(list, opts = {}, an = analyzeDirected(list, opts)) {
     meets = null;
     caveats.push('A pass is withheld: some directed sends failed or could not be tested (notMeasured), so the target "every directed message" is not measured.');
   }
-  return mk(2, list, value, n, meets, caveats);
+  const skipped = eventSkipped(opts);
+  if (meets === true && skipped > 0) {
+    meets = null;
+    caveats.push('A pass is withheld: some lane_event DM rows in the events file have no time that parses (counted in unparsed), so the lane sends are incomplete.');
+  }
+  const m = mk(2, list, value, n, meets, caveats);
+  m.unparsed += skipped;
+  return m;
 }
 
 export function metric3(list, opts = {}, an = analyzeDirected(list, opts)) {
@@ -815,7 +871,7 @@ export function metric3(list, opts = {}, an = analyzeDirected(list, opts)) {
     const evaluable = c('matched') + c('lost') + c('cut') + c('receiver_inactive');
     value[ch] = { evaluable, matched: c('matched'), cutExplained: c('cut'), receiverInactive: c('receiver_inactive'), receiverUnknown: c('receiver_unknown'),
       untestable: c('untestable'), undirected: c('undirected'), failed: c('failed'), unexplainedLoss: c('lost'), rate: evaluable ? round(c('lost') / evaluable, 4) : null };
-    if (evaluable) rates.push(value[ch].rate < 0.005);
+    if (evaluable) rates.push(c('lost') / evaluable < 0.005); // the raw rate: the rounded one can sit on the target
   }
   value.sendMessageNotSuccess = sum(list.map((f) => f.smNotSuccess));
   // SendMessage calls to a subagent (recipient_kind agent) have no session receiver: not judged here.
@@ -828,8 +884,12 @@ export function metric3(list, opts = {}, an = analyzeDirected(list, opts)) {
   // A failed or untestable send was never measured: a rate over the other sends is not a pass for "every" send.
   const notMeasured = sum(['lane', 'sendmessage'].map((c) => value[c].untestable + value[c].failed));
   if (notMeasured > 0) caveats.push('Some sends failed or could not be tested (untestable, failed): a pass is withheld; read the counts in value.');
-  const meets = unknown > 0 ? null : verdict === true && (value.sendMessageNotSuccess > 0 || notMeasured > 0) ? null : verdict;
-  return mk(3, list, value, sum(['lane', 'sendmessage'].map((c) => value[c].evaluable)), meets, caveats);
+  const skipped = eventSkipped(opts);
+  if (skipped > 0) caveats.push('Some lane_event DM rows in the events file have no time that parses (counted in unparsed): a pass is withheld.');
+  const meets = unknown > 0 ? null : verdict === true && (value.sendMessageNotSuccess > 0 || notMeasured > 0 || skipped > 0) ? null : verdict;
+  const m = mk(3, list, value, sum(['lane', 'sendmessage'].map((c) => value[c].evaluable)), meets, caveats);
+  m.unparsed += skipped;
+  return m;
 }
 
 export function metric4(list, opts = {}, an = analyzeDirected(list, opts)) {
@@ -839,8 +899,10 @@ export function metric4(list, opts = {}, an = analyzeDirected(list, opts)) {
   const canon = (k) => an.names.get(k) ?? k;
   let calls = 0;
   let hits = 0;
+  // The lane side comes from the same collection as metrics 1 to 3: event rows replace the transcript lane sends.
+  const laneAll = collectSends(list, opts).filter((x) => x.s.channel === 'lane' && (x.s.toHex || x.s.toName));
   for (const f of seats) {
-    const lane = f.sends.filter((s) => s.channel === 'lane' && (s.toHex || s.toName)).map((s) => ({ t: s.t, k: s.toHex || canon(s.toName) }));
+    const lane = laneAll.filter((x) => x.f === f).map((x) => ({ t: x.s.t, k: x.s.toHex || canon(x.s.toName) }));
     for (const s of f.sends.filter((x) => x.channel === 'sendmessage')) {
       calls++;
       const k = canon(s.toName);
@@ -848,7 +910,7 @@ export function metric4(list, opts = {}, an = analyzeDirected(list, opts)) {
     }
   }
   const rate = calls ? round(hits / calls, 4) : null;
-  return mk(4, list, { doubleSent: hits, smCalls: calls, rate }, calls, calls ? rate < 0.1 : null, caveats);
+  return mk(4, list, { doubleSent: hits, smCalls: calls, rate }, calls, calls ? hits / calls < 0.1 : null, caveats);
 }
 
 // The rule file names of rules-ondemand/manifest.json (read only, read once). A missing or bad
@@ -899,7 +961,8 @@ export function metric6(list, opts = {}) {
   const total = sum(src.map((f) => f.cacheReadTotal));
   const days = Number.isFinite(opts.since) && Number.isFinite(opts.until) ? (opts.until - opts.since) / 86400000 : null;
   // With no window the count per 3 days is unknown (null, not the raw count under that name).
-  const idlePer3 = days ? round(idle.length * 3 / days, 1) : null;
+  const rawPer3 = days ? idle.length * 3 / days : null;
+  const idlePer3 = rawPer3 === null ? null : round(rawPer3, 1);
   if (!days) caveats.push('No full --since/--until window: idleChecksPer3Days is null and the count part of the target is not judged; meets can fail on the cache-read share but cannot pass.');
   const idleCache = sum(idle.map((c) => c.cacheRead));
   const share = total ? idleCache / total : null;
@@ -915,26 +978,30 @@ export function metric6(list, opts = {}) {
   const short = days !== null && days < 1;
   if (short) caveats.push('Window under one day: meets judges the idle cache-read share only; idleChecksPer3Days is information.');
   // Each part is true, false or unknown (no window: the count is unknown). One false fails; a pass needs both true.
-  const countOk = idlePer3 === null ? null : short ? true : idlePer3 < 15;
+  const countOk = rawPer3 === null ? null : short ? true : rawPer3 < 15;
   const verdict = countOk === false || share >= 0.07 ? false : countOk === true ? true : null;
   return mk(6, list, value, checks.length, checks.length && total ? verdict : null, caveats);
 }
 
 export function metric7(list, opts = {}) {
   const asks = list.flatMap((f) => f.asks);
+  // A question still open at the observed window end counts through that end (a lower bound, never zero).
+  const open = list.flatMap((f) => f.openAsks);
   const waits = asks.map(([a, b]) => (b - a) / 1000);
+  const openWaits = open.map(([a, b]) => (b - a) / 1000);
   const calls = sum(list.map((f) => f.askCalls));
   const prompts = sum(list.map((f) => f.humanPrompts));
-  const union = unionLength(asks) / 1000;
+  const union = unionLength([...asks, ...open]) / 1000;
   const value = { questionCalls: calls, paired: asks.length, unpaired: sum(list.map((f) => f.askUnpaired)), humanPrompts: prompts, questionsPerPrompt: prompts ? round(calls / prompts, 2) : null,
-    waitsOver300s: waits.filter((w) => w > 300).length, sumWaitSec: round(sum(waits), 1), unionOpenSec: round(union, 1), unionOpenHours: round(union / 3600, 2),
+    openAtEnd: open.length, openAtEndSec: round(sum(openWaits), 1), waitsOver300s: waits.filter((w) => w > 300).length + openWaits.filter((w) => w > 300).length, sumWaitSec: round(sum(waits), 1), unionOpenSec: round(union, 1), unionOpenHours: round(union / 3600, 2),
     p50WaitSec: round(percentile(waits, 0.5), 1), p90WaitSec: round(percentile(waits, 0.9), 1), maxWaitSec: waits.length ? round(maxOf(waits), 1) : null };
   const caveats = ['Taps per landed PR is not computed (needs PR land data): meets is false when the wait count or the open time fails, and null otherwise (never true).',
+    'A question with no answer in the input counts as open to the window end (--until) or the last entry of its session: openAtEnd and openAtEndSec, included in waitsOver300s and unionOpenSec; a lower bound.',
     'Human prompts exclude meta, peer, scheduled and tag-wrapped user entries; the count is an estimate.'];
   // The third part of the target (taps per landed PR) is not computed, so the parts that are computed
   // can fail the target but cannot pass it: a pass is null.
   const judged = value.waitsOver300s < 15 && union / 3600 < 6;
-  return mk(7, list, value, asks.length, asks.length && !judged ? false : null, caveats);
+  return mk(7, list, value, asks.length, (asks.length + open.length) && !judged ? false : null, caveats);
 }
 
 export function metric8(list, opts = {}) {
@@ -1147,7 +1214,7 @@ export async function main(argv) {
       throw err && err.code === 'EEXIST' ? new CliError('Refusing an --out that already exists.') : err;
     }
     for (const m of report.metrics) process.stdout.write(`M${m.id} ${m.name}: meets=${m.meets} n=${m.n}\n`);
-    process.stdout.write(`Report written: ${path.basename(a.out)}\n`);
+    process.stdout.write('Report written.\n'); // a fixed line: the file name can hold a session handle
     return 0;
   } catch (err) {
     process.stderr.write(`${err instanceof CliError ? err.message : `Unexpected failure (${err && err.code ? err.code : 'error'}).`}\n`);
