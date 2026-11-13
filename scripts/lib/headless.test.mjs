@@ -142,15 +142,19 @@ test('runClaude at the cap starts no process and writes no end row', async () =>
   assert.equal(rows(file).length, 1);
 });
 
-test('runJudge is runClaude with purpose eval-judge and the judge model', async () => {
-  // Breaks when: runJudge uses another purpose (the ledger would no longer show judge runs) or an Opus model.
+test('runJudge is runClaude with purpose eval-judge and the judge model, Opus at effort high', async () => {
+  // Breaks when: runJudge uses another purpose (the ledger would no longer show judge runs), goes back to Sonnet,
+  // or drops effort high (Dave 2026-11-13: the judge is Opus 5.5 at effort high).
   const dir = tmp();
   const file = path.join(dir, 'ledger.jsonl');
   const stub = stubClaude(dir);
-  await runJudge('hello', { ledgerPath: file, command: process.execPath, prefixArgs: [stub], timeoutMs: 20_000, skipConfigFiles: true });
+  const res = await runJudge('hello', { ledgerPath: file, command: process.execPath, prefixArgs: [stub], timeoutMs: 20_000, skipConfigFiles: true });
   const [start] = rows(file);
   assert.equal(start.purpose, 'eval-judge');
-  assert.equal(start.model, 'sonnet');
+  assert.equal(start.model, 'opus');
+  const { argv } = JSON.parse(res.result);
+  assert.equal(argv[argv.indexOf('--model') + 1], 'opus');
+  assert.equal(argv[argv.indexOf('--effort') + 1], 'high');
 });
 
 test('a time-out ends the run with timedOut in the end row', async () => {
