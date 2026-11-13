@@ -1,5 +1,11 @@
 /**
- * PreToolUse:Edit|Write Hook - Enforce file locking for conflict prevention.
+ * PreToolUse Hook - Enforce file locking for conflict prevention, for every tool that writes a file.
+ *
+ * Group A (the tool names the path): Edit, Write, NotebookEdit, Desktop Commander write_file, edit_block,
+ * move_file. Same claim and deny for each path.
+ * Group B (shell text): Bash, PowerShell, Desktop Commander start_process and interact_with_process. The text
+ * is matched against the claims other live sessions hold (shared/write-targets.ts). A shell call never makes a
+ * claim. Card coord-file-claims-all-writers, rule O3.1.
  *
  * This hook:
  * 1. Checks if another ACTIVE session has claimed the file
@@ -10,9 +16,14 @@
  */
 
 import { readFileSync } from 'fs';
-import { resolveFileClaim } from './shared/db-utils-pg.js';
+import { isAbsolute, relative, resolve as resolvePath } from 'path';
+import { resolveFileClaim, listBlockingClaims } from './shared/db-utils-pg.js';
 import { resolveSessionId, canonicalProject } from './shared/session-id.js';
-import { resolveClaimKey } from './shared/claim-target.js';
+import { resolveClaimKey, resolveRepoContext, listWorktreeTops } from './shared/claim-target.js';
+import { directWritePaths, classifyShellText, type HeldClaim } from './shared/write-targets.js';
+import { readShellCommand } from './shared/shell-tools.js';
+import { isEngineHost } from './shared/engine-host.js';
+import { firstWarning } from './shared/claim-warned.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
 import { logGuardDecision } from './shared/guard-log.js';
 
@@ -69,24 +80,149 @@ export async function main(): Promise<void> {
     return;
   }
 
-  // Only process Edit and Write tools
-  if (input.tool_name !== 'Edit' && input.tool_name !== 'Write') {
+  // Group A: the tool names the path (Edit, Write, NotebookEdit, three Desktop Commander tools).
+  const direct = directWritePaths(input);
+  if (direct !== null) {
+    await mainDirect(input, direct);
+    return;
+  }
+  // Group B: shell text. Any other tool is none of our business.
+  const cmd = readShellCommand(input);
+  if (cmd.kind === 'not-shell') {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
-
-  // Extract file path from input
-  const filePath = input.tool_input?.file_path as string;
-  if (!filePath) {
+  // A review-agent run (cursor-agent) gets no hook text from the shell branch, and nothing is read or
+  // written for it (seat word 2026-11-13: hook text that reaches the review agent voids a run).
+  // The exact-path branch above keeps its deny: a write by name is the same claim as before.
+  // This import is an exception to ruling C3 in shared/engine-host.ts ("no deny guard imports it"),
+  // made by the seat for the SHELL branch only (2026-11-13 10:55 CST). The comment there is not edited:
+  // a change to engine-host.ts would change the build inputs of every hook that imports it.
+  if (isEngineHost(input)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
+  await mainShell(input, cmd);
+}
 
-  // Claim under the SAME identity heartbeat registers, so isSessionActive() can
-  // actually find the owner alive. Previously this read the machine-global id
-  // file and filed claims under an `s-*` row that never heartbeats -- which is
-  // why every conflict check fell through to "took over stale lock".
+/** Group A: one claim per named path. The first deny wins; else the first takeover message. */
+async function mainDirect(input: PreToolUseInput, paths: string[]): Promise<void> {
+  if (paths.length === 0) {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
   const sessionId = resolveSessionId(input.session_id);
+  let keep: any = { result: 'continue' };
+  for (const filePath of paths) {
+    const r = await claimOne(input, filePath, sessionId);
+    if (r.denied) {
+      keep = r.output;
+      break;
+    }
+    if (!keep.message && r.output.message) keep = r.output;
+  }
+  console.log(JSON.stringify(keep));
+}
+
+/** The deny output of a shell call that would write a held file. */
+function shellDeny(input: PreToolUseInput, filePath: string, holder: string): any {
+  const reason = `⚠️ FILE CONFLICT BLOCKED
+
+This command writes "${filePath}", which is held by session ${holder}.
+The claim is live: their lease runs, or that session is still alive.
+
+Coordinate with that session, or work on something else.
+To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
+  logGuardDecision('file-claims', input, 'deny', `file-conflict-shell: held by ${holder}`);
+  return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } };
+}
+
+const FOLDS_CASE = process.platform === 'win32' || process.platform === 'darwin';
+
+/** The spellings of one held file that shell text can use. */
+function formsOf(top: string, cwd: string, filePath: string): string[] {
+  const full = `${top}/${filePath}`;
+  const forms = new Set<string>([full]);
+  const drive = /^([a-z]):\/(.*)$/i.exec(full);
+  if (drive) forms.add(`/${drive[1].toLowerCase()}/${drive[2]}`);
+  // The cwd-relative spelling, only for a file under the cwd. A bare repo-relative name is NOT added
+  // for other folders: `src/a.ts` run from a different repo is another file.
+  const rel = relative(cwd, full).replace(/\\/g, '/');
+  if (rel && !rel.startsWith('..') && !isAbsolute(rel)) forms.add(rel);
+  return [...forms];
+}
+
+/** Group B: shell text against the claims other sessions hold. Never makes a claim. */
+async function mainShell(input: PreToolUseInput, cmd: ReturnType<typeof readShellCommand>): Promise<void> {
+  const cont = { result: 'continue' };
+  if (cmd.kind === 'unreadable') {
+    // The command text of a Desktop Commander shell call cannot be read: do not guess, stop it.
+    logGuardDecision('file-claims', input, 'deny', 'unreadable-command');
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: `file-claims cannot read the "${cmd.field}" of ${cmd.tool}, so it cannot check the files this call writes. Send the command as text.`,
+      },
+    }));
+    return;
+  }
+  if (cmd.kind !== 'command' || !cmd.text.trim()) {
+    console.log(JSON.stringify(cont));
+    return;
+  }
+  const cwd = resolvePath(typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd());
+  // The cwd repo may be none (a shell started outside any repo) or another repo than the file's:
+  // a command can name a file by absolute path. So the query covers every project.
+  const ctx = resolveRepoContext(cwd);
+  const sessionId = resolveSessionId(input.session_id);
+  // Database down: continue with NO text (a warning on every shell call would bury the banner).
+  const { claims, degraded } = await listBlockingClaims(sessionId, STALE_THRESHOLD_MS);
+  if (degraded || claims.length === 0) {
+    console.log(JSON.stringify(cont));
+    return;
+  }
+  const tops = new Map<string, string[]>();
+  const topsOf = (project: string): string[] => {
+    let t = tops.get(project);
+    if (!t) {
+      // The project key is the primary checkout's top folder (lower case). Its worktrees come from .git/worktrees.
+      t = [...new Set([...(ctx && ctx.project === project ? [ctx.top] : []), project, ...listWorktreeTops(project)])];
+      tops.set(project, t);
+    }
+    return t;
+  };
+  const held: HeldClaim[] = claims.map((c) => ({
+    filePath: c.filePath,
+    holder: c.sessionId,
+    // A stored absolute path (a cache file: its key is the raw path) is its own spelling. A repo-relative
+    // path is NOT a spelling by itself: `src/a.ts` in another repo is another file.
+    forms: [...new Set([...(isAbsolute(c.filePath) || /^[a-z]:[\\/]/i.test(c.filePath) ? [c.filePath] : []), ...topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath))])],
+  }));
+  const verdict = classifyShellText(cmd.text, held, FOLDS_CASE);
+  if (verdict.kind === 'deny' && !BREAK_GLASS) {
+    console.log(JSON.stringify(shellDeny(input, verdict.filePath, verdict.holder ?? 'another session')));
+    return;
+  }
+  if (verdict.kind === 'deny') {
+    logGuardDecision('file-claims', input, 'override', `break-glass: shell write to a file held by ${verdict.holder}`);
+    console.log(JSON.stringify({ result: 'continue', message: `[WARN] BREAK-GLASS: this command writes "${verdict.filePath}", held by session ${verdict.holder}. This was logged.` }));
+    return;
+  }
+  if (verdict.kind === 'mention' && firstWarning(sessionId, verdict.filePath)) {
+    console.log(JSON.stringify({
+      result: 'continue',
+      message: `[WARN] "${verdict.filePath}" is held by session ${verdict.holder}. This command names it but shows no write, so it is not stopped. This warning shows once per file.`,
+    }));
+    return;
+  }
+  console.log(JSON.stringify(cont));
+}
+
+/** One claim for one path: the Edit and Write logic, unchanged. */
+async function claimOne(input: PreToolUseInput, filePath: string, sessionId: string): Promise<{ output: any; denied: boolean }> {
+  // Claim under the SAME identity heartbeat registers, so isSessionActive() can
+  // actually find the owner alive. (sessionId is resolved once by the caller.)
 
   // Key by the FILE's own repo: repo-relative path plus the repo's common git dir. Two worktrees
   // of one repo then claim the same key, and a session in repo A editing repo B meets a session
@@ -210,7 +346,7 @@ To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
     console.error('[file-claims] conflict occurred but the event was not recorded');
   }
 
-  console.log(JSON.stringify(output));
+  return { output, denied: decision.outcome === 'blocked' };
 }
 
 // Run if executed directly. A PreToolUse hook MUST emit exactly one decision on

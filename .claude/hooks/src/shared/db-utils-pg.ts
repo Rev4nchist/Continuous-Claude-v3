@@ -1867,3 +1867,45 @@ asyncio.run(main())
     return { success: false, agents: [] };
   }
 }
+
+/** A claim that another session holds and the two-condition rule would NOT let this session reclaim. */
+export interface BlockingClaim {
+  filePath: string;
+  sessionId: string;
+  /** The claim's project key (normalized common dir of its repo). */
+  project: string;
+}
+
+/**
+ * The claims, in EVERY project, that a session other than `sessionId` holds right now: the lease is live OR the holder
+ * is alive. This is the exact negation of the reclaim rule in RESOLVE_CLAIM_SQL (reclaim needs an
+ * expired lease AND a stale holder). Read only: it changes no row and takes no lock. File-claims
+ * uses it for shell text, where no path is named (card coord-file-claims-all-writers). Every
+ * project, because a command can name a file in a repo other than the one of its cwd.
+ * `degraded: true` means the query did not run; the caller continues silently.
+ */
+export async function listBlockingClaims(
+  sessionId: string,
+  staleThresholdMs: number,
+): Promise<{ claims: BlockingClaim[]; degraded: boolean }> {
+  const staleSeconds = Math.floor(staleThresholdMs / 1000);
+  const { value, degraded } = await withPgClientOrFallback<BlockingClaim[]>(
+    async (client) => {
+      const res = await client.query(
+        `SELECT fc.file_path, fc.session_id, fc.project
+           FROM file_claims fc
+          WHERE fc.session_id <> $1
+            AND ( (fc.expires_at IS NOT NULL AND fc.expires_at > NOW())
+                  OR EXISTS (SELECT 1 FROM sessions s
+                              WHERE s.id = fc.session_id
+                                AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $2)) )
+          LIMIT 500`,
+        [sessionId, staleSeconds],
+      );
+      return res.rows.map((r: { file_path: string; session_id: string; project: string }) => ({ filePath: r.file_path, sessionId: r.session_id, project: r.project }));
+    },
+    [] as BlockingClaim[],
+    'listBlockingClaims',
+  );
+  return { claims: value, degraded };
+}

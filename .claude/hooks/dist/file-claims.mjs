@@ -5839,7 +5839,8 @@ var require_lib2 = __commonJS({
 
 // src/file-claims.ts
 init_trace_boot();
-import { readFileSync as readFileSync3 } from "fs";
+import { readFileSync as readFileSync4 } from "fs";
+import { isAbsolute as isAbsolute2, relative as relative2, resolve as resolvePath } from "path";
 
 // src/shared/db-utils-pg.ts
 init_trace_boot();
@@ -6227,6 +6228,28 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
   if (degraded || value === null) return { outcome: "degraded" };
   return value;
 }
+async function listBlockingClaims(sessionId, staleThresholdMs) {
+  const staleSeconds = Math.floor(staleThresholdMs / 1e3);
+  const { value, degraded } = await withPgClientOrFallback(
+    async (client) => {
+      const res = await client.query(
+        `SELECT fc.file_path, fc.session_id, fc.project
+           FROM file_claims fc
+          WHERE fc.session_id <> $1
+            AND ( (fc.expires_at IS NOT NULL AND fc.expires_at > NOW())
+                  OR EXISTS (SELECT 1 FROM sessions s
+                              WHERE s.id = fc.session_id
+                                AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $2)) )
+          LIMIT 500`,
+        [sessionId, staleSeconds]
+      );
+      return res.rows.map((r) => ({ filePath: r.file_path, sessionId: r.session_id, project: r.project }));
+    },
+    [],
+    "listBlockingClaims"
+  );
+  return { claims: value, degraded };
+}
 
 // src/shared/session-id.ts
 init_trace_boot();
@@ -6290,7 +6313,7 @@ function normalizeProjectKey(p) {
 
 // src/shared/claim-target.ts
 init_trace_boot();
-import { existsSync, lstatSync, readFileSync as readFileSync2, realpathSync } from "fs";
+import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, realpathSync } from "fs";
 import { dirname as dirname2, isAbsolute, join as join4, relative, resolve as resolve2 } from "path";
 var isNetworkPath = (p) => /^[\\/]{2}/.test(p);
 var FOLDS_CASE = /* @__PURE__ */ new Set(["win32", "darwin"]);
@@ -6361,6 +6384,159 @@ function resolveClaimKey(rawPath, options = {}) {
     return null;
   }
 }
+function resolveRepoContext(dir) {
+  try {
+    if (!dir || isNetworkPath(dir)) return null;
+    const anchor = nearestExisting(resolve2(dir));
+    if (!anchor) return null;
+    let cur = real(anchor);
+    for (; ; ) {
+      const common = commonDirOf(cur);
+      if (common === null) return null;
+      if (common !== void 0) {
+        const project = normalizeProjectKey(real(common).replace(/\\/g, "/").replace(/\/?\.git\/?$/, ""));
+        return { top: cur.replace(/\\/g, "/"), project };
+      }
+      const up = dirname2(cur);
+      if (up === cur) return null;
+      cur = up;
+    }
+  } catch {
+    return null;
+  }
+}
+function listWorktreeTops(top) {
+  try {
+    const dir = join4(top, ".git", "worktrees");
+    if (!existsSync(dir)) return [];
+    const out = [];
+    for (const name of readdirSync(dir)) {
+      try {
+        const gitFile = readFileSync2(join4(dir, name, "gitdir"), "utf8").trim();
+        if (gitFile) out.push(dirname2(gitFile).replace(/\\/g, "/"));
+      } catch {
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// src/shared/write-targets.ts
+init_trace_boot();
+
+// src/shared/shell-tools.ts
+init_trace_boot();
+var BOTH = ["Bash", "PowerShell"];
+var SHELL_TOOLS = /* @__PURE__ */ new Map([
+  ["Bash", { field: "command", dialects: ["Bash"], failClosed: false }],
+  ["PowerShell", { field: "command", dialects: ["PowerShell"], failClosed: false }],
+  ["mcp__plugin_desktop-commander_desktop-commander__start_process", { field: "command", dialects: BOTH, failClosed: true }],
+  ["mcp__plugin_desktop-commander_desktop-commander__interact_with_process", { field: "input", dialects: BOTH, failClosed: true }]
+]);
+function readShellCommand(input) {
+  const tool = input.tool_name || input.tool;
+  const spec = tool ? SHELL_TOOLS.get(tool) : void 0;
+  if (!tool || !spec) return { kind: "not-shell" };
+  const toolInput = input.tool_input;
+  const text = toolInput && typeof toolInput === "object" ? toolInput[spec.field] : void 0;
+  if (typeof text !== "string") {
+    return spec.failClosed ? { kind: "unreadable", tool, field: spec.field } : { kind: "command", tool, text: "", dialects: spec.dialects };
+  }
+  return { kind: "command", tool, text, dialects: spec.dialects };
+}
+
+// src/shared/write-targets.ts
+var DC = "mcp__plugin_desktop-commander_desktop-commander__";
+var DIRECT_WRITERS = /* @__PURE__ */ new Map([
+  ["Edit", ["file_path"]],
+  ["Write", ["file_path"]],
+  ["NotebookEdit", ["notebook_path"]],
+  [`${DC}write_file`, ["path"]],
+  [`${DC}edit_block`, ["file_path"]],
+  [`${DC}move_file`, ["source", "destination"]]
+]);
+var SHELL_WRITERS = [...SHELL_TOOLS.keys()];
+var CLAIM_TOOLS = [...DIRECT_WRITERS.keys(), ...SHELL_WRITERS];
+function directWritePaths(input) {
+  const tool = input.tool_name || input.tool;
+  const fields = tool ? DIRECT_WRITERS.get(tool) : void 0;
+  if (!tool || !fields) return null;
+  const ti = input.tool_input;
+  if (!ti || typeof ti !== "object") return [];
+  const out = [];
+  for (const f of fields) {
+    const v = ti[f];
+    if (typeof v === "string" && v) out.push(v);
+  }
+  return out;
+}
+var CUES = "(?:tee|set-content|add-content|out-file|mv|cp|rm|move-item|copy-item|remove-item|sed\\s+(?:-[a-z]*i[a-z]*|--in-place)|git\\s+(?:checkout|restore|apply))";
+var CUE_RE = new RegExp(`(?<![\\w-])${CUES}(?![\\w-])`, "gi");
+var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var END = "(?![\\w.\\-/])";
+var START = "(?<![\\w.\\-/])";
+function classifyShellText(text, claims, fold) {
+  if (!text || claims.length === 0) return { kind: "none" };
+  let t = text.replace(/\\/g, "/");
+  if (fold) t = t.toLowerCase();
+  let mention = null;
+  const cueIndexes = [];
+  CUE_RE.lastIndex = 0;
+  for (let m = CUE_RE.exec(t); m; m = CUE_RE.exec(t)) cueIndexes.push(m.index);
+  const firstCue = cueIndexes.length ? Math.min(...cueIndexes) : -1;
+  for (const claim of claims) {
+    const forms = claim.forms.map((f) => f.replace(/\\/g, "/")).map((f) => fold ? f.toLowerCase() : f).filter(Boolean);
+    if (forms.length === 0) continue;
+    const alt = forms.map(escapeRe).join("|");
+    if (new RegExp(`>>?\\s*['"]?(?:\\./)?(?:${alt})${END}`).test(t)) return { kind: "deny", filePath: claim.filePath, holder: claim.holder };
+    const at = new RegExp(`${START}(?:\\./)?(?:${alt})${END}`, "g");
+    let sawPath = false;
+    for (let m = at.exec(t); m; m = at.exec(t)) {
+      sawPath = true;
+      if (firstCue >= 0 && m.index > firstCue) return { kind: "deny", filePath: claim.filePath, holder: claim.holder };
+    }
+    if (sawPath && mention === null) mention = claim;
+  }
+  return mention === null ? { kind: "none" } : { kind: "mention", filePath: mention.filePath, holder: mention.holder };
+}
+
+// src/shared/engine-host.ts
+init_trace_boot();
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
+// src/shared/claim-warned.ts
+init_trace_boot();
+import { appendFileSync as appendFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "fs";
+import { homedir as homedir4 } from "os";
+import { join as join5 } from "path";
+function stateDir() {
+  return process.env.CCV3_FILE_CLAIMS_STATE_DIR || join5(homedir4(), ".claude", "cache", "file-claims-warned");
+}
+var safeName = (s) => s.replace(/[^\w.-]/g, "_").slice(0, 80) || "session";
+function firstWarning(sessionId, filePath) {
+  try {
+    const dir = stateDir();
+    const file = join5(dir, `${safeName(sessionId)}.txt`);
+    if (existsSync2(file) && readFileSync3(file, "utf8").split("\n").includes(filePath)) return false;
+    mkdirSync3(dir, { recursive: true });
+    appendFileSync2(file, `${filePath}
+`, { mode: 384 });
+    return true;
+  } catch {
+    return true;
+  }
+}
 
 // src/file-claims.ts
 init_guard_log();
@@ -6376,22 +6552,127 @@ function humanizeUntil(iso) {
 async function main() {
   let input;
   try {
-    const stdinContent = readFileSync3(0, "utf-8");
+    const stdinContent = readFileSync4(0, "utf-8");
     input = JSON.parse(stdinContent);
   } catch {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
-  if (input.tool_name !== "Edit" && input.tool_name !== "Write") {
+  const direct = directWritePaths(input);
+  if (direct !== null) {
+    await mainDirect(input, direct);
+    return;
+  }
+  const cmd = readShellCommand(input);
+  if (cmd.kind === "not-shell") {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
-  const filePath = input.tool_input?.file_path;
-  if (!filePath) {
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
+  await mainShell(input, cmd);
+}
+async function mainDirect(input, paths) {
+  if (paths.length === 0) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
   const sessionId = resolveSessionId(input.session_id);
+  let keep2 = { result: "continue" };
+  for (const filePath of paths) {
+    const r = await claimOne(input, filePath, sessionId);
+    if (r.denied) {
+      keep2 = r.output;
+      break;
+    }
+    if (!keep2.message && r.output.message) keep2 = r.output;
+  }
+  console.log(JSON.stringify(keep2));
+}
+function shellDeny(input, filePath, holder) {
+  const reason = `\u26A0\uFE0F FILE CONFLICT BLOCKED
+
+This command writes "${filePath}", which is held by session ${holder}.
+The claim is live: their lease runs, or that session is still alive.
+
+Coordinate with that session, or work on something else.
+To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
+  logGuardDecision("file-claims", input, "deny", `file-conflict-shell: held by ${holder}`);
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
+}
+var FOLDS_CASE2 = process.platform === "win32" || process.platform === "darwin";
+function formsOf(top, cwd, filePath) {
+  const full = `${top}/${filePath}`;
+  const forms = /* @__PURE__ */ new Set([full]);
+  const drive = /^([a-z]):\/(.*)$/i.exec(full);
+  if (drive) forms.add(`/${drive[1].toLowerCase()}/${drive[2]}`);
+  const rel = relative2(cwd, full).replace(/\\/g, "/");
+  if (rel && !rel.startsWith("..") && !isAbsolute2(rel)) forms.add(rel);
+  return [...forms];
+}
+async function mainShell(input, cmd) {
+  const cont = { result: "continue" };
+  if (cmd.kind === "unreadable") {
+    logGuardDecision("file-claims", input, "deny", "unreadable-command");
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: `file-claims cannot read the "${cmd.field}" of ${cmd.tool}, so it cannot check the files this call writes. Send the command as text.`
+      }
+    }));
+    return;
+  }
+  if (cmd.kind !== "command" || !cmd.text.trim()) {
+    console.log(JSON.stringify(cont));
+    return;
+  }
+  const cwd = resolvePath(typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
+  const ctx = resolveRepoContext(cwd);
+  const sessionId = resolveSessionId(input.session_id);
+  const { claims, degraded } = await listBlockingClaims(sessionId, STALE_THRESHOLD_MS);
+  if (degraded || claims.length === 0) {
+    console.log(JSON.stringify(cont));
+    return;
+  }
+  const tops = /* @__PURE__ */ new Map();
+  const topsOf = (project) => {
+    let t = tops.get(project);
+    if (!t) {
+      t = [.../* @__PURE__ */ new Set([...ctx && ctx.project === project ? [ctx.top] : [], project, ...listWorktreeTops(project)])];
+      tops.set(project, t);
+    }
+    return t;
+  };
+  const held = claims.map((c) => ({
+    filePath: c.filePath,
+    holder: c.sessionId,
+    // A stored absolute path (a cache file: its key is the raw path) is its own spelling. A repo-relative
+    // path is NOT a spelling by itself: `src/a.ts` in another repo is another file.
+    forms: [.../* @__PURE__ */ new Set([...isAbsolute2(c.filePath) || /^[a-z]:[\\/]/i.test(c.filePath) ? [c.filePath] : [], ...topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath))])]
+  }));
+  const verdict = classifyShellText(cmd.text, held, FOLDS_CASE2);
+  if (verdict.kind === "deny" && !BREAK_GLASS) {
+    console.log(JSON.stringify(shellDeny(input, verdict.filePath, verdict.holder ?? "another session")));
+    return;
+  }
+  if (verdict.kind === "deny") {
+    logGuardDecision("file-claims", input, "override", `break-glass: shell write to a file held by ${verdict.holder}`);
+    console.log(JSON.stringify({ result: "continue", message: `[WARN] BREAK-GLASS: this command writes "${verdict.filePath}", held by session ${verdict.holder}. This was logged.` }));
+    return;
+  }
+  if (verdict.kind === "mention" && firstWarning(sessionId, verdict.filePath)) {
+    console.log(JSON.stringify({
+      result: "continue",
+      message: `[WARN] "${verdict.filePath}" is held by session ${verdict.holder}. This command names it but shows no write, so it is not stopped. This warning shows once per file.`
+    }));
+    return;
+  }
+  console.log(JSON.stringify(cont));
+}
+async function claimOne(input, filePath, sessionId) {
   const key = resolveClaimKey(filePath, { cwd: input.cwd });
   const claimPath = key ? key.filePath : filePath;
   const project = key ? key.project : canonicalProject(input.cwd);
@@ -6462,7 +6743,7 @@ To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
   if (decision.eventRecorded === false) {
     console.error("[file-claims] conflict occurred but the event was not recorded");
   }
-  console.log(JSON.stringify(output));
+  return { output, denied: decision.outcome === "blocked" };
 }
 main().catch((err) => {
   console.error("[file-claims] unexpected error:", err);
