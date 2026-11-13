@@ -226,6 +226,30 @@ describe('group B: the cwd is not the repo of the file', () => {
   });
 });
 
+describe('group B: a tracked file is one claim across worktrees, a .claude/cache file is local to one checkout (PR 544)', () => {
+  const linked = (): string => {
+    const wt = join(repo, '.claude', 'worktrees', 'w2');
+    mkdirSync(join(repo, '.claude', 'worktrees'), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', wt, '-b', 'w2');
+    return wt.split('\\').join('/');
+  };
+  it('tracked file: a claim made in checkout P stops a write named under the linked worktree W (one key, row 2 of the drill)', async () => {
+    const wt = linked();
+    expect(denied(await run('Bash', { command: `echo x > '${wt}/src/held.ts'` }, { cwd: wt }))).toBe(true);
+  });
+  it('cache file: a claim keyed by the absolute path in P does not stop the same name under W', async () => {
+    const wt = linked();
+    const inP = abs('.claude/cache/pre-pr/summary.md');
+    seen.held = [{ filePath: inP, sessionId: 'other-session', project }];
+    // (a) the file under W is another file: continue
+    expect(denied(await run('Bash', { command: `echo x > '${wt}/.claude/cache/pre-pr/summary.md'` }, { cwd: wt }))).toBe(false);
+    // (b) the absolute path under P, run with cwd in W: the claim holds
+    expect(denied(await run('Bash', { command: `echo x > '${inP}'` }, { cwd: wt }))).toBe(true);
+    // a bare relative name from the cwd in W is W's file, not the claimed one
+    expect(denied(await run('Bash', { command: 'echo x > .claude/cache/pre-pr/summary.md' }, { cwd: wt }))).toBe(false);
+  });
+});
+
 describe('engine host (review agent)', () => {
   it('prints no text, asks no query and writes no state file for a shell call', async () => {
     const o = await run('Bash', { command: 'cat src/held.ts' }, { hook_event_name: 'preToolUse' });

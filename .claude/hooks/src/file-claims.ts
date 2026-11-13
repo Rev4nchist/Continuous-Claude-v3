@@ -197,7 +197,11 @@ async function mainShell(input: PreToolUseInput, cmd: ReturnType<typeof readShel
     holder: c.sessionId,
     // A stored absolute path (a cache file: its key is the raw path) is its own spelling. A repo-relative
     // path is NOT a spelling by itself: `src/a.ts` in another repo is another file.
-    forms: [...new Set([...(isAbsolute(c.filePath) || /^[a-z]:[\\/]/i.test(c.filePath) ? [c.filePath] : []), ...topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath))])],
+    // A stored absolute path is a claim local to ONE checkout (PR 544: .claude/cache): only that path matches.
+    // A repo-relative path is one key for every checkout of the repo: spell it under each known top.
+    forms: isAbsolute(c.filePath) || /^[a-z]:[\\/]/i.test(c.filePath)
+      ? [c.filePath]
+      : [...new Set(topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath)))],
   }));
   const verdict = classifyShellText(cmd.text, held, FOLDS_CASE);
   if (verdict.kind === 'deny' && !BREAK_GLASS) {
