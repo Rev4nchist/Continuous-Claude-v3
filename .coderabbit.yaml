@@ -36,6 +36,11 @@ reviews:
     - "!docs/**"
     - "!thoughts/**"
     - "!.claude/skills/_vendor/**"
+    # Answer keys of the review engine (cursor-review.mjs TREE_EXCLUDES): no review bot may read them.
+    - "!scripts/eval/review-eval/gold/**"
+    - "!scripts/eval/review-eval/seeds/**"
+    - "!scripts/eval/review-eval/rubrics/**"
+    - "!scripts/eval/review-eval/linktype-labels.json"
   profile: chill
   auto_approvals:
     enabled: false

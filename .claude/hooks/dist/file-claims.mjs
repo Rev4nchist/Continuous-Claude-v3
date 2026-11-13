@@ -6295,6 +6295,10 @@ import { dirname as dirname2, isAbsolute, join as join4, relative, resolve as re
 var isNetworkPath = (p) => /^[\\/]{2}/.test(p);
 var FOLDS_CASE = /* @__PURE__ */ new Set(["win32", "darwin"]);
 var real = (p) => realpathSync.native(p);
+var isWorktreeCache = (rel, fold) => {
+  const r = fold ? rel.toLowerCase() : rel;
+  return r === ".claude/cache" || r.startsWith(".claude/cache/");
+};
 function nearestExisting(abs) {
   let cur = abs;
   for (; ; ) {
@@ -6343,6 +6347,7 @@ function resolveClaimKey(rawPath, options = {}) {
         );
         let rel = relative(dir, realFile).replace(/\\/g, "/");
         if (!rel || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) return null;
+        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) return null;
         const harness = isHarnessPath(rel);
         if (isHarnessPath(abs) !== harness || isHarnessPath(realFile) !== harness) return null;
         if (FOLDS_CASE.has(platform)) rel = rel.toLowerCase();

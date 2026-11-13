@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { loadRows, pickAction, rowToPair, run, sampleIds, summarize, toFinding, wilson } from './external-judge.mjs';
+import { JUDGE_MODEL, loadRows, parseArgs, pickAction, rowToPair, run, sampleIds, summarize, toFinding, wilson } from './external-judge.mjs';
 import { judgePrompt } from './judge.mjs';
 import { pullPinned, PullRefusal } from './external-pull.mjs';
 
@@ -35,9 +35,11 @@ const row = (i, decision = 'Yes') => ({
   judge_matched_action_id: 'a2',
 });
 const rows = (n) => Array.from({ length: n }, (_, i) => row(i, i % 2 ? 'No' : 'Yes'));
-const verdictRun = (sameIssue = 'yes') => {
+// served: the model name the fake claude -p envelope reports in modelUsage (null: no modelUsage at all).
+const verdictRun = (sameIssue = 'yes', served = 'claude-opus-5-5') => {
   const calls = [];
-  const fn = async (req, deps) => { calls.push({ req, deps }); return { ok: true, stdout: JSON.stringify({ type: 'result', result: JSON.stringify({ sameIssue, real: 'unclear', confidence: 5, reason: 'r' }) }) }; };
+  const envelope = () => ({ type: 'result', result: JSON.stringify({ sameIssue, real: 'unclear', confidence: 5, reason: 'r' }), ...(served ? { modelUsage: { [served]: { inputTokens: 1 } } } : {}) });
+  const fn = async (req, deps) => { calls.push({ req, deps }); return { ok: true, stdout: JSON.stringify(envelope()) }; };
   return { fn, calls };
 };
 const ledgerLines = (file) => readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -175,7 +177,8 @@ test('F8 judge calls use session review-external and purpose external-judge, and
   for (const c of v.calls) {
     assert.equal(c.deps.sessionId, 'review-external');
     assert.equal(c.req.purpose, 'external-judge');
-    assert.equal(c.req.model, 'sonnet');
+    assert.equal(c.req.model, 'opus');
+    assert.equal(c.req.effort, 'high');
     assert.match(c.req.prompt, /### Hunk\n\n?<<<END UNTRUSTED DATA>>>/);
   }
   assert.deepEqual(r.out.summary.notMeasured, ['real']);
@@ -394,9 +397,10 @@ test('G10 an old end row is reused only when its source is the one the pair has 
   const ds = `${ID}@${SHA}`;
   const end = (pairId, human, judge, candidateSource) => JSON.stringify({ ts: new Date(NOW - 5000).toISOString(), phase: 'end', dataset: ds, pairId, human, judge, ...(candidateSource ? { candidateSource } : {}) });
   writeFileSync(ledgerPath, `${[end('t1', 'yes', 'yes', 'human'), end('t2', 'no', 'yes', 'all'), end('t3', 'no', 'yes')].join('\n')}\n`);
-  const v = verdictRun('no');
+  const v = verdictRun('no', 'claude-sonnet-5-5');
   const c = captured();
-  const r = await run(base({ sample: 10 }), { rows: [yesRow('t1'), noRow('t2'), noRow('t3')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
+  // Old rows have no model field: they are Sonnet rows, so this resume test runs as Sonnet.
+  const r = await run(base({ sample: 10, model: 'sonnet' }), { rows: [yesRow('t1'), noRow('t2'), noRow('t3')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
   assert.equal(v.calls.length, 2, 'the all row and the row with no source are judged again; the human row is not');
   assert.match(c.lines[0], /already judged 1, pending 2/);
   assert.match(c.lines[0], /stale 2/);
@@ -405,4 +409,143 @@ test('G10 an old end row is reused only when its source is the one the pair has 
   assert.deepEqual(Object.keys(r.out.summary.bySource).sort(), ['human', 'picked']);
   assert.equal(r.out.pairs.find((p) => p.pairId === 't2').judge, 'no', 'the new verdict replaces the old one');
   assert.equal(r.out.pairs.find((p) => p.pairId === 't1').judge, 'yes', 'the human row keeps its old verdict');
+});
+
+// ---- H: the judge model (hf-judge-opus) ----------------------------------------------------------------------------
+
+const endRow = (pairId, human, judge, extra = {}) => JSON.stringify({ ts: new Date(NOW - 5000).toISOString(), phase: 'end', dataset: `${ID}@${SHA}`, pairId, human, judge, candidateSource: 'human', ...extra });
+
+test('H1 the default judge is the one model constant, opus at effort high; start and end rows carry the model and the served model', async () => {
+  // Breaks when: the call goes back to sonnet, effort is dropped, or a ledger row has no model field.
+  assert.equal(JUDGE_MODEL, 'opus');
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  const v = verdictRun('yes');
+  const r = await run(base({ sample: 1 }), { rows: [yesRow('t1')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, headSha: 'b'.repeat(40), ...silent });
+  assert.equal(r.code, 0);
+  assert.equal(v.calls[0].req.model, JUDGE_MODEL);
+  assert.equal(v.calls[0].req.effort, 'high');
+  const [start, end] = ledgerLines(ledgerPath);
+  assert.equal(start.model, 'opus');
+  assert.equal(end.model, 'opus');
+  assert.equal(end.servedModel, 'claude-opus-5-5');
+});
+
+test('H2 parseArgs takes --model opus|sonnet, --cap N and --stop-on-error, and refuses any other model', () => {
+  // Breaks when: haiku or an unknown model reaches the judge, or --cap takes a non-integer.
+  assert.equal(parseArgs([]).model, undefined);
+  assert.equal(parseArgs(['--model', 'sonnet']).model, 'sonnet');
+  assert.equal(parseArgs(['--model', 'opus', '--cap', '65', '--stop-on-error']).cap, 65);
+  assert.equal(parseArgs(['--stop-on-error']).stopOnError, true);
+  assert.throws(() => parseArgs(['--model', 'haiku']), /--model/);
+  assert.throws(() => parseArgs(['--cap', 'x']), /integer/);
+  assert.throws(() => parseArgs(['--cap', '0']), /1 or more/);
+  assert.throws(() => parseArgs(['--cap', '-5']), /1 or more/);
+  assert.equal(parseArgs(['--out-dir', 'o']).outDir, 'o');
+});
+
+test('H3 an opus run sees sonnet-judged pairs as pending; old rows with no model field read as sonnet for this ledger', async () => {
+  // Breaks when: an Opus score mixes in Sonnet verdicts, or legacy rows are dropped from a Sonnet run.
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  writeFileSync(ledgerPath, `${[endRow('t1', 'yes', 'no'), endRow('t2', 'yes', 'no', { model: 'sonnet' })].join('\n')}\n`);
+  const opus = verdictRun('yes');
+  const c = captured();
+  const r = await run(base({ sample: 2 }), { rows: [yesRow('t1'), yesRow('t2')], runClaudeFn: opus.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
+  assert.equal(opus.calls.length, 2, 'both pairs are judged again on opus');
+  assert.equal(r.out.summary.n, 2);
+  assert.equal(r.out.summary.agree, 2, 'only the opus verdicts (yes) count, not the sonnet ones (no)');
+  const sonnet = verdictRun('yes', 'claude-sonnet-5-5');
+  const r2 = await run(base({ sample: 2, model: 'sonnet' }), { rows: [yesRow('t1'), yesRow('t2')], runClaudeFn: sonnet.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(sonnet.calls.length, 0, 'a sonnet run reuses the legacy row and the sonnet row');
+  assert.equal(r2.out.summary.agree, 0);
+});
+
+test('H4 --cap reaches runClaude as deps.cap for this run only; without it no cap is passed', async () => {
+  // Breaks when: the raise is dropped, or a run without the flag passes a cap that overrides the shared constant.
+  const a = verdictRun('yes');
+  await run(base({ sample: 1, cap: 65 }), { rows: [yesRow('t1')], runClaudeFn: a.fn, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(a.calls[0].deps.cap, 65);
+  const b = verdictRun('yes');
+  await run(base({ sample: 1 }), { rows: [yesRow('t1')], runClaudeFn: b.fn, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal('cap' in b.calls[0].deps, false);
+});
+
+test('H5 an opus call served by another model, or with no served model, is an error row and stops the run', async () => {
+  // Breaks when: an older Opus or a missing modelUsage counts as an Opus verdict (seat condition a).
+  for (const served of ['claude-opus-4-1', 'claude-sonnet-5-5', null]) {
+    const ledgerPath = path.join(tmp(), 'l.jsonl');
+    const v = verdictRun('yes', served);
+    const c = captured();
+    const r = await run(base({ sample: 3 }), { rows: [yesRow('t1'), yesRow('t2'), yesRow('t3')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
+    assert.equal(v.calls.length, 1, `served ${served}: the run stops after the first call`);
+    assert.equal(r.code, 2);
+    const end = ledgerLines(ledgerPath).find((x) => x.phase === 'end');
+    assert.equal(end.error, 'served-model');
+    assert.equal(end.servedModel, served);
+    assert.equal(r.out.summary.n, 0, 'the wrong-model verdict is not counted');
+    assert.match(c.lines.at(-1), /stopped: served-model/);
+  }
+});
+
+test('H6 --stop-on-error stops after the first error row; without it the run goes on', async () => {
+  // Breaks when: a timeout or parse fault in a batch is followed by more paid calls although the flag is set.
+  let n = 0;
+  const flaky = async () => { n += 1; return n === 1 ? { ok: false, reason: 'timeout' } : JSON.parse(JSON.stringify({ ok: true, stdout: JSON.stringify({ type: 'result', result: '{"sameIssue":"yes","real":"unclear","confidence":5,"reason":"r"}', modelUsage: { 'claude-opus-5-5': {} } }) })); };
+  const rws = [yesRow('t1'), yesRow('t2'), yesRow('t3')];
+  const r = await run(base({ sample: 3, stopOnError: true }), { rows: rws, runClaudeFn: flaky, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(n, 1);
+  assert.equal(r.code, 2);
+  n = 0;
+  const r2 = await run(base({ sample: 3 }), { rows: rws, runClaudeFn: flaky, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(n, 3);
+  assert.equal(r2.code, 0);
+});
+
+test('H7 the report file name, the output and the console line carry the model and the head SHA; the other model is printed beside it', async () => {
+  // Breaks when: an Opus report overwrites the Sonnet report, or the report does not say which code made the verdicts (seat condition c).
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  writeFileSync(ledgerPath, `${[endRow('t1', 'yes', 'no'), endRow('t2', 'no', 'no', { candidateSource: 'picked' })].join('\n')}\n`);
+  const v = verdictRun('yes');
+  const c = captured();
+  const outDir = tmp();
+  const r = await run(base({ sample: 2 }), { rows: [yesRow('t1'), noRow('t2')], runClaudeFn: v.fn, ledgerPath, outDir, now: () => NOW, headSha: 'c'.repeat(40), ...c.io });
+  assert.match(path.basename(r.outPath), /hf-judge-precheck-opus\.json$/);
+  assert.equal(r.out.model, 'opus');
+  assert.equal(r.out.headSha, 'c'.repeat(40));
+  assert.equal(r.out.compare.model, 'sonnet');
+  assert.equal(r.out.compare.summary.n, 2);
+  assert.deepEqual(r.out.compare.paired, { n: 2, bothAgree: 0, onlyThis: 1, onlyOther: 1, bothWrong: 0 });
+  assert.match(c.lines.at(-1), /^external-judge \[opus @ cccccccc\]/);
+  assert.ok(c.lines.some((l) => /^compare sonnet: n 2; agreement 1\/2/.test(l)));
+});
+
+test('H9 a wrong served model stops the run even when the answer does not parse', async () => {
+  // Breaks when: a parse fault from another model is a plain error row and the run goes on (CLI finding on cde4777c).
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  const calls = [];
+  const fn = async (req) => { calls.push(req); return { ok: true, stdout: JSON.stringify({ type: 'result', result: 'not json', modelUsage: { 'claude-sonnet-5-5': {} } }) }; };
+  const r = await run(base({ sample: 3 }), { rows: [yesRow('t1'), yesRow('t2'), yesRow('t3')], runClaudeFn: fn, ledgerPath, outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(calls.length, 1);
+  assert.equal(r.code, 2);
+  assert.equal(ledgerLines(ledgerPath).find((x) => x.phase === 'end').error, 'served-model');
+});
+
+test('H10 each end row names the head that made it; the report counts verdicts by head', async () => {
+  // Breaks when: resumed verdicts are credited to the head of the latest run (CLI finding on cde4777c, seat condition c).
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  writeFileSync(ledgerPath, `${endRow('t1', 'yes', 'yes', { model: 'opus', servedModel: 'claude-opus-5-5', headSha: 'd'.repeat(40) })}\n`);
+  const v = verdictRun('yes');
+  const r = await run(base({ sample: 2 }), { rows: [yesRow('t1'), yesRow('t2')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, headSha: 'e'.repeat(40), ...silent });
+  assert.equal(v.calls.length, 1);
+  assert.equal(ledgerLines(ledgerPath).at(-1).headSha, 'e'.repeat(40));
+  assert.deepEqual(r.out.verdictHeads, { ['d'.repeat(40)]: 1, ['e'.repeat(40)]: 1 });
+});
+
+test('H8 summarize adds tpr and tnr with Wilson intervals, and the confidence 4+ table', () => {
+  // Breaks when: the strict-judge signal (misses on human yes) is hidden behind kappa alone.
+  const recs = [{ ...rec('yes', 'yes'), confidence: 5 }, { ...rec('yes', 'no'), confidence: 3 }, { ...rec('no', 'no'), confidence: 4 }, { ...rec('no', 'no'), confidence: 2 }];
+  const s = summarize(recs);
+  assert.deepEqual([s.tpr.k, s.tpr.n], [1, 2]);
+  assert.deepEqual([s.tnr.k, s.tnr.n], [2, 2]);
+  assert.ok(s.tpr.ci95[0] < 0.5 && s.tpr.ci95[1] > 0.5);
+  assert.deepEqual(s.highConfidence, { n: 2, agree: 2, humanYes: 1 });
 });
