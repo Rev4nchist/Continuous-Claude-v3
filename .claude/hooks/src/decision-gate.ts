@@ -106,17 +106,42 @@
  *             remotes and none named, or one remote that fetches from one repo and pushes to another (fetch-push-differ): denied, name
  *             the repo with -R. Scope other (decisions.enforce). The land script stays a CCv3 tool.
  * Position unknown (popd, cd -, a bare cd) denies when the cwd or a known folder is CCv3 OR covered. Every deny text a covered folder shows
- * names the folder and the offer command by full path (node <home>/continuous-claude/scripts/github/app-ask.mjs <sub-command> --dir '<folder>').
+ * names the folder and the offer command by full path (node '<home>/continuous-claude/scripts/github/app-ask.mjs' <sub-command> --dir '<folder>';
+ * the script path is in single quotes since seat review 1, item 6, and a home with a quote mark gets the stop line).
  * F2: a value from the repo or the command (branch, remote, folder) goes into that command only as one plain word (a folder in single
  * quotes). Fixer G: an unsafe value never gets a placeholder or a quoting rule. When app-ask reads the same value itself (the @{push}
  * remote, the current branch, the payload cwd) the command leaves the flag out; else the text holds one plain line: the value cannot be
  * passed safely in a command, tell Dave. An SSH host alias of an entry with no github field gets a line that the entry needs that field
  * (open-pr, merge). Every such value in an app text is one plain line (oneLine). Coverage runs no git unless a live entry root holds the folder by the path test (underLiveRoot: files only, F8).
- * Registry missing: nothing is covered, silent. Registry corrupt: nothing is covered, plus a guard-log row (with the effect) and one
- * warning line that names the file only; the line also ends the warn or deny text of the same call.
+ * Registry missing: nothing is covered, an allow; silent, except when LANE_REGISTRY_PATH names the file: then a guard-log row
+ * (registry-missing, with the effect) and one warning line that names the file only; the line also ends the warn or deny text of the same
+ * call. Registry corrupt (seat review 1, item 4; it replaces the S5 "pass with a warning"): the file exists but does not parse after one
+ * retry (tap-scope.ts readRegistry). A push, a PR create and a merge in any folder outside CCv3 is then DENIED (registry-corrupt), with a
+ * text that names the file and the way out (fix the file, or ask Dave); position unknown too. A push gets scope app-push off the tap path
+ * (hard); a create or merge gets scope other, read with the home flags (decisions.enforce, as every app create or merge deny). A CCv3
+ * checkout never reads the registry, so it keeps its old behaviour. Not covered by it: the denies that rest on a covered folder only
+ * (the verb rule's unread push, cd-unexpanded, GIT_DIR and the cd alias, the catch of a git throw): with a corrupt registry no folder is
+ * covered, so those keep their uncovered result.
  * LIMIT (seat answer S2): the gate reads the registry file itself, not the board key. Any session can edit the registry or its mirror, so
  * coverage guards against a slip, not against a session that edits the registry to dodge the gate. A create or merge that names a covered
  * repo, run from a folder that is neither CCv3 nor covered, is not judged.
+ * KNOWN LIMITS of the app path (seat review 1, stated, not fixed):
+ *   - A remote host with no dot (an ssh config alias such as github-work) is read as GitHub (repo-identity.mjs githubHost), so its
+ *     owner/repo tail can take the github field of the entry.
+ *   - A relative path target (git push ../other.git) keys on its text (local:<entry>:../other.git), not on the folder it names.
+ *   - '@' in a local target makes the key ambiguous: decisions.mjs:34 joins repo and branch with '@' (local:e:/srv/a@b.git@feat).
+ *   - git+ssh:// and www.github.com URLs give no GitHub slug. git+ssh:// keys as GitHub only through the github field of the entry
+ *     (with no field, open-pr and merge ask for it). www.github.com always keys as local:, so open-pr and merge refuse it (gh cannot
+ *     take that key): a dead end with no way out but a plain github.com remote.
+ *   - git write-tree (a chained commit here, staged files in app-ask) writes tree objects into the repo: the one write of a read path.
+ *   - The path test (underLiveRoot) treats a .git read error other than not-found as "no worktree", and the registry reader drops an
+ *     entry with no key or a relative path, both silently.
+ *   - app-ask.mjs (registryEntry) and tap-scope.ts (nearestEntry) pick an entry in a different order when two entries match one
+ *     checkout: app-ask tests the raw and the real spelling of each entry in entry order; tap-scope tests the raw spelling against
+ *     every entry first, then the real one. The entry key, and so a local: key, can then differ.
+ *   - app-ask.mjs refuses a CCv3 checkout by the raw remote config (url, pushurl); the gate asks git remote -v (insteadOf applied).
+ *   - commandRepo reads -R at the end of a short-flag cluster (-fR x) even when an earlier letter takes a value (-tR x is a title "R"):
+ *     it fails closed. The deny texts print a typed --remote URL as the command gave it (with any user:token part).
  * Where it runs. A push, a create, a land and a merge are each judged in EVERY folder on the cd path before them (dirsAfter): with no cd,
  * the payload cwd; else the folder after each prefix of the cd list. The cwd joins them when any cd before the shape is joined to it by
  * something other than && (`;`, `||`, `|`, `&`, a line end), or follows a `||` or a pipe: that cd can fail or be skipped (`cd B extra`,
@@ -225,7 +250,8 @@ export interface Deps {
  */
 export type Scope = 'push' | 'other' | 'app-push';
 /**
- * `notice` (decide() only): the registry file that could not be read (S5). It rides on an allow, a warn and a deny alike (item 7).
+ * `notice` (decide() only): a MISSING registry file named by LANE_REGISTRY_PATH (S5; seat review 1, item 4: a corrupt file is the
+ * registry-corrupt deny, not a notice). It rides on an allow, a warn and a deny alike (item 7).
  * `tapPath` (app-push only, Dave 11-13 "Hard denies always deny"): the deny is the tap path of an app push (shipTap), the only app-push
  * deny that a literal false of decisions.enforceAppPush turns into a warning. decide() drops it from the deny it returns.
  * `homeFlags` (fix round 6, item 1): the deny is for a covered folder, so decisions.enforce is read from the home copy only.
@@ -340,7 +366,10 @@ function askCmd(deps: Deps, offer: Offer, dir: string): Ask {
   else if (fwd(CWDS.get(deps) ?? '') === folder) read.push('folder');
   else return { ok: false, text: stopLine('folder', folder) };
   const note = read.length === 0 ? '' : ` (app-ask reads the ${read.join(' and the ')} itself: run it in that folder, on that branch)`;
-  return { ok: true, text: `node ${fwd(deps.home)}/continuous-claude/scripts/github/app-ask.mjs ${words.join(' ')} --json${note}` };
+  // Seat review 1, item 6: the script path in single quotes, as --dir, so a home with a space still runs; a home SAFE_DIR refuses gets the stop line.
+  const script = `${fwd(deps.home)}/continuous-claude/scripts/github/app-ask.mjs`;
+  if (!SAFE_DIR.test(script)) return { ok: false, text: stopLine('script path', script) };
+  return { ok: true, text: `node '${script}' ${words.join(' ')} --json${note}` };
 }
 /** The ask part of a text: `ok(command)`, or the plain line when no command can serve the offer. */
 const askPart = (deps: Deps, offer: Offer, dir: string, ok: (cmd: string) => string): string => {
@@ -447,9 +476,15 @@ const appPositionWhy = (deps: Deps, dir: string, offer: Offer): string =>
 const needsFieldLine = (entryKey: string, remote: string): string =>
   `the registry entry ${prose(entryKey)} needs a github field naming owner/repo (remote ${prose(remote)} is an SSH host alias, so gh has no repo to act on); tell Dave.`;
 const inAppFolder = (dir: string): string => ` The command starts in ${at(dir)}, a folder judged for Dave's tap.`;
-/** S5, item 6: the visible line names the file only. What it means for coverage goes to the guard-log row (CORRUPT_EFFECT). */
+/**
+ * S5, item 6: the visible line names the file only. What it means for coverage goes to the guard-log row (CORRUPT_EFFECT). Seat review 1,
+ * item 4: the line is now for a MISSING file named by LANE_REGISTRY_PATH (a corrupt file denies, registryCorruptWhy); the log row says registry-missing.
+ */
 const corruptLine = (file: string): string => `WARNING (decision-gate): the project registry ${prose(fwd(file))} cannot be read. Tell Dave.`;
-const CORRUPT_EFFECT = "folders outside CCv3 were not checked for Dave's tap (nothing is covered while the file cannot be read)";
+const CORRUPT_EFFECT = "folders outside CCv3 were not checked for Dave's tap (nothing is covered while the file is missing)";
+/** Seat review 1, item 4: the deny of a push, create or merge outside CCv3 while the registry exists but does not parse. */
+const registryCorruptWhy = (file: string, dir: string): string =>
+  `the project registry ${prose(fwd(file))} exists but cannot be parsed (read twice), so this folder (${at(dir)}) cannot be checked for Dave's tap, and a push, PR create or merge outside CCv3 stays blocked. Fix the file (valid JSON with a projects list), or ask Dave.`;
 
 // ---------- the store, as text and as a path ----------
 
@@ -1435,9 +1470,13 @@ function isCcv3Checkout(deps: Deps, dir: string): boolean {
 
 // ---------- app folders (tap-scope.ts) ----------
 
-/** A folder outside CCv3: covered or not, the entry key, and the registry file when it could not be read (S5). */
-/** `github`: the github field of the entry (F5): the key repo of a remote URL with no github.com slug whose owner/repo equals it. */
-interface Place { covered: boolean; entryKey: string; github: string | null; corrupt: string | null }
+/**
+ * A folder outside CCv3: covered or not, the entry key, and the registry file when it could not be used. `github`: the github field of the
+ * entry (F5): the key repo of a remote URL with no github.com slug whose owner/repo equals it. Seat review 1, item 4: `corrupt` is a file
+ * that exists but does not parse (read twice): a push, create or merge here is DENIED (registryCorruptDeny). `notice` is a MISSING file
+ * named by LANE_REGISTRY_PATH: an allow with the one notice line.
+ */
+interface Place { covered: boolean; entryKey: string; github: string | null; corrupt: string | null; notice?: string }
 const NOT_COVERED: Place = { covered: false, entryKey: '', github: null, corrupt: null };
 const TOP_ARGS = ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'];
 const COMMON_ARGS = ['rev-parse', '--path-format=absolute', '--git-common-dir'];
@@ -1464,7 +1503,8 @@ function appPlace(deps: Deps, dir: string): Place {
 type TapScopeDeps = NonNullable<Deps['tapScope']>;
 function readPlace(deps: Deps, scope: TapScopeDeps, dir: string): Place {
   const reg = scope.registry();
-  if (reg.state !== 'ok') return reg.state === 'corrupt' ? { ...NOT_COVERED, corrupt: reg.file } : NOT_COVERED;
+  if (reg.state === 'corrupt') return { ...NOT_COVERED, corrupt: reg.file };
+  if (reg.state === 'missing') return reg.envPath ? { ...NOT_COVERED, notice: reg.file } : NOT_COVERED;
   if (!underLiveRoot(dir, reg, scope)) return NOT_COVERED;
   try {
     const { top, main } = repoRoots(deps, dir);
@@ -1495,8 +1535,16 @@ function repoRoots(deps: Deps, dir: string): { top: string; main: string | null 
   if (root === null) throw new AppScopeError(new Error(`the repo root of ${at(dir)} cannot be read (no work tree, and no <root>/.git common dir)`));
   return { top: root, main: root };
 }
-/** An allow for a folder that is not covered, with the S5 notice when the registry could not be read. */
-const passOf = (place: Place): Decision => (place.corrupt ? { action: 'allow', notice: place.corrupt } : ALLOW);
+/**
+ * The verdict of a push, create or merge in a folder that is not covered: the registry-corrupt deny (seat review 1, item 4; scope app-push
+ * for a push, off the tap path, so hard; other for a create or merge, read with the home flags by homeRead), else an allow, with the notice
+ * of a missing file named by LANE_REGISTRY_PATH.
+ */
+function passOf(place: Place, dir: string, scope: Scope): Decision {
+  if (place.corrupt) return registryCorruptDeny(place.corrupt, dir, scope);
+  return place.notice ? { action: 'allow', notice: place.notice } : ALLOW;
+}
+const registryCorruptDeny = (file: string, dir: string, scope: Scope): Deny => ({ ...deny('registry-corrupt', registryCorruptWhy(file, dir), scope), homeFlags: true });
 
 /**
  * The first covered folder of the list, for a deny that fires in any checkout (cd-unexpanded, GIT_DIR). A CCv3 folder keeps today's text.
@@ -1533,8 +1581,13 @@ function cmdRepoOf(s: Shape, named: string | null, env: NodeJS.ProcessEnv): CmdR
   const text = s.ftext ?? s.text ?? '';
   const prior = s.prior ?? NO_PRIOR;
   const repo = commandRepo(text, s.fmtext ?? s.mtext ?? text, env, prior.repos);
-  return { named, repo, foreign: repo !== null && repo !== CCV3_REPO, nonLiteral: hasNonLiteralRepo(text) || prior.nonLiteral };
+  return { named, repo, foreign: repo !== null && repo !== CCV3_REPO, nonLiteral: hasNonLiteralRepo(text) || CLUSTER_VAR_REPO.test(text) || prior.nonLiteral };
 }
+/**
+ * Seat review 1, item 1: a variable after -R at the end of a short-flag cluster (-dR $R, -fR=%R%). hasNonLiteralRepo (checkpoint-shapes.ts,
+ * frozen) needs a space before -R. Read only by appRepoFor (the app path): `nonLiteral` has no CCv3 reader.
+ */
+const CLUSTER_VAR_REPO = /(?:^|\s)-[A-Za-z]+R\s*=?["']?[^\s"']*(?:\$|\x60|%[A-Za-z_]\w*%)/;
 
 const namesCcv3 = (repo: string | null): boolean => repo !== null && repo.split(' ').includes(CCV3_REPO);
 
@@ -1819,7 +1872,7 @@ function judgeAppCreate(text: string, mtext: string, deps: Deps, dir: string, cm
 const homeRead = (d: Decision): Decision => (d.action === 'deny' ? { ...d, homeFlags: true as const } : d);
 function appCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const place = appPlace(deps, dir);
-  if (!place.covered) return passOf(place);
+  if (!place.covered) return passOf(place, dir, 'other');
   // The head first: every repo deny below then offers open-pr with the branch this create names (--head), not the checked-out one.
   const branch = headBranch(text, mtext, deps, dir);
   if (branch === '') return deny('head-unresolved', appHeadWhy(dir));
@@ -1841,7 +1894,7 @@ function judgeAppMerge(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Dec
 }
 function appMerge(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const place = appPlace(deps, dir);
-  if (!place.covered) return passOf(place);
+  if (!place.covered) return passOf(place, dir, 'other');
   if (shape.pr === null) return deny('no-pr', appNoPrWhy(dir));
   const repo = appRepoFor(cmd, deps, dir, place, { sub: 'merge', pr: shape.pr });
   if ('action' in repo) return repo;
@@ -1913,7 +1966,9 @@ function appPositionAt(deps: Deps, dirs: string[], scope: Scope, offer: Offer): 
   for (const dir of dirs) {
     const place = appPlace(deps, dir);
     if (place.covered) return [{ ...deny('position-unknown', inApp(deps, () => appPositionWhy(deps, dir, offer)), scope), homeFlags: true as const }];
-    notice ??= place.corrupt;
+    // Seat review 1, item 4: a corrupt registry denies the shape in a folder outside CCv3 (the caller found no CCv3 folder on the path).
+    if (place.corrupt) return [registryCorruptDeny(place.corrupt, dir, scope)];
+    notice ??= place.notice ?? null;
   }
   return notice === null ? [] : [{ action: 'allow', notice }];
 }
@@ -1960,7 +2015,8 @@ function remoteKind(remote: string): 'origin' | 'fork' | null {
 /**
  * Push: a ship decision ("Commit and push", or "Push only" when no commit is chained) for the branch, bound to the tree being pushed.
  * The head is not compared: the tap was made before the commit, so its head is the parent of the commit now at HEAD. The tree is the
- * same before and after the commit. "Push only" is bound to HEAD's tree. It counts only when `alone` is true (pushesAlone: the command holds
+ * same before and after the commit. "Push only" is bound to HEAD's tree (in a covered folder also to its head: seat review 1, item 3,
+ * shipTap pushOnlyHead; the CCv3 rule here is unchanged). It counts only when `alone` is true (pushesAlone: the command holds
  * nothing but cd, read-only git and pushes), so a command that can stage or commit before the push never takes it, whatever shape it has.
  * `chained`: the same command commits the staged tree first (commitPrecedesPush), so the tree pushed is `git write-tree`, not HEAD's.
  * Order: unreadable target, not CCv3, origin, other remote, subagent, force or delete form, branch, main, tree, tap.
@@ -2011,10 +2067,15 @@ function currentBranch(deps: Deps, dir: string): string {
 }
 
 interface ShipTexts { notRef: (ref: string) => string; tree: (what: string) => string; ship: () => string }
-interface ShipCheck { p: PushShape; deps: Deps; dir: string; chained: boolean; alone: boolean; key: string; scope: Scope; texts: ShipTexts }
+/**
+ * `pushOnlyHead` (seat review 1, item 3; the app path only, judgeAppPush): a "Push only" tap counts only when its head (the commit app-ask
+ * stored) equals the commit of the pushed ref. "Commit and push" keeps the tree rule: its chained commit moves the head after the tap.
+ * The CCv3 call never sets it, so the CCv3 shipTap and its git calls are unchanged (G4).
+ */
+interface ShipCheck { p: PushShape; deps: Deps; dir: string; chained: boolean; alone: boolean; key: string; scope: Scope; texts: ShipTexts; pushOnlyHead?: true }
 
 /** The ship tap of a push for `key`, bound to the tree being pushed (judgePush). Shared by CCv3 and the app folders; only the key, scope and texts differ. */
-function shipTap({ p, deps, dir, chained, alone, key, scope, texts }: ShipCheck): Decision {
+function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead }: ShipCheck): Decision {
   const ref = p.src ?? 'HEAD';
   if (ref.startsWith('-')) return deny('push-target-unresolved', texts.notRef(ref), scope);
   // A plain commit earlier in the same command moves HEAD to the staged tree before this push runs: read the index. The commit lands on the
@@ -2023,14 +2084,25 @@ function shipTap({ p, deps, dir, chained, alone, key, scope, texts }: ShipCheck)
   const r = viaIndex ? deps.git(dir, ['write-tree']) : deps.git(dir, ['rev-parse', `${ref}^{tree}`]);
   if (r.status !== 0) return deny('push-tree-unresolved', texts.tree(viaIndex ? 'the index (git write-tree)' : ref), scope);
   const tree = r.stdout.trim();
-  const ok = decisionRows(deps.env).some((row) => row.step === 'ship' && row.key === key && (isShipLabel(row.label) || (!viaIndex && alone && isPushOnlyLabel(row.label))) && row.tree !== null && row.tree === tree);
+  // The head of the pushed ref, read at most once and only when a Push only row matched everything else (item 3). A failed read is no match.
+  let refHead: string | null | undefined;
+  const headOf = (): string | null => {
+    if (refHead === undefined) {
+      const h = deps.git(dir, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
+      refHead = h.status === 0 && h.stdout.trim() !== '' ? h.stdout.trim().toLowerCase() : null;
+    }
+    return refHead;
+  };
+  const pushOnly = (head: string): boolean => !pushOnlyHead || (headOf() !== null && head.toLowerCase() === headOf());
+  const ok = decisionRows(deps.env).some((row) => row.step === 'ship' && row.key === key && row.tree !== null && row.tree === tree
+    && (isShipLabel(row.label) || (!viaIndex && alone && isPushOnlyLabel(row.label) && pushOnly(row.head))));
   return ok ? ALLOW : deny('ship', texts.ship(), scope);
 }
 
 /** A push in a folder outside CCv3: judged only when covered. A git throw from here on is judged with scope app-push (AppScopeError). */
 function judgeAppPushAt(shape: Shape, deps: Deps, dir: string, subagent: boolean, chained: boolean, alone: boolean, flow: boolean): Decision {
   const place = appPlace(deps, dir);
-  if (!place.covered) return passOf(place);
+  if (!place.covered) return passOf(place, dir, 'app-push');
   try {
     return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow));
   } catch (err) {
@@ -2199,7 +2271,7 @@ function judgeAppPush(shape: Shape, deps: Deps, dir: string, place: Place, subag
   };
   // git reads a source @ as HEAD: a commit chained before `git push up @` moves the current branch, so the index rule applies (item 5).
   const q: PushShape = p.src === '@' ? { ...p, src: null } : p;
-  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey({ repo: k.key, branch: k.branch }), scope: 'app-push', texts });
+  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey({ repo: k.key, branch: k.branch }), scope: 'app-push', texts, pushOnlyHead: true });
   // Dave 11-13: this is the tap path, the only app-push deny that decisions.enforceAppPush false softens. Every deny above stays hard.
   return r.action === 'deny' ? { ...r, tapPath: true as const } : r;
 }
@@ -2289,8 +2361,8 @@ function judge(input: HookInput, deps: Deps, notes: Set<string>): Deny[] {
 /**
  * Pure given its deps. A deny whose flag is on (decisions.enforce for most shapes, decisions.enforcePush for a push, app-push unless
  * decisions.enforceAppPush is false) is returned as a deny, and so is an app-push deny off the tap path whatever its flag says
- * (hardAppDeny, Dave 11-13). Other denies become an allow with `warn`. With no deny, an unreadable
- * registry seen in a folder outside CCv3 is an allow with `notice` (S5).
+ * (hardAppDeny, Dave 11-13). Other denies become an allow with `warn`. With no deny, a missing registry named by LANE_REGISTRY_PATH,
+ * seen in a folder outside CCv3, is an allow with `notice` (S5; a corrupt one is the registry-corrupt deny: seat review 1, item 4).
  */
 export function decide(input: HookInput, deps: Deps): Decision {
   const notes = new Set<string>();
@@ -2419,7 +2491,7 @@ export function handle(raw: string, deps: Deps): string {
     } else if (d.notice) {
       shown = out({ additionalContext: corruptLine(d.notice) });
     }
-    if (d.notice) logGuardDecision(HOOK, input, 'warn', `registry-corrupt ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
+    if (d.notice) logGuardDecision(HOOK, input, 'warn', `registry-missing ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
     return shown;
   } catch (err) {
     return unjudgeable(input, deps, err);

@@ -104,7 +104,7 @@ const denied = (v: Verdict): { reason: string; pattern: string } => {
 /** The words of the app-ask command in a deny text (sub-command to the last flag). Fixer G: no placeholder to fill in. */
 function askWords(reason: string): string[] {
   // .*? and not \S*: the home path (the temp folder here) may hold a space.
-  const m = /node .*?app-ask\.mjs (.*?) --json/.exec(reason);
+  const m = /node .*?app-ask\.mjs'? (.*?) --json/.exec(reason);
   if (!m) throw new Error(`no app-ask command in: ${reason}`);
   return (m[1].match(/'[^']*'|\S+/g) ?? []).map((w) => w.replace(/^'(.*)'$/, '$1'));
 }
@@ -259,7 +259,7 @@ describe('gate deny -> parsed app-ask command -> real app-ask -> real ledger -> 
     git(d, 'config', `branch.${odd}.merge`, `refs/heads/${odd}`);
     git(d, 'update-ref', `refs/remotes/up/${odd}`, 'main');
     const before = denied(verdict(d, 'git push'));
-    expect(/node .*?app-ask\.mjs (.*?) --json/.exec(before.reason)?.[1], before.reason).toBe(`push --remote up --src HEAD --dir '${d}'`);
+    expect(/node .*?app-ask\.mjs'? (.*?) --json/.exec(before.reason)?.[1], before.reason).toBe(`push --remote up --src HEAD --dir '${d}'`);
     expect(before.reason).toContain('app-ask reads the branch itself');
     chain(d, 'git push', 'ship');
   });

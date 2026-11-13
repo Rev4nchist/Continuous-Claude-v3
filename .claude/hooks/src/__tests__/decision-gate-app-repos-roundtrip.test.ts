@@ -87,7 +87,7 @@ const verdict = (cwd: string, command: string) => decide(bash(cwd, command), dep
 /** The words of the app-ask command in a deny text (sub-command to the last flag). Fixer G: no placeholder to fill in. */
 function askWords(reason: string): string[] {
   // .*? and not \S*: the home path (the temp folder here) may hold a space.
-  const m = /node .*?app-ask\.mjs (.*?) --json/.exec(reason);
+  const m = /node .*?app-ask\.mjs'? (.*?) --json/.exec(reason);
   if (!m) throw new Error(`no app-ask command in: ${reason}`);
   return (m[1].match(/'[^']*'|\S+/g) ?? []).map((w) => w.replace(/^'(.*)'$/, '$1'));
 }

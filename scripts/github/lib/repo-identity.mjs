@@ -15,6 +15,7 @@
 //   ghKey(git, o)                         the key of a create or merge: the FETCH URL of a remote (gh reads it), or the named repo
 //   openPrKey({ repo, branch, base })     the open-pr key: repo@branch, plus :base when the create names one (fix round 5, F8)
 //   oneLine(text, max)                    one plain line for a question text, clipped to max code points
+//   stripCredentials(text)                a remote or URL without its user and token part (the strip of the key; seat review 1, item 2)
 
 const NAME = '([\\w.-]+)';
 const TAIL = `${NAME}\\/([\\w.-]+?)(?:\\.git)?\\/?$`;
@@ -77,11 +78,20 @@ export function githubField(v) {
   return m && !DOTS.test(m[1]) && !DOTS.test(m[2]) ? v.trim().toLowerCase() : null;
 }
 
+/**
+ * A remote or URL with its user and token part removed: `scheme://user:token@host/...` to `scheme://host/...` (up to the LAST @ before the
+ * first slash, so a raw @ in a token goes too), and the user of the scp form (`user@host:path`). A remote name or a path without a user
+ * part is returned as given (trimmed). Seat review 1, item 2: app-ask.mjs shows and stores a remote only through this, and so does the key.
+ */
+export function stripCredentials(text) {
+  return String(text ?? '').trim().replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1').replace(/^[^@/\s]+@(?=[^@/:\s]+:)/, '');
+}
+
 /** A non-GitHub target, normalised for a key: a path by normPath; a URL with its user and token part and trailing slashes removed. */
 function targetOf(url) {
   const t = url.trim();
   if (isPathLike(t)) return normPath(t.replace(/^file:\/\//i, ''));
-  return t.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, '$1').replace(/^[^@/:\s]+@(?=[^/:\s]+:)/, '').replace(/\/+$/, '');
+  return stripCredentials(t).replace(/\/+$/, '');
 }
 
 /**
@@ -156,7 +166,8 @@ export function remoteUrls(git, remote, push) {
 }
 /** { urls, configured } of remoteUrls: `configured` is false for a URL or path typed in the command (no remote of that name). */
 function targetsOf(git, remote, push) {
-  const listed = out(git, ['remote', 'get-url', ...(push ? ['--push', '--all'] : []), remote]);
+  // Seat review 1, item 5: --end-of-options, so a remote word that starts with - never reaches git as an option.
+  const listed = out(git, ['remote', 'get-url', ...(push ? ['--push', '--all'] : []), '--end-of-options', remote]);
   if (listed !== null) return { urls: lines(listed), configured: true };
   return isUrlLike(remote) ? { urls: [remote.trim()], configured: false } : null;
 }

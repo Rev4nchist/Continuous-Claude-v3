@@ -721,7 +721,8 @@ function commandRepo(text, mtext, env = {}, prior = []) {
   const gh = /\bgh\s/i.exec(mseg);
   if (gh === null) return null;
   const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
-  const values = [...flagValues(REPO_FLAG, seg, mseg, gh.index), ...flagValues(GH_REPO_ASSIGN, seg, mseg, 0)];
+  const cluster = new RegExp(`(?:^|\\s)-[A-Za-z]+R\\s*=?["']?${REPO_VALUE}`, "g");
+  const values = [...flagValues(REPO_FLAG, seg, mseg, gh.index), ...flagValues(cluster, seg, mseg, gh.index), ...flagValues(GH_REPO_ASSIGN, seg, mseg, 0)];
   const explicits = [...values, ...envRepo ? [envRepo] : []].map(ownerRepo);
   const slugs = [.../* @__PURE__ */ new Set([...explicits, ...prior, ...pathRepos(seg, mseg)])].sort();
   return slugs.length === 0 ? null : slugs.join(" ");
@@ -996,10 +997,13 @@ function githubField(v) {
   const m = OWNER_REPO.exec(v.trim());
   return m && !DOTS.test(m[1]) && !DOTS.test(m[2]) ? v.trim().toLowerCase() : null;
 }
+function stripCredentials(text) {
+  return String(text ?? "").trim().replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, "$1").replace(/^[^@/\s]+@(?=[^@/:\s]+:)/, "");
+}
 function targetOf2(url) {
   const t = url.trim();
   if (isPathLike(t)) return normPath(t.replace(/^file:\/\//i, ""));
-  return t.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1").replace(/^[^@/:\s]+@(?=[^/:\s]+:)/, "").replace(/\/+$/, "");
+  return stripCredentials(t).replace(/\/+$/, "");
 }
 function sshTail(url) {
   if (typeof url !== "string") return null;
@@ -1037,7 +1041,7 @@ function remoteUrls(git, remote, push) {
   return targetsOf(git, remote, push)?.urls ?? null;
 }
 function targetsOf(git, remote, push) {
-  const listed = out(git, ["remote", "get-url", ...push ? ["--push", "--all"] : [], remote]);
+  const listed = out(git, ["remote", "get-url", ...push ? ["--push", "--all"] : [], "--end-of-options", remote]);
   if (listed !== null) return { urls: lines(listed), configured: true };
   return isUrlLike(remote) ? { urls: [remote.trim()], configured: false } : null;
 }
@@ -1139,6 +1143,12 @@ function entryOf(item) {
 }
 function readRegistry(opts = {}) {
   const file = registryFile(opts);
+  const named = !opts.path && Boolean((opts.env ?? process.env).LANE_REGISTRY_PATH);
+  const first = readOnce(file, opts);
+  const r = first.state === "corrupt" ? readOnce(file, opts) : first;
+  return named ? { ...r, envPath: true } : r;
+}
+function readOnce(file, opts) {
   let text;
   try {
     text = (opts.deps?.readFile ?? readUtf8)(file);
@@ -1315,7 +1325,9 @@ function askCmd(deps, offer, dir) {
   else if (fwd(CWDS.get(deps) ?? "") === folder) read.push("folder");
   else return { ok: false, text: stopLine("folder", folder) };
   const note = read.length === 0 ? "" : ` (app-ask reads the ${read.join(" and the ")} itself: run it in that folder, on that branch)`;
-  return { ok: true, text: `node ${fwd(deps.home)}/continuous-claude/scripts/github/app-ask.mjs ${words.join(" ")} --json${note}` };
+  const script = `${fwd(deps.home)}/continuous-claude/scripts/github/app-ask.mjs`;
+  if (!SAFE_DIR.test(script)) return { ok: false, text: stopLine("script path", script) };
+  return { ok: true, text: `node '${script}' ${words.join(" ")} --json${note}` };
 }
 var askPart = (deps, offer, dir, ok) => {
   const a = askCmd(deps, offer, dir);
@@ -1366,7 +1378,8 @@ var appPositionWhy = (deps, dir, offer) => `popd, Pop-Location, cd - or a bare c
 var needsFieldLine = (entryKey, remote) => `the registry entry ${prose(entryKey)} needs a github field naming owner/repo (remote ${prose(remote)} is an SSH host alias, so gh has no repo to act on); tell Dave.`;
 var inAppFolder = (dir) => ` The command starts in ${at(dir)}, a folder judged for Dave's tap.`;
 var corruptLine = (file) => `WARNING (decision-gate): the project registry ${prose(fwd(file))} cannot be read. Tell Dave.`;
-var CORRUPT_EFFECT = "folders outside CCv3 were not checked for Dave's tap (nothing is covered while the file cannot be read)";
+var CORRUPT_EFFECT = "folders outside CCv3 were not checked for Dave's tap (nothing is covered while the file is missing)";
+var registryCorruptWhy = (file, dir) => `the project registry ${prose(fwd(file))} exists but cannot be parsed (read twice), so this folder (${at(dir)}) cannot be checked for Dave's tap, and a push, PR create or merge outside CCv3 stays blocked. Fix the file (valid JSON with a projects list), or ask Dave.`;
 var norm = (p) => p.replace(/\\/g, "/").toLowerCase();
 var STORE_PATH_RE = /ccv3-mods\/decisions\.json(?:\.|$)/;
 var STORE_TEXT_RE = /ccv3-mods\/+decisions\.json(?![\w-])/;
@@ -2010,7 +2023,8 @@ function appPlace(deps, dir) {
 }
 function readPlace(deps, scope, dir) {
   const reg = scope.registry();
-  if (reg.state !== "ok") return reg.state === "corrupt" ? { ...NOT_COVERED, corrupt: reg.file } : NOT_COVERED;
+  if (reg.state === "corrupt") return { ...NOT_COVERED, corrupt: reg.file };
+  if (reg.state === "missing") return reg.envPath ? { ...NOT_COVERED, notice: reg.file } : NOT_COVERED;
   if (!underLiveRoot(dir, reg, scope)) return NOT_COVERED;
   try {
     const { top, main: main3 } = repoRoots(deps, dir);
@@ -2033,7 +2047,11 @@ function repoRoots(deps, dir) {
   if (root === null) throw new AppScopeError(new Error(`the repo root of ${at(dir)} cannot be read (no work tree, and no <root>/.git common dir)`));
   return { top: root, main: root };
 }
-var passOf = (place) => place.corrupt ? { action: "allow", notice: place.corrupt } : ALLOW;
+function passOf(place, dir, scope) {
+  if (place.corrupt) return registryCorruptDeny(place.corrupt, dir, scope);
+  return place.notice ? { action: "allow", notice: place.notice } : ALLOW;
+}
+var registryCorruptDeny = (file, dir, scope) => ({ ...deny("registry-corrupt", registryCorruptWhy(file, dir), scope), homeFlags: true });
 function coveredAmong(deps, dirs) {
   const scope = deps.tapScope;
   if (!scope) return null;
@@ -2052,8 +2070,9 @@ function cmdRepoOf(s, named, env) {
   const text = s.ftext ?? s.text ?? "";
   const prior = s.prior ?? NO_PRIOR;
   const repo = commandRepo(text, s.fmtext ?? s.mtext ?? text, env, prior.repos);
-  return { named, repo, foreign: repo !== null && repo !== CCV3_REPO, nonLiteral: hasNonLiteralRepo(text) || prior.nonLiteral };
+  return { named, repo, foreign: repo !== null && repo !== CCV3_REPO, nonLiteral: hasNonLiteralRepo(text) || CLUSTER_VAR_REPO.test(text) || prior.nonLiteral };
 }
+var CLUSTER_VAR_REPO = /(?:^|\s)-[A-Za-z]+R\s*=?["']?[^\s"']*(?:\$|\x60|%[A-Za-z_]\w*%)/;
 var namesCcv3 = (repo) => repo !== null && repo.split(" ").includes(CCV3_REPO);
 function routeOf(deps, dir, cmd) {
   const named = cmd.named === CCV3_REPO;
@@ -2242,7 +2261,7 @@ function judgeAppCreate(text, mtext, deps, dir, cmd) {
 var homeRead = (d) => d.action === "deny" ? { ...d, homeFlags: true } : d;
 function appCreate(text, mtext, deps, dir, cmd) {
   const place = appPlace(deps, dir);
-  if (!place.covered) return passOf(place);
+  if (!place.covered) return passOf(place, dir, "other");
   const branch = headBranch(text, mtext, deps, dir);
   if (branch === "") return deny("head-unresolved", appHeadWhy(dir));
   const { base, many } = baseBranch(text, mtext);
@@ -2260,7 +2279,7 @@ function judgeAppMerge(shape, deps, dir, cmd) {
 }
 function appMerge(shape, deps, dir, cmd) {
   const place = appPlace(deps, dir);
-  if (!place.covered) return passOf(place);
+  if (!place.covered) return passOf(place, dir, "other");
   if (shape.pr === null) return deny("no-pr", appNoPrWhy(dir));
   const repo = appRepoFor(cmd, deps, dir, place, { sub: "merge", pr: shape.pr });
   if ("action" in repo) return repo;
@@ -2305,7 +2324,8 @@ function appPositionAt(deps, dirs, scope, offer) {
   for (const dir of dirs) {
     const place = appPlace(deps, dir);
     if (place.covered) return [{ ...deny("position-unknown", inApp(deps, () => appPositionWhy(deps, dir, offer)), scope), homeFlags: true }];
-    notice ??= place.corrupt;
+    if (place.corrupt) return [registryCorruptDeny(place.corrupt, dir, scope)];
+    notice ??= place.notice ?? null;
   }
   return notice === null ? [] : [{ action: "allow", notice }];
 }
@@ -2372,19 +2392,28 @@ function currentBranch(deps, dir) {
   if (r.status !== 0) throw new Error("git branch --show-current failed");
   return r.stdout.trim();
 }
-function shipTap({ p, deps, dir, chained, alone, key, scope, texts }) {
+function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead }) {
   const ref = p.src ?? "HEAD";
   if (ref.startsWith("-")) return deny("push-target-unresolved", texts.notRef(ref), scope);
   const viaIndex = chained && p.dir === null && (p.src === null || deps.git(dir, ["branch", "--show-current"]).stdout.trim() === p.src);
   const r = viaIndex ? deps.git(dir, ["write-tree"]) : deps.git(dir, ["rev-parse", `${ref}^{tree}`]);
   if (r.status !== 0) return deny("push-tree-unresolved", texts.tree(viaIndex ? "the index (git write-tree)" : ref), scope);
   const tree = r.stdout.trim();
-  const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && (isShipLabel(row.label) || !viaIndex && alone && isPushOnlyLabel(row.label)) && row.tree !== null && row.tree === tree);
+  let refHead;
+  const headOf = () => {
+    if (refHead === void 0) {
+      const h = deps.git(dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
+      refHead = h.status === 0 && h.stdout.trim() !== "" ? h.stdout.trim().toLowerCase() : null;
+    }
+    return refHead;
+  };
+  const pushOnly = (head) => !pushOnlyHead || headOf() !== null && head.toLowerCase() === headOf();
+  const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && row.tree !== null && row.tree === tree && (isShipLabel(row.label) || !viaIndex && alone && isPushOnlyLabel(row.label) && pushOnly(row.head)));
   return ok ? ALLOW : deny("ship", texts.ship(), scope);
 }
 function judgeAppPushAt(shape, deps, dir, subagent, chained, alone, flow) {
   const place = appPlace(deps, dir);
-  if (!place.covered) return passOf(place);
+  if (!place.covered) return passOf(place, dir, "app-push");
   try {
     return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow));
   } catch (err) {
@@ -2480,7 +2509,7 @@ function judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow) {
     ship: () => alone || chained || flow ? appPushWhy(deps, dir, k.key, k.branch, offer, risk) : appNotAloneWhy(deps, dir, offer)
   };
   const q = p.src === "@" ? { ...p, src: null } : p;
-  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey2({ repo: k.key, branch: k.branch }), scope: "app-push", texts });
+  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey2({ repo: k.key, branch: k.branch }), scope: "app-push", texts, pushOnlyHead: true });
   return r.action === "deny" ? { ...r, tapPath: true } : r;
 }
 var MOVE_ENV_MASKED = /(?:^|\W)GIT_(?:DIR|WORK_TREE|COMMON_DIR)(?!\w)/i;
@@ -2641,7 +2670,7 @@ ${corruptLine(d.notice)}` : "";
     } else if (d.notice) {
       shown = out2({ additionalContext: corruptLine(d.notice) });
     }
-    if (d.notice) logGuardDecision(HOOK, input, "warn", `registry-corrupt ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
+    if (d.notice) logGuardDecision(HOOK, input, "warn", `registry-missing ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
     return shown;
   } catch (err) {
     return unjudgeable(input, deps, err);

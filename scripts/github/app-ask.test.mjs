@@ -573,3 +573,75 @@ test('AA24: a remote named team/fork is resolved by git', () => {
   assert.equal(r.code, 0, r.err);
   assert.equal(offers(w)[0].key, 'other/lib@feat/x');
 });
+
+// Seat review 1, item 2: a typed --remote URL with user:token@ is a secret. Every shown or stored remote value goes through the
+// credential strip of the key (repo-identity.mjs stripCredentials, the rule of targetOf). Change that breaks it: show the raw --remote.
+const TOKEN = 's3cr3tTK';
+const noToken = (w, r, what) => {
+  for (const [name, text] of [['stdout', r.out], ['stderr', r.err], ['store', existsSync(w.store) ? readFileSync(w.store, 'utf8') : '']]) {
+    assert.ok(!text.includes(TOKEN), `${what}: the token reached ${name}: ${text}`);
+  }
+};
+test('AA26: a token URL never reaches stdout, the stored offer or a refusal text', () => {
+  const w = world();
+  const dir = repo(w, 'app', { remotes: { origin: ACME } });
+  // success: a GitHub URL with a token, question, printed spec and stored offer
+  const ok = run(w, dir, ['push', '--dir', dir, '--remote', `https://u:${TOKEN}@github.com/Acme/App.git`, '--branch', 'feat/x', '--src', 'HEAD', '--json']);
+  assert.equal(ok.code, 0, ok.err);
+  assert.equal(offers(w)[0].key, 'acme/app@feat/x');
+  assert.match(JSON.parse(ok.out).question, /to https:\/\/github\.com\/Acme\/App\.git/);
+  noToken(w, ok, 'push ok');
+  // refusals: a non-GitHub token URL with no registry entry (no-key), open-pr with and without an entry, merge
+  const bad = `https://u:${TOKEN}@git.example.com/a/b.git`;
+  const w2 = world();
+  const d2 = repo(w2, 'app', { remotes: { origin: ACME } });
+  for (const args of [['push', '--branch', 'feat/x', '--src', 'HEAD'], ['open-pr'], ['merge', '--pr', '4', '--facts', factsFile(w2, OPEN_FACTS)]]) {
+    const r = run(w2, d2, [...args, '--dir', d2, '--remote', bad]);
+    assert.equal(r.code, 1, `${args[0]}: ${r.err}`);
+    assert.match(r.err, /git\.example\.com/, args[0]);
+    noToken(w2, r, `${args[0]} no entry`);
+  }
+  writeRegistry(w2, [{ key: 'app', path: d2 }]);
+  for (const args of [['open-pr'], ['merge', '--pr', '4', '--facts', factsFile(w2, OPEN_FACTS)]]) {
+    const r = run(w2, d2, [...args, '--dir', d2, '--remote', bad]);
+    assert.equal(r.code, 1, `${args[0]}: ${r.err}`);
+    noToken(w2, r, `${args[0]} with entry`);
+  }
+  noOffer(w2);
+});
+
+// Seat review 1, item 5: a --src or --remote value that starts with - is an option to git, not a ref or a remote. parseArgs refuses it,
+// and every git call that takes a ref or a remote from the command puts --end-of-options before it.
+// Change that breaks it: accept a value with one leading dash; drop --end-of-options from a ref or remote call.
+test('AA27: parseArgs refuses a --src or --remote value that starts with a dash', async () => {
+  const { parseArgs } = await load();
+  for (const argv of [['push', '--src', '-oops'], ['push', '--remote', '-c'], ['open-pr', '--remote', '-x'], ['push', '--src', '--output=x']]) {
+    assert.ok(parseArgs(argv).error, argv.join(' '));
+  }
+  assert.equal(parseArgs(['push', '--src', 'feat', '--remote', 'origin']).o.src, 'feat');
+});
+test('AA28: every git call with a ref or a remote from the command puts --end-of-options before it', async () => {
+  const { planWith } = await load();
+  const calls = [];
+  const fake = (url) => (args) => {
+    calls.push(args);
+    if (args[0] === 'branch') return { status: 0, stdout: 'main\n' };
+    if (args[0] === 'remote' && args.length === 1) return { status: 0, stdout: 'origin\n' };
+    if (args.includes('get-url')) return { status: 0, stdout: `${url}\n` };
+    if (args[0] === 'rev-list') return { status: 0, stdout: '1\n' };
+    if (args[0] === 'diff') return { status: 0, stdout: '' };
+    const last = args[args.length - 1];
+    if (last.endsWith('^{commit}')) return { status: 0, stdout: `${'a'.repeat(40)}\n` };
+    if (last.endsWith('^{tree}')) return { status: 0, stdout: `${'b'.repeat(40)}\n` };
+    return { status: 128, stdout: '' };
+  };
+  const plan = planWith({ sub: 'push', remote: 'origin', branch: 'feat', src: 'feat' }, { git: fake('https://github.com/acme/app.git') });
+  assert.equal(plan.key, 'acme/app@feat');
+  assert.equal(plan.tree, 'b'.repeat(40));
+  // open-pr of an SSH alias with no github field: the refusal path reads get-url once more (:188)
+  assert.throws(() => planWith({ sub: 'open-pr', remote: 'origin', branch: 'feat' }, { git: fake('git@github-work:acme/app.git'), entry: { key: 'app', github: null } }), /github field/);
+  const userWords = new Set(['origin', 'feat', 'feat^{commit}', 'feat^{tree}']);
+  const bare = calls.filter((args) => args.some((a, i) => userWords.has(a) && args[i - 1] !== '--end-of-options'));
+  assert.deepEqual(bare, [], 'a ref or remote word with no --end-of-options before it');
+  assert.ok(calls.filter((a) => a.includes('get-url')).length >= 3, 'push get-url, open-pr fetch get-url and the alias re-read were all seen');
+});

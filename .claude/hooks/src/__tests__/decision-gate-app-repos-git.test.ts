@@ -122,17 +122,23 @@ describe('D1 the real Deps reads the registry at LANE_REGISTRY_PATH', () => {
     process.env.LANE_REGISTRY_PATH = `${home}/missing-registry.json`;
     try {
       expect(verdict(bash(R.x, 'git push up feat'))).toBe('allow');
+      // Seat review 1, item 4: a missing file named by LANE_REGISTRY_PATH passes with the one notice line.
+      const out = JSON.parse(handleGate(bash(R.x, 'git push up feat')));
+      expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
+      expect(out.hookSpecificOutput.additionalContext).toContain('missing-registry.json');
     } finally {
       process.env.LANE_REGISTRY_PATH = `${home}/project-registry.json`;
     }
   });
-  it('a corrupt registry passes with one warning line', () => {
+  // Seat review 1, item 4 (re-pinned; it pinned "corrupt = pass"): a registry that exists but does not parse denies outside CCv3.
+  it('a corrupt registry denies the push and names the file and the way out', () => {
     writeFileSync(`${home}/bad-registry.json`, '{"projects": 3}');
     process.env.LANE_REGISTRY_PATH = `${home}/bad-registry.json`;
     try {
       const out = JSON.parse(handleGate(bash(R.x, 'git push up feat')));
-      expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
-      expect(out.hookSpecificOutput.additionalContext).toContain('bad-registry.json');
+      expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(out.hookSpecificOutput.permissionDecisionReason).toContain('bad-registry.json');
+      expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/Fix the file .* or ask Dave/);
     } finally {
       process.env.LANE_REGISTRY_PATH = `${home}/project-registry.json`;
     }

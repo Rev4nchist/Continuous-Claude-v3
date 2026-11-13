@@ -9,7 +9,8 @@
  *   C3  a mixed-case remote URL makes a key the offer writer never writes           -> keep the case of the remote URL in the key
  *   C4  popd, cd - or a bare cd before a shape passes in a covered folder           -> the position test back to CCv3 only
  *   C5  an unregistered, inactive, off, ccv3-root, nested inactive or plain-under-CCv3 folder is judged -> skip a coverage reason
- *   C6  registry missing is loud, or registry corrupt is silent (S5)                -> drop the notice, or emit it for missing too
+ *   C6  (seat review 1, item 4) registry corrupt passes, or registry missing denies, or a missing file named by LANE_REGISTRY_PATH is
+ *       silent -> passOf returns the allow again; deny on missing; drop the envPath notice
  *   C7  a covered push only warns by default, or the flag turns it off with a non-literal false (D2 a, G1) -> read enforceAppPush as a true flag
  *   C8  a remote is banned (origin), main passes, force or a subagent push passes, a push with no remote is judged on a guess (R5b, R6)
  *   C9  a create or merge that names another repo is judged with the folder key (R5c), also from a CCv3 folder
@@ -90,7 +91,8 @@ const HEAD = 'a'.repeat(40);
 const HEAD2 = 'c'.repeat(40);
 const TREE = 't'.repeat(40);
 const CCV3_URL = 'https://github.com/Rev4nchist/Continuous-Claude-v3.git';
-const ASK = 'node /home/tester/continuous-claude/scripts/github/app-ask.mjs';
+// Seat review 1, item 6: the script path is in single quotes.
+const ASK = "node '/home/tester/continuous-claude/scripts/github/app-ask.mjs'";
 let scratch = '';
 let storeFile = '';
 const saved: Record<string, string | undefined> = {};
@@ -176,6 +178,8 @@ interface World {
   folders?: Record<string, Folder>;
   /** Registry file text; null = the file is missing; undefined = REGISTRY. */
   registry?: string | null;
+  /** Seat review 1, item 4: the registry file is named by LANE_REGISTRY_PATH (readRegistry env), not by the path argument. */
+  registryEnv?: boolean;
   /**
    * Router config text at /work and at <home>/continuous-claude (fix round 5, ruling C: enforceAppPush is read from the home copy only);
    * null = no config anywhere.
@@ -210,11 +214,12 @@ function answer(f: Folder, dir: string, a: string): { status: number; stdout: st
   if (a === 'remote') return ok(Object.keys(f.remotes ?? {}).join('\n'));
   if (a === 'rev-parse --path-format=absolute --show-toplevel --git-common-dir') return ok(`${f.top ?? dir}\n${f.common ?? `${f.top ?? dir}/.git`}`);
   const pushList = (name: string): string[] | null => { const p = f.pushUrls?.[name]; return p ? [p].flat() : f.remotes?.[name] ? [f.remotes[name]] : null; };
-  const ga = /^remote get-url --push --all (.+)$/.exec(a);
+  // Seat review 1, item 5: repo-identity.mjs puts --end-of-options before the remote word.
+  const ga = /^remote get-url --push --all (?:--end-of-options )?(.+)$/.exec(a);
   if (ga) { const l = pushList(ga[1]); return l ? ok(l.join('\n')) : { status: 2, stdout: '' }; }
-  const gp = /^remote get-url --push (.+)$/.exec(a);
+  const gp = /^remote get-url --push (?:--end-of-options )?(.+)$/.exec(a);
   if (gp) { const l = pushList(gp[1]); return l ? ok(l[0]) : { status: 2, stdout: '' }; }
-  const gu = /^remote get-url (.+)$/.exec(a);
+  const gu = /^remote get-url (?:--end-of-options )?(.+)$/.exec(a);
   if (gu) return f.remotes?.[gu[1]] ? ok(f.remotes[gu[1]]) : { status: 2, stdout: '' };
   if (a === 'rev-parse --abbrev-ref @{push}') return f.pushRef ? ok(f.pushRef) : { status: 128, stdout: '' };
   if (a === 'rev-parse --symbolic-full-name @{push}') return f.pushRef ? ok(`refs/remotes/${f.pushRef}`) : { status: 128, stdout: '' };
@@ -232,11 +237,14 @@ function answer(f: Folder, dir: string, a: string): { status: number; stdout: st
   if (a.startsWith('rev-list --count ')) return ok(String(f.ahead ?? 1));
   const heads = f.heads ?? { feat: HEAD, main: HEAD2 };
   if (a === 'rev-parse HEAD') return heads[f.branch ?? 'feat'] ? ok(heads[f.branch ?? 'feat']) : { status: 128, stdout: '' };
-  const v = /^rev-parse --verify --quiet (.+)\^\{commit\}$/.exec(a);
+  // Seat review 1, items 3 and 5: app-ask puts --end-of-options before a ref (with --verify), and the app Push only tap reads
+  // <ref>^{commit} (HEAD too).
+  const v = /^rev-parse --verify --quiet (?:--end-of-options )?(.+)\^\{commit\}$/.exec(a);
   if (v) { const name = v[1] === 'HEAD' ? f.branch ?? 'feat' : v[1].replace(/^refs\/heads\//, ''); return heads[name] ? ok(heads[name]) : { status: 1, stdout: '' }; }
-  const c = /^rev-parse (.+)\^\{commit\}$/.exec(a);
-  if (c && heads[c[1]]) return ok(heads[c[1]]);
-  const t = /^rev-parse (.+)\^\{tree\}$/.exec(a);
+  const c = /^rev-parse (?:--verify )?(?:--end-of-options )?(.+)\^\{commit\}$/.exec(a);
+  const cname = c ? (c[1] === 'HEAD' ? f.branch ?? 'feat' : c[1].replace(/^refs\/heads\//, '')) : '';
+  if (c && heads[cname]) return ok(heads[cname]);
+  const t = /^rev-parse (?:--verify )?(?:--end-of-options )?(.+)\^\{tree\}$/.exec(a);
   const trees = f.trees ?? { HEAD: TREE, feat: TREE, main: TREE };
   const tname = t ? t[1].replace(/^refs\/heads\//, '') : '';
   if (t && trees[tname]) return ok(trees[tname]);
@@ -268,7 +276,8 @@ function deps(w: World = {}): Deps {
   if (w.noScope) return d;
   const readFile = (): string => { if (regText === null) throw errno('ENOENT'); return regText; };
   const realpath = w.realpath ?? same;
-  return { ...d, tapScope: { registry: () => readRegistry({ path: '/reg/project-registry.json', deps: { readFile, realpath } }), realpath, readFile: fakeFile } };
+  const where = w.registryEnv ? { env: { LANE_REGISTRY_PATH: '/reg/project-registry.json' } } : { path: '/reg/project-registry.json' };
+  return { ...d, tapScope: { registry: () => readRegistry({ ...where, deps: { readFile, realpath } }), realpath, readFile: fakeFile } };
 }
 
 function tap(step: Step, key: string, head: string, label: string, tree?: string): void {
@@ -404,27 +413,57 @@ describe('C5 what is not covered passes, as today (R10)', () => {
   });
 });
 
-describe('C6 registry missing is silent, registry corrupt passes with one warning line and a log row (S5)', () => {
-  it('missing: the hook prints {}', () => {
+// Seat review 1, item 4 (re-pinned; the S5 rows pinned "corrupt = pass"): a registry that exists but does not parse (read twice) DENIES a
+// push, a PR create and a merge in every folder outside CCv3, with a text that names the file and the way out. A missing file stays an
+// allow; it is silent, or carries the one notice line when LANE_REGISTRY_PATH names it. A CCv3 checkout keeps its old behaviour.
+describe('C6 registry missing passes (a notice when LANE_REGISTRY_PATH names it); registry corrupt denies outside CCv3 (seat review 1, item 4)', () => {
+  it('missing, named by the argument or the home copy: the hook prints {}', () => {
     expect(handle(JSON.stringify(bash(PUSH)), deps({ registry: null }))).toBe('{}');
   });
+  // Change that breaks it: drop the notice for a missing file named by LANE_REGISTRY_PATH, or deny it.
+  it('missing, named by LANE_REGISTRY_PATH: the call passes with the one notice line and a guard-log row', () => {
+    process.env.CCV3_GUARD_DECISIONS_LOG = `${scratch}/guard.jsonl`;
+    for (const cmd of [PUSH, CREATE, MERGE]) {
+      const out = JSON.parse(handle(JSON.stringify(bash(cmd)), deps({ registry: null, registryEnv: true })));
+      expect(out.hookSpecificOutput.permissionDecision, cmd).toBeUndefined();
+      expect(out.hookSpecificOutput.additionalContext, cmd).toBe(CORRUPT_LINE);
+    }
+    const rows = readFileSync(`${scratch}/guard.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(rows.map((r) => r.reason.split(' ')[0])).toEqual(['registry-missing', 'registry-missing', 'registry-missing']);
+    expect(rows.every((r) => r.decision === 'warn')).toBe(true);
+  });
   for (const [name, text] of [['bad JSON', '{not json'], ['projects is no list', '{"projects":{}}']] as const) {
-    it(`corrupt (${name}): the call passes, the hook adds one warning line, and a guard-log row is written`, () => {
+    // Change that breaks it: corrupt passes again (passOf returns an allow with the notice), or the text names no file or no way out.
+    it(`corrupt (${name}): push, create and merge are denied in a registered and an unregistered folder; the text names the file and the way out`, () => {
       process.env.CCV3_GUARD_DECISIONS_LOG = `${scratch}/guard.jsonl`;
-      for (const cmd of [PUSH, CREATE, MERGE]) {
-        const out = JSON.parse(handle(JSON.stringify(bash(cmd)), deps({ registry: text })));
-        expect(out.hookSpecificOutput.permissionDecision, cmd).toBeUndefined();
-        const ctx: string = out.hookSpecificOutput.additionalContext;
-        // Item 6: the visible line names the file and asks for Dave only; the effect on coverage is in the log row.
-        expect(ctx).toBe(CORRUPT_LINE);
+      for (const cwd of ['/work/app-x', '/work/stray']) {
+        for (const [cmd, scope] of [[PUSH, 'app-push'], [CREATE, 'other'], [MERGE, 'other']] as const) {
+          const r = denyOf(bash(cmd, cwd), { registry: text });
+          expect(r, `${cwd} ${cmd}`).toMatchObject({ pattern: 'registry-corrupt', scope });
+          expect(r!.reason).toContain('/reg/project-registry.json');
+          expect(r!.reason).toContain(cwd);
+          expect(r!.reason).toMatch(/fix the file .* or ask Dave/i);
+        }
       }
+      const out = JSON.parse(handle(JSON.stringify(bash(PUSH)), deps({ registry: text })));
+      expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
       const rows = readFileSync(`${scratch}/guard.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-      expect(rows.map((r) => r.reason.split(' ')[0])).toEqual(['registry-corrupt', 'registry-corrupt', 'registry-corrupt']);
-      expect(rows.every((r) => r.decision === 'warn')).toBe(true);
-      expect(rows.every((r) => /not checked for Dave's tap/.test(r.reason)), JSON.stringify(rows)).toBe(true);
+      expect(rows.map((r) => `${r.decision} ${r.reason}`)).toEqual(['deny registry-corrupt']);
     });
   }
-  it('corrupt: a CCv3 folder and a non-gated command print no warning', () => {
+  it('corrupt: the push deny is hard (enforceAppPush false does not soften it); popd before a push denies too', () => {
+    expect(denyOf(bash(PUSH), { registry: '{bad', config: JSON.stringify({ decisions: { enforce: true, enforceAppPush: false } }) })?.pattern).toBe('registry-corrupt');
+    expect(denyOf(bash(`popd && ${PUSH}`), { registry: '{bad' })?.pattern).toBe('registry-corrupt');
+  });
+  // The chosen scope, made visible: a create or merge deny is scope other with the home flags, as every app create or merge deny, so it
+  // only warns while decisions.enforce is not literal true. Change that breaks it: give it the push scope, or a scope with no flag.
+  it('corrupt: with decisions.enforce not true, a create warns (scope other); the push still denies', () => {
+    const off = { registry: '{bad', config: JSON.stringify({ decisions: {} }) };
+    expect(verdict(bash(CREATE), off)).toMatchObject({ action: 'allow', scope: 'other' });
+    expect((verdict(bash(CREATE), off) as { warn?: string }).warn).toMatch(/^registry-corrupt: /);
+    expect(denyOf(bash(PUSH), off)?.pattern).toBe('registry-corrupt');
+  });
+  it('corrupt: a CCv3 folder and a non-gated command keep their old output', () => {
     expect(handle(JSON.stringify(bash('git status')), deps({ registry: '{bad' }))).toBe('{}');
     expect(handle(JSON.stringify(bash('git push fork main', '/work/cc')), deps({ registry: '{bad' }))).toBe('{}');
   });
@@ -666,6 +705,9 @@ describe('C11 every covered deny text names the judged folder, the full offer co
   const f2 = { ...FOLDERS, '/work/app-x': { remotes: gh('acme/app-x'), branch: '', throwOn: [] } };
   const cases: [string, object, World?, string?][] = [
     ['ship', bash(PUSH), undefined, `${ASK} push --remote up --branch feat --src feat --dir '/work/app-x' --json`],
+    // Seat review 1, item 4: the registry-corrupt deny text holds nothing banned either.
+    ['registry-corrupt push', bash(PUSH), { registry: '{bad' }],
+    ['registry-corrupt merge', bash(MERGE), { registry: '{bad' }],
     ['ship no remote named', bash('git push'), { folders: { ...FOLDERS, '/work/app-x': { remotes: gh('acme/app-x'), pushRef: 'up/feat' } } }, `${ASK} push --remote up --branch feat --src HEAD --dir '/work/app-x' --json`],
     ['push-urls', bash(PUSH), { folders: { ...FOLDERS, '/work/app-x': { remotes: gh('acme/app-x'), pushUrls: { up: ['https://github.com/acme/app-x.git', 'https://github.com/acme/b.git'] } } } }],
     ['fetch-push-differ', bash(CREATE), { folders: { ...FOLDERS, '/work/app-x': { remotes: gh('acme/app-x'), pushUrls: { up: 'https://github.com/me/app-x.git' } } } }, `${ASK} open-pr --remote up --branch feat --dir '/work/app-x' --json`],
@@ -716,7 +758,7 @@ describe('C11 every covered deny text names the judged folder, the full offer co
       expect(text, name).toContain(dir);
       for (const [what, re] of BANNED) expect(re.test(text), `${name}: ${what} in: ${text}`).toBe(false);
       if (offer) expect(text, name).toContain(offer);
-      for (const m of text.matchAll(/node \S*app-ask\.mjs/g)) expect(m[0], name).toBe(ASK);
+      for (const m of text.matchAll(/node '?\S*app-ask\.mjs'?/g)) expect(m[0], name).toBe(ASK);
     });
   }
   it('the warn line, the unjudgeable text and the S5 line hold nothing banned either', () => {
@@ -876,7 +918,7 @@ describe('C16 a push -C path with backslashes is the folder it names (report of 
 // ---------- fix round 1, fixer B ----------
 
 /** Every offer command in a text: from `node ` to ` --json`. */
-const commandsIn = (text: string): string[] => [...text.matchAll(/node \S*app-ask\.mjs.*? --json/g)].map((m) => m[0]);
+const commandsIn = (text: string): string[] => [...text.matchAll(/node '?\S*app-ask\.mjs'?.*? --json/g)].map((m) => m[0]);
 /** One word of an offer command: a plain word, a <placeholder>, or a single-quoted folder of plain path characters. */
 const SAFE_WORD = /^(?:[A-Za-z0-9._/@+-]+|<[a-z]+>|'[A-Za-z0-9._/@+:\\ -]+')$/;
 const wordsOf = (cmd: string): string[] => cmd.match(/'[^']*'|\S+/g) ?? [];
@@ -945,7 +987,8 @@ describe('C17 F2: a repo value goes into an offer command only as a plain word; 
 });
 
 describe('C18 S5: the registry line stays when the same call also warns or denies (builder open issue)', () => {
-  const corrupt = (extra: World = {}): World => ({ registry: '{bad', ...extra });
+  // Seat review 1, item 4 (re-pinned): a corrupt registry now denies, so the notice comes from a missing file named by LANE_REGISTRY_PATH.
+  const corrupt = (extra: World = {}): World => ({ registry: null, registryEnv: true, ...extra });
   const MIXED = `gh pr merge 7 --match-head-commit ${HEAD} && cd /work/app-x && ${PUSH}`;
   // Change that breaks it: decide() drops the notes when a deny or a warn exists (the old `denies.length === 0` branch only).
   it('a deny in the CCv3 folder and an unreadable registry for the app folder: the deny text ends with the registry line', () => {
@@ -956,7 +999,7 @@ describe('C18 S5: the registry line stays when the same call also warns or denie
     expect(reason).toMatch(/^BLOCKED \(decision-gate\): /);
     expect(reason.split('\n').pop()).toBe(CORRUPT_LINE);
     const rows = readFileSync(`${scratch}/guard.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    expect(rows.map((r) => r.reason.split(' ')[0])).toEqual(['land', 'registry-corrupt']);
+    expect(rows.map((r) => r.reason.split(' ')[0])).toEqual(['land', 'registry-missing']);
   });
   it('the same call in warn mode: the warning, then the registry line', () => {
     const out = JSON.parse(handle(JSON.stringify(bash(MIXED, '/work/cc')), deps(corrupt({ config: JSON.stringify({ decisions: {} }) }))));
@@ -2144,5 +2187,60 @@ describe('R5 ruling B: a move value that names a CCv3 repo or no repo keeps the 
   });
   it('a relative GIT_DIR from /work names /work/app-x: denied, scope app-push', () => {
     expect(denyOf(bash('GIT_DIR=app-x/.git git push up topic', '/work'), { ...devX(), folders: { ...devX().folders, '/work': { remotes: gh('acme/work') } } })?.scope).toBe('app-push');
+  });
+});
+
+describe('Seat review 1 (fix round 7): items 1, 3, 4 and 6 on the app path', () => {
+  // Item 1. Change that breaks it: commandRepo reads -R only after a space (REPO_FLAG alone), or cmdRepoOf drops the cluster variable test.
+  it('item 1: a -fR or -dR cluster that names another repo is repo-differs, and -dR $R is repo-unreadable, even with the folder tap', () => {
+    openX();
+    mergeX();
+    expect(denyOf(bash(`${CREATE} -fR other/repo`))?.pattern).toBe('repo-differs');
+    expect(denyOf(bash(`${MERGE} -dRother/repo`))?.pattern).toBe('repo-differs');
+    expect(denyOf(bash(`${MERGE} -dR $R`))?.pattern).toBe('repo-unreadable');
+    expect(passes(bash(`${MERGE} -dR acme/app-x`))).toBe(true);
+  });
+  // CCv3 effect of item 1, outside the 8 G4 rows (proof-g4 has no cluster payload), for the seat to rule on: the R5c rule now reads the
+  // cluster too, so a CCv3 merge with -dR <other repo> is repo-foreign ("go to that repo folder"); at fb468d52 the CCv3 key judged it.
+  // A cluster that names CCv3 itself keeps the CCv3 rule. Change that breaks it: commandRepo without the cluster pattern.
+  it('item 1, CCv3: -dR other/lib from a CCv3 folder is repo-foreign; -dR of the CCv3 repo keeps the land rule', () => {
+    expect(denyOf(bash(`${MERGE} -dR other/lib`, '/work/cc'))?.pattern).toBe('repo-foreign');
+    expect(denyOf(bash(`${MERGE} -dR Rev4nchist/Continuous-Claude-v3`, '/work/cc'))?.pattern).toBe('land');
+  });
+});
+
+describe('Seat review 1, item 6: the app-ask script path is quoted in app texts', () => {
+  // Change that breaks it: print the script path unquoted (a home with a space splits the node argument), or quote a home with a quote mark.
+  it('a home with a space: the offer command holds the script path in single quotes; a home with a quote mark gets the stop line', () => {
+    const spaced = decide(bash(PUSH), { ...deps(), home: '/home/te ster' });
+    expect(spaced.action === 'deny' && spaced.reason).toContain("run node '/home/te ster/continuous-claude/scripts/github/app-ask.mjs' push --remote up");
+    const quoted = decide(bash(PUSH), { ...deps(), home: "/home/o'brien" });
+    expect(quoted.action === 'deny' && quoted.reason).toContain('cannot be passed safely in a command; tell Dave.');
+    expect(quoted.action === 'deny' && quoted.reason).not.toContain('app-ask.mjs push');
+  });
+  it('the CCv3 text keeps its relative ship-ask path, unquoted', () => {
+    const r = denyOf(bash(CREATE, '/work/cc'));
+    expect(r?.reason).toContain('run node scripts/github/ship-ask.mjs open-pr');
+  });
+});
+
+describe('Seat review 1, item 3: an app "Push only" tap is bound to the head app-ask stored, not only to the tree', () => {
+  const moved = (extra: Folder = {}): World => ({ folders: { ...FOLDERS, '/work/app-x': { remotes: gh('acme/app-x'), heads: { feat: HEAD2, main: HEAD2 }, ...extra } } });
+  // Change that breaks it: compare the tree only for an app Push only tap (the old shipTap rule).
+  it('Push only for head A does not clear a push whose ref is at head B with the same tree; at head A it does', () => {
+    shipX('Push only');
+    expect(denyOf(bash(PUSH), moved())).toMatchObject({ pattern: 'ship', scope: 'app-push' });
+    expect(passes(bash(PUSH))).toBe(true);
+  });
+  // Change that breaks it: require the head for "Commit and push" too (the commit moves the head after the tap).
+  it('Commit and push keeps the tree rule: the head moved by the chained commit does not matter', () => {
+    shipX('Commit and push');
+    expect(passes(bash(PUSH), moved())).toBe(true);
+    expect(passes(bash(`git commit -m x && ${PUSH}`), moved({ indexTree: TREE }))).toBe(true);
+  });
+  // G4: the CCv3 shipTap is unchanged. Change that breaks it: pass the head rule to the CCv3 call of shipTap.
+  it('CCv3: a Push only tap with another head still clears a push of the same tree', () => {
+    tap('ship', 'Rev4nchist/Continuous-Claude-v3@feat', 'b'.repeat(40), 'Push only', TREE);
+    expect(passes(bash('git push fork feat', '/work/cc'), { config: JSON.stringify({ decisions: { enforce: true, enforcePush: true } }) })).toBe(true);
   });
 });

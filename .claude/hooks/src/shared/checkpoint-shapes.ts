@@ -256,7 +256,9 @@ function pathRepos(seg: string, mseg: string): string[] {
 
 /**
  * The lowercased owner/repo that a gh command names, or null when it names none (the folder decides). F1: only the first command segment
- * of `text` is read (the gate passes each gh shape its own segment), and only where gh takes a repo: -R / --repo after the gh word, a
+ * of `text` is read (the gate passes each gh shape its own segment), and only where gh takes a repo: -R / --repo after the gh word (also
+ * -R at the end of a short-flag cluster: -fR x, -dRx, -dR=x; seat review 1, item 1; a cluster whose earlier letter takes a value is read
+ * as -R too, which fails closed), a
  * GH_REPO= assignment in the segment, env GH_REPO, the repos/<o>/<r> path of gh api, the PR URL of gh pr merge, view or ready.
  * `mtext` is `text` with its quoted strings blanked (maskQuoted, same length): a flag inside quotes, a --body, a --title or a heredoc
  * names no repo. A flag value is read raw (`-R "o/r"`), and a path or URL in a quoted word with no blank counts.
@@ -273,7 +275,10 @@ export function commandRepo(text: string, mtext: string, env: NodeJS.ProcessEnv 
   const gh = /\bgh\s/i.exec(mseg);
   if (gh === null) return null;
   const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
-  const values = [...flagValues(REPO_FLAG, seg, mseg, gh.index), ...flagValues(GH_REPO_ASSIGN, seg, mseg, 0)];
+  // Seat review 1, item 1: gh (pflag) reads -R at the end of a short-flag cluster too (-fR x, -dRx, -dR=x). REPO_FLAG (frozen with
+  // namedRepo) needs a space before -R, so the cluster form has its own pattern, built here (see priorGhRepo: no module-level RegExp).
+  const cluster = new RegExp(`(?:^|\\s)-[A-Za-z]+R\\s*=?["']?${REPO_VALUE}`, 'g');
+  const values = [...flagValues(REPO_FLAG, seg, mseg, gh.index), ...flagValues(cluster, seg, mseg, gh.index), ...flagValues(GH_REPO_ASSIGN, seg, mseg, 0)];
   const explicits = [...values, ...(envRepo ? [envRepo] : [])].map(ownerRepo);
   const slugs = [...new Set([...explicits, ...prior, ...pathRepos(seg, mseg)])].sort();
   return slugs.length === 0 ? null : slugs.join(' ');

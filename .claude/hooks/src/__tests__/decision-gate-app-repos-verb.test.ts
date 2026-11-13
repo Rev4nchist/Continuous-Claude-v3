@@ -79,14 +79,14 @@ function answer(f: Folder, dir: string, a: string): { status: number; stdout: st
   if (a === 'remote -v') return ok(Object.entries(f.remotes).map(([n, u]) => `${n}\t${u} (fetch)\n${n}\t${u} (push)`).join('\n'));
   if (a === 'remote') return ok(Object.keys(f.remotes).join('\n'));
   if (a === 'rev-parse --path-format=absolute --show-toplevel --git-common-dir') return ok(`${dir}\n${dir}/.git`);
-  const url = /^remote get-url (?:--push (?:--all )?)?(.+)$/.exec(a);
+  const url = /^remote get-url (?:--push (?:--all )?)?(?:--end-of-options )?(.+)$/.exec(a);
   if (url) return f.remotes[url[1]] ? ok(f.remotes[url[1]]) : { status: 2, stdout: '' };
   if (a === 'rev-parse --abbrev-ref @{push}') return ok(`${first}/feat`);
   if (a === 'rev-parse --symbolic-full-name @{push}') return ok(`refs/remotes/${first}/feat`);
   if (/^symbolic-ref --quiet --short refs\/remotes\/[^/]+\/HEAD$/.test(a)) return ok(`${first}/develop`);
   if (a === 'branch --show-current') return ok('feat');
-  if (a === 'rev-parse HEAD' || /^rev-parse (?:--verify --quiet )?feat\^\{commit\}$/.test(a)) return ok(HEAD);
-  const t = /^rev-parse (.+)\^\{tree\}$/.exec(a);
+  if (a === 'rev-parse HEAD' || /^rev-parse (?:--verify (?:--quiet )?)?(?:--end-of-options )?(?:feat|HEAD)\^\{commit\}$/.test(a)) return ok(HEAD);
+  const t = /^rev-parse (?:--verify )?(?:--end-of-options )?(.+)\^\{tree\}$/.exec(a);
   if (t && TREES.has(t[1])) return ok(TREE);
   return { status: 1, stdout: '' };
 }

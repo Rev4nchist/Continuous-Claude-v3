@@ -99,6 +99,18 @@ const ROWS: Row[] = [
   { id: 'k19', text: 'gh pr merge 5 &>log.txt --repo other/lib', repo: 'other/lib', named: null },
   // A segment with no gh call names no repo.
   { id: 'k16', text: 'git push -R acme/app', repo: null, named: null },
+  // Seat review 1, item 1: gh reads -R at the END of a short-flag cluster (-fR, -dR), with a separate or an attached value. namedRepo
+  // keeps its own rule (a space before -R), so it names nothing here. Change that breaks it: read -R only after a space (REPO_FLAG alone).
+  { id: 'l1', text: 'gh pr create --draft -fR other/repo', repo: 'other/repo', named: null },
+  { id: 'l2', text: 'gh pr create --draft -fRother/repo', repo: 'other/repo', named: null },
+  { id: 'l3', text: 'gh pr merge 5 --squash -dR other/repo', repo: 'other/repo', named: null },
+  { id: 'l4', text: 'gh pr merge 5 --squash -dRother/repo', repo: 'other/repo', named: null },
+  { id: 'l5', text: 'gh pr merge 5 -dR=Other/Repo.git', repo: 'other/repo', named: null },
+  { id: 'l6', text: 'gh pr merge 5 -dR Rev4nchist/Continuous-Claude-v3', repo: CCV3_REPO, named: null },
+  // A cluster in quoted prose or in another command is no flag; a long option that ends in R is no cluster.
+  { id: 'l7', text: 'gh pr create --draft --title "x -fR other/repo"', repo: null, named: null },
+  { id: 'l8', text: 'ls -lR other/repo && gh pr create --draft', repo: null, named: null },
+  { id: 'l9', text: 'gh pr create --draft --fooR other/repo', repo: null, named: null },
 ];
 
 describe('namedRepo is unchanged (CCv3 slug or null)', () => {

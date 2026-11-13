@@ -7,7 +7,8 @@
  * the old CCv3 code judges CCv3.
  *
  * This file reads the RAW registry JSON itself (path argument, else LANE_REGISTRY_PATH, else <home>/.claude/project-registry.json).
- * It does not use the board key or resolveBoard of lane-board.ts (seat answer S2).
+ * It does not use the board key or resolveBoard of lane-board.ts (seat answer S2). Seat review 1, item 4: a file that does not parse is
+ * read once more before it counts as 'corrupt' (the gate then denies a push, create or merge outside CCv3); 'missing' stays an allow.
  * LIMIT (seat answer S2): any session can edit the registry or its mirror. Coverage guards against a slip, not against a session
  * that edits the registry to dodge the gate.
  *
@@ -27,7 +28,11 @@ import * as identity from '../../../../scripts/github/lib/repo-identity.mjs';
 export type RegistryState = 'missing' | 'corrupt' | 'ok';
 /** `github`: the raw github field of the entry (owner/repo), the key repo of a remote URL with no github.com slug (F5). */
 export interface TapEntry { key: string; root: string; status: string; tapGate: string | null; github: string | null }
-export interface Registry { state: RegistryState; entries: TapEntry[]; file: string }
+/**
+ * `envPath` (seat review 1, item 4): present and true only when LANE_REGISTRY_PATH named the file (not the path argument, not the home
+ * copy). The gate shows its one notice line for a MISSING file named that way.
+ */
+export interface Registry { state: RegistryState; entries: TapEntry[]; file: string; envPath?: true }
 export interface TapScopeDeps {
   /** Read a file as UTF-8 text (the registry; the .git file walk of underLiveRoot). Throws as fs does (err.code 'ENOENT' for a missing file). */
   readFile?: (file: string) => string;
@@ -91,9 +96,20 @@ function entryOf(item: unknown): TapEntry | null {
   return { key, root, status, tapGate: typeof e.tapGate === 'string' ? e.tapGate : null, github: typeof e.github === 'string' ? e.github : null };
 }
 
-/** Read the registry. ENOENT is 'missing'; any other read error, bad JSON or a `projects` that is not an array is 'corrupt'. */
+/**
+ * Read the registry. ENOENT is 'missing'; any other read error, bad JSON or a `projects` that is not an array is 'corrupt'.
+ * Seat review 1, item 4: a corrupt read is tried once more (a session may be writing the file); the second answer stands. The gate DENIES
+ * a push, create or merge outside CCv3 on 'corrupt', so one torn read must not block. `envPath` marks a file named by LANE_REGISTRY_PATH.
+ */
 export function readRegistry(opts: ReadRegistryOptions = {}): Registry {
   const file = registryFile(opts);
+  const named = !opts.path && Boolean((opts.env ?? process.env).LANE_REGISTRY_PATH);
+  const first = readOnce(file, opts);
+  const r = first.state === 'corrupt' ? readOnce(file, opts) : first;
+  return named ? { ...r, envPath: true } : r;
+}
+
+function readOnce(file: string, opts: ReadRegistryOptions): Registry {
   let text: string;
   try {
     text = (opts.deps?.readFile ?? readUtf8)(file);

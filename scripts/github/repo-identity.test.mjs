@@ -192,9 +192,10 @@ function fakeGit(f) {
     if (a === 'remote') return ok(Object.keys(f.remotes ?? {}).join('\n'));
     if (a === 'rev-parse --symbolic-full-name @{push}') return f.pushRef ? ok(f.pushRef) : { status: 128, stdout: '' };
     if (a === 'branch --show-current') return ok(f.branch ?? 'feat');
-    const all = /^remote get-url --push --all (.+)$/.exec(a);
+    // Seat review 1, item 5: the remote word comes after --end-of-options; a call without it gets no answer (drop it: these rows go red).
+    const all = /^remote get-url --push --all --end-of-options (.+)$/.exec(a);
     if (all) { const r = f.remotes?.[all[1]]; return r ? ok((r.push ?? [r.url]).join('\n')) : { status: 2, stdout: '' }; }
-    const one = /^remote get-url (.+)$/.exec(a);
+    const one = /^remote get-url --end-of-options (.+)$/.exec(a);
     if (one) { const r = f.remotes?.[one[1]]; return r ? ok(r.url) : { status: 2, stdout: '' }; }
     return { status: 1, stdout: '' };
   };
@@ -367,5 +368,26 @@ describe('openPrKey (fix round 5, F8: the base branch is in the open-pr key)', (
     assert.equal(identity.openPrKey({ repo: 'acme/app', branch: 'feat/x', base: null }), 'acme/app@feat/x');
     assert.equal(identity.openPrKey({ repo: 'acme/app', branch: 'feat/x', base: 'dev' }), 'acme/app@feat/x:dev');
     assert.notEqual(identity.openPrKey({ repo: 'acme/app', branch: 'feat', base: 'dev' }), identity.openPrKey({ repo: 'acme/app', branch: 'feat', base: 'main' }));
+  });
+});
+
+// Seat review 1, item 2: the strip app-ask.mjs runs on every shown or stored remote, and the key runs on a non-GitHub target.
+// Change that breaks it: stop at the first @ (a raw @ in a token leaks the rest), or keep the user:token of the scp form.
+describe('stripCredentials (seat review 1, item 2)', () => {
+  it('drops the user and token part of a URL and of the scp form; a name or a path is unchanged', () => {
+    const rows = [
+      ['https://u:tok@github.com/acme/app.git', 'https://github.com/acme/app.git'],
+      ['https://u:to@k@git.example.com/a/b.git', 'https://git.example.com/a/b.git'],
+      ['ssh://git@host:2222/a/b.git', 'ssh://host:2222/a/b.git'],
+      ['u:tok@host:a/b.git', 'host:a/b.git'],
+      ['git@github.com:acme/app.git', 'github.com:acme/app.git'],
+      ['origin', 'origin'],
+      ['team/fork', 'team/fork'],
+      ['/srv/git/a@b.git', '/srv/git/a@b.git'],
+    ];
+    for (const [input, out] of rows) assert.equal(identity.stripCredentials(input), out, input);
+  });
+  it('the key of a non-GitHub token URL holds no token', () => {
+    assert.equal(identity.keyRepo({ url: 'https://u:to@k@git.example.com/a/b.git', entryKey: 'app' }), 'local:app:https://git.example.com/a/b.git');
   });
 });

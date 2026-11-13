@@ -57,11 +57,12 @@ function answer(f: Folder, a: string): { status: number; stdout: string } {
   if (a === 'remote -v') return ok(Object.entries(f.remotes).map(([n, u]) => `${n}\t${u} (fetch)\n${n}\t${u} (push)`).join('\n'));
   if (a === 'remote') return ok(Object.keys(f.remotes).join('\n'));
   if (a === 'rev-parse --path-format=absolute --show-toplevel --git-common-dir') return ok(`${APP}\n${APP}/.git`);
-  const ga = /^remote get-url --push --all (.+)$/.exec(a);
+  // Seat review 1, item 5: repo-identity.mjs puts --end-of-options before the remote word.
+  const ga = /^remote get-url --push --all (?:--end-of-options )?(.+)$/.exec(a);
   if (ga) return ok((f.pushUrls?.[ga[1]] ?? [f.remotes[ga[1]]]).join('\n'));
-  const gp = /^remote get-url --push (.+)$/.exec(a);
+  const gp = /^remote get-url --push (?:--end-of-options )?(.+)$/.exec(a);
   if (gp) return ok((f.pushUrls?.[gp[1]] ?? [f.remotes[gp[1]]])[0]);
-  const gu = /^remote get-url (.+)$/.exec(a);
+  const gu = /^remote get-url (?:--end-of-options )?(.+)$/.exec(a);
   if (gu && f.remotes[gu[1]]) return ok(f.remotes[gu[1]]);
   if (a === 'rev-parse --abbrev-ref @{push}') return f.pushRef ? ok(f.pushRef) : { status: 128, stdout: '' };
   if (a === 'rev-parse --symbolic-full-name @{push}') return f.pushRef ? ok(`refs/remotes/${f.pushRef}`) : { status: 128, stdout: '' };
@@ -69,7 +70,8 @@ function answer(f: Folder, a: string): { status: number; stdout: string } {
   if (a.startsWith('config --get-regexp ')) return f.config === undefined ? { status: 1, stdout: '' } : ok(f.config);
   if (a === 'branch --show-current') return ok('feat');
   if (a === 'rev-parse HEAD') return ok(HEAD);
-  const t = /^rev-parse (.+)\^\{tree\}$/.exec(a);
+  if (/^rev-parse (?:--verify )?(?:--end-of-options )?(?:feat|HEAD)\^\{commit\}$/.test(a)) return ok(HEAD);
+  const t = /^rev-parse (?:--verify )?(?:--end-of-options )?(.+)\^\{tree\}$/.exec(a);
   if (t && TREES.has(t[1].replace(/^refs\/heads\//, ''))) return ok(TREE);
   return { status: 1, stdout: '' };
 }

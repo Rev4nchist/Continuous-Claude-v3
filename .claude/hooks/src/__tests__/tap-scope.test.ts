@@ -274,3 +274,39 @@ describe('repo-identity door', () => {
     expect(oneLine('a\nb', 10)).toBe('a b');
   });
 });
+
+// Seat review 1, item 4: a registry that does not parse is read once more (a write in progress); a missing file named by
+// LANE_REGISTRY_PATH is marked, so the gate shows its notice. Change that breaks it: no retry; envPath set for the argument or home path.
+describe('readRegistry retry and envPath (seat review 1, item 4)', () => {
+  const counted = (texts: (string | Error)[]) => {
+    let n = 0;
+    const readFile = (): string => { const t = texts[Math.min(n++, texts.length - 1)]; if (t instanceof Error) throw t; return t; };
+    return { readFile, reads: () => n };
+  };
+  it('a bad read then a good read is ok, after two reads', () => {
+    const f = counted(['{"projects":[', regJson([APP])]);
+    expect(readRegistry({ path: '/r.json', deps: { readFile: f.readFile } }).state).toBe('ok');
+    expect(f.reads()).toBe(2);
+  });
+  it('two bad reads are corrupt, after two reads; an EACCES is retried too', () => {
+    const f = counted(['{']);
+    expect(readRegistry({ path: '/r.json', deps: { readFile: f.readFile } }).state).toBe('corrupt');
+    expect(f.reads()).toBe(2);
+    const g = counted([errno('EACCES'), regJson([APP])]);
+    expect(readRegistry({ path: '/r.json', deps: { readFile: g.readFile } }).state).toBe('ok');
+  });
+  it('a good file and a missing file are read once', () => {
+    const f = counted([regJson([APP])]);
+    readRegistry({ path: '/r.json', deps: { readFile: f.readFile } });
+    expect(f.reads()).toBe(1);
+    const m = counted([errno('ENOENT')]);
+    readRegistry({ path: '/r.json', deps: { readFile: m.readFile } });
+    expect(m.reads()).toBe(1);
+  });
+  it('envPath is true only for a file named by LANE_REGISTRY_PATH', () => {
+    const missing = () => { throw errno('ENOENT'); };
+    expect(readRegistry({ env: { LANE_REGISTRY_PATH: '/b/reg.json' }, deps: { readFile: missing } }).envPath).toBe(true);
+    expect(readRegistry({ path: '/a/reg.json', env: { LANE_REGISTRY_PATH: '/b/reg.json' }, deps: { readFile: missing } }).envPath).toBeUndefined();
+    expect(readRegistry({ env: { HOME: '/h' }, deps: { readFile: missing } }).envPath).toBeUndefined();
+  });
+});

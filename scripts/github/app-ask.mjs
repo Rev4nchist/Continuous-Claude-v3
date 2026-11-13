@@ -31,7 +31,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
-import { fetchKey, ghRemote, needsGithubField, normPath, oneLine, openPrKey, pushKey, remoteNames, repoSlug } from './lib/repo-identity.mjs';
+import { fetchKey, ghRemote, needsGithubField, normPath, oneLine, openPrKey, pushKey, remoteNames, repoSlug, stripCredentials } from './lib/repo-identity.mjs';
 
 const CCV3_SLUG = 'rev4nchist/continuous-claude-v3';
 const RECOMMENDED = ' (Recommended)';
@@ -44,6 +44,8 @@ const FLAGS = { push: ['dir', 'remote', 'branch', 'src'], 'open-pr': ['dir', 're
 class Refuse extends Error {}
 
 const plain = (v, n = 60) => oneLine(v, n);
+/** Seat review 1, item 2: a remote as it is shown or stored (question, offer, stdout, refusal): no user or token part, one plain line. */
+const rem = (v, n = 60) => plain(stripCredentials(v), n);
 const short = (sha) => String(sha ?? '').slice(0, 7);
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const opt = (label, description, first = false) => ({ label: `${label}${first ? RECOMMENDED : ''}`, description });
@@ -53,9 +55,9 @@ const notNow = () => opt(NOT_NOW, 'Nothing runs.');
 
 /** push. data: { repo, branch, remote, head, tree, staged, ahead }. staged > 0 offers Commit and push; else Push only. */
 export function pushSpec({ repo, branch, remote, head, tree, staged, ahead }) {
-  const where = `${plain(branch)} to ${plain(remote)} (${plain(repo, 80)})`;
+  const where = `${plain(branch)} to ${rem(remote)} (${plain(repo, 80)})`;
   const ready = staged > 0;
-  const first = ready ? `Commit ${plural(staged, 'file')} on ${plain(branch)} and push to ${plain(remote)} (${plain(repo, 80)})?` : `Push ${where}? Nothing is staged.`;
+  const first = ready ? `Commit ${plural(staged, 'file')} on ${plain(branch)} and push to ${rem(remote)} (${plain(repo, 80)})?` : `Push ${where}? Nothing is staged.`;
   const state = `State: HEAD ${short(head)}, tree ${short(tree)}, ${plural(ahead, 'commit')} not on the remote.`;
   const go = ready ? opt('Commit and push', 'Commits the staged files, then pushes this branch. The tap binds this tree.', true) : opt('Push only', 'No commit is made. The tap binds the tree of the pushed ref.', true);
   return { header: 'App push', question: [first, state].join('\n'), options: [go, notNow()] };
@@ -141,9 +143,9 @@ export const registryEntryKey = (dir, env = process.env) => registryEntry(dir, e
 
 const PUSH_REFUSAL = {
   'name-remote': () => 'name the remote: pass --remote R. This branch has no @{push} remote.',
-  'unknown-remote': (k) => `name the remote: ${plain(k.remote)} is not a remote of this checkout and not a URL.`,
-  'no-key': (k) => `remote ${plain(k.remote)} is not a GitHub remote, and this checkout is the root of no registry entry, so the repo has no key.`,
-  'multi-pushurl': (k) => `remote ${plain(k.remote)} pushes to more than one repo (${plain(k.keys.join(', '), 160)}); one tap covers one push URL. Push to one URL.`,
+  'unknown-remote': (k) => `name the remote: ${rem(k.remote)} is not a remote of this checkout and not a URL.`,
+  'no-key': (k) => `remote ${rem(k.remote)} is not a GitHub remote, and this checkout is the root of no registry entry, so the repo has no key.`,
+  'multi-pushurl': (k) => `remote ${rem(k.remote)} pushes to more than one repo (${plain(k.keys.join(', '), 160)}); one tap covers one push URL. Push to one URL.`,
   'no-branch': () => 'HEAD is detached: pass --branch B.',
 };
 
@@ -155,9 +157,10 @@ function sourceOf(git, { src, branch, remote, current }) {
   const name = src ?? branch;
   if (name === 'HEAD' || name === '@' || (current !== '' && name === current)) return { head: outOf(git, ['rev-parse', 'HEAD']), headTree: outOf(git, ['rev-parse', 'HEAD^{tree}']), ref: 'HEAD', isCurrent: true };
   const refs = src !== undefined && src !== null ? [src] : [`refs/heads/${branch}`, `refs/remotes/${remote}/${branch}`];
+  // Seat review 1, item 5: --end-of-options before every ref from the command (rev-parse needs --verify for it: without, it echoes the marker).
   for (const ref of refs) {
-    const head = outOf(git, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
-    if (head) return { head, headTree: outOf(git, ['rev-parse', `${ref}^{tree}`]), ref, isCurrent: false };
+    const head = outOf(git, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
+    if (head) return { head, headTree: outOf(git, ['rev-parse', '--verify', '--end-of-options', `${ref}^{tree}`]), ref, isCurrent: false };
   }
   throw new Refuse(`the ref ${plain(src ?? branch)} does not exist here. Pass a branch or ref that exists.`);
 }
@@ -171,7 +174,8 @@ function planPush(git, o, id, current) {
   if (!t.head || !t.headTree) throw new Refuse(`the ref ${plain(src ?? k.branch)} has no commit.`);
   const staged = t.isCurrent ? (outOf(git, ['diff', '--cached', '--name-only']) ?? '').split('\n').filter(Boolean).length : 0;
   const scope = remoteNames(git).includes(k.remote) ? `--remotes=${k.remote}` : '--remotes';
-  const ahead = Number(outOf(git, ['rev-list', '--count', t.ref, '--not', scope]) ?? 0);
+  // --not flips the refs after it, so the second --not turns it back before --end-of-options and the ref (git takes no option after the ref).
+  const ahead = Number(outOf(git, ['rev-list', '--count', '--not', scope, '--not', '--end-of-options', t.ref]) ?? 0);
   const tree = staged > 0 ? outOf(git, ['write-tree']) : t.headTree;
   if (!tree) throw new Refuse('the index tree could not be read (an unmerged path?).');
   const spec = pushSpec({ repo: k.key, branch: k.branch, remote: k.remote, head: t.head, tree, staged, ahead });
@@ -183,12 +187,12 @@ function ghRepoOf(git, o, id) {
   const remote = o.remote ?? ghRemote(git);
   if (!remote) throw new Refuse(`name the remote: pass --remote R. This branch has no @{push} remote and the checkout has not one remote only. Remotes here: ${remotesText(git)}.`);
   const repo = fetchKey(git, remote, id);
-  if (!repo) throw new Refuse(`name the remote: ${plain(remote)} is not a remote of this checkout with a URL. Remotes here: ${remotesText(git)}.`);
+  if (!repo) throw new Refuse(`name the remote: ${rem(remote)} is not a remote of this checkout with a URL. Remotes here: ${remotesText(git)}.`);
   // Fixer G (item 7): an SSH host alias of an entry with no github field has a way out, and it is Dave's: a github field in the entry.
-  if (repo.startsWith('local:') && needsGithubField(outOf(git, ['remote', 'get-url', remote]) ?? '', id.github)) {
-    throw new Refuse(`the registry entry ${plain(id.entryKey ?? '')} needs a github field naming owner/repo: remote ${plain(remote)} is an SSH host alias, so gh has no repo to act on. Tell Dave.`);
+  if (repo.startsWith('local:') && needsGithubField(outOf(git, ['remote', 'get-url', '--end-of-options', remote]) ?? '', id.github)) {
+    throw new Refuse(`the registry entry ${plain(id.entryKey ?? '')} needs a github field naming owner/repo: remote ${rem(remote)} is an SSH host alias, so gh has no repo to act on. Tell Dave.`);
   }
-  if (repo.startsWith('local:')) throw new Refuse(`${o.sub} needs a GitHub remote: gh cannot take ${plain(repo, 120)} with -R. ${plain(remote)} is not a GitHub remote.`);
+  if (repo.startsWith('local:')) throw new Refuse(`${o.sub} needs a GitHub remote: gh cannot take ${plain(repo, 120)} with -R. ${rem(remote)} is not a GitHub remote.`);
   return { repo, remote };
 }
 
@@ -307,6 +311,8 @@ export function parseArgs(argv) {
     if (rest[i] === '--json') { o.json = true; continue; }
     const name = rest[i].slice(2);
     if (!rest[i].startsWith('--') || !FLAGS[sub].includes(name) || rest[i + 1] === undefined || rest[i + 1].startsWith('--')) return { error: `bad argument ${plain(rest[i], 40)} for ${sub}` };
+    // Seat review 1, item 5: a ref or a remote that starts with - would reach git as an option. The value is not echoed (a URL may hold a token).
+    if ((name === 'src' || name === 'remote') && rest[i + 1].startsWith('-')) return { error: `the --${name} value must not start with -` };
     o[name] = rest[++i];
   }
   if (sub === 'merge' && !/^[1-9]\d*$/.test(o.pr ?? '')) return { error: 'merge needs --pr N' };
