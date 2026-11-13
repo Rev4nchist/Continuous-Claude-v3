@@ -72,6 +72,7 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const CONFIG = JSON.parse(readFileSync(path.join(REPO_ROOT, 'review-router.config.json'), 'utf8'));
+const REVIEW_MD = readFileSync(path.join(REPO_ROOT, 'REVIEW.md'), 'utf8');
 // Never read or write Dave's real paid ledger: every run here that could touch it gets a temp one.
 // Safety net: a run that forgets gateLogPath still writes to a temp file, never to Dave's real pre-pr-gates.jsonl.
 process.env.PRE_PR_GATE_LOG = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-gatelog-env-')), 'pre-pr-gates.jsonl');
@@ -81,7 +82,10 @@ const HEAD = 'a'.repeat(40);
 
 // No test reads Dave's real CodeRabbit store (%LOCALAPPDATA%\coderabbit\reviews): every call goes in with crStore null (off) unless a test
 // passes its own temp store. The step 2c tests (T0..T8) pass one on purpose.
-const runCodeRabbit = (o) => runCodeRabbitLive({ crStore: null, ...o });
+// The answer-key guard reads REVIEW.md in the root and a both-sides path list. Tests that pass no list get a clean one; a test that passes
+// changedPaths (or its own guardPaths) is checked on that list.
+const CLEAN_PATHS = ['src/clean.mjs'];
+const runCodeRabbit = (o) => runCodeRabbitLive({ crStore: null, ...(o.changedPaths === undefined && !('guardPaths' in o) ? { guardPaths: CLEAN_PATHS } : {}), ...o });
 const runPrePr = (o) => runPrePrLive({ crStore: null, ...o });
 
 function fakeGit(map) {
@@ -657,6 +661,7 @@ const USAGE_OK = ev({ type: 'usage', remaining: 5, fullCapacityInMs: 0 });
 
 function crFixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), 'prepr-cr-'));
+  writeFileSync(path.join(root, 'REVIEW.md'), REVIEW_MD);
   const calls = [];
   const usageCalls = [];
   const runner = (opts) => {
@@ -1580,6 +1585,7 @@ function makeRepo({ files = { 'docs/a.md': 'hello\n' } } = {}) {
   git(dir, 'init', '-q', '-b', 'main');
   writeFileSync(path.join(dir, '.gitignore'), '.claude/cache/\n');
   writeFileSync(path.join(dir, 'README.md'), 'root\n');
+  writeFileSync(path.join(dir, 'REVIEW.md'), REVIEW_MD); // the answer-key guard reads it from the root
   git(dir, 'add', '.');
   git(dir, 'commit', '-q', '-m', 'base');
   git(dir, 'checkout', '-q', '-b', 'feat/x');
@@ -3276,4 +3282,159 @@ test('S2c-T8: a throw in the snapshot, in the second listing or in the diagnosti
   for (const [name, deps] of Object.entries(variants)) {
     assert.deepEqual(await t8Run(deps, true), baseline, name);
   }
+});
+
+// ---------- answer-key guard (card prepr-answer-key-cli-guard): no CLI review reads an answer-key path ----------
+// The list is REVIEW.md "## Skip paths" (globs under scripts/eval/review-eval/). The guard runs in runCodeRabbit before the lock, the counter
+// and the CLI, on the paths of BOTH sides of the change (a delete or a rename names its old path too). How it can fail, and the test:
+//   a gold, seeds, rubrics or labels path reaches the CLI; the guard runs after the lock or the counter          -> A1
+//   a prefix match blocks linktype-labels.json.bak or review-eval/gold.mjs, or misses a glob                      -> A2
+//   REVIEW.md missing, unreadable, with no section, or with no answer-key glob lets the run go                      -> A3
+//   a null changed list lets the run go                                                                           -> A4
+//   the live list drifts from cursor-review.mjs TREE_EXCLUDES                                                       -> A5
+//   a clean diff is blocked                                                                                       -> A6
+//   a delete or a rename out of gold/ shows only the new path (git diff --name-only follows renames)              -> A7, A8
+//   Gold/ or a backslash path slips past the match                                                                -> A9
+//   runPrePr does not pass the both-sides list, or reads a failed git as "no paths"                               -> A7, A10
+const GOLD = 'scripts/eval/review-eval/gold/g.json';
+const KEY_TAIL = /Dave's decision.*internal review.*seat diff read/s;
+
+test('A1: a diff with an answer-key path FAILs before the lock, the counter and the CLI; the detail names the first path and the count', async () => {
+  const f = crFixture();
+  // A live lock held by another run: a guard that sat after the lock would answer "a run is in progress" instead.
+  const p = crPaths(f.root, 'feat/x');
+  mkdirSync(path.dirname(p.lock), { recursive: true });
+  const lockText = JSON.stringify({ pid: process.pid, head: 'other', at: new Date(f.now.getTime() - 60_000).toISOString() });
+  writeFileSync(p.lock, lockText);
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: ['src/a.ts', GOLD, 'scripts/eval/review-eval/seeds/s.json'] }));
+  assert.equal(r.status, 'FAIL');
+  assert.doesNotMatch(r.detail, /in progress/);
+  assert.equal(r.skipReason, undefined);
+  assert.match(r.detail, new RegExp(`${GOLD.replaceAll('/', '\\/')}, 2 in all`));
+  assert.match(r.detail, /--skip-cr/);
+  assert.match(r.detail, KEY_TAIL);
+  assert.equal(f.calls.length + f.usageCalls.length, 0, 'the CLI is never called, not even the usage check');
+  assert.equal(existsSync(p.counter), false, 'no run counted');
+  assert.equal(readFileSync(p.lock, 'utf8'), lockText, 'the other run keeps its lock');
+});
+
+test('A2: seeds, rubrics, linktype-labels.json and gold match by whole glob; a .bak, gold.mjs and a sibling folder do not', () => {
+  const block = (p) => PRE.answerKeyBlock({ root: REPO_ROOT, paths: [p] });
+  for (const p of ['scripts/eval/review-eval/seeds/s.json', 'scripts/eval/review-eval/rubrics/deep/r.md', 'scripts/eval/review-eval/linktype-labels.json', GOLD]) {
+    assert.match(block(p) ?? '', /answer-key path/, p);
+  }
+  for (const p of ['scripts/eval/review-eval/linktype-labels.json.bak', 'scripts/eval/review-eval/gold.mjs', 'scripts/eval/review-eval/goldx/a.json', 'scripts/eval/review-eval/lib.mjs', 'src/gold/g.json']) {
+    assert.equal(block(p), null, p);
+  }
+});
+
+test('A3: REVIEW.md missing, unreadable, without the section, or without an answer-key glob FAILs and never calls the CLI', async () => {
+  const bad = {
+    missing: (root) => rmSync(path.join(root, 'REVIEW.md')),
+    unreadable: (root) => { rmSync(path.join(root, 'REVIEW.md')); mkdirSync(path.join(root, 'REVIEW.md')); },
+    'no section': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\nno list here\n'),
+    'no answer-key glob': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\n## Skip paths\n\n```\ndocs/**\nscripts/eval/review-eval-other/**\n```\n'),
+  };
+  for (const [name, breakIt] of Object.entries(bad)) {
+    const f = crFixture();
+    breakIt(f.root);
+    const r = await runCodeRabbit(crOpts(f, { changedPaths: ['src/a.ts'] }));
+    assert.equal(r.status, 'FAIL', name);
+    assert.match(r.detail, /could not check the diff/, name);
+    assert.match(r.detail, KEY_TAIL, name);
+    assert.equal(f.calls.length + f.usageCalls.length, 0, name);
+    assert.equal(existsSync(crPaths(f.root, 'feat/x').counter), false, name);
+  }
+});
+
+test('A4: a null changed-file list FAILs and never calls the CLI', async () => {
+  const f = crFixture();
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: null }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /changed-file list is unknown/);
+  assert.equal(f.calls.length + f.usageCalls.length, 0);
+});
+
+test('A5: the live REVIEW.md gives the answer-key globs, and they are the answer-key entries of cursor-review.mjs TREE_EXCLUDES', async () => {
+  const { TREE_EXCLUDES } = await import('./cursor-review.mjs');
+  const live = PRE.answerKeyGlobs(REPO_ROOT);
+  assert.ok(Array.isArray(live.globs), JSON.stringify(live));
+  const asEntry = (g) => g.replace(/\/\*\*$/, '');
+  const excluded = TREE_EXCLUDES.filter((x) => x.startsWith('scripts/eval/review-eval/'));
+  assert.deepEqual([...live.globs.map(asEntry)].sort(), [...excluded].sort());
+  assert.equal(live.globs.length, 4);
+});
+
+test('A6: a clean diff runs the CLI as before', async () => {
+  const f = crFixture();
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: ['src/a.ts', 'docs/x.md', 'scripts/eval/review-eval/lib.mjs'] }));
+  assert.equal(r.status, 'PASS');
+  assert.equal(f.calls.length, 1);
+});
+
+test('A9: the match ignores case, backslashes and a leading ./', () => {
+  for (const p of ['Scripts/Eval/Review-Eval/Gold/G.json', 'scripts\\eval\\review-eval\\gold\\g.json', './scripts/eval/review-eval/gold/g.json', 'SCRIPTS/EVAL/REVIEW-EVAL/LINKTYPE-LABELS.JSON']) {
+    assert.match(PRE.answerKeyBlock({ root: REPO_ROOT, paths: [p] }) ?? '', new RegExp(`answer-key path \\(${p.replace(/[.\\/-]/g, '\\$&')},`), p);
+  }
+});
+
+// A repo whose base (main) holds an answer-key .md file, then the branch deletes it or renames it out. .md keeps the diff docs-only, so
+// the evidence step passes and the CodeRabbit step runs.
+function repoWithGoldFile() {
+  const repo = makeRepo({ files: {} });
+  const rel = 'scripts/eval/review-eval/gold/old.md';
+  git(repo.dir, 'checkout', '-q', 'main');
+  mkdirSync(path.join(repo.dir, path.dirname(rel)), { recursive: true });
+  writeFileSync(path.join(repo.dir, rel), 'a long enough answer key body so that git sees the rename\nline two\nline three\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'gold on main');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  git(repo.dir, 'merge', '-q', '--ff-only', 'main');
+  return { ...repo, rel };
+}
+const crStep = (r) => r.result.results.find((x) => x.step === 'coderabbit');
+
+test('A7: a DELETE of an answer-key file is caught: bothSidePaths lists it and runPrePr FAILs the CodeRabbit step with no CLI call', async () => {
+  const repo = repoWithGoldFile();
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  assert.deepEqual(PRE.bothSidePaths(makeGit(repo.dir), 'main...HEAD'), [repo.rel]);
+  const run = await prePr(repo);
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, new RegExp(`${repo.rel.replaceAll('/', '\\/')}, 1 in all`));
+  assert.equal(run.crCalls.length, 0);
+});
+
+test('A8: a RENAME out of gold/ is caught on the OLD path: --name-only shows only the new one, bothSidePaths shows both', async () => {
+  const repo = repoWithGoldFile();
+  mkdirSync(path.join(repo.dir, 'docs'), { recursive: true });
+  git(repo.dir, 'mv', repo.rel, 'docs/moved.md');
+  git(repo.dir, 'commit', '-q', '-m', 'move gold out');
+  assert.deepEqual(changedFiles(makeGit(repo.dir), 'main').paths, ['docs/moved.md'], 'the rename shows only the new path today');
+  assert.deepEqual(PRE.bothSidePaths(makeGit(repo.dir), 'main...HEAD'), ['docs/moved.md', repo.rel]);
+  const run = await prePr(repo);
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /answer-key path/);
+  assert.equal(run.crCalls.length, 0);
+});
+
+test('A11: answerKeyRange (the cr-fix guard) checks both sides of from..HEAD in a real repo', () => {
+  const repo = repoWithGoldFile();
+  assert.equal(PRE.answerKeyRange(repo.dir, 'main'), null, 'an empty range is clean');
+  mkdirSync(path.join(repo.dir, 'docs'), { recursive: true });
+  git(repo.dir, 'mv', repo.rel, 'docs/moved.md');
+  git(repo.dir, 'commit', '-q', '-m', 'move gold out');
+  assert.match(PRE.answerKeyRange(repo.dir, 'main') ?? '', /answer-key path \(scripts\/eval\/review-eval\/gold\/old\.md, 1 in all\)/);
+  assert.match(PRE.answerKeyRange(path.join(os.tmpdir(), 'prepr-no-such-dir'), 'main') ?? '', /could not check the diff/);
+});
+
+test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {
+  const repo = makeRepo();
+  const real = makeGit(repo.dir);
+  const git = (args) => (args.includes('--no-renames') ? { status: 128, stdout: '', stderr: 'fatal: boom' } : real(args));
+  const run = await prePr(repo, { git });
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /could not check the diff/);
+  assert.equal(run.crCalls.length, 0);
+  assert.equal((await prePr(makeRepo())).crCalls.length, 1, 'a clean branch still runs the CLI');
 });

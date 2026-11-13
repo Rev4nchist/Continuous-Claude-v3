@@ -113,6 +113,7 @@ import { checkSummary } from './lib/pr-summary.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
+import { parseReviewMd } from '../ratchets/review-skip-sync.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -1124,6 +1125,48 @@ function reusedReview({ root, e2e, saved, base, why }) {
   return { ...verdict, detail: `${why}: ${verdict.detail} Output: ${rel(root, path.join(e2e, saved))}` };
 }
 
+// ---------- the answer-key guard (card prepr-answer-key-cli-guard) ----------
+// No CodeRabbit CLI review may read an answer-key path. The one list is REVIEW.md "## Skip paths" (parseReviewMd, the list that
+// scripts/ratchets/review-skip-sync.mjs ties to the bot configs); the guard keeps the globs under scripts/eval/review-eval/. It checks the paths
+// of BOTH sides of the change: `git diff --name-only` follows renames, so a rename out of gold/ names only the new path. Fail closed: a list
+// it cannot read or an unknown path list is the same FAIL.
+
+const ANSWER_KEY_DIR = 'scripts/eval/review-eval/';
+const KEY_NEXT = "--skip-cr on such a branch is Dave's decision; the next step is the internal review plus a seat diff read.";
+const slashLower = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+
+/** { globs } (the answer-key globs of REVIEW.md "Skip paths") or { reason } when the file or the list cannot be read. */
+export function answerKeyGlobs(root) {
+  let text;
+  try { text = readFileSync(path.join(root, 'REVIEW.md'), 'utf8'); } catch (err) { return { reason: `REVIEW.md could not be read (${err.code ?? 'error'})` }; }
+  let all;
+  try { all = parseReviewMd(text); } catch (err) { return { reason: String(err.message) }; }
+  const globs = all.filter((g) => slashLower(g).startsWith(ANSWER_KEY_DIR));
+  return globs.length > 0 ? { globs } : { reason: `REVIEW.md "Skip paths" has no glob under ${ANSWER_KEY_DIR}` };
+}
+
+/**
+ * The FAIL detail, or null when the paths hold no answer-key path. A path matches a whole glob, after slashes and case are normalised
+ * (Gold/ is gold/). The text names the first matched path and the count: a path, never file content.
+ */
+export function answerKeyBlock({ root, paths }) {
+  const stop = (why) => `the answer-key guard could not check the diff (${why}): no CLI review runs on a diff it cannot check. ${KEY_NEXT}`;
+  if (!Array.isArray(paths)) return stop('the changed-file list is unknown');
+  const { globs, reason } = answerKeyGlobs(root);
+  if (!globs) return stop(reason);
+  const hits = paths.filter((p) => globs.some((g) => matchGlob(slashLower(g), slashLower(p))));
+  return hits.length === 0 ? null : `the diff holds an answer-key path (${hits[0]}, ${hits.length} in all): no CLI review may read it. ${KEY_NEXT}`;
+}
+
+/** Every path of a change, old and new side (a rename is a delete plus an add), or null when git fails. `range` is e.g. `main...HEAD`. */
+export function bothSidePaths(git, range) {
+  const r = git(['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-renames', '-z', range]);
+  return r.status === 0 ? r.stdout.split('\0').filter(Boolean) : null;
+}
+
+/** For cr-fix.mjs: the guard detail for the commits `from..HEAD` in `cwd`, or null. */
+export const answerKeyRange = (cwd, from) => answerKeyBlock({ root: cwd, paths: bothSidePaths(makeGit(cwd), `${from}..HEAD`) });
+
 // ---------- a read-only note: the CLI store holds a new marker with no git data (step 2c) ----------
 // The CLI keeps each review at <store>/<workspace>/<scope>/reviews/<id>/ with a .session-complete-v2 marker ({ hasGitMetadata: boolean }) and,
 // when it built git data, a git.json ({ workingDirectory }). The note claims no cause and never changes a verdict. It reads folder names at
@@ -1211,15 +1254,17 @@ function storeNote(store, before, { verdict, parsed, root }) {
 }
 
 /**
- * One `cr review --agent --committed` per head, at most CR_RUN_LIMIT per branch across every worktree. In order: --skip-cr; a saved
+ * One `cr review --agent --committed` per head, at most CR_RUN_LIMIT per branch across every worktree. In order: --skip-cr; the answer-key guard (a FAIL when the diff holds an answer-key path or the guard cannot check it: no lock, no slot, no CLI); a saved
  * output for this head (reused, no run); the run lock (a second step on the same branch FAILs while one runs; a stale lock is replaced);
  * the run counter and its cap; the free `cr usage --agent` preflight; the review, streamed to <date>-pre-pr-cr-<sha7>.running.txt and then
  * saved as .txt (a finished review) or .failed.txt. A run that started uses a slot, even if it failed. A process that never started, a failed
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, crStore = liveCrStore() }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, crStore = liveCrStore() }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
+  const keyBlock = answerKeyBlock({ root, paths: guardPaths === undefined ? changedPaths : guardPaths });
+  if (keyBlock) return result('coderabbit', 'FAIL', keyBlock);
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
   const saved = savedReviewFor(e2e, short);
@@ -1421,7 +1466,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(await measureAsync(async () => (failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, crStore }))));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${base}...HEAD`), crStore }))));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
