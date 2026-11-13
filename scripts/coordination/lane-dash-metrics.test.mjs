@@ -1004,6 +1004,12 @@ test('goalOf: a session handle and a SHA inside the sentence are masked', () => 
   assert.equal(goalOf('GOAL: a faded 2026111 decade'), 'a faded 2026111 decade');
 });
 
+test('goalOf: a whole session uuid is masked, letters-only parts included (CodeRabbit CLI, pre-pr a325502)', () => {
+  // Breaks if a uuid in the GOAL sentence reaches lanes.json: the handle rule needs "#", the SHA rule needs a digit.
+  assert.equal(goalOf('GOAL: help aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee and b2b46d90-5361-424d-a80d-bfe4f49674e6 now'), 'help [id] and [id] now');
+  assert.equal(goalOf('GOAL: ask #B2B46D90-5361-424D-A80D-BFE4F49674E6 first'), 'ask [id] first');
+});
+
 test('goalOf: a long sentence is cut at a word boundary with an ellipsis', () => {
   // Breaks if there is no cut (lanes.json size) or the cut splits a word.
   const g = goalOf(`GOAL: ${'word '.repeat(80)}`);

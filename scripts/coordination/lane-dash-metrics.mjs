@@ -63,6 +63,8 @@ const PARK_PREFIX = 'PARKED until ';
 const GOAL_TAG = 'GOAL:';
 const GOAL_STOPS = [' | ', 'WAITS ON', 'NEXT', 'MS:'];
 // A SHA: 7 to 40 hex characters with at least one digit and one letter, so "faded" and "2026111" stay.
+// A session uuid, with or without a leading '#'. Masked first, so no part of it is left for the rules after it.
+const UUID_RUN = /#?\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const SHA_RUN = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/gi;
 
 /** True when lane.mjs park wrote the note: "PARKED until <time> -- <reason> || <old note>". */
@@ -96,6 +98,7 @@ export function goalOf(note) {
   s = s.slice(GOAL_TAG.length);
   const end = Math.min(...GOAL_STOPS.map((t) => s.indexOf(t)).filter((i) => i >= 0), s.length);
   const text = s.slice(0, end)
+    .replace(UUID_RUN, '[id]')
     .replace(/#[0-9a-f]{8}\b/gi, '#[handle]')
     .replace(SHA_RUN, '[sha]')
     .replace(/\s+/g, ' ')
