@@ -134,7 +134,8 @@ function scoreCmd(argv, io, cfg, { spend = false } = {}) {
   const out = flag(argv, '--out', null);
   if (out) { mkdirSync(path.dirname(out), { recursive: true }); writeFileSync(out, `${JSON.stringify(card, null, 2)}\n`); }
   if (spend && argv.includes('--holdout-spend')) {
-    const lines = holdoutSpendLines(runs, frozenOf, { ts: new Date(io.now?.() ?? Date.now()).toISOString(), scope: spendScope });
+    // ev.runs: the newest row per round, as score keeps it, so a re-run of one round counts once.
+    const lines = holdoutSpendLines(ev.runs, frozenOf, { ts: new Date(io.now?.() ?? Date.now()).toISOString(), scope: spendScope });
     const file = flag(argv, '--spend-ledger', io.spendLedger ?? HOLDOUT_SPEND_PATH);
     if (lines.length > 0) { mkdirSync(path.dirname(file), { recursive: true }); appendFileSync(file, lines.map((l) => `${JSON.stringify(l)}\n`).join('')); }
     io.stderr(`score: holdout-spend lines written: ${lines.length}`);

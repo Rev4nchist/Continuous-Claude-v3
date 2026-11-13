@@ -272,6 +272,17 @@ test('holdout spend counts only ok runs that score keeps: not a failed build, a 
   assert.equal(JSON.parse(readFileSync(ledger, 'utf8').trim()).holdoutRuns, 1);
 });
 
+test('holdout spend counts a re-run of one round once, as score keeps only the newest row (CodeRabbit CLI minor on 60570913)', async () => {
+  // Breaks when: holdoutSpendLines reads the raw runs instead of the rows evaluateRuns keeps.
+  const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }]);
+  const rows = readFileSync(path.join(dir, 'runs.jsonl'), 'utf8').trim();
+  const again = JSON.stringify({ ...JSON.parse(rows), ts: '2026-11-13T01:00:00Z' });
+  writeFileSync(path.join(dir, 'runs.jsonl'), `${rows}\n${again}\n`);
+  const ledger = path.join(tmp(), 'h.jsonl');
+  assert.equal(await main(['score', '--dir', dir, '--holdout-spend'], { ...quiet(), cfg: freezeCfg, spendLedger: ledger }), 0);
+  assert.equal(JSON.parse(readFileSync(ledger, 'utf8').trim()).holdoutRuns, 1);
+});
+
 test('an invalid --scope exits 2 before any write (no --out card, no spend line)', async () => {
   // Breaks when: the scope is checked after the --out scorecard is written.
   const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }]);
