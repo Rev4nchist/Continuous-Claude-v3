@@ -10,12 +10,18 @@
 //                                             --linktype F reads the linkType labels (default linktype-labels.json beside this file)
 //   rescore --archive A --out D [--root R]    re-apply the parser and the path filter to archived raw answers (no model call); then `score --dir D`
 //   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+//   budget --dataset F [--ledger F] [--gold-dir D] [--json]   read only: per-phase eval scopes, the phase 4 need and the four cut cases
+//   score ... --holdout-spend [--scope P4] [--spend-ledger F]  also write one holdout-spend line per frozen arm
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONFIG_PATH, loadConfig } from './config.mjs';
-import { loadDataset, realMajors, resolveFindings, splitSets, zeroMajorPrs } from './dataset.mjs';
-import { recordEngineFreeze, recordFreeze } from './freeze.mjs';
+import { defaultLedgerPath } from '../../github/cursor-review.mjs';
+import { budgetFromFile, EVAL_SCOPES, p4Plan } from './budget.mjs';
+import { CONFIG_PATH, judgeModelFor, loadConfig } from './config.mjs';
+import { loadDataset, mergeGold, prCounts, realMajors, reserveSources, resolveFindings, setOf, splitSets, zeroMajorPrs } from './dataset.mjs';
+import { frozenEngineSha, LEGACY_ENGINE_VERSION, recordEngineFreeze, recordFreeze, recordVersionedFreeze } from './freeze.mjs';
+import { GOLD_DIR, loadCleanControls, loadGold } from './gold.mjs';
 import { exportPairs, ingestLabels } from './labels.mjs';
 import { LINKTYPE_PATH, loadLinkTypes } from './linktype.mjs';
 import { makeGit, replayRun as realReplayRun } from './replay.mjs';
@@ -35,7 +41,7 @@ async function loadMajors(argv, io, cfg) {
   if (!file) throw Object.assign(new Error('--dataset <file> is required'), { code: 'BAD_INPUT' });
   const ds = loadDataset(file);
   const resolved = await resolveFindings(ds, { gh: io.gh, filter: (f) => ['major', 'critical'].includes(String(f.severity).toLowerCase()) && f.verdict === 'real' });
-  return splitSets(resolved, cfg).replay.map((f) => ({ ...f, set: (cfg.holdoutExclude ?? []).includes(f.pr) ? 'dev' : 'holdout' }));
+  return splitSets(resolved, cfg).replay.map((f) => ({ ...f, set: setOf(f.pr, cfg) }));
 }
 
 async function replayCmd(argv, io, cfg, root) {
@@ -68,25 +74,139 @@ async function replayCmd(argv, io, cfg, root) {
   const pr = Number(flag(argv, '--pr', NaN));
   const round = Number(flag(argv, '--round', NaN));
   if (!Number.isInteger(pr) || !Number.isInteger(round)) { io.stderr('replay: --pr N --round K or --all-majors is required'); return 2; }
-  const res = await run({ pr, round, buildOnly, set: flag(argv, '--set', 'holdout'), reviewer, bodyMode }, deps);
+  // A reserve PR is the next holdout: it is never replayed. The default set comes from config.json, not 'holdout'.
+  const own = setOf(pr, cfg);
+  if (own === 'reserve') { io.stderr('replay: the PR is on the reserve list (config.json reserve): a reserve PR is never replayed'); return 2; }
+  const res = await run({ pr, round, buildOnly, set: flag(argv, '--set', own), reviewer, bodyMode }, deps);
   io.stdout(JSON.stringify(res, null, 1));
   return res.exit ?? 1;
 }
 
-function scoreCmd(argv, io, cfg) {
+// The model family of each reviewer (both run on Cursor with Grok 4.7 today). A run with no reviewer is an old cursor-review row.
+const REVIEWER_FAMILY = Object.freeze({ engine: 'grok', 'cursor-review': 'grok' });
+const familyOfRun = (r) => r.family ?? REVIEWER_FAMILY[r.reviewer ?? 'cursor-review'] ?? `unknown (reviewer ${JSON.stringify(r.reviewer)})`;
+const versionOfRun = (r) => r.promptVersion ?? LEGACY_ENGINE_VERSION;
+
+export const HOLDOUT_SPEND_PATH = path.join(os.homedir(), '.claude', 'state', 'local-review', 'eval', 'holdout-spend.jsonl');
+
+/**
+ * The newest row per round and arm: key pr|round|sha40|reviewer|promptVersion, by ts, and on a tie or an unreadable ts the later line.
+ * The reviewer is part of the key, so both arms of an A/B round stay. (score.mjs newestPerRound keys without it: a follow-up for its owner.)
+ */
+function newestPerArm(runs) {
+  const best = new Map();
+  runs.forEach((r, i) => {
+    const key = [r.pr, r.round, r.sha40, r.reviewer ?? 'none', r.reviewer === 'engine' ? versionOfRun(r) : ''].join('|');
+    const t = Date.parse(r.ts);
+    const prev = best.get(key);
+    if (!prev || Number.isNaN(t) || Number.isNaN(prev.t) || t >= prev.t) best.set(key, { r, t });
+  });
+  return [...best.values()].map((x) => x.r);
+}
+
+/**
+ * One line per frozen arm with holdout runs: { ts, reviewer, promptVersion, promptSha256, holdoutRuns, scope }. No PR id.
+ * frozenFor(row) is the same rule as scorecard (score.mjs:89): the hash of the row's reviewer, else the folder fallback.
+ * A row with no reviewer shows as reviewer 'none'.
+ */
+function holdoutSpendLines(runs, frozenFor, { ts, scope }) {
+  const arms = new Map();
+  for (const r of newestPerArm(runs)) {
+    const reviewer = r.reviewer ?? 'none';
+    const promptVersion = reviewer === 'engine' ? versionOfRun(r) : null;
+    const frozen = frozenFor(r);
+    // Only runs that made a model call and that score keeps: status ok, no full-body leak, complete coverage, the frozen hash.
+    const kept = r.status === 'ok' && r.bodyMode !== 'full' && r.coverageComplete !== false;
+    if (r.set !== 'holdout' || !kept || !frozen || r.promptSha256 !== frozen) continue;
+    const key = `${reviewer}|${promptVersion}|${frozen}`;
+    const arm = arms.get(key) ?? { ts, reviewer, promptVersion, promptSha256: frozen, holdoutRuns: 0, scope };
+    arm.holdoutRuns += 1;
+    arms.set(key, arm);
+  }
+  return [...arms.values()];
+}
+
+/** spend: true only for `score --holdout-spend`; `report` never writes. */
+function scoreCmd(argv, io, cfg, { spend = false } = {}) {
   const dir = flag(argv, '--dir', null);
   if (!dir) { io.stderr('score: --dir <review-eval folder> is required'); return 2; }
   const rebase = flag(argv, '--rebase', null);
   const runs = readJsonl(path.join(dir, 'runs.jsonl')).map((r) => (rebase && r.findingsPath ? { ...r, findingsPath: archiveFile(rebase, r.findingsPath) } : r));
   const datasetFile = path.join(dir, 'dataset-resolved.json');
   if (!existsSync(datasetFile)) { io.stderr(`score: ${datasetFile} is missing: run \`resolve --out\` first`); return 2; }
+  // A judge never shares the reviewer family, and there is no default judge: a family with no entry refuses the whole card.
+  for (const family of new Set(runs.map(familyOfRun))) {
+    try { judgeModelFor(cfg, family); } catch (e) { io.stderr(`score: ${e.message}`); return 2; }
+  }
+  const engineVersions = [...new Set(runs.filter((r) => r.reviewer === 'engine').map(versionOfRun))];
+  if (engineVersions.length > 1) { io.stderr(`score: engine runs of ${engineVersions.join(' and ')} in one folder: score one prompt version at a time`); return 2; }
+  const engineSha = frozenEngineSha(cfg, engineVersions[0] ?? LEGACY_ENGINE_VERSION);
+  // With no frozen hash, score.mjs cannot mark a row stale, so an unfrozen arm would count as clean holdout.
+  if (engineVersions.length === 1 && !engineSha) { io.stderr(`score: no engine freeze for ${engineVersions[0]}: run \`cli.mjs freeze --engine --prompt-version ${engineVersions[0]}\` first`); return 2; }
+  const spendScope = flag(argv, '--scope', 'P4');
+  if (spend && argv.includes('--holdout-spend') && !EVAL_SCOPES.includes(spendScope)) { io.stderr(`score: --scope takes ${EVAL_SCOPES.join(', ')}`); return 2; }
+  // One freeze rule for the scorecard and the spend ledger (score.mjs:89): the reviewer's hash, else the folder fallback.
+  const frozenByReviewer = { engine: engineSha, 'cursor-review': cfg.freeze?.promptSha256 };
+  const frozenFallback = (runs.some((r) => r.reviewer === 'engine') ? engineSha : cfg.freeze?.promptSha256) ?? null;
+  const frozenFor = (r) => (r.reviewer ? frozenByReviewer[r.reviewer] : undefined) ?? frozenFallback;
   const resolved = JSON.parse(readFileSync(datasetFile, 'utf8'));
   const ev = evaluateRuns({ runs, dataset: resolved.findings, readFindings: (p) => (p ? JSON.parse(readFileSync(p, 'utf8')) : { findings: [] }) });
   const labels = readJsonl(path.join(dir, 'labels.jsonl'));
-  const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, linkTypes: loadLinkTypes(flag(argv, '--linktype', LINKTYPE_PATH)), frozenByReviewer: { engine: cfg.engineFreeze?.promptSha256?.full, 'cursor-review': cfg.freeze?.promptSha256 }, frozenPromptSha256: (runs.some((r) => r.reviewer === 'engine') ? cfg.engineFreeze?.promptSha256?.full : cfg.freeze?.promptSha256) ?? null, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
+  const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, linkTypes: loadLinkTypes(flag(argv, '--linktype', LINKTYPE_PATH)), frozenByReviewer, frozenPromptSha256: frozenFallback, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
   const out = flag(argv, '--out', null);
   if (out) { mkdirSync(path.dirname(out), { recursive: true }); writeFileSync(out, `${JSON.stringify(card, null, 2)}\n`); }
+  if (spend && argv.includes('--holdout-spend')) {
+    // Raw runs: holdoutSpendLines keeps the newest row per round and arm itself, so a re-run counts once and both A/B arms stay.
+    const lines = holdoutSpendLines(runs, frozenFor, { ts: new Date(io.now?.() ?? Date.now()).toISOString(), scope: spendScope });
+    const file = flag(argv, '--spend-ledger', io.spendLedger ?? HOLDOUT_SPEND_PATH);
+    if (lines.length > 0) { mkdirSync(path.dirname(file), { recursive: true }); appendFileSync(file, lines.map((l) => `${JSON.stringify(l)}\n`).join('')); }
+    io.stderr(`score: holdout-spend lines written: ${lines.length}`);
+  }
   io.stdout(JSON.stringify(card, null, 1));
+  return 0;
+}
+
+// ---------- budget (map C1, T04, E02): read only ----------
+
+function budgetReport({ cfg, ledger, ds, goldDir, now }) {
+  const b = budgetFromFile(ledger, cfg, { now, scope: 'P4' });
+  const merged = mergeGold(loadGold(goldDir).rows, cfg);
+  const controlsInFile = loadCleanControls(goldDir).length;
+  const c = prCounts({ ds, cfg, goldRows: merged.rows });
+  const plan = p4Plan({ counts: { controls: controlsInFile, holdout: c.holdout, dev: c.dev, gold: c.gold }, p4: cfg.p4, p4Free: b.scopes.P4.free });
+  const split = 'dataset + config.json holdoutExclude';
+  const sources = { holdout: split, dev: split, gold: 'gold loader', controls: plan.inputs.controlsPlanned ? `planned (config.json p4.controlsMin; clean-controls.json has ${controlsInFile})` : 'clean-controls.json' };
+  return { ledger, scopes: b.scopes, evalUsed: b.evalUsed, globalUsed: b.globalUsed, inputs: { ...plan.inputs, sources, goldBySource: c.goldBySource, goldOverlap: c.goldOverlap, suites: c.suites, reservePrsInDataset: c.reserve, goldSplitDiffers: merged.splitDiffers }, need: plan.need, fits: plan.fits, reserved: cfg.p4.reserved, cases: plan.cases, reserve: reserveSources(cfg) };
+}
+
+function budgetText(r) {
+  const scope = ([s, v]) => (v.free === 0 ? `${s} ${v.used} used of ${v.cap} (closed)` : `${s} ${v.used} used of ${v.cap}, ${v.free} free`);
+  const i = r.inputs;
+  const caseLine = (c) => {
+    const head = `holdout ${c.holdoutRuns} run${c.holdoutRuns === 1 ? '' : 's'} per arm, winner evidence ${c.winnerStarts} starts: `;
+    if (!c.fits) return `- ${head}DOES NOT FIT, short by ${c.shortfall} engine calls (free ${c.freeStarts} starts = ${c.freeCalls} calls; controls ${c.controlsCalls} + holdout ${c.holdoutCalls} calls); gold targets with a call 0 of ${i.gold}`;
+    return `- ${head}free ${c.freeStarts} starts = ${c.freeCalls} engine calls; controls ${c.controls} (${c.controlsCalls} calls), holdout PRs ${i.holdout} (${c.holdoutCalls} calls), dev PRs ${c.devTargets} of ${i.dev} (${c.devCalls} calls), gold targets with a call ${c.goldTargets} of ${i.gold}; starts: p4-ab ${c.p4abStarts} + verifier replay ${r.reserved.verifierReplay} + winner evidence ${c.winnerStarts} = ${c.sum}`;
+  };
+  return [
+    `Eval budget (read only; ledger ${r.ledger})`,
+    ...Object.entries(r.scopes).map(scope),
+    `Global 7-day starts: ${r.globalUsed} (stop at 240)`,
+    `Phase 4 inputs (counts only): controls ${i.controls} [${i.sources.controls}], holdout PRs ${i.holdout} [${i.sources.holdout}], dev PRs ${i.dev} [${i.sources.dev}], gold targets ${i.gold} [${i.sources.gold}; ${Object.entries(i.goldBySource).map(([s, n]) => `${s} ${n}`).join(', ') || 'none'}]`,
+    `Phase 4 need for the full design: ${r.need} starts, beside verifier replay ${r.reserved.verifierReplay} and winner evidence ${r.reserved.winnerEvidence}: ${r.fits ? 'fits' : 'does not fit'} in P4 ${r.scopes.P4.free} free`,
+    `Own-repo gold targets left out because their PR is already a holdout or dev PR: ${i.goldOverlap}`,
+    `The cut (DP1.16), four cases. Nothing is written; Dave chooses what gives way. It takes the reserved starts whole from P4 ${r.scopes.P4.free} free (it assumes verifier replay and winner evidence have spent none yet):`,
+    ...r.cases.map(caseLine),
+    `reserve PRs ${r.reserve.total}, with no answer-key source ${r.reserve.noSource}`,
+    `dataset PRs with no suite in config.json: ${i.suites.none} of ${i.suites.total} (regression ${i.suites.regression}, capability ${i.suites.capability})`,
+    `gold rows whose own split differs from config.json: ${i.goldSplitDiffers}`,
+  ].join('\n');
+}
+
+function budgetCmd(argv, io, cfg) {
+  const dsFile = flag(argv, '--dataset', null);
+  if (!dsFile) { io.stderr('budget: --dataset <the CodeRabbit dataset file> is required'); return 2; }
+  const r = budgetReport({ cfg, ledger: flag(argv, '--ledger', defaultLedgerPath()), ds: loadDataset(dsFile), goldDir: flag(argv, '--gold-dir', GOLD_DIR), now: io.now?.() ?? Date.now() });
+  io.stdout(argv.includes('--json') ? JSON.stringify(r, null, 1) : budgetText(r));
   return 0;
 }
 
@@ -120,8 +240,10 @@ export async function main(argv, io = {}) {
   try {
     switch (cmd) {
       case 'freeze': {
-        const freezeIt = argv.includes('--engine') ? recordEngineFreeze : recordFreeze;
-        const f = freezeIt({ git: makeGit(root), cfgPath: flag(argv, '--config', CONFIG_PATH) });
+        const promptVersion = flag(argv, '--prompt-version', null);
+        if (promptVersion !== null && !argv.includes('--engine')) { io.stderr('freeze: --prompt-version needs --engine'); return 2; }
+        const freezeIt = promptVersion !== null ? recordVersionedFreeze : argv.includes('--engine') ? recordEngineFreeze : recordFreeze;
+        const f = freezeIt({ git: makeGit(root), cfgPath: flag(argv, '--config', CONFIG_PATH), ...(promptVersion !== null ? { promptVersion } : {}) });
         io.stdout(JSON.stringify(f, null, 1));
         return 0;
       }
@@ -129,7 +251,7 @@ export async function main(argv, io = {}) {
         const ds = loadDataset(flag(argv, '--dataset', ''));
         const findings = await resolveFindings(ds, { gh: io.gh });
         const sets = splitSets(findings, cfg);
-        const out = { findings, zeroMajorPrs: zeroMajorPrs(ds), counts: { findings: findings.length, replay: sets.replay.length, holdout: sets.holdout.length, dev: sets.dev.length, byResolution: Object.fromEntries(['comment', 'round', 'unresolved'].map((k) => [k, findings.filter((f) => f.resolvedBy === k).length])) } };
+        const out = { findings, zeroMajorPrs: zeroMajorPrs(ds), counts: { findings: findings.length, replay: sets.replay.length, holdout: sets.holdout.length, dev: sets.dev.length, reserve: sets.reserve.length, byResolution: Object.fromEntries(['comment', 'round', 'unresolved'].map((k) => [k, findings.filter((f) => f.resolvedBy === k).length])) } };
         const file = flag(argv, '--out', null);
         if (file) { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, `${JSON.stringify(out, null, 1)}\n`); }
         io.stdout(JSON.stringify(out.counts, null, 1));
@@ -161,7 +283,8 @@ export async function main(argv, io = {}) {
         io.stderr('labels: use export | ingest');
         return 1;
       }
-      case 'score': return scoreCmd(argv, io, cfg);
+      case 'score': return scoreCmd(argv, io, cfg, { spend: true });
+      case 'budget': return budgetCmd(argv, io, cfg);
       case 'rescore': return rescoreCmd(argv, io, root);
       case 'report': {
         let text = '';
@@ -181,7 +304,7 @@ export async function main(argv, io = {}) {
         return 0;
       }
       default:
-        io.stderr(`review-eval: unknown command ${JSON.stringify(cmd)}. Use freeze | resolve | replay | shadow | judge | labels | score | rescore | report`);
+        io.stderr(`review-eval: unknown command ${JSON.stringify(cmd)}. Use freeze | resolve | replay | shadow | judge | labels | score | budget | rescore | report`);
         return 1;
     }
   } catch (e) {
