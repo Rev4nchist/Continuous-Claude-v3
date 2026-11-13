@@ -12,8 +12,8 @@ import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
 
 import {
-  DEFAULT_PROJECT_ROWS, DEFAULT_SHOW_ROWS, HOURS_TOKEN, STATE_WORD, STATUS_WORD, TILE_COLUMNS,
-  addDays, assignmentTile, buildTileRows, chicagoDay, daveQueue, formatChicago, formatDay, freshSentence,
+  DEFAULT_CATEGORY_ROWS, DEFAULT_PROJECT_ROWS, DEFAULT_SHOW_ROWS, HOURS_TOKEN, NO_CATEGORY_NAME, STATE_WORD, STATUS_WORD, TILE_COLUMNS,
+  GOAL_MAX, addDays, assignmentTile, buildTileRows, goalOf, isParkedNote, categoryRows, chicagoDay, dailyRows, daveQueue, verdictTile, formatChicago, formatDay, freshSentence,
   growthState, hasPriorWindow, hoursOld, isStale, neverStarted, niceTicks, p0Sentence, p0Tile, pileTile,
   pluralize, projectRows, showWipBar, sign, staleChipText, staleSentence, takeaway, targetMap, trendState, windowOf, wipTile,
 } from './lane-dash-metrics.mjs';
@@ -457,7 +457,7 @@ test('tiles rows: every row has the seven columns, ids are unique, and values ar
     assert.deepEqual(Object.keys(r), TILE_COLUMNS, r.id);
     assert.ok(!seen.has(r.id), `duplicate id ${r.id}`);
     seen.add(r.id);
-    assert.ok([1, 2, 3, 4, 5, 6, 7, 'page'].includes(r.tile), r.id);
+    assert.ok([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 'page'].includes(r.tile), r.id);
     assert.ok(['figure', 'text', 'chip', 'row', 'bar', 'day', 'tick'].includes(r.kind), r.id);
     assert.ok(r.rank === null || Number.isInteger(r.rank), r.id);
     assert.ok(r.value === null || Number.isFinite(r.value), r.id);
@@ -469,7 +469,7 @@ test('tiles rows: every row has the seven columns, ids are unique, and values ar
 
 // Breaks if one tile writes ids under another tile's prefix, which would mix them on the page.
 test('tiles rows: one tile is the rows with one id prefix', () => {
-  const prefix = { 1: 'wait', 2: 'pile', 3: 'never', 4: 'wip', 5: 'p0', 6: 'proj', 7: 'assign', page: 'page' };
+  const prefix = { 1: 'wait', 2: 'pile', 3: 'never', 4: 'wip', 5: 'p0', 6: 'proj', 7: 'assign', 8: 'verdict', 9: 'cat', 10: 'daily', page: 'page' };
   for (const r of build()) assert.ok(r.id.startsWith(`${prefix[r.tile]}.`), `${r.id} on tile ${r.tile}`);
 });
 
@@ -748,4 +748,305 @@ test('size: a large board stays well under the 256 KB cap', () => {
   const rows = build({ lanes, meta: { ...f.meta, open_check: 2000 } });
   const bytes = Buffer.byteLength(JSON.stringify({ sql: 'x', exportedAt: 'y', rows }));
   assert.ok(bytes < 64 * 1024, `${bytes} bytes`);
+});
+
+// ---------------------------------------------------------------- tiles 8 to 10: verdict, category rows, day table (fleetops-category-progress)
+
+// Window Nov 1 to Nov 7 (META_BASE.today). History from Oct 27, so no earlier week. Reminder cards (track reminders) are in no count.
+function catFixture() {
+  const projects = [
+    proj('re', { name: 'Review engine', status: 'done', done_day: '2026-10-30', visible_until: '2026-11-01' }),
+    proj('lb', { name: 'Lane board' }),
+    proj('unassigned', { name: 'Unassigned', status: 'no_end' }),
+  ];
+  const lanes = [
+    lane({ id: 'r1', title: 'TITLE-R1', project: 're', band: 'P2', state: 'backlog', created_day: '2026-11-02', created_at: '2026-11-02T15:00:00.000Z' }),
+    lane({ id: 'r2', title: 'TITLE-R2', project: 're', band: 'P0', state: 'blocked', created_day: '2026-10-28', created_at: '2026-10-28T15:00:00.000Z' }),
+    lane({ id: 'r3', title: 'TITLE-R3', project: 're', state: 'done', created_day: '2026-10-29', created_at: '2026-10-29T12:00:00.000Z', first_claim_at: '2026-10-31T12:00:00.000Z', done_at: '2026-11-03T15:00:00.000Z', done_day: '2026-11-03' }),
+    lane({ id: 'r4', title: 'TITLE-R4', project: 're', state: 'done', created_day: '2026-10-27', created_at: '2026-10-27T12:00:00.000Z' }),
+    lane({ id: 'l1', title: 'TITLE-L1', project: 'lb', band: 'P1', state: 'ready', created_day: '2026-11-05', created_at: '2026-11-05T15:00:00.000Z' }),
+    lane({ id: 'l2', title: 'TITLE-L2', project: 'lb', state: 'done', created_day: '2026-11-06', created_at: '2026-11-06T13:00:00.000Z', first_claim_at: '2026-11-06T14:00:00.000Z', done_at: '2026-11-06T16:00:00.000Z', done_day: '2026-11-06' }),
+    lane({ id: 'l3', title: 'TITLE-L3', project: 'lb', track: 'reminders', band: 'P1', state: 'backlog', created_day: '2026-11-04', created_at: '2026-11-04T15:00:00.000Z' }),
+    lane({ id: 'u1', title: 'TITLE-U1', project: 'unassigned', state: 'backlog', created_day: '2026-11-03', created_at: '2026-11-03T15:00:00.000Z' }),
+    lane({ id: 'u2', title: 'TITLE-U2', project: 'unassigned', state: 'backlog', created_day: '2026-11-04', created_at: '2026-11-04T15:00:00.000Z' }),
+    lane({ id: 'u3', title: 'TITLE-U3', project: 'unassigned', state: 'backlog', created_day: '2026-11-05', created_at: '2026-11-05T15:00:00.000Z' }),
+    lane({ id: 'u4', title: 'TITLE-U4', project: 'unassigned', track: 'reminders', state: 'backlog', created_day: '2026-11-07', created_at: '2026-11-07T15:00:00.000Z' }),
+  ];
+  return { projects, lanes, meta: { ...META_BASE, open_check: lanes.filter((l) => l.state !== 'done').length } };
+}
+const catBuild = (over = {}) => buildTileRows({ ...fixture(), ...catFixture(), ...over });
+
+// Breaks if the old projectRows filters come back: a Done project past visible_until, or unassigned, leaves the table.
+test('categoryRows: a Done project past visible_until stays; unassigned is last as "No category yet"', () => {
+  const f = catFixture();
+  const c = categoryRows(f.projects, f.lanes, f.meta, TARGETS);
+  assert.deepEqual(c.rows.map((r) => r.key), ['re', 'lb', 'unassigned']);
+  assert.equal(c.rows[2].name, NO_CATEGORY_NAME);
+  assert.equal(NO_CATEGORY_NAME, 'No category yet');
+});
+
+// Breaks if the sort puts unassigned by its open count (3, the most), or a tie does not keep the project order.
+test('categoryRows: sorted by open count, ties keep project order, unassigned pinned last', () => {
+  const f = catFixture();
+  const extra = [lane({ id: 'l9', project: 'lb', state: 'ready', created_day: '2026-10-28' })];
+  const c = categoryRows(f.projects, [...f.lanes, ...extra], f.meta, TARGETS);
+  assert.deepEqual(c.rows.map((r) => r.key), ['re', 'lb', 'unassigned'], 'tie 2 open each: re first by project order');
+  const more = [lane({ id: 'l8', project: 'lb', state: 'ready', created_day: '2026-10-28' }), ...extra];
+  assert.deepEqual(categoryRows(f.projects, [...f.lanes, ...more], f.meta, TARGETS).rows.map((r) => r.key), ['lb', 're', 'unassigned']);
+});
+
+// Breaks if a reminder card is counted anywhere in tiles 8 to 10, or a born-done lane (no done_day) is not closed.
+test('categoryRows: counts per row, reminders out, born-done counts as closed', () => {
+  const f = catFixture();
+  const [re, lb, un] = categoryRows(f.projects, f.lanes, f.meta, TARGETS).rows;
+  assert.deepEqual([re.total, re.closed, re.open, re.blocked, re.created, re.closedWindow, re.net, re.waited, re.lastClose],
+    [4, 2, 2, 1, 1, 1, 0, 1, '2026-11-03']);
+  assert.deepEqual([lb.total, lb.closed, lb.open, lb.created, lb.closedWindow, lb.net, lb.waited], [2, 1, 1, 2, 1, 1, 0]);
+  assert.deepEqual([un.total, un.closed, un.open, un.created, un.net, un.lastClose], [3, 0, 3, 3, 3, null]);
+  assert.deepEqual(re.bands, { P0: 1, P1: 0, P2: 1, none: 0 });
+  assert.deepEqual(lb.bands, { P0: 0, P1: 1, P2: 0, none: 0 }, 'the P1 reminder l3 is not counted');
+});
+
+// Breaks if "No category yet" disappears when it has no cards, or a zero total divides.
+test('categoryRows: "No category yet" with 0 cards still shows 0 of 0; another empty category is left out', () => {
+  const f = catFixture();
+  const lanes = f.lanes.filter((l) => l.project !== 'unassigned');
+  const c = categoryRows([...f.projects, proj('empty')], lanes, f.meta, TARGETS);
+  assert.deepEqual(c.rows.map((r) => r.key), ['re', 'lb', 'unassigned']);
+  const rows = catBuild({ lanes, projects: [...f.projects, proj('empty')] });
+  assert.equal(text(rows, 'cat.row.3.name'), 'No category yet');
+  assert.equal(text(rows, 'cat.row.3.closed'), '0 of 0 closed');
+  assert.equal(byId(rows).get('cat.row.3.total').value, 0);
+  for (const r of rows) assert.ok(r.value === null || Number.isFinite(r.value), r.id);
+});
+
+// Breaks if a project key in the lanes but not in projects.json is dropped (the seat changes the rules later).
+test('categoryRows: a lane project missing from the projects list still gets a row, before unassigned', () => {
+  const f = catFixture();
+  const lanes = [...f.lanes, lane({ id: 'n1', project: 'newcat', state: 'ready', created_day: '2026-10-28' })];
+  assert.deepEqual(categoryRows(f.projects, lanes, f.meta, TARGETS).rows.map((r) => r.key), ['re', 'lb', 'newcat', 'unassigned']);
+});
+
+// Breaks if the cap cuts "No category yet", or the hidden count is wrong.
+test('categoryRows: the cap never cuts "No category yet"; cat.more names the hidden count', () => {
+  const f = catFixture();
+  const c = categoryRows(f.projects, f.lanes, f.meta, { ...TARGETS, category_rows: 2 });
+  assert.deepEqual(c.rows.map((r) => r.key), ['re', 'unassigned']);
+  assert.equal(c.hidden, 1);
+  const rows = catBuild({ targets: [...fixture().targets, { key: 'category_rows', value: 2 }] });
+  assert.equal(text(rows, 'cat.more'), '1 more category not shown');
+  assert.equal(byId(rows).get('page.rows.cat').value, 2);
+  assert.equal(DEFAULT_CATEGORY_ROWS, 9);
+  assert.ok(!byId(catBuild()).has('cat.more'));
+  assert.equal(byId(catBuild()).get('page.rows.cat').value, 9);
+});
+
+// Breaks if the category nets and the verdict net use two different lane sets (the reminder rule on one side only).
+test('verdictTile: net counts no reminder; the category nets sum to it; the day table sums to the week', () => {
+  const f = catFixture();
+  const v = verdictTile(f.lanes, f.meta, TARGETS);
+  assert.deepEqual([v.created, v.done, v.net, v.waited, v.reminders], [6, 2, 4, 1, 2]);
+  const cats = categoryRows(f.projects, f.lanes, f.meta, { ...TARGETS, category_rows: 99 });
+  assert.equal(cats.rows.reduce((s, r) => s + r.net, 0), v.net);
+  const days = dailyRows(f.lanes, f.meta, TARGETS);
+  assert.equal(days.reduce((s, d) => s + d.created, 0), v.created);
+  assert.equal(days.reduce((s, d) => s + d.closed, 0), v.done);
+});
+
+// Breaks if a verdict word, the share line or the reminder note changes wording or shows when it should not.
+test('tile 8: verdict words, share line only while the top category net is above 0, reminder note', () => {
+  const rows = catBuild();
+  assert.equal(text(rows, 'verdict.net'), '+4');
+  assert.equal(byId(rows).get('verdict.net').value, 4);
+  assert.equal(text(rows, 'verdict.growth'), 'Growing');
+  assert.equal(byId(rows).get('verdict.growth').tone, 'neutral', 'no earlier week: no verdict colour');
+  assert.equal(text(rows, 'verdict.sentence'), 'We create more cards than we close: net +4 in 7 days.');
+  assert.equal(text(rows, 'verdict.week'), 'In the 7 days to Nov 7, today so far: 6 created, 2 closed.');
+  assert.equal(text(rows, 'verdict.waited'), '1 of 2 closed cards waited 1 day or more.');
+  assert.equal(text(rows, 'verdict.share'), 'Largest net gain: No category yet, +3.');
+  assert.equal(text(rows, 'verdict.note'), '2 reminder cards are left out.');
+  const f = catFixture();
+  const closing = [...f.lanes, ...['x1', 'x2', 'x3', 'x4', 'x5'].map((id) => lane({ id, project: 'lb', state: 'done', created_day: '2026-10-28', done_day: '2026-11-04', done_at: '2026-11-04T15:00:00.000Z' }))];
+  const neg = catBuild({ lanes: closing });
+  assert.equal(text(neg, 'verdict.sentence'), 'We close more cards than we create: net -1 in 7 days.');
+  assert.ok(!byId(neg).has('verdict.share'));
+  const flat = catBuild({ lanes: closing.filter((l) => l.id !== 'x5') });
+  assert.equal(text(flat, 'verdict.sentence'), 'We create and close the same number of cards: net 0 in 7 days.');
+  const noRem = catBuild({ lanes: f.lanes.filter((l) => l.track !== 'reminders') });
+  assert.ok(!byId(noRem).has('verdict.note'));
+});
+
+// Breaks if the share line puts a category net beside a smaller page net ("+10 of the +2"), which reads as nonsense.
+test('tile 8: the share line never claims a part larger than the whole', () => {
+  const f = catFixture();
+  // lb closes 5 more cards in the window: lb net -4, page net -1 + ... => page net below the unassigned net of +3.
+  const lanes = [...f.lanes, ...['y1', 'y2', 'y3', 'y4'].map((id) => lane({ id, project: 'lb', state: 'done', created_day: '2026-10-28', done_day: '2026-11-04', done_at: '2026-11-04T15:00:00.000Z' }))];
+  const rows = catBuild({ lanes });
+  assert.equal(byId(rows).get('verdict.net').value, 0 + 3 + (2 - 5));
+  assert.equal(text(rows, 'verdict.net'), '0');
+  assert.ok(!byId(rows).has('verdict.share'), 'page net 0: no share line');
+  // Keep y1 and y2: lb net -1, page net +2, top category (No category yet) +3, larger than the page net.
+  const one = catBuild({ lanes: lanes.slice(0, -2) });
+  assert.equal(byId(one).get('verdict.net').value, 2);
+  const share = text(one, 'verdict.share');
+  assert.ok(!/ of the /.test(share), share);
+  assert.equal(share, 'Largest net gain: No category yet, +3.');
+});
+
+// Breaks if the earlier week shows without 14 days of history, or its numbers come from another window.
+test('tile 8: the earlier week shows only with a full earlier window', () => {
+  assert.ok(!byId(catBuild()).has('verdict.prior'));
+  const f = catFixture();
+  const lanes = [...f.lanes, lane({ id: 'p1', project: 'lb', state: 'done', created_day: '2026-10-26', done_day: '2026-10-27', done_at: '2026-10-27T15:00:00.000Z' })];
+  const rows = catBuild({ lanes, meta: { ...f.meta, history_start: '2026-10-20' } });
+  // Oct 25 to Oct 31: r2, r3, r4 and p1 created; only p1 closed (r4 is born done, with no day).
+  assert.equal(text(rows, 'verdict.prior'), 'Earlier 7 days: 4 created, 1 closed, net +3.');
+});
+
+// Breaks if a category row loses its words, the bar inputs, or the growth chip shows on a net of 0.
+test('tile 9: category row text, bar inputs, growth chip only on a net that is not 0', () => {
+  const rows = catBuild();
+  assert.equal(text(rows, 'cat.row.1.name'), 'Review engine');
+  assert.equal(text(rows, 'cat.row.1.closed'), '2 of 4 closed');
+  assert.equal(byId(rows).get('cat.row.1.closed').value, 2);
+  assert.equal(byId(rows).get('cat.row.1.total').value, 4);
+  assert.equal(text(rows, 'cat.row.1.meta'), '2 open, 1 blocked · 7 days: 1 created, 1 closed, net 0 · 1 waited · last close Nov 3');
+  assert.equal(text(rows, 'cat.row.1.bands'), 'Open by band: P0 1 · P1 0 · P2 1 · none 0');
+  assert.ok(!byId(rows).has('cat.row.1.chip.growth'));
+  assert.equal(text(rows, 'cat.row.2.meta'), '1 open · 7 days: 2 created, 1 closed, net +1 · 0 waited · last close Nov 6');
+  assert.equal(text(rows, 'cat.row.2.chip.growth'), 'Growing');
+  assert.equal(text(rows, 'cat.row.3.meta'), '3 open · 7 days: 3 created, 0 closed, net +3');
+  assert.equal(text(rows, 'cat.note'), 'Closed includes dropped cards. Reopened cards count as open. Reminder cards are left out.');
+  assert.ok(byId(rows).get('cat.row.1.name').rank === 1 && byId(rows).get('cat.row.3.bands').rank === 3);
+});
+
+// Breaks if " (parked)" reaches a category name (export-dash-data.db.test asserts no "(parked)" in tiles.json),
+// or a parked category loses the Parked chip that says it instead.
+test('tile 9: a parked category name loses " (parked)" and gets a Parked chip', () => {
+  const f = catFixture();
+  const projects = f.projects.map((p) => (p.key === 'lb' ? { ...p, name: 'Lane board (parked)', parked: true } : p));
+  const rows = catBuild({ projects });
+  assert.ok(!JSON.stringify(rows).includes('(parked)'));
+  assert.equal(text(rows, 'cat.row.2.name'), 'Lane board');
+  assert.equal(text(rows, 'cat.row.2.chip.parked'), 'Parked');
+  assert.ok(!byId(rows).has('cat.row.1.chip.parked'));
+});
+
+// Breaks if the day table changes length, order or the "today so far" label, or net is not created minus closed.
+test('tile 10: seven days oldest first, last label "today so far", net is created minus closed', () => {
+  const rows = catBuild();
+  const labels = [1, 2, 3, 4, 5, 6, 7].map((i) => text(rows, `daily.row.${i}.label`));
+  assert.deepEqual(labels, ['Nov 1', 'Nov 2', 'Nov 3', 'Nov 4', 'Nov 5', 'Nov 6', 'today so far']);
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((i) => byId(rows).get(`daily.row.${i}.created`).value), [0, 1, 1, 1, 2, 1, 0]);
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((i) => byId(rows).get(`daily.row.${i}.closed`).value), [0, 0, 1, 0, 0, 1, 0]);
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((i) => text(rows, `daily.row.${i}.net`)), ['0', '+1', '0', '+1', '+2', '0', '0']);
+  assert.ok(!byId(rows).has('daily.row.8.label'));
+  assert.equal(text(rows, 'daily.note'), "Rebuilt from today's card states.");
+  assert.equal(text(rows, 'daily.summary'), 'In the 7 days to Nov 7, closed beat created on 0 of 7 days.');
+});
+
+// Breaks if a lane title or a lane id reaches a row of tiles 8 to 10 (seat condition a: names and counts only).
+test('tiles 8 to 10: no lane title and no lane id in any row', () => {
+  const f = catFixture();
+  const rows = catBuild().filter((r) => [8, 9, 10].includes(r.tile));
+  assert.ok(rows.length > 30);
+  const out = JSON.stringify(rows);
+  for (const l of f.lanes) {
+    assert.ok(!out.includes(l.title), l.title);
+    assert.ok(!new RegExp(`\\b${l.id}\\b`).test(out), l.id);
+  }
+});
+
+// Breaks if an empty board throws in tiles 8 to 10, or "No category yet" is missing from it.
+test('tiles 8 to 10: an empty board gives words, not a throw', () => {
+  const rows = buildTileRows({
+    lanes: [], assignments: [], projects: [proj('unassigned', { status: 'no_end' })], targets: fixture().targets,
+    meta: { ...META_BASE, history_start: null, open_check: 0, done_check: 0 }, snapshots: [],
+  });
+  assert.equal(text(rows, 'verdict.sentence'), 'No cards in this export.');
+  assert.equal(text(rows, 'cat.row.1.name'), 'No category yet');
+  assert.equal(text(rows, 'cat.row.1.closed'), '0 of 0 closed');
+  assert.equal(text(rows, 'daily.row.7.label'), 'today so far');
+});
+
+// ---------------------------------------------------------------- goalOf (fleetops-category-expand)
+
+test('goalOf: keeps only the sentence before " | "; the SHA and test counts after it never pass', () => {
+  // Breaks if the cut at " | " goes: the rest of a lane note holds SHAs and test text.
+  assert.equal(goalOf('GOAL: let Dave see the work. | NEXT: run 34/34 at abc1234 | MS: x.md'), 'let Dave see the work.');
+});
+
+test('goalOf: each stop word cuts, whichever comes first', () => {
+  // Breaks if one stop word is dropped from the list, or the latest stop wins over the first.
+  assert.equal(goalOf('GOAL: a b WAITS ON the seat'), 'a b');
+  assert.equal(goalOf('GOAL: a b NEXT: tests'), 'a b');
+  assert.equal(goalOf('GOAL: a b MS: C:/x.md'), 'a b');
+  assert.equal(goalOf('GOAL: a NEXT b WAITS ON c | d'), 'a');
+});
+
+test('goalOf: "GOAL:" must start the note; later in the note it does not count', () => {
+  // Breaks if the parser searches for GOAL: anywhere: an old note after "|| before:" would leak a stale goal.
+  assert.equal(goalOf('Dave (kanban): moved || before: GOAL: old goal'), null);
+  assert.equal(goalOf('  GOAL: spaced  '), 'spaced');
+});
+
+test('goalOf: a park note is cut through its first " || " as lane.mjs writes it', () => {
+  // Breaks if only "PARKED until ... -- " is skipped: the park reason would come first and hide the GOAL.
+  const note = 'PARKED until 2026-11-14 09:00 CST -- waits on Dave || GOAL: ship the expand rows. | NEXT: page';
+  assert.equal(goalOf(note), 'ship the expand rows.');
+  assert.equal(goalOf('PARKED until 2026-11-14 09:00 CST -- waits on Dave'), null);
+});
+
+test('goalOf: a session handle and a SHA inside the sentence are masked', () => {
+  // Breaks if the handle rule or the 7 to 40 hex rule (seat word 10:51) goes.
+  assert.equal(goalOf('GOAL: help #0f5ea433 land 71e3bc68 and 4c4b5eb5d1'), 'help #[handle] land [sha] and [sha]');
+  // A word of only a to f letters, or only digits, is not a SHA.
+  assert.equal(goalOf('GOAL: a faded 2026111 decade'), 'a faded 2026111 decade');
+});
+
+test('goalOf: a whole session uuid is masked, letters-only parts included (CodeRabbit CLI, pre-pr a325502)', () => {
+  // Breaks if a uuid in the GOAL sentence reaches lanes.json: the handle rule needs "#", the SHA rule needs a digit.
+  assert.equal(goalOf('GOAL: help aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee and b2b46d90-5361-424d-a80d-bfe4f49674e6 now'), 'help [id] and [id] now');
+  assert.equal(goalOf('GOAL: ask #B2B46D90-5361-424D-A80D-BFE4F49674E6 first'), 'ask [id] first');
+});
+
+test('goalOf: ids joined to a word by "_" are still masked (CodeRabbit CLI, pre-pr 2efd658)', () => {
+  // Breaks if the masks need a word boundary: "_" is a word character, so \b sees none before the id.
+  assert.equal(goalOf('GOAL: inspect session_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee now'), 'inspect session_[id] now');
+  assert.equal(goalOf('GOAL: land x_abc1234 and #0f5ea433_y'), 'land x_[sha] and #[handle]_y');
+});
+
+test('goalOf: the sentence ends at " || " (kanban and park keep the old note after it) (CodeRabbit CLI, pre-pr 2efd658)', () => {
+  // Breaks if " || before: <old note>" stays in the goal: " || " holds no " | ".
+  assert.equal(goalOf('GOAL: ship. || before: private old note'), 'ship.');
+});
+
+test('goalOf: a long sentence is cut at a word boundary with an ellipsis', () => {
+  // Breaks if there is no cut (lanes.json size) or the cut splits a word.
+  const g = goalOf(`GOAL: ${'word '.repeat(80)}`);
+  assert.ok(g.length <= GOAL_MAX, String(g.length));
+  assert.ok(g.endsWith('…'));
+  assert.match(g.slice(0, -1), /\bword$/);
+});
+
+test('goalOf: no GOAL gives null, never the raw note', () => {
+  // Breaks if a missing goal falls back to the note text.
+  for (const n of [null, undefined, 42, '', 'just a status', 'GOAL:', 'GOAL:   | NEXT: x']) assert.equal(goalOf(n), null, String(n));
+});
+
+test('isParkedNote: true only for a note that starts with "PARKED until "', () => {
+  // Breaks if a parked held lane reads as active work (seat word 10:51, item 6a).
+  assert.equal(isParkedNote('PARKED until 2026-11-14 -- x || GOAL: y'), true);
+  assert.equal(isParkedNote('GOAL: y | PARKED until later'), false);
+  assert.equal(isParkedNote(null), false);
+});
+
+test('tile 9: each category row carries its project key; "No category yet" has key unassigned', () => {
+  // Breaks if the page cannot find a row's cards in lanes.json (it filters on this key).
+  const rows = catBuild();
+  const f = { ...fixture(), ...catFixture() };
+  const keys = categoryRows(f.projects, f.lanes, f.meta, f.targets ?? TARGETS).rows.map((r) => r.key);
+  keys.forEach((k, i) => assert.equal(text(rows, `cat.row.${i + 1}.key`), k));
+  assert.equal(text(rows, `cat.row.${keys.length}.key`), 'unassigned');
+  assert.ok(keys.length >= 2);
 });

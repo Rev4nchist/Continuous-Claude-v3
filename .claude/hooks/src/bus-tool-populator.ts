@@ -21,6 +21,7 @@
 import { readFileSync, statSync, realpathSync } from 'fs';
 import { resolve, relative, isAbsolute } from 'path';
 import { mutateBus, addFileInPlay } from './shared/context-bus.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 interface HookInput {
   tool_name?: string;
@@ -159,6 +160,11 @@ function main(): void {
     const raw = readFileSync(0, 'utf-8').trim();
     if (raw) input = JSON.parse(raw);
   } catch {
+    console.log('{}');
+    return;
+  }
+  // Under cursor-agent (the review engine): no bus file in the reviewed tree (card engine-run-hook-files).
+  if (isEngineHost(input)) {
     console.log('{}');
     return;
   }

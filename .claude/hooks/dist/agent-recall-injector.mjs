@@ -1002,6 +1002,18 @@ var FOCUS_SYMBOLS_CAP = 50;
 var RECENT_FINDINGS_CAP = 50;
 var OPEN_THREADS_CAP = 50;
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/shared/bus-focus.ts
 var BUS_STALENESS_MAX_AGE = 3;
 var MAX_FOCUS_TERMS = 8;
@@ -1318,6 +1330,10 @@ async function main() {
   } catch (e) {
     log2.warn("failed to parse stdin", { error: e?.message });
     outputContinue();
+    return;
+  }
+  if (isEngineHost(input)) {
+    console.log("{}");
     return;
   }
   const out = handleAgentTask(input);

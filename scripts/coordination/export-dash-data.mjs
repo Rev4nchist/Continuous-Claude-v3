@@ -14,14 +14,24 @@
  *   flow = flat rows of the Flow figures (claimed, done, created and reopened per day, week totals, median claim to done,
  *   rework rate), computed in Node by lane-dash-flow.mjs (schema in that file). The Fleet app reads it. It is NOT a
  *   FleetOps dashboard source: the fleetops-refresh skill copies seven files and never uploads flow.json.
- * Plus refresh.json, the refresh trigger doc (not a dataset). See buildRefreshDoc.
+ * Plus refresh.json, the refresh trigger doc (not a dataset). See buildRefreshDoc. It carries largest_doc, the largest
+ * document and its share of the cap, for the harness doctor. A failed check writes export-error.json instead (reason
+ * 'size' or 'checks'); the next good export removes it.
+ *
+ * lanes.json holds the open lanes only (fleetops-lanes-file-size, 2026-11-13). Every figure (tiles, flow, snapshots,
+ * project counts and the open-count check) is built from the full lane list in memory before that cut, so no figure
+ * changes. meta carries lanes_rows_total and lanes_rows_written. The page reads lanes.json for open cards only.
+ * lanes-all.json keeps the full list on this machine for local tools and tests: not a dataset, never uploaded.
  *
  * Database: SELECT only, in BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY with default_transaction_read_only=on.
  * Connection chain as lane.mjs: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL, OPC_POSTGRES_URL, local default.
  * Scope: project_key = the config board ('continuous-claude'). Another board's lanes and events never appear.
  * The DB clock is UTC. Every day bucket is America/Chicago.
  *
- * What is NOT exported: lane.note, scope, rationale, done_when text, event bodies, session ids or 8-hex handles.
+ * What is NOT exported: the raw lane.note, scope, rationale, done_when text, event bodies, session ids or 8-hex handles.
+ * A held lane (owner not null) also gets goal, holder and parked (heldFields): goal is only the GOAL sentence that
+ * starts its note (goalOf in lane-dash-metrics.mjs), holder is only the session's chosen name from its identity file
+ * while the lease is live (holderName), parked says the note is a park note. Every other lane row has none of the three keys.
  * Lane titles are exported (cut at a word boundary to TITLE_MAX characters, with an ellipsis). A '#' plus 8 hex digits in a title becomes '#[handle]'. The lanes rows follow a column allowlist.
  *
  * Meanings:
@@ -52,12 +62,57 @@ import { requireDep } from '../lib/resolve-deps.mjs';
 import { loadConfig } from './lane-dash-config.mjs';
 import { loadProjectRules, projectOf, UNASSIGNED } from './lane-dash-project.mjs';
 import { buildFlowRows } from './lane-dash-flow.mjs';
-import { buildTileRows } from './lane-dash-metrics.mjs';
+import { buildTileRows, goalOf, isParkedNote } from './lane-dash-metrics.mjs';
+import { NAME_CLIP, readIdentity } from './session-label.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
 
 export const DOC_CAP_BYTES = 256 * 1024;
+/** A document at this share of DOC_CAP_BYTES or more gets a WARN line in the export log. */
+export const SIZE_WARN_PCT = 75;
+/** Written in the out folder when the checks fail; removed by the next good export. The harness doctor reads it. */
+export const EXPORT_ERROR = 'export-error.json';
+/** The full lane list, for local tools and tests only: not a dataset, not in refresh.json, never uploaded, no cap. */
+export const LANES_ALL = 'lanes-all.json';
+const pctOf = (bytes) => Math.round((bytes / DOC_CAP_BYTES) * 100);
+// refresh.json and lanes-all.json are no datasets: never uploaded, so no cap and no warning.
+const isDataset = (f) => f.name !== 'refresh.json' && f.name !== LANES_ALL;
+
+/** The largest dataset document as {name, bytes, pct}, or null when there is none. `files` is [{name, bytes}]. */
+export function sizeReport(files) {
+  const docs = files.filter(isDataset);
+  if (!docs.length) return null;
+  const top = docs.reduce((a, b) => (b.bytes > a.bytes ? b : a));
+  return { name: top.name, bytes: top.bytes, pct: pctOf(top.bytes) };
+}
+
+/** One WARN line for each dataset document at SIZE_WARN_PCT of the cap or more. */
+export function sizeWarnings(files) {
+  return files.filter((x) => isDataset(x) && pctOf(x.bytes) >= SIZE_WARN_PCT)
+    .map((x) => `WARN size: ${x.name} ${x.bytes} of ${DOC_CAP_BYTES} bytes (${pctOf(x.bytes)}%)`);
+}
+
+/** The documents as written: lanes keeps the open lanes only; meta says how many rows exist and how many were written. */
+function writtenEnvelopes(full) {
+  const all = full.lanes.rows;
+  const open = all.filter((l) => l.state !== 'done');
+  return {
+    ...full,
+    lanes: {
+      ...full.lanes,
+      sql: `${full.lanes.sql}\n-- written: open lanes only (state <> 'done'). Done lanes are counted in tiles, flow and snapshots before this cut.`,
+      rows: open,
+    },
+    meta: { ...full.meta, rows: full.meta.rows.map((r, i) => (i === 0 ? { ...r, lanes_rows_total: all.length, lanes_rows_written: open.length } : r)) },
+  };
+}
+
+function writeExportError(outDir, err) {
+  const problems = Array.isArray(err.problems) ? err.problems : [String(err.message)];
+  const reason = problems.some((p) => /over the \d+ byte/.test(p)) ? 'size' : 'checks';
+  writeFileSync(path.join(outDir, EXPORT_ERROR), `${JSON.stringify({ at: new Date().toISOString(), reason, problems }, null, 2)}\n`);
+}
 /** Longest exported lane title, ellipsis included. The page clamps a row to two lines; this keeps the file small. */
 export const TITLE_MAX = 160;
 
@@ -71,6 +126,26 @@ export function cutTitle(title, max = TITLE_MAX) {
   const keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room);
   return `${keep.trimEnd()}…`;
 }
+/** A session name as the dashboard may show it: clipped, hex ids and handles removed, or null. */
+export function holderName(name) {
+  if (typeof name !== 'string') return null;
+  const s = name.replace(/#?[0-9a-f]{8}[0-9a-f-]*/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, NAME_CLIP).trim();
+  return s || null;
+}
+
+const sessionName = (uuid) => readIdentity(uuid)?.name ?? null;
+
+/**
+ * The three keys a held lane adds to its lanes row, or {} for a lane with no owner. The raw note and the session id
+ * are read here and never returned. holder is null when the lease ended: a gone session is not named.
+ */
+export function heldFields(l, exportedAt, nameOf = sessionName) {
+  if (!l.owner_session_id) return {};
+  const lease = l.lease_expires_at ? new Date(l.lease_expires_at).getTime() : NaN;
+  const live = Number.isFinite(lease) && lease > Date.parse(exportedAt);
+  return { goal: goalOf(l.note), holder: live ? holderName(nameOf(l.owner_session_id)) : null, parked: isParkedNote(l.note) };
+}
+
 export const DATASETS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles', 'flow'];
 const TZ = 'America/Chicago';
 const LOCK_STALE_MS = 10 * 60 * 1000;
@@ -141,14 +216,14 @@ export function buildProjectRows(rules, lanes, config) {
     const doneAt = doneAts.length ? doneAts[doneAts.length - 1] : null;
     const doneDay = chicagoDay(doneAt);
     return {
-      key: p.key, name: p.name, goal: p.goal, done_when: p.done,
+      key: p.key, name: p.name, goal: p.goal, next_goal: p.next_goal ?? '', done_when: p.done,
       terminal_lanes: ids.join(', '), terminal_total: ids.length, terminal_done: done.length,
       status, done_at: doneAt, done_day: doneDay, visible_until: doneDay ? addDays(doneDay, visibleDays) : null,
       parked: p.parked, proposed: p.proposed, focus: p.focus,
     };
   });
   rows.push({
-    key: UNASSIGNED, name: 'Unassigned', goal: 'No project rule matches yet.', done_when: 'Give each lane a project rule.',
+    key: UNASSIGNED, name: 'Unassigned', goal: 'No project rule matches yet.', next_goal: '', done_when: 'Give each lane a project rule.',
     terminal_lanes: '', terminal_total: 0, terminal_done: 0, status: 'no_end', done_at: null, done_day: null, visible_until: null,
     parked: false, proposed: false, focus: false,
   });
@@ -156,7 +231,7 @@ export function buildProjectRows(rules, lanes, config) {
 }
 
 /** Throws one Error (with .problems) listing every failed check. */
-export function checkInvariants({ envelopes, directOpen, bornDone = [] }) {
+export function checkInvariants({ envelopes, directOpen, bornDone = [], fullLanes = null }) {
   const born = new Set(bornDone);
   const problems = [];
   const stamps = new Set();
@@ -168,7 +243,8 @@ export function checkInvariants({ envelopes, directOpen, bornDone = [] }) {
     if (bytes > DOC_CAP_BYTES) problems.push(`${d}.json is ${bytes} bytes, over the ${DOC_CAP_BYTES} byte (256 KB) cap`);
   }
   if (stamps.size > 1) problems.push(`exportedAt differs between documents: ${[...stamps].join(', ')}`);
-  const lanes = envelopes?.lanes?.rows ?? [];
+  // Counts and projects read the full lane list when given (writeExport passes it): lanes.json holds open lanes only.
+  const lanes = fullLanes ?? envelopes?.lanes?.rows ?? [];
   const keys = new Set((envelopes?.projects?.rows ?? []).map((p) => p.key));
   for (const l of lanes) if (!keys.has(l.project)) problems.push(`lane ${l.id} has project '${l.project}', which is not in the projects rows`);
   const today = envelopes?.meta?.rows?.[0]?.today;
@@ -195,7 +271,7 @@ export function checkInvariants({ envelopes, directOpen, bornDone = [] }) {
  * clearRefreshPending resets it only for the same key, so an older upload never hides a newer export.
  * Wiring the clearing call to a hook (HOOK_TOOLS and the settings matcher) is a later PR, not this file. It needs Dave's yes on hooks. A held lock makes clearRefreshFile throw, so that hook must retry.
  */
-export function buildRefreshDoc(exportedAt, files) {
+export function buildRefreshDoc(exportedAt, files, largest = null) {
   return {
     pending: true,
     key: exportedAt,
@@ -203,6 +279,7 @@ export function buildRefreshDoc(exportedAt, files) {
     files: [...files],
     cleared_at: null,
     clear_with: { tool: 'ArtifactData', action: 'write', target: 'datasets/lanes' },
+    ...(largest ? { largest_doc: largest } : {}),
   };
 }
 
@@ -313,10 +390,18 @@ export function writeExport(outDir, collected) {
         rows: upsertSnapshot(prior, row),
       },
     };
-    const envelopes = { ...withSnaps, tiles: buildTilesEnvelope(withSnaps, exportedAt), flow: buildFlowEnvelope(withSnaps, collected, exportedAt) };
-    checkInvariants({ envelopes, directOpen: collected.directOpen, bornDone: collected.bornDone });
+    const full = { ...withSnaps, tiles: buildTilesEnvelope(withSnaps, exportedAt), flow: buildFlowEnvelope(withSnaps, collected, exportedAt) };
+    const envelopes = writtenEnvelopes(full);
+    try {
+      checkInvariants({ envelopes, fullLanes: full.lanes.rows, directOpen: collected.directOpen, bornDone: collected.bornDone });
+    } catch (err) {
+      writeExportError(outDir, err);
+      throw err;
+    }
     const files = DATASETS.map((d) => ({ name: `${d}.json`, text: JSON.stringify(envelopes[d]) }));
-    files.push({ name: 'refresh.json', text: JSON.stringify(buildRefreshDoc(exportedAt, DATASETS.map((d) => `${d}.json`)), null, 2) });
+    const largest = sizeReport(files.map((x) => ({ name: x.name, bytes: Buffer.byteLength(x.text) })));
+    files.push({ name: 'refresh.json', text: JSON.stringify(buildRefreshDoc(exportedAt, DATASETS.map((d) => `${d}.json`), largest), null, 2) });
+    files.push({ name: LANES_ALL, text: JSON.stringify(full.lanes) });
     for (const f of files) {
       const tmp = path.join(outDir, `${f.name}.tmp`);
       writeFileSync(tmp, f.text);
@@ -328,7 +413,8 @@ export function writeExport(outDir, collected) {
     if (existsSync(snapFile) && (firstOfDay || !existsSync(`${snapFile}.bak`))) copyFileSync(snapFile, `${snapFile}.bak`);
     for (const f of files) renameSync(path.join(outDir, `${f.name}.tmp`), path.join(outDir, f.name));
     temps.length = 0;
-    return { exportedAt, files: files.map((f) => ({ name: f.name, bytes: Buffer.byteLength(f.text) })), envelopes };
+    try { unlinkSync(path.join(outDir, EXPORT_ERROR)); } catch { /* no earlier failure */ }
+    return { exportedAt, files: files.map((f) => ({ name: f.name, bytes: Buffer.byteLength(f.text) })), envelopes, allLanes: full.lanes.rows };
   } finally {
     for (const t of temps) { try { unlinkSync(t); } catch { /* already gone */ } }
     try { unlinkSync(lock); } catch { /* already gone */ }
@@ -407,6 +493,7 @@ const SQL_LANES = `WITH ev AS (
   CROSS JOIN LATERAL (SELECT split_part(coalesce(e.body, ''), ' || before:', 1) AS head) h
   WHERE l2.project_key = $1 GROUP BY e.lane_id)
 SELECT l.id, left(regexp_replace(l.title, '#[0-9a-f]{8}', '#[handle]', 'g'), 400) AS title, l.track, l.band, l.state, l.priority, l.created_at, l.lease_expires_at,
+  l.owner_session_id, CASE WHEN l.owner_session_id IS NOT NULL THEN l.note END AS note,
   (l.owner_session_id IS NOT NULL) AS held, (coalesce(l.done_when, '') <> '') AS has_done_when,
   ev.first_claim, CASE WHEN l.state = 'done' THEN ev.done_ev END AS done_at, ev.last_work, ev.dave_ask,
   coalesce(ev.claims, 0) AS claims
@@ -473,6 +560,7 @@ export async function collect(client, { rules, config }) {
     last_work_at: iso(l.last_work), dave_ask_at: iso(l.dave_ask),
     lease_expires_at: iso(l.lease_expires_at), held: l.held, has_done_when: l.has_done_when,
     terminal: terminal.has(l.id), claims: Number(l.claims),
+    ...heldFields(l, exportedAt),
   }));
 
   const claims = (await rows(SQL_CLAIMS)).map((r) => ({
@@ -558,7 +646,9 @@ export async function main(argv = process.argv.slice(2)) {
   const result = writeExport(out, collected);
   console.log(`exported at ${result.exportedAt} (UTC) to ${out}`);
   for (const f of result.files) console.log(`  ${f.name.padEnd(18)} ${String(f.bytes).padStart(7)} bytes`);
-  const lanes = result.envelopes.lanes.rows;
+  for (const w of sizeWarnings(result.files)) console.log(w);
+  const lanes = result.allLanes;
+  console.log(`lanes.json: ${result.envelopes.lanes.rows.length} open lanes written of ${lanes.length}`);
   const by = (key, rows) => rows.reduce((m, r) => ({ ...m, [r[key]]: (m[r[key]] || 0) + 1 }), {});
   console.log(`states ${JSON.stringify(by('state', lanes))}`);
   console.log(`open by project ${JSON.stringify(by('project', lanes.filter((l) => l.state !== 'done')))}`);

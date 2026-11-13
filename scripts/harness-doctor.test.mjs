@@ -57,7 +57,7 @@ import { requireDep } from './lib/resolve-deps.mjs';
 import {
   parseArgs, parseCsv, scheduleChecks, blocklistAge, registryProjectRows, laneBoardColumns, laneSchema,
   lanesShim, laneHookClientVersion, hooksRenderCheck, hooksDistParity, lanePathGuardCheck, depsHooksInstall, depsStoreLink,
-  reminderSyncCheck,
+  reminderSyncCheck, fleetopsSize,
 } from './harness-doctor.mjs';
 import { assertScratchUrl } from './coordination/scratch-db.mjs';
 
@@ -2186,4 +2186,39 @@ test('hooks:trace-fresh is the off WARN when CCV3_HOOK_TRACE is 0 in the process
   assert.match(c.detail, /off/);
   put(liveFile(fx.home), JSON.stringify({ env: { CCV3_HOOK_TRACE: '1' } }));
   assert.equal(traceCheck(fx).status, 'FAIL', 'value 1 is not off: no day file is a FAIL again');
+});
+
+// ---- fleetops export size (fleetops-lanes-file-size part 2)
+const dashHome = (files = {}) => {
+  const home = mkdtempSync(join(tmpdir(), 'dash-home-'));
+  for (const [name, body] of Object.entries(files)) put(join(home, '.claude', 'state', 'lane-dash', name), typeof body === 'string' ? body : JSON.stringify(body));
+  return { home };
+};
+
+test('fleetopsSize: PASS with no export, with no size recorded, or under 75%', () => {
+  // Breaks if a machine with no export, or an old refresh.json, shows a false warning.
+  assert.equal(fleetopsSize(dashHome()).status, 'PASS');
+  assert.equal(fleetopsSize(dashHome({ 'refresh.json': { pending: true } })).status, 'PASS');
+  assert.equal(fleetopsSize(dashHome({ 'refresh.json': { largest_doc: { name: 'lanes.json', bytes: 77346, pct: 30 } } })).status, 'PASS');
+});
+
+test('fleetopsSize: WARN at 75% of the limit or more, and names the file', () => {
+  // Breaks if the early warning does not reach the doctor line.
+  const r = fleetopsSize(dashHome({ 'refresh.json': { largest_doc: { name: 'lanes.json', bytes: 200000, pct: 76 } } }));
+  assert.equal(r.status, 'WARN');
+  assert.match(r.detail, /lanes\.json.*200000.*76%/);
+});
+
+test('fleetopsSize: FAIL when the last export stopped on the size limit; WARN for another failed check', () => {
+  // Breaks if a stopped export (no new data on the dashboard) is not a FAIL.
+  const size = fleetopsSize(dashHome({ 'export-error.json': { at: '2026-11-13T18:00:00Z', reason: 'size', problems: ['lanes.json is 300000 bytes, over the 262144 byte (256 KB) cap'] } }));
+  assert.equal(size.status, 'FAIL');
+  assert.match(size.detail, /limit/);
+  const other = fleetopsSize(dashHome({ 'export-error.json': { at: '2026-11-13T18:00:00Z', reason: 'checks', problems: ['open count'] } }));
+  assert.equal(other.status, 'WARN');
+});
+
+test('fleetopsSize: a file that does not parse is a WARN, not a crash', () => {
+  // Breaks if a half-written file throws and hides the other doctor checks.
+  assert.equal(fleetopsSize(dashHome({ 'refresh.json': '{not json' })).status, 'WARN');
 });

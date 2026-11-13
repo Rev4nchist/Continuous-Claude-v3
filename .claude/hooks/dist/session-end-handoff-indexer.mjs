@@ -371,6 +371,18 @@ function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform 
   return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/session-end-handoff-indexer.ts
 var RECENT_WINDOW_MS = 10 * 6e4;
 var HANDOFF_EXTS = [".yaml", ".yml", ".md"];
@@ -504,6 +516,10 @@ async function main() {
     const raw = await readStdin();
     if (raw.trim()) input = JSON.parse(raw);
   } catch {
+  }
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const opcDir = getOpcDir();

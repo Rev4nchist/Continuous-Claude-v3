@@ -24,6 +24,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 interface SessionEndInput {
   session_id?: string;
@@ -257,6 +258,13 @@ async function main(): Promise<void> {
     if (raw.trim()) input = JSON.parse(raw) as SessionEndInput;
   } catch {
     // Fall through: empty input is treated as "no recent handoff"
+  }
+
+  // Under cursor-agent (the review engine): no log file in the reviewed tree, no indexer run
+  // (card engine-run-hook-files).
+  if (isEngineHost(input)) {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
   }
 
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();

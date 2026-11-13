@@ -58,6 +58,7 @@ function harness({ cap = null, ledgerRows = null, ledgerOverride = null, merges 
     ledgerPath,
     cliCap: () => cap,
     branch: () => 'fix/x',
+    answerKey: () => null,
     gh: (args) => {
       calls.gh.push(args);
       if (ghError) throw new Error(ghError);
@@ -85,6 +86,24 @@ test('CF1: the CLI runs `review --agent --committed --base-commit <newest review
   assert.ok(h.calls.runs[0].timeoutMs >= 15 * 60_000, 'a review needs at least 15 minutes (coderabbit-cli.md)');
   assert.ok(!h.calls.runs[0].args.some((a) => /use-credits|api-key/.test(a)), 'never a billing or key flag');
   assert.ok(FIX.CR_FIX_ARGS(OLD).every((a) => !/use-credits|api-key/.test(a)));
+});
+
+test('CF-AK: a range with an answer-key path stops before the CLI starts (the guard of pre-pr.mjs, no run, no output file)', async () => {
+  const h = harness();
+  h.deps.answerKey = () => 'the diff holds an answer-key path (scripts/eval/review-eval/gold/g.json, 1 in all)';
+  const r = await h.go();
+  assert.equal(h.calls.runs.length, 0);
+  assert.equal(r.exitCode, 2);
+  assert.match(r.reason, /answer-key path/);
+});
+
+test('CF-AK2: with no stub the real guard is wired in and fails closed on a checkout git cannot read: no CLI run', async () => {
+  const h = harness();
+  delete h.deps.answerKey;
+  const r = await h.go({ cwd: path.join(os.tmpdir(), 'crfix-no-such-dir') });
+  assert.equal(h.calls.runs.length, 0);
+  assert.equal(r.exitCode, 2);
+  assert.match(r.reason, /could not check the diff/);
 });
 
 test('CF2: the base is the NEWEST CodeRabbit review with a body; people, empty thread replies and older rounds are skipped', async () => {

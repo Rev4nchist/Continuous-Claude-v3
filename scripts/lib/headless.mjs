@@ -143,7 +143,10 @@ export async function runClaude({ prompt, model = 'sonnet', timeoutMs = 180_000,
   return { ok, id: reserved.id, exit: run.status, stdout: run.stdout, stderr: run.stderr, result: parsed.result, costUsd: parsed.costUsd, usage: parsed.usage, timedOut: Boolean(run.timedOut), durationMs: run.durationMs, error: run.error };
 }
 
-/** The judge call: sonnet, purpose eval-judge. The prompt carries the whole job; no tools run. */
+/**
+ * The judge call: Opus at effort high (Dave 2026-11-13), purpose eval-judge. The prompt carries the whole job; no tools run.
+ * The prompt stays v0 (judge.mjs judgePrompt): prompt v1 is measured only on the label pre-check pair type.
+ */
 export function runJudge(prompt, { timeoutMs = 180_000, ...deps } = {}) {
-  return runClaude({ prompt, model: 'sonnet', timeoutMs, purpose: 'eval-judge' }, deps);
+  return runClaude({ prompt, model: 'opus', effort: 'high', timeoutMs, purpose: 'eval-judge' }, deps);
 }

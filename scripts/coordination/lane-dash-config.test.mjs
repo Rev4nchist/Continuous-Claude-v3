@@ -12,6 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, normalizeConfig, LIMIT_KEYS } from './lane-dash-config.mjs';
+import { loadProjectRules, projectOf } from './lane-dash-project.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_FILE = path.join(HERE, 'lane-dash.config.json');
@@ -76,11 +77,11 @@ describe('the committed lane-dash.config.json', () => {
     assert.ok(row(cfg, 'project_rows').source.length > 0);
   });
 
-  it('the file lists every default target, so the targets document has 14 rows and no key is left to the defaults', () => {
+  it('the file lists every default target, so the targets document has 15 rows and no key is left to the defaults', () => {
     // Breaks if a default target (such as project_rows) is added to the loader and not to the committed file, or the other way round.
     const fileKeys = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')).targets.map((t) => t.key);
     assert.deepEqual([...fileKeys].sort(), normalizeConfig({}).targets.map((t) => t.key).sort());
-    assert.equal(cfg.targets.length, 14);
+    assert.equal(cfg.targets.length, 15);
   });
 
   it('keeps Done projects visible for 28 days and names the board', () => {
@@ -112,5 +113,36 @@ describe('loadConfig', () => {
     const f = path.join(tmp, 'bad.json');
     fs.writeFileSync(f, '{oops');
     assert.throws(() => loadConfig(f), /bad\.json/);
+  });
+});
+
+describe('the real config and the real project rules agree (fleetops-lanes-file-size part 1)', () => {
+  const rules = loadProjectRules(path.join(HERE, 'lane-projects.json'));
+
+  it('category_rows shows every category plus "No category yet"', () => {
+    // Breaks if a category is added to lane-projects.json and category_rows is not raised: the last row would hide.
+    const cap = loadConfig(CONFIG_FILE).targets.find((t) => t.key === 'category_rows').value;
+    assert.ok(cap >= rules.projects.length + 1, `category_rows ${cap} < ${rules.projects.length} categories + 1`);
+  });
+
+  it('every category has a plain next goal', () => {
+    // Breaks if a category loses its next_goal: its row then shows no Next goal line.
+    for (const p of rules.projects) assert.ok(p.next_goal.trim().length > 0, p.key);
+  });
+
+  it('cards land in the categories of the approved draft (2026-11-13), first match wins', () => {
+    // Breaks if a prefix is dropped, or the rule order changes which category a card gets.
+    const cases = {
+      'coord-drill-2': 'coordination', 'std-coordination': 'coordination', 'say-wake-test': 'coordination', 'keeper-visible-result': 'coordination',
+      'prflow-push-blocks': 'pr-flow', 'ready-checks-followups': 'pr-flow', 'create-land-workdir': 'pr-flow',
+      'prepr-coordination-gate': 'pr-flow', 'ready-outside-diff': 'review-engine', 'prepr-answer-key-cli-guard': 'review-engine',
+      'system-eng-review': 'toolchain-gates', 'sched-tasks-failing-1109': 'toolchain-gates', 'dead-wizard-py-delete': 'toolchain-gates',
+      'fleetops-lanes-file-size': 'agentic-os-bridge', 'notion-sync-test': 'agentic-os-bridge', 'harness-price-exact': 'agentic-os-bridge',
+      'board-publish-budget': 'lane-board', 'kanban-band-first-live-sync': 'lane-board',
+      'sweep-shared-head-once': 'review-engine', 'gold-schema-followups': 'review-engine', 'test-globs-followups': 'review-engine',
+      'guards-cd-drive-letter': 'guard-hardening', 'identity-probe-mask-db-url': 'guard-hardening',
+      'video-intake': 'unassigned',
+    };
+    for (const [id, want] of Object.entries(cases)) assert.equal(projectOf({ id, track: null }, rules), want, id);
   });
 });
