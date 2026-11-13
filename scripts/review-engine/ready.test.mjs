@@ -60,13 +60,26 @@ test('Y3 a reclaimable lane in work is not counted in the cap', () => {
   assert.deepEqual(readyIds(res), ['re-c']);
 });
 
-test('Y3b three live units fill the cap: every candidate is held back as cap-full and the result says so', () => {
-  const map = buildMap({ lanes: [lane('re-w1'), lane('re-w2'), lane('re-w3'), lane('re-c')] });
-  const res = run(map, [live('re-w1', 'active'), live('re-w2', 'review'), live('re-w3', 'active'), free('re-c')]);
-  assert.equal(res.cap.used, 3);
+// Cap 5 (Dave 2026-11-13, card coord-program-cap-5). Breaks when CAP_LIMIT is not 5.
+const W5 = ['re-w1', 're-w2', 're-w3', 're-w4', 're-w5'];
+
+test('Y3b four live units leave room: the 5th unit is READY and the header says cap 4/5', () => {
+  const map = buildMap({ lanes: [...W5.slice(0, 4), 're-c'].map((id) => lane(id)) });
+  const res = run(map, [...W5.slice(0, 4).map((id, i) => live(id, i % 2 ? 'review' : 'active')), free('re-c')]);
+  assert.equal(res.cap.used, 4);
+  assert.equal(res.cap.limit, 5);
+  assert.deepEqual(readyIds(res), ['re-c']);
+  assert.match(renderReady(res), /cap 4\/5 units/);
+});
+
+test('Y3c five live units fill the cap: a 6th candidate is held back as cap-full and the result says so', () => {
+  const map = buildMap({ lanes: [...W5, 're-c'].map((id) => lane(id)) });
+  const res = run(map, [...W5.map((id, i) => live(id, i % 2 ? 'review' : 'active')), free('re-c')]);
+  assert.equal(res.cap.used, 5);
   assert.deepEqual(readyIds(res), []);
   assert.equal(held(res, 're-c').reason, 'cap-full');
   assert.equal(res.result, 'cap-full');
+  assert.match(renderReady(res), /cap 5\/5 units/);
   assert.match(renderReady(res), /RESULT cap-full/);
 });
 
@@ -97,10 +110,10 @@ test('Y5b a pack branch that is no map pack does not merge two lanes into one un
 });
 
 test('Y6 two externals in work with a NULL branch count as two units', () => {
-  const map = buildMap({ lanes: [lane('re-w'), lane('re-c')], externals: [lane('hf-x'), lane('hf-y')] });
-  const rows = [live('hf-x', 'active'), live('hf-y', 'active'), live('re-w', 'active'), free('re-c')];
+  const map = buildMap({ lanes: [lane('re-w'), lane('re-w2'), lane('re-w3'), lane('re-c')], externals: [lane('hf-x'), lane('hf-y')] });
+  const rows = [live('hf-x', 'active'), live('hf-y', 'active'), live('re-w', 'active'), live('re-w2', 'active'), live('re-w3', 'active'), free('re-c')];
   const res = run(map, rows);
-  assert.equal(res.cap.used, 3);
+  assert.equal(res.cap.used, 5);
   assert.equal(held(res, 're-c').reason, 'cap-full');
 });
 
@@ -218,7 +231,7 @@ test('Y16 renderReady prints the pinned lines', () => {
   const rows = [free('re-a', { band: 'P1', priority: 12 }), live('re-s1', 'active'), free('re-s2'), live('re-r', 'review', OTHER, { note: 'tap' })];
   const text = renderReady(run(map, rows));
   const lines = text.split('\n');
-  assert.equal(lines[0], 'ready: board continuous-claude, caller cccccccc, mode worker, cap 2/3 units, slot held by re-s1');
+  assert.equal(lines[0], 'ready: board continuous-claude, caller cccccccc, mode worker, cap 2/5 units, slot held by re-s1');
   assert.ok(lines.includes('READY re-a  P1 12  wave 1  branch re/re-a'));
   assert.ok(lines.includes('HELD BACK re-s2  slot-held re-s1'));
   assert.ok(lines.includes(`waiting on Dave: re-r (${OTHER.slice(0, 8)}) tap`));
