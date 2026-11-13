@@ -62,6 +62,7 @@ import { checkStore } from './worktree/shared-deps.mjs';
 import { artifactIdOf, boardArtifact, loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
 import { checkLanePaths } from './coordination/lane-path-guard.mjs';
 import { registryDrift } from './coordination/registry-drift.mjs';
+import { DOC_CAP_BYTES, EXPORT_ERROR, SIZE_WARN_PCT } from './coordination/export-dash-data.mjs';
 import { resolveMachineProfile } from './settings/machine-profile.mjs';
 import { registrationKey, registrations, renderSettings, varsFromPaths } from './settings/render-settings.mjs';
 
@@ -1173,8 +1174,36 @@ const depsSection = (o) => {
 };
 
 // ---- run ----
+// ---- fleetops ----
+/**
+ * The FleetOps export size. The export writes refresh.json with largest_doc (the largest dataset file and its share
+ * of the 256 KB limit), or export-error.json when its checks fail. FAIL: the last export stopped on the limit, so the
+ * dashboard gets no new data. WARN: a file at SIZE_WARN_PCT of the limit or more, or another failed check.
+ */
+export function fleetopsSize(o) {
+  const dir = join(o.home, '.claude', 'state', 'lane-dash');
+  const errFile = join(dir, EXPORT_ERROR);
+  if (existsSync(errFile)) {
+    let e;
+    try { e = readJson(errFile); } catch (err) { return result('WARN', 'fleetops', 'export-size', `${errFile} is not valid JSON: ${msg(err)}`); }
+    const why = String((e?.problems ?? []).join('; ')).slice(0, 200);
+    if (e?.reason === 'size') return result('FAIL', 'fleetops', 'export-size', `the last FleetOps export stopped on the ${DOC_CAP_BYTES} byte limit at ${e?.at ?? 'unknown'}: ${why}`);
+    return result('WARN', 'fleetops', 'export-size', `the last FleetOps export failed its checks at ${e?.at ?? 'unknown'}: ${why}`);
+  }
+  const file = join(dir, 'refresh.json');
+  if (!existsSync(file)) return absent('fleetops', 'export-size', file);
+  let r;
+  try { r = readJson(file); } catch (err) { return result('WARN', 'fleetops', 'export-size', `${file} is not valid JSON: ${msg(err)}`); }
+  const d = r?.largest_doc;
+  if (!d || typeof d.pct !== 'number') return result('PASS', 'fleetops', 'export-size', 'no size recorded yet (an export from before the size report)');
+  const detail = `largest FleetOps export file ${d.name}: ${d.bytes} of ${DOC_CAP_BYTES} bytes (${d.pct}%)`;
+  return d.pct >= SIZE_WARN_PCT ? result('WARN', 'fleetops', 'export-size', `${detail}, at or over ${SIZE_WARN_PCT}%`) : result('PASS', 'fleetops', 'export-size', detail);
+}
+
+const fleetopsSection = (o) => [fleetopsSize(o)];
+
 const SECTIONS = [['repo', repoSection], ['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection],
-  ['schedule', scheduleSection], ['blocklist', blocklistSection], ['registry', registrySection], ['lanes', lanesSection], ['deps', depsSection]];
+  ['schedule', scheduleSection], ['blocklist', blocklistSection], ['registry', registrySection], ['lanes', lanesSection], ['fleetops', fleetopsSection], ['deps', depsSection]];
 
 /** Runs every section. A section that throws becomes one WARN, so one bad input never hides the rest. */
 export function collect(o) {

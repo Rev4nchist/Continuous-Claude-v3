@@ -1,0 +1,109 @@
+// Probes refuse a database that is not a scratch database (rule O3.9, gap 12, lane coord-probe-scratch-guard).
+//
+// Ways this can fail, one test each:
+//   T1  a probe with a guard on the env URL loses it, or runs it after its first connection: it does not exit 2 with the refusal line.
+//   T2  a probe under scripts/ names a database URL, docker exec or psql and has no scratch check at all (a new probe added with none).
+//   T3  a probe sends SQL to the live database by its fixed name (psql -d continuous_claude), so the env URL guard cannot protect it.
+//
+// T1 never reaches a database. The URL names the live database but points at port 1, where nothing listens: that stops the
+// pg-module probes. The five docker-exec probes ignore the URL's host and port, so T1 also runs every probe with a PATH that
+// holds only the node folder: docker and psql cannot start (T1c proves it). So a probe with no guard fails T1 by its exit code
+// or its text, and writes nothing (aegis and critic on PR 540).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = join(HERE, '..', '..');
+const DEAD_LIVE = 'postgresql://x:y@127.0.0.1:1/continuous_claude';
+
+// The nine probes of gap 12. Each refuses a live name before it connects, runs psql or starts a child process.
+const GUARDED = [
+  'claim-sql', 'dm-delivery', 'session-autoname', 'session-identity',
+  'lease', 'load', 'degradation', 'event-recording', 'session-lifecycle',
+];
+
+const env = () => {
+  const e = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: DEAD_LIVE };
+  delete e.DATABASE_URL;
+  delete e.OPC_POSTGRES_URL;
+  delete e.DOCKER_HOST;
+  delete e.DOCKER_CONTEXT;
+  // Windows keeps the key as Path: drop every spelling, then give only the node folder. The probes start hooks by process.execPath.
+  for (const k of Object.keys(e)) if (/^path$/i.test(k)) delete e[k];
+  e.PATH = dirname(process.execPath);
+  return e;
+};
+
+test('T1c in the T1 env, docker and psql cannot start', () => {
+  // Breaks when: env() keeps a PATH entry with docker or psql in it, so a docker-exec probe with no guard could reach the live container.
+  for (const cmd of ['docker', 'psql']) {
+    const r = spawnSync(cmd, ['--version'], { env: env(), encoding: 'utf8', timeout: 20_000 });
+    assert.ok(r.error?.code === 'ENOENT', `${cmd} started in the T1 env (status ${r.status}): ${r.stdout}${r.stderr}`);
+  }
+});
+
+for (const name of GUARDED) {
+  test(`T1 ${name}-probe refuses a database that is not a scratch database, exit 2, before any connection`, () => {
+    // Breaks when: the guard is removed, or it runs after the first connection (then the dead port gives another exit and text).
+    const r = spawnSync(process.execPath, [join(HERE, `${name}-probe.mjs`)], { env: env(), encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 2, `exit ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.match(r.stderr, new RegExp(`${name}-probe: refusing to run: database 'continuous_claude' is not a scratch database`));
+    assert.doesNotMatch(r.stdout, /PASS|FAIL/, 'no check ran');
+  });
+}
+
+/** Every *-probe.mjs under scripts/, found by a walk, not a hand list. */
+function probeFiles() {
+  return readdirSync(join(REPO, 'scripts'), { recursive: true })
+    .map(String)
+    .filter((p) => /(^|[\\/])[^\\/]*-probe\.mjs$/.test(p))
+    .map((p) => join(REPO, 'scripts', p));
+}
+
+// Real access only: an env URL read, or docker exec called with an argument list. A command string that a probe feeds to a hook
+// as test input (scripts/rules/rule-router-probe.mjs) is not access.
+// Also a direct psql call with an argument list (execFileSync('psql', [...]), spawn('psql', [...])).
+const TOUCHES_DB = /process\.env\.(CONTINUOUS_CLAUDE_DB_URL|DATABASE_URL|OPC_POSTGRES_URL)|['"]docker['"]\s*,\s*\[\s*['"]exec['"]|['"]psql(\.exe)?['"]\s*,\s*\[/;
+// project-board-probe.mjs guards with dbNameOf plus the lanes_pr1_ prefix (it has an --allow-live flag), not assertScratchUrl.
+const HAS_GUARD = (t) => /\bassertScratchUrl\(/.test(t) || (/\bdbNameOf\(/.test(t) && /lanes_pr1_/.test(t));
+
+test('T2 every probe under scripts/ that names a database URL, docker exec or psql has a scratch check', () => {
+  // Breaks when: a probe with database access is added or edited with no assertScratchUrl call (or dbNameOf plus the lanes_pr1_ prefix).
+  const files = probeFiles();
+  assert.ok(files.length >= 17, `the walk found ${files.length} probe files`);
+  const missing = files.filter((f) => { const t = readFileSync(f, 'utf8'); return TOUCHES_DB.test(t) && !HAS_GUARD(t); })
+    .map((f) => relative(REPO, f).replace(/\\/g, '/'));
+  assert.deepEqual(missing, []);
+});
+
+test('T2b the access check sees an env URL read, docker exec and a direct psql call, and not a psql command string fed to a hook', () => {
+  // Breaks when: one of the three access forms drops out of TOUCHES_DB (a new probe with that form then passes T2 with no guard),
+  // or the check starts to match a command string (scripts/rules/rule-router-probe.mjs would then fail T2).
+  for (const src of [
+    'const u = process.env.DATABASE_URL;',
+    "execFileSync('docker', ['exec', 'pg', 'psql'])",
+    "execFileSync('psql', ['-d', 'another_database', '-c', 'select 1'])",
+    'spawnSync("psql.exe", ["-c", "x"])',
+  ]) assert.match(src, TOUCHES_DB, src);
+  assert.doesNotMatch("bash('s13', 'docker exec continuous-claude-postgres psql -U claude -d continuous_claude -c \"SELECT 1\"')", TOUCHES_DB);
+});
+
+// The live name as a psql database argument: '-d', 'continuous_claude', '--dbname', 'continuous_claude' or '--dbname=continuous_claude'.
+const LIVE_DB_ARG = /['"](-d|--dbname)['"]\s*,\s*['"]continuous_claude['"]|['"]--dbname=continuous_claude['"]/;
+
+test('T3b the live-name check sees -d, --dbname and --dbname= forms', () => {
+  // Breaks when: one of the three psql forms drops out of LIVE_DB_ARG, so a probe that writes the live name that way passes T3.
+  for (const src of ["['-d', 'continuous_claude']", '["--dbname", "continuous_claude"]', "['--dbname=continuous_claude']"]) assert.match(src, LIVE_DB_ARG, src);
+  assert.doesNotMatch("['-d', DB_NAME]", LIVE_DB_ARG);
+});
+
+test('T3 no probe under scripts/ sends psql to the live database by its fixed name', () => {
+  // Breaks when: a probe passes '-d', 'continuous_claude' to psql in an argument list again.
+  const live = probeFiles().filter((f) => LIVE_DB_ARG.test(readFileSync(f, 'utf8')))
+    .map((f) => relative(REPO, f).replace(/\\/g, '/'));
+  assert.deepEqual(live, []);
+});

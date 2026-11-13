@@ -36,16 +36,24 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { laneEnv, makeBoards } from './probe-boards.mjs';
+import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
 const LANE = join(HERE, 'lane.mjs');
 
-let Client;
-try { ({ Client } = requireDep('pg', { repoRoot: REPO })); } catch (e) { console.error(`session-identity-probe: ${e.message}`); process.exit(2); }
 const CONN = process.env.CONTINUOUS_CLAUDE_DB_URL
   || process.env.DATABASE_URL
-  || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
+  || process.env.OPC_POSTGRES_URL
+  || ''; // no live default: an unset URL refuses (rule O3.9)
+// Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any connection.
+try { assertScratchUrl(CONN); } catch {
+  process.stderr.write(`session-identity-probe: refusing to run: database '${dbNameOf(CONN) || '(no name)'}' is not a scratch database. `
+    + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
+  process.exit(2);
+}
+let Client;
+try { ({ Client } = requireDep('pg', { repoRoot: REPO })); } catch (e) { console.error(`session-identity-probe: ${e.message}`); process.exit(2); }
 
 const DIR = mkdtempSync(join(tmpdir(), 'ccv3-identity-probe-'));
 const PREFIX = 'zz-sid-probe-';

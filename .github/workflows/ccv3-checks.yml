@@ -72,6 +72,9 @@ jobs:
       - name: pr-spend unit tests
         timeout-minutes: 5
         run: node --test scripts/github/pr-spend.test.mjs
+      - name: open-prs unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/open-prs.test.mjs
       - name: shared lib unit tests (file lock)
         timeout-minutes: 5
         run: node --test scripts/github/lib/file-lock.test.mjs
@@ -274,9 +277,9 @@ jobs:
       - name: lane board DB tests (render-board, lane-project, lane-dep-claim, lane-dep-done, lane-dep-seed, scratch-db, lane-inbox-id)
         timeout-minutes: 5
         run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/lane-dep-claim.test.mjs scripts/coordination/lane-dep-done.test.mjs scripts/coordination/lane-dep-seed.test.mjs scripts/coordination/scratch-db.test.mjs scripts/coordination/lane-inbox-id.test.mjs
-      # These 13 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
+      # These 14 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
       # They sit in this job because it already has the checkout with full history and the hooks install.
-      - name: lane board tests without a database (kanban, lane-shim,path guard, registry drift, session label, probe boards)
+      - name: lane board tests without a database (kanban, lane-shim,path guard, registry drift, session label, probe boards, probe scratch guard)
         if: ${{ !cancelled() }}   # run even when the DB step failed, so one red step does not hide the other
         timeout-minutes: 5
         run: >-
@@ -294,6 +297,7 @@ jobs:
           scripts/coordination/session-label.test.mjs
           scripts/coordination/probe-boards.test.mjs
           scripts/coordination/process-match.test.mjs
+          scripts/coordination/probe-scratch-guard.test.mjs
       # lane-context-db.test.ts skips without LANE_TEST_DB_URL, and vitest exits 0 on a skipped file. The program makes a scratch
       # database on this job's service, runs the one file, drops the database, and fails unless every test ran and passed.
       - name: lane-context cursor tests on a scratch database (fails when the file is skipped)

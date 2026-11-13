@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   DATASETS, DOC_CAP_BYTES, buildProjectRows, buildRefreshDoc, buildSnapshotRow, checkInvariants,
-  chicagoDay, clearRefreshFile, clearRefreshPending, cutTitle, readSnapshots, TITLE_MAX, upsertSnapshot, writeExport,
+  chicagoDay, clearRefreshFile, heldFields, holderName, sizeReport, sizeWarnings, SIZE_WARN_PCT, buildSnapshotRow as snapRow, clearRefreshPending, cutTitle, readSnapshots, TITLE_MAX, upsertSnapshot, writeExport,
 } from './export-dash-data.mjs';
 import { compileRules } from './lane-dash-project.mjs';
 import { normalizeConfig } from './lane-dash-config.mjs';
@@ -380,8 +380,8 @@ describe('writeExport', () => {
     const r = writeExport(out, collected(T1));
     const names = fs.readdirSync(out).sort();
     assert.equal(DATASETS.length, 8);
-    assert.deepEqual(names, ['assignments.json', 'flow.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
-    assert.deepEqual(names, [...DATASETS.map((d) => `${d}.json`), 'refresh.json'].sort());
+    assert.deepEqual(names, ['assignments.json', 'flow.json', 'lanes-all.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
+    assert.deepEqual(names, [...DATASETS.map((d) => `${d}.json`), 'lanes-all.json', 'refresh.json'].sort());
     for (const d of DATASETS) {
       const doc = JSON.parse(fs.readFileSync(path.join(out, `${d}.json`), 'utf8'));
       assert.equal(doc.exportedAt, T1, d);
@@ -495,11 +495,12 @@ describe('writeExport', () => {
     }
   });
 
-  it('an invariant failure writes no file at all', () => {
-    // Breaks if documents are written before the invariants are checked.
+  it('an invariant failure writes no data file, only export-error.json with reason checks', () => {
+    // Breaks if documents are written before the invariants are checked, or the failure leaves no trace for the doctor.
     const out = tmpDir();
     assert.throws(() => writeExport(out, collected(T1, { directOpen: 99 })), /open/);
-    assert.deepEqual(fs.readdirSync(out), []);
+    assert.deepEqual(fs.readdirSync(out), ['export-error.json']);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(out, 'export-error.json'), 'utf8')).reason, 'checks');
   });
 
   it('a held lock fails the export and writes nothing', () => {
@@ -568,5 +569,171 @@ describe('clearRefreshFile (PR 409 follow-up: same lock as writeExport, own temp
     fs.writeFileSync(refreshPath(out), '{oops');
     assert.throws(() => clearRefreshFile(out, T1, T3));
     assert.ok(!fs.existsSync(path.join(out, '.export.lock')));
+  });
+});
+
+describe('heldFields and holderName (fleetops-category-expand)', () => {
+  const EXP = '2026-11-13T16:00:00.000Z';
+  const names = { 'aaaa1111-0000-4000-8000-000000000001': 'FleetOps builder' };
+  const nameOf = (u) => names[u] ?? null;
+  const row = (o = {}) => ({ owner_session_id: 'aaaa1111-0000-4000-8000-000000000001', note: 'GOAL: show the work. | NEXT: x at abc1234',
+    lease_expires_at: new Date('2026-11-13T17:00:00Z'), ...o });
+
+  it('a lane with no owner gets no keys at all', () => {
+    // Breaks if goal or holder is written on every row (lanes.json has 27 KB of room left).
+    assert.deepEqual(heldFields(row({ owner_session_id: null }), EXP, nameOf), {});
+  });
+
+  it('a held lane gets the GOAL sentence, the session name and parked false; the raw note never passes', () => {
+    // Breaks if the note, the uuid or the SHA after " | " reaches the row.
+    const f = heldFields(row(), EXP, nameOf);
+    assert.deepEqual(f, { goal: 'show the work.', holder: 'FleetOps builder', parked: false });
+    assert.ok(!JSON.stringify(f).includes('abc1234'));
+    assert.ok(!JSON.stringify(f).includes('aaaa1111'));
+  });
+
+  it('an ended lease gives holder null: a gone session is not named', () => {
+    // Breaks if held (owner not null) alone names the holder.
+    assert.equal(heldFields(row({ lease_expires_at: new Date('2026-11-13T15:59:59Z') }), EXP, nameOf).holder, null);
+    assert.equal(heldFields(row({ lease_expires_at: null }), EXP, nameOf).holder, null);
+  });
+
+  it('a parked note gives parked true and still finds the GOAL after " || "', () => {
+    // Breaks if a waiting session reads as active work (seat word 10:51, item 6a).
+    const f = heldFields(row({ note: 'PARKED until 2026-11-14 -- waits || GOAL: g. | NEXT: n' }), EXP, nameOf);
+    assert.equal(f.parked, true);
+    assert.equal(f.goal, 'g.');
+  });
+
+  it('holderName clips to 16 characters and masks hex ids; empty gives null', () => {
+    // Breaks if a name holding a session id or handle reaches the dashboard.
+    assert.equal(holderName('FleetOps builder #b2b46d90'), 'FleetOps builder');
+    assert.ok(!/[0-9a-f]{8}/.test(holderName('b2b46d90-5361-424d-a80d') ?? ''));
+    assert.equal(holderName(''), null);
+    assert.equal(holderName(null), null);
+    assert.equal(holderName('  '), null);
+  });
+
+  it('40 held lanes at the goal limit add under 12 KB', () => {
+    // Breaks if the goal cut goes or more fields are added per held lane.
+    const long = `GOAL: ${'word '.repeat(100)}`;
+    const many = Array.from({ length: 40 }, () => heldFields(row({ note: long }), EXP, () => 'x'.repeat(40)));
+    assert.ok(JSON.stringify(many).length < 12 * 1024, String(JSON.stringify(many).length));
+  });
+});
+
+describe('buildProjectRows next_goal (fleetops-category-expand)', () => {
+  it('passes next_goal from the rules; absent gives an empty string', () => {
+    // Breaks if the export drops next_goal: the page then never shows the Next goal line.
+    const r = compileRules({ version: 1, projects: [{ key: 'p', name: 'P', next_goal: 'Retire CodeRabbit for HIGH.' }, { key: 'q', name: 'Q' }] });
+    const rows = buildProjectRows(r, [], cfg());
+    assert.equal(rows.find((x) => x.key === 'p').next_goal, 'Retire CodeRabbit for HIGH.');
+    assert.equal(rows.find((x) => x.key === 'q').next_goal, '');
+    assert.equal(rows.find((x) => x.key === 'unassigned').next_goal, '');
+  });
+});
+
+describe('lanes.json keeps open cards only (fleetops-lanes-file-size part 2)', () => {
+  const OLD = '2026-10-20T15:00:00.000Z';
+  const fixture = () => [
+    lane({ id: 'open-1', state: 'backlog', project: 'p' }),
+    lane({ id: 'open-2', state: 'active', project: 'p', held: true }),
+    lane({ id: 'done-new', state: 'done', project: 'p', done_at: T1, done_day: chicagoDay(T1) }),
+    lane({ id: 'done-old', state: 'done', project: 'p', created_at: OLD, created_day: '2026-10-20', done_at: OLD, done_day: '2026-10-20' }),
+  ];
+
+  it('writes only the lanes that are not done', () => {
+    // Breaks if the trim is off, or keeps a done lane: lanes.json then grows with the whole history.
+    const out = tmpDir();
+    writeExport(out, collected(T1, { lanes: fixture() }));
+    const doc = JSON.parse(fs.readFileSync(path.join(out, 'lanes.json'), 'utf8'));
+    assert.deepEqual(doc.rows.map((l) => l.id).sort(), ['open-1', 'open-2']);
+    assert.match(doc.sql, /open lanes only/);
+  });
+
+  it('every figure is the same as one built from the full lane list', () => {
+    // Breaks if tiles, flow, snapshots or projects are built after the trim: closed counts would lose the done lanes.
+    const out = tmpDir();
+    const c = collected(T1, { lanes: fixture() });
+    const r = writeExport(out, c);
+    const read = (d) => JSON.parse(fs.readFileSync(path.join(out, `${d}.json`), 'utf8'));
+    const full = withSnapshots(c).envelopes;
+    const snaps = read('snapshots').rows;
+    assert.deepEqual(snaps.at(-1), snapRow(fixture(), T1));
+    const e = c.envelopes;
+    const tiles = buildTileRows({ lanes: fixture(), assignments: e.assignments.rows, projects: e.projects.rows, targets: e.targets.rows, meta: e.meta.rows[0], snapshots: snaps });
+    assert.deepEqual(read('tiles').rows, tiles);
+    assert.deepEqual(read('flow').rows, full.flow.rows);
+    assert.deepEqual(read('projects').rows, e.projects.rows);
+    const closed = read('tiles').rows.find((x) => /^cat\.row\.\d+\.closed$/.test(x.id) && x.text.includes('of 4'));
+    assert.ok(closed, 'a category row counts all 4 cards, the 2 done ones included');
+    assert.equal(r.envelopes.lanes.rows.length, 2);
+  });
+
+  it('lanes-all.json keeps the full list on this machine; it is no dataset and not in refresh.json', () => {
+    // Breaks if local tools lose the done lanes, or the full list reaches the upload list.
+    const out = tmpDir();
+    writeExport(out, collected(T1, { lanes: fixture() }));
+    const all = JSON.parse(fs.readFileSync(path.join(out, 'lanes-all.json'), 'utf8'));
+    assert.deepEqual(all.rows.map((l) => l.id).sort(), ['done-new', 'done-old', 'open-1', 'open-2']);
+    assert.ok(!DATASETS.includes('lanes-all'));
+    assert.ok(!JSON.parse(fs.readFileSync(path.join(out, 'refresh.json'), 'utf8')).files.includes('lanes-all.json'));
+  });
+
+  it('meta says how many lane rows exist and how many were written', () => {
+    // Breaks if a reader of the Sources panel cannot see that lanes.json is partial.
+    const out = tmpDir();
+    writeExport(out, collected(T1, { lanes: fixture() }));
+    const meta = JSON.parse(fs.readFileSync(path.join(out, 'meta.json'), 'utf8')).rows[0];
+    assert.equal(meta.lanes_rows_total, 4);
+    assert.equal(meta.lanes_rows_written, 2);
+  });
+
+  it('the project check still sees done lanes', () => {
+    // Breaks if checkInvariants reads only the written rows: a done lane with an unknown project would pass unseen.
+    const lanes = [...fixture(), lane({ id: 'ghost-done', state: 'done', project: 'ghost', done_at: T1, done_day: chicagoDay(T1) })];
+    assert.throws(() => writeExport(tmpDir(), collected(T1, { lanes })), /ghost-done.*ghost/);
+  });
+});
+
+describe('size warning and size failure (fleetops-lanes-file-size part 2)', () => {
+  const CAP = DOC_CAP_BYTES;
+  it('sizeReport names the largest document; sizeWarnings lists each one at 75% or more', () => {
+    // Breaks if the early warning goes, or fires below 75%.
+    const files = [{ name: 'lanes.json', bytes: Math.ceil(CAP * 0.8) }, { name: 'tiles.json', bytes: Math.floor(CAP * 0.74) }, { name: 'refresh.json', bytes: 400 }];
+    assert.deepEqual(sizeReport(files), { name: 'lanes.json', bytes: Math.ceil(CAP * 0.8), pct: 80 });
+    const lines = sizeWarnings(files);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /^WARN size: lanes\.json \d+ of 262144 bytes \(80%\)$/);
+    assert.equal(SIZE_WARN_PCT, 75);
+  });
+
+  it('lanes-all.json, local only with no cap, never warns and is never the largest document', () => {
+    // Breaks if the full local list (91% on 2026-11-13) raises a false warning or a false doctor WARN.
+    const files = [{ name: 'lanes-all.json', bytes: CAP }, { name: 'lanes.json', bytes: 1000 }];
+    assert.deepEqual(sizeWarnings(files), []);
+    assert.equal(sizeReport(files).name, 'lanes.json');
+  });
+
+  it('refresh.json carries largest_doc', () => {
+    // Breaks if the harness doctor has nothing to read.
+    const out = tmpDir();
+    writeExport(out, collected(T1));
+    const refresh = JSON.parse(fs.readFileSync(path.join(out, 'refresh.json'), 'utf8'));
+    assert.equal(typeof refresh.largest_doc.name, 'string');
+    assert.ok(refresh.largest_doc.bytes > 0 && refresh.largest_doc.pct >= 0);
+  });
+
+  it('a document over the cap writes export-error.json with reason size; the next good export removes it', () => {
+    // Breaks if a failed export leaves no trace for the doctor, or an old failure stays after a good run.
+    const out = tmpDir();
+    const big = [lane({ id: 'huge', state: 'backlog', project: 'p', title: 'x'.repeat(CAP) })];
+    assert.throws(() => writeExport(out, collected(T1, { lanes: big })), /over the 262144 byte/);
+    const err = JSON.parse(fs.readFileSync(path.join(out, 'export-error.json'), 'utf8'));
+    assert.equal(err.reason, 'size');
+    assert.ok(err.problems.some((p) => /lanes\.json/.test(p)));
+    assert.ok(!fs.existsSync(path.join(out, 'lanes.json')), 'nothing else is written');
+    writeExport(out, collected(T1));
+    assert.ok(!fs.existsSync(path.join(out, 'export-error.json')));
   });
 });

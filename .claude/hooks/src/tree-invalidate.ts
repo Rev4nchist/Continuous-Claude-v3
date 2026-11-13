@@ -10,6 +10,7 @@
  */
 
 import * as fs from 'fs';
+import { isEngineHost } from './shared/engine-host.js';
 import * as path from 'path';
 
 interface PostToolUseInput {
@@ -117,6 +118,12 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no knowledge-tree.json change in the reviewed tree. (card engine-run-hook-files).
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
