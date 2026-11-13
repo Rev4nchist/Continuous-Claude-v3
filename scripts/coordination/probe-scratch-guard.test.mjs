@@ -51,7 +51,8 @@ function probeFiles() {
 
 // Real access only: an env URL read, or docker exec called with an argument list. A command string that a probe feeds to a hook
 // as test input (scripts/rules/rule-router-probe.mjs) is not access.
-const TOUCHES_DB = /process\.env\.(CONTINUOUS_CLAUDE_DB_URL|DATABASE_URL|OPC_POSTGRES_URL)|['"]docker['"]\s*,\s*\[\s*['"]exec['"]/;
+// Also a direct psql call with an argument list (execFileSync('psql', [...]), spawn('psql', [...])).
+const TOUCHES_DB = /process\.env\.(CONTINUOUS_CLAUDE_DB_URL|DATABASE_URL|OPC_POSTGRES_URL)|['"]docker['"]\s*,\s*\[\s*['"]exec['"]|['"]psql(\.exe)?['"]\s*,\s*\[/;
 const HAS_GUARD = (t) => /\bassertScratchUrl\(/.test(t) || (/\bdbNameOf\(/.test(t) && /lanes_pr1_/.test(t));
 
 test('T2 every probe under scripts/ that names a database URL, docker exec or psql has a scratch check', () => {
@@ -61,6 +62,18 @@ test('T2 every probe under scripts/ that names a database URL, docker exec or ps
   const missing = files.filter((f) => { const t = readFileSync(f, 'utf8'); return TOUCHES_DB.test(t) && !HAS_GUARD(t); })
     .map((f) => relative(REPO, f).replace(/\\/g, '/'));
   assert.deepEqual(missing, []);
+});
+
+test('T2b the access check sees an env URL read, docker exec and a direct psql call, and not a psql command string fed to a hook', () => {
+  // Breaks when: one of the three access forms drops out of TOUCHES_DB (a new probe with that form then passes T2 with no guard),
+  // or the check starts to match a command string (scripts/rules/rule-router-probe.mjs would then fail T2).
+  for (const src of [
+    'const u = process.env.DATABASE_URL;',
+    "execFileSync('docker', ['exec', 'pg', 'psql'])",
+    "execFileSync('psql', ['-d', 'another_database', '-c', 'select 1'])",
+    'spawnSync("psql.exe", ["-c", "x"])',
+  ]) assert.match(src, TOUCHES_DB, src);
+  assert.doesNotMatch("bash('s13', 'docker exec continuous-claude-postgres psql -U claude -d continuous_claude -c \"SELECT 1\"')", TOUCHES_DB);
 });
 
 test('T3 no probe under scripts/ sends psql to the live database by its fixed name', () => {
