@@ -53,23 +53,34 @@ if (process.env.FAKE_FACTORY_HANG) setInterval(() => {}, 1000);
 else process.exit(Number(process.env.FAKE_FACTORY_EXIT ?? 0));
 `;
 
+// The third command (scripts/github/pr-spend.mjs, card prflow-spend-line): the LAST step. It has its own call file. Its failure,
+// time-out or missing script changes nothing for the first two steps.
+const FAKE_PRSPEND = `
+import { writeFileSync } from 'node:fs';
+writeFileSync(process.env.FAKE_PRSPEND_CALL_FILE, JSON.stringify({ argv: process.argv.slice(2), pid: process.pid, envKeys: Object.keys(process.env), script: process.argv[1] }));
+console.log('fake pr-spend stdout line');
+if (process.env.FAKE_PRSPEND_HANG) setInterval(() => {}, 1000);
+else process.exit(Number(process.env.FAKE_PRSPEND_EXIT ?? 0));
+`;
+
 function git(cwd, args) {
   const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8', windowsHide: true });
   assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
 }
 
-function fixture({ withExport = true, withFactory = true, branch = null } = {}) {
+function fixture({ withExport = true, withFactory = true, withPrSpend = false, branch = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ccv3-snapshot-wrapper-'));
   const repo = join(root, 'repo');
   mkdirSync(join(repo, 'scripts', 'coordination'), { recursive: true });
   if (withExport) writeFileSync(join(repo, 'scripts', 'coordination', 'export-dash-data.mjs'), FAKE_EXPORT);
   if (withFactory) writeFileSync(join(repo, 'scripts', 'coordination', 'export-factory-data.mjs'), FAKE_FACTORY);
+  if (withPrSpend) { mkdirSync(join(repo, 'scripts', 'github'), { recursive: true }); writeFileSync(join(repo, 'scripts', 'github', 'pr-spend.mjs'), FAKE_PRSPEND); }
   if (branch) { git(repo, ['init', '-q', '-b', branch]); git(repo, ['commit', '-q', '--allow-empty', '-m', 'init']); }
-  return { root, repo, logDir: join(root, 'logs'), log: join(root, 'logs', '2026-11-07.log'), call: join(root, 'call.json'), factoryCall: join(root, 'factory-call.json') };
+  return { root, repo, logDir: join(root, 'logs'), log: join(root, 'logs', '2026-11-07.log'), call: join(root, 'call.json'), factoryCall: join(root, 'factory-call.json'), prSpendCall: join(root, 'pr-spend-call.json') };
 }
 
 function run(fx, extraEnv = {}) {
-  const env = { ...process.env, CCV3_LANE_SNAPSHOT_REPO_ROOT: fx.repo, CCV3_LANE_SNAPSHOT_LOG: fx.log, FAKE_CALL_FILE: fx.call, FAKE_FACTORY_CALL_FILE: fx.factoryCall, ...extraEnv };
+  const env = { ...process.env, CCV3_LANE_SNAPSHOT_REPO_ROOT: fx.repo, CCV3_LANE_SNAPSHOT_LOG: fx.log, FAKE_CALL_FILE: fx.call, FAKE_FACTORY_CALL_FILE: fx.factoryCall, FAKE_PRSPEND_CALL_FILE: fx.prSpendCall, ...extraEnv };
   for (const k of Object.keys(extraEnv)) if (extraEnv[k] === undefined) delete env[k];
   const started = Date.now();
   const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', WRAPPER], { env, encoding: 'utf8', windowsHide: true, timeout: 120000 });
@@ -286,4 +297,73 @@ test('41 ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN never reach the factory', wi
   assert.equal(r.status, 0, r.log);
   const keys = factoryCalled(fx).envKeys;
   assert.ok(!keys.some((k) => /^ANTHROPIC_(API_KEY|AUTH_TOKEN)$/i.test(k)), keys.filter((k) => /ANTHROPIC/i.test(k)).join(','));
+});
+
+// ---------------------------------------------------------------- the third command: scripts/github/pr-spend.mjs (card prflow-spend-line)
+// The log lines of a step are its output lines, an optional "TIMEOUT: <label> killed" and "<label> finished, exit N". The wrapper adds
+// no line of its own for a failed or killed third step, so that finish line is the one log line that names the failure.
+
+const prSpendCalled = (fx) => JSON.parse(readFileSync(fx.prSpendCall, 'utf8'));
+const prSpendLines = (log) => log.split(/\r?\n/).filter((l) => /pr-spend/.test(l));
+
+test('42 the third step runs last and bare, and a clean run still exits 0', win, () => {
+  // Breaks when pr-spend is not started, runs before the factory, or gets arguments by default.
+  const fx = fixture({ withPrSpend: true });
+  const r = run(fx);
+  assert.equal(r.status, 0, r.log);
+  assert.match(r.log, /pr-spend finished, exit 0\b/);
+  assert.match(r.log, /fake pr-spend stdout line/);
+  assert.deepEqual(prSpendCalled(fx).argv, []);
+  assert.equal(prSpendCalled(fx).script, join(fx.repo, 'scripts', 'github', 'pr-spend.mjs'));
+  assert.ok(r.log.indexOf('factory finished') < r.log.indexOf('pr-spend finished'), 'pr-spend runs after the factory');
+  const fx2 = fixture({ withPrSpend: true });
+  const r2 = run(fx2, { CCV3_PR_SPEND_EXTRA_ARGS: `--out ${join(fx2.root, 'out')}` });
+  assert.equal(r2.status, 0, r2.log);
+  assert.deepEqual(prSpendCalled(fx2).argv, ['--out', join(fx2.root, 'out')]);
+  assert.deepEqual(factoryCalled(fx2).argv, [], 'the pr-spend extra args never reach the factory');
+});
+
+test('43 a failing third step changes nothing: export 0 + factory 0 stays 0, export 1 stays 1, factory failure stays 5', win, () => {
+  // Breaks when the pr-spend exit code reaches the wrapper exit code, or its failure stops the first two steps from counting.
+  for (const [env, want] of [[{}, 0], [{ FAKE_EXIT: '1' }, 1], [{ FAKE_FACTORY_EXIT: '2' }, 5], [{ FAKE_EXIT: '1', FAKE_FACTORY_EXIT: '2' }, 1]]) {
+    const fx = fixture({ withPrSpend: true });
+    const r = run(fx, { ...env, FAKE_PRSPEND_EXIT: '7' });
+    assert.equal(r.status, want, `${JSON.stringify(env)} with pr-spend exit 7 must exit ${want}; log:\n${r.log}`);
+    assert.match(r.log, /pr-spend finished, exit 7\b/);
+    assert.match(r.log, /factory finished, exit /);
+    assert.ok(existsSync(fx.prSpendCall));
+  }
+});
+
+test('44 a slow third step is killed at CCV3_PR_SPEND_TIMEOUT_SEC and the wrapper exit code does not change', win, () => {
+  // Breaks when the third step has no limit, the kill leaves the process alive, or the 124 reaches the exit code.
+  for (const [env, want] of [[{}, 0], [{ FAKE_FACTORY_EXIT: '2' }, 5], [{ FAKE_EXIT: '1' }, 1]]) {
+    const fx = fixture({ withPrSpend: true });
+    const r = run(fx, { ...env, FAKE_PRSPEND_HANG: '1', CCV3_PR_SPEND_TIMEOUT_SEC: '3' });
+    assert.equal(r.status, want, r.log);
+    assert.match(r.log, /TIMEOUT: pr-spend killed/);
+    assert.ok(r.ms < 60000, `wrapper waited ${r.ms} ms`);
+    assert.throws(() => process.kill(prSpendCalled(fx).pid, 0), 'the hung pr-spend process must be dead');
+  }
+});
+
+test('45 a missing pr-spend script writes one log line and changes nothing', win, () => {
+  // Breaks when a missing script is silent, writes several lines, or turns the exit code nonzero.
+  const fx = fixture({ withPrSpend: false });
+  const r = run(fx);
+  assert.equal(r.status, 0, r.log);
+  const lines = prSpendLines(r.log);
+  assert.equal(lines.length, 1, r.log);
+  assert.match(lines[0], /pr-spend\.mjs not found at .*pr-spend\.mjs/);
+  assert.ok(existsSync(fx.call) && existsSync(fx.factoryCall), 'the first two steps still ran');
+  const fx2 = fixture({ withPrSpend: false });
+  assert.equal(run(fx2, { FAKE_FACTORY_EXIT: '2' }).status, 5);
+});
+
+test('46 the key strip reaches the third step too', win, () => {
+  // Breaks when the key strip moves after the third step starts.
+  const fx = fixture({ withPrSpend: true });
+  const r = run(fx, { ANTHROPIC_API_KEY: 'sk-test-not-real', ANTHROPIC_AUTH_TOKEN: 'tok-test-not-real' });
+  assert.equal(r.status, 0, r.log);
+  assert.ok(!prSpendCalled(fx).envKeys.some((k) => /^ANTHROPIC_(API_KEY|AUTH_TOKEN)$/i.test(k)));
 });
