@@ -69,6 +69,9 @@ jobs:
       - name: cr-fix unit tests
         timeout-minutes: 5
         run: node --test scripts/github/cr-fix.test.mjs
+      - name: pr-spend unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/pr-spend.test.mjs
       - name: shared lib unit tests (file lock)
         timeout-minutes: 5
         run: node --test scripts/github/lib/file-lock.test.mjs
