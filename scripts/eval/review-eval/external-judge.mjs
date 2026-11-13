@@ -315,6 +315,7 @@ export async function run(opts, deps = {}) {
       lastServed = servedModelOf(res?.stdout);
       return res;
     };
+    const headSha = deps.headSha ?? headOf();
     let calls = 0;
     let stopped = null;
     for (const pairId of pending.slice(0, allowed)) {
@@ -323,7 +324,13 @@ export async function run(opts, deps = {}) {
       calls += 1;
       lastServed = null;
       const res = await judgePair(p.pair, { runJudge });
-      const endBase = { ts: new Date(now()).toISOString(), phase: 'end', dataset, pairId, model, servedModel: lastServed };
+      const endBase = { ts: new Date(now()).toISOString(), phase: 'end', dataset, pairId, model, servedModel: lastServed, headSha };
+      if (lastServed && !servedMatches(model, lastServed)) {
+        // Another model answered: a stop, whether its answer parsed or not.
+        append(ledgerPath, { ...endBase, error: 'served-model' });
+        stopped = 'served-model';
+        break;
+      }
       if (!res.ok) {
         append(ledgerPath, { ...endBase, error: res.error });
         if (res.error === 'cap') { stopped = 'shared headless cap'; break; }
@@ -342,13 +349,15 @@ export async function run(opts, deps = {}) {
     const after = readOwnLedger(ledgerPath);
     const recordsOf = (m) => { const final = fresh(judgedMap(after, dataset, m)); return ids.filter((i) => final.has(i)).map((i) => {
       const r = final.get(i);
-      return { pairId: i, human: r.human, judge: r.judge, agree: r.human === r.judge, candidateSource: r.candidateSource, confidence: r.confidence ?? null };
+      return { pairId: i, human: r.human, judge: r.judge, agree: r.human === r.judge, candidateSource: r.candidateSource, confidence: r.confidence ?? null, headSha: r.headSha ?? null };
     }); };
     const records = recordsOf(model);
     const otherRecs = recordsOf(otherModel);
-    const headSha = deps.headSha ?? headOf();
+    // The heads that made the counted verdicts (an end row before the head field has none: key "unknown").
+    const verdictHeads = {};
+    for (const r of records) { const k = r.headSha ?? 'unknown'; verdictHeads[k] = (verdictHeads[k] ?? 0) + 1; }
     const out = {
-      model, effort: JUDGE_EFFORT, headSha,
+      model, effort: JUDGE_EFFORT, headSha, verdictHeads,
       dataset, file, seed, sampleRequested: sample, sampleIds: ids, uncertainExcluded: uncertain, noCandidate, noCandidateByLabel, staleRejudged, pendingAfterRun: ids.length - records.length,
       generatedAt: new Date(now()).toISOString(), pairs: records, summary: summarize(records),
       compare: { model: otherModel, summary: summarize(otherRecs), paired: pairedCounts(records, otherRecs) },

@@ -518,6 +518,28 @@ test('H7 the report file name, the output and the console line carry the model a
   assert.ok(c.lines.some((l) => /^compare sonnet: n 2; agreement 1\/2/.test(l)));
 });
 
+test('H9 a wrong served model stops the run even when the answer does not parse', async () => {
+  // Breaks when: a parse fault from another model is a plain error row and the run goes on (CLI finding on cde4777c).
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  const calls = [];
+  const fn = async (req) => { calls.push(req); return { ok: true, stdout: JSON.stringify({ type: 'result', result: 'not json', modelUsage: { 'claude-sonnet-5-5': {} } }) }; };
+  const r = await run(base({ sample: 3 }), { rows: [yesRow('t1'), yesRow('t2'), yesRow('t3')], runClaudeFn: fn, ledgerPath, outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(calls.length, 1);
+  assert.equal(r.code, 2);
+  assert.equal(ledgerLines(ledgerPath).find((x) => x.phase === 'end').error, 'served-model');
+});
+
+test('H10 each end row names the head that made it; the report counts verdicts by head', async () => {
+  // Breaks when: resumed verdicts are credited to the head of the latest run (CLI finding on cde4777c, seat condition c).
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  writeFileSync(ledgerPath, `${endRow('t1', 'yes', 'yes', { model: 'opus', servedModel: 'claude-opus-5-5', headSha: 'd'.repeat(40) })}\n`);
+  const v = verdictRun('yes');
+  const r = await run(base({ sample: 2 }), { rows: [yesRow('t1'), yesRow('t2')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, headSha: 'e'.repeat(40), ...silent });
+  assert.equal(v.calls.length, 1);
+  assert.equal(ledgerLines(ledgerPath).at(-1).headSha, 'e'.repeat(40));
+  assert.deepEqual(r.out.verdictHeads, { ['d'.repeat(40)]: 1, ['e'.repeat(40)]: 1 });
+});
+
 test('H8 summarize adds tpr and tnr with Wilson intervals, and the confidence 4+ table', () => {
   // Breaks when: the strict-judge signal (misses on human yes) is hidden behind kappa alone.
   const recs = [{ ...rec('yes', 'yes'), confidence: 5 }, { ...rec('yes', 'no'), confidence: 3 }, { ...rec('no', 'no'), confidence: 4 }, { ...rec('no', 'no'), confidence: 2 }];
