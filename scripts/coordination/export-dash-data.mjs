@@ -21,7 +21,10 @@
  * Scope: project_key = the config board ('continuous-claude'). Another board's lanes and events never appear.
  * The DB clock is UTC. Every day bucket is America/Chicago.
  *
- * What is NOT exported: lane.note, scope, rationale, done_when text, event bodies, session ids or 8-hex handles.
+ * What is NOT exported: the raw lane.note, scope, rationale, done_when text, event bodies, session ids or 8-hex handles.
+ * A held lane (owner not null) also gets goal, holder and parked (heldFields): goal is only the GOAL sentence that
+ * starts its note (goalOf in lane-dash-metrics.mjs), holder is only the session's chosen name from its identity file
+ * while the lease is live (holderName), parked says the note is a park note. Every other lane row has none of the three keys.
  * Lane titles are exported (cut at a word boundary to TITLE_MAX characters, with an ellipsis). A '#' plus 8 hex digits in a title becomes '#[handle]'. The lanes rows follow a column allowlist.
  *
  * Meanings:
@@ -52,7 +55,8 @@ import { requireDep } from '../lib/resolve-deps.mjs';
 import { loadConfig } from './lane-dash-config.mjs';
 import { loadProjectRules, projectOf, UNASSIGNED } from './lane-dash-project.mjs';
 import { buildFlowRows } from './lane-dash-flow.mjs';
-import { buildTileRows } from './lane-dash-metrics.mjs';
+import { buildTileRows, goalOf, isParkedNote } from './lane-dash-metrics.mjs';
+import { NAME_CLIP, readIdentity } from './session-label.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
@@ -71,6 +75,26 @@ export function cutTitle(title, max = TITLE_MAX) {
   const keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room);
   return `${keep.trimEnd()}…`;
 }
+/** A session name as the dashboard may show it: clipped, hex ids and handles removed, or null. */
+export function holderName(name) {
+  if (typeof name !== 'string') return null;
+  const s = name.replace(/#?[0-9a-f]{8}[0-9a-f-]*/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, NAME_CLIP).trim();
+  return s || null;
+}
+
+const sessionName = (uuid) => readIdentity(uuid)?.name ?? null;
+
+/**
+ * The three keys a held lane adds to its lanes row, or {} for a lane with no owner. The raw note and the session id
+ * are read here and never returned. holder is null when the lease ended: a gone session is not named.
+ */
+export function heldFields(l, exportedAt, nameOf = sessionName) {
+  if (!l.owner_session_id) return {};
+  const lease = l.lease_expires_at ? new Date(l.lease_expires_at).getTime() : NaN;
+  const live = Number.isFinite(lease) && lease > Date.parse(exportedAt);
+  return { goal: goalOf(l.note), holder: live ? holderName(nameOf(l.owner_session_id)) : null, parked: isParkedNote(l.note) };
+}
+
 export const DATASETS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles', 'flow'];
 const TZ = 'America/Chicago';
 const LOCK_STALE_MS = 10 * 60 * 1000;
@@ -141,14 +165,14 @@ export function buildProjectRows(rules, lanes, config) {
     const doneAt = doneAts.length ? doneAts[doneAts.length - 1] : null;
     const doneDay = chicagoDay(doneAt);
     return {
-      key: p.key, name: p.name, goal: p.goal, done_when: p.done,
+      key: p.key, name: p.name, goal: p.goal, next_goal: p.next_goal ?? '', done_when: p.done,
       terminal_lanes: ids.join(', '), terminal_total: ids.length, terminal_done: done.length,
       status, done_at: doneAt, done_day: doneDay, visible_until: doneDay ? addDays(doneDay, visibleDays) : null,
       parked: p.parked, proposed: p.proposed, focus: p.focus,
     };
   });
   rows.push({
-    key: UNASSIGNED, name: 'Unassigned', goal: 'No project rule matches yet.', done_when: 'Give each lane a project rule.',
+    key: UNASSIGNED, name: 'Unassigned', goal: 'No project rule matches yet.', next_goal: '', done_when: 'Give each lane a project rule.',
     terminal_lanes: '', terminal_total: 0, terminal_done: 0, status: 'no_end', done_at: null, done_day: null, visible_until: null,
     parked: false, proposed: false, focus: false,
   });
@@ -407,6 +431,7 @@ const SQL_LANES = `WITH ev AS (
   CROSS JOIN LATERAL (SELECT split_part(coalesce(e.body, ''), ' || before:', 1) AS head) h
   WHERE l2.project_key = $1 GROUP BY e.lane_id)
 SELECT l.id, left(regexp_replace(l.title, '#[0-9a-f]{8}', '#[handle]', 'g'), 400) AS title, l.track, l.band, l.state, l.priority, l.created_at, l.lease_expires_at,
+  l.owner_session_id, CASE WHEN l.owner_session_id IS NOT NULL THEN l.note END AS note,
   (l.owner_session_id IS NOT NULL) AS held, (coalesce(l.done_when, '') <> '') AS has_done_when,
   ev.first_claim, CASE WHEN l.state = 'done' THEN ev.done_ev END AS done_at, ev.last_work, ev.dave_ask,
   coalesce(ev.claims, 0) AS claims
@@ -473,6 +498,7 @@ export async function collect(client, { rules, config }) {
     last_work_at: iso(l.last_work), dave_ask_at: iso(l.dave_ask),
     lease_expires_at: iso(l.lease_expires_at), held: l.held, has_done_when: l.has_done_when,
     terminal: terminal.has(l.id), claims: Number(l.claims),
+    ...heldFields(l, exportedAt),
   }));
 
   const claims = (await rows(SQL_CLAIMS)).map((r) => ({

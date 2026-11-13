@@ -76,11 +76,11 @@ describe('the committed lane-dash.config.json', () => {
     assert.ok(row(cfg, 'project_rows').source.length > 0);
   });
 
-  it('the file lists every default target, so the targets document has 14 rows and no key is left to the defaults', () => {
+  it('the file lists every default target, so the targets document has 15 rows and no key is left to the defaults', () => {
     // Breaks if a default target (such as project_rows) is added to the loader and not to the committed file, or the other way round.
     const fileKeys = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')).targets.map((t) => t.key);
     assert.deepEqual([...fileKeys].sort(), normalizeConfig({}).targets.map((t) => t.key).sort());
-    assert.equal(cfg.targets.length, 14);
+    assert.equal(cfg.targets.length, 15);
   });
 
   it('keeps Done projects visible for 28 days and names the board', () => {

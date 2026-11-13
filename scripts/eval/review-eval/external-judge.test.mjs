@@ -14,9 +14,11 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { loadRows, pickAction, rowToPair, run, sampleIds, summarize, toFinding, wilson } from './external-judge.mjs';
+import { JUDGE_MODEL, loadRows, parseArgs, pickAction, rowToPair, run, sampleIds, summarize, toFinding, wilson } from './external-judge.mjs';
 import { judgePrompt } from './judge.mjs';
+import { JUDGE_PROMPT_V1_FILLED_SHA256, JUDGE_PROMPT_V1_SHA256, judgePromptV1 } from './judge-prompt-v1.mjs';
 import { pullPinned, PullRefusal } from './external-pull.mjs';
 
 const SHA = 'a'.repeat(40);
@@ -35,9 +37,11 @@ const row = (i, decision = 'Yes') => ({
   judge_matched_action_id: 'a2',
 });
 const rows = (n) => Array.from({ length: n }, (_, i) => row(i, i % 2 ? 'No' : 'Yes'));
-const verdictRun = (sameIssue = 'yes') => {
+// served: the model name the fake claude -p envelope reports in modelUsage (null: no modelUsage at all).
+const verdictRun = (sameIssue = 'yes', served = 'claude-opus-5-5') => {
   const calls = [];
-  const fn = async (req, deps) => { calls.push({ req, deps }); return { ok: true, stdout: JSON.stringify({ type: 'result', result: JSON.stringify({ sameIssue, real: 'unclear', confidence: 5, reason: 'r' }) }) }; };
+  const envelope = () => ({ type: 'result', result: JSON.stringify({ sameIssue, real: 'unclear', confidence: 5, reason: 'r' }), ...(served ? { modelUsage: { [served]: { inputTokens: 1 } } } : {}) });
+  const fn = async (req, deps) => { calls.push({ req, deps }); return { ok: true, stdout: JSON.stringify(envelope()) }; };
   return { fn, calls };
 };
 const ledgerLines = (file) => readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -175,7 +179,8 @@ test('F8 judge calls use session review-external and purpose external-judge, and
   for (const c of v.calls) {
     assert.equal(c.deps.sessionId, 'review-external');
     assert.equal(c.req.purpose, 'external-judge');
-    assert.equal(c.req.model, 'sonnet');
+    assert.equal(c.req.model, 'opus');
+    assert.equal(c.req.effort, 'high');
     assert.match(c.req.prompt, /### Hunk\n\n?<<<END UNTRUSTED DATA>>>/);
   }
   assert.deepEqual(r.out.summary.notMeasured, ['real']);
@@ -394,9 +399,10 @@ test('G10 an old end row is reused only when its source is the one the pair has 
   const ds = `${ID}@${SHA}`;
   const end = (pairId, human, judge, candidateSource) => JSON.stringify({ ts: new Date(NOW - 5000).toISOString(), phase: 'end', dataset: ds, pairId, human, judge, ...(candidateSource ? { candidateSource } : {}) });
   writeFileSync(ledgerPath, `${[end('t1', 'yes', 'yes', 'human'), end('t2', 'no', 'yes', 'all'), end('t3', 'no', 'yes')].join('\n')}\n`);
-  const v = verdictRun('no');
+  const v = verdictRun('no', 'claude-sonnet-5-5');
   const c = captured();
-  const r = await run(base({ sample: 10 }), { rows: [yesRow('t1'), noRow('t2'), noRow('t3')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
+  // Old rows have no model field: they are Sonnet rows, so this resume test runs as Sonnet.
+  const r = await run(base({ sample: 10, model: 'sonnet' }), { rows: [yesRow('t1'), noRow('t2'), noRow('t3')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
   assert.equal(v.calls.length, 2, 'the all row and the row with no source are judged again; the human row is not');
   assert.match(c.lines[0], /already judged 1, pending 2/);
   assert.match(c.lines[0], /stale 2/);
@@ -405,4 +411,386 @@ test('G10 an old end row is reused only when its source is the one the pair has 
   assert.deepEqual(Object.keys(r.out.summary.bySource).sort(), ['human', 'picked']);
   assert.equal(r.out.pairs.find((p) => p.pairId === 't2').judge, 'no', 'the new verdict replaces the old one');
   assert.equal(r.out.pairs.find((p) => p.pairId === 't1').judge, 'yes', 'the human row keeps its old verdict');
+});
+
+// ---- H: the judge model (hf-judge-opus) ----------------------------------------------------------------------------
+
+const endRow = (pairId, human, judge, extra = {}) => JSON.stringify({ ts: new Date(NOW - 5000).toISOString(), phase: 'end', dataset: `${ID}@${SHA}`, pairId, human, judge, candidateSource: 'human', ...extra });
+
+test('H1 the default judge is the one model constant, opus at effort high; start and end rows carry the model and the served model', async () => {
+  // Breaks when: the call goes back to sonnet, effort is dropped, or a ledger row has no model field.
+  assert.equal(JUDGE_MODEL, 'opus');
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  const v = verdictRun('yes');
+  const r = await run(base({ sample: 1 }), { rows: [yesRow('t1')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, headSha: 'b'.repeat(40), ...silent });
+  assert.equal(r.code, 0);
+  assert.equal(v.calls[0].req.model, JUDGE_MODEL);
+  assert.equal(v.calls[0].req.effort, 'high');
+  const [start, end] = ledgerLines(ledgerPath);
+  assert.equal(start.model, 'opus');
+  assert.equal(end.model, 'opus');
+  assert.equal(end.servedModel, 'claude-opus-5-5');
+});
+
+test('H2 parseArgs takes --model opus|sonnet, --cap N and --stop-on-error, and refuses any other model', () => {
+  // Breaks when: haiku or an unknown model reaches the judge, or --cap takes a non-integer.
+  assert.equal(parseArgs([]).model, undefined);
+  assert.equal(parseArgs(['--model', 'sonnet']).model, 'sonnet');
+  assert.equal(parseArgs(['--model', 'opus', '--cap', '65', '--stop-on-error']).cap, 65);
+  assert.equal(parseArgs(['--stop-on-error']).stopOnError, true);
+  assert.throws(() => parseArgs(['--model', 'haiku']), /--model/);
+  assert.throws(() => parseArgs(['--cap', 'x']), /integer/);
+  assert.throws(() => parseArgs(['--cap', '0']), /1 or more/);
+  assert.throws(() => parseArgs(['--cap', '-5']), /1 or more/);
+  assert.equal(parseArgs(['--out-dir', 'o']).outDir, 'o');
+});
+
+test('H3 an opus run sees sonnet-judged pairs as pending; old rows with no model field read as sonnet for this ledger', async () => {
+  // Breaks when: an Opus score mixes in Sonnet verdicts, or legacy rows are dropped from a Sonnet run.
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  writeFileSync(ledgerPath, `${[endRow('t1', 'yes', 'no'), endRow('t2', 'yes', 'no', { model: 'sonnet' })].join('\n')}\n`);
+  const opus = verdictRun('yes');
+  const c = captured();
+  const r = await run(base({ sample: 2 }), { rows: [yesRow('t1'), yesRow('t2')], runClaudeFn: opus.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
+  assert.equal(opus.calls.length, 2, 'both pairs are judged again on opus');
+  assert.equal(r.out.summary.n, 2);
+  assert.equal(r.out.summary.agree, 2, 'only the opus verdicts (yes) count, not the sonnet ones (no)');
+  const sonnet = verdictRun('yes', 'claude-sonnet-5-5');
+  const r2 = await run(base({ sample: 2, model: 'sonnet' }), { rows: [yesRow('t1'), yesRow('t2')], runClaudeFn: sonnet.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(sonnet.calls.length, 0, 'a sonnet run reuses the legacy row and the sonnet row');
+  assert.equal(r2.out.summary.agree, 0);
+});
+
+test('H4 --cap reaches runClaude as deps.cap for this run only; without it no cap is passed', async () => {
+  // Breaks when: the raise is dropped, or a run without the flag passes a cap that overrides the shared constant.
+  const a = verdictRun('yes');
+  await run(base({ sample: 1, cap: 65 }), { rows: [yesRow('t1')], runClaudeFn: a.fn, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(a.calls[0].deps.cap, 65);
+  const b = verdictRun('yes');
+  await run(base({ sample: 1 }), { rows: [yesRow('t1')], runClaudeFn: b.fn, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal('cap' in b.calls[0].deps, false);
+});
+
+test('H5 an opus call served by another model, or with no served model, is an error row and stops the run', async () => {
+  // Breaks when: an older Opus or a missing modelUsage counts as an Opus verdict (seat condition a).
+  for (const served of ['claude-opus-4-1', 'claude-sonnet-5-5', null]) {
+    const ledgerPath = path.join(tmp(), 'l.jsonl');
+    const v = verdictRun('yes', served);
+    const c = captured();
+    const r = await run(base({ sample: 3 }), { rows: [yesRow('t1'), yesRow('t2'), yesRow('t3')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, ...c.io });
+    assert.equal(v.calls.length, 1, `served ${served}: the run stops after the first call`);
+    assert.equal(r.code, 2);
+    const end = ledgerLines(ledgerPath).find((x) => x.phase === 'end');
+    assert.equal(end.error, 'served-model');
+    assert.equal(end.servedModel, served);
+    assert.equal(r.out.summary.n, 0, 'the wrong-model verdict is not counted');
+    assert.match(c.lines.at(-1), /stopped: served-model/);
+  }
+});
+
+test('H6 --stop-on-error stops after the first error row; without it the run goes on', async () => {
+  // Breaks when: a timeout or parse fault in a batch is followed by more paid calls although the flag is set.
+  let n = 0;
+  const flaky = async () => { n += 1; return n === 1 ? { ok: false, reason: 'timeout' } : JSON.parse(JSON.stringify({ ok: true, stdout: JSON.stringify({ type: 'result', result: '{"sameIssue":"yes","real":"unclear","confidence":5,"reason":"r"}', modelUsage: { 'claude-opus-5-5': {} } }) })); };
+  const rws = [yesRow('t1'), yesRow('t2'), yesRow('t3')];
+  const r = await run(base({ sample: 3, stopOnError: true }), { rows: rws, runClaudeFn: flaky, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(n, 1);
+  assert.equal(r.code, 2);
+  n = 0;
+  const r2 = await run(base({ sample: 3 }), { rows: rws, runClaudeFn: flaky, ledgerPath: path.join(tmp(), 'l.jsonl'), outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(n, 3);
+  assert.equal(r2.code, 0);
+});
+
+test('H7 the report file name, the output and the console line carry the model and the head SHA; the other model is printed beside it', async () => {
+  // Breaks when: an Opus report overwrites the Sonnet report, or the report does not say which code made the verdicts (seat condition c).
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  writeFileSync(ledgerPath, `${[endRow('t1', 'yes', 'no'), endRow('t2', 'no', 'no', { candidateSource: 'picked' })].join('\n')}\n`);
+  const v = verdictRun('yes');
+  const c = captured();
+  const outDir = tmp();
+  const r = await run(base({ sample: 2 }), { rows: [yesRow('t1'), noRow('t2')], runClaudeFn: v.fn, ledgerPath, outDir, now: () => NOW, headSha: 'c'.repeat(40), ...c.io });
+  assert.match(path.basename(r.outPath), /hf-judge-precheck-opus\.json$/);
+  assert.equal(r.out.model, 'opus');
+  assert.equal(r.out.headSha, 'c'.repeat(40));
+  assert.equal(r.out.compare.model, 'sonnet');
+  assert.equal(r.out.compare.summary.n, 2);
+  assert.deepEqual(r.out.compare.paired, { n: 2, bothAgree: 0, onlyThis: 1, onlyOther: 1, bothWrong: 0 });
+  assert.match(c.lines.at(-1), /^external-judge \[opus @ cccccccc\]/);
+  assert.ok(c.lines.some((l) => /^compare sonnet: n 2; agreement 1\/2/.test(l)));
+});
+
+test('H9 a wrong served model stops the run even when the answer does not parse', async () => {
+  // Breaks when: a parse fault from another model is a plain error row and the run goes on (CLI finding on cde4777c).
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  const calls = [];
+  const fn = async (req) => { calls.push(req); return { ok: true, stdout: JSON.stringify({ type: 'result', result: 'not json', modelUsage: { 'claude-sonnet-5-5': {} } }) }; };
+  const r = await run(base({ sample: 3 }), { rows: [yesRow('t1'), yesRow('t2'), yesRow('t3')], runClaudeFn: fn, ledgerPath, outDir: tmp(), now: () => NOW, ...silent });
+  assert.equal(calls.length, 1);
+  assert.equal(r.code, 2);
+  assert.equal(ledgerLines(ledgerPath).find((x) => x.phase === 'end').error, 'served-model');
+});
+
+test('H10 each end row names the head that made it; the report counts verdicts by head', async () => {
+  // Breaks when: resumed verdicts are credited to the head of the latest run (CLI finding on cde4777c, seat condition c).
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  writeFileSync(ledgerPath, `${endRow('t1', 'yes', 'yes', { model: 'opus', servedModel: 'claude-opus-5-5', headSha: 'd'.repeat(40) })}\n`);
+  const v = verdictRun('yes');
+  const r = await run(base({ sample: 2 }), { rows: [yesRow('t1'), yesRow('t2')], runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => NOW, headSha: 'e'.repeat(40), ...silent });
+  assert.equal(v.calls.length, 1);
+  assert.equal(ledgerLines(ledgerPath).at(-1).headSha, 'e'.repeat(40));
+  assert.deepEqual(r.out.verdictHeads, { ['d'.repeat(40)]: 1, ['e'.repeat(40)]: 1 });
+});
+
+test('H8 summarize adds tpr and tnr with Wilson intervals, and the confidence 4+ table', () => {
+  // Breaks when: the strict-judge signal (misses on human yes) is hidden behind kappa alone.
+  const recs = [{ ...rec('yes', 'yes'), confidence: 5 }, { ...rec('yes', 'no'), confidence: 3 }, { ...rec('no', 'no'), confidence: 4 }, { ...rec('no', 'no'), confidence: 2 }];
+  const s = summarize(recs);
+  assert.deepEqual([s.tpr.k, s.tpr.n], [1, 2]);
+  assert.deepEqual([s.tnr.k, s.tnr.n], [2, 2]);
+  assert.ok(s.tpr.ci95[0] < 0.5 && s.tpr.ci95[1] > 0.5);
+  assert.deepEqual(s.highConfidence, { n: 2, agree: 2, humanYes: 1 });
+});
+
+// ---- I: judge prompt version (--prompt v0|v1) and the outside set (--set) -------------------------------------------------
+// Every value below is made up. Every run() call injects rows, runClaudeFn, ledgerPath and outDir, so no test can reach a real claude -p.
+
+const sha256 = (s) => createHash('sha256').update(s).digest('hex');
+const EMPTY_PAIR = { cr: null, eng: null, hunk: '' };
+const DS = `${ID}@${SHA}`;
+const OPUS_V1_OUTSIDE = { model: 'opus', promptVersion: 'v1', set: 'outside' };
+// 80 decisive rows t000..t079. With seed 7 the first 6 ids of the seeded sample were taken from the code before this change.
+const GOLDEN_SAMPLE_6 = ['t024', 't054', 't020', 't026', 't002', 't005'];
+
+async function exec(opts, data, { v = verdictRun('yes'), ledgerPath = path.join(tmp(), 'l.jsonl'), now = NOW } = {}) {
+  const c = captured();
+  const r = await run(base(opts), { rows: data, runClaudeFn: v.fn, ledgerPath, outDir: tmp(), now: () => now, ...c.io });
+  return { r, v, c, ledgerPath };
+}
+// A finished end row for a pair of `data`, on the candidate that pair has now (a stale source would be judged again).
+const doneRow = (data, pairId, extra = {}) => endRow(pairId, 'yes', 'yes', { candidateSource: data.map(rowToPair).find((p) => p.pairId === pairId).candidateSource, ...extra });
+const writeLedger = (lines) => { const f = path.join(tmp(), 'l.jsonl'); writeFileSync(f, `${lines.join('\n')}\n`); return f; };
+
+test('I1 --prompt takes v0 or v1 and --set takes sample or outside; any other value is a usage error, in parseArgs and in run', async () => {
+  // Breaks when: an unknown prompt or set is accepted, so a paid run goes out with a prompt nobody froze.
+  assert.equal(parseArgs(['--prompt', 'v1']).prompt, 'v1');
+  assert.equal(parseArgs(['--set', 'outside']).set, 'outside');
+  assert.equal(parseArgs([]).prompt, undefined);
+  assert.throws(() => parseArgs(['--prompt', 'v2']), /--prompt must be one of v0, v1/);
+  assert.throws(() => parseArgs(['--prompt', 'constructor']), /--prompt/, 'an object property name is not a prompt');
+  assert.throws(() => parseArgs(['--set', 'all']), /--set must be one of sample, outside/);
+  for (const bad of [{ prompt: 'v2' }, { set: 'all' }]) {
+    const x = await exec({ sample: 2, ...bad }, rows(4));
+    assert.equal(x.r.code, 1);
+    assert.equal(x.v.calls.length, 0);
+    assert.equal(existsSync(x.ledgerPath), false);
+  }
+});
+
+test('I2 a v1 run sends the v1 text; the default run and --prompt v0 send the judge.mjs text byte for byte', async () => {
+  // Breaks when: v1 is routed to judgePrompt, the default is routed to v1, or the v0 path stops calling the judge.mjs prompt.
+  const pair = rowToPair(yesRow('t1')).pair;
+  const v1 = await exec({ sample: 1, prompt: 'v1' }, [yesRow('t1')]);
+  assert.equal(v1.v.calls[0].req.prompt, judgePromptV1(pair));
+  assert.doesNotMatch(v1.v.calls[0].req.prompt, /Engine finding/);
+  for (const opts of [{ sample: 1 }, { sample: 1, prompt: 'v0' }]) {
+    const v0 = await exec(opts, [yesRow('t1')]);
+    assert.equal(v0.v.calls[0].req.prompt, judgePrompt(pair));
+    assert.match(v0.v.calls[0].req.prompt, /Engine finding/);
+  }
+});
+
+test('I3 the default run picks the ids it picked before and sends judgePrompt for each, and the v0 sample report keeps its name', async () => {
+  // Breaks when: the default run draws another sample, reorders it, sends another text, or renames the v0 sample report.
+  const data = rows(80);
+  const pairs = new Map(data.map(rowToPair).map((p) => [p.pairId, p.pair]));
+  const x = await exec({ sample: 6 }, data);
+  assert.deepEqual(x.r.out.sampleIds, GOLDEN_SAMPLE_6);
+  assert.deepEqual(x.v.calls.map((c) => c.req.prompt), GOLDEN_SAMPLE_6.map((i) => judgePrompt(pairs.get(i))));
+  assert.match(path.basename(x.r.outPath), /^\d{4}-\d{2}-\d{2}-hf-judge-precheck-opus\.json$/);
+});
+
+test('I4 start and end rows carry promptVersion, set and the prompt sha; a legacy row reads as v0 and sample', async () => {
+  // Breaks when: a row drops promptVersion, set or promptSha256, or a row with no promptVersion stops counting as v0.
+  const v1 = await exec({ sample: 1, prompt: 'v1' }, [yesRow('t1')]);
+  for (const l of ledgerLines(v1.ledgerPath)) {
+    assert.equal(l.promptVersion, 'v1');
+    assert.equal(l.set, 'sample');
+    assert.equal(l.promptSha256, JUDGE_PROMPT_V1_SHA256);
+  }
+  const v0 = await exec({ sample: 1 }, [yesRow('t1')]);
+  const [start, end] = ledgerLines(v0.ledgerPath);
+  assert.deepEqual([start.promptVersion, end.promptVersion, end.set], ['v0', 'v0', 'sample']);
+  assert.equal(end.promptSha256, sha256(judgePrompt(EMPTY_PAIR)));
+  const legacy = writeLedger([endRow('t1', 'yes', 'yes', { model: 'opus' })]);
+  assert.equal((await exec({ sample: 1 }, [yesRow('t1')], { ledgerPath: legacy })).v.calls.length, 0, 'v0 reads the legacy row');
+  assert.equal((await exec({ sample: 1, prompt: 'v1' }, [yesRow('t1')], { ledgerPath: legacy })).v.calls.length, 1, 'v1 does not');
+});
+
+test('I5 one score per model and prompt: a v1 run sees v0 rows as pending and a v0 run sees v1 rows as pending', async () => {
+  // Breaks when: judgedMap or the summary ignores promptVersion, so a v1 score mixes in v0 verdicts or the reverse.
+  const data = [yesRow('t1'), yesRow('t2')];
+  const v0Rows = writeLedger([endRow('t1', 'yes', 'no', { model: 'opus' }), endRow('t2', 'yes', 'no', { model: 'opus', promptVersion: 'v0' })]);
+  const a = await exec({ sample: 2, prompt: 'v1' }, data, { ledgerPath: v0Rows });
+  assert.equal(a.v.calls.length, 2);
+  assert.deepEqual([a.r.out.summary.n, a.r.out.summary.agree], [2, 2], 'only the v1 verdicts (yes) count, not the v0 ones (no)');
+  const v1Rows = writeLedger([endRow('t1', 'yes', 'no', { model: 'opus', promptVersion: 'v1', set: 'sample' }), endRow('t2', 'yes', 'no', { model: 'opus', promptVersion: 'v1', set: 'sample' })]);
+  const b = await exec({ sample: 2 }, data, { ledgerPath: v1Rows });
+  assert.equal(b.v.calls.length, 2);
+  assert.deepEqual([b.r.out.summary.n, b.r.out.summary.agree], [2, 2]);
+});
+
+test('I6 the report compares the other prompt on the same model and set when both exist, and null when it does not; the model compare stays', async () => {
+  // Breaks when: the cross-prompt block pairs another model or set, is missing when both prompts exist, or replaces out.compare.
+  const data = [yesRow('t1'), yesRow('t2')];
+  const ledgerPath = writeLedger([endRow('t1', 'yes', 'yes', { model: 'opus' }), endRow('t2', 'yes', 'no', { model: 'opus' })]);
+  const x = await exec({ sample: 2, prompt: 'v1' }, data, { ledgerPath });
+  assert.equal(x.r.out.comparePrompt.promptVersion, 'v0');
+  assert.equal(x.r.out.comparePrompt.summary.n, 2);
+  assert.deepEqual(x.r.out.comparePrompt.paired, { n: 2, bothAgree: 1, onlyThis: 1, onlyOther: 0, bothWrong: 0 });
+  assert.equal(x.r.out.compare.model, 'sonnet');
+  assert.ok(x.c.lines.some((l) => /^compare prompt v0: n 2; agreement 1\/2/.test(l)));
+  assert.match(x.c.lines.at(-1), /^external-judge \[opus @/, 'the final line stays last');
+  assert.equal((await exec({ sample: 2, prompt: 'v1' }, data)).r.out.comparePrompt, null);
+});
+
+test('I7 --set outside is every decisive pair outside the default sample, in the seeded order, stable, and never non-decisive rows', async () => {
+  // Breaks when: a sample id leaks into outside, a decisive pair is lost, the order depends on call or --sample, or a no-action or uncertain row gets in.
+  const decisive = rows(80);
+  const extra = [row(900, 'Uncertain'), yesRow('nopair', { human_matched_action_id: 'zzz' }), noRow('noact', { developer_actions: '[]' })];
+  const dry = (o) => exec({ dryRun: true, showPrompts: 0, set: 'outside', ...o }, [...extra, ...decisive]);
+  const first = (await dry({ sample: 20 })).r.ids;
+  const all = decisive.map((r) => r.task_id);
+  const sample = new Set(sampleIds(all, 50, 7));
+  assert.equal(first.length, 30);
+  assert.ok(first.every((i) => !sample.has(i)), 'no sample id');
+  assert.deepEqual([...first].sort(), all.filter((i) => !sample.has(i)).sort(), 'every other decisive pair');
+  assert.deepEqual((await dry({ sample: 20 })).r.ids, first, 'second call');
+  assert.deepEqual((await dry({ sample: 5 })).r.ids, first, 'not moved by --sample');
+  assert.deepEqual(first, sampleIds(all, 80, 7).filter((i) => !sample.has(i)), 'the order of the sample code');
+  assert.ok(!first.some((i) => ['nopair', 'noact', 't900'].includes(i)));
+});
+
+test('I8 a v1 outside run writes -opus-v1-outside.json with promptSha256 and the passRule, and rows carry set outside', async () => {
+  // Breaks when: the report name ignores prompt or set (a v1 report would overwrite another), or the header drops the frozen sha or the pass rule.
+  const data = rows(55);
+  const x = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data);
+  assert.match(path.basename(x.r.outPath), /^\d{4}-\d{2}-\d{2}-hf-judge-precheck-opus-v1-outside\.json$/);
+  const o = JSON.parse(readFileSync(x.r.outPath, 'utf8'));
+  assert.deepEqual([o.model, o.effort, o.promptVersion, o.set], ['opus', 'high', 'v1', 'outside']);
+  assert.equal(o.promptSha256, JUDGE_PROMPT_V1_SHA256);
+  assert.equal(o.passRule, 'pass = kappa >= 0.60 on this set for this model and prompt; written before the run; no second prompt on the outside set after a fail');
+  assert.equal(o.summary.n, 5);
+  assert.ok(ledgerLines(x.ledgerPath).every((l) => l.set === 'outside'));
+  const v0 = await exec({ dailyShare: 100, set: 'outside' }, data);
+  assert.match(path.basename(v0.r.outPath), /-opus-v0-outside\.json$/);
+  assert.equal(v0.r.out.promptSha256, sha256(judgePrompt(EMPTY_PAIR)));
+  assert.match(path.basename((await exec({ sample: 1, prompt: 'v1' }, data)).r.outPath), /-opus-v1-sample\.json$/);
+});
+
+test('I9 a v1 run whose prompt sha differs from the sha on paid v1 rows for that model and set is refused before any call or ledger write', async () => {
+  // Breaks when: the freeze check is dropped, runs after the first call, compares across models or sets, or reads only end rows.
+  const data = rows(55);
+  const other = 'f'.repeat(64);
+  for (const phase of ['end', 'start']) {
+    const ledgerPath = writeLedger([JSON.stringify({ ts: new Date(NOW - 1000).toISOString(), phase, dataset: DS, pairId: 'z1', ...OPUS_V1_OUTSIDE, promptSha256: other })]);
+    const before = readFileSync(ledgerPath, 'utf8');
+    const x = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath });
+    assert.equal(x.r.code, 2, `${phase} row`);
+    assert.equal(x.v.calls.length, 0);
+    assert.equal(readFileSync(ledgerPath, 'utf8'), before, 'no new ledger line');
+  }
+  const same = writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256 })]);
+  assert.equal((await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: same })).r.code, 0, 'the same sha goes on');
+  const unrelated = writeLedger([
+    endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, set: 'sample', promptSha256: other }),
+    endRow('z2', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, model: 'sonnet', promptSha256: other }),
+    endRow('z3', 'yes', 'yes', { model: 'opus', promptVersion: 'v0', set: 'outside', promptSha256: other }),
+  ]);
+  assert.equal((await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: unrelated })).r.code, 0, 'another set, model or prompt does not freeze this one');
+});
+
+test('I10 an interrupted run resumes: judged pairs are skipped, and no pair is counted twice, even with a repeated end row', async () => {
+  // Breaks when: resume ignores (model, prompt, set) rows, re-judges a pair, or the summary counts every end row instead of one per pair.
+  const data = rows(55);
+  const ledgerPath = path.join(tmp(), 'l.jsonl');
+  const step = (share, v = verdictRun('yes')) => exec({ dailyShare: share, set: 'outside', prompt: 'v1' }, data, { ledgerPath, v });
+  const calls = [(await step(2)).v.calls.length, (await step(4)).v.calls.length];
+  const last = await step(10);
+  calls.push(last.v.calls.length);
+  assert.deepEqual(calls, [2, 2, 1]);
+  assert.equal(last.r.out.summary.n, 5);
+  const ends = ledgerLines(ledgerPath).filter((l) => l.phase === 'end');
+  assert.equal(new Set(ends.map((l) => l.pairId)).size, 5);
+  writeFileSync(ledgerPath, `${readFileSync(ledgerPath, 'utf8')}${JSON.stringify(ends[0])}\n`);
+  const again = await step(20);
+  assert.equal(again.v.calls.length, 0);
+  assert.equal(again.r.out.summary.n, 5, 'a repeated end row counts once');
+});
+
+test('I11 a dry run with --set outside --prompt v1 --show-prompts 0 prints the pair counts, makes 0 calls and writes nothing', async () => {
+  // Breaks when: the plan hides the set size, judged or pending counts, a dry run prints prompts or calls claude, or it counts rows of another prompt as judged.
+  const data = rows(80);
+  const ids = (await exec({ dryRun: true, showPrompts: 0, set: 'outside', prompt: 'v1' }, data)).r.ids;
+  const ledgerPath = writeLedger([
+    doneRow(data, ids[0], OPUS_V1_OUTSIDE),
+    doneRow(data, ids[1], OPUS_V1_OUTSIDE),
+    doneRow(data, ids[2], { model: 'opus', promptVersion: 'v0', set: 'outside' }),
+  ]);
+  const before = readFileSync(ledgerPath, 'utf8');
+  const x = await exec({ dryRun: true, showPrompts: 0, set: 'outside', prompt: 'v1' }, data, { ledgerPath });
+  assert.equal(x.v.calls.length, 0);
+  assert.equal(x.r.headlessCalls, 0);
+  assert.match(x.c.lines[0], /prompt v1 set outside/);
+  assert.match(x.c.lines[0], /pairs in set 30/);
+  assert.match(x.c.lines[0], /already judged 2, pending 28/);
+  assert.ok(!x.c.lines.some((l) => l.includes('UNTRUSTED DATA')), 'no prompt printed');
+  assert.equal(readFileSync(ledgerPath, 'utf8'), before);
+  assert.deepEqual([x.r.pairsInSet, x.r.judged, x.r.pending], [30, 2, 28]);
+});
+
+test('I12 a v1 call maps a thrown runner to timeout and a cap to a stop, as the v0 judge does', async () => {
+  // Breaks when: the v1 path lets a runner throw escape, or reads a cap as a timeout so a capped batch keeps spending calls.
+  const thrown = await exec({ sample: 2, prompt: 'v1' }, [yesRow('t1'), yesRow('t2')], { v: { fn: async () => { throw new Error('boom'); }, calls: [] } });
+  assert.equal(thrown.r.code, 0);
+  const errs = ledgerLines(thrown.ledgerPath).filter((l) => l.phase === 'end').map((l) => l.error);
+  assert.deepEqual(errs, ['timeout', 'timeout']);
+  let n = 0;
+  const capped = await exec({ sample: 3, prompt: 'v1' }, [yesRow('t1'), yesRow('t2'), yesRow('t3')], { v: { fn: async () => { n += 1; return { ok: false, reason: 'cap' }; }, calls: [] } });
+  assert.equal(n, 1);
+  assert.equal(capped.r.code, 2);
+  assert.equal(ledgerLines(capped.ledgerPath).find((l) => l.phase === 'end').error, 'cap');
+});
+
+test('I13 the v1 freeze also checks the filled-field sha: rows carry it, a different one is refused, and a row without it is not', async () => {
+  // Breaks when: a change to the clip limits or field labels (the filled text) passes the freeze, or the paid rows from before the filled sha are refused.
+  const data = rows(55);
+  const x = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data);
+  assert.ok(ledgerLines(x.ledgerPath).every((l) => l.promptFilledSha256 === JUDGE_PROMPT_V1_FILLED_SHA256));
+  assert.equal(x.r.out.promptFilledSha256, JUDGE_PROMPT_V1_FILLED_SHA256);
+  const moved = writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: 'f'.repeat(64) })]);
+  const r = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: moved });
+  assert.equal(r.r.code, 2);
+  assert.equal(r.v.calls.length, 0);
+  const legacy = writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256 })]);
+  assert.equal((await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: legacy })).r.code, 0);
+});
+
+test('I14 a v1 verdict counts only when its recorded shas are the current ones, from any set', async () => {
+  // Breaks when: a v1 verdict made with another prompt text (for example on the sample set) is reused and counted under the current sha.
+  const data = rows(55);
+  const ids = (await exec({ dryRun: true, showPrompts: 0, set: 'outside', prompt: 'v1' }, data)).r.ids;
+  const old = { model: 'opus', promptVersion: 'v1', set: 'sample' };
+  const cases = [
+    [{ promptSha256: 'f'.repeat(64) }, 5],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: 'f'.repeat(64) }, 5],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: JUDGE_PROMPT_V1_FILLED_SHA256 }, 4],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256 }, 4],
+  ];
+  for (const [shas, calls] of cases) {
+    const ledgerPath = writeLedger([doneRow(data, ids[0], { ...old, ...shas })]);
+    const x = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath });
+    assert.equal(x.v.calls.length, calls, JSON.stringify(shas));
+    assert.equal(x.r.out.summary.n, 5);
+  }
 });

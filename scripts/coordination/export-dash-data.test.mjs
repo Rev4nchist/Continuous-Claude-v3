@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   DATASETS, DOC_CAP_BYTES, buildProjectRows, buildRefreshDoc, buildSnapshotRow, checkInvariants,
-  chicagoDay, clearRefreshFile, clearRefreshPending, cutTitle, readSnapshots, TITLE_MAX, upsertSnapshot, writeExport,
+  chicagoDay, clearRefreshFile, heldFields, holderName, clearRefreshPending, cutTitle, readSnapshots, TITLE_MAX, upsertSnapshot, writeExport,
 } from './export-dash-data.mjs';
 import { compileRules } from './lane-dash-project.mjs';
 import { normalizeConfig } from './lane-dash-config.mjs';
@@ -568,5 +568,66 @@ describe('clearRefreshFile (PR 409 follow-up: same lock as writeExport, own temp
     fs.writeFileSync(refreshPath(out), '{oops');
     assert.throws(() => clearRefreshFile(out, T1, T3));
     assert.ok(!fs.existsSync(path.join(out, '.export.lock')));
+  });
+});
+
+describe('heldFields and holderName (fleetops-category-expand)', () => {
+  const EXP = '2026-11-13T16:00:00.000Z';
+  const names = { 'aaaa1111-0000-4000-8000-000000000001': 'FleetOps builder' };
+  const nameOf = (u) => names[u] ?? null;
+  const row = (o = {}) => ({ owner_session_id: 'aaaa1111-0000-4000-8000-000000000001', note: 'GOAL: show the work. | NEXT: x at abc1234',
+    lease_expires_at: new Date('2026-11-13T17:00:00Z'), ...o });
+
+  it('a lane with no owner gets no keys at all', () => {
+    // Breaks if goal or holder is written on every row (lanes.json has 27 KB of room left).
+    assert.deepEqual(heldFields(row({ owner_session_id: null }), EXP, nameOf), {});
+  });
+
+  it('a held lane gets the GOAL sentence, the session name and parked false; the raw note never passes', () => {
+    // Breaks if the note, the uuid or the SHA after " | " reaches the row.
+    const f = heldFields(row(), EXP, nameOf);
+    assert.deepEqual(f, { goal: 'show the work.', holder: 'FleetOps builder', parked: false });
+    assert.ok(!JSON.stringify(f).includes('abc1234'));
+    assert.ok(!JSON.stringify(f).includes('aaaa1111'));
+  });
+
+  it('an ended lease gives holder null: a gone session is not named', () => {
+    // Breaks if held (owner not null) alone names the holder.
+    assert.equal(heldFields(row({ lease_expires_at: new Date('2026-11-13T15:59:59Z') }), EXP, nameOf).holder, null);
+    assert.equal(heldFields(row({ lease_expires_at: null }), EXP, nameOf).holder, null);
+  });
+
+  it('a parked note gives parked true and still finds the GOAL after " || "', () => {
+    // Breaks if a waiting session reads as active work (seat word 10:51, item 6a).
+    const f = heldFields(row({ note: 'PARKED until 2026-11-14 -- waits || GOAL: g. | NEXT: n' }), EXP, nameOf);
+    assert.equal(f.parked, true);
+    assert.equal(f.goal, 'g.');
+  });
+
+  it('holderName clips to 16 characters and masks hex ids; empty gives null', () => {
+    // Breaks if a name holding a session id or handle reaches the dashboard.
+    assert.equal(holderName('FleetOps builder #b2b46d90'), 'FleetOps builder');
+    assert.ok(!/[0-9a-f]{8}/.test(holderName('b2b46d90-5361-424d-a80d') ?? ''));
+    assert.equal(holderName(''), null);
+    assert.equal(holderName(null), null);
+    assert.equal(holderName('  '), null);
+  });
+
+  it('40 held lanes at the goal limit add under 12 KB', () => {
+    // Breaks if the goal cut goes or more fields are added per held lane.
+    const long = `GOAL: ${'word '.repeat(100)}`;
+    const many = Array.from({ length: 40 }, () => heldFields(row({ note: long }), EXP, () => 'x'.repeat(40)));
+    assert.ok(JSON.stringify(many).length < 12 * 1024, String(JSON.stringify(many).length));
+  });
+});
+
+describe('buildProjectRows next_goal (fleetops-category-expand)', () => {
+  it('passes next_goal from the rules; absent gives an empty string', () => {
+    // Breaks if the export drops next_goal: the page then never shows the Next goal line.
+    const r = compileRules({ version: 1, projects: [{ key: 'p', name: 'P', next_goal: 'Retire CodeRabbit for HIGH.' }, { key: 'q', name: 'Q' }] });
+    const rows = buildProjectRows(r, [], cfg());
+    assert.equal(rows.find((x) => x.key === 'p').next_goal, 'Retire CodeRabbit for HIGH.');
+    assert.equal(rows.find((x) => x.key === 'q').next_goal, '');
+    assert.equal(rows.find((x) => x.key === 'unassigned').next_goal, '');
   });
 });

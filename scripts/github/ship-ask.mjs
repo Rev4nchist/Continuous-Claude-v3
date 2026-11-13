@@ -11,7 +11,9 @@
  *   SHIP_ASK_STATUS_SCRIPT  replaces review-status.mjs for land (tests). Honoured only in test mode.
  *   Test mode = SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE set to a path other than the default real store.
  *   Outside test mode both are ignored, with one warning on stderr, and the real data path runs.
- * The recommended option is first and its label ends with " (Recommended)". The question has at most 3 lines.
+ * The recommended option is first and its label ends with " (Recommended)". The question has at most 3 lines (land: at most 5).
+ * land starts with three lines, "Why:", "What it does:" and "You will see:" (the Problem, Change and You will see fields of the pre-pr
+ * summary), only when the summary's stamp binds to the PR head. Then one line that starts with "State:".
  * The store step of commit-and-push is `ship`. An open offer is what lets the AskUserQuestion hook record Dave's tap.
  * Exit 0 = the offer is written and the spec printed. 1 = no question can be asked (the reason is on stderr, nothing written).
  * 2 = bad usage. 3 = internal error.
@@ -21,7 +23,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
-import { SUMMARY_REL, changeOf, hashOf } from './lib/pr-summary.mjs';
+import { SUMMARY_REL, changeOf, hashOf, summaryFieldsOf } from './lib/pr-summary.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -97,14 +99,55 @@ export function rerunPrePrSpec({ branch, head, stampHead, fails, capLeftUsd }) {
   ] };
 }
 
-/** land. data: { pr, head, ready, reasons, mergeable, unresolved, pathway, by }. */
+const LAND_LABELS = ['Land now', 'Land when READY', 'Keep open', 'Return to draft'];
+const NO_SUMMARY = 'What it does: no checked summary for this head. Read the PR body before you answer.';
+const SUMMARY_MAX = 200;
+
+const WITHHELD = 'text withheld (it reads like the state line or an option). Read the PR body.';
+
+// Control, format, private-use and lone surrogate characters, and the line and paragraph separators. None may reach the question:
+// a zero-width or bidi character can hide the start of a field, and a separator can add a line.
+const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/gu;
+/** Text in one plain form: NFKC (full-width letters become ASCII), no unsafe character, one line, single spaces. */
+const plainOf = (text) => one(String(text ?? '').normalize('NFKC').replace(UNSAFE_CHARS, ' '));
+// READY or NOT READY as the first word, after any run of characters that are not letters or digits ("**READY**", "- NOT READY").
+const STARTS_AS_STATE = /^[^\p{L}\p{N}]*(?:not[^\p{L}\p{N}]+ready|ready)(?![\p{L}\p{N}])/iu;
+/** clip by code point: a cut never leaves half a character (the ledger needs the question word for word). */
+function clipPoints(text, n) {
+  const points = [...text];
+  return points.length > n ? `${points.slice(0, n - 1).join('')}…` : text;
+}
+
+/**
+ * One summary field as one line of at most SUMMARY_MAX characters, or null when the field is empty. The text comes from a file the building
+ * session wrote and shows above the machine facts. A field that could pose as them is not shown: one that holds an option label, or starts
+ * with READY, NOT READY (also behind punctuation, an invisible character or full-width letters), or holds "state:" anywhere.
+ * Its line says WITHHELD, so Dave sees that a text was there.
+ */
+function summaryLine(text) {
+  const t = plainOf(text);
+  if (!t) return null;
+  const low = t.toLowerCase();
+  const poses = STARTS_AS_STATE.test(t) || /state\s*:/i.test(t) || LAND_LABELS.some((l) => low.includes(l.toLowerCase()));
+  return poses ? WITHHELD : clipPoints(t, SUMMARY_MAX);
+}
+
+/** The description lines of the Land question: Why, What it does, You will see. With no field at all: the one NO_SUMMARY line. */
+function describeLines(summary) {
+  const rows = [['Why', summary?.problem], ['What it does', summary?.change], ['You will see', summary?.youWillSee]];
+  const lines = rows.map(([label, text]) => [label, summaryLine(text)]).filter(([, text]) => text).map(([label, text]) => `${label}: ${text}`);
+  return lines.length > 0 ? lines : [NO_SUMMARY];
+}
+
+/** land. data: { pr, head, ready, reasons, mergeable, unresolved, pathway, by, summary }. summary is { problem, change, youWillSee } of the pre-pr summary that binds to this head, or null. */
 export function landSpec(d) {
   const state = d.ready ? 'READY' : 'NOT READY';
   const review = d.pathway ? `review ${d.pathway}${d.by ? `, recorded by ${d.by}` : ''}` : 'no review recorded';
+  // The description first, then the machine facts on one line that starts with "State:". At most 5 lines.
   const lines = [
-    `PR #${d.pr} is ${state} at ${String(d.head).slice(0, 7)}: mergeable ${d.mergeable ?? 'unknown'}, ${plural(d.unresolved ?? 0, 'open thread')}.`,
-    `Review: ${review}.`,
-    d.ready ? 'land-pr.ps1 checks every gate again before it merges.' : `Not ready: ${clip((d.reasons ?? [])[0] ?? 'no reason given', 110)}.`,
+    ...describeLines(d.summary),
+    `State: PR #${d.pr} is ${state} at ${String(d.head).slice(0, 7)}: mergeable ${d.mergeable ?? 'unknown'}, ${plural(d.unresolved ?? 0, 'open thread')}. Review: ${review}.`,
+    ...(d.ready ? [] : [`Not ready: ${clip((d.reasons ?? [])[0] ?? 'no reason given', 110)}.`]),
   ];
   const go = d.ready ? opt('Land now', 'Runs land-pr.ps1 for this head. A push voids this answer.', true) : opt('Land when READY', 'Run land-pr.ps1 once READY is true for this head. A push voids this answer.', true);
   return { header: 'Land', question: lines.join('\n'), options: [go, opt('Keep open', 'Nothing runs. The PR stays open.'), opt('Return to draft', 'Runs gh pr ready --undo. The review pick starts again.')] };
@@ -165,9 +208,9 @@ export function gatherShip({ branch, msg }) {
   return { branch: t.name, head: t.head, tree: t.tree, headTree: t.headTree ?? null, staged, ahead: ahead === null ? null : Number(ahead), subject, missing: t.missing === true };
 }
 
-/** The stamp of this checkout, or null. */
-function readStamp() {
-  try { return JSON.parse(readFileSync(path.join(topOf(), '.claude', 'cache', 'pre-pr', 'stamp.json'), 'utf8')); } catch { return null; }
+/** The stamp of the checkout at root (default: this checkout), or null. */
+function readStamp(root = topOf()) {
+  try { return JSON.parse(readFileSync(path.join(root, '.claude', 'cache', 'pre-pr', 'stamp.json'), 'utf8')); } catch { return null; }
 }
 
 const costOfDetail = (detail) => Number(/billed \$([0-9.]+)/.exec(detail ?? '')?.[1] ?? 0);
@@ -182,15 +225,63 @@ async function capLeft() {
   } catch { return null; }
 }
 
-/** The Change sentence of the summary file, only when the stamp's summary row is PASS and the file is the one the stamp hashed (stamp.summary_sha256). Else null. */
-function readChange(stamp) {
+/** The text of the summary file under root, only when the stamp's summary row is PASS and the file is the one the stamp hashed (stamp.summary_sha256). Else null. */
+function checkedSummaryText(stamp, root = topOf()) {
   try {
     if (!stamp?.summary_sha256) return null;
     // PASS, or a NOTE the check marked ok (an older Head, a long sentence). A NOTE that hides a real problem has no summary_ok.
-  if (!Array.isArray(stamp.results) || !(stamp.summary_ok === true || stamp.results.find((r) => r.step === 'summary')?.status === 'PASS')) return null;
-    const text = readFileSync(path.join(topOf(), SUMMARY_REL), 'utf8');
-    return hashOf(text) === stamp.summary_sha256 ? changeOf(text) : null;
+    if (!Array.isArray(stamp.results) || !(stamp.summary_ok === true || stamp.results.find((r) => r.step === 'summary')?.status === 'PASS')) return null;
+    const text = readFileSync(path.join(root, SUMMARY_REL), 'utf8');
+    return hashOf(text) === stamp.summary_sha256 ? text : null;
   } catch { return null; }
+}
+
+/** The Change sentence of the checked summary of this checkout, or null. */
+const readChange = (stamp) => changeOf(checkedSummaryText(stamp));
+
+const SHA = /^[0-9a-f]{7,40}$/i;
+// The summary lookup must never stop the question: each of its git calls ends after this time, and a call that did not end is a failure.
+const SUMMARY_GIT_MS = 10000;
+const gitQuick = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: SUMMARY_GIT_MS });
+const gitOk = (args, cwd) => gitQuick(args, cwd).status === 0;
+/** stdout of a git call inside the time limit, or null. */
+const gitText = (args, cwd) => { const r = gitQuick(args, cwd); return r.status === 0 ? r.stdout.trim() : null; };
+
+/**
+ * True when a summary that pre-pr checked at stampHead still describes the PR at prHead:
+ * the two are the same commit, or stampHead is an ancestor and every commit after it that is not on main is a merge commit.
+ * Named limit (seat ruling): a merge commit that carries new code still binds. The gate does not use this text.
+ * A fix commit after pre-pr does not bind: pre-pr never saw it. Any git failure (a commit this repo does not hold, no main ref) does not bind.
+ */
+function bindsTo(stampHead, prHead, cwd) {
+  const from = String(stampHead ?? '').toLowerCase();
+  const to = String(prHead ?? '').toLowerCase();
+  if (!SHA.test(from) || !SHA.test(to)) return false;
+  if (from.length === 40 && from === to) return true;
+  // fork/main when this repo has it; the local main only when it does not. Both together would hide a fix commit that reached the local main only.
+  const main = ['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], cwd));
+  if (!main || !gitOk(['merge-base', '--is-ancestor', from, to], cwd)) return false;
+  return gitText(['rev-list', '--no-merges', `${from}..${to}`, `^${main}`], cwd) === '';
+}
+
+/** This checkout first, then every other worktree of the repo. */
+function checkoutRoots() {
+  const here = topOf();
+  const listed = (gitText(['worktree', 'list', '--porcelain'], here) ?? '').split(/\r?\n/).filter((l) => l.startsWith('worktree ')).map((l) => l.slice('worktree '.length).trim());
+  const seen = new Set();
+  return [here, ...listed].filter((root) => { const k = path.resolve(root).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+/** { problem, change, youWillSee } of the checked pre-pr summary whose stamp binds to prHead, or null. Never throws: any read error is null. */
+function readSummaryFor(prHead) {
+  try {
+    for (const root of checkoutRoots()) {
+      const stamp = readStamp(root);
+      const text = checkedSummaryText(stamp, root);
+      if (text && bindsTo(stamp.head, prHead, root)) return summaryFieldsOf(text);
+    }
+  } catch { /* the question shows the NO_SUMMARY line */ }
+  return null;
 }
 
 /** { branch, head, stampHead, stampAt, rows, fails, change, cliDetail, costUsd, capLeftUsd, now } for open-pr. */
@@ -222,7 +313,7 @@ export function statusScriptOf(env = process.env) {
   return real;
 }
 
-/** { pr, head, ready, reasons, mergeable, unresolved, isDraft, prState, pathway, by } for land. Runs review-status.mjs (read-only). */
+/** { pr, head, ready, reasons, mergeable, unresolved, isDraft, prState, pathway, by, summary } for land. Runs review-status.mjs (read-only). */
 export function gatherLand({ pr }, env = process.env) {
   const script = statusScriptOf(env);
   const r = spawnSync(process.execPath, [script, String(pr), '--repo', DEFAULT_REPO, '--json'], { encoding: 'utf8', windowsHide: true, cwd: topOf() });
@@ -231,7 +322,7 @@ export function gatherLand({ pr }, env = process.env) {
   const record = readJson(path.join(topOf(), '.claude', 'cache', 'pre-pr', 'pathway.json'));
   const mine = record && String(record.head).toLowerCase() === String(s.head).toLowerCase() ? record : null;
   const label = (s.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).find((n) => String(n).startsWith('review:'));
-  return { pr, head: s.head, ready: s.ready === true, reasons: s.reasons ?? [], mergeable: s.mergeable_state, unresolved: s.unresolved, isDraft: s.isDraft === true, prState: s.prState, pathway: mine?.pathway ?? PATHWAY_OF_LABEL[label] ?? null, by: mine?.decided_by ?? null };
+  return { pr, head: s.head, ready: s.ready === true, reasons: s.reasons ?? [], mergeable: s.mergeable_state, unresolved: s.unresolved, isDraft: s.isDraft === true, prState: s.prState, pathway: mine?.pathway ?? PATHWAY_OF_LABEL[label] ?? null, by: mine?.decided_by ?? null, summary: readSummaryFor(s.head) };
 }
 
 function readJson(file) {

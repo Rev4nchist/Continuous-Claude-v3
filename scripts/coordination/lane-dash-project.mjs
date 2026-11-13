@@ -57,6 +57,7 @@ export function compileRules(raw) {
       key,
       name: typeof p.name === 'string' ? p.name : key,
       goal: typeof p.goal === 'string' ? p.goal : '',
+      next_goal: typeof p.next_goal === 'string' ? p.next_goal : '',
       done: typeof p.done === 'string' ? p.done : '',
       idRe: typeof p.idRe === 'string' ? p.idRe : null,
       re: compileIdRe(key, p.idRe),

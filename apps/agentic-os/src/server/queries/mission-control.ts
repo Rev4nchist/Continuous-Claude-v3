@@ -35,6 +35,7 @@ import {
 import type { RollupResult } from '@/server/queries/spend-rollup-parse';
 import { readSessionNames } from '@/server/sources/identity-names';
 import { readLaneDash } from '@/server/sources/lane-dash';
+import { readPrFeed, type PrFeedSnapshot } from '@/server/sources/pr-feed';
 import { safeMessage } from '@/server/sources/safe-message';
 import { readSpendRollup } from '@/server/sources/spend-rollup';
 import { readStateFiles, type StateFiles, type StateSnapshot } from '@/server/sources/state-files';
@@ -139,6 +140,11 @@ export type MissionControlSnapshot = {
   spend: SpendView | null;
   /** The Flow tab: the lane-dashboard export, read only. Computed only when the request carries `view=flow`, else null. */
   flow: FlowView | null;
+  /**
+   * The Open pull requests table: open-prs.json and pr-spend.json, joined to lanes. Computed only for a request with
+   * no `view` (the Overview and Sessions polls), else null, so the Board, Spend and Flow polls carry none of it.
+   */
+  prFeed: PrFeedSnapshot | null;
   /** When the server produced this, ISO-8601 UTC. The UI shows staleness relative
    *  to receipt rather than to this value — a clock difference between server and
    *  browser is not the user's problem to reason about. */
@@ -212,7 +218,8 @@ export async function getMissionControlSnapshot(
   withSpend = false,
   withFlow = false,
 ): Promise<MissionControlSnapshot> {
-  const [databaseRaw, fleet, active, files, lanes, heldLanes, board, flow, coordRead] = await Promise.all([
+  const withPrFeed = !withBoard && !withSpend && !withFlow;
+  const [databaseRaw, fleet, active, files, lanes, heldLanes, board, flow, coordRead, prFeed] = await Promise.all([
     checkDatabaseReady(),
     getFleetOverview(),
     getActiveSessions(),
@@ -223,6 +230,8 @@ export async function getMissionControlSnapshot(
     withFlow ? readLaneDash() : Promise.resolve(null),
     // The Ready strip shows on every view, so this read runs on every poll.
     settle(getReadyCoord),
+    // readPrFeed never throws: a missing file is "absent", a failed lane lookup shows dashes.
+    withPrFeed ? readPrFeed() : Promise.resolve(null),
   ]);
 
   const database: MissionControlSnapshot['database'] = databaseRaw.ok
@@ -294,6 +303,7 @@ export async function getMissionControlSnapshot(
     board,
     spend,
     flow,
+    prFeed,
     generatedAt: new Date().toISOString(),
   };
 }

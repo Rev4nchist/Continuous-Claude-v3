@@ -13,6 +13,7 @@ import { FleetGrid } from './FleetGrid';
 import { FlowView } from './FlowView';
 import { LaneBoard } from './LaneBoard';
 import { NavTabs, type ViewId } from './NavTabs';
+import { OpenPrTable } from './OpenPrTable';
 import { PrPanel } from './PrPanel';
 import { ReadyCoord, ReadyForDave } from './ReadyForDave';
 import { SessionCards } from './SessionCards';
@@ -309,6 +310,13 @@ export function MissionControl({
               <div className="order-7 min-w-0 lg:order-none">
                 <PrPanel prs={prs} onSelect={(id) => choose(id)} />
               </div>
+
+              {/* Below the old panel: fleet-layout.spec.ts pins that panel directly under the session detail. */}
+              {data.prFeed !== null && (
+                <div className="order-8 min-w-0 lg:order-none">
+                  <OpenPrTable feed={data.prFeed} />
+                </div>
+              )}
 
               <div className="order-8 min-w-0 lg:order-none">
                 <SourceHealth sources={sources} />
