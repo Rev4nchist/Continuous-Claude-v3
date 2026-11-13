@@ -3304,7 +3304,7 @@ test('S2c-T8: a throw in the snapshot, in the second listing or in the diagnosti
 });
 
 // ---------- answer-key guard (card prepr-answer-key-cli-guard): no CLI review reads an answer-key path ----------
-// The list is REVIEW.md "## Skip paths" (globs under scripts/eval/review-eval/). The guard runs in runCodeRabbit before the lock, the counter
+// The match list is the frozen ANSWER_KEY_GLOBS; REVIEW.md "## Skip paths" is only the drift alarm (A13). The guard runs in runCodeRabbit before the lock, the counter
 // and the CLI, on the paths of BOTH sides of the change (a delete or a rename names its old path too). A hit is a SKIP "answer-key" (an earned
 // skip: the stamp gets cr_answer_key true and answer_key_paths N, and the gate accepts it only with both). An unreadable list, a null list and a
 // failed git read stay a FAIL. How it can fail, and the test:
@@ -3705,6 +3705,42 @@ test('A23: runPrePr resolves the base to a commit and re-checks it: a base that 
   const clean = await prePr(cleanRepo, { git: (args) => { if (args.includes('--no-renames')) ranges.push(args.at(-1)); return real(args); } });
   assert.equal(crStep(clean).status, 'PASS', 'a steady base still runs the CLI');
   assert.deepEqual(ranges, [`${shaOf(cleanRepo, 'main')}...HEAD`], 'the guard reads the range from the resolved base commit, not the branch name');
+});
+
+// The base can also move BEFORE it is resolved: git:behind passed, then a land elsewhere moved main while the gates ran. baseSha is then a
+// commit HEAD does not contain, so base...HEAD (from the merge base) misses the landed paths, while `--base main` can diff against the tip.
+// The last-moment check also asks that HEAD contains the base commit (critic and aegis, PR 552 internal pass).
+test('A24: a resolved base that HEAD does not contain starts no CLI and gives the run slot back', async () => {
+  // Breaks when: headMoved drops the merge-base --is-ancestor test.
+  const repo = makeRepo();
+  moveBase(repo);
+  const seen = [];
+  const runner = (o) => { seen.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  const r = await runCodeRabbitLive(crInRepo(repo, runner, { baseSha: shaOf(repo, 'main') }));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(r.skipReason, undefined);
+  assert.match(r.detail, /HEAD does not contain main/);
+  assert.match(r.detail, /merge main/);
+  assert.deepEqual(seen, ['usage'], 'the review is never called');
+  assert.equal(JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs.length, 0, 'not counted');
+});
+
+test('A25: runPrePr with a base that moves after git:behind and before it is resolved gives no CLI start', async () => {
+  // Breaks when: runPrePr resolves the base before the gates again without the ancestry test, or the test leaves headMoved.
+  const repo = makeRepo();
+  const real = makeGit(repo.dir);
+  let baseReads = 0;
+  const git = (args) => {
+    // The 1st read of the base ref is git:behind, the 2nd is resolveBase: the land happens between them.
+    if (args.join(' ') === 'rev-parse --verify --quiet main' && ++baseReads === 2) moveBase(repo);
+    return real(args);
+  };
+  const run = await prePr(repo, { git });
+  assert.equal(baseReads >= 2, true, 'the base was read twice');
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /HEAD does not contain main/);
+  assert.equal(run.crCalls.length, 0);
+  assert.equal(run.result.ok, false);
 });
 
 test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {

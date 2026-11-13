@@ -1129,8 +1129,8 @@ function reusedReview({ root, e2e, saved, base, why }) {
 }
 
 // ---------- the answer-key guard (card prepr-answer-key-cli-guard) ----------
-// No CodeRabbit CLI review may read an answer-key path. The one list is REVIEW.md "## Skip paths" (parseReviewMd, the list that
-// scripts/ratchets/review-skip-sync.mjs ties to the bot configs) is only the drift alarm: the match list is the frozen ANSWER_KEY_GLOBS. It checks the paths
+// No CodeRabbit CLI review may read an answer-key path. The match list is the frozen ANSWER_KEY_GLOBS. REVIEW.md "## Skip paths" (parseReviewMd,
+// the list that scripts/ratchets/review-skip-sync.mjs ties to the bot configs) is only the drift alarm. The guard checks the paths
 // of BOTH sides of the change: `git diff --name-only` follows renames, so a rename out of gold/ names only the new path. A hit is an earned SKIP
 // "answer-key" (the stamp and the gate: see answerKeyStep). Fail closed: a list it cannot read or an unknown path list is a FAIL.
 
@@ -1390,7 +1390,11 @@ function headMoved(git, { head, base, baseSha }) {
   if (baseSha === undefined) return null;
   const baseNow = sha(['rev-parse', '--verify', '--quiet', base]);
   if (baseNow === '' || !baseSha) return stale(`${base} could not be read before the CLI start`);
-  return baseNow === baseSha ? null : stale(`${base} moved during the preflight (it was ${baseSha.slice(0, 7)}, it is ${baseNow.slice(0, 7)})`);
+  if (baseNow !== baseSha) return stale(`${base} moved during the preflight (it was ${baseSha.slice(0, 7)}, it is ${baseNow.slice(0, 7)})`);
+  // A base that moved after git:behind and before resolveBase: base...HEAD (from the merge base) misses what landed, and the CLI can diff
+  // against the tip. With HEAD containing the base, both diffs are the same, so the guard saw what the CLI reads.
+  if (git(['merge-base', '--is-ancestor', baseSha, head]).status !== 0) return stale(`HEAD does not contain ${base} (${baseSha.slice(0, 7)}; it moved after the behind check). Next: merge ${base} into the branch`);
+  return null;
 }
 
 async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseSha, crStore }) {
