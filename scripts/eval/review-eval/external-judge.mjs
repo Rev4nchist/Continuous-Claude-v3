@@ -5,7 +5,11 @@
 // - Own ledger .claude/cache/hf-datasets/external-judge-ledger.jsonl: at most --daily-share (default 10) judge calls per Chicago day.
 // - Resumable: a pair with a judged end row in the ledger is skipped, on this day or a later one. Only when the end row's candidateSource is the one the pair has now: an old row judged on another prompt (source all, or none recorded) is judged again.
 // - Pairs with no candidate action leave the sample before the shuffle. A sample drawn before that change is not comparable with a new one for the same seed.
-// - --dry-run reads rows and the ledger, prints the plan and prompts, makes 0 headless calls and writes nothing.
+// - --dry-run reads rows and the ledger, prints the plan and prompts, makes 0 headless calls and writes nothing. Use --show-prompts 0 on real data.
+// - --model opus|sonnet (default JUDGE_MODEL, opus, effort high). Ledger rows carry the model; each model has its own verdicts and score.
+//   A call whose served model does not match is an error row and stops the run. --cap N raises the shared headless cap for this run only.
+//   --stop-on-error stops after the first error row. The report is <day>-hf-judge-precheck-<model>.json and names the head SHA.
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -22,6 +26,35 @@ export const DEFAULT_OUT_DIR = path.join(REPO, '.claude', 'cache', 'e2e');
 export const SESSION_ID = 'review-external';
 export const DEFAULT_SEED = 20261102;
 export const DEFAULT_DATASET = { id: 'code-review-bench/code-review-bench', sha: '343ecc5b815904aea4a1063a898f2325b76f97d0', file: 'human_annotations_task1.parquet' };
+// The judge model (Dave, 2026-11-13: Opus 5.5 at effort high, not Sonnet). 'sonnet' stays selectable to read and extend the old result.
+export const JUDGE_MODEL = 'opus';
+export const JUDGE_EFFORT = 'high';
+const MODELS = ['opus', 'sonnet'];
+// The served model that an opus run must report. An older Opus or no served model is a stop (seat condition, 2026-11-13).
+const SERVED = { opus: /^claude-opus-5-5\b/, sonnet: /^claude-sonnet-/ };
+// Ledger rows written before 2026-11-13 have no model field. All of them are Sonnet runs (the model was hard-coded), in this ledger only.
+const LEGACY_MODEL = 'sonnet';
+const rowModel = (r) => r.model ?? LEGACY_MODEL;
+
+/** The model names in the modelUsage of the claude -p result line, joined by comma; null when there is none. */
+export function servedModelOf(stdout) {
+  for (const l of String(stdout ?? '').split(/\r?\n/).reverse()) {
+    try {
+      const o = JSON.parse(l);
+      if (o && typeof o === 'object' && o.type === 'result') {
+        const names = o.modelUsage && typeof o.modelUsage === 'object' ? Object.keys(o.modelUsage) : [];
+        return names.length ? names.join(',') : null;
+      }
+    } catch { /* not the result line */ }
+  }
+  return null;
+}
+
+/** Every served model name matches the requested model (a run can report a helper model too: then all must match). */
+export function servedMatches(model, served) {
+  if (!served) return false;
+  return served.split(',').every((n) => SERVED[model].test(n));
+}
 
 // ---- rows -> pairs -------------------------------------------------------------------------------------------------
 
@@ -144,11 +177,16 @@ export function usedToday(rows, ms) {
   return rows.filter((r) => r.phase === 'start' && (Number.isNaN(Date.parse(r.ts)) || chicagoDay(Date.parse(r.ts)) === day)).length;
 }
 
-/** pairId -> judged end row, for one dataset. An end row with an error is not judged, so the pair is retried. */
-export function judgedMap(rows, dataset) {
+/** pairId -> judged end row, for one dataset and one model. An end row with an error is not judged, so the pair is retried. */
+export function judgedMap(rows, dataset, model = JUDGE_MODEL) {
   const m = new Map();
-  for (const r of rows) if (r.phase === 'end' && r.dataset === dataset && r.judge && !r.error) m.set(r.pairId, r);
+  for (const r of rows) if (r.phase === 'end' && r.dataset === dataset && r.judge && !r.error && rowModel(r) === model) m.set(r.pairId, r);
   return m;
+}
+
+/** The commit that runs this script (the report names the code that made the verdicts). null when git is not reachable. */
+function headOf() {
+  try { return execFileSync('git', ['-C', REPO, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim() || null; } catch { return null; }
 }
 
 const kappaOf = (records) => { const k = cohenKappa(records.map((r) => [r.human, r.judge])); return Number.isFinite(k) ? k : null; };
@@ -172,7 +210,26 @@ export function summarize(records, extra = {}) {
     if (r.agree) g.agree += 1;
     g.agreement = g.agree / g.n;
   }
-  return { n, agree, agreement: n ? agree / n : null, ci95: ci ? [ci.lo, ci.hi] : null, kappa: kappaOf(records), bySource, hard, notMeasured: ['real'], ...extra };
+  const rate = (subset) => { const k = subset.filter((r) => r.agree).length; const w = wilson(k, subset.length); return { k, n: subset.length, rate: subset.length ? k / subset.length : null, ci95: w ? [w.lo, w.hi] : null }; };
+  const high = records.filter((r) => r.confidence >= 4);
+  const highConfidence = { n: high.length, agree: high.filter((r) => r.agree).length, humanYes: high.filter((r) => r.human === 'yes').length };
+  return {
+    n, agree, agreement: n ? agree / n : null, ci95: ci ? [ci.lo, ci.hi] : null, kappa: kappaOf(records), bySource, hard,
+    tpr: rate(records.filter((r) => r.human === 'yes')), tnr: rate(records.filter((r) => r.human === 'no')), highConfidence, notMeasured: ['real'], ...extra,
+  };
+}
+
+/** Paired counts over the pairs that both models judged: both agree with the human, only this model, only the other, neither. */
+export function pairedCounts(thisRecs, otherRecs) {
+  const other = new Map(otherRecs.map((r) => [r.pairId, r]));
+  const p = { n: 0, bothAgree: 0, onlyThis: 0, onlyOther: 0, bothWrong: 0 };
+  for (const r of thisRecs) {
+    const o = other.get(r.pairId);
+    if (!o) continue;
+    p.n += 1;
+    if (r.agree && o.agree) p.bothAgree += 1; else if (r.agree) p.onlyThis += 1; else if (o.agree) p.onlyOther += 1; else p.bothWrong += 1;
+  }
+  return p;
 }
 
 const fmt3 = (x) => (x === null || x === undefined ? 'undefined' : x.toFixed(3));
@@ -207,7 +264,9 @@ export function loadRows({ id, sha, file }, { root = DEFAULT_ROOT } = {}) {
  * Returns { code, ... }. Code 2 is a refusal.
  */
 export async function run(opts, deps = {}) {
-  const { id, sha, file, sample = 50, seed = DEFAULT_SEED, dailyShare = 10, dryRun = false, showPrompts = 3 } = opts;
+  const { id, sha, file, sample = 50, seed = DEFAULT_SEED, dailyShare = 10, dryRun = false, showPrompts = 3, model = JUDGE_MODEL, cap = null, stopOnError = false } = opts;
+  if (!MODELS.includes(model)) { (deps.stderr ?? console.error)(`external-judge: --model must be one of ${MODELS.join(', ')}`); return { code: 1 }; }
+  const otherModel = MODELS.find((m) => m !== model);
   const stdout = deps.stdout ?? ((s) => console.log(s));
   const stderr = deps.stderr ?? ((s) => console.error(s));
   const now = deps.now ?? Date.now;
@@ -231,13 +290,13 @@ export async function run(opts, deps = {}) {
     const ledger = readOwnLedger(ledgerPath);
     // An end row counts only when it was judged on the candidate the pair has now.
     const fresh = (m) => new Map([...m].filter(([i, r]) => byId.get(i)?.candidateSource === r.candidateSource));
-    const judgedAny = judgedMap(ledger, dataset);
+    const judgedAny = judgedMap(ledger, dataset, model);
     const judged = fresh(judgedAny);
     const staleRejudged = ids.filter((i) => judgedAny.has(i) && !judged.has(i)).length;
     const pending = ids.filter((i) => !judged.has(i));
     const used = usedToday(ledger, now());
     const allowed = Math.max(0, Math.min(dailyShare - used, pending.length));
-    stdout(`plan: dataset ${dataset} file ${file}; rows ${all.length}, decisive ${decisive.length}, uncertain excluded ${uncertain}, no candidate ${noCandidate} (yes ${noCandidateByLabel.yes}, no ${noCandidateByLabel.no}); sample ${ids.length} seed ${seed}; already judged ${ids.length - pending.length}, pending ${pending.length}, stale ${staleRejudged} (judged on another prompt, judged again); external calls today ${used}/${dailyShare}, this run ${dryRun ? 0 : allowed} (dry-run would allow ${allowed}); headless calls made: ${dryRun ? 0 : 'see below'}`);
+    stdout(`plan: model ${model} effort ${JUDGE_EFFORT}${cap ? ` cap ${cap} (this run)` : ''}; dataset ${dataset} file ${file}; rows ${all.length}, decisive ${decisive.length}, uncertain excluded ${uncertain}, no candidate ${noCandidate} (yes ${noCandidateByLabel.yes}, no ${noCandidateByLabel.no}); sample ${ids.length} seed ${seed}; already judged ${ids.length - pending.length}, pending ${pending.length}, stale ${staleRejudged} (judged on another prompt, judged again); external calls today ${used}/${dailyShare}, this run ${dryRun ? 0 : allowed} (dry-run would allow ${allowed}); headless calls made: ${dryRun ? 0 : 'see below'}`);
 
     if (dryRun) {
       for (const i of pending.slice(0, showPrompts)) stdout(`--- prompt for pair ${i} (human: ${byId.get(i).human}, candidate: ${byId.get(i).candidateSource}) ---\n${judgePrompt(byId.get(i).pair)}`);
@@ -248,38 +307,72 @@ export async function run(opts, deps = {}) {
       return { code: 2, reason: 'daily-share', used };
     }
 
-    const runJudge = (prompt) => runClaudeFn({ prompt, model: 'sonnet', timeoutMs: 180_000, purpose: 'external-judge' }, { ...(deps.headlessDeps ?? {}), sessionId: SESSION_ID });
+    // The served model of the last call, read from its stdout inside the runJudge closure (judgePair keeps only the verdict).
+    let lastServed = null;
+    const headlessDeps = { ...(deps.headlessDeps ?? {}), sessionId: SESSION_ID, ...(cap ? { cap } : {}) };
+    const runJudge = async (prompt) => {
+      const res = await runClaudeFn({ prompt, model, effort: JUDGE_EFFORT, timeoutMs: 180_000, purpose: 'external-judge' }, headlessDeps);
+      lastServed = servedModelOf(res?.stdout);
+      return res;
+    };
+    const headSha = deps.headSha ?? headOf();
     let calls = 0;
     let stopped = null;
     for (const pairId of pending.slice(0, allowed)) {
       const p = byId.get(pairId);
-      append(ledgerPath, { ts: new Date(now()).toISOString(), day: chicagoDay(now()), phase: 'start', dataset, pairId, sessionId: SESSION_ID });
+      append(ledgerPath, { ts: new Date(now()).toISOString(), day: chicagoDay(now()), phase: 'start', dataset, pairId, sessionId: SESSION_ID, model });
       calls += 1;
+      lastServed = null;
       const res = await judgePair(p.pair, { runJudge });
+      const endBase = { ts: new Date(now()).toISOString(), phase: 'end', dataset, pairId, model, servedModel: lastServed, headSha };
+      if (lastServed && !servedMatches(model, lastServed)) {
+        // Another model answered: a stop, whether its answer parsed or not.
+        append(ledgerPath, { ...endBase, error: 'served-model' });
+        stopped = 'served-model';
+        break;
+      }
       if (!res.ok) {
-        append(ledgerPath, { ts: new Date(now()).toISOString(), phase: 'end', dataset, pairId, error: res.error });
-        if (res.error === 'cap') { stopped = 'cap'; break; }
+        append(ledgerPath, { ...endBase, error: res.error });
+        if (res.error === 'cap') { stopped = 'shared headless cap'; break; }
+        if (stopOnError) { stopped = `error ${res.error}`; break; }
         continue;
       }
-      append(ledgerPath, { ts: new Date(now()).toISOString(), phase: 'end', dataset, pairId, human: p.human, judge: res.sameIssue, confidence: res.confidence, candidateSource: p.candidateSource });
+      if (!servedMatches(model, lastServed)) {
+        // A verdict from another model is never counted: an error row (the pair is retried) and a stop, flag or not.
+        append(ledgerPath, { ...endBase, error: 'served-model' });
+        stopped = 'served-model';
+        break;
+      }
+      append(ledgerPath, { ...endBase, human: p.human, judge: res.sameIssue, confidence: res.confidence, candidateSource: p.candidateSource });
     }
 
-    const final = fresh(judgedMap(readOwnLedger(ledgerPath), dataset));
-    const records = ids.filter((i) => final.has(i)).map((i) => {
+    const after = readOwnLedger(ledgerPath);
+    const recordsOf = (m) => { const final = fresh(judgedMap(after, dataset, m)); return ids.filter((i) => final.has(i)).map((i) => {
       const r = final.get(i);
-      return { pairId: i, human: r.human, judge: r.judge, agree: r.human === r.judge, candidateSource: r.candidateSource, confidence: r.confidence ?? null };
-    });
+      return { pairId: i, human: r.human, judge: r.judge, agree: r.human === r.judge, candidateSource: r.candidateSource, confidence: r.confidence ?? null, headSha: r.headSha ?? null };
+    }); };
+    const records = recordsOf(model);
+    const otherRecs = recordsOf(otherModel);
+    // The heads that made the counted verdicts (an end row before the head field has none: key "unknown").
+    const verdictHeads = {};
+    for (const r of records) { const k = r.headSha ?? 'unknown'; verdictHeads[k] = (verdictHeads[k] ?? 0) + 1; }
     const out = {
+      model, effort: JUDGE_EFFORT, headSha, verdictHeads,
       dataset, file, seed, sampleRequested: sample, sampleIds: ids, uncertainExcluded: uncertain, noCandidate, noCandidateByLabel, staleRejudged, pendingAfterRun: ids.length - records.length,
       generatedAt: new Date(now()).toISOString(), pairs: records, summary: summarize(records),
+      compare: { model: otherModel, summary: summarize(otherRecs), paired: pairedCounts(records, otherRecs) },
     };
     mkdirSync(outDir, { recursive: true });
-    const outPath = path.join(outDir, `${chicagoDay(now())}-hf-judge-precheck.json`);
+    const outPath = path.join(outDir, `${chicagoDay(now())}-hf-judge-precheck-${model}.json`);
     writeFileSync(outPath, `${JSON.stringify(out, null, 2)}\n`);
     const s = out.summary;
+    const o = out.compare.summary;
+    const pc = out.compare.paired;
     stdout(`wrote ${outPath}`);
     stdout(splitLine(s.bySource));
-    stdout(`external-judge: ${calls} judge calls this run; ${records.length}/${ids.length} judged; n ${s.n}; agreement ${s.agree}/${s.n} (${fmt3(s.agreement)}); kappa: ${fmt3(s.kappa)}; hard (not picked): n ${s.hard.n}; agreement ${s.hard.agree}/${s.hard.n} (${fmt3(s.hard.agreement)}); kappa: ${fmt3(s.hard.kappa)}; real: not measured${stopped ? `; stopped: shared headless ${stopped}` : ''}`);
+    stdout(`tpr ${s.tpr.k}/${s.tpr.n} (${fmt3(s.tpr.rate)}); tnr ${s.tnr.k}/${s.tnr.n} (${fmt3(s.tnr.rate)}); confidence 4+: n ${s.highConfidence.n}, agree ${s.highConfidence.agree}, human yes ${s.highConfidence.humanYes}`);
+    stdout(`compare ${otherModel}: n ${o.n}; agreement ${o.agree}/${o.n} (${fmt3(o.agreement)}); kappa: ${fmt3(o.kappa)}; paired n ${pc.n}: both agree ${pc.bothAgree}, only ${model} ${pc.onlyThis}, only ${otherModel} ${pc.onlyOther}, both wrong ${pc.bothWrong}`);
+    stdout(`external-judge [${model} @ ${String(headSha ?? 'unknown').slice(0, 8)}]: ${calls} judge calls this run; ${records.length}/${ids.length} judged; n ${s.n}; agreement ${s.agree}/${s.n} (${fmt3(s.agreement)}); kappa: ${fmt3(s.kappa)}; hard (not picked): n ${s.hard.n}; agreement ${s.hard.agree}/${s.hard.n} (${fmt3(s.hard.agreement)}); kappa: ${fmt3(s.hard.kappa)}; real: not measured${stopped ? `; stopped: ${stopped}` : ''}`);
     return { code: stopped ? 2 : 0, calls, outPath, out };
   } catch (e) {
     if (e instanceof PullRefusal) { stderr(`external-judge refused: ${e.message}`); return { code: 2, reason: 'refused' }; }
@@ -298,16 +391,23 @@ export function parseArgs(argv) {
     else if (a === '--seed') o.seed = Number(next());
     else if (a === '--daily-share') o.dailyShare = Number(next());
     else if (a === '--show-prompts') o.showPrompts = Number(next());
+    else if (a === '--model') { o.model = next(); if (!MODELS.includes(o.model)) throw new Error(`--model must be one of ${MODELS.join(', ')}`); }
+    else if (a === '--cap') o.cap = Number(next());
+    else if (a === '--stop-on-error') o.stopOnError = true;
     else if (a === '--root') o.root = next();
+    else if (a === '--out-dir') o.outDir = next();
     else if (a === '--id' || a === '--sha' || a === '--file') o[a.slice(2)] = next();
     else throw new Error(`unknown argument ${a}`);
   }
-  for (const k of ['sample', 'seed', 'dailyShare', 'showPrompts']) if (k in o && !Number.isInteger(o[k])) throw new Error(`--${k} needs an integer`);
+  for (const k of ['sample', 'seed', 'dailyShare', 'showPrompts', 'cap']) if (k in o && !Number.isInteger(o[k])) throw new Error(`--${k} needs an integer`);
+  if ('cap' in o && o.cap < 1) throw new Error('--cap needs an integer of 1 or more');
   return o;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let opts;
   try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(`external-judge: ${e.message}`); process.exit(2); }
-  run(opts, { root: opts.root }).then((r) => process.exit(r.code));
+  // --root moves the dataset cache AND the lane ledger (a run from a worktree reads the primary checkout's cache and ledger).
+  const cli = { root: opts.root, ...(opts.root ? { ledgerPath: path.join(opts.root, 'external-judge-ledger.jsonl') } : {}), ...(opts.outDir ? { outDir: opts.outDir } : {}) };
+  run(opts, cli).then((r) => process.exit(r.code));
 }
