@@ -600,6 +600,76 @@ describe('owner rule: the [not-holder] hint recipient works in `say --to`', () =
   });
 });
 
+// Wake test 2026-11-13 (.claudedocs/e2e-say-wake-test): a lane DM never starts a turn in an idle session. `say --to`
+// prints one note on stdout after "sent to" when the receiver has been idle IDLE_NOTE_MINUTES (2). Failure modes:
+// no note for an idle receiver; a note for an active one, a broadcast or a headless run; a failed idle read that
+// changes the exit code, drops "sent to" or adds the note; the note before "sent to" or on stderr.
+describe('say --to: a note for an idle receiver (wake test)', () => {
+  const NOTE = /^note: a lane DM shows at .+'s next turn and does not start one\. To wake an idle session, also use SendMessage; a session in another permission-mode class holds it for Dave\.$/;
+  const peer = async (minutesAgo) => {
+    const id = sid();
+    await q(`INSERT INTO sessions (id, project, working_on, last_heartbeat, last_activity_at)
+             VALUES ($1,'probe','probe', now() - make_interval(mins => $2::int), now() - make_interval(mins => $2::int))`, [id, minutesAgo]);
+    return id;
+  };
+  const lines = (r) => r.out.trim().split('\n');
+
+  it('idle receiver (10 min): exit 0, "sent to" first, then the note, on stdout', async () => {
+    const to = await peer(10);
+    const r = lane(['say', 'idle-1 body', '--to', to.slice(0, 8)], { env: { LANE_CONTEXT_HEADLESS: '' } });
+    assert.equal(r.code, 0, r.err);
+    assert.match(lines(r)[0], /^sent to /);
+    assert.match(lines(r)[1] ?? '', NOTE, r.out);
+    assert.doesNotMatch(r.err, /note:/);
+    assert.equal((await q(`SELECT 1 FROM agentic_os.lane_event WHERE body='idle-1 body' AND to_session_id=$1`, [to])).rowCount, 1);
+  });
+
+  it('active receiver (now): no note', async () => {
+    const to = await peer(0);
+    const r = lane(['say', 'idle-2 body', '--to', to.slice(0, 8)], { env: { LANE_CONTEXT_HEADLESS: '' } });
+    assert.equal(r.code, 0, r.err);
+    assert.equal(lines(r).length, 1, r.out);
+  });
+
+  it('broadcast: no note', async () => {
+    await peer(10);
+    const r = lane(['say', 'idle-3 body'], { env: { LANE_CONTEXT_HEADLESS: '' } });
+    assert.equal(r.code, 0, r.err);
+    assert.equal(lines(r).length, 1, r.out);
+  });
+
+  it('headless (LANE_CONTEXT_HEADLESS=1): no note', async () => {
+    const to = await peer(10);
+    const r = lane(['say', 'idle-4 body', '--to', to.slice(0, 8)], { env: { LANE_CONTEXT_HEADLESS: '1' } });
+    assert.equal(r.code, 0, r.err);
+    assert.equal(lines(r).length, 1, r.out);
+  });
+
+  it('the idle read fails: no note, "sent to" and exit 0, the event is written', async () => {
+    const to = await peer(10);
+    // sessions becomes a view that raises only inside the query tagged /* say-idle-note */, so the recipient lookup
+    // still works. A view, not row security: the local role is a superuser, and a superuser skips row security.
+    await q(`CREATE FUNCTION public.zz_idle_boom() RETURNS boolean LANGUAGE plpgsql AS $f$
+      BEGIN IF current_query() LIKE '%say-idle-note%' THEN RAISE EXCEPTION 'idle read blocked by test'; END IF; RETURN true; END $f$`);
+    await q(`ALTER TABLE sessions RENAME TO zz_sessions_real`);
+    await q(`CREATE VIEW sessions AS SELECT * FROM zz_sessions_real WHERE public.zz_idle_boom()`);
+    let r;
+    try {
+      // Control: the fault fires for a tagged read of sessions, so the case below is not vacuous.
+      await assert.rejects(q(`/* say-idle-note */ SELECT id FROM sessions WHERE id=$1`, [to]), /idle read blocked by test/);
+      r = lane(['say', 'idle-5 body', '--to', to.slice(0, 8)], { env: { LANE_CONTEXT_HEADLESS: '' } });
+    } finally {
+      await q(`DROP VIEW IF EXISTS sessions`);
+      await q(`ALTER TABLE zz_sessions_real RENAME TO sessions`);
+      await q(`DROP FUNCTION IF EXISTS public.zz_idle_boom()`);
+    }
+    assert.equal(r.code, 0, r.err);
+    assert.match(lines(r)[0], /^sent to /);
+    assert.equal(lines(r).length, 1, r.out);
+    assert.equal((await q(`SELECT 1 FROM agentic_os.lane_event WHERE body='idle-5 body'`)).rowCount, 1);
+  });
+});
+
 describe('say: a note insert that fails is reported, never "sent"', () => {
   it('say-F1: a failed note insert gives exit 1, the "not confirmed" line, no "sent" and no event row', async () => {
     const r = await withBlockedEventKind('note', async () => lane(['say', 'sf1 body']));
