@@ -6339,6 +6339,7 @@ function resolveClaimKey(rawPath, options = {}) {
         );
         let rel = relative(dir, realFile).replace(/\\/g, "/");
         if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
+        if (isHarnessPath(realFile) !== isHarnessPath(rel)) return null;
         if (FOLDS_CASE.has(platform)) rel = rel.toLowerCase();
         return { filePath: rel, project };
       }

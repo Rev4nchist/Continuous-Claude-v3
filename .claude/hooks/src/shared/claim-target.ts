@@ -16,6 +16,7 @@
  */
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'path';
+import { isHarnessPath } from './leases.js';
 import { normalizeProjectKey } from './session-id.js';
 
 export interface ClaimKey {
@@ -93,6 +94,11 @@ export function resolveClaimKey(rawPath: string, options: ClaimKeyOptions = {}):
         );
         let rel = relative(dir, realFile).replace(/\\/g, '/');
         if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
+        // The lease class is decided from the key (resolveFileClaim). A repo rooted inside a harness
+        // folder (`<x>/.claude/skills/plugin`, or `~/.claude` itself) has a relative path with no
+        // `.claude/<dir>` segment, so the key would drop the file to the short lease. Keep today's
+        // key for it: never weaker than before.
+        if (isHarnessPath(realFile) !== isHarnessPath(rel)) return null;
         if (FOLDS_CASE.has(platform)) rel = rel.toLowerCase();
         return { filePath: rel, project };
       }

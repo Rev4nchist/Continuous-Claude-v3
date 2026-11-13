@@ -23,7 +23,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { resolveClaimKey } from '../shared/claim-target.js';
 import { canonicalProject } from '../shared/session-id.js';
-import { leaseFor } from '../shared/leases.js';
+import { isHarnessPath, leaseFor } from '../shared/leases.js';
 
 let root: string;
 
@@ -165,6 +165,28 @@ describe('resolveClaimKey', () => {
       expect(key).not.toBeNull();
       expect(leaseFor(key!.filePath)).toEqual(leaseFor(abs));
     }
+  });
+
+  it('12. keeps the old key when a repo root lies inside a harness folder (the relative key would lose the lease class)', () => {
+    // A plugin repo rooted at <x>/.claude/skills/plugin: its relative key is "SKILL.md", with no
+    // ".claude/skills" segment. The same holds for a repo rooted at a ".claude" folder itself.
+    const plugin = join(root, 'x', '.claude', 'skills', 'plugin');
+    mkdirSync(plugin, { recursive: true });
+    git(plugin, 'init', '-q');
+    writeFileSync(join(plugin, 'SKILL.md'), 's');
+    const dotClaude = join(root, 'home', '.claude');
+    mkdirSync(join(dotClaude, 'hooks'), { recursive: true });
+    git(dotClaude, 'init', '-q');
+    writeFileSync(join(dotClaude, 'hooks', 'x.ts'), 'x');
+    for (const file of [join(plugin, 'SKILL.md'), join(dotClaude, 'hooks', 'x.ts')]) {
+      expect(isHarnessPath(file), file).toBe(true);
+      expect(resolveClaimKey(file), file).toBeNull(); // old key: raw absolute path, harness class kept
+    }
+    // Control: an ordinary harness file in an ordinary repo still gets a repo-relative key.
+    const a = makeRepo('a-control');
+    mkdirSync(join(a, '.claude', 'hooks'), { recursive: true });
+    writeFileSync(join(a, '.claude', 'hooks', 'y.ts'), 'y');
+    expect(resolveClaimKey(join(a, '.claude', 'hooks', 'y.ts'))?.filePath).toBe('.claude/hooks/y.ts');
   });
 
   it('9. returns null for a broken .git file and does not throw', () => {
