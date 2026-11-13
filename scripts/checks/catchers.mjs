@@ -6,7 +6,7 @@
  *   node scripts/checks/catchers.mjs --base <ref> --head <ref|WORKTREE> [--root <dir>] [--json <file>] [--md <file>] [--run-tests]
  *   node scripts/checks/catchers.mjs --root <dir> --diff <file> [--json <file>] [--md <file>] [--run-tests]
  *
- * Catchers: cli-smoke (gate), parser-fixtures (gate), typecheck-changed (fact), mapped tests (fact).
+ * Catchers: cli-smoke (gate), parser-fixtures (gate), typecheck-changed (fact), mapped tests (fact), fixture-gap (fact).
  *   - Gate: smoke.failed > 0, fixtures.failed > 0, or a crash of the smoke or the fixtures tool (no verdict is a failed gate,
  *     not a pass). Nothing else blocks. A smoke TIMEOUT, a fixture skip or property error, a tsc error, a tsc crash and
  *     a mapped test result are facts.
@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { gatesFor } from '../github/pre-pr.mjs';
 import { changedLines } from './changed-lines.mjs';
 import { runSmoke } from './cli-smoke.mjs';
+import { fixtureGap } from './fixture-gap.mjs';
 import { runFixtures } from './parser-fixtures.mjs';
 import { runTypecheck } from './typecheck-changed.mjs';
 
@@ -108,24 +109,25 @@ async function guarded(name, fn, fallback) {
  * input: { root, diffText, files }. root: the tree that holds the changed files. diffText: the unified diff.
  * files (optional): the changed paths; the default is the files of the diff.
  * @param {{ root: string, diffText: string, files?: string[] }} input
- * @param {{ runTests?: boolean, exec?: Function, smoke?: Function, fixtures?: Function, typecheck?: Function }} [opts]
- * opts: { runTests, exec(gate, root) } and tool overrides { smoke, fixtures, typecheck } for tests.
- * Returns { files, typecheck, smoke, fixtures, mappedTests, gateFailed, errors }.
+ * @param {{ runTests?: boolean, exec?: Function, smoke?: Function, fixtures?: Function, typecheck?: Function, fixtureGap?: Function }} [opts]
+ * opts: { runTests, exec(gate, root) } and tool overrides { smoke, fixtures, typecheck, fixtureGap } for tests.
+ * Returns { files, typecheck, smoke, fixtures, fixtureGap, mappedTests, gateFailed, errors }. fixtureGap is a fact: it never sets gateFailed.
  */
 export async function runCatchers({ root, diffText, files }, opts = {}) {
   const tree = path.resolve(root);
   const changed = changedLines(diffText ?? '');
   const list = files ?? changed.map((c) => c.path);
-  const tools = { smoke: runSmoke, fixtures: runFixtures, typecheck: runTypecheck, ...opts };
+  const tools = { smoke: runSmoke, fixtures: runFixtures, typecheck: runTypecheck, fixtureGap, ...opts };
   const smoke = await guarded('cli-smoke', () => tools.smoke({ root: tree, files: list }), { results: [], failed: 0, timeouts: 0, checked: 0 });
   const fixtures = await guarded('parser-fixtures', () => tools.fixtures({ root: tree, files: list }), { results: [], skipped: [], errors: [], failed: 0 });
   const typecheck = await guarded('typecheck', () => tools.typecheck({ root: tree, files: list, ranges: changed }), { errors: [], skipped: null });
+  const fixtureGapResult = await guarded('fixture-gap', () => tools.fixtureGap(list), { files: [] });
   const gates = mappedTestGates(list);
   const mappedTests = opts.runTests ? gates.map((g) => runTestGate(g, tree, opts.exec ?? defaultExec)) : gates.map((g) => ({ id: g.id, command: commandOf(g), status: 'NOT_RUN', summary: '' }));
-  const errors = [smoke, fixtures, typecheck].map((r) => r.error).filter(Boolean);
+  const errors = [smoke, fixtures, typecheck, fixtureGapResult].map((r) => r.error).filter(Boolean);
   // tsc is a fact, not a gate, except when it cannot run at all: a missing compiler is the environment, and a green without it is wrong.
   const gateFailed = smoke.failed > 0 || fixtures.failed > 0 || Boolean(smoke.error) || Boolean(fixtures.error) || typecheck.env === true;
-  return { files: list, typecheck, smoke, fixtures, mappedTests, gateFailed, errors };
+  return { files: list, typecheck, smoke, fixtures, fixtureGap: fixtureGapResult, mappedTests, gateFailed, errors };
 }
 
 // ---------- facts for the reviewer ----------
@@ -160,6 +162,13 @@ function fixtureLines(fx) {
   return [head, ...rows, ...(bad.length > MAX_LISTED ? [`  ... ${bad.length - MAX_LISTED} more parser(s)`] : []), ...skips, ...errs];
 }
 
+/** One fact line, only when a changed parser or guard file has no parser-fixtures entry. Never a gate. */
+function gapLines(gap) {
+  const files = gap?.files ?? [];
+  if (files.length === 0) return [];
+  return [`fixture-gap (fact): ${files.length} changed parser/guard file(s) with no parser-fixtures entry: ${oneLine(files.slice(0, MAX_LISTED).join(', '))}`];
+}
+
 function typecheckLines(tc) {
   if (tc.skipped) return [`tsc (fact): skipped, ${oneLine(tc.skipped)}`];
   const head = `tsc (fact, changed lines only): ${tc.errors.length} error(s)`;
@@ -192,7 +201,7 @@ function fitLines(lines, maxBytes) {
 export function factsBody(result) {
   const body = [
     ...result.errors.map((e) => `catcher error: ${oneLine(e)}`),
-    ...smokeLines(result.smoke), ...fixtureLines(result.fixtures), ...typecheckLines(result.typecheck), ...testLines(result.mappedTests),
+    ...smokeLines(result.smoke), ...fixtureLines(result.fixtures), ...gapLines(result.fixtureGap), ...typecheckLines(result.typecheck), ...testLines(result.mappedTests),
   ];
   return `${fitLines(body, FACTS_MAX_BYTES - 64).join('\n')}\n`;
 }

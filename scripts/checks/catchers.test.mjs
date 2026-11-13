@@ -17,6 +17,11 @@
 //   C7  the git diff misses untracked files, or reads uncommitted work in commit mode, or takes an option as a ref
 //                                                                           -> drop untrackedDiff, use the wrong range, drop assertRef
 //   C8  the CLI exit code, output files or usage errors are wrong           -> change main()
+//   C10 an unregistered parser or guard file gives no gap fact, or a registered one does
+//                                                                           -> drop the fixtureGap call or the gapLines call in factsBody
+//   C11 a fixture gap blocks the gate, or a crash of the gap tool blocks    -> add fixtureGap to gateFailed
+//   C12 a result with no gap changes the facts text by one byte             -> print a gap line (or a heading) when the list is empty
+//   C13 the gap line lists more than 5 files, or carries a newline          -> drop the slice or oneLine in gapLines
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -26,6 +31,7 @@ import test, { after } from 'node:test';
 import {
   FACTS_MAX_BYTES, diffFromGit, factsBody, main, mappedTestGates, parseCli, runCatchers, summaryOf,
 } from './catchers.mjs';
+import { fixtureGap } from './fixture-gap.mjs';
 
 const made = [];
 const tmp = (label) => { const d = mkdtempSync(path.join(os.tmpdir(), `catchers-${label}-`)); made.push(d); return d; };
@@ -207,6 +213,63 @@ test('C9: a smoke TIMEOUT is shown as a fact and does not fail the gate; fixture
   assert.match(body, /2 skipped/);
   assert.match(body, /export absent/);
   assert.match(body, /property error brief\.parseTurnEnd: the property itself threw: boom/);
+});
+
+// ---------- fixture gap (fact) ----------
+
+const QUIET = { smoke: async () => ({ results: [], failed: 0, timeouts: 0, checked: 0 }), fixtures: async () => ({ results: [], skipped: [], errors: [], failed: 0 }), typecheck: async () => ({ errors: [], skipped: null }) };
+const GAP_LINE = /^fixture-gap \(fact\): \d+ changed parser\/guard file\(s\) with no parser-fixtures entry: .+$/m;
+// The real registry holds no file named like a parser or guard, so a registered parser needs a registry of its own.
+const withRegistry = (registry) => ({ fixtureGap: (list) => fixtureGap(list, registry) });
+const FILES = (...names) => Object.fromEntries(names.map((n) => [n, 'export const x = 1;\n']));
+
+test('C10: an unregistered guard file gives one gap fact line; a registered parser gives none (breaks if the gap call or its line is dropped)', async () => {
+  const gapped = await catchersOn(FILES('scripts/x/foo-guard.mjs'), QUIET);
+  assert.deepEqual(gapped.fixtureGap.files, ['scripts/x/foo-guard.mjs']);
+  const lines = factsBody(gapped).split('\n').filter((l) => l.startsWith('fixture-gap'));
+  assert.deepEqual(lines, ['fixture-gap (fact): 1 changed parser/guard file(s) with no parser-fixtures entry: scripts/x/foo-guard.mjs']);
+  const registered = await catchersOn(FILES('scripts/x/known-parser.mjs'), { ...QUIET, ...withRegistry([{ id: 'k', file: 'scripts/x/known-parser.mjs' }]) });
+  assert.deepEqual(registered.fixtureGap.files, []);
+  assert.ok(!factsBody(registered).includes('fixture-gap'));
+  const mixed = await catchersOn(FILES('scripts/x/known-parser.mjs', 'scripts/x/new-lexer.mjs'), { ...QUIET, ...withRegistry([{ id: 'k', file: 'scripts/x/known-parser.mjs' }]) });
+  assert.deepEqual(mixed.fixtureGap.files, ['scripts/x/new-lexer.mjs']);
+  assert.match(factsBody(mixed), GAP_LINE);
+});
+
+test('C11: a gap never changes gateFailed, and a crash of the gap tool is an error line but not a gate failure (breaks if fixtureGap joins gateFailed)', async () => {
+  const r = await catchersOn(FILES('scripts/x/foo-guard.mjs'), QUIET);
+  assert.equal(r.gateFailed, false);
+  assert.match(summaryOf(r), /^catchers: ok:/);
+  const boom = await catchersOn(FILES('scripts/x/foo-guard.mjs'), { ...QUIET, fixtureGap: () => { throw new Error('registry import failed'); } });
+  assert.equal(boom.gateFailed, false);
+  assert.deepEqual(boom.fixtureGap.files, []);
+  assert.match(boom.errors[0], /fixture-gap crashed: registry import failed/);
+  const real = await catchersOn({ ...CRASHING_CLI, ...FILES('scripts/x/foo-guard.mjs') }, { fixtures: QUIET.fixtures, typecheck: QUIET.typecheck });
+  assert.equal(real.gateFailed, true, 'a real smoke failure still fails the gate next to a gap');
+  assert.equal(real.fixtureGap.files.length, 1);
+});
+
+test('C12: with no gap the facts text is byte-identical to a result that has no fixtureGap field (breaks if an empty gap prints a line)', async () => {
+  const clean = await catchersOn(CLEAN_CLI, QUIET);
+  assert.deepEqual(clean.fixtureGap, { files: [] });
+  const without = { ...clean };
+  delete without.fixtureGap;
+  assert.equal(factsBody(clean), factsBody(without));
+  assert.equal(factsBody({ ...clean, fixtureGap: { files: [] } }), factsBody(without));
+});
+
+test('C13: the gap line lists at most 5 files and stays on one line (breaks if the slice or oneLine is dropped)', () => {
+  const files = Array.from({ length: 8 }, (_, i) => `scripts/x/g${i}-guard.mjs`);
+  const calm = { files: [], errors: [], gateFailed: false, smoke: { checked: 0, failed: 0, results: [] }, fixtures: { skipped: [], failed: 0, results: [] }, typecheck: { skipped: null, errors: [] }, mappedTests: [] };
+  const body = factsBody({ ...calm, fixtureGap: { files: [...files, 'a\nb'] } });
+  const line = body.split('\n').filter((l) => l.startsWith('fixture-gap'));
+  assert.equal(line.length, 1);
+  assert.match(line[0], /: 9 changed parser\/guard file\(s\) with no parser-fixtures entry: scripts\/x\/g0-guard\.mjs, .*g4-guard\.mjs$/);
+  assert.ok(!line[0].includes('g5-guard'));
+  assert.ok(body.indexOf('parser-fixtures GATE') < body.indexOf('fixture-gap'));
+  assert.ok(body.indexOf('fixture-gap') < body.indexOf('tsc (fact'));
+  assert.ok(!factsBody({ ...calm, fixtureGap: { files: ['a\nb.mjs'] } }).includes('\nb.mjs'));
+  assert.ok(factsBody({ ...calm, fixtureGap: { files: ['a\nb.mjs'] } }).includes('a b.mjs'));
 });
 
 // ---------- git diff ----------
