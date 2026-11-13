@@ -1157,12 +1157,6 @@ async function sessionsOnBoard(c, uuids, boardKey) {
 }
 
 /**
- * Who does `--to <want>` mean? A name first (exact, recent sessions), then a uuid prefix.
- * Several sessions with the name: prefer the one on this board; otherwise ask for `name@board`.
- * `name@board` picks the session on that board. A DM may cross boards, so a unique name
- * anywhere on the machine is fine.
- */
-/**
  * A `say --to` receiver idle this long gets a note after "sent to". Wake test 2026-11-13
  * (.claudedocs/e2e-say-wake-test): a lane DM never starts a turn in an idle session, it shows at the next turn.
  */
@@ -1187,6 +1181,12 @@ async function idleNote(c, to) {
     + 'To wake an idle session, also use SendMessage; a session in another permission-mode class holds it for Dave.';
 }
 
+/**
+ * Who does `--to <want>` mean? A name first (exact, recent sessions), then a uuid prefix.
+ * Several sessions with the name: prefer the one on this board; otherwise ask for `name@board`.
+ * `name@board` picks the session on that board. A DM may cross boards, so a unique name
+ * anywhere on the machine is fine.
+ */
 async function resolveRecipient(c, want, board) {
   const at = /^(.*\S)@([a-z0-9][a-z0-9-]*)$/.exec(want);
   const wantBoard = at && boardRoots(at[2]).length ? at[2] : null;
