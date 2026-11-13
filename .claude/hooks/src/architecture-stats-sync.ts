@@ -24,6 +24,7 @@ import { spawnSync } from 'node:child_process';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import { openSync, mkdirSync, existsSync } from 'node:fs';
 import * as path from 'node:path';
+import { isEngineHost } from './shared/engine-host.js';
 
 // ===========================================================================
 // Types
@@ -200,6 +201,12 @@ async function main(): Promise<void> {
   try {
     input = JSON.parse(raw);
   } catch {
+    console.log(passthrough());
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no log file and no sync script in the reviewed tree. (card engine-run-hook-files).
+  if (isEngineHost(input)) {
     console.log(passthrough());
     return;
   }

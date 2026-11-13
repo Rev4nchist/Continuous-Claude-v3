@@ -1223,8 +1223,10 @@ function readStdin() {
   return readFileSync2(0, "utf-8");
 }
 var START = performance.now();
+var ENGINE_HOST = false;
 async function main() {
   const input = JSON.parse(readStdin());
+  ENGINE_HOST = isEngineHost(input);
   if (input.tool_name !== "Read") {
     console.log("{}");
     return;
@@ -1334,11 +1336,13 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
 if (process.argv[1] && process.argv[1].includes("tldr-read-enforcer")) {
   main().catch((err) => {
     console.error(`TLDR enforcer error: ${err.message}`);
-    recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
-      outcome: "fail_open",
-      reason: "error",
-      duration_ms: performance.now() - START
-    });
+    if (!ENGINE_HOST) {
+      recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
+        outcome: "fail_open",
+        reason: "error",
+        duration_ms: performance.now() - START
+      });
+    }
     console.log("{}");
   });
 }

@@ -31,6 +31,7 @@
 import { readFileSync } from 'fs';
 import { mutateBus, bumpTurn, setIntent } from './shared/context-bus.js';
 import { sanitizeMemoryContent } from './shared/memory-sanitize.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 /** Max length of the sanitized intent we stamp onto the bus. */
 const INTENT_CAP = 120;
@@ -71,6 +72,13 @@ function shouldSeed(prompt: string | undefined): boolean {
 export async function runBusSessionPopulator(raw: string): Promise<object> {
   try {
     const input: UserPromptSubmitInput = JSON.parse(raw);
+
+    // Under cursor-agent (the review engine): no bus file in the reviewed tree. The guard sits here,
+    // not in main(), because prompt-submit runs this function in its own process. The cursor-agent
+    // name for UserPromptSubmit is not measured: this guard is by convention, not proven.
+    if (isEngineHost(input)) {
+      return { result: 'continue' };
+    }
 
     if (!shouldSeed(input.prompt)) {
       return { result: 'continue' };

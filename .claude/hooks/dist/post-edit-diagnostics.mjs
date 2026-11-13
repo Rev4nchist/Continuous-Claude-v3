@@ -1455,6 +1455,18 @@ function addFileInPlay(bus, file) {
   }
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/shared/ts-diagnostics.ts
 import { existsSync as existsSync6, readFileSync as readFileSync5 } from "fs";
 import { dirname as dirname5, join as join8, resolve as resolve4, relative, isAbsolute } from "path";
@@ -1584,6 +1596,10 @@ function resolveTscCommand(startDir, stopDir = startDir) {
 }
 async function main() {
   const input = JSON.parse(readFileSync6(0, "utf-8"));
+  if (isEngineHost(input)) {
+    console.log("{}");
+    return;
+  }
   if (input.tool_name !== "Edit" && input.tool_name !== "Write") {
     console.log("{}");
     return;

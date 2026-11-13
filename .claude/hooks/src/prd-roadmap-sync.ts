@@ -21,6 +21,7 @@ import { parseRoadmap, type RoadmapItem as SharedRoadmapItem } from './shared/ro
 import { isPathInsideProject, isTasksRelatedToGoal, localDateStamp } from './shared/roadmap-sync-guards.js';
 import { writeRoadmapGuarded } from './shared/roadmap-audit.js';
 import { insertUnderSection } from './shared/roadmap-splice.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 /**
  * A content edit plus the lines it INTENDS to remove.
@@ -640,6 +641,12 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no ROADMAP.md write in the reviewed tree. (card engine-run-hook-files).
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }

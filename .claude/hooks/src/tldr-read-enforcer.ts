@@ -602,8 +602,13 @@ function readStdin(): string {
 
 const START = performance.now();
 
+// Set once the payload is parsed. The error path below must not write a log into the reviewed tree
+// under the engine host (card engine-run-hook-files). Write-only guard: every decision is unchanged.
+let ENGINE_HOST = false;
+
 async function main() {
   const input: HookInput = JSON.parse(readStdin());
+  ENGINE_HOST = isEngineHost(input);
 
   if (input.tool_name !== 'Read') {
     console.log('{}');
@@ -757,11 +762,13 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
 if (process.argv[1] && process.argv[1].includes('tldr-read-enforcer')) {
   main().catch((err) => {
     console.error(`TLDR enforcer error: ${err.message}`);
-    recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
-      outcome: 'fail_open',
-      reason: 'error',
-      duration_ms: performance.now() - START,
-    });
+    if (!ENGINE_HOST) {
+      recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
+        outcome: 'fail_open',
+        reason: 'error',
+        duration_ms: performance.now() - START,
+      });
+    }
     console.log('{}');
   });
 }

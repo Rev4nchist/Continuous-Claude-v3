@@ -372,6 +372,20 @@ function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform 
 // src/architecture-stats-sync.ts
 import { openSync, mkdirSync, existsSync } from "node:fs";
 import * as path from "node:path";
+
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
+// src/architecture-stats-sync.ts
 var WATCHED_PATTERN = /^(?:\.claude\/(?:hooks|agents|skills)|scripts)\//m;
 var GIT_COMMIT_PATTERN = /\bgit\s+commit\b/;
 function isGitCommitCommand(command) {
@@ -453,6 +467,10 @@ async function main() {
   try {
     input = JSON.parse(raw);
   } catch {
+    console.log(passthrough());
+    return;
+  }
+  if (isEngineHost(input)) {
     console.log(passthrough());
     return;
   }

@@ -1686,6 +1686,18 @@ function buildFocusBlock(terms) {
   return wrapMemoryContext(body);
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/memory-awareness.ts
 var TEXT_ONLY_FLOOR = 0.0225;
 var HYBRID_FLOOR = 0.03275;
@@ -1881,6 +1893,9 @@ async function runMemoryAwareness(raw) {
 async function memoryAwarenessJob(raw) {
   const t0 = Date.now();
   const input = JSON.parse(raw);
+  if (isEngineHost(input)) {
+    return { result: "continue" };
+  }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   if (process.env.CLAUDE_AGENT_ID) {
     return { result: "continue" };

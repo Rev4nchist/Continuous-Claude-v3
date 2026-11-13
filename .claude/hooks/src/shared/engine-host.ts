@@ -12,7 +12,10 @@
  * identity-probe prints nothing. The callers are: epistemic-reminder, periodic-extract,
  * tldr-read-enforcer (PR 529); session-register, session-start-init-check,
  * session-start-memory-loaders, identity-probe, and the Tier B SessionStart hooks of card
- * engine-run-hook-silence-2.
+ * engine-run-hook-silence-2. Card engine-run-hook-files adds the hooks that write a FILE into the
+ * project folder (the reviewed tree): bus-tool-populator, bus-session-populator,
+ * post-edit-diagnostics, session-end-handoff-indexer and post-plan-roadmap. The cursor-agent name
+ * for UserPromptSubmit is not measured, so the bus-session-populator guard is by convention.
  *
  * tldr-read-enforcer is the one caller that has a deny branch. It may import this module because
  * seat ruling 1 made it ALLOW a Read under the engine host: its deny text would be hook text in

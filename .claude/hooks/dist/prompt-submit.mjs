@@ -7826,6 +7826,19 @@ function buildFocusBlock(terms) {
   return wrapMemoryContext(body);
 }
 
+// src/shared/engine-host.ts
+init_trace_boot();
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/memory-awareness.ts
 var TEXT_ONLY_FLOOR = 0.0225;
 var HYBRID_FLOOR = 0.03275;
@@ -8021,6 +8034,9 @@ async function runMemoryAwareness(raw) {
 async function memoryAwarenessJob(raw) {
   const t0 = Date.now();
   const input = JSON.parse(raw);
+  if (isEngineHost(input)) {
+    return { result: "continue" };
+  }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   if (process.env.CLAUDE_AGENT_ID) {
     return { result: "continue" };
@@ -8463,6 +8479,9 @@ function shouldSeed(prompt) {
 async function runBusSessionPopulator(raw) {
   try {
     const input = JSON.parse(raw);
+    if (isEngineHost(input)) {
+      return { result: "continue" };
+    }
     if (!shouldSeed(input.prompt)) {
       return { result: "continue" };
     }
@@ -8656,19 +8675,6 @@ function bandTag(band) {
 function laneOrderSql(alias) {
   if (!/^[a-z_][a-z0-9_]*$/.test(alias)) throw new Error(`laneOrderSql: bad alias ${JSON.stringify(alias)}`);
   return `CASE ${alias}.band WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END, ${alias}.due_at ASC NULLS LAST, ${alias}.priority, ${alias}.id`;
-}
-
-// src/shared/engine-host.ts
-init_trace_boot();
-var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
-function isEngineHost(input) {
-  try {
-    if (input === null || typeof input !== "object") return false;
-    const event = input.hook_event_name;
-    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
-  } catch {
-    return false;
-  }
 }
 
 // src/lane-context.ts

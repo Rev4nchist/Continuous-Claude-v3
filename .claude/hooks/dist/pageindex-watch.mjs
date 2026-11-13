@@ -355,6 +355,20 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 
 // src/pageindex-watch.ts
 import * as fs2 from "fs";
+
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
+// src/pageindex-watch.ts
 import * as path from "path";
 
 // src/lib/spawn-hidden.ts
@@ -453,6 +467,10 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }

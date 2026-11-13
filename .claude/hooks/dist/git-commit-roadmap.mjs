@@ -932,6 +932,18 @@ function appendRoadmapAuditRecord(projectDir, record) {
   appendAudit(projectDir, record);
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/git-commit-roadmap.ts
 var COMMIT_PATTERNS = {
   conventional: /^(feat|fix|docs|style|refactor|perf|test|chore|build|ci)(?:\(([^)]+)\))?!?:\s*(.+)$/i,
@@ -1163,6 +1175,10 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }

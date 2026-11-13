@@ -38,6 +38,7 @@ import { createLogger } from './shared/logger.js';
 import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-sanitize.js';
 import { readBus, type BusEntry } from './shared/context-bus.js';
 import { appendIntelBus, type IntelBusEvent } from './shared/intel-bus.js';
+import { isEngineHost } from './shared/engine-host.js';
 import {
   extractBusFocus,
   buildFocusBlock,
@@ -508,6 +509,13 @@ export async function main(): Promise<void> {
   } catch (e: any) {
     log.warn('failed to parse stdin', { error: e?.message });
     outputContinue();
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no recall log and no intel-bus row in the reviewed tree
+  // (card engine-run-hook-files). This hook only adds context; it never denies or changes the tool input.
+  if (isEngineHost(input)) {
+    console.log('{}');
     return;
   }
 

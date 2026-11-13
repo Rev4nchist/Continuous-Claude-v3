@@ -24,6 +24,7 @@ import {
 } from './shared/roadmap-sync-guards.js';
 import { insertUnderSection } from './shared/roadmap-splice.js';
 import { writeRoadmapGuarded, appendRoadmapAuditRecord } from './shared/roadmap-audit.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 interface PostToolUseInput {
   session_id: string;
@@ -437,6 +438,12 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no ROADMAP.md write and no git commit in the reviewed tree. (card engine-run-hook-files).
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
