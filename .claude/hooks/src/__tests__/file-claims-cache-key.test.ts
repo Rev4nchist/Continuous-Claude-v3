@@ -115,7 +115,8 @@ describe('resolveClaimKey: .claude/cache files keep the per-worktree (old) key',
     expect(resolveClaimKey(sneaky)).toEqual(resolveClaimKey(join(primary, 'src', 'x.ts')));
   });
 
-  it('a Windows separator inside the cache path is still the cache folder', () => {
+  // On POSIX a backslash is part of a file name, so this holds on win32 only (as claim-target.test.ts 10b).
+  it.skipIf(process.platform !== 'win32')('a Windows separator inside the cache path is still the cache folder', () => {
     expect(resolveClaimKey(`${wt}\\.claude\\cache\\pre-pr\\summary.md`, { platform: 'win32' })).toBeNull();
   });
 });
@@ -134,7 +135,9 @@ describe('file-claims hook: the key handed to resolveFileClaim', () => {
     expect(seen.calls[0].filePath).toBe('src/x.ts');
   });
 
-  it('the same cache file edited from the same worktree twice keeps one key (two sessions still meet)', async () => {
+  // This proves an EQUAL key only (the mock always grants). The real deny of a second session on the
+  // same worktree file is proved on the built hook (built-hook-proof.txt).
+  it('the same cache file edited from the same worktree twice gets the same key', async () => {
     await runHook(wt, join(wt, CACHE));
     await runHook(wt, join(wt, CACHE));
     expect(seen.calls[0]).toEqual(seen.calls[1]);
