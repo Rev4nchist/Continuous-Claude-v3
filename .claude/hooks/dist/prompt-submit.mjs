@@ -7828,7 +7828,7 @@ function buildFocusBlock(terms) {
 
 // src/shared/engine-host.ts
 init_trace_boot();
-var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
 function isEngineHost(input) {
   try {
     if (input === null || typeof input !== "object") return false;
@@ -8396,6 +8396,9 @@ async function detectConfirmation(input) {
   try {
     data = JSON.parse(input);
   } catch {
+    return { continue: true };
+  }
+  if (isEngineHost(data)) {
     return { continue: true };
   }
   const prompt = data.prompt?.trim() || "";

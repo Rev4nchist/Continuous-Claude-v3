@@ -372,7 +372,7 @@ function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform 
 }
 
 // src/shared/engine-host.ts
-var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
 function isEngineHost(input) {
   try {
     if (input === null || typeof input !== "object") return false;

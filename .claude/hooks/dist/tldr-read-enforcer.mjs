@@ -860,7 +860,7 @@ import * as path from "path";
 var CONTEXT_DIR = path.join(os.tmpdir(), "claude-search-context");
 
 // src/shared/engine-host.ts
-var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
 function isEngineHost(input) {
   try {
     if (input === null || typeof input !== "object") return false;
@@ -1223,10 +1223,8 @@ function readStdin() {
   return readFileSync2(0, "utf-8");
 }
 var START = performance.now();
-var ENGINE_HOST = false;
 async function main() {
   const input = JSON.parse(readStdin());
-  ENGINE_HOST = isEngineHost(input);
   if (input.tool_name !== "Read") {
     console.log("{}");
     return;
@@ -1336,13 +1334,11 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
 if (process.argv[1] && process.argv[1].includes("tldr-read-enforcer")) {
   main().catch((err) => {
     console.error(`TLDR enforcer error: ${err.message}`);
-    if (!ENGINE_HOST) {
-      recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
-        outcome: "fail_open",
-        reason: "error",
-        duration_ms: performance.now() - START
-      });
-    }
+    recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
+      outcome: "fail_open",
+      reason: "error",
+      duration_ms: performance.now() - START
+    });
     console.log("{}");
   });
 }

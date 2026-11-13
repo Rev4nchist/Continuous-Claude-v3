@@ -207,7 +207,7 @@ async function main(): Promise<void> {
 
   // Under cursor-agent (the review engine): no log file and no sync script in the reviewed tree. (card engine-run-hook-files).
   if (isEngineHost(input)) {
-    console.log(passthrough());
+    console.log('{}');
     return;
   }
 

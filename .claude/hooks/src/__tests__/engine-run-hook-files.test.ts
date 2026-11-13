@@ -23,17 +23,18 @@
  *     in process -> the guard sits inside runBusSessionPopulator and memoryAwarenessJob (source test)
  *  6. a new project writer is registered without the guard -> the registrations test
  *
- * Event names: sessionStart, postToolUse, sessionEnd are MEASURED; preToolUse is by convention.
- * The cursor-agent name for UserPromptSubmit is NOT measured: the bus-session-populator and
- * memory-awareness guards are by convention, not proven.
+ * Event names: sessionStart, postToolUse, sessionEnd are MEASURED; preToolUse and userPromptSubmit are
+ * by convention, NOT measured (seat ruling 2026-11-13 09:10 CST). The bus-session-populator and
+ * memory-awareness guards use userPromptSubmit and are by convention, not proven.
  *
- * tldr-read-enforcer is a deny guard. It is NOT in the table of silent hooks: its decision stays.
- * Only its error-path log write is guarded (write-only guard); see the last describe block.
+ * tldr-read-enforcer is a deny guard and is NOT changed by this card: under the engine host its main()
+ * already returns `{}` before any decision or log write (PR 529). Its table row proves the engine run
+ * leaves the project unchanged; its source is the same as main.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { build, type Plugin } from 'esbuild';
@@ -90,7 +91,7 @@ const SPECS: Spec[] = [
     claude: (p) => ({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: F(p) } }),
     expect: { created: BUS } },
   { hook: 'bus-session-populator', neutral: CONT,
-    cursor: [() => ({ hook_event_name: 'sessionStart', prompt: PROMPT }), () => ({ hook_event_name: 'preToolUse', prompt: PROMPT })],
+    cursor: [() => ({ hook_event_name: 'userPromptSubmit', prompt: PROMPT })],
     claude: () => ({ hook_event_name: 'UserPromptSubmit', prompt: PROMPT }),
     expect: { created: BUS } },
   { hook: 'post-edit-diagnostics', neutral: '{}',
@@ -112,7 +113,7 @@ const SPECS: Spec[] = [
       mkdirSync(join(proj, '.claude', 'logs'), { recursive: true });
       writeFileSync(f, 'old\n');
       const old = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-      require('fs').utimesSync(f, old, old);
+      utimesSync(f, old, old);
     },
     claude: () => ({ hook_event_name: 'SessionStart', source: 'startup' }),
     expect: { removed: /intel-bus\.jsonl\.1$/ } },
@@ -135,13 +136,15 @@ const SPECS: Spec[] = [
     seed: (proj) => { mkdirSync(join(proj, '.claude'), { recursive: true }); writeFileSync(join(proj, '.claude', 'knowledge-tree.json'), '{"a":1}\n'); },
     claude: (p) => ({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: F(p) }, tool_result: { success: true } }),
     expect: { changed: /knowledge-tree\.json$/ } },
-  { hook: 'architecture-stats-sync', neutral: '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":""}}',
+  { hook: 'architecture-stats-sync', neutral: '{}',
     cursor: CURSOR_TOOLS('Bash', () => ({ command: 'git commit -m x' })),
     claude: () => ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'git commit -m x' } }),
     expect: { spawns: true } },
   { hook: 'prd-roadmap-sync', neutral: CONT,
     cursor: CURSOR_TOOLS('Write', (p) => ({ file_path: join(p, 'docs', 'prd-feature.md'), content: '# PRD\n- [ ] a task\n' }), { tool_result: { success: true } }),
-    seed: (proj) => { mkdirSync(join(proj, 'docs'), { recursive: true }); writeFileSync(join(proj, 'docs', 'prd-feature.md'), '# PRD\n- [ ] a task\n'); writeFileSync(join(proj, 'ROADMAP.md'), '# Roadmap\n\n## Current Focus\n\n## Planned\n'); } },
+    seed: (proj) => { mkdirSync(join(proj, 'docs'), { recursive: true }); writeFileSync(join(proj, 'docs', 'prd-feature.md'), '# PRD\n- [ ] a task\n'); writeFileSync(join(proj, 'ROADMAP.md'), '# Roadmap\n\n## Current Focus\n\n## Planned\n'); },
+    claude: (p) => ({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: join(p, 'docs', 'prd-feature.md'), content: '# PRD\n- [ ] a task\n' }, tool_result: { success: true } }),
+    expect: { changed: /ROADMAP\.md$/ } },
   { hook: 'git-commit-roadmap', neutral: CONT,
     cursor: CURSOR_TOOLS('Bash', () => ({ command: 'git commit -m "feat: x"' }), { tool_response: { stdout: '[main abc1234] feat: x\n 1 file changed, 1 insertion(+)' } }),
     seed: (proj) => { writeFileSync(join(proj, 'ROADMAP.md'), '# Roadmap\n\n## Current Focus\n\n## Planned\n'); },
@@ -166,9 +169,19 @@ const SPECS: Spec[] = [
     cursor: CURSOR_TOOLS('Read', (p) => ({ file_path: F(p) })),
     seed: (proj) => { mkdirSync(join(proj, '.tldr'), { recursive: true }); writeFileSync(join(proj, '.tldr', 'keep'), 'x'); } },
   { hook: 'memory-awareness', neutral: CONT,
-    cursor: [() => ({ hook_event_name: 'sessionStart', prompt: PROMPT }), () => ({ hook_event_name: 'preToolUse', prompt: PROMPT })],
+    cursor: [() => ({ hook_event_name: 'userPromptSubmit', prompt: PROMPT })],
     seed: (proj) => { mkdirSync(join(proj, 'opc'), { recursive: true }); },
     claude: () => ({ hook_event_name: 'UserPromptSubmit', prompt: PROMPT }),
+    expect: { spawns: true } },
+  // Reads `.claude/smarter-everyday-state.json` in the project and, on a CANDIDATE state, stores a learning
+  // through a child and resets that file. Guarded as the 16th hook after the seat's open-writer question.
+  { hook: 'user-confirmation-detector', neutral: '{"continue":true}',
+    cursor: [() => ({ hook_event_name: 'userPromptSubmit', prompt: 'that worked' })],
+    seed: (proj) => {
+      mkdirSync(join(proj, '.claude'), { recursive: true });
+      writeFileSync(join(proj, '.claude', 'smarter-everyday-state.json'), JSON.stringify({ session_id: 's', state: 'CANDIDATE', tracked_file: 'src/x.ts', attempts: 2, failures: [], candidate_turn: 1, last_edit_content: null, test_command: null, context: null, current_turn: 2 }));
+    },
+    claude: () => ({ hook_event_name: 'UserPromptSubmit', prompt: 'that worked' }),
     expect: { spawns: true } },
 ];
 
@@ -290,7 +303,7 @@ describe('registrations: every project writer is guarded', () => {
     }
   }
   const src = (name: string) => readFileSync(join(HOOKS_ROOT, 'src', `${name}.ts`), 'utf-8');
-  const PROMPT_SUBMIT_JOBS = ['bus-session-populator', 'memory-awareness'];
+  const PROMPT_SUBMIT_JOBS = ['bus-session-populator', 'memory-awareness', 'user-confirmation-detector'];
 
   it('every guarded hook is registered, directly or through prompt-submit', () => {
     for (const s of SPECS) {
@@ -314,6 +327,9 @@ describe('registrations: every project writer is guarded', () => {
     const ma = src('memory-awareness');
     const maFn = ma.slice(ma.indexOf('async function memoryAwarenessJob'));
     expect(maFn.slice(0, 1200)).toMatch(/isEngineHost\(/);
+    const ucd = src('user-confirmation-detector');
+    const ucdFn = ucd.slice(ucd.indexOf('async function detectConfirmation'));
+    expect(ucdFn.slice(0, ucdFn.indexOf('\nasync function main'))).toMatch(/isEngineHost\(/);
   });
 
   it('every registered hook that imports the context bus or the intel bus is guarded, or is on the reviewed list', () => {
@@ -325,14 +341,5 @@ describe('registrations: every project writer is guarded', () => {
       if (!/shared\/(context-bus|intel-bus)/.test(text) || REVIEWED_NO_PROJECT_WRITE.has(name)) continue;
       expect(text, `${name} imports a bus and must call isEngineHost`).toMatch(/isEngineHost\(/);
     }
-  });
-});
-
-describe('tldr-read-enforcer: write-only guard (it is a deny guard; its decision does not change)', () => {
-  it('the error-path log write is skipped under the engine host', () => {
-    const text = readFileSync(join(HOOKS_ROOT, 'src', 'tldr-read-enforcer.ts'), 'utf-8');
-    const catchPart = text.slice(text.indexOf('main().catch('));
-    expect(catchPart).toMatch(/if \(!ENGINE_HOST\) \{\s*recordRead/);
-    expect(text).toMatch(/ENGINE_HOST = isEngineHost\(input\)/);
   });
 });

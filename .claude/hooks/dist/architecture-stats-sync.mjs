@@ -374,7 +374,7 @@ import { openSync, mkdirSync, existsSync } from "node:fs";
 import * as path from "node:path";
 
 // src/shared/engine-host.ts
-var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
 function isEngineHost(input) {
   try {
     if (input === null || typeof input !== "object") return false;
@@ -471,7 +471,7 @@ async function main() {
     return;
   }
   if (isEngineHost(input)) {
-    console.log(passthrough());
+    console.log("{}");
     return;
   }
   if (input.tool_name !== "Bash") {

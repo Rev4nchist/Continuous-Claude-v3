@@ -6348,7 +6348,7 @@ function healthAlertForSource(source, opts = {}) {
 
 // src/shared/engine-host.ts
 init_trace_boot();
-var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse"]);
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
 function isEngineHost(input) {
   try {
     if (input === null || typeof input !== "object") return false;

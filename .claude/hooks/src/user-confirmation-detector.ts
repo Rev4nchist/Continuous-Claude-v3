@@ -22,6 +22,7 @@ import { spawn } from 'child_process';
 import { writeStateWithLock } from './shared/atomic-write.js';
 import { isHarnessWrappedPrompt } from './shared/intent-extractor.js';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 interface UserPromptSubmitInput {
   session_id: string;
@@ -268,6 +269,12 @@ async function detectConfirmation(input: string): Promise<object> {
   try {
     data = JSON.parse(input);
   } catch {
+    return { continue: true };
+  }
+
+  // Under cursor-agent (the review engine): no state write into the reviewed tree and no store child,
+  // and an engine prompt is not Dave confirming anything (card engine-run-hook-files, seat 09:10).
+  if (isEngineHost(data)) {
     return { continue: true };
   }
 
