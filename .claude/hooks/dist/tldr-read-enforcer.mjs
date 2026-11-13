@@ -137,6 +137,7 @@ var HOT_PROGRAMS = [
   "decision-gate",
   "destructive-command-guard",
   "git-commit-roadmap",
+  "file-claims",
   "hook-health-monitor",
   "identity-probe",
   "lane-agent-tag",

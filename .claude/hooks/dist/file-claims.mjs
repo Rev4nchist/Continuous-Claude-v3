@@ -431,6 +431,7 @@ var init_trace_boot = __esm({
       "decision-gate",
       "destructive-command-guard",
       "git-commit-roadmap",
+      "file-claims",
       "hook-health-monitor",
       "identity-probe",
       "lane-agent-tag",
@@ -5840,7 +5841,7 @@ var require_lib2 = __commonJS({
 // src/file-claims.ts
 init_trace_boot();
 import { readFileSync as readFileSync4 } from "fs";
-import { isAbsolute as isAbsolute2, relative as relative2, resolve as resolvePath } from "path";
+import { basename as basename2, isAbsolute as isAbsolute2, relative as relative2, resolve as resolvePath } from "path";
 
 // src/shared/db-utils-pg.ts
 init_trace_boot();
@@ -5877,12 +5878,12 @@ var MissingDbUrlError = class extends Error {
     this.name = "MissingDbUrlError";
   }
 };
-function resolveDbUrl() {
+function resolveDbUrl(options = {}) {
   for (const name of DB_URL_VARS) {
     const value = process.env[name];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
-  if (!warnedMissingDbUrl) {
+  if (!warnedMissingDbUrl && !options.quiet) {
     warnedMissingDbUrl = true;
     console.error(
       "WARN: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL are unset; skipping database work"
@@ -5890,19 +5891,16 @@ function resolveDbUrl() {
   }
   return null;
 }
-function getPgConnectionString() {
-  return resolveDbUrl();
-}
-async function withPgClient(fn) {
-  const connectionString = getPgConnectionString();
+async function withPgClient(fn, options = {}) {
+  const connectionString = resolveDbUrl({ quiet: options.quiet });
   if (!connectionString) {
     throw new MissingDbUrlError();
   }
   const client = new Client({
     connectionString,
-    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-    query_timeout: QUERY_TIMEOUT_MS,
-    statement_timeout: QUERY_TIMEOUT_MS,
+    connectionTimeoutMillis: options.connectMs ?? CONNECT_TIMEOUT_MS,
+    query_timeout: options.queryMs ?? QUERY_TIMEOUT_MS,
+    statement_timeout: options.queryMs ?? QUERY_TIMEOUT_MS,
     application_name: "claude-hooks-coordination"
   });
   client.on("error", () => {
@@ -5931,10 +5929,24 @@ function describeError(err) {
   }
   return parts.filter(Boolean).join(" ") || err.constructor.name;
 }
-async function withPgClientOrFallback(fn, fallback, context) {
+async function withPgClientOrFallback(fn, fallback, context, options = {}) {
+  const { quiet = false, totalMs } = options;
   try {
-    return { value: await withPgClient(fn), degraded: false };
+    if (!totalMs) return { value: await withPgClient(fn, { quiet }), degraded: false };
+    const run = withPgClient(fn, { quiet, connectMs: totalMs, queryMs: totalMs });
+    run.catch(() => {
+    });
+    let timer;
+    const cap = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`timed out after ${totalMs} ms`)), totalMs);
+    });
+    try {
+      return { value: await Promise.race([run, cap]), degraded: false };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   } catch (err) {
+    if (quiet) return { value: fallback, degraded: true, error: describeError(err) };
     if (err instanceof MissingDbUrlError) {
       return { value: fallback, degraded: true, error: err.message };
     }
@@ -6228,25 +6240,28 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
   if (degraded || value === null) return { outcome: "degraded" };
   return value;
 }
+var LIST_BLOCKING_CLAIMS_SQL = `
+SELECT fc.file_path, fc.session_id, fc.project
+  FROM file_claims fc
+ WHERE fc.session_id <> $1
+   AND ( (fc.expires_at IS NOT NULL AND fc.expires_at > NOW())
+         OR EXISTS (SELECT 1 FROM sessions s
+                     WHERE s.id = fc.session_id
+                       AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $2)) )
+ ORDER BY fc.claimed_at DESC
+ LIMIT 500
+`;
+var LIST_BLOCKING_CLAIMS_BUDGET_MS = 1e3;
 async function listBlockingClaims(sessionId, staleThresholdMs) {
   const staleSeconds = Math.floor(staleThresholdMs / 1e3);
   const { value, degraded } = await withPgClientOrFallback(
     async (client) => {
-      const res = await client.query(
-        `SELECT fc.file_path, fc.session_id, fc.project
-           FROM file_claims fc
-          WHERE fc.session_id <> $1
-            AND ( (fc.expires_at IS NOT NULL AND fc.expires_at > NOW())
-                  OR EXISTS (SELECT 1 FROM sessions s
-                              WHERE s.id = fc.session_id
-                                AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $2)) )
-          LIMIT 500`,
-        [sessionId, staleSeconds]
-      );
+      const res = await client.query(LIST_BLOCKING_CLAIMS_SQL, [sessionId, staleSeconds]);
       return res.rows.map((r) => ({ filePath: r.file_path, sessionId: r.session_id, project: r.project }));
     },
     [],
-    "listBlockingClaims"
+    "listBlockingClaims",
+    { quiet: true, totalMs: LIST_BLOCKING_CLAIMS_BUDGET_MS }
   );
   return { claims: value, degraded };
 }
@@ -6455,7 +6470,7 @@ var DIRECT_WRITERS = /* @__PURE__ */ new Map([
   ["NotebookEdit", ["notebook_path"]],
   [`${DC}write_file`, ["path"]],
   [`${DC}edit_block`, ["file_path"]],
-  [`${DC}move_file`, ["source", "destination"]]
+  [`${DC}move_file`, ["destination", "source"]]
 ]);
 var SHELL_WRITERS = [...SHELL_TOOLS.keys()];
 var CLAIM_TOOLS = [...DIRECT_WRITERS.keys(), ...SHELL_WRITERS];
@@ -6472,34 +6487,87 @@ function directWritePaths(input) {
   }
   return out;
 }
-var CUES = "(?:tee|set-content|add-content|out-file|mv|cp|rm|move-item|copy-item|remove-item|sed\\s+(?:-[a-z]*i[a-z]*|--in-place)|git\\s+(?:checkout|restore|apply))";
-var CUE_RE = new RegExp(`(?<![\\w-])${CUES}(?![\\w-])`, "gi");
+var SIZE_CAP = 64 * 1024;
+var B_START = "(?<![\\w./-])";
+var B_END = "(?![\\w./-])";
+var CUE_DEFS = [
+  { name: "tee", src: "tee" },
+  { name: "tee-object", src: "tee-object" },
+  { name: "set-content", src: "set-content" },
+  { name: "add-content", src: "add-content" },
+  { name: "clear-content", src: "clear-content" },
+  { name: "out-file", src: "out-file" },
+  { name: "mv", src: "mv" },
+  { name: "move", src: "move" },
+  { name: "move-item", src: "move-item" },
+  { name: "cp", src: "cp", firstOperandReads: true },
+  { name: "copy", src: "copy", firstOperandReads: true },
+  { name: "copy-item", src: "copy-item", firstOperandReads: true },
+  { name: "rm", src: "rm" },
+  { name: "del", src: "del" },
+  { name: "erase", src: "erase" },
+  { name: "ri", src: "ri" },
+  { name: "remove-item", src: "remove-item" },
+  // Flags before -i are allowed (`sed -E -i`, `sed -e x -i`). [a-hj-z] leaves out "i", so the run of flags cannot backtrack.
+  { name: "sed -i", src: "sed\\s+(?:(?:-e\\s+\\S+|-f\\s+\\S+|-[a-hj-z]+)\\s+)*(?:-[a-z]*i[a-z]*(?:\\.\\w+)?|--in-place(?:=\\S+)?)" },
+  { name: "git checkout", src: "git\\s+checkout" },
+  { name: "git restore", src: "git\\s+restore" },
+  { name: "git apply", src: "git\\s+apply" },
+  { name: "safe-replace", src: "node\\s+\\S*safe-replace\\.mjs" }
+];
+var CUE_RE = new RegExp(
+  `${B_START}(?:${CUE_DEFS.map((d, i) => `(?<c${i}>${d.src})`).join("|")})${B_END}`,
+  "gi"
+);
+function cuesIn(t) {
+  const hits = [];
+  CUE_RE.lastIndex = 0;
+  for (let m = CUE_RE.exec(t); m; m = CUE_RE.exec(t)) {
+    const g = m.groups ?? {};
+    const i = CUE_DEFS.findIndex((_, k) => g[`c${k}`] !== void 0);
+    hits.push({ index: m.index, end: m.index + m[0].length, def: CUE_DEFS[Math.max(i, 0)] });
+    if (m[0].length === 0) CUE_RE.lastIndex++;
+  }
+  return hits;
+}
 var escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-var END = "(?![\\w.\\-/])";
-var START = "(?<![\\w.\\-/])";
+var PATH_END = "(?![\\w.\\-/])";
+var PATH_START = "(?<![\\w.\\-/])";
+var FIRST_OPERAND_GAP = /\s+(?:-\S+\s+)*['"]?/y;
+function firstOperandAt(t, cueEnd) {
+  FIRST_OPERAND_GAP.lastIndex = cueEnd;
+  const m = FIRST_OPERAND_GAP.exec(t);
+  return m ? cueEnd + m[0].length : -1;
+}
 function classifyShellText(text, claims, fold) {
-  if (!text || claims.length === 0) return { kind: "none" };
+  if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: "none" };
   let t = text.replace(/\\/g, "/");
   if (fold) t = t.toLowerCase();
+  const tl = t.toLowerCase();
+  const cues = cuesIn(t);
   let mention = null;
-  const cueIndexes = [];
-  CUE_RE.lastIndex = 0;
-  for (let m = CUE_RE.exec(t); m; m = CUE_RE.exec(t)) cueIndexes.push(m.index);
-  const firstCue = cueIndexes.length ? Math.min(...cueIndexes) : -1;
   for (const claim of claims) {
-    const forms = claim.forms.map((f) => f.replace(/\\/g, "/")).map((f) => fold ? f.toLowerCase() : f).filter(Boolean);
-    if (forms.length === 0) continue;
-    const alt = forms.map(escapeRe).join("|");
-    if (new RegExp(`>>?\\s*['"]?(?:\\./)?(?:${alt})${END}`).test(t)) return { kind: "deny", filePath: claim.filePath, holder: claim.holder };
-    const at = new RegExp(`${START}(?:\\./)?(?:${alt})${END}`, "g");
-    let sawPath = false;
-    for (let m = at.exec(t); m; m = at.exec(t)) {
-      sawPath = true;
-      if (firstCue >= 0 && m.index > firstCue) return { kind: "deny", filePath: claim.filePath, holder: claim.holder };
+    const exact = claim.forms.map((f) => f.replace(/\\/g, "/")).map((f) => fold ? f.toLowerCase() : f).filter(Boolean);
+    const ci = (claim.ciForms ?? []).map((f) => f.replace(/\\/g, "/").toLowerCase()).filter(Boolean);
+    for (const [hay, forms] of [[t, exact], [tl, ci]]) {
+      if (forms.length === 0) continue;
+      const alt = forms.map(escapeRe).join("|");
+      if (new RegExp(`(?<![-=])>>?\\s*['"]?(?:\\./)?(?:${alt})${PATH_END}`).test(hay)) {
+        return { kind: "deny", filePath: claim.filePath, holder: claim.holder, project: claim.project, cue: ">" };
+      }
+      const at = new RegExp(`${PATH_START}(?:\\./)?(?:${alt})${PATH_END}`, "g");
+      let sawPath = false;
+      for (let m = at.exec(hay); m; m = at.exec(hay)) {
+        sawPath = true;
+        const armed = cues.find((c) => c.index < m.index && !(c.def.firstOperandReads && firstOperandAt(t, c.end) === m.index));
+        if (armed) {
+          return { kind: "deny", filePath: claim.filePath, holder: claim.holder, project: claim.project, cue: armed.def.name };
+        }
+      }
+      if (sawPath && mention === null) mention = claim;
     }
-    if (sawPath && mention === null) mention = claim;
   }
-  return mention === null ? { kind: "none" } : { kind: "mention", filePath: mention.filePath, holder: mention.holder };
+  return mention === null ? { kind: "none" } : { kind: "mention", filePath: mention.filePath, holder: mention.holder, project: mention.project };
 }
 
 // src/shared/engine-host.ts
@@ -6517,20 +6585,36 @@ function isEngineHost(input) {
 
 // src/shared/claim-warned.ts
 init_trace_boot();
-import { appendFileSync as appendFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3 } from "fs";
+import { appendFileSync as appendFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, readdirSync as readdirSync2, statSync, unlinkSync } from "fs";
 import { homedir as homedir4 } from "os";
 import { join as join5 } from "path";
+var PRUNE_MS = 7 * 24 * 3600 * 1e3;
 function stateDir() {
   return process.env.CCV3_FILE_CLAIMS_STATE_DIR || join5(homedir4(), ".claude", "cache", "file-claims-warned");
 }
 var safeName = (s) => s.replace(/[^\w.-]/g, "_").slice(0, 80) || "session";
-function firstWarning(sessionId, filePath) {
+function prune(dir) {
+  try {
+    const cutoff = Date.now() - PRUNE_MS;
+    for (const name of readdirSync2(dir)) {
+      const file = join5(dir, name);
+      try {
+        if (statSync(file).mtimeMs < cutoff) unlinkSync(file);
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
+function firstWarning(sessionId, project, filePath) {
   try {
     const dir = stateDir();
     const file = join5(dir, `${safeName(sessionId)}.txt`);
-    if (existsSync2(file) && readFileSync3(file, "utf8").split("\n").includes(filePath)) return false;
+    const key = `${project}|${filePath}`;
+    if (existsSync2(file) && readFileSync3(file, "utf8").split("\n").includes(key)) return false;
     mkdirSync3(dir, { recursive: true });
-    appendFileSync2(file, `${filePath}
+    prune(dir);
+    appendFileSync2(file, `${key}
 `, { mode: 384 });
     return true;
   } catch {
@@ -6591,15 +6675,18 @@ async function mainDirect(input, paths) {
   }
   console.log(JSON.stringify(keep2));
 }
-function shellDeny(input, filePath, holder) {
+var isStoredAbsolute = (filePath) => isAbsolute2(filePath) || /^[a-z]:[\\/]/i.test(filePath);
+var shown = (filePath) => isStoredAbsolute(filePath) ? basename2(filePath) : filePath;
+function shellDeny(input, filePath, holder, cue) {
   const reason = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
-This command writes "${filePath}", which is held by session ${holder}.
+This command may write "${shown(filePath)}", which is held by session ${holder}. It holds the write cue "${cue}".
 The claim is live: their lease runs, or that session is still alive.
+This check reads the command text and does not run it, so it can be wrong. If you only read the file, split the command.
 
 Coordinate with that session, or work on something else.
 To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
-  logGuardDecision("file-claims", input, "deny", `file-conflict-shell: held by ${holder}`);
+  logGuardDecision("file-claims", input, "deny", `file-conflict-shell: cue=${cue} held by ${holder}`);
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
 }
 var FOLDS_CASE2 = process.platform === "win32" || process.platform === "darwin";
@@ -6641,7 +6728,7 @@ async function mainShell(input, cmd) {
   const topsOf = (project) => {
     let t = tops.get(project);
     if (!t) {
-      t = [.../* @__PURE__ */ new Set([...ctx && ctx.project === project ? [ctx.top] : [], project, ...listWorktreeTops(project)])];
+      t = [.../* @__PURE__ */ new Set([...ctx && ctx.project === project ? [ctx.top] : [], ...listWorktreeTops(project)])];
       tops.set(project, t);
     }
     return t;
@@ -6653,22 +6740,24 @@ async function mainShell(input, cmd) {
     // path is NOT a spelling by itself: `src/a.ts` in another repo is another file.
     // A stored absolute path is a claim local to ONE checkout (PR 544: .claude/cache): only that path matches.
     // A repo-relative path is one key for every checkout of the repo: spell it under each known top.
-    forms: isAbsolute2(c.filePath) || /^[a-z]:[\\/]/i.test(c.filePath) ? [c.filePath] : [...new Set(topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath)))]
+    project: c.project,
+    forms: isStoredAbsolute(c.filePath) ? [c.filePath] : [...new Set(topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath)))],
+    ciForms: isStoredAbsolute(c.filePath) ? [] : formsOf(c.project, cwd, c.filePath)
   }));
   const verdict = classifyShellText(cmd.text, held, FOLDS_CASE2);
   if (verdict.kind === "deny" && !BREAK_GLASS) {
-    console.log(JSON.stringify(shellDeny(input, verdict.filePath, verdict.holder ?? "another session")));
+    console.log(JSON.stringify(shellDeny(input, verdict.filePath, verdict.holder ?? "another session", verdict.cue)));
     return;
   }
   if (verdict.kind === "deny") {
-    logGuardDecision("file-claims", input, "override", `break-glass: shell write to a file held by ${verdict.holder}`);
-    console.log(JSON.stringify({ result: "continue", message: `[WARN] BREAK-GLASS: this command writes "${verdict.filePath}", held by session ${verdict.holder}. This was logged.` }));
+    logGuardDecision("file-claims", input, "override", `break-glass: shell cue=${verdict.cue} on a file held by ${verdict.holder}`);
+    console.log(JSON.stringify({ result: "continue", message: `[WARN] BREAK-GLASS: this command may write "${shown(verdict.filePath)}" (cue "${verdict.cue}"), held by session ${verdict.holder}. This was logged.` }));
     return;
   }
-  if (verdict.kind === "mention" && firstWarning(sessionId, verdict.filePath)) {
+  if (verdict.kind === "mention" && firstWarning(sessionId, verdict.project ?? "", verdict.filePath)) {
     console.log(JSON.stringify({
       result: "continue",
-      message: `[WARN] "${verdict.filePath}" is held by session ${verdict.holder}. This command names it but shows no write, so it is not stopped. This warning shows once per file.`
+      message: `[WARN] "${shown(verdict.filePath)}" is held by session ${verdict.holder}. This command names it but shows no write, so it is not stopped. This warning shows once per file.`
     }));
     return;
   }

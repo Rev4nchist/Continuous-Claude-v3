@@ -352,6 +352,7 @@ var init_trace_boot = __esm({
       "decision-gate",
       "destructive-command-guard",
       "git-commit-roadmap",
+      "file-claims",
       "hook-health-monitor",
       "identity-probe",
       "lane-agent-tag",
@@ -5823,12 +5824,12 @@ var MissingDbUrlError = class extends Error {
     this.name = "MissingDbUrlError";
   }
 };
-function resolveDbUrl() {
+function resolveDbUrl(options = {}) {
   for (const name of DB_URL_VARS) {
     const value = process.env[name];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
-  if (!warnedMissingDbUrl) {
+  if (!warnedMissingDbUrl && !options.quiet) {
     warnedMissingDbUrl = true;
     console.error(
       "WARN: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL are unset; skipping database work"
@@ -5836,19 +5837,16 @@ function resolveDbUrl() {
   }
   return null;
 }
-function getPgConnectionString() {
-  return resolveDbUrl();
-}
-async function withPgClient(fn) {
-  const connectionString = getPgConnectionString();
+async function withPgClient(fn, options = {}) {
+  const connectionString = resolveDbUrl({ quiet: options.quiet });
   if (!connectionString) {
     throw new MissingDbUrlError();
   }
   const client = new Client({
     connectionString,
-    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-    query_timeout: QUERY_TIMEOUT_MS,
-    statement_timeout: QUERY_TIMEOUT_MS,
+    connectionTimeoutMillis: options.connectMs ?? CONNECT_TIMEOUT_MS,
+    query_timeout: options.queryMs ?? QUERY_TIMEOUT_MS,
+    statement_timeout: options.queryMs ?? QUERY_TIMEOUT_MS,
     application_name: "claude-hooks-coordination"
   });
   client.on("error", () => {
