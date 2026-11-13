@@ -1162,6 +1162,31 @@ async function sessionsOnBoard(c, uuids, boardKey) {
  * `name@board` picks the session on that board. A DM may cross boards, so a unique name
  * anywhere on the machine is fine.
  */
+/**
+ * A `say --to` receiver idle this long gets a note after "sent to". Wake test 2026-11-13
+ * (.claudedocs/e2e-say-wake-test): a lane DM never starts a turn in an idle session, it shows at the next turn.
+ */
+const IDLE_NOTE_MINUTES = 2;
+
+/**
+ * The note for an idle receiver, or null. Read only, after the event is written: any failure of this read gives
+ * null, so it never changes the exit code, the "sent to" line or the event. None under LANE_CONTEXT_HEADLESS.
+ * The SQL comment tags the query, so a test can fail this read alone.
+ */
+async function idleNote(c, to) {
+  if (process.env.LANE_CONTEXT_HEADLESS) return null;
+  try {
+    const { rows } = await c.query(
+      `/* say-idle-note */ SELECT ${ALIVE_AT()} < now() - interval '${IDLE_NOTE_MINUTES} minutes' AS idle FROM sessions WHERE id=$1`, [to],
+    );
+    if (rows[0]?.idle !== true) return null;
+  } catch {
+    return null;
+  }
+  return `note: a lane DM shows at ${L(to)}'s next turn and does not start one. `
+    + 'To wake an idle session, also use SendMessage; a session in another permission-mode class holds it for Dave.';
+}
+
 async function resolveRecipient(c, want, board) {
   const at = /^(.*\S)@([a-z0-9][a-z0-9-]*)$/.exec(want);
   const wantBoard = at && boardRoots(at[2]).length ? at[2] : null;
@@ -2032,7 +2057,9 @@ const commands = {
       if (isMissingMigration(e)) throw e;
       throw new Error(`not confirmed: ${e.message}. It may already be on the board; a resend can post it twice.`);
     }
-    return `sent to ${to ? L(to) : `board ${board.key}`}${laneId ? ` re ${laneId}` : ''}`;
+    const sent = `sent to ${to ? L(to) : `board ${board.key}`}${laneId ? ` re ${laneId}` : ''}`;
+    const note = to ? await idleNote(c, to) : null;
+    return note ? `${sent}\n${note}` : sent;
   },
 
   /**
