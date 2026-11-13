@@ -43,7 +43,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { builtinModules } from 'node:module';
-import { HarnessError, PATHS, runNode, insertSession, track, result, snapshotRealHome, diffRealHome } from './lib.mjs';
+import { HarnessError, PATHS, assertNotAborted, runNode, insertSession, track, result, snapshotRealHome, diffRealHome } from './lib.mjs';
 
 export const meta = {
   id: '2',
@@ -65,9 +65,10 @@ class Fault extends Error {}
 /**
  * Run git with an argv array and no shell. Identity is passed by -c flags, so no identity config is needed.
  * HOME and USERPROFILE are the sandbox home (ctx.env), so the real global git config is not read; the
- * system config still is.
+ * system config still is. After a timeout abort it refuses: a scenario that kept running must not use the removed sandbox.
  */
-function git(ctx, cwd, args) {
+export function git(ctx, cwd, args) {
+  assertNotAborted('git');
   const flags = [
     '-c', 'user.name=coord-drill', '-c', 'user.email=coord-drill@example.invalid',
     '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${fwd(path.join(ctx.sandbox.dir, 'no-hooks'))}`,
@@ -79,7 +80,8 @@ function git(ctx, cwd, args) {
 }
 
 /** A repo with one commit and a linked worktree. Both hold src/x.ts and src/ctl.ts. Returns the two folders. */
-function makeRepo(ctx, label) {
+export function makeRepo(ctx, label) {
+  assertNotAborted('makeRepo');
   const root = path.join(ctx.sandbox.dir, `s2-${label}`);
   const main = path.join(root, 'main');
   const wt = path.join(root, 'wt');
@@ -129,9 +131,13 @@ function requireUsable(call, what) {
 }
 
 async function claimsOf(ctx, ids) {
-  return ctx.pg(async (c) => (await c.query(
+  const rows = await ctx.pg(async (c) => (await c.query(
     `SELECT file_path, project, session_id FROM public.file_claims
       WHERE session_id = ANY($1::text[]) ORDER BY claimed_at, file_path`, [ids])).rows);
+  // The hook stores a file in a repo as the repo-relative key with the repo's project, not as the absolute path that
+  // track(ctx, 'file') holds. The live zero check needs the pair as stored, or it cannot match this run's rows.
+  for (const r of rows) track(ctx, 'claim', { project: r.project, file: r.file_path });
+  return rows;
 }
 
 // ---------------------------------------------------------------- one hook, one fresh repo
@@ -299,7 +305,8 @@ const staticImports = (text) => [...text.matchAll(/^import\b[^;\n]*?\bfrom\s*["'
  * Any fault is a Fault, so the 2-old probe gives an ERROR row. A static import of a non-built-in module is a Fault too:
  * NODE_PATH does not apply to an ES module import, and the sandbox folder has no node_modules above it.
  */
-function extractOldHook(ctx) {
+export function extractOldHook(ctx) {
+  assertNotAborted('extractOldHook');
   const env = { ...process.env };
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX']) delete env[k];
   const r = spawnSync('git', ['-C', PATHS.REPO, 'show', `${OLD_HOOK_REV}:${OLD_HOOK_PATH}`],

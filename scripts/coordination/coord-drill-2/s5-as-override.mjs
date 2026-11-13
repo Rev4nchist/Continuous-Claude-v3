@@ -17,7 +17,7 @@ export const meta = {
 
 const NOTE_START = 'drill-initial-note';
 const NOTE_PROBE = 'drill-as';
-// The one shape of a rule refusal (lane.mjs:546-549): exit 4 and a line "REFUSED <verb> <id> [token] -- text".
+// The one shape of a rule refusal (refusal() in lane.mjs): exit 4 and a line "REFUSED <verb> <id> [token] -- text".
 // Any other non-zero exit (usage error, db timeout, missing migration) is a fault, never a refusal.
 const REFUSED_LINE_RE = /^REFUSED \S+ \S+ \[[a-z-]+\]/m;
 const isRefusal = (r) => r.code === 4 && REFUSED_LINE_RE.test(r.err);
@@ -105,7 +105,11 @@ export async function run(ctx) {
   await reset(ctx, laneId, A);
 
   const evidence = { control: ctl.evidence, probe1_override: p1.evidence, probe2_as_holder: p2.evidence, probe3_release_override: p3.evidence };
-  const probes = [['state --override', p1], ['--as <holder>', p2], ['release --override', p3]];
+  return finalRow({ base, ctlRow, evidence, probes: [['state --override', p1], ['--as <holder>', p2], ['release --override', p3]] });
+}
+
+/** Turn the three probes into the row. */
+export function finalRow({ base, ctlRow, evidence, probes }) {
   // A probe that changed the lane is a FAIL even when another probe faulted: the gap is open.
   const opened = probes.filter(([, p]) => p.changed).map(([n]) => n);
   const bad = probes.filter(([, p]) => p.fault);
@@ -113,5 +117,8 @@ export async function run(ctx) {
     return result({ ...base, verdict: 'ERROR', reason: `${bad.map(([n]) => n).join(' and ')}: no change, and no exit 4 with a "REFUSED <verb> <id> [token]" line, so a fault and not a refusal`, control: ctlRow, evidence });
   }
   if (opened.length === 0) return result({ ...base, verdict: 'PASS', reason: 'state --override, --as <holder> and release --override were all refused (exit 4, REFUSED line) and the lane did not change', control: ctlRow, evidence });
-  return result({ ...base, verdict: 'FAIL', reason: `a stranger changed a held lane with ${opened.join(' and ')}`, control: ctlRow, evidence });
+  // The gap is open, but a faulted probe is not a refusal: name it, so a reader does not take its silence for a PASS.
+  const faulted = bad.map(([n]) => n);
+  const note = faulted.length ? `; ${faulted.join(' and ')} faulted (no change, and no exit 4 with a "REFUSED <verb> <id> [token]" line), so that probe says nothing` : '';
+  return result({ ...base, verdict: 'FAIL', reason: `a stranger changed a held lane with ${opened.join(' and ')}${note}`, control: ctlRow, evidence: { ...evidence, faulted } });
 }

@@ -85,9 +85,11 @@ function requireUsable(call, what) {
 }
 
 async function claimsOf(ctx, ids) {
-  return ctx.pg(async (c) => (await c.query(
+  const rows = await ctx.pg(async (c) => (await c.query(
     `SELECT file_path, project, session_id FROM public.file_claims
       WHERE session_id = ANY($1::text[]) ORDER BY claimed_at, file_path`, [ids])).rows);
+  for (const r of rows) track(ctx, 'claim', { project: r.project, file: r.file_path }); // as stored: see s2
+  return rows;
 }
 
 // ---------------------------------------------------------------- registration gate
@@ -130,6 +132,21 @@ function fileClaimsMatchers() {
 
 // ---------------------------------------------------------------- scenario
 
+/** A's first Edit of a fresh file: it must be a usable answer. */
+export function checkAEdit(a) {
+  requireUsable(a, 'session A edit');
+  if (a.kind === 'warn') throw new Fault(`session A's Edit got a [WARN] answer (${a.note.slice(0, 120)}): COORDINATION_BREAK_GLASS must not reach the child.`);
+  if (a.kind === 'deny') throw new Fault('session A was denied on a fresh file: the setup is broken.');
+}
+
+/** The Edit control: B's Edit of the file A holds must be a deny. */
+export function checkControl(ctl, ids) {
+  requireUsable(ctl, 'control, session B edit');
+  if (ctl.kind === 'warn') throw new Fault(`control: B's Edit got a [WARN] answer (${ctl.note.slice(0, 120)}): a break-glass takeover let B through, so the control is not a deny.`);
+  if (ctl.kind === 'deny' && !ctl.text.includes(ids.a)) throw new Fault('control: the deny does not name session A; it was a deny for another reason.');
+  if (ctl.kind !== 'deny') throw new Fault(`control: an Edit by B on a file A holds was not denied (hook said: ${ctl.kind}). The hook or the setup is broken.`);
+}
+
 /** Set up the claim and run the control. Returns what the two shell calls need. */
 async function setup(ctx, hook, ev) {
   const dir = path.join(ctx.sandbox.dir, 's3');
@@ -148,15 +165,14 @@ async function setup(ctx, hook, ev) {
   });
   const a = callHook(ctx, hook, payload('Edit', ids.a, cwd, { file_path: file, old_string: 'a', new_string: 'b' }));
   ev.aEditStdout = a.text;
-  requireUsable(a, 'session A edit');
+  checkAEdit(a);
   const mine = await claimsOf(ctx, [ids.a]);
   if (!mine.some((r) => /src\/f\.ts$/i.test(fwd(r.file_path)))) {
     throw new Fault(`no file_claims row for A after A's Edit (hook said: ${a.kind}). A silent fail-open looks the same as a grant.`);
   }
   const ctl = callHook(ctx, hook, payload('Edit', ids.b, cwd, { file_path: file, old_string: 'a', new_string: 'b' }));
   ev.controlBEditStdout = ctl.text;
-  requireUsable(ctl, 'control, session B edit');
-  if (ctl.kind !== 'deny') throw new Fault(`control: an Edit by B on a file A holds was not denied (hook said: ${ctl.kind}). The hook or the setup is broken.`);
+  checkControl(ctl, ids);
   return { ids, file, cwd, dir };
 }
 
@@ -186,6 +202,12 @@ function negativeControl(ctx, hook, s, ev) {
   }
 }
 
+/** A [WARN] that is the break-glass takeover is a fault (COORDINATION_BREAK_GLASS reached the child), never a stop. */
+const BREAK_GLASS_RE = /BREAK-GLASS/;
+function requireNoBreakGlass(call, what) {
+  if (call.kind === 'warn' && BREAK_GLASS_RE.test(call.note)) throw new Fault(`${what} got a BREAK-GLASS [WARN] (${call.note.slice(0, 120)}): COORDINATION_BREAK_GLASS must not reach the child.`);
+}
+
 function shellCalls(ctx, hook, s, ev) {
   negativeControl(ctx, hook, s, ev);
   const bash = callHook(ctx, hook, payload('Bash', s.ids.b, s.cwd, { command: bashCommand(s.file) }));
@@ -198,7 +220,9 @@ function shellCalls(ctx, hook, s, ev) {
 }
 
 /** The sentence for each gate that fails. Empty list means PASS. */
-function failingGates({ bash, ps }, matchers) {
+export function failingGates({ bash, ps }, matchers) {
+  requireNoBreakGlass(bash, "B's Bash call");
+  requireNoBreakGlass(ps, "B's PowerShell call");
   const gaps = [];
   const stops = (c) => c.kind === 'deny' || c.kind === 'warn';
   if (!stops(bash)) gaps.push(`runtime gate: file-claims.mjs let B's Bash write through (hook said: ${bash.kind}); it only checks Edit and Write`);

@@ -53,7 +53,7 @@ export function abortDrill(ctx, why) {
   drillAborted = String(why ?? 'aborted');
 }
 
-function assertNotAborted(what) {
+export function assertNotAborted(what) {
   if (drillAborted) throw new HarnessError(`${what}: refused, the drill was aborted (${drillAborted})`);
 }
 
@@ -136,11 +136,20 @@ export function makeSandbox(runId) {
   };
 }
 
-// Variables that would make a child act as the drill's own session, board or checkout.
-const SCRUBBED_ENV = [
-  'LANE_PROJECT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'COORDINATION_BREAK_GLASS',
-  'COORDINATION_SESSION_ID', 'CLAUDE_PROJECT_DIR', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX',
-];
+// Names that would make a child act as the drill's own session, board or checkout. A whole family is removed, not a
+// fixed list: a new CLAUDE_CODE_* or GIT_* name (GIT_CONFIG_COUNT, GIT_SSH_COMMAND, ...) must not reach a child.
+// Env names are case-insensitive on Windows, so the match is too.
+const SCRUBBED_ENV_RE = /^(?:CLAUDE_CODE_|GIT_)|^CLAUDECODE$/i;
+const SCRUBBED_ENV = ['LANE_PROJECT', 'COORDINATION_BREAK_GLASS', 'COORDINATION_SESSION_ID', 'CLAUDE_PROJECT_DIR'];
+
+/** Delete from env every name the child must not inherit. */
+function scrub(env) {
+  const named = new Set(SCRUBBED_ENV);
+  for (const k of Object.keys(env)) {
+    if (SCRUBBED_ENV_RE.test(k) || named.has(k.toUpperCase())) delete env[k];
+  }
+  return env;
+}
 
 // The node_modules folder that holds `pg`, found once in this process (own checkout, primary, NODE_PATH).
 let pgModules;
@@ -164,8 +173,7 @@ function pgNodeModules() {
  */
 export function childEnv(url, sandbox, extra = {}) {
   assertScratch(url);
-  const env = { ...process.env };
-  for (const k of SCRUBBED_ENV) delete env[k];
+  const env = scrub({ ...process.env });
   const pgDir = pgNodeModules();
   const locked = {
     HOME: sandbox.homeDir,
@@ -180,6 +188,8 @@ export function childEnv(url, sandbox, extra = {}) {
     CCV3_HOOK_TRACE_DIR: sandbox.traceDir,
     CCV3_HOOK_TRACE_MODE_FILE: sandbox.traceModeFile,
     CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url,
+    // git never looks for a repository in this folder or above it: a child that runs outside a test repo finds none.
+    GIT_CEILING_DIRECTORIES: sandbox.dir,
   };
   const lockedNames = new Set(Object.keys(locked));
   const named = Object.keys(extra).filter((k) => lockedNames.has(k.toUpperCase()));
@@ -199,16 +209,24 @@ export function childEnv(url, sandbox, extra = {}) {
 
 /**
  * Run a node script with an argv array, no shell. A spawn error or a killed child is a HarnessError, not an exit code.
+ * A timeout (timeoutMs, default 120 s) is a HarnessError that carries the output so far in .out and .err: the create of
+ * the scratch database prints its name first, and the caller needs it to drop a database that was left behind.
  * env is required: a child with no env inherits process.env, and with it the live database url.
  * After abortDrill it refuses to run, except for the harness's own calls (harness: true: create and drop of the scratch database).
  */
-export function runNode(script, args = [], { env, input, cwd, harness = false } = {}) {
+export function runNode(script, args = [], { env, input, cwd, harness = false, timeoutMs = 120_000 } = {}) {
   if (!harness) assertNotAborted(`runNode(${path.basename(String(script))})`);
   if (!env) throw new HarnessError(`runNode(${path.basename(String(script))}): env is missing; a child without an explicit env would inherit the live database url`);
   const r = spawnSync(process.execPath, [script, ...args], {
-    env, input, cwd, encoding: 'utf8', windowsHide: true, timeout: 120_000,
+    env, input, cwd, encoding: 'utf8', windowsHide: true, timeout: timeoutMs,
   });
-  if (r.error) throw new HarnessError(`could not run ${path.basename(script)}: ${r.error.message}`);
+  if (r.error) {
+    const e = new HarnessError(`could not run ${path.basename(script)}: ${r.error.message}`);
+    e.out = r.stdout ?? '';
+    e.err = r.stderr ?? '';
+    e.timedOut = r.error.code === 'ETIMEDOUT';
+    throw e;
+  }
   if (r.status === null) throw new HarnessError(`${path.basename(script)} ended without an exit code (signal ${r.signal})`);
   return { code: r.status, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
@@ -259,13 +277,19 @@ export async function insertLane(client, { id, title, state = 'active', owner = 
   );
 }
 
-const TRACK_KINDS = ['session', 'lane', 'file'];
+const TRACK_KINDS = ['session', 'lane', 'file', 'claim'];
 
-/** Record an id the run created, for the live-board zero check. kind: 'session' | 'lane' | 'file' (a file path). */
+/**
+ * Record an id the run created, for the live-board zero check. kind: 'session' | 'lane' | 'file' (an absolute path, as
+ * the hook stores a file outside any repo) | 'claim' ({ project, file }: a file_claims row as the hook stores it, with the
+ * repo-relative key for a file in a repo).
+ */
 export function track(ctx, kind, id) {
   if (!TRACK_KINDS.includes(kind)) throw new HarnessError(`track: unknown kind '${kind}' (use ${TRACK_KINDS.join(', ')})`);
-  ctx.tracked ??= { session: [], lane: [], file: [] };
-  if (!ctx.tracked[kind].includes(id)) ctx.tracked[kind].push(id);
+  ctx.tracked ??= { session: [], lane: [], file: [], claim: [] };
+  ctx.tracked.claim ??= [];
+  const same = (x) => (kind === 'claim' ? x.project === id.project && x.file === id.file : x === id);
+  if (!ctx.tracked[kind].some(same)) ctx.tracked[kind].push(kind === 'claim' ? { project: id.project, file: id.file } : id);
 }
 
 // ---------------------------------------------------------------- proof of "no file outside the sandbox"

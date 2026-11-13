@@ -18,10 +18,13 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { assertScratchUrl, maskUrl } from '../scratch-db.mjs';
+import {
+  countChecks, createScratch, errText, errorRow, judge, liveZeroCheck, loadExpected, makeSignalHandler, maskText, newRunId, normalise, oneLine,
+  parseArgs, printRow, scratchControl, writeSummary,
+} from './judge.mjs';
 import {
   HarnessError, PATHS, abortDrill, assertScratch, childEnv, diffRealHome, loadPg, makeSandbox, result, runNode,
   sandboxControl, scanRealHomeChanged, snapshotRealHome, withPg,
@@ -49,44 +52,24 @@ const LIVE_URL = process.env.CONTINUOUS_CLAUDE_DB_URL
 
 // ---------------------------------------------------------------- args and output helpers
 
-function parseArgs(argv) {
-  const opts = { rows: Object.keys(SCENARIOS), out: null, keepDb: false, help: false };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--help' || a === '-h') opts.help = true;
-    else if (a === '--keep-db') opts.keepDb = true;
-    else if (a === '--rows') opts.rows = String(argv[++i] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-    else if (a === '--out') opts.out = path.resolve(argv[++i] ?? '');
-    else throw new HarnessError(`unknown argument '${a}'\n${USAGE}`);
-  }
-  opts.rows = [...new Set(opts.rows)];
-  const bad = opts.rows.filter((r) => !SCENARIOS[r]);
-  if (opts.rows.length === 0 || bad.length) throw new HarnessError(`unknown row(s) '${bad.join(',')}'. Rows: ${Object.keys(SCENARIOS).join(', ')}`);
-  return opts;
-}
-
-const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
-/** Hide the password of any url inside a message. */
-const maskText = (s) => String(s ?? '').replace(/\b[a-z]+:\/\/\S+/gi, (m) => maskUrl(m));
-const errText = (e) => maskText(e?.message ?? e);
+const parse = (argv) => parseArgs(argv, SCENARIOS, USAGE);
 
 // ---------------------------------------------------------------- scratch database
 
-/** The scratch database name a create or drop output names, or ''. A failed create can leave this database behind. */
-const namedDb = (r) => (/lanes_pr1_[a-z0-9_]+/.exec(`${r.out}\n${r.err}`) ?? [''])[0];
+/** Drop a database by name through scratch-db.mjs. The url is the server url with that name; it is never printed. */
+function dropByName(name) {
+  const url = urlOnDb(LIVE_URL, name);
+  assertScratch(url);
+  const d = runNode(PATHS.SCRATCH, ['drop', url], { env: process.env, harness: true });
+  if (d.code !== 0) throw new HarnessError(`scratch-db drop failed (exit ${d.code}): ${maskText(oneLine(d.err))}`);
+}
 
-/** Make the scratch database through scratch-db.mjs (the only creator) and check its name. */
-function createScratch() {
-  const r = runNode(PATHS.SCRATCH, ['create', '--through', '6'], { env: process.env, harness: true });
-  const left = namedDb(r) ? ` (output names database ${namedDb(r)}: it may need a manual drop)` : '';
-  if (r.code !== 0) throw new HarnessError(`scratch-db create failed (exit ${r.code}): ${maskText(oneLine(r.err))}${left}`);
-  let parsed;
-  try { parsed = JSON.parse(r.out.trim().split(/\r?\n/).pop()); } catch { throw new HarnessError(`scratch-db create printed no {url,name} JSON${left}`); }
-  assertScratch(parsed?.url);
-  // The name that the drop proof counts must be the name of the url, not a field that could be missing or different.
-  const name = assertScratchUrl(parsed.url);
-  if (parsed.name !== name) throw new HarnessError(`scratch-db create: name '${parsed.name}' differs from the url's database '${name}'`);
-  return { url: parsed.url, name };
+/** Make the scratch database through scratch-db.mjs (the only creator) and check its name. A failed create drops what it left. */
+function makeScratch() {
+  return createScratch({
+    run: () => runNode(PATHS.SCRATCH, ['create', '--through', '6'], { env: process.env, harness: true }),
+    dropByName,
+  });
 }
 
 async function withClient(url, fn) {
@@ -122,21 +105,6 @@ async function dropScratch(scratch) {
 }
 
 // ---------------------------------------------------------------- scenarios
-
-const errorRow = (id, title, reason, controlName) => result({
-  id, title, rule: '', verdict: 'ERROR', reason: oneLine(reason),
-  control: { name: controlName, ok: false, detail: oneLine(reason) },
-});
-
-/** A row a scenario returns must have an id and a verdict, and a PASS or FAIL needs a working control. Else it is ERROR. */
-function normalise(row, id) {
-  const known = row && typeof row === 'object' && ['PASS', 'FAIL', 'ERROR'].includes(row.verdict) && row.id !== undefined;
-  if (!known) return errorRow(id, '(bad row)', `scenario ${id} returned a row that is not a result() object`, 'row shape');
-  if (row.verdict !== 'ERROR' && row.control?.ok !== true) {
-    return errorRow(String(row.id), row.title, `row ${row.id} asked for ${row.verdict} without a working control`, 'positive control');
-  }
-  return { ...row, id: String(row.id) };
-}
 
 // A scenario that waits on a hung database call would block the drop and the cleanup. spawnSync calls in a
 // scenario block this timer, but each has its own 120 s limit in runNode; the timer covers the pg awaits.
@@ -174,74 +142,15 @@ async function runScenario(id, ctx) {
 
 // ---------------------------------------------------------------- live zero check (seat condition C3)
 
-// Each query takes exactly the lists it names (pg rejects a parameter that no placeholder uses). 'board' is the
-// sandbox board key: it finds a lane that a child made under an id the drill never tracked.
-const LIVE_QUERIES = {
-  sessions: { use: ['session'], sql: 'SELECT count(*)::int AS n FROM public.sessions WHERE id = ANY($1::text[])' },
-  lane: { use: ['lane'], sql: 'SELECT count(*)::int AS n FROM agentic_os.lane WHERE id = ANY($1::text[])' },
-  lane_by_board: { use: ['board'], sql: 'SELECT count(*)::int AS n FROM agentic_os.lane WHERE project_key = ANY($1::text[])' },
-  lane_event: {
-    use: ['session', 'lane'],
-    sql: 'SELECT count(*)::int AS n FROM agentic_os.lane_event WHERE session_id = ANY($1::text[]) OR to_session_id = ANY($1::text[]) OR lane_id = ANY($2::text[])',
-  },
-  file_claims: {
-    use: ['session', 'file'],
-    sql: 'SELECT count(*)::int AS n FROM public.file_claims WHERE session_id = ANY($1::text[]) OR file_path = ANY($2::text[])',
-  },
-};
-const MISSING_TABLE = new Set(['42P01', '3F000']); // undefined_table, invalid_schema_name
-
-/**
- * Count the rows of this run on the live server. Read only. A table the live server lacks is a failed check, not a 0:
- * a zero from a server that cannot hold the rows proves nothing.
- */
-async function liveCount(tracked, boardKey) {
-  const counts = {};
-  const lists = { ...tracked, board: [boardKey] };
-  await withClient(LIVE_URL, async (c) => {
+/** Count the rows of this run on the live server. Read only. The same checks run on the scratch database (countScratch). */
+async function countLive(tracked, boardKey, names) {
+  return withClient(LIVE_URL, async (c) => {
     await c.query('SET default_transaction_read_only = on');
-    for (const [table, { sql, use }] of Object.entries(LIVE_QUERIES)) {
-      try {
-        counts[table] = (await c.query(sql, use.map((k) => lists[k]))).rows[0].n;
-      } catch (e) {
-        if (MISSING_TABLE.has(e.code)) throw new HarnessError(`the live server has no table for '${table}' (${e.code}); the zero check cannot run`);
-        throw e;
-      }
-    }
+    return countChecks(c, tracked, boardKey, names);
   });
-  return { counts };
 }
 
-/** say collects the report lines: main prints them before the ROW lines, after RUN INVALID when a check failed. */
-async function liveZeroCheck(runId, tracked, ranDb, rows, boardKey, say = console.log, needDb = false) {
-  if (!ranDb) {
-    if (needDb) { // rows needed a database but the scratch create failed: the rows are ERROR, and this is the reason
-      say('LIVE BOARD: not checked: scratch database was not created');
-      return { checked: false, ok: true, reason: 'scratch database was not created' };
-    }
-    say('LIVE BOARD: not checked (only static rows ran, no database was opened)');
-    return { checked: false, ok: true, reason: 'static rows only' };
-  }
-  const ids = { sessions: tracked.session.length, lanes: tracked.lane.length, files: tracked.file.length };
-  say(`  note: live check looks for ${ids.sessions} session ids, ${ids.lanes} lane ids, ${ids.files} file paths`);
-  // A database row that ran to PASS or FAIL made sessions or lanes. Zero tracked ids then means the check looks for nothing.
-  const dbRan = rows.some((r) => !STATIC_ROWS.includes(r.id) && r.verdict !== 'ERROR' && !STATIC_ROWS.includes(r.id.split('-')[0])); // 2-old and 2-cross touch the database too
-  if (dbRan && ids.sessions + ids.lanes + ids.files === 0) {
-    say(`LIVE BOARD: check FAILED for run ${runId}: database rows ran but no id was tracked, so the check would look for nothing`);
-    return { checked: true, ok: false, error: 'no tracked ids', idsChecked: ids };
-  }
-  try {
-    const { counts } = await liveCount(tracked, boardKey);
-    const total = Object.values(counts).reduce((a, b) => a + b, 0);
-    say(total === 0
-      ? `LIVE BOARD: 0 rows of run ${runId} (checked sessions, lane, lane by board key, lane_event, file_claims)`
-      : `LIVE BOARD: ${total} rows of run ${runId} FOUND`);
-    return { checked: true, ok: total === 0, total, counts, idsChecked: ids };
-  } catch (e) {
-    say(`LIVE BOARD: check FAILED for run ${runId}: ${errText(e)}`);
-    return { checked: true, ok: false, error: errText(e), idsChecked: ids };
-  }
-}
+const countScratchWith = (url) => (tracked, boardKey, names) => withClient(url, (c) => countChecks(c, tracked, boardKey, names));
 
 // ---------------------------------------------------------------- real-home check ("no file outside the sandbox")
 
@@ -293,55 +202,24 @@ function repoHead() {
 
 // ---------------------------------------------------------------- report
 
-function printRow(row, expected) {
-  const exp = expected[row.id] ?? '(info)';
-  console.log(`ROW ${row.id}  ${row.verdict}  expected ${exp}  ${row.title} -- ${oneLine(row.reason)}`);
-  const c = row.control ?? {};
-  console.log(`  control: ${c.name} ${c.ok === true ? 'ok' : 'BROKEN'} -- ${oneLine(c.detail)}`);
-}
-
-/** Exit code from the rows, the harness state and the live check. Prints one DIFFERS line per mismatch. */
-function judge(rows, expected, harnessFailed, live, sandbox) {
-  const err = harnessFailed || rows.some((r) => r.verdict === 'ERROR') || (live.checked && !live.ok) || !sandbox.ok;
-  let differs = false;
-  for (const r of rows) {
-    if (!(r.id in expected) || r.verdict === 'ERROR' || r.verdict === expected[r.id]) continue;
-    console.log(`DIFFERS: row ${r.id} expected ${expected[r.id]} got ${r.verdict}`);
-    differs = true;
-  }
-  return err ? 2 : differs ? 1 : 0;
-}
-
-/** The expected verdict of every row. A requested row with no PASS or FAIL entry is a harness fault (exit 2), not a skip. */
-function loadExpected(requested) {
-  let rows;
-  try {
-    rows = JSON.parse(fs.readFileSync(path.join(PATHS.HERE, 'expected.json'), 'utf8')).rows ?? {};
-  } catch (e) {
-    throw new HarnessError(`cannot read expected.json: ${e.message}`);
-  }
-  const missing = requested.filter((r) => !['PASS', 'FAIL'].includes(rows[r]));
-  if (missing.length) throw new HarnessError(`expected.json has no PASS or FAIL entry for requested row(s) ${missing.join(',')}`);
-  return rows;
-}
-
 // ---------------------------------------------------------------- main
 
 async function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  const opts = parse(process.argv.slice(2));
   if (opts.help) { console.log(USAGE); return 0; }
   const startedAt = new Date().toISOString();
-  const runId = randomBytes(4).toString('hex');
+  const runId = newRunId();
   const expected = loadExpected(opts.rows);
   const needDb = opts.rows.some((r) => !STATIC_ROWS.includes(r));
   if (needDb) assertLiveUrlIsNotScratch();
   // Taken before any child runs. Read only.
   const realBefore = snapshotRealHome();
-  const tracked = { session: [], lane: [], file: [] };
+  const tracked = { session: [], lane: [], file: [], claim: [] };
   const rows = [];
   let scratch = null;
   let sandbox = null;
   let harnessFailed = false;
+  let control = null; // the positive control of the live zero check, run on the scratch database before it is dropped
   const head = repoHead();
   console.log(`coord-drill-2 run ${runId}, rows ${opts.rows.join(',')}, node ${process.version}, repo HEAD ${head}`);
   try {
@@ -350,7 +228,7 @@ async function main() {
     RUN_STATE.opts = opts;
     let dbError = null;
     if (needDb) {
-      try { scratch = createScratch(); RUN_STATE.scratch = scratch; console.log(`scratch database ${scratch.name} (${maskUrl(scratch.url)})`); } catch (e) { dbError = e; }
+      try { scratch = makeScratch(); RUN_STATE.scratch = scratch; console.log(`scratch database ${scratch.name} (${maskUrl(scratch.url)})`); } catch (e) { dbError = e; }
     }
     // Test of the signal handler: Windows cannot send a SIGINT that a handler sees, so the test asks the runner to
     // raise it here, at the point where a database and a sandbox exist. main then waits; the handler exits.
@@ -380,19 +258,22 @@ async function main() {
       rows.push(...(noDb ? [errorRow(id, '(scenario not run)', `no scratch database: ${errText(dbError)}`, 'scratch database exists')] : await runScenario(id, ctx)));
       if (ctx.aborted) harnessFailed = true;
     }
+    // The same queries as the live check, on the scratch database, while it still exists and holds this run's rows.
+    if (scratch && !ctx.aborted) control = await scratchControl(countScratchWith(scratch.url), tracked, sandbox.boardKey, opts.rows);
   } catch (e) {
     harnessFailed = true;
     console.log(`HARNESS ERROR: ${errText(e)}`);
   } finally {
     if (!RUN_STATE.cleaning) {
       RUN_STATE.cleaning = true; // a signal from here on finds the clean-up started and does not run it twice
-      harnessFailed = (await cleanUp(scratch, sandbox, opts)) || harnessFailed;
+      RUN_STATE.cleanupPromise = cleanUp(scratch, sandbox, opts); // a signal waits for this promise before it exits
+      harnessFailed = (await RUN_STATE.cleanupPromise) || harnessFailed;
     }
   }
   // Both checks run before any ROW line prints. A failed check makes the run invalid: say so first.
   const report = [];
   const say = (line) => report.push(line);
-  const live = await liveZeroCheck(runId, tracked, needDb && !!scratch, rows, sandbox?.boardKey, say, needDb);
+  const live = await liveZeroCheck(runId, tracked, needDb && !!scratch, rows, sandbox?.boardKey, say, needDb, { countLive, control });
   const sandboxProof = sandboxCheck(realBefore, runId, sandbox, tracked, say);
   const invalid = [...(live.checked && !live.ok ? ['live board check failed'] : []), ...(sandboxProof.ok ? [] : ['sandbox check failed'])];
   const valid = invalid.length === 0;
@@ -417,36 +298,26 @@ async function cleanUp(scratch, sandbox, opts) {
   return failed;
 }
 
-function writeSummary(file, summary) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(summary, null, 2)}\n`);
-}
-
 // ---------------------------------------------------------------- Ctrl-C and SIGTERM
 
 // What a signal handler must clean up: set by main as each part comes to exist.
-const RUN_STATE = { scratch: null, sandbox: null, opts: null, ctx: null, cleaning: false };
+const RUN_STATE = { scratch: null, sandbox: null, opts: null, ctx: null, cleaning: false, cleanupPromise: null };
 
 /**
  * On SIGINT or SIGTERM: stop new children (abortDrill), drop the scratch database, remove the sandbox, exit 130
  * (SIGINT) or 143 (SIGTERM). A child that runs now (spawnSync) gets the console Ctrl-C too; the handler runs when
  * it returns. When main's clean-up has started, the handler only exits. A second signal exits at once.
  */
-async function onSignal(signal) {
-  const code = signal === 'SIGINT' ? 130 : 143;
-  if (RUN_STATE.cleaning) { console.log(`INTERRUPTED (${signal}): clean-up already running; exit ${code}`); process.exit(code); }
-  RUN_STATE.cleaning = true;
-  process.once(signal, () => process.exit(code));
-  abortDrill(RUN_STATE.ctx, `interrupted by ${signal}`);
-  console.log(`INTERRUPTED (${signal}): dropping the scratch database and removing the sandbox`);
-  const failed = await cleanUp(RUN_STATE.scratch, RUN_STATE.sandbox, RUN_STATE.opts ?? { keepDb: false });
-  console.log(`INTERRUPTED: clean-up ${failed ? 'FAILED (see HARNESS ERROR above)' : 'done'}; no verdict; exit ${code}`);
-  process.exit(code);
-}
-for (const s of ['SIGINT', 'SIGTERM']) process.once(s, () => { onSignal(s); });
-
-main().then((code) => { process.exitCode = code; }).catch((e) => {
-  console.log(`HARNESS ERROR: ${errText(e)}`);
-  console.log('DRILL: 0 rows, 0 PASS, 0 FAIL, 0 ERROR, exit 2');
-  process.exitCode = 2;
+const onSignal = makeSignalHandler(RUN_STATE, {
+  cleanUp, abort: abortDrill, exit: (c) => process.exit(c), log: (l) => console.log(l), once: (s, fn) => process.once(s, fn),
 });
+
+// Run only as the entry script: a test can import this file without starting a drill.
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  for (const s of ['SIGINT', 'SIGTERM']) process.once(s, () => { onSignal(s); });
+  main().then((code) => { process.exitCode = code; }).catch((e) => {
+    console.log(`HARNESS ERROR: ${errText(e)}`);
+    console.log('DRILL: 0 rows, 0 PASS, 0 FAIL, 0 ERROR, exit 2');
+    process.exitCode = 2;
+  });
+}

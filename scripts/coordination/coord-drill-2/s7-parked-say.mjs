@@ -21,7 +21,7 @@ export const meta = {
 const FALLBACK_RE = /SendMessage|lane note|inbox --id|ask Dave/i;
 // A refusal that is really a setup fault. It must never count as the gap.
 const HARNESS_FAULT_RE = /usage: lane\.mjs|no session id|unknown board|migration \d+ is not applied|ECONNREFUSED|ENOENT|TypeError|ReferenceError|ambiguous|not confirmed|timeout|timed out|password authentication/i;
-// The one refusal that is the gap (lane.mjs:1194).
+// The one refusal that is the gap (resolveRecipient() in lane.mjs).
 const NO_RECENT_RE = /no recent session matching/i;
 
 const clip = (s) => String(s ?? '').slice(0, 200);
@@ -98,7 +98,7 @@ export async function run(ctx) {
 }
 
 /** Turn the second say into a verdict. Delivery or a named fallback is PASS; a refusal with neither is FAIL. */
-function judge({ base, ctl, second, n1, n2, evidence }) {
+export function judge({ base, ctl, second, n1, n2, evidence }) {
   const text = `${second.err}\n${second.out}`;
   if (second.code === 0 && n2 > n1) return result({ ...base, verdict: 'PASS', reason: 'the message reached the parked holder (a second event is addressed to A)', control: ctl, evidence });
   // Exit 0 and no event to A is not the known gap (a refusal). say may have resolved the name to another session: a setup fault.
@@ -107,8 +107,9 @@ function judge({ base, ctl, second, n1, n2, evidence }) {
   if (!second.err.trim() || HARNESS_FAULT_RE.test(text)) {
     return result({ ...base, verdict: 'ERROR', reason: 'the second say failed with a setup fault or no message, not the known refusal', control: ctl, evidence });
   }
-  if (FALLBACK_RE.test(text)) return result({ ...base, verdict: 'PASS', reason: 'the refusal names a fallback channel', control: ctl, evidence });
-  // FAIL only for the known refusal (lane.mjs:1194). Any other non-zero exit is not the gap.
+  // A fallback word counts only inside the known refusal: another error that happens to say "lane note" is no PASS.
+  if (NO_RECENT_RE.test(second.err) && FALLBACK_RE.test(text)) return result({ ...base, verdict: 'PASS', reason: 'the refusal names a fallback channel', control: ctl, evidence });
+  // FAIL only for the known refusal (resolveRecipient() in lane.mjs). Any other non-zero exit is not the gap.
   if (NO_RECENT_RE.test(second.err)) {
     return result({ ...base, verdict: 'FAIL', reason: `say refused (exit ${second.code}) with 'no recent session matching' and named no fallback: ${clip(second.err).trim()}`, control: ctl, evidence });
   }
