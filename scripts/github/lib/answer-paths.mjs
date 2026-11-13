@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { parseReviewMd } from '../../ratchets/review-skip-sync.mjs';
+import { parseReviewMd } from '../../ratchets/lib/review-md.mjs';
 
 // ---------- glob: ** (whole segments, zero or more), * (one segment), ? (one char). Nothing else is special. ----------
 

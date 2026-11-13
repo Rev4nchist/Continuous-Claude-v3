@@ -53,3 +53,34 @@ test('the old importers get the same functions through their re-exports', async 
   assert.equal(prePr.ANSWER_KEY_GLOBS, ANSWER_KEY_GLOBS);
   assert.equal(prePr.answerKeyCheck, answerKeyCheck);
 });
+
+const REVIEW_MD = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ratchets', 'lib', 'review-md.mjs');
+
+test('review-md.mjs run as the entry script prints nothing and exits 0', () => {
+  const r = node([REVIEW_MD]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, '');
+});
+
+test('review-md.mjs imported with argv[1] set to itself has no output and exposes its two names', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'review-md-'));
+  try {
+    const probe = path.join(dir, 'probe.mjs');
+    writeFileSync(probe, [
+      `process.argv[1] = ${JSON.stringify(REVIEW_MD)};`,
+      `const m = await import(${JSON.stringify(pathToFileURL(REVIEW_MD).href)});`,
+      'process.stdout.write(JSON.stringify(Object.keys(m).sort()));',
+    ].join('\n'));
+    const r = node([probe]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, '');
+    assert.deepEqual(JSON.parse(r.stdout), ['CannotCompare', 'parseReviewMd']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('review-skip-sync.mjs still exports the same parseReviewMd', async () => {
+  const ratchet = await import('../../ratchets/review-skip-sync.mjs');
+  const lib = await import('../../ratchets/lib/review-md.mjs');
+  assert.equal(ratchet.parseReviewMd, lib.parseReviewMd);
+});
