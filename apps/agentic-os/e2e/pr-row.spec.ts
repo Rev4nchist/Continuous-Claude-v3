@@ -139,6 +139,13 @@ test.describe('open pull requests table', () => {
     await expect(row.getByTestId('open-pr-spend')).toHaveText('no data');
   });
 
+  test('R5b a PR with no row in an existing spend file shows "none in the nightly file", never $0.00', async ({ page }) => {
+    writeOpen([openRow(556, 'feat/d')]);
+    writeSpend([spendRow(400)]);
+    await openOverview(page);
+    await expect(rowOf(page, 556).getByTestId('open-pr-spend')).toHaveText('none in the nightly file');
+  });
+
   test('R6 head ref, head sha, labels and title never reach the page or the API', async ({ page, request }) => {
     writeOpen([openRow(548, BRANCH_CANARY), openRow(549, DUP_CANARY), openRow(550, OTHER_CANARY)]);
     writeSpend([spendRow(548)]);

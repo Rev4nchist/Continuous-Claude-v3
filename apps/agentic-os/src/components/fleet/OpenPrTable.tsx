@@ -21,6 +21,7 @@ function laneText(lane: PrLane): string {
 }
 
 function spendText(spend: PrSpend): string {
+  if (spend.state === 'none-recorded') return 'none in the nightly file';
   if (spend.state === 'no-data' || (spend.usd === null && spend.engineRuns === null)) return 'no data';
   const parts = [
     spend.usd === null ? 'CodeRabbit no data' : `${formatUsd(spend.usd)} CodeRabbit`,

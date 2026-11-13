@@ -32,7 +32,14 @@ const LANE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 export type LaneRef = { id: string; branch: string | null };
 export type PrLane = { kind: 'none' } | { kind: 'one'; id: string } | { kind: 'many'; count: number };
 export type PrTap = { step: string; label: string; at: string; headMatches: boolean };
-export type PrSpend = { state: 'no-data' } | { state: 'ok'; usd: number | null; engineRuns: number | null };
+/**
+ * no-data: no pr-spend.json. none-recorded: the file has no row for this PR (it is nightly, so a PR opened today has
+ * none yet); never shown as $0. ok: the row, with null for a ledger that was absent.
+ */
+export type PrSpend =
+  | { state: 'no-data' }
+  | { state: 'none-recorded' }
+  | { state: 'ok'; usd: number | null; engineRuns: number | null };
 
 /** One feed row on the server. `headRef` is only for the lane join and never goes into the view. */
 type FeedRow = {
@@ -200,8 +207,7 @@ export function laneLookupKeys(feed: OpenPrFeed): { refs: string[]; leaves: stri
 function spendFor(spend: PrSpendFeed, pr: number): PrSpend {
   if (spend.status !== 'ok') return { state: 'no-data' };
   const s = spend.byPr.get(pr);
-  // The file exists and names no spend for this PR: nothing was spent.
-  return s === undefined ? { state: 'ok', usd: 0, engineRuns: 0 } : { state: 'ok', usd: s.usd, engineRuns: s.engineRuns };
+  return s === undefined ? { state: 'none-recorded' } : { state: 'ok', usd: s.usd, engineRuns: s.engineRuns };
 }
 
 function age(exportedAt: string | null, nowMs: number): { ageMinutes: number | null; stale: boolean } {

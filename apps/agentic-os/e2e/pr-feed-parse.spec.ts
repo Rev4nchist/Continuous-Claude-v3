@@ -107,7 +107,7 @@ test.describe('pr-feed-parse', () => {
     expect(other.status).toBe('other-repo');
     expect(other.rows).toEqual([]);
     const v = view(openDoc([openRow(8)]), spendDoc([spendRow(8, { repo: 'someone/else', key: 'someone/else#8' })]));
-    expect(v.rows[0].spend).toEqual({ state: 'ok', usd: 0, engineRuns: 0 });
+    expect(v.rows[0].spend).toEqual({ state: 'none-recorded' });
   });
 
   test('P6 the view holds no head ref, head sha, labels or title', () => {
@@ -169,8 +169,8 @@ test.describe('pr-feed-parse', () => {
       usd: null,
       engineRuns: null,
     });
-    // The file exists, the PR has no row: nothing was spent.
-    expect(view(openDoc([openRow(9)]), spendDoc([spendRow(10)])).rows[0].spend).toEqual({ state: 'ok', usd: 0, engineRuns: 0 });
+    // The file exists, the PR has no row: the nightly file has not seen it yet. Never $0 (seat word 2026-11-13 10:59).
+    expect(view(openDoc([openRow(9)]), spendDoc([spendRow(10)])).rows[0].spend).toEqual({ state: 'none-recorded' });
   });
 
   test('P9 lane link: branch first, then the head ref leaf; 0 lanes is none, 2 lanes is many', () => {
