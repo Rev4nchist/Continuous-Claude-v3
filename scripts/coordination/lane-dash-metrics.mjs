@@ -421,10 +421,15 @@ export function categoryRows(projects, lanes, meta, targets) {
   const edgeDays = num(targets, 'age_edge_1', 1);
   const cap = num(targets, 'category_rows', DEFAULT_CATEGORY_ROWS);
   const work = workLanes(lanes);
-  const names = new Map(projects.map((p) => [p.key, String(p.name ?? p.key)]));
+  const byKey = new Map(projects.map((p) => [p.key, p]));
+  // Same rule as tile 6: a Parked chip says it, so " (parked)" leaves the name.
+  const nameOf = (p) => (p.parked ? String(p.name ?? p.key).replace(/\s*\(parked\)\s*$/i, '') : String(p.name ?? p.key));
   const keys = [...new Set([...projects.map((p) => p.key), ...work.map(categoryKey)])].filter((k) => k !== NO_CATEGORY_KEY);
   const of = (k, name) => categoryOf(k, name, work.filter((l) => categoryKey(l) === k), w, edgeDays);
-  const sorted = keys.map((k) => of(k, names.get(k) ?? k)).filter((r) => r.total > 0).sort((a, b) => b.open - a.open);
+  const sorted = keys
+    .map((k) => ({ ...of(k, byKey.has(k) ? nameOf(byKey.get(k)) : k), parked: Boolean(byKey.get(k)?.parked) }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.open - a.open);
   const none = of(NO_CATEGORY_KEY, NO_CATEGORY_NAME);
   const keep = Math.max(0, cap - 1);
   return {
@@ -688,11 +693,14 @@ function verdictSentence(v) {
   return `We create and close the same number of cards: ${tail}`;
 }
 
-/** The category with the largest net, only while the page net and that net are both above 0. */
+/**
+ * The category with the largest net gain, only while the page net and that net are both above 0. It names the
+ * category and its own net, never "N of the page net": other categories can shrink, so a part can pass the whole.
+ */
 function shareLine(v, all) {
   if (v.net <= 0) return null;
   const top = all.reduce((best, r) => (best === null || r.net > best.net ? r : best), null);
-  return top && top.net > 0 ? `${cleanText(top.name)} holds ${sign(top.net)} of the ${sign(v.net)}.` : null;
+  return top && top.net > 0 ? `Largest net gain: ${cleanText(top.name)}, ${sign(top.net)}.` : null;
 }
 
 function tile8(add, c, cats) {
@@ -736,6 +744,7 @@ function tile9(add, c, cats) {
     add(`${pre}.name`, 'row', { rank: k, text: cleanText(r.name) });
     add(`${pre}.closed`, 'row', { rank: k, value: r.closed, text: `${r.closed} of ${r.total} closed` });
     add(`${pre}.total`, 'row', { rank: k, value: r.total });
+    if (r.parked) add(`${pre}.chip.parked`, 'chip', { rank: k, text: 'Parked', tone: 'neutral' });
     if (r.net !== 0) add(`${pre}.chip.growth`, 'chip', { rank: k, value: r.net, text: growthState(r.net, cats.priorKnown).word, tone: growthState(r.net, cats.priorKnown).tone });
     add(`${pre}.meta`, 'row', { rank: k, value: r.open, text: categoryMeta(r, cats.windowDays) });
     const b = r.bands;

@@ -863,7 +863,7 @@ test('tile 8: verdict words, share line only while the top category net is above
   assert.equal(text(rows, 'verdict.sentence'), 'We create more cards than we close: net +4 in 7 days.');
   assert.equal(text(rows, 'verdict.week'), 'In the 7 days to Nov 7, today so far: 6 created, 2 closed.');
   assert.equal(text(rows, 'verdict.waited'), '1 of 2 closed cards waited 1 day or more.');
-  assert.equal(text(rows, 'verdict.share'), 'No category yet holds +3 of the +4.');
+  assert.equal(text(rows, 'verdict.share'), 'Largest net gain: No category yet, +3.');
   assert.equal(text(rows, 'verdict.note'), '2 reminder cards are left out.');
   const f = catFixture();
   const closing = [...f.lanes, ...['x1', 'x2', 'x3', 'x4', 'x5'].map((id) => lane({ id, project: 'lb', state: 'done', created_day: '2026-10-28', done_day: '2026-11-04', done_at: '2026-11-04T15:00:00.000Z' }))];
@@ -874,6 +874,23 @@ test('tile 8: verdict words, share line only while the top category net is above
   assert.equal(text(flat, 'verdict.sentence'), 'We create and close the same number of cards: net 0 in 7 days.');
   const noRem = catBuild({ lanes: f.lanes.filter((l) => l.track !== 'reminders') });
   assert.ok(!byId(noRem).has('verdict.note'));
+});
+
+// Breaks if the share line puts a category net beside a smaller page net ("+10 of the +2"), which reads as nonsense.
+test('tile 8: the share line never claims a part larger than the whole', () => {
+  const f = catFixture();
+  // lb closes 5 more cards in the window: lb net -4, page net -1 + ... => page net below the unassigned net of +3.
+  const lanes = [...f.lanes, ...['y1', 'y2', 'y3', 'y4'].map((id) => lane({ id, project: 'lb', state: 'done', created_day: '2026-10-28', done_day: '2026-11-04', done_at: '2026-11-04T15:00:00.000Z' }))];
+  const rows = catBuild({ lanes });
+  assert.equal(byId(rows).get('verdict.net').value, 0 + 3 + (2 - 5));
+  assert.equal(text(rows, 'verdict.net'), '0');
+  assert.ok(!byId(rows).has('verdict.share'), 'page net 0: no share line');
+  // Keep y1 and y2: lb net -1, page net +2, top category (No category yet) +3, larger than the page net.
+  const one = catBuild({ lanes: lanes.slice(0, -2) });
+  assert.equal(byId(one).get('verdict.net').value, 2);
+  const share = text(one, 'verdict.share');
+  assert.ok(!/ of the /.test(share), share);
+  assert.equal(share, 'Largest net gain: No category yet, +3.');
 });
 
 // Breaks if the earlier week shows without 14 days of history, or its numbers come from another window.
@@ -901,6 +918,18 @@ test('tile 9: category row text, bar inputs, growth chip only on a net that is n
   assert.equal(text(rows, 'cat.row.3.meta'), '3 open · 7 days: 3 created, 0 closed, net +3');
   assert.equal(text(rows, 'cat.note'), 'Closed includes dropped cards. Reopened cards count as open. Reminder cards are left out.');
   assert.ok(byId(rows).get('cat.row.1.name').rank === 1 && byId(rows).get('cat.row.3.bands').rank === 3);
+});
+
+// Breaks if " (parked)" reaches a category name (export-dash-data.db.test asserts no "(parked)" in tiles.json),
+// or a parked category loses the Parked chip that says it instead.
+test('tile 9: a parked category name loses " (parked)" and gets a Parked chip', () => {
+  const f = catFixture();
+  const projects = f.projects.map((p) => (p.key === 'lb' ? { ...p, name: 'Lane board (parked)', parked: true } : p));
+  const rows = catBuild({ projects });
+  assert.ok(!JSON.stringify(rows).includes('(parked)'));
+  assert.equal(text(rows, 'cat.row.2.name'), 'Lane board');
+  assert.equal(text(rows, 'cat.row.2.chip.parked'), 'Parked');
+  assert.ok(!byId(rows).has('cat.row.1.chip.parked'));
 });
 
 // Breaks if the day table changes length, order or the "today so far" label, or net is not created minus closed.
