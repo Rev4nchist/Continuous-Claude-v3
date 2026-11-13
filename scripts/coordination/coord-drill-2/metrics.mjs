@@ -5,8 +5,11 @@
 //
 // OUTPUT RULE (seat condition): aggregates only. This file never prints or writes
 // a message text, a tool input text, a file content, an environment value, an
-// address or a url. Session ids appear as their first 8 characters. Texts are
-// reduced to sha1 hashes in memory and only counts leave the process.
+// address or a url. No session id and no session handle (not even its first 8
+// characters) is printed or written: sessions are labelled s1..sN in order of
+// their first event time, and the seat is a boolean field. The window is printed
+// as parsed ISO times. Texts are reduced to sha1 hashes in memory and only counts
+// leave the process.
 //
 // Window matching of sent texts uses the first 6 bytes of sha1 of each
 // 20-character window of the normalized text.
@@ -25,6 +28,10 @@ const VAR_MARK = '\u0001';
 const VAR_RE = /\$(?:\{[^}]*\}|\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)/g;
 // The review engine state folder is never opened. Checked on the path text before any fs call.
 const PROTECTED_FRAGMENT = '/.claude/state/review-engine';
+
+// A session id starts with 8 hex characters. Any other string is not taken as an id.
+const HEX_ID_RE = /^[0-9a-f]{8}[0-9a-f-]*$/i;
+const validId = (v) => typeof v === 'string' && HEX_ID_RE.test(v);
 
 const num = (v) => (Number.isFinite(v) ? v : 0);
 const asArray = (v) => (Array.isArray(v) ? v : []);
@@ -96,7 +103,10 @@ export function chicagoDay(ms) {
   return chicagoFmt.format(new Date(ms));
 }
 
-const dist = (arr) => ({ n: arr.length, p50: round(percentile(arr, 0.5), 1), p90: round(percentile(arr, 0.9), 1), max: arr.length ? round(Math.max(...arr), 1) : null });
+// A loop, not Math.max(...arr): a spread of a large array throws a RangeError.
+const maxOf = (arr) => arr.reduce((a, b) => (b > a ? b : a), -Infinity);
+
+export const dist = (arr) => ({ n: arr.length, p50: round(percentile(arr, 0.5), 1), p90: round(percentile(arr, 0.9), 1), max: arr.length ? round(maxOf(arr), 1) : null });
 
 // ---- tool call classifier (metric 8) --------------------------------------
 const LANE_VERB = String.raw`(?:lane\.mjs['"]?|\$[A-Za-z_][A-Za-z0-9_]*)\s+(?:--\S+\s+\S+\s+)*`;
@@ -220,10 +230,15 @@ function maskQuoted(s, shell) {
 
 // shell is the tool name (Bash or PowerShell): it sets which character escapes a quote.
 export function parseLaneSays(cmd, shell) {
-  const hits = [...String(cmd).matchAll(SAY_RE)];
+  const text0 = String(cmd);
+  // A hit counts only when its `say` word is outside quotes: a "lane.mjs say" inside the quoted text of
+  // another command is message text, not a send. The match runs on the original text, so a quoted script
+  // path ("C:/x/lane.mjs" say ...) still counts; the masked copy has the same length.
+  const masked = maskQuoted(text0, shell);
+  const hits = [...text0.matchAll(SAY_RE)].filter((m) => masked[m.index + m[0].length - /say\s+$/.exec(m[0])[0].length] !== MASK);
   return hits.map((m, i) => {
     const start = m.index + m[0].length;
-    const seg = cutCommand(String(cmd).slice(start, i + 1 < hits.length ? hits[i + 1].index : undefined), shell);
+    const seg = cutCommand(text0.slice(start, i + 1 < hits.length ? hits[i + 1].index : undefined), shell);
     // lane.mjs usage is say "message" [--to <name>]: --to may come before or after the message.
     // The search runs on a copy with the quoted spans masked: a --to inside the message is text.
     const to = /(?:^|\s)--to[ =]\s*(\S+)/.exec(maskQuoted(seg, shell));
@@ -267,7 +282,7 @@ class Ingestor {
     f.lines++;
     if (!e || typeof e !== 'object') { f.badLines++; return; }
     if (e.isSidechain === true) { f.sidechain++; return; }
-    if (!f.id && typeof e.sessionId === 'string') f.id = e.sessionId;
+    if (!f.id && validId(e.sessionId)) f.id = e.sessionId;
     const t = Date.parse(e.timestamp);
     if (!Number.isFinite(t)) { f.noTime++; return; }
     if (t < this.since || t > this.ext) return;
@@ -431,7 +446,9 @@ class Ingestor {
     const open = p.sends.filter((s) => s.directed && !s.toHex);
     hits.filter((h, k) => !taken.has(k)).forEach((h, i) => {
       let s = open[i];
-      if (!s) { if (!open[0]) return; s = { ...open[0] }; f.sends.push(s); }
+      // No directed send is open: the line is a delivery result no send in this command owns (a fan-out).
+      // It is not cloned into a send; it is counted in unparsed (metric 2).
+      if (!s) { if (!open[0]) { f.unparsed[2]++; return; } s = { ...open[0] }; f.sends.push(s); }
       s.toHex = h[2];
     });
   }
@@ -519,7 +536,7 @@ class Ingestor {
     for (const p of this.pending.values()) if (p.k === 'ask') f.askUnpaired++;
     f.activity.sort((a, b) => a - b);
     f.banners.sort((a, b) => a.t - b.t);
-    f.id = f.id || 'unknown';
+    f.id = validId(f.id) ? f.id : 'unknown';
     f.id8 = f.id.slice(0, 8);
     return f;
   }
@@ -635,8 +652,10 @@ function findArrival(s, sender, hex, ctx) {
   const kind = s.channel === 'lane' ? 'lane' : 'peer';
   for (const r of ctx.refs) {
     if (r.used || r.a.kind !== kind || r.f === sender || r.a.t < s.t - 5000) continue;
+    // An arrival of another message (both ids set, not equal) is not this send. No id on the arrival: probes decide.
+    if (s.msgId && r.a.msgId && r.a.msgId !== s.msgId) continue;
     if (hex && !r.f.id.toLowerCase().startsWith(hex)) continue;
-    const hit = s.probes.filter((k) => hasKey(r.a.keys, k)).length;
+    const hit =s.probes.filter((k) => hasKey(r.a.keys, k)).length;
     // A lane arrival holds many DMs, and DMs share template text: one shared window is not a match.
     // At least half of the probes must hit. A peer arrival is one message: one hit is enough.
     if (kind === 'lane' ? hit * 2 >= s.probes.length : hit > 0) return r;
@@ -644,15 +663,17 @@ function findArrival(s, sender, hex, ctx) {
   return null;
 }
 
-// A lane DM whose body the hook cut: under half of the probes hit, but at least one hits on an
-// arrival to the receiver that carries the cut marker. The DM was delivered in part: a cut, not a loss.
-// The cut marker on the arrival is what allows a single hit here; without it one hit is not a match.
+// A lane DM whose body the hook cut: under half of the probes hit, but the FIRST probe (the start of the
+// DM) hits on an arrival to the receiver that carries the cut marker, no later than 2 h after the send
+// (the window of nextBanner and activeWithin2h). The DM was delivered in part: a cut, not a loss.
+// The start of the text must be there: a run shared in the middle with another DM is not this DM.
+// Not covered: two DMs that open with the same 20 characters or more.
 function findCutArrival(s, sender, hex, ctx) {
   if (s.channel !== 'lane' || !s.probes.length) return null;
   for (const r of ctx.refs) {
-    if (r.a.kind !== 'lane' || !r.a.bodyCut || r.f === sender || r.a.t < s.t - 5000) continue;
+    if (r.a.kind !== 'lane' || !r.a.bodyCut || r.f === sender || r.a.t < s.t - 5000 || r.a.t > s.t + TWO_H) continue;
     if (hex && !r.f.id.toLowerCase().startsWith(hex)) continue;
-    if (s.probes.some((k) => hasKey(r.a.keys, k))) return r;
+    if (hasKey(r.a.keys, s.probes[0])) return r;
   }
   return null;
 }
@@ -672,9 +693,10 @@ function analyzeOne({ s, f }, ctx) {
   if (!s.probes.length && !s.msgId) return { ...rec, status: 'untestable' };
   if (!rf) return { ...rec, status: 'receiver_unknown' };
   const state = stateAt(rf, s.t);
-  if (findCutArrival(s, f, hex, ctx)) return { ...rec, status: 'cut', state };
+  // cutBy tells metric 1 which kind of cut explains the DM: the hook cut marker on the body, or a cut banner.
+  if (findCutArrival(s, f, hex, ctx)) return { ...rec, status: 'cut', cutBy: 'body', state };
   const nb = nextBanner(rf, s.t);
-  if (nb && nb.cut) return { ...rec, status: 'cut', state };
+  if (nb && nb.cut) return { ...rec, status: 'cut', cutBy: 'banner', state };
   return { ...rec, status: activeWithin2h(rf, s.t) ? 'lost' : 'receiver_inactive', state };
 }
 
@@ -692,9 +714,9 @@ export function analyzeDirected(list, opts = {}) {
 
 // ---- metric builders ------------------------------------------------------
 const DEFS = {
-  1: { name: 'Lane DMs cut by the hook cap', target: '0 cut banners, 0 DMs behind a cut', method: 'Count lane banners that hold a persisted-output stub, and unmatched lane DMs whose receiver has a cut banner next within 2 h.' },
-  2: { name: 'Directed-message delivery p50 and p90', target: 'p90 under 30 s for every directed message', method: 'Send time from the tool_use or lane_event row; arrival by msg_id (SendMessage) or 20-character sha1 windows; split by channel and receiver idle or busy at send.' },
-  3: { name: 'Unexplained message loss', target: 'under 0.5 percent per channel; every not-success retried by the fallback', method: 'Sends with no arrival, no cut banner next and a receiver active within 2 h, per channel; SendMessage results that are not success.' },
+  1: { name: 'Lane DMs cut by the hook cap', target: '0 cut banners, 0 DMs behind a cut', method: 'Count lane banners that hold a persisted-output stub, and unmatched lane DMs that were cut: the receiver has a cut banner next within 2 h (dmsBehindCutBanner), or a lane arrival to the receiver within 2 h opens with the start of the DM and ends with the hook cut marker (dmsCutBody). dmsBehindCut is the sum of both.' },
+  2: { name: 'Directed-message delivery p50 and p90', target: 'p90 under 30 s for every directed message', method: 'Send time from the tool_use or lane_event row; arrival by msg_id (SendMessage) or 20-character sha1 windows; split by channel and receiver idle or busy at send. A say result line "sent to <name> #<id>" that no directed send takes (a fan-out) is not a send here; it is counted in unparsed.' },
+  3: { name: 'Unexplained message loss', target: 'under 0.5 percent per channel; every not-success retried by the fallback', method: 'Sends with no arrival, not cut (no cut banner next and no arrival that ends with the hook cut marker, see metric 1) and a receiver active within 2 h, per channel; SendMessage results that are not success.' },
   4: { name: 'Double-send rate', target: 'under 10 percent', method: 'Seat SendMessage calls with a lane DM to the same receiver within 120 s, divided by seat SendMessage calls.' },
   5: { name: 'Injected hook bytes per request and exact-repeat share', target: 'under 350 B per request; repeats under 5 percent; rule-router file repeats under 20 percent', method: 'Sum of hook_additional_context strings and rule-router block results over distinct requestIds; repeats by full-string sha1 within a session.' },
   6: { name: 'Idle seat-check cost', target: 'under 15 idle checks and under 7 percent of seat cache read per 3 days', method: 'Cron-fired check prompts with no write action before the next turn end or prompt; their distinct requests and cache-read tokens.' },
@@ -716,11 +738,14 @@ export function metric1(list, opts = {}, an = analyzeDirected(list, opts)) {
   // Only banners inside the window count; the 2-hour tail after --until serves the cut lookup of a DM only.
   const banners = list.flatMap((f) => f.banners).filter((b) => b.inWin);
   const cut = banners.filter((b) => b.cut).length;
-  const behind = an.records.filter((r) => r.channel === 'lane' && r.status === 'cut').length;
+  const cutLane = an.records.filter((r) => r.channel === 'lane' && r.status === 'cut');
+  const behindBanner = cutLane.filter((r) => r.cutBy === 'banner').length;
+  const bodyCut = cutLane.filter((r) => r.cutBy === 'body').length;
+  const behind = behindBanner + bodyCut;
   const caveats = ['The DMs past a cut cannot be read from the stub; the count of DMs behind a cut needs the receiver transcripts and the sends in the same input.'];
   caveats.push('A cut SessionStart lane board is counted in cutSessionStartBoards and is not judged here.');
   if (!banners.length) caveats.push('No lane banner was seen in the input.');
-  return mk(1, list, { totalBanners: banners.length, cutBanners: cut, dmsBehindCut: behind, sessionStartBoards: sum(list.map((f) => f.boards.total)), cutSessionStartBoards: sum(list.map((f) => f.boards.cut)), cutRuleRouterStubs: sum(list.map((f) => f.stubs.rule)), otherStubs: sum(list.map((f) => f.stubs.other)) },
+  return mk(1, list, { totalBanners: banners.length, cutBanners: cut, dmsBehindCut: behind, dmsBehindCutBanner: behindBanner, dmsCutBody: bodyCut, sessionStartBoards: sum(list.map((f) => f.boards.total)), cutSessionStartBoards: sum(list.map((f) => f.boards.cut)), cutRuleRouterStubs: sum(list.map((f) => f.stubs.rule)), otherStubs: sum(list.map((f) => f.stubs.other)) },
     banners.length, banners.length ? cut === 0 && behind === 0 : null, caveats);
 }
 
@@ -729,7 +754,7 @@ const UNMATCHED = new Set(['lost', 'cut', 'receiver_inactive']);
 
 // Nearest-rank p90 of the matched waits with one infinite wait per unmatched send.
 // Returns Infinity when the rank falls on an unmatched send.
-function p90WithUnmatched(secs, unmatched) {
+export function p90WithUnmatched(secs, unmatched) {
   const total = secs.length + unmatched;
   if (!total) return null;
   const rank = Math.min(total, Math.max(1, Math.ceil(0.9 * total)));
@@ -873,8 +898,9 @@ export function metric6(list, opts = {}) {
   const idle = checks.filter((c) => c.writes === 0);
   const total = sum(src.map((f) => f.cacheReadTotal));
   const days = Number.isFinite(opts.since) && Number.isFinite(opts.until) ? (opts.until - opts.since) / 86400000 : null;
-  const idlePer3 = days ? round(idle.length * 3 / days, 1) : idle.length;
-  if (!days) caveats.push('No full --since/--until window: the idle count is not scaled to 3 days.');
+  // With no window the count per 3 days is unknown (null, not the raw count under that name).
+  const idlePer3 = days ? round(idle.length * 3 / days, 1) : null;
+  if (!days) caveats.push('No full --since/--until window: idleChecksPer3Days is null and the count part of the target is not judged; meets can fail on the cache-read share but cannot pass.');
   const idleCache = sum(idle.map((c) => c.cacheRead));
   const share = total ? idleCache / total : null;
   const value = { checks: checks.length, idleChecks: idle.length, idleRequests: sum(idle.map((c) => c.requests)), idleCacheRead: idleCache, seatCacheReadTotal: total,
@@ -888,8 +914,10 @@ export function metric6(list, opts = {}) {
   // A window under one day scales one idle check to 72 or more per 3 days: judge the cache-read share only.
   const short = days !== null && days < 1;
   if (short) caveats.push('Window under one day: meets judges the idle cache-read share only; idleChecksPer3Days is information.');
-  const countOk = short ? true : idlePer3 < 15;
-  return mk(6, list, value, checks.length, checks.length && total ? countOk && share < 0.07 : null, caveats);
+  // Each part is true, false or unknown (no window: the count is unknown). One false fails; a pass needs both true.
+  const countOk = idlePer3 === null ? null : short ? true : idlePer3 < 15;
+  const verdict = countOk === false || share >= 0.07 ? false : countOk === true ? true : null;
+  return mk(6, list, value, checks.length, checks.length && total ? verdict : null, caveats);
 }
 
 export function metric7(list, opts = {}) {
@@ -900,7 +928,7 @@ export function metric7(list, opts = {}) {
   const union = unionLength(asks) / 1000;
   const value = { questionCalls: calls, paired: asks.length, unpaired: sum(list.map((f) => f.askUnpaired)), humanPrompts: prompts, questionsPerPrompt: prompts ? round(calls / prompts, 2) : null,
     waitsOver300s: waits.filter((w) => w > 300).length, sumWaitSec: round(sum(waits), 1), unionOpenSec: round(union, 1), unionOpenHours: round(union / 3600, 2),
-    p50WaitSec: round(percentile(waits, 0.5), 1), p90WaitSec: round(percentile(waits, 0.9), 1), maxWaitSec: waits.length ? round(Math.max(...waits), 1) : null };
+    p50WaitSec: round(percentile(waits, 0.5), 1), p90WaitSec: round(percentile(waits, 0.9), 1), maxWaitSec: waits.length ? round(maxOf(waits), 1) : null };
   const caveats = ['Taps per landed PR is not computed (needs PR land data): meets is false when the wait count or the open time fails, and null otherwise (never true).',
     'Human prompts exclude meta, peer, scheduled and tag-wrapped user entries; the count is an estimate.'];
   // The third part of the target (taps per landed PR) is not computed, so the parts that are computed
@@ -929,7 +957,7 @@ export function metric9(list, opts = {}) {
   for (const f of list) for (const [d, n] of Object.entries(f.publishDays)) perDay[d] = (perDay[d] || 0) + n;
   const total = sum(Object.values(perDay));
   const r429 = sum(list.map((f) => f.results429));
-  const max = total ? Math.max(...Object.values(perDay)) : 0;
+  const max = total ? maxOf(Object.values(perDay)) : 0;
   const caveats = ['The per-day count covers the transcripts in the input only; the account limit is shared by every session, so pass all fleet files.'];
   const meets = total === 0 && r429 === 0 ? null : max < 100 && r429 === 0;
   return mk(9, list, { perDay: Object.fromEntries(Object.entries(perDay).sort()), maxPerDay: max, publishes: total, results429: r429 }, total, meets, caveats);
@@ -938,8 +966,8 @@ export function metric9(list, opts = {}) {
 export function metric10(list, opts = {}) {
   const pre = list.flatMap((f) => f.compactions);
   const mean = pre.length ? sum(pre) / pre.length : null;
-  const max = pre.length ? Math.max(...pre) : null;
-  const value = { compactions: pre.length, meanPreTokens: mean === null ? null : Math.round(mean), maxPreTokens: max, maxRequestContext: Math.max(0, ...list.map((f) => f.maxCtx)) };
+  const max = pre.length ? maxOf(pre) : null;
+  const value = { compactions: pre.length, meanPreTokens: mean === null ? null : Math.round(mean), maxPreTokens: max, maxRequestContext: maxOf([0, ...list.map((f) => f.maxCtx)]) };
   const caveats = ['The max single-request context is the largest input + cache read + cache creation of one request or iteration; the max target is judged on it, not on preTokens.'];
   if (!pre.length) caveats.push('No compact_boundary entry in the window: the mean is not judged.');
   const maxCtx = value.maxRequestContext;
@@ -960,14 +988,16 @@ export function computeMetrics(list, opts = {}) {
 // ---- command line ---------------------------------------------------------
 const USAGE = `Usage: node metrics.mjs --transcripts <dir or comma list of .jsonl files> [options]
   --transcripts <path,...>  REQUIRED. A folder (its .jsonl files) or a comma list of files. No default.
-  --since <ISO>             keep entries at or after this time
-  --until <ISO>             keep entries up to this time (arrivals may land up to 2 h later)
+  --since <ISO with zone>   keep entries at or after this time (Z or an offset is required)
+  --until <ISO with zone>   keep entries up to this time (arrivals may land up to 2 h later)
   --seat <id prefix>        the seat session (needed by metrics 4 and 8; limits metric 6)
   --events <json file>      lane_event rows exported from a scratch board
   --out <json file>         write the report here; stdout then holds one line per metric
   --help                    this text
 Aggregates only: no message text, tool input, file content, env value, address or url is printed.
 `;
+
+const ZONED_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/i;
 
 export function parseArgs(argv) {
   const a = { errors: [] };
@@ -981,7 +1011,10 @@ export function parseArgs(argv) {
     } else a.errors.push('Unknown option.');
   }
   for (const k of ['since', 'until']) {
-    if (a[k] !== undefined && !Number.isFinite(Date.parse(a[k]))) a.errors.push(`--${k} is not an ISO time.`);
+    if (a[k] === undefined) continue;
+    if (!Number.isFinite(Date.parse(a[k]))) a.errors.push(`--${k} is not an ISO time.`);
+    // A time with no zone would be read as local time: the same flags would mean different windows on two machines.
+    else if (!ZONED_RE.test(a[k])) a.errors.push(`--${k} needs a date, a time and a zone: Z or an offset such as +01:00.`);
   }
   // A short prefix (or the word unknown that a session with no id gets) would match many sessions.
   if (a.seat !== undefined && !/^[0-9a-f]{8}[0-9a-f-]*$/i.test(a.seat)) a.errors.push('--seat must start with 8 hex characters of a session id.');
@@ -1054,12 +1087,20 @@ function guardOut(out, inputReals, inputDirs) {
   if (exists) throw new CliError('Refusing an --out that already exists.');
 }
 
+// Sessions are listed as s1..sN by first event time (no event time last), then by input order. No id is printed.
+function labelledSessions(facts, seat) {
+  const order = facts.map((f, i) => ({ f, i })).sort((x, y) => (x.f.firstT ?? Infinity) - (y.f.firstT ?? Infinity) || x.i - y.i);
+  return order.map(({ f }, k) => ({ label: `s${k + 1}`, seat: Boolean(seat) && f.id.toLowerCase().startsWith(seat), lines: f.lines, badLines: f.badLines, requests: f.requests, compactions: f.compactions.length, sends: f.sends.length, arrivals: f.arrivals.length }));
+}
+
+const isoOf = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+
 function buildReport(facts, metrics, a, opts) {
   return {
     tool: 'coord-drill-2 metrics', generatedAt: new Date().toISOString(),
-    window: { since: a.since || null, until: a.until || null }, seat8: a.seat ? String(a.seat).slice(0, 8) : null, eventsUsed: Array.isArray(opts.eventSends), eventsRows: opts.eventStats ? opts.eventStats.rows : null, eventsSkipped: opts.eventStats ? opts.eventStats.unparsed : null,
+    window: { since: isoOf(opts.since), until: isoOf(opts.until) }, seatGiven: Boolean(a.seat), eventsUsed: Array.isArray(opts.eventSends), eventsRows: opts.eventStats ? opts.eventStats.rows : null, eventsSkipped: opts.eventStats ? opts.eventStats.unparsed : null,
     parse: { files: facts.length, lines: sum(facts.map((f) => f.lines)), badLines: sum(facts.map((f) => f.badLines)), noTime: sum(facts.map((f) => f.noTime)), sidechain: sum(facts.map((f) => f.sidechain)) },
-    sessions: facts.map((f) => ({ id8: f.id8, lines: f.lines, badLines: f.badLines, requests: f.requests, compactions: f.compactions.length, sends: f.sends.length, arrivals: f.arrivals.length })),
+    sessions: labelledSessions(facts, opts.seat),
     metrics,
   };
 }

@@ -20,7 +20,10 @@ import {
   parseArgs,
   manifestRuleFiles,
   eventSends,
+  percentile,
 } from './metrics.mjs';
+// A namespace import for names the fix round adds: a missing export fails one test, not the whole file.
+import * as M from './metrics.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(HERE, 'metrics.mjs');
@@ -76,7 +79,8 @@ test('metric 10: no compaction in the input gives meets null, not a pass', () =>
   const f = ingestEntries([asst(SEAT, 1, [])], {});
   const m = find(computeMetrics([f], {}), 10);
   assert.equal(m.meets, null);
-  assert.ok(m.caveats.length > 0);
+  // R6: the named caveat, not any caveat (the old check passed on the unrelated "largest request" caveat).
+  assert.ok(m.caveats.some((c) => c.startsWith('No compact_boundary entry in the window')), 'the no-compaction caveat is missing');
 });
 
 // ---- metric 7 -------------------------------------------------------------
@@ -115,7 +119,7 @@ test('metric 2: a lane DM that starts with a shell variable still matches on a l
   const sid = 'tu_say1';
   const sender = ingestEntries([
     asst(SEAT, 100, [use('PowerShell', { command: cmd }, sid)]),
-    result(SEAT, 101, sid, 'x', { toolUseResult: { stdout: 'sent to trex #bbbbbbbb ok' } }),
+    result(SEAT, 101, sid, 'x', { toolUseResult: { stdout: 'sent to zorblat #bbbbbbbb ok' } }),
   ], {});
   const recv = ingestEntries([
     sys(BLD, 50, 'turn_duration'),
@@ -132,7 +136,7 @@ test('metric 2: a lane DM that starts with a shell variable still matches on a l
 });
 
 test('metric 2: SendMessage joins on msg_id; cap at 2 h splits capped from uncapped; busy receiver is split out', () => {
-  const sm = (id, text) => use('SendMessage', { to: 'trex', message: text, summary: 's', type: 'message' }, id);
+  const sm = (id, text) => use('SendMessage', { to: 'zorblat', message: text, summary: 's', type: 'message' }, id);
   const sender = ingestEntries([
     asst(SEAT, 10, [sm('s1', 'alpha one')]),
     result(SEAT, 11, 's1', 'ok', { toolUseResult: { success: true, msg_id: 'm-1' } }),
@@ -159,10 +163,10 @@ test('metric 2: SendMessage joins on msg_id; cap at 2 h splits capped from uncap
 test('metric 3: a send with no arrival, no cut banner and an active receiver is unexplained loss; not-success counted', () => {
   const sender = ingestEntries([
     asst(SEAT, 10, [use('PowerShell', { command: `node lane.mjs say --to bbbbbbbb "${LONG}"` }, 'a1')]),
-    result(SEAT, 11, 'a1', 'x', { toolUseResult: { stdout: 'sent to trex #bbbbbbbb' } }),
+    result(SEAT, 11, 'a1', 'x', { toolUseResult: { stdout: 'sent to zorblat #bbbbbbbb' } }),
     asst(SEAT, 12, [use('PowerShell', { command: `node lane.mjs say --to cccccccc "zulu yankee xray whiskey victor uniform"` }, 'a2')]),
     result(SEAT, 13, 'a2', 'x', { toolUseResult: { stdout: 'sent to idle #cccccccc' } }),
-    asst(SEAT, 14, [use('SendMessage', { to: 'trex', message: 'alpha nothing' }, 'a3')]),
+    asst(SEAT, 14, [use('SendMessage', { to: 'zorblat', message: 'alpha nothing' }, 'a3')]),
     result(SEAT, 15, 'a3', 'x', { toolUseResult: { success: false } }),
   ], {});
   const active = ingestEntries([asst(BLD, 600, []), asst(BLD, 1200, [])], {});
@@ -180,7 +184,7 @@ test('metric 1: a persisted-output stub holding a lane banner is a cut banner; a
   const whole = '## 1 lane update(s) since you last looked\n- alpha bravo note';
   const sender = ingestEntries([
     asst(SEAT, 10, [use('PowerShell', { command: `node lane.mjs say --to bbbbbbbb "${LONG}"` }, 'c1')]),
-    result(SEAT, 11, 'c1', 'x', { toolUseResult: { stdout: 'sent to trex #bbbbbbbb' } }),
+    result(SEAT, 11, 'c1', 'x', { toolUseResult: { stdout: 'sent to zorblat #bbbbbbbb' } }),
   ], {});
   const recv = ingestEntries([
     hook(BLD, 5, 'UserPromptSubmit', [whole]),
@@ -200,9 +204,9 @@ test('metric 1: a persisted-output stub holding a lane banner is a cut banner; a
 
 // ---- metric 4 -------------------------------------------------------------
 test('metric 4: double send counts a lane DM to the same receiver within 120 s, not outside', () => {
-  const sm = (id) => use('SendMessage', { to: 'trex', message: 'alpha ping' }, id);
+  const sm = (id) => use('SendMessage', { to: 'zorblat', message: 'alpha ping' }, id);
   const say = (id) => use('PowerShell', { command: 'node lane.mjs say --to cccccccc "alpha ping"' }, id);
-  const sayRes = (sec, id) => result(SEAT, sec, id, 'x', { toolUseResult: { stdout: 'sent to session trex #cccccccc now' } });
+  const sayRes = (sec, id) => result(SEAT, sec, id, 'x', { toolUseResult: { stdout: 'sent to session zorblat #cccccccc now' } });
   const f = ingestEntries([
     asst(SEAT, 100, [sm('d1')]), asst(SEAT, 150, [say('l1')]), sayRes(151, 'l1'),
     asst(SEAT, 1000, [sm('d2')]), asst(SEAT, 1300, [say('l2')]), sayRes(1301, 'l2'),
@@ -331,14 +335,14 @@ const T2 = 'harbor timber copper signal willow';
 const T3 = 'granite ember falcon river summit';
 const saySend = (sec, id, to, text) => [
   asst(SEAT, sec, [use('PowerShell', { command: `node C:/x/lane.mjs say --to ${to} "${text}"` }, id)]),
-  result(SEAT, sec + 1, id, 'x', { toolUseResult: { stdout: `sent to trex #${to}` } }),
+  result(SEAT, sec + 1, id, 'x', { toolUseResult: { stdout: `sent to zorblat #${to}` } }),
 ];
 const saySendRaw = (sec, id, command) => [
   asst(SEAT, sec, [use('PowerShell', { command }, id)]),
-  result(SEAT, sec + 1, id, 'x', { toolUseResult: { stdout: 'sent to trex #bbbbbbbb' } }),
+  result(SEAT, sec + 1, id, 'x', { toolUseResult: { stdout: 'sent to zorblat #bbbbbbbb' } }),
 ];
 const smSend = (sec, id, text, msgId) => [
-  asst(SEAT, sec, [use('SendMessage', { to: 'trex', message: text }, id)]),
+  asst(SEAT, sec, [use('SendMessage', { to: 'zorblat', message: text }, id)]),
   result(SEAT, sec + 1, id, 'ok', { toolUseResult: { success: true, msg_id: msgId } }),
 ];
 const peerIn = (sid, sec, msgId) => ({ type: 'user', sessionId: sid, timestamp: iso(sec), origin: { kind: 'peer', msg_id: msgId }, message: { content: 'wrapper' } });
@@ -428,7 +432,7 @@ test('metric 3: a SendMessage to an agent is counted apart and does not make rec
 test('metric 2: failed directed sends withhold the pass', () => {
   const fails = [];
   for (let i = 0; i < 5; i++) {
-    fails.push(asst(SEAT, 100 + i * 10, [use('SendMessage', { to: 'trex', message: `${T2} ${i}` }, `f${i}`)]), result(SEAT, 101 + i * 10, `f${i}`, 'no', { toolUseResult: { success: false } }));
+    fails.push(asst(SEAT, 100 + i * 10, [use('SendMessage', { to: 'zorblat', message: `${T2} ${i}` }, `f${i}`)]), result(SEAT, 101 + i * 10, `f${i}`, 'no', { toolUseResult: { success: false } }));
   }
   const sender = ingestEntries([...smSend(10, 'fa', T1, 'm-1'), ...fails], {});
   const recv = ingestEntries([sys(BLD, 1, 'turn_duration'), peerIn(BLD, 11, 'm-1')], {});
@@ -586,8 +590,8 @@ test('ingestFile: the session id comes from the entries, not from the file name'
 test('parseLaneSays: --to is found after the message', () => {
   const [a] = parseLaneSays(`node C:/x/lane.mjs say "${T1}" --to bbbbbbbb`);
   assert.equal(a.toHex, 'bbbbbbbb');
-  const [b] = parseLaneSays(`node C:/x/lane.mjs say "${T1}" --to trex`);
-  assert.equal(b.toName, 'trex');
+  const [b] = parseLaneSays(`node C:/x/lane.mjs say "${T1}" --to zorblat`);
+  assert.equal(b.toName, 'zorblat');
 });
 
 // D6: lane.mjs prints "sent to board <key>" for a broadcast (no #sid8). The fixture is that real shape.
@@ -595,7 +599,7 @@ test('lane say results: a broadcast say before a directed one does not shift the
   const cmd = `node C:/x/lane.mjs say "broadcast words about ${T1}"; node C:/x/lane.mjs say --to bbbbbbbb "${T2}"`;
   const f = ingestEntries([
     asst(SEAT, 10, [use('PowerShell', { command: cmd }, 'bc1')]),
-    result(SEAT, 11, 'bc1', 'x', { toolUseResult: { stdout: 'sent to board k\nsent to trex #bbbbbbbb' } }),
+    result(SEAT, 11, 'bc1', 'x', { toolUseResult: { stdout: 'sent to board k\nsent to zorblat #bbbbbbbb' } }),
   ], {});
   assert.equal(f.sends.length, 2);
   assert.equal(f.sends[0].toHex, null);
@@ -609,7 +613,7 @@ test('lane say results: a directed send with a variable receiver takes the lefto
   const cmd = `node C:/x/lane.mjs say "broadcast words about ${T1}"; node C:/x/lane.mjs say --to $peer "${T2}"`;
   const f = ingestEntries([
     asst(SEAT, 10, [use('PowerShell', { command: cmd }, 'bc2')]),
-    result(SEAT, 11, 'bc2', 'x', { toolUseResult: { stdout: 'sent to board k\nsent to trex #bbbbbbbb' } }),
+    result(SEAT, 11, 'bc2', 'x', { toolUseResult: { stdout: 'sent to board k\nsent to zorblat #bbbbbbbb' } }),
   ], {});
   assert.equal(f.sends[0].toHex, null);
   assert.equal(f.sends[1].toHex, 'bbbbbbbb');
@@ -620,14 +624,14 @@ test('lane say results: a directed send with a variable receiver takes the lefto
 
 // D10: a --to inside the quoted message is message text, not the receiver.
 test('parseLaneSays: a --to inside the quoted message is not the receiver', () => {
-  const [a] = parseLaneSays(`node C:/x/lane.mjs say "use --to trex for ${T1}" --to bbbbbbbb`);
+  const [a] = parseLaneSays(`node C:/x/lane.mjs say "use --to zorblat for ${T1}" --to bbbbbbbb`);
   assert.equal(a.toHex, 'bbbbbbbb');
   assert.equal(a.toName, null);
-  const [b] = parseLaneSays(`node C:/x/lane.mjs say "use --to trex for ${T1}"`);
+  const [b] = parseLaneSays(`node C:/x/lane.mjs say "use --to zorblat for ${T1}"`);
   assert.equal(b.toName, null);
   assert.equal(b.directed, false);
-  const [c] = parseLaneSays(`node C:/x/lane.mjs say --to "trex" "${T1}"`);
-  assert.equal(c.toName, 'trex');
+  const [c] = parseLaneSays(`node C:/x/lane.mjs say --to "zorblat" "${T1}"`);
+  assert.equal(c.toName, 'zorblat');
 });
 
 // D1: the segment of a send ends at the next shell separator, so a later command is not part of its text.
@@ -797,6 +801,8 @@ test('CLI output safety: a marker in message texts never reaches stdout or the -
     for (const text of [r.stdout, r.stderr, written]) {
       assert.ok(!/zebrasecret/i.test(text), 'marker leaked');
       assert.ok(!text.includes(leakName), 'temp path leaked');
+      // R1: no session handle (the 8-hex prefix of an input session id) in any output.
+      for (const id of [SEAT, BLD]) assert.ok(!text.includes(id.slice(0, 8)), 'session handle leaked');
     }
     const parsed = JSON.parse(written);
     assert.equal(parsed.metrics.length, 10);
@@ -998,4 +1004,258 @@ test('CLI: --seat unk is refused even when a session has no id', () => {
     assert.equal(r.status, 2, r.stderr);
     assert.match(r.stderr, /8 hex/);
   });
+});
+
+// ---- fix round: every fixture below is invented ------------------------------
+const cutBanner = '<persisted-output>\nOutput too large (12.3KB). Full output saved to: somewhere\n\nPreview (first 2KB):\n## 5 lane update(s) since you last looked\n- alpha bravo\n</persisted-output>';
+const wholeBanner = '## 1 lane update(s) since you last looked\n- alpha bravo note';
+
+// R1: the report named every input session by its real 8-hex handle.
+test('R1: no session handle reaches stdout, stderr or the --out file; sessions get ordinal labels', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cd2-metrics-lbl-'));
+  try {
+    const inDir = path.join(dir, 'in');
+    const outDir = path.join(dir, 'out');
+    fs.mkdirSync(inDir);
+    fs.mkdirSync(outDir);
+    const w = (name, entries) => fs.writeFileSync(path.join(inDir, name), `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`);
+    w('a.jsonl', [asst(SEAT, 10, [], 'rs1')]);
+    w('b.jsonl', [sys(BLD, 1, 'turn_duration'), asst(BLD, 2, [], 'rb1')]);
+    w('c.jsonl', [{ type: 'assistant', sessionId: 'zebrasecret-session', timestamp: iso(5), requestId: 'ro1', message: { id: 'ro1', content: [] } }]);
+    const args = ['--transcripts', inDir, '--seat', 'aaaaaaaa', '--since', '2026-11-10T11:00:00-01:00'];
+    const plain = run(args);
+    assert.equal(plain.status, 0, plain.stderr);
+    const out = path.join(outDir, 'r.json');
+    const withOut = run([...args, '--out', out]);
+    assert.equal(withOut.status, 0, withOut.stderr);
+    const written = fs.readFileSync(out, 'utf8');
+    for (const text of [plain.stdout, plain.stderr, withOut.stdout, withOut.stderr, written]) {
+      for (const bad of ['aaaaaaaa', 'bbbbbbbb', 'zebrasec']) assert.ok(!text.toLowerCase().includes(bad), 'session handle leaked');
+      assert.ok(!/(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])/i.test(text), 'an 8-hex handle is in the output');
+    }
+    const rep = JSON.parse(plain.stdout);
+    assert.equal(rep.seat8, undefined);
+    assert.equal(rep.seatGiven, true);
+    // first event time order: b (t=1), c (t=5), a (t=10)
+    assert.deepEqual(rep.sessions.map((s) => s.label), ['s1', 's2', 's3']);
+    assert.deepEqual(rep.sessions.map((s) => s.seat), [false, false, true]);
+    assert.ok(rep.sessions.every((s) => !('id8' in s)));
+    assert.deepEqual(rep.sessions.map((s) => s.requests), [1, 1, 1]);
+    // window text of the caller is not echoed: the parsed time is printed
+    assert.equal(rep.window.since, '2026-11-10T12:00:00.000Z');
+    assert.equal(rep.window.until, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R1: a sessionId that is not hex is not taken as the session id', () => {
+  const odd = { ...asst(SEAT, 1, [], 'ro1'), sessionId: 'zebrasecret-session' };
+  assert.equal(ingestEntries([odd], {}).id8, 'unknown');
+  assert.equal(ingestEntries([odd, asst(SEAT, 2, [], 'ro2')], {}).id8, 'aaaaaaaa');
+});
+
+// R2: a lost DM that shares a mid-text run with a different, cut DM counted as cut.
+test('R2: a cut marker on a different DM does not turn a lost DM into a cut', () => {
+  const SHARED = 'handoff checklist opened sealed';
+  const A = `quartz meadow lantern orbit velvet harbor timber copper signal willow ${SHARED} granite ember falcon river summit marble thunder cobalt juniper saffron`;
+  const B = `zephyr cinder basalt prairie walnut tundra mosaic anchor beacon cipher ${SHARED} ${LONG_BODY}`;
+  const sender = ingestEntries([...saySend(10, 'r2a', 'bbbbbbbb', A), ...saySend(20, 'r2b', 'bbbbbbbb', B)], {});
+  const banner = `## 1 lane update(s) since you last looked\n- (direct to you) zephyr cinder basalt prairie walnut tundra mosaic anchor beacon cipher ${SHARED} wordx1k wordx2k${CUT_TAIL}`;
+  const recv = ingestEntries([hook(BLD, 40, 'UserPromptSubmit', [banner]), asst(BLD, 50, [])], {});
+  assert.equal(recv.arrivals[0].bodyCut, true);
+  assert.deepEqual(analyzeDirected([sender, recv], {}).records.map((r) => r.status), ['lost', 'cut']);
+});
+
+test('R2: a cut-marker arrival more than 2 h after the send is not that send\'s cut', () => {
+  const sender = ingestEntries(saySend(10, 'r2c', 'bbbbbbbb', LONG_BODY), {});
+  const banner = `## 1 lane update(s) since you last looked\n- (direct to you) ${LONG_BODY.slice(0, 400)}${CUT_TAIL}`;
+  const late = ingestEntries([asst(BLD, 600, []), hook(BLD, 10 + 3 * 3600, 'UserPromptSubmit', [banner])], {});
+  assert.deepEqual(analyzeDirected([sender, late], {}).records.map((r) => r.status), ['lost']);
+  const soon = ingestEntries([asst(BLD, 600, []), hook(BLD, 10 + 3600, 'UserPromptSubmit', [banner])], {});
+  assert.deepEqual(analyzeDirected([sender, soon], {}).records.map((r) => r.status), ['cut']);
+});
+
+// R3: SAY_RE matched "lane.mjs say" inside quoted message text: a phantom send.
+test('R3: a say inside the quoted text of another command is not a send; a quoted script path still is', () => {
+  const inner = 'node C:/x/lane.mjs say --to bbbbbbbb quartz meadow lantern orbit velvet';
+  assert.equal(parseLaneSays(`node C:/x/lane.mjs note alpha "reply with ${inner}"`, 'PowerShell').length, 0);
+  assert.equal(parseLaneSays(`node C:/x/lane.mjs note alpha 'reply with ${inner}'`, 'Bash').length, 0);
+  const outer = parseLaneSays(`node C:/x/lane.mjs say --to bbbbbbbb "${T1} then ${inner}"`, 'PowerShell');
+  assert.equal(outer.length, 1);
+  assert.deepEqual(outer[0].probes, sendProbes(`${T1} then ${inner}`));
+  const quotedPath = parseLaneSays(`node "C:/x/lane.mjs" say --to bbbbbbbb "${T1}"`, 'PowerShell');
+  assert.equal(quotedPath.length, 1);
+  assert.equal(quotedPath[0].toHex, 'bbbbbbbb');
+  const f = ingestEntries([asst(SEAT, 10, [use('PowerShell', { command: `node C:/x/lane.mjs note alpha "reply with ${inner}"` }, 'r3')])], {});
+  assert.equal(f.sends.length, 0);
+});
+
+// R4: leftover "sent to" lines with no open directed send were dropped without a trace.
+test('R4: result lines with no directed send to take them are counted in unparsed (metric 2)', () => {
+  const f = ingestEntries([
+    asst(SEAT, 10, [use('PowerShell', { command: `node C:/x/lane.mjs say "broadcast words about ${T1}"` }, 'r4')]),
+    result(SEAT, 11, 'r4', 'x', { toolUseResult: { stdout: 'sent to alpha #11111111\nsent to bravo #22222222' } }),
+  ], {});
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.sends[0].toHex, null);
+  const m2 = find(computeMetrics([f], {}), 2);
+  assert.equal(m2.unparsed, 2);
+  assert.match(m2.method, /sent to/);
+  assert.equal(find(computeMetrics([f], {}), 3).unparsed, 0);
+});
+
+// R5: dmsBehindCut counted body-cut DMs while the method named cut banners only.
+test('R5: dmsBehindCut splits into the banner cut and the cut-marker body cut; the method names both', () => {
+  const body = ingestEntries(saySend(10, 'r5a', 'bbbbbbbb', LONG_BODY), {});
+  const bodyBanner = `## 1 lane update(s) since you last looked\n- (direct to you) ${LONG_BODY.slice(0, 400)}${CUT_TAIL}`;
+  const bodyRecv = ingestEntries([hook(BLD, 40, 'UserPromptSubmit', [bodyBanner]), asst(BLD, 50, [])], {});
+  const mb = find(computeMetrics([body, bodyRecv], {}), 1);
+  assert.equal(mb.value.dmsBehindCut, 1);
+  assert.equal(mb.value.dmsCutBody, 1);
+  assert.equal(mb.value.dmsBehindCutBanner, 0);
+  assert.match(mb.method, /cut marker/);
+  // metric 3 treats the same DMs as cut (cutExplained), so its stated method names both kinds too
+  assert.equal(find(computeMetrics([body, bodyRecv], {}), 3).value.lane.cutExplained, 1);
+  assert.match(find(computeMetrics([body, bodyRecv], {}), 3).method, /cut banner.*cut marker/);
+  const ban = ingestEntries(saySend(10, 'r5b', 'bbbbbbbb', LONG_BODY), {});
+  const banRecv = ingestEntries([hook(BLD, 5, 'UserPromptSubmit', [wholeBanner]), hook(BLD, 60, 'UserPromptSubmit', [cutBanner]), asst(BLD, 70, [])], {});
+  const mc = find(computeMetrics([ban, banRecv], {}), 1);
+  assert.equal(mc.value.dmsBehindCut, 1);
+  assert.equal(mc.value.dmsBehindCutBanner, 1);
+  assert.equal(mc.value.dmsCutBody, 0);
+});
+
+// R6: percentile was tested on one-element lists only.
+test('R6: percentile is nearest-rank for n = 10, n = 11, ties and the empty list', () => {
+  const ten = [10, 3, 7, 1, 9, 5, 2, 8, 4, 6];
+  assert.equal(percentile(ten, 0.5), 5);
+  assert.equal(percentile(ten, 0.9), 9);
+  const eleven = [...ten, 11];
+  assert.equal(percentile(eleven, 0.5), 6);
+  assert.equal(percentile(eleven, 0.9), 10);
+  assert.equal(percentile([4, 4, 4, 9, 9], 0.5), 4);
+  assert.equal(percentile([4, 4, 4, 9, 9], 0.9), 9);
+  assert.equal(percentile([], 0.5), null);
+  const input = [3, 1, 2];
+  percentile(input, 0.5);
+  assert.deepEqual(input, [3, 1, 2]);
+});
+
+test('R6: metric 7 reports p50 and p90 of ten waits by nearest rank', () => {
+  const e = [];
+  for (let i = 1; i <= 10; i++) e.push(asst(SEAT, i * 100, [use('AskUserQuestion', { questions: [] }, `w${i}`)]), result(SEAT, i * 100 + i, `w${i}`, 'ok'));
+  const m = find(computeMetrics([ingestEntries(e, {})], {}), 7);
+  assert.equal(m.value.paired, 10);
+  assert.equal(m.value.p50WaitSec, 5);
+  assert.equal(m.value.p90WaitSec, 9);
+  assert.equal(m.value.maxWaitSec, 10);
+});
+
+test('R6: the p90 with unmatched sends is infinite when the rank falls on an unmatched send', () => {
+  const secs = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  assert.equal(M.p90WithUnmatched(secs, 0), 9);
+  assert.equal(M.p90WithUnmatched(secs, 1), 9); // total 10, rank 9
+  assert.equal(M.p90WithUnmatched(secs, 2), Infinity); // total 11, rank 10
+  assert.equal(M.p90WithUnmatched([], 3), Infinity);
+  assert.equal(M.p90WithUnmatched([], 0), null);
+});
+
+// R6: the realpath refusals (resolveInputs) had no test. A junction into a decoy folder whose path holds the
+// protected fragment. The decoy is created here under the temp folder; the real state folder is never touched.
+function withDecoyJunction(t, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cd2-metrics-jn-'));
+  const links = [];
+  try {
+    const decoy = path.join(dir, 'x', '.claude', 'state', 'review-engine');
+    // The decoy holds no .jsonl file: only the folder-level realpath check can refuse the first test's input.
+    fs.mkdirSync(decoy, { recursive: true });
+    const link = (target, at) => {
+      try { fs.symlinkSync(target, at, 'junction'); } catch (err) { t.skip(`this platform cannot make a junction (${err.code})`); return false; }
+      links.push(at);
+      return true;
+    };
+    fn(dir, decoy, link);
+  } finally {
+    for (const l of links) { try { fs.unlinkSync(l); } catch { try { fs.rmdirSync(l); } catch { /* already gone */ } } }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('R6: an input folder that is a junction into the protected folder is refused', (t) => {
+  withDecoyJunction(t, (dir, decoy, link) => {
+    const at = path.join(dir, 'harmless');
+    if (!link(decoy, at)) return;
+    const r = run(['--transcripts', at]);
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /refus/i);
+    assert.equal(r.stdout, '');
+    assert.ok(!r.stderr.includes(dir), 'temp path leaked');
+  });
+});
+
+test('R6: a .jsonl entry inside an input folder that is a junction into the protected folder is refused', (t) => {
+  withDecoyJunction(t, (dir, decoy, link) => {
+    const inDir = path.join(dir, 'in');
+    fs.mkdirSync(inDir);
+    fs.writeFileSync(path.join(inDir, 'ok.jsonl'), `${JSON.stringify(asst(SEAT, 1, [], 'r1'))}\n`);
+    if (!link(decoy, path.join(inDir, 'evil.jsonl'))) return;
+    const r = run(['--transcripts', inDir]);
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /refus/i);
+    assert.equal(r.stdout, '');
+  });
+});
+
+// R7: a send with a msg_id matched an arrival of another message by probe.
+test('R7: a SendMessage with a msg_id is not matched to an arrival of another msg_id; an arrival with no msg_id still matches', () => {
+  const sender = ingestEntries(smSend(10, 'r7a', T1, 'm-1'), {});
+  const other = { type: 'user', sessionId: BLD, timestamp: iso(11), origin: { kind: 'peer', msg_id: 'm-other', body: T1 }, message: { content: 'wrapper' } };
+  const recvOther = ingestEntries([sys(BLD, 1, 'turn_duration'), other], {});
+  assert.notEqual(analyzeDirected([sender, recvOther], {}).records[0].status, 'matched');
+  const same = { ...other, origin: { kind: 'peer', msg_id: 'm-1', body: T1 } };
+  const recvSame = ingestEntries([sys(BLD, 1, 'turn_duration'), same], {});
+  assert.equal(analyzeDirected([sender, recvSame], {}).records[0].status, 'matched');
+  const bare = { ...other, origin: { kind: 'peer', body: T1 } };
+  const recvBare = ingestEntries([sys(BLD, 1, 'turn_duration'), bare], {});
+  assert.equal(analyzeDirected([sender, recvBare], {}).records[0].status, 'matched');
+});
+
+// R8: a --since or --until with no zone was read as local time.
+test('R8: --since and --until need a zone (Z or an offset)', () => {
+  const bad = (k, v) => parseArgs(['--transcripts', 'x', k, v]).errors.length > 0;
+  for (const k of ['--since', '--until']) {
+    assert.ok(bad(k, '2026-11-10T12:00:00'), `${k} with no zone`);
+    assert.ok(bad(k, '2026-11-10'), `${k} with a date only`);
+    assert.ok(!bad(k, '2026-11-10T12:00:00Z'));
+    assert.ok(!bad(k, '2026-11-10T12:00:00.250+01:00'));
+    assert.ok(!bad(k, '2026-11-10T12:00:00-0600'));
+  }
+});
+
+// R9: Math.max(...arr) throws a RangeError on a large array.
+test('R9: metrics 7 and 10 and dist handle 300000 values', () => {
+  const f = ingestEntries([asst(SEAT, 1, [])], {});
+  f.compactions = Array.from({ length: 300000 }, (_, i) => i % 1000);
+  f.asks = Array.from({ length: 300000 }, (_, i) => [i, i + (i % 1000) * 1000]);
+  const ms = computeMetrics([f], {});
+  assert.equal(find(ms, 10).value.maxPreTokens, 999);
+  assert.equal(find(ms, 7).value.maxWaitSec, 999);
+  assert.equal(M.dist(Array.from({ length: 300000 }, (_, i) => i)).max, 299999);
+});
+
+// R11: with no window the count per 3 days is unknown: it was the raw count, and it was judged.
+test('R11: metric 6 with no --since/--until does not judge the idle count; a failing cache-read share still fails', () => {
+  const fire = { type: 'user', sessionId: SEAT, timestamp: iso(10), isMeta: true, scheduledTaskId: 't', wakeupSource: 'schedule_wakeup', message: { content: 'Seat check for lane alpha' } };
+  const mkFacts = (otherCache) => ingestEntries([
+    fire, asst(SEAT, 11, [use('Bash', { command: 'node lane.mjs board' })], 'k1', { input_tokens: 1, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 }),
+    sys(SEAT, 12, 'turn_duration'),
+    asst(SEAT, 30, [], 'k2', { input_tokens: 1, cache_read_input_tokens: otherCache, cache_creation_input_tokens: 0 }),
+  ], {});
+  const pass = find(computeMetrics([mkFacts(19000)], {}), 6);
+  assert.equal(pass.value.idleChecks, 1);
+  assert.equal(pass.value.idleChecksPer3Days, null);
+  assert.equal(pass.meets, null);
+  const fail = find(computeMetrics([mkFacts(1000)], {}), 6);
+  assert.equal(fail.meets, false);
 });
