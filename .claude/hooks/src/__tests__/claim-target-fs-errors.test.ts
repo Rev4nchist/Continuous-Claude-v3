@@ -19,7 +19,7 @@ import { join } from 'path';
 const probe = vi.hoisted(() => ({ calls: 0, code: '' as string, match: '' as string }));
 
 vi.mock('fs', async (importOriginal) => {
-  const real = await importOriginal<typeof import('fs')>();
+  const real = (await importOriginal()) as typeof import('fs');
   const count =
     <A extends unknown[], R>(fn: (...a: A) => R) =>
     (...a: A): R => {

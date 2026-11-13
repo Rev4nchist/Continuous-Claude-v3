@@ -31,7 +31,7 @@ vi.mock('../shared/db-utils-pg.js', () => ({
   },
 }));
 vi.mock('fs', async (importOriginal) => {
-  const real = await importOriginal<typeof import('fs')>();
+  const real = (await importOriginal()) as typeof import('fs');
   return {
     ...real,
     readFileSync: ((p: unknown, ...rest: unknown[]) =>
