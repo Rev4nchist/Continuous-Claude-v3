@@ -8,9 +8,36 @@
   "shadowFromPr": 250,
   "shadowDays": 21,
   "cursorEvalBudget": 120,
+  "evalScopes": {
+    "P1": 75,
+    "P4": 120,
+    "P6": 120
+  },
+  "p4": {
+    "arms": 2,
+    "successRate": 0.81,
+    "runs": {
+      "controls": 1,
+      "holdout": 2,
+      "dev": 1,
+      "gold": 1
+    },
+    "controlsMin": 15,
+    "reserved": {
+      "verifierReplay": 20,
+      "winnerEvidence": 32
+    }
+  },
+  "reserve": [],
+  "suites": {
+    "regression": [],
+    "capability": []
+  },
+  "judgeModels": {
+    "grok": "opus"
+  },
   "cursorHeadroom": 60,
   "headlessDailyCap": 30,
-  "judgeModel": "sonnet",
   "lineSlack": 3,
   "labelWeekCap": 20,
   "freeze": {

@@ -106,3 +106,131 @@ test('need reserves room for the retries: 38 used + need 2 fits a budget of 40, 
   assert.equal(cursorBudget(many(39, 'review-eval'), cfg, { now: NOW }).ok, true);
 });
 
+// ---------- per-phase eval scopes (re-eval-contract, map C1, C2, T04) ----------
+// Failure modes:
+//  S1 a P4 start counts against P1 (or the reverse)        -> scopes share one counter
+//  S2 the 75 untagged review-eval rows are not P1           -> scopeOf(review-eval) is null
+//  S3 P1 closed at 75: a 76th P1 start runs                  -> evalScopes ignored, fallback cap 120 used
+//  S4 the refusal does not say which scope                    -> reason without scope
+//  S5 a scope tag with a colon (not a file-name character)    -> evalSessionFor uses ':'
+//  S6 an unknown scope silently counts as P1                  -> evalSessionFor / cursorBudget accept any string
+//  C2 100 live starts + 120 P4 starts stay under 240          -> live and eval counted in one budget
+//  T04 the cut: wrong order of fill, wrong divisor, a negative case printed as a fit
+import { EVAL_SCOPES, evalSessionFor, p4Plan, scopeOf } from './budget.mjs';
+
+const scoped = { cursorEvalBudget: 120, cursorHeadroom: 60, evalScopes: { P1: 75, P4: 120, P6: 120 }, shadow: { dailyMax: 6 } };
+const OLD = NOW - 10 * 86_400_000;
+
+test('S2 S5 evalSessionFor gives review-eval for P1 and review-eval-P4 for P4; scopeOf reads them back; no colon', () => {
+  // Breaks when: P1 gets a suffix (the 75 old rows stop counting as P1), or the tag uses a colon.
+  assert.deepEqual(EVAL_SCOPES, ['P1', 'P4', 'P6']);
+  assert.equal(evalSessionFor('P1'), 'review-eval');
+  assert.equal(evalSessionFor('P4'), 'review-eval-P4');
+  assert.equal(evalSessionFor('P4').includes(':'), false);
+  assert.deepEqual(['review-eval', 'review-eval-P4', 'review-eval-P6', 'review-shadow', 'review-eval-P9', 'live', null].map(scopeOf), ['P1', 'P4', 'P6', null, null, null, null]);
+});
+
+test('S6 an unknown scope throws in evalSessionFor and refuses in cursorBudget', () => {
+  // Breaks when: an unknown scope is read as P1 or as a scope with the fallback cap.
+  assert.throws(() => evalSessionFor('P9'), /unknown eval scope/);
+  const r = cursorBudget([], scoped, { now: NOW, scope: 'P9' });
+  assert.deepEqual([r.ok, r.reason], [false, 'unknown-scope']);
+});
+
+test('S1 S2 75 untagged rows are P1; P4 shows 120 free; evalUsed still counts every scope', () => {
+  // Breaks when: scopes share one counter, or evalUsed drops the tagged rows.
+  const entries = [...many(75, 'review-eval', OLD, 'p1'), ...many(3, 'review-eval-P4', OLD, 'p4')];
+  const r = cursorBudget(entries, scoped, { now: NOW, scope: 'P4' });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.scopes.P1, { used: 75, cap: 75, free: 0 });
+  assert.deepEqual(r.scopes.P4, { used: 3, cap: 120, free: 117 });
+  assert.deepEqual(r.scopes.P6, { used: 0, cap: 120, free: 120 });
+  assert.equal(r.evalUsed, 78);
+});
+
+test('S3 S4 P1 is closed at 75: a P1 start is refused with eval-budget and names the scope; a P4 start still runs', () => {
+  // Breaks when: evalScopes is ignored (120 fallback lets a 76th P1 start run), or the refusal has no scope.
+  const entries = many(75, 'review-eval', OLD, 'p1');
+  const p1 = cursorBudget(entries, scoped, { now: NOW });
+  assert.deepEqual([p1.ok, p1.reason, p1.scope], [false, 'eval-budget', 'P1']);
+  assert.equal(cursorBudget(entries, scoped, { now: NOW, scope: 'P4' }).ok, true);
+});
+
+test('S1 a full P4 scope refuses P4 and leaves P6 open', () => {
+  // Breaks when: the refusal reads the total instead of the asked scope.
+  const entries = many(120, 'review-eval-P4', OLD, 'p4');
+  const r = cursorBudget(entries, scoped, { now: NOW, scope: 'P4' });
+  assert.deepEqual([r.ok, r.reason, r.scope], [false, 'eval-budget', 'P4']);
+  assert.equal(cursorBudget(entries, scoped, { now: NOW, scope: 'P6' }).ok, true);
+});
+
+test('C2 with 100 live starts in the week, the P4 scope stops at 120 before the global stop of 240', () => {
+  // Breaks when: live runs count against the eval scope, or the scope cap is above the headroom left by the live cap.
+  const live = many(100, 'live-session', NOW - 86_400_000, 'live');
+  const p4 = (n) => many(n, 'review-eval-P4', NOW - 3_600_000, 'p4');
+  const at119 = cursorBudget([...live, ...p4(119)], scoped, { now: NOW, scope: 'P4' });
+  assert.equal(at119.ok, true);
+  assert.equal(at119.globalUsed, 219);
+  const at120 = cursorBudget([...live, ...p4(120)], scoped, { now: NOW, scope: 'P4' });
+  // The scope refuses first (eval-budget, not headroom): the live cap of 100 plus the P4 scope of 120 stays under the stop of 240.
+  assert.deepEqual([at120.ok, at120.reason, at120.globalUsed], [false, 'eval-budget', 220]);
+});
+
+test('C2 the global stop still wins when other runs fill the week', () => {
+  // Breaks when: a scope with room skips the headroom check.
+  const r = cursorBudget([...many(100, 'live-session', NOW - 86_400_000, 'a'), ...many(140, 'other', NOW - 86_400_000, 'b')], scoped, { now: NOW, scope: 'P4' });
+  assert.deepEqual([r.ok, r.reason], [false, 'headroom']);
+});
+
+test('shadow rows count in no eval scope', () => {
+  // Breaks when: review-shadow is matched as a prefix of an eval scope.
+  const r = cursorBudget(many(6, 'review-shadow', OLD, 'sh'), scoped, { now: NOW, scope: 'P4' });
+  assert.deepEqual([r.scopes.P1.used, r.scopes.P4.used, r.scopes.P6.used, r.evalUsed], [0, 0, 0, 0]);
+});
+
+const P4 = { arms: 2, successRate: 0.81, runs: { controls: 1, holdout: 2, dev: 1, gold: 1 }, controlsMin: 15, reserved: { verifierReplay: 20, winnerEvidence: 32 } };
+const counts = { controls: 0, holdout: 8, dev: 4, gold: 120 };
+
+test('T04 need = ceil(sum of count x arms x runs / 0.81), with the planned 15 controls when the file has none', () => {
+  // Breaks when: the planned control count is dropped, the holdout runs are not 2, or the divisor is missing.
+  const plan = p4Plan({ counts, p4: P4, p4Free: 120 });
+  assert.equal(plan.inputs.controls, 15);
+  assert.equal(plan.inputs.controlsPlanned, true);
+  // (15x1 + 8x2 + 4x1 + 120x1) x 2 / 0.81 = 310 / 0.81 = 382.7 -> 383
+  assert.equal(plan.need, 383);
+  assert.equal(plan.fits, false);
+});
+
+test('T04 the four cut cases: gold targets and the shortfall line (own calc 9/2/-7/-14 calls left)', () => {
+  // Breaks when: the fill order changes, the winner-evidence divisor is not applied in its case, or a negative left is shown as a fit.
+  const plan = p4Plan({ counts, p4: P4, p4Free: 120 });
+  const row = (h, d) => plan.cases.find((c) => c.holdoutRuns === h && c.winnerDivisor === d);
+  const a = row(1, false);
+  assert.deepEqual([a.winnerStarts, a.freeStarts, a.freeCalls, a.controlsCalls, a.holdoutCalls, a.left, a.devTargets, a.goldTargets, a.fits], [32, 68, 55, 30, 16, 9, 4, 0, true]);
+  assert.ok(a.p4abStarts + 20 + a.winnerStarts <= 120);
+  const b = row(1, true);
+  assert.deepEqual([b.winnerStarts, b.freeStarts, b.freeCalls, b.left, b.devTargets, b.goldTargets, b.fits], [40, 60, 48, 2, 1, 0, true]);
+  const c = row(2, false);
+  assert.deepEqual([c.holdoutCalls, c.left, c.fits, c.shortfall, c.devTargets, c.goldTargets], [32, -7, false, 7, 0, 0]);
+  const d = row(2, true);
+  assert.deepEqual([d.left, d.fits, d.shortfall], [-14, false, 14]);
+});
+
+test('T04 a P4 scope with fewer free starts than the reserved ones shows negative free starts and no fit (no clamp hides it)', () => {
+  // Breaks when: freeStarts or freeCalls is clamped at 0, so the shortfall is understated.
+  const plan = p4Plan({ counts, p4: P4, p4Free: 40 });
+  const a = plan.cases.find((c) => c.holdoutRuns === 1 && c.winnerDivisor === false);
+  assert.equal(a.freeStarts, -12);
+  assert.equal(a.fits, false);
+  assert.equal(a.shortfall, 56); // freeCalls floor(-12 x 0.81) = -10; -10 - 30 controls - 16 holdout = -56
+});
+
+test('T04 with enough free starts the gold targets get calls, capped at the gold count', () => {
+  // Breaks when: gold targets are never filled, or the fill passes the target count.
+  const plan = p4Plan({ counts: { controls: 15, holdout: 2, dev: 1, gold: 3 }, p4: P4, p4Free: 400 });
+  const a = plan.cases.find((c) => c.holdoutRuns === 1 && c.winnerDivisor === false);
+  assert.equal(a.goldTargets, 3);
+  assert.equal(a.devTargets, 1);
+  assert.equal(plan.inputs.controlsPlanned, false);
+});
+

@@ -67,7 +67,7 @@ test('score reads --linktype and report prints n, raw agreement, kappa, the NOTE
   writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify(dataset));
   const lt = path.join(dir, 'lt.json');
   writeFileSync(lt, JSON.stringify({ labels: { '5:1': { final: 'same-file' } } }));
-  const cfg = { freeze: { promptSha256: 'P' } };
+  const cfg = { judgeModels: { grok: 'opus' }, freeze: { promptSha256: 'P' } };
   const io = quiet();
   assert.equal(await main(['report', '--dir', dir, '--linktype', lt], { ...io, cfg }), 0);
   const text = io.out.join('\n');
@@ -114,7 +114,7 @@ test('score judges engine runs against the engine freeze, and report prints the 
   writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify({ findings: [{ key: '5:1', pr: 5, sha40, path: 'src/a.mjs', startLine: 10, endLine: 10, severity: 'Major', verdict: 'real', source: 'inline' }], zeroMajorPrs: [] }));
   const lt = path.join(dir, 'lt.json');
   writeFileSync(lt, JSON.stringify({ labels: { '5:1': { final: 'within-hunk' } } }));
-  const cfg = { freeze: { promptSha256: 'OLD' }, engineFreeze: { promptSha256: { full: 'E1', delta: 'D1' } } };
+  const cfg = { judgeModels: { grok: 'opus' }, freeze: { promptSha256: 'OLD' }, engineFreeze: { promptSha256: { full: 'E1', delta: 'D1' } } };
   const io = quiet();
   assert.equal(await main(['report', '--dir', dir, '--linktype', lt], { ...io, cfg }), 0);
   const text = io.out.join('\n');
@@ -155,7 +155,7 @@ test('report prints the body-mode counts and the excluded runs (breaks if the re
   writeFileSync(path.join(dir, 'runs.jsonl'), [row(5, { bodyMode: 'withheld' }), row(6, { bodyMode: 'full' }), row(7, {})].join('\n'));
   writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify({ findings: [], zeroMajorPrs: [] }));
   const io = quiet();
-  assert.equal(await main(['report', '--dir', dir], { ...io, cfg: { freeze: { promptSha256: 'P' } } }), 0);
+  assert.equal(await main(['report', '--dir', dir], { ...io, cfg: { judgeModels: { grok: 'opus' }, freeze: { promptSha256: 'P' } } }), 0);
   assert.match(io.out.join('\n'), /Runs, 3 \(1 excluded\) \| body mode: withheld 1, full 1, unknown 1/);
 });
 
@@ -168,8 +168,200 @@ test('score checks each run against the freeze of its own reviewer: engine and c
   const runs = [row(5, { reviewer: 'engine', promptSha256: 'E1' }), row(6, { reviewer: 'cursor-review', promptSha256: 'OLD' }), row(7, { promptSha256: 'E1' }), row(8, { reviewer: 'engine', promptSha256: 'STALE' })];
   writeFileSync(path.join(dir, 'runs.jsonl'), `${runs.map((r) => JSON.stringify(r)).join('\n')}\n`);
   writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify({ findings: [], zeroMajorPrs: [] }));
-  const cfg = { freeze: { promptSha256: 'OLD' }, engineFreeze: { promptSha256: { full: 'E1', delta: 'D1' } } };
+  const cfg = { judgeModels: { grok: 'opus' }, freeze: { promptSha256: 'OLD' }, engineFreeze: { promptSha256: { full: 'E1', delta: 'D1' } } };
   const io = quiet();
   assert.equal(await main(['score', '--dir', dir, '--linktype', path.join(dir, 'none.json')], { ...io, cfg }), 0);
   assert.equal(JSON.parse(io.out.join('\n')).excludedRuns, 1, 'only the engine row with a stale hash leaves; the row with no reviewer uses the fallback freeze');
+});
+
+// ---------- eval contract (re-eval-contract): budget report, judge family, versioned freeze, holdout spend, config keys ----------
+// Failure modes:
+//  K1 the dead key judgeModel ("sonnet") comes back in config.json      -> no test reads the live file
+//  K2 the reserve or suites list ships with a PR number in it          -> a list filled by hand
+//  K3 P1 is not closed at 75 in the live config                        -> evalScopes missing
+//  J1 a reviewer family with no judgeModels entry falls back to a judge -> judgeModelFor returns a default
+//  J2 a judge of the reviewer's own family is accepted                 -> no family compare
+//  J3 score runs a run whose reviewer family has no judge              -> score does not call judgeModelFor
+//  B1 the budget report drops a scope, an input source or a cut case   -> one line missing
+//  B2 the budget report writes something                               -> it is not read only
+//  H1 plain score or report writes the holdout-spend ledger            -> write not behind --holdout-spend
+//  H2 a spend line carries a PR number                                 -> the run row is copied
+//  H3 a run of a stale (not frozen) arm writes a spend line           -> no frozen check
+//  F1 freeze --engine --prompt-version v2 writes engineFreeze          -> the old path runs
+//  F2 score mixes two engine prompt versions in one card               -> one frozen hash for all engine rows
+import { existsSync } from 'node:fs';
+import { familyOfModel, judgeModelFor, loadConfig } from './config.mjs';
+
+test('K1 K2 K3 the live config.json: no judgeModel key, well-formed reserve and suites, P1 closed at 75, a valid judge for grok', () => {
+  // Breaks when: the dead key comes back, a list entry is malformed, or a scope cap changes.
+  // The list contents are not pinned: re-holdout-rotate owns config.json next and moves PRs between them.
+  const cfg = loadConfig();
+  assert.equal(Object.hasOwn(cfg, 'judgeModel'), false);
+  assert.ok(Array.isArray(cfg.reserve) && cfg.reserve.every((r) => Number.isInteger(r.pr) && Object.hasOwn(r, 'answerKeySource')));
+  assert.deepEqual(Object.keys(cfg.suites).sort(), ['capability', 'regression']);
+  assert.ok(Object.values(cfg.suites).every((l) => Array.isArray(l) && l.every(Number.isInteger)));
+  assert.deepEqual(cfg.evalScopes, { P1: 75, P4: 120, P6: 120 });
+  assert.equal(familyOfModel(judgeModelFor(cfg, 'grok')), 'claude');
+  assert.equal(cfg.p4.controlsMin, 15);
+});
+
+test('J1 J2 judgeModelFor refuses a family with no entry and a judge of the same family; familyOfModel reads the model name', () => {
+  // Breaks when: a missing family falls back to a default judge, or a Claude judge is accepted for a Claude reviewer.
+  assert.equal(judgeModelFor({ judgeModels: { grok: 'opus' } }, 'grok'), 'opus');
+  assert.throws(() => judgeModelFor({ judgeModels: { grok: 'opus' } }, 'claude'), (e) => e.code === 'NO_JUDGE');
+  assert.throws(() => judgeModelFor({}, 'grok'), (e) => e.code === 'NO_JUDGE');
+  assert.throws(() => judgeModelFor({ judgeModels: { claude: 'sonnet' } }, 'claude'), (e) => e.code === 'SAME_FAMILY');
+  assert.throws(() => judgeModelFor({ judgeModels: { grok: 'grok4x' } }, 'grok'), (e) => e.code === 'UNKNOWN_FAMILY');
+  assert.deepEqual(['opus', 'claude-opus-5-5', 'sonnet', 'grok-4.7-high', 'composer-2.5', 'x'].map(familyOfModel), ['claude', 'claude', 'claude', 'grok', 'composer', null]);
+});
+
+const scoreDir = (rows) => {
+  const dir = tmp();
+  const find = path.join(dir, 'findings.json');
+  writeFileSync(find, JSON.stringify({ findings: [] }));
+  const runs = rows.map((r, i) => ({ set: 'holdout', pr: 5 + i, round: 1, sha40: 'c'.repeat(40), status: 'ok', ts: '2026-11-13T00:00:00Z', findingsPath: find, ...r }));
+  writeFileSync(path.join(dir, 'runs.jsonl'), `${runs.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  writeFileSync(path.join(dir, 'dataset-resolved.json'), JSON.stringify({ findings: [], zeroMajorPrs: [] }));
+  return dir;
+};
+const freezeCfg = { judgeModels: { grok: 'opus' }, freeze: { promptSha256: 'OLD' }, engineFreeze: { promptSha256: { full: 'E1' } }, engineFreezes: { v2: { promptSha256: { full: 'E2' } } } };
+
+test('J3 score refuses (exit 2) a run whose reviewer family has no judge entry', async () => {
+  // Breaks when: scoreCmd does not check the judge of each reviewer family.
+  const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }, { reviewer: 'claude-backend', promptSha256: 'C1' }]);
+  const io = quiet();
+  assert.equal(await main(['score', '--dir', dir], { ...io, cfg: freezeCfg }), 2);
+  assert.match(io.out.join('\n'), /no judge model for reviewer family/);
+});
+
+test('F2 score refuses engine runs of two prompt versions in one card; one version scores against its own freeze', async () => {
+  // Breaks when: all engine rows are judged against engineFreeze, or two versions mix in one scorecard.
+  const mixed = scoreDir([{ reviewer: 'engine', promptVersion: 'v1', promptSha256: 'E1' }, { reviewer: 'engine', promptVersion: 'v2', promptSha256: 'E2' }]);
+  assert.equal(await main(['score', '--dir', mixed], { ...quiet(), cfg: freezeCfg }), 2);
+  const v2 = scoreDir([{ reviewer: 'engine', promptVersion: 'v2', promptSha256: 'E2' }]);
+  const io = quiet();
+  assert.equal(await main(['score', '--dir', v2], { ...io, cfg: freezeCfg }), 0);
+  assert.equal(JSON.parse(io.out.join('\n')).excludedRuns, 0);
+});
+
+test('score refuses engine runs of a prompt version with no freeze (they never count as clean holdout)', async () => {
+  // Breaks when: a null frozen hash makes hashStale false and unfrozen rows score as holdout.
+  const dir = scoreDir([{ reviewer: 'engine', promptVersion: 'v2', promptSha256: 'X' }]);
+  const io = quiet();
+  assert.equal(await main(['score', '--dir', dir], { ...io, cfg: { ...freezeCfg, engineFreezes: {} } }), 2);
+  assert.match(io.out.join('\n'), /no engine freeze for v2/);
+});
+
+test('single replay: a reserve PR is refused and runs nothing; the default set comes from config (dev here), not holdout', async () => {
+  // Breaks when: replay --pr skips setOf, so a reserve PR is replayed and scored as holdout.
+  const calls = [];
+  const cfg = { holdoutExclude: [217], reserve: [{ pr: 300, answerKeySource: null }] };
+  const io = { ...quiet(), cfg, replayRun: async (a) => { calls.push(a); return { exit: 0 }; } };
+  assert.equal(await main(['replay', '--pr', '300', '--round', '1'], io), 2);
+  assert.equal(calls.length, 0);
+  assert.equal(await main(['replay', '--pr', '217', '--round', '1'], io), 0);
+  assert.equal(await main(['replay', '--pr', '5', '--round', '1'], io), 0);
+  assert.deepEqual(calls.map((c) => c.set), ['dev', 'holdout']);
+});
+
+test('holdout spend counts only ok runs that score keeps: not a failed build, a full-body leak or incomplete coverage', async () => {
+  // Breaks when: rows that score excludes (or that made no model call) are counted as holdout spend.
+  const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }, { reviewer: 'engine', promptSha256: 'E1', status: 'tree_unbuildable' }, { reviewer: 'engine', promptSha256: 'E1', bodyMode: 'full' }, { reviewer: 'engine', promptSha256: 'E1', coverageComplete: false }]);
+  const ledger = path.join(tmp(), 'h.jsonl');
+  assert.equal(await main(['score', '--dir', dir, '--holdout-spend'], { ...quiet(), cfg: freezeCfg, spendLedger: ledger }), 0);
+  assert.equal(JSON.parse(readFileSync(ledger, 'utf8').trim()).holdoutRuns, 1);
+});
+
+test('an invalid --scope exits 2 before any write (no --out card, no spend line)', async () => {
+  // Breaks when: the scope is checked after the --out scorecard is written.
+  const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }]);
+  const out = path.join(tmp(), 'card.json');
+  const ledger = path.join(tmp(), 'h.jsonl');
+  assert.equal(await main(['score', '--dir', dir, '--out', out, '--holdout-spend', '--scope', 'P9'], { ...quiet(), cfg: freezeCfg, spendLedger: ledger }), 2);
+  assert.deepEqual([existsSync(out), existsSync(ledger)], [false, false]);
+});
+
+test('H1 H2 H3 score --holdout-spend writes one line per frozen arm, no PR id; plain score and report write nothing', async () => {
+  // Breaks when: the write is not behind the flag, a PR number is copied, or a stale arm is counted.
+  const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }, { reviewer: 'engine', promptSha256: 'E1', set: 'dev' }, { reviewer: 'engine', promptSha256: 'E1' }]);
+  const ledger = path.join(tmp(), 'spend', 'holdout-spend.jsonl');
+  assert.equal(await main(['score', '--dir', dir], { ...quiet(), cfg: freezeCfg, spendLedger: ledger }), 0);
+  assert.equal(await main(['report', '--dir', dir, '--holdout-spend'], { ...quiet(), cfg: freezeCfg, spendLedger: ledger }), 0);
+  assert.equal(existsSync(ledger), false);
+  assert.equal(await main(['score', '--dir', dir, '--holdout-spend'], { ...quiet(), cfg: freezeCfg, spendLedger: ledger, now: () => Date.parse('2026-11-13T20:00:00Z') }), 0);
+  const lines = readFileSync(ledger, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(lines.length, 1);
+  assert.deepEqual(lines[0], { ts: '2026-11-13T20:00:00.000Z', reviewer: 'engine', promptVersion: 'v1', promptSha256: 'E1', holdoutRuns: 2, scope: 'P4' });
+  const stale = scoreDir([{ reviewer: 'engine', promptSha256: 'STALE' }]);
+  const ledger2 = path.join(tmp(), 'h2.jsonl');
+  await main(['score', '--dir', stale, '--holdout-spend'], { ...quiet(), cfg: freezeCfg, spendLedger: ledger2 });
+  assert.equal(existsSync(ledger2), false);
+});
+
+test('F1 freeze --engine --prompt-version v2 writes engineFreezes.v2 and leaves engineFreeze; an unknown version exits 2', async () => {
+  // Breaks when: the flag is ignored (engineFreeze is overwritten with the v2 hash) or v9 is accepted.
+  const file = path.join(tmp(), 'config.json');
+  writeFileSync(file, JSON.stringify({ engineFreeze: { promptSha256: { full: 'KEEP' } } }));
+  const root = fileURLToPath(new URL('../../..', import.meta.url));
+  assert.equal(await main(['freeze', '--engine', '--prompt-version', 'v2', '--config', file, '--root', root], quiet()), 0);
+  const { buildEnginePrompt } = await import('../../github/local-review/prompt.mjs');
+  const cfg = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(cfg.engineFreezes.v2.promptSha256.full, buildEnginePrompt({ mode: 'full', promptVersion: 'v2' }).promptSha256);
+  assert.equal(cfg.engineFreeze.promptSha256.full, 'KEEP');
+  assert.equal(await main(['freeze', '--engine', '--prompt-version', 'v9', '--config', file, '--root', root], quiet()), 2);
+});
+
+const budgetFixture = () => {
+  const dir = tmp();
+  const ledger = path.join(dir, 'ledger.jsonl');
+  const row = (i, sessionId) => JSON.stringify({ ts: '2026-11-03T12:00:00Z', phase: 'start', id: `${sessionId}-${i}`, ref: 'r', sessionId });
+  writeFileSync(ledger, `${[...Array.from({ length: 75 }, (_, i) => row(i, 'review-eval')), ...Array.from({ length: 4 }, (_, i) => row(i, 'review-shadow'))].join('\n')}\n`);
+  const ds = path.join(dir, 'ds.json');
+  const major = (pr) => ({ pr, severity: 'Major', verdict: 'real', round: 1, path: 'a.mjs' });
+  writeFileSync(ds, JSON.stringify({ prs: [], findings: [...[1, 2, 3, 4, 5, 6, 7, 8].map(major), ...[217, 222, 225, 238].map(major)] }));
+  const goldDir = path.join(dir, 'gold');
+  const live = loadConfig();
+  const cfg = { cursorEvalBudget: 120, cursorHeadroom: 60, evalScopes: { P1: 75, P4: 120, P6: 120 }, p4: live.p4, holdoutExclude: [217, 222, 225, 238], reserve: [], suites: { regression: [1, 2, 217], capability: [3] } };
+  return { ledger, ds, goldDir, cfg };
+};
+
+test('B1 B2 budget --json on a fixture ledger: P1 75 used and closed, P4 120 free, inputs with their sources, four cut cases, reserve count', async () => {
+  // Breaks when: a scope, an input source, a cut case or the reserve count is missing, or the verb writes a file.
+  const f = budgetFixture();
+  const io = quiet();
+  const before = readFileSync(f.ledger, 'utf8');
+  const spend = path.join(tmp(), 'spend.jsonl');
+  assert.equal(await main(['budget', '--ledger', f.ledger, '--dataset', f.ds, '--gold-dir', f.goldDir, '--json'], { ...io, cfg: f.cfg, spendLedger: spend, now: () => Date.parse('2026-11-13T20:00:00Z') }), 0);
+  assert.equal(readFileSync(f.ledger, 'utf8'), before);
+  assert.equal(existsSync(spend), false);
+  const r = JSON.parse(io.out.join('\n'));
+  assert.deepEqual(r.scopes.P1, { used: 75, cap: 75, free: 0 });
+  assert.deepEqual(r.scopes.P4, { used: 0, cap: 120, free: 120 });
+  assert.deepEqual(r.inputs.sources, { holdout: 'dataset + config.json holdoutExclude', dev: 'dataset + config.json holdoutExclude', gold: 'gold loader', controls: 'planned (config.json p4.controlsMin; clean-controls.json has 0)' });
+  assert.deepEqual([r.inputs.holdout, r.inputs.dev, r.inputs.gold, r.inputs.controls], [8, 4, 0, 15]);
+  assert.equal(r.cases.length, 4);
+  assert.deepEqual(r.reserve, { total: 0, noSource: 0, bySource: {} });
+  assert.equal(existsSync(f.goldDir), false);
+});
+
+test('B1 budget text report: each case states the gold targets that get a call, and a case that does not fit states the shortfall', async () => {
+  // Breaks when: the text drops the gold line or prints a negative case as a fit.
+  const f = budgetFixture();
+  const io = quiet();
+  assert.equal(await main(['budget', '--ledger', f.ledger, '--dataset', f.ds, '--gold-dir', f.goldDir], { ...io, cfg: f.cfg, now: () => Date.parse('2026-11-13T20:00:00Z') }), 0);
+  const text = io.out.join('\n');
+  assert.match(text, /P1 75 used of 75 \(closed\)/);
+  assert.match(text, /P4 0 used of 120, 120 free/);
+  assert.match(text, /holdout 1 run per arm, winner evidence 32 starts: .*gold targets with a call 0 of 0/);
+  assert.match(text, /holdout 2 runs per arm, winner evidence 32 starts: DOES NOT FIT, short by 7 engine calls/);
+  assert.match(text, /holdout 2 runs per arm, winner evidence 40 starts: DOES NOT FIT, short by 14 engine calls/);
+  assert.match(text, /reserve PRs 0, with no answer-key source 0/);
+  assert.match(text, /dataset PRs with no suite in config\.json: 8 of 12 \(regression 3, capability 1\)/);
+});
+
+test('budget without --dataset exits 2 and names the flag', async () => {
+  // Breaks when: a missing dataset gives counts of 0 that read as real.
+  const io = quiet();
+  assert.equal(await main(['budget', '--ledger', path.join(tmp(), 'l.jsonl')], { ...io, cfg: loadConfig() }), 2);
+  assert.match(io.out.join('\n'), /--dataset/);
 });
