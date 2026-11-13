@@ -7,10 +7,10 @@
 //  judge agreement gate needs 30+ pairs and 80%      -> pass at n<30
 //  every section-4 field is present
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import { wilson } from './bootstrap.mjs';
 import { pairId } from './labels.mjs';
-import { armKeyOf, evaluateRuns, joinReplicates, scorecard } from './score.mjs';
+import { armKeyOf, evaluateRuns, joinReplicates, MIN_CELL, scorecard } from './score.mjs';
 
 const m = (key, pr, set, crSev, engSev, over = {}) => ({ key, pr, set, crSev, crVerdict: 'real', crSource: 'inline', engSev, ...over });
 const run = (pr, set, findings, over = {}) => ({ set, pr, round: 1, status: 'ok', promptSha256: 'P0', durationMs: 1000, usage: { inputTokens: 10, outputTokens: 5 }, findings, ...over });
@@ -384,9 +384,7 @@ test('two replicates of one arm on one round both survive; a re-run of the same 
   const ev = evaluateRuns({ runs: rows, dataset: [dsMajor('9002:1', 9002)], readFindings: hitRead });
   assert.deepEqual(ev.runs.map((r) => r.replicate).sort(), [1, 2]);
   assert.deepEqual(ev.matches.map((x) => x.engSev), ['major', 'major'], 'the older miss of replicate 1 is gone');
-  for (const bad of [0, 1.5, '2', null, undefined]) {
-    assert.equal(evaluateRuns({ runs: [armRow(9002, { replicate: bad })], dataset: [], readFindings: hitRead }).runs[0].replicate, 1, String(bad));
-  }
+  assert.equal(evaluateRuns({ runs: [armRow(9002, { replicate: undefined })], dataset: [], readFindings: hitRead }).runs[0].replicate, 1, 'only an undefined replicate becomes 1');
 });
 
 test('evaluateRuns puts arm and replicate on each output run and each match row, incomplete runs too (breaks if either row type loses the field)', () => {
@@ -405,13 +403,13 @@ test('evaluateRuns returns attempts per arm: every row, the newest rows, failed 
     armRow(9005, { reviewer: 'cursor-review', status: 'ok', ts: t(1) }),
   ];
   const { attempts } = evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead });
-  assert.deepEqual(attempts['engine|v1|-|-'], { attempts: 5, newest: 3, failed: 1, failedThenOk: 1 });
-  assert.deepEqual(attempts['cursor-review|-|-|-'], { attempts: 1, newest: 1, failed: 0, failedThenOk: 0 });
+  assert.deepEqual(attempts['engine|v1|-|-'], { attempts: 5, newest: 3, failed: 1, failedThenOk: 1, invalidReplicate: 0 });
+  assert.deepEqual(attempts['cursor-review|-|-|-'], { attempts: 1, newest: 1, failed: 0, failedThenOk: 0, invalidReplicate: 0 });
 });
 
-test('joinReplicates joins folders and gives a row with no valid replicate the folder number; a valid replicate stays (breaks if the folder index is off by one or overwrites a set replicate)', () => {
+test('joinReplicates joins folders and gives a row with an undefined replicate the folder number; a set replicate stays, valid or not (breaks if the folder index is off by one or overwrites a set replicate)', () => {
   const joined = joinReplicates([[{ pr: 9008 }, { pr: 9009, replicate: 5 }], [{ pr: 9008, replicate: 0 }, { pr: 9010 }]]);
-  assert.deepEqual(joined.map((r) => [r.pr, r.replicate]), [[9008, 1], [9009, 5], [9008, 2], [9010, 2]]);
+  assert.deepEqual(joined.map((r) => [r.pr, r.replicate]), [[9008, 1], [9009, 5], [9008, 0], [9010, 2]], 'a replicate 0 is not undefined: it stays and is invalid');
   assert.deepEqual(joinReplicates([]), []);
 });
 
@@ -419,7 +417,7 @@ test('attempts: an older failed row that sits on a later line still counts as a 
   const rows = [armRow(9011, { reviewer: 'engine', status: 'ok', ts: '2026-11-03T02:00:00Z' }), armRow(9011, { reviewer: 'engine', status: 'failed', ts: '2026-11-03T01:00:00Z' })];
   const ev = evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead });
   assert.equal(ev.runs.length, 1);
-  assert.deepEqual(ev.attempts['engine|v1|-|-'], { attempts: 2, newest: 1, failed: 0, failedThenOk: 1 });
+  assert.deepEqual(ev.attempts['engine|v1|-|-'], { attempts: 2, newest: 1, failed: 0, failedThenOk: 1, invalidReplicate: 0 });
 });
 
 // ---------- re-score-paired step 2: multi-arm card ----------
@@ -667,17 +665,229 @@ test('a card with two arms sets the pooled recall, precision and cost.grok keys 
   assert.deepEqual(card.bodyModes, { withheld: 2, full: 1, unknown: 6 });
 });
 
-test('each perArm[k] holds the same numbers as the card of an input with only arm k; the arms differ (breaks if an arm reads rows of another arm)', () => {
+/**
+ * The perArm card of the second arm of twoArmInput, as a fixed object (R6). It was pasted from one run, then checked by hand against the fixture (the checks follow), so a later change shows as a diff:
+ * the arm has the runs of PRs 9101 and 9102 (cursor-review, frozen hash PC) and the first 3 match rows with no engine hit, so recall is 0 of 3 (2 PRs, 0 hit);
+ * the 3 misses hold 1 withdrawn and 2 with no list; its 3 posted findings are 2 real (one Dave label, one Claude label) and 1 noise; cost is 2 runs, 1000 + 2500 ms.
+ * There is no prFalseAlarm.prs: a perArm card prints no PR id.
+ */
+const OTHER_CARD = {
+  "schema": 1,
+  "perMajorRecall": {
+    "strict": {
+      "found": 0,
+      "total": 3,
+      "value": 0
+    },
+    "lenient": {
+      "found": 0,
+      "total": 3,
+      "value": 0
+    },
+    "strictSameIssue": {
+      "found": 0,
+      "total": 3,
+      "value": 0
+    }
+  },
+  "perPrRecall": {
+    "found": 0,
+    "total": 2,
+    "value": 0
+  },
+  "funnel": {
+    "runs": 1,
+    "raw": 4,
+    "withdrawn": 1,
+    "dropped": {
+      "total": 2,
+      "byReason": {
+        "no-file": 2
+      }
+    },
+    "posted": 2
+  },
+  "withdrawnMisses": {
+    "misses": 3,
+    "inWithdrawn": 1,
+    "noData": 2
+  },
+  "perClassRecall": {
+    "holdout": {
+      "within-hunk": {
+        "found": 0,
+        "total": 1,
+        "value": 0
+      },
+      "same-file": {
+        "found": 0,
+        "total": 2,
+        "value": 0
+      }
+    },
+    "dev": {}
+  },
+  "prFalseAlarm": {
+    "count": 0,
+    "total": 0
+  },
+  "precision": {
+    "real": 2,
+    "noise": 1,
+    "unverified": 0,
+    "posted": 3,
+    "value": 0.6666666666666666,
+    "range": [
+      0.6666666666666666,
+      0.6666666666666666
+    ],
+    "labelers": {
+      "dave": 1,
+      "claude": 2
+    }
+  },
+  "recall": {
+    "inDiff": {
+      "found": 0,
+      "total": 3,
+      "value": 0
+    },
+    "overall": {
+      "found": 0,
+      "total": 3,
+      "value": 0
+    }
+  },
+  "devRecall": {
+    "strict": {
+      "found": 0,
+      "total": 0,
+      "value": null
+    },
+    "lenient": {
+      "found": 0,
+      "total": 0,
+      "value": null
+    }
+  },
+  "escapeBaseline": {
+    "laterRound": 2,
+    "postMerge": 1
+  },
+  "bakeoffCrosswalk": {
+    "mapped": 2,
+    "letters": [
+      "a",
+      "b"
+    ]
+  },
+  "cost": {
+    "grok": {
+      "runs": 2,
+      "durationMs": 3500,
+      "usage": {
+        "inputTokens": 20,
+        "outputTokens": 10
+      }
+    },
+    "headless": {
+      "runs": 3,
+      "costUsd": 1.25,
+      "usage": {
+        "inputTokens": 100
+      }
+    }
+  },
+  "judgeAgreement": {
+    "n": 2,
+    "agree": 1,
+    "value": 0.5,
+    "kappa": 0,
+    "gate": 0.8,
+    "kappaGate": 0.6,
+    "status": "NOTE",
+    "pass": false
+  },
+  "excludedRuns": 0,
+  "bodyModes": {
+    "withheld": 1,
+    "full": 0,
+    "unknown": 1
+  },
+  "perSuite": {
+    "holdout": {
+      "unassigned": {
+        "found": 0,
+        "total": 3,
+        "value": null
+      }
+    },
+    "dev": {}
+  },
+  "perSource": {
+    "holdout": {
+      "CR": {
+        "found": 0,
+        "total": 3,
+        "value": null
+      }
+    },
+    "dev": {}
+  },
+  "goldARecall": {
+    "holdout": {
+      "found": 0,
+      "total": 0,
+      "value": null,
+      "ci": {
+        "lo": null,
+        "hi": null
+      }
+    },
+    "dev": {
+      "found": 0,
+      "total": 0,
+      "value": null,
+      "ci": {
+        "lo": null,
+        "hi": null
+      }
+    }
+  },
+  "cleanFalseMajor": {
+    "holdout": {
+      "controls": 0,
+      "falseMajors": 0,
+      "runs": 0,
+      "perPr": null,
+      "lo": null,
+      "hi": null
+    },
+    "dev": {
+      "controls": 0,
+      "falseMajors": 0,
+      "runs": 0,
+      "perPr": null,
+      "lo": null,
+      "hi": null
+    }
+  }
+};
+
+test('each perArm[k] holds the same numbers as the card of an input with only arm k; the arms differ; the second arm is pinned to a fixed card (breaks if an arm reads rows of another arm, or a perArm number moves)', () => {
   const input = twoArmInput();
   const card = scorecard(input);
   for (const arm of card.arms) {
     const solo = scorecard(onlyArm(input, arm));
     assert.deepEqual(solo.arms, [arm]);
-    for (const key of Object.keys(card.perArm[arm])) assert.deepEqual(card.perArm[arm][key], solo[key], `${arm} ${key}`);
+    for (const key of Object.keys(card.perArm[arm]).filter((k) => k !== 'prFalseAlarm')) assert.deepEqual(card.perArm[arm][key], solo[key], );
+    assert.deepEqual(card.perArm[arm].prFalseAlarm, { count: solo.prFalseAlarm.count, total: solo.prFalseAlarm.total }, );
     assert.ok('perMajorRecall' in card.perArm[arm] && 'cost' in card.perArm[arm]);
   }
+  assert.deepEqual(card.perArm[OTHER_ARM], OTHER_CARD);
   assert.deepEqual(card.perArm[ENGINE_ARM].perMajorRecall, BASE_CARD.perMajorRecall);
-  assert.notDeepEqual(card.perArm[OTHER_ARM].perMajorRecall, card.perArm[ENGINE_ARM].perMajorRecall);
+  for (const key of Object.keys(BASE_CARD).filter((k) => k !== 'prFalseAlarm')) assert.deepEqual(card.perArm[ENGINE_ARM][key], BASE_CARD[key], key);
+  assert.deepEqual(card.perArm[ENGINE_ARM].prFalseAlarm, { count: 1, total: 1 });
 });
 
 // ---------- re-score-paired step 4: the paired bar and the gold rows ----------
@@ -700,26 +910,46 @@ function pairedInput(extra = {}) {
   return { sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9201]), ...armRuns(CAND_ARM, [9201])], matches, suites, compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 400, seed: 7, ...extra };
 }
 
+/**
+ * Each item of the input becomes k items: the key gets a suffix, the PR (so the cluster) stays. The mean, d and the bounds stay as they were; only n grows.
+ * It lifts a small fixture over the cut of 20 real Majors (MIN_CELL).
+ */
+const fan = (input, k) => {
+  const copies = (key) => Array.from({ length: k }, (_, i) => `${key}~${i}`);
+  const spread = (map) => Object.fromEntries(Object.entries(map ?? {}).flatMap(([key, v]) => copies(key).map((c) => [c, v])));
+  return { ...input, matches: input.matches.flatMap((x) => copies(x.key).map((key) => ({ ...x, key }))), suites: spread(input.suites), sources: spread(input.sources) };
+};
+
 test('pairedBar: per suite delta in points, paired and unpaired counts, d and nNeeded; status is always NOTE and unassigned never gates (breaks if a mean, a count or a formula changes)', () => {
-  const bar = scorecard(pairedInput()).pairedBar.holdout;
+  const bar = scorecard(fan(pairedInput(), 7)).pairedBar.holdout;
   assert.deepEqual([bar.status, bar.baseline, bar.candidate], ['NOTE', BASE_ARM, CAND_ARM]);
   const reg = bar.regression;
-  assert.deepEqual([reg.delta, reg.n, reg.unpaired, reg.d, reg.nNeeded], [-12.5, 4, 1, 0.5, 769]);
+  assert.deepEqual([reg.delta, reg.n, reg.unpaired, reg.d, reg.nNeeded], [-12.5, 28, 7, 0.5, 769]);
   assert.ok(reg.lo <= reg.delta && reg.delta <= reg.hi);
   assert.equal(reg.wouldBe, 'FAIL', 'delta -12.5 with a lower bound far under -5');
   const cap = bar.capability;
-  assert.deepEqual([cap.delta, cap.n, cap.unpaired], [50, 3, 0]);
+  assert.deepEqual([cap.delta, cap.n, cap.unpaired], [50, 21, 0]);
   assert.ok(Math.abs(cap.d - 2 / 3) < 1e-12);
   assert.equal(cap.nNeeded, 7);
-  assert.equal(cap.wouldBe, 'FAIL', 'delta 50 on 3 items: the lower bound reaches 0');
-  assert.deepEqual([bar.unassigned.n, bar.unassigned.delta, bar.unassigned.wouldBe], [1, 0, null]);
+  assert.equal(cap.wouldBe, 'FAIL', 'delta 50 on 3 clusters: the lower bound reaches 0');
+  assert.deepEqual([bar.unassigned.n, bar.unassigned.delta, bar.unassigned.wouldBe], [7, null, null], '7 items: under the cut, and unassigned never gates');
+});
+
+test('R1 pairedBar under 20 Majors prints counts only: delta, lo, hi, d and wouldBe are null; n, unpaired, nNeeded, B and used still print (breaks if a number prints under the cut, or nNeeded is dropped with it)', () => {
+  const bar = scorecard(pairedInput()).pairedBar.holdout;
+  const reg = bar.regression;
+  assert.deepEqual([reg.delta, reg.lo, reg.hi, reg.d, reg.wouldBe], [null, null, null, null, null]);
+  assert.deepEqual([reg.n, reg.unpaired, reg.nNeeded, reg.B], [4, 1, 769, 400]);
+  assert.ok(Number.isInteger(reg.used) && reg.used > 0, 'used still prints');
+  assert.deepEqual([bar.capability.delta, bar.capability.wouldBe, bar.capability.n, bar.capability.nNeeded], [null, null, 3, 7]);
+  assert.deepEqual([bar.unassigned.delta, bar.unassigned.wouldBe, bar.unassigned.n], [null, null, 1]);
 });
 
 test('pairedBar: no compare gives null; a capability delta of 0 or less has no nNeeded (breaks if the bar runs without a compare or divides by a zero delta)', () => {
   const input = pairedInput();
   assert.equal(scorecard({ ...input, compare: undefined }).pairedBar, null);
   assert.equal(scorecard({ ...input, compare: undefined }).lostCaughtMajors, null);
-  const swapped = scorecard({ ...input, compare: { baseline: CAND_ARM, candidate: BASE_ARM } }).pairedBar.holdout;
+  const swapped = scorecard({ ...fan(input, 7), compare: { baseline: CAND_ARM, candidate: BASE_ARM } }).pairedBar.holdout;
   assert.deepEqual([swapped.capability.delta, swapped.capability.nNeeded, swapped.regression.delta], [-50, null, 12.5]);
 });
 
@@ -732,14 +962,16 @@ function oneClusterBar(suite, items, clusters = ['x', 'y']) {
 }
 
 test('pairedBar wouldBe gives the literal PASS or FAIL at each gate edge: regression passes above -5 and fails at -5 exactly; capability passes above 0 and fails at 0 (breaks if the gate moves, reads delta instead of lo, says a fixed word, or uses >= )', () => {
+  // Two clusters of 10 items each: 20 items, the cut of MIN_CELL. A repeated list keeps the mean.
+  const times = (k, items) => Array.from({ length: k }, () => items).flat();
   const idle = [[[0, 0, 0, 0], [0, 0, 0, 0]]];
-  const regPass = oneClusterBar('regression', [[[1, 1], [1, 1]], [[0, 0], [0, 0]]]);
+  const regPass = oneClusterBar('regression', times(5, [[[1, 1], [1, 1]], [[0, 0], [0, 0]]]));
   assert.deepEqual([regPass.delta, regPass.lo, regPass.wouldBe], [0, 0, 'PASS'], 'no change at all: the lower bound 0 is above -5');
-  const capPass = oneClusterBar('capability', [[[0, 0], [1, 1]], [[0, 0], [1, 1]]]);
+  const capPass = oneClusterBar('capability', times(5, [[[0, 0], [1, 1]], [[0, 0], [1, 1]]]));
   assert.deepEqual([capPass.delta, capPass.lo, capPass.wouldBe], [100, 100, 'PASS']);
-  const regEdge = oneClusterBar('regression', [[[1, 0, 0, 0], [0, 0, 0, 0]], ...idle, ...idle, ...idle, ...idle]);
+  const regEdge = oneClusterBar('regression', times(2, [[[1, 0, 0, 0], [0, 0, 0, 0]], ...idle, ...idle, ...idle, ...idle]));
   assert.deepEqual([regEdge.delta, regEdge.lo, regEdge.wouldBe], [-5, -5, 'FAIL'], 'the lower bound is exactly -5: not above it');
-  const capEdge = oneClusterBar('capability', [[[1, 0], [1, 0]], [[0, 0], [0, 0]]]);
+  const capEdge = oneClusterBar('capability', times(5, [[[1, 0], [1, 0]], [[0, 0], [0, 0]]]));
   assert.deepEqual([capEdge.delta, capEdge.lo, capEdge.wouldBe, capEdge.nNeeded], [0, 0, 'FAIL', null], 'delta 0: lo is exactly 0, not above it; no nNeeded at a delta of 0');
 });
 
@@ -755,13 +987,14 @@ test('pairedBar wouldBe reads the lower bound, not delta: a regression suite wit
 });
 
 test('pairedBar passes B and seed to the bootstrap: B 1 gives one resample so lo === hi; one seed repeats and other seeds differ (breaks if B or seed is ignored)', () => {
-  const input = pairedInput();
+  const input = fan(pairedInput(), 7);
   const bounds = (extra) => { const r = scorecard({ ...input, ...extra }).pairedBar.holdout.regression; return [r.lo, r.hi]; };
   const one = bounds({ B: 1, seed: 1 });
   assert.equal(one[0], one[1], 'B 1: a single resample');
   const [lo2000, hi2000] = bounds({ B: 2000, seed: 1 });
   assert.ok(lo2000 < hi2000);
   assert.deepEqual(bounds({ B: 3, seed: 4 }), bounds({ B: 3, seed: 4 }));
+  assert.ok(one[0] !== null, 'the cell has 28 items: it prints bounds');
   const seen = new Set([1, 2, 3, 4, 5, 6, 7, 8].map((seed) => bounds({ B: 3, seed }).join()));
   assert.ok(seen.size > 1, 'some seed changes the bounds');
 });
@@ -769,13 +1002,13 @@ test('pairedBar passes B and seed to the bootstrap: B 1 gives one resample so lo
 test('pairedBar: a catch whose pair a label calls a different issue is a miss (breaks if the sameIssue rule is dropped)', () => {
   const rows = [...itemRows(BASE_ARM, 'r1', 9201, [1, 1]), ...itemRows(CAND_ARM, 'r1', 9201, [1, 1], { engPairId: 'px' })];
   const labels = [{ findingId: 'px', pairId: 'px', verdict: 'real', sameIssue: false, by: 'claude' }];
-  const input = { sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9201]), ...armRuns(CAND_ARM, [9201])], matches: rows, suites: { r1: 'regression' }, compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 50 };
+  const input = fan({ sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9201]), ...armRuns(CAND_ARM, [9201])], matches: rows, suites: { r1: 'regression' }, compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 50 }, 20);
   assert.equal(scorecard({ ...input, labels }).pairedBar.holdout.regression.delta, -100);
   assert.equal(scorecard({ ...input, labels: [] }).pairedBar.holdout.regression.delta, 0);
 });
 
 test('pairedBar resamples by cluster: rows that share a cluster field give lo === hi even on different PRs (breaks if the cluster field is ignored)', () => {
-  const same = pairedInput({ B: 200 });
+  const same = fan(pairedInput({ B: 200 }), 7);
   const asOne = { ...same, matches: same.matches.map((x) => ({ ...x, cluster: 'one' })) };
   const bar = scorecard(asOne).pairedBar.holdout.regression;
   assert.deepEqual([bar.lo, bar.hi], [bar.delta, bar.delta]);
@@ -784,10 +1017,10 @@ test('pairedBar resamples by cluster: rows that share a cluster field give lo ==
 });
 
 test('pairedBar leaves a stale-hash holdout row out of both arms (breaks if the paired items skip the frozen-prompt rule)', () => {
-  const input = pairedInput();
-  const stale = { ...input, frozenByReviewer: { engine: 'PE' }, matches: input.matches.map((x) => (x.key === 'r2' ? { ...x, reviewer: 'engine', promptSha256: 'OLD' } : x)) };
+  const input = fan(pairedInput(), 7);
+  const stale = { ...input, frozenByReviewer: { engine: 'PE' }, matches: input.matches.map((x) => (x.key.startsWith('r2~') ? { ...x, reviewer: 'engine', promptSha256: 'OLD' } : x)) };
   const reg = scorecard(stale).pairedBar.holdout.regression;
-  assert.equal(reg.n, 3);
+  assert.equal(reg.n, 21);
   assert.ok(Math.abs(reg.delta - 100 * (2 / 3 - 0.5)) < 1e-9, String(reg.delta));
 });
 
@@ -912,16 +1145,20 @@ test('reliabilityFlags names a metric that is null on either arm as unmeasured, 
   assert.deepEqual(flagsOf({ b: att(0), c: att(0) }, { baseline: 'b', candidate: 'nobody' }), { flagged: [], unmeasured: ['runFailure', 'repairedJson'] }, 'a compare arm with no reliability row');
 });
 
-test('the new keys print no PR number and no item key: no key or leaf value of them is a fixture PR or a gold key (breaks if a key, a cluster or a PR id reaches a new field)', () => {
-  const card = scorecard(pairedInput({ cleanPrs: [9201], attempts: { [BASE_ARM]: { attempts: 3, newest: 3, failed: 1, failedThenOk: 0 } } }));
+test('the new keys print no PR number and no item key: no key or leaf value of them, perArm cards included, is a fixture PR or a gold key (breaks if a key, a cluster or a PR id reaches a new field, or perArm prints prFalseAlarm.prs)', () => {
+  // PR 9210 has no real Major and an engine major: it is the PR that prFalseAlarm would name.
+  const zero = armRuns(BASE_ARM, [9210], { findings: [{ id: 'zf', sev: 'major' }] });
+  const input = pairedInput({ cleanPrs: [9201], sets: { zeroMajorPrs: [9210] }, attempts: { [BASE_ARM]: { attempts: 3, newest: 3, failed: 1, failedThenOk: 0 } } });
+  const card = scorecard({ ...input, runs: [...input.runs, ...zero] });
   const solo = card.perArm[BASE_ARM];
-  const newKeys = [card.pairedBar, card.lostCaughtMajors, card.cleanRise, card.reliability, card.reliabilityFlags, solo.perSuite, solo.perSource, solo.goldARecall, solo.cleanFalseMajor];
+  assert.equal(solo.prFalseAlarm.count, 1, 'the fixture has a false alarm to leak');
+  const newKeys = [card.pairedBar, card.lostCaughtMajors, card.cleanRise, card.reliability, card.reliabilityFlags, card.perArm];
   const seen = [];
   const walk = (x) => {
     if (x !== null && typeof x === 'object') for (const [k, v] of Object.entries(x)) { seen.push(k); walk(v); } else seen.push(x);
   };
   walk(newKeys);
-  const secret = new Set(['r1', 'r2', 'r3', 'r4', 'r5', 'c1', 'c2', 'c3', 'u1', ...pairedInput().matches.map((x) => String(x.pr)), ...pairedInput().matches.map((x) => String(x.key))]);
+  const secret = new Set(['r1', 'r2', 'r3', 'r4', 'r5', 'c1', 'c2', 'c3', 'u1', '9210', ...pairedInput().matches.map((x) => String(x.pr)), ...pairedInput().matches.map((x) => String(x.key))]);
   assert.ok(seen.length > 40, 'the walk reached the new fields');
   assert.deepEqual(seen.filter((x) => [...secret].some((s) => String(x).includes(s))), []);
 });
@@ -929,21 +1166,25 @@ test('the new keys print no PR number and no item key: no key or leaf value of t
 test('pipeline: two folders of raw rows, two arms, joinReplicates, evaluateRuns and scorecard give the paired bar, the lost count and the pooled arm recall (breaks if evaluateRuns, joinReplicates or scorecard loses the arm or the replicate between steps 1 and 5)', () => {
   const CR = 'cursor-review|-|-|-';
   const ENG = 'engine|v1|-|-';
-  const dataset = [dsMajor('9950:1', 9950, { path: 'a.mjs', startLine: 10, endLine: 10 }), dsMajor('9950:2', 9950, { path: 'b.mjs', startLine: 20, endLine: 20 })];
-  const files = { cr: [{ file: 'a.mjs', line: 10, severity: 'major', title: 't' }], eng: [{ file: 'b.mjs', line: 20, severity: 'major', title: 't' }], eng2: [{ file: 'b.mjs', line: 20, severity: 'major', title: 't' }, { file: 'c.mjs', line: 5, severity: 'minor', title: 'u' }] };
+  // 20 regression items on a.mjs and 20 capability items on b.mjs, 10 lines apart: 20 per suite is the cut of MIN_CELL.
+  const lines = Array.from({ length: 20 }, (_, i) => 10 * (i + 1));
+  const dataset = [...lines.map((line, i) => dsMajor(`9950:r${i}`, 9950, { path: 'a.mjs', startLine: line, endLine: line })), ...lines.map((line, i) => dsMajor(`9950:c${i}`, 9950, { path: 'b.mjs', startLine: line, endLine: line }))];
+  const at = (file, line) => ({ file, line, severity: 'major', title: `t${file}${line}` });
+  const files = { cr: lines.map((l) => at('a.mjs', l)), eng: lines.map((l) => at('b.mjs', l)), eng2: [...lines.map((l) => at('b.mjs', l)), { file: 'c.mjs', line: 5, severity: 'minor', title: 'u' }] };
   const folder = (engPath) => [armRow(9950, { reviewer: 'cursor-review', findingsPath: 'cr' }), armRow(9950, { reviewer: 'engine', findingsPath: engPath })];
   const ev = evaluateRuns({ runs: joinReplicates([folder('eng'), folder('eng2')]), dataset, readFindings: (p) => ({ findings: files[p] }) });
   assert.deepEqual(ev.runs.map((r) => [r.arm, r.replicate]).sort(), [[CR, 1], [CR, 2], [ENG, 1], [ENG, 2]]);
-  const card = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs: ev.runs, matches: ev.matches, attempts: ev.attempts, compare: { baseline: CR, candidate: ENG }, suites: { '9950:1': 'regression', '9950:2': 'capability' }, B: 100 });
-  assert.deepEqual([card.pairedBar.holdout.regression.n, card.pairedBar.holdout.regression.delta, card.pairedBar.holdout.capability.n, card.pairedBar.holdout.capability.delta], [1, -100, 1, 100]);
-  assert.deepEqual(card.lostCaughtMajors.holdout, { count: 1, assessable: 2, flagged: true });
-  for (const arm of [CR, ENG]) assert.deepEqual([card.perArm[arm].perMajorRecall.strictSameIssue.found, card.perArm[arm].perMajorRecall.strictSameIssue.total], [2, 4], arm);
+  const suites = Object.fromEntries(lines.flatMap((_, i) => [[`9950:r${i}`, 'regression'], [`9950:c${i}`, 'capability']]));
+  const card = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs: ev.runs, matches: ev.matches, attempts: ev.attempts, compare: { baseline: CR, candidate: ENG }, suites, B: 100 });
+  assert.deepEqual([card.pairedBar.holdout.regression.n, card.pairedBar.holdout.regression.delta, card.pairedBar.holdout.capability.n, card.pairedBar.holdout.capability.delta], [20, -100, 20, 100]);
+  assert.deepEqual(card.lostCaughtMajors.holdout, { count: 20, assessable: 40, flagged: true });
+  for (const arm of [CR, ENG]) assert.deepEqual([card.perArm[arm].perMajorRecall.strictSameIssue.found, card.perArm[arm].perMajorRecall.strictSameIssue.total], [40, 80], arm);
   assert.deepEqual([card.reliability[ENG].findingsVariance, card.reliability[CR].findingsVariance, card.reliability[ENG].attempts], [0.25, 0, 2]);
 });
 
-test('pairedBar: a suite with no paired item says FAIL for regression and capability and null for unassigned (breaks if an empty suite passes or says null)', () => {
+test('pairedBar: a suite with no paired item has n 0 and no number, and says null for every wouldBe: it is under the cut of 20, so it never says PASS or FAIL (breaks if an empty suite passes or fails)', () => {
   const card = scorecard({ sets: {}, runs: armRuns(BASE_ARM, [9201]), matches: [], compare: { baseline: BASE_ARM, candidate: CAND_ARM } });
-  assert.deepEqual([card.pairedBar.holdout.regression.n, card.pairedBar.holdout.regression.delta, card.pairedBar.holdout.regression.wouldBe, card.pairedBar.holdout.capability.wouldBe, card.pairedBar.holdout.unassigned.wouldBe], [0, null, 'FAIL', 'FAIL', null]);
+  assert.deepEqual([card.pairedBar.holdout.regression.n, card.pairedBar.holdout.regression.delta, card.pairedBar.holdout.regression.wouldBe, card.pairedBar.holdout.capability.wouldBe, card.pairedBar.holdout.unassigned.wouldBe], [0, null, null, null, null]);
 });
 
 // ---------- re-score-paired fix round 1: tests that fail on a wrong change ----------
@@ -961,7 +1202,7 @@ test('a newest-row tie or an unreadable ts: the later line wins (breaks if the e
 
 test('attempts: a group that failed and then ended incomplete counts as failedThenOk (breaks if failedThenOk needs an ok newest row)', () => {
   const rows = [armRow(9013, { reviewer: 'engine', status: 'failed', ts: '2026-11-03T01:00:00Z' }), armRow(9013, { reviewer: 'engine', status: 'incomplete', ts: '2026-11-03T02:00:00Z' })];
-  assert.deepEqual(evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead }).attempts['engine|v1|-|-'], { attempts: 2, newest: 1, failed: 0, failedThenOk: 1 });
+  assert.deepEqual(evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead }).attempts['engine|v1|-|-'], { attempts: 2, newest: 1, failed: 0, failedThenOk: 1, invalidReplicate: 0 });
 });
 
 test('armKeyOf groups old rows like the spend ledger: an engine row with no promptVersion joins v1, other reviewers ignore promptVersion, no reviewer is its own arm (breaks if a fallback or the engine-only version rule changes)', () => {
@@ -970,8 +1211,8 @@ test('armKeyOf groups old rows like the spend ledger: an engine row with no prom
 });
 
 test('a one-arm card counts every match row even when the rows carry no reviewer, and an engine arm with a promptVersion other than v1 keeps its matches in perArm (breaks if the one-arm branch filters matches by arm, or the filter reads the wrong arm key)', () => {
-  const oneArm = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs: armRuns('engine|v1|-|-', [9301]).map((r) => ({ ...r, arm: undefined, reviewer: 'engine' })), matches: itemRows(undefined, 'o1', 9301, [1, 0, 1]).map((m) => ({ ...m, arm: undefined, replicate: undefined })) });
-  assert.equal(oneArm.perMajorRecall.strict.total, 3, 'rows with no reviewer still belong to the one arm');
+  const oneArm = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs: armRuns('engine|v1|-|-', [9301]).map((r) => ({ ...r, arm: undefined, reviewer: undefined })), matches: itemRows(undefined, 'o1', 9301, [1, 0, 1]).map((m) => ({ ...m, arm: undefined, replicate: undefined })) });
+  assert.equal(oneArm.perMajorRecall.strict.total, 3, 'runs and rows with no reviewer are one arm that owns every row');
   const dataset = [dsMajor('9302:1', 9302), dsMajor('9303:1', 9303)];
   const rows = [armRow(9302, { reviewer: 'engine', promptVersion: 'v2' }), armRow(9303, { reviewer: 'cursor-review' })];
   const ev = evaluateRuns({ runs: rows, dataset, readFindings: hitRead });
@@ -1003,25 +1244,28 @@ test('paired items are real Majors only: critical counts, a noise verdict and a 
     ...both('n4', 9324, { crSev: 'minor', engSev: 'major' }, { crSev: 'minor', engSev: null }), // a minor dataset finding: no item
   ];
   const suites = { n1: 'regression', n2: 'regression', n3: 'regression', n4: 'regression' };
-  const bar = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9321]), ...armRuns(CAND_ARM, [9321])], matches, suites, compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 50 }).pairedBar.holdout.regression;
-  assert.deepEqual([bar.n, bar.unpaired, bar.delta, bar.d], [2, 0, -100, 1]);
+  const input = fan({ sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9321]), ...armRuns(CAND_ARM, [9321])], matches, suites, compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 50 }, 10);
+  const bar = scorecard(input).pairedBar.holdout.regression;
+  assert.deepEqual([bar.n, bar.unpaired, bar.delta, bar.d], [20, 0, -100, 1]);
 });
 
 test('the default cluster of a paired item is its PR: two items on one PR move together; the bounds match an explicit PR cluster and differ from one cluster per item (breaks if the default is the item key or one cluster per row)', () => {
-  const prs = [9331, 9332, 9333, 9334, 9335, 9336];
+  // 10 PRs of 2 items: 20 items, the cut of MIN_CELL. The candidate catches both items of the first 5 PRs.
+  const prs = Array.from({ length: 10 }, (_, i) => 9331 + i);
   const keys = prs.flatMap((pr) => [`p${pr}a`, `p${pr}b`]);
   const matchesFor = (clusterOf) => prs.flatMap((pr, i) => ['a', 'b'].flatMap((s) => {
     const over = clusterOf(pr, `p${pr}${s}`);
-    return [...itemRows(BASE_ARM, `p${pr}${s}`, pr, [0], over), ...itemRows(CAND_ARM, `p${pr}${s}`, pr, [i < 3 ? 1 : 0], over)];
+    return [...itemRows(BASE_ARM, `p${pr}${s}`, pr, [0], over), ...itemRows(CAND_ARM, `p${pr}${s}`, pr, [i < 5 ? 1 : 0], over)];
   }));
   const bar = (clusterOf) => {
     const r = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9331]), ...armRuns(CAND_ARM, [9331])], matches: matchesFor(clusterOf), suites: Object.fromEntries(keys.map((k) => [k, 'regression'])), compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 2000, seed: 9 }).pairedBar.holdout.regression;
     return [r.delta, r.lo, r.hi];
   };
   const byDefault = bar(() => ({}));
-  assert.equal(byDefault[0], 50);
-  assert.deepEqual(byDefault, bar((pr) => ({ cluster: `#${pr}` })));
-  assert.notDeepEqual(byDefault, bar((pr, key) => ({ cluster: key })));
+  // Fixed values: the delta is 50 points. Over 10 PR clusters the share of candidate-caught clusters is Binomial(10, 0.5) / 10: its 2.5th and 97.5th percentiles are 2 and 8, so 20 and 80.
+  assert.deepEqual(byDefault, [50, 20, 80]);
+  assert.deepEqual(bar((pr) => ({ cluster: `#${pr}` })), [50, 20, 80], 'an explicit PR cluster gives the same bounds');
+  assert.deepEqual(bar((pr, key) => ({ cluster: key })), [50, 30, 70], 'one cluster per item: Binomial(20, 0.5) gives 6 and 14 of 20, so 30 and 70');
 });
 
 /** Real Major rows of the base arm, one replicate each. specs: [[key, pr, catches, over]]. */
@@ -1050,11 +1294,14 @@ test('a cell prints no value below 20 real Majors, not even at 19, and prints it
   assert.deepEqual(cellAt(20), { found: 10, total: 20, value: 0.5 });
 });
 
-test('cleanFalseMajor ignores a stale-hash run and a run with incomplete coverage, and keeps one control per PR: runs of 0 and 2 false Majors on one PR give perPr 1 and bounds 1 and 1 (breaks if the filters are skipped or the CI resamples runs)', () => {
+test('cleanFalseMajor ignores a stale-hash run and a run with incomplete coverage, and keeps one control per PR: runs of 0 and 2 false Majors on one PR give perPr 1 and null bounds, and two identical controls give bounds 1 and 1 (breaks if the filters are skipped or the CI resamples runs)', () => {
   const clean = (pr, replicate, sevs, over = {}) => ({ set: 'holdout', pr, round: 1, status: 'ok', arm: BASE_ARM, replicate, promptSha256: 'P0', findings: sevs.map((s, i) => ({ id: `f${i}`, sev: s })), ...over });
   const runs = [clean(9601, 1, []), clean(9601, 2, ['major', 'critical']), clean(9601, 3, ['major', 'major', 'major'], { promptSha256: 'OLD' }), clean(9601, 4, ['major'], { coverageComplete: false })];
   const c = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs, matches: [], cleanPrs: [9601], B: 400, seed: 3 }).cleanFalseMajor.holdout;
-  assert.deepEqual([c.controls, c.runs, c.falseMajors, c.perPr, c.lo, c.hi], [1, 2, 2, 1, 1, 1]);
+  assert.deepEqual([c.controls, c.runs, c.falseMajors, c.perPr, c.lo, c.hi], [1, 2, 2, 1, null, null], 'one control is no interval');
+  const two = [...runs, clean(9602, 1, []), clean(9602, 2, ['major', 'critical'])];
+  const c2 = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs: two, matches: [], cleanPrs: [9601, 9602], B: 400, seed: 3 }).cleanFalseMajor.holdout;
+  assert.deepEqual([c2.controls, c2.runs, c2.falseMajors, c2.perPr, c2.lo, c2.hi], [2, 4, 4, 1, 1, 1], 'two identical controls: the stale and incomplete runs still leave');
 });
 
 test('reliability: repairedJson counts ok rows only, so an incomplete row with the flag leaves the share at 0.25; p95WallMs skips a run with incomplete coverage (breaks if the denominator or the valid filter changes)', () => {
@@ -1090,23 +1337,23 @@ test('a source C row is its own source and CR does not take it (breaks if C is d
 
 test('attempts: every status except ok and incomplete is a failure (cap, tree_unbuildable, frozen, refused, failed) (breaks if the failure test narrows to one status)', () => {
   const rows = ['cap', 'tree_unbuildable', 'frozen', 'refused', 'failed'].map((status, i) => armRow(9820 + i, { reviewer: 'engine', status }));
-  assert.deepEqual(evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead }).attempts['engine|v1|-|-'], { attempts: 5, newest: 5, failed: 5, failedThenOk: 0 });
+  assert.deepEqual(evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead }).attempts['engine|v1|-|-'], { attempts: 5, newest: 5, failed: 5, failedThenOk: 0, invalidReplicate: 0 });
 });
 
 test('attempts: a failure keeps counting across two newer ok rows of one group (breaks if the earlier failure is dropped when a third row arrives)', () => {
   const t = (n) => `2026-11-03T0${n}:00:00Z`;
   const rows = [armRow(9825, { reviewer: 'engine', status: 'failed', ts: t(1) }), armRow(9825, { reviewer: 'engine', status: 'ok', ts: t(2) }), armRow(9825, { reviewer: 'engine', status: 'ok', ts: t(3) })];
-  assert.deepEqual(evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead }).attempts['engine|v1|-|-'], { attempts: 3, newest: 1, failed: 0, failedThenOk: 1 });
+  assert.deepEqual(evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead }).attempts['engine|v1|-|-'], { attempts: 3, newest: 1, failed: 0, failedThenOk: 1, invalidReplicate: 0 });
 });
 
 test('attempts: an incomplete row before an ok row is not a failure, so failedThenOk stays 0 (breaks if the earlier-row test reads status !== ok)', () => {
   const rows = [armRow(9826, { reviewer: 'engine', status: 'incomplete', ts: '2026-11-03T01:00:00Z' }), armRow(9826, { reviewer: 'engine', status: 'ok', ts: '2026-11-03T02:00:00Z' })];
-  assert.deepEqual(evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead }).attempts['engine|v1|-|-'], { attempts: 2, newest: 1, failed: 0, failedThenOk: 0 });
+  assert.deepEqual(evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead }).attempts['engine|v1|-|-'], { attempts: 2, newest: 1, failed: 0, failedThenOk: 0, invalidReplicate: 0 });
 });
 
-test('joinReplicates: a replicate that is not an integer of 1 or more is replaced by the folder number (1.5 and a string), and the folder number is 1-based (breaks if any number of 1 or more counts as valid)', () => {
-  const joined = joinReplicates([[{ pr: 9830 }], [{ pr: 9831, replicate: 1.5 }, { pr: 9832, replicate: '3' }]]);
-  assert.deepEqual(joined.map((r) => r.replicate), [1, 2, 2]);
+test('joinReplicates: only an undefined replicate takes the folder number, and that number is 1-based; 1.5, a string and null stay as they are (breaks if an invalid replicate is replaced by the folder number)', () => {
+  const joined = joinReplicates([[{ pr: 9830 }], [{ pr: 9831, replicate: 1.5 }, { pr: 9832, replicate: '3' }, { pr: 9833, replicate: null }, { pr: 9834 }]]);
+  assert.deepEqual(joined.map((r) => r.replicate), [1, 1.5, '3', null, 2]);
 });
 
 test('armKeyOf ignores an armId that is not a string (breaks if a truthy armId passes as the key)', () => {
@@ -1126,8 +1373,9 @@ test('engine finding ids stay unique across arms and replicates of one round (br
 });
 
 test('pairedBar nNeeded for regression rounds up: d 0.25 gives 385, not 384 (breaks if ceil becomes round)', () => {
-  const reg = oneClusterBar('regression', [[[1], [0]], [[1], [1]], [[0], [0]], [[0], [0]]]);
-  assert.deepEqual([reg.n, reg.d, reg.nNeeded], [8, 0.25, 385], '4 items in each of 2 identical clusters');
+  const four = [[[1], [0]], [[1], [1]], [[0], [0]], [[0], [0]]];
+  const reg = oneClusterBar('regression', [...four, ...four, ...four]);
+  assert.deepEqual([reg.n, reg.d, reg.nNeeded], [24, 0.25, 385], '12 items in each of 2 identical clusters');
 });
 
 test('pairedBar counts an item that only the candidate has as unpaired too (breaks if the item keys come from the baseline alone)', () => {
@@ -1182,15 +1430,16 @@ test('D3 perSuite, perSource and goldARecall keep one cell per set: the same ite
 });
 
 test('D3 pairedBar and lostCaughtMajors are one cell per set, and a holdout-only change leaves every dev cell as it was (breaks if the paired items pool both sets, or a holdout row moves a dev number)', () => {
-  const withCand = (holdoutCand) => scorecard({
+  // 20 copies of the item in each set: the cells reach the cut of 20 and print numbers.
+  const withCand = (holdoutCand) => scorecard(fan({
     sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9911]), ...armRuns(CAND_ARM, [9911])], compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 50,
     suites: { k1: 'regression' }, sources: { k1: 'A' },
     matches: [...itemRows(BASE_ARM, 'k1', 9911, [1, 1]), ...itemRows(CAND_ARM, 'k1', 9911, holdoutCand), ...itemRows(BASE_ARM, 'k1', 9911, [0, 0], asDev), ...itemRows(CAND_ARM, 'k1', 9911, [1, 1], asDev)],
-  });
+  }, 20));
   const lost = withCand([0, 0]);
   assert.deepEqual([lost.pairedBar.holdout.regression.delta, lost.pairedBar.dev.regression.delta], [-100, 100]);
-  assert.deepEqual([lost.pairedBar.holdout.regression.n, lost.pairedBar.dev.regression.n], [1, 1]);
-  assert.deepEqual([lost.lostCaughtMajors.holdout.count, lost.lostCaughtMajors.dev.count], [1, 0]);
+  assert.deepEqual([lost.pairedBar.holdout.regression.n, lost.pairedBar.dev.regression.n], [20, 20]);
+  assert.deepEqual([lost.lostCaughtMajors.holdout.count, lost.lostCaughtMajors.dev.count], [20, 0]);
   const kept = withCand([1, 1]);
   assert.equal(kept.pairedBar.holdout.regression.delta, 0);
   assert.notDeepEqual(kept.perArm[CAND_ARM].perSuite.holdout, lost.perArm[CAND_ARM].perSuite.holdout);
@@ -1214,18 +1463,22 @@ test('D4 cleanFalseMajor perPr is the mean over clean PRs of the false Majors of
   assert.ok(c.lo >= 0 && c.hi <= 4 && c.lo <= 2 && c.hi >= 2, `${c.lo} ${c.hi}`);
 });
 
-test('D4 cleanFalseMajor resamples PRs, each with all its runs: one PR whose runs have 0 and 2 false Majors gives lo === hi === perPr === 1 (breaks if the CI resamples runs)', () => {
-  const c = cleanCard([cleanRun(9965, 1, []), cleanRun(9965, 2, ['major', 'critical'])], [9965]);
-  assert.deepEqual([c.controls, c.perPr, c.lo, c.hi], [1, 1, 1, 1]);
+test('D4 cleanFalseMajor resamples PRs, each with all its runs: two PRs whose runs have 0 and 2 false Majors give lo === hi === perPr === 1 (breaks if the CI resamples runs)', () => {
+  const twoRuns = (pr) => [cleanRun(pr, 1, []), cleanRun(pr, 2, ['major', 'critical'])];
+  const c = cleanCard([...twoRuns(9965), ...twoRuns(9966)], [9965, 9966]);
+  assert.deepEqual([c.controls, c.perPr, c.lo, c.hi], [2, 1, 1, 1]);
 });
 
 test('pairedBar counts clusters; under 2 clusters wouldBe is FAIL even at no change, and a regression suite with no discordant item has no nNeeded (breaks if one cluster can PASS, clusters is missing, or nNeeded is 0 at d 0)', () => {
-  const same = [[[1, 1], [1, 1]], [[0, 0], [0, 0]]];
-  const one = oneClusterBar('regression', same, ['x']);
-  assert.deepEqual([one.clusters, one.n, one.delta, one.lo, one.wouldBe, one.d, one.nNeeded], [1, 2, 0, 0, 'FAIL', 0, null]);
-  const two = oneClusterBar('regression', same);
-  assert.deepEqual([two.clusters, two.n, two.wouldBe], [2, 4, 'PASS']);
-  assert.equal(oneClusterBar('capability', [[[0, 0], [1, 1]]], ['x']).wouldBe, 'FAIL');
+  const same = (n) => Array.from({ length: n }, (_, i) => (i % 2 ? [[1, 1], [1, 1]] : [[0, 0], [0, 0]]));
+  const one = oneClusterBar('regression', same(20), ['x']);
+  assert.deepEqual([one.clusters, one.n, one.delta, one.lo, one.wouldBe, one.d, one.nNeeded], [1, 20, 0, 0, 'FAIL', 0, null]);
+  const two = oneClusterBar('regression', same(10));
+  assert.deepEqual([two.clusters, two.n, two.wouldBe], [2, 20, 'PASS']);
+  assert.equal(oneClusterBar('capability', Array.from({ length: 20 }, () => [[0, 0], [1, 1]]), ['x']).wouldBe, 'FAIL');
+  assert.equal(oneClusterBar('regression', same(2), ['x']).wouldBe, null, 'one cluster of 2 items is under the cut: no word at all');
+  const underCut = oneClusterBar('regression', same(2));
+  assert.deepEqual([underCut.clusters, underCut.n, underCut.delta, underCut.wouldBe], [2, 4, null, null], 'two clusters and 4 items said PASS before the cut; now no word');
   assert.equal(scorecard(pairedInput()).pairedBar.holdout.regression.clusters, 4, 'default cluster is the PR');
 });
 
@@ -1286,6 +1539,7 @@ test('D5 cleanFalseMajor is one cell per set: a holdout clean run and a dev clea
   const [h, d] = [card.cleanFalseMajor.holdout, card.cleanFalseMajor.dev];
   assert.deepEqual([h.controls, h.falseMajors, h.perPr], [1, 1, 1]);
   assert.deepEqual([d.controls, d.falseMajors, d.perPr], [1, 3, 3]);
+  assert.deepEqual([h.lo, h.hi, d.lo, d.hi], [null, null, null, null], 'cleanPrs names 3 PRs but each set has 1 control with a valid run: no interval');
 });
 
 const riseRuns = (spec) => spec.map(([arm, pr, sevs, over]) => cleanRun(pr, 1, sevs, { arm, ...over }));
@@ -1360,8 +1614,158 @@ test('D6 several match rows of one key in one replicate are one replicate whose 
   const input = { sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9931]), ...armRuns(CAND_ARM, [9931])], matches, compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 50, suites: { d1: 'regression', d2: 'capability' }, sources: { d1: 'A', d2: 'A', d3: 'A' } };
   const card = scorecard(input);
   assert.deepEqual(card.lostCaughtMajors.holdout, { count: 0, assessable: 2, flagged: false }, 'd2 is one replicate (not assessable); d3 is half caught in each replicate (not lost)');
-  assert.equal(card.pairedBar.holdout.regression.delta, 62.5, 'd1: candidate 1 against baseline mean of replicate means 0.375, in points');
-  assert.deepEqual(card.pairedBar.holdout.capability.delta, -100, 'd2: 0 against 1');
+  // The paired bar prints numbers from 20 items: 20 copies of d1 (regression) and of d2 (capability) in their own input.
+  const wide = scorecard(fan(input, 20)).pairedBar.holdout;
+  assert.equal(wide.regression.delta, 62.5, 'd1: candidate 1 against baseline mean of replicate means 0.375, in points');
+  assert.deepEqual(wide.capability.delta, -100, 'd2: 0 against 1');
   assert.deepEqual([card.perArm[BASE_ARM].goldARecall.holdout.found, card.perArm[BASE_ARM].goldARecall.holdout.total], [1.875, 3], 'd1 0.375 + d2 1 + d3 0.5');
   assert.deepEqual([card.perArm[CAND_ARM].goldARecall.holdout.found, card.perArm[CAND_ARM].goldARecall.holdout.total], [1, 3], 'd1 only');
+});
+
+// ---------- re-score-paired seat fix round (08-seat-review of 2096c5f3) ----------
+
+test('C evaluateRuns puts a cluster on each match row: d.cluster, else range:<range>, else owner/repo#pr in lower case; the run repo is the last fallback (breaks if the cluster is left off the row, the repo drops out of it, or the case is kept)', () => {
+  const dataset = [
+    dsMajor('own:1', 9060),
+    dsMajor('ext:1', 9060, { repo: 'Owner/X', path: 'b.mjs' }),
+    dsMajor('tgt:1', 9060, { target: { repo: 'Other/Y' }, path: 'c.mjs' }),
+    dsMajor('rng:1', 9060, { target: { range: 'aaa..bbb' }, path: 'd.mjs' }),
+    dsMajor('rng:2', 9060, { range: 'ccc..ddd', path: 'e.mjs' }),
+    dsMajor('cl:1', 9060, { cluster: 'group-7', repo: 'Owner/X', path: 'f.mjs' }),
+    dsMajor('run:1', 9061),
+  ];
+  const rows = [armRow(9060, { reviewer: 'engine' }), armRow(9061, { reviewer: 'engine', repo: 'Run/Repo' })];
+  const ev = evaluateRuns({ runs: rows, dataset, readFindings: hitRead });
+  assert.deepEqual(Object.fromEntries(ev.matches.map((x) => [x.key, x.cluster])), { 'own:1': '#9060', 'ext:1': 'owner/x#9060', 'tgt:1': 'other/y#9060', 'rng:1': 'range:aaa..bbb', 'rng:2': 'range:ccc..ddd', 'cl:1': 'group-7', 'run:1': 'run/repo#9061' });
+});
+
+test('C an own-repo item #N and an external item owner/x#N with the same PR number are two clusters in the paired bar (breaks if the match row has no cluster, so both fall to #N)', () => {
+  const CR = 'cursor-review|-|-|-';
+  const ENG = 'engine|v1|-|-';
+  const dataset = [dsMajor('own:1', 9062), dsMajor('ext:1', 9062, { repo: 'Owner/X', path: 'b.mjs' })];
+  const ev = evaluateRuns({ runs: [armRow(9062, { reviewer: 'engine' }), armRow(9062, { reviewer: 'cursor-review' })], dataset, readFindings: hitRead });
+  const card = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs: ev.runs, matches: ev.matches, compare: { baseline: CR, candidate: ENG }, suites: { 'own:1': 'regression', 'ext:1': 'regression' }, B: 50 });
+  assert.equal(card.pairedBar.holdout.regression.n, 2);
+  assert.equal(card.pairedBar.holdout.regression.clusters, 2);
+});
+
+/** A regression suite of n paired items, each on its own PR (so its own cluster); 1 item in 5 is lost by the candidate. */
+const nItemBar = (n, unpairedN = 0) => {
+  const keys = Array.from({ length: n }, (_, i) => `z${i}`);
+  const matches = keys.flatMap((k, i) => [...itemRows(BASE_ARM, k, 9500 + i, [1]), ...itemRows(CAND_ARM, k, 9500 + i, [i % 5 === 0 ? 0 : 1])]);
+  // Baseline-only items: in the suite, but with no candidate row, so they are unpaired.
+  const loose = Array.from({ length: unpairedN }, (_, i) => `u${i}`);
+  matches.push(...loose.flatMap((k, i) => itemRows(BASE_ARM, k, 9580 + i, [1])));
+  const input = { sets: {}, frozenPromptSha256: 'P0', runs: [...armRuns(BASE_ARM, [9500]), ...armRuns(CAND_ARM, [9500])], matches, suites: Object.fromEntries([...keys, ...loose].map((k) => [k, 'regression'])), compare: { baseline: BASE_ARM, candidate: CAND_ARM }, B: 200, seed: 3 };
+  return scorecard(input).pairedBar.holdout.regression;
+};
+
+test('R1 MIN_CELL is 20; a paired cell of 19 items prints no number and one of 20 prints them (breaks if the cut moves, is exclusive, or the numbers print under it)', () => {
+  assert.equal(MIN_CELL, 20);
+  const under = nItemBar(19);
+  assert.deepEqual([under.delta, under.lo, under.hi, under.d, under.wouldBe], [null, null, null, null, null]);
+  assert.deepEqual([under.n, under.unpaired, under.B, under.nNeeded], [19, 0, 200, 324], 'nNeeded is how many are needed: ceil(1537 * 4 / 19)');
+  const at = nItemBar(20);
+  assert.ok(Math.abs(at.delta + 20) < 1e-9, String(at.delta));
+  assert.equal(at.d, 0.2);
+  assert.ok(at.lo <= at.delta && at.delta <= at.hi);
+  assert.deepEqual([at.n, at.nNeeded, at.wouldBe], [20, 308, 'FAIL']);
+});
+
+test('R1 the cut reads the paired items alone: 19 paired items plus 1 or 5 unpaired items still print no number, and 20 paired plus 1 unpaired print it (breaks if the cut reads n + unpaired)', () => {
+  for (const loose of [1, 5]) {
+    const bar = nItemBar(19, loose);
+    assert.deepEqual([bar.n, bar.unpaired], [19, loose]);
+    assert.deepEqual([bar.delta, bar.lo, bar.hi, bar.d, bar.wouldBe], [null, null, null, null, null], `unpaired ${loose}`);
+  }
+  const at = nItemBar(20, 1);
+  assert.deepEqual([at.n, at.unpaired, at.d, at.wouldBe], [20, 1, 0.2, 'FAIL']);
+  assert.ok(at.delta !== null && at.lo !== null && at.hi !== null);
+});
+
+test('R3 a one-arm card keeps prFalseAlarm.prs at the top, and no perArm card prints it: count and total only (breaks if a per-arm card prints a PR id, or the top-level prs key is lost)', () => {
+  const card = scorecard(ONE_ARM_INPUT);
+  assert.deepEqual(card.prFalseAlarm, BASE_CARD.prFalseAlarm);
+  assert.deepEqual(card.perArm[ENGINE_ARM].prFalseAlarm, { count: BASE_CARD.prFalseAlarm.count, total: BASE_CARD.prFalseAlarm.total });
+  const two = scorecard(twoArmInput());
+  for (const arm of two.arms) assert.equal(Object.hasOwn(two.perArm[arm].prFalseAlarm, 'prs'), false, arm);
+});
+
+test('R5a repairedJson is the share among the ok rows that carry a boolean repairedJson: 2 flagged ok rows of 4 ok rows, 1 true, gives 0.5 (breaks if a row with no flag stays in the denominator)', () => {
+  const runs = relRuns('a', 4, (i) => (i < 2 ? { repairedJson: i === 0 } : {}));
+  assert.equal(scorecard(relInput(runs, {})).reliability.a.repairedJson, 0.5);
+  const flaggedNotOk = [...relRuns('a', 2, (i) => ({ repairedJson: i === 0 })), ...relRuns('a', 1, () => ({ pr: 9790, status: 'incomplete', coverageComplete: false, repairedJson: true }))];
+  assert.equal(scorecard(relInput(flaggedNotOk, {})).reliability.a.repairedJson, 0.5, 'a flagged row that is not ok stays out');
+  // Ok rows whose repairedJson is not a boolean (null, 1, 'true') carry no flag: they stay out of the share.
+  const odd = relRuns('a', 6, (i) => [{ repairedJson: true }, { repairedJson: false }, { repairedJson: null }, { repairedJson: 1 }, { repairedJson: 'true' }, {}][i]);
+  assert.equal(scorecard(relInput(odd, {})).reliability.a.repairedJson, 0.5, 'null, 1 and "true" are not flags');
+});
+
+test('R5c engine runs with match rows that carry no arm and no reviewer make a second arm, the "none" arm, so the card has two arms and no pooled number (breaks if an armless match row is given the run arm, or dropped)', () => {
+  const NONE = armKeyOf({});
+  const runs = armRuns(ENGINE_ARM, [9082]);
+  const matches = itemRows(undefined, 'a1', 9082, [1]).map((r) => ({ ...r, arm: undefined, replicate: undefined }));
+  const card = scorecard({ sets: {}, frozenPromptSha256: 'P0', runs, matches });
+  assert.deepEqual(card.arms, [ENGINE_ARM, NONE].sort());
+  assert.equal(card.perMajorRecall, null, 'two arms: no pooled number');
+  assert.equal(card.perArm[NONE].perMajorRecall.strict.total, 1, 'the armless rows are one item in their own arm');
+  assert.equal(card.perArm[ENGINE_ARM].perMajorRecall.strict.total, 0, 'the engine arm has no rows');
+});
+
+test('R5b every paired suite cell prints B and used; B is 2000 by default and the B of the input otherwise; an empty suite has used 0 (breaks if the cell drops them or the default moves)', () => {
+  const bar = scorecard(pairedInput({ B: undefined })).pairedBar.holdout;
+  for (const name of ['regression', 'capability', 'unassigned']) {
+    assert.equal(bar[name].B, 2000, name);
+    assert.ok(Number.isInteger(bar[name].used) && bar[name].used > 0 && bar[name].used <= 2000, `${name} used ${bar[name].used}`);
+  }
+  assert.equal(scorecard(pairedInput({ B: 400 })).pairedBar.holdout.regression.B, 400);
+  const empty = scorecard({ sets: {}, runs: armRuns(BASE_ARM, [9201]), matches: [], compare: { baseline: BASE_ARM, candidate: CAND_ARM } }).pairedBar.holdout.regression;
+  assert.deepEqual([empty.B, empty.used], [2000, 0]);
+});
+
+test('R5c arms are the union of the run arms and the match arms: matches of a second arm that has no run make a two-arm card, with the pooled keys null (breaks if arms come from the runs alone)', () => {
+  const input = { sets: {}, frozenPromptSha256: 'P0', runs: armRuns(BASE_ARM, [9080]), matches: [...itemRows(BASE_ARM, 'u1', 9080, [1]), ...itemRows(CAND_ARM, 'u2', 9081, [0])] };
+  const card = scorecard(input);
+  assert.deepEqual(card.arms, [BASE_ARM, CAND_ARM]);
+  assert.deepEqual(Object.keys(card.perArm), [BASE_ARM, CAND_ARM]);
+  assert.equal(card.perMajorRecall, null, 'two arms: no pooled number');
+  assert.deepEqual([card.perArm[BASE_ARM].perMajorRecall.strict.total, card.perArm[CAND_ARM].perMajorRecall.strict.total], [1, 1]);
+});
+
+test('R5d evaluateRuns leaves out a row whose replicate is 0, -1, 1.5, a string or null; it counts each in attempts as invalidReplicate; an undefined replicate is still 1 (breaks if an invalid replicate becomes 1, is scored, or is not counted)', () => {
+  const bad = [0, -1, 1.5, '3', null];
+  const rows = [armRow(9070, { reviewer: 'engine' }), ...bad.map((replicate, i) => armRow(9070, { reviewer: 'engine', round: 2 + i, replicate, status: i === 0 ? 'failed' : 'ok' }))];
+  const ev = evaluateRuns({ runs: rows, dataset: [dsMajor('9070:1', 9070)], readFindings: hitRead });
+  assert.deepEqual(ev.runs.map((r) => [r.round, r.replicate]), [[1, 1]]);
+  assert.equal(ev.matches.length, 1);
+  assert.deepEqual(ev.attempts['engine|v1|-|-'], { attempts: 6, newest: 1, failed: 0, failedThenOk: 0, invalidReplicate: 5 });
+  const only = evaluateRuns({ runs: [armRow(9071, { reviewer: 'cursor-review', replicate: 0 })], dataset: [], readFindings: hitRead });
+  assert.deepEqual(only.runs, []);
+  assert.deepEqual(only.attempts['cursor-review|-|-|-'], { attempts: 1, newest: 0, failed: 0, failedThenOk: 0, invalidReplicate: 1 });
+});
+
+test('R5d a joined folder with a replicate of 0 keeps it, so evaluateRuns drops the row and counts it (breaks if joinReplicates repairs an invalid replicate)', () => {
+  const rows = joinReplicates([[armRow(9072, { reviewer: 'engine' })], [armRow(9072, { reviewer: 'engine', replicate: 0 })]]);
+  const ev = evaluateRuns({ runs: rows, dataset: [], readFindings: hitRead });
+  assert.deepEqual(ev.runs.map((r) => r.replicate), [1]);
+  assert.equal(ev.attempts['engine|v1|-|-'].invalidReplicate, 1);
+});
+
+test('R6 one input and one seed give a byte-identical card on two calls, for a compared card and a one-arm card (breaks if a card reads a clock, an unseeded random number or shared state)', () => {
+  const compared = fan(pairedInput({ B: 300, seed: 5, cleanPrs: [9201], attempts: { [BASE_ARM]: { attempts: 2, newest: 2, failed: 0, failedThenOk: 0 } } }), 7);
+  assert.equal(JSON.stringify(scorecard(compared)), JSON.stringify(scorecard(compared)));
+  assert.notEqual(scorecard(compared).pairedBar.holdout.regression.delta, null, 'the compared card holds numbers');
+  assert.equal(JSON.stringify(scorecard(ONE_ARM_INPUT)), JSON.stringify(scorecard(ONE_ARM_INPUT)));
+  // A clock moves between the two calls: a card field read from Date would differ, even at a coarse grain such as a second or a day.
+  mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 0, 1) });
+  try {
+    for (const input of [compared, ONE_ARM_INPUT]) {
+      const first = JSON.stringify(scorecard(input));
+      mock.timers.setTime(Date.UTC(2027, 5, 15, 12, 30, 45, 123));
+      assert.equal(JSON.stringify(scorecard(input)), first, 'the card does not read the clock');
+      mock.timers.setTime(Date.UTC(2026, 0, 1));
+    }
+  } finally {
+    mock.timers.reset();
+  }
 });

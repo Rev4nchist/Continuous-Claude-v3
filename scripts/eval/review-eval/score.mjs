@@ -10,6 +10,9 @@
 //  cleanFalseMajor: a control is one distinct clean PR with a valid run. perPr is the mean over those PRs of the false Majors of the PR averaged over its runs. The CI resamples PRs.
 //  cleanRise: per set, over the clean PRs that both compared arms have a valid run on; null when they share none.
 //  reliabilityFlags: { flagged, unmeasured }. unmeasured lists a metric that is null on either compared arm: an empty flagged list then does not mean no regression.
+//  Counts only under 20 real Majors (MIN_CELL): a paired cell then prints n, unpaired, nNeeded, B and used and no delta, bounds, d or wouldBe. A clean-control CI needs 2 controls.
+//  perArm cards carry no prFalseAlarm.prs: a new field prints no PR id. The top-level prFalseAlarm of a one-arm card keeps it.
+//  A match row has cluster (evaluateRuns sets it from the dataset row). A run row whose replicate is set and invalid is not scored: attempts counts it as invalidReplicate.
 //  Arms: a run or match row has arm (armKeyOf) and replicate. A card of two or more arms has no pooled number: perArm holds one card per arm. See armKeyOf, pairedBar, reliability.
 import { normalizeRepoPath } from '../../github/review-filter.mjs';
 import { cohenKappa } from './agreement.mjs';
@@ -94,7 +97,7 @@ function bodyModes(runs) {
 }
 
 /** Cells with fewer real Majors than this print counts and no value. */
-const MIN_CELL = 20;
+export const MIN_CELL = 20;
 const SOURCES = ['A', 'B', 'C', 'CR'];
 const SUITE_NAMES = ['regression', 'capability'];
 /** Dev and holdout never mix: each of these numbers is one cell per set. A match row with no set belongs to neither cell. */
@@ -160,12 +163,16 @@ function armItems(rows, labelBy) {
   return new Map([...byKey].map(([key, it]) => [key, { cluster: it.cluster, reps: [...it.byRep.values()].map(meanOf) }]));
 }
 
-/** One suite cell of the paired bar. paired: [{ b, c, cluster }] (mean catch of each arm). The bootstrap resamples whole clusters of pairs. clusters is their count: under 2, wouldBe is FAIL. */
+/**
+ * One suite cell of the paired bar. paired: [{ b, c, cluster }] (mean catch of each arm). The bootstrap resamples whole clusters of pairs. clusters is their count: under 2, wouldBe is FAIL.
+ * Under MIN_CELL paired items the cell prints counts only: delta, lo, hi, d and wouldBe are null. nNeeded stays: it says how many items are needed.
+ */
 function suiteCell(name, paired, unpaired, { B, seed }) {
   const n = paired.length;
   const stat = (items) => (items.length ? 100 * (meanOf(items.map((i) => i.c)) - meanOf(items.map((i) => i.b))) : null);
   const clusters = [...groupBy(paired, (i) => i.cluster).values()];
-  const { point, lo, hi } = clusterBootstrap({ clusters, stat, B, seed });
+  const boot = clusterBootstrap({ clusters, stat, B, seed });
+  const { point, lo, hi } = boot;
   const d = n ? paired.filter((i) => i.b !== i.c).length / n : null;
   const dp = point === null ? null : point / 100;
   let nNeeded = null;
@@ -174,7 +181,8 @@ function suiteCell(name, paired, unpaired, { B, seed }) {
   const gate = { regression: -5, capability: 0 }[name];
   // One cluster makes every resample the full data (lo === hi === point): that is no interval, so it cannot PASS.
   const wouldBe = gate === undefined ? null : (clusters.length >= 2 && lo !== null && lo > gate ? 'PASS' : 'FAIL');
-  return { delta: point, lo, hi, n, clusters: clusters.length, unpaired, d, nNeeded, wouldBe };
+  const shown = n >= MIN_CELL;
+  return { delta: shown ? point : null, lo: shown ? lo : null, hi: shown ? hi : null, n, clusters: clusters.length, unpaired, d: shown ? d : null, nNeeded, wouldBe: shown ? wouldBe : null, B: boot.B, used: boot.used };
 }
 
 /** The paired bar and the lost-Major count of two arms on ONE set. rows: the eligible match rows of every arm in that set. Counts only: no key, no PR id leaves this function. */
@@ -202,6 +210,7 @@ function pairedOf({ rows, labelBy, compare, suites, B, seed }) {
  * perPr = the mean over clean PRs of (the false Majors of that PR, averaged over its valid runs). falseMajors and runs are raw totals over the valid runs.
  * The CI resamples PRs: one cluster per PR holds its runs. Each run item has the weight 1 / (runs of its PR), so a PR drawn twice counts twice.
  * valid: the valid runs of ONE set (scoreOne calls it once per set).
+ * With fewer than 2 controls lo and hi are null: one control gives no interval.
  */
 const falseMajorsOf = (r) => (r.findings ?? []).filter((f) => isMajor(lc(f.sev))).length;
 function cleanFalseMajorOf(valid, cleanPrs, { B, seed }) {
@@ -211,7 +220,8 @@ function cleanFalseMajorOf(valid, cleanPrs, { B, seed }) {
   const stat = (items) => (items.length ? items.reduce((x, i) => x + i.n * i.w, 0) / items.reduce((x, i) => x + i.w, 0) : null);
   const perPr = meanOf(clusters.map((rs) => meanOf(rs.map((i) => i.n))));
   const { lo, hi } = clusterBootstrap({ clusters, stat, B, seed });
-  return { controls: clusters.length, falseMajors: clusters.flat().reduce((x, i) => x + i.n, 0), runs: clusters.flat().length, perPr, lo, hi };
+  const enough = clusters.length >= 2;
+  return { controls: clusters.length, falseMajors: clusters.flat().reduce((x, i) => x + i.n, 0), runs: clusters.flat().length, perPr, lo: enough ? lo : null, hi: enough ? hi : null };
 }
 
 function scoreOne({ runs = [], matches = [], labels = [], sets = {}, linkTypes = {}, frozenPromptSha256 = null, frozenByReviewer = {}, frozenByArm = {}, escapes = {}, bakeoff = {}, headless = {}, pairsSent = [], suites = {}, sources = {}, cleanPrs = [], B = 2000, seed = 1 } = {}) {
@@ -309,11 +319,11 @@ function findingsVarianceOf(valid) {
 /** The reliability row of one arm. runs: the arm's output runs. a: the arm's attempts row from evaluateRuns (undefined when the caller gave none). */
 function reliabilityOf(runs, a, { stale }) {
   const valid = runs.filter((r) => !stale(r) && r.coverageComplete !== false);
-  const ok = runs.filter((r) => r.status === 'ok');
-  const flagged = runs.some((r) => typeof r.repairedJson === 'boolean');
+  // The share counts the ok rows that carry a boolean repairedJson. A row with no flag is not a row without repair.
+  const flagged = runs.filter((r) => r.status === 'ok' && typeof r.repairedJson === 'boolean');
   return {
     runFailure: a && a.newest > 0 ? a.failed / a.newest : null,
-    repairedJson: flagged && ok.length > 0 ? ok.filter((r) => r.repairedJson === true).length / ok.length : null,
+    repairedJson: flagged.length > 0 ? flagged.filter((r) => r.repairedJson === true).length / flagged.length : null,
     p95WallMs: percentile(valid.map((r) => r.durationMs).filter(Number.isFinite), 0.95),
     findingsVariance: findingsVarianceOf(valid),
     attempts: a?.attempts ?? null,
@@ -339,6 +349,9 @@ function pairedBySet(input) {
   const cells = bySet(input.rows, (rows) => pairedOf({ ...input, rows }));
   return { pairedBar: Object.fromEntries(SET_NAMES.map((n) => [n, cells[n].pairedBar])), lostCaughtMajors: Object.fromEntries(SET_NAMES.map((n) => [n, cells[n].lostCaughtMajors])) };
 }
+
+/** A copy of an arm card whose prFalseAlarm has count and total and no PR list. */
+const withoutPrs = (card) => ({ ...card, prFalseAlarm: { count: card.prFalseAlarm.count, total: card.prFalseAlarm.total } });
 
 /** Per-arm keys of the gold rows. A card of two or more arms keeps them in perArm only. */
 const ARM_ONLY_KEYS = ['perSuite', 'perSource', 'goldARecall', 'cleanFalseMajor'];
@@ -373,12 +386,13 @@ function reliabilityByArm(runs, arms, input, stale) {
 
 /**
  * The scorecard. One arm (or none): the scoreOne card plus arms and perArm. Two or more arms: the pooled keys are null and perArm holds one scoreOne card per arm.
- * A run's arm is run.arm (evaluateRuns sets it) or armKeyOf(run). A match row's arm is m.arm or armKeyOf(m); with one arm every match belongs to it.
+ * A run's arm is run.arm (evaluateRuns sets it) or armKeyOf(run). A match row's arm is m.arm or armKeyOf(m). The arms are the union of both, so a match row of an arm with no run makes a second arm.
+ * A perArm card has no prFalseAlarm.prs: a new field prints no PR id.
  */
 export function scorecard(input = {}) {
   const runs = input.runs ?? [];
   const matches = input.matches ?? [];
-  const arms = [...new Set(runs.map(armOfRow))].sort();
+  const arms = [...new Set([...runs, ...matches].map(armOfRow))].sort();
   const { compare = null, suites = {}, B = 2000, seed = 1 } = input;
   const { eligible, stale } = rowFilters(input);
   const reliability = reliabilityByArm(runs, arms, input, stale);
@@ -388,9 +402,9 @@ export function scorecard(input = {}) {
   let perArm;
   if (arms.length <= 1) {
     card = scoreOne(input);
-    perArm = Object.fromEntries(arms.map((a) => [a, card]));
+    perArm = Object.fromEntries(arms.map((a) => [a, withoutPrs(card)]));
   } else {
-    perArm = Object.fromEntries(arms.map((a) => [a, armCard(a)]));
+    perArm = Object.fromEntries(arms.map((a) => [a, withoutPrs(armCard(a))]));
     const all = scoreOne(input);
     card = { ...all, ...Object.fromEntries([...POOLED_KEYS, ...ARM_ONLY_KEYS].map((k) => [k, null])), cost: { ...all.cost, grok: null } };
   }
@@ -404,12 +418,15 @@ export function armKeyOf(run) {
   return [reviewer, reviewer === 'engine' ? (run?.promptVersion ?? LEGACY_ENGINE_VERSION) : '-', run?.model ?? '-', run?.backend ?? '-'].join('|');
 }
 
-/** The replicate number of a run row: an integer of 1 or more, else 1. */
-export const replicateOf = (run) => (Number.isInteger(run?.replicate) && run.replicate >= 1 ? run.replicate : 1);
+/** A replicate number is an integer of 1 or more. */
+const validReplicate = (v) => Number.isInteger(v) && v >= 1;
 
-/** Join the RAW run rows of several folders: call it before evaluateRuns, which stamps replicate 1 on a row that has none. A row with no valid replicate gets the folder number (first folder is replicate 1). */
+/** The replicate of a run row: 1 when it is undefined, else the value as it is. An invalid value (0, -1, 1.5, '3', null) stays invalid: evaluateRuns does not score that row. */
+export const replicateOf = (run) => (run?.replicate === undefined ? 1 : run.replicate);
+
+/** Join the RAW run rows of several folders: call it before evaluateRuns, which stamps replicate 1 on a row that has none. A row with an undefined replicate gets the folder number (first folder is replicate 1). A set value stays, valid or not. */
 export function joinReplicates(folders) {
-  return folders.flatMap((rows, i) => rows.map((r) => ({ ...r, replicate: Number.isInteger(r?.replicate) && r.replicate >= 1 ? r.replicate : i + 1 })));
+  return folders.flatMap((rows, i) => rows.map((r) => ({ ...r, replicate: r?.replicate === undefined ? i + 1 : r.replicate })));
 }
 
 const isFailure = (r) => r.status !== 'ok' && r.status !== 'incomplete';
@@ -432,11 +449,18 @@ function newestPerRound(runs) {
   return [...best.values()].sort((a, b) => a.i - b.i);
 }
 
-/** Per arm: { attempts (every row), newest (newest rows), failed (newest rows that are not ok and not incomplete), failedThenOk (groups that ended ok or incomplete after a failure) }. */
+/**
+ * Per arm: { attempts (every row), newest (newest rows), failed (newest rows that are not ok and not incomplete), failedThenOk (groups that ended ok or incomplete after a failure),
+ * invalidReplicate (rows whose replicate is set and invalid: they count in attempts, and in no other number) }.
+ */
 function attemptsByArm(runs, groups) {
   const out = {};
-  const slot = (arm) => (out[arm] ??= { attempts: 0, newest: 0, failed: 0, failedThenOk: 0 });
-  for (const r of runs) slot(armKeyOf(r)).attempts += 1;
+  const slot = (arm) => (out[arm] ??= { attempts: 0, newest: 0, failed: 0, failedThenOk: 0, invalidReplicate: 0 });
+  for (const r of runs) {
+    const a = slot(armKeyOf(r));
+    a.attempts += 1;
+    if (!validReplicate(replicateOf(r))) a.invalidReplicate += 1;
+  }
   for (const g of groups) {
     const a = slot(armKeyOf(g.r));
     a.newest += 1;
@@ -455,15 +479,26 @@ function nearWithdrawn(withdrawn, c, tol) {
 }
 
 /**
+ * The cluster of a match row, from the dataset row: d.cluster when it is a non-empty string, else range:<range> for a range row,
+ * else owner/repo#pr in lower case (the goldKey form: an own-repo row gives '#pr'). The repo comes from the dataset row, else the run.
+ */
+function clusterOfDataset(d, run) {
+  if (isText(d.cluster)) return d.cluster;
+  const range = d.range ?? d.target?.range;
+  if (isText(range)) return `range:${range}`;
+  return `${String(d.repo ?? d.target?.repo ?? run.repo ?? '').toLowerCase()}#${run.pr}`;
+}
+
+/**
  * Glue: match each replayed run against the dataset findings of its (pr, sha40).
  * runs: run records (with findingsPath). dataset: resolved findings. readFindings(path) => { findings: [{ file, line, lineEnd, severity, title }] }.
- * Returns { runs, matches, attempts } ready for scorecard(). runs: [{ ...run, arm, replicate, findings: [{ id, pairId, sev, matchedKey }] }]. matches: one row per dataset finding of a replayed round, with arm and replicate.
- * attempts: { [arm]: { attempts, newest, failed, failedThenOk } }.
+ * Returns { runs, matches, attempts } ready for scorecard(). runs: [{ ...run, arm, replicate, findings: [{ id, pairId, sev, matchedKey }] }]. matches: one row per dataset finding of a replayed round, with arm, replicate and cluster.
+ * A row whose replicate is set and invalid is not scored. attempts: { [arm]: { attempts, newest, failed, failedThenOk, invalidReplicate } }.
  */
 export function evaluateRuns({ runs, dataset, readFindings, tol = 3 }) {
   const outRuns = [];
   const matches = [];
-  const groups = newestPerRound(runs);
+  const groups = newestPerRound(runs.filter((r) => validReplicate(replicateOf(r))));
   for (const run0 of groups.map((g) => g.r).filter((r) => r.status === 'ok' || r.status === 'incomplete')) {
     const run = { ...run0, arm: armKeyOf(run0), replicate: replicateOf(run0) };
     // An incomplete run (status incomplete, or an older ok row with coverageComplete false) stays in the output so the card counts it as excluded,
@@ -477,7 +512,7 @@ export function evaluateRuns({ runs, dataset, readFindings, tol = 3 }) {
     const cr = dataset.filter((d) => d.pr === run.pr && d.sha40 === run.sha40).map((d) => ({ src: 'cr', id: d.key, file: d.path, start: d.startLine, end: d.endLine, sev: foldSev(d.severity), d }));
     const res = matchFindings(cr, eng, { tol });
     const hit = new Map(res.matches.map((m) => [m.cr.id, m.eng]));
-    for (const c of cr) matches.push({ key: c.id, pr: run.pr, arm: run.arm, replicate: run.replicate, set: run.set, reviewer: run.reviewer ?? null, promptSha256: run.promptSha256 ?? null, bodyMode: run.bodyMode ?? null, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null, engPairId: hit.get(c.id)?.pairId ?? null, inWithdrawn: nearWithdrawn(withdrawn, c, tol) });
+    for (const c of cr) matches.push({ key: c.id, pr: run.pr, arm: run.arm, replicate: run.replicate, cluster: clusterOfDataset(c.d, run), set: run.set, reviewer: run.reviewer ?? null, promptSha256: run.promptSha256 ?? null, bodyMode: run.bodyMode ?? null, crSev: c.sev, crVerdict: c.d.verdict, crSource: c.d.source, engSev: hit.get(c.id)?.sev ?? null, engPairId: hit.get(c.id)?.pairId ?? null, inWithdrawn: nearWithdrawn(withdrawn, c, tol) });
     const byEng = new Map(res.matches.map((m) => [m.eng.id, m.cr.id]));
     outRuns.push({ ...run, findings: eng.map((e) => ({ id: e.id, pairId: e.pairId, sev: e.sev, matchedKey: byEng.get(e.id) ?? null })) });
   }

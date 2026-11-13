@@ -1,9 +1,12 @@
 // The holdout.json writer. Pure of any default location: every function takes the path. HOLDOUT_PATH is only the name of the live file.
-// One row per engineVersion: { engineVersion, majors, found, recall, pairedBar }. Counts only, no PR id. pairedBar is the holdout cell of the scorecard.
+// One row per engineVersion: { engineVersion, majors, found, recall, pairedBar }. Counts only, no PR id.
+// majors = distinct gold items (an integer). found may be a mean over replicates (fractional), 0 <= found <= majors. recall is null under MIN_CELL (20) majors.
+// The caller gives the per-set pairedBar of a card ({ holdout, dev }). The row keeps its holdout cell through an allow-list of keys.
 // engineVersion is the caller's label of the row; the ledger check ties the row to an arm by promptVersion and promptSha256, not by engineVersion.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { MIN_CELL } from './score.mjs';
 
 export const HOLDOUT_PATH = path.join(os.homedir(), '.claude', 'state', 'local-review', 'eval', 'holdout.json');
 
@@ -29,13 +32,33 @@ export function readHoldout(file) {
   return data;
 }
 
+const isObject = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+/** Keys of the holdout cell that the file keeps, each with the test of its value. Nothing else is copied: no cluster count, no free key, no PR id, no object, no free string. */
+const isNum = (v) => v === null || Number.isFinite(v);
+const CELL_KEYS = { status: (v) => v === 'NOTE', baseline: isText, candidate: isText };
+const SUITE_CELLS = ['regression', 'capability', 'unassigned'];
+const SUITE_KEYS = { ...Object.fromEntries(['delta', 'lo', 'hi', 'n', 'unpaired', 'd', 'nNeeded', 'B', 'used'].map((k) => [k, isNum])), wouldBe: (v) => v === null || v === 'PASS' || v === 'FAIL' };
+const pick = (from, types) => Object.fromEntries(Object.entries(types).filter(([k, ok]) => Object.hasOwn(from, k) && ok(from[k])).map(([k]) => [k, from[k]]));
+const isHoldoutCell = (c) => isObject(c) && c.status === 'NOTE' && isText(c.baseline) && isText(c.candidate) && SUITE_CELLS.every((n) => isObject(c[n]));
+
 function checkArgs({ path: file, engineVersion, majors, found, pairedBar, ledgerLines }) {
   if (!isText(file)) throw new Error('holdout path is missing');
   if (!isText(engineVersion)) throw new Error('engineVersion must be a non-empty string');
-  if (!Number.isInteger(majors) || !Number.isInteger(found) || found < 0 || found > majors) throw new Error('majors and found must be integers with 0 <= found <= majors');
+  // majors = distinct gold items. found may be a mean over replicates, so it may be fractional.
+  if (!Number.isInteger(majors) || majors < 0) throw new Error('majors must be an integer of 0 or more');
+  if (!Number.isFinite(found) || found < 0 || found > majors) throw new Error('found must be a finite number with 0 <= found <= majors');
   if (!Array.isArray(ledgerLines)) throw new Error('ledgerLines must be an array');
-  // The scorecard pairedBar is { holdout, dev }. Only the holdout cell belongs in this file: a dev number here would pass as a holdout number.
-  if (pairedBar !== null && typeof pairedBar === 'object' && Object.hasOwn(pairedBar, 'dev')) throw new Error('pairedBar must be the holdout cell (scorecard pairedBar.holdout), not the card pairedBar with a dev key');
+  // pairedBar is the per-set object of a card: { holdout, dev }. A bare cell, a whole card or any other object is refused. null (a card with no compare) stays.
+  if (pairedBar === null) return;
+  const perSet = isObject(pairedBar) && isHoldoutCell(pairedBar.holdout) && Object.keys(pairedBar).every((k) => k === 'holdout' || k === 'dev');
+  if (!perSet) throw new Error('pairedBar must be the per-set pairedBar of a card ({ holdout, dev }), not a bare cell or a whole card');
+}
+
+/** The holdout cell of the per-set pairedBar, through the allow-list. null stays null. */
+function holdoutCell(pairedBar) {
+  if (pairedBar === null) return null;
+  const cell = pairedBar.holdout;
+  return { ...pick(cell, CELL_KEYS), ...Object.fromEntries(SUITE_CELLS.filter((n) => isObject(cell[n])).map((n) => [n, pick(cell[n], SUITE_KEYS)])) };
 }
 
 /** The spend ledger has a line for this arm: reviewer engine, the same promptVersion and the same promptSha256. Both values must be set. */
@@ -50,8 +73,9 @@ export function writeHoldout({ path: file, engineVersion, promptVersion, promptS
   checkArgs({ path: file, engineVersion, majors, found, pairedBar, ledgerLines });
   if (!hasLedgerLine(ledgerLines, promptVersion, promptSha256)) return { written: false, reason: 'no-ledger-line' };
   const old = readHoldout(file);
-  if (Object.hasOwn(old.rows, engineVersion) && !replace) return { written: false, reason: 'exists' };
-  const row = { engineVersion, majors, found, recall: majors ? found / majors : null, pairedBar };
+  if (Object.hasOwn(old.rows, engineVersion) && replace !== true) return { written: false, reason: 'exists' };
+  // A recall under MIN_CELL majors is a percent that the card itself would not print.
+  const row = { engineVersion, majors, found, recall: majors >= MIN_CELL ? found / majors : null, pairedBar: holdoutCell(pairedBar) };
   const next = { schema: 1, rows: { ...old.rows, [engineVersion]: row } };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = path.join(path.dirname(file), `.holdout-${process.pid}-${Date.now()}.tmp`);
