@@ -62,7 +62,7 @@ export class Client {
 export default { Client };
 `;
 
-const DROP_PREFIXES = ['VITEST', 'CCV3_', 'LANE_', 'CLAUDE_'];
+const DROP_PREFIXES = ['VITEST', 'CCV3_', 'LANE_', 'CLAUDE_', 'PG', 'COORDINATION_']; // PG* and COORDINATION_*: no live database through the env
 const DROP_KEYS = ['CONTINUOUS_CLAUDE_DB_URL', 'DATABASE_URL', 'OPC_POSTGRES_URL', 'POSTGRES_URL'];
 
 let root: string;
@@ -135,6 +135,7 @@ describe('session-start-docker (empty PATH: docker absent)', () => {
   it('Cursor payload: prints the neutral output, no additionalContext', () => {
     const r = runHook('session-start-docker', cursorStart(sid('dk-cursor')), newTmp());
     expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
     expect(r.stdout).toBe(CONTINUE);
   }, T);
 
@@ -167,6 +168,7 @@ describe('session-start-continuity (legacy ledger fixture)', () => {
     const ledger = seed(tmp);
     const r = runHook('session-start-continuity', cursorStart(sid('sc-cursor')), tmp);
     expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
     expect(r.stdout).toBe(CONTINUE);
     expect(readFileSync(ledger, 'utf-8')).toBe(LEDGER);
   }, T);
@@ -193,6 +195,7 @@ describe('roadmap-reconcile (ROADMAP with 2 missing files)', () => {
     seed(tmp);
     const r = runHook('roadmap-reconcile', cursorStart(sid('rr-cursor')), tmp);
     expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
     expect(r.stdout).toBe('{}');
   }, T);
 
@@ -225,6 +228,7 @@ describe('hook-health-monitor (settings.json names a missing dist)', () => {
     seed(tmp);
     const r = runHook('hook-health-monitor', cursorStart(sid('hm-cursor')), tmp);
     expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
     expect(r.stdout).toBe(CONTINUE);
   }, T);
 
@@ -251,8 +255,29 @@ describe('lane-context (pg stubbed: query log, no connection)', () => {
     const tmp = newTmp();
     const r = runHook('lane-context', cursorStart(sid('lc-cursor')), tmp, pgEnv(tmp));
     expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
     expect(r.stdout).toBe('{}');
     expect(existsSync(join(tmp, 'pg-queries.log'))).toBe(false);
+  }, T);
+
+  it('Cursor postToolUse payload: prints {} and sends no query (no mid-turn DM read)', () => {
+    const tmp = newTmp();
+    const payload = { hook_event_name: 'postToolUse', session_id: sid('lc-cursor-post'), tool_name: 'Shell' };
+    const r = runHook('lane-context', payload, tmp, pgEnv(tmp));
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toBe('{}');
+    expect(existsSync(join(tmp, 'pg-queries.log'))).toBe(false);
+  }, T);
+
+  it('Claude PostToolUse control: prints {} and does reach the database stub', () => {
+    const tmp = newTmp();
+    const payload = { hook_event_name: 'PostToolUse', session_id: sid('lc-claude-post'), tool_name: 'Bash', cwd: tmp };
+    const r = runHook('lane-context', payload, tmp, pgEnv(tmp));
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('{}');
+    // Control for the Cursor case above: the stub log exists, so "no query" there is not vacuous.
+    expect(existsSync(join(tmp, 'pg-queries.log'))).toBe(true);
   }, T);
 
   it('Claude payload: prints the original {} and runs the lease UPDATE', () => {
