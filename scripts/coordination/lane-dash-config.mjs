@@ -25,6 +25,7 @@ const DEFAULT_TARGETS = [
   { key: 'age_edge_3', value: 7, label: 'Decide-or-drop age (days)', source: 'PROPOSAL: a never-started lane older than this needs a decision.' },
   { key: 'show_rows', value: 4, label: 'Rows per list', source: 'Page choice. The Waiting on Dave list.' },
   { key: 'project_rows', value: 4, label: 'Rows in the project list', source: 'Dave, 2026-11-08 (phone length): the Projects to done tile shows 4 rows.' },
+  { key: 'category_rows', value: 9, label: 'Rows in the category list', source: 'Dave, 2026-11-13: all 9 category rows on the phone.' },
   { key: 'log_rows', value: 12, label: 'Rows in the assignment log', source: 'Page choice.' },
   { key: 'session_rows', value: 7, label: 'Rows in Who took work', source: 'Page choice.' },
   { key: 'trend_min_days', value: 7, label: 'Snapshots before trends show', source: 'PROPOSAL: a trend line needs a week of daily snapshots.' },
