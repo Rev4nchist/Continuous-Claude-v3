@@ -64,7 +64,7 @@ import { cliCapOf } from './cr-paid.mjs';
 import { envStep } from './lib/env-step.mjs';
 import {
   SURFACES, ALWAYS_GATES, CATCHER_PARSER_FILES, BASE_TOKEN, withBase, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
-  runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
+  runCodeRabbit as runCodeRabbitLive, runPrePr as runPrePrLive, assertSafeCrArgs, changedFiles, makeGit, notesFor,
   parseAgentStream, parseUsage, usageCostOf, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
   killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn, acquireLock,
 } from './pre-pr.mjs';
@@ -72,12 +72,21 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const CONFIG = JSON.parse(readFileSync(path.join(REPO_ROOT, 'review-router.config.json'), 'utf8'));
+const REVIEW_MD = readFileSync(path.join(REPO_ROOT, 'REVIEW.md'), 'utf8');
 // Never read or write Dave's real paid ledger: every run here that could touch it gets a temp one.
 // Safety net: a run that forgets gateLogPath still writes to a temp file, never to Dave's real pre-pr-gates.jsonl.
 process.env.PRE_PR_GATE_LOG = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-gatelog-env-')), 'pre-pr-gates.jsonl');
 const tempLedger = () => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
 
 const HEAD = 'a'.repeat(40);
+
+// No test reads Dave's real CodeRabbit store (%LOCALAPPDATA%\coderabbit\reviews): every call goes in with crStore null (off) unless a test
+// passes its own temp store. The step 2c tests (T0..T8) pass one on purpose.
+// The answer-key guard reads REVIEW.md in the root and a both-sides path list. Tests that pass no list get a clean one; a test that passes
+// changedPaths (or its own guardPaths) is checked on that list.
+const CLEAN_PATHS = ['src/clean.mjs'];
+const runCodeRabbit = (o) => runCodeRabbitLive({ crStore: null, ...(o.changedPaths === undefined && !('guardPaths' in o) ? { guardPaths: CLEAN_PATHS } : {}), ...o });
+const runPrePr = (o) => runPrePrLive({ crStore: null, ...o });
 
 function fakeGit(map) {
   return (args) => {
@@ -652,6 +661,7 @@ const USAGE_OK = ev({ type: 'usage', remaining: 5, fullCapacityInMs: 0 });
 
 function crFixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), 'prepr-cr-'));
+  writeFileSync(path.join(root, 'REVIEW.md'), REVIEW_MD);
   const calls = [];
   const usageCalls = [];
   const runner = (opts) => {
@@ -661,7 +671,7 @@ function crFixture() {
   };
   return { root, calls, usageCalls, runner, now: new Date('2026-10-27T10:00:00Z'), ledgerPath: tempLedger() };
 }
-const crOpts = (f, extra = {}) => ({ root: f.root, branch: 'feat/x', head: HEAD, base: 'main', now: f.now, runner: f.runner, ledgerPath: f.ledgerPath, ...extra });
+const crOpts = (f, extra = {}) => ({ root: f.root, branch: 'feat/x', head: HEAD, base: 'main', now: f.now, runner: f.runner, ledgerPath: f.ledgerPath, crStore: null, ...extra });
 
 test('C1: the run uses cr review --agent and never --use-credits or --api-key', async () => {
   const f = crFixture();
@@ -1449,6 +1459,25 @@ test('B1: a stamp written by --skip-cr records reason flag, and the built hook d
   assert.match(v.reason, /flag/);
 });
 
+test('B1k: an answer-key stamp written by pre-pr is allowed by the built hook only with both proof fields; flag stays denied', async () => {
+  // Breaks when: the hook (dist/pre-pr-gate.mjs, built from src) does not accept the earned reason, accepts it with a field missing, or pre-pr stops writing the fields.
+  const repo = withFork(repoWithGoldFile());
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  const run = await prePr(repo);
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  const file = stampFile(repo);
+  const stamp = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(hookVerdict(repo.dir).allow, true, 'both fields: allowed');
+  const denied = (over) => { writeFileSync(file, JSON.stringify({ ...stamp, ...over })); return hookVerdict(repo.dir); };
+  for (const over of [{ answer_key_paths: undefined }, { answer_key_paths: 0 }, { cr_answer_key: false }, { cr_answer_key: undefined }]) {
+    const v = denied(over);
+    assert.equal(v.allow, false, JSON.stringify(over));
+    assert.match(v.reason, /answer-key/, JSON.stringify(over));
+  }
+  assert.equal(denied({ cr_skip_reason: 'flag' }).allow, false, 'the fields do not excuse flag');
+});
+
 test('B2: the same run with the cap reached, or a known rate-limit wait, or no CLI, is allowed by the built hook; a review that ran is allowed', async () => {
   const capped = withFork(makeRepo());
   const spent = { root: capped.dir, branch: 'feat/x', base: 'main', now: new Date('2026-10-27T09:00:00Z'), runner: (o) => ({ status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }) };
@@ -1575,6 +1604,7 @@ function makeRepo({ files = { 'docs/a.md': 'hello\n' } } = {}) {
   git(dir, 'init', '-q', '-b', 'main');
   writeFileSync(path.join(dir, '.gitignore'), '.claude/cache/\n');
   writeFileSync(path.join(dir, 'README.md'), 'root\n');
+  writeFileSync(path.join(dir, 'REVIEW.md'), REVIEW_MD); // the answer-key guard reads it from the root
   git(dir, 'add', '.');
   git(dir, 'commit', '-q', '-m', 'base');
   git(dir, 'checkout', '-q', '-b', 'feat/x');
@@ -1610,6 +1640,7 @@ async function prePr(repo, extra = {}) {
     guardLog: () => {},
     envCheck: NO_ENV,
     ledgerPath: tempLedger(),
+    crStore: null,
     gateLogPath: tempGateLog(),
     // The osv and pssa advisories never start a scanner or touch the network here: no lockfile, no binary. The OSV-PP / PSSA-PP tests inject their own.
     osvLockfiles: [], findOsv: () => null, findPssa: () => null,
@@ -3023,4 +3054,702 @@ test('GL6: the default log path honours PRE_PR_GATE_LOG, then falls back to the 
   const { gateLogPath } = await import('./lib/gate-log.mjs');
   assert.equal(gateLogPath({ PRE_PR_GATE_LOG: path.join('somewhere', 'y.jsonl') }), path.join('somewhere', 'y.jsonl'));
   assert.equal(gateLogPath({ USERPROFILE: path.join('home', 't') }), path.join('home', 't', '.claude', 'logs', 'pre-pr-gates.jsonl'));
+});
+
+// ---------- step 2c: a note when a NEW CLI store marker has no git data ----------
+// The CLI keeps each review at %LOCALAPPDATA%\coderabbit\reviews\<workspace>\<scope>\reviews\<id>\ with a .session-complete-v2 marker.
+// A FAIL with unreviewed files plus a new marker with hasGitMetadata false gets ONE read-only note. It never changes a verdict.
+// How it can fail, and the test that catches it (written before the code):
+//   LOCALAPPDATA unset, empty or relative gives a path under the cwd (the `?? ''` pattern)      -> S2c-T0
+//   listMarkers throws on a missing store, lists files or stray folders, or recurses              -> T2, T5h
+//   a failed "before" snapshot reads as empty, so ~500 old markers look new                       -> T2b
+//   readFlag treats a string "false", a missing or a broken marker as false                       -> T3
+//   the own-root match breaks on slash, drive-letter case or trailing slash                       -> T4, T5b
+//   a foreign marker suppresses the note, or is named in it                                       -> T5c, T5d
+//   the note shows the user path or any file content                                              -> T5a, T5g
+//   a marker folder is entered (a sentinel one level deeper is read)                              -> T5h
+//   the note changes the status, detail, skipReason, run counter or notes of the step             -> T6, T8
+//   a PASS run gets the note                                                                      -> T7
+//   a throw in the snapshot or the diagnostic stops the step                                      -> T8
+// Test names are S2c-<id> (the file already has T1..T7 for the runner). S2c-T0..T6 fail before the code. S2c-T7, S2c-T8 and N3 (untouched) guard behaviour that must not change.
+
+const mkStore = () => mkdtempSync(path.join(os.tmpdir(), 'prepr-crstore-'));
+const SENTINEL = 'SENTINEL-do-not-read-9f3c';
+const NOTE = (key) => `a new CLI store marker has no git data (hasGitMetadata false): %LOCALAPPDATA%\\coderabbit\\reviews\\${key.split('/').join('\\')}; this can be a run of another project. The step still fails.`;
+// The real marker shape: { version, state, hasGitMetadata, hasIncrementalDiff } (boolean flags). git.json holds workingDirectory (backslashes, C:).
+function mkMarker(store, key, { flag = false, git = null, marker = null } = {}) {
+  const dir = path.join(store, ...key.split('/'));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, '.session-complete-v2'), JSON.stringify(marker ?? { version: 2, state: 'complete', hasGitMetadata: flag, hasIncrementalDiff: flag }));
+  if (git !== null) writeFileSync(path.join(dir, 'git.json'), JSON.stringify({ workingDirectory: git, head: 'x' }));
+}
+const storeDeps = (store, extra = {}) => ({ root: store, list: PRE.listMarkers, diagnose: PRE.storeDiagnostic, ...extra });
+const UNREVIEWED = ev(CONTEXT, MAJOR, { ...DONE, unreviewedFileCount: 8 });
+// A runner that writes a marker into the store on the review call (not the usage call), like the real CLI does.
+function crWriting(f, store, key, flag) {
+  const inner = f.runner;
+  f.runner = (o) => { if (o.args[0] !== 'usage') mkMarker(store, key, { flag }); return inner(o); };
+}
+const storeNotes = (r) => r.notes.filter((n) => /hasGitMetadata/.test(n));
+
+test('S2c-T0: crStoreRoot is null for an unset, empty or relative LOCALAPPDATA, and joins an absolute one', () => {
+  // Breaks when: crStoreRoot copies `env.LOCALAPPDATA ?? ''` (cursor-review.mjs:410): '' joins to a relative path under the cwd.
+  assert.equal(PRE.crStoreRoot({}), null);
+  assert.equal(PRE.crStoreRoot({ LOCALAPPDATA: undefined }), null);
+  assert.equal(PRE.crStoreRoot({ LOCALAPPDATA: '' }), null);
+  assert.equal(PRE.crStoreRoot({ LOCALAPPDATA: 'AppData' }), null);
+  const abs = os.tmpdir();
+  assert.equal(PRE.crStoreRoot({ LOCALAPPDATA: abs }), path.join(abs, 'coderabbit', 'reviews'));
+});
+
+test('S2c-T2: listMarkers lists workspace/scope/reviews/id keys at a fixed depth; a missing store is empty; a file as the store is null', () => {
+  const s = mkStore();
+  mkMarker(s, 'w1/s1/reviews/a');
+  mkMarker(s, 'w1/s1/reviews/b');
+  mkMarker(s, 'w2/s2/reviews/c');
+  mkdirSync(path.join(s, 'w3', 's3'), { recursive: true }); // a scope with no reviews folder
+  writeFileSync(path.join(s, '.checkpoint-compaction-v2'), 'x'); // a stray file next to the workspaces (real store)
+  writeFileSync(path.join(s, 'w1', 'stray.txt'), 'x');
+  writeFileSync(path.join(s, 'w1', 's1', 'reviews', 'stray.txt'), 'x');
+  assert.deepEqual([...PRE.listMarkers(s)].sort(), ['w1/s1/reviews/a', 'w1/s1/reviews/b', 'w2/s2/reviews/c']);
+  const none = PRE.listMarkers(path.join(s, 'nope'));
+  assert.ok(none instanceof Set);
+  assert.equal(none.size, 0);
+  assert.equal(PRE.listMarkers(path.join(s, '.checkpoint-compaction-v2')), null);
+});
+
+test('S2c-T2b: a failed "before" or "after" snapshot (null) gives no message; the step with a null first listing gets no note', async () => {
+  // Breaks when: null is read as an empty set, so every old marker looks new.
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/old1');
+  mkMarker(s, 'w/s/reviews/old2');
+  const after = new Set(['w/s/reviews/old1', 'w/s/reviews/old2']);
+  assert.equal(PRE.storeDiagnostic({ before: null, after, root: 'C:/x/wt', storeRoot: s }), null);
+  assert.equal(PRE.storeDiagnostic({ before: new Set(), after: null, root: 'C:/x/wt', storeRoot: s }), null);
+  const f = crFixture();
+  f.runner.next = { status: 0, stdout: UNREVIEWED, stderr: '' };
+  let calls = 0;
+  const list = (r) => (calls++ === 0 ? null : PRE.listMarkers(r));
+  const r = await runCodeRabbit(crOpts(f, { crStore: storeDeps(s, { list }) }));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(storeNotes(r).length, 0);
+});
+
+test('S2c-T3: readFlag is true or false only for a boolean hasGitMetadata; a missing, broken or non-boolean marker is null', () => {
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/t', { flag: true });
+  mkMarker(s, 'w/s/reviews/f', { flag: false });
+  mkMarker(s, 'w/s/reviews/str', { marker: { hasGitMetadata: 'false' } });
+  mkMarker(s, 'w/s/reviews/nokey', { marker: { version: 2 } });
+  mkdirSync(path.join(s, 'w', 's', 'reviews', 'empty'), { recursive: true });
+  mkMarker(s, 'w/s/reviews/bad');
+  writeFileSync(path.join(s, 'w', 's', 'reviews', 'bad', '.session-complete-v2'), '{not json');
+  const at = (id) => PRE.readFlag(path.join(s, 'w', 's', 'reviews', id));
+  assert.equal(at('t'), true);
+  assert.equal(at('f'), false);
+  assert.equal(at('str'), null);
+  assert.equal(at('nokey'), null);
+  assert.equal(at('empty'), null);
+  assert.equal(at('bad'), null);
+});
+
+test('S2c-T4: normDir is a pure string function: slashes, drive-letter case and trailing slash', () => {
+  assert.equal(PRE.normDir('C:\\Users\\x\\wt\\'), 'c:/Users/x/wt');
+  assert.equal(PRE.normDir('c:/Users/x/wt'), 'c:/Users/x/wt');
+  assert.equal(PRE.normDir('C:/Users/x/wt//'), 'c:/Users/x/wt');
+  assert.equal(PRE.normDir('/home/x/wt/'), '/home/x/wt');
+  assert.equal(PRE.normDir('/'), '/');
+  assert.equal(PRE.normDir(null), '');
+  assert.notEqual(PRE.normDir('C:/a/b'), PRE.normDir('C:/a/bc'));
+});
+
+const diag = (store, keys, root, before = new Set()) => PRE.storeDiagnostic({ before, after: new Set(keys), root, storeRoot: store });
+
+test('S2c-T5a: one new marker with no git data gives the path-only note, in %LOCALAPPDATA% form, with no user or temp path', () => {
+  const s = mkStore();
+  mkMarker(s, 'ws1/sc1/reviews/id1', { flag: false });
+  const note = diag(s, ['ws1/sc1/reviews/id1'], 'C:/work/wt');
+  assert.equal(note, NOTE('ws1/sc1/reviews/id1'));
+  assert.ok(!note.includes(os.tmpdir()), 'no expanded path');
+  assert.ok(!note.includes(os.homedir()), 'no home path');
+});
+
+test('S2c-T5b: a new marker whose git.json names this root (any slash, drive case, trailing slash) gives no note', () => {
+  for (const named of ['C:\\work\\wt', 'c:/work/wt/', 'C:/work/wt', 'c:\\work\\wt\\']) {
+    const s = mkStore();
+    mkMarker(s, 'w/s/reviews/bad', { flag: false });
+    mkMarker(s, 'w/s/reviews/own', { flag: true, git: named });
+    assert.equal(diag(s, ['w/s/reviews/bad', 'w/s/reviews/own'], 'C:/work/wt'), null, named);
+  }
+});
+
+test('S2c-T5c: a foreign new marker (git.json names another dir) does not suppress the note and is not named in it', () => {
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/bad', { flag: false });
+  mkMarker(s, 'w/s/reviews/foreign', { flag: true, git: 'C:\\work\\other' });
+  const note = diag(s, ['w/s/reviews/bad', 'w/s/reviews/foreign'], 'C:/work/wt');
+  assert.equal(note, NOTE('w/s/reviews/bad'));
+  assert.ok(!note.includes('foreign'));
+});
+
+test('S2c-T5d: a foreign marker alone gives no note, even with a false flag; no new marker gives none; two false markers give one note (the first by name)', () => {
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/foreign', { flag: false, git: 'C:\\work\\other' });
+  assert.equal(diag(s, ['w/s/reviews/foreign'], 'C:/work/wt'), null);
+  const t = mkStore();
+  mkMarker(t, 'w/s/reviews/old', { flag: false });
+  assert.equal(diag(t, ['w/s/reviews/old'], 'C:/work/wt', new Set(['w/s/reviews/old'])), null, 'old marker is not new');
+  const u = mkStore();
+  mkMarker(u, 'w/s/reviews/b2', { flag: false });
+  mkMarker(u, 'w/s/reviews/a1', { flag: false });
+  assert.equal(diag(u, ['w/s/reviews/b2', 'w/s/reviews/a1'], 'C:/work/wt'), NOTE('w/s/reviews/a1'));
+});
+
+test('S2c-T5g: no file content reaches the note: a sentinel in the marker and in git.json is absent', () => {
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/bad', { marker: { hasGitMetadata: false, note: SENTINEL } });
+  writeFileSync(path.join(s, 'w', 's', 'reviews', 'bad', 'git.json'), JSON.stringify({ head: SENTINEL }));
+  const note = diag(s, ['w/s/reviews/bad'], 'C:/work/wt');
+  assert.equal(note, NOTE('w/s/reviews/bad'));
+  assert.ok(!note.includes(SENTINEL));
+});
+
+test('S2c-T5h: a marker folder is never entered: a decoy one level deeper is not listed, not read, and cannot change the result', () => {
+  // Breaks when: listMarkers or the diagnostic recurses into <id>/. The decoy git.json names this root: reading it would suppress the note.
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/bad', { flag: false });
+  mkMarker(s, 'w/s/reviews/bad/deeper', { flag: false, git: 'C:\\work\\wt' });
+  writeFileSync(path.join(s, 'w', 's', 'reviews', 'bad', 'deeper', 'diff.txt'), SENTINEL);
+  mkMarker(s, 'w/s/reviews/good', { flag: true });
+  mkMarker(s, 'w/s/reviews/good/deeper', { flag: false });
+  const keys = PRE.listMarkers(s);
+  assert.deepEqual([...keys].sort(), ['w/s/reviews/bad', 'w/s/reviews/good']);
+  const note = PRE.storeDiagnostic({ before: new Set(), after: keys, root: 'C:/work/wt', storeRoot: s });
+  assert.equal(note, NOTE('w/s/reviews/bad'));
+  assert.ok(!note.includes('deeper') && !note.includes(SENTINEL));
+  assert.equal(PRE.storeDiagnostic({ before: new Set(['w/s/reviews/bad']), after: keys, root: 'C:/work/wt', storeRoot: s }), null, 'the good marker has git data; its decoy is unread');
+});
+
+test('S2c-T6: a FAIL with unreviewed files and a new marker with no git data gets one note; verdict, skipReason and run count do not change', async () => {
+  const f = crFixture();
+  const s = mkStore();
+  mkMarker(s, 'old/s/reviews/1', { flag: true, git: 'C:\\other' });
+  f.runner.next = { status: 0, stdout: UNREVIEWED, stderr: '' };
+  crWriting(f, s, 'w/s/reviews/new', false);
+  const r = await runCodeRabbit(crOpts(f, { crStore: storeDeps(s) }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /INCOMPLETE/);
+  assert.equal(r.skipReason, undefined);
+  assert.deepEqual(storeNotes(r), [NOTE('w/s/reviews/new')]);
+  assert.equal(f.calls.length, 1);
+  const counter = JSON.parse(readFileSync(crPaths(f.root, 'feat/x').counter, 'utf8'));
+  assert.equal(counter.runs.length, 1, 'the run is counted');
+  assert.equal(counter.runs[0].outcome, 'failed');
+});
+
+test('S2c-T7: a PASS run whose runner writes a new marker with no git data gets no note', async () => {
+  const f = crFixture();
+  const s = mkStore();
+  crWriting(f, s, 'w/s/reviews/new', false);
+  const r = await runCodeRabbit(crOpts(f, { crStore: storeDeps(s) }));
+  assert.equal(r.status, 'PASS');
+  assert.equal(storeNotes(r).length, 0);
+  // Breaks when: the unreviewedFileCount > 0 condition is dropped. A FAIL with no unreviewed count (a failed outcome) gets no note.
+  const g = crFixture();
+  const t = mkStore();
+  g.runner.next = { status: 0, stdout: ev(CONTEXT, MAJOR, { ...DONE, outcome: 'failed', message: 'server error' }), stderr: '' };
+  crWriting(g, t, 'w/s/reviews/new', false);
+  const failed = await runCodeRabbit(crOpts(g, { crStore: storeDeps(t) }));
+  assert.equal(failed.status, 'FAIL');
+  assert.equal(storeNotes(failed).length, 0);
+});
+
+test('S2c-T6b: with the note, only one note is added: status, detail, skipReason and counter equal the empty-store run', async () => {
+  const baseline = await t8Run((s) => storeDeps(s), false);
+  const noted = await t8Run((s) => storeDeps(s), true);
+  assert.equal(noted.notes.at(-1), NOTE('w/s/reviews/new'));
+  assert.deepEqual({ ...noted, notes: noted.notes.slice(0, -1) }, baseline);
+});
+
+test('S2c-T6c: runPrePr hands its crStore to the CodeRabbit step (the snapshot reads the store it was given)', async () => {
+  // Breaks when: runPrePr drops crStore from its runCodeRabbit call (every prePr() test would then read the live store).
+  const s = mkStore();
+  const seen = [];
+  const crStore = { root: s, list: (r) => { seen.push(r); return PRE.listMarkers(r); }, diagnose: PRE.storeDiagnostic };
+  const { crCalls } = await prePr(makeRepo(), { crStore });
+  assert.equal(crCalls.length, 1);
+  assert.ok(seen.length >= 1 && seen.every((r) => r === s), JSON.stringify(seen));
+});
+
+async function t8Run(deps, writes) {
+  const f = crFixture();
+  const s = mkStore();
+  f.runner.next = { status: 0, stdout: UNREVIEWED, stderr: '' };
+  if (writes) crWriting(f, s, 'w/s/reviews/new', false);
+  const r = await runCodeRabbit(crOpts(f, { crStore: deps(s) }));
+  const counter = readFileSync(crPaths(f.root, 'feat/x').counter, 'utf8');
+  return { status: r.status, detail: r.detail, skipReason: r.skipReason, notes: r.notes, counter, calls: f.calls.length };
+}
+
+test('S2c-T8: a throw in the snapshot, in the second listing or in the diagnostic gives the same step as an empty-store run', async () => {
+  // Breaks when: a try is removed (the step rejects) or a throw changes the status, detail, skipReason, notes or run counter.
+  const baseline = await t8Run((s) => storeDeps(s), false);
+  assert.equal(baseline.status, 'FAIL');
+  const boom = () => { throw new Error('boom'); };
+  const listThrowsOn = (n) => (s) => { let c = 0; return storeDeps(s, { list: (r) => { if (c++ === n) boom(); return PRE.listMarkers(r); } }); };
+  const variants = { snapshot: listThrowsOn(0), 'second listing': listThrowsOn(1), diagnostic: (s) => storeDeps(s, { diagnose: boom }), 'no store root': () => storeDeps(null) };
+  for (const [name, deps] of Object.entries(variants)) {
+    assert.deepEqual(await t8Run(deps, true), baseline, name);
+  }
+});
+
+// ---------- answer-key guard (card prepr-answer-key-cli-guard): no CLI review reads an answer-key path ----------
+// The match list is the frozen ANSWER_KEY_GLOBS; REVIEW.md "## Skip paths" is only the drift alarm (A13). The guard runs in runCodeRabbit before the lock, the counter
+// and the CLI, on the paths of BOTH sides of the change (a delete or a rename names its old path too). A hit is a SKIP "answer-key" (an earned
+// skip: the stamp gets cr_answer_key true and answer_key_paths N, and the gate accepts it only with both). An unreadable list, a null list and a
+// failed git read stay a FAIL. How it can fail, and the test:
+//   a gold, seeds, rubrics or labels path reaches the CLI; the guard runs after the lock or the counter          -> A1
+//   a prefix match blocks linktype-labels.json.bak or review-eval/gold.mjs, or misses a glob                      -> A2
+//   REVIEW.md missing, unreadable, with no section, or with no answer-key glob lets the run go                      -> A3
+//   a null changed list lets the run go                                                                           -> A4
+//   the live list drifts from cursor-review.mjs TREE_EXCLUDES                                                       -> A5
+//   a clean diff is blocked                                                                                       -> A6
+//   a delete or a rename out of gold/ shows only the new path (git diff --name-only follows renames)              -> A7, A8
+//   Gold/ or a backslash path slips past the match                                                                -> A9
+//   runPrePr does not pass the both-sides list, or reads a failed git as "no paths"                               -> A7, A10
+const GOLD = 'scripts/eval/review-eval/gold/g.json';
+const KEY_TAIL = /Fix REVIEW\.md or the git read, then run pre-pr again\.$/;
+// A REVIEW.md "Skip paths" block with the four answer-key globs (the live one) plus extra lines.
+const reviewMdWith = (extra) => REVIEW_MD.replace(/(## Skip paths\s+```\r?\n)/, `$1${extra}\n`);
+
+test('A1: a diff with an answer-key path is SKIPped (answer-key) before the lock, the counter and the CLI; the detail names the first path and the count', async () => {
+  const f = crFixture();
+  // A live lock held by another run: a guard that sat after the lock would answer "a run is in progress" instead.
+  const p = crPaths(f.root, 'feat/x');
+  mkdirSync(path.dirname(p.lock), { recursive: true });
+  const lockText = JSON.stringify({ pid: process.pid, head: 'other', at: new Date(f.now.getTime() - 60_000).toISOString() });
+  writeFileSync(p.lock, lockText);
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: ['src/a.ts', GOLD, 'scripts/eval/review-eval/seeds/s.json'] }));
+  assert.equal(r.status, 'SKIP');
+  assert.doesNotMatch(r.detail, /in progress/);
+  assert.equal(r.skipReason, 'answer-key');
+  assert.equal(r.answerKeyPaths, 2);
+  assert.match(r.detail, new RegExp(`${GOLD.replaceAll('/', '\\/')}, 2 in all`));
+  assert.match(r.detail, /internal review and a seat diff read replace the CLI/);
+  assert.ok(!r.detail.includes('seeds/s.json'), 'only the first path is named');
+  assert.equal(f.calls.length + f.usageCalls.length, 0, 'the CLI is never called, not even the usage check');
+  assert.equal(existsSync(p.counter), false, 'no run counted');
+  assert.equal(readFileSync(p.lock, 'utf8'), lockText, 'the other run keeps its lock');
+});
+
+test('A2: seeds, rubrics, linktype-labels.json and gold match by whole glob; a .bak, gold.mjs and a sibling folder do not', () => {
+  const block = (p) => PRE.answerKeyBlock({ root: REPO_ROOT, paths: [p] });
+  for (const p of ['scripts/eval/review-eval/seeds/s.json', 'scripts/eval/review-eval/rubrics/deep/r.md', 'scripts/eval/review-eval/linktype-labels.json', GOLD]) {
+    assert.match(block(p) ?? '', /answer-key path/, p);
+  }
+  for (const p of ['scripts/eval/review-eval/linktype-labels.json.bak', 'scripts/eval/review-eval/gold.mjs', 'scripts/eval/review-eval/goldx/a.json', 'scripts/eval/review-eval/lib.mjs', 'src/gold/g.json']) {
+    assert.equal(block(p), null, p);
+  }
+});
+
+test('A3: REVIEW.md missing, unreadable, without the section, or without an answer-key glob FAILs and never calls the CLI', async () => {
+  const bad = {
+    missing: (root) => rmSync(path.join(root, 'REVIEW.md')),
+    unreadable: (root) => { rmSync(path.join(root, 'REVIEW.md')); mkdirSync(path.join(root, 'REVIEW.md')); },
+    'no section': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\nno list here\n'),
+    'no answer-key glob': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\n## Skip paths\n\n```\ndocs/**\nscripts/eval/review-eval-other/**\n```\n'),
+    // The match list is a constant of the four globs; REVIEW.md is the drift alarm. One missing glob, or one wide glob instead, is a FAIL.
+    'three of four globs': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\n## Skip paths\n\n```\ndocs/**\nscripts/eval/review-eval/gold/**\nscripts/eval/review-eval/seeds/**\nscripts/eval/review-eval/rubrics/**\n```\n'),
+    'a wide glob instead of the four': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\n## Skip paths\n\n```\ndocs/**\nscripts/eval/review-eval/**\n```\n'),
+  };
+  for (const [name, breakIt] of Object.entries(bad)) {
+    const f = crFixture();
+    breakIt(f.root);
+    const r = await runCodeRabbit(crOpts(f, { changedPaths: ['src/a.ts'] }));
+    assert.equal(r.status, 'FAIL', name);
+    assert.match(r.detail, /could not check the diff/, name);
+    assert.match(r.detail, KEY_TAIL, name);
+    assert.doesNotMatch(r.detail, /--skip-cr/, name);
+    assert.equal(f.calls.length + f.usageCalls.length, 0, name);
+    assert.equal(existsSync(crPaths(f.root, 'feat/x').counter), false, name);
+  }
+});
+
+test('A4: a null changed-file list FAILs and never calls the CLI', async () => {
+  const f = crFixture();
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: null }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /changed-file list is unknown/);
+  assert.equal(f.calls.length + f.usageCalls.length, 0);
+});
+
+test('A5: the frozen ANSWER_KEY_GLOBS are the answer-key globs of the live REVIEW.md AND the answer-key entries of cursor-review.mjs TREE_EXCLUDES', async () => {
+  const { TREE_EXCLUDES } = await import('./cursor-review.mjs');
+  const { parseReviewMd } = await import('../ratchets/review-skip-sync.mjs');
+  const asEntry = (g) => g.replace(/\/\*\*$/, '');
+  const frozen = PRE.ANSWER_KEY_GLOBS;
+  assert.equal(frozen.length, 4);
+  assert.ok(Object.isFrozen(frozen));
+  const inReviewMd = parseReviewMd(REVIEW_MD).filter((g) => g.startsWith('scripts/eval/review-eval/'));
+  assert.deepEqual([...frozen].sort(), [...inReviewMd].sort(), 'REVIEW.md Skip paths holds exactly the four');
+  const excluded = TREE_EXCLUDES.filter((x) => x.startsWith('scripts/eval/review-eval/'));
+  assert.deepEqual(frozen.map(asEntry).sort(), [...excluded].sort(), 'TREE_EXCLUDES holds exactly the four');
+  assert.deepEqual(PRE.answerKeyGlobs(REPO_ROOT), { globs: frozen });
+});
+
+test('A13: a wide glob in REVIEW.md earns nothing: with the four present, a file outside the four runs the CLI; a gold path still hits', async () => {
+  const f = crFixture();
+  writeFileSync(path.join(f.root, 'REVIEW.md'), reviewMdWith('scripts/eval/review-eval/**'));
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: ['scripts/eval/review-eval/lib.mjs'] }));
+  assert.equal(r.status, 'PASS');
+  assert.equal(f.calls.length, 1, 'the CLI runs');
+  const g = crFixture();
+  writeFileSync(path.join(g.root, 'REVIEW.md'), reviewMdWith('scripts/eval/review-eval/**'));
+  assert.equal((await runCodeRabbit(crOpts(g, { changedPaths: [GOLD] }))).skipReason, 'answer-key');
+});
+
+test('A6: a clean diff runs the CLI as before', async () => {
+  const f = crFixture();
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: ['src/a.ts', 'docs/x.md', 'scripts/eval/review-eval/lib.mjs'] }));
+  assert.equal(r.status, 'PASS');
+  assert.equal(f.calls.length, 1);
+});
+
+test('A9: the match ignores case, backslashes and a leading ./', () => {
+  for (const p of ['Scripts/Eval/Review-Eval/Gold/G.json', 'scripts\\eval\\review-eval\\gold\\g.json', './scripts/eval/review-eval/gold/g.json', 'SCRIPTS/EVAL/REVIEW-EVAL/LINKTYPE-LABELS.JSON']) {
+    assert.match(PRE.answerKeyBlock({ root: REPO_ROOT, paths: [p] }) ?? '', new RegExp(`answer-key path \\(${p.replace(/[.\\/-]/g, '\\$&')},`), p);
+  }
+});
+
+// A repo whose base (main) holds an answer-key .md file, then the branch deletes it or renames it out. .md keeps the diff docs-only, so
+// the evidence step passes and the CodeRabbit step runs.
+function repoWithGoldFile() {
+  const repo = makeRepo({ files: {} });
+  const rel = 'scripts/eval/review-eval/gold/old.md';
+  git(repo.dir, 'checkout', '-q', 'main');
+  mkdirSync(path.join(repo.dir, path.dirname(rel)), { recursive: true });
+  writeFileSync(path.join(repo.dir, rel), 'a long enough answer key body so that git sees the rename\nline two\nline three\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'gold on main');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  git(repo.dir, 'merge', '-q', '--ff-only', 'main');
+  return { ...repo, rel };
+}
+const crStep = (r) => r.result.results.find((x) => x.step === 'coderabbit');
+
+const stampOf = (repo) => JSON.parse(readFileSync(stampFile(repo), 'utf8'));
+const keyFields = (s) => ({ skipped: s.cr_skipped, reason: s.cr_skip_reason, key: s.cr_answer_key, n: s.answer_key_paths, docs: s.cr_docs_only });
+
+test('A7: a DELETE of an answer-key file is caught: bothSidePaths lists it and runPrePr SKIPs the CodeRabbit step as answer-key (stamp fields set, no CLI call)', async () => {
+  const repo = repoWithGoldFile();
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  assert.deepEqual(PRE.bothSidePaths(makeGit(repo.dir), 'main...HEAD'), [repo.rel]);
+  const run = await prePr(repo);
+  assert.equal(crStep(run).status, 'SKIP');
+  assert.equal(crStep(run).skipReason, 'answer-key');
+  assert.match(crStep(run).detail, new RegExp(`${repo.rel.replaceAll('/', '\\/')}, 1 in all`));
+  assert.equal(run.crCalls.length, 0);
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.deepEqual(keyFields(stampOf(repo)), { skipped: true, reason: 'answer-key', key: true, n: 1, docs: false });
+});
+
+test('A12: a normal stamp has cr_answer_key false and answer_key_paths 0 (only an answer-key skip sets them)', async () => {
+  const repo = makeRepo();
+  const run = await prePr(repo);
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.deepEqual(keyFields(stampOf(repo)), { skipped: false, reason: null, key: false, n: 0, docs: false });
+});
+
+test('A8: a RENAME out of gold/ is caught on the OLD path: --name-only shows only the new one, bothSidePaths shows both', async () => {
+  const repo = repoWithGoldFile();
+  mkdirSync(path.join(repo.dir, 'docs'), { recursive: true });
+  git(repo.dir, 'mv', repo.rel, 'docs/moved.md');
+  git(repo.dir, 'commit', '-q', '-m', 'move gold out');
+  assert.deepEqual(changedFiles(makeGit(repo.dir), 'main').paths, ['docs/moved.md'], 'the rename shows only the new path today');
+  assert.deepEqual(PRE.bothSidePaths(makeGit(repo.dir), 'main...HEAD'), ['docs/moved.md', repo.rel]);
+  const run = await prePr(repo);
+  assert.equal(crStep(run).status, 'SKIP');
+  assert.match(crStep(run).detail, /answer-key path/);
+  assert.equal(run.crCalls.length, 0);
+  assert.deepEqual(keyFields(stampOf(repo)), { skipped: true, reason: 'answer-key', key: true, n: 1, docs: false });
+});
+
+test('A11: answerKeyRange (the cr-fix guard) checks both sides of from..HEAD in a real repo', () => {
+  const repo = repoWithGoldFile();
+  assert.equal(PRE.answerKeyRange(repo.dir, 'main'), null, 'an empty range is clean');
+  mkdirSync(path.join(repo.dir, 'docs'), { recursive: true });
+  git(repo.dir, 'mv', repo.rel, 'docs/moved.md');
+  git(repo.dir, 'commit', '-q', '-m', 'move gold out');
+  assert.match(PRE.answerKeyRange(repo.dir, 'main') ?? '', /answer-key path \(scripts\/eval\/review-eval\/gold\/old\.md, 1 in all\)/);
+  const closed = PRE.answerKeyRange(path.join(os.tmpdir(), 'prepr-no-such-dir'), 'main') ?? '';
+  assert.match(closed, /could not check the diff/);
+  assert.match(closed, /Fix REVIEW\.md or the git read, then run cr-fix again\.$/);
+  assert.doesNotMatch(closed + PRE.answerKeyRange(repo.dir, 'main'), /--skip-cr/, 'cr-fix has no --skip-cr flag');
+});
+
+// The guard range is base...HEAD and the stamp records no base. A hit earns the skip only on the default base, and only when the hit path is also
+// in the fork/<base>...HEAD list (so a stale local base cannot pull another PR's gold path into this change).
+test('A14: with a --base override a hit is a FAIL, never an earned skip; the CLI never starts', async () => {
+  const f = crFixture();
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: [GOLD], guardBase: { override: true, forkPaths: undefined } }));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(r.skipReason, undefined);
+  assert.match(r.detail, new RegExp(`${GOLD.replaceAll('/', '\\/')}, 1 in all`));
+  assert.match(r.detail, /--base/);
+  assert.equal(f.calls.length + f.usageCalls.length, 0);
+  const repo = repoWithGoldFile();
+  git(repo.dir, 'branch', 'trunk', 'main');
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  const run = await prePr(repo, { base: 'trunk' });
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /--base trunk/);
+  assert.equal(run.crCalls.length, 0);
+  assert.equal(run.result.ok, false);
+});
+
+// Local main is behind fork/main; the branch merged fork/main, so git:behind passes, but main...HEAD holds another PR's gold file.
+function repoWithStaleMain() {
+  const repo = makeRepo({ files: {} });
+  const d = repo.dir;
+  git(d, 'checkout', '-q', '-b', 'up', 'main');
+  mkdirSync(path.join(d, 'scripts', 'eval', 'review-eval', 'gold'), { recursive: true });
+  writeFileSync(path.join(d, 'scripts', 'eval', 'review-eval', 'gold', 'other.md'), 'another pull request gold\n');
+  git(d, 'add', '.');
+  git(d, 'commit', '-q', '-m', 'other pr gold');
+  git(d, 'update-ref', 'refs/remotes/fork/main', git(d, 'rev-parse', 'HEAD'));
+  git(d, 'checkout', '-q', 'feat/x');
+  git(d, 'merge', '-q', '--no-ff', '--no-edit', 'up');
+  mkdirSync(path.join(d, 'docs'), { recursive: true });
+  writeFileSync(path.join(d, 'docs', 'mine.md'), 'my change\n');
+  git(d, 'add', '.');
+  git(d, 'commit', '-q', '-m', 'my change');
+  return repo;
+}
+
+test('A15: a stale local main that pulls another PR\'s gold path in is a FAIL that says to update local main; the CLI never starts', async () => {
+  const repo = repoWithStaleMain();
+  const run = await prePr(repo);
+  assert.equal(crStep(run).status, 'FAIL', run.result.lines.join('\n'));
+  assert.equal(crStep(run).skipReason, undefined);
+  assert.match(crStep(run).detail, /gold\/other\.md, 1 in all/);
+  assert.match(crStep(run).detail, /update local main/);
+  assert.match(crStep(run).detail, /git fetch fork main/);
+  assert.equal(run.crCalls.length, 0);
+  assert.equal(run.result.ok, false);
+});
+
+test('A16: with fork/main present, an answer-key path that is also in the fork/main list still earns the skip; an unreadable fork list is a FAIL', async () => {
+  const repo = repoWithGoldFile();
+  git(repo.dir, 'update-ref', 'refs/remotes/fork/main', 'main');
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  const run = await prePr(repo);
+  assert.equal(crStep(run).status, 'SKIP', run.result.lines.join('\n'));
+  assert.equal(crStep(run).skipReason, 'answer-key');
+  assert.equal(run.result.ok, true);
+  const f = crFixture();
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: [GOLD], guardBase: { override: false, forkPaths: null } }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /fork\/main/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('A17: an accepted answer-key skip writes one guardLog row (decision, count, head, reason); a normal run writes none', async () => {
+  const repo = repoWithGoldFile();
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  const rows = [];
+  const run = await prePr(repo, { guardLog: (row) => rows.push(row) });
+  assert.equal(crStep(run).skipReason, 'answer-key');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].decision, 'answer-key');
+  assert.equal(rows[0].count, 1);
+  assert.equal(rows[0].head, git(repo.dir, 'rev-parse', 'HEAD'));
+  assert.match(rows[0].reason, /gold\/old\.md, 1 in all/);
+  const none = [];
+  await prePr(makeRepo(), { guardLog: (row) => none.push(row) });
+  assert.deepEqual(none, []);
+  // The default logger keeps the row's own decision, count and head (cli-missing keeps its fixed decision).
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-gl-')), 'g.jsonl');
+  logCliMissing(rows[0], { CCV3_GUARD_DECISIONS_LOG: file });
+  const written = JSON.parse(readFileSync(file, 'utf8').trim());
+  assert.deepEqual([written.decision, written.count, written.head], ['answer-key', 1, rows[0].head]);
+});
+
+// The guard checks the diff before the lock, but the usage preflight is awaited before the review starts. A commit or a checkout in that
+// window changes the committed diff the CLI would read, so HEAD is read again right before the CLI starts.
+function crInRepo(repo, runner, extra = {}) {
+  return { root: repo.dir, branch: 'feat/x', head: repo.head, base: 'main', now: new Date('2026-10-27T10:00:00Z'), runner, ledgerPath: tempLedger(), headGit: makeGit(repo.dir), crStore: null, guardPaths: CLEAN_PATHS, ...extra };
+}
+const commitDuring = (repo, rel) => {
+  mkdirSync(path.dirname(path.join(repo.dir, rel)), { recursive: true });
+  writeFileSync(path.join(repo.dir, rel), `moved ${rel}\n`);
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', `during the preflight: ${rel}`);
+};
+
+test('A18: HEAD moved during the usage preflight (a commit, or a new gold path) starts no CLI and gives the run slot back', async () => {
+  for (const rel of ['docs/during.md', GOLD]) {
+    const repo = makeRepo();
+    const seen = [];
+    const runner = (o) => {
+      seen.push(o.args[0]);
+      if (o.args[0] === 'usage') { commitDuring(repo, rel); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+      return { status: 0, stdout: NDJSON_OK, stderr: '' };
+    };
+    const r = await runCodeRabbitLive(crInRepo(repo, runner));
+    assert.equal(r.status, 'FAIL', rel);
+    assert.equal(r.skipReason, undefined, rel);
+    assert.match(r.detail, /HEAD moved during the preflight/, rel);
+    assert.match(r.detail, /run pre-pr again/, rel);
+    assert.deepEqual(seen, ['usage'], `${rel}: the review is never called`);
+    const counter = JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8'));
+    assert.equal(counter.runs.length, 0, `${rel}: not counted`);
+    assert.equal(existsSync(crPaths(repo.dir, 'feat/x').lock), false, `${rel}: the lock is released`);
+  }
+});
+
+test('A19: a steady HEAD runs the CLI as before; an unreadable HEAD before the start is a FAIL; no headGit (a direct call) adds no check', async () => {
+  const repo = makeRepo();
+  const calls = [];
+  const runner = (o) => { calls.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  assert.equal((await runCodeRabbitLive(crInRepo(repo, runner))).status, 'PASS');
+  assert.deepEqual(calls, ['usage', 'review']);
+  const broken = makeRepo();
+  const none = [];
+  const r = await runCodeRabbitLive(crInRepo(broken, (o) => { none.push(o.args[0]); return { status: 0, stdout: USAGE_OK, stderr: '' }; }, { headGit: () => ({ status: 128, stdout: '', stderr: 'fatal' }) }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /HEAD could not be re-read/);
+  assert.deepEqual(none, ['usage']);
+  const direct = makeRepo();
+  const moving = [];
+  const mover = (o) => { moving.push(o.args[0]); if (o.args[0] === 'usage') commitDuring(direct, 'docs/x.md'); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  assert.equal((await runCodeRabbitLive(crInRepo(direct, mover, { headGit: null, crStore: null }))).status, 'PASS');
+});
+
+test('A20: runPrePr hands its git to the CodeRabbit step: a HEAD that moves in the preflight gives no CLI start', async () => {
+  // Breaks when: runPrePr drops headGit from its runCodeRabbit call.
+  const repo = makeRepo();
+  const crCalls = [];
+  const crRunner = (o) => {
+    if (o.args[0] === 'usage') { commitDuring(repo, 'docs/during.md'); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+    crCalls.push(o);
+    return { status: 0, stdout: NDJSON_OK, stderr: '' };
+  };
+  const run = await prePr(repo, { crRunner });
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /HEAD moved during the preflight/);
+  assert.equal(crCalls.length, 0);
+  assert.equal(run.result.ok, false);
+});
+
+// The base ref moves too: every worktree shares refs/heads/main, and landed PRs move it all day. The base is resolved to a commit before the guard
+// runs and read again right before the CLI starts (`--base main` is read by name, so the CLI would review a diff the guard did not inspect).
+const shaOf = (repo, ref) => git(repo.dir, 'rev-parse', ref);
+const moveBase = (repo) => git(repo.dir, 'update-ref', 'refs/heads/main', git(repo.dir, 'commit-tree', 'main^{tree}', '-p', 'main', '-m', 'main moved'));
+
+test('A21: the base ref moved during the usage preflight starts no CLI and gives the run slot back', async () => {
+  const repo = makeRepo();
+  const seen = [];
+  const runner = (o) => {
+    seen.push(o.args[0]);
+    if (o.args[0] === 'usage') moveBase(repo);
+    return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' };
+  };
+  const r = await runCodeRabbitLive(crInRepo(repo, runner, { baseSha: shaOf(repo, 'main') }));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(r.skipReason, undefined);
+  assert.match(r.detail, /main moved during the preflight/);
+  assert.match(r.detail, /run pre-pr again/);
+  assert.deepEqual(seen, ['usage'], 'the review is never called');
+  assert.equal(JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs.length, 0, 'not counted');
+  assert.equal(existsSync(crPaths(repo.dir, 'feat/x').lock), false);
+});
+
+test('A22: an empty head or base that cannot be read FAILs before any equality test; a steady base runs the CLI', async () => {
+  const repo = makeRepo();
+  const seen = [];
+  const runner = (o) => { seen.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  const failedRead = () => ({ status: 128, stdout: '', stderr: 'fatal' });
+  const emptyHead = await runCodeRabbitLive(crInRepo(repo, runner, { head: '', headGit: failedRead }));
+  assert.equal(emptyHead.status, 'FAIL', 'head empty and the re-read failed: not "equal"');
+  assert.match(emptyHead.detail, /HEAD could not be re-read/);
+  assert.deepEqual(seen, ['usage']);
+  const noBase = await runCodeRabbitLive(crInRepo(makeRepo(), runner, { baseSha: null }));
+  assert.equal(noBase.status, 'FAIL');
+  assert.match(noBase.detail, /main could not be read/);
+  const steady = makeRepo();
+  seen.length = 0;
+  assert.equal((await runCodeRabbitLive(crInRepo(steady, runner, { baseSha: shaOf(steady, 'main') }))).status, 'PASS');
+  assert.deepEqual(seen, ['usage', 'review']);
+});
+
+test('A23: runPrePr resolves the base to a commit and re-checks it: a base that moves in the preflight gives no CLI start', async () => {
+  // Breaks when: runPrePr drops baseSha from its runCodeRabbit call.
+  const repo = makeRepo();
+  const crCalls = [];
+  const crRunner = (o) => {
+    if (o.args[0] === 'usage') { moveBase(repo); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+    crCalls.push(o);
+    return { status: 0, stdout: NDJSON_OK, stderr: '' };
+  };
+  const run = await prePr(repo, { crRunner });
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /main moved during the preflight/);
+  assert.equal(crCalls.length, 0);
+  const cleanRepo = makeRepo();
+  const real = makeGit(cleanRepo.dir);
+  const ranges = [];
+  const clean = await prePr(cleanRepo, { git: (args) => { if (args.includes('--no-renames')) ranges.push(args.at(-1)); return real(args); } });
+  assert.equal(crStep(clean).status, 'PASS', 'a steady base still runs the CLI');
+  assert.deepEqual(ranges, [`${shaOf(cleanRepo, 'main')}...HEAD`], 'the guard reads the range from the resolved base commit, not the branch name');
+});
+
+// The base can also move BEFORE it is resolved: git:behind passed, then a land elsewhere moved main while the gates ran. baseSha is then a
+// commit HEAD does not contain, so base...HEAD (from the merge base) misses the landed paths, while `--base main` can diff against the tip.
+// The last-moment check also asks that HEAD contains the base commit (critic and aegis, PR 552 internal pass).
+test('A24: a resolved base that HEAD does not contain starts no CLI and gives the run slot back', async () => {
+  // Breaks when: headMoved drops the merge-base --is-ancestor test.
+  const repo = makeRepo();
+  moveBase(repo);
+  const seen = [];
+  const runner = (o) => { seen.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  const r = await runCodeRabbitLive(crInRepo(repo, runner, { baseSha: shaOf(repo, 'main') }));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(r.skipReason, undefined);
+  assert.match(r.detail, /HEAD does not contain main/);
+  assert.match(r.detail, /merge main/);
+  assert.deepEqual(seen, ['usage'], 'the review is never called');
+  assert.equal(JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs.length, 0, 'not counted');
+});
+
+test('A25: runPrePr with a base that moves after git:behind and before it is resolved gives no CLI start', async () => {
+  // Breaks when: runPrePr resolves the base before the gates again without the ancestry test, or the test leaves headMoved.
+  const repo = makeRepo();
+  const real = makeGit(repo.dir);
+  let baseReads = 0;
+  const git = (args) => {
+    // The 1st read of the base ref is git:behind, the 2nd is resolveBase: the land happens between them.
+    if (args.join(' ') === 'rev-parse --verify --quiet main' && ++baseReads === 2) moveBase(repo);
+    return real(args);
+  };
+  const run = await prePr(repo, { git });
+  assert.equal(baseReads >= 2, true, 'the base was read twice');
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /HEAD does not contain main/);
+  assert.equal(run.crCalls.length, 0);
+  assert.equal(run.result.ok, false);
+});
+
+test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {
+  const repo = makeRepo();
+  const real = makeGit(repo.dir);
+  const git = (args) => (args.includes('--no-renames') ? { status: 128, stdout: '', stderr: 'fatal: boom' } : real(args));
+  const run = await prePr(repo, { git });
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /could not check the diff/);
+  assert.equal(run.crCalls.length, 0);
+  assert.equal((await prePr(makeRepo())).crCalls.length, 1, 'a clean branch still runs the CLI');
 });

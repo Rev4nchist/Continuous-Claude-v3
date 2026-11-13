@@ -68,9 +68,11 @@
  * empty --committed scope; the run is given back), "docs-only" (every changed file is docs, the same test the evidence step uses, and the
  * CLI sent only the error "No files to review" because .coderabbit.yaml path_filters exclude docs/**; the run is given back; the stamp also
  * holds cr_docs_only true; any other error, or any non-docs changed file, stays a FAIL), "cli-cap" (today's paid CLI spend reached
- * coderabbit.cli_daily_cap_usd in review-router.config.json; no run is spent) or "earlier-step-failed". The hook accepts "cli-missing",
- * "cli-cap", "cap" with cr_finished_runs >= 1, "rate-limited" with a retry time, and "docs-only" with cr_docs_only and docs_verified both
- * true. It denies the rest, including "cli-error".
+ * coderabbit.cli_daily_cap_usd in review-router.config.json; no run is spent), "answer-key" (the diff holds a path of the REVIEW.md answer-key globs, old or new side:
+ * no CLI review may read it; no lock, no run; the stamp also holds cr_answer_key true and answer_key_paths N >= 1; the internal review and a seat diff read replace
+ * the CLI; a list or a path list the guard cannot read stays a FAIL) or "earlier-step-failed". The hook accepts "cli-missing",
+ * "cli-cap", "cap" with cr_finished_runs >= 1, "rate-limited" with a retry time, "docs-only" with cr_docs_only and docs_verified both
+ * true, and "answer-key" with cr_answer_key true and answer_key_paths a whole number >= 1. It denies the rest, including "cli-error".
  * Cost estimate (Dave, 2026-11-06): after `cr usage --agent`, the step prints one line with every changed file x $0.25 (the estimate errs
  * high: no file is left out). Remaining 0 stays a SKIP "rate-limited" with no run (Dave: no billed run on an empty allowance). Only an
  * unavailable usage read (count unknown) adds today's paid CLI spend: over the cap is a SKIP "cli-cap"; under it the run starts as before
@@ -113,6 +115,7 @@ import { checkSummary } from './lib/pr-summary.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
+import { parseReviewMd } from '../ratchets/review-skip-sync.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -1125,16 +1128,210 @@ function reusedReview({ root, e2e, saved, base, why }) {
   return { ...verdict, detail: `${why}: ${verdict.detail} Output: ${rel(root, path.join(e2e, saved))}` };
 }
 
+// ---------- the answer-key guard (card prepr-answer-key-cli-guard) ----------
+// No CodeRabbit CLI review may read an answer-key path. The match list is the frozen ANSWER_KEY_GLOBS. REVIEW.md "## Skip paths" (parseReviewMd,
+// the list that scripts/ratchets/review-skip-sync.mjs ties to the bot configs) is only the drift alarm. The guard checks the paths
+// of BOTH sides of the change: `git diff --name-only` follows renames, so a rename out of gold/ names only the new path. A hit is an earned SKIP
+// "answer-key" (the stamp and the gate: see answerKeyStep). Fail closed: a list it cannot read or an unknown path list is a FAIL.
+
 /**
- * One `cr review --agent --committed` per head, at most CR_RUN_LIMIT per branch across every worktree. In order: --skip-cr; a saved
+ * The match list: the four known answer-key globs, frozen here (Seat ruling 2026-11-13). A glob in the branch's own REVIEW.md earns nothing:
+ * a wider one cannot widen the skip. REVIEW.md "Skip paths" is only the drift alarm (answerKeyGlobs). The test A5 ties this list to the live
+ * REVIEW.md and to the answer-key entries of cursor-review.mjs TREE_EXCLUDES.
+ */
+export const ANSWER_KEY_GLOBS = Object.freeze([
+  'scripts/eval/review-eval/gold/**',
+  'scripts/eval/review-eval/seeds/**',
+  'scripts/eval/review-eval/rubrics/**',
+  'scripts/eval/review-eval/linktype-labels.json',
+]);
+const slashLower = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+
+/** { globs } (the frozen four) or { reason }: fail closed when REVIEW.md "Skip paths" cannot be read or lacks any of the four. */
+export function answerKeyGlobs(root) {
+  let text;
+  try { text = readFileSync(path.join(root, 'REVIEW.md'), 'utf8'); } catch (err) { return { reason: `REVIEW.md could not be read (${err.code ?? 'error'})` }; }
+  let listed;
+  try { listed = parseReviewMd(text).map(slashLower); } catch (err) { return { reason: String(err.message) }; }
+  const missing = ANSWER_KEY_GLOBS.filter((g) => !listed.includes(slashLower(g)));
+  return missing.length === 0 ? { globs: ANSWER_KEY_GLOBS } : { reason: `REVIEW.md "Skip paths" lacks ${missing.join(', ')}` };
+}
+
+/**
+ * { hits } (the answer-key paths, at least one), { closed } (why the guard cannot check the diff) or null (no answer-key path). A path
+ * matches a whole glob, after slashes and case are normalised (Gold/ is gold/).
+ */
+export function answerKeyCheck({ root, paths }) {
+  if (!Array.isArray(paths)) return { closed: 'the changed-file list is unknown' };
+  const { globs, reason } = answerKeyGlobs(root);
+  if (!globs) return { closed: reason };
+  const hits = paths.filter((p) => globs.some((g) => matchGlob(slashLower(g), slashLower(p))));
+  return hits.length === 0 ? null : { hits };
+}
+
+const closedText = (why) => `the answer-key guard could not check the diff (${why}): no CLI review runs on a diff it cannot check. Fix REVIEW.md or the git read, then run pre-pr again.`;
+const hitText = (hits) => `the diff holds an answer-key path (${hits[0]}, ${hits.length} in all)`;
+
+/**
+ * Why a hit may not earn the skip, or null. The range is base...HEAD and the stamp records no base, so: with a --base override (not main) a
+ * hit is a FAIL; with the default base, a hit path that is not also in the fork/<base>...HEAD list comes from a stale local base, so it is a
+ * FAIL that says to update local <base>; an unreadable fork list is a FAIL. No guardBase (a direct call) adds no check.
+ */
+function baseProblem(hits, guardBase, base) {
+  if (!guardBase) return null;
+  if (guardBase.override) return `${hitText(hits)} and --base ${base} is not the default base: an earned skip needs the default base, so this is a FAIL. The CLI did not start. Run pre-pr.mjs without --base, or ask the seat.`;
+  if (guardBase.forkPaths === undefined) return null;
+  if (guardBase.forkPaths === null) return `${hitText(hits)}, but ${FORK}/${base} could not be compared (git failed), so the skip is not earned. The CLI did not start. Run pre-pr.mjs again.`;
+  const inFork = new Set(guardBase.forkPaths.map(slashLower));
+  const foreign = hits.filter((p) => !inFork.has(slashLower(p)));
+  if (foreign.length === 0) return null;
+  return `the diff against local ${base} holds an answer-key path (${foreign[0]}, ${foreign.length} in all) that ${FORK}/${base}...HEAD does not hold: local ${base} is behind ${FORK}/${base}. The CLI did not start. Next: update local ${base} (git fetch ${FORK} ${base}, then fast-forward local ${base}), then run pre-pr.mjs again.`;
+}
+
+/**
+ * The CodeRabbit step result for a guard check. A hit is an earned SKIP "answer-key" (Dave, 2026-11-13): the stamp gets cr_answer_key true and
+ * answer_key_paths N, and the pre-pr-gate hook accepts the skip only with both. A guard that cannot check, or a hit with a base problem
+ * (baseProblem), is a FAIL. The text names the first path and the count: a path, never file content.
+ */
+export function answerKeyStep(check, guardBase = undefined, base = 'main') {
+  if (check.closed !== undefined) return result('coderabbit', 'FAIL', closedText(check.closed));
+  const problem = baseProblem(check.hits, guardBase, base);
+  if (problem) return result('coderabbit', 'FAIL', problem);
+  const detail = `${hitText(check.hits)}: the CodeRabbit CLI does not run on it. The internal review and a seat diff read replace the CLI.`;
+  return { ...skipped('answer-key', detail), answerKeyPaths: check.hits.length };
+}
+
+/** The refusal text for cr-fix.mjs and the tests (a string), or null. cr-fix has no stamp, so a hit is a refusal there. */
+export function answerKeyBlock(input) {
+  const check = answerKeyCheck(input);
+  if (!check) return null;
+  if (check.closed !== undefined) return `the answer-key guard could not check the diff (${check.closed}): no CLI review starts on a diff it cannot check. Fix REVIEW.md or the git read, then run cr-fix again.`;
+  return `${hitText(check.hits)}: no CLI review may start on it. Use the internal review and a seat diff read.`;
+}
+
+/** Every path of a change, old and new side (a rename is a delete plus an add), or null when git fails. `range` is e.g. `main...HEAD`. */
+export function bothSidePaths(git, range) {
+  const r = git(['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-renames', '-z', range]);
+  return r.status === 0 ? r.stdout.split('\0').filter(Boolean) : null;
+}
+
+/**
+ * What the guard needs to trust the base...HEAD range: whether --base is an override (not main), and the fork/<base>...HEAD path list
+ * (undefined: no fork ref to compare with; null: git failed).
+ */
+export function guardBaseOf(git, base) {
+  const forkRef = `refs/remotes/${FORK}/${base}`;
+  const hasFork = git(['rev-parse', '--verify', '--quiet', forkRef]).status === 0;
+  return { override: base !== 'main', forkPaths: hasFork ? bothSidePaths(git, `${forkRef}...HEAD`) : undefined };
+}
+
+/** The commit a base ref names now, or '' when git cannot say. runPrePr reads it before the guard; the last-moment check reads it again. */
+export function resolveBase(git, base) {
+  const r = git(['rev-parse', '--verify', '--quiet', base]);
+  return r.status === 0 ? r.stdout.trim() : '';
+}
+
+/** For cr-fix.mjs: the guard detail for the commits `from..HEAD` in `cwd`, or null. */
+export const answerKeyRange = (cwd, from) => answerKeyBlock({ root: cwd, paths: bothSidePaths(makeGit(cwd), `${from}..HEAD`) });
+
+// ---------- a read-only note: the CLI store holds a new marker with no git data (step 2c) ----------
+// The CLI keeps each review at <store>/<workspace>/<scope>/reviews/<id>/ with a .session-complete-v2 marker ({ hasGitMetadata: boolean }) and,
+// when it built git data, a git.json ({ workingDirectory }). The note claims no cause and never changes a verdict. It reads folder names at
+// that fixed depth, then at most the marker and git.json of each NEW id: it never enters an id folder or reads a stored diff.
+
+const CR_MARKER = '.session-complete-v2';
+
+/** The CLI review store, or null when LOCALAPPDATA is unset, empty or not an absolute path (no fallback to a path under the cwd). */
+export function crStoreRoot(env = process.env) {
+  const base = env?.LOCALAPPDATA;
+  if (typeof base !== 'string' || base === '' || !path.isAbsolute(base)) return null;
+  return path.join(base, 'coderabbit', 'reviews');
+}
+
+/** Folder names in `dir`: [] when it is missing, a throw on any other error (a file, no access). Files are skipped. */
+function subDirs(dir) {
+  try { return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+const scopeKeys = (root, ws) => subDirs(path.join(root, ws)).flatMap((sc) => subDirs(path.join(root, ws, sc, 'reviews')).map((id) => `${ws}/${sc}/reviews/${id}`));
+
+/** The review folders of the store as a Set of `workspace/scope/reviews/id` keys: empty when the store is missing, null on any other error. */
+export function listMarkers(root) {
+  try { return new Set(subDirs(root).flatMap((ws) => scopeKeys(root, ws))); } catch { return null; }
+}
+
+const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
+
+/** hasGitMetadata of the marker in one review folder: true or false for a boolean, null for a missing, broken or other value. */
+export function readFlag(dir) {
+  const flag = readJson(path.join(dir, CR_MARKER))?.hasGitMetadata;
+  return typeof flag === 'boolean' ? flag : null;
+}
+
+const workingDirOf = (dir) => { const w = readJson(path.join(dir, 'git.json'))?.workingDirectory; return typeof w === 'string' ? w : null; };
+
+/** A folder name for comparing: forward slashes, no trailing slash, lower-case drive letter. A pure string function. */
+export function normDir(p) {
+  if (typeof p !== 'string') return '';
+  const s = p.replace(/\\/g, '/').replace(/\/+$/, '');
+  return s === '' && p !== '' ? '/' : s.replace(/^[A-Za-z]:/, (d) => d.toLowerCase());
+}
+
+function ownRoots(root) {
+  const names = [normDir(root)];
+  try { names.push(normDir(realpathSync(root))); } catch { /* the folder may be gone: the plain name stays */ }
+  return names.filter(Boolean);
+}
+
+const crStoreNote = (key) => `a new CLI store marker has no git data (hasGitMetadata false): %LOCALAPPDATA%\\coderabbit\\reviews\\${key.split('/').join('\\')}; this can be a run of another project. The step still fails.`;
+
+/**
+ * The note for the first new review folder (by name) whose marker says hasGitMetadata false and that has no git.json, or null. Null too when
+ * a snapshot is null, nothing is new, or any new folder's git.json names this checkout (its own review has git data). A folder whose git.json
+ * names another folder is not ours. The text holds the folder key in %LOCALAPPDATA% form: no user path and no file content.
+ */
+export function storeDiagnostic({ before, after, root, storeRoot }) {
+  if (!before || !after || !storeRoot) return null;
+  const own = ownRoots(root);
+  const fresh = [...after].filter((k) => !before.has(k)).sort().map((key) => ({ key, dir: path.join(storeRoot, ...key.split('/')) }));
+  const named = fresh.map((m) => ({ ...m, wd: workingDirOf(m.dir) }));
+  if (named.some((m) => m.wd !== null && own.includes(normDir(m.wd)))) return null;
+  const bad = named.find((m) => m.wd === null && readFlag(m.dir) === false);
+  return bad ? crStoreNote(bad.key) : null;
+}
+
+/** The store dep of the step: undefined means the live store (LOCALAPPDATA); null turns the note off. Tests pass their own. */
+const liveCrStore = () => ({ root: crStoreRoot(), list: listMarkers, diagnose: storeDiagnostic });
+
+/** The snapshot before the run, or null. Never throws. */
+function snapshotStore(store) {
+  try { return store?.root ? store.list(store.root) : null; } catch { return null; }
+}
+
+/** The note for a FAIL with unreviewed files, or null. Never throws. */
+function storeNote(store, before, { verdict, parsed, root }) {
+  try {
+    if (!store?.root || verdict.status !== 'FAIL' || !(Number(parsed.complete?.unreviewedFileCount) > 0)) return null;
+    const note = store.diagnose({ before, after: store.list(store.root), root, storeRoot: store.root });
+    return typeof note === 'string' ? note : null;
+  } catch { return null; }
+}
+
+/**
+ * One `cr review --agent --committed` per head, at most CR_RUN_LIMIT per branch across every worktree. In order: --skip-cr; the answer-key guard (a SKIP answer-key when the diff holds an answer-key path, a FAIL when the guard cannot check it: no lock, no slot, no CLI); a saved
  * output for this head (reused, no run); the run lock (a second step on the same branch FAILs while one runs; a stale lock is replaced);
  * the run counter and its cap; the free `cr usage --agent` preflight; the review, streamed to <date>-pre-pr-cr-<sha7>.running.txt and then
  * saved as .txt (a finished review) or .failed.txt. A run that started uses a slot, even if it failed. A process that never started, a failed
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, guardBase = undefined, headGit = null, baseSha = undefined, crStore = liveCrStore() }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
+  const keyCheck = answerKeyCheck({ root, paths: guardPaths === undefined ? changedPaths : guardPaths });
+  if (keyCheck) return answerKeyStep(keyCheck, guardBase, base);
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
   const saved = savedReviewFor(e2e, short);
@@ -1143,7 +1340,7 @@ export async function runCodeRabbit({ root, branch, head, base, now, runner, ski
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseSha, crStore });
   } finally {
     rmSync(paths.lock, { force: true });
   }
@@ -1176,7 +1373,31 @@ function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
   }
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly }) {
+/**
+ * A FAIL when HEAD or the base ref is not what the guards checked, else null. The usage preflight is awaited after the answer-key guard, and
+ * `--committed --base <name>` reads the committed diff of HEAD against the base ref by name, so a commit, a checkout, or a landed PR that moves
+ * the base in that window would change what the CLI reads. runPrePr resolves the base to a commit (`baseSha`) before the guard runs. A read
+ * that fails or is empty is a FAIL, tested before any equality (an empty head and an empty re-read are not "equal"). With no `git` (a direct
+ * call) there is no check; with no `baseSha` (undefined) only HEAD is checked. The caller gives the run slot back and starts no CLI.
+ */
+function headMoved(git, { head, base, baseSha }) {
+  if (!git) return null;
+  const stale = (why) => result('coderabbit', 'FAIL', `${why}, so no CLI review was started; run pre-pr again`);
+  const sha = (args) => { const r = git(args); return r.status === 0 ? r.stdout.trim() : ''; };
+  const now = sha(['rev-parse', 'HEAD']);
+  if (now === '' || !head) return stale('HEAD could not be re-read before the CLI start');
+  if (now !== head) return stale(`HEAD moved during the preflight (it was ${head.slice(0, 7)}, it is ${now.slice(0, 7)})`);
+  if (baseSha === undefined) return null;
+  const baseNow = sha(['rev-parse', '--verify', '--quiet', base]);
+  if (baseNow === '' || !baseSha) return stale(`${base} could not be read before the CLI start`);
+  if (baseNow !== baseSha) return stale(`${base} moved during the preflight (it was ${baseSha.slice(0, 7)}, it is ${baseNow.slice(0, 7)})`);
+  // A base that moved after git:behind and before resolveBase: base...HEAD (from the merge base) misses what landed, and the CLI can diff
+  // against the tip. With HEAD containing the base, both diffs are the same, so the guard saw what the CLI reads.
+  if (git(['merge-base', '--is-ancestor', baseSha, head]).status !== 0) return stale(`HEAD does not contain ${base} (${baseSha.slice(0, 7)}; it moved after the behind check). Next: merge ${base} into the branch`);
+  return null;
+}
+
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseSha, crStore }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
@@ -1204,6 +1425,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
     const overCap = cliCapBlock(cliCapUsd, now, ledgerPath, estimate);
     if (overCap) return overCap;
   }
+  const storeBefore = snapshotStore(crStore);
   const run = { head, at: now.toISOString(), outcome: 'started', newCode };
   const giveBack = () => {
     counter.runs.splice(counter.runs.indexOf(run), 1);
@@ -1215,6 +1437,8 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   mkdirSync(e2e, { recursive: true });
   const running = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}.running.txt`);
   const onTick = (t) => log(`pre-pr: cr review still running (${t.elapsedSec}s${t.lastEvent ? `, last event: ${t.lastEvent}` : ''}); limit ${Math.round(timeoutMs / MIN)} min`);
+  const moved = headMoved(headGit, { head, base, baseSha });
+  if (moved) { giveBack(); return moved; }
   const r = await runner({ cwd: root, args: CR_ARGS(base), timeoutMs, streamTo: running, onTick });
   if (r.error && !r.timedOut && NOT_STARTED.test(String(r.errorCode ?? r.error))) {
     giveBack();
@@ -1229,7 +1453,8 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   writeFileSync(out, r.stderr && verdict.status !== 'PASS' ? `${stdout}\n[stderr]\n${r.stderr}` : stdout);
   rmSync(running, { force: true });
   const logNote = logCliSpend({ branch, head, parsed, now, ledgerPath });
-  verdict.notes = [...(verdict.notes ?? []), estimateText.replace(/^pre-pr: /, ''), ...(logNote ? [logNote] : [])];
+  const storeLine = storeNote(crStore, storeBefore, { verdict, parsed, root });
+  verdict.notes = [...(verdict.notes ?? []), estimateText.replace(/^pre-pr: /, ''), ...(logNote ? [logNote] : []), ...(storeLine ? [storeLine] : [])];
   if (verdict.skipReason === 'no-changes' || verdict.skipReason === 'docs-only') giveBack();
   else {
     run.outcome = verdict.status === 'PASS' ? 'finished' : 'failed';
@@ -1258,18 +1483,23 @@ function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
   return file;
 }
 
-/** One row in the guard decision log (the file the hooks write): the CodeRabbit CLI is not installed, so no CLI review ran. Never throws. */
+/**
+ * One row in the guard decision log (the file the hooks write): a CLI review did not run and the stamp will say so. The decision is
+ * "cli-missing" (the CodeRabbit CLI is not installed) unless the entry names another one ("answer-key", with count and head). Never throws.
+ */
 export function logCliMissing(entry, env = process.env) {
   try {
     const file = env.CCV3_GUARD_DECISIONS_LOG || path.join(logsDir(env), 'guard-decisions.jsonl');
-    const row = { ts: new Date().toISOString(), hook: 'pre-pr', tool: '', decision: 'cli-missing', reason: String(entry?.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200), session_id: '' };
+    const decision = typeof entry?.decision === 'string' && entry.decision !== '' ? entry.decision : 'cli-missing';
+    const extra = { ...(Number.isInteger(entry?.count) ? { count: entry.count } : {}), ...(typeof entry?.head === 'string' ? { head: entry.head.slice(0, 40) } : {}) };
+    const row = { ts: new Date().toISOString(), hook: 'pre-pr', tool: '', decision, reason: String(entry?.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200), session_id: '', ...extra };
     mkdirSync(path.dirname(file), { recursive: true });
     appendFileSync(file, `${JSON.stringify(row)}\n`);
   } catch { /* a log problem never stops the run */ }
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const runId = randomUUID();
@@ -1331,16 +1561,19 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const pssa = measure(() => pssaAdvisory({ root, paths: changes.paths, module: findPssa(), run: pssaRun }));
     if (pssa) results.push(pssa);
   }
+  const baseSha = resolveBase(git, base);
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(await measureAsync(async () => (failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified }))));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseSha || base}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseSha, crStore }))));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
     results.push({ step: 'coderabbit:cli-missing', status: 'NOTE', detail: `no CLI review ran: ${crStep.detail}`, notes: [] });
     guardLog({ hook: 'pre-pr', decision: 'cli-missing', reason: crStep.detail });
   }
+  // An accepted answer-key skip leaves a row too: the reason (it names the first path), the count of paths and the head.
+  if (crStep.skipReason === 'answer-key') guardLog({ hook: 'pre-pr', decision: 'answer-key', reason: crStep.detail, count: crStep.answerKeyPaths, head });
   // A tree that was already dirty at the start is reported once, by git:clean.
   if (head !== null && !results.some((r) => r.step === 'git:clean' && r.status === 'FAIL')) results.push(measure(() => checkStable(git, head)));
   const ok = head !== null && !results.some((r) => r.status === 'FAIL');
@@ -1355,7 +1588,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const slim = results.map(({ step, status, detail }) => ({ step, status, detail }));
     const cr = results.find((r) => r.step === 'coderabbit');
     const crSkipped = cr?.status === 'SKIP';
-    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
+    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', cr_answer_key: crSkipped && cr.skipReason === 'answer-key', answer_key_paths: crSkipped && cr.skipReason === 'answer-key' ? cr.answerKeyPaths ?? 0 : 0, docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
   }
   return { ok, results, lines, head, branch, logPath, stampPath: ok ? stampPath : null };
 }
