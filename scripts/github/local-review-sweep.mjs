@@ -859,7 +859,9 @@ function runsWindow(ctx, rows) {
 /** The read-audit summary of the window's runs: void runs with their heads (newest audit line, or the list line), and runs with no audit line. */
 function auditWindow(ctx, rows) {
   const newest = newestByRunId(readLines(ctx.auditStatePath));
-  const voids = rows.filter((r) => r.audit === 'void' || newest.get(r.runId)?.verdict === 'void').map((r) => ({ runId: r.runId, pr: r.pr, head: r.head, rules: r.auditRules ?? null }));
+  // A newer void audit line (a re-audit) wins over the list line: its rules, cut to rule, tool and answerKey.
+  const rulesOf = (r) => { const n = newest.get(r.runId); return n?.verdict === 'void' ? ruleNames(n.rules ?? []) : (r.auditRules ?? null); };
+  const voids = rows.filter((r) => r.audit === 'void' || newest.get(r.runId)?.verdict === 'void').map((r) => ({ runId: r.runId, pr: r.pr, head: r.head, rules: rulesOf(r) }));
   return { voids, unaudited: rows.filter((r) => !newest.has(r.runId)).length };
 }
 

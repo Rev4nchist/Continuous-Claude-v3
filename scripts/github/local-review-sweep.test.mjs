@@ -699,6 +699,24 @@ test('T8c a void run names its audit rules (rule, tool, answerKey) in the list l
   assert.match(w.out.at(-1), /\[stub-2-2 PR 2 head [0-9a-f]+ rules outside-path/);
 });
 
+test('T8d a pass run that a newer audit line voids: the report names the rules of that newer line, without its path fields', async () => {
+  // Breaks when: the report takes the rules from the old list line (rules none) once a re-audit voids the run, or copies field/callId.
+  const w = world({ pulls: [pullOf(1, { band: 'HIGH' })] });
+  assert.equal(await main(['--cli-dir', w.cliDir], deps(w)), SWEEP_EXIT.OK);
+  const row = jsonl(listFile(w)).find((r) => r.pr === 1);
+  assert.equal(row.audit, 'pass');
+  // The audit line carries the real clock (auditReplay), not the sweep's test clock: go one minute past it.
+  const first = readLines(w.auditState).find((l) => l.runId === row.runId);
+  const later = new Date(Date.parse(first.ts) + 60_000).toISOString();
+  appendFileSync(w.auditState, `${JSON.stringify({ schema: 1, ts: later, runId: row.runId, verdict: 'void',
+    rules: [{ rule: 'outside-path', tool: 'glob', field: 'files[0]', callId: 'c9', answerKey: false }] })}\n`);
+  assert.equal(await main(['--cli-dir', w.cliDir, '--dry-run'], deps(w)), SWEEP_EXIT.OK);
+  const text = w.out.at(-1);
+  assert.match(text, new RegExp(`\\[${row.runId} PR 1 head [0-9a-f]+ rules outside-path\\]`));
+  assert.equal(await main(['--cli-dir', w.cliDir, '--dry-run', '--json'], deps(w)), SWEEP_EXIT.OK);
+  assert.deepEqual(reportOf(w).window.readAudit.voids[0].rules, [{ rule: 'outside-path', tool: 'glob', answerKey: false }]);
+});
+
 // ---------- T9 order and share ----------
 
 test('T9 HIGH first, then MID and ELEVATED by the --band-counts share; LOW never runs; --max-runs stops the sweep', async () => {
