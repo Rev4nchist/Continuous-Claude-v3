@@ -18,6 +18,7 @@
 //   E15 a multi-PR row is called merge-interaction (blame of a rewritten block spans PRs by nature) -> add a blamedPrCount rule
 //   E16 the primary flag is ignored, or the all-rows line or the rule-of-thumb wording is missing -> change report()
 //   E17 a capitalised Mock file is not a mock                               -> drop toLowerCase in the mock rule
+//   E18 the share loses a caveat line, changes its wording or order, or keeps path-only rows in the third share -> change shareLines()
 //   E14 --help is an error                                                 -> change main()
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -104,13 +105,15 @@ test('E9: the report shows every class, zeros too, and n/a for the share with no
   const empty = report([], { noTarget: { byReason: {}, inPrOnly: 0 } });
   for (const c of CAUSES) assert.match(empty, new RegExp(`${c}: 0`));
   assert.match(empty, /reviewer-fixable share: n\/a/);
+  assert.match(empty, /reviewer-fixable share without path-only classes: n\/a/);
+  assert.match(empty, /class thin-guard-tables is set by file path, not by reading the fix/);
   assert.match(empty, /escape rows: 0/);
 });
 
 test('E10: the reviewer-fixable share counts advisory-major-open and thin-guard-tables only (breaks if REVIEWER_FIXABLE changes)', () => {
   assert.deepEqual([...REVIEWER_FIXABLE].sort(), ['advisory-major-open', 'thin-guard-tables']);
   const rows = ['advisory-major-open', 'thin-guard-tables', 'wrong-surfaces', 'unclassified'].map((cause, i) => ({ mergeSha: `m${i}`, blamedPr: i, cause }));
-  assert.match(report(rows, {}), /reviewer-fixable share: 2\/4 \(50%\) \(lower bound: rows carry no linkedFinding\)/);
+  assert.match(report(rows, {}), /reviewer-fixable share: 2 of 4 primary rows \(50%\) \(lower bound: rows carry no linkedFinding\)/);
 });
 
 test('E16: the report counts primary rows per cause, keeps an all-rows line, bases the share on primary rows, and says the rule is a rule of thumb (breaks if the primary flag is ignored or the wording goes)', () => {
@@ -126,13 +129,30 @@ test('E16: the report counts primary rows per cause, keeps an all-rows line, bas
   assert.match(text, /^ {2}unclassified: 0$/m, 'a non-primary row is not in the per-cause counts');
   assert.match(text, /all rows by cause[^\n]*unclassified 2/);
   assert.match(text, /all rows by cause[^\n]*wrong-surfaces 1/);
-  assert.match(text, /reviewer-fixable share: 1\/2 \(50%\) \(lower bound: rows carry no linkedFinding\)/);
+  assert.match(text, /reviewer-fixable share: 1 of 2 primary rows \(50%\) \(lower bound: rows carry no linkedFinding\)/);
   assert.match(text, /a rule of thumb \(right in 4 of 4 doc cases\), not a proven cause/);
 });
 
 test('E17: the mock check reads the lowercased basename (breaks if the case is not folded)', () => {
   assert.equal(cls({ fixFiles: ['scripts/x/MockServer.mjs'] }), 'mocked-fixture');
   assert.equal(cls({ fixFiles: ['scripts/x/FAKE_MOCK.mjs'] }), 'mocked-fixture');
+});
+
+test('E18: the share carries its caveats on the lines next to it, in order: the share with its row count, the path-only warning, the share without path-only classes (breaks if a line, its wording or its order changes, or thin-guard-tables rows stay in the third share)', () => {
+  const mk = (cause, n, extra = {}) => Array.from({ length: n }, (_, i) => ({ mergeSha: `${cause}${i}`, blamedPr: i, cause, ...extra }));
+  // 19 primary rows: 7 advisory-major-open, 5 thin-guard-tables, 4 wrong-surfaces, 3 unclassified. Non-primary rows must not count.
+  const rows = [...mk('advisory-major-open', 7), ...mk('thin-guard-tables', 5), ...mk('wrong-surfaces', 4, { primary: true }), ...mk('unclassified', 3), ...mk('thin-guard-tables', 3, { primary: false })];
+  const lines = report(rows, {}).split('\n');
+  const at = lines.findIndex((l) => l.startsWith('reviewer-fixable share: '));
+  assert.ok(at >= 0, 'the share line exists');
+  assert.deepEqual(lines.slice(at, at + 3), [
+    'reviewer-fixable share: 12 of 19 primary rows (63%) (lower bound: rows carry no linkedFinding)',
+    'class thin-guard-tables is set by file path, not by reading the fix; a range heavy in guard-file fixes raises this share',
+    'reviewer-fixable share without path-only classes: 7 of 14 primary rows (50%)',
+  ]);
+  const onlyPath = report(mk('thin-guard-tables', 2), {}).split('\n');
+  assert.ok(onlyPath.includes('reviewer-fixable share without path-only classes: n/a'), 'M = 0 prints n/a');
+  assert.ok(onlyPath.includes('reviewer-fixable share: 2 of 2 primary rows (100%) (lower bound: rows carry no linkedFinding)'));
 });
 
 test('E11: the no-target count and its reasons print; in-PR-only fixes print apart (breaks if they are merged or lost)', () => {

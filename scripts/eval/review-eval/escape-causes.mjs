@@ -60,10 +60,28 @@ const countBy = (rows) => {
   return counts;
 };
 
-function shareLine(counts, total) {
-  if (total === 0) return 'reviewer-fixable share: n/a';
-  const n = REVIEWER_FIXABLE.reduce((sum, c) => sum + counts[c], 0);
-  return `reviewer-fixable share: ${n}/${total} (${Math.round((100 * n) / total)}%) (lower bound: rows carry no linkedFinding)`;
+/** Classes set by file path alone, not by reading the fix. thin-guard-tables is the reviewer-fixable one. */
+const PATH_ONLY = Object.freeze(['thin-guard-tables']);
+const PATH_ONLY_WARNING = 'class thin-guard-tables is set by file path, not by reading the fix; a range heavy in guard-file fixes raises this share';
+
+const percent = (n, m) => `${Math.round((100 * n) / m)}%`;
+
+/**
+ * The share a reviewer could fix, on three lines that stay together (the seat asked for the caveats next to the number):
+ *   1 the share of the primary rows, with its row count (a lower bound: rows carry no linkedFinding);
+ *   2 the warning that thin-guard-tables is set by path alone;
+ *   3 the share again with the path-only classes left out of both counts, or n/a when no row is left.
+ */
+function shareLines(counts, total) {
+  const fixable = REVIEWER_FIXABLE.reduce((sum, c) => sum + counts[c], 0);
+  const pathOnly = PATH_ONLY.reduce((sum, c) => sum + counts[c], 0);
+  const m = total - pathOnly;
+  const n = fixable - PATH_ONLY.filter((c) => REVIEWER_FIXABLE.includes(c)).reduce((sum, c) => sum + counts[c], 0);
+  return [
+    total === 0 ? 'reviewer-fixable share: n/a' : `reviewer-fixable share: ${fixable} of ${total} primary rows (${percent(fixable, total)}) (lower bound: rows carry no linkedFinding)`,
+    PATH_ONLY_WARNING,
+    m === 0 ? 'reviewer-fixable share without path-only classes: n/a' : `reviewer-fixable share without path-only classes: ${n} of ${m} primary rows (${percent(n, m)})`,
+  ];
 }
 
 function noTargetLines(noTarget) {
@@ -92,7 +110,7 @@ export function report(rows, { noTarget } = {}) {
     `by cause (primary rows only; ${RULE_OF_THUMB}):`,
     ...CAUSES.map((c) => `  ${c}: ${counts[c]}`),
     `all rows by cause (every blamed PR, the noise): ${CAUSES.map((c) => `${c} ${all[c]}`).join(', ')}`,
-    shareLine(counts, primary.length),
+    ...shareLines(counts, primary.length),
     ...noTargetLines(noTarget),
   ].join('\n');
 }
