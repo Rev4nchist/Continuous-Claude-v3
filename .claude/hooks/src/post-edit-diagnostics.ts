@@ -12,6 +12,7 @@ import { spawnSync } from 'child_process';
 import { dirname, join, relative, resolve } from 'path';
 import { queryDaemonSync, trackHookActivitySync } from './lib/daemon-client.js';
 import { mutateBus, addFileInPlay } from './shared/context-bus.js';
+import { isEngineHost } from './shared/engine-host.js';
 import {
   classifyExtension,
   findNearestTsconfig,
@@ -133,6 +134,12 @@ export function resolveTscCommand(
 
 async function main() {
   const input: HookInput = JSON.parse(readFileSync(0, 'utf-8'));
+
+  // Under cursor-agent (the review engine): no bus file, no tsc text (card engine-run-hook-files).
+  if (isEngineHost(input)) {
+    console.log('{}');
+    return;
+  }
 
   // Only run on Edit and Write operations
   if (input.tool_name !== 'Edit' && input.tool_name !== 'Write') {

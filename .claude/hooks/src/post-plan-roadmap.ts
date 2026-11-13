@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
+import { isEngineHost } from './shared/engine-host.js';
 import { getProjectIdentity, isContentRelevantToProject } from './shared/project-relevance.js';
 import {
   parseRoadmap,
@@ -763,6 +764,13 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no ROADMAP.md or log file in the reviewed tree
+  // (card engine-run-hook-files).
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }

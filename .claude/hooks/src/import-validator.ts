@@ -8,6 +8,7 @@
 import { readFileSync } from 'fs';
 import { basename } from 'path';
 import { queryDaemonSync, trackHookActivitySync } from './lib/daemon-client.js';
+import { isEngineHost } from './shared/engine-host.js';
 
 interface HookInput {
   tool_name: string;
@@ -91,6 +92,12 @@ function checkSymbolExists(symbol: string): { exists: boolean, location?: string
 
 async function main() {
   const input: HookInput = JSON.parse(readFileSync(0, 'utf-8'));
+
+  // Under cursor-agent (the review engine): no tldr daemon start for the reviewed tree. (card engine-run-hook-files).
+  if (isEngineHost(input)) {
+    console.log('{}');
+    return;
+  }
 
   if (input.tool_name !== 'Write' && input.tool_name !== 'Edit') {
     console.log('{}');
