@@ -1,0 +1,10 @@
+{
+  "_comment": "Verdict of each row on main today. A fix card changes one line here in its own pull request. PASS = the rule is enforced. Row 2 is PASS since PR 536 (merge e17eda1c, file claims keyed by the file's own repo): it holds only on a checkout that has that merge, else the dist is the old hook and row 2 says FAIL. Info sub-rows 2-old (old hook 900124e6, expected FAIL) and 2-cross (expected PASS) print their verdicts but are not listed here, so the ratchet never counts them.",
+  "rows": {
+    "2": "PASS",
+    "3": "FAIL",
+    "5": "FAIL",
+    "7": "FAIL",
+    "8": "FAIL"
+  }
+}
