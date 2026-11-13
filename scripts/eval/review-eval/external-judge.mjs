@@ -14,14 +14,14 @@
 // - --set sample|outside (default sample). sample is the seeded sample (--sample N, default 50). outside is every decisive pair that is not in
 //   the default 50-pair sample for the seed, in the seeded order; --sample does not move it. Ledger rows carry set (none reads as sample).
 // - The report is <day>-hf-judge-precheck-<model>.json for v0 + sample, else <day>-hf-judge-precheck-<model>-<prompt>-<set>.json. Its header holds
-//   promptSha256 and passRule. The v1 text is frozen: a v1 run whose sha differs from the sha on existing v1 rows (same model and set) is refused (code 2).
+//   promptSha256 and passRule. The v1 text is frozen: a v1 run whose sha differs from the sha on existing v1 rows (same model, any set) is refused (code 2).
 //   v1 rows and the report also carry promptFilledSha256 (the text of a pair with every field set), frozen the same way.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chicagoDay, runClaude } from '../../lib/headless.mjs';
+import { chicagoDay, runClaude, servedMatches, servedModelOf } from '../../lib/headless.mjs';
 import { cohenKappa } from './agreement.mjs';
 import { judgePair, judgePrompt, parseVerdict } from './judge.mjs';
 import { JUDGE_PROMPT_V1_FILLED_SHA256, JUDGE_PROMPT_V1_SHA256, judgePromptV1 } from './judge-prompt-v1.mjs';
@@ -38,8 +38,6 @@ export const DEFAULT_DATASET = { id: 'code-review-bench/code-review-bench', sha:
 export const JUDGE_MODEL = 'opus';
 export const JUDGE_EFFORT = 'high';
 const MODELS = ['opus', 'sonnet'];
-// The served model that an opus run must report. An older Opus or no served model is a stop (seat condition, 2026-11-13).
-const SERVED = { opus: /^claude-opus-5-5\b/, sonnet: /^claude-sonnet-/ };
 // Ledger rows written before 2026-11-13 have no model field. All of them are Sonnet runs (the model was hard-coded), in this ledger only.
 const LEGACY_MODEL = 'sonnet';
 const rowModel = (r) => r.model ?? LEGACY_MODEL;
@@ -55,7 +53,6 @@ const PROMPT_SHA = { v0: SHA_V0, v1: JUDGE_PROMPT_V1_SHA256 };
 // Only v1 is frozen, so only v1 has the filled-field sha (the text of a pair with every field set).
 const FILLED_SHA = { v1: JUDGE_PROMPT_V1_FILLED_SHA256 };
 const rowPrompt = (r) => r.promptVersion ?? 'v0';
-const rowSet = (r) => r.set ?? 'sample';
 
 /** The v1 judge: the same call shape and error mapping as judgePair in judge.mjs, with the v1 prompt. Never throws. */
 export async function judgeV1(pair, { runJudge }) {
@@ -76,26 +73,22 @@ export function selectIds(decisiveIds, { set, sample, seed }) {
   return sampleIds(decisiveIds, decisiveIds.length, seed).filter((i) => !inSample.has(i));
 }
 
-/** The prompt sha256 values on the paid rows (start or end) of one dataset, model, prompt and set. */
-export function paidShas(rows, dataset, model, promptVersion, set) {
-  const same = (r) => r.dataset === dataset && rowModel(r) === model && rowPrompt(r) === promptVersion && rowSet(r) === set;
-  return new Set(rows.filter((r) => (r.phase === 'start' || r.phase === 'end') && same(r) && r.promptSha256).map((r) => r.promptSha256));
-}
-
 /**
- * True when this run's prompt sha, or its filled-field sha, differs from one already paid for under the same model, prompt and set.
- * Only v1 is frozen. A paid row from before the filled sha existed has none, and only its empty-pair sha is compared.
+ * The v1 freeze, per dataset and model, across sets. 'prompt' when a paid v1 row (start or end) has no prompt sha or another one;
+ * 'filled' when one has another filled-field sha; null when the run may go on. Every real v1 row carries a prompt sha (they came in
+ * together), so a row without one is not trusted. A paid row from before the filled sha existed has none: only its prompt sha is compared.
  */
-export function frozenMismatch(rows, dataset, model, promptVersion, set, sha256, filledSha256 = FILLED_SHA[promptVersion]) {
-  if (promptVersion !== 'v1') return false;
-  if ([...paidShas(rows, dataset, model, promptVersion, set)].some((s) => s !== sha256)) return true;
-  const same = (r) => r.dataset === dataset && rowModel(r) === model && rowPrompt(r) === promptVersion && rowSet(r) === set;
-  return rows.some((r) => (r.phase === 'start' || r.phase === 'end') && same(r) && r.promptFilledSha256 && r.promptFilledSha256 !== filledSha256);
+export function freezeFault(rows, dataset, model, promptVersion, sha256 = PROMPT_SHA[promptVersion], filledSha256 = FILLED_SHA[promptVersion]) {
+  if (promptVersion !== 'v1') return null;
+  const paid = rows.filter((r) => (r.phase === 'start' || r.phase === 'end') && r.dataset === dataset && rowModel(r) === model && rowPrompt(r) === promptVersion);
+  if (paid.some((r) => r.promptSha256 !== sha256)) return 'prompt';
+  if (paid.some((r) => r.promptFilledSha256 && r.promptFilledSha256 !== filledSha256)) return 'filled';
+  return null;
 }
 
-/** A v1 verdict is reused only when the shas it recorded are the current ones, whatever its set. A sha it did not record is not compared. */
+/** A v1 verdict is reused or compared only when it carries the current prompt sha, and the current filled sha when it recorded one. */
 const shasCurrent = (r) => rowPrompt(r) !== 'v1'
-  || ((!r.promptSha256 || r.promptSha256 === PROMPT_SHA.v1) && (!r.promptFilledSha256 || r.promptFilledSha256 === FILLED_SHA.v1));
+  || (r.promptSha256 === PROMPT_SHA.v1 && (!r.promptFilledSha256 || r.promptFilledSha256 === FILLED_SHA.v1));
 
 /** The usage message for a model, prompt or set that is not allowed; null when all three are. */
 export function usageError(model, promptVersion, set) {
@@ -111,25 +104,8 @@ export function reportName(day, model, promptVersion, set) {
   return `${day}-hf-judge-precheck-${model}${tail}.json`;
 }
 
-/** The model names in the modelUsage of the claude -p result line, joined by comma; null when there is none. */
-export function servedModelOf(stdout) {
-  for (const l of String(stdout ?? '').split(/\r?\n/).reverse()) {
-    try {
-      const o = JSON.parse(l);
-      if (o && typeof o === 'object' && o.type === 'result') {
-        const names = o.modelUsage && typeof o.modelUsage === 'object' ? Object.keys(o.modelUsage) : [];
-        return names.length ? names.join(',') : null;
-      }
-    } catch { /* not the result line */ }
-  }
-  return null;
-}
-
-/** Every served model name matches the requested model (a run can report a helper model too: then all must match). */
-export function servedMatches(model, served) {
-  if (!served) return false;
-  return served.split(',').every((n) => SERVED[model].test(n));
-}
+// servedModelOf and servedMatches live in headless.mjs (runJudge uses them too); re-exported here for the tests and callers.
+export { servedModelOf, servedMatches };
 
 // ---- rows -> pairs -------------------------------------------------------------------------------------------------
 
@@ -366,9 +342,11 @@ export async function run(opts, deps = {}) {
 
     const ledger = readOwnLedger(ledgerPath);
     const promptSha256 = PROMPT_SHA[promptVersion];
-    if (frozenMismatch(ledger, dataset, model, promptVersion, set, promptSha256)) {
-      stderr(`external-judge refused: the ${promptVersion} prompt text changed since paid ${promptVersion} calls for ${model} on set ${set} (sha256 ${promptSha256} is not the frozen one). No call made.`);
-      return { code: 2, reason: 'prompt-frozen' };
+    const fault = freezeFault(ledger, dataset, model, promptVersion);
+    if (fault) {
+      const which = fault === 'filled' ? `filled-field sha256 ${FILLED_SHA[promptVersion]}` : `prompt sha256 ${promptSha256}`;
+      stderr(`external-judge refused: the ${promptVersion} prompt text changed since paid ${promptVersion} calls for ${model} on any set (${which} is not the frozen one, or a paid row has no prompt sha). No call made.`);
+      return { code: 2, reason: 'prompt-frozen', fault };
     }
     // An end row counts only when it was judged on the candidate the pair has now, and (v1) with the current prompt text.
     const fresh = (m) => new Map([...m].filter(([i, r]) => byId.get(i)?.candidateSource === r.candidateSource && shasCurrent(r)));
@@ -378,7 +356,7 @@ export async function run(opts, deps = {}) {
     const pending = ids.filter((i) => !judged.has(i));
     const used = usedToday(ledger, now());
     const allowed = Math.max(0, Math.min(dailyShare - used, pending.length));
-    stdout(`plan: model ${model} effort ${JUDGE_EFFORT} prompt ${promptVersion} set ${set}${cap ? ` cap ${cap} (this run)` : ''}; dataset ${dataset} file ${file}; rows ${all.length}, decisive ${decisive.length}, uncertain excluded ${uncertain}, no candidate ${noCandidate} (yes ${noCandidateByLabel.yes}, no ${noCandidateByLabel.no}); sample ${ids.length} seed ${seed}; pairs in set ${ids.length}; already judged ${ids.length - pending.length}, pending ${pending.length}, stale ${staleRejudged} (judged on another prompt, judged again); external calls today ${used}/${dailyShare}, this run ${dryRun ? 0 : allowed} (dry-run would allow ${allowed}); headless calls made: ${dryRun ? 0 : 'see below'}`);
+    stdout(`plan: model ${model} effort ${JUDGE_EFFORT} prompt ${promptVersion} set ${set}${cap ? ` cap ${cap} (this run)` : ''}; dataset ${dataset} file ${file}; rows ${all.length}, decisive ${decisive.length}, uncertain excluded ${uncertain}, no candidate ${noCandidate} (yes ${noCandidateByLabel.yes}, no ${noCandidateByLabel.no}); seed ${seed}; pairs in set ${ids.length}; already judged ${ids.length - pending.length}, pending ${pending.length}, stale ${staleRejudged} (judged on another prompt, judged again); external calls today ${used}/${dailyShare}, this run ${dryRun ? 0 : allowed} (dry-run would allow ${allowed}); headless calls made: ${dryRun ? 0 : 'see below'}`);
 
     if (dryRun) {
       for (const i of pending.slice(0, showPrompts)) stdout(`--- prompt for pair ${i} (human: ${byId.get(i).human}, candidate: ${byId.get(i).candidateSource}) ---\n${PROMPTS[promptVersion](byId.get(i).pair)}`);

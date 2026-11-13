@@ -39,7 +39,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments, readPrCommits } from './review-status.mjs';
-import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, billedText, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
+import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, answerKeyRange, billedText, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -211,7 +211,7 @@ function save(file, text, deps) {
  * writeOut(file, text), now. Returns { line, exitCode, reason, outFile, from, head, verdict }.
  */
 export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN }, deps = {}) {
-  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, mergesIn: gitMergesIn, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), cliCap: readCliCap, branch: gitBranch, ledgerPath: null, ...deps };
+  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, mergesIn: gitMergesIn, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), cliCap: readCliCap, branch: gitBranch, ledgerPath: null, answerKey: answerKeyRange, ...deps };
   const range = readRange(pr, repo, cwd, d);
   if (range.stop) return range.stop;
   const { from, head } = range;
@@ -219,6 +219,8 @@ export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEO
   if (bad) return bad;
   const capped = checkCap(cwd, d);
   if (capped) return capped;
+  const key = d.answerKey(cwd, from);
+  if (key) return stop(key);
   const merges = safeMerges(d, cwd, from);
   const run = await d.runCr({ cwd, args: CR_FIX_ARGS(from), timeoutMs });
   const stdout = String(run.stdout ?? '');
