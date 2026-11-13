@@ -24,6 +24,13 @@
 //  S22 stats counts are wrong (slice, rule flag, human or AI, category, context, bad commit)
 //  S23 an AACR json that is not an array, or an object with one array, is read as rows -> shape check dropped
 //  S1b --help after a subcommand, or --out with no value, runs the command and writes the default gold file -> flag parse lets them through
+//  S26 pin-prs accepts a moved head or base when the git-ignored pins file is absent (fresh checkout)   -> committed gold file not compared
+//  S27 a Qodo PR whose head commit is after the dataset date, or has no usable date, is pinned           -> headAt check dropped, or the first commit is read, not the last
+//  S28 a PR with a recorded pin (pins file or gold) that now answers 404, no-head or head-after-dataset is dropped silently -> refusal dropped
+//  S29 a pin-prs rerun changes pinnedAt (so every row's prPinnedAt) for a PR whose head and base did not move -> old pinnedAt not kept
+//  S30 a Qodo line at a hunk edge is mapped wrong (9, 10, 20, 21 against [10,20])                        -> hunk compare made strict
+//  S31 main runs with no FILE_SHA256 guard when the caller passes no fileSha256                          -> production default changed to null
+//  S15b a pure-deletion hunk (+c,0) gives a line range                                                  -> Math.max(len, 1) restored
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -31,7 +38,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { datasetDirName } from './external-pull.mjs';
-import { assertUniqueIds, FILE_SHA256, GH_CALL_CAP, main, parseHunks, PINS, PRS_FILE, SEVERITY_MAP_VERSION, SLICE_EXTS } from './external-slices.mjs';
+import { assertUniqueIds, FILE_SHA256, GH_CALL_CAP, main, parseHunks, PINS, PRS_FILE, PRS_VERSION, QODO_DATASET_AT, SEVERITY_MAP_VERSION, SLICE_EXTS } from './external-slices.mjs';
 import { loadGold, validateRow } from './gold.mjs';
 
 const NOW = Date.parse('2026-11-13T12:00:00Z');
@@ -50,7 +57,7 @@ function writeDataset(root, pin, rows, manifestOver = {}) {
   writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: pin.id, sha: pin.sha, file: pin.file, bytes: buf.length, sha256: sha256(buf), fetchedAt: '2026-11-13T00:00:00.000Z', ...manifestOver }));
   return sha256(buf);
 }
-const writePrs = (root, prs, over = {}) => writeFileSync(path.join(root, PRS_FILE), JSON.stringify({ version: 2, qodo: { id: PINS.qodo.id, sha: PINS.qodo.sha }, pinnedAt: '2026-11-12T00:00:00.000Z', prs, excluded: [], ...over }));
+const writePrs = (root, prs, over = {}) => writeFileSync(path.join(root, PRS_FILE), JSON.stringify({ version: 3, qodo: { id: PINS.qodo.id, sha: PINS.qodo.sha }, pinnedAt: '2026-11-12T00:00:00.000Z', prs, excluded: [], ...over }));
 
 const issue = (over = {}) => ({ title: 'SENTINEL_TITLE', description: 'SENTINEL_DESC', file_path: 'src/a.ts', start_line: 12, end_line: 14, problematic_code_snippet: 'SENTINEL_SNIP', rule_name: 'SENTINEL_RULE', ...over });
 const qrow = (url, issues) => ({ repo: 'acme/widget', pr_url_to_review: url, issues, num_of_issues: issues.length });
@@ -67,7 +74,10 @@ const QODO = [
   ]),
   qrow(PR22, [issue()]), // no pin
 ];
-const PINNED = { 'acme/widget#11': { head: HEAD, base: BASE, complete: true, files: { 'src/a.ts': [[10, 20]], 'src/B.PY': [[50, 60]] } } };
+const HEAD_AT = '2026-02-01T00:00:00.000Z';
+const PINNED_AT = '2026-11-12T00:00:00.000Z';
+const mkPin = (over = {}) => ({ head: HEAD, base: BASE, complete: true, headAt: HEAD_AT, pinnedAt: PINNED_AT, files: {}, ...over });
+const PINNED = { 'acme/widget#11': mkPin({ files: { 'src/a.ts': [[10, 20]], 'src/B.PY': [[50, 60]] } }) };
 
 const arow = (over = {}) => ({
   pr_url: 'https://github.com/Acme/Gizmo/pull/5', pr_source_commit: 'D'.repeat(40), pr_target_commit: 'c'.repeat(40), path: 'pkg/mod.PY', from_line: 7, to_line: 9, side: 'right',
@@ -100,7 +110,9 @@ async function cli(argv, deps = {}) {
   const out = [];
   const err = [];
   // fileSha256 null: the made-up fixtures are not the pinned files. S2b tests the FILE_SHA256 check.
-  const code = await main(argv, { stdout: (s) => out.push(String(s)), stderr: (s) => err.push(String(s)), now: () => NOW, fileSha256: null, ...deps });
+  // goldFile: a path that does not exist, so a test never reads the real committed gold file.
+  const goldFile = path.join(tmp(), 'no-gold-c.json');
+  const code = await main(argv, { stdout: (s) => out.push(String(s)), stderr: (s) => err.push(String(s)), now: () => NOW, fileSha256: null, goldFile, ...deps });
   return { code, out: out.join('\n'), err: err.join('\n') };
 }
 const build = async (root, name = 'gold-c.json') => {
@@ -119,7 +131,7 @@ function fakeGh(map) {
     const e = map[key];
     if (!e) throw Object.assign(new Error('gh api failed: 404'), { status: 404 });
     if (pr) return { head: { sha: e.head }, base: { sha: e.base }, changed_files: e.changed ?? e.files.length, user: { login: 'someone' } };
-    return { files: e.files };
+    return { files: e.files, commits: e.commits ?? [{ commit: { committer: { date: e.headAt ?? HEAD_AT } } }] };
   };
   return { fn, calls };
 }
@@ -257,7 +269,7 @@ test('S6 S7 S9 Qodo rows: severity from the rule flag, linkType from the hunks, 
     assert.deepEqual(x.target, { repo: 'acme/widget', pr: 11, round: 1, sha40: HEAD });
     assert.deepEqual([x.source, x.suite, x.split], ['C', 'capability', 'holdout']);
     assert.deepEqual(x.labels, [{ by: 'qodo', verdict: 'real' }]);
-    assert.deepEqual([x.provenance.severityMapVersion, x.provenance.prHead, x.provenance.prBase, x.provenance.prPinnedAt], [SEVERITY_MAP_VERSION, HEAD, BASE, '2026-11-12T00:00:00.000Z']);
+    assert.deepEqual([x.provenance.severityMapVersion, x.provenance.prHead, x.provenance.prBase, x.provenance.prPinnedAt], [SEVERITY_MAP_VERSION, HEAD, BASE, PINNED_AT]);
   }
 });
 
@@ -290,7 +302,7 @@ test('S8 bad commit, category, context, repo and file are excluded and counted, 
 test('S8 a Qodo repo or file that gold.mjs refuses is excluded', async () => {
   // Breaks when: the repo or file rule is not applied before the row is built.
   const rows = [qrow('https://github.com/acme/.hidden/pull/11', [issue()]), qrow(PR11, [issue({ file_path: 'a\\b.ts' }), issue({ file_path: './a.ts' })])];
-  const root = setup({ qodo: rows, aacr: [], prs: { ...PINNED, 'acme/.hidden#11': { head: HEAD, base: BASE, complete: true, files: {} } } });
+  const root = setup({ qodo: rows, aacr: [], prs: { ...PINNED, 'acme/.hidden#11': mkPin() } });
   const c = JSON.parse((await build(root)).out);
   assert.deepEqual(c.excluded, { 'bad-repo': 1, 'bad-file': 2 });
   assert.equal(c.rows.qodo, 0);
@@ -355,15 +367,16 @@ test('S13 build refuses a missing pins file and a pins file for another Qodo pin
 
 test('S14 a row that fails validateRow exits 1 and writes nothing', async () => {
   // Breaks when: validation is skipped, or the file is written before the check.
-  const root = setup({ qodo: [qrow('https://github.com/acme/widget/pull/0', [issue()])], aacr: [], prs: { 'acme/widget#0': { head: HEAD, base: BASE, complete: true, files: {} } } });
+  const root = setup({ qodo: [qrow('https://github.com/acme/widget/pull/0', [issue()])], aacr: [], prs: { 'acme/widget#0': mkPin() } });
   const r = await build(root);
   assert.equal(r.code, 1);
   assert.equal(existsSync(r.file), false);
 });
 
 test('S15 parseHunks reads the new-side range of each hunk', () => {
-  // Breaks when: +c,d is read as the old side, d is not defaulted to 1, d = 0 gives an empty range, or no patch throws.
-  assert.deepEqual(parseHunks('@@ -1,3 +10,11 @@ fn\n x\n@@ -40 +50,0 @@\n@@ -5,2 +70 @@ y\n'), [[10, 20], [50, 50], [70, 70]]);
+  // Breaks when: +c,d is read as the old side, d is not defaulted to 1, a pure deletion (+c,0) gives a range, or no patch throws.
+  assert.deepEqual(parseHunks('@@ -1,3 +10,11 @@ fn\n x\n@@ -40 +50,0 @@\n@@ -5,2 +70 @@ y\n'), [[10, 20], [70, 70]]);
+  assert.deepEqual(parseHunks('@@ -40 +50,0 @@\n'), []);
   assert.deepEqual(parseHunks(undefined), []);
   assert.deepEqual(parseHunks(''), []);
   assert.deepEqual(parseHunks('no hunk header here'), []);
@@ -378,8 +391,8 @@ test('S15 pin-prs writes the pins file: hunks, null for a file with no patch, co
   assert.deepEqual(gh.calls, ['repos/acme/widget/pulls/11', `repos/acme/widget/compare/${BASE}...${HEAD}`]);
   const file = readFileSync(path.join(root, PRS_FILE), 'utf8');
   assert.deepEqual(JSON.parse(file), {
-    version: 2, qodo: { id: PINS.qodo.id, sha: PINS.qodo.sha }, pinnedAt: '2026-11-13T12:00:00.000Z', excluded: [],
-    prs: { 'acme/widget#11': { head: HEAD, base: BASE, complete: true, files: { 'src/a.ts': [[10, 20], [50, 50]], 'README.md': null } } },
+    version: 3, qodo: { id: PINS.qodo.id, sha: PINS.qodo.sha }, pinnedAt: '2026-11-13T12:00:00.000Z', excluded: [],
+    prs: { 'acme/widget#11': mkPin({ pinnedAt: '2026-11-13T12:00:00.000Z', files: { 'src/a.ts': [[10, 20]], 'README.md': null } }) },
   });
   assert.doesNotMatch(file + r.out + r.err, /someone|login|token|authorization/i);
   assert.doesNotMatch(r.out + r.err, /acme|widget|src\//);
@@ -412,7 +425,7 @@ test('S16 pin-prs stops before the 150th-plus-one call and writes nothing', asyn
 });
 
 test('S17 pin-prs stops at once on a rate limit (error, HTTP 403 or 429, or a message body), with no retry and no file', async () => {
-  // Breaks when: a retry is added, the status check is dropped, or a partial file is written.
+  // Breaks when: a retry is added, the status check is dropped, the rate-limit detection (rateErr, rateBody) is removed, or a partial file is written.
   const limits = [
     () => { throw new Error('API rate limit exceeded'); },
     () => { throw Object.assign(new Error('gh api failed: 403'), { status: 403 }); },
@@ -430,6 +443,7 @@ test('S17 pin-prs stops at once on a rate limit (error, HTTP 403 or 429, or a me
     const root = setup({ qodo: rows, prs: false });
     const r = await cli(['pin-prs'], { root, ghFn });
     assert.equal(r.code, 1);
+    assert.match(r.err, /stopped: rate limit/, 'detected as a rate limit, not as a plain failure');
     assert.equal(calls.length, 2, 'no retry, no later call');
     assert.equal(existsSync(path.join(root, PRS_FILE)), false);
   }
@@ -437,12 +451,12 @@ test('S17 pin-prs stops at once on a rate limit (error, HTTP 403 or 429, or a me
 
 test('S18 pin-prs refuses a PR head that moved since the recorded pin, exit 2, file unchanged', async () => {
   // Breaks when: the head compare is dropped.
-  const root = setup({ prs: { 'acme/widget#11': { head: '1'.repeat(40), base: BASE, files: {} } } });
+  const root = setup({ prs: { 'acme/widget#11': mkPin({ head: '1'.repeat(40) }) } });
   const before = readFileSync(path.join(root, PRS_FILE), 'utf8');
   const r = await cli(['pin-prs'], { root, ghFn: fakeGh(GH).fn });
   assert.equal(r.code, 2);
   assert.equal(readFileSync(path.join(root, PRS_FILE), 'utf8'), before);
-  const same = setup({ prs: { 'acme/widget#11': { head: HEAD, base: BASE, files: {} } } });
+  const same = setup({ prs: { 'acme/widget#11': mkPin() } });
   assert.equal((await cli(['pin-prs'], { root: same, ghFn: fakeGh(GH).fn })).code, 0);
 });
 
@@ -452,7 +466,7 @@ test('S19 a PR whose head or base is not 40-hex, or that answers 404, is exclude
   const ghFn = async (p) => {
     if (p.endsWith('/pulls/12')) return { head: { sha: 'xyz' }, base: { sha: BASE } };
     if (p.endsWith('/pulls/13')) throw Object.assign(new Error('gh api failed: 404'), { status: 404 });
-    return /\/pulls\//.test(p) ? { head: { sha: HEAD }, base: { sha: BASE } } : { files: [] };
+    return /\/pulls\//.test(p) ? { head: { sha: HEAD }, base: { sha: BASE } } : { files: [], commits: [{ commit: { committer: { date: HEAD_AT } } }] };
   };
   const root = setup({ qodo: rows, prs: false });
   const r = await cli(['pin-prs'], { root, ghFn });
@@ -466,7 +480,7 @@ test('S19 a PR whose head or base is not 40-hex, or that answers 404, is exclude
 
 test('S18b pin-prs refuses a PR whose base moved while the head stayed, exit 2, file unchanged', async () => {
   // Breaks when: only the head is compared, so a base-only change replaces the recorded hunks.
-  const root = setup({ prs: { 'acme/widget#11': { head: HEAD, base: '1'.repeat(40), complete: true, files: {} } } });
+  const root = setup({ prs: { 'acme/widget#11': mkPin({ base: '1'.repeat(40) }) } });
   const before = readFileSync(path.join(root, PRS_FILE), 'utf8');
   const r = await cli(['pin-prs'], { root, ghFn: fakeGh(GH).fn });
   assert.equal(r.code, 2);
@@ -494,7 +508,7 @@ test('S25 pin-prs marks a compare that lost files as incomplete', async () => {
 
 test('S25 build excludes a Qodo linkType it cannot prove: a file missing from an incomplete compare, a line in a file with no patch', async () => {
   // Breaks when: a missing file is called cross-file-static on a cut-off compare, or a no-patch file is called same-file.
-  const prs = { 'acme/widget#11': { head: HEAD, base: BASE, complete: false, files: { 'src/a.ts': [[10, 20]], 'src/B.PY': null } } };
+  const prs = { 'acme/widget#11': mkPin({ complete: false, files: { 'src/a.ts': [[10, 20]], 'src/B.PY': null } }) };
   const r = await build(setup({ qodo: [QODO[0]], aacr: [], prs }));
   assert.equal(r.code, 0, r.err);
   const c = JSON.parse(r.out);
@@ -503,13 +517,16 @@ test('S25 build excludes a Qodo linkType it cannot prove: a file missing from an
   assert.deepEqual(c.linkType, { 'within-hunk': 1, 'same-file': 2 });
 });
 
-test('S13b build refuses a version 1 pins file (no complete flag), so old pins are pinned again', async () => {
-  // Breaks when: build reads a pins file that cannot say whether a compare was cut off.
-  const root = setup({ prs: false });
-  writePrs(root, PINNED, { version: 1 });
-  const r = await build(root);
-  assert.equal(r.code, 2);
-  assert.match(r.err, /pin-prs/);
+test('S13b build refuses a version 1 or 2 pins file (no complete flag, no headAt or per-PR pinnedAt), so old pins are pinned again', async () => {
+  // Breaks when: build reads a pins file that cannot say whether a compare was cut off or when the head was made.
+  assert.equal(PRS_VERSION, 3);
+  for (const version of [1, 2]) {
+    const root = setup({ prs: false });
+    writePrs(root, PINNED, { version });
+    const r = await build(root);
+    assert.equal(r.code, 2, `version ${version}`);
+    assert.match(r.err, /Run pin-prs again/);
+  }
 });
 
 test('S19 build counts a Qodo PR that pin-prs excluded as pr-not-pinned', async () => {
@@ -517,4 +534,118 @@ test('S19 build counts a Qodo PR that pin-prs excluded as pr-not-pinned', async 
   const root = setup({ aacr: [], prs: {} });
   const c = JSON.parse((await build(root)).out);
   assert.equal(c.excluded['pr-not-pinned'], 6);
+});
+
+const goldRow = (prov = {}, over = {}) => ({ labels: [{ by: 'qodo', verdict: 'real' }], target: { repo: 'acme/widget', pr: 11 }, provenance: { prHead: HEAD, prBase: BASE, prPinnedAt: '2026-11-01T00:00:00.000Z', ...prov }, ...over });
+const writeGold = (rows) => {
+  const file = path.join(tmp(), 'gold-c.json');
+  writeFileSync(file, JSON.stringify(rows));
+  return file;
+};
+const pinsOf = (root) => JSON.parse(readFileSync(path.join(root, PRS_FILE), 'utf8'));
+
+test('S26 pin-prs with no pins file compares a new head or base with the committed gold file, and refuses a move with nothing written', async () => {
+  // Breaks when: cmdPinPrs reads only the git-ignored pins file, or the gold compare skips head or base, or counts a non-Qodo row.
+  for (const moved of [{ prHead: '1'.repeat(40) }, { prBase: '1'.repeat(40) }]) {
+    const root = setup({ qodo: [QODO[0]], prs: false });
+    const r = await cli(['pin-prs'], { root, ghFn: fakeGh(GH).fn, goldFile: writeGold([goldRow(moved)]) });
+    assert.equal(r.code, 2, JSON.stringify(moved));
+    assert.equal(existsSync(path.join(root, PRS_FILE)), false);
+  }
+  const same = setup({ qodo: [QODO[0]], prs: false });
+  const ok = await cli(['pin-prs'], { root: same, ghFn: fakeGh(GH).fn, goldFile: writeGold([goldRow()]) });
+  assert.equal(ok.code, 0, ok.err);
+  const aacr = goldRow({ prHead: undefined }, { labels: [{ by: 'aacr', verdict: 'real' }] });
+  const skip = setup({ qodo: [QODO[0]], prs: false });
+  assert.equal((await cli(['pin-prs'], { root: skip, ghFn: fakeGh(GH).fn, goldFile: writeGold([aacr]) })).code, 0);
+});
+
+test('S26 a PR in the gold file keeps its prPinnedAt when its head and base did not move', async () => {
+  // Breaks when: the pin takes the run time instead of the recorded gold prPinnedAt.
+  const root = setup({ qodo: [QODO[0]], prs: false });
+  const r = await cli(['pin-prs'], { root, ghFn: fakeGh(GH).fn, goldFile: writeGold([goldRow()]) });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(pinsOf(root).prs['acme/widget#11'].pinnedAt, '2026-11-01T00:00:00.000Z');
+});
+
+test('S27 a PR whose head commit is after the dataset date, or has no usable date, is excluded as head-after-dataset; the last commit decides', async () => {
+  // Breaks when: the headAt check is dropped, the first commit is read instead of the last, or a missing or bad date passes.
+  assert.equal(QODO_DATASET_AT, '2026-02-03T19:01:08Z');
+  const late = { commit: { committer: { date: '2026-03-01T00:00:00Z' } } };
+  const early = { commit: { committer: { date: '2026-01-01T00:00:00Z' } } };
+  const edge = { commit: { committer: { date: QODO_DATASET_AT } } };
+  const cases = [
+    [{ headAt: '2026-03-01T00:00:00Z' }, 'head-after-dataset'], [{ commits: [] }, 'head-after-dataset'],
+    [{ headAt: 'not a date' }, 'head-after-dataset'], [{ commits: [{ commit: {} }] }, 'head-after-dataset'],
+    [{ commits: [early, late] }, 'head-after-dataset'], [{ commits: [late, early] }, 'pinned'], [{ commits: [edge] }, 'pinned'],
+  ];
+  for (const [over, want] of cases) {
+    const root = setup({ qodo: [QODO[0]], prs: false });
+    const r = await cli(['pin-prs'], { root, ghFn: fakeGh({ 'acme/widget#11': { ...GH['acme/widget#11'], ...over } }).fn });
+    assert.equal(r.code, 0, r.err);
+    const pins = pinsOf(root);
+    assert.deepEqual(want === 'pinned' ? Object.keys(pins.prs) : pins.excluded, want === 'pinned' ? ['acme/widget#11'] : [{ key: 'acme/widget#11', reason: want }], JSON.stringify(over));
+    if (want !== 'pinned') assert.equal(JSON.parse(r.out).excluded['head-after-dataset'], 1);
+  }
+});
+
+test('S27 a PR with a head before the dataset date is pinned with headAt (ISO, committer date, else author date)', async () => {
+  // Breaks when: headAt is not recorded, is not normalised to ISO, or the author-date fallback is dropped.
+  const root = setup({ qodo: [QODO[0]], prs: false });
+  const r = await cli(['pin-prs'], { root, ghFn: fakeGh(GH).fn });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(pinsOf(root).prs['acme/widget#11'].headAt, HEAD_AT);
+  const author = setup({ qodo: [QODO[0]], prs: false });
+  const commits = [{ commit: { author: { date: '2026-01-05T10:00:00Z' } } }];
+  await cli(['pin-prs'], { root: author, ghFn: fakeGh({ 'acme/widget#11': { ...GH['acme/widget#11'], commits } }).fn });
+  assert.equal(pinsOf(author).prs['acme/widget#11'].headAt, '2026-01-05T10:00:00.000Z');
+});
+
+test('S28 a PR with a recorded pin that is now gone, has no usable sha or a head after the dataset is a refusal, exit 2, nothing written', async () => {
+  // Breaks when: pinAll drops a previously pinned PR into excluded instead of refusing (pins file or gold file).
+  const late = fakeGh({ 'acme/widget#11': { ...GH['acme/widget#11'], headAt: '2026-03-01T00:00:00Z' } }).fn;
+  const badSha = async () => ({ head: { sha: 'xyz' }, base: { sha: BASE } });
+  for (const ghFn of [fakeGh({}).fn, badSha, late]) {
+    const root = setup({ qodo: [QODO[0]], prs: { 'acme/widget#11': mkPin() } });
+    const before = readFileSync(path.join(root, PRS_FILE), 'utf8');
+    const r = await cli(['pin-prs'], { root, ghFn });
+    assert.equal(r.code, 2);
+    assert.equal(readFileSync(path.join(root, PRS_FILE), 'utf8'), before);
+    const fresh = setup({ qodo: [QODO[0]], prs: false });
+    assert.equal((await cli(['pin-prs'], { root: fresh, ghFn, goldFile: writeGold([goldRow()]) })).code, 2);
+    assert.equal(existsSync(path.join(fresh, PRS_FILE)), false);
+  }
+});
+
+test('S29 a second pin-prs run at a later time keeps the first pinnedAt of an unchanged PR, and two builds are byte-identical', async () => {
+  // Breaks when: pinnedAt is rewritten on every run (prPinnedAt of every Qodo row changes without a moved pin).
+  const root = setup({ prs: false });
+  assert.equal((await cli(['pin-prs'], { root, ghFn: fakeGh(GH).fn })).code, 0);
+  const first = await build(root, 'a.json');
+  const later = await cli(['pin-prs'], { root, ghFn: fakeGh(GH).fn, now: () => NOW + 3600 * 1000 });
+  assert.equal(later.code, 0, later.err);
+  const pins = pinsOf(root);
+  assert.equal(pins.pinnedAt, '2026-11-13T13:00:00.000Z');
+  assert.equal(pins.prs['acme/widget#11'].pinnedAt, '2026-11-13T12:00:00.000Z');
+  const second = await build(root, 'b.json');
+  assert.equal(readFileSync(second.file, 'utf8'), readFileSync(first.file, 'utf8'));
+  assert.ok(rowsOf(first.file).every((x) => x.labels[0].by !== 'qodo' || x.provenance.prPinnedAt === '2026-11-13T12:00:00.000Z'));
+});
+
+test('S30 a Qodo line at a hunk edge: 9 and 21 are same-file, 10 and 20 are within-hunk', async () => {
+  // Breaks when: the hunk compare is made strict (> or <), or the end is read as exclusive.
+  const issues = [9, 10, 20, 21].map((n) => issue({ start_line: n }));
+  const prs = { 'acme/widget#11': mkPin({ files: { 'src/a.ts': [[10, 20]] } }) };
+  const r = await build(setup({ qodo: [qrow(PR11, issues)], aacr: [], prs }));
+  assert.equal(r.code, 0, r.err);
+  const got = rowsOf(r.file).sort((a, b) => a.provenance.issue - b.provenance.issue).map((x) => [x.line, x.linkType]);
+  assert.deepEqual(got, [[9, 'same-file'], [10, 'within-hunk'], [20, 'within-hunk'], [21, 'same-file']]);
+});
+
+test('S31 main with no fileSha256 key uses the production FILE_SHA256 and refuses made-up files', async () => {
+  // Breaks when: the default of deps.fileSha256 becomes null, so the production run reads any file that matches its manifest.
+  const err = [];
+  const code = await main(['stats'], { root: setup(), stdout: () => {}, stderr: (s) => err.push(String(s)), now: () => NOW });
+  assert.equal(code, 2);
+  assert.match(err.join('\n'), /FILE_SHA256/);
 });

@@ -120,7 +120,8 @@ export async function main(argv, { stdout = (s) => console.log(s), stderr = (s) 
       for (const r of await listFiles(f, { fetchFn })) stdout(`${r.size}\t${r.path}`);
       return 0;
     }
-    const { filePath, manifest } = await pullPinned(f, { fetchFn, root });
+    // Only these three flags reach pullPinned: a --maxBytes flag (NaN or a huge number) must never lift the size cap.
+    const { filePath, manifest } = await pullPinned({ id: f.id, sha: f.sha, file: f.file }, { fetchFn, root });
     stdout(`pulled ${manifest.id}@${manifest.sha} ${manifest.file}: ${manifest.bytes} bytes sha256 ${manifest.sha256}`);
     stdout(`stored ${filePath}`);
     return 0;

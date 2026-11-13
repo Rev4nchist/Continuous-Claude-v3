@@ -1,7 +1,8 @@
 // Gold C builder: turns two pinned external review datasets into gold rows (source 'C') for gold/gold-c.json.
 // Subcommands (no argument or --help prints usage and exits 2, with no network and no file write):
 //   stats     offline. Counts only: never a row, path, url or text.
-//   pin-prs   network (gh api). Pins head, base and new-side hunk ranges of each Qodo PR that has an in-slice finding.
+//   pin-prs   network (gh api). Pins head, base, head commit date and new-side hunk ranges of each Qodo PR that has an in-slice finding.
+//             A PR whose head is later than QODO_DATASET_AT is excluded. A pin that moved, against the pins file or the committed gold file, is a refusal.
 //             At most GH_CALL_CAP calls in one pass, no retry, a rate limit stops the pass. Writes <root>/gold-c-prs.json at the end only.
 //   build     offline. Reads both pinned files and gold-c-prs.json, writes the gold rows (--out, default gold/gold-c.json).
 // Both datasets are untrusted data: a file is read only when its sha256 equals the manifest written by external-pull.mjs.
@@ -33,8 +34,10 @@ export const SEVERITY_MAP_VERSION = 1;
 export const SLICE_EXTS = Object.freeze(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py']);
 export const GH_CALL_CAP = 150;
 export const PRS_FILE = 'gold-c-prs.json';
-/** Version 2 adds `complete` per PR and null hunks for a file with no patch. */
-export const PRS_VERSION = 2;
+/** HF lastModified of the pinned Qodo revision. The dataset has no commit field, so a PR head made after this is not the head its lines were written against. */
+export const QODO_DATASET_AT = '2026-02-03T19:01:08Z';
+/** Version 2 adds `complete` per PR and null hunks for a file with no patch. Version 3 adds `headAt` and `pinnedAt` per PR. */
+export const PRS_VERSION = 3;
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 const PR_URL_RE = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)$/;
@@ -147,13 +150,13 @@ function aacrStats(rows) {
 
 // ---- pin-prs -------------------------------------------------------------------------------------------------------
 
-/** New-side line ranges of each '@@ -a,b +c,d @@' hunk: [c, c + max(d, 1) - 1]. d defaults to 1. No patch gives []. */
+/** New-side line ranges of each '@@ -a,b +c,d @@' hunk: [c, c + d - 1]. d defaults to 1. A hunk with d = 0 (pure deletion) has no new-side line and is skipped. No patch gives []. */
 export function parseHunks(patch) {
   const out = [];
   for (const m of String(patch ?? '').matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
     const start = Number(m[1]);
     const len = m[2] === undefined ? 1 : Number(m[2]);
-    out.push([start, start + Math.max(len, 1) - 1]);
+    if (len > 0) out.push([start, start + len - 1]);
   }
   return out;
 }
@@ -180,9 +183,18 @@ function metered(ghFn) {
 /** path -> new-side hunk ranges, or null when the compare gave no patch for that file (its hunks are unknown). */
 const filesOf = (list) => Object.fromEntries(list.filter((x) => typeof x?.filename === 'string').map((x) => [x.filename, typeof x.patch === 'string' ? parseHunks(x.patch) : null]));
 
+/** ISO date of the last commit in a compare (the head commit): committer date, else author date. null when missing or not a date. */
+function headDate(commits) {
+  const c = Array.isArray(commits) ? commits.at(-1)?.commit : null;
+  const ms = Date.parse(c?.committer?.date ?? c?.author?.date);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+const madeInTime = (headAt) => headAt !== null && Date.parse(headAt) <= Date.parse(QODO_DATASET_AT);
+
 /**
- * { pin: {head, base, complete, files} } or { reason: 'no-head' } for a PR that is gone or has no usable sha. Any other error
- * is thrown. `complete` is true only when the compare listed as many files as the PR reports (a compare is cut off at 300).
+ * { pin: {head, base, complete, headAt, files} } or { reason } for a PR that is gone or has no usable sha ('no-head') or whose head
+ * commit is later than the dataset ('head-after-dataset'). Any other error is thrown. `complete` is true only when the compare
+ * listed as many files as the PR reports (a compare is cut off at 300). headAt comes from the compare already fetched.
  */
 async function pinOne(m, ref) {
   const api = `repos/${ref.repo}`;
@@ -193,7 +205,9 @@ async function pinOne(m, ref) {
     const cmpRes = await m.get(`${api}/compare/${base}...${head}`);
     const list = Array.isArray(cmpRes?.files) ? cmpRes.files : [];
     const complete = Number.isSafeInteger(pr?.changed_files) && list.length === pr.changed_files;
-    return { pin: { head, base, complete, files: filesOf(list) } };
+    const headAt = headDate(cmpRes?.commits);
+    if (!madeInTime(headAt)) return { reason: 'head-after-dataset' };
+    return { pin: { head, base, complete, headAt, files: filesOf(list) } };
   } catch (e) {
     if (e instanceof Stop || ![404, 410].includes(e?.status)) throw e;
     return { reason: 'no-head' };
@@ -215,37 +229,62 @@ function readPrsFile(root) {
   if (!existsSync(file)) return null;
   let data;
   try { data = JSON.parse(readFileSync(file, 'utf8')); } catch { throw new PullRefusal(`${PRS_FILE} is not valid JSON.`); }
-  // Version 1 (no `complete` flag) is read only by pin-prs, to compare the recorded pins. build needs version 2.
-  if (!isObj(data) || ![1, PRS_VERSION].includes(data.version) || !isObj(data.prs) || !isObj(data.qodo)) throw new PullRefusal(`${PRS_FILE} has an unknown shape.`);
+  // Versions 1 and 2 are read only by pin-prs, to compare the recorded pins. build needs the current version.
+  if (!isObj(data) || ![1, 2, PRS_VERSION].includes(data.version) || !isObj(data.prs) || !isObj(data.qodo)) throw new PullRefusal(`${PRS_FILE} has an unknown shape.`);
   if (data.qodo.id !== PINS.qodo.id || data.qodo.sha !== PINS.qodo.sha) throw new PullRefusal(`${PRS_FILE} is for another Qodo pin.`);
   return data;
 }
 
-/** Pins each PR into acc.prs or acc.excluded. A head or a base that differs from the recorded pin is a PullRefusal. */
-async function pinAll(m, refs, existing, acc) {
+/** { key: [{head, base, pinnedAt}] } of Qodo rows in the committed gold file. A missing file is an empty map. */
+function readGoldPins(file) {
+  const out = new Map();
+  if (!file || !existsSync(file)) return out;
+  let rows;
+  try { rows = JSON.parse(readFileSync(file, 'utf8')); } catch { throw new PullRefusal('the committed gold file is not valid JSON.'); }
+  if (!Array.isArray(rows)) throw new PullRefusal('the committed gold file is not a JSON array.');
+  for (const r of rows.filter((x) => isObj(x) && x.labels?.[0]?.by === 'qodo' && isObj(x.target) && isObj(x.provenance))) {
+    const key = prKey(r.target);
+    out.set(key, [...(out.get(key) ?? []), { head: r.provenance.prHead, base: r.provenance.prBase, pinnedAt: r.provenance.prPinnedAt }]);
+  }
+  return out;
+}
+
+/** The pins recorded for a PR: its entry in the cache pins file (a version 1 or 2 entry has no pinnedAt: the file's time) and its gold rows. */
+function recordedPins(key, ctx) {
+  const c = ctx.existing?.prs[key];
+  const cached = isObj(c) ? [{ head: c.head, base: c.base, pinnedAt: c.pinnedAt ?? ctx.existing.pinnedAt }] : [];
+  return [...cached, ...(ctx.gold.get(key) ?? [])];
+}
+
+/**
+ * Pins each PR into acc.prs or acc.excluded. A PullRefusal when a head or base differs from any recorded pin (pins file or gold),
+ * or when a PR with a recorded pin is now excluded. An unchanged PR keeps its recorded pinnedAt.
+ */
+async function pinAll(m, refs, ctx, acc) {
   for (const [key, ref] of refs) {
+    const seen = recordedPins(key, ctx);
     const r = await pinOne(m, ref);
+    if (r.reason && seen.length) throw new PullRefusal('a PR with a recorded pin is now excluded. Refusing, nothing written.');
     if (r.reason) { acc.excluded.push({ key, reason: r.reason }); continue; }
-    const old = existing?.prs[key];
-    if (old && (old.head !== r.pin.head || old.base !== r.pin.base)) throw new PullRefusal('a pinned PR head or base moved. A moved pin is an unpinned source: refusing, nothing written.');
-    acc.prs[key] = r.pin;
+    if (seen.some((o) => o.head !== r.pin.head || o.base !== r.pin.base)) throw new PullRefusal('a pinned PR head or base moved. A moved pin is an unpinned source: refusing, nothing written.');
+    acc.prs[key] = { ...r.pin, pinnedAt: seen.find((o) => nonEmpty(o.pinnedAt))?.pinnedAt ?? ctx.nowIso };
   }
 }
 
 async function cmdPinPrs(d) {
   const { rows } = loadPinned(PINS.qodo, d.root, d.fileSha256?.qodo);
-  const existing = readPrsFile(d.root);
+  const ctx = { existing: readPrsFile(d.root), gold: readGoldPins(d.goldFile), nowIso: new Date(d.now()).toISOString() };
   const m = metered(d.ghFn);
   const prs = {};
   const excluded = [];
   try {
-    await pinAll(m, qodoPrs(rows), existing, { prs, excluded });
+    await pinAll(m, qodoPrs(rows), ctx, { prs, excluded });
   } catch (e) {
     if (!(e instanceof Stop)) throw e;
     d.stderr(`external-slices stopped: ${e.message}. Nothing written. PRs pinned so far ${Object.keys(prs).length}, calls used ${m.calls}.`);
     return 1;
   }
-  const out = { version: PRS_VERSION, qodo: { id: PINS.qodo.id, sha: PINS.qodo.sha }, pinnedAt: new Date(d.now()).toISOString(), prs, excluded };
+  const out = { version: PRS_VERSION, qodo: { id: PINS.qodo.id, sha: PINS.qodo.sha }, pinnedAt: ctx.nowIso, prs, excluded };
   writeJson(path.join(d.root, PRS_FILE), out);
   d.stdout(JSON.stringify({ pinned: Object.keys(prs).length, excluded: tally(excluded, (e) => e.reason), calls: m.calls }, null, 2));
   return 0;
@@ -264,6 +303,7 @@ const rowId = (prefix, sha, row, issue) => `${prefix}${sha256(`${sha}:${row}:${i
 /**
  * The linkType of a Qodo finding, or null when it cannot be proven: a file missing from a compare that was cut off may still
  * be in the PR, and a line in a file with no patch may or may not sit in a hunk. A null row is excluded, never guessed.
+ * A finding with no line, in a file the compare lists, is same-file by definition: the file is in the diff.
  */
 function qodoLink(file, line, pin) {
   const files = isObj(pin.files) ? pin.files : {};
@@ -286,7 +326,7 @@ function qodoRow(f, t, ctx) {
   if (!isObj(pin)) return { reason: 'pr-not-pinned' };
   const linkType = qodoLink(f.path, f.line, pin);
   if (!linkType) return { reason: 'link-unproven' };
-  const provenance = { dataset: PINS.qodo.id, sha: PINS.qodo.sha, file: PINS.qodo.file, sha256: ctx.sha256, row: f.row, issue: f.issue, ruleFlag: f.rule, severityMapVersion: SEVERITY_MAP_VERSION, prHead: pin.head, prBase: pin.base, prPinnedAt: ctx.pinnedAt };
+  const provenance = { dataset: PINS.qodo.id, sha: PINS.qodo.sha, file: PINS.qodo.file, sha256: ctx.sha256, row: f.row, issue: f.issue, ruleFlag: f.rule, severityMapVersion: SEVERITY_MAP_VERSION, prHead: pin.head, prBase: pin.base, prPinnedAt: pin.pinnedAt };
   const parts = { id: rowId('c-qodo-', PINS.qodo.sha, f.row, f.issue), sha40: pin.head, severity: f.rule ? 'minor' : 'major', linkType, by: 'qodo', provenance };
   return { row: makeRow(f, t, parts) };
 }
@@ -318,7 +358,7 @@ function convert(f, make, ctx) {
   return t && repoOk(t.repo) ? make(f, t, ctx) : { reason: 'bad-repo' };
 }
 
-function buildRows({ qodo, aacr, prs, pinnedAt }) {
+function buildRows({ qodo, aacr, prs }) {
   const rows = [];
   const excluded = [];
   const add = (list, make, ctx) => {
@@ -327,7 +367,7 @@ function buildRows({ qodo, aacr, prs, pinnedAt }) {
       if (r.row) rows.push(r.row); else excluded.push({ reason: r.reason });
     }
   };
-  add(qodoFindings(qodo.rows).filter((f) => inSlice(f.path)), qodoRow, { prs, pinnedAt, sha256: qodo.sha256 });
+  add(qodoFindings(qodo.rows).filter((f) => inSlice(f.path)), qodoRow, { prs, sha256: qodo.sha256 });
   add(aacrFindings(aacr.rows).filter((f) => f.label === 1 && inSlice(f.path)), aacrRow, { sha256: aacr.sha256 });
   assertUniqueIds(rows);
   return { rows: rows.sort((a, b) => cmp(a.id, b.id)), excluded };
@@ -353,7 +393,7 @@ async function cmdBuild(d, flags) {
   const pins = readPrsFile(d.root);
   if (!pins) throw new PullRefusal(`${PRS_FILE} is missing. Run pin-prs first.`);
   if (pins.version !== PRS_VERSION) throw new PullRefusal(`${PRS_FILE} is version ${pins.version}; build needs version ${PRS_VERSION}. Run pin-prs again.`);
-  const built = buildRows({ qodo, aacr, prs: pins.prs, pinnedAt: pins.pinnedAt });
+  const built = buildRows({ qodo, aacr, prs: pins.prs });
   const problems = built.rows.flatMap((r) => validateRow(r).map((p) => `${r.id} ${p}`));
   if (problems.length) {
     d.stderr(`external-slices: ${problems.length} row problem(s), nothing written:\n${problems.slice(0, 5).join('\n')}`);
@@ -404,6 +444,7 @@ export async function main(argv, deps = {}) {
     stdout: deps.stdout ?? ((s) => console.log(s)), stderr: deps.stderr ?? ((s) => console.error(s)),
     ghFn: deps.ghFn ?? defaultGh, root: deps.root ?? DEFAULT_ROOT, now: deps.now ?? Date.now,
     fileSha256: deps.fileSha256 === undefined ? FILE_SHA256 : deps.fileSha256,
+    goldFile: deps.goldFile ?? path.join(GOLD_DIR, 'gold-c.json'),
   };
   const [cmd, ...rest] = argv;
   if (argv.includes('--help')) { d.stdout(USAGE); return 2; }

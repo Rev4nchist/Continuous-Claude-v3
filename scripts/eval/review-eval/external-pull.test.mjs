@@ -10,13 +10,14 @@
 //  P9 the body size differs from x-linked-size and the file is stored                               -> declared size not compared with the bytes received
 //  P10 the HEAD 200 with content-length path stops working                                          -> 200 branch removed
 //  P11 the HEAD is sent with redirect follow, or the GET is not following                           -> wrong redirect mode on either request
+//  P12 a --maxBytes flag (NaN or a huge number) reaches pullPinned and lifts the size cap            -> main copies every --name value into the pull options
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { assertPinned, datasetDirName, MAX_BYTES, pullPinned, PullRefusal, resolveUrl } from './external-pull.mjs';
+import { assertPinned, datasetDirName, main, MAX_BYTES, pullPinned, PullRefusal, resolveUrl } from './external-pull.mjs';
 
 const SHA = 'b'.repeat(40);
 const OTHER = 'c'.repeat(40);
@@ -175,4 +176,18 @@ test('P10 a HEAD 200 with content-length still works, and a 200 without one is r
 test('P10 a HEAD error status other than 200 or 3xx is an error, not a pull', async () => {
   // Breaks when: any status is treated as a redirect.
   await assert.rejects(pull({}, { fetchFn: fakeHf({ status: 404, headers: hop() }).fn, root: tmp() }), (e) => !(e instanceof PullRefusal) && /HTTP 404/.test(e.message));
+});
+
+test('P12 main ignores a --maxBytes flag: abc and a huge number both leave the 5 MB cap in force, exit 2, nothing stored', async () => {
+  // Breaks when: main passes every parsed --name value (maxBytes included) to pullPinned, so NaN disables and a big value lifts the cap.
+  for (const value of ['abc', '99999999999']) {
+    const hf = fakeHf({ headers: hop({ 'x-linked-size': String(MAX_BYTES + 1) }) });
+    const root = tmp();
+    const err = [];
+    const code = await main(['--id', ID, '--sha', SHA, '--file', FILE, '--maxBytes', value], { fetchFn: hf.fn, root, stdout: () => {}, stderr: (s) => err.push(String(s)) });
+    assert.equal(code, 2, value);
+    assert.match(err.join(' '), /byte limit/);
+    assert.deepEqual(hf.calls.map((c) => c.method), ['HEAD'], 'GET must not be called');
+    assert.equal(stored(root), false);
+  }
 });
