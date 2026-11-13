@@ -89,17 +89,36 @@ const versionOfRun = (r) => r.promptVersion ?? LEGACY_ENGINE_VERSION;
 
 export const HOLDOUT_SPEND_PATH = path.join(os.homedir(), '.claude', 'state', 'local-review', 'eval', 'holdout-spend.jsonl');
 
-/** One line per frozen arm with holdout runs: { ts, reviewer, promptVersion, promptSha256, holdoutRuns, scope }. No PR id. */
-function holdoutSpendLines(runs, frozenOf, { ts, scope }) {
+/**
+ * The newest row per round and arm: key pr|round|sha40|reviewer|promptVersion, by ts, and on a tie or an unreadable ts the later line.
+ * The reviewer is part of the key, so both arms of an A/B round stay. (score.mjs newestPerRound keys without it: a follow-up for its owner.)
+ */
+function newestPerArm(runs) {
+  const best = new Map();
+  runs.forEach((r, i) => {
+    const key = [r.pr, r.round, r.sha40, r.reviewer ?? 'none', r.reviewer === 'engine' ? versionOfRun(r) : ''].join('|');
+    const t = Date.parse(r.ts);
+    const prev = best.get(key);
+    if (!prev || Number.isNaN(t) || Number.isNaN(prev.t) || t >= prev.t) best.set(key, { r, t });
+  });
+  return [...best.values()].map((x) => x.r);
+}
+
+/**
+ * One line per frozen arm with holdout runs: { ts, reviewer, promptVersion, promptSha256, holdoutRuns, scope }. No PR id.
+ * frozenFor(row) is the same rule as scorecard (score.mjs:89): the hash of the row's reviewer, else the folder fallback.
+ * A row with no reviewer shows as reviewer 'none'.
+ */
+function holdoutSpendLines(runs, frozenFor, { ts, scope }) {
   const arms = new Map();
-  for (const r of runs) {
-    const reviewer = r.reviewer ?? 'cursor-review';
+  for (const r of newestPerArm(runs)) {
+    const reviewer = r.reviewer ?? 'none';
     const promptVersion = reviewer === 'engine' ? versionOfRun(r) : null;
-    const frozen = frozenOf(reviewer, promptVersion);
-    // Only runs that made a model call and that score keeps: status ok, no full-body leak, complete coverage.
+    const frozen = frozenFor(r);
+    // Only runs that made a model call and that score keeps: status ok, no full-body leak, complete coverage, the frozen hash.
     const kept = r.status === 'ok' && r.bodyMode !== 'full' && r.coverageComplete !== false;
     if (r.set !== 'holdout' || !kept || !frozen || r.promptSha256 !== frozen) continue;
-    const key = `${reviewer}|${promptVersion}`;
+    const key = `${reviewer}|${promptVersion}|${frozen}`;
     const arm = arms.get(key) ?? { ts, reviewer, promptVersion, promptSha256: frozen, holdoutRuns: 0, scope };
     arm.holdoutRuns += 1;
     arms.set(key, arm);
@@ -126,16 +145,19 @@ function scoreCmd(argv, io, cfg, { spend = false } = {}) {
   if (engineVersions.length === 1 && !engineSha) { io.stderr(`score: no engine freeze for ${engineVersions[0]}: run \`cli.mjs freeze --engine --prompt-version ${engineVersions[0]}\` first`); return 2; }
   const spendScope = flag(argv, '--scope', 'P4');
   if (spend && argv.includes('--holdout-spend') && !EVAL_SCOPES.includes(spendScope)) { io.stderr(`score: --scope takes ${EVAL_SCOPES.join(', ')}`); return 2; }
-  const frozenOf = (reviewer, version) => (reviewer === 'engine' ? frozenEngineSha(cfg, version ?? LEGACY_ENGINE_VERSION) : cfg.freeze?.promptSha256 ?? null);
+  // One freeze rule for the scorecard and the spend ledger (score.mjs:89): the reviewer's hash, else the folder fallback.
+  const frozenByReviewer = { engine: engineSha, 'cursor-review': cfg.freeze?.promptSha256 };
+  const frozenFallback = (runs.some((r) => r.reviewer === 'engine') ? engineSha : cfg.freeze?.promptSha256) ?? null;
+  const frozenFor = (r) => (r.reviewer ? frozenByReviewer[r.reviewer] : undefined) ?? frozenFallback;
   const resolved = JSON.parse(readFileSync(datasetFile, 'utf8'));
   const ev = evaluateRuns({ runs, dataset: resolved.findings, readFindings: (p) => (p ? JSON.parse(readFileSync(p, 'utf8')) : { findings: [] }) });
   const labels = readJsonl(path.join(dir, 'labels.jsonl'));
-  const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, linkTypes: loadLinkTypes(flag(argv, '--linktype', LINKTYPE_PATH)), frozenByReviewer: { engine: engineSha, 'cursor-review': cfg.freeze?.promptSha256 }, frozenPromptSha256: (runs.some((r) => r.reviewer === 'engine') ? engineSha : cfg.freeze?.promptSha256) ?? null, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
+  const card = scorecard({ runs: ev.runs, matches: ev.matches, labels, sets: { zeroMajorPrs: resolved.zeroMajorPrs ?? [] }, linkTypes: loadLinkTypes(flag(argv, '--linktype', LINKTYPE_PATH)), frozenByReviewer, frozenPromptSha256: frozenFallback, pairsSent: readJsonl(path.join(dir, 'pairs-sent.jsonl')) });
   const out = flag(argv, '--out', null);
   if (out) { mkdirSync(path.dirname(out), { recursive: true }); writeFileSync(out, `${JSON.stringify(card, null, 2)}\n`); }
   if (spend && argv.includes('--holdout-spend')) {
-    // ev.runs: the newest row per round, as score keeps it, so a re-run of one round counts once.
-    const lines = holdoutSpendLines(ev.runs, frozenOf, { ts: new Date(io.now?.() ?? Date.now()).toISOString(), scope: spendScope });
+    // Raw runs: holdoutSpendLines keeps the newest row per round and arm itself, so a re-run counts once and both A/B arms stay.
+    const lines = holdoutSpendLines(runs, frozenFor, { ts: new Date(io.now?.() ?? Date.now()).toISOString(), scope: spendScope });
     const file = flag(argv, '--spend-ledger', io.spendLedger ?? HOLDOUT_SPEND_PATH);
     if (lines.length > 0) { mkdirSync(path.dirname(file), { recursive: true }); appendFileSync(file, lines.map((l) => `${JSON.stringify(l)}\n`).join('')); }
     io.stderr(`score: holdout-spend lines written: ${lines.length}`);

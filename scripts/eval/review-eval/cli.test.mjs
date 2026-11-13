@@ -283,6 +283,30 @@ test('holdout spend counts a re-run of one round once, as score keeps only the n
   assert.equal(JSON.parse(readFileSync(ledger, 'utf8').trim()).holdoutRuns, 1);
 });
 
+test('holdout spend keeps both arms of one round: one line per reviewer (CodeRabbit CLI major on 90fb577)', async () => {
+  // Breaks when: the spend dedupe keys a round without the reviewer, so one A/B arm replaces the other.
+  const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }, { reviewer: 'cursor-review', promptSha256: 'OLD' }]);
+  const rows = readFileSync(path.join(dir, 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => ({ ...JSON.parse(l), pr: 5 }));
+  writeFileSync(path.join(dir, 'runs.jsonl'), `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  const ledger = path.join(tmp(), 'h.jsonl');
+  assert.equal(await main(['score', '--dir', dir, '--holdout-spend'], { ...quiet(), cfg: freezeCfg, spendLedger: ledger }), 0);
+  const lines = readFileSync(ledger, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => [l.reviewer, l.holdoutRuns]).sort(), [['cursor-review', 1], ['engine', 1]]);
+});
+
+test('holdout spend judges a row with no reviewer by the same freeze as score: in a folder with engine runs, that is the engine freeze (CodeRabbit CLI minor on 90fb577)', async () => {
+  // Breaks when: the spend helper maps a missing reviewer to the cursor-review freeze while score uses the engine hash.
+  const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }, { promptSha256: 'OLD' }, { promptSha256: 'E1' }]);
+  const ledger = path.join(tmp(), 'h.jsonl');
+  const io = quiet();
+  assert.equal(await main(['score', '--dir', dir, '--holdout-spend'], { ...io, cfg: freezeCfg, spendLedger: ledger }), 0);
+  const excluded = JSON.parse(io.out.filter((s) => s.startsWith('{')).join('\n')).excludedRuns;
+  const lines = readFileSync(ledger, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(excluded, 1, 'score excludes the no-reviewer row with OLD');
+  // The engine row and the no-reviewer row with E1 count; the no-reviewer row with OLD (excluded by score) does not.
+  assert.deepEqual(lines.map((l) => [l.reviewer, l.promptSha256, l.holdoutRuns]).sort(), [['engine', 'E1', 1], ['none', 'E1', 1]]);
+});
+
 test('an invalid --scope exits 2 before any write (no --out card, no spend line)', async () => {
   // Breaks when: the scope is checked after the --out scorecard is written.
   const dir = scoreDir([{ reviewer: 'engine', promptSha256: 'E1' }]);
