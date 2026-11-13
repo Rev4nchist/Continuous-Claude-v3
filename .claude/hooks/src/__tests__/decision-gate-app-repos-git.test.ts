@@ -84,7 +84,8 @@ beforeAll(() => {
   ];
   writeFileSync(`${home}/project-registry.json`, JSON.stringify({ projects }));
   process.env.LANE_REGISTRY_PATH = `${home}/project-registry.json`;
-});
+  // Builds several real git repos: under full-suite load this passed the 10 s default hook timeout (2026-11-13).
+}, 120_000);
 afterAll(() => {
   for (const k of ENV_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   rmSync(home, { recursive: true, force: true });
