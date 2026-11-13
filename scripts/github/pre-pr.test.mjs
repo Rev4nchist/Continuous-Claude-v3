@@ -3578,6 +3578,73 @@ test('A17: an accepted answer-key skip writes one guardLog row (decision, count,
   assert.deepEqual([written.decision, written.count, written.head], ['answer-key', 1, rows[0].head]);
 });
 
+// The guard checks the diff before the lock, but the usage preflight is awaited before the review starts. A commit or a checkout in that
+// window changes the committed diff the CLI would read, so HEAD is read again right before the CLI starts.
+function crInRepo(repo, runner, extra = {}) {
+  return { root: repo.dir, branch: 'feat/x', head: repo.head, base: 'main', now: new Date('2026-10-27T10:00:00Z'), runner, ledgerPath: tempLedger(), headGit: makeGit(repo.dir), crStore: null, guardPaths: CLEAN_PATHS, ...extra };
+}
+const commitDuring = (repo, rel) => {
+  mkdirSync(path.dirname(path.join(repo.dir, rel)), { recursive: true });
+  writeFileSync(path.join(repo.dir, rel), `moved ${rel}\n`);
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', `during the preflight: ${rel}`);
+};
+
+test('A18: HEAD moved during the usage preflight (a commit, or a new gold path) starts no CLI and gives the run slot back', async () => {
+  for (const rel of ['docs/during.md', GOLD]) {
+    const repo = makeRepo();
+    const seen = [];
+    const runner = (o) => {
+      seen.push(o.args[0]);
+      if (o.args[0] === 'usage') { commitDuring(repo, rel); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+      return { status: 0, stdout: NDJSON_OK, stderr: '' };
+    };
+    const r = await runCodeRabbitLive(crInRepo(repo, runner));
+    assert.equal(r.status, 'FAIL', rel);
+    assert.equal(r.skipReason, undefined, rel);
+    assert.match(r.detail, /HEAD moved during the preflight/, rel);
+    assert.match(r.detail, /run pre-pr again/, rel);
+    assert.deepEqual(seen, ['usage'], `${rel}: the review is never called`);
+    const counter = JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8'));
+    assert.equal(counter.runs.length, 0, `${rel}: not counted`);
+    assert.equal(existsSync(crPaths(repo.dir, 'feat/x').lock), false, `${rel}: the lock is released`);
+  }
+});
+
+test('A19: a steady HEAD runs the CLI as before; an unreadable HEAD before the start is a FAIL; no headGit (a direct call) adds no check', async () => {
+  const repo = makeRepo();
+  const calls = [];
+  const runner = (o) => { calls.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  assert.equal((await runCodeRabbitLive(crInRepo(repo, runner))).status, 'PASS');
+  assert.deepEqual(calls, ['usage', 'review']);
+  const broken = makeRepo();
+  const none = [];
+  const r = await runCodeRabbitLive(crInRepo(broken, (o) => { none.push(o.args[0]); return { status: 0, stdout: USAGE_OK, stderr: '' }; }, { headGit: () => ({ status: 128, stdout: '', stderr: 'fatal' }) }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /HEAD could not be re-read/);
+  assert.deepEqual(none, ['usage']);
+  const direct = makeRepo();
+  const moving = [];
+  const mover = (o) => { moving.push(o.args[0]); if (o.args[0] === 'usage') commitDuring(direct, 'docs/x.md'); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  assert.equal((await runCodeRabbitLive(crInRepo(direct, mover, { headGit: null, crStore: null }))).status, 'PASS');
+});
+
+test('A20: runPrePr hands its git to the CodeRabbit step: a HEAD that moves in the preflight gives no CLI start', async () => {
+  // Breaks when: runPrePr drops headGit from its runCodeRabbit call.
+  const repo = makeRepo();
+  const crCalls = [];
+  const crRunner = (o) => {
+    if (o.args[0] === 'usage') { commitDuring(repo, 'docs/during.md'); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+    crCalls.push(o);
+    return { status: 0, stdout: NDJSON_OK, stderr: '' };
+  };
+  const run = await prePr(repo, { crRunner });
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /HEAD moved during the preflight/);
+  assert.equal(crCalls.length, 0);
+  assert.equal(run.result.ok, false);
+});
+
 test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {
   const repo = makeRepo();
   const real = makeGit(repo.dir);
