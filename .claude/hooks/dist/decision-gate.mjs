@@ -1333,6 +1333,8 @@ function pushNeed(risk) {
   return `The default branch of remote ${prose(risk.remote)} is not known in this checkout; git remote set-head ${risk.remote} --auto records it.`;
 }
 var appPushWhy = (deps, dir, repo, branch, offer, risk) => `no "ship" decision from Dave for the tree you push to ${prose(branch)}${risk.kind === "default" ? ", a default branch of" : " in"} ${prose(repo)} (folder ${at(dir)}). ${pushNeed(risk)} ${askPart(deps, offer, dir, (c) => `Ask him first: run ${c}, ${ASK_HOW}, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged).`)} The tap is bound to this repo, this branch and one tree. A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
+var PUSH_WAY_OUT = "run git push as its own command: git push <remote> <branch>";
+var appNotAloneWhy = (deps, dir, offer) => `this push shares its command with another command, a pipe or a redirect (folder ${at(dir)}), so Dave's "Push only" tap does not count for it. To clear it, ${PUSH_WAY_OUT}. ${askPart(deps, offer, dir, (c) => `If the gate still asks for his tap then, ask him first: run ${c}, ${ASK_HOW}.`)}`;
 var appPushUrlsWhy = (dir, remote, keys) => `remote ${prose(remote)} of ${at(dir)} pushes to more than one repo (${prose(keys.join(", "))}), and one tap covers one push URL, so this push stays blocked even with Dave's tap. Push to one URL (git push <url> <branch>), or ask Dave to run it himself.`;
 var ghRepoArg = (key) => SAFE_WORD.test(key) && !key.startsWith("local:") ? key : "<owner/repo>";
 var appFetchPushWhy = (deps, dir, remote, key, pushKeys, offer) => `remote ${prose(remote)} of ${at(dir)} fetches from ${prose(key)} but pushes to ${prose(pushKeys.join(", "))}, so gh may act on another repo than the tap names. Name the repo gh acts on: add -R ${ghRepoArg(key)} to the command. ${askPart(deps, offer, dir, (c) => `The question for it: ${c}.`)}`;
@@ -1351,7 +1353,7 @@ var WIDER_WHY = "git config makes this push write more than the branch it names;
 var appWiderConfigWhy = (dir, key) => `${WIDER_WHY}. The key: ${prose(key)} (folder ${at(dir)}).${key === "push.followtags" ? " With push.followTags set, add --no-follow-tags too." : ""} A tap cannot cover it: the tap names one branch.`;
 var appWiderOptWhy = (dir, opt) => `${prose(opt)} makes this push write more than the branch it names (tags, other branches or submodule repos) in ${at(dir)}, so it stays blocked even with Dave's tap: a tap names one branch. ${opt.startsWith("-c ") ? "Run git push with no -c push setting" : "Push without that option"}, or ask Dave.`;
 var appRawUnsafeWhy = (dir) => `this command holds a git push that is not one plain git push call, and a force or delete spelling is in its text (--force, --mirror, --delete, -f or -d in a short option bundle, or a word that starts with +; folder ${at(dir)}), so it stays blocked even with Dave's tap. Run the push as its own command with no such word in it: git push <remote> <branch>. If a force push is really needed, ask Dave to run it himself.`;
-var appUnreadWhy = (dir) => `this command holds a git push that this gate cannot read as one plain git push call (folder ${at(dir)}): a global option or an option it does not know, more than one -C, a shell -c, eval, a control word, a substitution or a git alias. No tap can be tied to it: run git push with no global option before push, as its own command: git push <remote> <branch> (git -C <folder> push is fine).`;
+var appUnreadWhy = (dir) => `this command holds a git push that this gate cannot read as one plain git push call (folder ${at(dir)}): a global option or an option it does not know, more than one -C, a shell -c, eval, a control word, a substitution or a git alias. To clear it, ${PUSH_WAY_OUT}, with no global option before push (git -C <folder> push is fine).`;
 var appBundleWhy = (dir) => `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
 var appSubagentWhy = (dir) => `a subagent cannot push in ${at(dir)}: Dave's tap belongs to the main session. Ask the main session to do it.`;
 var appHeadWhy = (dir) => `the head branch of this create cannot be named in ${at(dir)} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo folder on a branch.`;
@@ -1685,6 +1687,10 @@ var holdsGitPush = (s) => {
   const w = squashMarks(s).split(WORD_SPLIT);
   return w.some((x) => /(?:^|[\\/])git(?:\.exe)?$/i.test(x)) && w.some(isPushWord);
 };
+var aliasPushes = (w) => {
+  const t = squashMarks(w);
+  return t.slice(t.indexOf("=") + 1).split(WORD_SPLIT).some(isPushWord);
+};
 function verbAt(ms, rs, g) {
   if (g[1]) return "push";
   const from = g.index + g[0].length;
@@ -1693,7 +1699,7 @@ function verbAt(ms, rs, g) {
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     if (!w.startsWith("-")) return ODD_VERB.test(w) ? "odd" : /^push$/i.test(w) ? "push" : "other";
-    if (w === "-c" && /^alias\./i.test(squashMarks(words[i + 1] ?? ""))) return "odd";
+    if (w === "-c" && /^alias\./i.test(squashMarks(words[i + 1] ?? ""))) return aliasPushes(words[i + 1]) ? "odd-push" : "odd";
     if (w === "-c" || VALUE_GLOBAL.test(w)) i++;
   }
   return null;
@@ -1710,9 +1716,10 @@ function verbsOf(raw, shell) {
     const verbs = [...ms.matchAll(GIT_WORD)].filter((g) => isRunner(rs, g)).map((g) => verbAt(ms, rs, g));
     const pushes = verbs.filter((v) => v === "push").length;
     const payload = PAYLOAD.test(rs) && holdsGitPush(rs);
+    const aliasPush = verbs.includes("odd-push");
     read.pushes += pushes;
-    read.odd ||= payload || verbs.includes("odd");
-    if (pushes > 0 || payload) read.segs.push(rs);
+    read.odd ||= payload || aliasPush || verbs.includes("odd");
+    if (pushes > 0 || payload || aliasPush) read.segs.push(rs);
   }
   return read;
 }
@@ -2167,7 +2174,22 @@ function steadyCommand(raw, shell) {
   const view = fdBlank(raw);
   return pushesAlone(view, shell) || commitPrecedesPush(view, shell);
 }
-function segmentsOf(raw, shell) {
+var ADD_GIT = gitCallRe("add");
+var ADD_SAFE = safeCallRe("add", PUSH_WRAPPERS, "", "gi");
+function stageKind(ms, rs) {
+  const k = segmentKind(ms, rs);
+  if (k !== "other" || /[(){}<>]/.test(ms) || /[$`]/.test(rs)) return k;
+  if (openCall(ms, rs, COMMIT_GIT, COMMIT_SAFE)) return "commit";
+  return openCall(ms, rs, ADD_GIT, ADD_SAFE) ? "stage" : "other";
+}
+function shipFlow(raw, shell) {
+  const segs = segmentsOf(fdBlank(raw), shell, stageKind);
+  if (segs === null || segs.seq.includes("other")) return false;
+  const firstPush = segs.seq.indexOf("push");
+  const lastCommit = segs.seq.lastIndexOf("commit");
+  return firstPush >= 0 && lastCommit >= 0 && Math.max(lastCommit, segs.seq.lastIndexOf("stage")) < firstPush;
+}
+function segmentsOf(raw, shell, kindOf = segmentKind) {
   const view = joinContinuations(raw, shell);
   const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
   if (masked.includes("|") || /(?<!&)&(?!&)/.test(masked)) return null;
@@ -2179,7 +2201,7 @@ function segmentsOf(raw, shell) {
   for (const [start, next] of [...breaks, [view.length, view.length]]) {
     const ms = masked.slice(from, start);
     if (ms.trim() !== "") {
-      seq.push(segmentKind(ms, view.slice(from, start)));
+      seq.push(kindOf(ms, view.slice(from, start)));
       before.push(pending.trim());
       pending = "";
     } else pending += ms;
@@ -2293,7 +2315,7 @@ function judgePushAt(s, deps, cwd, shell, ctx) {
   const p = s.push;
   const dirs = pushDirsOf(p, cwd, shell);
   const chainOnly = chainDirsOf(p, cwd, shell).filter((d) => !dirs.includes(d) && firstCovered(deps, [d]) !== null);
-  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone));
+  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow));
   const lost = dirs.find(isUnexpanded);
   if (lost !== void 0) return [unexpandedDeny(deps, [cwd, ...dirs], lost, "push", "app-push")];
   const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
@@ -2320,7 +2342,7 @@ function judgePush(shape, deps, dir, ctx) {
     const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell, deps.home)) ?? coveredAmong(deps, [dir]);
     return app === null ? d("push-target-unresolved", pushUnresolvedWhy(what)) : deny("push-target-unresolved", appPushUnresolvedWhy(app, what), "app-push");
   }
-  if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone);
+  if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow);
   let remote = p.remote;
   if (remote === null) {
     const up = deps.git(dir, ["rev-parse", "--abbrev-ref", "@{push}"]);
@@ -2360,11 +2382,11 @@ function shipTap({ p, deps, dir, chained, alone, key, scope, texts }) {
   const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && (isShipLabel(row.label) || !viaIndex && alone && isPushOnlyLabel(row.label)) && row.tree !== null && row.tree === tree);
   return ok ? ALLOW : deny("ship", texts.ship(), scope);
 }
-function judgeAppPushAt(shape, deps, dir, subagent, chained, alone) {
+function judgeAppPushAt(shape, deps, dir, subagent, chained, alone, flow) {
   const place = appPlace(deps, dir);
   if (!place.covered) return passOf(place);
   try {
-    return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone));
+    return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow));
   } catch (err) {
     throw new AppScopeError(err);
   }
@@ -2429,7 +2451,7 @@ function configKind(key, raw, remote, p) {
   if (key === "push.followtags") return on && !p.noFollowTags ? "wider" : "none";
   return "none";
 }
-function judgeAppPush(shape, deps, dir, place, subagent, chained, alone) {
+function judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow) {
   const p = shape.push;
   const d = (pattern, why) => deny(pattern, why, "app-push");
   if (subagent) return d("subagent", appSubagentWhy(dir));
@@ -2453,7 +2475,9 @@ function judgeAppPush(shape, deps, dir, place, subagent, chained, alone) {
   const texts = {
     notRef: (ref) => appPushUnresolvedWhy(dir, `${ref} is not a ref`),
     tree: (what) => appTreeWhy(dir, what),
-    ship: () => appPushWhy(deps, dir, k.key, k.branch, offer, risk)
+    // Seat ruling a: no Push only tap counts for a push that is not alone and has no commit before it, so the text names the way out.
+    // The Commit and push flow (git add, git commit, then the push: flow) keeps the ship text: its tap is the way out.
+    ship: () => alone || chained || flow ? appPushWhy(deps, dir, k.key, k.branch, offer, risk) : appNotAloneWhy(deps, dir, offer)
   };
   const q = p.src === "@" ? { ...p, src: null } : p;
   const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey2({ repo: k.key, branch: k.branch }), scope: "app-push", texts });
@@ -2490,7 +2514,7 @@ function judgeCommand(input, deps, notes) {
         denies.push(movedDeny(s, deps, cwd, shell, cmd.text));
         continue;
       }
-      const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, text: cmd.text, shell }) : judgeAt(s, deps, cwd, shell, named);
+      const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell }) : judgeAt(s, deps, cwd, shell, named);
       for (const d of found) {
         if (d.action === "deny") add(d);
         else if (d.notice) notes.add(d.notice);

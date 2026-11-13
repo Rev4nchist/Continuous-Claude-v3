@@ -60,7 +60,7 @@
  *       read; case-sensitive compare; overlapping option alternatives; openPrKey without the base.
  *   Re-pinned by fixer P (fix round 6, the verb rule; rows in decision-gate-app-repos-verb.test.ts): C11 R5 F4 (-C /work -C app-x from a
  *       CCv3 cwd: the old row named one folder twice and could not fail), C11 and ruling A test -f / [ -d ] / chmod +x (the tap path,
- *       allowed with the tap), R5 F2 alias -f (the tap path, not push-unsafe).
+ *       allowed with the tap), R5 F2 alias -f (the tap path, not push-unsafe; seat ruling c, 11-13, made it push-unsafe again).
  *   Re-pinned by fixer M: C12 the GIT_DIR row of an unregistered cwd (an app-repo GIT_DIR now denies, scope app-push; /x/.git keeps scope
  *       push); C26 item 2 'a dry run behind a hidden global option' (it was a pass: quiet is read only inside the strict reader); C1 the
  *       create-from-main and REST create rows and C15 the --base dev row (F8: the tap key holds the base). deps() serves the config at
@@ -1750,7 +1750,8 @@ describe('C25 item 4: the 7 s git deadline applies to app-folder git only', () =
 // ---------- C26: fix round 4, fixer K (push config that widens a push, hidden global options, option prefixes, deny texts) ----------
 
 const WIDER = 'git config makes this push write more than the branch it names; name both sides: git push <remote> <src>:<dst> --no-recurse-submodules, or ask Dave';
-const NO_GLOBAL = 'run git push with no global option before push';
+// Re-pinned by seat ruling b (11-13): the unread text names the way out first (verb test R6-Wb).
+const NO_GLOBAL = 'run git push as its own command: git push <remote> <branch>, with no global option before push';
 const unresolved = { pattern: 'push-target-unresolved', scope: 'app-push' };
 const unsafe = { pattern: 'push-unsafe', scope: 'app-push' };
 const CC_PUSH: World = { config: JSON.stringify({ decisions: { enforce: true, enforcePush: true } }) };
@@ -1950,9 +1951,10 @@ describe('R5 F2: a push inside a control word, a substitution, a shell -c, eval 
     const plain = form('git push up topic');
     it(`R5 F2 tap: ${plain} is denied, scope app-push`, () => { expect(denyOf(bash(plain), devX())?.scope, plain).toBe('app-push'); });
   }
-  // Re-pinned by fix round 6 (verb rule): -c alias.<x>= defines the verb in the command, so the call takes the tap path, force or not.
-  it('R5 F2 alias: git -c alias.x=push x -f up topic and git -c alias.x=push x up topic are denied (the tap path)', () => {
-    expect(denyOf(bash('git -c alias.x=push x -f up topic'), devX())).toMatchObject(unresolved);
+  // Re-pinned by fix round 6 (verb rule): -c alias.<x>= defines the verb in the command, so the call takes the tap path.
+  // Re-pinned by seat ruling c (11-13): an alias whose value holds push makes a push segment, so -f there is push-unsafe (verb test R6-A).
+  it('R5 F2 alias: git -c alias.x=push x -f up topic is push-unsafe; git -c alias.x=push x up topic is denied (the tap path)', () => {
+    expect(denyOf(bash('git -c alias.x=push x -f up topic'), devX())).toMatchObject(unsafe);
     expect(denyOf(bash('git -c alias.x=push x up topic'), devX())?.scope).toBe('app-push');
   });
 });

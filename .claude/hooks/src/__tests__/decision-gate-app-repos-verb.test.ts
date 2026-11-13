@@ -12,6 +12,8 @@
  *   I1  a review-router.config.json in the app repo shadows decisions.enforce of the home copy for a covered create or merge
  *   I2  a ~, $HOME, $env:USERPROFILE or %USERPROFILE% folder of a cd, -C or GIT_DIR misses a covered app repo from a CCv3 cwd
  *   I3  a throw in the push reader leaves a covered push allowed with no line
+ *   W   a tap-path deny no tap can clear (a push not alone, an unread push) does not name the way out, or says no tap can be tied
+ *   A   an inline -c alias.<n>=<value> whose value holds push is no push segment, so a force spelling beside it is not push-unsafe
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -185,6 +187,55 @@ describe('R6-V5 an unread push takes the tap path; the hard denies stay', () => 
     expect(verdict(bash('git push --repo https://github.com/acme/o.git up topic'), d)).toMatchObject({ action: 'deny', scope: 'app-push' });
     expect(verdict(bash('git push up topic', APP, { agent_id: 's1' }), d)).toMatchObject({ action: 'deny', pattern: 'subagent' });
     expect(verdict(bash('git push --force up topic'), d)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  });
+});
+
+/** The way out a tap-path deny names when no tap can clear the command as written (seat rulings a and b, 11-13). */
+const WAY_OUT = 'run git push as its own command: git push <remote> <branch>';
+const reasonOf = (input: object): string => { const v = verdict(input); return v.action === 'deny' ? v.reason : ''; };
+
+describe('R6-W the tap-path deny names the way out when no tap can clear the command', () => {
+  // Change that breaks it: give a push with another command beside it the plain ship text (it tells Dave to tap "Push only",
+  // and that tap never counts for a push that is not alone in its command).
+  it('R6-Wa test -f x && git push up feat: the ship deny names the way out, never that no tap can be tied to it', () => {
+    expect(verdict(bash('test -f x && git push up feat'))).toMatchObject({ action: 'deny', pattern: 'ship', scope: 'app-push' });
+    const why = reasonOf(bash('test -f x && git push up feat'));
+    expect(why).toContain(WAY_OUT);
+    expect(why).not.toMatch(/no tap can be tied/i);
+  });
+  // Change that breaks it: give the not-alone text to every push that is neither alone nor chained (a leading git add makes
+  // commitPrecedesPush false, but add, commit and push is the Commit and push flow, and its tap binds the staged tree).
+  for (const cmd of ['git add -A && git commit -m fix && git push up feat', 'git add -A && git commit -m "push the fix" && git push up feat']) {
+    it(`R6-Wc ${cmd}: the ship text with the Commit and push offer, not the not-alone text`, () => {
+      expect(verdict(bash(cmd))).toMatchObject({ action: 'deny', pattern: 'ship', scope: 'app-push' });
+      const why = reasonOf(bash(cmd));
+      expect(why).toContain('no "ship" decision from Dave for the tree you push');
+      expect(why).toContain('"Commit and push"');
+      expect(why).not.toContain(WAY_OUT);
+    });
+  }
+  // Change that breaks it: count a git add with no commit as the Commit and push flow (the push sends HEAD, so that tap cannot clear it).
+  it('R6-Wd git add -A && git push up feat (no commit): the not-alone text', () => {
+    expect(reasonOf(bash('git add -A && git push up feat'))).toContain(WAY_OUT);
+  });
+  // Change that breaks it: keep the round-5 unread text ("No tap can be tied to it: ...").
+  it('R6-Wb git -p push up topic: the unread deny names the way out, never that no tap can be tied to it', () => {
+    expect(verdict(bash('git -p push up topic'))).toMatchObject({ action: 'deny', pattern: 'push-target-unresolved', scope: 'app-push' });
+    const why = reasonOf(bash('git -p push up topic'));
+    expect(why).toContain(WAY_OUT);
+    expect(why).not.toMatch(/no tap can be tied/i);
+  });
+});
+
+describe('R6-A an inline -c alias.<n>=<value> whose value holds push is a push segment for the force test', () => {
+  // Change that breaks it: count a segment for the force test only by its push calls and payloads (the alias call is no push call).
+  it('R6-Aa git -c alias.x=push x -f up feat: push-unsafe, also when enforceAppPush is false', () => {
+    expect(verdict(bash('git -c alias.x=push x -f up feat'))).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
+    expect(verdict(bash('git -c alias.x=push x -f up feat'), deps(SOFT))).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
+  });
+  // Change that breaks it: make every alias push a hard deny (it denies whatever enforceAppPush says).
+  it('R6-Ab git -c alias.x=push x up feat with no force spelling: the tap path (warns when enforceAppPush is false)', () => {
+    warns(bash('git -c alias.x=push x up feat'));
   });
 });
 
