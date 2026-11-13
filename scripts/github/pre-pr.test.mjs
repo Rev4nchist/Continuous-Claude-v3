@@ -3075,7 +3075,7 @@ test('GL6: the default log path honours PRE_PR_GATE_LOG, then falls back to the 
 
 const mkStore = () => mkdtempSync(path.join(os.tmpdir(), 'prepr-crstore-'));
 const SENTINEL = 'SENTINEL-do-not-read-9f3c';
-const NOTE = (key) => `a new CLI store marker has no git data (hasGitMetadata false): %LOCALAPPDATA%\\coderabbit\\reviews\\${key.split('/').join('\\')}. The step still fails.`;
+const NOTE = (key) => `a new CLI store marker has no git data (hasGitMetadata false): %LOCALAPPDATA%\\coderabbit\\reviews\\${key.split('/').join('\\')}; this can be a run of another project. The step still fails.`;
 // The real marker shape: { version, state, hasGitMetadata, hasIncrementalDiff } (boolean flags). git.json holds workingDirectory (backslashes, C:).
 function mkMarker(store, key, { flag = false, git = null, marker = null } = {}) {
   const dir = path.join(store, ...key.split('/'));
@@ -3318,7 +3318,9 @@ test('S2c-T8: a throw in the snapshot, in the second listing or in the diagnosti
 //   Gold/ or a backslash path slips past the match                                                                -> A9
 //   runPrePr does not pass the both-sides list, or reads a failed git as "no paths"                               -> A7, A10
 const GOLD = 'scripts/eval/review-eval/gold/g.json';
-const KEY_TAIL = /Dave's decision.*internal review.*seat diff read/s;
+const KEY_TAIL = /Fix REVIEW\.md or the git read, then run pre-pr again\.$/;
+// A REVIEW.md "Skip paths" block with the four answer-key globs (the live one) plus extra lines.
+const reviewMdWith = (extra) => REVIEW_MD.replace(/(## Skip paths\s+```\r?\n)/, `$1${extra}\n`);
 
 test('A1: a diff with an answer-key path is SKIPped (answer-key) before the lock, the counter and the CLI; the detail names the first path and the count', async () => {
   const f = crFixture();
@@ -3356,6 +3358,9 @@ test('A3: REVIEW.md missing, unreadable, without the section, or without an answ
     unreadable: (root) => { rmSync(path.join(root, 'REVIEW.md')); mkdirSync(path.join(root, 'REVIEW.md')); },
     'no section': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\nno list here\n'),
     'no answer-key glob': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\n## Skip paths\n\n```\ndocs/**\nscripts/eval/review-eval-other/**\n```\n'),
+    // The match list is a constant of the four globs; REVIEW.md is the drift alarm. One missing glob, or one wide glob instead, is a FAIL.
+    'three of four globs': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\n## Skip paths\n\n```\ndocs/**\nscripts/eval/review-eval/gold/**\nscripts/eval/review-eval/seeds/**\nscripts/eval/review-eval/rubrics/**\n```\n'),
+    'a wide glob instead of the four': (root) => writeFileSync(path.join(root, 'REVIEW.md'), '# Review\n\n## Skip paths\n\n```\ndocs/**\nscripts/eval/review-eval/**\n```\n'),
   };
   for (const [name, breakIt] of Object.entries(bad)) {
     const f = crFixture();
@@ -3364,6 +3369,7 @@ test('A3: REVIEW.md missing, unreadable, without the section, or without an answ
     assert.equal(r.status, 'FAIL', name);
     assert.match(r.detail, /could not check the diff/, name);
     assert.match(r.detail, KEY_TAIL, name);
+    assert.doesNotMatch(r.detail, /--skip-cr/, name);
     assert.equal(f.calls.length + f.usageCalls.length, 0, name);
     assert.equal(existsSync(crPaths(f.root, 'feat/x').counter), false, name);
   }
@@ -3377,14 +3383,29 @@ test('A4: a null changed-file list FAILs and never calls the CLI', async () => {
   assert.equal(f.calls.length + f.usageCalls.length, 0);
 });
 
-test('A5: the live REVIEW.md gives the answer-key globs, and they are the answer-key entries of cursor-review.mjs TREE_EXCLUDES', async () => {
+test('A5: the frozen ANSWER_KEY_GLOBS are the answer-key globs of the live REVIEW.md AND the answer-key entries of cursor-review.mjs TREE_EXCLUDES', async () => {
   const { TREE_EXCLUDES } = await import('./cursor-review.mjs');
-  const live = PRE.answerKeyGlobs(REPO_ROOT);
-  assert.ok(Array.isArray(live.globs), JSON.stringify(live));
+  const { parseReviewMd } = await import('../ratchets/review-skip-sync.mjs');
   const asEntry = (g) => g.replace(/\/\*\*$/, '');
+  const frozen = PRE.ANSWER_KEY_GLOBS;
+  assert.equal(frozen.length, 4);
+  assert.ok(Object.isFrozen(frozen));
+  const inReviewMd = parseReviewMd(REVIEW_MD).filter((g) => g.startsWith('scripts/eval/review-eval/'));
+  assert.deepEqual([...frozen].sort(), [...inReviewMd].sort(), 'REVIEW.md Skip paths holds exactly the four');
   const excluded = TREE_EXCLUDES.filter((x) => x.startsWith('scripts/eval/review-eval/'));
-  assert.deepEqual([...live.globs.map(asEntry)].sort(), [...excluded].sort());
-  assert.equal(live.globs.length, 4);
+  assert.deepEqual(frozen.map(asEntry).sort(), [...excluded].sort(), 'TREE_EXCLUDES holds exactly the four');
+  assert.deepEqual(PRE.answerKeyGlobs(REPO_ROOT), { globs: frozen });
+});
+
+test('A13: a wide glob in REVIEW.md earns nothing: with the four present, a file outside the four runs the CLI; a gold path still hits', async () => {
+  const f = crFixture();
+  writeFileSync(path.join(f.root, 'REVIEW.md'), reviewMdWith('scripts/eval/review-eval/**'));
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: ['scripts/eval/review-eval/lib.mjs'] }));
+  assert.equal(r.status, 'PASS');
+  assert.equal(f.calls.length, 1, 'the CLI runs');
+  const g = crFixture();
+  writeFileSync(path.join(g.root, 'REVIEW.md'), reviewMdWith('scripts/eval/review-eval/**'));
+  assert.equal((await runCodeRabbit(crOpts(g, { changedPaths: [GOLD] }))).skipReason, 'answer-key');
 });
 
 test('A6: a clean diff runs the CLI as before', async () => {
@@ -3463,7 +3484,98 @@ test('A11: answerKeyRange (the cr-fix guard) checks both sides of from..HEAD in 
   assert.match(PRE.answerKeyRange(repo.dir, 'main') ?? '', /answer-key path \(scripts\/eval\/review-eval\/gold\/old\.md, 1 in all\)/);
   const closed = PRE.answerKeyRange(path.join(os.tmpdir(), 'prepr-no-such-dir'), 'main') ?? '';
   assert.match(closed, /could not check the diff/);
+  assert.match(closed, /Fix REVIEW\.md or the git read, then run cr-fix again\.$/);
   assert.doesNotMatch(closed + PRE.answerKeyRange(repo.dir, 'main'), /--skip-cr/, 'cr-fix has no --skip-cr flag');
+});
+
+// The guard range is base...HEAD and the stamp records no base. A hit earns the skip only on the default base, and only when the hit path is also
+// in the fork/<base>...HEAD list (so a stale local base cannot pull another PR's gold path into this change).
+test('A14: with a --base override a hit is a FAIL, never an earned skip; the CLI never starts', async () => {
+  const f = crFixture();
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: [GOLD], guardBase: { override: true, forkPaths: undefined } }));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(r.skipReason, undefined);
+  assert.match(r.detail, new RegExp(`${GOLD.replaceAll('/', '\\/')}, 1 in all`));
+  assert.match(r.detail, /--base/);
+  assert.equal(f.calls.length + f.usageCalls.length, 0);
+  const repo = repoWithGoldFile();
+  git(repo.dir, 'branch', 'trunk', 'main');
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  const run = await prePr(repo, { base: 'trunk' });
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /--base trunk/);
+  assert.equal(run.crCalls.length, 0);
+  assert.equal(run.result.ok, false);
+});
+
+// Local main is behind fork/main; the branch merged fork/main, so git:behind passes, but main...HEAD holds another PR's gold file.
+function repoWithStaleMain() {
+  const repo = makeRepo({ files: {} });
+  const d = repo.dir;
+  git(d, 'checkout', '-q', '-b', 'up', 'main');
+  mkdirSync(path.join(d, 'scripts', 'eval', 'review-eval', 'gold'), { recursive: true });
+  writeFileSync(path.join(d, 'scripts', 'eval', 'review-eval', 'gold', 'other.md'), 'another pull request gold\n');
+  git(d, 'add', '.');
+  git(d, 'commit', '-q', '-m', 'other pr gold');
+  git(d, 'update-ref', 'refs/remotes/fork/main', git(d, 'rev-parse', 'HEAD'));
+  git(d, 'checkout', '-q', 'feat/x');
+  git(d, 'merge', '-q', '--no-ff', '--no-edit', 'up');
+  mkdirSync(path.join(d, 'docs'), { recursive: true });
+  writeFileSync(path.join(d, 'docs', 'mine.md'), 'my change\n');
+  git(d, 'add', '.');
+  git(d, 'commit', '-q', '-m', 'my change');
+  return repo;
+}
+
+test('A15: a stale local main that pulls another PR\'s gold path in is a FAIL that says to update local main; the CLI never starts', async () => {
+  const repo = repoWithStaleMain();
+  const run = await prePr(repo);
+  assert.equal(crStep(run).status, 'FAIL', run.result.lines.join('\n'));
+  assert.equal(crStep(run).skipReason, undefined);
+  assert.match(crStep(run).detail, /gold\/other\.md, 1 in all/);
+  assert.match(crStep(run).detail, /update local main/);
+  assert.match(crStep(run).detail, /git fetch fork main/);
+  assert.equal(run.crCalls.length, 0);
+  assert.equal(run.result.ok, false);
+});
+
+test('A16: with fork/main present, an answer-key path that is also in the fork/main list still earns the skip; an unreadable fork list is a FAIL', async () => {
+  const repo = repoWithGoldFile();
+  git(repo.dir, 'update-ref', 'refs/remotes/fork/main', 'main');
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  const run = await prePr(repo);
+  assert.equal(crStep(run).status, 'SKIP', run.result.lines.join('\n'));
+  assert.equal(crStep(run).skipReason, 'answer-key');
+  assert.equal(run.result.ok, true);
+  const f = crFixture();
+  const r = await runCodeRabbit(crOpts(f, { changedPaths: [GOLD], guardBase: { override: false, forkPaths: null } }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /fork\/main/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('A17: an accepted answer-key skip writes one guardLog row (decision, count, head, reason); a normal run writes none', async () => {
+  const repo = repoWithGoldFile();
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  const rows = [];
+  const run = await prePr(repo, { guardLog: (row) => rows.push(row) });
+  assert.equal(crStep(run).skipReason, 'answer-key');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].decision, 'answer-key');
+  assert.equal(rows[0].count, 1);
+  assert.equal(rows[0].head, git(repo.dir, 'rev-parse', 'HEAD'));
+  assert.match(rows[0].reason, /gold\/old\.md, 1 in all/);
+  const none = [];
+  await prePr(makeRepo(), { guardLog: (row) => none.push(row) });
+  assert.deepEqual(none, []);
+  // The default logger keeps the row's own decision, count and head (cli-missing keeps its fixed decision).
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-gl-')), 'g.jsonl');
+  logCliMissing(rows[0], { CCV3_GUARD_DECISIONS_LOG: file });
+  const written = JSON.parse(readFileSync(file, 'utf8').trim());
+  assert.deepEqual([written.decision, written.count, written.head], ['answer-key', 1, rows[0].head]);
 });
 
 test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {

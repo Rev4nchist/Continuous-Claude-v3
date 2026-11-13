@@ -1130,22 +1130,31 @@ function reusedReview({ root, e2e, saved, base, why }) {
 
 // ---------- the answer-key guard (card prepr-answer-key-cli-guard) ----------
 // No CodeRabbit CLI review may read an answer-key path. The one list is REVIEW.md "## Skip paths" (parseReviewMd, the list that
-// scripts/ratchets/review-skip-sync.mjs ties to the bot configs); the guard keeps the globs under scripts/eval/review-eval/. It checks the paths
+// scripts/ratchets/review-skip-sync.mjs ties to the bot configs) is only the drift alarm: the match list is the frozen ANSWER_KEY_GLOBS. It checks the paths
 // of BOTH sides of the change: `git diff --name-only` follows renames, so a rename out of gold/ names only the new path. A hit is an earned SKIP
 // "answer-key" (the stamp and the gate: see answerKeyStep). Fail closed: a list it cannot read or an unknown path list is a FAIL.
 
-const ANSWER_KEY_DIR = 'scripts/eval/review-eval/';
-const KEY_NEXT = "--skip-cr on such a branch is Dave's decision; the next step is the internal review plus a seat diff read.";
+/**
+ * The match list: the four known answer-key globs, frozen here (Seat ruling 2026-11-13). A glob in the branch's own REVIEW.md earns nothing:
+ * a wider one cannot widen the skip. REVIEW.md "Skip paths" is only the drift alarm (answerKeyGlobs). The test A5 ties this list to the live
+ * REVIEW.md and to the answer-key entries of cursor-review.mjs TREE_EXCLUDES.
+ */
+export const ANSWER_KEY_GLOBS = Object.freeze([
+  'scripts/eval/review-eval/gold/**',
+  'scripts/eval/review-eval/seeds/**',
+  'scripts/eval/review-eval/rubrics/**',
+  'scripts/eval/review-eval/linktype-labels.json',
+]);
 const slashLower = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
 
-/** { globs } (the answer-key globs of REVIEW.md "Skip paths") or { reason } when the file or the list cannot be read. */
+/** { globs } (the frozen four) or { reason }: fail closed when REVIEW.md "Skip paths" cannot be read or lacks any of the four. */
 export function answerKeyGlobs(root) {
   let text;
   try { text = readFileSync(path.join(root, 'REVIEW.md'), 'utf8'); } catch (err) { return { reason: `REVIEW.md could not be read (${err.code ?? 'error'})` }; }
-  let all;
-  try { all = parseReviewMd(text); } catch (err) { return { reason: String(err.message) }; }
-  const globs = all.filter((g) => slashLower(g).startsWith(ANSWER_KEY_DIR));
-  return globs.length > 0 ? { globs } : { reason: `REVIEW.md "Skip paths" has no glob under ${ANSWER_KEY_DIR}` };
+  let listed;
+  try { listed = parseReviewMd(text).map(slashLower); } catch (err) { return { reason: String(err.message) }; }
+  const missing = ANSWER_KEY_GLOBS.filter((g) => !listed.includes(slashLower(g)));
+  return missing.length === 0 ? { globs: ANSWER_KEY_GLOBS } : { reason: `REVIEW.md "Skip paths" lacks ${missing.join(', ')}` };
 }
 
 /**
@@ -1160,16 +1169,34 @@ export function answerKeyCheck({ root, paths }) {
   return hits.length === 0 ? null : { hits };
 }
 
-const closedText = (why) => `the answer-key guard could not check the diff (${why}): no CLI review runs on a diff it cannot check. ${KEY_NEXT}`;
+const closedText = (why) => `the answer-key guard could not check the diff (${why}): no CLI review runs on a diff it cannot check. Fix REVIEW.md or the git read, then run pre-pr again.`;
 const hitText = (hits) => `the diff holds an answer-key path (${hits[0]}, ${hits.length} in all)`;
 
 /**
- * The CodeRabbit step result for a guard check. A hit is an earned SKIP "answer-key" (Dave, 2026-11-13): the stamp gets cr_answer_key true and
- * answer_key_paths N, and the pre-pr-gate hook accepts the skip only with both. A guard that cannot check stays a FAIL. The text names the
- * first path and the count: a path, never file content.
+ * Why a hit may not earn the skip, or null. The range is base...HEAD and the stamp records no base, so: with a --base override (not main) a
+ * hit is a FAIL; with the default base, a hit path that is not also in the fork/<base>...HEAD list comes from a stale local base, so it is a
+ * FAIL that says to update local <base>; an unreadable fork list is a FAIL. No guardBase (a direct call) adds no check.
  */
-export function answerKeyStep(check) {
+function baseProblem(hits, guardBase, base) {
+  if (!guardBase) return null;
+  if (guardBase.override) return `${hitText(hits)} and --base ${base} is not the default base: an earned skip needs the default base, so this is a FAIL. The CLI did not start. Run pre-pr.mjs without --base, or ask the seat.`;
+  if (guardBase.forkPaths === undefined) return null;
+  if (guardBase.forkPaths === null) return `${hitText(hits)}, but ${FORK}/${base} could not be compared (git failed), so the skip is not earned. The CLI did not start. Run pre-pr.mjs again.`;
+  const inFork = new Set(guardBase.forkPaths.map(slashLower));
+  const foreign = hits.filter((p) => !inFork.has(slashLower(p)));
+  if (foreign.length === 0) return null;
+  return `the diff against local ${base} holds an answer-key path (${foreign[0]}, ${foreign.length} in all) that ${FORK}/${base}...HEAD does not hold: local ${base} is behind ${FORK}/${base}. The CLI did not start. Next: update local ${base} (git fetch ${FORK} ${base}, then fast-forward local ${base}), then run pre-pr.mjs again.`;
+}
+
+/**
+ * The CodeRabbit step result for a guard check. A hit is an earned SKIP "answer-key" (Dave, 2026-11-13): the stamp gets cr_answer_key true and
+ * answer_key_paths N, and the pre-pr-gate hook accepts the skip only with both. A guard that cannot check, or a hit with a base problem
+ * (baseProblem), is a FAIL. The text names the first path and the count: a path, never file content.
+ */
+export function answerKeyStep(check, guardBase = undefined, base = 'main') {
   if (check.closed !== undefined) return result('coderabbit', 'FAIL', closedText(check.closed));
+  const problem = baseProblem(check.hits, guardBase, base);
+  if (problem) return result('coderabbit', 'FAIL', problem);
   const detail = `${hitText(check.hits)}: the CodeRabbit CLI does not run on it. The internal review and a seat diff read replace the CLI.`;
   return { ...skipped('answer-key', detail), answerKeyPaths: check.hits.length };
 }
@@ -1178,7 +1205,7 @@ export function answerKeyStep(check) {
 export function answerKeyBlock(input) {
   const check = answerKeyCheck(input);
   if (!check) return null;
-  if (check.closed !== undefined) return `the answer-key guard could not check the diff (${check.closed}): no CLI review starts on a diff it cannot check. Use the internal review and a seat diff read.`;
+  if (check.closed !== undefined) return `the answer-key guard could not check the diff (${check.closed}): no CLI review starts on a diff it cannot check. Fix REVIEW.md or the git read, then run cr-fix again.`;
   return `${hitText(check.hits)}: no CLI review may start on it. Use the internal review and a seat diff read.`;
 }
 
@@ -1186,6 +1213,16 @@ export function answerKeyBlock(input) {
 export function bothSidePaths(git, range) {
   const r = git(['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-renames', '-z', range]);
   return r.status === 0 ? r.stdout.split('\0').filter(Boolean) : null;
+}
+
+/**
+ * What the guard needs to trust the base...HEAD range: whether --base is an override (not main), and the fork/<base>...HEAD path list
+ * (undefined: no fork ref to compare with; null: git failed).
+ */
+export function guardBaseOf(git, base) {
+  const forkRef = `refs/remotes/${FORK}/${base}`;
+  const hasFork = git(['rev-parse', '--verify', '--quiet', forkRef]).status === 0;
+  return { override: base !== 'main', forkPaths: hasFork ? bothSidePaths(git, `${forkRef}...HEAD`) : undefined };
 }
 
 /** For cr-fix.mjs: the guard detail for the commits `from..HEAD` in `cwd`, or null. */
@@ -1243,7 +1280,7 @@ function ownRoots(root) {
   return names.filter(Boolean);
 }
 
-const crStoreNote = (key) => `a new CLI store marker has no git data (hasGitMetadata false): %LOCALAPPDATA%\\coderabbit\\reviews\\${key.split('/').join('\\')}. The step still fails.`;
+const crStoreNote = (key) => `a new CLI store marker has no git data (hasGitMetadata false): %LOCALAPPDATA%\\coderabbit\\reviews\\${key.split('/').join('\\')}; this can be a run of another project. The step still fails.`;
 
 /**
  * The note for the first new review folder (by name) whose marker says hasGitMetadata false and that has no git.json, or null. Null too when
@@ -1285,10 +1322,10 @@ function storeNote(store, before, { verdict, parsed, root }) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, crStore = liveCrStore() }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, guardBase = undefined, crStore = liveCrStore() }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const keyCheck = answerKeyCheck({ root, paths: guardPaths === undefined ? changedPaths : guardPaths });
-  if (keyCheck) return answerKeyStep(keyCheck);
+  if (keyCheck) return answerKeyStep(keyCheck, guardBase, base);
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
   const saved = savedReviewFor(e2e, short);
@@ -1414,11 +1451,16 @@ function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
   return file;
 }
 
-/** One row in the guard decision log (the file the hooks write): the CodeRabbit CLI is not installed, so no CLI review ran. Never throws. */
+/**
+ * One row in the guard decision log (the file the hooks write): a CLI review did not run and the stamp will say so. The decision is
+ * "cli-missing" (the CodeRabbit CLI is not installed) unless the entry names another one ("answer-key", with count and head). Never throws.
+ */
 export function logCliMissing(entry, env = process.env) {
   try {
     const file = env.CCV3_GUARD_DECISIONS_LOG || path.join(logsDir(env), 'guard-decisions.jsonl');
-    const row = { ts: new Date().toISOString(), hook: 'pre-pr', tool: '', decision: 'cli-missing', reason: String(entry?.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200), session_id: '' };
+    const decision = typeof entry?.decision === 'string' && entry.decision !== '' ? entry.decision : 'cli-missing';
+    const extra = { ...(Number.isInteger(entry?.count) ? { count: entry.count } : {}), ...(typeof entry?.head === 'string' ? { head: entry.head.slice(0, 40) } : {}) };
+    const row = { ts: new Date().toISOString(), hook: 'pre-pr', tool: '', decision, reason: String(entry?.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200), session_id: '', ...extra };
     mkdirSync(path.dirname(file), { recursive: true });
     appendFileSync(file, `${JSON.stringify(row)}\n`);
   } catch { /* a log problem never stops the run */ }
@@ -1490,13 +1532,15 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(await measureAsync(async () => (failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${base}...HEAD`), crStore }))));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${base}...HEAD`), guardBase: guardBaseOf(git, base), crStore }))));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
     results.push({ step: 'coderabbit:cli-missing', status: 'NOTE', detail: `no CLI review ran: ${crStep.detail}`, notes: [] });
     guardLog({ hook: 'pre-pr', decision: 'cli-missing', reason: crStep.detail });
   }
+  // An accepted answer-key skip leaves a row too: the reason (it names the first path), the count of paths and the head.
+  if (crStep.skipReason === 'answer-key') guardLog({ hook: 'pre-pr', decision: 'answer-key', reason: crStep.detail, count: crStep.answerKeyPaths, head });
   // A tree that was already dirty at the start is reported once, by git:clean.
   if (head !== null && !results.some((r) => r.step === 'git:clean' && r.status === 'FAIL')) results.push(measure(() => checkStable(git, head)));
   const ok = head !== null && !results.some((r) => r.status === 'FAIL');
