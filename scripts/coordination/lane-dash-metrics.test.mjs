@@ -1010,6 +1010,17 @@ test('goalOf: a whole session uuid is masked, letters-only parts included (CodeR
   assert.equal(goalOf('GOAL: ask #B2B46D90-5361-424D-A80D-BFE4F49674E6 first'), 'ask [id] first');
 });
 
+test('goalOf: ids joined to a word by "_" are still masked (CodeRabbit CLI, pre-pr 2efd658)', () => {
+  // Breaks if the masks need a word boundary: "_" is a word character, so \b sees none before the id.
+  assert.equal(goalOf('GOAL: inspect session_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee now'), 'inspect session_[id] now');
+  assert.equal(goalOf('GOAL: land x_abc1234 and #0f5ea433_y'), 'land x_[sha] and #[handle]_y');
+});
+
+test('goalOf: the sentence ends at " || " (kanban and park keep the old note after it) (CodeRabbit CLI, pre-pr 2efd658)', () => {
+  // Breaks if " || before: <old note>" stays in the goal: " || " holds no " | ".
+  assert.equal(goalOf('GOAL: ship. || before: private old note'), 'ship.');
+});
+
 test('goalOf: a long sentence is cut at a word boundary with an ellipsis', () => {
   // Breaks if there is no cut (lanes.json size) or the cut splits a word.
   const g = goalOf(`GOAL: ${'word '.repeat(80)}`);

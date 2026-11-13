@@ -61,11 +61,12 @@ export const GOAL_MAX = 200;
 
 const PARK_PREFIX = 'PARKED until ';
 const GOAL_TAG = 'GOAL:';
-const GOAL_STOPS = [' | ', 'WAITS ON', 'NEXT', 'MS:'];
+const GOAL_STOPS = [' || ', ' | ', 'WAITS ON', 'NEXT', 'MS:'];
 // A SHA: 7 to 40 hex characters with at least one digit and one letter, so "faded" and "2026111" stay.
 // A session uuid, with or without a leading '#'. Masked first, so no part of it is left for the rules after it.
-const UUID_RUN = /#?\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-const SHA_RUN = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/gi;
+// The masks test for a hex character on each side, not a word boundary: "_" is a word character, so \b misses "x_<id>".
+const UUID_RUN = /#?(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/gi;
+const SHA_RUN = /(?<![0-9a-z])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![0-9a-z])/gi;
 
 /** True when lane.mjs park wrote the note: "PARKED until <time> -- <reason> || <old note>". */
 export function isParkedNote(note) {
@@ -99,7 +100,7 @@ export function goalOf(note) {
   const end = Math.min(...GOAL_STOPS.map((t) => s.indexOf(t)).filter((i) => i >= 0), s.length);
   const text = s.slice(0, end)
     .replace(UUID_RUN, '[id]')
-    .replace(/#[0-9a-f]{8}\b/gi, '#[handle]')
+    .replace(/#[0-9a-f]{8}(?![0-9a-f])/gi, '#[handle]')
     .replace(SHA_RUN, '[sha]')
     .replace(/\s+/g, ' ')
     .trim();
