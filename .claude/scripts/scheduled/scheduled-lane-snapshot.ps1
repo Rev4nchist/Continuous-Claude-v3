@@ -2,7 +2,7 @@
 # The task is hidden:true in tasks.json: it runs through conhost --headless so Task Scheduler opens no window.
 # Runs under Windows PowerShell 5.1: no PS7-only syntax here. ASCII only.
 #
-# It runs two commands, one after the other, each with no arguments and its own time limit:
+# It runs three commands, one after the other, each with no arguments and its own time limit:
 #   1. `node scripts/coordination/export-dash-data.mjs`. The export reads the lane board (SELECT only), writes the
 #      eight lane-dash JSON documents to its default folder (~/.claude/state/lane-dash) and upserts one row per
 #      Chicago day into snapshots.json there. A run at 23:55 puts one row per day in the file, so the daily
@@ -10,11 +10,17 @@
 #   2. `node scripts/coordination/export-factory-data.mjs`. It reads four local files (no database) and writes
 #      factory.json to the same folder, for the Fleet app. It runs whatever the export exit code: a failed or killed
 #      export is no reason to skip it.
-# Neither uploads anything or calls a model: llm=false in tasks.json. tasks.json sets battery=true, so the job also
+#   3. `node scripts/github/pr-spend.mjs` (card prflow-spend-line). It reads four local ledgers and writes pr-spend.json to the same
+#      folder: review spend per pull request, for the Fleet app. It is the LAST step and it is advisory: its exit code, a time-out
+#      (killed at its limit) or a missing script never changes the exit code below, the refresh flag or the snapshot row. The wrapper
+#      writes no failure line of its own for it: the log has "pr-spend starting", the step's own output, "TIMEOUT: pr-spend killed"
+#      and "pr-spend finished, exit N".
+#      A missing script writes one line. It runs whatever the first two exit codes were.
+# None of the three uploads anything or calls a model: llm=false in tasks.json. tasks.json sets battery=true, so the job also
 # runs on battery.
 # Exit code: the export exit code when it is not 0 (1 a check failed or the database is down, 124 the export ran past
 # its limit). Else 5 when the factory step failed (nonzero exit, killed at its limit, or script not found).
-# Else 0. 3 = export-dash-data.mjs not found (nothing runs). tasks.json allowedExit [0] makes the health check
+# Else 0. The third step is not in this logic. 3 = export-dash-data.mjs not found (nothing runs). tasks.json allowedExit [0] makes the health check
 # report any nonzero code, so a factory failure shows without a tasks.json change.
 #
 # This file lives in the repo at .claude/scripts/scheduled/ and the forward sync installs it at
@@ -30,6 +36,8 @@
 #   CCV3_LANE_SNAPSHOT_EXTRA_ARGS  extra export arguments, e.g. --out <dir>
 #   CCV3_FACTORY_TIMEOUT_SEC       factory time limit in seconds (default 60; 120 + 60 is under the 5-minute task limit)
 #   CCV3_FACTORY_EXTRA_ARGS        extra factory arguments, e.g. --out <dir>
+#   CCV3_PR_SPEND_TIMEOUT_SEC      pr-spend time limit in seconds (default 30; 120 + 60 + 30 is under the 5-minute task limit)
+#   CCV3_PR_SPEND_EXTRA_ARGS       extra pr-spend arguments, e.g. --out <dir>
 
 $logPath = if ($env:CCV3_LANE_SNAPSHOT_LOG) { $env:CCV3_LANE_SNAPSHOT_LOG } else { Join-Path $env:USERPROFILE ('.claude\logs\lane-snapshot\' + (Get-Date -Format 'yyyy-MM-dd') + '.log') }
 $logDir = Split-Path -Parent $logPath
@@ -114,6 +122,18 @@ if (Test-Path -LiteralPath $factory) {
 # Exit: the export code when it is not 0, else 5 for a failed factory step, else 0.
 $exitCode = $rc
 if ($rc -eq 0 -and $factoryRc -ne 0) { $exitCode = 5 }
+
+# Third step, last. $exitCode is final above: nothing below reads $script:boundedRc into it, so this step cannot change the exit code.
+# A start failure is caught and logged. A missing script writes one line.
+$prSpend = Join-Path $R 'scripts\github\pr-spend.mjs'
+if (Test-Path -LiteralPath $prSpend) {
+  $psecs = 30
+  if ($env:CCV3_PR_SPEND_TIMEOUT_SEC) { $psecs = [int]$env:CCV3_PR_SPEND_TIMEOUT_SEC }
+  Write-Log 'pr-spend starting'
+  try { Invoke-Bounded 'pr-spend' $prSpend $env:CCV3_PR_SPEND_EXTRA_ARGS $psecs } catch { Write-Log "pr-spend could not run: $($_.Exception.Message)" }
+} else {
+  Write-Log "pr-spend.mjs not found at $prSpend"
+}
 
 # Keep 14 days of dated logs. Only files named yyyy-MM-dd.log are touched.
 Get-ChildItem -LiteralPath $logDir -Filter '*.log' -ErrorAction SilentlyContinue |
