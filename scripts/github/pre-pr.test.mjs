@@ -3645,6 +3645,68 @@ test('A20: runPrePr hands its git to the CodeRabbit step: a HEAD that moves in t
   assert.equal(run.result.ok, false);
 });
 
+// The base ref moves too: every worktree shares refs/heads/main, and landed PRs move it all day. The base is resolved to a commit before the guard
+// runs and read again right before the CLI starts (`--base main` is read by name, so the CLI would review a diff the guard did not inspect).
+const shaOf = (repo, ref) => git(repo.dir, 'rev-parse', ref);
+const moveBase = (repo) => git(repo.dir, 'update-ref', 'refs/heads/main', git(repo.dir, 'commit-tree', 'main^{tree}', '-p', 'main', '-m', 'main moved'));
+
+test('A21: the base ref moved during the usage preflight starts no CLI and gives the run slot back', async () => {
+  const repo = makeRepo();
+  const seen = [];
+  const runner = (o) => {
+    seen.push(o.args[0]);
+    if (o.args[0] === 'usage') moveBase(repo);
+    return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' };
+  };
+  const r = await runCodeRabbitLive(crInRepo(repo, runner, { baseSha: shaOf(repo, 'main') }));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(r.skipReason, undefined);
+  assert.match(r.detail, /main moved during the preflight/);
+  assert.match(r.detail, /run pre-pr again/);
+  assert.deepEqual(seen, ['usage'], 'the review is never called');
+  assert.equal(JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs.length, 0, 'not counted');
+  assert.equal(existsSync(crPaths(repo.dir, 'feat/x').lock), false);
+});
+
+test('A22: an empty head or base that cannot be read FAILs before any equality test; a steady base runs the CLI', async () => {
+  const repo = makeRepo();
+  const seen = [];
+  const runner = (o) => { seen.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  const failedRead = () => ({ status: 128, stdout: '', stderr: 'fatal' });
+  const emptyHead = await runCodeRabbitLive(crInRepo(repo, runner, { head: '', headGit: failedRead }));
+  assert.equal(emptyHead.status, 'FAIL', 'head empty and the re-read failed: not "equal"');
+  assert.match(emptyHead.detail, /HEAD could not be re-read/);
+  assert.deepEqual(seen, ['usage']);
+  const noBase = await runCodeRabbitLive(crInRepo(makeRepo(), runner, { baseSha: null }));
+  assert.equal(noBase.status, 'FAIL');
+  assert.match(noBase.detail, /main could not be read/);
+  const steady = makeRepo();
+  seen.length = 0;
+  assert.equal((await runCodeRabbitLive(crInRepo(steady, runner, { baseSha: shaOf(steady, 'main') }))).status, 'PASS');
+  assert.deepEqual(seen, ['usage', 'review']);
+});
+
+test('A23: runPrePr resolves the base to a commit and re-checks it: a base that moves in the preflight gives no CLI start', async () => {
+  // Breaks when: runPrePr drops baseSha from its runCodeRabbit call.
+  const repo = makeRepo();
+  const crCalls = [];
+  const crRunner = (o) => {
+    if (o.args[0] === 'usage') { moveBase(repo); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+    crCalls.push(o);
+    return { status: 0, stdout: NDJSON_OK, stderr: '' };
+  };
+  const run = await prePr(repo, { crRunner });
+  assert.equal(crStep(run).status, 'FAIL');
+  assert.match(crStep(run).detail, /main moved during the preflight/);
+  assert.equal(crCalls.length, 0);
+  const cleanRepo = makeRepo();
+  const real = makeGit(cleanRepo.dir);
+  const ranges = [];
+  const clean = await prePr(cleanRepo, { git: (args) => { if (args.includes('--no-renames')) ranges.push(args.at(-1)); return real(args); } });
+  assert.equal(crStep(clean).status, 'PASS', 'a steady base still runs the CLI');
+  assert.deepEqual(ranges, [`${shaOf(cleanRepo, 'main')}...HEAD`], 'the guard reads the range from the resolved base commit, not the branch name');
+});
+
 test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {
   const repo = makeRepo();
   const real = makeGit(repo.dir);

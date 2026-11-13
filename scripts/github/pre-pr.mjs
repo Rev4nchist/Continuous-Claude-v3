@@ -1225,6 +1225,12 @@ export function guardBaseOf(git, base) {
   return { override: base !== 'main', forkPaths: hasFork ? bothSidePaths(git, `${forkRef}...HEAD`) : undefined };
 }
 
+/** The commit a base ref names now, or '' when git cannot say. runPrePr reads it before the guard; the last-moment check reads it again. */
+export function resolveBase(git, base) {
+  const r = git(['rev-parse', '--verify', '--quiet', base]);
+  return r.status === 0 ? r.stdout.trim() : '';
+}
+
 /** For cr-fix.mjs: the guard detail for the commits `from..HEAD` in `cwd`, or null. */
 export const answerKeyRange = (cwd, from) => answerKeyBlock({ root: cwd, paths: bothSidePaths(makeGit(cwd), `${from}..HEAD`) });
 
@@ -1322,7 +1328,7 @@ function storeNote(store, before, { verdict, parsed, root }) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, guardBase = undefined, headGit = null, crStore = liveCrStore() }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, guardBase = undefined, headGit = null, baseSha = undefined, crStore = liveCrStore() }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const keyCheck = answerKeyCheck({ root, paths: guardPaths === undefined ? changedPaths : guardPaths });
   if (keyCheck) return answerKeyStep(keyCheck, guardBase, base);
@@ -1334,7 +1340,7 @@ export async function runCodeRabbit({ root, branch, head, base, now, runner, ski
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, crStore });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseSha, crStore });
   } finally {
     rmSync(paths.lock, { force: true });
   }
@@ -1368,20 +1374,26 @@ function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
 }
 
 /**
- * A FAIL when HEAD is not the head the guards checked, else null. The usage preflight is awaited after the answer-key guard, and `--committed`
- * reads the committed diff, so a commit or checkout in that window would change what the CLI reads. With no `git` (a direct call) there is no
- * check. The caller gives the run slot back and starts no CLI.
+ * A FAIL when HEAD or the base ref is not what the guards checked, else null. The usage preflight is awaited after the answer-key guard, and
+ * `--committed --base <name>` reads the committed diff of HEAD against the base ref by name, so a commit, a checkout, or a landed PR that moves
+ * the base in that window would change what the CLI reads. runPrePr resolves the base to a commit (`baseSha`) before the guard runs. A read
+ * that fails or is empty is a FAIL, tested before any equality (an empty head and an empty re-read are not "equal"). With no `git` (a direct
+ * call) there is no check; with no `baseSha` (undefined) only HEAD is checked. The caller gives the run slot back and starts no CLI.
  */
-function headMoved(git, head) {
+function headMoved(git, { head, base, baseSha }) {
   if (!git) return null;
-  const r = git(['rev-parse', 'HEAD']);
-  const now = r.status === 0 ? r.stdout.trim() : '';
-  if (now === head) return null;
-  if (now === '') return result('coderabbit', 'FAIL', 'HEAD could not be re-read before the CLI start, so no CLI review was started; run pre-pr again');
-  return result('coderabbit', 'FAIL', `HEAD moved during the preflight (it was ${head.slice(0, 7)}, it is ${now.slice(0, 7)}), so no CLI review was started; run pre-pr again`);
+  const stale = (why) => result('coderabbit', 'FAIL', `${why}, so no CLI review was started; run pre-pr again`);
+  const sha = (args) => { const r = git(args); return r.status === 0 ? r.stdout.trim() : ''; };
+  const now = sha(['rev-parse', 'HEAD']);
+  if (now === '' || !head) return stale('HEAD could not be re-read before the CLI start');
+  if (now !== head) return stale(`HEAD moved during the preflight (it was ${head.slice(0, 7)}, it is ${now.slice(0, 7)})`);
+  if (baseSha === undefined) return null;
+  const baseNow = sha(['rev-parse', '--verify', '--quiet', base]);
+  if (baseNow === '' || !baseSha) return stale(`${base} could not be read before the CLI start`);
+  return baseNow === baseSha ? null : stale(`${base} moved during the preflight (it was ${baseSha.slice(0, 7)}, it is ${baseNow.slice(0, 7)})`);
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, crStore }) {
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseSha, crStore }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
@@ -1421,7 +1433,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   mkdirSync(e2e, { recursive: true });
   const running = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}.running.txt`);
   const onTick = (t) => log(`pre-pr: cr review still running (${t.elapsedSec}s${t.lastEvent ? `, last event: ${t.lastEvent}` : ''}); limit ${Math.round(timeoutMs / MIN)} min`);
-  const moved = headMoved(headGit, head);
+  const moved = headMoved(headGit, { head, base, baseSha });
   if (moved) { giveBack(); return moved; }
   const r = await runner({ cwd: root, args: CR_ARGS(base), timeoutMs, streamTo: running, onTick });
   if (r.error && !r.timedOut && NOT_STARTED.test(String(r.errorCode ?? r.error))) {
@@ -1545,10 +1557,11 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const pssa = measure(() => pssaAdvisory({ root, paths: changes.paths, module: findPssa(), run: pssaRun }));
     if (pssa) results.push(pssa);
   }
+  const baseSha = resolveBase(git, base);
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(await measureAsync(async () => (failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${base}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, crStore }))));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseSha || base}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseSha, crStore }))));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
