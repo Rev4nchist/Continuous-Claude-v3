@@ -64,7 +64,7 @@ import { cliCapOf } from './cr-paid.mjs';
 import { envStep } from './lib/env-step.mjs';
 import {
   SURFACES, ALWAYS_GATES, CATCHER_PARSER_FILES, BASE_TOKEN, withBase, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
-  runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
+  runCodeRabbit as runCodeRabbitLive, runPrePr as runPrePrLive, assertSafeCrArgs, changedFiles, makeGit, notesFor,
   parseAgentStream, parseUsage, usageCostOf, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
   killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn, acquireLock,
 } from './pre-pr.mjs';
@@ -78,6 +78,11 @@ process.env.PRE_PR_GATE_LOG = path.join(mkdtempSync(path.join(os.tmpdir(), 'prep
 const tempLedger = () => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
 
 const HEAD = 'a'.repeat(40);
+
+// No test reads Dave's real CodeRabbit store (%LOCALAPPDATA%\coderabbit\reviews): every call goes in with crStore null (off) unless a test
+// passes its own temp store. The step 2c tests (T0..T8) pass one on purpose.
+const runCodeRabbit = (o) => runCodeRabbitLive({ crStore: null, ...o });
+const runPrePr = (o) => runPrePrLive({ crStore: null, ...o });
 
 function fakeGit(map) {
   return (args) => {
@@ -661,7 +666,7 @@ function crFixture() {
   };
   return { root, calls, usageCalls, runner, now: new Date('2026-10-27T10:00:00Z'), ledgerPath: tempLedger() };
 }
-const crOpts = (f, extra = {}) => ({ root: f.root, branch: 'feat/x', head: HEAD, base: 'main', now: f.now, runner: f.runner, ledgerPath: f.ledgerPath, ...extra });
+const crOpts = (f, extra = {}) => ({ root: f.root, branch: 'feat/x', head: HEAD, base: 'main', now: f.now, runner: f.runner, ledgerPath: f.ledgerPath, crStore: null, ...extra });
 
 test('C1: the run uses cr review --agent and never --use-credits or --api-key', async () => {
   const f = crFixture();
@@ -1610,6 +1615,7 @@ async function prePr(repo, extra = {}) {
     guardLog: () => {},
     envCheck: NO_ENV,
     ledgerPath: tempLedger(),
+    crStore: null,
     gateLogPath: tempGateLog(),
     // The osv and pssa advisories never start a scanner or touch the network here: no lockfile, no binary. The OSV-PP / PSSA-PP tests inject their own.
     osvLockfiles: [], findOsv: () => null, findPssa: () => null,
@@ -3023,4 +3029,251 @@ test('GL6: the default log path honours PRE_PR_GATE_LOG, then falls back to the 
   const { gateLogPath } = await import('./lib/gate-log.mjs');
   assert.equal(gateLogPath({ PRE_PR_GATE_LOG: path.join('somewhere', 'y.jsonl') }), path.join('somewhere', 'y.jsonl'));
   assert.equal(gateLogPath({ USERPROFILE: path.join('home', 't') }), path.join('home', 't', '.claude', 'logs', 'pre-pr-gates.jsonl'));
+});
+
+// ---------- step 2c: a note when a NEW CLI store marker has no git data ----------
+// The CLI keeps each review at %LOCALAPPDATA%\coderabbit\reviews\<workspace>\<scope>\reviews\<id>\ with a .session-complete-v2 marker.
+// A FAIL with unreviewed files plus a new marker with hasGitMetadata false gets ONE read-only note. It never changes a verdict.
+// How it can fail, and the test that catches it (written before the code):
+//   LOCALAPPDATA unset, empty or relative gives a path under the cwd (the `?? ''` pattern)      -> S2c-T0
+//   listMarkers throws on a missing store, lists files or stray folders, or recurses              -> T2, T5h
+//   a failed "before" snapshot reads as empty, so ~500 old markers look new                       -> T2b
+//   readFlag treats a string "false", a missing or a broken marker as false                       -> T3
+//   the own-root match breaks on slash, drive-letter case or trailing slash                       -> T4, T5b
+//   a foreign marker suppresses the note, or is named in it                                       -> T5c, T5d
+//   the note shows the user path or any file content                                              -> T5a, T5g
+//   a marker folder is entered (a sentinel one level deeper is read)                              -> T5h
+//   the note changes the status, detail, skipReason, run counter or notes of the step             -> T6, T8
+//   a PASS run gets the note                                                                      -> T7
+//   a throw in the snapshot or the diagnostic stops the step                                      -> T8
+// Test names are S2c-<id> (the file already has T1..T7 for the runner). S2c-T0..T6 fail before the code. S2c-T7, S2c-T8 and N3 (untouched) guard behaviour that must not change.
+
+const mkStore = () => mkdtempSync(path.join(os.tmpdir(), 'prepr-crstore-'));
+const SENTINEL = 'SENTINEL-do-not-read-9f3c';
+const NOTE = (key) => `a new CLI store marker has no git data (hasGitMetadata false): %LOCALAPPDATA%\\coderabbit\\reviews\\${key.split('/').join('\\')}. The step still fails.`;
+// The real marker shape: { version, state, hasGitMetadata, hasIncrementalDiff } (boolean flags). git.json holds workingDirectory (backslashes, C:).
+function mkMarker(store, key, { flag = false, git = null, marker = null } = {}) {
+  const dir = path.join(store, ...key.split('/'));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, '.session-complete-v2'), JSON.stringify(marker ?? { version: 2, state: 'complete', hasGitMetadata: flag, hasIncrementalDiff: flag }));
+  if (git !== null) writeFileSync(path.join(dir, 'git.json'), JSON.stringify({ workingDirectory: git, head: 'x' }));
+}
+const storeDeps = (store, extra = {}) => ({ root: store, list: PRE.listMarkers, diagnose: PRE.storeDiagnostic, ...extra });
+const UNREVIEWED = ev(CONTEXT, MAJOR, { ...DONE, unreviewedFileCount: 8 });
+// A runner that writes a marker into the store on the review call (not the usage call), like the real CLI does.
+function crWriting(f, store, key, flag) {
+  const inner = f.runner;
+  f.runner = (o) => { if (o.args[0] !== 'usage') mkMarker(store, key, { flag }); return inner(o); };
+}
+const storeNotes = (r) => r.notes.filter((n) => /hasGitMetadata/.test(n));
+
+test('S2c-T0: crStoreRoot is null for an unset, empty or relative LOCALAPPDATA, and joins an absolute one', () => {
+  // Breaks when: crStoreRoot copies `env.LOCALAPPDATA ?? ''` (cursor-review.mjs:410): '' joins to a relative path under the cwd.
+  assert.equal(PRE.crStoreRoot({}), null);
+  assert.equal(PRE.crStoreRoot({ LOCALAPPDATA: undefined }), null);
+  assert.equal(PRE.crStoreRoot({ LOCALAPPDATA: '' }), null);
+  assert.equal(PRE.crStoreRoot({ LOCALAPPDATA: 'AppData' }), null);
+  const abs = os.tmpdir();
+  assert.equal(PRE.crStoreRoot({ LOCALAPPDATA: abs }), path.join(abs, 'coderabbit', 'reviews'));
+});
+
+test('S2c-T2: listMarkers lists workspace/scope/reviews/id keys at a fixed depth; a missing store is empty; a file as the store is null', () => {
+  const s = mkStore();
+  mkMarker(s, 'w1/s1/reviews/a');
+  mkMarker(s, 'w1/s1/reviews/b');
+  mkMarker(s, 'w2/s2/reviews/c');
+  mkdirSync(path.join(s, 'w3', 's3'), { recursive: true }); // a scope with no reviews folder
+  writeFileSync(path.join(s, '.checkpoint-compaction-v2'), 'x'); // a stray file next to the workspaces (real store)
+  writeFileSync(path.join(s, 'w1', 'stray.txt'), 'x');
+  writeFileSync(path.join(s, 'w1', 's1', 'reviews', 'stray.txt'), 'x');
+  assert.deepEqual([...PRE.listMarkers(s)].sort(), ['w1/s1/reviews/a', 'w1/s1/reviews/b', 'w2/s2/reviews/c']);
+  const none = PRE.listMarkers(path.join(s, 'nope'));
+  assert.ok(none instanceof Set);
+  assert.equal(none.size, 0);
+  assert.equal(PRE.listMarkers(path.join(s, '.checkpoint-compaction-v2')), null);
+});
+
+test('S2c-T2b: a failed "before" or "after" snapshot (null) gives no message; the step with a null first listing gets no note', async () => {
+  // Breaks when: null is read as an empty set, so every old marker looks new.
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/old1');
+  mkMarker(s, 'w/s/reviews/old2');
+  const after = new Set(['w/s/reviews/old1', 'w/s/reviews/old2']);
+  assert.equal(PRE.storeDiagnostic({ before: null, after, root: 'C:/x/wt', storeRoot: s }), null);
+  assert.equal(PRE.storeDiagnostic({ before: new Set(), after: null, root: 'C:/x/wt', storeRoot: s }), null);
+  const f = crFixture();
+  f.runner.next = { status: 0, stdout: UNREVIEWED, stderr: '' };
+  let calls = 0;
+  const list = (r) => (calls++ === 0 ? null : PRE.listMarkers(r));
+  const r = await runCodeRabbit(crOpts(f, { crStore: storeDeps(s, { list }) }));
+  assert.equal(r.status, 'FAIL');
+  assert.equal(storeNotes(r).length, 0);
+});
+
+test('S2c-T3: readFlag is true or false only for a boolean hasGitMetadata; a missing, broken or non-boolean marker is null', () => {
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/t', { flag: true });
+  mkMarker(s, 'w/s/reviews/f', { flag: false });
+  mkMarker(s, 'w/s/reviews/str', { marker: { hasGitMetadata: 'false' } });
+  mkMarker(s, 'w/s/reviews/nokey', { marker: { version: 2 } });
+  mkdirSync(path.join(s, 'w', 's', 'reviews', 'empty'), { recursive: true });
+  mkMarker(s, 'w/s/reviews/bad');
+  writeFileSync(path.join(s, 'w', 's', 'reviews', 'bad', '.session-complete-v2'), '{not json');
+  const at = (id) => PRE.readFlag(path.join(s, 'w', 's', 'reviews', id));
+  assert.equal(at('t'), true);
+  assert.equal(at('f'), false);
+  assert.equal(at('str'), null);
+  assert.equal(at('nokey'), null);
+  assert.equal(at('empty'), null);
+  assert.equal(at('bad'), null);
+});
+
+test('S2c-T4: normDir is a pure string function: slashes, drive-letter case and trailing slash', () => {
+  assert.equal(PRE.normDir('C:\\Users\\x\\wt\\'), 'c:/Users/x/wt');
+  assert.equal(PRE.normDir('c:/Users/x/wt'), 'c:/Users/x/wt');
+  assert.equal(PRE.normDir('C:/Users/x/wt//'), 'c:/Users/x/wt');
+  assert.equal(PRE.normDir('/home/x/wt/'), '/home/x/wt');
+  assert.equal(PRE.normDir('/'), '/');
+  assert.equal(PRE.normDir(null), '');
+  assert.notEqual(PRE.normDir('C:/a/b'), PRE.normDir('C:/a/bc'));
+});
+
+const diag = (store, keys, root, before = new Set()) => PRE.storeDiagnostic({ before, after: new Set(keys), root, storeRoot: store });
+
+test('S2c-T5a: one new marker with no git data gives the path-only note, in %LOCALAPPDATA% form, with no user or temp path', () => {
+  const s = mkStore();
+  mkMarker(s, 'ws1/sc1/reviews/id1', { flag: false });
+  const note = diag(s, ['ws1/sc1/reviews/id1'], 'C:/work/wt');
+  assert.equal(note, NOTE('ws1/sc1/reviews/id1'));
+  assert.ok(!note.includes(os.tmpdir()), 'no expanded path');
+  assert.ok(!note.includes(os.homedir()), 'no home path');
+});
+
+test('S2c-T5b: a new marker whose git.json names this root (any slash, drive case, trailing slash) gives no note', () => {
+  for (const named of ['C:\\work\\wt', 'c:/work/wt/', 'C:/work/wt', 'c:\\work\\wt\\']) {
+    const s = mkStore();
+    mkMarker(s, 'w/s/reviews/bad', { flag: false });
+    mkMarker(s, 'w/s/reviews/own', { flag: true, git: named });
+    assert.equal(diag(s, ['w/s/reviews/bad', 'w/s/reviews/own'], 'C:/work/wt'), null, named);
+  }
+});
+
+test('S2c-T5c: a foreign new marker (git.json names another dir) does not suppress the note and is not named in it', () => {
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/bad', { flag: false });
+  mkMarker(s, 'w/s/reviews/foreign', { flag: true, git: 'C:\\work\\other' });
+  const note = diag(s, ['w/s/reviews/bad', 'w/s/reviews/foreign'], 'C:/work/wt');
+  assert.equal(note, NOTE('w/s/reviews/bad'));
+  assert.ok(!note.includes('foreign'));
+});
+
+test('S2c-T5d: a foreign marker alone gives no note, even with a false flag; no new marker gives none; two false markers give one note (the first by name)', () => {
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/foreign', { flag: false, git: 'C:\\work\\other' });
+  assert.equal(diag(s, ['w/s/reviews/foreign'], 'C:/work/wt'), null);
+  const t = mkStore();
+  mkMarker(t, 'w/s/reviews/old', { flag: false });
+  assert.equal(diag(t, ['w/s/reviews/old'], 'C:/work/wt', new Set(['w/s/reviews/old'])), null, 'old marker is not new');
+  const u = mkStore();
+  mkMarker(u, 'w/s/reviews/b2', { flag: false });
+  mkMarker(u, 'w/s/reviews/a1', { flag: false });
+  assert.equal(diag(u, ['w/s/reviews/b2', 'w/s/reviews/a1'], 'C:/work/wt'), NOTE('w/s/reviews/a1'));
+});
+
+test('S2c-T5g: no file content reaches the note: a sentinel in the marker and in git.json is absent', () => {
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/bad', { marker: { hasGitMetadata: false, note: SENTINEL } });
+  writeFileSync(path.join(s, 'w', 's', 'reviews', 'bad', 'git.json'), JSON.stringify({ head: SENTINEL }));
+  const note = diag(s, ['w/s/reviews/bad'], 'C:/work/wt');
+  assert.equal(note, NOTE('w/s/reviews/bad'));
+  assert.ok(!note.includes(SENTINEL));
+});
+
+test('S2c-T5h: a marker folder is never entered: a decoy one level deeper is not listed, not read, and cannot change the result', () => {
+  // Breaks when: listMarkers or the diagnostic recurses into <id>/. The decoy git.json names this root: reading it would suppress the note.
+  const s = mkStore();
+  mkMarker(s, 'w/s/reviews/bad', { flag: false });
+  mkMarker(s, 'w/s/reviews/bad/deeper', { flag: false, git: 'C:\\work\\wt' });
+  writeFileSync(path.join(s, 'w', 's', 'reviews', 'bad', 'deeper', 'diff.txt'), SENTINEL);
+  mkMarker(s, 'w/s/reviews/good', { flag: true });
+  mkMarker(s, 'w/s/reviews/good/deeper', { flag: false });
+  const keys = PRE.listMarkers(s);
+  assert.deepEqual([...keys].sort(), ['w/s/reviews/bad', 'w/s/reviews/good']);
+  const note = PRE.storeDiagnostic({ before: new Set(), after: keys, root: 'C:/work/wt', storeRoot: s });
+  assert.equal(note, NOTE('w/s/reviews/bad'));
+  assert.ok(!note.includes('deeper') && !note.includes(SENTINEL));
+  assert.equal(PRE.storeDiagnostic({ before: new Set(['w/s/reviews/bad']), after: keys, root: 'C:/work/wt', storeRoot: s }), null, 'the good marker has git data; its decoy is unread');
+});
+
+test('S2c-T6: a FAIL with unreviewed files and a new marker with no git data gets one note; verdict, skipReason and run count do not change', async () => {
+  const f = crFixture();
+  const s = mkStore();
+  mkMarker(s, 'old/s/reviews/1', { flag: true, git: 'C:\\other' });
+  f.runner.next = { status: 0, stdout: UNREVIEWED, stderr: '' };
+  crWriting(f, s, 'w/s/reviews/new', false);
+  const r = await runCodeRabbit(crOpts(f, { crStore: storeDeps(s) }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /INCOMPLETE/);
+  assert.equal(r.skipReason, undefined);
+  assert.deepEqual(storeNotes(r), [NOTE('w/s/reviews/new')]);
+  assert.equal(f.calls.length, 1);
+  const counter = JSON.parse(readFileSync(crPaths(f.root, 'feat/x').counter, 'utf8'));
+  assert.equal(counter.runs.length, 1, 'the run is counted');
+  assert.equal(counter.runs[0].outcome, 'failed');
+});
+
+test('S2c-T7: a PASS run whose runner writes a new marker with no git data gets no note', async () => {
+  const f = crFixture();
+  const s = mkStore();
+  crWriting(f, s, 'w/s/reviews/new', false);
+  const r = await runCodeRabbit(crOpts(f, { crStore: storeDeps(s) }));
+  assert.equal(r.status, 'PASS');
+  assert.equal(storeNotes(r).length, 0);
+  // Breaks when: the unreviewedFileCount > 0 condition is dropped. A FAIL with no unreviewed count (a failed outcome) gets no note.
+  const g = crFixture();
+  const t = mkStore();
+  g.runner.next = { status: 0, stdout: ev(CONTEXT, MAJOR, { ...DONE, outcome: 'failed', message: 'server error' }), stderr: '' };
+  crWriting(g, t, 'w/s/reviews/new', false);
+  const failed = await runCodeRabbit(crOpts(g, { crStore: storeDeps(t) }));
+  assert.equal(failed.status, 'FAIL');
+  assert.equal(storeNotes(failed).length, 0);
+});
+
+test('S2c-T6b: with the note, only one note is added: status, detail, skipReason and counter equal the empty-store run', async () => {
+  const baseline = await t8Run((s) => storeDeps(s), false);
+  const noted = await t8Run((s) => storeDeps(s), true);
+  assert.equal(noted.notes.at(-1), NOTE('w/s/reviews/new'));
+  assert.deepEqual({ ...noted, notes: noted.notes.slice(0, -1) }, baseline);
+});
+
+test('S2c-T6c: runPrePr hands its crStore to the CodeRabbit step (the snapshot reads the store it was given)', async () => {
+  // Breaks when: runPrePr drops crStore from its runCodeRabbit call (every prePr() test would then read the live store).
+  const s = mkStore();
+  const seen = [];
+  const crStore = { root: s, list: (r) => { seen.push(r); return PRE.listMarkers(r); }, diagnose: PRE.storeDiagnostic };
+  const { crCalls } = await prePr(makeRepo(), { crStore });
+  assert.equal(crCalls.length, 1);
+  assert.ok(seen.length >= 1 && seen.every((r) => r === s), JSON.stringify(seen));
+});
+
+async function t8Run(deps, writes) {
+  const f = crFixture();
+  const s = mkStore();
+  f.runner.next = { status: 0, stdout: UNREVIEWED, stderr: '' };
+  if (writes) crWriting(f, s, 'w/s/reviews/new', false);
+  const r = await runCodeRabbit(crOpts(f, { crStore: deps(s) }));
+  const counter = readFileSync(crPaths(f.root, 'feat/x').counter, 'utf8');
+  return { status: r.status, detail: r.detail, skipReason: r.skipReason, notes: r.notes, counter, calls: f.calls.length };
+}
+
+test('S2c-T8: a throw in the snapshot, in the second listing or in the diagnostic gives the same step as an empty-store run', async () => {
+  // Breaks when: a try is removed (the step rejects) or a throw changes the status, detail, skipReason, notes or run counter.
+  const baseline = await t8Run((s) => storeDeps(s), false);
+  assert.equal(baseline.status, 'FAIL');
+  const boom = () => { throw new Error('boom'); };
+  const listThrowsOn = (n) => (s) => { let c = 0; return storeDeps(s, { list: (r) => { if (c++ === n) boom(); return PRE.listMarkers(r); } }); };
+  const variants = { snapshot: listThrowsOn(0), 'second listing': listThrowsOn(1), diagnostic: (s) => storeDeps(s, { diagnose: boom }), 'no store root': () => storeDeps(null) };
+  for (const [name, deps] of Object.entries(variants)) {
+    assert.deepEqual(await t8Run(deps, true), baseline, name);
+  }
 });

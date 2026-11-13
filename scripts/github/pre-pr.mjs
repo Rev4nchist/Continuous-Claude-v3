@@ -1124,6 +1124,92 @@ function reusedReview({ root, e2e, saved, base, why }) {
   return { ...verdict, detail: `${why}: ${verdict.detail} Output: ${rel(root, path.join(e2e, saved))}` };
 }
 
+// ---------- a read-only note: the CLI store holds a new marker with no git data (step 2c) ----------
+// The CLI keeps each review at <store>/<workspace>/<scope>/reviews/<id>/ with a .session-complete-v2 marker ({ hasGitMetadata: boolean }) and,
+// when it built git data, a git.json ({ workingDirectory }). The note claims no cause and never changes a verdict. It reads folder names at
+// that fixed depth, then at most the marker and git.json of each NEW id: it never enters an id folder or reads a stored diff.
+
+const CR_MARKER = '.session-complete-v2';
+
+/** The CLI review store, or null when LOCALAPPDATA is unset, empty or not an absolute path (no fallback to a path under the cwd). */
+export function crStoreRoot(env = process.env) {
+  const base = env?.LOCALAPPDATA;
+  if (typeof base !== 'string' || base === '' || !path.isAbsolute(base)) return null;
+  return path.join(base, 'coderabbit', 'reviews');
+}
+
+/** Folder names in `dir`: [] when it is missing, a throw on any other error (a file, no access). Files are skipped. */
+function subDirs(dir) {
+  try { return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+const scopeKeys = (root, ws) => subDirs(path.join(root, ws)).flatMap((sc) => subDirs(path.join(root, ws, sc, 'reviews')).map((id) => `${ws}/${sc}/reviews/${id}`));
+
+/** The review folders of the store as a Set of `workspace/scope/reviews/id` keys: empty when the store is missing, null on any other error. */
+export function listMarkers(root) {
+  try { return new Set(subDirs(root).flatMap((ws) => scopeKeys(root, ws))); } catch { return null; }
+}
+
+const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
+
+/** hasGitMetadata of the marker in one review folder: true or false for a boolean, null for a missing, broken or other value. */
+export function readFlag(dir) {
+  const flag = readJson(path.join(dir, CR_MARKER))?.hasGitMetadata;
+  return typeof flag === 'boolean' ? flag : null;
+}
+
+const workingDirOf = (dir) => { const w = readJson(path.join(dir, 'git.json'))?.workingDirectory; return typeof w === 'string' ? w : null; };
+
+/** A folder name for comparing: forward slashes, no trailing slash, lower-case drive letter. A pure string function. */
+export function normDir(p) {
+  if (typeof p !== 'string') return '';
+  const s = p.replace(/\\/g, '/').replace(/\/+$/, '');
+  return s === '' && p !== '' ? '/' : s.replace(/^[A-Za-z]:/, (d) => d.toLowerCase());
+}
+
+function ownRoots(root) {
+  const names = [normDir(root)];
+  try { names.push(normDir(realpathSync(root))); } catch { /* the folder may be gone: the plain name stays */ }
+  return names.filter(Boolean);
+}
+
+const crStoreNote = (key) => `a new CLI store marker has no git data (hasGitMetadata false): %LOCALAPPDATA%\\coderabbit\\reviews\\${key.split('/').join('\\')}. The step still fails.`;
+
+/**
+ * The note for the first new review folder (by name) whose marker says hasGitMetadata false and that has no git.json, or null. Null too when
+ * a snapshot is null, nothing is new, or any new folder's git.json names this checkout (its own review has git data). A folder whose git.json
+ * names another folder is not ours. The text holds the folder key in %LOCALAPPDATA% form: no user path and no file content.
+ */
+export function storeDiagnostic({ before, after, root, storeRoot }) {
+  if (!before || !after || !storeRoot) return null;
+  const own = ownRoots(root);
+  const fresh = [...after].filter((k) => !before.has(k)).sort().map((key) => ({ key, dir: path.join(storeRoot, ...key.split('/')) }));
+  const named = fresh.map((m) => ({ ...m, wd: workingDirOf(m.dir) }));
+  if (named.some((m) => m.wd !== null && own.includes(normDir(m.wd)))) return null;
+  const bad = named.find((m) => m.wd === null && readFlag(m.dir) === false);
+  return bad ? crStoreNote(bad.key) : null;
+}
+
+/** The store dep of the step: undefined means the live store (LOCALAPPDATA); null turns the note off. Tests pass their own. */
+const liveCrStore = () => ({ root: crStoreRoot(), list: listMarkers, diagnose: storeDiagnostic });
+
+/** The snapshot before the run, or null. Never throws. */
+function snapshotStore(store) {
+  try { return store?.root ? store.list(store.root) : null; } catch { return null; }
+}
+
+/** The note for a FAIL with unreviewed files, or null. Never throws. */
+function storeNote(store, before, { verdict, parsed, root }) {
+  try {
+    if (!store?.root || verdict.status !== 'FAIL' || !(Number(parsed.complete?.unreviewedFileCount) > 0)) return null;
+    const note = store.diagnose({ before, after: store.list(store.root), root, storeRoot: store.root });
+    return typeof note === 'string' ? note : null;
+  } catch { return null; }
+}
+
 /**
  * One `cr review --agent --committed` per head, at most CR_RUN_LIMIT per branch across every worktree. In order: --skip-cr; a saved
  * output for this head (reused, no run); the run lock (a second step on the same branch FAILs while one runs; a stale lock is replaced);
@@ -1132,7 +1218,7 @@ function reusedReview({ root, e2e, saved, base, why }) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, crStore = liveCrStore() }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
@@ -1142,7 +1228,7 @@ export async function runCodeRabbit({ root, branch, head, base, now, runner, ski
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, crStore });
   } finally {
     rmSync(paths.lock, { force: true });
   }
@@ -1175,7 +1261,7 @@ function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
   }
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly }) {
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, crStore }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
@@ -1203,6 +1289,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
     const overCap = cliCapBlock(cliCapUsd, now, ledgerPath, estimate);
     if (overCap) return overCap;
   }
+  const storeBefore = snapshotStore(crStore);
   const run = { head, at: now.toISOString(), outcome: 'started', newCode };
   const giveBack = () => {
     counter.runs.splice(counter.runs.indexOf(run), 1);
@@ -1228,7 +1315,8 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   writeFileSync(out, r.stderr && verdict.status !== 'PASS' ? `${stdout}\n[stderr]\n${r.stderr}` : stdout);
   rmSync(running, { force: true });
   const logNote = logCliSpend({ branch, head, parsed, now, ledgerPath });
-  verdict.notes = [...(verdict.notes ?? []), estimateText.replace(/^pre-pr: /, ''), ...(logNote ? [logNote] : [])];
+  const storeLine = storeNote(crStore, storeBefore, { verdict, parsed, root });
+  verdict.notes = [...(verdict.notes ?? []), estimateText.replace(/^pre-pr: /, ''), ...(logNote ? [logNote] : []), ...(storeLine ? [storeLine] : [])];
   if (verdict.skipReason === 'no-changes' || verdict.skipReason === 'docs-only') giveBack();
   else {
     run.outcome = verdict.status === 'PASS' ? 'finished' : 'failed';
@@ -1268,7 +1356,7 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary }) {
+export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined }) {
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const runId = randomUUID();
@@ -1333,7 +1421,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(await measureAsync(async () => (failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified }))));
+    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, crStore }))));
   const crStep = results[results.length - 1];
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
