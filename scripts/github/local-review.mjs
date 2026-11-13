@@ -3,13 +3,18 @@
  * local-review.mjs: the local review engine core (spec .claudedocs/2026-11-02-review-engine-p1-engine-core-spec.md, sections 1 and 2,
  * with section 13 of .claudedocs/2026-11-02-local-review-engine-spec.md overriding it).
  *
- * Usage: node scripts/github/local-review.mjs --pr <n> [--fresh] [--gates <pre-pr log>] [--facts <catchers.md>] [--json] [--engine-here] [--repo owner/name]
+ * Usage: node scripts/github/local-review.mjs (--pr <n> | --range <base>..<head>) [--fresh] [--gates <pre-pr log>] [--facts <catchers.md>] [--json] [--engine-here] [--repo owner/name]
+ *          [--prompt-version v1|v2] [--model <id>] [--backend cursor] [--arm <id>]
+ * A flag run (any of --range, --prompt-version, --model, --backend or --arm, whatever its value) is an eval run: fresh, an eval- ledger ref with its arm key
+ * (--arm, else <prompt version>-<model>-<backend>), and for a --range its own record folder range-<base12>-<arm key>. It is refused (exit 2), before any pin,
+ * git, gh or ledger work, when its records, slots or ledgers sit under the live state root or its cursor ledger is the live one (set LOCAL_REVIEW_STATE_DIR
+ * and CURSOR_REVIEW_LEDGER). A run with none of the five flags is the default path and is unchanged.
  *
  * Run without LOCAL_REVIEW_PINNED, it pins the engine first: it extracts scripts/ and review-router.config.json at fork/main to
  * <state>/local-review/engine/<sha>/ and starts that copy as a child process. The pinned process refuses (exit 2) when its own file is
  * not under engine/<sha>/. --engine-here (tests only) runs from the current tree and writes trusted:false.
  *
- * One review of one PR head (reviewHead): skip rules, band route, full or delta range, a slot, the review tree, CONTEXT.md and
+ * One review of one PR head or one --range base..head (reviewHead): skip rules, band route, full or delta range, a slot, the review tree, CONTEXT.md and
  * PROMPT.md, a cap-checked agent run with one retry, the S5 filter, then an append-only record and the ledger end line.
  * P1 records `escalate` only. It posts no label and starts no critic or CodeRabbit run. It never writes coderabbit-paid.jsonl.
  *
@@ -25,17 +30,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  BAND_MODEL, DEFAULT_REPO, EXIT, buildAgentEnv, finishRun, isExcluded, prepareReview, reserveRun,
+  BAND_MODEL, DEFAULT_REPO, EXIT, MODEL_ALLOWLIST, buildAgentEnv, defaultLedgerPath, finishRun, isExcluded, prepareReview, reserveRun,
   resolveAgent, runAgent,
 } from './cursor-review.mjs';
 import { pidAlive, withLock } from './lib/file-lock.mjs';
 import { resolveWaitMs as grokWaitMs } from './lib/grok-slots.mjs';
 import { run as cursorBackend } from './local-review/backends/cursor.mjs';
 import { buildContext, readAtSha } from './local-review/context.mjs';
-import { buildEnginePrompt, lastJsonBlock, PROMPT_PATH } from './local-review/prompt.mjs';
+import { buildEnginePrompt, lastJsonBlock, PROMPT_PATH, PROMPT_VERSION, PROMPT_VERSIONS } from './local-review/prompt.mjs';
 import { buildTrace, condense, contextSha, cursorAgentVersion, writeTraceFiles } from './local-review/trace.mjs';
 import {
-  branchSlug, buildFunnel, listRecords, lastReviewedSha, settlePrior, stateRoot as recordsRoot, writeRecord,
+  RECORD_SCHEMA, branchSlug, buildFunnel, listRecords, lastReviewedSha, settlePrior, stateRoot as recordsRoot, writeRecord,
 } from './local-review/record.mjs';
 import {
   SEVERITY_RANK, filterFindings, findingId, isIgnoreFile, isStrippedFile, mapLine, parseHunks, rangeTouched, stripIgnoreFiles,
@@ -68,14 +73,17 @@ export const ENGINE_FILES = Object.freeze([
   'scripts/github/local-review/backends/cursor.mjs', 'scripts/github/lib/grok-slots.mjs', 'scripts/github/lib/findings-repair.mjs',
 ]);
 
-/** The landed local_review block (review-router.config.json). A missing block uses these. */
+/**
+ * The landed local_review block (review-router.config.json). A missing block uses these.
+ * weekly_live_cap is the weekly cap of live review starts. local-review-sweep.mjs enforces it with its own reader; this file only validates the key.
+ */
 export const LOCAL_REVIEW_DEFAULTS = Object.freeze({
   enabled: true, bands: ['MID', 'ELEVATED', 'HIGH', 'CRITICAL'], max_concurrent: 2, per_branch_cap: 8, retry_max: 1, slot_wait_min: DEFAULT_SLOT_WAIT_MIN,
-  timeout_min: 20, thread_min_confidence: 3, context_cap_kb: 48, skip_authors: ['dependabot[bot]'], headless_daily_cap: 30,
+  timeout_min: 20, thread_min_confidence: 3, context_cap_kb: 48, skip_authors: ['dependabot[bot]'], headless_daily_cap: 30, weekly_live_cap: 100,
 });
 const KINDS = {
   enabled: 'bool', bands: 'strings', skip_authors: 'strings', max_concurrent: 'pos', per_branch_cap: 'pos', retry_max: 'nonneg',
-  slot_wait_min: 'nonneg', timeout_min: 'pos', thread_min_confidence: 'pos', context_cap_kb: 'pos', headless_daily_cap: 'pos',
+  slot_wait_min: 'nonneg', timeout_min: 'pos', thread_min_confidence: 'pos', context_cap_kb: 'pos', headless_daily_cap: 'pos', weekly_live_cap: 'pos',
 };
 const KIND_OK = {
   bool: (v) => typeof v === 'boolean',
@@ -83,6 +91,66 @@ const KIND_OK = {
   pos: (v) => Number.isInteger(v) && v > 0,
   nonneg: (v) => Number.isInteger(v) && v >= 0,
 };
+
+const DEFAULT_BACKEND = 'cursor';
+/** The review backends by name. `run` is the agent call (backends/*.mjs). A null run is a reserved name that is not wired: re-p4-wire adds one line. */
+export const BACKENDS = Object.freeze({
+  cursor: Object.freeze({ run: cursorBackend }),
+  claude: Object.freeze({ run: null, refusal: 'backend claude is not wired yet (re-claude-backend, re-p4-wire)' }),
+});
+/** Lower case only and no trailing dot: Windows folds both in a folder name, so Arm-A and arm-a. would share the record folder of arm-a. */
+const ARM_ID = /^[a-z0-9._-]{1,40}$/;
+/** An arm id is a folder and ledger name part. Tighter than the seat regex on purpose: no leading "-" (a flag, or an option to git) and no "..". */
+const armOk = (arm) => typeof arm === 'string' && ARM_ID.test(arm) && !arm.startsWith('-') && !arm.endsWith('.') && !arm.includes('..');
+const modelRefusal = (reason) => ({ ok: false, reason });
+
+/**
+ * The model gate, pure: { ok:true, model } or { ok:false, reason }. For every backend it refuses an empty id, auto in any case, a fast variant
+ * (-fast suffix or -fast- inside) and any id with haiku. For cursor the id must also be in MODEL_ALLOWLIST (cursor-review.mjs).
+ */
+export function checkModel(backend, model) {
+  const m = typeof model === 'string' ? model : '';
+  const low = m.trim().toLowerCase();
+  if (!Object.hasOwn(BACKENDS, backend)) return modelRefusal(`unknown backend ${JSON.stringify(backend)}`);
+  if (low === '') return modelRefusal('the model id is empty');
+  if (low === 'auto') return modelRefusal('model auto is refused: pass an explicit model id');
+  if (low.endsWith('-fast') || low.includes('-fast-')) return modelRefusal(`model ${JSON.stringify(m)} is a fast variant: reviews never run in fast mode`);
+  if (low.includes('haiku')) return modelRefusal(`model ${JSON.stringify(m)} is refused: reviews never use haiku`);
+  if (backend === 'cursor' && !MODEL_ALLOWLIST.has(m)) return modelRefusal(`model ${JSON.stringify(m)} is not allowed: use ${[...MODEL_ALLOWLIST].join(' or ')}`);
+  return { ok: true, model: m };
+}
+
+/** { base, head } of "<base>..<head>", or { error }. Exactly one "..", two non-empty sides, no "...", no side that starts with "-" or holds a space. */
+export function parseRange(text) {
+  const t = String(text ?? '');
+  const parts = t.split('..');
+  const bad = parts.length !== 2 || t.includes('...') || parts.some((x) => !/^[^\s-]\S*$/.test(x));
+  return bad ? { error: `--range needs <base>..<head> (one "..", two refs, no "..."), got ${JSON.stringify(t)}` } : { base: parts[0], head: parts[1] };
+}
+
+/** The first problem in the target and run flags of a run (parseArgs and reviewHead share it), or null. Runs before any git, gh or ledger call. */
+function checkRunOpts(o) {
+  const backend = o.backend ?? DEFAULT_BACKEND;
+  if (!Object.hasOwn(BACKENDS, backend)) return `--backend needs one of ${Object.keys(BACKENDS).join(', ')}, got ${JSON.stringify(backend)}`;
+  if (!BACKENDS[backend].run) return BACKENDS[backend].refusal;
+  if (o.pr !== undefined && o.range !== undefined) return 'pass --pr or --range, not both';
+  if (o.range !== undefined && parseRange(o.range).error) return parseRange(o.range).error;
+  if (o.promptVersion !== undefined && !PROMPT_VERSIONS.includes(o.promptVersion)) return `--prompt-version needs ${PROMPT_VERSIONS.join(' or ')}, got ${JSON.stringify(o.promptVersion)}`;
+  if (o.arm !== undefined && !armOk(o.arm)) return `--arm needs 1 to 40 characters of [a-z0-9._-], not starting with "-", not ending with "." and not holding "..", got ${JSON.stringify(o.arm)}`;
+  const model = o.model === undefined ? { ok: true } : checkModel(backend, o.model);
+  return model.ok ? null : model.reason;
+}
+
+const NON_DEFAULT_FLAGS = Object.freeze([['range', '--range'], ['promptVersion', '--prompt-version'], ['model', '--model'], ['backend', '--backend'], ['arm', '--arm']]);
+
+/**
+ * Why a run is not the default path, or null. Decided from the flags alone, before any pin, git, gh or ledger work: a run is non-default when
+ * any of --range, --prompt-version, --model, --backend or --arm is present, whatever its value (a flag that repeats the default is still a flag run).
+ */
+function nonDefaultWhy(o) {
+  const hit = NON_DEFAULT_FLAGS.find(([key]) => o[key] !== undefined);
+  return hit ? `a run with ${hit[1]}` : null;
+}
 
 const badInput = (msg) => Object.assign(new Error(msg), { code: 'BAD_INPUT' });
 const clip = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 3)}...` : String(s));
@@ -251,6 +319,15 @@ export function pinEngine({ root, env = process.env } = {}, deps = {}) {
   return { ok: true, engineSha: sha, dir, ...(warning ? { warning } : {}) };
 }
 
+/** The real path of p, with the part below the deepest existing folder kept as written (a folder not made yet has no real path). */
+function realDeep(p) {
+  const abs = path.resolve(p);
+  try { return realpathSync(abs); } catch {
+    const up = path.dirname(abs);
+    return up === abs ? abs : path.join(realDeep(up), path.basename(abs));
+  }
+}
+
 const realOr = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
 
 /** True when selfPath sits strictly under <engineRoot>/<sha>/. */
@@ -274,15 +351,23 @@ export function checkPin({ env = process.env, selfPath, engineRoot, engineHere =
   return { ok: false, reason: 'not started from a pinned engine copy: run without LOCAL_REVIEW_PINNED so the engine pins itself, or pass --engine-here (tests only)' };
 }
 
-/** trusted:true needs every engine file blob to equal `git rev-parse fork/main:<path>` (13.3). */
+/**
+ * trusted:true needs every engine file blob to equal `<sha>:<path>` (13.3), where sha is `<remote>/main` resolved ONCE here. That sha is mainSha, and the
+ * record stores it as engineMainSha, so the record names the commit the blobs were compared with. When it does not resolve to 40 hex, nothing is compared:
+ * { trusted:false, mismatched: every file, mainSha: null }.
+ */
 export function computeTrust({ selfRoot, git, remote = 'fork', files = ENGINE_FILES }) {
-  const r = git(['rev-parse', ...files.map((f) => `${remote}/main:${f}`)]);
+  const m = git(['rev-parse', '--verify', '--quiet', `${remote}/main^{commit}`]);
+  const resolved = String(m.stdout ?? '').trim();
+  const mainSha = m.status === 0 && SHA40.test(resolved) ? resolved : null;
+  if (mainSha === null) return { trusted: false, mismatched: [...files], mainSha: null };
+  const r = git(['rev-parse', ...files.map((f) => `${mainSha}:${f}`)]);
   const want = r.status === 0 ? String(r.stdout).split(/\r?\n/).filter(Boolean) : [];
   const mismatched = files.filter((f, i) => {
     const have = blobSha(path.join(selfRoot, f));
     return have === null || have !== want[i];
   });
-  return { trusted: mismatched.length === 0, mismatched };
+  return { trusted: mismatched.length === 0, mismatched, mainSha };
 }
 
 // ---------- resolveTarget ----------
@@ -312,6 +397,9 @@ function fetchDeps(root, deps, env) {
   return { git: deps.git ?? defaultGit(root), withLock: deps.withLock ?? withLock, fetchLock: P.fetchLock, remote: deps.remote ?? 'fork' };
 }
 
+/** A changed file stays in the review when its new or its old name is outside TREE_EXCLUDES: a rename into an excluded folder still changes the old path. */
+const keepFile = (f) => !isExcluded(f.filename) || (Boolean(f.previous_filename) && !isExcluded(f.previous_filename));
+
 /**
  * One gh read of the PR, then the commits (fetched under the fetch lock when missing), the merge base and the changed files
  * (`git diff --name-status -M -z`, minus TREE_EXCLUDES). Throws BAD_INPUT when gh returns no head or base.
@@ -327,8 +415,34 @@ export async function resolveTarget({ root, pr, gh, repo = DEFAULT_REPO }, deps 
   ensureCommit(d, head, [`pull/${pr}/head`]);
   ensureCommit(d, pullBaseSha, [baseRef, pullBaseSha]);
   const mergeBase = gitOut(d.git, ['merge-base', pullBaseSha, head]).trim();
-  const files = parseNameStatus(gitOut(d.git, ['diff', '--name-status', '-M', '-z', mergeBase, head])).filter((f) => !isExcluded(f.filename));
+  const files = parseNameStatus(gitOut(d.git, ['diff', '--name-status', '-M', '-z', mergeBase, head])).filter(keepFile);
   return { pr, head, pullBaseSha, mergeBase, pull, files, branch: pull.head.ref };
+}
+
+function revParseCommit(git, side) {
+  const r = git(['rev-parse', '--verify', '--end-of-options', `${side}^{commit}`]);
+  const sha = String(r.stdout ?? '').trim();
+  if (r.status !== 0 || !SHA40.test(sha)) throw badInput(`range side ${JSON.stringify(side)} is not a commit in this repository (nothing is fetched)`);
+  return sha;
+}
+
+/**
+ * The target of --range <base>..<head>: both sides resolved to commits with local git only (no fetch, no gh: seed refs are local), the merge base and
+ * the changed files (the same diff and exclude rule as resolveTarget). The pull is a synthetic one with no body and no labels.
+ * Throws BAD_INPUT for a malformed range, an unknown ref or no merge base. -> the resolveTarget shape with pr null and range '<base40>..<head40>'
+ */
+export function resolveRangeTarget({ root, range }, deps = {}) {
+  const parsed = parseRange(range);
+  if (parsed.error) throw badInput(parsed.error);
+  const git = deps.git ?? defaultGit(root);
+  const base = revParseCommit(git, parsed.base);
+  const head = revParseCommit(git, parsed.head);
+  const mb = git(['merge-base', base, head]);
+  const mergeBase = String(mb.stdout ?? '').trim();
+  if (mb.status !== 0 || !SHA40.test(mergeBase)) throw badInput(`range ${base.slice(0, 8)}..${head.slice(0, 8)} has no merge base`);
+  const files = parseNameStatus(gitOut(git, ['diff', '--name-status', '-M', '-z', mergeBase, head])).filter(keepFile);
+  const pull = { title: `range ${base.slice(0, 8)}..${head.slice(0, 8)}`, body: '', labels: [], draft: false, user: null };
+  return { pr: null, range: `${base}..${head}`, head, pullBaseSha: base, mergeBase, pull, files, branch: `range-${base.slice(0, 12)}` };
 }
 
 // ---------- routeBand ----------
@@ -469,7 +583,7 @@ function makeDeps(opts, deps) {
     configPath: deps.configPath ?? path.resolve(path.dirname(selfPath), '..', '..', 'review-router.config.json'),
     gh: deps.gh ?? defaultGh(opts.repo ?? DEFAULT_REPO), repo: opts.repo ?? DEFAULT_REPO,
     withLock: deps.withLock ?? withLock, fetchLock: P.fetchLock, remote: deps.remote ?? 'fork',
-    backend: deps.backend ?? cursorBackend, runAgent: deps.runAgent ?? runAgent, reserveRun: deps.reserveRun ?? reserveRun, finishRun: deps.finishRun ?? finishRun,
+    backend: deps.backend ?? BACKENDS[opts.backend ?? DEFAULT_BACKEND]?.run, live: liveOf(deps), runAgent: deps.runAgent ?? runAgent, reserveRun: deps.reserveRun ?? reserveRun, finishRun: deps.finishRun ?? finishRun,
     writeRecord: deps.writeRecord ?? writeRecord, prepareReview: deps.prepareReview ?? prepareReview,
     readAtSha: deps.readAtSha ?? ((r, s, p) => readAtSha(r, s, p)), agent: deps.agent, agentVersion: deps.agentVersion ?? cursorAgentVersion, writeTraceFiles: deps.writeTraceFiles ?? writeTraceFiles,
     slotDeps: { now: deps.now, pidAlive: deps.pidAlive, pid: deps.pid, sleep: deps.sleep, lockWaitMs: deps.lockWaitMs, pollMs: deps.pollMs, log: deps.stderr ? (m) => deps.stderr(`local-review: ${m}`) : undefined },
@@ -490,7 +604,8 @@ function skip(d, row) {
   return { exit: EXIT.OK, recordPath: null, skipReason: row.reason };
 }
 
-const skipRow = (s, reason) => skip(s.d, { pr: s.opts.pr, head: s.target?.head ?? null, branch: s.target?.branch ?? null, reason });
+/** A skip row of this run. A flag run never reaches the live ledger (runHead refuses it first), so a skip row needs no guard of its own. */
+const skipRow = (s, reason) => skip(s.d, { pr: s.opts.pr, ...(s.opts.range === undefined ? {} : { range: s.opts.range }), head: s.target?.head ?? null, branch: s.target?.branch ?? null, reason });
 
 function baseConfig(s) {
   const { d, target } = s;
@@ -504,17 +619,22 @@ function baseConfig(s) {
   return s.full;
 }
 
-async function stepTarget(s) {
+/** The target of the run: a --range from local git, else the PR through gh. */
+async function loadTarget(s) {
   const { d, opts } = s;
+  if (opts.range !== undefined) return resolveRangeTarget({ root: d.root, range: opts.range }, { git: d.git });
+  return resolveTarget({ root: d.root, pr: opts.pr, gh: d.gh, repo: d.repo }, { git: d.git, withLock: d.withLock, stateDir: d.P.aux, stateRoot: d.P.records, env: d.env, remote: d.remote });
+}
+
+async function stepTarget(s) {
+  const { d } = s;
   try {
-    s.target = await resolveTarget({ root: d.root, pr: opts.pr, gh: d.gh, repo: d.repo }, { git: d.git, withLock: d.withLock, stateDir: d.P.aux, stateRoot: d.P.records, env: d.env, remote: d.remote });
+    s.target = await loadTarget(s);
     s.slug = branchSlug(s.target.branch);
   } catch (err) {
     return refuse(d, err.code === 'BAD_INPUT' || /branch name/.test(err.message) ? EXIT.REFUSED : EXIT.FAILED, err.message);
   }
   if (RESERVED_SLUGS.has(foldSlug(s.slug))) return refuse(d, EXIT.REFUSED, `branch name "${s.target.branch}" collides with the engine folder`);
-  // An eval run (evalRun) has its own ref, so it neither eats the live per-branch cap nor meets it. The eval budget caps it (review-eval/budget.mjs).
-  s.ref = opts.evalRun ? `eval-${opts.pr}-${s.target.head.slice(0, 8)}` : `branch-${s.slug}`;
   const { pull } = s.target;
   if (pull.draft === true) return skipRow(s, 'draft');
   if (s.cfg.skip_authors.includes(pull.user?.login)) return skipRow(s, `author ${pull.user.login} is on the skip list`);
@@ -526,6 +646,70 @@ function stepBand(s) {
   s.route = routeBand({ files: s.target.files, configAtBase: baseConfig(s), labels });
   if (!s.route.band) return refuse(s.d, EXIT.REFUSED, 'no matrix block in the band config: the band cannot be set');
   if (!s.cfg.bands.includes(s.route.band) || !s.route.model) return skipRow(s, `band ${s.route.band} is not reviewed`);
+  return null;
+}
+
+/** True when dir is the live root or sits under it. Real paths (the deepest folder that exists), so a short name or a link cannot hide it. */
+function underRoot(dir, live) {
+  const rel = path.relative(realDeep(live), realDeep(dir));
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+const sameDir = (a, b) => path.relative(realDeep(a), realDeep(b)) === '';
+
+/** True when a and b name the same file once links are resolved (path.relative folds case on Windows). */
+const sameFile = (a, b) => path.relative(realDeep(a), realDeep(b)) === '';
+
+/**
+ * The reason a flag run may not use these state paths, or null. They are live when the records sit under the live root, when the slots and ledgers
+ * folder is the live root's parent (design note 3a), or when the cursor ledger is the live default ledger (`live.cursorLedger`, defaultLedgerPath with
+ * no override: the cap and the usage report read it). live = { root, cursorLedger }.
+ */
+function liveClash(why, P, live) {
+  if (!why) return null;
+  if (underRoot(P.records, live.root) || sameDir(P.aux, path.dirname(live.root))) return `${why} would write under the live state root ${live.root}: set LOCAL_REVIEW_STATE_DIR to another folder`;
+  if (sameFile(P.cursorLedger, live.cursorLedger)) return `${why} would write to the live cursor ledger ${live.cursorLedger}: set CURSOR_REVIEW_LEDGER to another file`;
+  return null;
+}
+
+/** The live paths of a run: the injected ones (tests), else the real defaults with no environment override. */
+const liveOf = (deps) => ({ root: deps.liveStateRoot ?? recordsRoot({ env: {} }), cursorLedger: deps.liveCursorLedger ?? defaultLedgerPath({}) });
+
+/**
+ * The cap ref of a run. An eval run (evalRun) has its own ref, so it neither eats the live per-branch cap nor meets it. The eval budget caps it
+ * (review-eval/budget.mjs). A flag run adds its arm key, so two arms on one head or range have two refs.
+ */
+function refOf(s) {
+  const { target } = s;
+  const arm = s.armKey === null ? '' : `-${s.armKey}`;
+  if (target.range) return `eval-range-${target.pullBaseSha.slice(0, 8)}-${target.head.slice(0, 8)}${arm}`;
+  return s.evalRun ? `eval-${target.pr}-${target.head.slice(0, 8)}${arm}` : `branch-${s.slug}`;
+}
+
+/**
+ * The record folder of a flag run: range-<base12>-<arm key> for a range, <PR branch>-<arm key> for a PR, so each arm has its own folder and the
+ * stored majorsOpen (the union at a head) counts one arm only. Set here, not in the target step: the default arm key needs the model.
+ */
+function armBranch(s) {
+  const branch = s.target.range ? `range-${s.target.pullBaseSha.slice(0, 12)}-${s.armKey}` : `${s.target.branch}-${s.armKey}`;
+  s.target = { ...s.target, branch };
+  s.slug = branchSlug(branch);
+}
+
+/**
+ * The model of this run: --model, else the band's. The gate runs on the default too. A flag run (nonDefault, set from the flags in runHead) is fresh and has an
+ * eval ref with its arm key: --arm when given, else <prompt version>-<model>-<backend>. A range run also takes its record folder from the arm key.
+ */
+function stepModel(s) {
+  const chosen = s.opts.model ?? s.route.model;
+  const checked = checkModel(s.backend, chosen);
+  if (!checked.ok) return refuse(s.d, EXIT.REFUSED, `band ${s.route.band}: ${checked.reason}`);
+  s.route = { ...s.route, model: chosen };
+  s.armKey = s.nonDefault ? (s.opts.arm ?? `${s.promptVersion}-${chosen}-${s.backend}`) : null;
+  s.fresh = Boolean(s.opts.fresh) || s.nonDefault;
+  s.evalRun = Boolean(s.opts.evalRun) || s.nonDefault;
+  try { if (s.nonDefault) armBranch(s); } catch (err) { return refuse(s.d, EXIT.REFUSED, err.message); }
+  s.ref = refOf(s);
   return null;
 }
 
@@ -596,7 +780,7 @@ function stepDelta(s) {
 async function stepRange(s) {
   const { d, target } = s;
   const trustedOnly = s.trust.trusted;
-  s.range = resolveRange({ branch: target.branch, head: target.head, fresh: s.opts.fresh, trustedOnly }, { stateRoot: d.P.records, env: d.env, isAncestor: isAncestorOf(d) });
+  s.range = resolveRange({ branch: target.branch, head: target.head, fresh: s.fresh, trustedOnly }, { stateRoot: d.P.records, env: d.env, isAncestor: isAncestorOf(d) });
   if (s.range.mode === 'done') return skipRow(s, 'range done: a complete record exists at this head');
   s.prior = []; s.priorRelined = []; s.touchedIds = new Set();
   return s.range.mode === 'delta' ? stepDelta(s) : null;
@@ -617,7 +801,7 @@ function writeReviewDir(s, prep) {
   writeFileSync(path.join(dir, 'CONTEXT.md'), ctx.text);
   const delta = s.range.mode === 'delta';
   const files = delta ? s.deltaFiles.map((f) => f.filename) : prep.files;
-  const prompt = buildEnginePrompt({ mode: s.range.mode, files, agentFiles });
+  const prompt = buildEnginePrompt({ mode: s.range.mode, files, agentFiles, promptVersion: s.promptVersion });
   writeFileSync(path.join(prep.dir, PROMPT_PATH), prompt.promptText);
   if (delta) writeDeltaFiles(s, prep, dir);
   return { ctx, prompt, diffText };
@@ -655,7 +839,7 @@ function endLine(s, cur, extra = {}) {
   d.finishRun(d.P.cursorLedger, cur.runId, {
     ref: s.ref, model: route.model, band: route.band, sessionId: d.env.CLAUDE_CODE_SESSION_ID || null, durationMs: cur.run.durationMs ?? null, spawnedAt: cur.run.spawnedAt ? new Date(cur.run.spawnedAt).toISOString() : null,
     exit: cur.error ? EXIT.FAILED : EXIT.OK, timedOut: Boolean(cur.run.timedOut), modelVerified: cur.parsed.modelVerified, usage: cur.parsed.usage,
-    ...(cur.error ? { error: clip(cur.error, 300) } : {}), repo: d.repo, purpose: 'review', pr: s.target.pr, head: s.target.head, mode: s.range.mode, engineSha: s.pin.engineSha, ...extra,
+    ...(cur.error ? { error: clip(cur.error, 300) } : {}), repo: d.repo, purpose: 'review', pr: s.target.pr, ...(s.target.range ? { range: s.target.range } : {}), head: s.target.head, mode: s.range.mode, engineSha: s.pin.engineSha, ...extra,
   }, { now: d.now });
 }
 
@@ -709,6 +893,15 @@ function settleAndFilter(s, prep, plan, answer) {
   return { findings: [...settled.filter((f) => !ids.has(f.id)), ...merged], kept, dropped: r.dropped, problems: r.problems };
 }
 
+/** The schema 2 fields (RECORD_FIELDS minus promptVersion). A field no lane fills yet holds its fixed empty value. */
+function schema2Fields(s, out) {
+  return {
+    contextVersion: null, armId: s.opts.arm ?? null, verify: [], uncertainMajors: 0, impactRows: [], overallCorrectness: null,
+    runIds: out.runs.map((r) => r.runId), cursorRunId: out.prev.runId, engineMainSha: s.engineMainSha, backend: s.backend,
+    target: s.target.range ? { range: s.target.range } : { pr: s.target.pr },
+  };
+}
+
 function buildRecord(s, plan, out, answer, filtered, error) {
   const { target, route } = s;
   const final = out.prev;
@@ -723,7 +916,7 @@ function buildRecord(s, plan, out, answer, filtered, error) {
   // An answer that claims no selected file reviewed is not complete when files were selected: a hidden or unreadable tree gives that answer.
   const complete = runComplete(final.run, final.parsed, answer) && (selected === 0 || claimedReviewed > 0);
   return {
-    schema: 1, runId: final.runId, pr: target.pr, branch: target.branch, head: target.head, mergeBase: target.mergeBase, pullBaseSha: target.pullBaseSha,
+    schema: RECORD_SCHEMA, runId: final.runId, pr: target.pr, branch: target.branch, head: target.head, mergeBase: target.mergeBase, pullBaseSha: target.pullBaseSha,
     engineSha: s.pin.engineSha, trusted: s.trust.trusted, model: route.model, cursorAgentVersion: s.agentVersion, contextSha: contextSha(plan.ctx.text), promptVersion: plan.prompt.promptVersion, promptSha256: plan.prompt.promptSha256,
     mode: s.range.mode, from: s.range.from, band: { band, score, G, C, K, L, securityTier }, status: error ? 'failed' : 'ok', skipReason: null,
     escalate: route.escalate, runs: out.runs,
@@ -731,6 +924,7 @@ function buildRecord(s, plan, out, answer, filtered, error) {
     contextMissing: plan.ctx.contextMissing, findings: filtered.findings, dropped: filtered.dropped, problems,
     bodyMode: s.opts.withholdBody ? 'withheld' : 'full',
     funnel: buildFunnel({ answer: error ? null : answer, dropped: filtered.dropped, kept: filtered.kept }), withdrawn: error ? [] : (answer?.withdrawn ?? []), ts: new Date(s.d.now()).toISOString(),
+    ...schema2Fields(s, out),
   };
 }
 
@@ -828,17 +1022,27 @@ async function withSlot(s) {
   try { return await stepRun(s); } finally { releaseSlot({ runKey, file: d.P.slots }, d.slotDeps); }
 }
 
+const noTarget = (o) => (o.range === undefined && (!Number.isInteger(o.pr) || o.pr <= 0) ? 'a PR number or a range is required (--pr <n> or --range <base>..<head>)' : null);
+
 async function runHead(opts, d) {
-  if (!Number.isInteger(opts.pr) || opts.pr <= 0) return refuse(d, EXIT.REFUSED, 'a PR number is required (--pr <n>)');
+  const bad = checkRunOpts(opts) ?? noTarget(opts);
+  if (bad) return refuse(d, EXIT.REFUSED, bad);
+  // Decided from the flags, before any pin, git, gh, config or ledger work: a flag run aimed at the live root or the live cursor ledger ends here.
+  const why = nonDefaultWhy(opts);
+  const clash = liveClash(why, d.P, d.live);
+  if (clash) return refuse(d, EXIT.REFUSED, clash);
   const pin = checkPin({ env: d.env, selfPath: d.selfPath, engineRoot: d.P.engineRoot, engineHere: opts.engineHere });
   if (!pin.ok) return refuse(d, EXIT.REFUSED, pin.reason);
   const loaded = loadConfig(d.configPath);
   if (!loaded.ok) return refuse(d, EXIT.REFUSED, loaded.reason);
   d.sweepAgeMs = loaded.cfg.timeout_min * MIN + TMP_GRACE_MS;
-  const trust = pin.pinned ? computeTrust({ selfRoot: d.selfRoot, git: d.git, remote: d.remote }) : { trusted: false, mismatched: ['--engine-here'] };
-  const s = { d, opts, pin, trust, cfg: loaded.cfg, full: loaded.full, problems: [], rec: { stateRoot: d.P.records, env: d.env }, timeoutMs: loaded.cfg.timeout_min * MIN };
-  if (!s.cfg.enabled) return skip(d, { pr: opts.pr, reason: 'local_review.enabled is false' });
-  const early = (await stepTarget(s)) ?? stepBand(s) ?? (await stepRange(s));
+  const trust = pin.pinned ? computeTrust({ selfRoot: d.selfRoot, git: d.git, remote: d.remote }) : { trusted: false, mismatched: ['--engine-here'], mainSha: null };
+  const s = {
+    d, opts, pin, trust, cfg: loaded.cfg, full: loaded.full, problems: [], rec: { stateRoot: d.P.records, env: d.env }, timeoutMs: loaded.cfg.timeout_min * MIN,
+    backend: opts.backend ?? DEFAULT_BACKEND, promptVersion: opts.promptVersion ?? PROMPT_VERSION, engineMainSha: trust.mainSha, nonDefault: why !== null, why, armKey: null,
+  };
+  if (!s.cfg.enabled) return skip(d, { pr: opts.pr ?? null, ...(opts.range ? { range: opts.range } : {}), reason: 'local_review.enabled is false' });
+  const early = (await stepTarget(s)) ?? stepBand(s) ?? stepModel(s) ?? (await stepRange(s));
   if (early) return early;
   s.agent = d.agent ?? resolveAgent({ env: d.env });
   if (s.agent.error) return refuse(d, EXIT.FAILED, s.agent.error);
@@ -847,7 +1051,8 @@ async function runHead(opts, d) {
 }
 
 /**
- * One review of one PR head. opts: { pr, fresh, gatesText, factsText, engineHere, withholdBody (eval runs only), evalRun (eval runs: own cap ref), root, repo }.
+ * One review of one PR head, or of a --range. opts: { pr | range, fresh, gatesText, factsText, engineHere, withholdBody (eval runs only), evalRun (eval runs: own cap ref), root, repo,
+ *   promptVersion, model, backend, arm }. A flag run (see the file header) is fresh, uses an eval- ref with its arm key and refuses the live state root and the live cursor ledger. deps (tests) also: liveStateRoot, liveCursorLedger.
  * deps (tests): { git, gh, backend (default: backends/cursor.mjs run), runAgent, reserveRun, finishRun, writeRecord, prepareReview, readAtSha, agent, now, pidAlive, sleep, env, stateRoot,
  *   stateDir, cursorLedger, selfPath, selfRoot, configPath, tmpRoot, grep, stderr }.
  * -> { exit, recordPath|null, skipReason|null, ... }
@@ -865,6 +1070,7 @@ export async function reviewHead(opts, deps = {}) {
 
 // ---------- command line ----------
 
+/** The command line as options. Values are only read here; checkRunOpts judges them after the loop, so the flag order does not matter. */
 export function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i += 1) {
@@ -874,13 +1080,20 @@ export function parseArgs(argv) {
       case '--gates': out.gates = argv[++i]; if (!out.gates) return { error: '--gates needs a file' }; break;
       case '--facts': out.facts = argv[++i]; if (!out.facts) return { error: '--facts needs a file' }; break;
       case '--repo': out.repo = argv[++i]; if (!/^[\w.-]+\/[\w.-]+$/.test(out.repo ?? '')) return { error: '--repo needs owner/name' }; break;
+      case '--range': out.range = argv[++i]; if (out.range === undefined) return { error: '--range needs <base>..<head>' }; break;
+      case '--prompt-version': out.promptVersion = argv[++i]; if (out.promptVersion === undefined) return { error: '--prompt-version needs a version' }; break;
+      case '--model': out.model = argv[++i]; if (out.model === undefined) return { error: '--model needs a model id' }; break;
+      case '--backend': out.backend = argv[++i]; if (out.backend === undefined) return { error: '--backend needs a name' }; break;
+      case '--arm': out.arm = argv[++i]; if (out.arm === undefined) return { error: '--arm needs an id' }; break;
       case '--fresh': out.fresh = true; break;
       case '--json': out.json = true; break;
       case '--engine-here': out.engineHere = true; break;
       default: return { error: `unknown argument ${JSON.stringify(a)}` };
     }
   }
-  if (out.pr === undefined) return { error: 'pass --pr <n>: the engine runs on a PR' };
+  const bad = checkRunOpts(out);
+  if (bad) return { error: bad };
+  if (out.pr === undefined && out.range === undefined) return { error: 'pass --pr <n> or --range <base>..<head>' };
   return out;
 }
 
@@ -927,7 +1140,12 @@ export async function main(argv, deps = {}) {
   if (args.error) { err(`local-review: ${args.error}`); return EXIT.REFUSED; }
   const env = deps.env ?? process.env;
   const root = deps.root ?? repoRoot();
-  if (!env.LOCAL_REVIEW_PINNED && !args.engineHere) return relaunch(argv, { root, env, out, err, deps });
+  if (!env.LOCAL_REVIEW_PINNED && !args.engineHere) {
+    // A flag run aimed at the live root or the live cursor ledger is refused before the engine is pinned: pinEngine fetches and writes under that root.
+    const clash = liveClash(nonDefaultWhy(args), statePaths(deps, env), liveOf(deps));
+    if (clash) { err(`local-review: ${clash}`); return EXIT.REFUSED; }
+    return relaunch(argv, { root, env, out, err, deps });
+  }
   const gates = args.gates ? readTextArg('--gates', args.gates) : {};
   if (gates.error) { err(`local-review: ${gates.error}`); return EXIT.REFUSED; }
   const facts = args.facts ? readTextArg('--facts', args.facts) : {};

@@ -6,8 +6,18 @@ import { createHash } from 'node:crypto';
 import nodeFs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { withLock as fileLock } from '../lib/file-lock.mjs';
 
-export const RECORD_SCHEMA = 1;
+export const RECORD_SCHEMA = 2;
+/**
+ * The contract fields of a schema 2 record, one list for every reader and writer (design note re-engine-cli-schema, section 4). A field that no
+ * lane fills yet holds a fixed empty value. A schema 1 record already has promptVersion and none of the others: readers must not require the others.
+ */
+export const RECORD_FIELDS = Object.freeze([
+  'promptVersion', 'contextVersion', 'armId', 'verify', 'uncertainMajors', 'impactRows', 'overallCorrectness',
+  'runIds', 'cursorRunId', 'engineMainSha', 'backend', 'target',
+]);
+const LOCK_WAIT_MS = 5000;
 const HEAD40 = /^[0-9a-f]{40}$/;
 const RUN_ID = /^[A-Za-z0-9._-]{1,80}$/;
 const MAJOR = new Set(['critical', 'major']);
@@ -138,13 +148,23 @@ export function settlePrior(prior, answers, { touches, exists = () => true } = {
 /**
  * Writes one record, once. The body goes to a temp file in the same folder and is then renamed into place, so a reader never sees a
  * part-written record. An existing record at the path is never replaced (throws). The stored majorsOpen is the union over every
- * run already at this head plus this one. Returns { path, sha256, record }; sha256 is of the stored bytes (the ledger recordSha256).
+ * run already at this head plus this one. The listing, the union and the rename run under the head-folder lock, so two writers at
+ * one head cannot both miss the other's Major; a lock that stays held throws. opts.withLock and opts.lockWaitMs are for tests.
+ * Returns { path, sha256, record }; sha256 is of the stored bytes (the ledger recordSha256).
  */
 export function writeRecord(record, opts = {}) {
   const io = { ...nodeFs, ...opts.fs };
   const runId = String(record?.runId ?? '');
   if (!RUN_ID.test(runId) || runId.includes('..')) throw new Error(`runId "${runId}" is not usable as a file name`);
   const dir = headDir(record.branch, record.head, opts);
+  io.mkdirSync(dir, { recursive: true });
+  const locked = (opts.withLock ?? fileLock)(path.join(dir, 'records'), { lockWaitMs: opts.lockWaitMs ?? LOCK_WAIT_MS }, () => writeLocked(record, { dir, runId, io }, opts));
+  if (locked?.ok === false) throw new Error(`record lock at ${dir} is not free: ${locked.detail ?? locked.reason ?? 'held'}`);
+  return locked;
+}
+
+/** The part of writeRecord that needs the lock: the exists check, the listing of earlier runs, the union and the rename. */
+function writeLocked(record, { dir, runId, io }, opts) {
   const final = path.join(dir, `${runId}.json`);
   if (io.existsSync(final)) throw new Error(`record ${final} exists: records are append-only`);
   const earlier = listRecords({ branch: record.branch, head: record.head }, opts);
@@ -152,7 +172,6 @@ export function writeRecord(record, opts = {}) {
   const ts = record.ts ?? new Date((opts.now ?? Date.now)()).toISOString();
   const stored = { ...record, schema: RECORD_SCHEMA, ts, problems, majorsOpen: majorsOpen([...earlier.records.map((r) => r.record), record]).length };
   const body = `${JSON.stringify(stored, null, 2)}\n`;
-  io.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.${runId}.${process.pid}.tmp`);
   io.writeFileSync(tmp, body);
   try { io.renameSync(tmp, final); } catch (err) { try { io.unlinkSync(tmp); } catch { /* already gone */ } throw err; }
