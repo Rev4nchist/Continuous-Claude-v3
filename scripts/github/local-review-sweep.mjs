@@ -682,8 +682,21 @@ function auditRun(ctx, t, res, record) {
     kind: 'engine', runOk: record?.status === 'ok' && record.coverage?.complete === true, streamPath, runId: record?.runId ?? res.runId,
     head: record?.head ?? t.head, pr: t.pr, round: null, git: ctx.git, statePath: ctx.auditStatePath, tmpdir: ctx.tmpRoot, env: ctx.env,
   });
-  return { verdict: a.patch?.void ? 'void' : (a.line?.verdict ?? 'void'), symlinkCheck: a.line?.symlinkCheck ?? null };
+  const rules = [...(a.line?.rules ?? []), ...(a.recordError ? [{ rule: 'record-failed' }] : [])];
+  return { verdict: a.patch?.void ? 'void' : (a.line?.verdict ?? 'void'), symlinkCheck: a.line?.symlinkCheck ?? null, rules: ruleNames(rules) };
 }
+
+/** The audit rules of a run without paths, fields or call ids: rule, tool and answerKey only, de-duplicated (the list line is not a stream copy). */
+function ruleNames(rules) {
+  const out = new Map();
+  for (const r of rules) {
+    const x = { rule: String(r.rule), tool: r.tool ?? null, answerKey: r.answerKey === true };
+    out.set(JSON.stringify(x), x);
+  }
+  return [...out.values()];
+}
+
+const rulesText = (rules) => [...new Set((rules ?? []).map((r) => r.rule))].join(',') || 'none';
 
 /** The fields every list line carries: the key alreadyRun reads (head + engineSha), the versions, and what the label was tested against (F2). */
 function lineBase(ctx, eng, t) {
@@ -702,7 +715,7 @@ function listLine(ctx, eng, t, record, res, audit, copy) {
   const reason = notCounted({ eng, record, audit, copyGone: copy.gone, copyChanged: copy.changed, label: base.label });
   return {
     ...base, runId: record?.runId ?? res.runId ?? null, head: record?.head ?? t.head, recordPath: res.recordPath, bodyMode: record?.bodyMode ?? null,
-    audit: audit.verdict, symlinkCheck: audit.symlinkCheck, band: record?.band?.band ?? t.band ?? null, status: record?.status ?? null,
+    audit: audit.verdict, auditRules: audit.rules ?? [], symlinkCheck: audit.symlinkCheck, band: record?.band?.band ?? t.band ?? null, status: record?.status ?? null,
     counted: reason === null, ...(reason ? { reason } : {}), ...(copy.gone ? { copyGone: true } : {}), ...(copy.changed ? { copyChanged: true } : {}),
   };
 }
@@ -754,7 +767,7 @@ function afterRun(ctx, eng, t, res) {
   const line = listLine(ctx, eng, t, record, res, auditRun(ctx, t, res, record), copy);
   appendList(ctx, line);
   if (line.audit !== 'void') return null;
-  ctx.log(`local-review-sweep: read audit VOID for run ${line.runId} (PR ${t.pr}, head ${line.head}): the sweep stops; the seat reads the stream first`);
+  ctx.log(`local-review-sweep: read audit VOID for run ${line.runId} (PR ${t.pr}, head ${line.head}, rules ${rulesText(line.auditRules)}): the sweep stops; the seat reads the stream first`);
   return 'void';
 }
 
@@ -846,7 +859,7 @@ function runsWindow(ctx, rows) {
 /** The read-audit summary of the window's runs: void runs with their heads (newest audit line, or the list line), and runs with no audit line. */
 function auditWindow(ctx, rows) {
   const newest = newestByRunId(readLines(ctx.auditStatePath));
-  const voids = rows.filter((r) => r.audit === 'void' || newest.get(r.runId)?.verdict === 'void').map((r) => ({ runId: r.runId, pr: r.pr, head: r.head }));
+  const voids = rows.filter((r) => r.audit === 'void' || newest.get(r.runId)?.verdict === 'void').map((r) => ({ runId: r.runId, pr: r.pr, head: r.head, rules: r.auditRules ?? null }));
   return { voids, unaudited: rows.filter((r) => !newest.has(r.runId)).length };
 }
 
@@ -906,7 +919,7 @@ export function textReport(r) {
     + `refused ${s.refused}, failed ${s.failed}, busy ${s.busy}, engine skips ${JSON.stringify(s.engineSkip)}`;
   const runs = `window ${w.days} days: ${w.runs} run(s); per risk band ${JSON.stringify(w.runsByBand)}; `
     + `runs per PR p50 ${w.runsPerPr.p50 ?? 'n/a'}, p90 ${w.runsPerPr.p90 ?? 'n/a'}; runs with facts ${w.facts.with}, without ${w.facts.without} (${pct(w.facts.share)})`;
-  const voids = w.readAudit.voids.map((v) => ` [${v.runId} PR ${v.pr} head ${v.head}]`).join('');
+  const voids = w.readAudit.voids.map((v) => ` [${v.runId} PR ${v.pr} head ${v.head}${v.rules ? ` rules ${rulesText(v.rules)}` : ''}]`).join('');
   const lines = [
     `${head}, repo ${r.repo}${r.stopped ? `, STOPPED: ${r.stopped}` : ''}`,
     `planned: ${r.planned.map(planned).join('; ') || 'none'}`,

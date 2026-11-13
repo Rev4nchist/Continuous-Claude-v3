@@ -677,10 +677,26 @@ test('T8b the plain-text report names the void run head and prints the CLI-Major
   const w = world({ pulls: [pullOf(2, { band: 'MID', result: 'void' })] });
   assert.equal(await main(['--cli-dir', w.cliDir], deps(w)), SWEEP_EXIT.VOID);
   const text = w.out.at(-1);
-  assert.match(text, new RegExp(`read audit: 1 void run\\(s\\) \\[stub-1-2 PR 2 head ${H(2)}\\]`));
+  assert.match(text, new RegExp(`read audit: 1 void run\\(s\\) \\[stub-1-2 PR 2 head ${H(2)} rules outside-path(,answer-key)?\\]`));
   assert.match(text, /CLI-Major heads: 0/);
   assert.match(text, /ledger load: 1 live starts in 7 days of a cap of 100/);
   assert.match(text, /STOPPED: void/);
+});
+
+test('T8c a void run names its audit rules (rule, tool, answerKey) in the list line, the VOID log line and the report; no path, no field, no call id', async () => {
+  // Breaks when: auditRun drops the rule names, listLine does not write auditRules, the VOID log line or the report omits the rule,
+  // or a path, a field name or a call id leaks into the list line.
+  const w = world({ pulls: [pullOf(1, { band: 'HIGH' }), pullOf(2, { band: 'MID', result: 'void' })] });
+  assert.equal(await main(['--cli-dir', w.cliDir], deps(w)), SWEEP_EXIT.VOID);
+  const rows = jsonl(listFile(w));
+  const clean = rows.find((r) => r.pr === 1);
+  const bad = rows.find((r) => r.pr === 2);
+  assert.deepEqual(clean.auditRules, [], 'a pass run has no audit rules');
+  assert.ok(bad.auditRules.some((x) => x.rule === 'outside-path'), JSON.stringify(bad.auditRules));
+  for (const x of bad.auditRules) assert.deepEqual(Object.keys(x).sort(), ['answerKey', 'rule', 'tool']);
+  assert.doesNotMatch(JSON.stringify(bad), /linktype-labels|C:\\\\work\\\\primary/, 'no read path in the list line');
+  assert.match(w.logs.join('\n'), /read audit VOID for run stub-2-2 \(PR 2, head [0-9a-f]+, rules outside-path/);
+  assert.match(w.out.at(-1), /\[stub-2-2 PR 2 head [0-9a-f]+ rules outside-path/);
 });
 
 // ---------- T9 order and share ----------
