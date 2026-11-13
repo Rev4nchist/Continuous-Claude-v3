@@ -105,7 +105,7 @@ test('the child runs bare by default, and CCV3_OPEN_PRS_EXTRA_ARGS reaches it', 
   assert.deepEqual(called(fx).argv, []);
   assert.equal(called(fx).script, join(fx.repo, 'scripts', 'github', 'open-prs.mjs'));
   const fx2 = fixture();
-  const r2 = run(fx2, { CCV3_OPEN_PRS_EXTRA_ARGS: `--out ${join(fx2.root, 'out')} --cap 5` });
+  const r2 = run(fx2, { CCV3_OPEN_PRS_EXTRA_ARGS: `--out "${join(fx2.root, 'out')}" --cap 5` });
   assert.equal(r2.status, 0, r2.log + r2.err);
   assert.deepEqual(called(fx2).argv, ['--out', join(fx2.root, 'out'), '--cap', '5']);
 });

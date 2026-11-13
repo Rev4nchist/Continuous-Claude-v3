@@ -234,7 +234,10 @@ const summaryLine = (rows) => {
 
 // ---------------------------------------------------------------- lock and write
 
-/** True when the lock names a live pid and started less than 20 minutes ago. A lock that vanished is not held. */
+/**
+ * True when the lock started less than 20 minutes ago and names a live pid. An empty or unreadable
+ * pid (a run between create and write) counts as held until it is stale. A lock that vanished is not held.
+ */
 function lockHeld(lock, d) {
   let text;
   try { text = readFileSync(lock, 'utf8'); } catch (e) { return e?.code !== 'ENOENT'; }
@@ -242,7 +245,8 @@ function lockHeld(lock, d) {
   let startMs = Date.parse(started);
   if (!Number.isFinite(startMs)) { try { startMs = statSync(lock).mtimeMs; } catch { return false; } }
   if (d.now().getTime() - startMs > LOCK_STALE_MS) return false;
-  return pidAlive(Number.parseInt(pid, 10));
+  const n = Number.parseInt(pid, 10);
+  return !(n > 0) || pidAlive(n);
 }
 
 /** True when this run now owns the lock. False when a live run holds it. */

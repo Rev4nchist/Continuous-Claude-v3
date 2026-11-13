@@ -25,7 +25,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -88,6 +88,7 @@ async function run(spec = {}) {
   if (spec.old !== undefined || spec.lock !== undefined) mkdirSync(out, { recursive: true });
   if (spec.old !== undefined) writeFileSync(outFile, spec.old);
   if (spec.lock !== undefined) writeFileSync(join(out, '.open-prs.lock'), spec.lock);
+  if (spec.lockMtimeMs !== undefined) utimesSync(join(out, '.open-prs.lock'), spec.lockMtimeMs / 1000, spec.lockMtimeMs / 1000);
   if (spec.store !== undefined) {
     const text = typeof spec.store === 'string' ? spec.store : JSON.stringify(spec.store);
     mkdirSync(dirname(STORE_FILE), { recursive: true });
@@ -467,6 +468,18 @@ test('12b a live pid does not keep a lock older than 20 minutes: 19 minutes hold
   assert.equal(held.text, null, 'the 19-minute lock holds: nothing is written');
   assert.equal(held.calls.gh.length, 0);
   const taken = await run({ lock: `${process.pid} ${iso(T0 - 21 * 60_000)}` });
+  assert.equal(taken.code, 0);
+  assert.equal(taken.doc.rows.length, 3);
+  assert.deepEqual(leftovers(taken), []);
+});
+
+test('12d an empty lock (a run between create and pid write) holds until its mtime is 20 minutes old', async () => {
+  // Breaks when an empty or invalid pid counts as dead: a second run would delete a fresh lock and overlap the first.
+  const held = await run({ lock: '', lockMtimeMs: T0 - 60_000 });
+  assert.equal(held.code, 0);
+  assert.equal(held.text, null, 'the fresh empty lock holds: nothing is written');
+  assert.equal(held.calls.gh.length, 0);
+  const taken = await run({ lock: '', lockMtimeMs: T0 - 21 * 60_000 });
   assert.equal(taken.code, 0);
   assert.equal(taken.doc.rows.length, 3);
   assert.deepEqual(leftovers(taken), []);
