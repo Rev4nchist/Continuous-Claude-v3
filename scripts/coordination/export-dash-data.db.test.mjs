@@ -39,7 +39,7 @@ const S2 = 'bbbb2222-0000-4000-8000-000000000002';
 const S3 = 'abcdef12-3456-4890-abcd-ef1234567890';
 const HANDLES = ['aaaa1111', 'bbbb2222', 'abcdef12'];
 
-const state = { url: '', tmp: '', db: null, rules: '' };
+const state = { url: '', tmp: '', db: null, rules: '', ids: '' };
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 /** An ISO time `days` days and `hours` hours before the clock. Flow fixtures use it so they stay inside the grid. */
@@ -71,7 +71,8 @@ function dropScratch(url) {
 function runExport(args, extraEnv = {}) {
   const url = extraEnv.CONTINUOUS_CLAUDE_DB_URL ?? state.url;
   assertScratchUrl(url);
-  const env = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url, ...extraEnv };
+  // CCV3_IDENTITY_DIR: a temp folder, so the export never reads a live session name.
+  const env = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url, CCV3_IDENTITY_DIR: state.ids, ...extraEnv };
   const r = spawnSync(process.execPath, [EXPORT, ...args], { env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr, all: `${r.stdout}${r.stderr}` };
 }
@@ -103,11 +104,15 @@ before(async () => {
   state.db = new Client({ connectionString: state.url });
   await state.db.connect();
   state.rules = path.join(state.tmp, 'rules.json');
+  state.ids = path.join(state.tmp, 'identity');
+  fs.mkdirSync(state.ids);
+  fs.writeFileSync(path.join(state.ids, `${S1}.json`), JSON.stringify({ uuid: S1, name: 'Builder one' }));
+  fs.writeFileSync(path.join(state.ids, `${S3}.json`), JSON.stringify({ uuid: S3, name: 'Gone session' }));
   fs.writeFileSync(state.rules, JSON.stringify({
     version: 1,
     projects: [
       { key: 'proj-x', name: 'X', goal: 'gx', done: 'dx', idRe: '^px-', terminalLanes: ['px-1', 'px-2'] },
-      { key: 'proj-y', name: 'Y', goal: 'gy', done: 'dy', idRe: '^py-' },
+      { key: 'proj-y', name: 'Y', goal: 'gy', done: 'dy', idRe: '^py-', next_goal: 'Ship Y next.' },
       { key: 'proj-z', name: 'Z', goal: 'gz', done: 'dz', idRe: '^pz-', terminalLanes: ['pz-1'], parked: true },
     ],
   }));
@@ -157,6 +162,12 @@ before(async () => {
   await addEvent('py-kdone', 'kanban', '2026-11-06T15:00:00Z', {
     body: 'py-kdone state review -> done', detail: { kind: 'state', from: 'review', to: 'done', text: 'kanban card' },
   });
+  // fleetops-category-expand: a held lane with a live lease and a GOAL note; a held parked lane.
+  const live = new Date(Date.now() + 2 * HOUR_MS).toISOString();
+  await addLane({ id: 'py-held', state: 'active', created: '2026-11-04T15:00:00Z', owner: S1, lease: live,
+    note: 'GOAL: build the expand rows. | NEXT: run 34/34 at abc1234 SECRET-TAIL' });
+  await addLane({ id: 'py-parked', state: 'review', created: '2026-11-04T15:00:00Z', owner: S1, lease: live,
+    note: 'PARKED until 2026-11-20 09:00 CST -- SECRET-REASON || GOAL: wait for the seat.' });
   // M2: a session handle in a title must be masked.
   await addLane({ id: 'py-title', created: '2026-11-04T15:00:00Z', title: `Resume session #aaaa1111 handoff #12 and #abcdef12 ${'tail '.repeat(60)}end` });
   await addLane({ id: 'py-reassign', created: '2026-11-01T15:00:00Z' });
@@ -207,6 +218,7 @@ const ALLOWED_LANE_KEYS = [
   'band', 'claims', 'created_at', 'created_day', 'dave_ask_at', 'done_at', 'done_day', 'first_claim_at', 'has_done_when',
   'held', 'id', 'last_work_at', 'lease_expires_at', 'priority', 'project', 'state', 'terminal', 'title', 'track',
 ];
+const HELD_LANE_KEYS = [...ALLOWED_LANE_KEYS, 'goal', 'holder', 'parked'].sort();
 
 describe('export-dash-data.mjs against a scratch database', () => {
   let dir;
@@ -251,8 +263,8 @@ describe('export-dash-data.mjs against a scratch database', () => {
   it('lanes rows have exactly the allowlisted keys and only this board (greymatter-design is absent)', () => {
     // Breaks if a column such as note, scope, rationale or done_when text is added, or the board filter is lost.
     const lanes = readDoc(dir, 'lanes').rows;
-    for (const l of lanes) assert.deepEqual(Object.keys(l).sort(), ALLOWED_LANE_KEYS, l.id);
-    assert.deepEqual(lanes.map((l) => l.id).sort(), ['px-1', 'px-2', 'px-3', 'px-4', 'py-1', 'py-ask-claim', 'py-ask-latest', 'py-before-only', 'py-early-done', 'py-edge', 'py-kanban', 'py-kb-card', 'py-kdone', 'py-negation', 'py-note', 'py-notice', 'py-quick', 'py-reassign', 'py-slow', 'py-stale', 'py-title', 'pz-1']);
+    for (const l of lanes) assert.deepEqual(Object.keys(l).sort(), l.held ? HELD_LANE_KEYS : ALLOWED_LANE_KEYS, l.id);
+    assert.deepEqual(lanes.map((l) => l.id).sort(), ['px-1', 'px-2', 'px-3', 'px-4', 'py-1', 'py-ask-claim', 'py-ask-latest', 'py-before-only', 'py-early-done', 'py-edge', 'py-held', 'py-kanban', 'py-kb-card', 'py-kdone', 'py-negation', 'py-note', 'py-notice', 'py-parked', 'py-quick', 'py-reassign', 'py-slow', 'py-stale', 'py-title', 'pz-1']);
     assert.ok(!readAll(dir).includes('gm-1'));
   });
 
@@ -262,6 +274,26 @@ describe('export-dash-data.mjs against a scratch database', () => {
     for (const secret of ['SECRET', ...HANDLES, S1, S2, S3]) assert.ok(!text.includes(secret), `leaked ${secret}`);
     assert.ok(!/"handle"/.test(text));
     assert.equal(readDoc(dir, 'lanes').rows.find((l) => l.id === 'px-1').has_done_when, true);
+  });
+
+  it('a held lane exports only its GOAL sentence and session name; a gone holder is not named; the raw note never passes', () => {
+    // Breaks if the note leaks (SHA, test counts, park reason), the uuid leaks, or an ended lease still names the holder.
+    const rows = readDoc(dir, 'lanes').rows;
+    const held = rows.find((l) => l.id === 'py-held');
+    assert.deepEqual([held.goal, held.holder, held.parked], ['build the expand rows.', 'Builder one', false]);
+    const parked = rows.find((l) => l.id === 'py-parked');
+    assert.deepEqual([parked.goal, parked.holder, parked.parked], ['wait for the seat.', 'Builder one', true]);
+    const gone = rows.find((l) => l.id === 'py-ask-claim');
+    assert.deepEqual([gone.goal, gone.holder, gone.parked], [null, null, false]);
+    const text = readAll(dir).replace(/"sql":\s*"(?:[^"\\]|\\.)*"/g, '');
+    for (const bad of ['abc1234', '34/34', 'SECRET-TAIL', 'SECRET-REASON', 'Gone session']) assert.ok(!text.includes(bad), `leaked ${bad}`);
+  });
+
+  it('projects rows carry next_goal from the rules', () => {
+    // Breaks if next_goal is dropped between lane-projects.json and projects.json.
+    const p = readDoc(dir, 'projects').rows;
+    assert.equal(p.find((r) => r.key === 'proj-y').next_goal, 'Ship Y next.');
+    assert.equal(p.find((r) => r.key === 'proj-x').next_goal, '');
   });
 
   it('masks a #<8 hex> session handle in a title and keeps other #numbers (M2)', () => {
@@ -300,7 +332,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
     assert.equal(px2.done_at, null);
     assert.equal(px2.done_day, null);
     assert.equal(px2.last_work_at, '2026-11-02T18:00:00.000Z');
-    assert.equal(readDoc(dir, 'meta').rows[0].open_check, 15);
+    assert.equal(readDoc(dir, 'meta').rows[0].open_check, 17);
   });
 
   it('a lane with zero events has null timestamps and zero claims', () => {
@@ -390,9 +422,9 @@ describe('export-dash-data.mjs against a scratch database', () => {
     // Breaks if the snapshot row is appended twice per day or the previous file is not kept.
     const snaps = readDoc(dir, 'snapshots').rows;
     assert.equal(snaps.length, 1);
-    assert.equal(snaps[0].open, 15);
+    assert.equal(snaps[0].open, 17);
     assert.equal(snaps[0].p0_open, 1);
-    assert.equal(snaps[0].never_claimed_open, 13); // px-4, px-3, px-2, py-1, py-note, py-notice, py-stale, py-ask-latest, py-kanban, py-before-only, py-kb-card, py-negation, py-title have no claim event
+    assert.equal(snaps[0].never_claimed_open, 15); // py-held, py-parked, px-4, px-3, px-2, py-1, py-note, py-notice, py-stale, py-ask-latest, py-kanban, py-before-only, py-kb-card, py-negation, py-title have no claim event
     const second = runExport(['--out', dir, '--rules', state.rules]);
     assert.equal(second.code, 0, second.all);
     assert.equal(readDoc(dir, 'snapshots').rows.length, 1);

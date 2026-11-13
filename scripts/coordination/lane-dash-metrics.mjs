@@ -56,6 +56,52 @@ export const DEFAULT_CATEGORY_ROWS = 9;
 export const NO_CATEGORY_KEY = 'unassigned';
 export const NO_CATEGORY_NAME = 'No category yet';
 export const HOURS_TOKEN = '{h}';
+/** Longest exported GOAL sentence, ellipsis included. */
+export const GOAL_MAX = 200;
+
+const PARK_PREFIX = 'PARKED until ';
+const GOAL_TAG = 'GOAL:';
+const GOAL_STOPS = [' | ', 'WAITS ON', 'NEXT', 'MS:'];
+// A SHA: 7 to 40 hex characters with at least one digit and one letter, so "faded" and "2026111" stay.
+const SHA_RUN = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/gi;
+
+/** True when lane.mjs park wrote the note: "PARKED until <time> -- <reason> || <old note>". */
+export function isParkedNote(note) {
+  return typeof note === 'string' && note.startsWith(PARK_PREFIX);
+}
+
+/** Cuts text at a word boundary and ends it with "…". Text that fits is returned as it is. */
+function cutWords(s, max) {
+  if (s.length <= max) return s;
+  const room = s.slice(0, max - 1);
+  const space = room.lastIndexOf(' ');
+  const keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room);
+  return `${keep.trimEnd()}…`;
+}
+
+/**
+ * The plain-English GOAL sentence that starts a lane note (board order, seat 2026-11-13), or null.
+ * A park note is cut through its first " || ", as lane.mjs unparkedNote does. The sentence ends at the first
+ * " | ", "WAITS ON", "NEXT" or "MS:". Handles and SHAs are masked. Never returns any other part of the note.
+ */
+export function goalOf(note) {
+  if (typeof note !== 'string') return null;
+  let s = note.trim();
+  if (isParkedNote(s)) {
+    const at = s.indexOf(' || ');
+    if (at < 0) return null;
+    s = s.slice(at + 4).trim();
+  }
+  if (!s.startsWith(GOAL_TAG)) return null;
+  s = s.slice(GOAL_TAG.length);
+  const end = Math.min(...GOAL_STOPS.map((t) => s.indexOf(t)).filter((i) => i >= 0), s.length);
+  const text = s.slice(0, end)
+    .replace(/#[0-9a-f]{8}\b/gi, '#[handle]')
+    .replace(SHA_RUN, '[sha]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text ? cutWords(text, GOAL_MAX) : null;
+}
 export const TILE_COLUMNS = ['id', 'tile', 'kind', 'rank', 'value', 'text', 'tone'];
 
 // ---------------------------------------------------------------- words (moved out of the views)
@@ -742,6 +788,7 @@ function tile9(add, c, cats) {
     const k = i + 1;
     const pre = `cat.row.${k}`;
     add(`${pre}.name`, 'row', { rank: k, text: cleanText(r.name) });
+    add(`${pre}.key`, 'row', { rank: k, text: r.key });
     add(`${pre}.closed`, 'row', { rank: k, value: r.closed, text: `${r.closed} of ${r.total} closed` });
     add(`${pre}.total`, 'row', { rank: k, value: r.total });
     if (r.parked) add(`${pre}.chip.parked`, 'chip', { rank: k, text: 'Parked', tone: 'neutral' });

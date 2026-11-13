@@ -13,7 +13,7 @@ import test, { mock } from 'node:test';
 
 import {
   DEFAULT_CATEGORY_ROWS, DEFAULT_PROJECT_ROWS, DEFAULT_SHOW_ROWS, HOURS_TOKEN, NO_CATEGORY_NAME, STATE_WORD, STATUS_WORD, TILE_COLUMNS,
-  addDays, assignmentTile, buildTileRows, categoryRows, chicagoDay, dailyRows, daveQueue, verdictTile, formatChicago, formatDay, freshSentence,
+  GOAL_MAX, addDays, assignmentTile, buildTileRows, goalOf, isParkedNote, categoryRows, chicagoDay, dailyRows, daveQueue, verdictTile, formatChicago, formatDay, freshSentence,
   growthState, hasPriorWindow, hoursOld, isStale, neverStarted, niceTicks, p0Sentence, p0Tile, pileTile,
   pluralize, projectRows, showWipBar, sign, staleChipText, staleSentence, takeaway, targetMap, trendState, windowOf, wipTile,
 } from './lane-dash-metrics.mjs';
@@ -967,4 +967,69 @@ test('tiles 8 to 10: an empty board gives words, not a throw', () => {
   assert.equal(text(rows, 'cat.row.1.name'), 'No category yet');
   assert.equal(text(rows, 'cat.row.1.closed'), '0 of 0 closed');
   assert.equal(text(rows, 'daily.row.7.label'), 'today so far');
+});
+
+// ---------------------------------------------------------------- goalOf (fleetops-category-expand)
+
+test('goalOf: keeps only the sentence before " | "; the SHA and test counts after it never pass', () => {
+  // Breaks if the cut at " | " goes: the rest of a lane note holds SHAs and test text.
+  assert.equal(goalOf('GOAL: let Dave see the work. | NEXT: run 34/34 at abc1234 | MS: x.md'), 'let Dave see the work.');
+});
+
+test('goalOf: each stop word cuts, whichever comes first', () => {
+  // Breaks if one stop word is dropped from the list, or the latest stop wins over the first.
+  assert.equal(goalOf('GOAL: a b WAITS ON the seat'), 'a b');
+  assert.equal(goalOf('GOAL: a b NEXT: tests'), 'a b');
+  assert.equal(goalOf('GOAL: a b MS: C:/x.md'), 'a b');
+  assert.equal(goalOf('GOAL: a NEXT b WAITS ON c | d'), 'a');
+});
+
+test('goalOf: "GOAL:" must start the note; later in the note it does not count', () => {
+  // Breaks if the parser searches for GOAL: anywhere: an old note after "|| before:" would leak a stale goal.
+  assert.equal(goalOf('Dave (kanban): moved || before: GOAL: old goal'), null);
+  assert.equal(goalOf('  GOAL: spaced  '), 'spaced');
+});
+
+test('goalOf: a park note is cut through its first " || " as lane.mjs writes it', () => {
+  // Breaks if only "PARKED until ... -- " is skipped: the park reason would come first and hide the GOAL.
+  const note = 'PARKED until 2026-11-14 09:00 CST -- waits on Dave || GOAL: ship the expand rows. | NEXT: page';
+  assert.equal(goalOf(note), 'ship the expand rows.');
+  assert.equal(goalOf('PARKED until 2026-11-14 09:00 CST -- waits on Dave'), null);
+});
+
+test('goalOf: a session handle and a SHA inside the sentence are masked', () => {
+  // Breaks if the handle rule or the 7 to 40 hex rule (seat word 10:51) goes.
+  assert.equal(goalOf('GOAL: help #0f5ea433 land 71e3bc68 and 4c4b5eb5d1'), 'help #[handle] land [sha] and [sha]');
+  // A word of only a to f letters, or only digits, is not a SHA.
+  assert.equal(goalOf('GOAL: a faded 2026111 decade'), 'a faded 2026111 decade');
+});
+
+test('goalOf: a long sentence is cut at a word boundary with an ellipsis', () => {
+  // Breaks if there is no cut (lanes.json size) or the cut splits a word.
+  const g = goalOf(`GOAL: ${'word '.repeat(80)}`);
+  assert.ok(g.length <= GOAL_MAX, String(g.length));
+  assert.ok(g.endsWith('…'));
+  assert.match(g.slice(0, -1), /\bword$/);
+});
+
+test('goalOf: no GOAL gives null, never the raw note', () => {
+  // Breaks if a missing goal falls back to the note text.
+  for (const n of [null, undefined, 42, '', 'just a status', 'GOAL:', 'GOAL:   | NEXT: x']) assert.equal(goalOf(n), null, String(n));
+});
+
+test('isParkedNote: true only for a note that starts with "PARKED until "', () => {
+  // Breaks if a parked held lane reads as active work (seat word 10:51, item 6a).
+  assert.equal(isParkedNote('PARKED until 2026-11-14 -- x || GOAL: y'), true);
+  assert.equal(isParkedNote('GOAL: y | PARKED until later'), false);
+  assert.equal(isParkedNote(null), false);
+});
+
+test('tile 9: each category row carries its project key; "No category yet" has key unassigned', () => {
+  // Breaks if the page cannot find a row's cards in lanes.json (it filters on this key).
+  const rows = catBuild();
+  const f = { ...fixture(), ...catFixture() };
+  const keys = categoryRows(f.projects, f.lanes, f.meta, f.targets ?? TARGETS).rows.map((r) => r.key);
+  keys.forEach((k, i) => assert.equal(text(rows, `cat.row.${i + 1}.key`), k));
+  assert.equal(text(rows, `cat.row.${keys.length}.key`), 'unassigned');
+  assert.ok(keys.length >= 2);
 });
