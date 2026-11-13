@@ -231,7 +231,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
   it('exits 0 and writes the eight documents plus the refresh doc', () => {
     // Breaks if the script fails on the fixture or skips a document (tiles.json and flow.json included).
     assert.equal(run.code, 0, run.all);
-    assert.deepEqual(fs.readdirSync(dir).sort(), ['assignments.json', 'flow.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['assignments.json', 'flow.json', 'lanes-all.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
   });
 
   it('tiles.json: flat rows from the real database figures, titles allowed, no handle, TREX name stripped', () => {
@@ -262,8 +262,10 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('lanes rows have exactly the allowlisted keys and only this board (greymatter-design is absent)', () => {
     // Breaks if a column such as note, scope, rationale or done_when text is added, or the board filter is lost.
-    const lanes = readDoc(dir, 'lanes').rows;
+    const lanes = readDoc(dir, 'lanes-all').rows;
     for (const l of lanes) assert.deepEqual(Object.keys(l).sort(), l.held ? HELD_LANE_KEYS : ALLOWED_LANE_KEYS, l.id);
+    // The written lanes.json is the open subset of the full list (fleetops-lanes-file-size).
+    assert.deepEqual(readDoc(dir, 'lanes').rows.map((l) => l.id).sort(), lanes.filter((l) => l.state !== 'done').map((l) => l.id).sort());
     assert.deepEqual(lanes.map((l) => l.id).sort(), ['px-1', 'px-2', 'px-3', 'px-4', 'py-1', 'py-ask-claim', 'py-ask-latest', 'py-before-only', 'py-early-done', 'py-edge', 'py-held', 'py-kanban', 'py-kb-card', 'py-kdone', 'py-negation', 'py-note', 'py-notice', 'py-parked', 'py-quick', 'py-reassign', 'py-slow', 'py-stale', 'py-title', 'pz-1']);
     assert.ok(!readAll(dir).includes('gm-1'));
   });
@@ -273,12 +275,12 @@ describe('export-dash-data.mjs against a scratch database', () => {
     const text = readAll(dir);
     for (const secret of ['SECRET', ...HANDLES, S1, S2, S3]) assert.ok(!text.includes(secret), `leaked ${secret}`);
     assert.ok(!/"handle"/.test(text));
-    assert.equal(readDoc(dir, 'lanes').rows.find((l) => l.id === 'px-1').has_done_when, true);
+    assert.equal(readDoc(dir, 'lanes-all').rows.find((l) => l.id === 'px-1').has_done_when, true);
   });
 
   it('a held lane exports only its GOAL sentence and session name; a gone holder is not named; the raw note never passes', () => {
     // Breaks if the note leaks (SHA, test counts, park reason), the uuid leaks, or an ended lease still names the holder.
-    const rows = readDoc(dir, 'lanes').rows;
+    const rows = readDoc(dir, 'lanes-all').rows;
     const held = rows.find((l) => l.id === 'py-held');
     assert.deepEqual([held.goal, held.holder, held.parked], ['build the expand rows.', 'Builder one', false]);
     const parked = rows.find((l) => l.id === 'py-parked');
@@ -298,14 +300,14 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('masks a #<8 hex> session handle in a title and keeps other #numbers (M2)', () => {
     // Breaks if the title is exported as it is: a handle in a lane title would reach the dashboard.
-    const t = readDoc(dir, 'lanes').rows.find((l) => l.id === 'py-title').title;
+    const t = readDoc(dir, 'lanes-all').rows.find((l) => l.id === 'py-title').title;
     assert.ok(t.startsWith('Resume session #[handle] handoff #12 and #[handle] tail'), t);
     assert.ok(!/#[0-9a-f]{8}/.test(t));
   });
 
   it('cuts a long title at a word boundary within TITLE_MAX (not at 110 characters mid-word)', () => {
     // Breaks if the SQL still cuts at 110, the export does not cut at all, or the cut splits a word.
-    const t = readDoc(dir, 'lanes').rows.find((l) => l.id === 'py-title').title;
+    const t = readDoc(dir, 'lanes-all').rows.find((l) => l.id === 'py-title').title;
     assert.ok(t.length > 110 && t.length <= 160, `length ${t.length}`);
     assert.ok(t.endsWith('…'));
     assert.match(t.slice(0, -1), /\btail$/);
@@ -313,7 +315,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('repeat done counts the lane once and takes the latest done event; day buckets are America/Chicago', () => {
     // Breaks if done_at is the first done event, or the day is the UTC date.
-    const px1 = readDoc(dir, 'lanes').rows.find((l) => l.id === 'px-1');
+    const px1 = readDoc(dir, 'lanes-all').rows.find((l) => l.id === 'px-1');
     assert.equal(px1.state, 'done');
     assert.equal(px1.done_at, '2026-11-02T05:30:00.000Z');
     assert.equal(px1.done_day, '2026-11-01'); // 23:30 CST on 11-01, not 11-02
@@ -327,7 +329,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('a done lane that was reopened has done_at null and counts as open', () => {
     // Breaks if done_at is "any done event" instead of "done event while state = done".
-    const px2 = readDoc(dir, 'lanes').rows.find((l) => l.id === 'px-2');
+    const px2 = readDoc(dir, 'lanes-all').rows.find((l) => l.id === 'px-2');
     assert.equal(px2.state, 'ready');
     assert.equal(px2.done_at, null);
     assert.equal(px2.done_day, null);
@@ -337,7 +339,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('a lane with zero events has null timestamps and zero claims', () => {
     // Breaks if the events join drops lanes that have no events.
-    const l = readDoc(dir, 'lanes').rows.find((x) => x.id === 'py-1');
+    const l = readDoc(dir, 'lanes-all').rows.find((x) => x.id === 'py-1');
     assert.equal(l.first_claim_at, null);
     assert.equal(l.last_work_at, null);
     assert.equal(l.dave_ask_at, null);
@@ -347,13 +349,13 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('notes do not count as work (defect d)', () => {
     // Breaks if last_work includes kind note (export-c.mjs:27).
-    const l = readDoc(dir, 'lanes').rows.find((x) => x.id === 'py-note');
+    const l = readDoc(dir, 'lanes-all').rows.find((x) => x.id === 'py-note');
     assert.equal(l.last_work_at, null);
   });
 
   it('dave_ask_at is the time of the latest needs-Dave EVENT, never lane.note (defect c)', () => {
     // Breaks if the export reads lane.note, or takes the earliest ask, or ignores kanban asks, or counts any later note.
-    const by = Object.fromEntries(readDoc(dir, 'lanes').rows.map((l) => [l.id, l]));
+    const by = Object.fromEntries(readDoc(dir, 'lanes-all').rows.map((l) => [l.id, l]));
     assert.equal(by['py-note'].dave_ask_at, '2026-11-05T15:00:00.000Z');
     assert.equal(by['py-stale'].dave_ask_at, null, 'lane.note says needs Dave but no event does');
     assert.equal(by['py-ask-latest'].dave_ask_at, '2026-11-07T15:00:00.000Z');
@@ -364,7 +366,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('dave_ask_at reads only the text before " || before:", and only a "moved into waiting" kanban event (M1)', () => {
     // Breaks if the match runs on the kept old note, a kanban card note counts, or a negation counts.
-    const by = Object.fromEntries(readDoc(dir, 'lanes').rows.map((l) => [l.id, l]));
+    const by = Object.fromEntries(readDoc(dir, 'lanes-all').rows.map((l) => [l.id, l]));
     assert.equal(by['py-before-only'].dave_ask_at, null, 'the ask is only in the kept old note');
     assert.equal(by['py-kb-card'].dave_ask_at, null, 'a kanban card note is not a move into waiting');
     assert.equal(by['py-negation'].dave_ask_at, null, '"no longer needs Dave" is not an ask');
@@ -373,7 +375,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('a lane marked done by kanban-apply (kind kanban, state to done) has done_at, done_day and last_work_at (H1)', () => {
     // Breaks if done_ev or last_work read only kind 'done': the lane is state done with no done_at and the open count check fails.
-    const l = readDoc(dir, 'lanes').rows.find((x) => x.id === 'py-kdone');
+    const l = readDoc(dir, 'lanes-all').rows.find((x) => x.id === 'py-kdone');
     assert.equal(l.state, 'done');
     assert.equal(l.done_at, '2026-11-06T15:00:00.000Z');
     assert.equal(l.done_day, '2026-11-06');
@@ -588,7 +590,7 @@ describe('flow.json against a scratch database', () => {
     // Breaks if SQL_REWORK returns a body or a session, or a row writes a lane id or title.
     const text = JSON.stringify(flow);
     for (const secret of ['SECRET', ...HANDLES, S1, S2, S3, 'gm-1', 'Title of', 'greymatter']) assert.ok(!text.includes(secret), `leaked ${secret}`);
-    for (const l of readDoc(dir, 'lanes').rows) assert.ok(!text.includes(l.id), `leaked lane id ${l.id}`);
+    for (const l of readDoc(dir, 'lanes-all').rows) assert.ok(!text.includes(l.id), `leaked lane id ${l.id}`);
     for (const r of flow.rows) assert.equal(r.tone, null, r.id);
     assert.equal(get('flow.week.claimed.label').text, 'lanes claimed, not claim events');
     assert.equal(get('flow.week.rework.done.label').text, 'done lanes, including reopened');
@@ -613,7 +615,7 @@ describe('failure paths', () => {
       const d = outDir('born');
       const r = runExport(['--out', d, '--rules', state.rules]);
       assert.equal(r.code, 0, r.all);
-      const row = readDoc(d, 'lanes').rows.find((l) => l.id === 'born-done');
+      const row = readDoc(d, 'lanes-all').rows.find((l) => l.id === 'born-done');
       assert.equal(row.state, 'done');
       assert.equal(row.done_at, null);
       assert.equal(row.done_day, null);
@@ -623,7 +625,7 @@ describe('failure paths', () => {
     }
   });
 
-  it('exits non-zero and writes nothing when a done lane has no done signal of either kind (open count mismatch)', async () => {
+  it('exits non-zero and writes no data file (only export-error.json) when a done lane has no done signal of either kind (open count mismatch)', async () => {
     // Breaks if the rebuilt-versus-direct open count check is removed. The lane has kanban events that are NOT a move to done.
     await addLane({ id: 'bad-done', state: 'done', created: '2026-11-05T15:00:00Z' });
     await addEvent('bad-done', 'kanban', '2026-11-05T16:00:00Z', { body: 'bad-done state ready -> review', detail: { kind: 'state', from: 'ready', to: 'review' } });
@@ -633,7 +635,7 @@ describe('failure paths', () => {
       const r = runExport(['--out', d, '--rules', state.rules]);
       assert.notEqual(r.code, 0);
       assert.match(r.all, /open count/);
-      assert.equal(fs.existsSync(d) ? fs.readdirSync(d).length : 0, 0);
+      assert.deepEqual(fs.existsSync(d) ? fs.readdirSync(d) : [], ['export-error.json']);
     } finally {
       await q('DELETE FROM agentic_os.lane WHERE id = $1', ['bad-done']);
     }
