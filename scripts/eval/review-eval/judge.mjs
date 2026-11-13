@@ -55,11 +55,18 @@ export function parseVerdict(stdout) {
   return { ok: true, sameIssue: same, verdict, confidence: Number.isFinite(c) ? Math.min(5, Math.max(1, Math.round(c))) : null, reason: clip(obj.reason, 500) };
 }
 
-/** { same, confidence, reason, verdict } or { error: 'cap' | 'timeout' | 'parse' }. Never throws. */
+/** The error of a failed judge run: cap, served-model (with the model that answered) or timeout. */
+const failure = (res) => {
+  if (res?.reason === 'cap') return { error: 'cap' };
+  if (res?.reason === 'served-model') return { error: 'served-model', servedModel: res.servedModel ?? null };
+  return { error: 'timeout' };
+};
+
+/** { same, confidence, reason, verdict } or { error: 'cap' | 'served-model' | 'timeout' | 'parse' }. Never throws. */
 export async function judgeSameIssue({ cr, eng, hunk }, { runJudge }) {
   let res;
   try { res = await runJudge(judgePrompt({ cr, eng, hunk })); } catch { return { error: 'timeout' }; }
-  if (!res?.ok) return { error: res?.reason === 'cap' ? 'cap' : 'timeout' };
+  if (!res?.ok) return failure(res);
   const v = parseVerdict(res.stdout);
   if (!v.ok) return { error: 'parse' };
   return { same: v.sameIssue === 'yes', confidence: v.confidence, reason: v.reason };
@@ -69,7 +76,7 @@ export async function judgeSameIssue({ cr, eng, hunk }, { runJudge }) {
 export async function judgePair(pair, { runJudge }) {
   let res;
   try { res = await runJudge(judgePrompt(pair)); } catch { return { ok: false, error: 'timeout' }; }
-  if (!res?.ok) return { ok: false, error: res?.reason === 'cap' ? 'cap' : 'timeout' };
+  if (!res?.ok) return { ok: false, ...failure(res) };
   return parseVerdict(res.stdout);
 }
 

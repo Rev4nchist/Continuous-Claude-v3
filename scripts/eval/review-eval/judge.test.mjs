@@ -7,7 +7,7 @@
 //  prompt: PR text is fenced as untrusted data and the hunk is inline
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { judgePrompt, judgeSameIssue, parseVerdict, resolveJudged } from './judge.mjs';
+import { judgePair, judgePrompt, judgeSameIssue, parseVerdict, resolveJudged } from './judge.mjs';
 
 const envelope = (inner) => `${JSON.stringify({ type: 'result', subtype: 'success', result: inner, total_cost_usd: 0.01 })}\n`;
 const good = JSON.stringify({ sameIssue: 'yes', real: 'real', confidence: 5, reason: 'both name the unchecked null' });
@@ -49,6 +49,15 @@ test('sF11 a judge error is never "same": cap, timeout and parse errors come bac
   const parse = await judgeSameIssue(pair, { runJudge: async () => ({ ok: true, stdout: 'not json' }) });
   assert.deepEqual(parse, { error: 'parse' });
   for (const r of [cap, timeout, parse]) assert.equal('same' in r, false);
+});
+
+test('a served-model fault comes back as error served-model with the model name, from judgeSameIssue and judgePair', async () => {
+  // Breaks when: judge.mjs maps every non-cap failure to 'timeout' again (the shadow run could not see a wrong model and would spend every call).
+  const pair = { cr: { title: 't', body: 'b' }, eng: { title: 't2', body: 'b2' }, hunk: '' };
+  const runJudge = async () => ({ ok: false, reason: 'served-model', servedModel: 'claude-opus-4-1' });
+  assert.deepEqual(await judgeSameIssue(pair, { runJudge }), { error: 'served-model', servedModel: 'claude-opus-4-1' });
+  assert.deepEqual(await judgePair(pair, { runJudge }), { ok: false, error: 'served-model', servedModel: 'claude-opus-4-1' });
+  assert.deepEqual(await judgePair(pair, { runJudge: async () => ({ ok: false, reason: 'cap' }) }), { ok: false, error: 'cap' });
 });
 
 test('judgeSameIssue never throws when runJudge rejects', async () => {

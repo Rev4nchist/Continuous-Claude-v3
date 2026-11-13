@@ -348,3 +348,60 @@ test('the default shadow engine still replays with the cursor-review reviewer: i
   await engine({ pr: 1, rank: 1, sha40: sha('a') });
   assert.equal(seen[0].reviewer, 'cursor-review');
 });
+
+test('a judge served by another model stops the batch: one judge call for 3 pairs, the model in the log, a non-zero exit', async () => {
+  // Breaks when: shadow treats a served-model fault as one pending pair and goes on (every later judge call is spent for no verdict).
+  const root = mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'shadow-served-'));
+  const A = sha('a');
+  const gh = async (args) => {
+    const route = args[args.length - 1];
+    if (route.includes('/reviews')) return [[{ id: 11, user: CR, body: '**Actionable comments posted: 3**', commit_id: A, submitted_at: '2026-11-01T01:00:00Z' }]];
+    if (route.includes('/issues/300/comments')) return [[]];
+    if (route.includes('/commits')) return [[{ sha: A }]];
+    if (route.includes('/pulls/300/comments')) return [[10, 50, 90].map((l, i) => ({ id: 90 + i, user: CR, in_reply_to_id: null, original_commit_id: A, original_line: l, path: 'a.mjs', body: `**Bug ${i}**` }))];
+    return { user: { login: 'dave' }, state: 'open', merged_at: null };
+  };
+  const git = (args) => (args[0] === 'merge-base' ? { status: 0, stdout: `${sha('b')}\n` } : { status: 0, stdout: '' });
+  const findingsPath = path.join(root, 'f.json');
+  // Engine findings in the same file, 20 lines away: no line match, so all 3 CR findings go to the judge.
+  writeFileSync(findingsPath, JSON.stringify({ timedOut: false, findings: [30, 70, 110].map((line) => ({ file: 'a.mjs', line, lineEnd: null, severity: 'major', title: 't' })) }));
+  const replayRun = async (args) => ({ exit: 0, status: 'ok', pr: args.pr, round: args.round, record: { sha40: A }, findingsPath });
+  let calls = 0;
+  const runJudge = async () => { calls += 1; return { ok: false, reason: 'served-model', servedModel: 'claude-opus-4-1' }; };
+  const errs = [];
+  const code = await main(['retro', '--from', '300', '--to', '300'], { root, cfg: { shadow: {}, freeze: { promptSha256: 'P' } }, gh, git, replayRun, runJudge, engineVersion: 'v1', now: () => 1_700_000_000_000, stdout: () => {}, stderr: (s) => errs.push(s) });
+  assert.equal(calls, 1, 'one judge call, then stop');
+  assert.notEqual(code, 0);
+  assert.match(errs.join('\n'), /claude-opus-4-1/);
+  const row = readFileSync(path.join(root, 'pairs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((r) => r.sha40 === A);
+  assert.equal(row.state, 'engine_pending', 'no verdict is counted');
+});
+
+test('after a judge stop no later round of the same PR starts an engine run', async () => {
+  // Breaks when: pairsForPr keeps its round loop after the served-model stop, so a later round spends a paid engine call.
+  const root = mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'shadow-served-rounds-'));
+  const A = sha('a');
+  const C = sha('c');
+  const gh = async (args) => {
+    const route = args[args.length - 1];
+    if (route.includes('/reviews')) return [[
+      { id: 11, user: CR, body: '**Actionable comments posted: 1**', commit_id: A, submitted_at: '2026-11-01T01:00:00Z' },
+      { id: 12, user: CR, body: '**Actionable comments posted: 0**', commit_id: C, submitted_at: '2026-11-01T02:00:00Z' },
+    ]];
+    if (route.includes('/issues/300/comments')) return [[]];
+    if (route.includes('/commits')) return [[{ sha: A }, { sha: C }]];
+    if (route.includes('/pulls/300/comments')) return [[{ id: 90, user: CR, in_reply_to_id: null, original_commit_id: A, original_line: 10, path: 'a.mjs', body: '**Bug**' }]];
+    return { user: { login: 'dave' }, state: 'open', merged_at: null };
+  };
+  const git = (args) => (args[0] === 'merge-base' ? { status: 0, stdout: `${sha('b')}\n` } : { status: 0, stdout: '' });
+  const findingsPath = path.join(root, 'f.json');
+  writeFileSync(findingsPath, JSON.stringify({ timedOut: false, findings: [{ file: 'a.mjs', line: 40, lineEnd: null, severity: 'major', title: 't' }] }));
+  const engineRounds = [];
+  const replayRun = async (args) => { engineRounds.push(args.round); return { exit: 0, status: 'ok', pr: args.pr, round: args.round, record: { sha40: args.round === 1 ? A : C }, findingsPath }; };
+  let calls = 0;
+  const runJudge = async () => { calls += 1; return { ok: false, reason: 'served-model', servedModel: 'claude-opus-4-1' }; };
+  const code = await main(['retro', '--from', '300', '--to', '300'], { root, cfg: { shadow: {}, freeze: { promptSha256: 'P' } }, gh, git, replayRun, runJudge, engineVersion: 'v1', now: () => 1_700_000_000_000, stdout: () => {}, stderr: () => {} });
+  assert.equal(calls, 1);
+  assert.deepEqual(engineRounds, [1], 'no engine call for round 2');
+  assert.notEqual(code, 0);
+});
