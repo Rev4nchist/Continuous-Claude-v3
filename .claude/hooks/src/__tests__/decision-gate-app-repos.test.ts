@@ -58,6 +58,9 @@
  *       MASTER, Develop; F7 60 runs of a long hostile command over 1 s (WIDE_OPT backtracking); F8 an open-pr tap for one base licenses
  *       another -> quiet outside the strict reader; drop rawPushDenies; judge the move in the cwd only; last -C only; cwd-upward flag
  *       read; case-sensitive compare; overlapping option alternatives; openPrKey without the base.
+ *   Re-pinned by fixer P (fix round 6, the verb rule; rows in decision-gate-app-repos-verb.test.ts): C11 R5 F4 (-C /work -C app-x from a
+ *       CCv3 cwd: the old row named one folder twice and could not fail), C11 and ruling A test -f / [ -d ] / chmod +x (the tap path,
+ *       allowed with the tap), R5 F2 alias -f (the tap path, not push-unsafe).
  *   Re-pinned by fixer M: C12 the GIT_DIR row of an unregistered cwd (an app-repo GIT_DIR now denies, scope app-push; /x/.git keeps scope
  *       push); C26 item 2 'a dry run behind a hidden global option' (it was a pass: quiet is read only inside the strict reader); C1 the
  *       create-from-main and REST create rows and C15 the --base dev row (F8: the tap key holds the base). deps() serves the config at
@@ -75,7 +78,7 @@
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
 import { readRegistry } from '../shared/tap-scope.js';
@@ -681,12 +684,14 @@ describe('C11 every covered deny text names the judged folder, the full offer co
     ['R5 F1 push-unsafe (option value hides -f)', bash('git push -uo -n -f up main')],
     ['R5 F1 push-target-unresolved (option value hides -h)', bash('git push -uo -h up main')],
     ['R5 F2 push-unsafe (sh -c)', bash(`sh -c 'git push -f up topic'`)],
-    ['R5 push-unsafe (a force word of another command beside a push off the list)', bash('test -f x && git push up topic')],
+    ['R6 ship (a force word of another command beside a push: the tap path)', bash('test -f x && git push up topic')],
     ['R5 F8 base-unresolved (two bases)', bash('gh pr create --draft --head feat --base dev --title t --base main')],
     ['R5 F2 push-target-unresolved (eval)', bash(`eval 'git push up topic'`)],
     ['R5 F3 push-target-unresolved (GIT_DIR at the app repo, unregistered cwd)', bash('GIT_DIR=/work/app-x/.git git push up topic', '/work/stray')],
     ['R5 F3 push-target-unresolved (--git-dir at the app repo, CCv3 cwd)', bash('git --git-dir=/work/app-x/.git push up topic', '/work/cc')],
-    ['R5 F4 ship (-C chain into the app repo)', bash('git -C /work/app-x -C /work/app-x push up main', '/work/stray'), undefined, `${ASK} push --remote up --branch main --src main --dir '/work/app-x' --json`],
+    // Fix round 6 (item 4): the chain names /work/app-x only through BOTH -C values, from a CCv3 cwd. The base reading (last -C wins)
+    // runs in the uncovered <cwd>/app-x (platform path rules), so dropping the chain reading turns this row red.
+    ['R5 F4 ship (-C chain into the app repo)', bash('git -C /work -C app-x push up main', '/work/cc'), { folders: { ...FOLDERS, [slash(resolve('/work/cc', 'app-x'))]: { remotes: gh('acme/stray') } } }, `${ASK} push --remote up --branch main --src main --dir '/work/app-x' --json`],
     ['R5 F5 ship (an app config file does not warn)', bash('git push up main'), { appConfig: JSON.stringify({ decisions: { enforceAppPush: false } }) }],
     ['R5 F6 ship (Main)', bash('git push up Main'), { folders: { ...FOLDERS, '/work/app-x': { remotes: gh('acme/app-x'), trees: { Main: TREE } } } }],
     ['R5 F8 open-pr (with a base)', bash('gh pr create --draft --head feat --base dev --title t'), undefined, `${ASK} open-pr --remote up --branch feat --base dev --dir '/work/app-x' --json`],
@@ -1945,8 +1950,9 @@ describe('R5 F2: a push inside a control word, a substitution, a shell -c, eval 
     const plain = form('git push up topic');
     it(`R5 F2 tap: ${plain} is denied, scope app-push`, () => { expect(denyOf(bash(plain), devX())?.scope, plain).toBe('app-push'); });
   }
-  it('R5 F2 alias: git -c alias.x=push x -f up topic is push-unsafe; git -c alias.x=push x up topic is denied', () => {
-    expect(denyOf(bash('git -c alias.x=push x -f up topic'), devX())).toMatchObject(unsafe);
+  // Re-pinned by fix round 6 (verb rule): -c alias.<x>= defines the verb in the command, so the call takes the tap path, force or not.
+  it('R5 F2 alias: git -c alias.x=push x -f up topic and git -c alias.x=push x up topic are denied (the tap path)', () => {
+    expect(denyOf(bash('git -c alias.x=push x -f up topic'), devX())).toMatchObject(unresolved);
     expect(denyOf(bash('git -c alias.x=push x up topic'), devX())?.scope).toBe('app-push');
   });
 });
@@ -2077,15 +2083,12 @@ describe('R5 ruling A: the strict reading of the whole text, and what is no push
       expect(denyOf(bash(cmd), devX()), cmd).toMatchObject(unsafe);
     }
   });
-  // Ruling A says a force spelling ANYWHERE in the raw text: a word of another command counts too (accepted over-deny, listed for the
-  // seat). The text names the way out: the push as its own command. Change that breaks it: read the force words of the push call only.
-  it('accepted over-deny: test -f, [ -d ] or chmod +x beside a push off the list is push-unsafe, even with the tap; the text names the way out', () => {
+  // Re-pinned by fix round 6 (verb rule): a force word counts only in a push segment, so test -f, [ -d ] or chmod +x beside a push is no
+  // force: the push off the list takes the tap path and passes with its tap. Change that breaks it: read force words in the whole text.
+  it('test -f, [ -d ] or chmod +x beside a push off the list: the tap path, allowed with the tap', () => {
+    for (const cmd of ['test -f x && git push up topic', '[ -d dist ] && git push up topic', 'chmod +x s.sh && git push up topic']) tapPath(cmd, devX());
     shipX('Commit and push', 'topic');
-    for (const cmd of ['test -f x && git push up topic', '[ -d dist ] && git push up topic', 'chmod +x s.sh && git push up topic']) {
-      const r = denyOf(bash(cmd), devX());
-      expect(r, cmd).toMatchObject(unsafe);
-      expect(r!.reason, cmd).toContain('Run the push as its own command');
-    }
+    for (const cmd of ['test -f x && git push up topic', '[ -d dist ] && git push up topic', 'chmod +x s.sh && git push up topic']) allowed(bash(cmd), devX());
     expect(passes(bash('git push up topic'), devX())).toBe(true);
   });
   // Change that breaks it: count a push in sh -c as read when another push of the text has a shape (a tap for topic licenses it).

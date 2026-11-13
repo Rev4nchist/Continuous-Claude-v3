@@ -1351,7 +1351,7 @@ var WIDER_WHY = "git config makes this push write more than the branch it names;
 var appWiderConfigWhy = (dir, key) => `${WIDER_WHY}. The key: ${prose(key)} (folder ${at(dir)}).${key === "push.followtags" ? " With push.followTags set, add --no-follow-tags too." : ""} A tap cannot cover it: the tap names one branch.`;
 var appWiderOptWhy = (dir, opt) => `${prose(opt)} makes this push write more than the branch it names (tags, other branches or submodule repos) in ${at(dir)}, so it stays blocked even with Dave's tap: a tap names one branch. ${opt.startsWith("-c ") ? "Run git push with no -c push setting" : "Push without that option"}, or ask Dave.`;
 var appRawUnsafeWhy = (dir) => `this command holds a git push that is not one plain git push call, and a force or delete spelling is in its text (--force, --mirror, --delete, -f or -d in a short option bundle, or a word that starts with +; folder ${at(dir)}), so it stays blocked even with Dave's tap. Run the push as its own command with no such word in it: git push <remote> <branch>. If a force push is really needed, ask Dave to run it himself.`;
-var appUnreadWhy = (dir) => `this command holds a git push that this gate cannot read as one plain git push call (folder ${at(dir)}): a global option or an option it does not know, more than one -C, a shell -c, eval, a control word, a substitution or a git alias. No tap can be tied to it, so it stays blocked: run git push with no global option before push, as its own command: git push <remote> <branch> (git -C <folder> push is fine).`;
+var appUnreadWhy = (dir) => `this command holds a git push that this gate cannot read as one plain git push call (folder ${at(dir)}): a global option or an option it does not know, more than one -C, a shell -c, eval, a control word, a substitution or a git alias. No tap can be tied to it: run git push with no global option before push, as its own command: git push <remote> <branch> (git -C <folder> push is fine).`;
 var appBundleWhy = (dir) => `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
 var appSubagentWhy = (dir) => `a subagent cannot push in ${at(dir)}: Dave's tap belongs to the main session. Ask the main session to do it.`;
 var appHeadWhy = (dir) => `the head branch of this create cannot be named in ${at(dir)} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo folder on a branch.`;
@@ -1670,13 +1670,51 @@ function pushShapesOf(raw, tool) {
   return out3;
 }
 var squashMarks = (t) => t.replace(/["'\\^`]/g, "");
-var STASH_PUSH = /\bstash\s+push\b/gi;
 var WORD_SPLIT = /[\s;&|(){}<>=,]+/;
 var isPushWord = (w) => /^push$/i.test(w) || /(?:^|[\\/])git-push(?:\.exe)?$/i.test(w);
-function pushWordCount(raw) {
-  const s = squashMarks(raw);
-  if (!/git/i.test(s)) return 0;
-  return s.replace(STASH_PUSH, " ").split(WORD_SPLIT).filter(isPushWord).length;
+var GIT_WORD = /(?<![^\s;&|(){}`!])(?:(?:[^\s;&|(){}`'"]*[\\/])?(?:git(?:\.exe)?|git-(?:safe|for)\.ps1|(git-push(?:\.exe)?))|"[^"]*"|'[^']*')(?=\s|$)/gi;
+var isRunner = (rs, g) => {
+  const raw = rs.slice(g.index, g.index + g[0].length);
+  return !/^["']/.test(g[0]) || isGitToken(raw) || isSafeToken(raw, PUSH_WRAPPERS);
+};
+var VALUE_GLOBAL = /^(?:-C|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|-Pa(?:th?)?|-R(?:e(?:m(?:o(?:te?)?)?)?)?)$/i;
+var ODD_VERB = /[$`{}()%"'\\*?[\]]/;
+var WORDS = /(?:"[^"]*"|'[^']*'|[^\s"'])+/g;
+var PAYLOAD = /\b(?:(?:ba|z|da|k)?sh(?:\.exe)?\s+(?:-\w+\s+)*-\w*c\b|eval\b|cmd(?:\.exe)?\s+(?:\/\w+\s+)*\/[ck]\b|(?:pwsh|powershell)(?:\.exe)?\s.*?-c(?:ommand)?\b|Invoke-Expression\b|iex\b)|(?:\$\(|`)\s*(?:[^\s;&|()`'"]*[\\/])?git(?:\.exe)?\s/i;
+var holdsGitPush = (s) => {
+  const w = squashMarks(s).split(WORD_SPLIT);
+  return w.some((x) => /(?:^|[\\/])git(?:\.exe)?$/i.test(x)) && w.some(isPushWord);
+};
+function verbAt(ms, rs, g) {
+  if (g[1]) return "push";
+  const from = g.index + g[0].length;
+  const cut = ms.slice(from).search(ARGS_END_RE);
+  const words = [...ms.slice(from, cut < 0 ? ms.length : from + cut).matchAll(WORDS)].map((w) => rs.slice(from + w.index, from + w.index + w[0].length));
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!w.startsWith("-")) return ODD_VERB.test(w) ? "odd" : /^push$/i.test(w) ? "push" : "other";
+    if (w === "-c" && /^alias\./i.test(squashMarks(words[i + 1] ?? ""))) return "odd";
+    if (w === "-c" || VALUE_GLOBAL.test(w)) i++;
+  }
+  return null;
+}
+function verbsOf(raw, shell) {
+  const { view, masked } = viewOf(raw, shell);
+  const read = { pushes: 0, odd: false, segs: [] };
+  let from = 0;
+  for (const m of [...masked.matchAll(/[;&|\r\n]+/g), null]) {
+    const to = m === null ? masked.length : m.index;
+    const ms = masked.slice(from, to);
+    const rs = view.slice(from, to);
+    from = m === null ? to : to + m[0].length;
+    const verbs = [...ms.matchAll(GIT_WORD)].filter((g) => isRunner(rs, g)).map((g) => verbAt(ms, rs, g));
+    const pushes = verbs.filter((v) => v === "push").length;
+    const payload = PAYLOAD.test(rs) && holdsGitPush(rs);
+    read.pushes += pushes;
+    read.odd ||= payload || verbs.includes("odd");
+    if (pushes > 0 || payload) read.segs.push(rs);
+  }
+  return read;
 }
 var FORCE_LONG_NAMES = ["force", "force-with-lease", "force-if-includes", "mirror", "delete"];
 var isForceBundle = (w) => /^-[vqnfduoh46]+$/.test(w) && /[fd]/.test(w);
@@ -1705,21 +1743,17 @@ function strictWhole(raw, tool, shell) {
   const pushSegs = segmentsOf(fdBlank(raw), shell)?.seq.filter((k) => k === "push").length ?? -1;
   return calls.length === pushSegs && calls.every(strictAccounted);
 }
-function onlyNeighbours(raw, shell) {
-  const segs = segmentsOf(fdBlank(raw), shell);
-  return segs !== null && segs.seq.length > 0 && segs.seq.every((k) => k === "cd" || k === "read" || k === "commit");
-}
 function shapedCalls(raw, tool, shell) {
   const { view, masked } = viewOf(raw, shell);
   const shaped = (calls) => calls.filter((c) => pushShapesFrom(c).length > 0).length;
   return Math.max(shaped(pushCallsOf(masked, view, false)), shaped(pushCallsIn(raw, mayRunUnderCmd(tool)).filter((c) => c.squashed)));
 }
 function rawVerdict(raw, tool) {
-  const words = pushWordCount(raw);
   const shell = tool === "PowerShell" ? "pwsh" : "bash";
-  if (words === 0 || onlyNeighbours(raw, shell)) return null;
+  const read = verbsOf(raw, shell);
+  if (read.pushes === 0 && !read.odd) return null;
   if (strictWhole(raw, tool, shell)) return { kind: "ok", unread: false };
-  return { kind: forceSpelled(raw) ? "unsafe" : "tap", unread: words > shapedCalls(raw, tool, shell) };
+  return { kind: read.segs.some(forceSpelled) ? "unsafe" : "tap", unread: read.odd || read.pushes > shapedCalls(raw, tool, shell) };
 }
 function chainStep(base, value, shell) {
   const raw = value.includes("\\") ? unquotePath(value, shell) : value;
@@ -1735,18 +1769,27 @@ function chainDirsOf(p, cwd, shell) {
   return [...new Set(dirsAfter(cwd, p.cds, shell, p.loose).map((b) => chainDir(b, p.cdirs, shell)))].filter((d) => !isUnexpanded(d));
 }
 var MOVE_VALUE_RE = /(?:\bGIT_(?:DIR|WORK_TREE|COMMON_DIR)[ \t]*=[ \t]*|--(?:git-dir|work-tree)(?:=|\s+))(\S+)/gi;
-function moveTargets(raw, cwd, shell) {
+function moveTargets(raw, cwd, shell, home) {
   const out3 = [];
   for (const m of raw.replace(/["']/g, "").matchAll(MOVE_VALUE_RE)) {
-    const dir = chainStep(cwd, m[1].replace(/[;&|)]+$/, ""), shell);
-    if (isUnexpanded(dir)) continue;
-    out3.push(dir.replace(/[\\/]\.git(?:[\\/]worktrees[\\/][^\\/]+)?[\\/]*$/i, ""));
+    for (const dir of knownDirs([chainStep(cwd, m[1].replace(/[;&|)]+$/, ""), shell)], home)) out3.push(dir.replace(/[\\/]\.git(?:[\\/]worktrees[\\/][^\\/]+)?[\\/]*$/i, ""));
   }
   return [...new Set(out3)];
 }
+var HOME_LEAD = /^(?:~|\$HOME\b|\$\{HOME\}|\$env:USERPROFILE\b|%USERPROFILE%)(?=$|[\\/])/i;
+function knownDirs(dirs, home) {
+  return dirs.flatMap((d) => {
+    if (!isUnexpanded(d)) return [d];
+    const raw = d.slice(UNEXPANDED.length);
+    const lead = HOME_LEAD.exec(raw);
+    const rest = lead === null ? "" : raw.slice(lead[0].length);
+    if (lead === null || hasUnexpandedPart(rest.replace(/^[\\/]+/, ""))) return [];
+    return [home.startsWith("/") ? posix2.join(home, rest) : join6(home, rest)];
+  });
+}
 var firstCovered = (deps, dirs) => dirs.find((d) => coveredAmong(deps, [d]) !== null) ?? null;
 var RAW_CD = /^(?:cd|chdir|pushd|set-location|sl|push-location)$/i;
-function rawDirs(raw, tool, cwd, shell) {
+function rawDirs(raw, tool, cwd, shell, home) {
   const out3 = [cwd];
   for (const call of pushCallsIn(raw, mayRunUnderCmd(tool))) {
     for (const base of dirsAfter(cwd, call.cds, shell, true)) out3.push(base, chainDir(base, callDirsOf(call), shell));
@@ -1759,14 +1802,14 @@ function rawDirs(raw, tool, cwd, shell) {
     chained = chainStep(chained, words[i + 1], shell);
     out3.push(chained);
   }
-  return [.../* @__PURE__ */ new Set([...out3, ...moveTargets(raw, cwd, shell)])].filter((d) => !isUnexpanded(d));
+  return [.../* @__PURE__ */ new Set([...knownDirs(out3, home), ...moveTargets(raw, cwd, shell, home)])];
 }
 function rawPushDenies(raw, tool, deps, cwd, shell) {
   const v = rawVerdict(raw, tool);
   if (v === null || v.kind === "ok" || v.kind === "tap" && !v.unread) return [];
-  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell));
+  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
   if (dir === null) return [];
-  return [v.kind === "unsafe" ? deny("push-unsafe", appRawUnsafeWhy(dir), "app-push") : deny("push-target-unresolved", appUnreadWhy(dir), "app-push")];
+  return [v.kind === "unsafe" ? deny("push-unsafe", appRawUnsafeWhy(dir), "app-push") : { ...deny("push-target-unresolved", appUnreadWhy(dir), "app-push"), tapPath: true }];
 }
 function cmdSegments(view) {
   const out3 = [];
@@ -1837,16 +1880,17 @@ function shapesOf(raw, tool) {
 }
 var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforce");
 var enforcingPush = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforcePush");
-function enforcingAppPush(deps) {
+function homeFlag(deps, key) {
   try {
     const cfg = JSON.parse(deps.readFile(join6(deps.home, "continuous-claude", "review-router.config.json")) ?? "null");
-    return cfg?.decisions?.enforceAppPush !== false;
+    return cfg?.decisions?.[key];
   } catch {
-    return true;
+    return null;
   }
 }
-function enforcingScope(scope, deps, cwd) {
-  if (scope === "app-push") return enforcingAppPush(deps);
+function enforcingScope(scope, deps, cwd, homeOnly = false) {
+  if (scope === "app-push") return homeFlag(deps, "enforceAppPush") !== false;
+  if (homeOnly && scope === "other") return homeFlag(deps, "enforce") === true;
   return scope === "push" ? enforcingPush(deps, cwd) : enforcing(deps, cwd);
 }
 var FLAG_OF = { push: "decisions.enforcePush", other: "decisions.enforce", "app-push": "decisions.enforceAppPush" };
@@ -2171,8 +2215,9 @@ function judgeLand(shape, deps, dir, cmd) {
   return ok ? ALLOW : deny("land", landWhy(shape.pr));
 }
 function judgeAppCreate(text, mtext, deps, dir, cmd) {
-  return inApp(deps, () => appCreate(text, mtext, deps, dir, cmd));
+  return homeRead(inApp(deps, () => appCreate(text, mtext, deps, dir, cmd)));
 }
+var homeRead = (d) => d.action === "deny" ? { ...d, homeFlags: true } : d;
 function appCreate(text, mtext, deps, dir, cmd) {
   const place = appPlace(deps, dir);
   if (!place.covered) return passOf(place);
@@ -2189,7 +2234,7 @@ function appCreate(text, mtext, deps, dir, cmd) {
   return d && isOpenPrLabel(d.label) ? ALLOW : deny("open-pr", appOpenPrWhy(deps, dir, repo, branch, head, base));
 }
 function judgeAppMerge(shape, deps, dir, cmd) {
-  return inApp(deps, () => appMerge(shape, deps, dir, cmd));
+  return homeRead(inApp(deps, () => appMerge(shape, deps, dir, cmd)));
 }
 function appMerge(shape, deps, dir, cmd) {
   const place = appPlace(deps, dir);
@@ -2230,14 +2275,14 @@ function judgeAt(s, deps, cwd, shell, named) {
   return dirs.map((d) => s.kind === "create" ? judgeCreate(s, deps, d, cmd) : judgeLand(s, deps, d, cmd));
 }
 function unexpandedDeny(deps, dirs, lost, scope, appScope) {
-  const dir = coveredAmong(deps, dirs.filter((d) => !isUnexpanded(d)));
-  return dir === null ? deny("cd-unexpanded", unexpandedWhy(lost), scope) : deny("cd-unexpanded", unexpandedWhy(lost) + inAppFolder(dir), appScope);
+  const dir = firstCovered(deps, knownDirs(dirs, deps.home));
+  return dir === null ? deny("cd-unexpanded", unexpandedWhy(lost), scope) : { ...deny("cd-unexpanded", unexpandedWhy(lost) + inAppFolder(dir), appScope), tapPath: true, homeFlags: true };
 }
 function appPositionAt(deps, dirs, scope, offer) {
   let notice = null;
   for (const dir of dirs) {
     const place = appPlace(deps, dir);
-    if (place.covered) return [deny("position-unknown", inApp(deps, () => appPositionWhy(deps, dir, offer)), scope)];
+    if (place.covered) return [{ ...deny("position-unknown", inApp(deps, () => appPositionWhy(deps, dir, offer)), scope), homeFlags: true }];
     notice ??= place.corrupt;
   }
   return notice === null ? [] : [{ action: "allow", notice }];
@@ -2272,7 +2317,7 @@ function judgePush(shape, deps, dir, ctx) {
   const d = (pattern, why) => deny(pattern, why, "push");
   if (p.moved) {
     const what = "--git-dir or --work-tree moves the repo, so the checkout is unknown";
-    const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell)) ?? coveredAmong(deps, [dir]);
+    const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell, deps.home)) ?? coveredAmong(deps, [dir]);
     return app === null ? d("push-target-unresolved", pushUnresolvedWhy(what)) : deny("push-target-unresolved", appPushUnresolvedWhy(app, what), "app-push");
   }
   if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone);
@@ -2457,12 +2502,12 @@ function judgeCommand(input, deps, notes) {
 }
 function movedDeny(s, deps, cwd, shell, text) {
   const dirs = s.kind === "push" ? pushDirsOf(s.push, cwd, shell) : dirsAfter(cwd, s.at.cds, shell, s.at.loose);
-  const targets = s.kind === "push" ? [...new Set([cwd, ...dirs].flatMap((d) => isUnexpanded(d) ? [] : moveTargets(text, d, shell)))] : [];
+  const targets = s.kind === "push" ? [...new Set([cwd, ...dirs].flatMap((d) => isUnexpanded(d) ? [] : moveTargets(text, d, shell, deps.home)))] : [];
   const dir = firstCovered(deps, targets) ?? coveredAmong(deps, [cwd, ...dirs].filter((d) => !isUnexpanded(d)));
   if (s.kind === "push") {
     return dir === null ? deny("push-target-unresolved", pushUnresolvedWhy(MOVED_WHY), "push") : deny("push-target-unresolved", MOVED_WHY + inAppFolder(dir), "app-push");
   }
-  return dir === null ? deny("repo-moved", MOVED_WHY) : deny("repo-moved", MOVED_WHY + inAppFolder(dir));
+  return dir === null ? deny("repo-moved", MOVED_WHY) : { ...deny("repo-moved", MOVED_WHY + inAppFolder(dir)), homeFlags: true };
 }
 function judgeWrite(input, deps) {
   const args = input.tool_input ?? {};
@@ -2483,9 +2528,9 @@ function decide(input, deps) {
   const notice = notes.size === 0 ? {} : { notice: [...notes][0] };
   if (denies.length === 0) return notes.size === 0 ? ALLOW : { action: "allow", ...notice };
   const cwd = input.cwd || process.cwd();
-  const live = denies.find((d) => hardAppDeny(d) || enforcingScope(d.scope, deps, cwd));
+  const live = denies.find((d) => hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags));
   if (live) {
-    const { tapPath: _tap, ...shown } = live;
+    const { tapPath: _tap, homeFlags: _home, ...shown } = live;
     return { ...shown, ...notice };
   }
   return { action: "allow", warn: `${denies[0].pattern}: ${denies[0].reason}`, scope: denies[0].scope, ...notice };
@@ -2531,9 +2576,9 @@ var warnOut = (text, scope = "other", tail = "") => out2({ additionalContext: `W
 function gatedScopes(input, app = false) {
   const tool = input.tool_name || input.tool || "";
   if (WRITE_TOOLS.has(tool)) return /* @__PURE__ */ new Set(["other"]);
-  const cmd = readShellCommand(input);
-  const scopes = new Set(cmd.kind === "command" ? shapesOf(cmd.text, cmd.tool).map(scopeOf) : []);
-  if (app && scopes.size > 0) scopes.add("app-push");
+  const shapes = catchShapes(input);
+  const scopes = new Set((shapes ?? []).map(scopeOf));
+  if (app && (scopes.size > 0 || shapes === null)) scopes.add("app-push");
   return scopes;
 }
 function unreadableInput() {
@@ -2595,7 +2640,7 @@ function unjudgeable(input, deps, thrown) {
   const hint = gone ? "Run the command from a folder that exists." : "Run the command again. If it keeps failing, ask Dave.";
   const why = `could not verify Dave's tap (${detail}). ${hint}`;
   const cwd = input.cwd || process.cwd();
-  const live = app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd));
+  const live = app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? "deny" : "warn", "cwd-missing");
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : scopes.has("app-push") ? "app-push" : "push");
 }
@@ -2612,11 +2657,19 @@ function hardAppCall(input) {
     if (cmd.kind !== "command") return false;
     const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === "push");
     if (input.agent_id && pushes.length > 0) return true;
-    const v = rawVerdict(cmd.text, cmd.tool);
-    if (v !== null && (v.kind === "unsafe" || v.unread)) return true;
+    if (rawVerdict(cmd.text, cmd.tool)?.kind === "unsafe") return true;
     return pushes.some(({ push: p }) => p !== void 0 && (p.force || p.unsafeOpt || p.repoOpt || p.oBundle || p.widerOpt !== null));
   } catch {
-    return true;
+    return Boolean(input.agent_id);
+  }
+}
+function catchShapes(input) {
+  const cmd = readShellCommand(input);
+  if (cmd.kind !== "command") return [];
+  try {
+    return shapesOf(cmd.text, cmd.tool);
+  } catch {
+    return null;
   }
 }
 function pushUnderLiveRoot(input, deps) {
@@ -2624,13 +2677,13 @@ function pushUnderLiveRoot(input, deps) {
     const scope = deps.tapScope;
     const cmd = readShellCommand(input);
     if (!scope || cmd.kind !== "command") return false;
-    const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === "push");
-    if (pushes.length === 0) return false;
+    const pushes = catchShapes(input)?.filter((s) => s.kind === "push") ?? null;
+    if (pushes?.length === 0) return false;
     const reg = scope.registry();
     const cwd = input.cwd || process.cwd();
     const shell = shellOf(input);
-    const paths = pushes.flatMap((s) => [cwd, ...pushDirsOf(s.push, cwd, shell), ...chainDirsOf(s.push, cwd, shell)]).filter((d) => !isUnexpanded(d));
-    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell))];
+    const paths = knownDirs((pushes ?? []).flatMap((s) => [cwd, ...pushDirsOf(s.push, cwd, shell), ...chainDirsOf(s.push, cwd, shell)]).concat(cwd), deps.home);
+    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
     return dirs.some((d) => underLiveRoot(d, reg, scope, { outsideCcv3: true }));
   } catch {
     return false;

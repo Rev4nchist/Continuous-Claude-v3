@@ -9,7 +9,7 @@
  *   H3  a mirror or + remote.<r>.push config warns
  *   H4  push config or a command option that widens the push (push.followTags, --follow-tags, -c push.*) warns
  *   H5  --repo warns
- *   H6  an unknown git global option before push, or a push no shape reads (sh -c), warns
+ *   H6  (re-pinned by fix round 6) an unknown git global option before push, or a push no shape reads (sh -c), DENIES: it is the tap path now
  *   H7  a short bundle with o warns
  *   H8  the other app-push denies that are no tap path (two push URLs, position unknown) warn
  *   H9  the catch (a git throw) warns for a force push or a subagent push when the flag is false
@@ -139,11 +139,13 @@ describe('Dave 11-13 "Hard denies always deny": enforceAppPush false keeps every
   it('H5 --repo is push-target-unresolved', () => {
     expect(verdict(bash('git push --repo https://github.com/acme/other.git up topic'))).toMatchObject(unresolved);
   });
-  it('H6a an unknown git global option before push (git -p push up topic) is push-target-unresolved', () => {
-    expect(verdict(bash('git -p push up topic'))).toMatchObject(unresolved);
+  // Re-pinned by fix round 6 (Dave 11-13, "Stop accidents, list the rest"): an unread push takes the tap path, so it warns here.
+  // Change that breaks it: give an unread push the hard deny again.
+  it('H6a an unknown git global option before push (git -p push up topic) takes the tap path: it warns', () => {
+    expect(verdict(bash('git -p push up topic'))).toMatchObject({ action: 'allow', scope: 'app-push' });
   });
-  it('H6b a push no shape reads (sh -c with no force word) is push-target-unresolved', () => {
-    expect(verdict(bash("sh -c 'git push up topic'"))).toMatchObject(unresolved);
+  it('H6b a push no shape reads (sh -c with no force word) takes the tap path: it warns', () => {
+    expect(verdict(bash("sh -c 'git push up topic'"))).toMatchObject({ action: 'allow', scope: 'app-push' });
   });
   it('H7 a short bundle with o (git push -uo x up topic) is push-target-unresolved', () => {
     expect(verdict(bash('git push -uo x up topic'))).toMatchObject(unresolved);

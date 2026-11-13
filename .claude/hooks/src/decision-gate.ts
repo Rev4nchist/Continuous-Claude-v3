@@ -66,19 +66,27 @@
  *               --recurse-submodules=<on>, a -c push.*, remote.* or submodule.* key); a short bundle with o (-oh, -uo x: the rest is the
  *               push option value); and a hidden push (below). The text names the way out: git push <remote> <src>:<dst>
  *               --no-recurse-submodules (plus --no-follow-tags), which takes the tap path.
- *               Also: a subagent push, push URLs of two repos, a remote or branch that cannot be named, position unknown, a git throw.
- *             RAW-TEXT ALLOW-LIST (fix round 5, fixer M, ruling A; it replaces the fix round 4 hidden-push reading and its WIDE_OPT
- *             regex, F7): no lexer case is added. rawVerdict reads the raw text with the marks a shell strips from a word deleted
- *             (quotes, \, ^, backtick). A text with no push word (the whole word push, git stash push left out) next to git, or one whose
- *             segments are all cd, read-only git or plain commits, is not read. `ok`: the WHOLE text is the strict reading
- *             (steadyCommand, and each push segment is one call whose every word the strict reader accounts for: the listed options,
- *             a dry run or help (-n --dry-run -h --help: quiet is decided ONLY here, F1), one -C at most (F4), no or exactly
- *             <remote> <branch>). Anything else: every shape takes the tap path, and in the first covered folder of the raw folders
- *             (the cwd, the cd and -C words of the raw text, chained, inside sh -c too, and the move targets) a force spelling ANYWHERE
- *             in the raw text (--force*, --mirror, --delete and their prefixes, f or d in a short push bundle, + before a word) is
- *             push-unsafe, and a push word that no shape reads (sh -c, bash -lc, cmd /c, pwsh -Command, eval, if/!, a backtick, $(),
- *             a git alias, a global option or an option before the verb it does not read: F2) is push-target-unresolved. A CCv3 or
- *             uncovered folder gets no deny from it (G4). PUSH_GIT and the CCv3 shapes are unchanged.
+ *               Also: a subagent push, push URLs of two repos, a remote or branch that cannot be named, position unknown.
+ *             THE VERB RULE (fix round 6; Dave's decision 2026-11-13, seat session, "Stop accidents, list the rest"): the gate stops
+ *             ordinary commands and mistakes (a plain force push, a push to a default branch, a subagent push, an unusual push form).
+ *             rawVerdict judges by the VERB of each git call outside quotes (a git word anywhere outside quotes counts: fail closed),
+ *             never by the word push anywhere in the text. Verb push: `ok` when the WHOLE text is the strict reading (steadyCommand, each
+ *             push segment one call whose every word the strict reader accounts for: the listed options, a dry run or help (quiet is
+ *             decided ONLY here, F1), one -C at most (F4), no or exactly <remote> <branch>); else every shape takes the tap path.
+ *             Another plain verb (add, commit, log, stash): no push, so a commit message, a grep pattern or an echo text that holds push
+ *             is text. The TAP PATH, never a hard deny, in the first covered folder of the raw folders (the cwd, the cd and -C words of
+ *             the raw text, chained, and the move targets): a verb that is no plain word ($, backtick, a bracket, %, a quote, a backslash,
+ *             a glob, or -c alias.<x>=), a shell -c, eval, cmd /c, pwsh -Command, Invoke-Expression or $( ) payload with git and push,
+ *             and a push call no shape reads (an unknown global option, a wrapper or control word the shapes do not read). The HARD
+ *             deny of the rule is a force spelling (--force*, --mirror, --delete and their prefixes, f or d in a short push bundle, +
+ *             before a word) in a segment that holds a push call or such a payload: push-unsafe. A force word of another command (test -f)
+ *             is no force. A reader throw is a push off the list: the tap path (catchShapes). A CCv3 or uncovered folder gets no deny
+ *             from it (G4). PUSH_GIT and the CCv3 shapes are unchanged.
+ *             KNOWN LIMITS (Dave 11-13: deliberate tricks are out of scope, listed, not read): a verb built at run time (git pu${x}sh,
+ *             $'\x70ush', ${X:-push}, PowerShell ("pu"+"sh")) only takes the tap path when its git word is visible; an alias already in
+ *             git config; encoded text; git send-pack; gh api writes to git refs; git config set in the environment; the git-safe and
+ *             git-for wrappers pass git options on unread; a quoted $( ) whose git is not first (x="$(cd A && git push)"); text piped to a
+ *             shell (echo '...' | sh); a variable for git ($GIT push).
  *             RULING B (F3, F4): a literal GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, --git-dir or --work-tree value names a repo folder
  *             (<root>/.git is <root>); a covered one is judged with the app rule (app-push), a CCv3 one or one that names no folder keeps
  *             the base path and text. Two or more -C values are applied in order, each relative to the one before (chainDir); a chain
@@ -116,7 +124,9 @@
  * before a push, a create or a merge, the folder is unknown: it is denied if the cwd or a folder on the known cd path is a CCv3 checkout, or the
  * command names CCv3 (create and merge only). A push with an absolute -C names its folder, so it is judged there. The land script reads no folder, so it is judged by its tap only.
  * A cd target the shell expands and this hook cannot (`$D/..`, `$(pwd)/..`, a backtick, `~`, a glob, a PowerShell expression) is an unexpanded folder: denied in any checkout (cd-unexpanded),
- * and so is a relative cd after it (`cd $D && cd ..`). The same holds for a -C value. GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR in the text, and a cd alias (alias go=cd, Set-Alias go Set-Location),
+ * and so is a relative cd after it (`cd $D && cd ..`). The same holds for a -C value. Fix round 6 (item 2): for the coverage test a leading ~, $HOME,
+ * $env:USERPROFILE or %USERPROFILE% of a cd, -C or GIT_DIR value is the home folder (knownDirs); in a covered folder the deny is the app-push tap path;
+ * a CCv3 or unknown target keeps the base deny and text. GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR in the text, and a cd alias (alias go=cd, Set-Alias go Set-Location),
  * are denied in any checkout too (the folder is not named). A bash cd name spelled `c\d`, `c''d` or `''cd` is read as cd. A comment line with an open `(` or backtick opens no subshell.
  * A wrapper before git (env, nice, timeout, xargs, setsid, sudo, with their options) is still a push.
  * Accepted over-deny: an unquoted read of the name (`echo $GIT_DIR`, `unset GIT_DIR`), an alias for cd that is never used, a variable cd before an absolute one (`cd $D && cd /abs`: the prefix is judged).
@@ -135,10 +145,13 @@
  * Dave 11-13 ("Hard denies always deny"): decisions.enforceAppPush literal false softens ONLY the tap path of an app push (a push to a
  * default branch, a push form off the strict list, the no-tap reasons: the shipTap deny, marked tapPath). The HARD denies of the app
  * push path stay denies whatever the flag says: a force push in any spelling (push-unsafe), a subagent push, a mirror or '+' push
- * config, config that widens the push, --repo, an unknown git global option before push, and every other app-push deny (hardAppDeny).
- * The catch does the same for the hard kinds the text alone shows (hardAppCall). CCv3 scopes and texts are unchanged.
+ * config, config that widens the push, --repo, an o bundle, and every other app-push deny (hardAppDeny). The tap path (tapPath) is also
+ * the verb rule's unread push and the cd-unexpanded deny of a covered folder (fix round 6). The catch does the same for the hard kinds the
+ * text alone shows (hardAppCall). CCv3 scopes and texts are unchanged.
  * Fix round 5 (ruling C, F5): enforceAppPush is read ONLY from <home>/continuous-claude/review-router.config.json, never from the payload
- * cwd upward, so a config file inside an app repo cannot turn its denies into warnings. The other two flags keep the lookup below.
+ * cwd upward, so a config file inside an app repo cannot turn its denies into warnings. Fix round 6 (item 1): so is decisions.enforce for
+ * a deny of a covered folder (homeFlags: an app create, merge, position-unknown, cd-unexpanded or repo-moved; and the catch of a covered
+ * call). CCv3 and enforcePush keep the lookup below.
  * A git throw after the path test put the folder under a live root reaches the catch as AppScopeError (scope app-push). A throw before
  * that (git remote -v fails or times out) gets app-push too when a push of the call runs in a folder the path test puts under a live root
  * (pushUnderLiveRoot), and so does a cd-unexpanded or GIT_DIR deny (coveredAmong). App-folder git (Deps.appGit, run inside inApp) stops
@@ -214,8 +227,9 @@ export type Scope = 'push' | 'other' | 'app-push';
  * `notice` (decide() only): the registry file that could not be read (S5). It rides on an allow, a warn and a deny alike (item 7).
  * `tapPath` (app-push only, Dave 11-13 "Hard denies always deny"): the deny is the tap path of an app push (shipTap), the only app-push
  * deny that a literal false of decisions.enforceAppPush turns into a warning. decide() drops it from the deny it returns.
+ * `homeFlags` (fix round 6, item 1): the deny is for a covered folder, so decisions.enforce is read from the home copy only.
  */
-export type Deny = { action: 'deny'; reason: string; pattern: string; scope: Scope; notice?: string; tapPath?: true };
+export type Deny = { action: 'deny'; reason: string; pattern: string; scope: Scope; notice?: string; tapPath?: true; homeFlags?: true };
 export type Decision = { action: 'allow'; warn?: string; scope?: Scope; notice?: string } | Deny;
 interface HookInput { tool_name?: string; tool?: string; tool_input?: Record<string, unknown>; cwd?: string; agent_id?: string; session_id?: string }
 
@@ -393,13 +407,13 @@ const appWiderOptWhy = (dir: string, opt: string): string =>
  * the gate does not know, more than one -C, sh -c, eval, a control word, a substitution, a git alias).
  */
 /**
- * Fix round 5 (ruling A): a force spelling anywhere in the text of a command whose push is off the strict reading. The word may belong to
- * another command (test -f, chmod +x), so the text names the way out: the push as its own command.
+ * Fix round 6 (verb rule): a force spelling in a segment that holds a push call or a payload with git and push, off the strict reading.
+ * A force-like word of another command in the same segment, or inside a payload, counts too, so the text names the way out.
  */
 const appRawUnsafeWhy = (dir: string): string =>
   `this command holds a git push that is not one plain git push call, and a force or delete spelling is in its text (--force, --mirror, --delete, -f or -d in a short option bundle, or a word that starts with +; folder ${at(dir)}), so it stays blocked even with Dave's tap. Run the push as its own command with no such word in it: git push <remote> <branch>. If a force push is really needed, ask Dave to run it himself.`;
 const appUnreadWhy = (dir: string): string =>
-  `this command holds a git push that this gate cannot read as one plain git push call (folder ${at(dir)}): a global option or an option it does not know, more than one -C, a shell -c, eval, a control word, a substitution or a git alias. No tap can be tied to it, so it stays blocked: run git push with no global option before push, as its own command: git push <remote> <branch> (git -C <folder> push is fine).`;
+  `this command holds a git push that this gate cannot read as one plain git push call (folder ${at(dir)}): a global option or an option it does not know, more than one -C, a shell -c, eval, a control word, a substitution or a git alias. No tap can be tied to it: run git push with no global option before push, as its own command: git push <remote> <branch> (git -C <folder> push is fine).`;
 /** Fix round 4 (fixer K, critic major 3): git reads the rest of a short bundle after o as the push option value. */
 const appBundleWhy = (dir: string): string =>
   `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
@@ -906,26 +920,69 @@ export function pushShapesOf(raw: string, tool?: string): Shape[] {
   return out;
 }
 
-// ---------- the raw-text allow-list (fix round 5, fixer M, ruling A; app folders only) ----------
+// ---------- the verb rule (fix round 6, Dave 11-13 "Stop accidents, list the rest"; app folders only) ----------
 //
-// Rounds 1 to 4 chased each spelling of a hidden push in the shared lexer (a global option, -oh, a control word ...). Ruling A ends that:
-// in a COVERED folder a push passes with no tap only when the WHOLE text is the strict reading, and every other text that holds a push
-// word next to git takes the tap path, or a hard deny when a force spelling is anywhere in the raw text. No lexer case is added: the rule
-// reads the raw text with the marks a shell strips from a word deleted (quotes, a backslash, the cmd ^, the PowerShell backtick).
+// A push is judged by the VERB of each git call outside quotes (a git word anywhere outside quotes counts: fail closed), never by the
+// word push anywhere in the text. Verb push: the strict reader. Another plain verb (add, commit, log, stash ...): no push, so a message,
+// a grep pattern or an echo text that holds push is text. A verb that is not a plain word, or a shell -c, eval, cmd /c, pwsh -Command or
+// $( ) payload with git and push: the tap path, read no further. A force spelling counts only in a segment with a push call or such a payload.
 
 /** The raw text with the marks a shell strips from a word deleted: g"i"t, g\it, p''ush and `git push` read as git and push. */
 const squashMarks = (t: string): string => t.replace(/["'\\^`]/g, '');
-/** `git stash push` stashes; it is no push. */
-const STASH_PUSH = /\bstash\s+push\b/gi;
 /** A word ends at a blank, a separator, a bracket, = (alias.x=push) or a redirect. */
 const WORD_SPLIT = /[\s;&|(){}<>=,]+/;
-/** A push word is the whole word push (any case), or a git-push executable. A path, a file or a branch name that holds push is no push word. */
 const isPushWord = (w: string): boolean => /^push$/i.test(w) || /(?:^|[\\/])git-push(?:\.exe)?$/i.test(w);
-/** The push words of a text that also holds git (any spelling the marks hide); 0 when it holds no git. */
-function pushWordCount(raw: string): number {
-  const s = squashMarks(raw);
-  if (!/git/i.test(s)) return 0;
-  return s.replace(STASH_PUSH, ' ').split(WORD_SPLIT).filter(isPushWord).length;
+/**
+ * A git executable word outside quotes (git, git.exe, git-safe.ps1, git-for.ps1; group 1: git-push, whose verb is push), or a quoted
+ * word whose raw text is one of them ("git", "C:\...\git.exe": checked by isRunner, as PUSH_GIT does).
+ */
+const GIT_WORD = /(?<![^\s;&|(){}`!])(?:(?:[^\s;&|(){}`'"]*[\\/])?(?:git(?:\.exe)?|git-(?:safe|for)\.ps1|(git-push(?:\.exe)?))|"[^"]*"|'[^']*')(?=\s|$)/gi;
+const isRunner = (rs: string, g: RegExpMatchArray): boolean => {
+  const raw = rs.slice(g.index!, g.index! + g[0].length);
+  return !/^["']/.test(g[0]) || isGitToken(raw) || isSafeToken(raw, PUSH_WRAPPERS);
+};
+/** A global option (git, and git-for.ps1 -Path and -Remote) whose value is the next word. */
+const VALUE_GLOBAL = /^(?:-C|--git-dir|--work-tree|--namespace|--super-prefix|--config-env|-Pa(?:th?)?|-R(?:e(?:m(?:o(?:te?)?)?)?)?)$/i;
+/** A verb that is no plain word: it holds a $, backtick, bracket, %, quote, backslash or glob. */
+const ODD_VERB = /[$`{}()%"'\\*?[\]]/;
+const WORDS = /(?:"[^"]*"|'[^']*'|[^\s"'])+/g;
+/** A shell payload (sh -c, bash -lc, eval, cmd /c, pwsh -Command, Invoke-Expression) or a $( ) or backtick substitution that starts with git. */
+const PAYLOAD = /\b(?:(?:ba|z|da|k)?sh(?:\.exe)?\s+(?:-\w+\s+)*-\w*c\b|eval\b|cmd(?:\.exe)?\s+(?:\/\w+\s+)*\/[ck]\b|(?:pwsh|powershell)(?:\.exe)?\s.*?-c(?:ommand)?\b|Invoke-Expression\b|iex\b)|(?:\$\(|`)\s*(?:[^\s;&|()`'"]*[\\/])?git(?:\.exe)?\s/i;
+const holdsGitPush = (s: string): boolean => { const w = squashMarks(s).split(WORD_SPLIT); return w.some((x) => /(?:^|[\\/])git(?:\.exe)?$/i.test(x)) && w.some(isPushWord); };
+
+/** The verb of one git word of a segment (`ms` masked, `rs` raw): push, odd (the tap path), another plain verb, or none. */
+function verbAt(ms: string, rs: string, g: RegExpMatchArray): 'push' | 'odd' | 'other' | null {
+  if (g[1]) return 'push';
+  const from = g.index! + g[0].length;
+  const cut = ms.slice(from).search(ARGS_END_RE);
+  const words = [...ms.slice(from, cut < 0 ? ms.length : from + cut).matchAll(WORDS)].map((w) => rs.slice(from + w.index!, from + w.index! + w[0].length));
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!w.startsWith('-')) return ODD_VERB.test(w) ? 'odd' : /^push$/i.test(w) ? 'push' : 'other';
+    // -c alias.<x>=... defines a verb in the command itself: the tap path.
+    if (w === '-c' && /^alias\./i.test(squashMarks(words[i + 1] ?? ''))) return 'odd';
+    if (w === '-c' || VALUE_GLOBAL.test(w)) i++;
+  }
+  return null;
+}
+/** The verb reading of a command: its push calls, whether any call or payload takes the tap path, and the segments a force word counts in. */
+function verbsOf(raw: string, shell: 'bash' | 'pwsh'): { pushes: number; odd: boolean; segs: string[] } {
+  const { view, masked } = viewOf(raw, shell);
+  const read = { pushes: 0, odd: false, segs: [] as string[] };
+  let from = 0;
+  for (const m of [...masked.matchAll(/[;&|\r\n]+/g), null]) {
+    const to = m === null ? masked.length : m.index!;
+    const ms = masked.slice(from, to);
+    const rs = view.slice(from, to);
+    from = m === null ? to : to + m[0].length;
+    const verbs = [...ms.matchAll(GIT_WORD)].filter((g) => isRunner(rs, g)).map((g) => verbAt(ms, rs, g));
+    const pushes = verbs.filter((v) => v === 'push').length;
+    const payload = PAYLOAD.test(rs) && holdsGitPush(rs);
+    read.pushes += pushes;
+    read.odd ||= payload || verbs.includes('odd');
+    if (pushes > 0 || payload) read.segs.push(rs);
+  }
+  return read;
 }
 /** The long options ruling A names as force spellings; any prefix of one counts (git takes a unique prefix). */
 const FORCE_LONG_NAMES = ['force', 'force-with-lease', 'force-if-includes', 'mirror', 'delete'];
@@ -967,11 +1024,6 @@ function strictWhole(raw: string, tool: string | undefined, shell: 'bash' | 'pws
   const pushSegs = segmentsOf(fdBlank(raw), shell)?.seq.filter((k) => k === 'push').length ?? -1;
   return calls.length === pushSegs && calls.every(strictAccounted);
 }
-/** True when every segment is a cd, read-only git or a plain commit: a push word there is text (a message, a path, a log search). */
-function onlyNeighbours(raw: string, shell: 'bash' | 'pwsh'): boolean {
-  const segs = segmentsOf(fdBlank(raw), shell);
-  return segs !== null && segs.seq.length > 0 && segs.seq.every((k) => k === 'cd' || k === 'read' || k === 'commit');
-}
 /** The push calls that make a shape: the most of the tool's own view and of the quotes-deleted segments (`git "push"`). */
 function shapedCalls(raw: string, tool: string | undefined, shell: 'bash' | 'pwsh'): number {
   const { view, masked } = viewOf(raw, shell);
@@ -979,18 +1031,18 @@ function shapedCalls(raw: string, tool: string | undefined, shell: 'bash' | 'pws
   return Math.max(shaped(pushCallsOf(masked, view, false)), shaped(pushCallsIn(raw, mayRunUnderCmd(tool)).filter((c) => c.squashed)));
 }
 /**
- * The raw verdict of a command (no git): null when it holds no push word next to git, or only cd, read-only git and plain commits.
- * `ok`: the whole text is the strict reading (the shapes decide, and a strict dry run passes). Else `tap` (every shape takes the tap
- * path) or `unsafe` (a force spelling anywhere: push-unsafe). `unread`: more push words than calls that make a shape (a push in sh -c,
- * eval, a substitution, behind an unknown option or global option, or a quiet word the strict reader did not account for).
+ * The verb verdict of a command (no git): null when no git call has the verb push and nothing takes the tap path. `ok`: the whole
+ * text is the strict reading (the shapes decide, and a strict dry run passes). Else `tap` (every shape takes the tap path) or `unsafe`
+ * (a force spelling in a push segment: push-unsafe). `unread` (the tap path): an odd verb or a payload, or more push calls than calls
+ * that make a shape (behind an unknown option or global option, a wrapper the shapes do not read, a quiet word the strict reader did not account for).
  */
 type RawVerdict = { kind: 'ok' | 'tap' | 'unsafe'; unread: boolean } | null;
 function rawVerdict(raw: string, tool?: string): RawVerdict {
-  const words = pushWordCount(raw);
   const shell = tool === 'PowerShell' ? 'pwsh' : 'bash';
-  if (words === 0 || onlyNeighbours(raw, shell)) return null;
+  const read = verbsOf(raw, shell);
+  if (read.pushes === 0 && !read.odd) return null;
   if (strictWhole(raw, tool, shell)) return { kind: 'ok', unread: false };
-  return { kind: forceSpelled(raw) ? 'unsafe' : 'tap', unread: words > shapedCalls(raw, tool, shell) };
+  return { kind: read.segs.some(forceSpelled) ? 'unsafe' : 'tap', unread: read.odd || read.pushes > shapedCalls(raw, tool, shell) };
 }
 
 /** Each folder of a -C chain: git applies each -C relative to the one before (F4, ruling B). A posix base keeps posix rules (tests on Windows). */
@@ -1011,17 +1063,31 @@ function chainDirsOf(p: PushShape, cwd: string, shell: 'bash' | 'pwsh'): string[
 
 /**
  * Ruling B (F3): the repo folder a literal GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, --git-dir or --work-tree value names: <root>/.git and
- * <root>/.git/worktrees/<n> name <root>; another value names itself. A value with a variable or a ~ is left out (the cwd rule decides).
+ * <root>/.git/worktrees/<n> name <root>; another value names itself. A value with a variable is left out (the cwd rule decides); a home
+ * value is expanded (knownDirs).
  */
 const MOVE_VALUE_RE = /(?:\bGIT_(?:DIR|WORK_TREE|COMMON_DIR)[ \t]*=[ \t]*|--(?:git-dir|work-tree)(?:=|\s+))(\S+)/gi;
-function moveTargets(raw: string, cwd: string, shell: 'bash' | 'pwsh'): string[] {
+function moveTargets(raw: string, cwd: string, shell: 'bash' | 'pwsh', home: string): string[] {
   const out: string[] = [];
   for (const m of raw.replace(/["']/g, '').matchAll(MOVE_VALUE_RE)) {
-    const dir = chainStep(cwd, m[1].replace(/[;&|)]+$/, ''), shell);
-    if (isUnexpanded(dir)) continue;
-    out.push(dir.replace(/[\\/]\.git(?:[\\/]worktrees[\\/][^\\/]+)?[\\/]*$/i, ''));
+    for (const dir of knownDirs([chainStep(cwd, m[1].replace(/[;&|)]+$/, ''), shell)], home)) out.push(dir.replace(/[\\/]\.git(?:[\\/]worktrees[\\/][^\\/]+)?[\\/]*$/i, ''));
   }
   return [...new Set(out)];
+}
+/**
+ * Fix round 6 (item 2): the folders of a list for a coverage test. An unexpanded folder that starts with ~, $HOME, ${HOME},
+ * $env:USERPROFILE or %USERPROFILE% (and holds nothing else to expand) gets the home folder; any other unexpanded folder is left out.
+ */
+const HOME_LEAD = /^(?:~|\$HOME\b|\$\{HOME\}|\$env:USERPROFILE\b|%USERPROFILE%)(?=$|[\\/])/i;
+function knownDirs(dirs: string[], home: string): string[] {
+  return dirs.flatMap((d) => {
+    if (!isUnexpanded(d)) return [d];
+    const raw = d.slice(UNEXPANDED.length);
+    const lead = HOME_LEAD.exec(raw);
+    const rest = lead === null ? '' : raw.slice(lead[0].length);
+    if (lead === null || hasUnexpandedPart(rest.replace(/^[\\/]+/, ''))) return [];
+    return [home.startsWith('/') ? posix.join(home, rest) : join(home, rest)];
+  });
 }
 /** The first folder of the list that is covered and no CCv3 checkout, each judged alone (coveredAmong stops at a CCv3 folder). */
 const firstCovered = (deps: Deps, dirs: string[]): string | null => dirs.find((d) => coveredAmong(deps, [d]) !== null) ?? null;
@@ -1032,7 +1098,7 @@ const firstCovered = (deps: Deps, dirs: string[]): string | null => dirs.find((d
  * folder before; plus the move targets (ruling B).
  */
 const RAW_CD = /^(?:cd|chdir|pushd|set-location|sl|push-location)$/i;
-function rawDirs(raw: string, tool: string | undefined, cwd: string, shell: 'bash' | 'pwsh'): string[] {
+function rawDirs(raw: string, tool: string | undefined, cwd: string, shell: 'bash' | 'pwsh', home: string): string[] {
   const out = [cwd];
   for (const call of pushCallsIn(raw, mayRunUnderCmd(tool))) {
     for (const base of dirsAfter(cwd, call.cds, shell, true)) out.push(base, chainDir(base, callDirsOf(call), shell));
@@ -1045,7 +1111,7 @@ function rawDirs(raw: string, tool: string | undefined, cwd: string, shell: 'bas
     chained = chainStep(chained, words[i + 1], shell);
     out.push(chained);
   }
-  return [...new Set([...out, ...moveTargets(raw, cwd, shell)])].filter((d) => !isUnexpanded(d));
+  return [...new Set([...knownDirs(out, home), ...moveTargets(raw, cwd, shell, home)])];
 }
 
 /**
@@ -1056,9 +1122,10 @@ function rawDirs(raw: string, tool: string | undefined, cwd: string, shell: 'bas
 function rawPushDenies(raw: string, tool: string | undefined, deps: Deps, cwd: string, shell: 'bash' | 'pwsh'): Deny[] {
   const v = rawVerdict(raw, tool);
   if (v === null || v.kind === 'ok' || (v.kind === 'tap' && !v.unread)) return [];
-  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell));
+  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
   if (dir === null) return [];
-  return [v.kind === 'unsafe' ? deny('push-unsafe', appRawUnsafeWhy(dir), 'app-push') : deny('push-target-unresolved', appUnreadWhy(dir), 'app-push')];
+  // Fix round 6: an unread push takes the tap path; only a force spelling in a push segment is hard.
+  return [v.kind === 'unsafe' ? deny('push-unsafe', appRawUnsafeWhy(dir), 'app-push') : { ...deny('push-target-unresolved', appUnreadWhy(dir), 'app-push'), tapPath: true }];
 }
 
 
@@ -1164,17 +1231,19 @@ const enforcingPush = (deps: Deps, cwd: string): boolean => routerFlag(cwd, deps
  * config text is parsed here. Fix round 5 (ruling C, F5): the flag is read ONLY from <home>/continuous-claude/review-router.config.json,
  * never from the payload cwd upward, so a config file inside an app repo cannot turn its denies into warnings. No file, bad JSON or any
  * other value: deny. A literal false softens the tap path only (Dave 11-13): decide() asks hardAppDeny first.
+ * Fix round 6 (item 1): a deny for a covered folder (`homeOnly`) reads decisions.enforce from the same home copy only.
  */
-function enforcingAppPush(deps: Deps): boolean {
+function homeFlag(deps: Deps, key: string): unknown {
   try {
-    const cfg = JSON.parse(deps.readFile(join(deps.home, 'continuous-claude', 'review-router.config.json')) ?? 'null') as { decisions?: { enforceAppPush?: unknown } } | null;
-    return cfg?.decisions?.enforceAppPush !== false;
+    const cfg = JSON.parse(deps.readFile(join(deps.home, 'continuous-claude', 'review-router.config.json')) ?? 'null') as { decisions?: Record<string, unknown> } | null;
+    return cfg?.decisions?.[key];
   } catch {
-    return true;
+    return null;
   }
 }
-function enforcingScope(scope: Scope, deps: Deps, cwd: string): boolean {
-  if (scope === 'app-push') return enforcingAppPush(deps);
+function enforcingScope(scope: Scope, deps: Deps, cwd: string, homeOnly = false): boolean {
+  if (scope === 'app-push') return homeFlag(deps, 'enforceAppPush') !== false;
+  if (homeOnly && scope === 'other') return homeFlag(deps, 'enforce') === true;
   return scope === 'push' ? enforcingPush(deps, cwd) : enforcing(deps, cwd);
 }
 const FLAG_OF: Record<Scope, string> = { push: 'decisions.enforcePush', other: 'decisions.enforce', 'app-push': 'decisions.enforceAppPush' };
@@ -1705,8 +1774,10 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decisio
 
 /** Create in a folder outside CCv3: when covered, "Open draft PR" for (key repo, branch, head). Unlike CCv3, a create from main needs a tap too. */
 function judgeAppCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  return inApp(deps, () => appCreate(text, mtext, deps, dir, cmd));
+  return homeRead(inApp(deps, () => appCreate(text, mtext, deps, dir, cmd)));
 }
+/** Fix round 6 (item 1): a deny for a covered folder reads decisions.enforce from the home copy only. */
+const homeRead = (d: Decision): Decision => (d.action === 'deny' ? { ...d, homeFlags: true as const } : d);
 function appCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const place = appPlace(deps, dir);
   if (!place.covered) return passOf(place);
@@ -1727,7 +1798,7 @@ function appCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: Cm
 
 /** Merge in a folder outside CCv3: when covered, "Merge now (no READY check)" for (key repo, PR) at the head the command names. */
 function judgeAppMerge(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  return inApp(deps, () => appMerge(shape, deps, dir, cmd));
+  return homeRead(inApp(deps, () => appMerge(shape, deps, dir, cmd)));
 }
 function appMerge(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const place = appPlace(deps, dir);
@@ -1787,10 +1858,14 @@ function judgeAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', name
   return dirs.map((d) => (s.kind === 'create' ? judgeCreate(s, deps, d, cmd) : judgeLand(s, deps, d, cmd)));
 }
 
-/** The cd-unexpanded deny: the app text and scope when the cwd or a known folder is covered (and none is CCv3), else today's. */
+/**
+ * The cd-unexpanded deny: the app text and scope when a folder of the list is covered (round 6, item 2: each judged alone, a home value
+ * expanded by knownDirs, so a CCv3 cwd no longer hides a covered folder beside the value), else today's. The app deny is the tap path
+ * (round 6): a force push is hard by the verb rule.
+ */
 function unexpandedDeny(deps: Deps, dirs: string[], lost: string, scope: Scope, appScope: Scope): Deny {
-  const dir = coveredAmong(deps, dirs.filter((d) => !isUnexpanded(d)));
-  return dir === null ? deny('cd-unexpanded', unexpandedWhy(lost), scope) : deny('cd-unexpanded', unexpandedWhy(lost) + inAppFolder(dir), appScope);
+  const dir = firstCovered(deps, knownDirs(dirs, deps.home));
+  return dir === null ? deny('cd-unexpanded', unexpandedWhy(lost), scope) : { ...deny('cd-unexpanded', unexpandedWhy(lost) + inAppFolder(dir), appScope), tapPath: true, homeFlags: true };
 }
 
 /** Position unknown with no CCv3 folder on the path (the caller tested every one): a deny when one of the folders is covered (R3a). */
@@ -1798,7 +1873,7 @@ function appPositionAt(deps: Deps, dirs: string[], scope: Scope, offer: Offer): 
   let notice: string | null = null;
   for (const dir of dirs) {
     const place = appPlace(deps, dir);
-    if (place.covered) return [deny('position-unknown', inApp(deps, () => appPositionWhy(deps, dir, offer)), scope)];
+    if (place.covered) return [{ ...deny('position-unknown', inApp(deps, () => appPositionWhy(deps, dir, offer)), scope), homeFlags: true as const }];
     notice ??= place.corrupt;
   }
   return notice === null ? [] : [{ action: 'allow', notice }];
@@ -1859,7 +1934,7 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
     const what = '--git-dir or --work-tree moves the repo, so the checkout is unknown';
     // Ruling B (F3): the repo the value names decides first (a covered one gives app-push); a CCv3 or unknown one keeps the base text.
     // A relative value is resolved from the judged folder (its cd path and -C): advisor review of fix round 5.
-    const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell)) ?? coveredAmong(deps, [dir]);
+    const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell, deps.home)) ?? coveredAmong(deps, [dir]);
     return app === null ? d('push-target-unresolved', pushUnresolvedWhy(what)) : deny('push-target-unresolved', appPushUnresolvedWhy(app, what), 'app-push');
   }
   if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone);
@@ -2147,12 +2222,12 @@ function movedDeny(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', te
   const dirs = s.kind === 'push' ? pushDirsOf(s.push!, cwd, shell) : dirsAfter(cwd, s.at!.cds, shell, s.at!.loose);
   // Ruling B names the push: only a push reads the move targets, each resolved from every folder of its path (a cd before it moves the
   // shell first). A create or merge keeps the cwd rule.
-  const targets = s.kind === 'push' ? [...new Set([cwd, ...dirs].flatMap((d) => (isUnexpanded(d) ? [] : moveTargets(text, d, shell))))] : [];
+  const targets = s.kind === 'push' ? [...new Set([cwd, ...dirs].flatMap((d) => (isUnexpanded(d) ? [] : moveTargets(text, d, shell, deps.home))))] : [];
   const dir = firstCovered(deps, targets) ?? coveredAmong(deps, [cwd, ...dirs].filter((d) => !isUnexpanded(d)));
   if (s.kind === 'push') {
     return dir === null ? deny('push-target-unresolved', pushUnresolvedWhy(MOVED_WHY), 'push') : deny('push-target-unresolved', MOVED_WHY + inAppFolder(dir), 'app-push');
   }
-  return dir === null ? deny('repo-moved', MOVED_WHY) : deny('repo-moved', MOVED_WHY + inAppFolder(dir));
+  return dir === null ? deny('repo-moved', MOVED_WHY) : { ...deny('repo-moved', MOVED_WHY + inAppFolder(dir)), homeFlags: true };
 }
 
 function judgeWrite(input: HookInput, deps: Deps): Deny[] {
@@ -2183,9 +2258,9 @@ export function decide(input: HookInput, deps: Deps): Decision {
   const notice = notes.size === 0 ? {} : { notice: [...notes][0] };
   if (denies.length === 0) return notes.size === 0 ? ALLOW : { action: 'allow', ...notice };
   const cwd = input.cwd || process.cwd();
-  const live = denies.find((d) => hardAppDeny(d) || enforcingScope(d.scope, deps, cwd));
+  const live = denies.find((d) => hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags));
   if (live) {
-    const { tapPath: _tap, ...shown } = live;
+    const { tapPath: _tap, homeFlags: _home, ...shown } = live;
     return { ...shown, ...notice };
   }
   return { action: 'allow', warn: `${denies[0].pattern}: ${denies[0].reason}`, scope: denies[0].scope, ...notice };
@@ -2256,9 +2331,10 @@ const warnOut = (text: string, scope: Scope = 'other', tail = ''): string => out
 function gatedScopes(input: HookInput, app = false): Set<Scope> {
   const tool = input.tool_name || input.tool || '';
   if (WRITE_TOOLS.has(tool)) return new Set<Scope>(['other']);
-  const cmd = readShellCommand(input);
-  const scopes = new Set<Scope>(cmd.kind === 'command' ? shapesOf(cmd.text, cmd.tool).map(scopeOf) : []);
-  if (app && scopes.size > 0) scopes.add('app-push');
+  const shapes = catchShapes(input);
+  const scopes = new Set<Scope>((shapes ?? []).map(scopeOf));
+  // Fix round 6 (item 3): a reader throw in a covered folder is a push off the list: scope app-push, the tap path.
+  if (app && (scopes.size > 0 || shapes === null)) scopes.add('app-push');
   return scopes;
 }
 
@@ -2330,7 +2406,7 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
   const cwd = input.cwd || process.cwd();
   // Each gated scope is judged by its own flag. A mixed command denies when either flag is on. Dave 11-13: in a covered folder a call
   // that holds a hard deny (hardAppCall, no git) denies whatever decisions.enforceAppPush says.
-  const live = (app && hardAppCall(input)) || [...scopes].some((s) => enforcingScope(s, deps, cwd));
+  const live = (app && hardAppCall(input)) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? 'deny' : 'warn', 'cwd-missing');
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has('other') ? 'other' : scopes.has('app-push') ? 'app-push' : 'push');
 }
@@ -2349,11 +2425,21 @@ function hardAppCall(input: HookInput): boolean {
     if (cmd.kind !== 'command') return false;
     const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === 'push');
     if (input.agent_id && pushes.length > 0) return true;
-    const v = rawVerdict(cmd.text, cmd.tool);
-    if (v !== null && (v.kind === 'unsafe' || v.unread)) return true;
+    if (rawVerdict(cmd.text, cmd.tool)?.kind === 'unsafe') return true;
     return pushes.some(({ push: p }) => p !== undefined && (p.force || p.unsafeOpt || p.repoOpt || p.oBundle || p.widerOpt !== null));
   } catch {
-    return true;
+    // Fix round 6 (item 3): a throw of the push reader is a push off the list, the tap path; a subagent call stays hard.
+    return Boolean(input.agent_id);
+  }
+}
+/** Fix round 6 (item 3): the shapes of a shell call for the catch, or null when the reader throws (gatedScopes, pushUnderLiveRoot). */
+function catchShapes(input: HookInput): Shape[] | null {
+  const cmd = readShellCommand(input);
+  if (cmd.kind !== 'command') return [];
+  try {
+    return shapesOf(cmd.text, cmd.tool);
+  } catch {
+    return null;
   }
 }
 
@@ -2366,14 +2452,15 @@ function pushUnderLiveRoot(input: HookInput, deps: Deps): boolean {
     const scope = deps.tapScope;
     const cmd = readShellCommand(input);
     if (!scope || cmd.kind !== 'command') return false;
-    const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === 'push');
-    if (pushes.length === 0) return false;
+    // A reader throw (null) is a push off the list: the cwd is its folder.
+    const pushes = catchShapes(input)?.filter((s) => s.kind === 'push') ?? null;
+    if (pushes?.length === 0) return false;
     const reg = scope.registry();
     const cwd = input.cwd || process.cwd();
     const shell = shellOf(input);
-    // Fix round 5 (F4, F3): the -C chain folders, and the move targets resolved from each folder.
-    const paths = pushes.flatMap((s) => [cwd, ...pushDirsOf(s.push!, cwd, shell), ...chainDirsOf(s.push!, cwd, shell)]).filter((d) => !isUnexpanded(d));
-    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell))];
+    // Fix round 5 (F4, F3): the -C chain folders, and the move targets resolved from each folder. Round 6: a home folder is expanded.
+    const paths = knownDirs((pushes ?? []).flatMap((s) => [cwd, ...pushDirsOf(s.push!, cwd, shell), ...chainDirsOf(s.push!, cwd, shell)]).concat(cwd), deps.home);
+    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
     return dirs.some((d) => underLiveRoot(d, reg, scope, { outsideCcv3: true }));
   } catch {
     return false;
