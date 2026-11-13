@@ -856,7 +856,7 @@ test('Y12 ready prints the claimable lanes and the cap line; --json has the pinn
   const text = await inProc(['ready', '--as', 'sess-1'], fakeIo({ rows }));
   assert.equal(text.code, 0, text.err.join('\n'));
   const out = text.out.join('\n');
-  assert.match(out, /^ready: board continuous-claude, caller sess-1, mode worker, cap 0\/3 units, slot free$/m);
+  assert.match(out, /^ready: board continuous-claude, caller sess-1, mode worker, cap 0\/5 units, slot free$/m);
   assert.match(out, /^READY re-dummy-1 /m);
   assert.match(out, /^READY re-dummy-4 .*spends$/m);
   const j = JSON.parse((await inProc(['ready', '--as', 'sess-1', '--json'], fakeIo({ rows }))).out.join('\n'));
