@@ -8,7 +8,8 @@
  *   push     [--remote R] [--branch B] [--src S]: store step `ship`, key repo@B, head = the commit of S, tree = the index tree (`git write-tree`)
  *            when S is the checked-out HEAD and files are staged, else the tree of S. B is the DESTINATION branch the push updates; S is the
  *            source ref (default: HEAD for the current branch, else B). A Push only offer is written even when nothing is ahead.
- *   open-pr  [--remote R] [--branch B] [--base B]: store step `open-pr`, key repo@branch, head = the branch tip, no tree.
+ *   open-pr  [--remote R] [--branch B] [--base B]: store step `open-pr`, key repo@branch (plus :base with --base B, fix round 5 F8:
+ *            lib/repo-identity.mjs openPrKey, the rule the gate reads), head = the branch tip, no tree.
  *   merge    --pr N [--remote R]: store step `land`, key repo#N, head = the PR head sha (gh pr view N -R repo). A draft or a closed PR is refused.
  *   --dir    the folder of the checkout (default: the cwd). --json prints the spec only ({ header, question, options }), to pass to AskUserQuestion.
  * Key repo: ONE rule with the decision gate, in lib/repo-identity.mjs (pushKey, ghKey), over the same git questions.
@@ -30,7 +31,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
-import { fetchKey, ghRemote, needsGithubField, normPath, oneLine, pushKey, remoteNames, repoSlug } from './lib/repo-identity.mjs';
+import { fetchKey, ghRemote, needsGithubField, normPath, oneLine, openPrKey, pushKey, remoteNames, repoSlug } from './lib/repo-identity.mjs';
 
 const CCV3_SLUG = 'rev4nchist/continuous-claude-v3';
 const RECOMMENDED = ' (Recommended)';
@@ -197,7 +198,8 @@ function planOpenPr(git, o, id, current) {
   if (!branch) throw new Refuse('HEAD is detached: pass --branch B.');
   const t = sourceOf(git, { src: undefined, branch, remote, current });
   if (!t.head) throw new Refuse(`branch ${plain(branch)} has no commit.`);
-  return { spec: openPrSpec({ repo, branch, base: o.base, head: t.head }), key: decisionKey({ repo, branch }), head: t.head, tree: null };
+  // Fix round 5 (F8): the key holds the base the PR targets (one rule with the gate, repo-identity.mjs openPrKey).
+  return { spec: openPrSpec({ repo, branch, base: o.base, head: t.head }), key: openPrKey({ repo, branch, base: o.base }), head: t.head, tree: null };
 }
 
 function planMerge(git, o, id, view) {

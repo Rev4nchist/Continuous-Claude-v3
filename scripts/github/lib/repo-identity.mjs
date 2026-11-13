@@ -13,6 +13,7 @@
 //   pushKey(git, o)                       the key of a push: the push URLs of the remote, the destination branch
 //   pushDefaults(git, remote)             the remote and branch a push takes when the command names none (ONE rule with pushKey)
 //   ghKey(git, o)                         the key of a create or merge: the FETCH URL of a remote (gh reads it), or the named repo
+//   openPrKey({ repo, branch, base })     the open-pr key: repo@branch, plus :base when the create names one (fix round 5, F8)
 //   oneLine(text, max)                    one plain line for a question text, clipped to max code points
 
 const NAME = '([\\w.-]+)';
@@ -239,6 +240,17 @@ export function ghKey(git, { named = null, entryKey = null, github = null } = {}
   const pushKeys = uniq((remoteUrls(git, via, true) ?? []).map((url) => keyRepo({ url, entryKey, github })));
   if (pushKeys.some((k) => k !== key)) return { ok: false, why: 'fetch-push-differ', key, remote: via, pushKeys };
   return { ok: true, key, remote: via };
+}
+
+/**
+ * The open-pr key of an app repo (fix round 5, F8): `<repo>@<branch>`, the branch key of the store (decisions.mjs decisionKey), plus
+ * `:<base>` when the create names the base branch it targets. A colon is in no git ref name, so the base never runs into the branch, and
+ * a tap for base dev never licenses a create into main. No base (null, undefined or ''): the key of before (gh then takes the default
+ * branch, and a create that names a base needs its own tap). The decision gate and app-ask.mjs both build the key here.
+ */
+export function openPrKey({ repo, branch, base = null } = {}) {
+  const key = `${repo}@${branch}`;
+  return typeof base === 'string' && base !== '' ? `${key}:${base}` : key;
 }
 
 /** Control, format, private-use and lone-surrogate characters, and the line and paragraph separators. */

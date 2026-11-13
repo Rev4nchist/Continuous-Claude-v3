@@ -152,7 +152,8 @@ test('AA3: open-pr writes step open-pr, a branch key, the branch tip as head, no
   assert.equal(r.code, 0, r.err);
   const [offer] = offers(w);
   assert.equal(offer.step, 'open-pr');
-  assert.equal(offer.key, 'acme/app@feat/x');
+  // Fix round 5 re-pin (F8): --base main is in the key (repo-identity.mjs openPrKey), so a tap for one base never licenses another.
+  assert.equal(offer.key, 'acme/app@feat/x:main');
   assert.equal(offer.head, tip);
   assert.notEqual(offer.head, git(w, dir, 'rev-parse', 'HEAD'));
   assert.equal(offer.tree, null);
@@ -349,6 +350,21 @@ test('AA11: a newline in a base name or a PR title cannot start a line of the qu
   const b = run(w, dir, ['open-pr', '--dir', dir, '--remote', 'origin', '--base', hostile, '--json']);
   assert.equal(b.code, 0, b.err);
   assert.equal(JSON.parse(b.out).question.split('\n').length <= 3, true);
+});
+
+// Fix round 5 (F8). Change that breaks it: key open-pr on repo@branch only (the tap for base dev then licenses a create into main).
+test('AA-F8: the open-pr key holds the base: dev and main give two keys; no --base gives the key of before', () => {
+  const w = world();
+  const dir = repo(w, 'app', { remotes: { origin: ACME } });
+  const keyOf = (args) => {
+    const r = run(w, dir, ['open-pr', '--dir', dir, '--remote', 'origin', ...args, '--json']);
+    assert.equal(r.code, 0, r.err);
+    return offers(w).filter((o) => o.open !== false).map((o) => o.key);
+  };
+  assert.ok(keyOf(['--base', 'dev']).includes('acme/app@feat/x:dev'));
+  assert.ok(keyOf(['--base', 'main']).includes('acme/app@feat/x:main'));
+  assert.ok(keyOf([]).includes('acme/app@feat/x'));
+  assert.equal(new Set(offers(w).map((o) => o.key)).size, 3, 'three keys: one per base, and none');
 });
 
 test('AA12: two repos with the same branch, tree and head give different keys, and both offers stay open', () => {

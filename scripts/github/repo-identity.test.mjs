@@ -357,3 +357,15 @@ describe('purity', () => {
     assert.equal(/child_process|\bspawn|\bexecSync|\bexecFile/.test(src), false);
   });
 });
+
+// Fix round 5 (F8). Change that breaks it: drop the base from the key (a tap for base dev then licenses a create into main), or add a
+// suffix when no base is named (every open-pr tap of before stops matching).
+describe('openPrKey (fix round 5, F8: the base branch is in the open-pr key)', () => {
+  it('RI-F8 no base gives repo@branch; a base adds :base; two bases give two keys', () => {
+    assert.equal(identity.openPrKey({ repo: 'acme/app', branch: 'feat/x' }), 'acme/app@feat/x');
+    assert.equal(identity.openPrKey({ repo: 'acme/app', branch: 'feat/x', base: '' }), 'acme/app@feat/x');
+    assert.equal(identity.openPrKey({ repo: 'acme/app', branch: 'feat/x', base: null }), 'acme/app@feat/x');
+    assert.equal(identity.openPrKey({ repo: 'acme/app', branch: 'feat/x', base: 'dev' }), 'acme/app@feat/x:dev');
+    assert.notEqual(identity.openPrKey({ repo: 'acme/app', branch: 'feat', base: 'dev' }), identity.openPrKey({ repo: 'acme/app', branch: 'feat', base: 'main' }));
+  });
+});

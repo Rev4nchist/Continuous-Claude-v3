@@ -52,6 +52,16 @@
  *       or matching over-denies a positional push, or the way out dead-ends; 2 a global option PUSH_GIT does not read hides the push;
  *       3 a prefix of an unsafe long option, or a short bundle with o, escapes push-unsafe; 5 a source word that is no plain ref says
  *       "run again" -> configKind by effect; hiddenPushDenies; UNSAFE_LONG prefixes and the o cut; appTreeWhy plain test.
+ *   R5  (fix round 5, fixer M; seat reviewer on 785138fd, rulings A B C) each R5 F<n> row was red on 785138fd before the fix:
+ *       F1 a push option value hides -n/-h/-f; F2 a push in a control word, substitution, sh -c, eval or git alias; F3 GIT_DIR or
+ *       --git-dir at an app repo from a CCv3 or unregistered cwd; F4 a -C chain; F5 enforceAppPush read from the app repo; F6 Main,
+ *       MASTER, Develop; F7 60 runs of a long hostile command over 1 s (WIDE_OPT backtracking); F8 an open-pr tap for one base licenses
+ *       another -> quiet outside the strict reader; drop rawPushDenies; judge the move in the cwd only; last -C only; cwd-upward flag
+ *       read; case-sensitive compare; overlapping option alternatives; openPrKey without the base.
+ *   Re-pinned by fixer M: C12 the GIT_DIR row of an unregistered cwd (an app-repo GIT_DIR now denies, scope app-push; /x/.git keeps scope
+ *       push); C26 item 2 'a dry run behind a hidden global option' (it was a pass: quiet is read only inside the strict reader); C1 the
+ *       create-from-main and REST create rows and C15 the --base dev row (F8: the tap key holds the base). deps() serves the config at
+ *       <home>/continuous-claude too (ruling C) and an app-repo config file for R5 F5 (appConfig).
  *   Re-pinned by fixer K: C23 matching / remote.up.push bare rows, C25 -c, --follow-tags, push.followTags and the colon-less mapping rows
  *       (tap path -> push-target-unresolved); the CONFIG_TEXT row is dropped (no row needed it) and its commands joined the lead-in row.
  *   Re-pinned by fixer H (strict allow-list; each row names why): C22 main:feat, feat topic, @ on feat, the URL target and team/fork
@@ -163,8 +173,13 @@ interface World {
   folders?: Record<string, Folder>;
   /** Registry file text; null = the file is missing; undefined = REGISTRY. */
   registry?: string | null;
-  /** Router config text at /work; null = no config anywhere. */
+  /**
+   * Router config text at /work and at <home>/continuous-claude (fix round 5, ruling C: enforceAppPush is read from the home copy only);
+   * null = no config anywhere.
+   */
   config?: string | null;
+  /** R5 F5: a router config file inside the app repo /work/app-x (the gate must not read enforceAppPush from it). */
+  appConfig?: string;
   /** No tapScope field at all (the shape of every old test). */
   noScope?: boolean;
   calls?: string[];
@@ -232,7 +247,11 @@ function deps(w: World = {}): Deps {
   const d: Deps = {
     env: { ...process.env, CCV3_DECISIONS_FILE: storeFile },
     home: '/home/tester',
-    readFile: (p) => (slash(p) === '/work/review-router.config.json' ? config : null),
+    readFile: (p) => {
+      const f = slash(p);
+      if (f === '/work/app-x/review-router.config.json') return w.appConfig ?? null;
+      return f === '/work/review-router.config.json' || f === '/home/tester/continuous-claude/review-router.config.json' ? config : null;
+    },
     git: (cwd, args) => {
       const dir = slash(cwd);
       const a = args.join(' ');
@@ -288,13 +307,17 @@ describe('C1 a covered folder judges push, create and merge (R2, R3, R4)', () =>
   it('denies a create from main with no tap (no main exception outside CCv3), and allows it after its tap', () => {
     const fromMain = 'gh pr create --draft --head main --base release --title t';
     expect(denyOf(bash(fromMain))?.pattern).toBe('open-pr');
-    tap('open-pr', 'acme/app-x@main', HEAD2, 'Open draft PR');
+    // Fix round 5 re-pin (F8): the key holds the base the create names (acme/app-x@main:release).
+    tap('open-pr', 'acme/app-x@main:release', HEAD2, 'Open draft PR');
     expect(passes(bash(fromMain))).toBe(true);
   });
   it('the REST create form: denied with no tap, allowed after it, repo-differs for another repo', () => {
     const rest = (repo: string) => `gh api repos/${repo}/pulls -X POST -f head=feat -f base=main -f title=t -F draft=true`;
     expect(denyOf(bash(rest('acme/app-x')))).toMatchObject({ pattern: 'open-pr', scope: 'other' });
+    // Fix round 5 re-pin (F8): -f base=main is in the key (acme/app-x@feat:main); the tap with no base no longer licenses it.
     openX();
+    expect(passes(bash(rest('acme/app-x')))).toBe(false);
+    tap('open-pr', 'acme/app-x@feat:main', HEAD, 'Open draft PR');
     expect(passes(bash(rest('acme/app-x')))).toBe(true);
     expect(denyOf(bash(rest('other/lib')))?.pattern).toBe('repo-differs');
   });
@@ -609,8 +632,12 @@ describe('C12 a git throw after coverage is known is unjudgeable with scope app-
   // Change that breaks it: coveredAmong swallows the throw with no path test (the deny falls back to scope push and only warns).
   it('a GIT_DIR or unexpanded-cd push whose folder git cannot read (timeout) keeps scope app-push by the path test', () => {
     for (const cmd of [`GIT_DIR=/x/.git ${PUSH}`, `cd $D && ${PUSH}`]) expect(denyOf(bash(cmd), throwing(['remote -v']))?.scope, cmd).toBe('app-push');
-    const stray = verdict(bash(`GIT_DIR=/x/.git ${PUSH}`, '/work/stray'), { folders: { ...FOLDERS, '/work/stray': { ...FOLDERS['/work/stray'], throwOn: ['remote -v'] } } });
-    expect(stray).toMatchObject({ action: 'allow', scope: 'push' });
+    // Fix round 5 re-pin (F3, ruling B): this row pinned the allow of a GIT_DIR push from an unregistered cwd. GIT_DIR aimed at the app
+    // repo /work/app-x is now judged by the rule of that repo: denied, scope app-push. A GIT_DIR that names no repo git can read and no
+    // folder under a live root (/x/.git) keeps the base path: scope push (warn).
+    const strayThrows: World = { folders: { ...FOLDERS, '/work/stray': { ...FOLDERS['/work/stray'], throwOn: ['remote -v'] } } };
+    expect(denyOf(bash(`GIT_DIR=/work/app-x/.git ${PUSH}`, '/work/stray'), strayThrows)?.scope).toBe('app-push');
+    expect(verdict(bash(`GIT_DIR=/x/.git ${PUSH}`, '/work/stray'), strayThrows)).toMatchObject({ action: 'allow', scope: 'push' });
   });
   it('a throw in the rev-parse of coverage (after the path test) is scope app-push too', () => {
     const out = JSON.parse(handle(JSON.stringify(bash(PUSH)), deps(throwing(['rev-parse --path-format=absolute --show-toplevel --git-common-dir']))));
@@ -650,6 +677,19 @@ describe('C11 every covered deny text names the judged folder, the full offer co
     ['push-target-unresolved (not a ref)', bash('git push up -- -x:feat')],
     ['push-tree-unresolved', bash('git push up nope:feat')],
     ['push-unsafe', bash('git push --force up feat')],
+    // Fix round 5 (F9): one deny row per finding of the seat reviewer.
+    ['R5 F1 push-unsafe (option value hides -f)', bash('git push -uo -n -f up main')],
+    ['R5 F1 push-target-unresolved (option value hides -h)', bash('git push -uo -h up main')],
+    ['R5 F2 push-unsafe (sh -c)', bash(`sh -c 'git push -f up topic'`)],
+    ['R5 push-unsafe (a force word of another command beside a push off the list)', bash('test -f x && git push up topic')],
+    ['R5 F8 base-unresolved (two bases)', bash('gh pr create --draft --head feat --base dev --title t --base main')],
+    ['R5 F2 push-target-unresolved (eval)', bash(`eval 'git push up topic'`)],
+    ['R5 F3 push-target-unresolved (GIT_DIR at the app repo, unregistered cwd)', bash('GIT_DIR=/work/app-x/.git git push up topic', '/work/stray')],
+    ['R5 F3 push-target-unresolved (--git-dir at the app repo, CCv3 cwd)', bash('git --git-dir=/work/app-x/.git push up topic', '/work/cc')],
+    ['R5 F4 ship (-C chain into the app repo)', bash('git -C /work/app-x -C /work/app-x push up main', '/work/stray'), undefined, `${ASK} push --remote up --branch main --src main --dir '/work/app-x' --json`],
+    ['R5 F5 ship (an app config file does not warn)', bash('git push up main'), { appConfig: JSON.stringify({ decisions: { enforceAppPush: false } }) }],
+    ['R5 F6 ship (Main)', bash('git push up Main'), { folders: { ...FOLDERS, '/work/app-x': { remotes: gh('acme/app-x'), trees: { Main: TREE } } } }],
+    ['R5 F8 open-pr (with a base)', bash('gh pr create --draft --head feat --base dev --title t'), undefined, `${ASK} open-pr --remote up --branch feat --base dev --dir '/work/app-x' --json`],
     ['subagent push', bash(PUSH, '/work/app-x', { agent_id: 's' })],
     ['cd-unexpanded push', bash(`cd $D && ${PUSH}`)],
     ['cd-unexpanded create', bash(`cd $D && ${CREATE}`)],
@@ -747,7 +787,10 @@ describe('C15 a CCv3 slug outside the gh segment does not take a covered folder 
     expect(r?.pattern).toBe('open-pr');
     expect(r?.reason).toContain(`${ASK} open-pr`);
     expect(r?.reason).not.toMatch(/ship-ask|land-pr/);
+    // Fix round 5 re-pin (F8): the create names --base dev, so its key is acme/app-x@main:dev (a tap with no base does not license it).
     tap('open-pr', 'acme/app-x@main', HEAD2, 'Open draft PR');
+    expect(passes(bash(cmd))).toBe(false);
+    tap('open-pr', 'acme/app-x@main:dev', HEAD2, 'Open draft PR');
     expect(passes(bash(cmd))).toBe(true);
   });
   it('a covered merge with a CCv3 PR URL in --body is judged with the folder key', () => {
@@ -1810,8 +1853,12 @@ describe('C26 item 2: a global option the push parser does not read gives a push
     expect(verdict(bash('git push -oh fork feat', '/work/cc'), CC_PUSH)).toEqual({ action: 'allow' });
     expect(denyOf(bash('git push --mirr fork feat', '/work/cc'), CC_PUSH)?.pattern).toBe('ship');
   });
-  it('a dry run behind a hidden global option stays a pass', () => {
-    allowed(bash('git -p push --dry-run up main'), devX());
+  // Fix round 5 re-pin (ruling A): quiet is read only inside the strict reader, for a call it accounts for. git -p is a global option it
+  // does not read, so --dry-run there is a bare word: denied push-target-unresolved (it was a pass). A strict dry run still passes.
+  it('a dry run behind a hidden global option is denied; a strict dry run passes', () => {
+    expect(denyOf(bash('git -p push --dry-run up main'), devX())).toMatchObject(unresolved);
+    allowed(bash('git push --dry-run up main'), devX());
+    allowed(bash('git push -n up main'), devX());
   });
   // Change that breaks it: read the option words as -\S+ in the masked view (a quoted value with a blank ends the word early).
   it('a hidden global option with a quoted value that holds a blank: denied', () => {
@@ -1867,5 +1914,230 @@ describe('C25 item 6: an SSH remote on a host that is not GitHub never takes the
     const r = denyOf(bash('git push mirror main', G2), w);
     expect(r?.pattern).toBe('ship');
     expect(r!.reason).toContain('local:glab2:gitlab.com:acme/app.git');
+  });
+});
+
+// ---------- R5: fix round 5, fixer M (seat reviewer on 785138fd: F1 to F9; rulings A, B, C) ----------
+
+/** The hook output of one payload (handle): a git throw is judged by the catch, as in the real hook. */
+const hookOut = (input: object, w?: World): { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string } =>
+  JSON.parse(handle(JSON.stringify(input), deps(w))).hookSpecificOutput ?? {};
+
+describe('R5 F1: a push option value never hides a later flag (ruling A: quiet only inside the strict reader)', () => {
+  // Change that breaks it: read -n or -h as quiet outside a call the strict reader accounts for (the push makes no shape and passes).
+  for (const cmd of ['git push -uo -n -f up main', 'git push --push-opt -n --force up main', 'git push --push -n --force up main', 'git push -uo -n --force-with-lease up topic']) {
+    it(`R5 F1 force: ${cmd} is push-unsafe`, () => { expect(denyOf(bash(cmd), devX()), cmd).toMatchObject(unsafe); });
+  }
+  for (const cmd of ['git push -uo -h up main', 'git push --push-opt -h up topic', 'git push --push -n up topic', 'git push -uo -n up topic']) {
+    it(`R5 F1 quiet: ${cmd} is denied, scope app-push`, () => { expect(denyOf(bash(cmd), devX())?.scope, cmd).toBe('app-push'); });
+  }
+});
+
+describe('R5 F2: a push inside a control word, a substitution, a shell -c, eval or a git alias is never a no-tap pass', () => {
+  const FORMS: ((p: string) => string)[] = [
+    (p) => `if ${p}; then echo ok; fi`, (p) => `! ${p}`, (p) => `echo \`${p}\``, (p) => `echo "$(${p})"`, (p) => `sh -c '${p}'`,
+    (p) => `bash -lc '${p}'`, (p) => `cmd /c ${p}`, (p) => `pwsh -Command "${p}"`, (p) => `eval '${p}'`,
+  ];
+  // Change that breaks it: read the push only where the shared lexer finds a call (each form below has no shape, or no strict reading).
+  for (const form of FORMS) {
+    const cmd = form('git push -f up topic');
+    it(`R5 F2 force: ${cmd} is push-unsafe`, () => { expect(denyOf(bash(cmd), devX()), cmd).toMatchObject(unsafe); });
+    const plain = form('git push up topic');
+    it(`R5 F2 tap: ${plain} is denied, scope app-push`, () => { expect(denyOf(bash(plain), devX())?.scope, plain).toBe('app-push'); });
+  }
+  it('R5 F2 alias: git -c alias.x=push x -f up topic is push-unsafe; git -c alias.x=push x up topic is denied', () => {
+    expect(denyOf(bash('git -c alias.x=push x -f up topic'), devX())).toMatchObject(unsafe);
+    expect(denyOf(bash('git -c alias.x=push x up topic'), devX())?.scope).toBe('app-push');
+  });
+});
+
+describe('R5 F3: GIT_DIR, --git-dir or --work-tree aimed at an app repo is judged by the rule of that repo (ruling B)', () => {
+  // Change that breaks it: judge the move in the cwd only (an unregistered or CCv3 cwd gives scope push, which only warns).
+  const forms = ['GIT_DIR=/work/app-x/.git git push up topic', 'git --git-dir=/work/app-x/.git push up topic', 'git --work-tree=/work/app-x push up topic'];
+  for (const cmd of forms) {
+    for (const cwd of ['/work/stray', '/work/cc']) {
+      it(`R5 F3 ${cmd} from ${cwd}: denied, scope app-push`, () => { expect(denyOf(bash(cmd, cwd), devX()), `${cwd}: ${cmd}`).toMatchObject({ scope: 'app-push' }); });
+    }
+  }
+});
+
+describe('R5 F4: every -C applies in order, relative to the one before (ruling B)', () => {
+  // Change that breaks it: keep only the last -C (git -C /work/app-x -C . runs in /work/app-x, not in the cwd).
+  // The base reading resolves the last relative -C with the platform path rules (on Windows /work/cc becomes C:\work\cc, a folder the fake
+  // git does not know, so the call ends in the catch). The rows read the hook output, which denies on both platforms after the fix.
+  it('R5 F4 git -C /work/app-x -C . push -f up main from a CCv3 cwd: the hook denies', () => {
+    expect(hookOut(bash('git -C /work/app-x -C . push -f up main', '/work/cc'), devX()).permissionDecision).toBe('deny');
+  });
+  it('R5 F4 git -C /work/app-x -C . push up topic from an unregistered cwd: the hook denies', () => {
+    expect(hookOut(bash('git -C /work/app-x -C . push up topic', '/work/stray'), devX()).permissionDecision).toBe('deny');
+  });
+  it('R5 F4 git -C /work -C app-x push up topic from an unregistered cwd: the hook denies', () => {
+    expect(hookOut(bash('git -C /work -C app-x push up topic', '/work/stray'), devX()).permissionDecision).toBe('deny');
+  });
+});
+
+describe('R5 F5: enforceAppPush is read from <home>/continuous-claude only (ruling C)', () => {
+  // Change that breaks it: read the flag from the payload cwd upward (a config file in the app repo turns the deny to a warning).
+  it('R5 F5 a review-router.config.json in the app repo with enforceAppPush false does not turn the deny to a warning', () => {
+    expect(denyOf(bash('git push up main'), { ...devX(), appConfig: JSON.stringify({ decisions: { enforceAppPush: false } }) })).toMatchObject({ pattern: 'ship', scope: 'app-push' });
+  });
+});
+
+describe('R5 F6: the default-branch compare ignores case', () => {
+  // Change that breaks it: compare main, master and the remote HEAD branch as written.
+  for (const b of ['Main', 'MASTER', 'Develop']) {
+    it(`R5 F6 git push up ${b}: ship, scope app-push`, () => {
+      expect(denyOf(bash(`git push up ${b}`), devX({ trees: { ...TREES_ALL, [b]: TREE } })), b).toMatchObject({ pattern: 'ship', scope: 'app-push' });
+    });
+  }
+});
+
+describe('R5 F7: a long hostile command is read in linear time', () => {
+  // Change that breaks it: an option reader whose alternatives overlap (-C VAL and -ANY_WORD both take -C), so a failed match backtracks.
+  it('R5 F7 60 runs of git with 30 -C words and no verb finish under 1 s', () => {
+    const cmd = `git ${'-C '.repeat(30)}status`;
+    const start = Date.now();
+    for (let i = 0; i < 60; i++) decide(bash(cmd), deps(devX()));
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+  // Change that breaks it: a force-bundle regex with a star on each side of [fd] (quadratic on a long -fff...x word), or any reader of
+  // the raw rule that backtracks on a long -C run before push.
+  it('R5 F7b 60 runs of a long hostile push command (30 -C words, an 8000-letter bundle) finish under 1 s', () => {
+    // handle(), as the real hook: the -C chain names a folder under the live root that git cannot read, so the call ends in the catch (deny).
+    const cmd = JSON.stringify(bash(`git ${'-C '.repeat(30)}push -${'f'.repeat(8000)}x up topic`));
+    const start = Date.now();
+    for (let i = 0; i < 60; i++) expect(JSON.parse(handle(cmd, deps(devX()))).hookSpecificOutput.permissionDecision).toBe('deny');
+    const ms = Date.now() - start;
+    expect(ms, `${ms} ms`).toBeLessThan(1000);
+  });
+});
+
+describe('R5 F8: the open-pr key holds the base branch', () => {
+  // Change that breaks it: key open-pr on repo@branch only (a tap for base dev then licenses a create into main).
+  it('R5 F8 an open-pr tap for base dev does not allow a create with base main', () => {
+    const dev = 'gh pr create --draft --head feat --base dev --title t';
+    allowAfterAsk(bash(dev));
+    expect(denyOf(bash('gh pr create --draft --head feat --base main --title t'))?.pattern).toBe('open-pr');
+    expect(denyOf(bash('gh pr create --draft --head feat --title t'))?.pattern).toBe('open-pr');
+  });
+  // Change that breaks it: leave --base out of the offer (the tap app-ask writes then has no base, and the create stays denied).
+  it('the deny offers --base; -B, --base= and the REST base= read the same base; a variable base gets the plain line, no command', () => {
+    const r = denyOf(bash('gh pr create --draft --head feat -B dev --title t'));
+    expect(commandsIn(r!.reason)).toEqual([`${ASK} open-pr --remote up --branch feat --base dev --dir '/work/app-x' --json`]);
+    expect(allowAfterAsk(bash('gh pr create --draft --head feat --base=dev --title t')).key).toBe('acme/app-x@feat:dev');
+    expect(passes(bash('gh api repos/acme/app-x/pulls -X POST -f head=feat -f base=dev -f title=t'))).toBe(true);
+    const v = denyOf(bash('gh pr create --draft --head feat --base $B --title t'));
+    expect(commandsIn(v!.reason)).toEqual([]);
+    expect(v!.reason).toContain(`the base $B ${STOP}`);
+  });
+  // Change that breaks it: read a --base inside quoted prose (a --body that names a base is text).
+  // Change that breaks it: read only the first base (gh takes the last --base, and the last base= field), or miss --field=base=.
+  it('R5 F8b a create that names two bases, or --field=base=, is never licensed by the tap of one base', () => {
+    allowAfterAsk(bash('gh pr create --draft --head feat --base dev --title t'));
+    const cmds = [
+      'gh pr create --draft --head feat --base dev --title t --base main',
+      'gh api repos/acme/app-x/pulls -X POST -f head=feat -f base=dev -f title=t -f base=main',
+      'gh api repos/acme/app-x/pulls -X POST -f head=feat --field=base=main -f title=t',
+    ];
+    for (const cmd of cmds) expect(passes(bash(cmd)), cmd).toBe(false);
+  });
+  it('a --base inside a quoted --body is text: the key has no base', () => {
+    openX();
+    expect(passes(bash('gh pr create --draft --head feat --title t --body "use --base main later"'))).toBe(true);
+  });
+  it('CCv3 is unchanged (G4): a CCv3 create that names --base keys on the branch only, as base did', () => {
+    tap('open-pr', 'Rev4nchist/Continuous-Claude-v3@feat', HEAD, 'Open draft PR');
+    expect(verdict(bash('gh pr create --draft --head feat --base dev --title t', '/work/cc'), at('/work/cc', CC))).toEqual({ action: 'allow' });
+  });
+});
+
+describe('R5 ruling A: the strict reading of the whole text, and what is no push', () => {
+  // Change that breaks it: count push words against calls (a branch or message that holds push takes the strict push off the list).
+  it('a branch or a commit message that holds push keeps a strict push on the list', () => {
+    allowed(bash('git push up fix/push-gate'), devX({ trees: { ...TREES_ALL, 'fix/push-gate': TREE } }));
+    allowed(bash('git commit -m "push fix" && git push up topic'), devX({ indexTree: TREE }));
+    allowed(bash('git status && git push -u up topic 2>&1'), devX());
+  });
+  // Change that breaks it: deny any text that holds git and push (a path, a file, a branch, a stash, a log search, Push-Location).
+  it('a path, a file or a branch name with push in it, git stash push, a log search and Push-Location are no push', () => {
+    for (const cmd of ['git add src/push.ts', 'git checkout push-fix', 'cat docs/git-push.md', 'git stash push -m wip', 'git log --grep push', 'git commit -m "push the fix"']) {
+      allowed(bash(cmd), devX());
+    }
+    allowed(pwsh('Push-Location /work/app-x; git status'), devX());
+  });
+  // Change that breaks it: let the strict reader skip a word, or read more than one -C (git applies each -C in order).
+  it('two -C values, an unknown option and a third positional take a strict-looking push off the list', () => {
+    tapPath('git -C /work/app-x -C /work/app-x push up topic', devX());
+    tapPath('git push --atomic up topic', devX());
+  });
+  // Change that breaks it: read a force spelling only in the shape (a force word after a push option value or in another call counts).
+  it('a force spelling anywhere in a text off the list is push-unsafe, even with the tap of the branch', () => {
+    shipX('Commit and push', 'topic');
+    for (const cmd of ['git push -o -f up topic', 'git push up topic && sh -c "git push --forc up main"', 'git push up topic; eval "git push up +main"', 'git push --mirr up topic']) {
+      expect(denyOf(bash(cmd), devX()), cmd).toMatchObject(unsafe);
+    }
+  });
+  // Ruling A says a force spelling ANYWHERE in the raw text: a word of another command counts too (accepted over-deny, listed for the
+  // seat). The text names the way out: the push as its own command. Change that breaks it: read the force words of the push call only.
+  it('accepted over-deny: test -f, [ -d ] or chmod +x beside a push off the list is push-unsafe, even with the tap; the text names the way out', () => {
+    shipX('Commit and push', 'topic');
+    for (const cmd of ['test -f x && git push up topic', '[ -d dist ] && git push up topic', 'chmod +x s.sh && git push up topic']) {
+      const r = denyOf(bash(cmd), devX());
+      expect(r, cmd).toMatchObject(unsafe);
+      expect(r!.reason, cmd).toContain('Run the push as its own command');
+    }
+    expect(passes(bash('git push up topic'), devX())).toBe(true);
+  });
+  // Change that breaks it: count a push in sh -c as read when another push of the text has a shape (a tap for topic licenses it).
+  it('a second push no shape reads is denied even when the first one has its tap', () => {
+    shipX('Commit and push', 'topic');
+    expect(denyOf(bash("git push up topic; sh -c 'git push up release'"), devX())).toMatchObject(unresolved);
+  });
+  it('PowerShell forms: a block and Invoke-Expression', () => {
+    expect(denyOf(pwsh('if ($true) { git push -f up topic }'), devX())).toMatchObject(unsafe);
+    expect(denyOf(pwsh('Invoke-Expression "git push up topic"'), devX())?.scope).toBe('app-push');
+  });
+  // Change that breaks it: judge the raw folders without the -C chain or the cd inside the quoted text (an unregistered cwd passes).
+  it('a push inside sh -c names its folder by -C or cd: judged there from an unregistered cwd', () => {
+    expect(denyOf(bash("sh -c 'git -C /work/app-x push -f up topic'", '/work/stray'), devX())).toMatchObject(unsafe);
+    expect(denyOf(bash("sh -c 'cd /work/app-x && git push up topic'", '/work/stray'), devX())).toMatchObject(unresolved);
+  });
+  // G4: a CCv3 checkout and an uncovered folder get no raw deny.
+  it('CCv3 unchanged (G4): a push in sh -c, eval or a substitution in a CCv3 checkout passes as in base; an uncovered folder too', () => {
+    for (const cmd of ["sh -c 'git push -f fork feat'", 'eval "git push fork feat"', 'echo "$(git push --force fork feat)"']) {
+      expect(verdict(bash(cmd, '/work/cc'), CC_PUSH), cmd).toEqual({ action: 'allow' });
+      expect(verdict(bash(cmd, '/work/stray'), CC_PUSH), cmd).toEqual({ action: 'allow' });
+    }
+  });
+});
+
+describe('R5 ruling B: a move value that names a CCv3 repo or no repo keeps the base path and text (G4)', () => {
+  // Change that breaks it: judge a CCv3 target with the app rule, or deny an unresolvable value in a CCv3 checkout with app-push.
+  it('GIT_DIR or --git-dir aimed at the CCv3 repo, or at a missing folder, from a CCv3 cwd: scope push, the base text', () => {
+    for (const cmd of ['GIT_DIR=/work/cc/.git git push fork feat', 'git --git-dir=/work/cc/.git push fork feat', 'GIT_DIR=/nowhere/.git git push fork feat', 'GIT_DIR=$X git push fork feat']) {
+      const r = denyOf(bash(cmd, '/work/cc'), CC_PUSH);
+      expect(r, cmd).toMatchObject({ pattern: 'push-target-unresolved', scope: 'push' });
+      expect(r!.reason, cmd).not.toMatch(/judged for Dave's tap|\(folder /);
+    }
+  });
+  // Change that breaks it: read the move value from the cwd only (a relative value is resolved from the cwd).
+  // Ruling B, unresolvable value: a literal path git cannot read that lies under a live root (the path test of coveredAmong) takes
+  // app-push; a variable value keeps the cwd rule. Change that breaks it: skip the path test for a move target git cannot read.
+  it('GIT_DIR at a missing folder under the live root /work/app-x, from an unregistered cwd: denied, scope app-push', () => {
+    expect(denyOf(bash('GIT_DIR=/work/app-x/gone/.git git push up topic', '/work/stray'), devX())?.scope).toBe('app-push');
+    expect(verdict(bash('GIT_DIR=$X git push up topic', '/work/stray'), devX())).toMatchObject({ action: 'allow', scope: 'push' });
+  });
+  // Change that breaks it: resolve a relative move value from the payload cwd only (the cd before it moves the shell first).
+  it('R5 F3b cd /work/app-x && GIT_DIR=.git git push up topic from a CCv3 cwd: denied, scope app-push', () => {
+    expect(denyOf(bash('cd /work/app-x && GIT_DIR=.git git push up topic', '/work/cc'), devX())?.scope).toBe('app-push');
+  });
+  // Ruling B names the push: a GIT_DIR before a create or merge keeps the cwd rule (no move target is read for it).
+  it('a GIT_DIR at the app repo before a create from a CCv3 cwd keeps the base repo-moved text', () => {
+    const r = denyOf(bash('GIT_DIR=/work/app-x/.git gh pr create --draft --head feat --title t', '/work/cc'), devX());
+    expect(r).toMatchObject({ pattern: 'repo-moved', scope: 'other' });
+    expect(r!.reason).not.toMatch(/judged for Dave's tap/);
+  });
+  it('a relative GIT_DIR from /work names /work/app-x: denied, scope app-push', () => {
+    expect(denyOf(bash('GIT_DIR=app-x/.git git push up topic', '/work'), { ...devX(), folders: { ...devX().folders, '/work': { remotes: gh('acme/work') } } })?.scope).toBe('app-push');
   });
 });

@@ -244,5 +244,7 @@ export const ghKey: (git: GitRun, o: KeyIdentity & { named?: string | null }) =>
 export const pushDefaults: (git: GitRun, remote?: string | null) => { remote: string | null; branch: string } = identity.pushDefaults;
 /** Fixer G, item 4: the remote gh reads for a create or a merge with no -R (repo-identity.mjs ghRemote, the rule of app-ask). */
 export const ghRemote: (git: GitRun) => string | null = (git) => identity.ghRemote(git);
+/** Fix round 5 (F8): the open-pr key of an app repo, repo@branch plus :base when the create names one (repo-identity.mjs openPrKey). */
+export const openPrKey: (a: { repo: string; branch: string; base?: string | null }) => string = identity.openPrKey;
 /** Fixer G, item 7: an SSH host alias remote URL of an entry with no github field (repo-identity.mjs needsGithubField). */
 export const needsGithubField: (url: string, github: string | null) => boolean = identity.needsGithubField;
