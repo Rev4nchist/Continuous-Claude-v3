@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { JUDGE_PROMPT_V1_SHA256, JUDGE_PROMPT_VERSION, judgePromptV1 } from './judge-prompt-v1.mjs';
+import { FILLED_PAIR, JUDGE_PROMPT_V1_FILLED_SHA256, JUDGE_PROMPT_V1_SHA256, JUDGE_PROMPT_VERSION, judgePromptV1 } from './judge-prompt-v1.mjs';
 import { parseVerdict } from './judge.mjs';
 
 const START = '<<<UNTRUSTED DATA>>>';
@@ -76,4 +76,15 @@ test('P5 the sha is the sha256 of the template text, and one changed line change
   assert.notEqual(lines[2], template.split('\n')[2], 'the edit hit the line');
   assert.notEqual(sha(lines.join('\n')), JUDGE_PROMPT_V1_SHA256);
   assert.notEqual(sha(judgePromptV1(pairOf())), JUDGE_PROMPT_V1_SHA256, 'the template holds no pair data');
+});
+
+test('P6 the filled sha covers the filled-field text: its pair is longer than every clip limit, in both blocks', () => {
+  // Breaks when: the filled sha is taken over the empty pair again, or its pair is short enough that a clip-limit change leaves the text as it is.
+  for (const f of [FILLED_PAIR.cr, FILLED_PAIR.eng]) {
+    assert.ok(String(f.severity).length > 20 && String(f.title).length > 300 && String(f.body).length > 3000);
+  }
+  assert.match(JUDGE_PROMPT_V1_FILLED_SHA256, /^[0-9a-f]{64}$/);
+  assert.equal(JUDGE_PROMPT_V1_FILLED_SHA256, sha(judgePromptV1(FILLED_PAIR)));
+  assert.notEqual(JUDGE_PROMPT_V1_FILLED_SHA256, JUDGE_PROMPT_V1_SHA256);
+  assert.equal(JUDGE_PROMPT_V1_SHA256, sha(judgePromptV1(EMPTY)), 'the empty-pair sha on paid rows does not move');
 });

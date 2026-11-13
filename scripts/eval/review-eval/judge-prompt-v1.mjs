@@ -28,3 +28,9 @@ export function judgePromptV1(pair) {
 
 /** sha256 hex of the prompt template (the prompt of a fixed empty pair), so a report can freeze the text. */
 export const JUDGE_PROMPT_V1_SHA256 = createHash('sha256').update(judgePromptV1({ cr: null, eng: null, hunk: '' })).digest('hex');
+
+// The empty pair shows only the (none) branch of fenceBlock. This fixed pair is longer than every clip limit in both blocks,
+// so a change to a clip limit or a field label changes the filled sha. The report freezes both shas.
+const filled = (c) => ({ severity: c.repeat(30), title: c.repeat(400), body: c.repeat(3500) });
+export const FILLED_PAIR = Object.freeze({ cr: filled('c'), eng: filled('e'), hunk: '' });
+export const JUDGE_PROMPT_V1_FILLED_SHA256 = createHash('sha256').update(judgePromptV1(FILLED_PAIR)).digest('hex');

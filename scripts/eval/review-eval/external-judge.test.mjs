@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { JUDGE_MODEL, loadRows, parseArgs, pickAction, rowToPair, run, sampleIds, summarize, toFinding, wilson } from './external-judge.mjs';
 import { judgePrompt } from './judge.mjs';
-import { JUDGE_PROMPT_V1_SHA256, judgePromptV1 } from './judge-prompt-v1.mjs';
+import { JUDGE_PROMPT_V1_FILLED_SHA256, JUDGE_PROMPT_V1_SHA256, judgePromptV1 } from './judge-prompt-v1.mjs';
 import { pullPinned, PullRefusal } from './external-pull.mjs';
 
 const SHA = 'a'.repeat(40);
@@ -760,4 +760,37 @@ test('I12 a v1 call maps a thrown runner to timeout and a cap to a stop, as the 
   assert.equal(n, 1);
   assert.equal(capped.r.code, 2);
   assert.equal(ledgerLines(capped.ledgerPath).find((l) => l.phase === 'end').error, 'cap');
+});
+
+test('I13 the v1 freeze also checks the filled-field sha: rows carry it, a different one is refused, and a row without it is not', async () => {
+  // Breaks when: a change to the clip limits or field labels (the filled text) passes the freeze, or the paid rows from before the filled sha are refused.
+  const data = rows(55);
+  const x = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data);
+  assert.ok(ledgerLines(x.ledgerPath).every((l) => l.promptFilledSha256 === JUDGE_PROMPT_V1_FILLED_SHA256));
+  assert.equal(x.r.out.promptFilledSha256, JUDGE_PROMPT_V1_FILLED_SHA256);
+  const moved = writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: 'f'.repeat(64) })]);
+  const r = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: moved });
+  assert.equal(r.r.code, 2);
+  assert.equal(r.v.calls.length, 0);
+  const legacy = writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256 })]);
+  assert.equal((await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: legacy })).r.code, 0);
+});
+
+test('I14 a v1 verdict counts only when its recorded shas are the current ones, from any set', async () => {
+  // Breaks when: a v1 verdict made with another prompt text (for example on the sample set) is reused and counted under the current sha.
+  const data = rows(55);
+  const ids = (await exec({ dryRun: true, showPrompts: 0, set: 'outside', prompt: 'v1' }, data)).r.ids;
+  const old = { model: 'opus', promptVersion: 'v1', set: 'sample' };
+  const cases = [
+    [{ promptSha256: 'f'.repeat(64) }, 5],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: 'f'.repeat(64) }, 5],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: JUDGE_PROMPT_V1_FILLED_SHA256 }, 4],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256 }, 4],
+  ];
+  for (const [shas, calls] of cases) {
+    const ledgerPath = writeLedger([doneRow(data, ids[0], { ...old, ...shas })]);
+    const x = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath });
+    assert.equal(x.v.calls.length, calls, JSON.stringify(shas));
+    assert.equal(x.r.out.summary.n, 5);
+  }
 });
