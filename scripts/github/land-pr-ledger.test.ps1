@@ -28,8 +28,13 @@ using namespace System.Management.Automation.Language
 #   a run with only the lock variable set writes elsewhere (the real home); the ledger variable is ignored -> L6a, L6b
 #   the wrong engine record (write time, tie, temp file, trace file, other file type), a slug that leaves the root, an absolute or
 #   backslash path                                                                   -> L7a, L7b, L7c, L7d
+#   routing present without a required ARRAY read as a list (not "not read")        -> L1e (routing {}: reviewers null)
 #   a merge answer that is not JSON breaks the line                                  -> L8a
-#   mergeCall wrong; the second read's sha not used, or used when its head is another head -> L8b, L8c
+#   a failed call counted as this run's merge without proof, or the sha of another merge kept: mergeCall "failed-but-merged"
+#   needs the checked head and a merged_at no earlier than 120 s before the call     -> L8b (fresh, same head: failed-but-merged + sha),
+#                                                                                      L8c (another head), L8e (old merged_at),
+#                                                                                      L8f (no merged_at), L8g (merged_at not a date):
+#                                                                                      merged-elsewhere, mergeSha null
 #   a stderr line in the merge answer hides the sha of the JSON answer                -> L8d
 #   two lands run their lines together, or write CR or a BOM                        -> L9
 #   a line holds a home path, a drive path or the user name                         -> L10
@@ -44,6 +49,9 @@ using namespace System.Management.Automation.Language
 #   a run of this test writes the real ledger                                        -> L15
 #   the land step's slug drifts from branchSlug in record.mjs (/, space, non-ASCII, the Kelvin sign that a case-blind replace keeps,
 #   a surrogate pair, a dot before /, a trailing dot, CON, "..", "a..b", ".", ""); the record files differ from readJsonFiles -> L16
+#   a lock value that is a bare file name gives an empty folder, so every land warns -> L17 (the ledger-path statement, read from the
+#   syntax tree, run in a temp current folder: the line goes to land-outcomes.jsonl there). Function level, not a full land: the lock
+#   code itself refuses a bare name (New-Item -Path '' throws in Enter-LandLock, so the land stops before the merge).
 # What L11 cannot prove: L11a sees only gh and node (git is real, not logged); L11b reads the text, so a program started through .NET
 # under a name it does not list would pass it; L11c runs the step outside the land, with values set by this file.
 # L16 drives Get-LandEngineRecord read from the land step's syntax tree (no copy in this file), not a full land, to keep the run short.
@@ -84,11 +92,12 @@ $realBefore = Get-RealLedgerState
 #   -Merged      the PR is already merged before this run
 #   -MergeOut    what the merge call prints; -MergeErr a line it prints on stderr; -MergeExit its exit code
 #   -AgainSha    the merge_commit_sha of the PR read after a merge; -AgainHead the head sha of that read (default: the checked head)
+#   -AgainAt     the merged_at of that read: 'now' (the UTC time when the case is made, just before its run), a literal text, or '' (none)
 #   -BreakRemote the merge call renames the bare remote, so every later fetch fails
 #   -Ready       the ready-check JSON fields on top of ready/head/mergeable_state/reasons
 function New-Case([string]$name, [string]$Branch = 'fix/ledger-wiring', [string[]]$Labels = @('risk:r2', 'alpha', 'Zeta'), [switch]$NoLabels,
   [switch]$Merged, [string]$MergeOut = '', [string]$MergeErr = '', [int]$MergeExit = 0, [string]$AgainSha = '', [string]$AgainHead = '',
-  [switch]$BreakRemote, [hashtable]$Ready = $null, [int]$RecheckExit = 0) {
+  [string]$AgainAt = '', [switch]$BreakRemote, [hashtable]$Ready = $null, [int]$RecheckExit = 0) {
   $dir = Join-Path $work $name; $stub = Join-Path $dir 'stub'; $repo = Join-Path $dir 'repo'; $remote = Join-Path $dir 'fork.git'
   New-Item -ItemType Directory -Force -Path $stub, $repo | Out-Null
   git init -q -b main $repo 2>&1 | Out-Null
@@ -104,6 +113,7 @@ function New-Case([string]$name, [string]$Branch = 'fix/ledger-wiring', [string[
     $o = [ordered]@{ merged = $m; head = [ordered]@{ ref = $Branch; sha = $(if ($m -and $AgainHead) { $AgainHead } else { $sha }) } }
     if (-not $NoLabels) { $o.labels = @($Labels | ForEach-Object { @{ name = $_ } }) }
     if ($m -and $AgainSha) { $o.merge_commit_sha = $AgainSha }
+    if ($m -and $AgainAt) { $o.merged_at = $(if ($AgainAt -eq 'now') { [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture) } else { $AgainAt }) }
     $o | ConvertTo-Json -Compress -Depth 5
   }
   Set-Content -LiteralPath (Join-Path $stub 'pull.json') -Value (& $pull ([bool]$Merged))
@@ -291,6 +301,11 @@ try {
   $line = Get-OneLine 'L1d' $c (Invoke-Land $c) $c.Ledger
   Check 'L1d reviewers and crRounds are null when the ready JSON has no routing' (Test-Has $line @('"reviewers":null', '"crRounds":null'))
 
+  # L1e: routing present but without a required array (routing {}): reviewers is "not read" (null), not [none].
+  $c = New-Case 'l1e' -Ready @{ routing = @{}; coderabbitReviews = 1; coderabbitRounds = 1 }
+  $line = Get-OneLine 'L1e' $c (Invoke-Land $c) $c.Ledger
+  Check 'L1e routing {} gives reviewers null' ($line.Contains('"reviewers":null'))
+
   # L2: -IgnoreReview: nothing of the review was read, so crRounds and reviewers are null; ignoreReview is a real true; no labels field gives null.
   $c = New-Case 'l2' -NoLabels
   $line = Get-OneLine 'L2' $c (Invoke-Land $c @('-IgnoreReview')) $c.Ledger
@@ -387,14 +402,19 @@ try {
   $c = New-Case 'l8a' -MergeOut 'merge accepted (stub text, not JSON)'
   $line = Get-OneLine 'L8a' $c (Invoke-Land $c) $c.Ledger
   Check 'L8a mergeSha is null and mergeCall is ok' (Test-Has $line @('"mergeSha":null', '"mergeCall":"ok"'))
-  # L8b: the merge call exits non-zero but the PR read after it says merged at the checked head: mergeSha is that read's merge_commit_sha.
-  $c = New-Case 'l8b' -MergeOut 'HTTP 502: Bad Gateway (stub)' -MergeExit 1 -AgainSha $againSha
+  # L8b: the merge call exits non-zero but the PR read after it says merged at the checked head, with a merged_at taken just before
+  # the run (inside the 120 s margin before the call): failed-but-merged, and mergeSha is that read's merge_commit_sha.
+  $c = New-Case 'l8b' -MergeOut 'HTTP 502: Bad Gateway (stub)' -MergeExit 1 -AgainSha $againSha -AgainAt 'now'
   $line = Get-OneLine 'L8b' $c (Invoke-Land $c) $c.Ledger
-  Check 'L8b mergeSha is the merge_commit_sha of the second read, mergeCall is failed-but-merged' (Test-Has $line @("`"mergeSha`":`"$againSha`"", '"mergeCall":"failed-but-merged"'))
-  # L8c: the same, but the second read shows another head: someone else's merge. mergeSha is null; headSha stays the checked head.
-  $c = New-Case 'l8c' -MergeOut 'HTTP 502: Bad Gateway (stub)' -MergeExit 1 -AgainSha $againSha -AgainHead $otherHead
-  $line = Get-OneLine 'L8c' $c (Invoke-Land $c) $c.Ledger
-  Check 'L8c a second read at another head gives mergeSha null, mergeCall failed-but-merged, headSha the checked head' (Test-Has $line @('"mergeSha":null', '"mergeCall":"failed-but-merged"', "`"headSha`":`"$sha`""))
+  Check 'L8b a fresh merged_at at the checked head: mergeCall failed-but-merged, mergeSha the second read''s sha' (Test-Has $line @("`"mergeSha`":`"$againSha`"", '"mergeCall":"failed-but-merged"'))
+  # L8c, L8e, L8f, L8g: the merge cannot be tied to this run: merged-elsewhere, mergeSha null, headSha the checked head, the land goes on.
+  #   c: the second read shows another head (fresh merged_at); e: merged_at is old; f: no merged_at; g: merged_at is not a date.
+  foreach ($v in @(@('c', $otherHead, 'now'), @('e', '', '2020-01-01T00:00:00Z'), @('f', '', ''), @('g', '', 'not a date'))) {
+    $id = "L8$($v[0])"
+    $c = New-Case "l8$($v[0])" -MergeOut 'HTTP 502: Bad Gateway (stub)' -MergeExit 1 -AgainSha $againSha -AgainHead $v[1] -AgainAt $v[2]
+    $line = Get-OneLine $id $c (Invoke-Land $c) $c.Ledger
+    Check "$id mergeCall merged-elsewhere, mergeSha null, headSha the checked head" (Test-Has $line @('"mergeSha":null', '"mergeCall":"merged-elsewhere"', "`"headSha`":`"$sha`""))
+  }
   # L8d: the merge call prints its JSON answer and a notice on stderr: mergeSha is still the JSON sha (only text lines are parsed).
   $c = New-Case 'l8d' -MergeErr 'notice: stub line on stderr'
   $line = Get-OneLine 'L8d' $c (Invoke-Land $c) $c.Ledger
@@ -451,14 +471,14 @@ try {
   # it and the line after it (the save and the restore of $LASTEXITCODE).
   $tokens = $null; $perr = $null
   $ast = [Parser]::ParseFile($script, [ref]$tokens, [ref]$perr)
-  $ledgerFns = 'Get-LandEngineRecord', 'Get-LandOutcome', 'Add-LandOutcome'
+  $ledgerFns = 'Get-LandEngineRecord', 'Get-LandMergeCall', 'Get-LandOutcome', 'Add-LandOutcome'
   $fnAsts = @($ast.FindAll({ param($n) $n -is [FunctionDefinitionAst] -and $n.Name -in $ledgerFns }, $true))
   $inFn = { param($n) for ($p = $n.Parent; $p; $p = $p.Parent) { if ($p -is [FunctionDefinitionAst]) { return $true } }; $false }
   # The nearest try statement around the one Add-LandOutcome call outside a function (the held section's outer try also holds it).
   $stepCalls = @($ast.FindAll({ param($n) $n -is [CommandAst] -and $n.GetCommandName() -eq 'Add-LandOutcome' -and -not (& $inFn $n) }, $true))
   $tries = @($stepCalls | ForEach-Object { $p = $_.Parent; while ($p -and $p -isnot [TryStatementAst]) { $p = $p.Parent }; $p } | Where-Object { $_ })
-  Check 'L11 harness: the land step parses, and the three ledger functions and one ledger step are found' ($perr.Count -eq 0 -and $fnAsts.Count -eq 3 -and $stepCalls.Count -eq 1 -and $tries.Count -eq 1)
-  if ($tries.Count -eq 1 -and $fnAsts.Count -eq 3) {
+  Check 'L11 harness: the land step parses, and the four ledger functions and one ledger step are found' ($perr.Count -eq 0 -and $fnAsts.Count -eq 4 -and $stepCalls.Count -eq 1 -and $tries.Count -eq 1)
+  if ($tries.Count -eq 1 -and $fnAsts.Count -eq 4) {
     $stmts = @($tries[0].Parent.Statements); $iTry = [array]::IndexOf($stmts, $tries[0])
     $step = @($stmts[[Math]::Max(0, $iTry - 1)..[Math]::Min($stmts.Count - 1, $iTry + 1)])
     $bad = foreach ($a in @($fnAsts) + $step) {
@@ -487,7 +507,7 @@ try {
         "`$ledgerPath = $(& $q $v[1])"
         "`$pull = $(& $q $pullJson) | ConvertFrom-Json"
         "`$res = $(& $q ('{"sha":"' + $mergeSha + '"}'))"
-        '$again = $null; $mergeCallFailed = $false'
+        '$again = $null; $mergeCallFailed = $false; $mergeCallAt = [DateTime]::UtcNow'
         "`$script:readyJson = $(& $q $readyJson) | ConvertFrom-Json"
         "`$Pr = 7; `$Repo = $(& $q $repoName); `$Method = 'merge'; `$IgnoreReview = [switch]`$false"
         '$global:LASTEXITCODE = 37'
@@ -545,6 +565,33 @@ try {
     Set-WriteTime $recDir '.b.json' ([datetime]::new(2026, 1, 2, 0, 0, 0, [DateTimeKind]::Utc))
     Set-WriteTime $recDir 'c.trace.json' ([datetime]::new(2026, 1, 3, 0, 0, 0, [DateTimeKind]::Utc))
     Check 'L16 files: a dot-named *.json is a record (as in record.mjs), a trace file is not' ((Get-LandEngineRecord 'plain' $sha) -ceq "plain/$sha/.b.json")
+  }
+
+  # L17 (S1): a lock value that is a bare file name. The land step's own ledger-path statements (the "$ledgerPath = $null" line and the
+  # try after it, read from the syntax tree) and Add-LandOutcome run in a child pwsh whose current folder is a temp folder.
+  $pathTries = @($ast.FindAll({ param($n) $n -is [TryStatementAst] -and -not (& $inFn $n) -and @($n.Body.Statements | Where-Object { $_ -is [AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$ledgerPath' }).Count -eq 1 }, $true))
+  $addFn = @($fnAsts | Where-Object { $_.Name -eq 'Add-LandOutcome' })
+  Check 'L17 harness: one ledger-path try statement and Add-LandOutcome are found' ($pathTries.Count -eq 1 -and $addFn.Count -eq 1)
+  if ($pathTries.Count -eq 1 -and $addFn.Count -eq 1) {
+    $pStmts = @($pathTries[0].Parent.Statements); $iP = [array]::IndexOf($pStmts, $pathTries[0])
+    $cwd = Join-Path $work 'l17-cwd'; New-Item -ItemType Directory -Force -Path $cwd | Out-Null
+    $body = @(
+      '$ErrorActionPreference = ''Stop'''
+      $addFn[0].Extent.Text
+      "Set-Location -LiteralPath '$($cwd.Replace("'", "''"))'"
+      '$env:CCV3_LAND_LOCK = ''land.lock''; Remove-Item -LiteralPath Env:\CCV3_LAND_LEDGER -ErrorAction SilentlyContinue'
+      @($pStmts[[Math]::Max(0, $iP - 1)..$iP] | ForEach-Object { $_.Extent.Text })
+      'Add-LandOutcome -Path $ledgerPath -Record ([ordered]@{ schema = 1 })'
+      'Write-Output "PATH=$ledgerPath"'
+    ) -join "`n"
+    $iso = Join-Path $work 'l17-step.ps1'
+    [System.IO.File]::WriteAllText($iso, $body, [System.Text.UTF8Encoding]::new($false))
+    $isoOut = @(& pwsh -NoProfile -File $iso 2>&1 | ForEach-Object { "$_" })
+    $want = Join-Path $cwd 'land-outcomes.jsonl'
+    $pathLine = @($isoOut | Where-Object { $_ -like 'PATH=*' }) | Select-Object -First 1
+    $ok = $pathLine -eq "PATH=$want" -and @(Get-LedgerLines $want).Count -eq 1 -and @($isoOut | Where-Object { $_ -match 'WARNING: land ledger not written' }).Count -eq 0
+    Check 'L17 a bare lock name puts the ledger in the current folder (land-outcomes.jsonl), one line, no WARNING' $ok
+    if (-not $ok) { $isoOut | ForEach-Object { Write-Host "  step: $_" } }
   }
 
   # L10 (K2): no line written in this test holds a drive path, a home folder or the user name (also in JSON-escaped form).
