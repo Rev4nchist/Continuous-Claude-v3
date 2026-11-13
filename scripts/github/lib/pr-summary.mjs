@@ -27,6 +27,13 @@ export function changeOf(text) {
   return parseFields(text).get('Change')?.[0] || null;
 }
 
+/** { problem, change, youWillSee } of a summary text: the first value of each label, or null. The Land dialog shows them. */
+export function summaryFieldsOf(text) {
+  const fields = typeof text === 'string' ? parseFields(text) : new Map();
+  const first = (label) => fields.get(label)?.[0] || null;
+  return { problem: first('Problem'), change: first('Change'), youWillSee: first('You will see') };
+}
+
 // "Label: text", also written as a markdown bullet ("- Label: text") or in bold ("**Label:** text").
 const LABEL_LINE = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?(Branch|Head|Base|Problem|Change|You will see|Risk|Not included)(?:\*\*)?:(?:\*\*)?[ \t]*(.*)$/;
 

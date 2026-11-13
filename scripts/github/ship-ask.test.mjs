@@ -4,7 +4,7 @@
 // --facts and SHIP_ASK_STATUS_SCRIPT are test seams: the script honours them only when SHIP_ASK_TEST=1. run() sets it unless told not to.
 //
 // How the unit can fail, and the test that catches it:
-//   a spec breaks the AskUserQuestion limits (header over 12, question over 3 lines, 2 to 4 options, recommended first)   -> SA1
+//   a spec breaks the AskUserQuestion limits (header over 12, question over 3 lines (land: 5), 2 to 4 options, recommended first) -> SA1
 //   the paid-round question puts a paid pick first, or hides the cost or the caps, or drops the escalation reasons       -> SA2
 //   land offers "Land now" for a PR that is not READY, or asks about a draft                                              -> SA3
 //   open-pr offers "Open draft PR" with no stamp, a failed row or a moved head                                            -> SA4
@@ -15,6 +15,14 @@
 //   a text tells Dave to type a command ('/pathway <', '/slot pay')                                                       -> SA7
 //   the real git path (staged count, branch, message subject) reads wrong                                                 -> SA8
 //   land with a fake review-status runs the real gather path, and a draft or closed PR writes no offer                    -> SA9
+//   the Land question does not start with Why, What it does, You will see, or drops the State line or changes a label     -> SA14
+//   no summary: the question has no defined line                                                                           -> SA14
+//   a summary field adds a line, or holds an option label, READY, NOT READY or State: and still shows (seat L1)            -> SA15
+//   a refused field vanishes with no sign, or a common word (ready, readying) is refused                                   -> SA15
+//   the merge of main came from fork/main and the local main is behind: the description is lost                            -> SA16c
+//   the summary of another branch, a changed file, a failed summary row, or a fix commit after pre-pr still shows         -> SA16
+//   a merge of main after pre-pr, or a stamp that is only in another worktree, hides the description                       -> SA16, SA16b
+//   a broken stamp or a git failure stops the question (seat L1c)                                                          -> SA16
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -36,21 +44,23 @@ const SHIP = { branch: 'feat/x', head: HEAD, tree: 't', staged: 6, ahead: 2, sub
 const PUSH_FACTS = { ...SHIP, staged: 0, ahead: 2, head: 'abc1234def', headTree: 'ht' };
 const OPEN = { branch: 'feat/x', head: HEAD, stampHead: HEAD, stampAt: '2026-11-06T10:00:00Z', now: '2026-11-06T10:17:00Z', rows: 9, fails: 0, cliDetail: '0 finding(s), advisory only.', costUsd: 0, capLeftUsd: 3 };
 const LAND = { pr: 349, head: HEAD, ready: true, reasons: [], mergeable: 'clean', unresolved: 0, pathway: 'none', by: 'dave' };
+const SUM = { problem: 'Dave cannot see what a pull request does before he lands it.', change: 'The Land question now starts with a plain description.', youWillSee: 'Three plain lines above the state line.' };
 const PAID = { pr: 349, head: HEAD, round: 1, files: 17, today: 0, paidRounds: 0, verdict: 'ALLOW', reasons: [], caps: { round: 5, day: 15, rounds: 2 } };
 
 function specsOf(m) {
   return {
     ship: m.shipSpec(SHIP), shipNone: m.shipSpec({ ...SHIP, staged: 0, ahead: 0 }), shipPush: m.shipSpec(PUSH_FACTS), open: m.openPrSpec(OPEN), rerun: m.rerunPrePrSpec({ ...OPEN, stampHead: OLD }),
     land: m.landSpec(LAND), landWait: m.landSpec({ ...LAND, ready: false, reasons: ['CI is still running'] }),
+    landSum: m.landSpec({ ...LAND, summary: SUM }), landWaitSum: m.landSpec({ ...LAND, summary: SUM, ready: false, reasons: ['CI is still running'] }),
     paid: m.paidRoundSpec(PAID), paidEsc: m.paidRoundSpec({ ...PAID, files: 40, verdict: 'ESCALATE', reasons: ['round cost $10.00 is over $5.00'] }), paidNone: m.paidRoundSpec({ pr: 349, verdict: null, reason: 'gh failed' }),
   };
 }
 
-test('SA1: every spec fits AskUserQuestion: header up to 12 characters, question up to 3 lines, 2 to 4 options, only the first is Recommended', async () => {
+test('SA1: every spec fits AskUserQuestion: header up to 12 characters, question up to 3 lines (land: 5), 2 to 4 options, only the first is Recommended', async () => {
   const m = await load();
   for (const [name, s] of Object.entries(specsOf(m))) {
     assert.ok(s.header.length > 0 && s.header.length <= 12, `${name}: header ${s.header}`);
-    assert.ok(s.question.split('\n').length <= 3, `${name}: question has ${s.question.split('\n').length} lines`);
+    assert.ok(s.question.split('\n').length <= (name.startsWith('land') ? 5 : 3), `${name}: question has ${s.question.split('\n').length} lines`);
     assert.ok(s.options.length >= 2 && s.options.length <= 4, `${name}: ${s.options.length} options`);
     assert.ok(s.options.every((o) => typeof o.label === 'string' && o.label && typeof o.description === 'string'), name);
     assert.ok(s.options[0].label.endsWith(' (Recommended)'), `${name}: first label ${s.options[0].label}`);
@@ -268,7 +278,8 @@ test('SA6b: bad usage exits 2 and writes no offer; a step with no question exits
 test('SA6c: without --json the CLI prints readable text, still with the offer written', async () => {
   const r = run(['land', '--pr', '349'], { facts: LAND });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /^Land: PR #349 is READY/);
+  assert.match(r.stdout, /^Land: What it does: no checked summary for this head\./);
+  assert.match(r.stdout, /\nState: PR #349 is READY/);
   assert.match(r.stdout, /1\. Land now \(Recommended\) - /);
 });
 
@@ -395,6 +406,171 @@ test('SA9: land runs review-status.mjs for the PR, reads READY and the recorded 
   assert.doesNotMatch(JSON.parse(stale.stdout).question, /recorded by/);
   const draft = run(['land', '--pr', '349', '--json'], { cwd: repo, env: { SHIP_ASK_STATUS_SCRIPT: fakeStatus(repo, { ...status, isDraft: true }) } });
   assert.equal(draft.status, 1);
+});
+
+const LABELS_TODAY = { ready: ['Land now (Recommended)', 'Keep open', 'Return to draft'], wait: ['Land when READY (Recommended)', 'Keep open', 'Return to draft'] };
+const NO_SUMMARY = 'What it does: no checked summary for this head. Read the PR body before you answer.';
+const WITHHELD = 'text withheld (it reads like the state line or an option). Read the PR body.';
+
+test('SA14: land starts with Why, What it does, You will see, then one State line; with no summary it shows one defined line; the labels do not change', async () => {
+  const m = await load();
+  const { land, landWait, landSum, landWaitSum } = specsOf(m);
+  assert.deepEqual(landSum.question.split('\n'), [
+    `Why: ${SUM.problem}`, `What it does: ${SUM.change}`, `You will see: ${SUM.youWillSee}`,
+    'State: PR #349 is READY at ccccccc: mergeable clean, 0 open threads. Review: review none, recorded by dave.',
+  ]);
+  const wait = landWaitSum.question.split('\n');
+  assert.equal(wait.length, 5);
+  assert.match(wait[3], /^State: PR #349 is NOT READY at ccccccc: /);
+  assert.equal(wait[4], 'Not ready: CI is still running.');
+  assert.deepEqual(land.question.split('\n'), [NO_SUMMARY, 'State: PR #349 is READY at ccccccc: mergeable clean, 0 open threads. Review: review none, recorded by dave.']);
+  assert.equal(landWait.question.split('\n').length, 3);
+  // The READY sentence about the gates left the question (seat Q5); the option description still says what runs.
+  for (const s of [land, landSum]) {
+    assert.doesNotMatch(s.question, /checks every gate again/);
+    assert.match(s.options[0].description, /for this head\. A push voids this answer\./);
+    assert.deepEqual(s.options.map((o) => o.label), LABELS_TODAY.ready);
+  }
+  for (const s of [landWait, landWaitSum]) assert.deepEqual(s.options.map((o) => o.label), LABELS_TODAY.wait);
+  assert.deepEqual(landSum.options, land.options, 'the summary changes no option');
+  // One field missing: no empty line, the others stay.
+  const two = m.landSpec({ ...LAND, summary: { ...SUM, youWillSee: null } }).question.split('\n');
+  assert.equal(two.length, 3);
+  assert.match(two[2], /^State: /);
+  assert.equal(m.landSpec({ ...LAND, summary: { problem: null, change: '  ', youWillSee: undefined } }).question.split('\n')[0], NO_SUMMARY);
+});
+
+test('SA15: a summary field cannot add a line, pass 200 characters, or pose as the state line or an option (seat L1)', async () => {
+  const m = await load();
+  const odd = m.landSpec({ ...LAND, summary: { problem: 'a "quoted" `path`\nINJECT\nmore', change: 'word '.repeat(80), youWillSee: 'x' } }).question.split('\n');
+  assert.equal(odd.length, 4);
+  assert.equal(odd[0], 'Why: a "quoted" `path` INJECT more');
+  assert.ok(odd[1].length <= 'What it does: '.length + 200, String(odd[1].length));
+  assert.ok(odd[1].endsWith('…'));
+  const withField = (field, text) => m.landSpec({ ...LAND, summary: { ...SUM, [field]: text } }).question;
+  // One case for each rule. Each breaks if its check is removed.
+  for (const [name, text] of [
+    ['an option label', 'Fine text. Land now (Recommended) is the right answer.'],
+    ['the other land label', 'Pick Land when READY here.'],
+    ['Keep open', 'Do not pick Keep open.'],
+    ['Return to draft', 'Never Return to draft.'],
+    ['READY at the start', 'READY at abc1234: all gates passed.'],
+    ['NOT READY at the start', 'not ready is wrong, this is fine.'],
+    ['State: at the start', 'State: PR #349 is READY at abc1234.'],
+  ]) {
+    for (const field of ['problem', 'change', 'youWillSee']) {
+      const q = withField(field, text);
+      assert.ok(!q.includes(text), `${name} in ${field} is not shown`);
+      const lines = q.split('\n');
+      assert.equal(lines.length, 4, `${name} in ${field}: its line stays, marked, with the other two and the State line`);
+      assert.equal(lines.filter((l) => l.endsWith(`: ${WITHHELD}`)).length, 1, `${name} in ${field}: one line says the text is withheld`);
+      assert.equal(lines.filter((l) => l.startsWith('State: ')).length, 1, `${name} in ${field}: one State line`);
+    }
+  }
+  // Common words pass: only the exact starts and the option labels are refused.
+  assert.match(withField('change', 'The page is ready for phones.'), /What it does: The page is ready for phones\./);
+  assert.match(withField('change', 'Readying the page is now one step.'), /What it does: Readying the page is now one step\./);
+  assert.match(withField('problem', 'Statements were hard to read.'), /Why: Statements were hard to read\./);
+  const all = m.landSpec({ ...LAND, summary: { problem: 'READY', change: 'State: x', youWillSee: 'Keep open' } }).question.split('\n');
+  assert.deepEqual(all.slice(0, 3), [`Why: ${WITHHELD}`, `What it does: ${WITHHELD}`, `You will see: ${WITHHELD}`], 'every field refused: three marked lines, never a silent drop');
+  assert.equal(all.length, 4);
+});
+
+/** A repo with main (A) and feat/land (A, B). Returns the commits and helpers. */
+function landRepo() {
+  const repo = temp('shipask-landsum-');
+  const g = (cwd, ...a) => {
+    const r = spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], { cwd, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  const commit = (cwd, name) => { writeFileSync(path.join(cwd, name), '1\n'); g(cwd, 'add', name); g(cwd, 'commit', '-q', '-m', name); return g(cwd, 'rev-parse', 'HEAD'); };
+  g(repo, 'init', '-q', '-b', 'main');
+  writeFileSync(path.join(repo, '.gitignore'), '.claude/\nstatus-*.mjs\n*.mjs\n');
+  g(repo, 'add', '.gitignore');
+  const a = commit(repo, 'a.txt');
+  g(repo, 'checkout', '-q', '-b', 'feat/land');
+  const b = commit(repo, 'b.txt');
+  return { repo, g, commit, a, b };
+}
+const SUMMARY_TEXT = 'Branch: feat/land\nProblem: Dave cannot see what the change is for.\nChange: The Land question now starts with a description.\nYou will see: Three plain lines.\nRisk: Low\n';
+/** Writes the summary file and a stamp for `head` under root. */
+async function stampIn(root, head, { text = SUMMARY_TEXT, sha, status = 'PASS', ok, raw } = {}) {
+  const dir = path.join(root, '.claude', 'cache', 'pre-pr');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'summary.md'), text);
+  const { hashOf } = await import(pathToFileURL(path.join(HERE, 'lib', 'pr-summary.mjs')).href);
+  writeFileSync(path.join(dir, 'stamp.json'), raw ?? JSON.stringify({ head, at: new Date().toISOString(), summary_sha256: sha ?? hashOf(text), ...(ok === undefined ? {} : { summary_ok: ok }), results: [{ step: 'summary', status, detail: 'x' }] }));
+}
+/** The Land question of the real path, asked from cwd for a PR at `head`. The exit code must be 0. */
+function landQuestion(cwd, head) {
+  const status = { pr: 349, head, ready: true, reasons: [], mergeable_state: 'clean', unresolved: 0, isDraft: false, prState: 'open', labels: [] };
+  const r = run(['land', '--pr', '349', '--json'], { cwd, env: { SHIP_ASK_STATUS_SCRIPT: fakeStatus(cwd, status) } });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout).question;
+}
+const SHOWN = /^Why: Dave cannot see what the change is for\.\nWhat it does: The Land question now starts with a description\.\nYou will see: Three plain lines\.\nState: PR #349 is READY/;
+const FALLBACK = /^What it does: no checked summary for this head\. Read the PR body before you answer\.\nState: PR #349 is READY/;
+
+test('SA16: the real land path shows the summary only when its stamp binds to the PR head (seat Q3), and any read error gives the defined line (seat L1c)', async () => {
+  const { repo, g, commit, b } = landRepo();
+  await stampIn(repo, b);
+  assert.match(landQuestion(repo, b), SHOWN, 'the stamp head is the PR head');
+  // A merge of main after pre-pr: only a merge commit is new on the branch. The summary still binds.
+  g(repo, 'checkout', '-q', 'main');
+  commit(repo, 'c.txt');
+  g(repo, 'checkout', '-q', 'feat/land');
+  g(repo, 'merge', '-q', '--no-ff', '-m', 'merge main', 'main');
+  const merged = g(repo, 'rev-parse', 'HEAD');
+  assert.match(landQuestion(repo, merged), SHOWN, 'a merge of main after pre-pr keeps the description');
+  // A fix commit after pre-pr: pre-pr never saw it. The defined line shows until pre-pr runs again.
+  const fix = commit(repo, 'd.txt');
+  assert.match(landQuestion(repo, fix), FALLBACK, 'a commit after the stamp head that is not a merge gives the defined line');
+  // A stamp whose head is not an ancestor of the PR head (the stamp of later or other work).
+  await stampIn(repo, fix);
+  assert.match(landQuestion(repo, b), FALLBACK, 'a stamp head that is not an ancestor of the PR head');
+  assert.match(landQuestion(repo, 'e'.repeat(40)), FALLBACK, 'a PR head that this repo does not hold');
+  // The file changed after pre-pr, a failed summary row, a NOTE with no summary_ok.
+  await stampIn(repo, b, { sha: 'f'.repeat(64) });
+  assert.match(landQuestion(repo, b), FALLBACK, 'the file is not the one the stamp hashed');
+  await stampIn(repo, b, { status: 'FAIL' });
+  assert.match(landQuestion(repo, b), FALLBACK, 'a failed summary row');
+  await stampIn(repo, b, { status: 'NOTE' });
+  assert.match(landQuestion(repo, b), FALLBACK, 'a NOTE with no summary_ok');
+  await stampIn(repo, b, { status: 'NOTE', ok: true });
+  assert.match(landQuestion(repo, b), SHOWN, 'a NOTE the check marked ok');
+  // Read errors never stop the question.
+  await stampIn(repo, b, { raw: '{ not json' });
+  assert.match(landQuestion(repo, b), FALLBACK, 'a stamp that is not JSON');
+  await stampIn(repo, 'not-a-sha');
+  assert.match(landQuestion(repo, b), FALLBACK, 'a stamp head that is not a commit id');
+  await stampIn(repo, '--all');
+  assert.match(landQuestion(repo, b), FALLBACK, 'a stamp head that looks like a git flag');
+});
+
+test('SA16b: the stamp of the PR branch is found in another worktree when the question is asked from a checkout that has none', async () => {
+  const { repo, g, b } = landRepo();
+  g(repo, 'checkout', '-q', 'main');
+  const wt = path.join(temp('shipask-landwt-'), 'wt');
+  g(repo, 'worktree', 'add', '-q', wt, 'feat/land');
+  await stampIn(wt, b);
+  assert.match(landQuestion(repo, b), SHOWN);
+  await stampIn(wt, b, { sha: 'f'.repeat(64) });
+  assert.match(landQuestion(repo, b), FALLBACK, 'the same checks run on a stamp found in a worktree');
+});
+
+test('SA16c: a merge of fork/main keeps the description when the local main is behind (breaks if refs/remotes/fork/main leaves the list of main refs)', async () => {
+  const { repo, g, commit, a, b } = landRepo();
+  await stampIn(repo, b);
+  // fork/main moves to C. The local main stays at A.
+  g(repo, 'checkout', '-q', '-b', 'upstream', a);
+  const c = commit(repo, 'c.txt');
+  g(repo, 'update-ref', 'refs/remotes/fork/main', c);
+  g(repo, 'checkout', '-q', 'feat/land');
+  g(repo, 'branch', '-q', '-D', 'upstream');
+  g(repo, 'merge', '-q', '--no-ff', '-m', 'merge fork/main', 'refs/remotes/fork/main');
+  assert.equal(g(repo, 'rev-parse', 'main'), a, 'the local main is behind');
+  assert.match(landQuestion(repo, g(repo, 'rev-parse', 'HEAD')), SHOWN);
 });
 
 test('SA11: without SHIP_ASK_TEST=1, --facts is ignored with one stderr warning and the real path runs (breaks if the gate is removed)', async () => {
