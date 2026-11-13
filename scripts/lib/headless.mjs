@@ -173,7 +173,8 @@ export function servedMatches(model, served) {
  */
 export async function runJudge(prompt, { timeoutMs = 180_000, ...deps } = {}) {
   const res = await runClaude({ prompt, model: 'opus', effort: 'high', timeoutMs, purpose: 'eval-judge' }, deps);
-  if (!res.ok) return res;
   const servedModel = servedModelOf(res.stdout);
+  // A failed run that still names another model is a served-model fault; a failed run with no model (cap, timeout) stays as it is.
+  if (!res.ok) return servedModel && !servedMatches('opus', servedModel) ? { ...res, reason: 'served-model', servedModel } : res;
   return servedMatches('opus', servedModel) ? { ...res, servedModel } : { ...res, ok: false, reason: 'served-model', servedModel };
 }

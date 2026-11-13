@@ -230,6 +230,7 @@ async function pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kin
       if (pending) Object.assign(row, { state: 'engine_pending', reason: 'judge unavailable' });
     }
     rows.push(row);
+    if (budget.judgeStop) break; // no engine call for a later round of this PR
   }
   return { rows, rounds, pull };
 }
