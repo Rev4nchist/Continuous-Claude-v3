@@ -219,7 +219,11 @@ async function pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kin
       const disputed = [];
       let pending = false;
       for (const j of res.toJudge) {
-        const verdict = resolveJudged(await judgeSameIssue({ cr: j.cr, eng: j.candidates[0], hunk: '' }, { runJudge }), { minConfidence: cfg.shadow?.minConfidence ?? 4 });
+        // After a served-model fault no judge call is made: each would be spent for no verdict. The pair stays pending.
+        if (budget.judgeStop) { pending = true; continue; }
+        const judged = await judgeSameIssue({ cr: j.cr, eng: j.candidates[0], hunk: '' }, { runJudge });
+        if (judged.error === 'served-model') { budget.judgeStop = { servedModel: judged.servedModel, pr }; pending = true; continue; }
+        const verdict = resolveJudged(judged, { minConfidence: cfg.shadow?.minConfidence ?? 4 });
         if (verdict.kind === 'match') { matches.push({ crId: j.cr.id, engId: j.candidates[0].id, how: 'judge' }); usedE.add(j.candidates[0].id); } else if (verdict.kind === 'disputed') disputed.push(j.cr.id); else if (verdict.kind === 'pending') pending = true;
       }
       Object.assign(row, { eng: engF.map(({ id, sev, inDiff, file, start, end }) => ({ id, sev, inDiff, file, start, end })), matches, disputed, crOnly: res.crOnly.map((f) => f.id), engOnly: engF.filter((f) => !usedE.has(f.id)).map((f) => f.id) });
@@ -299,7 +303,9 @@ export async function main(argv, deps = {}) {
         const { rows } = await pairsForPr(pr, { gh, git, engine, runJudge, cfg, now, dryRun, kind, band: deps.band ?? 'MID', version, budget, finalKeys });
         all.push(...rows);
       } catch (e) { failures.push({ pr, error: String(e.message).slice(0, 200) }); }
+      if (budget.judgeStop) break; // no engine or judge call for the next PRs
     }
+    if (budget.judgeStop) err(`shadow ${cmd}: stopped at PR ${budget.judgeStop.pr}: the judge was served by ${budget.judgeStop.servedModel ?? 'no reported model'}, not Opus 5.5. No more judge or engine calls; the rows so far are kept as engine_pending.`);
     writeFileSync(path.join(root, 'retro-rounds.json'), `${JSON.stringify({ at: new Date(now).toISOString(), from, to, rounds: all.map(({ pr, sha40, round, state, reason }) => ({ pr, sha40, round, state, reason })) }, null, 1)}\n`);
     if (!dryRun) {
       const file = path.join(root, 'pairs.jsonl');
@@ -309,6 +315,7 @@ export async function main(argv, deps = {}) {
     const counts = Object.fromEntries(PAIR_STATES.map((s) => [s, all.filter((r) => r.state === s).length]));
     const result = { command: cmd, from, to, dryRun, engineVersion: version, rounds: all.length, counts, failures, pairs: all.map(({ pr, round, sha40, state, reason, cr, matches, crOnly, engOnly, disputed }) => ({ pr, round, sha40, state, reason, crFindings: cr.length, matches: matches.length, crOnly: crOnly.length, engOnly: engOnly.length, disputed: disputed.length })) };
     out(argv.includes('--json') ? JSON.stringify(result, null, 1) : `shadow ${cmd}: ${all.length} rounds, ${JSON.stringify(counts)}`);
+    if (budget.judgeStop) return 1;
     return failures.length && all.length === 0 ? 1 : 0;
   }
 
