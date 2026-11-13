@@ -167,7 +167,8 @@ test('F7 dry-run makes 0 headless calls and writes no ledger and no output', asy
   assert.equal(v.calls.length, 0);
   assert.equal(existsSync(ledgerPath), false);
   assert.equal(existsSync(outDir), false);
-  assert.match(lines[0], /^plan: .*sample 5 seed 7.*headless calls made: 0/);
+  assert.match(lines[0], /^plan: .*seed 7; pairs in set 5;.*headless calls made: 0/);
+  assert.doesNotMatch(lines[0], /sample \d+ seed/, 'the set size is printed once, as "pairs in set"');
   assert.ok(lines.some((l) => l.includes('UNTRUSTED DATA')), 'prints the prompts it would send');
 });
 
@@ -234,7 +235,7 @@ const yesRow = (id, extra = {}) => ({ ...noRow(id), human_match_decision: 'yes',
 let recCount = 0;
 const rec = (human, judge, candidateSource = 'human') => { recCount += 1; return { pairId: `p${recCount}`, human, judge, agree: human === judge, candidateSource }; };
 const times = (n, f) => Array.from({ length: n }, (_, i) => f(i));
-const captured = () => { const lines = []; return { lines, io: { stdout: (s) => lines.push(s), stderr: () => {} } }; };
+const captured = () => { const lines = []; const errs = []; return { lines, errs, io: { stdout: (s) => lines.push(s), stderr: (s) => errs.push(s) } }; };
 const maskEng = (p) => judgePrompt(p).replace(p.eng.body, 'ENG_BODY');
 
 test('G1 a no row with no judge match shows exactly one action, never the whole list', () => {
@@ -703,11 +704,17 @@ test('I9 a v1 run whose prompt sha differs from the sha on paid v1 rows for that
   const same = writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256 })]);
   assert.equal((await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: same })).r.code, 0, 'the same sha goes on');
   const unrelated = writeLedger([
-    endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, set: 'sample', promptSha256: other }),
     endRow('z2', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, model: 'sonnet', promptSha256: other }),
     endRow('z3', 'yes', 'yes', { model: 'opus', promptVersion: 'v0', set: 'outside', promptSha256: other }),
   ]);
-  assert.equal((await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: unrelated })).r.code, 0, 'another set, model or prompt does not freeze this one');
+  assert.equal((await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: unrelated })).r.code, 0, 'another model or prompt does not freeze this one');
+  // The freeze holds across sets: a v1 text paid on the sample set cannot change for an outside run, and the reverse.
+  for (const [paidSet, runSet] of [['sample', 'outside'], ['outside', 'sample']]) {
+    const crossSet = writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, set: paidSet, promptSha256: other })]);
+    const x = await exec({ dailyShare: 100, sample: 2, set: runSet, prompt: 'v1' }, data, { ledgerPath: crossSet });
+    assert.equal(x.r.code, 2, `paid on ${paidSet}, run on ${runSet}`);
+    assert.equal(x.v.calls.length, 0);
+  }
 });
 
 test('I10 an interrupted run resumes: judged pairs are skipped, and no pair is counted twice, even with a repeated end row', async () => {
@@ -733,8 +740,9 @@ test('I11 a dry run with --set outside --prompt v1 --show-prompts 0 prints the p
   const data = rows(80);
   const ids = (await exec({ dryRun: true, showPrompts: 0, set: 'outside', prompt: 'v1' }, data)).r.ids;
   const ledgerPath = writeLedger([
-    doneRow(data, ids[0], OPUS_V1_OUTSIDE),
-    doneRow(data, ids[1], OPUS_V1_OUTSIDE),
+    // Real v1 rows always carry the prompt sha; a v1 row without one is frozen (I13).
+    doneRow(data, ids[0], { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256 }),
+    doneRow(data, ids[1], { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256 }),
     doneRow(data, ids[2], { model: 'opus', promptVersion: 'v0', set: 'outside' }),
   ]);
   const before = readFileSync(ledgerPath, 'utf8');
@@ -772,25 +780,38 @@ test('I13 the v1 freeze also checks the filled-field sha: rows carry it, a diffe
   const r = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: moved });
   assert.equal(r.r.code, 2);
   assert.equal(r.v.calls.length, 0);
+  // The refusal names the sha that differs: here the filled-field sha, not the empty-pair sha.
+  assert.match(r.c.errs.join('\n'), new RegExp(`filled-field sha256 ${JUDGE_PROMPT_V1_FILLED_SHA256}`));
+  assert.doesNotMatch(r.c.errs.join('\n'), new RegExp(`prompt sha256 ${JUDGE_PROMPT_V1_SHA256}`));
+  const emptyMoved = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, promptSha256: 'e'.repeat(64) })]) });
+  assert.match(emptyMoved.c.errs.join('\n'), new RegExp(`prompt sha256 ${JUDGE_PROMPT_V1_SHA256}`));
+  assert.doesNotMatch(emptyMoved.c.errs.join('\n'), /filled-field/);
+  // A paid v1 row with no prompt sha at all is frozen too: every real v1 row carries one, so a row without it is not trusted.
+  const noSha = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE })]) });
+  assert.equal(noSha.r.code, 2);
+  assert.equal(noSha.v.calls.length, 0);
   const legacy = writeLedger([endRow('z1', 'yes', 'yes', { ...OPUS_V1_OUTSIDE, promptSha256: JUDGE_PROMPT_V1_SHA256 })]);
   assert.equal((await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: legacy })).r.code, 0);
 });
 
-test('I14 a v1 verdict counts only when its recorded shas are the current ones, from any set', async () => {
-  // Breaks when: a v1 verdict made with another prompt text (for example on the sample set) is reused and counted under the current sha.
+test('I14 a v1 verdict counts only when its recorded shas are the current ones: same model refuses, the other model is left out of the compare', async () => {
+  // Breaks when: a v1 verdict made with another prompt text is reused or counted under the current sha
+  // (same model: the freeze, across sets; other model: the compare block reads it).
   const data = rows(55);
   const ids = (await exec({ dryRun: true, showPrompts: 0, set: 'outside', prompt: 'v1' }, data)).r.ids;
-  const old = { model: 'opus', promptVersion: 'v1', set: 'sample' };
   const cases = [
-    [{ promptSha256: 'f'.repeat(64) }, 5],
-    [{ promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: 'f'.repeat(64) }, 5],
-    [{ promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: JUDGE_PROMPT_V1_FILLED_SHA256 }, 4],
-    [{ promptSha256: JUDGE_PROMPT_V1_SHA256 }, 4],
+    [{ promptSha256: 'f'.repeat(64) }, false],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: 'f'.repeat(64) }, false],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256, promptFilledSha256: JUDGE_PROMPT_V1_FILLED_SHA256 }, true],
+    [{ promptSha256: JUDGE_PROMPT_V1_SHA256 }, true],
+    [{}, false],
   ];
-  for (const [shas, calls] of cases) {
-    const ledgerPath = writeLedger([doneRow(data, ids[0], { ...old, ...shas })]);
-    const x = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath });
-    assert.equal(x.v.calls.length, calls, JSON.stringify(shas));
-    assert.equal(x.r.out.summary.n, 5);
+  for (const [shas, current] of cases) {
+    const label = JSON.stringify(shas);
+    const same = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: writeLedger([doneRow(data, ids[0], { model: 'opus', promptVersion: 'v1', set: 'sample', ...shas })]) });
+    assert.deepEqual([same.r.code, same.v.calls.length], current ? [0, 4] : [2, 0], `same model, ${label}`);
+    const other = await exec({ dailyShare: 100, set: 'outside', prompt: 'v1' }, data, { ledgerPath: writeLedger([doneRow(data, ids[0], { model: 'sonnet', promptVersion: 'v1', set: 'outside', ...shas })]) });
+    assert.equal(other.r.code, 0, `other model, ${label}`);
+    assert.equal(other.r.out.compare.summary.n, current ? 1 : 0, `other model compare, ${label}`);
   }
 });

@@ -143,10 +143,37 @@ export async function runClaude({ prompt, model = 'sonnet', timeoutMs = 180_000,
   return { ok, id: reserved.id, exit: run.status, stdout: run.stdout, stderr: run.stderr, result: parsed.result, costUsd: parsed.costUsd, usage: parsed.usage, timedOut: Boolean(run.timedOut), durationMs: run.durationMs, error: run.error };
 }
 
+// The served model that a run for each requested alias must report. The alias 'opus' is not version-pinned, so an older Opus is a fault.
+const SERVED = { opus: /^claude-opus-5-5\b/, sonnet: /^claude-sonnet-/ };
+
+/** The model names in the modelUsage of the claude -p result line, joined by comma; null when there is none. */
+export function servedModelOf(stdout) {
+  for (const l of String(stdout ?? '').split(/\r?\n/).reverse()) {
+    try {
+      const o = JSON.parse(l);
+      if (o && typeof o === 'object' && o.type === 'result') {
+        const names = o.modelUsage && typeof o.modelUsage === 'object' ? Object.keys(o.modelUsage) : [];
+        return names.length ? names.join(',') : null;
+      }
+    } catch { /* not the result line */ }
+  }
+  return null;
+}
+
+/** Every served model name matches the requested model (a run can report a helper model too: then all must match). */
+export function servedMatches(model, served) {
+  if (!served) return false;
+  return served.split(',').every((n) => SERVED[model].test(n));
+}
+
 /**
  * The judge call: Opus at effort high (Dave 2026-11-13), purpose eval-judge. The prompt carries the whole job; no tools run.
  * The prompt stays v0 (judge.mjs judgePrompt): prompt v1 is measured only on the label pre-check pair type.
+ * A finished run whose served model is not Opus 5.5 (or is not reported) is an error result, reason 'served-model'. There is no retry.
  */
-export function runJudge(prompt, { timeoutMs = 180_000, ...deps } = {}) {
-  return runClaude({ prompt, model: 'opus', effort: 'high', timeoutMs, purpose: 'eval-judge' }, deps);
+export async function runJudge(prompt, { timeoutMs = 180_000, ...deps } = {}) {
+  const res = await runClaude({ prompt, model: 'opus', effort: 'high', timeoutMs, purpose: 'eval-judge' }, deps);
+  if (!res.ok) return res;
+  const servedModel = servedModelOf(res.stdout);
+  return servedMatches('opus', servedModel) ? { ...res, servedModel } : { ...res, ok: false, reason: 'served-model', servedModel };
 }
