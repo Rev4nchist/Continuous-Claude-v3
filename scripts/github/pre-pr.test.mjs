@@ -1459,6 +1459,25 @@ test('B1: a stamp written by --skip-cr records reason flag, and the built hook d
   assert.match(v.reason, /flag/);
 });
 
+test('B1k: an answer-key stamp written by pre-pr is allowed by the built hook only with both proof fields; flag stays denied', async () => {
+  // Breaks when: the hook (dist/pre-pr-gate.mjs, built from src) does not accept the earned reason, accepts it with a field missing, or pre-pr stops writing the fields.
+  const repo = withFork(repoWithGoldFile());
+  git(repo.dir, 'rm', '-q', repo.rel);
+  git(repo.dir, 'commit', '-q', '-m', 'delete gold');
+  const run = await prePr(repo);
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  const file = stampFile(repo);
+  const stamp = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(hookVerdict(repo.dir).allow, true, 'both fields: allowed');
+  const denied = (over) => { writeFileSync(file, JSON.stringify({ ...stamp, ...over })); return hookVerdict(repo.dir); };
+  for (const over of [{ answer_key_paths: undefined }, { answer_key_paths: 0 }, { cr_answer_key: false }, { cr_answer_key: undefined }]) {
+    const v = denied(over);
+    assert.equal(v.allow, false, JSON.stringify(over));
+    assert.match(v.reason, /answer-key/, JSON.stringify(over));
+  }
+  assert.equal(denied({ cr_skip_reason: 'flag' }).allow, false, 'the fields do not excuse flag');
+});
+
 test('B2: the same run with the cap reached, or a known rate-limit wait, or no CLI, is allowed by the built hook; a review that ran is allowed', async () => {
   const capped = withFork(makeRepo());
   const spent = { root: capped.dir, branch: 'feat/x', base: 'main', now: new Date('2026-10-27T09:00:00Z'), runner: (o) => ({ status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }) };
@@ -3286,7 +3305,9 @@ test('S2c-T8: a throw in the snapshot, in the second listing or in the diagnosti
 
 // ---------- answer-key guard (card prepr-answer-key-cli-guard): no CLI review reads an answer-key path ----------
 // The list is REVIEW.md "## Skip paths" (globs under scripts/eval/review-eval/). The guard runs in runCodeRabbit before the lock, the counter
-// and the CLI, on the paths of BOTH sides of the change (a delete or a rename names its old path too). How it can fail, and the test:
+// and the CLI, on the paths of BOTH sides of the change (a delete or a rename names its old path too). A hit is a SKIP "answer-key" (an earned
+// skip: the stamp gets cr_answer_key true and answer_key_paths N, and the gate accepts it only with both). An unreadable list, a null list and a
+// failed git read stay a FAIL. How it can fail, and the test:
 //   a gold, seeds, rubrics or labels path reaches the CLI; the guard runs after the lock or the counter          -> A1
 //   a prefix match blocks linktype-labels.json.bak or review-eval/gold.mjs, or misses a glob                      -> A2
 //   REVIEW.md missing, unreadable, with no section, or with no answer-key glob lets the run go                      -> A3
@@ -3299,7 +3320,7 @@ test('S2c-T8: a throw in the snapshot, in the second listing or in the diagnosti
 const GOLD = 'scripts/eval/review-eval/gold/g.json';
 const KEY_TAIL = /Dave's decision.*internal review.*seat diff read/s;
 
-test('A1: a diff with an answer-key path FAILs before the lock, the counter and the CLI; the detail names the first path and the count', async () => {
+test('A1: a diff with an answer-key path is SKIPped (answer-key) before the lock, the counter and the CLI; the detail names the first path and the count', async () => {
   const f = crFixture();
   // A live lock held by another run: a guard that sat after the lock would answer "a run is in progress" instead.
   const p = crPaths(f.root, 'feat/x');
@@ -3307,12 +3328,13 @@ test('A1: a diff with an answer-key path FAILs before the lock, the counter and 
   const lockText = JSON.stringify({ pid: process.pid, head: 'other', at: new Date(f.now.getTime() - 60_000).toISOString() });
   writeFileSync(p.lock, lockText);
   const r = await runCodeRabbit(crOpts(f, { changedPaths: ['src/a.ts', GOLD, 'scripts/eval/review-eval/seeds/s.json'] }));
-  assert.equal(r.status, 'FAIL');
+  assert.equal(r.status, 'SKIP');
   assert.doesNotMatch(r.detail, /in progress/);
-  assert.equal(r.skipReason, undefined);
+  assert.equal(r.skipReason, 'answer-key');
+  assert.equal(r.answerKeyPaths, 2);
   assert.match(r.detail, new RegExp(`${GOLD.replaceAll('/', '\\/')}, 2 in all`));
-  assert.match(r.detail, /--skip-cr/);
-  assert.match(r.detail, KEY_TAIL);
+  assert.match(r.detail, /internal review and a seat diff read replace the CLI/);
+  assert.ok(!r.detail.includes('seeds/s.json'), 'only the first path is named');
   assert.equal(f.calls.length + f.usageCalls.length, 0, 'the CLI is never called, not even the usage check');
   assert.equal(existsSync(p.counter), false, 'no run counted');
   assert.equal(readFileSync(p.lock, 'utf8'), lockText, 'the other run keeps its lock');
@@ -3394,15 +3416,28 @@ function repoWithGoldFile() {
 }
 const crStep = (r) => r.result.results.find((x) => x.step === 'coderabbit');
 
-test('A7: a DELETE of an answer-key file is caught: bothSidePaths lists it and runPrePr FAILs the CodeRabbit step with no CLI call', async () => {
+const stampOf = (repo) => JSON.parse(readFileSync(stampFile(repo), 'utf8'));
+const keyFields = (s) => ({ skipped: s.cr_skipped, reason: s.cr_skip_reason, key: s.cr_answer_key, n: s.answer_key_paths, docs: s.cr_docs_only });
+
+test('A7: a DELETE of an answer-key file is caught: bothSidePaths lists it and runPrePr SKIPs the CodeRabbit step as answer-key (stamp fields set, no CLI call)', async () => {
   const repo = repoWithGoldFile();
   git(repo.dir, 'rm', '-q', repo.rel);
   git(repo.dir, 'commit', '-q', '-m', 'delete gold');
   assert.deepEqual(PRE.bothSidePaths(makeGit(repo.dir), 'main...HEAD'), [repo.rel]);
   const run = await prePr(repo);
-  assert.equal(crStep(run).status, 'FAIL');
+  assert.equal(crStep(run).status, 'SKIP');
+  assert.equal(crStep(run).skipReason, 'answer-key');
   assert.match(crStep(run).detail, new RegExp(`${repo.rel.replaceAll('/', '\\/')}, 1 in all`));
   assert.equal(run.crCalls.length, 0);
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.deepEqual(keyFields(stampOf(repo)), { skipped: true, reason: 'answer-key', key: true, n: 1, docs: false });
+});
+
+test('A12: a normal stamp has cr_answer_key false and answer_key_paths 0 (only an answer-key skip sets them)', async () => {
+  const repo = makeRepo();
+  const run = await prePr(repo);
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.deepEqual(keyFields(stampOf(repo)), { skipped: false, reason: null, key: false, n: 0, docs: false });
 });
 
 test('A8: a RENAME out of gold/ is caught on the OLD path: --name-only shows only the new one, bothSidePaths shows both', async () => {
@@ -3413,9 +3448,10 @@ test('A8: a RENAME out of gold/ is caught on the OLD path: --name-only shows onl
   assert.deepEqual(changedFiles(makeGit(repo.dir), 'main').paths, ['docs/moved.md'], 'the rename shows only the new path today');
   assert.deepEqual(PRE.bothSidePaths(makeGit(repo.dir), 'main...HEAD'), ['docs/moved.md', repo.rel]);
   const run = await prePr(repo);
-  assert.equal(crStep(run).status, 'FAIL');
+  assert.equal(crStep(run).status, 'SKIP');
   assert.match(crStep(run).detail, /answer-key path/);
   assert.equal(run.crCalls.length, 0);
+  assert.deepEqual(keyFields(stampOf(repo)), { skipped: true, reason: 'answer-key', key: true, n: 1, docs: false });
 });
 
 test('A11: answerKeyRange (the cr-fix guard) checks both sides of from..HEAD in a real repo', () => {
@@ -3425,7 +3461,9 @@ test('A11: answerKeyRange (the cr-fix guard) checks both sides of from..HEAD in 
   git(repo.dir, 'mv', repo.rel, 'docs/moved.md');
   git(repo.dir, 'commit', '-q', '-m', 'move gold out');
   assert.match(PRE.answerKeyRange(repo.dir, 'main') ?? '', /answer-key path \(scripts\/eval\/review-eval\/gold\/old\.md, 1 in all\)/);
-  assert.match(PRE.answerKeyRange(path.join(os.tmpdir(), 'prepr-no-such-dir'), 'main') ?? '', /could not check the diff/);
+  const closed = PRE.answerKeyRange(path.join(os.tmpdir(), 'prepr-no-such-dir'), 'main') ?? '';
+  assert.match(closed, /could not check the diff/);
+  assert.doesNotMatch(closed + PRE.answerKeyRange(repo.dir, 'main'), /--skip-cr/, 'cr-fix has no --skip-cr flag');
 });
 
 test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {

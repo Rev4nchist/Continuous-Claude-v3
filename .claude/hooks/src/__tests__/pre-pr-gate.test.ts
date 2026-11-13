@@ -477,6 +477,29 @@ describe('K3: the docs-only skip', () => {
   });
 });
 
+describe('K4: the answer-key skip', () => {
+  const key = (over: Record<string, unknown> = {}) => stampJson({ cr_skipped: true, cr_skip_reason: 'answer-key', cr_answer_key: true, answer_key_paths: 2, ...over });
+
+  it('K4a: answer-key is allowed when the stamp has cr_answer_key true and answer_key_paths a whole number of 1 or more', () => {
+    expect(decide(input(CREATE[0]), deps({ stamp: key() })).action).toBe('allow');
+    expect(decide(input(CREATE[0]), deps({ stamp: key({ answer_key_paths: 1 }) })).action).toBe('allow');
+  });
+
+  it('K4b: answer-key with one field missing, or answer_key_paths 0, negative, fractional or text, is denied with a reason that names the fields', () => {
+    for (const over of [{ cr_answer_key: undefined }, { cr_answer_key: false }, { cr_answer_key: 'true' }, { answer_key_paths: undefined }, { answer_key_paths: 0 }, { answer_key_paths: -1 }, { answer_key_paths: 1.5 }, { answer_key_paths: '2' }, { answer_key_paths: null }]) {
+      const d = decide(input(CREATE[0]), deps({ stamp: key(over) }));
+      expect(d.action, JSON.stringify(over)).toBe('deny');
+      expect(d.action === 'deny' && d.reason, JSON.stringify(over)).toMatch(/answer-key.*cr_answer_key.*answer_key_paths/);
+    }
+  });
+
+  it('K4c: the fields do not excuse another reason: flag stays denied, and so do no-changes, earlier-step-failed and cli-error', () => {
+    for (const r of ['flag', 'no-changes', 'earlier-step-failed', 'cli-error']) {
+      expect(decide(input(CREATE[0]), deps({ stamp: key({ cr_skip_reason: r }) })).action, r).toBe('deny');
+    }
+  });
+});
+
 describe('B: the pushed head and the body file', () => {
   it('B1: a pushed head (refs/remotes/fork/<branch>) must equal the stamped head', () => {
     const other = 'e'.repeat(40);

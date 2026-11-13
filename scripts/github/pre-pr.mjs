@@ -68,9 +68,11 @@
  * empty --committed scope; the run is given back), "docs-only" (every changed file is docs, the same test the evidence step uses, and the
  * CLI sent only the error "No files to review" because .coderabbit.yaml path_filters exclude docs/**; the run is given back; the stamp also
  * holds cr_docs_only true; any other error, or any non-docs changed file, stays a FAIL), "cli-cap" (today's paid CLI spend reached
- * coderabbit.cli_daily_cap_usd in review-router.config.json; no run is spent) or "earlier-step-failed". The hook accepts "cli-missing",
- * "cli-cap", "cap" with cr_finished_runs >= 1, "rate-limited" with a retry time, and "docs-only" with cr_docs_only and docs_verified both
- * true. It denies the rest, including "cli-error".
+ * coderabbit.cli_daily_cap_usd in review-router.config.json; no run is spent), "answer-key" (the diff holds a path of the REVIEW.md answer-key globs, old or new side:
+ * no CLI review may read it; no lock, no run; the stamp also holds cr_answer_key true and answer_key_paths N >= 1; the internal review and a seat diff read replace
+ * the CLI; a list or a path list the guard cannot read stays a FAIL) or "earlier-step-failed". The hook accepts "cli-missing",
+ * "cli-cap", "cap" with cr_finished_runs >= 1, "rate-limited" with a retry time, "docs-only" with cr_docs_only and docs_verified both
+ * true, and "answer-key" with cr_answer_key true and answer_key_paths a whole number >= 1. It denies the rest, including "cli-error".
  * Cost estimate (Dave, 2026-11-06): after `cr usage --agent`, the step prints one line with every changed file x $0.25 (the estimate errs
  * high: no file is left out). Remaining 0 stays a SKIP "rate-limited" with no run (Dave: no billed run on an empty allowance). Only an
  * unavailable usage read (count unknown) adds today's paid CLI spend: over the cap is a SKIP "cli-cap"; under it the run starts as before
@@ -1128,8 +1130,8 @@ function reusedReview({ root, e2e, saved, base, why }) {
 // ---------- the answer-key guard (card prepr-answer-key-cli-guard) ----------
 // No CodeRabbit CLI review may read an answer-key path. The one list is REVIEW.md "## Skip paths" (parseReviewMd, the list that
 // scripts/ratchets/review-skip-sync.mjs ties to the bot configs); the guard keeps the globs under scripts/eval/review-eval/. It checks the paths
-// of BOTH sides of the change: `git diff --name-only` follows renames, so a rename out of gold/ names only the new path. Fail closed: a list
-// it cannot read or an unknown path list is the same FAIL.
+// of BOTH sides of the change: `git diff --name-only` follows renames, so a rename out of gold/ names only the new path. A hit is an earned SKIP
+// "answer-key" (the stamp and the gate: see answerKeyStep). Fail closed: a list it cannot read or an unknown path list is a FAIL.
 
 const ANSWER_KEY_DIR = 'scripts/eval/review-eval/';
 const KEY_NEXT = "--skip-cr on such a branch is Dave's decision; the next step is the internal review plus a seat diff read.";
@@ -1146,16 +1148,37 @@ export function answerKeyGlobs(root) {
 }
 
 /**
- * The FAIL detail, or null when the paths hold no answer-key path. A path matches a whole glob, after slashes and case are normalised
- * (Gold/ is gold/). The text names the first matched path and the count: a path, never file content.
+ * { hits } (the answer-key paths, at least one), { closed } (why the guard cannot check the diff) or null (no answer-key path). A path
+ * matches a whole glob, after slashes and case are normalised (Gold/ is gold/).
  */
-export function answerKeyBlock({ root, paths }) {
-  const stop = (why) => `the answer-key guard could not check the diff (${why}): no CLI review runs on a diff it cannot check. ${KEY_NEXT}`;
-  if (!Array.isArray(paths)) return stop('the changed-file list is unknown');
+export function answerKeyCheck({ root, paths }) {
+  if (!Array.isArray(paths)) return { closed: 'the changed-file list is unknown' };
   const { globs, reason } = answerKeyGlobs(root);
-  if (!globs) return stop(reason);
+  if (!globs) return { closed: reason };
   const hits = paths.filter((p) => globs.some((g) => matchGlob(slashLower(g), slashLower(p))));
-  return hits.length === 0 ? null : `the diff holds an answer-key path (${hits[0]}, ${hits.length} in all): no CLI review may read it. ${KEY_NEXT}`;
+  return hits.length === 0 ? null : { hits };
+}
+
+const closedText = (why) => `the answer-key guard could not check the diff (${why}): no CLI review runs on a diff it cannot check. ${KEY_NEXT}`;
+const hitText = (hits) => `the diff holds an answer-key path (${hits[0]}, ${hits.length} in all)`;
+
+/**
+ * The CodeRabbit step result for a guard check. A hit is an earned SKIP "answer-key" (Dave, 2026-11-13): the stamp gets cr_answer_key true and
+ * answer_key_paths N, and the pre-pr-gate hook accepts the skip only with both. A guard that cannot check stays a FAIL. The text names the
+ * first path and the count: a path, never file content.
+ */
+export function answerKeyStep(check) {
+  if (check.closed !== undefined) return result('coderabbit', 'FAIL', closedText(check.closed));
+  const detail = `${hitText(check.hits)}: the CodeRabbit CLI does not run on it. The internal review and a seat diff read replace the CLI.`;
+  return { ...skipped('answer-key', detail), answerKeyPaths: check.hits.length };
+}
+
+/** The refusal text for cr-fix.mjs and the tests (a string), or null. cr-fix has no stamp, so a hit is a refusal there. */
+export function answerKeyBlock(input) {
+  const check = answerKeyCheck(input);
+  if (!check) return null;
+  if (check.closed !== undefined) return `the answer-key guard could not check the diff (${check.closed}): no CLI review starts on a diff it cannot check. Use the internal review and a seat diff read.`;
+  return `${hitText(check.hits)}: no CLI review may start on it. Use the internal review and a seat diff read.`;
 }
 
 /** Every path of a change, old and new side (a rename is a delete plus an add), or null when git fails. `range` is e.g. `main...HEAD`. */
@@ -1254,7 +1277,7 @@ function storeNote(store, before, { verdict, parsed, root }) {
 }
 
 /**
- * One `cr review --agent --committed` per head, at most CR_RUN_LIMIT per branch across every worktree. In order: --skip-cr; the answer-key guard (a FAIL when the diff holds an answer-key path or the guard cannot check it: no lock, no slot, no CLI); a saved
+ * One `cr review --agent --committed` per head, at most CR_RUN_LIMIT per branch across every worktree. In order: --skip-cr; the answer-key guard (a SKIP answer-key when the diff holds an answer-key path, a FAIL when the guard cannot check it: no lock, no slot, no CLI); a saved
  * output for this head (reused, no run); the run lock (a second step on the same branch FAILs while one runs; a stale lock is replaced);
  * the run counter and its cap; the free `cr usage --agent` preflight; the review, streamed to <date>-pre-pr-cr-<sha7>.running.txt and then
  * saved as .txt (a finished review) or .failed.txt. A run that started uses a slot, even if it failed. A process that never started, a failed
@@ -1263,8 +1286,8 @@ function storeNote(store, before, { verdict, parsed, root }) {
  */
 export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, crStore = liveCrStore() }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
-  const keyBlock = answerKeyBlock({ root, paths: guardPaths === undefined ? changedPaths : guardPaths });
-  if (keyBlock) return result('coderabbit', 'FAIL', keyBlock);
+  const keyCheck = answerKeyCheck({ root, paths: guardPaths === undefined ? changedPaths : guardPaths });
+  if (keyCheck) return answerKeyStep(keyCheck);
   const short = head.slice(0, 7);
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
   const saved = savedReviewFor(e2e, short);
@@ -1487,7 +1510,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const slim = results.map(({ step, status, detail }) => ({ step, status, detail }));
     const cr = results.find((r) => r.step === 'coderabbit');
     const crSkipped = cr?.status === 'SKIP';
-    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
+    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', cr_answer_key: crSkipped && cr.skipReason === 'answer-key', answer_key_paths: crSkipped && cr.skipReason === 'answer-key' ? cr.answerKeyPaths ?? 0 : 0, docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
   }
   return { ok, results, lines, head, branch, logPath, stampPath: ok ? stampPath : null };
 }
