@@ -79,7 +79,8 @@ export function loadPg() {
 export async function withPg(url, fn) {
   assertScratch(url);
   const { Client } = loadPg();
-  const client = new Client({ connectionString: url, connectionTimeoutMillis: 5000 });
+  // query_timeout: the client gives up on a query whose socket goes silent; statement_timeout below only bounds a query the server runs.
+  const client = new Client({ connectionString: url, connectionTimeoutMillis: 5000, query_timeout: 35_000 });
   try {
     await client.connect();
     await client.query(`SET statement_timeout = '30s'`);
@@ -227,7 +228,13 @@ export function runNode(script, args = [], { env, input, cwd, harness = false, t
     e.timedOut = r.error.code === 'ETIMEDOUT';
     throw e;
   }
-  if (r.status === null) throw new HarnessError(`${path.basename(script)} ended without an exit code (signal ${r.signal})`);
+  if (r.status === null) {
+    // The output so far goes with the error, as above: the create may have printed the database name before the signal.
+    const e = new HarnessError(`${path.basename(script)} ended without an exit code (signal ${r.signal})`);
+    e.out = r.stdout ?? '';
+    e.err = r.stderr ?? '';
+    throw e;
+  }
   return { code: r.status, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 
@@ -438,11 +445,13 @@ export function scanRealHomeChanged(before, markers = [], homes = realHomes()) {
   const hits = [];
   let scanned = 0;
   let unreadable = 0;
+  let unlisted = 0;
   for (const home of homes) {
     for (const sub of SCAN_DIRS) {
       const dir = path.join(home, '.claude', ...sub);
       let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      // A missing folder holds nothing to check. Any other listing error leaves the folder unchecked: the scan is incomplete.
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { if (e?.code !== 'ENOENT') unlisted++; continue; }
       for (const e of entries) {
         if (!e.isFile()) continue;
         const file = path.join(dir, e.name);
@@ -456,8 +465,8 @@ export function scanRealHomeChanged(before, markers = [], homes = realHomes()) {
       }
     }
   }
-  // scanIncomplete: a changed file was not read, so it can hide a marker. The caller must not report "0 writes".
-  return { hits, scanned, unreadable, scanIncomplete: unreadable > 0 };
+  // scanIncomplete: a changed file was not read, or a folder could not be listed, so it can hide a marker. The caller must not report "0 writes".
+  return { hits, scanned, unreadable, unlisted, scanIncomplete: unreadable > 0 || unlisted > 0 };
 }
 
 /**

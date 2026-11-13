@@ -23,7 +23,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { HarnessError, childEnv, diffRealHome, makeSandbox, result, scanRealHomeChanged, snapshotRealHome } from './lib.mjs';
+import { HarnessError, childEnv, diffRealHome, makeSandbox, result, runNode, scanRealHomeChanged, snapshotRealHome } from './lib.mjs';
 
 const MARKER = 'drill-test-marker-0001';
 const isWin = process.platform === 'win32';
@@ -151,6 +151,40 @@ test('childEnv points the home and the hook logs into the sandbox', (t) => {
   for (const k of ['HOME', 'CCV3_GUARD_DECISIONS_LOG', 'CCV3_HOOK_TRACE_DIR']) {
     assert.ok(path.resolve(env[k]).startsWith(path.resolve(sb.dir)), `${k} is outside the sandbox`);
   }
+});
+
+// ---------------------------------------------------------------- CLI review findings on 6cf06c2f (part 1)
+
+test('scanRealHomeChanged marks the scan incomplete when a scan folder exists but cannot be listed', (t) => {
+  // Breaks when: the readdirSync catch skips every error again, not only a missing folder.
+  const { dir, home } = tempHome();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const before = snapshotRealHome([home]);
+  fs.writeFileSync(path.join(home, '.claude', 'logs'), 'a file where a folder is expected'); // readdirSync: ENOTDIR
+  const scan = scanRealHomeChanged(before, [MARKER], [home]);
+  assert.equal(scan.scanIncomplete, true);
+  assert.ok(scan.unlisted >= 1, `unlisted ${scan.unlisted}`);
+});
+
+test('scanRealHomeChanged still skips a scan folder that does not exist (control)', (t) => {
+  const { dir, home } = tempHome();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const scan = scanRealHomeChanged(snapshotRealHome([home]), [MARKER], [home]);
+  assert.equal(scan.scanIncomplete, false);
+});
+
+test('runNode keeps the output so far when a child ends on a signal', (t) => {
+  // Breaks when: the status-null branch throws a HarnessError without .out and .err.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coord-drill-2-sig-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const script = path.join(dir, 'sig.mjs');
+  fs.writeFileSync(script, "process.stdout.write('lanes_pr1_feedface\\n', () => process.kill(process.pid, 'SIGKILL'));\n");
+  const probe = spawnSync(process.execPath, [script], { encoding: 'utf8', windowsHide: true });
+  if (probe.status !== null) { t.skip(`this platform reports exit ${probe.status} for a killed child, not a signal`); return; }
+  let err;
+  try { runNode(script, [], { env: { ...process.env }, harness: true }); } catch (e) { err = e; }
+  assert.ok(err instanceof HarnessError, 'no HarnessError');
+  assert.match(String(err.out), /lanes_pr1_feedface/);
 });
 
 // ---------------------------------------------------------------- result()

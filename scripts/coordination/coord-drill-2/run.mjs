@@ -179,7 +179,7 @@ function sandboxCheck(before, runId, sandbox, tracked, say = console.log) {
       : `SANDBOX: ${hits.length} real-home writes FOUND (watched real files: ${of})`);
     say(`SANDBOX SCAN: ${scan.scanned + scan.unreadable} real files in logs, state, state/identity, cache changed during the run: ${scan.scanned} read, ${scan.unreadable} unreadable (not checked), ${scan.hits.length} marker hits`);
     for (const c of hits) say(`  real-home write: ${c}`);
-    if (scan.scanIncomplete) say(`SANDBOX SCAN: INCOMPLETE: ${scan.unreadable} changed real file(s) could not be read, so a write of this run cannot be ruled out`);
+    if (scan.scanIncomplete) say(`SANDBOX SCAN: INCOMPLETE: ${scan.unreadable} changed real file(s) could not be read and ${scan.unlisted ?? 0} folder(s) could not be listed, so a write of this run cannot be ruled out`);
     return { ok: hits.length === 0 && !scan.scanIncomplete, changed, scan, watched, listed, control };
   } catch (e) {
     say(`SANDBOX: ERROR, check failed: ${errText(e)}`);
