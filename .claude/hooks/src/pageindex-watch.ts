@@ -10,6 +10,7 @@
  */
 
 import * as fs from 'fs';
+import { isEngineHost } from './shared/engine-host.js';
 import * as path from 'path';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 
@@ -130,6 +131,12 @@ async function main() {
   try {
     data = JSON.parse(input);
   } catch {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
+
+  // Under cursor-agent (the review engine): no batch_index child, no debounce write for the reviewed tree. (card engine-run-hook-files).
+  if (isEngineHost(data)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }

@@ -1128,6 +1128,18 @@ function addFileInPlay(bus, file) {
   }
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/bus-tool-populator.ts
 var GREP_HIT_CAP = 8;
 var GREP_SCAN_LINES = 200;
@@ -1221,6 +1233,10 @@ function main() {
     const raw = readFileSync4(0, "utf-8").trim();
     if (raw) input = JSON.parse(raw);
   } catch {
+    console.log("{}");
+    return;
+  }
+  if (isEngineHost(input)) {
     console.log("{}");
     return;
   }

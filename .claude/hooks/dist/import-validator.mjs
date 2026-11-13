@@ -683,6 +683,18 @@ function trackHookActivitySync(hookName, projectDir, success = true, metrics = {
   }
 }
 
+// src/shared/engine-host.ts
+var ENGINE_EVENT_NAMES = /* @__PURE__ */ new Set(["sessionStart", "postToolUse", "sessionEnd", "preToolUse", "userPromptSubmit"]);
+function isEngineHost(input) {
+  try {
+    if (input === null || typeof input !== "object") return false;
+    const event = input.hook_event_name;
+    return typeof event === "string" && ENGINE_EVENT_NAMES.has(event);
+  } catch {
+    return false;
+  }
+}
+
 // src/import-validator.ts
 function tldrSearch(pattern, projectDir = ".") {
   try {
@@ -725,6 +737,10 @@ function checkSymbolExists(symbol) {
 }
 async function main() {
   const input = JSON.parse(readFileSync2(0, "utf-8"));
+  if (isEngineHost(input)) {
+    console.log("{}");
+    return;
+  }
   if (input.tool_name !== "Write" && input.tool_name !== "Edit") {
     console.log("{}");
     return;
