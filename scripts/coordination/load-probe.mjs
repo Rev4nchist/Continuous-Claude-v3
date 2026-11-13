@@ -57,8 +57,22 @@
 
 import { execFileSync, spawn } from 'child_process';
 import { writeFileSync } from 'fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { canonProject, repoPath } from './canon-home.mjs';
+import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+
+// Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any psql call or child process.
+const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || '';
+let DB_NAME;
+try { DB_NAME = assertScratchUrl(DB_URL); } catch {
+  process.stderr.write(`load-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. `
+    + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
+  process.exit(2);
+}
+// psql below takes DB_NAME, the value assertScratchUrl returned. The hooks this probe starts read the same scratch database.
+process.env.CONTINUOUS_CLAUDE_DB_URL = DB_URL;
+process.env.DATABASE_URL = DB_URL;
+process.env.OPC_POSTGRES_URL = DB_URL;
 // The hooks spawned here log their denies. Send that log to a temp file, never the real ~/.claude/logs one.
 process.env.CCV3_GUARD_DECISIONS_LOG ||= (process.env.TEMP || process.env.TMPDIR || '/tmp') + `/ccv3-probe-guard-decisions-${process.pid}.jsonl`; // one file per run, so two runs never mix rows
 
@@ -88,12 +102,20 @@ const PROJECT_CWD = repoPath();
 const CANONICAL_PROJECT = canonProject();
 console.log(`canonical project: ${CANONICAL_PROJECT}`);
 const TARGET_FILE = join(PROJECT_CWD, '.claude', 'hooks', 'src', '__loadprobe__.ts');
+// The claim key the file-claims hook stores since PR 536 (.claude/hooks/src/shared/claim-target.ts resolveClaimKey):
+// the path relative to the repo top folder, forward slashes, lower-cased where the file system ignores case.
+// SQL seeds and reads use it; the hook payload keeps the absolute path, as Claude Code sends it.
+const claimKey = (abs) => {
+  const rel = relative(PROJECT_CWD, abs).replace(/\\/g, '/');
+  return process.platform === 'win32' || process.platform === 'darwin' ? rel.toLowerCase() : rel;
+};
+
 const OWNER = 'loadprobe-owner-0000-0000-000000000000';
 
 function psql(sql) {
   return execFileSync(
     'docker',
-    ['exec', 'continuous-claude-postgres', 'psql', '-U', 'claude', '-d', 'continuous_claude', '-t', '-A', '-c', sql],
+    ['exec', 'continuous-claude-postgres', 'psql', '-U', 'claude', '-d', DB_NAME, '-t', '-A', '-c', sql],
     { encoding: 'utf-8' }
   ).trim();
 }
@@ -117,19 +139,19 @@ const PURGE_EVENTS =
 
 function setup() {
   psql(`
-    DELETE FROM file_claims WHERE file_path = '${TARGET_FILE}';
+    DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET_FILE)}';
     DELETE FROM sessions WHERE id LIKE 'loadprobe-%';
     ${PURGE_EVENTS}
     INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat)
     VALUES ('${OWNER}', '${CANONICAL_PROJECT}', 'load probe owner', NOW(), NOW());
     INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
-    VALUES ('${TARGET_FILE}', '${CANONICAL_PROJECT}', '${OWNER}', NOW(), NOW() + INTERVAL '30 minutes');
+    VALUES ('${claimKey(TARGET_FILE)}', '${CANONICAL_PROJECT}', '${OWNER}', NOW(), NOW() + INTERVAL '30 minutes');
   `);
 }
 
 function teardown() {
   psql(`
-    DELETE FROM file_claims WHERE file_path = '${TARGET_FILE}';
+    DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET_FILE)}';
     DELETE FROM sessions WHERE id LIKE 'loadprobe-%';
     ${PURGE_EVENTS}
   `);
