@@ -51,6 +51,19 @@ const FOLDS_CASE: ReadonlySet<NodeJS.Platform> = new Set<NodeJS.Platform>(['win3
 
 const real = (p: string): string => realpathSync.native(p);
 
+/**
+ * `.claude/cache/**` holds git-ignored files that each worktree makes for itself (the pre-pr summary,
+ * its logs). One key for every worktree would make two sessions fight over files they cannot share
+ * (card coord-file-claims-worktree-local). Such a file keeps today's key (raw absolute path, cwd
+ * project), which differs per worktree. No .gitignore parser: a wrong ignore rule could weaken the
+ * guard for a tracked file, and this prefix rule can only ever make a claim narrower for a file
+ * under `.claude/cache`. The relative path is already resolved (".." gone) when this runs.
+ */
+const isWorktreeCache = (rel: string, fold: boolean): boolean => {
+  const r = fold ? rel.toLowerCase() : rel;
+  return r === '.claude/cache' || r.startsWith('.claude/cache/');
+};
+
 /** The nearest existing folder or file at or above `abs`. */
 function nearestExisting(abs: string): string | null {
   let cur = abs;
@@ -115,6 +128,7 @@ export function resolveClaimKey(rawPath: string, options: ClaimKeyOptions = {}):
         let rel = relative(dir, realFile).replace(/\\/g, '/');
         // Outside the repo: "..", or a path that starts with "../". A folder named "..foo" is fine.
         if (!rel || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) return null;
+        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) return null;
         // The lease class is decided from the key (resolveFileClaim). A repo rooted inside a harness
         // folder (`<x>/.claude/skills/plugin`, or `~/.claude` itself) has a relative path with no
         // `.claude/<dir>` segment, and a link can make the raw and the real path differ. Main
