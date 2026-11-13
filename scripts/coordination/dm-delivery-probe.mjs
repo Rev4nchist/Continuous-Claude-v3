@@ -36,14 +36,11 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { jsonArrayOf, laneEnv, makeBoards } from './probe-boards.mjs';
+import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
 
 const run = promisify(execFile);
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-
-/** `pg` lives in the hooks bundle or in apps/agentic-os of this checkout or the primary (scripts/lib/resolve-deps.mjs). */
-let pg;
-try { pg = requireDep('pg', { repoRoot: REPO }); } catch (e) { console.error(`dm-delivery-probe: ${e.message}`); process.exit(2); }
 
 const dmFile = (sid) => join(tmpdir(), `claude-lane-dm-${sid}.json`);
 const clearThrottle = (sid) => { try { rmSync(dmFile(sid), { force: true }); } catch { /* fine */ } };
@@ -55,6 +52,16 @@ const HOOK = process.env.DM_PROBE_HOOK
 const CONN = process.env.CONTINUOUS_CLAUDE_DB_URL
   || process.env.DATABASE_URL
   || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
+// Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any connection.
+try { assertScratchUrl(CONN); } catch {
+  process.stderr.write(`dm-delivery-probe: refusing to run: database '${dbNameOf(CONN) || '(no name)'}' is not a scratch database. `
+    + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
+  process.exit(2);
+}
+
+/** `pg` lives in the hooks bundle or in apps/agentic-os of this checkout or the primary (scripts/lib/resolve-deps.mjs). */
+let pg;
+try { pg = requireDep('pg', { repoRoot: REPO }); } catch (e) { console.error(`dm-delivery-probe: ${e.message}`); process.exit(2); }
 
 const RECEIVER = `probe-recv-${process.pid}`;
 const SENDER = `probe-send-${process.pid}`;

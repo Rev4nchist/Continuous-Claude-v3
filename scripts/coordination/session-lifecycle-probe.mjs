@@ -47,8 +47,10 @@
  *                                                   database instead of docker exec. The
  *                                                   hook gets the same URL in its env.
  *                                                   Use it with a scratch database
- *                                                   (scratch-db.mjs create); no flag keeps
- *                                                   the docker exec behaviour exactly.
+ *                                                   (scratch-db.mjs create). With no flag the
+ *                                                   probe uses docker exec on the scratch
+ *                                                   database named by the env URL; a URL that
+ *                                                   is not a scratch name refuses, exit 2.
  *
  * Exit codes: 0 all checks passed | 1 a check failed | 2 usage/environment error
  */
@@ -58,7 +60,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
-import { maskUrl } from './scratch-db.mjs';
+import { assertScratchUrl, dbNameOf, maskUrl } from './scratch-db.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..');
@@ -70,6 +72,15 @@ function arg(name, fallback) {
 
 const CONTAINER = arg('container', 'continuous-claude-postgres');
 const DB_URL = arg('db-url', null);
+// Rule O3.9: this probe writes, so it runs on a scratch database only. --db-url first, then the env chain; no URL refuses.
+// The docker exec path (no --db-url) sends SQL to the scratch name that assertScratchUrl returns, never to continuous_claude.
+const TARGET_URL = DB_URL || process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || '';
+let DB_NAME;
+try { DB_NAME = assertScratchUrl(TARGET_URL); } catch {
+  process.stderr.write(`session-lifecycle-probe: refusing to run: database '${dbNameOf(TARGET_URL) || '(no name)'}' is not a scratch database. `
+    + "Pass --db-url or set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
+  process.exit(2);
+}
 const HOOK = resolve(arg('hook', join(REPO, '.claude', 'hooks', 'dist', 'coordination-release.mjs')));
 const PROBE_ID = `probe-lifecycle-${process.pid}-1`;
 const ABSENT_ID = `probe-lifecycle-${process.pid}-absent`;
@@ -94,7 +105,7 @@ async function psql(sql) {
 function dockerPsql(sql) {
   const res = spawnSync(
     'docker',
-    ['exec', CONTAINER, 'psql', '-U', 'claude', '-d', 'continuous_claude', '-At', '-F', '|', '-c', sql],
+    ['exec', CONTAINER, 'psql', '-U', 'claude', '-d', DB_NAME, '-At', '-F', '|', '-c', sql],
     { encoding: 'utf-8' },
   );
   if (res.error) throw new Error(`docker exec failed: ${res.error.message}`);
@@ -139,8 +150,8 @@ function runHook(sessionId) {
     }),
     encoding: 'utf-8',
     timeout: 30_000,
-    // The hook resolves its own database from env. With --db-url it must be the same one.
-    ...(DB_URL ? { env: { ...process.env, CONTINUOUS_CLAUDE_DB_URL: DB_URL, DATABASE_URL: DB_URL, OPC_POSTGRES_URL: DB_URL } } : {}),
+    // The hook resolves its own database from env. It must be the same scratch database, on both paths.
+    env: { ...process.env, CONTINUOUS_CLAUDE_DB_URL: TARGET_URL, DATABASE_URL: TARGET_URL, OPC_POSTGRES_URL: TARGET_URL },
   });
   return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
 }

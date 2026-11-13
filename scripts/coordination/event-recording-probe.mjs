@@ -20,6 +20,20 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { canonProject, repoPath } from './canon-home.mjs';
+import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+
+// Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any psql call or child process.
+const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || '';
+let DB_NAME;
+try { DB_NAME = assertScratchUrl(DB_URL); } catch {
+  process.stderr.write(`event-recording-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. `
+    + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
+  process.exit(2);
+}
+// psql below takes DB_NAME, the value assertScratchUrl returned. The hooks this probe starts read the same scratch database.
+process.env.CONTINUOUS_CLAUDE_DB_URL = DB_URL;
+process.env.DATABASE_URL = DB_URL;
+process.env.OPC_POSTGRES_URL = DB_URL;
 // The hooks spawned here log their denies. Send that log to a temp file, never the real ~/.claude/logs one.
 process.env.CCV3_GUARD_DECISIONS_LOG ||= (process.env.TEMP || process.env.TMPDIR || '/tmp') + `/ccv3-probe-guard-decisions-${process.pid}.jsonl`; // one file per run, so two runs never mix rows
 
@@ -33,7 +47,7 @@ const STALE = 'step4e2e-stale-0000-0000-000000000000';
 
 function psql(sql) {
   return execFileSync('docker',
-    ['exec', 'continuous-claude-postgres', 'psql', '-U', 'claude', '-d', 'continuous_claude', '-t', '-A', '-c', sql],
+    ['exec', 'continuous-claude-postgres', 'psql', '-U', 'claude', '-d', DB_NAME, '-t', '-A', '-c', sql],
     { encoding: 'utf-8' }).trim();
 }
 
