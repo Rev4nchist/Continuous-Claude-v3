@@ -1,0 +1,250 @@
+/**
+ * claim-target: the file-claims key is (repo-relative path, common dir of the FILE's own repo).
+ *
+ * Ways it can fail (one test each):
+ *  1. A worktree and the primary checkout give two keys for one repo path (the card's bug).
+ *  2. The same relative path in two different repos collides.
+ *  3. A ".." segment gives a second spelling of one file.
+ *  4. A new file in a folder that does not exist yet gets no key (or throws).
+ *  5. A file outside any repo gets a key (it must keep today's raw key: null here).
+ *  6. A moved worktree folder changes the key.
+ *  7. A file reached through a link crashes the resolver, or gets a key from the link's side.
+ *  8. Case folds on Linux, or does not fold on win32 and darwin (seat change C2).
+ *  9. A broken .git file throws instead of falling back.
+ * 10. The project string differs from the one `canonicalProject` (git) gives: 8.3 short names.
+ *
+ * Real temp repos and real `git worktree add`: the expected project value comes from the real
+ * `canonicalProject`, not from a copy of the logic. Hooks CI runs on Linux: paths use "/".
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync, symlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { resolveClaimKey } from '../shared/claim-target.js';
+import { canonicalProject } from '../shared/session-id.js';
+import { isHarnessPath, leaseFor } from '../shared/leases.js';
+
+let root: string;
+
+function git(cwd: string, ...args: string[]): void {
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t.invalid', ...args], {
+    cwd,
+    stdio: 'ignore',
+  });
+}
+
+function makeRepo(name: string): string {
+  const dir = join(root, name);
+  mkdirSync(dir, { recursive: true });
+  git(dir, 'init', '-q');
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'init');
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'x.ts'), 'x');
+  return dir;
+}
+
+function addWorktree(repo: string, name: string): string {
+  const wt = join(root, name);
+  git(repo, 'worktree', 'add', '-q', wt, '-b', name);
+  return wt;
+}
+
+beforeEach(() => {
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'claim-key-')));
+});
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+describe('resolveClaimKey', () => {
+  it('1. gives one key for the primary checkout and a worktree', () => {
+    const a = makeRepo('a');
+    const wt = addWorktree(a, 'a-wt');
+    const fromPrimary = resolveClaimKey(join(a, 'src', 'x.ts'));
+    const fromWorktree = resolveClaimKey(join(wt, 'src', 'x.ts'));
+    expect(fromPrimary).not.toBeNull();
+    expect(fromWorktree).toEqual(fromPrimary);
+    expect(fromWorktree?.filePath).toBe('src/x.ts');
+  });
+
+  it('10. project equals what canonicalProject (git) gives for the repo', () => {
+    const a = makeRepo('a');
+    const wt = addWorktree(a, 'a-wt');
+    expect(resolveClaimKey(join(wt, 'src', 'x.ts'))?.project).toBe(canonicalProject(a));
+    expect(resolveClaimKey(join(wt, 'src', 'x.ts'))?.project).toBe(canonicalProject(wt));
+  });
+
+  it('2. keeps the same relative path in two different repos apart', () => {
+    const a = makeRepo('a');
+    const b = makeRepo('b');
+    const ka = resolveClaimKey(join(a, 'src', 'x.ts'));
+    const kb = resolveClaimKey(join(b, 'src', 'x.ts'));
+    expect(ka?.filePath).toBe(kb?.filePath);
+    expect(ka?.project).not.toBe(kb?.project);
+  });
+
+  it('3. folds ".." segments into one spelling', () => {
+    const a = makeRepo('a');
+    const wt = addWorktree(a, 'a-wt');
+    const plain = resolveClaimKey(join(a, 'src', 'x.ts'));
+    const dotted = resolveClaimKey(join(wt, 'src', '..', 'src', '..', 'src', 'x.ts'));
+    expect(dotted).toEqual(plain);
+  });
+
+  it('4. keys a new file in folders that do not exist yet', () => {
+    const a = makeRepo('a');
+    const key = resolveClaimKey(join(a, 'new', 'deep', 'y.ts'));
+    expect(key?.filePath).toBe('new/deep/y.ts');
+    expect(key?.project).toBe(canonicalProject(a));
+  });
+
+  it('5. returns null for a file outside any repo', () => {
+    const loose = join(root, 'loose');
+    mkdirSync(loose);
+    writeFileSync(join(loose, 'z.ts'), 'z');
+    expect(resolveClaimKey(join(loose, 'z.ts'))).toBeNull();
+    expect(resolveClaimKey(join(loose, 'nope', 'z.ts'))).toBeNull();
+  });
+
+  it('6. keeps the key when the worktree folder moves', () => {
+    const a = makeRepo('a');
+    const wt = addWorktree(a, 'a-wt');
+    const before = resolveClaimKey(join(wt, 'src', 'x.ts'));
+    const moved = join(root, 'a-wt-moved');
+    git(a, 'worktree', 'move', wt, moved);
+    const after = resolveClaimKey(join(moved, 'src', 'x.ts'));
+    expect(after).toEqual(before);
+  });
+
+  it('7. follows a link to the real file and does not throw', () => {
+    const a = makeRepo('a');
+    const b = makeRepo('b');
+    const link = join(a, 'linked');
+    symlinkSync(join(b, 'src'), link, process.platform === 'win32' ? 'junction' : 'dir');
+    let key: ReturnType<typeof resolveClaimKey> = null;
+    expect(() => {
+      key = resolveClaimKey(join(link, 'x.ts'));
+    }).not.toThrow();
+    // The key follows the real file: repo B, not repo A.
+    expect(key).toEqual(resolveClaimKey(join(b, 'src', 'x.ts')));
+  });
+
+  it('8. folds case only where the file system ignores case', () => {
+    const a = makeRepo('a');
+    mkdirSync(join(a, 'MixedDir'), { recursive: true });
+    const file = join(a, 'MixedDir', 'File.ts');
+    expect(resolveClaimKey(file, { platform: 'win32' })?.filePath).toBe('mixeddir/file.ts');
+    expect(resolveClaimKey(file, { platform: 'darwin' })?.filePath).toBe('mixeddir/file.ts');
+    expect(resolveClaimKey(file, { platform: 'linux' })?.filePath).toBe('MixedDir/File.ts');
+  });
+
+  it.skipIf(process.platform !== 'win32')('10b. an 8.3 short path gives the same key as the long path', () => {
+    const a = makeRepo('a-long-repo-name');
+    let short = a;
+    try {
+      short = execFileSync(
+        'powershell',
+        ['-NoProfile', '-Command', `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${a}').ShortPath`],
+        { encoding: 'utf8' },
+      ).trim();
+    } catch {
+      return; // no short names on this machine: nothing to pin
+    }
+    if (!short || short.toLowerCase() === a.toLowerCase()) return; // 8.3 names are off
+    const viaShort = resolveClaimKey(join(short, 'src', 'x.ts'));
+    expect(viaShort).toEqual(resolveClaimKey(join(a, 'src', 'x.ts')));
+    expect(viaShort?.project).toBe(canonicalProject(a));
+  });
+
+  it('11. gives a claim the same lease class as the absolute path did (harness files keep the long lease)', () => {
+    const a = makeRepo('a');
+    for (const rel of ['.claude/hooks/src/x.ts', '.claude/rules/r.md', '.claude/skills/s/SKILL.md', '.claude/settings.json', 'src/app/page.tsx']) {
+      const abs = join(a, ...rel.split('/'));
+      const key = resolveClaimKey(abs);
+      expect(key).not.toBeNull();
+      expect(leaseFor(key!.filePath)).toEqual(leaseFor(abs));
+    }
+  });
+
+  it('12. keeps the old key when a repo root lies inside a harness folder (the relative key would lose the lease class)', () => {
+    // A plugin repo rooted at <x>/.claude/skills/plugin: its relative key is "SKILL.md", with no
+    // ".claude/skills" segment. The same holds for a repo rooted at a ".claude" folder itself.
+    const plugin = join(root, 'x', '.claude', 'skills', 'plugin');
+    mkdirSync(plugin, { recursive: true });
+    git(plugin, 'init', '-q');
+    writeFileSync(join(plugin, 'SKILL.md'), 's');
+    const dotClaude = join(root, 'home', '.claude');
+    mkdirSync(join(dotClaude, 'hooks'), { recursive: true });
+    git(dotClaude, 'init', '-q');
+    writeFileSync(join(dotClaude, 'hooks', 'x.ts'), 'x');
+    for (const file of [join(plugin, 'SKILL.md'), join(dotClaude, 'hooks', 'x.ts')]) {
+      expect(isHarnessPath(file), file).toBe(true);
+      expect(resolveClaimKey(file), file).toBeNull(); // old key: raw absolute path, harness class kept
+    }
+    // Control: an ordinary harness file in an ordinary repo still gets a repo-relative key.
+    const a = makeRepo('a-control');
+    mkdirSync(join(a, '.claude', 'hooks'), { recursive: true });
+    writeFileSync(join(a, '.claude', 'hooks', 'y.ts'), 'y');
+    expect(resolveClaimKey(join(a, '.claude', 'hooks', 'y.ts'))?.filePath).toBe('.claude/hooks/y.ts');
+  });
+
+  it('13. R1: a worktree INSIDE the primary checkout (the real layout) gives the primary key, not the long path', () => {
+    const a = makeRepo('a');
+    const wt = join(a, '.claude', 'worktrees', 'wt');
+    mkdirSync(join(a, '.claude', 'worktrees'), { recursive: true });
+    git(a, 'worktree', 'add', '-q', wt, '-b', 'wt-inside');
+    const fromWorktree = resolveClaimKey(join(wt, 'src', 'x.ts'));
+    const fromPrimary = resolveClaimKey(join(a, 'src', 'x.ts'));
+    expect(fromWorktree?.filePath).toBe('src/x.ts'); // not .claude/worktrees/wt/src/x.ts
+    expect(fromWorktree).toEqual(fromPrimary);
+    expect(fromWorktree?.project).toBe(canonicalProject(a));
+  });
+
+  it('14. R1: in a nested repo the inner repo wins', () => {
+    const outer = makeRepo('outer');
+    const inner = join(outer, 'vendor', 'inner');
+    mkdirSync(join(inner, 'src'), { recursive: true });
+    git(inner, 'init', '-q');
+    writeFileSync(join(inner, 'src', 'x.ts'), 'x');
+    const key = resolveClaimKey(join(inner, 'src', 'x.ts'));
+    expect(key?.filePath).toBe('src/x.ts'); // not vendor/inner/src/x.ts
+    expect(key?.project).toBe(canonicalProject(inner));
+    expect(key?.project).not.toBe(canonicalProject(outer));
+  });
+
+  it('15. S1: the harness guard also compares the RAW path (a link named like a harness folder)', () => {
+    const a = makeRepo('a');
+    mkdirSync(join(a, 'plain'), { recursive: true });
+    writeFileSync(join(a, 'plain', 'x.ts'), 'x');
+    mkdirSync(join(a, '.claude'), { recursive: true });
+    symlinkSync(join(a, 'plain'), join(a, '.claude', 'hooks'), process.platform === 'win32' ? 'junction' : 'dir');
+    const raw = join(a, '.claude', 'hooks', 'x.ts');
+    // main classes the raw path as harness; the real file and the relative key are not harness.
+    expect(isHarnessPath(raw)).toBe(true);
+    expect(resolveClaimKey(raw)).toBeNull(); // old key, so the harness lease stays
+  });
+
+  it('16. S2: a folder named "..foo" is a normal folder, not a path outside the repo', () => {
+    const a = makeRepo('a');
+    mkdirSync(join(a, '..foo'), { recursive: true });
+    writeFileSync(join(a, '..foo', 'x.ts'), 'x');
+    expect(resolveClaimKey(join(a, '..foo', 'x.ts'))?.filePath).toBe('..foo/x.ts');
+  });
+
+  it('17. S2: a relative raw path resolves against the given cwd, not the hook process cwd', () => {
+    const a = makeRepo('a');
+    const key = resolveClaimKey(join('src', 'x.ts'), { cwd: a });
+    expect(key?.filePath).toBe('src/x.ts');
+    expect(key?.project).toBe(canonicalProject(a));
+  });
+
+  it('9. returns null for a broken .git file and does not throw', () => {
+    const odd = join(root, 'odd');
+    mkdirSync(odd);
+    writeFileSync(join(odd, '.git'), 'this is not a gitdir line');
+    writeFileSync(join(odd, 'f.ts'), 'f');
+    expect(() => resolveClaimKey(join(odd, 'f.ts'))).not.toThrow();
+    expect(resolveClaimKey(join(odd, 'f.ts'))).toBeNull();
+  });
+});

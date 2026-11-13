@@ -12,6 +12,7 @@
 import { readFileSync } from 'fs';
 import { resolveFileClaim } from './shared/db-utils-pg.js';
 import { resolveSessionId, canonicalProject } from './shared/session-id.js';
+import { resolveClaimKey } from './shared/claim-target.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
 import { logGuardDecision } from './shared/guard-log.js';
 
@@ -86,18 +87,29 @@ export async function main(): Promise<void> {
   // file and filed claims under an `s-*` row that never heartbeats -- which is
   // why every conflict check fell through to "took over stale lock".
   const sessionId = resolveSessionId(input.session_id);
-  const project = canonicalProject(input.cwd);
+
+  // Key by the FILE's own repo: repo-relative path plus the repo's common git dir. Two worktrees
+  // of one repo then claim the same key, and a session in repo A editing repo B meets a session
+  // in repo B. Reads files only (no git process). The cases that keep the old key (raw path and
+  // the project of cwd, which still needs git) are listed in shared/claim-target.ts. A stored row
+  // with an absolute path (a live session that started before this change) is not seen by the new
+  // key until it expires.
+  const key = resolveClaimKey(filePath, { cwd: input.cwd });
+  const claimPath = key ? key.filePath : filePath;
+  const project = key ? key.project : canonicalProject(input.cwd);
 
   // One statement decides and claims, and logs the conflict in the same
   // transaction. This used to be three round trips (check -> is-holder-alive ->
   // claim) with a race in each gap; the worst was that two sessions racing for
   // an UNCLAIMED file were BOTH told to go ahead. See resolveFileClaim.
   const decision = await resolveFileClaim(
-    filePath, project, sessionId, STALE_THRESHOLD_MS, input.tool_name,
+    claimPath, project, sessionId, STALE_THRESHOLD_MS, input.tool_name,
     { breakGlass: BREAK_GLASS },
   );
 
-  const fileName = filePath.split(/[/\\]/).pop() || filePath;
+  // Messages name the repo-relative path. A file outside any repo keeps the bare file name, so a
+  // message never shows another session's absolute path.
+  const fileName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
   let output: any;
 
   switch (decision.outcome) {
