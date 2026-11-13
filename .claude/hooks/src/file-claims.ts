@@ -6,6 +6,9 @@
  * Group B (shell text): Bash, PowerShell, Desktop Commander start_process and interact_with_process. The text
  * is matched against the claims other live sessions hold (shared/write-targets.ts). A shell call never makes a
  * claim. Card coord-file-claims-all-writers, rule O3.1.
+ * Above 64 KB (SIZE_CAP in shared/write-targets.ts) a shell command is NOT scanned and continues, also while
+ * another session holds a claim. Seat ruling 2026-11-13: this guard is for accidents, and a deny of every large
+ * command would block ordinary heredocs. A path built at run time is not seen either (see the PR Known limits).
  *
  * This hook:
  * 1. Checks if another ACTIVE session has claimed the file
