@@ -26,7 +26,8 @@
  *   3. Cursor rule (P1, seat ruling). A cursor END row counts for a PR only when ALL hold:
  *        - it has a pr (a positive whole number);
  *        - its ref (end row, else the start row of the same id) starts with "branch-". This is an allowlist: eval-, trex-,
- *          range-, plan-, linktype- and every other ref are out. If the start and end rows disagree, the row is out;
+ *          range-, plan-, linktype- and every other ref are out. If the start and end rows disagree (two different branch refs
+ *          too), the row is out. A run is another repo when either row names another repo;
  *        - its purpose (end row, else start row) is absent or "review" (verify, bench and the rest are out).
  *      Today's measured end-row combos: pr + purpose review + ref branch- (46), pr + no purpose + ref branch- (30), pr + mode delta +
  *      ref branch- (1). The cursor rows hold no kind or label field; mode (full, delta) is a review run either way.
@@ -166,7 +167,14 @@ const refOf = (start, end) => ({ refs: [end?.ref, start?.ref].filter((v) => v !=
 export function isBranchReview(start, end) {
   const { refs, purposes } = refOf(start, end);
   if (refs.length === 0 || !refs.every((r) => typeof r === 'string' && r.startsWith('branch-'))) return false;
+  if (new Set(refs).size > 1) return false; // two different branch refs: the rows disagree
   return purposes.every((p) => p === 'review');
+}
+
+/** The repo of a run: a repo that is not CCv3 on either row wins, so an end row cannot hide another repo on its start row. */
+export function repoOfRun(start, end) {
+  const named = [end?.repo, start?.repo].filter((v) => v !== undefined && v !== null);
+  return named.find((r) => repoVerdict(r) !== 'ccv3') ?? named[0];
 }
 
 /** Cursor END rows with a pr, split by rule 3. Start rows are indexed by id and used only for ref, purpose and repo. */
@@ -185,7 +193,7 @@ export function collectEngine(objs) {
     if (!isBranchReview(start, o)) { notReview++; continue; }
     const u = isObject(o.usage) ? o.usage : {};
     runs.push({
-      pr: o.pr, head: o.head, repo: o.repo ?? start?.repo, timedOut: o.timedOut === true,
+      pr: o.pr, head: o.head, repo: repoOfRun(start, o), timedOut: o.timedOut === true,
       tokens: { in: tokenOf(u.inputTokens), out: tokenOf(u.outputTokens), cacheRead: tokenOf(u.cacheReadTokens), cacheWrite: tokenOf(u.cacheWriteTokens) },
     });
   }

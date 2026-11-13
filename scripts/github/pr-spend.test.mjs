@@ -216,6 +216,26 @@ test('an end row with no matching start row still counts when its own ref is a b
   assert.deepEqual(keys(r), [55]);
 });
 
+test('a start row and an end row that name two different branch refs are out (CodeRabbit CLI finding, pre-pr 7a93a87)', async () => {
+  // Breaks when the ref check tests only the branch- prefix of each row and not that both rows name the same ref.
+  const r = await run({ cursor: [...pair({ id: 'd1', pr: 60 }, { start: { ref: 'branch-a' }, end: { ref: 'branch-b' } }), ...pair({ id: 'd2', pr: 61 })] });
+  assert.deepEqual(keys(r), [61]);
+  assert.equal(r.doc.excluded.engineNotReview, 1);
+});
+
+test('a run is another repo when its start row or its end row names another repo, in either order (CodeRabbit CLI finding, pre-pr 7a93a87)', async () => {
+  // Breaks when the end row's repo hides a different repo on the start row (repo = end ?? start).
+  const r = await run({
+    cursor: [
+      ...pair({ id: 'r1', pr: 62 }, { start: { repo: 'Other/elsewhere' }, end: { repo: CCV3 } }),
+      ...pair({ id: 'r2', pr: 63 }, { start: { repo: CCV3 }, end: { repo: 'Other/elsewhere' } }),
+      ...pair({ id: 'r3', pr: 64 }, { start: { repo: CCV3 }, end: { repo: undefined } }),
+    ],
+  });
+  assert.deepEqual(keys(r), [64]);
+  assert.equal(r.doc.excluded.engineOtherRepo, 2);
+});
+
 test('engine spend is tokens and run counts only; a null usage adds no tokens but still counts the run', async () => {
   // Breaks when a null usage throws, drops the run, or a dollar field appears.
   const r = await run({
