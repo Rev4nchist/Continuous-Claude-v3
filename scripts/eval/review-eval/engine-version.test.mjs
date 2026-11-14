@@ -45,6 +45,7 @@ function baseFiles() {
   files[`${DIR}prompt.mjs`] = 'export const PROMPT_VERSION = 1;\n';
   files[`${DIR}prompt.test.mjs`] = '// synthetic test\n';
   files[ROUTER] = 'export function bandOf() { return "MID"; }\n';
+  for (const f of BAND_SET_FILES) if (f !== ROUTER) files[f] = `// synthetic ${f}\n`;
   files[CONFIG] = `${JSON.stringify(baseConfig(), null, 2)}\n`;
   files['README.md'] = 'synthetic repo\n';
   return files;
@@ -104,7 +105,8 @@ test('one sha gives the same versions twice, and the CLI prints the same lines t
   assert.equal(o.sha, r.sha0);
   assert.equal(o.engineVersion, a.engineVersion);
   assert.equal(o.bandVersion, a.bandVersion);
-  assert.deepEqual(o.bandFiles.map((f) => f.path), [ROUTER]);
+  // Sorted by path: the matcher lib sorts before the router.
+  assert.deepEqual(o.bandFiles.map((f) => f.path), ['scripts/github/lib/answer-paths.mjs', ROUTER]);
 });
 
 // 2
@@ -114,6 +116,7 @@ test('a change to each reviewer-set file changes reviewerVersion and not bandVer
   const LISTED = [
     'scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/lib/file-lock.mjs',
     'scripts/github/lib/grok-slots.mjs', 'scripts/github/lib/findings-repair.mjs', 'scripts/github/lib/proc.mjs', 'scripts/ratchets/review-skip-sync.mjs',
+    'scripts/ratchets/lib/review-md.mjs',
   ];
   assert.deepEqual([...REVIEWER_SET_FILES], LISTED);
   const r = makeRepo();
@@ -125,6 +128,19 @@ test('a change to each reviewer-set file changes reviewerVersion and not bandVer
     assert.equal(v.bandVersion, base.bandVersion, f);
     r.commit({ [f]: baseFiles()[f] });
   }
+});
+
+// 2b
+test('a change to answer-paths.mjs changes bandVersion and not reviewerVersion; a change to review-md.mjs the reverse', () => {
+  // Breaks when: the moved matcher lib is left out of BAND_SET_FILES, or the moved review-md lib out of REVIEWER_SET_FILES (the PR 567 gap).
+  const r = makeRepo();
+  const base = at(r, r.sha0);
+  const band = at(r, r.commit({ 'scripts/github/lib/answer-paths.mjs': '// changed\n' }));
+  assert.notEqual(band.bandVersion, base.bandVersion);
+  assert.equal(band.reviewerVersion, base.reviewerVersion);
+  const rev = at(r, r.commit({ 'scripts/github/lib/answer-paths.mjs': baseFiles()['scripts/github/lib/answer-paths.mjs'], 'scripts/ratchets/lib/review-md.mjs': '// changed\n' }));
+  assert.notEqual(rev.reviewerVersion, base.reviewerVersion);
+  assert.equal(rev.bandVersion, base.bandVersion);
 });
 
 // 3
