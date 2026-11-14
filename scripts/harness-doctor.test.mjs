@@ -259,7 +259,8 @@ function run(fx, extra = [], envExtra = {}) {
   // HARNESS_DOCTOR_SCHTASKS_DIR points the doctor at fake schtasks output, so a test never reads the real Task Scheduler.
   // HARNESS_DOCTOR_NO_DB=1 keeps a test from reading whatever database the shell points at.
   // CCV3_HOOK_TRACE is dropped from the caller env: the doctor reads it (hooks:trace-fresh), so a shell that sets it must not change a test.
-  const { CCV3_HOOK_TRACE: _callerTrace, ...callerEnv } = process.env;
+  // HARNESS_DOCTOR_EMBED_PRIVATE_MB likewise: the tests without the seam must read a real process.
+  const { CCV3_HOOK_TRACE: _callerTrace, HARNESS_DOCTOR_EMBED_PRIVATE_MB: _callerEmbed, ...callerEnv } = process.env;
   const env = { ...callerEnv, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks, HARNESS_DOCTOR_NO_DB: '1', ...envExtra };
   const r = spawnSync(process.execPath, [DOCTOR, '--home', fx.home, '--repo', fx.repo, ...extra], { encoding: 'utf8', windowsHide: true, timeout: 60000, env });
   const lines = (r.stdout ?? '').split(/\r?\n/).filter(Boolean);
@@ -2272,7 +2273,7 @@ const realPython = (() => {
   if (process.platform !== 'win32') return null;
   try {
     const all = execFileSync('where', ['python'], { encoding: 'utf8', windowsHide: true }).split(/\r?\n/).map((s) => s.trim());
-    return all.find((p) => p && !/WindowsApps/i.test(p) && existsSync(p)) ?? null;
+    return all.find((p) => p && /\.exe$/i.test(p) && !/WindowsApps/i.test(p) && existsSync(p)) ?? null;
   } catch { return null; }
 })();
 

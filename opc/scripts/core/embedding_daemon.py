@@ -625,11 +625,9 @@ def _commit_ceiling_mb(env: Any = None) -> int:
     except ValueError:
         value = None
     if value is None or value < CEILING_FLOOR_MB:
-        print(
-            f"[embedding] daemon: {COMMIT_CEILING_ENV} is not a whole number of at least "
-            f"{CEILING_FLOOR_MB}; using {COMMIT_CEILING_DEFAULT_MB} MB",
-            file=sys.stderr,
-            flush=True,
+        _log(
+            f"{COMMIT_CEILING_ENV} is not a whole number of at least "
+            f"{CEILING_FLOOR_MB}; using {COMMIT_CEILING_DEFAULT_MB} MB"
         )
         return COMMIT_CEILING_DEFAULT_MB
     return value
@@ -662,11 +660,9 @@ def _effective_ceiling_mb(configured_mb: int, baseline_mb: int | None) -> int:
     floor = int(baseline_mb) + CEILING_MARGIN_MB
     if floor <= configured_mb:
         return configured_mb
-    print(
-        f"[embedding] daemon: commit ceiling raised from {int(configured_mb)} MB to {floor} MB "
-        f"(baseline {int(baseline_mb)} MB after warmup)",
-        file=sys.stderr,
-        flush=True,
+    _log(
+        f"commit ceiling raised from {int(configured_mb)} MB to {floor} MB "
+        f"(baseline {int(baseline_mb)} MB after warmup)"
     )
     return floor
 
@@ -683,17 +679,19 @@ def _begin_ceiling_exit(
         if _CEILING_EXIT_STARTED.is_set():
             return False
         _CEILING_EXIT_STARTED.set()
-    # Every step below either never raises or sits inside the stop guarantee of _drain_then_stop,
-    # so a ceiling exit that has started always ends in a stop (never a daemon that drains forever).
-    _log(
-        f"commit ceiling: private {int(size_mb)} MB over {int(ceiling_mb)} MB; "
-        f"os threads {_os_thread_count()}; python threads {threading.active_count()}; "
-        "draining, then exiting"
-    )
-    _DRAINING.set()  # before the file goes: a client that still pings sees "not ready"
-    _delete_own_daemon_info()
     stop = shutdown if shutdown is not None else (_SERVER.shutdown if _SERVER is not None else None)
-    _drain_then_stop(stop, drain_s)
+    # A ceiling exit that has started always ends in a stop, even if a step here raises (for
+    # example MemoryError under commit pressure): never a daemon that drains forever with the lock.
+    try:
+        _log(
+            f"commit ceiling: private {int(size_mb)} MB over {int(ceiling_mb)} MB; "
+            f"os threads {_os_thread_count()}; python threads {threading.active_count()}; "
+            "draining, then exiting"
+        )
+        _DRAINING.set()  # before the file goes: a client that still pings sees "not ready"
+        _delete_own_daemon_info()
+    finally:
+        _drain_then_stop(stop, drain_s)
     return True
 
 
@@ -715,12 +713,7 @@ def _ceiling_tick(
         except Exception as exc:  # noqa: BLE001
             if not _CEILING_READ_FAILED_LOGGED:
                 _CEILING_READ_FAILED_LOGGED = True
-                print(
-                    f"[embedding] daemon: commit read failed ({type(exc).__name__}); "
-                    "the commit ceiling is off",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                _log(f"commit read failed ({type(exc).__name__}); the commit ceiling is off")
             return False
         if size <= limit:
             return False

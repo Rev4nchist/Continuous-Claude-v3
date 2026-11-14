@@ -34,6 +34,21 @@ from scripts.core import embedding_daemon as ed
 VEC = [0.0, 1.0, 2.0]
 
 
+class _StopLoop(BaseException):
+    """Ends a watchdog loop in a test. Not KeyboardInterrupt: a stray thread cannot stop pytest."""
+
+
+def _patch_daemon_sleep(monkeypatch, sleep) -> None:
+    """Give the daemon module its own time namespace: the patched sleep reaches no other module."""
+    import types
+
+    fake = types.SimpleNamespace(
+        **{k: getattr(time, k) for k in dir(time) if not k.startswith("__")}
+    )
+    fake.sleep = sleep
+    monkeypatch.setattr(ed, "time", fake)
+
+
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     """Temp discovery file, clean drain state, no server; restore afterwards."""
@@ -276,16 +291,16 @@ def test_the_watchdog_reads_the_ceiling_once_and_checks_it_each_tick(monkeypatch
     def sleep(_s):
         ticks["n"] += 1
         if ticks["n"] > 3:
-            raise KeyboardInterrupt  # end the endless loop
+            raise _StopLoop  # end the endless loop
 
-    monkeypatch.setattr(ed.time, "sleep", sleep)
+    _patch_daemon_sleep(monkeypatch, sleep)
     monkeypatch.setattr(ed, "_SERVER", object())
     read = MagicMock(return_value=8192)
     tick = MagicMock(return_value=False)
     monkeypatch.setattr(ed, "_commit_ceiling_mb", read)
     monkeypatch.setattr(ed, "_ceiling_tick", tick)
     monkeypatch.setattr(ed, "_recall_watchdog_tick", lambda was: True)
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(_StopLoop):
         ed._recall_watchdog(interval_s=0)
     assert read.call_count == 1
     assert tick.call_count == 3
@@ -299,9 +314,9 @@ def test_the_watchdog_raises_the_ceiling_over_the_baseline_and_passes_the_uptime
     def sleep(_s):
         ticks["n"] += 1
         if ticks["n"] > 1:
-            raise KeyboardInterrupt
+            raise _StopLoop
 
-    monkeypatch.setattr(ed.time, "sleep", sleep)
+    _patch_daemon_sleep(monkeypatch, sleep)
     monkeypatch.setattr(ed, "_SERVER", object())
     monkeypatch.setattr(ed, "_BASELINE_MB", 7000)
     monkeypatch.setattr(ed, "_STARTED_MONO", time.monotonic() - 1000)
@@ -309,7 +324,7 @@ def test_the_watchdog_raises_the_ceiling_over_the_baseline_and_passes_the_uptime
     tick = MagicMock(return_value=False)
     monkeypatch.setattr(ed, "_ceiling_tick", tick)
     monkeypatch.setattr(ed, "_recall_watchdog_tick", lambda was: True)
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(_StopLoop):
         ed._recall_watchdog(interval_s=0)
     kwargs = tick.call_args.kwargs
     assert kwargs["ceiling_mb"] == 7000 + ed.CEILING_MARGIN_MB
@@ -374,6 +389,19 @@ def test_a_ceiling_exit_whose_log_fails_still_stops(monkeypatch):
     assert stop.called
 
 
+def test_a_ceiling_exit_whose_file_delete_raises_still_stops(monkeypatch):
+    """MemoryError under commit pressure between the once-guard and the drain must still stop."""
+
+    def boom(*_a, **_k):
+        raise MemoryError
+
+    monkeypatch.setattr(ed, "_delete_own_daemon_info", boom)
+    stop = MagicMock()
+    with pytest.raises(MemoryError):
+        ed._begin_ceiling_exit(9000, 8192, shutdown=stop, drain_s=0.1)
+    assert stop.called
+
+
 def test_the_private_commit_reader_returns_whole_megabytes():
     mb = ed._private_commit_mb()
     assert isinstance(mb, int) and mb > 0
@@ -422,10 +450,52 @@ def test_the_ceiling_exit_lets_the_encode_in_work_finish_then_stops(server):
             release.set()
         exiter.join(5)
         worker.join(5)
-        time.sleep(0.2)  # the stop runs on its own thread
     assert stop.called
     assert replies and replies[0]["vector"] == VEC
     assert ed._begin_ceiling_exit(9000, 8192, shutdown=stop) is False, "the exit starts once"
+
+
+def test_a_recall_whose_embed_hangs_answers_within_its_own_timeout(server, recall_loop):
+    """The client waits RECALL_TIMEOUT_S; the recall embed must not hold the handler for 120 s."""
+    entered, release = threading.Event(), threading.Event()
+
+    def hang(text, model=None):
+        entered.set()
+        release.wait(10)
+        return VEC
+
+    with patch.object(ed, "embed", side_effect=hang):
+        try:
+            t0 = time.perf_counter()
+            reply = _call(_port(server), {"cmd": "recall", "query": "q"}, timeout=10)
+            assert time.perf_counter() - t0 < ed.RECALL_TIMEOUT_S + 2
+        finally:
+            release.set()
+    assert reply["ok"] is False and "encode_timeout" in reply["error"], reply
+
+
+def test_a_recall_that_times_out_is_cancelled(server, recall_loop, monkeypatch):
+    """A do_recall that outlives its wait is cancelled: it holds no pool connection for nobody."""
+    import asyncio
+
+    monkeypatch.setattr(ed, "RECALL_TIMEOUT_S", 0.3)
+    cancelled = threading.Event()
+
+    async def slow(vec, query, k, mode, project_id=None, scope_mode=None):
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return {"results": [], "_meta": {}}
+
+    with (
+        patch.object(ed, "embed", return_value=VEC),
+        patch.object(ed, "_get_do_recall", return_value=slow),
+    ):
+        reply = _call(_port(server), {"cmd": "recall", "query": "q"}, timeout=10)
+    assert reply == {"ok": False, "error": "recall_timeout"}, reply
+    assert cancelled.wait(3), "the timed-out do_recall was not cancelled"
 
 
 def test_the_ceiling_exit_stops_after_the_drain_limit_when_a_request_hangs():
@@ -474,7 +544,6 @@ def test_the_ceiling_exit_waits_for_a_recall_in_do_recall(server, recall_loop):
             release.set()
         worker.join(5)
         exiter.join(5)
-        time.sleep(0.2)
     assert stop.called
     assert replies and replies[0]["ok"] is True, replies
 
@@ -493,7 +562,6 @@ def test_a_request_admitted_before_the_drain_holds_the_exit():
     assert not stop.called
     ed._end_request()
     exiter.join(5)
-    time.sleep(0.2)
     assert stop.called
 
 
@@ -576,7 +644,7 @@ ed._acquire_startup_slot = lambda: ed._acquire_exclusive_lock(lock)
 ed._hide_own_console_on_windows = lambda: None
 ed._start_recall_runtime = lambda: None
 ed._start_recall_watchdog = lambda: note_baseline()  # runs after the baseline read
-ed._private_commit_mb = lambda: 100
+ed._private_commit_mb = lambda: 100 if "warmup" in names else -1
 ed.SHUTDOWN_DRAIN_S = 1.0
 names = {}
 def note(key):
