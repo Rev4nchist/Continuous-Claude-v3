@@ -52,6 +52,9 @@
  * NO DENY GUARD MAY IMPORT THIS (seat ruling C3): destructive-command-guard, decision-gate,
  * file-claims, package-install-guard, pre-pr-gate, rule-router and any other guard keep their
  * behaviour under the engine. The one exception is tldr-read-enforcer (seat ruling 1, above).
+ * A second, narrow exception (card coord-file-claims-all-writers, review F11): file-claims imports
+ * this module for its SHELL branch only, which prints nothing under the engine. Its exact-path
+ * branch (Edit, Write and the other tools that name the path) keeps its deny under the engine.
  */
 
 const ENGINE_EVENT_NAMES: ReadonlySet<string> = new Set(['sessionStart', 'postToolUse', 'sessionEnd', 'preToolUse', 'userPromptSubmit']);

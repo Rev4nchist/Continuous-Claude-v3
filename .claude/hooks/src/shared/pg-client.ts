@@ -69,12 +69,12 @@ export class MissingDbUrlError extends Error {
  * empty CONTINUOUS_CLAUDE_DB_URL). On null, one stderr WARN per process
  * names the variables and does not print a value.
  */
-export function resolveDbUrl(): string | null {
+export function resolveDbUrl(options: { quiet?: boolean } = {}): string | null {
   for (const name of DB_URL_VARS) {
     const value = process.env[name];
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
-  if (!warnedMissingDbUrl) {
+  if (!warnedMissingDbUrl && !options.quiet) {
     warnedMissingDbUrl = true;
     console.error(
       'WARN: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL are unset; skipping database work'
@@ -95,17 +95,20 @@ export function getPgConnectionString(): string | null {
  * because "cannot reach the DB" means something different to a claim check
  * (fail open, let the edit through) than to a heartbeat (nothing to do).
  */
-export async function withPgClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
-  const connectionString = getPgConnectionString();
+export async function withPgClient<T>(
+  fn: (client: Client) => Promise<T>,
+  options: { quiet?: boolean; connectMs?: number; queryMs?: number } = {},
+): Promise<T> {
+  const connectionString = resolveDbUrl({ quiet: options.quiet });
   if (!connectionString) {
     // resolveDbUrl already wrote the one WARN. Do not connect, and do not log again.
     throw new MissingDbUrlError();
   }
   const client = new Client({
     connectionString,
-    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-    query_timeout: QUERY_TIMEOUT_MS,
-    statement_timeout: QUERY_TIMEOUT_MS,
+    connectionTimeoutMillis: options.connectMs ?? CONNECT_TIMEOUT_MS,
+    query_timeout: options.queryMs ?? QUERY_TIMEOUT_MS,
+    statement_timeout: options.queryMs ?? QUERY_TIMEOUT_MS,
     application_name: 'claude-hooks-coordination',
   });
 
@@ -160,11 +163,27 @@ function describeError(err: unknown): string {
 export async function withPgClientOrFallback<T>(
   fn: (client: Client) => Promise<T>,
   fallback: T,
-  context: string
+  context: string,
+  options: { quiet?: boolean; totalMs?: number } = {},
 ): Promise<{ value: T; degraded: boolean; error?: string }> {
+  const { quiet = false, totalMs } = options;
   try {
-    return { value: await withPgClient(fn), degraded: false };
+    if (!totalMs) return { value: await withPgClient(fn, { quiet }), degraded: false };
+    // A hard cap for a hot path (every shell call): connect and query share one budget, and a hung
+    // server cannot hold the hook longer than `totalMs`. The abandoned call is left to finish on its own.
+    const run = withPgClient(fn, { quiet, connectMs: totalMs, queryMs: totalMs });
+    run.catch(() => { /* the race below reports the failure */ });
+    let timer: NodeJS.Timeout | undefined;
+    const cap = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`timed out after ${totalMs} ms`)), totalMs);
+    });
+    try {
+      return { value: await Promise.race([run, cap]), degraded: false };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   } catch (err) {
+    if (quiet) return { value: fallback, degraded: true, error: describeError(err) };
     if (err instanceof MissingDbUrlError) {
       // The WARN already named the variables. A second "degraded" line would
       // be a second message, and it must not invent a URL.
