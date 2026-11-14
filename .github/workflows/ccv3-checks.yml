@@ -59,7 +59,7 @@ jobs:
         run: node --test scripts/github/pr-checkpoint.test.mjs
       - name: pre-pr unit tests
         timeout-minutes: 5
-        run: node --test scripts/github/pre-pr.test.mjs
+        run: node --test scripts/github/pre-pr.test.mjs scripts/github/pre-pr-partial-run.test.mjs
       - name: land-recheck unit tests
         timeout-minutes: 5
         run: node --test scripts/github/land-recheck.test.mjs
