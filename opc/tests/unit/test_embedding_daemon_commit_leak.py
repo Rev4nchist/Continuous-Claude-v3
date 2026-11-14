@@ -106,14 +106,14 @@ def _port(srv) -> int:
 
 def test_every_encode_runs_on_one_thread(server):
     """Fails on the old daemon: each request encoded on a new thread (one OpenMP team each)."""
-    ids: list[int] = []
+    ids: list[threading.Thread] = []
 
     def fake_embed(text, model=None):
-        ids.append(threading.get_ident())
+        ids.append(threading.current_thread())
         return VEC
 
     def fake_batch(texts, model=None):
-        ids.append(threading.get_ident())
+        ids.append(threading.current_thread())
         return [VEC for _ in texts]
 
     with (
@@ -126,15 +126,15 @@ def test_every_encode_runs_on_one_thread(server):
             assert _call(_port(server), {"cmd": "embed_batch", "texts": ["a", "b"]})["count"] == 2
     assert len(ids) == 12
     assert len(set(ids)) == 1, f"encode ran on {len(set(ids))} threads"
-    assert ids[0] != threading.get_ident()
+    assert ids[0] is not threading.current_thread()
 
 
 def test_a_daemon_embed_from_any_thread_runs_on_the_encode_thread():
     """The recall handler embeds through _daemon_embed, so recall gets the same single thread."""
-    ids: list[int] = []
+    ids: list[threading.Thread] = []
 
     def fake_embed(text, model=None):
-        ids.append(threading.get_ident())
+        ids.append(threading.current_thread())
         return VEC
 
     with patch.object(ed, "embed", side_effect=fake_embed):
@@ -178,10 +178,10 @@ def _fake_do_recall(entered: threading.Event | None = None, release: threading.E
 
 def test_a_recall_embeds_on_the_encode_thread(server, recall_loop):
     """A recall embed reverted to a direct encode runs on the handler thread: this fails then."""
-    ids: list[int] = []
+    ids: list[threading.Thread] = []
 
     def fake_embed(text, model=None):
-        ids.append(threading.get_ident())
+        ids.append(threading.current_thread())
         return VEC
 
     with (
@@ -196,11 +196,11 @@ def test_a_recall_embeds_on_the_encode_thread(server, recall_loop):
 
 def test_an_encode_error_reaches_the_client_and_the_encode_thread_survives(server):
     calls = {"n": 0}
-    ids: list[int] = []
+    ids: list[threading.Thread] = []
 
     def flaky(text, model=None):
         calls["n"] += 1
-        ids.append(threading.get_ident())
+        ids.append(threading.current_thread())
         if calls["n"] == 1:
             raise ValueError("boom")
         return VEC
@@ -589,6 +589,40 @@ def test_a_timed_out_encode_is_cancelled_and_names_its_cause():
     blocker.join(5)
     ed._on_encode_thread(lambda: None, timeout=5)  # FIFO: the cancelled one came before this
     assert ran["late"] is False
+
+
+def test_a_cancelled_encode_job_releases_its_request_payload():
+    """A job whose caller timed out keeps no request text queued while the worker is busy."""
+    import gc
+    import weakref
+
+    class Payload:
+        pass
+
+    entered, release = threading.Event(), threading.Event()
+
+    def hang():
+        entered.set()
+        release.wait(10)
+
+    blocker = threading.Thread(target=lambda: ed._on_encode_thread(hang, timeout=15), daemon=True)
+    blocker.start()
+    assert entered.wait(5)
+    try:
+        payload = Payload()
+        ref = weakref.ref(payload)
+
+        def job(p=payload):
+            return p
+
+        with pytest.raises(ed._cf.TimeoutError):
+            ed._on_encode_thread(job, timeout=0.2)
+        del payload, job
+        gc.collect()
+        assert ref() is None, "the cancelled job still holds its payload in the queue"
+    finally:
+        release.set()
+    blocker.join(5)
 
 
 def test_the_ceiling_waits_for_the_minimum_uptime():
