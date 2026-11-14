@@ -6053,7 +6053,7 @@ function absoluteOf(typed, cwd, platform) {
 }
 function candidateKeys(typedPath, cwd, options = {}) {
   const platform = options.platform ?? process.platform;
-  const key = resolveClaimKey(typedPath, { cwd, platform });
+  const key = resolveClaimKey(platform === "win32" ? gitBashToDrive(typedPath) : typedPath, { cwd, platform });
   const exact = key ? { file_path: key.filePath, project: key.project } : { file_path: typedPath, project: canonicalProject(cwd) };
   const loose = [typedPath, absoluteOf(typedPath, cwd, platform), exact.file_path].map((p) => looseForm(p, platform));
   return { exact, raw: typedPath, loose: [...new Set(loose)] };
@@ -6095,7 +6095,7 @@ async function releaseInTransaction(client, sessionId, typedPaths, cwd, reason, 
     const ctx = { client, sessionId, cwd, options, own, freed: [] };
     const results = [];
     for (const typed of typedPaths) results.push(await releaseOne(ctx, typed));
-    if (ctx.freed.length > 0) await recordRelease(client, sessionId, reason, results);
+    if (ctx.freed.length > 0) await recordRelease(client, sessionId, reason, ctx.freed);
     await client.query("COMMIT");
     return results;
   } catch (err) {
@@ -6104,12 +6104,12 @@ async function releaseInTransaction(client, sessionId, typedPaths, cwd, reason, 
     throw err;
   }
 }
-async function recordRelease(client, sessionId, reason, results) {
-  const files = [...new Set(results.flatMap((r) => r.outcome === "freed" ? [r.file] : []))];
+async function recordRelease(client, sessionId, reason, freedKeys) {
+  const claims = freedKeys.map((k) => JSON.parse(k)).map(([file_path, project]) => ({ file_path, project }));
   const ok = await recordEventInTransaction(client, {
     kind: "claim_released",
     sessionId,
-    detail: { reason, count: files.length, files }
+    detail: { reason, count: claims.length, files: claims.map((c) => c.file_path), claims }
   });
   if (!ok) throw new Error("claim_released event was not recorded");
 }

@@ -80,7 +80,8 @@ export function candidateKeys(
   options: MatchOptions = {},
 ): { exact: ClaimRow; raw: string; loose: string[] } {
   const platform = options.platform ?? process.platform;
-  const key = resolveClaimKey(typedPath, { cwd, platform });
+  // Git Bash `/c/x` is a drive path on win32: convert BEFORE the resolver, or it searches under C:/c/x (CLI finding).
+  const key = resolveClaimKey(platform === 'win32' ? gitBashToDrive(typedPath) : typedPath, { cwd, platform });
   const exact = key
     ? { file_path: key.filePath, project: key.project }
     : { file_path: typedPath, project: canonicalProject(cwd) };
@@ -161,7 +162,7 @@ async function releaseInTransaction(
     const ctx: Ctx = { client, sessionId, cwd, options, own, freed: [] };
     const results: ReleaseResult[] = [];
     for (const typed of typedPaths) results.push(await releaseOne(ctx, typed));
-    if (ctx.freed.length > 0) await recordRelease(client, sessionId, reason, results);
+    if (ctx.freed.length > 0) await recordRelease(client, sessionId, reason, ctx.freed);
     await client.query('COMMIT');
     return results;
   } catch (err) {
@@ -171,12 +172,13 @@ async function releaseInTransaction(
 }
 
 /** One event for the call. A dropped event throws, so the delete rolls back with it (one transaction). */
-async function recordRelease(client: Queryable, sessionId: string, reason: string, results: ReleaseResult[]): Promise<void> {
-  const files = [...new Set(results.flatMap((r) => (r.outcome === 'freed' ? [r.file] : [])))];
+async function recordRelease(client: Queryable, sessionId: string, reason: string, freedKeys: string[]): Promise<void> {
+  // One entry per distinct (file_path, project): the same name freed in two repos counts 2 (CLI finding).
+  const claims = freedKeys.map((k) => JSON.parse(k) as [string, string]).map(([file_path, project]) => ({ file_path, project }));
   const ok = await recordEventInTransaction(client as never, {
     kind: 'claim_released',
     sessionId,
-    detail: { reason, count: files.length, files },
+    detail: { reason, count: claims.length, files: claims.map((c) => c.file_path), claims },
   });
   if (!ok) throw new Error('claim_released event was not recorded');
 }

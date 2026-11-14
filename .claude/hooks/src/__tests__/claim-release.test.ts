@@ -148,6 +148,20 @@ describe('candidateKeys and matchOwnRows (pure)', () => {
     expect(matchOwnRows('/c/Users/x/repo/.claude/cache/a.log', '/home/x', stored, { platform: 'linux' })).toEqual({ kind: 'none' });
   });
 
+  it('CLI finding (minor): a Git Bash path reaches resolveClaimKey as a drive path, so a TRACKED claim is found (win32)', () => {
+    keyOf.mockImplementation((p: string) => (/^c:\//i.test(p) ? { filePath: 'src/a.ts', project: 'c:/repo' } : null));
+    const rows = [row('src/a.ts', 'c:/repo')];
+    expect(matchOwnRows('/c/repo/src/a.ts', 'C:/repo', rows, win)).toEqual({ kind: 'delete', row: rows[0], tier: 'exact' });
+    expect(keyOf).toHaveBeenCalledWith('C:/repo/src/a.ts', expect.anything());
+  });
+
+  it('SEAT: the Git Bash conversion does not run off win32: a posix /c/repo/x stays as typed', () => {
+    keyOf.mockReturnValue(null);
+    matchOwnRows('/c/repo/src/a.ts', '/home/u', [row('src/a.ts', 'c:/repo')], { platform: 'linux' });
+    expect(keyOf).toHaveBeenCalledWith('/c/repo/src/a.ts', expect.anything());
+    expect(keyOf).not.toHaveBeenCalledWith('C:/repo/src/a.ts', expect.anything());
+  });
+
   it('case folds on win32 and darwin, not on linux', () => {
     const stored = [row('c:/w/file.log')];
     expect(matchOwnRows('C:/W/File.LOG', 'C:/w', stored, win)).toMatchObject({ kind: 'delete' });
@@ -207,6 +221,18 @@ describe('releaseOwnClaim (mocked database)', () => {
     await releaseOwnClaim(ME, ['src/a.ts', 'src/b.ts'], '/w', 'one-file', win);
     expect(h.log.filter((q) => q.sql === 'EVENT')).toHaveLength(1);
     expect(h.log.find((q) => q.sql === 'EVENT')!.params[0]).toMatchObject({ detail: { count: 2, files: ['src/a.ts', 'src/b.ts'] } });
+  });
+
+  it('CLI finding (minor): the same name freed in two projects counts 2 and keeps both projects in the event', async () => {
+    h.db = [
+      { file_path: 'src/a.ts', project: 'p1', session_id: ME },
+      { file_path: 'src/a.ts', project: 'p2', session_id: ME },
+    ];
+    keyOf.mockImplementation((t: string) => ({ filePath: 'src/a.ts', project: t.includes('p1') ? 'p1' : 'p2' }));
+    const r = await releaseOwnClaim(ME, ['C:/p1/src/a.ts', 'C:/p2/src/a.ts'], 'C:/w', 'one-file', win);
+    expect(r.map((x) => x.outcome)).toEqual(['freed', 'freed']);
+    const detail = (h.log.find((q) => q.sql === 'EVENT')!.params[0] as { detail: Record<string, unknown> }).detail;
+    expect(detail).toMatchObject({ count: 2, claims: [{ file_path: 'src/a.ts', project: 'p1' }, { file_path: 'src/a.ts', project: 'p2' }] });
   });
 
   it('a path typed twice is freed once and reported freed twice', async () => {
