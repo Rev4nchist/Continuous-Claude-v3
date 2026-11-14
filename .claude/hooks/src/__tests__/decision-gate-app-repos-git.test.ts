@@ -23,10 +23,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { decisionRecord, offerWrite } from '../shared/decisions-store.js';
 import { handle as ledger } from '../decision-ledger.js';
 import { decide, handle as gateHandle, realDeps } from '../decision-gate.js';
+
+// Each row runs real git many times. Alone the slowest row takes about 2 s; in the full suite two rows took 6.1 s and 8.1 s,
+// over the 5 s default (2026-11-13, 513754c2). The limit guards against a hang, not against a slow machine.
+vi.setConfig({ testTimeout: 30_000 });
 
 const CCV3 = 'https://github.com/Rev4nchist/continuous-claude-v3.git';
 const FIXED = { GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z', GIT_AUTHOR_NAME: 'p', GIT_AUTHOR_EMAIL: 'p@example.invalid', GIT_COMMITTER_NAME: 'p', GIT_COMMITTER_EMAIL: 'p@example.invalid' };
