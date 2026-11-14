@@ -19,7 +19,7 @@
  *      a bare live root passes untapped                                    -> return NOT_COVERED when no root can be read
  *   T1 the real Deps runs git after the 7 s deadline                       -> realDeps without the deadline, or makeGit ignores it
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,7 +44,17 @@ const R: Record<string, string> = {};
 let head = '';
 let tree = '';
 
-const git = (cwd: string, ...a: string[]) => spawnSync('git', a, { cwd, encoding: 'utf8', env: { ...process.env, ...FIXED } });
+/**
+ * PR 566 round 2 (d): the process env with no git repo-location variable, so an inherited GIT_DIR (a hook or a worktree shell) cannot
+ * point the fixture git or the gate's own git at another repo than the cwd.
+ */
+const REPO_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_CEILING_DIRECTORIES'];
+const cleanEnv = (): NodeJS.ProcessEnv => {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (REPO_VARS.includes(k.toUpperCase())) delete env[k];
+  return env;
+};
+const git = (cwd: string, ...a: string[]) => spawnSync('git', a, { cwd, encoding: 'utf8', env: { ...cleanEnv(), ...FIXED } });
 /**
  * A remote whose remote HEAD names feat (refs/remotes/<n>/HEAD, as develop often is), so a push of feat is a default-branch push and needs
  * the tap (Dave 11-13, fixer E). Without it feat is no default branch and passes untapped, and these rows would test nothing.
@@ -106,7 +116,7 @@ const bash = (cwd: string, command: string, extra: Record<string, unknown> = {})
 /** The real Deps with the temp folder as home, so the gate never reads the developer's home config (absent on a CI runner). */
 /** PR 566 review: the gate's own git calls get the same empty global config as the fixture git (FIXED), so the developer's config cannot change them. */
 const isolatedSpawn: NonNullable<Parameters<typeof realDeps>[0]>['spawn'] = (_cmd, args, o) =>
-  spawnSync('git', args, { ...o, env: { ...process.env, GIT_CONFIG_GLOBAL: GITCONFIG, GIT_CONFIG_NOSYSTEM: '1' } });
+  spawnSync('git', args, { ...o, env: { ...cleanEnv(), GIT_CONFIG_GLOBAL: GITCONFIG, GIT_CONFIG_NOSYSTEM: '1' } });
 const deps = (opts?: Parameters<typeof realDeps>[0]) => ({ ...realDeps({ spawn: isolatedSpawn, ...opts }), home });
 const verdict = (input: object): string => {
   const d = decide(input, deps());
@@ -118,6 +128,25 @@ const tapShip = (key: string): void => {
   expect(offerWrite({ step: 'ship', key, head, tree, spec: { header: 'T', question: `Q ${key}?`, options: [{ label: 'Commit and push' }, { label: 'Stop here' }] } }).ok).toBe(true);
   expect(decisionRecord({ step: 'ship', key, head, label: 'Commit and push' })).toEqual({ ok: true });
 };
+
+describe('E1 PR 566 round 2 (d): an inherited GIT_DIR reaches neither the fixture git nor the gate git', () => {
+  // Change that breaks E1: spread process.env (not cleanEnv()) in git() or isolatedSpawn.
+  it('git init in a temp folder makes <folder>/.git, not the GIT_DIR the process holds', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dg-e1-'));
+    const stray = join(dir, 'stray.git');
+    const was = process.env.GIT_DIR;
+    process.env.GIT_DIR = stray;
+    try {
+      expect(git(dir, 'init', '-q').status).toBe(0);
+      expect(String(isolatedSpawn!('git', ['rev-parse', '--git-dir'], { cwd: dir, encoding: 'utf8' })?.stdout ?? '').trim()).toBe('.git');
+      expect(existsSync(join(dir, '.git'))).toBe(true);
+      expect(existsSync(stray)).toBe(false);
+    } finally {
+      if (was === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = was;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('D1 the real Deps reads the registry at LANE_REGISTRY_PATH', () => {
   it('the registry field reads that file', () => {

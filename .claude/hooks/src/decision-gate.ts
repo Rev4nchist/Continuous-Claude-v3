@@ -492,6 +492,8 @@ const unpairedWhy = (dir: string): string =>
 const appBundleWhy = (dir: string): string =>
   `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
 const appSubagentWhy = (dir: string): string => `a subagent cannot push in ${at(dir)}: Dave's tap belongs to the main session. Ask the main session to do it.`;
+const appManyHeadsWhy = (dir: string, heads: string[]): string =>
+  `this create names more than one head (${prose(heads.join(', '))}) in ${at(dir)}; gh opens the PR from the last one, so the head its open-pr decision is for cannot be known. Name one head (gh pr create --head <branch>, or one -f head=<branch>).`;
 const appHeadOwnerWhy = (dir: string, owner: string): string =>
   `this create names its head with the owner ${prose(owner)}: (in ${at(dir)}), so the PR would open from that owner's fork, and a tap from Dave covers only a branch of this checkout. Name the head with no owner: prefix (gh pr create --head <branch>), or ask Dave to open it.`;
 const appHeadWhy = (dir: string): string => `the head branch of this create cannot be named in ${at(dir)} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo folder on a branch.`;
@@ -1853,9 +1855,13 @@ function aliasStop(deps: Deps, dir: string, place: Place, key: string, remote: s
   return url !== null && needsGithubField(url, place.github) ? { stop: needsFieldLine(place.entryKey, remote) } : {};
 }
 
-/** A git throw in a covered folder, after coverage is known: the catch judges it with scope app-push. */
+/**
+ * A git throw in a covered folder, after coverage is known: the catch reads decisions.enforce from the home copy only. `push` (the
+ * default, a push or the coverage read): app-push joins the scopes. PR 566 round 2 (b, c): a throw inside a covered create or merge
+ * carries push false, so it keeps scope other with the home flag, and the push flag does not judge it.
+ */
 class AppScopeError extends Error {
-  constructor(readonly inner: unknown) {
+  constructor(readonly inner: unknown, readonly push = true) {
     super(String((inner as Error)?.message ?? inner));
     this.name = 'AppScopeError';
   }
@@ -1882,6 +1888,12 @@ function unquotedFlagValue(re: RegExp, text: string, mtext: string): string | nu
 function namedHead(text: string, mtext: string): string | null {
   return unquotedFlagValue(HEAD_FIELD_RE, text, mtext)
     ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+}
+/** PR 566 round 2 (a): every head value the create names (REST head= fields and, for gh pr create, --head / -H), outside quoted prose. */
+function namedHeads(text: string, mtext: string): string[] {
+  const create = PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text));
+  return [...unquotedFlagValues(HEAD_FIELD_RE, text, mtext), ...(create ? unquotedFlagValues(HEAD_FLAG_RE, text, mtext) : [])]
+    .map((h) => h.replace(/["']+$/, '')).filter((h) => h !== '');
 }
 /** PR 566 review (CodeRabbit, decision-gate.ts:2085): the `owner:` prefix of the head a create names, or null. */
 function headOwner(text: string, mtext: string): string | null {
@@ -2091,9 +2103,33 @@ function judgeAppCreate(text: string, mtext: string, deps: Deps, dir: string, cm
 }
 /** Fix round 6 (item 1): a deny for a covered folder reads decisions.enforce from the home copy only. */
 const homeRead = (d: Decision): Decision => (d.action === 'deny' ? { ...d, homeFlags: true as const } : d);
-function appCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  const place = appPlace(deps, dir);
+/**
+ * PR 566 round 2 (b, c): the coverage read of a create or merge, then its body. A throw after coverage is known (the coverage read's own
+ * AppScopeError, or any throw in the body) leaves as AppScopeError with push false: the catch reads decisions.enforce from the home copy
+ * only and keeps scope other. A throw before coverage is known stays as it is.
+ */
+function coveredCall(deps: Deps, dir: string, body: (place: Place) => Decision): Decision {
+  let place: Place;
+  try {
+    place = appPlace(deps, dir);
+  } catch (err) {
+    throw err instanceof AppScopeError ? new AppScopeError(err.inner, false) : err;
+  }
   if (!place.covered) return passOf(place, dir, 'other');
+  try {
+    return body(place);
+  } catch (err) {
+    throw new AppScopeError(err instanceof AppScopeError ? err.inner : err, false);
+  }
+}
+function appCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
+  return coveredCall(deps, dir, (place) => appCreateIn(text, mtext, deps, dir, cmd, place));
+}
+function appCreateIn(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo, place: Place): Decision {
+  // PR 566 round 2 (a): gh takes the LAST of a repeated --head, the gate reads the first. Two different heads: no tap can name the one
+  // that opens, so the create is denied before any head is read.
+  const heads = [...new Set(namedHeads(text, mtext))];
+  if (heads.length > 1) return deny('head-unresolved', appManyHeadsWhy(dir, heads));
   // PR 566 review: an `owner:` head opens the PR from that owner's fork. The tap is keyed on the local branch and its local head, so it
   // cannot cover another fork's branch: denied before the prefix is dropped (headBranch keeps dropping it for the CCv3 path).
   const owner = headOwner(text, mtext);
@@ -2118,8 +2154,9 @@ function judgeAppMerge(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Dec
   return homeRead(inApp(deps, () => appMerge(shape, deps, dir, cmd)));
 }
 function appMerge(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  const place = appPlace(deps, dir);
-  if (!place.covered) return passOf(place, dir, 'other');
+  return coveredCall(deps, dir, (place) => appMergeIn(shape, deps, dir, cmd, place));
+}
+function appMergeIn(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo, place: Place): Decision {
   if (shape.pr === null) return deny('no-pr', appNoPrWhy(dir));
   const repo = appRepoFor(cmd, deps, dir, place, { sub: 'merge', pr: shape.pr });
   if ('action' in repo) return repo;
@@ -2682,7 +2719,7 @@ function inApp<T>(deps: Deps, run: () => T): T {
 // ---------- hook plumbing ----------
 
 /** Seat 3d, last line of defence: a scheme://user:token@ in any output text loses its user and token part (CREDS_RE, next to prose). */
-const out =(extra: Record<string, unknown>): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...extra } }).replace(CREDS_RE, '$1');
+const out = (extra: Record<string, unknown>): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...extra } }).replace(CREDS_RE, '$1');
 const denyOut = (reason: string): string => out({ permissionDecision: 'deny', permissionDecisionReason: reason });
 /** The app-push warning names no flag: no covered text says how to switch the gate (S6). */
 const warnLead = (scope: Scope): string => (scope === 'app-push'
@@ -2759,11 +2796,14 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
   // A throw in a covered folder after the path test carries scope app-push (AppScopeError); the cause inside it is judged as before.
   // Item 4: a throw before that (git remote -v of isCcv3Checkout) gets app-push too when a push runs in a folder under a live registry
   // root by the path test (no git), so the D2 a block holds. A folder under the continuous-claude root keeps its old scope.
-  const app = thrown instanceof AppScopeError || pushUnderLiveRoot(input, deps);
+  // PR 566 round 2 (c): a throw inside a covered create or merge (AppScopeError with push false) keeps the home flag but adds no app-push.
+  const underRoot = pushUnderLiveRoot(input, deps);
+  const app = thrown instanceof AppScopeError || underRoot;
+  const appPush = (thrown instanceof AppScopeError && thrown.push) || underRoot;
   const err = thrown instanceof AppScopeError ? thrown.inner : thrown;
   const gone = err instanceof MissingCwdError;
   if (!gone) { try { logGuardError(HOOK, err); } catch { /* the log never blocks */ } }
-  const scopes = gatedScopesSafe(input, app);
+  const scopes = gatedScopesSafe(input, appPush);
   // Reviewer-2 item 4: a store write no longer returns before the shapes, so a throw there must not drop its scope.
   if (storeWriteCall(input, deps)) scopes.add('other');
   if (scopes.size === 0) return '{}';

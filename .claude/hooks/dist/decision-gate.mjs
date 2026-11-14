@@ -1374,6 +1374,7 @@ var appUnreadWhy = (dir) => `this command holds a git push that this gate cannot
 var unpairedWhy = (dir) => `a quote mark in this command has no pair (a message the gate cannot read as one string), so where its PR create or merge runs and the repo it names cannot be read (folder ${at(dir)}). Put the message in a file (git commit -F <file>, --body-file <file>) and run the gh call as its own command.`;
 var appBundleWhy = (dir) => `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
 var appSubagentWhy = (dir) => `a subagent cannot push in ${at(dir)}: Dave's tap belongs to the main session. Ask the main session to do it.`;
+var appManyHeadsWhy = (dir, heads) => `this create names more than one head (${prose(heads.join(", "))}) in ${at(dir)}; gh opens the PR from the last one, so the head its open-pr decision is for cannot be known. Name one head (gh pr create --head <branch>, or one -f head=<branch>).`;
 var appHeadOwnerWhy = (dir, owner) => `this create names its head with the owner ${prose(owner)}: (in ${at(dir)}), so the PR would open from that owner's fork, and a tap from Dave covers only a branch of this checkout. Name the head with no owner: prefix (gh pr create --head <branch>), or ask Dave to open it.`;
 var appHeadWhy = (dir) => `the head branch of this create cannot be named in ${at(dir)} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo folder on a branch.`;
 var appManyBasesWhy = (dir, bases) => `this create names more than one base branch (${prose(bases.join(", "))}) in ${at(dir)}, so the base its open-pr decision is for cannot be known. Name one base (gh pr create --base <branch>, or one -f base=<branch>).`;
@@ -2231,12 +2232,14 @@ function aliasStop(deps, dir, place, key, remote) {
   return url !== null && needsGithubField2(url, place.github) ? { stop: needsFieldLine(place.entryKey, remote) } : {};
 }
 var AppScopeError = class extends Error {
-  constructor(inner) {
+  constructor(inner, push = true) {
     super(String(inner?.message ?? inner));
     this.inner = inner;
+    this.push = push;
     this.name = "AppScopeError";
   }
   inner;
+  push;
 };
 var HEAD_FIELD_RE = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/g;
 var HEAD_FLAG_RE = /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/g;
@@ -2250,6 +2253,10 @@ function unquotedFlagValue(re, text, mtext) {
 }
 function namedHead(text, mtext) {
   return unquotedFlagValue(HEAD_FIELD_RE, text, mtext) ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+}
+function namedHeads(text, mtext) {
+  const create = PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text));
+  return [...unquotedFlagValues(HEAD_FIELD_RE, text, mtext), ...create ? unquotedFlagValues(HEAD_FLAG_RE, text, mtext) : []].map((h) => h.replace(/["']+$/, "")).filter((h) => h !== "");
 }
 function headOwner(text, mtext) {
   const m = /^([^:\s]+):/.exec(namedHead(text, mtext) ?? "");
@@ -2394,9 +2401,26 @@ function judgeAppCreate(text, mtext, deps, dir, cmd) {
   return homeRead(inApp(deps, () => appCreate(text, mtext, deps, dir, cmd)));
 }
 var homeRead = (d) => d.action === "deny" ? { ...d, homeFlags: true } : d;
-function appCreate(text, mtext, deps, dir, cmd) {
-  const place = appPlace(deps, dir);
+function coveredCall(deps, dir, body) {
+  let place;
+  try {
+    place = appPlace(deps, dir);
+  } catch (err) {
+    throw err instanceof AppScopeError ? new AppScopeError(err.inner, false) : err;
+  }
   if (!place.covered) return passOf(place, dir, "other");
+  try {
+    return body(place);
+  } catch (err) {
+    throw new AppScopeError(err instanceof AppScopeError ? err.inner : err, false);
+  }
+}
+function appCreate(text, mtext, deps, dir, cmd) {
+  return coveredCall(deps, dir, (place) => appCreateIn(text, mtext, deps, dir, cmd, place));
+}
+function appCreateIn(text, mtext, deps, dir, cmd, place) {
+  const heads = [...new Set(namedHeads(text, mtext))];
+  if (heads.length > 1) return deny("head-unresolved", appManyHeadsWhy(dir, heads));
   const owner = headOwner(text, mtext);
   if (owner !== null) return deny("head-foreign", appHeadOwnerWhy(dir, owner));
   const branch = headBranch(text, mtext, deps, dir);
@@ -2415,8 +2439,9 @@ function judgeAppMerge(shape, deps, dir, cmd) {
   return homeRead(inApp(deps, () => appMerge(shape, deps, dir, cmd)));
 }
 function appMerge(shape, deps, dir, cmd) {
-  const place = appPlace(deps, dir);
-  if (!place.covered) return passOf(place, dir, "other");
+  return coveredCall(deps, dir, (place) => appMergeIn(shape, deps, dir, cmd, place));
+}
+function appMergeIn(shape, deps, dir, cmd, place) {
   if (shape.pr === null) return deny("no-pr", appNoPrWhy(dir));
   const repo = appRepoFor(cmd, deps, dir, place, { sub: "merge", pr: shape.pr });
   if ("action" in repo) return repo;
@@ -2830,7 +2855,9 @@ ${corruptLine(d.notice)}` : "";
   }
 }
 function unjudgeable(input, deps, thrown) {
-  const app = thrown instanceof AppScopeError || pushUnderLiveRoot(input, deps);
+  const underRoot = pushUnderLiveRoot(input, deps);
+  const app = thrown instanceof AppScopeError || underRoot;
+  const appPush = thrown instanceof AppScopeError && thrown.push || underRoot;
   const err = thrown instanceof AppScopeError ? thrown.inner : thrown;
   const gone = err instanceof MissingCwdError;
   if (!gone) {
@@ -2839,7 +2866,7 @@ function unjudgeable(input, deps, thrown) {
     } catch {
     }
   }
-  const scopes = gatedScopesSafe(input, app);
+  const scopes = gatedScopesSafe(input, appPush);
   if (storeWriteCall(input, deps)) scopes.add("other");
   if (scopes.size === 0) return "{}";
   const raw = gone ? err.message : String(err?.message ?? err).slice(0, 160);

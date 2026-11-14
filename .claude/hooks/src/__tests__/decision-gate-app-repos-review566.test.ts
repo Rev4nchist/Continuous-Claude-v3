@@ -56,7 +56,7 @@ function answer(a: string): { status: number; stdout: string } {
   return { status: 1, stdout: '' };
 }
 
-function deps(home: string = ON): Deps {
+function deps(home: string = ON, throwOn: string[] = []): Deps {
   return {
     env: { ...process.env },
     home: '/home/tester',
@@ -66,7 +66,12 @@ function deps(home: string = ON): Deps {
       if (f === `${APP}/review-router.config.json`) return APP_CFG;
       return null;
     },
-    git: (cwd, args) => (cwd.replace(/\\/g, '/') === APP ? answer(args.join(' ')) : { status: 128, stdout: '' }),
+    git: (cwd, args) => {
+      if (cwd.replace(/\\/g, '/') !== APP) return { status: 128, stdout: '' };
+      const a = args.join(' ');
+      if (throwOn.includes(a)) throw new Error(`spawnSync git ETIMEDOUT (${a})`);
+      return answer(a);
+    },
     tapScope: {
       registry: () => readRegistry({ path: '/reg/project-registry.json', deps: { readFile: () => REGISTRY, realpath: (p) => p } }),
       realpath: (p) => p,
@@ -80,6 +85,38 @@ const hookText = (input: object): string => {
   const o = JSON.parse(handle(JSON.stringify(input), deps())).hookSpecificOutput ?? {};
   return String(o.permissionDecisionReason ?? o.additionalContext ?? '');
 };
+/** deny, warn or pass of the hook stdout, with a git call that throws. */
+const hookKind = (input: object, home: string, throwOn: string[]): string => {
+  const o = JSON.parse(handle(JSON.stringify(input), deps(home, throwOn))).hookSpecificOutput ?? {};
+  return o.permissionDecision === 'deny' ? 'deny' : typeof o.additionalContext === 'string' ? 'warn' : 'pass';
+};
+const CREATE = 'gh pr create --draft --title t --body b';
+const HEAD_READ = 'rev-parse feat^{commit}';
+const ROOT_READ = 'rev-parse --path-format=absolute --show-toplevel --git-common-dir';
+
+describe('PR 566 CodeRabbit round 2 (Dave 10:47: "One last fix, then land")', () => {
+  // Change that breaks C4: drop the namedHeads check in appCreateIn.
+  it('C4 a create that names two different heads is denied head-unresolved', () => {
+    expect(verdict(bash('gh pr create --draft --head feat --head topic --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'head-unresolved' });
+  });
+  it('K4 control: the same head twice is one head (the open-pr deny)', () => {
+    expect(verdict(bash('gh pr create --draft --head feat --head feat --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'open-pr' });
+  });
+  // Change that breaks C5: coveredCall rethrows the body's error as it is (no AppScopeError).
+  it('C5 a git throw inside a covered create, home enforce true, app config false: the catch denies', () => {
+    expect(hookKind(bash(CREATE), ON, [HEAD_READ])).toBe('deny');
+  });
+  it('K5 control: the same throw with home enforce false only warns', () => {
+    expect(hookKind(bash(CREATE), OFF, [HEAD_READ])).toBe('warn');
+  });
+  // Change that breaks C6: coveredCall keeps push true on the coverage read's AppScopeError (app-push joins the scopes).
+  it('C6 a coverage-read throw of a covered create with home enforce false warns, not denies by the push flag', () => {
+    expect(hookKind(bash(CREATE), OFF, [ROOT_READ])).toBe('warn');
+  });
+  it('K6 control: the same coverage-read throw of a covered PUSH still denies (app-push default on)', () => {
+    expect(hookKind(bash('git push up main'), OFF, [ROOT_READ])).toBe('deny');
+  });
+});
 
 describe('PR 566 CodeRabbit round 1: the three output fixes', () => {
   // Change that breaks C1: drop homeFlags from the subagent deny (subagentDeny returns the base deny).
