@@ -5,17 +5,20 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { EXIT, finishRun, parseReviewOutput, reserveRun, runAgent as realRunAgent } from './cursor-review.mjs';
+import { BAND_MODEL, EXIT, MODEL_ALLOWLIST, defaultLedgerPath, finishRun, parseReviewOutput, reserveRun, runAgent as realRunAgent } from './cursor-review.mjs';
 import {
   ENGINE_FILES, buildEngineEnv, checkPin, computeTrust, loadConfig, main, parseArgs, parseNameStatus, pinEngine, releaseSlot, resolveRange,
   pathspecDiffArgv, resolveTarget, reviewHead, routeBand, sweepTmp, takeSlot,
 } from './local-review.mjs';
+import * as LR from './local-review.mjs'; // the new exports are read through LR so a missing one fails its own test, not the whole file
+import { buildEnginePrompt } from './local-review/prompt.mjs';
+import * as REC from './local-review/record.mjs';
 import { writeRecord } from './local-review/record.mjs';
 import { findingId } from './review-filter.mjs';
 
@@ -82,6 +85,10 @@ function fakeGit(w) {
     const [a, b] = args;
     if (a === 'cat-file') return ok();
     if (a === 'fetch') return ok();
+    if (a === 'rev-parse' && args.includes('--verify') && w.refs) {
+      const side = String(args.at(-1)).replace(/\^\{commit\}$/, '');
+      return w.refs[side] ? ok(`${w.refs[side]}\n`) : { status: 128, stdout: '', stderr: `fatal: bad revision '${side}'` };
+    }
     if (a === 'merge-base' && b === '--is-ancestor') return { status: w.isAncestor(args[2], args[3]) ? 0 : 1, stdout: '', stderr: '' };
     if (a === 'merge-base') return ok(`${MB}\n`);
     if (a === 'diff' && b === '--name-status') return ok(args.includes(FROM) && w.deltaNameStatus !== undefined ? w.deltaNameStatus : w.nameStatus);
@@ -122,7 +129,7 @@ function deps(w, over = {}) {
     env: { PATH: 'x', ANTHROPIC_API_KEY: 'k', GH_TOKEN: 't', GITHUB_TOKEN: 't2', CLAUDE_CODE_MESSAGING_TOKEN: 'm', KEEP_ME: '1' },
     git: fakeGit(w), gh: async (args) => { w.ghCalls.push(args); return w.pull; }, runAgent: fakeRunAgent(w), prepareReview: fakePrepare(w),
     readAtSha: (root, sha, rel) => { w.readAtCalls.push({ sha, rel }); return rel === 'review-router.config.json' ? w.configText : null; },
-    agent: { cmd: 'fake-node', prefixArgs: ['fake-index.js'] }, now: () => NOW, stateRoot: w.stateRoot, cursorLedger: w.cursorLedger, tmpRoot: w.tmpRoot,
+    agent: { cmd: 'fake-node', prefixArgs: ['fake-index.js'] }, now: () => NOW, stateRoot: w.stateRoot, liveStateRoot: path.join(w.T, 'live-elsewhere'), cursorLedger: w.cursorLedger, tmpRoot: w.tmpRoot,
     configPath: w.configPath, agentVersion: () => '2026.10.22-test', pidAlive: () => true, sleep: async () => {}, stderr: () => {},
     reserveRun: (...a) => { w.reserveCalls.push(a); return reserveRun(...a); },
     finishRun: (...a) => { w.finishCalls.push(a); return finishRun(...a); },
@@ -617,11 +624,18 @@ function engineCopy() {
   return root;
 }
 
-const trustGit = (root, tweak = (x) => x) => (args) => (args[0] === 'rev-parse' ? ok(tweak(ENGINE_FILES.map((rel) => hashObject(path.join(root, rel)))).join('\n')) : { status: 1, stdout: '', stderr: 'no' });
+const MAIN_SHA = '9'.repeat(40);
+/** A fake git for computeTrust: the resolve of <remote>/main gives MAIN_SHA; a blob lookup answers only for <MAIN_SHA>:<path> names (anything else is a failure, so a second resolve cannot pass). */
+const trustGit = (root, tweak = (x) => x) => (args) => {
+  if (args[0] !== 'rev-parse') return { status: 1, stdout: '', stderr: 'no' };
+  if (args.includes('--verify')) return args.some((a) => /^[\w.-]+\/main\^\{commit\}$/.test(a)) ? ok(`${MAIN_SHA}\n`) : { status: 128, stdout: '', stderr: 'bad ref' };
+  if (!args.slice(1).every((a, i) => a === `${MAIN_SHA}:${ENGINE_FILES[i]}`)) return { status: 128, stdout: '', stderr: 'blob names do not start with the resolved sha' };
+  return ok(tweak(ENGINE_FILES.map((rel) => hashObject(path.join(root, rel)))).join('\n'));
+};
 
 test('trusted:true needs every engine blob to equal fork/main; one changed byte, a missing file or a git failure gives false (breaks if the blob compare is dropped)', () => {
   const root = engineCopy();
-  assert.deepEqual(computeTrust({ selfRoot: root, git: trustGit(root) }), { trusted: true, mismatched: [] });
+  assert.deepEqual(computeTrust({ selfRoot: root, git: trustGit(root) }), { trusted: true, mismatched: [], mainSha: MAIN_SHA });
   const wrong = computeTrust({ selfRoot: root, git: trustGit(root, (l) => [...l.slice(0, 2), '0'.repeat(40), ...l.slice(3)]) });
   assert.equal(wrong.trusted, false);
   assert.deepEqual(wrong.mismatched, [ENGINE_FILES[2]]);
@@ -632,6 +646,25 @@ test('trusted:true needs every engine blob to equal fork/main; one changed byte,
   rmSync(path.join(root, ENGINE_FILES[4]));
   assert.equal(computeTrust({ selfRoot: root, git: stale }).trusted, false);
   assert.equal(computeTrust({ selfRoot: root, git: () => ({ status: 128, stdout: '', stderr: 'bad' }) }).trusted, false);
+});
+
+test('computeTrust resolves <remote>/main once and compares every blob as <sha>:<path>; it returns that sha as mainSha, and null (untrusted) when it does not resolve to 40 hex (breaks if the blobs are read through the moving ref, or the sha comes from a second resolve)', () => {
+  const root = engineCopy();
+  const calls = [];
+  const spy = (args) => { calls.push(args); return trustGit(root)(args); };
+  const t = computeTrust({ selfRoot: root, git: spy, remote: 'fork' });
+  assert.equal(t.mainSha, MAIN_SHA);
+  const resolves = calls.filter((a) => a.some((x) => String(x).endsWith('main^{commit}')));
+  assert.equal(resolves.length, 1, 'one resolve of fork/main');
+  assert.ok(resolves[0].includes('--verify'));
+  const blobs = calls.filter((a) => !resolves.includes(a));
+  assert.equal(blobs.length, 1);
+  assert.deepEqual(blobs[0].slice(1), ENGINE_FILES.map((rel) => `${MAIN_SHA}:${rel}`), 'every blob name starts with the resolved sha, not with fork/main');
+  for (const bad of [{ status: 128, stdout: '', stderr: 'bad' }, ok('not-a-sha\n'), ok(''), ok(`${'9'.repeat(39)}\n`)]) {
+    const r = computeTrust({ selfRoot: root, git: (args) => (args.includes('--verify') ? bad : trustGit(root)(args)) });
+    assert.deepEqual([r.trusted, r.mainSha], [false, null], JSON.stringify(bad));
+    assert.deepEqual(r.mismatched, ENGINE_FILES, 'nothing was compared');
+  }
 });
 
 test('a pinned run with matching blobs writes trusted:true and the engineSha; --engine-here writes trusted:false and no engineSha (breaks if trust is not computed from the blobs)', async () => {
@@ -895,7 +928,7 @@ test('the record holds the pin, prompt and band fields, and a second run at the 
   const w = world();
   const first = await run(w);
   const rec = readRecord(first);
-  assert.equal(rec.schema, 1);
+  assert.equal(rec.schema, 2);
   assert.equal(rec.pr, 7);
   assert.equal(rec.branch, 'feat/x');
   assert.equal(rec.head, HEAD);
@@ -1504,7 +1537,7 @@ async function goldenRun(over = {}) {
 
 /** Taken on the code before the move (main ff608f90). A change to these literals is a change of the engine output. */
 const GOLDEN = {
-  record: 'ee2306d261e7ae6f171f2fb76dcf0bea96a91c44790ebebb8708346ad279fe1c',
+  record: '5219401c576305e8e4110c99a5372b4580bb80a97b0f51b2ba2b1043510af87a', // schema 2 adds fields to the record bytes: the ledger, trace and stream hashes below are unchanged
   ledger: 'e09fbd23600307377abb202c38c618713d783b5e71b589859b08494a04a0e7dc',
   trace: '279551cd66ee48e55c6678f7be699394a6c4174128be815ffe9917935db4c668',
   stream: 'f1135a6a11912cad7ae110bdc08592fee0a9cbb0975b211a16c78001c8e6dbb5',
@@ -1625,9 +1658,9 @@ for (const rel of SEAM_FILES) {
     assert.ok(ENGINE_FILES.includes(rel), `${rel} is not in ENGINE_FILES`);
     const forkMain = trustGit(engineCopy());
     const root = engineCopy();
-    assert.deepEqual(computeTrust({ selfRoot: root, git: forkMain }), { trusted: true, mismatched: [] });
+    assert.deepEqual(computeTrust({ selfRoot: root, git: forkMain }), { trusted: true, mismatched: [], mainSha: MAIN_SHA });
     appendFileSync(path.join(root, rel), '\n// edited\n');
-    assert.deepEqual(computeTrust({ selfRoot: root, git: forkMain }), { trusted: false, mismatched: [rel] });
+    assert.deepEqual(computeTrust({ selfRoot: root, git: forkMain }), { trusted: false, mismatched: [rel], mainSha: MAIN_SHA });
   });
 }
 
@@ -1728,4 +1761,929 @@ test('RUN_STAGES is exported as the list run, settle, record, the names re-p4-wi
   assert.ok(Array.isArray(RUN_STAGES), 'RUN_STAGES is not exported');
   assert.deepEqual(RUN_STAGES.map((x) => x.name), ['run', 'settle', 'record']);
   assert.ok(RUN_STAGES.every((x) => typeof x.run === 'function'));
+});
+
+// ---------- re-engine-cli-schema: flags, model check, range target, state isolation, schema 2 ----------
+
+const RANGE = 'seed-base..seed-head';
+const rangeWorld = (over = {}) => world({ refs: { 'seed-base': BASE, 'seed-head': HEAD }, ...over });
+/** Every file under dir as [relative path, size, mtime, sha256]: two snapshots are equal only when no byte and no time changed. */
+function snapshot(dir) {
+  const out = [];
+  const walk = (d) => {
+    for (const ent of readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, ent.name);
+      if (ent.isDirectory()) { walk(p); continue; }
+      const buf = readFileSync(p);
+      out.push([path.relative(dir, p), buf.length, statSync(p).mtimeMs, sha256(buf)]);
+    }
+  };
+  if (existsSync(dir)) walk(dir);
+  return out.sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+test('parseArgs: --pr and --range are exclusive and one is required; --range needs exactly one .. with two non-empty sides (breaks if both are accepted, or a malformed range passes)', () => {
+  assert.match(parseArgs(['--pr', '5', '--range', 'a..b']).error, /not both/);
+  assert.match(parseArgs(['--range', 'a..b', '--pr', '5']).error, /not both/);
+  assert.match(parseArgs(['--json']).error, /--pr <n> or --range/);
+  for (const bad of ['a...b', '..b', 'a..', 'ab', 'a..b..c', '-x..b', 'a..-b', 'a b..c', '']) assert.match(parseArgs(['--range', bad]).error, /--range/, bad);
+  assert.match(parseArgs(['--range']).error, /--range/);
+  assert.deepEqual(parseArgs(['--range', 'refs/eval/seed/x..abc123', '--engine-here']), { range: 'refs/eval/seed/x..abc123', engineHere: true });
+});
+
+test('parseArgs: --prompt-version, --backend, --model and --arm are checked before any run, in any flag order (breaks if a value is not checked or the check depends on order)', () => {
+  assert.match(parseArgs(['--pr', '5', '--prompt-version', 'v3']).error, /prompt-version/);
+  assert.match(parseArgs(['--pr', '5', '--prompt-version']).error, /prompt-version/);
+  assert.equal(parseArgs(['--pr', '5', '--prompt-version', 'v2']).promptVersion, 'v2');
+  assert.match(parseArgs(['--pr', '5', '--backend', 'nope']).error, /backend/);
+  assert.match(parseArgs(['--pr', '5', '--backend', 'claude']).error, /not wired yet/);
+  assert.match(parseArgs(['--pr', '5', '--model', 'auto']).error, /auto/);
+  assert.match(parseArgs(['--pr', '5', '--model', 'grok-4.7-high-fast']).error, /fast/);
+  assert.match(parseArgs(['--pr', '5', '--model', 'grok-9']).error, /not allowed/);
+  assert.match(parseArgs(['--pr', '5', '--model']).error, /--model/);
+  assert.deepEqual(parseArgs(['--model', 'grok-4.7-xhigh', '--backend', 'cursor', '--pr', '5']), { model: 'grok-4.7-xhigh', backend: 'cursor', pr: 5 });
+  assert.equal(parseArgs(['--pr', '5', '--arm', 'arm-a_1.2']).arm, 'arm-a_1.2');
+  // Upper case and a trailing dot are refused: Windows folds both in a folder name, so Arm-A and arm-a. would share the folder of arm-a.
+  for (const bad of ['', 'a b', 'a/b', 'x'.repeat(41), 'a;b', '--json', '-x', '..', 'a..b', '-', 'arm-A_1.2', 'ARM', 'a.']) assert.match(parseArgs(['--pr', '5', '--arm', bad]).error, /--arm/, JSON.stringify(bad));
+  assert.match(parseArgs(['--pr', '5', '--arm']).error, /--arm/);
+  assert.match(parseArgs(['--pr', '5', '--arm', '--json']).error, /--arm/, 'a flag is never taken as the arm id');
+  assert.equal(parseArgs(['--pr', '5', '--arm', 'a.b-c_1']).arm, 'a.b-c_1');
+});
+
+test('checkModel refuses fast variants, auto, haiku and ids outside the cursor allowlist; it passes the allowlisted ids (breaks if any refusal is dropped)', () => {
+  for (const bad of ['grok-4.7-high-fast', 'GROK-4.7-HIGH-FAST', 'grok-fast-4', 'auto', 'AUTO', ' Auto ', 'claude-haiku-4-5', 'Claude-HAIKU-4-5', 'grok-4.7-low', '', undefined]) {
+    assert.equal(LR.checkModel('cursor', bad).ok, false, String(bad));
+  }
+  for (const bad of ['auto', 'claude-haiku-4-5', 'sonnet-fast', 'x-HAIKU-y']) assert.equal(LR.checkModel('claude', bad).ok, false, `claude ${bad}`);
+  assert.equal(LR.checkModel('cursor', 'grok-4.7-high').ok, true);
+  assert.equal(LR.checkModel('cursor', 'grok-4.7-xhigh').ok, true);
+  assert.equal(LR.checkModel('claude', 'claude-sonnet-5-5').ok, true, 'claude: the haiku refusal only (seat answer 2)');
+  assert.equal(LR.checkModel('claude', 'x-fast-y').ok, false, 'the -fast- infix is refused on its own, not only through the cursor allowlist');
+  assert.equal(LR.checkModel('claude', 'x-fast').ok, false);
+  assert.equal(LR.checkModel('nobackend', 'grok-4.7-high').ok, false);
+  assert.equal(LR.checkModel('constructor', 'grok-4.7-high').ok, false);
+  assert.match(LR.checkModel('cursor', 'auto').reason, /auto/);
+});
+
+test('checkModel: every BAND_MODEL value and every MODEL_ALLOWLIST id passes for cursor (breaks if the default path would be refused by its own check)', () => {
+  assert.ok(Object.keys(BAND_MODEL).length >= 4);
+  for (const [band, model] of Object.entries(BAND_MODEL)) assert.deepEqual(LR.checkModel('cursor', model), { ok: true, model }, band);
+  for (const model of MODEL_ALLOWLIST) assert.equal(LR.checkModel('cursor', model).ok, true, model);
+});
+
+test('--backend claude is refused with exit 2 before any review: main calls no review, reviewHead calls no git or gh and writes no ledger line (breaks if the claude map entry is wired or the refusal comes late)', async () => {
+  const w = world();
+  let called = 0;
+  const err = [];
+  const code = await main(['--pr', '7', '--backend', 'claude', '--engine-here'], { root: w.T, env: {}, stdout: () => {}, stderr: (m) => err.push(m), reviewHead: async () => { called += 1; return { exit: 0 }; } });
+  assert.equal(code, EXIT.REFUSED);
+  assert.equal(called, 0);
+  assert.match(err.join(' '), /not wired yet.*re-claude-backend/);
+  const r = await run(w, { backend: 'claude' });
+  assert.equal(r.exit, EXIT.REFUSED);
+  assert.equal(w.gitCalls.length + w.ghCalls.length + w.agentCalls.length + w.reserveCalls.length, 0);
+  assert.equal(existsSync(w.cursorLedger), false, 'no ledger line');
+  assert.equal(existsSync(path.join(w.aux, 'local-review-ledger.jsonl')), false);
+});
+
+test('main passes --range and the new flags to reviewHead as options (breaks if main drops a flag)', async () => {
+  let seen;
+  const code = await main(['--range', 'a..b', '--prompt-version', 'v2', '--model', 'grok-4.7-xhigh', '--arm', 'x1', '--engine-here'], { root: 'r', env: { LOCAL_REVIEW_STATE_DIR: path.join(tmp('main-flags'), 'local-review') }, stdout: () => {}, stderr: () => {}, reviewHead: async (o) => { seen = o; return { exit: 0 }; } });
+  assert.equal(code, 0);
+  assert.equal(seen.range, 'a..b');
+  assert.equal(seen.pr, undefined);
+  assert.equal(seen.promptVersion, 'v2');
+  assert.equal(seen.model, 'grok-4.7-xhigh');
+  assert.equal(seen.arm, 'x1');
+});
+
+test('reviewHead refuses a bad prompt version, a bad model, a bad arm and a bad target with exit 2 before any git, gh or ledger call (breaks if reviewHead trusts its caller instead of the check parseArgs uses)', async () => {
+  for (const bad of [{ promptVersion: 'v3' }, { model: 'auto' }, { model: 'grok-4.7-high-fast' }, { arm: 'a b' }, { range: RANGE }, { pr: undefined, range: 'a...b' }]) {
+    const w = rangeWorld();
+    const r = await run(w, bad);
+    assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(bad));
+    assert.equal(w.gitCalls.length + w.ghCalls.length + w.agentCalls.length, 0, JSON.stringify(bad));
+    assert.equal(existsSync(w.cursorLedger), false, JSON.stringify(bad));
+  }
+  const none = rangeWorld();
+  assert.equal((await reviewHead({ engineHere: true, root: none.T }, deps(none))).exit, EXIT.REFUSED, 'neither --pr nor --range');
+});
+
+test('--prompt-version v2 reaches buildEnginePrompt: the record and the prompt file carry v2 and its hash, not the v1 hash (breaks if promptVersion is not passed on)', async () => {
+  const v1 = world();
+  const v2 = world();
+  const recV1 = readRecord(await run(v1));
+  const recV2 = readRecord(await run(v2, { promptVersion: 'v2' }));
+  assert.equal(recV1.promptVersion, 'v1');
+  assert.equal(recV2.promptVersion, 'v2');
+  assert.equal(recV1.promptSha256, buildEnginePrompt({ mode: 'full', promptVersion: 'v1' }).promptSha256);
+  assert.equal(recV2.promptSha256, buildEnginePrompt({ mode: 'full', promptVersion: 'v2' }).promptSha256);
+  assert.notEqual(recV1.promptSha256, recV2.promptSha256);
+  assert.notEqual(v1.agentCalls[0].prompt, v2.agentCalls[0].prompt);
+});
+
+test('--model passes the chosen id to the record, the reserve entry, the agent command and the ledger (breaks if --model is ignored)', async () => {
+  const w = world();
+  const r = await run(w, { model: 'grok-4.7-xhigh' });
+  assert.equal(r.exit, EXIT.OK, JSON.stringify(r));
+  assert.equal(readRecord(r).model, 'grok-4.7-xhigh');
+  assert.equal(w.reserveCalls[0][1].model, 'grok-4.7-xhigh');
+  const args = w.agentCalls[0].spec.args;
+  assert.equal(args[args.indexOf('--model') + 1], 'grok-4.7-xhigh', 'the agent command names the chosen model');
+  assert.equal(lines(w.cursorLedger).filter((l) => l.phase === 'end')[0].model, 'grok-4.7-xhigh');
+});
+
+test('default path equal: a run with no flag and a run with explicit default flags (--prompt-version v1 --backend cursor --model <band model>, in an isolated root) match on every schema 1 field, the prompt hash, the model and the ledger end line but the ref (breaks if a default value drifts when the flags are given)', async () => {
+  const a = world();
+  const b = world();
+  const ra = await run(a);
+  const rb = await run(b, { promptVersion: 'v1', backend: 'cursor', model: BAND_MODEL.MID });
+  const recA = readRecord(ra);
+  const recB = readRecord(rb);
+  // branch is the record folder key: a flag run adds its arm key to it (armBranch), as it does to the ledger ref.
+  const strip = (r) => { const { runId, runs, runIds, cursorRunId, ts, branch, ...rest } = r; return { ...rest, runs: runs.map(({ runId: _id, ...x }) => x) }; };
+  assert.deepEqual(strip(recB), strip(recA));
+  assert.equal(recB.branch, `${recA.branch}-v1-${BAND_MODEL.MID}-cursor`);
+  assert.equal(recB.promptSha256, recA.promptSha256);
+  assert.equal(recB.promptSha256, buildEnginePrompt({ mode: 'full', promptVersion: 'v1' }).promptSha256);
+  assert.equal(recB.model, recA.model);
+  assert.equal(recA.model, BAND_MODEL[recA.band.band]);
+  assert.equal(a.reserveCalls[0][1].ref, 'branch-feat-x');
+  assert.equal(b.reserveCalls[0][1].ref, `eval-7-${HEAD.slice(0, 8)}-v1-${BAND_MODEL.MID}-cursor`, 'any of the five flags makes the run an eval run, whatever its value');
+  const endA = lines(a.cursorLedger).filter((l) => l.phase === 'end')[0];
+  const endB = lines(b.cursorLedger).filter((l) => l.phase === 'end')[0];
+  const noId = ({ id, ts, spawnedAt, recordPath, recordSha256, ref, ...x }) => x;
+  assert.deepEqual(noId(endB), noId(endA));
+  assert.equal(b.reserveCalls[0][1].model, a.reserveCalls[0][1].model);
+  assert.equal(a.agentCalls[0].prompt, b.agentCalls[0].prompt, 'the prompt file is the same bytes');
+});
+
+// ---------- state isolation (design note 3a) ----------
+
+test('state isolation: a run with any of --range, --prompt-version, --model, --backend or --arm, whatever its value, that targets the live state root is refused with exit 2 before any git, gh or ledger call (breaks if the live-root guard is missing, judges the value, or runs after the first call)', async () => {
+  const flags = [['v2', { promptVersion: 'v2' }], ['v1 (the default value)', { promptVersion: 'v1' }], ['range', { pr: undefined, range: RANGE }], ['model', { model: 'grok-4.7-xhigh' }],
+    ['model equal to the band default', { model: BAND_MODEL.MID }], ['backend cursor (the default value)', { backend: 'cursor' }], ['arm only', { arm: 'a1' }]];
+  for (const [name, opts] of flags) {
+    const w = rangeWorld();
+    const r = await run(w, opts, { liveStateRoot: w.stateRoot });
+    assert.equal(r.exit, EXIT.REFUSED, name);
+    assert.match(r.reason, /live state root/, name);
+    assert.equal(w.gitCalls.length + w.ghCalls.length, 0, `${name}: no git or gh call before the refusal`);
+    assert.equal(w.agentCalls.length + w.reserveCalls.length, 0, name);
+    assert.equal(existsSync(w.stateRoot), false, `${name}: no record folder`);
+    assert.equal(existsSync(w.cursorLedger), false, `${name}: no ledger line`);
+    assert.equal(existsSync(path.join(w.aux, 'local-review-ledger.jsonl')), false, `${name}: no skip row`);
+  }
+  const under = world();
+  assert.equal((await run(under, { promptVersion: 'v2' }, { liveStateRoot: under.aux })).exit, EXIT.REFUSED, 'a records folder under the live root is live');
+  if (process.platform === 'win32') {
+    const fold = world();
+    assert.equal((await run(fold, { promptVersion: 'v2' }, { liveStateRoot: fold.stateRoot.toUpperCase() })).exit, EXIT.REFUSED, 'Windows folds case');
+  }
+});
+
+test('state isolation: the live-root refusal comes before the config, the pin check and the trust compare: a disabled config writes no skip row and a pinned run makes no git call (breaks if the guard moves below loadConfig or computeTrust)', async () => {
+  const off = world();
+  const cfg = tempConfig(off, (c) => { c.local_review = { ...c.local_review, enabled: false }; });
+  const r = await run(off, { model: BAND_MODEL.MID }, { liveStateRoot: off.stateRoot, configPath: cfg });
+  assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(r));
+  assert.match(r.reason, /live state root/);
+  assert.deepEqual(skipRows(off), [], 'no skip row for "enabled is false" on the live ledger');
+  const control = world();
+  const ctl = await run(control, {}, { liveStateRoot: control.stateRoot, configPath: tempConfig(control, (c) => { c.local_review = { ...c.local_review, enabled: false }; }) });
+  assert.match(ctl.skipReason, /enabled is false/, 'a default run on the live root still writes that skip row');
+  assert.equal(skipRows(control).length, 1);
+  const w = world();
+  const root = engineCopy();
+  const pinned = await run(w, { engineHere: false, arm: 'x' }, {
+    env: { LOCAL_REVIEW_PINNED: SHA }, selfPath: path.join(w.stateRoot, 'engine', SHA, 'scripts', 'github', 'local-review.mjs'), selfRoot: root, configPath: path.join(root, 'review-router.config.json'), liveStateRoot: w.stateRoot,
+  });
+  assert.equal(pinned.exit, EXIT.REFUSED, JSON.stringify(pinned));
+  assert.match(pinned.reason, /live state root/);
+  assert.equal(w.gitCalls.length + w.ghCalls.length, 0, 'no git call, so no trust compare and no fork/main resolve');
+});
+
+test('state isolation: a default run on the live root keeps the live branch ref; a --model run (the band default or not) is an eval run with its own arm ref in an isolated root (breaks if the guard fires on the default path, or a flag run keeps the live ref)', async () => {
+  const w = world();
+  const first = await run(w, {}, { liveStateRoot: w.stateRoot });
+  assert.equal(first.exit, EXIT.OK, JSON.stringify(first));
+  assert.equal(w.reserveCalls[0][1].ref, 'branch-feat-x');
+  const same = world();
+  const r = await run(same, { model: 'grok-4.7-high' });
+  assert.equal(r.exit, EXIT.OK, JSON.stringify(r));
+  assert.equal(same.reserveCalls[0][1].ref, `eval-7-${HEAD.slice(0, 8)}-v1-grok-4.7-high-cursor`, 'the band default model, given as a flag, is still a flag run');
+  const other = world();
+  const o = await run(other, { model: 'grok-4.7-xhigh' });
+  assert.equal(other.reserveCalls[0][1].ref, `eval-7-${HEAD.slice(0, 8)}-v1-grok-4.7-xhigh-cursor`);
+  assert.equal(o.exit, EXIT.OK);
+  const armed = world();
+  await run(armed, { arm: 'arm-q' });
+  assert.equal(armed.reserveCalls[0][1].ref, `eval-7-${HEAD.slice(0, 8)}-arm-q`, 'the arm id is the arm key when given');
+  const evalOnly = world();
+  await run(evalOnly, { evalRun: true });
+  assert.equal(evalOnly.reserveCalls[0][1].ref, `eval-7-${HEAD.slice(0, 8)}`, 'the review-eval harness passes evalRun and no flag: its ref keeps its old form');
+});
+
+test('state isolation: a non-default run is fresh and reserves an eval- ref: a complete record or a full live cap does not stop it (breaks if the run joins the live branch cap or the range-done rule)', async () => {
+  const w = world();
+  await run(w); // a complete default record already sits at this head in the same folder
+  seedCap(w, 'branch-feat-x', 8);
+  const r = await run(w, { promptVersion: 'v2' });
+  assert.equal(r.exit, EXIT.OK, JSON.stringify(r));
+  assert.equal(readRecord(r).mode, 'full');
+  assert.equal(w.reserveCalls.at(-1)[1].ref, `eval-7-${HEAD.slice(0, 8)}-v2-grok-4.7-high-cursor`);
+  assert.equal(w.agentCalls.length, 2);
+});
+
+test('state isolation: non-default runs aimed at the live world itself (same state root, ledgers and slots) are refused and leave it byte-unchanged; the next default run still skips "range done" (breaks if the live-root guard is removed)', async () => {
+  const live = rangeWorld();
+  const over = { liveStateRoot: live.stateRoot };
+  const seeded = await run(live, {}, over);
+  assert.equal(seeded.exit, EXIT.OK);
+  const before = snapshot(live.aux);
+  assert.ok(before.length >= 2, 'the live folder holds the record and the ledger');
+  for (const opts of [{ promptVersion: 'v2' }, { model: 'grok-4.7-xhigh' }, { pr: undefined, range: RANGE, arm: 'a1' }]) {
+    const r = await run(live, opts, over);
+    assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(opts));
+    assert.match(r.reason, /live state root/, JSON.stringify(opts));
+  }
+  assert.deepEqual(snapshot(live.aux), before);
+  assert.equal(live.agentCalls.length, 1, 'no non-default run reached the agent');
+  const again = await run(live, {}, over);
+  assert.match(again.skipReason, /^range done/, 'the default run still finds its own record, and only that one');
+  assert.equal(live.agentCalls.length, 1);
+});
+
+test('state isolation: a --model run (the band default or not) is refused on the live root even for a draft PR, a skip-listed author or an unreviewed band, and writes no skip row (breaks if the skip rules run before the flags are judged)', async () => {
+  const cases = [['draft', { pull: pullOf({ draft: true }) }], ['skip author', { pull: pullOf({ user: { login: 'dependabot[bot]' } }) }], ['band LOW', { nameStatus: 'M\0README.md\0' }]];
+  for (const model of ['grok-4.7-xhigh', BAND_MODEL.MID]) {
+    for (const [name, over] of cases) {
+      const w = world(over);
+      const r = await run(w, { model }, { liveStateRoot: w.stateRoot });
+      assert.equal(r.exit, EXIT.REFUSED, `${name} ${model}`);
+      assert.match(r.reason, /live state root/, `${name} ${model}`);
+      assert.deepEqual(skipRows(w), [], `${name} ${model}: no skip row in the live ledger`);
+      assert.equal(existsSync(w.stateRoot), false, name);
+    }
+  }
+  const plain = world({ pull: pullOf({ draft: true }) });
+  assert.equal((await run(plain, {}, { liveStateRoot: plain.stateRoot })).skipReason, 'draft', 'a default run still skips a draft on the live root');
+});
+
+test('state isolation: a LOCAL_REVIEW_STATE_DIR beside the live root shares its slots and ledgers, so a non-default run there is refused; a default run, and a folder elsewhere, are not (breaks if the guard looks at the records folder only)', async () => {
+  const w = world();
+  const live = path.join(w.T, 'state', 'local-review');
+  const beside = path.join(w.T, 'state', 'local-review-eval');
+  const elsewhere = path.join(w.T, 'other', 'local-review-eval');
+  const r = await run(w, { promptVersion: 'v2' }, { stateRoot: beside, liveStateRoot: live });
+  assert.equal(r.exit, EXIT.REFUSED);
+  assert.match(r.reason, /live state root/);
+  assert.equal(w.agentCalls.length + w.reserveCalls.length, 0);
+  assert.equal(existsSync(beside), false);
+  const ok1 = await run(world(), { promptVersion: 'v2' }, { stateRoot: elsewhere, stateDir: path.join(w.T, 'other'), liveStateRoot: live });
+  assert.equal(ok1.exit, EXIT.OK, JSON.stringify(ok1));
+  const def = await run(world(), {}, { stateRoot: beside, liveStateRoot: live });
+  assert.equal(def.exit, EXIT.OK, 'the default path has no isolation rule');
+});
+
+test('main refuses a non-default run aimed at the live root before it pins the engine: no fetch, no extract, no prune under the live root (breaks if main relaunches first)', async () => {
+  const live = tmp('main-live');
+  const elsewhere = tmp('main-else');
+  const liveRoot = path.join(live, 'local-review');
+  let pinned = 0;
+  const pin = () => { pinned += 1; return { ok: false, reason: 'stop' }; };
+  const go = (argv, stateDir, err = () => {}) => main(argv, { root: live, env: { LOCAL_REVIEW_STATE_DIR: stateDir }, liveStateRoot: liveRoot, stdout: () => {}, stderr: err, pinEngine: pin });
+  for (const argv of [['--pr', '7', '--prompt-version', 'v2'], ['--range', 'a..b'], ['--pr', '7', '--arm', 'x'], ['--pr', '7', '--model', BAND_MODEL.MID], ['--pr', '7', '--backend', 'cursor'], ['--pr', '7', '--prompt-version', 'v1']]) {
+    const err = [];
+    assert.equal(await go(argv, liveRoot, (m) => err.push(m)), EXIT.REFUSED, argv.join(' '));
+    assert.match(err.join(' '), /live state root/, argv.join(' '));
+  }
+  assert.equal(pinned, 0, 'the engine was never pinned');
+  await go(['--pr', '7', '--prompt-version', 'v2'], elsewhere);
+  assert.equal(pinned, 1, 'a non-default run on a folder outside the live root pins as before');
+  await go(['--pr', '7'], liveRoot);
+  assert.equal(pinned, 2, 'a default run pins as before');
+});
+
+test('state isolation: a flag run whose cursor ledger is the live default ledger is refused before any call, with isolated records and no CURSOR_REVIEW_LEDGER override or with an override that names the live file; another ledger file is not refused (breaks if the cursor ledger is not checked)', async () => {
+  const live = path.join(tmp('live-ledger'), 'state', 'cursor-review-ledger.jsonl');
+  const same = (w, over) => run(w, { promptVersion: 'v2' }, { liveCursorLedger: live, ...over });
+  const viaDeps = world();
+  const a = await same(viaDeps, { cursorLedger: live });
+  assert.equal(a.exit, EXIT.REFUSED, JSON.stringify(a));
+  assert.match(a.reason, /live cursor ledger/);
+  assert.equal(viaDeps.gitCalls.length + viaDeps.ghCalls.length + viaDeps.agentCalls.length + viaDeps.reserveCalls.length, 0);
+  assert.equal(existsSync(live), false, 'nothing was written to the live ledger');
+  const viaEnv = world();
+  const b = await same(viaEnv, { cursorLedger: undefined, env: { PATH: 'x', CURSOR_REVIEW_LEDGER: live } });
+  assert.equal(b.exit, EXIT.REFUSED, JSON.stringify(b));
+  assert.match(b.reason, /live cursor ledger/);
+  assert.equal(existsSync(live), false);
+  const dotted = world();
+  const c = await same(dotted, { cursorLedger: `${path.dirname(live)}${path.sep}..${path.sep}state${path.sep}cursor-review-ledger.jsonl` });
+  assert.equal(c.exit, EXIT.REFUSED, 'the same file by another spelling of the path');
+  if (process.platform === 'win32') {
+    const fold = world();
+    assert.equal((await same(fold, { cursorLedger: live.toUpperCase() })).exit, EXIT.REFUSED, 'Windows folds case');
+  }
+  const other = world();
+  const d = await same(other, {});
+  assert.equal(d.exit, EXIT.OK, JSON.stringify(d));
+  const def = world();
+  const e = await run(def, {}, { liveCursorLedger: def.cursorLedger });
+  assert.equal(e.exit, EXIT.OK, 'a default run may use the live ledger');
+});
+
+test('main refuses a flag run whose cursor ledger is the live default ledger before it pins the engine (breaks if main checks the records folder only)', async () => {
+  const dir = tmp('main-ledger');
+  const liveLedger = path.join(dir, 'cursor-review-ledger.jsonl');
+  let pinned = 0;
+  const err = [];
+  const code = await main(['--pr', '7', '--arm', 'x'], {
+    root: dir, env: { LOCAL_REVIEW_STATE_DIR: path.join(dir, 'iso', 'local-review'), CURSOR_REVIEW_LEDGER: liveLedger }, liveStateRoot: path.join(dir, 'live', 'local-review'), liveCursorLedger: liveLedger,
+    stdout: () => {}, stderr: (m) => err.push(m), pinEngine: () => { pinned += 1; return { ok: false, reason: 'stop' }; },
+  });
+  assert.equal(code, EXIT.REFUSED);
+  assert.match(err.join(' '), /live cursor ledger/);
+  assert.equal(pinned, 0);
+});
+
+/** Every file under dir as Map<relative path with /, bytes>. */
+function bytesUnder(dir) {
+  const out = new Map();
+  const walk = (d) => {
+    for (const ent of readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, ent.name);
+      if (ent.isDirectory()) walk(p); else out.set(path.relative(dir, p).replaceAll('\\', '/'), readFileSync(p));
+    }
+  };
+  if (existsSync(dir)) walk(dir);
+  return out;
+}
+
+test('a successful flag run in an isolated root and ledger writes nothing under a live root that holds a default record; the next default run adds only its own files (breaks if a flag run writes a record, a ledger line, a slot or a skip row under the live root)', async () => {
+  const live = world();
+  const liveDeps = { liveStateRoot: live.stateRoot, liveCursorLedger: live.cursorLedger };
+  const seeded = await run(live, {}, liveDeps);
+  assert.equal(seeded.exit, EXIT.OK, JSON.stringify(seeded));
+  const before = bytesUnder(live.aux);
+  assert.ok([...before.keys()].some((k) => k.startsWith('local-review/feat-x/')), 'the live root holds the default record');
+  assert.ok(before.has('cursor-review-ledger.jsonl'), 'and its ledger');
+  const iso = world();
+  const flagged = await run(iso, { promptVersion: 'v2', arm: 'iso-arm' }, liveDeps);
+  assert.equal(flagged.exit, EXIT.OK, JSON.stringify(flagged));
+  assert.equal(readRecord(flagged).promptVersion, 'v2');
+  assert.ok(path.relative(iso.aux, flagged.recordPath).startsWith('local-review'), 'the record sits under the isolated state folder');
+  assert.deepEqual(lines(iso.cursorLedger).map((l) => l.ref), [`eval-7-${HEAD.slice(0, 8)}-iso-arm`, `eval-7-${HEAD.slice(0, 8)}-iso-arm`], 'the isolated ledger holds the flag run');
+  const mid = bytesUnder(live.aux);
+  assert.deepEqual([...mid.keys()], [...before.keys()], 'no file was added or removed under the live root');
+  for (const [name, buf] of before) assert.ok(mid.get(name).equals(buf), `${name} is byte-identical after the flag run`);
+  live.pull = pullOf({ head: { sha: FROM, ref: 'feat/y' } });
+  const next = await run(live, {}, liveDeps);
+  assert.equal(next.exit, EXIT.OK, JSON.stringify(next));
+  const after = bytesUnder(live.aux);
+  for (const [name, buf] of before) {
+    const now = after.get(name);
+    assert.ok(now, `${name} still exists`);
+    assert.ok(name.endsWith('.jsonl') ? now.subarray(0, buf.length).equals(buf) : now.equals(buf), `${name}: an earlier file is untouched, a ledger only grows`);
+  }
+  const added = [...after.keys()].filter((k) => !before.has(k));
+  assert.ok(added.length > 0 && added.every((k) => k.startsWith('local-review/feat-y/')), `only the new default run files were added: ${added.join(', ')}`);
+  const newLines = after.get('cursor-review-ledger.jsonl').toString('utf8').slice(before.get('cursor-review-ledger.jsonl').length).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.ok(newLines.length > 0 && newLines.every((l) => l.ref === 'branch-feat-y'), 'the new ledger lines are the default run only');
+});
+
+// ---------- --range target ----------
+
+function rangeRepo() {
+  const dir = tmp('range-repo');
+  gitIn(dir, 'init', '-q', '-b', 'main');
+  writeFileSync(path.join(dir, 'a.txt'), 'one\n');
+  gitIn(dir, 'add', '-A');
+  gitIn(dir, 'commit', '-q', '-m', 'c1');
+  const base = gitIn(dir, 'rev-parse', 'HEAD');
+  mkdirSync(path.join(dir, 'src'));
+  mkdirSync(path.join(dir, '.claudedocs'));
+  writeFileSync(path.join(dir, 'src', 'b.mjs'), 'export const b = 1;\n');
+  writeFileSync(path.join(dir, '.claudedocs', 'x.md'), 'notes\n');
+  gitIn(dir, 'add', '-A');
+  gitIn(dir, 'commit', '-q', '-m', 'c2');
+  const head = gitIn(dir, 'rev-parse', 'HEAD');
+  gitIn(dir, 'update-ref', 'refs/eval/seed/h1', head);
+  gitIn(dir, 'update-ref', 'refs/eval/seed/b1', base);
+  gitIn(dir, 'checkout', '-q', '--detach', base);
+  return { dir, base, head };
+}
+const recordingGit = (dir, calls) => (args, o = {}) => {
+  calls.push(args);
+  const r = spawnSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd: dir, input: o.input, encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+};
+
+test('resolveRangeTarget resolves seed refs offline, with no fetch and no gh: shas, merge base, excluded paths dropped, synthetic pull, range- branch (breaks if a ref is fetched, or the target keeps pr)', () => {
+  const r = rangeRepo();
+  const calls = [];
+  const t = LR.resolveRangeTarget({ root: r.dir, range: 'refs/eval/seed/b1..refs/eval/seed/h1' }, { git: recordingGit(r.dir, calls) });
+  assert.equal(t.head, r.head);
+  assert.equal(t.pullBaseSha, r.base);
+  assert.equal(t.mergeBase, r.base);
+  assert.equal(t.pr, null);
+  assert.equal(t.range, `${r.base}..${r.head}`);
+  assert.equal(t.branch, `range-${r.base.slice(0, 12)}`);
+  assert.deepEqual(t.files, [{ filename: 'src/b.mjs' }]);
+  assert.deepEqual(t.pull, { title: `range ${r.base.slice(0, 8)}..${r.head.slice(0, 8)}`, body: '', labels: [], draft: false, user: null });
+  assert.equal(calls.some((a) => a[0] === 'fetch'), false, 'no fetch: seed refs are local only');
+  const viaSha = LR.resolveRangeTarget({ root: r.dir, range: `${r.base}..${r.head}` });
+  assert.equal(viaSha.head, r.head, 'the default git runs in root');
+});
+
+test('resolveRangeTarget refuses an unknown ref, a ref that is no commit and an option-like side with BAD_INPUT, and never fetches (breaks if an unknown ref is fetched or reaches git as an option)', () => {
+  const r = rangeRepo();
+  for (const range of [`refs/eval/seed/nope..${r.head}`, `${r.base}..refs/eval/seed/nope`, `--output=x..${r.head}`, `${r.base}...${r.head}`, 'a..']) {
+    const calls = [];
+    assert.throws(() => LR.resolveRangeTarget({ root: r.dir, range }, { git: recordingGit(r.dir, calls) }), (e) => e.code === 'BAD_INPUT', range);
+    assert.equal(calls.some((a) => a[0] === 'fetch'), false, range);
+  }
+});
+
+test('--range run: exit 0, a schema 2 record with pr null and target.range, no gh call, eval ref with the arm key, record folder range-<base12>-<arm key>/<head40> (breaks if the range path calls gh, keeps pr, or lands in a branch folder)', async () => {
+  const w = rangeWorld();
+  const r = await run(w, { pr: undefined, range: RANGE });
+  assert.equal(r.exit, EXIT.OK, JSON.stringify(r));
+  assert.equal(w.ghCalls.length, 0);
+  assert.equal(w.gitCalls.some((c) => c.args[0] === 'fetch'), false);
+  const rec = readRecord(r);
+  assert.equal(rec.schema, 2);
+  assert.equal(rec.pr, null);
+  assert.deepEqual(rec.target, { range: `${BASE}..${HEAD}` });
+  const armKey = `v1-${BAND_MODEL.MID}-cursor`;
+  assert.equal(rec.branch, `range-${BASE.slice(0, 12)}-${armKey}`);
+  assert.equal(rec.head, HEAD);
+  assert.equal(r.recordPath, path.join(w.stateRoot, `range-${BASE.slice(0, 12)}-${armKey}`, HEAD, `${rec.runId}.json`));
+  assert.equal(rec.mode, 'full');
+  assert.equal(w.prepareInput.range, `${BASE}..${HEAD}`);
+  assert.equal(w.reserveCalls[0][1].ref, `eval-range-${BASE.slice(0, 8)}-${HEAD.slice(0, 8)}-${armKey}`);
+  const end = lines(w.cursorLedger).filter((l) => l.phase === 'end')[0];
+  assert.equal(end.pr, null);
+  assert.equal(end.head, HEAD);
+});
+
+test('--range: two arms on one range land in two folders with two cap refs; neither is skipped as "range done" and each stored majorsOpen counts only its own Majors (breaks if arms share a folder or a ref)', async () => {
+  const w = rangeWorld({ runs: [agentRun([finding()]), agentRun([finding({ title: 'Another Major', startLine: 4, endLine: 4 })])] });
+  const a = await run(w, { pr: undefined, range: RANGE, arm: 'arm-a' });
+  const b = await run(w, { pr: undefined, range: RANGE, arm: 'arm-b', promptVersion: 'v2' });
+  assert.equal(a.exit, EXIT.OK);
+  assert.equal(b.exit, EXIT.OK, JSON.stringify(b));
+  assert.equal(w.agentCalls.length, 2);
+  const [ra, rb] = [readRecord(a), readRecord(b)];
+  assert.equal(ra.armId, 'arm-a');
+  assert.equal(rb.armId, 'arm-b');
+  assert.equal(rb.mode, 'full', 'the second arm does not run as a delta on the first arm findings');
+  assert.equal(ra.branch, `range-${BASE.slice(0, 12)}-arm-a`);
+  assert.equal(rb.branch, `range-${BASE.slice(0, 12)}-arm-b`);
+  assert.notEqual(path.dirname(a.recordPath), path.dirname(b.recordPath), 'two folders');
+  assert.equal(readdirSync(path.join(w.stateRoot, ra.branch, HEAD)).filter((n) => n.endsWith('.json') && !n.endsWith('.trace.json')).length, 1, 'one record in the folder of arm-a');
+  assert.equal(ra.majorsOpen, 1);
+  assert.equal(rb.majorsOpen, 1, 'arm-b counts its own Major only: in one shared folder the union would give 2');
+  const [refA, refB] = w.reserveCalls.map((c) => c[1].ref);
+  assert.equal(refA, `eval-range-${BASE.slice(0, 8)}-${HEAD.slice(0, 8)}-arm-a`);
+  assert.equal(refB, `eval-range-${BASE.slice(0, 8)}-${HEAD.slice(0, 8)}-arm-b`);
+  const again = await run(w, { pr: undefined, range: RANGE, arm: 'arm-a' });
+  assert.equal(again.exit, EXIT.OK, 'a range run is fresh: its own earlier record does not skip it');
+});
+
+test('--range without --arm: the arm key is <prompt version>-<model>-<backend>, so two prompt versions or two models on one range do not share a folder or a ref (breaks if the default arm key drops a part)', async () => {
+  const w = rangeWorld();
+  const recs = [];
+  for (const o of [{}, { promptVersion: 'v2' }, { model: 'grok-4.7-xhigh' }]) recs.push(readRecord(await run(w, { pr: undefined, range: RANGE, ...o })));
+  assert.deepEqual(recs.map((r) => r.branch), [`v1-grok-4.7-high-cursor`, `v2-grok-4.7-high-cursor`, `v1-grok-4.7-xhigh-cursor`].map((k) => `range-${BASE.slice(0, 12)}-${k}`));
+  assert.equal(new Set(w.reserveCalls.map((c) => c[1].ref)).size, 3);
+});
+
+test('--pr flag run: two arms on one PR head land in two folders <branch>-<arm key>, so each stored majorsOpen counts only its own Majors (breaks if only range runs get an arm folder)', async () => {
+  const w = world({ runs: [agentRun([finding()]), agentRun([finding({ title: 'Another Major', startLine: 4, endLine: 4 })])] });
+  const a = await run(w, { arm: 'arm-a' });
+  const b = await run(w, { arm: 'arm-b' });
+  assert.equal(a.exit, EXIT.OK, JSON.stringify(a));
+  assert.equal(b.exit, EXIT.OK, JSON.stringify(b));
+  const [ra, rb] = [readRecord(a), readRecord(b)];
+  assert.equal(ra.branch, 'feat/x-arm-a');
+  assert.equal(rb.branch, 'feat/x-arm-b');
+  assert.notEqual(path.dirname(a.recordPath), path.dirname(b.recordPath), 'two folders');
+  assert.equal(ra.majorsOpen, 1);
+  assert.equal(rb.majorsOpen, 1, 'in one shared folder the union would give 2');
+});
+
+test('state isolation: with no injected live ledger, the real default ledger path is the live one (breaks if liveOf falls back to anything but defaultLedgerPath({}))', async () => {
+  const w = world();
+  const r = await run(w, { promptVersion: 'v2' }, { liveCursorLedger: undefined, cursorLedger: defaultLedgerPath({}) });
+  assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(r));
+  assert.match(r.reason, /live cursor ledger/);
+  assert.equal(w.gitCalls.length + w.ghCalls.length + w.reserveCalls.length, 0);
+});
+
+test('a --range run with local_review.enabled false writes a skip row that names the range (breaks if the row carries only pr)', async () => {
+  const w = rangeWorld();
+  const r = await run(w, { pr: undefined, range: RANGE }, { configPath: tempConfig(w, (c) => { c.local_review = { ...c.local_review, enabled: false }; }) });
+  assert.match(r.skipReason, /enabled is false/);
+  const rows = skipRows(w);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].range, RANGE);
+  assert.equal(rows[0].pr, null);
+});
+
+test('resolveRangeTarget refuses two unrelated roots: no merge base is BAD_INPUT and no diff runs (breaks if the no-merge-base refusal is deleted)', () => {
+  const r = rangeRepo();
+  gitIn(r.dir, 'checkout', '-q', '--orphan', 'other');
+  writeFileSync(path.join(r.dir, 'z.txt'), 'z\n');
+  gitIn(r.dir, 'add', '-A');
+  gitIn(r.dir, 'commit', '-q', '-m', 'unrelated root');
+  gitIn(r.dir, 'update-ref', 'refs/eval/seed/orphan', gitIn(r.dir, 'rev-parse', 'HEAD'));
+  const calls = [];
+  assert.throws(() => LR.resolveRangeTarget({ root: r.dir, range: 'refs/eval/seed/h1..refs/eval/seed/orphan' }, { git: recordingGit(r.dir, calls) }), (e) => e.code === 'BAD_INPUT' && /no merge base/.test(e.message));
+  assert.equal(calls.some((a) => a[0] === 'diff'), false, 'the diff never ran');
+});
+
+test('the model gate runs on the default path: a band model that is not allowed ends the run with exit 2 before the agent (breaks if the gate is skipped when --model is absent)', async () => {
+  const saved = BAND_MODEL.MID;
+  try {
+    for (const bad of ['grok-4.7-high-fast', 'auto', 'claude-haiku-4-5', 'grok-9']) {
+      BAND_MODEL.MID = bad;
+      const w = world();
+      const r = await run(w);
+      assert.equal(r.exit, EXIT.REFUSED, bad);
+      assert.match(r.reason, /band MID/, bad);
+      assert.equal(w.agentCalls.length + w.reserveCalls.length, 0, bad);
+      assert.equal(existsSync(w.cursorLedger), false, bad);
+    }
+  } finally { BAND_MODEL.MID = saved; }
+});
+
+test('--range with an unknown ref exits 2 and calls no agent, no fetch and no gh (breaks if a bad ref becomes exit 1 or a fetch)', async () => {
+  const w = rangeWorld();
+  const r = await run(w, { pr: undefined, range: 'seed-base..nope' });
+  assert.equal(r.exit, EXIT.REFUSED);
+  assert.equal(w.agentCalls.length + w.ghCalls.length, 0);
+  assert.equal(w.gitCalls.some((c) => c.args[0] === 'fetch'), false);
+  assert.equal(w.reserveCalls.length, 0);
+});
+
+// ---------- engine-trusted-findings: a rename into an excluded folder ----------
+
+test('resolveTarget keeps a file renamed into an excluded folder, and drops a file whose old and new names are both excluded (breaks if the filter looks at the new name only)', async () => {
+  const w = world({ nameStatus: 'R90\0scripts/github/local-review.mjs\0artifacts/x.mjs\0R90\0artifacts/a.mjs\0.claudedocs/b.mjs\0M\0.claudedocs/c.md\0R90\0.claudedocs/d.md\0src/d.md\0' });
+  const t = await resolveTarget({ root: w.T, pr: 7, gh: async () => w.pull }, { git: fakeGit(w), withLock: (f, o, fn) => fn(), stateRoot: w.stateRoot });
+  assert.deepEqual(t.files, [{ filename: 'artifacts/x.mjs', previous_filename: 'scripts/github/local-review.mjs' }, { filename: 'src/d.md', previous_filename: '.claudedocs/d.md' }]);
+});
+
+test('rename into an excluded folder: the run keeps the record, the band sees the old path (CRITICAL), and the coverage says nothing was reviewed (breaks if the rename drops out of the band, or the record claims complete)', async () => {
+  const w = world({ nameStatus: 'R90\0scripts/github/local-review.mjs\0artifacts/x.mjs\0' });
+  const r = await run(w);
+  assert.equal(r.exit, EXIT.OK, JSON.stringify(r));
+  assert.equal(r.skipReason, null);
+  const rec = readRecord(r);
+  assert.equal(rec.band.band, 'CRITICAL', 'bandOf reads previous_filename');
+  assert.equal(rec.model, 'grok-4.7-xhigh');
+  assert.equal(rec.coverage.selected, 1);
+  assert.equal(rec.coverage.claimedReviewed, 0, 'the new path is not in the review tree');
+  assert.equal(rec.coverage.complete, false, 'a rename-only change into an excluded folder is never a silent complete');
+});
+
+// ---------- schema 2 ----------
+
+test('the record holds every RECORD_FIELDS key with the contract value, for an ok run and a failed run (breaks if buildRecord omits a field or fills it with a wrong empty value)', async () => {
+  assert.ok(Array.isArray(REC.RECORD_FIELDS) && REC.RECORD_FIELDS.length >= 12);
+  assert.equal(REC.RECORD_SCHEMA, 2);
+  for (const [name, w] of [['ok', world()], ['failed', world({ runs: [failRun(1)] })]]) {
+    const rec = readRecord(await run(w, { arm: 'arm-x' }));
+    assert.equal(rec.schema, REC.RECORD_SCHEMA, name);
+    for (const key of REC.RECORD_FIELDS) assert.ok(key in rec, `${name}: ${key}`);
+    assert.equal(rec.contextVersion, null);
+    assert.equal(rec.armId, 'arm-x');
+    assert.deepEqual(rec.verify, []);
+    assert.equal(rec.uncertainMajors, 0);
+    assert.deepEqual(rec.impactRows, []);
+    assert.equal(rec.overallCorrectness, null);
+    assert.equal(rec.backend, 'cursor');
+    assert.deepEqual(rec.target, { pr: 7 });
+    assert.equal(rec.engineMainSha, null, 'an --engine-here run has no fork/main compare');
+    assert.deepEqual(rec.runIds, rec.runs.map((x) => x.runId));
+    assert.equal(rec.cursorRunId, rec.runId);
+  }
+  const noArm = readRecord(await run(world()));
+  assert.equal(noArm.armId, null);
+});
+
+test('runIds lists every attempt and cursorRunId is the final one (breaks if a retried run records one id)', async () => {
+  const w = world({ runs: [spawnErrRun(), agentRun([finding()])] });
+  const rec = readRecord(await run(w));
+  assert.equal(rec.runIds.length, 2);
+  assert.notEqual(rec.runIds[0], rec.runIds[1]);
+  assert.equal(rec.cursorRunId, rec.runIds[1]);
+  assert.equal(rec.cursorRunId, rec.runId);
+});
+
+test('a pinned run records engineMainSha: the sha computeTrust compared against, from one resolve of fork/main; an unresolvable fork/main gives null and untrusted (breaks if the field stays null, takes the pinned sha, or comes from a second rev-parse)', async () => {
+  const go = async (resolve) => {
+    const w = world();
+    const root = engineCopy();
+    const git = fakeGit(w);
+    const resolves = [];
+    const blobCalls = [];
+    const r = await run(w, { engineHere: false }, {
+      env: { LOCAL_REVIEW_PINNED: SHA }, selfPath: path.join(w.stateRoot, 'engine', SHA, 'scripts', 'github', 'local-review.mjs'), selfRoot: root, configPath: path.join(root, 'review-router.config.json'),
+      git: (args, o) => {
+        if (args[0] !== 'rev-parse') return git(args, o);
+        if (args.includes('--verify')) { resolves.push(args); return resolve(args); }
+        blobCalls.push(args);
+        return trustGit(root)(args);
+      },
+    });
+    assert.equal(r.exit, EXIT.OK, JSON.stringify(r));
+    return { rec: readRecord(r), resolves, blobCalls };
+  };
+  const ok1 = await go((args) => { assert.ok(args.some((a) => a === 'fork/main^{commit}')); return ok(`${MAIN_SHA}\n`); });
+  assert.equal(ok1.rec.engineMainSha, MAIN_SHA);
+  assert.equal(ok1.resolves.length, 1, 'fork/main is resolved once for the whole run');
+  assert.ok(ok1.blobCalls[0].slice(1).every((a) => a.startsWith(`${MAIN_SHA}:`)), 'the blobs were compared against the sha the record names');
+  assert.equal(ok1.rec.engineSha, SHA);
+  assert.equal(ok1.rec.trusted, true);
+  const bad = await go(() => ({ status: 1, stdout: '', stderr: 'bad' }));
+  assert.equal(bad.rec.engineMainSha, null);
+  assert.equal(bad.rec.trusted, false, 'no fork/main to compare against is not trusted');
+  assert.equal((await go(() => ok('not-a-sha\n'))).rec.engineMainSha, null);
+});
+
+// ---------- weekly_live_cap ----------
+
+const cfgFile = (obj) => { const f = path.join(tmp('cfg'), 'c.json'); writeFileSync(f, JSON.stringify(obj)); return f; };
+
+test('weekly_live_cap: a config with no local_review block and one with a block without the key both read 100 (breaks if the default is dropped or changed)', () => {
+  assert.equal(LR.LOCAL_REVIEW_DEFAULTS.weekly_live_cap, 100);
+  assert.equal(loadConfig(cfgFile({})).cfg.weekly_live_cap, 100);
+  assert.equal(loadConfig(cfgFile({ local_review: { max_concurrent: 3 } })).cfg.weekly_live_cap, 100);
+  assert.equal(loadConfig(cfgFile({ local_review: { weekly_live_cap: 40 } })).cfg.weekly_live_cap, 40);
+  assert.equal(loadConfig(REAL_CONFIG).ok, true);
+});
+
+test('weekly_live_cap: 0, -1, 1.5, "100", null and true are refused by loadConfig (breaks if the key is not in KINDS)', () => {
+  for (const bad of [0, -1, 1.5, '100', null, true]) {
+    const c = loadConfig(cfgFile({ local_review: { weekly_live_cap: bad } }));
+    assert.equal(c.ok, false, JSON.stringify(bad));
+    assert.match(c.reason, /weekly_live_cap/);
+  }
+});
+
+// ---------- round 3 (seat review of re-engine-cli-schema) ----------
+
+/** A git whose pathspec diff lists the names it was asked for, so DELTA.diff holds a path only when the engine asked git for it. */
+function echoingGit(w) {
+  const base = fakeGit(w);
+  return (args, o) => {
+    if (args[0] !== '--literal-pathspecs') return base(args, o);
+    w.gitCalls.push({ args, input: o?.input });
+    return ok(namesAfterDashes(args).map((n) => `diff --git a/${n} b/${n}\n+x\n`).join(''));
+  };
+}
+
+test('M1 a delta run drops a file renamed into an excluded folder from the delta list, DELTA.diff and the prompt, while the band still sees the old path (breaks if stepDelta keeps the excluded new name in deltaFiles)', async () => {
+  for (const dest of ['scripts/eval/review-eval/gold/x.mjs', 'artifacts/x.mjs']) {
+    const w = world({ nameStatus: `R90\0scripts/github/local-review.mjs\0${dest}\0M\0src/app.mjs\0`, changedSince: `${dest}\0src/app.mjs\0` });
+    oldRecord(w);
+    const r = await run(w, {}, { git: echoingGit(w) });
+    assert.equal(r.exit, EXIT.OK, `${dest}: ${JSON.stringify(r)}`);
+    const rec = readRecord(r);
+    assert.equal(rec.mode, 'delta', dest);
+    assert.equal(rec.band.band, 'CRITICAL', `${dest}: bandOf still reads the old path of the rename`);
+    assert.equal(rec.coverage.selected, 1, `${dest}: only the reviewable delta file is counted`);
+    assert.equal(rec.coverage.claimedReviewed, 1, dest);
+    const spec = w.gitCalls.find((c) => c.args[0] === '--literal-pathspecs' && c.args.includes(FROM));
+    assert.deepEqual(namesAfterDashes(spec.args), ['src/app.mjs'], `${dest}: git was not asked for the excluded path`);
+    assert.ok(!w.agentCalls[0].delta.includes(dest), `${dest}: DELTA.diff holds the excluded path`);
+    assert.ok(w.agentCalls[0].delta.includes('src/app.mjs'), dest);
+    assert.ok(!w.agentCalls[0].prompt.includes(dest), `${dest}: PROMPT.md names the excluded path`);
+    assert.ok(w.agentCalls[0].prompt.includes('src/app.mjs'), dest);
+  }
+});
+
+test('M1 CONTEXT.md never reads or names a path in an excluded folder, in full mode and in delta mode: a file renamed into one reaches the context by its old name only (breaks if writeReviewDir hands target.files, with the excluded new name, to buildContext)', async () => {
+  for (const mode of ['full', 'delta']) {
+    for (const [dest, folder] of [['scripts/eval/review-eval/gold/x.mjs', 'scripts/eval/review-eval/gold/'], ['artifacts/x.mjs', 'artifacts/']]) {
+      const w = world({ nameStatus: `R90\0scripts/github/local-review.mjs\0${dest}\0M\0src/app.mjs\0`, changedSince: `${dest}\0src/app.mjs\0` });
+      if (mode === 'delta') oldRecord(w);
+      const r = await run(w, {}, { git: echoingGit(w) });
+      assert.equal(r.exit, EXIT.OK, `${mode} ${dest}: ${JSON.stringify(r)}`);
+      assert.equal(readRecord(r).mode, mode);
+      assert.deepEqual(w.readAtCalls.filter((c) => c.rel.startsWith(folder)), [], `${mode} ${dest}: a file under the excluded folder was read at the merge base`);
+      assert.ok(w.readAtCalls.some((c) => c.rel.startsWith('scripts/github/')), `${mode} ${dest}: the old name still gets its folder guidelines read`);
+      assert.ok(!w.agentCalls[0].context.includes(dest), `${mode} ${dest}: CONTEXT.md names the excluded path`);
+    }
+  }
+});
+
+test('M1 a delta whose only changed file is one renamed into an excluded folder is empty and skips (breaks if the excluded file alone still starts the agent)', async () => {
+  const w = world({ nameStatus: 'R90\0scripts/github/local-review.mjs\0artifacts/x.mjs\0', changedSince: 'artifacts/x.mjs\0' });
+  oldRecord(w);
+  const r = await run(w, {}, { git: echoingGit(w) });
+  assert.match(r.skipReason, /delta is empty/);
+  assert.equal(w.agentCalls.length, 0);
+});
+
+test('state isolation: a records root that is a parent of the live root is refused, also when a branch named local and --arm review make the final folder the live root itself (breaks if only a records folder under the live root is refused)', async () => {
+  for (const ref of ['local', 'feat/x']) {
+    const w = world({ pull: pullOf({ head: { sha: HEAD, ref } }) });
+    const live = path.join(w.T, 'state', 'local-review');
+    const r = await run(w, { arm: 'review' }, { stateRoot: path.join(w.T, 'state'), liveStateRoot: live });
+    assert.equal(r.exit, EXIT.REFUSED, `${ref}: ${JSON.stringify(r)}`);
+    assert.match(r.reason, /live state root/, ref);
+    assert.equal(w.gitCalls.length + w.ghCalls.length + w.agentCalls.length + w.reserveCalls.length, 0, `${ref}: refused before any call`);
+    assert.equal(existsSync(live), false, `${ref}: nothing was made in the live root`);
+  }
+});
+
+test('state isolation: the final record folder is judged after the arm key is known: a link in an isolated records root that leads into the live root is refused (breaks if only the records root, not <records>/<slug>, is checked)', async () => {
+  const w = world();
+  const live = path.join(tmp('final-live'), 'live', 'local-review');
+  mkdirSync(live, { recursive: true });
+  mkdirSync(w.stateRoot, { recursive: true });
+  symlinkSync(live, path.join(w.stateRoot, 'feat-x-a1'), 'junction'); // PR branch feat/x + arm a1 = folder feat-x-a1
+  const r = await run(w, { arm: 'a1' }, { liveStateRoot: live });
+  assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(r));
+  assert.match(r.reason, /live state root/);
+  assert.equal(w.agentCalls.length + w.reserveCalls.length, 0);
+  assert.deepEqual(readdirSync(live), [], 'nothing was written through the link');
+});
+
+test('state isolation: a link at the HEAD folder <records>/<slug>/<head40> that leads into the live root is refused (breaks if the check stops at <records>/<slug>)', async () => {
+  const w = world();
+  const live = path.join(tmp('head-live'), 'live', 'local-review');
+  mkdirSync(live, { recursive: true });
+  mkdirSync(path.join(w.stateRoot, 'feat-x-a1'), { recursive: true });
+  symlinkSync(live, path.join(w.stateRoot, 'feat-x-a1', HEAD.toLowerCase()), 'junction');
+  const r = await run(w, { arm: 'a1' }, { liveStateRoot: live });
+  assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(r));
+  assert.match(r.reason, /live state root/);
+  assert.equal(w.agentCalls.length + w.reserveCalls.length, 0);
+  assert.deepEqual(readdirSync(live), [], 'nothing was written through the link');
+});
+
+test('state isolation: a records root in a folder of the live root whose name starts with ".." (e.g. <live>/..eval) is inside the live root and refused (breaks if any relative path that starts with ".." counts as outside)', async () => {
+  const w = world();
+  const live = path.join(tmp('dotdot-live'), 'live', 'local-review');
+  mkdirSync(live, { recursive: true });
+  const r = await run(w, { promptVersion: 'v2' }, { liveStateRoot: live, stateRoot: path.join(live, '..eval', 'records') });
+  assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(r));
+  assert.match(r.reason, /live state root/);
+  assert.equal(w.gitCalls.length + w.ghCalls.length + w.agentCalls.length + w.reserveCalls.length, 0);
+});
+
+test('state isolation: a cursor ledger file under the live root is refused, given by deps or by CURSOR_REVIEW_LEDGER (breaks if only the live default ledger file is compared)', async () => {
+  const live = path.join(tmp('ledger-in-live'), 'live', 'local-review');
+  const inside = path.join(live, 'nested', 'cursor.jsonl');
+  const viaDeps = world();
+  const a = await run(viaDeps, { promptVersion: 'v2' }, { liveStateRoot: live, cursorLedger: inside });
+  assert.equal(a.exit, EXIT.REFUSED, JSON.stringify(a));
+  assert.match(a.reason, /live state root/);
+  const viaEnv = world();
+  const b = await run(viaEnv, { promptVersion: 'v2' }, { liveStateRoot: live, cursorLedger: undefined, env: { PATH: 'x', CURSOR_REVIEW_LEDGER: inside } });
+  assert.equal(b.exit, EXIT.REFUSED, JSON.stringify(b));
+  assert.match(b.reason, /live state root/);
+  for (const w of [viaDeps, viaEnv]) assert.equal(w.gitCalls.length + w.ghCalls.length + w.agentCalls.length + w.reserveCalls.length, 0);
+  assert.equal(existsSync(inside), false);
+  const outside = world();
+  assert.equal((await run(outside, { promptVersion: 'v2' }, { liveStateRoot: live })).exit, EXIT.OK, 'a ledger elsewhere is not refused');
+});
+
+test('main refuses a flag run aimed at the live root before it asks git for the repo root (breaks if the live-root check sits below repoRoot())', async () => {
+  const dir = tmp('main-first');
+  const liveRoot = path.join(dir, 'live', 'local-review');
+  let roots = 0;
+  const base = { env: { LOCAL_REVIEW_STATE_DIR: liveRoot }, liveStateRoot: liveRoot, repoRoot: () => { roots += 1; return dir; }, stdout: () => {}, stderr: () => {}, pinEngine: () => ({ ok: false, reason: 'stop' }) };
+  assert.equal(await main(['--pr', '7', '--arm', 'x'], base), EXIT.REFUSED);
+  assert.equal(roots, 0, 'no repo root lookup (a git spawn) before the refusal');
+  assert.equal(await main(['--pr', '7', '--arm', 'x', '--engine-here'], base), EXIT.REFUSED, 'a flag run that runs in place is refused first too');
+  assert.equal(roots, 0, 'also with --engine-here');
+  assert.equal(await main(['--pr', '7'], base), EXIT.REFUSED, 'the default run reaches the pin, which the stub fails');
+  assert.equal(roots, 1, 'the default run does look up the repo root through deps.repoRoot (the spy is wired)');
+});
+
+const SCHEMA2_ADDED = ['contextVersion', 'armId', 'verify', 'uncertainMajors', 'impactRows', 'overallCorrectness', 'runIds', 'cursorRunId', 'engineMainSha', 'backend', 'target'];
+const sortDeep = (v) => (Array.isArray(v) ? v.map(sortDeep) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortDeep(v[k])])) : v);
+
+test('schema 1 tie to main: a default run, minus runId, ts, schema, majorsOpen, the 11 schema 2 keys and each run runId, keys sorted deeply, hashes to the value taken on main 5a6f0f6e (breaks if the default path changes any other record field)', async () => {
+  const w = world();
+  const r = await run(w);
+  const out = { ...readRecord(r) };
+  for (const k of ['runId', 'ts', 'schema', 'majorsOpen', ...SCHEMA2_ADDED]) delete out[k];
+  out.runs = (out.runs ?? []).map(({ runId, ...x }) => x);
+  // This constant was TAKEN ON MAIN 5a6f0f6e with this exact procedure (.claudedocs/e2e-re-engine-cli-schema/17-schema1-core-hash-main.txt). Never regenerate it on this branch.
+  assert.equal(sha256(JSON.stringify(sortDeep(out))), 'd067e8313cacf4a8ea5cbfd8c8c50940e52404c4c510a66e853d35a36fbf9a34');
+});
+
+test('resolveRangeTarget puts --end-of-options before the ref in both rev-parse calls (breaks if the flag is removed: a ref that starts with a dash would then reach git as an option)', () => {
+  const r = rangeRepo();
+  const calls = [];
+  LR.resolveRangeTarget({ root: r.dir, range: 'refs/eval/seed/b1..refs/eval/seed/h1' }, { git: recordingGit(r.dir, calls) });
+  const parses = calls.filter((a) => a[0] === 'rev-parse');
+  assert.deepEqual(parses.map((a) => a.at(-1)), ['refs/eval/seed/b1^{commit}', 'refs/eval/seed/h1^{commit}']);
+  for (const a of parses) {
+    assert.ok(a.includes('--end-of-options'), a.join(' '));
+    assert.equal(a.indexOf('--end-of-options'), a.length - 2, `the flag sits right before the ref: ${a.join(' ')}`);
+  }
+});
+
+test('a live-root refusal names paths under the home folder as ~/..., never the user home path (breaks if the clash message prints the full path)', async () => {
+  const home = os.homedir();
+  const liveRoot = path.join(home, '.claude', 'state', 'local-review');
+  const liveLedger = path.join(home, '.claude', 'state', 'cursor-review-ledger.jsonl');
+  const a = world();
+  const rootClash = await run(a, { arm: 'x' }, { stateRoot: liveRoot, liveStateRoot: liveRoot });
+  assert.equal(rootClash.exit, EXIT.REFUSED, JSON.stringify(rootClash));
+  assert.ok(!rootClash.reason.includes(home), rootClash.reason);
+  assert.ok(rootClash.reason.includes('~/.claude/state/local-review'), rootClash.reason);
+  const b = world();
+  const ledgerClash = await run(b, { arm: 'x' }, { cursorLedger: liveLedger, liveCursorLedger: liveLedger });
+  assert.equal(ledgerClash.exit, EXIT.REFUSED, JSON.stringify(ledgerClash));
+  assert.ok(!ledgerClash.reason.includes(home), ledgerClash.reason);
+  assert.ok(ledgerClash.reason.includes('~/.claude/state/cursor-review-ledger.jsonl'), ledgerClash.reason);
+  for (const w of [a, b]) assert.equal(w.gitCalls.length + w.agentCalls.length + w.reserveCalls.length, 0);
+});
+
+// ---------- round 4 (critic items on the excluded-folder rename) ----------
+
+/** A git whose pathspec diff gives every name a hunk over line 1 (so a prior finding there is touched) and records each call. */
+function hunkGit(w) {
+  const base = fakeGit(w);
+  return (args, o) => {
+    if (args[0] !== '--literal-pathspecs') return base(args, o);
+    w.gitCalls.push({ args, input: o?.input });
+    return ok(namesAfterDashes(args).map((n) => `diff --git a/${n} b/${n}\n--- a/${n}\n+++ b/${n}\n@@ -1,1 +1,1 @@\n-a\n+b\n`).join(''));
+  };
+}
+
+test('R4-1 a prior finding on a file renamed into an excluded folder stays on its old path: PRIOR.json and the pathspec diff never hold the excluded name (breaks if priorUnderRenames moves the finding to the excluded name, or writeDeltaFiles sends it)', async () => {
+  for (const dest of ['scripts/eval/review-eval/gold/x.mjs', 'artifacts/x.mjs']) {
+    const w = world({ nameStatus: `R90\0src/old.mjs\0${dest}\0M\0src/app.mjs\0`, changedSince: `${dest}\0src/app.mjs\0` });
+    oldRecord(w, { findings: [{ id: 'p1', file: 'src/old.mjs', startLine: 1, endLine: 1, severity: 'major', status: 'open', title: 'Old one', body: 'Old body' }] });
+    const r = await run(w, {}, { git: hunkGit(w) });
+    assert.equal(r.exit, EXIT.OK, `${dest}: ${JSON.stringify(r)}`);
+    const prior = JSON.parse(w.agentCalls[0].prior);
+    assert.deepEqual(prior.map((f) => f.file), ['src/old.mjs'], `${dest}: the finding stays on the old name and is still sent`);
+    assert.ok(!w.agentCalls[0].prior.includes(`${dest}"`), `${dest}: PRIOR.json holds the excluded file`);
+    for (const c of w.gitCalls.filter((x) => x.args[0] === '--literal-pathspecs')) assert.ok(!c.args.includes(dest), `${dest}: a pathspec diff names the excluded path: ${c.args.join(' ')}`);
+  }
+});
+
+test('R4-2 coverage and the trace diffFiles use the names the model sees: a rename-only PR into an excluded folder counts the old name, and the excluded name is never claimed or traced (breaks if inSet and diffFiles read target.files filenames)', async () => {
+  const mk = (reviewed) => world({ nameStatus: 'R90\0src/old.mjs\0artifacts/x.mjs\0', treeFiles: { 'src/old.mjs': SRC }, runs: [agentRun([], { reviewed })] });
+  const w = mk(['src/old.mjs']);
+  const r = await run(w);
+  assert.equal(r.exit, EXIT.OK, JSON.stringify(r));
+  const rec = readRecord(r);
+  assert.equal(rec.coverage.claimedReviewed, 1, 'the old name the model saw counts');
+  assert.equal(rec.coverage.complete, true);
+  const trace = JSON.parse(readFileSync(besideRecord(r, '.trace.json'), 'utf8'));
+  assert.deepEqual(trace.diffFiles, ['src/old.mjs']);
+  const none = mk(['artifacts/x.mjs']);
+  const rec2 = readRecord(await run(none));
+  assert.equal(rec2.coverage.claimedReviewed, 0, 'the excluded new name was never shown, so a claim on it counts for nothing');
+  assert.equal(rec2.coverage.complete, false);
+});
+
+test('R4-3 a flag run whose cursor ledger sits in the live root parent folder is refused, also the slots file name and the live default ledger (breaks if only a ledger under the live root is refused)', async () => {
+  const live = path.join(tmp('ledger-sibling'), 'live', 'local-review');
+  const parent = path.dirname(live);
+  for (const name of ['local-review-ledger.jsonl', 'local-review-slots.json', 'cursor-review-ledger.jsonl']) {
+    const w = world();
+    const r = await run(w, { promptVersion: 'v2' }, { liveStateRoot: live, cursorLedger: path.join(parent, name) });
+    assert.equal(r.exit, EXIT.REFUSED, `${name}: ${JSON.stringify(r)}`);
+    assert.match(r.reason, /live state/, name);
+    assert.equal(w.gitCalls.length + w.ghCalls.length + w.agentCalls.length + w.reserveCalls.length, 0, `${name}: refused before any call`);
+  }
+  const deeper = world();
+  assert.equal((await run(deeper, { promptVersion: 'v2' }, { liveStateRoot: live, cursorLedger: path.join(parent, 'elsewhere', 'x.jsonl') })).exit, EXIT.OK, 'a ledger in a sub-folder of the parent is not refused');
+});
+
+test('R4-4 a record write error that holds the home folder reaches the end line and the reason as ~/... (breaks if only part of the message is passed through homeRel)', async () => {
+  const home = os.homedir();
+  const w = world();
+  const r = await run(w, {}, { writeRecord: () => { throw new Error(`cannot write ${path.join(home, 'x', 'rec.json')}`); } });
+  assert.equal(r.exit, EXIT.FAILED);
+  const end = lines(w.cursorLedger).filter((l) => l.phase === 'end').at(-1);
+  assert.match(end.error, /record write failed/);
+  assert.ok(!end.error.includes(home), end.error);
+  assert.ok(!r.reason.includes(home), r.reason);
+  assert.ok(r.reason.includes('~'), r.reason);
+});
+
+test('R4-5 CONTEXT.md input holds no excluded name: a rename OUT of an excluded folder is read by its new name only, in full and delta mode (breaks if contextFiles keeps an excluded previous_filename)', async () => {
+  for (const mode of ['full', 'delta']) {
+    const w = world({ nameStatus: 'R90\0scripts/eval/review-eval/gold/x.json\0src/x.json\0M\0src/app.mjs\0', changedSince: 'src/x.json\0src/app.mjs\0' });
+    if (mode === 'delta') oldRecord(w);
+    const r = await run(w, {}, { git: echoingGit(w) });
+    assert.equal(r.exit, EXIT.OK, `${mode}: ${JSON.stringify(r)}`);
+    assert.equal(readRecord(r).mode, mode);
+    assert.deepEqual(w.readAtCalls.filter((c) => c.rel.includes('review-eval/gold')), [], `${mode}: an excluded name was read at the merge base`);
+    assert.ok(!w.agentCalls[0].context.includes('review-eval/gold'), `${mode}: CONTEXT.md names the excluded path`);
+  }
 });
