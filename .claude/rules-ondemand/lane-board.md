@@ -42,7 +42,7 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | O3.3 | Before a pull request opens, run `git diff --name-only main...<branch>`. Compare it with the scope. Put the output in Evidence. | advice; warn (planned) |
 | O3.4 | A lane that changes tracked files works on its own branch. A new branch or a new worktree needs Dave's yes. For `re-` lanes after GO: one lane, one worktree, one branch `re/<lane-id>`, one pull request (one exception in the README: the one trial pack on the Pack line of `map.md`; Dave, 2026-11-10). | advice |
 | O3.5 | A commit or a push needs Dave's yes for that task. Commit only your own files. Commits on one branch run one after another. Say so with `L say` before a commit run. | advice |
-| O3.6 | A tracked file has one claim for every checkout of its repo. A `.claude/cache` claim stays in its own checkout. A holder frees one finished file: `node C:/Users/dkhay/.claude/hooks/dist/release-claim.mjs <path>`. | advice; deny (`file-claims` hook) |
+| O3.6 | A tracked file has one claim for every worktree of one clone. A `.claude/cache` claim stays in its own checkout. A holder frees one finished file: `node C:/Users/dkhay/.claude/hooks/dist/release-claim.mjs <path>`. | advice; deny (`file-claims` hook) |
 | O3.7 | Never edit a worktree copy of `lane.mjs` outside your lane's write set. Run a worktree copy only against a scratch database (`CONTINUOUS_CLAUDE_DB_URL`). | advice |
 | O3.8 | Stage `.claude/hooks/dist/*` only for your own hook build. One hook build is in work at a time. A dist commit on `main` reaches every session. | advice |
 | O3.9 | Run a `*-probe.mjs` only with `CONTINUOUS_CLAUDE_DB_URL` set to a scratch database. A probe can write to the live database by default. | advice |
