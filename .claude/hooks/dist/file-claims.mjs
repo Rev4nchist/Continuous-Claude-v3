@@ -6613,14 +6613,17 @@ function isHeldSpelling(content, claims, fold) {
   const lower = s.toLowerCase();
   const whole = claims.some((c) => c.forms.some((f) => fold ? spellingOf(f).toLowerCase() === lower : spellingOf(f) === s) || (c.ciForms ?? []).some((f) => spellingOf(f).toLowerCase() === lower));
   if (whole) return true;
-  if (/\s/.test(s)) return false;
   return claims.some((c) => {
     const exact = c.forms.map(spellingOf).filter(Boolean).map((f) => fold ? f.toLowerCase() : f);
     const ci = (c.ciForms ?? []).map(spellingOf).filter(Boolean).map((f) => f.toLowerCase());
     return [[fold ? lower : s, exact], [lower, ci]].some(([hay, forms]) => {
       if (forms.length === 0) return false;
       const alt = forms.map(escapeRe).join("|");
-      return new RegExp(`${PATH_START}(?:${alt})${PATH_END}`).test(hay);
+      for (const m of hay.matchAll(new RegExp(`${PATH_START}(?:${alt})${PATH_END}`, "g"))) {
+        const rest = hay.slice(0, m.index) + hay.slice(m.index + m[0].length);
+        if (!/\s/.test(rest)) return true;
+      }
+      return false;
     });
   });
 }

@@ -124,6 +124,35 @@ describe('fail closed: a sign that the quotes may be misread keeps the whole tex
   });
 });
 
+// CodeRabbit CLI run 1 of 2 finding (a), Dave's tap "One last fix, then land": a held file whose OWN name has a space.
+// A string that holds the held path plus white-space-free text around it is still ONE operand (a wildcard, a stream).
+// Only the white space of the path itself is allowed in an operand. Prose around the path still has spaces.
+describe('a held path with a space in its name', () => {
+  const HELD_SP = [{ filePath: 'src/my file.ts', forms: ['src/my file.ts', 'c:/repo/src/my file.ts'] }];
+  const sp = (text: string) => classifyShellText(text, HELD_SP, false);
+
+  it.each([
+    ['Set-Content -Path "src/my file.ts*" -Value x'],
+    ["Set-Content 'src/my file.ts?' x"],
+    ['Out-File "src/my file.ts:tag"'],
+    ['Set-Content "src/my file.ts" -Value "note"'],
+    ['Set-Content "src/my file.ts " x'],
+    ['Set-Content "./src/my file.ts*" x'],
+    ['Add-Content -Path "c:/repo/src/my file.ts:stream" -Value "x"'],
+  ])('denies: %s', (text) => {
+    expect(sp(text)).toMatchObject({ kind: 'deny', filePath: 'src/my file.ts' });
+  });
+
+  it.each([
+    ['Add-Content log.md "note: edited src/my file.ts today"'],
+    ['Add-Content log.md "see src/my file.ts"'],
+    ['Add-Content log.md "src/my file.tsx"'],
+    ['Write-Host "fixing src/my file.ts now"'],
+  ])('does not deny prose or another file: %s', (text) => {
+    expect(sp(text).kind).not.toBe('deny');
+  });
+});
+
 describe('platform and case', () => {
   it('folds case on a case-folding platform for a data string too', () => {
     expect(verdict('Add-Content log.md "see SRC/A.TS"', true).kind).not.toBe('deny');
