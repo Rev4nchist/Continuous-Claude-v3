@@ -48,7 +48,7 @@
 //   lanes:relative-path-guard: at or under the ratchet baseline (PASS); a file over it (WARN naming the file); no baseline (WARN)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, symlinkSync, rmdirSync, unlinkSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -2248,6 +2248,9 @@ test('memory:embedding-daemon: a stale file (pid gone) is a PASS info; a bad fil
   const fx = fixture();
   embedInfo(fx, { pid: 4242 });
   assert.match(run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: 'gone' }).checks['memory:embedding-daemon'].detail, /^info: pid 4242 .* does not run/);
+  const reused = run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: 'other' }).checks['memory:embedding-daemon'];
+  assert.equal(reused.status, 'PASS', 'a pid reused by a process that is not python is a stale file, not a leak');
+  assert.match(reused.detail, /^info: pid 4242 .* is not a python process now/);
   assert.equal(run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: 'x' }).checks['memory:embedding-daemon'].status, 'WARN');
   for (const body of ['not json', { pid: 'a; Stop-Process 1' }, { pid: -1 }, {}]) {
     embedInfo(fx, body);
@@ -2256,10 +2259,32 @@ test('memory:embedding-daemon: a stale file (pid gone) is a PASS info; a bad fil
   }
 });
 
-test('memory:embedding-daemon reads a real process without the seam (Windows): this test runner is under the limits', { skip: process.platform !== 'win32' }, () => {
+test('memory:embedding-daemon reads a real process without the seam (Windows): a pid that is not python is a stale file', { skip: process.platform !== 'win32' }, () => {
   const fx = fixture();
-  embedInfo(fx, { pid: process.pid });
+  embedInfo(fx, { pid: process.pid }); // this node test runner
   const c = run(fx).checks['memory:embedding-daemon'];
   assert.equal(c.status, 'PASS', c.detail);
-  assert.match(c.detail, new RegExp(`pid ${process.pid} holds \\d+ MB`));
+  assert.match(c.detail, new RegExp(`^info: pid ${process.pid} .* is not a python process now`));
+});
+
+// The first real python.exe on PATH (Windows `where`; not the WindowsApps store alias), or null: the test then skips.
+const realPython = (() => {
+  if (process.platform !== 'win32') return null;
+  try {
+    const all = execFileSync('where', ['python'], { encoding: 'utf8', windowsHide: true }).split(/\r?\n/).map((s) => s.trim());
+    return all.find((p) => p && !/WindowsApps/i.test(p) && existsSync(p)) ?? null;
+  } catch { return null; }
+})();
+
+test('memory:embedding-daemon reads a real python process without the seam (Windows): a small one is under the limits', { skip: process.platform !== 'win32' || !realPython }, () => {
+  const child = spawn(realPython, ['-c', 'import time; time.sleep(60)'], { stdio: 'ignore', windowsHide: true });
+  try {
+    const fx = fixture();
+    embedInfo(fx, { pid: child.pid });
+    const c = run(fx).checks['memory:embedding-daemon'];
+    assert.equal(c.status, 'PASS', c.detail);
+    assert.match(c.detail, new RegExp(`pid ${child.pid} holds \\d+ MB`));
+  } finally {
+    child.kill(); // only our own child
+  }
 });

@@ -350,19 +350,21 @@ const repoSection = (o) => [repoBranch(o)];
 // ---- memory ----
 // embedding-daemon-commit-leak (2026-11-13): the embedding daemon held 97.3 GB of private commit after about 36 hours and starved
 // pre-pr and vitest ("cannot allocate memory"). Read-only: this check never stops a process (a stop is Dave's yes).
-// Test seam: HARNESS_DOCTOR_EMBED_PRIVATE_MB is the commit in MB, or "gone" for a pid that does not run.
+// Test seam: HARNESS_DOCTOR_EMBED_PRIVATE_MB is the commit in MB, "gone" for a pid that does not run, or "other" for a pid
+// that now belongs to a process that is not python (a stale file whose pid was reused).
+// Known gap: a daemon that runs with CCV3_EMBED_COMMIT_CEILING_MB above the FAIL line shows FAIL before its own ceiling acts.
 export const EMBED_COMMIT_WARN_MB = 4096;
 export const EMBED_COMMIT_FAIL_MB = 8192;
 
-/** The private commit of a pid in MB, 'gone', 'skip' (not Windows) or null (unreadable). The pid is a checked whole number. */
+/** The private commit of a pid in MB, 'gone', 'other', 'skip' (not Windows) or null (unreadable). The pid is a checked whole number. */
 function embedPrivateMb(pid) {
   const seam = process.env.HARNESS_DOCTOR_EMBED_PRIVATE_MB;
-  if (seam !== undefined) return seam === 'gone' ? 'gone' : (/^\d+$/.test(seam) ? Number(seam) : null);
+  if (seam !== undefined) return seam === 'gone' || seam === 'other' ? seam : (/^\d+$/.test(seam) ? Number(seam) : null);
   if (process.platform !== 'win32') return 'skip';
-  const ps = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.PrivateMemorySize64 } else { 'gone' }`;
+  const ps = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if (-not $p) { 'gone' } elseif ($p.ProcessName -notlike 'python*') { 'other' } else { $p.PrivateMemorySize64 }`;
   const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', timeout: 20_000, windowsHide: true });
   const out = String(r.stdout ?? '').trim();
-  if (out === 'gone') return 'gone';
+  if (out === 'gone' || out === 'other') return out;
   return /^\d+$/.test(out) ? Math.round(Number(out) / (1024 * 1024)) : null;
 }
 
@@ -374,6 +376,7 @@ export function embeddingDaemonCommit(o) {
   if (!Number.isInteger(pid) || pid <= 0) return result('WARN', 'memory', 'embedding-daemon', `${file} has no valid pid`);
   const mb = embedPrivateMb(pid);
   if (mb === 'gone') return result('PASS', 'memory', 'embedding-daemon', `info: pid ${pid} named in ${file} does not run (a stale file)`);
+  if (mb === 'other') return result('PASS', 'memory', 'embedding-daemon', `info: pid ${pid} named in ${file} is not a python process now (a stale file)`);
   if (mb === 'skip') return result('PASS', 'memory', 'embedding-daemon', `info: not checked on ${process.platform}`);
   if (mb === null) return result('WARN', 'memory', 'embedding-daemon', `cannot read the private commit of pid ${pid}`);
   const status = mb >= EMBED_COMMIT_FAIL_MB ? 'FAIL' : mb >= EMBED_COMMIT_WARN_MB ? 'WARN' : 'PASS';
