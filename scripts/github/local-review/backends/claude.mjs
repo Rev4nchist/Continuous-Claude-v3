@@ -1,7 +1,10 @@
 // The Claude backend of the review engine (re-claude-backend): one `claude -p` run, read-only, and its parse.
 // Contract (map.md "Backend contract", same as backends/cursor.mjs): run(input, opts) -> { text, traceEvents, exitCode, costTag, run, parsed }.
-//   input: { promptPath, reviewDir, model, effort, timeoutMs }. opts: { agent, env, promptArgv, runAgent, now } from the engine;
-//   tests also pass { ledgerPath, cap, tempRoot, claudePath }. opts.agent is not read: this file finds claude.exe itself (seat Q2, 2026-11-14).
+//   input: { promptPath, reviewDir, model, effort, timeoutMs }. opts: { agent, env, promptArgv, runAgent, now, headless } from the engine;
+//   tests also pass { tempRoot, claudePath }. opts.agent is not read: this file finds claude.exe itself (seat Q2, 2026-11-14).
+//   opts.headless = { reserve, finish, ledgerPath, cap }: the day-cap functions of scripts/lib/headless.mjs (reserveHeadless, finishHeadless), the
+//   ledger file and the cap, injected by the caller (seat ruling 2026-11-14, option B: this file imports nothing outside the reviewer set).
+//   No opts.headless, or a bad part of it, is notRun 'headless-ledger: ...' before any spawn: it fails closed and spends nothing.
 //   The engine reads only run and parsed. run never rejects on an agent failure; it rejects only on a missing env or runAgent.
 //   Every reserved run gets exactly one end row in the headless ledger, whatever fails after the reservation.
 // Isolation, prevent and not only detect (seat GO 2026-11-14):
@@ -17,15 +20,15 @@
 // Trace (seat Q3, option A): the claude stream is translated into the cursor-agent tool_call form, so trace.mjs buildTrace and read-audit.mjs read it
 //   unchanged. run.stdout is the translated stream; run.rawStream and traceEvents hold the raw stream and the translated events. The translation is
 //   total: nothing it does not know vanishes; it becomes an unknown_<name> call (read-audit voids it as unknown-kind) and a problem.
-// Model: full ids only (MODELS). Effort is always high. Spend: the day cap and ledger of scripts/lib/headless.mjs, read-only (purpose review-engine).
+// Model: full ids only (MODELS). Effort is always high. Spend: the injected day cap and ledger (opts.headless, purpose review-engine).
 // MAX_TURNS: 216 = 2 x 108, the highest tool-call count in the 35 saved engine traces under ~/.claude/state/local-review on 2026-11-14
 //   (median 34, p90 67); never under 60 (seat Q6). A turn can hold several calls, so 216 turns is at least 216 calls.
-// Pinned engine copy: re-p4-wire adds this file AND scripts/lib/headless.mjs to ENGINE_FILES (seat Q7). Imports: cursor-review.mjs and headless.mjs only.
+// Pinned engine copy: this file is in the reviewer set by the local-review/ folder rule (engine-version.mjs). Its one relative import is
+//   cursor-review.mjs, already in the set. Never import scripts/lib/headless.mjs here: the import closure test fails on it.
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseReviewOutput } from '../../cursor-review.mjs';
-import { defaultHeadlessLedger, finishHeadless, HEADLESS_DAILY_CAP, reserveHeadless } from '../../../lib/headless.mjs';
 
 export const MODELS = Object.freeze(['claude-opus-5-5', 'claude-sonnet-5-5']);
 export const EFFORT = 'high';
@@ -294,6 +297,17 @@ function finishRun(result, { reviewDir, model }, extraProblems) {
   return { out, served };
 }
 
+/** The reason opts.headless cannot be used, or null. Absent is 'none'. */
+export function headlessProblem(h) {
+  if (h === undefined || h === null) return 'none';
+  if (typeof h !== 'object') return 'headless is not an object';
+  if (typeof h.reserve !== 'function') return 'reserve is not a function';
+  if (typeof h.finish !== 'function') return 'finish is not a function';
+  if (typeof h.ledgerPath !== 'string' || h.ledgerPath === '') return 'ledgerPath is not a path';
+  if (!Number.isInteger(h.cap) || h.cap < 1) return 'cap is not a positive integer';
+  return null;
+}
+
 export async function run({ reviewDir, model, effort, timeoutMs }, opts = {}) {
   const { env, promptArgv, runAgent, now = Date.now } = opts;
   if (!env || typeof env !== 'object') throw new TypeError('backends/claude run: opts.env is required (buildEngineEnv)');
@@ -301,14 +315,17 @@ export async function run({ reviewDir, model, effort, timeoutMs }, opts = {}) {
   const gate = checkClaudeModel(model);
   if (!gate.ok) return notRun(gate.reason);
   if (effort !== null && effort !== undefined && effort !== EFFORT) return notRun(`effort ${JSON.stringify(effort)} is refused: the Claude backend runs at ${EFFORT} only`);
+  const hlBad = headlessProblem(opts.headless);
+  if (hlBad) return notRun(`headless-ledger: ${hlBad}`);
+  const { reserve, finish, ledgerPath, cap } = opts.headless;
   const command = opts.claudePath ?? findClaude(env);
   if (!command) return notRun('no-claude: claude.exe not found in an absolute PATH folder');
-  const ledgerPath = opts.ledgerPath ?? defaultHeadlessLedger(env);
   let reserved;
-  try { reserved = reserveHeadless(ledgerPath, { purpose: PURPOSE, model, sessionId: null }, { now, cap: opts.cap ?? HEADLESS_DAILY_CAP }); } catch (err) { return notRun(`headless-ledger: ${errText(err)}`); }
+  try { reserved = reserve(ledgerPath, { purpose: PURPOSE, model, sessionId: null }, { now, cap }); } catch (err) { return notRun(`headless-ledger: ${errText(err)}`); }
+  if (!reserved || typeof reserved !== 'object') return notRun('headless-ledger: reserve returned no result');
   if (!reserved.ok) return notRun(reserved.reason === 'cap' ? 'headless-cap' : `headless-${reserved.reason}`);
 
-  // From here on every path ends in one finishHeadless call.
+  // From here on every path ends in one finish call.
   const t0 = now();
   const extra = [];
   let result;
@@ -338,7 +355,7 @@ export async function run({ reviewDir, model, effort, timeoutMs }, opts = {}) {
     out = { text: '', traceEvents: null, exitCode: result.status ?? null, costTag: 'claude', run: { ...result, toolStats: null }, parsed: failedParse(`the run output could not be read: ${errText(err)}`) };
   } finally {
     try {
-      finishHeadless(ledgerPath, reserved.id, {
+      finish(ledgerPath, reserved.id, {
         exit: result.status ?? null, durationMs: result.durationMs ?? null, timedOut: Boolean(result.timedOut), servedModel: served.served, keyStripped: true,
         ...(result.error ? { error: String(result.error).slice(0, 300) } : {}),
       }, { now });

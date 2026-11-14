@@ -10,6 +10,8 @@ import {
 } from './claude.mjs';
 import { buildTrace } from '../trace.mjs';
 import { auditStream } from '../../../eval/review-eval/read-audit.mjs';
+// The real ledger functions, injected as the engine will (seat ruling 2026-11-14, option B): claude.mjs itself never imports headless.mjs.
+import { finishHeadless, HEADLESS_DAILY_CAP, reserveHeadless } from '../../../lib/headless.mjs';
 
 const MODEL = 'claude-sonnet-5-5';
 const TMP = os.tmpdir();
@@ -232,7 +234,7 @@ function harness(over = {}) {
   mkdirSync(tempRoot);
   const calls = [];
   const runAgent = over.runAgent ?? (async (spec) => { calls.push(spec); return { status: 0, stdout: happy(), stderr: '', timedOut: false, durationMs: 5 }; });
-  const opts = { agent: null, env: { PATH: 'p', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_SESSION_ID: 'x' }, promptArgv: ['Read .review/PROMPT.md'], runAgent, now: () => Date.parse('2026-11-14T12:00:00Z'), ledgerPath: ledger, tempRoot, claudePath: 'C:/fake/claude.exe', ...over.opts };
+  const opts = { agent: null, env: { PATH: 'p', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_SESSION_ID: 'x' }, promptArgv: ['Read .review/PROMPT.md'], runAgent, now: () => Date.parse('2026-11-14T12:00:00Z'), headless: { reserve: reserveHeadless, finish: finishHeadless, ledgerPath: ledger, cap: HEADLESS_DAILY_CAP }, tempRoot, claudePath: 'C:/fake/claude.exe', ...over.opts };
   const input = { promptPath: inTree('.review/PROMPT.md'), reviewDir: TREE, model: MODEL, effort: null, timeoutMs: 1000, ...over.input };
   return { dir, ledger, tempRoot, calls, opts, input, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -286,11 +288,58 @@ test('run: at the headless day cap nothing spawns, the run is notRun, and no new
   try {
     const day = Date.parse('2026-11-14T12:00:00Z');
     writeFileSync(h.ledger, `${line({ ts: new Date(day - 1000).toISOString(), phase: 'start', id: 'x1' })}\n`);
-    const out = await run(h.input, { ...h.opts, cap: 1 });
+    const out = await run(h.input, { ...h.opts, headless: { ...h.opts.headless, cap: 1 } });
     assert.equal(h.calls.length, 0);
     assert.equal(out.parsed.notRun, true);
     assert.equal(out.run.error, 'headless-cap');
     assert.equal(ledgerRows(h.ledger).length, 1);
+  } finally { h.done(); }
+});
+
+test('run: with no opts.headless, or a part of it missing, the run is notRun and nothing spawns (fails closed, no spend)', async () => {
+  const h = harness();
+  try {
+    const { headless, ...noHeadless } = h.opts;
+    const bad = [
+      [undefined, 'headless-ledger: none'],
+      [{ ...headless, reserve: undefined }, 'headless-ledger: reserve is not a function'],
+      [{ ...headless, finish: 'x' }, 'headless-ledger: finish is not a function'],
+      [{ ...headless, ledgerPath: '' }, 'headless-ledger: ledgerPath is not a path'],
+      [{ ...headless, cap: 0 }, 'headless-ledger: cap is not a positive integer'],
+      [{ ...headless, cap: undefined }, 'headless-ledger: cap is not a positive integer'],
+    ];
+    for (const [hl, reason] of bad) {
+      const out = await run(h.input, hl === undefined ? noHeadless : { ...noHeadless, headless: hl });
+      assert.equal(out.parsed.notRun, true, reason);
+      assert.equal(out.run.error, reason);
+    }
+    assert.equal(h.calls.length, 0, 'no process starts');
+    assert.deepEqual(ledgerRows(h.ledger), []);
+  } finally { h.done(); }
+});
+
+test('run: the injected reserve runs before the spawn with the cap, and finish runs after it with the reserved id', async () => {
+  const order = [];
+  const h = harness({ runAgent: async () => { order.push('spawn'); return { status: 0, stdout: happy(), stderr: '', timedOut: false, durationMs: 7 }; } });
+  try {
+    const headless = {
+      ledgerPath: 'L.jsonl', cap: 9,
+      reserve: (file, meta, o) => { order.push(['reserve', file, meta.purpose, meta.model, o.cap]); return { ok: true, id: 'r1' }; },
+      finish: (file, id, end) => { order.push(['finish', file, id, end.exit, end.durationMs]); },
+    };
+    const out = await run(h.input, { ...h.opts, headless });
+    assert.equal(out.parsed.ok, true, out.parsed.problems.join('; '));
+    assert.deepEqual(order, [['reserve', 'L.jsonl', 'review-engine', MODEL, 9], 'spawn', ['finish', 'L.jsonl', 'r1', 0, 7]]);
+  } finally { h.done(); }
+});
+
+test('run: an injected reserve that throws is notRun with its text, and nothing spawns', async () => {
+  const h = harness();
+  try {
+    const headless = { ...h.opts.headless, reserve: () => { throw new Error('lock busy'); } };
+    const out = await run(h.input, { ...h.opts, headless });
+    assert.equal(out.run.error, 'headless-ledger: lock busy');
+    assert.equal(h.calls.length, 0);
   } finally { h.done(); }
 });
 
