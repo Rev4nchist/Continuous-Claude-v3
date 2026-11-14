@@ -142,3 +142,34 @@ describe('KS: a CLI skip that Dave decided', () => {
     expect(none.used).toEqual([]);
   });
 });
+
+describe('KR: the tap is used up through the REAL store (CodeRabbit nitpick, PR 576)', () => {
+  it('K8: with the real store, one tap allows one create, the second is denied, and another label never allows', async () => {
+    // Breaks when: the real store changes its consumption behaviour (K7 uses a small fake that copies it).
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const real = await import('../shared/decisions-store.js');
+    const file = join(mkdtempSync(join(tmpdir(), 'cli-skip-real-')), 'decisions.json');
+    const saved = process.env.CCV3_DECISIONS_FILE;
+    process.env.CCV3_DECISIONS_FILE = file;
+    try {
+      const spec = { header: 'CLI skip', question: 'Q?', options: [{ label: SKIP_LABEL }, { label: 'Keep the CLI review' }] };
+      const record = (label: string) => {
+        expect(real.offerWrite({ step: 'cli-skip', key: KEY, head: HEAD, spec }).ok).toBe(true);
+        expect(real.decisionRecord({ step: 'cli-skip', key: KEY, head: HEAD, label })).toEqual({ ok: true });
+      };
+      const realDeps = (): Deps => ({ ...deps(flagStamp()), decisionRead: real.decisionRead, decisionUse: real.decisionUse } as Deps);
+      const raw = JSON.stringify({ tool_name: 'Bash', tool_input: { command: CREATE }, cwd: ROOT });
+      const verdictOf = (): string => JSON.parse(handle(raw, realDeps()) || '{}').hookSpecificOutput?.permissionDecision ?? 'allow';
+      record('Keep the CLI review');
+      expect(verdictOf()).toBe('deny');
+      record(SKIP_LABEL);
+      expect(verdictOf()).toBe('allow');
+      expect(verdictOf()).toBe('deny');
+    } finally {
+      if (saved === undefined) delete process.env.CCV3_DECISIONS_FILE; else process.env.CCV3_DECISIONS_FILE = saved;
+      rmSync(file, { force: true });
+    }
+  });
+});

@@ -110,10 +110,12 @@ export const CLI_KEEP_LABEL = 'Keep the CLI review';
  */
 export function cliSkipSpec(d) {
   const spent = Number(d.runsSpent) || 0;
-  const unreviewed = Number(d.unreviewed) || 0;
+  // Missing coverage is not zero coverage: with no counter row that holds a count, the text says the coverage is unknown (CodeRabbit, PR 576).
+  const known = Number.isInteger(d.unreviewed);
+  const unreviewed = known ? d.unreviewed : 0;
   const lines = [
     `The CodeRabbit CLI review of ${clip(d.branch, 60)} at ${String(d.head).slice(0, 7)} did not finish.`,
-    `${plural(spent, 'CLI run')} spent of 2; the CLI left ${plural(unreviewed, 'file')} unreviewed.`,
+    known ? `${plural(spent, 'CLI run')} spent of 2; the CLI left ${plural(unreviewed, 'file')} unreviewed.` : `${plural(spent, 'CLI run')} spent of 2; the files the CLI left unreviewed are unknown (no coverage count on record).`,
     'Skip the CLI review for this head and open the PR?',
   ];
   const skip = opt(CLI_SKIP_LABEL, 'pre-pr-gate lets the flag stamp open the PR once for this branch and head. A push voids this answer.', spent >= 2);
@@ -329,7 +331,9 @@ export async function gatherCliSkip({ branch }) {
     const counter = JSON.parse(readFileSync(crPaths(topOf(), t.name).counter, 'utf8'));
     runs = Array.isArray(counter?.runs) ? counter.runs : [];
   } catch { /* no counter: 0 runs */ }
-  const unreviewed = runs.reduce((m, r) => (Number.isInteger(r?.unreviewed) ? Math.max(m, r.unreviewed) : m), 0);
+  // null (unknown) when no row holds a count: a missing counter must not read as "0 files unreviewed".
+  const counts = runs.filter((r) => Number.isInteger(r?.unreviewed)).map((r) => r.unreviewed);
+  const unreviewed = counts.length > 0 ? Math.max(...counts) : null;
   return {
     branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null,
     stampSkip: stamp?.cr_skipped === true ? stamp.cr_skip_reason ?? null : null, runsSpent: runs.filter((r) => r?.newCode !== false).length, unreviewed,

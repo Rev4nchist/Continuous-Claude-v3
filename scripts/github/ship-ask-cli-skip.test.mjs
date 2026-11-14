@@ -106,3 +106,32 @@ test('S5: gatherCliSkip reads the real stamp and run counter of a temp checkout 
     process.chdir(before);
   }
 });
+
+test('S6: a missing counter reads as UNKNOWN coverage, never as 0 files unreviewed (CodeRabbit, PR 576)', async () => {
+  // Breaks when: gatherCliSkip or cliSkipSpec turns "no coverage count on record" into 0 (the question would understate the skipped scope).
+  const { execFileSync } = await import('node:child_process');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { gatherCliSkip, cliSkipSpec } = await import('./ship-ask.mjs');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'cli-skip-nocounter-'));
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: dir, encoding: 'utf8', windowsHide: true }).trim();
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(dir, 'a.txt'), 'a\n');
+  git('add', '.'); git('commit', '-q', '-m', 'base');
+  git('checkout', '-q', '-b', 'feat/s6');
+  const head = git('rev-parse', 'HEAD');
+  mkdirSync(path.join(dir, '.claude', 'cache', 'pre-pr'), { recursive: true });
+  writeFileSync(path.join(dir, '.claude', 'cache', 'pre-pr', 'stamp.json'), JSON.stringify({ head, branch: 'feat/s6', cr_skipped: true, cr_skip_reason: 'flag', results: [] }));
+  const before = process.cwd();
+  process.chdir(dir);
+  try {
+    const d = await gatherCliSkip({ branch: undefined });
+    assert.equal(d.unreviewed, null, 'no counter: unknown, not 0');
+    const text = cliSkipSpec(d).question;
+    assert.match(text, /unknown/);
+    assert.doesNotMatch(text, /left 0 files/);
+  } finally {
+    process.chdir(before);
+  }
+  // A real zero stays a zero.
+  assert.match(cliSkipSpec({ branch: 'feat/x', head: 'c'.repeat(40), runsSpent: 1, unreviewed: 0 }).question, /left 0 files unreviewed/);
+});
