@@ -197,17 +197,21 @@ export interface BreakpointInput {
 const hhmm = (at: string): string => { const m = /T(\d\d:\d\d)/.exec(at)?.[1]; return m ? `${m}Z` : ''; };
 const mask = (s: string, n: number): string => cut(maskSecrets(oneLine(s)), n);
 
-function laneBlock(lanes: LaneFacts[]): string[] {
+/** The lane block with each field cut to `cut` characters. cut 0 gives the lane ids only. */
+function laneBlock(lanes: LaneFacts[], cut: number = LANE_FIELD_CUT): string[] {
   if (!lanes.length) return [];
   const out = ['## Lanes held'];
   for (const l of lanes) {
-    out.push(`- ${l.id}${l.title ? `: ${mask(l.title, 100)}` : ''}`);
-    if (l.goal) out.push(`  GOAL: ${mask(l.goal, LANE_FIELD_CUT)}`);
-    if (l.next) out.push(`  NEXT: ${mask(l.next, LANE_FIELD_CUT)}`);
-    if (l.milestone) out.push(`  MS: ${mask(l.milestone, 200)}`);
+    out.push(`- ${l.id}${l.title && cut ? `: ${mask(l.title, 100)}` : ''}`);
+    if (!cut) continue;
+    if (l.goal) out.push(`  GOAL: ${mask(l.goal, cut)}`);
+    if (l.next) out.push(`  NEXT: ${mask(l.next, cut)}`);
+    if (l.milestone) out.push(`  MS: ${mask(l.milestone, Math.min(200, cut))}`);
   }
   return out;
 }
+
+const size = (lines: string[]): number => (lines.length ? lines.join('\n').length + 1 : 0);
 
 function decisionLine(d: Decision): string {
   const head = d.header ? `${mask(d.header, 30)}: ` : '';
@@ -222,26 +226,36 @@ export function buildBreakpoint(input: BreakpointInput): string {
     `session: ${input.sessionId} | trigger: ${input.trigger} | at: ${input.now.toISOString().slice(0, 16)}Z`,
     ...(input.branch ? [`branch: ${mask(input.branch, 100)}`] : []),
   ];
-  const typed = input.typed.length
-    ? [`## ${TYPED_HEADER}`, ...input.typed.map((t) => `- [${hhmm(t.at)}] ${mask(t.text, TYPED_CUT)}`)]
-    : [];
   const resume = ['## Resume', 'Resume: continue with the NEXT step of the lane note. Do not re-ask a decision above.'];
-  const fixed = [...head, ...laneBlock(input.lanes), ...typed, ...resume].join('\n');
-  let budget = MAX_FILE_CHARS - fixed.length - 80;
-  const kept: string[] = [];
+  // Budget order (seat review 11-14): decisions are the purpose of the file, so they take the room FIRST, newest first. The lane
+  // block takes what is left (fields cut to fit, down to the ids), then the typed lines (newest first, one by one).
+  let room = MAX_FILE_CHARS - size(head) - size(resume) - 40;
   // Older decisions first (carried from the previous file: the tail read of a long transcript may not reach them), then the new
   // ones. The same decision gives the same line, so it is listed once.
   const fresh = input.decisions.map(decisionLine);
   const freshSet = new Set(fresh);
   const lines = [...(input.carried ?? []).filter((l) => !freshSet.has(l)), ...fresh];
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (line.length + 1 > budget) break;
-    kept.unshift(line);
-    budget -= line.length + 1;
+  const decHead = '## Decisions made (Do not ask these again)';
+  const kept: string[] = [];
+  // The lane ids never drop out: the ids-only lane block is reserved before the decisions take the room (seat tweak 11-14).
+  let decRoom = room - size(laneBlock(input.lanes, 0)) - decHead.length - 1;
+  for (let i = lines.length - 1; i >= 0 && lines[i].length + 1 <= decRoom; i--) {
+    kept.unshift(lines[i]);
+    decRoom -= lines[i].length + 1;
   }
-  const decisions = kept.length ? ['## Decisions made (Do not ask these again)', ...kept] : [];
-  const text = [...head, ...laneBlock(input.lanes), ...decisions, ...typed, ...resume].join('\n') + '\n';
+  const decisions = kept.length ? [decHead, ...kept] : [];
+  room -= size(decisions);
+  const lanes = [LANE_FIELD_CUT, 80, 0].map((c) => laneBlock(input.lanes, c)).find((b) => size(b) <= room) ?? laneBlock(input.lanes, 0);
+  room -= size(lanes);
+  const typedLines = input.typed.map((t) => `- [${hhmm(t.at)}] ${mask(t.text, TYPED_CUT)}`);
+  const typedKept: string[] = [];
+  let typedRoom = room - TYPED_HEADER.length - 4;
+  for (let i = typedLines.length - 1; i >= 0 && typedLines[i].length + 1 <= typedRoom; i--) {
+    typedKept.unshift(typedLines[i]);
+    typedRoom -= typedLines[i].length + 1;
+  }
+  const typed = typedKept.length ? [`## ${TYPED_HEADER}`, ...typedKept] : [];
+  const text = [...head, ...lanes, ...decisions, ...typed, ...resume].join('\n') + '\n';
   return text.length > MAX_FILE_CHARS ? text.slice(0, MAX_FILE_CHARS - 1) : text;
 }
 

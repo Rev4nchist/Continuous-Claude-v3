@@ -227,9 +227,9 @@ function appendTraceRow(row, opts = {}) {
     const dir = opts.dir ?? traceDir(process.env);
     const day = row.ts.slice(0, 10);
     const file = join(dir, `hook-trace-${day}.jsonl`);
-    let size = 0;
+    let size2 = 0;
     try {
-      size = fs.statSync(file).size;
+      size2 = fs.statSync(file).size;
     } catch (e) {
       if (e.code !== "ENOENT") throw e;
       fs.mkdirSync(dir, { recursive: true });
@@ -238,7 +238,7 @@ function appendTraceRow(row, opts = {}) {
       } catch {
       }
     }
-    if (size >= (opts.capBytes ?? DAY_CAP_BYTES)) {
+    if (size2 >= (opts.capBytes ?? DAY_CAP_BYTES)) {
       bumpDropped(join(dir, `hook-trace-${day}.dropped`));
       return "dropped";
     }
@@ -462,12 +462,12 @@ function readTranscriptTail(file, maxBytes = TAIL_BYTES) {
   let fd = null;
   try {
     fd = fs2.openSync(file, "r");
-    const size = fs2.fstatSync(fd).size;
-    const len = Math.min(size, maxBytes);
+    const size2 = fs2.fstatSync(fd).size;
+    const len = Math.min(size2, maxBytes);
     const buf = Buffer.alloc(len);
-    fs2.readSync(fd, buf, 0, len, size - len);
+    fs2.readSync(fd, buf, 0, len, size2 - len);
     const text = buf.toString("utf8");
-    if (size <= len) return text;
+    if (size2 <= len) return text;
     const nl = text.indexOf("\n");
     return nl < 0 ? "" : text.slice(nl + 1);
   } catch {
@@ -504,17 +504,19 @@ var hhmm = (at) => {
   return m ? `${m}Z` : "";
 };
 var mask = (s, n) => cut(maskSecrets(oneLine(s)), n);
-function laneBlock(lanes) {
+function laneBlock(lanes, cut2 = LANE_FIELD_CUT) {
   if (!lanes.length) return [];
   const out = ["## Lanes held"];
   for (const l of lanes) {
-    out.push(`- ${l.id}${l.title ? `: ${mask(l.title, 100)}` : ""}`);
-    if (l.goal) out.push(`  GOAL: ${mask(l.goal, LANE_FIELD_CUT)}`);
-    if (l.next) out.push(`  NEXT: ${mask(l.next, LANE_FIELD_CUT)}`);
-    if (l.milestone) out.push(`  MS: ${mask(l.milestone, 200)}`);
+    out.push(`- ${l.id}${l.title && cut2 ? `: ${mask(l.title, 100)}` : ""}`);
+    if (!cut2) continue;
+    if (l.goal) out.push(`  GOAL: ${mask(l.goal, cut2)}`);
+    if (l.next) out.push(`  NEXT: ${mask(l.next, cut2)}`);
+    if (l.milestone) out.push(`  MS: ${mask(l.milestone, Math.min(200, cut2))}`);
   }
   return out;
 }
+var size = (lines) => lines.length ? lines.join("\n").length + 1 : 0;
 function decisionLine(d) {
   const head = d.header ? `${mask(d.header, 30)}: ` : "";
   const note = d.note ? ` (note: ${mask(d.note, NOTE_CUT)})` : "";
@@ -526,22 +528,31 @@ function buildBreakpoint(input) {
     `session: ${input.sessionId} | trigger: ${input.trigger} | at: ${input.now.toISOString().slice(0, 16)}Z`,
     ...input.branch ? [`branch: ${mask(input.branch, 100)}`] : []
   ];
-  const typed = input.typed.length ? [`## ${TYPED_HEADER}`, ...input.typed.map((t) => `- [${hhmm(t.at)}] ${mask(t.text, TYPED_CUT)}`)] : [];
   const resume = ["## Resume", "Resume: continue with the NEXT step of the lane note. Do not re-ask a decision above."];
-  const fixed = [...head, ...laneBlock(input.lanes), ...typed, ...resume].join("\n");
-  let budget = MAX_FILE_CHARS - fixed.length - 80;
-  const kept = [];
+  let room = MAX_FILE_CHARS - size(head) - size(resume) - 40;
   const fresh = input.decisions.map(decisionLine);
   const freshSet = new Set(fresh);
   const lines = [...(input.carried ?? []).filter((l) => !freshSet.has(l)), ...fresh];
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (line.length + 1 > budget) break;
-    kept.unshift(line);
-    budget -= line.length + 1;
+  const decHead = "## Decisions made (Do not ask these again)";
+  const kept = [];
+  let decRoom = room - size(laneBlock(input.lanes, 0)) - decHead.length - 1;
+  for (let i = lines.length - 1; i >= 0 && lines[i].length + 1 <= decRoom; i--) {
+    kept.unshift(lines[i]);
+    decRoom -= lines[i].length + 1;
   }
-  const decisions = kept.length ? ["## Decisions made (Do not ask these again)", ...kept] : [];
-  const text = [...head, ...laneBlock(input.lanes), ...decisions, ...typed, ...resume].join("\n") + "\n";
+  const decisions = kept.length ? [decHead, ...kept] : [];
+  room -= size(decisions);
+  const lanes = [LANE_FIELD_CUT, 80, 0].map((c) => laneBlock(input.lanes, c)).find((b) => size(b) <= room) ?? laneBlock(input.lanes, 0);
+  room -= size(lanes);
+  const typedLines = input.typed.map((t) => `- [${hhmm(t.at)}] ${mask(t.text, TYPED_CUT)}`);
+  const typedKept = [];
+  let typedRoom = room - TYPED_HEADER.length - 4;
+  for (let i = typedLines.length - 1; i >= 0 && typedLines[i].length + 1 <= typedRoom; i--) {
+    typedKept.unshift(typedLines[i]);
+    typedRoom -= typedLines[i].length + 1;
+  }
+  const typed = typedKept.length ? [`## ${TYPED_HEADER}`, ...typedKept] : [];
+  const text = [...head, ...lanes, ...decisions, ...typed, ...resume].join("\n") + "\n";
   return text.length > MAX_FILE_CHARS ? text.slice(0, MAX_FILE_CHARS - 1) : text;
 }
 function carriedDecisionLines(fileText) {
@@ -918,10 +929,10 @@ function readTranscriptTail2(file) {
   try {
     const fd = fs3.openSync(file, "r");
     try {
-      const size = fs3.fstatSync(fd).size;
-      const len = Math.min(size, TRANSCRIPT_TAIL_BYTES);
+      const size2 = fs3.fstatSync(fd).size;
+      const len = Math.min(size2, TRANSCRIPT_TAIL_BYTES);
       const buf = Buffer.alloc(len);
-      fs3.readSync(fd, buf, 0, len, size - len);
+      fs3.readSync(fd, buf, 0, len, size2 - len);
       return buf.toString("utf-8");
     } finally {
       fs3.closeSync(fd);

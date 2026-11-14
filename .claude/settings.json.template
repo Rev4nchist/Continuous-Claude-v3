@@ -494,6 +494,14 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/pre-compact-continuity.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 15,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/pre-compact-breakpoint.mjs"
+            ]
           }
         ]
       },

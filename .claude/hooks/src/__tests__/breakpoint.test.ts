@@ -200,6 +200,48 @@ const baseInput = () => ({
   typed: [{ at: T(3), text: 'yes take the card' }],
 });
 
+// ---------------------------------------------------------------- seat fix 2 (CodeRabbit CLI minor, 11-14): decisions get the budget FIRST
+describe('buildBreakpoint: decisions get the budget before long lane fields and typed lines', () => {
+  const long = (c: string, n: number) => c.repeat(n);
+  const lane = (i: number) => ({ id: `lane-number-${i}`, title: long('T', 100), goal: long('g', 300), next: long('n', 300), milestone: 'C:/' + long('m', 300) });
+  const typed5 = Array.from({ length: 5 }, (_, i) => ({ at: T(10 + i), text: long('t', 400) + i }));
+  const decisions = (n: number) => Array.from({ length: n }, (_, i) => ({ at: T(i), header: 'H', question: `Decision question number ${i}?`, answer: `answer ${i} ` + long('a', 120) }));
+  const input = (n: number) => ({ ...baseInput(), lanes: [lane(1), lane(2), lane(3)], typed: typed5, decisions: decisions(n) });
+
+  it('3 long lanes + 5 long typed lines + 10 decisions: every decision stays, the file stays under the cap, the resume sentence stays', () => {
+    const t = buildBreakpoint(input(10));
+    for (let i = 0; i < 10; i++) expect(t, `decision ${i}`).toContain(`Decision question number ${i}?`);
+    expect(t.length).toBeLessThanOrEqual(MAX_FILE_CHARS);
+    expect(t).toContain('Resume: continue with the NEXT step');
+  });
+  it('too many decisions for the file: the newest stay, the oldest go, the cap and the resume sentence hold', () => {
+    const t = buildBreakpoint(input(40));
+    expect(t).toContain('Decision question number 39?');
+    expect(t).not.toContain('Decision question number 0?');
+    expect(t.length).toBeLessThanOrEqual(MAX_FILE_CHARS);
+    expect(t).toContain('Resume: continue with the NEXT step');
+  });
+  it('120 carried decisions that fill the file and 3 lanes: the 3 lane ids still show (the ids-only lane block is reserved before the decisions)', () => {
+    // Short lines on purpose: the decisions then use the room down to the last few characters, so nothing is left over by luck.
+    const carried = Array.from({ length: 120 }, (_, i) => `- [12:00Z] H: Carried ${i}? -> ${long('z', 20)}`);
+    const t = buildBreakpoint({ ...input(10), carried });
+    for (let i = 1; i <= 3; i++) expect(t, `lane ${i}`).toContain(`lane-number-${i}`);
+    expect(t).toContain('Decision question number 9?');
+    expect(t).toContain('Resume: continue with the NEXT step');
+    expect(t.length).toBeLessThanOrEqual(MAX_FILE_CHARS);
+  });
+  it('the lane ids stay when the fields are cut to make room', () => {
+    const t = buildBreakpoint(input(10));
+    for (let i = 1; i <= 3; i++) expect(t).toContain(`lane-number-${i}`);
+  });
+  it('with room to spare, the lane fields and the typed lines are not cut (no change for a small file)', () => {
+    const t = buildBreakpoint(baseInput());
+    expect(t).toContain('GOAL: let Dave compact in place');
+    expect(t).toContain('NEXT: write red tests');
+    expect(t).toContain('yes take the card');
+  });
+});
+
 describe('buildBreakpoint', () => {
   it('holds the lane, the decisions block, the typed block and one resume sentence', () => {
     const t = buildBreakpoint(baseInput());
