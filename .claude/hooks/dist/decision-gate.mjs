@@ -1377,6 +1377,7 @@ var openPrWhy = (branch, head) => `no "open-pr" decision from Dave for ${branch}
 var landWhy = (pr) => `no "land" decision from Dave for PR #${pr}. Ask him first: run node scripts/github/ship-ask.mjs land --pr ${pr} --json, pass its JSON to AskUserQuestion word for word. Only "Land now" or "Land when READY" lets a land run. If the PR already merged, run land-pr.ps1 -Pr ${pr} -CleanupOnly.`;
 var pushWhy = (branch) => `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
 var PUSH_UNSAFE_WHY = "a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave's tap. Push without that option. If it is really needed, ask Dave to run it himself.";
+var PUSH_REFSPEC_WHY = "a refspec that names a ref outside refs/heads and refs/tags, or holds a wildcard, can send refs that must stay local (refs/eval/*). Push one branch by name: git push fork <branch>.";
 var PUSH_REPO_OPT_WHY = "a --repo option names the push target, so the remote this gate reads is not where the push goes. Name the fork remote and push from the repo.";
 var PUSH_ORIGIN_WHY = "a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.";
 var pushUnresolvedWhy = (what) => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
@@ -1775,6 +1776,7 @@ function callDirsOf(call) {
   const dirs = [...call.opts.matchAll(DIR_OPT_RE), ...call.opts.matchAll(PATH_OPT_RE)].sort((a, b) => a.index - b.index);
   return dirs.map((m) => m[1].includes("\\") ? m[1] : squashQuotes(m[1]));
 }
+var WIDE_LONG = ["mirror", "all"];
 var UNSAFE_LONG = ["mirror", "all", "branches", "tags", "delete", "prune", "force", "force-with-lease", "force-if-includes"];
 var PUSH_KEY_RE = /^(?:push|remote|submodule)\./;
 var C_OPT_RE = /(?:^|\s)-c\s+((?:[^\s"']|"[^"]*"|'[^']*')+)/g;
@@ -1783,6 +1785,7 @@ function readLongFlag(f, t) {
   const name = eq < 0 ? t.slice(2) : t.slice(2, eq);
   const value = eq < 0 ? null : t.slice(eq + 1).toLowerCase();
   if (UNSAFE_LONG.some((n) => n.startsWith(name))) f.unsafeOpt = true;
+  if (name.length >= 2 && WIDE_LONG.some((n) => n.startsWith(name))) f.wideOpt = true;
   if (name === "no-recurse-submodules") f.noRecurse = true;
   else if (name.length >= 4 && "recurse-submodules".startsWith(name)) {
     if (value === "no" || value === "check") f.noRecurse = true;
@@ -1792,7 +1795,7 @@ function readLongFlag(f, t) {
   else if (name.length >= 3 && "follow-tags".startsWith(name)) f.widerOpt ??= t;
 }
 function appFlagsOf(tokens, opts) {
-  const f = { unsafeOpt: false, oBundle: false, widerOpt: null, noRecurse: false, noFollowTags: false };
+  const f = { unsafeOpt: false, wideOpt: false, oBundle: false, widerOpt: null, noRecurse: false, noFollowTags: false };
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     if (t === "--") break;
@@ -1900,6 +1903,7 @@ function pushShapesOf(raw, tool) {
         if (!call.squashed) kept.plain &&= p.plain;
         kept.repoOpt ||= p.repoOpt;
         kept.unsafeOpt ||= p.unsafeOpt;
+        kept.wideOpt ||= p.wideOpt;
         kept.oBundle ||= p.oBundle;
         kept.widerOpt ??= p.widerOpt;
         kept.oneSide ||= p.oneSide;
@@ -2627,12 +2631,14 @@ function remoteKind(remote) {
   if (r === "origin" || r.includes("parcadei")) return "origin";
   return r === "fork" || r.includes(CCV3_REPO) ? "fork" : null;
 }
+var outsideHeads = (p) => [p.src, p.branch].some((r) => typeof r === "string" && (r.startsWith("refs/") && !r.startsWith("refs/tags/") || r.includes("*")));
 var hardOf = (d) => ({ ...d, hard: true });
 function intentDeny(p, subagent, fallback) {
   if (subagent) return hardOf(deny("subagent", SUBAGENT_WHY, "push"));
   const r = (p.remote ?? "").toLowerCase();
   if (r === "origin" || r.includes("parcadei")) return hardOf(deny("push-origin", PUSH_ORIGIN_WHY, "push"));
-  if (p.force || p.unsafeOpt) return hardOf(deny("push-unsafe", PUSH_UNSAFE_WHY, "push"));
+  if (p.force || p.unsafeOpt || p.wideOpt) return hardOf(deny("push-unsafe", PUSH_UNSAFE_WHY, "push"));
+  if (outsideHeads(p)) return hardOf(deny("push-target-unresolved", PUSH_REFSPEC_WHY, "push"));
   if (p.repoOpt) return hardOf(deny("push-target-unresolved", PUSH_REPO_OPT_WHY, "push"));
   return fallback;
 }
@@ -2695,7 +2701,8 @@ function judgePush(shape, deps, dir, ctx) {
   if (kind === "origin") return hardOf(d("push-origin", PUSH_ORIGIN_WHY));
   if (kind === null) return ALLOW;
   if (subagent) return hardOf(d("subagent", SUBAGENT_WHY));
-  if (p.unsafeOpt && !p.force) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
+  if (p.wideOpt || p.unsafeOpt && !p.force) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
+  if (outsideHeads(p)) return hardOf(d("push-target-unresolved", PUSH_REFSPEC_WHY));
   const branch = p.branch ?? currentBranch(deps, dir);
   if (p.force && (branch === "main" || branch === "")) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
   if (branch !== "" && branch !== "main") {

@@ -158,6 +158,38 @@ describe('PB: hard denies without enforcePush', () => {
   });
 });
 
+describe('PR: refspecs and wide options (seat GO 16:5x: refs/eval seed refs must never reach a remote)', () => {
+  it('B8: a refspec that names a ref outside refs/heads and refs/tags, or holds a wildcard, denies, with a tap on record', () => {
+    // Breaks when: such a refspec is read as a branch name and goes to the ship tap (a tap on feat/x then lets it pass).
+    shipTap();
+    for (const c of ['git push fork refs/eval/*:refs/eval/*', 'git push fork refs/*:refs/*', 'git push fork refs/eval/seed/x', 'git push fork refs/eval/seed/x:refs/eval/seed/x', 'git push fork HEAD:refs/eval/seed/x', 'git push fork feat/*:feat/*', 'git push fork +refs/eval/x:refs/eval/x']) {
+      const d = verdict(bash(c));
+      expect(d.action, c).toBe('deny');
+    }
+  });
+
+  it('B9: full --mirror and --all are hard denies (a prefix too); --tags and --delete of an own branch stay soft', () => {
+    // Breaks when: the full spellings are only the soft push-unsafe (the guard asks) while the prefixed ones are hard.
+    shipTap();
+    for (const c of ['git push --mirror fork', 'git push --all fork', 'git push --mir fork', 'git push --al fork', 'git push --mirror fork feat/x']) expect(denied(bash(c)), c).toBe(true);
+    for (const c of ['git push --tags fork', 'git push --delete fork feat/x']) expect(verdict(bash(c)).action, c).toBe('allow');
+  });
+
+  it('B11: a push with TWO refspecs denies when only the SECOND is bad (every refspec is judged)', () => {
+    // Breaks when: the shape keeps only the first refspec (a bad one hides behind a good one).
+    shipTap();
+    for (const c of ['git push fork feat/x refs/eval/seed/y', 'git push fork feat/x refs/*:refs/*', 'git push fork feat/x refs/eval/*:refs/eval/*', 'git push fork refs/heads/feat/x HEAD:refs/eval/seed/y']) expect(denied(bash(c)), c).toBe(true);
+    // The control: two good refspecs of the tapped branch pass.
+    expect(verdict(bash('git push fork feat/x HEAD:feat/x')).action).toBe('allow');
+  });
+
+  it('B10: a plain branch name and refs/heads/<own branch> still pass with their tap (no question added)', () => {
+    // Breaks when: the refspec rule catches the ordinary refspecs.
+    shipTap();
+    for (const c of ['git push fork feat/x', 'git push fork refs/heads/feat/x', 'git push fork HEAD:refs/heads/feat/x', 'git push fork feat/x:feat/x', 'git push fork HEAD:feat/x']) expect(verdict(bash(c)).action, c).toBe('allow');
+  });
+});
+
 describe('HS: the holdout scan on a push of a re/ branch', () => {
   const RE = { branch: 're/re-x' };
   const PUSH = 'git push fork re/re-x';

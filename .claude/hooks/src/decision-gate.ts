@@ -315,6 +315,7 @@ const landWhy = (pr: string): string =>
 const pushWhy = (branch: string): string =>
   `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
 const PUSH_UNSAFE_WHY = 'a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave\'s tap. Push without that option. If it is really needed, ask Dave to run it himself.';
+const PUSH_REFSPEC_WHY = 'a refspec that names a ref outside refs/heads and refs/tags, or holds a wildcard, can send refs that must stay local (refs/eval/*). Push one branch by name: git push fork <branch>.';
 const PUSH_REPO_OPT_WHY = 'a --repo option names the push target, so the remote this gate reads is not where the push goes. Name the fork remote and push from the repo.';
 const PUSH_ORIGIN_WHY = 'a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.';
 const pushUnresolvedWhy = (what: string): string => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
@@ -652,6 +653,8 @@ interface PushShape {
    * side, so git maps it through remote.<r>.push or push.default. `noRecurse`, `noFollowTags`: the command turns that config off.
    */
   unsafeOpt: boolean;
+  /** --mirror or --all (any unique prefix): every ref or every branch. */
+  wideOpt: boolean;
   oBundle: boolean;
   widerOpt: string | null;
   oneSide: boolean;
@@ -1036,11 +1039,13 @@ function callDirsOf(call: RawPush): string[] {
 const callDirOf = (call: RawPush): string | null => callDirsOf(call).pop() ?? null;
 
 /** Fix round 4 (fixer K, critic major 3): the long options that rewrite, remove or add many remote refs. Any prefix of one counts. */
+/** The options that push every ref (--mirror) or every branch (--all). */
+const WIDE_LONG = ['mirror', 'all'];
 const UNSAFE_LONG = ['mirror', 'all', 'branches', 'tags', 'delete', 'prune', 'force', 'force-with-lease', 'force-if-includes'];
 /** A -c key that changes what a push writes (push.*, remote.*, submodule.*): the repo config the gate reads is then not what git uses. */
 const PUSH_KEY_RE = /^(?:push|remote|submodule)\./;
 const C_OPT_RE = /(?:^|\s)-c\s+((?:[^\s"']|"[^"]*"|'[^']*')+)/g;
-type AppFlags = Pick<PushShape, 'unsafeOpt' | 'oBundle' | 'widerOpt' | 'noRecurse' | 'noFollowTags'>;
+type AppFlags = Pick<PushShape, 'unsafeOpt' | 'wideOpt' | 'oBundle' | 'widerOpt' | 'noRecurse' | 'noFollowTags'>;
 
 /** One long option, for the app flags: an unsafe prefix, recursion and tag following on or off. */
 function readLongFlag(f: AppFlags, t: string): void {
@@ -1048,6 +1053,8 @@ function readLongFlag(f: AppFlags, t: string): void {
   const name = eq < 0 ? t.slice(2) : t.slice(2, eq);
   const value = eq < 0 ? null : t.slice(eq + 1).toLowerCase();
   if (UNSAFE_LONG.some((n) => n.startsWith(name))) f.unsafeOpt = true;
+  // --mirror and --all (any unique prefix) push every ref or every branch: a hard deny in CCv3 (card prflow-push-blocks, seat 16:5x).
+  if (name.length >= 2 && (WIDE_LONG.some((n) => n.startsWith(name)))) f.wideOpt = true;
   if (name === 'no-recurse-submodules') f.noRecurse = true;
   else if (name.length >= 4 && 'recurse-submodules'.startsWith(name)) {
     if (value === 'no' || value === 'check') f.noRecurse = true;
@@ -1062,7 +1069,7 @@ function readLongFlag(f: AppFlags, t: string): void {
  * bundle git reads o as the push option and the rest of the word as its value, so only the letters before the o count here.
  */
 function appFlagsOf(tokens: string[], opts: string): AppFlags {
-  const f: AppFlags = { unsafeOpt: false, oBundle: false, widerOpt: null, noRecurse: false, noFollowTags: false };
+  const f: AppFlags = { unsafeOpt: false, wideOpt: false, oBundle: false, widerOpt: null, noRecurse: false, noFollowTags: false };
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     if (t === '--') break;
@@ -1164,6 +1171,7 @@ export function pushShapesOf(raw: string, tool?: string): Shape[] {
         // Fix round 4 (fixer K): a flag that denies is OR-merged and a flag that clears a deny is AND-merged, so the dropped copy of
         // `git push up topic && git push --mirr up topic` still denies.
         kept.unsafeOpt ||= p.unsafeOpt;
+        kept.wideOpt ||= p.wideOpt;
         kept.oBundle ||= p.oBundle;
         kept.widerOpt ??= p.widerOpt;
         kept.oneSide ||= p.oneSide;
@@ -2288,6 +2296,9 @@ function remoteKind(remote: string): 'origin' | 'fork' | null {
   return r === 'fork' || r.includes(CCV3_REPO) ? 'fork' : null;
 }
 
+/** The source or the destination of the refspec names a ref outside refs/heads and refs/tags (the shape drops refs/heads/ itself), or holds a wildcard. */
+const outsideHeads = (p: PushShape): boolean => [p.src, p.branch].some((r) => typeof r === 'string' && ((r.startsWith('refs/') && !r.startsWith('refs/tags/')) || r.includes('*')));
+
 /** A hard deny: it holds whatever decisions.enforcePush says (decide() asks hardAppDeny first). */
 const hardOf = (d: Deny): Deny => ({ ...d, hard: true });
 
@@ -2301,7 +2312,8 @@ function intentDeny(p: PushShape, subagent: boolean, fallback: Deny): Deny {
   if (subagent) return hardOf(deny('subagent', SUBAGENT_WHY, 'push'));
   const r = (p.remote ?? '').toLowerCase();
   if (r === 'origin' || r.includes('parcadei')) return hardOf(deny('push-origin', PUSH_ORIGIN_WHY, 'push'));
-  if (p.force || p.unsafeOpt) return hardOf(deny('push-unsafe', PUSH_UNSAFE_WHY, 'push'));
+  if (p.force || p.unsafeOpt || p.wideOpt) return hardOf(deny('push-unsafe', PUSH_UNSAFE_WHY, 'push'));
+  if (outsideHeads(p)) return hardOf(deny('push-target-unresolved', PUSH_REFSPEC_WHY, 'push'));
   if (p.repoOpt) return hardOf(deny('push-target-unresolved', PUSH_REPO_OPT_WHY, 'push'));
   return fallback;
 }
@@ -2385,7 +2397,8 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
   if (kind === null) return ALLOW;
   // A subagent never has a tap (D3): any push to the fork is denied, main included. Its pushes elsewhere are not our business.
   if (subagent) return hardOf(d('subagent', SUBAGENT_WHY));
-  if (p.unsafeOpt && !p.force) return hardOf(d('push-unsafe', PUSH_UNSAFE_WHY));
+  if (p.wideOpt || (p.unsafeOpt && !p.force)) return hardOf(d('push-unsafe', PUSH_UNSAFE_WHY));
+  if (outsideHeads(p)) return hardOf(d('push-target-unresolved', PUSH_REFSPEC_WHY));
   const branch = p.branch ?? currentBranch(deps, dir);
   if (p.force && (branch === 'main' || branch === '')) return hardOf(d('push-unsafe', PUSH_UNSAFE_WHY));
   // The holdout scan runs BEFORE the force return: a force push of a re/ branch must not skip it (the guard's yes would send it out unscanned).
