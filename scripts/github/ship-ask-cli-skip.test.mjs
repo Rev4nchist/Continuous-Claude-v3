@@ -67,3 +67,42 @@ test('S3: the question names branch, head, runs and unreviewed files; two option
   assert.equal(plan.key, decisionKey({ branch: 'feat/x' }));
   assert.equal(plan.head, HEAD);
 });
+
+test('S5: gatherCliSkip reads the real stamp and run counter of a temp checkout (no --facts)', async () => {
+  // Breaks when: the real data path reads the wrong stamp, counter or branch (the S1-S3 tests pass data in by hand and never run it).
+  const { execFileSync } = await import('node:child_process');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { gatherCliSkip } = await import('./ship-ask.mjs');
+  const { crPaths } = await import('./pre-pr.mjs');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'cli-skip-repo-'));
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: dir, encoding: 'utf8', windowsHide: true }).trim();
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(dir, 'a.txt'), 'a\n');
+  git('add', '.'); git('commit', '-q', '-m', 'base');
+  git('checkout', '-q', '-b', 'feat/s5');
+  writeFileSync(path.join(dir, 'b.txt'), 'b\n');
+  git('add', '.'); git('commit', '-q', '-m', 'work');
+  const head = git('rev-parse', 'HEAD');
+  mkdirSync(path.join(dir, '.claude', 'cache', 'pre-pr'), { recursive: true });
+  writeFileSync(path.join(dir, '.claude', 'cache', 'pre-pr', 'stamp.json'), JSON.stringify({ head, branch: 'feat/s5', cr_skipped: true, cr_skip_reason: 'flag', results: [] }));
+  const counter = crPaths(dir, 'feat/s5').counter;
+  mkdirSync(path.dirname(counter), { recursive: true });
+  writeFileSync(counter, JSON.stringify({ branch: 'feat/s5', runs: [{ head, outcome: 'failed', complete: false, newCode: true, partial: true, unreviewed: 3 }, { head, outcome: 'failed', complete: false, newCode: true, unreviewed: 5 }, { head, outcome: 'finished', complete: true, newCode: false }] }));
+  const before = process.cwd();
+  process.chdir(dir);
+  try {
+    const d = await gatherCliSkip({ branch: undefined });
+    assert.equal(d.branch, 'feat/s5');
+    assert.equal(d.head, head);
+    assert.equal(d.stampHead, head);
+    assert.equal(d.stampSkip, 'flag');
+    assert.equal(d.runsSpent, 2, 'the row with newCode false is not a spent run');
+    assert.equal(d.unreviewed, 5, 'the largest unreviewed count of the rows');
+    assert.equal(planOf('cli-skip', d, { branch: 'feat/s5' }).refuse, undefined);
+    // A stamp that is not a flag skip: no question.
+    writeFileSync(path.join(dir, '.claude', 'cache', 'pre-pr', 'stamp.json'), JSON.stringify({ head, branch: 'feat/s5', cr_skipped: true, cr_skip_reason: 'cap', results: [] }));
+    assert.ok(planOf('cli-skip', await gatherCliSkip({ branch: undefined }), { branch: 'feat/s5' }).refuse);
+  } finally {
+    process.chdir(before);
+  }
+});

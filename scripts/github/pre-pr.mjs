@@ -1010,7 +1010,7 @@ function findingFixed(git, from, to, f) {
   const end = f.end === null || f.end === undefined ? f.start : f.end;
   if (!Number.isInteger(end) || end < f.start) return false;
   // The name is a literal path (--literal-pathspecs): ":(top)x" or "src/*.ts" must not match files. --inter-hunk-context=0 keeps far hunks apart whatever the user's git config says.
-  const d = git(['--literal-pathspecs', 'diff', '--unified=0', '--inter-hunk-context=0', '--no-renames', `${from}..${to}`, '--', f.file]);
+  const d = git(['--literal-pathspecs', 'diff', '--no-color', '--unified=0', '--inter-hunk-context=0', '--no-renames', `${from}..${to}`, '--', f.file]);
   if (d.status !== 0) return false;
   for (const m of d.stdout.matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/gm)) {
     const a = Number(m[1]);
