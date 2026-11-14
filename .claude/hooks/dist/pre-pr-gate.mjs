@@ -1123,9 +1123,9 @@ function stampProblem(raw, head, now, body) {
   if (at - now > FUTURE_SLACK_MS) return "the stamp time is in the future";
   const reason = String(o.cr_skip_reason);
   const waitKnown = reason === "rate-limited" && typeof o.cr_retry_minutes === "number" && o.cr_retry_minutes > 0;
-  const capEarned = reason === "cap" && typeof o.cr_finished_runs === "number" && o.cr_finished_runs >= 1;
+  const capEarned = reason === "cap" && (typeof o.cr_finished_runs === "number" && o.cr_finished_runs >= 1 || Number.isInteger(o.cr_partial_earned) && o.cr_partial_earned >= 1);
   if (o.cr_skipped === true && reason === "cap" && !capEarned) {
-    return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? "none")}). The cap counts runs that finished with a PASS. Fix the CLI and run pre-pr.mjs again`;
+    return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? "none")}) and no partial run earned it (cr_partial_earned: ${String(o.cr_partial_earned ?? "none")}). The cap counts runs that finished with a PASS, or partial runs whose findings the branch changed. A finding judged false and not changed does not earn: the way out is Dave's recorded decision, not an edit of the lines. Fix the CLI and run pre-pr.mjs again`;
   }
   const docsOnlyEarned = reason === "docs-only" && o.cr_docs_only === true && o.docs_verified === true;
   if (o.cr_skipped === true && reason === "docs-only" && !docsOnlyEarned) {

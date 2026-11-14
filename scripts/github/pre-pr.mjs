@@ -979,6 +979,76 @@ function crVerdict(p, { exitProblem, base, docsOnly = false }) {
   return result('coderabbit', 'PASS', `${p.findings.length} finding(s)${words ? ` (${words})` : ''}${billedText(p.usageCost)}${c.reused ? ', a reused result (not a new review)' : ''}, advisory only (fix real ones, then re-run the Evidence GREEN).`, notes);
 }
 
+/**
+ * Counter-row fields for a CLI run that stopped part way (rule A). Returns null unless the run ended with a complete record, no error
+ * event, an exit of 0 or 1 and a positive count of files the CLI did not review. Positions only: no finding text goes in the row.
+ */
+function partialRowOf({ verdict, parsed, exitProblem, changedPaths = [] }) {
+  const c = parsed?.complete;
+  if (verdict?.status !== 'FAIL' || !c) return null;
+  if (c.status === 'review_skipped' || c.outcome === 'failed') return null;
+  const unreviewed = Number(c.unreviewedFileCount);
+  if (!Number.isInteger(unreviewed) || unreviewed <= 0) return null;
+  if ((parsed.errors ?? []).length > 0 || parsed.awaiting) return null;
+  // A line that was not JSON may have been a finding: the row could list fewer findings than the run found. Fail closed.
+  if (Number(parsed.unparsed ?? 0) > 0) return null;
+  if (exitProblem && exitProblem !== 'exit 1') return null;
+  const reviewed = Array.isArray(c.reviewedFiles) ? c.reviewedFiles.length : Math.max(0, changedPaths.length - unreviewed);
+  const asInt = (v) => (Number.isInteger(v) ? v : null);
+  const findings = (parsed.findings ?? []).map((f) => ({
+    file: typeof f.file === 'string' && f.file !== '?' && f.file !== '' ? f.file : null,
+    start: asInt(f.start),
+    end: asInt(f.end),
+  }));
+  return { partial: true, unreviewed, reviewed, findings };
+}
+
+/** True when a finding's lines were changed after the run: an old-side hunk of `git diff --unified=0` overlaps start..end. Fails closed. */
+function findingFixed(git, from, to, f) {
+  if (!f || typeof f.file !== 'string' || f.file === '' || f.file === '?') return false;
+  if (!Number.isInteger(f.start) || f.start < 1) return false;
+  const end = f.end === null || f.end === undefined ? f.start : f.end;
+  if (!Number.isInteger(end) || end < f.start) return false;
+  // The name is a literal path (--literal-pathspecs): ":(top)x" or "src/*.ts" must not match files. --inter-hunk-context=0 keeps far hunks apart whatever the user's git config says.
+  const d = git(['--literal-pathspecs', 'diff', '--unified=0', '--inter-hunk-context=0', '--no-renames', `${from}..${to}`, '--', f.file]);
+  if (d.status !== 0) return false;
+  for (const m of d.stdout.matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/gm)) {
+    const a = Number(m[1]);
+    const b = m[2] === undefined ? 1 : Number(m[2]);
+    if (b > 0 && a <= end && a + b - 1 >= f.start) return true;
+  }
+  return false;
+}
+
+/**
+ * Rule A: how many partial rows earn the cap skip at `head`, and the largest unreviewed count among them. A row earns only when it has
+ * partial === true, reviewed >= 1, unreviewed >= 1, a 40-hex head that is an ancestor of `head`, a findings list, and every finding fixed.
+ */
+export function partialEarnedFor(root, rows, head) {
+  const git = makeGit(root);
+  let earned = 0;
+  let unreviewed = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row?.partial !== true) continue;
+    if (!Number.isInteger(row.reviewed) || row.reviewed < 1) continue;
+    if (!Number.isInteger(row.unreviewed) || row.unreviewed < 1) continue;
+    if (typeof row.head !== 'string' || !/^[0-9a-f]{40}$/.test(row.head)) continue;
+    if (!Array.isArray(row.findings)) continue;
+    if (git(['merge-base', '--is-ancestor', row.head, head]).status !== 0) continue;
+    if (!row.findings.every((f) => findingFixed(git, row.head, head, f))) continue;
+    earned += 1;
+    unreviewed = Math.max(unreviewed, row.unreviewed);
+  }
+  return { earned, unreviewed };
+}
+
+/** Rule A: a cap skip earned by a partial run needs the PR body line "CLI unreviewed files: <n>", n equal to the stamp's count. */
+export function partialBodyCheck({ body, unreviewed }) {
+  const nums = [...String(body ?? '').matchAll(/^\s*(?:[-*]\s+)?CLI unreviewed files:\s*(\d+)\s*$/gim)].map((m) => Number(m[1]));
+  if (nums.length >= 1 && nums.every((n) => n === unreviewed)) return result('coderabbit:partial-body', 'PASS', `the PR body names the ${unreviewed} file(s) the CLI did not review`);
+  return result('coderabbit:partial-body', 'FAIL', `the cap skip is earned by a partial CLI run: add one line "CLI unreviewed files: ${unreviewed}" to the PR body (n from cr_unreviewed_files).`);
+}
+
 const withOutput = (verdict, savedAs) => ({ ...verdict, detail: `${verdict.detail} Output: ${savedAs}` });
 
 /**
@@ -1411,7 +1481,9 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   }
   const counted = counter.runs.filter((r) => r.newCode !== false).length;
   if (counted >= CR_RUN_LIMIT) {
-    return skipped('cap', `limit reached: ${counted} cr review runs with new code already used on ${branch} (a pre-pr.mjs limit of ${CR_RUN_LIMIT} per branch on heads with new code, not a coderabbit-cli.md rule; a run on a head that changed only docs, evidence, the PR body or test snapshots is not counted), so no CLI review this time; the stamp records cr_skip_reason cap`);
+    // Rule A: a partial run whose findings the branch changed earns the cap skip. Earning is read only here, at the cap.
+    const earn = partialEarnedFor(root, counter.runs, head);
+    return { ...skipped('cap', `limit reached: ${counted} cr review runs with new code already used on ${branch} (a pre-pr.mjs limit of ${CR_RUN_LIMIT} per branch on heads with new code, not a coderabbit-cli.md rule; a run on a head that changed only docs, evidence, the PR body or test snapshots is not counted), so no CLI review this time; the stamp records cr_skip_reason cap`), partialEarned: earn.earned, unreviewedFiles: earn.unreviewed };
   }
   const capped = cliCapBlock(cliCapUsd, now, ledgerPath);
   if (capped) return capped;
@@ -1459,6 +1531,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   else {
     run.outcome = verdict.status === 'PASS' ? 'finished' : 'failed';
     run.complete = verdict.status === 'PASS';
+    Object.assign(run, partialRowOf({ verdict, parsed, exitProblem, changedPaths: changedPaths ?? [] }) ?? {});
     writeFileSync(counterFile, JSON.stringify(counter, null, 2));
   }
   return withOutput(verdict, rel(root, out));
@@ -1567,6 +1640,10 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
     : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseSha || base}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseSha, crStore }))));
   const crStep = results[results.length - 1];
+  const crFinished = finishedRuns(root, branch, base);
+  const partialSkip = crStep.skipReason === 'cap' ? { earned: crStep.partialEarned ?? 0, unreviewed: crStep.unreviewedFiles ?? 0 } : { earned: 0, unreviewed: 0 };
+  // Rule A: a cap skip that only a partial run earns needs the PR body line. A finished run earns it with no line.
+  if (crStep.skipReason === 'cap' && crFinished === 0 && partialSkip.earned >= 1) results.push(partialBodyCheck({ body: bodyText, unreviewed: partialSkip.unreviewed }));
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
     results.push({ step: 'coderabbit:cli-missing', status: 'NOTE', detail: `no CLI review ran: ${crStep.detail}`, notes: [] });
@@ -1588,7 +1665,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const slim = results.map(({ step, status, detail }) => ({ step, status, detail }));
     const cr = results.find((r) => r.step === 'coderabbit');
     const crSkipped = cr?.status === 'SKIP';
-    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', cr_answer_key: crSkipped && cr.skipReason === 'answer-key', answer_key_paths: crSkipped && cr.skipReason === 'answer-key' ? cr.answerKeyPaths ?? 0 : 0, docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
+    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: crFinished, cr_partial_earned: partialSkip.earned, cr_unreviewed_files: partialSkip.unreviewed, cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', cr_answer_key: crSkipped && cr.skipReason === 'answer-key', answer_key_paths: crSkipped && cr.skipReason === 'answer-key' ? cr.answerKeyPaths ?? 0 : 0, docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
   }
   return { ok, results, lines, head, branch, logPath, stampPath: ok ? stampPath : null };
 }
