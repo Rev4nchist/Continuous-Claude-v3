@@ -33,7 +33,10 @@ import { decide, handle as gateHandle, realDeps } from '../decision-gate.js';
 vi.setConfig({ testTimeout: 30_000 });
 
 const CCV3 = 'https://github.com/Rev4nchist/continuous-claude-v3.git';
-const FIXED = { GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z', GIT_AUTHOR_NAME: 'p', GIT_AUTHOR_EMAIL: 'p@example.invalid', GIT_COMMITTER_NAME: 'p', GIT_COMMITTER_EMAIL: 'p@example.invalid' };
+// An empty global git config and no system config: a developer's commit.gpgsign or hooksPath cannot break the fixture commits.
+const GITCONFIG = join(mkdtempSync(join(tmpdir(), 'dg-gitcfg-')), 'gitconfig');
+writeFileSync(GITCONFIG, '');
+const FIXED = { GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z', GIT_AUTHOR_NAME: 'p', GIT_AUTHOR_EMAIL: 'p@example.invalid', GIT_COMMITTER_NAME: 'p', GIT_COMMITTER_EMAIL: 'p@example.invalid', GIT_CONFIG_GLOBAL: GITCONFIG, GIT_CONFIG_NOSYSTEM: '1' };
 let home = '';
 const saved: Record<string, string | undefined> = {};
 const ENV_KEYS = ['CCV3_DECISIONS_FILE', 'LANE_REGISTRY_PATH', 'CLAUDE_AGENT_ID'];
@@ -173,7 +176,7 @@ describe('K1 K2 the key: X and Y share branch, tree and head; only the repo in t
     const app = spec('App ship', 'Commit and push feat of acme/app-x?');
     expect(offerWrite({ step: 'ship', key: 'Rev4nchist/Continuous-Claude-v3@feat', head, tree, spec: ccv3 }).ok).toBe(true);
     expect(offerWrite({ step: 'ship', key: 'acme/app-x@feat', head, tree, spec: app }).ok).toBe(true);
-    const answer = (q: typeof app) => ledger(JSON.stringify({ tool_name: 'AskUserQuestion', tool_input: { questions: [q] }, tool_response: { answers: { [q.question]: 'Commit and push' } } }));
+    const answer = (q: typeof app) => ledger(JSON.stringify({ tool_name: 'AskUserQuestion', session_id: 's-app-git', tool_input: { questions: [q] }, tool_response: { answers: { [q.question]: 'Commit and push' } } }));
     expect(answer(app)).toContain('acme/app-x@feat');
     expect(verdict(bash(R.x, 'git push up feat'))).toBe('allow');
     expect(verdict(bash(R.cc, 'git push fork feat'))).toBe('warn:ship');

@@ -42,7 +42,10 @@ import { handle as ledger } from '../decision-ledger.js';
 import { decide, realDeps } from '../decision-gate.js';
 
 const APP_ASK = fileURLToPath(new URL('../../../../scripts/github/app-ask.mjs', import.meta.url));
-const FIXED = { GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z', GIT_AUTHOR_NAME: 'p', GIT_AUTHOR_EMAIL: 'p@example.invalid', GIT_COMMITTER_NAME: 'p', GIT_COMMITTER_EMAIL: 'p@example.invalid' };
+// An empty global git config and no system config: a developer's commit.gpgsign or hooksPath cannot break the fixture commits.
+const GITCONFIG = join(mkdtempSync(join(tmpdir(), 'dg-gitcfg-')), 'gitconfig');
+writeFileSync(GITCONFIG, '');
+const FIXED = { GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z', GIT_AUTHOR_NAME: 'p', GIT_AUTHOR_EMAIL: 'p@example.invalid', GIT_COMMITTER_NAME: 'p', GIT_COMMITTER_EMAIL: 'p@example.invalid', GIT_CONFIG_GLOBAL: GITCONFIG, GIT_CONFIG_NOSYSTEM: '1' };
 const ENV_KEYS = ['CCV3_DECISIONS_FILE', 'LANE_REGISTRY_PATH', 'CLAUDE_AGENT_ID', 'APP_ASK_TEST'];
 const saved: Record<string, string | undefined> = {};
 let home = '';
@@ -126,7 +129,7 @@ function tapThroughAsk(cwd: string, reason: string, facts?: object): string {
   expect(r.status, `app-ask ${words.join(' ')}: ${r.stderr}`).toBe(0);
   const spec = JSON.parse(r.stdout) as { header: string; question: string; options: { label: string }[] };
   const label = spec.options[0].label;
-  const out = ledger(JSON.stringify({ tool_name: 'AskUserQuestion', tool_input: { questions: [spec] }, tool_response: { answers: { [spec.question]: label } } }));
+  const out = ledger(JSON.stringify({ tool_name: 'AskUserQuestion', session_id: 's-ch', tool_input: { questions: [spec] }, tool_response: { answers: { [spec.question]: label } } }));
   expect(out, 'the ledger recorded the tap').toMatch(/record/i);
   return label;
 }
