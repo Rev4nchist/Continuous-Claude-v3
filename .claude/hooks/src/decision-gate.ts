@@ -229,7 +229,9 @@ import { homedir } from 'os';
 import { isAbsolute, join, posix, resolve } from 'path';
 import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, commandRepo, hasNonLiteralRepo, namedRepo, priorGhRepo } from './shared/checkpoint-shapes.js';
+import { answerKeyHitsOf } from './shared/answer-paths-door.js';
 import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared/decisions-store.js';
+import { countIdsIn, loadHoldoutIds } from './shared/holdout-ids.js';
 import { CALL_START, GLOBAL_OPT, PATH_PREFIX, VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { blankInertQuotes, isTextOnlyCommand } from './shared/inert-quotes.js';
@@ -258,6 +260,13 @@ export interface Deps {
   env: NodeJS.ProcessEnv;
   home: string;
   /**
+   * The push scan seams (card prflow-push-blocks). BOTH present: a CCv3 push of a `re/` branch, or of any branch whose diff touches an
+   * answer-key path, is scanned for holdout ids (scanHoldout). Absent (the old tests): no scan, no extra git call. realDeps sets both.
+   * `holdoutIds(dir)` returns the ids (it throws on any problem, and an empty list is a problem); `answerKeyHits(paths)` the matching paths.
+   */
+  holdoutIds?: (dir: string) => string[];
+  answerKeyHits?: (paths: string[]) => string[];
+  /**
    * The registry for app folders (shared/tap-scope.ts). Absent: no folder outside CCv3 is covered and no extra git runs (the old tests).
    * `registry` is read lazily, at most once per call, and never for a CCv3 checkout. `realpath` is passed to coverageOf (default: fs).
    * `readFile` reads the .git file of a linked worktree for the path test (underLiveRoot; default: fs). It throws as fs does.
@@ -282,7 +291,7 @@ export type Scope = 'push' | 'other' | 'app-push';
  * deny that a literal false of decisions.enforceAppPush turns into a warning. decide() drops it from the deny it returns.
  * `homeFlags` (fix round 6, item 1): the deny is for a covered folder, so decisions.enforce is read from the home copy only.
  */
-export type Deny = { action: 'deny'; reason: string; pattern: string; scope: Scope; notice?: string; tapPath?: true; homeFlags?: true };
+export type Deny = { action: 'deny'; reason: string; pattern: string; scope: Scope; notice?: string; tapPath?: true; homeFlags?: true; hard?: true };
 export type Decision = { action: 'allow'; warn?: string; scope?: Scope; notice?: string } | Deny;
 interface HookInput { tool_name?: string; tool?: string; tool_input?: Record<string, unknown>; cwd?: string; agent_id?: string; session_id?: string }
 
@@ -306,6 +315,7 @@ const landWhy = (pr: string): string =>
 const pushWhy = (branch: string): string =>
   `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
 const PUSH_UNSAFE_WHY = 'a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave\'s tap. Push without that option. If it is really needed, ask Dave to run it himself.';
+const PUSH_REPO_OPT_WHY = 'a --repo option names the push target, so the remote this gate reads is not where the push goes. Name the fork remote and push from the repo.';
 const PUSH_ORIGIN_WHY = 'a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.';
 const pushUnresolvedWhy = (what: string): string => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
 const STORE_WHY = 'only decision-ledger writes the decision store, from Dave\'s tap in AskUserQuestion. Do not write it by hand. To record a decision, ask the question with AskUserQuestion.';
@@ -2263,7 +2273,7 @@ function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', 
   if (p.unknown && !fixedByDir) {
     const all = [...new Set([cwd, ...dirs])];
     const ccv3 = all.some((d) => isCcv3Checkout(deps, d));
-    if (ccv3) return [deny('position-unknown', POSITION_WHY, 'push')];
+    if (ccv3) return [intentDeny(p, subagent, deny('position-unknown', POSITION_WHY, 'push'))];
     // A covered folder on the path denies too (R3a). Else judge the known folders anyway, so a --git-dir or --work-tree push (p.moved) still denies.
     const app = appPositionAt(deps, all, 'app-push', pushOffer(p));
     if (app.some((d) => d.action === 'deny')) return app;
@@ -2276,6 +2286,60 @@ function remoteKind(remote: string): 'origin' | 'fork' | null {
   const r = remote.toLowerCase();
   if (r === 'origin' || r.includes('parcadei')) return 'origin';
   return r === 'fork' || r.includes(CCV3_REPO) ? 'fork' : null;
+}
+
+/** A hard deny: it holds whatever decisions.enforcePush says (decide() asks hardAppDeny first). */
+const hardOf = (d: Deny): Deny => ({ ...d, hard: true });
+
+/**
+ * The intent of a push judged BEFORE its folder is known (card prflow-push-blocks): the push has an early return (--git-dir, popd, GIT_DIR,
+ * a cd alias) whose deny has scope push and so only warns while decisions.enforcePush is absent. Read from the shape alone (no git, no
+ * folder): a subagent push, a literal origin or parcadei remote, a prefixed unsafe option, a force form, --repo. The target is unknown, so
+ * a force form cannot be shown to be an own feature branch: it is hard. Returns the hard deny of the intent, else `fallback` unchanged.
+ */
+function intentDeny(p: PushShape, subagent: boolean, fallback: Deny): Deny {
+  if (subagent) return hardOf(deny('subagent', SUBAGENT_WHY, 'push'));
+  const r = (p.remote ?? '').toLowerCase();
+  if (r === 'origin' || r.includes('parcadei')) return hardOf(deny('push-origin', PUSH_ORIGIN_WHY, 'push'));
+  if (p.force || p.unsafeOpt) return hardOf(deny('push-unsafe', PUSH_UNSAFE_WHY, 'push'));
+  if (p.repoOpt) return hardOf(deny('push-target-unresolved', PUSH_REPO_OPT_WHY, 'push'));
+  return fallback;
+}
+
+/**
+ * Holdout scan of a CCv3 push (card prflow-push-blocks; seat conditions 3b). Runs only when both seams are present and the push is of a
+ * `re/` branch, or the diff against fork/main touches an answer-key path. It reads the lines the branch ADDS (three dots: from the merge
+ * base, so a merge of main adds nothing of main's), the commit messages of the range and the changed file names (an id can stand in a path).
+ * Every failure is a hard deny: the id list unreadable or empty, a git read that fails, a diff over the size bound. The bound is by size
+ * (files, bytes), never by a clock. The deny text and the log hold a COUNT only: no id, no title, no path.
+ */
+const SCAN_MAX_FILES = 2000;
+const SCAN_MAX_BYTES = 1_500_000;
+function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string): Deny | null {
+  if (!deps.holdoutIds || !deps.answerKeyHits) return null;
+  const isRe = branch.startsWith('re/');
+  const stop = (pattern: string, why: string): Deny => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, 'push'));
+  const ref = p.src ?? 'HEAD';
+  if (ref.startsWith('-')) return null; // shipTap denies a ref that starts with a dash
+  const sha = deps.git(dir, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
+  if (sha.status !== 0 || sha.stdout.trim() === '') return isRe ? stop('holdout-scan-unavailable', 'its head could not be read. Run the push again from the repo.') : null;
+  const range = `fork/main...${sha.stdout.trim()}`;
+  const names = deps.git(dir, ['diff', '--name-only', '--no-renames', '-z', range]);
+  if (names.status !== 0) return stop('holdout-scan-unavailable', 'the changed files against fork/main could not be read. Run git fetch fork main in the repo, then push again.');
+  const files = names.stdout.split('\0').filter(Boolean);
+  if (!isRe && deps.answerKeyHits(files).length === 0) return null;
+  if (files.length > SCAN_MAX_FILES) return stop('holdout-scan-too-large', `it changes ${files.length} files, over the bound of ${SCAN_MAX_FILES}. Push in parts: fewer files in each push.`);
+  let ids: string[];
+  try { ids = deps.holdoutIds(dir); } catch { return stop('holdout-scan-unavailable', 'the holdout id list could not be read, so the scan cannot run.'); }
+  if (!Array.isArray(ids) || ids.length === 0) return stop('holdout-scan-unavailable', 'the holdout id list is empty, so the scan cannot run.');
+  const diff = deps.git(dir, ['diff', '--unified=0', '--no-color', '--no-renames', range]);
+  const log = deps.git(dir, ['log', '--format=%B', `fork/main..${sha.stdout.trim()}`]);
+  if (diff.status !== 0 || log.status !== 0) return stop('holdout-scan-unavailable', 'the diff or the commit messages could not be read. Run the push again from the repo.');
+  if (diff.stdout.length > SCAN_MAX_BYTES) return stop('holdout-scan-too-large', `its diff is over ${SCAN_MAX_BYTES} bytes. Push in parts: fewer commits or files in each push.`);
+  const added = diff.stdout.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
+  const count = countIdsIn(`${added}\n${log.stdout}\n${files.join('\n')}`, ids);
+  if (count === 0) return null;
+  return hardOf(deny('holdout-id', `this push of ${branch} carries ${count} holdout id${count === 1 ? '' : 's'} in added lines, commit messages or file names. Remove them, or push without them. Which ones stays with the seat: this text names a count only.`, 'push'));
 }
 
 /**
@@ -2297,9 +2361,13 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
     // Ruling B (F3): the repo the value names decides first (a covered one gives app-push); a CCv3 or unknown one keeps the base text.
     // A relative value is resolved from the judged folder (its cd path and -C): advisor review of fix round 5.
     const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell, deps.home)) ?? coveredAmong(deps, [dir]);
-    return app === null ? d('push-target-unresolved', pushUnresolvedWhy(what)) : deny('push-target-unresolved', appPushUnresolvedWhy(app, what), 'app-push');
+    if (app !== null) return deny('push-target-unresolved', appPushUnresolvedWhy(app, what), 'app-push');
+    // The target is unknown (CCv3 or a folder nobody covers): the intent decides before the folder (card prflow-push-blocks).
+    return intentDeny(p, subagent, d('push-target-unresolved', pushUnresolvedWhy(what)));
   }
   if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow);
+  // --repo names the push target, so the remote this gate reads is not where the push goes: a hard deny, before any remote is read.
+  if (p.repoOpt) return hardOf(subagent ? d('subagent', SUBAGENT_WHY) : d('push-target-unresolved', PUSH_REPO_OPT_WHY));
   let remote = p.remote;
   if (remote === null) {
     const up = deps.git(dir, ['rev-parse', '--abbrev-ref', '@{push}']);
@@ -2310,12 +2378,22 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
     const u = deps.git(dir, ['remote', 'get-url', remote]);
     if (u.status === 0) kind = remoteKind(u.stdout.trim());
   }
-  if (kind === 'origin') return d('push-origin', PUSH_ORIGIN_WHY);
+  // Hard denies (card prflow-push-blocks): they hold whatever decisions.enforcePush says. A push to origin, a subagent push, a wide or
+  // prefixed unsafe option, --repo, and a force push to main or to a branch that cannot be named. A force push to an OWN feature branch stays a
+  // soft push-unsafe: the destructive-command-guard asks Dave there (seat ruling 2026-11-14).
+  if (kind === 'origin') return hardOf(d('push-origin', PUSH_ORIGIN_WHY));
   if (kind === null) return ALLOW;
   // A subagent never has a tap (D3): any push to the fork is denied, main included. Its pushes elsewhere are not our business.
-  if (subagent) return d('subagent', SUBAGENT_WHY);
-  if (p.force) return d('push-unsafe', PUSH_UNSAFE_WHY);
+  if (subagent) return hardOf(d('subagent', SUBAGENT_WHY));
+  if (p.unsafeOpt && !p.force) return hardOf(d('push-unsafe', PUSH_UNSAFE_WHY));
   const branch = p.branch ?? currentBranch(deps, dir);
+  if (p.force && (branch === 'main' || branch === '')) return hardOf(d('push-unsafe', PUSH_UNSAFE_WHY));
+  // The holdout scan runs BEFORE the force return: a force push of a re/ branch must not skip it (the guard's yes would send it out unscanned).
+  if (branch !== '' && branch !== 'main') {
+    const scanned = scanHoldout(p, deps, dir, branch);
+    if (scanned !== null) return scanned;
+  }
+  if (p.force) return d('push-unsafe', PUSH_UNSAFE_WHY);
   if (branch === '') return d('push-target-unresolved', pushUnresolvedWhy('the branch of this push cannot be named (detached HEAD?)'));
   if (branch === 'main') return ALLOW;
   const texts: ShipTexts = {
@@ -2578,7 +2656,7 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] 
     for (const s of [...rest, ...pushes]) {
       // The land script reads no folder, so GIT_DIR and an alias never block it.
       if (moved && s.kind !== 'land') {
-        denies.push(movedDeny(s, deps, cwd, shell, cmd.text));
+        denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id)));
         continue;
       }
       const found = s.kind === 'push' ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell }) : judgeAt(s, deps, cwd, shell, named);
@@ -2620,14 +2698,14 @@ function storeWriteCall(input: HookInput, deps: Deps): boolean {
  * or when the cwd or a known folder is covered (and none is CCv3), else today's. A target that is a CCv3 checkout or names no folder
  * keeps the base path and text.
  */
-function movedDeny(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', text: string): Deny {
+function movedDeny(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', text: string, subagent = false): Deny {
   const dirs = s.kind === 'push' ? pushDirsOf(s.push!, cwd, shell) : dirsAfter(cwd, s.at!.cds, shell, s.at!.loose);
   // Ruling B names the push: only a push reads the move targets, each resolved from every folder of its path (a cd before it moves the
   // shell first). A create or merge keeps the cwd rule.
   const targets = s.kind === 'push' ? [...new Set([cwd, ...dirs].flatMap((d) => (isUnexpanded(d) ? [] : moveTargets(text, d, shell, deps.home))))] : [];
   const dir = firstCovered(deps, targets) ?? coveredAmong(deps, [cwd, ...dirs].filter((d) => !isUnexpanded(d)));
   if (s.kind === 'push') {
-    return dir === null ? deny('push-target-unresolved', pushUnresolvedWhy(MOVED_WHY), 'push') : deny('push-target-unresolved', MOVED_WHY + inAppFolder(dir), 'app-push');
+    return dir === null ? intentDeny(s.push!, subagent, deny('push-target-unresolved', pushUnresolvedWhy(MOVED_WHY), 'push')) : deny('push-target-unresolved', MOVED_WHY + inAppFolder(dir), 'app-push');
   }
   return dir === null ? deny('repo-moved', MOVED_WHY) : { ...deny('repo-moved', MOVED_WHY + inAppFolder(dir)), homeFlags: true };
 }
@@ -2662,7 +2740,7 @@ export function decide(input: HookInput, deps: Deps): Decision {
   const cwd = input.cwd || process.cwd();
   const live = denies.find((d) => hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags));
   if (live) {
-    const { tapPath: _tap, homeFlags: _home, ...shown } = live;
+    const { tapPath: _tap, homeFlags: _home, hard: _hard, ...shown } = live;
     return { ...shown, ...notice };
   }
   return { action: 'allow', warn: `${denies[0].pattern}: ${denies[0].reason}`, scope: denies[0].scope, ...notice };
@@ -2672,7 +2750,7 @@ export function decide(input: HookInput, deps: Deps): Decision {
  * config, config or an option that widens the push, --repo, a push no shape reads, and every other app-push deny but shipTap's) denies
  * whatever decisions.enforceAppPush says. With the flag not false every app-push deny denies anyway, so the result is the same there.
  */
-const hardAppDeny = (d: Deny): boolean => d.scope === 'app-push' && d.tapPath !== true;
+const hardAppDeny = (d: Deny): boolean => d.hard === true || (d.scope === 'app-push' && d.tapPath !== true);
 
 /**
  * The Deps of one call (item 5): every git answer is kept by folder and arguments, so isCcv3Checkout, the coverage rev-parse and the
@@ -2935,7 +3013,17 @@ export function realDeps(opts: { start?: number } & Pick<GitOptions, 'now' | 'sp
     env: process.env,
     home: homedir(),
     tapScope: { registry: () => (registry ??= readRegistry({ env: process.env })) },
+    // The push scan: the ids come from the primary checkout of the folder being pushed (the dataset is git-ignored, so a worktree has none).
+    holdoutIds: (dir) => loadHoldoutIds(primaryRootOf(makeGit(run), dir)),
+    answerKeyHits: answerKeyHitsOf,
   };
+}
+
+/** The primary checkout of a folder: the parent of git's common dir. Throws when git cannot say (the scan then denies). */
+function primaryRootOf(git: Deps['git'], dir: string): string {
+  const r = git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (r.status !== 0 || r.stdout.trim() === '') throw new Error('no common dir');
+  return resolve(r.stdout.trim(), '..');
 }
 
 async function main(): Promise<void> {

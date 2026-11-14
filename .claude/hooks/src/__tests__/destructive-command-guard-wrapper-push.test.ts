@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { decide } from '../destructive-command-guard.js';
+import { normalizeGitWrappers } from '../shared/destructive-classifier.js';
 
 const interactiveFor = (tool: 'Bash' | 'PowerShell') => ({ tool_name: tool, permission_mode: 'default' });
 const FORMS = ['--force', '-f', '--force-with-lease', '+feat/x', ':feat/x', '--delete', '--mirror'];
@@ -50,5 +51,38 @@ describe('W: git wrapper pushes', () => {
       expect(decide(cmd, interactiveFor('PowerShell'), {}).decision, cmd).toBe('allow');
       expect(decide(cmd, interactiveFor('Bash'), {}).decision, cmd).toBe('allow');
     }
+  });
+});
+
+describe('W: normalizeGitWrappers cost grows linearly (seat read 16:0x: a regex that starts at every character of one long token is quadratic)', () => {
+  // Ratio form, no wall-clock limit: the time of 4N characters against N, the minimum of 3 samples each. Linear gives about 4, quadratic about 16.
+  // Breaks when: the match is not anchored at a token start (the optional path part starts at each character and runs to the token end).
+  const RATIO_LIMIT = 12;
+  const best = (fn: () => void): number => Math.min(...[0, 1, 2].map(() => { const t = performance.now(); fn(); return performance.now() - t; }));
+  const N = 20_000;
+  const shapes: Array<[string, (n: number) => string]> = [
+    ['one long token with no space', (n) => 'a'.repeat(n)],
+    ['a long path-like token (many slashes)', (n) => 'a/'.repeat(n / 2)],
+    ['a long token of git-safe-like fragments', (n) => 'git-safe.p'.repeat(n / 10)],
+  ];
+  for (const [name, make] of shapes) {
+    it(`W5: ${name}`, () => {
+      const small = make(N);
+      const big = make(4 * N);
+      normalizeGitWrappers(small); // warm up
+      const ratio = best(() => normalizeGitWrappers(big)) / Math.max(best(() => normalizeGitWrappers(small)), 0.05);
+      expect(ratio, `ratio ${ratio.toFixed(1)}`).toBeLessThan(RATIO_LIMIT);
+      expect(normalizeGitWrappers(small)).toBe(small); // nothing to rewrite
+    });
+  }
+
+  it('W6: the anchored match still rewrites each wrapper spelling at a token start', () => {
+    // Breaks when: the lookbehind is too strict (a wrapper after a quote, a separator or the text start is no longer read).
+    for (const [text, want] of [
+      ['pwsh -File scripts/git-safe.ps1 push --force fork x', 'git push --force fork x'],
+      [String.raw`cd /r && pwsh -File C:\repo\scripts\git-safe.ps1 -C C:\repo push -f fork x`, 'cd /r && git push -f fork x'],
+      ['& scripts/git-safe.ps1 push --force fork x', 'git push --force fork x'],
+      ['echo ok; scripts/git-for.ps1 -UseGitSafe push --delete fork x', 'echo ok; git push --delete fork x'],
+    ] as const) expect(normalizeGitWrappers(text), text).toBe(want);
   });
 });

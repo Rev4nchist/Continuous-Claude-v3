@@ -240,6 +240,26 @@ describe('HS: the holdout scan on a push of a re/ branch', () => {
     expect(verdict(bash('git push fork feat/x'), { ...w, diff: '+++ b/gold/a.json\n+{}\n' }).action).toBe('allow');
   });
 
+  it('H12: an id that stands only in the PATH of an added or renamed file denies (seat 2, 14:1x)', () => {
+    // Breaks when: only the added lines and the messages are scanned (a file named after a holdout PR passes).
+    tapRe();
+    expect(denied(bash(PUSH), { ...RE, files: [`src/pr-${SYNTH}-fix.ts`], diff: '+++ b/src/x.ts\n+const a = 1;\n' })).toBe(true);
+    expect(denied(bash(PUSH), { ...RE, files: ['src/old.ts', `docs/notes-for-#${SYNTH}.md`], diff: '+++ b/src/x.ts\n+const a = 1;\n' })).toBe(true);
+    expect(verdict(bash(PUSH), { ...RE, files: ['src/pr-fix.ts'], diff: '+++ b/src/x.ts\n+const a = 1;\n' }).action).toBe('allow');
+  });
+
+  it('H13: a FORCE push of a re/ branch is scanned too (the guard\'s yes must not send it out unscanned)', () => {
+    // Breaks when: the force return comes before the scan (seat read 16:0x).
+    tapRe();
+    for (const c of ['git push --force fork re/re-x', 'git push -f fork re/re-x', 'git push fork +re/re-x']) {
+      const d = verdict(bash(c), { ...RE, diff: `+++ b/src/a.ts\n+// PR ${SYNTH}\n` });
+      expect(d.action, c).toBe('deny');
+      expect(d.action === 'deny' ? d.pattern : '', c).toBe('holdout-id');
+    }
+    // A clean force push of a re/ branch stays the soft push-unsafe (the guard asks Dave), never a hard deny.
+    expect(verdict(bash('git push --force fork re/re-x'), { ...RE, diff: '+++ b/src/a.ts\n+const a = 1;\n' }).action).toBe('allow');
+  });
+
   it('H11: a re/ push with no id passes with its ship tap only (no question added)', () => {
     // Breaks when: the scan denies a clean push.
     tapRe();
