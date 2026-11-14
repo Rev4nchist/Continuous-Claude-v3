@@ -102,7 +102,7 @@ const FUTURE_SLACK_MS = 5 * 60_000;
  */
 export const GIT_TIMEOUT_MS = 2000;
 /**
- * The reasons a stamp may have skipped the CodeRabbit CLI review (pre-pr.mjs: cr_skip_reason). Allowed: "cli-missing" (cr is not installed); "cli-cap" (today's paid CLI spend reached the daily cap; no run was spent); "cap" only with cr_finished_runs >= 1; "rate-limited" only with a known retry time. "flag" (--skip-cr),
+ * The reasons a stamp may have skipped the CodeRabbit CLI review (pre-pr.mjs: cr_skip_reason). Allowed: "cli-missing" (cr is not installed); "cli-cap" (today's paid CLI spend reached the daily cap; no run was spent); "cap" only with cr_finished_runs >= 1 or cr_partial_earned >= 1 (a partial run whose findings the branch changed); "rate-limited" only with a known retry time. "flag" (--skip-cr),
  * "no-changes" (the CLI saw an empty scope) and "earlier-step-failed" are not allowed. "docs-only" (every changed file is docs, so the CLI had
  * nothing to review) is allowed only when the stamp has cr_docs_only === true AND docs_verified === true. "rate-limited" is allowed only
  * with a known retry time in the stamp (cr_retry_minutes), which the gate log also shows. "answer-key" (the diff holds a path of the REVIEW.md
@@ -505,7 +505,7 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
   if (raw === null) return 'no stamp. The pre-PR check has not passed in this checkout';
   let s: unknown;
   try { s = JSON.parse(raw); } catch { return 'the stamp is not valid JSON'; }
-  const o = s as { head?: unknown; at?: unknown; cr_skipped?: unknown; cr_skip_reason?: unknown; cr_retry_minutes?: unknown; cr_finished_runs?: unknown; cr_docs_only?: unknown; docs_verified?: unknown; cr_answer_key?: unknown; answer_key_paths?: unknown; body_sha256?: unknown } | null;
+  const o = s as { head?: unknown; at?: unknown; cr_skipped?: unknown; cr_skip_reason?: unknown; cr_retry_minutes?: unknown; cr_finished_runs?: unknown; cr_docs_only?: unknown; docs_verified?: unknown; cr_answer_key?: unknown; answer_key_paths?: unknown; body_sha256?: unknown; cr_partial_earned?: unknown; cr_unreviewed_files?: unknown } | null;
   if (!o || typeof o !== 'object' || typeof o.head !== 'string' || o.head === '') return 'the stamp has no head';
   const at = typeof o.at === 'string' ? Date.parse(o.at) : NaN;
   if (!Number.isFinite(at)) return 'the stamp has no valid time';
@@ -514,9 +514,9 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
   if (at - now > FUTURE_SLACK_MS) return 'the stamp time is in the future';
   const reason = String(o.cr_skip_reason);
   const waitKnown = reason === 'rate-limited' && typeof o.cr_retry_minutes === 'number' && o.cr_retry_minutes > 0;
-  const capEarned = reason === 'cap' && typeof o.cr_finished_runs === 'number' && o.cr_finished_runs >= 1;
+  const capEarned = reason === 'cap' && ((typeof o.cr_finished_runs === 'number' && o.cr_finished_runs >= 1) || (Number.isInteger(o.cr_partial_earned) && (o.cr_partial_earned as number) >= 1));
   if (o.cr_skipped === true && reason === 'cap' && !capEarned) {
-    return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? 'none')}). The cap counts runs that finished with a PASS. Fix the CLI and run pre-pr.mjs again`;
+    return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? 'none')}) and no partial run earned it (cr_partial_earned: ${String(o.cr_partial_earned ?? 'none')}). The cap counts runs that finished with a PASS, or partial runs whose findings the branch changed. A finding judged false and not changed does not earn: the way out is Dave's recorded decision, not an edit of the lines. Fix the CLI and run pre-pr.mjs again`;
   }
   const docsOnlyEarned = reason === 'docs-only' && o.cr_docs_only === true && o.docs_verified === true;
   if (o.cr_skipped === true && reason === 'docs-only' && !docsOnlyEarned) {
