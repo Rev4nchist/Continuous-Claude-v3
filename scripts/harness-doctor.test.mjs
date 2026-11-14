@@ -48,7 +48,7 @@
 //   lanes:relative-path-guard: at or under the ratchet baseline (PASS); a file over it (WARN naming the file); no baseline (WARN)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, symlinkSync, rmdirSync, unlinkSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -259,7 +259,8 @@ function run(fx, extra = [], envExtra = {}) {
   // HARNESS_DOCTOR_SCHTASKS_DIR points the doctor at fake schtasks output, so a test never reads the real Task Scheduler.
   // HARNESS_DOCTOR_NO_DB=1 keeps a test from reading whatever database the shell points at.
   // CCV3_HOOK_TRACE is dropped from the caller env: the doctor reads it (hooks:trace-fresh), so a shell that sets it must not change a test.
-  const { CCV3_HOOK_TRACE: _callerTrace, ...callerEnv } = process.env;
+  // HARNESS_DOCTOR_EMBED_PRIVATE_MB likewise: the tests without the seam must read a real process.
+  const { CCV3_HOOK_TRACE: _callerTrace, HARNESS_DOCTOR_EMBED_PRIVATE_MB: _callerEmbed, ...callerEnv } = process.env;
   const env = { ...callerEnv, HARNESS_DOCTOR_SCHTASKS_DIR: fx.schtasks, HARNESS_DOCTOR_NO_DB: '1', ...envExtra };
   const r = spawnSync(process.execPath, [DOCTOR, '--home', fx.home, '--repo', fx.repo, ...extra], { encoding: 'utf8', windowsHide: true, timeout: 60000, env });
   const lines = (r.stdout ?? '').split(/\r?\n/).filter(Boolean);
@@ -2221,4 +2222,70 @@ test('fleetopsSize: FAIL when the last export stopped on the size limit; WARN fo
 test('fleetopsSize: a file that does not parse is a WARN, not a crash', () => {
   // Breaks if a half-written file throws and hides the other doctor checks.
   assert.equal(fleetopsSize(dashHome({ 'refresh.json': '{not json' })).status, 'WARN');
+});
+
+// ---- memory (embedding-daemon-commit-leak, 2026-11-13) ----
+const embedInfo = (fx, body) => put(join(fx.home, '.claude', 'run', 'ccv3-embedding.json'), typeof body === 'string' ? body : JSON.stringify(body));
+
+test('memory:embedding-daemon is a PASS that says info when no daemon runs (no discovery file)', () => {
+  const r = run(fixture());
+  assert.equal(r.checks['memory:embedding-daemon']?.status, 'PASS');
+  assert.match(r.checks['memory:embedding-daemon'].detail, /^info: no daemon runs/);
+});
+
+test('memory:embedding-daemon: under 4096 MB PASS, from 4096 WARN, from 8192 FAIL (exit 1); the detail names the pid and the size', () => {
+  const fx = fixture();
+  embedInfo(fx, { pid: 4242, port: 1 });
+  for (const [mb, status, code] of [['3000', 'PASS', 0], ['4096', 'WARN', 0], ['8191', 'WARN', 0], ['8192', 'FAIL', 1], ['97300', 'FAIL', 1]]) {
+    const r = run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: mb });
+    const c = r.checks['memory:embedding-daemon'];
+    assert.equal(c?.status, status, `${mb} MB: ${c?.detail}`);
+    assert.match(c.detail, new RegExp(`pid 4242 holds ${mb} MB`));
+    assert.equal(r.code, code, `${mb} MB exit code`);
+  }
+});
+
+test('memory:embedding-daemon: a stale file (pid gone) is a PASS info; a bad file or pid is a WARN; an unreadable size is a WARN', () => {
+  const fx = fixture();
+  embedInfo(fx, { pid: 4242 });
+  assert.match(run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: 'gone' }).checks['memory:embedding-daemon'].detail, /^info: pid 4242 .* does not run/);
+  const reused = run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: 'other' }).checks['memory:embedding-daemon'];
+  assert.equal(reused.status, 'PASS', 'a pid reused by a process that is not python is a stale file, not a leak');
+  assert.match(reused.detail, /^info: pid 4242 .* is not a python process now/);
+  assert.equal(run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: 'x' }).checks['memory:embedding-daemon'].status, 'WARN');
+  for (const body of ['not json', { pid: 'a; Stop-Process 1' }, { pid: -1 }, {}]) {
+    embedInfo(fx, body);
+    const c = run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: '10' }).checks['memory:embedding-daemon'];
+    assert.equal(c.status, 'WARN', JSON.stringify(body));
+  }
+});
+
+test('memory:embedding-daemon reads a real process without the seam (Windows): a pid that is not python is a stale file', { skip: process.platform !== 'win32' }, () => {
+  const fx = fixture();
+  embedInfo(fx, { pid: process.pid }); // this node test runner
+  const c = run(fx).checks['memory:embedding-daemon'];
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, new RegExp(`^info: pid ${process.pid} .* is not a python process now`));
+});
+
+// The first real python.exe on PATH (Windows `where`; not the WindowsApps store alias), or null: the test then skips.
+const realPython = (() => {
+  if (process.platform !== 'win32') return null;
+  try {
+    const all = execFileSync('where', ['python'], { encoding: 'utf8', windowsHide: true }).split(/\r?\n/).map((s) => s.trim());
+    return all.find((p) => p && /\.exe$/i.test(p) && !/WindowsApps/i.test(p) && existsSync(p)) ?? null;
+  } catch { return null; }
+})();
+
+test('memory:embedding-daemon reads a real python process without the seam (Windows): a small one is under the limits', { skip: process.platform !== 'win32' || !realPython }, () => {
+  const child = spawn(realPython, ['-c', 'import time; time.sleep(60)'], { stdio: 'ignore', windowsHide: true });
+  try {
+    const fx = fixture();
+    embedInfo(fx, { pid: child.pid });
+    const c = run(fx).checks['memory:embedding-daemon'];
+    assert.equal(c.status, 'PASS', c.detail);
+    assert.match(c.detail, new RegExp(`pid ${child.pid} holds \\d+ MB`));
+  } finally {
+    child.kill(); // only our own child
+  }
 });
