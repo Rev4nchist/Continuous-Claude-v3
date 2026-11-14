@@ -25,7 +25,7 @@
  * Links: the nearest existing parent is resolved with realpath, so a file reached through a
  * junction or symlink gets the key of the real file.
  */
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'path';
 import { isHarnessPath } from './leases.js';
 import { normalizeProjectKey } from './session-id.js';
@@ -151,5 +151,64 @@ export function resolveClaimKey(rawPath: string, options: ClaimKeyOptions = {}):
     }
   } catch {
     return null;
+  }
+}
+
+export interface RepoContext {
+  /** Top folder of the repo that holds `dir`, real path, forward slashes. */
+  top: string;
+  /** Same project string as `ClaimKey.project`. */
+  project: string;
+}
+
+/**
+ * The repo of a folder (the payload cwd): its top folder and project key. File-claims uses it to
+ * list the claims other sessions hold in that repo and to spell each claimed path in full. A
+ * worktree inside the primary checkout resolves to its own top folder. Null when `dir` is outside
+ * any repo or on a share, or a `.git` cannot be read. Reads files only. Never throws.
+ */
+export function resolveRepoContext(dir: string): RepoContext | null {
+  try {
+    if (!dir || isNetworkPath(dir)) return null;
+    const anchor = nearestExisting(resolve(dir));
+    if (!anchor) return null;
+    let cur = real(anchor);
+    for (;;) {
+      const common = commonDirOf(cur);
+      if (common === null) return null;
+      if (common !== undefined) {
+        const project = normalizeProjectKey(real(common).replace(/\\/g, '/').replace(/\/?\.git\/?$/, ''));
+        return { top: cur.replace(/\\/g, '/'), project };
+      }
+      const up = dirname(cur);
+      if (up === cur) return null;
+      cur = up;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The top folders of the linked worktrees of the repo whose top folder is `top`: one `gitdir` file
+ * per worktree under `<top>/.git/worktrees`. Reads files only. A repo with no worktrees, or a `top`
+ * that is not a primary checkout, gives []. Never throws.
+ */
+export function listWorktreeTops(top: string): string[] {
+  try {
+    const dir = join(top, '.git', 'worktrees');
+    if (!existsSync(dir)) return [];
+    const out: string[] = [];
+    for (const name of readdirSync(dir)) {
+      try {
+        const gitFile = readFileSync(join(dir, name, 'gitdir'), 'utf8').trim();
+        if (gitFile) out.push(dirname(gitFile).replace(/\\/g, '/'));
+      } catch {
+        // one unreadable entry does not hide the others
+      }
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
