@@ -247,10 +247,15 @@ async function p7() {
   await setLane('re-dummy-2', 'active', 'zz-rp-own2');
   await setLane('re-dummy-3', 'active', 'zz-rp-own3');
   const two = ready('zz-rp-me');
-  check('P7 seat + one spender + a pack held by 2 owners: cap 2/3, ext-dummy is READY', has(two.out, /cap 2\/3 units/) && has(two.out, /^READY ext-dummy /m), two.all.slice(0, 300));
+  check('P7 seat + one spender + a pack held by 2 owners: cap 2/5, ext-dummy is READY', has(two.out, /cap 2\/5 units/) && has(two.out, /^READY ext-dummy /m), two.all.slice(0, 300));
+  // Cap 5 (Dave 2026-11-13, card coord-program-cap-5): a 4th unit leaves room, a 5th fills the cap.
   await setLane('re-dummy-1', 'active', 'zz-rp-own4');
+  await setLane('re-dummy-5', 'active', 'zz-rp-own5');
+  const four = ready('zz-rp-me');
+  check('P7 four units: cap 4/5, ext-dummy is READY as the 5th', has(four.out, /cap 4\/5 units/) && has(four.out, /^READY ext-dummy /m), four.all.slice(0, 300));
+  await setLane('re-dummy-6', 'active', 'zz-rp-own6');
   const full = ready('zz-rp-me');
-  check('P7 a third unit: cap 3/3, ext-dummy HELD BACK cap-full, RESULT cap-full', has(full.out, /cap 3\/3 units/) && has(full.out, /^HELD BACK ext-dummy {2}cap-full$/m) && has(full.out, /^RESULT cap-full$/m), full.all.slice(0, 300));
+  check('P7 a fifth unit: cap 5/5, ext-dummy HELD BACK cap-full, RESULT cap-full', has(full.out, /cap 5\/5 units/) && has(full.out, /^HELD BACK ext-dummy {2}cap-full$/m) && has(full.out, /^RESULT cap-full$/m), full.all.slice(0, 300));
 }
 
 async function p8() {
