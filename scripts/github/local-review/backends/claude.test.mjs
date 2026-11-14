@@ -187,6 +187,24 @@ test('translation: benign events (thinking, rate limit, thinking tokens) pass wi
   assert.equal(auditStream(t.stdout, { tmpdir: TMP }).verdict, 'pass');
 });
 
+test('translation: a rate-limit notice that is not allowed is a problem; the real allowed shape is not', () => {
+  // The real notice of 2026-11-14: status allowed, overage rejected (overage is off for the account). Only status counts.
+  const real = { status: 'allowed', rateLimitType: 'seven_day', overageStatus: 'rejected', isUsingOverage: false };
+  for (const info of [real, { status: 'allowed_warning' }]) {
+    const t = translateStream(stream(init(), { type: 'rate_limit_event', rate_limit_info: info }, result()), { treeDir: TREE });
+    assert.deepEqual(t.problems, [], JSON.stringify(info));
+  }
+  for (const ev of [
+    { type: 'rate_limit_event', rate_limit_info: { status: 'rejected' } },
+    { type: 'rate_limit_event', rate_limit_info: { status: 'ALLOWED' } },
+    { type: 'rate_limit_event', rate_limit_info: {} },
+    { type: 'rate_limit_event' },
+  ]) {
+    const t = translateStream(stream(init(), ev, result()), { treeDir: TREE });
+    assert.ok(t.problems.some((p) => /rate-limit notice/.test(p)), JSON.stringify(ev));
+  }
+});
+
 test('translation: a line that is not JSON is a problem, never dropped in silence', () => {
   const t = translateStream(`${happy()}\nnot json`, { treeDir: TREE });
   assert.ok(t.problems.some((p) => /not JSON/.test(p)));
@@ -337,14 +355,20 @@ test('path check: every way out of the tree is caught; plain tree paths pass', (
   const outside = [
     path.join(TMP, 'cursor-review-abc123', 'tree2', 'x.js'), path.join(os.homedir(), '.ssh', 'id_rsa'), '../x.js', 'src/../../x', '~/.ssh/id_rsa',
     '%USERPROFILE%\\x', '$HOME/x', 'file:///c:/x', '\\\\server\\share\\x', '//server/share/x', 'D:x', `${TREE}\\.. \\secret`, 'src/name.', 'src/name ',
-    '{src,..}/x', 'C:/Users/**', '/', '/etc/passwd',
+    '{src,..}/x', '/', '/etc/passwd', path.join(os.homedir(), '**'),
   ];
+  // Windows only: a drive path is absolute only on win32, and win32 paths compare without case.
+  // On POSIX 'C:/Users/**' is a relative name under the cwd (the tree), and an upper-case TREE is another folder.
+  if (process.platform === 'win32') outside.push('C:/Users/**');
   for (const p of outside) assert.equal(escapesTree(p, TREE), true, p);
-  for (const p of [inTree('src/a.js'), 'src/a.js', './src/a.js', '**/*.js', 'src/**/*.{js,ts}', TREE, TREE.toUpperCase()]) assert.equal(escapesTree(p, TREE), false, p);
+  const inside = [inTree('src/a.js'), 'src/a.js', './src/a.js', '**/*.js', 'src/**/*.{js,ts}', TREE];
+  if (process.platform === 'win32') inside.push(TREE.toUpperCase());
+  for (const p of inside) assert.equal(escapesTree(p, TREE), false, p);
 });
 
 test('path check: a Glob pattern or a Grep glob that climbs out voids the run', () => {
-  for (const ev of [toolUse('t1', 'Glob', { pattern: 'C:/Users/dkhay/.ssh/*' }), toolUse('t1', 'Glob', { pattern: '../../**' }), toolUse('t1', 'Grep', { pattern: 'x', glob: '../**' }), toolUse('t1', 'Grep', { pattern: 'x', path: path.join(TMP, 'other') })]) {
+  const outsideGlob = process.platform === 'win32' ? 'C:/Users/dkhay/.ssh/*' : path.join(os.homedir(), '.ssh', '*');
+  for (const ev of [toolUse('t1', 'Glob', { pattern: outsideGlob }), toolUse('t1', 'Glob', { pattern: path.join(TMP, 'other', '**') }), toolUse('t1', 'Glob', { pattern: '../../**' }), toolUse('t1', 'Grep', { pattern: 'x', glob: '../**' }), toolUse('t1', 'Grep', { pattern: 'x', path: path.join(TMP, 'other') })]) {
     const t = translateStream(stream(init(), ev, toolResult('t1', ''), result()), { treeDir: TREE });
     assert.ok(t.problems.some((p) => /outside the review tree/.test(p)), JSON.stringify(ev));
   }

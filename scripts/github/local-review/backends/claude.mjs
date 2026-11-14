@@ -37,6 +37,8 @@ const CLAUDE_MD_EXCLUDES = Object.freeze(['**/CLAUDE.md', '**/CLAUDE.local.md', 
 const DROP_ENV = /^(ANTHROPIC_.*|CLAUDE_CODE_.*|CLAUDECODE|CLAUDE_PID|CLAUDE_PROJECT_DIR|CLAUDE_ENV_FILE)$/i;
 // System events that carry nothing the trace needs and no text from outside the run. Every other subtype (a hook event too) voids.
 const BENIGN_SYSTEM = new Set(['thinking_tokens']);
+// The rate-limit statuses of a run that went ahead: "allowed" (seen in the 2026-11-14 smoke) and "allowed_warning" (near the limit).
+const RATE_LIMIT_OK = new Set(['allowed', 'allowed_warning']);
 const PATH_PREFIX = /^(?:[~%$]|file:)/i;
 const UNC = /^[\\/]{2}/;
 const DRIVE_REL = /^[A-Za-z]:(?![\\/])/;
@@ -223,7 +225,14 @@ export function translateStream(raw, { treeDir }) {
       else unknown(`system_${ev.subtype}`, `a system event ${JSON.stringify(String(ev.subtype))} is not allowed in a review run`);
       continue;
     }
-    if (ev.type === 'rate_limit_event') { out.push({ type: 'system', subtype: 'rate_limit_event', rate_limit_info: ev.rate_limit_info ?? null }); continue; }
+    if (ev.type === 'rate_limit_event') {
+      // Only the notice's own status counts (overageStatus is "rejected" whenever overage is off). A run that was not allowed,
+      // or a notice with no status, never ends ok.
+      const status = isObject(ev.rate_limit_info) ? ev.rate_limit_info.status : undefined;
+      if (!RATE_LIMIT_OK.has(status)) problems.push(`a rate-limit notice with status ${JSON.stringify(status ?? null)} is not allowed in a review run`);
+      out.push({ type: 'system', subtype: 'rate_limit_event', rate_limit_info: ev.rate_limit_info ?? null });
+      continue;
+    }
     if (ev.type === 'assistant' || ev.type === 'user') {
       const blocks = blocksOf(ev);
       if (!blocks) { unknown(`${ev.type}_shape`, `an ${ev.type} event has no content list`); continue; }
