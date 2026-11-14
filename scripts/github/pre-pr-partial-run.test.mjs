@@ -350,3 +350,44 @@ test('PA12: the counter and the stamp hold positions and counts only, no finding
   assert.equal(stampText.includes(text), false, 'stamp');
   assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), true);
 });
+
+// Round 1 of the CodeRabbit CLI review of pre-pr.mjs (15b4a114): three holes in the earn rule.
+
+test('PA13: a finding file name with git pathspec magic counts as a literal path, never as fixed', async () => {
+  // Breaks when: findingFixed passes the file name to git as a pathspec (":(top)src/a.ts" and "src/*.ts" match the changed file).
+  const repo = paRepo();
+  const head = paChangeLine(repo, 11);
+  for (const file of [':(top)src/a.ts', ':/src/a.ts', 'src/*.ts', ':(glob)src/**', ':(icase)SRC/A.TS']) {
+    const row = paPartial(repo.head, { findings: [{ file, start: 11, end: 11 }] });
+    assert.equal((await paAtCap(repo, [row, PA_FILLER], head)).partialEarned, 0, file);
+  }
+  // The control: the literal name of the same changed file earns, so the cases above fail for their own reason.
+  assert.equal((await paAtCap(repo, [paPartial(repo.head, { findings: [{ file: 'src/a.ts', start: 11, end: 11 }] }), PA_FILLER], head)).partialEarned, 1);
+});
+
+test('PA14: a stream with a line that is not JSON writes no partial field (the stream may have lost a finding)', async () => {
+  // Breaks when: partialRowOf ignores parsed.unparsed (a lost finding line would leave the row with fewer findings, so it could earn).
+  const repo = paRepo();
+  const lost = { status: 0, stdout: `${ev(CONTEXT, MAJOR)}this line is not json\n${ev(paDone())}`, stderr: '' };
+  const r = await runCodeRabbit(crInRepo(repo, withUsage(lost)));
+  assert.equal(r.status, 'FAIL');
+  const row = paRead(repo).runs.at(-1);
+  assert.equal(row.partial, undefined);
+  assert.equal('reviewed' in row || 'unreviewed' in row || 'findings' in row, false);
+  // The control: the same stream without the bad line writes the partial row.
+  const clean = paRepo();
+  await runCodeRabbit(crInRepo(clean, withUsage(paStream(MAJOR, paDone()))));
+  assert.equal(paRead(clean).runs.at(-1).partial, true);
+});
+
+test('PA15: a user git setting that merges hunks (diff.interHunkContext) cannot make an untouched finding line count as fixed', async () => {
+  // Breaks when: the findingFixed diff does not pass --inter-hunk-context=0 (two far changes merge into one hunk that covers line 15).
+  const repo = paRepo();
+  git(repo.dir, 'config', 'diff.interHunkContext', '10');
+  paChangeLine(repo, 11);
+  const head = paChangeLine(repo, 19);
+  const row = paPartial(repo.head, { findings: [{ file: 'src/a.ts', start: 15, end: 15 }] });
+  assert.equal((await paAtCap(repo, [row, PA_FILLER], head)).partialEarned, 0, 'line 15 was never changed');
+  const near = paPartial(repo.head, { findings: [{ file: 'src/a.ts', start: 19, end: 19 }] });
+  assert.equal((await paAtCap(repo, [near, PA_FILLER], head)).partialEarned, 1, 'the control: line 19 was changed');
+});

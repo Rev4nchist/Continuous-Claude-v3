@@ -990,6 +990,8 @@ function partialRowOf({ verdict, parsed, exitProblem, changedPaths = [] }) {
   const unreviewed = Number(c.unreviewedFileCount);
   if (!Number.isInteger(unreviewed) || unreviewed <= 0) return null;
   if ((parsed.errors ?? []).length > 0 || parsed.awaiting) return null;
+  // A line that was not JSON may have been a finding: the row could list fewer findings than the run found. Fail closed.
+  if (Number(parsed.unparsed ?? 0) > 0) return null;
   if (exitProblem && exitProblem !== 'exit 1') return null;
   const reviewed = Array.isArray(c.reviewedFiles) ? c.reviewedFiles.length : Math.max(0, changedPaths.length - unreviewed);
   const asInt = (v) => (Number.isInteger(v) ? v : null);
@@ -1007,7 +1009,8 @@ function findingFixed(git, from, to, f) {
   if (!Number.isInteger(f.start) || f.start < 1) return false;
   const end = f.end === null || f.end === undefined ? f.start : f.end;
   if (!Number.isInteger(end) || end < f.start) return false;
-  const d = git(['diff', '--unified=0', '--no-renames', `${from}..${to}`, '--', f.file]);
+  // The name is a literal path (--literal-pathspecs): ":(top)x" or "src/*.ts" must not match files. --inter-hunk-context=0 keeps far hunks apart whatever the user's git config says.
+  const d = git(['--literal-pathspecs', 'diff', '--unified=0', '--inter-hunk-context=0', '--no-renames', `${from}..${to}`, '--', f.file]);
   if (d.status !== 0) return false;
   for (const m of d.stdout.matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/gm)) {
     const a = Number(m[1]);
