@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSy
 import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import * as REC from './record.mjs'; // the new exports are read through REC so a missing one fails its own test, not the whole file
 import { createHash } from 'node:crypto';
 import {
   branchSlug, buildFunnel, confidenceOf, findRecord, lastReviewedSha, listRecords, majorsOpen, settlePrior, writeRecord,
@@ -68,7 +69,7 @@ test('13.3 the stored path is <root>/<slug>/<head40>/<runId>.json and sha256 is 
   const w = writeRecord(rec('r1', H1), { stateRoot: root });
   assert.equal(w.path, path.join(root, 'feat-x', H1, 'r1.json'));
   assert.equal(createHash('sha256').update(readFileSync(w.path)).digest('hex'), w.sha256);
-  assert.equal(JSON.parse(readFileSync(w.path, 'utf8')).schema, 1);
+  assert.equal(JSON.parse(readFileSync(w.path, 'utf8')).schema, 2);
 });
 
 test('13.3 the state root comes from opts or the environment, never a fixed home path in tests (breaks if the injection is ignored)', () => {
@@ -208,4 +209,128 @@ test('listRecords skips <runId>.trace.json beside a record: the trace is not a r
   assert.equal(got.records.length, 1);
   assert.deepEqual(got.unreadable, []);
   assert.equal(got.records[0].record.runId, 'r1');
+});
+
+// ---------- schema 2 ----------
+
+/** A schema 1 record, as an old engine wrote it: no field of the schema 2 list. Written by hand, because writeRecord always stamps the current schema. */
+function writeOldRecord(root, runId, head, findings, ts) {
+  const dir = path.join(root, 'feat-x', head);
+  mkdirSync(dir, { recursive: true });
+  const body = { schema: 1, runId, branch: 'feat/x', head, status: 'ok', coverage: { complete: true }, findings, ts, majorsOpen: findings.length };
+  writeFileSync(path.join(dir, `${runId}.json`), `${JSON.stringify(body, null, 2)}\n`);
+  return body;
+}
+
+test('RECORD_SCHEMA is 2 and RECORD_FIELDS names the schema 2 fields once each (breaks if the bump or a field name is dropped)', () => {
+  assert.equal(REC.RECORD_SCHEMA, 2);
+  assert.deepEqual([...REC.RECORD_FIELDS].sort(), [
+    'armId', 'backend', 'contextVersion', 'cursorRunId', 'engineMainSha', 'impactRows', 'overallCorrectness', 'promptVersion', 'runIds', 'target', 'uncertainMajors', 'verify',
+  ]);
+  assert.equal(new Set(REC.RECORD_FIELDS).size, REC.RECORD_FIELDS.length);
+  assert.throws(() => { REC.RECORD_FIELDS.push('x'); }, TypeError, 'the list is frozen');
+});
+
+test('a folder with a schema 1 and a schema 2 record at one head stays readable: listRecords lists both, majorsOpen unions them, lastReviewedSha finds the old head (breaks if a reader requires a schema 2 field)', () => {
+  const root = tmp('mixed');
+  writeOldRecord(root, 'old1', H1, [major('old-major')], '2026-11-02T10:00:01.000Z');
+  const w = writeRecord(rec('new2', H1, [major('new-major')], { ts: '2026-11-13T10:00:00.000Z' }), { stateRoot: root });
+  assert.equal(w.record.schema, 2);
+  const got = listRecords({ branch: 'feat/x', head: H1 }, { stateRoot: root });
+  assert.deepEqual(got.records.map((r) => r.record.schema), [1, 2]);
+  assert.deepEqual(got.unreadable, []);
+  assert.deepEqual(majorsOpen(got.records.map((r) => r.record)).map((f) => f.id).sort(), ['new-major', 'old-major']);
+  assert.equal(w.record.majorsOpen, 2, 'the new record counts the schema 1 Major');
+  assert.equal(lastReviewedSha({ branch: 'feat/x', head: H2, isAncestor: () => true }, { stateRoot: root }), H1);
+  assert.equal(findRecord({ branch: 'feat/x', head: H1 }, { stateRoot: root }).runId, 'new2');
+  assert.equal(findRecord({ branch: 'feat/x', head: H1, runId: 'old1', completeOnly: true }, { stateRoot: root }).schema, 1);
+});
+
+// ---------- majorsOpen under a lock ----------
+
+test('writeRecord lists the earlier records, computes majorsOpen and renames inside the head-folder lock (breaks if any of the three runs outside withLock)', () => {
+  const root = tmp('lock-order');
+  writeRecord(rec('r1', H1, [major('x')]), { stateRoot: root });
+  const events = [];
+  const io = { readdirSync: (...a) => { events.push('list'); return readdirSync(...a); }, renameSync: (a, b) => { events.push('rename'); return realRename(a, b); } };
+  const withLock = (file, o, fn) => {
+    events.push(`enter:${path.dirname(file) === path.join(root, 'feat-x', H1) ? 'head' : file}`);
+    const out = fn();
+    events.push('exit');
+    return out;
+  };
+  const w = writeRecord(rec('r2', H1, [major('y')]), { stateRoot: root, fs: io, withLock });
+  assert.equal(events[0], 'enter:head', 'the lock sits in the head folder');
+  assert.equal(events.at(-1), 'exit');
+  assert.ok(events.includes('list') && events.includes('rename'));
+  assert.equal(events.indexOf('list') > 0 && events.lastIndexOf('rename') < events.length - 1, true, 'the listing and the rename are between enter and exit');
+  assert.equal(w.record.majorsOpen, 2);
+});
+
+test('a lock that stays held throws and writes nothing; a lock result of ok:false never lets the write through (breaks if { ok: false } is ignored)', () => {
+  const root = tmp('lock-held');
+  const held = () => ({ ok: false, reason: 'lock', detail: 'the lock is held by another session' });
+  assert.throws(() => writeRecord(rec('r1', H1, [major('x')]), { stateRoot: root, withLock: held }), /lock/);
+  assert.deepEqual(readdirSync(path.join(root, 'feat-x', H1)), [], 'no record and no temp file');
+});
+
+test('two writers at one head: the second waits for the first rename, then counts the first Major in majorsOpen (breaks if the listing happens outside the lock, so a concurrent writer misses the other Major)', () => {
+  const root = tmp('lock-two');
+  let second;
+  let secondError = null;
+  let fired = false;
+  const io = {
+    renameSync: (a, b) => {
+      if (!fired) {
+        fired = true;
+        // The first writer holds the lock and has not renamed yet. A second writer at the same head must not get through.
+        try { second = writeRecord(rec('r2', H1, [major('y')]), { stateRoot: root, lockWaitMs: 40 }); } catch (err) { secondError = err; }
+      }
+      return realRename(a, b);
+    },
+  };
+  const first = writeRecord(rec('r1', H1, [major('x')]), { stateRoot: root, fs: io });
+  assert.equal(second, undefined, 'the second writer did not write while the first held the lock');
+  assert.match(String(secondError?.message), /lock/);
+  assert.equal(first.record.majorsOpen, 1);
+  const retry = writeRecord(rec('r2', H1, [major('y')]), { stateRoot: root });
+  assert.equal(retry.record.majorsOpen, 2, 'after the first rename the second writer sees the first Major');
+  assert.deepEqual(readdirSync(path.join(root, 'feat-x', H1)).sort(), ['r1.json', 'r2.json']);
+});
+
+// ---------- majorsOpen is the union at a head ----------
+
+test('the stored majorsOpen is the union over every record at the head, whatever its arm or target, so it equals majorsOpen(list) (breaks if a filter on the arm or the target comes back: the stored count and the reader would then disagree)', () => {
+  const root = tmp('union');
+  const range = { range: `${H2}..${H1}` };
+  const w = (id, extra, findings) => writeRecord(rec(id, H1, findings, extra), { stateRoot: root }).record.majorsOpen;
+  assert.equal(w('r1', { target: range, armId: 'arm-a' }, [major('x')]), 1);
+  assert.equal(w('r2', { target: range, armId: 'arm-b' }, [major('y'), major('z')]), 3, 'arm-b counts the Major of arm-a at the same head');
+  assert.equal(w('r3', { target: range, armId: 'arm-a' }, [major('w')]), 4);
+  assert.equal(w('r4', { target: { pr: 7 } }, [major('v')]), 5);
+  const list = listRecords({ branch: 'feat/x', head: H1 }, { stateRoot: root }).records.map((r) => r.record);
+  assert.equal(majorsOpen(list).length, 5);
+  assert.equal(list.at(-1).majorsOpen, majorsOpen(list).length, 'the last stored count agrees with the reader');
+});
+
+// ---------- error texts hold no home folder path ----------
+
+test('a held record lock throws a message that names the home folder as ~, never the user home path, also inside the lock detail (breaks if the error prints the full path)', () => {
+  const home = os.homedir();
+  const root = path.join(home, '.lr-never-made', 'local-review');
+  const held = () => ({ ok: false, reason: 'lock', detail: `the lock ${path.join(root, 'feat-x', H1, 'records.lock')} is held by another session` });
+  let message = '';
+  try { writeRecord(rec('r1', H1, [major('x')]), { stateRoot: root, withLock: held, fs: { mkdirSync: () => {} } }); } catch (err) { message = err.message; }
+  assert.match(message, /record lock at .* is not free/);
+  assert.ok(!message.includes(home), message);
+  assert.ok(!message.includes(home.replaceAll('\\', '/')), message);
+  assert.ok(message.includes('~/.lr-never-made/local-review/feat-x/'), message);
+});
+
+test('homeRel turns a home folder path into ~/..., in either slash form, and leaves other text alone (breaks if the helper stops matching a form)', () => {
+  const home = os.homedir();
+  assert.equal(REC.homeRel(path.join(home, '.claude', 'state')), '~/.claude/state');
+  assert.equal(REC.homeRel(`${home.replaceAll('\\', '/')}/x/y`), '~/x/y');
+  assert.equal(REC.homeRel('no path here'), 'no path here');
+  assert.equal(REC.homeRel(`a ${path.join(home, 'p')} b ${path.join(home, 'q')}`), 'a ~/p b ~/q');
 });
