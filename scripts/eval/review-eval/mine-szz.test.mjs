@@ -27,6 +27,16 @@
 //   S19 round is not the rank of the head in the CodeRabbit rounds          -> change the rank, or keep a head that is not in the list
 //   S20 an oversize hunk shares a call, or a batch passes 10 pairs          -> change batchItems
 //   S21 the label cache is not reused, or written without the allow flag    -> change the cache read or write guard
+//   L01 the fix subject (the PR title) reaches the judge prompt             -> put the "Fix subject:" line back in itemText
+//   L02 a prompt with a PR number, a fix title or a fix sha is sent         -> drop a check in promptGuard, or call the judge first
+//   L02b a refused prompt takes a daily slot or labels its pairs            -> push the slot row before the guard, or keep the batch
+//   L02c one leaking item takes the clean items of its batch down with it   -> guard only the whole batch prompt (drop cleanItems)
+//   L03 a fix sha prefix in a diff line reaches the judge                   -> drop maskShas, or mask only full shas
+//   L04 the whole fix diff goes in each pair, so a big diff calls alone     -> keep f.hunk whole in runItem
+//   L04b hunks cut by head lines pick the wrong hunk after a shift          -> pass the head lines to cutHunks
+//   L04c a hunk is split, an adjacent one is lost, or no hunk is kept       -> change the overlap, the slack or the nearest rule
+//   L05 an old judge-version label is reused for the new prompt             -> keep JUDGE_VERSION at szz-label-v1
+//   L06 the usage or the report hides the gold line numbers or the cut      -> drop the notes
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -77,7 +87,16 @@ function buildRepo(steps) {
   writeFileSync(path.join(dir, 'README.md'), 'x\n');
   sh(dir, ['add', '-A']);
   sh(dir, ['commit', '-q', '-m', 'chore: init']);
-  let main = sh(dir, ['rev-parse', 'HEAD']);
+  return importSteps({ dir, git: makeGit(dir), prs: {} }, sh(dir, ['rev-parse', 'HEAD']), steps);
+}
+
+/** Adds steps on top of main of a built repo, so a file of a later step can name a sha of an earlier one. */
+const extendRepo = (b, steps) => importSteps(b, sh(b.dir, ['rev-parse', 'main']), steps);
+
+/** Imports steps from the commit `start` with one git fast-import, and adds their PRs to b.prs. */
+function importSteps(b, start, steps) {
+  const { dir } = b;
+  let main = start;
   let mark = 0;
   let out = '';
   const marks = {};
@@ -100,7 +119,8 @@ function buildRepo(steps) {
   for (const l of readFileSync(marksFile, 'utf8').split('\n').filter(Boolean)) { const [m, sha] = l.split(' '); marks[m] = sha; }
   sh(dir, ['reset', '-q', '--hard', 'main']);
   for (const p of Object.values(prs)) { p.shas = p.markList.map((m) => marks[m]); p.mergeSha = marks[p.markMerge]; }
-  return { dir, git: makeGit(dir), prs };
+  Object.assign(b.prs, prs);
+  return b;
 }
 
 const A_DAY = '2026-10-10T10:00:00Z';
@@ -316,14 +336,16 @@ test('S12: isRegression is true only for an engine record of the blamed PR with 
 
 test('S11: goldRowOf takes the split from config.json: holdoutExclude is dev, reserve is reserve, the rest is holdout (breaks if setOf is not used)', () => {
   const cfg = { holdoutExclude: [5], reserve: [{ pr: 7, answerKeySource: 'x' }], lineSlack: 3 };
-  const cand = (pr) => ({ blamedPr: pr, round: 2, head: 'd'.repeat(40), file: 'a.txt', line: 3, fixSha: 'f'.repeat(40), fixMergeSha: 'e'.repeat(40), blamedMergeSha: 'c'.repeat(40), cause: 'unclassified', primary: true });
+  const cand = (pr) => ({ blamedPr: pr, round: 2, head: 'd'.repeat(40), file: 'a.txt', line: 3, fixSha: 'f'.repeat(40), fixMergeSha: 'e'.repeat(40), blamedMergeSha: 'c'.repeat(40), cause: 'unclassified', primary: true, hunksShown: 1, hunksLeftOut: 2 });
   const label = { verdict: 'real', severity: 'major' };
   assert.deepEqual([5, 7, 9].map((pr) => goldRowOf({ cand: cand(pr), label, n: 1, suite: 'capability', cfg }).split), ['dev', 'reserve', 'holdout']);
   const row = goldRowOf({ cand: cand(5), label, n: 3, suite: 'regression', cfg });
   assert.deepEqual(validateRow(row), []);
   assert.deepEqual(row.target, { pr: 5, round: 2, sha40: 'd'.repeat(40) });
-  assert.deepEqual(row.labels, [{ by: 'claude-opus-5-5', verdict: 'real', judgeVersion: 'szz-label-v1' }]);
-  assert.deepEqual(row.provenance, { miner: 'mine-szz-v1', fixSha: 'f'.repeat(40), fixMergeSha: 'e'.repeat(40), blamedMergeSha: 'c'.repeat(40), cause: 'unclassified', primary: true, crBefore: false });
+  assert.deepEqual(row.labels, [{ by: 'claude-opus-5-5', verdict: 'real', judgeVersion: 'szz-label-v2' }]);
+  assert.deepEqual(row.provenance, { miner: 'mine-szz-v1', fixSha: 'f'.repeat(40), fixMergeSha: 'e'.repeat(40), blamedMergeSha: 'c'.repeat(40), cause: 'unclassified', primary: true, crBefore: false, hunksShown: 1, hunksLeftOut: 2 });
+  const open = goldRowOf({ cand: { ...cand(5), kind: 'open-bug', hunksShown: 0, hunksLeftOut: 0 }, label, suite: 'capability', cfg });
+  assert.deepEqual(open.provenance, { miner: 'mine-szz-v1', kind: 'open-bug', blamedMergeSha: 'c'.repeat(40), hunksShown: 0, hunksLeftOut: 0 });
   assert.equal(row.linkType, 'within-hunk');
   assert.match(row.id, /^A:[0-9a-f]{12}$/);
   const twin = goldRowOf({ cand: { ...cand(5), blamedPr: 9 }, label, n: 7, suite: 'regression', cfg });
@@ -331,7 +353,7 @@ test('S11: goldRowOf takes the split from config.json: holdoutExclude is dev, re
 });
 
 test('S10-unit: validateOutputs returns the problem lines of a bad row and of a bad control, never a value (breaks if validateRow or loadCleanControls is skipped, or a value is printed)', () => {
-  const good = goldRowOf({ cand: { blamedPr: 5, round: 1, head: 'd'.repeat(40), file: 'a.txt', line: 3, fixSha: 'f'.repeat(40), fixMergeSha: 'e'.repeat(40), blamedMergeSha: 'c'.repeat(40), cause: 'unclassified', primary: true }, label: { verdict: 'real', severity: 'major' }, n: 1, suite: 'capability', cfg: CFG });
+  const good = goldRowOf({ cand: { blamedPr: 5, round: 1, head: 'd'.repeat(40), file: 'a.txt', line: 3, fixSha: 'f'.repeat(40), fixMergeSha: 'e'.repeat(40), blamedMergeSha: 'c'.repeat(40), cause: 'unclassified', primary: true, hunksShown: 1, hunksLeftOut: 0 }, label: { verdict: 'real', severity: 'major' }, n: 1, suite: 'capability', cfg: CFG });
   const control = { id: 'K:1', split: 'holdout', target: { pr: 3, round: 1, sha40: 'a'.repeat(40) }, provenance: { why: 'dataset-no-finding' } };
   assert.deepEqual(validateOutputs({ goldRows: [good], controls: [control] }), []);
   const bad = validateOutputs({ goldRows: [{ ...good, file: ' secret-name.txt' }], controls: [{ ...control, split: 'bogus-split-value' }] });
@@ -540,6 +562,7 @@ test('S03: an open bug maps to the EARLIEST main merge that holds the origin com
     assert.equal(cached.length, 1);
     assert.equal(cached[0].blamedMergeSha, b.prs[11].mergeSha);
     assert.equal(cached[0].fixSha, 'open-bug');
+    assert.deepEqual([cached[0].hunksShown, cached[0].hunksLeftOut], [0, 0], 'an open bug has no fix diff');
     assert.equal(r.deps.judge.prompts[0].includes('the wait never ends'), true, 'the card text is in the prompt');
   }
 });
@@ -591,7 +614,8 @@ test('S21: the label cache is reused by a second run, and written only with the 
   const cacheFile = path.join(base.state, 'szz-labels.jsonl');
   const cached = readFileSync(cacheFile, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(cached.length, 3);
-  assert.deepEqual(Object.keys(cached[0]).sort(), ['blamedMergeSha', 'file', 'fixSha', 'key', 'line', 'severity', 'verdict']);
+  assert.deepEqual(Object.keys(cached[0]).sort(), ['blamedMergeSha', 'file', 'fixSha', 'hunksLeftOut', 'hunksShown', 'key', 'line', 'severity', 'verdict']);
+  assert.deepEqual(cached.map((c) => [c.hunksShown, c.hunksLeftOut]), [[1, 0], [1, 0], [1, 0]], 'one hunk per file in the big repo');
   const j2 = fakeJudge([REAL()]);
   const r2 = await run(base.argv, { ...base.deps, judge: j2 });
   assert.equal(j2.prompts.length, 0, 'a cached label is not asked again');
@@ -635,6 +659,7 @@ test('S15/S04/S11/S12: --write makes gold-a.json, clean-controls.json and escape
   assert.equal(rows[0].provenance.fixSha, b.prs[22].shas[0]);
   assert.equal(rows[0].provenance.blamedMergeSha, b.prs[21].mergeSha);
   assert.equal(rows[0].provenance.cause, 'wrong-surfaces');
+  assert.deepEqual(rows.map((x) => [x.provenance.hunksShown, x.provenance.hunksLeftOut]), [[1, 0], [1, 0], [1, 0]], 'the hunk counts reach gold-a.json');
   for (const x of rows) assert.deepEqual(validateRow(x), []);
   assert.equal(loadCleanControls(r.gold).length, 40);
   assert.deepEqual(r.json.controls, { group1: 2, group2: 38, removedBlamed: 3, removedFailedFix: 24, removedUnmappedFix: 1, noRound: 0, roundFailed: 0, notOnMain: 1, total: 40 });
@@ -1096,4 +1121,214 @@ test('R20: an escape row with an unreadable fix time is counted as failed, not d
   assert.equal(r.code, 0, r.err);
   assert.equal(r.json.failed['fix-time'], 1, JSON.stringify(r.json.failed));
   assert.equal(r.json.pairs, 2);
+});
+
+// ---------- leak round: safe and small judge prompts (L<item>) ----------
+// The new exports are read through the namespace (szz.), so on the old code each test fails alone and the file still loads.
+
+const ODD = ['zanzibar', 'quokka', 'telemetry'];
+const SHA_A = 'abcdef0123456789abcdef0123456789abcdef01';
+const SHA_B = '0123456789abcdef0123456789abcdef01234567';
+const TITLE = 'fix: quokka drift in the parser';
+const leakOf = () => szz.leakTerms([SHA_A, SHA_B, 'open-bug', undefined], [`${TITLE} (#4242)`, 'Merge pull request #4242 from x/y', 'wip']);
+const cacheRows = (state) => readFileSync(path.join(state, 'szz-labels.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+
+test('L01: the judge prompt holds no part of the fix subject, in a built prompt and end to end (breaks if the "Fix subject:" line comes back)', async () => {
+  const built = buildPrompt([{ kind: 'fix', subject: `fix: ${ODD.join(' ')}`, hunk: '@@ -2 +2 @@\n-buggy\n+fixed', blamed: '>    2| buggy' }]);
+  assert.equal(built.includes('+fixed'), true, 'the hunk is in: the check is not vacuous');
+  for (const w of [...ODD, 'Fix subject']) assert.equal(built.includes(w), false, w);
+  const b = small({ fixSubject: `fix: ${ODD.join(' ')} (#9001)` });
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 1);
+  for (const w of [...ODD, 'Fix subject']) assert.equal(judge.prompts[0].includes(w), false, w);
+  assert.equal(r.json.labelled, 1);
+});
+
+test('L02: leakTerms keeps scrubbed fix titles and fix shas; promptGuard and sendGuarded refuse each leak kind and never call the judge; a clean prompt is sent (breaks if a check is dropped or the judge is called first)', async () => {
+  const leak = leakOf();
+  assert.deepEqual(leak.titles, [TITLE], 'the merge subject scrubs to nothing and a short title is not guarded');
+  assert.deepEqual(leak.shas, [SHA_A, SHA_B]);
+  const hits = [
+    ...['see #4242 here', 'PR-4242', 'PR 4242', 'pr 4242', 'pulls/4242', 'pull/4242', 'issues/4242'].map((t) => [t, 'pr-number']),
+    ['log("FIX: Quokka drift in the parser")', 'fix-title'],
+    [`ref ${SHA_A.slice(0, 7)} x`, 'fix-sha'], [`ref ${SHA_B} x`, 'fix-sha'], [`id_e${SHA_A.slice(0, 9)}`, 'fix-sha'],
+  ];
+  for (const [text, kind] of hits) {
+    const prompt = `clean text\n${text}\nmore clean text`;
+    assert.equal(szz.promptGuard(prompt, leak), kind, text);
+    let calls = 0;
+    const sent = await szz.sendGuarded(prompt, leak, async () => { calls += 1; return { ok: true }; });
+    assert.deepEqual(sent, { refused: kind }, text);
+    assert.equal(calls, 0, `the judge is not called: ${text}`);
+  }
+  const clean = 'a clean prompt: the parser drifts, color #fff, sha fedcba9876 of another commit';
+  assert.equal(szz.promptGuard(clean, leak), null);
+  let calls = 0;
+  const sent = await szz.sendGuarded(clean, leak, async (p) => { calls += 1; return { ok: true, result: p }; });
+  assert.equal(calls, 1);
+  assert.deepEqual(sent, { res: { ok: true, result: clean } });
+});
+
+test('L02b: a fix title in a diff line refuses the call end to end: no judge call, no slot taken, the batch fails as prompt-guard, the pair stays unlabelled (breaks if the guard is skipped or runs after the slot row)', async () => {
+  const b = buildRepo([
+    { n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('alpha', `log("${TITLE}")`, 'omega') } }] },
+    { n: 12, at: B_DAY, commits: [{ subject: `${TITLE} (#9001)`, files: { 'src/f.txt': lines('alpha', 'fixed', 'omega') } }] },
+  ]);
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 0);
+  assert.equal(r.json.failed['prompt-guard'], 1, JSON.stringify(r.json.failed));
+  assert.equal(r.json.labelCalls.used, 0, 'a refused prompt takes no daily slot');
+  assert.deepEqual([r.json.labelled, r.json.unlabelled], [0, 1]);
+});
+
+test('L02c: of 3 items where 1 holds the fix title, one call goes with the 2 clean items, prompt-guard counts 1, the leaking item stays unlabelled (breaks if the guard runs only on the whole batch prompt)', async () => {
+  const body = (b2) => Array.from({ length: 30 }, (_, i) => ({ 4: b2 ? 'good-a' : 'bad-a', 14: b2 ? 'good-b' : `log("${TITLE}")`, 24: b2 ? 'good-c' : 'bad-c' }[i] ?? `c${i}`));
+  const b = buildRepo([
+    { n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines(...body(false)) } }] },
+    { n: 12, at: B_DAY, commits: [{ subject: `${TITLE} (#9001)`, files: { 'src/f.txt': lines(...body(true)) } }] },
+  ]);
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 1, JSON.stringify(r.json.failed));
+  const p = judge.prompts[0];
+  assert.equal([...p.matchAll(/^### Pair/gm)].length, 2);
+  assert.equal(p.includes('+good-a') && p.includes('+good-c'), true, p);
+  assert.equal(p.toLowerCase().includes(TITLE) || p.includes('good-b'), false, 'the leaking item is not in the call');
+  assert.equal(r.json.failed['prompt-guard'], 1, JSON.stringify(r.json.failed));
+  assert.deepEqual([r.json.labelled, r.json.unlabelled], [2, 1]);
+  assert.equal(r.json.labelCalls.used, 1);
+});
+
+test('L03: maskShas masks each hex run that is a prefix of a fix sha, short, full or upper case; the guard then passes; a prefix inside a longer hex run stays and is refused (breaks if the mask is dropped or masks only full shas)', () => {
+  const leak = leakOf();
+  const text = `-ref ${SHA_A.slice(0, 12)} and ${SHA_B}\n+ref (${SHA_A.slice(0, 7).toUpperCase()}) other deadbeef1`;
+  const masked = szz.maskShas(text, leak.shas);
+  assert.equal(masked, '-ref <sha> and <sha>\n+ref (<sha>) other deadbeef1');
+  assert.equal(szz.promptGuard(masked, leak), null);
+  const glued = `x e${SHA_A.slice(0, 7)} y`;
+  assert.equal(szz.maskShas(glued, leak.shas), glued, 'e + the prefix is one hex run, and it is no prefix');
+  assert.equal(szz.promptGuard(glued, leak), 'fix-sha');
+});
+
+test('L03b: a diff line that names a fix sha of the run comes out masked end to end, and the guard passes (breaks if the mask does not run before the guard)', async () => {
+  const b = small();
+  const fixSha = b.prs[12].shas[0];
+  const mergeSha = b.prs[12].mergeSha;
+  extendRepo(b, [
+    { n: 13, at: '2026-10-12T10:00:00Z', commits: [{ subject: 'feat: g', files: { 'src/g.txt': lines('one', `ref ${fixSha.slice(0, 12)} and ${mergeSha}`, 'two') } }] },
+    { n: 14, at: '2026-10-13T10:00:00Z', commits: [{ subject: 'fix: g ref', files: { 'src/g.txt': lines('one', 'ref none', 'two') } }] },
+  ]);
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 }), escRow(b, { fixPr: 14, blamedPr: 13 })], extra: ['--label'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 1, JSON.stringify(r.json.failed));
+  const prompt = judge.prompts[0];
+  assert.equal(prompt.includes('-ref <sha> and <sha>'), true, prompt);
+  for (const s of [fixSha, mergeSha]) assert.equal(prompt.includes(s.slice(0, 7)), false, 'no fix sha prefix is left');
+  assert.equal(r.json.failed['prompt-guard'], undefined);
+  assert.equal(r.json.labelled, 2);
+});
+
+/** A hunk head line with text after the second @@, and its body lines. */
+const H = (start, count, body) => [`@@ -${start}${count === undefined ? '' : `,${count}`} +${start} @@ fn()`, ...body];
+
+test('L04c: cutHunks keeps whole hunks whose old range is within the slack of the blamed lines, keeps the lines before the first hunk, keeps the nearest hunk when none is in reach, and reads -a,0 as after line a (breaks if a hunk is split, the slack is off by one, or no hunk is kept)', () => {
+  const top = H(5, undefined, ['-top', '+top2']);
+  const mid = H(20, 2, ['-m1', '-@@ -99 +99 @@ removed text, not a hunk head', '+n1']);
+  const near = H(24, undefined, ['-near', '+near2']);
+  const far = H(28, undefined, ['-far', '+far2']);
+  const three = szz.cutHunks([...top, ...mid, ...far].join('\n'), { line: 21, endLine: 21 }, 3);
+  assert.equal(three.hunk, mid.join('\n'), 'only the middle hunk, whole: line 20 and the -@@ line stay though only line 21 is blamed');
+  assert.deepEqual([three.hunksShown, three.hunksLeftOut], [1, 2]);
+  const diff = [...top, ...mid, ...near, ...far].join('\n');
+  const adj = szz.cutHunks(diff, { line: 20, endLine: 21 }, 3);
+  assert.equal(adj.hunk, [...mid, ...near].join('\n'), 'a hunk 3 lines past the run is next to it');
+  assert.deepEqual([adj.hunksShown, adj.hunksLeftOut], [2, 2]);
+  assert.equal(szz.cutHunks(diff, { line: 20, endLine: 21 }, 2).hunk, mid.join('\n'), 'one line past the slack is out');
+  const none = szz.cutHunks(diff, { line: 12, endLine: 12 }, 0);
+  assert.equal(none.hunk, top.join('\n'), 'no hunk in reach: the nearest one hunk');
+  assert.deepEqual([none.hunksShown, none.hunksLeftOut], [1, 3]);
+  const ins = H(12, 0, ['+new1', '+new2']);
+  const after = H(19, undefined, ['-x', '+y']);
+  const pair = [...ins, ...after].join('\n');
+  assert.equal(szz.cutHunks(pair, { line: 15, endLine: 15 }, 3).hunk, ins.join('\n'), '-12,0 sits after line 12: in reach of line 15 with slack 3');
+  assert.equal(szz.cutHunks(pair, { line: 16, endLine: 16 }, 3).hunk, after.join('\n'), 'and out of reach of line 16');
+  const head = ['diff --git a/f b/f', '--- a/f', '+++ b/f'];
+  assert.equal(szz.cutHunks([...head, ...top, ...far].join('\n'), { line: 5, endLine: 5 }, 3).hunk, [...head, ...top].join('\n'), 'the lines before the first hunk stay');
+});
+
+test('L04: a fix diff of 12 one-line hunks, over HUNK_LIMIT as a whole, gives 12 small items packed 10 to a call, each with 1 hunk shown and 11 left out (breaks if each item keeps the whole file diff)', async () => {
+  const Q = 'q'.repeat(300);
+  const body = (word) => Array.from({ length: 120 }, (_, i) => (i % 10 === 4 ? `${word}-${i} ${Q}` : `c${i}`));
+  const b = buildRepo([
+    { n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines(...body('bad')) } }] },
+    { n: 12, at: B_DAY, commits: [{ subject: 'fix: f (#9001)', files: { 'src/f.txt': lines(...body('good')) } }] },
+  ]);
+  const fixSha = b.prs[12].shas[0];
+  const whole = sh(b.dir, ['diff', '--unified=0', `${fixSha}^`, fixSha]);
+  assert.ok(whole.length > HUNK_LIMIT, `the whole diff is ${whole.length} chars: the check is not vacuous`);
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label', '--allow-label-cache-write'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(judge.prompts.map((p) => [...p.matchAll(/^### Pair/gm)].length), [BATCH_SIZE, 2]);
+  assert.deepEqual(judge.prompts.map((p) => [...p.matchAll(/^@@ -/gm)].length), [BATCH_SIZE, 2], 'one hunk for each pair');
+  assert.equal(r.json.labelled, 12);
+  const cached = cacheRows(r.state);
+  assert.ok(cached.length === 12 && cached.every((c) => c.hunksShown === 1 && c.hunksLeftOut === 11), JSON.stringify(cached.map((c) => [c.hunksShown, c.hunksLeftOut])));
+});
+
+test('L04b: the diff is cut by the blamed lines at the parent of the fix, not by their head lines: after a 10-line shift the middle hunk is still the one shown; the counts go in the cache row (breaks if cutHunks gets the head lines)', async () => {
+  const base = Array.from({ length: 40 }, (_, i) => `n${i + 1}`);
+  const withMid = base.map((l, i) => (i === 19 ? 'mid-bad' : l));
+  const pre = Array.from({ length: 10 }, (_, i) => `p${i + 1}`);
+  const fixed = withMid.map((l, i) => ({ 4: 'top-fix', 19: 'mid-fix', 34: 'bot-fix' }[i] ?? l));
+  const b = buildRepo([
+    { n: 10, at: '2026-10-09T10:00:00Z', commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines(...base) } }] },
+    { n: 11, at: A_DAY, commits: [{ subject: 'feat: mid', files: { 'src/f.txt': lines(...withMid) } }] },
+    { direct: { at: '2026-10-10T12:00:00Z', subject: 'chore: prepend', files: { 'src/f.txt': lines(...pre, ...withMid) } } },
+    { n: 12, at: B_DAY, commits: [{ subject: 'fix: f (#9001)', files: { 'src/f.txt': lines(...pre, ...fixed) } }] },
+  ]);
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label', '--allow-label-cache-write'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 1);
+  const p = judge.prompts[0];
+  assert.equal(p.includes('+mid-fix'), true, p);
+  assert.equal(p.includes('top-fix') || p.includes('bot-fix'), false, p);
+  assert.match(p, /^> +20\| mid-bad$/m, 'the blamed line is line 20 at the head and line 30 at the parent of the fix');
+  const [row] = cacheRows(r.state);
+  assert.deepEqual([row.line, row.hunksShown, row.hunksLeftOut], [20, 1, 2]);
+});
+
+test('L05: JUDGE_VERSION is szz-label-v2 and labelKey carries it, so a szz-label-v1 cache row is asked again (breaks if the version is not bumped)', async () => {
+  assert.equal(szz.JUDGE_VERSION, 'szz-label-v2');
+  const c = { fixSha: 'f'.repeat(40), blamedMergeSha: 'c'.repeat(40), file: 'a.txt', line: 3 };
+  assert.equal(szz.labelKey(c), `szz-label-v2:${'f'.repeat(40)}:${'c'.repeat(40)}:a.txt:3`);
+  const b = small();
+  const s = setup(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]) } });
+  const v1 = { key: `szz-label-v1:${b.prs[12].shas[0]}:${b.prs[11].mergeSha}:src/f.txt:2`, verdict: 'noise', severity: 'minor' };
+  writeFileSync(path.join(s.state, 'szz-labels.jsonl'), `${JSON.stringify(v1)}\n`);
+  const r = await run(s.argv, s.deps);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(s.deps.judge.prompts.length, 1, 'the v1 label is not reused');
+  assert.equal(JSON.parse(r.out).verdicts.real, 1);
+});
+
+test('L06: the usage and the text report say the judge prompt shows gold line numbers by design and the fix diff is cut near the blamed lines (breaks if a note is dropped)', async () => {
+  const help = await run(['--help']);
+  assert.equal(help.code, 0);
+  const b = small();
+  const s = setup(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })] });
+  const text = await run(s.argv.filter((a) => a !== '--json'), s.deps);
+  assert.equal(text.code, 0, text.err);
+  for (const out of [help.out, text.out]) {
+    assert.match(out, /the judge prompt shows gold line numbers by design/i);
+    assert.match(out, /the fix diff is cut to the hunks near the blamed lines/i);
+    assert.match(out, /titles under 8 characters are not guarded/i);
+  }
 });

@@ -3,6 +3,8 @@
 //   For each escape row (fix commit, blamed PR) it blames the removed lines again, keeps the lines that the blamed PR wrote,
 //   and maps them to the PR head. One gold candidate is one run of adjacent head lines. A pair that CodeRabbit flagged before
 //   the fix is dropped (seat Q1). A candidate is labelled by the judge (Opus, effort high) in batches, under a daily slot.
+//   The fix diff of a candidate is cut to the hunks near its blamed lines. Each judge prompt is scrubbed of PR references,
+//   masked of fix shas, then guarded: a prompt that still holds a PR number, a fix title or a fix sha is not sent.
 // Counts only: the report holds no PR number, no file name and no line. A dry run writes nothing.
 // With --write the three gold files are built and checked in memory first, then written: one failed gate writes none.
 // Named limits: review-body CodeRabbit findings have no line and are not read; one model family labels every row.
@@ -33,7 +35,7 @@ export const BATCH_CHAR_LIMIT = 24_000;
 export const CONTROLS_MIN = 30;
 export const SINCE_DEFAULT = '2026-08-01';
 export const MINER = 'mine-szz-v1';
-export const JUDGE_VERSION = 'szz-label-v1';
+export const JUDGE_VERSION = 'szz-label-v2';
 export const LABELER = 'claude-opus-5-5';
 /** The lane marker. It goes in the sessionId field of the headless ledger row, so this lane counts its own calls. */
 export const LEDGER_TAG = 'szz-miner';
@@ -82,25 +84,101 @@ export function keepBlamed(blamed, blamedSet, fixSet) {
   return { kept: blamed.filter((b) => blamedSet.has(b.sha) && !fixSet.has(b.sha)), own: blamed.filter((b) => fixSet.has(b.sha)).length };
 }
 
+/** Each kept line found at the head by its origin (sha, origin line): [{ old, head }]. old: its line in the blame that found it. */
+function headPairs(kept, headBlame) {
+  const byOrigin = new Map(headBlame.map((h) => [`${h.sha}:${h.origLine}`, h.line]));
+  return kept.flatMap((k) => { const head = byOrigin.get(`${k.sha}:${k.origLine}`); return head === undefined ? [] : [{ old: k.line, head }]; });
+}
+
 /** Finds each kept line at the head by its origin (sha, origin line). lines: the head line numbers. missing: kept lines not at the head. */
 export function mapToHead(kept, headBlame) {
-  const byOrigin = new Map(headBlame.map((h) => [`${h.sha}:${h.origLine}`, h.line]));
-  const found = kept.map((k) => byOrigin.get(`${k.sha}:${k.origLine}`));
-  return { lines: found.filter((l) => l !== undefined), missing: found.filter((l) => l === undefined).length };
+  const pairs = headPairs(kept, headBlame);
+  return { lines: pairs.map((p) => p.head), missing: kept.length - pairs.length };
 }
+
+/** The PR reference forms, in scrub order. scrubPrs removes them; promptGuard refuses a prompt that still holds one. */
+const PR_PATTERNS = [
+  /Merge pull request[^\n]*/gi,
+  /\bpull request\s*#?\d+/gi,
+  /\bPR[-\s]*#?\d+/gi,
+  /\b(?:pulls?|issues)\/\d+/gi,
+  /\(#\d+\)/g,
+  /#\d+(?![0-9A-Za-z_])/g,
+];
 
 /**
  * Removes every PR reference from a text: (#N), #N, pull/N, pulls/N, issues/N, PR N, PR-N, pr N, "pull request N" and merge-commit text.
  * A #N followed by a letter or digit is kept (a hex colour such as #1a2b3c). An all-digit #N is scrubbed: the leak guard wins.
  */
 export function scrubPrs(text) {
-  return String(text)
-    .replace(/Merge pull request[^\n]*/gi, '')
-    .replace(/\bpull request\s*#?\d+/gi, '')
-    .replace(/\bPR[-\s]*#?\d+/gi, '')
-    .replace(/\b(?:pulls?|issues)\/\d+/gi, '')
-    .replace(/\(#\d+\)/g, '')
-    .replace(/#\d+(?![0-9A-Za-z_])/g, '');
+  return PR_PATTERNS.reduce((t, re) => t.replace(re, ''), String(text));
+}
+
+// ---------- the leak guard ----------
+
+/**
+ * Named limit: a fix title shorter than this (after the scrub) is not guarded, because a short word such as "wip" would refuse most
+ * prompts. The report says so (NOTES.shortTitles).
+ */
+const TITLE_MIN = 8;
+/** A maximal run of 7 to 40 hex characters. One pattern for the mask; the guard looks for a sha prefix anywhere. */
+const HEX_RUN = /(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/gi;
+const SHA_RE = /^[0-9a-f]{40,64}$/;
+
+/** The leak terms of a run: the fix shas (lower case) and the fix titles (scrubbed, trimmed, lower case, TITLE_MIN or longer). */
+export function leakTerms(shas, titles) {
+  const t = [...titles].map((x) => scrubPrs(x).trim().toLowerCase()).filter((x) => x.length >= TITLE_MIN);
+  const s = [...shas].map((x) => String(x ?? '').toLowerCase()).filter((x) => SHA_RE.test(x));
+  return { shas: [...new Set(s)], titles: [...new Set(t)] };
+}
+
+/** Replaces each hex run that is a prefix of a fix sha with <sha>. A prefix inside a longer hex run stays: the guard refuses it. */
+export function maskShas(text, shas) {
+  return String(text).replace(HEX_RUN, (run) => (shas.some((s) => s.startsWith(run.toLowerCase())) ? '<sha>' : run));
+}
+
+/** The leak a prompt holds: 'pr-number', 'fix-title', 'fix-sha', or null for a clean prompt. */
+export function promptGuard(prompt, leak) {
+  const text = String(prompt);
+  if (PR_PATTERNS.some((re) => text.search(re) >= 0)) return 'pr-number';
+  const lower = text.toLowerCase();
+  if (leak.titles.some((t) => lower.includes(t))) return 'fix-title';
+  if (leak.shas.some((s) => lower.includes(s.slice(0, 7)))) return 'fix-sha';
+  return null;
+}
+
+/** Sends a finished prompt to judge only when promptGuard passes it. Returns { refused: kind } (judge not called) or { res } (null on a throw). */
+export async function sendGuarded(prompt, leak, judge) {
+  const refused = promptGuard(prompt, leak);
+  if (refused) return { refused };
+  try { return { res: await judge(prompt) }; } catch { return { res: null }; }
+}
+
+// ---------- the diff cut ----------
+
+const HUNK_HEAD = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/;
+
+/** The old-side range of a hunk head. A pure insertion (-a,0) sits after line a: its range is [a, a]. */
+const oldRange = (m) => { const start = Number(m[1]); const n = m[2] === undefined ? 1 : Number(m[2]); return [start, start + Math.max(n, 1) - 1]; };
+
+/**
+ * Cuts the fix diff of one file to the hunks whose old-side range overlaps [span.line - slack, span.endLine + slack].
+ * span: the blamed lines as numbered at the parent of the fix (the old side of the diff). A hunk is kept whole; lines before
+ * the first hunk stay. No hunk in reach: the nearest one hunk is kept. Returns { hunk, hunksShown, hunksLeftOut }.
+ */
+export function cutHunks(text, span, slack) {
+  const head = [];
+  const hunks = [];
+  for (const line of String(text).split('\n')) {
+    const m = HUNK_HEAD.exec(line);
+    if (m) hunks.push({ range: oldRange(m), lines: [line] });
+    else (hunks.length ? hunks.at(-1).lines : head).push(line);
+  }
+  if (hunks.length === 0) return { hunk: String(text), hunksShown: 0, hunksLeftOut: 0 };
+  const gap = ([a, b]) => Math.max(0, a - (span.endLine + slack), span.line - slack - b);
+  const near = hunks.filter((h) => gap(h.range) === 0);
+  const kept = near.length ? near : [hunks.reduce((best, h) => (gap(h.range) < gap(best.range) ? h : best))];
+  return { hunk: [...head, ...kept.flatMap((h) => h.lines)].join('\n'), hunksShown: kept.length, hunksLeftOut: hunks.length - kept.length };
 }
 
 // ---------- the prompt and the answer ----------
@@ -116,13 +194,17 @@ const INSTRUCTIONS = [
 function itemText(item, i) {
   const head = `### Pair ${i + 1}`;
   if (item.kind === 'open-bug') return [head, `Defect described (no fix exists yet): ${item.note}`, 'Blamed lines with context (> marks the blamed lines):', item.blamed].join('\n');
-  return [head, `Fix subject: ${item.subject}`, 'Fix diff for the file:', item.hunk, 'Blamed lines as they stand in the reviewed head (> marks the blamed lines):', item.blamed].join('\n');
+  // No fix subject: it is the PR title, a leak. The diff is cut to the hunks near the blamed lines (cutHunks).
+  return [head, 'Fix diff for the file:', item.hunk, 'Blamed lines as they stand in the reviewed head (> marks the blamed lines):', item.blamed].join('\n');
 }
 
 /** The judge prompt for a batch of candidates. The whole text is scrubbed of PR references. */
 export function buildPrompt(items) {
   return scrubPrs([INSTRUCTIONS, ...items.map(itemText)].join('\n\n'));
 }
+
+/** The prompt a judge call sends: buildPrompt, then each fix sha prefix masked. promptGuard checks it before the call. */
+const judgePrompt = (items, leak) => maskShas(buildPrompt(items), leak.shas);
 
 /**
  * Splits candidates into judge calls: up to `size` pairs a call, and a prompt of at most `chars` characters (buildPrompt length).
@@ -200,9 +282,10 @@ export function isRegression(records, t, slack) {
  */
 export function goldRowOf({ cand, label, suite, cfg }) {
   const open = cand.kind === 'open-bug';
+  const hunks = { hunksShown: cand.hunksShown, hunksLeftOut: cand.hunksLeftOut };
   const provenance = open
-    ? { miner: MINER, kind: 'open-bug', blamedMergeSha: cand.blamedMergeSha }
-    : { miner: MINER, fixSha: cand.fixSha, fixMergeSha: cand.fixMergeSha, blamedMergeSha: cand.blamedMergeSha, cause: cand.cause, primary: cand.primary, crBefore: false };
+    ? { miner: MINER, kind: 'open-bug', blamedMergeSha: cand.blamedMergeSha, ...hunks }
+    : { miner: MINER, fixSha: cand.fixSha, fixMergeSha: cand.fixMergeSha, blamedMergeSha: cand.blamedMergeSha, cause: cand.cause, primary: cand.primary, crBefore: false, ...hunks };
   return {
     id: stableId('A', [cand.blamedMergeSha, cand.file, cand.line]), source: 'A', suite, split: setOf(cand.blamedPr, cfg), target: { pr: cand.blamedPr, round: cand.round, sha40: cand.head },
     file: cand.file, line: cand.line, severity: label.severity, linkType: 'within-hunk',
@@ -340,7 +423,7 @@ function atomicWrite(file, text) {
 // ---------- the label cache ----------
 
 /** The cache key of a label. It holds JUDGE_VERSION, so a label of another judge version is asked again. */
-const labelKey = (c) => `${JUDGE_VERSION}:${c.fixSha}:${c.blamedMergeSha}:${c.file}:${c.line}`;
+export const labelKey = (c) => `${JUDGE_VERSION}:${c.fixSha}:${c.blamedMergeSha}:${c.file}:${c.line}`;
 
 function readLabelCache(stateDir) {
   const file = path.join(stateDir, LABEL_CACHE);
@@ -410,11 +493,21 @@ function blamedText(env, head, file, run) {
   return out.join('\n');
 }
 
-/** The head lines of the kept lines of one file: { lines } or { reason: 'file-gone' | 'line-gone' }. */
+/** The head lines of the kept lines of one file: { lines, pairs: [{ old, head }] } or { reason: 'file-gone' | 'line-gone' }. */
 function headLines(env, head, file, kept) {
   if (env.git(['cat-file', '-e', `${head}:${file}`]).status !== 0) return { reason: 'file-gone' };
-  const found = mapToHead(kept, parsePorcelain(gitText(env.git, ['blame', '-w', '--porcelain', head, '--', file], 'blame')));
-  return found.lines.length ? { lines: found.lines } : { reason: 'line-gone' };
+  const pairs = headPairs(kept, parsePorcelain(gitText(env.git, ['blame', '-w', '--porcelain', head, '--', file], 'blame')));
+  return pairs.length ? { lines: pairs.map((p) => p.head), pairs } : { reason: 'line-gone' };
+}
+
+/**
+ * One candidate run of a file. The fix diff is cut by the run's lines at the parent of the fix (the diff's old side), not by
+ * its head lines: a commit between the reviewed head and the fix can shift them.
+ */
+function runItem(env, head, f, run, pairs) {
+  const olds = pairs.filter((p) => p.head >= run.line && p.head <= run.endLine).map((p) => p.old);
+  const cut = cutHunks(f.hunk, { line: Math.min(...olds), endLine: Math.max(...olds) }, env.slack);
+  return { file: f.path, ...run, hunk: cut.hunk, hunksShown: cut.hunksShown, hunksLeftOut: cut.hunksLeftOut, blamed: blamedText(env, head, f.path, run) };
 }
 
 const REASON_ORDER = ['line-gone', 'file-gone', 'own-pr', 'no-blamed-line'];
@@ -439,7 +532,7 @@ function mapPair(env, row) {
     if (kept.length === 0) { if (own) reasons.add('own-pr'); continue; }
     const h = headLines(env, head, f.path, kept);
     if (h.reason) reasons.add(h.reason);
-    else runs.push(...runsOf(h.lines).map((r) => ({ file: f.path, ...r, hunk: f.hunk, blamed: blamedText(env, head, f.path, r) })));
+    else runs.push(...runsOf(h.lines).map((r) => runItem(env, head, f, r, h.pairs)));
   }
   return runs.length ? { runs, head } : { reason: pickReason(reasons) };
 }
@@ -458,15 +551,21 @@ async function ghStage(env, base, mapped) {
   return { cands: kept, dropped: all.length - kept.length };
 }
 
-function subjectOf(env, sha) {
-  return cached(env.subjects, sha, (s) => gitText(env.git, ['log', '-1', '--format=%s', s], 'subject').trim());
+/**
+ * The title lines of a fix commit for the leak guard: its subject; for a merge commit also the first body line (GitHub puts the
+ * PR title there). Cached. A failed read throws StepError('subject'): the pair fails, it is never mined unguarded.
+ */
+function titlesOf(env, sha, withBody) {
+  const all = cached(env.subjects, sha, (s) => lines(gitText(env.git, ['log', '-1', '--format=%s%n%b', s], 'subject')).map((l) => l.trim()).filter(Boolean));
+  return withBody ? all.slice(0, 2) : all.slice(0, 1);
 }
 
 /** One escape row to candidates. Returns { cands, dropped } or { reason, blame }. Throws a StepError on a failed git or gh step. */
 async function minePair(env, row) {
+  for (const t of [...titlesOf(env, row.fixSha, false), ...(row.mergeSha ? titlesOf(env, row.mergeSha, true) : [])]) env.titles.add(t);
   const mapped = mapPair(env, row);
   if (mapped.reason) return { reason: mapped.reason, blame: true };
-  const base = { kind: 'fix', fixSha: row.fixSha, fixMergeSha: row.mergeSha, fixMergedAt: row.fixMergedAt, blamedPr: row.blamedPr, blamedMergeSha: row.blamedMergeSha, cause: row.cause, primary: row.primary !== false, band: row.band ?? 'UNKNOWN', subject: subjectOf(env, row.fixSha) };
+  const base = { kind: 'fix', fixSha: row.fixSha, fixMergeSha: row.mergeSha, fixMergedAt: row.fixMergedAt, blamedPr: row.blamedPr, blamedMergeSha: row.blamedMergeSha, cause: row.cause, primary: row.primary !== false, band: row.band ?? 'UNKNOWN' };
   return ghStage(env, base, mapped);
 }
 
@@ -493,8 +592,9 @@ async function mineOpenBug(env, spec, note) {
   const h = headLines(env, head, spec.file, [origin]);
   if (h.reason) return { reason: h.reason };
   const run = { file: spec.file, line: h.lines[0], endLine: h.lines[0] };
-  const mapped = { head, runs: [{ ...run, hunk: note, blamed: blamedText(env, head, spec.file, run) }] };
-  const base = { kind: 'open-bug', fixSha: 'open-bug', blamedPr: pr.number, blamedMergeSha: pr.merge_commit_sha, cause: 'open-bug', primary: true, band: 'UNKNOWN', subject: note, note };
+  // An open bug has no fix diff: no hunk is shown or left out.
+  const mapped = { head, runs: [{ ...run, hunk: note, hunksShown: 0, hunksLeftOut: 0, blamed: blamedText(env, head, spec.file, run) }] };
+  const base = { kind: 'open-bug', fixSha: 'open-bug', blamedPr: pr.number, blamedMergeSha: pr.merge_commit_sha, cause: 'open-bug', primary: true, band: 'UNKNOWN', note };
   return ghStage(env, base, mapped);
 }
 
@@ -511,24 +611,38 @@ async function labelStage(cands, ctx) {
   const usedNow = () => laneCallsToday([...readHeadlessLedger(ctx.ledgerPath).entries, ...own], ctx.now());
   const slot = { used: usedNow(), max: SZZ_DAILY_CALLS, stopped: false };
   if (!ctx.args.label) return slot;
-  for (const batch of batchItems(cands.filter((c) => !c.label))) {
+  for (const batch of batchItems(cleanItems(cands.filter((c) => !c.label), ctx))) {
     if (usedNow() >= SZZ_DAILY_CALLS) { slot.stopped = true; break; }
     const call = { phase: 'start', purpose: 'eval-judge', sessionId: `${LEDGER_TAG}:this-run`, ts: new Date(ctx.now()).toISOString(), id: `this-run-${own.length + 1}` };
-    own.push(call);
-    if (!(await askBatch(batch, ctx, call))) bump(ctx.stats.failed, 'label');
+    // The second check: the whole built prompt. A refused prompt makes no call, so it takes no slot. Its pairs stay unlabelled.
+    const sent = await sendGuarded(judgePrompt(batch, ctx.leak), ctx.leak, (prompt) => { own.push(call); return ctx.judge(prompt); });
+    if (sent.refused) bump(ctx.stats.failed, 'prompt-guard');
+    else if (!keepAnswers(batch, sent.res, ctx, call)) bump(ctx.stats.failed, 'label');
   }
   slot.used = usedNow();
   return slot;
 }
 
-/** One judge call. Sets cand.label for each answered pair, and appends the cache rows when the flag allows. Returns false for a failed batch. */
-async function askBatch(batch, ctx, call) {
-  const res = await ctx.judge(buildPrompt(batch)).catch(() => null);
+/**
+ * The first check: each item alone, as its own scrubbed and masked prompt, before the batching. A leaking item is left out
+ * (failed prompt-guard, one per item) and stays unlabelled, so it never takes the clean items of a batch down with it.
+ */
+function cleanItems(items, ctx) {
+  return items.filter((c) => {
+    const leaks = promptGuard(judgePrompt([c], ctx.leak), ctx.leak) !== null;
+    if (leaks) bump(ctx.stats.failed, 'prompt-guard');
+    return !leaks;
+  });
+}
+
+/** The answer of one judge call. Sets cand.label for each answered pair, and appends the cache rows when the flag allows. Returns false for a failed batch. */
+function keepAnswers(batch, res, ctx, call) {
   if (res?.id) call.id = res.id;
   const answers = res?.ok ? parseAnswer(res.result, batch.length) : null;
   if (!answers) return false;
   batch.forEach((c, i) => { c.label = answers[i]; });
-  if (ctx.args.allowLabelCacheWrite) appendLabelCache(ctx.stateDir, batch.map((c) => ({ key: labelKey(c), fixSha: c.fixSha, blamedMergeSha: c.blamedMergeSha, file: c.file, line: c.line, ...c.label })));
+  const row = (c) => ({ key: labelKey(c), fixSha: c.fixSha, blamedMergeSha: c.blamedMergeSha, file: c.file, line: c.line, hunksShown: c.hunksShown, hunksLeftOut: c.hunksLeftOut, ...c.label });
+  if (ctx.args.allowLabelCacheWrite) appendLabelCache(ctx.stateDir, batch.map(row));
   return true;
 }
 
@@ -565,7 +679,7 @@ function pairEnv(args, deps, history) {
   const comments = async (pr) => { const r = await gh(['api', '--paginate', '--slurp', `repos/${repo}/pulls/${pr}/comments?per_page=100`]); return Array.isArray(r) && r.every(Array.isArray) ? r.flat() : r; };
   return {
     git, gh, repo, ref: args.ref ?? 'main', slack: deps.cfg.lineSlack ?? 3, mergeShas: new Set(history.merges.map((m) => m.mergeSha)), cache: new Map(),
-    rounds: new Map(), comments: new Map(), subjects: new Map(), openBugTargets: [], commentsOf: comments, pullsOf: async (sha) => gh(['api', `repos/${repo}/commits/${sha}/pulls`]),
+    rounds: new Map(), comments: new Map(), subjects: new Map(), openBugTargets: [], fixShas: new Set(), titles: new Set(), commentsOf: comments, pullsOf: async (sha) => gh(['api', `repos/${repo}/commits/${sha}/pulls`]),
   };
 }
 
@@ -600,7 +714,10 @@ async function attempt(job, stats, seen) {
 async function mineAll(rows, args, env, stats) {
   const seen = new Set();
   const cands = [];
-  for (const row of rows) cands.push(...await attempt(async () => ({ ...(await minePair(env, row)), fixMergeSha: row.mergeSha }), stats, seen));
+  for (const row of rows) {
+    env.fixShas.add(row.fixSha).add(row.mergeSha); // every fix sha of the run is a leak term, also of a pair with no candidate
+    cands.push(...await attempt(async () => ({ ...(await minePair(env, row)), fixMergeSha: row.mergeSha }), stats, seen));
+  }
   for (const spec of args.openBugs) cands.push(...await attempt(() => mineOpenBug(env, spec, args.openBugNote), stats, seen));
   return cands;
 }
@@ -690,7 +807,7 @@ function reportOf(stats, cands, rows, slot, controls, args) {
     countedBySplit: tally(counted, (c) => rowOf(c).split), countedBySuite: tally(counted, (c) => rowOf(c).suite), countedByBand: tally(counted, (c) => c.band),
     yield: tally(counted, (c) => c.cause),
     labelCalls: { used: slot.used, max: slot.max, ...(slot.stopped ? { stopped: true } : {}) },
-    controls: controls.counts, baseline: null, primaryOnly: Boolean(args.primaryOnly), notes: [NOTES.oneFamily, NOTES.reviewBody, NOTES.oneRun], written: [],
+    controls: controls.counts, baseline: null, primaryOnly: Boolean(args.primaryOnly), notes: [NOTES.oneFamily, NOTES.reviewBody, NOTES.oneRun, NOTES.goldLines, NOTES.diffCut, NOTES.shortTitles], written: [],
   };
 }
 
@@ -698,6 +815,9 @@ const NOTES = {
   oneFamily: 'one model family (claude-opus-5-5) labels every row',
   reviewBody: 'review-body CodeRabbit findings are not read (named limit)',
   oneRun: 'one miner run at a time: two runs can race on the daily slot (named limit)',
+  goldLines: 'the judge prompt shows gold line numbers by design',
+  diffCut: 'the fix diff is cut to the hunks near the blamed lines',
+  shortTitles: `titles under ${TITLE_MIN} characters are not guarded (named limit)`,
 };
 
 function textReport(rep) {
@@ -770,6 +890,10 @@ const USAGE = [
   '  Without --write it is a dry run: it reads git, gh and the state dir and writes no file.',
   '  --label asks the judge (Opus, effort high) for labels, at most 6 calls a Chicago day, 10 pairs a call. It never runs without this flag.',
   '  --allow-label-cache-write keeps the labels in <state-dir>/szz-labels.jsonl. Without it a --label run keeps nothing.',
+  '  The judge prompt shows gold line numbers by design. The fix diff is cut to the hunks near the blamed lines (lineSlack of config.json).',
+  '  The judge prompt holds no fix subject. Fix sha prefixes are masked. Each item is guarded alone before the batching: an item that',
+  '  still holds a PR number, a fix title or a fix sha is left out (failed prompt-guard) and stays unlabelled. The whole prompt is',
+  `  guarded again before each call. Titles under ${TITLE_MIN} characters are not guarded (named limit).`,
   '  --write builds gold-a.json, clean-controls.json and escape-baseline.json in memory, checks them, then writes all three or none.',
   '  --write refuses a partial run (a failed pair, an unlabelled candidate, a failed control round read); --allow-partial writes anyway.',
   '  --report may sit outside the repo, or in .claudedocs/ or .claude/cache/e2e/ of the repo; never in the gold dir or the state dir.',
@@ -842,7 +966,7 @@ async function mine(args, deps, dirs) {
   const env = pairEnv(args, { ...deps, git }, history);
   const allRows = readEscapeRows(dirs.stateDir);
   const cands = await mineAll(candidateRows(allRows, args, stats), args, env, stats);
-  const ctx = { args, stateDir: dirs.stateDir, ledgerPath: deps.ledgerPath ?? defaultHeadlessLedger(deps.env ?? process.env), now: deps.now ?? Date.now, stats };
+  const ctx = { args, stateDir: dirs.stateDir, ledgerPath: deps.ledgerPath ?? defaultHeadlessLedger(deps.env ?? process.env), now: deps.now ?? Date.now, stats, leak: leakTerms(env.fixShas, env.titles) };
   ctx.judge = deps.judge ?? defaultJudge(ctx);
   const slot = await labelStage(cands, ctx);
   const records = await (deps.readRecords ?? (() => readEngineRecords(args.recordsDir ?? path.join(os.homedir(), '.claude', 'state', 'local-review'))))();
