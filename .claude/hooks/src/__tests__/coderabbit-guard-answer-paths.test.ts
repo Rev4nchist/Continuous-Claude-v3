@@ -26,7 +26,7 @@ vi.mock('../../../../scripts/github/lib/answer-paths.mjs', async (importOriginal
   };
 });
 
-import { classifyCommand, decide, logDeny, parseInvocation, readState } from '../coderabbit-guard.js';
+import { classifyCommand, decide, effectiveCwd, gitEnv, logDeny, parseInvocation, parseShape, readState, repoBranchKey } from '../coderabbit-guard.js';
 
 // The env key stays non-CCv3 in every case: the check must come from the git remotes, never from the cap key.
 const NOT_CCV3_KEY = 'x#feature';
@@ -122,7 +122,7 @@ afterEach(() => {
   dirs = [];
 });
 
-describe('coderabbit-guard answer-key check', () => {
+describe('coderabbit-guard answer-key check', { timeout: 30_000 }, () => {
   it('1 denies when the diff holds a gold path', () => {
     const f = makeRepo();
     put(f.root, GOLD, '{}\n');
@@ -428,7 +428,7 @@ describe('coderabbit-guard answer-key check', () => {
     expect(decide(input(`cd "${slash(clean.root)}"; ${REVIEW}`), clean.env).allow).toBe(true);
   });
 
-  it('27 R2: the override lifts the run cap only: a gold path is still denied, a clean diff passes', () => {
+  it('27 R2: the override never lifts the answer-key check (it lifts the run cap and the billing and block denies, as on main): a gold path is still denied, a clean diff passes', () => {
     const f = makeRepo();
     put(f.root, 'src/b.ts', 'export const b = 2;\n');
     commit(f.root, 'clean change');
@@ -571,7 +571,7 @@ function expectWayOut(r: ReturnType<typeof decide>, label = ''): void {
   expect((r.reason ?? '').endsWith('answer-key'), label).toBe(true);
 }
 
-describe('coderabbit-guard answer-key allow list (round 2)', () => {
+describe('coderabbit-guard answer-key allow list (round 2)', { timeout: 30_000 }, () => {
   it('38 the allowed shapes pass on a clean diff and count a run', () => {
     const f = cleanRepo();
     const here = slash(f.root);
@@ -761,12 +761,15 @@ describe('coderabbit-guard answer-key allow list (round 2)', () => {
     expectWayOut(r);
   });
 
-  it('54 in a foreign repo a raw-only review is allowed, but one with an option the parser cannot read is denied (a --dir may reach CCv3)', () => {
+  it('54 (round 3, M1) in a foreign repo a review the parser cannot place is denied with the way-out text; a wrapper it opens still passes', () => {
     const f = makeRepo({ remote: OTHER_URL });
-    expect(f.run('watch -n 5 cr review --agent').allow).toBe(true);
-    const r = f.run('watch -n 5 cr review --agent --dir ..');
-    expect(r.allow).toBe(false);
-    expect((r.reason ?? '').endsWith('answer-key')).toBe(true);
+    // Round 2 allowed the first form here. A raw-only review (a wrapper the parser does not read) may run in a folder the check does not see.
+    for (const c of ['watch -n 5 cr review --agent', 'watch -n 5 cr review --agent --dir ..', `env -C ${slash(f.root)} cr review --agent`]) {
+      expectWayOut(f.run(c), c);
+      expectWayOut(f.run(c, { cwd: plainFolder() }), `plain ${c}`);
+    }
+    expect(f.run('time cr review --agent').allow).toBe(true);
+    expect(f.run('bash -c "cr review --agent"').allow).toBe(true);
   });
 
   it('55 a cd that the folder step cannot follow gets the way-out: a cd after the review, and a cd inside a wrapper string', () => {
@@ -813,7 +816,7 @@ describe('coderabbit-guard answer-key allow list (round 2)', () => {
 // Round 2: log rows of the answer-key path hold no cwd and no command text, and no reason is cut by the masker.
 // ---------------------------------------------------------------------------------------------
 
-describe('coderabbit-guard answer-key log rows (round 2)', () => {
+describe('coderabbit-guard answer-key log rows (round 2)', { timeout: 30_000 }, () => {
   function rowsOf(f: Fixture, input: Parameters<typeof decide>[0]): { result: ReturnType<typeof decide>; rows: Array<Record<string, unknown>> } {
     const log = join(f.top, 'guard.jsonl');
     rmSync(log, { force: true });
@@ -873,5 +876,324 @@ describe('coderabbit-guard answer-key log rows (round 2)', () => {
     const { rows } = rowsOf(f, bash(f, 'cr review --agent --use-credits'));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveProperty('command');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 3: ONE call rule for both the answer-key check and the run slot (B1, B2, B4), the folder rules (B3, M1, M2), the key deadline (M3).
+// A call: an unquoted cr word followed by review, anywhere; a quoted cr word only when a program that runs a string gets it.
+// ---------------------------------------------------------------------------------------------
+
+const WIN = process.platform === 'win32';
+const stateOf = (f: Fixture): string => f.env.CCV3_CODERABBIT_GUARD_STATE as string;
+/** The run slots used so far, from the state file. f.run deletes that file before every call, so a slot test cannot use it. */
+const slots = (f: Fixture): number => Object.values(readState(stateOf(f)).counts).reduce((a, b) => a + b, 0);
+/** Like f.run, but the run counter stays: a slot test reads it before and after. */
+function keep(f: Fixture, command: string, o: { cwd?: string; tool?: string } = {}): ReturnType<typeof decide> {
+  return decide({ tool_name: o.tool ?? 'Bash', cwd: o.cwd ?? f.root, tool_input: { command } }, f.env);
+}
+
+describe('coderabbit-guard answer-key round 3', { timeout: 30_000 }, () => {
+  const B1: Array<[string, string, string?]> = [
+    ['npm exec', 'npm exec coderabbit review --agent'],
+    ['pnpm dlx', 'pnpm dlx coderabbit review --agent'],
+    ['winpty', 'winpty cr review --agent'],
+    ['stdbuf', 'stdbuf -oL cr review --agent'],
+    ['command substitution as the program', '"$(command -v cr)" review --agent'],
+    ['unquoted substitution as the program', '$(command -v cr) review --agent'],
+    ['backtick substitution as the program', '`command -v cr` review --agent'],
+    ['PowerShell Get-Command', '& (Get-Command cr) review --agent', 'PowerShell'],
+  ];
+
+  it.each(B1)('B1 denies %s with the way-out text, on a clean diff, and uses no slot', (name, command, tool) => {
+    const f = cleanRepo();
+    expectWayOut(keep(f, command, { tool }), name);
+    expect(slots(f), name).toBe(0);
+  });
+
+  it.each([
+    ['quoted program word', '"cr" review --agent --base main'],
+    ['quoted path to the program', '"/opt/tools/cr" review --agent --base main'],
+  ])('B1 a quoted program in command position is still a call: %s', (name, command) => {
+    const f = cleanRepo();
+    expectWayOut(keep(f, command), name);
+    expect(slots(f), name).toBe(0);
+    const ps = cleanRepo();
+    expectWayOut(keep(ps, `& ${command.replace('--base main', '')}`, { tool: 'PowerShell' }), `ps ${name}`);
+  });
+
+  // A shell string behind a wrapper the parser does not peel (the first five were denied by the round 2 detector, which read every
+  // segment led by a wrapper). The shell word sits unquoted inside the segment, so the string it runs is a call.
+  const WRAPPED: Array<[string, string, string?]> = [
+    ['nice', 'nice sh -c "cr review --agent"'],
+    ['env -i', 'env -i bash -c "cr review --agent"'],
+    ['find -exec sh -c', 'find . -maxdepth 0 -exec sh -c "cr review --agent" \\;'],
+    ['timeout -k', 'timeout -k 5 60 bash -c "cr review --agent"'],
+    ['winpty bash -c', 'winpty bash -c "cr review --agent"'],
+    ['stdbuf sh -c', 'stdbuf -oL sh -c "cr review --agent"'],
+    ['PowerShell powershell "..."', 'powershell "cr review --agent"', 'PowerShell'],
+  ];
+  it.each(WRAPPED)('B1 a quoted shell string behind a wrapper the parser does not peel is a call: %s', (name, command, tool) => {
+    const f = cleanRepo();
+    expectWayOut(keep(f, command, { tool }), name);
+    expect(slots(f), name).toBe(0);
+  });
+
+  it.each([
+    ['winpty bash -c grep', `winpty bash -c "grep 'cr review' docs"`],
+    ['find -exec grep', 'find docs -exec grep -l "cr review" {} +'],
+    ['bash script path', 'bash run.sh "cr review"'],
+    ['nice grep', 'nice grep -rn "cr review" docs'],
+    ['env -i grep', 'env -i grep "coderabbit review" notes.md'],
+  ])('B2 a quoted string behind a wrapper stays data when the program only reads it: %s', (name, command) => {
+    const f = goldRepo();
+    expect(keep(f, command).allow, name).toBe(true);
+    expect(slots(f), name).toBe(0);
+  });
+
+  it.each([
+    ['find -exec grep', 'find docs -exec grep -l "cr review" {} +'],
+    ['npx vitest -t', 'npx vitest run -t "cr review"'],
+    ['pnpm exec vitest -t', "pnpm exec vitest run -t 'cr review --base'"],
+  ])('B2 allows %s: the quoted words are data, in a CCv3 folder with gold in the diff, and use no slot', (name, command) => {
+    const f = goldRepo();
+    expect(keep(f, command).allow, name).toBe(true);
+    expect(keep(f, command, { tool: 'PowerShell' }).allow, `ps ${name}`).toBe(true);
+    expect(slots(f), name).toBe(0);
+  });
+
+  it.each([
+    ['time grep', 'time grep -n "cr review --dir" README.md'],
+    ['if grep', 'if grep -q "cr review" notes.md; then echo y; fi'],
+    ['bash -c grep', `bash -c "grep 'cr review' docs"`],
+    ['xargs grep', "xargs grep 'cr review'"],
+    ['sudo grep', 'sudo grep -n "coderabbit review" docs'],
+  ])('B4 %s names the words: no answer-key check and no run slot', (name, command) => {
+    const f = goldRepo();
+    expect(keep(f, command).allow, name).toBe(true);
+    expect(slots(f), name).toBe(0);
+    const foreign = makeRepo({ remote: OTHER_URL });
+    expect(keep(foreign, command).allow, `foreign ${name}`).toBe(true);
+    expect(slots(foreign), `foreign ${name}`).toBe(0);
+  });
+
+  it('B4 a real allowed review uses exactly one slot, and a words-only command next to it adds none', () => {
+    const f = cleanRepo();
+    expect(keep(f, 'cr review --agent --base main').allow).toBe(true);
+    expect(slots(f)).toBe(1);
+    expect(keep(f, 'grep -n "cr review" README.md').allow).toBe(true);
+    expect(slots(f)).toBe(1);
+  });
+
+  it('B4 a quoted word that a shell, eval or starter runs is read again by the same rule', () => {
+    const f = goldRepo();
+    for (const c of [
+      `bash -c "grep -rn 'cr review' docs; cr review --agent --base main"`,
+      `bash -ec 'cr review --agent --base main'`,
+      `eval "cr review --agent --base main"`,
+      'wsl sh -c "cr review --agent --base main"',
+    ]) {
+      expectWayOut(keep(f, c), c);
+    }
+    expect(slots(f)).toBe(0);
+    expectWayOut(keep(f, 'Start-Process -FilePath "cr.exe" -ArgumentList "review --agent --base main"', { tool: 'PowerShell' }));
+    expect(slots(f)).toBe(0);
+  });
+
+  // ---- B3 ----
+
+  it('B3 Bash has no CD: a cd in capitals does not move the folder, so the review runs in the session folder (gold) and is denied', () => {
+    const gold = goldRepo();
+    const clean = cleanRepo({ remote: OTHER_URL });
+    const r = keep(gold, `CD ${slash(clean.root)}; cr review --agent --base main`);
+    expect(r.allow).toBe(false);
+    expect(slots(gold)).toBe(0);
+    expect(effectiveCwd(`CD ${slash(clean.root)}`, gold.root, false)).toBe(gold.root);
+    expect(effectiveCwd(`cd ${slash(clean.root)}`, gold.root, false)).not.toBe(gold.root);
+    // PowerShell cd is not case-sensitive.
+    expect(effectiveCwd(`CD ${slash(clean.root)}`, gold.root, true)).not.toBe(gold.root);
+  });
+
+  it.skipIf(!WIN)('B3 PowerShell reads /c/x as C:\\c\\x, not as C:\\x: the rewrite is for Bash only', () => {
+    expect(effectiveCwd('cd /c/Users/x', 'C:\\start', false).toLowerCase()).toBe('c:\\users\\x');
+    expect(effectiveCwd('cd /c/Users/x', 'C:\\start', true).toLowerCase()).toBe('c:\\c\\users\\x');
+  });
+
+  it('B3 with ; the review runs even when the cd fails: the start folder is checked too, with && it is not', () => {
+    const gold = goldRepo();
+    const clean = cleanRepo({ remote: OTHER_URL });
+    const target = slash(clean.root);
+    const semi = keep(gold, `cd ${target}; cr review --agent --base main`);
+    expect(semi.allow).toBe(false);
+    expect(semi.reason).toContain('(1)');
+    expect(slots(gold)).toBe(0);
+    const semiPs = keep(gold, `cd ${target}; cr review --agent --base main`, { tool: 'PowerShell' });
+    expect(semiPs.allow).toBe(false);
+    expect(semiPs.reason).toContain('(1)');
+    // && never reaches the review when the cd fails, so only the target counts (test 44 keeps this).
+    expect(keep(gold, `cd ${target} && cr review --agent --base main`).allow).toBe(true);
+    // A clean start folder with a ; and a CCv3 target is checked in the target as before.
+    const startClean = cleanRepo();
+    expect(keep(startClean, `cd ${slash(gold.root)}; cr review --agent --base main`).allow).toBe(false);
+  });
+
+  // ---- M1 ----
+
+  it.each([
+    ['env -C', (ccv3: string) => `env -C ${ccv3} cr review --agent --base main`],
+    ['env --chdir', (ccv3: string) => `env --chdir ${ccv3} cr review --agent --base main`],
+    ['env -C after a cd', (ccv3: string) => `cd .. && env -C ${ccv3} cr review --agent`],
+    ['bash -ec with a cd inside', (ccv3: string) => `bash -ec 'cd ${ccv3} && cr review --agent --base main'`],
+    ['Start-Process -WorkingDirectory', (ccv3: string) => `Start-Process cr -WorkingDirectory ${ccv3} -ArgumentList "review --agent"`],
+    ['Start-Process quoted path -WorkingDirectory', (ccv3: string) => `Start-Process -FilePath "cr.exe" -WorkingDirectory ${ccv3} -ArgumentList "review --agent"`],
+  ])('M1 %s: a review the check cannot place is denied with the way-out text in a foreign repo and in a plain folder, and uses no slot', (name, build) => {
+    const ccv3 = goldRepo();
+    const foreign = makeRepo({ remote: OTHER_URL });
+    const command = build(slash(ccv3.root));
+    expectWayOut(keep(foreign, command), `foreign ${name}`);
+    expectWayOut(keep(foreign, command, { tool: 'PowerShell' }), `foreign ps ${name}`);
+    expectWayOut(keep(foreign, command, { cwd: plainFolder() }), `plain ${name}`);
+    expect(slots(foreign), name).toBe(0);
+  });
+
+  it('M1 a wrapper the parser opens and places in the session folder still passes in a foreign folder', () => {
+    const foreign = makeRepo({ remote: OTHER_URL });
+    // f.run starts every call with an empty counter: the cap of 2 must not decide here.
+    for (const c of ['sudo -u root cr review --agent', 'xargs -n 1 cr review --agent', 'time cr review --agent', 'bash -c "cr review --agent"']) {
+      const r = foreign.run(c);
+      expect(r.allow, c).toBe(true);
+      expect(r.increment, c).toBe(true);
+    }
+  });
+
+  // ---- M2 ----
+
+  const PS_CD: Array<[string, string]> = [
+    ['cd with a backslash path', 'cd C:\\Users\\x\\repo; cr review --agent --base main'],
+    ['cd with a quoted backslash path', 'cd "C:\\Users\\my repo"; cr review --agent --base main'],
+    ['Set-Location', 'Set-Location C:\\Users\\x\\repo; cr review --agent --base main'],
+    ['sl', 'sl C:/Users/x/repo; cr review --agent --base main'],
+    ['Set-Location -Path', 'Set-Location -Path C:\\Users\\x\\repo; cr review --agent --base main'],
+    ['set-location -literalpath', 'set-location -LiteralPath "C:\\Users\\my repo"; cr review --agent --base main'],
+    ['cd -Path', 'cd -Path ./repo && cr review --agent --base main'],
+  ];
+
+  it.each(PS_CD)('M2 PowerShell: parseShape accepts %s', (_name, command) => {
+    const shape = parseShape(command, true);
+    expect(shape).not.toBeNull();
+    expect(shape?.cd).toBeTruthy();
+    // Bash reads a backslash as an escape and has no Set-Location: the same text is not the shape there.
+    if (/\\|set-location|^sl /i.test(command)) expect(parseShape(command, false)).toBeNull();
+  });
+
+  it('M2 a backslash stays out of every other token, and Bash keeps failing the shape', () => {
+    expect(parseShape('cd C:\\x; cr review --agent --base ma\\in', true)).toBeNull();
+    expect(parseShape('cd C:\\x; cr review --agent --base main --dir src\\a', true)).toBeNull();
+    expect(parseShape('cd C:\\x && cr review --agent --base main', false)).toBeNull();
+    expect(parseShape('Set-Location -Path; cr review --agent --base main', true)).toBeNull();
+    expect(parseShape('Set-Location -Foo C:\\x; cr review --agent --base main', true)).toBeNull();
+  });
+
+  it('M2 Bash: a backslash cd target gets the way-out text and names the cause', () => {
+    const f = cleanRepo();
+    const r = keep(f, `cd ${slash(f.root).replace(/\//g, '\\')} && cr review --agent --base main`);
+    expectWayOut(r);
+    expect(r.reason).toContain('backslash');
+  });
+
+  it.skipIf(!WIN)('M2 PowerShell on Windows: a backslash cd target is followed (clean repo passes, gold repo is denied)', () => {
+    const clean = cleanRepo();
+    const gold = goldRepo();
+    const back = (p: string) => p.replace(/\//g, '\\');
+    const from = plainFolder();
+    expect(keep(clean, `cd ${back(clean.root)}; cr review --agent --base main`, { tool: 'PowerShell', cwd: from }).allow).toBe(true);
+    expect(slots(clean)).toBe(1);
+    expect(keep(clean, `Set-Location -LiteralPath "${back(clean.root)}"; cr review --agent --base main`, { tool: 'PowerShell', cwd: from }).allow).toBe(true);
+    const bad = keep(gold, `cd ${back(gold.root)}; cr review --agent --base main`, { tool: 'PowerShell', cwd: from });
+    expect(bad.allow).toBe(false);
+    expect(bad.reason).toContain('(1)');
+  });
+
+  // ---- SMALL ----
+
+  it('a cd target must be absolute or start with ./, ../ or ~: a bare name could move through CDPATH', () => {
+    for (const ok of ['/tmp/x', 'C:/x', './x', '../x', '~/x', '~', '..', '.']) {
+      expect(parseShape(`cd ${ok} && cr review --agent --base main`, false), ok).not.toBeNull();
+    }
+    for (const bad of ['repo', 'a/b', '-', '...x']) {
+      expect(parseShape(`cd ${bad} && cr review --agent --base main`, false), bad).toBeNull();
+    }
+    const f = cleanRepo();
+    mkdirSync(join(f.root, 'sub'));
+    expectWayOut(keep(f, 'cd sub && cr review --agent --base main'));
+  });
+
+  it('a missing refs/remotes/fork/main or refs/heads/main is named in the deny text', () => {
+    const f = cleanRepo();
+    git(f.root, ['update-ref', '-d', 'refs/remotes/fork/main']);
+    const noFork = keep(f, REVIEW);
+    expect(noFork.allow).toBe(false);
+    expect(noFork.reason).toContain('refs/remotes/fork/main');
+    expect((noFork.reason ?? '').endsWith('answer-key')).toBe(true);
+    git(f.root, ['update-ref', 'refs/remotes/fork/main', f.base]);
+    git(f.root, ['branch', '-m', 'main', 'renamed-main']);
+    const noMain = keep(f, 'cr review --agent --base renamed-main');
+    expect(noMain.allow).toBe(false);
+    expect(noMain.reason).toContain('refs/heads/main');
+    expect((noMain.reason ?? '').endsWith('answer-key')).toBe(true);
+  });
+
+  it('the git calls run with LC_ALL=C and without GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE', () => {
+    const env = gitEnv({ LANG: 'de_DE.UTF-8', LC_ALL: 'de_DE.UTF-8', GIT_DIR: 'x', GIT_WORK_TREE: 'y', GIT_INDEX_FILE: 'z', KEEP: '1' });
+    expect(env.LC_ALL).toBe('C');
+    expect(env.KEEP).toBe('1');
+    for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) expect(env).not.toHaveProperty(name);
+  });
+
+  // ---- the parser reads what the call rule relies on ----
+
+  it('parseInvocation skips runner options with values, opens combined shell flags, and marks a folder option', () => {
+    expect(parseInvocation('sudo -u root cr review --agent')).toMatchObject({ exe: 'cr' });
+    expect(parseInvocation('xargs -n 1 cr review --agent')).toMatchObject({ exe: 'cr' });
+    expect(parseInvocation('sudo -u root cr review --agent')?.moves).toBeUndefined();
+    expect(parseInvocation('sudo -D /elsewhere cr review --agent')).toMatchObject({ exe: 'cr', moves: true });
+    expect(parseInvocation("bash -ec 'cr review --agent'")?.nested).toBe('cr review --agent');
+    expect(parseInvocation('sh -xc "cr review --agent"')?.nested).toBe('cr review --agent');
+    expect(parseInvocation('bash --noprofile script.sh')?.nested).toBeUndefined();
+    expect(parseInvocation('sh -c "bash -c \\"cr review --agent\\""')?.nested).toBe('bash -c "cr review --agent"');
+    expect(parseInvocation('Start-Process -FilePath "C:\\Program Files\\CodeRabbit\\cr.exe" -ArgumentList "review --agent"')).toMatchObject({ exe: 'cr' });
+    expect(parseInvocation('Start-Process cr -WorkingDirectory x -ArgumentList "review --agent"')).toMatchObject({ exe: 'cr', moves: true });
+  });
+
+  // ---- M3 ----
+
+  it('M3 repoBranchKey has the same deadline as the other git calls: a spent budget gives the cwd key, a normal call the repo key', () => {
+    const f = cleanRepo();
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.CCV3_CODERABBIT_GUARD_KEY;
+    expect(repoBranchKey(f.root, env)).toMatch(/#feature$/);
+    expect(repoBranchKey(f.root, env)).not.toMatch(/^cwd#/);
+    const t0 = Date.now();
+    let calls = 0;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => (++calls <= 1 ? t0 : t0 + 61000));
+    try {
+      expect(repoBranchKey(f.root, env)).toMatch(/^cwd#/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('round 3 keeps the log rule: a run-cap deny still logs the command head and the cwd', () => {
+    const f = cleanRepo();
+    writeFileSync(stateOf(f), JSON.stringify({ counts: { [NOT_CCV3_KEY]: 2 } }));
+    const input = { tool_name: 'Bash', session_id: 's-cap', cwd: f.root, tool_input: { command: REVIEW } };
+    const result = decide(input, f.env);
+    expect(result.allow).toBe(false);
+    expect(result.reason).toContain('run cap reached');
+    const log = join(f.top, 'cap.jsonl');
+    logDeny(input, result, { ...f.env, CCV3_GUARD_DECISIONS_LOG: log });
+    const row = JSON.parse(readFileSync(log, 'utf8').split('\n').filter(Boolean)[0]) as Record<string, unknown>;
+    expect(row).toHaveProperty('cwd');
+    expect(row).toHaveProperty('command');
   });
 });

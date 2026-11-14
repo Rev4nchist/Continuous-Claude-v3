@@ -891,14 +891,26 @@ describe('coderabbit-guard: search commands that mention "cr review" do not use 
   it.each([
     ['bash', 'time cr review --agent'],
     ['bash', 'nohup sh -c "cr review --agent"'],
-    ['bash', 'find . -maxdepth 0 -exec cr review --agent {} ;'],
-    ['bash', 'watch -n 5 cr review --agent'],
+    ['bash', 'sudo -u root cr review --agent'],
     ['pwsh', 'Start-Job -ScriptBlock { cr review --agent }'],
     ['pwsh', 'Invoke-Expression "cr review --agent"'],
   ])('still counts an executing wrapper (%s): %s', (tool, command) => {
     const make = tool === 'bash' ? bash : pwsh;
     expect(decide(make(command), env).allow).toBe(true);
     expect(readState(join(dir, 'state.json')).counts['search#main']).toBeGreaterThanOrEqual(1);
+  });
+
+  // Round 3 (M1): a wrapper the parser does not read (find -exec, watch) may run the review in a folder the check does not see.
+  // It is denied in every folder, also this folder outside git, and it uses no slot.
+  it.each([
+    ['bash', 'find . -maxdepth 0 -exec cr review --agent {} ;'],
+    ['bash', 'watch -n 5 cr review --agent'],
+  ])('denies a wrapper the parser does not read (%s): %s', (tool, command) => {
+    const make = tool === 'bash' ? bash : pwsh;
+    const d = decide(make(command), env);
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('run the review as its own plain command with --base <ref>');
+    expect(existsSync(join(dir, 'state.json'))).toBe(false);
   });
 });
 
@@ -1010,8 +1022,17 @@ describe('coderabbit-guard: mixed parsed and hidden reviews count per segment', 
   });
 
   it('does not count a segment twice when the parser and the raw scan both see it', () => {
-    expect(decide(bash('cr review --agent && cr doctor && echo cr review'), env).allow).toBe(true);
+    expect(decide(bash('cr review --agent && cr doctor && echo "cr review"'), env).allow).toBe(true);
     expect(readState(stateFile).counts['mixed#main']).toBe(1);
+  });
+
+  // Round 3 (the one call rule): an UNQUOTED cr word followed by review is a call anywhere, also after echo. No parsed cr call stands for it,
+  // so the check cannot place it: the whole command is denied with the way-out text and uses no slot. The quoted form above is data.
+  it('denies an unquoted `echo cr review` as a call the check cannot place, and uses no slot', () => {
+    const d = decide(bash('cr review --agent && cr doctor && echo cr review'), env);
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('run the review as its own plain command with --base <ref>');
+    expect(existsSync(stateFile)).toBe(false);
   });
 
   it('blocks a three-run mix and records nothing', () => {
