@@ -2222,3 +2222,44 @@ test('fleetopsSize: a file that does not parse is a WARN, not a crash', () => {
   // Breaks if a half-written file throws and hides the other doctor checks.
   assert.equal(fleetopsSize(dashHome({ 'refresh.json': '{not json' })).status, 'WARN');
 });
+
+// ---- memory (embedding-daemon-commit-leak, 2026-11-13) ----
+const embedInfo = (fx, body) => put(join(fx.home, '.claude', 'run', 'ccv3-embedding.json'), typeof body === 'string' ? body : JSON.stringify(body));
+
+test('memory:embedding-daemon is a PASS that says info when no daemon runs (no discovery file)', () => {
+  const r = run(fixture());
+  assert.equal(r.checks['memory:embedding-daemon']?.status, 'PASS');
+  assert.match(r.checks['memory:embedding-daemon'].detail, /^info: no daemon runs/);
+});
+
+test('memory:embedding-daemon: under 4096 MB PASS, from 4096 WARN, from 8192 FAIL (exit 1); the detail names the pid and the size', () => {
+  const fx = fixture();
+  embedInfo(fx, { pid: 4242, port: 1 });
+  for (const [mb, status, code] of [['3000', 'PASS', 0], ['4096', 'WARN', 0], ['8191', 'WARN', 0], ['8192', 'FAIL', 1], ['97300', 'FAIL', 1]]) {
+    const r = run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: mb });
+    const c = r.checks['memory:embedding-daemon'];
+    assert.equal(c?.status, status, `${mb} MB: ${c?.detail}`);
+    assert.match(c.detail, new RegExp(`pid 4242 holds ${mb} MB`));
+    assert.equal(r.code, code, `${mb} MB exit code`);
+  }
+});
+
+test('memory:embedding-daemon: a stale file (pid gone) is a PASS info; a bad file or pid is a WARN; an unreadable size is a WARN', () => {
+  const fx = fixture();
+  embedInfo(fx, { pid: 4242 });
+  assert.match(run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: 'gone' }).checks['memory:embedding-daemon'].detail, /^info: pid 4242 .* does not run/);
+  assert.equal(run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: 'x' }).checks['memory:embedding-daemon'].status, 'WARN');
+  for (const body of ['not json', { pid: 'a; Stop-Process 1' }, { pid: -1 }, {}]) {
+    embedInfo(fx, body);
+    const c = run(fx, [], { HARNESS_DOCTOR_EMBED_PRIVATE_MB: '10' }).checks['memory:embedding-daemon'];
+    assert.equal(c.status, 'WARN', JSON.stringify(body));
+  }
+});
+
+test('memory:embedding-daemon reads a real process without the seam (Windows): this test runner is under the limits', { skip: process.platform !== 'win32' }, () => {
+  const fx = fixture();
+  embedInfo(fx, { pid: process.pid });
+  const c = run(fx).checks['memory:embedding-daemon'];
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, new RegExp(`pid ${process.pid} holds \\d+ MB`));
+});
