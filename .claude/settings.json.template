@@ -291,7 +291,7 @@
         ]
       },
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell|mcp__plugin_desktop-commander_desktop-commander__write_file|mcp__plugin_desktop-commander_desktop-commander__edit_block|mcp__plugin_desktop-commander_desktop-commander__move_file|mcp__plugin_desktop-commander_desktop-commander__start_process|mcp__plugin_desktop-commander_desktop-commander__interact_with_process",
         "hooks": [
           {
             "type": "command",
@@ -300,7 +300,12 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/file-claims.mjs"
             ]
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
           {
             "type": "command",
             "command": "node",

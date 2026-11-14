@@ -171,6 +171,11 @@ const SPECS: Spec[] = [
   { hook: 'tldr-read-enforcer', neutral: '{}',
     cursor: CURSOR_TOOLS('Read', (p) => ({ file_path: F(p) })),
     seed: (proj) => { mkdirSync(join(proj, '.tldr'), { recursive: true }); writeFileSync(join(proj, '.tldr', 'keep'), 'x'); } },
+  // file-claims: only its SHELL branch is silent under the host (card coord-file-claims-all-writers, seat
+  // change 2). The exact-path branch (Edit, Write ...) keeps its deny. The unit test
+  // file-claims-all-writers.test.ts proves the shell branch asks no database query under the host.
+  { hook: 'file-claims', neutral: CONT,
+    cursor: [...CURSOR_TOOLS('Bash', () => ({ command: 'echo x > src/x.ts' })), ...CURSOR_TOOLS('PowerShell', () => ({ command: "Set-Content -LiteralPath 'src/x.ts' -Value x" }))] },
   { hook: 'memory-awareness', neutral: CONT,
     cursor: [() => ({ hook_event_name: 'userPromptSubmit', prompt: PROMPT })],
     seed: (proj) => { mkdirSync(join(proj, 'opc'), { recursive: true }); },
