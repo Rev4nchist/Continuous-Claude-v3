@@ -145,3 +145,43 @@ test('classifyFromFiles: no trace or no truth file is insufficient_evidence', ()
   assert.equal(classifyFromFiles({ truth: { file: 'a' }, trace: undefined, record: {} }).missing, 'filesRead');
   assert.equal(classifyFromFiles({ truth: {}, trace: { filesRead: [], diffFiles: ['x'] }, record: {} }).missing, 'truthPath');
 });
+
+// ---------- round 3: path collapse and empty lists ----------
+
+const FORMS = [['a//b.mjs', 'a/b.mjs'], ['a/./b.mjs', 'a/b.mjs'], ['a/x/../b.mjs', 'a/b.mjs'], ['/a/b.mjs', 'a/b.mjs'], ['a/b.mjs/', 'a/b.mjs'], ['.\\a\\\\b.mjs', 'a/b.mjs'], ['./A/B.mjs', 'a/b.mjs']];
+
+test('normPath: collapses //, /./ and /../ segments and strips a leading or trailing slash', () => {
+  for (const [from, to] of FORMS) assert.equal(normPath(from), to, from);
+});
+
+test('normPath: a path that still starts with .. is kept, and a path that is nothing gives an empty string', () => {
+  assert.equal(normPath('../x/y.mjs'), '../x/y.mjs');
+  assert.equal(normPath('a/../../x.mjs'), '../x.mjs');
+  for (const empty of ['', '.', './', '/', undefined]) assert.equal(normPath(empty), '', String(empty));
+});
+
+test('odd forms of src/a.mjs match src/a.mjs in all three roles', () => {
+  const odd = ['src//a.mjs', 'src/./a.mjs', 'src/x/../a.mjs', '/src/a.mjs', 'src/a.mjs/', '.\\src\\\\a.mjs', 'SRC/A.mjs'];
+  for (const o of odd) {
+    assert.deepEqual(classifyMiss({ ...base, truthPath: o }).judge, PAIR1, `truth ${o}`);
+    assert.deepEqual(classifyMiss({ ...base, diffFiles: [o] }).judge, PAIR1, `diff ${o}`);
+    assert.deepEqual(classifyMiss({ ...base, filesRead: [o] }).judge, PAIR1, `read ${o}`);
+  }
+});
+
+test('diffFiles that normalize to nothing count as empty: [{}], [null], ["./"], ["/"] give missing diffFiles', () => {
+  for (const diffFiles of [[{}], [null], ['./'], ['/'], [{ path: '' }], ['', '.']]) {
+    const r = classifyMiss({ ...base, diffFiles });
+    assert.equal(r.cls, 'insufficient_evidence', JSON.stringify(diffFiles));
+    assert.equal(r.missing, 'diffFiles');
+  }
+});
+
+test('a truth path that normalizes to nothing is insufficient_evidence naming truthPath', () => {
+  for (const truthPath of ['.', './', '/']) assert.equal(classifyMiss({ ...base, truthPath }).missing, 'truthPath', truthPath);
+});
+
+test('impact rows with no usable path count as empty for impactRowsEmpty', () => {
+  for (const impactRows of [[{}], [null], ['./'], [{ path: '/' }]]) assert.equal(classifyMiss({ ...base, impactRows }).impactRowsEmpty, true, JSON.stringify(impactRows));
+  assert.equal(classifyMiss({ ...base, impactRows: [{}, { path: 'q.mjs' }] }).impactRowsEmpty, false);
+});

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAtSha as defaultReadAtSha } from '../../github/local-review/context.mjs';
 import { matchFindings } from './match.mjs';
-import { normPath } from './miss-cause.mjs';
+import { listPaths, normPath } from './miss-cause.mjs';
 import { RUBRIC_NAMES, checkRubric, parseRubric } from './rubrics/rubric-lint.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -59,41 +59,57 @@ export function headAvailable(repo, head) {
 }
 
 /**
+ * 'absent' when git ls-tree at the head lists nothing for the path, 'present' when it lists the path, 'error' for anything else
+ * (a non-sha head, a missing commit, a non-repo, a git failure). No shell.
+ */
+export function treeProbe(repo, head, file) {
+  if (!/^[0-9a-f]{7,64}$/i.test(String(head))) return 'error';
+  const r = spawnSync('git', ['ls-tree', head, '--', file], { cwd: repo, shell: false, windowsHide: true, encoding: 'utf8' });
+  if (r.error || r.status !== 0) return 'error';
+  return String(r.stdout).trim() === '' ? 'absent' : 'present';
+}
+
+function missingBlob({ repo, head, file, probe, out }) {
+  let seen;
+  try { seen = probe(repo, head, file); } catch { seen = 'error'; }
+  return seen === 'absent' ? out('invalid', 'the cited path is missing at the head') : out('insufficient_evidence', 'blob not readable: the path is in the tree or the probe failed');
+}
+
+/**
  * Checks the cited file and line range at the reviewed head. There is no quote to check (seat Q1), so quoteChecked is always false.
  * label: valid | invalid | insufficient_evidence | null (the finding cites no path:line and is not scored).
  * The head is checked first (headOk, else headCheck(repo, head)). A head that is not there gives insufficient_evidence, 'head not available'.
- * With a good head, readAtSha returning null means the file is missing at the head, so it is invalid.
- * A throw from readAtSha (git cannot start) is still insufficient_evidence.
+ * With a good head, readAtSha returns null for a missing blob and also for a blob git cannot read. One tree probe tells them apart:
+ * the path is not in the tree: invalid. The path is listed, or the probe fails: insufficient_evidence, 'blob not readable'.
+ * A reversed range is swapped, so the larger line is the end.
+ * A throw from readAtSha (git cannot start) is also insufficient_evidence.
  */
-export function citationCheck(finding, { readAtSha = defaultReadAtSha, repo, head, headOk, headCheck = headAvailable } = {}) {
+export function citationCheck(finding, { readAtSha = defaultReadAtSha, repo, head, headOk, headCheck = headAvailable, treeProbe: probe = treeProbe } = {}) {
   const out = (label, reason) => ({ label, quoteChecked: false, reason });
   const { startLine } = finding ?? {};
   if (typeof finding?.file !== 'string' || !Number.isInteger(startLine)) return out(null, 'the finding cites no path:line, so it is not scored');
   if (!(headOk ?? headCheck(repo, head))) return out('insufficient_evidence', 'head not available: the repo does not hold the reviewed commit');
   const file = finding.file.replaceAll('\\', '/').replace(/^\.\//, '');
-  const endLine = Number.isInteger(finding.endLine) ? finding.endLine : startLine;
+  const ends = Number.isInteger(finding.endLine) ? finding.endLine : startLine;
+  const [lo, endLine] = [Math.min(startLine, ends), Math.max(startLine, ends)]; // a reversed range is swapped
   if (badPath(file)) return out('invalid', 'the cited path is not a path inside the repo');
-  if (startLine < 1) return out('invalid', `startLine ${startLine} is below 1`);
-  if (endLine < startLine) return out('invalid', 'the line range ends before it starts');
+  if (lo < 1) return out('invalid', `startLine ${lo} is below 1`);
   let text;
   try { text = readAtSha(repo, head, file); } catch { return out('insufficient_evidence', 'the git read failed, so the path and lines cannot be checked'); }
-  if (text === null || text === undefined) return out('invalid', 'the cited path is missing at the head');
+  if (text === null || text === undefined) return missingBlob({ repo, head, file, probe, out });
   const n = lineCount(text);
   if (endLine > n) return out('invalid', `line ${endLine} is past the end of the file (${n} lines)`);
-  return out('valid', `the path exists at the head and lines ${startLine}-${endLine} are inside the file (${n} lines)`);
+  return out('valid', `the path exists at the head and lines ${lo}-${endLine} are inside the file (${n} lines)`);
 }
 
 // ---------- context reach ----------
 
-const pathOf = (e) => (typeof e === 'string' ? e : e?.path);
-
 /** { ratio, opened, listed }. Rows are counted once per normalized path. ratio is null (never 0) when no impact rows exist. With rows and no trace, ratio is null and missing is 'filesRead'. */
 export function contextReach(record, trace) {
-  const list = Array.isArray(record?.impactRows) ? record.impactRows : [];
-  const rows = [...new Set(list.map(pathOf).filter((p) => typeof p === 'string' && p !== '').map(normPath))];
+  const rows = [...new Set(listPaths(record?.impactRows))];
   if (rows.length === 0) return { ratio: null, opened: 0, listed: 0 };
   if (!Array.isArray(trace?.filesRead)) return { ratio: null, opened: 0, listed: rows.length, missing: 'filesRead' };
-  const read = new Set(trace.filesRead.map(pathOf).filter((p) => typeof p === 'string').map(normPath));
+  const read = new Set(listPaths(trace.filesRead));
   const opened = rows.filter((p) => read.has(p)).length;
   return { ratio: opened / rows.length, opened, listed: rows.length };
 }
@@ -105,13 +121,18 @@ export function contextReach(record, trace) {
  * Else { judge: true, candidates } with every place-matched finding. The matcher is one to one, so it runs once per finding.
  * A truth with no usable file is { label: 'insufficient_evidence', judged: false }. A null or non-object finding, or one with no file, is skipped.
  * A truth with no numeric line has no place: findings in the same file go to the judge with low: true (as match.mjs toJudge does); none gives missed.
- * A truth with a line and only far same-file findings is missed.
+ * A truth with a line and only far same-file findings is missed. findings that is not an array is insufficient_evidence.
+ * A finding with endLine below startLine is swapped.
  */
 export function missedBug(truth, findings) {
-  if (typeof truth?.file !== 'string' || truth.file === '') return { label: 'insufficient_evidence', judged: false };
+  if (typeof truth?.file !== 'string' || truth.file === '' || !Array.isArray(findings)) return { label: 'insufficient_evidence', judged: false };
   const t = { file: normPath(truth.file), start: truth.line, end: truth.line, sev: truth.severity };
-  const usable = (Array.isArray(findings) ? findings : []).filter((f) => isObj(f) && typeof f.file === 'string' && f.file !== '');
-  const toEng = (f) => ({ file: normPath(f.file), start: f.startLine, end: f.endLine ?? f.startLine, sev: f.severity });
+  const usable = findings.filter((f) => isObj(f) && typeof f.file === 'string' && f.file !== '');
+  const toEng = (f) => {
+    const end = f.endLine ?? f.startLine;
+    const swap = Number.isFinite(f.startLine) && Number.isFinite(end) && end < f.startLine; // a reversed range is swapped
+    return { file: normPath(f.file), start: swap ? end : f.startLine, end: swap ? f.startLine : end, sev: f.severity };
+  };
   const placed = usable.filter((f) => matchFindings([t], [toEng(f)]).matches.length > 0);
   if (placed.length > 0) return { judge: true, candidates: placed };
   const sameFile = Number.isFinite(t.start) ? [] : usable.filter((f) => matchFindings([t], [toEng(f)]).toJudge.length > 0);
@@ -160,18 +181,19 @@ function closeOf(t, start) {
   return -1;
 }
 
-/** The top-level JSON objects in the text, in order. An object inside another is not top-level. */
+/** The top-level JSON objects in the text, in order, or null when a block that holds a label does not parse. An object inside another is not top-level. */
 function objectsOf(text) {
   const t = String(text ?? '');
   const found = [];
   if (t.length > 40_000) return found;
   for (let i = t.indexOf('{'); i >= 0; i = t.indexOf('{', i + 1)) {
     const end = closeOf(t, i);
-    if (end < 0) continue;
-    try {
-      const o = JSON.parse(t.slice(i, end + 1));
-      if (isObj(o)) { found.push(o); i = end; }
-    } catch { /* not an object: try the next brace */ }
+    const block = t.slice(i, end < 0 ? t.length : end + 1);
+    let o = null;
+    try { o = end < 0 ? null : JSON.parse(block); } catch { /* a block that does not parse */ }
+    if (isObj(o)) { found.push(o); i = end; continue; }
+    // A broken outer block that holds a label must not let its inner object stand in: the whole answer is unusable.
+    if (block.includes('"label"')) return null;
   }
   return found;
 }
@@ -197,6 +219,7 @@ const ABSTAIN_LABELS = ['insufficient_evidence', 'unclear'];
  */
 export function parseRubricAnswer(stdout, loaded, { allowed } = {}) {
   const objs = objectsOf(resultText(stdout));
+  if (objs === null) return { ok: false, error: 'parse' };
   const values = labelsOf(loaded, allowed).map((l) => l.value);
   const labelOf = (o) => (typeof o?.label === 'string' && values.includes(o.label.trim()) ? o.label.trim() : null);
   const last = objs[objs.length - 1];
@@ -227,12 +250,13 @@ export async function judgeRubric(loaded, inputs, { runJudge, reviewerBackend, a
   const prompt = buildRubricPrompt(loaded, inputs, { allowed });
   let res;
   try { res = await runJudge(prompt); } catch { return { ok: false, error: 'failed' }; }
-  if (!res?.ok) return { ok: false, error: failureOf(res), ...(res?.servedModel ? { servedModel: res.servedModel } : {}) };
+  if (!res?.ok) return { ok: false, error: failureOf(res), ...(typeof res?.servedModel === 'string' && res.servedModel ? { servedModel: res.servedModel } : {}) };
   const { servedMatches } = await import('../../lib/headless.mjs');
-  if (!servedMatches('opus', res.servedModel)) return { ok: false, error: 'served-model', servedModel: res.servedModel ?? null };
+  const served = typeof res.servedModel === 'string' ? res.servedModel : null; // a number, object or array is never a served model
+  if (served === null || !servedMatches('opus', served)) return { ok: false, error: 'served-model', servedModel: served };
   const parsed = parseRubricAnswer(res.stdout ?? res.result, loaded, { allowed });
   if (!parsed.ok) return parsed;
-  return { ...parsed, tag: { ...loaded.tag, promptVersion: PROMPT_VERSION, model: res.servedModel, effort, allowed: Array.isArray(allowed) ? [...allowed].sort() : null } };
+  return { ...parsed, tag: { ...loaded.tag, promptVersion: PROMPT_VERSION, model: served, effort, allowed: Array.isArray(allowed) ? [...allowed].sort() : null } };
 }
 
 // ---------- CLI ----------
@@ -263,8 +287,8 @@ function readJson(file) {
 
 const countBy = (rows, label) => rows.filter((r) => r.label === label).length;
 
-// A printed id has no control characters and is at most 64 characters long.
-const safeId = (id) => String(id ?? '').replace(/\p{Cc}/gu, '').slice(0, 64);
+// A printed id has no control or format characters (bidi overrides included) and is at most 64 characters long.
+const safeId = (id) => String(id ?? '').replace(/[\p{Cc}\p{Cf}]/gu, '').slice(0, 64);
 
 function citationRows(record, repo) {
   const headOk = headAvailable(repo, record.head); // once per record
@@ -304,7 +328,7 @@ function runCli(argv) {
   const repo = opts['--repo'];
   if (repo !== undefined && !(statSync(repo, { throwIfNoEntry: false })?.isDirectory())) return fail('--repo', 'is not a folder');
   const reach = contextReach(rec.value, tr.value);
-  const out = { record: safeId(path.basename(opts['--record'])), contextReach: { ...reach, impactRowsEmpty: !(rec.value.impactRows?.length > 0) } };
+  const out = { record: safeId(path.basename(opts['--record'])), contextReach: { ...reach, impactRowsEmpty: reach.listed === 0 } };
   if (rubric !== 'context-reach' && repo === undefined) out.citationSkipped = 'no --repo';
   if (rubric !== 'context-reach' && repo !== undefined) out.citation = citationRows(rec.value, repo);
   return { code: 0, stdout: opts['--json'] ? `${JSON.stringify(out, null, 2)}\n` : render(out), stderr: '' };
@@ -327,4 +351,5 @@ if (isMain()) {
   process.stderr.write(r.stderr);
   process.exitCode = r.code;
 }
+
 

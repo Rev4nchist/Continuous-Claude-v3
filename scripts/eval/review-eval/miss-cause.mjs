@@ -3,16 +3,27 @@
 // Every result carries impactRowsEmpty. Today no producer writes impact rows, so step 2 has no data (seat ruling, Q2).
 // The truth id is added by the caller.
 // Known limits: a filesRead path outside the tree (an absolute path) does not match a relative diff path;
-// in delta mode diffFiles holds only the delta files, so the result says deltaMode: true.
+// in delta mode diffFiles holds only the delta files, so the result says deltaMode: true;
+// paths that differ only by case merge.
+import { posix } from 'node:path';
 
-/** One path form: forward slashes, no leading ./, lower case. Case is always folded: the record does not say which OS made it. */
+/**
+ * One path form: forward slashes, segments collapsed (a//b, a/./b, a/x/../b), no leading or trailing slash, lower case.
+ * A path that still starts with .. is kept as it is: it can never equal a tree path. A path that is nothing gives ''.
+ * Case is always folded: the record does not say which OS made it.
+ */
 export function normPath(p) {
-  return String(p ?? '').replaceAll('\\', '/').replace(/^(\.\/)+/, '').toLowerCase();
+  const s = String(p ?? '').replaceAll('\\', '/');
+  if (s === '') return '';
+  return posix.normalize(s).replace(/^(\.?\/)+/, '').replace(/\/+$/, '').replace(/^\.$/, '').toLowerCase();
 }
 
 // A list entry is a plain string or an object with a path field.
 const pathOf = (e) => (typeof e === 'string' ? e : e?.path);
-const setOf = (list) => new Set((Array.isArray(list) ? list : []).map(pathOf).filter((p) => typeof p === 'string' && p !== '').map(normPath));
+
+/** The normalized, non-empty paths of a list of strings or { path } objects. An entry with no usable path is left out. */
+export const listPaths = (list) => (Array.isArray(list) ? list : []).map(pathOf).filter((p) => typeof p === 'string').map(normPath).filter((p) => p !== '');
+const setOf = (list) => new Set(listPaths(list));
 
 // The judge may always answer insufficient_evidence (the rubric allows it).
 const GOOD_PAIR = {
@@ -25,13 +36,13 @@ function missing(name, impactRowsEmpty) {
 }
 
 function classify({ truthPath, diffFiles, hunkFiles, filesRead, impactRows }) {
-  const impactRowsEmpty = !Array.isArray(impactRows) || impactRows.length === 0;
-  if (typeof truthPath !== 'string' || truthPath === '') return missing('truthPath', impactRowsEmpty);
-  if (!Array.isArray(filesRead)) return missing('filesRead', impactRowsEmpty);
-  // A reviewed diff always has a file, so an empty or missing list is a missing input, not a class.
-  if (!Array.isArray(diffFiles) || diffFiles.length === 0) return missing('diffFiles', impactRowsEmpty);
+  const impactRowsEmpty = setOf(impactRows).size === 0;
   const t = normPath(truthPath);
+  if (t === '') return missing('truthPath', impactRowsEmpty);
+  if (!Array.isArray(filesRead)) return missing('filesRead', impactRowsEmpty);
   const lists = { diffFiles: setOf(diffFiles), hunkFiles: setOf(hunkFiles), impactRows: setOf(impactRows) };
+  // A reviewed diff always has a file, so a list with no usable path is a missing input, not a class.
+  if (lists.diffFiles.size === 0) return missing('diffFiles', impactRowsEmpty);
   const read = setOf(filesRead).has(t);
   const diffHeld = ['diffFiles', 'hunkFiles'].filter((k) => lists[k].has(t));
   const step = diffHeld.length ? 1 : lists.impactRows.has(t) ? 2 : 3;

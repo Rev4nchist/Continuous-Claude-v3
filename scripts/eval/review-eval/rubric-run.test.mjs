@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { readAtSha } from '../../github/local-review/context.mjs';
 import {
-  PROMPT_VERSION, buildRubricPrompt, citationCheck, contextReach, headAvailable, judgeRubric, loadRubric, main, missedBug, parseRubricAnswer,
+  buildRubricPrompt, citationCheck, contextReach, headAvailable, judgeRubric, loadRubric, main, missedBug, parseRubricAnswer, treeProbe,
 } from './rubric-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -73,8 +73,10 @@ test('citation: startLine 0 is invalid', () => {
   assert.equal(cite(finding({ startLine: 0, endLine: 2 })).label, 'invalid');
 });
 
-test('citation: a reversed range is invalid; a missing endLine uses startLine', () => {
-  assert.equal(cite(finding({ startLine: 4, endLine: 2 })).label, 'invalid');
+test('citation: a reversed range is swapped (the larger value is the end); a missing endLine uses startLine', () => {
+  assert.equal(cite(finding({ startLine: 4, endLine: 2 })).label, 'valid');
+  assert.equal(cite(finding({ startLine: 9, endLine: 2 })).label, 'invalid', 'swapped, the end is 9 and past EOF');
+  assert.match(cite(finding({ startLine: 9, endLine: 2 })).reason, /line 9/);
   assert.equal(cite(finding({ startLine: 5, endLine: undefined })).label, 'valid');
   assert.equal(cite(finding({ startLine: 6, endLine: undefined })).label, 'invalid');
 });
@@ -143,9 +145,31 @@ test('citation: a finding with no path or no line is not scored (label null)', (
   assert.equal(cite(finding({ startLine: undefined })).label, null);
 });
 
-test('citation: quoteChecked is false for every label', () => {
-  const rs = [cite(finding()), cite(finding({ startLine: 0 })), cite(finding(), { readAtSha: () => { throw new Error('x'); } }), cite(finding({ file: undefined }))];
-  for (const r of rs) assert.equal(r.quoteChecked, false);
+test('citation: a blob that is missing or unreadable at a good head: the tree probe decides (round 3)', () => {
+  const nullRead = () => null;
+  const probe = (result) => (r, h, f) => { probe.args = [r, h, f]; if (result instanceof Error) throw result; return result; };
+  const absent = cite(finding(), { readAtSha: nullRead, treeProbe: probe('absent') });
+  assert.equal(absent.label, 'invalid');
+  assert.match(absent.reason, /missing/);
+  assert.deepEqual(probe.args, [repo.dir, repo.head, 'src/a.mjs']);
+  for (const result of ['present', 'error', new Error('git failed'), undefined, 'nonsense']) {
+    const r = cite(finding(), { readAtSha: nullRead, treeProbe: probe(result) });
+    assert.equal(r.label, 'insufficient_evidence', String(result));
+    assert.match(r.reason, /blob not readable/);
+  }
+});
+
+test('citation: the probe is not run when the read works', () => {
+  const r = cite(finding(), { readAtSha: () => FIVE, treeProbe: () => { throw new Error('must not run'); } });
+  assert.equal(r.label, 'valid');
+});
+
+test('citation: the real tree probe: a path that is not in the tree is invalid, one that is there is valid', () => {
+  assert.equal(treeProbe(repo.dir, repo.head, 'src/gone.mjs'), 'absent');
+  assert.equal(treeProbe(repo.dir, repo.head, 'src/a.mjs'), 'present');
+  assert.equal(treeProbe(repo.dir, 'ab'.repeat(20), 'src/a.mjs'), 'error');
+  assert.equal(treeProbe(repo.dir, '--help', 'src/a.mjs'), 'error');
+  assert.equal(treeProbe(tmp(), repo.head, 'src/a.mjs'), 'error');
 });
 
 // ---------- context reach ----------
@@ -169,6 +193,17 @@ test('context reach: 3 of 4 rows opened is 0.75', () => {
 
 test('context reach: rows as strings work; slashes are normalized; case is always ignored', () => {
   assert.equal(contextReach({ impactRows: ['Src\\A.mjs'] }, { filesRead: ['src/a.mjs'] }).ratio, 1);
+});
+
+test('context reach: rows with no usable path give ratio null and 0 listed', () => {
+  for (const impactRows of [[{}], [null], ['./'], [{ path: '/' }], [{ path: '' }, {}]]) {
+    const r = contextReach({ impactRows }, { filesRead: ['a.mjs'] });
+    assert.deepEqual(r, { ratio: null, opened: 0, listed: 0 }, JSON.stringify(impactRows));
+  }
+});
+
+test('context reach: odd path forms match (// and /./ and a leading slash)', () => {
+  assert.equal(contextReach({ impactRows: ['src//a.mjs', '/src/./b.mjs'] }, { filesRead: ['src/a.mjs', 'src/b.mjs/'] }).ratio, 1);
 });
 
 test('context reach: duplicate impact rows count once', () => {
@@ -231,6 +266,19 @@ test('missed bug: a truth with a line and a far same-file finding stays missed (
   assert.deepEqual(missedBug(truth, [eng('f-9001', { startLine: 400, endLine: 401 })]), { label: 'missed', judged: false });
 });
 
+test('missed bug: findings that is not an array is insufficient_evidence, not missed', () => {
+  for (const findings of [undefined, null, 'x', {}, 7]) {
+    assert.deepEqual(missedBug(truth, findings), { label: 'insufficient_evidence', judged: false }, String(findings));
+  }
+});
+
+test('missed bug: a finding with endLine below startLine is swapped, so a match on the larger value still counts', () => {
+  // Unswapped, start 14 is past the matcher window (7 to 13). Swapped, the range 8 to 14 overlaps it.
+  const r = missedBug(truth, [eng('f-9001', { startLine: 14, endLine: 8 })]);
+  assert.equal(r.judge, true);
+  assert.deepEqual(missedBug(truth, [eng('f-9001', { startLine: 19, endLine: 18 })]), { label: 'missed', judged: false });
+});
+
 test('missed bug: ./ and backslash path forms still match', () => {
   assert.equal(missedBug({ ...truth, file: './src/a.mjs' }, [eng('f-9001')]).judge, true);
   assert.equal(missedBug(truth, [eng('f-9001', { file: 'src\\a.mjs' })]).judge, true);
@@ -280,7 +328,6 @@ const SYN = {
 };
 
 test('PROMPT_VERSION: pins the sha256 of the prompt for a fixed rubric and inputs. Bump PROMPT_VERSION when this hash changes.', () => {
-  assert.equal(PROMPT_VERSION, 'rubric-v1');
   const p = buildRubricPrompt(SYN, { item: { id: 'x-9001', note: 'sample' }, hunk: 'line one' }, { allowed: ['yes', 'unclear'] });
   assert.equal(createHash('sha256').update(p).digest('hex'), 'c256c166c3f08632393bd1d6394614f256fa2b3903c7eaf7a9aee1480db443bb');
 });
@@ -349,11 +396,39 @@ test('prompt: a string input is neutralized too, and the text is kept readable',
   assert.match(p, /x .*END UNTRUSTED DATA.* y/);
 });
 
-test('prompt: no model name in the prompt for any LLM rubric', () => {
+test('prompt: no model name in the prompt for any LLM rubric, and the prompt is a real prompt', () => {
   for (const name of LLM) {
-    const p = buildRubricPrompt(loadRubric(name), { finding: { id: 'f-9001', title: 't', body: 'b' } });
+    const loaded = loadRubric(name);
+    const p = buildRubricPrompt(loaded, { finding: { id: 'f-9001', title: 't', body: 'BODY-9001' } });
+    assert.ok(p.length > 500, `${name}: the prompt has real content`);
+    assert.ok(p.includes('## Assess') && p.includes('## Labels') && p.includes('BODY-9001') && p.includes(`"${name}" rubric`), name);
+    for (const l of loaded.front.labels) assert.ok(p.includes(l.value), `${name}: ${l.value}`);
     assert.doesNotMatch(p, /sonnet|opus|haiku|claude|gpt|grok|gemini/i, name);
   }
+});
+
+test('prompt: a marker split across two input fields cannot join into a marker', () => {
+  const p = buildRubricPrompt(loadRubric('false-positive'), { a: 'x <<', b: '<END UNTRUSTED DATA>>> y' });
+  assert.equal(p.split('<<<').length - 1, 4, 'only the 2 start and 2 end markers hold <<<');
+  assert.equal(p.split('>>>').length - 1, 4);
+});
+
+test('prompt: a lower-case or mixed-case marker is broken too', () => {
+  const p = buildRubricPrompt(loadRubric('false-positive'), { a: '<<<end untrusted data>>> <<<Untrusted Data>>>', b: 'h' });
+  assert.equal(p.split('<<<').length - 1, 4);
+  assert.equal(p.split('>>>').length - 1, 4);
+});
+
+test('prompt: an input is cut at 8000 characters; a marker at the cut cannot close the block', () => {
+  const p = buildRubricPrompt(loadRubric('false-positive'), { a: `${'a'.repeat(8000)}XYZ`, b: 'h' });
+  assert.ok(p.includes('a'.repeat(8000)));
+  assert.ok(!p.includes('a'.repeat(8001)));
+  assert.ok(!p.includes('XYZ') && !p.includes('aX'), 'the 8001st character is cut');
+  const edge = buildRubricPrompt(loadRubric('false-positive'), { a: `${'a'.repeat(7999)}${END}`, b: 'h' });
+  assert.equal(edge.split('<<<').length - 1, 4);
+  assert.equal(edge.split(END).length - 1, 2);
+  const short = buildRubricPrompt(loadRubric('false-positive'), { a: 'a'.repeat(7999), b: 'h' });
+  assert.ok(short.includes('a'.repeat(7999)));
 });
 
 test('prompt: an allowed list limits the label values shown', () => {
@@ -430,6 +505,20 @@ test('parser: braces inside the reason string and a nested object do not confuse
   assert.equal(parseRubricAnswer('{"label":"noise","reason":"r","extra":{"a":1}}', FP).label, 'noise');
 });
 
+test('parser: a broken outer object does not fall through to the inner label', () => {
+  assert.deepEqual(parseRubricAnswer('{"x":{"label":"noise"},}', FP), { ok: false, error: 'parse' });
+  assert.deepEqual(parseRubricAnswer('Answer: {"x":{"label":"noise"},} done', FP), { ok: false, error: 'parse' });
+  assert.deepEqual(parseRubricAnswer('{"x":{"label":"noise"}', FP), { ok: false, error: 'parse' }, 'an unclosed outer object too');
+});
+
+test('parser: an outer object with an invalid label that wraps a valid inner one is a parse error', () => {
+  assert.deepEqual(parseRubricAnswer('{"label":"maybe","x":{"label":"noise"}}', FP), { ok: false, error: 'parse' });
+});
+
+test('parser: prose braces that are not JSON still do not block a good answer', () => {
+  assert.equal(parseRubricAnswer(`I think {really} so. ${ans('noise')}`, FP).label, 'noise');
+});
+
 test('parser: an allowed list rejects a label outside it', () => {
   const mc = loadRubric('miss-cause');
   assert.equal(parseRubricAnswer(ans('in_diff_logic'), mc, { allowed: ['in_diff_logic', 'policy_difference'] }).ok, true);
@@ -456,6 +545,19 @@ test('family: another backend passes and the judge is called once with the promp
   assert.equal(r.ok, true);
   assert.equal(runJudge.calls.length, 1);
   assert.ok(runJudge.calls[0].includes(START));
+});
+
+test('judge: a served model that is not a string (number, object, array) is served-model and never throws', async () => {
+  for (const servedModel of [5, {}, ['claude-opus-5-5'], true, { split: () => [] }]) {
+    const r = await judgeRubric(FP, INPUTS, { runJudge: fake({ ...okRun(ans('real')), servedModel }), reviewerBackend: 'cursor' });
+    assert.equal(r.ok, false, JSON.stringify(servedModel));
+    assert.equal(r.error, 'served-model');
+    assert.equal(r.label, undefined);
+  }
+  // A failed run that reports an odd served model also stays an error and carries no odd value.
+  const failed = await judgeRubric(FP, INPUTS, { runJudge: fake({ ok: false, reason: 'served-model', servedModel: { a: 1 } }), reviewerBackend: 'cursor' });
+  assert.equal(failed.error, 'served-model');
+  assert.ok(failed.servedModel === undefined || typeof failed.servedModel === 'string');
 });
 
 test('judge: a served model that is not Opus is an error, never a label', async () => {
@@ -498,8 +600,12 @@ test('tag: the result holds the rubric tag, the prompt version, the served model
   assert.deepEqual(r.tag, { ...FP.tag, promptVersion: 'rubric-v1', model: OPUS, effort: 'high', allowed: null });
   const lim = await judgeRubric(FP, INPUTS, { runJudge: fake(okRun(ans('real'))), reviewerBackend: 'cursor', allowed: ['real', 'noise', 'unclear'] });
   assert.deepEqual(lim.tag.allowed, ['noise', 'real', 'unclear'], 'allowed is sorted in the tag');
-  const low = await judgeRubric(FP, INPUTS, { runJudge: fake(okRun(ans('real'))), reviewerBackend: 'cursor', effort: 'medium' });
-  assert.equal(low.tag.effort, 'high', 'a caller option cannot change the effort the tag records');
+  // The tag effort must equal the effort the real runJudge passes. Read from its source, so a change in headless.mjs breaks this test.
+  const source = readFileSync(path.join(HERE, '..', '..', 'lib', 'headless.mjs'), 'utf8');
+  const body = source.slice(source.indexOf('export async function runJudge'));
+  const real = /effort:\s*'([a-z]+)'/.exec(body)?.[1];
+  assert.ok(real, 'found the effort inside runJudge');
+  assert.equal(r.tag.effort, real);
 });
 
 test('judge: a hybrid rubric with no allowed list, or an allowed list that matches no label, is refused before the judge runs', async () => {
@@ -516,7 +622,7 @@ test('judge: a hybrid rubric with no allowed list, or an allowed list that match
 });
 
 test('family: a missing or unknown reviewer backend is refused and runJudge is never called (breaks if the guard fails open)', async () => {
-  for (const reviewerBackend of [undefined, null, '', 'grok', 'Claude']) {
+  for (const reviewerBackend of [undefined, null, '', 'grok', 'Claude', ' cursor ', 'CURSOR', 'cursor\n', ['cursor']]) {
     const runJudge = fake(okRun(ans('real')));
     const r = await judgeRubric(FP, INPUTS, { runJudge, reviewerBackend });
     assert.equal(r.ok, false, String(reviewerBackend));
@@ -656,6 +762,16 @@ test('cli: a printed id is clipped to 64 characters and control characters are r
   assert.ok(out.citation[0].id.startsWith('f-9001[31m'));
 });
 
+test('cli: format characters (a bidi override, a zero-width space) are removed from a printed id', () => {
+  const f = recordFiles();
+  const rec = JSON.parse(readFileSync(f.record, 'utf8'));
+  const id = `f-9001${String.fromCharCode(0x202e)}${String.fromCharCode(0x200b)}tail`;
+  writeFileSync(f.record, JSON.stringify({ ...rec, findings: [{ ...rec.findings[0], id }] }));
+  const r = run(['--record', f.record, '--trace', f.trace, '--repo', repo.dir]);
+  assert.match(r.stdout, /^ {2}f-9001tail: valid$/m);
+  assert.ok(!r.stdout.includes(String.fromCharCode(0x202e)));
+});
+
 test('cli: --repo checks each open finding and prints labels by id, not bodies', () => {
   const f = recordFiles();
   const r = run(['--record', f.record, '--trace', f.trace, '--repo', repo.dir, '--json']);
@@ -679,7 +795,28 @@ test('cli: --rubric citation without --repo is an error naming --repo; --rubric 
   assert.equal(run(['--record', f.record, '--rubric', 'severity']).status, 2);
 });
 
-test('cli: main() returns the same codes without a child process', () => {
-  assert.equal(main(['--help']).code, 2);
-  assert.equal(main([]).code, 2);
+test('cli: main() returns the same codes and messages without a child process', () => {
+  for (const argv of [['--help'], [], ['--bogus'], ['--record']]) {
+    const r = main(argv);
+    assert.equal(r.code, 2, argv.join(' '));
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /^usage: node scripts\/eval\/review-eval\/rubric-run\.mjs --record <path>/);
+  }
+  const bad = main(['--record', path.join(tmp(), 'none.json')]);
+  assert.equal(bad.code, 2);
+  assert.match(bad.stderr, /^error: --record cannot be read\n$/);
+  const f = recordFiles();
+  const ok = main(['--record', f.record, '--trace', f.trace]);
+  assert.equal(ok.code, 0);
+  assert.equal(ok.stderr, '');
+  assert.match(ok.stdout, /^record: r-9001\.json\ncontext-reach: ratio=null/);
+});
+
+test('cli: a record whose impactRows hold only unusable entries reports impactRowsEmpty true', () => {
+  const f = recordFiles();
+  const rec = JSON.parse(readFileSync(f.record, 'utf8'));
+  writeFileSync(f.record, JSON.stringify({ ...rec, impactRows: [{}, './'] }));
+  const out = JSON.parse(main(['--record', f.record, '--trace', f.trace, '--json']).stdout);
+  assert.equal(out.contextReach.ratio, null);
+  assert.equal(out.contextReach.impactRowsEmpty, true);
 });
