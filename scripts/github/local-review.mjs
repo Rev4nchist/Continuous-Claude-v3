@@ -659,7 +659,8 @@ function stepBand(s) {
 /** True when dir is the live root or sits under it. Real paths (the deepest folder that exists), so a short name or a link cannot hide it. */
 function underRoot(dir, live) {
   const rel = path.relative(realDeep(live), realDeep(dir));
-  return !rel.startsWith('..') && !path.isAbsolute(rel);
+  // Only '..' or '../...' leaves the root: a child folder may be named '..eval'.
+  return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 const sameDir = (a, b) => path.relative(realDeep(a), realDeep(b)) === '';
@@ -708,8 +709,8 @@ function armBranch(s) {
   const branch = s.target.range ? `range-${s.target.pullBaseSha.slice(0, 12)}-${s.armKey}` : `${s.target.branch}-${s.armKey}`;
   s.target = { ...s.target, branch };
   s.slug = branchSlug(branch);
-  // The final folder as it resolves now: a link inside the records root may lead into the live root.
-  const finalDir = path.join(s.d.P.records, s.slug);
+  // The final head folder as it resolves now (writeRecord adds <head40>): a link inside the records root may lead into the live root.
+  const finalDir = path.join(s.d.P.records, s.slug, s.target.head.toLowerCase());
   if (nested(finalDir, s.d.live.root)) throw badInput(`${s.why} would write the record folder ${homeRel(finalDir)} in or around the live state root ${homeRel(s.d.live.root)}`);
 }
 

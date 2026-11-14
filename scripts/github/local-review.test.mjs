@@ -2514,6 +2514,29 @@ test('state isolation: the final record folder is judged after the arm key is kn
   assert.deepEqual(readdirSync(live), [], 'nothing was written through the link');
 });
 
+test('state isolation: a link at the HEAD folder <records>/<slug>/<head40> that leads into the live root is refused (breaks if the check stops at <records>/<slug>)', async () => {
+  const w = world();
+  const live = path.join(tmp('head-live'), 'live', 'local-review');
+  mkdirSync(live, { recursive: true });
+  mkdirSync(path.join(w.stateRoot, 'feat-x-a1'), { recursive: true });
+  symlinkSync(live, path.join(w.stateRoot, 'feat-x-a1', HEAD.toLowerCase()), 'junction');
+  const r = await run(w, { arm: 'a1' }, { liveStateRoot: live });
+  assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(r));
+  assert.match(r.reason, /live state root/);
+  assert.equal(w.agentCalls.length + w.reserveCalls.length, 0);
+  assert.deepEqual(readdirSync(live), [], 'nothing was written through the link');
+});
+
+test('state isolation: a records root in a folder of the live root whose name starts with ".." (e.g. <live>/..eval) is inside the live root and refused (breaks if any relative path that starts with ".." counts as outside)', async () => {
+  const w = world();
+  const live = path.join(tmp('dotdot-live'), 'live', 'local-review');
+  mkdirSync(live, { recursive: true });
+  const r = await run(w, { promptVersion: 'v2' }, { liveStateRoot: live, stateRoot: path.join(live, '..eval', 'records') });
+  assert.equal(r.exit, EXIT.REFUSED, JSON.stringify(r));
+  assert.match(r.reason, /live state root/);
+  assert.equal(w.gitCalls.length + w.ghCalls.length + w.agentCalls.length + w.reserveCalls.length, 0);
+});
+
 test('state isolation: a cursor ledger file under the live root is refused, given by deps or by CURSOR_REVIEW_LEDGER (breaks if only the live default ledger file is compared)', async () => {
   const live = path.join(tmp('ledger-in-live'), 'live', 'local-review');
   const inside = path.join(live, 'nested', 'cursor.jsonl');
