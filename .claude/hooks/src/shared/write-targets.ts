@@ -24,6 +24,7 @@
  * tools (guard: hook-matcher-runtime-consistency.test.ts). `SHELL_WRITERS` and `DIRECT_WRITERS` are the list.
  */
 import { SHELL_TOOLS } from './shell-tools.js';
+import { blankDataStrings } from './data-spans.js';
 
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
 
@@ -151,12 +152,52 @@ function firstOperandAt(t: string, cueEnd: number): number {
   return cueEnd + m[0].length;
 }
 
+/** One spelling for comparing a whole string with a held path: slashes, no outer space, no leading "./". */
+const spellingOf = (s: string): string => s.replace(/\\/g, '/').trim().replace(/^\.\//, '');
+
+/**
+ * True when the string is an OPERAND of a held file, so the data blanking must leave it as it is. Two cases:
+ *  - the string, as a whole, is one spelling of a held file (a trailing space is trimmed: `"src/a.ts "`);
+ *  - the held path sits in it by the classifier's own boundaries and the text AROUND the path has no white space.
+ *    That keeps `"src/a.ts*"` (a PowerShell wildcard) and `"src/a.ts:tag"` (a stream): PATH_END lets those
+ *    characters follow the path, and the shell still writes the held file. The white space of a held path itself
+ *    (`"src/my file.ts*"`) does not count. Prose has spaces around the path, so a note or a commit message that
+ *    names the file is blanked. A case-insensitive form matches in any case.
+ */
+function isHeldSpelling(content: string, claims: readonly HeldClaim[], fold: boolean): boolean {
+  const s = spellingOf(content);
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  const whole = claims.some((c) =>
+    c.forms.some((f) => (fold ? spellingOf(f).toLowerCase() === lower : spellingOf(f) === s))
+    || (c.ciForms ?? []).some((f) => spellingOf(f).toLowerCase() === lower));
+  if (whole) return true;
+  return claims.some((c) => {
+    const exact = c.forms.map(spellingOf).filter(Boolean).map((f) => (fold ? f.toLowerCase() : f));
+    const ci = (c.ciForms ?? []).map(spellingOf).filter(Boolean).map((f) => f.toLowerCase());
+    return [[fold ? lower : s, exact], [lower, ci]].some(([hay, forms]) => {
+      if ((forms as string[]).length === 0) return false;
+      const alt = (forms as string[]).map(escapeRe).join('|');
+      // The white space of the held path itself is part of the operand (a file named "my file.ts"). White space in
+      // the text AROUND the path makes the string prose.
+      for (const m of (hay as string).matchAll(new RegExp(`${PATH_START}(?:${alt})${PATH_END}`, 'g'))) {
+        const rest = (hay as string).slice(0, m.index) + (hay as string).slice(m.index! + m[0].length);
+        if (!/\s/.test(rest)) return true;
+      }
+      return false;
+    });
+  });
+}
+
 /**
  * Classify shell text against the claims other sessions hold. The text is read as a whole: backslashes
  * are folded to slashes, and case is folded when the file system folds it (`fold`).
  */
 export function classifyShellText(text: string, claims: readonly HeldClaim[], fold: boolean): ShellVerdict {
   if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: 'none' };
+  // A held path inside text that a data head prints or stores is no write (card coord-file-claims-text-false-match).
+  // A string that IS a held path stays: it is the operand of the write.
+  text = blankDataStrings(text, (s) => isHeldSpelling(s, claims, fold));
   let t = text.replace(/\\/g, '/');
   if (fold) t = t.toLowerCase();
   const tl = t.toLowerCase();
