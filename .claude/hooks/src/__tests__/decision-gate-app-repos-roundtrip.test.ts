@@ -170,4 +170,14 @@ describe('the deny text, the real app-ask CLI and the real ledger give the key t
     roundTrip(d, 'gh pr create -R acme/rt-up --draft --title t', 'open-pr');
     roundTrip(d, 'git push origin feat', 'ship');
   });
+  // Reviewer-2 round, seat 3d: the deny prints the remote with no user:token part, and that printed remote keys the same tap.
+  // Change that breaks it: drop noCreds in askCmd (the token is printed), or strip the remote before pushKey in either side.
+  it('RT10 a user:token URL remote: no token in the deny, and its printed --remote round-trips', () => {
+    const d = makeRepo('rt-tok', { up: 'https://github.com/acme/rt-tok.git' });
+    const cmd = 'git push https://user:ghp_SECRETTOKEN123@github.com/acme/rt-tok.git main';
+    const before = verdict(d, cmd);
+    expect(before.action === 'deny' ? before.reason : '').not.toContain('ghp_SECRETTOKEN123');
+    expect(askWords((before as { reason: string }).reason)).toContain('https://github.com/acme/rt-tok.git');
+    roundTrip(d, cmd, 'ship');
+  });
 });

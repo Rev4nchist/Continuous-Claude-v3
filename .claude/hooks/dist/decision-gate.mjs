@@ -1252,6 +1252,7 @@ var needsGithubField2 = needsGithubField;
 
 // src/decision-gate.ts
 var HOOK = "decision-gate";
+var noCreds = stripCredentials;
 var DC = "mcp__plugin_desktop-commander_desktop-commander__";
 var COMMAND_TOOLS2 = /* @__PURE__ */ new Set(["Bash", "PowerShell", `${DC}start_process`, `${DC}interact_with_process`]);
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "NotebookEdit", `${DC}write_file`, `${DC}edit_block`, `${DC}move_file`, `${DC}write_pdf`]);
@@ -1276,6 +1277,7 @@ var goThereWhy = (repo) => `this command names ${repo}, which is not the CCv3 re
 var fwd = (p) => p.replace(/\\/g, "/");
 var prose = (v) => oneLine3(v, 200);
 var at = (dir) => prose(fwd(dir));
+var remoteProse = (remote) => prose(noCreds(remote));
 var SAFE_WORD = /^[A-Za-z0-9._/+][A-Za-z0-9._/@+-]*$/;
 var SAFE_REMOTE = /^[A-Za-z0-9._/+][A-Za-z0-9._/@+:-]*$/;
 var SAFE_DIR = /^[A-Za-z0-9._/@+:\\ -]+$/;
@@ -1305,8 +1307,9 @@ function flagWord(deps, dir, offer, flag, value, safe) {
 function askCmd(deps, offer, dir) {
   if (offer.stop) return { ok: false, text: offer.stop };
   const flags = [
+    // Seat 3d: the remote with no user:token part. app-ask keys a URL by its owner/repo (repoSlug) or its stripped text, so the key is the same.
     ["pr", offer.pr, /^\d+$/],
-    ["remote", offer.remote, SAFE_REMOTE],
+    ["remote", offer.remote ? noCreds(offer.remote) : offer.remote, SAFE_REMOTE],
     ["branch", offer.branch, SAFE_WORD],
     ["src", offer.src, SAFE_WORD],
     ["base", offer.base, SAFE_WORD]
@@ -1341,15 +1344,15 @@ var appNoPrWhy = (dir) => `the PR number cannot be read from this command (folde
 function pushNeed(risk) {
   if (risk.kind === "default") return "A push to main, master or the branch the remote HEAD names needs his tap; a push to another branch does not.";
   if (risk.kind === "unsure") return "This push can update a default branch of the repo, so it needs his tap.";
-  if (!SAFE_WORD.test(risk.remote)) return `The default branch of remote ${prose(risk.remote)} is not known in this checkout, so this push needs his tap.`;
-  return `The default branch of remote ${prose(risk.remote)} is not known in this checkout; git remote set-head ${risk.remote} --auto records it.`;
+  if (!SAFE_WORD.test(risk.remote)) return `The default branch of remote ${remoteProse(risk.remote)} is not known in this checkout, so this push needs his tap.`;
+  return `The default branch of remote ${remoteProse(risk.remote)} is not known in this checkout; git remote set-head ${risk.remote} --auto records it.`;
 }
 var appPushWhy = (deps, dir, repo, branch, offer, risk) => `no "ship" decision from Dave for the tree you push to ${prose(branch)}${risk.kind === "default" ? ", a default branch of" : " in"} ${prose(repo)} (folder ${at(dir)}). ${pushNeed(risk)} ${askPart(deps, offer, dir, (c) => `Ask him first: run ${c}, ${ASK_HOW}, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged).`)} The tap is bound to this repo, this branch and one tree. A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
 var PUSH_WAY_OUT = "run git push as its own command: git push <remote> <branch>";
 var appNotAloneWhy = (deps, dir, offer) => `this push shares its command with another command, a pipe or a redirect (folder ${at(dir)}), so Dave's "Push only" tap does not count for it. To clear it, ${PUSH_WAY_OUT}. ${askPart(deps, offer, dir, (c) => `If the gate still asks for his tap then, ask him first: run ${c}, ${ASK_HOW}.`)}`;
-var appPushUrlsWhy = (dir, remote, keys) => `remote ${prose(remote)} of ${at(dir)} pushes to more than one repo (${prose(keys.join(", "))}), and one tap covers one push URL, so this push stays blocked even with Dave's tap. Push to one URL (git push <url> <branch>), or ask Dave to run it himself.`;
+var appPushUrlsWhy = (dir, remote, keys) => `remote ${remoteProse(remote)} of ${at(dir)} pushes to more than one repo (${prose(keys.join(", "))}), and one tap covers one push URL, so this push stays blocked even with Dave's tap. Push to one URL (git push <url> <branch>), or ask Dave to run it himself.`;
 var ghRepoArg = (key) => SAFE_WORD.test(key) && !key.startsWith("local:") ? key : "<owner/repo>";
-var appFetchPushWhy = (deps, dir, remote, key, pushKeys, offer) => `remote ${prose(remote)} of ${at(dir)} fetches from ${prose(key)} but pushes to ${prose(pushKeys.join(", "))}, so gh may act on another repo than the tap names. Name the repo gh acts on: add -R ${ghRepoArg(key)} to the command. ${askPart(deps, offer, dir, (c) => `The question for it: ${c}.`)}`;
+var appFetchPushWhy = (deps, dir, remote, key, pushKeys, offer) => `remote ${remoteProse(remote)} of ${at(dir)} fetches from ${prose(key)} but pushes to ${prose(pushKeys.join(", "))}, so gh may act on another repo than the tap names. Name the repo gh acts on: add -R ${ghRepoArg(key)} to the command. ${askPart(deps, offer, dir, (c) => `The question for it: ${c}.`)}`;
 var appNoTargetWhy = (deps, dir, remotes, offer) => `${at(dir)} has more than one remote (${prose(remotes.join(", "))}) and its branch has no push target (@{push}), so the repo gh acts on is not known. Name the repo: add -R <owner/repo> (the repo of one remote). ${askPart(deps, offer, dir, (c) => `Then ask the question for that remote: ${c}.`)} Or set the push target first: git branch --set-upstream-to=<remote>/<branch>.`;
 var appNameRemoteWhy = (deps, dir) => `this push names no remote and its branch has no push target (@{push}) in ${at(dir)}, so the repo of its ship decision cannot be known: name the remote and the branch (git push <remote> <branch>). ${askPart(deps, { sub: "push", remote: "<remote>" }, dir, (c) => `Ask the ship question for that remote: ${c}.`)}`;
 var appRepoOptWhy = (dir) => `--repo names the target of this push in ${at(dir)}, so the repo of its ship decision cannot be known, and it stays blocked even with Dave's tap: name the repo as the remote argument (git push <remote> <branch>).`;
@@ -1360,12 +1363,13 @@ var appTreeWhy = (dir, what) => {
   return `cannot read the tree of ${prose(what)} in ${at(dir)}, so its ship decision cannot be found. ${plain ? "Run the command again from the repo folder." : "To clear it, name the branch as plain text: git push <remote> <branch>."}`;
 };
 var appUnsafeWhy = (dir) => `a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs (folder ${at(dir)}), so it stays blocked even with Dave's tap. Push without that option. If it is really needed, ask Dave to run it himself.`;
-var appUnsafeConfigWhy = (dir, remote, key) => `remote ${prose(remote)} is set as a mirror or has a + push refspec (${prose(key)}) in ${at(dir)}, so this push can rewrite or remove remote refs and stays blocked even with Dave's tap; ask Dave to run it himself or to change that config.`;
+var appUnsafeConfigWhy = (dir, remote, key) => `remote ${remoteProse(remote)} is set as a mirror or has a + push refspec (${prose(key)}) in ${at(dir)}, so this push can rewrite or remove remote refs and stays blocked even with Dave's tap; ask Dave to run it himself or to change that config.`;
 var WIDER_WHY = "git config makes this push write more than the branch it names; name both sides: git push <remote> <src>:<dst> --no-recurse-submodules, or ask Dave";
 var appWiderConfigWhy = (dir, key) => `${WIDER_WHY}. The key: ${prose(key)} (folder ${at(dir)}).${key === "push.followtags" ? " With push.followTags set, add --no-follow-tags too." : ""} A tap cannot cover it: the tap names one branch.`;
 var appWiderOptWhy = (dir, opt) => `${prose(opt)} makes this push write more than the branch it names (tags, other branches or submodule repos) in ${at(dir)}, so it stays blocked even with Dave's tap: a tap names one branch. ${opt.startsWith("-c ") ? "Run git push with no -c push setting" : "Push without that option"}, or ask Dave.`;
-var appRawUnsafeWhy = (dir) => `this command holds a git push that is not one plain git push call, and a force or delete spelling is in its text (--force, --mirror, --delete, -f or -d in a short option bundle, or a word that starts with +; folder ${at(dir)}), so it stays blocked even with Dave's tap. Run the push as its own command with no such word in it: git push <remote> <branch>. If a force push is really needed, ask Dave to run it himself.`;
+var appRawUnsafeWhy = (dir) => `this command holds a git push that is not one plain git push call, and a force or delete spelling is in its text (--force, --mirror, --delete, -f or -d in a short option bundle, a word that starts with +, a :branch delete, --all, --tags, --prune or --branches; folder ${at(dir)}), so it stays blocked even with Dave's tap. Run the push as its own command with no such word in it: git push <remote> <branch>. If a force push is really needed, ask Dave to run it himself.`;
 var appUnreadWhy = (dir) => `this command holds a git push that this gate cannot read as one plain git push call (folder ${at(dir)}): a global option or an option it does not know, more than one -C, a shell -c, eval, a control word, a substitution or a git alias. To clear it, ${PUSH_WAY_OUT}, with no global option before push (git -C <folder> push is fine).`;
+var unpairedWhy = (dir) => `a quote mark in this command has no pair (a message the gate cannot read as one string), so where its PR create or merge runs and the repo it names cannot be read (folder ${at(dir)}). Put the message in a file (git commit -F <file>, --body-file <file>) and run the gh call as its own command.`;
 var appBundleWhy = (dir) => `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
 var appSubagentWhy = (dir) => `a subagent cannot push in ${at(dir)}: Dave's tap belongs to the main session. Ask the main session to do it.`;
 var appHeadWhy = (dir) => `the head branch of this create cannot be named in ${at(dir)} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo folder on a branch.`;
@@ -1375,7 +1379,7 @@ var appRepoUnreadableWhy = (dir) => `the repo this command names is a variable (
 var appRepoDiffersWhy = (deps, dir, named, key, offer) => `this command names ${prose(named)}, but no remote of ${at(dir)} fetches from it (the repo of the folder is ${key === null ? "not known: several remotes and no push target" : prose(key)}). Run it from the folder of the repo it names, or name the repo of one of its remotes. ${askPart(deps, offer, dir, (c) => `The question for this folder: ${c}.`)}`;
 var appRepoUnnamedWhy = (deps, dir, offer, key) => `${at(dir)} has more than one remote, so gh may act on another repo than the tap names. Name the repo: -R ${key === null ? "<owner/repo>" : ghRepoArg(key)} for the branch's push target (@{push}), or the repo of another remote. ${askPart(deps, offer, dir, (c) => `The question for this folder: ${c}.`)}`;
 var appPositionWhy = (deps, dir, offer) => `popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, and ${at(dir)} is judged for Dave's tap, so the folder this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd. ${askPart(deps, offer, dir, (c) => `The question for that folder: ${c}.`)}`;
-var needsFieldLine = (entryKey, remote) => `the registry entry ${prose(entryKey)} needs a github field naming owner/repo (remote ${prose(remote)} is an SSH host alias, so gh has no repo to act on); tell Dave.`;
+var needsFieldLine = (entryKey, remote) => `the registry entry ${prose(entryKey)} needs a github field naming owner/repo (remote ${remoteProse(remote)} is an SSH host alias, so gh has no repo to act on); tell Dave.`;
 var inAppFolder = (dir) => ` The command starts in ${at(dir)}, a folder judged for Dave's tap.`;
 var corruptLine = (file) => `WARNING (decision-gate): the project registry ${prose(fwd(file))} cannot be read. Tell Dave.`;
 var CORRUPT_EFFECT = "folders outside CCv3 were not checked for Dave's tap (nothing is covered while the file is missing)";
@@ -1487,6 +1491,117 @@ function pushCallsOf(masked, raw, atStart, before = { cds: [], unknown: false, l
   }
   return calls;
 }
+var HEREDOC_OPEN = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|(\\?)([A-Za-z_][\w.-]*))/g;
+var HERESTRING_OPEN = /@(['"])[ \t]*\r?\n/g;
+var DATA_CMD = /^(?:[^\s;&|()`'"]*[\\/])?(?:git|gh)(?:\.exe)?$/i;
+var INNER_CAT = /^cat$/;
+var RUNS_IN_BODY = /\$\(|`/;
+var blankChars = (s) => s.replace(/[^\r\n]/g, " ");
+var firstWord = (t) => t.trim().split(/\s+/)[0] ?? "";
+function outsideQuotes(t, tool) {
+  let rest = t;
+  for (const [s, e] of quotedSpans(t, tool)) rest = rest.slice(0, s) + " ".repeat(e - s) + rest.slice(e);
+  return rest.replace(tool === "PowerShell" ? /`[\s\S]/g : /\\[\s\S]/g, "  ");
+}
+var quoteLeft = (t, tool) => /["']/.test(outsideQuotes(t, tool));
+function opensData(text, at2, tool) {
+  const lead = text.slice(0, at2);
+  const segStart = Math.max(...["\n", ";", "&", "|"].map((c) => lead.lastIndexOf(c))) + 1;
+  const seg = lead.slice(segStart);
+  if (!DATA_CMD.test(firstWord(seg))) return false;
+  const sub = seg.lastIndexOf("$(");
+  if (sub < 0 || seg.includes(")", sub)) return !quoteLeft(lead, tool);
+  const inner = seg.slice(sub + 2);
+  return INNER_CAT.test(firstWord(inner)) && !quoteLeft(lead.slice(0, segStart + sub).replace(/"$/, ""), tool) && !quoteLeft(inner, tool);
+}
+function closingLine(text, from, ends) {
+  for (let pos = from; pos <= text.length; ) {
+    const eol = text.indexOf("\n", pos);
+    if (ends(text.slice(pos, eol < 0 ? text.length : eol).replace(/\r$/, ""))) return pos;
+    if (eol < 0) return -1;
+    pos = eol + 1;
+  }
+  return -1;
+}
+function blankHeredocs(text) {
+  let out3 = text;
+  let next = 0;
+  for (const m of text.matchAll(HEREDOC_OPEN)) {
+    if (m.index < next) continue;
+    const nl = text.indexOf("\n", m.index + m[0].length);
+    if (nl < 0) break;
+    const start = Math.max(nl + 1, next);
+    const delim = m[2] ?? m[3] ?? m[5];
+    const end = closingLine(text, start, (line) => (m[1] === "-" ? line.replace(/^\t+/, "") : line) === delim);
+    if (end < 0) break;
+    const quoted = m[5] === void 0 || m[4] === "\\";
+    const rest = text.slice(m.index + m[0].length, nl).replace(/\r$/, "");
+    const plainLine = !rest.includes("|") && !rest.endsWith("\\") && !quoteLeft(rest, "Bash");
+    if (plainLine && opensData(out3, m.index, "Bash") && (quoted || !RUNS_IN_BODY.test(text.slice(start, end)))) out3 = out3.slice(0, start) + blankChars(text.slice(start, end)) + out3.slice(end);
+    const eol = text.indexOf("\n", end);
+    next = eol < 0 ? text.length : eol + 1;
+  }
+  return out3;
+}
+function blankHereStrings(text) {
+  let out3 = text;
+  let next = 0;
+  for (const m of text.matchAll(HERESTRING_OPEN)) {
+    if (m.index < next) continue;
+    const start = m.index + m[0].length;
+    const end = closingLine(text, start, (line) => line.trimStart().startsWith(`${m[1]}@`));
+    if (end < 0) break;
+    const closedAtStart = text.startsWith(`${m[1]}@`, end);
+    const body = text.slice(start, end);
+    if (closedAtStart && opensData(out3, m.index, "PowerShell") && (m[1] === "'" || !RUNS_IN_BODY.test(body))) out3 = out3.slice(0, start) + blankChars(body) + out3.slice(end);
+    next = end + 2;
+  }
+  return out3;
+}
+function blankBodies(text, tool) {
+  if (tool === "Bash") return text.includes("<<") ? blankHeredocs(text) : text;
+  if (tool === "PowerShell") return text.includes("@") ? blankHereStrings(text) : text;
+  return text;
+}
+function readCommand(input) {
+  const cmd = readShellCommand(input);
+  return cmd.kind === "command" ? { ...cmd, text: blankBodies(cmd.text, cmd.tool) } : cmd;
+}
+function dropComments(view, tool) {
+  let out3 = view;
+  for (let from = 0; ; ) {
+    const spans = quotedSpans(out3, tool);
+    const re = /(^|[\s;&|(])#[^\n]*/g;
+    re.lastIndex = from;
+    let hit = null;
+    for (let m = re.exec(out3); m !== null && hit === null; m = re.exec(out3)) {
+      const at2 = m.index + m[1].length;
+      const end = m.index + m[0].length;
+      if (!spans.some(([s, e]) => at2 > s && at2 < e) && !/["']/.test(out3.slice(end))) hit = { at: at2, end };
+    }
+    if (hit === null) return out3;
+    out3 = out3.slice(0, hit.at) + " ".repeat(hit.end - hit.at) + out3.slice(hit.end);
+    from = hit.end;
+  }
+}
+function hiddenPieces(raw, tool) {
+  const tools = tool === "Bash" || tool === "PowerShell" ? [tool] : ["Bash", "PowerShell"];
+  return tools.flatMap((t) => {
+    const view = dropComments(joinContinuations(raw, t === "PowerShell" ? "pwsh" : "bash"), t);
+    if (!quoteLeft(view, t)) return [];
+    return quotedSpans(view, t).flatMap(([s, e]) => view.slice(s + 1, e - 1).split(/[;&|\r\n(]+/).slice(1));
+  });
+}
+var RUNNER_WORD = /^(?:[^\s'"]*[\\/])?(?:git(?:\.exe)?|git-(?:safe|for)\.ps1)$/i;
+var LEAD_WORD = /^(?:then|do|else|\{|!|sudo|env|nice|nohup|time|timeout|xargs|setsid|-\S*|\d+[smhd]?|[A-Za-z_]\w*=\S*)$/;
+var programOf = (p) => p.trim().split(/\s+/).find((w) => !LEAD_WORD.test(w)) ?? "";
+var hiddenPush = (p) => RUNNER_WORD.test(programOf(p)) && holdsGitPush(p);
+var hiddenGh = (p) => {
+  const t = squashMarks(p);
+  return /^(?:[^\s]*[\\/])?gh(?:\.exe)?$/i.test(programOf(t)) && (/\bpr\s+(?:create|new|merge)\b/i.test(t) || /\bapi\b[\s\S]*\b(?:pulls|merge)\b/i.test(t));
+};
+var wideSpelled = (s) => squashMarks(s).split(/[\s;&|(){}<>]+/).some((w) => /^--(?:all|tags|prune|branches)$/i.test(w) || /^:[^:\s]/.test(w));
+var hardSpelled = (s) => forceSpelled(s) || wideSpelled(s);
 var quotesToBreaks = (view) => view.replace(/["']/g, ";");
 var quotesToSpaces = (view) => view.replace(/["']/g, " ");
 var PLAIN_QUOTED_CD = /(^|[;&|\r\n(]\s*)((?:cd|chdir)\s+)"(?![A-Za-z]:)([^\s"'%$`^()&|;<>\r\n]+)"(?=\s*(?:$|[;&|\r\n)]))/gi;
@@ -1771,9 +1886,11 @@ function shapedCalls(raw, tool, shell) {
 function rawVerdict(raw, tool) {
   const shell = tool === "PowerShell" ? "pwsh" : "bash";
   const read = verbsOf(raw, shell);
-  if (read.pushes === 0 && !read.odd) return null;
-  if (strictWhole(raw, tool, shell)) return { kind: "ok", unread: false };
-  return { kind: read.segs.some(forceSpelled) ? "unsafe" : "tap", unread: read.odd || read.pushes > shapedCalls(raw, tool, shell) };
+  const hidden = hiddenPieces(raw, tool).filter(hiddenPush);
+  if (read.pushes === 0 && !read.odd && hidden.length === 0) return null;
+  if (hidden.length === 0 && strictWhole(raw, tool, shell)) return { kind: "ok", unread: false };
+  const unsafe = read.segs.some(hardSpelled) || hidden.some(hardSpelled);
+  return { kind: unsafe ? "unsafe" : "tap", unread: read.odd || hidden.length > 0 || read.pushes > shapedCalls(raw, tool, shell) };
 }
 function chainStep(base, value, shell) {
   const raw = value.includes("\\") ? unquotePath(value, shell) : value;
@@ -1824,12 +1941,19 @@ function rawDirs(raw, tool, cwd, shell, home) {
   }
   return [.../* @__PURE__ */ new Set([...knownDirs(out3, home), ...moveTargets(raw, cwd, shell, home)])];
 }
-function rawPushDenies(raw, tool, deps, cwd, shell) {
+function rawPushDenies(raw, tool, deps, cwd, shell, subagent) {
   const v = rawVerdict(raw, tool);
   if (v === null || v.kind === "ok" || v.kind === "tap" && !v.unread) return [];
   const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
   if (dir === null) return [];
-  return [v.kind === "unsafe" ? deny("push-unsafe", appRawUnsafeWhy(dir), "app-push") : { ...deny("push-target-unresolved", appUnreadWhy(dir), "app-push"), tapPath: true }];
+  if (v.kind === "unsafe") return [deny("push-unsafe", appRawUnsafeWhy(dir), "app-push")];
+  const unread = deny("push-target-unresolved", appUnreadWhy(dir), "app-push");
+  return [subagent ? unread : { ...unread, tapPath: true }];
+}
+function hiddenGhDenies(raw, tool, deps, cwd, shell) {
+  if (!hiddenPieces(raw, tool).some(hiddenGh)) return [];
+  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
+  return dir === null ? [] : [{ ...deny("position-unknown", unpairedWhy(dir)), homeFlags: true }];
 }
 function cmdSegments(view) {
   const out3 = [];
@@ -2315,10 +2439,13 @@ function judgeAt(s, deps, cwd, shell, named) {
   }
   return dirs.map((d) => s.kind === "create" ? judgeCreate(s, deps, d, cmd) : judgeLand(s, deps, d, cmd));
 }
-function unexpandedDeny(deps, dirs, lost, scope, appScope) {
+function unexpandedDeny(deps, dirs, lost, scope, appScope, soft = true) {
   const dir = firstCovered(deps, knownDirs(dirs, deps.home));
-  return dir === null ? deny("cd-unexpanded", unexpandedWhy(lost), scope) : { ...deny("cd-unexpanded", unexpandedWhy(lost) + inAppFolder(dir), appScope), tapPath: true, homeFlags: true };
+  if (dir === null) return deny("cd-unexpanded", unexpandedWhy(lost), scope);
+  const d = { ...deny("cd-unexpanded", unexpandedWhy(lost) + inAppFolder(dir), appScope), homeFlags: true };
+  return soft ? { ...d, tapPath: true } : d;
 }
+var softPush = (p, subagent) => !subagent && !p.force && !p.unsafeOpt && !p.repoOpt && !p.oBundle && p.widerOpt === null;
 function appPositionAt(deps, dirs, scope, offer) {
   let notice = null;
   for (const dir of dirs) {
@@ -2337,7 +2464,7 @@ function judgePushAt(s, deps, cwd, shell, ctx) {
   const chainOnly = chainDirsOf(p, cwd, shell).filter((d) => !dirs.includes(d) && firstCovered(deps, [d]) !== null);
   const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow));
   const lost = dirs.find(isUnexpanded);
-  if (lost !== void 0) return [unexpandedDeny(deps, [cwd, ...dirs], lost, "push", "app-push")];
+  if (lost !== void 0) return [unexpandedDeny(deps, [cwd, ...dirs], lost, "push", "app-push", softPush(p, subagent))];
   const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
   if (p.unknown && !fixedByDir) {
     const all = [.../* @__PURE__ */ new Set([cwd, ...dirs])];
@@ -2520,12 +2647,11 @@ function movesRepo(text) {
   return MOVE_ENV_RAW.test(text) || ["Bash", "PowerShell"].some((tool) => MOVE_ENV_MASKED.test(maskQuoted(text, tool))) || CD_ALIAS.test(squashQuotes(text));
 }
 function judgeCommand(input, deps, notes) {
-  const cmd = readShellCommand(input);
+  const cmd = readCommand(input);
   if (cmd.kind !== "command" || cmd.text === "") return [];
   const cwd = input.cwd || process.cwd();
-  if (writesStoreText(cmd.text, deps)) return [deny("store-write", STORE_WHY)];
+  const denies = storeWriteCall(input, deps) ? [deny("store-write", STORE_WHY)] : [];
   const shapes = shapesOf(cmd.text, cmd.tool);
-  const denies = [];
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(deny("subagent", SUBAGENT_WHY));
   const pushes = shapes.filter((s) => s.kind === "push");
   const rest = input.agent_id ? [] : shapes.filter((s) => s.kind !== "push");
@@ -2550,8 +2676,17 @@ function judgeCommand(input, deps, notes) {
       }
     }
   }
-  for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
+  for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
+  for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   return denies;
+}
+function storeWriteCall(input, deps) {
+  try {
+    const cmd = readShellCommand(input);
+    return cmd.kind === "command" && cmd.text !== "" && writesStoreText(cmd.text, deps);
+  } catch {
+    return false;
+  }
 }
 function movedDeny(s, deps, cwd, shell, text) {
   const dirs = s.kind === "push" ? pushDirsOf(s.push, cwd, shell) : dirsAfter(cwd, s.at.cds, shell, s.at.loose);
@@ -2622,7 +2757,8 @@ function inApp(deps, run) {
     mode.app = false;
   }
 }
-var out2 = (extra) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...extra } });
+var CREDS_RE = /([a-z][a-z0-9+.-]*:\/\/)[^\s/'"\\]*@/gi;
+var out2 = (extra) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...extra } }).replace(CREDS_RE, "$1");
 var denyOut = (reason) => out2({ permissionDecision: "deny", permissionDecisionReason: reason });
 var warnLead = (scope) => scope === "app-push" ? "this push in an app folder has no tap from Dave; it would be blocked in block mode." : `this command would be blocked when ${FLAG_OF[scope]} is true.`;
 var warnOut = (text, scope = "other", tail = "") => out2({ additionalContext: `WARNING (decision-gate, warn mode): ${warnLead(scope)} ${text.replace(/^BLOCKED \(decision-gate\): /, "")}${tail}` });
@@ -2687,6 +2823,7 @@ function unjudgeable(input, deps, thrown) {
     }
   }
   const scopes = gatedScopesSafe(input, app);
+  if (storeWriteCall(input, deps)) scopes.add("other");
   if (scopes.size === 0) return "{}";
   const raw = gone ? err.message : String(err?.message ?? err).slice(0, 160);
   const detail = app ? prose(raw) : raw;
@@ -2706,7 +2843,7 @@ var gatedScopesSafe = (input, app = false) => {
 };
 function hardAppCall(input) {
   try {
-    const cmd = readShellCommand(input);
+    const cmd = readCommand(input);
     if (cmd.kind !== "command") return false;
     const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === "push");
     if (input.agent_id && pushes.length > 0) return true;
@@ -2717,7 +2854,7 @@ function hardAppCall(input) {
   }
 }
 function catchShapes(input) {
-  const cmd = readShellCommand(input);
+  const cmd = readCommand(input);
   if (cmd.kind !== "command") return [];
   try {
     return shapesOf(cmd.text, cmd.tool);
@@ -2728,7 +2865,7 @@ function catchShapes(input) {
 function pushUnderLiveRoot(input, deps) {
   try {
     const scope = deps.tapScope;
-    const cmd = readShellCommand(input);
+    const cmd = readCommand(input);
     if (!scope || cmd.kind !== "command") return false;
     const pushes = catchShapes(input)?.filter((s) => s.kind === "push") ?? null;
     if (pushes?.length === 0) return false;

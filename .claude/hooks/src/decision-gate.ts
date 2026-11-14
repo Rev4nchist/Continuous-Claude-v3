@@ -141,7 +141,27 @@
  *     every entry first, then the real one. The entry key, and so a local: key, can then differ.
  *   - app-ask.mjs refuses a CCv3 checkout by the raw remote config (url, pushurl); the gate asks git remote -v (insteadOf applied).
  *   - commandRepo reads -R at the end of a short-flag cluster (-fR x) even when an earlier letter takes a value (-tR x is a title "R"):
- *     it fails closed. The deny texts print a typed --remote URL as the command gave it (with any user:token part).
+ *     it fails closed.
+ *   - Single use: an app tap is bound to the repo, the branch and one head or tree; the gate does not consume it; it ends with a new
+ *     offer for the same step, key and head, or after 7 days (reviewer-2 round, seat 3c; pinned both sides).
+ * Seat 3d (reviewer-2 round; Dave: never print a key): every remote in a text and in the offer --remote goes through stripCredentials
+ * (repo-identity.mjs), and out() strips any scheme://user:token@ left in the output. The key is unchanged: a URL keys on its owner/repo
+ * or on its stripped text, so the printed --remote gives the key the gate reads.
+ * Reviewer-2 round, item 1 (an unpaired quote in a message hid a later push): readCommand blanks the body of a data heredoc or
+ * here-string before any reading (blankBodies, the rule above blankHeredocs), so every maskQuoted site gets the blanked text. When a
+ * quote is still left with no pair (hiddenPieces; # comments dropped first), a git push at a command position inside a quoted span is a
+ * push no shape reads (rawVerdict: the tap path; a force, delete or wide spelling in that piece, or a subagent, makes it hard), and a gh
+ * create or merge there is denied position-unknown in a covered folder. A CCv3 or uncovered folder gets no new deny from it. Item 3: the
+ * cd-unexpanded and the unread-push denies are the tap path only when the push holds no hard kind and no agent_id; a payload push (sh -c)
+ * with a force, delete (:dst) or wide (--all, --tags, --prune, --branches) spelling is push-unsafe. Item 4: a store write no longer
+ * returns before the shapes; its deny comes first, and the shapes of the same command are judged too.
+ * KNOWN LIMITS of this round (stated, not fixed):
+ *   - In a CCv3 folder, when the blanker declines (PowerShell $msg = @' ... '@ then git commit -m $msg; git push --force fork feat), the
+ *     push stays hidden as on main; card prflow-push-blocks carries it.
+ *   - git push -oh <remote> <branch>: the reader takes -h as help, so the push has no shape and takes the tap path; with enforceAppPush
+ *     false it warns (seat ruling).
+ *   - The missing-registry notice appears only when LANE_REGISTRY_PATH names the file; a corrupt registry gives no deny for a push that
+ *     has no shape (the raw push denies need a covered folder, and a corrupt registry covers none).
  * Where it runs. A push, a create, a land and a merge are each judged in EVERY folder on the cd path before them (dirsAfter): with no cd,
  * the payload cwd; else the folder after each prefix of the cd list. The cwd joins them when any cd before the shape is joined to it by
  * something other than && (`;`, `||`, `|`, `&`, a line end), or follows a `||` or a pipe: that cd can fail or be skipped (`cd B extra`,
@@ -211,14 +231,18 @@ import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared
 import { CALL_START, GLOBAL_OPT, PATH_PREFIX, VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { blankInertQuotes, isTextOnlyCommand } from './shared/inert-quotes.js';
-import { maskQuoted } from './shared/mask-quotes.js';
+import { maskQuoted, quotedSpans } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
 import {
   coverageOf, ghKey, ghRemote, keyRepo, needsGithubField, oneLine, openPrKey, pushDefaults, pushKey, readRegistry, underLiveRoot, type GitRun, type Registry,
 } from './shared/tap-scope.js';
+// @ts-ignore TS7016: repo-identity.mjs has no declaration file (tap-scope.ts imports it the same way; esbuild bundles it).
+import { stripCredentials } from '../../../scripts/github/lib/repo-identity.mjs';
 
 const HOOK = 'decision-gate';
+/** Seat 3d (Dave: never print a key): a remote as text, with no user:token part (the strip app-ask and the key use). */
+const noCreds: (remote: string) => string = stripCredentials;
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
 export const COMMAND_TOOLS: ReadonlySet<string> = new Set(['Bash', 'PowerShell', `${DC}start_process`, `${DC}interact_with_process`]);
 export const WRITE_TOOLS: ReadonlySet<string> = new Set(['Write', 'Edit', 'NotebookEdit', `${DC}write_file`, `${DC}edit_block`, `${DC}move_file`, `${DC}write_pdf`]);
@@ -294,6 +318,8 @@ const fwd = (p: string): string => p.replace(/\\/g, '/');
 const prose = (v: string): string => oneLine(v, 200);
 /** The folder of a text, as prose. */
 const at = (dir: string): string => prose(fwd(dir));
+/** A remote of a text, as prose, with no user:token part (seat 3d). */
+const remoteProse = (remote: string): string => prose(noCreds(remote));
 /**
  * F2: a value goes into a runnable command only as one plain word: letters, digits and . _ / + -, and @ after the first character (not first
  * a -, never read as an option; PowerShell reads a leading @ as an operator). A remote may also hold : (a URL; : is a plain character in
@@ -351,7 +377,8 @@ function flagWord(deps: Deps, dir: string, offer: Offer, flag: string, value: st
 function askCmd(deps: Deps, offer: Offer, dir: string): Ask {
   if (offer.stop) return { ok: false, text: offer.stop };
   const flags: [string, string | null | undefined, RegExp][] = [
-    ['pr', offer.pr, /^\d+$/], ['remote', offer.remote, SAFE_REMOTE], ['branch', offer.branch, SAFE_WORD], ['src', offer.src, SAFE_WORD], ['base', offer.base, SAFE_WORD],
+    // Seat 3d: the remote with no user:token part. app-ask keys a URL by its owner/repo (repoSlug) or its stripped text, so the key is the same.
+    ['pr', offer.pr, /^\d+$/], ['remote', offer.remote ? noCreds(offer.remote) : offer.remote, SAFE_REMOTE], ['branch', offer.branch, SAFE_WORD], ['src', offer.src, SAFE_WORD], ['base', offer.base, SAFE_WORD],
   ];
   const words: string[] = [offer.sub];
   const read: string[] = [];
@@ -393,8 +420,8 @@ const appNoPrWhy = (dir: string): string => `the PR number cannot be read from t
 function pushNeed(risk: PushRisk): string {
   if (risk.kind === 'default') return 'A push to main, master or the branch the remote HEAD names needs his tap; a push to another branch does not.';
   if (risk.kind === 'unsure') return 'This push can update a default branch of the repo, so it needs his tap.';
-  if (!SAFE_WORD.test(risk.remote)) return `The default branch of remote ${prose(risk.remote)} is not known in this checkout, so this push needs his tap.`;
-  return `The default branch of remote ${prose(risk.remote)} is not known in this checkout; git remote set-head ${risk.remote} --auto records it.`;
+  if (!SAFE_WORD.test(risk.remote)) return `The default branch of remote ${remoteProse(risk.remote)} is not known in this checkout, so this push needs his tap.`;
+  return `The default branch of remote ${remoteProse(risk.remote)} is not known in this checkout; git remote set-head ${risk.remote} --auto records it.`;
 }
 /** F3: the offer names the remote, the destination branch and the source ref of the push, so app-ask keys and binds what the gate reads. */
 const appPushWhy = (deps: Deps, dir: string, repo: string, branch: string, offer: Offer, risk: PushRisk): string =>
@@ -409,11 +436,11 @@ const PUSH_WAY_OUT = 'run git push as its own command: git push <remote> <branch
 const appNotAloneWhy = (deps: Deps, dir: string, offer: Offer): string =>
   `this push shares its command with another command, a pipe or a redirect (folder ${at(dir)}), so Dave's "Push only" tap does not count for it. To clear it, ${PUSH_WAY_OUT}. ${askPart(deps, offer, dir, (c) => `If the gate still asks for his tap then, ask him first: run ${c}, ${ASK_HOW}.`)}`;
 const appPushUrlsWhy = (dir: string, remote: string, keys: string[]): string =>
-  `remote ${prose(remote)} of ${at(dir)} pushes to more than one repo (${prose(keys.join(', '))}), and one tap covers one push URL, so this push stays blocked even with Dave's tap. Push to one URL (git push <url> <branch>), or ask Dave to run it himself.`;
+  `remote ${remoteProse(remote)} of ${at(dir)} pushes to more than one repo (${prose(keys.join(', '))}), and one tap covers one push URL, so this push stays blocked even with Dave's tap. Push to one URL (git push <url> <branch>), or ask Dave to run it himself.`;
 /** F6: the -R value is printed only as a plain owner/repo word; a local: key cannot be passed to gh. */
 const ghRepoArg = (key: string): string => (SAFE_WORD.test(key) && !key.startsWith('local:') ? key : '<owner/repo>');
 const appFetchPushWhy = (deps: Deps, dir: string, remote: string, key: string, pushKeys: string[], offer: Offer): string =>
-  `remote ${prose(remote)} of ${at(dir)} fetches from ${prose(key)} but pushes to ${prose(pushKeys.join(', '))}, so gh may act on another repo than the tap names. Name the repo gh acts on: add -R ${ghRepoArg(key)} to the command. ${askPart(deps, offer, dir, (c) => `The question for it: ${c}.`)}`;
+  `remote ${remoteProse(remote)} of ${at(dir)} fetches from ${prose(key)} but pushes to ${prose(pushKeys.join(', '))}, so gh may act on another repo than the tap names. Name the repo gh acts on: add -R ${ghRepoArg(key)} to the command. ${askPart(deps, offer, dir, (c) => `The question for it: ${c}.`)}`;
 const appNoTargetWhy = (deps: Deps, dir: string, remotes: string[], offer: Offer): string =>
   `${at(dir)} has more than one remote (${prose(remotes.join(', '))}) and its branch has no push target (@{push}), so the repo gh acts on is not known. Name the repo: add -R <owner/repo> (the repo of one remote). ${askPart(deps, offer, dir, (c) => `Then ask the question for that remote: ${c}.`)} Or set the push target first: git branch --set-upstream-to=<remote>/<branch>.`;
 const appNameRemoteWhy = (deps: Deps, dir: string): string =>
@@ -434,7 +461,7 @@ const appTreeWhy = (dir: string, what: string): string => {
 const appUnsafeWhy = (dir: string): string => `a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs (folder ${at(dir)}), so it stays blocked even with Dave's tap. Push without that option. If it is really needed, ask Dave to run it himself.`;
 /** Fix round 4 (fixer K, critic minor 6): push-unsafe from config has no option to drop, so the text names the key. */
 const appUnsafeConfigWhy = (dir: string, remote: string, key: string): string =>
-  `remote ${prose(remote)} is set as a mirror or has a + push refspec (${prose(key)}) in ${at(dir)}, so this push can rewrite or remove remote refs and stays blocked even with Dave's tap; ask Dave to run it himself or to change that config.`;
+  `remote ${remoteProse(remote)} is set as a mirror or has a + push refspec (${prose(key)}) in ${at(dir)}, so this push can rewrite or remove remote refs and stays blocked even with Dave's tap; ask Dave to run it himself or to change that config.`;
 /** Fix round 4 (fixer K, critic major 1): the hard deny of push config that makes the push write more than the branch it names. */
 const WIDER_WHY = 'git config makes this push write more than the branch it names; name both sides: git push <remote> <src>:<dst> --no-recurse-submodules, or ask Dave';
 const appWiderConfigWhy = (dir: string, key: string): string =>
@@ -450,9 +477,12 @@ const appWiderOptWhy = (dir: string, opt: string): string =>
  * A force-like word of another command in the same segment, or inside a payload, counts too, so the text names the way out.
  */
 const appRawUnsafeWhy = (dir: string): string =>
-  `this command holds a git push that is not one plain git push call, and a force or delete spelling is in its text (--force, --mirror, --delete, -f or -d in a short option bundle, or a word that starts with +; folder ${at(dir)}), so it stays blocked even with Dave's tap. Run the push as its own command with no such word in it: git push <remote> <branch>. If a force push is really needed, ask Dave to run it himself.`;
+  `this command holds a git push that is not one plain git push call, and a force or delete spelling is in its text (--force, --mirror, --delete, -f or -d in a short option bundle, a word that starts with +, a :branch delete, --all, --tags, --prune or --branches; folder ${at(dir)}), so it stays blocked even with Dave's tap. Run the push as its own command with no such word in it: git push <remote> <branch>. If a force push is really needed, ask Dave to run it himself.`;
 const appUnreadWhy = (dir: string): string =>
   `this command holds a git push that this gate cannot read as one plain git push call (folder ${at(dir)}): a global option or an option it does not know, more than one -C, a shell -c, eval, a control word, a substitution or a git alias. To clear it, ${PUSH_WAY_OUT}, with no global option before push (git -C <folder> push is fine).`;
+/** Item 1a: a gh create or merge behind a quote with no pair. */
+const unpairedWhy = (dir: string): string =>
+  `a quote mark in this command has no pair (a message the gate cannot read as one string), so where its PR create or merge runs and the repo it names cannot be read (folder ${at(dir)}). Put the message in a file (git commit -F <file>, --body-file <file>) and run the gh call as its own command.`;
 /** Fix round 4 (fixer K, critic major 3): git reads the rest of a short bundle after o as the push option value. */
 const appBundleWhy = (dir: string): string =>
   `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
@@ -474,7 +504,7 @@ const appPositionWhy = (deps: Deps, dir: string, offer: Offer): string =>
  * open-pr and merge. The way out is Dave's: a github field in the registry entry. The line names no switch and no CCv3 tool.
  */
 const needsFieldLine = (entryKey: string, remote: string): string =>
-  `the registry entry ${prose(entryKey)} needs a github field naming owner/repo (remote ${prose(remote)} is an SSH host alias, so gh has no repo to act on); tell Dave.`;
+  `the registry entry ${prose(entryKey)} needs a github field naming owner/repo (remote ${remoteProse(remote)} is an SSH host alias, so gh has no repo to act on); tell Dave.`;
 const inAppFolder = (dir: string): string => ` The command starts in ${at(dir)}, a folder judged for Dave's tap.`;
 /**
  * S5, item 6: the visible line names the file only. What it means for coverage goes to the guard-log row (CORRUPT_EFFECT). Seat review 1,
@@ -716,6 +746,164 @@ function pushCallsOf(masked: string, raw: string, atStart: boolean, before: Wher
   }
   return calls;
 }
+
+// ---------- heredoc and here-string bodies (reviewer-2 round, item 1) ----------
+//
+// A message body with one unpaired quote (Don't, 27") made maskQuoted pair it with a later quote and mask the push after it. blankBodies
+// blanks the body of a bash heredoc or a PowerShell here-string first (same length, line ends kept), only when the body is data: the
+// segment starts with git or gh and the opener is outside its quotes, or is the body of a cat that is a whole open $( ) in it
+// (opensData); no pipe follows the opener on its line; a closing line ends it (the first line that is the delimiter; a here-string close with blanks before it is refused), and nothing in it
+// runs (an unquoted delimiter or @" with $( or a backtick in the body is refused). Anything else stays as it is, and hiddenPieces (item 1a)
+// judges it. writesStoreText reads the text before the blank: a heredoc body is how a store write is spelled.
+
+/** A bash heredoc opener (not <<<): <<WORD, <<-WORD, <<'WORD', <<"WORD", <<\WORD. */
+const HEREDOC_OPEN = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|(\\?)([A-Za-z_][\w.-]*))/g;
+/** A PowerShell here-string opener: @' or @" at the end of its line. */
+const HERESTRING_OPEN = /@(['"])[ \t]*\r?\n/g;
+/** The commands whose heredoc or here-string is data, never run: the first word of the segment. cat only inside its $( ). */
+const DATA_CMD = /^(?:[^\s;&|()`'"]*[\\/])?(?:git|gh)(?:\.exe)?$/i;
+const INNER_CAT = /^cat$/;
+const RUNS_IN_BODY = /\$\(|`/;
+const blankChars = (s: string): string => s.replace(/[^\r\n]/g, ' ');
+const firstWord = (t: string): string => t.trim().split(/\s+/)[0] ?? '';
+type QuoteTool = 'Bash' | 'PowerShell';
+/** The text with every quoted span of the shell's reading (maskQuoted pairing) blanked, marks included, and escapes blanked. */
+function outsideQuotes(t: string, tool: QuoteTool): string {
+  let rest = t;
+  for (const [s, e] of quotedSpans(t, tool)) rest = rest.slice(0, s) + ' '.repeat(e - s) + rest.slice(e);
+  return rest.replace(tool === 'PowerShell' ? /`[\s\S]/g : /\\[\s\S]/g, '  ');
+}
+/** True when a quote mark of `t` has no pair in the shell's reading (a string still open at its end, or a stray mark). */
+const quoteLeft = (t: string, tool: QuoteTool): boolean => /["']/.test(outsideQuotes(t, tool));
+
+/**
+ * True when the opener at `at` is data: the segment (cut at a line end, ; & or |) starts with git or gh, and the opener is either
+ * outside every quoted span of the text before it (reviewer-2 minor 1: the spans, not a count of marks), or the body of a cat that is
+ * the whole of an open $( in it (git commit -m "$(cat <<'EOF'), with no open quote before that $( but its own ".
+ * eval "$(cat <<EOF", bash -c, cat <<EOF | bash and a here-string in a variable are refused (their body runs).
+ */
+function opensData(text: string, at: number, tool: QuoteTool): boolean {
+  const lead = text.slice(0, at);
+  const segStart = Math.max(...['\n', ';', '&', '|'].map((c) => lead.lastIndexOf(c))) + 1;
+  const seg = lead.slice(segStart);
+  if (!DATA_CMD.test(firstWord(seg))) return false;
+  const sub = seg.lastIndexOf('$(');
+  if (sub < 0 || seg.includes(')', sub)) return !quoteLeft(lead, tool);
+  const inner = seg.slice(sub + 2);
+  return INNER_CAT.test(firstWord(inner)) && !quoteLeft(lead.slice(0, segStart + sub).replace(/"$/, ''), tool) && !quoteLeft(inner, tool);
+}
+/** The start of the first line at or after `from` that `ends` accepts, or -1. */
+function closingLine(text: string, from: number, ends: (line: string) => boolean): number {
+  for (let pos = from; pos <= text.length;) {
+    const eol = text.indexOf('\n', pos);
+    if (ends(text.slice(pos, eol < 0 ? text.length : eol).replace(/\r$/, ''))) return pos;
+    if (eol < 0) return -1;
+    pos = eol + 1;
+  }
+  return -1;
+}
+function blankHeredocs(text: string): string {
+  let out = text;
+  let next = 0;
+  for (const m of text.matchAll(HEREDOC_OPEN)) {
+    if (m.index! < next) continue;
+    const nl = text.indexOf('\n', m.index! + m[0].length);
+    if (nl < 0) break;
+    const start = Math.max(nl + 1, next);
+    const delim = m[2] ?? m[3] ?? m[5];
+    const end = closingLine(text, start, (line) => (m[1] === '-' ? line.replace(/^\t+/, '') : line) === delim);
+    if (end < 0) break; // no closing line: the shell reads the rest as the body; leave it to hiddenPieces
+    const quoted = m[5] === undefined || m[4] === '\\';
+    // Refused: a pipe after the opener on its line (the body goes on to another command); a line that ends with a backslash or holds an
+    // open quote after the opener (reviewer-2 major 2: bash starts the body after the LOGICAL line, so the next lines are commands).
+    const rest = text.slice(m.index! + m[0].length, nl).replace(/\r$/, '');
+    const plainLine = !rest.includes('|') && !rest.endsWith('\\') && !quoteLeft(rest, 'Bash');
+    if (plainLine && opensData(out, m.index!, 'Bash') && (quoted || !RUNS_IN_BODY.test(text.slice(start, end)))) out = out.slice(0, start) + blankChars(text.slice(start, end)) + out.slice(end);
+    const eol = text.indexOf('\n', end);
+    next = eol < 0 ? text.length : eol + 1;
+  }
+  return out;
+}
+function blankHereStrings(text: string): string {
+  let out = text;
+  let next = 0;
+  for (const m of text.matchAll(HERESTRING_OPEN)) {
+    if (m.index! < next) continue;
+    const start = m.index! + m[0].length;
+    const end = closingLine(text, start, (line) => line.trimStart().startsWith(`${m[1]}@`));
+    if (end < 0) break;
+    const closedAtStart = text.startsWith(`${m[1]}@`, end);
+    const body = text.slice(start, end);
+    if (closedAtStart && opensData(out, m.index!, 'PowerShell') && (m[1] === "'" || !RUNS_IN_BODY.test(body))) out = out.slice(0, start) + blankChars(body) + out.slice(end);
+    next = end + 2;
+  }
+  return out;
+}
+/** Item 1b: the text with each data body blanked, by the shell of the tool. Desktop Commander may run each body line: no blank there. */
+function blankBodies(text: string, tool: string | undefined): string {
+  if (tool === 'Bash') return text.includes('<<') ? blankHeredocs(text) : text;
+  if (tool === 'PowerShell') return text.includes('@') ? blankHereStrings(text) : text;
+  return text;
+}
+/** The shell command of a call with its data bodies blanked: every reader of this file (each maskQuoted site) gets it through here. */
+function readCommand(input: HookInput): ReturnType<typeof readShellCommand> {
+  const cmd = readShellCommand(input);
+  return cmd.kind === 'command' ? { ...cmd, text: blankBodies(cmd.text, cmd.tool) } : cmd;
+}
+
+/**
+ * Reviewer-2 major 1: a # at a word start outside quotes opens a comment to the line end (Bash and PowerShell). Each comment is blanked
+ * in turn from the left, and the spans are read again after each, so a quote inside a comment pairs with nothing. Only a comment with
+ * no quote mark after its line is dropped (the comment at the end of a command).
+ */
+function dropComments(view: string, tool: QuoteTool): string {
+  let out = view;
+  for (let from = 0; ;) {
+    const spans = quotedSpans(out, tool);
+    const re = /(^|[\s;&|(])#[^\n]*/g;
+    re.lastIndex = from;
+    let hit: { at: number; end: number } | null = null;
+    for (let m = re.exec(out); m !== null && hit === null; m = re.exec(out)) {
+      const at = m.index + m[1].length;
+      const end = m.index + m[0].length;
+      // Only when no quote mark follows the comment line: a # line may be data (a heredoc body the blanker left), and its quote then
+      // pairs with a later one in the readers' mask; kept, the unpaired test sees it (advisor review of this round).
+      if (!spans.some(([s, e]) => at > s && at < e) && !/["']/.test(out.slice(end))) hit = { at, end };
+    }
+    if (hit === null) return out;
+    out = out.slice(0, hit.at) + ' '.repeat(hit.end - hit.at) + out.slice(hit.end);
+    from = hit.end;
+  }
+}
+/**
+ * Item 1a: when a quote is left with no pair in the tool's reading (comments dropped), the pieces of each quoted span that sit at a
+ * command position in it (after ; & | ( or a line end inside the span; reviewer-2 blocker: never the span start, which is a word of the
+ * text before). Such a quote can pair with the wrong one and mask a call: these pieces are the calls the mask may have hidden.
+ */
+function hiddenPieces(raw: string, tool?: string): string[] {
+  const tools: QuoteTool[] = tool === 'Bash' || tool === 'PowerShell' ? [tool] : ['Bash', 'PowerShell'];
+  return tools.flatMap((t) => {
+    const view = dropComments(joinContinuations(raw, t === 'PowerShell' ? 'pwsh' : 'bash'), t);
+    if (!quoteLeft(view, t)) return [];
+    return quotedSpans(view, t).flatMap(([s, e]) => view.slice(s + 1, e - 1).split(/[;&|\r\n(]+/).slice(1));
+  });
+}
+const RUNNER_WORD = /^(?:[^\s'"]*[\\/])?(?:git(?:\.exe)?|git-(?:safe|for)\.ps1)$/i;
+/** A lead word before the program of a piece: a control word, a wrapper (as the header lists), its option or number, or VAR=. */
+const LEAD_WORD = /^(?:then|do|else|\{|!|sudo|env|nice|nohup|time|timeout|xargs|setsid|-\S*|\d+[smhd]?|[A-Za-z_]\w*=\S*)$/;
+/** The program word of a piece, after its lead words. */
+const programOf = (p: string): string => p.trim().split(/\s+/).find((w) => !LEAD_WORD.test(w)) ?? '';
+/** A hidden piece that is a git push call: git (or a git wrapper script) as its program, and the word push. */
+const hiddenPush = (p: string): boolean => RUNNER_WORD.test(programOf(p)) && holdsGitPush(p);
+/** A hidden piece that is a gh create or merge (gh pr create|new|merge, or gh api to a pulls or merge path). */
+const hiddenGh = (p: string): boolean => {
+  const t = squashMarks(p);
+  return /^(?:[^\s]*[\\/])?gh(?:\.exe)?$/i.test(programOf(t)) && (/\bpr\s+(?:create|new|merge)\b/i.test(t) || /\bapi\b[\s\S]*\b(?:pulls|merge)\b/i.test(t));
+};
+/** Reviewer-2: the wide push words (--all, --tags, --prune, --branches; forceSpelled is the round 6 force list) and a :dst delete refspec. */
+const wideSpelled = (s: string): boolean => squashMarks(s).split(/[\s;&|(){}<>]+/).some((w) => /^--(?:all|tags|prune|branches)$/i.test(w) || /^:[^:\s]/.test(w));
+/** A hard push spelling in one segment or piece: force, delete, mirror, wide. */
+const hardSpelled = (s: string): boolean => forceSpelled(s) || wideSpelled(s);
 
 /** The quote marks of a view become segment breaks, same length. A call inside a quoted string then sits at a command position. */
 const quotesToBreaks = (view: string): string => view.replace(/["']/g, ';');
@@ -1091,9 +1279,13 @@ type RawVerdict = { kind: 'ok' | 'tap' | 'unsafe'; unread: boolean } | null;
 function rawVerdict(raw: string, tool?: string): RawVerdict {
   const shell = tool === 'PowerShell' ? 'pwsh' : 'bash';
   const read = verbsOf(raw, shell);
-  if (read.pushes === 0 && !read.odd) return null;
-  if (strictWhole(raw, tool, shell)) return { kind: 'ok', unread: false };
-  return { kind: read.segs.some(forceSpelled) ? 'unsafe' : 'tap', unread: read.odd || read.pushes > shapedCalls(raw, tool, shell) };
+  // Item 1a: a git push in a span an unpaired quote may have masked is a push no shape reads; a force or wide word anywhere makes it hard.
+  const hidden = hiddenPieces(raw, tool).filter(hiddenPush);
+  if (read.pushes === 0 && !read.odd && hidden.length === 0) return null;
+  if (hidden.length === 0 && strictWhole(raw, tool, shell)) return { kind: 'ok', unread: false };
+  // Reviewer-2 major 3 and blocker: a hard spelling counts in a push segment or payload, and in a hidden push piece, never elsewhere.
+  const unsafe = read.segs.some(hardSpelled) || hidden.some(hardSpelled);
+  return { kind: unsafe ? 'unsafe' : 'tap', unread: read.odd || hidden.length > 0 || read.pushes > shapedCalls(raw, tool, shell) };
 }
 
 /** Each folder of a -C chain: git applies each -C relative to the one before (F4, ruling B). A posix base keeps posix rules (tests on Windows). */
@@ -1170,13 +1362,24 @@ function rawDirs(raw: string, tool: string | undefined, cwd: string, shell: 'bas
  * as before), push-unsafe for a force spelling, else push-target-unresolved for a push word no shape reads. A git throw is caught in
  * coveredAmong: a folder the path test puts under a live root counts as covered (fail closed, scope app-push).
  */
-function rawPushDenies(raw: string, tool: string | undefined, deps: Deps, cwd: string, shell: 'bash' | 'pwsh'): Deny[] {
+function rawPushDenies(raw: string, tool: string | undefined, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', subagent: boolean): Deny[] {
   const v = rawVerdict(raw, tool);
   if (v === null || v.kind === 'ok' || (v.kind === 'tap' && !v.unread)) return [];
   const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
   if (dir === null) return [];
-  // Fix round 6: an unread push takes the tap path; only a force spelling in a push segment is hard.
-  return [v.kind === 'unsafe' ? deny('push-unsafe', appRawUnsafeWhy(dir), 'app-push') : { ...deny('push-target-unresolved', appUnreadWhy(dir), 'app-push'), tapPath: true }];
+  // Fix round 6: an unread push takes the tap path; only a force spelling in a push segment is hard. Reviewer-2 item 3: a subagent's too.
+  if (v.kind === 'unsafe') return [deny('push-unsafe', appRawUnsafeWhy(dir), 'app-push')];
+  const unread = deny('push-target-unresolved', appUnreadWhy(dir), 'app-push');
+  return [subagent ? unread : { ...unread, tapPath: true }];
+}
+/**
+ * Item 1a: a gh create or merge in a span an unpaired quote may have masked (a cd before it or a -R in it is not read). In the first
+ * covered folder of the raw folders it is denied position-unknown (scope other, the home flags); a CCv3 or uncovered folder gets nothing.
+ */
+function hiddenGhDenies(raw: string, tool: string | undefined, deps: Deps, cwd: string, shell: 'bash' | 'pwsh'): Deny[] {
+  if (!hiddenPieces(raw, tool).some(hiddenGh)) return [];
+  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
+  return dir === null ? [] : [{ ...deny('position-unknown', unpairedWhy(dir)), homeFlags: true }];
 }
 
 
@@ -1955,10 +2158,14 @@ function judgeAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', name
  * expanded by knownDirs, so a CCv3 cwd no longer hides a covered folder beside the value), else today's. The app deny is the tap path
  * (round 6): a force push is hard by the verb rule.
  */
-function unexpandedDeny(deps: Deps, dirs: string[], lost: string, scope: Scope, appScope: Scope): Deny {
+function unexpandedDeny(deps: Deps, dirs: string[], lost: string, scope: Scope, appScope: Scope, soft = true): Deny {
   const dir = firstCovered(deps, knownDirs(dirs, deps.home));
-  return dir === null ? deny('cd-unexpanded', unexpandedWhy(lost), scope) : { ...deny('cd-unexpanded', unexpandedWhy(lost) + inAppFolder(dir), appScope), tapPath: true, homeFlags: true };
+  if (dir === null) return deny('cd-unexpanded', unexpandedWhy(lost), scope);
+  const d: Deny = { ...deny('cd-unexpanded', unexpandedWhy(lost) + inAppFolder(dir), appScope), homeFlags: true };
+  return soft ? { ...d, tapPath: true } : d;
 }
+/** Reviewer-2 item 3: a push is on the tap path only when nothing in it is a hard deny (subagent, force or delete, a wide or unsafe option, --repo, an o bundle, a widening option). */
+const softPush = (p: PushShape, subagent: boolean): boolean => !subagent && !p.force && !p.unsafeOpt && !p.repoOpt && !p.oBundle && p.widerOpt === null;
 
 /** Position unknown with no CCv3 folder on the path (the caller tested every one): a deny when one of the folders is covered (R3a). */
 function appPositionAt(deps: Deps, dirs: string[], scope: Scope, offer: Offer): Decision[] {
@@ -1992,7 +2199,7 @@ function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', 
   const chainOnly = chainDirsOf(p, cwd, shell).filter((d) => !dirs.includes(d) && firstCovered(deps, [d]) !== null);
   const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow));
   const lost = dirs.find(isUnexpanded);
-  if (lost !== undefined) return [unexpandedDeny(deps, [cwd, ...dirs], lost, 'push', 'app-push')];
+  if (lost !== undefined) return [unexpandedDeny(deps, [cwd, ...dirs], lost, 'push', 'app-push', softPush(p, subagent))];
   const fixedByDir = p.dir !== null && resolveDir('/a', p.dir, shell) === resolveDir('/b', p.dir, shell);
   if (p.unknown && !fixedByDir) {
     const all = [...new Set([cwd, ...dirs])];
@@ -2291,12 +2498,13 @@ function movesRepo(text: string): boolean {
 
 /** Every deny of a command. All shapes are judged (no early return), so each deny keeps its scope and decide() applies the flag of that scope. */
 function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] {
-  const cmd = readShellCommand(input);
+  const cmd = readCommand(input);
   if (cmd.kind !== 'command' || cmd.text === '') return [];
   const cwd = input.cwd || process.cwd();
-  if (writesStoreText(cmd.text, deps)) return [deny('store-write', STORE_WHY)];
+  // Reviewer-2 item 4: the store write denies first, and the shapes are judged on (a force push beside it is not lost). The raw text:
+  // a heredoc body is how a store write is spelled.
+  const denies: Deny[] = storeWriteCall(input, deps) ? [deny('store-write', STORE_WHY)] : [];
   const shapes = shapesOf(cmd.text, cmd.tool);
-  const denies: Deny[] = [];
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   if (input.agent_id && shapes.some((s) => s.kind !== 'push')) denies.push(deny('subagent', SUBAGENT_WHY));
   const pushes = shapes.filter((s) => s.kind === 'push');
@@ -2323,8 +2531,18 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] 
   }
   // Fix round 5 (ruling A): a push word that no shape reads, or a force spelling anywhere, in a covered folder. It comes after the shape
   // denies (their texts are more precise) and also runs when the text has no shape. A CCv3 or uncovered folder gets nothing (G4).
-  for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
+  for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
+  for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   return denies;
+}
+/** The shell text of the call (before any blank) writes the decision store. Never throws: the catch reads it too. */
+function storeWriteCall(input: HookInput, deps: Deps): boolean {
+  try {
+    const cmd = readShellCommand(input);
+    return cmd.kind === 'command' && cmd.text !== '' && writesStoreText(cmd.text, deps);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -2430,7 +2648,9 @@ function inApp<T>(deps: Deps, run: () => T): T {
 
 // ---------- hook plumbing ----------
 
-const out = (extra: Record<string, unknown>): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...extra } });
+/** Seat 3d, last line of defence: a scheme://user:token@ in any output text loses its user and token part. */
+const CREDS_RE = /([a-z][a-z0-9+.-]*:\/\/)[^\s/'"\\]*@/gi;
+const out = (extra: Record<string, unknown>): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...extra } }).replace(CREDS_RE, '$1');
 const denyOut = (reason: string): string => out({ permissionDecision: 'deny', permissionDecisionReason: reason });
 /** The app-push warning names no flag: no covered text says how to switch the gate (S6). */
 const warnLead = (scope: Scope): string => (scope === 'app-push'
@@ -2512,6 +2732,8 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
   const gone = err instanceof MissingCwdError;
   if (!gone) { try { logGuardError(HOOK, err); } catch { /* the log never blocks */ } }
   const scopes = gatedScopesSafe(input, app);
+  // Reviewer-2 item 4: a store write no longer returns before the shapes, so a throw there must not drop its scope.
+  if (storeWriteCall(input, deps)) scopes.add('other');
   if (scopes.size === 0) return '{}';
   const raw = gone ? err.message : String((err as Error)?.message ?? err).slice(0, 160);
   const detail = app ? prose(raw) : raw;
@@ -2535,7 +2757,7 @@ const gatedScopesSafe = (input: HookInput, app = false): Set<Scope> => { try { r
  */
 function hardAppCall(input: HookInput): boolean {
   try {
-    const cmd = readShellCommand(input);
+    const cmd = readCommand(input);
     if (cmd.kind !== 'command') return false;
     const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === 'push');
     if (input.agent_id && pushes.length > 0) return true;
@@ -2548,7 +2770,7 @@ function hardAppCall(input: HookInput): boolean {
 }
 /** Fix round 6 (item 3): the shapes of a shell call for the catch, or null when the reader throws (gatedScopes, pushUnderLiveRoot). */
 function catchShapes(input: HookInput): Shape[] | null {
-  const cmd = readShellCommand(input);
+  const cmd = readCommand(input);
   if (cmd.kind !== 'command') return [];
   try {
     return shapesOf(cmd.text, cmd.tool);
@@ -2564,7 +2786,7 @@ function catchShapes(input: HookInput): Shape[] | null {
 function pushUnderLiveRoot(input: HookInput, deps: Deps): boolean {
   try {
     const scope = deps.tapScope;
-    const cmd = readShellCommand(input);
+    const cmd = readCommand(input);
     if (!scope || cmd.kind !== 'command') return false;
     // A reader throw (null) is a push off the list: the cwd is its folder.
     const pushes = catchShapes(input)?.filter((s) => s.kind === 'push') ?? null;
