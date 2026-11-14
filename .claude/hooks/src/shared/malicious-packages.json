@@ -20844,6 +20844,606 @@
       "reason": "Malware in sol-wallet-adapater (GHSA-5c87-58w4-f8xf)",
       "date": "2026-11-13",
       "advisory": "https://github.com/advisories/GHSA-5c87-58w4-f8xf"
+    },
+    "@sfunction/dsh-screenshot": {
+      "blocked_all": true,
+      "reason": "Malware in @sfunction/dsh-screenshot (GHSA-7jf6-qwv2-qppp)",
+      "date": "2026-11-14",
+      "advisory": "https://github.com/advisories/GHSA-7jf6-qwv2-qppp"
+    },
+    "@zread/cli-win32-arm64": {
+      "blocked_all": true,
+      "reason": "Malware in @zread/cli-win32-arm64 (GHSA-vfc7-g3hx-84wp)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-vfc7-g3hx-84wp"
+    },
+    "@zread/cli-win32-x64": {
+      "blocked_all": true,
+      "reason": "Malware in @zread/cli-win32-x64 (GHSA-h7rw-cqm6-8xhc)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-h7rw-cqm6-8xhc"
+    },
+    "@zread/cli-linux-x64": {
+      "blocked_all": true,
+      "reason": "Malware in @zread/cli-linux-x64 (GHSA-rmrw-hx84-5hgq)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-rmrw-hx84-5hgq"
+    },
+    "@zread/cli-linux-arm64": {
+      "blocked_all": true,
+      "reason": "Malware in @zread/cli-linux-arm64 (GHSA-jw9g-9vcc-5xjv)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-jw9g-9vcc-5xjv"
+    },
+    "@zread/cli-darwin-x64": {
+      "blocked_all": true,
+      "reason": "Malware in @zread/cli-darwin-x64 (GHSA-4r36-qqxv-mv2c)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-4r36-qqxv-mv2c"
+    },
+    "@zread/cli-darwin-arm64": {
+      "blocked_all": true,
+      "reason": "Malware in @zread/cli-darwin-arm64 (GHSA-mj52-2x34-ppqq)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-mj52-2x34-ppqq"
+    },
+    "zread_cli": {
+      "blocked_all": true,
+      "reason": "Malware in zread_cli (GHSA-3429-mj25-c5wf)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-3429-mj25-c5wf"
+    },
+    "@jelou/cli-win32-x64": {
+      "blocked_all": true,
+      "reason": "Malware in @jelou/cli-win32-x64 (GHSA-q78g-75cg-hwq6)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-q78g-75cg-hwq6"
+    },
+    "rush-mfa": {
+      "blocked_all": true,
+      "reason": "Malware in rush-mfa (GHSA-j4f5-mgch-g6xr)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-j4f5-mgch-g6xr"
+    },
+    "dowload_ebok_aws_lambda_in_action_by_danilo_poccia_o3xgh": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_aws_lambda_in_action_by_danilo_poccia_o3xgh (GHSA-w4x5-gcvx-77p7)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-w4x5-gcvx-77p7"
+    },
+    "dowload_ebok_to_kill_and_kill_again_by_john_coston_id159": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_to_kill_and_kill_again_by_john_coston_id159 (GHSA-rc56-p7rg-hx63)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-rc56-p7rg-hx63"
+    },
+    "dowload_ebok_honey_so_sweet_vol_5_by_amu_meguro_6vbdo": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_honey_so_sweet_vol_5_by_amu_meguro_6vbdo (GHSA-pq73-ph36-cv8h)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-pq73-ph36-cv8h"
+    },
+    "dowload_ebok_ecchi_gallery_by_takumi_kobayashi_c8fuf": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_ecchi_gallery_by_takumi_kobayashi_c8fuf (GHSA-6p5c-33pm-w6g4)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-6p5c-33pm-w6g4"
+    },
+    "dowload_ebok_puppy_love_by_rachel_renee_russell_7ae7c": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_puppy_love_by_rachel_renee_russell_7ae7c (GHSA-cv7j-v76g-6272)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-cv7j-v76g-6272"
+    },
+    "dowload_ebok_kosten_und_leistungsrechnung_fur_dummies_by_michael_griga_b29bg": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_kosten_und_leistungsrechnung_fur_dummies_by_michael_griga_b29bg (GHSA-j96h-3gpr-89wg)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-j96h-3gpr-89wg"
+    },
+    "dowload_ebok_dorothy_debe_morir_by_danielle_paige_4802q": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_dorothy_debe_morir_by_danielle_paige_4802q (GHSA-8q25-wxxp-pv39)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-8q25-wxxp-pv39"
+    },
+    "dowload_ebok_le_livre_du_hygge_by_meik_wiking_8ia8u": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_le_livre_du_hygge_by_meik_wiking_8ia8u (GHSA-jq4p-3p6x-2r3h)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-jq4p-3p6x-2r3h"
+    },
+    "dowload_ebok_tiques_et_maladies_a_tiques_by_karen_d_mccoy_nathalie_boulanger_191kq": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_tiques_et_maladies_a_tiques_by_karen_d_mccoy_nathalie_boulanger_191kq (GHSA-cfcg-6p23-7cj4)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-cfcg-6p23-7cj4"
+    },
+    "dowload_ebok_a_sally_lockhart_mystery_1_the_ruby_in_the_smoke_by_philip_pullman_mb9cv": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_a_sally_lockhart_mystery_1_the_ruby_in_the_smoke_by_philip_pullman_mb9cv (GHSA-59p4-3p5q-mx6r)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-59p4-3p5q-mx6r"
+    },
+    "dowload_ebok_dunenfluch_by_sven_koch_66l2o": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_dunenfluch_by_sven_koch_66l2o (GHSA-5p78-jmjf-pfv2)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-5p78-jmjf-pfv2"
+    },
+    "dowload_ebok_priestdaddy_by_patricia_lockwood_cdh21": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_priestdaddy_by_patricia_lockwood_cdh21 (GHSA-52qf-wxg6-h9c2)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-52qf-wxg6-h9c2"
+    },
+    "dowload_ebok_caveman_by_jo_raven_krxnj": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_caveman_by_jo_raven_krxnj (GHSA-8pqv-jjgv-h2qc)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-8pqv-jjgv-h2qc"
+    },
+    "dowload_ebok_trummerkind_by_mechtild_borrmann_moqf9": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_trummerkind_by_mechtild_borrmann_moqf9 (GHSA-g9m8-5q5h-g326)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-g9m8-5q5h-g326"
+    },
+    "dowload_ebok_die_pantelides_dynastie_3_teilige_serie_by_maya_blake_glcqq": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_die_pantelides_dynastie_3_teilige_serie_by_maya_blake_glcqq (GHSA-4q25-67vm-x363)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-4q25-67vm-x363"
+    },
+    "dowload_ebok_the_way_of_the_superior_man_by_david_deida_df8yi": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_the_way_of_the_superior_man_by_david_deida_df8yi (GHSA-984w-2c2r-9jrr)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-984w-2c2r-9jrr"
+    },
+    "dowload_ebok_il_libro_dei_medium_by_allan_kardec_es9tx": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_il_libro_dei_medium_by_allan_kardec_es9tx (GHSA-cv77-8wf4-prvq)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-cv77-8wf4-prvq"
+    },
+    "dowload_ebok_marion_duval_integrale_tome_01_by_yvan_pommaux_nicole_pommaux_msvgc": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_marion_duval_integrale_tome_01_by_yvan_pommaux_nicole_pommaux_msvgc (GHSA-mfp9-fj5w-rmpr)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-mfp9-fj5w-rmpr"
+    },
+    "dowload_ebok_weber_s_barbecue_bible_by_jamie_purviance_tggf4": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_weber_s_barbecue_bible_by_jamie_purviance_tggf4 (GHSA-vrgp-w6q9-89xf)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-vrgp-w6q9-89xf"
+    },
+    "the_shaolin_workout_by_shi_yan_ming_r43vx": {
+      "blocked_all": true,
+      "reason": "Malware in the_shaolin_workout_by_shi_yan_ming_r43vx (GHSA-r29f-hcc3-523r)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-r29f-hcc3-523r"
+    },
+    "dowload_ebok_les_heritiers_by_pierre_bourdieu_jean_claude_passeron_7aha3": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_les_heritiers_by_pierre_bourdieu_jean_claude_passeron_7aha3 (GHSA-5hgc-87fp-mx54)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-5hgc-87fp-mx54"
+    },
+    "dowload_ebok_hbr_guide_to_buying_a_small_business_by_richard_s_ruback_royce_yudkoff_0gmgu": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_hbr_guide_to_buying_a_small_business_by_richard_s_ruback_royce_yudkoff_0gmgu (GHSA-v5rg-fr44-xwrf)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-v5rg-fr44-xwrf"
+    },
+    "dowload_ebok_legenden_der_schattenjager_akademie_by_cassandra_clare_sarah_rees_brennan_maureen_johns_d6wf2": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_legenden_der_schattenjager_akademie_by_cassandra_clare_sarah_rees_brennan_maureen_johns_d6wf2 (GHSA-xfv8-2q24-32xw)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-xfv8-2q24-32xw"
+    },
+    "dowload_ebok_death_march_to_the_parallel_world_rhapsody_vol_1_by_hiro_ainana_w4s1c": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_death_march_to_the_parallel_world_rhapsody_vol_1_by_hiro_ainana_w4s1c (GHSA-8xmw-xgv7-3h2p)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-8xmw-xgv7-3h2p"
+    },
+    "dowload_ebok_la_sed_harry_hole_11_by_jo_nesbo_pznny": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_la_sed_harry_hole_11_by_jo_nesbo_pznny (GHSA-692h-g3mp-g8mx)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-692h-g3mp-g8mx"
+    },
+    "dowload_ebok_la_esclavitud_del_miedo_by_rodrigo_fica_perez_7fayr": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_la_esclavitud_del_miedo_by_rodrigo_fica_perez_7fayr (GHSA-9qmp-x256-wf2m)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-9qmp-x256-wf2m"
+    },
+    "dowload_ebok_no_dejes_de_mirarme_by_lina_galan_2gouu": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_no_dejes_de_mirarme_by_lina_galan_2gouu (GHSA-h2wx-v879-9m2h)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-h2wx-v879-9m2h"
+    },
+    "dowload_ebok_exploring_swift_playgrounds_by_jesse_feiler_rdm74": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_exploring_swift_playgrounds_by_jesse_feiler_rdm74 (GHSA-5h77-g354-j6vw)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-5h77-g354-j6vw"
+    },
+    "exploring_the_nikon_z6ii_z7ii_a_complete_digital_by_katherin_stuessy_2fszs": {
+      "blocked_all": true,
+      "reason": "Malware in exploring_the_nikon_z6ii_z7ii_a_complete_digital_by_katherin_stuessy_2fszs (GHSA-6jp9-xjqf-2v68)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-6jp9-xjqf-2v68"
+    },
+    "dowload_ebok_die_din_en_iso_9001_2015_verstehen_by_simone_brugger_gebhardt_dg4ii": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_die_din_en_iso_9001_2015_verstehen_by_simone_brugger_gebhardt_dg4ii (GHSA-gpw4-xfrj-225x)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-gpw4-xfrj-225x"
+    },
+    "dowload_ebok_omega_by_ruediger_dahlke_veit_lindau_wndky": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_omega_by_ruediger_dahlke_veit_lindau_wndky (GHSA-2q4v-rjr3-h65r)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-2q4v-rjr3-h65r"
+    },
+    "dowload_ebok_consulting_by_mohan_kancharla_alqda": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_consulting_by_mohan_kancharla_alqda (GHSA-g8wf-fw82-r73q)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-g8wf-fw82-r73q"
+    },
+    "dowload_ebok_l_arabie_saoudite_en_100_questions_by_fatiha_dazi_heni_yznj8": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_l_arabie_saoudite_en_100_questions_by_fatiha_dazi_heni_yznj8 (GHSA-7grf-4q2m-xfpf)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-7grf-4q2m-xfpf"
+    },
+    "dowload_ebok_finding_you_by_jo_watson_x3k81": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_finding_you_by_jo_watson_x3k81 (GHSA-47mg-q52g-hwwr)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-47mg-q52g-hwwr"
+    },
+    "dowload_ebok_rogue_heroes_by_ben_macintyre_o8fbf": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_rogue_heroes_by_ben_macintyre_o8fbf (GHSA-x328-h6fp-4x8f)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-x328-h6fp-4x8f"
+    },
+    "dowload_ebok_distopia_mexicana_by_lorenzo_meyer_r5yi0": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_distopia_mexicana_by_lorenzo_meyer_r5yi0 (GHSA-7rwq-mmf7-4xrj)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-7rwq-mmf7-4xrj"
+    },
+    "dowload_ebok_conspiraciones_by_jesus_cintora_rjkui": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_conspiraciones_by_jesus_cintora_rjkui (GHSA-rjcj-386c-wwjf)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-rjcj-386c-wwjf"
+    },
+    "dowload_ebok_lustiges_taschenbuch_ostern_01_ecomic_sonderausg_by_walt_disney_edt9x": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_lustiges_taschenbuch_ostern_01_ecomic_sonderausg_by_walt_disney_edt9x (GHSA-9hwq-vhmp-7c92)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-9hwq-vhmp-7c92"
+    },
+    "dowload_ebok_satisfaction_by_lexi_blake_ys40v": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_satisfaction_by_lexi_blake_ys40v (GHSA-pq32-6qr7-mhq3)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-pq32-6qr7-mhq3"
+    },
+    "dowload_ebok_zulajka_opent_haar_ogen_by_guzel_jachina_0zzc7": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_zulajka_opent_haar_ogen_by_guzel_jachina_0zzc7 (GHSA-2g9q-mwv9-88f5)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-2g9q-mwv9-88f5"
+    },
+    "dowload_ebok_ciceron_oeuvres_completes_by_cicero_vgejh": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_ciceron_oeuvres_completes_by_cicero_vgejh (GHSA-hj3j-wfhh-ff4j)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-hj3j-wfhh-ff4j"
+    },
+    "dowload_ebok_ldk_t13_by_ayu_watanabe_x27d0": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_ldk_t13_by_ayu_watanabe_x27d0 (GHSA-2f94-hq8v-53h8)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-2f94-hq8v-53h8"
+    },
+    "dowload_ebok_superior_spider_man_4_marvel_collection_by_dan_slott_60isu": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_superior_spider_man_4_marvel_collection_by_dan_slott_60isu (GHSA-hx6f-mjr7-h9j4)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-hx6f-mjr7-h9j4"
+    },
+    "dowload_ebok_guadalcanal_diary_by_richard_tregaskis_0b02s": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_guadalcanal_diary_by_richard_tregaskis_0b02s (GHSA-wr63-x384-x9gc)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-wr63-x384-x9gc"
+    },
+    "dowload_ebok_eat_live_go_fresh_food_fast_by_donal_skehan_cgi6g": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_eat_live_go_fresh_food_fast_by_donal_skehan_cgi6g (GHSA-pqvj-wf39-3hgj)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-pqvj-wf39-3hgj"
+    },
+    "dowload_ebok_la_dieta_della_longevita_by_valter_d_longo_en71f": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_la_dieta_della_longevita_by_valter_d_longo_en71f (GHSA-qmhw-ffwc-m564)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-qmhw-ffwc-m564"
+    },
+    "dowload_ebok_de_eerste_vrouw_by_susan_smit_h20y6": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_de_eerste_vrouw_by_susan_smit_h20y6 (GHSA-hm2v-2v7g-cx9x)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-hm2v-2v7g-cx9x"
+    },
+    "ramses_the_battle_of_kadesh_volume_iii_by_christian_jacq_9xuaw": {
+      "blocked_all": true,
+      "reason": "Malware in ramses_the_battle_of_kadesh_volume_iii_by_christian_jacq_9xuaw (GHSA-55h7-vr6g-6v6p)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-55h7-vr6g-6v6p"
+    },
+    "dowload_ebok_my_z_jedwabnego_by_anna_bikont_wjhvk": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_my_z_jedwabnego_by_anna_bikont_wjhvk (GHSA-47x7-4pj7-3h9f)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-47x7-4pj7-3h9f"
+    },
+    "dowload_ebok_sas_76_putsch_a_ouagadougou_by_gerard_de_villiers_pcjag": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_sas_76_putsch_a_ouagadougou_by_gerard_de_villiers_pcjag (GHSA-7qpx-v9qg-pr86)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-7qpx-v9qg-pr86"
+    },
+    "dowload_ebok_velferd_pa_avveie_by_tore_nyseter_1z2n5": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_velferd_pa_avveie_by_tore_nyseter_1z2n5 (GHSA-jxm9-jf6p-jq4x)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-jxm9-jf6p-jq4x"
+    },
+    "dowload_ebok_manual_de_gastronomia_molecular_by_mariana_koppmann_e4ksx": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_manual_de_gastronomia_molecular_by_mariana_koppmann_e4ksx (GHSA-73v8-m29v-234q)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-73v8-m29v-234q"
+    },
+    "dowload_ebok_la_bible_les_recits_fondateurs_t04_by_frederic_boyer_serge_bloch_51793": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_la_bible_les_recits_fondateurs_t04_by_frederic_boyer_serge_bloch_51793 (GHSA-3ppg-fmwf-8p6p)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-3ppg-fmwf-8p6p"
+    },
+    "dowload_ebok_dominion_by_peter_mclean_vz0td": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_dominion_by_peter_mclean_vz0td (GHSA-652q-fq4h-c3p3)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-652q-fq4h-c3p3"
+    },
+    "dowload_ebok_cycling_climbs_of_the_midlands_by_simon_warren_ay0u7": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_cycling_climbs_of_the_midlands_by_simon_warren_ay0u7 (GHSA-74w4-49fc-8q55)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-74w4-49fc-8q55"
+    },
+    "dowload_ebok_secret_elements_3_im_auge_des_orkans_by_johanna_danninger_tpm1o": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_secret_elements_3_im_auge_des_orkans_by_johanna_danninger_tpm1o (GHSA-3cv3-mm9j-wcgm)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-3cv3-mm9j-wcgm"
+    },
+    "dowload_ebok_the_son_of_neptune_the_graphic_novel_heroes_of_o_by_rick_riordan_xx97z": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_the_son_of_neptune_the_graphic_novel_heroes_of_o_by_rick_riordan_xx97z (GHSA-3vmh-q7c9-p6fw)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-3vmh-q7c9-p6fw"
+    },
+    "dowload_ebok_iced_under_by_barbara_ross_vbch7": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_iced_under_by_barbara_ross_vbch7 (GHSA-7v5p-3f8c-f8ph)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-7v5p-3f8c-f8ph"
+    },
+    "dowload_ebok_schwesterherz_by_kristina_ohlsson_92eey": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_schwesterherz_by_kristina_ohlsson_92eey (GHSA-8ghx-vwhc-59fg)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-8ghx-vwhc-59fg"
+    },
+    "dowload_ebok_maailman_ympari_80_paivassa_by_jules_verne_gp0bq": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_maailman_ympari_80_paivassa_by_jules_verne_gp0bq (GHSA-f7vm-rh3w-xfxm)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-f7vm-rh3w-xfxm"
+    },
+    "dowload_ebok_refugium_by_stephan_berndt_8wh19": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_refugium_by_stephan_berndt_8wh19 (GHSA-qq8v-36qx-4gcg)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-qq8v-36qx-4gcg"
+    },
+    "dowload_ebok_he_is_a_beast_t03_by_saki_aikawa_cxuth": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_he_is_a_beast_t03_by_saki_aikawa_cxuth (GHSA-rw35-pccg-hr87)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-rw35-pccg-hr87"
+    },
+    "dowload_ebok_het_tienerbrein_by_jelle_jolles_0fic2": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_het_tienerbrein_by_jelle_jolles_0fic2 (GHSA-f6m3-r6m6-rhpw)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-f6m3-r6m6-rhpw"
+    },
+    "dowload_ebok_park_avenue_prince_by_louise_bay_cqoxd": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_park_avenue_prince_by_louise_bay_cqoxd (GHSA-ggj4-qh5c-f66f)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-ggj4-qh5c-f66f"
+    },
+    "le_guide_incroyablement_facile_de_l_iphone_14_et_d_by_scott_la_counte_gaztr": {
+      "blocked_all": true,
+      "reason": "Malware in le_guide_incroyablement_facile_de_l_iphone_14_et_d_by_scott_la_counte_gaztr (GHSA-6763-v22q-83g5)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-6763-v22q-83g5"
+    },
+    "dowload_ebok_desert_star_volume_2_by_enrico_marini_stephen_desberg_5cvyz": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_desert_star_volume_2_by_enrico_marini_stephen_desberg_5cvyz (GHSA-qqqh-3pgv-p656)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-qqqh-3pgv-p656"
+    },
+    "dowload_ebok_visioning_new_and_minority_religions_by_eugene_v_gallagher_n9z7a": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_visioning_new_and_minority_religions_by_eugene_v_gallagher_n9z7a (GHSA-w8hh-g9q2-2qj8)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-w8hh-g9q2-2qj8"
+    },
+    "dowload_ebok_decadence_by_michel_onfray_cpbyr": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_decadence_by_michel_onfray_cpbyr (GHSA-5x5h-j56q-jxc4)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-5x5h-j56q-jxc4"
+    },
+    "dowload_ebok_walking_the_americas_by_levison_wood_lkum4": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_walking_the_americas_by_levison_wood_lkum4 (GHSA-xf6h-jgp7-xqp9)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-xf6h-jgp7-xqp9"
+    },
+    "dowload_ebok_lettre_a_ma_fille_by_maya_angelou_gt68h": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_lettre_a_ma_fille_by_maya_angelou_gt68h (GHSA-wvg3-r8gq-qwp5)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-wvg3-r8gq-qwp5"
+    },
+    "dowload_ebok_smiley_by_laurann_dohner_7okd1": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_smiley_by_laurann_dohner_7okd1 (GHSA-jf7m-mpq5-99pq)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-jf7m-mpq5-99pq"
+    },
+    "dowload_ebok_historia_de_un_oso_by_gabriel_osorio_antonia_herrera_ti9e1": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_historia_de_un_oso_by_gabriel_osorio_antonia_herrera_ti9e1 (GHSA-85g8-v5g6-v986)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-85g8-v5g6-v986"
+    },
+    "dowload_ebok_frostblood_the_epic_new_york_times_bestseller_by_elly_blake_l7itq": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_frostblood_the_epic_new_york_times_bestseller_by_elly_blake_l7itq (GHSA-hpxv-8vrw-3qw3)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-hpxv-8vrw-3qw3"
+    },
+    "dowload_ebok_gatherings_by_flora_shedden_oybwg": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_gatherings_by_flora_shedden_oybwg (GHSA-m482-f8wm-cvh3)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-m482-f8wm-cvh3"
+    },
+    "dowload_ebok_les_7_habitudes_de_ceux_qui_reussissent_tout_ce_qu_by_stephen_r_covey_ff8dk": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_les_7_habitudes_de_ceux_qui_reussissent_tout_ce_qu_by_stephen_r_covey_ff8dk (GHSA-32wc-h96q-9cqh)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-32wc-h96q-9cqh"
+    },
+    "dowload_ebok_il_caso_mattei_by_calia_vincenzo_sabrina_pisu_3ti3o": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_il_caso_mattei_by_calia_vincenzo_sabrina_pisu_3ti3o (GHSA-47c5-x9cw-x639)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-47c5-x9cw-x639"
+    },
+    "dowload_ebok_the_power_of_when_by_michael_breus_pj2mk": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_the_power_of_when_by_michael_breus_pj2mk (GHSA-qp9h-xw8w-c46m)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-qp9h-xw8w-c46m"
+    },
+    "dowload_ebok_irena_s_children_by_tilar_j_mazzeo_s4ksn": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_irena_s_children_by_tilar_j_mazzeo_s4ksn (GHSA-34x5-m2wr-m8m3)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-34x5-m2wr-m8m3"
+    },
+    "dowload_ebok_i_giorni_del_sacro_by_franco_cardini_jbda6": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_i_giorni_del_sacro_by_franco_cardini_jbda6 (GHSA-pcqv-6hp5-xm6v)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-pcqv-6hp5-xm6v"
+    },
+    "dowload_ebok_how_to_exit_vim_by_chris_worfolk_3nkxo": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_how_to_exit_vim_by_chris_worfolk_3nkxo (GHSA-4wm6-gm7f-w542)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-4wm6-gm7f-w542"
+    },
+    "dowload_ebok_alice_nel_paese_delle_meraviglie_by_lewis_carroll_x9gkl": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_alice_nel_paese_delle_meraviglie_by_lewis_carroll_x9gkl (GHSA-9fvj-64r8-7p4j)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-9fvj-64r8-7p4j"
+    },
+    "dowload_ebok_deichmord_by_katharina_peters_dllxm": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_deichmord_by_katharina_peters_dllxm (GHSA-pgmf-vhv9-48cj)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-pgmf-vhv9-48cj"
+    },
+    "dowload_ebok_stop_fixing_women_by_catherine_fox_y3l0z": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_stop_fixing_women_by_catherine_fox_y3l0z (GHSA-5jgx-7jv5-x4fh)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-5jgx-7jv5-x4fh"
+    },
+    "dowload_ebok_bound_to_surrender_a_doms_of_genesis_novella_by_jenna_jacob_qisab": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_bound_to_surrender_a_doms_of_genesis_novella_by_jenna_jacob_qisab (GHSA-h4mw-qwpp-h362)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-h4mw-qwpp-h362"
+    },
+    "dowload_ebok_shattered_destiny_episode_five_by_odette_c_bell_u4e8s": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_shattered_destiny_episode_five_by_odette_c_bell_u4e8s (GHSA-vg8p-qccg-q557)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-vg8p-qccg-q557"
+    },
+    "dowload_ebok_the_duke_s_secret_heir_by_sarah_mallory_w476t": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_the_duke_s_secret_heir_by_sarah_mallory_w476t (GHSA-jfm5-p2px-mqwh)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-jfm5-p2px-mqwh"
+    },
+    "dowload_ebok_garden_of_thorns_by_amber_mitchell_01wxc": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_garden_of_thorns_by_amber_mitchell_01wxc (GHSA-3xj7-wpr9-xgqq)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-3xj7-wpr9-xgqq"
+    },
+    "dowload_ebok_maximiliano_emperador_de_mexico_by_carlos_tello_diaz_ql02i": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_maximiliano_emperador_de_mexico_by_carlos_tello_diaz_ql02i (GHSA-79wc-qj45-jh85)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-79wc-qj45-jh85"
+    },
+    "dowload_ebok_for_jeg_forsvinder_by_paul_kalanithi_r3v5o": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_for_jeg_forsvinder_by_paul_kalanithi_r3v5o (GHSA-vwp2-9cff-775x)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-vwp2-9cff-775x"
+    },
+    "dowload_ebok_the_quick_and_easy_way_to_effective_speaking_by_dale_carnegie_0ley1": {
+      "blocked_all": true,
+      "reason": "Malware in dowload_ebok_the_quick_and_easy_way_to_effective_speaking_by_dale_carnegie_0ley1 (GHSA-mg69-77m8-rxpc)",
+      "date": "2026-11-13",
+      "advisory": "https://github.com/advisories/GHSA-mg69-77m8-rxpc"
     }
   }
 }
