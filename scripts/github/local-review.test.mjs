@@ -1641,11 +1641,14 @@ const PINNED_MISSING_KEYS = [NO_ERR, NO_ERR, NO_ERR, { run: ['spawnedAt', 'toolS
 // ---------- the engine seam: trust and stages ----------
 
 const SEAM_FILES = ['scripts/github/local-review/backends/cursor.mjs', 'scripts/github/lib/grok-slots.mjs', 'scripts/github/lib/findings-repair.mjs'];
+// The libs that review-router.mjs and review-skip-sync.mjs import since the answer-key move (card coderabbit-guard-answer-key).
+const MOVED_LIB_FILES = ['scripts/github/lib/answer-paths.mjs', 'scripts/ratchets/lib/review-md.mjs'];
 
-test('ENGINE_FILES ends with the Cursor backend, grok-slots.mjs, then findings-repair.mjs: appended, so the indexed entries keep their place (breaks if an entry is inserted in the middle or the order changes)', () => {
-  assert.deepEqual(ENGINE_FILES.slice(-3), SEAM_FILES);
-  // The whole list as it was on main ff608f90, in order, before the three appended entries.
-  assert.deepEqual(ENGINE_FILES.slice(0, -3), [
+test('ENGINE_FILES holds the Cursor backend, grok-slots.mjs, findings-repair.mjs, then the two moved libs: appended, so the indexed entries keep their place (breaks if an entry is inserted in the middle or the order changes)', () => {
+  assert.deepEqual(ENGINE_FILES.slice(13, 16), SEAM_FILES);
+  assert.deepEqual(ENGINE_FILES.slice(16), MOVED_LIB_FILES);
+  // The whole list as it was on main ff608f90, in order, before the appended entries.
+  assert.deepEqual(ENGINE_FILES.slice(0, 13), [
     'scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/review-router.mjs',
     'scripts/github/review-status.mjs', 'scripts/github/local-review/context.mjs', 'scripts/github/local-review/prompt.mjs',
     'scripts/github/local-review/record.mjs', 'scripts/github/local-review/trace.mjs', 'scripts/github/lib/file-lock.mjs', 'scripts/github/lib/proc.mjs',
@@ -1653,7 +1656,7 @@ test('ENGINE_FILES ends with the Cursor backend, grok-slots.mjs, then findings-r
   ]);
 });
 
-for (const rel of SEAM_FILES) {
+for (const rel of [...SEAM_FILES, ...MOVED_LIB_FILES]) {
   test(`trust: a copy whose ${rel} differs from fork/main is trusted:false (breaks if the file is dropped from ENGINE_FILES)`, () => {
     assert.ok(ENGINE_FILES.includes(rel), `${rel} is not in ENGINE_FILES`);
     const forkMain = trustGit(engineCopy());

@@ -78,6 +78,7 @@ export const ENGINE_FILES = Object.freeze([
   'scripts/github/local-review/record.mjs', 'scripts/github/local-review/trace.mjs', 'scripts/github/lib/file-lock.mjs', 'scripts/github/lib/proc.mjs',
   'scripts/ratchets/review-skip-sync.mjs', 'review-router.config.json',
   'scripts/github/local-review/backends/cursor.mjs', 'scripts/github/lib/grok-slots.mjs', 'scripts/github/lib/findings-repair.mjs',
+  'scripts/github/lib/answer-paths.mjs', 'scripts/ratchets/lib/review-md.mjs',
 ]);
 
 /**
