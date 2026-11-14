@@ -6462,6 +6462,69 @@ function readShellCommand(input) {
   return { kind: "command", tool, text, dialects: spec.dialects };
 }
 
+// src/shared/data-spans.ts
+init_trace_boot();
+
+// src/shared/mask-quotes.ts
+init_trace_boot();
+var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;
+var PWSH_STRING = /"(?:[^"`]|`[\s\S])*"|'(?:[^']|'')*'/g;
+function quotedSpans(command, tool = "Bash") {
+  return [...command.matchAll(tool === "PowerShell" ? PWSH_STRING : BASH_STRING)].map((m) => [m.index, m.index + m[0].length]);
+}
+
+// src/shared/data-spans.ts
+var DATA_HEAD = new RegExp(
+  String.raw`^\s*(?:add-content|set-content|out-file|echo|write-host|write-output|printf|git\s+commit` + String.raw`|node(?:\.exe)?\s+(?:\S*[\\/])?lane\.mjs\s+(?:note|say))(?=\s|$)`,
+  "i"
+);
+var PLAIN_HEAD = /^\s*(?:cd|Set-Location|git\s+(?:add|status))(?=\s|$)/i;
+var RUNS_TEXT = /\$\(|`|<<|\$['"]|\\\r?\n/;
+var SPECIAL = /[\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]/u;
+var OUTSIDE_RISK = /[#(){}'"]/;
+var SEGMENT_BREAK = /[;&|\r\n]+/g;
+function sharedSpans(text) {
+  const bash = quotedSpans(text, "Bash");
+  const pwsh = quotedSpans(text, "PowerShell");
+  if (bash.length !== pwsh.length || bash.some(([s, e], i) => s !== pwsh[i][0] || e !== pwsh[i][1])) return null;
+  if (bash.some(([s]) => s > 0 && text[s - 1] === "\\")) return null;
+  return bash;
+}
+function maskSpans(text, spans) {
+  const chars = text.split("");
+  for (const [s, e] of spans) chars.fill(" ", s, e);
+  return chars.join("");
+}
+function segmentsOf(masked) {
+  const out = [];
+  let from = 0;
+  const breaks = [...masked.matchAll(SEGMENT_BREAK)].map((m) => ({ at: m.index, sep: m[0] }));
+  for (const b of [...breaks, { at: masked.length, sep: "" }]) {
+    if (masked.slice(from, b.at).trim() !== "") out.push({ from, end: b.at, piped: b.sep.includes("|") });
+    from = b.at + b.sep.length;
+  }
+  return out;
+}
+function blankDataStrings(text, keep2) {
+  if (RUNS_TEXT.test(text) || SPECIAL.test(text)) return text;
+  const spans = sharedSpans(text);
+  if (!spans || spans.length === 0) return text;
+  const masked = maskSpans(text, spans);
+  if (OUTSIDE_RISK.test(masked)) return text;
+  const segs = segmentsOf(masked);
+  const headOf = (seg, re) => re.test(masked.slice(seg.from, seg.end)) && re.test(text.slice(seg.from, seg.end));
+  if (!segs.every((seg) => headOf(seg, DATA_HEAD) || headOf(seg, PLAIN_HEAD))) return text;
+  let out = text;
+  for (const seg of segs) {
+    if (seg.piped || !headOf(seg, DATA_HEAD)) continue;
+    for (const [s, e] of spans) {
+      if (s < seg.from || e > seg.end || keep2(text.slice(s + 1, e - 1))) continue;
+      out = out.slice(0, s + 1) + " ".repeat(e - s - 2) + out.slice(e - 1);
+    }
+  }
+  return out;
+}
+
 // src/shared/write-targets.ts
 var DC = "mcp__plugin_desktop-commander_desktop-commander__";
 var DIRECT_WRITERS = /* @__PURE__ */ new Map([
@@ -6543,8 +6606,30 @@ function firstOperandAt(t, cueEnd) {
   if (/(?:^|\s)-de(?:s(?:t\w*)?)?(?=\s)/i.test(m[0])) return -1;
   return cueEnd + m[0].length;
 }
+var spellingOf = (s) => s.replace(/\\/g, "/").trim().replace(/^\.\//, "");
+function isHeldSpelling(content, claims, fold) {
+  const s = spellingOf(content);
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  const whole = claims.some((c) => c.forms.some((f) => fold ? spellingOf(f).toLowerCase() === lower : spellingOf(f) === s) || (c.ciForms ?? []).some((f) => spellingOf(f).toLowerCase() === lower));
+  if (whole) return true;
+  return claims.some((c) => {
+    const exact = c.forms.map(spellingOf).filter(Boolean).map((f) => fold ? f.toLowerCase() : f);
+    const ci = (c.ciForms ?? []).map(spellingOf).filter(Boolean).map((f) => f.toLowerCase());
+    return [[fold ? lower : s, exact], [lower, ci]].some(([hay, forms]) => {
+      if (forms.length === 0) return false;
+      const alt = forms.map(escapeRe).join("|");
+      for (const m of hay.matchAll(new RegExp(`${PATH_START}(?:${alt})${PATH_END}`, "g"))) {
+        const rest = hay.slice(0, m.index) + hay.slice(m.index + m[0].length);
+        if (!/\s/.test(rest)) return true;
+      }
+      return false;
+    });
+  });
+}
 function classifyShellText(text, claims, fold) {
   if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: "none" };
+  text = blankDataStrings(text, (s) => isHeldSpelling(s, claims, fold));
   let t = text.replace(/\\/g, "/");
   if (fold) t = t.toLowerCase();
   const tl = t.toLowerCase();
