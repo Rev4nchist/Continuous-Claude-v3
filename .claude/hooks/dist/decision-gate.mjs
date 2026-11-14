@@ -1276,7 +1276,8 @@ var SUBAGENT_WHY = "a subagent cannot open a PR, land, merge or push: Dave's tap
 var NO_PR_WHY = "the PR number cannot be read from this command, so its land decision cannot be found. Name the PR number in the command (land-pr.ps1 -Pr <n>, gh pr merge <n>).";
 var goThereWhy = (repo) => `this command names ${repo}, which is not the CCv3 repo, so it cannot be judged with a CCv3 decision: go to that repo folder and run it there.`;
 var fwd = (p) => p.replace(/\\/g, "/");
-var prose = (v) => oneLine3(v, 200);
+var CREDS_RE = /([a-z][a-z0-9+.-]*:\/\/)[^\s/'"\\]*@/gi;
+var prose = (v) => oneLine3(v.replace(CREDS_RE, "$1"), 200);
 var at = (dir) => prose(fwd(dir));
 var remoteProse = (remote) => prose(noCreds(remote));
 var SAFE_WORD = /^[A-Za-z0-9._/+][A-Za-z0-9._/@+-]*$/;
@@ -1373,6 +1374,7 @@ var appUnreadWhy = (dir) => `this command holds a git push that this gate cannot
 var unpairedWhy = (dir) => `a quote mark in this command has no pair (a message the gate cannot read as one string), so where its PR create or merge runs and the repo it names cannot be read (folder ${at(dir)}). Put the message in a file (git commit -F <file>, --body-file <file>) and run the gh call as its own command.`;
 var appBundleWhy = (dir) => `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
 var appSubagentWhy = (dir) => `a subagent cannot push in ${at(dir)}: Dave's tap belongs to the main session. Ask the main session to do it.`;
+var appHeadOwnerWhy = (dir, owner) => `this create names its head with the owner ${prose(owner)}: (in ${at(dir)}), so the PR would open from that owner's fork, and a tap from Dave covers only a branch of this checkout. Name the head with no owner: prefix (gh pr create --head <branch>), or ask Dave to open it.`;
 var appHeadWhy = (dir) => `the head branch of this create cannot be named in ${at(dir)} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo folder on a branch.`;
 var appManyBasesWhy = (dir, bases) => `this create names more than one base branch (${prose(bases.join(", "))}) in ${at(dir)}, so the base its open-pr decision is for cannot be known. Name one base (gh pr create --base <branch>, or one -f base=<branch>).`;
 var appHeadReadWhy = (dir, branch) => `cannot read the head of ${prose(branch)} in ${at(dir)}, so its open-pr decision cannot be found. Run the command again from the repo folder.`;
@@ -2246,8 +2248,15 @@ function unquotedFlagValue(re, text, mtext) {
   }
   return null;
 }
+function namedHead(text, mtext) {
+  return unquotedFlagValue(HEAD_FIELD_RE, text, mtext) ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+}
+function headOwner(text, mtext) {
+  const m = /^([^:\s]+):/.exec(namedHead(text, mtext) ?? "");
+  return m ? m[1] : null;
+}
 function headBranch(text, mtext, deps, dir) {
-  const named = unquotedFlagValue(HEAD_FIELD_RE, text, mtext) ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+  const named = namedHead(text, mtext);
   if (named) return named.replace(/^[^:\s]+:/, "").replace(/["']+$/, "");
   const r = deps.git(dir, ["branch", "--show-current"]);
   if (r.status !== 0) throw new Error("git branch --show-current failed");
@@ -2388,6 +2397,8 @@ var homeRead = (d) => d.action === "deny" ? { ...d, homeFlags: true } : d;
 function appCreate(text, mtext, deps, dir, cmd) {
   const place = appPlace(deps, dir);
   if (!place.covered) return passOf(place, dir, "other");
+  const owner = headOwner(text, mtext);
+  if (owner !== null) return deny("head-foreign", appHeadOwnerWhy(dir, owner));
   const branch = headBranch(text, mtext, deps, dir);
   if (branch === "") return deny("head-unresolved", appHeadWhy(dir));
   const { base, many } = baseBranch(text, mtext);
@@ -2654,10 +2665,10 @@ function judgeCommand(input, deps, notes) {
   const cwd = input.cwd || process.cwd();
   const denies = storeWriteCall(input, deps) ? [deny("store-write", STORE_WHY)] : [];
   const shapes = shapesOf(cmd.text, cmd.tool);
-  if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(deny("subagent", SUBAGENT_WHY));
+  const shell = shellOf(input);
+  if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));
   const pushes = shapes.filter((s) => s.kind === "push");
   const rest = input.agent_id ? [] : shapes.filter((s) => s.kind !== "push");
-  const shell = shellOf(input);
   const add = (d) => {
     if (!denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope && o.tapPath === d.tapPath)) denies.push(d);
   };
@@ -2681,6 +2692,11 @@ function judgeCommand(input, deps, notes) {
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   return denies;
+}
+function subagentDeny(shapes, deps, cwd, shell) {
+  const base = deny("subagent", SUBAGENT_WHY);
+  const covered = shapes.some((s) => s.kind !== "push" && coveredAmong(deps, (s.at ? dirsAfter(cwd, s.at.cds, shell, s.at.loose) : [cwd]).filter((d) => !isUnexpanded(d))) !== null);
+  return covered ? { ...base, homeFlags: true } : base;
 }
 function storeWriteCall(input, deps) {
   try {
@@ -2759,7 +2775,6 @@ function inApp(deps, run) {
     mode.app = false;
   }
 }
-var CREDS_RE = /([a-z][a-z0-9+.-]*:\/\/)[^\s/'"\\]*@/gi;
 var out2 = (extra) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...extra } }).replace(CREDS_RE, "$1");
 var denyOut = (reason) => out2({ permissionDecision: "deny", permissionDecisionReason: reason });
 var warnLead = (scope) => scope === "app-push" ? "this push in an app folder has no tap from Dave; it would be blocked in block mode." : `this command would be blocked when ${FLAG_OF[scope]} is true.`;
@@ -2900,7 +2915,7 @@ var GitDeadlineError = class extends Error {
 var HOOK_BUDGET_MS = 7e3;
 function makeGit(opts = {}) {
   const now = opts.now ?? Date.now;
-  const spawn = opts.spawn ?? ((cmd, args, o) => spawnSync(cmd, args, o));
+  const spawn = opts.spawn ?? ((_cmd, args, o) => spawnSync("git", args, o));
   const exists = opts.exists ?? existsSync2;
   return (cwd, args) => {
     const left = opts.deadline === void 0 ? GIT_TIMEOUT_MS : opts.deadline - now();

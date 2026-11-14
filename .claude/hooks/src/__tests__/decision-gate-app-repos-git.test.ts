@@ -104,7 +104,10 @@ afterAll(() => {
 
 const bash = (cwd: string, command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-app-git', ...extra });
 /** The real Deps with the temp folder as home, so the gate never reads the developer's home config (absent on a CI runner). */
-const deps = (opts?: Parameters<typeof realDeps>[0]) => ({ ...realDeps(opts), home });
+/** PR 566 review: the gate's own git calls get the same empty global config as the fixture git (FIXED), so the developer's config cannot change them. */
+const isolatedSpawn: NonNullable<Parameters<typeof realDeps>[0]>['spawn'] = (_cmd, args, o) =>
+  spawnSync('git', args, { ...o, env: { ...process.env, GIT_CONFIG_GLOBAL: GITCONFIG, GIT_CONFIG_NOSYSTEM: '1' } });
+const deps = (opts?: Parameters<typeof realDeps>[0]) => ({ ...realDeps({ spawn: isolatedSpawn, ...opts }), home });
 const verdict = (input: object): string => {
   const d = decide(input, deps());
   return d.action === 'deny' ? `deny:${d.pattern}` : d.warn ? `warn:${d.warn.split(':')[0]}` : 'allow';

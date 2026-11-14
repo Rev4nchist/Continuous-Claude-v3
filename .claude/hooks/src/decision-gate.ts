@@ -317,7 +317,10 @@ const goThereWhy = (repo: string): string => `this command names ${repo}, which 
 
 const fwd = (p: string): string => p.replace(/\\/g, '/');
 /** A value from the repo or the command (branch, remote, entry key, folder, head) as prose: one plain line (oneLine, G2), never raw. */
-const prose = (v: string): string => oneLine(v, 200);
+/** A scheme://user:token@ loses its user and token part. Used by prose (before its cut) and by out() on every output text. */
+const CREDS_RE = /([a-z][a-z0-9+.-]*:\/\/)[^\s/'"\\]*@/gi;
+// PR 566 review (CodeRabbit, decision-gate.ts:472): the credentials go BEFORE the 200-code-point cut, so a cut cannot leave a user or token part.
+const prose = (v: string): string => oneLine(v.replace(CREDS_RE, '$1'), 200);
 /** The folder of a text, as prose. */
 const at = (dir: string): string => prose(fwd(dir));
 /** A remote of a text, as prose, with no user:token part (seat 3d). */
@@ -489,6 +492,8 @@ const unpairedWhy = (dir: string): string =>
 const appBundleWhy = (dir: string): string =>
   `a short option bundle with o (as in -oh or -uo) gives the rest of the word, or the next word, to the push option (folder ${at(dir)}), so the other flags of this push cannot be read: write -o <value> as its own word (git push -o <value> <remote> <branch>).`;
 const appSubagentWhy = (dir: string): string => `a subagent cannot push in ${at(dir)}: Dave's tap belongs to the main session. Ask the main session to do it.`;
+const appHeadOwnerWhy = (dir: string, owner: string): string =>
+  `this create names its head with the owner ${prose(owner)}: (in ${at(dir)}), so the PR would open from that owner's fork, and a tap from Dave covers only a branch of this checkout. Name the head with no owner: prefix (gh pr create --head <branch>), or ask Dave to open it.`;
 const appHeadWhy = (dir: string): string => `the head branch of this create cannot be named in ${at(dir)} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo folder on a branch.`;
 /** Fix round 5 (F8, advisor review): a create that names two bases cannot be tied to one tap. */
 const appManyBasesWhy = (dir: string, bases: string[]): string =>
@@ -1874,9 +1879,17 @@ function unquotedFlagValue(re: RegExp, text: string, mtext: string): string | nu
  * `text` is the create's own command (shapesOf cuts it at the next break outside quotes), so a later command's -H or a quoted `--head` in a
  * title is not read. `mtext` is the same text with its quoted strings blanked.
  */
-function headBranch(text: string, mtext: string, deps: Deps, dir: string): string {
-  const named = unquotedFlagValue(HEAD_FIELD_RE, text, mtext)
+function namedHead(text: string, mtext: string): string | null {
+  return unquotedFlagValue(HEAD_FIELD_RE, text, mtext)
     ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+}
+/** PR 566 review (CodeRabbit, decision-gate.ts:2085): the `owner:` prefix of the head a create names, or null. */
+function headOwner(text: string, mtext: string): string | null {
+  const m = /^([^:\s]+):/.exec(namedHead(text, mtext) ?? '');
+  return m ? m[1] : null;
+}
+function headBranch(text: string, mtext: string, deps: Deps, dir: string): string {
+  const named = namedHead(text, mtext);
   if (named) return named.replace(/^[^:\s]+:/, '').replace(/["']+$/, '');
   const r = deps.git(dir, ['branch', '--show-current']);
   if (r.status !== 0) throw new Error('git branch --show-current failed');
@@ -2081,6 +2094,10 @@ const homeRead = (d: Decision): Decision => (d.action === 'deny' ? { ...d, homeF
 function appCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const place = appPlace(deps, dir);
   if (!place.covered) return passOf(place, dir, 'other');
+  // PR 566 review: an `owner:` head opens the PR from that owner's fork. The tap is keyed on the local branch and its local head, so it
+  // cannot cover another fork's branch: denied before the prefix is dropped (headBranch keeps dropping it for the CCv3 path).
+  const owner = headOwner(text, mtext);
+  if (owner !== null) return deny('head-foreign', appHeadOwnerWhy(dir, owner));
   // The head first: every repo deny below then offers open-pr with the branch this create names (--head), not the checked-out one.
   const branch = headBranch(text, mtext, deps, dir);
   if (branch === '') return deny('head-unresolved', appHeadWhy(dir));
@@ -2511,10 +2528,10 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] 
   const denies: Deny[] = storeWriteCall(input, deps) ? [deny('store-write', STORE_WHY)] : [];
   const shapes = shapesOf(cmd.text, cmd.tool);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
-  if (input.agent_id && shapes.some((s) => s.kind !== 'push')) denies.push(deny('subagent', SUBAGENT_WHY));
+  const shell = shellOf(input);
+  if (input.agent_id && shapes.some((s) => s.kind !== 'push')) denies.push(subagentDeny(shapes, deps, cwd, shell));
   const pushes = shapes.filter((s) => s.kind === 'push');
   const rest = input.agent_id ? [] : shapes.filter((s) => s.kind !== 'push');
-  const shell = shellOf(input);
   const add = (d: Deny): void => { if (!denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope && o.tapPath === d.tapPath)) denies.push(d); };
   if (pushes.length > 0 || rest.length > 0) {
     const named = namedRepo(cmd.text, deps.env);
@@ -2540,6 +2557,17 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] 
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   return denies;
 }
+/**
+ * PR 566 review (CodeRabbit, decision-gate.ts:2514): the subagent deny of a create, land or merge. When a folder on its path is a covered
+ * app folder (coveredAmong: none is CCv3), decisions.enforce is read from the home copy only (homeFlags), as for every app create or merge.
+ * Otherwise the CCv3 lookup is unchanged.
+ */
+function subagentDeny(shapes: Shape[], deps: Deps, cwd: string, shell: 'bash' | 'pwsh'): Deny {
+  const base = deny('subagent', SUBAGENT_WHY);
+  const covered = shapes.some((s) => s.kind !== 'push' && coveredAmong(deps, (s.at ? dirsAfter(cwd, s.at.cds, shell, s.at.loose) : [cwd]).filter((d) => !isUnexpanded(d))) !== null);
+  return covered ? { ...base, homeFlags: true } : base;
+}
+
 /** The shell text of the call (before any blank) writes the decision store. Never throws: the catch reads it too. */
 function storeWriteCall(input: HookInput, deps: Deps): boolean {
   try {
@@ -2653,9 +2681,8 @@ function inApp<T>(deps: Deps, run: () => T): T {
 
 // ---------- hook plumbing ----------
 
-/** Seat 3d, last line of defence: a scheme://user:token@ in any output text loses its user and token part. */
-const CREDS_RE = /([a-z][a-z0-9+.-]*:\/\/)[^\s/'"\\]*@/gi;
-const out = (extra: Record<string, unknown>): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...extra } }).replace(CREDS_RE, '$1');
+/** Seat 3d, last line of defence: a scheme://user:token@ in any output text loses its user and token part (CREDS_RE, next to prose). */
+const out =(extra: Record<string, unknown>): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...extra } }).replace(CREDS_RE, '$1');
 const denyOut = (reason: string): string => out({ permissionDecision: 'deny', permissionDecisionReason: reason });
 /** The app-push warning names no flag: no covered text says how to switch the gate (S6). */
 const warnLead = (scope: Scope): string => (scope === 'app-push'
@@ -2840,7 +2867,8 @@ export interface GitOptions {
 
 export function makeGit(opts: GitOptions = {}): Deps['git'] {
   const now = opts.now ?? Date.now;
-  const spawn: Spawn = opts.spawn ?? ((cmd, args, o) => spawnSync(cmd, args, o));
+  // PR 566 CI (semgrep detect-child-process): the default runs only git, as a literal. makeGit calls spawn with 'git' alone.
+  const spawn: Spawn = opts.spawn ?? ((_cmd, args, o) => spawnSync('git', args, o));
   const exists = opts.exists ?? existsSync;
   return (cwd, args) => {
     const left = opts.deadline === undefined ? GIT_TIMEOUT_MS : opts.deadline - now();
