@@ -6611,7 +6611,18 @@ function isHeldSpelling(content, claims, fold) {
   const s = spellingOf(content);
   if (!s) return false;
   const lower = s.toLowerCase();
-  return claims.some((c) => c.forms.some((f) => fold ? spellingOf(f).toLowerCase() === lower : spellingOf(f) === s) || (c.ciForms ?? []).some((f) => spellingOf(f).toLowerCase() === lower));
+  const whole = claims.some((c) => c.forms.some((f) => fold ? spellingOf(f).toLowerCase() === lower : spellingOf(f) === s) || (c.ciForms ?? []).some((f) => spellingOf(f).toLowerCase() === lower));
+  if (whole) return true;
+  if (/\s/.test(s)) return false;
+  return claims.some((c) => {
+    const exact = c.forms.map(spellingOf).filter(Boolean).map((f) => fold ? f.toLowerCase() : f);
+    const ci = (c.ciForms ?? []).map(spellingOf).filter(Boolean).map((f) => f.toLowerCase());
+    return [[fold ? lower : s, exact], [lower, ci]].some(([hay, forms]) => {
+      if (forms.length === 0) return false;
+      const alt = forms.map(escapeRe).join("|");
+      return new RegExp(`${PATH_START}(?:${alt})${PATH_END}`).test(hay);
+    });
+  });
 }
 function classifyShellText(text, claims, fold) {
   if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: "none" };

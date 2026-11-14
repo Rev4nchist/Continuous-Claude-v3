@@ -28,6 +28,11 @@ describe('data heads: a held path inside the written text is no write', () => {
     ['Set-Content notes.md "fixed src/a.ts"'],
     ['"x" | Out-File notes.md -InputObject "see src/a.ts"'],
     ['Write-Host "fixing src/a.ts now"'],
+    // a one-word string that only looks like another file is no operand of the held file (F1 control)
+    ['Add-Content log.md "other/src/a.ts"'],
+    ['Add-Content log.md "src/a.tsx"'],
+    ['Add-Content log.md "src/a.ts.md"'],
+    ['Add-Content log.md "my notes src/a.ts.md"'],
     ['Write-Output "mv x src/a.ts"'],
     ['echo "rm src/a.ts is the plan"'],
     ["printf '%s' 'Set-Content src/a.ts'"],
@@ -58,6 +63,15 @@ describe('data heads: a real write to the held file still denies', () => {
     ['echo "x" > src/a.ts'],
     ['echo "x" > "src/a.ts"'],
     ['echo "src/a.ts" > src/a.ts'],
+    // F1 (seat review round 1): a one-word string that holds the held path plus a suffix is an OPERAND, not prose.
+    // PATH_END of the classifier allows these characters after the path, and the shell still writes the held file.
+    ['Set-Content "src/a.ts*" x'],
+    ["Set-Content 'src/a.ts*' -Value x"],
+    ['Out-File "src/a.ts:tag"'],
+    ['Add-Content -Path "src/a.ts:stream" -Value "x"'],
+    ['Set-Content "./src/a.ts?" x'],
+    ['Set-Content "src/a.ts " x'],
+    ['echo x > "src/a.ts"extra'],
     ['echo "x" | tee src/a.ts'],
     ['echo "x" | tee "src/a.ts"'],
     ['git commit -m "msg" ; rm src/a.ts'],

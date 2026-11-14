@@ -155,14 +155,32 @@ function firstOperandAt(t: string, cueEnd: number): number {
 /** One spelling for comparing a whole string with a held path: slashes, no outer space, no leading "./". */
 const spellingOf = (s: string): string => s.replace(/\\/g, '/').trim().replace(/^\.\//, '');
 
-/** True when the string, as a whole, is one spelling of a held file. A case-insensitive form matches in any case. */
+/**
+ * True when the string is an OPERAND of a held file, so the data blanking must leave it as it is. Two cases:
+ *  - the string, as a whole, is one spelling of a held file (a trailing space is trimmed: `"src/a.ts "`);
+ *  - the string has no white space and the held path sits in it by the classifier's own boundaries. That keeps
+ *    `"src/a.ts*"` (a PowerShell wildcard) and `"src/a.ts:tag"` (a stream): PATH_END lets those characters follow
+ *    the path, and the shell still writes the held file. Prose has spaces, so a note or a commit message that
+ *    names the file is blanked. A case-insensitive form matches in any case.
+ */
 function isHeldSpelling(content: string, claims: readonly HeldClaim[], fold: boolean): boolean {
   const s = spellingOf(content);
   if (!s) return false;
   const lower = s.toLowerCase();
-  return claims.some((c) =>
+  const whole = claims.some((c) =>
     c.forms.some((f) => (fold ? spellingOf(f).toLowerCase() === lower : spellingOf(f) === s))
     || (c.ciForms ?? []).some((f) => spellingOf(f).toLowerCase() === lower));
+  if (whole) return true;
+  if (/\s/.test(s)) return false;
+  return claims.some((c) => {
+    const exact = c.forms.map(spellingOf).filter(Boolean).map((f) => (fold ? f.toLowerCase() : f));
+    const ci = (c.ciForms ?? []).map(spellingOf).filter(Boolean).map((f) => f.toLowerCase());
+    return [[fold ? lower : s, exact], [lower, ci]].some(([hay, forms]) => {
+      if ((forms as string[]).length === 0) return false;
+      const alt = (forms as string[]).map(escapeRe).join('|');
+      return new RegExp(`${PATH_START}(?:${alt})${PATH_END}`).test(hay as string);
+    });
+  });
 }
 
 /**
