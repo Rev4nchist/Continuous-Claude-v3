@@ -18,7 +18,12 @@
 //   S12 suite regression vs capability                                      -> change isRegression
 //   S12b the engine record reader takes a trace file or an engine run      -> drop a skip rule in readEngineRecords
 //   S13 controls: blamed, near a failed fix, near an unmapped fix, under 30 -> change buildControls or the bar
-//   S13e a failed round read counts as "no round"                          -> merge roundFailed into noRound
+//   S13c a no-round control is dropped, or kept with no head or a bad one  -> drop the merged-head branch, or skip the sha check
+//   S13e a failed round read counts as "no round", or reads a merged head  -> merge roundFailed into noRoundHead
+//   S13h the merged head comes from gh, or the gold gate refuses it         -> read the head from the rounds, or revert gold.mjs
+//   R18b the report hides the group 2 start or the merged-head count        -> change the controls line or drop NOTES.mergedHead
+//   S13f group 2 does not start 2026-06-01 (06-15 out, or 05-31 in)       -> move GROUP2_FROM
+//   S13g the report does not name the group 2 start                       -> drop NOTES.group2From
 //   S14 the baseline copy is not byte-equal, or a risk band is missing      -> change the copy or baselineProblems
 //   S15 a dry run writes, or a write is not all-or-nothing                  -> change main
 //   S16 a PR number reaches stdout, the report or the judge prompt          -> change scrubPrs or the report text
@@ -37,6 +42,10 @@
 //   L04c a hunk is split, an adjacent one is lost, or no hunk is kept       -> change the overlap, the slack or the nearest rule
 //   L05 an old judge-version label is reused for the new prompt             -> keep JUDGE_VERSION at szz-label-v1
 //   L06 the usage or the report hides the gold line numbers or the cut      -> drop the notes
+//   P01 the default daily limit is not 30                                   -> keep SZZ_DAILY_CALLS at 6
+//   P02 --daily-calls is ignored, or a bad value runs                       -> drop the flag or loosen checkArgs
+//   P03 --stop-after is ignored, drops the labels it got, or misnames a stop -> change the label-stage checks
+//   P04 a shared-cap refusal is retried, hidden, or the cap is bypassed     -> keep calling after reason cap, or pass a cap to runJudge
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -216,6 +225,8 @@ function fakeJudge(verdicts, { raw } = {}) {
   return Object.assign(judge, { prompts });
 }
 const REAL = (severity = 'major') => ({ verdict: 'real', severity });
+/** --label with a daily limit of 6 for this run: the slot tests below were written for six calls a day. */
+const SIX = ['--label', '--daily-calls', '6'];
 const NOW = Date.parse('2026-11-13T18:00:00Z');
 const CFG = { holdoutExclude: [21, 11], reserve: [], lineSlack: 3 };
 const NO_DATA = { prs: [], findings: [] };
@@ -306,7 +317,7 @@ test('S09-unit: laneCallsToday counts only start rows of this lane today, by the
     row({ sessionId: 'other-session' }), row({ purpose: 'other' }), row({ phase: 'end' }),
   ];
   assert.equal(laneCallsToday([...today, ...other], NOW), 3);
-  assert.equal(SZZ_DAILY_CALLS, 6);
+  assert.equal(SZZ_DAILY_CALLS, 30, 'the default daily limit (Dave, pace decision)');
 });
 
 test('S06-unit: crDrops drops a CodeRabbit line comment on the file within the slack, made before the fix merge (breaks if slack, time, file or user rule changes)', () => {
@@ -376,8 +387,10 @@ test('S14-unit: baselineProblems wants one row for each of the five risk bands (
 const day = (n) => new Date(Date.parse('2026-08-01T12:00:00Z') + n * 86_400_000).toISOString();
 const SHA = (n) => String(n).padStart(40, '0');
 const merges40 = () => Array.from({ length: 40 }, (_, i) => ({ pr: 100 + i, mergeSha: SHA(100 + i), mergedAt: day(i) }));
+/** A stand-in for the merged head that git gives (first-parent merge ^2): f and the last 39 digits of the merge sha. */
+const HEAD_OF = (m) => `f${m.mergeSha.slice(1)}`;
 const ctl = (over = {}) => buildControls({
-  datasetPrs: [], merges: merges40(), escapeRows: [], failedFixShas: new Set(), noTargetFixShas: new Set(), filesOf: () => [], roundOf: async () => ({ round: 1, sha40: 'a'.repeat(40) }), cfg: CFG, ...over,
+  datasetPrs: [], merges: merges40(), escapeRows: [], failedFixShas: new Set(), noTargetFixShas: new Set(), filesOf: () => [], roundOf: async () => ({ round: 1, sha40: 'a'.repeat(40) }), headOf: HEAD_OF, cfg: CFG, ...over,
 });
 
 test('S13: buildControls removes a blamed PR, a PR in the 30 days before a failed fix, and a PR before an unmapped fix that shares a file; counts each rule (breaks if a rule, the 30 day edge or the order changes)', async () => {
@@ -419,11 +432,14 @@ test('S13b: the 30 day edge: 30 days before is in, 31 days is out; the unmapped-
   assert.equal(r.counts.removedUnmappedFix, 2);
 });
 
-test('S13e: a failed round read is counted as roundFailed, apart from no round (breaks if a gh failure reads as "no round")', async () => {
-  const r = await ctl({ merges: merges40().slice(0, 3), roundOf: async (pr) => { if (pr === 101) throw new Error('gh down'); return pr === 102 ? null : { round: 1, sha40: 'a'.repeat(40) }; } });
-  assert.deepEqual(r.controls.map((c) => c.target.pr), [100]);
+test('S13e: a failed round read drops the control and counts roundFailed, and asks no merged head; no round keeps it on the merged head (breaks if a gh failure reads as "no round")', async () => {
+  const asked = [];
+  const headOf = (m) => { asked.push(m.pr); return HEAD_OF(m); };
+  const r = await ctl({ merges: merges40().slice(0, 3), headOf, roundOf: async (pr) => { if (pr === 101) throw new Error('gh down'); return pr === 102 ? null : { round: 1, sha40: 'a'.repeat(40) }; } });
+  assert.deepEqual(r.controls.map((c) => c.target.pr), [100, 102]);
   assert.equal(r.counts.roundFailed, 1);
-  assert.equal(r.counts.noRound, 1);
+  assert.equal(r.counts.noRoundHead, 1);
+  assert.deepEqual(asked, [102], 'the merged head is read only for a control with no round, never after a failed read');
 });
 
 test('S12b: readEngineRecords reads <branch>/<head>/<run>.json with pr and findings, and skips trace files, the engine and cli-pairs folders, bad JSON and files with no findings (breaks if a skip rule is dropped)', () => {
@@ -455,12 +471,57 @@ test('S04b: a file moved by a direct commit after the PR merged is unmapped file
   assert.equal(judge.prompts.length, 0);
 });
 
-test('S13c: a control with no round is dropped and counted (breaks if a missing round is kept with a guess)', async () => {
-  const r = await ctl({ merges: merges40().slice(0, 3), roundOf: async (pr) => (pr === 101 ? null : { round: 2, sha40: 'b'.repeat(40) }) });
-  assert.deepEqual(r.controls.map((c) => c.target.pr), [100, 102]);
-  assert.equal(r.counts.noRound, 1);
-  assert.equal(r.controls[0].target.round, 2);
+test('S13c: a control with no round is kept on its merged head with round null and counted noRoundHead; no merged head drops it as noHead (breaks if a missing round is dropped, guessed, or kept with no head)', async () => {
+  const merges = merges40().slice(0, 4);
+  const headOf = (m) => (m.pr === 102 ? null : m.pr === 103 ? 'not-a-sha' : HEAD_OF(m));
+  const r = await ctl({ merges, headOf, roundOf: async (pr) => (pr === 100 ? { round: 2, sha40: 'b'.repeat(40) } : null) });
+  assert.deepEqual(r.controls.map((c) => c.target.pr), [100, 101]);
+  assert.deepEqual(r.controls[0].target, { pr: 100, round: 2, sha40: 'b'.repeat(40) });
+  assert.deepEqual(r.controls[0].provenance, { why: 'pre-window-no-fix' }, 'a control with a round has no head marker');
+  assert.deepEqual(r.controls[1].target, { pr: 101, round: null, sha40: HEAD_OF(merges[1]) });
+  assert.deepEqual(r.controls[1].provenance, { why: 'pre-window-no-fix', head: 'merged-head-no-round' });
+  assert.deepEqual([r.counts.noRoundHead, r.counts.noHead, r.counts.group2, r.counts.total], [1, 2, 2, 2]);
+  assert.deepEqual(validateOutputs({ goldRows: [], controls: r.controls }), [], 'gold.mjs takes the merged-head control');
   assert.equal(CONTROLS_MIN, 30);
+});
+
+test('S13h: end to end, a control whose CodeRabbit rounds miss its head is written with round null and the merged head from git, not a sha from gh (breaks if the head comes from gh or the gold gate refuses it)', async () => {
+  const b = big();
+  const ghSha = 'e'.repeat(40);
+  const r = await bigRun([], { gh: fakeGh(b, { reviews: { 103: [ghSha] } }) });
+  assert.equal(r.code, 0, r.err);
+  const c = loadCleanControls(r.gold).find((x) => x.target.pr === 103);
+  assert.ok(c, 'PR 103 is a control');
+  assert.equal(c.target.round, null);
+  assert.equal(c.target.sha40, b.prs[103].shas.at(-1), 'the second parent of the merge commit');
+  assert.notEqual(c.target.sha40, ghSha);
+  assert.deepEqual(c.provenance, { why: 'dataset-no-finding', head: 'merged-head-no-round' });
+  assert.equal(r.json.controls.noRoundHead, 1);
+  assert.equal(r.json.controls.total, 40);
+});
+
+test('S13f: group 2 starts 2026-06-01 by default: a PR merged 2026-06-15 is in it, a PR merged 2026-05-31 is not (breaks if GROUP2_FROM moves after 06-15, or to 05-31 or earlier)', async () => {
+  const merges = [
+    { pr: 1, mergeSha: SHA(1), mergedAt: '2026-05-31T12:00:00Z' },
+    { pr: 2, mergeSha: SHA(2), mergedAt: '2026-06-15T12:00:00Z' },
+  ];
+  const r = await ctl({ merges });
+  const prs = r.controls.map((c) => c.target.pr);
+  assert.equal(prs.includes(2), true, `a PR merged 2026-06-15 is a group 2 control: ${JSON.stringify(r.counts)}`);
+  assert.equal(prs.includes(1), false, 'a PR merged 2026-05-31 is before group 2');
+  assert.equal(r.counts.group2, 1, JSON.stringify(r.counts));
+  assert.equal(r.controls.find((c) => c.target.pr === 2).provenance.why, 'pre-window-no-fix');
+});
+
+test('S13g: the text and JSON report name the group 2 start (breaks if the note is dropped)', async () => {
+  const b = small();
+  const s = setup(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })] });
+  const text = await run(s.argv.filter((a) => a !== '--json'), s.deps);
+  assert.equal(text.code, 0, text.err);
+  assert.match(text.out, /group 2 starts 2026-06-01 \(Dave, 2026-11-14\)/);
+  const json = await run(s.argv, s.deps);
+  assert.equal(json.code, 0, json.err);
+  assert.ok(JSON.parse(json.out).notes.includes('group 2 starts 2026-06-01 (Dave, 2026-11-14)'));
 });
 
 // ---------- end to end on temp repos ----------
@@ -567,18 +628,18 @@ test('S03: an open bug maps to the EARLIEST main merge that holds the origin com
   }
 });
 
-test('S09: with the six lane calls of today used, no call starts; rows of another lane or day do not count; a run cannot pass the slot (breaks if the ledger or the in-run counter is ignored)', async () => {
+test('S09: with --daily-calls 6 and the six lane calls of today used, no call starts; rows of another lane or day do not count; a run cannot pass the slot (breaks if the ledger or the in-run counter is ignored)', async () => {
   const ledger = path.join(tmp('led'), 'ledger.jsonl');
   const row = (over) => `${JSON.stringify({ phase: 'start', purpose: 'eval-judge', sessionId: `${LEDGER_TAG}:s`, ts: '2026-11-13T15:00:00Z', id: `i${Math.random()}`, ...over })}\n`;
   const b = small();
   const rows = [escRow(b, { fixPr: 12, blamedPr: 11 })];
   writeFileSync(ledger, Array.from({ length: 6 }, () => row({})).join(''));
-  const full = await report(b, { rows, extra: ['--label'], deps: { judge: fakeJudge([REAL()]), ledgerPath: ledger } });
+  const full = await report(b, { rows, extra: SIX, deps: { judge: fakeJudge([REAL()]), ledgerPath: ledger } });
   assert.equal(full.deps.judge.prompts.length, 0);
   assert.equal(full.json.labelCalls.used, 6);
   assert.equal(full.json.labelled, 0);
   writeFileSync(ledger, [...Array.from({ length: 5 }, () => row({})), ...Array.from({ length: 4 }, () => row({ sessionId: 'other' })), row({ ts: '2026-11-12T05:00:00Z' })].join(''));
-  const some = await report(b, { rows, extra: ['--label'], deps: { judge: fakeJudge([REAL()]), ledgerPath: ledger } });
+  const some = await report(b, { rows, extra: SIX, deps: { judge: fakeJudge([REAL()]), ledgerPath: ledger } });
   assert.equal(some.deps.judge.prompts.length, 1);
   // Two oversize hunks need two calls; five are used, so only one call may run, though the fake judge writes no ledger row.
   const huge = 'q'.repeat(HUNK_LIMIT + 500);
@@ -588,7 +649,7 @@ test('S09: with the six lane calls of today used, no call starts; rows of anothe
   ]);
   writeFileSync(ledger, Array.from({ length: 5 }, () => row({})).join(''));
   const j2 = fakeJudge([REAL()]);
-  const two = await report(b2, { rows: [escRow(b2, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge: j2, ledgerPath: ledger } });
+  const two = await report(b2, { rows: [escRow(b2, { fixPr: 12, blamedPr: 11 })], extra: SIX, deps: { judge: j2, ledgerPath: ledger } });
   assert.equal(j2.prompts.length, 1);
   assert.equal([...j2.prompts[0].matchAll(/^### Pair/gm)].length, 1, 'an oversize hunk is alone in its call');
   assert.equal(two.json.labelCalls.used, 6);
@@ -662,7 +723,7 @@ test('S15/S04/S11/S12: --write makes gold-a.json, clean-controls.json and escape
   assert.deepEqual(rows.map((x) => [x.provenance.hunksShown, x.provenance.hunksLeftOut]), [[1, 0], [1, 0], [1, 0]], 'the hunk counts reach gold-a.json');
   for (const x of rows) assert.deepEqual(validateRow(x), []);
   assert.equal(loadCleanControls(r.gold).length, 40);
-  assert.deepEqual(r.json.controls, { group1: 2, group2: 38, removedBlamed: 3, removedFailedFix: 24, removedUnmappedFix: 1, noRound: 0, roundFailed: 0, notOnMain: 1, total: 40 });
+  assert.deepEqual(r.json.controls, { group1: 2, group2: 38, removedBlamed: 3, removedFailedFix: 24, removedUnmappedFix: 1, noRoundHead: 0, noHead: 0, roundFailed: 0, notOnMain: 1, total: 40 });
   assert.deepEqual(readFileSync(path.join(r.gold, 'escape-baseline.json')), readFileSync(path.join(r.state, 'escape-baseline.json')), 'byte equal');
   assert.deepEqual(readdirSync(r.gold).sort(), ['clean-controls.json', 'escape-baseline.json', 'gold-a.json'], 'no temp file is left');
   assert.equal(r.json.counted, 2);
@@ -987,7 +1048,7 @@ test('R11: the slot is counted again before each call: a call of another run, or
   writeFileSync(ledger, Array.from({ length: 4 }, () => laneRow({})).join(''));
   let t = NOW;
   const j1 = ledgerJudge(ledger, () => t, (k) => { if (k === 1) appendFileSync(ledger, laneRow({ ts: '2026-11-13T15:30:00Z' })); });
-  const r1 = await report(b, { rows, extra: ['--label'], deps: { judge: j1, ledgerPath: ledger, now: () => t } });
+  const r1 = await report(b, { rows, extra: SIX, deps: { judge: j1, ledgerPath: ledger, now: () => t } });
   assert.equal(r1.code, 0, r1.err);
   assert.equal(j1.prompts.length, 1, 'the second call does not start');
   assert.equal(r1.json.labelCalls.used, 6, 'the own call is counted once: its ledger row and the in-run count share an id');
@@ -997,9 +1058,104 @@ test('R11: the slot is counted again before each call: a call of another run, or
   writeFileSync(ledger2, Array.from({ length: 6 }, () => laneRow({ ts: '2026-11-14T07:00:00Z' })).join(''));
   t = Date.parse('2026-11-14T05:50:00Z'); // 23:50 on Nov 13 in Chicago
   const j2 = ledgerJudge(ledger2, () => t, (k) => { if (k === 1) t = Date.parse('2026-11-14T06:30:00Z'); });
-  const r2 = await report(b, { rows, extra: ['--label'], deps: { judge: j2, ledgerPath: ledger2, now: () => t } });
+  const r2 = await report(b, { rows, extra: SIX, deps: { judge: j2, ledgerPath: ledger2, now: () => t } });
   assert.equal(r2.code, 0, r2.err);
   assert.equal(j2.prompts.length, 1, 'after midnight the new day is full');
+});
+
+// ---------- pace: the daily limit, the checkpoint and the shared cap (P<item>) ----------
+
+const textOf = (out) => out.split('\n');
+const stopLines = (out) => textOf(out).filter((l) => l.startsWith('labelling stopped: '));
+
+test('P01: the daily limit is 30 by default: six lane calls today still let a call start, thirty stop it with the daily-limit line (breaks if the default stays 6)', async () => {
+  const b = small();
+  const rows = [escRow(b, { fixPr: 12, blamedPr: 11 })];
+  const ledger = path.join(tmp('led'), 'ledger.jsonl');
+  writeFileSync(ledger, Array.from({ length: 6 }, () => laneRow({})).join(''));
+  const j1 = fakeJudge([REAL()]);
+  const r1 = await report(b, { rows, extra: ['--label'], deps: { judge: j1, ledgerPath: ledger } });
+  assert.equal(r1.code, 0, r1.err);
+  assert.equal(j1.prompts.length, 1);
+  assert.equal(r1.json.labelCalls.max, 30);
+  writeFileSync(ledger, Array.from({ length: 30 }, () => laneRow({})).join(''));
+  const s = setup(b, { rows, extra: ['--label'], deps: { judge: fakeJudge([REAL()]), ledgerPath: ledger } });
+  const text = await run(s.argv.filter((a) => a !== '--json'), s.deps);
+  assert.equal(text.code, 0, text.err);
+  assert.equal(s.deps.judge.prompts.length, 0);
+  assert.deepEqual(stopLines(text.out), ['labelling stopped: daily limit reached (30)']);
+});
+
+test('P02: --daily-calls N sets the daily limit of the run; a value that is not a positive integer, or no value, is a usage error before any git call (breaks if the flag is ignored or loosely parsed)', async () => {
+  const b = small();
+  const rows = [escRow(b, { fixPr: 12, blamedPr: 11 })];
+  const ledger = path.join(tmp('led'), 'ledger.jsonl');
+  writeFileSync(ledger, Array.from({ length: 2 }, () => laneRow({})).join(''));
+  const j = fakeJudge([REAL()]);
+  const r = await report(b, { rows, extra: ['--label', '--daily-calls', '2'], deps: { judge: j, ledgerPath: ledger } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(j.prompts.length, 0, 'two used of two');
+  assert.deepEqual([r.json.labelCalls.max, r.json.labelCalls.stop], [2, 'daily-limit']);
+  const boom = () => { throw new Error('must not be called'); };
+  for (const flag of ['--daily-calls', '--stop-after']) {
+    for (const v of ['0', '-1', '1.5', 'x', '', '1e3', '01', '99999999999999999999']) {
+      const bad = await run([flag, v], { git: boom, gh: boom });
+      assert.equal(bad.code, 2, `${flag} ${JSON.stringify(v)}`);
+      assert.match(bad.err, new RegExp(`${flag} .*positive integer`), bad.err);
+      assert.match(bad.err, /usage: /);
+    }
+    assert.equal((await run([flag], { git: boom, gh: boom })).code, 2, `${flag} with no value`);
+  }
+});
+
+test('P03: --stop-after N stops the label stage after N calls of this run, keeps the labels of those calls, and says so; the first limit reached names itself (breaks if the checkpoint is ignored or drops the labels it got)', async () => {
+  const b = twoHuge();
+  const rows = [escRow(b, { fixPr: 12, blamedPr: 11 })];
+  const j = fakeJudge([REAL()]);
+  const s = setup(b, { rows, extra: ['--label', '--allow-label-cache-write', '--stop-after', '1'], deps: { judge: j } });
+  const r = await run(s.argv, s.deps);
+  assert.equal(r.code, 0, r.err);
+  const json = JSON.parse(r.out);
+  assert.equal(j.prompts.length, 1, 'two calls are needed; the checkpoint stops after one');
+  assert.deepEqual([json.labelled, json.unlabelled], [1, 1]);
+  assert.deepEqual([json.labelCalls.stopped, json.labelCalls.stop], [true, 'checkpoint']);
+  assert.equal(cacheRows(s.state).length, 1, 'the label of the one call is kept');
+  const text = await run(s.argv.filter((a) => a !== '--json'), { ...s.deps, judge: fakeJudge([REAL()]) });
+  assert.equal(text.code, 0, text.err);
+  assert.deepEqual(stopLines(text.out), [], 'the cached pair needs no call; the second call is the first of this run');
+  // Both limits: five lane calls used of six, checkpoint 2. The daily limit comes first and names itself.
+  const ledger = path.join(tmp('led'), 'ledger.jsonl');
+  writeFileSync(ledger, Array.from({ length: 5 }, () => laneRow({})).join(''));
+  const j2 = fakeJudge([REAL()]);
+  const both = setup(b, { rows, extra: ['--label', '--daily-calls', '6', '--stop-after', '2'], deps: { judge: j2, ledgerPath: ledger } });
+  const r2 = await run(both.argv.filter((a) => a !== '--json'), both.deps);
+  assert.equal(r2.code, 0, r2.err);
+  assert.equal(j2.prompts.length, 1);
+  assert.deepEqual(stopLines(r2.out), ['labelling stopped: daily limit reached (6)']);
+  const j3 = fakeJudge([REAL()]);
+  const ck = setup(b, { rows, extra: ['--label', '--stop-after', '1'], deps: { judge: j3 } });
+  const r3 = await run(ck.argv.filter((a) => a !== '--json'), ck.deps);
+  assert.equal(r3.code, 0, r3.err);
+  assert.deepEqual(stopLines(r3.out), ['labelling stopped: stopped after 1 calls (checkpoint)']);
+});
+
+test('P04: a shared-cap refusal of the runner is a failed batch, stops further calls, takes no lane slot, and prints the shared-cap line; defaultJudge passes no cap of its own (breaks if the cap refusal is retried, hidden or bypassed)', async () => {
+  const b = twoHuge();
+  const rows = [escRow(b, { fixPr: 12, blamedPr: 11 })];
+  const calls = [];
+  const runner = async (prompt, opts) => { calls.push(opts); return { ok: false, reason: 'cap', count: 30 }; };
+  const ledgerPath = path.join(tmp('led'), 'ledger.jsonl');
+  const judge = szz.defaultJudge({ ledgerPath, now: () => NOW }, runner);
+  const s = setup(b, { rows, extra: ['--label', '--daily-calls', '99'], deps: { judge, ledgerPath } });
+  const json = JSON.parse((await run(s.argv, s.deps)).out);
+  assert.equal(calls.length, 1, 'no call after the cap refusal');
+  assert.equal(Object.hasOwn(calls[0], 'cap'), false, '--daily-calls never reaches the shared cap');
+  assert.equal(json.failed.label, 1, JSON.stringify(json.failed));
+  assert.deepEqual([json.labelled, json.labelCalls.used, json.labelCalls.stop], [0, 0, 'shared-cap']);
+  calls.length = 0;
+  const text = await run(s.argv.filter((a) => a !== '--json'), s.deps);
+  assert.equal(text.code, 0, text.err);
+  assert.deepEqual(stopLines(text.out), ['labelling stopped: shared headless cap reached (30)']);
 });
 
 test('R13: reportPathProblem allows .claudedocs and .claude/cache/e2e of the repo, and refuses the rest of the repo, the gold dir and the state dir (breaks if an allowed folder is refused or a repo path passes)', () => {
@@ -1086,6 +1242,15 @@ test('R18: the text report shows the failed control round reads (breaks if round
   const r = await run(s.argv.filter((a) => a !== '--json'), s.deps);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /round failed \d+/);
+});
+
+test('R18b: the text report names the group 2 start and the merged-head count in the controls line, and the merged-head note (breaks if the line or the note is dropped)', async () => {
+  const b = small();
+  const s = setup(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })] });
+  const r = await run(s.argv.filter((a) => a !== '--json'), s.deps);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /^controls: group1 \d+, group2 \d+ \(from 06-01\), merged head without round \d+, no merged head \d+, removed blamed \d+, /m);
+  assert.match(r.out, /a control with no CodeRabbit round uses its merged head \(Dave, 2026-11-14\)/);
 });
 
 test('R19: a written file that is not byte-equal to its staged content rolls back all three files (breaks if the byte check runs after the old files are gone)', async () => {

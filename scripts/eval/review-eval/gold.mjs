@@ -4,10 +4,12 @@
 // Row fields: id, source 'A'|'B'|'C'|'CR', suite 'regression'|'capability', split 'dev'|'holdout'|'reserve',
 //   target {pr, round, sha40, repo?} | {range: 'base..head'}, file, line?, severity, linkType,
 //   labels [{by, verdict, judgeVersion?}], provenance, slice? ('security').
-// Optional: `line`, `slice`, `labels[].judgeVersion`, and `target.repo` only on the PR form. No field is nullable.
+// Optional: `line`, `slice`, `labels[].judgeVersion`, and `target.repo` only on the PR form. No field is nullable, except a control's target.round (below).
 // `target.repo` is 'owner/name': required when source is 'C', refused for A, B and CR. The range form never has it.
 // Clean controls (gold/clean-controls.json, read by loadCleanControls): {id, split, target, provenance}.
 //   The target has the same two forms as a gold row; repo is refused (a control is one of our own PRs, map.md:678).
+//   One exception (Dave, 2026-11-14): a control may have round null when provenance.head is 'merged-head-no-round'
+//   (no CodeRabbit round on its merged head). Its sha40 is still required and checked. A gold row never has round null.
 // `target.repo` is lower case only, with no `.git` suffix and no leading or trailing `.` or `-` in a part: this module
 //   refuses a second spelling of one repository and never folds it (the producer folds before it writes).
 // A file name with `.json` in another case, or a case variant of clean-controls.json or escape-baseline.json, is a problem.
@@ -137,12 +139,17 @@ function checkRepo(t, rule) {
   return repoOk(t.repo) ? [] : bad('target.repo', `${kind(t.repo)}, expected ${REPO_WHAT}`);
 }
 
-function checkPrForm(t, rule) {
+/** The provenance marker of a control on its merged head. Only such a control may have round null. */
+const MERGED_HEAD = 'merged-head-no-round';
+const onMergedHead = (c) => isPlain(c?.provenance) && c.provenance.head === MERGED_HEAD;
+
+/** nullRound: round null is allowed (a merged-head control only). */
+function checkPrForm(t, rule, nullRound) {
   return [
     ...checkKeys(t, [...PR_KEYS, 'repo'], PR_KEYS, 'target'),
     ...checkRepo(t, rule),
     ...('pr' in t ? checkInt(t.pr, 'target.pr') : []),
-    ...('round' in t ? checkInt(t.round, 'target.round') : []),
+    ...('round' in t && !(nullRound && t.round === null) ? checkInt(t.round, 'target.round') : []),
     ...('sha40' in t ? checkPattern(t.sha40, SHA_RE, 'target.sha40', '40 lowercase hex characters') : []),
   ];
 }
@@ -153,11 +160,11 @@ function checkRangeForm(t, prKeys, rule) {
   return [...head, ...checkKeys(t, ['range'], ['range'], 'target'), ...checkRange(t.range)];
 }
 
-function checkTarget(t, rule) {
+function checkTarget(t, rule, nullRound = false) {
   if (!isPlain(t)) return ['target: expected an object'];
   const prKeys = PR_KEYS.filter((k) => Object.hasOwn(t, k));
   if (Object.hasOwn(t, 'range')) return checkRangeForm(t, prKeys, rule);
-  return prKeys.length ? checkPrForm(t, rule) : bad('target', FORMS);
+  return prKeys.length ? checkPrForm(t, rule, nullRound) : bad('target', FORMS);
 }
 
 function checkLabel(l, where) {
@@ -203,7 +210,7 @@ const FIELD_RULES = {
 const CONTROL_RULES = {
   id: idRule,
   split: splitRule,
-  target: (v) => checkTarget(v, 'refused'),
+  target: (v, c) => checkTarget(v, 'refused', onMergedHead(c)),
   provenance: checkProvenance,
 };
 

@@ -25,7 +25,8 @@ import { GOLD_DIR, GoldError, SEVERITIES, loadCleanControls, validateRow } from 
 import { crRounds, defaultGh } from './github.mjs';
 import { VERDICTS } from './labels.mjs';
 
-export const SZZ_DAILY_CALLS = 6;
+/** The default daily limit of the lane's judge calls (Dave's pace decision). --daily-calls sets another for one run. */
+export const SZZ_DAILY_CALLS = 30;
 export const BATCH_SIZE = 10;
 /** A hunk longer than this (in characters) goes in a judge call of its own. */
 export const HUNK_LIMIT = 6000;
@@ -43,7 +44,8 @@ export const LEDGER_TAG = 'szz-miner';
 /** A judge call may carry 10 pairs or one oversize hunk: more time than the default 180 s. */
 const JUDGE_TIMEOUT_MS = 300_000;
 const DAY = 86_400_000;
-const GROUP2_FROM = '2026-08-01T00:00:00Z';
+// Dave 2026-11-14: widen both ways, target 30 controls.
+const GROUP2_FROM = '2026-06-01T00:00:00Z';
 const GROUP2_UNTIL = '2026-10-06T23:59:59Z';
 const BANDS = ['LOW', 'MID', 'ELEVATED', 'HIGH', 'CRITICAL'];
 const LABEL_CACHE = 'szz-labels.jsonl';
@@ -301,10 +303,12 @@ const inWindow = (m, fix) => m.mergeSha !== fix.mergeSha && Date.parse(m.mergedA
  * The clean controls. Group 1: the dataset PRs with no finding at all. Group 2: PRs merged in the control window.
  * A PR is removed (first rule that matches): blamed by any escape row; merged within 30 days before a fix PR that failed (failedFixShas);
  * merged within 30 days before a fix PR with no target that touches a file of it (noTargetFixShas; unknown files remove it: fail closed).
- * A PR with no CodeRabbit round on its head is dropped and counted (noRound). merges: [{ pr, mergeSha, mergedAt }] in history order.
+ * A PR with no CodeRabbit round on its head is kept on its merged head (round null, counted noRoundHead); with no merged head it is
+ * dropped (noHead). A failed round read drops it (roundFailed). headOf(m): the merged head from git, or null.
+ * merges: [{ pr, mergeSha, mergedAt }] in history order.
  */
-export async function buildControls({ datasetPrs, merges, escapeRows, failedFixShas, noTargetFixShas, filesOf, roundOf, cfg, from = GROUP2_FROM, until = GROUP2_UNTIL }) {
-  const counts = { group1: 0, group2: 0, removedBlamed: 0, removedFailedFix: 0, removedUnmappedFix: 0, noRound: 0, roundFailed: 0, notOnMain: 0, total: 0 };
+export async function buildControls({ datasetPrs, merges, escapeRows, failedFixShas, noTargetFixShas, filesOf, roundOf, headOf, cfg, from = GROUP2_FROM, until = GROUP2_UNTIL }) {
+  const counts = { group1: 0, group2: 0, removedBlamed: 0, removedFailedFix: 0, removedUnmappedFix: 0, noRoundHead: 0, noHead: 0, roundFailed: 0, notOnMain: 0, total: 0 };
   const ruleOf = controlRule({ merges, escapeRows, failedFixShas, noTargetFixShas, filesOf });
   const byPr = new Map(merges.map((m) => [m.pr, m]));
   const group1 = [...new Set(datasetPrs)].flatMap((pr) => { if (byPr.has(pr)) return [byPr.get(pr)]; counts.notOnMain += 1; return []; });
@@ -315,10 +319,10 @@ export async function buildControls({ datasetPrs, merges, escapeRows, failedFixS
     for (const m of list) {
       const rule = ruleOf(m);
       if (rule) { counts[rule] += 1; continue; }
-      const round = await roundFor(roundOf, m, counts);
-      if (!round) continue;
+      const t = await targetFor({ roundOf, headOf }, m, counts);
+      if (!t) continue;
       counts[group] += 1;
-      controls.push({ id: stableId('K', [m.mergeSha]), split: setOf(m.pr, cfg), target: { pr: m.pr, round: round.round, sha40: round.sha40 }, provenance: { why } });
+      controls.push({ id: stableId('K', [m.mergeSha]), split: setOf(m.pr, cfg), target: t.target, provenance: t.head ? { why, head: t.head } : { why } });
     }
   }
   counts.total = controls.length;
@@ -341,16 +345,24 @@ function controlRule({ merges, escapeRows, failedFixShas, noTargetFixShas, files
   };
 }
 
-/** The round of a control, or null. No round counts as noRound; a failed read counts as roundFailed (a failure is never "no round"). */
-async function roundFor(roundOf, m, counts) {
-  try {
-    const round = await roundOf(m.pr, m);
-    if (!round) counts.noRound += 1;
-    return round;
-  } catch {
-    counts.roundFailed += 1;
-    return null;
-  }
+const SHA40_RE = /^[0-9a-f]{40}$/;
+/** The provenance marker of a control on its merged head. gold.mjs allows round null only with it. */
+const MERGED_HEAD = 'merged-head-no-round';
+
+/**
+ * The target of a control: { target, head? } or null (dropped). A failed round read counts as roundFailed: a failure is never
+ * "no round", and no merged head is read for it (fail closed).
+ */
+async function targetFor({ roundOf, headOf }, m, counts) {
+  let round;
+  try { round = await roundOf(m.pr, m); } catch { counts.roundFailed += 1; return null; }
+  if (round) return { target: { pr: m.pr, round: round.round, sha40: round.sha40 } };
+  // Dave 2026-11-14: widen both ways, target 30 controls. No round: the merged head from git (first-parent merge ^2), never from gh.
+  let head;
+  try { head = headOf(m); } catch { head = null; }
+  if (typeof head !== 'string' || !SHA40_RE.test(head)) { counts.noHead += 1; return null; }
+  counts.noRoundHead += 1;
+  return { target: { pr: m.pr, round: null, sha40: head }, head: MERGED_HEAD };
 }
 
 // ---------- baseline and output checks ----------
@@ -609,18 +621,36 @@ async function labelStage(cands, ctx) {
   // Known limit: two runs can still race between this count and the ledger append in runJudge. Run one miner at a time.
   const own = [];
   const usedNow = () => laneCallsToday([...readHeadlessLedger(ctx.ledgerPath).entries, ...own], ctx.now());
-  const slot = { used: usedNow(), max: SZZ_DAILY_CALLS, stopped: false };
+  const max = ctx.args.dailyCalls ?? SZZ_DAILY_CALLS;
+  const slot = { used: usedNow(), max, stopped: false };
   if (!ctx.args.label) return slot;
   for (const batch of batchItems(cleanItems(cands.filter((c) => !c.label), ctx))) {
-    if (usedNow() >= SZZ_DAILY_CALLS) { slot.stopped = true; break; }
+    const limit = limitReached(usedNow(), max, own.length, ctx.args.stopAfter);
+    if (limit) { Object.assign(slot, limit); break; }
     const call = { phase: 'start', purpose: 'eval-judge', sessionId: `${LEDGER_TAG}:this-run`, ts: new Date(ctx.now()).toISOString(), id: `this-run-${own.length + 1}` };
     // The second check: the whole built prompt. A refused prompt makes no call, so it takes no slot. Its pairs stay unlabelled.
     const sent = await sendGuarded(judgePrompt(batch, ctx.leak), ctx.leak, (prompt) => { own.push(call); return ctx.judge(prompt); });
-    if (sent.refused) bump(ctx.stats.failed, 'prompt-guard');
-    else if (!keepAnswers(batch, sent.res, ctx, call)) bump(ctx.stats.failed, 'label');
+    if (sent.refused) { bump(ctx.stats.failed, 'prompt-guard'); continue; }
+    if (!keepAnswers(batch, sent.res, ctx, call)) bump(ctx.stats.failed, 'label');
+    // The shared headless cap (scripts/lib/headless.mjs) refused the run: no call was made, so it takes no slot. Stop: every next call is refused too.
+    if (sent.res?.reason === 'cap') { own.splice(own.indexOf(call), 1); Object.assign(slot, { stopped: true, stop: 'shared-cap', stopCount: sent.res.count ?? null }); break; }
   }
   slot.used = usedNow();
   return slot;
+}
+
+/** The limit that stops the next call, or null: the daily limit of the lane first, then the checkpoint of this run (--stop-after). */
+function limitReached(used, max, ownCalls, stopAfter) {
+  if (used >= max) return { stopped: true, stop: 'daily-limit', stopCount: max };
+  if (stopAfter !== undefined && ownCalls >= stopAfter) return { stopped: true, stop: 'checkpoint', stopCount: stopAfter };
+  return null;
+}
+
+/** The stop line of the label stage. It names the limit and its count. */
+function stopText(lc) {
+  if (lc.stop === 'checkpoint') return `stopped after ${lc.stopCount} calls (checkpoint)`;
+  if (lc.stop === 'shared-cap') return `shared headless cap reached (${lc.stopCount ?? 'count unknown'})`;
+  return `daily limit reached (${lc.stopCount})`;
 }
 
 /**
@@ -760,11 +790,13 @@ async function controlsStage(args, deps, env, history, blamed, stats) {
   const failedFixShas = new Set(perPr.filter((p) => FAILURE_REASONS.includes(p.noTarget)).map((p) => p.mergeSha));
   const noTargetFixShas = new Set([...perPr.filter((p) => p.fix === true && p.rows?.length === 0 && NO_TARGET_REASONS.includes(p.noTarget)).map((p) => p.mergeSha), ...stats.unmappedFixes]);
   const filesOf = (sha) => { const r = env.git(['diff', '--name-only', `${sha}^1`, sha]); return r.status === 0 ? lines(r.stdout) : null; };
+  // The merged head: the second parent of the first-parent merge, from git (headsOf). Never a sha that gh names.
+  const headOf = (m) => heads.get(m.mergeSha) ?? null;
   const roundOf = async (pr, m) => {
-    const rank = (await crRounds(pr, { gh: env.gh, repo: env.repo })).findIndex((r) => r.sha40 === heads.get(m.mergeSha)) + 1;
-    return rank ? { round: rank, sha40: heads.get(m.mergeSha) } : null;
+    const rank = (await crRounds(pr, { gh: env.gh, repo: env.repo })).findIndex((r) => r.sha40 === headOf(m)) + 1;
+    return rank ? { round: rank, sha40: headOf(m) } : null;
   };
-  const built = await buildControls({ datasetPrs: dataset.prs, merges, escapeRows: blamed, failedFixShas, noTargetFixShas, filesOf, roundOf, cfg: deps.cfg });
+  const built = await buildControls({ datasetPrs: dataset.prs, merges, escapeRows: blamed, failedFixShas, noTargetFixShas, filesOf, roundOf, headOf, cfg: deps.cfg });
   return { ...built, fixChainsGiven: Array.isArray(fixChains?.perPr), datasetOk: dataset.ok };
 }
 
@@ -806,8 +838,8 @@ function reportOf(stats, cands, rows, slot, controls, args) {
     goldRows: rows.length, counted: counted.length,
     countedBySplit: tally(counted, (c) => rowOf(c).split), countedBySuite: tally(counted, (c) => rowOf(c).suite), countedByBand: tally(counted, (c) => c.band),
     yield: tally(counted, (c) => c.cause),
-    labelCalls: { used: slot.used, max: slot.max, ...(slot.stopped ? { stopped: true } : {}) },
-    controls: controls.counts, baseline: null, primaryOnly: Boolean(args.primaryOnly), notes: [NOTES.oneFamily, NOTES.reviewBody, NOTES.oneRun, NOTES.goldLines, NOTES.diffCut, NOTES.shortTitles], written: [],
+    labelCalls: { used: slot.used, max: slot.max, ...(slot.stopped ? { stopped: true, stop: slot.stop, stopCount: slot.stopCount } : {}) },
+    controls: controls.counts, baseline: null, primaryOnly: Boolean(args.primaryOnly), notes: [NOTES.oneFamily, NOTES.reviewBody, NOTES.oneRun, NOTES.goldLines, NOTES.diffCut, NOTES.shortTitles, NOTES.group2From, NOTES.mergedHead], written: [],
   };
 }
 
@@ -818,6 +850,8 @@ const NOTES = {
   goldLines: 'the judge prompt shows gold line numbers by design',
   diffCut: 'the fix diff is cut to the hunks near the blamed lines',
   shortTitles: `titles under ${TITLE_MIN} characters are not guarded (named limit)`,
+  group2From: 'group 2 starts 2026-06-01 (Dave, 2026-11-14)',
+  mergedHead: 'a control with no CodeRabbit round uses its merged head (Dave, 2026-11-14)',
 };
 
 function textReport(rep) {
@@ -831,8 +865,9 @@ function textReport(rep) {
     `gold rows (real): ${rep.goldRows}`, `counted (real, major or critical): ${rep.counted}`,
     `counted by split: ${kv(rep.countedBySplit)}`, `counted by suite: ${kv(rep.countedBySuite)}`, `counted by risk band: ${kv(rep.countedByBand)}`,
     `yield (counted, by cause): ${kv(rep.yield)}`,
-    `label calls today: ${rep.labelCalls.used} of ${rep.labelCalls.max}${rep.labelCalls.stopped ? ' (slot used up, labelling stopped)' : ''}`,
-    `controls: group1 ${c.group1}, group2 ${c.group2}, removed blamed ${c.removedBlamed}, removed near a failed fix ${c.removedFailedFix}, removed near an unmapped fix ${c.removedUnmappedFix}, no round ${c.noRound}, round failed ${c.roundFailed}, not on main ${c.notOnMain}, total ${c.total}`,
+    `label calls today: ${rep.labelCalls.used} of ${rep.labelCalls.max}`,
+    ...(rep.labelCalls.stopped ? [`labelling stopped: ${stopText(rep.labelCalls)}`] : []),
+    `controls: group1 ${c.group1}, group2 ${c.group2} (from 06-01), merged head without round ${c.noRoundHead}, no merged head ${c.noHead}, removed blamed ${c.removedBlamed}, removed near a failed fix ${c.removedFailedFix}, removed near an unmapped fix ${c.removedUnmappedFix}, round failed ${c.roundFailed}, not on main ${c.notOnMain}, total ${c.total}`,
     `baseline copy: ${rep.baseline}`,
     ...rep.notes,
   ];
@@ -886,9 +921,13 @@ function writeStage(run, dirs, args, deps) {
 const USAGE = [
   'usage: node scripts/eval/review-eval/mine-szz.mjs [--since <iso>] [--state-dir <dir>] [--gold-dir <dir>] [--label] [--allow-label-cache-write] [--write]',
   '       [--open-bug <file>:<line> ... --open-bug-note <text>] [--primary-only] [--fix-chains-json <file>] [--dataset <file>] [--records-dir <dir>]',
-  '       [--repo owner/name] [--ref <ref>] [--report <file>] [--json] [--allow-partial]',
+  '       [--repo owner/name] [--ref <ref>] [--report <file>] [--json] [--allow-partial] [--daily-calls <n>] [--stop-after <n>]',
   '  Without --write it is a dry run: it reads git, gh and the state dir and writes no file.',
-  '  --label asks the judge (Opus, effort high) for labels, at most 6 calls a Chicago day, 10 pairs a call. It never runs without this flag.',
+  `  --label asks the judge (Opus, effort high) for labels, at most ${SZZ_DAILY_CALLS} calls a Chicago day, 10 pairs a call. It never runs without this flag.`,
+  '  --daily-calls <n> sets the daily limit of this lane for the run (a positive integer). The shared headless cap of',
+  '  scripts/lib/headless.mjs still applies: its refusal fails the batch and stops the run ("shared headless cap reached").',
+  '  --stop-after <n> stops labelling after n judge calls of this run (a checkpoint). The labels of those calls are kept.',
+  '  The first limit reached stops the run; the report names it and its count.',
   '  --allow-label-cache-write keeps the labels in <state-dir>/szz-labels.jsonl. Without it a --label run keeps nothing.',
   '  The judge prompt shows gold line numbers by design. The fix diff is cut to the hunks near the blamed lines (lineSlack of config.json).',
   '  The judge prompt holds no fix subject. Fix sha prefixes are masked. Each item is guarded alone before the batching: an item that',
@@ -903,7 +942,9 @@ const USAGE = [
   '  The report holds counts only: no PR number, file name or line.',
 ].join('\n');
 
-const VALUE_FLAGS = { '--since': 'since', '--state-dir': 'stateDir', '--gold-dir': 'goldDir', '--report': 'report', '--dataset': 'dataset', '--fix-chains-json': 'fixChainsJson', '--open-bug-note': 'openBugNote', '--repo': 'repo', '--ref': 'ref', '--records-dir': 'recordsDir' };
+const VALUE_FLAGS = { '--since': 'since', '--state-dir': 'stateDir', '--gold-dir': 'goldDir', '--report': 'report', '--dataset': 'dataset', '--fix-chains-json': 'fixChainsJson', '--open-bug-note': 'openBugNote', '--repo': 'repo', '--ref': 'ref', '--records-dir': 'recordsDir', '--daily-calls': 'dailyCalls', '--stop-after': 'stopAfter' };
+/** The value flags that take a positive integer. checkArgs turns each into a number. */
+const COUNT_FLAGS = { '--daily-calls': 'dailyCalls', '--stop-after': 'stopAfter' };
 const BOOL_FLAGS = { '--label': 'label', '--allow-label-cache-write': 'allowLabelCacheWrite', '--write': 'write', '--allow-partial': 'allowPartial', '--json': 'json', '--primary-only': 'primaryOnly', '--help': 'help', '-h': 'help' };
 
 function parseOpenBug(text) {
@@ -929,6 +970,12 @@ function checkArgs(out) {
   if (out.since !== undefined && !Number.isFinite(Date.parse(out.since))) return { error: `--since ${JSON.stringify(out.since)} is not a date` };
   if (out.openBugs.length && !out.openBugNote) return { error: '--open-bug needs --open-bug-note (the defect text of the card)' };
   if (out.ref?.startsWith('-')) return { error: `--ref ${JSON.stringify(out.ref)} is not a usable git ref` };
+  for (const [flag, key] of Object.entries(COUNT_FLAGS)) {
+    if (out[key] === undefined) continue;
+    const n = /^[1-9]\d*$/.test(out[key]) ? Number(out[key]) : NaN;
+    if (!Number.isSafeInteger(n)) return { error: `${flag} ${JSON.stringify(out[key])} is not a positive integer` };
+    out[key] = n;
+  }
   return out;
 }
 
