@@ -38,6 +38,8 @@ import {
   applyBreakpoint,
   laneFactsFrom,
   carriedDecisionLines,
+  readBreakpoint,
+  FRESH_MS,
   MAX_FILE_CHARS,
   MAX_INJECT_CHARS,
   TYPED_HEADER,
@@ -326,6 +328,41 @@ describe('pruneOld: only its own old files in its own folder', () => {
   });
   it('does nothing for a folder that does not exist', () => {
     expect(pruneOld(path.join(os.tmpdir(), 'bp-nope-' + Date.now()), Date.now())).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- seat review 12:27: a stale file must not be injected
+describe('readBreakpoint: only a fresh file (seat fix 1)', () => {
+  const SID = '4c4b5eb5-0b86-4552-af79-7c1a0a9f59ac';
+  const put = (ageMs: number) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bp-fresh-'));
+    const file = breakpointPath(home, SID)!;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '# Session breakpoint\n- [12:01Z] Q? -> A\n');
+    const t = new Date(Date.now() - ageMs);
+    fs.utimesSync(file, t, t);
+    return home;
+  };
+  it('uses a file written a minute ago', () => {
+    expect(readBreakpoint(put(60_000), SID)).toContain('Q? -> A');
+  });
+  it('ignores a file older than the freshness window (an earlier compact, a hook that timed out or is not registered)', () => {
+    expect(FRESH_MS).toBeLessThanOrEqual(15 * 60 * 1000);
+    expect(readBreakpoint(put(FRESH_MS + 60_000), SID)).toBeNull();
+    expect(readBreakpoint(put(3 * 24 * 3600 * 1000), SID)).toBeNull();
+  });
+  it('an ignored file gives today\'s context after a compact (fail open)', () => {
+    const ledger = '## Continuity ledger\n';
+    expect(applyBreakpoint('compact', ledger, readBreakpoint(put(2 * 3600 * 1000), SID))).toBe(ledger);
+  });
+});
+
+describe('UTC mark on the times (seat minor 2)', () => {
+  it('writes Z after the hh:mm of a decision and of a typed line', () => {
+    const text = buildBreakpoint(baseInput());
+    expect(text).toMatch(/- \[\d\d:\d\dZ\] .*->/);
+    expect(text).toMatch(/- \[\d\d:\d\dZ\] /);
+    expect(text).not.toMatch(/- \[\d\d:\d\d\] /);
   });
 });
 

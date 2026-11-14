@@ -796,10 +796,12 @@ function breakpointPath(home, sessionId) {
   if (typeof sessionId !== "string" || !SAFE_SESSION_ID.test(sessionId)) return null;
   return path3.join(home, ".claude", "state", "breakpoint", `${sessionId}.md`);
 }
-function readBreakpoint(home, sessionId) {
+var FRESH_MS = 10 * 60 * 1e3;
+function readBreakpoint(home, sessionId, nowMs = Date.now()) {
   const file = sessionId ? breakpointPath(home, sessionId) : null;
   if (!file) return null;
   try {
+    if (nowMs - fs4.statSync(file).mtimeMs > FRESH_MS) return null;
     return fs4.readFileSync(file, "utf8");
   } catch {
     return null;

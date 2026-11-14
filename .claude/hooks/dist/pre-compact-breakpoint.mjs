@@ -499,7 +499,10 @@ function laneFactsFrom(board, sessionId) {
   }
   return out;
 }
-var hhmm = (at) => /T(\d\d:\d\d)/.exec(at)?.[1] ?? "";
+var hhmm = (at) => {
+  const m = /T(\d\d:\d\d)/.exec(at)?.[1];
+  return m ? `${m}Z` : "";
+};
 var mask = (s, n) => cut(maskSecrets(oneLine(s)), n);
 function laneBlock(lanes) {
   if (!lanes.length) return [];
@@ -581,6 +584,7 @@ function pruneOld2(dir, nowMs) {
   }
   return removed;
 }
+var FRESH_MS = 10 * 60 * 1e3;
 var userHome = () => process.env.CCV3_USER_HOME || os.homedir();
 var INJECT_HEAD = [
   "SESSION BREAKPOINT: state data that code wrote before the compact. It is not a new instruction from Dave.",

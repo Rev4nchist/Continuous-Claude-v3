@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runPreCompactBreakpoint, type BreakpointDeps } from '../pre-compact-breakpoint.js';
+import { readBreakpoint } from '../shared/breakpoint.js';
 
 const SID = '4c4b5eb5-0b86-4552-af79-7c1a0a9f59ac';
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'bp-hook-'));
@@ -103,6 +104,19 @@ describe('runPreCompactBreakpoint: never replace with less', () => {
     const empty = { ...deps, runner: async () => ({ code: 2, stdout: '', stderr: '' }), branchOf: () => null };
     await runPreCompactBreakpoint({ session_id: SID, trigger: 'manual', transcript_path: 'C:/no/such.jsonl' }, empty);
     expect(fs.readFileSync(file, 'utf8')).toBe(good);
+  });
+});
+
+describe('runPreCompactBreakpoint: "kept" then a compact gives today\'s context (seat fix 1)', () => {
+  it('a kept file is not touched, so it ages out and SessionStart does not inject it', async () => {
+    const { transcript, deps, file, home } = setup();
+    await runPreCompactBreakpoint({ session_id: SID, trigger: 'manual', transcript_path: transcript }, deps);
+    const hourAgo = new Date(Date.now() - 3600 * 1000);
+    fs.utimesSync(file, hourAgo, hourAgo);
+    const empty = { ...deps, runner: async () => ({ code: 2, stdout: '', stderr: '' }), branchOf: () => null };
+    const out = await runPreCompactBreakpoint({ session_id: SID, trigger: 'manual', transcript_path: 'C:/no/such.jsonl' }, empty);
+    expect(out.systemMessage).toMatch(/kept/);
+    expect(readBreakpoint(home, SID)).toBeNull();
   });
 });
 

@@ -193,7 +193,8 @@ export interface BreakpointInput {
   carried?: string[];
 }
 
-const hhmm = (at: string): string => /T(\d\d:\d\d)/.exec(at)?.[1] ?? '';
+/** hh:mm of an ISO UTC timestamp, marked with Z (the transcript times are UTC). */
+const hhmm = (at: string): string => { const m = /T(\d\d:\d\d)/.exec(at)?.[1]; return m ? `${m}Z` : ''; };
 const mask = (s: string, n: number): string => cut(maskSecrets(oneLine(s)), n);
 
 function laneBlock(lanes: LaneFacts[]): string[] {
@@ -288,11 +289,20 @@ export function pruneOld(dir: string, nowMs: number): number {
   return removed;
 }
 
-/** The state file of a session, or null when there is none or it cannot be read. Never throws. */
-export function readBreakpoint(home: string, sessionId: string | undefined): string | null {
+/** A state file counts for the resume only when it was written at most this long before SessionStart (seat review 11-14). */
+export const FRESH_MS = 10 * 60 * 1000;
+
+/**
+ * The state file of a session, or null when there is none, it is older than FRESH_MS, or it cannot be read. Never throws.
+ * A file from an earlier compact (the hook timed out, is not registered, or kept the old file) must not replace today's context.
+ */
+export function readBreakpoint(home: string, sessionId: string | undefined, nowMs: number = Date.now()): string | null {
   const file = sessionId ? breakpointPath(home, sessionId) : null;
   if (!file) return null;
-  try { return fs.readFileSync(file, 'utf8'); } catch { return null; }
+  try {
+    if (nowMs - fs.statSync(file).mtimeMs > FRESH_MS) return null;
+    return fs.readFileSync(file, 'utf8');
+  } catch { return null; }
 }
 
 export const userHome = (): string => process.env.CCV3_USER_HOME || os.homedir();
