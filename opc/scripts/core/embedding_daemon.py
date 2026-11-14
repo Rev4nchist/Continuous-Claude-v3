@@ -57,6 +57,7 @@ import concurrent.futures as _cf
 import json
 import math
 import os
+import queue
 import signal
 import socket
 import socketserver
@@ -182,10 +183,8 @@ def embed(text: str, model: Any | None = None) -> list[float]:
     if model is None:
         model = load_model()
     # The model is NOT thread-safe for concurrent ``encode`` on the same
-    # instance (PyTorch model state, ndarray reuse, etc.). The daemon
-    # serialises calls via _MODEL_LOCK below; here we just compute.
-    # NOTE: parallel embed_batch calls from different threads will queue up
-    # at the lock in the daemon path; that's intentional.
+    # instance (PyTorch model state, ndarray reuse, etc.). The daemon runs
+    # every call on its one encode thread under _EMBED_CALL_LOCK; here we just compute.
     vec = model.encode(text, convert_to_numpy=True).tolist()
     return vec
 
@@ -237,6 +236,151 @@ def _run_oneshot() -> int:
 # thread-safe for concurrent inference on the same model instance. Same
 # lesson kraken hit on the Phase 2 rerank daemon.
 _EMBED_CALL_LOCK = threading.Lock()
+
+# ONE long-lived encode thread (embedding-daemon-commit-leak, 2026-11-13).
+# ROOT CAUSE: socketserver.ThreadingTCPServer runs each request on a NEW thread. torch runs its
+# CPU kernels on OpenMP (MSVC vcomp, 14 threads here), which builds a thread team for EVERY
+# calling thread and never frees it when that thread exits. Each request left a 13-thread team
+# with committed buffers behind: the live daemon reached 97.3 GB of private commit in about
+# 36 hours (working set 1.7 GB). Measured: 200 encodes on fresh threads took the process from
+# 46 to 2667 threads; on one thread it stayed flat (.claudedocs/e2e-embedding-daemon-commit-leak/).
+# So every model.encode of the daemon runs on this one thread, and torch keeps one team for the
+# life of the process. ping and shutdown never go through it, so a hung encode cannot block them.
+ENCODE_WAIT_S = 120.0
+MODEL_LOAD_WAIT_S = 600.0
+# A plain DAEMON thread on a queue, not a ThreadPoolExecutor: Python joins executor workers at
+# interpreter exit BEFORE atexit runs, so one hung encode kept the process, its commit and the
+# startup lock alive forever with no discovery file (found 2026-11-14). A daemon thread is
+# never joined, and atexit still releases the startup lock.
+_ENCODE_QUEUE: queue.SimpleQueue[tuple[_cf.Future[Any], Any]] = queue.SimpleQueue()
+_ENCODE_THREAD: threading.Thread | None = None
+_ENCODE_THREAD_LOCK = threading.Lock()
+
+
+def _encode_worker() -> None:
+    """Run queued encode jobs one by one, forever. Skip a cancelled job (its caller gave up)."""
+    while True:
+        fut, fn = _ENCODE_QUEUE.get()
+        if not fut.set_running_or_notify_cancel():
+            continue
+        try:
+            with _EMBED_CALL_LOCK:
+                result = fn()
+        except BaseException as exc:  # noqa: BLE001 — hand every error to the caller, keep the thread
+            fut.set_exception(exc)
+        else:
+            fut.set_result(result)
+
+
+def _submit_encode(fn: Any) -> _cf.Future[Any]:
+    """Queue ``fn()`` for the one encode thread (started on first use) and return its future."""
+    global _ENCODE_THREAD
+    with _ENCODE_THREAD_LOCK:
+        if _ENCODE_THREAD is None or not _ENCODE_THREAD.is_alive():
+            _ENCODE_THREAD = threading.Thread(
+                target=_encode_worker, name="ccv3-encode", daemon=True
+            )
+            _ENCODE_THREAD.start()
+    fut: _cf.Future[Any] = _cf.Future()
+    _ENCODE_QUEUE.put((fut, fn))
+    return fut
+
+
+def _on_encode_thread(fn: Any, *args: Any, timeout: float = ENCODE_WAIT_S) -> Any:
+    """Run ``fn(*args)`` on the encode thread under _EMBED_CALL_LOCK and return its result.
+
+    Raises fn's own exception, or concurrent.futures.TimeoutError after ``timeout`` seconds. On a
+    timeout a job that has not started is cancelled, so it never runs for a caller that has left.
+    """
+    fut = _submit_encode(lambda: fn(*args))
+    try:
+        return fut.result(timeout=timeout)
+    except _cf.TimeoutError:
+        fut.cancel()
+        raise _cf.TimeoutError(f"encode_timeout after {timeout:g} s") from None
+
+
+def _daemon_embed(text: str, timeout: float = ENCODE_WAIT_S) -> list[float]:
+    """``embed`` on the encode thread. ``embed`` is looked up at call time (tests patch it)."""
+    return _on_encode_thread(lambda: embed(text, model=None), timeout=timeout)
+
+
+def _daemon_embed_batch(texts: list[str]) -> list[list[float]]:
+    """``embed_batch`` on the encode thread."""
+    return _on_encode_thread(lambda: embed_batch(texts, model=None))
+
+
+# Set by a drain (commit-ceiling exit, shutdown, signal): the daemon admits no new encode work and
+# ping reports not ready.
+_DRAINING = threading.Event()
+# Requests in work (embed, embed_batch, recall). Admission checks _DRAINING and counts in ONE
+# critical section, and a request ends only after its reply is sent. So a drain that waits for
+# zero never cuts a request in work: not a recall that is past its embed and still in do_recall,
+# and not a request that passed the drain check but has not yet queued its encode.
+_INFLIGHT = 0
+_INFLIGHT_COND = threading.Condition()
+_INFLIGHT_UNDERFLOW_LOGGED = False
+
+
+def _admit_request() -> bool:
+    """Count one request in, unless the daemon drains. True when admitted (then _end_request)."""
+    global _INFLIGHT
+    with _INFLIGHT_COND:
+        if _DRAINING.is_set():
+            return False
+        _INFLIGHT += 1
+        return True
+
+
+def _end_request() -> None:
+    """Count one admitted request out. An end without an admit is a bug: it is logged once."""
+    global _INFLIGHT, _INFLIGHT_UNDERFLOW_LOGGED
+    with _INFLIGHT_COND:
+        if _INFLIGHT <= 0:
+            if not _INFLIGHT_UNDERFLOW_LOGGED:
+                _INFLIGHT_UNDERFLOW_LOGGED = True
+                _log("request count went below zero (an end without an admit)")
+            _INFLIGHT = 0
+        else:
+            _INFLIGHT -= 1
+        _INFLIGHT_COND.notify_all()
+
+
+def _log(message: str) -> None:
+    """One daemon log line on stderr. Never raises: a log write must not stop a drain or exit."""
+    try:
+        print(f"[embedding] daemon: {message}", file=sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _drain(timeout: float) -> bool:
+    """Stop admitting, then wait up to ``timeout`` for every admitted request to end.
+
+    Returns True when no request is left.
+    """
+    with _INFLIGHT_COND:
+        _DRAINING.set()
+        return _INFLIGHT_COND.wait_for(lambda: _INFLIGHT == 0, timeout=timeout)
+
+
+def _drain_then_stop(stop: Any, drain_s: float) -> bool:
+    """Drain, then call ``stop`` inline. ``stop`` runs even when the drain step raises.
+
+    Callers run it only on a thread the server does not serve (the watchdog, or a thread started
+    for a shutdown cmd or a signal), because ``server.shutdown`` waits for serve_forever to return.
+    It starts no thread, so it cannot fail for want of one under memory pressure.
+    Returns the drain result.
+    """
+    drained = False
+    try:
+        drained = _drain(drain_s)
+        if not drained:
+            _log(f"drain limit {drain_s:g} s reached with requests in work; stopping anyway")
+    finally:
+        if stop is not None:
+            stop()
+    return drained
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -440,12 +584,156 @@ def _recall_watchdog_tick(was_ready: bool) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Commit ceiling (embedding-daemon-commit-leak B'): a bound on ANY future leak.
+# ---------------------------------------------------------------------------
+# The watchdog reads the daemon's private commit every tick. Over the ceiling the daemon drains:
+# it takes no new encode work, removes its discovery file, lets each request in work end (or
+# CEILING_DRAIN_S pass), then shuts down. The startup lock is held until the process exits, so a
+# spawn during the drain (up to CEILING_DRAIN_S) exits at the lock and clients use their fallback;
+# the first spawn after the exit starts a fresh daemon.
+# A fresh daemon holds about 3 GB, so a ceiling under CEILING_FLOOR_MB would restart in a loop:
+# such a value, 0, or a value that is not a whole number falls back to the default with one log
+# line.
+COMMIT_CEILING_ENV = "CCV3_EMBED_COMMIT_CEILING_MB"
+COMMIT_CEILING_DEFAULT_MB = 8192
+CEILING_FLOOR_MB = 4096
+# No restart loop: the ceiling is at least the daemon's own size after warmup plus this margin,
+# and no ceiling exit happens in the first CEILING_MIN_UPTIME_S. Both live in memory only.
+CEILING_MARGIN_MB = 2048
+CEILING_MIN_UPTIME_S = 900.0
+# Longer than any request can take (encode wait + recall wait): a valid request always ends first.
+CEILING_DRAIN_S = ENCODE_WAIT_S + RECALL_TIMEOUT_S + 10.0
+# An explicit shutdown (cmd or signal) waits only a short time for requests in work: the operator
+# asked for the stop, so a request longer than this is cut. The no-cut rule is for the ceiling exit.
+SHUTDOWN_DRAIN_S = 10.0
+_SERVER: Any = None
+_CEILING_EXIT_STARTED = threading.Event()
+_CEILING_EXIT_LOCK = threading.Lock()
+_BASELINE_MB: int | None = None
+_STARTED_MONO: float | None = None
+_CEILING_READ_FAILED_LOGGED = False
+
+
+def _commit_ceiling_mb(env: Any = None) -> int:
+    """The ceiling in MB from COMMIT_CEILING_ENV, else the default. Logs once on a bad value."""
+    raw = (os.environ if env is None else env).get(COMMIT_CEILING_ENV)
+    if raw is None or str(raw).strip() == "":
+        return COMMIT_CEILING_DEFAULT_MB
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        value = None
+    if value is None or value < CEILING_FLOOR_MB:
+        _log(
+            f"{COMMIT_CEILING_ENV} is not a whole number of at least "
+            f"{CEILING_FLOOR_MB}; using {COMMIT_CEILING_DEFAULT_MB} MB"
+        )
+        return COMMIT_CEILING_DEFAULT_MB
+    return value
+
+
+def _private_commit_mb() -> int:
+    """This process's private commit in MB (psutil: PrivateUsage on Windows, uss elsewhere)."""
+    import psutil  # noqa: PLC0415  (only the daemon path needs it)
+
+    proc = psutil.Process()
+    private = getattr(proc.memory_info(), "private", None)
+    if private is None:
+        private = proc.memory_full_info().uss
+    return int(private // (1024 * 1024))
+
+
+def _os_thread_count() -> int:
+    try:
+        import psutil  # noqa: PLC0415
+
+        return int(psutil.Process().num_threads())
+    except Exception:  # noqa: BLE001
+        return -1
+
+
+def _effective_ceiling_mb(configured_mb: int, baseline_mb: int | None) -> int:
+    """The ceiling the watchdog uses: at least the size after warmup plus CEILING_MARGIN_MB."""
+    if baseline_mb is None or baseline_mb <= 0:
+        return configured_mb
+    floor = int(baseline_mb) + CEILING_MARGIN_MB
+    if floor <= configured_mb:
+        return configured_mb
+    _log(
+        f"commit ceiling raised from {int(configured_mb)} MB to {floor} MB "
+        f"(baseline {int(baseline_mb)} MB after warmup)"
+    )
+    return floor
+
+
+def _begin_ceiling_exit(
+    size_mb: int, ceiling_mb: int, *, shutdown: Any = None, drain_s: float = CEILING_DRAIN_S
+) -> bool:
+    """Drain and stop the daemon once. A request in work ends (reply or timeout) before the stop.
+
+    The log line holds sizes and counts only: no request text, no database address.
+    Returns True when this call started the exit, False when one was already started.
+    """
+    with _CEILING_EXIT_LOCK:
+        if _CEILING_EXIT_STARTED.is_set():
+            return False
+        _CEILING_EXIT_STARTED.set()
+    stop = shutdown if shutdown is not None else (_SERVER.shutdown if _SERVER is not None else None)
+    # A ceiling exit that has started always ends in a stop, even if a step here raises (for
+    # example MemoryError under commit pressure): never a daemon that drains forever with the lock.
+    try:
+        _log(
+            f"commit ceiling: private {int(size_mb)} MB over {int(ceiling_mb)} MB; "
+            f"os threads {_os_thread_count()}; python threads {threading.active_count()}; "
+            "draining, then exiting"
+        )
+        _DRAINING.set()  # before the file goes: a client that still pings sees "not ready"
+        _delete_own_daemon_info()
+    finally:
+        _drain_then_stop(stop, drain_s)
+    return True
+
+
+def _ceiling_tick(
+    *,
+    read_mb: Any = None,
+    ceiling_mb: int | None = None,
+    begin_exit: Any = None,
+    uptime_s: float | None = None,
+) -> bool:
+    """One ceiling check. Never raises. Returns True when the exit was started by this tick."""
+    global _CEILING_READ_FAILED_LOGGED
+    try:
+        if uptime_s is not None and uptime_s < CEILING_MIN_UPTIME_S:
+            return False
+        limit = _commit_ceiling_mb() if ceiling_mb is None else ceiling_mb
+        try:
+            size = (read_mb or _private_commit_mb)()
+        except Exception as exc:  # noqa: BLE001
+            if not _CEILING_READ_FAILED_LOGGED:
+                _CEILING_READ_FAILED_LOGGED = True
+                _log(f"commit read failed ({type(exc).__name__}); the commit ceiling is off")
+            return False
+        if size <= limit:
+            return False
+        return bool((begin_exit or _begin_ceiling_exit)(size, limit))
+    except Exception:  # noqa: BLE001 — a watchdog must never crash the daemon
+        return False
+
+
 def _recall_watchdog(interval_s: float = 60.0) -> None:
-    """Background loop: re-check + heal the recall runtime every ``interval_s``."""
+    """Every ``interval_s``: re-check + heal the recall runtime, and check the commit ceiling."""
     was_ready = True
+    # Read once: a bad value logs one line, not one per tick. Raised above the warmup baseline
+    # (no restart loop).
+    ceiling = _effective_ceiling_mb(_commit_ceiling_mb(), _BASELINE_MB)
     while True:
         time.sleep(interval_s)
         was_ready = _recall_watchdog_tick(was_ready)
+        if _SERVER is not None:
+            uptime = None if _STARTED_MONO is None else time.monotonic() - _STARTED_MONO
+            _ceiling_tick(ceiling_mb=ceiling, uptime_s=uptime)
 
 
 def _start_recall_watchdog() -> None:
@@ -483,7 +771,8 @@ def _build_ping_response() -> dict[str, Any]:
     """
     return {
         "ok": True,
-        "ready": _model_ready(),
+        # A draining daemon is not ready: clients fall back, then spawn a fresh one.
+        "ready": _model_ready() and not _DRAINING.is_set(),
         "model": MODEL_NAME,
         "dim": EMBEDDING_DIM,
         "recall_ready": bool(_RECALL_READY),
@@ -541,9 +830,10 @@ def _handle_recall_request(req: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "error": "recall_loop_dead"}
 
         # H6: embed IN-PROCESS with the resident model (same vector space as
-        # `embed`). Serialized by _EMBED_CALL_LOCK (model is not thread-safe).
-        with _EMBED_CALL_LOCK:
-            query_vector = embed(query, model=None)
+        # `embed`), on the one encode thread (serialized by _EMBED_CALL_LOCK).
+        # The handler admitted this request first (_admit_request), so a drain waits for it.
+        # The client waits only RECALL_TIMEOUT_S, so the embed waits no longer (then is cancelled).
+        query_vector = _daemon_embed(query, timeout=RECALL_TIMEOUT_S)
 
         do_recall = _get_do_recall()
 
@@ -565,6 +855,7 @@ def _handle_recall_request(req: dict[str, Any]) -> dict[str, Any]:
         try:
             result = fut.result(timeout=RECALL_TIMEOUT_S)
         except (_cf.TimeoutError, asyncio.TimeoutError):
+            fut.cancel()  # stop the coroutine, so it does not hold a pool connection for nobody
             return {"ok": False, "error": "recall_timeout"}
         except RuntimeError as exc:
             _set_recall_ready(False)
@@ -601,48 +892,32 @@ class _EmbeddingHandler(socketserver.BaseRequestHandler):
                 # ST-05: backward-compatible — adds recall_ready + loop_ok only.
                 _send_frame(self.request, _build_ping_response())
                 return
-            if cmd == "recall":
-                # ST-05: resident recall op. Self-contained, never raises
-                # (H1) — returns {ok:false, error} on any failure so the
-                # client falls back to the uv path without hanging.
-                _send_frame(self.request, _handle_recall_request(req))
-                return
             if cmd == "shutdown":
                 _send_frame(self.request, {"ok": True})
-                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                # Drain for a short time on a new thread, then stop (never on a served thread).
+                threading.Thread(
+                    target=_drain_then_stop,
+                    args=(self.server.shutdown, SHUTDOWN_DRAIN_S),
+                    daemon=True,
+                ).start()
                 return
-            if cmd == "embed":
-                text = req.get("text", "")
-                if not isinstance(text, str):
-                    _send_frame(self.request, {"error": "text must be a string"})
+            if cmd in ("embed", "embed_batch", "recall"):
+                # One admission: the drain check and the count are one step, and the request
+                # ends only after its reply is sent, so a drain waits for it.
+                if not _admit_request():
+                    draining: dict[str, Any] = {"error": "daemon_draining"}
+                    if cmd == "recall":
+                        draining = {"ok": False, "error": "daemon_draining"}
+                    _send_frame(self.request, draining)
                     return
-                t0 = time.perf_counter()
-                with _EMBED_CALL_LOCK:
-                    vec = embed(text, model=None)
-                elapsed_ms = (time.perf_counter() - t0) * 1000
-                _send_frame(self.request, {
-                    "vector": vec,
-                    "elapsed_ms": elapsed_ms,
-                    "dim": len(vec),
-                })
-                return
-            if cmd == "embed_batch":
-                texts = req.get("texts", [])
-                if not isinstance(texts, list):
-                    _send_frame(self.request, {"error": "texts must be a list"})
-                    return
-                if not all(isinstance(t, str) for t in texts):
-                    _send_frame(self.request, {"error": "all texts must be strings"})
-                    return
-                t0 = time.perf_counter()
-                with _EMBED_CALL_LOCK:
-                    vecs = embed_batch(texts, model=None)
-                elapsed_ms = (time.perf_counter() - t0) * 1000
-                _send_frame(self.request, {
-                    "vectors": vecs,
-                    "elapsed_ms": elapsed_ms,
-                    "count": len(vecs),
-                })
+                try:
+                    try:
+                        reply = _encode_reply(cmd, req)
+                    except Exception as exc:  # noqa: BLE001 — the error reply is sent before the request ends
+                        reply = {"error": str(exc) or type(exc).__name__}
+                    _send_frame(self.request, reply)
+                finally:
+                    _end_request()
                 return
             _send_frame(self.request, {"error": f"unknown cmd: {cmd!r}"})
         except (EOFError, ConnectionResetError, BrokenPipeError):
@@ -650,9 +925,32 @@ class _EmbeddingHandler(socketserver.BaseRequestHandler):
             return
         except Exception as exc:  # noqa: BLE001
             try:
-                _send_frame(self.request, {"error": str(exc)})
+                _send_frame(self.request, {"error": str(exc) or type(exc).__name__})
             except OSError:
                 pass
+
+
+def _encode_reply(cmd: str, req: dict[str, Any]) -> dict[str, Any]:
+    """The reply for an admitted embed, embed_batch or recall request. Raises on an encode error."""
+    if cmd == "recall":
+        # ST-05: resident recall op. Self-contained, never raises (H1) — returns {ok:false, error}
+        # on any failure so the client falls back to the uv path without hanging.
+        return _handle_recall_request(req)
+    if cmd == "embed":
+        text = req.get("text", "")
+        if not isinstance(text, str):
+            return {"error": "text must be a string"}
+        t0 = time.perf_counter()
+        vec = _daemon_embed(text)
+        return {"vector": vec, "elapsed_ms": (time.perf_counter() - t0) * 1000, "dim": len(vec)}
+    texts = req.get("texts", [])
+    if not isinstance(texts, list):
+        return {"error": "texts must be a list"}
+    if not all(isinstance(t, str) for t in texts):
+        return {"error": "all texts must be strings"}
+    t0 = time.perf_counter()
+    vecs = _daemon_embed_batch(texts)
+    return {"vectors": vecs, "elapsed_ms": (time.perf_counter() - t0) * 1000, "count": len(vecs)}
 
 
 class _ThreadingTCPServer(socketserver.ThreadingTCPServer):
@@ -678,14 +976,17 @@ def _write_daemon_info(pid: int, port: int) -> None:
     DAEMON_INFO_PATH.write_text(json.dumps(info), encoding="utf-8")
 
 
-def _delete_daemon_info() -> None:
-    """Remove daemon discovery file (best-effort)."""
+def _delete_own_daemon_info(path: Path | None = None) -> bool:
+    """Remove the discovery file only when it names THIS process. Never raises."""
+    p = DAEMON_INFO_PATH if path is None else path
     try:
-        DAEMON_INFO_PATH.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
+        info = json.loads(p.read_text(encoding="utf-8"))
+        if int(info.get("pid", -1)) != os.getpid():
+            return False
+        p.unlink()
+        return True
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
 def _check_existing_daemon() -> bool:
@@ -905,16 +1206,25 @@ def _run_daemon(port: int) -> int:
     # discovery file. Clients that see the discovery file assume the
     # daemon is hot and ready to serve.
     print("[embedding] daemon: pre-loading model...", file=sys.stderr, flush=True)
-    model = load_model()
+    # Load and warm up on the encode thread, so model construction and the first encode build
+    # the ONE OpenMP team the daemon keeps, not a second one on the main thread.
+    model = _on_encode_thread(load_model, timeout=MODEL_LOAD_WAIT_S)
     # Warm-up encode pass to compile internal caches (kernel autotune etc).
     t_warm = time.perf_counter()
-    _ = model.encode("warmup", convert_to_numpy=True)
+    _ = _on_encode_thread(lambda: model.encode("warmup", convert_to_numpy=True))
     print(
         f"[embedding] daemon: warmup encode: "
         f"{(time.perf_counter() - t_warm) * 1000:.1f}ms",
         file=sys.stderr,
         flush=True,
     )
+    # The ceiling baseline (no restart loop): this daemon's own size after warmup, in memory only.
+    global _BASELINE_MB, _STARTED_MONO
+    try:
+        _BASELINE_MB = _private_commit_mb()
+    except Exception:  # noqa: BLE001 — no baseline: the configured ceiling applies as it is
+        _BASELINE_MB = None
+    _STARTED_MONO = time.monotonic()
 
     # ST-05: stand up the resident recall runtime AFTER the model warmup
     # (background asyncio loop + asyncpg pool). Best-effort + additive — a
@@ -926,6 +1236,8 @@ def _run_daemon(port: int) -> int:
     _start_recall_watchdog()
 
     server = _ThreadingTCPServer(("127.0.0.1", port), _EmbeddingHandler)
+    global _SERVER
+    _SERVER = server  # the commit-ceiling exit stops it (see _begin_ceiling_exit)
     actual_port = server.server_address[1]
     pid = os.getpid()
     _write_daemon_info(pid, actual_port)
@@ -946,7 +1258,9 @@ def _run_daemon(port: int) -> int:
             file=sys.stderr,
             flush=True,
         )
-        threading.Thread(target=server.shutdown, daemon=True).start()
+        threading.Thread(
+            target=_drain_then_stop, args=(server.shutdown, SHUTDOWN_DRAIN_S), daemon=True
+        ).start()
 
     # SIGTERM is the standard shutdown signal. SIGINT (Ctrl+C) likewise.
     # Windows additionally exposes SIGBREAK for Ctrl+Break.
@@ -968,7 +1282,8 @@ def _run_daemon(port: int) -> int:
         try:
             server.server_close()
         finally:
-            _delete_daemon_info()
+            # Own file only: never remove a discovery file another daemon wrote.
+            _delete_own_daemon_info()
             print(
                 "[embedding] daemon: stopped, info file cleaned up",
                 file=sys.stderr,
