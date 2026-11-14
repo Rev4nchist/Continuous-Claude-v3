@@ -312,3 +312,25 @@ test('the stored majorsOpen is the union over every record at the head, whatever
   assert.equal(majorsOpen(list).length, 5);
   assert.equal(list.at(-1).majorsOpen, majorsOpen(list).length, 'the last stored count agrees with the reader');
 });
+
+// ---------- error texts hold no home folder path ----------
+
+test('a held record lock throws a message that names the home folder as ~, never the user home path, also inside the lock detail (breaks if the error prints the full path)', () => {
+  const home = os.homedir();
+  const root = path.join(home, '.lr-never-made', 'local-review');
+  const held = () => ({ ok: false, reason: 'lock', detail: `the lock ${path.join(root, 'feat-x', H1, 'records.lock')} is held by another session` });
+  let message = '';
+  try { writeRecord(rec('r1', H1, [major('x')]), { stateRoot: root, withLock: held, fs: { mkdirSync: () => {} } }); } catch (err) { message = err.message; }
+  assert.match(message, /record lock at .* is not free/);
+  assert.ok(!message.includes(home), message);
+  assert.ok(!message.includes(home.replaceAll('\\', '/')), message);
+  assert.ok(message.includes('~/.lr-never-made/local-review/feat-x/'), message);
+});
+
+test('homeRel turns a home folder path into ~/..., in either slash form, and leaves other text alone (breaks if the helper stops matching a form)', () => {
+  const home = os.homedir();
+  assert.equal(REC.homeRel(path.join(home, '.claude', 'state')), '~/.claude/state');
+  assert.equal(REC.homeRel(`${home.replaceAll('\\', '/')}/x/y`), '~/x/y');
+  assert.equal(REC.homeRel('no path here'), 'no path here');
+  assert.equal(REC.homeRel(`a ${path.join(home, 'p')} b ${path.join(home, 'q')}`), 'a ~/p b ~/q');
+});

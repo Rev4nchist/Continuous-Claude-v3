@@ -34,6 +34,20 @@ export function branchSlug(branch) {
   return slug;
 }
 
+/**
+ * The text with the home folder written as ~ and the rest of that path with forward slashes ("~/.claude/state/..."), so an error message or a
+ * ledger line never holds the user name. Both slash forms of the home folder match; on win32 the match ignores case, as the file system does.
+ */
+export function homeRel(text) {
+  const home = os.homedir();
+  const s = String(text);
+  if (!home) return s;
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const forms = [...new Set([home, home.replaceAll('\\', '/')])].map(esc).join('|');
+  const re = new RegExp(`(?:${forms})(?![A-Za-z0-9_.-])([^\\s"'\`]*)`, process.platform === 'win32' ? 'gi' : 'g');
+  return s.replace(re, (_, rest) => `~${rest.replaceAll('\\', '/')}`);
+}
+
 export function stateRoot(opts = {}) {
   const env = opts.env ?? process.env;
   return opts.stateRoot || env.LOCAL_REVIEW_STATE_DIR || path.join(os.homedir(), '.claude', 'state', 'local-review');
@@ -159,14 +173,14 @@ export function writeRecord(record, opts = {}) {
   const dir = headDir(record.branch, record.head, opts);
   io.mkdirSync(dir, { recursive: true });
   const locked = (opts.withLock ?? fileLock)(path.join(dir, 'records'), { lockWaitMs: opts.lockWaitMs ?? LOCK_WAIT_MS }, () => writeLocked(record, { dir, runId, io }, opts));
-  if (locked?.ok === false) throw new Error(`record lock at ${dir} is not free: ${locked.detail ?? locked.reason ?? 'held'}`);
+  if (locked?.ok === false) throw new Error(homeRel(`record lock at ${dir} is not free: ${locked.detail ?? locked.reason ?? 'held'}`));
   return locked;
 }
 
 /** The part of writeRecord that needs the lock: the exists check, the listing of earlier runs, the union and the rename. */
 function writeLocked(record, { dir, runId, io }, opts) {
   const final = path.join(dir, `${runId}.json`);
-  if (io.existsSync(final)) throw new Error(`record ${final} exists: records are append-only`);
+  if (io.existsSync(final)) throw new Error(homeRel(`record ${final} exists: records are append-only`));
   const earlier = listRecords({ branch: record.branch, head: record.head }, opts);
   const problems = [...(record.problems ?? []), ...earlier.unreadable.map((p) => `unreadable record: ${p}`)];
   const ts = record.ts ?? new Date((opts.now ?? Date.now)()).toISOString();

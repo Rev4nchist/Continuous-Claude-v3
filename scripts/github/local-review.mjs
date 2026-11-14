@@ -7,8 +7,9 @@
  *          [--prompt-version v1|v2] [--model <id>] [--backend cursor] [--arm <id>]
  * A flag run (any of --range, --prompt-version, --model, --backend or --arm, whatever its value) is an eval run: fresh, an eval- ledger ref with its arm key
  * (--arm, else <prompt version>-<model>-<backend>), and for a --range its own record folder range-<base12>-<arm key>. It is refused (exit 2), before any pin,
- * git, gh or ledger work, when its records, slots or ledgers sit under the live state root or its cursor ledger is the live one (set LOCAL_REVIEW_STATE_DIR
- * and CURSOR_REVIEW_LEDGER). A run with none of the five flags is the default path and is unchanged.
+ * git, gh or ledger work (main: before the repo root lookup too), when its records root and the live root are one folder or one holds the other, its slots or
+ * ledgers sit beside the live root, or its cursor ledger sits under the live root or is the live one (set LOCAL_REVIEW_STATE_DIR and CURSOR_REVIEW_LEDGER).
+ * Once the arm key is known, a final record folder that resolves into the live root (a link) is refused too, before the model call. Paths in the refusal read ~/... (homeRel). A run with none of the five flags is the default path and is unchanged.
  *
  * Run without LOCAL_REVIEW_PINNED, it pins the engine first: it extracts scripts/ and review-router.config.json at fork/main to
  * <state>/local-review/engine/<sha>/ and starts that copy as a child process. The pinned process refuses (exit 2) when its own file is
@@ -19,6 +20,12 @@
  * P1 records `escalate` only. It posts no label and starts no critic or CodeRabbit run. It never writes coderabbit-paid.jsonl.
  *
  * Exit codes: 0 ok or skip, 1 failed, 2 refused, 3 cap or busy.
+ *
+ * Known limits:
+ * - The fetch lock sits in aux (local-review-fetch beside the records root), so an eval --pr run and the live sweep, each with its own aux, can fetch in one
+ *   repository at the same time. Follow-up: put the lock under the git common dir.
+ * - A records lock (records.lock in a head folder) is stale only after 30 s with a dead pid. A reused pid keeps it alive: delete that head folder's
+ *   records.lock by hand (per head, never a global delete).
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -40,7 +47,7 @@ import { buildContext, readAtSha } from './local-review/context.mjs';
 import { buildEnginePrompt, lastJsonBlock, PROMPT_PATH, PROMPT_VERSION, PROMPT_VERSIONS } from './local-review/prompt.mjs';
 import { buildTrace, condense, contextSha, cursorAgentVersion, writeTraceFiles } from './local-review/trace.mjs';
 import {
-  RECORD_SCHEMA, branchSlug, buildFunnel, listRecords, lastReviewedSha, settlePrior, stateRoot as recordsRoot, writeRecord,
+  RECORD_SCHEMA, branchSlug, buildFunnel, homeRel, listRecords, lastReviewedSha, settlePrior, stateRoot as recordsRoot, writeRecord,
 } from './local-review/record.mjs';
 import {
   SEVERITY_RANK, filterFindings, findingId, isIgnoreFile, isStrippedFile, mapLine, parseHunks, rangeTouched, stripIgnoreFiles,
@@ -660,15 +667,22 @@ const sameDir = (a, b) => path.relative(realDeep(a), realDeep(b)) === '';
 /** True when a and b name the same file once links are resolved (path.relative folds case on Windows). */
 const sameFile = (a, b) => path.relative(realDeep(a), realDeep(b)) === '';
 
+/** True when a and b are one folder or one holds the other (real paths), so neither can sit inside the other. */
+const nested = (a, b) => underRoot(a, b) || underRoot(b, a);
+
 /**
- * The reason a flag run may not use these state paths, or null. They are live when the records sit under the live root, when the slots and ledgers
- * folder is the live root's parent (design note 3a), or when the cursor ledger is the live default ledger (`live.cursorLedger`, defaultLedgerPath with
- * no override: the cap and the usage report read it). live = { root, cursorLedger }.
+ * The reason a flag run may not use these state paths, or null. They are live when the records root and the live root are one folder or one holds
+ * the other (a parent root can make a final folder inside the live root), when the cursor ledger sits under the live root, when the slots and ledgers
+ * folder is the live root's parent (design note 3a), when the cursor ledger file sits in that parent folder, or when the cursor ledger is the live default ledger (`live.cursorLedger`, defaultLedgerPath with
+ * no override: the cap and the usage report read it). live = { root, cursorLedger }. Paths in the reason are written ~/... (homeRel).
  */
 function liveClash(why, P, live) {
   if (!why) return null;
-  if (underRoot(P.records, live.root) || sameDir(P.aux, path.dirname(live.root))) return `${why} would write under the live state root ${live.root}: set LOCAL_REVIEW_STATE_DIR to another folder`;
-  if (sameFile(P.cursorLedger, live.cursorLedger)) return `${why} would write to the live cursor ledger ${live.cursorLedger}: set CURSOR_REVIEW_LEDGER to another file`;
+  const root = homeRel(live.root);
+  if (nested(P.records, live.root) || sameDir(P.aux, path.dirname(live.root))) return `${why} would write in or around the live state root ${root}: set LOCAL_REVIEW_STATE_DIR to another folder`;
+  if (underRoot(P.cursorLedger, live.root)) return `${why} would write its cursor ledger under the live state root ${root}: set CURSOR_REVIEW_LEDGER to another file`;
+  if (sameDir(path.dirname(P.cursorLedger), path.dirname(live.root))) return `${why} would write its cursor ledger in the live state folder ${homeRel(path.dirname(live.root))}, beside the live root: set CURSOR_REVIEW_LEDGER to another file`;
+  if (sameFile(P.cursorLedger, live.cursorLedger)) return `${why} would write to the live cursor ledger ${homeRel(live.cursorLedger)}: set CURSOR_REVIEW_LEDGER to another file`;
   return null;
 }
 
@@ -694,6 +708,9 @@ function armBranch(s) {
   const branch = s.target.range ? `range-${s.target.pullBaseSha.slice(0, 12)}-${s.armKey}` : `${s.target.branch}-${s.armKey}`;
   s.target = { ...s.target, branch };
   s.slug = branchSlug(branch);
+  // The final folder as it resolves now: a link inside the records root may lead into the live root.
+  const finalDir = path.join(s.d.P.records, s.slug);
+  if (nested(finalDir, s.d.live.root)) throw badInput(`${s.why} would write the record folder ${homeRel(finalDir)} in or around the live state root ${homeRel(s.d.live.root)}`);
 }
 
 /**
@@ -753,9 +770,9 @@ function deltaRenames(d, from, head) {
   return new Map(list.filter((f) => f.previous_filename).map((f) => [f.previous_filename, f.filename]));
 }
 
-/** The prior findings with a renamed file moved to its new name, and the pathspec names (new and old) for the rename-aware diff. */
+/** The prior findings with a renamed file moved to its new name (never to an excluded one: it stays on the old, gone path), and the pathspec names (new and old) for the rename-aware diff. */
 function priorUnderRenames(prior, renames) {
-  const moved = prior.map((f) => (renames.has(f.file) ? { ...f, file: renames.get(f.file) } : f));
+  const moved = prior.map((f) => (renames.has(f.file) && !isExcluded(renames.get(f.file)) ? { ...f, file: renames.get(f.file) } : f));
   const files = new Set(moved.map((f) => f.file));
   const olds = [...renames].filter(([, to]) => files.has(to)).map(([from]) => from);
   return { moved, names: [...files, ...olds] };
@@ -765,7 +782,8 @@ function priorUnderRenames(prior, renames) {
 function stepDelta(s) {
   const { d, target, range } = s;
   const changed = new Set(splitZ(gitOut(d.git, ['diff', '--name-only', '--no-renames', '-z', range.from, target.head])));
-  s.deltaFiles = target.files.filter((f) => changed.has(f.filename));
+  // target.files keeps a file renamed into an excluded folder for the band and the coverage; the delta never reads or names it (main dropped it).
+  s.deltaFiles = target.files.filter((f) => changed.has(f.filename) && !isExcluded(f.filename));
   if (s.deltaFiles.length === 0) return skipRow(s, 'delta is empty (only main merge changes since the last review)');
   s.deltaDiff = pathspecDiff(d, [range.from, target.head], s.deltaFiles.map((f) => f.filename));
   const { moved, names } = priorUnderRenames(loadPrior(s), deltaRenames(d, range.from, target.head));
@@ -786,6 +804,12 @@ async function stepRange(s) {
   return s.range.mode === 'delta' ? stepDelta(s) : null;
 }
 
+/** The changed files as the context builder sees them: an excluded name (a rename into or out of an excluded folder) is dropped, so it is never read or listed. */
+function contextFiles(files) {
+  const clean = ({ filename, previous_filename: prev, ...rest }) => ({ ...rest, ...(!isExcluded(filename) && { filename }), ...(prev && !isExcluded(prev) && { previous_filename: prev }) });
+  return files.map(clean).filter((f) => f.filename || f.previous_filename);
+}
+
 function writeReviewDir(s, prep) {
   const { d, target, cfg } = s;
   const dir = path.join(prep.dir, '.review');
@@ -796,7 +820,7 @@ function writeReviewDir(s, prep) {
   stripIgnoreFiles(prep.dir, d.platform);
   const agentFiles = [...new Set([...(prep.agentFiles ?? []), ...prep.files.filter((f) => isIgnoreFile(f, d.platform))])];
   const diffText = readFileSync(path.join(prep.dir, 'PR.diff'), 'utf8');
-  const input = { root: d.root, mergeBase: target.mergeBase, head: target.head, pull: s.opts.withholdBody ? { ...target.pull, body: BODY_WITHHELD } : target.pull, files: target.files, gates: s.opts.gatesText, facts: s.opts.factsText, capKb: cfg.context_cap_kb };
+  const input = { root: d.root, mergeBase: target.mergeBase, head: target.head, pull: s.opts.withholdBody ? { ...target.pull, body: BODY_WITHHELD } : target.pull, files: contextFiles(target.files), gates: s.opts.gatesText, facts: s.opts.factsText, capKb: cfg.context_cap_kb };
   const ctx = buildContext(input, { readAtSha: d.readAtSha });
   writeFileSync(path.join(dir, 'CONTEXT.md'), ctx.text);
   const delta = s.range.mode === 'delta';
@@ -809,7 +833,7 @@ function writeReviewDir(s, prep) {
 
 function writeDeltaFiles(s, prep, dir) {
   writeFileSync(path.join(prep.dir, 'DELTA.diff'), s.deltaDiff);
-  const send = s.priorRelined.filter((f) => s.touchedIds.has(f.id))
+  const send = s.priorRelined.filter((f) => s.touchedIds.has(f.id) && !isExcluded(f.file))
     .map((f) => ({ id: f.id, file: f.file, startLine: f.startLine, endLine: f.endLine, severity: f.severity, title: clip(f.title ?? '', 300), body: clip(f.body ?? '', 1500) }));
   writeFileSync(path.join(dir, 'PRIOR.json'), `${JSON.stringify(send, null, 2)}\n`);
 }
@@ -864,6 +888,9 @@ const runComplete = (run, parsed, answer) => run.status === 0 && !run.timedOut &
 
 const normPath = (p) => String(p).replaceAll('\\', '/').replace(/^\.\//, '');
 
+/** The names the model sees for these changed files: the new name, or the old one when the new name is excluded (a rename into an excluded folder). Both excluded: none. */
+const seenNames = (files) => files.map((f) => (isExcluded(f.filename) ? f.previous_filename : f.filename)).filter((n) => n && !isExcluded(n));
+
 const rankOf = (f) => SEVERITY_RANK[f.severity] ?? 0;
 
 /** One log line per raw answer finding, before the S5 filter, so a dropped finding can still be found in the run log. */
@@ -909,9 +936,10 @@ function buildRecord(s, plan, out, answer, filtered, error) {
   const problems = [...s.problems, ...final.parsed.problems, ...filtered.problems, ...(error ? [error] : [])];
   if (out.stopped) problems.push(`the retry was not reserved (${out.stopped.reason}): the first failed attempt stands`);
   const selectedFiles = s.range.mode === 'delta' ? s.deltaFiles : target.files;
+  const seen = seenNames(selectedFiles);
   const selected = selectedFiles.length;
   // Only a claimed path that is in the selected set counts: the prompt's example path, echoed back, reviews nothing.
-  const inSet = new Set(selectedFiles.map((f) => normPath(f.filename)));
+  const inSet = new Set(seen.map(normPath));
   const claimedReviewed = (answer?.reviewed ?? []).filter((p) => inSet.has(normPath(p))).length;
   // An answer that claims no selected file reviewed is not complete when files were selected: a hidden or unreadable tree gives that answer.
   const complete = runComplete(final.run, final.parsed, answer) && (selected === 0 || claimedReviewed > 0);
@@ -935,7 +963,7 @@ function persist(s, final, record, error) {
   try {
     written = d.writeRecord(record, { stateRoot: d.P.records, env: d.env, now: d.now });
   } catch (err) {
-    const msg = `record write failed: ${err.message}`;
+    const msg = homeRel(`record write failed: ${err.message}`);
     endLine(s, { ...final, error: msg }, { findingCount: 0 });
     return refuse(d, EXIT.FAILED, msg);
   }
@@ -951,7 +979,7 @@ function saveTrace(s, { prep, final, record, dir }) {
     const trace = buildTrace({
       raw, treeDir: prep.dir, runId: record.runId, pr: target.pr, headSha: target.head, engineSha: record.engineSha, promptSha256: record.promptSha256,
       contextSha: record.contextSha, model: record.model, cursorAgentVersion: record.cursorAgentVersion, durationMs: final.run.durationMs, toolStats: final.run.toolStats ?? undefined,
-      funnel: record.funnel, findings: record.findings, diffFiles: (s.range.mode === 'delta' ? s.deltaFiles : target.files).map((f) => f.filename),
+      funnel: record.funnel, findings: record.findings, diffFiles: seenNames(s.range.mode === 'delta' ? s.deltaFiles : target.files),
     });
     d.writeTraceFiles({ dir, runId: record.runId, trace, raw, condensed: condense(raw, { treeDir: prep.dir }) });
   } catch (err) {
@@ -1132,20 +1160,19 @@ function report(r, json, out) {
   else if (r.reason) out(`local-review: ${r.reason}`);
 }
 
-/** Returns the exit code. deps (tests): reviewHead deps plus stdout, stderr, env, root, pinEngine, runAgent. */
+/** Returns the exit code. deps (tests): reviewHead deps plus stdout, stderr, env, root, repoRoot (a function, default: git rev-parse), pinEngine, runAgent. */
 export async function main(argv, deps = {}) {
   const out = deps.stdout ?? ((s) => process.stdout.write(`${s}\n`));
   const err = deps.stderr ?? ((s) => process.stderr.write(`${s}\n`));
   const args = parseArgs(argv);
   if (args.error) { err(`local-review: ${args.error}`); return EXIT.REFUSED; }
   const env = deps.env ?? process.env;
-  const root = deps.root ?? repoRoot();
-  if (!env.LOCAL_REVIEW_PINNED && !args.engineHere) {
-    // A flag run aimed at the live root or the live cursor ledger is refused before the engine is pinned: pinEngine fetches and writes under that root.
-    const clash = liveClash(nonDefaultWhy(args), statePaths(deps, env), liveOf(deps));
-    if (clash) { err(`local-review: ${clash}`); return EXIT.REFUSED; }
-    return relaunch(argv, { root, env, out, err, deps });
-  }
+  const relaunching = !env.LOCAL_REVIEW_PINNED && !args.engineHere;
+  // A flag run aimed at the live root or the live cursor ledger is refused first: before repoRoot() (a git spawn) and before the engine is pinned (pinEngine fetches and writes under that root).
+  const clash = liveClash(nonDefaultWhy(args), statePaths(deps, env), liveOf(deps));
+  if (clash) { err(`local-review: ${clash}`); return EXIT.REFUSED; }
+  const root = deps.root ?? (deps.repoRoot ?? repoRoot)();
+  if (relaunching) return relaunch(argv, { root, env, out, err, deps });
   const gates = args.gates ? readTextArg('--gates', args.gates) : {};
   if (gates.error) { err(`local-review: ${gates.error}`); return EXIT.REFUSED; }
   const facts = args.facts ? readTextArg('--facts', args.facts) : {};
