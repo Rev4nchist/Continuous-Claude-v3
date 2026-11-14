@@ -26,7 +26,7 @@ vi.mock('../../../../scripts/github/lib/answer-paths.mjs', async (importOriginal
   };
 });
 
-import { classifyCommand, decide, effectiveCwd, gitEnv, logDeny, parseInvocation, parseShape, readState, repoBranchKey } from '../coderabbit-guard.js';
+import { answerKeyDeny, classifyCommand, decide, effectiveCwd, gitEnv, logDeny, parseInvocation, parseShape, readState, repoBranchKey } from '../coderabbit-guard.js';
 
 // The env key stays non-CCv3 in every case: the check must come from the git remotes, never from the cap key.
 const NOT_CCV3_KEY = 'x#feature';
@@ -770,6 +770,21 @@ describe('coderabbit-guard answer-key allow list (round 2)', { timeout: 30_000 }
     }
     expect(f.run('time cr review --agent').allow).toBe(true);
     expect(f.run('bash -c "cr review --agent"').allow).toBe(true);
+  });
+
+  it('54b (R2) in a foreign repo a review that is not the shape, with an option the parser cannot read, gets the way-out text', () => {
+    // Breaks when the last branch of answerKeyDeny returns null for an unaccounted option (it may hide a --dir into CCv3).
+    // Every command tried through decide() is denied by an earlier step first, so this calls answerKeyDeny with the flag set.
+    const f = makeRepo({ remote: OTHER_URL });
+    const plain = plainFolder();
+    for (const cwd of [f.root, plain]) {
+      const run = { command: 'time cr review --agent', ps: false, startCwd: cwd, cwd, home: plain, invocations: [], unplaced: false };
+      const reason = answerKeyDeny({ ...run, unaccounted: true });
+      expect(reason, cwd).toContain(WAY);
+      expect((reason ?? '').endsWith('answer-key'), cwd).toBe(true);
+      // The pin: without the flag the same foreign review is not the check's business.
+      expect(answerKeyDeny({ ...run, unaccounted: false }), cwd).toBeNull();
+    }
   });
 
   it('55 a cd that the folder step cannot follow gets the way-out: a cd after the review, and a cd inside a wrapper string', () => {
