@@ -158,6 +158,8 @@
  * KNOWN LIMITS of this round (stated, not fixed):
  *   - In a CCv3 folder, when the blanker declines (PowerShell $msg = @' ... '@ then git commit -m $msg; git push --force fork feat), the
  *     push stays hidden as on main; card prflow-push-blocks carries it.
+ *   - A git or gh subcommand that gives its stdin to a shell (for example a submodule foreach or an alias that starts sh) runs a
+ *     blanked body: the blanker trusts the git or gh word of the segment.
  *   - git push -oh <remote> <branch>: the reader takes -h as help, so the push has no shape and takes the tap path; with enforceAppPush
  *     false it warns (seat ruling).
  *   - The missing-registry notice appears only when LANE_REGISTRY_PATH names the file; a corrupt registry gives no deny for a push that
@@ -784,8 +786,11 @@ const quoteLeft = (t: string, tool: QuoteTool): boolean => /["']/.test(outsideQu
  */
 function opensData(text: string, at: number, tool: QuoteTool): boolean {
   const lead = text.slice(0, at);
-  const segStart = Math.max(...['\n', ';', '&', '|'].map((c) => lead.lastIndexOf(c))) + 1;
-  const seg = lead.slice(segStart);
+  // F1 (seat delta read): the segment start, its first word and its $( are read on the lead with every quoted span blanked (same
+  // length), so a ; & | or line end inside a quoted word ('x; git y') starts no segment.
+  const bare = outsideQuotes(lead, tool);
+  const segStart = Math.max(...['\n', ';', '&', '|'].map((c) => bare.lastIndexOf(c))) + 1;
+  const seg = bare.slice(segStart);
   if (!DATA_CMD.test(firstWord(seg))) return false;
   const sub = seg.lastIndexOf('$(');
   if (sub < 0 || seg.includes(')', sub)) return !quoteLeft(lead, tool);

@@ -336,6 +336,17 @@ describe('W3 major 3: a payload push with a force, delete or wide spelling stays
   });
 });
 
+describe('W6 F1: a separator inside a quoted word does not start the segment of an opener', () => {
+  // Change that breaks it: find the segment start and the first word on the raw lead (lastIndexOf of ; & | and line ends) again.
+  const opener = "bash -s -- 'x; git y' <<'EOF'\n";
+  it('Q3 bash -s with a quoted "; git" before the opener runs its body: the force push in it is push-unsafe', () => {
+    expect(verdict(bash(`${opener}git push -f up feat\nEOF`), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
+  });
+  it('CCv3: the same opener with a merge in the body gets the CCv3 merge deny (decisions.enforce true, no tap)', () => {
+    expect(verdict(bash(`${opener}${G} pr merge 12\nEOF`, CC))).toMatchObject({ action: 'deny', scope: 'other' });
+  });
+});
+
 describe('W4 minor 1: an opener inside a quoted span is no opener, even when the marks count even', () => {
   // Change that breaks it: test the quote marks by count (pairedQuotes) in opensData.
   it("git commit -m 'a\"' \"b <<EOF ... x\" && git push -f: the force push is push-unsafe", () => {

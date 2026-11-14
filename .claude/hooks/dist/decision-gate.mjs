@@ -1507,8 +1507,9 @@ function outsideQuotes(t, tool) {
 var quoteLeft = (t, tool) => /["']/.test(outsideQuotes(t, tool));
 function opensData(text, at2, tool) {
   const lead = text.slice(0, at2);
-  const segStart = Math.max(...["\n", ";", "&", "|"].map((c) => lead.lastIndexOf(c))) + 1;
-  const seg = lead.slice(segStart);
+  const bare = outsideQuotes(lead, tool);
+  const segStart = Math.max(...["\n", ";", "&", "|"].map((c) => bare.lastIndexOf(c))) + 1;
+  const seg = bare.slice(segStart);
   if (!DATA_CMD.test(firstWord(seg))) return false;
   const sub = seg.lastIndexOf("$(");
   if (sub < 0 || seg.includes(")", sub)) return !quoteLeft(lead, tool);
