@@ -935,13 +935,13 @@ test('pairedBar: per suite delta in points, paired and unpaired counts, d and nN
   assert.deepEqual([bar.unassigned.n, bar.unassigned.delta, bar.unassigned.wouldBe], [7, null, null], '7 items: under the cut, and unassigned never gates');
 });
 
-test('R1 pairedBar under 20 Majors prints counts only: delta, lo, hi, d and wouldBe are null; n, unpaired, nNeeded, B and used still print (breaks if a number prints under the cut, or nNeeded is dropped with it)', () => {
+test('R1 pairedBar under 20 Majors prints counts only: delta, lo, hi, d, nNeeded and wouldBe are null; n, unpaired, B and used still print (breaks if a number prints under the cut; nNeeded = ceil(1537 * d) gives d back, seat ruling (b))', () => {
   const bar = scorecard(pairedInput()).pairedBar.holdout;
   const reg = bar.regression;
-  assert.deepEqual([reg.delta, reg.lo, reg.hi, reg.d, reg.wouldBe], [null, null, null, null, null]);
-  assert.deepEqual([reg.n, reg.unpaired, reg.nNeeded, reg.B], [4, 1, 769, 400]);
+  assert.deepEqual([reg.delta, reg.lo, reg.hi, reg.d, reg.nNeeded, reg.wouldBe], [null, null, null, null, null, null]);
+  assert.deepEqual([reg.n, reg.unpaired, reg.B], [4, 1, 400]);
   assert.ok(Number.isInteger(reg.used) && reg.used > 0, 'used still prints');
-  assert.deepEqual([bar.capability.delta, bar.capability.wouldBe, bar.capability.n, bar.capability.nNeeded], [null, null, 3, 7]);
+  assert.deepEqual([bar.capability.delta, bar.capability.wouldBe, bar.capability.n, bar.capability.nNeeded], [null, null, 3, null]);
   assert.deepEqual([bar.unassigned.delta, bar.unassigned.wouldBe, bar.unassigned.n], [null, null, 1]);
 });
 
@@ -1664,7 +1664,7 @@ test('R1 MIN_CELL is 20; a paired cell of 19 items prints no number and one of 2
   assert.equal(MIN_CELL, 20);
   const under = nItemBar(19);
   assert.deepEqual([under.delta, under.lo, under.hi, under.d, under.wouldBe], [null, null, null, null, null]);
-  assert.deepEqual([under.n, under.unpaired, under.B, under.nNeeded], [19, 0, 200, 324], 'nNeeded is how many are needed: ceil(1537 * 4 / 19)');
+  assert.deepEqual([under.n, under.unpaired, under.B, under.nNeeded], [19, 0, 200, null], 'under the cut nNeeded is null: ceil(1537 * d) would give d back');
   const at = nItemBar(20);
   assert.ok(Math.abs(at.delta + 20) < 1e-9, String(at.delta));
   assert.equal(at.d, 0.2);

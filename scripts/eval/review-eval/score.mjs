@@ -10,7 +10,7 @@
 //  cleanFalseMajor: a control is one distinct clean PR with a valid run. perPr is the mean over those PRs of the false Majors of the PR averaged over its runs. The CI resamples PRs.
 //  cleanRise: per set, over the clean PRs that both compared arms have a valid run on; null when they share none.
 //  reliabilityFlags: { flagged, unmeasured }. unmeasured lists a metric that is null on either compared arm: an empty flagged list then does not mean no regression.
-//  Counts only under 20 real Majors (MIN_CELL): a paired cell then prints n, unpaired, nNeeded, B and used and no delta, bounds, d or wouldBe. A clean-control CI needs 2 controls.
+//  Counts only under 20 real Majors (MIN_CELL): a paired cell then prints n, unpaired, B and used and no delta, bounds, d, nNeeded or wouldBe. A clean-control CI needs 2 controls.
 //  perArm cards carry no prFalseAlarm.prs: a new field prints no PR id. The top-level prFalseAlarm of a one-arm card keeps it.
 //  A match row has cluster (evaluateRuns sets it from the dataset row). A run row whose replicate is set and invalid is not scored: attempts counts it as invalidReplicate.
 //  Arms: a run or match row has arm (armKeyOf) and replicate. A card of two or more arms has no pooled number: perArm holds one card per arm. See armKeyOf, pairedBar, reliability.
@@ -165,7 +165,8 @@ function armItems(rows, labelBy) {
 
 /**
  * One suite cell of the paired bar. paired: [{ b, c, cluster }] (mean catch of each arm). The bootstrap resamples whole clusters of pairs. clusters is their count: under 2, wouldBe is FAIL.
- * Under MIN_CELL paired items the cell prints counts only: delta, lo, hi, d and wouldBe are null. nNeeded stays: it says how many items are needed.
+ * Under MIN_CELL paired items the cell prints counts only: delta, lo, hi, d, nNeeded and wouldBe are null.
+ * nNeeded is null too: ceil(1537 * d) would give the hidden d back (seat ruling (b), 2026-11-13).
  */
 function suiteCell(name, paired, unpaired, { B, seed }) {
   const n = paired.length;
@@ -182,7 +183,7 @@ function suiteCell(name, paired, unpaired, { B, seed }) {
   // One cluster makes every resample the full data (lo === hi === point): that is no interval, so it cannot PASS.
   const wouldBe = gate === undefined ? null : (clusters.length >= 2 && lo !== null && lo > gate ? 'PASS' : 'FAIL');
   const shown = n >= MIN_CELL;
-  return { delta: shown ? point : null, lo: shown ? lo : null, hi: shown ? hi : null, n, clusters: clusters.length, unpaired, d: shown ? d : null, nNeeded, wouldBe: shown ? wouldBe : null, B: boot.B, used: boot.used };
+  return { delta: shown ? point : null, lo: shown ? lo : null, hi: shown ? hi : null, n, clusters: clusters.length, unpaired, d: shown ? d : null, nNeeded: shown ? nNeeded : null, wouldBe: shown ? wouldBe : null, B: boot.B, used: boot.used };
 }
 
 /** The paired bar and the lost-Major count of two arms on ONE set. rows: the eligible match rows of every arm in that set. Counts only: no key, no PR id leaves this function. */
