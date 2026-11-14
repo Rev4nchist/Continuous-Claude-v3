@@ -328,15 +328,17 @@ function mergeShaOfLine(line) {
 
 /**
  * Stores the rows of the fix PRs in `rows`. The rows of a fix PR (one mergeSha) REPLACE every row the file has for that mergeSha:
- * a re-run that finds another primary must not leave the old one beside it. Rows of other mergeShas, and lines that are not
+ * a re-run that finds another primary must not leave the old one beside it. `processed` lists the mergeShas that this run read
+ * to the end (no failed step): the old rows of each are cleared even when the run found no row for it. A PR that failed, or
+ * is not in the run, is not in `processed`: its old rows stay. Rows of other mergeShas, and lines that are not
  * rows, stay byte for byte and in order; the new rows go at the end. The file is written to a temp file and renamed.
  * Returns { added, skipped, updated, removed }: new keys, rows equal to the old ones, same key with other content, old rows dropped.
  */
-export function writeRows(stateDir, rows) {
+export function writeRows(stateDir, rows, processed = []) {
   mkdirSync(stateDir, { recursive: true });
   const file = path.join(stateDir, ESCAPES_FILE);
   const old = existsSync(file) ? readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => l !== '') : [];
-  const mine = new Set(rows.map((r) => r.mergeSha));
+  const mine = new Set([...rows.map((r) => r.mergeSha), ...processed]);
   const oldByKey = new Map(old.filter((l) => mine.has(mergeShaOfLine(l))).map((l) => [keyOf(JSON.parse(l)), l]));
   const fresh = new Map(rows.map((r) => [keyOf(r), JSON.stringify(r)]));
   const stats = tally(oldByKey, fresh, rows.length);
@@ -469,7 +471,7 @@ function totalsLines(t) {
 async function mineAll(prs, deps) {
   const cache = new Map();
   const results = [];
-  for (const pr of prs) results.push(settle({ pr: pr.pr, ...(await escapesForPr(pr, { ...deps, prOfSha: cache })) }));
+  for (const pr of prs) results.push(settle({ pr: pr.pr, mergeSha: pr.mergeSha, ...(await escapesForPr(pr, { ...deps, prOfSha: cache })) }));
   return results;
 }
 
@@ -481,13 +483,16 @@ function baselineOf(win, rows, deps) {
   return { baseline: buildBaseline(rows, banded, window), leftOut: rowsLeftOut(rows, banded) };
 }
 
+/** True for a result whose PR was read to the end: git worked and no diff, blame or gh call failed. */
+const readToTheEnd = (r) => r.noTarget !== 'git-failed' && !r.failed;
+
 function emitFiles(args, run, stdout, dir) {
   if (args.json) {
     mkdirSync(path.dirname(path.resolve(args.json)), { recursive: true });
     writeFileSync(args.json, `${JSON.stringify(run, null, 2)}\n`);
   }
   if (!args.write) return;
-  const w = writeRows(dir, run.rows);
+  const w = writeRows(dir, run.rows, run.perPr.filter(readToTheEnd).map((r) => r.mergeSha));
   stdout(`rows written: ${w.added} added, ${w.skipped} skipped (${path.join(dir, ESCAPES_FILE)})`);
   if (run.baseline) { writeBaseline(dir, run.baseline); stdout(`baseline written: ${path.join(dir, BASELINE_FILE)}`); }
 }

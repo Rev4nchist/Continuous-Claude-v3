@@ -780,6 +780,39 @@ test('F43: the fix diff pins rename detection with -M, so a user diff.renames=fa
   assert.deepEqual(r.rows.map((x) => x.blamedPr), [3], 'only the changed line of the renamed file is blamed');
 });
 
+test('F44: writeRows clears the old rows of every processed fix PR, also with no new row; it keeps the rows of PRs not processed, byte for byte (breaks if only the mergeShas of the new rows are cleared)', () => {
+  const dir = tmp('state');
+  const file = path.join(dir, 'escapes.jsonl');
+  const keep = '{"mergeSha":"keep",  "pr":8,"blamedPr":1,"cause":"unclassified"}';
+  writeFileSync(file, [JSON.stringify(row('gone', 1)), keep, JSON.stringify(row('gone', 2)), JSON.stringify(row('failed', 3))].join('\n') + '\n');
+  const r = writeRows(dir, [], ['gone']);
+  assert.deepEqual(r, { added: 0, skipped: 0, updated: 0, removed: 2 });
+  assert.deepEqual(readFileSync(file, 'utf8').split('\n').filter(Boolean), [keep, JSON.stringify(row('failed', 3))], 'the other rows keep their bytes and order');
+  assert.deepEqual(writeRows(dir, [], ['never-stored']), { added: 0, skipped: 0, updated: 0, removed: 0 });
+  assert.deepEqual(readdirSync(dir), ['escapes.jsonl']);
+  assert.deepEqual(writeRows(dir, [row('new', 4)], ['gone']), { added: 1, skipped: 0, updated: 0, removed: 0 }, 'processed and new rows together');
+});
+
+test('F45: the CLI clears the stored row of a fix PR after a clean re-run with no row, keeps it after a failed re-run, and leaves the rows of PRs outside the run alone (breaks if a clean empty re-run leaves the old row, or a failed run clears it)', async () => {
+  const b = partialRepo();
+  const dir = path.join(tmp('state'), 'clear');
+  const file = path.join(dir, 'escapes.jsonl');
+  const args = ['--range', '1..4', '--repo', 'o/r', '--write', '--state-dir', dir];
+  const outside = '{"mergeSha":"outside",  "pr":99,"blamedPr":7,"cause":"unclassified"}'; // a PR that is not in this run
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, `${outside}\n`);
+  await cli(args, { git: b.git, gh: fakeGh(b) });
+  const stored = readFileSync(file, 'utf8');
+  assert.equal(stored.split('\n').filter(Boolean).length, 3, 'the outside row plus two rows of PR 4');
+  await cli(args, { git: b.git, gh: fakeGh(b, { fail: true }) });
+  assert.equal(readFileSync(file, 'utf8'), stored, 'a failed re-run keeps the stored rows');
+  await cli(args, { git: b.git, gh: flakyGh(b) });
+  assert.equal(readFileSync(file, 'utf8'), stored, 'a partial-failure re-run keeps them too');
+  const clean = await cli(args, { git: b.git, gh: fakeGh(b, { override: () => [] }) });
+  assert.equal(clean.code, 0, clean.err);
+  assert.equal(readFileSync(file, 'utf8'), `${outside}\n`, 'a clean re-run with no row clears PR 4 and nothing else');
+});
+
 test('F20: the CLI with --state-dir leaves the live escapes file as it was, also when it does not exist (breaks if the default dir is read or written)', async () => {
   const live = path.join(os.homedir(), '.claude', 'state', 'review-engine', 'escapes.jsonl');
   const stat = () => (existsSync(live) ? statSync(live) : null);

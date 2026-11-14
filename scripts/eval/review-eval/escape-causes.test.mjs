@@ -215,6 +215,20 @@ test('E13b: --from-json takes rows and the no-target count from a fix-chains --j
   assert.match(r.text, /fixes with no blame target: 2/);
 });
 
+test('E20: under --since the no-target lines are labelled as the whole run, because they are not filtered by date; without --since there is no label (breaks if the totals look filtered)', async () => {
+  const dir = tmp();
+  const file = path.join(dir, 'run.json');
+  const rows = [{ mergeSha: 'a', pr: 2, blamedPr: 1, cause: 'unclassified', fixMergedAt: '2026-01-01T00:00:00Z' }, { mergeSha: 'b', pr: 4, blamedPr: 3, cause: 'unclassified', fixMergedAt: '2026-03-01T00:00:00Z' }];
+  writeFileSync(file, JSON.stringify({ rows, totals: { noTarget: { byReason: { 'outside-window': 2 }, inPrOnly: 1 } } }));
+  const cut = (await run(['--from-json', file, '--since', '2026-02-01T00:00:00Z'])).text;
+  assert.match(cut, /escape rows: 1 /);
+  assert.match(cut, /fixes with no blame target: 2 \(outside-window 2\) \(whole run, not filtered by --since\)/);
+  assert.match(cut, /fix commits inside their own PR only \(not counted as no-target\): 1 \(whole run, not filtered by --since\)/);
+  const all = (await run(['--from-json', file])).text;
+  assert.match(all, /fixes with no blame target: 2 \(outside-window 2\)$/m);
+  assert.doesNotMatch(all, /whole run/);
+});
+
 test('E19: --from-json with no rows array exits 2 with a message and never falls back to the state dir (breaks if a missing rows array reads escapes.jsonl)', async () => {
   const dir = tmp();
   rowsFile(dir, [JSON.stringify({ mergeSha: 'a', pr: 2, blamedPr: 1, cause: 'unclassified' })]);

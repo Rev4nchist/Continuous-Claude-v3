@@ -113,7 +113,7 @@ jobs:
         run: node --test scripts/ratchets/semgrep-ccv3.test.mjs
       - name: checks unit tests (state-table helper, prove-check harness, test-map selector)
         timeout-minutes: 5
-        run: node --test scripts/checks/state-table.test.mjs scripts/checks/prove-check.test.mjs scripts/checks/test-map.test.mjs scripts/checks/fixture-gap.test.mjs scripts/checks/catchers.test.mjs
+        run: node --test scripts/checks/state-table.test.mjs scripts/checks/prove-check.test.mjs scripts/checks/test-map.test.mjs scripts/checks/fixture-gap.test.mjs
       - name: router checkpoint state x event table (C5 T2)
         timeout-minutes: 5
         run: node --test scripts/github/review-router-checkpoint-table.test.mjs

@@ -84,12 +84,16 @@ function shareLines(counts, total) {
   ];
 }
 
-function noTargetLines(noTarget) {
+const WHOLE_RUN = ' (whole run, not filtered by --since)';
+
+/** wholeRun: the rows were cut by --since, but these counts are of the whole run (no-target fixes carry no date). */
+function noTargetLines(noTarget, wholeRun = false) {
   if (!noTarget) return ['fixes with no blame target: not available (pass --from-json <fix-chains --json file>)'];
   const entries = Object.entries(noTarget.byReason ?? {});
   const total = entries.reduce((sum, [, n]) => sum + n, 0);
   const detail = entries.length ? ` (${entries.map(([k, n]) => `${k} ${n}`).join(', ')})` : '';
-  return [`fixes with no blame target: ${total}${detail}`, `fix commits inside their own PR only (not counted as no-target): ${noTarget.inPrOnly ?? 0}`];
+  const note = wholeRun ? WHOLE_RUN : '';
+  return [`fixes with no blame target: ${total}${detail}${note}`, `fix commits inside their own PR only (not counted as no-target): ${noTarget.inPrOnly ?? 0}${note}`];
 }
 
 /** The primary row of a fix PR is the latest merged blamed PR. An old row with no `primary` field counts as primary. */
@@ -101,7 +105,7 @@ const RULE_OF_THUMB = 'a rule of thumb (right in 4 of 4 doc cases), not a proven
  * a rule of thumb (right in 4 of 4 doc cases), not a proven cause. One line keeps the all-row counts, so the noise stays visible.
  * noTarget: { byReason: { reason: n }, inPrOnly } from the fix-chains totals, or absent.
  */
-export function report(rows, { noTarget } = {}) {
+export function report(rows, { noTarget, wholeRun = false } = {}) {
   const primary = rows.filter(isPrimary);
   const counts = countBy(primary);
   const all = countBy(rows);
@@ -111,7 +115,7 @@ export function report(rows, { noTarget } = {}) {
     ...CAUSES.map((c) => `  ${c}: ${counts[c]}`),
     `all rows by cause (every blamed PR, the noise): ${CAUSES.map((c) => `${c} ${all[c]}`).join(', ')}`,
     ...shareLines(counts, primary.length),
-    ...noTargetLines(noTarget),
+    ...noTargetLines(noTarget, wholeRun),
   ].join('\n');
 }
 
@@ -165,7 +169,7 @@ export async function main(argv, deps = {}) {
     const rows = args.fromJson ? fromRun.rows : readEscapeRows(dir);
     if (!args.fromJson && !existsSync(path.join(dir, ESCAPES_FILE))) stdout(`0 escape rows (no ${ESCAPES_FILE} in ${dir})`);
     const cut = args.since ? since(rows, args.since) : { kept: rows, undated: null };
-    stdout(report(cut.kept, { noTarget: fromRun?.totals?.noTarget }));
+    stdout(report(cut.kept, { noTarget: fromRun?.totals?.noTarget, wholeRun: Boolean(args.since) }));
     if (cut.undated !== null) stdout(`undated rows left out: ${cut.undated}`);
     return 0;
   } catch (err) {
