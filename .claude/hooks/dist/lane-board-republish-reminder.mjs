@@ -356,6 +356,7 @@ var init_trace_boot = __esm({
       "decision-gate",
       "destructive-command-guard",
       "git-commit-roadmap",
+      "file-claims",
       "hook-health-monitor",
       "identity-probe",
       "lane-agent-tag",

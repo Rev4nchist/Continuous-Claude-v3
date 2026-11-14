@@ -93,7 +93,7 @@ test('T8 renderStatus is five lines: header, states, cap and slot, waves, next d
   assert.equal(out.length, 5);
   assert.equal(out[0], 'status: board continuous-claude, 4 lanes, program state HOLD');
   assert.equal(out[1], 'states: blocked 1, backlog 0, ready 0, active 1, review 0, done 1, no card 1');
-  assert.equal(out[2], 'cap: 2/3 units, slot free');
+  assert.equal(out[2], 'cap: 2/5 units, slot free');
   assert.equal(out[3], 'waves: 0: 1/2 done, 0 in work, 0 blocked; 1: 0/2 done, 1 in work, 1 blocked');
   assert.equal(out[4], 'next decision point: DP2 (9 open)');
   assert.equal(renderStatus(status(undefined, { decisions: null })).split('\n')[4], 'next decision point: none');

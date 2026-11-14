@@ -19,7 +19,7 @@ Script: `node C:/Users/dkhay/continuous-claude/scripts/review-engine/program.mjs
 
 ## The cap
 
-- At most 3 program lanes are in work, and 1 lane that spends test runs. `program.mjs ready` applies the cap.
+- At most 5 program lanes are in work, and 1 lane that spends test runs. `program.mjs ready` applies the cap.
 - The cap counts lanes in `active` or `review` whose holder is alive. A parked lane with a live holder counts.
 - Before a command that runs longer than 5 minutes, run `node C:/Users/dkhay/.claude/scripts/lane.mjs renew`.
 
