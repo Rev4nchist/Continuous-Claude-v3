@@ -347,6 +347,45 @@ function repoBranch(o) {
 
 const repoSection = (o) => [repoBranch(o)];
 
+// ---- memory ----
+// embedding-daemon-commit-leak (2026-11-13): the embedding daemon held 97.3 GB of private commit after about 36 hours and starved
+// pre-pr and vitest ("cannot allocate memory"). Read-only: this check never stops a process (a stop is Dave's yes).
+// Test seam: HARNESS_DOCTOR_EMBED_PRIVATE_MB is the commit in MB, "gone" for a pid that does not run, or "other" for a pid
+// that now belongs to a process that is not python (a stale file whose pid was reused).
+// Known gap: a daemon that runs with CCV3_EMBED_COMMIT_CEILING_MB above the FAIL line shows FAIL before its own ceiling acts.
+export const EMBED_COMMIT_WARN_MB = 4096;
+export const EMBED_COMMIT_FAIL_MB = 8192;
+
+/** The private commit of a pid in MB, 'gone', 'other', 'skip' (not Windows) or null (unreadable). The pid is a checked whole number. */
+function embedPrivateMb(pid) {
+  const seam = process.env.HARNESS_DOCTOR_EMBED_PRIVATE_MB;
+  if (seam !== undefined) return seam === 'gone' || seam === 'other' ? seam : (/^\d+$/.test(seam) ? Number(seam) : null);
+  if (process.platform !== 'win32') return 'skip';
+  const ps = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if (-not $p) { 'gone' } elseif ($p.ProcessName -notlike 'python*') { 'other' } else { $p.PrivateMemorySize64 }`;
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', timeout: 20_000, windowsHide: true });
+  const out = String(r.stdout ?? '').trim();
+  if (out === 'gone' || out === 'other') return out;
+  return /^\d+$/.test(out) ? Math.round(Number(out) / (1024 * 1024)) : null;
+}
+
+export function embeddingDaemonCommit(o) {
+  const file = join(o.home, '.claude', 'run', 'ccv3-embedding.json');
+  if (!existsSync(file)) return result('PASS', 'memory', 'embedding-daemon', `info: no daemon runs (no ${file})`);
+  let pid;
+  try { pid = readJson(file).pid; } catch (err) { return result('WARN', 'memory', 'embedding-daemon', `${file} is not valid JSON: ${msg(err)}`); }
+  if (!Number.isInteger(pid) || pid <= 0) return result('WARN', 'memory', 'embedding-daemon', `${file} has no valid pid`);
+  const mb = embedPrivateMb(pid);
+  if (mb === 'gone') return result('PASS', 'memory', 'embedding-daemon', `info: pid ${pid} named in ${file} does not run (a stale file)`);
+  if (mb === 'other') return result('PASS', 'memory', 'embedding-daemon', `info: pid ${pid} named in ${file} is not a python process now (a stale file)`);
+  if (mb === 'skip') return result('PASS', 'memory', 'embedding-daemon', `info: not checked on ${process.platform}`);
+  if (mb === null) return result('WARN', 'memory', 'embedding-daemon', `cannot read the private commit of pid ${pid}`);
+  const status = mb >= EMBED_COMMIT_FAIL_MB ? 'FAIL' : mb >= EMBED_COMMIT_WARN_MB ? 'WARN' : 'PASS';
+  const act = status === 'PASS' ? '' : ': it leaks or the fix is not live; a stop of the process is Dave\'s yes';
+  return result(status, 'memory', 'embedding-daemon', `pid ${pid} holds ${mb} MB of private commit (WARN at ${EMBED_COMMIT_WARN_MB}, FAIL at ${EMBED_COMMIT_FAIL_MB})${act}`);
+}
+
+const memorySection = (o) => [embeddingDaemonCommit(o)];
+
 // ---- schedule ----
 const SCHEDULE_REL = ['scripts', 'scheduled', 'tasks.json'];
 const TASK_RUNNING = 267009; // SCHED_S_TASK_RUNNING
@@ -1203,7 +1242,8 @@ export function fleetopsSize(o) {
 const fleetopsSection = (o) => [fleetopsSize(o)];
 
 const SECTIONS = [['repo', repoSection], ['hooks', hooksSection], ['sync', syncSection], ['logs', logsSection], ['review', reviewSection],
-  ['schedule', scheduleSection], ['blocklist', blocklistSection], ['registry', registrySection], ['lanes', lanesSection], ['fleetops', fleetopsSection], ['deps', depsSection]];
+  ['schedule', scheduleSection], ['blocklist', blocklistSection], ['registry', registrySection], ['lanes', lanesSection], ['fleetops', fleetopsSection], ['deps', depsSection],
+  ['memory', memorySection]];
 
 /** Runs every section. A section that throws becomes one WARN, so one bad input never hides the rest. */
 export function collect(o) {
