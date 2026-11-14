@@ -436,7 +436,7 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 // src/coderabbit-guard.ts
 import { execFileSync, spawnSync } from "child_process";
 import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { homedir as homedir3, tmpdir } from "os";
 import { dirname as dirname2, join as join3, resolve as resolve2 } from "path";
 
 // src/shared/output.ts
@@ -827,7 +827,7 @@ function splitFirst(s) {
 }
 function baseName(tok) {
   const norm = tok.replace(/\\/g, "/");
-  return norm.slice(norm.lastIndexOf("/") + 1).toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, "");
+  return norm.slice(norm.lastIndexOf("/") + 1).toLowerCase().replace(/(?<=.)@.*$/, "").replace(/\.(exe|cmd|bat|ps1)$/, "");
 }
 function cleanToken(t) {
   return t.replace(/^["'`]+|["'`)]+$/g, "");
@@ -943,7 +943,7 @@ function classifyInvocation(inv, plain) {
   if (isReadOnlySubcommand(inv.args)) return { verdict: "allow" };
   return { verdict: "block", reason: NOT_ALLOWED };
 }
-var CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?)(?=$|[\s"'`)\\,}])/gi;
+var CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?)(?=$|[\s"'`)\\,}@])/gi;
 var BILLING_WORD = /(?:^|[\s"'`(=,])--(?:use-credits|api-key)(?=$|[\s"'`)=,])/i;
 var REVIEW_WORD = /\breview\b/i;
 var EXECUTING_PROGRAMS = /* @__PURE__ */ new Set([
@@ -1117,22 +1117,33 @@ function repoBranchKey(cwd = process.cwd(), env = process.env) {
   }
 }
 var CD_SEGMENT = /^(?:cd|chdir|pushd|push-location|set-location|sl)\s+(?:(?:-\w+|\/d)\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))/i;
-function effectiveCwd(command, cwd, ps = false) {
+function homeOf(env = process.env) {
+  return env.USERPROFILE || env.HOME || homedir3();
+}
+function cdTarget(dir, target, home) {
+  const expanded = home && /^~(?=[\\/]|$)/.test(target) ? join3(home, target.slice(1)) : target;
+  return resolve2(dir, expanded.replace(/^\/([a-zA-Z])(?=\/|$)/, "$1:"));
+}
+function effectiveCwd(command, cwd, ps = false, home = "") {
   let dir = cwd;
   for (const seg of segmentize(command, ps)) {
     const m = CD_SEGMENT.exec(seg);
     const target = m?.[1] ?? m?.[2] ?? m?.[3];
-    if (target && target !== "-") dir = resolve2(dir, target.replace(/^\/([a-zA-Z])(?=\/|$)/, "$1:"));
+    if (target && target !== "-") dir = cdTarget(dir, target, home);
   }
   return dir;
 }
 var CCV3_REMOTE = /(?:rev4nchist|parcadei)\/continuous-claude(?:-v3)?/i;
 var ANSWER_BASES = ["refs/heads/main", "refs/remotes/fork/main"];
+var EVAL_TREE = "scripts/eval/review-eval";
 var ANSWER_GIT_TIMEOUT_MS = 1e4;
 var ANSWER_BUDGET_MS = 3e4;
 var gitDeadline = 0;
 var DENY_PREFIX = "CodeRabbit guard:";
 var cannotCheck = (why) => `${DENY_PREFIX} ${why}: no CLI review runs on a diff it cannot check for answer-key`;
+var WAY_OUT_TEXT = "run the review as its own plain command with --base <ref>";
+var WAY_OUT = `${DENY_PREFIX} ${WAY_OUT_TEXT}, so the check can read the diff for answer-key`;
+var budgetOut = () => Date.now() >= gitDeadline;
 function gitRun(cwd, args) {
   const left = gitDeadline - Date.now();
   if (left <= 0) return { ok: false, status: null, stdout: "", stderr: "budget" };
@@ -1225,21 +1236,21 @@ function configDeny(cwd, files) {
   for (const file of files) {
     const abs = resolve2(cwd, file);
     let real;
+    if (budgetOut()) return cannotCheck("the time budget ended");
     try {
       real = realpathSync(abs);
     } catch {
       return cannotCheck("a --config file cannot be read");
     }
     if (namesAnswerKey(abs) || namesAnswerKey(real)) return `${DENY_PREFIX} a --config file is sent to the service and it is answer-key`;
+    if (budgetOut()) return cannotCheck("the time budget ended");
+    try {
+      if (statSync(real).isDirectory()) return WAY_OUT;
+    } catch {
+      return cannotCheck("a --config file cannot be read");
+    }
   }
   return null;
-}
-function remoteKind(url) {
-  if (CCV3_REMOTE.test(url)) return "ccv3";
-  if (/^file:/i.test(url)) return "unknown";
-  if (/^[a-z][a-z0-9+.-]*:\/\/[^/\s]+\//i.test(url)) return "other";
-  if (/^[^/\\:@\s]+@[^/\\:\s]+:/.test(url)) return "other";
-  return "unknown";
 }
 function ccv3Root(dir) {
   const top = gitRun(dir, ["rev-parse", "--show-toplevel"]);
@@ -1247,42 +1258,49 @@ function ccv3Root(dir) {
   const root = top.stdout.trim();
   if (!root) return null;
   const remotes = gitRun(root, ["config", "--get-regexp", "^remote\\..*\\.url$"]);
-  if (remotes.status === 1) return { root };
-  if (!remotes.ok) return null;
-  const urls = remotes.stdout.split("\n").map((l) => l.trim().split(/\s+/).slice(1).join(" ")).filter(Boolean);
-  return urls.every((u) => remoteKind(u) === "other") ? { skip: true } : { root };
+  if (remotes.status !== 1 && !remotes.ok) return null;
+  const urls = remotes.status === 1 ? [] : remotes.stdout.split("\n").map((l) => l.trim().split(/\s+/).slice(1).join(" ")).filter(Boolean);
+  if (urls.some((u) => CCV3_REMOTE.test(u))) return { root };
+  const tree = gitRun(root, ["ls-tree", "HEAD", "--", EVAL_TREE]);
+  if (tree.ok) return tree.stdout.trim() ? { root } : { skip: true };
+  const head = gitRun(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  if (head.status !== 1 || budgetOut()) return null;
+  return existsSync(join3(root, EVAL_TREE)) ? { root } : { skip: true };
 }
 function rangesFor(root, opts) {
   const ranges = ANSWER_BASES.map((b) => `${b}...HEAD`);
-  const named = [...opts.bases.map((v) => [v, false]), ...opts.baseCommits.map((v) => [v, true])];
-  for (const [value, commit] of named) {
-    if (value.startsWith("-") || !gitRun(root, ["rev-parse", "--verify", "--quiet", `${value}^{commit}`]).ok) {
-      return cannotCheck("a --base or --base-commit value does not resolve to a commit");
-    }
-    ranges.push(`${value}...HEAD`);
-    if (commit) ranges.push(`${value}..HEAD`);
+  for (const value of [...opts.bases, ...opts.baseCommits]) {
+    if (value.startsWith("-") || !gitRun(root, ["rev-parse", "--verify", "--quiet", `${value}^{commit}`]).ok) return WAY_OUT;
+    ranges.push(`${value}...HEAD`, `${value}..HEAD`);
   }
   return ranges;
 }
-function dirDeny(dir, opts) {
-  const found = ccv3Root(dir);
-  if (found === null) return cannotCheck("the git root or the remotes cannot be read");
-  if ("skip" in found) return null;
-  const ranges = rangesFor(found.root, opts);
+function rootDeny(root, opts) {
+  const ranges = rangesFor(root, opts);
   if (typeof ranges === "string") return ranges;
   const union = /* @__PURE__ */ new Set();
   for (const range of ranges) {
-    const paths = diffPaths(found.root, range);
+    const paths = diffPaths(root, range);
     if (paths === null) return cannotCheck("git diff failed");
     for (const p of paths) union.add(p);
   }
-  const tree = statusPaths(found.root);
+  const tree = statusPaths(root);
   if (tree === null) return cannotCheck("git status failed");
   for (const p of tree) union.add(p);
-  const check = answerKeyCheck({ root: found.root, paths: [...union] });
+  const check = answerKeyCheck({ root, paths: [...union] });
   if (check === null) return null;
   if ("closed" in check) return cannotCheck("the REVIEW.md skip list is not usable");
   return `${DENY_PREFIX} no CLI review may read the paths in the diff (${check.hits.length}) that are answer-key`;
+}
+function checkedRoots(dirs) {
+  const roots = /* @__PURE__ */ new Set();
+  let error;
+  for (const dir of dirs) {
+    const found = ccv3Root(dir);
+    if (found === null) error ??= cannotCheck("the git root or the remotes cannot be read");
+    else if (!("skip" in found)) roots.add(found.root);
+  }
+  return { roots: [...roots], error };
 }
 var CD_WORD = /^(?:cd|chdir|pushd|popd|push-location|pop-location|set-location|sl)(?=\s|$)/i;
 function nestedHasCd(text, ps, depth) {
@@ -1301,13 +1319,16 @@ function folderDeny(command, ps, cwd) {
     if (CD_WORD.test(text)) {
       const m = CD_SEGMENT.exec(text);
       const target = m?.[1] ?? m?.[2] ?? m?.[3];
-      if (!target || target === "-" || /[~$%`]/.test(target)) return cannotCheck("a cd target cannot be read");
-      if (seenCr) return cannotCheck("a cd comes after the review");
+      if (!target || target === "-" || /[$%`]/.test(target) || target.includes("~") && !/^~(?:[\\/][^~]*)?$/.test(target)) {
+        return WAY_OUT;
+      }
+      if (seenCr) return WAY_OUT;
     }
     if ([...text.matchAll(CR_WORD)].length > 0) seenCr = true;
     const inv = parseInvocation(seg);
-    if (inv?.nested !== void 0 && nestedHasCd(inv.nested, ps, 0)) return cannotCheck("a cd sits inside a wrapper string");
+    if (inv?.nested !== void 0 && nestedHasCd(inv.nested, ps, 0)) return WAY_OUT;
   }
+  if (budgetOut()) return cannotCheck("the time budget ended");
   try {
     if (!statSync(cwd).isDirectory()) return cannotCheck("the folder the review runs in is not a folder");
   } catch {
@@ -1315,21 +1336,108 @@ function folderDeny(command, ps, cwd) {
   }
   return null;
 }
+var SHAPE_FLAGS = /* @__PURE__ */ new Set(["--agent", "--fresh", "--show-prompts", "--use-credits", "--committed", "--uncommitted", "--include-untracked", "--usage", "--deep", "--help", "-h"]);
+var SHAPE_VALUE_OPTIONS = ["--base", "--base-commit", "--dir", "--remote", "--source-branch", "--region"];
+var BARE_TOKEN = /^[A-Za-z0-9._/:=~-]+/;
+var QUOTED_BODY = /^[A-Za-z0-9._/:= -]*$/;
+var REMOTE_LITERAL = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+function shapeTokens(text) {
+  const out = [];
+  const n = text.length;
+  const ends = (k) => k >= n || text[k] === " " || text[k] === "	" || text[k] === ";" || text.startsWith("&&", k);
+  let i = 0;
+  while (i < n) {
+    const c = text[i];
+    if (c === " " || c === "	") i++;
+    else if (c === ";") {
+      out.push({ sep: ";" });
+      i++;
+    } else if (text.startsWith("&&", i)) {
+      out.push({ sep: "&&" });
+      i += 2;
+    } else if (c === '"' || c === "'") {
+      const close = text.indexOf(c, i + 1);
+      const body = close < 0 ? "" : text.slice(i + 1, close);
+      if (close < 0 || !QUOTED_BODY.test(body) || !ends(close + 1)) return null;
+      out.push({ v: body, quoted: true });
+      i = close + 1;
+    } else {
+      const m = BARE_TOKEN.exec(text.slice(i));
+      if (!m || !ends(i + m[0].length)) return null;
+      out.push({ v: m[0], quoted: false });
+      i += m[0].length;
+    }
+  }
+  return out;
+}
+var literalValue = (t) => t !== void 0 && t.v !== "" && !t.v.startsWith("-") && !t.v.includes("~");
+function parseShape(command) {
+  const override = OVERRIDE.exec(command);
+  const toks = shapeTokens((override ? command.slice(override[0].length) : command).trim());
+  if (!toks || toks.length === 0) return null;
+  const groups = [[]];
+  for (const t of toks) {
+    if ("sep" in t) groups.push([]);
+    else groups[groups.length - 1].push(t);
+  }
+  if (groups.length > 2) return null;
+  const shape = { bases: [], baseCommits: [], dirs: [], configs: [], remotes: [], bad: false };
+  if (groups.length === 2) {
+    const [word, target] = groups[0];
+    if (groups[0].length !== 2 || word.quoted || !/^cd$/i.test(word.v)) return null;
+    shape.cd = target.v;
+  }
+  const [program, sub, ...rest] = groups[groups.length - 1];
+  if (!program || !sub || program.quoted || sub.quoted || !isCrExecutable(program.v) || sub.v !== "review") return null;
+  const slot = { "--base": shape.bases, "--base-commit": shape.baseCommits, "--dir": shape.dirs, "--remote": shape.remotes, "--config": shape.configs };
+  for (const name of SHAPE_VALUE_OPTIONS) slot[name] ??= [];
+  let i = 0;
+  while (i < rest.length) {
+    const t = rest[i++];
+    if (t.quoted) return null;
+    if (SHAPE_FLAGS.has(t.v)) continue;
+    const eq = /^(--[a-z-]+)=(.*)$/.exec(t.v);
+    const name = eq ? eq[1] : t.v === "-c" ? "--config" : t.v;
+    if (!Object.hasOwn(slot, name)) return null;
+    if (eq) {
+      if (!literalValue({ v: eq[2] })) return null;
+      slot[name].push(eq[2]);
+    } else if (name === "--config") {
+      let n = 0;
+      while (literalValue(rest[i])) {
+        shape.configs.push(rest[i++].v);
+        n++;
+      }
+      if (n === 0) return null;
+    } else {
+      const value = rest[i++];
+      if (!literalValue(value)) return null;
+      slot[name].push(value.v);
+    }
+  }
+  return shape.remotes.every((r) => REMOTE_LITERAL.test(r)) ? shape : null;
+}
 function answerKeyDeny(run) {
   try {
     gitDeadline = Date.now() + ANSWER_BUDGET_MS;
-    if (run.unaccounted) return cannotCheck("a CLI option in the command cannot be read");
-    const folder = folderDeny(run.command, run.ps, run.cwd);
+    const shape = parseShape(run.command);
+    const cwd = shape ? shape.cd === void 0 ? run.startCwd : cdTarget(run.startCwd, shape.cd, run.home) : run.cwd;
+    const folder = folderDeny(run.command, run.ps, cwd);
     if (folder) return folder;
-    const opts = readReviewOptions(run.invocations);
+    const opts = shape ?? readReviewOptions(run.invocations);
+    const folders = [cwd, ...opts.dirs.map((d) => resolve2(cwd, d))];
+    const early = shape ? void 0 : checkedRoots(folders);
+    if (early && early.roots.length > 0) return WAY_OUT;
     if (opts.bad) return cannotCheck("a CLI option has no value");
-    if (opts.remotes.some((r) => CCV3_REMOTE.test(r))) {
-      return `${DENY_PREFIX} --remote names the CCv3 repo, so the service reads it, answer-key included`;
-    }
-    const config = configDeny(run.cwd, opts.configs);
+    if (opts.remotes.some((r) => CCV3_REMOTE.test(r))) return `${DENY_PREFIX} --remote names the CCv3 repo and the service reads its answer-key`;
+    const config = configDeny(cwd, opts.configs);
     if (config) return config;
-    for (const dir of [run.cwd, ...opts.dirs.map((d) => resolve2(run.cwd, d))]) {
-      const reason = dirDeny(dir, opts);
+    const { roots, error } = early ?? checkedRoots(folders);
+    if (error) return error;
+    if (roots.length === 0) return !shape && run.unaccounted ? cannotCheck("a CLI option in the command cannot be read") : null;
+    if (opts.bases.length + opts.baseCommits.length === 0) return WAY_OUT;
+    for (const root of roots) {
+      const reason = rootDeny(root, opts);
       if (reason) return reason;
     }
     return null;
@@ -1371,12 +1479,55 @@ function rawReview(command) {
   const first = [...command.matchAll(CR_WORD)][0];
   return !!first && REVIEW_WORD.test(command.slice((first.index ?? 0) + first[0].length));
 }
-function answerKeyResult(input, command, ps, verdict, seam) {
+var TEXT_PROGRAMS = /* @__PURE__ */ new Set([
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "ag",
+  "ack",
+  "echo",
+  "printf",
+  "cat",
+  "type",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "wc",
+  "sed",
+  "awk",
+  "git",
+  "gh",
+  "select-string",
+  "sls",
+  "findstr",
+  "write-output",
+  "write-host",
+  "set-content",
+  "add-content",
+  "out-file"
+]);
+function spanMayRun(raw, ps, depth) {
+  const inv = parseInvocation(raw);
+  if (!inv) return true;
+  if (inv.nested !== void 0) return depth >= MAX_NESTING || rawCallMayRun(inv.nested, ps, depth + 1);
+  if (isCrExecutable(inv.exe)) return true;
+  return !TEXT_PROGRAMS.has(inv.exe);
+}
+function rawCallMayRun(source, ps, depth = 0) {
+  const lexed = lexShell(joinContinuations(source, ps), ps);
+  return rawScan(lexed, ps).reviewSegments.some((s) => spanMayRun(s.raw, ps, depth));
+}
+function answerKeyResult(input, command, ps, verdict, seam, env) {
   const blockedReview = (verdict.runs ?? 0) === 0 && verdict.verdict === "block" && rawReview(command);
   if ((verdict.runs ?? 0) === 0 && !blockedReview) return null;
-  const cwd = (seam.cwdOf ?? effectiveCwd)(command, input.cwd || process.cwd(), ps);
+  if (!blockedReview && (verdict.invocations ?? []).length === 0 && !rawCallMayRun(command, ps)) return null;
+  const startCwd = input.cwd || process.cwd();
+  const home = homeOf(env);
+  const cwd = (seam.cwdOf ?? ((c, d, p) => effectiveCwd(c, d, p, home)))(command, startCwd, ps);
   const unaccounted = verdict.unaccounted === true || blockedReview && rawOptionCount(command) > 0;
-  const reason = answerKeyDeny({ command, ps, cwd, invocations: verdict.invocations ?? [], unaccounted });
+  const reason = answerKeyDeny({ command, ps, startCwd, cwd, home, invocations: verdict.invocations ?? [], unaccounted });
   return reason ? { allow: false, reason, answerKey: true } : null;
 }
 function decideChecked(input, env, seam) {
@@ -1386,9 +1537,10 @@ function decideChecked(input, env, seam) {
   const classify = seam.classify ?? classifyCommand;
   const runsCommand = BASH_TOOLS.has(tool) || DELEGATE_TOOLS.has(tool) && tool !== "Skill" && command !== "";
   if (OVERRIDE.test(command)) {
-    const denied2 = runsCommand ? answerKeyResult(input, command, ps, classify(command, ps), seam) : null;
+    const denied2 = runsCommand ? answerKeyResult(input, command, ps, classify(command, ps), seam, env) : null;
     if (denied2) return denied2;
-    logGuardDecision("coderabbit-guard", input, "override", "SKIP_CODERABBIT_GUARD=1", { command, env });
+    if (rawReview(command)) logGuardDecision("coderabbit-guard", { ...input, cwd: void 0 }, "override", "SKIP_CODERABBIT_GUARD=1", { env });
+    else logGuardDecision("coderabbit-guard", input, "override", "SKIP_CODERABBIT_GUARD=1", { command, env });
     return { allow: true };
   }
   if (tool === "Skill") {
@@ -1399,16 +1551,17 @@ function decideChecked(input, env, seam) {
   if (DELEGATE_TOOLS.has(tool)) {
     const d = classifyDelegate(input);
     if (d.verdict === "block") return { allow: false, reason: d.reason };
-    return (command ? answerKeyResult(input, command, false, classify(command, false), seam) : null) ?? { allow: true };
+    return (command ? answerKeyResult(input, command, false, classify(command, false), seam, env) : null) ?? { allow: true };
   }
   if (!BASH_TOOLS.has(tool)) return { allow: true };
   const verdict = classify(command, ps);
   if (verdict.verdict === "block") return { allow: false, reason: verdict.reason };
   const runs = verdict.runs ?? 0;
   if (runs === 0) return { allow: true };
-  const denied = answerKeyResult(input, command, ps, verdict, seam);
+  const denied = answerKeyResult(input, command, ps, verdict, seam, env);
   if (denied) return denied;
-  const cwd = (seam.cwdOf ?? effectiveCwd)(command, input.cwd || process.cwd(), ps);
+  const home = homeOf(env);
+  const cwd = (seam.cwdOf ?? ((c, d, p) => effectiveCwd(c, d, p, home)))(command, input.cwd || process.cwd(), ps);
   const key = repoBranchKey(cwd, env);
   const path2 = statePath(env);
   const state = readState(path2);
@@ -1441,7 +1594,8 @@ function readStdin() {
   return readFileSync2(0, "utf-8");
 }
 function logDeny(input, result, env = process.env) {
-  logGuardDecision("coderabbit-guard", input, "deny", result.reason || "blocked", result.answerKey ? { env } : { command: input.tool_input?.command, env });
+  if (result.answerKey) logGuardDecision("coderabbit-guard", { ...input, cwd: void 0 }, "deny", result.reason || "blocked", { env });
+  else logGuardDecision("coderabbit-guard", input, "deny", result.reason || "blocked", { command: input.tool_input?.command, env });
 }
 function main() {
   let input;
@@ -1468,6 +1622,7 @@ if (!process.env.VITEST) {
 }
 export {
   BILLING_REASON,
+  WAY_OUT_TEXT,
   answerKeyDeny,
   checkRunCap,
   classifyCommand,
@@ -1477,6 +1632,7 @@ export {
   decide,
   effectiveCwd,
   hasForbiddenFlags,
+  homeOf,
   isCodeWorkspace,
   isCrExecutable,
   isReadOnlyAutofixDelegate,
@@ -1488,6 +1644,7 @@ export {
   logDeny,
   normalizeRemote,
   parseInvocation,
+  parseShape,
   parsedOptionCount,
   rawBilling,
   rawOptionCount,

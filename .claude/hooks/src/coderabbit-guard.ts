@@ -63,19 +63,45 @@
  * - Runs are counted at PreToolUse time. The guard never sees the result, so failed and
  *   rate-limited runs still use a slot.
  *
- * Answer-key check: a counted review run (Bash, PowerShell, or a Task or Agent that carries the command) is denied when its diff may
- * hold an answer-key path (scripts/github/lib/answer-paths.mjs, the frozen four globs). The check reads git, never the run-cap key:
- * the commits against refs/heads/main and refs/remotes/fork/main, the working tree (staged, unstaged, untracked), and every base,
- * --dir, --config and --remote the command names. It runs unless the target is positively another repo (root resolved, remotes read,
- * every remote a host-form URL that is not CCv3); a repo with no remote, a local-path remote or a git error is checked or denied.
- * A deny holds the count of matched paths, never a path, and its log line holds no command text. The override lifts the run cap only.
- * Any error before or inside the check denies a command that holds a cr word followed by review (failClosed).
+ * Answer-key check (an ALLOW LIST, round 2): a counted review run (the Bash or PowerShell tool) is denied when its diff may hold an
+ * answer-key path (scripts/github/lib/answer-paths.mjs, the frozen four globs). The check reads git, never the run-cap key.
+ * A Task or Agent payload carries `prompt`, not `command`: a prompt is never checked for a review call (the autofix rule reads prompt and
+ * description for its own purpose only). What the guard sees is the Bash or PowerShell call of the subagent itself. Only a Task or Agent
+ * payload that has a tool_input.command (none known today) gets the same check, and it counts no run.
+ *
+ * Which repo: a folder is skipped only when git resolves its root, no remote is CCv3 AND HEAD has no scripts/eval/review-eval tree. A CCv3
+ * mirror or a renamed fork is checked; a folder outside git, and a foreign repo (with or without a remote), are skipped. A git error denies.
+ * A repo with no commit yet has no HEAD tree: the folder itself decides (a review-eval folder in it means checked).
+ *
+ * In a CCv3 checkout a counted review passes in ONE shape only: a single plain `cr review ...` or `coderabbit review ...` call, alone or
+ * after ONE plain `cd <literal folder that exists>` joined by `&&` or `;`, with options from the CLI 0.9.0 help list, each with a
+ * literal value, and a literal --base or --base-commit that resolves. The allow test (parseShape) is strict on the raw text: tokens of
+ * [A-Za-z0-9._/:=-] (a cd target may start with ~, expanded through the home folder of the env), or such a token in simple quotes around
+ * the whole token (a space is allowed inside quotes). Any other character ($ % backtick @ { } ( ) a pipe, a quote inside a token, a
+ * comment, a newline) fails it. So does any wrapper, keyword, runner or second cd. Everything that is not that shape is denied with ONE
+ * way-out text: run the review as its own plain command with --base <ref>. A backslash in a cd target also fails the shape (use /).
+ * Options that read more than the diff: every --base and --base-commit (X...HEAD and X..HEAD both), the main and fork/main ranges, the
+ * working tree (staged, unstaged, untracked), every --dir, every -c or --config file (a folder or an answer-key file is denied) and
+ * --remote (a literal owner/repo, and not the CCv3 repo). `--deep` is a flag only: a focus text after it is not part of the shape.
+ * The SKIP_CODERABBIT_GUARD=1 prefix is cut before the shape test. A deny holds the count of matched paths, never a path. A log row of
+ * this check holds no cwd and no command text, and every reason ENDS with the words answer-key (the log masker turns a later word into ***).
+ * The override lifts the run cap only. Any error before or inside the check denies a command that holds a cr word followed by review (failClosed).
+ *
+ * The check runs only when the command holds a review call: a parsed call, or a raw-only span led by a program that runs a string (a shell,
+ * wsl, watch, find, Start-Process, ...). Text that only NAMES the words is not a call: a grep, echo or git line, also behind time or if, and
+ * a wrapper string such as `bash -c "grep 'cr review' docs"` whose inner command is such a line. The run cap still counts those (unchanged).
  *
  * Known limits of the answer-key check:
- * - Wrappers outside EXECUTING_PROGRAMS are not read: `node -e "..."`, `python -c "..."`. A shell tool other than Bash or PowerShell is not read.
- * - A review started with `Start-Process -WorkingDirectory`, `git -C`, `env -C` or `xargs -I` can run in a folder the check does not see.
- * - Time: the git calls of one check share a 30 s budget (each call 10 s at most). After an allow, repoBranchKey adds at most four 10 s
- *   git calls. The worst case is 70 s, so the hook registration must set a timeout above 70 s (use 90 s).
+ * - A shell tool other than Bash and PowerShell is not read. Wrappers outside EXECUTING_PROGRAMS are not read: `node -e "..."`, `python -c "..."`.
+ * - A review started with `Start-Process -WorkingDirectory`, `git -C`, `env -C` or `xargs -I` runs in a folder the check does not see: from a
+ *   session folder outside CCv3 it passes when the command holds no option the parser cannot read (`env -C <ccv3> cr review --agent`). Not done.
+ * - A review that runs in a foreign repo is still denied for an option the parser cannot read (`watch -n 5 cr review --agent --dir ..`) and
+ *   for a cd the folder step cannot follow. Both are kept on purpose from round 1: they can hide a CCv3 folder.
+ * - A run-cap deny and a block deny (billing flag, not the answer-key check) still log the command head and the cwd.
+ * - VITEST in the session env turns the whole hook off (the main() gate at the end of this file).
+ * - The hook has no registration yet, so no timeout is enforced. The registration card must test a timeout of 90 s or more.
+ * - Time: the git calls and file checks of one check share a 30 s budget (each git call 10 s at most; the budget is read before every
+ *   git call, realpathSync and statSync). After an allow, repoBranchKey adds at most four 10 s git calls. The worst case is 70 s.
  *
  * Override: SKIP_CODERABBIT_GUARD=1 as a LEADING assignment (or `$env:SKIP_CODERABBIT_GUARD=1;` in
  * PowerShell). Each use writes an 'override' line to the guard decision log.
@@ -84,7 +110,7 @@
  */
 import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
 import { logGuardDecision } from './shared/guard-log.js';
@@ -497,11 +523,13 @@ function splitFirst(s: string): { tok: string; rest: string } {
   return { tok: m[1] ?? m[2] ?? m[3] ?? '', rest: m[4] ?? '' };
 }
 
+/** The program name of a token: no path, no `@version` suffix (`coderabbit@latest`), no .exe/.cmd/.bat/.ps1. */
 function baseName(tok: string): string {
   const norm = tok.replace(/\\/g, '/');
   return norm
     .slice(norm.lastIndexOf('/') + 1)
     .toLowerCase()
+    .replace(/(?<=.)@.*$/, '')
     .replace(/\.(exe|cmd|bat|ps1)$/, '');
 }
 
@@ -672,7 +700,7 @@ function classifyInvocation(inv: Invocation, plain: boolean): SegmentClass {
 // ---------------------------------------------------------------------------------------------
 
 /** A standalone cr or coderabbit word: after a space, quote, path separator or bracket; not `.coderabbit.yaml`. */
-const CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?)(?=$|[\s"'`)\\,}])/gi;
+const CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?)(?=$|[\s"'`)\\,}@])/gi;
 const BILLING_WORD = /(?:^|[\s"'`(=,])--(?:use-credits|api-key)(?=$|[\s"'`)=,])/i;
 const REVIEW_WORD = /\breview\b/i;
 /**
@@ -924,14 +952,24 @@ export function repoBranchKey(cwd: string = process.cwd(), env: NodeJS.ProcessEn
 
 const CD_SEGMENT = /^(?:cd|chdir|pushd|push-location|set-location|sl)\s+(?:(?:-\w+|\/d)\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))/i;
 
-/** The directory the command runs in: the payload cwd, moved by the last `cd <dir>` in the command. */
-export function effectiveCwd(command: string, cwd: string, ps = false): string {
+/** The home folder of an env: the same order as the guard log. */
+export function homeOf(env: NodeJS.ProcessEnv = process.env): string {
+  return env.USERPROFILE || env.HOME || homedir();
+}
+
+/** `target` resolved from `dir`. A leading `~` goes through `home` (the shell expands it). Git Bash writes C:\x as /c/x; node would read that as a path on the current drive. */
+function cdTarget(dir: string, target: string, home: string): string {
+  const expanded = home && /^~(?=[\\/]|$)/.test(target) ? join(home, target.slice(1)) : target;
+  return resolve(dir, expanded.replace(/^\/([a-zA-Z])(?=\/|$)/, '$1:'));
+}
+
+/** The directory the command runs in: the payload cwd, moved by the last `cd <dir>` in the command. A leading `~` is expanded through `home`. */
+export function effectiveCwd(command: string, cwd: string, ps = false, home = ''): string {
   let dir = cwd;
   for (const seg of segmentize(command, ps)) {
     const m = CD_SEGMENT.exec(seg);
     const target = m?.[1] ?? m?.[2] ?? m?.[3];
-    // Git Bash writes C:\x as /c/x; node would read that as a path on the current drive.
-    if (target && target !== '-') dir = resolve(dir, target.replace(/^\/([a-zA-Z])(?=\/|$)/, '$1:'));
+    if (target && target !== '-') dir = cdTarget(dir, target, home);
   }
   return dir;
 }
@@ -940,22 +978,29 @@ export function effectiveCwd(command: string, cwd: string, ps = false): string {
 // Answer-key check: no CLI review may start on a diff that holds an answer-key path
 // ---------------------------------------------------------------------------------------------
 //
-// The check runs for every counted review run. CCv3 is read from the git remotes of the directory the review runs in, never from the
-// run-cap key (an env key or a `cwd#` fallback key is not evidence about the repo). The paths it reads are the union of: the commits
-// against main and against fork/main, the working tree (staged, unstaged and untracked), and every base the CLI options name.
-// A reason holds the COUNT of matched paths and never a path. Any failure denies: the hook's outer catch allows, so this code has its own.
+// The check runs for every command that holds a review call. CCv3 is read from the git remotes and the HEAD tree of the directory the review
+// runs in, never from the run-cap key (an env key or a `cwd#` fallback key is not evidence about the repo). The paths it reads are the union
+// of: the commits against main and against fork/main, the working tree (staged, unstaged and untracked), and both ranges (X...HEAD and
+// X..HEAD) of every base the CLI options name. A reason holds the COUNT of matched paths and never a path, and ENDS with the words
+// answer-key. Any failure denies: the hook's outer catch allows, so this code has its own.
 
 /** A remote URL of the CCv3 repo (either owner, either repo name, any host). Unanchored on purpose: an odd URL form over-matches and is checked. */
 const CCV3_REMOTE = /(?:rev4nchist|parcadei)\/continuous-claude(?:-v3)?/i;
 /** The two ranges pre-pr.mjs checks: local main and fork/main. `--no-renames`: a move out of gold/ names the old path too. */
 const ANSWER_BASES = ['refs/heads/main', 'refs/remotes/fork/main'];
+/** A HEAD that holds this tree is a CCv3 checkout, whatever its remotes say (a mirror, a renamed fork). */
+const EVAL_TREE = 'scripts/eval/review-eval';
 const ANSWER_GIT_TIMEOUT_MS = 10000;
 /** One budget for all git calls of one check, so a stalled disk costs at most this long (the hook timeout must be longer). */
 const ANSWER_BUDGET_MS = 30000;
 let gitDeadline = 0;
-// The log masker reads `key` followed by a word or a colon as a secret name: keep `answer-key` at the end of a sentence.
+// The log masker reads `key` followed by a word or a colon as a secret name: every reason ENDS with `answer-key`.
 const DENY_PREFIX = 'CodeRabbit guard:';
 const cannotCheck = (why: string): string => `${DENY_PREFIX} ${why}: no CLI review runs on a diff it cannot check for answer-key`;
+/** The way-out text of every shape deny. */
+export const WAY_OUT_TEXT = 'run the review as its own plain command with --base <ref>';
+const WAY_OUT = `${DENY_PREFIX} ${WAY_OUT_TEXT}, so the check can read the diff for answer-key`;
+const budgetOut = (): boolean => Date.now() >= gitDeadline;
 
 interface GitResult {
   ok: boolean;
@@ -1084,82 +1129,90 @@ function namesAnswerKey(path: string): boolean {
   return false;
 }
 
-/** A config file is sent to the service. Deny an answer-key file, a missing file, and a link that leads to either. */
+/** A config file is sent to the service. Deny an answer-key file, a missing file, a folder, and a link that leads to any of them. The budget is read before each file call. */
 function configDeny(cwd: string, files: string[]): string | null {
   for (const file of files) {
     const abs = resolve(cwd, file);
     let real: string;
+    if (budgetOut()) return cannotCheck('the time budget ended');
     try {
       real = realpathSync(abs);
     } catch {
       return cannotCheck('a --config file cannot be read');
     }
     if (namesAnswerKey(abs) || namesAnswerKey(real)) return `${DENY_PREFIX} a --config file is sent to the service and it is answer-key`;
+    if (budgetOut()) return cannotCheck('the time budget ended');
+    try {
+      if (statSync(real).isDirectory()) return WAY_OUT;
+    } catch {
+      return cannotCheck('a --config file cannot be read');
+    }
   }
   return null;
 }
 
 /**
- * What a remote URL says about the repo. A host form (`scheme://host/...` or `user@host:path`) that is not CCv3 is positively another
- * repo. A local path (or file://) says nothing, so it is unknown and the check runs.
+ * Whether `dir` may be a CCv3 checkout. Skip (not checked) only when git resolves the root, no remote is CCv3 AND HEAD holds no
+ * scripts/eval/review-eval tree: a folder outside git or a foreign repo. A mirror or a renamed fork has the tree and is checked. Null: git
+ * failed, an unborn HEAD or a broken config (deny).
  */
-function remoteKind(url: string): 'ccv3' | 'other' | 'unknown' {
-  if (CCV3_REMOTE.test(url)) return 'ccv3';
-  if (/^file:/i.test(url)) return 'unknown';
-  if (/^[a-z][a-z0-9+.-]*:\/\/[^/\s]+\//i.test(url)) return 'other';
-  if (/^[^/\\:@\s]+@[^/\\:\s]+:/.test(url)) return 'other';
-  return 'unknown';
-}
-
-/** Whether `dir` may be a CCv3 checkout (true unless it is positively another repo, or not a repo): false for a folder outside git, a repo with no remote, or another repo. Null: git failed (deny). */
 function ccv3Root(dir: string): { root: string } | { skip: true } | null {
   const top = gitRun(dir, ['rev-parse', '--show-toplevel']);
   if (!top.ok) return top.status === 128 && /not a git repository/i.test(top.stderr) ? { skip: true } : null;
   const root = top.stdout.trim();
   if (!root) return null;
   const remotes = gitRun(root, ['config', '--get-regexp', '^remote\\..*\\.url$']);
-  if (remotes.status === 1) return { root }; // exit 1: no remote at all, so nothing says it is another repo: check
-  if (!remotes.ok) return null;
-  const urls = remotes.stdout.split('\n').map((l) => l.trim().split(/\s+/).slice(1).join(' ')).filter(Boolean);
-  // Positively not CCv3: the root resolved, the remotes read, there is at least one, and every one is another host-form repo.
-  return urls.every((u) => remoteKind(u) === 'other') ? { skip: true } : { root };
+  if (remotes.status !== 1 && !remotes.ok) return null; // exit 1 is "no remote at all"
+  const urls = remotes.status === 1 ? [] : remotes.stdout.split('\n').map((l) => l.trim().split(/\s+/).slice(1).join(' ')).filter(Boolean);
+  if (urls.some((u) => CCV3_REMOTE.test(u))) return { root };
+  const tree = gitRun(root, ['ls-tree', 'HEAD', '--', EVAL_TREE]);
+  if (tree.ok) return tree.stdout.trim() ? { root } : { skip: true };
+  // A git failure denies. An unborn HEAD (no commit yet) is not a failure: there is no HEAD tree, so the folder itself decides.
+  const head = gitRun(root, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  if (head.status !== 1 || budgetOut()) return null;
+  return existsSync(join(root, EVAL_TREE)) ? { root } : { skip: true };
 }
 
-/** The ranges the check reads in one CCv3 checkout, or a deny reason. Each base the CLI options name must resolve. */
+/** The ranges the check reads in one CCv3 checkout, or a deny reason. Each base the CLI options name must resolve; each gets X...HEAD and X..HEAD. */
 function rangesFor(root: string, opts: ReviewOptions): string[] | string {
   const ranges = ANSWER_BASES.map((b) => `${b}...HEAD`);
-  const named: Array<[string, boolean]> = [...opts.bases.map((v): [string, boolean] => [v, false]), ...opts.baseCommits.map((v): [string, boolean] => [v, true])];
-  for (const [value, commit] of named) {
-    if (value.startsWith('-') || !gitRun(root, ['rev-parse', '--verify', '--quiet', `${value}^{commit}`]).ok) {
-      return cannotCheck('a --base or --base-commit value does not resolve to a commit');
-    }
-    ranges.push(`${value}...HEAD`);
-    // A commit on the current branch: the two-dot range reads that commit's own tree, so it never reads fewer paths.
-    if (commit) ranges.push(`${value}..HEAD`);
+  for (const value of [...opts.bases, ...opts.baseCommits]) {
+    if (value.startsWith('-') || !gitRun(root, ['rev-parse', '--verify', '--quiet', `${value}^{commit}`]).ok) return WAY_OUT;
+    // The two-dot range reads the base's own tree: a path unchanged since the merge base that the base branch deleted shows only there.
+    ranges.push(`${value}...HEAD`, `${value}..HEAD`);
   }
   return ranges;
 }
 
-/** The deny reason for one directory, or null (not a CCv3 checkout, or no answer-key path). */
-function dirDeny(dir: string, opts: ReviewOptions): string | null {
-  const found = ccv3Root(dir);
-  if (found === null) return cannotCheck('the git root or the remotes cannot be read');
-  if ('skip' in found) return null;
-  const ranges = rangesFor(found.root, opts);
+/** The deny reason for one CCv3 checkout, or null (no answer-key path in the diff). */
+function rootDeny(root: string, opts: ReviewOptions): string | null {
+  const ranges = rangesFor(root, opts);
   if (typeof ranges === 'string') return ranges;
   const union = new Set<string>();
   for (const range of ranges) {
-    const paths = diffPaths(found.root, range);
+    const paths = diffPaths(root, range);
     if (paths === null) return cannotCheck('git diff failed');
     for (const p of paths) union.add(p);
   }
-  const tree = statusPaths(found.root);
+  const tree = statusPaths(root);
   if (tree === null) return cannotCheck('git status failed');
   for (const p of tree) union.add(p);
-  const check = answerKeyCheck({ root: found.root, paths: [...union] });
+  const check = answerKeyCheck({ root, paths: [...union] });
   if (check === null) return null;
   if ('closed' in check) return cannotCheck('the REVIEW.md skip list is not usable');
   return `${DENY_PREFIX} no CLI review may read the paths in the diff (${check.hits.length}) that are answer-key`;
+}
+
+/** The CCv3 checkouts among `dirs` (deduplicated roots), and a deny reason when git failed for any folder. A skipped folder adds nothing. */
+function checkedRoots(dirs: string[]): { roots: string[]; error?: string } {
+  const roots = new Set<string>();
+  let error: string | undefined;
+  for (const dir of dirs) {
+    const found = ccv3Root(dir);
+    if (found === null) error ??= cannotCheck('the git root or the remotes cannot be read');
+    else if (!('skip' in found)) roots.add(found.root);
+  }
+  return { roots: [...roots], error };
 }
 
 // ---- the folder the review runs in ----
@@ -1177,9 +1230,10 @@ function nestedHasCd(text: string, ps: boolean, depth: number): boolean {
 }
 
 /**
- * A deny reason when the folder a review runs in cannot be read from the command: a cd target that holds `~`, `$`, `%` or a backtick
- * (resolve() reads them as plain text), a cd with no target, `cd -`, popd, a cd AFTER the review, a cd inside a wrapper string, or a folder
- * that does not exist. effectiveCwd cannot follow these, so the check could read the wrong repo.
+ * A deny reason when the folder a review runs in cannot be read from the command: a cd target that holds `$`, `%`, a backtick or a `~`
+ * that is not a leading `~` or `~/` (resolve() reads them as plain text), a cd with no target, `cd -`, popd, a cd AFTER the review, a cd
+ * inside a wrapper string (the way-out), or a folder that does not exist. effectiveCwd cannot follow these, so the check could read the
+ * wrong repo. The budget is read before the statSync.
  */
 function folderDeny(command: string, ps: boolean, cwd: string): string | null {
   let seenCr = false;
@@ -1188,13 +1242,16 @@ function folderDeny(command: string, ps: boolean, cwd: string): string | null {
     if (CD_WORD.test(text)) {
       const m = CD_SEGMENT.exec(text);
       const target = m?.[1] ?? m?.[2] ?? m?.[3];
-      if (!target || target === '-' || /[~$%`]/.test(target)) return cannotCheck('a cd target cannot be read');
-      if (seenCr) return cannotCheck('a cd comes after the review');
+      if (!target || target === '-' || /[$%`]/.test(target) || (target.includes('~') && !/^~(?:[\\/][^~]*)?$/.test(target))) {
+        return WAY_OUT;
+      }
+      if (seenCr) return WAY_OUT;
     }
     if ([...text.matchAll(CR_WORD)].length > 0) seenCr = true;
     const inv = parseInvocation(seg);
-    if (inv?.nested !== undefined && nestedHasCd(inv.nested, ps, 0)) return cannotCheck('a cd sits inside a wrapper string');
+    if (inv?.nested !== undefined && nestedHasCd(inv.nested, ps, 0)) return WAY_OUT;
   }
+  if (budgetOut()) return cannotCheck('the time budget ended');
   try {
     if (!statSync(cwd).isDirectory()) return cannotCheck('the folder the review runs in is not a folder');
   } catch {
@@ -1203,34 +1260,149 @@ function folderDeny(command: string, ps: boolean, cwd: string): string | null {
   return null;
 }
 
+// ---- the allowed shape ----
+
+/** What the allow test reads: the options of one plain review, and the cd target when one comes first. */
+interface Shape extends ReviewOptions {
+  cd?: string;
+}
+
+const SHAPE_FLAGS = new Set(['--agent', '--fresh', '--show-prompts', '--use-credits', '--committed', '--uncommitted', '--include-untracked', '--usage', '--deep', '--help', '-h']);
+const SHAPE_VALUE_OPTIONS = ['--base', '--base-commit', '--dir', '--remote', '--source-branch', '--region'];
+/** A literal token. `~` is read by the caller: only a cd target may lead with it. */
+const BARE_TOKEN = /^[A-Za-z0-9._/:=~-]+/;
+const QUOTED_BODY = /^[A-Za-z0-9._/:= -]*$/;
+const REMOTE_LITERAL = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+type ShapeToken = { v: string; quoted: boolean } | { sep: '&&' | ';' };
+
+/** Tokens of a command that holds only literal words, `&&` and `;`. Null at the first other character, an open quote, or a quote inside a token. */
+function shapeTokens(text: string): ShapeToken[] | null {
+  const out: ShapeToken[] = [];
+  const n = text.length;
+  const ends = (k: number): boolean => k >= n || text[k] === ' ' || text[k] === '\t' || text[k] === ';' || text.startsWith('&&', k);
+  let i = 0;
+  while (i < n) {
+    const c = text[i];
+    if (c === ' ' || c === '\t') i++;
+    else if (c === ';') {
+      out.push({ sep: ';' });
+      i++;
+    } else if (text.startsWith('&&', i)) {
+      out.push({ sep: '&&' });
+      i += 2;
+    } else if (c === '"' || c === "'") {
+      const close = text.indexOf(c, i + 1);
+      const body = close < 0 ? '' : text.slice(i + 1, close);
+      if (close < 0 || !QUOTED_BODY.test(body) || !ends(close + 1)) return null;
+      out.push({ v: body, quoted: true });
+      i = close + 1;
+    } else {
+      const m = BARE_TOKEN.exec(text.slice(i));
+      if (!m || !ends(i + m[0].length)) return null;
+      out.push({ v: m[0], quoted: false });
+      i += m[0].length;
+    }
+  }
+  return out;
+}
+
+/** An option value: not empty, not another option, no `~` (the shell would expand it, this check does not). */
+const literalValue = (t: { v: string } | undefined): t is { v: string } => t !== undefined && t.v !== '' && !t.v.startsWith('-') && !t.v.includes('~');
+
+/**
+ * The strict allow test on the RAW command: ONE plain review call, alone or after ONE plain `cd <literal>` joined by `&&` or `;`. Null for
+ * anything else. The SKIP_CODERABBIT_GUARD=1 prefix is cut first (it lifts the run cap only).
+ */
+export function parseShape(command: string): Shape | null {
+  const override = OVERRIDE.exec(command);
+  const toks = shapeTokens((override ? command.slice(override[0].length) : command).trim());
+  if (!toks || toks.length === 0) return null;
+  const groups: Array<Array<{ v: string; quoted: boolean }>> = [[]];
+  for (const t of toks) {
+    if ('sep' in t) groups.push([]);
+    else groups[groups.length - 1].push(t);
+  }
+  if (groups.length > 2) return null;
+  const shape: Shape = { bases: [], baseCommits: [], dirs: [], configs: [], remotes: [], bad: false };
+  if (groups.length === 2) {
+    const [word, target] = groups[0];
+    if (groups[0].length !== 2 || word.quoted || !/^cd$/i.test(word.v)) return null;
+    shape.cd = target.v;
+  }
+  const [program, sub, ...rest] = groups[groups.length - 1];
+  if (!program || !sub || program.quoted || sub.quoted || !isCrExecutable(program.v) || sub.v !== 'review') return null;
+  const slot: Record<string, string[]> = { '--base': shape.bases, '--base-commit': shape.baseCommits, '--dir': shape.dirs, '--remote': shape.remotes, '--config': shape.configs };
+  for (const name of SHAPE_VALUE_OPTIONS) slot[name] ??= [];
+  let i = 0;
+  while (i < rest.length) {
+    const t = rest[i++];
+    if (t.quoted) return null;
+    if (SHAPE_FLAGS.has(t.v)) continue;
+    const eq = /^(--[a-z-]+)=(.*)$/.exec(t.v);
+    const name = eq ? eq[1] : t.v === '-c' ? '--config' : t.v;
+    if (!Object.hasOwn(slot, name)) return null;
+    if (eq) {
+      if (!literalValue({ v: eq[2] })) return null;
+      slot[name].push(eq[2]);
+    } else if (name === '--config') {
+      // -c and --config take one or more files, up to the next option.
+      let n = 0;
+      while (literalValue(rest[i])) {
+        shape.configs.push(rest[i++].v);
+        n++;
+      }
+      if (n === 0) return null;
+    } else {
+      const value = rest[i++];
+      if (!literalValue(value)) return null;
+      slot[name].push(value.v);
+    }
+  }
+  return shape.remotes.every((r) => REMOTE_LITERAL.test(r)) ? shape : null;
+}
+
 export interface AnswerKeyRun {
   command: string;
   ps: boolean;
-  /** The folder the review runs in (effectiveCwd). */
+  /** The folder of the payload (the session or subagent cwd). */
+  startCwd: string;
+  /** The folder the review runs in, as effectiveCwd reads it. */
   cwd: string;
+  /** The home folder for a leading `~` in a cd target. */
+  home: string;
   invocations: Invocation[];
   unaccounted: boolean;
 }
 
 /**
- * A deny reason when a review run may read an answer-key path or the check cannot finish, else null. `invocations` are the parsed review
- * calls (their options); `unaccounted` is true when the raw text holds an option that no parsed call gives. Own catch: the outer one allows.
+ * A deny reason when a review run may read an answer-key path or the check cannot finish, else null. Own catch: the outer one allows.
+ * Order: read the folder; read the options (the shape when the command is the allowed shape, else what the parser gives); check --remote and
+ * the config files; decide which folders are CCv3 checkouts (the folder and every --dir); none: allow. Else only the allowed shape with a
+ * literal base passes, and its diff is read.
  */
 export function answerKeyDeny(run: AnswerKeyRun): string | null {
   try {
     gitDeadline = Date.now() + ANSWER_BUDGET_MS;
-    if (run.unaccounted) return cannotCheck('a CLI option in the command cannot be read');
-    const folder = folderDeny(run.command, run.ps, run.cwd);
+    const shape = parseShape(run.command);
+    const cwd = shape ? (shape.cd === undefined ? run.startCwd : cdTarget(run.startCwd, shape.cd, run.home)) : run.cwd;
+    const folder = folderDeny(run.command, run.ps, cwd);
     if (folder) return folder;
-    const opts = readReviewOptions(run.invocations);
+    const opts = shape ?? readReviewOptions(run.invocations);
+    const folders = [cwd, ...opts.dirs.map((d) => resolve(cwd, d))];
+    // Not the allowed shape and a CCv3 checkout is involved: the way-out, whatever else is wrong with the command.
+    const early = shape ? undefined : checkedRoots(folders);
+    if (early && early.roots.length > 0) return WAY_OUT;
     if (opts.bad) return cannotCheck('a CLI option has no value');
-    if (opts.remotes.some((r) => CCV3_REMOTE.test(r))) {
-      return `${DENY_PREFIX} --remote names the CCv3 repo, so the service reads it, answer-key included`;
-    }
-    const config = configDeny(run.cwd, opts.configs);
+    if (opts.remotes.some((r) => CCV3_REMOTE.test(r))) return `${DENY_PREFIX} --remote names the CCv3 repo and the service reads its answer-key`;
+    const config = configDeny(cwd, opts.configs);
     if (config) return config;
-    for (const dir of [run.cwd, ...opts.dirs.map((d) => resolve(run.cwd, d))]) {
-      const reason = dirDeny(dir, opts);
+    const { roots, error } = early ?? checkedRoots(folders);
+    if (error) return error;
+    if (roots.length === 0) return !shape && run.unaccounted ? cannotCheck('a CLI option in the command cannot be read') : null;
+    if (opts.bases.length + opts.baseCommits.length === 0) return WAY_OUT;
+    for (const root of roots) {
+      const reason = rootDeny(root, opts);
       if (reason) return reason;
     }
     return null;
@@ -1295,14 +1467,44 @@ function rawReview(command: string): boolean {
   return !!first && REVIEW_WORD.test(command.slice((first.index ?? 0) + first[0].length));
 }
 
-/** The answer-key result for a review run (the verdict counts at least one run), or null. A deny uses no run slot. */
-function answerKeyResult(input: PreToolUseInput, command: string, ps: boolean, verdict: SegmentClass, seam: DecideSeam): DecideResult | null {
+/** Programs whose arguments are text to read or print: a cr word behind one of them (also behind time or if) names the words and calls nothing. */
+const TEXT_PROGRAMS = new Set([
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'echo', 'printf', 'cat', 'type', 'head', 'tail', 'less', 'more', 'wc', 'sed', 'awk',
+  'git', 'gh', 'select-string', 'sls', 'findstr', 'write-output', 'write-host', 'set-content', 'add-content', 'out-file',
+]);
+
+/**
+ * True when a raw span (a segment of an executing program that names cr and later review) may run a review. The parser peels prefixes
+ * and runners and opens a wrapper string: a wrapper whose inner command holds no call is not a call, a text program is not a call, and
+ * anything else it cannot read (wsl, watch, find, `bash -ec`, `env -C`) is treated as a call.
+ */
+function spanMayRun(raw: string, ps: boolean, depth: number): boolean {
+  const inv = parseInvocation(raw);
+  if (!inv) return true;
+  if (inv.nested !== undefined) return depth >= MAX_NESTING || rawCallMayRun(inv.nested, ps, depth + 1);
+  if (isCrExecutable(inv.exe)) return true;
+  return !TEXT_PROGRAMS.has(inv.exe);
+}
+
+function rawCallMayRun(source: string, ps: boolean, depth = 0): boolean {
+  const lexed = lexShell(joinContinuations(source, ps), ps);
+  return rawScan(lexed, ps).reviewSegments.some((s) => spanMayRun(s.raw, ps, depth));
+}
+
+/**
+ * The answer-key result for a command that may hold a review, or null. The run cap counts more than this check reads: a parsed review
+ * call (`verdict.invocations`), or a raw-only span that may run a review. Text that only names the words is no call. A deny uses no run slot.
+ */
+function answerKeyResult(input: PreToolUseInput, command: string, ps: boolean, verdict: SegmentClass, seam: DecideSeam, env: NodeJS.ProcessEnv): DecideResult | null {
   // A blocked review (the override lifted the block) has no parsed calls: any option in its raw text counts as unread.
   const blockedReview = (verdict.runs ?? 0) === 0 && verdict.verdict === 'block' && rawReview(command);
   if ((verdict.runs ?? 0) === 0 && !blockedReview) return null;
-  const cwd = (seam.cwdOf ?? effectiveCwd)(command, input.cwd || process.cwd(), ps);
+  if (!blockedReview && (verdict.invocations ?? []).length === 0 && !rawCallMayRun(command, ps)) return null;
+  const startCwd = input.cwd || process.cwd();
+  const home = homeOf(env);
+  const cwd = (seam.cwdOf ?? ((c: string, d: string, p?: boolean) => effectiveCwd(c, d, p, home)))(command, startCwd, ps);
   const unaccounted = verdict.unaccounted === true || (blockedReview && rawOptionCount(command) > 0);
-  const reason = answerKeyDeny({ command, ps, cwd, invocations: verdict.invocations ?? [], unaccounted });
+  const reason = answerKeyDeny({ command, ps, startCwd, cwd, home, invocations: verdict.invocations ?? [], unaccounted });
   return reason ? { allow: false, reason, answerKey: true } : null;
 }
 
@@ -1315,9 +1517,11 @@ function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, seam: Dec
 
   // The override lifts the run cap only. A review that may read an answer-key path is denied even with it.
   if (OVERRIDE.test(command)) {
-    const denied = runsCommand ? answerKeyResult(input, command, ps, classify(command, ps), seam) : null;
+    const denied = runsCommand ? answerKeyResult(input, command, ps, classify(command, ps), seam, env) : null;
     if (denied) return denied;
-    logGuardDecision('coderabbit-guard', input, 'override', 'SKIP_CODERABBIT_GUARD=1', { command, env });
+    // A command that names a review gets a row with no cwd and no command text: the check read the folder and the options.
+    if (rawReview(command)) logGuardDecision('coderabbit-guard', { ...input, cwd: undefined }, 'override', 'SKIP_CODERABBIT_GUARD=1', { env });
+    else logGuardDecision('coderabbit-guard', input, 'override', 'SKIP_CODERABBIT_GUARD=1', { command, env });
     return { allow: true };
   }
 
@@ -1330,9 +1534,10 @@ function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, seam: Dec
   if (DELEGATE_TOOLS.has(tool)) {
     const d = classifyDelegate(input);
     if (d.verdict === 'block') return { allow: false, reason: d.reason };
-    // A Task or Agent that carries a review command gets the same answer-key check as a Bash call. It counts no run.
-    // The command is classified here, not through `d`: a read-only autofix prompt returns allow from classifyDelegate before it reads the command.
-    return (command ? answerKeyResult(input, command, false, classify(command, false), seam) : null) ?? { allow: true };
+    // A Task or Agent payload carries `prompt`, not `command`, and a prompt is never checked for a review call. Only a payload that has a tool_input.command
+    // gets the same answer-key check as a Bash call (it counts no run). The command is classified here, not through `d`: a read-only
+    // autofix prompt returns allow from classifyDelegate before it reads the command.
+    return (command ? answerKeyResult(input, command, false, classify(command, false), seam, env) : null) ?? { allow: true };
   }
 
   if (!BASH_TOOLS.has(tool)) return { allow: true };
@@ -1343,9 +1548,10 @@ function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, seam: Dec
   if (runs === 0) return { allow: true };
 
   // The check decides from git, not from the cap key, and runs before the cap, so a deny uses no slot.
-  const denied = answerKeyResult(input, command, ps, verdict, seam);
+  const denied = answerKeyResult(input, command, ps, verdict, seam, env);
   if (denied) return denied;
-  const cwd = (seam.cwdOf ?? effectiveCwd)(command, input.cwd || process.cwd(), ps);
+  const home = homeOf(env);
+  const cwd = (seam.cwdOf ?? ((c: string, d: string, p?: boolean) => effectiveCwd(c, d, p, home)))(command, input.cwd || process.cwd(), ps);
   const key = repoBranchKey(cwd, env);
   const path = statePath(env);
   const state = readState(path);
@@ -1385,9 +1591,10 @@ function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
 
-/** The deny line of the guard log. An answer-key deny logs no command text: the command can name a path or a folder. */
+/** The deny line of the guard log. An answer-key deny logs no command text and no cwd: either can name a path or a folder. */
 export function logDeny(input: PreToolUseInput, result: DecideResult, env: NodeJS.ProcessEnv = process.env): void {
-  logGuardDecision('coderabbit-guard', input, 'deny', result.reason || 'blocked', result.answerKey ? { env } : { command: input.tool_input?.command, env });
+  if (result.answerKey) logGuardDecision('coderabbit-guard', { ...input, cwd: undefined }, 'deny', result.reason || 'blocked', { env });
+  else logGuardDecision('coderabbit-guard', input, 'deny', result.reason || 'blocked', { command: input.tool_input?.command, env });
 }
 
 function main(): void {
