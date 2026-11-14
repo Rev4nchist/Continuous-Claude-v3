@@ -672,7 +672,8 @@ function parseInvocationInner(segment: string, moves: { on: boolean }): Invocati
     } else if (exe === 'cmd') {
       return { exe, args: [], nested: unquoteOuter(rest.replace(/^(?:\/[a-z]\s+)+/i, '')) };
     } else if (SHELLS.has(exe)) {
-      const flags = POSIX_SHELLS.has(exe) ? '[a-z]{0,3}c[a-z]{0,3}|command' : 'c|command|lc';
+      // Any option cluster that holds a c opens the string (`-c`, `-ec`, `-euxvc`, `-cxu`): no cap on the letters around it.
+      const flags = POSIX_SHELLS.has(exe) ? '[a-z]*c[a-z]*|command' : 'c|command|lc';
       const m = new RegExp(`(?:^|\\s)-(?:${flags})\\s+([\\s\\S]*)$`, 'i').exec(rest);
       if (m) return { exe, args: [], nested: unquoteOuter(m[1]) };
       const doc = rest.match(/<<-?[ \t]*(?:'[^'\n]*'|"[^"\n]*"|\\?[\w.-]+)[ \t]*\r?\n([\s\S]*)$/);
@@ -994,8 +995,9 @@ export function classifyCommand(source: string, ps = false, depth = 0): SegmentC
     counted.push(...calls);
     if (c.unaccounted) unaccounted = true;
     // Placed: a parsed cr call stands for the review of this span (or the string it opened brought a placed call). A wrapper option that moves the folder is not placed.
-    const placed = inv.nested === undefined ? isCrExecutable(inv.exe) && !inv.moves : (c.runs ?? 0) > 0 && c.unplaced !== true;
-    if (c.unplaced || (inv.moves && isCrExecutable(inv.exe) && (c.runs ?? 0) > 0)) unplaced = true;
+    // A wrapper string (`sudo -D dir bash -c '...'`) inherits the move: the review inside runs in a folder the check does not see.
+    const placed = inv.nested === undefined ? isCrExecutable(inv.exe) && !inv.moves : (c.runs ?? 0) > 0 && c.unplaced !== true && !inv.moves;
+    if (c.unplaced || (inv.moves && (inv.nested !== undefined || isCrExecutable(inv.exe)) && (c.runs ?? 0) > 0)) unplaced = true;
     if (!owner) runs += c.runs ?? 0;
     else {
       owner.placed ||= placed;

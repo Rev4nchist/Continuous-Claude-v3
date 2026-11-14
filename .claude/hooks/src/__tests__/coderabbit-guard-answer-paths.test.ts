@@ -1081,6 +1081,67 @@ describe('coderabbit-guard answer-key round 3', { timeout: 30_000 }, () => {
     }
   });
 
+  // ---- CLI run 1 findings F2 and F4 (seat ruling 2026-11-14) ----
+
+  it.each([
+    ['sudo -D dir bash -c', (c: string) => `sudo -D ${c} bash -c 'cr review --agent --base main'`],
+    ['sudo -D dir sh -c', (c: string) => `sudo -D ${c} sh -c "cr review --agent --base main"`],
+    ['sudo -D dir sh -c nested bash -c', (c: string) => `sudo -D ${c} sh -c 'bash -c "cr review --agent --base main"'`],
+    ['sudo --chdir dir bash -c', (c: string) => `sudo --chdir ${c} bash -c 'cr review --agent --base main'`],
+    ['env -C dir sh -c', (c: string) => `env -C ${c} sh -c 'cr review --agent --base main'`],
+    ['env -C dir nested sh -c', (c: string) => `env -C ${c} bash -c 'sh -c "cr review --agent --base main"'`],
+    ['sudo -D dir bash -euxvc', (c: string) => `sudo -D ${c} bash -euxvc 'cr review --agent --base main'`],
+  ])('F2 %s: a folder move in front of a wrapper string that holds a review is denied with the way-out text and uses no slot', (name, build) => {
+    const ccv3 = goldRepo();
+    const foreign = makeRepo({ remote: OTHER_URL });
+    const command = build(slash(ccv3.root));
+    expectWayOut(keep(foreign, command), `foreign ${name}`);
+    expectWayOut(keep(foreign, command, { cwd: plainFolder() }), `plain ${name}`);
+    expect(slots(foreign), name).toBe(0);
+  });
+
+  it('F2 parseInvocation marks a folder option on a wrapper that opens a string, and not on one that does not move', () => {
+    expect(parseInvocation("sudo -D /x bash -c 'cr review --agent'")).toMatchObject({ exe: 'bash', moves: true });
+    expect(parseInvocation("sudo -u root bash -c 'cr review --agent'")?.moves).toBeUndefined();
+  });
+
+  it.each([
+    ['4 letters before c', "bash -euxvc 'cr review --agent --base main'"],
+    ['4 letters before c, sh', "sh -euxvc 'cr review --agent --base main'"],
+    ['letters after c', "bash -cxuvz 'cr review --agent --base main'"],
+    ['4 before and 4 after c', "bash -euxvcpqrs 'cr review --agent --base main'"],
+    ['an upper-case letter in the cluster', "bash -Eeuxvc 'cr review --agent --base main'"],
+    ['a second cluster', "bash -eu -xc 'cr review --agent --base main'"],
+    ['a second cluster of 4 letters', "bash -eu -xuvec 'cr review --agent --base main'"],
+    ['zsh', "zsh -euxvc 'cr review --agent --base main'"],
+  ])('F4 %s: the quoted review counts as a call, so a gold diff is denied and a foreign folder counts its run', (_name, command) => {
+    expect(parseInvocation(command)?.nested).toBe('cr review --agent --base main');
+    const gold = goldRepo();
+    // A wrapper string is not the one plain shape, so in a CCv3 checkout it gets the way-out text, as `bash -c` does (the M1 table).
+    expectWayOut(keep(gold, command), 'gold');
+    expect(keep(gold, "bash -c 'cr review --agent --base main'").reason).toBe(keep(gold, command).reason);
+    expect(slots(gold)).toBe(0);
+    const foreign = makeRepo({ remote: OTHER_URL });
+    const r = foreign.run(command);
+    expect(r.allow).toBe(true);
+    expect(r.increment).toBe(true);
+  });
+
+  it('F4 a text the tokenizer cannot shape is denied with the way-out text, never allowed with 0 runs', () => {
+    const f = cleanRepo();
+    for (const c of [
+      "cr review --agent --base 'main",
+      'cr review --agent --base ma"in',
+      'cr review --agent --base main --unknown-option x',
+      'cr review --agent --base $(echo main)',
+      'cr review --agent --base main | cat',
+    ]) {
+      const r = keep(f, c);
+      expect(r.allow, c).toBe(false);
+    }
+    expect(slots(f)).toBe(0);
+  });
+
   // ---- M2 ----
 
   const PS_CD: Array<[string, string]> = [

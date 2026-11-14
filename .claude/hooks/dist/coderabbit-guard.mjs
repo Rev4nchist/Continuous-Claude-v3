@@ -910,7 +910,7 @@ function parseInvocationInner(segment, moves) {
     } else if (exe === "cmd") {
       return { exe, args: [], nested: unquoteOuter(rest.replace(/^(?:\/[a-z]\s+)+/i, "")) };
     } else if (SHELLS.has(exe)) {
-      const flags = POSIX_SHELLS.has(exe) ? "[a-z]{0,3}c[a-z]{0,3}|command" : "c|command|lc";
+      const flags = POSIX_SHELLS.has(exe) ? "[a-z]*c[a-z]*|command" : "c|command|lc";
       const m = new RegExp(`(?:^|\\s)-(?:${flags})\\s+([\\s\\S]*)$`, "i").exec(rest);
       if (m) return { exe, args: [], nested: unquoteOuter(m[1]) };
       const doc = rest.match(/<<-?[ \t]*(?:'[^'\n]*'|"[^"\n]*"|\\?[\w.-]+)[ \t]*\r?\n([\s\S]*)$/);
@@ -1108,8 +1108,8 @@ function classifyCommand(source, ps = false, depth = 0) {
     const calls = inv.nested === void 0 ? (c.runs ?? 0) > 0 ? [inv] : [] : c.invocations ?? [];
     counted.push(...calls);
     if (c.unaccounted) unaccounted = true;
-    const placed = inv.nested === void 0 ? isCrExecutable(inv.exe) && !inv.moves : (c.runs ?? 0) > 0 && c.unplaced !== true;
-    if (c.unplaced || inv.moves && isCrExecutable(inv.exe) && (c.runs ?? 0) > 0) unplaced = true;
+    const placed = inv.nested === void 0 ? isCrExecutable(inv.exe) && !inv.moves : (c.runs ?? 0) > 0 && c.unplaced !== true && !inv.moves;
+    if (c.unplaced || inv.moves && (inv.nested !== void 0 || isCrExecutable(inv.exe)) && (c.runs ?? 0) > 0) unplaced = true;
     if (!owner) runs += c.runs ?? 0;
     else {
       owner.placed ||= placed;
