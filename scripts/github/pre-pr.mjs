@@ -142,7 +142,7 @@ const nodeGate = (id, script, extra = [], more = {}) => ({ id, cmd: 'node', args
 const cheapGate = (id, script, extra = []) => nodeGate(id, script, extra, { cheap: true });
 
 // Tests in scripts/checks that the checks-tests gate runs. test-map.test.mjs has its own gate.
-const CHECKS_TESTS = ['prove-check', 'state-table', 'changed-lines', 'typecheck-changed', 'cli-smoke', 'parser-fixtures', 'catchers'].map((n) => `scripts/checks/${n}.test.mjs`);
+const CHECKS_TESTS = ['prove-check', 'state-table', 'changed-lines', 'typecheck-changed', 'cli-smoke', 'parser-fixtures', 'catchers', 'fixture-gap'].map((n) => `scripts/checks/${n}.test.mjs`);
 // Parser files outside scripts/**/*.mjs that scripts/checks/parser-fixtures/registry.mjs names. A test keeps this list equal to the registry.
 export const CATCHER_PARSER_FILES = ['apps/agentic-os/src/server/sources/safe-message.ts', '.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts'];
 export const BASE_TOKEN = '{base}';
