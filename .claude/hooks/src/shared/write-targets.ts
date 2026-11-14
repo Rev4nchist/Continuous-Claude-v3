@@ -24,6 +24,7 @@
  * tools (guard: hook-matcher-runtime-consistency.test.ts). `SHELL_WRITERS` and `DIRECT_WRITERS` are the list.
  */
 import { SHELL_TOOLS } from './shell-tools.js';
+import { blankDataStrings } from './data-spans.js';
 
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
 
@@ -151,12 +152,28 @@ function firstOperandAt(t: string, cueEnd: number): number {
   return cueEnd + m[0].length;
 }
 
+/** One spelling for comparing a whole string with a held path: slashes, no outer space, no leading "./". */
+const spellingOf = (s: string): string => s.replace(/\\/g, '/').trim().replace(/^\.\//, '');
+
+/** True when the string, as a whole, is one spelling of a held file. A case-insensitive form matches in any case. */
+function isHeldSpelling(content: string, claims: readonly HeldClaim[], fold: boolean): boolean {
+  const s = spellingOf(content);
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  return claims.some((c) =>
+    c.forms.some((f) => (fold ? spellingOf(f).toLowerCase() === lower : spellingOf(f) === s))
+    || (c.ciForms ?? []).some((f) => spellingOf(f).toLowerCase() === lower));
+}
+
 /**
  * Classify shell text against the claims other sessions hold. The text is read as a whole: backslashes
  * are folded to slashes, and case is folded when the file system folds it (`fold`).
  */
 export function classifyShellText(text: string, claims: readonly HeldClaim[], fold: boolean): ShellVerdict {
   if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: 'none' };
+  // A held path inside text that a data head prints or stores is no write (card coord-file-claims-text-false-match).
+  // A string that IS a held path stays: it is the operand of the write.
+  text = blankDataStrings(text, (s) => isHeldSpelling(s, claims, fold));
   let t = text.replace(/\\/g, '/');
   if (fold) t = t.toLowerCase();
   const tl = t.toLowerCase();
