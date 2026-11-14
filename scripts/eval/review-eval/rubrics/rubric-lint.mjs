@@ -19,10 +19,15 @@ const LINE_SPLIT = /\r\n?|\n/;
  * a hex SHA of 7 to 40 chars with at least one digit and one letter a-f, not touching other hex chars.
  * No `g` flag: it keeps state.
  */
-export const PR_TOKEN_RE = /p(?:r|ulls?|ull request)[\s:#_/-]*\d+|issues?\/\d+|#\d+|(?<![0-9a-f])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![0-9a-f])/i;
+// The PR word may be followed by any run of separators and the filler words "no", "num" or "number" (PR number N, PR no. N, PR (N), GH-N).
+export const PR_TOKEN_RE = /(?<![a-z])(?:prs?|pulls?|pull[\s_-]?requests?|gh)(?:[\s:#_/().-]|no\b|num(?:ber)?\b)*\d+|issues?\/\d+|#\d+|(?<![0-9a-f])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![0-9a-f])/i;
 /** Rule 8: an integer of 3 or more digits, not touching other digits. Letters and underscores beside it do not hide it. No `g` flag. */
 export const BIG_INT_RE = /(?<!\d)\d{3,}(?!\d)/;
-const MODEL_RE = /\b(sonnet|opus|haiku|claude|gpt|grok|gemini)\b/i;
+// Left edge only: a name glued to a digit or an underscore on the right (opus5, claude_x) still counts.
+const MODEL_RE = /(?<![a-z])(sonnet|opus|haiku|claude|gpt|grok|gemini)/i;
+// A format character (zero width space, joiner, bidi mark) can split a token and hide it from every rule.
+const FORMAT_CHAR_RE = /\p{Cf}/u;
+const TEXT_SECTIONS = ['Assess', 'Out of scope', 'Reason contract'];
 
 // Built with fromCharCode: a typed escape for this character has been turned into the raw character before.
 const BOM = String.fromCharCode(0xfeff);
@@ -110,6 +115,12 @@ function checkHeadings({ headings, body }) {
   if (!sameList(h3.map((h) => h.text), EXAMPLE_PARTS)) problems.push('headings: Examples needs ### Pass and then ### Fail, and no other ### heading');
   const examples = h2.find((h) => h.text === 'Examples');
   if (examples && h3.some((h) => h.line < examples.line)) problems.push('headings: the ### headings must sit under Examples');
+  for (const name of TEXT_SECTIONS) {
+    const at = headings.findIndex((h) => h.level === 2 && h.text === name);
+    if (at < 0) continue;
+    const stop = headings[at + 1]?.line ?? lines.length;
+    if (!lines.slice(headings[at].line + 1, stop).some((l) => l.trim() !== '')) problems.push(`empty-section: ## ${name} has no text`);
+  }
   for (const part of EXAMPLE_PARTS) {
     const at = headings.findIndex((h) => h.level === 3 && h.text === part);
     if (at < 0) continue;
@@ -133,6 +144,7 @@ export function checkRubric(parsed, name) {
   for (const n of linesMatching(text, PR_TOKEN_RE)) problems.push(`pr-token: line ${n} holds a PR reference or a SHA`);
   for (const n of linesMatching(text, BIG_INT_RE)) problems.push(`big-int: line ${n} holds an integer of 3 or more digits`);
   for (const n of linesMatching(text, MODEL_RE)) problems.push(`model-name: line ${n} names a model`);
+  for (const n of linesMatching(text, FORMAT_CHAR_RE)) problems.push(`format-char: line ${n} holds a zero-width or other format character`);
   return problems;
 }
 

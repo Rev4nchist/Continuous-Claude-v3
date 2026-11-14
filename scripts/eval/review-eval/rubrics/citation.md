@@ -31,8 +31,9 @@
 This rubric is deterministic. The runner computes the label and writes a computed reason: which check failed, or that all passed, with the finding id. No judge writes it.
 
 ## Examples
+Pass: a case and its right label. Fail: a wrong label a judge could give for a case, and the right label.
 ### Pass
 - valid: the path:line exists at the head, and the quoted line matches the output of git show.
 
 ### Fail
-- invalid (synthetic): the line number is past the end of the file at the head.
+- (synthetic) The line number is past the end of the file at the head. A label of valid is wrong. The right label is invalid.

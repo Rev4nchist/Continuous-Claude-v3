@@ -31,9 +31,10 @@
 The judge answers with one label value and one reason sentence. The sentence cites the finding id. The runner fills in that id. The judge does not invent it. The three values are exactly the values the judge parser accepts.
 
 ## Examples
+Pass: a case and its right label. Fail: a wrong label a judge could give for a case, and the right label.
 ### Pass
 - real: the engine flags that a brief parser drops a question line with no bullet. The followup holds a test that failed before the fix (expected one item, got none).
 - unclear: a race is flagged on the merged head. There is no followup, and the hunk does not decide it.
 
 ### Fail
-- noise (synthetic): a style preference is reported as a bug. A label of real here is wrong.
+- (synthetic) A style preference is reported as a bug. A label of real is wrong. The right label is noise.

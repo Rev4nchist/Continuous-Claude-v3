@@ -27,8 +27,9 @@
 This rubric is deterministic. The runner computes the ratio and writes a computed reason: the opened count and the listed count. No judge writes it. The ratio has a null score, so it is left out of every mean.
 
 ## Examples
+Pass: a case and its right label. Fail: a wrong label a judge could give for a case, and the right label.
 ### Pass
-- Report only (synthetic): 4 impact rows, 3 opened, ratio 0.75. The ratio is printed and not gated.
+- ratio (synthetic): 4 impact rows, 3 opened, ratio 0.75. The ratio is printed and not gated.
 
 ### Fail
-- A run that turns the ratio into a pass or fail gate (synthetic). This rubric has gates false, so that run is wrong.
+- (synthetic) A run turns the ratio into a pass or fail result. That is wrong. The right output is the ratio alone, with no verdict, because this rubric has gates false.

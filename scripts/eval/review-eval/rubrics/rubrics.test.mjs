@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { parseVerdict } from '../judge.mjs';
+import { SEVERITIES } from '../gold.mjs';
+import { VERDICTS } from '../labels.mjs';
 import { BIG_INT_RE, PR_TOKEN_RE, RUBRIC_NAMES, checkDir, checkRubric, parseRubric } from './rubric-lint.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -148,8 +150,16 @@ test('failure 6a: the false-positive label values are exactly the values the rea
   const values = front.labels.map((l) => l.value).sort();
   const accepted = (v) => parseVerdict(JSON.stringify({ sameIssue: 'yes', real: v })).ok;
   for (const v of values) assert.ok(accepted(v), `parseVerdict rejects the label "${v}"`);
-  const probes = ['real', 'noise', 'unclear', 'maybe', 'fake', 'true', 'false', 'unknown', ''];
-  assert.deepEqual(probes.filter(accepted).sort(), values);
+  assert.deepEqual([...VERDICTS].sort(), values, 'the false-positive labels differ from labels.mjs VERDICTS');
+  for (const v of VERDICTS) assert.ok(accepted(v), `parseVerdict rejects the VERDICTS value "${v}"`);
+});
+
+test('seat 1: the severity scale in severity.md is the gold.mjs SEVERITIES list, high to low (breaks if the rubric adds or drops a step)', () => {
+  const { body, front } = parseRubric(readFileSync(path.join(HERE, 'severity.md'), 'utf8'));
+  const m = /^- The scale, from high to low: (.+).$/m.exec(body);
+  assert.ok(m, 'severity.md has no scale line');
+  assert.deepEqual(m[1].split(', '), [...SEVERITIES]);
+  for (const l of front.labels) assert.ok(!/nit/i.test(l.description), `label ${l.value} names a step outside SEVERITIES`);
 });
 
 test('failure 6b: miss-cause holds the in_diff_logic class (breaks if the class is renamed or dropped)', () => {
@@ -163,7 +173,8 @@ test('rule 7: every PR reference form in the file is a problem (breaks if PR_TOK
   const forms = [
     `see ${'#'}${9001}`, `see pull/${9002}`, `see pulls/${9012}`, `see PR ${9003}`, `see pr ${9004}`, `see PR${9005}`,
     `see PR-${9006}`, `see PR: ${9007}`, `see PR_${9008}`, `see pr_${9123}`, `see issues/${9010}`, `see issue/${9013}`,
-    `see pull request ${9011}`, `see ${sha7}`, `see ${sha40}`, `see ${sha7.toUpperCase()}`, `see v2-4-g${sha7}`,
+    `see pull request ${9011}`, `see PR number ${7}`, `see PR no. ${12}`, `see PR (${5})`, `see PRs ${3}`, `see GH-${42}`,
+    `see pull-request ${8}`, `see pull_request ${9}`, `see PR #${4}`, `see PR ${6}`, `see ${sha7}`, `see ${sha40}`, `see ${sha7.toUpperCase()}`, `see v2-4-g${sha7}`,
   ];
   for (const token of forms) {
     assert.ok(PR_TOKEN_RE.test(token), `PR_TOKEN_RE misses "${token}"`);
@@ -174,7 +185,7 @@ test('rule 7: every PR reference form in the file is a problem (breaks if PR_TOK
 });
 
 test('rule 7: plain words and near misses are not PR tokens (breaks if PR_TOKEN_RE grows too wide)', () => {
-  for (const ok of ['effaced and deadbeef', 'the PR title', 'pull request', 'a pull request here', 'version 12', 'abcdef', '1234567', 'e2e test', 'issue tracker']) {
+  for (const ok of ['effaced and deadbeef', 'the PR title', 'pull request', 'a pull request here', 'version 12', 'abcdef', '1234567', 'e2e test', 'issue tracker', 'high 5', 'through 2', 'the PR title is short', 'approach 3', 'a pull request number']) {
     assert.ok(!PR_TOKEN_RE.test(ok), `PR_TOKEN_RE hits "${ok}"`);
   }
   assert.ok(!PR_TOKEN_RE.global && !BIG_INT_RE.global, 'a global regex keeps state between tests');
@@ -208,7 +219,7 @@ test('the seven real rubrics hold exactly these label values, appliesTo and gate
     severity: { appliesTo: 'finding', gates: true, labels: ['exact', 'off_by_one', 'inverted', 'insufficient_evidence'] },
     citation: { appliesTo: 'finding', gates: true, labels: ['valid', 'invalid', 'insufficient_evidence'] },
     'context-reach': { appliesTo: 'record', gates: false, labels: ['ratio'] },
-    'test-value': { appliesTo: 'test', gates: true, labels: ['e2e_behaviour', 'isolated_justified', 'tautological', 'insufficient_evidence'] },
+    'test-value': { appliesTo: 'test', gates: true, labels: ['e2e_behaviour', 'isolated_justified', 'unit_e2e_reachable', 'tautological', 'insufficient_evidence'] },
   };
   assert.deepEqual(Object.keys(want).sort(), [...RUBRIC_NAMES].sort());
   for (const [name, w] of Object.entries(want)) {
@@ -224,5 +235,27 @@ test('the seven real rubric files have no problems (breaks if any file drifts fr
   for (const name of RUBRIC_NAMES) {
     const problems = checkRubric(parseRubric(readFileSync(path.join(HERE, `${name}.md`), 'utf8')), name);
     assert.deepEqual(problems, [], `${name}.md`);
+  }
+});
+
+test('seat 4: a model name glued to a digit or underscore is a problem (breaks if MODEL_RE keeps a right word edge)', () => {
+  for (const t of ['use opus5 here', 'use claude_x here', 'use sonnet4 here']) expectCode(make({}, inAssess(t)), 'model-name');
+  assert.deepEqual(problemsOf(make({}, inAssess('Check twelve items.'))), []);
+});
+
+test('seat 4: a format character (zero width) anywhere in the file is a problem (breaks if format characters are not rejected)', () => {
+  const zw = String.fromCharCode(0x200b);
+  expectCode(make({}, inAssess(`see P${zw}R ${9001}`)), 'format-char');
+  expectCode(make({}, inAssess(`plain${zw}text`)), 'format-char');
+});
+
+test('seat 4: an empty Assess, Out of scope or Reason contract section is a problem (breaks if a blank section passes)', () => {
+  for (const h of ['Assess', 'Out of scope', 'Reason contract']) {
+    const lines = BODY.split('\n');
+    const at = lines.indexOf(`## ${h}`);
+    let end = at + 1;
+    while (end < lines.length && !lines[end].startsWith('#')) end += 1;
+    const body = [...lines.slice(0, at + 1), '', ...lines.slice(end)].join('\n');
+    expectCode(make({}, body), 'empty-section');
   }
 });
