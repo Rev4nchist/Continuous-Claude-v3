@@ -106,6 +106,25 @@ describe('candidateKeys and matchOwnRows (pure)', () => {
     expect(matchOwnRows('C:/repo/src/A.ts', 'C:/repo', rows, win)).toEqual({ kind: 'delete', row: rows[1], tier: 'exact' });
   });
 
+  it('SEAT F1: a repo-relative row of ANOTHER project is never freed by a path typed in this project', () => {
+    // Own row: README.md in repo B only. Typed from repo A, where the session holds no claim.
+    keyOf.mockReturnValue({ filePath: 'readme.md', project: 'c:/repoa' });
+    const rows = [row('readme.md', 'c:/repob')];
+    expect(matchOwnRows('README.md', 'C:/repoA', rows, win)).toEqual({ kind: 'none' });
+    expect(matchOwnRows('C:/repoA/README.md', 'C:/repoA', rows, win)).toEqual({ kind: 'none' });
+  });
+
+  it('SEAT F1: the same repo-relative key held in repo A and repo B: the exact tier frees repo A only', () => {
+    keyOf.mockReturnValue({ filePath: 'readme.md', project: 'c:/repoa' });
+    const rows = [row('readme.md', 'c:/repob'), row('readme.md', 'c:/repoa')];
+    expect(matchOwnRows('README.md', 'C:/repoA', rows, win)).toEqual({ kind: 'delete', row: rows[1], tier: 'exact' });
+  });
+
+  it('SEAT F1: a stored absolute path keeps the loose rule across projects (a cache claim)', () => {
+    const rows = [row('C:/w/.claude/cache/x.log', 'c:/p1')];
+    expect(matchOwnRows('C:\\w\\.claude\\cache\\x.log', 'C:/elsewhere', rows, win)).toMatchObject({ kind: 'delete', tier: 'loose' });
+  });
+
   it('a raw cache path (no key) is the raw string plus the cwd project', () => {
     const typed = 'C:/w/.claude/cache/x.log';
     expect(candidateKeys(typed, 'C:/w', win).exact).toEqual(row(typed));

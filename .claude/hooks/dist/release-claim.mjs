@@ -6058,15 +6058,17 @@ function candidateKeys(typedPath, cwd, options = {}) {
   const loose = [typedPath, absoluteOf(typedPath, cwd, platform), exact.file_path].map((p) => looseForm(p, platform));
   return { exact, raw: typedPath, loose: [...new Set(loose)] };
 }
+var isStoredAbsolute = (p) => /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(p);
 var pick2 = (rows, tier) => rows.length === 1 ? { kind: "delete", row: rows[0], tier } : { kind: "ambiguous", rows };
 function matchOwnRows(typedPath, cwd, ownRows, options = {}) {
   const platform = options.platform ?? process.platform;
   const c = candidateKeys(typedPath, cwd, options);
   const exact = ownRows.find((r) => r.file_path === c.exact.file_path && r.project === c.exact.project);
   if (exact) return { kind: "delete", row: exact, tier: "exact" };
-  const raw = ownRows.filter((r) => r.file_path === c.raw);
+  const inScope = ownRows.filter((r) => isStoredAbsolute(r.file_path) || r.project === c.exact.project);
+  const raw = inScope.filter((r) => r.file_path === c.raw);
   if (raw.length > 0) return pick2(raw, "raw");
-  const loose = ownRows.filter((r) => c.loose.includes(looseForm(r.file_path, platform)));
+  const loose = inScope.filter((r) => c.loose.includes(looseForm(r.file_path, platform)));
   return loose.length > 0 ? pick2(loose, "loose") : { kind: "none" };
 }
 async function otherHolder(client, key, typed) {

@@ -6,6 +6,7 @@
  *
  * Rules:
  *  - Holder only. The holder test is `session_id = $3` in the DELETE. A non-holder frees 0 rows.
+ *    The session id comes from the environment, so the holder test is cooperative, like `--as` of lane.mjs.
  *  - The caller's OWN rows are read first and the typed path is matched against them in JS, so nobody has
  *    to rebuild the stored key by hand (a tracked file is repo-relative, a `.claude/cache` file keeps the
  *    raw path the tool sent: see claim-target.ts).
@@ -87,6 +88,12 @@ export function candidateKeys(
   return { exact, raw: typedPath, loose: [...new Set(loose)] };
 }
 
+/**
+ * A stored raw path (a `.claude/cache` file, a file outside a repo) is absolute. A repo-relative key such as
+ * `readme.md` belongs to ONE repo, so a raw or loose match counts only in the exact key's project (seat F1).
+ */
+const isStoredAbsolute = (p: string): boolean => /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(p);
+
 const pick = (rows: ClaimRow[], tier: 'raw' | 'loose'): Match =>
   rows.length === 1 ? { kind: 'delete', row: rows[0], tier } : { kind: 'ambiguous', rows };
 
@@ -101,9 +108,10 @@ export function matchOwnRows(
   const c = candidateKeys(typedPath, cwd, options);
   const exact = ownRows.find((r) => r.file_path === c.exact.file_path && r.project === c.exact.project);
   if (exact) return { kind: 'delete', row: exact, tier: 'exact' };
-  const raw = ownRows.filter((r) => r.file_path === c.raw);
+  const inScope = ownRows.filter((r) => isStoredAbsolute(r.file_path) || r.project === c.exact.project);
+  const raw = inScope.filter((r) => r.file_path === c.raw);
   if (raw.length > 0) return pick(raw, 'raw');
-  const loose = ownRows.filter((r) => c.loose.includes(looseForm(r.file_path, platform)));
+  const loose = inScope.filter((r) => c.loose.includes(looseForm(r.file_path, platform)));
   return loose.length > 0 ? pick(loose, 'loose') : { kind: 'none' };
 }
 
