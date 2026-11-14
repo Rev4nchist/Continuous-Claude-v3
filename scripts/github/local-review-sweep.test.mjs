@@ -29,7 +29,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { REVIEWER_SET_FILES, computeVersions as realComputeVersions } from '../eval/review-eval/engine-version.mjs';
+import { BAND_SET_FILES, REVIEWER_SET_FILES, computeVersions as realComputeVersions } from '../eval/review-eval/engine-version.mjs';
 import { readLines } from '../eval/review-eval/read-audit.mjs';
 import { checkPin } from './local-review.mjs';
 import {
@@ -298,7 +298,7 @@ function engineRepo({ localReview = {} } = {}) {
   const commit = (marker) => {
     for (const f of REVIEWER_SET_FILES) put(dir, f, f === 'scripts/github/local-review.mjs' ? STUB_SRC(marker) : `// ${f} ${marker}\n`);
     put(dir, 'scripts/github/local-review/prompt.mjs', 'export const PROMPT_VERSION = 1;\n');
-    put(dir, 'scripts/github/review-router.mjs', '// band rules\n');
+    for (const f of BAND_SET_FILES) put(dir, f, f === 'scripts/github/review-router.mjs' ? '// band rules\n' : `// ${f}\n`);
     put(dir, 'review-router.config.json', `${JSON.stringify({ local_review: localReview, matrix: {} })}\n`);
     put(dir, 'docs/outside.md', 'not part of the copy\n');
     gitOk(git, 'add', '-A');
