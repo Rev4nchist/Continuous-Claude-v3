@@ -45,7 +45,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 /** Floor, not a target. Raise on purpose; never lower to make a run pass. */
 export const MIN_REGISTERED = 60;
 /** Ceiling on the baseline length. Lower it in every commit that removes a baseline name. Never raise it. */
-export const MAX_UNTESTED = 15;
+export const MAX_UNTESTED = 14;
 const HOOK_TEST_ROOT = join('.claude', 'hooks', 'src', '__tests__');
 const HOOK_TEST_FILE = /\.test\.ts$/;
 const SCRIPT_TEST_FILE = /\.test\.(?:ts|mjs|js|cjs)$/;
