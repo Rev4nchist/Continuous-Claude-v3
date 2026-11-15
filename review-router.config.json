@@ -104,6 +104,10 @@
       "scripts/github/land-none-check.mjs",
       ".claude/hooks/src/shared/checkpoint-shapes.ts",
       "scripts/github/pre-pr.mjs",
+      "scripts/github/lib/answer-paths.mjs",
+
+      "scripts/github/lib/answer-key.mjs",
+      "scripts/ratchets/lib/review-md.mjs",
       "apps/agentic-os/src/server/sources/safe-message.ts",
       "apps/agentic-os/src/server/sources/prompt-text.ts",
       "apps/agentic-os/scripts/provision-roles.*"
@@ -131,6 +135,10 @@
       "scripts/github/land-none-check.mjs",
       ".claude/hooks/src/shared/checkpoint-shapes.ts",
       "scripts/github/pre-pr.mjs",
+      "scripts/github/lib/answer-paths.mjs",
+
+      "scripts/github/lib/answer-key.mjs",
+      "scripts/ratchets/lib/review-md.mjs",
       "apps/agentic-os/src/server/sources/safe-message.ts",
       "apps/agentic-os/src/server/sources/prompt-text.ts",
       "apps/agentic-os/scripts/provision-roles.*",

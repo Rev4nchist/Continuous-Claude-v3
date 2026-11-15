@@ -123,9 +123,9 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
     const target = targetOf(input, tool);
     if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
-    const path = guardLogPath(env);
-    mkdirSync(dirname(path), { recursive: true, mode: 448 });
-    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+    const path2 = guardLogPath(env);
+    mkdirSync(dirname(path2), { recursive: true, mode: 448 });
+    appendFileSync(path2, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
 }
@@ -435,9 +435,9 @@ function bootTrace(env = process.env, _bootCall) {
 if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
 
 // src/coderabbit-guard.ts
-import { execFileSync } from "child_process";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { spawnSync } from "child_process";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { homedir as homedir3, tmpdir } from "os";
 import { dirname as dirname2, join as join3, resolve as resolve2 } from "path";
 
 // src/shared/output.ts
@@ -454,6 +454,91 @@ function outputDeny(reason, decision = "deny") {
   }));
 }
 
+// ../../scripts/github/lib/answer-paths.mjs
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+// ../../scripts/ratchets/lib/review-md.mjs
+var CannotCompare = class extends Error {
+};
+var lines = (text) => String(text).split(/\r?\n/);
+function parseReviewMd(text) {
+  const all = lines(text);
+  const at = all.findIndex((l) => /^##\s+Skip paths\s*$/i.test(l));
+  if (at < 0) throw new CannotCompare('REVIEW.md has no "## Skip paths" section');
+  const rest = all.slice(at + 1);
+  const end = rest.findIndex((l) => /^##\s/.test(l));
+  const section = end < 0 ? rest : rest.slice(0, end);
+  const open = section.findIndex((l) => /^```/.test(l));
+  const close = open < 0 ? -1 : section.findIndex((l, i) => i > open && /^```\s*$/.test(l));
+  if (open < 0 || close < 0) throw new CannotCompare('REVIEW.md "Skip paths" has no fenced block');
+  const globs = section.slice(open + 1, close).map((l) => l.trim()).filter(Boolean);
+  if (globs.length === 0) throw new CannotCompare('REVIEW.md "Skip paths" block is empty');
+  return globs;
+}
+
+// ../../scripts/github/lib/answer-key.mjs
+var ANSWER_KEY_GLOBS = Object.freeze([
+  "scripts/eval/review-eval/gold/**",
+  "scripts/eval/review-eval/seeds/**",
+  "scripts/eval/review-eval/rubrics/**",
+  "scripts/eval/review-eval/linktype-labels.json"
+]);
+var slashLower = (p) => String(p).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+function matches(glob, p) {
+  if (glob.endsWith("/**")) {
+    const prefix = glob.slice(0, -2);
+    return p.length > prefix.length && p.startsWith(prefix);
+  }
+  return glob === p;
+}
+function answerKeyHitsOf(paths, globs = ANSWER_KEY_GLOBS) {
+  const list = globs.map(slashLower);
+  return paths.filter((p) => {
+    const n = slashLower(p);
+    return list.some((g) => matches(g, n));
+  });
+}
+
+// ../../scripts/github/lib/answer-paths.mjs
+var escapeRe = (s) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+var segmentToRe = (seg) => escapeRe(seg).replace(/\*+/g, "[^/]*").replace(/\?/g, "[^/]");
+function globToRegExp(glob) {
+  if (typeof glob !== "string" || glob === "") throw new Error("empty glob");
+  const segs = glob.split("/");
+  let re = "";
+  segs.forEach((seg, i) => {
+    const last = i === segs.length - 1;
+    if (seg === "**") re += last ? ".+" : "(?:[^/]+/)*";
+    else re += segmentToRe(seg) + (last ? "" : "/");
+  });
+  return new RegExp(`^${re}$`);
+}
+var matchGlob = (glob, p) => globToRegExp(glob).test(p);
+function answerKeyGlobs(root) {
+  let text;
+  try {
+    text = readFileSync(path.join(root, "REVIEW.md"), "utf8");
+  } catch (err) {
+    return { reason: `REVIEW.md could not be read (${err.code ?? "error"})` };
+  }
+  let listed;
+  try {
+    listed = parseReviewMd(text).map(slashLower);
+  } catch (err) {
+    return { reason: String(err.message) };
+  }
+  const missing = ANSWER_KEY_GLOBS.filter((g) => !listed.includes(slashLower(g)));
+  return missing.length === 0 ? { globs: ANSWER_KEY_GLOBS } : { reason: `REVIEW.md "Skip paths" lacks ${missing.join(", ")}` };
+}
+function answerKeyCheck({ root, paths }) {
+  if (!Array.isArray(paths)) return { closed: "the changed-file list is unknown" };
+  const { globs, reason } = answerKeyGlobs(root);
+  if (!globs) return { closed: reason };
+  const hits = answerKeyHitsOf(paths, globs);
+  return hits.length === 0 ? null : { hits };
+}
+
 // src/coderabbit-guard.ts
 var BASH_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var DELEGATE_TOOLS = /* @__PURE__ */ new Set(["Task", "Agent", "Skill"]);
@@ -464,21 +549,21 @@ function statePath(env = process.env) {
   const base = env.CCV3_CODERABBIT_GUARD_STATE || join3(tmpdir(), STATE_BASENAME);
   return base;
 }
-function readState(path) {
+function readState(path2) {
   try {
-    if (!existsSync(path)) return { counts: {} };
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (!existsSync(path2)) return { counts: {} };
+    const parsed = JSON.parse(readFileSync2(path2, "utf8"));
     return { counts: parsed?.counts && typeof parsed.counts === "object" ? parsed.counts : {} };
   } catch {
     return { counts: {} };
   }
 }
-function writeState(path, state) {
-  const tmp = `${path}.${process.pid}.tmp`;
+function writeState(path2, state) {
+  const tmp = `${path2}.${process.pid}.tmp`;
   try {
-    mkdirSync2(dirname2(path), { recursive: true });
+    mkdirSync2(dirname2(path2), { recursive: true });
     writeFileSync(tmp, JSON.stringify(state), "utf8");
-    renameSync(tmp, path);
+    renameSync(tmp, path2);
   } catch {
     try {
       unlinkSync(tmp);
@@ -731,9 +816,29 @@ function segmentSpans(lexed, ps) {
 function segmentize(command, ps = false) {
   return segmentSpans(lexShell(joinContinuations(command, ps), ps), ps).map((s) => s.text);
 }
+function parseUnits(lexed, ps) {
+  const fine = segmentSpans(lexed, ps);
+  const units = [];
+  for (const [a, b] of segmentRanges(lexed, ps, true)) {
+    const whole = lexed.text.slice(a, b).trim();
+    if (!whole) continue;
+    if (parseInvocation(whole)?.nested !== void 0) units.push({ start: a, end: b, text: whole });
+    else units.push(...fine.filter((f) => f.start >= a && f.end <= b));
+  }
+  return units;
+}
+function segmentUnits(command, ps) {
+  return parseUnits(lexShell(joinContinuations(command, ps), ps), ps).map((u) => u.text);
+}
 var ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
 var RUNNERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "sudo", "doas", "xargs"]);
+var RUNNER_VALUE_FLAGS = {
+  sudo: /* @__PURE__ */ new Set(["-u", "-g", "-h", "-p", "-U", "-t", "-T", "-r", "-C", "-D", "-R"]),
+  doas: /* @__PURE__ */ new Set(["-u", "-C"]),
+  xargs: /* @__PURE__ */ new Set(["-n", "-L", "-P", "-s", "-d", "-E", "-a", "-I"])
+};
 var SHELLS = /* @__PURE__ */ new Set(["pwsh", "powershell", "bash", "sh", "zsh"]);
+var POSIX_SHELLS = /* @__PURE__ */ new Set(["bash", "sh", "zsh"]);
 var EVALS = /* @__PURE__ */ new Set(["eval", "iex", "invoke-expression"]);
 var STARTERS = /* @__PURE__ */ new Set(["start-process", "saps", "start"]);
 var PREFIXES = /* @__PURE__ */ new Set([
@@ -759,7 +864,7 @@ function splitFirst(s) {
 }
 function baseName(tok) {
   const norm = tok.replace(/\\/g, "/");
-  return norm.slice(norm.lastIndexOf("/") + 1).toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, "");
+  return norm.slice(norm.lastIndexOf("/") + 1).toLowerCase().replace(/^["'`]+/, "").replace(/(?<=.)@.*$/, "").replace(/\.(exe|cmd|bat|ps1)$/, "");
 }
 function cleanToken(t) {
   return t.replace(/^["'`]+|["'`)]+$/g, "");
@@ -773,16 +878,38 @@ function stripLeadingQuote(s) {
 function unquoteOuter(s) {
   const t = s.trim();
   const m = t.match(/^"((?:\\.|[^"\\])*)"|^'([^']*)'/);
-  return m ? m[1] ?? m[2] ?? "" : stripLeadingQuote(t);
+  return m ? m[1] !== void 0 ? m[1].replace(/\\(["\\])/g, "$1") : m[2] ?? "" : stripLeadingQuote(t);
 }
 function parseStarter(rest) {
+  const moves = /(?:^|\s)-wo\w*/i.test(rest);
+  const quoted = /(?:^|\s)-filepath\s+(?:"([^"]*)"|'([^']*)')/i.exec(rest);
+  if (quoted) {
+    const others = (rest.slice(0, quoted.index) + " " + rest.slice(quoted.index + quoted[0].length)).split(/[\s,]+/).map(cleanToken).filter(Boolean);
+    return { exe: baseName(quoted[1] ?? quoted[2] ?? ""), args: others, moves };
+  }
   const toks = rest.split(/[\s,]+/).map(cleanToken).filter(Boolean);
   const fp = toks.findIndex((t) => /^-filepath$/i.test(t));
   const at = fp >= 0 ? fp + 1 : toks.findIndex((t) => !/^(?:-\S+|\/[a-z]+)$/i.test(t));
-  if (at < 0 || !toks[at]) return { exe: "start-process", args: toks };
-  return { exe: baseName(toks[at]), args: toks.filter((_, k) => k !== at) };
+  if (at < 0 || !toks[at]) return { exe: "start-process", args: toks, moves };
+  return { exe: baseName(toks[at]), args: toks.filter((_, k) => k !== at), moves };
+}
+function skipRunnerOptions(exe, rest, moves) {
+  const values = RUNNER_VALUE_FLAGS[exe];
+  let s = rest;
+  for (; ; ) {
+    const { tok, rest: after } = splitFirst(s);
+    if (!tok.startsWith("-") || tok === "-") return s;
+    if (tok === "--") return after;
+    if (exe === "sudo" && /^(?:-[DR]|--chdir|--chroot)/.test(tok)) moves.on = true;
+    s = values?.has(tok) ? splitFirst(after).rest : after;
+  }
 }
 function parseInvocation(segment) {
+  const moves = { on: false };
+  const found = parseInvocationInner(segment, moves);
+  return found && moves.on ? { ...found, moves: true } : found;
+}
+function parseInvocationInner(segment, moves) {
   let s = segment.trim();
   for (let depth = 0; depth < 8; depth++) {
     let prev;
@@ -795,11 +922,12 @@ function parseInvocation(segment) {
     if (!tok) return null;
     const exe = baseName(tok);
     if (RUNNERS.has(exe)) {
-      s = rest.replace(/^(?:-\S+\s+)+/, "");
+      s = skipRunnerOptions(exe, rest, moves);
     } else if (exe === "cmd") {
       return { exe, args: [], nested: unquoteOuter(rest.replace(/^(?:\/[a-z]\s+)+/i, "")) };
     } else if (SHELLS.has(exe)) {
-      const m = rest.match(/(?:^|\s)-(?:c|command|lc)\s+([\s\S]*)$/i);
+      const flags = POSIX_SHELLS.has(exe) ? "[a-z]*c[a-z]*|command" : "c|command|lc";
+      const m = new RegExp(`(?:^|\\s)-(?:${flags})\\s+([\\s\\S]*)$`, "i").exec(rest);
       if (m) return { exe, args: [], nested: unquoteOuter(m[1]) };
       const doc = rest.match(/<<-?[ \t]*(?:'[^'\n]*'|"[^"\n]*"|\\?[\w.-]+)[ \t]*\r?\n([\s\S]*)$/);
       const here = rest.match(/<<<\s*([\s\S]*)$/);
@@ -875,31 +1003,10 @@ function classifyInvocation(inv, plain) {
   if (isReadOnlySubcommand(inv.args)) return { verdict: "allow" };
   return { verdict: "block", reason: NOT_ALLOWED };
 }
-var CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?)(?=$|[\s"'`)\\,}])/gi;
+var CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?)(?=$|[\s"'`)\\,}@])/gi;
 var BILLING_WORD = /(?:^|[\s"'`(=,])--(?:use-credits|api-key)(?=$|[\s"'`)=,])/i;
 var REVIEW_WORD = /\breview\b/i;
-var EXECUTING_PROGRAMS = /* @__PURE__ */ new Set([
-  ...SHELLS,
-  ...EVALS,
-  ...STARTERS,
-  ...RUNNERS,
-  ...PREFIXES,
-  "cmd",
-  "timeout",
-  "watch",
-  "find",
-  "parallel",
-  "nice",
-  "setsid",
-  "wsl",
-  "foreach-object",
-  "%",
-  "start-job",
-  "sajb",
-  "start-threadjob",
-  "invoke-command",
-  "icm"
-]);
+var STRING_RUNNERS = /* @__PURE__ */ new Set(["wsl", "watch", "ssh", "parallel", "foreach-object", "%", "start-job", "sajb", "start-threadjob", "invoke-command", "icm"]);
 var BILLING_REASON = "CodeRabbit guard: billing flag with a CodeRabbit CLI call";
 function leadingProgram(segment) {
   let s = segment.trim();
@@ -935,19 +1042,46 @@ function isExecuted(lexed, fine, at) {
   if (lexed.bodies.has(at)) return false;
   return lexed.execs.some(([a, b]) => a <= at && at < b);
 }
+function runsQuotedString(segment, masked, ps) {
+  if (STARTERS.has(leadingProgram(segment))) return true;
+  const inv = parseInvocation(segment);
+  if (inv?.nested !== void 0) return false;
+  if (inv !== null && STRING_RUNNERS.has(inv.exe)) return true;
+  for (const m of masked.matchAll(/[^\s;|&(){}`]+/g)) {
+    if (m[0].includes(FILL)) continue;
+    const prog = baseName(m[0]);
+    if (!(SHELLS.has(prog) || EVALS.has(prog) || STARTERS.has(prog) || prog === "cmd" || STRING_RUNNERS.has(prog))) continue;
+    const sub = parseInvocation(segment.slice(m.index ?? 0));
+    if (sub?.nested !== void 0) {
+      if (holdsReviewCall(sub.nested, ps)) return true;
+    } else if (!POSIX_SHELLS.has(prog)) return true;
+  }
+  return false;
+}
+function commandEnd(lexed, from) {
+  const m = /\|\||&&|[;|&\n]/.exec(lexed.masked.slice(from));
+  return m ? from + (m.index ?? 0) : lexed.text.length;
+}
 function rawScan(lexed, ps = false) {
   const found = { reviewSegments: [] };
   const text = lexed.text;
+  const blanked = lexed.bodies.size === 0 ? text : text.split("").map((ch, k) => lexed.bodies.has(k) ? " " : ch).join("");
   for (const [a, b] of segmentRanges(lexed, ps, true)) {
-    const seg = text.slice(a, b).trim();
-    if (!seg) continue;
-    const program = leadingProgram(seg);
-    if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
-    const reads = readsText(program);
-    const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => lexed.bodies.has(a + k) ? " " : ch).join("").trim();
-    const first = [...raw.matchAll(CR_WORD)][0];
-    if (!first) continue;
-    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ start: a, end: b, raw });
+    const seg = text.slice(a, b);
+    if (!seg.trim()) continue;
+    const reads = readsText(leadingProgram(seg));
+    const scan = reads ? text : blanked;
+    let quotedRuns;
+    for (const m of seg.matchAll(CR_WORD)) {
+      const at = a + (m.index ?? 0) + m[0].length - m[1].length;
+      const quoted = lexed.masked[at] === FILL && !(reads && lexed.bodies.has(at));
+      if (quoted) quotedRuns ??= runsQuotedString(seg, lexed.masked.slice(a, b), ps);
+      if (quoted && !quotedRuns) continue;
+      const end = Math.max(b, commandEnd(lexed, at + m[1].length));
+      if (!REVIEW_WORD.test(scan.slice(at + m[1].length, end))) continue;
+      found.reviewSegments.push({ start: a, end: b, raw: scan.slice(at, end).trim() });
+      break;
+    }
   }
   return found;
 }
@@ -972,8 +1106,11 @@ function classifyCommand(source, ps = false, depth = 0) {
   let runs = 0;
   let allowed = false;
   const plainCall = depth === 0 && isPlainCommand(source, joined, lexed, ps);
-  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
-  for (const { start, end, text: seg } of segmentSpans(lexed, ps)) {
+  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false, placed: false, invs: [] }));
+  const counted = [];
+  let unaccounted = false;
+  let unplaced = false;
+  for (const { start, end, text: seg } of parseUnits(lexed, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
     if (!inv) continue;
@@ -984,22 +1121,36 @@ function classifyCommand(source, ps = false, depth = 0) {
     else c = { verdict: "ignore" };
     if (c.verdict === "block") return c;
     if (c.verdict === "allow") allowed = true;
+    const calls = inv.nested === void 0 ? (c.runs ?? 0) > 0 ? [inv] : [] : c.invocations ?? [];
+    counted.push(...calls);
+    if (c.unaccounted) unaccounted = true;
+    const placed = inv.nested === void 0 ? isCrExecutable(inv.exe) && !inv.moves : (c.runs ?? 0) > 0 && c.unplaced !== true && !inv.moves;
+    if (c.unplaced || inv.moves && (inv.nested !== void 0 || isCrExecutable(inv.exe)) && (c.runs ?? 0) > 0) unplaced = true;
     if (!owner) runs += c.runs ?? 0;
     else {
+      owner.placed ||= placed;
+      owner.invs.push(...calls);
       owner.parsed += c.runs ?? 0;
       owner.covered ||= c.reviewHelp === true && seg.trim() === text.slice(owner.start, owner.end).trim();
     }
   }
-  for (const h of hidden) runs += h.parsed > 0 ? h.parsed : h.covered ? 0 : 1;
-  if (runs > 0) return { verdict: "allow", countsRun: true, runs };
+  for (const h of hidden) {
+    runs += h.parsed > 0 ? h.parsed : h.covered ? 0 : 1;
+    if (!h.placed && !h.covered) unplaced = true;
+    if (rawOptionCount(h.raw) > parsedOptionCount(h.invs)) unaccounted = true;
+  }
+  if (runs > 0) return { verdict: "allow", countsRun: true, runs, invocations: counted, unaccounted, unplaced };
   return { verdict: allowed ? "allow" : "ignore", reviewHelp: hidden.some((h) => h.covered) };
 }
 function classifyShellSegment(segment, ps = false) {
   return classifyCommand(segment, ps);
 }
 function git(args, cwd) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 }).trim();
+  const r = gitRun(cwd, args);
+  if (!r.ok) throw new Error(`git ${args[0]} failed`);
+  return r.stdout.trim();
 }
+var KEY_BUDGET_MS = 1e4;
 function normalizeRemote(url) {
   const u = url.trim().replace(/\\/g, "/");
   const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/]*@)?([^/:]+)(?::\d*)?\/(.+)$/i.exec(u);
@@ -1032,6 +1183,7 @@ function branchId(root) {
 function repoBranchKey(cwd = process.cwd(), env = process.env) {
   const fromEnv = env.CCV3_CODERABBIT_GUARD_KEY;
   if (fromEnv) return fromEnv;
+  gitDeadline = Date.now() + KEY_BUDGET_MS;
   try {
     const root = git(["rev-parse", "--show-toplevel"], cwd);
     return `${repoId(root)}#${branchId(root)}`;
@@ -1039,15 +1191,374 @@ function repoBranchKey(cwd = process.cwd(), env = process.env) {
     return `cwd#${cwd}`;
   }
 }
-var CD_SEGMENT = /^(?:cd|chdir|pushd|set-location|sl)\s+(?:(?:-\w+|\/d)\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))/i;
-function effectiveCwd(command, cwd, ps = false) {
+var CD_ARGS = String.raw`\s+(?:(?:-\w+|\/d)\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))`;
+var CD_SEGMENT_PS = new RegExp(`^(?:cd|chdir|pushd|push-location|set-location|sl)${CD_ARGS}`, "i");
+var CD_SEGMENT_BASH = new RegExp(`^(?:cd|pushd)${CD_ARGS}`);
+var cdSegment = (segment, ps) => (ps ? CD_SEGMENT_PS : CD_SEGMENT_BASH).exec(segment);
+function homeOf(env = process.env) {
+  return env.USERPROFILE || env.HOME || homedir3();
+}
+function cdTarget(dir, target, home, ps) {
+  const expanded = home && /^~(?=[\\/]|$)/.test(target) ? join3(home, target.slice(1)) : target;
+  return resolve2(dir, ps ? expanded : expanded.replace(/^\/([a-zA-Z])(?=\/|$)/, "$1:"));
+}
+function effectiveCwd(command, cwd, ps = false, home = "") {
   let dir = cwd;
   for (const seg of segmentize(command, ps)) {
-    const m = CD_SEGMENT.exec(seg);
+    const m = cdSegment(seg, ps);
     const target = m?.[1] ?? m?.[2] ?? m?.[3];
-    if (target && target !== "-") dir = resolve2(dir, target.replace(/^\/([a-zA-Z])(?=\/|$)/, "$1:"));
+    if (target && target !== "-") dir = cdTarget(dir, target, home, ps);
   }
   return dir;
+}
+var CCV3_REMOTE = /(?:rev4nchist|parcadei)\/continuous-claude(?:-v3)?/i;
+var ANSWER_BASES = ["refs/heads/main", "refs/remotes/fork/main"];
+var EVAL_TREE = "scripts/eval/review-eval";
+var ANSWER_GIT_TIMEOUT_MS = 1e4;
+var ANSWER_BUDGET_MS = 3e4;
+var gitDeadline = 0;
+var DENY_PREFIX = "CodeRabbit guard:";
+var cannotCheck = (why) => `${DENY_PREFIX} ${why}: no CLI review runs on a diff it cannot check for answer-key`;
+var WAY_OUT_TEXT = "run the review as its own plain command with --base <ref>";
+var WAY_OUT = `${DENY_PREFIX} ${WAY_OUT_TEXT}, so the check can read the diff for answer-key`;
+var wayOut = (cause) => cause ? `${DENY_PREFIX} ${WAY_OUT_TEXT} (${cause}), so the check can read the diff for answer-key` : WAY_OUT;
+var budgetOut = () => Date.now() >= gitDeadline;
+function gitEnv(base = process.env) {
+  const env = { ...base, LC_ALL: "C" };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[name];
+  return env;
+}
+function gitRun(cwd, args) {
+  const left = gitDeadline - Date.now();
+  if (left <= 0) return { ok: false, status: null, stdout: "", stderr: "budget" };
+  const r = spawnSync("git", args, { cwd, env: gitEnv(), encoding: "utf8", timeout: Math.min(ANSWER_GIT_TIMEOUT_MS, left), windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  return {
+    ok: !r.error && r.status === 0,
+    status: r.status,
+    stdout: typeof r.stdout === "string" ? r.stdout : "",
+    stderr: typeof r.stderr === "string" ? r.stderr : ""
+  };
+}
+function diffPaths(root, range) {
+  const r = gitRun(root, ["-c", "core.quotepath=false", "diff", "--name-only", "--no-renames", "-z", range, "--"]);
+  return r.ok ? r.stdout.split("\0").filter(Boolean) : null;
+}
+function statusPaths(root) {
+  const r = gitRun(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  if (!r.ok) return null;
+  const fields = r.stdout.split("\0");
+  const out = [];
+  for (let i = 0; i < fields.length; i++) {
+    const rec = fields[i];
+    if (!rec) continue;
+    if (rec.length < 4 || rec[2] !== " ") return null;
+    out.push(rec.slice(3));
+    if (/[RC]/.test(rec.slice(0, 2))) {
+      const old = fields[++i];
+      if (!old) return null;
+      out.push(old);
+    }
+  }
+  return out;
+}
+var REVIEW_OPTION = /(?:^|[\s"'`(=,{])(?:--base-commit|--base|--dir|--remote|--config|-c[^\s"'`)=,}]*)(?=$|[\s"'`)=,}])/gi;
+function optionCount(text) {
+  return [...text.matchAll(REVIEW_OPTION)].length;
+}
+function parsedOptionCount(invs) {
+  return invs.reduce((n, inv) => n + optionCount(` ${inv.args.join(" ")}`), 0);
+}
+function rawOptionCount(raw) {
+  const first = [...raw.matchAll(CR_WORD)][0];
+  return first ? optionCount(` ${raw.slice((first.index ?? 0) + first[0].length)}`) : 0;
+}
+var VALUE_OPTIONS = /* @__PURE__ */ new Set(["--base", "--base-commit", "--dir", "--remote"]);
+function readReviewOptions(invs) {
+  const o = { bases: [], baseCommits: [], dirs: [], configs: [], remotes: [], bad: false };
+  const slot = { "--base": o.bases, "--base-commit": o.baseCommits, "--dir": o.dirs, "--remote": o.remotes, "--config": o.configs };
+  for (const inv of invs) {
+    const a = optionArgs(inv.args);
+    for (let i = 0; i < a.length; i++) {
+      const tok = a[i].toLowerCase();
+      const eq = /^(--base-commit|--base|--dir|--remote|--config)=(.*)$/.exec(tok);
+      if (eq) {
+        const value = a[i].slice(eq[1].length + 1);
+        if (value) slot[eq[1]].push(value);
+        else o.bad = true;
+      } else if (VALUE_OPTIONS.has(tok)) {
+        const value = a[i + 1];
+        if (value === void 0 || value.startsWith("-")) o.bad = true;
+        else {
+          slot[tok].push(value);
+          i++;
+        }
+      } else if (tok === "-c" || tok === "--config") {
+        let n = 0;
+        while (a[i + 1] !== void 0 && !a[i + 1].startsWith("-")) {
+          o.configs.push(a[++i]);
+          n++;
+        }
+        if (n === 0) o.bad = true;
+      } else if (/^-c./.test(tok) && !tok.startsWith("--")) {
+        o.configs.push(a[i].slice(2));
+      }
+    }
+  }
+  return o;
+}
+function namesAnswerKey(path2) {
+  const segs = slashLower(path2).split("/");
+  for (let i = 0; i < segs.length; i++) {
+    const tail = segs.slice(i).join("/");
+    if (ANSWER_KEY_GLOBS.some((g) => matchGlob(slashLower(g), tail) || matchGlob(slashLower(g), `${tail}/_`))) return true;
+  }
+  return false;
+}
+function configDeny(cwd, files) {
+  for (const file of files) {
+    const abs = resolve2(cwd, file);
+    let real;
+    if (budgetOut()) return cannotCheck("the time budget ended");
+    try {
+      real = realpathSync(abs);
+    } catch {
+      return cannotCheck("a --config file cannot be read");
+    }
+    if (namesAnswerKey(abs) || namesAnswerKey(real)) return `${DENY_PREFIX} a --config file is sent to the service and it is answer-key`;
+    if (budgetOut()) return cannotCheck("the time budget ended");
+    try {
+      if (statSync(real).isDirectory()) return WAY_OUT;
+    } catch {
+      return cannotCheck("a --config file cannot be read");
+    }
+  }
+  return null;
+}
+function ccv3Root(dir) {
+  const top = gitRun(dir, ["rev-parse", "--show-toplevel"]);
+  if (!top.ok) return top.status === 128 && /not a git repository/i.test(top.stderr) ? { skip: true } : null;
+  const root = top.stdout.trim();
+  if (!root) return null;
+  const remotes = gitRun(root, ["config", "--get-regexp", "^remote\\..*\\.url$"]);
+  if (remotes.status !== 1 && !remotes.ok) return null;
+  const urls = remotes.status === 1 ? [] : remotes.stdout.split("\n").map((l) => l.trim().split(/\s+/).slice(1).join(" ")).filter(Boolean);
+  if (urls.some((u) => CCV3_REMOTE.test(u))) return { root };
+  const tree = gitRun(root, ["ls-tree", "HEAD", "--", EVAL_TREE]);
+  if (tree.ok) return tree.stdout.trim() ? { root } : { skip: true };
+  const head = gitRun(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  if (head.status !== 1 || budgetOut()) return null;
+  return existsSync(join3(root, EVAL_TREE)) ? { root } : { skip: true };
+}
+function rangesFor(root, opts) {
+  const ranges = ANSWER_BASES.map((b) => `${b}...HEAD`);
+  for (const value of [...opts.bases, ...opts.baseCommits]) {
+    if (value.startsWith("-") || !gitRun(root, ["rev-parse", "--verify", "--quiet", `${value}^{commit}`]).ok) return WAY_OUT;
+    ranges.push(`${value}...HEAD`, `${value}..HEAD`);
+  }
+  return ranges;
+}
+function missingRef(root) {
+  if (budgetOut()) return "the time budget ended";
+  const missing = ANSWER_BASES.find((b) => !gitRun(root, ["rev-parse", "--verify", "--quiet", `${b}^{commit}`]).ok);
+  return missing ? `the ref ${missing} is missing` : void 0;
+}
+function rootDeny(root, opts) {
+  const ranges = rangesFor(root, opts);
+  if (typeof ranges === "string") return ranges;
+  const union = /* @__PURE__ */ new Set();
+  for (const range of ranges) {
+    const paths = diffPaths(root, range);
+    if (paths === null) return cannotCheck(missingRef(root) ?? "git diff failed");
+    for (const p of paths) union.add(p);
+  }
+  const tree = statusPaths(root);
+  if (tree === null) return cannotCheck("git status failed");
+  for (const p of tree) union.add(p);
+  const check = answerKeyCheck({ root, paths: [...union] });
+  if (check === null) return null;
+  if ("closed" in check) return cannotCheck("the REVIEW.md skip list is not usable");
+  return `${DENY_PREFIX} no CLI review may read the paths in the diff (${check.hits.length}) that are answer-key`;
+}
+function checkedRoots(dirs) {
+  const roots = /* @__PURE__ */ new Set();
+  let error;
+  for (const dir of dirs) {
+    const found = ccv3Root(dir);
+    if (found === null) error ??= cannotCheck("the git root or the remotes cannot be read");
+    else if (!("skip" in found)) roots.add(found.root);
+  }
+  return { roots: [...roots], error };
+}
+var CD_WORD_PS = /^(?:cd|chdir|pushd|popd|push-location|pop-location|set-location|sl)(?=\s|$)/i;
+var CD_WORD_BASH = /^(?:cd|pushd|popd)(?=\s|$)/;
+function nestedHasCd(text, ps, depth) {
+  if (depth > MAX_NESTING) return true;
+  for (const seg of segmentUnits(text, ps)) {
+    if (CD_WORD_PS.test(seg.trim())) return true;
+    const inv = parseInvocation(seg);
+    if (inv?.nested !== void 0 && nestedHasCd(inv.nested, ps, depth + 1)) return true;
+  }
+  return false;
+}
+function folderDeny(command, ps, cwd) {
+  let seenCr = false;
+  for (const seg of segmentUnits(command, ps)) {
+    const text = seg.trim();
+    if ((ps ? CD_WORD_PS : CD_WORD_BASH).test(text)) {
+      const m = cdSegment(text, ps);
+      const target = m?.[1] ?? m?.[2] ?? m?.[3];
+      if (!target || target === "-" || /[$%`]/.test(target) || target.includes("~") && !/^~(?:[\\/][^~]*)?$/.test(target)) {
+        return WAY_OUT;
+      }
+      if (!ps && m?.[3] !== void 0 && m[3].includes("\\")) return wayOut("a backslash in a cd target is an escape in Bash: write the path with /");
+      if (seenCr) return WAY_OUT;
+    }
+    if ([...text.matchAll(CR_WORD)].length > 0) seenCr = true;
+    const inv = parseInvocation(seg);
+    if (inv?.nested !== void 0 && nestedHasCd(inv.nested, ps, 0)) return WAY_OUT;
+  }
+  if (budgetOut()) return cannotCheck("the time budget ended");
+  try {
+    if (!statSync(cwd).isDirectory()) return cannotCheck("the folder the review runs in is not a folder");
+  } catch {
+    return cannotCheck("the folder the review runs in does not exist");
+  }
+  return null;
+}
+var SHAPE_FLAGS = /* @__PURE__ */ new Set(["--agent", "--fresh", "--show-prompts", "--use-credits", "--committed", "--uncommitted", "--include-untracked", "--usage", "--deep", "--help", "-h"]);
+var SHAPE_VALUE_OPTIONS = ["--base", "--base-commit", "--dir", "--remote", "--source-branch", "--region"];
+var BARE_TOKEN = /^[A-Za-z0-9._/:=~-]+/;
+var BARE_TOKEN_PS = /^[A-Za-z0-9._/:=~\\-]+/;
+var QUOTED_BODY = /^[A-Za-z0-9._/:= -]*$/;
+var QUOTED_BODY_PS = /^[A-Za-z0-9._/:= \\-]*$/;
+var REMOTE_LITERAL = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+var FIXED_TARGET = /^(?:\/|[A-Za-z]:[\\/]|\.{1,2}(?:[\\/]|$)|~)/;
+function shapeTokens(text, ps) {
+  const out = [];
+  const n = text.length;
+  const bare = ps ? BARE_TOKEN_PS : BARE_TOKEN;
+  const quotedBody = ps ? QUOTED_BODY_PS : QUOTED_BODY;
+  const ends = (k) => k >= n || text[k] === " " || text[k] === "	" || text[k] === ";" || text.startsWith("&&", k);
+  let i = 0;
+  while (i < n) {
+    const c = text[i];
+    if (c === " " || c === "	") i++;
+    else if (c === ";") {
+      out.push({ sep: ";" });
+      i++;
+    } else if (text.startsWith("&&", i)) {
+      out.push({ sep: "&&" });
+      i += 2;
+    } else if (c === '"' || c === "'") {
+      const close = text.indexOf(c, i + 1);
+      const body = close < 0 ? "" : text.slice(i + 1, close);
+      if (close < 0 || !quotedBody.test(body) || !ends(close + 1)) return null;
+      out.push({ v: body, quoted: true });
+      i = close + 1;
+    } else {
+      const m = bare.exec(text.slice(i));
+      if (!m || !ends(i + m[0].length)) return null;
+      out.push({ v: m[0], quoted: false });
+      i += m[0].length;
+    }
+  }
+  return out;
+}
+var literalValue = (t) => t !== void 0 && t.v !== "" && !t.v.startsWith("-") && !t.v.includes("~");
+function parseShape(command, ps = false) {
+  const override = OVERRIDE.exec(command);
+  const toks = shapeTokens((override ? command.slice(override[0].length) : command).trim(), ps);
+  if (!toks || toks.length === 0) return null;
+  const groups = [[]];
+  let semi = false;
+  for (const t of toks) {
+    if ("sep" in t) {
+      semi = t.sep === ";";
+      groups.push([]);
+    } else groups[groups.length - 1].push(t);
+  }
+  if (groups.length > 2) return null;
+  const shape = { bases: [], baseCommits: [], dirs: [], configs: [], remotes: [], bad: false };
+  if (groups.length === 2) {
+    const [word, ...args] = groups[0];
+    if (ps && args.length === 2 && !args[0].quoted && /^-(?:literal)?path$/i.test(args[0].v)) args.shift();
+    const cdWord = ps ? /^(?:cd|set-location|sl)$/i : /^cd$/;
+    if (!word || args.length !== 1 || word.quoted || !cdWord.test(word.v) || !FIXED_TARGET.test(args[0].v)) return null;
+    shape.cd = args[0].v;
+    shape.semi = semi;
+  }
+  const last = groups[groups.length - 1];
+  if (last.some((t) => t.v.includes("\\"))) return null;
+  const [program, sub, ...rest] = last;
+  if (!program || !sub || program.quoted || sub.quoted || !isCrExecutable(program.v) || sub.v !== "review") return null;
+  const slot = { "--base": shape.bases, "--base-commit": shape.baseCommits, "--dir": shape.dirs, "--remote": shape.remotes, "--config": shape.configs };
+  for (const name of SHAPE_VALUE_OPTIONS) slot[name] ??= [];
+  let i = 0;
+  while (i < rest.length) {
+    const t = rest[i++];
+    if (t.quoted) return null;
+    if (SHAPE_FLAGS.has(t.v)) continue;
+    const eq = /^(--[a-z-]+)=(.*)$/.exec(t.v);
+    const name = eq ? eq[1] : t.v === "-c" ? "--config" : t.v;
+    if (!Object.hasOwn(slot, name)) return null;
+    if (eq) {
+      if (!literalValue({ v: eq[2] })) return null;
+      slot[name].push(eq[2]);
+    } else if (name === "--config") {
+      let n = 0;
+      while (literalValue(rest[i])) {
+        shape.configs.push(rest[i++].v);
+        n++;
+      }
+      if (n === 0) return null;
+    } else {
+      const value = rest[i++];
+      if (!literalValue(value)) return null;
+      slot[name].push(value.v);
+    }
+  }
+  return shape.remotes.every((r) => REMOTE_LITERAL.test(r)) ? shape : null;
+}
+function shapeCause(command, ps) {
+  const head = command.replace(OVERRIDE, "").trim().split(/&&|;/)[0].trim();
+  const word = /^(\S+)\s+(.*)$/.exec(head);
+  if (!word) return void 0;
+  if (!ps && /^cd$/i.test(word[1]) && word[1] !== "cd") return "Bash has no CD: write cd in lower case";
+  if (!/^(?:cd|chdir|pushd|set-location|sl)$/i.test(word[1])) return void 0;
+  if (!ps && word[2].includes("\\")) return "a backslash in a cd target is an escape in Bash: write the path with /";
+  const target = word[2].replace(/^(?:-\w+\s+)*/, "").replace(/^["']|["']$/g, "");
+  if (!FIXED_TARGET.test(target)) return "a cd target must be absolute or start with ./ ../ or ~";
+  return void 0;
+}
+function answerKeyDeny(run) {
+  try {
+    gitDeadline = Date.now() + ANSWER_BUDGET_MS;
+    const shape = parseShape(run.command, run.ps);
+    if (!shape && run.unplaced) return wayOut(shapeCause(run.command, run.ps));
+    const cwd = shape ? shape.cd === void 0 ? run.startCwd : cdTarget(run.startCwd, shape.cd, run.home, run.ps) : run.cwd;
+    const folder = folderDeny(run.command, run.ps, cwd);
+    if (folder) return folder;
+    const opts = shape ?? readReviewOptions(run.invocations);
+    const startToo = shape ? shape.semi === true : cwd !== run.startCwd;
+    const folders = [cwd, ...startToo ? [run.startCwd] : [], ...opts.dirs.map((d) => resolve2(cwd, d))];
+    const early = shape ? void 0 : checkedRoots(folders);
+    if (early && early.roots.length > 0) return wayOut(shapeCause(run.command, run.ps));
+    if (opts.bad) return cannotCheck("a CLI option has no value");
+    if (opts.remotes.some((r) => CCV3_REMOTE.test(r))) return `${DENY_PREFIX} --remote names the CCv3 repo and the service reads its answer-key`;
+    const config = configDeny(cwd, opts.configs);
+    if (config) return config;
+    const { roots, error } = early ?? checkedRoots(folders);
+    if (error) return error;
+    if (roots.length === 0) return !shape && run.unaccounted ? wayOut() : null;
+    if (opts.bases.length + opts.baseCommits.length === 0) return WAY_OUT;
+    for (const root of roots) {
+      const reason = rootDeny(root, opts);
+      if (reason) return reason;
+    }
+    return null;
+  } catch {
+    return cannotCheck("the check failed with an error");
+  }
 }
 function checkRunCap(state, key, runs = 1) {
   const count = state.counts[key] ?? 0;
@@ -1079,11 +1590,41 @@ function classifyDelegate(input) {
   if (cmd) return classifyCommand(cmd);
   return { verdict: "ignore" };
 }
-function decide(input, env = process.env) {
+function rawReview(command) {
+  const first = [...command.matchAll(CR_WORD)][0];
+  return !!first && REVIEW_WORD.test(command.slice((first.index ?? 0) + first[0].length));
+}
+function holdsReviewCall(source, ps, depth = 0) {
+  const lexed = lexShell(joinContinuations(source, ps), ps);
+  if (rawScan(lexed, ps).reviewSegments.length > 0 || depth > MAX_NESTING) return true;
+  for (const { text } of parseUnits(lexed, ps)) {
+    const inv = parseInvocation(text);
+    if (!inv) continue;
+    if (inv.nested !== void 0 ? holdsReviewCall(inv.nested, ps, depth + 1) : isCrExecutable(inv.exe) && inv.args.some((a) => a.toLowerCase() === "review")) return true;
+  }
+  return false;
+}
+function answerKeyResult(input, command, ps, verdict, seam, env) {
+  const blockedReview = (verdict.runs ?? 0) === 0 && verdict.verdict === "block" && holdsReviewCall(command, ps);
+  if ((verdict.runs ?? 0) === 0 && !blockedReview) return null;
+  const startCwd = input.cwd || process.cwd();
+  const home = homeOf(env);
+  const cwd = (seam.cwdOf ?? ((c, d, p) => effectiveCwd(c, d, p, home)))(command, startCwd, ps);
+  const unaccounted = verdict.unaccounted === true || blockedReview && rawOptionCount(command) > 0;
+  const reason = answerKeyDeny({ command, ps, startCwd, cwd, home, invocations: verdict.invocations ?? [], unaccounted, unplaced: verdict.unplaced === true });
+  return reason ? { allow: false, reason, answerKey: true } : null;
+}
+function decideChecked(input, env, seam) {
   const tool = input.tool_name || "";
   const command = input.tool_input?.command || "";
+  const ps = tool === "PowerShell";
+  const classify = seam.classify ?? classifyCommand;
+  const runsCommand = BASH_TOOLS.has(tool) || DELEGATE_TOOLS.has(tool) && tool !== "Skill" && command !== "";
   if (OVERRIDE.test(command)) {
-    logGuardDecision("coderabbit-guard", input, "override", "SKIP_CODERABBIT_GUARD=1", { command, env });
+    const denied2 = runsCommand ? answerKeyResult(input, command, ps, classify(command, ps), seam, env) : null;
+    if (denied2) return denied2;
+    if (rawReview(command)) logGuardDecision("coderabbit-guard", { ...input, cwd: void 0 }, "override", "SKIP_CODERABBIT_GUARD=1", { env });
+    else logGuardDecision("coderabbit-guard", input, "override", "SKIP_CODERABBIT_GUARD=1", { command, env });
     return { allow: true };
   }
   if (tool === "Skill") {
@@ -1094,17 +1635,20 @@ function decide(input, env = process.env) {
   if (DELEGATE_TOOLS.has(tool)) {
     const d = classifyDelegate(input);
     if (d.verdict === "block") return { allow: false, reason: d.reason };
-    return { allow: true };
+    return (command ? answerKeyResult(input, command, false, classify(command, false), seam, env) : null) ?? { allow: true };
   }
   if (!BASH_TOOLS.has(tool)) return { allow: true };
-  const ps = tool === "PowerShell";
-  const verdict = classifyCommand(command, ps);
+  const verdict = classify(command, ps);
   if (verdict.verdict === "block") return { allow: false, reason: verdict.reason };
   const runs = verdict.runs ?? 0;
   if (runs === 0) return { allow: true };
-  const path = statePath(env);
-  const state = readState(path);
-  const key = repoBranchKey(effectiveCwd(command, input.cwd || process.cwd(), ps), env);
+  const denied = answerKeyResult(input, command, ps, verdict, seam, env);
+  if (denied) return denied;
+  const home = homeOf(env);
+  const cwd = (seam.cwdOf ?? ((c, d, p) => effectiveCwd(c, d, p, home)))(command, input.cwd || process.cwd(), ps);
+  const key = repoBranchKey(cwd, env);
+  const path2 = statePath(env);
+  const state = readState(path2);
   const cap = checkRunCap(state, key, runs);
   if (!cap.ok) {
     return {
@@ -1112,11 +1656,30 @@ function decide(input, env = process.env) {
       reason: `CodeRabbit guard: run cap reached (${cap.count} of ${MAX_RUNS} cr review --agent runs used for ${key}; this command adds ${runs})`
     };
   }
-  writeState(path, recordRun(state, key, runs));
+  writeState(path2, recordRun(state, key, runs));
   return { allow: true, increment: true };
 }
+function failClosed(input) {
+  const command = input.tool_input?.command || "";
+  const reviewTool = BASH_TOOLS.has(input.tool_name || "") || DELEGATE_TOOLS.has(input.tool_name || "") && input.tool_name !== "Skill";
+  if (reviewTool && command && rawReview(command)) {
+    return { allow: false, reason: cannotCheck("the command could not be read"), answerKey: true };
+  }
+  return { allow: true };
+}
+function decide(input, env = process.env, seam = {}) {
+  try {
+    return decideChecked(input, env, seam);
+  } catch {
+    return failClosed(input);
+  }
+}
 function readStdin() {
-  return readFileSync(0, "utf-8");
+  return readFileSync2(0, "utf-8");
+}
+function logDeny(input, result, env = process.env) {
+  if (result.answerKey) logGuardDecision("coderabbit-guard", { ...input, cwd: void 0 }, "deny", result.reason || "blocked", { env });
+  else logGuardDecision("coderabbit-guard", input, "deny", result.reason || "blocked", { command: input.tool_input?.command, env });
 }
 function main() {
   let input;
@@ -1128,9 +1691,7 @@ function main() {
   }
   const result = decide(input);
   if (!result.allow) {
-    logGuardDecision("coderabbit-guard", input, "deny", result.reason || "blocked", {
-      command: input.tool_input?.command
-    });
+    logDeny(input, result);
     outputDeny(result.reason || "CodeRabbit guard: blocked");
     return;
   }
@@ -1145,6 +1706,8 @@ if (!process.env.VITEST) {
 }
 export {
   BILLING_REASON,
+  WAY_OUT_TEXT,
+  answerKeyDeny,
   checkRunCap,
   classifyCommand,
   classifyDelegate,
@@ -1152,7 +1715,9 @@ export {
   classifySkill,
   decide,
   effectiveCwd,
+  gitEnv,
   hasForbiddenFlags,
+  homeOf,
   isCodeWorkspace,
   isCrExecutable,
   isReadOnlyAutofixDelegate,
@@ -1161,10 +1726,15 @@ export {
   isSkillInstall,
   joinContinuations,
   lexShell,
+  logDeny,
   normalizeRemote,
   parseInvocation,
+  parseShape,
+  parsedOptionCount,
   rawBilling,
+  rawOptionCount,
   rawScan,
+  readReviewOptions,
   readState,
   recordRun,
   repoBranchKey,
