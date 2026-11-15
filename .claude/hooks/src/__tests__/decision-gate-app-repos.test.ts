@@ -2057,13 +2057,14 @@ describe('R5 F7: a long hostile command is read in linear time', () => {
   });
   // Change that breaks it: a force-bundle regex with a star on each side of [fd] (quadratic on a long -fff...x word), or any reader of
   // the raw rule that backtracks on a long -C run before push.
-  it('R5 F7b 60 runs of a long hostile push command (30 -C words, an 8000-letter bundle) finish under 1 s of CPU time', () => {
+  it('R5 F7b 30 runs of a long hostile push command (30 -C words, an 8000-letter bundle) finish under 1 s of CPU time', () => {
     // handle(), as the real hook: the -C chain names a folder under the live root that git cannot read, so the call ends in the catch (deny).
     const cmd = JSON.stringify(bash(`git ${'-C '.repeat(30)}push -${'f'.repeat(8000)}x up topic`));
-    // Little headroom (361 ms alone against 1000): the best of 3 samples. A full-suite run took 1047 ms of CPU in ONE sample while other sessions
-    // ran test files; a real backtracking regex is slow in every sample and still fails.
+    // Little headroom (361 ms alone against 1000 with 60 runs): the best of 3 samples, and 30 runs instead of 60 (seat ruling 11-14, the one
+    // exception to "inputs unchanged"): alone about 180 ms, 5.5x. A full-suite run took 1047 ms of CPU in ONE sample while other sessions ran test
+    // files, and the best sample of a later run was about 830 ms beside one loop. A real backtracking regex is slow in every sample and still fails.
     const ms = cpuBest(() => cpuTimed(() => {
-      for (let i = 0; i < 60; i++) expect(JSON.parse(handle(cmd, deps(devX()))).hookSpecificOutput.permissionDecision).toBe('deny');
+      for (let i = 0; i < 30; i++) expect(JSON.parse(handle(cmd, deps(devX()))).hookSpecificOutput.permissionDecision).toBe('deny');
     }).ms);
     expect(ms, `${ms} ms CPU (best of 3)`).toBeLessThan(1000);
   });
