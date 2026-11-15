@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractNotesSections, extractGuardedCurrentFocus } from '../session-start-continuity.js';
+import { extractNotesSections, extractGuardedCurrentFocus, compactStatusLine } from '../session-start-continuity.js';
 
 describe('extractNotesSections', () => {
   it('finds both ## Notes and ## For Next Session blocks when present', () => {
@@ -119,5 +119,43 @@ describe('extractGuardedCurrentFocus (D2F-03)', () => {
   it('returns null when there is no Current Focus section', () => {
     const roadmap = ['# Project Roadmap', '', '## Completed', '- [x] X'].join('\n');
     expect(extractGuardedCurrentFocus(roadmap, CC_DIR)).toBeNull();
+  });
+});
+
+// Card compact-status-line-says-breakpoint: the visible line after a compact must say what the model really got.
+describe('compactStatusLine', () => {
+  const HANDOFF_LINE = '[compact] Loaded from handoff: x.yaml | Goal: g | Focus: f';
+  const FILE = [
+    '# Session breakpoint',
+    'session: abc',
+    '## Decisions made',
+    '- [23:14Z] Open PR -> Open draft PR',
+    '',
+  ].join('\n');
+
+  it('says the breakpoint loaded when a breakpoint file replaces the context', () => {
+    const line = compactStatusLine('compact', HANDOFF_LINE, FILE);
+    expect(line).toContain('[compact]');
+    expect(line.toLowerCase()).toContain('breakpoint');
+    expect(line).not.toContain('Loaded from handoff');
+  });
+
+  it('keeps the handoff line when no breakpoint file exists', () => {
+    expect(compactStatusLine('compact', HANDOFF_LINE, null)).toBe(HANDOFF_LINE);
+  });
+
+  it('keeps the handoff line when the breakpoint file is only whitespace', () => {
+    expect(compactStatusLine('compact', HANDOFF_LINE, '  \n ')).toBe(HANDOFF_LINE);
+  });
+
+  it('does not touch startup, resume or clear lines', () => {
+    for (const t of ['startup', 'resume', 'clear']) {
+      expect(compactStatusLine(t, HANDOFF_LINE, FILE)).toBe(HANDOFF_LINE);
+    }
+  });
+
+  it('gives the breakpoint line when a compact has no handoff line at all', () => {
+    const line = compactStatusLine('compact', '', FILE);
+    expect(line.toLowerCase()).toContain('breakpoint');
   });
 });
