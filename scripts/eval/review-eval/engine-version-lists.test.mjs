@@ -107,6 +107,26 @@ test('EL6: the frozen baseline equals the lists as first written in 9f93fe56', (
   assert.notEqual(parent.status, 0, '9f93fe56 is the commit that added the module');
 });
 
+test('EL8: the module absent at a sha that has 9f93fe56 as ancestor (renamed or deleted later) is an error, not the baseline', () => {
+  const r = repoWith(baselineFiles());
+  const first = EV.PRE_MODULE_BASELINE.firstSha;
+  assert.match(first, /^[0-9a-f]{40}$/, 'the full sha, for merge-base');
+  // The fixture cannot hold 9f93fe56, so its git answers the ancestor question as the real repo would for a later sha.
+  const asLater = (args) => (args[0] === 'merge-base' ? { status: 0, stdout: '', stderr: '' } : r.git(args));
+  assert.throws(() => EV.listsAt({ sha: r.sha, git: asLater }), new RegExp(`absent at [0-9a-f]{12}, which has ${first.slice(0, 12)} as ancestor`));
+  const asBroken = (args) => (args[0] === 'merge-base' ? { status: 128, stdout: '', stderr: 'fatal' } : args[0] === 'cat-file' && args[1] === '-e' ? { status: 0, stdout: '', stderr: '' } : r.git(args));
+  assert.throws(() => EV.listsAt({ sha: r.sha, git: asBroken }), /merge-base failed/, 'a failed ancestor check with 9f93fe56 known is an error');
+  assert.equal(EV.listsAt({ sha: r.sha, git: r.git }).source, 'baseline', 'a repo without 9f93fe56 (a fixture) still gets the baseline');
+});
+
+test('EL9: on this repo the pin predates 9f93fe56 and main does not', (t) => {
+  const shallow = spawnSync('git', ['rev-parse', '--is-shallow-repository'], { cwd: REPO_ROOT, encoding: 'utf8' }).stdout.trim() === 'true';
+  if (shallow) { t.skip('a shallow clone has no 9f93fe56 or 01f63c79'); return; }
+  const git = (args) => { const r = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }); return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }; };
+  if (git(['cat-file', '-e', '01f63c799af0658dcc20af667427317b887fafd7^{commit}']).status !== 0) { t.skip('this clone has no 01f63c79'); return; }
+  assert.equal(EV.listsAt({ sha: '01f63c799af0658dcc20af667427317b887fafd7', git }).source, 'baseline');
+});
+
 test('EL7: with no lists option, computeVersions reads the checkout lists, as before', () => {
   const files = Object.fromEntries([...EV.REVIEWER_SET_FILES, ...EV.BAND_SET_FILES, CONFIG].map((p) => [p, p === CONFIG ? CONFIG_TEXT : `// ${p}\n`]));
   const r = repoWith({ [MODULE]: moduleText(), ...files });

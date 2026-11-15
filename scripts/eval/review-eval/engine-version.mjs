@@ -129,7 +129,7 @@ export const LIST_MODULE = 'scripts/eval/review-eval/engine-version.mjs';
  * A test ties this baseline to that commit. Never edit it to follow the constants above.
  */
 export const PRE_MODULE_BASELINE = Object.freeze({
-  firstSha: '9f93fe56',
+  firstSha: '9f93fe568ccbc578d0bd9cec5f487702753c355d',
   reviewerSetFiles: Object.freeze([
     'scripts/github/local-review.mjs',
     'scripts/github/cursor-review.mjs',
@@ -176,6 +176,11 @@ export function listsAt({ sha, git }) {
   const blob = git(['rev-parse', '--verify', '--quiet', `${sha}:${LIST_MODULE}`]);
   if (blob.status !== 0) {
     const b = PRE_MODULE_BASELINE;
+    // The baseline is for a sha OLDER than the module only. A later sha without it (a rename, a delete) is an error. A repo that does not
+    // hold firstSha at all (a test fixture) has no later history to confuse, so its sha gets the baseline.
+    const anc = git(['merge-base', '--is-ancestor', b.firstSha, sha]);
+    if (anc.status === 0) throw new Error(`${LIST_MODULE} is absent at ${at}, which has ${b.firstSha.slice(0, 12)} as ancestor: a renamed or deleted list module`);
+    if (anc.status !== 1 && git(['cat-file', '-e', `${b.firstSha}^{commit}`]).status === 0) throw new Error(`git merge-base failed for ${b.firstSha.slice(0, 12)} and ${at}`);
     return { reviewerSetFiles: [...b.reviewerSetFiles], bandSetFiles: [...b.bandSetFiles], reviewerSetDir: b.reviewerSetDir, source: 'baseline' };
   }
   const r = git(['cat-file', 'blob', String(blob.stdout).trim()]);
