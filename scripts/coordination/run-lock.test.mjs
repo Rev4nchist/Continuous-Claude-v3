@@ -54,6 +54,9 @@
 //   F6b unknown gate   a gate with an unknown start time is never broken after pid reuse                 (no age rule)
 //   low                break log after removal; 5.0 GB boundary; release and break need --pid; a classifyEntry miss exits;
 //                      the samples hook works with no test store; the warn row has no head
+//   G3 light spacing   a hook build gets WAIT from the 2 minute spacing after a heavy start            (spacing without kind.heavy)
+//   G4 list sweep      list deletes lock files with no gate, so it can delete a lock that a renew just wrote  (sweep outside withGate)
+//   G4 list wedge      list waits for ever on a gate that stays held, or creates the store when it is missing (no fail open)
 //
 // Gate file contract these tests pin: gate.lock holds JSON {"pid": N, "pidStart": M} of its holder.
 // The "unknown" value these tests pin: pidStart(pid) returns the string 'unknown' when the read fails.
@@ -1285,6 +1288,66 @@ test('S3: a failed pgrep gives no process; a bad or non-positive pid in its outp
   const mixed = (cmd) => (cmd === 'pgrep' ? { status: 0, stdout: 'abc\n4242\n0\n-5\n' } : { status: 0, stdout: 'Sat Nov 15 09:00:00 2026\n' });
   const procs = RL.realPrePrProcs({ spawn: mixed, platform: 'linux' });
   assert.deepEqual(procs.map((p) => p.pid), [4242]);
+});
+
+test('G3: a light kind is governed only by the load bar: a hook build 30 seconds after a heavy start is granted', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 100);
+  live(ctx, 101);
+  assert.equal((await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, ctx.d)).granted, true);
+  ctx.st.now = T0 + 30_000;
+  const build = await acquire({ kind: 'hook-build', pid: 101, holder: 't' }, ctx.d);
+  assert.equal(build.granted, true, build.lines.join('\n'));
+  assert.equal(JSON.parse(readFileSync(join(ctx.dir, 'last-grant.json'), 'utf8')).at, T0, 'the hook build does not move the spacing clock');
+  ctx.st.load = 85;
+  live(ctx, 102);
+  assert.equal((await acquire({ kind: 'hook-build', pid: 102, holder: 't' }, ctx.d)).granted, false, 'the load bar still refuses a hook build');
+});
+
+test('G4: list sweeps inside the gate: a renew that lands between the sweep decision and the remove keeps its lock', async () => {
+  // The old list removed the file with no gate. A renew (register, same pid and kind) that wrote the same file name in that
+  // window lost its lock. The seam starts a real register at that moment and does not wait for it: with the gate it waits for list.
+  const ctx = setup({ free: 6 });
+  ctx.mode('grant');
+  live(ctx, 9000); // list and the renew take the gate as pid 9000: a waiter judges a gate dead when its holder pid has no start time
+  await take(ctx, 'pre-pr', 100); // file pre-pr-100-1100.lock
+  ctx.st.now = T0 + 60 * MIN; // past its expiry
+  let snapshotTaken = false;
+  ctx.d.pidStart = (pid) => (pid === 100 && !snapshotTaken ? 'unknown' : ctx.st.alive.get(pid) ?? null); // the snapshot read fails: expired and not proven alive
+  let fired = 0;
+  let renew = null;
+  ctx.d.beforeSweepRemove = () => {
+    if (fired++) return;
+    snapshotTaken = true;
+    renew = register({ kind: 'pre-pr', pid: 100, holder: 'renewed' }, { ...ctx.d, beforeSweepRemove: undefined });
+  };
+  await list(ctx.d);
+  assert.equal(fired, 1, 'the sweep decided to remove the expired lock');
+  await renew;
+  assert.deepEqual(lockFiles(ctx.dir), ['pre-pr-100-1100.lock'], 'the renewed lock stays');
+  assert.equal(JSON.parse(readFileSync(join(ctx.dir, 'pre-pr-100-1100.lock'), 'utf8')).holder, 'renewed');
+  assert.equal(existsSync(join(ctx.dir, 'gate.lock')), false, 'the gate is freed');
+});
+
+test('G4: list on a missing store works and does not create it', async () => {
+  const ctx = setup();
+  const gone = join(ctx.dir, 'no-such-store');
+  const out = await list({ ...ctx.d, dir: gone });
+  assert.match(out.lines.join('\n'), /no live lock/);
+  assert.equal(existsSync(gone), false, 'a read does not make the store');
+});
+
+test('G4: a gate that stays held does not wedge list: it falls back to a listing that removes nothing', async () => {
+  const ctx = setup({ free: 6 });
+  ctx.mode('grant');
+  live(ctx, 9000);
+  await take(ctx, 'pre-pr', 100);
+  ctx.st.alive.delete(100); // the run is gone: a gated list would sweep its lock
+  writeFileSync(join(ctx.dir, 'gate.lock'), JSON.stringify({ pid: 9000, pidStart: 1000 + 9000 })); // a live holder, a fresh file
+  const out = await list(ctx.d);
+  assert.deepEqual(out.live, [], 'the dead run is not listed');
+  assert.deepEqual(lockFiles(ctx.dir), ['pre-pr-100-1100.lock'], 'no gate, so nothing is removed');
 });
 
 test('S4: RUN_LOCK_TEST_SAMPLES is ignored when RUN_LOCK_DIR is the default store', async () => {

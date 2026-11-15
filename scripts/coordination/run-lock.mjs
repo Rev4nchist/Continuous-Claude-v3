@@ -190,6 +190,7 @@ function defaults(deps = {}) {
     selfPid: deps.selfPid ?? process.pid,
     beforeGateBreak: deps.beforeGateBreak,
     afterGateRename: deps.afterGateRename,
+    beforeSweepRemove: deps.beforeSweepRemove, // test seam: runs in sweep between the decision to remove a lock and the remove
     rmFile: deps.rmFile || rmSync, // test seam: the finally step removes our gate with this
   };
 }
@@ -243,14 +244,21 @@ function provenAlive(file, rec, starts) {
 /**
  * Remove the lock files of a dead run. A past expiry removes a lock only when the holder is NOT proven alive: a long pre-pr,
  * a machine sleep or a loop with no renew must keep its slot. A lock with no finite expiry counts as expired, so only proof of life keeps it. File work only.
- * Return the live ones.
+ * Return the live ones. remove false lists the live ones and removes nothing (list, when it cannot take the gate).
+ * Callers that remove must hold the gate: a renew that writes the same file name must not meet our remove.
  */
-function sweep(d, starts) {
+function sweep(d, starts, remove = true) {
   const now = d.now();
   const live = [];
   for (const { file, rec } of lockRecords(d.dir)) {
     const expired = !Number.isFinite(rec.expiresAt) || rec.expiresAt <= now; // no finite expiry (old code) counts as expired; a proven-alive holder still keeps the lock
-    if (isDead(file, rec, starts) || (expired && !provenAlive(file, rec, starts))) { try { rmSync(join(d.dir, file)); } catch { /* another session removed it */ } continue; }
+    if (isDead(file, rec, starts) || (expired && !provenAlive(file, rec, starts))) {
+      if (remove) {
+        d.beforeSweepRemove?.(file);
+        try { rmSync(join(d.dir, file)); } catch { /* another session removed it */ }
+      }
+      continue;
+    }
     live.push({ ...rec, file });
   }
   return live;
@@ -413,7 +421,8 @@ export async function acquire(opts, deps) {
     }
     const lastRec = readJson(join(d.dir, 'last-grant.json'));
     const lastAt = lastRec && Number.isFinite(lastRec.at) && lastRec.at <= now + FUTURE_SKEW_MS ? lastRec.at : null; // a time far in the future is a bad file
-    if (lastAt !== null && now - lastAt < SPACING_MS) refuse('spacing', `last grant at ${clockText(lastAt, d.timeZone, false)}, grants are 2 minutes apart`);
+    // The spacing is for a heavy start only. A light kind (hook-build) is governed by the load bar alone.
+    if (kind.heavy && lastAt !== null && now - lastAt < SPACING_MS) refuse('spacing', `last grant at ${clockText(lastAt, d.timeZone, false)}, grants are 2 minutes apart`);
     const retryAt = Math.max(keys.includes('spacing') ? lastAt + SPACING_MS : 0, keys.some((k) => k !== 'spacing') ? now + SPACING_MS : 0, now);
     const lines = unlocked.length ? [unlockedLine(unlocked)] : [];
     if (d.samplesHooked) lines.unshift('NOTE samples come from RUN_LOCK_TEST_SAMPLES (a test hook), not from the machine');
@@ -496,11 +505,22 @@ export async function breakLock(opts, deps) {
   return { removed, files };
 }
 
+/**
+ * The sweep for list, inside the gate as register and acquire do. The process reads come first (the snapshot, the self start),
+ * then file work only. A missing store has nothing to sweep: no gate, and the read must not create the store. A gate that
+ * cannot be taken (it stays held) fails open: list the live runs and remove nothing.
+ */
+async function sweepGated(d, starts) {
+  if (!existsSync(d.dir)) return sweep(d, starts, false);
+  const selfStart = d.pidStart(d.selfPid);
+  try { return await withGate(d, selfStart, () => sweep(d, starts)); } catch { return sweep(d, starts, false); }
+}
+
 export async function list(deps) {
   const d = defaults(deps);
   const starts = startsSnapshot(d);
   const procs = d.prePrProcs();
-  const live = sweep(d, starts);
+  const live = await sweepGated(d, starts);
   const unlocked = unlockedRuns(d, live, procs);
   const lines = [`mode: ${readMode(d.dir)}`, `store: ${d.dir}`];
   for (const r of live) lines.push(`${r.kind} pid ${r.pid} holder ${r.holder}${r.session ? ` session ${r.session}` : ''} since ${clockText(r.startedAt, d.timeZone, false)} until ${clockText(r.expiresAt, d.timeZone)}`);

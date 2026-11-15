@@ -882,6 +882,8 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
       finish(null);
       return;
     }
+    activeCr = child;
+    const forget = () => { if (activeCr === child) activeCr = null; };
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
@@ -893,8 +895,8 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
       for (const line of lines) lastEvent = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1] ?? lastEvent;
     });
     child.stderr.on('data', (chunk) => { if (!settled) stderr += chunk; });
-    child.on('error', (err) => { error = String(err.message); errorCode = err.code; finish(null); });
-    child.on('close', (code) => finish(code));
+    child.on('error', (err) => { forget(); error = String(err.message); errorCode = err.code; finish(null); });
+    child.on('close', (code) => { forget(); finish(code); });
   });
 }
 
@@ -1745,13 +1747,42 @@ async function takeRunLock(bodyPath) {
     console.error('pre-pr: stopped before any gate (the run lock said wait); run it again after the time above');
     process.exit(EXIT_LOCK_WAIT);
   }
-  // An 'exit' handler waits for no promise, so the release is synchronous. A signal ends the process without an 'exit'
-  // event unless a handler asks for one. A kill -9 or a crash leaves the file: the next acquire drops it (dead pid).
-  // The signal handlers run only after a blocking gate child (spawnSync) returns: the event loop is busy until then, so a
-  // SIGINT or SIGTERM waits for the child. Before this point no handler exists, so a signal ends the process at once and
-  // a lock written by then stays. The next acquire drops it (dead pid).
+  installRunLockHandlers();
+}
+
+/**
+ * The live CodeRabbit child, or null. defaultCrRunner sets it when the child starts and clears it when the child ends.
+ * The signal handler of the run lock reads it: a signal must stop the review before the lock is freed.
+ */
+let activeCr = null;
+
+/**
+ * Stop the live CodeRabbit child and its process tree, then forget it. Returns false when none runs. Never throws: the caller
+ * is a signal handler and must reach process.exit. killer is a test seam.
+ */
+export function killActiveCr(killer = (c) => killTree(c.pid)) {
+  const child = activeCr;
+  if (!child) return false;
+  activeCr = null;
+  try { killer(child); } catch { /* the child may be gone already */ }
+  try { child.kill(); } catch { /* already gone */ }
+  return true;
+}
+
+/**
+ * Free the run lock at exit and on SIGINT or SIGTERM. An 'exit' handler waits for no promise, so the release is synchronous.
+ * A signal ends the process without an 'exit' event unless a handler asks for one. A kill -9 or a crash leaves the file: the
+ * next acquire drops it (dead pid).
+ * A signal handler runs at once while the async CodeRabbit step runs. It waits only for a blocking gate child (spawnSync):
+ * the event loop is busy until that child returns. The handler stops the CodeRabbit child FIRST, then exits. The 'exit'
+ * handler then frees the lock, so a second pre-pr cannot start beside a live review. Before this function runs no handler
+ * exists, so a signal ends the process at once and a lock written by then stays. The next acquire drops it (dead pid).
+ */
+export function installRunLockHandlers() {
   process.on('exit', () => { try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ } });
-  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) process.on(signal, () => process.exit(code));
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    process.on(signal, () => { killActiveCr(); process.exit(code); });
+  }
 }
 
 async function main() {
