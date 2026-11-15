@@ -8,7 +8,7 @@
     1. refuses (exit 1) if that .bat does not exist, so the task never points at a missing file;
     2. exports the task's current XML to a timestamped backup under $env:USERPROFILE\.claude\state\;
     3. sets the task action to: cmd.exe /c "<BatPath>", working directory $env:USERPROFILE\.claude.
-  The trigger (daily 09:00) and the principal (current user) are not touched.
+  The trigger (daily 06:30, set by register-ccv3-tasks.ps1 from tasks.json) and the principal (current user) are not touched.
 
   -WhatIf prints what would change and changes nothing, not even the backup file.
   Restore: schtasks /create /tn CCv3-Blocklist-Update /xml <backup file> /f
