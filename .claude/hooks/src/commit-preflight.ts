@@ -23,9 +23,10 @@
  *
  * Zero `git` spawns: the branch and HEAD come from reading files (shared/git-head.ts). Any error
  * means `{}` (fail open): a bug here must never block a commit.
- * One exception (card prflow-push-blocks): a commit on a `re/` branch makes ONE git read of the index
- * (stagedHoldoutCount). When the staged added lines hold a holdout id the hook asks ("the push will be
- * refused"), with a count only. It is an early warning; the push check in decision-gate is the gate.
+ * One exception (cards prflow-push-blocks and coord-holdout-scan-warn): every commit makes ONE git read of the
+ * index (stagedHoldoutCount). When the staged added lines hold a holdout id, a commit on a `re/` branch asks
+ * ("the push will be refused") and a commit on any other branch gets a warning only, with a count only. It is
+ * an early warning; the push check in decision-gate is the gate.
  *
  * Registered in settings.json on two matcher blocks (Bash, PowerShell), like
  * destructive-command-guard. The runtime gate below is the same two tools. The helpers live in
@@ -274,6 +275,7 @@ export function preflight(input: HookInput | null | undefined, opts: PreflightOp
     let judged = false;
     let mainText: string | null = null;
     let holdoutText: string | null = null;
+    let holdoutWarn: string | null = null;
     for (const call of calls) {
       const dir = callDir(command, masked, call, cwd);
       const head = dir ? resolveHead(dir) : null;
@@ -289,10 +291,16 @@ export function preflight(input: HookInput | null | undefined, opts: PreflightOp
         });
         warn = verdict.kind === 'proven' ? null : `commit-preflight: ${verdict.message}`;
       }
-      // A commit on a re/ branch: early warning when the staged added lines hold a holdout id. Ask only; the push check is the gate.
-      if (!holdoutText && head.branch?.startsWith('re/')) {
+      // The staged added lines of every commit are read once (card coord-holdout-scan-warn, seat Q2: one reader of the staged diff).
+      // On a re/ branch a hit asks, since the push will be refused. On any other branch it only warns (warn first), with a count only.
+      // Each kind is scanned until its own text is set: a warning from one commit of the command must not hide a re/ ask of another,
+      // and an ask must not hide a warning (CLI finding of 569660a7).
+      const isRe = Boolean(head.branch?.startsWith('re/'));
+      if (isRe ? !holdoutText : !holdoutWarn) {
         const n = (opts.stagedHoldout ?? stagedHoldoutCount)(dir, head.mainRoot);
-        if (n !== null && n > 0) holdoutText = `The staged lines of this commit on ${head.branch} hold ${n} holdout id${n === 1 ? '' : 's'}. The push will be refused. Remove them before you commit.`;
+        const ids = `${n} holdout id${n === 1 ? '' : 's'}`;
+        if (n !== null && n > 0 && isRe) holdoutText = `The staged lines of this commit on ${head.branch} hold ${ids}. The push will be refused. Remove them before you commit.`;
+        else if (n !== null && n > 0 && !holdoutWarn) holdoutWarn = `holdout-scan: the staged lines of this commit hold ${ids}. Remove them before the commit leaves this machine (count only, warn mode).`;
       }
       if (mainText || !head.branch || !PROTECTED_BRANCHES.has(head.branch)) continue;
       const msg = messageHead(command, masked, call, [dir, cwd]);
@@ -307,11 +315,11 @@ export function preflight(input: HookInput | null | undefined, opts: PreflightOp
           hookEventName: 'PreToolUse',
           permissionDecision: 'ask',
           permissionDecisionReason: askText,
-          ...(warn ? { additionalContext: warn } : {}),
+          ...(warn || holdoutWarn ? { additionalContext: [warn, holdoutWarn].filter(Boolean).join('\n') } : {}),
         },
       };
     }
-    const context = [warn, askText].filter(Boolean).join('\n');
+    const context = [warn, askText, holdoutWarn].filter(Boolean).join('\n');
     if (!context) return null;
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } };
   } catch {

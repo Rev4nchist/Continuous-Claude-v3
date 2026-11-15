@@ -43,13 +43,39 @@ describe('CH: holdout early warning', () => {
     expect(reasonOf(preflight(one.payload, one.opts))).toMatch(/hold 1 holdout id\./);
   });
 
-  it('CH2: a commit on a non-re branch makes no staged read', () => {
-    // Breaks when: the trigger widens to every branch (a git read on each ordinary commit).
+  it('CH2: a commit on a non-re branch with staged holdout ids WARNS with a count and never asks (card coord-holdout-scan-warn, seat Q2)', () => {
+    // Breaks when: the staged read stays re/-only, or a non-re branch gets an ask instead of a warning, or the text holds more than a count.
     let calls = 0;
     const c = ctx('feat/x', () => { calls += 1; return 3; });
     const out = preflight(c.payload, c.opts);
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
     expect(reasonOf(out)).not.toMatch(/holdout/);
+    const context: string = (out as any)?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context).toMatch(/hold 3 holdout ids/);
+    expect(context).not.toMatch(/push will be refused/);
+    expect(context).not.toMatch(/\d{5,}/);
+    for (const answer of [null, 0]) {
+      const z = ctx('feat/x', () => answer);
+      expect(((preflight(z.payload, z.opts) as any)?.hookSpecificOutput?.additionalContext ?? '')).not.toMatch(/holdout/);
+    }
+  });
+
+  it('CH4: two commits in one command, a feature branch with ids first and then a re/ branch with ids, still ask for the re/ commit; the reverse order is the control (CLI finding, seat word 13:1x)', () => {
+    // Breaks when: a warning on the first commit stops the staged scan, so a later re/ commit loses its ask.
+    const feat = mkRepo(tempDir('pfh-feat'), 'feat/x');
+    const re = mkRepo(tempDir('pfh-re'), 're/re-x');
+    const registryPath = writeRegistry(join(tempDir('reg'), 'project-registry.json'), [{ name: 'p', path: feat, e2e: { command: 'x' } }]);
+    const session = `commit-preflight-holdout-${process.pid}-${Date.now()}-${n++}`;
+    sessions.push(session);
+    const counts = (dir: string) => (dir === feat ? 2 : dir === re ? 3 : 0);
+    for (const order of [[feat, re], [re, feat]]) {
+      const payload = loadFixture('commit-no-proof', { REPO: feat, SESSION: session });
+      payload.tool_input.command = `git -C "${order[0]}" commit -m "chore: a" && git -C "${order[1]}" commit -m "chore: b"`;
+      const out = preflight(payload, { env: {}, registryPath, stagedHoldout: counts } as PreflightOptions);
+      expect(decisionOf(out), `order ${order === undefined ? '' : order.map((d) => (d === feat ? 'feat' : 're')).join(' then ')}`).toBe('ask');
+      expect(reasonOf(out)).toMatch(/on re\/re-x hold 3 holdout ids/);
+      expect((out as any)?.hookSpecificOutput?.additionalContext ?? '').toMatch(/staged lines of this commit hold 2 holdout ids/);
+    }
   });
 
   it('CH3: a read that fails (null) or finds nothing (0) adds no ask', () => {
