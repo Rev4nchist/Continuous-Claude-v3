@@ -12,13 +12,13 @@ import { withPgClientOrFallback } from './pg-client.js';
 /** A deny is rare, so one query is cheap. Connect plus query, in total. */
 const HOLDER_LANE_BUDGET_MS = 500;
 
+/** The statement. scripts/coordination/holder-lane-probe.mjs reads this text out of this file and runs it on a scratch database. */
+export const HOLDER_OPEN_LANE_SQL = `SELECT 1 FROM agentic_os.lane WHERE owner_session_id = $1 AND state <> 'done' LIMIT 1`;
+
 export async function holderHoldsOpenLane(sessionId: string): Promise<boolean | null> {
   const { value, degraded } = await withPgClientOrFallback<boolean>(
     async (client) => {
-      const res = await client.query(
-        `SELECT 1 FROM agentic_os.lane WHERE owner_session_id = $1 AND state <> 'done' LIMIT 1`,
-        [sessionId],
-      );
+      const res = await client.query(HOLDER_OPEN_LANE_SQL, [sessionId]);
       return res.rows.length > 0;
     },
     true,

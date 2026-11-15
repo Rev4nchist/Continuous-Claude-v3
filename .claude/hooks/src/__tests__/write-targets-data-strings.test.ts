@@ -209,6 +209,8 @@ describe('PowerShell backtick escapes: anything off the list keeps today\'s resu
     ["Add-Content own.md -Value 'see src/a.ts `n'"],
     // one listed escape does not excuse an unlisted one in the same text
     ['Add-Content own.md "see src/a.ts `n and `e"'],
+    // a LISTED escape outside every string is still a backtick outside a string (seat diff read item 6)
+    ['Add-Content own.md `n "see src/a.ts"'],
   ])('keeps the deny: %s', (text) => {
     expect(ps(text).kind).toBe('deny');
   });

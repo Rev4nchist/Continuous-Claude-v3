@@ -136,7 +136,7 @@ const isStoredAbsolute = (filePath: string): boolean => isAbsolute(filePath) || 
 const shown = (filePath: string): string => (isStoredAbsolute(filePath) ? basename(filePath) : filePath);
 
 async function shellDeny(input: PreToolUseInput, filePath: string, holder: string, cue: string): Promise<any> {
-  const lines = holder === 'another session' ? '' : await holderLines(holder, shown(filePath));
+  const lines = holder === 'another session' ? '' : await holderLines(holder, filePath, isStoredAbsolute(filePath));
   const reason = `⚠️ FILE CONFLICT BLOCKED
 
 This command may write "${shown(filePath)}", which is held by session ${holder}. It holds the write cue "${cue}".
@@ -151,20 +151,24 @@ To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
 
 /**
  * Lines for a deny text (card coord-file-guard-named-file): the holder's handle and the exact release command. A release
- * stays the holder's act; this guard never frees a claim. "the holder's card is done" only when the holder owns no open lane.
- * Any error leaves the deny as it was (the lookup is a hint, never a gate).
+ * stays the holder's act; this guard never frees a claim. "The holder holds no open lane." only when that is true: it says
+ * nothing about a card, because a live session that never claimed a lane looks the same (seat diff read of 68a33182).
+ * A claim with no repo-relative path (a stored absolute path, or a file outside any repo) gets the --list form: a base name
+ * would not resolve in the holder's folder. Any error leaves the deny as it was (the lookup is a hint, never a gate).
  */
-async function holderLines(holder: string, filePath: string): Promise<string> {
+async function holderLines(holder: string, filePath: string, listForm: boolean): Promise<string> {
   const handle = `#${String(holder).slice(0, 8)}`;
-  let cardDone = false;
+  let noOpenLane = false;
   try {
-    cardDone = (await holderHoldsOpenLane(holder)) === false;
+    noOpenLane = (await holderHoldsOpenLane(holder)) === false;
   } catch {
-    cardDone = false;
+    noOpenLane = false;
   }
-  const release = `Holder: ${handle}. Only the holder frees a claim: it runs\n  node C:/Users/dkhay/.claude/hooks/dist/release-claim.mjs ${filePath}`;
-  const done = "This claim is a leftover: the holder's card is done and it holds no open lane.";
-  return `\n${release}${cardDone ? `\n${done}` : ''}`;
+  // A PowerShell single-quoted string: a quote inside is doubled.
+  const target = listForm ? '--list' : `'${filePath.replace(/'/g, "''")}'`;
+  const release = `Holder: ${handle}. Only the holder frees a claim: it runs\n  node ~/.claude/hooks/dist/release-claim.mjs ${target}`;
+  const lane = noOpenLane ? '\nThe holder holds no open lane.' : '';
+  return `\n${release}${lane}`;
 }
 
 const FOLDS_CASE = process.platform === 'win32' || process.platform === 'darwin';
@@ -324,7 +328,7 @@ async function claimOne(input: PreToolUseInput, filePath: string, sessionId: str
 
       const blockMessage = `⚠️ FILE CONFLICT BLOCKED
 
-"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName) : ''}
+"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, !key) : ''}
 
 ${leaseLine}
 Reclaiming needs BOTH an expired lease AND a holder that has stopped

@@ -369,54 +369,77 @@ describe('named file in a note with a backtick line break', () => {
   });
 });
 
-// Card coord-file-guard-named-file (seat ruling 2026-11-15, Q1): a deny names the holder handle and the exact release
-// command, and says "the holder's card is done" only when the holder holds no open lane. The guard never releases a claim:
-// a release stays the holder's act.
+// Card coord-file-guard-named-file (seat ruling 2026-11-15, Q1 and diff read of 68a33182): a deny names the holder handle and
+// the exact release command, and says "the holder holds no open lane" only when that is true. It never says the card is done
+// (a live session that never claimed a lane would look finished) and never frees a claim: a release stays the holder's act.
 //
 // Ways this can fail:
 //  1. The deny text has no holder handle or no release command (a blocked session cannot tell the holder what to run).
-//  2. "card is done" shows for a holder that still holds an open lane (a false statement), or when the lookup is down.
-//  3. The lookup breaks the deny (a database error must leave the deny as it was).
-//  4. The text appears for the shell deny but not for the Edit deny (two deny paths).
+//  2. "holds no open lane" shows for a holder that still holds an open lane (a false statement), or when the lookup is down.
+//  3. The text pushes a working peer to release: it must not say "leftover" or "card is done".
+//  4. The lookup breaks the deny (a database error must leave the deny as it was).
+//  5. The text appears for the shell deny but not for the Edit deny (two deny paths).
+//  6. A stored absolute-path claim (a cache file) gets a base name that release-claim cannot resolve: it must get the --list form.
+//  7. The release command carries one user folder, or an unquoted path.
 describe('deny text names the holder and the release command', () => {
   const reason = (o: Out) => o.hookSpecificOutput?.permissionDecisionReason ?? '';
   const SHELL = { command: 'Set-Content src/held.ts "x"' };
+  const CMD = "node ~/.claude/hooks/dist/release-claim.mjs 'src/held.ts'";
 
-  it('shell deny: handle, release command with the path; "card is done" when the holder holds no open lane', async () => {
+  it('shell deny: handle, quoted release command; "holds no open lane" when the holder holds none', async () => {
     seen.openLane = false;
     const r = reason(await run('PowerShell', SHELL));
     expect(r).toContain('#other-se');
-    expect(r).toContain('release-claim.mjs src/held.ts');
-    expect(r).toContain("the holder's card is done");
+    expect(r).toContain(CMD);
+    expect(r).toContain('holds no open lane');
+    expect(r).not.toContain('leftover');
+    expect(r).not.toContain('card is done');
+    expect(r).not.toContain('C:/Users/');
   });
 
-  it('shell deny: no "card is done" while the holder holds an open lane', async () => {
+  it('shell deny: no "no open lane" line while the holder holds an open lane', async () => {
     seen.openLane = true;
     const r = reason(await run('PowerShell', SHELL));
-    expect(r).toContain('release-claim.mjs src/held.ts');
-    expect(r).not.toContain('card is done');
+    expect(r).toContain(CMD);
+    expect(r).not.toContain('holds no open lane');
   });
 
-  it('shell deny: no "card is done" when the lane lookup is down (unknown)', async () => {
+  it('shell deny: no "no open lane" line when the lane lookup is down (unknown)', async () => {
     seen.openLane = null;
     const r = reason(await run('PowerShell', SHELL));
-    expect(r).toContain('release-claim.mjs src/held.ts');
-    expect(r).not.toContain('card is done');
+    expect(r).toContain(CMD);
+    expect(r).not.toContain('holds no open lane');
   });
 
   it('Edit deny carries the same lines', async () => {
     seen.openLane = false;
     const r = reason(await run('Edit', { file_path: abs('src/held.ts') }));
     expect(r).toContain('#other-se');
-    expect(r).toContain('release-claim.mjs src/held.ts');
-    expect(r).toContain("the holder's card is done");
+    expect(r).toContain(CMD);
+    expect(r).toContain('holds no open lane');
+    expect(r).not.toContain('card is done');
   });
 
   it('a lookup that throws leaves the deny in place', async () => {
-    seen.openLane = 'boom' as unknown as boolean;
     seen.throwLane = true;
     const o = await run('PowerShell', SHELL);
     expect(denied(o)).toBe(true);
-    expect(reason(o)).not.toContain('card is done');
+    expect(reason(o)).not.toContain('holds no open lane');
+  });
+
+  it('a stored absolute-path claim (a cache file) gets the --list form, never a base name or the stored path', async () => {
+    const inP = abs('.claude/cache/pre-pr/summary.md');
+    seen.held = [{ filePath: inP, sessionId: 'other-session', project }];
+    seen.openLane = false;
+    const r = reason(await run('Bash', { command: `echo x > '${inP}'` }));
+    expect(r).toContain('node ~/.claude/hooks/dist/release-claim.mjs --list');
+    expect(r).not.toContain("release-claim.mjs 'summary.md'");
+    expect(r).not.toContain(root.split('\\').join('/'));
+  });
+
+  it('a path with an apostrophe is quoted for PowerShell (the quote is doubled)', async () => {
+    seen.held = [{ filePath: "src/it's.ts", sessionId: 'other-session', project }];
+    const r = reason(await run('PowerShell', { command: `Set-Content "src/it's.ts" "x"` }));
+    expect(r).toContain("release-claim.mjs 'src/it''s.ts'");
   });
 });

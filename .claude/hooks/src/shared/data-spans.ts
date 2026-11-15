@@ -77,10 +77,6 @@ function segmentsOf(masked: string): Segment[] {
   return out;
 }
 
-/**
- * The command with the inside of each data string replaced by spaces, or the command unchanged when it is not plain
- * (rule 1). Same length, so an offset in the result is an offset in the command. The quote marks stay.
- */
 /** Backtick escapes that PowerShell reads as plain characters in a double-quoted string: `n `r `t `` `" `' `0. */
 const PWSH_PLAIN_ESCAPE = /^`[nrt`"'0]$/;
 
@@ -106,6 +102,11 @@ function plainPwshEscapes(text: string): string {
   return chars.join('');
 }
 
+/**
+ * The command with the inside of each data string replaced by spaces, or the command unchanged when it is not plain
+ * (rule 1). Same length, so an offset in the result is an offset in the command. The quote marks stay.
+ * `pwsh` is true for the PowerShell tool only: listed backtick escapes inside a double-quoted string are plain text there.
+ */
 export function blankDataStrings(text: string, keep: KeepSpan, pwsh = false): string {
   const original = text;
   // Card coord-file-guard-named-file: for the PowerShell tool only, a short list of backtick escapes inside a

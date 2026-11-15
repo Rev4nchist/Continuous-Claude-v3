@@ -6269,13 +6269,11 @@ async function listBlockingClaims(sessionId, staleThresholdMs) {
 // src/shared/holder-lane.ts
 init_trace_boot();
 var HOLDER_LANE_BUDGET_MS = 500;
+var HOLDER_OPEN_LANE_SQL = `SELECT 1 FROM agentic_os.lane WHERE owner_session_id = $1 AND state <> 'done' LIMIT 1`;
 async function holderHoldsOpenLane(sessionId) {
   const { value, degraded } = await withPgClientOrFallback(
     async (client) => {
-      const res = await client.query(
-        `SELECT 1 FROM agentic_os.lane WHERE owner_session_id = $1 AND state <> 'done' LIMIT 1`,
-        [sessionId]
-      );
+      const res = await client.query(HOLDER_OPEN_LANE_SQL, [sessionId]);
       return res.rows.length > 0;
     },
     true,
@@ -6803,7 +6801,7 @@ async function mainDirect(input, paths) {
 var isStoredAbsolute = (filePath) => isAbsolute2(filePath) || /^[a-z]:[\\/]/i.test(filePath);
 var shown = (filePath) => isStoredAbsolute(filePath) ? basename2(filePath) : filePath;
 async function shellDeny(input, filePath, holder, cue) {
-  const lines = holder === "another session" ? "" : await holderLines(holder, shown(filePath));
+  const lines = holder === "another session" ? "" : await holderLines(holder, filePath, isStoredAbsolute(filePath));
   const reason = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
 This command may write "${shown(filePath)}", which is held by session ${holder}. It holds the write cue "${cue}".
@@ -6815,20 +6813,20 @@ To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
   logGuardDecision("file-claims", input, "deny", `file-conflict-shell: cue=${cue} held by ${holder}`);
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
 }
-async function holderLines(holder, filePath) {
+async function holderLines(holder, filePath, listForm) {
   const handle = `#${String(holder).slice(0, 8)}`;
-  let cardDone = false;
+  let noOpenLane = false;
   try {
-    cardDone = await holderHoldsOpenLane(holder) === false;
+    noOpenLane = await holderHoldsOpenLane(holder) === false;
   } catch {
-    cardDone = false;
+    noOpenLane = false;
   }
+  const target = listForm ? "--list" : `'${filePath.replace(/'/g, "''")}'`;
   const release = `Holder: ${handle}. Only the holder frees a claim: it runs
-  node C:/Users/dkhay/.claude/hooks/dist/release-claim.mjs ${filePath}`;
-  const done = "This claim is a leftover: the holder's card is done and it holds no open lane.";
+  node ~/.claude/hooks/dist/release-claim.mjs ${target}`;
+  const lane = noOpenLane ? "\nThe holder holds no open lane." : "";
   return `
-${release}${cardDone ? `
-${done}` : ""}`;
+${release}${lane}`;
 }
 var FOLDS_CASE2 = process.platform === "win32" || process.platform === "darwin";
 function formsOf(top, cwd, filePath) {
@@ -6935,7 +6933,7 @@ touch the file.`;
       }
       const blockMessage = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
-"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName) : ""}
+"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, !key) : ""}
 
 ${leaseLine}
 Reclaiming needs BOTH an expired lease AND a holder that has stopped
