@@ -119,19 +119,93 @@ function readConfig(git, sha, blob) {
   return cfg;
 }
 
-/** Both versions at one commit. Throws an Error with a one-line message on any problem. */
-export function computeVersions({ sha, root = process.cwd(), git = gitIn(root) } = {}) {
+// ---- the lists at a sha (card sweep-pinned-own-lists) ----
+// A pinned engine copy is proven and versioned by the lists of ITS sha. The checkout's lists can name a file the pin never had (PR 567).
+
+/** This module, the one source of the lists at a sha. */
+export const LIST_MODULE = 'scripts/eval/review-eval/engine-version.mjs';
+/**
+ * The lists for a sha that predates this module: as first written in 9f93fe56 (2026-11-12). The pin 01f63c79 is older than the module.
+ * A test ties this baseline to that commit. Never edit it to follow the constants above.
+ */
+export const PRE_MODULE_BASELINE = Object.freeze({
+  firstSha: '9f93fe56',
+  reviewerSetFiles: Object.freeze([
+    'scripts/github/local-review.mjs',
+    'scripts/github/cursor-review.mjs',
+    'scripts/github/review-filter.mjs',
+    'scripts/github/lib/file-lock.mjs',
+    'scripts/github/lib/grok-slots.mjs',
+    'scripts/github/lib/findings-repair.mjs',
+    'scripts/github/lib/proc.mjs',
+    'scripts/ratchets/review-skip-sync.mjs',
+  ]),
+  bandSetFiles: Object.freeze(['scripts/github/review-router.mjs']),
+  reviewerSetDir: 'scripts/github/local-review/',
+});
+const CHECKOUT_LISTS = Object.freeze({ reviewerSetFiles: REVIEWER_SET_FILES, bandSetFiles: BAND_SET_FILES, reviewerSetDir: REVIEWER_SET_DIR });
+
+/** A frozen string array constant of the module text: only quoted strings and commas between the brackets, else an error. */
+function literalArray(text, name, at) {
+  const m = new RegExp(`^export const ${name} = Object\\.freeze\\(\\[([^\\]]*)\\]\\);`, 'm').exec(text);
+  if (!m) {
+    if (new RegExp(`^export const ${name}\\b`, 'm').test(text)) throw new Error(`${name} at ${at} is not a plain literal array`);
+    throw new Error(`${LIST_MODULE} at ${at} has no ${name}`);
+  }
+  if (!/^(\s*'[^'\\\n]+'\s*,?)*\s*$/.test(m[1])) throw new Error(`${name} at ${at} is not a plain literal array`);
+  return [...m[1].matchAll(/'([^'\\\n]+)'/g)].map((x) => x[1]);
+}
+
+function literalString(text, name, at) {
+  const m = new RegExp(`^export const ${name} = (.*);\\s*$`, 'm').exec(text);
+  if (!m) throw new Error(`${LIST_MODULE} at ${at} has no ${name}`);
+  const s = /^'([^'\\\n]+)'$/.exec(m[1].trim());
+  if (!s) throw new Error(`${name} at ${at} is not a plain string literal`);
+  return s[1];
+}
+
+/**
+ * The file lists at one commit: { reviewerSetFiles, bandSetFiles, reviewerSetDir, source }. With this module at the sha, its own constants
+ * (source "sha"); a constant that is absent or not a plain literal is an error. Without the module, PRE_MODULE_BASELINE (source
+ * "baseline"). Never the checkout's lists. Throws an Error with a one-line message.
+ */
+export function listsAt({ sha, git }) {
+  const at = String(sha).slice(0, 12);
+  const type = git(['cat-file', '-t', sha]);
+  if (type.status !== 0 || String(type.stdout).trim() !== 'commit') throw new Error(`${sha} is not a commit in this repository`);
+  const blob = git(['rev-parse', '--verify', '--quiet', `${sha}:${LIST_MODULE}`]);
+  if (blob.status !== 0) {
+    const b = PRE_MODULE_BASELINE;
+    return { reviewerSetFiles: [...b.reviewerSetFiles], bandSetFiles: [...b.bandSetFiles], reviewerSetDir: b.reviewerSetDir, source: 'baseline' };
+  }
+  const r = git(['cat-file', 'blob', String(blob.stdout).trim()]);
+  if (r.status !== 0) throw new Error(`git cat-file failed for ${LIST_MODULE} at ${at}`);
+  const text = String(r.stdout).replace(/\r\n/g, '\n');
+  return {
+    reviewerSetFiles: literalArray(text, 'REVIEWER_SET_FILES', at),
+    bandSetFiles: literalArray(text, 'BAND_SET_FILES', at),
+    reviewerSetDir: literalString(text, 'REVIEWER_SET_DIR', at),
+    source: 'sha',
+  };
+}
+
+/**
+ * Both versions at one commit. Throws an Error with a one-line message on any problem. `lists` (from listsAt) replaces the checkout's
+ * lists; without it the checkout's lists are used, as before, for every other caller.
+ */
+export function computeVersions({ sha, root = process.cwd(), git = gitIn(root), lists = CHECKOUT_LISTS } = {}) {
   if (typeof sha !== 'string' || !SHA_RE.test(sha)) throw new Error(`sha must be 40 hex digits, got ${JSON.stringify(String(sha).slice(0, 60))}`);
   const id = sha.toLowerCase();
   const type = git(['cat-file', '-t', id]);
   if (type.status !== 0 || String(type.stdout).trim() !== 'commit') throw new Error(`${id} is not a commit in this repository`);
   const blobs = listTree(git, id);
-  const missing = [...REVIEWER_SET_FILES, ...BAND_SET_FILES].filter((p) => !blobs.has(p)).sort();
+  const missing = [...lists.reviewerSetFiles, ...lists.bandSetFiles].filter((p) => !blobs.has(p)).sort();
   if (missing.length > 0) throw Object.assign(new Error(`missing at ${id}: ${missing.join(', ')}`), { missing });
   const cfg = readConfig(git, id, blobs.get(CONFIG_FILE));
   const pick = (paths) => paths.map((p) => ({ path: p, blob: blobs.get(p) })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const reviewerFiles = pick([...REVIEWER_SET_FILES, ...[...blobs.keys()].filter(inDir)]);
-  const bandFiles = pick([...BAND_SET_FILES]);
+  const inSet = (p) => p.startsWith(lists.reviewerSetDir) && !isTestFile(p);
+  const reviewerFiles = pick([...lists.reviewerSetFiles, ...[...blobs.keys()].filter(inSet)]);
+  const bandFiles = pick([...lists.bandSetFiles]);
   const rv = reviewerVersion({ files: reviewerFiles, localReview: cfg.local_review });
   return { sha: id, engineVersion: rv, reviewerVersion: rv, bandVersion: bandVersion({ files: bandFiles, matrix: cfg.matrix }), reviewerFiles, bandFiles, missing: [] };
 }
