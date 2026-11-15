@@ -155,6 +155,15 @@ describe('holdout-scan', () => {
     expect(other?.hookSpecificOutput.additionalContext, 'another session warns once too').toMatch(/holdout-scan off/);
   });
 
+  it('HS13: a primary-root lookup that throws gives the scan-off warning once and never an exception (seat read of 9cda80b1)', () => {
+    const boom = () => { throw new Error('no home'); };
+    const call = (sid: string) => scanInput({ tool_name: 'Bash', tool_input: { command: 'echo x' }, cwd: home, session_id: sid }, { env: { CCV3_USER_HOME: home }, logPath, repoRoot: boom });
+    expect(() => call('sess-9')).not.toThrow();
+    expect(call('sess-8').output?.hookSpecificOutput.additionalContext).toMatch(/holdout-scan off/);
+    expect(call('sess-8').output, 'once per session').toBeNull();
+    expect(() => scanInput({ tool_name: 'Read', tool_input: {}, cwd: home }, { env: {}, logPath, repoRoot: boom })).not.toThrow();
+  });
+
   it('HS12: the log row says whether the cwd is inside a CCv3 checkout (true or false, no path)', () => {
     run('Bash', { command: `echo PR #${FAKE_PR}` }, {}, join(home, 'continuous-claude', '.claude', 'worktrees', 'w1'));
     run('Bash', { command: `echo PR #${FAKE_PR}` }, {}, join(home, 'other-repo'));

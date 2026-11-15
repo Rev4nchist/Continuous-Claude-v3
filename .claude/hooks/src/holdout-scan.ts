@@ -24,7 +24,8 @@ const EXEMPT = [/\/scripts\/eval\/review-eval\/gold\//i, /\/\.claude\/state\/rev
 
 type Env = Record<string, string | undefined>;
 interface HookInput { tool_name?: string; tool_input?: Record<string, unknown>; cwd?: string; session_id?: string }
-interface Deps { env?: Env; logPath?: string; now?: () => string }
+/** repoRoot (tests): the primary checkout lookup; default primaryRepo. It may throw: the hook then warns that the scan is off. */
+interface Deps { env?: Env; logPath?: string; now?: () => string; repoRoot?: (env: Env) => string }
 interface Output { hookSpecificOutput: { hookEventName: 'PreToolUse'; additionalContext: string } }
 interface Scanned { text: string; tailBytes: number }
 
@@ -107,10 +108,14 @@ function firstOffInSession(home: string, sessionId: string): boolean {
 }
 
 /** True when the cwd is the primary checkout or below it (its worktrees): the log splits false fires of other repos (seat S1). */
-const inCcv3 = (cwd: string, env: Env): boolean => {
-  const root = fwd(primaryRepo(env)).toLowerCase();
-  const dir = fwd(cwd).toLowerCase().replace(/\/+$/, '');
-  return dir === root || dir.startsWith(`${root}/`);
+const inCcv3 = (cwd: string, rootOf: () => string): boolean => {
+  try {
+    const root = fwd(rootOf()).toLowerCase();
+    const dir = fwd(cwd).toLowerCase().replace(/\/+$/, '');
+    return dir === root || dir.startsWith(`${root}/`);
+  } catch {
+    return false; // a lookup that throws must not stop the tool (seat read of 9cda80b1)
+  }
 };
 
 const wrap = (text: string): Output => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: text } });
@@ -123,13 +128,14 @@ export function scanInput(data: HookInput, deps: Deps = {}): { output: Output | 
   const now = deps.now ?? (() => new Date().toISOString());
   const tool = str(data.tool_name);
   const cwd = data.cwd || process.cwd();
-  const ccv3 = inCcv3(cwd, env);
   const out = outgoingText(tool, data.tool_input ?? {});
   if (!out) return { output: null };
+  const rootOf = deps.repoRoot ? () => deps.repoRoot!(env) : () => primaryRepo(env);
+  const ccv3 = inCcv3(cwd, rootOf);
   const readFile = (p: string): string | null => { try { return readFileSync(p, 'utf8'); } catch { return null; } };
   if (routerFlag(cwd, readFile, home, 'holdoutScan', 'off')) return { output: null };
   let ids: string[];
-  try { ids = loadHoldoutIds(primaryRepo(env)); } catch {
+  try { ids = loadHoldoutIds(rootOf()); } catch {
     writeLog(logPath, { ts: now(), tool, error: 'list', mode: 'warn', ccv3 });
     if (!firstOffInSession(home, str(data.session_id))) return { output: null };
     return { output: wrap('holdout-scan off: the holdout id list could not be read; this input was not scanned (warn mode).') };
@@ -143,8 +149,10 @@ export function scanInput(data: HookInput, deps: Deps = {}): { output: Output | 
 function main(): void {
   let data: HookInput = {};
   try { data = JSON.parse(readFileSync(0, 'utf8') || '{}') as HookInput; } catch { return; }
-  const { output } = scanInput(data);
-  if (output) console.log(JSON.stringify(output));
+  try {
+    const { output } = scanInput(data);
+    if (output) console.log(JSON.stringify(output));
+  } catch { /* warn-only hook: a bug here must never stop a tool */ }
 }
 
 if (process.argv[1] && /holdout-scan\.(mjs|ts|js)$/.test(process.argv[1])) main();

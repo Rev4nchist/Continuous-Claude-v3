@@ -554,10 +554,14 @@ function firstOffInSession(home, sessionId) {
   }
   return true;
 }
-var inCcv3 = (cwd, env) => {
-  const root = fwd2(primaryRepo(env)).toLowerCase();
-  const dir = fwd2(cwd).toLowerCase().replace(/\/+$/, "");
-  return dir === root || dir.startsWith(`${root}/`);
+var inCcv3 = (cwd, rootOf) => {
+  try {
+    const root = fwd2(rootOf()).toLowerCase();
+    const dir = fwd2(cwd).toLowerCase().replace(/\/+$/, "");
+    return dir === root || dir.startsWith(`${root}/`);
+  } catch {
+    return false;
+  }
 };
 var wrap = (text) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: text } });
 function scanInput(data, deps = {}) {
@@ -567,9 +571,10 @@ function scanInput(data, deps = {}) {
   const now = deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
   const tool = str(data.tool_name);
   const cwd = data.cwd || process.cwd();
-  const ccv3 = inCcv3(cwd, env);
   const out = outgoingText(tool, data.tool_input ?? {});
   if (!out) return { output: null };
+  const rootOf = deps.repoRoot ? () => deps.repoRoot(env) : () => primaryRepo(env);
+  const ccv3 = inCcv3(cwd, rootOf);
   const readFile = (p) => {
     try {
       return readFileSync2(p, "utf8");
@@ -580,7 +585,7 @@ function scanInput(data, deps = {}) {
   if (routerFlag(cwd, readFile, home, "holdoutScan", "off")) return { output: null };
   let ids;
   try {
-    ids = loadHoldoutIds(primaryRepo(env));
+    ids = loadHoldoutIds(rootOf());
   } catch {
     writeLog(logPath, { ts: now(), tool, error: "list", mode: "warn", ccv3 });
     if (!firstOffInSession(home, str(data.session_id))) return { output: null };
@@ -598,8 +603,11 @@ function main() {
   } catch {
     return;
   }
-  const { output } = scanInput(data);
-  if (output) console.log(JSON.stringify(output));
+  try {
+    const { output } = scanInput(data);
+    if (output) console.log(JSON.stringify(output));
+  } catch {
+  }
 }
 if (process.argv[1] && /holdout-scan\.(mjs|ts|js)$/.test(process.argv[1])) main();
 export {
