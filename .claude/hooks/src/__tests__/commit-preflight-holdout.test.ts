@@ -9,10 +9,11 @@
  *   - the text holds anything but a count                                                      -> CH1
  * The count is injected through PreflightOptions.stagedHoldout. No real id is in this file.
  */
-import { rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { preflight, type PreflightOptions } from '../commit-preflight.js';
+import { preflight, stagedHoldoutCount, type PreflightOptions } from '../commit-preflight.js';
 import { getStateFile } from '../shared/test-run-state.js';
 import { loadFixture, mkRepo, tempDir, writeRegistry } from './correct-helpers.js';
 
@@ -84,5 +85,56 @@ describe('CH: holdout early warning', () => {
       const c = ctx('re/re-x', () => answer);
       expect(decisionOf(preflight(c.payload, c.opts))).toBeUndefined();
     }
+  });
+  it('CH6: the staged lines over the read bound warn that they were not read (card coord-decision-gate-round3-content-scan)', () => {
+    // Breaks when: an over-bound read stays silent (it says nothing about what it did not read).
+    for (const branch of ['re/re-x', 'feat/x']) {
+      const c = ctx(branch, () => 'too-large');
+      const out = preflight(c.payload, c.opts) as any;
+      expect(out?.hookSpecificOutput?.additionalContext ?? '').toMatch(/over 1500000 bytes and were not read/);
+      expect(decisionOf(out)).toBeUndefined();
+    }
+  });
+});
+
+/** C5 items 12 and 14 on the default reader: a real index and a made-up id list in a temp primary checkout. */
+describe('CH: the default staged reader', () => {
+  const CID = '987654321';
+  function world(dataset: unknown): { repo: string; mainRoot: string } {
+    const repo = tempDir('pfh-real');
+    execFileSync('git', ['init', '-q', '-b', 're/re-x', repo], { windowsHide: true });
+    execFileSync('git', ['config', 'core.autocrlf', 'false'], { cwd: repo, windowsHide: true });
+    const mainRoot = tempDir('pfh-main');
+    mkdirSync(join(mainRoot, '.claudedocs'), { recursive: true });
+    mkdirSync(join(mainRoot, 'scripts', 'eval', 'review-eval'), { recursive: true });
+    writeFileSync(join(mainRoot, '.claudedocs', '2026-11-01-pr-review-dataset.json'), JSON.stringify(dataset));
+    writeFileSync(join(mainRoot, 'scripts', 'eval', 'review-eval', 'config.json'), JSON.stringify({ reserve: [], holdoutExclude: [] }));
+    return { repo, mainRoot };
+  }
+  const stage = (repo: string, name: string, text: string | Buffer): void => {
+    writeFileSync(join(repo, name), text);
+    execFileSync('git', ['add', '--', name], { cwd: repo, windowsHide: true });
+  };
+  const GOOD = { prs: [{ pr: 9001 }], findings: [{ pr: 9001, comment_id: Number(CID) }] };
+
+  it('CH7: an added line whose content starts with ++ is counted (item 12)', () => {
+    // Breaks when: lines that start with +++ are dropped (the old header filter).
+    const w = world(GOOD);
+    stage(w.repo, 'p.txt', `++ ${CID}\n`);
+    expect(stagedHoldoutCount(w.repo, w.mainRoot)).toBe(1);
+  });
+
+  it('CH8: an id list read from a dataset of the wrong shape gives no count, not a short list (item 14)', () => {
+    // Breaks when: a dataset with no findings key gives the PR numbers only and the staged id is missed (count 0).
+    const w = world({ prs: [{ pr: 9001 }] });
+    stage(w.repo, 'p.txt', `+ ${CID}\n`);
+    expect(stagedHoldoutCount(w.repo, w.mainRoot)).toBeNull();
+  });
+
+  it('CH9: staged lines over the read bound give too-large', () => {
+    // Breaks when: an over-bound read returns null (silent) or a count of a prefix.
+    const w = world(GOOD);
+    stage(w.repo, 'big.txt', `${'x'.repeat(1_600_000)}\n`);
+    expect(stagedHoldoutCount(w.repo, w.mainRoot)).toBe('too-large');
   });
 });
