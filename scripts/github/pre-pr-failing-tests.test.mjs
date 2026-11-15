@@ -99,6 +99,16 @@ test('FT6: two failures in two files are both named, in output order', () => {
   ]);
 });
 
+test('FT8: a vitest file that fails at load ("FAIL  <file> [ <file> ]") is named as the whole file, once', () => {
+  const out = [
+    ' FAIL  src/__tests__/broken-import.test.ts [ src/__tests__/broken-import.test.ts ]',
+    "Error: Failed to load url ./gone.js (resolved id: ./gone.js) in src/__tests__/broken-import.test.ts",
+    ' FAIL  src/__tests__/broken-import.test.ts [ src/__tests__/broken-import.test.ts ]',
+    ' Test Files  1 failed | 212 passed (213)',
+  ].join('\n');
+  assert.deepEqual(failingNotes(gate('hooks-vitest', execOut(1, out))), ['failing: the whole file, it failed before its tests ran (src/__tests__/broken-import.test.ts)']);
+});
+
 test('FT7: more than 10 failures name the first 10 and count the rest', () => {
   const out = Array.from({ length: 13 }, (_, i) => tapFail(`t${i}`, 'scripts/github/m.test.mjs', i + 1, i + 1)).join('\n');
   const names = failingNotes(gate('github-tests', execOut(1, out)));

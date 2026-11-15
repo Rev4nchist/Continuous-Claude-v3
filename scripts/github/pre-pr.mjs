@@ -710,6 +710,8 @@ const TAP_DIRECTIVE = /\s#\s*(?:SKIP|TODO)\b/i;
 const TAP_NEXT = /^\s*(?:(?:not )?ok \d+ |# Subtest:)/;
 const TAP_LOCATION = /^\s*location:\s*'(.+):(\d+):\d+'\s*$/;
 const VITEST_FAIL = /^\s*FAIL\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+>\s+(.+?)\s*$/;
+// A file that fails before its tests run (an import, a syntax error, a hook that throws): "FAIL  <file> [ <file> ]", no test name.
+const VITEST_FILE_FAIL = /^\s*FAIL\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+\[\s*\S+\s*\]\s*$/;
 
 /** A TAP location path, with its doubled backslashes undone, relative to `root` when it is inside it, always with forward slashes. */
 function locationPath(raw, root) {
@@ -731,6 +733,8 @@ export function failingTestsOf(output, root) {
   lines.forEach((line, i) => {
     const v = VITEST_FAIL.exec(line);
     if (v) return add(`${v[2]} (${v[1]})`);
+    const f = VITEST_FILE_FAIL.exec(line);
+    if (f) return add(`the whole file, it failed before its tests ran (${f[1]})`);
     const t = TAP_NOT_OK.exec(line);
     if (!t || TAP_DIRECTIVE.test(t[1])) return undefined;
     const end = lines.findIndex((l, j) => j > i && TAP_NEXT.test(l));
