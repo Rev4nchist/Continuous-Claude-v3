@@ -54,7 +54,10 @@ describe('a session end removes the claims of that session', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const src = realRead(join(here, '..', 'shared', 'db-utils-pg.ts'), 'utf-8');
     const start = src.indexOf('export async function releaseSessionClaims');
-    const body = src.slice(start, start + 1500);
+    // A missing function must fail with a clear message, and the body ends at the next top-level export, not after a fixed length.
+    expect(start).toBeGreaterThanOrEqual(0);
+    const next = src.indexOf('\nexport ', start + 1);
+    const body = src.slice(start, next === -1 ? undefined : next);
     expect(body).toMatch(/DELETE FROM file_claims WHERE session_id = \$1\s+RETURNING/);
     expect(body).not.toMatch(/DELETE FROM file_claims[^`]*project/);
   });

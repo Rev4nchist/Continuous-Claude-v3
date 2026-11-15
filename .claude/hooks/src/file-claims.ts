@@ -133,7 +133,9 @@ async function mainDirect(input: PreToolUseInput, paths: string[]): Promise<void
 const isStoredAbsolute = (filePath: string): boolean => isAbsolute(filePath) || /^[a-z]:[\\/]/i.test(filePath);
 
 /** What a message shows for a stored path: a cache claim is an absolute path, so only its base name. */
-const shown = (filePath: string): string => (isStoredAbsolute(filePath) ? basename(filePath) : filePath);
+/** A stored path is text another session wrote and a model reads the deny: a control or line-break character shows as "?". */
+const printable = (s: string): string => s.replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]/g, '?');
+const shown = (filePath: string): string => printable(isStoredAbsolute(filePath) ? basename(filePath) : filePath);
 
 async function shellDeny(input: PreToolUseInput, filePath: string, holder: string, cue: string): Promise<any> {
   const lines = holder === 'another session' ? '' : await holderLines(holder, filePath, isStoredAbsolute(filePath));
@@ -164,8 +166,11 @@ async function holderLines(holder: string, filePath: string, listForm: boolean):
   } catch {
     noOpenLane = false;
   }
-  // A PowerShell single-quoted string: a quote inside is doubled.
-  const target = listForm ? '--list' : `'${filePath.replace(/'/g, "''")}'`;
+  // The path is text another session stored, and a model reads this deny. An ALLOWLIST (seat word 2026-11-15 08:57, CodeRabbit
+  // CLI finding 2): only letters, digits, dot, underscore, hyphen, slash and space get the quoted form. Any other path (a quote,
+  // a curly quote, a line break, a dollar sign, a semicolon) gets --list, so nothing in it can reach the command line.
+  const quotable = /^[A-Za-z0-9._\/ -]+$/.test(filePath);
+  const target = listForm || !quotable ? '--list' : `'${filePath}'`;
   const release = `Holder: ${handle}. Only the holder frees a claim: it runs\n  node ~/.claude/hooks/dist/release-claim.mjs ${target}`;
   const lane = noOpenLane ? '\nThe holder holds no open lane.' : '';
   return `\n${release}${lane}`;
@@ -289,7 +294,8 @@ async function claimOne(input: PreToolUseInput, filePath: string, sessionId: str
 
   // Messages name the repo-relative path. A file outside any repo keeps the bare file name, so a
   // message never shows another session's absolute path.
-  const fileName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
+  const rawName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
+  const fileName = printable(rawName);
   let output: any;
 
   switch (decision.outcome) {

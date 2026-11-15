@@ -437,9 +437,33 @@ describe('deny text names the holder and the release command', () => {
     expect(r).not.toContain(root.split('\\').join('/'));
   });
 
-  it('a path with an apostrophe is quoted for PowerShell (the quote is doubled)', async () => {
-    seen.held = [{ filePath: "src/it's.ts", sessionId: 'other-session', project }];
-    const r = reason(await run('PowerShell', { command: `Set-Content "src/it's.ts" "x"` }));
-    expect(r).toContain("release-claim.mjs 'src/it''s.ts'");
+  // CodeRabbit CLI finding 2 and seat word 2026-11-15 08:57: the path is text another session stored and a model reads the
+  // deny. Only letters, digits, dot, underscore, hyphen, slash and space get the quoted form (an ALLOWLIST); any other path
+  // gets --list, so no quote, curly quote, line break or shell character can reach the command line of the deny text.
+  it.each([
+    ['an apostrophe', "src/it's.ts", `Set-Content "src/it's.ts" "x"`],
+    ['a curly quote', 'src/a’b.ts', 'Set-Content "src/a’b.ts" "x"'],
+    ['a semicolon', 'src/a;b.ts', 'Set-Content "src/a;b.ts" "x"'],
+    ['a dollar sign', 'src/a$b.ts', "Set-Content 'src/a$b.ts' 'x'"],
+  ])('a path with %s gets the --list form, never a quoted path', async (_name, filePath, command) => {
+    seen.held = [{ filePath, sessionId: 'other-session', project }];
+    const r = reason(await run('PowerShell', { command }));
+    expect(r).toContain('FILE CONFLICT BLOCKED');
+    expect(r).toContain('node ~/.claude/hooks/dist/release-claim.mjs --list');
+    expect(r).not.toContain(`release-claim.mjs '`);
+  });
+
+  it('a path with a line break gets the --list form and adds no line to the deny text (Edit deny)', async () => {
+    seen.blocked = new Set(['src/a\nb.ts']);
+    const r = reason(await run('Edit', { file_path: abs('src/a\nb.ts') }));
+    expect(r).toContain('FILE CONFLICT BLOCKED');
+    expect(r).toContain('release-claim.mjs --list');
+    expect(r).not.toContain('a\nb.ts');
+  });
+
+  it('a path of letters, digits, dot, underscore, hyphen, slash and space keeps the quoted form', async () => {
+    seen.held = [{ filePath: 'src/my file_2-a.ts', sessionId: 'other-session', project }];
+    const r = reason(await run('PowerShell', { command: 'Set-Content "src/my file_2-a.ts" "x"' }));
+    expect(r).toContain("release-claim.mjs 'src/my file_2-a.ts'");
   });
 });

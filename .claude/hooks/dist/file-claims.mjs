@@ -6799,7 +6799,8 @@ async function mainDirect(input, paths) {
   console.log(JSON.stringify(keep2));
 }
 var isStoredAbsolute = (filePath) => isAbsolute2(filePath) || /^[a-z]:[\\/]/i.test(filePath);
-var shown = (filePath) => isStoredAbsolute(filePath) ? basename2(filePath) : filePath;
+var printable = (s) => s.replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]/g, "?");
+var shown = (filePath) => printable(isStoredAbsolute(filePath) ? basename2(filePath) : filePath);
 async function shellDeny(input, filePath, holder, cue) {
   const lines = holder === "another session" ? "" : await holderLines(holder, filePath, isStoredAbsolute(filePath));
   const reason = `\u26A0\uFE0F FILE CONFLICT BLOCKED
@@ -6821,7 +6822,8 @@ async function holderLines(holder, filePath, listForm) {
   } catch {
     noOpenLane = false;
   }
-  const target = listForm ? "--list" : `'${filePath.replace(/'/g, "''")}'`;
+  const quotable = /^[A-Za-z0-9._\/ -]+$/.test(filePath);
+  const target = listForm || !quotable ? "--list" : `'${filePath}'`;
   const release = `Holder: ${handle}. Only the holder frees a claim: it runs
   node ~/.claude/hooks/dist/release-claim.mjs ${target}`;
   const lane = noOpenLane ? "\nThe holder holds no open lane." : "";
@@ -6914,7 +6916,8 @@ async function claimOne(input, filePath, sessionId) {
     input.tool_name,
     { breakGlass: BREAK_GLASS }
   );
-  const fileName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
+  const rawName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
+  const fileName = printable(rawName);
   let output;
   switch (decision.outcome) {
     case "blocked": {
