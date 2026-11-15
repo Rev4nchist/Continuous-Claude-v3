@@ -31,6 +31,7 @@ import { join } from 'path';
 import { resolveClaimKey } from '../shared/claim-target.js';
 import { canonicalProject } from '../shared/session-id.js';
 import { matchOwnRows } from '../shared/claim-release.js';
+import { leaseFor } from '../shared/leases.js';
 
 const seen = vi.hoisted(() => ({
   calls: [] as Array<{ filePath: string; project: string }>,
@@ -193,6 +194,32 @@ describe('file-claims hook: the pair handed to resolveFileClaim', () => {
     expect(reason).not.toContain(slashed(wt));
     expect(reason).not.toContain(slashed(wt).toLowerCase());
     expect(reason).toContain('release-claim.mjs --list');
+  });
+});
+
+describe('lease class (seat check 12:24: the new key must not change how long a claim lives)', () => {
+  it('11. the key of a cache file gets the same lease class as its raw absolute path did', () => {
+    const abs = [
+      join(wt, CACHE),
+      join(wt, '.claude', 'cache', 'settings.json'), // the basename rule of isHarnessPath
+      join(wt, '.claude', 'cache', 'hooks', 'x.md'), // a folder named hooks under the cache folder is not harness source
+    ];
+    for (const p of abs) {
+      const key = resolveClaimKey(p);
+      expect(key).not.toBeNull();
+      expect(leaseFor(key!.filePath)).toEqual(leaseFor(p));
+    }
+    expect(leaseFor(resolveClaimKey(join(wt, CACHE))!.filePath).leaseClass).toBe('file');
+  });
+
+  it('11b. a repo rooted inside a harness folder keeps the class its raw path gave (the absolute key carries the folder)', () => {
+    const inner = join(root, '.claude', 'skills', 'plug-repo');
+    mkdirSync(join(inner, '.claude', 'cache'), { recursive: true });
+    git(inner, 'init', '-q');
+    const p = join(inner, '.claude', 'cache', 'f.md');
+    const key = resolveClaimKey(p);
+    expect(key).not.toBeNull();
+    expect(leaseFor(key!.filePath)).toEqual(leaseFor(p));
   });
 });
 
