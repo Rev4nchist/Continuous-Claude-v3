@@ -6017,7 +6017,10 @@ function resolveClaimKey(rawPath, options = {}) {
         );
         let rel = relative(dir, realFile).replace(/\\/g, "/");
         if (!rel || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) return null;
-        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) return null;
+        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) {
+          const absKey = realFile.replace(/\\/g, "/");
+          return { filePath: FOLDS_CASE.has(platform) ? absKey.toLowerCase() : absKey, project };
+        }
         const harness = isHarnessPath(rel);
         if (isHarnessPath(abs) !== harness || isHarnessPath(realFile) !== harness) return null;
         if (FOLDS_CASE.has(platform)) rel = rel.toLowerCase();

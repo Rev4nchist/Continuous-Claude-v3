@@ -18,26 +18,11 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-class CannotCompare extends Error {}
+import { CannotCompare, parseReviewMd } from './lib/review-md.mjs';
 
 const lines = (text) => String(text).split(/\r?\n/);
 
-/** Globs in the first fenced block under the "Skip paths" heading of REVIEW.md. */
-export function parseReviewMd(text) {
-  const all = lines(text);
-  const at = all.findIndex((l) => /^##\s+Skip paths\s*$/i.test(l));
-  if (at < 0) throw new CannotCompare('REVIEW.md has no "## Skip paths" section');
-  const rest = all.slice(at + 1);
-  const end = rest.findIndex((l) => /^##\s/.test(l));
-  const section = end < 0 ? rest : rest.slice(0, end);
-  const open = section.findIndex((l) => /^```/.test(l));
-  const close = open < 0 ? -1 : section.findIndex((l, i) => i > open && /^```\s*$/.test(l));
-  if (open < 0 || close < 0) throw new CannotCompare('REVIEW.md "Skip paths" has no fenced block');
-  const globs = section.slice(open + 1, close).map((l) => l.trim()).filter(Boolean);
-  if (globs.length === 0) throw new CannotCompare('REVIEW.md "Skip paths" block is empty');
-  return globs;
-}
+export { parseReviewMd };
 
 export function parseGreptile(text) {
   let config;

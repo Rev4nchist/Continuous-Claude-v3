@@ -111,8 +111,9 @@ function tap(step: Step, key: string, head: string, label: string, tree?: string
 }
 const shipTap = (branch = 'feat/x') => tap('ship', `${REPO}@${branch}`, HEAD, 'Commit and push (Recommended)', TREE);
 
-const bash = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: '/repo', ...extra });
-const pwsh = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo', ...extra });
+// Round 3 item 17: every payload carries a session_id (hook-dev rule: without it a child process takes a PID-based id).
+const bash = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: '/repo', session_id: 'push-blocks-test', ...extra });
+const pwsh = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo', session_id: 'push-blocks-test', ...extra });
 const verdict = (input: object, w?: World) => decide(input, deps(w));
 const denied = (input: object, w?: World) => verdict(input, w).action === 'deny';
 const reasonOf = (input: object, w?: World): string => { const d = verdict(input, w); return d.action === 'deny' ? d.reason : ''; };
@@ -374,7 +375,9 @@ describe('HS: the holdout scan on a push of a re/ branch', () => {
     it('H20: the controls stay allowed: an ordinary commit and push with no answer-key path, and a push with no chain', () => {
       // Breaks when: every chained push of a non-re branch is denied (the seat: no blanket deny).
       shipTap();
-      expect(verdict(bash(CHAIN), { ...KEY, headFiles: ['src/a.ts'], cachedFiles: ['src/b.ts'], untracked: ['notes.md'] }).action).toBe('allow');
+      // Round 3 C4 (Dave 2026-11-15): commit -a stages files after the gate reads the index, so this chain is now a hard
+      // push-state-unknown in CCv3 (not an answer-key deny: the seat's "no blanket deny" of the scan still holds for the scan).
+      expect(verdict(bash(CHAIN), { ...KEY, headFiles: ['src/a.ts'], cachedFiles: ['src/b.ts'], untracked: ['notes.md'] })).toMatchObject({ action: 'deny', pattern: 'push-state-unknown' });
       expect(verdict(bash('git push fork feat/x'), { ...KEY, headFiles: ['gold/a.json'] }).action).toBe('allow');
     });
 

@@ -12,8 +12,8 @@
  * Any failure returns null, and the caller keeps today's key (raw path, cwd project): a file
  * outside any repo, a `.git` entry that cannot be read (any error but "not found"), a path on a
  * network share (no file read at all: sync calls have no time limit), a path whose lease class
- * would change, or a path under `.claude/cache` (git-ignored, one copy per worktree: see
- * `isWorktreeCache`).
+ * would change. A path under `.claude/cache` (git-ignored, one copy per worktree: see
+ * `isWorktreeCache`) keeps a per-worktree key: its real absolute path (card coord-file-claims-cache-key-canonical).
  *
  * What it does not do:
  *  - A stored row with an absolute path (a live session that started before this change) is not
@@ -55,14 +55,13 @@ const real = (p: string): string => realpathSync.native(p);
 /**
  * `.claude/cache/**` holds git-ignored files that each worktree makes for itself (the pre-pr summary,
  * its logs). One key for every worktree would make two sessions fight over files they cannot share
- * (card coord-file-claims-worktree-local). Such a file keeps today's key (raw absolute path, cwd
- * project), which differs per worktree. No .gitignore parser: a wrong ignore rule could weaken the
+ * (card coord-file-claims-worktree-local). Such a file gets a key that differs per worktree (its real
+ * absolute path). No .gitignore parser: a wrong ignore rule could weaken the
  * guard for a tracked file, and this prefix rule can only ever make a claim narrower for a file
  * under `.claude/cache`. The relative path is already resolved (".." gone) when this runs.
  *
  * The rule ASSUMES `.claude/cache/` is git-ignored (see the repo `.gitignore`). A file force-added
- * there loses the cross-worktree claim. For such a path the fallback key is the raw `file_path`, so
- * two spellings of one file (slash, case, relative) in one worktree are two keys, as before PR 536.
+ * there loses the cross-worktree claim.
  */
 const isWorktreeCache = (rel: string, fold: boolean): boolean => {
   const r = fold ? rel.toLowerCase() : rel;
@@ -108,9 +107,10 @@ function commonDirOf(top: string): string | null | undefined {
 }
 
 /**
- * Resolve the claim key of `rawPath`, or null when the file is outside any repo, the repo cannot
- * be read, or the file is under `.claude/cache` (a per-worktree file: the caller keeps the old key,
- * raw path plus cwd project, which differs per worktree). Never throws.
+ * Resolve the claim key of `rawPath`, or null when the file is outside any repo or the repo cannot
+ * be read (the caller keeps the old key, raw path plus cwd project). A file under `.claude/cache` (a
+ * per-worktree file) gets its real absolute path as the key, so it differs per worktree and is one
+ * key for every spelling of the path. Never throws.
  */
 export function resolveClaimKey(rawPath: string, options: ClaimKeyOptions = {}): ClaimKey | null {
   try {
@@ -134,7 +134,14 @@ export function resolveClaimKey(rawPath: string, options: ClaimKeyOptions = {}):
         let rel = relative(dir, realFile).replace(/\\/g, '/');
         // Outside the repo: "..", or a path that starts with "../". A folder named "..foo" is fine.
         if (!rel || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) return null;
-        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) return null;
+        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) {
+          // Card coord-file-claims-cache-key-canonical: a per-worktree file is keyed by its REAL absolute path (forward
+          // slashes, case folded where the file system ignores case) plus the repo project. Every spelling of the
+          // path (slash, case, "..", relative to the cwd, a link) is then one key, and two worktrees stay two keys.
+          // The path is absolute, so the shell guard and the release hint read it as a stored absolute path.
+          const absKey = realFile.replace(/\\/g, '/');
+          return { filePath: FOLDS_CASE.has(platform) ? absKey.toLowerCase() : absKey, project };
+        }
         // The lease class is decided from the key (resolveFileClaim). A repo rooted inside a harness
         // folder (`<x>/.claude/skills/plugin`, or `~/.claude` itself) has a relative path with no
         // `.claude/<dir>` segment, and a link can make the raw and the real path differ. Main

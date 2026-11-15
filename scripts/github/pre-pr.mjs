@@ -115,8 +115,7 @@ import { checkSummary } from './lib/pr-summary.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
-import { parseReviewMd } from '../ratchets/review-skip-sync.mjs';
-import { ANSWER_KEY_GLOBS, answerKeyHitsOf, slashLower } from './lib/answer-key.mjs';
+import { ANSWER_KEY_GLOBS, answerKeyGlobs, answerKeyCheck, slashLower } from './lib/answer-paths.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
@@ -144,7 +143,7 @@ const nodeGate = (id, script, extra = [], more = {}) => ({ id, cmd: 'node', args
 const cheapGate = (id, script, extra = []) => nodeGate(id, script, extra, { cheap: true });
 
 // Tests in scripts/checks that the checks-tests gate runs. test-map.test.mjs has its own gate.
-const CHECKS_TESTS = ['prove-check', 'state-table', 'changed-lines', 'typecheck-changed', 'cli-smoke', 'parser-fixtures', 'catchers'].map((n) => `scripts/checks/${n}.test.mjs`);
+const CHECKS_TESTS = ['prove-check', 'state-table', 'changed-lines', 'typecheck-changed', 'cli-smoke', 'parser-fixtures', 'catchers', 'fixture-gap'].map((n) => `scripts/checks/${n}.test.mjs`);
 // Parser files outside scripts/**/*.mjs that scripts/checks/parser-fixtures/registry.mjs names. A test keeps this list equal to the registry.
 export const CATCHER_PARSER_FILES = ['apps/agentic-os/src/server/sources/safe-message.ts', '.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts'];
 export const BASE_TOKEN = '{base}';
@@ -1266,34 +1265,7 @@ function reusedReview({ root, e2e, saved, base, why }) {
 // of BOTH sides of the change: `git diff --name-only` follows renames, so a rename out of gold/ names only the new path. A hit is an earned SKIP
 // "answer-key" (the stamp and the gate: see answerKeyStep). Fail closed: a list it cannot read or an unknown path list is a FAIL.
 
-/**
- * The match list: the four known answer-key globs, frozen here (Seat ruling 2026-11-13). A glob in the branch's own REVIEW.md earns nothing:
- * a wider one cannot widen the skip. REVIEW.md "Skip paths" is only the drift alarm (answerKeyGlobs). The test A5 ties this list to the live
- * REVIEW.md and to the answer-key entries of cursor-review.mjs TREE_EXCLUDES.
- */
-export { ANSWER_KEY_GLOBS };
-
-/** { globs } (the frozen four) or { reason }: fail closed when REVIEW.md "Skip paths" cannot be read or lacks any of the four. */
-export function answerKeyGlobs(root) {
-  let text;
-  try { text = readFileSync(path.join(root, 'REVIEW.md'), 'utf8'); } catch (err) { return { reason: `REVIEW.md could not be read (${err.code ?? 'error'})` }; }
-  let listed;
-  try { listed = parseReviewMd(text).map(slashLower); } catch (err) { return { reason: String(err.message) }; }
-  const missing = ANSWER_KEY_GLOBS.filter((g) => !listed.includes(slashLower(g)));
-  return missing.length === 0 ? { globs: ANSWER_KEY_GLOBS } : { reason: `REVIEW.md "Skip paths" lacks ${missing.join(', ')}` };
-}
-
-/**
- * { hits } (the answer-key paths, at least one), { closed } (why the guard cannot check the diff) or null (no answer-key path). A path
- * matches a whole glob, after slashes and case are normalised (Gold/ is gold/).
- */
-export function answerKeyCheck({ root, paths }) {
-  if (!Array.isArray(paths)) return { closed: 'the changed-file list is unknown' };
-  const { globs, reason } = answerKeyGlobs(root);
-  if (!globs) return { closed: reason };
-  const hits = answerKeyHitsOf(paths, globs);
-  return hits.length === 0 ? null : { hits };
-}
+export { ANSWER_KEY_GLOBS, answerKeyGlobs, answerKeyCheck };
 
 const closedText = (why) => `the answer-key guard could not check the diff (${why}): no CLI review runs on a diff it cannot check. Fix REVIEW.md or the git read, then run pre-pr again.`;
 const hitText = (hits) => `the diff holds an answer-key path (${hits[0]}, ${hits.length} in all)`;
