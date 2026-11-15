@@ -1,0 +1,1178 @@
+[
+  {
+    "id": "b-op-bool-invert-1b0bce2f",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-bool-invert-1b0bce2f..refs/eval/seed/op-bool-invert-1b0bce2f"
+    },
+    "file": "scripts/checks/fixture-gap.mjs",
+    "line": 22,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "bool-invert",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/fixture-gap.test.mjs",
+      "failsIn": "scripts/checks/fixture-gap.test.mjs",
+      "failureSha256": "0a1bc46cea432910a38bb7af7e81111f4b98bdfe1c047d071ac3435daf08b038",
+      "truthNote": "a true or false literal inverted: `if (GAP_EXCLUDE.includes(file) || file.startsWith('scripts/checks/parser-fixtures/')) return false;` became `if (GAP_EXCLUDE.includes(file) || file.startsWith('scripts/checks/parser-fixtures/')) return true;`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-cl-free-2614bc4c",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-2614bc4c..refs/eval/seed/cl-free-2614bc4c"
+    },
+    "file": "scripts/checks/fixture-gap.mjs",
+    "line": 23,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/fixture-gap.test.mjs",
+      "failsIn": "scripts/checks/fixture-gap.test.mjs",
+      "failureSha256": "9b88fd9de9867c2ae882966745bc8fa7547ec839f7033fa181cf921a58daf8a3",
+      "truthNote": "The basename uses the first slash instead of the last, so a nested path like src/parsers/util.mjs is matched on its folder name and wrongly reported as a gap.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-cd00e336",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-cd00e336..refs/eval/seed/op-cmp-flip-cd00e336"
+    },
+    "file": "scripts/checks/fixture-gap.mjs",
+    "line": 21,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/fixture-gap.test.mjs",
+      "failsIn": "scripts/checks/fixture-gap.test.mjs",
+      "failureSha256": "fa70cbd750cab96074305fa960933b9daef337aa21e71b6f084119c4dafa049e",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `if (file.split('/').some((d) => d === 'dist' || d === '__tests__')) return false;` became `if (file.split('/').some((d) => d !== 'dist' || d === '__tests__')) return false;`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-bool-invert-a079fab4",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-bool-invert-a079fab4..refs/eval/seed/op-bool-invert-a079fab4"
+    },
+    "file": "scripts/checks/fixture-gap.mjs",
+    "line": 20,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "bool-invert",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/fixture-gap.test.mjs",
+      "failsIn": "scripts/checks/fixture-gap.test.mjs",
+      "failureSha256": "f6711121fa95479d5600ec565c1cb715a9f436eadc78c73b1ea46c3a47edbe1c",
+      "truthNote": "a true or false literal inverted: `if (!SOURCE_EXT.test(file) || TEST_FILE.test(file)) return false;` became `if (!SOURCE_EXT.test(file) || TEST_FILE.test(file)) return true;`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-cl-free-994e2e3e",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-994e2e3e..refs/eval/seed/cl-free-994e2e3e"
+    },
+    "file": "scripts/checks/fixture-gap.mjs",
+    "line": 16,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/fixture-gap.test.mjs",
+      "failsIn": "scripts/checks/fixture-gap.test.mjs",
+      "failureSha256": "33aac53eb1907571da539708349d328a0e55e0577b83ab817a96adc9b309bb3b",
+      "truthNote": "The path normalizer now converts only the first backslash to a forward slash, so a Windows path with two or more backslashes fails to match its registry entry or the folder exclusions.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-ffc61f51",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-ffc61f51..refs/eval/seed/cl-free-ffc61f51"
+    },
+    "file": "scripts/checks/fixture-gap.mjs",
+    "line": 24,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/fixture-gap.test.mjs",
+      "failsIn": "scripts/checks/fixture-gap.test.mjs",
+      "failureSha256": "9b88fd9de9867c2ae882966745bc8fa7547ec839f7033fa181cf921a58daf8a3",
+      "truthNote": "The pattern now matches against the full path instead of the basename, so a non-parser file inside a folder such as src/parsers/ or scripts/guards/ is wrongly reported as a fixture gap.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-2c3328e3",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-2c3328e3..refs/eval/seed/cl-free-2c3328e3"
+    },
+    "file": "scripts/skills/trigger-probe.mjs",
+    "line": 145,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/skills/trigger-probe.test.mjs",
+      "failsIn": "scripts/skills/trigger-probe.test.mjs",
+      "failureSha256": "b806ed6d03108393a8e17d9763a070dd959c99dab2d0f20da10b0855f813a39d",
+      "truthNote": "Without a forbid list, the hit test uses every instead of some, so a run that fires no skill counts as a hit, and a run that fires an expected skill plus another skill counts as a miss.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-e148799a",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-e148799a..refs/eval/seed/cl-free-e148799a"
+    },
+    "file": "scripts/skills/trigger-probe.mjs",
+    "line": 143,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/skills/trigger-probe.test.mjs",
+      "failsIn": "scripts/skills/trigger-probe.test.mjs",
+      "failureSha256": "79dfe0f449a60ea3668c4ed74eb359b8488b4a2f867ecc6e6ee64d67102c67c5",
+      "truthNote": "In a forbid case with an expect list, the hit check now requires every fired skill to be expected, so a run that fires an expected skill plus any other non-forbidden skill scores as a miss.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-3340846d",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-3340846d..refs/eval/seed/cl-free-3340846d"
+    },
+    "file": "scripts/ratchets/scan-ratchet.mjs",
+    "line": 98,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/ratchets/scan-ratchet.test.mjs",
+      "failsIn": "scripts/ratchets/scan-ratchet.test.mjs",
+      "failureSha256": "fa6a81c0d70d1cde6007e53c3b4c3e53205ec7fb78498402f8be81978cce63b3",
+      "truthNote": "An osv group with max_severity exactly 7 is no longer counted, but the documented threshold is at least 7.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-26b5f54b",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-26b5f54b..refs/eval/seed/op-cmp-flip-26b5f54b"
+    },
+    "file": "scripts/ratchets/scan-ratchet.mjs",
+    "line": 215,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/ratchets/scan-ratchet.test.mjs",
+      "failsIn": "scripts/ratchets/scan-ratchet.test.mjs",
+      "failureSha256": "4c1c0bf38a3e588d02cf6fdf04b9fe2cb1c16236ae6dbc41dfa00a261cbd29c5",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `if (a === '--update') opts.update = true;` became `if (a !== '--update') opts.update = true;`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-3c0744e0",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-3c0744e0..refs/eval/seed/op-cmp-flip-3c0744e0"
+    },
+    "file": "scripts/ratchets/scan-ratchet.mjs",
+    "line": 230,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/ratchets/scan-ratchet.test.mjs",
+      "failsIn": "scripts/ratchets/scan-ratchet.test.mjs",
+      "failureSha256": "4c1c0bf38a3e588d02cf6fdf04b9fe2cb1c16236ae6dbc41dfa00a261cbd29c5",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `const current = osv ? osv.counts : opts.tool === 'trivy' ? trivyCounts(report) : semgrepCounts(report);` became `const current = osv ? osv.counts : opts.tool !== 'trivy' ? trivyCounts(report) : semgrepCounts(report);`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-3e28e189",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-3e28e189..refs/eval/seed/op-cmp-flip-3e28e189"
+    },
+    "file": "scripts/ratchets/scan-ratchet.mjs",
+    "line": 213,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/ratchets/scan-ratchet.test.mjs",
+      "failsIn": "scripts/ratchets/scan-ratchet.test.mjs",
+      "failureSha256": "4c1c0bf38a3e588d02cf6fdf04b9fe2cb1c16236ae6dbc41dfa00a261cbd29c5",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `for (let i = 0; i < argv.length; i++) {` became `for (let i = 0; i <= argv.length; i++) {`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-5ad6de8d",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-5ad6de8d..refs/eval/seed/op-cmp-flip-5ad6de8d"
+    },
+    "file": "scripts/ratchets/scan-ratchet.mjs",
+    "line": 229,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/ratchets/scan-ratchet.test.mjs",
+      "failsIn": "scripts/ratchets/scan-ratchet.test.mjs",
+      "failureSha256": "bdff4427670d8fc8f004500784758a4c2bc3ab2ac82dfc6e9117bdd31cb9b4df",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `const osv = opts.tool === 'osv' ? osvReport(report, opts.root) : null;` became `const osv = opts.tool !== 'osv' ? osvReport(report, opts.root) : null;`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-7312eb5a",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-7312eb5a..refs/eval/seed/op-cmp-flip-7312eb5a"
+    },
+    "file": "scripts/ratchets/scan-ratchet.mjs",
+    "line": 51,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/ratchets/scan-ratchet.test.mjs",
+      "failsIn": "scripts/ratchets/scan-ratchet.test.mjs",
+      "failureSha256": "9356d67a11001362195789386305d312dccc4aa17348622e686f296a898015f2",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `if (m.Status === 'FAIL' && TRIVY_LEVELS.has(m.Severity)) bump(counts, `misconf|${target}|${m.ID}`);` became `if (m.Status !== 'FAIL' && TRIVY_LEVELS.has(m.Severity)) bump(counts, `misconf|${target}|${m.ID}`);`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-cl-free-68c62ddf",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-68c62ddf..refs/eval/seed/cl-free-68c62ddf"
+    },
+    "file": "scripts/check-agent-model-drift.mjs",
+    "line": 39,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/check-agent-model-drift.test.mjs",
+      "failsIn": "scripts/check-agent-model-drift.test.mjs",
+      "failureSha256": "eccd965426536f54e3cf8d860a16676ce04a7512d679b014f97f77468fc7dc04",
+      "truthNote": "A quoted scalar such as `effort: \"high\"` returns the quote character instead of the value inside the quotes, so quoted models and efforts read wrong.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-op-drop-guard-01d07b2f",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-drop-guard-01d07b2f..refs/eval/seed/op-drop-guard-01d07b2f"
+    },
+    "file": "scripts/check-agent-model-drift.mjs",
+    "line": 36,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "drop-guard",
+      "seedVersion": 1,
+      "test": "node --test scripts/check-agent-model-drift.test.mjs",
+      "failsIn": "scripts/check-agent-model-drift.test.mjs",
+      "failureSha256": "f0c1a60c543c1efbe89da3bb965758224aa8dfbe1c14039c0200ffdd3ee20773",
+      "truthNote": "an early-return guard line removed: `if (!m) return undefined;` became (blank)",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-df81c2aa",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-df81c2aa..refs/eval/seed/op-cmp-flip-df81c2aa"
+    },
+    "file": "scripts/check-agent-model-drift.mjs",
+    "line": 25,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/check-agent-model-drift.test.mjs",
+      "failsIn": "scripts/check-agent-model-drift.test.mjs",
+      "failureSha256": "bb978aa75bf0850b507d388fcd5a0929c843aac277951a3a01ded97be015a786",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `if (end === -1) return { model: undefined, reason: 'unterminated-frontmatter' };` became `if (end !== -1) return { model: undefined, reason: 'unterminated-frontmatter' };`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-cl-free-eec17a7c",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-eec17a7c..refs/eval/seed/cl-free-eec17a7c"
+    },
+    "file": "scripts/check-agent-model-drift.mjs",
+    "line": 40,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/check-agent-model-drift.test.mjs",
+      "failsIn": "scripts/check-agent-model-drift.test.mjs",
+      "failureSha256": "771c819c90a8381fd1693349af2e2313ca0389d7a877849a277be9799bfea35c",
+      "truthNote": "The comment-stripping regex now removes a trailing comment only when it has no spaces, so `effort: high  # why` reads as `high  # why` instead of `high`.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-ecab6d91",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-ecab6d91..refs/eval/seed/op-cmp-flip-ecab6d91"
+    },
+    "file": "scripts/check-agent-model-drift.mjs",
+    "line": 28,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/check-agent-model-drift.test.mjs",
+      "failsIn": "scripts/check-agent-model-drift.test.mjs",
+      "failureSha256": "bb978aa75bf0850b507d388fcd5a0929c843aac277951a3a01ded97be015a786",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `if (model === undefined) return { model: undefined, reason: 'no-model-field' };` became `if (model !== undefined) return { model: undefined, reason: 'no-model-field' };`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-cl-free-fc5fb0f2",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-fc5fb0f2..refs/eval/seed/cl-free-fc5fb0f2"
+    },
+    "file": "scripts/check-agent-model-drift.mjs",
+    "line": 26,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/check-agent-model-drift.test.mjs",
+      "failsIn": "scripts/check-agent-model-drift.test.mjs",
+      "failureSha256": "022473af61401acc236d310ed37ffb9daf5b4d2a4a7359c94f6007b59512a574",
+      "truthNote": "The frontmatter block drops its last character, so the last key before the closing --- reads truncated, for example effort: high becomes hig.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-6a0b7327",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-6a0b7327..refs/eval/seed/cl-free-6a0b7327"
+    },
+    "file": "scripts/hooks/trace-marker-check.mjs",
+    "line": 36,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/trace-marker-check.test.mjs",
+      "failsIn": "scripts/hooks/trace-marker-check.test.mjs",
+      "failureSha256": "74c41334ffa41cfb69a29af386c148f475afd10aa163e5c1d09b71d5618e6051",
+      "truthNote": "The vacuous check now tests the registered name list instead of the names that have a dist file, so a set of registered names with no dist files gives no trace-marker-vacuous finding.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-9a647f79",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-9a647f79..refs/eval/seed/cl-free-9a647f79"
+    },
+    "file": "scripts/hooks/trace-marker-check.mjs",
+    "line": 42,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/trace-marker-check.test.mjs",
+      "failsIn": "scripts/hooks/trace-marker-check.test.mjs",
+      "failureSha256": "8fbf8a2cd2a6a3a83446347caf6baf2b8caa9eaeee6374898336740618b4a70d",
+      "truthNote": "A dist without the marker now also counts as missing the boot call, so it gives a false trace-boot-call-missing finding and the marked count subtracts it twice.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-f158aef2",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-f158aef2..refs/eval/seed/cl-free-f158aef2"
+    },
+    "file": "scripts/hooks/trace-marker-check.mjs",
+    "line": 43,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/trace-marker-check.test.mjs",
+      "failsIn": "scripts/hooks/trace-marker-check.test.mjs",
+      "failureSha256": "e71ba4e6c5a4b14404f5f79dc16a1a0f34a8cccfed174d49cfb16af3da697bec",
+      "truthNote": "When exactly one dist has the marker but no boot call, the check skips the trace-boot-call-missing finding.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-fab44eee",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-fab44eee..refs/eval/seed/cl-free-fab44eee"
+    },
+    "file": "scripts/hooks/trace-marker-check.mjs",
+    "line": 50,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/trace-marker-check.test.mjs",
+      "failsIn": "scripts/hooks/trace-marker-check.test.mjs",
+      "failureSha256": "c410fe8936d86e9de8f3acdaefc4e12998de96a71beab066d2d453cae2a3ce6b",
+      "truthNote": "The count-regression finding now fires when the number of fully traced dists equals the floor, so a set that exactly meets minCount is wrongly reported as a regression.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-cl-free-6a9ef9e4",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-6a9ef9e4..refs/eval/seed/cl-free-6a9ef9e4"
+    },
+    "file": "scripts/agents/check-agent-body.mjs",
+    "line": 199,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/agents/check-agent-body.test.mjs",
+      "failsIn": "scripts/agents/check-agent-body.test.mjs",
+      "failureSha256": "9ee816e785881301e306484479a62f7cd36f00d711fc65427b7e8aac23f70216",
+      "truthNote": "The ratchet reports a regression when a count equals the baseline, so an unchanged repo fails the gate.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-op-logic-flip-aa6ad228",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-logic-flip-aa6ad228..refs/eval/seed/op-logic-flip-aa6ad228"
+    },
+    "file": "scripts/agents/check-agent-body.mjs",
+    "line": 134,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "logic-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/agents/check-agent-body.test.mjs",
+      "failsIn": "scripts/agents/check-agent-body.test.mjs",
+      "failureSha256": "53a5b75234c30c5e3cb8f9ff12518c864005c3641b6ead3e90a68a23652e96e7",
+      "truthNote": "a logical and changed to a logical or: `if (needs.write && !has(WRITE_TOOLS)) out.push({ need: 'Write', evidence: needs.write });` became `if (needs.write || !has(WRITE_TOOLS)) out.push({ need: 'Write', evidence: needs.write });`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-17eb733d",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-17eb733d..refs/eval/seed/op-cmp-flip-17eb733d"
+    },
+    "file": "scripts/agents/check-agent-body.mjs",
+    "line": 40,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/agents/check-agent-body.test.mjs",
+      "failsIn": "scripts/agents/check-agent-body.test.mjs",
+      "failureSha256": "9aafa92c2c38d72ab65412ca1b1f8b36889fc37af5f00539cd70515acaa18d36",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `return { frontmatter: t.slice(3, end), body: after === -1 ? '' : t.slice(after + 1) };` became `return { frontmatter: t.slice(3, end), body: after !== -1 ? '' : t.slice(after + 1) };`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-logic-flip-cc7680a6",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-logic-flip-cc7680a6..refs/eval/seed/op-logic-flip-cc7680a6"
+    },
+    "file": "scripts/agents/check-agent-body.mjs",
+    "line": 118,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "logic-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/agents/check-agent-body.test.mjs",
+      "failsIn": "scripts/agents/check-agent-body.test.mjs",
+      "failureSha256": "6f30ef4771daa9e220674d7a4bbd597e80335b1a3e731bbc6c192ecf72799a56",
+      "truthNote": "a logical and changed to a logical or: `const runLine = prose.find((p) => RUN_RE.test(p.text) && !NEG_RE.test(p.text));` became `const runLine = prose.find((p) => RUN_RE.test(p.text) || !NEG_RE.test(p.text));`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-7a3371cb",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-7a3371cb..refs/eval/seed/op-cmp-flip-7a3371cb"
+    },
+    "file": "scripts/agents/check-agent-body.mjs",
+    "line": 38,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/agents/check-agent-body.test.mjs",
+      "failsIn": "scripts/agents/check-agent-body.test.mjs",
+      "failureSha256": "1bafc6a387ab152421d008dfc8d18cdf686c36179e9de5fcacf3560499b25eb2",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `if (end === -1) return { frontmatter: '', body: t };` became `if (end !== -1) return { frontmatter: '', body: t };`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-logic-flip-dfe9cf4c",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-logic-flip-dfe9cf4c..refs/eval/seed/op-logic-flip-dfe9cf4c"
+    },
+    "file": "scripts/agents/check-agent-body.mjs",
+    "line": 120,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "logic-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/agents/check-agent-body.test.mjs",
+      "failsIn": "scripts/agents/check-agent-body.test.mjs",
+      "failureSha256": "53a5b75234c30c5e3cb8f9ff12518c864005c3641b6ead3e90a68a23652e96e7",
+      "truthNote": "a logical and changed to a logical or: `const writeLine = prose.find((p) => WRITE_RE.test(p.text) && !NEG_RE.test(p.text));` became `const writeLine = prose.find((p) => WRITE_RE.test(p.text) || !NEG_RE.test(p.text));`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-cl-free-78b0890e",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-78b0890e..refs/eval/seed/cl-free-78b0890e"
+    },
+    "file": "scripts/checks/state-table.mjs",
+    "line": 36,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/state-table.test.mjs",
+      "failsIn": "scripts/checks/state-table.test.mjs",
+      "failureSha256": "5a7f3675b47c1c6a8801d70ef5aea59049fa382c3338adaa88e3f83acc820f2e",
+      "truthNote": "An empty event array for a kind now counts as coverage, so tableProblems no longer reports that the kind has no event that covers it and no na reason.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-9c0f6a98",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-9c0f6a98..refs/eval/seed/op-cmp-flip-9c0f6a98"
+    },
+    "file": "scripts/checks/state-table.mjs",
+    "line": 14,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/state-table.test.mjs",
+      "failsIn": "scripts/checks/state-table.test.mjs",
+      "failureSha256": "6593a9a44c54f92d418257dc6ae63fc8a64d9c9d5a4ea902fdf22fe96344bc38",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `const hasReason = (na) => typeof na === 'string' && na.trim() !== '';` became `const hasReason = (na) => typeof na !== 'string' && na.trim() !== '';`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-a2ed32aa",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-a2ed32aa..refs/eval/seed/op-cmp-flip-a2ed32aa"
+    },
+    "file": "scripts/checks/state-table.mjs",
+    "line": 39,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/checks/state-table.test.mjs",
+      "failsIn": "scripts/checks/state-table.test.mjs",
+      "failureSha256": "a31c04a9a2c085c005bb9910e0eb275c1495de8b59e9356c2a81889f51ab1161",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `else if (!cells.some((c) => c.event === e && !('na' in c))) problems.push(`kind ${kind}: event ${e} has no cell that runs`);` became `else if (!cells.some((c) => c.event !== e && !('na' in c))) problems.push(`kind ${kind}: event ${e} has no cell that runs`);`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-cl-free-8c500fad",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/cl-free-8c500fad..refs/eval/seed/cl-free-8c500fad"
+    },
+    "file": "scripts/hooks/hook-trace-report.mjs",
+    "line": 28,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "claude",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/hook-trace-report.test.mjs",
+      "failsIn": "scripts/hooks/hook-trace-report.test.mjs",
+      "failureSha256": "b157109e62f1d3100a0077e5c5765e62e57931a46b633d7fb16e468a911eef50",
+      "truthNote": "The percentile rounds the rank down instead of up, so a non-integer rank picks the element one below the nearest-rank value; for example, p50 of [1,2,3,4,5] returns 2 instead of 3.",
+      "severitySource": "seeder",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  {
+    "id": "b-op-drop-guard-5583094e",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-drop-guard-5583094e..refs/eval/seed/op-drop-guard-5583094e"
+    },
+    "file": "scripts/hooks/hook-trace-report.mjs",
+    "line": 26,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "drop-guard",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/hook-trace-report.test.mjs",
+      "failsIn": "scripts/hooks/hook-trace-report.test.mjs",
+      "failureSha256": "ee500e7bc7aea5b87d3f798669e016219fc9f2477f3c408238c4fbf861bb35da",
+      "truthNote": "an early-return guard line removed: `if (!values.length) return null;` became (blank)",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-logic-flip-126b75da",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-logic-flip-126b75da..refs/eval/seed/op-logic-flip-126b75da"
+    },
+    "file": "scripts/hooks/hook-trace-report.mjs",
+    "line": 35,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "logic-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/hook-trace-report.test.mjs",
+      "failsIn": "scripts/hooks/hook-trace-report.test.mjs",
+      "failureSha256": "aec7ff04256b77b45df19aed3c82b4fd207e888538ad094062fc8f68c05f5123",
+      "truthNote": "a logical and changed to a logical or: `return readdirSync(dir).map((f) => ({ f, m: DAY_FILE.exec(f) })).filter((x) => x.m && x.m[1] >= cutoff)` became `return readdirSync(dir).map((f) => ({ f, m: DAY_FILE.exec(f) })).filter((x) => x.m || x.m[1] >= cutoff)`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-093d0f7b",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-093d0f7b..refs/eval/seed/op-cmp-flip-093d0f7b"
+    },
+    "file": "scripts/hooks/hook-trace-report.mjs",
+    "line": 89,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/hook-trace-report.test.mjs",
+      "failsIn": "scripts/hooks/hook-trace-report.test.mjs",
+      "failureSha256": "bb8766c4bbb9ac7da8b6fdbf8b5f787386fdf0a8c84fc954ac467c12ceb0978c",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `else if (argv[i] === '--by') o.by = String(argv[++i]).split(',').map((s) => s.trim()).filter(Boolean);` became `else if (argv[i] !== '--by') o.by = String(argv[++i]).split(',').map((s) => s.trim()).filter(Boolean);`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-995f52cb",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-995f52cb..refs/eval/seed/op-cmp-flip-995f52cb"
+    },
+    "file": "scripts/hooks/hook-trace-report.mjs",
+    "line": 87,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/hook-trace-report.test.mjs",
+      "failsIn": "scripts/hooks/hook-trace-report.test.mjs",
+      "failureSha256": "e2d0205e0a538068473272537c3735e3c68289107f71912e2086b345063ee237",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `if (argv[i] === '--dir') o.dir = argv[++i];` became `if (argv[i] !== '--dir') o.dir = argv[++i];`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-cmp-flip-d2e9ba7b",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-cmp-flip-d2e9ba7b..refs/eval/seed/op-cmp-flip-d2e9ba7b"
+    },
+    "file": "scripts/hooks/hook-trace-report.mjs",
+    "line": 54,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "cmp-flip",
+      "seedVersion": 1,
+      "test": "node --test scripts/hooks/hook-trace-report.test.mjs",
+      "failsIn": "scripts/hooks/hook-trace-report.test.mjs",
+      "failureSha256": "0ab0c403cdb20d4c246144aaeeb38c0b0a1aa21ac9876dcb106a6783e8db8550",
+      "truthNote": "a comparison changed (< to <=, > to >=, === to !==): `const fmt = (n) => (n === null ? '-' : String(Math.round(n * 10) / 10));` became `const fmt = (n) => (n !== null ? '-' : String(Math.round(n * 10) / 10));`",
+      "severitySource": "seeder"
+    }
+  },
+  {
+    "id": "b-op-off-by-one-09da3566",
+    "source": "B",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "range": "refs/eval/seed-base/op-off-by-one-09da3566..refs/eval/seed/op-off-by-one-09da3566"
+    },
+    "file": "scripts/pricing/refresh-prices.mjs",
+    "line": 31,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "seed-test",
+        "verdict": "real"
+      }
+    ],
+    "provenance": {
+      "author": "operator",
+      "operator": "off-by-one",
+      "seedVersion": 1,
+      "test": "node --test scripts/pricing/refresh-prices.test.mjs",
+      "failsIn": "scripts/pricing/refresh-prices.test.mjs",
+      "failureSha256": "7769b15d9f7b9d19c9bf0a6fa4569118481cdbf38b5152d3b3820d6f695e803d",
+      "truthNote": "an offset of one changed to two: `return at >= 0 ? argv[at + 1] : undefined;` became `return at >= 0 ? argv[at + 2] : undefined;`",
+      "severitySource": "seeder"
+    }
+  }
+]
