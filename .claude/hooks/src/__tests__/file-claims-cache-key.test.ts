@@ -31,6 +31,8 @@ vi.mock('../shared/db-utils-pg.js', () => ({
     return { outcome: 'granted' };
   },
 }));
+// Card coord-file-guard-named-file: a deny asks the lane table for a hint; no test reaches a real database.
+vi.mock('../shared/holder-lane.js', () => ({ holderHoldsOpenLane: async () => null }));
 vi.mock('fs', async (importOriginal) => {
   const real = (await importOriginal()) as typeof import('fs');
   return {

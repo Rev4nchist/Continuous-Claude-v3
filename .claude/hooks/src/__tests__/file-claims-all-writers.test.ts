@@ -31,6 +31,8 @@ const seen = vi.hoisted(() => ({
   blocked: new Set<string>(),
   held: [] as Array<{ filePath: string; sessionId: string; project: string }>,
   listDegraded: false,
+  openLane: true as boolean | null,
+  throwLane: false,
 }));
 
 vi.mock('../shared/db-utils-pg.js', () => ({
@@ -44,6 +46,12 @@ vi.mock('../shared/db-utils-pg.js', () => ({
     seen.listCalls++;
     // Degraded WITH claims: only the degraded flag may keep the hook from denying (review F13).
     return { claims: seen.held, degraded: seen.listDegraded };
+  },
+}));
+vi.mock('../shared/holder-lane.js', () => ({
+  holderHoldsOpenLane: async () => {
+    if (seen.throwLane) throw new Error('lane lookup down');
+    return seen.openLane;
   },
 }));
 vi.mock('fs', async (importOriginal) => {
@@ -101,6 +109,8 @@ beforeEach(() => {
   project = resolveRepoContext(repo)!.project;
   seen.held = [{ filePath: 'src/held.ts', sessionId: 'other-session', project }];
   seen.listDegraded = false;
+  seen.openLane = true;
+  seen.throwLane = false;
 });
 afterEach(() => {
   for (const [k, v] of Object.entries(saved)) {
@@ -333,5 +343,127 @@ describe('engine host (review agent)', () => {
   it('a group A write still gets the claim check under the engine (the deny guard keeps its behaviour)', async () => {
     const o = await run('Edit', { file_path: abs('src/held.ts') }, { hook_event_name: 'preToolUse' });
     expect(denied(o)).toBe(true);
+  });
+});
+
+// Card coord-file-guard-named-file (seat ruling 2026-11-15): the PowerShell tool reads a backtick line break inside a
+// double-quoted note as plain text, so a note that only NAMES a held file passes. Bash and Desktop Commander keep every
+// backtick as a risk sign, and a write to the held file still denies.
+describe('named file in a note with a backtick line break', () => {
+  const NOTE = 'Add-Content -Path notes/own.md -Value "- 08:20 src/held.ts landed`n- next step"';
+
+  it('PowerShell: the note passes', async () => {
+    expect(denied(await run('PowerShell', { command: NOTE }))).toBe(false);
+  });
+
+  it('Bash: the same text still denies (the Bash reading keeps the backtick as a risk sign)', async () => {
+    expect(denied(await run('Bash', { command: NOTE }))).toBe(true);
+  });
+
+  it('Desktop Commander start_process: the same text still denies', async () => {
+    expect(denied(await run(`${DC}start_process`, { command: NOTE }))).toBe(true);
+  });
+
+  it('PowerShell: a write to the held file with a backtick line break still denies', async () => {
+    expect(denied(await run('PowerShell', { command: 'Add-Content src/held.ts "line one`nline two"' }))).toBe(true);
+  });
+});
+
+// Card coord-file-guard-named-file (seat ruling 2026-11-15, Q1 and diff read of 68a33182): a deny names the holder handle and
+// the exact release command, and says "the holder holds no open lane" only when that is true. It never says the card is done
+// (a live session that never claimed a lane would look finished) and never frees a claim: a release stays the holder's act.
+//
+// Ways this can fail:
+//  1. The deny text has no holder handle or no release command (a blocked session cannot tell the holder what to run).
+//  2. "holds no open lane" shows for a holder that still holds an open lane (a false statement), or when the lookup is down.
+//  3. The text pushes a working peer to release: it must not say "leftover" or "card is done".
+//  4. The lookup breaks the deny (a database error must leave the deny as it was).
+//  5. The text appears for the shell deny but not for the Edit deny (two deny paths).
+//  6. A stored absolute-path claim (a cache file) gets a base name that release-claim cannot resolve: it must get the --list form.
+//  7. The release command carries one user folder, or an unquoted path.
+describe('deny text names the holder and the release command', () => {
+  const reason = (o: Out) => o.hookSpecificOutput?.permissionDecisionReason ?? '';
+  const SHELL = { command: 'Set-Content src/held.ts "x"' };
+  const CMD = "node ~/.claude/hooks/dist/release-claim.mjs 'src/held.ts'";
+
+  it('shell deny: handle, quoted release command; "holds no open lane" when the holder holds none', async () => {
+    seen.openLane = false;
+    const r = reason(await run('PowerShell', SHELL));
+    expect(r).toContain('#other-se');
+    expect(r).toContain(CMD);
+    expect(r).toContain('holds no open lane');
+    expect(r).not.toContain('leftover');
+    expect(r).not.toContain('card is done');
+    expect(r).not.toContain('C:/Users/');
+  });
+
+  it('shell deny: no "no open lane" line while the holder holds an open lane', async () => {
+    seen.openLane = true;
+    const r = reason(await run('PowerShell', SHELL));
+    expect(r).toContain(CMD);
+    expect(r).not.toContain('holds no open lane');
+  });
+
+  it('shell deny: no "no open lane" line when the lane lookup is down (unknown)', async () => {
+    seen.openLane = null;
+    const r = reason(await run('PowerShell', SHELL));
+    expect(r).toContain(CMD);
+    expect(r).not.toContain('holds no open lane');
+  });
+
+  it('Edit deny carries the same lines', async () => {
+    seen.openLane = false;
+    const r = reason(await run('Edit', { file_path: abs('src/held.ts') }));
+    expect(r).toContain('#other-se');
+    expect(r).toContain(CMD);
+    expect(r).toContain('holds no open lane');
+    expect(r).not.toContain('card is done');
+  });
+
+  it('a lookup that throws leaves the deny in place', async () => {
+    seen.throwLane = true;
+    const o = await run('PowerShell', SHELL);
+    expect(denied(o)).toBe(true);
+    expect(reason(o)).not.toContain('holds no open lane');
+  });
+
+  it('a stored absolute-path claim (a cache file) gets the --list form, never a base name or the stored path', async () => {
+    const inP = abs('.claude/cache/pre-pr/summary.md');
+    seen.held = [{ filePath: inP, sessionId: 'other-session', project }];
+    seen.openLane = false;
+    const r = reason(await run('Bash', { command: `echo x > '${inP}'` }));
+    expect(r).toContain('node ~/.claude/hooks/dist/release-claim.mjs --list');
+    expect(r).not.toContain("release-claim.mjs 'summary.md'");
+    expect(r).not.toContain(root.split('\\').join('/'));
+  });
+
+  // CodeRabbit CLI finding 2 and seat word 2026-11-15 08:57: the path is text another session stored and a model reads the
+  // deny. Only letters, digits, dot, underscore, hyphen, slash and space get the quoted form (an ALLOWLIST); any other path
+  // gets --list, so no quote, curly quote, line break or shell character can reach the command line of the deny text.
+  it.each([
+    ['an apostrophe', "src/it's.ts", `Set-Content "src/it's.ts" "x"`],
+    ['a curly quote', 'src/a’b.ts', 'Set-Content "src/a’b.ts" "x"'],
+    ['a semicolon', 'src/a;b.ts', 'Set-Content "src/a;b.ts" "x"'],
+    ['a dollar sign', 'src/a$b.ts', "Set-Content 'src/a$b.ts' 'x'"],
+  ])('a path with %s gets the --list form, never a quoted path', async (_name, filePath, command) => {
+    seen.held = [{ filePath, sessionId: 'other-session', project }];
+    const r = reason(await run('PowerShell', { command }));
+    expect(r).toContain('FILE CONFLICT BLOCKED');
+    expect(r).toContain('node ~/.claude/hooks/dist/release-claim.mjs --list');
+    expect(r).not.toContain(`release-claim.mjs '`);
+  });
+
+  it('a path with a line break gets the --list form and adds no line to the deny text (Edit deny)', async () => {
+    seen.blocked = new Set(['src/a\nb.ts']);
+    const r = reason(await run('Edit', { file_path: abs('src/a\nb.ts') }));
+    expect(r).toContain('FILE CONFLICT BLOCKED');
+    expect(r).toContain('release-claim.mjs --list');
+    expect(r).not.toContain('a\nb.ts');
+  });
+
+  it('a path of letters, digits, dot, underscore, hyphen, slash and space keeps the quoted form', async () => {
+    seen.held = [{ filePath: 'src/my file_2-a.ts', sessionId: 'other-session', project }];
+    const r = reason(await run('PowerShell', { command: 'Set-Content "src/my file_2-a.ts" "x"' }));
+    expect(r).toContain("release-claim.mjs 'src/my file_2-a.ts'");
   });
 });
