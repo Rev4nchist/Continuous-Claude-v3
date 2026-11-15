@@ -42,6 +42,14 @@ function runHook(input: Record<string, unknown> | string): { stdout: string; sta
 }
 
 describe('pr-opened-review-loop classifiers (unit)', () => {
+  it('a create with a global option before pr is an open; a read with one is not (PR 592, finding 2)', () => {
+    // Breaks when: PR_CREATE_RE stays /gh\s+pr\s+create/, so `gh -R o/r pr create` is no open (the gate and the reminder both skip it).
+    for (const cmd of ['gh -R o/r pr create --fill', 'gh --repo o/r pr create --fill', 'gh --repo=o/r pr create', 'gh.exe -R o/r pr create --fill']) expect(isPrOpenCommand(cmd), cmd).toBe(true);
+    for (const cmd of ['gh pr list -R o/r', 'gh -R o/r pr view 1', 'gh -R o/r pr list', 'gh x\ngh pr view 1', 'gh x $(gh pr view 1)']) expect(isPrOpenCommand(cmd), cmd).toBe(false);
+    // The prefix is plain tokens on one line: a line end or a substitution is no prefix (the open is then read as its own command).
+    expect(isPrOpenCommand('gh x\ngh pr create --fill')).toBe(true);
+  });
+
   it('detects gh pr create', () => {
     expect(isPrOpenCommand('gh pr create --title "x" --body "y"')).toBe(true);
   });
