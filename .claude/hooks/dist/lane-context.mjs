@@ -5760,9 +5760,9 @@ var require_lib2 = __commonJS({
 
 // src/lane-context.ts
 init_trace_boot();
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync3, statSync as statSync3, writeFileSync } from "node:fs";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync4, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir5, tmpdir as tmpdir2 } from "node:os";
-import { dirname as dirname3, join as join6 } from "node:path";
+import { dirname as dirname4, join as join7 } from "node:path";
 
 // node_modules/pg/esm/index.mjs
 init_trace_boot();
@@ -5975,14 +5975,20 @@ function isEngineHost(input) {
   }
 }
 
-// src/shared/session-identity.ts
-init_trace_boot();
-import { closeSync, existsSync as existsSync2, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync2, readSync, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
-import { homedir as homedir4 } from "os";
-import { join as join5 } from "path";
-
 // src/shared/atomic-write.ts
 init_trace_boot();
+import {
+  writeFileSync,
+  renameSync as renameSync2,
+  unlinkSync,
+  existsSync as existsSync2,
+  openSync,
+  closeSync,
+  readFileSync as readFileSync2,
+  statSync as statSync2,
+  constants
+} from "fs";
+import { dirname as dirname3, basename as basename2, join as join4 } from "path";
 
 // src/shared/logger.ts
 init_trace_boot();
@@ -6058,12 +6064,32 @@ function createLogger(hookName) {
 
 // src/shared/atomic-write.ts
 var log = createLogger("atomic-write");
+function atomicWriteSync(filePath, content) {
+  const dir = dirname3(filePath);
+  const tmpFile = join4(dir, `.${basename2(filePath)}.tmp.${process.pid}`);
+  try {
+    writeFileSync(tmpFile, content, "utf-8");
+    renameSync2(tmpFile, filePath);
+  } catch (err) {
+    try {
+      if (existsSync2(tmpFile)) unlinkSync(tmpFile);
+    } catch {
+    }
+    throw err;
+  }
+}
+
+// src/shared/session-identity.ts
+init_trace_boot();
+import { closeSync as closeSync2, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, readSync, readdirSync as readdirSync2, statSync as statSync3 } from "fs";
+import { homedir as homedir4 } from "os";
+import { join as join6 } from "path";
 
 // src/lib/spawn-hidden.ts
 init_trace_boot();
 import { tmpdir } from "os";
-import { join as join4 } from "path";
-var RELAY_ERROR_LOG = join4(tmpdir(), "ccv3-spawn-hidden.log");
+import { join as join5 } from "path";
+var RELAY_ERROR_LOG = join5(tmpdir(), "ccv3-spawn-hidden.log");
 var RELAY_LAUNCH_FAILED = 127;
 var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
 
@@ -6073,11 +6099,11 @@ var TAIL_BYTES = 256 * 1024;
 var HEAD_BYTES = 512 * 1024;
 var SAFE_ID_RE = /^[0-9a-fA-F-]{8,64}$/;
 function identityDir() {
-  return process.env.CCV3_IDENTITY_DIR || join5(homedir4(), ".claude", "state", "identity");
+  return process.env.CCV3_IDENTITY_DIR || join6(homedir4(), ".claude", "state", "identity");
 }
 var shortId = (uuid) => uuid.slice(0, 8);
 function identityPath(uuid) {
-  return SAFE_ID_RE.test(uuid) ? join5(identityDir(), `${uuid}.json`) : null;
+  return SAFE_ID_RE.test(uuid) ? join6(identityDir(), `${uuid}.json`) : null;
 }
 function asString(v) {
   return typeof v === "string" && v ? v : null;
@@ -6090,7 +6116,7 @@ function readIdentity(uuid) {
   const file = identityPath(uuid);
   if (!file) return null;
   try {
-    const o = JSON.parse(readFileSync2(file, "utf8"));
+    const o = JSON.parse(readFileSync3(file, "utf8"));
     if (!o || typeof o !== "object" || typeof o.uuid !== "string") return null;
     return {
       uuid,
@@ -6122,6 +6148,12 @@ var CONNECT_TIMEOUT_MS = 1200;
 var QUERY_TIMEOUT_MS = 1500;
 var LEASE_MINUTES = 90;
 var STALE_MINUTES = 5;
+var RECLAIMABLE_SQL = `((lease_expires_at IS NULL OR lease_expires_at < now())
+             AND NOT EXISTS (
+               SELECT 1 FROM sessions s
+               WHERE s.id = agentic_os.lane.owner_session_id
+                 AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+             ))`;
 var MAX_EVENTS = 12;
 var MAX_PEERS = 10;
 var DM_THROTTLE_MS = 15e3;
@@ -6130,11 +6162,11 @@ var REPLY_FOOTER = "A DM with a decision, a finding or a request: reply one time
 var RELATED_MAX = 8;
 var RELATES_TO = "RELATES TO:";
 function dmStatePath(sessionId) {
-  return join6(tmpdir2(), `claude-lane-dm-${sessionId.replace(/[^A-Za-z0-9._-]/g, "_")}.json`);
+  return join7(tmpdir2(), `claude-lane-dm-${sessionId.replace(/[^A-Za-z0-9._-]/g, "_")}.json`);
 }
 function readDmState(sessionId) {
   try {
-    const s = JSON.parse(readFileSync3(dmStatePath(sessionId), "utf8"));
+    const s = JSON.parse(readFileSync4(dmStatePath(sessionId), "utf8"));
     return {
       ts: Number(s.ts) || 0,
       lastShownDmId: Number(s.lastShownDmId) || 0
@@ -6145,7 +6177,7 @@ function readDmState(sessionId) {
 }
 function writeDmState(sessionId, state) {
   try {
-    writeFileSync(dmStatePath(sessionId), JSON.stringify(state), "utf8");
+    writeFileSync2(dmStatePath(sessionId), JSON.stringify(state), "utf8");
   } catch {
   }
 }
@@ -6235,13 +6267,13 @@ function formatReminderLines(rows, now = /* @__PURE__ */ new Date()) {
 }
 var BOARD_CACHE_TTL_MS = 10 * 6e4;
 var safeId = (s) => s.replace(/[^A-Za-z0-9._-]/g, "_");
-var boardCachePath = (sid) => join6(tmpdir2(), `claude-lane-board-${safeId(sid)}.json`);
+var boardCachePath = (sid) => join7(tmpdir2(), `claude-lane-board-${safeId(sid)}.json`);
 function registryPath(env) {
-  return env.LANE_REGISTRY_PATH || join6(env.USERPROFILE || env.HOME || homedir5(), ".claude", "project-registry.json");
+  return env.LANE_REGISTRY_PATH || join7(env.USERPROFILE || env.HOME || homedir5(), ".claude", "project-registry.json");
 }
 function registryStamp(env) {
   try {
-    const st = statSync3(registryPath(env));
+    const st = statSync4(registryPath(env));
     return `${st.mtimeMs}:${st.size}`;
   } catch {
     return "none";
@@ -6254,7 +6286,7 @@ function resolveBoardKey(sid, cwd, env = process.env, now = Date.now()) {
   const headless = isHeadless(env);
   if (useCache) {
     try {
-      const c = JSON.parse(readFileSync3(boardCachePath(sid), "utf8"));
+      const c = JSON.parse(readFileSync4(boardCachePath(sid), "utf8"));
       if (c.cwd === here && c.reg === reg && c.headless === headless && now - Number(c.ts) < BOARD_CACHE_TTL_MS && (c.board === null || typeof c.board === "string")) return c.board;
     } catch {
     }
@@ -6262,7 +6294,7 @@ function resolveBoardKey(sid, cwd, env = process.env, now = Date.now()) {
   const board = resolveBoard(cwd, { env })?.key ?? null;
   if (useCache) {
     try {
-      writeFileSync(boardCachePath(sid), JSON.stringify({ cwd: here, board, reg, headless, ts: now }), "utf8");
+      writeFileSync2(boardCachePath(sid), JSON.stringify({ cwd: here, board, reg, headless, ts: now }), "utf8");
     } catch {
     }
   }
@@ -6271,17 +6303,17 @@ function resolveBoardKey(sid, cwd, env = process.env, now = Date.now()) {
 var ERROR_LINE_EVERY_MS = 10 * 6e4;
 function logLaneContextError(sid, eventName, err, now = Date.now()) {
   try {
-    const stamp = join6(tmpdir2(), `claude-lane-err-${safeId(sid)}.json`);
+    const stamp = join7(tmpdir2(), `claude-lane-err-${safeId(sid)}.json`);
     let last = 0;
     try {
-      last = Number(JSON.parse(readFileSync3(stamp, "utf8")).ts) || 0;
+      last = Number(JSON.parse(readFileSync4(stamp, "utf8")).ts) || 0;
     } catch {
     }
     if (now - last < ERROR_LINE_EVERY_MS) return;
-    writeFileSync(stamp, JSON.stringify({ ts: now }), "utf8");
+    writeFileSync2(stamp, JSON.stringify({ ts: now }), "utf8");
     const e = err;
-    const file = process.env.LANE_CONTEXT_ERROR_LOG || join6(homedir5(), ".claude", "logs", "lane-context-errors.jsonl");
-    mkdirSync3(dirname3(file), { recursive: true });
+    const file = process.env.LANE_CONTEXT_ERROR_LOG || join7(homedir5(), ".claude", "logs", "lane-context-errors.jsonl");
+    mkdirSync3(dirname4(file), { recursive: true });
     const message = String(e?.message ?? err).replace(/postgres(?:ql)?:\/\/\S+/gi, "postgres://***").slice(0, 300);
     appendFileSync2(file, JSON.stringify({
       ts: new Date(now).toISOString(),
@@ -6309,7 +6341,46 @@ var HOLD_MAX = 8;
 var PEER_LANES_MAX = 3;
 function pageCtx(opts) {
   const clock = opts.uptime ?? (() => process.uptime());
-  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S, age: clock };
+  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S, age: clock, now: opts.now ?? Date.now };
+}
+var CUT_MAX_PRINTS = 3;
+var CUT_TTL_MS = 30 * 60 * 1e3;
+var CUT_MAX_IDS = 8;
+var CUT_PREFIX = "CUT, NOT READ:";
+function cutStateDir() {
+  return process.env.LANE_CUT_STATE_DIR || join7(dirname4(identityDir()), "lane-cut");
+}
+var cutStatePath = (me) => join7(cutStateDir(), `${safeId(me)}.json`);
+function readCutEntries(me, now) {
+  try {
+    const raw = JSON.parse(readFileSync4(cutStatePath(me), "utf8"));
+    if (!Array.isArray(raw.entries)) return [];
+    return raw.entries.map((e) => ({ id: Number(e?.id), at: Number(e?.at), prints: Number(e?.prints) })).filter((e) => Number.isSafeInteger(e.id) && e.id > 0 && Number.isFinite(e.at) && Number.isFinite(e.prints) && e.prints >= 0 && e.prints < CUT_MAX_PRINTS && e.at <= now && now - e.at < CUT_TTL_MS);
+  } catch {
+    return [];
+  }
+}
+function cutPending(me, now) {
+  const entries = readCutEntries(me, now);
+  if (!entries.length) return { line: null, shown: [], entries };
+  const shown = entries.slice(0, CUT_MAX_IDS).map((e) => e.id);
+  const more = entries.length - shown.length;
+  return { line: `${CUT_PREFIX} ${shown.join(" ")}${more > 0 ? ` +${more} more` : ""}`, shown, entries };
+}
+function recordCuts(me, now, pending, printed, cutIds) {
+  try {
+    const known = new Set(pending.entries.map((e) => e.id));
+    const counted = printed ? pending.shown : [];
+    const added = cutIds.filter((id) => !known.has(id));
+    if (!counted.length && !added.length) return;
+    const entries = pending.entries.map((e) => counted.includes(e.id) ? { ...e, prints: e.prints + 1 } : e).filter((e) => e.prints < CUT_MAX_PRINTS).concat(added.map((id) => ({ id, at: now, prints: 0 })));
+    mkdirSync3(cutStateDir(), { recursive: true });
+    atomicWriteSync(cutStatePath(me), JSON.stringify({ entries }));
+  } catch {
+  }
+}
+function cutOnPage(page) {
+  return page.events.filter((e) => page.bodies?.has(e.id) && page.bodies.get(e.id) !== (e.body ?? "")).map((e) => e.id);
 }
 function utf8Bytes(s) {
   return Buffer.byteLength(s, "utf8");
@@ -6638,12 +6709,7 @@ async function relatedLine(client, held, own) {
   if (!shown.length) return `Related: +${ids.length} more`;
   const rows = (await client.query(
     `SELECT id, owner_session_id,
-            ((lease_expires_at IS NULL OR lease_expires_at < now())
-             AND NOT EXISTS (
-               SELECT 1 FROM sessions s
-               WHERE s.id = agentic_os.lane.owner_session_id
-                 AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
-             )) AS reclaimable
+            ${RECLAIMABLE_SQL} AS reclaimable
        FROM agentic_os.lane WHERE id = ANY($1::text[])`,
     [shown]
   )).rows;
@@ -6657,6 +6723,8 @@ async function relatedLine(client, held, own) {
   const more = ids.length > shown.length ? `, +${ids.length - shown.length} more` : "";
   return `Related: ${shown.map((id) => `${id} (${tag(id)})`).join(", ")}${more}`;
 }
+var MASTER_CARD_ID = "re-program";
+var CONTROL_CHARS = new RegExp("[\\u0000-\\u001f\\u007f]", "g");
 async function loadBanner(client, me, board, eventName) {
   const mine = (await client.query(
     `SELECT * FROM agentic_os.lane l WHERE owner_session_id=$1 AND state<>'done' ORDER BY ${laneOrderSql("l")}`,
@@ -6708,11 +6776,23 @@ async function loadBanner(client, me, board, eventName) {
   } catch (err) {
     logLaneContextError(me, eventName, err);
   }
-  return { here, elsewhere, peers, claimable, related, reminderLines };
+  let seat = null;
+  try {
+    const row = (await client.query(
+      `SELECT owner_session_id, ${RECLAIMABLE_SQL} AS reclaimable
+         FROM agentic_os.lane
+        WHERE id = $1 AND COALESCE(project_key, $3::text) = $2::text AND state <> 'done'`,
+      [MASTER_CARD_ID, board, DEFAULT_BOARD]
+    )).rows[0];
+    if (row?.owner_session_id && !row.reclaimable) seat = who(row.owner_session_id).replace(CONTROL_CHARS, "");
+  } catch (err) {
+    logLaneContextError(me, eventName, err);
+  }
+  return { here, elsewhere, peers, claimable, related, reminderLines, seat };
 }
-function buildHeader(b, meLabel, board, budgets) {
+function buildHeader(b, meLabel, board, budgets, cutLine = null) {
   const cmd = laneCliCmd();
-  const top = topLines(b, meLabel, board, cmd);
+  const top = topLines(b, meLabel, board, cmd, cutLine);
   const order = [peerSection(b.peers, budgets.scopes, cmd), claimSection(b.claimable, cmd), reminderSection(b.reminderLines, cmd)];
   let lines = [];
   for (let n = 0; n <= order.length; n += 1) {
@@ -6726,8 +6806,10 @@ function buildHeader(b, meLabel, board, budgets) {
   }
   return lines;
 }
-function topLines(b, meLabel, board, cmd) {
+function topLines(b, meLabel, board, cmd, cutLine) {
   const lines = [boardHeading(board), `You are ${meLabel}.`, ""];
+  if (cutLine) lines.unshift(cutLine);
+  if (b.seat) lines.unshift(`SEAT: ${b.seat}`);
   if (b.here.length) {
     const held = idList(b.here, (l) => l.id, (l) => `${bandTag(l.band)} ${l.id}`, HOLD_MAX, (n) => `+${n} more: ${cmd} mine`);
     lines.push(`You hold: ${held}`);
@@ -6787,16 +6869,18 @@ async function boardPage(client, a, ctx) {
   const late = ctx.late();
   const budget = header.length ? ctx.budgets.start : ctx.budgets.prompt;
   const cold = unread.length > 0 && unread[0].board_wm === null;
-  const headBytes = header.length ? utf8Bytes(header.join("\n")) + 2 : 0;
+  const lead = header.length ? header : a.cut.line && unread.length ? [a.cut.line] : [];
+  const headBytes = lead.length ? utf8Bytes(lead.join("\n")) + 2 : 0;
   const page = pageUnread(unread, { cold, bytes: eventBytes(budget - headBytes - pageReserve(unread), board) });
   const withCmd = namesInbox({ rowBefore: !cold, rowWritten: !late && page.boardRow !== null });
-  const lines = [...header];
+  const lines = [...lead];
   if (unread.length) {
     if (lines.length) lines.push("");
     lines.push(...unreadLines(page, board, { withCmd, coldBoard: cold }));
   }
   const text = lines.join("\n");
   if (utf8Bytes(text) > budget) return buildOutput(boardFallback(board, a.meLabel, oldestDmId(unread)), a.eventName);
+  if (!late) recordCuts(me, ctx.now(), a.cut, a.cut.line !== null && lead.includes(a.cut.line), cutOnPage(page));
   if (unread.length && lines.length) {
     await finishCursors(client, ctx, { me, eventName: a.eventName, rows: cursorWrites(me, board, page), late });
   }
@@ -6839,8 +6923,9 @@ async function runLaneContext(raw, opts = {}) {
     if (!board) return isHeadless() ? {} : await directMessagesOnly(client, me, eventName, ctx);
     const unread = await readUnread(client, UNREAD_BOARD_SQL, [me, board, wmKey(me, board)]);
     const meLabel = who(me, payload.session_title || void 0);
-    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets) : [];
-    return await boardPage(client, { me, meLabel, board, eventName, unread, header }, ctx);
+    const cut = cutPending(me, ctx.now());
+    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets, cut.line) : [];
+    return await boardPage(client, { me, meLabel, board, eventName, unread, header, cut }, ctx);
   } catch (err) {
     logLaneContextError(me, eventName, err);
     return {};
@@ -6855,9 +6940,11 @@ if (/(^|[\\/])lane-context\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
 export {
   BUDGETS,
   DM_THROTTLE_MS,
+  RECLAIMABLE_SQL,
   boardFallback,
   cutBody,
   cutMarker,
+  cutStateDir,
   cutToBytes,
   deliverDirectMessages,
   dmStatePath,

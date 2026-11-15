@@ -39,6 +39,7 @@ import { boardStamp, defaultOut, parseRenderArgs, templateHash, writeAtomic } fr
 import { processMatchSummary } from './process-match.mjs';
 import { compareLanes, laneOrderSql } from './lane-sort.mjs';
 import { BAND_CAP, BAND_GROUPS, bandChipHtml, bandKey, capState, groupByBand } from './board-band-view.mjs';
+import { tickMarker } from './tick-marker.mjs';
 import { DONE_DAYS, DONE_SQL, clockText, cutNote, dayLabel, pickDone } from './board-done-view.mjs';
 import { dueChip, splitScheduled } from './board-scheduled-view.mjs';
 import { waitsOnSql } from './lane-dep.mjs';
@@ -250,6 +251,9 @@ const PILL = {
 
 // ------------------------------------------------------------------ markup
 
+// A master card whose seat tick has stopped (coord-seat-tick-alert): '' for every other lane. The word comes from tick-marker.mjs.
+const tickPill = (l) => { const t = tickMarker(l); return t ? `<span class="pill p-warn">${esc(t)}</span>` : ''; };
+
 const laneRow = (l, i) => {
   const owner = l.owner_session_id;
   const leaseMin = l.lease_expires_at
@@ -262,7 +266,7 @@ const laneRow = (l, i) => {
     <span class="state-c"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span></span>
     <span class="own">${owner
       ? `<span class="who">${esc(short(owner))}</span>${leaseMin !== null
-        ? `<span class="lease${leaseMin <= 0 ? ' lapsed' : ''}">${leaseMin > 0 ? `${leaseMin}m left` : 'lease lapsed'}</span>` : ''}`
+        ? `<span class="lease${leaseMin <= 0 ? ' lapsed' : ''}">${leaseMin > 0 ? `${leaseMin}m left` : 'lease lapsed'}</span>` : ''}${tickPill(l)}`
       : '<span class="free">unclaimed</span>'}</span>
     <span class="scope">${esc(l.scope || '')}</span>
     <span class="age">${esc(ago(l.updated_at))}</span>
@@ -331,12 +335,12 @@ const kbHolder = (l, ro = false) => {
     return `<div class="kb-holder">${owner
       ? `<span class="kb-who mono">${esc(short(owner))}</span>${leaseMin !== null && leaseMin <= 0
         ? `<span class="pill p-warn">LAPSED</span><span class="kb-lease mono">lease ended ${esc(end)}</span>`
-        : leaseMin !== null ? `<span class="kb-lease mono">lease ends ${esc(end)}</span>` : ''}`
+        : leaseMin !== null ? `<span class="kb-lease mono">lease ends ${esc(end)}</span>` : ''}${tickPill(l)}`
       : '<span class="kb-lease mono">unclaimed</span>'}</div>`;
   }
   return `<div class="kb-holder">${owner
     ? `<span class="kb-who mono">${esc(short(owner))}</span>${leaseMin !== null && leaseMin <= 0
-      ? '<span class="pill p-warn">LAPSED</span>' : leaseMin !== null ? `<span class="kb-lease mono">${leaseMin}m left</span>` : ''}`
+      ? '<span class="pill p-warn">LAPSED</span>' : leaseMin !== null ? `<span class="kb-lease mono">${leaseMin}m left</span>` : ''}${tickPill(l)}`
     : '<span class="kb-lease mono">unclaimed</span>'}</div>`;
 };
 
