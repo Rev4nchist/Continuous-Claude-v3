@@ -116,6 +116,7 @@ import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 import { parseReviewMd } from '../ratchets/review-skip-sync.mjs';
+import { ANSWER_KEY_GLOBS, answerKeyHitsOf, slashLower } from './lib/answer-key.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -1209,13 +1210,7 @@ function reusedReview({ root, e2e, saved, base, why }) {
  * a wider one cannot widen the skip. REVIEW.md "Skip paths" is only the drift alarm (answerKeyGlobs). The test A5 ties this list to the live
  * REVIEW.md and to the answer-key entries of cursor-review.mjs TREE_EXCLUDES.
  */
-export const ANSWER_KEY_GLOBS = Object.freeze([
-  'scripts/eval/review-eval/gold/**',
-  'scripts/eval/review-eval/seeds/**',
-  'scripts/eval/review-eval/rubrics/**',
-  'scripts/eval/review-eval/linktype-labels.json',
-]);
-const slashLower = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+export { ANSWER_KEY_GLOBS };
 
 /** { globs } (the frozen four) or { reason }: fail closed when REVIEW.md "Skip paths" cannot be read or lacks any of the four. */
 export function answerKeyGlobs(root) {
@@ -1235,7 +1230,7 @@ export function answerKeyCheck({ root, paths }) {
   if (!Array.isArray(paths)) return { closed: 'the changed-file list is unknown' };
   const { globs, reason } = answerKeyGlobs(root);
   if (!globs) return { closed: reason };
-  const hits = paths.filter((p) => globs.some((g) => matchGlob(slashLower(g), slashLower(p))));
+  const hits = answerKeyHitsOf(paths, globs);
   return hits.length === 0 ? null : { hits };
 }
 

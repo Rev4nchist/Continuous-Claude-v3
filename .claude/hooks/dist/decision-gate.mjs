@@ -467,9 +467,9 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 
 // src/decision-gate.ts
 import { spawnSync } from "child_process";
-import { existsSync as existsSync2, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync2, readFileSync as readFileSync6 } from "fs";
 import { homedir as homedir5 } from "os";
-import { isAbsolute as isAbsolute2, join as join6, posix as posix2, resolve as resolve2 } from "path";
+import { isAbsolute as isAbsolute2, join as join7, posix as posix2, resolve as resolve2 } from "path";
 
 // src/pr-opened-review-loop.ts
 import { existsSync, mkdirSync as mkdirSync2, readFileSync, unlinkSync, writeFileSync } from "fs";
@@ -742,6 +742,32 @@ function priorGhRepo(text, mtext) {
   return { repos: [...new Set(repos)], nonLiteral };
 }
 
+// ../../scripts/github/lib/answer-key.mjs
+var ANSWER_KEY_GLOBS = Object.freeze([
+  "scripts/eval/review-eval/gold/**",
+  "scripts/eval/review-eval/seeds/**",
+  "scripts/eval/review-eval/rubrics/**",
+  "scripts/eval/review-eval/linktype-labels.json"
+]);
+var slashLower = (p) => String(p).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+function matches(glob, p) {
+  if (glob.endsWith("/**")) {
+    const prefix = glob.slice(0, -2);
+    return p.length > prefix.length && p.startsWith(prefix);
+  }
+  return glob === p;
+}
+function answerKeyHitsOf(paths, globs = ANSWER_KEY_GLOBS) {
+  const list = globs.map(slashLower);
+  return paths.filter((p) => {
+    const n = slashLower(p);
+    return list.some((g) => matches(g, n));
+  });
+}
+
+// src/shared/answer-paths-door.ts
+var answerKeyHitsOf2 = answerKeyHitsOf;
+
 // src/shared/decisions-store.ts
 import { readFileSync as readFileSync3 } from "fs";
 
@@ -795,6 +821,88 @@ function decisionRows(env = process.env) {
   } catch {
     return [];
   }
+}
+
+// src/shared/holdout-ids.ts
+import { readFileSync as readFileSync4 } from "fs";
+import { join as join5 } from "path";
+
+// ../../scripts/github/lib/holdout-ids.mjs
+function holdoutIdsOf(ds, cfg) {
+  const reserved = new Set((cfg?.reserve ?? []).map((r) => r?.pr));
+  const excluded = new Set(cfg?.holdoutExclude ?? []);
+  const inHoldout = (pr) => !reserved.has(pr) && !excluded.has(pr);
+  const out3 = /* @__PURE__ */ new Set();
+  for (const p of ds?.prs ?? []) if (inHoldout(p?.pr)) out3.add(String(p.pr));
+  for (const f of ds?.findings ?? []) {
+    if (!inHoldout(f?.pr)) continue;
+    out3.add(String(f.pr));
+    if (f.comment_id !== void 0 && f.comment_id !== null) {
+      out3.add(String(f.comment_id));
+      out3.add(`${f.pr}:${f.comment_id}`);
+    }
+    if (typeof f.round === "string" && /^[0-9a-f]{7,40}$/i.test(f.round)) out3.add(f.round.toLowerCase());
+  }
+  out3.delete("undefined");
+  out3.delete("null");
+  return [...out3];
+}
+var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
+function countIdsIn(text, ids) {
+  const s = String(text ?? "");
+  let n = 0;
+  for (const id of ids) {
+    if (typeof id !== "string" || id === "") continue;
+    if (/^\d+$/.test(id)) {
+      if (digitHit(s, id)) n += 1;
+    } else if (tokenHit(s, id)) n += 1;
+  }
+  return n;
+}
+function digitHit(s, id) {
+  const long = id.length >= 7;
+  let from = 0;
+  for (; ; ) {
+    const at2 = s.indexOf(id, from);
+    if (at2 < 0) return false;
+    from = at2 + 1;
+    const before = s[at2 - 1];
+    const after = s[at2 + id.length];
+    if (before !== void 0 && /\d/.test(before) || after !== void 0 && /\d/.test(after)) continue;
+    if (long || CONTEXT.test(s.slice(Math.max(0, at2 - 8), at2))) return true;
+  }
+}
+function tokenHit(s, id) {
+  const low = s.toLowerCase();
+  const want = id.toLowerCase();
+  const word = /[0-9a-f:]/;
+  let from = 0;
+  for (; ; ) {
+    const at2 = low.indexOf(want, from);
+    if (at2 < 0) return false;
+    from = at2 + 1;
+    const before = low[at2 - 1];
+    const after = low[at2 + want.length];
+    if (before !== void 0 && word.test(before) || after !== void 0 && word.test(after)) continue;
+    return true;
+  }
+}
+
+// src/shared/holdout-ids.ts
+var DATASET_REL = ".claudedocs/2026-11-01-pr-review-dataset.json";
+var EVAL_CONFIG_REL = "scripts/eval/review-eval/config.json";
+var countIdsIn2 = countIdsIn;
+function loadHoldoutIds(mainRoot) {
+  let ids;
+  try {
+    const ds = JSON.parse(readFileSync4(join5(mainRoot, DATASET_REL), "utf8"));
+    const cfg = JSON.parse(readFileSync4(join5(mainRoot, EVAL_CONFIG_REL), "utf8"));
+    ids = holdoutIdsOf(ds, cfg);
+  } catch {
+    throw new Error("the holdout id list could not be read");
+  }
+  if (!Array.isArray(ids) || ids.length === 0) throw new Error("the holdout id list is empty");
+  return ids;
 }
 
 // src/shared/git-call.ts
@@ -1269,6 +1377,8 @@ var openPrWhy = (branch, head) => `no "open-pr" decision from Dave for ${branch}
 var landWhy = (pr) => `no "land" decision from Dave for PR #${pr}. Ask him first: run node scripts/github/ship-ask.mjs land --pr ${pr} --json, pass its JSON to AskUserQuestion word for word. Only "Land now" or "Land when READY" lets a land run. If the PR already merged, run land-pr.ps1 -Pr ${pr} -CleanupOnly.`;
 var pushWhy = (branch) => `no "ship" decision from Dave for the tree you push to ${branch}. Ask him first: run node scripts/github/ship-ask.mjs commit-and-push --branch ${branch} --json, pass its JSON to AskUserQuestion word for word, then push only after he taps "Commit and push" (files staged) or "Push only" (nothing staged). The tap is bound to one tree: the staged tree, or HEAD's tree for "Push only". A change after the tap (a merge, a new commit) needs a new tap. Run the ship as a bare commit && push: no redirect, no pipe, no trailing command. Report the result in a separate command.`;
 var PUSH_UNSAFE_WHY = "a force, delete, mirror, all-branch or tag push can rewrite or remove remote refs, so it stays blocked even with Dave's tap. Push without that option. If it is really needed, ask Dave to run it himself.";
+var PUSH_REFSPEC_WHY = "a refspec that names a ref outside refs/heads and refs/tags, or holds a wildcard, can send refs that must stay local (refs/eval/*). Push one branch by name: git push fork <branch>.";
+var PUSH_REPO_OPT_WHY = "a --repo option names the push target, so the remote this gate reads is not where the push goes. Name the fork remote and push from the repo.";
 var PUSH_ORIGIN_WHY = "a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.";
 var pushUnresolvedWhy = (what) => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
 var STORE_WHY = "only decision-ledger writes the decision store, from Dave's tap in AskUserQuestion. Do not write it by hand. To record a decision, ask the question with AskUserQuestion.";
@@ -1666,6 +1776,7 @@ function callDirsOf(call) {
   const dirs = [...call.opts.matchAll(DIR_OPT_RE), ...call.opts.matchAll(PATH_OPT_RE)].sort((a, b) => a.index - b.index);
   return dirs.map((m) => m[1].includes("\\") ? m[1] : squashQuotes(m[1]));
 }
+var WIDE_LONG = ["mirror", "all"];
 var UNSAFE_LONG = ["mirror", "all", "branches", "tags", "delete", "prune", "force", "force-with-lease", "force-if-includes"];
 var PUSH_KEY_RE = /^(?:push|remote|submodule)\./;
 var C_OPT_RE = /(?:^|\s)-c\s+((?:[^\s"']|"[^"]*"|'[^']*')+)/g;
@@ -1674,6 +1785,7 @@ function readLongFlag(f, t) {
   const name = eq < 0 ? t.slice(2) : t.slice(2, eq);
   const value = eq < 0 ? null : t.slice(eq + 1).toLowerCase();
   if (UNSAFE_LONG.some((n) => n.startsWith(name))) f.unsafeOpt = true;
+  if (name.length >= 2 && WIDE_LONG.some((n) => n.startsWith(name))) f.wideOpt = true;
   if (name === "no-recurse-submodules") f.noRecurse = true;
   else if (name.length >= 4 && "recurse-submodules".startsWith(name)) {
     if (value === "no" || value === "check") f.noRecurse = true;
@@ -1683,7 +1795,7 @@ function readLongFlag(f, t) {
   else if (name.length >= 3 && "follow-tags".startsWith(name)) f.widerOpt ??= t;
 }
 function appFlagsOf(tokens, opts) {
-  const f = { unsafeOpt: false, oBundle: false, widerOpt: null, noRecurse: false, noFollowTags: false };
+  const f = { unsafeOpt: false, wideOpt: false, oBundle: false, widerOpt: null, noRecurse: false, noFollowTags: false };
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     if (t === "--") break;
@@ -1791,6 +1903,7 @@ function pushShapesOf(raw, tool) {
         if (!call.squashed) kept.plain &&= p.plain;
         kept.repoOpt ||= p.repoOpt;
         kept.unsafeOpt ||= p.unsafeOpt;
+        kept.wideOpt ||= p.wideOpt;
         kept.oBundle ||= p.oBundle;
         kept.widerOpt ??= p.widerOpt;
         kept.oneSide ||= p.oneSide;
@@ -1926,7 +2039,7 @@ function knownDirs(dirs, home) {
     const lead = HOME_LEAD.exec(raw);
     const rest = lead === null ? "" : raw.slice(lead[0].length);
     if (lead === null || hasUnexpandedPart(rest.replace(/^[\\/]+/, ""))) return [];
-    return [home.startsWith("/") ? posix2.join(home, rest) : join6(home, rest)];
+    return [home.startsWith("/") ? posix2.join(home, rest) : join7(home, rest)];
   });
 }
 var firstCovered = (deps, dirs) => dirs.find((d) => coveredAmong(deps, [d]) !== null) ?? null;
@@ -2031,7 +2144,7 @@ var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisi
 var enforcingPush = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforcePush");
 function homeFlag(deps, key) {
   try {
-    const cfg = JSON.parse(deps.readFile(join6(deps.home, "continuous-claude", "review-router.config.json")) ?? "null");
+    const cfg = JSON.parse(deps.readFile(join7(deps.home, "continuous-claude", "review-router.config.json")) ?? "null");
     return cfg?.decisions?.[key];
   } catch {
     return null;
@@ -2507,7 +2620,7 @@ function judgePushAt(s, deps, cwd, shell, ctx) {
   if (p.unknown && !fixedByDir) {
     const all = [.../* @__PURE__ */ new Set([cwd, ...dirs])];
     const ccv3 = all.some((d) => isCcv3Checkout(deps, d));
-    if (ccv3) return [deny("position-unknown", POSITION_WHY, "push")];
+    if (ccv3) return [intentDeny(p, subagent, deny("position-unknown", POSITION_WHY, "push"))];
     const app = appPositionAt(deps, all, "app-push", pushOffer(p));
     if (app.some((d) => d.action === "deny")) return app;
   }
@@ -2518,6 +2631,81 @@ function remoteKind(remote) {
   if (r === "origin" || r.includes("parcadei")) return "origin";
   return r === "fork" || r.includes(CCV3_REPO) ? "fork" : null;
 }
+var outsideHeads = (p) => [p.src, p.branch].some((r) => typeof r === "string" && (r.startsWith("refs/") && !r.startsWith("refs/tags/") || r.includes("*")));
+var hardOf = (d) => ({ ...d, hard: true });
+function intentDeny(p, subagent, fallback) {
+  if (subagent) return hardOf(deny("subagent", SUBAGENT_WHY, "push"));
+  const r = (p.remote ?? "").toLowerCase();
+  if (r === "origin" || r.includes("parcadei")) return hardOf(deny("push-origin", PUSH_ORIGIN_WHY, "push"));
+  if (p.force || p.unsafeOpt || p.wideOpt) return hardOf(deny("push-unsafe", PUSH_UNSAFE_WHY, "push"));
+  if (outsideHeads(p)) return hardOf(deny("push-target-unresolved", PUSH_REFSPEC_WHY, "push"));
+  if (p.repoOpt) return hardOf(deny("push-target-unresolved", PUSH_REPO_OPT_WHY, "push"));
+  return fallback;
+}
+var SCAN_MAX_FILES = 2e3;
+var SCAN_MAX_BYTES = 15e5;
+function scanHoldout(p, deps, dir, branch, chained) {
+  if (!deps.holdoutIds || !deps.answerKeyHits) return null;
+  try {
+    return scanHoldoutRead(p, deps, dir, branch, chained);
+  } catch {
+    return hardOf(deny("holdout-scan-unavailable", `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, "push"));
+  }
+}
+function chainedAnswerKeyPaths(deps, dir) {
+  const reads = [
+    ["diff", "--name-only", "--no-renames", "-z", "fork/main...HEAD"],
+    ["diff", "--name-only", "--no-renames", "-z", "--cached"],
+    ["diff", "--name-only", "--no-renames", "-z", "HEAD"],
+    ["ls-files", "--others", "--exclude-standard", "-z"]
+  ];
+  const all = /* @__PURE__ */ new Set();
+  for (const args of reads) {
+    const r = deps.git(dir, args);
+    if (r.status !== 0) return "unreadable";
+    for (const f of r.stdout.split("\0")) if (f) all.add(f);
+    if (all.size > SCAN_MAX_FILES) return "too-large";
+  }
+  return deps.answerKeyHits([...all]).length > 0 ? "hit" : "none";
+}
+function scanHoldoutRead(p, deps, dir, branch, chained) {
+  const isRe = branch.startsWith("re/");
+  const stop = (pattern, why) => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, "push"));
+  if (isRe && chained) return stop("holdout-scan-unavailable", "the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.");
+  if (!isRe && chained) {
+    const hit = chainedAnswerKeyPaths(deps, dir);
+    if (hit === "unreadable") return stop("holdout-scan-unavailable", "the same command also changes files, and the paths it can change could not be read. Commit first, push in a separate command.");
+    if (hit === "too-large") return stop("holdout-scan-too-large", `the same command also changes more than ${SCAN_MAX_FILES} files. Commit first, push in a separate command.`);
+    if (hit === "hit") return stop("holdout-chained-answer-key", "the same command also changes an answer-key path, so the new content cannot be read yet. Commit first, push in a separate command.");
+  }
+  const ref = p.src ?? "HEAD";
+  if (ref.startsWith("-")) return null;
+  const sha = deps.git(dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
+  if (sha.status !== 0 || sha.stdout.trim() === "") return isRe ? stop("holdout-scan-unavailable", "its head could not be read. Run the push again from the repo.") : null;
+  const range = `fork/main...${sha.stdout.trim()}`;
+  const names = deps.git(dir, ["diff", "--name-only", "--no-renames", "-z", range]);
+  if (names.status !== 0) return stop("holdout-scan-unavailable", "the changed files against fork/main could not be read. Run git fetch fork main in the repo, then push again.");
+  const files = names.stdout.split("\0").filter(Boolean);
+  if (!isRe && deps.answerKeyHits(files).length === 0) return null;
+  if (files.length > SCAN_MAX_FILES) return stop("holdout-scan-too-large", `it changes ${files.length} files, over the bound of ${SCAN_MAX_FILES}. Push in parts: fewer files in each push.`);
+  let ids;
+  try {
+    ids = deps.holdoutIds(dir);
+  } catch {
+    return stop("holdout-scan-unavailable", "the holdout id list could not be read, so the scan cannot run.");
+  }
+  if (!Array.isArray(ids) || ids.length === 0) return stop("holdout-scan-unavailable", "the holdout id list is empty, so the scan cannot run.");
+  const diff = deps.git(dir, ["diff", "--unified=0", "--no-color", "--no-renames", range]);
+  const log = deps.git(dir, ["log", "--format=%B", `fork/main..${sha.stdout.trim()}`]);
+  if (diff.status !== 0 || log.status !== 0) return stop("holdout-scan-unavailable", "the diff or the commit messages could not be read. Run the push again from the repo.");
+  if (diff.stdout.length > SCAN_MAX_BYTES) return stop("holdout-scan-too-large", `its diff is over ${SCAN_MAX_BYTES} bytes. Push in parts: fewer commits or files in each push.`);
+  const added = diff.stdout.split("\n").filter((l) => l.startsWith("+")).join("\n");
+  const count = countIdsIn2(`${added}
+${log.stdout}
+${files.join("\n")}`, ids);
+  if (count === 0) return null;
+  return hardOf(deny("holdout-id", `this push of ${branch} carries ${count} holdout id${count === 1 ? "" : "s"} in added lines, commit messages or file names. Remove them, or push without them. Which ones stays with the seat: this text names a count only.`, "push"));
+}
 function judgePush(shape, deps, dir, ctx) {
   const { subagent, chained, alone } = ctx;
   const p = shape.push;
@@ -2525,9 +2713,11 @@ function judgePush(shape, deps, dir, ctx) {
   if (p.moved) {
     const what = "--git-dir or --work-tree moves the repo, so the checkout is unknown";
     const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell, deps.home)) ?? coveredAmong(deps, [dir]);
-    return app === null ? d("push-target-unresolved", pushUnresolvedWhy(what)) : deny("push-target-unresolved", appPushUnresolvedWhy(app, what), "app-push");
+    if (app !== null) return deny("push-target-unresolved", appPushUnresolvedWhy(app, what), "app-push");
+    return intentDeny(p, subagent, d("push-target-unresolved", pushUnresolvedWhy(what)));
   }
   if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow);
+  if (p.repoOpt) return hardOf(subagent ? d("subagent", SUBAGENT_WHY) : d("push-target-unresolved", PUSH_REPO_OPT_WHY));
   let remote = p.remote;
   if (remote === null) {
     const up = deps.git(dir, ["rev-parse", "--abbrev-ref", "@{push}"]);
@@ -2538,11 +2728,18 @@ function judgePush(shape, deps, dir, ctx) {
     const u = deps.git(dir, ["remote", "get-url", remote]);
     if (u.status === 0) kind = remoteKind(u.stdout.trim());
   }
-  if (kind === "origin") return d("push-origin", PUSH_ORIGIN_WHY);
+  if (kind === "origin") return hardOf(d("push-origin", PUSH_ORIGIN_WHY));
   if (kind === null) return ALLOW;
-  if (subagent) return d("subagent", SUBAGENT_WHY);
-  if (p.force) return d("push-unsafe", PUSH_UNSAFE_WHY);
+  if (subagent) return hardOf(d("subagent", SUBAGENT_WHY));
+  if (p.wideOpt || p.unsafeOpt && !p.force) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
+  if (outsideHeads(p)) return hardOf(d("push-target-unresolved", PUSH_REFSPEC_WHY));
   const branch = p.branch ?? currentBranch(deps, dir);
+  if (p.force && (branch === "main" || branch === "")) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
+  if (branch !== "") {
+    const scanned = scanHoldout(p, deps, dir, branch, chained || !alone);
+    if (scanned !== null) return scanned;
+  }
+  if (p.force) return d("push-unsafe", PUSH_UNSAFE_WHY);
   if (branch === "") return d("push-target-unresolved", pushUnresolvedWhy("the branch of this push cannot be named (detached HEAD?)"));
   if (branch === "main") return ALLOW;
   const texts = {
@@ -2704,7 +2901,7 @@ function judgeCommand(input, deps, notes) {
     const moved = movesRepo(cmd.text);
     for (const s of [...rest, ...pushes]) {
       if (moved && s.kind !== "land") {
-        denies.push(movedDeny(s, deps, cwd, shell, cmd.text));
+        denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id)));
         continue;
       }
       const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell }) : judgeAt(s, deps, cwd, shell, named);
@@ -2731,12 +2928,12 @@ function storeWriteCall(input, deps) {
     return false;
   }
 }
-function movedDeny(s, deps, cwd, shell, text) {
+function movedDeny(s, deps, cwd, shell, text, subagent = false) {
   const dirs = s.kind === "push" ? pushDirsOf(s.push, cwd, shell) : dirsAfter(cwd, s.at.cds, shell, s.at.loose);
   const targets = s.kind === "push" ? [...new Set([cwd, ...dirs].flatMap((d) => isUnexpanded(d) ? [] : moveTargets(text, d, shell, deps.home)))] : [];
   const dir = firstCovered(deps, targets) ?? coveredAmong(deps, [cwd, ...dirs].filter((d) => !isUnexpanded(d)));
   if (s.kind === "push") {
-    return dir === null ? deny("push-target-unresolved", pushUnresolvedWhy(MOVED_WHY), "push") : deny("push-target-unresolved", MOVED_WHY + inAppFolder(dir), "app-push");
+    return dir === null ? intentDeny(s.push, subagent, deny("push-target-unresolved", pushUnresolvedWhy(MOVED_WHY), "push")) : deny("push-target-unresolved", MOVED_WHY + inAppFolder(dir), "app-push");
   }
   return dir === null ? deny("repo-moved", MOVED_WHY) : { ...deny("repo-moved", MOVED_WHY + inAppFolder(dir)), homeFlags: true };
 }
@@ -2761,12 +2958,12 @@ function decide(input, deps) {
   const cwd = input.cwd || process.cwd();
   const live = denies.find((d) => hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags));
   if (live) {
-    const { tapPath: _tap, homeFlags: _home, ...shown } = live;
+    const { tapPath: _tap, homeFlags: _home, hard: _hard, ...shown } = live;
     return { ...shown, ...notice };
   }
   return { action: "allow", warn: `${denies[0].pattern}: ${denies[0].reason}`, scope: denies[0].scope, ...notice };
 }
-var hardAppDeny = (d) => d.scope === "app-push" && d.tapPath !== true;
+var hardAppDeny = (d) => d.hard === true || d.scope === "app-push" && d.tapPath !== true;
 function perCall(deps) {
   const seen = /* @__PURE__ */ new Map();
   const mode = { app: false };
@@ -2961,15 +3158,23 @@ function realDeps(opts = {}) {
     appGit: makeGit({ ...run, deadline: (start ?? Date.now()) + HOOK_BUDGET_MS }),
     readFile: (p) => {
       try {
-        return existsSync2(p) ? readFileSync5(p, "utf8") : null;
+        return existsSync2(p) ? readFileSync6(p, "utf8") : null;
       } catch {
         return null;
       }
     },
     env: process.env,
     home: homedir5(),
-    tapScope: { registry: () => registry ??= readRegistry({ env: process.env }) }
+    tapScope: { registry: () => registry ??= readRegistry({ env: process.env }) },
+    // The push scan: the ids come from the primary checkout of the folder being pushed (the dataset is git-ignored, so a worktree has none).
+    holdoutIds: (dir) => loadHoldoutIds(primaryRootOf(makeGit(run), dir)),
+    answerKeyHits: answerKeyHitsOf2
   };
+}
+function primaryRootOf(git, dir) {
+  const r = git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  if (r.status !== 0 || r.stdout.trim() === "") throw new Error("no common dir");
+  return resolve2(r.stdout.trim(), "..");
 }
 async function main2() {
   const start = Date.now();

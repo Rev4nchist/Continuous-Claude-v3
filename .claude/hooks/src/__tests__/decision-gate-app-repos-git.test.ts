@@ -90,6 +90,8 @@ beforeAll(() => {
   R.off = makeRepo(`${home}/off-app`, { up: 'https://github.com/acme/off-app.git' });
   R.stray = makeRepo(`${home}/stray`, { up: 'https://github.com/acme/stray.git' });
   R.cc = makeRepo(`${home}/cc`, { fork: CCV3 });
+  // The CCv3 push scan reads fork/main (card prflow-push-blocks): a real CCv3 checkout has it after its first fetch.
+  git(R.cc, 'update-ref', 'refs/remotes/fork/main', 'main');
   R.plain = makeRepo(`${home}/cc/plain`, { up: 'https://github.com/acme/plain.git' });
   R.wt = `${home}/wt-x`;
   git(R.x, 'worktree', 'add', '-q', '-b', 'wtb', R.wt);
