@@ -3,8 +3,9 @@
  * ship-ask.mjs: builds the AskUserQuestion spec of one ship step and writes the offer to the decision store (pathway-flow-v2, design N1).
  * Tests: scripts/github/ship-ask.test.mjs. Store: scripts/github/lib/decisions.mjs.
  *
- * Usage: node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round> [--pr N | --branch B] [--msg file] [--json] [--facts f.json]
- *   commit-and-push, open-pr: --branch B (default: the current branch). --msg is the commit message file (commit-and-push only).
+ * Usage: node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip> [--pr N | --branch B] [--msg file] [--json] [--facts f.json]
+ *   commit-and-push, open-pr, cli-skip: --branch B (default: the current branch). --msg is the commit message file (commit-and-push only).
+ *   cli-skip: Dave decides to skip the CLI review for the head of a flag stamp (pre-pr.mjs --skip-cr); pre-pr-gate then accepts it once.
  *   land, paid-round: --pr N.
  *   --json   print { header, question, options: [{ label, description }] } as one JSON object. Pass it to AskUserQuestion unchanged.
  *   --facts  read the step data from a JSON file, not from git, gh and the ledger (tests). Honoured only in test mode.
@@ -33,7 +34,7 @@ const PAID_PER_FILE = 0.25;
 const PATHWAY_OF_LABEL = { 'review:none': 'none', 'review:coderabbit': 'coderabbit', 'review:deep': 'both' };
 
 /** The ship-ask step word -> the store step. */
-export const STORE_STEP = Object.freeze({ 'commit-and-push': 'ship', 'open-pr': 'open-pr', land: 'land', 'paid-round': 'paid-round' });
+export const STORE_STEP = Object.freeze({ 'commit-and-push': 'ship', 'open-pr': 'open-pr', land: 'land', 'paid-round': 'paid-round', 'cli-skip': 'cli-skip' });
 
 const one = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 const clip = (text, n) => (one(text).length > n ? `${one(text).slice(0, n - 1)}…` : one(text));
@@ -97,6 +98,29 @@ export function rerunPrePrSpec({ branch, head, stampHead, fails, capLeftUsd }) {
     opt(`Re-run pre-pr (${cost})`, 'Runs node scripts/github/pre-pr.mjs --body <file>. The CLI review is free inside the hourly allowance.', true),
     opt('Stop here', 'No PR opens.'),
   ] };
+}
+
+/** The tap that lets pre-pr-gate accept a flag skip (pre-pr-gate.ts CLI_SKIP_LABEL). */
+export const CLI_SKIP_LABEL = 'Skip the CLI review for this head';
+export const CLI_KEEP_LABEL = 'Keep the CLI review';
+
+/**
+ * cli-skip: Dave decides that the CodeRabbit CLI review is skipped for this head. data: { branch, head, runsSpent, unreviewed }.
+ * The skip is recommended only when the run cap is spent (2 runs): no CLI path is left. Else keeping the review is first.
+ */
+export function cliSkipSpec(d) {
+  const spent = Number(d.runsSpent) || 0;
+  // Missing coverage is not zero coverage: with no counter row that holds a count, the text says the coverage is unknown (CodeRabbit, PR 576).
+  const known = Number.isInteger(d.unreviewed);
+  const unreviewed = known ? d.unreviewed : 0;
+  const lines = [
+    `The CodeRabbit CLI review of ${clip(d.branch, 60)} at ${String(d.head).slice(0, 7)} did not finish.`,
+    known ? `${plural(spent, 'CLI run')} spent of 2; the CLI left ${plural(unreviewed, 'file')} unreviewed.` : `${plural(spent, 'CLI run')} spent of 2; the files the CLI left unreviewed are unknown (no coverage count on record).`,
+    'Skip the CLI review for this head and open the PR?',
+  ];
+  const skip = opt(CLI_SKIP_LABEL, 'pre-pr-gate lets the flag stamp open the PR once for this branch and head. A push voids this answer.', spent >= 2);
+  const keep = opt(CLI_KEEP_LABEL, 'The PR stays blocked. Fix the findings, run pre-pr again.', spent < 2);
+  return { header: 'CLI skip', question: lines.join('\n'), options: spent >= 2 ? [skip, keep] : [keep, skip] };
 }
 
 const LAND_LABELS = ['Land now', 'Land when READY', 'Keep open', 'Return to draft'];
@@ -297,6 +321,25 @@ export async function gatherOpenPr({ branch }) {
   };
 }
 
+/** { branch, head, stampHead, stampSkip, runsSpent, unreviewed } for cli-skip: the stamp of this checkout and the run counter of the branch. */
+export async function gatherCliSkip({ branch }) {
+  const t = branchTarget(branch, process.cwd());
+  const stamp = readStamp();
+  let runs = [];
+  try {
+    const { crPaths } = await import('./pre-pr.mjs');
+    const counter = JSON.parse(readFileSync(crPaths(topOf(), t.name).counter, 'utf8'));
+    runs = Array.isArray(counter?.runs) ? counter.runs : [];
+  } catch { /* no counter: 0 runs */ }
+  // null (unknown) when no row holds a count: a missing counter must not read as "0 files unreviewed".
+  const counts = runs.filter((r) => Number.isInteger(r?.unreviewed)).map((r) => r.unreviewed);
+  const unreviewed = counts.length > 0 ? Math.max(...counts) : null;
+  return {
+    branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null,
+    stampSkip: stamp?.cr_skipped === true ? stamp.cr_skip_reason ?? null : null, runsSpent: runs.filter((r) => r?.newCode !== false).length, unreviewed,
+  };
+}
+
 /** True only when SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one. The test seams (--facts, SHIP_ASK_STATUS_SCRIPT) need both. */
 function seamsOn(env = process.env) {
   if (env.SHIP_ASK_TEST !== '1' || !env[DECISIONS_ENV]) return false;
@@ -351,6 +394,11 @@ export function planOf(step, data, args) {
     const ok = data.stampHead && data.fails === 0 && String(data.stampHead).toLowerCase() === String(data.head).toLowerCase();
     return { spec: ok ? openPrSpec(data) : rerunPrePrSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: null };
   }
+  if (step === 'cli-skip') {
+    const same = data.stampHead && data.head && String(data.stampHead).toLowerCase() === String(data.head).toLowerCase();
+    if (data.stampSkip !== 'flag' || !same) return { refuse: `there is no flag stamp for ${data.branch} at ${String(data.head).slice(0, 7)}. Run node scripts/github/pre-pr.mjs --skip-cr --body <file> first: the question follows its stamp.` };
+    return { spec: cliSkipSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: null };
+  }
   const key = decisionKey({ pr: args.pr });
   if (step === 'paid-round') return { spec: paidRoundSpec(data), key, head: data.head, tree: null };
   if (data.isDraft) return { refuse: `PR #${args.pr} is a draft. Call pr_checkpoint {pr} first: land needs a ready PR.` };
@@ -385,6 +433,7 @@ async function dataOf(o) {
   }
   if (o.step === 'commit-and-push') return gatherShip({ branch: o.branch, msg: o.msg });
   if (o.step === 'open-pr') return gatherOpenPr({ branch: o.branch });
+  if (o.step === 'cli-skip') return gatherCliSkip({ branch: o.branch });
   return o.step === 'land' ? gatherLand({ pr: o.pr }) : gatherPaid({ pr: o.pr });
 }
 
@@ -393,7 +442,7 @@ const textOf = (spec) => [`${spec.header}: ${spec.question}`, ...spec.options.ma
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.error) {
-    console.error(`ship-ask: usage: ${parsed.error}. node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round> [--pr N | --branch B] [--msg file] [--json] [--facts f.json]`);
+    console.error(`ship-ask: usage: ${parsed.error}. node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip> [--pr N | --branch B] [--msg file] [--json] [--facts f.json]`);
     process.exit(2);
   }
   const { o } = parsed;

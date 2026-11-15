@@ -750,7 +750,7 @@ import { mkdirSync as mkdirSync3, readFileSync as readFileSync2, renameSync, unl
 import os from "node:os";
 import path from "node:path";
 var DECISIONS_ENV = "CCV3_DECISIONS_FILE";
-var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round"]);
+var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round", "cli-skip"]);
 var REPO = "Rev4nchist/Continuous-Claude-v3";
 var MAX_AGE_MS = 7 * 24 * 3600 * 1e3;
 var MISS_TTL_MS = 60 * 60 * 1e3;
