@@ -845,8 +845,12 @@ export function testChildEnv(base, home) {
   return { ...env, HOMEDRIVE: root.slice(0, 2), HOMEPATH: home.slice(root.length - 1) };
 }
 
-/** The env of the headless Claude child (F10b): the system names and the real home names (the subscription login lives there). Nothing else. */
-export const claudeChildEnv = (base) => pickEnv(base, [...SYSTEM_VARS, ...REAL_HOME_VARS]);
+/**
+ * The env of the headless Claude child (F10b): the system names and the real home names (the subscription login lives there), and one name the
+ * seeder sets itself: CLAUDE_CODE_DISABLE_AUTO_MEMORY=1, so the run writes no memory folder under the real home (docs: memory.md, "Enable or
+ * disable auto memory"). No other CLAUDE_CODE_* name of the parent passes.
+ */
+export const claudeChildEnv = (base) => ({ ...pickEnv(base, [...SYSTEM_VARS, ...REAL_HOME_VARS]), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' });
 
 /** One `node --test <file>` in cwd, with the env of testChildEnv and a fresh temp home that is removed afterwards. baseEnv: tests give a parent env. */
 export function runTestOnce(cwd, file, timeoutMs, baseEnv = process.env) {
@@ -1291,8 +1295,55 @@ export function checkSmokeContext(streamText) {
 // Item 5: the init event of a stream-json run lists what the session loaded. Field names as the repo reads them (scripts/github/local-review/backends/claude.mjs
 // reads tools, mcp_servers and plugins of the init event; scripts/coordination/coord-drill-2/metrics.mjs reads input_tokens, cache_read_input_tokens and
 // cache_creation_input_tokens of a usage object). The camelCase variants are accepted too. A field that is missing, or not a list, is 'unknown'.
-const SMOKE_FIELDS = Object.freeze({ tools: ['tools'], mcp_servers: ['mcp_servers', 'mcpServers'], plugins: ['plugins'] });
+const SMOKE_FIELDS = Object.freeze({ tools: ['tools'], mcp_servers: ['mcp_servers', 'mcpServers'], plugins: ['plugins'], skills: ['skills'], agents: ['agents'] });
 const UNKNOWN = 'unknown';
+
+// The smoke rule (seat ruling, 2026-11-14). The built-in names below are copied from the init event of the real smoke run of that day (Claude Code 2.1.325).
+// A skill or agent name outside these lists is a user, project or plugin one: the run loaded context it must not have, so the smoke fails.
+export const BUILTIN_SKILLS = Object.freeze(['deep-research', 'design', 'design-sync', 'dataviz', 'update-config', 'verify', 'debug', 'code-review', 'simplify', 'batch', 'fewer-permission-prompts', 'doctor', 'loop', 'schedule', 'claude-api', 'workflow-authoring', 'run', 'run-skill-generator', 'plugin-authoring']);
+export const BUILTIN_AGENTS = Object.freeze(['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup', 'web-fetch']);
+const SKILL_SET = new Set(BUILTIN_SKILLS);
+const AGENT_SET = new Set(BUILTIN_AGENTS);
+
+/**
+ * The token bound of a smoke run, for the file of the run. Measured 12,070 tokens for one dev file on 2026-11-14 (Claude Code init of that run).
+ * 16,000 is that plus about 33 percent margin for the system prompt, and the file part allows 3 bytes per token.
+ */
+export const SMOKE_TOKEN_BOUND = (fileText) => 16_000 + Math.ceil(Buffer.byteLength(String(fileText ?? '')) / 3);
+
+const nameOf = (x) => (typeof x === 'string' ? x : x?.name);
+const knownNames = (list, known) => Array.isArray(list) && list.every((x) => known.has(nameOf(x)));
+const builtinPlugins = (list) => Array.isArray(list) && list.every((p) => p?.path === 'builtin');
+const noEntries = (v) => v === undefined || (v !== null && typeof v === 'object' && Object.keys(v).length === 0);
+
+/** The checks on the init event, in rule order: name -> pass. An unknown value fails. */
+function initChecks(e, lists) {
+  return {
+    tools: lists.tools === 0, mcp_servers: lists.mcp_servers === 0, plugins: builtinPlugins(e.plugins),
+    skills: knownNames(e.skills, SKILL_SET), agents: knownNames(e.agents, AGENT_SET),
+    output_style: e.output_style === 'default', api_key_source: e.apiKeySource === 'none',
+    additional_directories: Array.isArray(e.additional_directories) && e.additional_directories.length === 0, memory_paths: noEntries(e.memory_paths),
+  };
+}
+
+/** The checks on the run: the token total, one turn, no user line (a cross-session message that landed would show as an extra turn and a user line). */
+function runChecks(streamText, total, bound) {
+  const lines = jsonLines(streamText);
+  const result = lines.filter((o) => o.type === 'result').at(-1);
+  return { tokens: Number.isFinite(total) && total < bound, num_turns: result?.num_turns === 1, user_line: !lines.some((o) => o.type === 'user') };
+}
+
+const failedNames = (checks) => Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
+
+/** The lines of a stream that parse as a JSON object (other lines are skipped). */
+function jsonLines(streamText) {
+  return String(streamText ?? '').split(/\r?\n/).flatMap((line) => {
+    try {
+      const o = JSON.parse(line);
+      return o && typeof o === 'object' ? [o] : [];
+    } catch { return []; }
+  });
+}
 
 /** { line, event } of the first system/init line of a stream, or null. */
 function initEvent(streamText) {
@@ -1309,19 +1360,25 @@ const listCount = (event, names) => names.map((n) => event[n]).find(Array.isArra
 const tokenCount = (usage, names) => names.map((n) => usage?.[n]).find((v) => Number.isFinite(v)) ?? UNKNOWN;
 
 /**
- * The smoke report of a stream-json run: { ok, init, tools, mcp_servers, plugins, inputTokens, cacheReadTokens, cacheCreationTokens, initLine }.
- * The three lists are counts. ok is true only when an init event exists and all three counts are 0 (unknown fails). The token counts come from the
- * usage of the result line; input_tokens alone leaves out cached context, so both cache counts are reported. A missing token count does not fail.
+ * The smoke report of a stream-json run: { ok, failed, init, tools, mcp_servers, plugins, skills, agents, inputTokens, cacheReadTokens,
+ * cacheCreationTokens, totalTokens, tokenBound, initLine }. The five lists are counts. `failed` is the list of failed check names (initChecks and
+ * runChecks, in rule order; ['init'] when there is no init event): names only, never a value of the init event. ok is true when `failed` is empty.
+ * The token counts come from the usage of the result line; input_tokens alone leaves out cached context, so both cache counts are in the total.
+ * A missing token count fails the smoke. fileText sets the token bound (SMOKE_TOKEN_BOUND).
  */
-export function smokeReport(streamText) {
+export function smokeReport(streamText, fileText = '') {
   const init = initEvent(streamText);
   const lists = Object.fromEntries(Object.entries(SMOKE_FIELDS).map(([key, names]) => [key, init ? listCount(init.event, names) : UNKNOWN]));
   const { usage } = readResult(streamText);
-  return {
-    ok: init !== null && Object.values(lists).every((n) => n === 0), init: init !== null, ...lists,
+  const counts = {
     inputTokens: tokenCount(usage, ['input_tokens', 'inputTokens']), cacheReadTokens: tokenCount(usage, ['cache_read_input_tokens', 'cacheReadInputTokens']),
-    cacheCreationTokens: tokenCount(usage, ['cache_creation_input_tokens', 'cacheCreationInputTokens']), initLine: init?.line ?? null,
+    cacheCreationTokens: tokenCount(usage, ['cache_creation_input_tokens', 'cacheCreationInputTokens']),
   };
+  const all = Object.values(counts);
+  const totalTokens = all.every(Number.isFinite) ? all.reduce((a, b) => a + b, 0) : UNKNOWN;
+  const tokenBound = SMOKE_TOKEN_BOUND(fileText);
+  const failed = init ? failedNames({ ...initChecks(init.event, lists), ...runChecks(streamText, totalTokens, tokenBound) }) : ['init'];
+  return { ok: failed.length === 0, failed, init: init !== null, ...lists, ...counts, totalTokens, tokenBound, initLine: init?.line ?? null };
 }
 
 /** The claude argv of a smoke run: the result format becomes stream-json (it needs --verbose), so hook events and the init event show in the stream. */
@@ -1362,24 +1419,28 @@ export async function runSeedClaude({ file, fileText, brief, forbidden, ledgerPa
   if (!claim.ok) return no(claim.reason);
   const ownCwd = deps.cwd === undefined;
   const cwd = deps.cwd ?? mkdtempSync(path.join(os.tmpdir(), 'seed-claude-'));
+  const state = { settingsFault: false };
   try {
     const res = await runClaude(
       { prompt: buildSeedPrompt(fileText, brief, file), model: CLAUDE_MODEL, effort: CLAUDE_EFFORT, purpose: LANE_PURPOSE, timeoutMs: deps.timeoutMs ?? 300_000 },
-      claudeRunDeps(deps, { ledgerPath, cwd, smoke }),
+      claudeRunDeps(deps, { ledgerPath, cwd, smoke, state }),
     );
+    if (state.settingsFault) return no('settings');
     const interpret = () => interpretRun(res, file, fileText);
-    return smoke && !res.reason ? judgeSmoke(res, smokeOut, interpret) : interpret();
+    return smoke && !res.reason ? judgeSmoke(res, smokeOut, interpret, fileText) : interpret();
   } finally {
+    rmSync(path.join(cwd, RUN_SETTINGS_FILE), { force: true });
     if (ownCwd) rmSync(cwd, { recursive: true, force: true });
   }
 }
 
 /**
- * The smoke judgement of a run that happened (no cap, lock or missing claude): the init line is saved first (one line per run), then a bad init
- * (a tool, an MCP server or a plugin, or no init event) refuses the run, then a context marker or hook event does. The report rides on the result.
+ * The smoke judgement of a run that happened (no cap, lock or missing claude): the init line is saved first (one line per run), then a failed smoke
+ * rule (smokeReport: the init lists, the token bound, the turn count, a user line, or no init event) refuses the run, then a context marker or hook
+ * event does. The report rides on the result.
  */
-function judgeSmoke(res, smokeOut, interpret) {
-  const { initLine, ...smoke } = smokeReport(res.stdout);
+function judgeSmoke(res, smokeOut, interpret, fileText) {
+  const { initLine, ...smoke } = smokeReport(res.stdout, fileText);
   if (initLine !== null) appendFileSync(smokeOut, `${initLine}\n`);
   if (!smoke.ok) return { ok: false, reason: 'smoke-init', smoke };
   return { ...(smokeFailure(res) ?? interpret()), smoke };
@@ -1393,18 +1454,62 @@ function smokeFailure(res) {
 
 /**
  * The deps of runClaude: project setting sources only, an allowlist env (F10b: runClaude passes deps.env to childEnv, which then strips the
- * Anthropic keys), and for a smoke run a spawn that asks for stream-json (headless.mjs buildArgs fixes json).
+ * Anthropic keys), and a spawn that rewrites --settings (settingsSpawn) and, for a smoke run, asks for stream-json (headless.mjs buildArgs fixes json).
  */
-function claudeRunDeps(deps, { ledgerPath, cwd, smoke }) {
-  const base = deps.spawnFn ?? spawn;
-  const smokeSpawn = (command, args, opts) => base(command, streamJsonArgs(args), opts);
+function claudeRunDeps(deps, { ledgerPath, cwd, smoke, state }) {
   const env = claudeChildEnv(deps.env ?? process.env);
-  return { ...deps, ledgerPath, cwd, env, prefixArgs: [...SETTING_ARGS, ...(deps.prefixArgs ?? [])], ...(smoke ? { spawnFn: smokeSpawn } : {}) };
+  return { ...deps, ledgerPath, cwd, env, prefixArgs: [...SETTING_ARGS, ...(deps.prefixArgs ?? [])], spawnFn: settingsSpawn(deps.spawnFn ?? spawn, { smoke, state }) };
+}
+
+const RUN_SETTINGS_FILE = 'seed-run-settings.json';
+// The two settings every Claude run gets (seat ruling, 2026-11-14; docs: cross-session-messaging.md "Control inbound messages" and
+// "Non-interactive sessions", memory.md "Enable or disable auto memory"). Known limit: the docs say crossSessionInbound refuse still binds the
+// messaging socket and drops every message. Only --bare skips the socket, and --bare needs an API key, which this lane never uses. So the
+// messaging_socket_path field stays in the init event, and the smoke rule does not assert it. The num_turns and user line rules catch a message that landed.
+const RUN_SETTINGS = Object.freeze({ crossSessionInbound: 'refuse', autoMemoryEnabled: false });
+const slashes = (p) => p.replace(/\\/g, '/');
+
+/** The settings object of the file that the argv names with --settings (relative to cwd, as claude reads it). Throws on no value, two flags, or a bad file. */
+function originalSettings(args, at, cwd) {
+  if (at < 0) return {};
+  if (args.lastIndexOf('--settings') !== at || typeof args[at + 1] !== 'string') throw new Error('settings: ambiguous argv');
+  const base = JSON.parse(readFileSync(path.resolve(cwd, args[at + 1]), 'utf8'));
+  if (base === null || typeof base !== 'object' || Array.isArray(base)) throw new Error('settings: not an object');
+  return base;
+}
+
+/**
+ * The argv of a Claude run with --settings pointing at a merged file in cwd: the original settings, then RUN_SETTINGS on top. An argv with no
+ * --settings gets one appended. Throws (the caller then refuses the run, no spawn) when the original cannot be read or is not a JSON object.
+ */
+export function withRunSettings(args, cwd) {
+  const at = args.indexOf('--settings');
+  const merged = path.join(cwd, RUN_SETTINGS_FILE);
+  writeFileSync(merged, JSON.stringify({ ...originalSettings(args, at, cwd), ...RUN_SETTINGS }));
+  const out = [...args];
+  if (at < 0) out.push('--settings', slashes(merged)); else out[at + 1] = slashes(merged);
+  return out;
+}
+
+/**
+ * The spawn of a Claude run. Every run passes through withRunSettings; a smoke run then asks for stream-json. A settings fault throws before the
+ * spawn (headless.mjs reports a throwing spawn as a failed run) and sets state.settingsFault, so runSeedClaude answers with reason 'settings'.
+ */
+function settingsSpawn(base, { smoke, state }) {
+  return (command, args, opts) => {
+    let argv;
+    try { argv = withRunSettings(args, opts.cwd); } catch (err) {
+      state.settingsFault = true;
+      throw err;
+    }
+    return base(command, smoke ? streamJsonArgs(argv) : argv, opts);
+  };
 }
 
 // A cap or a run fault stops the batch: each further run would spend a ledger row on the same fault.
-// A smoke run whose init lists a tool, an MCP server or a plugin (or has no init) stops too: the next run would show the same context.
-const STOP_REASONS = new Set(['lane-cap', 'ledger-cap', 'served-model', 'no-claude', 'lock', 'smoke-init', 'no-smoke-out']);
+// A smoke run that fails the smoke rule (or has no init) stops too: the next run would show the same context.
+// A settings fault stops it: headless.mjs reserves the ledger row before the spawn and the lane claim is taken, so each further run would spend both.
+const STOP_REASONS = new Set(['lane-cap', 'ledger-cap', 'served-model', 'no-claude', 'lock', 'smoke-init', 'no-smoke-out', 'settings']);
 
 /**
  * Run items one after another. The first stop reason ends the batch: no retry.
@@ -1442,7 +1547,7 @@ const USAGE = [
   '  emit        --seeds <dir> --gold-file <file> --seed <id> [--slice security]',
   '  check-refs  [--repo <dir>] [--seeds <dir>] [--remote <name>]      the remote defaults to fork; zero seed refs is not a pass; a ref with no manifest fails',
   '  claude      --confirm-headless --repo <dir> --seeds <dir> --ledger <file> --config <f> --dataset <f> --gold <dir> --files <a,b> --brief <text> [--rev <rev>] [--smoke --smoke-out <file>]',
-  '              --smoke saves the stream-json init line of each run to --smoke-out (required with --smoke) and fails a run whose init lists a tool, an MCP server or a plugin',
+  '              --smoke saves the stream-json init line of each run to --smoke-out (required with --smoke) and fails a run that breaks the smoke rule (see smokeReport)',
   `operators: ${OPERATORS.map((o) => o.id).join(', ')}`,
   'Under node --test the repo, seeds, gold, gold-file and ledger flags must be explicit. Exit: 0 ok, 1 refused or failed check, 2 usage.',
 ].join('\n');

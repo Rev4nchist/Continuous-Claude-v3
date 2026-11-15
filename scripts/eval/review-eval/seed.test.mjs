@@ -10,7 +10,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TREE_EXCLUDES } from '../../github/cursor-review.mjs';
-import { defaultHeadlessLedger, HEADLESS_LEDGER } from '../../lib/headless.mjs';
+import { defaultHeadlessLedger, HEADLESS_DAILY_CAP, HEADLESS_LEDGER } from '../../lib/headless.mjs';
 import { loadGold, SEVERITIES, validateRow } from './gold.mjs';
 import { ANSWER_KEY_SEGMENTS } from './read-audit.mjs';
 import { forbiddenSet } from './rubrics/lint-ids.mjs';
@@ -146,7 +146,12 @@ function commitFile(ctx, name, content, message = 'add') {
 // ---- Claude arm fakes ----
 // extraLines: lines of the run stream that come before the result line (a stream-json run shows an init event and hook events there).
 const USAGE_FIXTURE = { input_tokens: 3, cache_read_input_tokens: 40, cache_creation_input_tokens: 5, output_tokens: 7 };
-function fakeSpawn(calls, { answer, served = ['claude-opus-5-5'], isError = false, extraLines = [], usage = USAGE_FIXTURE } = {}) {
+// The built-in names of the Claude Code init event of the real smoke run of 2026-11-14 (field names and built-in names only: no cwd, id, path or socket).
+// Literal lists on purpose: the test must not read the pinned lists from the code under test.
+const BUILTIN_SKILL_LIST = ['deep-research', 'design', 'design-sync', 'dataviz', 'update-config', 'verify', 'debug', 'code-review', 'simplify', 'batch', 'fewer-permission-prompts', 'doctor', 'loop', 'schedule', 'claude-api', 'workflow-authoring', 'run', 'run-skill-generator', 'plugin-authoring'];
+const BUILTIN_AGENT_LIST = ['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup', 'web-fetch'];
+const BUILTIN_PLUGIN_LIST = ['cc-plugin-agents-md', 'cc-plugin-telemetry', 'cc-plugin-privacy', 'cc-plugin-plugin-authoring'];
+function fakeSpawn(calls, { answer, served = ['claude-opus-5-5'], isError = false, extraLines = [], usage = USAGE_FIXTURE, numTurns = 1 } = {}) {
   return (command, args, opts) => {
     const call = { command, args, opts, prompt: null };
     calls.push(call);
@@ -156,7 +161,7 @@ function fakeSpawn(calls, { answer, served = ['claude-opus-5-5'], isError = fals
     child.stderr = stream();
     child.kill = () => {};
     const line = JSON.stringify({
-      type: 'result', is_error: isError, result: typeof answer === 'string' ? answer : JSON.stringify(answer), total_cost_usd: 0.01, usage,
+      type: 'result', is_error: isError, num_turns: numTurns, result: typeof answer === 'string' ? answer : JSON.stringify(answer), total_cost_usd: 0.01, usage,
       modelUsage: served ? Object.fromEntries(served.map((n) => [n, { inputTokens: 1 }])) : undefined,
     });
     const payload = [...extraLines, line].join('\n');
@@ -165,8 +170,10 @@ function fakeSpawn(calls, { answer, served = ['claude-opus-5-5'], isError = fals
   };
 }
 // claimFile: a temp claim file beside the ledger (F3: the real default claim file is refused under node --test).
+// No skipConfigFiles: headless.mjs then writes the real settings file of the probe in os.tmpdir() and passes its absolute path, as a real run does.
+// The settings rewrite of the seeder reads that file (it fails closed on a missing one). Tests of the refusal pass skipConfigFiles: true on purpose.
 const claudeDeps = (spawnFn, ledgerPath, extra = {}) => ({
-  ledgerPath, claimFile: ledgerPath ? `${ledgerPath}.claims.jsonl` : undefined, now: () => NOW, command: 'claude-fake', skipConfigFiles: true, spawnFn, agentDeps: { platform: 'linux', gateEnv: { CCV3_GROK_GATE: 'off' } }, ...extra,
+  ledgerPath, claimFile: ledgerPath ? `${ledgerPath}.claims.jsonl` : undefined, now: () => NOW, command: 'claude-fake', spawnFn, agentDeps: { platform: 'linux', gateEnv: { CCV3_GROK_GATE: 'off' } }, ...extra,
 });
 const ledgerRows = (file, n, purpose, ts = NOW) => writeFileSync(file, Array.from({ length: n }, (_, i) => JSON.stringify({ ts: new Date(ts).toISOString(), phase: 'start', id: `r${i}-${purpose}-${ts}`, purpose })).join('\n') + (n ? '\n' : ''));
 const GOOD_ANSWER = { file: 'src/calc.mjs', line: 2, before: '  return n < max;', after: '  return n <= max;', truthNote: 'the bound is now inclusive' };
@@ -1379,15 +1386,15 @@ test('F9 the lane day cap of 8 stops the batch before a spawn; yesterday and oth
   assert.equal(c4.length, 2);
 });
 
-test('F9 the ledger own cap of 30 stops the batch with no retry', async () => {
-  // Breaks when: a cap answer from the ledger is retried or read as a model failure.
+test('F9 the ledger own cap (HEADLESS_DAILY_CAP) stops the batch with no retry', async () => {
+  // Breaks when: a cap answer from the ledger is retried or read as a model failure. The row count follows the shared cap (30, then 200 since PR 578).
   const ledger = path.join(tmp(), 'ledger.jsonl');
-  ledgerRows(ledger, 30, 'eval-judge');
+  ledgerRows(ledger, HEADLESS_DAILY_CAP, 'eval-judge');
   const calls = [];
   const r = await seed.runSeedBatch([{ file: 'src/calc.mjs', fileText: CALC, brief: 'b' }, { file: 'src/calc.mjs', fileText: CALC, brief: 'b' }], { forbidden: forbidden(), ledgerPath: ledger }, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER }), ledger));
   assert.equal(r.stopped, 'ledger-cap');
   assert.equal(calls.length, 0);
-  assert.equal(readFileSync(ledger, 'utf8').trim().split('\n').length, 30);
+  assert.equal(readFileSync(ledger, 'utf8').trim().split('\n').length, HEADLESS_DAILY_CAP);
 });
 
 test('F10 a served model that is not the asked model is an error, not a row', async () => {
@@ -1537,9 +1544,10 @@ test('F10b the Claude child gets an allowlist environment: no CLAUDE_CODE_*, no 
   const r = await seed.runSeedClaude({ file: 'src/calc.mjs', fileText: CALC, brief: 'b', forbidden: forbidden(), ledgerPath: ledger }, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER }), ledger, { env: parent }));
   assert.equal(r.ok, true, JSON.stringify(r));
   const env = calls[0].opts.env;
-  assert.deepEqual(Object.keys(env).sort(), ['HOME', 'PATH', 'SystemRoot', 'USERPROFILE']);
+  // CLAUDE_CODE_DISABLE_AUTO_MEMORY is the one CLAUDE_CODE_* name the seeder sets itself (child env rule); none of the parent's pass.
+  assert.deepEqual(Object.keys(env).sort(), ['CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'HOME', 'PATH', 'SystemRoot', 'USERPROFILE']);
   assert.equal(env.HOME, '/home/real', 'the login of the real home is kept');
-  assert.deepEqual(Object.keys(seed.claudeChildEnv({ ...parent, TEMP: 't', TMP: 't', ComSpec: 'c', PATHEXT: 'p', WINDIR: 'w', APPDATA: 'a', LOCALAPPDATA: 'l' })).sort(), ['APPDATA', 'ComSpec', 'HOME', 'LOCALAPPDATA', 'PATH', 'PATHEXT', 'SystemRoot', 'TEMP', 'TMP', 'USERPROFILE', 'WINDIR']);
+  assert.deepEqual(Object.keys(seed.claudeChildEnv({ ...parent, TEMP: 't', TMP: 't', ComSpec: 'c', PATHEXT: 'p', WINDIR: 'w', APPDATA: 'a', LOCALAPPDATA: 'l' })).sort(), ['APPDATA', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'ComSpec', 'HOME', 'LOCALAPPDATA', 'PATH', 'PATHEXT', 'SystemRoot', 'TEMP', 'TMP', 'USERPROFILE', 'WINDIR']);
 });
 
 test('F7 each paid result is planted right after its run, in a try per item: a throw on item 3 keeps items 1 and 2', async () => {
@@ -1577,7 +1585,9 @@ test('finding 18: the scratch cwd of a Claude run is removed when the run ends; 
   assert.equal(existsSync(mine), true, 'a cwd the caller gave is not removed');
 });
 
-const INIT_EVENT = JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', tools: [], mcp_servers: [], plugins: [] });
+// The init fields of a clean run (smoke rule). plugins stays [] here: the real shape with builtin plugins has its own fixture below.
+const CLEAN_INIT = { tools: [], mcp_servers: [], plugins: [], skills: BUILTIN_SKILL_LIST, agents: BUILTIN_AGENT_LIST, output_style: 'default', apiKeySource: 'none', additional_directories: [] };
+const INIT_EVENT = JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', ...CLEAN_INIT });
 const HOOK_EVENT = JSON.stringify({ type: 'system', subtype: 'hook_response', hook_name: 'x', output: 'text' });
 // The seat list (S4). A literal list on purpose: the test must not read the list from the code under test.
 const SMOKE_MARKER_LIST = ['MULTI-SESSION COORDINATION', 'Lane board', 'MEMORY MATCH', 'SESSION FOCUS', 'system-reminder', 'SessionStart', 'Reminders due'];
@@ -1616,7 +1626,8 @@ test('S4 a smoke run asks for stream-json and refuses a run whose stream shows a
   const hook = await run([INIT_EVENT, HOOK_EVENT], true);
   assert.equal(hook.r.reason, 'smoke-context');
   assert.equal(hook.r.hookEvents, 1);
-  const marker = await run([INIT_EVENT, JSON.stringify({ type: 'user', text: 'Lane board: 3 open' })], true);
+  // A line of type user now fails the smoke init first (smoke rule), so the marker rides on an assistant line here.
+  const marker = await run([INIT_EVENT, JSON.stringify({ type: 'assistant', text: 'Lane board: 3 open' })], true);
   assert.equal(marker.r.reason, 'smoke-context');
   assert.equal(marker.r.markers, 1);
   const plain = await run([HOOK_EVENT], false);
@@ -2054,9 +2065,9 @@ test('item 6 untar skips an entry type it does not know and counts it, with no t
 });
 
 // ---- item 5: the smoke report ----
-const initOf = (over = {}) => JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', tools: [], mcp_servers: [], plugins: [], ...over });
-const resultOf = (usage = USAGE_FIXTURE) => JSON.stringify({ type: 'result', result: '{}', ...(usage ? { usage } : {}) });
-const streamOf = (init, usage) => [...(init === null ? [] : [init]), resultOf(usage)].join('\n');
+const initOf = (over = {}) => JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', ...CLEAN_INIT, ...over });
+const resultOf = (usage = USAGE_FIXTURE, numTurns = 1) => JSON.stringify({ type: 'result', result: '{}', num_turns: numTurns, ...(usage ? { usage } : {}) });
+const streamOf = (init, usage, numTurns) => [...(init === null ? [] : [init]), resultOf(usage, numTurns)].join('\n');
 
 test('item 5 smokeReport: empty lists pass and show their lengths and the token counts; each non-empty list fails; a missing init event or field is unknown and fails', () => {
   // Breaks when: a non-empty tools, mcp_servers or plugins list passes, a missing init event passes, a missing field counts as empty, or a field name variant is not read.
@@ -2079,7 +2090,7 @@ test('item 5 smokeReport: empty lists pass and show their lengths and the token 
   }
   assert.equal(seed.smokeReport(streamOf(initOf({ plugins: 'none' }))).ok, false, 'a value that is not a list is unknown, not empty');
   const noUsage = seed.smokeReport(streamOf(initOf(), null));
-  assert.deepEqual([noUsage.ok, noUsage.inputTokens], [true, 'unknown']);
+  assert.deepEqual([noUsage.ok, noUsage.inputTokens], [false, 'unknown'], 'smoke rule: a missing token count fails');
 });
 
 const smokeArgs = (ledger, out) => ({ file: 'src/calc.mjs', fileText: CALC, brief: 'b', forbidden: forbidden(), ledgerPath: ledger, smoke: true, smokeOut: out });
@@ -2147,4 +2158,236 @@ test('item 5 through the CLI: --smoke needs --smoke-out; a clean smoke prints th
   const bad = JSON.parse(dirty.out.join('').trim().split('\n').pop());
   assert.equal(bad.stopped, 'smoke-init');
   assert.equal(bad.smoke.at(-1).tools, 1);
+});
+
+// ---- seat rulings of 2026-11-14: the smoke rule, the child env and the child settings ----
+// The init event of the saved real smoke run, with the private values left out: 4 builtin plugins, 19 skills, 6 agents. The socket field is
+// present and never asserted (the docs say a refuse setting still binds the socket). memory_paths is absent, as it is when auto memory is off.
+const REAL_SHAPE = {
+  ...CLEAN_INIT, plugins: BUILTIN_PLUGIN_LIST.map((name) => ({ name, path: 'builtin', source: `${name}@builtin` })), messaging_socket_path: 'a-socket-name',
+};
+const reportOf = (over, { usage, numTurns, fileText } = {}) => seed.smokeReport(streamOf(initOf(over), usage, numTurns), fileText);
+const CHECK_ORDER = ['tools', 'mcp_servers', 'plugins', 'skills', 'agents', 'output_style', 'api_key_source', 'additional_directories', 'memory_paths', 'tokens', 'num_turns', 'user_line'];
+
+test('smoke rule: the pinned BUILTIN_SKILLS and BUILTIN_AGENTS are frozen and equal the names of the saved init event', () => {
+  // Breaks when: a name is added to or dropped from a pinned list, or a list is left unfrozen.
+  assert.deepEqual([...seed.BUILTIN_SKILLS], BUILTIN_SKILL_LIST);
+  assert.deepEqual([...seed.BUILTIN_AGENTS], BUILTIN_AGENT_LIST);
+  assert.equal(Object.isFrozen(seed.BUILTIN_SKILLS), true);
+  assert.equal(Object.isFrozen(seed.BUILTIN_AGENTS), true);
+});
+
+test('smoke rule: an init event in the shape of the saved real run passes (builtin plugins, builtin skills and agents, a socket field)', () => {
+  // Breaks when: a builtin plugin, skill or agent of the real run fails, or the socket field or another field is asserted.
+  const r = seed.smokeReport(streamOf(initOf(REAL_SHAPE)));
+  assert.deepEqual([r.ok, r.failed, r.plugins, r.skills, r.agents], [true, [], 4, 19, 6]);
+});
+
+test('smoke rule: every plugin has the path exactly builtin; another path, no path or an unknown plugins field fails', () => {
+  // Breaks when: a non-builtin plugin passes, a plugin with no path passes, a loose match (case, space) passes, or a missing field counts as empty.
+  const bad = [[{ name: 'x', path: 'C:/some/dir' }], [{ name: 'x' }], [{ name: 'a', path: 'builtin' }, { name: 'b', path: 'Builtin' }], [{ name: 'x', path: 'builtin ' }], 'none', undefined];
+  for (const plugins of bad) {
+    const r = reportOf({ plugins });
+    assert.deepEqual([r.ok, r.failed], [false, ['plugins']], JSON.stringify(plugins));
+  }
+  assert.equal(reportOf({ plugins: [{ name: 'a', path: 'builtin' }] }).ok, true);
+});
+
+test('smoke rule: every skill and agent name is in the pinned lists; strings or objects with a name pass; an unknown or absent field fails', () => {
+  // Breaks when: an unknown name passes, a nameless object passes, the object form is not read, the match is case loose, or an absent field passes.
+  for (const field of ['skills', 'agents']) {
+    const known = field === 'skills' ? BUILTIN_SKILL_LIST[1] : BUILTIN_AGENT_LIST[1];
+    assert.equal(reportOf({ [field]: [{ name: known }] }).ok, true, `${field} objects`);
+    assert.equal(reportOf({ [field]: [known] }).ok, true, `${field} strings`);
+    for (const list of [['kanban-sync'], [{ name: 'kanban-sync' }], [known, 'my-extra'], [{}], [{ name: 7 }], [null], [known.toUpperCase()], 'all', undefined]) {
+      const r = reportOf({ [field]: list });
+      assert.deepEqual([r.ok, r.failed], [false, [field]], `${field} ${JSON.stringify(list)}`);
+    }
+  }
+});
+
+test('smoke rule: output_style is default, apiKeySource is none and additional_directories is an empty list', () => {
+  // Breaks when: another style, a key source, an added directory or a missing field passes.
+  const cases = [
+    ['output_style', ['Explanatory', undefined, null], 'output_style'],
+    ['apiKeySource', ['user', 'ANTHROPIC_API_KEY', undefined], 'api_key_source'],
+    ['additional_directories', [['/some/dir'], 'x', undefined], 'additional_directories'],
+  ];
+  for (const [field, values, check] of cases) {
+    for (const value of values) {
+      const r = reportOf({ [field]: value });
+      assert.deepEqual([r.ok, r.failed], [false, [check]], `${field} ${JSON.stringify(value)}`);
+    }
+  }
+});
+
+test('smoke rule: SMOKE_TOKEN_BOUND is 16000 plus the file bytes over 3, rounded up', () => {
+  // Breaks when: the base, the divisor or the rounding changes, or characters are counted where the rule says bytes (the euro sign is 3 bytes).
+  assert.equal(seed.SMOKE_TOKEN_BOUND(''), 16000);
+  assert.equal(seed.SMOKE_TOKEN_BOUND('abc'), 16001);
+  assert.equal(seed.SMOKE_TOKEN_BOUND('abcd'), 16002);
+  assert.equal(seed.SMOKE_TOKEN_BOUND('\u20ac\u20ac\u20ac'), 16003);
+  assert.equal(seed.SMOKE_TOKEN_BOUND('x'.repeat(30_000)), 26_000);
+});
+
+test('smoke rule: the token total (input, cache read, cache creation) is under the bound; the bound itself and a missing count fail', () => {
+  // Breaks when: a count is left out of the total, the compare is <=, the file size is not in the bound, or a missing count passes.
+  const usage = (input, read, create) => ({ input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: create });
+  const measured = reportOf({}, { usage: usage(2, 649, 11_419) });
+  assert.deepEqual([measured.ok, measured.totalTokens, measured.tokenBound], [true, 12_070, 16_000], 'the measured run of 2026-11-14');
+  const big = 'x'.repeat(30_000);
+  assert.equal(reportOf({}, { usage: usage(2, 649, 25_348), fileText: big }).ok, true, 'one below the bound of 26000');
+  const atBound = reportOf({}, { usage: usage(2, 649, 25_349), fileText: big });
+  assert.deepEqual([atBound.ok, atBound.failed], [false, ['tokens']]);
+  assert.equal(reportOf({}, { usage: usage(20_000, 0, 0) }).ok, false, 'a long file is what raises the bound');
+  assert.equal(reportOf({}, { usage: usage(20_000, 0, 0), fileText: big }).ok, true);
+  assert.equal(reportOf({}, { usage: usage(1, 0, 15_998) }).ok, true, 'the total adds the cache creation count');
+  assert.equal(reportOf({}, { usage: usage(1, 15_998, 1) }).ok, false, 'the total adds the cache read count');
+  for (const field of ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']) {
+    const { [field]: _gone, ...partial } = usage(2, 649, 11_419);
+    const r = reportOf({}, { usage: partial });
+    assert.deepEqual([r.ok, r.failed], [false, ['tokens']], `${field} missing`);
+  }
+});
+
+test('smoke rule: memory_paths is absent or has no entries; any entry fails', () => {
+  // Breaks when: a memory path in the init event passes (auto memory would write a folder under the real home).
+  for (const memory_paths of [undefined, {}, []]) assert.equal(reportOf({ memory_paths }).ok, true, JSON.stringify(memory_paths));
+  for (const memory_paths of [{ auto: 'a-path' }, ['a-path']]) {
+    const r = reportOf({ memory_paths });
+    assert.deepEqual([r.ok, r.failed], [false, ['memory_paths']], JSON.stringify(memory_paths));
+  }
+});
+
+test('smoke rule: num_turns of the result line is 1 and the stream has no user line; an unknown num_turns fails', () => {
+  // Breaks when: a second turn passes, a missing or null num_turns passes, or a line of type user (a message that landed) passes.
+  const two = seed.smokeReport(streamOf(initOf(), undefined, 2));
+  assert.deepEqual([two.ok, two.failed], [false, ['num_turns']]);
+  const nullTurns = seed.smokeReport(streamOf(initOf(), undefined, null));
+  assert.deepEqual([nullTurns.ok, nullTurns.failed], [false, ['num_turns']]);
+  const noField = seed.smokeReport([initOf(), JSON.stringify({ type: 'result', result: '{}', usage: USAGE_FIXTURE })].join('\n'));
+  assert.deepEqual([noField.ok, noField.failed], [false, ['num_turns']]);
+  const noResult = seed.smokeReport(initOf());
+  assert.equal(noResult.ok, false);
+  const user = seed.smokeReport([initOf(), JSON.stringify({ type: 'user', message: 'a message' }), resultOf()].join('\n'));
+  assert.deepEqual([user.ok, user.failed], [false, ['user_line']]);
+});
+
+test('smoke rule: a failed run lists the names of the failed checks in rule order, and never a value of the init event', async () => {
+  // Breaks when: the result carries an init value (a skill name, a session id), the check names change, or a failed check is left out of the list.
+  const ledger = path.join(tmp(), 'ledger.jsonl');
+  const out = path.join(tmp(), 'init.jsonl');
+  const init = initOf({ skills: ['SENTINEL-skill'], plugins: [{ name: 'SENTINEL-plugin', path: 'SENTINEL-path' }], output_style: 'SENTINEL-style', session_id: 'SENTINEL-session', cwd: 'SENTINEL-cwd' });
+  const r = await seed.runSeedClaude(smokeArgs(ledger, out), claudeDeps(fakeSpawn([], { answer: GOOD_ANSWER, extraLines: [init], numTurns: 2 }), ledger));
+  assert.equal(r.reason, 'smoke-init');
+  assert.deepEqual(r.smoke.failed, CHECK_ORDER.filter((c) => ['plugins', 'skills', 'output_style', 'num_turns'].includes(c)));
+  assert.equal(JSON.stringify(r).includes('SENTINEL'), false, 'no init value in the result');
+  assert.match(readFileSync(out, 'utf8'), /SENTINEL-session/, 'the init line itself is still saved to the file');
+});
+
+test('smoke rule: a second turn or a user line in a real smoke run stops the batch with smoke-init, before the next run', async () => {
+  // Breaks when: the num_turns and user line rules are not part of the smoke verdict, or the batch goes on after them.
+  const items = ['a', 'b'].map((n) => ({ file: 'src/calc.mjs', fileText: CALC, brief: n }));
+  const userLine = JSON.stringify({ type: 'user', message: 'a message' });
+  for (const spawnOpts of [{ numTurns: 2, extraLines: [initOf()] }, { extraLines: [initOf(), userLine] }]) {
+    const ledger = path.join(tmp(), 'ledger.jsonl');
+    const calls = [];
+    const batch = await seed.runSeedBatch(items, { forbidden: forbidden(), ledgerPath: ledger, smoke: true, smokeOut: path.join(tmp(), 'init.jsonl') }, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER, ...spawnOpts }), ledger));
+    assert.equal(batch.stopped, 'smoke-init');
+    assert.equal(calls.length, 1, 'no second run');
+  }
+});
+
+test('child env rule: claudeChildEnv sets CLAUDE_CODE_DISABLE_AUTO_MEMORY to 1, whatever the parent holds, and the run child gets it', async () => {
+  // Breaks when: the name or value changes, the parent value wins, or the run does not use claudeChildEnv.
+  assert.equal(seed.claudeChildEnv({ PATH: '/bin' }).CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+  assert.equal(seed.claudeChildEnv({ PATH: '/bin', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0' }).CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+  const ledger = path.join(tmp(), 'ledger.jsonl');
+  const calls = [];
+  await seed.runSeedClaude({ file: 'src/calc.mjs', fileText: CALC, brief: 'b', forbidden: forbidden(), ledgerPath: ledger }, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER }), ledger, { env: { PATH: '/bin', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0' } }));
+  assert.equal(calls[0].opts.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+});
+
+// Reads the --settings file at spawn time: the run removes it afterwards.
+const settingsSpy = (inner, seen) => (command, args, opts) => {
+  const file = args[args.indexOf('--settings') + 1];
+  seen.push({ count: args.filter((a) => a === '--settings').length, file, cwd: opts.cwd, json: JSON.parse(readFileSync(file, 'utf8')), args });
+  return inner(command, args, opts);
+};
+const SETTINGS_ARGS = { file: 'src/calc.mjs', fileText: CALC, brief: 'b' };
+
+test('settings rule: every run, smoke or not, passes one --settings file inside its cwd with crossSessionInbound refuse, autoMemoryEnabled false and the original keys', async () => {
+  // Breaks when: a key is missing, the original keys are dropped or win over ours, the original file is edited, a second --settings is added,
+  // the merged file is outside the run cwd or is left behind, or the smoke argv loses stream-json.
+  for (const smoke of [false, true]) {
+    const dir = tmp();
+    const original = JSON.stringify({ disableAllHooks: true, customKeep: 'kept', crossSessionInbound: 'allow', autoMemoryEnabled: true });
+    writeFileSync(path.join(dir, 'no-hooks.json'), original);
+    const ledger = path.join(tmp(), 'ledger.jsonl');
+    const seen = [];
+    const spawnFn = settingsSpy(fakeSpawn([], { answer: GOOD_ANSWER, extraLines: smoke ? [initOf()] : [] }), seen);
+    const r = await seed.runSeedClaude({ ...SETTINGS_ARGS, forbidden: forbidden(), ledgerPath: ledger, smoke, smokeOut: smoke ? path.join(tmp(), 'init.jsonl') : undefined }, claudeDeps(spawnFn, ledger, { skipConfigFiles: true, cwd: dir }));
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(seen.length, 1);
+    const [one] = seen;
+    assert.equal(one.count, 1, 'one --settings');
+    assert.deepEqual(one.json, { disableAllHooks: true, customKeep: 'kept', crossSessionInbound: 'refuse', autoMemoryEnabled: false });
+    assert.equal(path.dirname(path.resolve(one.file)), path.resolve(dir), 'inside the run cwd');
+    assert.notEqual(path.resolve(one.file), path.resolve(dir, 'no-hooks.json'), 'not the original file');
+    assert.equal(readFileSync(path.join(dir, 'no-hooks.json'), 'utf8'), original, 'the original file is untouched');
+    assert.equal(existsSync(one.file), false, 'the merged file is removed after the run');
+    assert.equal(one.args[one.args.indexOf('--setting-sources') + 1], 'project');
+    assert.equal(one.args[one.args.indexOf('--output-format') + 1], smoke ? 'stream-json' : 'json');
+  }
+});
+
+test('settings rule: with the real settings file of headless.mjs (an absolute path) the merged file is in the scratch cwd and goes with it', async () => {
+  // Breaks when: an absolute original path is read against another folder, or the scratch cwd keeps the merged file.
+  const ledger = path.join(tmp(), 'ledger.jsonl');
+  const seen = [];
+  const r = await seed.runSeedClaude({ ...SETTINGS_ARGS, forbidden: forbidden(), ledgerPath: ledger }, claudeDeps(settingsSpy(fakeSpawn([], { answer: GOOD_ANSWER }), seen), ledger));
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual([seen[0].json.disableAllHooks, seen[0].json.crossSessionInbound, seen[0].json.autoMemoryEnabled], [true, 'refuse', false]);
+  assert.equal(path.dirname(path.resolve(seen[0].file)), path.resolve(seen[0].cwd));
+  assert.equal(existsSync(seen[0].cwd), false, 'the scratch cwd is gone with the file');
+});
+
+test('settings rule: a missing, unparsable or non-object original settings file refuses with reason settings and no spawn, smoke or not', async () => {
+  // Breaks when: a bad original is replaced by an empty object (the run would start with the user settings), a spawn happens, or the reason is not settings.
+  for (const content of [null, 'not json {', '[]', 'null', '"text"']) {
+    for (const smoke of [false, true]) {
+      const dir = tmp();
+      if (content !== null) writeFileSync(path.join(dir, 'no-hooks.json'), content);
+      const ledger = path.join(tmp(), 'ledger.jsonl');
+      const calls = [];
+      const args = { ...SETTINGS_ARGS, forbidden: forbidden(), ledgerPath: ledger, smoke, smokeOut: smoke ? path.join(tmp(), 'init.jsonl') : undefined };
+      const r = await seed.runSeedClaude(args, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER, extraLines: [initOf()] }), ledger, { skipConfigFiles: true, cwd: dir }));
+      assert.deepEqual([r.ok, r.reason, calls.length], [false, 'settings', 0], `${JSON.stringify(content)} smoke ${smoke}`);
+      assert.equal(readdirSync(dir).includes('seed-run-settings.json'), false, 'no merged file is left');
+    }
+  }
+});
+
+test('settings rule: a settings fault stops the batch before the next run', async () => {
+  // Breaks when: settings is not a stop reason (each further run would spend a lane claim and a ledger row on the same fault).
+  const dir = tmp();
+  const ledger = path.join(tmp(), 'ledger.jsonl');
+  const calls = [];
+  const items = ['a', 'b', 'c'].map((n) => ({ file: 'src/calc.mjs', fileText: CALC, brief: n }));
+  const batch = await seed.runSeedBatch(items, { forbidden: forbidden(), ledgerPath: ledger }, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER }), ledger, { skipConfigFiles: true, cwd: dir }));
+  assert.equal(batch.stopped, 'settings');
+  assert.deepEqual([batch.results.length, calls.length], [0, 0]);
+});
+
+test('settings rule: withRunSettings appends --settings when the argv has none, does not read --setting-sources as it, and refuses two or a dangling one', () => {
+  // Breaks when: an argv with no --settings gets no merged file, --setting-sources is taken for --settings, or an ambiguous argv is accepted.
+  const dir = tmp();
+  const out = seed.withRunSettings(['-p', '--setting-sources', 'project'], dir);
+  assert.deepEqual(out.slice(0, 3), ['-p', '--setting-sources', 'project']);
+  assert.equal(out[3], '--settings');
+  assert.deepEqual(JSON.parse(readFileSync(out[4], 'utf8')), { crossSessionInbound: 'refuse', autoMemoryEnabled: false });
+  assert.equal(path.dirname(path.resolve(out[4])), path.resolve(dir));
+  writeFileSync(path.join(dir, 'a.json'), '{}');
+  assert.throws(() => seed.withRunSettings(['--settings', 'a.json', '--settings', 'a.json'], dir));
+  assert.throws(() => seed.withRunSettings(['-p', '--settings'], dir));
 });
