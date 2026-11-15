@@ -37,7 +37,7 @@
     "lib/run-command.ts": "e224fc5c77934ea845fbce88c7c42379901f155670ddf33a8c0038b81ce746be",
     "lib/skill-validation-prompt.ts": "418211d39d35d9955b4e6eaea3bacc1b209f7b28038427623c76ee8d1494f386",
     "lib/spawn-hidden.ts": "d948c649f15a486a6da5e5807ed5e9cee18aac9bf4c04098080a371d19aa5610",
-    "lib/trace-boot.ts": "33fe40763dcd3f25de5f627f5aaffd9eaa69a1a6a482cf3bcc0a7792d78152e1",
+    "lib/trace-boot.ts": "a21efbfbbda6e5dac3cf6440dc943753d73f35ffb87e76a6ae352a59226307c2",
     "lib/transcript-parser.ts": "561e3b405f7b9e245a68c7d7a0a33dc397a6b58d1297c00b34901d3a2c81a785",
     "linear-branch-context.ts": "2606d2b4673e20578e60bda30bd1f973fa0f53f0572ca9c1bca71fa103eb9346",
     "mcp-activity-tracker.ts": "0ca80468de7242925b84036eee99e62fc531a78f860d7050fee1ba896eb246ed",
