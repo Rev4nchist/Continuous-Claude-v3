@@ -118,6 +118,7 @@ import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs
 import { parseReviewMd } from '../ratchets/review-skip-sync.mjs';
 import { ANSWER_KEY_GLOBS, answerKeyHitsOf, slashLower } from './lib/answer-key.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
+import { acquire as acquireRunLock, release as releaseRunLock } from '../coordination/run-lock.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -129,7 +130,7 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock'];
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
@@ -1748,6 +1749,28 @@ function repoRoot() {
   return r.status === 0 && r.stdout.trim() ? path.resolve(r.stdout.trim()) : SCRIPT_ROOT;
 }
 
+/**
+ * First step of a run (card coord-run-lock-and-go-row): ask the run lock for a slot. Warn mode only logs a refusal and the
+ * run goes on. Grant mode stops here, before any gate, with the reason and the time to try again (exit 3). The lock is freed
+ * at exit. A lock that cannot run (a broken store) never stops pre-pr: it is cooperative. GRANTED is not safe from a change of
+ * main: the CodeRabbit step still fails when main changes during a CLI run.
+ */
+async function takeRunLock(bodyPath) {
+  let r;
+  try {
+    r = await acquireRunLock({ kind: 'pre-pr', pid: process.pid, holder: `pre-pr ${path.basename(bodyPath)}` });
+  } catch (err) {
+    console.error(`pre-pr: the run lock is not available (${String(err?.message ?? err).split('\n')[0]}); the run goes on`);
+    return;
+  }
+  for (const line of r.lines) console.error(`run-lock: ${line}`);
+  if (!r.granted) {
+    console.error('pre-pr: stopped before any gate (the run lock said wait); run it again after the time above');
+    process.exit(3);
+  }
+  process.on('exit', () => { releaseRunLock({ pid: process.pid, kind: 'pre-pr' }).catch(() => {}); });
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); process.exit(0); }
@@ -1760,6 +1783,7 @@ async function main() {
   }
   const timeoutProblem = crTimeoutProblem(args);
   if (timeoutProblem) console.error(`pre-pr: ${timeoutProblem}`);
+  await takeRunLock(bodyPath);
   const run = await runPrePr({
     root: repoRoot(), base: option(args, '--base') ?? 'main', bodyText, bodyPath: path.resolve(bodyPath), skipCr: args.includes('--skip-cr'),
     keepGoing: args.includes('--keep-going'), crTimeout: crTimeoutMs(args), log: (line) => console.error(line),

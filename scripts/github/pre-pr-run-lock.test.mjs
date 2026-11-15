@@ -39,7 +39,7 @@ test('grant mode: a refused start stops before any gate, says why, and leaves no
   const r = run(sb, ['--body', sb.body]);
   const out = `${r.stdout}\n${r.stderr}`;
   assert.equal(r.status, 3, out);
-  assert.match(out, /run-lock: WAIT last grant/);
+  assert.match(out, /run-lock: WAIT .*last grant at/); // other reasons (load, slots) may come first on a busy machine
   assert.match(out, /try again after \d\d:\d\d CST/);
   assert.match(out, /stopped before any gate/);
   assert.doesNotMatch(out, /git:branch|git:clean|RESULT/, 'no check ran');
@@ -51,9 +51,11 @@ test('warn mode: the same refusal is only logged, the run goes on, and its lock 
   writeFileSync(join(sb.store, 'last-grant.json'), JSON.stringify({ at: Date.now(), kind: 'pre-pr', pid: 1 }));
   const r = run(sb, ['--body', sb.body]);
   const out = `${r.stdout}\n${r.stderr}`;
-  assert.match(out, /run-lock: WOULD WAIT last grant/);
+  assert.match(out, /run-lock: WOULD WAIT .*last grant at/);
   assert.match(out, /run-lock: GRANTED pre-pr/);
-  assert.match(out, /git:branch|git:clean|RESULT/, 'the checks started');
+  // The run went past the lock. In an empty temp repo it ends in an error or at its first failing check: either proves it started.
+  assert.match(out, /pre-pr: stopped by an error|git:branch|git:clean|RESULT/, 'the run started');
+  assert.doesNotMatch(out, /stopped before any gate/);
   assert.equal(locks(sb.store).length, 0, 'the lock is freed when pre-pr exits');
   assert.match(readdirSync(sb.store).join(' '), /warn-log\.jsonl/);
 });
