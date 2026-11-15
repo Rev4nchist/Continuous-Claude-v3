@@ -19,10 +19,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decisionKey, decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
 import { decide, handle, type Deps } from '../decision-gate.js';
 import { isPrOpenCommand } from '../pr-opened-review-loop.js';
+import { classifyDestructive } from '../shared/destructive-classifier.js';
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);
 const TREE = 't'.repeat(40);
+const INDEX = 'i'.repeat(40);
 let dir = '';
 let saved: string | undefined;
 
@@ -39,6 +41,10 @@ afterEach(() => {
 interface World {
   /** git THROWS for every call whose folder contains this text (a spawn error, a deadline). */
   throwIn?: string;
+  /** C3: the checked-out branch (default feat/x). */
+  branch?: string;
+  /** C3: the holdout scan seams: the id list, and the one line every outgoing diff adds. */
+  scan?: { ids: string[]; added: string };
 }
 
 /** The shipped state: enforce true, enforcePush absent. A fake git for a CCv3 checkout at /repo. */
@@ -53,14 +59,22 @@ function deps(w: World = {}): Deps {
       const a = args.join(' ');
       if (a === 'remote -v') return { status: 0, stdout: `fork\thttps://github.com/${REPO}.git (push)\n` };
       if (a === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
-      if (a === 'branch --show-current') return { status: 0, stdout: 'feat/x\n' };
+      if (a === 'branch --show-current') return { status: 0, stdout: `${w.branch ?? 'feat/x'}\n` };
+      if (w.scan && a.startsWith('diff --name-only')) return { status: 0, stdout: 'src/x.ts\0' };
+      if (w.scan && a.startsWith('diff --unified=0')) return { status: 0, stdout: `+++ b/src/x.ts\n+${w.scan.added}\n` };
+      if (w.scan && a.startsWith('log --format=%B')) return { status: 0, stdout: 'a message\n' };
+      if (w.scan && a.startsWith('ls-files')) return { status: 0, stdout: '' };
       if (a === 'rev-parse --abbrev-ref @{push}') return { status: 128, stdout: '' };
       // A remote name the text does not show as upstream: only git can tell that `up` points at parcadei (R18-5).
       if (a === 'remote get-url up') return { status: 0, stdout: 'https://github.com/parcadei/Continuous-Claude-v3.git\n' };
       if (/^rev-parse (.+)\^\{commit\}$/.test(a)) return { status: 0, stdout: `${HEAD}\n` };
       if (/^rev-parse (.+)\^\{tree\}$/.test(a)) return { status: 0, stdout: `${TREE}\n` };
+      // C4: the index tree (what a chained commit will hold) and the checkout root of a folder (/other is another checkout).
+      if (a === 'write-tree') return { status: 0, stdout: `${INDEX}\n` };
+      if (a === 'rev-parse --path-format=absolute --show-toplevel') return { status: 0, stdout: `${cwd.replace(/\\/g, '/').startsWith('/other') ? '/other' : '/repo'}\n` };
       return { status: 1, stdout: '' };
     },
+    ...(w.scan ? { holdoutIds: () => w.scan!.ids, answerKeyHits: () => [] } : {}),
     // The registry: only the CCv3 root, at /repo. /elsewhere is under no root (an unregistered folder).
     tapScope: {
       registry: () => ({ state: 'ok', file: '/reg.json', entries: [{ key: 'continuous-claude', root: '/repo', status: 'active', tapGate: null, github: null }] }),
@@ -351,6 +365,25 @@ describe('C2 seat findings: a character the merge reader does not model makes th
     landTap(5);
     expect(patternIn(pwsh(`${MERGE} 5 --squash --body "x“" --match-head-commit ${HEAD} "y”"`))).toBe('merge-no-head');
   });
+  it('C2-17 (seat delta q3): a gh call run by another program (bash -c, pwsh -c, cmd /c, a here-string) makes the head unread', () => {
+    // Breaks when: the reader starts at the gh word whatever comes before it. Another program parses the words again (cmd also expands
+    // %X% inside double quotes), so the words gh gets cannot be proven from this text.
+    landTap(5);
+    openTap('feat/x');
+    const m = `${MERGE} 5 --squash --match-head-commit ${HEAD}`;
+    const c = 'gh pr create --head feat/x --title t';
+    for (const tool of [bash, pwsh]) {
+      for (const [w, x] of [[`bash -c '${m}'`, `bash -c '${c}'`], [`pwsh -Command '${m}'`, `pwsh -Command '${c}'`], [`cmd /c "${m}"`, `cmd /c "${c}"`],
+        [`cmd /c ${m}`, `cmd /c ${c}`], [`powershell -c ${m}`, `powershell -c ${c}`], [`@'\n${m}\n'@ | Invoke-Expression`, `@'\n${c}\n'@ | iex`]]) {
+        expect(patternIn(tool(w)), `${tool === bash ? 'bash' : 'pwsh'} ${w}`).toBe('merge-no-head');
+        expect(patternIn(tool(x)), `${tool === bash ? 'bash' : 'pwsh'} ${x}`).not.toBe('allow');
+      }
+    }
+  });
+  it('C2-C10 (cost): a literal NAME=value setting before gh (GH_REPO=..., GH_PROMPT_DISABLED=1) still passes', () => {
+    landTap(5);
+    expect(patternIn(bash(`GH_PROMPT_DISABLED=1 ${MERGE} 5 --squash --match-head-commit ${HEAD}`))).toBe('allow');
+  });
   it('C2-15 (pre-read 6): a positional glob, brace, paren or comma word makes the head unread', () => {
     // Breaks when: the allowlist lets * ? [ ] { } ( ) or , through outside quotes.
     landTap(5);
@@ -405,6 +438,26 @@ describe('C1: a create names its head and base in one known way, once', () => {
     }
     openTap('topic');
     expect(verdictOf(`${API_CREATE} --raw-field=head=topic -f base=main -f title=t`).action).toBe('allow');
+  });
+  it('C1-12 (seat 09:09, Lane Board Multi K9): a create with -R before pr (gh -R <repo> pr create --fill) is a create, and two ride on no one tap', () => {
+    // Breaks when: the create reader needs `gh pr` as adjacent words, so a gh global -R before pr is no create (no tap needed), or a
+    // second -R create after a tapped one passes on the same tap.
+    expect(verdictOf(`gh -R ${REPO} pr create --fill`).action).toBe('deny');
+    expect(verdictOf(`gh --repo ${REPO} pr create --fill`).action).toBe('deny');
+    expect(patternOf(`gh -R ${REPO} pr merge 5 --squash --match-head-commit ${HEAD}`)).toBe('merge-no-head');
+    expect(patternIn(pwsh(`gh -R ${REPO} pr new --fill`))).toBe('head-unresolved');
+    const d = verdictOf(`gh -R ${REPO} pr create --fill`);
+    expect(d.action === 'deny' && d.reason).toMatch(/Put the flag after the subcommand: gh pr create -R <repo>/);
+    openTap('feat/x');
+    expect(verdictOf(`gh pr create --fill && gh -R ${REPO} pr create --fill`).action).toBe('deny');
+    expect(verdictOf(`gh -R ${REPO} pr create --head feat/x --base main --title t --body-file b.md`).action).toBe('deny'); // the tap does not clear it
+  });
+  it('C1-C12 (cost): the flag after the subcommand still passes with the tap; a gh flag with no create or merge in the text is no deny', () => {
+    // Breaks when: the rule fires on any gh flag, or on a create whose -R stands after the subcommand.
+    openTap('feat/x');
+    expect(verdictOf(`gh pr create -R ${REPO} --head feat/x --base main --title t --body-file b.md`).action).toBe('allow');
+    expect(verdictOf('gh --version && gh pr list')).toEqual({ action: 'allow' });
+    expect(verdictOf(`gh -R ${REPO} pr view 5`)).toEqual({ action: 'allow' });
   });
   it('C1-4 (F-4): -F on gh pr create is the body file, never a head field', () => {
     // Breaks when: -F head=<x> is read as a head on gh pr create (a tap for `approved` then opens feat/x).
@@ -495,5 +548,177 @@ describe('C1: a create names its head and base in one known way, once', () => {
       `gh api repos/${REPO}/pulls --method POST --raw-field=head=feat/x --field base=main -f title=t -F draft=true`,
       `gh api repos/{owner}/{repo}/pulls -X POST -f head=feat/x -f base=main -f title="a b" -f body='c $d'`,
     ]) expect(verdictOf(c).action, c).toBe('allow');
+  });
+});
+
+/**
+ * C4: no unmodelled state change before a push. A push is judged only when every step before the LAST step that names a push is a cd,
+ * a read-only git call or a push, or when the command is the modelled `git commit ... && git push` (the index rule). Anything else (a
+ * checkout, a reset, a merge, a commit joined by ; or ||, a group, a script) can move HEAD, the branch or the tree before the push, and
+ * the gate reads them before the command runs: a HARD deny, push-state-unknown. A chained commit with a push that has its own -C is
+ * judged on the index only when rev-parse --show-toplevel proves the same checkout (at most 3 extra git calls; a failed call denies).
+ *   - item 16: git checkout re/topic && git push fork HEAD:main     -> C4-1 (red today: main is allowed with no tap)
+ *   - R3-b: git commit -m x && git -C . push fork feat/x            -> C4-2 (red today: the HEAD tree is judged)
+ *   - class: git reset --hard origin/main && git push fork HEAD:feat, a group, a ; commit -> C4-3..C4-6
+ */
+const shipTapOn = (tree: string) => {
+  expect(offerWrite({ step: 'ship', key: decisionKey({ branch: 'feat/x' }), head: HEAD, tree, spec: { header: 'T', question: 'Q?', options: [{ label: 'Commit and push (Recommended)' }, { label: 'Another option' }] } }).ok).toBe(true);
+  expect(decisionRecord({ step: 'ship', key: decisionKey({ branch: 'feat/x' }), head: HEAD, label: 'Commit and push (Recommended)' })).toEqual({ ok: true });
+};
+
+/** The push pattern in the shipped state (enforcePush absent): a soft deny comes back as allow with a warn that opens with its pattern. */
+const pushPat = (command: string): string => {
+  const d = verdictOf(command);
+  if (d.action === 'deny') return d.pattern;
+  return 'warn' in d && typeof d.warn === 'string' ? `warn:${d.warn.split(':')[0]}` : 'allow';
+};
+
+describe('C4: no unmodelled state change before a push', () => {
+  it('C4-1 (item 16): a checkout before a push to main is a hard deny (the gate would judge the head from before the checkout)', () => {
+    // Breaks when: a push of HEAD:main after a branch change is allowed as a main push, or scanned against the old head.
+    const d = verdictOf('git checkout re/topic && git push fork HEAD:main');
+    expect(d.action === 'deny' && d.pattern).toBe('push-state-unknown');
+    expect(d.action === 'deny' && d.reason).toMatch(/Run the branch change and the push as two commands/);
+    // Dave 2026-11-15: the exact two-command form for the top measured case (a commit the index rule cannot model).
+    expect(d.action === 'deny' && d.reason).toMatch(/commit in one command .* and push in the next command \(git push <remote> <branch>\)/);
+    expect(run(bash('git checkout re/topic && git push fork HEAD:main')).permissionDecision).toBe('deny'); // hard: enforcePush absent
+  });
+  it('C4-2 (R3-b): a chained commit and a push with -C . are judged on the index when the same checkout is proven', () => {
+    // Breaks when: a push with its own -C after a commit reads the HEAD tree (an old tap then passes the new contents).
+    shipTapOn(TREE);
+    expect(pushPat('git commit -m x && git -C . push fork feat/x')).toBe('warn:ship');
+    shipTapOn(INDEX);
+    expect(pushPat('git commit -m x && git -C . push fork feat/x')).toBe('allow');
+  });
+  it('C4-3 (class): a chained commit and a push in ANOTHER checkout is push-tree-unresolved', () => {
+    shipTapOn(INDEX);
+    shipTapOn(TREE);
+    expect(pushPat('git commit -m x && git -C /other/wt push fork feat/x')).toBe('warn:push-tree-unresolved');
+  });
+  it('C4-4 (class, design note): a reset, a merge or a ; commit before the push is push-state-unknown, whatever the tap', () => {
+    // Breaks when: a state change the gate does not model falls back to the HEAD tree rule (a tap on the OLD tree passes the new commit).
+    shipTapOn(TREE);
+    for (const c of ['git reset --hard origin/main && git push fork HEAD:feat/x', 'git merge fork/main && git push fork feat/x',
+      'git commit -F m.txt; git push fork feat/x', 'git stash pop && git push fork feat/x', 'npm run build && git push fork feat/x']) {
+      expect(patternOf(c), c).toBe('push-state-unknown');
+    }
+  });
+  it('C4-5 (class): a push inside a group after a change of branch is push-state-unknown (the last step that names a push decides)', () => {
+    shipTapOn(TREE);
+    expect(patternOf('git push fork feat/x; (git checkout other; git push fork feat/x)')).toBe('push-state-unknown');
+    expect(patternOf('git status > s.txt; git push fork feat/x')).toBe('push-state-unknown');
+  });
+  it('C4-C3 (cost): the words of the push step itself are the push reader\'s business, not C4 (a wrapper, a redirect after it)', () => {
+    // Breaks when: C4 also judges the last push step, so a wrapper or a redirect on the push itself becomes a hard state deny.
+    shipTapOn(TREE);
+    expect(pushPat('nice -n 5 git push fork feat/x')).toBe('allow');
+    expect(pushPat('git push fork feat/x > log.txt')).not.toBe('push-state-unknown');
+  });
+  it('C4-C1 (cost): a pipe or 2>&1 AFTER the push, a read before it, a second push: still judged by the tap', () => {
+    // Breaks when: the rule reads what follows the last push, or refuses cd and read-only git before it.
+    shipTapOn(TREE);
+    for (const c of ['git push fork feat/x 2>&1 | tail -5', 'cd /repo && git status && git push fork feat/x', 'git push fork feat/x && git log -1',
+      'git push fork feat/x; git push fork feat/x', 'pwsh -File scripts/git-safe.ps1 push fork feat/x']) {
+      expect(pushPat(c), c).toBe('allow');
+    }
+  });
+  it('C4-C2 (cost): the modelled commit && push (the index rule) still passes with a tap on the index tree', () => {
+    shipTapOn(INDEX);
+    expect(pushPat('git commit -F m.txt && git push fork feat/x')).toBe('allow');
+    expect(pushPat('pwsh -File scripts/git-safe.ps1 commit -F m.txt && pwsh -File scripts/git-safe.ps1 push fork feat/x')).toBe('allow');
+  });
+  it('C4-6 (measured flow): commit && push with a pipe AFTER the push is the index rule, not the HEAD tree rule', () => {
+    // Breaks when: commitPrecedesPush reads the whole text, so a trailing pipe makes the commit-and-push flow fall to the HEAD tree
+    // (an old tap passes the new contents) or to push-state-unknown (80 of 137 measured denies).
+    const c = 'git commit -F m.txt && pwsh -File scripts/git-safe.ps1 push fork feat/x 2>&1 | Select-Object -Last 3';
+    shipTapOn(TREE);
+    expect(pushPat(c)).toBe('warn:ship');
+    shipTapOn(INDEX);
+    expect(pushPat(c)).toBe('allow');
+  });
+});
+
+/**
+ * C3: a push is read whole, or it is denied hard (seat rulings 2026-11-15 08:55, milestone 538 of re-program.md). The source AND the
+ * destination of a refspec decide the re/ scan; a push that moves the repo (--git-dir, GIT_DIR=) or that only a payload holds is a HARD
+ * deny where a folder is CCv3 or cannot be placed. Only the text of a deny changes for a re/ push with a pipe after it (Q4 option b).
+ *   - item 15: git push fork re/x:feat/y, refs/heads/re/x:feat/y, HEAD:feat/y on re/topic -> C3-1 (red today: no scan, a ship warn)
+ *   - item 10: git --git-dir=.git push, GIT_DIR=.git git push                              -> C3-2 (red today: a warn)
+ *   - Q1: sh -c 'git push fork re/x' in a CCv3 root                                        -> C3-3 (red today: a plain allow)
+ *   - builder A: git-safe push of re/ with 2>&1 | Select-Object                            -> C3-4 (red today: "also commits")
+ *   - item 11: & git-safe.ps1 'push' '--force' (destructive classifier)                    -> C3-5 (red today: no ask)
+ */
+const ID = 'HOLD-ID-1';
+const verdictIn = (input: object, w: World) => decide(input, deps(w));
+const patIn = (input: object, w: World): string => { const d = verdictIn(input, w); return d.action === 'deny' ? d.pattern : 'warn' in d && typeof d.warn === 'string' ? `warn:${d.warn.split(':')[0]}` : 'allow'; };
+
+describe('C3: a push is read whole, or it is denied hard', () => {
+  it('C3-1 (item 15): a re/ SOURCE pushed to another destination is scanned for holdout ids', () => {
+    // Breaks when: isRe reads only the destination branch, so re/x:feat/y (or HEAD:feat/y on a re/ branch) skips the scan.
+    const w: World = { scan: { ids: [ID], added: `see ${ID}` } };
+    expect(patIn(bash('git push fork re/x:feat/y'), w)).toBe('holdout-id');
+    expect(patIn(bash('git push fork refs/heads/re/x:feat/y'), w)).toBe('holdout-id'); // a spelling not in the list
+    expect(patIn(bash('git push fork HEAD:feat/y'), { ...w, branch: 're/topic' })).toBe('holdout-id');
+    expect(run(bash('git push fork re/x:feat/y'), w).permissionDecision).toBe('deny'); // hard: enforcePush absent
+  });
+  it('C3-C1 (cost): the same pushes with no id in their content keep the ship rule; a feat source is not a re/ scan', () => {
+    const w: World = { scan: { ids: [ID], added: 'clean line' } };
+    expect(patIn(bash('git push fork re/x:feat/y'), w)).toBe('warn:ship');
+    expect(patIn(bash('git push fork HEAD:feat/y'), { ...w, branch: 're/topic' })).toBe('warn:ship');
+    expect(patIn(bash('git push fork feat/z:feat/y'), { scan: { ids: [ID], added: `see ${ID}` } })).toBe('warn:ship');
+  });
+  it('C3-2 (item 10): a push that moves the repo (--git-dir, GIT_DIR=) in a CCv3 root is a hard deny, not a warn', () => {
+    // Breaks when: the moved-repo fallback of intentDeny stays soft, so with enforcePush absent the push (re/ unscanned) only warns.
+    for (const c of ['git --git-dir=.git push fork re/x', 'GIT_DIR=.git git push fork re/x', 'git --work-tree=. push fork feat/x']) {
+      const o = run(bash(c));
+      expect(o.permissionDecision, c).toBe('deny');
+      expect(o.permissionDecisionReason, c).toMatch(/push-target-unresolved|checkout this command runs in cannot be known|checkout is unknown/);
+    }
+  });
+  it('C3-C2 (cost, R18-C3 narrowing): the same push in a resolved unregistered folder keeps the warning', () => {
+    // Breaks when: the item 10 hard deny reaches a folder outside every registry root (Dave D1).
+    for (const c of ['git --git-dir=.git push up feat/x', 'GIT_DIR=.git git push up feat/x']) {
+      const o = run({ ...bash(c), cwd: '/elsewhere/app' });
+      expect(o.permissionDecision, c).toBeUndefined();
+    }
+  });
+  it('C3-3 (seat Q1): a push that only a payload holds (sh -c, bash -c, pwsh -c) in a CCv3 root is a hard push-target-unresolved', () => {
+    // Breaks when: the raw rule skips a CCv3 root, so a re/ push in a payload runs with no scan and no tap (today: a plain allow).
+    for (const c of ["sh -c 'git push fork re/x'", 'bash -c "git push fork feat/x"', `sh -c 'git -C "/repo/My App" push fork feat/x'`]) {
+      const d = verdictOf(c);
+      expect(d.action === 'deny' && d.pattern, c).toBe('push-target-unresolved');
+      expect(d.action === 'deny' && d.reason, c).toMatch(/run git push as its own command/i);
+      expect(run(bash(c)).permissionDecision, c).toBe('deny');
+    }
+    expect(patternIn(pwsh("pwsh -c 'git push fork feat/x'"))).toBe('push-target-unresolved');
+  });
+  it('C3-C3 (cost): a command that only names push in a payload as text, and a plain push, keep today\'s result', () => {
+    // Breaks when: the CCv3 raw rule fires on a word, not on a git push call.
+    expect(verdictOf("sh -c 'echo push the button'")).toEqual({ action: 'allow' });
+    expect(verdictOf('git commit -m "push later"')).toEqual({ action: 'allow' });
+    expect(pushPat('git push fork main')).toBe('allow');
+  });
+  it('C3-4 (builder A, seat Q4 option b): a re/ push with 2>&1 | Select-Object is denied with the real cause, not "also commits"', () => {
+    // Breaks when: the scan text for a push that is not alone says the command commits or changes the branch.
+    const c = 'pwsh -File scripts/git-safe.ps1 push fork re/topic 2>&1 | Select-Object -Last 3';
+    const d = decide(pwsh(c), deps({ scan: { ids: [ID], added: 'clean' }, branch: 're/topic' }));
+    expect(d.action === 'deny' && d.pattern).toBe('holdout-scan-unavailable');
+    expect(d.action === 'deny' && d.reason).not.toMatch(/also commits/);
+    expect(d.action === 'deny' && d.reason).toMatch(/run the push with no pipe and no redirect/i);
+    // The chained commit keeps its own text.
+    const e = decide(bash('git commit -F m.txt && git push fork re/topic'), deps({ scan: { ids: [ID], added: 'clean' }, branch: 're/topic' }));
+    expect(e.action === 'deny' && e.reason).toMatch(/also commits/);
+  });
+  it('C3-5 (item 11): a quoted push word after the git wrapper is read as push by the destructive classifier', () => {
+    // Breaks when: the wrapper force-push rule needs an unquoted push, so '& git-safe.ps1 'push' '--force'' gets no ask.
+    for (const c of ["& scripts/git-safe.ps1 'push' '--force' fork x", '& scripts/git-safe.ps1 "push" --force fork x', "pwsh -File scripts/git-safe.ps1 -C . 'push' '+feat/x'"]) {
+      expect(classifyDestructive(c, 0, 'PowerShell'), c).toBe('git push --force');
+    }
+  });
+  it('C3-C5 (cost; item 13 Known limit, seat Q3): a plain wrapper push asks no more than today; a message that names the wrapper still asks', () => {
+    expect(classifyDestructive('pwsh -File scripts/git-safe.ps1 push fork feat/x', 0, 'PowerShell')).toBeNull();
+    expect(classifyDestructive("& scripts/git-safe.ps1 'push' fork feat/x", 0, 'PowerShell')).toBeNull();
+    // Item 13 stays as it is (Known limit): the rule keeps asking on a quoted message that names the wrapper and a force form.
+    expect(classifyDestructive('git commit -m "document git-safe.ps1 push --force"', 0, 'PowerShell')).toBe('git push --force');
   });
 });

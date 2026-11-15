@@ -444,7 +444,6 @@ describe('G3 git push to the fork', () => {
       'git stash push',
       'git stash push -m wip',
       'git -C /repo stash push -m wip',
-      'echo git push fork feat/x',
       'rg "git push fork feat/x" docs',
       "rg 'git push' docs",
       'git commit -m "git push fork feat/x"',
@@ -460,6 +459,11 @@ describe('G3 git push to the fork', () => {
       expect(denied(bash(cmd)), cmd).toBe(false);
       expect(denied(pwsh(cmd)), cmd).toBe(false);
       expect(handle(JSON.stringify(bash(cmd)), deps())).toBe('{}');
+    });
+    // Round 3 C3 (seat Q1, 2026-11-15): the raw verb reader counts the git push after echo as a push no shape reads (a covered app folder
+    // already took the tap path). In a CCv3 root that is now a hard push-target-unresolved: an accepted over-deny (0 of 588 pushes in 7 days).
+    it('denies echo git push fork feat/x hard (round 3 C3: a push no shape reads, an accepted over-deny)', () => {
+      expect(handle(JSON.stringify(bash('echo git push fork feat/x')), deps())).toContain('"permissionDecision":"deny"');
     });
     it('passes a push in a checkout that is not CCv3', () => {
       expect(denied(bash(PUSH), { remote: 'https://github.com/someone/else.git' })).toBe(false);
@@ -528,8 +532,11 @@ describe('G3 git push to the fork', () => {
       expect(denied(bash(`${PUSH}; git push -f fork feat/x`))).toBe(true);
       expect(denied(bash(`git push -f fork feat/x; ${PUSH}`))).toBe(true);
     });
-    it('does not deny a dry run of a force push', () => {
-      expect(denied(bash('git push --dry-run --force fork feat/x'))).toBe(false);
+    // Round 3 C3 (seat Q1, 2026-11-15): this row pinned the allow of a force dry run, which no push shape reads (quiet). The raw rule
+    // reads a force word in a push it cannot read: in a CCv3 root that is now a hard push-target-unresolved (accepted over-deny, 0 of 588
+    // measured). A plain dry run still passes (RED-7).
+    it('denies a dry run of a force push hard (round 3 C3: no shape reads it)', () => {
+      expect(handle(JSON.stringify(bash('git push --dry-run --force fork feat/x')), deps())).toContain('"permissionDecision":"deny"');
     });
   });
 
@@ -722,9 +729,10 @@ describe('G3 git push to the fork', () => {
       decide(bash(`${PUSH}; cd /a`), deps({ calls }));
       expect([...new Set(calls.map((c) => c.cwd))]).toEqual(['/repo']);
     });
-    it('allows the push when the tap covers every folder on the path', () => {
+    it('a push after `true || cd` is denied even when the tap covers every folder on the path (round 3 C4)', () => {
       shipTap();
-      expect(denied(bash(`cd /repo && true || cd ${OTHER_DIR}; ${PUSH}`), W)).toBe(false);
+      // Round 3 C4 (Dave 2026-11-15): a step before the push that the gate does not model is a hard deny, push-state-unknown. `true` is a program it does not model.
+      expect(denied(bash(`cd /repo && true || cd ${OTHER_DIR}; ${PUSH}`), W)).toBe(true);
     });
 
     // HOLE 2: \" escapes in bash, not in PowerShell. Each shell hides a different cd, so the squashed view reads cds under both masks.
@@ -849,12 +857,14 @@ ${PUSHB}`,
       `${COMMIT}; git -C /other push fork feat/x`,
       `${COMMIT}; git push fork other:feat/x`,
       `${COMMIT}; git push fork feat/x; ${COMMIT}`,
-    ])('3/4: %j falls back to the HEAD tree rule (a tap on the index tree is not enough)', (cmd) => {
+    ])('3/4: %j is denied with a tap on the index tree AND with one on the HEAD tree (round 3 C4)', (cmd) => {
+      // Round 3 C4 (Dave 2026-11-15): a step before the push that the gate does not model is a hard deny, push-state-unknown.
+      // Before round 3 the HEAD-tree tap passed here, and the push then sent the new commit under a tap for the old tree.
       tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', INDEX);
       expect(denied(bash(cmd), W), cmd).toBe(true);
       rmSync(storeFile, { force: true });
       tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
-      expect(denied(bash(cmd), { ...W, trees: { HEAD: TREE, 'feat/x': TREE, other: TREE } }), `${cmd} with a HEAD-tree tap`).toBe(false);
+      expect(denied(bash(cmd), { ...W, trees: { HEAD: TREE, 'feat/x': TREE, other: TREE } }), `${cmd} with a HEAD-tree tap`).toBe(true);
     });
 
     it('3b: a fallback never asks git for the index tree', () => {
@@ -918,7 +928,7 @@ ${PUSHB}`,
 ${gs} push fork feat/x`), W)).toBe(true);
     });
 
-    it('10: ; newline and || between commit and push use the HEAD tree rule (a failed commit would push HEAD)', () => {
+    it('10: ; newline and || between commit and push: no index read, and no tap clears it (round 3 C4)', () => {
       for (const cmd of [`${COMMIT}; ${PUSHB}`, `${COMMIT}
 ${PUSHB}`, `${COMMIT} || ${PUSHB}`]) {
         rmSync(storeFile, { force: true });
@@ -927,7 +937,8 @@ ${PUSHB}`, `${COMMIT} || ${PUSHB}`]) {
         expect(callsOf(cmd), cmd).not.toContain('write-tree');
         rmSync(storeFile, { force: true });
         tap('ship', branchKey(), HEAD, 'Commit and push (Recommended)', TREE);
-        expect(denied(bash(cmd), W), `${cmd} with a HEAD-tree tap`).toBe(false);
+        // Round 3 C4 (Dave 2026-11-15): a step before the push that the gate does not model is a hard deny, push-state-unknown.
+        expect(denied(bash(cmd), W), `${cmd} with a HEAD-tree tap`).toBe(true);
       }
     });
 
@@ -1281,8 +1292,9 @@ describe('G16 the push flag and the other flag act alone', () => {
       expect(decide(bash(c), deps({ enforce: true, ...ABSENT })).action, c).toBe('deny'); // the land part denies
       expect(decide(bash(c), deps({ enforce: false, enforcePush: true })).action, c).toBe('deny'); // the push part denies
       const both = decide(bash(c), deps({ enforce: false, enforcePush: false }));
-      expect(both.action, c).toBe('allow');
-      expect(both.action === 'allow' && both.warn, c).toBeTruthy();
+      // Round 3 C4 (Dave 2026-11-15): a step before the push that the gate does not model is a hard deny, push-state-unknown. The land script before the push can move the branch: hard.
+      expect(both.action, c).toBe(c === cmd ? 'deny' : 'allow');
+      if (c === push) expect(both.action === 'allow' && both.warn, c).toBeTruthy();
       expect(decide(bash(c), deps({ enforce: true, enforcePush: true })).action, c).toBe('deny');
     }
   });
@@ -2594,7 +2606,8 @@ describe('T22 reviewer shapes: unexpanded targets that cancel, GIT_DIR, cd alias
       'sudo -u bob git push fork feat/x',
       'true && env GIT_TRACE=0 nice -n 5 timeout 60 git push fork feat/x',
     ])('denies %s with no tap', (cmd) => {
-      expect(patternOf(bash(cmd), {}), cmd).toBe('ship');
+      // Round 3 C4 (Dave 2026-11-15): a step before the push that the gate does not model is a hard deny, push-state-unknown. A pipe into xargs and a `true &&` come before the push.
+      expect(patternOf(bash(cmd), {}), cmd).toBe(/^(?:echo|true)\b/.test(cmd) ? 'push-state-unknown' : 'ship');
     });
     it('an allowed shape stays allowed behind a wrapper (main, and a non-push git command)', () => {
       expect(denied(bash('env git push fork main'))).toBe(false);

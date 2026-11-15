@@ -375,7 +375,9 @@ describe('HS: the holdout scan on a push of a re/ branch', () => {
     it('H20: the controls stay allowed: an ordinary commit and push with no answer-key path, and a push with no chain', () => {
       // Breaks when: every chained push of a non-re branch is denied (the seat: no blanket deny).
       shipTap();
-      expect(verdict(bash(CHAIN), { ...KEY, headFiles: ['src/a.ts'], cachedFiles: ['src/b.ts'], untracked: ['notes.md'] }).action).toBe('allow');
+      // Round 3 C4 (Dave 2026-11-15): commit -a stages files after the gate reads the index, so this chain is now a hard
+      // push-state-unknown in CCv3 (not an answer-key deny: the seat's "no blanket deny" of the scan still holds for the scan).
+      expect(verdict(bash(CHAIN), { ...KEY, headFiles: ['src/a.ts'], cachedFiles: ['src/b.ts'], untracked: ['notes.md'] })).toMatchObject({ action: 'deny', pattern: 'push-state-unknown' });
       expect(verdict(bash('git push fork feat/x'), { ...KEY, headFiles: ['gold/a.json'] }).action).toBe('allow');
     });
 

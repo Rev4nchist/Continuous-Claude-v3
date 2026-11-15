@@ -1561,14 +1561,37 @@ function landShapesOf(seg, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh =
   const pr = lastArg(seg, LAND_PR_RE);
   if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out3.push({ kind: "land", pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
-  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? TAIL_CLI_RE.exec(tail) : null;
+  const opens = (m) => m !== null && GH_PREFIX_OK.test(tail.slice(0, m.index)) ? m : null;
+  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? opens(TAIL_CLI_RE.exec(tail)) : null;
   if (cli) out3.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD });
   const api = MERGE_API_RE.exec(seg);
-  const rawApi = MERGE_API_RE.exec(rawSeg) ? TAIL_API_RE.exec(tail) : null;
+  const rawApi = MERGE_API_RE.exec(rawSeg) ? opens(TAIL_API_RE.exec(tail)) : null;
   if (api && !GET_RE.test(api[0])) out3.push({ kind: "merge", pr: api[1], ...rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD });
   return out3;
 }
 var TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
+function quoteOpenAt(text, pos, pwsh) {
+  const esc = pwsh ? "`" : "\\";
+  let q = "";
+  for (let i = 0; i < pos && i < text.length; i++) {
+    const ch = text[i];
+    if (q === "'") {
+      if (ch === "'") q = "";
+      continue;
+    }
+    if (ch === esc) {
+      i++;
+      continue;
+    }
+    if (q === '"') {
+      if (ch === '"') q = "";
+      continue;
+    }
+    if (ch === "'" || ch === '"') q = ch;
+  }
+  return q !== "";
+}
+var GH_PREFIX_OK = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_\-./:]*\s+)*$/;
 var TAIL_API_RE = /\bgh\s+api\b[\s\S]*$/i;
 function rawTail(text) {
   let q = "";
@@ -2224,21 +2247,47 @@ function rawDirs(raw, tool, cwd, shell, home) {
   for (const call of pushCallsIn(raw, mayRunUnderCmd(tool))) {
     for (const base of dirsAfter(cwd, call.cds, shell, true)) out3.push(base, chainDir(base, callDirsOf(call), shell));
   }
-  const words = raw.replace(/["'`^]/g, "").split(/[\s;&|(){}<>]+/);
-  let chained = cwd;
-  for (let i = 0; i + 1 < words.length; i++) {
-    if (!RAW_CD.test(words[i]) && words[i] !== "-C" && !/^-path$/i.test(words[i])) continue;
-    out3.push(chainStep(cwd, words[i + 1], shell));
-    chained = chainStep(chained, words[i + 1], shell);
-    out3.push(chained);
+  const lists = [raw.replace(/["'`^]/g, "").split(/[\s;&|(){}<>]+/), ...payloadWords(raw, shell) ?? []];
+  for (const words of lists) {
+    let chained = cwd;
+    for (let i = 0; i + 1 < words.length; i++) {
+      if (!RAW_CD.test(words[i]) && words[i] !== "-C" && !/^-path$/i.test(words[i])) continue;
+      out3.push(chainStep(cwd, words[i + 1], shell));
+      chained = chainStep(chained, words[i + 1], shell);
+      out3.push(chained);
+    }
   }
   return [.../* @__PURE__ */ new Set([...knownDirs(out3, home), ...moveTargets(raw, cwd, shell, home)])];
 }
+function payloadWords(raw, shell) {
+  const top = pairedWords(raw, shell === "pwsh");
+  if (top === null) return null;
+  const lists = [top];
+  for (const w of top.filter((t) => /\s/.test(t))) {
+    const inner = [pairedWords(w, false), pairedWords(w, true)];
+    if (inner.some((l) => l === null)) return null;
+    lists.push(...inner);
+  }
+  return lists;
+}
+var RAW_PUSH_WHY = "this push sits inside the text of another program (sh -c, bash -c, pwsh -c) or in a quote this gate cannot pair, so its folder, remote and branch cannot be read. Run git push as its own command: git push <remote> <branch>.";
 function rawPushDenies(raw, tool, deps, cwd, shell, subagent) {
   const v = rawVerdict(raw, tool);
   if (v === null || v.kind === "ok" || v.kind === "tap" && !v.unread) return [];
-  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
-  if (dir === null) return [];
+  const dirs = rawDirs(raw, tool, cwd, shell, deps.home);
+  const dir = firstCovered(deps, dirs);
+  if (dir === null) {
+    if (!v.unread) return [];
+    const ccv3 = (d) => {
+      try {
+        return isCcv3Checkout(deps, d);
+      } catch {
+        return false;
+      }
+    };
+    const hit = payloadWords(raw, shell) === null || dirs.some((d) => !isUnexpanded(d) && ccv3(d));
+    return hit ? [hardOf(deny("push-target-unresolved", RAW_PUSH_WHY, "push"))] : [];
+  }
   if (v.kind === "unsafe") return [deny("push-unsafe", appRawUnsafeWhy(dir), "app-push")];
   const unread = deny("push-target-unresolved", appUnreadWhy(dir), "app-push");
   return [subagent ? unread : { ...unread, tapPath: true }];
@@ -2247,6 +2296,27 @@ function hiddenGhDenies(raw, tool, deps, cwd, shell) {
   if (!hiddenPieces(raw, tool).some(hiddenGh)) return [];
   const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
   return dir === null ? [] : [{ ...deny("position-unknown", unpairedWhy(dir)), homeFlags: true }];
+}
+var GH_FLAG_FIRST = /(?:^|[\s;&|(){}])gh(?:\.exe)?\s+-/i;
+var GH_MERGE_TEXT = /\bpr\s+merge\b|\bapi\b[^\n]*\/merge\b/i;
+var GH_CREATE_TEXT = /\bpr\s+(?:create|new)\b|\bapi\b[^\n]*\/pulls\b/i;
+var GH_FLAG_FIRST_WHY = "a gh flag stands before the subcommand (gh -R <repo> pr ...), so this gate cannot read the call. Put the flag after the subcommand: gh pr create -R <repo> --head <branch> --base <base> ..., or gh pr merge <n> -R <repo> --match-head-commit <sha> ...";
+function ghFlagFirstDenies(raw, tool, deps, cwd, shell) {
+  const text = squashMarks(raw);
+  if (!GH_FLAG_FIRST.test(text)) return [];
+  const pattern = GH_MERGE_TEXT.test(text) ? "merge-no-head" : GH_CREATE_TEXT.test(text) ? "head-unresolved" : null;
+  if (pattern === null) return [];
+  const dirs = rawDirs(raw, tool, cwd, shell, deps.home).filter((d) => !isUnexpanded(d));
+  const app = firstCovered(deps, dirs);
+  if (app !== null) return [{ ...deny(pattern, `${GH_FLAG_FIRST_WHY}${inAppFolder(app)}`), homeFlags: true }];
+  const ccv3 = dirs.some((d) => {
+    try {
+      return isCcv3Checkout(deps, d);
+    } catch {
+      return false;
+    }
+  });
+  return ccv3 ? [deny(pattern, GH_FLAG_FIRST_WHY)] : [];
 }
 function cmdSegments(view) {
   const out3 = [];
@@ -2296,7 +2366,7 @@ function shapesOf(raw, tool) {
       const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
       const owns = reads.map(({ masked }) => ownCommand(view, masked, from));
       const prior = priorOf(view, reads.map((r) => r.masked), from);
-      const tail = rawTail(view.slice(from));
+      const tail = quoteOpenAt(view, from, pwshTool) ? "" : rawTail(view.slice(from));
       for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
         for (const shape of landShapesOf(s, textOnly, seg, tail, pwshTool)) {
           for (const own of owns) for (const at2 of wheres) add({ ...shape, at: at2, ...own, prior }, landId(shape, at2, own, prior));
@@ -2631,6 +2701,7 @@ function createRead(text, pwsh = false) {
   const isCli = cli !== null && (api === null || cli.index < api.index);
   const m = isCli ? cli : api;
   if (m === null) return BAD("the create can only be read with its quotes deleted");
+  if (!GH_PREFIX_OK.test(text.slice(0, m.index))) return BAD("the gh call is run by another program (a wrapper such as bash -c, pwsh -Command or cmd /c), which reads the words again");
   const rest = text.slice(m.index + m[0].length);
   if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"), pwsh)) return BAD(CREATE_CHAR_WHY);
   return isCli ? cliCreateRead(rest, pwsh) : apiCreateRead(rest, pwsh);
@@ -2694,6 +2765,40 @@ var fdBlank = (raw) => raw.replace(FD_DUP, (m, lead) => lead + " ".repeat(m.leng
 function steadyCommand(raw, shell) {
   const view = fdBlank(raw);
   return pushesAlone(view, shell) || commitPrecedesPush(view, shell);
+}
+function stateModelled(raw, shell) {
+  const r = pushPrefix(raw, shell);
+  return r !== null && (r.plain || commitPrecedesPush(r.prefix, shell));
+}
+function pushPrefix(raw, shell) {
+  const view = fdBlank(joinContinuations(raw, shell));
+  const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
+  const steps = [];
+  let from = 0;
+  let pending = "";
+  for (const [start, next] of [...[...masked.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]), [view.length, view.length]]) {
+    const ms = masked.slice(from, start);
+    if (ms.trim() !== "") {
+      steps.push({ kind: /^\s*(?:popd|Pop-Location)\s*$/i.test(ms) ? "popd" : segmentKind(ms, view.slice(from, start)), named: /\bpush\b/i.test(squashQuotes(view.slice(from, start))), op: pending, end: start });
+      pending = "";
+    } else pending += ms;
+    pending += masked.slice(start, next);
+    from = next;
+  }
+  const last = steps.map((s) => s.named).lastIndexOf(true);
+  if (last < 0) return null;
+  const plain = steps.slice(0, last).every((s) => s.kind === "cd" || s.kind === "read" || s.kind === "push" || s.kind === "popd") && steps.slice(1, last + 1).every((s) => !s.op.includes("|") && !/(?<!&)&(?!&)/.test(s.op));
+  return { prefix: view.slice(0, steps[last].end), plain };
+}
+var PUSH_STATE_WHY = "a step before this push can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.";
+var PUSH_CHECKOUT_WHY = "the commit before this push runs in one checkout and the push in another (or the checkout of the push folder cannot be read), so the tree it sends cannot be judged. Commit and push in two commands, or push from the same folder: git commit ...; git push <remote> <branch>.";
+function sameCheckout(deps, commitDirs, dir) {
+  const top = (d) => {
+    const r = deps.git(d, ["rev-parse", "--path-format=absolute", "--show-toplevel"]);
+    return r.status === 0 && r.stdout.trim() !== "" ? r.stdout.trim() : null;
+  };
+  const push = top(dir);
+  return push !== null && commitDirs.length > 0 && commitDirs.every((c) => top(c) === push);
 }
 var ADD_GIT = gitCallRe("add");
 var ADD_SAFE = safeCallRe("add", PUSH_WRAPPERS, "", "gi");
@@ -2862,12 +2967,14 @@ function appPositionAt(deps, dirs, scope, offer) {
   return notice === null ? [] : [{ action: "allow", notice }];
 }
 var pushOffer = (p) => ({ sub: "push", remote: p.remote });
+var hardUnlessUnregistered = (d, unregistered) => unregistered ? d : hardOf(d);
 function judgePushAt(s, deps, cwd, shell, ctx) {
   const { subagent, chained, alone } = ctx;
   const p = s.push;
   const dirs = pushDirsOf(p, cwd, shell);
   const chainOnly = chainDirsOf(p, cwd, shell).filter((d) => !dirs.includes(d) && firstCovered(deps, [d]) !== null);
-  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow));
+  const c4 = { ...ctx, commitDirs: dirsAfter(cwd, p.cds, shell, p.loose, null) };
+  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow, c4));
   const lost = dirs.find(isUnexpanded);
   if (lost !== void 0) return [unexpandedDeny(deps, [cwd, ...dirs], lost, "push", "app-push", softPush(p, subagent))];
   const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
@@ -2878,7 +2985,7 @@ function judgePushAt(s, deps, cwd, shell, ctx) {
     const app = appPositionAt(deps, all, "app-push", pushOffer(p));
     if (app.some((d) => d.action === "deny")) return app;
   }
-  return [...fromChain, ...dirs.map((d) => judgePush(s, deps, d, ctx))];
+  return [...fromChain, ...dirs.map((d) => judgePush(s, deps, d, c4))];
 }
 function remoteKind(remote) {
   const r = remote.toLowerCase();
@@ -2898,10 +3005,10 @@ function intentDeny(p, subagent, fallback) {
 }
 var SCAN_MAX_FILES = 2e3;
 var SCAN_MAX_BYTES = 15e5;
-function scanHoldout(p, deps, dir, branch, chained) {
+function scanHoldout(p, deps, dir, branch, chained, alone) {
   if (!deps.holdoutIds || !deps.answerKeyHits) return null;
   try {
-    return scanHoldoutRead(p, deps, dir, branch, chained);
+    return scanHoldoutRead(p, deps, dir, branch, chained, alone);
   } catch {
     return hardOf(deny("holdout-scan-unavailable", `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, "push"));
   }
@@ -2922,10 +3029,21 @@ function chainedAnswerKeyPaths(deps, dir) {
   }
   return deps.answerKeyHits([...all]).length > 0 ? "hit" : "none";
 }
-function scanHoldoutRead(p, deps, dir, branch, chained) {
-  const isRe = branch.startsWith("re/");
+var headName = (ref) => ref.replace(/^refs\/heads\//, "");
+function sendsRe(p, deps, dir, branch) {
+  if (headName(branch).startsWith("re/")) return true;
+  if (p.src === null && p.branch === null) return false;
+  const src = headName(p.src ?? "HEAD");
+  if (src.startsWith("re/")) return true;
+  return (src === "HEAD" || src === "@") && currentBranch(deps, dir).startsWith("re/");
+}
+var RE_NOT_ALONE_WHY = "the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.";
+function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
+  const isRe = sendsRe(p, deps, dir, branch);
+  const chained = chainedCommit || !alone;
   const stop = (pattern, why) => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, "push"));
-  if (isRe && chained) return stop("holdout-scan-unavailable", "the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.");
+  if (isRe && chainedCommit) return stop("holdout-scan-unavailable", "the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.");
+  if (isRe && chained) return stop("holdout-scan-unavailable", RE_NOT_ALONE_WHY);
   if (!isRe && chained) {
     const hit = chainedAnswerKeyPaths(deps, dir);
     if (hit === "unreadable") return stop("holdout-scan-unavailable", "the same command also changes files, and the paths it can change could not be read. Commit first, push in a separate command.");
@@ -2968,9 +3086,9 @@ function judgePush(shape, deps, dir, ctx) {
     const what = "--git-dir or --work-tree moves the repo, so the checkout is unknown";
     const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell, deps.home)) ?? coveredAmong(deps, [dir]);
     if (app !== null) return deny("push-target-unresolved", appPushUnresolvedWhy(app, what), "app-push");
-    return intentDeny(p, subagent, d("push-target-unresolved", pushUnresolvedWhy(what)));
+    return intentDeny(p, subagent, hardUnlessUnregistered(d("push-target-unresolved", pushUnresolvedWhy(what)), ctx.unregistered));
   }
-  if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow);
+  if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow, ctx);
   if (p.repoOpt) return hardOf(subagent ? d("subagent", SUBAGENT_WHY) : d("push-target-unresolved", PUSH_REPO_OPT_WHY));
   let remote = p.remote;
   if (remote === null) {
@@ -2987,10 +3105,11 @@ function judgePush(shape, deps, dir, ctx) {
   if (subagent) return hardOf(d("subagent", SUBAGENT_WHY));
   if (p.wideOpt || p.unsafeOpt && !p.force) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
   if (outsideHeads(p)) return hardOf(d("push-target-unresolved", PUSH_REFSPEC_WHY));
+  if (!ctx.modelled) return hardOf(d("push-state-unknown", PUSH_STATE_WHY));
   const branch = p.branch ?? currentBranch(deps, dir);
   if (p.force && (branch === "main" || branch === "")) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
   if (branch !== "") {
-    const scanned = scanHoldout(p, deps, dir, branch, chained || !alone);
+    const scanned = scanHoldout(p, deps, dir, branch, chained, alone);
     if (scanned !== null) return scanned;
   }
   if (p.force) return d("push-unsafe", PUSH_UNSAFE_WHY);
@@ -3001,17 +3120,18 @@ function judgePush(shape, deps, dir, ctx) {
     tree: (what) => `cannot read the tree of ${what} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`,
     ship: () => pushWhy(branch)
   };
-  return shipTap({ p, deps, dir, chained, alone, key: decisionKey2({ branch }), scope: "push", texts });
+  return shipTap({ p, deps, dir, chained, alone, key: decisionKey2({ branch }), scope: "push", texts, commitDirs: ctx.commitDirs });
 }
 function currentBranch(deps, dir) {
   const r = deps.git(dir, ["branch", "--show-current"]);
   if (r.status !== 0) throw new Error("git branch --show-current failed");
   return r.stdout.trim();
 }
-function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead }) {
+function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead, commitDirs }) {
   const ref = p.src ?? "HEAD";
   if (ref.startsWith("-")) return deny("push-target-unresolved", texts.notRef(ref), scope);
-  const viaIndex = chained && p.dir === null && (p.src === null || deps.git(dir, ["branch", "--show-current"]).stdout.trim() === p.src);
+  if (chained && p.dir !== null && !sameCheckout(deps, commitDirs ?? [], dir)) return deny("push-tree-unresolved", PUSH_CHECKOUT_WHY, scope);
+  const viaIndex = chained && (p.src === null || deps.git(dir, ["branch", "--show-current"]).stdout.trim() === p.src);
   const r = viaIndex ? deps.git(dir, ["write-tree"]) : deps.git(dir, ["rev-parse", `${ref}^{tree}`]);
   if (r.status !== 0) return deny("push-tree-unresolved", texts.tree(viaIndex ? "the index (git write-tree)" : ref), scope);
   const tree = r.stdout.trim();
@@ -3027,11 +3147,11 @@ function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead
   const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && row.tree !== null && row.tree === tree && (isShipLabel(row.label) || !viaIndex && alone && isPushOnlyLabel(row.label) && pushOnly(row.head)));
   return ok ? ALLOW : deny("ship", texts.ship(), scope);
 }
-function judgeAppPushAt(shape, deps, dir, subagent, chained, alone, flow) {
+function judgeAppPushAt(shape, deps, dir, subagent, chained, alone, flow, ctx) {
   const place = appPlace(deps, dir);
   if (!place.covered) return passOf(place, dir, "app-push");
   try {
-    return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow));
+    return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow, ctx));
   } catch (err) {
     throw new AppScopeError(err);
   }
@@ -3096,7 +3216,7 @@ function configKind(key, raw, remote, p) {
   if (key === "push.followtags") return on && !p.noFollowTags ? "wider" : "none";
   return "none";
 }
-function judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow) {
+function judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow, ctx) {
   const p = shape.push;
   const d = (pattern, why) => deny(pattern, why, "app-push");
   if (subagent) return d("subagent", appSubagentWhy(dir));
@@ -3125,7 +3245,8 @@ function judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow) {
     ship: () => alone || chained || flow ? appPushWhy(deps, dir, k.key, k.branch, offer, risk) : appNotAloneWhy(deps, dir, offer)
   };
   const q = p.src === "@" ? { ...p, src: null } : p;
-  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey2({ repo: k.key, branch: k.branch }), scope: "app-push", texts, pushOnlyHead: true });
+  if (ctx !== void 0 && !ctx.modelled) return { ...d("push-state-unknown", `${PUSH_STATE_WHY} (folder ${at(dir)})`), tapPath: true };
+  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey2({ repo: k.key, branch: k.branch }), scope: "app-push", texts, pushOnlyHead: true, commitDirs: ctx?.commitDirs });
   return r.action === "deny" ? { ...r, tapPath: true } : r;
 }
 var MOVE_ENV_MASKED = /(?:^|\W)GIT_(?:DIR|WORK_TREE|COMMON_DIR)(?!\w)/i;
@@ -3150,15 +3271,18 @@ function judgeCommand(input, deps, notes, denies = []) {
   };
   if (pushes.length > 0 || rest.length > 0) {
     const named = namedRepo(cmd.text, deps.env);
-    const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
+    const prefix = pushes.length > 0 ? pushPrefix(cmd.text, shell) : null;
+    const chained = pushes.length > 0 && (commitPrecedesPush(cmd.text, shell) || prefix !== null && commitPrecedesPush(prefix.prefix, shell));
     const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
+    const modelled = pushes.length === 0 || stateModelled(cmd.text, shell);
     const moved = movesRepo(cmd.text);
+    const unregistered = (moved || pushes.some((s) => s.push.moved)) && pushFoldersUnregistered(input, deps);
     for (const s of [...rest, ...pushes]) {
       if (moved && s.kind !== "land") {
-        denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id)));
+        denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id), unregistered));
         continue;
       }
-      const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell }) : judgeAt(s, deps, cwd, shell, named);
+      const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell, modelled, unregistered }) : judgeAt(s, deps, cwd, shell, named);
       for (const d of found) {
         if (d.action === "deny") add(d);
         else if (d.notice) notes.add(d.notice);
@@ -3167,6 +3291,7 @@ function judgeCommand(input, deps, notes, denies = []) {
   }
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
+  for (const d of ghFlagFirstDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   return denies;
 }
 function subagentDeny(shapes, deps, cwd, shell) {
@@ -3182,12 +3307,12 @@ function storeWriteCall(input, deps) {
     return false;
   }
 }
-function movedDeny(s, deps, cwd, shell, text, subagent = false) {
+function movedDeny(s, deps, cwd, shell, text, subagent = false, unregistered = false) {
   const dirs = s.kind === "push" ? pushDirsOf(s.push, cwd, shell) : dirsAfter(cwd, s.at.cds, shell, s.at.loose);
   const targets = s.kind === "push" ? [...new Set([cwd, ...dirs].flatMap((d) => isUnexpanded(d) ? [] : moveTargets(text, d, shell, deps.home)))] : [];
   const dir = firstCovered(deps, targets) ?? coveredAmong(deps, [cwd, ...dirs].filter((d) => !isUnexpanded(d)));
   if (s.kind === "push") {
-    return dir === null ? intentDeny(s.push, subagent, deny("push-target-unresolved", pushUnresolvedWhy(MOVED_WHY), "push")) : deny("push-target-unresolved", MOVED_WHY + inAppFolder(dir), "app-push");
+    return dir === null ? intentDeny(s.push, subagent, hardUnlessUnregistered(deny("push-target-unresolved", pushUnresolvedWhy(MOVED_WHY), "push"), unregistered)) : deny("push-target-unresolved", MOVED_WHY + inAppFolder(dir), "app-push");
   }
   return dir === null ? deny("repo-moved", MOVED_WHY) : { ...deny("repo-moved", MOVED_WHY + inAppFolder(dir)), homeFlags: true };
 }
