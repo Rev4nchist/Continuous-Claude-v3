@@ -8683,6 +8683,12 @@ var CONNECT_TIMEOUT_MS2 = 1200;
 var QUERY_TIMEOUT_MS2 = 1500;
 var LEASE_MINUTES = 90;
 var STALE_MINUTES = 5;
+var RECLAIMABLE_SQL = `((lease_expires_at IS NULL OR lease_expires_at < now())
+             AND NOT EXISTS (
+               SELECT 1 FROM sessions s
+               WHERE s.id = agentic_os.lane.owner_session_id
+                 AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+             ))`;
 var MAX_EVENTS = 12;
 var MAX_PEERS = 10;
 var DM_THROTTLE_MS = 15e3;
@@ -8870,7 +8876,44 @@ var HOLD_MAX = 8;
 var PEER_LANES_MAX = 3;
 function pageCtx(opts) {
   const clock = opts.uptime ?? (() => process.uptime());
-  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S, age: clock };
+  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S, age: clock, now: opts.now ?? Date.now };
+}
+var CUT_MAX_PRINTS = 3;
+var CUT_TTL_MS = 30 * 60 * 1e3;
+var CUT_MAX_IDS = 8;
+var CUT_PREFIX = "CUT, NOT READ:";
+function cutStateDir() {
+  return process.env.LANE_CUT_STATE_DIR || join16(dirname6(identityDir()), "lane-cut");
+}
+var cutStatePath = (me) => join16(cutStateDir(), `${me.replace(/[^A-Za-z0-9._-]/g, "_")}.json`);
+function readCutEntries(me, now) {
+  try {
+    const raw = JSON.parse(readFileSync12(cutStatePath(me), "utf8"));
+    if (!Array.isArray(raw.entries)) return [];
+    return raw.entries.map((e) => ({ id: Number(e?.id), at: Number(e?.at), prints: Number(e?.prints) })).filter((e) => Number.isSafeInteger(e.id) && e.id > 0 && Number.isFinite(e.at) && Number.isFinite(e.prints) && e.prints < CUT_MAX_PRINTS && now - e.at < CUT_TTL_MS);
+  } catch {
+    return [];
+  }
+}
+function cutPending(me, now) {
+  const entries = readCutEntries(me, now);
+  if (!entries.length) return { line: null, shown: [], entries };
+  const shown = entries.slice(0, CUT_MAX_IDS).map((e) => e.id);
+  const more = entries.length - shown.length;
+  return { line: `${CUT_PREFIX} ${shown.join(" ")}${more > 0 ? ` +${more} more` : ""}`, shown, entries };
+}
+function recordCuts(me, now, pending, printed, cutIds) {
+  try {
+    const known = new Set(pending.entries.map((e) => e.id));
+    const entries = pending.entries.map((e) => printed && pending.shown.includes(e.id) ? { ...e, prints: e.prints + 1 } : e).filter((e) => e.prints < CUT_MAX_PRINTS).concat(cutIds.filter((id) => !known.has(id)).map((id) => ({ id, at: now, prints: 0 })));
+    if (!entries.length && !pending.entries.length) return;
+    mkdirSync10(cutStateDir(), { recursive: true });
+    writeFileSync5(cutStatePath(me), JSON.stringify({ entries }), "utf8");
+  } catch {
+  }
+}
+function cutOnPage(page) {
+  return page.events.filter((e) => page.bodies?.has(e.id) && page.bodies.get(e.id) !== (e.body ?? "")).map((e) => e.id);
 }
 function utf8Bytes(s) {
   return Buffer.byteLength(s, "utf8");
@@ -9199,12 +9242,7 @@ async function relatedLine(client, held, own) {
   if (!shown.length) return `Related: +${ids.length} more`;
   const rows = (await client.query(
     `SELECT id, owner_session_id,
-            ((lease_expires_at IS NULL OR lease_expires_at < now())
-             AND NOT EXISTS (
-               SELECT 1 FROM sessions s
-               WHERE s.id = agentic_os.lane.owner_session_id
-                 AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
-             )) AS reclaimable
+            ${RECLAIMABLE_SQL} AS reclaimable
        FROM agentic_os.lane WHERE id = ANY($1::text[])`,
     [shown]
   )).rows;
@@ -9218,6 +9256,7 @@ async function relatedLine(client, held, own) {
   const more = ids.length > shown.length ? `, +${ids.length - shown.length} more` : "";
   return `Related: ${shown.map((id) => `${id} (${tag(id)})`).join(", ")}${more}`;
 }
+var MASTER_CARD_ID = "re-program";
 async function loadBanner(client, me, board, eventName) {
   const mine = (await client.query(
     `SELECT * FROM agentic_os.lane l WHERE owner_session_id=$1 AND state<>'done' ORDER BY ${laneOrderSql("l")}`,
@@ -9269,11 +9308,23 @@ async function loadBanner(client, me, board, eventName) {
   } catch (err) {
     logLaneContextError(me, eventName, err);
   }
-  return { here, elsewhere, peers, claimable, related, reminderLines };
+  let seat = null;
+  try {
+    const row = (await client.query(
+      `SELECT owner_session_id, ${RECLAIMABLE_SQL} AS reclaimable
+         FROM agentic_os.lane
+        WHERE id = $1 AND COALESCE(project_key, $3::text) = $2::text AND state <> 'done'`,
+      [MASTER_CARD_ID, board, DEFAULT_BOARD]
+    )).rows[0];
+    if (row?.owner_session_id && !row.reclaimable) seat = who(row.owner_session_id);
+  } catch (err) {
+    logLaneContextError(me, eventName, err);
+  }
+  return { here, elsewhere, peers, claimable, related, reminderLines, seat };
 }
-function buildHeader(b, meLabel, board, budgets) {
+function buildHeader(b, meLabel, board, budgets, cutLine = null) {
   const cmd = laneCliCmd();
-  const top = topLines(b, meLabel, board, cmd);
+  const top = topLines(b, meLabel, board, cmd, cutLine);
   const order = [peerSection(b.peers, budgets.scopes, cmd), claimSection(b.claimable, cmd), reminderSection(b.reminderLines, cmd)];
   let lines = [];
   for (let n = 0; n <= order.length; n += 1) {
@@ -9287,8 +9338,10 @@ function buildHeader(b, meLabel, board, budgets) {
   }
   return lines;
 }
-function topLines(b, meLabel, board, cmd) {
+function topLines(b, meLabel, board, cmd, cutLine) {
   const lines = [boardHeading(board), `You are ${meLabel}.`, ""];
+  if (cutLine) lines.unshift(cutLine);
+  if (b.seat) lines.unshift(`SEAT: ${b.seat}`);
   if (b.here.length) {
     const held = idList(b.here, (l) => l.id, (l) => `${bandTag(l.band)} ${l.id}`, HOLD_MAX, (n) => `+${n} more: ${cmd} mine`);
     lines.push(`You hold: ${held}`);
@@ -9348,16 +9401,18 @@ async function boardPage(client, a, ctx) {
   const late = ctx.late();
   const budget = header.length ? ctx.budgets.start : ctx.budgets.prompt;
   const cold = unread.length > 0 && unread[0].board_wm === null;
-  const headBytes = header.length ? utf8Bytes(header.join("\n")) + 2 : 0;
+  const lead = header.length ? header : a.cut.line && unread.length ? [a.cut.line] : [];
+  const headBytes = lead.length ? utf8Bytes(lead.join("\n")) + 2 : 0;
   const page = pageUnread(unread, { cold, bytes: eventBytes(budget - headBytes - pageReserve(unread), board) });
   const withCmd = namesInbox({ rowBefore: !cold, rowWritten: !late && page.boardRow !== null });
-  const lines = [...header];
+  const lines = [...lead];
   if (unread.length) {
     if (lines.length) lines.push("");
     lines.push(...unreadLines(page, board, { withCmd, coldBoard: cold }));
   }
   const text = lines.join("\n");
   if (utf8Bytes(text) > budget) return buildOutput(boardFallback(board, a.meLabel, oldestDmId(unread)), a.eventName);
+  recordCuts(me, ctx.now(), a.cut, a.cut.line !== null && lead.includes(a.cut.line), cutOnPage(page));
   if (unread.length && lines.length) {
     await finishCursors(client, ctx, { me, eventName: a.eventName, rows: cursorWrites(me, board, page), late });
   }
@@ -9400,8 +9455,9 @@ async function runLaneContext(raw, opts = {}) {
     if (!board) return isHeadless() ? {} : await directMessagesOnly(client, me, eventName, ctx);
     const unread = await readUnread(client, UNREAD_BOARD_SQL, [me, board, wmKey(me, board)]);
     const meLabel = who(me, payload.session_title || void 0);
-    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets) : [];
-    return await boardPage(client, { me, meLabel, board, eventName, unread, header }, ctx);
+    const cut = cutPending(me, ctx.now());
+    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets, cut.line) : [];
+    return await boardPage(client, { me, meLabel, board, eventName, unread, header, cut }, ctx);
   } catch (err) {
     logLaneContextError(me, eventName, err);
     return {};
