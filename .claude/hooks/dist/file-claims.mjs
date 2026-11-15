@@ -6402,7 +6402,10 @@ function resolveClaimKey(rawPath, options = {}) {
         );
         let rel = relative(dir, realFile).replace(/\\/g, "/");
         if (!rel || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) return null;
-        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) return null;
+        if (isWorktreeCache(rel, FOLDS_CASE.has(platform))) {
+          const absKey = realFile.replace(/\\/g, "/");
+          return { filePath: FOLDS_CASE.has(platform) ? absKey.toLowerCase() : absKey, project };
+        }
         const harness = isHarnessPath(rel);
         if (isHarnessPath(abs) !== harness || isHarnessPath(realFile) !== harness) return null;
         if (FOLDS_CASE.has(platform)) rel = rel.toLowerCase();
@@ -6916,7 +6919,9 @@ async function claimOne(input, filePath, sessionId) {
     input.tool_name,
     { breakGlass: BREAK_GLASS }
   );
-  const rawName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
+  const keyIsAbsolute = !key || isStoredAbsolute(key.filePath);
+  const shownPath = key ? key.filePath : filePath;
+  const rawName = keyIsAbsolute ? shownPath.split(/[/\\]/).pop() || shownPath : shownPath;
   const fileName = printable(rawName);
   let output;
   switch (decision.outcome) {
@@ -6936,7 +6941,7 @@ touch the file.`;
       }
       const blockMessage = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
-"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, !key) : ""}
+"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, keyIsAbsolute) : ""}
 
 ${leaseLine}
 Reclaiming needs BOTH an expired lease AND a holder that has stopped
