@@ -88,7 +88,8 @@ import { openDepSql } from './shared/lane-dep.js';
 import { bandTag, laneOrderSql } from './shared/lane-sort.js';
 import { resolveDbUrl } from './shared/pg-client.js';
 import { isEngineHost } from './shared/engine-host.js';
-import { label } from './shared/session-identity.js';
+import { atomicWriteSync } from './shared/atomic-write.js';
+import { identityDir, label } from './shared/session-identity.js';
 
 /**
  * The context-injection output shape.
@@ -123,6 +124,16 @@ const CONNECT_TIMEOUT_MS = 1200;
 const QUERY_TIMEOUT_MS = 1500;
 const LEASE_MINUTES = 90;
 const STALE_MINUTES = 5;
+/**
+ * The reclaim test of lane.mjs (rule L2.8) as a SQL boolean on `agentic_os.lane`: the lease ended AND the holder is
+ * quiet. One definition, for the Related line and the SEAT line.
+ */
+export const RECLAIMABLE_SQL = `((lease_expires_at IS NULL OR lease_expires_at < now())
+             AND NOT EXISTS (
+               SELECT 1 FROM sessions s
+               WHERE s.id = agentic_os.lane.owner_session_id
+                 AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+             ))`;
 /** Past this, an injected digest stops being a summary and starts being a wall. */
 const MAX_EVENTS = 12;
 /**
@@ -445,13 +456,81 @@ const TITLE_MAX_BYTES = 100;
 const HOLD_MAX = 8;
 const PEER_LANES_MAX = 3;
 
-/** Test seams. `uptime` is read at call time, so a spy on process.uptime works too. */
-export interface RunOpts { uptime?: () => number; budgets?: Partial<Budgets> }
-interface PageCtx { budgets: Budgets; late: () => boolean; age: () => number }
+/** Test seams. `uptime` is read at call time, so a spy on process.uptime works too. `now` is epoch ms (CUT line ages). */
+export interface RunOpts { uptime?: () => number; budgets?: Partial<Budgets>; now?: () => number }
+interface PageCtx { budgets: Budgets; late: () => boolean; age: () => number; now: () => number }
 
 function pageCtx(opts: RunOpts): PageCtx {
   const clock = opts.uptime ?? (() => process.uptime());
-  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S, age: clock };
+  return { budgets: { ...BUDGETS, ...opts.budgets }, late: () => clock() > UPTIME_LIMIT_S, age: clock, now: opts.now ?? Date.now };
+}
+
+// ---------------------------------------------------------------- CUT, NOT READ line (card coord-seat-label-and-cut-line)
+// A page that cuts an event body keeps the event id in a small state file of this hook (no database). Each later board
+// text starts, after the SEAT line, with one line that names the ids still pending. An id leaves after CUT_MAX_PRINTS
+// prints or CUT_TTL_MS. The line marks nothing as read. Every failure here drops the line, never the banner.
+
+const CUT_MAX_PRINTS = 3;
+const CUT_TTL_MS = 30 * 60 * 1000;
+const CUT_MAX_IDS = 8;
+const CUT_PREFIX = 'CUT, NOT READ:';
+
+interface CutEntry { id: number; at: number; prints: number }
+/** What the next board text prints: the line (or null), the ids on it, and the live entries the write starts from. */
+interface CutPending { line: string | null; shown: number[]; entries: CutEntry[] }
+
+/** The folder of the state files. It follows the identity folder, so a test that moves that one moves this one. */
+export function cutStateDir(): string {
+  return process.env.LANE_CUT_STATE_DIR || join(dirname(identityDir()), 'lane-cut');
+}
+const cutStatePath = (me: string): string => join(cutStateDir(), `${safeId(me)}.json`);
+
+/**
+ * The live entries: 0 to 2 prints, and kept for less than 30 minutes (an `at` in the future is not read). A missing,
+ * corrupt or unreadable file gives [].
+ */
+function readCutEntries(me: string, now: number): CutEntry[] {
+  try {
+    const raw = JSON.parse(readFileSync(cutStatePath(me), 'utf8')) as { entries?: unknown };
+    if (!Array.isArray(raw.entries)) return [];
+    return raw.entries
+      .map((e: Partial<CutEntry>) => ({ id: Number(e?.id), at: Number(e?.at), prints: Number(e?.prints) }))
+      .filter((e) => Number.isSafeInteger(e.id) && e.id > 0 && Number.isFinite(e.at) && Number.isFinite(e.prints)
+        && e.prints >= 0 && e.prints < CUT_MAX_PRINTS && e.at <= now && now - e.at < CUT_TTL_MS);
+  } catch { return []; }
+}
+
+function cutPending(me: string, now: number): CutPending {
+  const entries = readCutEntries(me, now);
+  if (!entries.length) return { line: null, shown: [], entries };
+  const shown = entries.slice(0, CUT_MAX_IDS).map((e) => e.id);
+  const more = entries.length - shown.length;
+  return { line: `${CUT_PREFIX} ${shown.join(' ')}${more > 0 ? ` +${more} more` : ''}`, shown, entries };
+}
+
+/**
+ * After a text went out: one more print for each id on its line, and the ids this page cut. Never throws.
+ * No write when nothing changed. The write is a temp file and a rename: the read above and this write have database
+ * queries between them, so two runs of one session must never leave half a file.
+ */
+function recordCuts(me: string, now: number, pending: CutPending, printed: boolean, cutIds: number[]): void {
+  try {
+    const known = new Set(pending.entries.map((e) => e.id));
+    const counted = printed ? pending.shown : [];
+    const added = cutIds.filter((id) => !known.has(id));
+    if (!counted.length && !added.length) return;
+    const entries = pending.entries
+      .map((e) => (counted.includes(e.id) ? { ...e, prints: e.prints + 1 } : e))
+      .filter((e) => e.prints < CUT_MAX_PRINTS)
+      .concat(added.map((id) => ({ id, at: now, prints: 0 })));
+    mkdirSync(cutStateDir(), { recursive: true });
+    atomicWriteSync(cutStatePath(me), JSON.stringify({ entries }));
+  } catch { /* a state we could not write is a line we do not print; the banner stays */ }
+}
+
+/** The ids of events on this page whose printed body is cut. */
+function cutOnPage(page: UnreadPage<EventRow>): number[] {
+  return page.events.filter((e) => page.bodies?.has(e.id) && page.bodies.get(e.id) !== (e.body ?? '')).map((e) => e.id);
 }
 
 export function utf8Bytes(s: string): number {
@@ -990,12 +1069,7 @@ async function relatedLine(client: Client, held: LaneRow[], own: LaneRow[]): Pro
   // gets no DM (M4.12), so the line must not name its old holder as a peer to message.
   const rows = (await client.query<{ id: string; owner_session_id: string | null; reclaimable: boolean | null }>(
     `SELECT id, owner_session_id,
-            ((lease_expires_at IS NULL OR lease_expires_at < now())
-             AND NOT EXISTS (
-               SELECT 1 FROM sessions s
-               WHERE s.id = agentic_os.lane.owner_session_id
-                 AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
-             )) AS reclaimable
+            ${RECLAIMABLE_SQL} AS reclaimable
        FROM agentic_os.lane WHERE id = ANY($1::text[])`,
     [shown],
   )).rows;
@@ -1022,7 +1096,13 @@ interface Banner {
   claimable: LaneRow[];
   related: string | null;
   reminderLines: string[];
+  /** The label of the session that holds the master card, or null (M4.17). */
+  seat: string | null;
 }
+
+/** The master card: the lane that stands for a program (CONTEXT.md). Its holder is the coordinator seat. */
+const MASTER_CARD_ID = 're-program';
+const CONTROL_CHARS = new RegExp('[\\u0000-\\u001f\\u007f]', 'g');
 
 /** A part of the banner and the one line it becomes when the header is over its budget (C4). */
 interface Section { full: string[]; short: string[] }
@@ -1095,7 +1175,21 @@ async function loadBanner(client: Client, me: string, board: string, eventName: 
   try {
     reminderLines = formatReminderLines((await client.query<ReminderRow>(REMINDERS_SQL, [board])).rows, new Date());
   } catch (err) { logLaneContextError(me, eventName, err); }
-  return { here, elsewhere, peers, claimable, related, reminderLines };
+  // Own try/catch: a failing lookup drops the SEAT line, never the banner. No holder, no line (M4.17).
+  let seat: string | null = null;
+  try {
+    // This board's master card only (a NULL project_key is the default board). A holder who is reclaimable gets no DM
+    // (M4.12), so he is not the seat either.
+    const row = (await client.query<{ owner_session_id: string | null; reclaimable: boolean | null }>(
+      `SELECT owner_session_id, ${RECLAIMABLE_SQL} AS reclaimable
+         FROM agentic_os.lane
+        WHERE id = $1 AND COALESCE(project_key, $3::text) = $2::text AND state <> 'done'`,
+      [MASTER_CARD_ID, board, DEFAULT_BOARD],
+    )).rows[0];
+    // A name is read from a file. Control characters (0x00-0x1f, 0x7f) could break the line or paint the terminal.
+    if (row?.owner_session_id && !row.reclaimable) seat = who(row.owner_session_id).replace(CONTROL_CHARS, '');
+  } catch (err) { logLaneContextError(me, eventName, err); }
+  return { here, elsewhere, peers, claimable, related, reminderLines, seat };
 }
 
 /**
@@ -1103,9 +1197,9 @@ async function loadBanner(client: Client, me: string, board: string, eventName: 
  * share `budgets.scopes`. When the header is still over its budget, whole sections become one line each, in this
  * order: peer scopes, Claimable, Reminders.
  */
-function buildHeader(b: Banner, meLabel: string, board: string, budgets: Budgets): string[] {
+function buildHeader(b: Banner, meLabel: string, board: string, budgets: Budgets, cutLine: string | null = null): string[] {
   const cmd = laneCliCmd();
-  const top = topLines(b, meLabel, board, cmd);
+  const top = topLines(b, meLabel, board, cmd, cutLine);
   const order = [peerSection(b.peers, budgets.scopes, cmd), claimSection(b.claimable, cmd), reminderSection(b.reminderLines, cmd)];
   let lines: string[] = [];
   for (let n = 0; n <= order.length; n += 1) {
@@ -1120,9 +1214,12 @@ function buildHeader(b: Banner, meLabel: string, board: string, budgets: Budgets
   return lines;
 }
 
-/** The lines that are never cut: heading, "You are", "You hold" or the three no-lane lines, Milestone, Related. */
-function topLines(b: Banner, meLabel: string, board: string, cmd: string): string[] {
+/** The lines that are never cut: SEAT, CUT NOT READ, heading, "You are", "You hold" or the three no-lane lines, Milestone, Related. */
+function topLines(b: Banner, meLabel: string, board: string, cmd: string, cutLine: string | null): string[] {
   const lines = [boardHeading(board), `You are ${meLabel}.`, ''];
+  if (cutLine) lines.unshift(cutLine);
+  // The label is at most 16 name characters plus " #sid8", so the line stays near 64 bytes (M4.17: about 60).
+  if (b.seat) lines.unshift(`SEAT: ${b.seat}`);
   if (b.here.length) {
     const held = idList(b.here, (l) => l.id, (l) => `${bandTag(l.band)} ${l.id}`, HOLD_MAX, (n) => `+${n} more: ${cmd} mine`);
     lines.push(`You hold: ${held}`);
@@ -1189,6 +1286,8 @@ interface BoardPageArgs {
   unread: EventRow[];
   /** The SessionStart header, or [] on the prompt path. */
   header: string[];
+  /** The CUT, NOT READ ids this text may print (the header already holds the line on SessionStart). */
+  cut: CutPending;
 }
 
 /**
@@ -1201,16 +1300,21 @@ async function boardPage(client: Client, a: BoardPageArgs, ctx: PageCtx): Promis
   const late = ctx.late();
   const budget = header.length ? ctx.budgets.start : ctx.budgets.prompt;
   const cold = unread.length > 0 && unread[0].board_wm === null;
-  const headBytes = header.length ? utf8Bytes(header.join('\n')) + 2 : 0;
+  // The prompt path has no header: it leads with the CUT line when the page has text, so a prompt with no news stays silent.
+  const lead = header.length ? header : (a.cut.line && unread.length ? [a.cut.line] : []);
+  const headBytes = lead.length ? utf8Bytes(lead.join('\n')) + 2 : 0;
   const page = pageUnread(unread, { cold, bytes: eventBytes(budget - headBytes - pageReserve(unread), board) });
   const withCmd = namesInbox({ rowBefore: !cold, rowWritten: !late && page.boardRow !== null });
-  const lines = [...header];
+  const lines = [...lead];
   if (unread.length) {
     if (lines.length) lines.push('');
     lines.push(...unreadLines(page, board, { withCmd, coldBoard: cold }));
   }
   const text = lines.join('\n');
   if (utf8Bytes(text) > budget) return buildOutput(boardFallback(board, a.meLabel, oldestDmId(unread)), a.eventName);
+  // The text goes out: count a print for each id on its line, and keep the ids this page cut. Not on a fallback, and not
+  // when the page is late: the text may never arrive, which is why the cursors are not written then either.
+  if (!late) recordCuts(me, ctx.now(), a.cut, a.cut.line !== null && lead.includes(a.cut.line), cutOnPage(page));
   // Advance the cursors only for what was actually injected. Nothing was
   // shown on a turn that produced no output, so nothing may be marked read.
   // Events cut from the page stay above the cursors (see pageUnread).
@@ -1287,8 +1391,9 @@ export async function runLaneContext(raw: string, opts: RunOpts = {}): Promise<o
     // Broadcasts are this board's; direct messages come from any board. See UNREAD_SQL.
     const unread = await readUnread(client, UNREAD_BOARD_SQL, [me, board, wmKey(me, board)]);
     const meLabel = who(me, payload.session_title || undefined);
-    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets) : [];
-    return await boardPage(client, { me, meLabel, board, eventName, unread, header }, ctx);
+    const cut = cutPending(me, ctx.now());
+    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets, cut.line) : [];
+    return await boardPage(client, { me, meLabel, board, eventName, unread, header, cut }, ctx);
   } catch (err) {
     // Nothing on stdout by contract. No database, no tables, no lanes, slow connect — all
     // the same answer: say nothing and let the turn proceed. One throttled line in the

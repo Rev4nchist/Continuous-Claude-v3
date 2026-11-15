@@ -466,7 +466,7 @@ function bootTrace(env = process.env, _bootCall) {
 if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
 
 // src/rule-router.ts
-import { readFileSync, readdirSync, appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, openSync, closeSync, unlinkSync } from "fs";
+import { readFileSync, readdirSync, appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, openSync, closeSync, unlinkSync, writeFileSync, rmSync } from "fs";
 import { homedir as homedir3, tmpdir } from "os";
 import { join as join3, dirname as dirname2 } from "path";
 
@@ -957,6 +957,57 @@ function blockedDir(input) {
   const key = (input.session_id || "no-session").replace(/[^A-Za-z0-9_-]/g, "_");
   return join3(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-blocked-${key}`);
 }
+var POINTER_FLOOR_BYTES = 2e3;
+function ledgerDir(input) {
+  if (!input.session_id) return null;
+  return join3(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-shown-${input.session_id.replace(/[^A-Za-z0-9_-]/g, "_")}`);
+}
+function ledgerHas(input, id) {
+  const dir = ledgerDir(input);
+  if (!dir) return false;
+  try {
+    const e = JSON.parse(readFileSync(join3(dir, `${id}.json`), "utf8"));
+    return e.v === 1 && e.id === id;
+  } catch {
+    return false;
+  }
+}
+function ledgerWrite(input, id) {
+  const dir = ledgerDir(input);
+  if (!dir) return;
+  try {
+    mkdirSync2(dir, { recursive: true });
+    writeFileSync(join3(dir, `${id}.json`), JSON.stringify({ v: 1, id, at: (/* @__PURE__ */ new Date()).toISOString() }));
+  } catch {
+  }
+}
+function ledgerDrop(input) {
+  const dir = ledgerDir(input);
+  if (!dir) return;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+  }
+}
+function ruleBytes(entry, dir) {
+  return entry.files.reduce((n, f) => n + Buffer.byteLength(readFileSync(join3(dir, f), "utf8").trim()), 0);
+}
+function pointerLine(entry, dir) {
+  const paths = entry.files.map((f) => join3(dir, f).replace(/\\/g, "/")).join(", ");
+  return `[rule-router] ${entry.id}: ${paths} -- Read this file before you act in its area.`;
+}
+function pointerIds(input, toShow, dir) {
+  const ids = /* @__PURE__ */ new Set();
+  if (isSubagent(input)) return ids;
+  for (const r of toShow) {
+    if (r.mode !== "inject" || r.subagent === "block" || !ledgerHas(input, r.id)) continue;
+    try {
+      if (ruleBytes(r, dir) >= POINTER_FLOOR_BYTES) ids.add(r.id);
+    } catch {
+    }
+  }
+  return ids;
+}
 function isSubagent(input) {
   return !!(input.agent_id || process.env.CLAUDE_AGENT_ID);
 }
@@ -980,11 +1031,14 @@ function falseFireFooter(ids) {
 ----- If a rule above is NOT about this call -----
 Record the false fire, then carry on: \`node ${script} add --rule <${ids.join("|")}> --what "<first words of the call>" --note "<why it does not apply>" --source agent\``;
 }
-function decide(matched, seen, dir) {
-  const fresh = matched.filter((r) => !seen.includes(r.id));
-  if (fresh.length === 0) return { kind: "none", ids: [], text: "" };
+function decide(matched, seen, dir, pointers = /* @__PURE__ */ new Set()) {
+  const unseen = matched.filter((r) => !seen.includes(r.id));
+  if (unseen.length === 0) return { kind: "none", ids: [], text: "" };
+  const lines = unseen.filter((r) => pointers.has(r.id)).map((r) => pointerLine(r, dir));
+  const fresh = unseen.filter((r) => !pointers.has(r.id));
+  if (fresh.length === 0) return { kind: "inject", ids: unseen.map((r) => r.id), text: lines.join("\n") };
   const ids = fresh.map((r) => r.id);
-  const body = fresh.map((r) => ruleText(r, dir)).join("\n\n") + falseFireFooter(ids);
+  const body = [...lines, ...fresh.map((r) => ruleText(r, dir))].join("\n\n") + falseFireFooter(ids);
   if (fresh.some((r) => r.mode === "deny-first")) {
     return {
       kind: "deny",
@@ -1050,6 +1104,7 @@ function rearm(input) {
 }
 function onSessionStart(input) {
   if (REARM_SOURCES.has(input.source || "")) {
+    if (input.source === "clear") ledgerDrop(input);
     const removed = rearm(input);
     logFire(input, { kind: "rearm", ids: [], text: "" }, [], { source: input.source, removed });
   }
@@ -1090,8 +1145,10 @@ function run(raw) {
     return { ...r, mode: "inject" };
   });
   let d;
+  let pointed = /* @__PURE__ */ new Set();
   try {
-    d = decide(toShow, [], dir);
+    pointed = pointerIds(input, toShow, dir);
+    d = decide(toShow, [], dir, pointed);
   } catch (err) {
     for (const r of won) {
       try {
@@ -1111,7 +1168,14 @@ function run(raw) {
     outputContinue();
     return;
   }
-  logFire(input, d, won, downgraded.length ? { downgraded } : {});
+  if (!isSubagent(input)) {
+    for (const r of toShow) if (r.mode === "inject" && !pointed.has(r.id)) ledgerWrite(input, r.id);
+  }
+  logFire(input, d, won, {
+    ...downgraded.length ? { downgraded } : {},
+    ...pointed.size ? { pointed: [...pointed] } : {},
+    bytes: d.text.length
+  });
   if (d.kind === "deny") {
     logGuardDecision("rule-router", input, "deny", `rule-block: ${d.ids.join(",")}`);
     outputDeny(d.text, "deny");
@@ -1131,6 +1195,7 @@ if ((process.argv[1] || "").includes("rule-router")) {
   main();
 }
 export {
+  POINTER_FLOOR_BYTES,
   commandSegments,
   decide,
   isLaneSegment,

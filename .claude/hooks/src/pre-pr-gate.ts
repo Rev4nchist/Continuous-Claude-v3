@@ -81,6 +81,7 @@ import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
+import { GH_OPT_PREFIX } from './shared/gh-open-prefix.js';
 import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
@@ -129,7 +130,7 @@ export interface Deps {
   logError?: (message: string, ctx?: ErrorContext) => void;
   /** The decision store (rule B: a CLI skip that Dave decided). Missing in a test that does not use it: then no skip is decided. */
   decisionRead?: (t: { step: Step; key: string; head: string }) => { label: string } | null;
-  decisionUse?: (t: { step: Step; key: string; head: string }) => { ok: boolean };
+  decisionUse?: (t: { step: Step; key: string; head: string; label?: string }) => { ok: boolean };
 }
 
 /** The tap of `ship-ask.mjs cli-skip` that opens a flag skip. The recommended option carries a suffix (ship-ask opt()). Anchored: no other text. */
@@ -141,7 +142,7 @@ export interface ErrorContext { code?: string; cwd?: string }
  * which warn mode turns into an allow.
  */
 export type Decision =
-  | { action: 'allow'; warn?: string; usedCliSkip?: { key: string; head: string } }
+  | { action: 'allow'; warn?: string; usedCliSkip?: { key: string; head: string; label: string } }
   | { action: 'override' }
   | { action: 'deny'; reason: string; pattern: string; soft?: boolean };
 
@@ -429,7 +430,9 @@ const OPEN_HEAD = /^\s*gh\s+(?:pr\s+create|api)(?=\s|$)/i;
 const bodyViewOf = (command: string, tool: string | undefined): string => blankInertQuotesAround(command, tool, OPEN_HEAD);
 
 // A gh api call counts as an open only when its path ends at /pulls (the create). A read such as .../pulls/201/comments is no open.
-const OPEN_SEGMENT = /(?:^|[;&|\r\n(]\s*)gh\s+(?:pr\s+create(?=\s|$)|api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))/gi;
+// A global option before `pr` (`gh -R owner/repo pr create`, `gh --repo owner/repo pr create`) is up to six plain tokens (letters, digits and . / : = @ -) on one line: counted as an open too. Any other character in a token (`;`, `$(`, a quote) ends the match, as on main. The count only grows, so a
+// text with two such opens is denied (fail closed, no option parser): a second create must not ride on the tap or the stamp of the first (PR 576 follow-up, item 1).
+const OPEN_SEGMENT = new RegExp(String.raw`(?:^|[;&|\r\n(\x60]\s*)gh(?:\.exe)?(?:\s+pr\s+create(?=\s|$)|${GH_OPT_PREFIX}[^\S\r\n]+pr\s+create(?=\s|$)|\s+api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))`, 'gi');
 
 /**
  * The text of the one open (gh pr create, gh api) from its head to the next segment break outside quotes. The body flags count only there:
@@ -583,7 +586,7 @@ interface Ctx {
   ccv3: () => boolean;
   enforcing: () => boolean;
   /** Set by the stamp rule when a flag skip passed on Dave's cli-skip tap: handle() uses the tap up when the decision is an allow. */
-  cliSkipUsed?: { key: string; head: string };
+  cliSkipUsed?: { key: string; head: string; label: string };
 }
 
 const once = <T>(f: () => T): (() => T) => {
@@ -723,12 +726,12 @@ function cliSkipKey(deps: Deps, top: string, branch: string | null): string | nu
   return name ? decisionKey({ branch: name }) : null;
 }
 
-/** True when the store holds Dave's cli-skip tap for this key and head, with the skip label. Any read problem is false (fail closed). */
-function cliSkipDecided(deps: Deps, key: string, head: string): boolean {
+/** The label of Dave's cli-skip tap for this key and head when it is the skip label, else null. Any read problem is null (fail closed). The label is passed to the use call. */
+function cliSkipLabelOf(deps: Deps, key: string, head: string): string | null {
   try {
     const d = deps.decisionRead?.({ step: 'cli-skip', key, head }) ?? null;
-    return d !== null && typeof d.label === 'string' && CLI_SKIP_LABEL.test(d.label);
-  } catch { return false; }
+    return d !== null && typeof d.label === 'string' && CLI_SKIP_LABEL.test(d.label) ? d.label : null;
+  } catch { return null; }
 }
 
 /** The stamp rules for one folder. A folder that is not a CCv3 checkout (and no CCv3 signal names the repo) is no concern of the stamp. */
@@ -753,10 +756,11 @@ function stampDenyIn(command: string, deps: Deps, ctx: Ctx, dir: string): Decisi
   const head = headRun.stdout.trim();
   const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, shell === 'bash' ? fromGitBashPath(bodyPath) : bodyPath))) };
   const checks = stampRoots(deps, dir, top, branch).map((r) => {
-    let relied: { key: string; head: string } | null = null;
+    let relied: { key: string; head: string; label: string } | null = null;
     const decided = (): boolean => {
       const key = cliSkipKey(deps, top, branch);
-      if (key !== null && cliSkipDecided(deps, key, head)) { relied = { key, head }; return true; }
+      const label = key === null ? null : cliSkipLabelOf(deps, key, head);
+      if (key !== null && label !== null) { relied = { key, head, label }; return true; }
       return false;
     };
     return { problem: stampProblem(deps.readFile(join(r, STAMP_REL)), head, deps.now(), body, decided), relied };
@@ -851,7 +855,7 @@ export function handle(raw: string, deps: Deps): string {
     if (d.action === 'allow' && d.warn) logGuardDecision(HOOK, input, 'warn', d.warn, { command });
     // Rule B: a skip that Dave decided is used up at the allow. A decision that cannot be used up (a lock, a missing row) is no allow.
     if (d.action === 'allow' && d.usedCliSkip) {
-      const used = deps.decisionUse?.({ step: 'cli-skip', key: d.usedCliSkip.key, head: d.usedCliSkip.head });
+      const used = deps.decisionUse?.({ step: 'cli-skip', key: d.usedCliSkip.key, head: d.usedCliSkip.head, label: d.usedCliSkip.label });
       if (used?.ok !== true) {
         logGuardDecision(HOOK, input, 'deny', 'cli-skip-not-used', { command });
         return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'BLOCKED (pre-pr-gate): Dave\'s cli-skip decision for this branch and head could not be used up (the decision store was busy or the decision is gone). Run the command again. If it keeps failing, ask Dave with node scripts/github/ship-ask.mjs cli-skip --branch <branch>.' } });

@@ -80,7 +80,7 @@
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
@@ -270,7 +270,7 @@ const NO_DATA = { prs: [], findings: [] };
 async function run(argv, deps = {}) {
   const out = [];
   const err = [];
-  const code = await main(argv, { stdout: (s) => out.push(String(s)), stderr: (s) => err.push(String(s)), cfg: CFG, readRecords: () => [], now: () => NOW, env: {}, dataset: NO_DATA, ledgerPath: path.join(tmp('ledger'), 'ledger.jsonl'), countedMin: 0, ...deps });
+  const code = await main(argv, { stdout: (s) => out.push(String(s)), stderr: (s) => err.push(String(s)), cfg: CFG, readRecords: () => [], now: () => NOW, env: {}, dataset: NO_DATA, ledgerPath: path.join(tmp('ledger'), 'ledger.jsonl'), countedMin: 0, sleep: async () => {}, ...deps });
   return { code, out: out.join('\n'), err: err.join('\n') };
 }
 /** Common args and deps for one repo. */
@@ -315,6 +315,15 @@ test('S16-unit: scrubPrs removes every PR reference form and leaves other text (
   assert.equal(/4242/.test(clean), false, clean);
   assert.equal(clean.split('\n')[0], 'fix: x ', 'the (#N) suffix goes with its brackets');
   assert.equal(scrubPrs('const a = 12; // #todo'), 'const a = 12; // #todo');
+});
+
+test('G5: the colon forms (PR: N, PR:#N, pull request: N) and the GH-N form are scrubbed and refused by the guard; plain text with a colon and a number is not (breaks if the colon or GH- form is dropped from PR_PATTERNS)', () => {
+  const leak = { titles: [], shas: [] };
+  for (const form of ['PR: 4242', 'PR:#4242', 'pr : 4242', 'pull request: 4242', 'Pull Request:#4242', 'GH-4242', 'gh-4242', 'see GH-4242.']) {
+    assert.equal(/4242/.test(scrubPrs(form)), false, `scrub: ${form}`);
+    assert.equal(szz.promptGuard(`text ${form} text`, leak), 'pr-number', `guard: ${form}`);
+  }
+  for (const plain of ['retries: 3', 'timeout: 4242 ms', 'sprint: 4242', 'PRIME 4242', 'ugh-4242']) assert.equal(szz.promptGuard(plain, leak), null, `not a PR form: ${plain}`);
 });
 
 test('S20: batchItems puts up to 10 pairs in a call and an oversize hunk alone (breaks if the size cap or the oversize rule changes)', () => {
@@ -606,6 +615,36 @@ test('S07: a gh failure on one pair gives no row for it, counts as failed, and t
   assert.equal(r.json.labelled, 1);
 });
 
+/** A gh that fails the first `n` calls of one route (a TLS time-out), then answers like inner. */
+const flakyGh = (inner, routeRe, n) => {
+  let left = n;
+  const gh = async (args) => { if (routeRe.test(args.at(-1)) && left > 0) { left -= 1; inner.calls.push(args); throw new Error('net/http: TLS handshake timeout'); } return inner(args); };
+  return Object.assign(gh, { calls: inner.calls });
+};
+
+test('G7a: a gh read that times out twice and then answers is retried with a growing wait, and the pair is mined (breaks if a time-out fails the pair at once, or the wait does not grow)', async () => {
+  const b = small();
+  const waits = [];
+  const gh = flakyGh(fakeGh(b), /\/pulls\/11\/comments\?/, 2);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh, sleep: async (ms) => { waits.push(ms); } } });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.failed, {}, JSON.stringify(r.json.failed));
+  assert.equal(r.json.labelled, 1);
+  assert.equal(waits.length, 2);
+  assert.ok(waits[0] > 0 && waits[1] > waits[0], `waits ${waits}`);
+});
+
+test('G7b: a gh read that still fails after the last try is a failed pair, with a bounded number of tries (breaks if the retry loops on, or a failed read means no comment)', async () => {
+  const b = small();
+  const gh = flakyGh(fakeGh(b), /\/pulls\/11\/comments\?/, 99);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh, sleep: async () => {} } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.failed.comments, 1);
+  assert.equal(r.json.labelled, 0);
+  assert.equal(gh.calls.filter((a) => /\/pulls\/11\/comments\?/.test(a.at(-1))).length, szz.GH_TRIES);
+  assert.ok(szz.GH_TRIES >= 2 && szz.GH_TRIES <= 5);
+});
+
 test('S06: a CodeRabbit line comment before the fix drops that row and counts it; a comment after the fix, on another file or far away does not (breaks if the drop is skipped or too wide)', async () => {
   const b = big();
   const head = b.prs[21].shas.at(-1);
@@ -637,11 +676,133 @@ test('S19: round is the 1-based rank of the head in the CodeRabbit rounds; a hea
   const r = await run(s.argv, s.deps);
   assert.equal(r.code, 0, r.err);
   assert.ok(loadGold(s.gold).rows.length === 3 && loadGold(s.gold).rows.every((x) => x.target.round === 2 && x.target.sha40 === head));
-  for (const reviews of [{ 21: [c1] }, { 21: [] }]) {
+  // A head that is not a round maps to the last earlier round (Q2 option b, seat 2026-11-15) only through B1 below; an empty list,
+  // or a list whose rounds are not ancestors of the merged head (here: a commit of the later fix PR), stays unmapped.
+  for (const reviews of [{ 21: [] }, { 21: [b.prs[22].shas[0]] }]) {
     const j = await report(b, { rows: bigRows(b), extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews }) } });
     assert.equal(j.json.unmapped['head-not-reviewed'], 1, JSON.stringify(reviews));
     assert.equal(j.json.labelled, 0);
   }
+});
+
+test('B1: a merged head that is not a round maps to the last round before it when every blamed line is unchanged; the row targets that round, at its line numbers (breaks if option b is dropped, or the line keeps the head numbering)', async () => {
+  const b = big();
+  const [c1] = b.prs[21].shas; // c1 has a.txt without the two header lines: bad-a is line 2 there, line 4 at the head
+  const s = setup(b, { rows: bigRows(b), extra: ['--label', '--allow-label-cache-write', '--write'], deps: { judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews: { 21: [c1] } }), fixChains: FIXES(b), dataset: DATASET } });
+  const r = await run(s.argv, s.deps);
+  assert.equal(r.code, 0, r.err);
+  const rows = loadGold(s.gold).rows;
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every((x) => x.target.round === 1 && x.target.sha40 === c1), JSON.stringify(rows.map((x) => x.target)));
+  assert.deepEqual(rows.map((x) => [x.file, x.line]).sort(), [['s/a.txt', 2], ['s/b.txt', 2], ['s/c.txt', 2]]);
+  assert.ok(rows.every((x) => x.provenance.headMap === 'last-round'), 'the row says it was mapped to an earlier round');
+  const rep = JSON.parse(r.out);
+  assert.equal(rep.earlierRound, 3);
+});
+
+test('B1b: a row whose merged head is a round keeps the exact row of before: no headMap field, the head sha and rank (breaks if option b touches a reviewed head)', async () => {
+  const b = big();
+  const head = b.prs[21].shas.at(-1);
+  const s = setup(b, { rows: bigRows(b), extra: ['--label', '--allow-label-cache-write', '--write'], deps: { judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews: { 21: [b.prs[21].shas[0], head] } }), fixChains: FIXES(b), dataset: DATASET } });
+  const r = await run(s.argv, s.deps);
+  assert.equal(r.code, 0, r.err);
+  const rows = loadGold(s.gold).rows;
+  assert.ok(rows.length === 3 && rows.every((x) => x.target.round === 2 && x.target.sha40 === head && !('headMap' in x.provenance)));
+  assert.equal(JSON.parse(r.out).earlierRound, 0);
+});
+
+/** PR 31: commit 1 adds f.txt and g.txt; commit 2 changes one line of f.txt (other) or the blamed line (blamed). Fix PR 32 fixes "bug". */
+const roundRepo = (second) => buildRepo([
+  { n: 31, at: A_DAY, commits: [
+    { subject: 'feat: add f', files: { 'src/f.txt': lines('alpha', 'bug', 'omega', 'tail') } },
+    { subject: 'feat: tweak f', files: { 'src/f.txt': second === 'blamed' ? lines('alpha', 'bug2', 'omega', 'tail') : lines('alpha', 'bug', 'omega', 'tail2') } },
+  ] },
+  { n: 32, at: B_DAY, commits: [{ subject: 'fix: f (#9001)', files: { 'src/f.txt': second === 'blamed' ? lines('alpha', 'good', 'omega', 'tail') : lines('alpha', 'good', 'omega', 'tail2') } }] },
+]);
+
+test('B2: a blamed line that changed after the last round is not mapped: it counts as lines-changed-after-round, no candidate (breaks if a changed line maps to the old round)', async () => {
+  const b = roundRepo('blamed');
+  const r = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews: { 31: [b.prs[31].shas[0]] } }) } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.unmapped['lines-changed-after-round'], 1, JSON.stringify(r.json.unmapped));
+  assert.equal(r.json.labelled, 0);
+});
+
+test('B2b: two blamed lines, one changed after the last round and one not: the pair is not mapped (all lines, seat point 3) (breaks if one unchanged line is enough)', async () => {
+  const b = buildRepo([
+    { n: 31, at: A_DAY, commits: [
+      { subject: 'feat: add f', files: { 'src/f.txt': lines('alpha', 'bug', 'bugB', 'omega') } },
+      { subject: 'feat: tweak f', files: { 'src/f.txt': lines('alpha', 'bug', 'bugB2', 'omega') } },
+    ] },
+    { n: 32, at: B_DAY, commits: [{ subject: 'fix: f (#9001)', files: { 'src/f.txt': lines('alpha', 'good', 'goodB', 'omega') } }] },
+  ]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews: { 31: [b.prs[31].shas[0]] } }) } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.unmapped['lines-changed-after-round'], 1, JSON.stringify(r.json.unmapped));
+  assert.equal(r.json.labelled, 0);
+});
+
+test('B3: another line of the file changed after the last round, the blamed line did not: the pair maps to that round (breaks if the rule is file-level)', async () => {
+  const b = roundRepo('other');
+  const c1 = b.prs[31].shas[0];
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { judge, gh: fakeGh(b, { reviews: { 31: [c1] } }) } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.labelled, 1, JSON.stringify(r.json.unmapped));
+  assert.equal(r.json.earlierRound, 1);
+  assert.match(judge.prompts[0], /> {4}2\| bug/, 'the judge sees the round tree');
+});
+
+test('B4: the last ancestor round is taken, not the first; a later round that is not an ancestor is skipped (breaks if the scan starts at the first round or skips the ancestor test)', async () => {
+  const b = buildRepo([
+    { n: 31, at: A_DAY, commits: [
+      { subject: 'feat: add f', files: { 'src/f.txt': lines('alpha', 'bug', 'omega', 'tail') } },
+      { subject: 'feat: context', files: { 'src/f.txt': lines('alpha', 'bug', 'omega2', 'tail') } },
+      { subject: 'feat: tail', files: { 'src/f.txt': lines('alpha', 'bug', 'omega2', 'tail2') } },
+    ] },
+    { n: 32, at: B_DAY, commits: [{ subject: 'fix: f (#9001)', files: { 'src/f.txt': lines('alpha', 'good', 'omega2', 'tail2') } }] },
+  ]);
+  const [c1, c2] = b.prs[31].shas;
+  const later = b.prs[32].shas[0];
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { judge, gh: fakeGh(b, { reviews: { 31: [c1, c2, later] } }) } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.earlierRound, 1, JSON.stringify(r.json.unmapped));
+  assert.match(judge.prompts[0], /omega2/, 'the blamed text comes from the second round (c2), not the first');
+});
+
+test('B6: a merge-base failure that is not yes or no (exit 128, a round commit missing from the clone) fails the pair as merge-base, never reads as "not an ancestor" (breaks if any non-zero exit means no)', async () => {
+  const b = roundRepo('other');
+  const git = (args) => (args[0] === 'merge-base' && args[1] === '--is-ancestor' ? { status: 128, stdout: '', stderr: 'fatal: Not a valid commit name' } : b.git(args));
+  const r = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { git, judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews: { 31: [b.prs[31].shas[0]] } }) } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.failed['merge-base'], 1, JSON.stringify(r.json));
+  assert.equal(r.json.unmapped['head-not-reviewed'] ?? 0, 0);
+  assert.equal(r.json.labelled, 0);
+});
+
+test('B5: a CodeRabbit comment 2 lines from the open bug does not drop it (rule i, open-bug rows only); the same comment drops a fix pair, and rule ii (same line range) is only counted (breaks if rule i is wider, or the count is wrong)', async () => {
+  const b = roundRepo('other');
+  const c1 = b.prs[31].shas[0];
+  const near = { user: CR_USER, path: 'src/f.txt', line: 4, created_at: '2026-10-10T11:00:00Z' }; // the blamed line is 2
+  const gh = () => fakeGh(b, { reviews: { 31: [c1] }, comments: { 31: [near] } });
+  const fix = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh: gh() } });
+  assert.equal(fix.json.crDropped, 1);
+  assert.equal(fix.json.crSameRangeKept, 1, 'rule ii would keep it: the comment is not on the blamed line');
+  const onLine = { ...near, line: 2 };
+  const fix2 = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews: { 31: [c1] }, comments: { 31: [onLine] } }) } });
+  assert.equal(fix2.json.crDropped, 1);
+  assert.equal(fix2.json.crSameRangeKept, 0, 'a comment ON the blamed line drops it under rule ii too');
+  const ob = buildRepo([{ n: 31, at: A_DAY, commits: [
+    { subject: 'feat: add f', files: { 'src/f.txt': lines('alpha', 'bug', 'omega', 'tail') } },
+    { subject: 'feat: tweak f', files: { 'src/f.txt': lines('alpha', 'bug', 'omega', 'tail2') } },
+  ] }]);
+  const judge = fakeJudge([REAL()]);
+  const open = await report(ob, { rows: [], extra: ['--label', '--open-bug', 'src/f.txt:2', '--open-bug-note', 'the wait never ends'], deps: { judge, gh: fakeGh(ob, { reviews: { 31: [ob.prs[31].shas[0]] }, comments: { 31: [near] } }) } });
+  assert.equal(open.code, 0, open.err);
+  assert.equal(open.json.crDropped, 0, 'rule i: an open-bug row is never dropped by a nearby comment');
+  assert.equal(open.json.labelled, 1);
+  assert.equal(open.json.earlierRound, 1, 'the open bug maps to the last round too');
 });
 
 test('S03: an open bug maps to the EARLIEST main merge that holds the origin commit, in either list order (breaks if the last or the latest merge is taken)', async () => {
@@ -809,6 +970,20 @@ test('S14b: the baseline status compares the rows, not the bytes: a CRLF copy of
   assert.equal(await status(), 'differs', 'a changed row');
 });
 
+test('G6: a byte-order mark at the start of the gold copy (an editor save) is identical for the same rows; a changed row with a mark still differs (breaks if the mark is not stripped before the parse)', async () => {
+  const ok = await bigRun();
+  const b = big();
+  const status = async () => JSON.parse((await run(['--since', '2026-08-01', '--repo', 'o/r', '--state-dir', ok.state, '--gold-dir', ok.gold, '--json'], { git: b.git, gh: fakeGh(b), fixChains: FIXES(b), dataset: DATASET })).out).baseline;
+  const dest = path.join(ok.gold, 'escape-baseline.json');
+  const src = readFileSync(path.join(ok.state, 'escape-baseline.json'), 'utf8');
+  writeFileSync(dest, `﻿${src}`);
+  assert.equal(await status(), 'identical', 'a mark on the same rows');
+  writeFileSync(dest, `﻿${src.replace(/\r?\n/g, '\r\n')}`);
+  assert.equal(await status(), 'identical', 'a mark and CRLF on the same rows');
+  writeFileSync(dest, `﻿${baselineText().replace('"prsMerged": 5', '"prsMerged": 7')}`);
+  assert.equal(await status(), 'differs', 'a changed row with a mark');
+});
+
 test('S13d: --write without a fix-chains input refuses to write controls (breaks if the partial-failure source is optional for a write)', async () => {
   const b = big();
   const s = setup(b, { rows: bigRows(b), extra: writeArgs, deps: { judge: fakeJudge([REAL()]), dataset: DATASET } });
@@ -944,6 +1119,25 @@ test('R02: a failed rename of the second gold file restores all three old files;
   assert.deepEqual(existsSync(fresh.gold) ? readdirSync(fresh.gold) : [], [], 'the file renamed in first is removed again');
 });
 
+test('G8: --write --allow-partial into a gold dir inside a checkout (a .git folder, or a worktree .git file) is refused before any read; a scratch dir outside a checkout is not (breaks if the partial write can reach a real gold folder)', async () => {
+  for (const kind of ['dir', 'file']) {
+    const repo = tmp(`checkout-${kind}`);
+    if (kind === 'dir') mkdirSync(path.join(repo, '.git')); else writeFileSync(path.join(repo, '.git'), 'gitdir: C:/x/.git/worktrees/y\n');
+    const gold = path.join(repo, 'scripts', 'eval', 'review-eval', 'gold');
+    plantOld(gold);
+    const s = writeSetup({}, [...writeArgs, '--allow-partial']);
+    const argv = s.argv.map((a) => (a === s.gold ? gold : a));
+    const r = await run(argv, s.deps);
+    assert.equal(r.code, 2, `${kind}: ${r.err}`);
+    assert.match(r.err, /--allow-partial/);
+    assert.equal(s.deps.gh.calls.length, 0, 'refused before any gh read');
+    for (const n of GOLD_FILES) assert.equal(readFileSync(path.join(gold, n), 'utf8'), `OLD ${n}\n`, `${kind}: ${n} untouched`);
+  }
+  const ok = writeSetup({}, [...writeArgs, '--allow-partial']);
+  const r = await run(ok.argv, ok.deps);
+  assert.equal(r.code, 0, `a scratch gold dir outside a checkout stays allowed: ${r.err}`);
+});
+
 test('R03: --write refuses a run with an unlabelled candidate or a failed pair, unless --allow-partial is given (breaks if the gate ignores either count)', async () => {
   const noLabel = writeSetup({}, ['--allow-label-cache-write', '--write']);
   const r1 = await run(noLabel.argv, noLabel.deps);
@@ -1040,6 +1234,43 @@ test('R07: a removed line that the fix PR wrote itself is unmapped own-pr, end t
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(r.json.unmapped, { 'own-pr': 1 });
   assert.equal(judge.prompts.length, 0);
+});
+
+/** PR 11 brings "buggy"; fix PR 12 only touches its whitespace (blame -w keeps PR 11 as origin); fix PR 13 really fixes it. */
+const twoFixes = () => buildRepo([
+  { n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('alpha', 'buggy', 'omega') } }] },
+  { n: 12, at: B_DAY, commits: [{ subject: 'fix: spacing (#9001)', files: { 'src/f.txt': lines('alpha', 'buggy  ', 'omega') } }] },
+  { n: 13, at: '2026-10-12T10:00:00Z', commits: [{ subject: 'fix: the real one (#9002)', files: { 'src/f.txt': lines('alpha', 'fixed', 'omega') } }] },
+]);
+
+test('G1: two fixes of one blamed line are both judged; the real verdict wins over noise, in either order; one duplicate is counted (breaks if duplicates go before labelling)', async () => {
+  for (const verdicts of [[{ verdict: 'noise', severity: 'minor' }, REAL()], [REAL(), { verdict: 'noise', severity: 'minor' }]]) {
+    const b = twoFixes();
+    const judge = fakeJudge(verdicts);
+    const rows = [escRow(b, { fixPr: 12, blamedPr: 11 }), escRow(b, { fixPr: 13, blamedPr: 11 })];
+    const r = await report(b, { rows, extra: ['--label'], deps: { judge } });
+    assert.equal(r.code, 0, r.err);
+    assert.equal([...judge.prompts.join('\n').matchAll(/^### Pair/gm)].length, 2, 'both fixes reach the judge');
+    assert.equal(r.json.duplicates, 1);
+    assert.equal(r.json.verdicts.real, 1, JSON.stringify(r.json.verdicts));
+    assert.equal(r.json.goldRows, 1);
+    assert.equal(r.json.counted, 1);
+  }
+});
+
+test('G1b: when no fix of the line is real and one is still unlabelled, the unlabelled one is kept, so the write gate still sees it (breaks if a noise label outranks a missing one)', async () => {
+  const b = twoFixes();
+  const rows = [escRow(b, { fixPr: 12, blamedPr: 11 }), escRow(b, { fixPr: 13, blamedPr: 11 })];
+  const s = setup(b, { rows });
+  const hit = { fixSha: b.prs[12].shas[0], blamedMergeSha: b.prs[11].mergeSha, file: 'src/f.txt', line: 2 };
+  writeFileSync(path.join(s.state, 'szz-labels.jsonl'), `${JSON.stringify({ key: szz.labelKey(hit), ...hit, verdict: 'noise', severity: 'minor' })}
+`);
+  const r = { ...(await run(s.argv, s.deps)) };
+  r.json = JSON.parse(r.out);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.labelled, 0, 'the noise label of fix 12 is not the kept candidate');
+  assert.equal(r.json.unlabelled, 1, JSON.stringify(r.json));
+  assert.equal(r.json.duplicates, 1);
 });
 
 test('R08: two escape rows that map to the same head line give one candidate and one duplicate (breaks if the dedup is dropped)', async () => {
@@ -1225,6 +1456,29 @@ test('R13: reportPathProblem allows .claudedocs and .claude/cache/e2e of the rep
   assert.notEqual(p(path.join(goldInDocs, 'r.txt'), goldInDocs), null, 'the gold dir stays refused inside an allowed folder');
 });
 
+test('G4: --report refuses a path into a gold folder through a trailing dot or space, a junction, or a gold folder of another checkout (breaks if the check compares the raw text only)', () => {
+  const root = tmp('root');
+  const gold = path.join(root, 'scripts', 'gold');
+  mkdirSync(gold, { recursive: true });
+  const state = tmp('st');
+  const p = (f, g = gold) => szz.reportPathProblem({ report: f }, g, state, root);
+  const scratchGold = path.join(tmp('scratch'), 'gold');
+  mkdirSync(scratchGold);
+  assert.notEqual(p(`${scratchGold}.${path.sep}r.txt`, scratchGold), null, 'trailing dot, gold dir outside the repo');
+  assert.notEqual(p(`${scratchGold} ${path.sep}r.txt`, scratchGold), null, 'trailing space, gold dir outside the repo');
+  const outside = tmp('outside');
+  const link = path.join(outside, 'link');
+  symlinkSync(gold, link, 'junction');
+  const other = path.join(tmp('primary'), 'scripts', 'eval', 'review-eval', 'gold');
+  mkdirSync(other, { recursive: true });
+  for (const [name, f] of [
+    ['trailing dot', `${gold}.${path.sep}r.txt`], ['trailing space', `${gold} ${path.sep}r.txt`], ['junction', path.join(link, 'r.txt')],
+    ['another checkout gold', path.join(other, 'gold-a.json')], ['another checkout gold, upper case', path.join(other.toUpperCase(), 'R.TXT')],
+  ]) assert.notEqual(p(f), null, name);
+  assert.equal(p(path.join(outside, 'r.txt')), null, 'a plain path outside the repo stays allowed');
+  assert.equal(p(path.join(root, '.claudedocs', 'e2e-gold-a-x', 'r.txt')), null, 'a folder name that only holds "gold" stays allowed');
+});
+
 test('R14: ids are stable between runs: a row or control dropped before another does not change its id; the label key holds the judge version (breaks if ids are counters or the key has no version)', async () => {
   const all = await bigRun();
   assert.equal(all.code, 0, all.err);
@@ -1360,6 +1614,24 @@ test('R19b: a rollback step that fails is named in the thrown error with the .ba
     (err) => /rename in failed/.test(err.message) && /rollback failed \(1\): restore of a failed/.test(err.message) && /\.bak files in/.test(err.message),
   );
   assert.equal(readFileSync(path.join(dir, 'b.json'), 'utf8'), 'OLD b\n', 'the other old file is restored');
+});
+
+test('G3: a .bak file left by a failed rollback is never overwritten: the next write refuses, writes nothing and keeps the .bak (breaks if writeAll renames over a left .bak)', async () => {
+  const dir = tmp('leftbak');
+  writeFileSync(path.join(dir, 'a.json'), 'NEW-ish a\n');
+  writeFileSync(path.join(dir, 'a.json.bak'), 'ONLY COPY of old a\n');
+  assert.throws(() => szz.writeAll(dir, [{ name: 'a.json', content: 'NEWER a\n' }, { name: 'b.json', content: 'NEW b\n' }]), /a\.json\.bak/);
+  assert.equal(readFileSync(path.join(dir, 'a.json.bak'), 'utf8'), 'ONLY COPY of old a\n', 'the .bak is kept');
+  assert.equal(readFileSync(path.join(dir, 'a.json'), 'utf8'), 'NEW-ish a\n', 'the file is not replaced');
+  assert.deepEqual(readdirSync(dir).sort(), ['a.json', 'a.json.bak'], 'no b.json, no .tmp');
+  const s = writeSetup();
+  plantOld(s.gold);
+  writeFileSync(path.join(s.gold, 'gold-a.json.bak'), 'ONLY COPY\n');
+  const r = await run(s.argv, s.deps);
+  assert.notEqual(r.code, 0, 'the run reports the refusal');
+  assert.match(r.err, /gold-a\.json\.bak/);
+  assert.equal(readFileSync(path.join(s.gold, 'gold-a.json.bak'), 'utf8'), 'ONLY COPY\n');
+  for (const n of GOLD_FILES) assert.equal(readFileSync(path.join(s.gold, n), 'utf8'), `OLD ${n}\n`, `${n} is the old file`);
 });
 
 test('R20: an escape row with an unreadable fix time is counted as failed, not dropped silently (breaks if the row is filtered out uncounted)', async () => {
@@ -1702,6 +1974,35 @@ test('R3-m5: an escape row whose fixSha or mergeSha is not 40 lower-case hex is 
   assert.equal(r.json.pairs, 4);
   const upper = good.mergeSha.toUpperCase();
   assert.equal(seen.some((a) => a.some((x) => x.includes('not-a-sha') || x.startsWith('--all') || x.includes(upper))), false, 'no bad sha reaches git');
+});
+
+test('G2: an escape row whose blamedMergeSha is not 40 lower-case hex, or whose blamedPr is not a positive integer, is not mined and counts failed blamed-target; git and gh never see it (breaks if the blamed check is dropped)', async () => {
+  const b = small();
+  const good = escRow(b, { fixPr: 12, blamedPr: 11 });
+  const bad = [
+    { ...good, blamedMergeSha: '--output=x' }, { ...good, blamedMergeSha: good.blamedMergeSha.toUpperCase() }, { ...good, blamedMergeSha: undefined },
+    { ...good, blamedPr: 0 }, { ...good, blamedPr: -3 }, { ...good, blamedPr: 1.5 }, { ...good, blamedPr: '11' }, { ...good, blamedPr: '11/../x' },
+  ];
+  const seen = [];
+  const git = (args) => { seen.push(args); return b.git(args); };
+  const inner = fakeGh(b);
+  const gh = Object.assign(async (args) => inner(args), { calls: inner.calls });
+  const r = await report(b, { rows: [good, ...bad], deps: { git, gh } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.failed['blamed-target'], bad.length, JSON.stringify(r.json.failed));
+  assert.equal(r.json.pairs, bad.length + 1);
+  const upper = good.blamedMergeSha.toUpperCase();
+  assert.equal(seen.some((a) => a.some((x) => x.includes('--output=x') || x.includes(upper) || x.includes('undefined'))), false, 'no bad blamed sha reaches git');
+  assert.equal(inner.calls.some((a) => /\/pulls\/(0|-3|1\.5|11\/\.\.)/.test(a.at(-1))), false, 'no bad PR number reaches gh');
+});
+
+test('G2b: an open bug whose gh PR list gives a number that is not a positive integer maps to no PR (breaks if the open-bug PR number is not checked)', async () => {
+  const b = buildRepo([{ n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('alpha', 'buggy', 'omega') } }] }]);
+  const origin = b.prs[11].shas[0];
+  const pulls = { [origin]: [{ number: '11', merged_at: A_DAY, merge_commit_sha: b.prs[11].mergeSha }] };
+  const r = await report(b, { rows: [], extra: ['--open-bug', 'src/f.txt:2', '--open-bug-note', 'the wait never ends'], deps: { gh: fakeGh(b, { pulls }) } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.unmapped['open-bug-no-pr'], 1, JSON.stringify(r.json));
 });
 
 test('R3-n1: on a label cache hit the hunk counts come from the cache row (the labelled prompt), not from this run\'s cut (breaks if a cache hit keeps the run counts)', async () => {

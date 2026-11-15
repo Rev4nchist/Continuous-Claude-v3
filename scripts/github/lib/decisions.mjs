@@ -139,11 +139,16 @@ export function decisionRead({ step, key, head }) {
   return d && typeof d.label === 'string' ? { label: d.label, at: d.at } : null;
 }
 
-/** decisionUse({ step, key, head }) -> { ok: true } | { ok: false, reason }. Uses the decision up (call it AFTER the action succeeds). Resets the miss count. */
-export function decisionUse({ step, key, head }) {
+/**
+ * decisionUse({ step, key, head, label? }) -> { ok: true } | { ok: false, reason }. Uses the decision up (call it AFTER the action succeeds). Resets the miss count.
+ * With a label, the row is used only when its label is that one, else { ok: false, reason: 'label-changed' } and the row stays: a tap that Dave recorded
+ * between the read and the use is not used up by the decision that was read (PR 576 follow-up, item 2). No label: the row is used whatever its label.
+ */
+export function decisionUse({ step, key, head, label }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-decision' };
   return update((store) => {
     const id = idOf({ step, key, head });
+    if (typeof label === 'string' && store.decisions[id] && store.decisions[id].label !== label) return { ok: false, reason: 'label-changed' };
     const had = Boolean(store.decisions[id]);
     delete store.decisions[id];
     delete store.offers[id];
