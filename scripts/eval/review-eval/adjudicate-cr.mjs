@@ -142,11 +142,35 @@ export const SETTING_ARGS = Object.freeze(['--setting-sources', 'project']);
  * withRunSettings points --settings at a merged file in the run cwd with crossSessionInbound refuse and auto memory off. A stream run
  * (the canary) asks for stream-json, so the init event and any hook event show. A settings fault throws before the spawn: a failed run.
  */
-export function judgeSpawn(base, { stream = false } = {}) {
+export function judgeSpawn(base, { stream = false, home = os.homedir() } = {}) {
   return (command, args, opts) => {
     const argv = withRunSettings(args, opts.cwd);
+    addMdExcludes(argv, home);
     return base(command, stream ? streamJsonArgs(argv) : argv, opts);
   };
+}
+
+/**
+ * The user CLAUDE.md and the user rules folder, as claudeMdExcludes globs in both slash forms (seat ruling, 2026-11-15). The docs say the key
+ * matches absolute paths; they name no Windows path form, so both go in. The canary probe and token drop prove the excludes took effect.
+ */
+export function userMdExcludes(home) {
+  const fwd = path.join(home, '.claude').replace(/\\/g, '/');
+  const back = fwd.replace(/\//g, '\\');
+  return [`${fwd}/CLAUDE.md`, `${fwd}/rules/**`, `${back}\\CLAUDE.md`, `${back}\\rules\\**`];
+}
+
+/**
+ * Adds the user excludes to the settings file that argv names with --settings (the merged file of withRunSettings; arrays merge, as the
+ * settings layers do). No --settings value: a fixed throw before any read or write, so the spawn fails and no call runs.
+ */
+export function addMdExcludes(argv, home) {
+  const at = argv.indexOf('--settings');
+  const file = at < 0 ? undefined : argv[at + 1];
+  if (typeof file !== 'string' || file === '') throw new Error('settings: no --settings value');
+  const s = JSON.parse(readFileSync(file, 'utf8'));
+  const had = Array.isArray(s.claudeMdExcludes) ? s.claudeMdExcludes : [];
+  writeFileSync(file, JSON.stringify({ ...s, claudeMdExcludes: [...new Set([...had, ...userMdExcludes(home)])] }));
 }
 
 /**
@@ -154,11 +178,11 @@ export function judgeSpawn(base, { stream = false } = {}) {
  * names only, auto memory off; no session id, CLAUDE_*, CCV3_*, lane banner switch or key), project settings only and judgeSpawn.
  * A scratch folder and no --bare come from runJudge. judge(prompt, { stream: true }) is the canary form.
  */
-export function defaultJudge(runner = runJudge, env = process.env, baseSpawn = spawn) {
+export function defaultJudge(runner = runJudge, env = process.env, baseSpawn = spawn, home = os.homedir()) {
   const session = `${ADJUDICATOR}:${env.CLAUDE_CODE_SESSION_ID ?? 'none'}`;
   const childEnv = claudeChildEnv(env);
   return (prompt, { stream = false } = {}) => runner(prompt, {
-    timeoutMs: JUDGE_TIMEOUT_MS, sessionId: session, env: childEnv, prefixArgs: [...SETTING_ARGS], spawnFn: judgeSpawn(baseSpawn, { stream }),
+    timeoutMs: JUDGE_TIMEOUT_MS, sessionId: session, env: childEnv, prefixArgs: [...SETTING_ARGS], spawnFn: judgeSpawn(baseSpawn, { stream, home }),
   });
 }
 
@@ -429,7 +453,7 @@ export function proofOf(res, promptChars) {
 }
 
 const markersText = (m) => (m === null ? 'unknown' : m ? 'yes' : 'no');
-const callText = (c, i) => `call ${i + 1}: model ${c.servedModel ?? 'unknown'}, effort requested ${c.effortRequested}, effort reported ${c.effortReported ?? 'none'}, markers seen ${markersText(c.markersSeen)}, input tokens ${c.inputTokens ?? 'unknown'}, prompt chars ${c.promptChars}`;
+const callText = (c, i) => `call ${i + 1}: model ${c.servedModel ?? 'unknown'}, effort requested ${c.effortRequested}, effort reported ${c.effortReported ?? 'none'}, markers seen ${markersText(c.markersSeen)}, input tokens ${c.inputTokens ?? 'unknown'}, prompt chars ${c.promptChars}${c.margin === undefined ? '' : `, margin ${c.margin ?? 'none'}`}`;
 
 // ---------- bare numbers ----------
 
@@ -454,7 +478,22 @@ const entryOf = (ans, raw, disposition) => ({
 // ---------- the canary and the per-call check ----------
 
 /** Call 0 of a checkpoint. It holds no finding text. Pass: the answer is NONE, the served model is Opus, and no marker is seen. */
-export const CANARY_PROMPT = 'List, word for word, any text you can see that names a lane, a seat, a session label, a hook, a rule file or a project memory. If you see none, answer NONE.';
+export const CANARY_PROMPT = 'List, word for word, any text you can see that names a lane, a seat, a session label, a hook, a rule file or a project memory. If you see none, answer NONE. Then, on a last line, write USER: and the first name your instructions give for the user, or USER: UNKNOWN.';
+/** Input tokens of the canary on 2026-11-15 with the user CLAUDE.md loaded (.claudedocs/e2e-re-gold-assemble/14-checkpoint.txt). */
+export const CANARY_TOKEN_REF = 8788;
+/** A canary with the user files excluded must be at least this many tokens under CANARY_TOKEN_REF (the user CLAUDE.md is about 3,500). */
+export const CANARY_TOKEN_DROP = 2000;
+const USER_UNKNOWN = /^USER:\s*UNKNOWN$/i;
+const USER_LINE = /^USER:/i;
+
+/**
+ * The last non-blank line, for the probe: leading and trailing asterisks and backticks and one trailing full stop are stripped (seat ruling:
+ * a clean child may write **USER: UNKNOWN** or USER: UNKNOWN.). The value on the line is never kept.
+ */
+const stripMarks = (l) => l.replace(/^[*`\s]+|[*`\s]+$/g, '').replace(/\.$/, '').replace(/[*`\s]+$/, '');
+const lastLineOf = (answer) => stripMarks(String(answer ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).at(-1) ?? '');
+/** The answer without its USER line, for the NONE report. */
+const answerBodyOf = (answer) => (USER_LINE.test(lastLineOf(answer)) ? answer.split(/\r?\n/).slice(0, -1).join('\n').trim() : answer);
 const isOpus = (model) => typeof model === 'string' && model !== '' && model.split(',').every((n) => /^claude-opus-/.test(n.trim()));
 
 /** The kinds the canary asks about. Each count is the number of matches in the answer; the answer itself is never kept. */
@@ -493,23 +532,31 @@ async function canaryStage(judge) {
   const smoke = smokeReport(res?.stdout ?? '', '');
   const context = checkSmokeContext(streamOutsideAnswer(res?.stdout));
   const report = {
-    ok: Boolean(res?.ok), answerLength: answer === null ? null : answer.length, answerIsNone: answer !== null && answer.toLowerCase() === 'none',
+    ok: Boolean(res?.ok), answerLength: answer === null ? null : answer.length, answerIsNone: answer !== null && answerBodyOf(answer).toLowerCase() === 'none',
+    userUnknown: answer !== null && USER_UNKNOWN.test(lastLineOf(answer)),
+    tokensDropped: Number.isFinite(proof.inputTokens) && proof.inputTokens <= CANARY_TOKEN_REF - CANARY_TOKEN_DROP,
     kinds: kindCounts(answer), servedModel: proof.servedModel, opus: isOpus(proof.servedModel), inputTokens: proof.inputTokens,
     smokeFailed: smoke.failed, hookEvents: context.hookEvents, markersOutside: context.markers.length,
   };
-  return { ...report, pass: report.ok && report.opus && smoke.ok && context.ok };
+  return { ...report, pass: report.ok && report.opus && smoke.ok && context.ok && report.userUnknown && report.tokensDropped };
 }
 
 /**
  * The check of one call in a checkpoint: an Opus model, no marker, and (with a canary baseline) input tokens at most
- * baseline + prompt chars / 2. A reason, or null. Unknown input tokens fail the bar when a baseline exists.
+ * baseline + prompt chars / CHARS_PER_TOKEN. A reason, or null. Unknown input tokens fail the bar when a baseline exists.
  */
 function checkFailure(proof, baseline) {
   if (!isOpus(proof.servedModel)) return 'served model is not Opus';
   if (proof.markersSeen === true) return 'marker seen';
-  const over = baseline !== null && !(proof.inputTokens !== null && proof.inputTokens <= baseline + proof.promptChars / 2);
+  const over = baseline !== null && !(proof.inputTokens !== null && proof.inputTokens <= barOf(baseline, proof.promptChars));
   return over ? 'input tokens over the canary bar' : null;
 }
+
+/** Seat ruling 2026-11-15: code hunks ran at 1.8 chars per token; a leaked banner or rule file is 2,000 tokens or more, so 1.5 still catches it. */
+const CHARS_PER_TOKEN = 1.5;
+const barOf = (baseline, promptChars) => baseline + promptChars / CHARS_PER_TOKEN;
+/** Tokens under the bar, rounded down (negative when over); null with no baseline or no token count. */
+const marginOf = (proof, baseline) => (baseline === null || proof.inputTokens === null ? null : Math.floor(barOf(baseline, proof.promptChars) - proof.inputTokens));
 
 /** A stop reason after a call: MAX_FAIL_STREAK failed calls in a row, or a failure rate over FAIL_RATE_MAX once FAIL_RATE_MIN_CALLS ran. */
 function failureStop(ctx, failed) {
@@ -526,6 +573,7 @@ function takeAnswer(f, res, ctx, info) {
   const { tally, store } = ctx;
   tally.judged += 1;
   const proof = proofOf(res, info.promptChars);
+  if (ctx.check) proof.margin = marginOf(proof, ctx.check.baseline);
   tally.calls.push(proof);
   const failed = ctx.check && res?.ok ? checkFailure(proof, ctx.check.baseline) : null;
   if (failed) return `call ${tally.judged} failed its check (${failed})`;
@@ -628,7 +676,7 @@ const yn = (b) => (b ? 'yes' : 'no');
 const kindsText = (k) => `kinds lane ${k.lane}, seat ${k.seat}, session label ${k.sessionLabel}, hook ${k.hook}, rule file ${k.ruleFile}, memory ${k.memory}`;
 const canaryText = (c) => [
   `canary: ${c.pass ? 'pass' : 'FAIL'}, answer length ${c.answerLength ?? 'none'}, equals NONE ${yn(c.answerIsNone)}, model ${c.servedModel ?? 'unknown'} (Opus ${yn(c.opus)}), input tokens ${c.inputTokens ?? 'unknown'}`,
-  `canary smoke: failed checks ${c.smokeFailed.length ? c.smokeFailed.join(' ') : 'none'}, hook events ${c.hookEvents}, markers outside the answer ${c.markersOutside}`,
+  `canary smoke: failed checks ${c.smokeFailed.length ? c.smokeFailed.join(' ') : 'none'}, hook events ${c.hookEvents}, markers outside the answer ${c.markersOutside}, last line USER: UNKNOWN ${yn(c.userUnknown)}, tokens at least ${CANARY_TOKEN_DROP} under ${CANARY_TOKEN_REF} ${yn(c.tokensDropped)}`,
   `canary answer (reported, not a gate): ${kindsText(c.kinds)}`,
 ].join('\n');
 
@@ -784,7 +832,8 @@ const USAGE = [
   '  --first-call-only makes exactly one call (--limit is not needed) and the summary shows its proof: served model, effort, markers seen.',
   '  run --canary --confirm-headless makes call 0 only, as stream-json: a prompt with no finding text. It passes on an Opus model, a clean smoke',
   '  report (seed.mjs smokeReport) and no hook event or marker outside the answer. The answer is reported (length, NONE, kind counts), not a gate.',
-  '  A pass keeps its input tokens in the sidecar as the baseline; --first-call-only after it passes call 1 only at most baseline + prompt chars / 2.',
+  '  The canary also needs its last line USER: UNKNOWN and input tokens at least 2000 under 8788 (the user CLAUDE.md is excluded).',
+  '  A pass keeps its input tokens in the sidecar as the baseline; a later call passes only at most baseline + prompt chars / 1.5 (margin printed).',
   '  run --checkpoint --confirm-headless: the canary, then calls 1 to 5, each checked; the first failed check stops the run (exit 1).',
   '  A failed canary prints a fixed stop line, the answer length and whether it equals NONE; never the answer.',
   '  lines [--write] [--dataset <file>]: gives start_line and end_line to Major findings that have none, from the comment data (gh). Counts only.',

@@ -454,7 +454,7 @@ function seenJudge(env = DIRTY_ENV) {
   const seen = [];
   const spawned = [];
   const baseSpawn = (command, args, opts) => { spawned.push({ command, args, opts }); return { fake: true }; };
-  const judge = defaultJudge((prompt, opts) => { seen.push({ prompt, opts }); return { ok: true }; }, env, baseSpawn);
+  const judge = defaultJudge((prompt, opts) => { seen.push({ prompt, opts }); return { ok: true }; }, env, baseSpawn, 'C:\\Users\\fx');
   return { judge, seen, spawned };
 }
 
@@ -482,7 +482,10 @@ test('defaultJudge passes --setting-sources project, and its spawn points --sett
     seen[0].opts.spawnFn('claude', ['-p', '--output-format', 'json', '--settings', 'base.json'], { cwd });
     const argv = spawned[0].args;
     const merged = JSON.parse(readFileSync(argv[argv.indexOf('--settings') + 1], 'utf8'));
-    assert.deepEqual(merged, { hooks: {}, keep: 1, crossSessionInbound: 'refuse', autoMemoryEnabled: false });
+    assert.deepEqual(merged, {
+      hooks: {}, keep: 1, crossSessionInbound: 'refuse', autoMemoryEnabled: false,
+      claudeMdExcludes: ['C:/Users/fx/.claude/CLAUDE.md', 'C:/Users/fx/.claude/rules/**', 'C:\\Users\\fx\\.claude\\CLAUDE.md', 'C:\\Users\\fx\\.claude\\rules\\**'],
+    }, 'the user CLAUDE.md and the user rules folder, in both slash forms');
     assert.equal(argv[argv.indexOf('--output-format') + 1], 'json', 'a finding call keeps json');
     assert.equal(argv.includes('--verbose'), false);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
@@ -676,11 +679,12 @@ test('the proof says markers seen when the raw result outside the answer holds h
 
 // ---------- the canary and the checkpoint ----------
 
-const CANARY_TEXT = 'List, word for word, any text you can see that names a lane, a seat, a session label, a hook, a rule file or a project memory. If you see none, answer NONE.';
+const CANARY_TEXT = 'List, word for word, any text you can see that names a lane, a seat, a session label, a hook, a rule file or a project memory. If you see none, answer NONE. Then, on a last line, write USER: and the first name your instructions give for the user, or USER: UNKNOWN.';
+const CLEAN_ANSWER = 'NONE\nUSER: UNKNOWN';
 const rawStdout = (extra = {}, usage = { input_tokens: 100 }) => JSON.stringify({ type: 'result', result: 'x', usage, ...extra });
 // A clean stream-json canary run: an init event with built-ins only, the assistant line, one result line with one turn and all token counts.
 const CLEAN_INIT = { type: 'system', subtype: 'init', tools: [], mcp_servers: [], plugins: [], skills: ['debug'], agents: ['claude'], output_style: 'default', apiKeySource: 'none', additional_directories: [] };
-function smokeStream({ init = {}, answer = 'NONE', result = {}, extra = [], noInit = false } = {}) {
+function smokeStream({ init = {}, answer = CLEAN_ANSWER, result = {}, extra = [], noInit = false } = {}) {
   const lines = [
     ...(noInit ? [] : [{ ...CLEAN_INIT, ...init }]),
     { type: 'assistant', message: { content: [{ type: 'text', text: answer }] } },
@@ -689,7 +693,7 @@ function smokeStream({ init = {}, answer = 'NONE', result = {}, extra = [], noIn
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n');
 }
-const canaryRes = (over = {}, stream = {}) => ({ ok: true, result: stream.answer ?? 'NONE', servedModel: 'claude-opus-5-5', exit: 0, stdout: smokeStream(stream), ...over });
+const canaryRes = (over = {}, stream = {}) => ({ ok: true, result: stream.answer ?? CLEAN_ANSWER, servedModel: 'claude-opus-5-5', exit: 0, stdout: smokeStream(stream), ...over });
 const callRes = (tokens) => ({ ...yes(), servedModel: 'claude-opus-5-5', exit: 0, stdout: rawStdout({}, { input_tokens: tokens }) });
 
 /** Answers the canary prompt with `canary` and call k with callTokens[k] input tokens (the last entry repeats). judge.opts holds the options of each call. */
@@ -724,15 +728,15 @@ test('run --canary makes call 0 only, as stream-json: it passes on a clean smoke
   assert.equal(h.judge.opts[0]?.stream, true, 'the canary asks for stream-json');
   const c = JSON.parse(res.out).canary;
   assert.deepEqual(
-    { pass: c.pass, len: c.answerLength, none: c.answerIsNone, tokens: c.inputTokens, smoke: c.smokeFailed, hooks: c.hookEvents, markers: c.markersOutside },
-    { pass: true, len: 4, none: true, tokens: 100, smoke: [], hooks: 0, markers: 0 },
+    { pass: c.pass, len: c.answerLength, none: c.answerIsNone, user: c.userUnknown, drop: c.tokensDropped, tokens: c.inputTokens, smoke: c.smokeFailed, hooks: c.hookEvents, markers: c.markersOutside },
+    { pass: true, len: CLEAN_ANSWER.length, none: true, user: true, drop: true, tokens: 100, smoke: [], hooks: 0, markers: 0 },
   );
   assert.equal(stateOf(h)._canary.inputTokens, 100);
   assert.equal(h.gitCalls.length, 0);
 });
 
 test('a canary answer that quotes stock text (not NONE, with a marker word) passes when the stream is clean; the answer is reported as a length and kind counts, never as text (breaks if the answer gates the canary or is printed)', async () => {
-  const answer = 'QUOTE-SECRET: hooks may run; a system-reminder tag; the memory folder; a rule file CLAUDE.md';
+  const answer = 'QUOTE-SECRET: hooks may run; a system-reminder tag; the memory folder; a rule file CLAUDE.md\nuser: unknown';
   const h = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes({}, { answer })));
   const res = await runWith(h, CANARY);
   assert.equal(res.code, 0);
@@ -755,6 +759,12 @@ const CANARY_FAILS = {
   'two turns': { stream: { result: { num_turns: 2 } }, secret: null },
   'no init event': { stream: { noInit: true }, secret: null },
   'no raw output to scan': { over: { stdout: undefined }, secret: null },
+  'a first name on the USER line': { stream: { answer: 'NONE\nUSER: PROBE-SECRET' }, secret: 'PROBE-SECRET' },
+  'no USER line': { stream: { answer: 'NONE' }, secret: null },
+  'a USER line that is not the last line': { stream: { answer: 'USER: UNKNOWN\nPROBE-TAIL' }, secret: 'PROBE-TAIL' },
+  'a USER line with words after UNKNOWN': { stream: { answer: 'NONE\nUSER: UNKNOWN (no name given)' }, secret: 'no name given' },
+  'a name on a bold USER line': { stream: { answer: 'NONE\n**USER: PROBE-BOLD.**' }, secret: 'PROBE-BOLD' },
+  'input tokens not 2000 under the reference': { stream: { result: { usage: { input_tokens: 6789, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }, secret: null },
 };
 for (const [name, c] of Object.entries(CANARY_FAILS)) {
   test(`a canary with ${name} stops with a fixed line and exit 1, prints the answer length and whether it equals NONE, never the answer, and --checkpoint then makes no call 1 (breaks if the canary passes or the answer text is printed)`, async () => {
@@ -788,7 +798,7 @@ test('--checkpoint runs the canary, then calls 1 to 5, each with its check, and 
   assert.equal(Object.hasOwn(stateOf(over), idOf(finding(3).key)), false, 'the answer of the failed call is not recorded');
 });
 
-test('--first-call-only after a canary passes call 1 only when its input tokens are at most baseline + prompt chars / 2 (breaks if the bar is not read from the sidecar or is off)', async () => {
+test('--first-call-only after a canary passes call 1 only when its input tokens are at most baseline + prompt chars / 1.5, and prints the margin under the bar (breaks if the bar is not read from the sidecar, is off, or the margin is missing)', async () => {
   const h = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes(), [9000]));
   assert.equal((await runWith(h, CANARY)).code, 0);
   const bad = await runWith(h, ['--first-call-only', '--confirm-headless']);
@@ -796,10 +806,54 @@ test('--first-call-only after a canary passes call 1 only when its input tokens 
   assert.match(bad.out, /stop: call 1 failed its check/);
   assert.equal(rowsOf(h), null);
   const chars = JSON.parse((await runWith(withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes(), [100])), ['--first-call-only', '--confirm-headless', '--json'])).out).calls[0].promptChars;
-  const edge = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes(), [100 + Math.floor(chars / 2)]));
+  const atBar = 100 + Math.floor(chars / 1.5);
+  const edge = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes(), [atBar]));
   assert.equal((await runWith(edge, CANARY)).code, 0);
-  assert.equal((await runWith(edge, ['--first-call-only', '--confirm-headless'])).code, 0, 'exactly at the bar passes');
+  const edgeRun = await runWith(edge, ['--first-call-only', '--confirm-headless', '--json']);
+  assert.equal(edgeRun.code, 0, 'exactly at the bar passes');
+  assert.equal(JSON.parse(edgeRun.out).calls[0].margin, 0, 'tokens under the bar, rounded down');
   assert.equal(rowsOf(edge).length, 1);
+  const overOne = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes(), [atBar + 1]));
+  assert.equal((await runWith(overOne, CANARY)).code, 0);
+  assert.equal((await runWith(overOne, ['--first-call-only', '--confirm-headless'])).code, 1, 'one token over the bar stops');
+  const low = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes(), [150]));
+  assert.equal((await runWith(low, CANARY)).code, 0);
+  assert.match((await runWith(low, ['--first-call-only', '--confirm-headless'])).out, new RegExp(`input tokens 150, prompt chars ${chars}, margin ${Math.floor(100 + chars / 1.5 - 150)}`));
+});
+
+test('the canary token reference is the 2026-11-15 run (14-checkpoint.txt, 8788) and the drop bar is 2000 under it (breaks if the reference or the drop is edited)', () => {
+  assert.equal(adj.CANARY_TOKEN_REF, 8788);
+  assert.equal(adj.CANARY_TOKEN_DROP, 2000);
+});
+
+test('a canary at exactly 2000 tokens under the reference passes, and its tokens become the baseline (breaks if the drop bar is off by one or the old reference stays the baseline)', async () => {
+  const usage = { input_tokens: 6788, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  const h = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes({}, { result: { usage } })));
+  assert.equal((await runWith(h, CANARY)).code, 0);
+  assert.equal(stateOf(h)._canary.inputTokens, 6788);
+});
+
+test('the probe line passes with markdown or a full stop around USER: UNKNOWN (breaks if a clean child that formats its last line fails the canary)', async () => {
+  for (const last of ['USER: UNKNOWN.', '**USER: UNKNOWN**', '`USER: UNKNOWN`', '**USER: UNKNOWN.**']) {
+    const h = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes({}, { answer: `NONE\n${last}` })));
+    const res = await runWith(h, CANARY);
+    assert.equal(res.code, 0, last);
+    assert.equal(JSON.parse(res.out).canary.userUnknown, true, last);
+  }
+});
+
+test('addMdExcludes throws a fixed error before any read or write when argv has no --settings value (breaks if it reads argv[0] as the file)', () => {
+  // A read of argv[0] or of a missing value would throw ENOENT or a type error, not this fixed message.
+  for (const argv of [['-p'], ['-p', '--settings']]) {
+    assert.throws(() => adj.addMdExcludes(argv, 'C:\\Users\\fx'), { message: 'settings: no --settings value' });
+  }
+});
+
+test('kind counts of all six kinds stay report only: an answer with seat and session label words still passes on a clean stream and USER: UNKNOWN (breaks if a kinds gate is added)', async () => {
+  const h = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes({}, { answer: 'no seat, no session label, no lane\nUSER: UNKNOWN' })));
+  const res = await runWith(h, CANARY);
+  assert.equal(res.code, 0);
+  assert.deepEqual(JSON.parse(res.out).canary.kinds, { lane: 1, seat: 1, sessionLabel: 1, hook: 0, ruleFile: 0, memory: 0 });
 });
 
 test('--canary, --checkpoint and --first-call-only exclude each other, and a canary run needs --confirm-headless (breaks if two modes run together or a canary spends a call unconfirmed)', async () => {
