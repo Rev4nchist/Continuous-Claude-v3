@@ -38,6 +38,18 @@ describe('cpuMs', () => {
   });
 });
 
+describe('the pool this clock needs', () => {
+  // cpuMs() reads process.cpuUsage(). That is the work of ONE test file only when vitest runs each file in its own forked child process
+  // (default pool `forks`, vitest 4). Under `--pool=threads` the files share one process and cpuUsage() counts the other threads too, so a
+  // speed row would measure the work of other test files. The fault direction is safe (more CPU, never less: a false red, not a false green),
+  // but a later change of the pool must not slip in unseen.
+  it('5. this test file runs in a forked child process, not in a worker thread (seat delta read, 11-14)', async () => {
+    const { isMainThread } = await import('node:worker_threads');
+    expect(isMainThread, 'a worker thread: the pool is threads, process.cpuUsage() counts other files').toBe(true);
+    expect(typeof process.send, 'no IPC channel: this is not a forked child of the vitest main process').toBe('function');
+  });
+});
+
 describe('cpuTimed', () => {
   it('4. returns the value of the function and the CPU time it used', () => {
     let t = 0;
