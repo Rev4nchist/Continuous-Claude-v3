@@ -104,15 +104,17 @@ export function mapToHead(kept, headBlame) {
 /** The PR reference forms, in scrub order. scrubPrs removes them; promptGuard refuses a prompt that still holds one. */
 const PR_PATTERNS = [
   /Merge pull request[^\n]*/gi,
-  /\bpull request\s*#?\d+/gi,
-  /\bPR[-\s]*#?\d+/gi,
+  /\bpull request\s*:?\s*#?\d+/gi,
+  /\bPR[-\s:]*#?\d+/gi,
+  /\bGH-\d+/gi,
   /\b(?:pulls?|issues)\/\d+/gi,
   /\(#\d+\)/g,
   /#\d+(?![0-9A-Za-z_])/g,
 ];
 
 /**
- * Removes every PR reference from a text: (#N), #N, pull/N, pulls/N, issues/N, PR N, PR-N, pr N, "pull request N" and merge-commit text.
+ * Removes every PR reference from a text: (#N), #N, pull/N, pulls/N, issues/N, PR N, PR-N, PR: N, pr N, "pull request N",
+ * "pull request: N", GH-N and merge-commit text.
  * A #N followed by a letter or digit is kept (a hex colour such as #1a2b3c). An all-digit #N is scrubbed: the leak guard wins.
  */
 export function scrubPrs(text) {
@@ -309,6 +311,8 @@ export function goldRowOf({ cand, label, suite, cfg }) {
   const provenance = open
     ? { miner: MINER, kind: 'open-bug', blamedMergeSha: cand.blamedMergeSha, ...hunks }
     : { miner: MINER, fixSha: cand.fixSha, fixMergeSha: cand.fixMergeSha, blamedMergeSha: cand.blamedMergeSha, cause: cand.cause, primary: cand.primary, crBefore: false, ...hunks };
+  // Only a row mapped to an earlier round carries headMap: a row on a reviewed merged head stays byte-equal to before.
+  if (cand.headMap) provenance.headMap = cand.headMap;
   return {
     id: stableId('A', [cand.blamedMergeSha, cand.file, cand.line]), source: 'A', suite, split: setOf(cand.blamedPr, cfg), target: { pr: cand.blamedPr, round: cand.round, sha40: cand.head },
     file: cand.file, line: cand.line, severity: label.severity, linkType: 'within-hunk',
@@ -423,6 +427,9 @@ export function writeAll(dir, files, { rename = renameSync } = {}) {
   mkdirSync(dir, { recursive: true });
   const items = files.map((f) => { const dest = path.join(dir, f.name); return { ...f, dest, tmp: `${dest}.${process.pid}.tmp`, bak: `${dest}.bak` }; });
   const removeAll = (paths) => { for (const p of paths) { try { rmSync(p, RM); } catch { /* best effort */ } } };
+  // A .bak left by a failed rollback can be the only copy of an old gold file: never rename over it. Nothing is written.
+  const left = items.filter((t) => existsSync(t.bak)).map((t) => path.basename(t.bak));
+  if (left.length) throw new Error(`a .bak file from an earlier failed write is still in ${dir}: ${left.join(', ')}; restore or remove it by hand first`);
   try {
     for (const t of items) writeFileSync(t.tmp, t.content);
   } catch (err) {
@@ -608,14 +615,28 @@ function mapPair(env, row) {
   const sets = { blamed: revSet(env, `${row.blamedMergeSha}^1..${row.blamedMergeSha}^2`), fix: revSet(env, `${row.mergeSha}^1..${row.mergeSha}^2`) };
   const reasons = new Set();
   const runs = [];
+  const found = [];
   for (const f of files) {
     const { kept, own } = blameFile(env, row, f, sets);
     if (kept.length === 0) { if (own) reasons.add('own-pr'); continue; }
     const h = headLines(env, head, f.path, kept);
-    if (h.reason) reasons.add(h.reason);
-    else runs.push(...runsOf(h.lines).map((r) => runItem(env, head, f, r, h.pairs)));
+    if (h.reason) { reasons.add(h.reason); continue; }
+    runs.push(...runsOf(h.lines).map((r) => runItem(env, head, f, r, h.pairs)));
+    found.push({ f, kept: kept.filter((k) => h.pairs.some((p) => p.old === k.line)) });
   }
-  return runs.length ? { runs, head } : { reason: pickReason(reasons) };
+  if (!runs.length) return { reason: pickReason(reasons) };
+  // The same lines at an earlier commit (the Q2 last-round mapping): every line found at the head must be found there by its
+  // blame origin, else null. Found by origin means the line text is the same and its origin commit is inside that commit.
+  const at = (sha) => {
+    const out = [];
+    for (const { f, kept } of found) {
+      const h = headLines(env, sha, f.path, kept);
+      if (h.reason || h.pairs.length !== kept.length) return null;
+      out.push(...runsOf(h.lines).map((r) => runItem(env, sha, f, r, h.pairs)));
+    }
+    return out;
+  };
+  return { runs, head, at };
 }
 
 // ---------- the gh stage ----------
@@ -624,12 +645,44 @@ const cached = (map, key, make) => { if (!map.has(key)) map.set(key, make(key));
 
 async function ghStage(env, base, mapped) {
   const rounds = await cached(env.rounds, base.blamedPr, (pr) => crRounds(pr, { gh: env.gh, repo: env.repo })).catch(() => { throw new StepError('rounds'); });
-  const rank = rounds.findIndex((r) => r.sha40 === mapped.head) + 1;
-  if (rank === 0) return { reason: 'head-not-reviewed' };
+  const placed = placeOnRound(env, rounds, mapped);
+  if (placed.reason) return { reason: placed.reason };
+  const all = placed.runs.map((r) => ({ ...base, ...r, head: placed.head, round: placed.round, ...(placed.earlier ? { headMap: HEAD_MAP_LAST_ROUND } : {}) }));
+  // Rule (i) (seat 2026-11-15): an open-bug row is Dave's named defect; a CodeRabbit comment near it does not drop it.
+  if (base.kind === 'open-bug') return { cands: all, dropped: 0, sameRangeKept: 0 };
   const comments = await cached(env.comments, base.blamedPr, (pr) => env.commentsOf(pr)).catch(() => { throw new StepError('comments'); });
-  const all = mapped.runs.map((r) => ({ ...base, ...r, head: mapped.head, round: rank }));
   const kept = all.filter((c) => !crDrops(comments, c, env.slack));
-  return { cands: kept, dropped: all.length - kept.length };
+  // Rule (ii) is measured only (seat): a dropped run that no comment touches on its own line range.
+  const sameRangeKept = all.filter((c) => !kept.includes(c) && !crDrops(comments, c, 0)).length;
+  return { cands: kept, dropped: all.length - kept.length, sameRangeKept };
+}
+
+/** Marks a candidate (and its gold row provenance) mapped to the last round before the merged head (Q2 option b). */
+const HEAD_MAP_LAST_ROUND = 'last-round';
+
+/**
+ * The round of the mapped head: its rank when the merged head is a round. Else (Q2 option b, seat 2026-11-15) the last round
+ * that is an ancestor of the merged head, when every blamed line is unchanged there (mapped.at); a changed line gives
+ * 'lines-changed-after-round' and no earlier round is tried. No such round: 'head-not-reviewed'.
+ */
+function placeOnRound(env, rounds, mapped) {
+  const rank = rounds.findIndex((r) => r.sha40 === mapped.head) + 1;
+  if (rank) return { runs: mapped.runs, head: mapped.head, round: rank };
+  for (let i = rounds.length - 1; i >= 0; i -= 1) {
+    const sha = rounds[i].sha40;
+    if (!SHA40_RE.test(String(sha)) || !isAncestor(env, sha, mapped.head)) continue;
+    const runs = mapped.at(sha);
+    return runs ? { runs, head: sha, round: i + 1, earlier: true } : { reason: 'lines-changed-after-round' };
+  }
+  return { reason: 'head-not-reviewed' };
+}
+
+/** git merge-base --is-ancestor: exit 0 yes, 1 no, anything else is a failed step (never read as no). */
+function isAncestor(env, a, b) {
+  const r = env.git(['merge-base', '--is-ancestor', a, b]);
+  if (r.status === 0) return true;
+  if (r.status === 1) return false;
+  throw new StepError('merge-base');
 }
 
 /**
@@ -662,7 +715,7 @@ async function openBugPr(env, spec) {
   const origin = parsePorcelain(gitText(env.git, ['blame', '-w', '--porcelain', '-L', `${spec.line},${spec.line}`, env.ref, '--', spec.file], 'blame'))[0];
   if (!origin) return { reason: 'no-blamed-line' };
   const pulls = await env.pullsOf(origin.sha).catch(() => { throw new StepError('gh'); });
-  const pr = earliest((Array.isArray(pulls) ? pulls : []).filter((p) => env.mergeShas.has(p.merge_commit_sha)));
+  const pr = earliest((Array.isArray(pulls) ? pulls : []).filter((p) => env.mergeShas.has(p.merge_commit_sha) && Number.isSafeInteger(p.number) && p.number > 0));
   return pr ? { origin, pr } : { reason: 'open-bug-no-pr' };
 }
 
@@ -675,9 +728,10 @@ async function mineOpenBug(env, spec, note) {
   const head = gitText(env.git, ['rev-parse', '--verify', `${pr.merge_commit_sha}^2`], 'rev-parse').trim();
   const h = headLines(env, head, spec.file, [origin]);
   if (h.reason) return { reason: h.reason };
-  const run = { file: spec.file, line: h.lines[0], endLine: h.lines[0] };
   // An open bug has no fix diff: no hunk is shown or left out.
-  const mapped = { head, runs: [{ ...run, hunk: note, hunksShown: 0, hunksLeftOut: 0, blamed: blamedText(env, head, spec.file, run) }] };
+  const runAt = (sha, line) => { const run = { file: spec.file, line, endLine: line }; return { ...run, hunk: note, hunksShown: 0, hunksLeftOut: 0, blamed: blamedText(env, sha, spec.file, run) }; };
+  const at = (sha) => { const r = headLines(env, sha, spec.file, [origin]); return r.reason || r.pairs.length !== 1 ? null : [runAt(sha, r.lines[0])]; };
+  const mapped = { head, runs: [runAt(head, h.lines[0])], at };
   const base = { kind: 'open-bug', fixSha: 'open-bug', blamedPr: pr.number, blamedMergeSha: pr.merge_commit_sha, cause: 'open-bug', primary: true, band: 'UNKNOWN', note };
   return ghStage(env, base, mapped);
 }
@@ -812,9 +866,26 @@ function readRecord(file) {
 const tally = (list, keyOf) => list.reduce((acc, x) => { bump(acc, keyOf(x)); return acc; }, {});
 const isCounted = (c) => c.label?.verdict === 'real' && ['major', 'critical'].includes(c.label.severity);
 
+/** Tries of one gh read: a busy network gives TLS time-outs (3 of 5 runs on 11-14). The waits between tries grow. */
+export const GH_TRIES = 3;
+const GH_WAIT_MS = [2_000, 8_000];
+const realSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/** gh with a retry: a read that still fails after GH_TRIES tries throws its last error, so the pair fails (never "no data"). */
+function retryingGh(gh, sleep = realSleep) {
+  return async (args) => {
+    for (let i = 1; ; i += 1) {
+      try { return await gh(args); } catch (err) {
+        if (i >= GH_TRIES) throw err;
+        await sleep(GH_WAIT_MS[Math.min(i - 1, GH_WAIT_MS.length - 1)]);
+      }
+    }
+  };
+}
+
 function pairEnv(args, deps, history) {
   const git = deps.git ?? makeGit(process.cwd());
-  const gh = deps.gh ?? defaultGh;
+  const gh = retryingGh(deps.gh ?? defaultGh, deps.sleep);
   const repo = args.repo ?? DEFAULT_REPO;
   const comments = async (pr) => { const r = await gh(['api', '--paginate', '--slurp', `repos/${repo}/pulls/${pr}/comments?per_page=100`]); return Array.isArray(r) && r.every(Array.isArray) ? r.flat() : r; };
   return {
@@ -833,7 +904,9 @@ function candidateRows(all, args, stats) {
   const wanted = all.filter((r) => !args.primaryOnly || r.primary !== false);
   const sha40 = (v) => typeof v === 'string' && SHA40_RE.test(v);
   const shaOk = keepOrFail(wanted, (r) => sha40(r.fixSha) && sha40(r.mergeSha), 'fix-sha', stats);
-  const timed = keepOrFail(shaOk, (r) => Number.isFinite(Date.parse(r.fixMergedAt)), 'fix-time', stats);
+  // The blamed side goes into git (blamedMergeSha^2) and gh (pulls/<blamedPr>) arguments too: check it before any call.
+  const blamedOk = keepOrFail(shaOk, (r) => sha40(r.blamedMergeSha) && Number.isSafeInteger(r.blamedPr) && r.blamedPr > 0, 'blamed-target', stats);
+  const timed = keepOrFail(blamedOk,(r) => Number.isFinite(Date.parse(r.fixMergedAt)), 'fix-time', stats);
   const rows = timed.filter((r) => Date.parse(r.fixMergedAt) >= since);
   return [...rows.filter((r) => r.primary !== false), ...rows.filter((r) => r.primary === false)];
 }
@@ -879,11 +952,32 @@ async function attempt(job, stats, seen) {
     const r = await job();
     if (r.reason) { bump(stats.unmapped, r.reason); if (r.blame) stats.unmappedFixes.add(r.fixMergeSha); return []; }
     stats.crDropped += r.dropped;
-    return r.cands.filter((c) => { const k = `${c.blamedMergeSha}:${c.file}:${c.line}`; if (seen.has(k)) { stats.duplicates += 1; return false; } seen.add(k); return true; });
+    stats.crSameRangeKept += r.sameRangeKept ?? 0;
+    // Before the labels only an identical pair goes (same fix, same line: same label key). Two fixes of one line both reach the judge.
+    return r.cands.filter((c) => { const k = labelKey(c); if (seen.has(k)) { stats.duplicates += 1; return false; } seen.add(k); return true; });
   } catch (err) {
     bump(stats.failed, err instanceof StepError ? err.step : 'other');
     return [];
   }
+}
+
+/** Keep order of a duplicate group: a real label, then no label (it can still be real), then unclear, then noise. */
+const KEEP_RANK = (c) => (!c.label ? 2 : ({ real: 3, unclear: 1, noise: 0 }[c.label.verdict] ?? 0));
+
+/**
+ * After the labels: one candidate for each blamed line (blamedMergeSha, file, line), the best by KEEP_RANK, the first mined on a
+ * tie. The others count as duplicates. Mined order is kept, so a group with one candidate gives the same rows as before.
+ */
+function oneAtEachLine(cands, stats) {
+  const best = new Map();
+  for (const c of cands) {
+    const k = `${c.blamedMergeSha}:${c.file}:${c.line}`;
+    const old = best.get(k);
+    if (!old || KEEP_RANK(c) > KEEP_RANK(old)) best.set(k, c);
+  }
+  const keep = new Set(best.values());
+  stats.duplicates += cands.length - keep.size;
+  return cands.filter((c) => keep.has(c));
 }
 
 async function mineAll(rows, args, env, stats) {
@@ -898,7 +992,7 @@ async function mineAll(rows, args, env, stats) {
 }
 
 function newStats() {
-  return { pairs: 0, crDropped: 0, duplicates: 0, unmapped: {}, failed: {}, unmappedFixes: new Set(), backfilled: 0 };
+  return { pairs: 0, crDropped: 0, crSameRangeKept: 0, duplicates: 0, unmapped: {}, failed: {}, unmappedFixes: new Set(), backfilled: 0 };
 }
 
 /** { merge sha -> head sha } of the first-parent merges, from one git call. */
@@ -983,7 +1077,9 @@ function baselineStatus(stateDir, goldDir) {
   // Rows, not bytes (seat 2026-11-14): core.autocrlf checks the gold file out with CRLF, so a byte compare reports a false
   // "differs" for the same rows. A copy that does not parse differs.
   let same = false;
-  try { same = isDeepStrictEqual(JSON.parse(readFileSync(dest, 'utf8')), JSON.parse(src.toString('utf8'))); } catch { same = false; }
+  // A byte-order mark (an editor save) is not a row change either: strip one at the start before the parse.
+  const rowsOf = (text) => JSON.parse(text.replace(/^﻿/, ''));
+  try { same = isDeepStrictEqual(rowsOf(readFileSync(dest, 'utf8')), rowsOf(src.toString('utf8'))); } catch { same = false; }
   return same ? 'identical' : 'differs';
 }
 
@@ -1004,7 +1100,8 @@ function reportOf(stats, cands, rows, slot, controls, args) {
   const rowOf = (c) => entryOf(c).row;
   const v = tally(labelled, (c) => c.label.verdict);
   return {
-    pairs: stats.pairs, crDropped: stats.crDropped, duplicates: stats.duplicates, unmapped: stats.unmapped, failed: stats.failed,
+    pairs: stats.pairs, crDropped: stats.crDropped, crSameRangeKept: stats.crSameRangeKept, duplicates: stats.duplicates, unmapped: stats.unmapped, failed: stats.failed,
+    earlierRound: cands.filter((c) => c.headMap === HEAD_MAP_LAST_ROUND).length,
     labelled: labelled.length, unlabelled: cands.length - labelled.length,
     verdicts: { real: v.real ?? 0, noise: v.noise ?? 0, unclear: v.unclear ?? 0 },
     goldRows: rows.length, counted: counted.length,
@@ -1032,7 +1129,7 @@ function textReport(rep) {
   const c = rep.controls;
   return [
     'mine-szz report (counts only)',
-    `pairs: ${rep.pairs}`, `crDropped: ${rep.crDropped}`, `duplicates: ${rep.duplicates}`,
+    `pairs: ${rep.pairs}`, `crDropped: ${rep.crDropped} (kept under a same-range rule, measured only: ${rep.crSameRangeKept})`, `mapped to the last round before the merged head: ${rep.earlierRound}`, `duplicates: ${rep.duplicates}`,
     `unmapped: ${kv(rep.unmapped)}`, `failed: ${kv(rep.failed)}`,
     `labelled: ${rep.labelled} (real ${rep.verdicts.real}, noise ${rep.verdicts.noise}, unclear ${rep.verdicts.unclear}), unlabelled: ${rep.unlabelled}`,
     `gold rows (real): ${rep.goldRows}`, `counted (real, major or critical): ${rep.counted}`,
@@ -1200,10 +1297,26 @@ const REPORT_DIRS = ['.claudedocs', path.join('.claude', 'cache', 'e2e')];
  */
 export function reportPathProblem(args, goldDir, stateDir, root = REPO_ROOT) {
   if (!args.report) return null;
-  const bad = `--report ${args.report} is inside the gold dir, the state dir or the repo (outside .claudedocs and .claude/cache/e2e)`;
-  if ([goldDir, stateDir].some((d) => isInside(d, args.report))) return bad;
-  const allowed = REPORT_DIRS.some((d) => isInside(path.join(root, d), args.report));
-  return isInside(root, args.report) && !allowed ? bad : null;
+  const bad = `--report ${args.report} is inside the gold dir, the state dir, a folder named gold, or the repo (outside .claudedocs and .claude/cache/e2e)`;
+  const report = realish(args.report);
+  if ([goldDir, stateDir].some((d) => isInside(realish(d), report))) return bad;
+  // A gold folder of another checkout (the primary, seen from a worktree) is not under root: refuse every folder named gold.
+  if (path.dirname(report).split(path.sep).some((s) => s.toLowerCase() === 'gold')) return bad;
+  const allowed = REPORT_DIRS.some((d) => isInside(realish(path.join(root, d)), report));
+  return isInside(realish(root), report) && !allowed ? bad : null;
+}
+
+/**
+ * The path as Windows opens it: each part without trailing dots and spaces (Windows drops them, so `gold.\x` is `gold\x`),
+ * and the longest existing start resolved through junctions and links (realpath). The rest is joined on unchanged.
+ */
+function realish(p) {
+  const parts = path.resolve(p).split(path.sep).map((s, i) => (i === 0 ? s : s.replace(/[. ]+$/, '') || s));
+  for (let n = parts.length; n > 0; n -= 1) {
+    const head = parts.slice(0, n).join(path.sep) || path.sep;
+    try { return path.join(realpathSync.native(head), ...parts.slice(n)); } catch { /* not there: try a shorter start */ }
+  }
+  return parts.join(path.sep);
 }
 
 /** The judge of a run: runner (runJudge) under the lane marker in sessionId, so laneCallsToday counts the call. */
@@ -1218,10 +1331,11 @@ async function mine(args, deps, dirs) {
   const stats = newStats();
   const env = pairEnv(args, { ...deps, git }, history);
   const allRows = readEscapeRows(dirs.stateDir);
-  const cands = await mineAll(candidateRows(allRows, args, stats), args, env, stats);
+  const mined = await mineAll(candidateRows(allRows, args, stats), args, env, stats);
   const ctx = { args, stateDir: dirs.stateDir, ledgerPath: deps.ledgerPath ?? defaultHeadlessLedger(deps.env ?? process.env), now: deps.now ?? Date.now, stats, leak: leakTerms(env.fixShas, env.titles) };
   ctx.judge = deps.judge ?? defaultJudge(ctx);
-  const slot = await labelStage(cands, ctx);
+  const slot = await labelStage(mined, ctx);
+  const cands = oneAtEachLine(mined, stats);
   const records = await (deps.readRecords ?? (() => readEngineRecords(args.recordsDir ?? path.join(os.homedir(), '.claude', 'state', 'local-review'))))();
   const rows = goldRows(cands, records, { cfg: deps.cfg });
   // After the labels: the control pass touches no candidate, label or leak term of this run.
