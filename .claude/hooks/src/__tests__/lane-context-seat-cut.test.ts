@@ -14,14 +14,38 @@
  * The database is a stub: it answers the master card lookup (by its `re-program` parameter) and nothing else.
  * The real SQL runs against the live table in the probe, not here.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Row = Record<string, unknown>;
+
+// A recording wrapper over fs: the CUT state write must go through a temp file and a rename. Everything else passes through.
+const { fsLog, wrapFs } = vi.hoisted(() => {
+  const log = { writes: [] as string[], renames: [] as Array<[string, string]>, failRename: false };
+  const wrap = async (importOriginal: () => Promise<unknown>): Promise<Record<string, unknown>> => {
+    const real = (await importOriginal()) as Record<string, unknown>;
+    const writeFileSync = real.writeFileSync as (...a: unknown[]) => void;
+    const renameSync = real.renameSync as (...a: unknown[]) => void;
+    const over = {
+      writeFileSync: (...a: unknown[]): void => { log.writes.push(String(a[0])); writeFileSync(...a); },
+      renameSync: (...a: unknown[]): void => {
+        log.renames.push([String(a[0]), String(a[1])]);
+        if (log.failRename) throw new Error('EPERM: rename failed');
+        renameSync(...a);
+      },
+    };
+    return { ...real, ...over, default: { ...real, ...over } };
+  };
+  return { fsLog: log, wrapFs: wrap };
+});
+vi.mock('node:fs', wrapFs);
+vi.mock('fs', wrapFs);
+
 const fake = vi.hoisted(() => ({
   calls: [] as Array<{ sql: string; params: unknown[] | undefined }>,
+  failSeat: false,
   seat: [] as Row[],
   claimable: [] as Row[],
   peers: [] as Row[],
@@ -36,6 +60,7 @@ vi.mock('pg', () => {
     async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
       fake.calls.push({ sql, params });
       if (params?.includes('re-program')) {
+        if (fake.failSeat) throw new Error('seat lookup failed');
         // Stands in for the WHERE clause: a query that names no project_key sees every board's re-program.
         const rows = fake.seat.filter((r) => !/project_key/.test(sql) || params.includes(r.project_key));
         return { rows };
@@ -60,7 +85,7 @@ let tmp: string;
 let ccv3: string;
 const keys = ['LANE_REGISTRY_PATH', 'DATABASE_URL', 'CONTINUOUS_CLAUDE_DB_URL', 'CCV3_IDENTITY_DIR', 'CCV3_USER_HOME',
   'LANE_BOARD_CACHE', 'LANE_CONTEXT_ERROR_LOG', 'CLAUDE_CODE_ENTRYPOINT', 'LANE_CONTEXT_HEADLESS',
-  'LANE_CUT_STATE_DIR'] as const;
+  'LANE_CUT_STATE_DIR', 'TEMP', 'TMP', 'TMPDIR'] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -79,6 +104,12 @@ beforeEach(() => {
   process.env.LANE_BOARD_CACHE = '0';
   process.env.LANE_CONTEXT_ERROR_LOG = join(tmp, 'errors.jsonl');
   process.env.LANE_CUT_STATE_DIR = join(tmp, 'cut-state');
+  // The hook's throttle and cache files go to os.tmpdir(): give each test its own, so no test shares a file with another.
+  const osTmp = join(tmp, 'os-tmp');
+  mkdirSync(osTmp, { recursive: true });
+  process.env.TEMP = osTmp; process.env.TMP = osTmp; process.env.TMPDIR = osTmp;
+  fsLog.writes.length = 0; fsLog.renames.length = 0; fsLog.failRename = false;
+  fake.failSeat = false;
   delete process.env.CLAUDE_CODE_ENTRYPOINT;
   delete process.env.LANE_CONTEXT_HEADLESS;
   fake.calls.length = 0;
@@ -171,6 +202,27 @@ describe('SEAT', () => {
     expect(fake.calls.find((c) => c.params?.includes('re-program'))?.sql).toContain(RECLAIMABLE_SQL);
   });
 
+  it('S8: control characters in the holder name never reach the line: it stays one line', async () => {
+    fake.seat = [seatRow(BOSS)];
+    for (const name of ['ev\u001b[31mil', 'two\nlines', 'nul\u0000x\u007fy', 'bell\u0007\u0008end']) {
+      writeIdentity(BOSS, { name });
+      const lines = (await run('SessionStart')).split('\n');
+      expect(lines[0], name).toMatch(/^SEAT: [^\u0000-\u001f\u007f]+ #cccccccc$/);
+      expect(lines[1]).toContain('## Lane board continuous-claude');
+    }
+  });
+
+  it('S9: a failing SEAT lookup drops the line only: the rest of the text is the same, and nothing crashes', async () => {
+    fake.seat = [];
+    const base = await run('SessionStart');
+    writeIdentity(BOSS, { name: 'trex' });
+    fake.seat = [seatRow(BOSS)];
+    fake.failSeat = true;
+    const text = await run('SessionStart');
+    expect(text).not.toContain('SEAT:');
+    expect(text).toBe(base);
+  });
+
   it('S5: the prompt path and the mid-turn path print no SEAT line', async () => {
     writeIdentity(BOSS, { name: 'trex' });
     fake.seat = [seatRow(BOSS)];
@@ -217,6 +269,7 @@ describe('CUT', () => {
   const at = (ms: number): { now: () => number } => ({ now: () => T0 + ms });
   const CUT_RE = /^CUT, NOT READ: /;
   const cutLineOf = (t: string): string | undefined => t.split('\n').find((l) => CUT_RE.test(l));
+  const hasCut = (t: string): boolean => t.includes('more bytes. Full text');
   const cutFile = (): string => join(process.env.LANE_CUT_STATE_DIR as string, `${ME}.json`);
   const big = (id: number): Row => ({
     id, occurred_at: '', lane_id: null, kind: 'note', session_id: PEER, to_session_id: null,
@@ -330,8 +383,12 @@ describe('CUT', () => {
     expect(emitFn).toHaveBeenCalledTimes(1);
     expect(String(emitFn.mock.calls[0][0])).toContain('short');
     expect(String(emitFn.mock.calls[0][0])).not.toContain('CUT, NOT READ');
+    // The mid-turn text counted no print: the id still prints 3 more times, and is gone on the 4th.
     fake.unread = [];
-    expect(cutLineOf(await run('SessionStart', at(MIN)))).toBe('CUT, NOT READ: 41');
+    for (let i = 1; i <= 3; i += 1) {
+      expect(cutLineOf(await run('SessionStart', at(i * MIN))), `print ${i}`).toBe('CUT, NOT READ: 41');
+    }
+    expect(cutLineOf(await run('SessionStart', at(4 * MIN)))).toBeUndefined();
   });
 
   it('C8: a corrupt state file gives no line and no crash; the banner still prints', async () => {
@@ -349,5 +406,72 @@ describe('CUT', () => {
     const text = await run('SessionStart', at(MIN));
     expect(cutLineOf(text)).toBeUndefined();
     expect(text.split('\n')[0]).toContain('## Lane board continuous-claude');
+  });
+
+  it('C9: a late page (the hook is old) sends its text but counts no print and records no cut', async () => {
+    await cutIt(41);
+    const late = await run('SessionStart', { uptime: () => 5, ...at(MIN) });
+    expect(cutLineOf(late)).toBe('CUT, NOT READ: 41');
+    // A late prompt page that cuts a new event records nothing either.
+    fake.unread = [big(77)];
+    const latePrompt = await run('UserPromptSubmit', { uptime: () => 5, ...at(MIN) });
+    expect(hasCut(latePrompt)).toBe(true);
+    fake.unread = [];
+    for (let i = 2; i <= 4; i += 1) {
+      expect(cutLineOf(await run('SessionStart', at(i * MIN))), `print ${i}`).toBe('CUT, NOT READ: 41');
+    }
+    expect(cutLineOf(await run('SessionStart', at(5 * MIN)))).toBeUndefined();
+  });
+
+  it('C10: the state is written to a temp file in its own folder, then renamed over the state file', async () => {
+    await cutIt(41);
+    expect(fsLog.writes).not.toContain(cutFile());
+    const toState = fsLog.renames.filter(([, to]) => to === cutFile());
+    expect(toState).toHaveLength(1);
+    const [from] = toState[0];
+    expect(from).not.toBe(cutFile());
+    expect(dirname(from)).toBe(dirname(cutFile()));
+    expect(fsLog.writes).toContain(from);
+  });
+
+  it('C10: a rename that fails leaves the old state file intact, no temp file, and the banner unchanged', async () => {
+    await cutIt(41);
+    const before = readFileSync(cutFile(), 'utf8');
+    fsLog.failRename = true;
+    await cutIt(42, MIN);
+    fsLog.failRename = false;
+    expect(readFileSync(cutFile(), 'utf8')).toBe(before);
+    expect(readdirSync(dirname(cutFile()))).toEqual([basename(cutFile())]);
+    expect(cutLineOf(await run('SessionStart', at(2 * MIN)))).toBe('CUT, NOT READ: 41');
+  });
+
+  it('C11: a state folder that cannot be written drops the line only: the text is the same, and nothing crashes', async () => {
+    const base = await run('SessionStart', at(0));
+    const blocker = join(tmp, 'a-file');
+    writeFileSync(blocker, 'x');
+    process.env.LANE_CUT_STATE_DIR = join(blocker, 'sub'); // mkdir under a regular file fails
+    await cutIt(41);
+    expect(await run('SessionStart', at(MIN))).toBe(base);
+  });
+
+  it('C12: a state file with prints below 0 or an `at` in the future is not read', async () => {
+    mkdirSync(dirname(cutFile()), { recursive: true });
+    writeFileSync(cutFile(), JSON.stringify({ entries: [
+      { id: 41, at: T0, prints: 0 },
+      { id: 42, at: T0, prints: -5 },
+      { id: 43, at: T0 + 10 * MIN, prints: 0 },
+    ] }), 'utf8');
+    expect(cutLineOf(await run('SessionStart', at(MIN)))).toBe('CUT, NOT READ: 41');
+  });
+
+  it('C13: a text that prints no pending id and cuts nothing does not touch the state file', async () => {
+    await cutIt(41);
+    fsLog.writes.length = 0; fsLog.renames.length = 0;
+    fake.unread = [];
+    await run('UserPromptSubmit', at(MIN)); // no unread: the prompt path is silent, so no print
+    await run('SessionStart', at(MIN)); // with nothing pending after expiry: nothing to change
+    const stateWrites = [...fsLog.writes, ...fsLog.renames.map(([, to]) => to)].filter((p) => p.includes('cut-state'));
+    // The SessionStart print is a change (one write); the silent prompt is not.
+    expect(stateWrites.filter((p) => p === cutFile())).toHaveLength(1);
   });
 });
