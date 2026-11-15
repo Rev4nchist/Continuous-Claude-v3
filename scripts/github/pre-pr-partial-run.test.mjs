@@ -391,3 +391,14 @@ test('PA15: a user git setting that merges hunks (diff.interHunkContext) cannot 
   const near = paPartial(repo.head, { findings: [{ file: 'src/a.ts', start: 19, end: 19 }] });
   assert.equal((await paAtCap(repo, [near, PA_FILLER], head)).partialEarned, 1, 'the control: line 19 was changed');
 });
+
+test('PA16: a user git setting that colors diffs (color.ui always) cannot hide a fixed finding', async () => {
+  // Breaks when: the findingFixed diff does not pass --no-color (the escape codes in front of "@@" break the hunk header match, so a fixed finding counts as not fixed).
+  const repo = paRepo();
+  git(repo.dir, 'config', 'color.ui', 'always');
+  const head = paChangeLine(repo, 11);
+  const row = paPartial(repo.head, { findings: [{ file: 'src/a.ts', start: 11, end: 11 }] });
+  assert.equal((await paAtCap(repo, [row, PA_FILLER], head)).partialEarned, 1, 'line 11 was changed');
+  const untouched = paPartial(repo.head, { findings: [{ file: 'src/a.ts', start: 15, end: 15 }] });
+  assert.equal((await paAtCap(repo, [untouched, PA_FILLER], head)).partialEarned, 0, 'the control: line 15 was not changed');
+});

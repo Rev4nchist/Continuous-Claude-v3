@@ -1897,10 +1897,11 @@ describe('C26 item 2: a global option the push parser does not read gives a push
     expect(r?.scope).toBe('app-push');
   });
   // G4: the CCv3 path is unchanged. These rows pin base behaviour in a CCv3 checkout.
-  it('CCv3 unchanged: git -p push --force fork feat and git push -oh fork feat pass; git push --mirr fork feat keeps the ship deny', () => {
+  it('CCv3: git -p push --force fork feat and git push -oh fork feat pass; git push --mirr fork feat is a hard push-unsafe (card prflow-push-blocks)', () => {
     expect(verdict(bash('git -p push --force fork feat', '/work/cc'), CC_PUSH)).toEqual({ action: 'allow' });
     expect(verdict(bash('git push -oh fork feat', '/work/cc'), CC_PUSH)).toEqual({ action: 'allow' });
-    expect(denyOf(bash('git push --mirr fork feat', '/work/cc'), CC_PUSH)?.pattern).toBe('ship');
+    // A prefixed unsafe option (--mirr, --del, --al) is a hard deny in CCv3 now: it used to reach the ship tap and keep the ship deny.
+    expect(denyOf(bash('git push --mirr fork feat', '/work/cc'), CC_PUSH)?.pattern).toBe('push-unsafe');
   });
   // Fix round 5 re-pin (ruling A): quiet is read only inside the strict reader, for a call it accounts for. git -p is a global option it
   // does not read, so --dry-run there is a bare word: denied push-target-unresolved (it was a pass). A strict dry run still passes.

@@ -23,16 +23,21 @@
  *
  * Zero `git` spawns: the branch and HEAD come from reading files (shared/git-head.ts). Any error
  * means `{}` (fail open): a bug here must never block a commit.
+ * One exception (card prflow-push-blocks): a commit on a `re/` branch makes ONE git read of the index
+ * (stagedHoldoutCount). When the staged added lines hold a holdout id the hook asks ("the push will be
+ * refused"), with a count only. It is an early warning; the push check in decision-gate is the gate.
  *
  * Registered in settings.json on two matcher blocks (Bash, PowerShell), like
  * destructive-command-guard. The runtime gate below is the same two tools. The helpers live in
  * shared/ because a hook file runs main() at load; importing one hook from another would run both.
  */
+import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { isAbsolute, resolve } from 'path';
 import { hasE2e, judge, latestSidecar, readTestRun } from './shared/done-proof.js';
 import { VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { resolveHead } from './shared/git-head.js';
+import { countIdsIn, loadHoldoutIds } from './shared/holdout-ids.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { isUnattended } from './shared/unattended.js';
 import { logGuardDecision } from './shared/guard-log.js';
@@ -46,6 +51,26 @@ export interface PreflightOptions {
   /** Registry file; default ~/.claude/project-registry.json. */
   registryPath?: string;
   now?: number;
+  /**
+   * The early warning of the push scan (card prflow-push-blocks): how many holdout ids stand in the STAGED added lines of a commit on a `re/`
+   * branch, or null when it cannot be read (fail open: this is feedback, the push check is the gate). Default: a git read of the index.
+   */
+  stagedHoldout?: (dir: string, mainRoot: string) => number | null;
+}
+
+/** Staged added lines above this size are not read (the warning stays silent; the push check bounds the real scan). */
+const STAGED_MAX_BYTES = 1_500_000;
+
+/** Default for PreflightOptions.stagedHoldout: one git read of the index. A count only; never an id. Fail open (null). */
+function stagedHoldoutCount(dir: string, mainRoot: string): number | null {
+  try {
+    const r = spawnSync('git', ['diff', '--cached', '--unified=0', '--no-color', '--no-renames'], { cwd: dir, encoding: 'utf8', windowsHide: true, maxBuffer: STAGED_MAX_BYTES * 2, timeout: 5000 });
+    if (r.status !== 0 || typeof r.stdout !== 'string' || r.stdout.length > STAGED_MAX_BYTES) return null;
+    const added = r.stdout.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
+    return countIdsIn(added, loadHoldoutIds(mainRoot));
+  } catch {
+    return null;
+  }
 }
 
 interface HookInput {
@@ -248,6 +273,7 @@ export function preflight(input: HookInput | null | undefined, opts: PreflightOp
     let warn: string | null = null;
     let judged = false;
     let mainText: string | null = null;
+    let holdoutText: string | null = null;
     for (const call of calls) {
       const dir = callDir(command, masked, call, cwd);
       const head = dir ? resolveHead(dir) : null;
@@ -263,23 +289,29 @@ export function preflight(input: HookInput | null | undefined, opts: PreflightOp
         });
         warn = verdict.kind === 'proven' ? null : `commit-preflight: ${verdict.message}`;
       }
+      // A commit on a re/ branch: early warning when the staged added lines hold a holdout id. Ask only; the push check is the gate.
+      if (!holdoutText && head.branch?.startsWith('re/')) {
+        const n = (opts.stagedHoldout ?? stagedHoldoutCount)(dir, head.mainRoot);
+        if (n !== null && n > 0) holdoutText = `The staged lines of this commit on ${head.branch} hold ${n} holdout id${n === 1 ? '' : 's'}. The push will be refused. Remove them before you commit.`;
+      }
       if (mainText || !head.branch || !PROTECTED_BRANCHES.has(head.branch)) continue;
       const msg = messageHead(command, masked, call, [dir, cwd]);
       if (msg !== null && isFeatOrFix(msg)) mainText = mainBranchText(head.branch, head.repoRoot);
     }
     if (!judged) return null; // no repo could be read: fail open
 
-    if (mainText && !isUnattended(input ?? {}, opts.env ?? process.env)) {
+    const askText = [mainText, holdoutText].filter(Boolean).join('\n');
+    if (askText && !isUnattended(input ?? {}, opts.env ?? process.env)) {
       return {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
           permissionDecision: 'ask',
-          permissionDecisionReason: mainText,
+          permissionDecisionReason: askText,
           ...(warn ? { additionalContext: warn } : {}),
         },
       };
     }
-    const context = [warn, mainText].filter(Boolean).join('\n');
+    const context = [warn, askText].filter(Boolean).join('\n');
     if (!context) return null;
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } };
   } catch {
@@ -298,7 +330,9 @@ function main(): void {
   }
   const out = preflight(input);
   if (out?.hookSpecificOutput.permissionDecision === 'ask') {
-    logGuardDecision('commit-preflight', input, 'ask', 'commit-on-protected-branch', { command: String(input.tool_input?.command ?? '') });
+    // A holdout row logs the rule name only: no command, no count, no id.
+    if (/holdout id/.test(out.hookSpecificOutput.permissionDecisionReason ?? '')) logGuardDecision('commit-preflight', input, 'ask', 'holdout-staged', {});
+    else logGuardDecision('commit-preflight', input, 'ask', 'commit-on-protected-branch', { command: String(input.tool_input?.command ?? '') });
   }
   console.log(JSON.stringify(out ?? {}));
 }
