@@ -376,7 +376,8 @@ describe('C2 seat findings: a character the merge reader does not model makes th
       for (const [w, x] of [[`bash -c '${m}'`, `bash -c '${c}'`], [`pwsh -Command '${m}'`, `pwsh -Command '${c}'`], [`cmd /c "${m}"`, `cmd /c "${c}"`],
         [`cmd /c ${m}`, `cmd /c ${c}`], [`powershell -c ${m}`, `powershell -c ${c}`], [`@'\n${m}\n'@ | Invoke-Expression`, `@'\n${c}\n'@ | iex`]]) {
         expect(patternIn(tool(w)), `${tool === bash ? 'bash' : 'pwsh'} ${w}`).toBe('merge-no-head');
-        expect(patternIn(tool(x)), `${tool === bash ? 'bash' : 'pwsh'} ${x}`).not.toBe('allow');
+        // Seat note (conformance read 09:4x): the create rows name their pattern, not only "not allow".
+        expect(patternIn(tool(x)), `${tool === bash ? 'bash' : 'pwsh'} ${x}`).toBe('head-unresolved');
       }
     }
   });
@@ -629,7 +630,7 @@ describe('C4: no unmodelled state change before a push', () => {
   });
   it('C4-6 (measured flow): commit && push with a pipe AFTER the push is the index rule, not the HEAD tree rule', () => {
     // Breaks when: commitPrecedesPush reads the whole text, so a trailing pipe makes the commit-and-push flow fall to the HEAD tree
-    // (an old tap passes the new contents) or to push-state-unknown (80 of 137 measured denies).
+    // (an old tap passes the new contents) or to push-state-unknown (the git-safe commit-and-push flow, found by the C4 measure).
     const c = 'git commit -F m.txt && pwsh -File scripts/git-safe.ps1 push fork feat/x 2>&1 | Select-Object -Last 3';
     shipTapOn(TREE);
     expect(pushPat(c)).toBe('warn:ship');
@@ -714,6 +715,55 @@ describe('C3: a push is read whole, or it is denied hard', () => {
     for (const c of ["& scripts/git-safe.ps1 'push' '--force' fork x", '& scripts/git-safe.ps1 "push" --force fork x', "pwsh -File scripts/git-safe.ps1 -C . 'push' '+feat/x'"]) {
       expect(classifyDestructive(c, 0, 'PowerShell'), c).toBe('git push --force');
     }
+  });
+  it('C3-5b (seat fix 1): a quoted option value that starts with push, then a later value with ; still asks (the option value is not the subcommand)', () => {
+    // Breaks when: WRAPPER_OPT refuses a quoted value that starts with push, so the rule reads that value as the subcommand and the ;
+    // inside it ends the match before the real --force (an ask dropped: only-tightens broken).
+    // The quoted wrapper path with a blank is read only by the wrapper rule (the quote-stripped rewrite cannot name it).
+    for (const c of ["& scripts/git-safe.ps1 -Remote 'push;x' push --force fork x", '& scripts/git-safe.ps1 -Remote "push|x" push --force fork x',
+      "& 'C:\\my repo\\scripts\\git-safe.ps1' -Remote 'push;x' push --force fork x"]) {
+      expect(classifyDestructive(c, 0, 'PowerShell'), c).toBe('git push --force');
+    }
+  });
+  it('C3-6 (seat fix 2): a remote list that throws is no proof of "not CCv3": the raw rule and the gh flag-first rule deny', () => {
+    // Breaks when: a throw from isCcv3Checkout reads as "not CCv3", so a payload push or a flag-first create in that folder passes.
+    for (const c of ["sh -c 'git push fork re/x'", `gh -R ${REPO} pr create --fill`]) {
+      expect(run(bash(c), { throwIn: '/repo' }).permissionDecision, c).toBe('deny');
+    }
+  });
+  it('C3-C6 (cost, R18-C3 narrowing): the same throw in a resolved folder under no registry root keeps today\'s result', () => {
+    for (const c of ["sh -c 'git push up feat/x'", `gh -R ${REPO} pr create --fill`]) {
+      expect(run({ ...bash(c), cwd: '/elsewhere/app' }, { throwIn: '/elsewhere' }).permissionDecision, c).toBeUndefined();
+    }
+  });
+  it('C3-7 (seat fix 4): a source taken from HEAD or @ with ~ or ^ reads the checked-out branch for the re/ scan', () => {
+    // Breaks when: sendsRe matches only a bare HEAD or @, so HEAD~0:feat/y on a re/ branch skips the scan.
+    const w: World = { scan: { ids: [ID], added: `see ${ID}` }, branch: 're/topic' };
+    for (const c of ['git push fork @:feat/y', 'git push fork HEAD~0:feat/y', 'git push fork @~0:feat/y', 'git push fork HEAD^0:feat/y']) {
+      expect(patIn(bash(c), w), c).toBe('holdout-id');
+    }
+  });
+  it('C3-8 (seat fix 5): popd and Pop-Location before a push are a folder change (the position reader), not an unmodelled step', () => {
+    // Breaks when: pushPrefix reads popd or Pop-Location as "other", so a push after it is push-state-unknown.
+    // An absolute -C names the push folder, so the position reader lets it through and C4 decides (with a bare push, position-unknown
+    // comes first and hides C4).
+    shipTapOn(TREE);
+    expect(pushPat('popd && git -C /repo push fork feat/x')).toBe('allow');
+    expect(patternIn(pwsh('Pop-Location; git -C /repo push fork feat/x'))).not.toBe('push-state-unknown');
+  });
+  it('C3-9 (seat fix 6): a push to a local path before the last push moves a local branch: push-state-unknown', () => {
+    // Breaks when: every push step before the last push counts as safe, so git push . HEAD:feat/x moves feat/x before the judged push.
+    shipTapOn(TREE);
+    for (const c of ['git push . HEAD:feat/x && git push fork feat/x', 'git push ../other main && git push fork feat/x', 'git push /tmp/r.git x && git push fork feat/x']) {
+      expect(patternOf(c), c).toBe('push-state-unknown');
+    }
+    expect(pushPat('git push fork other && git push fork feat/x')).not.toBe('push-state-unknown'); // cost: a push to a remote first
+  });
+  it('C1-13 (seat fix 3): a gh named by its path with a flag first is head-unresolved or merge-no-head', () => {
+    // Breaks when: GH_FLAG_FIRST needs a bare gh word, so /usr/bin/gh -R ... or C:\\tools\\gh.exe -R ... is read by no reader.
+    expect(patternOf(`/usr/bin/gh -R ${REPO} pr create --fill`)).toBe('head-unresolved');
+    expect(patternIn(pwsh(`C:\\tools\\gh.exe -R ${REPO} pr create --fill`))).toBe('head-unresolved');
+    expect(patternIn(pwsh(`& "C:\\Program Files\\GitHub CLI\\gh.exe" -R ${REPO} pr merge 5 --squash --match-head-commit ${HEAD}`))).toBe('merge-no-head');
   });
   it('C3-C5 (cost; item 13 Known limit, seat Q3): a plain wrapper push asks no more than today; a message that names the wrapper still asks', () => {
     expect(classifyDestructive('pwsh -File scripts/git-safe.ps1 push fork feat/x', 0, 'PowerShell')).toBeNull();

@@ -1639,9 +1639,8 @@ function rawPushDenies(raw: string, tool: string | undefined, deps: Deps, cwd: s
     // Round 3 C3 (seat Q1, F-2): a push no shape reads is a HARD deny when a folder of it is a CCv3 checkout, or when a quote of its
     // payload cannot be paired (its folder cannot be read, so it cannot be shown uncovered: every folder, seat ACCEPTED cost).
     if (!v.unread) return [];
-    // A folder whose remotes git cannot list is not shown to be CCv3 here (it was an allow before; the shape judging still runs there).
-    const ccv3 = (d: string): boolean => { try { return isCcv3Checkout(deps, d); } catch { return false; } };
-    const hit = payloadWords(raw, shell) === null || dirs.some((d) => !isUnexpanded(d) && ccv3(d));
+    // Seat fix 2: a folder whose remotes git cannot list counts as CCv3 unless it is a resolved folder under no registry root.
+    const hit = payloadWords(raw, shell) === null || dirs.some((d) => !isUnexpanded(d) && ccv3OrUnplaced(deps, d));
     return hit ? [hardOf(deny('push-target-unresolved', RAW_PUSH_WHY, 'push'))] : [];
   }
   // Fix round 6: an unread push takes the tap path; only a force spelling in a push segment is hard. Reviewer-2 item 3: a subagent's too.
@@ -1666,21 +1665,22 @@ function hiddenGhDenies(raw: string, tool: string | undefined, deps: Deps, cwd: 
  * is unread. Read on the quotes-deleted text, so a quoted spelling counts too (more denies, never fewer). Measured: 0 of 764 gh commands
  * in 7 days. A CCv3 folder gets the CCv3 deny, a covered folder the app one (homeFlags); an uncovered folder nothing, as for every create.
  */
-const GH_FLAG_FIRST = /(?:^|[\s;&|(){}])gh(?:\.exe)?\s+-/i;
+// Seat fix 3: gh may be named by its path (/usr/bin/gh, C:\tools\gh.exe, "C:\Program Files\GitHub CLI\gh.exe"), with a quote after it.
+const GH_FLAG_FIRST = /(?:^|[\s;&|(){}"'])(?:[^\s;&|(){}"']*[\\/])?gh(?:\.exe)?["']?\s+-/i;
 const GH_MERGE_TEXT = /\bpr\s+merge\b|\bapi\b[^\n]*\/merge\b/i;
 const GH_CREATE_TEXT = /\bpr\s+(?:create|new)\b|\bapi\b[^\n]*\/pulls\b/i;
 const GH_FLAG_FIRST_WHY = 'a gh flag stands before the subcommand (gh -R <repo> pr ...), so this gate cannot read the call. Put the flag after the subcommand: gh pr create -R <repo> --head <branch> --base <base> ..., or gh pr merge <n> -R <repo> --match-head-commit <sha> ...';
 function ghFlagFirstDenies(raw: string, tool: string | undefined, deps: Deps, cwd: string, shell: 'bash' | 'pwsh'): Deny[] {
+  // The raw text too: squashMarks deletes the backslash of a Windows path (seat fix 3).
   const text = squashMarks(raw);
-  if (!GH_FLAG_FIRST.test(text)) return [];
+  if (!GH_FLAG_FIRST.test(text) && !GH_FLAG_FIRST.test(raw)) return [];
   const pattern = GH_MERGE_TEXT.test(text) ? 'merge-no-head' : GH_CREATE_TEXT.test(text) ? 'head-unresolved' : null;
   if (pattern === null) return [];
   const dirs = rawDirs(raw, tool, cwd, shell, deps.home).filter((d) => !isUnexpanded(d));
   const app = firstCovered(deps, dirs);
   if (app !== null) return [{ ...deny(pattern, `${GH_FLAG_FIRST_WHY}${inAppFolder(app)}`), homeFlags: true }];
-  // A folder whose remotes git cannot list is not shown to be CCv3 here; the shape judging of the rest still runs.
-  const ccv3 = dirs.some((d) => { try { return isCcv3Checkout(deps, d); } catch { return false; } });
-  return ccv3 ? [deny(pattern, GH_FLAG_FIRST_WHY)] : [];
+  // Seat fix 2: a folder whose remotes git cannot list counts as CCv3 unless it is a resolved folder under no registry root.
+  return dirs.some((d) => ccv3OrUnplaced(deps, d)) ? [deny(pattern, GH_FLAG_FIRST_WHY)] : [];
 }
 
 
@@ -2366,23 +2366,26 @@ function steadyCommand(raw: string, shell: 'bash' | 'pwsh'): boolean {
  */
 function stateModelled(raw: string, shell: 'bash' | 'pwsh'): boolean {
   const r = pushPrefix(raw, shell);
-  return r !== null && (r.plain || commitPrecedesPush(r.prefix, shell));
+  return r !== null && !r.localPush && (r.plain || commitPrecedesPush(r.prefix, shell));
 }
 /**
- * The text up to the end of the LAST step that names a push, when that step is a plain push (else null), and whether every step before
- * it is a cd, a read-only git call or a push joined by ; && or || (`plain`). What follows the last push (a pipe, 2>&1 | Select-Object)
- * cannot change what it sends, so commitPrecedesPush reads the prefix: the commit-and-push flow with a trailing pipe is the index rule.
+ * The text up to the end of the LAST step that names a push (null when no step names one), whether every step before it is a cd, popd,
+ * a read-only git call or a push joined by ; && or || (`plain`), and whether a push before it goes to a local path (`localPush`). What
+ * follows the last push (a pipe, 2>&1 | Select-Object) cannot change what it sends, so commitPrecedesPush reads the prefix: the
+ * commit-and-push flow with a trailing pipe is the index rule; so is commit && push && commit (the last commit is after the push).
+ * Accepted over-deny: a step after the push that names the word push (git push ... | Select-String push) becomes the last named step.
  */
-function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plain: boolean } | null {
+function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plain: boolean; localPush: boolean } | null {
   const view = fdBlank(joinContinuations(raw, shell));
   const masked = maskQuoted(view, shell === 'pwsh' ? 'PowerShell' : 'Bash');
-  const steps: { kind: SegKind | 'popd'; named: boolean; op: string; end: number }[] = [];
+  const steps: { kind: SegKind | 'popd'; named: boolean; op: string; end: number; raw: string }[] = [];
   let from = 0;
   let pending = '';
   for (const [start, next] of [...[...masked.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const), [view.length, view.length] as const]) {
     const ms = masked.slice(from, start);
+    const rs = view.slice(from, start);
     // A step names a push when its quotes-deleted text holds the word (git "push" is a push too).
-    if (ms.trim() !== '') { steps.push({ kind: /^\s*(?:popd|Pop-Location)\s*$/i.test(ms) ? 'popd' : segmentKind(ms, view.slice(from, start)), named: /\bpush\b/i.test(squashQuotes(view.slice(from, start))), op: pending, end: start }); pending = ''; } else pending += ms;
+    if (ms.trim() !== '') { steps.push({ kind: /^\s*(?:popd|Pop-Location)\s*$/i.test(ms) ? 'popd' : segmentKind(ms, rs), named: /\bpush\b/i.test(squashQuotes(rs)), op: pending, end: start, raw: rs }); pending = ''; } else pending += ms;
     pending += masked.slice(start, next);
     from = next;
   }
@@ -2393,8 +2396,13 @@ function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plai
   // popd and Pop-Location only move the folder: the position reader judges them (position-unknown), so they count as a cd here.
   const plain = steps.slice(0, last).every((s) => s.kind === 'cd' || s.kind === 'read' || s.kind === 'push' || s.kind === 'popd')
     && steps.slice(1, last + 1).every((s) => !s.op.includes('|') && !/(?<!&)&(?!&)/.test(s.op));
-  return { prefix: view.slice(0, steps[last].end), plain };
+  // Seat fix 6: a push step before the last one that pushes to a local path (git push . HEAD:x, git push ../r main) moves a local branch.
+  const tool = shell === 'pwsh' ? 'PowerShell' : 'Bash';
+  const localPush = steps.slice(0, last).some((s) => s.kind === 'push' && pushShapesOf(s.raw, tool).some((p) => LOCAL_REMOTE.test(p.push?.remote ?? '')));
+  return { prefix: view.slice(0, steps[last].end), plain, localPush };
 }
+/** A push remote that is a path on this machine, not a remote name: ., .., ./x, ../x, /x, ~, a drive letter, file:, a backslash. */
+const LOCAL_REMOTE = /^(?:\.{1,2}(?:[\\/]|$)|[\\/~]|[A-Za-z]:|file:)|\\/i;
 const PUSH_STATE_WHY = 'a step before this push can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.';
 const PUSH_CHECKOUT_WHY = 'the commit before this push runs in one checkout and the push in another (or the checkout of the push folder cannot be read), so the tree it sends cannot be judged. Commit and push in two commands, or push from the same folder: git commit ...; git push <remote> <branch>.';
 
@@ -2407,8 +2415,10 @@ function sameCheckout(deps: Deps, commitDirs: string[], dir: string): boolean {
     const r = deps.git(d, ['rev-parse', '--path-format=absolute', '--show-toplevel']);
     return r.status === 0 && r.stdout.trim() !== '' ? r.stdout.trim() : null;
   };
+  // Seat fix 7: the bound is a count of git calls, not a clock: the push folder and at most 2 commit folders (3 calls). More: false.
+  if (commitDirs.length === 0 || commitDirs.length > 2) return false;
   const push = top(dir);
-  return push !== null && commitDirs.length > 0 && commitDirs.every((c) => top(c) === push);
+  return push !== null && commitDirs.every((c) => top(c) === push);
 }
 
 const ADD_GIT = gitCallRe('add');
@@ -2765,7 +2775,8 @@ function sendsRe(p: PushShape, deps: Deps, dir: string, branch: string): boolean
   if (p.src === null && p.branch === null) return false;
   const src = headName(p.src ?? 'HEAD');
   if (src.startsWith('re/')) return true;
-  return (src === 'HEAD' || src === '@') && currentBranch(deps, dir).startsWith('re/');
+  // Seat fix 4: HEAD or @ alone, or followed by ~, ^ or @ (HEAD~0, @^0, HEAD@{0}) names a commit of the checked-out branch.
+  return /^(?:HEAD|@)(?:$|[~^@])/.test(src) && currentBranch(deps, dir).startsWith('re/');
 }
 const RE_NOT_ALONE_WHY = 'the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.';
 
@@ -3506,11 +3517,37 @@ function pushFoldersUnregistered(input: HookInput, deps: Deps): boolean {
     const paths = knownDirs(raw, deps.home);
     const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
     if (dirs.length === 0 || dirs.some((d) => !isAbsolute(d) || isUnexpanded(d))) return false;
-    // The CCv3 root as a live entry, so the public path test finds it (underLiveRoot never counts the CCv3 key as live).
-    const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: 'active', tapGate: null })) };
-    return !dirs.some((d) => underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope));
+    return !dirs.some((d) => underRegistryRoot(d, reg, scope));
   } catch {
     return false;
+  }
+}
+/** True when the path test puts `d` under a live registry root or the CCv3 root. Files only. */
+function underRegistryRoot(d: string, reg: ReturnType<TapScopeDeps['registry']>, scope: TapScopeDeps): boolean {
+  // The CCv3 root as a live entry, so the public path test finds it (underLiveRoot never counts the CCv3 key as live).
+  const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: 'active', tapGate: null })) };
+  return underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope);
+}
+/** Round 3 seat fix 2: `d` is an absolute folder with no variable under no registry root (the R18-C3 test for one folder). Never throws. */
+function folderUnregistered(deps: Deps, d: string): boolean {
+  try {
+    const scope = deps.tapScope;
+    if (!scope || !isAbsolute(d) || isUnexpanded(d)) return false;
+    const reg = scope.registry();
+    return reg.state === 'ok' && !underRegistryRoot(d, reg, scope);
+  } catch {
+    return false;
+  }
+}
+/**
+ * Round 3 seat fix 2: a CCv3 checkout, or a folder whose remotes git cannot list and that is not shown to be a resolved folder under
+ * no registry root (fail closed: a throw is no proof of "not CCv3"). Never throws.
+ */
+function ccv3OrUnplaced(deps: Deps, d: string): boolean {
+  try {
+    return isCcv3Checkout(deps, d);
+  } catch {
+    return !folderUnregistered(deps, d);
   }
 }
 

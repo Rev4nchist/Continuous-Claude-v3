@@ -2278,14 +2278,7 @@ function rawPushDenies(raw, tool, deps, cwd, shell, subagent) {
   const dir = firstCovered(deps, dirs);
   if (dir === null) {
     if (!v.unread) return [];
-    const ccv3 = (d) => {
-      try {
-        return isCcv3Checkout(deps, d);
-      } catch {
-        return false;
-      }
-    };
-    const hit = payloadWords(raw, shell) === null || dirs.some((d) => !isUnexpanded(d) && ccv3(d));
+    const hit = payloadWords(raw, shell) === null || dirs.some((d) => !isUnexpanded(d) && ccv3OrUnplaced(deps, d));
     return hit ? [hardOf(deny("push-target-unresolved", RAW_PUSH_WHY, "push"))] : [];
   }
   if (v.kind === "unsafe") return [deny("push-unsafe", appRawUnsafeWhy(dir), "app-push")];
@@ -2297,26 +2290,19 @@ function hiddenGhDenies(raw, tool, deps, cwd, shell) {
   const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
   return dir === null ? [] : [{ ...deny("position-unknown", unpairedWhy(dir)), homeFlags: true }];
 }
-var GH_FLAG_FIRST = /(?:^|[\s;&|(){}])gh(?:\.exe)?\s+-/i;
+var GH_FLAG_FIRST = /(?:^|[\s;&|(){}"'])(?:[^\s;&|(){}"']*[\\/])?gh(?:\.exe)?["']?\s+-/i;
 var GH_MERGE_TEXT = /\bpr\s+merge\b|\bapi\b[^\n]*\/merge\b/i;
 var GH_CREATE_TEXT = /\bpr\s+(?:create|new)\b|\bapi\b[^\n]*\/pulls\b/i;
 var GH_FLAG_FIRST_WHY = "a gh flag stands before the subcommand (gh -R <repo> pr ...), so this gate cannot read the call. Put the flag after the subcommand: gh pr create -R <repo> --head <branch> --base <base> ..., or gh pr merge <n> -R <repo> --match-head-commit <sha> ...";
 function ghFlagFirstDenies(raw, tool, deps, cwd, shell) {
   const text = squashMarks(raw);
-  if (!GH_FLAG_FIRST.test(text)) return [];
+  if (!GH_FLAG_FIRST.test(text) && !GH_FLAG_FIRST.test(raw)) return [];
   const pattern = GH_MERGE_TEXT.test(text) ? "merge-no-head" : GH_CREATE_TEXT.test(text) ? "head-unresolved" : null;
   if (pattern === null) return [];
   const dirs = rawDirs(raw, tool, cwd, shell, deps.home).filter((d) => !isUnexpanded(d));
   const app = firstCovered(deps, dirs);
   if (app !== null) return [{ ...deny(pattern, `${GH_FLAG_FIRST_WHY}${inAppFolder(app)}`), homeFlags: true }];
-  const ccv3 = dirs.some((d) => {
-    try {
-      return isCcv3Checkout(deps, d);
-    } catch {
-      return false;
-    }
-  });
-  return ccv3 ? [deny(pattern, GH_FLAG_FIRST_WHY)] : [];
+  return dirs.some((d) => ccv3OrUnplaced(deps, d)) ? [deny(pattern, GH_FLAG_FIRST_WHY)] : [];
 }
 function cmdSegments(view) {
   const out3 = [];
@@ -2768,7 +2754,7 @@ function steadyCommand(raw, shell) {
 }
 function stateModelled(raw, shell) {
   const r = pushPrefix(raw, shell);
-  return r !== null && (r.plain || commitPrecedesPush(r.prefix, shell));
+  return r !== null && !r.localPush && (r.plain || commitPrecedesPush(r.prefix, shell));
 }
 function pushPrefix(raw, shell) {
   const view = fdBlank(joinContinuations(raw, shell));
@@ -2778,8 +2764,9 @@ function pushPrefix(raw, shell) {
   let pending = "";
   for (const [start, next] of [...[...masked.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]), [view.length, view.length]]) {
     const ms = masked.slice(from, start);
+    const rs = view.slice(from, start);
     if (ms.trim() !== "") {
-      steps.push({ kind: /^\s*(?:popd|Pop-Location)\s*$/i.test(ms) ? "popd" : segmentKind(ms, view.slice(from, start)), named: /\bpush\b/i.test(squashQuotes(view.slice(from, start))), op: pending, end: start });
+      steps.push({ kind: /^\s*(?:popd|Pop-Location)\s*$/i.test(ms) ? "popd" : segmentKind(ms, rs), named: /\bpush\b/i.test(squashQuotes(rs)), op: pending, end: start, raw: rs });
       pending = "";
     } else pending += ms;
     pending += masked.slice(start, next);
@@ -2788,8 +2775,11 @@ function pushPrefix(raw, shell) {
   const last = steps.map((s) => s.named).lastIndexOf(true);
   if (last < 0) return null;
   const plain = steps.slice(0, last).every((s) => s.kind === "cd" || s.kind === "read" || s.kind === "push" || s.kind === "popd") && steps.slice(1, last + 1).every((s) => !s.op.includes("|") && !/(?<!&)&(?!&)/.test(s.op));
-  return { prefix: view.slice(0, steps[last].end), plain };
+  const tool = shell === "pwsh" ? "PowerShell" : "Bash";
+  const localPush = steps.slice(0, last).some((s) => s.kind === "push" && pushShapesOf(s.raw, tool).some((p) => LOCAL_REMOTE.test(p.push?.remote ?? "")));
+  return { prefix: view.slice(0, steps[last].end), plain, localPush };
 }
+var LOCAL_REMOTE = /^(?:\.{1,2}(?:[\\/]|$)|[\\/~]|[A-Za-z]:|file:)|\\/i;
 var PUSH_STATE_WHY = "a step before this push can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.";
 var PUSH_CHECKOUT_WHY = "the commit before this push runs in one checkout and the push in another (or the checkout of the push folder cannot be read), so the tree it sends cannot be judged. Commit and push in two commands, or push from the same folder: git commit ...; git push <remote> <branch>.";
 function sameCheckout(deps, commitDirs, dir) {
@@ -2797,8 +2787,9 @@ function sameCheckout(deps, commitDirs, dir) {
     const r = deps.git(d, ["rev-parse", "--path-format=absolute", "--show-toplevel"]);
     return r.status === 0 && r.stdout.trim() !== "" ? r.stdout.trim() : null;
   };
+  if (commitDirs.length === 0 || commitDirs.length > 2) return false;
   const push = top(dir);
-  return push !== null && commitDirs.length > 0 && commitDirs.every((c) => top(c) === push);
+  return push !== null && commitDirs.every((c) => top(c) === push);
 }
 var ADD_GIT = gitCallRe("add");
 var ADD_SAFE = safeCallRe("add", PUSH_WRAPPERS, "", "gi");
@@ -3035,7 +3026,7 @@ function sendsRe(p, deps, dir, branch) {
   if (p.src === null && p.branch === null) return false;
   const src = headName(p.src ?? "HEAD");
   if (src.startsWith("re/")) return true;
-  return (src === "HEAD" || src === "@") && currentBranch(deps, dir).startsWith("re/");
+  return /^(?:HEAD|@)(?:$|[~^@])/.test(src) && currentBranch(deps, dir).startsWith("re/");
 }
 var RE_NOT_ALONE_WHY = "the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.";
 function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
@@ -3550,10 +3541,30 @@ function pushFoldersUnregistered(input, deps) {
     const paths = knownDirs(raw, deps.home);
     const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
     if (dirs.length === 0 || dirs.some((d) => !isAbsolute2(d) || isUnexpanded(d))) return false;
-    const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: "active", tapGate: null })) };
-    return !dirs.some((d) => underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope));
+    return !dirs.some((d) => underRegistryRoot(d, reg, scope));
   } catch {
     return false;
+  }
+}
+function underRegistryRoot(d, reg, scope) {
+  const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: "active", tapGate: null })) };
+  return underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope);
+}
+function folderUnregistered(deps, d) {
+  try {
+    const scope = deps.tapScope;
+    if (!scope || !isAbsolute2(d) || isUnexpanded(d)) return false;
+    const reg = scope.registry();
+    return reg.state === "ok" && !underRegistryRoot(d, reg, scope);
+  } catch {
+    return false;
+  }
+}
+function ccv3OrUnplaced(deps, d) {
+  try {
+    return isCcv3Checkout(deps, d);
+  } catch {
+    return !folderUnregistered(deps, d);
   }
 }
 var MissingCwdError = class extends Error {

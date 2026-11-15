@@ -2197,7 +2197,7 @@ describe('R5 ruling A: the strict reading of the whole text, and what is no push
   // G4: a CCv3 checkout and an uncovered folder get no raw deny.
   it('a push in sh -c, eval or a substitution: a hard deny in a CCv3 checkout (round 3 C3, seat Q1); an uncovered folder passes as in base', () => {
     // Round 3 C3 (seat Q1, 2026-11-15): this row pinned the CCv3 allow (G4). A push no shape reads in a CCv3 root is now a hard
-    // push-target-unresolved: a re/ push in a payload skipped the holdout scan. Measured: 9 of 588 pushes in 7 days, all fixture text.
+    // push-target-unresolved: a re/ push in a payload skipped the holdout scan. Measured (file 45): 17 of 588 pushes in 7 days change, none a real push.
     for (const cmd of ["sh -c 'git push -f fork feat'", 'eval "git push fork feat"', 'echo "$(git push --force fork feat)"']) {
       expect(denyOf(bash(cmd, '/work/cc'), CC_PUSH)?.pattern, cmd).toBe('push-target-unresolved');
       expect(verdict(bash(cmd, '/work/stray'), CC_PUSH), cmd).toEqual({ action: 'allow' });
