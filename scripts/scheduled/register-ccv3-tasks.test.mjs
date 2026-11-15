@@ -16,7 +16,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -199,4 +199,27 @@ test('active copy ignores a stale tasks.json at the home-level relative path and
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /CCv3-T-Plain:/);
   assert.doesNotMatch(r.out, /CCv3-T-Stale/);
+});
+
+test('dry run on the REAL tasks.json: CCv3-Blocklist-Update is daily 06:30, wakes the laptop, allowed on battery (card blocklist-commit-0630)', win, () => {
+  // Breaks if the trigger goes back to 09:00: at 09:00 the bot commit moves main during the morning checks.
+  const realTasks = join(dirname(SCRIPT), '..', '..', '..', 'scripts', 'scheduled', 'tasks.json');
+  const tasks = JSON.parse(readFileSync(realTasks, 'utf8')).tasks;
+  const root = mkdtempSync(join(tmpdir(), 'reg-real-'));
+  try {
+    const home = join(root, 'home');
+    mkdirSync(join(home, 'scripts', 'scheduled'), { recursive: true });
+    for (const t of tasks) writeFileSync(join(home, 'scripts', 'scheduled', basename(t.script)), 'rem stub\r\n');
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT, '-TasksFile', realTasks, '-ClaudeHome', home, '-Only', 'CCv3-Blocklist-Update'],
+      { encoding: 'utf8', windowsHide: true, timeout: 90000 });
+    assert.equal(r.status, 0, (r.stdout ?? '') + (r.stderr ?? ''));
+    const line = (r.stdout ?? '').split(/\r?\n/).find((l) => l.startsWith('CCv3-Blocklist-Update:'));
+    assert.ok(line, r.stdout);
+    // Dave 2026-11-15: wake at 06:30 and allow battery, so a sleeping laptop on battery still runs it before the checks.
+    assert.match(line, /^CCv3-Blocklist-Update: cmd\.exe \/c ".*scheduled-blocklist-update\.bat"  \[daily 06:30, limit 30 min, llm=false battery=allow wake=yes\]$/);
+    assert.doesNotMatch(r.stdout, /^\[WARN\] CCv3-Blocklist-Update/m, 'wake with battery blocked would do nothing on battery');
+    assert.match(r.stdout, /^DRY RUN: nothing changed/m);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

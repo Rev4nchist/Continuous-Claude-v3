@@ -1,7 +1,7 @@
 @echo off
 setlocal
 REM Daily package security blocklist update
-REM Runs via Windows Task Scheduler at 9am (task CCv3-Blocklist-Update, cmd.exe /c <this file>)
+REM Runs via Windows Task Scheduler at 06:30 (task CCv3-Blocklist-Update, cmd.exe /c <this file>)
 REM
 REM This file lives in the repo at .claude/scripts/scheduled/ and the forward sync installs it at
 REM %USERPROFILE%\.claude\scripts\scheduled\. The task points at that installed copy, so the job
