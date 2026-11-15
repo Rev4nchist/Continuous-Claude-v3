@@ -304,7 +304,8 @@ describe('gate deny -> parsed app-ask command -> real app-ask -> real ledger -> 
     git(d, 'config', '--unset', 'remote.up.push');
     git(d, 'config', '--unset', 'push.recurseSubmodules');
     // The gate reads @{push} of topic now; the shell would switch to main first and push main.
-    expect(denied(verdict(d, 'git checkout -q main && git push')).pattern, 'a branch switch before a bare push').toBe('ship');
+    // Round 3 C4 (Dave 2026-11-15, "Strict here, soft in apps"): a step before the push that the gate does not model is push-state-unknown, on the tap path.
+    expect(denied(verdict(d, 'git checkout -q main && git push')).pattern, 'a branch switch before a bare push').toBe('push-state-unknown');
     expect(verdict(d, 'git push'), 'config cleared again: the bare push passes').toEqual({ action: 'allow' });
   });
 });

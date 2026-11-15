@@ -6,8 +6,10 @@
 //   a test file matches *.test.mjs), and the local_review block of review-router.config.json without EXEMPT_LOCAL_REVIEW_KEYS.
 //   PROMPT_VERSION lives in local-review/prompt.mjs, so the directory rule covers it. No CONTEXT_VERSION exists today.
 //   scripts/ratchets/review-skip-sync.mjs is in the set (coordinator ruling, 2026-11-12): local-review/context.mjs:12 loads it with a
-//   dynamic import inside a try (optional), and it builds the skip list the reviewer reads. It has no relative import of its own.
-// bandVersion: the band set. BAND_SET_FILES (the whole review-router.mjs blob) and the matrix block of review-router.config.json.
+//   dynamic import inside a try (optional), and it builds the skip list the reviewer reads. It imports one lib, scripts/ratchets/lib/review-md.mjs
+//   (parseReviewMd, moved out of it 2026-11-14), which is in the set too.
+// bandVersion: the band set. BAND_SET_FILES (the whole review-router.mjs blob, and scripts/github/lib/answer-paths.mjs, the glob matcher
+//   and the answer-key list moved out of it 2026-11-14) and the matrix block of review-router.config.json.
 // Import closure: importClosureGaps reads both sets, static and literal dynamic imports. BAND_SET_IMPORT_EXEMPT is the one import from the
 //   band set that stays outside both sets (coordinator ruling, final): review-router.mjs:47 imports PR status helpers from review-status.mjs.
 // engineVersion: the contract name. An alias of reviewerVersion, exported from this module only.
@@ -44,9 +46,10 @@ export const REVIEWER_SET_FILES = Object.freeze([
   'scripts/github/lib/findings-repair.mjs',
   'scripts/github/lib/proc.mjs',
   'scripts/ratchets/review-skip-sync.mjs',
+  'scripts/ratchets/lib/review-md.mjs',
 ]);
 export const REVIEWER_SET_DIR = 'scripts/github/local-review/';
-export const BAND_SET_FILES = Object.freeze(['scripts/github/review-router.mjs']);
+export const BAND_SET_FILES = Object.freeze(['scripts/github/review-router.mjs', 'scripts/github/lib/answer-paths.mjs', 'scripts/github/lib/answer-key.mjs']);
 /**
  * Imports of the band set that stay outside both sets. review-router.mjs:47 imports PR status helpers from review-status.mjs (pullLabelNames,
  * latestCodeRabbitSummary, codeRabbitNotice, commitsNamed, shaIsHead). bandOf and CRITICAL_TRUST_BOUNDARY do not use them. Exempt by the

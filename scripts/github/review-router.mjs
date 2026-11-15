@@ -45,28 +45,14 @@ import path from 'node:path';
 import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { pullLabelNames, latestCodeRabbitSummary, codeRabbitNotice, commitsNamed, shaIsHead } from './review-status.mjs';
+import { globToRegExp, matchGlob } from './lib/answer-paths.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 
 // ---------- glob: ** (whole segments, zero or more), * (one segment), ? (one char). Nothing else is special. ----------
 
-const escapeRe = (s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-const segmentToRe = (seg) => escapeRe(seg).replace(/\*+/g, '[^/]*').replace(/\?/g, '[^/]');
-
-export function globToRegExp(glob) {
-  if (typeof glob !== 'string' || glob === '') throw new Error('empty glob');
-  const segs = glob.split('/');
-  let re = '';
-  segs.forEach((seg, i) => {
-    const last = i === segs.length - 1;
-    if (seg === '**') re += last ? '.+' : '(?:[^/]+/)*';
-    else re += segmentToRe(seg) + (last ? '' : '/');
-  });
-  return new RegExp(`^${re}$`);
-}
-
-export const matchGlob = (glob, p) => globToRegExp(glob).test(p);
+export { globToRegExp, matchGlob };
 
 // ---------- classes ----------
 

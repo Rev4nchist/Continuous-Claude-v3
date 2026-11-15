@@ -383,9 +383,12 @@ function routerFlag(cwd, readFile, home, section, key) {
   }
 }
 
+// src/shared/gh-open-prefix.ts
+var GH_OPT_PREFIX = String.raw`(?:[^\S\r\n]+[\w.\/:=@-]+){1,6}?`;
+
 // src/pr-opened-review-loop.ts
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
-var PR_CREATE_RE = /\bgh\s+pr\s+create\b/i;
+var PR_CREATE_RE = new RegExp(String.raw`\bgh(?:\s+|${GH_OPT_PREFIX}[^\S\r\n]+)pr\s+(?:create|new)\b`, "i");
 var GH_API_RE = /\bgh\s+api\b/i;
 var PULLS_PATH_RE = /\/pulls\/?(?=[\s"'?]|$)/i;
 var POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;

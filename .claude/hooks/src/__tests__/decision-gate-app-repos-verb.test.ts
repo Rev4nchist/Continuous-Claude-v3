@@ -161,9 +161,11 @@ describe('R6-V3 a verb that is not a plain word, or a shell payload with git and
 
 describe('R6-V4 a force word counts only in the segment of a git push call', () => {
   // Change that breaks it: read a force spelling anywhere in the raw text (test -f is a force word of test, not of the push).
-  it('R6-V4a test -f x && git push up topic with a topic tap: allowed', () => {
+  it('R6-V4a test -f x && git push up topic with a topic tap: still denied, on the tap path (round 3 C4)', () => {
+    // Round 3 C4 (Dave 2026-11-15, "Strict here, soft in apps"): a step before the push that the gate does not model is push-state-unknown,
+    // on the tap path. It is not a force word: the pattern is not push-unsafe.
     tap('ship', 'acme/app-x@topic', 'Commit and push', TREE);
-    expect(verdict(bash('test -f x && git push up topic'))).toEqual({ action: 'allow' });
+    expect(verdict(bash('test -f x && git push up topic'))).toMatchObject({ action: 'deny', pattern: 'push-state-unknown' });
   });
   it('R6-V4b test -f x && git push up topic with no tap: the tap path (warns when enforceAppPush is false)', () => {
     warns(bash('test -f x && git push up topic'));
@@ -198,7 +200,8 @@ describe('R6-W the tap-path deny names the way out when no tap can clear the com
   // Change that breaks it: give a push with another command beside it the plain ship text (it tells Dave to tap "Push only",
   // and that tap never counts for a push that is not alone in its command).
   it('R6-Wa test -f x && git push up feat: the ship deny names the way out, never that no tap can be tied to it', () => {
-    expect(verdict(bash('test -f x && git push up feat'))).toMatchObject({ action: 'deny', pattern: 'ship', scope: 'app-push' });
+    // Round 3 C4 (Dave 2026-11-15, "Strict here, soft in apps"): a step before the push that the gate does not model is push-state-unknown, on the tap path.
+    expect(verdict(bash('test -f x && git push up feat'))).toMatchObject({ action: 'deny', pattern: 'push-state-unknown', scope: 'app-push' });
     const why = reasonOf(bash('test -f x && git push up feat'));
     expect(why).toContain(WAY_OUT);
     expect(why).not.toMatch(/no tap can be tied/i);
@@ -206,12 +209,14 @@ describe('R6-W the tap-path deny names the way out when no tap can clear the com
   // Change that breaks it: give the not-alone text to every push that is neither alone nor chained (a leading git add makes
   // commitPrecedesPush false, but add, commit and push is the Commit and push flow, and its tap binds the staged tree).
   for (const cmd of ['git add -A && git commit -m fix && git push up feat', 'git add -A && git commit -m "push the fix" && git push up feat']) {
-    it(`R6-Wc ${cmd}: the ship text with the Commit and push offer, not the not-alone text`, () => {
-      expect(verdict(bash(cmd))).toMatchObject({ action: 'deny', pattern: 'ship', scope: 'app-push' });
+    it(`R6-Wc ${cmd}: push-state-unknown on the tap path, with the two-command way out (round 3 C4)`, () => {
+      // Round 3 C4 (Dave 2026-11-15, "Strict here, soft in apps"): a step before the push that the gate does not model is push-state-unknown,
+      // on the tap path: git add before the commit changes the index the gate reads, so no tap clears it. The text names the two commands.
+      expect(verdict(bash(cmd))).toMatchObject({ action: 'deny', pattern: 'push-state-unknown', scope: 'app-push' });
+      warns(bash(cmd)); // the tap path: enforceAppPush false softens it (Dave 11-13)
       const why = reasonOf(bash(cmd));
-      expect(why).toContain('no "ship" decision from Dave for the tree you push');
-      expect(why).toContain('"Commit and push"');
-      expect(why).not.toContain(WAY_OUT);
+      expect(why).toContain('commit first, push in a separate command');
+      expect(why).toContain(WAY_OUT);
     });
   }
   // Change that breaks it: count a git add with no commit as the Commit and push flow (the push sends HEAD, so that tap cannot clear it).

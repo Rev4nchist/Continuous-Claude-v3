@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -18,6 +18,12 @@ import {
 
 const HOOK = resolve(__dirname, '../../dist/coderabbit-guard.mjs');
 
+// A folder outside any git repo. The guard checks a review run against the git repo it runs in (answer-key check), and these tests are
+// about parsing and counting: they run in a folder where that check has nothing to read, so it never depends on this checkout.
+const OTHER_REMOTE = 'https://github.com/someone/other-repo.git';
+const NEUTRAL_CWD = mkdtempSync(join(tmpdir(), 'cr-guard-neutral-'));
+afterAll(() => rmSync(NEUTRAL_CWD, { recursive: true, force: true }));
+
 function runHook(
   input: Record<string, unknown>,
   extraEnv: Record<string, string> = {},
@@ -30,6 +36,7 @@ function runHook(
     encoding: 'utf8',
     timeout: 15000,
     env,
+    cwd: NEUTRAL_CWD,
   });
   return { stdout: res.stdout.trim(), status: res.status };
 }
@@ -39,8 +46,8 @@ function deny(stdout: string): boolean {
   return o.hookSpecificOutput?.permissionDecision === 'deny';
 }
 
-const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command } });
-const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command } });
+const bash = (command: string) => ({ tool_name: 'Bash', cwd: NEUTRAL_CWD, tool_input: { command } });
+const pwsh = (command: string) => ({ tool_name: 'PowerShell', cwd: NEUTRAL_CWD, tool_input: { command } });
 
 // Built at runtime so no source line holds the billing flag followed by a value (secret scanners flag that).
 const KEY_FLAG = ['--api', 'key'].join('-');
@@ -651,8 +658,9 @@ describe('coderabbit-guard: run counter key', { timeout: 180_000 }, () => {
   });
 
   it('reads the payload cwd, not the hook process cwd', () => {
-    const a = makeRepo('a', 'feat/a');
-    const b = makeRepo('b', 'feat/b');
+    // A repo with no remote is unknown to the answer-key check, which then needs main refs: give these repos another repo's remote.
+    const a = makeRepo('a', 'feat/a', OTHER_REMOTE);
+    const b = makeRepo('b', 'feat/b', OTHER_REMOTE);
     const stateFile = join(dir, 'state.json');
     const env = { CCV3_CODERABBIT_GUARD_STATE: stateFile };
     expect(decide({ ...bash('cr review --agent'), cwd: a }, env).allow).toBe(true);
@@ -661,8 +669,8 @@ describe('coderabbit-guard: run counter key', { timeout: 180_000 }, () => {
   });
 
   it('follows a leading cd, because subagents run every command as cd <worktree> && ...', () => {
-    const a = makeRepo('a', 'feat/a');
-    const b = makeRepo('b', 'feat/b');
+    const a = makeRepo('a', 'feat/a', OTHER_REMOTE);
+    const b = makeRepo('b', 'feat/b', OTHER_REMOTE);
     const stateFile = join(dir, 'state.json');
     const env = { CCV3_CODERABBIT_GUARD_STATE: stateFile };
     expect(decide({ ...bash(`cd "${b}" && cr review --agent`), cwd: a }, env).allow).toBe(true);
@@ -883,14 +891,26 @@ describe('coderabbit-guard: search commands that mention "cr review" do not use 
   it.each([
     ['bash', 'time cr review --agent'],
     ['bash', 'nohup sh -c "cr review --agent"'],
-    ['bash', 'find . -maxdepth 0 -exec cr review --agent {} ;'],
-    ['bash', 'watch -n 5 cr review --agent'],
+    ['bash', 'sudo -u root cr review --agent'],
     ['pwsh', 'Start-Job -ScriptBlock { cr review --agent }'],
     ['pwsh', 'Invoke-Expression "cr review --agent"'],
   ])('still counts an executing wrapper (%s): %s', (tool, command) => {
     const make = tool === 'bash' ? bash : pwsh;
     expect(decide(make(command), env).allow).toBe(true);
     expect(readState(join(dir, 'state.json')).counts['search#main']).toBeGreaterThanOrEqual(1);
+  });
+
+  // Round 3 (M1): a wrapper the parser does not read (find -exec, watch) may run the review in a folder the check does not see.
+  // It is denied in every folder, also this folder outside git, and it uses no slot.
+  it.each([
+    ['bash', 'find . -maxdepth 0 -exec cr review --agent {} ;'],
+    ['bash', 'watch -n 5 cr review --agent'],
+  ])('denies a wrapper the parser does not read (%s): %s', (tool, command) => {
+    const make = tool === 'bash' ? bash : pwsh;
+    const d = decide(make(command), env);
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('run the review as its own plain command with --base <ref>');
+    expect(existsSync(join(dir, 'state.json'))).toBe(false);
   });
 });
 
@@ -1002,8 +1022,17 @@ describe('coderabbit-guard: mixed parsed and hidden reviews count per segment', 
   });
 
   it('does not count a segment twice when the parser and the raw scan both see it', () => {
-    expect(decide(bash('cr review --agent && cr doctor && echo cr review'), env).allow).toBe(true);
+    expect(decide(bash('cr review --agent && cr doctor && echo "cr review"'), env).allow).toBe(true);
     expect(readState(stateFile).counts['mixed#main']).toBe(1);
+  });
+
+  // Round 3 (the one call rule): an UNQUOTED cr word followed by review is a call anywhere, also after echo. No parsed cr call stands for it,
+  // so the check cannot place it: the whole command is denied with the way-out text and uses no slot. The quoted form above is data.
+  it('denies an unquoted `echo cr review` as a call the check cannot place, and uses no slot', () => {
+    const d = decide(bash('cr review --agent && cr doctor && echo cr review'), env);
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('run the review as its own plain command with --base <ref>');
+    expect(existsSync(stateFile)).toBe(false);
   });
 
   it('blocks a three-run mix and records nothing', () => {
