@@ -12,6 +12,8 @@
 //   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
 //   budget --dataset F [--ledger F] [--gold-dir D] [--json]   read only: per-phase eval scopes, the phase 4 need and the four cut cases
 //   score ... --holdout-spend [--scope P4] [--spend-ledger F]  also write one holdout-spend line per frozen arm
+//   mine ... | seed ... | dispositions ...     hand the rest of argv to mine-szz.mjs, seed.mjs or dispositions.mjs and return their exit code
+//   gold report [--json] [--gold-dir D]       read only: gold and control counts (no ids) and the done-when lines; exit 3 when a bar is not met
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,9 +23,10 @@ import { budgetFromFile, EVAL_SCOPES, p4Plan } from './budget.mjs';
 import { CONFIG_PATH, judgeModelFor, loadConfig } from './config.mjs';
 import { loadDataset, mergeGold, prCounts, realMajors, reserveSources, resolveFindings, setOf, splitSets, zeroMajorPrs } from './dataset.mjs';
 import { frozenEngineSha, LEGACY_ENGINE_VERSION, recordEngineFreeze, recordFreeze, recordVersionedFreeze } from './freeze.mjs';
-import { GOLD_DIR, loadCleanControls, loadGold } from './gold.mjs';
+import { GOLD_DIR, loadCleanControls, loadGold, SEVERITIES, SOURCES, SPLITS, SUITES } from './gold.mjs';
 import { exportPairs, ingestLabels } from './labels.mjs';
 import { LINKTYPE_PATH, loadLinkTypes } from './linktype.mjs';
+import { isMajor } from './match.mjs';
 import { makeGit, replayRun as realReplayRun } from './replay.mjs';
 import { archiveFile, rescoreArchive, treeCheck } from './rescore.mjs';
 import { evaluateRuns, scorecard } from './score.mjs';
@@ -210,6 +213,87 @@ function budgetCmd(argv, io, cfg) {
   return 0;
 }
 
+// ---------- gold report and the pass-through tools (card re-gold-assemble): read only, counts only ----------
+
+const TOOLS = { mine: () => import('./mine-szz.mjs'), seed: () => import('./seed.mjs'), dispositions: () => import('./dispositions.mjs') };
+
+/** Hand argv after the command name to the tool's own main. io.mains.<name> replaces it in tests. */
+async function toolCmd(cmd, argv, io) {
+  const run = io.mains?.[cmd] ?? (await TOOLS[cmd]()).main;
+  return (await run(argv.slice(1))) ?? 1;
+}
+
+/** The gold rows as the scorer reads them: a Gold B row gets an in-memory truth.note from provenance.truthNote. Never mutates, never written. */
+export function goldView(rows) {
+  const hasNote = (r) => r.source === 'B' && typeof r.provenance?.truthNote === 'string';
+  return rows.map((r) => (hasNote(r) ? { ...r, truth: { note: r.provenance.truthNote } } : r));
+}
+
+const tally = (keys, rows, pick) => Object.fromEntries(keys.map((k) => [k, rows.filter((r) => pick(r) === k).length]));
+const hasText = (v) => typeof v === 'string' && v !== '';
+const hasBreakingTest = (r) => hasText(r.provenance?.test) && hasText(r.provenance?.failureSha256);
+
+/** Gold D: records fixed over records with a disposition. null when there is none. Reported apart; no bar reads it. */
+function goldD(records) {
+  const kind = (r) => r.disposition ?? { real: 'fixed', noise: 'wrong', unclear: 'wont_fix' }[r.verdict];
+  const labeled = (records ?? []).map(kind).filter((d) => d !== undefined && d !== 'unlabeled');
+  const fixed = labeled.filter((d) => d === 'fixed').length;
+  return labeled.length === 0 ? null : { value: fixed / labeled.length, fixed, withDisposition: labeled.length };
+}
+
+function goldBars(c) {
+  const abc = c.majors.bySource.A + c.majors.bySource.B + c.majors.bySource.C;
+  return [
+    { name: 'majors across A/B/C >= 50', pass: abc >= 50, detail: String(abc) },
+    { name: 'every Gold B row has a breaking test', pass: c.goldB.missingBreakingTest === 0, detail: `${c.goldB.withBreakingTest} of ${c.goldB.rows}` },
+    { name: 'regression suite non-empty', pass: c.bySuite.regression > 0, detail: String(c.bySuite.regression) },
+    { name: 'capability suite non-empty', pass: c.bySuite.capability > 0, detail: String(c.bySuite.capability) },
+    { name: 'clean controls >= 30', pass: c.cleanControls >= 30, detail: String(c.cleanControls) },
+  ];
+}
+
+function goldCounts(rows, controls, records) {
+  const majors = rows.filter((r) => isMajor(r.severity));
+  const goldB = rows.filter((r) => r.source === 'B');
+  const tested = goldB.filter(hasBreakingTest).length;
+  const c = {
+    rows: rows.length,
+    bySource: tally(SOURCES, rows, (r) => r.source),
+    bySuite: tally(SUITES, rows, (r) => r.suite),
+    bySeverity: tally(SEVERITIES, rows, (r) => r.severity),
+    bySplit: tally(SPLITS, rows, (r) => r.split),
+    majors: { total: majors.length, bySource: tally(SOURCES, majors, (r) => r.source) },
+    goldB: { rows: goldB.length, withBreakingTest: tested, missingBreakingTest: goldB.length - tested },
+    cleanControls: controls.length,
+    goldD: goldD(records),
+  };
+  return { ...c, bars: goldBars(c) };
+}
+
+function goldText(c) {
+  const list = (o) => Object.entries(o).map(([k, n]) => `${k} ${n}`).join(', ');
+  const d = c.goldD;
+  return [
+    `gold rows ${c.rows}: source ${list(c.bySource)}`,
+    `suite ${list(c.bySuite)}`,
+    `severity ${list(c.bySeverity)}`,
+    `split ${list(c.bySplit)}`,
+    `majors ${c.majors.total} (${list(c.majors.bySource)})`,
+    `gold B breaking test: ${c.goldB.withBreakingTest} with, ${c.goldB.missingBreakingTest} missing`,
+    `clean controls ${c.cleanControls}`,
+    d ? `gold D resolved by merge: ${d.value.toFixed(2)} (${d.fixed}/${d.withDisposition}; reported apart, no bar reads it)` : 'gold D: no disposition records',
+    ...c.bars.map((b) => `${b.pass ? 'PASS' : 'FAIL'} ${b.name} (${b.detail})`),
+  ].join('\n');
+}
+
+function goldCmd(argv, io) {
+  if (argv[1] !== 'report') { io.stderr('gold: use report [--json] [--gold-dir D]'); return 2; }
+  const dir = flag(argv, '--gold-dir', GOLD_DIR);
+  const c = goldCounts(loadGold(dir).rows, loadCleanControls(dir), io.dispositions);
+  io.stdout(argv.includes('--json') ? JSON.stringify(c, null, 1) : goldText(c));
+  return c.bars.every((b) => b.pass) ? 0 : 3;
+}
+
 /** The real path: follows symlinks and junctions in the nearest existing ancestor, then appends the missing segments. */
 function canonical(p) {
   let head = path.resolve(p);
@@ -286,6 +370,8 @@ export async function main(argv, io = {}) {
       case 'score': return scoreCmd(argv, io, cfg, { spend: true });
       case 'budget': return budgetCmd(argv, io, cfg);
       case 'rescore': return rescoreCmd(argv, io, root);
+      case 'mine': case 'seed': case 'dispositions': return await toolCmd(cmd, argv, io);
+      case 'gold': return goldCmd(argv, io);
       case 'report': {
         let text = '';
         const sink = { ...io, stdout: (s) => { text = s; } };
@@ -304,7 +390,7 @@ export async function main(argv, io = {}) {
         return 0;
       }
       default:
-        io.stderr(`review-eval: unknown command ${JSON.stringify(cmd)}. Use freeze | resolve | replay | shadow | judge | labels | score | budget | rescore | report`);
+        io.stderr(`review-eval: unknown command ${JSON.stringify(cmd)}. Use freeze | resolve | replay | shadow | judge | labels | score | budget | rescore | report | mine | seed | dispositions | gold`);
         return 1;
     }
   } catch (e) {
