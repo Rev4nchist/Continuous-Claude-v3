@@ -36,6 +36,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { classifyDestructive, decide, extractShellWrapperPayloads } from '../destructive-command-guard.js';
+import { cpuMs } from './helpers/cpu-time.js';
 
 const bash = (c: string): string | null => classifyDestructive(c, 0, 'Bash');
 const pwsh = (c: string): string | null => classifyDestructive(c, 0, 'PowerShell');
@@ -316,11 +317,12 @@ describe('legit commands with redirects stay allowed', () => {
 });
 
 describe('the second scan stays linear', () => {
+  // CPU time of the process, not wall time (card hooks-timing-tests-under-load): a busy suite stalls wall time. Limits unchanged.
   const timed = (cmd: string): number => {
-    const t0 = performance.now();
+    const t0 = cpuMs();
     bash(cmd);
     pwsh(cmd);
-    return performance.now() - t0;
+    return cpuMs() - t0;
   };
   it.each([
     ['2>&1 x ', 1500],

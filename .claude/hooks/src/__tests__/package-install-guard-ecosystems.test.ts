@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installSegments } from '../package-install-guard.js';
+import { cpuMs } from './helpers/cpu-time.js';
 
 const DIST = fileURLToPath(new URL('../../dist/package-install-guard.mjs', import.meta.url));
 const NET_STUB = fileURLToPath(new URL('./package-guard-net-stub.cjs', import.meta.url));
@@ -378,11 +379,12 @@ describe('package-install-guard: installs from ecosystems with no registry check
     it('installSegments returns nothing for a read-only choco call', () => {
       expect(installSegments('choco list && winget search x')).toEqual([]);
     });
-    it('1500 repeated "winget install" and "dotnet new" words scan in under 1 s', () => {
-      const t0 = Date.now();
+    // Card hooks-timing-tests-under-load: CPU time of the process, not wall time (a busy suite stalls wall time). Input and limit unchanged.
+    it('1500 repeated "winget install" and "dotnet new" words scan in under 1 s of CPU time', () => {
+      const t0 = cpuMs();
       installSegments('echo' + ' winget install'.repeat(1500) + ' x');
       installSegments('echo' + ' dotnet new'.repeat(1500) + ' x');
-      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(cpuMs() - t0).toBeLessThan(1000);
     });
   });
 });
