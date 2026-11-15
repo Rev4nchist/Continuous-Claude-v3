@@ -234,14 +234,20 @@ export async function register(opts, deps) {
   });
 }
 
-/** Free the lock files of one pid. */
-export async function release(opts, deps) {
+/** Free the lock files of one pid, synchronously: safe inside a process 'exit' handler, which waits for no promise. */
+export function releaseSync(opts, deps) {
   const d = defaults(deps);
   let removed = 0;
   for (const { file, rec } of lockRecords(d.dir)) {
-    if (rec.pid === opts.pid && (!opts.kind || rec.kind === opts.kind)) { rmSync(join(d.dir, file)); removed++; }
+    if (rec.pid === opts.pid && (!opts.kind || rec.kind === opts.kind)) {
+      try { rmSync(join(d.dir, file)); removed++; } catch { /* another session removed it */ }
+    }
   }
   return { removed };
+}
+
+export async function release(opts, deps) {
+  return releaseSync(opts, deps);
 }
 
 /** Remove a lock by hand. A reason is required and the log line names who: that is the whole control. */

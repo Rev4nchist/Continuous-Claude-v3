@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { acquire, breakLock, CAVEAT, KINDS, list, maxSlots, register, release, warnSummary } from './run-lock.mjs';
+import { acquire, breakLock, CAVEAT, KINDS, list, maxSlots, register, release, releaseSync, warnSummary } from './run-lock.mjs';
 
 const T0 = Date.parse('2026-11-15T15:00:00Z');
 const MIN = 60_000;
@@ -316,4 +316,15 @@ test('an unknown kind is a usage error; the first version has no quiet-window ki
   await assert.rejects(acquire({ kind: 'nope', pid: 100, holder: 't' }, ctx.d), /unknown kind/);
   await assert.rejects(acquire({ kind: 'quiet-window', pid: 100, holder: 't' }, ctx.d), /unknown kind/);
   assert.deepEqual(Object.keys(KINDS).sort(), ['hook-build', 'label-run', 'loop', 'pre-pr', 'suite']);
+});
+
+test('releaseSync frees the lock before it returns: an exit handler waits for no promise', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100);
+  assert.equal(lockFiles(ctx.dir).length, 1);
+  const r = releaseSync({ pid: 100, kind: 'pre-pr' }, ctx.d); // no await: the file is gone when the call returns
+  assert.equal(r.removed, 1);
+  assert.equal(lockFiles(ctx.dir).length, 0);
+  assert.equal(releaseSync({ pid: 100 }, ctx.d).removed, 0, 'a second call finds nothing and does not throw');
 });

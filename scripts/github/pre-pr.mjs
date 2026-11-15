@@ -118,7 +118,7 @@ import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs
 import { parseReviewMd } from '../ratchets/review-skip-sync.mjs';
 import { ANSWER_KEY_GLOBS, answerKeyHitsOf, slashLower } from './lib/answer-key.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
-import { acquire as acquireRunLock, release as releaseRunLock } from '../coordination/run-lock.mjs';
+import { acquire as acquireRunLock, releaseSync as releaseRunLockSync } from '../coordination/run-lock.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -1768,7 +1768,10 @@ async function takeRunLock(bodyPath) {
     console.error('pre-pr: stopped before any gate (the run lock said wait); run it again after the time above');
     process.exit(3);
   }
-  process.on('exit', () => { releaseRunLock({ pid: process.pid, kind: 'pre-pr' }).catch(() => {}); });
+  // An 'exit' handler waits for no promise, so the release is synchronous. A signal ends the process without an 'exit'
+  // event unless a handler asks for one. A kill -9 or a crash leaves the file: the next acquire drops it (dead pid).
+  process.on('exit', () => { try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ } });
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) process.on(signal, () => process.exit(code));
 }
 
 async function main() {
