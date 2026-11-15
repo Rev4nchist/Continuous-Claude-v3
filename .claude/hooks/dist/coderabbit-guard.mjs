@@ -477,6 +477,29 @@ function parseReviewMd(text) {
   return globs;
 }
 
+// ../../scripts/github/lib/answer-key.mjs
+var ANSWER_KEY_GLOBS = Object.freeze([
+  "scripts/eval/review-eval/gold/**",
+  "scripts/eval/review-eval/seeds/**",
+  "scripts/eval/review-eval/rubrics/**",
+  "scripts/eval/review-eval/linktype-labels.json"
+]);
+var slashLower = (p) => String(p).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+function matches(glob, p) {
+  if (glob.endsWith("/**")) {
+    const prefix = glob.slice(0, -2);
+    return p.length > prefix.length && p.startsWith(prefix);
+  }
+  return glob === p;
+}
+function answerKeyHitsOf(paths, globs = ANSWER_KEY_GLOBS) {
+  const list = globs.map(slashLower);
+  return paths.filter((p) => {
+    const n = slashLower(p);
+    return list.some((g) => matches(g, n));
+  });
+}
+
 // ../../scripts/github/lib/answer-paths.mjs
 var escapeRe = (s) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 var segmentToRe = (seg) => escapeRe(seg).replace(/\*+/g, "[^/]*").replace(/\?/g, "[^/]");
@@ -492,13 +515,6 @@ function globToRegExp(glob) {
   return new RegExp(`^${re}$`);
 }
 var matchGlob = (glob, p) => globToRegExp(glob).test(p);
-var ANSWER_KEY_GLOBS = Object.freeze([
-  "scripts/eval/review-eval/gold/**",
-  "scripts/eval/review-eval/seeds/**",
-  "scripts/eval/review-eval/rubrics/**",
-  "scripts/eval/review-eval/linktype-labels.json"
-]);
-var slashLower = (p) => String(p).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 function answerKeyGlobs(root) {
   let text;
   try {
@@ -519,7 +535,7 @@ function answerKeyCheck({ root, paths }) {
   if (!Array.isArray(paths)) return { closed: "the changed-file list is unknown" };
   const { globs, reason } = answerKeyGlobs(root);
   if (!globs) return { closed: reason };
-  const hits = paths.filter((p) => globs.some((g) => matchGlob(slashLower(g), slashLower(p))));
+  const hits = answerKeyHitsOf(paths, globs);
   return hits.length === 0 ? null : { hits };
 }
 
