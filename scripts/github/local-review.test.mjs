@@ -1642,9 +1642,9 @@ const PINNED_MISSING_KEYS = [NO_ERR, NO_ERR, NO_ERR, { run: ['spawnedAt', 'toolS
 
 const SEAM_FILES = ['scripts/github/local-review/backends/cursor.mjs', 'scripts/github/lib/grok-slots.mjs', 'scripts/github/lib/findings-repair.mjs'];
 // The libs that review-router.mjs and review-skip-sync.mjs import since the answer-key move (card coderabbit-guard-answer-key).
-const MOVED_LIB_FILES = ['scripts/github/lib/answer-paths.mjs', 'scripts/ratchets/lib/review-md.mjs'];
+const MOVED_LIB_FILES = ['scripts/github/lib/answer-paths.mjs', 'scripts/ratchets/lib/review-md.mjs', 'scripts/github/lib/answer-key.mjs'];
 
-test('ENGINE_FILES holds the Cursor backend, grok-slots.mjs, findings-repair.mjs, then the two moved libs: appended, so the indexed entries keep their place (breaks if an entry is inserted in the middle or the order changes)', () => {
+test('ENGINE_FILES holds the Cursor backend, grok-slots.mjs, findings-repair.mjs, then the three moved libs: appended, so the indexed entries keep their place (breaks if an entry is inserted in the middle or the order changes)', () => {
   assert.deepEqual(ENGINE_FILES.slice(13, 16), SEAM_FILES);
   assert.deepEqual(ENGINE_FILES.slice(16), MOVED_LIB_FILES);
   // The whole list as it was on main ff608f90, in order, before the appended entries.
