@@ -172,6 +172,7 @@ function defaults(deps = {}) {
     prePrProcs: deps.prePrProcs || realPrePrProcs,
     selfPid: deps.selfPid ?? process.pid,
     beforeGateBreak: deps.beforeGateBreak,
+    afterGateRename: deps.afterGateRename,
   };
 }
 
@@ -265,6 +266,7 @@ function breakDeadGate(d, gate) {
   d.beforeGateBreak?.(); // test seam: runs in the window between the judgment and the move
   const aside = `${gate}.broken-${randomUUID()}`;
   try { renameSync(gate, aside); } catch { return false; } // gone, or another process broke it first
+  d.afterGateRename?.(); // test seam: runs after the move and before the compare. A live holder may take the free name here.
   let moved = null;
   try { moved = readFileSync(aside, 'utf8'); } catch { /* read failed: treat as foreign and put it back */ }
   if (moved !== text) { try { linkSync(aside, gate); } catch { /* the name is taken again: that holder owns it now */ } }

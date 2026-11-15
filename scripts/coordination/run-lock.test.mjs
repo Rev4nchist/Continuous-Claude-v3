@@ -869,6 +869,30 @@ test('F6a: a gate that another holder takes over while we break a dead one is no
   assert.equal(done.r?.granted, true, done.e?.message);
 });
 
+test('F6a: a live gate that appears after we move the dead gate aside is not removed', async () => {
+  // The first F6a test swaps BEFORE the re-read, so a read-then-delete also passes it. This one swaps AFTER the move:
+  // only a move-then-compare keeps the live gate, because a delete by name would remove the new file.
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 101);
+  live(ctx, 102);
+  const gate = join(ctx.dir, 'gate.lock');
+  const liveBody = gateBody(102, 1102);
+  writeFileSync(gate, gateBody(555, 5555)); // pid 555 does not run
+  let swapped = false;
+  ctx.d.afterGateRename = () => { if (!swapped) { swapped = true; writeFileSync(gate, liveBody); } }; // a live holder takes the gate name in this window (a plain write: it also replaces a file that is still there)
+  const outcome = acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d).then((r) => ({ r }), (e) => ({ e }));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(swapped, true, 'the test did swap the gate after the move');
+  assert.equal(lockFiles(ctx.dir).length, 0, 'no lock is written while a live holder has the gate');
+  assert.equal(readFileSync(gate, 'utf8'), liveBody, 'the live holder\'s gate survives');
+  assert.deepEqual(readdirSync(ctx.dir).filter((f) => f.startsWith('gate.lock.')), [], 'no renamed leftover');
+  rmSync(gate);
+  const done = await outcome;
+  assert.equal(done.r?.granted, true, done.e?.message);
+  assert.equal(lockFiles(ctx.dir).length, 1, 'one lock only: the run was granted once');
+});
+
 test('F6a: a dead gate that we break leaves no renamed file behind', async () => {
   const ctx = setup();
   ctx.mode('grant');

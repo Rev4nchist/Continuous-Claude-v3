@@ -1762,7 +1762,7 @@ async function takeRunLock(bodyPath) {
   let r;
   try {
     const headRead = spawnSync('git', ['rev-parse', '--short=8', 'HEAD'], { encoding: 'utf8', windowsHide: true });
-    const head = headRead.status === 0 && /^[0-9a-f]{8}$/.test(headRead.stdout.trim()) ? headRead.stdout.trim() : null; // null: no repo or no commit
+    const head = headRead.status === 0 && /^[0-9a-f]{8,40}$/.test(headRead.stdout.trim()) ? headRead.stdout.trim() : null; // null: no repo or no commit
     r = await acquireRunLock({ kind: 'pre-pr', pid: process.pid, holder: `pre-pr ${path.basename(bodyPath)}`, head });
   } catch (err) {
     console.error(`pre-pr: the run lock is not available (${String(err?.message ?? err).split('\n')[0]}); the run goes on`);
