@@ -14,7 +14,7 @@
  *  6. an async workload (a child process timer) is not awaited
  */
 import { describe, it, expect } from 'vitest';
-import { scalingRatio, assertScaling, FLOOR_MS, MAX_RATIO, SCALE_FACTOR, SAMPLES } from './helpers/scaling.js';
+import { scalingRatio, assertScaling, FLOOR_MS, MAX_RATIO, SCALE_FACTOR, SAMPLES, GROWTH_GUARD } from './helpers/scaling.js';
 
 /** A fake clock: `run` advances it by the cost of the workload. `spikeFirst` makes the first call of each size 50x slower. */
 function fake(cost: (n: number) => number, opts: { load?: number; spikeFirst?: boolean } = {}) {
@@ -75,6 +75,32 @@ describe('scalingRatio', () => {
     const run = async (n: number) => { await Promise.resolve(); t += n * 0.01; };
     const r = await scalingRatio(run, 1000, { now: () => t });
     expect(r.ratio).toBeCloseTo(SCALE_FACTOR, 5);
+  });
+});
+
+describe('growth guard: a runaway workload fails fast and the larger size never runs', () => {
+  // Why: a mutant that is exponential would never finish the 4n sample, and a test that hangs is not red. The guard compares each
+  // doubling of n: more than GROWTH_GUARD times slower (cubic gives 8, exponential far more) fails at once.
+  it('7. an exponential workload is stopped at the first doubling that jumps, and the 4n size is never run', async () => {
+    const sizes: number[] = [];
+    let t = 0;
+    const run = (n: number) => { sizes.push(n); t += Math.pow(2, n / 4) * 0.001; };
+    const r = await scalingRatio(run, 16, { now: () => t });
+    expect(r.early).toBe(true);
+    // The size that showed the jump (2n = 64) ran; four times the last good size (4 * 32 = 128) did not.
+    expect(r.n).toBe(32);
+    expect(Math.max(...sizes)).toBe(64);
+  });
+  it('8. assertScaling rejects the exponential workload and the message names the guard and the ratio', async () => {
+    let t = 0;
+    const run = (n: number) => { t += Math.pow(2, n / 4) * 0.001; };
+    await expect(assertScaling(run, 16, { now: () => t })).rejects.toThrow(/growth guard.*ratio|ratio.*growth guard/i);
+  });
+  it('9. a linear workload is not stopped by the guard', async () => {
+    const f = fake((n) => n * 0.01);
+    const r = await scalingRatio(f.run, 1000, { now: f.now });
+    expect(r.early).toBe(false);
+    expect(GROWTH_GUARD).toBeGreaterThan(SCALE_FACTOR / 2 * 2);
   });
 });
 
