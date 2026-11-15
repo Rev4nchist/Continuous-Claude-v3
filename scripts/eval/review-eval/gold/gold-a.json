@@ -66,6 +66,40 @@
     }
   },
   {
+    "id": "A:c1402717ef6d",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 35,
+      "round": 1,
+      "sha40": "3aab3ef3f608ebfdab37d026f8d41253099c9e3d"
+    },
+    "file": ".claude/hooks/src/post-plan-roadmap.ts",
+    "line": 539,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "5c9088f6e5b68c4e8cdd61bed98a09f883ce2ace",
+      "fixMergeSha": "3b34dfd702c8a2310cdc1f8693dad920200b5a44",
+      "blamedMergeSha": "51bd5bd3f8f8f272c4c6cc6490ff91cd3be9198d",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 9,
+      "headMap": "last-round"
+    }
+  },
+  {
     "id": "A:b77efe2ae642",
     "source": "A",
     "suite": "capability",
@@ -96,6 +130,108 @@
       "crBefore": false,
       "hunksShown": 1,
       "hunksLeftOut": 0
+    }
+  },
+  {
+    "id": "A:a56bf1d598fa",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 58,
+      "round": 1,
+      "sha40": "8903ab999484a443858d1a26ebc6431663273a48"
+    },
+    "file": ".claude/hooks/dist/rule-router.mjs",
+    "line": 57,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "f7b848a4e72a669618ef9fd09d929258ac8e45c3",
+      "fixMergeSha": "eb4d8c6fa15f5dfa6a69a30bd76c6483f2d4d080",
+      "blamedMergeSha": "9bec26c506526b56e71adfca157a63f2e5492251",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 4,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:1d9a45bdef9f",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 58,
+      "round": 1,
+      "sha40": "8903ab999484a443858d1a26ebc6431663273a48"
+    },
+    "file": ".claude/hooks/src/rule-router.ts",
+    "line": 88,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "f7b848a4e72a669618ef9fd09d929258ac8e45c3",
+      "fixMergeSha": "eb4d8c6fa15f5dfa6a69a30bd76c6483f2d4d080",
+      "blamedMergeSha": "9bec26c506526b56e71adfca157a63f2e5492251",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 4,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:bb039ac9bab7",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 58,
+      "round": 1,
+      "sha40": "8903ab999484a443858d1a26ebc6431663273a48"
+    },
+    "file": ".claude/hooks/dist/rule-router.mjs",
+    "line": 105,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "01e7d9d0bac60d504121a439661e23c319e67799",
+      "fixMergeSha": "09f8dc3a5d271b50ff57082826b0a5d9c6b7dc05",
+      "blamedMergeSha": "9bec26c506526b56e71adfca157a63f2e5492251",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 1,
+      "headMap": "last-round"
     }
   },
   {
@@ -264,6 +400,40 @@
     }
   },
   {
+    "id": "A:45590a81d7e8",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 74,
+      "round": 1,
+      "sha40": "4562e76bd7a541ea0239716b9c42f8c19d30a5a7"
+    },
+    "file": "scripts/sync-to-active.sh",
+    "line": 536,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a3d88246326a92bdf94b65b64c7e89dc5ac985e6",
+      "fixMergeSha": "1617cdfbd7227e6ef6ca90399901401f6691520b",
+      "blamedMergeSha": "ceb61b2f4819a539dec5a9c2fc5e3f540933d50c",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0,
+      "headMap": "last-round"
+    }
+  },
+  {
     "id": "A:ea28e3809db8",
     "source": "A",
     "suite": "capability",
@@ -393,6 +563,176 @@
       "crBefore": false,
       "hunksShown": 1,
       "hunksLeftOut": 0
+    }
+  },
+  {
+    "id": "A:4367fc5862fd",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 95,
+      "round": 1,
+      "sha40": "03a8d9bceca09e68384c4ab7ce8c985c99ffdbd0"
+    },
+    "file": "scripts/skills/trigger-probe.mjs",
+    "line": 109,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "b41fbba6e4a451eee64a05ef75b1fefce4305fa4",
+      "fixMergeSha": "d94b093c631be152ca88faf063a0d25b7c29e757",
+      "blamedMergeSha": "4421c055c30b260c393e5780910e2dd8d8f18318",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 2,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:480a9edebfee",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 103,
+      "round": 1,
+      "sha40": "ef82abbc51dcf49e3081546efa7de3adfef4837d"
+    },
+    "file": ".claude/templates/CLAUDE.md.template",
+    "line": 92,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "66f00835f21d926102c9f6ff34b5e11f9a961bd7",
+      "fixMergeSha": "c8618931639b6b62b30be275fde66b1af42d0f2e",
+      "blamedMergeSha": "d94b093c631be152ca88faf063a0d25b7c29e757",
+      "cause": "wrong-surfaces",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:5a939a1feee8",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 106,
+      "round": 1,
+      "sha40": "edc838528cdb5c354c0fa8d7d62328e4914d71f4"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/index.tsx",
+    "line": 88,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "74796e4a6b241381553c31b3e7101c2aa6b7ff39",
+      "fixMergeSha": "62ca4e0bb3afc8ef235efc85959357ed8411cd3a",
+      "blamedMergeSha": "990009a5d4785bcd309606922ad943325e13f24e",
+      "cause": "wrong-surfaces",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:ecb3301d6024",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 106,
+      "round": 1,
+      "sha40": "edc838528cdb5c354c0fa8d7d62328e4914d71f4"
+    },
+    "file": ".claude/plugins/ccv3-mods/tsconfig.json",
+    "line": 2,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a005d2e8a0ee73a1fa3c7fbbae90a3d55dd2961e",
+      "fixMergeSha": "210ce2626a9df8832d6b1a61bb0a905aae3520a3",
+      "blamedMergeSha": "990009a5d4785bcd309606922ad943325e13f24e",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:917b8b75a69d",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 58,
+      "round": 1,
+      "sha40": "8903ab999484a443858d1a26ebc6431663273a48"
+    },
+    "file": ".claude/agents/codex-worker.md",
+    "line": 3,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "364d798976cda0ae78ccc69f1a36d7ecb2b1c448",
+      "fixMergeSha": "31b890574ecc73771977980973e97b006961c4b3",
+      "blamedMergeSha": "9bec26c506526b56e71adfca157a63f2e5492251",
+      "cause": "mocked-fixture",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 9,
+      "headMap": "last-round"
     }
   },
   {
@@ -1848,6 +2188,176 @@
     }
   },
   {
+    "id": "A:adaff4cdadca",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 233,
+      "round": 1,
+      "sha40": "0aaef0220244112d1f62bb20f69c47c1222d927a"
+    },
+    "file": "apps/agentic-os/src/components/fleet/MissionControl.tsx",
+    "line": 99,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a5d0fa1eff5c12517dcc8ba4fe5c4fe8d0cb526f",
+      "fixMergeSha": "5a5331dcd8efd411db5004fa69dc5f18e2dd3cc2",
+      "blamedMergeSha": "8e0017ce221c33947ceb31aebaf78d35d12bf02a",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 4,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:bb7d3d1a9b09",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 233,
+      "round": 1,
+      "sha40": "0aaef0220244112d1f62bb20f69c47c1222d927a"
+    },
+    "file": "apps/agentic-os/src/components/fleet/MissionControl.tsx",
+    "line": 102,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a5d0fa1eff5c12517dcc8ba4fe5c4fe8d0cb526f",
+      "fixMergeSha": "5a5331dcd8efd411db5004fa69dc5f18e2dd3cc2",
+      "blamedMergeSha": "8e0017ce221c33947ceb31aebaf78d35d12bf02a",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 4,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:ff589c55fe5e",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 233,
+      "round": 1,
+      "sha40": "0aaef0220244112d1f62bb20f69c47c1222d927a"
+    },
+    "file": "apps/agentic-os/src/components/fleet/MissionControl.tsx",
+    "line": 106,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a5d0fa1eff5c12517dcc8ba4fe5c4fe8d0cb526f",
+      "fixMergeSha": "5a5331dcd8efd411db5004fa69dc5f18e2dd3cc2",
+      "blamedMergeSha": "8e0017ce221c33947ceb31aebaf78d35d12bf02a",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 5,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:2d400a7c61f5",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 233,
+      "round": 1,
+      "sha40": "0aaef0220244112d1f62bb20f69c47c1222d927a"
+    },
+    "file": "apps/agentic-os/src/components/fleet/MissionControl.tsx",
+    "line": 112,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a5d0fa1eff5c12517dcc8ba4fe5c4fe8d0cb526f",
+      "fixMergeSha": "5a5331dcd8efd411db5004fa69dc5f18e2dd3cc2",
+      "blamedMergeSha": "8e0017ce221c33947ceb31aebaf78d35d12bf02a",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 4,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:79cb653187d4",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 233,
+      "round": 1,
+      "sha40": "0aaef0220244112d1f62bb20f69c47c1222d927a"
+    },
+    "file": "apps/agentic-os/src/components/fleet/MissionControl.tsx",
+    "line": 119,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a5d0fa1eff5c12517dcc8ba4fe5c4fe8d0cb526f",
+      "fixMergeSha": "5a5331dcd8efd411db5004fa69dc5f18e2dd3cc2",
+      "blamedMergeSha": "8e0017ce221c33947ceb31aebaf78d35d12bf02a",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 5,
+      "headMap": "last-round"
+    }
+  },
+  {
     "id": "A:3c9b5edf244e",
     "source": "A",
     "suite": "capability",
@@ -2970,6 +3480,40 @@
     }
   },
   {
+    "id": "A:d1699a57a8c8",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 253,
+      "round": 1,
+      "sha40": "f3f73c35027457e9babbe884d3a283b7be9ac5d6"
+    },
+    "file": "scripts/coordination/kanban-client.js",
+    "line": 690,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "ce2fc19d9080f9f3388a8e5a53411bc3eacd0082",
+      "fixMergeSha": "2a1a4c2f7501d4069766c580abb0c9174bdcb68f",
+      "blamedMergeSha": "c1c74c6ceb18c0bc82f11fb81afd842065d8d412",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 0,
+      "headMap": "last-round"
+    }
+  },
+  {
     "id": "A:3b7eb6eee33b",
     "source": "A",
     "suite": "capability",
@@ -3033,6 +3577,40 @@
       "crBefore": false,
       "hunksShown": 1,
       "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:4c48f165f1c5",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 252,
+      "round": 1,
+      "sha40": "a7a6490250d768a2674fc6bb76cd87281edd0a73"
+    },
+    "file": "review-router.config.json",
+    "line": 176,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "64cd9f443e3cd5b77caa52f6d91ed61de5d09ffd",
+      "fixMergeSha": "c6ba1554416608f150ed5c8e40039a0cdee722db",
+      "blamedMergeSha": "361dc1b55bb5ee1b35d103fd9f3dfc7ad051474a",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0,
+      "headMap": "last-round"
     }
   },
   {
@@ -3201,6 +3779,108 @@
     }
   },
   {
+    "id": "A:04e7237cd009",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 286,
+      "round": 2,
+      "sha40": "4c0bb15fb3c5d347b3015b84d078f31fc1ae6654"
+    },
+    "file": "scripts/github/land-none-probe.mjs",
+    "line": 7,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a8659e38f4db415e04d2b8fecc4f57c208501a11",
+      "fixMergeSha": "25bf9b7f51d9c60d1e1acda2a1d1c421a4bb6239",
+      "blamedMergeSha": "c780cdeecdccda6f699b68c51203b175c7d95d5c",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:d2735ff66f44",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 286,
+      "round": 2,
+      "sha40": "4c0bb15fb3c5d347b3015b84d078f31fc1ae6654"
+    },
+    "file": "scripts/github/land-none-probe.mjs",
+    "line": 59,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "a8659e38f4db415e04d2b8fecc4f57c208501a11",
+      "fixMergeSha": "25bf9b7f51d9c60d1e1acda2a1d1c421a4bb6239",
+      "blamedMergeSha": "c780cdeecdccda6f699b68c51203b175c7d95d5c",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1,
+      "headMap": "last-round"
+    }
+  },
+  {
+    "id": "A:f9493047dde7",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 252,
+      "round": 1,
+      "sha40": "a7a6490250d768a2674fc6bb76cd87281edd0a73"
+    },
+    "file": "scripts/github/cr-fix.mjs",
+    "line": 214,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "9c6a4d6810a4f1d3084ce17968a255bbc61f7e95",
+      "fixMergeSha": "78dc49ad3cad0bbaef0bc6b18cbf9fb588284000",
+      "blamedMergeSha": "361dc1b55bb5ee1b35d103fd9f3dfc7ad051474a",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 2,
+      "headMap": "last-round"
+    }
+  },
+  {
     "id": "A:f747766ed4a2",
     "source": "A",
     "suite": "capability",
@@ -3231,6 +3911,36 @@
       "crBefore": false,
       "hunksShown": 1,
       "hunksLeftOut": 19
+    }
+  },
+  {
+    "id": "A:c6d3866dd9e6",
+    "source": "A",
+    "suite": "capability",
+    "split": "dev",
+    "target": {
+      "pr": 222,
+      "round": 3,
+      "sha40": "61f94d524cfdf92ee7b1fa9efe35e035b0bd822c"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts",
+    "line": 433,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "kind": "open-bug",
+      "blamedMergeSha": "2df7de630a41c5f249a548d3f8c311ad04df53af",
+      "hunksShown": 0,
+      "hunksLeftOut": 0,
+      "headMap": "last-round"
     }
   }
 ]
