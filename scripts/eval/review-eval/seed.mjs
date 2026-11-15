@@ -281,7 +281,12 @@ const PSQL_WORD = /\bpsql\b/;
 const DOCKER_WORD = /\bdocker\b/;
 const GH_COMMAND = /['"`]gh(?:\.exe)?(?:['"`]|\s)|[&|;(]\s*gh\s+\w/;
 const LANE_SHIM = /\blane[\w-]*\.mjs\b/;
-const RISKY_WORDS = Object.freeze([DELETE_CALL, PSQL_WORD, DOCKER_WORD, GH_COMMAND, LANE_SHIM]);
+// Seat item 1: a module loaded by a computed name is invisible to the import-closure scan, so the loading text itself is a refusal.
+// A dynamic import( or a require( whose argument is not one plain string literal (no ${), and every createRequire.
+const DYNAMIC_IMPORT = /\bimport\s*\(\s*(?!(['"`])[^'"`$]*\1\s*\))/;
+const DYNAMIC_REQUIRE = /\brequire\s*\(\s*(?!(['"`])[^'"`$]*\1\s*\))/;
+const CREATE_REQUIRE = /\bcreateRequire\b/;
+const RISKY_WORDS = Object.freeze([DELETE_CALL, PSQL_WORD, DOCKER_WORD, GH_COMMAND, LANE_SHIM, DYNAMIC_IMPORT, DYNAMIC_REQUIRE, CREATE_REQUIRE]);
 
 function importsDbClient(text) {
   const isDbModule = (spec) => /^\.{1,2}\//.test(spec) && DB_MODULE_NAME.test(path.posix.basename(spec).replace(/\.\w+$/, ''));

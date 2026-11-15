@@ -499,6 +499,19 @@ const CLEAN = [
   'const weight = 3;', "const ghost = 'high';", 'const gh = 1;', "spawnSync('ghx', []);", "const s = 'gh-pages';", 'const dockerless = 1;', "const f = 'plane.mjs';", "import './util.mjs';", "import('./util.mjs');",
 ];
 
+// Seat item 1 (ade8569e read): a module loaded by a computed name is invisible to the import-closure scan, so the text that does it is risky.
+const DYNAMIC_LOADS = [
+  'const m = await import(name);', 'await import (spec)', 'import(`./${x}.mjs`);', "await import('./' + file);",
+  'const m = require(name);', 'require(path.join(dir, f));', "module.require(x);", "const r = createRequire(import.meta.url);", "import { createRequire } from 'node:module';",
+];
+const STATIC_LOADS = ["await import('./util.mjs');", 'await import(`./util.mjs`);', "const x = require('./x.mjs');", 'requireAuth(user);', 'const required = 1;', 'const importer = 2;'];
+
+test('seat item 1: a dynamic import or require of a computed name, or createRequire, is risky; a literal spec is not', () => {
+  // Breaks when: a non-literal import( or require( passes, createRequire passes, or a literal dynamic import or a require look-alike is refused.
+  for (const text of DYNAMIC_LOADS) assert.equal(seed.isRiskyContent(text), true, text);
+  for (const text of STATIC_LOADS) assert.equal(seed.isRiskyContent(text), false, text);
+});
+
 test('F1 the content rule refuses text that deletes files, pushes with git, or imports a database client; plain code passes', () => {
   // Breaks when: one of the call forms is missed (rmSync, rm(, unlinkSync, unlink(, rmdirSync, a git push by a spawn, an exec or a wrapper call, pg, postgres or a db module), or a look-alike is refused.
   for (const text of RISKY) assert.equal(seed.isRiskyContent(text), true, text);
