@@ -53,7 +53,7 @@ Two scheduled tasks currently run in this system:
 
 | Task | Schedule | Runs | Reference |
 |------|----------|------|-----------|
-| `CCv3-Blocklist-Update` | daily 9:00am | Package-install blocklist refresh | `package-install-safety.md` |
+| `CCv3-Blocklist-Update` | daily 06:30 | Package-install blocklist refresh | `package-install-safety.md` |
 | `CCv3-Judge-Batch` | DISABLED | RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). Braintrust judge pipeline. | none |
 
 ## Hooks
