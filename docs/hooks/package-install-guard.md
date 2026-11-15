@@ -134,7 +134,10 @@ It refuses if the installed .bat is missing and saves the old task XML under `~/
 
 Task name: `CCv3-Blocklist-Update`. Check status: `schtasks /query /tn "CCv3-Blocklist-Update"`
 
-If the machine is off or asleep at 06:30, it runs when the machine next wakes up (`-StartWhenAvailable`).
+The task wakes a sleeping laptop at 06:30 (`wake: true`) and may start on battery (`battery: true`), both set in
+`scripts/scheduled/tasks.json` and applied by `register-ccv3-tasks.ps1`. A wake on battery also needs the power
+plan setting "Allow wake timers" on for battery. If the machine is off at 06:30, it runs when the machine next
+starts (`-StartWhenAvailable`).
 
 ### Manual
 

@@ -201,7 +201,7 @@ test('active copy ignores a stale tasks.json at the home-level relative path and
   assert.doesNotMatch(r.out, /CCv3-T-Stale/);
 });
 
-test('dry run on the REAL tasks.json: CCv3-Blocklist-Update is daily 06:30, blocked on battery, no wake (card blocklist-commit-0630)', win, () => {
+test('dry run on the REAL tasks.json: CCv3-Blocklist-Update is daily 06:30, wakes the laptop, allowed on battery (card blocklist-commit-0630)', win, () => {
   // Breaks if the trigger goes back to 09:00: at 09:00 the bot commit moves main during the morning checks.
   const realTasks = join(dirname(SCRIPT), '..', '..', '..', 'scripts', 'scheduled', 'tasks.json');
   const tasks = JSON.parse(readFileSync(realTasks, 'utf8')).tasks;
@@ -215,7 +215,9 @@ test('dry run on the REAL tasks.json: CCv3-Blocklist-Update is daily 06:30, bloc
     assert.equal(r.status, 0, (r.stdout ?? '') + (r.stderr ?? ''));
     const line = (r.stdout ?? '').split(/\r?\n/).find((l) => l.startsWith('CCv3-Blocklist-Update:'));
     assert.ok(line, r.stdout);
-    assert.match(line, /^CCv3-Blocklist-Update: cmd\.exe \/c ".*scheduled-blocklist-update\.bat"  \[daily 06:30, limit 30 min, llm=false battery=block wake=no\]$/);
+    // Dave 2026-11-15: wake at 06:30 and allow battery, so a sleeping laptop on battery still runs it before the checks.
+    assert.match(line, /^CCv3-Blocklist-Update: cmd\.exe \/c ".*scheduled-blocklist-update\.bat"  \[daily 06:30, limit 30 min, llm=false battery=allow wake=yes\]$/);
+    assert.doesNotMatch(r.stdout, /^\[WARN\] CCv3-Blocklist-Update/m, 'wake with battery blocked would do nothing on battery');
     assert.match(r.stdout, /^DRY RUN: nothing changed/m);
   } finally {
     rmSync(root, { recursive: true, force: true });

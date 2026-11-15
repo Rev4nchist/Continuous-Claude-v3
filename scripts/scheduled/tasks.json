@@ -18,7 +18,8 @@
       "allowedExit": [0],
       "maxAgeHours": 48,
       "llm": false,
-      "wake": false
+      "battery": true,
+      "wake": true
     },
     {
       "name": "CCv3-RuleRouter-Audit",
