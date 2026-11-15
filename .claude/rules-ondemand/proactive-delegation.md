@@ -154,6 +154,8 @@ A timed-out agent/command (exit 143) is **not** proof of failure — verify stat
 
 ## Long background waits: keep the cache warm
 
+Card holders: the keep-warm timer is rule L2.15 of `docs/coordination/standard.md`.
+
 Use this section only when two things are true:
 - The session settings have `idleCompaction: false` (Dave's machine since 2026-10-27).
 - The session states a 1-hour cache TTL.
