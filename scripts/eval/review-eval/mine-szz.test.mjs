@@ -64,6 +64,20 @@
 //   C02 the control pass adds candidates, labels or leak terms                 -> mine the control rows through minePair or mineAll
 //   C03 a control window after the group 2 start writes                        -> drop the gate, or compare the wrong way
 //   C04 a bad --control-since runs                                             -> drop the date check of checkArgs
+// Seat diff read of PR 582 (D<item><case>):
+//   D1a a failed cat-file read (a time-out) is read as file-gone, so --write goes on -> read any non-zero cat-file status as file-gone
+//   D1b git's missing-path text is no longer file-gone                       -> match no stderr text, or the wrong text
+//   D2a a missing escapes file reads as 0 rows and --write replaces gold-a       -> drop the missing-file check of the write gate
+//   D2b a damaged escapes line is skipped with no count and --write goes on   -> drop the parse check of the write gate
+//   D2c --write replaces gold-a with fewer counted rows than the done-when bar -> drop the counted bar, or move it off 15
+//   D3a a new label cache row has no promptSha, or a hash of another text     -> drop promptSha, or hash the unmasked or batch text
+//   D3b a changed prompt with the same key reuses the old label                -> ignore promptSha on the cache read
+//   D3c an old cache row with no promptSha is asked again                     -> treat a missing promptSha as a miss
+//   D4a a hit with no promptSha is not back-filled, filled twice, or asked    -> drop the back-fill, skip the hasSha check, or ask the judge
+//   D4b the back-fill writes without --allow-label-cache-write                -> drop the flag check of the back-fill
+//   D4c after the back-fill a changed prompt for the key is still a hit       -> back-fill a row with no promptSha, or let the old row win
+//   D4d two rows of one key: another row than the last one wins               -> prefer a row by promptSha, or keep the first row
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -249,10 +263,14 @@ const NOW = Date.parse('2026-11-13T18:00:00Z');
 const CFG = { holdoutExclude: [21, 11], reserve: [], lineSlack: 3 };
 const NO_DATA = { prs: [], findings: [] };
 
+/**
+ * countedMin 0: the synthetic repos hold 0 to 3 counted rows, under the real bar (COUNTED_MIN, 15). The D2c test passes
+ * countedMin: undefined, so main uses the real bar.
+ */
 async function run(argv, deps = {}) {
   const out = [];
   const err = [];
-  const code = await main(argv, { stdout: (s) => out.push(String(s)), stderr: (s) => err.push(String(s)), cfg: CFG, readRecords: () => [], now: () => NOW, env: {}, dataset: NO_DATA, ledgerPath: path.join(tmp('ledger'), 'ledger.jsonl'), ...deps });
+  const code = await main(argv, { stdout: (s) => out.push(String(s)), stderr: (s) => err.push(String(s)), cfg: CFG, readRecords: () => [], now: () => NOW, env: {}, dataset: NO_DATA, ledgerPath: path.join(tmp('ledger'), 'ledger.jsonl'), countedMin: 0, ...deps });
   return { code, out: out.join('\n'), err: err.join('\n') };
 }
 /** Common args and deps for one repo. */
@@ -693,7 +711,7 @@ test('S21: the label cache is reused by a second run, and written only with the 
   const cacheFile = path.join(base.state, 'szz-labels.jsonl');
   const cached = readFileSync(cacheFile, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(cached.length, 3);
-  assert.deepEqual(Object.keys(cached[0]).sort(), ['blamedMergeSha', 'file', 'fixSha', 'hunksLeftOut', 'hunksShown', 'key', 'line', 'severity', 'verdict']);
+  assert.deepEqual(Object.keys(cached[0]).sort(), ['blamedMergeSha', 'file', 'fixSha', 'hunksLeftOut', 'hunksShown', 'key', 'line', 'promptSha', 'severity', 'verdict']);
   assert.deepEqual(cached.map((c) => [c.hunksShown, c.hunksLeftOut]), [[1, 0], [1, 0], [1, 0]], 'one hunk per file in the big repo');
   const j2 = fakeJudge([REAL()]);
   const r2 = await run(base.argv, { ...base.deps, judge: j2 });
@@ -917,12 +935,12 @@ test('R02: a failed rename of the second gold file restores all three old files;
   const s = writeSetup({ rename: failRenameInto('clean-controls.json') });
   plantOld(s.gold);
   const r = await run(s.argv, s.deps);
-  assert.notEqual(r.code, 0, 'the failed write is reported');
+  assert.equal(r.code, 2, `the failed write is reported, not a gate refusal: ${r.err}`);
   for (const n of GOLD_FILES) assert.equal(readFileSync(path.join(s.gold, n), 'utf8'), `OLD ${n}\n`, `${n} is the old file`);
   assert.deepEqual(readdirSync(s.gold).sort(), GOLD_FILES, 'no .bak and no .tmp');
   const fresh = writeSetup({ rename: failRenameInto('clean-controls.json') });
   const r2 = await run(fresh.argv, fresh.deps);
-  assert.notEqual(r2.code, 0);
+  assert.equal(r2.code, 2, r2.err);
   assert.deepEqual(existsSync(fresh.gold) ? readdirSync(fresh.gold) : [], [], 'the file renamed in first is removed again');
 });
 
@@ -1323,7 +1341,7 @@ test('R19: a written file that is not byte-equal to its staged content rolls bac
   const s = writeSetup({ rename: corrupt });
   plantOld(s.gold);
   const r = await run(s.argv, s.deps);
-  assert.notEqual(r.code, 0);
+  assert.equal(r.code, 2, `the failed write is reported, not a gate refusal: ${r.err}`);
   for (const f of GOLD_FILES) assert.equal(readFileSync(path.join(s.gold, f), 'utf8'), `OLD ${f}\n`, `${f} is the old file`);
   assert.deepEqual(readdirSync(s.gold).sort(), GOLD_FILES);
 });
@@ -1814,4 +1832,225 @@ test('C04: a --control-since that is not a date, or has no value, is a usage err
   assert.equal(none.code, 2);
   assert.match(none.err, /--control-since needs a value/);
   assert.match((await run(['--help'])).out, /--control-since <iso>/);
+});
+
+// ---------- seat diff read of PR 582: one test per finding (D<item><case>) ----------
+
+/** A git that answers `cat-file -e <head>:<file>` with status 1 and the given stderr. Every other call goes to the real git. */
+const catFileGit = (git, file, stderr) => (args) => (args[0] === 'cat-file' && String(args.at(-1)).endsWith(`:${file}`) ? { status: 1, stdout: '', stderr } : git(args));
+const oldFilesStay = (gold) => {
+  for (const n of GOLD_FILES) assert.equal(readFileSync(path.join(gold, n), 'utf8'), `OLD ${n}\n`, `${n} is the old file`);
+  assert.deepEqual(readdirSync(gold).sort(), GOLD_FILES, 'no .bak and no .tmp');
+};
+const errLines = (r) => r.err.split('\n');
+
+test('D1a: a cat-file read that times out (status 1, the makeGit time-out text) is 1 failed pair and --write refuses; the old gold files stay (breaks if any non-zero cat-file status reads as file-gone)', async () => {
+  const b = big();
+  const s = writeSetup({ git: catFileGit(b.git, 's/a.txt', 'spawnSync git ETIMEDOUT') });
+  plantOld(s.gold);
+  const r = await run(s.argv, s.deps);
+  assert.equal(r.code, 1, r.err);
+  assert.deepEqual(JSON.parse(r.out).failed, { 'cat-file': 1 }, r.out);
+  assert.ok(errLines(r).includes('mine-szz: failed pairs: 1 (--allow-partial writes anyway)'), r.err);
+  oldFilesStay(s.gold);
+});
+
+test('D1b: git\'s own missing-path texts, also with status 1, still read as file-gone: the other files of the pair are mined and no pair fails (breaks if the stderr match is dropped or wrong)', async () => {
+  const b = big();
+  const head = b.prs[21].shas.at(-1);
+  for (const text of [`fatal: path 's/a.txt' does not exist in '${head}'`, `fatal: path 's/a.txt' exists on disk, but not in '${head}'`]) {
+    const s = writeSetup({ git: catFileGit(b.git, 's/a.txt', text) });
+    const r = await run(s.argv, s.deps);
+    assert.equal(r.code, 0, `${text}: ${r.err}`);
+    assert.deepEqual(JSON.parse(r.out).failed, {}, text);
+    assert.deepEqual(loadGold(s.gold).rows.map((x) => x.file), ['s/b.txt', 's/c.txt'], text);
+  }
+});
+
+const escapesOf = (state) => path.join(state, 'escapes.jsonl');
+
+test('D2a: --write refuses a state dir with no escapes file and the old gold files stay (breaks if the write gate reads a missing file as 0 rows)', async () => {
+  const s = writeSetup();
+  rmSync(escapesOf(s.state));
+  plantOld(s.gold);
+  const r = await run(s.argv, s.deps);
+  assert.equal(r.code, 1, r.err);
+  assert.ok(errLines(r).includes('mine-szz: escapes file missing'), r.err);
+  oldFilesStay(s.gold);
+});
+
+test('D2b: --write refuses an escapes file with a line that does not parse and counts it; blank lines do not count; the old gold files stay (breaks if the gate skips a damaged line)', async () => {
+  const s = writeSetup();
+  appendFileSync(escapesOf(s.state), '\n   \n{"fixSha": "broken\n');
+  plantOld(s.gold);
+  const r = await run(s.argv, s.deps);
+  assert.equal(r.code, 1, r.err);
+  assert.ok(errLines(r).includes('mine-szz: escapes file has 1 line(s) that do not parse'), r.err);
+  oldFilesStay(s.gold);
+  const blank = writeSetup();
+  appendFileSync(escapesOf(blank.state), '\n   \r\n');
+  const ok = await run(blank.argv, blank.deps);
+  assert.equal(ok.code, 0, `blank lines are no damage: ${ok.err}`);
+});
+
+test('D2c: --write refuses a run whose counted rows are under the done-when bar of 15, with the count in the line, also with --allow-partial; the old gold files stay (breaks if the bar is dropped or moved off 15)', async () => {
+  for (const [judge, n, extra] of [[fakeJudge([{ verdict: 'noise', severity: 'minor' }]), 0, []], [fakeJudge([REAL('major')]), 3, ['--allow-partial']]]) {
+    // countedMin undefined: main uses the real bar, COUNTED_MIN.
+    const s = writeSetup({ judge, countedMin: undefined }, [...writeArgs, ...extra]);
+    plantOld(s.gold);
+    const r = await run(s.argv, s.deps);
+    assert.equal(r.code, 1, r.err);
+    assert.equal(JSON.parse(r.out).counted, n);
+    assert.ok(errLines(r).includes(`mine-szz: counted rows ${n} is under the bar 15`), r.err);
+    oldFilesStay(s.gold);
+  }
+  assert.equal(szz.COUNTED_MIN, 15);
+});
+
+const sha256 = (text) => createHash('sha256').update(text).digest('hex');
+const smallKey = (b) => szz.labelKey({ fixSha: b.prs[12].shas[0], blamedMergeSha: b.prs[11].mergeSha, file: 'src/f.txt', line: 2 });
+
+test('D3a: a new label cache row carries promptSha, the sha256 of the single-item prompt the judge got; the label key does not change (breaks if promptSha is dropped or hashes another text)', async () => {
+  const b = small();
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label', '--allow-label-cache-write'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 1, 'one item, one call: the batch prompt is the single-item prompt');
+  const [row] = cacheRows(r.state);
+  assert.equal(row.promptSha, sha256(judge.prompts[0]));
+  assert.equal(row.key, `szz-label-v2:${b.prs[12].shas[0]}:${b.prs[11].mergeSha}:src/f.txt:2`, 'promptSha is not part of the key');
+});
+
+test('D3a2: promptShaOf (the back-fill helper) hashes the masked single-item prompt that is sent, not the unmasked text (breaks if the helper skips the mask or the item text)', () => {
+  const leak = szz.leakTerms([SHA_A], []);
+  const item = { kind: 'fix', hunk: `@@ -2 +2 @@\n-log("${SHA_A.slice(0, 10)}")\n+fixed`, blamed: '>    2| fixed' };
+  const sent = szz.maskShas(buildPrompt([item]), leak.shas);
+  assert.notEqual(sent, buildPrompt([item]), 'the mask changes the text: the check is not vacuous');
+  assert.equal(szz.promptShaOf(item, leak), sha256(sent));
+});
+
+/** The M10b repo: the lineSlack of the run changes the diff cut, so it changes the prompt of the one item, not its key. */
+const slackRepo = () => buildRepo([
+  { n: 10, at: '2026-10-09T10:00:00Z', commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7') } }] },
+  { n: 11, at: A_DAY, commits: [{ subject: 'feat: bad', files: { 'src/f.txt': lines('l1', 'l2', 'bad', 'l4', 'l5', 'l6', 'l7') } }] },
+  { n: 12, at: B_DAY, commits: [{ subject: 'fix: f (#9001)', files: { 'src/f.txt': lines('l1', 'l2', 'good', 'l4', 'l5', 'inserted', 'l6', 'l7') } }] },
+]);
+
+test('D3b: a changed prompt with the same key is a miss: the item is asked again and its new row wins; the same prompt again is a hit (breaks if the cache read ignores promptSha)', async () => {
+  const b = slackRepo();
+  const s = setup(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label', '--allow-label-cache-write'] });
+  const go = async (slack) => {
+    const judge = fakeJudge([REAL()]);
+    const r = await run(s.argv, { ...s.deps, judge, cfg: { ...CFG, lineSlack: slack } });
+    assert.equal(r.code, 0, r.err);
+    return judge.prompts;
+  };
+  const first = await go(2);
+  assert.equal(first.length, 1);
+  const second = await go(1);
+  assert.equal(second.length, 1, 'the cut changed the prompt: the old label is not reused');
+  assert.notEqual(second[0], first[0]);
+  const rows = cacheRows(s.state);
+  assert.deepEqual(rows.map((x) => x.key), [rows[0].key, rows[0].key], 'one key, two rows');
+  assert.deepEqual(rows.map((x) => x.promptSha), [sha256(first[0]), sha256(second[0])]);
+  assert.equal((await go(1)).length, 0, 'the same prompt again is a hit: the last row of the key wins');
+});
+
+test('D3c: an old cache row with no promptSha is a hit (no call, its label used); a row whose promptSha differs is a miss (breaks if a missing promptSha is a miss, or a differing one a hit)', async () => {
+  const b = small();
+  const once = async (row) => {
+    const s = setup(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]) } });
+    writeFileSync(path.join(s.state, 'szz-labels.jsonl'), `${JSON.stringify(row)}\n`);
+    const r = await run(s.argv, s.deps);
+    assert.equal(r.code, 0, r.err);
+    return { calls: s.deps.judge.prompts.length, verdicts: JSON.parse(r.out).verdicts };
+  };
+  const old = { key: smallKey(b), verdict: 'noise', severity: 'minor' };
+  assert.deepEqual(await once(old), { calls: 0, verdicts: { real: 0, noise: 1, unclear: 0 } });
+  assert.deepEqual(await once({ ...old, promptSha: '0'.repeat(64) }), { calls: 1, verdicts: { real: 1, noise: 0, unclear: 0 } });
+});
+
+/** The S07 repo: one fix PR repairs a line of PR 11 and a line of PR 13, so a run has two candidates. */
+const twoRepo = () => buildRepo([
+  { n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('alpha', 'buggy', 'omega') } }] },
+  { n: 13, at: A_DAY, commits: [{ subject: 'feat: g', files: { 'src/g.txt': lines('one', 'bad', 'two') } }] },
+  { n: 12, at: B_DAY, commits: [{ subject: 'fix: both (#9001)', files: { 'src/f.txt': lines('alpha', 'fixed', 'omega'), 'src/g.txt': lines('one', 'good', 'two') } }] },
+]);
+const twoRows = (b) => [escRow(b, { fixPr: 12, blamedPr: 11 }), escRow(b, { fixPr: 12, blamedPr: 13, primary: false })];
+/** A label cache row as the miner wrote it before promptSha. */
+const oldRow = (b, blamedPr, file, verdict = 'noise') => {
+  const c = { fixSha: b.prs[12].shas[0], blamedMergeSha: b.prs[blamedPr].mergeSha, file, line: 2 };
+  return { key: szz.labelKey(c), ...c, hunksShown: 1, hunksLeftOut: 0, verdict, severity: 'minor' };
+};
+const BACKFILL = 'label cache back-filled with promptSha: ';
+const backfillLine = (out) => textOf(out).find((l) => l.startsWith(BACKFILL));
+
+test('D4a: two cache hits with no promptSha and the write flag append two rows with this run\'s hash, the same label fields, no judge call and no slot; a second run appends none (breaks if the back-fill is dropped, runs twice or asks the judge)', async () => {
+  const b = twoRepo();
+  // The hashes a labelled run writes for the same two items: the back-fill must write the same ones.
+  const fresh = await report(b, { rows: twoRows(b), extra: ['--label', '--allow-label-cache-write'], deps: { judge: fakeJudge([REAL()]) } });
+  assert.equal(fresh.code, 0, fresh.err);
+  const want = Object.fromEntries(cacheRows(fresh.state).map((x) => [x.key, x.promptSha]));
+  const s = setup(b, { rows: twoRows(b), extra: ['--label', '--allow-label-cache-write'] });
+  const olds = [oldRow(b, 11, 'src/f.txt'), oldRow(b, 13, 'src/g.txt')];
+  writeFileSync(path.join(s.state, 'szz-labels.jsonl'), olds.map((x) => `${JSON.stringify(x)}\n`).join(''));
+  const go = async () => {
+    const judge = fakeJudge([REAL()]);
+    const text = await run(s.argv.filter((a) => a !== '--json'), { ...s.deps, judge });
+    assert.equal(text.code, 0, text.err);
+    return { calls: judge.prompts.length, line: backfillLine(text.out) };
+  };
+  assert.deepEqual(await go(), { calls: 0, line: `${BACKFILL}2` });
+  const rows = cacheRows(s.state);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.slice(2), olds.map((x) => ({ ...x, promptSha: want[x.key] })), 'the old fields plus the hash a labelled run writes');
+  assert.equal(Object.keys(want).length, 2);
+  assert.deepEqual(await go(), { calls: 0, line: `${BACKFILL}0` }, 'the second run finds the hash: nothing to fill');
+  assert.equal(cacheRows(s.state).length, 4);
+  const json = await run(s.argv, s.deps);
+  assert.deepEqual([JSON.parse(json.out).labelCacheBackfilled, JSON.parse(json.out).labelCalls.used], [0, 0]);
+});
+
+test('D4b: without --allow-label-cache-write a hit with no promptSha is used and nothing is appended (breaks if the back-fill ignores the flag)', async () => {
+  const b = twoRepo();
+  const s = setup(b, { rows: twoRows(b), extra: ['--label'], deps: { judge: fakeJudge([REAL()]) } });
+  const file = path.join(s.state, 'szz-labels.jsonl');
+  writeFileSync(file, [oldRow(b, 11, 'src/f.txt'), oldRow(b, 13, 'src/g.txt')].map((x) => `${JSON.stringify(x)}\n`).join(''));
+  const before = readFileSync(file);
+  const r = await run(s.argv.filter((a) => a !== '--json'), s.deps);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(s.deps.judge.prompts.length, 0);
+  assert.equal(backfillLine(r.out), `${BACKFILL}0`);
+  assert.ok(readFileSync(file).equals(before), 'the cache file is byte-equal');
+});
+
+test('D4c: after the back-fill a changed prompt for that key is a miss; without the back-fill the old row would still be a hit (breaks if the back-filled row holds no hash or loses to the old row)', async () => {
+  const b = slackRepo();
+  const s = setup(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label', '--allow-label-cache-write'] });
+  const c = { fixSha: b.prs[12].shas[0], blamedMergeSha: b.prs[11].mergeSha, file: 'src/f.txt', line: 3 };
+  writeFileSync(path.join(s.state, 'szz-labels.jsonl'), `${JSON.stringify({ key: szz.labelKey(c), ...c, verdict: 'noise', severity: 'minor' })}\n`);
+  const go = async (slack) => {
+    const judge = fakeJudge([REAL()]);
+    const r = await run(s.argv, { ...s.deps, judge, cfg: { ...CFG, lineSlack: slack } });
+    assert.equal(r.code, 0, r.err);
+    return [judge.prompts.length, JSON.parse(r.out).labelCacheBackfilled];
+  };
+  assert.deepEqual(await go(2), [0, 1], 'slack 2: a hit, back-filled with the slack 2 prompt');
+  assert.deepEqual(await go(1), [1, 0], 'slack 1: the prompt changed, so the item is asked again');
+});
+
+test('D4d: of two rows with one key the last row wins, with or without promptSha (breaks if a row is preferred by promptSha or the first row wins)', async () => {
+  const b = small();
+  const key = smallKey(b);
+  const once = async (rows) => {
+    const s = setup(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]) } });
+    writeFileSync(path.join(s.state, 'szz-labels.jsonl'), rows.map((x) => `${JSON.stringify({ key, ...x })}\n`).join(''));
+    const r = await run(s.argv, s.deps);
+    assert.equal(r.code, 0, r.err);
+    return [s.deps.judge.prompts.length, JSON.parse(r.out).verdicts.noise];
+  };
+  const noSha = { verdict: 'noise', severity: 'minor' };
+  const wrongSha = { verdict: 'unclear', severity: 'minor', promptSha: '0'.repeat(64) };
+  assert.deepEqual(await once([wrongSha, noSha]), [0, 1], 'the last row (no promptSha) is a hit');
+  assert.deepEqual(await once([noSha, wrongSha]), [1, 0], 'the last row (another prompt) is a miss');
 });

@@ -20,7 +20,7 @@ import { DEFAULT_REPO } from '../../github/cursor-review.mjs';
 import { CODERABBIT_LOGIN } from '../../github/review-status.mjs';
 import { loadConfig, HERE } from './config.mjs';
 import { loadDataset, setOf } from './dataset.mjs';
-import { readEscapeRows, stateDirOf } from './escape-causes.mjs';
+import { ESCAPES_FILE, readEscapeRows, stateDirOf } from './escape-causes.mjs';
 import { makeGit, readMerges, removedRanges } from './fix-chains.mjs';
 import { GOLD_DIR, GoldError, SEVERITIES, loadCleanControls, validateRow } from './gold.mjs';
 import { crRounds, defaultGh } from './github.mjs';
@@ -35,6 +35,8 @@ export const HUNK_LIMIT = 6000;
 export const BATCH_CHAR_LIMIT = 24_000;
 /** The bar for the clean controls. It is Dave's number, not a tuning knob. */
 export const CONTROLS_MIN = 30;
+/** The done-when bar of the lane (docs/review-engine/map.md, re-szz-miner): --write needs 15 or more counted rows. Not a tuning knob. */
+export const COUNTED_MIN = 15;
 export const SINCE_DEFAULT = '2026-08-01';
 export const MINER = 'mine-szz-v1';
 export const JUDGE_VERSION = 'szz-label-v2';
@@ -455,16 +457,47 @@ function atomicWrite(file, text) {
 
 /**
  * The cache key of a label. It holds JUDGE_VERSION, so a label of another judge version is asked again.
- * The leak-term list is not part of the cache key on purpose: the guard decides whether a prompt may be sent; it does not change
- * the label of a prompt that was sent. A changed term list re-checks prompts, it does not invalidate labels.
+ * The leak-term list is not part of the cache key on purpose: the guard decides whether a prompt may be sent. The prompt text is
+ * checked apart from the key, by promptSha: a changed term list can change the sha mask, and so the prompt, which is then a miss.
  */
 export const labelKey = (c) => `${JUDGE_VERSION}:${c.fixSha}:${c.blamedMergeSha}:${c.file}:${c.line}`;
 
+/**
+ * The sha256 hex of the prompt of one item alone: judgePrompt([c], leak), the text the per-item guard checks. Each new label
+ * cache row holds it. leak: the leakTerms of the run (its fix shas set the mask, so the text). A back-fill script uses it too.
+ */
+export const promptShaOf = (c, leak) => createHash('sha256').update(judgePrompt([c], leak)).digest('hex');
+
+/** A cache row labels the item only when its prompt is the same. A row with no promptSha (written before it existed) is a hit. */
+const samePrompt = (hit, c, leak) => typeof hit.promptSha !== 'string' || hit.promptSha === promptShaOf(c, leak);
+
+/**
+ * The label cache by key. Of two rows with one key the LAST row in the file wins, with or without promptSha: a re-asked item and
+ * a back-filled row are appended, so the newest row of a key is the one that counts.
+ */
 function readLabelCache(stateDir) {
   const file = path.join(stateDir, LABEL_CACHE);
   if (!existsSync(file)) return new Map();
   const rows = lines(readFileSync(file, 'utf8')).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
   return new Map(rows.filter((r) => r?.key).map((r) => [r.key, r]));
+}
+
+/**
+ * Applies the cache hits. A hit whose row has no promptSha (an old row) gets one new row, with its fields and this run's
+ * promptSha, when the write flag allows. No judge call and no slot. Returns the number of rows back-filled.
+ */
+function applyCache(cands, ctx) {
+  const cache = readLabelCache(ctx.stateDir);
+  const fill = [];
+  for (const c of cands) {
+    const hit = cache.get(labelKey(c));
+    if (!hit || !samePrompt(hit, c, ctx.leak)) continue;
+    applyHit(c, hit);
+    if (typeof hit.promptSha !== 'string') fill.push({ ...hit, promptSha: promptShaOf(c, ctx.leak) });
+  }
+  if (!ctx.args.allowLabelCacheWrite || fill.length === 0) return 0;
+  appendLabelCache(ctx.stateDir, fill);
+  return fill.length;
 }
 
 function appendLabelCache(stateDir, rows) {
@@ -528,9 +561,22 @@ function blamedText(env, head, file, run) {
   return out.join('\n');
 }
 
-/** The head lines of the kept lines of one file: { lines, pairs: [{ old, head }] } or { reason: 'file-gone' | 'line-gone' }. */
+/**
+ * git's stderr for a path that is not in the commit (git 2.47): "path 'x' does not exist in '<sha>'", and "path 'x' exists on
+ * disk, but not in '<sha>'" when the work tree holds the file. Any other failure (a time-out, a failed start) is no answer.
+ */
+const PATH_GONE = /does not exist in '|exists on disk, but not in '/;
+
+/**
+ * The head lines of the kept lines of one file: { lines, pairs: [{ old, head }] } or { reason: 'file-gone' | 'line-gone' }.
+ * file-gone only when git says the path is not in the head; any other failed cat-file throws StepError('cat-file'), a failed pair.
+ */
 function headLines(env, head, file, kept) {
-  if (env.git(['cat-file', '-e', `${head}:${file}`]).status !== 0) return { reason: 'file-gone' };
+  const r = env.git(['cat-file', '-e', `${head}:${file}`]);
+  if (r.status !== 0) {
+    if (PATH_GONE.test(String(r.stderr ?? ''))) return { reason: 'file-gone' };
+    throw new StepError('cat-file');
+  }
   const pairs = headPairs(kept, parsePorcelain(gitText(env.git, ['blame', '-w', '--porcelain', head, '--', file], 'blame')));
   return pairs.length ? { lines: pairs.map((p) => p.head), pairs } : { reason: 'line-gone' };
 }
@@ -640,8 +686,7 @@ async function mineOpenBug(env, spec, note) {
 
 /** Applies cached labels, then (with --label) asks the judge for the rest, in batches, under the daily slot. Returns the label stats. */
 async function labelStage(cands, ctx) {
-  const cache = readLabelCache(ctx.stateDir);
-  for (const c of cands) { const hit = cache.get(labelKey(c)); if (hit) applyHit(c, hit); }
+  ctx.stats.backfilled = applyCache(cands, ctx);
   // The slot is counted again before each call, from the ledger and the clock of that moment: a call of another run and a new
   // Chicago day are seen. own: the calls of this run, ledger-shaped; a call takes the ledger id its judge returns, so it counts once.
   // Known limit: two runs can still race between this count and the ledger append in runJudge. Run one miner at a time.
@@ -736,7 +781,7 @@ function keepAnswers(batch, res, ctx) {
   const answers = res?.ok ? parseAnswer(res.result, batch.length) : null;
   if (!answers) return false;
   batch.forEach((c, i) => { c.label = answers[i]; });
-  const row = (c) => ({ key: labelKey(c), fixSha: c.fixSha, blamedMergeSha: c.blamedMergeSha, file: c.file, line: c.line, hunksShown: c.hunksShown, hunksLeftOut: c.hunksLeftOut, ...c.label });
+  const row = (c) => ({ key: labelKey(c), fixSha: c.fixSha, blamedMergeSha: c.blamedMergeSha, file: c.file, line: c.line, hunksShown: c.hunksShown, hunksLeftOut: c.hunksLeftOut, promptSha: promptShaOf(c, ctx.leak), ...c.label });
   if (ctx.args.allowLabelCacheWrite) appendLabelCache(ctx.stateDir, batch.map(row));
   return true;
 }
@@ -853,7 +898,7 @@ async function mineAll(rows, args, env, stats) {
 }
 
 function newStats() {
-  return { pairs: 0, crDropped: 0, duplicates: 0, unmapped: {}, failed: {}, unmappedFixes: new Set() };
+  return { pairs: 0, crDropped: 0, duplicates: 0, unmapped: {}, failed: {}, unmappedFixes: new Set(), backfilled: 0 };
 }
 
 /** { merge sha -> head sha } of the first-parent merges, from one git call. */
@@ -966,7 +1011,7 @@ function reportOf(stats, cands, rows, slot, controls, args) {
     countedBySplit: tally(counted, (c) => rowOf(c).split), countedBySuite: tally(counted, (c) => rowOf(c).suite),
     capabilityNoRecord: counted.filter((c) => rowOf(c).suite === 'capability' && entryOf(c).noRecord).length, countedByBand: tally(counted, (c) => c.band),
     yield: tally(counted, (c) => c.cause),
-    labelCalls: { used: slot.used, max: slot.max, ...(slot.stopped ? { stopped: true, stop: slot.stop, stopCount: slot.stopCount } : {}) },
+    labelCalls: { used: slot.used, max: slot.max, ...(slot.stopped ? { stopped: true, stop: slot.stop, stopCount: slot.stopCount } : {}) }, labelCacheBackfilled: stats.backfilled,
     controls: controls.counts, baseline: null, primaryOnly: Boolean(args.primaryOnly), notes: [NOTES.oneFamily, NOTES.reviewBody, NOTES.oneRun, NOTES.goldLines, NOTES.diffCut, NOTES.shortTitles, NOTES.group2From, NOTES.mergedHead], written: [],
   };
 }
@@ -996,6 +1041,7 @@ function textReport(rep) {
     `yield (counted, by cause): ${kv(rep.yield)}`,
     `label calls today: ${rep.labelCalls.used} of ${rep.labelCalls.max}`,
     ...(rep.labelCalls.stopped ? [`labelling stopped: ${stopText(rep.labelCalls)}`] : []),
+    `label cache back-filled with promptSha: ${rep.labelCacheBackfilled}`,
     `controls: group1 ${c.group1}, group2 ${c.group2} (from 06-01), merged head without round ${c.noRoundHead}, no merged head ${c.noHead}, removed blamed ${c.removedBlamed}, removed near a failed fix ${c.removedFailedFix}, removed near an unmapped fix ${c.removedUnmappedFix}, round failed ${c.roundFailed}, not on main ${c.notOnMain}, total ${c.total}`,
     `control mining from ${rep.controlMining.from}: pairs ${rep.controlMining.pairs}, unmapped fixes ${rep.controlMining.unmappedFixes}`,
     `baseline copy: ${rep.baseline}`,
@@ -1016,8 +1062,23 @@ function partialProblems(ctx) {
   ];
 }
 
+const parses = (line) => { try { JSON.parse(line); return true; } catch { return false; } };
+
+/**
+ * Problem lines for the escapes file, read here and not through readEscapeRows: that reads a missing file as no rows and skips a
+ * damaged line with no count, so a write could replace a full gold-a.json with a short one. A blank line is no damage.
+ */
+function escapesProblems(stateDir) {
+  const file = path.join(stateDir, ESCAPES_FILE);
+  if (!existsSync(file)) return ['escapes file missing'];
+  const bad = readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => l.trim() && !parses(l)).length;
+  return bad ? [`escapes file has ${bad} line(s) that do not parse`] : [];
+}
+
 function gateProblems(ctx) {
   const problems = validateOutputs({ goldRows: ctx.rows.map((r) => r.row), controls: ctx.controls.controls });
+  problems.push(...escapesProblems(ctx.stateDir));
+  if (ctx.report.counted < ctx.countedMin) problems.push(`counted rows ${ctx.report.counted} is under the bar ${ctx.countedMin}`);
   if (!ctx.args.allowPartial) problems.push(...partialProblems(ctx));
   if (!ctx.controls.fixChainsGiven) problems.push('fix-chains: --fix-chains-json (the fix-chains --json dry run) is needed to write the controls: the partial-failure rule has no source');
   if (ctx.controls.coverage) problems.push(ctx.controls.coverage);
@@ -1041,7 +1102,8 @@ function writeOutputs(ctx, rename) {
 /** The --write path: gates first, then all three files. Returns the problem lines; [] means the files are written. A failed write throws. */
 function writeStage(run, dirs, args, deps) {
   const baselineBuf = existsSync(path.join(dirs.stateDir, BASELINE_FILE)) ? readFileSync(path.join(dirs.stateDir, BASELINE_FILE)) : null;
-  const problems = gateProblems({ ...run, baselineBuf, args });
+  // deps.countedMin (tests only): the synthetic repos hold fewer counted rows than the bar. The command line cannot set it.
+  const problems = gateProblems({ ...run, baselineBuf, args, stateDir: dirs.stateDir, countedMin: deps.countedMin ?? COUNTED_MIN });
   if (problems.length) return problems;
   writeOutputs({ ...run, baselineBuf, goldDir: dirs.goldDir }, deps.rename);
   run.report.written = ['gold-a.json', 'clean-controls.json', BASELINE_FILE];
@@ -1065,6 +1127,7 @@ const USAGE = [
   '  --stop-after <n> stops labelling after n judge calls of this run (a checkpoint). The labels of those calls are kept.',
   '  The first limit reached stops the run; the report names it and its count.',
   '  --allow-label-cache-write keeps the labels in <state-dir>/szz-labels.jsonl. Without it a --label run keeps nothing.',
+  '  With it, a cache hit on a row with no promptSha gets one new row with the promptSha of this run (no judge call).',
   '  The judge prompt shows gold line numbers by design. The fix diff is cut to the hunks near the blamed lines (lineSlack of config.json).',
   '  The judge prompt holds no fix subject. Prefixes of every commit of a fix PR are masked, in the prompt and in the fix titles alike.',
   '  A fix title that occurs in the prompt template is not guarded (the report counts them). Each item is guarded alone before the batching: an item that',
@@ -1072,6 +1135,7 @@ const USAGE = [
   `  guarded again before each call. Titles under ${TITLE_MIN} characters are not guarded (named limit).`,
   '  --write builds gold-a.json, clean-controls.json and escape-baseline.json in memory, checks them, then writes all three or none.',
   '  --write refuses a partial run (a failed pair, an unlabelled candidate, a failed control round read); --allow-partial writes anyway.',
+  `  --write always refuses a missing escapes file, an escapes line that does not parse, and fewer than ${COUNTED_MIN} counted rows.`,
   '  --report may sit outside the repo, or in .claudedocs/ or .claude/cache/e2e/ of the repo; never in the gold dir or the state dir.',
   '  Run one miner at a time: two runs can race on the daily slot.',
   '  --fix-chains-json: the fix-chains.mjs --json dry run. It names the fix PRs that failed or had no target; --write needs it.',
@@ -1177,7 +1241,7 @@ function emit(run, args, stdout) {
 
 /**
  * Returns the exit code. 0 ok, 1 a gate failed (nothing written), 2 a bad argument or an unexpected error (a failed write is
- * rolled back). deps (tests): git, gh, judge, cfg, dataset, fixChains, readRecords, now, ledgerPath, env, rename, stdout, stderr.
+ * rolled back). deps (tests): git, gh, judge, cfg, dataset, fixChains, readRecords, now, ledgerPath, env, rename, countedMin, stdout, stderr.
  */
 export async function main(argv, deps = {}) {
   const stdout = deps.stdout ?? ((s) => process.stdout.write(`${s}\n`));
