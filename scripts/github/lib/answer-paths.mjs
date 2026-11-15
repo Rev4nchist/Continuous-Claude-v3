@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseReviewMd } from '../../ratchets/lib/review-md.mjs';
+import { ANSWER_KEY_GLOBS, answerKeyHitsOf, slashLower } from './answer-key.mjs';
 
 // ---------- glob: ** (whole segments, zero or more), * (one segment), ? (one char). Nothing else is special. ----------
 
@@ -27,18 +28,9 @@ export function globToRegExp(glob) {
 
 export const matchGlob = (glob, p) => globToRegExp(glob).test(p);
 
-/**
- * The match list: the four known answer-key globs, frozen here (Seat ruling 2026-11-13). A glob in the branch's own REVIEW.md earns nothing:
- * a wider one cannot widen the skip. REVIEW.md "Skip paths" is only the drift alarm (answerKeyGlobs). The test A5 ties this list to the live
- * REVIEW.md and to the answer-key entries of cursor-review.mjs TREE_EXCLUDES.
- */
-export const ANSWER_KEY_GLOBS = Object.freeze([
-  'scripts/eval/review-eval/gold/**',
-  'scripts/eval/review-eval/seeds/**',
-  'scripts/eval/review-eval/rubrics/**',
-  'scripts/eval/review-eval/linktype-labels.json',
-]);
-const slashLower = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+// The match list (ANSWER_KEY_GLOBS), slashLower and answerKeyHitsOf live in ./answer-key.mjs, the ONE list that the push gate also reads
+// (card prflow-push-blocks). This file re-exports the list and the normaliser, so the hook and the old importers keep their names.
+// A glob in the branch's own REVIEW.md earns nothing: REVIEW.md "Skip paths" is only the drift alarm (answerKeyGlobs below).
 
 /** { globs } (the frozen four) or { reason }: fail closed when REVIEW.md "Skip paths" cannot be read or lacks any of the four. */
 export function answerKeyGlobs(root) {
@@ -58,9 +50,9 @@ export function answerKeyCheck({ root, paths }) {
   if (!Array.isArray(paths)) return { closed: 'the changed-file list is unknown' };
   const { globs, reason } = answerKeyGlobs(root);
   if (!globs) return { closed: reason };
-  const hits = paths.filter((p) => globs.some((g) => matchGlob(slashLower(g), slashLower(p))));
+  const hits = answerKeyHitsOf(paths, globs);
   return hits.length === 0 ? null : { hits };
 }
 
-// slashLower is also used by pre-pr.mjs (baseProblem).
-export { slashLower };
+// ANSWER_KEY_GLOBS is the frozen list of ./answer-key.mjs. slashLower is also used by pre-pr.mjs (baseProblem).
+export { ANSWER_KEY_GLOBS, slashLower };

@@ -6266,6 +6266,23 @@ async function listBlockingClaims(sessionId, staleThresholdMs) {
   return { claims: value, degraded };
 }
 
+// src/shared/holder-lane.ts
+init_trace_boot();
+var HOLDER_LANE_BUDGET_MS = 500;
+var HOLDER_OPEN_LANE_SQL = `SELECT 1 FROM agentic_os.lane WHERE owner_session_id = $1 AND state <> 'done' LIMIT 1`;
+async function holderHoldsOpenLane(sessionId) {
+  const { value, degraded } = await withPgClientOrFallback(
+    async (client) => {
+      const res = await client.query(HOLDER_OPEN_LANE_SQL, [sessionId]);
+      return res.rows.length > 0;
+    },
+    true,
+    "holderHoldsOpenLane",
+    { quiet: true, totalMs: HOLDER_LANE_BUDGET_MS }
+  );
+  return degraded ? null : value;
+}
+
 // src/shared/session-id.ts
 init_trace_boot();
 import { execFileSync } from "child_process";
@@ -6462,6 +6479,86 @@ function readShellCommand(input) {
   return { kind: "command", tool, text, dialects: spec.dialects };
 }
 
+// src/shared/data-spans.ts
+init_trace_boot();
+
+// src/shared/mask-quotes.ts
+init_trace_boot();
+var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;
+var PWSH_STRING = /"(?:[^"`]|`[\s\S])*"|'(?:[^']|'')*'/g;
+function quotedSpans(command, tool = "Bash") {
+  return [...command.matchAll(tool === "PowerShell" ? PWSH_STRING : BASH_STRING)].map((m) => [m.index, m.index + m[0].length]);
+}
+
+// src/shared/data-spans.ts
+var DATA_HEAD = new RegExp(
+  String.raw`^\s*(?:add-content|set-content|out-file|echo|write-host|write-output|printf|git\s+commit` + String.raw`|node(?:\.exe)?\s+(?:\S*[\\/])?lane\.mjs\s+(?:note|say))(?=\s|$)`,
+  "i"
+);
+var PLAIN_HEAD = /^\s*(?:cd|Set-Location|git\s+(?:add|status))(?=\s|$)/i;
+var RUNS_TEXT = /\$\(|`|<<|\$['"]|\\\r?\n/;
+var SPECIAL = /[\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]/u;
+var OUTSIDE_RISK = /[#(){}'"]/;
+var SEGMENT_BREAK = /[;&|\r\n]+/g;
+function sharedSpans(text) {
+  const bash = quotedSpans(text, "Bash");
+  const pwsh = quotedSpans(text, "PowerShell");
+  if (bash.length !== pwsh.length || bash.some(([s, e], i) => s !== pwsh[i][0] || e !== pwsh[i][1])) return null;
+  if (bash.some(([s]) => s > 0 && text[s - 1] === "\\")) return null;
+  return bash;
+}
+function maskSpans(text, spans) {
+  const chars = text.split("");
+  for (const [s, e] of spans) chars.fill(" ", s, e);
+  return chars.join("");
+}
+function segmentsOf(masked) {
+  const out = [];
+  let from = 0;
+  const breaks = [...masked.matchAll(SEGMENT_BREAK)].map((m) => ({ at: m.index, sep: m[0] }));
+  for (const b of [...breaks, { at: masked.length, sep: "" }]) {
+    if (masked.slice(from, b.at).trim() !== "") out.push({ from, end: b.at, piped: b.sep.includes("|") });
+    from = b.at + b.sep.length;
+  }
+  return out;
+}
+var PWSH_PLAIN_ESCAPE = /^`[nrt`"'0]$/;
+function plainPwshEscapes(text) {
+  if (!text.includes("`")) return text;
+  const inDouble = quotedSpans(text, "PowerShell").filter(([s]) => text[s] === '"');
+  const chars = text.split("");
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "`") continue;
+    const inside = inDouble.some(([s, e]) => i >= s + 1 && i + 1 <= e - 2);
+    if (!inside || !PWSH_PLAIN_ESCAPE.test(text.slice(i, i + 2))) return text;
+    chars[i] = " ";
+    chars[i + 1] = " ";
+    i++;
+  }
+  return chars.join("");
+}
+function blankDataStrings(text, keep2, pwsh = false) {
+  const original = text;
+  if (pwsh) text = plainPwshEscapes(text);
+  if (RUNS_TEXT.test(text) || SPECIAL.test(text)) return original;
+  const spans = sharedSpans(text);
+  if (!spans || spans.length === 0) return original;
+  const masked = maskSpans(text, spans);
+  if (OUTSIDE_RISK.test(masked)) return original;
+  const segs = segmentsOf(masked);
+  const headOf = (seg, re) => re.test(masked.slice(seg.from, seg.end)) && re.test(text.slice(seg.from, seg.end));
+  if (!segs.every((seg) => headOf(seg, DATA_HEAD) || headOf(seg, PLAIN_HEAD))) return original;
+  let out = text;
+  for (const seg of segs) {
+    if (seg.piped || !headOf(seg, DATA_HEAD)) continue;
+    for (const [s, e] of spans) {
+      if (s < seg.from || e > seg.end || keep2(text.slice(s + 1, e - 1))) continue;
+      out = out.slice(0, s + 1) + " ".repeat(e - s - 2) + out.slice(e - 1);
+    }
+  }
+  return out;
+}
+
 // src/shared/write-targets.ts
 var DC = "mcp__plugin_desktop-commander_desktop-commander__";
 var DIRECT_WRITERS = /* @__PURE__ */ new Map([
@@ -6543,8 +6640,30 @@ function firstOperandAt(t, cueEnd) {
   if (/(?:^|\s)-de(?:s(?:t\w*)?)?(?=\s)/i.test(m[0])) return -1;
   return cueEnd + m[0].length;
 }
-function classifyShellText(text, claims, fold) {
+var spellingOf = (s) => s.replace(/\\/g, "/").trim().replace(/^\.\//, "");
+function isHeldSpelling(content, claims, fold) {
+  const s = spellingOf(content);
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  const whole = claims.some((c) => c.forms.some((f) => fold ? spellingOf(f).toLowerCase() === lower : spellingOf(f) === s) || (c.ciForms ?? []).some((f) => spellingOf(f).toLowerCase() === lower));
+  if (whole) return true;
+  return claims.some((c) => {
+    const exact = c.forms.map(spellingOf).filter(Boolean).map((f) => fold ? f.toLowerCase() : f);
+    const ci = (c.ciForms ?? []).map(spellingOf).filter(Boolean).map((f) => f.toLowerCase());
+    return [[fold ? lower : s, exact], [lower, ci]].some(([hay, forms]) => {
+      if (forms.length === 0) return false;
+      const alt = forms.map(escapeRe).join("|");
+      for (const m of hay.matchAll(new RegExp(`${PATH_START}(?:${alt})${PATH_END}`, "g"))) {
+        const rest = hay.slice(0, m.index) + hay.slice(m.index + m[0].length);
+        if (!/\s/.test(rest)) return true;
+      }
+      return false;
+    });
+  });
+}
+function classifyShellText(text, claims, fold, pwsh = false) {
   if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: "none" };
+  text = blankDataStrings(text, (s) => isHeldSpelling(s, claims, fold), pwsh);
   let t = text.replace(/\\/g, "/");
   if (fold) t = t.toLowerCase();
   const tl = t.toLowerCase();
@@ -6680,18 +6799,36 @@ async function mainDirect(input, paths) {
   console.log(JSON.stringify(keep2));
 }
 var isStoredAbsolute = (filePath) => isAbsolute2(filePath) || /^[a-z]:[\\/]/i.test(filePath);
-var shown = (filePath) => isStoredAbsolute(filePath) ? basename2(filePath) : filePath;
-function shellDeny(input, filePath, holder, cue) {
+var printable = (s) => s.replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]/g, "?");
+var shown = (filePath) => printable(isStoredAbsolute(filePath) ? basename2(filePath) : filePath);
+async function shellDeny(input, filePath, holder, cue) {
+  const lines = holder === "another session" ? "" : await holderLines(holder, filePath, isStoredAbsolute(filePath));
   const reason = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
 This command may write "${shown(filePath)}", which is held by session ${holder}. It holds the write cue "${cue}".
 The claim is live: their lease runs, or that session is still alive.
-This check reads the command text and does not run it, so it can be wrong. If you only read the file, split the command.
+This check reads the command text and does not run it, so it can be wrong. If you only read the file, split the command.${lines}
 
 Coordinate with that session, or work on something else.
 To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
   logGuardDecision("file-claims", input, "deny", `file-conflict-shell: cue=${cue} held by ${holder}`);
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
+}
+async function holderLines(holder, filePath, listForm) {
+  const handle = `#${String(holder).slice(0, 8)}`;
+  let noOpenLane = false;
+  try {
+    noOpenLane = await holderHoldsOpenLane(holder) === false;
+  } catch {
+    noOpenLane = false;
+  }
+  const quotable = /^[A-Za-z0-9._\/ -]+$/.test(filePath);
+  const target = listForm || !quotable ? "--list" : `'${filePath}'`;
+  const release = `Holder: ${handle}. Only the holder frees a claim: it runs
+  node ~/.claude/hooks/dist/release-claim.mjs ${target}`;
+  const lane = noOpenLane ? "\nThe holder holds no open lane." : "";
+  return `
+${release}${lane}`;
 }
 var FOLDS_CASE2 = process.platform === "win32" || process.platform === "darwin";
 function formsOf(top, cwd, filePath) {
@@ -6748,9 +6885,9 @@ async function mainShell(input, cmd) {
     forms: isStoredAbsolute(c.filePath) ? [c.filePath] : [...new Set(topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath)))],
     ciForms: isStoredAbsolute(c.filePath) ? [] : formsOf(c.project, cwd, c.filePath)
   }));
-  const verdict = classifyShellText(cmd.text, held, FOLDS_CASE2);
+  const verdict = classifyShellText(cmd.text, held, FOLDS_CASE2, cmd.tool === "PowerShell");
   if (verdict.kind === "deny" && !BREAK_GLASS) {
-    console.log(JSON.stringify(shellDeny(input, verdict.filePath, verdict.holder ?? "another session", verdict.cue)));
+    console.log(JSON.stringify(await shellDeny(input, verdict.filePath, verdict.holder ?? "another session", verdict.cue)));
     return;
   }
   if (verdict.kind === "deny") {
@@ -6779,7 +6916,8 @@ async function claimOne(input, filePath, sessionId) {
     input.tool_name,
     { breakGlass: BREAK_GLASS }
   );
-  const fileName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
+  const rawName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
+  const fileName = printable(rawName);
   let output;
   switch (decision.outcome) {
     case "blocked": {
@@ -6798,7 +6936,7 @@ touch the file.`;
       }
       const blockMessage = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
-"${fileName}" is held by session ${decision.holder}
+"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, !key) : ""}
 
 ${leaseLine}
 Reclaiming needs BOTH an expired lease AND a holder that has stopped

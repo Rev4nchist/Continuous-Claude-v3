@@ -58,6 +58,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as PRE from './pre-pr.mjs';
+import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
 import { REGISTRY } from '../checks/parser-fixtures/registry.mjs';
 import { MARKER } from './lib/pssa-advisory.mjs';
 import { cliCapOf } from './cr-paid.mjs';
@@ -216,6 +217,22 @@ test('CO1: a scripts/coordination change runs the same coordination test files a
     for (const f of files) assert.ok(existsSync(path.join(REPO_ROOT, f)), f);
   }
   assert.equal(ids(gatesFor(['docs/x.md'], REPO_ROOT)).some((id) => id.startsWith('coordination-')), false);
+});
+
+test('CO2: reminder-sync.test.mjs runs in the pre-pr coordination-tests gate and in a CI step of job coordination-db (no gate ran it before)', async () => {
+  // Breaks when the file leaves COORDINATION_TESTS, or when no step of the CI job names it. CO1 cannot see this: it compares the two lists with each other.
+  const file = 'scripts/coordination/reminder-sync.test.mjs';
+  assert.ok(existsSync(path.join(REPO_ROOT, file)), file);
+  const g = gatesFor(['scripts/coordination/reminder-sync.mjs'], REPO_ROOT).find((x) => x.id === 'coordination-tests');
+  assert.ok(g, 'a reminder-sync.mjs change plans coordination-tests');
+  assert.ok(g.args.includes(file), `coordination-tests args hold ${file}`);
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  const start = wf.indexOf('\n  coordination-db:');
+  assert.ok(start >= 0, 'the workflow has the coordination-db job');
+  const rest = wf.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [\w-]+:/);
+  const job = (next < 0 ? rest : rest.slice(0, next + 1)).split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n');
+  assert.ok(job.includes(file), `a step of CI job coordination-db runs ${file}`);
 });
 
 // ---------- dependency routing: a path that feeds a gate selects it, even when the diff never touches that gate's own folder ----------
@@ -431,6 +448,22 @@ test('TG3: a change under scripts/eval/review-eval (code, fixtures, config) runs
   assert.equal(notesFor(['scripts/eval/review-eval/config.json'], CONFIG).some((n) => n.step.startsWith('unowned:')), false);
 });
 
+test('TG3b: a change to a reviewer-set or band-set file runs review-eval-tests, taken from the engine-version lists (breaks if the trigger list is copied or dropped; PR 574 failed in CI on a one-file reviewer change)', async () => {
+  // The paths come from the module the engine freeze reads, so a file added to a set runs the gate with no edit here.
+  const sample = [...REVIEWER_SET_FILES, `${REVIEWER_SET_DIR}backends/x.mjs`, `${REVIEWER_SET_DIR}a/b/deep.mjs`, `${REVIEWER_SET_DIR}prompt.mjs`, ...BAND_SET_FILES];
+  assert.ok(sample.length >= 10, 'the lists are not empty');
+  for (const p of sample) assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('review-eval-tests'), p);
+  // A file outside the sets and outside the eval folder does not start it.
+  assert.equal(ids(gatesFor(['scripts/github/open-prs.mjs'], REPO_ROOT)).includes('review-eval-tests'), false);
+});
+
+test('TG3c: review-eval-tests also runs the tests of the rubrics folder, which the top-level pattern does not reach (breaks if the second pattern is dropped)', async () => {
+  const { r, picked } = runGlobGate('review-eval-tests', 'scripts/eval/review-eval/rubrics/rubric-lint.mjs',
+    ['scripts/eval/review-eval/t.test.mjs', 'scripts/eval/review-eval/rubrics/r.test.mjs']);
+  assert.equal(r.status, 'PASS', `${r.detail}\n${r.output}`);
+  assert.deepEqual(picked, ['r', 't']);
+});
+
 test('TG4: CI job ratchets runs the same three glob patterns as pre-pr, each in single quotes (breaks if a pattern drifts or loses its quotes)', async () => {
   const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
   const start = wf.indexOf('\n  ratchets:');
@@ -444,12 +477,14 @@ test('TG4: CI job ratchets runs the same three glob patterns as pre-pr, each in 
   for (const id of ['local-review-tests', 'resolve-deps-tests', 'review-eval-tests']) {
     const g = gates.find((x) => x.id === id);
     assert.ok(g, id);
-    const pattern = g.args[1];
-    assert.ok(pattern.includes('*'), `${id}: ${pattern} is a glob`);
-    // Unquoted, bash reads ** as * (no globstar) and drops the top-level files with no error. Node expands a quoted pattern.
-    const hits = runs.filter((l) => l.includes(pattern));
-    assert.ok(hits.length > 0, `${id}: no run line in job ratchets names ${pattern}`);
-    for (const l of hits) assert.ok(l.includes(`'${pattern}'`), `${id}: ${pattern} is not in single quotes: ${l.trim()}`);
+    // Every pattern of the gate (review-eval-tests has two: the folder and its rubrics subfolder).
+    for (const pattern of g.args.slice(1)) {
+      assert.ok(pattern.includes('*'), `${id}: ${pattern} is a glob`);
+      // Unquoted, bash reads ** as * (no globstar) and drops the top-level files with no error. Node expands a quoted pattern.
+      const hits = runs.filter((l) => l.includes(pattern));
+      assert.ok(hits.length > 0, `${id}: no run line in job ratchets names ${pattern}`);
+      for (const l of hits) assert.ok(l.includes(`'${pattern}'`), `${id}: ${pattern} is not in single quotes: ${l.trim()}`);
+    }
   }
 });
 

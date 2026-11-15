@@ -123,9 +123,9 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
     const target = targetOf(input, tool);
     if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
-    const path = guardLogPath(env);
-    mkdirSync(dirname(path), { recursive: true, mode: 448 });
-    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+    const path2 = guardLogPath(env);
+    mkdirSync(dirname(path2), { recursive: true, mode: 448 });
+    appendFileSync(path2, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
 }
@@ -154,9 +154,9 @@ function logGuardError(hook, err, opts = {}) {
     const env = opts.env ?? process.env;
     if (!shouldWrite(env)) return;
     const entry = { ts: (/* @__PURE__ */ new Date()).toISOString(), hook, kind: "error", message: errorMessage(err), stack: firstFrame(err), source: guardSource(env) };
-    const path = guardLogPath(env);
-    mkdirSync(dirname(path), { recursive: true, mode: 448 });
-    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+    const path2 = guardLogPath(env);
+    mkdirSync(dirname(path2), { recursive: true, mode: 448 });
+    appendFileSync(path2, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
 }
@@ -468,7 +468,7 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 // src/pre-pr-gate.ts
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync2, statSync } from "fs";
+import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync4, statSync as statSync2 } from "fs";
 import { dirname as dirname3, isAbsolute, join as join5, posix, resolve as resolve2, win32 } from "path";
 
 // src/pr-opened-review-loop.ts
@@ -873,6 +873,184 @@ function blankInertQuotesAround(command, tool, openHead) {
   return blankSpans(command, inertSpans(command, "Bash", openHead), inertSpans(command, "PowerShell", openHead));
 }
 
+// ../../scripts/github/lib/decisions.mjs
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync, unlinkSync as unlinkSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { randomUUID as randomUUID2 } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+
+// ../../scripts/github/lib/file-lock.mjs
+import { randomUUID } from "node:crypto";
+import { closeSync, openSync, readFileSync as readFileSync2, statSync, unlinkSync as unlinkSync2, writeSync } from "node:fs";
+var MUTEX_STALE_MS = 2e3;
+var sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+var readLock = (lock) => {
+  try {
+    return readFileSync2(lock, "utf8");
+  } catch {
+    return null;
+  }
+};
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+function staleContent(lock, lockStaleMs) {
+  const st = statSync(lock);
+  if (Date.now() - st.mtimeMs <= lockStaleMs) return null;
+  if (!st.isFile()) return null;
+  const content = readLock(lock);
+  if (content === null) return null;
+  const pid = Number.parseInt(content.split(" ")[0], 10);
+  return pidAlive(pid) ? null : content;
+}
+function createExclusive(path2, token) {
+  const fd = openSync(path2, "wx");
+  try {
+    writeSync(fd, token);
+  } finally {
+    closeSync(fd);
+  }
+}
+function clearDeadMutex(mutex) {
+  const dead = staleContent(mutex, MUTEX_STALE_MS);
+  if (dead !== null && readLock(mutex) === dead) unlinkSync2(mutex);
+}
+function takeOver(lock, lockStaleMs) {
+  const mutex = `${lock}.takeover`;
+  const token = `${process.pid} ${randomUUID()}`;
+  try {
+    createExclusive(mutex, token);
+  } catch (err) {
+    if (err.code === "EEXIST") clearDeadMutex(mutex);
+    return false;
+  }
+  try {
+    if (staleContent(lock, lockStaleMs) === null) return false;
+    unlinkSync2(lock);
+    return true;
+  } finally {
+    try {
+      if (readLock(mutex) === token) unlinkSync2(mutex);
+    } catch {
+    }
+  }
+}
+function withLock(file, { lockWaitMs = 5e3, lockStaleMs = 3e4 } = {}, fn) {
+  const lock = `${file}.lock`;
+  const token = `${process.pid} ${randomUUID()}`;
+  const began = Date.now();
+  for (; ; ) {
+    try {
+      createExclusive(lock, token);
+      break;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      let taken = false;
+      try {
+        taken = staleContent(lock, lockStaleMs) !== null && takeOver(lock, lockStaleMs);
+      } catch {
+      }
+      if (taken) continue;
+      if (Date.now() - began >= lockWaitMs) return { ok: false, reason: "lock", detail: `the lock ${lock} is held by another session` };
+      sleepSync(25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      if (readLock(lock) === token) unlinkSync2(lock);
+    } catch {
+    }
+  }
+}
+
+// ../../scripts/github/lib/decisions.mjs
+var DECISIONS_ENV = "CCV3_DECISIONS_FILE";
+var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round", "cli-skip"]);
+var REPO = "Rev4nchist/Continuous-Claude-v3";
+var MAX_AGE_MS = 7 * 24 * 3600 * 1e3;
+var MISS_TTL_MS = 60 * 60 * 1e3;
+var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(os.homedir(), ".claude", "state", "ccv3-mods", "decisions.json");
+var decisionKey = ({ repo = REPO, pr, branch }) => pr !== void 0 && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`;
+var empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
+var idOf = ({ step, key, head }) => `${step}
+${key}
+${String(head).toLowerCase()}`;
+var isText = (v) => typeof v === "string" && v !== "";
+var isPlain = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+function readStore(file) {
+  try {
+    const s = JSON.parse(readFileSync3(file, "utf8"));
+    if (!isPlain(s)) return empty();
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? store : empty();
+  } catch {
+    return empty();
+  }
+}
+function writeStore(file, store) {
+  const tmp = `${file}.${process.pid}.${randomUUID2()}.tmp`;
+  const text = `${JSON.stringify(store, null, 2)}
+`;
+  writeFileSync2(tmp, text);
+  try {
+    renameSync(tmp, file);
+  } catch {
+    try {
+      unlinkSync3(tmp);
+    } catch {
+    }
+    writeFileSync2(file, text);
+  }
+}
+function prune(store, now) {
+  for (const group of [store.offers, store.decisions, store.misses]) {
+    for (const [id, row] of Object.entries(group)) {
+      if (!(now - Date.parse(row?.at) <= MAX_AGE_MS)) delete group[id];
+    }
+  }
+}
+function update(fn) {
+  const file = decisionsPath();
+  mkdirSync3(path.dirname(file), { recursive: true });
+  const locked = withLock(file, {}, () => {
+    const store = readStore(file);
+    prune(store, Date.now());
+    const out = fn(store);
+    writeStore(file, store);
+    return out;
+  });
+  return locked;
+}
+function decisionRead({ step, key, head }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return null;
+  const d = readStore(decisionsPath()).decisions[idOf({ step, key, head })];
+  return d && typeof d.label === "string" ? { label: d.label, at: d.at } : null;
+}
+function decisionUse({ step, key, head }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: "no-decision" };
+  return update((store) => {
+    const id = idOf({ step, key, head });
+    const had = Boolean(store.decisions[id]);
+    delete store.decisions[id];
+    delete store.offers[id];
+    delete store.misses[id];
+    return had ? { ok: true } : { ok: false, reason: "no-decision" };
+  });
+}
+
+// src/shared/decisions-store.ts
+var decisionRead2 = decisionRead;
+var decisionUse2 = decisionUse;
+var decisionKey2 = decisionKey;
+
 // src/shared/shell-tools.ts
 var BOTH = ["Bash", "PowerShell"];
 var SHELL_TOOLS = /* @__PURE__ */ new Map([
@@ -906,6 +1084,7 @@ var COMMAND_TOOLS2 = /* @__PURE__ */ new Set(["Bash", "PowerShell", `${DC}start_
 var HOOK = "pre-pr-gate";
 var RUN = "node scripts/github/pre-pr.mjs --body <file>";
 var BODY_UNVERIFIABLE = "the PR body is not a file, so it cannot be matched to the body pre-pr.mjs checked. Pass the body as a file: -F body=@<file> (gh api) or --body-file <file> (gh pr create). An inline body, a body from stdin, --fill and --fill-first are denied";
+var CLI_SKIP_LABEL = /^Skip the CLI review for this head(?: \(Recommended\))?$/;
 var commandOf = (input) => {
   const c = readShellCommand(input);
   return c.kind === "command" ? c.text : "";
@@ -1042,8 +1221,8 @@ function bodyFilesOf(command) {
   return sources.flatMap((re) => [...command.matchAll(new RegExp(re.source, "g"))].map((m) => m.slice(1).find((g) => g !== void 0) ?? ""));
 }
 function bodyFileOf(command) {
-  const path = bodyFilesOf(command)[0];
-  return path !== void 0 && path !== "-" ? path : null;
+  const path2 = bodyFilesOf(command)[0];
+  return path2 !== void 0 && path2 !== "-" ? path2 : null;
 }
 var OPEN_HEAD = /^\s*gh\s+(?:pr\s+create|api)(?=\s|$)/i;
 var bodyViewOf = (command, tool) => blankInertQuotesAround(command, tool, OPEN_HEAD);
@@ -1100,13 +1279,13 @@ function stampRoots(deps, dir, root, branch) {
   const r = deps.git(dir, ["worktree", "list", "--porcelain"]);
   if (r.status !== 0) return roots;
   for (const block of r.stdout.split(/\r?\n\r?\n/)) {
-    const path = /^worktree (.+)$/m.exec(block)?.[1];
+    const path2 = /^worktree (.+)$/m.exec(block)?.[1];
     const ref = /^branch refs\/heads\/(.+)$/m.exec(block)?.[1];
-    if (path && ref === branch && !roots.includes(path.trim())) roots.push(path.trim());
+    if (path2 && ref === branch && !roots.includes(path2.trim())) roots.push(path2.trim());
   }
   return roots;
 }
-function stampProblem(raw, head, now, body) {
+function stampProblem(raw, head, now, body, flagDecided = () => false) {
   if (raw === null) return "no stamp. The pre-PR check has not passed in this checkout";
   let s;
   try {
@@ -1123,9 +1302,9 @@ function stampProblem(raw, head, now, body) {
   if (at - now > FUTURE_SLACK_MS) return "the stamp time is in the future";
   const reason = String(o.cr_skip_reason);
   const waitKnown = reason === "rate-limited" && typeof o.cr_retry_minutes === "number" && o.cr_retry_minutes > 0;
-  const capEarned = reason === "cap" && typeof o.cr_finished_runs === "number" && o.cr_finished_runs >= 1;
+  const capEarned = reason === "cap" && (typeof o.cr_finished_runs === "number" && o.cr_finished_runs >= 1 || Number.isInteger(o.cr_partial_earned) && o.cr_partial_earned >= 1);
   if (o.cr_skipped === true && reason === "cap" && !capEarned) {
-    return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? "none")}). The cap counts runs that finished with a PASS. Fix the CLI and run pre-pr.mjs again`;
+    return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? "none")}) and no partial run earned it (cr_partial_earned: ${String(o.cr_partial_earned ?? "none")}). The cap counts runs that finished with a PASS, or partial runs whose findings the branch changed. A finding judged false and not changed does not earn: the way out is Dave's recorded decision, not an edit of the lines. Fix the CLI and run pre-pr.mjs again`;
   }
   const docsOnlyEarned = reason === "docs-only" && o.cr_docs_only === true && o.docs_verified === true;
   if (o.cr_skipped === true && reason === "docs-only" && !docsOnlyEarned) {
@@ -1135,7 +1314,8 @@ function stampProblem(raw, head, now, body) {
   if (o.cr_skipped === true && reason === "answer-key" && !answerKeyEarned) {
     return `the stamp skipped the CodeRabbit CLI review as answer-key, but it lacks cr_answer_key: true or answer_key_paths: a whole number of 1 or more (cr_answer_key: ${String(o.cr_answer_key ?? "none")}, answer_key_paths: ${String(o.answer_key_paths ?? "none")}). An answer-key skip is allowed only when pre-pr.mjs found an answer-key path in the diff. Run pre-pr.mjs again`;
   }
-  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned && !docsOnlyEarned && !answerKeyEarned) {
+  const flagEarned = o.cr_skipped === true && reason === "flag" && flagDecided();
+  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned && !docsOnlyEarned && !answerKeyEarned && !flagEarned) {
     return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || "none"}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), a docs-only branch (docs-only, with cr_docs_only and docs_verified true), a diff with an answer-key path (answer-key, with cr_answer_key true and answer_key_paths 1 or more), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
@@ -1235,9 +1415,10 @@ function decideAs(input, deps, text, quoteTool = input.tool_name || input.tool) 
   deps = guardUnexpandedCd(deps, plan);
   const ctx = makeCtx(input, command, deps, shapes, plan, bodyViewOf(command, quoteTool));
   const d = judge(command, deps, ctx, shapes);
-  if (d.action !== "deny") return d;
+  const used = ctx.cliSkipUsed ? { usedCliSkip: ctx.cliSkipUsed } : {};
+  if (d.action !== "deny") return d.action === "allow" ? { ...d, ...used } : d;
   if (hasOverride(command, deps.env)) return { action: "override" };
-  return d.soft && !ctx.enforcing() ? { action: "allow", warn: d.pattern } : d;
+  return d.soft && !ctx.enforcing() ? { action: "allow", warn: d.pattern, ...used } : d;
 }
 function judge(command, deps, ctx, shapes) {
   const moved = repoMovedDeny(command, shapes);
@@ -1268,6 +1449,18 @@ function stampDeny(command, deps, ctx) {
   }
   return null;
 }
+function cliSkipKey(deps, top, branch) {
+  const name = branch ?? deps.git(top, ["branch", "--show-current"]).stdout.trim();
+  return name ? decisionKey2({ branch: name }) : null;
+}
+function cliSkipDecided(deps, key, head) {
+  try {
+    const d = deps.decisionRead?.({ step: "cli-skip", key, head }) ?? null;
+    return d !== null && typeof d.label === "string" && CLI_SKIP_LABEL.test(d.label);
+  } catch {
+    return false;
+  }
+}
 function stampDenyIn(command, deps, ctx, dir) {
   const { named, shell } = ctx;
   const rule = (pattern, why) => deny(pattern, ctx.dirs.length > 1 ? `${why}. The command can run in more than one folder. A cd joined by ; or || or a line end can fail. The shell then stays in its folder. This check is for ${dir}. Join the cd to the PR command with && to name one folder` : why);
@@ -1283,8 +1476,21 @@ function stampDenyIn(command, deps, ctx, dir) {
   if (headRun.status !== 0) return rule("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${top}`);
   const head = headRun.stdout.trim();
   const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve2(dir, shell === "bash" ? fromGitBashPath(bodyPath) : bodyPath))) };
-  const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join5(r, STAMP_REL)), head, deps.now(), body));
-  if (!problems.some((p) => p === null)) return rule("stamp", problems[0] ?? "no stamp");
+  const checks = stampRoots(deps, dir, top, branch).map((r) => {
+    let relied = null;
+    const decided = () => {
+      const key = cliSkipKey(deps, top, branch);
+      if (key !== null && cliSkipDecided(deps, key, head)) {
+        relied = { key, head };
+        return true;
+      }
+      return false;
+    };
+    return { problem: stampProblem(deps.readFile(join5(r, STAMP_REL)), head, deps.now(), body, decided), relied };
+  });
+  const passed = checks.find((c) => c.problem === null);
+  if (!passed) return rule("stamp", checks[0]?.problem ?? "no stamp");
+  if (passed.relied) ctx.cliSkipUsed = passed.relied;
   const pushed = pushedProblem(deps, top, branch, head);
   return pushed ? rule("pushed-head", pushed) : null;
 }
@@ -1358,6 +1564,13 @@ The stamp comes from: ${RUN}`;
     const d = decide(input, deps);
     if (d.action === "override") logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
     if (d.action === "allow" && d.warn) logGuardDecision(HOOK, input, "warn", d.warn, { command });
+    if (d.action === "allow" && d.usedCliSkip) {
+      const used = deps.decisionUse?.({ step: "cli-skip", key: d.usedCliSkip.key, head: d.usedCliSkip.head });
+      if (used?.ok !== true) {
+        logGuardDecision(HOOK, input, "deny", "cli-skip-not-used", { command });
+        return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "BLOCKED (pre-pr-gate): Dave's cli-skip decision for this branch and head could not be used up (the decision store was busy or the decision is gone). Run the command again. If it keeps failing, ask Dave with node scripts/github/ship-ask.mjs cli-skip --branch <branch>." } });
+      }
+    }
     if (d.action !== "deny") return "{}";
     logGuardDecision(HOOK, input, "deny", d.pattern, { command });
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: d.reason } });
@@ -1404,17 +1617,17 @@ var GIT_FIX = "Fix: install Git for Windows (https://git-scm.com/download/win) o
 function gitNotFound(detail) {
   return Object.assign(new Error(`git not found on PATH: ${detail}. ${GIT_FIX}`), { code: GIT_NOT_FOUND });
 }
-function runnableFile(path, platform = process.platform) {
+function runnableFile(path2, platform = process.platform) {
   try {
-    if (!statSync(path).isFile()) return false;
-    if (platform !== "win32") accessSync(path, constants.X_OK);
+    if (!statSync2(path2).isFile()) return false;
+    if (platform !== "win32") accessSync(path2, constants.X_OK);
     return true;
   } catch {
     return false;
   }
 }
 function resolveGit(env = process.env, exists, platform = process.platform) {
-  exists ??= (path) => runnableFile(path, platform);
+  exists ??= (path2) => runnableFile(path2, platform);
   const win = platform === "win32";
   const p = win ? win32 : posix;
   const exe = win ? "git.exe" : "git";
@@ -1457,7 +1670,7 @@ function makeErrorLogger(env = process.env) {
   return (message, ctx = {}) => {
     if (!shouldWrite(env)) return;
     const file = join5(dirname3(guardLogPath(env)), "pre-pr-gate-errors.jsonl");
-    mkdirSync3(dirname3(file), { recursive: true, mode: 448 });
+    mkdirSync4(dirname3(file), { recursive: true, mode: 448 });
     const cwd = ctx.cwd ?? null;
     let cwdExists = false;
     try {
@@ -1474,14 +1687,16 @@ function realDeps() {
     git: makeGit(),
     readFile: (p) => {
       try {
-        return readFileSync2(p, "utf8");
+        return readFileSync4(p, "utf8");
       } catch {
         return null;
       }
     },
     now: () => Date.now(),
     env: process.env,
-    logError: makeErrorLogger(process.env)
+    logError: makeErrorLogger(process.env),
+    decisionRead: decisionRead2,
+    decisionUse: decisionUse2
   };
 }
 async function main2() {
@@ -1498,6 +1713,7 @@ if (!process.env.VITEST) {
 export {
   CCV3_REPO,
   CD_UNEXPANDED,
+  CLI_SKIP_LABEL,
   COMMAND_TOOLS2 as COMMAND_TOOLS,
   DIR_NOT_FOUND,
   GIT_NOT_FOUND,

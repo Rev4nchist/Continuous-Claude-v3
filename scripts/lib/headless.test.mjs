@@ -62,10 +62,26 @@ test('F12 the day cap counts the America/Chicago day, not the UTC day', () => {
   const late = Date.parse('2026-11-02T05:30:00Z');
   assert.equal(chicagoDay(late), '2026-11-01');
   for (let i = 0; i < HEADLESS_DAILY_CAP; i += 1) assert.equal(reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => late }).ok, true);
-  const r31 = reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => late });
-  assert.deepEqual([r31.ok, r31.reason], [false, 'cap']);
+  const over = reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => late });
+  assert.deepEqual([over.ok, over.reason], [false, 'cap']);
   // One hour later it is 00:30 on 11-02 in Chicago: a new day. The UTC day has not changed, so a UTC count would refuse.
   assert.equal(reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => late + 3_600_000 }).ok, true);
+});
+
+test('the default day cap is 200: run 31 is allowed, run 201 is refused (Dave, 2026-11-14)', () => {
+  // Breaks when: HEADLESS_DAILY_CAP goes back to 30 (run 31 is refused) or the default cap of reserveHeadless is not the constant.
+  // A temp ledger passed by path; no cap option, so the default applies. The live ledger is never touched.
+  const dir = tmp();
+  const file = path.join(dir, 'ledger.jsonl');
+  const now = Date.parse('2026-11-14T18:00:00Z');
+  const reserve = () => reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => now });
+  for (let i = 1; i <= 30; i += 1) assert.equal(reserve().ok, true, `run ${i}`);
+  const r31 = reserve();
+  assert.deepEqual([r31.ok, r31.count], [true, 31]);
+  for (let i = 32; i <= 200; i += 1) assert.equal(reserve().ok, true, `run ${i}`);
+  const r201 = reserve();
+  assert.deepEqual([r201.ok, r201.reason, r201.count], [false, 'cap', 200]);
+  assert.equal(HEADLESS_DAILY_CAP, 200);
 });
 
 test('13.6 the cap counts every headless run in the ledger, whatever its purpose', () => {
@@ -193,4 +209,37 @@ test('a time-out ends the run with timedOut in the end row', async () => {
   assert.equal(res.timedOut, true);
   assert.equal(rows(file)[1].timedOut, true);
   mkdirSync(dir, { recursive: true });
+});
+
+// Temp folder (card headless-run-temp-cleanup): runClaude made a headless-run-* cwd for each run and never removed it.
+test('a run with no cwd of its own removes its temp cwd after a successful run', async () => {
+  // Breaks when: the finally block that removes the temp cwd is removed, or it runs only on a failed run.
+  const dir = tmp();
+  const stub = stubClaude(dir);
+  const res = await runClaude({ prompt: 'p', timeoutMs: 20_000 }, { ledgerPath: path.join(dir, 'ledger.jsonl'), command: process.execPath, prefixArgs: [stub], skipConfigFiles: true });
+  assert.equal(res.ok, true);
+  const { cwd } = JSON.parse(res.result);
+  assert.match(path.basename(cwd), /^headless-run-/);
+  assert.equal(existsSync(cwd), false, `left behind: ${cwd}`);
+});
+
+test('a run with no cwd of its own removes its temp cwd when the spawn throws', async () => {
+  // Breaks when: the removal is not in a finally block (a throw skips it).
+  const dir = tmp();
+  let cwd = null;
+  const spawnFn = (_cmd, _args, opts) => { cwd = opts.cwd; throw new Error('spawn failed'); };
+  await runClaude({ prompt: 'p', timeoutMs: 5_000 }, { ledgerPath: path.join(dir, 'ledger.jsonl'), command: process.execPath, skipConfigFiles: true, spawnFn }).catch(() => {});
+  assert.ok(cwd, 'the spawn was called with a cwd');
+  assert.equal(existsSync(cwd), false, `left behind: ${cwd}`);
+});
+
+test('a cwd that the caller passed in is never removed', async () => {
+  // Breaks when: the removal ignores whether the caller gave deps.cwd (the seeder passes its own cwd and removes it itself).
+  const dir = tmp();
+  const own = mkdtempSync(path.join(dir, 'caller-cwd-'));
+  writeFileSync(path.join(own, 'keep.txt'), 'x');
+  const res = await runClaude({ prompt: 'p', timeoutMs: 20_000 }, { ledgerPath: path.join(dir, 'ledger.jsonl'), command: process.execPath, prefixArgs: [stubClaude(dir)], skipConfigFiles: true, cwd: own });
+  assert.equal(res.ok, true);
+  assert.equal(JSON.parse(res.result).cwd, own);
+  assert.equal(existsSync(path.join(own, 'keep.txt')), true);
 });

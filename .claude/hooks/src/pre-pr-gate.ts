@@ -86,6 +86,7 @@ import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes }
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
 import { blankInertQuotes, blankInertQuotesAround } from './shared/inert-quotes.js';
 import { maskQuoted } from './shared/mask-quotes.js';
+import { decisionKey, decisionRead, decisionUse, type Step } from './shared/decisions-store.js';
 import { readShellCommand } from './shared/shell-tools.js';
 
 export { CCV3_REPO, namedRepo };
@@ -102,7 +103,7 @@ const FUTURE_SLACK_MS = 5 * 60_000;
  */
 export const GIT_TIMEOUT_MS = 2000;
 /**
- * The reasons a stamp may have skipped the CodeRabbit CLI review (pre-pr.mjs: cr_skip_reason). Allowed: "cli-missing" (cr is not installed); "cli-cap" (today's paid CLI spend reached the daily cap; no run was spent); "cap" only with cr_finished_runs >= 1; "rate-limited" only with a known retry time. "flag" (--skip-cr),
+ * The reasons a stamp may have skipped the CodeRabbit CLI review (pre-pr.mjs: cr_skip_reason). Allowed: "cli-missing" (cr is not installed); "cli-cap" (today's paid CLI spend reached the daily cap; no run was spent); "cap" only with cr_finished_runs >= 1 or cr_partial_earned >= 1 (a partial run whose findings the branch changed); "rate-limited" only with a known retry time. "flag" (--skip-cr),
  * "no-changes" (the CLI saw an empty scope) and "earlier-step-failed" are not allowed. "docs-only" (every changed file is docs, so the CLI had
  * nothing to review) is allowed only when the stamp has cr_docs_only === true AND docs_verified === true. "rate-limited" is allowed only
  * with a known retry time in the stamp (cr_retry_minutes), which the gate log also shows. "answer-key" (the diff holds a path of the REVIEW.md
@@ -126,7 +127,13 @@ export interface Deps {
   now: () => number;
   env: NodeJS.ProcessEnv;
   logError?: (message: string, ctx?: ErrorContext) => void;
+  /** The decision store (rule B: a CLI skip that Dave decided). Missing in a test that does not use it: then no skip is decided. */
+  decisionRead?: (t: { step: Step; key: string; head: string }) => { label: string } | null;
+  decisionUse?: (t: { step: Step; key: string; head: string }) => { ok: boolean };
 }
+
+/** The tap of `ship-ask.mjs cli-skip` that opens a flag skip. The recommended option carries a suffix (ship-ask opt()). Anchored: no other text. */
+export const CLI_SKIP_LABEL = /^Skip the CLI review for this head(?: \(Recommended\))?$/;
 /** What handle() knows about an error beyond its message: the error's `code` and the payload `cwd`. Both can be absent. */
 export interface ErrorContext { code?: string; cwd?: string }
 /**
@@ -134,7 +141,7 @@ export interface ErrorContext { code?: string; cwd?: string }
  * which warn mode turns into an allow.
  */
 export type Decision =
-  | { action: 'allow'; warn?: string }
+  | { action: 'allow'; warn?: string; usedCliSkip?: { key: string; head: string } }
   | { action: 'override' }
   | { action: 'deny'; reason: string; pattern: string; soft?: boolean };
 
@@ -501,11 +508,11 @@ function stampRoots(deps: Deps, dir: string, root: string, branch: string | null
 
 interface BodyCheck { path: string; sha: string | null }
 
-function stampProblem(raw: string | null, head: string, now: number, body: BodyCheck | null): string | null {
+function stampProblem(raw: string | null, head: string, now: number, body: BodyCheck | null, flagDecided: () => boolean = () => false): string | null {
   if (raw === null) return 'no stamp. The pre-PR check has not passed in this checkout';
   let s: unknown;
   try { s = JSON.parse(raw); } catch { return 'the stamp is not valid JSON'; }
-  const o = s as { head?: unknown; at?: unknown; cr_skipped?: unknown; cr_skip_reason?: unknown; cr_retry_minutes?: unknown; cr_finished_runs?: unknown; cr_docs_only?: unknown; docs_verified?: unknown; cr_answer_key?: unknown; answer_key_paths?: unknown; body_sha256?: unknown } | null;
+  const o = s as { head?: unknown; at?: unknown; cr_skipped?: unknown; cr_skip_reason?: unknown; cr_retry_minutes?: unknown; cr_finished_runs?: unknown; cr_docs_only?: unknown; docs_verified?: unknown; cr_answer_key?: unknown; answer_key_paths?: unknown; body_sha256?: unknown; cr_partial_earned?: unknown; cr_unreviewed_files?: unknown } | null;
   if (!o || typeof o !== 'object' || typeof o.head !== 'string' || o.head === '') return 'the stamp has no head';
   const at = typeof o.at === 'string' ? Date.parse(o.at) : NaN;
   if (!Number.isFinite(at)) return 'the stamp has no valid time';
@@ -514,9 +521,9 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
   if (at - now > FUTURE_SLACK_MS) return 'the stamp time is in the future';
   const reason = String(o.cr_skip_reason);
   const waitKnown = reason === 'rate-limited' && typeof o.cr_retry_minutes === 'number' && o.cr_retry_minutes > 0;
-  const capEarned = reason === 'cap' && typeof o.cr_finished_runs === 'number' && o.cr_finished_runs >= 1;
+  const capEarned = reason === 'cap' && ((typeof o.cr_finished_runs === 'number' && o.cr_finished_runs >= 1) || (Number.isInteger(o.cr_partial_earned) && (o.cr_partial_earned as number) >= 1));
   if (o.cr_skipped === true && reason === 'cap' && !capEarned) {
-    return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? 'none')}). The cap counts runs that finished with a PASS. Fix the CLI and run pre-pr.mjs again`;
+    return `the stamp skipped the CodeRabbit CLI review for the run cap, but no CLI run on this branch has finished with a PASS (cr_finished_runs: ${String(o.cr_finished_runs ?? 'none')}) and no partial run earned it (cr_partial_earned: ${String(o.cr_partial_earned ?? 'none')}). The cap counts runs that finished with a PASS, or partial runs whose findings the branch changed. A finding judged false and not changed does not earn: the way out is Dave's recorded decision, not an edit of the lines. Fix the CLI and run pre-pr.mjs again`;
   }
   const docsOnlyEarned = reason === 'docs-only' && o.cr_docs_only === true && o.docs_verified === true;
   if (o.cr_skipped === true && reason === 'docs-only' && !docsOnlyEarned) {
@@ -526,7 +533,9 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
   if (o.cr_skipped === true && reason === 'answer-key' && !answerKeyEarned) {
     return `the stamp skipped the CodeRabbit CLI review as answer-key, but it lacks cr_answer_key: true or answer_key_paths: a whole number of 1 or more (cr_answer_key: ${String(o.cr_answer_key ?? 'none')}, answer_key_paths: ${String(o.answer_key_paths ?? 'none')}). An answer-key skip is allowed only when pre-pr.mjs found an answer-key path in the diff. Run pre-pr.mjs again`;
   }
-  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned && !docsOnlyEarned && !answerKeyEarned) {
+  // Rule B: a flag skip passes only with Dave's recorded cli-skip decision for this branch and head (asked lazily: only a flag stamp reads the store).
+  const flagEarned = o.cr_skipped === true && reason === 'flag' && flagDecided();
+  if (o.cr_skipped === true && !ALLOWED_SKIP_REASONS.has(reason) && !waitKnown && !capEarned && !docsOnlyEarned && !answerKeyEarned && !flagEarned) {
     return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || 'none'}). Only a finished-run cap, a missing CLI (cli-missing), the daily CLI spend cap (cli-cap), a docs-only branch (docs-only, with cr_docs_only and docs_verified true), a diff with an answer-key path (answer-key, with cr_answer_key true and answer_key_paths 1 or more), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
@@ -573,6 +582,8 @@ interface Ctx {
   isCcv3At: (dir: string) => boolean;
   ccv3: () => boolean;
   enforcing: () => boolean;
+  /** Set by the stamp rule when a flag skip passed on Dave's cli-skip tap: handle() uses the tap up when the decision is an allow. */
+  cliSkipUsed?: { key: string; head: string };
 }
 
 const once = <T>(f: () => T): (() => T) => {
@@ -653,9 +664,10 @@ function decideAs(input: HookInput, deps: Deps, text?: string, quoteTool: string
   deps = guardUnexpandedCd(deps, plan);
   const ctx = makeCtx(input, command, deps, shapes, plan, bodyViewOf(command, quoteTool));
   const d = judge(command, deps, ctx, shapes);
-  if (d.action !== 'deny') return d;
+  const used = ctx.cliSkipUsed ? { usedCliSkip: ctx.cliSkipUsed } : {};
+  if (d.action !== 'deny') return d.action === 'allow' ? { ...d, ...used } : d;
   if (hasOverride(command, deps.env)) return { action: 'override' };
-  return d.soft && !ctx.enforcing() ? { action: 'allow', warn: d.pattern } : d;
+  return d.soft && !ctx.enforcing() ? { action: 'allow', warn: d.pattern, ...used } : d;
 }
 
 function judge(command: string, deps: Deps, ctx: Ctx, shapes: Shapes): Decision {
@@ -705,6 +717,20 @@ function stampDeny(command: string, deps: Deps, ctx: Ctx): Decision | null {
   return null;
 }
 
+/** The decision key of the branch (`repo@branch`), or null when the branch is unknown. */
+function cliSkipKey(deps: Deps, top: string, branch: string | null): string | null {
+  const name = branch ?? deps.git(top, ['branch', '--show-current']).stdout.trim();
+  return name ? decisionKey({ branch: name }) : null;
+}
+
+/** True when the store holds Dave's cli-skip tap for this key and head, with the skip label. Any read problem is false (fail closed). */
+function cliSkipDecided(deps: Deps, key: string, head: string): boolean {
+  try {
+    const d = deps.decisionRead?.({ step: 'cli-skip', key, head }) ?? null;
+    return d !== null && typeof d.label === 'string' && CLI_SKIP_LABEL.test(d.label);
+  } catch { return false; }
+}
+
 /** The stamp rules for one folder. A folder that is not a CCv3 checkout (and no CCv3 signal names the repo) is no concern of the stamp. */
 function stampDenyIn(command: string, deps: Deps, ctx: Ctx, dir: string): Decision | null {
   const { named, shell } = ctx;
@@ -726,8 +752,19 @@ function stampDenyIn(command: string, deps: Deps, ctx: Ctx, dir: string): Decisi
   if (headRun.status !== 0) return rule('head-unresolved', `cannot resolve the head ${branch ?? 'HEAD'} in ${top}`);
   const head = headRun.stdout.trim();
   const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, shell === 'bash' ? fromGitBashPath(bodyPath) : bodyPath))) };
-  const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join(r, STAMP_REL)), head, deps.now(), body));
-  if (!problems.some((p) => p === null)) return rule('stamp', problems[0] ?? 'no stamp');
+  const checks = stampRoots(deps, dir, top, branch).map((r) => {
+    let relied: { key: string; head: string } | null = null;
+    const decided = (): boolean => {
+      const key = cliSkipKey(deps, top, branch);
+      if (key !== null && cliSkipDecided(deps, key, head)) { relied = { key, head }; return true; }
+      return false;
+    };
+    return { problem: stampProblem(deps.readFile(join(r, STAMP_REL)), head, deps.now(), body, decided), relied };
+  });
+  const passed = checks.find((c) => c.problem === null);
+  if (!passed) return rule('stamp', checks[0]?.problem ?? 'no stamp');
+  // A skip that rests on Dave's tap is used up at the allow (handle), once the whole decision is an allow.
+  if (passed.relied) ctx.cliSkipUsed = passed.relied;
   const pushed = pushedProblem(deps, top, branch, head);
   return pushed ? rule('pushed-head', pushed) : null;
 }
@@ -812,6 +849,14 @@ export function handle(raw: string, deps: Deps): string {
     const d = decide(input, deps);
     if (d.action === 'override') logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
     if (d.action === 'allow' && d.warn) logGuardDecision(HOOK, input, 'warn', d.warn, { command });
+    // Rule B: a skip that Dave decided is used up at the allow. A decision that cannot be used up (a lock, a missing row) is no allow.
+    if (d.action === 'allow' && d.usedCliSkip) {
+      const used = deps.decisionUse?.({ step: 'cli-skip', key: d.usedCliSkip.key, head: d.usedCliSkip.head });
+      if (used?.ok !== true) {
+        logGuardDecision(HOOK, input, 'deny', 'cli-skip-not-used', { command });
+        return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'BLOCKED (pre-pr-gate): Dave\'s cli-skip decision for this branch and head could not be used up (the decision store was busy or the decision is gone). Run the command again. If it keeps failing, ask Dave with node scripts/github/ship-ask.mjs cli-skip --branch <branch>.' } });
+      }
+    }
     if (d.action !== 'deny') return '{}';
     logGuardDecision(HOOK, input, 'deny', d.pattern, { command });
     return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: d.reason } });
@@ -957,6 +1002,8 @@ function realDeps(): Deps {
     now: () => Date.now(),
     env: process.env,
     logError: makeErrorLogger(process.env),
+    decisionRead,
+    decisionUse,
   };
 }
 

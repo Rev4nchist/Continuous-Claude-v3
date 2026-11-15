@@ -32,6 +32,7 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | L2.12 | Mark done only after the merge: `L done <id> --merged <sha>`. A lane with no pull request: `L done <id> --no-pr --evidence <path>`. The path is a file under `.claudedocs/e2e-<lane-id>/`. The command records the SHA of `main` at that time. Both forms meet a dependency. A plain `L done <id>` still works but meets no dependency, and on a met lane it writes nothing. With `--if-state <from>`, `L state <id> done` on a met lane writes nothing only when the lane is in `<from>` (read in code, not run). A wrong `done` opens the dependent lanes until the seat's recheck. | advice; deny for a `--merged` SHA that is not on `main` or an `--evidence` path outside the folder |
 | L2.13 | Hand off: before `/create_handoff`, note the lane with the next step. Write the lane id and your session id in the handoff. Keep the lane. On `/resume_handoff`: run `L mine`. If the lane is not listed, run `L adopt --from <old-session-uuid>`. Adopt works only when this session has the old session's chosen name (not an auto word) or names it as previous, and the old session ended or is quiet 5 minutes. It moves every open lane of the old session. If adopt is refused, do not claim: ask Dave. | advice |
 | L2.14 | Drop a lane you added by mistake: `L done <id> --note "DROPPED: <why>"`. | advice |
+| L2.15 | Every session that holds a card runs a keep-warm timer: `CronCreate` cron `11,41 7-21 * * *`, recurring. A tick with no message above it gets the reply "warm" and no tool. Start the timer at claim, adopt and resume: a session-only cron ends with the session. In usage overage the cache lives 5 minutes, so a tick cannot keep it warm: stop the timer then. | advice |
 
 ### Ownership
 
@@ -42,7 +43,7 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | O3.3 | Before a pull request opens, run `git diff --name-only main...<branch>`. Compare it with the scope. Put the output in Evidence. | advice; warn (planned) |
 | O3.4 | A lane that changes tracked files works on its own branch. A new branch or a new worktree needs Dave's yes. For `re-` lanes after GO: one lane, one worktree, one branch `re/<lane-id>`, one pull request (one exception in the README: the one trial pack on the Pack line of `map.md`; Dave, 2026-11-10). | advice |
 | O3.5 | A commit or a push needs Dave's yes for that task. Commit only your own files. Commits on one branch run one after another. Say so with `L say` before a commit run. | advice |
-| O3.6 | A tracked file has one claim for every checkout of its repo. A `.claude/cache` claim stays in its own checkout. A holder frees one finished file: `node C:/Users/dkhay/.claude/hooks/dist/release-claim.mjs <path>`. | advice; deny (`file-claims` hook) |
+| O3.6 | A tracked file has one claim for every worktree of one clone. A `.claude/cache` claim stays in its own checkout. A holder frees one finished file: `node C:/Users/dkhay/.claude/hooks/dist/release-claim.mjs <path>`. | advice; deny (`file-claims` hook) |
 | O3.7 | Never edit a worktree copy of `lane.mjs` outside your lane's write set. Run a worktree copy only against a scratch database (`CONTINUOUS_CLAUDE_DB_URL`). | advice |
 | O3.8 | Stage `.claude/hooks/dist/*` only for your own hook build. One hook build is in work at a time. A dist commit on `main` reaches every session. | advice |
 | O3.9 | Run a `*-probe.mjs` only with `CONTINUOUS_CLAUDE_DB_URL` set to a scratch database. A probe can write to the live database by default. | advice |
@@ -102,6 +103,11 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | Id | Rule | Level |
 |---|---|---|
 | V7.1 | During a wave, no session changes verb behaviour, exit codes, banner text or `lane-board.md` without the agreement of the seat. | advice |
+| V7.2 | Every START word (PRE-PR START, HOOK BUILD START, HEAVY START) names the free memory the seat measured and an end time. A quiet window has an end time. Start a heavy run only after the START word for it. Send the END word when the run ends. | advice |
+| V7.3 | Heavy runs go by free memory, measured by the seat at each START. 9 GB or more free: up to 4 at once. 7 GB or more: up to 3. Below 7 GB: up to 2. Below 5 GB nothing new starts while a long loop runs. A hook build needs no slot of its own. | advice |
+| V7.4 | The land word needs the seat's own read of GitHub at that moment, with no pre-pr running. After the land the seat rechecks: merged on GitHub, the sha on `main`, the sync cursor, the live hook hashes and, for a guard, one live payload to the built hook. A "landed" claim to Dave cites the merged sha on `main`. Dave's land tap is single use. | advice |
+| V7.5 | On a pull request that changes a critical file, plan one review and no fix push after it. A fix over 30 lines, or in a critical file, costs a second paid review. Ask the seat before any fix push. A finding of the same class goes to the next card. | advice |
+| V7.6 | A guard that reads shell text fails closed on the raw text and grows no hand parser. When two review rounds each find a new deny-to-allow hole of the same kind in one guard, the fix loop stops and the finding goes to Dave. No fix before the seat's word. | advice |
 <!-- standard-rules:end -->
 
 ## Command path

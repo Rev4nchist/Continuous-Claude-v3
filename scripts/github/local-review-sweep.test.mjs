@@ -33,7 +33,7 @@ import { BAND_SET_FILES, REVIEWER_SET_FILES, computeVersions as realComputeVersi
 import { readLines } from '../eval/review-eval/read-audit.mjs';
 import { checkPin } from './local-review.mjs';
 import {
-  DEFAULT_BAND_COUNTS, FROZEN_LABEL, REHEARSAL_LABEL, SWEEP_EXIT, WEEKLY_LIVE_CAP, liveStarts, main, parseArgs, parseWorktrees, planOrder, proveCopy,
+  DEFAULT_BAND_COUNTS, FROZEN_LABEL, REHEARSAL_LABEL, SWEEP_EXIT, WEEKLY_LIVE_CAP, liveStarts, main, parseArgs, parseWorktrees, planOrder, proveCopy, sweepVersions,
 } from './local-review-sweep.mjs';
 import { parseAgentStream } from './pre-pr.mjs';
 
@@ -368,7 +368,7 @@ test('T4 --engine-sha extracts the engine into <records>/engine/<sha>/, imports 
   assert.equal(reportOf(w).mode, 'pinned');
   // F2: the line keeps what the label was tested against, so a later gate can check it against decisions.md.
   assert.equal(row.frozenSha, sha);
-  assert.equal(row.frozenEngineVersion, realComputeVersions({ sha, git: repo.git }).engineVersion);
+  assert.equal(row.frozenEngineVersion, sweepVersions({ sha, root: repo.dir, git: repo.git }).engineVersion);
 });
 
 test('T4b a --frozen-sha whose engineVersion differs gives the rehearsal label', async () => {

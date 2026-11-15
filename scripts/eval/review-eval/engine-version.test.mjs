@@ -105,8 +105,8 @@ test('one sha gives the same versions twice, and the CLI prints the same lines t
   assert.equal(o.sha, r.sha0);
   assert.equal(o.engineVersion, a.engineVersion);
   assert.equal(o.bandVersion, a.bandVersion);
-  // Sorted by path: the matcher lib sorts before the router.
-  assert.deepEqual(o.bandFiles.map((f) => f.path), ['scripts/github/lib/answer-paths.mjs', ROUTER]);
+  // Sorted by path: the answer-key list and the matcher lib sort before the router.
+  assert.deepEqual(o.bandFiles.map((f) => f.path), ['scripts/github/lib/answer-key.mjs', 'scripts/github/lib/answer-paths.mjs', ROUTER]);
 });
 
 // 2

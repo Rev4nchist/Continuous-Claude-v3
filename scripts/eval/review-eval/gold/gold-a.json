@@ -1,0 +1,3236 @@
+[
+  {
+    "id": "A:62f381224657",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 31,
+      "round": 2,
+      "sha40": "6e3e98c33414a5386d2ce518eb077d70c9cd29cd"
+    },
+    "file": "scripts/claude-snapshot/snapshot-claude.ps1",
+    "line": 67,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "44bddba150591036b82f4ed6c20f754e72b5e993",
+      "fixMergeSha": "e2b67d3d8be7dd59469d87068002068b1bcc84f1",
+      "blamedMergeSha": "d149a6a82fde760b360e4132ce680be3f4d941d7",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0
+    }
+  },
+  {
+    "id": "A:96ca07f9e4a3",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 36,
+      "round": 6,
+      "sha40": "649776d6d049693f8490a487e7ca0c060bb68351"
+    },
+    "file": ".claude/skills/codex/SKILL.md",
+    "line": 30,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "40abb91c5d9d44a14c25ea3177d554f4a70a1714",
+      "fixMergeSha": "ab5ba8abdeedcf698b8178d9475174349c9ea255",
+      "blamedMergeSha": "2f5c76147ef9513424c8e98fef36b0346cf4caba",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:b77efe2ae642",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 50,
+      "round": 3,
+      "sha40": "7f0b4874414305c8f4964c978d67805035594ced"
+    },
+    "file": "scripts/github/land-pr.ps1",
+    "line": 53,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "17720235ff33a467397eac9f9c3d699f6132b6bf",
+      "fixMergeSha": "3f107cffb678b0ea1a00b5e228d65579e6b6669a",
+      "blamedMergeSha": "6495db306fbf53516e48e1b6001052f98b3c55db",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0
+    }
+  },
+  {
+    "id": "A:700aac8c3139",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 50,
+      "round": 3,
+      "sha40": "7f0b4874414305c8f4964c978d67805035594ced"
+    },
+    "file": "scripts/github/coderabbit-status.mjs",
+    "line": 35,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "3de9338bf8be69ff2ffc2e02f423773badc6667e",
+      "fixMergeSha": "25e694eb95d7c0d3d6177fee1ce6c07b7adb272a",
+      "blamedMergeSha": "6495db306fbf53516e48e1b6001052f98b3c55db",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:640431c8f0a7",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 50,
+      "round": 3,
+      "sha40": "7f0b4874414305c8f4964c978d67805035594ced"
+    },
+    "file": "scripts/github/coderabbit-status.mjs",
+    "line": 40,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "3de9338bf8be69ff2ffc2e02f423773badc6667e",
+      "fixMergeSha": "25e694eb95d7c0d3d6177fee1ce6c07b7adb272a",
+      "blamedMergeSha": "6495db306fbf53516e48e1b6001052f98b3c55db",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:04fb9e8d511c",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 66,
+      "round": 2,
+      "sha40": "4c4e9820a1d23deae0cd3507454288ac9aeaffce"
+    },
+    "file": ".claude/rules-src/agent-model-selection.md",
+    "line": 14,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "cb9c5e0c4e8bcded1cacee48be88d40b3ed7e7c1",
+      "fixMergeSha": "84b9770fa9b66194483da62053ea133eff0c4f21",
+      "blamedMergeSha": "b2e0b6b004aba5bf6a1098aea8f0184ac15be199",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 3
+    }
+  },
+  {
+    "id": "A:9c15f41ce692",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 66,
+      "round": 2,
+      "sha40": "4c4e9820a1d23deae0cd3507454288ac9aeaffce"
+    },
+    "file": "scripts/check-agent-model-drift.mjs",
+    "line": 59,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "cb9c5e0c4e8bcded1cacee48be88d40b3ed7e7c1",
+      "fixMergeSha": "84b9770fa9b66194483da62053ea133eff0c4f21",
+      "blamedMergeSha": "b2e0b6b004aba5bf6a1098aea8f0184ac15be199",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1
+    }
+  },
+  {
+    "id": "A:a78f7e74d306",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 48,
+      "round": 3,
+      "sha40": "dc6b9c65475600c115a462768045350accbea1d9"
+    },
+    "file": "scripts/precommit-build-guard.sh",
+    "line": 81,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "f21858a5ebf6a6df5919c9176778ddb919333565",
+      "fixMergeSha": "24593b23b8fad541710562abcde9fe652f43d460",
+      "blamedMergeSha": "32c45df12c1d9b6fb11713b383d8428fe6916d61",
+      "cause": "wrong-surfaces",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1
+    }
+  },
+  {
+    "id": "A:ea28e3809db8",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 81,
+      "round": 3,
+      "sha40": "afe97e229b82790f7e497d55a6f22267e7373a20"
+    },
+    "file": ".claude/skills/skill-forge/scripts/run_eval.py",
+    "line": 180,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "3996957e898cdeff3ff199ed5e4e6f5c7f6b2e96",
+      "fixMergeSha": "76bab1c53946ef35226f2299de5c80f9efc765ba",
+      "blamedMergeSha": "ab3acd72ad1924147f6e11753e9a07f72e5aaadb",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 20
+    }
+  },
+  {
+    "id": "A:342dc7dd8068",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 81,
+      "round": 3,
+      "sha40": "afe97e229b82790f7e497d55a6f22267e7373a20"
+    },
+    "file": ".claude/skills/skill-forge/scripts/run_eval.py",
+    "line": 234,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "3996957e898cdeff3ff199ed5e4e6f5c7f6b2e96",
+      "fixMergeSha": "76bab1c53946ef35226f2299de5c80f9efc765ba",
+      "blamedMergeSha": "ab3acd72ad1924147f6e11753e9a07f72e5aaadb",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 20
+    }
+  },
+  {
+    "id": "A:6db21b0d8811",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 81,
+      "round": 3,
+      "sha40": "afe97e229b82790f7e497d55a6f22267e7373a20"
+    },
+    "file": ".claude/skills/skill-forge/scripts/run_eval.py",
+    "line": 309,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "3996957e898cdeff3ff199ed5e4e6f5c7f6b2e96",
+      "fixMergeSha": "76bab1c53946ef35226f2299de5c80f9efc765ba",
+      "blamedMergeSha": "ab3acd72ad1924147f6e11753e9a07f72e5aaadb",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 19
+    }
+  },
+  {
+    "id": "A:f1bc89e50946",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 81,
+      "round": 3,
+      "sha40": "afe97e229b82790f7e497d55a6f22267e7373a20"
+    },
+    "file": "docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md",
+    "line": 45,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "3996957e898cdeff3ff199ed5e4e6f5c7f6b2e96",
+      "fixMergeSha": "76bab1c53946ef35226f2299de5c80f9efc765ba",
+      "blamedMergeSha": "ab3acd72ad1924147f6e11753e9a07f72e5aaadb",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0
+    }
+  },
+  {
+    "id": "A:27ab56e958c3",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 167,
+      "round": 2,
+      "sha40": "010f019d391cfa8d1fa78f99a00b9c930a022149"
+    },
+    "file": "scripts/github/review-status.mjs",
+    "line": 603,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "67c65adffa2710bd517ebe41a8609ab91402b115",
+      "fixMergeSha": "bfed50d37565fc562cf8ea604a7abf5ff6a45219",
+      "blamedMergeSha": "c395480fa454aefe1043a921f27f2a7a1b5a66dd",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 5
+    }
+  },
+  {
+    "id": "A:ba89c3810635",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/dist/pre-pr-gate.mjs",
+    "line": 231,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 6
+    }
+  },
+  {
+    "id": "A:e5d2f426ed19",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/dist/pre-pr-gate.mjs",
+    "line": 234,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 6
+    }
+  },
+  {
+    "id": "A:e7e1f766b42f",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/dist/pre-pr-gate.mjs",
+    "line": 252,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 6
+    }
+  },
+  {
+    "id": "A:8c9fa7d21832",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/dist/pre-pr-gate.mjs",
+    "line": 339,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 7
+    }
+  },
+  {
+    "id": "A:2a2d04834aaa",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/dist/pre-pr-gate.mjs",
+    "line": 349,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 7
+    }
+  },
+  {
+    "id": "A:dc7cd8d954d9",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/src/pre-pr-gate.ts",
+    "line": 60,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 8
+    }
+  },
+  {
+    "id": "A:ee36d8b8062c",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/src/pre-pr-gate.ts",
+    "line": 64,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 8
+    }
+  },
+  {
+    "id": "A:a9203e52be91",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/src/pre-pr-gate.ts",
+    "line": 92,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 8
+    }
+  },
+  {
+    "id": "A:5c59725f88cd",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/src/pre-pr-gate.ts",
+    "line": 191,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 9
+    }
+  },
+  {
+    "id": "A:470c7eed0cbc",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 193,
+      "round": 4,
+      "sha40": "10514ebfb2713b9baf2264d62ec368a0df6c4e0e"
+    },
+    "file": ".claude/hooks/src/pre-pr-gate.ts",
+    "line": 201,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "4aece0ff51ddb2198071cd92076ce3e7cc9e9dd5",
+      "fixMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "blamedMergeSha": "6bc940827d592ae79c4fb132e5983b59d0647c47",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 9
+    }
+  },
+  {
+    "id": "A:ded60b8f341d",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 195,
+      "round": 1,
+      "sha40": "4fe9cdf6159abd9b18bf076717f4c4f9d314c643"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/os-tabs-model.ts",
+    "line": 243,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "0689cb8d63167347c79fe595810d48c628ac49da",
+      "fixMergeSha": "3a3148ad7a2cca46922bd7d1767de3a561896732",
+      "blamedMergeSha": "457092f29de353b723d9fa9d5459129b4cba4814",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 5
+    }
+  },
+  {
+    "id": "A:7d6b3a3e6687",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 195,
+      "round": 1,
+      "sha40": "4fe9cdf6159abd9b18bf076717f4c4f9d314c643"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/os-tabs-model.ts",
+    "line": 272,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "0689cb8d63167347c79fe595810d48c628ac49da",
+      "fixMergeSha": "3a3148ad7a2cca46922bd7d1767de3a561896732",
+      "blamedMergeSha": "457092f29de353b723d9fa9d5459129b4cba4814",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 5
+    }
+  },
+  {
+    "id": "A:98122c222d87",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 195,
+      "round": 1,
+      "sha40": "4fe9cdf6159abd9b18bf076717f4c4f9d314c643"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/os-tabs-model.ts",
+    "line": 213,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "7d66b05253646191c09eac16e32f39572b8fe61b",
+      "fixMergeSha": "0ae5f64a1bcd4aeb160d5c98a5d390890a549937",
+      "blamedMergeSha": "457092f29de353b723d9fa9d5459129b4cba4814",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1
+    }
+  },
+  {
+    "id": "A:9021ba37c103",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 195,
+      "round": 1,
+      "sha40": "4fe9cdf6159abd9b18bf076717f4c4f9d314c643"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/os-tabs-model.ts",
+    "line": 240,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "7d66b05253646191c09eac16e32f39572b8fe61b",
+      "fixMergeSha": "0ae5f64a1bcd4aeb160d5c98a5d390890a549937",
+      "blamedMergeSha": "457092f29de353b723d9fa9d5459129b4cba4814",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1
+    }
+  },
+  {
+    "id": "A:7a60e9457e0f",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 206,
+      "round": 3,
+      "sha40": "207e1a36f25b4d2468a93f77ccdb3000ac00e85c"
+    },
+    "file": ".claude/plugins/ccv3-mods/README.md",
+    "line": 14,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "77b029f2671a72b0688dcd5ab7050f4de5b800df",
+      "fixMergeSha": "4ff7dc66764b8c9c8806266aa98a61ca1e1ab5a2",
+      "blamedMergeSha": "0ae5f64a1bcd4aeb160d5c98a5d390890a549937",
+      "cause": "wrong-surfaces",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1
+    }
+  },
+  {
+    "id": "A:2255cc5452bd",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 197,
+      "round": 4,
+      "sha40": "c7407707e1160d0a112cfee8bd0b12dd2ee1b2f7"
+    },
+    "file": ".claude/hooks/dist/pre-pr-gate.mjs",
+    "line": 242,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "0f29bc14bfe7fcf6e28d96e5539f443d0b1f9319",
+      "fixMergeSha": "02bc64a7a61efc4c77fd25bcab09679c7f13e175",
+      "blamedMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 4
+    }
+  },
+  {
+    "id": "A:7375aa44e70e",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 197,
+      "round": 4,
+      "sha40": "c7407707e1160d0a112cfee8bd0b12dd2ee1b2f7"
+    },
+    "file": ".claude/hooks/src/pre-pr-gate.ts",
+    "line": 83,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "0f29bc14bfe7fcf6e28d96e5539f443d0b1f9319",
+      "fixMergeSha": "02bc64a7a61efc4c77fd25bcab09679c7f13e175",
+      "blamedMergeSha": "82a06d6358b8ff39ad7e109d98d19f65cf9f29e2",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 5
+    }
+  },
+  {
+    "id": "A:c72f07ca926c",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 216,
+      "round": 1,
+      "sha40": "fb011b634948e077d65d110716a2908150e448a2"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/pr-loop/model.ts",
+    "line": 189,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "baa7a0bf7f2e6b4fe49863c6e28ad164dd4594b7",
+      "fixMergeSha": "f4370d8b8d25fbb068da0d1eaf92c7e5c23f3d2e",
+      "blamedMergeSha": "aef1e7e21178291eab8f86350e6ecd7ee428c485",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0
+    }
+  },
+  {
+    "id": "A:4ca6861e856b",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 220,
+      "round": 1,
+      "sha40": "982102006dca5da4302628c4b4ea51e191135025"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/hud/seed.ts",
+    "line": 22,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "63699c2da47e2ad989827eb3b3fe8854185c4239",
+      "fixMergeSha": "5b72fb3399585877148f3890c46afe5cdb32b70e",
+      "blamedMergeSha": "dce71cdcd3d903ad0ad57b26b8f5edc8150a7669",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 4
+    }
+  },
+  {
+    "id": "A:109e34e307cc",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 220,
+      "round": 1,
+      "sha40": "982102006dca5da4302628c4b4ea51e191135025"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/hud/seed.ts",
+    "line": 30,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "63699c2da47e2ad989827eb3b3fe8854185c4239",
+      "fixMergeSha": "5b72fb3399585877148f3890c46afe5cdb32b70e",
+      "blamedMergeSha": "dce71cdcd3d903ad0ad57b26b8f5edc8150a7669",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:e7ad8f7d08b8",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 220,
+      "round": 1,
+      "sha40": "982102006dca5da4302628c4b4ea51e191135025"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/hud/seed.ts",
+    "line": 61,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "63699c2da47e2ad989827eb3b3fe8854185c4239",
+      "fixMergeSha": "5b72fb3399585877148f3890c46afe5cdb32b70e",
+      "blamedMergeSha": "dce71cdcd3d903ad0ad57b26b8f5edc8150a7669",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 4
+    }
+  },
+  {
+    "id": "A:e0c67e54a11d",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 221,
+      "round": 2,
+      "sha40": "68cf693ca00a0699a7ca5c8f9d288a0d9ff683de"
+    },
+    "file": "scripts/github/review-router.mjs",
+    "line": 205,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "073c6993fd5519b30c9d87ab41f193c061b9b676",
+      "fixMergeSha": "66a3b385c04addaeffd49b656432195730808381",
+      "blamedMergeSha": "d4270286687c2d2912674444b8159ad1e378713c",
+      "cause": "mocked-fixture",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 17
+    }
+  },
+  {
+    "id": "A:728c30cbf1e4",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 221,
+      "round": 2,
+      "sha40": "68cf693ca00a0699a7ca5c8f9d288a0d9ff683de"
+    },
+    "file": "scripts/github/review-router.mjs",
+    "line": 207,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "073c6993fd5519b30c9d87ab41f193c061b9b676",
+      "fixMergeSha": "66a3b385c04addaeffd49b656432195730808381",
+      "blamedMergeSha": "d4270286687c2d2912674444b8159ad1e378713c",
+      "cause": "mocked-fixture",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 17
+    }
+  },
+  {
+    "id": "A:723ae38f620e",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 221,
+      "round": 2,
+      "sha40": "68cf693ca00a0699a7ca5c8f9d288a0d9ff683de"
+    },
+    "file": "scripts/github/review-router.mjs",
+    "line": 227,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "073c6993fd5519b30c9d87ab41f193c061b9b676",
+      "fixMergeSha": "66a3b385c04addaeffd49b656432195730808381",
+      "blamedMergeSha": "d4270286687c2d2912674444b8159ad1e378713c",
+      "cause": "mocked-fixture",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 18
+    }
+  },
+  {
+    "id": "A:2e099744385d",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 221,
+      "round": 2,
+      "sha40": "68cf693ca00a0699a7ca5c8f9d288a0d9ff683de"
+    },
+    "file": "scripts/github/review-router.mjs",
+    "line": 530,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "073c6993fd5519b30c9d87ab41f193c061b9b676",
+      "fixMergeSha": "66a3b385c04addaeffd49b656432195730808381",
+      "blamedMergeSha": "d4270286687c2d2912674444b8159ad1e378713c",
+      "cause": "mocked-fixture",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 19
+    }
+  },
+  {
+    "id": "A:720670f866c5",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/fit-rows.ts",
+    "line": 10,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:c40eb72dae06",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/fit-rows.ts",
+    "line": 20,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 3
+    }
+  },
+  {
+    "id": "A:5739b9da4696",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 10,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 16
+    }
+  },
+  {
+    "id": "A:32c71855451b",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 22,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 16
+    }
+  },
+  {
+    "id": "A:141554ab511b",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 38,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 15
+    }
+  },
+  {
+    "id": "A:b61ba96be94f",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 42,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 14
+    }
+  },
+  {
+    "id": "A:35f58dbf76aa",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 47,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 14
+    }
+  },
+  {
+    "id": "A:5c1f994aadc4",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 61,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 15
+    }
+  },
+  {
+    "id": "A:6e0818daf179",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 64,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 14
+    }
+  },
+  {
+    "id": "A:e0d693c5feec",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 67,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 15
+    }
+  },
+  {
+    "id": "A:7e6155919f7a",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 90,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 16
+    }
+  },
+  {
+    "id": "A:3084df2ed52f",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 101,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 16
+    }
+  },
+  {
+    "id": "A:4d19fd429747",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 118,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 16
+    }
+  },
+  {
+    "id": "A:47760ea6b445",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 139,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 15
+    }
+  },
+  {
+    "id": "A:64fecefe0309",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 218,
+      "round": 1,
+      "sha40": "eea58dcf619e4eb818ec80184293050c05c85cdf"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/text.ts",
+    "line": 141,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "2a37bf1c254fc6e217efe0d44113e62323c4ef60",
+      "fixMergeSha": "730409180b25df49bf3fa012629915a5af1cb75a",
+      "blamedMergeSha": "0fbbbff1a53881962a6cd4309b3d71087cb33c61",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 15
+    }
+  },
+  {
+    "id": "A:a28c1e14b709",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 221,
+      "round": 2,
+      "sha40": "68cf693ca00a0699a7ca5c8f9d288a0d9ff683de"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/pr-loop/model.ts",
+    "line": 352,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "24b6161e87077d4adbcf6a69a5b1bc883122c8dc",
+      "fixMergeSha": "5812f64b9f980e5357e74425ce70de85cf8ef65f",
+      "blamedMergeSha": "d4270286687c2d2912674444b8159ad1e378713c",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 10
+    }
+  },
+  {
+    "id": "A:1a4e29efa1ce",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 216,
+      "round": 1,
+      "sha40": "fb011b634948e077d65d110716a2908150e448a2"
+    },
+    "file": ".claude/plugins/ccv3-mods/hooks/pr-loop/index.ts",
+    "line": 261,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "8c065333e6d372ddda35bbd493e3ed439c149155",
+      "fixMergeSha": "52d8c594412d1f1b82907732058ede7d1c731efc",
+      "blamedMergeSha": "aef1e7e21178291eab8f86350e6ecd7ee428c485",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 4
+    }
+  },
+  {
+    "id": "A:9002ca8e8784",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 243,
+      "round": 3,
+      "sha40": "455d48fa4bc78b5a64a6f07bca5a135336f541fa"
+    },
+    "file": "apps/agentic-os/src/server/sources/safe-message.ts",
+    "line": 110,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "90edd3c9e1a063bab1a33f3a5c4322e951b4499a",
+      "fixMergeSha": "62e957c4e2ac0c172688e737254b268d4731bbdb",
+      "blamedMergeSha": "707612bd7a7d16358bc9701474e6dc4671d50d67",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:3c9b5edf244e",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 227,
+      "round": 3,
+      "sha40": "8367959085c5a8cd38f83bbcfd5ffd78e23acdec"
+    },
+    "file": "scripts/github/review-status.mjs",
+    "line": 832,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "f60e94f77a2839ed131a8327d1022233899ab5b6",
+      "fixMergeSha": "4a898462ae29897c6272a51727ad3abe58b5b8d6",
+      "blamedMergeSha": "ac03ec783536e9866d63bef20377cbc054d43fde",
+      "cause": "mocked-fixture",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:7d1503e91ddb",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 203,
+      "round": 3,
+      "sha40": "a2f601a426b704982f0a3742e17b8700177b24e4"
+    },
+    "file": "scripts/github/pr-checkpoint.mjs",
+    "line": 334,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "3f333f30d59d37a929eaf4f2887ed375ef263b31",
+      "fixMergeSha": "f1386189645698f228fabdec8fa1d54f13f3551d",
+      "blamedMergeSha": "3626f45a41c83ae46fb35e63ef453d47681f924e",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 7
+    }
+  },
+  {
+    "id": "A:45d37ccbf91d",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 203,
+      "round": 3,
+      "sha40": "a2f601a426b704982f0a3742e17b8700177b24e4"
+    },
+    "file": "scripts/github/pr-checkpoint.mjs",
+    "line": 368,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "3f333f30d59d37a929eaf4f2887ed375ef263b31",
+      "fixMergeSha": "f1386189645698f228fabdec8fa1d54f13f3551d",
+      "blamedMergeSha": "3626f45a41c83ae46fb35e63ef453d47681f924e",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 8
+    }
+  },
+  {
+    "id": "A:d00fcb942404",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 221,
+      "round": 2,
+      "sha40": "68cf693ca00a0699a7ca5c8f9d288a0d9ff683de"
+    },
+    "file": "scripts/github/review-status.mjs",
+    "line": 911,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "67a47a5b3e1f99cbb67f4d4cada029f45cf7ad54",
+      "fixMergeSha": "41d77f56088d4991be97cc59cfecab58e2ead05c",
+      "blamedMergeSha": "d4270286687c2d2912674444b8159ad1e378713c",
+      "cause": "mocked-fixture",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 1
+    }
+  },
+  {
+    "id": "A:5e2f10910ce4",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 18837,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:0d048e69f695",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 18846,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:6a6e29251272",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 18852,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:839cf3d5b204",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 18869,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:a9c4373e1ab3",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19046,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 34
+    }
+  },
+  {
+    "id": "A:91a9fdccd6d9",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19051,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 34
+    }
+  },
+  {
+    "id": "A:38b504a2ba76",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19054,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 34
+    }
+  },
+  {
+    "id": "A:44fb164dd789",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19057,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 35
+    }
+  },
+  {
+    "id": "A:18af9b90dab0",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19066,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:da440189d9c3",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19150,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 35
+    }
+  },
+  {
+    "id": "A:3501ead7608c",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19580,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:3326021e32ce",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19603,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:3388b688ca87",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19618,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:b6b7d4f97637",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19683,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 34
+    }
+  },
+  {
+    "id": "A:7a21425103bb",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 19696,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 36
+    }
+  },
+  {
+    "id": "A:6f28253ea9bd",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 141,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:29c8c928b7e6",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 154,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:2a62aeefcfa0",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 160,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:4a5030fa7092",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 179,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:a02a0818a4dc",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 329,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 39
+    }
+  },
+  {
+    "id": "A:2cea62a84970",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 334,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 3,
+      "hunksLeftOut": 39
+    }
+  },
+  {
+    "id": "A:eba7cb095a27",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 347,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 40
+    }
+  },
+  {
+    "id": "A:9b9025f26de9",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 360,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:6ad0a8946705",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 511,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 40
+    }
+  },
+  {
+    "id": "A:bfcd0ae8dd72",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 1154,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:10162bfc6b1a",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 1184,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:f996f5f24ccc",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 1201,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:1282ef314e9a",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 1283,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 40
+    }
+  },
+  {
+    "id": "A:bd94008bf367",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 1299,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e4830bf099181ae549e2fca320b1265d384a6945",
+      "fixMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 41
+    }
+  },
+  {
+    "id": "A:2d0532247de5",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 285,
+      "round": 3,
+      "sha40": "d88543bc66addb22a450c4e90ddd49d559fa21df"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 45,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "5f89c87f6db403bb5048d8fc85045be586220b15",
+      "fixMergeSha": "4df6564cf71278488cef41e7fe910455a726c71a",
+      "blamedMergeSha": "079ba3dc683693abec579f675cd57667b3718076",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 8
+    }
+  },
+  {
+    "id": "A:3b7eb6eee33b",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 291,
+      "round": 2,
+      "sha40": "57fc9cab51805f2282bf59c2d19d6128ae127005"
+    },
+    "file": ".claude/hooks/dist/package-install-guard.mjs",
+    "line": 20311,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "34c0457afaeac5b2c0ec25c5ec90d0c3b3fb35f5",
+      "fixMergeSha": "b63dc23ec849a9a97b7b39920a48a64d6e6f93a5",
+      "blamedMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 3
+    }
+  },
+  {
+    "id": "A:2c7791dae06b",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 291,
+      "round": 2,
+      "sha40": "57fc9cab51805f2282bf59c2d19d6128ae127005"
+    },
+    "file": ".claude/hooks/src/package-install-guard.ts",
+    "line": 1417,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "34c0457afaeac5b2c0ec25c5ec90d0c3b3fb35f5",
+      "fixMergeSha": "b63dc23ec849a9a97b7b39920a48a64d6e6f93a5",
+      "blamedMergeSha": "9af5e0e5956cb104ac16d62f3f05a55abdc2781e",
+      "cause": "thin-guard-tables",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 2
+    }
+  },
+  {
+    "id": "A:3aa1553a828f",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 154,
+      "round": 2,
+      "sha40": "547d9ae24987323a33ebd6357e0a8405d861feff"
+    },
+    "file": ".claude/hooks/src/__tests__/pr-opened-review-loop.test.ts",
+    "line": 23,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "6e5576ecbe549c74e4f0d389df6bf20f894e4655",
+      "fixMergeSha": "c5f40abac86eabba49eae693333c270f38479f3b",
+      "blamedMergeSha": "718012f0d83b90301b659a19656bc91560efafcb",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0
+    }
+  },
+  {
+    "id": "A:4d2d97ee2e71",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 216,
+      "round": 1,
+      "sha40": "fb011b634948e077d65d110716a2908150e448a2"
+    },
+    "file": ".claude/hooks/dist/checkpoint-shapes-cli.mjs",
+    "line": 212,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "bd8d4eb435199a98c0c3a59a08b7aeda1b6388ca",
+      "fixMergeSha": "1382927f3b92c9b21e80a3fba5ddc08dccd4d669",
+      "blamedMergeSha": "aef1e7e21178291eab8f86350e6ecd7ee428c485",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 0
+    }
+  },
+  {
+    "id": "A:e6377c9f4e23",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 181,
+      "round": 2,
+      "sha40": "d78b3ba61541f53d2bf3e83b05b190cd1a609c8b"
+    },
+    "file": "opc/scripts/core/incremental_extract.py",
+    "line": 711,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e0e32a54437dd473cf816b3399ca1643b3662db0",
+      "fixMergeSha": "3682975266e18bd3319c03e8e51d7f48a8274d1a",
+      "blamedMergeSha": "e0dc3ea0677e96ecb0fc8db07cda8c1e8c18634c",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 6
+    }
+  },
+  {
+    "id": "A:6d3b449570d7",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 181,
+      "round": 2,
+      "sha40": "d78b3ba61541f53d2bf3e83b05b190cd1a609c8b"
+    },
+    "file": "opc/scripts/core/incremental_extract.py",
+    "line": 737,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e0e32a54437dd473cf816b3399ca1643b3662db0",
+      "fixMergeSha": "3682975266e18bd3319c03e8e51d7f48a8274d1a",
+      "blamedMergeSha": "e0dc3ea0677e96ecb0fc8db07cda8c1e8c18634c",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 6
+    }
+  },
+  {
+    "id": "A:9cdd13fe7ac8",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 181,
+      "round": 2,
+      "sha40": "d78b3ba61541f53d2bf3e83b05b190cd1a609c8b"
+    },
+    "file": "opc/scripts/core/incremental_extract.py",
+    "line": 749,
+    "severity": "major",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "e0e32a54437dd473cf816b3399ca1643b3662db0",
+      "fixMergeSha": "3682975266e18bd3319c03e8e51d7f48a8274d1a",
+      "blamedMergeSha": "e0dc3ea0677e96ecb0fc8db07cda8c1e8c18634c",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 2,
+      "hunksLeftOut": 5
+    }
+  },
+  {
+    "id": "A:f747766ed4a2",
+    "source": "A",
+    "suite": "capability",
+    "split": "holdout",
+    "target": {
+      "pr": 309,
+      "round": 6,
+      "sha40": "9b244ee7b292c6480c93179e906d37218d99982c"
+    },
+    "file": "scripts/github/local-review.mjs",
+    "line": 613,
+    "severity": "minor",
+    "linkType": "within-hunk",
+    "labels": [
+      {
+        "by": "claude-opus-5-5",
+        "verdict": "real",
+        "judgeVersion": "szz-label-v2"
+      }
+    ],
+    "provenance": {
+      "miner": "mine-szz-v1",
+      "fixSha": "fc87de1de261052c670a7477043094c6b60e8dc3",
+      "fixMergeSha": "5826c86e61690a635567df2e44adffa27de5ab79",
+      "blamedMergeSha": "053e4b6070eeb0a159236b7aba12de662924ca4c",
+      "cause": "unclassified",
+      "primary": true,
+      "crBefore": false,
+      "hunksShown": 1,
+      "hunksLeftOut": 19
+    }
+  }
+]

@@ -105,6 +105,8 @@
       ".claude/hooks/src/shared/checkpoint-shapes.ts",
       "scripts/github/pre-pr.mjs",
       "scripts/github/lib/answer-paths.mjs",
+
+      "scripts/github/lib/answer-key.mjs",
       "scripts/ratchets/lib/review-md.mjs",
       "apps/agentic-os/src/server/sources/safe-message.ts",
       "apps/agentic-os/src/server/sources/prompt-text.ts",
@@ -134,6 +136,8 @@
       ".claude/hooks/src/shared/checkpoint-shapes.ts",
       "scripts/github/pre-pr.mjs",
       "scripts/github/lib/answer-paths.mjs",
+
+      "scripts/github/lib/answer-key.mjs",
       "scripts/ratchets/lib/review-md.mjs",
       "apps/agentic-os/src/server/sources/safe-message.ts",
       "apps/agentic-os/src/server/sources/prompt-text.ts",
@@ -201,5 +205,5 @@
     "cli_daily_cap_usd": 3,
     "monthly_file_cap": 160
   },
-  "local_review": {"enabled":true,"bands":["MID","ELEVATED","HIGH","CRITICAL"],"max_concurrent":2,"per_branch_cap":8,"retry_max":1,"slot_wait_min":60,"timeout_min":40,"thread_min_confidence":3,"context_cap_kb":48,"skip_authors":["dependabot[bot]"],"headless_daily_cap":30}
+  "local_review": {"enabled":true,"bands":["MID","ELEVATED","HIGH","CRITICAL"],"max_concurrent":2,"per_branch_cap":8,"retry_max":1,"slot_wait_min":60,"timeout_min":40,"thread_min_confidence":3,"context_cap_kb":48,"skip_authors":["dependabot[bot]"],"headless_daily_cap":200}
 }

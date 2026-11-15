@@ -435,7 +435,8 @@ function bootTrace(env = process.env, _bootCall) {
 if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
 
 // src/commit-preflight.ts
-import { readFileSync as readFileSync3 } from "fs";
+import { spawnSync } from "child_process";
+import { readFileSync as readFileSync4 } from "fs";
 import { isAbsolute as isAbsolute2, resolve as resolve4 } from "path";
 
 // src/shared/done-proof.ts
@@ -662,6 +663,88 @@ function resolveHead(dir) {
   }
 }
 
+// src/shared/holdout-ids.ts
+import { readFileSync as readFileSync3 } from "fs";
+import { join as join6 } from "path";
+
+// ../../scripts/github/lib/holdout-ids.mjs
+function holdoutIdsOf(ds, cfg) {
+  const reserved = new Set((cfg?.reserve ?? []).map((r) => r?.pr));
+  const excluded = new Set(cfg?.holdoutExclude ?? []);
+  const inHoldout = (pr) => !reserved.has(pr) && !excluded.has(pr);
+  const out = /* @__PURE__ */ new Set();
+  for (const p of ds?.prs ?? []) if (inHoldout(p?.pr)) out.add(String(p.pr));
+  for (const f of ds?.findings ?? []) {
+    if (!inHoldout(f?.pr)) continue;
+    out.add(String(f.pr));
+    if (f.comment_id !== void 0 && f.comment_id !== null) {
+      out.add(String(f.comment_id));
+      out.add(`${f.pr}:${f.comment_id}`);
+    }
+    if (typeof f.round === "string" && /^[0-9a-f]{7,40}$/i.test(f.round)) out.add(f.round.toLowerCase());
+  }
+  out.delete("undefined");
+  out.delete("null");
+  return [...out];
+}
+var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
+function countIdsIn(text, ids) {
+  const s = String(text ?? "");
+  let n = 0;
+  for (const id of ids) {
+    if (typeof id !== "string" || id === "") continue;
+    if (/^\d+$/.test(id)) {
+      if (digitHit(s, id)) n += 1;
+    } else if (tokenHit(s, id)) n += 1;
+  }
+  return n;
+}
+function digitHit(s, id) {
+  const long = id.length >= 7;
+  let from = 0;
+  for (; ; ) {
+    const at = s.indexOf(id, from);
+    if (at < 0) return false;
+    from = at + 1;
+    const before = s[at - 1];
+    const after = s[at + id.length];
+    if (before !== void 0 && /\d/.test(before) || after !== void 0 && /\d/.test(after)) continue;
+    if (long || CONTEXT.test(s.slice(Math.max(0, at - 8), at))) return true;
+  }
+}
+function tokenHit(s, id) {
+  const low = s.toLowerCase();
+  const want = id.toLowerCase();
+  const word = /[0-9a-f:]/;
+  let from = 0;
+  for (; ; ) {
+    const at = low.indexOf(want, from);
+    if (at < 0) return false;
+    from = at + 1;
+    const before = low[at - 1];
+    const after = low[at + want.length];
+    if (before !== void 0 && word.test(before) || after !== void 0 && word.test(after)) continue;
+    return true;
+  }
+}
+
+// src/shared/holdout-ids.ts
+var DATASET_REL = ".claudedocs/2026-11-01-pr-review-dataset.json";
+var EVAL_CONFIG_REL = "scripts/eval/review-eval/config.json";
+var countIdsIn2 = countIdsIn;
+function loadHoldoutIds(mainRoot) {
+  let ids;
+  try {
+    const ds = JSON.parse(readFileSync3(join6(mainRoot, DATASET_REL), "utf8"));
+    const cfg = JSON.parse(readFileSync3(join6(mainRoot, EVAL_CONFIG_REL), "utf8"));
+    ids = holdoutIdsOf(ds, cfg);
+  } catch {
+    throw new Error("the holdout id list could not be read");
+  }
+  if (!Array.isArray(ids) || ids.length === 0) throw new Error("the holdout id list is empty");
+  return ids;
+}
+
 // src/shared/mask-quotes.ts
 var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;
 var PWSH_STRING = /"(?:[^"`]|`[\s\S])*"|'(?:[^']|'')*'/g;
@@ -682,6 +765,17 @@ function isUnattended(input, env = process.env) {
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var PROTECTED_BRANCHES = /* @__PURE__ */ new Set(["main", "master"]);
 var FEAT_OR_FIX = /^(feat|fix)(\(|:|!)/;
+var STAGED_MAX_BYTES = 15e5;
+function stagedHoldoutCount(dir, mainRoot) {
+  try {
+    const r = spawnSync("git", ["diff", "--cached", "--unified=0", "--no-color", "--no-renames"], { cwd: dir, encoding: "utf8", windowsHide: true, maxBuffer: STAGED_MAX_BYTES * 2, timeout: 5e3 });
+    if (r.status !== 0 || typeof r.stdout !== "string" || r.stdout.length > STAGED_MAX_BYTES) return null;
+    const added = r.stdout.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).join("\n");
+    return countIdsIn2(added, loadHoldoutIds(mainRoot));
+  } catch {
+    return null;
+  }
+}
 var GIT_CALL = gitCallRe("commit");
 var SAFE_CALL = safeCallRe("commit");
 function findCommits(command, masked) {
@@ -750,7 +844,7 @@ function fileHead(rawPath, dirs) {
   const candidates = isAbsolute2(native) ? [native] : dirs.map((d) => resolve4(d, native));
   for (const file of candidates) {
     try {
-      const text = readFileSync3(file, "utf8").replace(/^\uFEFF/, "").trimStart();
+      const text = readFileSync4(file, "utf8").replace(/^\uFEFF/, "").trimStart();
       return text ? firstLine(text) : null;
     } catch {
     }
@@ -791,6 +885,7 @@ function preflight(input, opts = {}) {
     let warn = null;
     let judged = false;
     let mainText = null;
+    let holdoutText = null;
     for (const call of calls) {
       const dir = callDir(command, masked, call, cwd);
       const head = dir ? resolveHead(dir) : null;
@@ -806,22 +901,27 @@ function preflight(input, opts = {}) {
         });
         warn = verdict.kind === "proven" ? null : `commit-preflight: ${verdict.message}`;
       }
+      if (!holdoutText && head.branch?.startsWith("re/")) {
+        const n = (opts.stagedHoldout ?? stagedHoldoutCount)(dir, head.mainRoot);
+        if (n !== null && n > 0) holdoutText = `The staged lines of this commit on ${head.branch} hold ${n} holdout id${n === 1 ? "" : "s"}. The push will be refused. Remove them before you commit.`;
+      }
       if (mainText || !head.branch || !PROTECTED_BRANCHES.has(head.branch)) continue;
       const msg = messageHead(command, masked, call, [dir, cwd]);
       if (msg !== null && isFeatOrFix(msg)) mainText = mainBranchText(head.branch, head.repoRoot);
     }
     if (!judged) return null;
-    if (mainText && !isUnattended(input ?? {}, opts.env ?? process.env)) {
+    const askText = [mainText, holdoutText].filter(Boolean).join("\n");
+    if (askText && !isUnattended(input ?? {}, opts.env ?? process.env)) {
       return {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: "ask",
-          permissionDecisionReason: mainText,
+          permissionDecisionReason: askText,
           ...warn ? { additionalContext: warn } : {}
         }
       };
     }
-    const context = [warn, mainText].filter(Boolean).join("\n");
+    const context = [warn, askText].filter(Boolean).join("\n");
     if (!context) return null;
     return { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: context } };
   } catch {
@@ -831,7 +931,7 @@ function preflight(input, opts = {}) {
 function main() {
   let input = {};
   try {
-    const raw = readFileSync3(0, "utf8").trim();
+    const raw = readFileSync4(0, "utf8").trim();
     if (raw) input = JSON.parse(raw);
   } catch {
     console.log("{}");
@@ -839,7 +939,8 @@ function main() {
   }
   const out = preflight(input);
   if (out?.hookSpecificOutput.permissionDecision === "ask") {
-    logGuardDecision("commit-preflight", input, "ask", "commit-on-protected-branch", { command: String(input.tool_input?.command ?? "") });
+    if (/holdout id/.test(out.hookSpecificOutput.permissionDecisionReason ?? "")) logGuardDecision("commit-preflight", input, "ask", "holdout-staged", {});
+    else logGuardDecision("commit-preflight", input, "ask", "commit-on-protected-branch", { command: String(input.tool_input?.command ?? "") });
   }
   console.log(JSON.stringify(out ?? {}));
 }

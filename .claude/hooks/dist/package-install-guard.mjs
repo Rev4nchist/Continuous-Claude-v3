@@ -824,6 +824,12 @@ function taggedWrapperPayloads(segments) {
 function wrapperPayloadsFromSegments(segments) {
   return taggedWrapperPayloads(segments).map((w) => w.payload);
 }
+var WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'-]\S*)`;
+var WRAPPER_OPT = String.raw`-[A-Za-z]\S*(?:\s+(?!push\b)${WRAPPER_VAL})?`;
+var WRAPPER_FORCE_PUSH = new RegExp(
+  String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?\s["']?(?:--(?:force|mirror|all|delete|prune)|-[A-Za-z]*[fd][A-Za-z]*(?=[\s"']|$)|[+:]\S)`,
+  "i"
+);
 function bodySubstitutions(body, tool) {
   const out = [];
   const esc = tool === "PowerShell" ? "`" : "\\";
@@ -22683,6 +22689,30 @@ var malicious_packages_default = {
       reason: "Malware in dowload_ebok_the_quick_and_easy_way_to_effective_speaking_by_dale_carnegie_0ley1 (GHSA-mg69-77m8-rxpc)",
       date: "2026-11-13",
       advisory: "https://github.com/advisories/GHSA-mg69-77m8-rxpc"
+    },
+    "@theholocron/holocron-plugin-discord": {
+      blocked_all: true,
+      reason: "Malware in @theholocron/holocron-plugin-discord (GHSA-95pv-hv63-58m8)",
+      date: "2026-11-15",
+      advisory: "https://github.com/advisories/GHSA-95pv-hv63-58m8"
+    },
+    "node-zserial": {
+      blocked_all: true,
+      reason: "Malware in node-zserial (GHSA-2p2h-g9qq-v2wx)",
+      date: "2026-11-15",
+      advisory: "https://github.com/advisories/GHSA-2p2h-g9qq-v2wx"
+    },
+    "@crvouga/mockingbird-service-microsoft": {
+      blocked_all: true,
+      reason: "Malware in @crvouga/mockingbird-service-microsoft (GHSA-w3gq-mm9x-7w7c)",
+      date: "2026-11-15",
+      advisory: "https://github.com/advisories/GHSA-w3gq-mm9x-7w7c"
+    },
+    testpackage83: {
+      blocked_all: true,
+      reason: "Malicious code in testpackage83 (npm) (GHSA-ccgw-9w4v-vqh2)",
+      date: "2026-11-14",
+      advisory: "https://github.com/advisories/GHSA-ccgw-9w4v-vqh2"
     }
   }
 };

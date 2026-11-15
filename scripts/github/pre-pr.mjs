@@ -116,6 +116,7 @@ import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 import { ANSWER_KEY_GLOBS, answerKeyGlobs, answerKeyCheck, slashLower } from './lib/answer-paths.mjs';
+import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -127,7 +128,7 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync'];
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
@@ -211,7 +212,14 @@ export const SURFACES = [
   // stop-process-tree tests (PowerShell on Windows). The gate runs every scripts/lib/*.test.mjs; the id keeps its old name.
   { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/*.test.mjs')] },
   // scripts/eval/review-eval: every file below (fixtures, config) runs the eval node tests. The folder runs in about 5 s.
-  { id: 'eval-scripts', globs: ['scripts/eval/review-eval/**'], gates: [nodeTest('review-eval-tests', 'scripts/eval/review-eval/*.test.mjs', 5 * MIN)] },
+  // The files of the engine freeze sets run them too: engine-version.test.mjs checks the import closure of those files, and a change
+  // to one of them (PR 574 changed one reviewer backend) failed it in CI only. The lists are imported from the engine-version
+  // module, never copied. The rubrics subfolder has its own tests, which the top-level pattern does not reach.
+  {
+    id: 'eval-scripts',
+    globs: ['scripts/eval/review-eval/**', ...REVIEWER_SET_FILES, `${REVIEWER_SET_DIR}**`, ...BAND_SET_FILES],
+    gates: [{ id: 'review-eval-tests', cmd: 'node', args: ['--test', 'scripts/eval/review-eval/*.test.mjs', 'scripts/eval/review-eval/rubrics/*.test.mjs'], cwd: '.', timeoutMs: 10 * MIN }],
+  },
   // lane-context-db.test.ts skips without LANE_TEST_DB_URL. This gate makes a scratch database on local Postgres, runs that one
   // file and FAILs when it is skipped (Postgres down = one ENV line, never a pass). CI job coordination-db runs the same program.
   {
@@ -692,6 +700,59 @@ export function defaultExec(spec) {
 
 const outputOf = (r) => `${r.stdout ?? ''}${r.stderr ? `\n${r.stderr}` : ''}`;
 
+// ---------- failing-test names on a FAIL line (card coord-prepr-failing-test-name) ----------
+// A FAIL line used to carry only the last 12 output lines: the TAP counts, never the name of the test that failed.
+
+export const FAILING_NAMES_CAP = 10;
+const TAP_NOT_OK = /^\s*not ok \d+ - (.*?)\s*$/;
+const TAP_DIRECTIVE = /\s#\s*(?:SKIP|TODO)\b/i;
+const TAP_NEXT = /^\s*(?:(?:not )?ok \d+ |# Subtest:)/;
+const TAP_LOCATION = /^\s*location:\s*'(.+):(\d+):\d+'\s*$/;
+const VITEST_FAIL = /^\s*FAIL\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+>\s+(.+?)\s*$/;
+// A file that fails before its tests run (an import, a syntax error, a hook that throws): "FAIL  <file> [ <file> ]", no test name.
+const VITEST_FILE_FAIL = /^\s*FAIL\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+\[\s*\S+\s*\]\s*$/;
+
+/** A TAP location path, with its doubled backslashes undone, relative to `root` when it is inside it, always with forward slashes. */
+function locationPath(raw, root) {
+  const abs = raw.replace(/\\\\/g, '\\');
+  const relative = path.relative(root, abs);
+  const inside = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  return (inside ? relative : abs).replace(/\\/g, '/');
+}
+
+/**
+ * The failing tests that a node TAP or a vitest output names, in output order, each once: "<name> (<file>:<line>)" for TAP (the file from
+ * its location line) and "<suite > test> (<file>)" for vitest. A SKIP or TODO line and a parent whose only fault is a failed subtest are
+ * not failures of their own.
+ */
+export function failingTestsOf(output, root) {
+  const lines = String(output ?? '').split(/\r?\n/);
+  const names = [];
+  const add = (name) => { if (!names.includes(name)) names.push(name); };
+  lines.forEach((line, i) => {
+    const v = VITEST_FAIL.exec(line);
+    if (v) return add(`${v[2]} (${v[1]})`);
+    const f = VITEST_FILE_FAIL.exec(line);
+    if (f) return add(`the whole file, it failed before its tests ran (${f[1]})`);
+    const t = TAP_NOT_OK.exec(line);
+    if (!t || TAP_DIRECTIVE.test(t[1])) return undefined;
+    const end = lines.findIndex((l, j) => j > i && TAP_NEXT.test(l));
+    const block = lines.slice(i + 1, end === -1 ? undefined : end);
+    if (block.some((l) => /failureType:\s*'subtestsFailed'/.test(l))) return undefined;
+    const loc = block.map((l) => TAP_LOCATION.exec(l)).find(Boolean);
+    return add(loc ? `${t[1]} (${locationPath(loc[1], root)}:${loc[2]})` : t[1]);
+  });
+  return names;
+}
+
+/** The notes of a FAIL gate: the failing tests (or the line that says none was found), then the last 12 output lines. */
+export function failNotes(clean, root) {
+  const names = failingTestsOf(clean, root);
+  const more = names.length > FAILING_NAMES_CAP ? [`... ${names.length - FAILING_NAMES_CAP} more failing tests`] : [];
+  const head = names.length === 0 ? ['no failing test line found'] : [...names.slice(0, FAILING_NAMES_CAP).map((n) => `failing: ${n}`), ...more];
+  return [...head, ...clean.split(/\r?\n/).filter(Boolean).slice(-12)];
+}
+
 /** Run one gate. PASS on exit 0 (and an empty post-check). The summary line is the runner's own. */
 export function runGate(gate, { root, exec, git }) {
   const step = `gate:${gate.id}`;
@@ -699,16 +760,16 @@ export function runGate(gate, { root, exec, git }) {
   const r = exec({ id: gate.id, cmd: gate.cmd, args: gate.args, cwd: path.join(root, gate.cwd), timeoutMs: gate.timeoutMs, root });
   const out = outputOf(r);
   const base = { output: out, command: shown };
-  if (r.timedOut) return { ...result(step, 'FAIL', `timed out after ${Math.round(gate.timeoutMs / MIN)} min: ${shown}`), ...base };
-  if (r.error) return { ...result(step, 'FAIL', `could not start: ${r.error}`), ...base };
+  const clean = out.replace(ANSI, '');
+  if (r.timedOut) return { ...result(step, 'FAIL', `timed out after ${Math.round(gate.timeoutMs / MIN)} min: ${shown}`, failNotes(clean, root)), ...base };
+  if (r.error) return { ...result(step, 'FAIL', `could not start: ${r.error}`, failNotes(clean, root)), ...base };
   if (r.status !== 0) {
     // `acceptExit` names the one known non-zero exit a gate may pass with (see MODS_TSC_NOT_RUN); it returns the note.
-    const accepted = gate.acceptExit?.(out.replace(ANSI, ''));
+    const accepted = gate.acceptExit?.(clean);
     if (accepted) return { ...result(step, 'PASS', accepted), ...base };
-    const tail = out.replace(ANSI, '').split(/\r?\n/).filter(Boolean).slice(-12);
     // A missing package is the environment, not the change: say so first, so nobody hunts a bug in code that is fine.
-    const env = envPrefix(out.replace(ANSI, ''), { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
-    return { ...result(step, 'FAIL', env ?? `exit ${r.status}: ${summaryLine(out)}`, tail), ...base };
+    const env = envPrefix(clean, { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
+    return { ...result(step, 'FAIL', env ?? `exit ${r.status}: ${summaryLine(out)}`, failNotes(clean, root)), ...base };
   }
   if (gate.postCheck) {
     const posts = gate.postCheck.argv.map((a) => git(a));
@@ -977,6 +1038,76 @@ function crVerdict(p, { exitProblem, base, docsOnly = false }) {
   }
   const words = SEVERITIES.filter((s) => p.bySeverity[s]).map((s) => `${p.bySeverity[s]} ${s}`).join(', ');
   return result('coderabbit', 'PASS', `${p.findings.length} finding(s)${words ? ` (${words})` : ''}${billedText(p.usageCost)}${c.reused ? ', a reused result (not a new review)' : ''}, advisory only (fix real ones, then re-run the Evidence GREEN).`, notes);
+}
+
+/**
+ * Counter-row fields for a CLI run that stopped part way (rule A). Returns null unless the run ended with a complete record, no error
+ * event, an exit of 0 or 1 and a positive count of files the CLI did not review. Positions only: no finding text goes in the row.
+ */
+function partialRowOf({ verdict, parsed, exitProblem, changedPaths = [] }) {
+  const c = parsed?.complete;
+  if (verdict?.status !== 'FAIL' || !c) return null;
+  if (c.status === 'review_skipped' || c.outcome === 'failed') return null;
+  const unreviewed = Number(c.unreviewedFileCount);
+  if (!Number.isInteger(unreviewed) || unreviewed <= 0) return null;
+  if ((parsed.errors ?? []).length > 0 || parsed.awaiting) return null;
+  // A line that was not JSON may have been a finding: the row could list fewer findings than the run found. Fail closed.
+  if (Number(parsed.unparsed ?? 0) > 0) return null;
+  if (exitProblem && exitProblem !== 'exit 1') return null;
+  const reviewed = Array.isArray(c.reviewedFiles) ? c.reviewedFiles.length : Math.max(0, changedPaths.length - unreviewed);
+  const asInt = (v) => (Number.isInteger(v) ? v : null);
+  const findings = (parsed.findings ?? []).map((f) => ({
+    file: typeof f.file === 'string' && f.file !== '?' && f.file !== '' ? f.file : null,
+    start: asInt(f.start),
+    end: asInt(f.end),
+  }));
+  return { partial: true, unreviewed, reviewed, findings };
+}
+
+/** True when a finding's lines were changed after the run: an old-side hunk of `git diff --unified=0` overlaps start..end. Fails closed. */
+function findingFixed(git, from, to, f) {
+  if (!f || typeof f.file !== 'string' || f.file === '' || f.file === '?') return false;
+  if (!Number.isInteger(f.start) || f.start < 1) return false;
+  const end = f.end === null || f.end === undefined ? f.start : f.end;
+  if (!Number.isInteger(end) || end < f.start) return false;
+  // The name is a literal path (--literal-pathspecs): ":(top)x" or "src/*.ts" must not match files. --inter-hunk-context=0 keeps far hunks apart whatever the user's git config says.
+  const d = git(['--literal-pathspecs', 'diff', '--no-color', '--unified=0', '--inter-hunk-context=0', '--no-renames', `${from}..${to}`, '--', f.file]);
+  if (d.status !== 0) return false;
+  for (const m of d.stdout.matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/gm)) {
+    const a = Number(m[1]);
+    const b = m[2] === undefined ? 1 : Number(m[2]);
+    if (b > 0 && a <= end && a + b - 1 >= f.start) return true;
+  }
+  return false;
+}
+
+/**
+ * Rule A: how many partial rows earn the cap skip at `head`, and the largest unreviewed count among them. A row earns only when it has
+ * partial === true, reviewed >= 1, unreviewed >= 1, a 40-hex head that is an ancestor of `head`, a findings list, and every finding fixed.
+ */
+export function partialEarnedFor(root, rows, head) {
+  const git = makeGit(root);
+  let earned = 0;
+  let unreviewed = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row?.partial !== true) continue;
+    if (!Number.isInteger(row.reviewed) || row.reviewed < 1) continue;
+    if (!Number.isInteger(row.unreviewed) || row.unreviewed < 1) continue;
+    if (typeof row.head !== 'string' || !/^[0-9a-f]{40}$/.test(row.head)) continue;
+    if (!Array.isArray(row.findings)) continue;
+    if (git(['merge-base', '--is-ancestor', row.head, head]).status !== 0) continue;
+    if (!row.findings.every((f) => findingFixed(git, row.head, head, f))) continue;
+    earned += 1;
+    unreviewed = Math.max(unreviewed, row.unreviewed);
+  }
+  return { earned, unreviewed };
+}
+
+/** Rule A: a cap skip earned by a partial run needs the PR body line "CLI unreviewed files: <n>", n equal to the stamp's count. */
+export function partialBodyCheck({ body, unreviewed }) {
+  const nums = [...String(body ?? '').matchAll(/^\s*(?:[-*]\s+)?CLI unreviewed files:\s*(\d+)\s*$/gim)].map((m) => Number(m[1]));
+  if (nums.length >= 1 && nums.every((n) => n === unreviewed)) return result('coderabbit:partial-body', 'PASS', `the PR body names the ${unreviewed} file(s) the CLI did not review`);
+  return result('coderabbit:partial-body', 'FAIL', `the cap skip is earned by a partial CLI run: add one line "CLI unreviewed files: ${unreviewed}" to the PR body (n from cr_unreviewed_files).`);
 }
 
 const withOutput = (verdict, savedAs) => ({ ...verdict, detail: `${verdict.detail} Output: ${savedAs}` });
@@ -1378,7 +1509,9 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   }
   const counted = counter.runs.filter((r) => r.newCode !== false).length;
   if (counted >= CR_RUN_LIMIT) {
-    return skipped('cap', `limit reached: ${counted} cr review runs with new code already used on ${branch} (a pre-pr.mjs limit of ${CR_RUN_LIMIT} per branch on heads with new code, not a coderabbit-cli.md rule; a run on a head that changed only docs, evidence, the PR body or test snapshots is not counted), so no CLI review this time; the stamp records cr_skip_reason cap`);
+    // Rule A: a partial run whose findings the branch changed earns the cap skip. Earning is read only here, at the cap.
+    const earn = partialEarnedFor(root, counter.runs, head);
+    return { ...skipped('cap', `limit reached: ${counted} cr review runs with new code already used on ${branch} (a pre-pr.mjs limit of ${CR_RUN_LIMIT} per branch on heads with new code, not a coderabbit-cli.md rule; a run on a head that changed only docs, evidence, the PR body or test snapshots is not counted), so no CLI review this time; the stamp records cr_skip_reason cap`), partialEarned: earn.earned, unreviewedFiles: earn.unreviewed };
   }
   const capped = cliCapBlock(cliCapUsd, now, ledgerPath);
   if (capped) return capped;
@@ -1426,6 +1559,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   else {
     run.outcome = verdict.status === 'PASS' ? 'finished' : 'failed';
     run.complete = verdict.status === 'PASS';
+    Object.assign(run, partialRowOf({ verdict, parsed, exitProblem, changedPaths: changedPaths ?? [] }) ?? {});
     writeFileSync(counterFile, JSON.stringify(counter, null, 2));
   }
   return withOutput(verdict, rel(root, out));
@@ -1439,12 +1573,20 @@ function formatLines(results) {
   return results.flatMap((r) => [lineOf(r), ...(r.notes ?? []).map((n) => `    ${n}`)]);
 }
 
-function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
+/** `text` cut to about `max` characters by keeping its first and last halves: the end of a test run holds its failures and counts. */
+export function clipEnds(text, max) {
+  const s = String(text);
+  if (s.length <= max) return s;
+  const half = Math.floor(max / 2);
+  return `${s.slice(0, half)}\n... ${s.length - 2 * half} characters cut ...\n${s.slice(-half)}`;
+}
+
+export function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
   const dir = path.join(root, '.claude', 'cache', 'e2e');
   mkdirSync(dir, { recursive: true });
   // The time is in the name: a re-run on the same head must not overwrite the log of the run before it.
   const file = path.join(dir, `${dayOf(now)}-pre-pr-${head.slice(0, 7)}-${clockOf(now)}.log`);
-  const outputs = results.filter((r) => r.output).map((r) => `\n===== ${r.step}: ${r.command}\n${clip(r.output.replace(ANSI, ''), 200_000)}`);
+  const outputs = results.filter((r) => r.output).map((r) => `\n===== ${r.step}: ${r.command}\n${clipEnds(r.output.replace(ANSI, ''), 200_000)}`);
   const head2 = [`pre-pr ${now.toISOString()}`, `head ${head}`, `branch ${branch}`, `base ${base} (local ref; fork/${base} fetched first, see git:behind)`, `body_sha256 ${bodySha}`, ''];
   writeFileSync(file, [...head2, ...lines, ...outputs, ''].join('\n'));
   return file;
@@ -1534,6 +1676,10 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
     : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseSha || base}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseSha, crStore }))));
   const crStep = results[results.length - 1];
+  const crFinished = finishedRuns(root, branch, base);
+  const partialSkip = crStep.skipReason === 'cap' ? { earned: crStep.partialEarned ?? 0, unreviewed: crStep.unreviewedFiles ?? 0 } : { earned: 0, unreviewed: 0 };
+  // Rule A: a cap skip that only a partial run earns needs the PR body line. A finished run earns it with no line.
+  if (crStep.skipReason === 'cap' && crFinished === 0 && partialSkip.earned >= 1) results.push(partialBodyCheck({ body: bodyText, unreviewed: partialSkip.unreviewed }));
   if (crStep.skipReason === 'cli-missing') {
     // The hook accepts this stamp, so say plainly that no CLI review ran, and leave a row Dave can find later.
     results.push({ step: 'coderabbit:cli-missing', status: 'NOTE', detail: `no CLI review ran: ${crStep.detail}`, notes: [] });
@@ -1555,7 +1701,7 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const slim = results.map(({ step, status, detail }) => ({ step, status, detail }));
     const cr = results.find((r) => r.step === 'coderabbit');
     const crSkipped = cr?.status === 'SKIP';
-    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: finishedRuns(root, branch, base), cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', cr_answer_key: crSkipped && cr.skipReason === 'answer-key', answer_key_paths: crSkipped && cr.skipReason === 'answer-key' ? cr.answerKeyPaths ?? 0 : 0, docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
+    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: crFinished, cr_partial_earned: partialSkip.earned, cr_unreviewed_files: partialSkip.unreviewed, cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', cr_answer_key: crSkipped && cr.skipReason === 'answer-key', answer_key_paths: crSkipped && cr.skipReason === 'answer-key' ? cr.answerKeyPaths ?? 0 : 0, docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
   }
   return { ok, results, lines, head, branch, logPath, stampPath: ok ? stampPath : null };
 }
