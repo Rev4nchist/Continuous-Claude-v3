@@ -929,6 +929,12 @@ function commandSegments(command, tool) {
   return quotedSegments(command, tool).map((s) => stripLeaders(stripQuotedStrings(s, tool))).filter(Boolean);
 }
 var test = (patterns, value) => !!patterns && patterns.some((p) => new RegExp(p).test(value));
+var LANE_SEGMENT = /^node(?:\.exe)?(?:\s+-[\w-]+(?:=\S+)?)*\s+(?:"[^"]*[\\/]lane\.mjs"|'[^']*[\\/]lane\.mjs'|(?:[^\s"']*[\\/])?lane\.mjs)(?:\s|$)/;
+var isLaneSegment = (segment) => LANE_SEGMENT.test(segment);
+function segmentHit(r, seg2) {
+  if (r.laneSegment === "skip" && r.subagent !== "block" && isLaneSegment(seg2)) return false;
+  return test(r.segment, seg2);
+}
 function matchRules(input, manifest) {
   const tool = input.tool_name || "";
   const ti = input.tool_input || {};
@@ -936,7 +942,7 @@ function matchRules(input, manifest) {
     if (COMMAND_TOOLS.has(tool)) {
       const command = typeof ti.command === "string" ? ti.command : "";
       if (!command) return false;
-      return commandSegments(command, tool).some((seg2) => test(r.command, seg2)) || quotedSegments(command, tool).some((seg2) => test(r.segment, seg2));
+      return commandSegments(command, tool).some((seg2) => test(r.command, seg2)) || quotedSegments(command, tool).some((seg2) => segmentHit(r, seg2));
     }
     if (AGENT_TOOLS.has(tool)) return test(r.agent, String(ti.subagent_type || ""));
     if (tool === "Skill") return test(r.skill, String(ti.skill || ""));
@@ -998,7 +1004,7 @@ function triggerWords(input, fired) {
   if (!COMMAND_TOOLS.has(tool)) return String(ti.subagent_type ?? ti.skill ?? tool).slice(0, 60);
   const segs = quotedSegments(String(ti.command ?? ""), tool);
   const plain = (seg3) => stripLeaders(stripQuotedStrings(seg3, tool));
-  const hit = segs.find((seg3) => fired.some((r) => test(r.command, plain(seg3)) || test(r.segment, seg3)));
+  const hit = segs.find((seg3) => fired.some((r) => test(r.command, plain(seg3)) || segmentHit(r, seg3)));
   const seg2 = hit ?? segs[0] ?? "";
   const [cmd = "", arg] = plain(seg2).split(/\s+/);
   const words = arg === void 0 ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : "<arg>"}`;
@@ -1127,6 +1133,7 @@ if ((process.argv[1] || "").includes("rule-router")) {
 export {
   commandSegments,
   decide,
+  isLaneSegment,
   matchRules,
   quotedSegments,
   rearm,

@@ -171,6 +171,7 @@
         "pr-review-loop.md"
       ],
       "mode": "inject",
+      "laneSegment": "skip",
       "command": [
         "^gh\\s+pr\\s+create\\b",
         "^gh\\s+pr\\s+merge\\b",
@@ -195,6 +196,7 @@
         "coderabbit-cli.md"
       ],
       "mode": "inject",
+      "laneSegment": "skip",
       "command": [
         "^(cr|coderabbit)\\b"
       ],
