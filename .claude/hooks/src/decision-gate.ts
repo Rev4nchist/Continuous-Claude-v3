@@ -668,6 +668,8 @@ interface PushShape {
 interface Where { cds: string[]; unknown: boolean; loose: boolean }
 interface Shape {
   kind: 'create' | 'land' | 'merge' | 'store' | 'push'; pr: string | null; sha?: string | null; push?: PushShape;
+  /** Round 3 C2, a merge only: the head cannot be read as gh reads it (two values, a non-literal, an unknown flag, an unpaired quote). */
+  shaBad?: true;
   /** Create, land and merge: where the shape runs. */
   at?: Where;
   /**
@@ -681,6 +683,10 @@ interface Shape {
   fmtext?: string;
   /** Fixer G, item 5: the GH_REPO assignments of the segments before this one (priorGhRepo, under the Bash and the PowerShell mask). */
   prior?: Prior;
+  /** Round 3 C1, seat ruling A: a create's raw tail (rawTail), read by createRead; it is not cut at a lone & or a CR. */
+  tail?: string;
+  /** Seat item 3: the payload tool is PowerShell (a backslash is literal there). */
+  pwsh?: boolean;
 }
 interface Prior { repos: string[]; nonLiteral: boolean }
 const NO_PRIOR: Prior = { repos: [], nonLiteral: false };
@@ -700,17 +706,228 @@ const SEGMENT_RE = /[;&|\r\n]+/;
 const lastArg = (args: string, re: RegExp): string | null => re.exec(args)?.[1] ?? null;
 
 /** The land and merge shapes of ONE command segment (no && ; | or newline in it), with the PR and the sha read from that segment alone. */
-function landShapesOf(seg: string, textOnly = false): Shape[] {
+function landShapesOf(seg: string, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh = false): Shape[] {
   const out: Shape[] = [];
+  // The land script pins its own head: its sha is read as before (round 3 C2 changes only the merge read).
   const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
   // textOnly: the whole command only prints or reads text (isTextOnlyCommand), so the script name is a mention. A mention that names a PR (-Pr 12) stays a land shape.
   const pr = lastArg(seg, LAND_PR_RE);
   if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out.push({ kind: 'land', pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
-  if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), sha });
+  // Round 3 C2: the head is read from the RAW segment, whose quotes are what gh gets. When only the quotes-deleted view shows the merge
+  // (quotes inside its words), the head cannot be read whole: fail closed. Seat ruling A: the words are read from the raw TAIL (the text up
+  // to the next ; | newline or && outside quotes), not from the segment cut at every & and CR, so a head after 2>&1 is read too.
+  // Seat delta q3: the gh word must open its command (only literal NAME=value settings before it), else another program parses the words.
+  const opens = (m: RegExpExecArray | null): RegExpExecArray | null => (m !== null && GH_PREFIX_OK.test(tail.slice(0, m.index)) ? m : null);
+  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? opens(TAIL_CLI_RE.exec(tail)) : null;
+  if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...(rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD) });
   const api = MERGE_API_RE.exec(seg);
-  if (api && !GET_RE.test(api[0])) out.push({ kind: 'merge', pr: api[1], sha });
+  const rawApi = MERGE_API_RE.exec(rawSeg) ? opens(TAIL_API_RE.exec(tail)) : null;
+  if (api && !GET_RE.test(api[0])) out.push({ kind: 'merge', pr: api[1], ...(rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD) });
   return out;
+}
+const TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
+/** True when `pos` of `text` is inside a quote: single quotes are literal; the escape is \ in bash, a backtick in PowerShell. */
+function quoteOpenAt(text: string, pos: number, pwsh: boolean): boolean {
+  const esc = pwsh ? '`' : '\\';
+  let q = '';
+  for (let i = 0; i < pos && i < text.length; i++) {
+    const ch = text[i];
+    if (q === "'") { if (ch === "'") q = ''; continue; }
+    if (ch === esc) { i++; continue; }
+    if (q === '"') { if (ch === '"') q = ''; continue; }
+    if (ch === "'" || ch === '"') q = ch;
+  }
+  return q !== '';
+}
+/**
+ * Seat delta q3: what may stand before the gh word of a merge or create in its own command: nothing, or literal NAME=value settings
+ * (GH_REPO=..., GH_PROMPT_DISABLED=1). A wrapper (bash -c, pwsh -Command, cmd /c, a here-string, sudo, time) runs gh through another parser.
+ */
+const GH_PREFIX_OK = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_\-./:]*\s+)*$/;
+const TAIL_API_RE = /\bgh\s+api\b[\s\S]*$/i;
+
+/**
+ * Seat ruling A: the raw text of the command that starts `text`, up to the first ; | newline or && OUTSIDE quotes (bash and PowerShell
+ * both end a command there). A lone & and a CR are kept in the tail, so the allowlist (unmodelled) refuses them; an open quote runs to
+ * the end, so the pairing refuses it.
+ */
+function rawTail(text: string): string {
+  let q = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === q) q = ''; continue; }
+    if (ch === "'" || ch === '"') { q = ch; continue; }
+    if (ch === ';' || ch === '|' || ch === '\n' || (ch === '&' && text[i + 1] === '&')) return text.slice(0, i);
+  }
+  return text;
+}
+
+// ---------- round 3 C2: the merge head, read from one known place, once ----------
+
+/**
+ * The words of a command text with their quotes paired (bash rules: '...' is literal, "..." takes \ escapes; a \ outside quotes escapes the
+ * next character). Null when a quote is not closed: the reader cannot pair it, so the caller fails closed. A redirect word stays a word.
+ */
+function pairedWords(text: string, pwsh = false): string[] | null {
+  const words: string[] = [];
+  let cur = '';
+  let open = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (/\s/.test(ch)) { if (open) { words.push(cur); cur = ''; open = false; } continue; }
+    open = true;
+    if (ch === "'") { const end = text.indexOf("'", i + 1); if (end < 0) return null; cur += text.slice(i + 1, end); i = end; continue; }
+    if (ch === '"') {
+      let j = i + 1;
+      for (; j < text.length && text[j] !== '"'; j++) { if (!pwsh && text[j] === '\\' && j + 1 < text.length) j++; cur += text[j]; }
+      if (j >= text.length) return null;
+      i = j;
+      continue;
+    }
+    if (!pwsh && ch === '\\' && i + 1 < text.length) { cur += text[++i]; continue; }
+    cur += ch;
+  }
+  if (open) words.push(cur);
+  return words;
+}
+
+/**
+ * Round 3 C2 and C1, seat ruling A (an allowlist, not a list of bad characters): true unless every character of the text is one whose
+ * effect the reader models the same way in bash and PowerShell. A character not on the list makes the head unread.
+ *   - outside quotes: ASCII letters, digits, space, tab, - _ . / = : and the two quote characters. An @ inside a word (body=@file) is
+ *     literal in both shells; an @ that opens a word is a PowerShell splat, so it is refused.
+ *   - inside '...': printable ASCII and a newline (literal in both shells; '' splits the same in both).
+ *   - inside "...": the same but $, a backtick and a backslash (bash expands $ and escapes with \, PowerShell with a backtick).
+ *   - anywhere: a non-ASCII character (a curly quote is a quote for PowerShell, NBSP and the Unicode spaces are word characters for bash),
+ *     a CR, \v and \f. An open quote at the end is refused by pairedWords, the next step of every reader.
+ * So a redirect (< >), a lone &, # (a comment), $, a backtick, a backslash, a glob, a brace, a paren and a comma outside quotes are refused.
+ */
+function unmodelled(text: string, pwsh = false): boolean {
+  let q = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    // Seat item 3: a backslash next to a quote is refused in every tool (a native program can read \" as an escaped quote).
+    if (ch === '\\' && (QUOTE_CH.has(text[i - 1] ?? '') || QUOTE_CH.has(text[i + 1] ?? ''))) return true;
+    if (q === "'") { if (ch === "'") q = ''; else if (!QUOTED_OK.test(ch)) return true; continue; }
+    if (q === '"') { if (ch === '"') q = ''; else if (!QUOTED_OK.test(ch) || '$`'.includes(ch) || (ch === '\\' && !pwsh)) return true; continue; }
+    if (ch === "'" || ch === '"') { q = ch; continue; }
+    if (ch === '@' && i > 0 && !/[ \t]/.test(text[i - 1])) continue;
+    if (ch === '\\' && pwsh) continue; // seat item 3: literal in PowerShell; the Bash tool refuses it (an escape)
+    if (!BARE_OK.test(ch)) return true;
+  }
+  return false;
+}
+const QUOTE_CH = new Set(["'", '"']);
+const BARE_OK = /^[A-Za-z0-9 \t\-_./=:]$/;
+const QUOTED_OK = /^[\x20-\x7E\n]$/;
+
+type MergeHead = { sha: string | null; shaBad?: true };
+const UNREAD_HEAD: MergeHead = { sha: null, shaBad: true };
+/** The deny text of a merge whose head cannot be read (CCv3 and covered folders: it names no CCv3 tool). */
+const HEAD_UNREAD_WHY = (pr: string | null): string => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, an unpaired quote, or a character this gate cannot read the same way in bash and PowerShell. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : '<n>'} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>. ${PLAIN_WAY_OUT}`;
+/** Seat 07:4x, item 2: the exact way out of the two biggest measured costs (a redirect after the call, a $ value). */
+const PLAIN_WAY_OUT = 'For a redirect: run the call with no redirect. For a $ variable or $(...): put the value in the command as plain text or use a body file.';
+const HEX40 = /^[0-9a-f]{40}$/i;
+/** One head from the values found: none is no head; any value that is not a literal 40-hex string, or two different values, is bad. */
+function oneHead(values: string[]): MergeHead {
+  if (values.some((v) => !HEX40.test(v))) return { sha: null, shaBad: true };
+  const set = new Set(values.map((v) => v.toLowerCase()));
+  if (set.size > 1) return { sha: null, shaBad: true };
+  return { sha: [...set][0] ?? null };
+}
+const MERGE_BOOL = new Set(['--merge', '-m', '--squash', '-s', '--rebase', '-r', '--auto', '--disable-auto', '--admin', '--delete-branch', '-d']);
+const MERGE_VALUE = new Set(['--body', '-b', '--body-file', '-F', '--subject', '-t', '--author-email', '-A', '--match-head-commit', '--repo', '-R']);
+const SHORT_BOOL = 'msrd';
+const SHORT_VALUE = 'bFtAR';
+
+/**
+ * A short-flag cluster (gh takes `-dR x` and `-dRx`): every letter but the last is a known short bool; the last is a bool or a known
+ * short value flag, whose value is the rest of the word or the next word. Returns how many next words it uses, or null when unknown.
+ */
+function shortCluster(w: string, next: string | undefined): number | null {
+  return clusterOf(w, next, SHORT_BOOL, SHORT_VALUE)?.used ?? null;
+}
+/** The cluster read with the letter sets of one command: the value flag it ends in (letter, value), and how many next words it uses. */
+function clusterOf(w: string, next: string | undefined, bools: string, values: string): { used: number; letter: string | null; value: string | null } | null {
+  const letters = w.slice(1);
+  for (let k = 0; k < letters.length; k++) {
+    const ch = letters[k];
+    if (bools.includes(ch)) continue;
+    if (!values.includes(ch)) return null;
+    if (k < letters.length - 1) return { used: 0, letter: ch, value: letters.slice(k + 1) }; // the rest of the word is the value
+    return next === undefined ? null : { used: 1, letter: ch, value: next };
+  }
+  return { used: 0, letter: null, value: null };
+}
+
+/**
+ * `gh pr merge <args>`: the head is the value of --match-head-commit (space or =), and nothing else. Any flag outside the known set, a
+ * value flag with no value or an unpaired quote is bad: the reader cannot tell what gh will take as the head. Positionals are not read.
+ */
+function cliMergeHead(args: string, pwsh = false): MergeHead {
+  if (unmodelled(args, pwsh)) return UNREAD_HEAD;
+  const words = pairedWords(args, pwsh);
+  if (words === null) return UNREAD_HEAD;
+  const heads: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!w.startsWith('-') || w === '-') continue;
+    if (/^-[A-Za-z]{2,}/.test(w)) { const used = shortCluster(w, words[i + 1]); if (used === null) return UNREAD_HEAD; i += used; continue; }
+    const eq = w.startsWith('--') ? w.indexOf('=') : -1;
+    const name = eq > 0 ? w.slice(0, eq) : w;
+    if (MERGE_BOOL.has(name) && eq < 0) continue;
+    if (!MERGE_VALUE.has(name)) return { sha: null, shaBad: true };
+    const value: string | undefined = eq > 0 ? w.slice(eq + 1) : words[++i];
+    if (value === undefined) return { sha: null, shaBad: true };
+    if (name === '--match-head-commit') heads.push(value);
+  }
+  return oneHead(heads);
+}
+
+const API_FIELD = /^(?:-f|-F|--raw-field|--field)$/;
+const API_FIELD_EQ = /^(?:--raw-field|--field)=(.*)$/s;
+const API_VALUE = new Set(['-X', '--method', '-H', '--header', '--hostname', '-q', '--jq', '-t', '--template', '--cache', '-p', '--preview']);
+
+/**
+ * The words of a gh api call after `api`, one by one: the endpoint (the first plain word), a known option with its value, or a field
+ * (-f, -F, --raw-field, --field; space, = or attached -fkey=v). `null` field: an option, read and skipped. A word this reader does not
+ * know (an unknown dash word, a second plain word, --input) gives `bad` (seat ruling B: the merge reader denies it, as the create reader does).
+ */
+type ApiWord = { bad: string } | { field: string | null; used: number };
+function apiWord(w: string, next: string | undefined, endpointSeen: boolean): ApiWord {
+  if (w === '--input' || w.startsWith('--input=')) return { bad: '--input (the body comes from a file)' };
+  if (API_FIELD.test(w)) return next === undefined ? { bad: 'a field flag with no value' } : { field: next, used: 1 };
+  if (API_FIELD_EQ.test(w)) return { field: API_FIELD_EQ.exec(w)![1], used: 0 };
+  if (/^-[fF][^=]/.test(w)) return { field: w.slice(2), used: 0 };
+  if (API_VALUE.has(w)) return next === undefined ? { bad: `${w} with no value` } : { field: null, used: 1 };
+  if (/^--(?:method|hostname|header|jq|template|cache|preview)=/.test(w) || /^-X./.test(w) || API_BOOL.has(w)) return { field: null, used: 0 };
+  if (!w.startsWith('-') && !endpointSeen) return { field: null, used: -1 };
+  return { bad: `a word this gate does not know on the api call (${w})` };
+}
+
+/**
+ * `gh api .../pulls/<n>/merge <args>`: the head is the value of the `sha` field, and nothing else. The value of another field
+ * (commit_message="sha=...") is never read. An unknown word, --input or an unpaired quote is bad.
+ */
+function apiMergeHead(text: string, pwsh = false): MergeHead {
+  const rest = text.replace(/^[\s\S]*?\bapi\b/, '');
+  // gh's own placeholders ({owner}, {repo}, {branch}) hold no comma, so bash does not expand them, and they make one word in PowerShell.
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return UNREAD_HEAD;
+  const words = pairedWords(rest, pwsh);
+  if (words === null) return UNREAD_HEAD;
+  const heads: string[] = [];
+  let endpoint = false;
+  for (let i = 0; i < words.length; i++) {
+    const r = apiWord(words[i], words[i + 1], endpoint);
+    if ('bad' in r) return UNREAD_HEAD;
+    if (r.used === -1) { endpoint = true; continue; }
+    i += r.used;
+    if (r.field === null) continue;
+    const eq = r.field.indexOf('=');
+    if (eq > 0 && r.field.slice(0, eq) === 'sha') heads.push(r.field.slice(eq + 1));
+  }
+  return oneHead(heads);
 }
 
 // ---------- the push shape ----------
@@ -1376,16 +1593,37 @@ function rawDirs(raw: string, tool: string | undefined, cwd: string, shell: 'bas
   for (const call of pushCallsIn(raw, mayRunUnderCmd(tool))) {
     for (const base of dirsAfter(cwd, call.cds, shell, true)) out.push(base, chainDir(base, callDirsOf(call), shell));
   }
-  const words = raw.replace(/["'`^]/g, '').split(/[\s;&|(){}<>]+/);
-  let chained = cwd;
-  for (let i = 0; i + 1 < words.length; i++) {
-    if (!RAW_CD.test(words[i]) && words[i] !== '-C' && !/^-path$/i.test(words[i])) continue;
-    out.push(chainStep(cwd, words[i + 1], shell));
-    chained = chainStep(chained, words[i + 1], shell);
-    out.push(chained);
+  // Round 3 C3 (F-1): the cut words of the old reading, AND the quote-paired words of the text and of each payload word in it, so a
+  // quoted folder that holds a space ("/x/My App") is read whole. A union only: more folders, never fewer.
+  const lists = [raw.replace(/["'`^]/g, '').split(/[\s;&|(){}<>]+/), ...(payloadWords(raw, shell) ?? [])];
+  for (const words of lists) {
+    let chained = cwd;
+    for (let i = 0; i + 1 < words.length; i++) {
+      if (!RAW_CD.test(words[i]) && words[i] !== '-C' && !/^-path$/i.test(words[i])) continue;
+      out.push(chainStep(cwd, words[i + 1], shell));
+      chained = chainStep(chained, words[i + 1], shell);
+      out.push(chained);
+    }
   }
   return [...new Set([...knownDirs(out, home), ...moveTargets(raw, cwd, shell, home)])];
 }
+/**
+ * Round 3 C3 (F-1, F-2): the quote-paired words (pairedWords) of the text, and of each word in it that holds a blank (a payload such as
+ * sh -c '...'), read by both shells' rules; one level, no new reader. Null when a quote cannot be paired at either level: the folder of
+ * a payload push cannot be read, so the caller denies.
+ */
+function payloadWords(raw: string, shell: 'bash' | 'pwsh'): string[][] | null {
+  const top = pairedWords(raw, shell === 'pwsh');
+  if (top === null) return null;
+  const lists = [top];
+  for (const w of top.filter((t) => /\s/.test(t))) {
+    const inner = [pairedWords(w, false), pairedWords(w, true)];
+    if (inner.some((l) => l === null)) return null;
+    lists.push(...(inner as string[][]));
+  }
+  return lists;
+}
+const RAW_PUSH_WHY = 'this push sits inside the text of another program (sh -c, bash -c, pwsh -c) or in a quote this gate cannot pair, so its folder, remote and branch cannot be read. Run git push as its own command: git push <remote> <branch>.';
 
 /**
  * The deny of the raw rule: in the first covered folder of rawDirs (none in a CCv3 checkout or an uncovered folder, so their output stays
@@ -1395,8 +1633,16 @@ function rawDirs(raw: string, tool: string | undefined, cwd: string, shell: 'bas
 function rawPushDenies(raw: string, tool: string | undefined, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', subagent: boolean): Deny[] {
   const v = rawVerdict(raw, tool);
   if (v === null || v.kind === 'ok' || (v.kind === 'tap' && !v.unread)) return [];
-  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
-  if (dir === null) return [];
+  const dirs = rawDirs(raw, tool, cwd, shell, deps.home);
+  const dir = firstCovered(deps, dirs);
+  if (dir === null) {
+    // Round 3 C3 (seat Q1, F-2): a push no shape reads is a HARD deny when a folder of it is a CCv3 checkout, or when a quote of its
+    // payload cannot be paired (its folder cannot be read, so it cannot be shown uncovered: every folder, seat ACCEPTED cost).
+    if (!v.unread) return [];
+    // Seat fix 2: a folder whose remotes git cannot list counts as CCv3 unless it is a resolved folder under no registry root.
+    const hit = payloadWords(raw, shell) === null || dirs.some((d) => !isUnexpanded(d) && ccv3OrUnplaced(deps, d));
+    return hit ? [hardOf(deny('push-target-unresolved', RAW_PUSH_WHY, 'push'))] : [];
+  }
   // Fix round 6: an unread push takes the tap path; only a force spelling in a push segment is hard. Reviewer-2 item 3: a subagent's too.
   if (v.kind === 'unsafe') return [deny('push-unsafe', appRawUnsafeWhy(dir), 'app-push')];
   const unread = deny('push-target-unresolved', appUnreadWhy(dir), 'app-push');
@@ -1410,6 +1656,37 @@ function hiddenGhDenies(raw: string, tool: string | undefined, deps: Deps, cwd: 
   if (!hiddenPieces(raw, tool).some(hiddenGh)) return [];
   const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
   return dir === null ? [] : [{ ...deny('position-unknown', unpairedWhy(dir)), homeFlags: true }];
+}
+
+/**
+ * Round 3 C1-12 (Dave 2026-11-15 09:14, "Fix in round 3 now"; seat milestone 550): a gh flag before the subcommand (gh -R <repo> pr
+ * create, gh --repo <repo> pr merge) hides the call from the create and merge readers, which need `gh pr` or `gh api` as adjacent
+ * words. Fail closed on the raw text: when a gh word is followed by a dash word and the text also names a create or a merge, the head
+ * is unread. Read on the quotes-deleted text, so a quoted spelling counts too (more denies, never fewer). Measured: 0 of 764 gh commands
+ * in 7 days. A CCv3 folder gets the CCv3 deny, a covered folder the app one (homeFlags); an uncovered folder nothing, as for every create.
+ */
+// Seat fix 3: gh may be named by its path (/usr/bin/gh, C:\tools\gh.exe, "C:\Program Files\GitHub CLI\gh.exe"), with a quote after it.
+const GH_FLAG_FIRST = /(?:^|[\s;&|(){}"'])(?:[^\s;&|(){}"']*[\\/])?gh(?:\.exe)?["']?\s+-/i;
+const GH_MERGE_TEXT = /\bpr\s+merge\b|\bapi\b[^\n]*\/merge\b/i;
+const GH_CREATE_TEXT = /\bpr\s+(?:create|new)\b|\bapi\b[^\n]*\/pulls\b/i;
+const GH_FLAG_FIRST_WHY = 'a gh flag stands before the subcommand (gh -R <repo> pr ...), so this gate cannot read the call. Put the flag after the subcommand: gh pr create -R <repo> --head <branch> --base <base> ..., or gh pr merge <n> -R <repo> --match-head-commit <sha> ...';
+function ghFlagFirstDenies(raw: string, tool: string | undefined, deps: Deps, cwd: string, shell: 'bash' | 'pwsh'): Deny[] {
+  // The raw text too: squashMarks deletes the backslash of a Windows path (seat fix 3).
+  const text = squashMarks(raw);
+  if (!GH_FLAG_FIRST.test(text) && !GH_FLAG_FIRST.test(raw)) return [];
+  const pattern = GH_MERGE_TEXT.test(text) ? 'merge-no-head' : GH_CREATE_TEXT.test(text) ? 'head-unresolved' : null;
+  if (pattern === null) return [];
+  const dirs = rawDirs(raw, tool, cwd, shell, deps.home).filter((d) => !isUnexpanded(d));
+  const app = firstCovered(deps, dirs);
+  if (app !== null) return [{ ...deny(pattern, `${GH_FLAG_FIRST_WHY}${inAppFolder(app)}`), homeFlags: true }];
+  // Seat fix 2: a folder whose remotes git cannot list counts as CCv3 unless it is a resolved folder under no registry root.
+  if (dirs.some((d) => ccv3OrUnplaced(deps, d))) return [deny(pattern, GH_FLAG_FIRST_WHY)];
+  // CLI :1681 (seat word 2026-11-15): outside CCv3 a registry that does not parse denies the call, as for every create and merge.
+  for (const d of dirs) {
+    const place = appPlace(deps, d);
+    if (place.corrupt) return [registryCorruptDeny(place.corrupt, d, 'other')];
+  }
+  return [];
 }
 
 
@@ -1450,7 +1727,7 @@ const priorId = (p: Prior): string => (p.repos.length === 0 && !p.nonLiteral ? '
 const fullId = (own: Own): string => (own.ftext === own.text ? '' : `|${own.ftext}`);
 /** A merge keeps its own command in the id (F1): two merges of one PR and head with different -R values are two shapes. */
 const landId = (shape: Shape, at: Where, own: Own, prior: Prior): string =>
-  `${shape.kind}|${shape.pr}|${shape.sha}|${whereId(at)}${shape.kind === 'merge' ? `|${own.ftext}${priorId(prior)}` : ''}`;
+  `${shape.kind}|${shape.pr}|${shape.sha}${shape.shaBad ? '!' : ''}|${whereId(at)}${shape.kind === 'merge' ? `|${own.ftext}${priorId(prior)}` : ''}`;
 /** The folders a segment may run in, one `Where` per distinct reading of the cds before it. */
 const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
 
@@ -1473,6 +1750,8 @@ function shapesOf(raw: string, tool?: string): Shape[] {
     && !PR_NUMBER_IN_TEXT_RE.test(raw)
     && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every(isTextOnlyCommand);
   const out: Shape[] = [];
+  // Seat item 3: the tool decides one fact of the merge and create readers (a backslash is literal in PowerShell).
+  const pwshTool = tool === 'PowerShell';
   const seen = new Set<string>();
   const add = (shape: Shape, id: string): void => { if (!seen.has(id)) { seen.add(id); out.push(shape); } };
   let created = false;
@@ -1482,14 +1761,17 @@ function shapesOf(raw: string, tool?: string): Shape[] {
       const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
       const owns = reads.map(({ masked }) => ownCommand(view, masked, from));
       const prior = priorOf(view, reads.map((r) => r.masked), from);
+      // Seat delta q3: a segment that starts inside a quote of the whole text (a here-string line, a quoted -c payload) is text that
+      // another program may run: its tail is empty, so every head read from it is unread.
+      const tail = quoteOpenAt(view, from, pwshTool) ? '' : rawTail(view.slice(from));
       for (const s of new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly)) {
+        for (const shape of landShapesOf(s, textOnly, seg, tail, pwshTool)) {
           for (const own of owns) for (const at of wheres) add({ ...shape, at, ...own, prior }, landId(shape, at, own, prior));
         }
       }
       if (!isPrOpenText(seg)) continue;
       created = true;
-      for (const own of owns) for (const at of wheres) add({ kind: 'create', pr: null, at, ...own, prior }, `create|${whereId(at)}|${own.text}${fullId(own)}${priorId(prior)}`);
+      for (const own of owns) for (const at of wheres) add({ kind: 'create', pr: null, at, ...own, prior, tail, pwsh: pwshTool }, `create|${whereId(at)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
     }
   }
   // A create that no single segment shows (`gh pr` + newline + `create`): judge the whole text in the cwd and in every folder of the cds.
@@ -1497,7 +1779,7 @@ function shapesOf(raw: string, tool?: string): Shape[] {
     const view = views[0];
     const masked = maskQuoted(view, 'Bash');
     for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
-      add({ kind: 'create', pr: null, at, text: view, mtext: masked, ftext: view, fmtext: masked }, `create|${whereId(at)}|${view}`);
+      add({ kind: 'create', pr: null, at, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool }, `create|${whereId(at)}|${view}`);
     }
   }
   out.push(...pushShapesOf(raw, tool));
@@ -1885,69 +2167,117 @@ class AppScopeError extends Error {
   }
 }
 
-const HEAD_FIELD_RE = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/g;
-const HEAD_FLAG_RE = /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/g;
-const PR_CREATE_CMD_RE = /\bgh\s+pr\s+create\b/i;
 
-/** The value of the first flag that is not inside a quoted string: its first character is the same in the masked view (a quoted one is blanked). */
-function unquotedFlagValue(re: RegExp, text: string, mtext: string): string | null {
-  for (const m of text.matchAll(re)) {
-    const at = m.index! + m[0].search(/\S/);
-    if (mtext[at] === text[at]) return m[1];
+// ---------- round 3 C1: the head and base of a create, read from one known place, once ----------
+
+/**
+ * The reading of a create: `bad` is the reason the words gh gets cannot be read whole (head-unresolved). `heads` and `bases`: every
+ * distinct value named (the callers deny two or more, each with its own text).
+ */
+interface CreateRead { bad: string | null; heads: string[]; bases: string[] }
+const CREATE_BOOL = new Set(['--draft', '-d', '--fill', '-f', '--fill-first', '--fill-verbose', '--web', '-w', '--no-maintainer-edit', '--dry-run', '--editor', '-e']);
+const CREATE_VALUE = new Set(['--title', '-t', '--body', '-b', '--body-file', '-F', '--label', '-l', '--assignee', '-a', '--reviewer', '-r',
+  '--milestone', '-m', '--project', '-p', '--head', '-H', '--base', '-B', '--repo', '-R', '--template', '-T', '--recover']);
+const CREATE_SHORT_BOOL = 'dwef';
+const CREATE_SHORT_VALUE = 'tbFlarmpHBRT';
+const API_CREATE_KEYS = new Set(['head', 'base', 'title', 'body', 'draft', 'maintainer_can_modify', 'issue']);
+const API_BOOL = new Set(['--paginate', '--slurp', '--silent', '--verbose', '-i', '--include']);
+const CLI_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
+const API_CMD_RE = /\bgh\s+api\b/i;
+/** A value that is not a literal: cmd.exe %VAR% (the shell forms are caught by unmodelled). */
+const NOT_LITERAL_RE = /%[^%\s]+%/;
+const BAD = (why: string): CreateRead => ({ bad: why, heads: [], bases: [] });
+
+/** `gh pr create|new <args>`: every word is a known flag or a value of one. -F is --body-file. */
+function cliCreateRead(args: string, pwsh: boolean): CreateRead {
+  const words = pairedWords(args, pwsh);
+  if (words === null) return BAD('an unpaired quote');
+  const heads: string[] = [];
+  const bases: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!w.startsWith('-') || w === '-') return BAD(`a word gh pr create does not take (${w})`);
+    if (/^-[A-Za-z]{2,}/.test(w)) {
+      const c = clusterOf(w, words[i + 1], CREATE_SHORT_BOOL, CREATE_SHORT_VALUE);
+      if (c === null) return BAD(`a flag this gate does not know (${w})`);
+      // -dH x and -dHx name a head (-B a base) as the long flag would.
+      if (c.letter === 'H') heads.push(c.value!);
+      if (c.letter === 'B') bases.push(c.value!);
+      i += c.used;
+      continue;
+    }
+    const eq = w.startsWith('--') ? w.indexOf('=') : -1;
+    const name = eq > 0 ? w.slice(0, eq) : w;
+    if (CREATE_BOOL.has(name) && eq < 0) continue;
+    if (!CREATE_VALUE.has(name)) return BAD(`a flag this gate does not know (${name})`);
+    const value = eq > 0 ? w.slice(eq + 1) : words[++i];
+    if (value === undefined) return BAD(`${name} with no value`);
+    if (name === '--head' || name === '-H') heads.push(value);
+    if (name === '--base' || name === '-B') bases.push(value);
   }
-  return null;
+  return headAndBase(heads, bases);
+}
+
+/** A head or base value that is empty or not literal is bad; else every distinct value. An empty base (--base "") counts as none, as before. */
+function headAndBase(heads: string[], bases: string[]): CreateRead {
+  if (heads.some((v) => v === '' || NOT_LITERAL_RE.test(v))) return BAD('a head value that is empty or not a literal');
+  const named = bases.filter((b) => b !== '');
+  if (named.some((v) => NOT_LITERAL_RE.test(v))) return BAD('a base value that is not a literal');
+  return { bad: null, heads: [...new Set(heads)], bases: [...new Set(named)] };
+}
+
+/** `gh api .../pulls <args>`: fields only from the known keys; an unknown word, --input, a head or base from a file (=@) or head_repo is bad. */
+function apiCreateRead(rest: string, pwsh: boolean): CreateRead {
+  const words = pairedWords(rest, pwsh);
+  if (words === null) return BAD('an unpaired quote');
+  const heads: string[] = [];
+  const bases: string[] = [];
+  let endpoint = false;
+  for (let i = 0; i < words.length; i++) {
+    const r = apiWord(words[i], words[i + 1], endpoint);
+    if ('bad' in r) return BAD(r.bad);
+    if (r.used === -1) { endpoint = true; continue; }
+    i += r.used;
+    if (r.field === null) continue;
+    const eq = r.field.indexOf('=');
+    const key = eq > 0 ? r.field.slice(0, eq) : r.field;
+    if (!API_CREATE_KEYS.has(key)) return BAD(`a field this gate does not know (${key})`);
+    const value = eq > 0 ? r.field.slice(eq + 1) : '';
+    if ((key === 'head' || key === 'base') && value.startsWith('@')) return BAD(`a ${key} read from a file (${key}=@...)`);
+    if (key === 'head') heads.push(value);
+    if (key === 'base') bases.push(value);
+  }
+  return headAndBase(heads, bases);
 }
 
 /**
- * The head branch a PR-create command names (`-F head=`, `--head`, `-H`), without an `owner:` prefix; else the checked-out branch.
- * `text` is the create's own command (shapesOf cuts it at the next break outside quotes), so a later command's -H or a quoted `--head` in a
- * title is not read. `mtext` is the same text with its quoted strings blanked.
+ * The head and base a create names, from the raw tail of its command (rawTail: up to the next ; | newline or && outside quotes, so a
+ * head after 2>&1 is in it). The reader is the one of the EARLIER gh call: a quoted title that names gh pr new does not make an api create
+ * a CLI one. A create that only the quotes-deleted view shows, or a text the allowlist refuses (unmodelled), is bad. gh's
+ * {owner}/{repo}/{branch} placeholders are allowed, as in the merge read.
  */
-function namedHead(text: string, mtext: string): string | null {
-  return unquotedFlagValue(HEAD_FIELD_RE, text, mtext)
-    ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+function createRead(text: string, pwsh = false): CreateRead {
+  const cli = CLI_CREATE_RE.exec(text);
+  const api = API_CMD_RE.exec(text);
+  const isCli = cli !== null && (api === null || cli.index < api.index);
+  const m = isCli ? cli : api;
+  if (m === null) return BAD('the create can only be read with its quotes deleted');
+  if (!GH_PREFIX_OK.test(text.slice(0, m.index))) return BAD('the gh call is run by another program (a wrapper such as bash -c, pwsh -Command or cmd /c), which reads the words again');
+  const rest = text.slice(m.index + m[0].length);
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return BAD(CREATE_CHAR_WHY);
+  return isCli ? cliCreateRead(rest, pwsh) : apiCreateRead(rest, pwsh);
 }
-/** PR 566 round 2 (a): every head value the create names (REST head= fields and, for gh pr create, --head / -H), outside quoted prose. */
-function namedHeads(text: string, mtext: string): string[] {
-  const create = PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text));
-  return [...unquotedFlagValues(HEAD_FIELD_RE, text, mtext), ...(create ? unquotedFlagValues(HEAD_FLAG_RE, text, mtext) : [])]
-    .map((h) => h.replace(/["']+$/, '')).filter((h) => h !== '');
-}
-/** PR 566 review (CodeRabbit, decision-gate.ts:2085): the `owner:` prefix of the head a create names, or null. */
-function headOwner(text: string, mtext: string): string | null {
-  const m = /^([^:\s]+):/.exec(namedHead(text, mtext) ?? '');
-  return m ? m[1] : null;
-}
-function headBranch(text: string, mtext: string, deps: Deps, dir: string): string {
-  const named = namedHead(text, mtext);
-  if (named) return named.replace(/^[^:\s]+:/, '').replace(/["']+$/, '');
+const CREATE_CHAR_WHY = 'a character whose effect this gate cannot read the same way in bash and PowerShell (outside quotes only letters, digits, - _ . / = : and spaces; no $, backtick or backslash in double quotes; no redirect, &, non-ASCII or CR)';
+const createBadWhy = (dir: string, why: string): string =>
+  `the head or base of this create cannot be read as gh reads it in ${dir}: ${why}. Name the head and base once, in the plain form: gh pr create --head <branch> --base <base> ..., or gh api .../pulls -X POST -f head=<branch> -f base=<base> .... A body made by $(...) or a heredoc is refused: pass it as a file with --body-file <path> or -F body=@<path>, with forward slashes in the path. ${PLAIN_WAY_OUT}`;
+
+/** The branch of a named head (its `owner:` prefix dropped), else the checked-out branch. */
+function readBranch(named: string | null, deps: Deps, dir: string): string {
+  if (named) return named.replace(/^[^:\s]+:/, '');
   const r = deps.git(dir, ['branch', '--show-current']);
   if (r.status !== 0) throw new Error('git branch --show-current failed');
   return r.stdout.trim();
 }
-
-/**
- * Fix round 5 (F8): the base branch a covered create names: -f/-F base= of the REST form, or --base / -B of gh pr create, outside quoted
- * prose (unquotedFlagValue). Null when it names none (gh takes the default branch). A value with a variable stays as written: app-ask
- * cannot take it (the offer gives the plain line), and no tap key holds it, so the create stays denied.
- */
-const BASE_FIELD_RE = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:\s*|=)["']?base=["']?([^\s"']*)/g;
-const BASE_FLAG_RE = /(?:^|\s)(?:--base(?:\s+|=)|-B\s*)["']?([^\s"']*)/g;
-/** Every value of the flag that is not inside a quoted string (unquotedFlagValue reads the first only). */
-function unquotedFlagValues(re: RegExp, text: string, mtext: string): string[] {
-  return [...text.matchAll(re)].filter((m) => { const i = m.index! + m[0].search(/\S/); return mtext[i] === text[i]; }).map((m) => m[1]);
-}
-/**
- * The base, or `many` when the create names two or more different bases (gh takes the last --base and the last base= field; the gate
- * does not guess which, it denies: advisor review of fix round 5). An empty value counts as none.
- */
-function baseBranch(text: string, mtext: string): { base: string | null; many: string[] } {
-  const create = PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text));
-  const all = [...unquotedFlagValues(BASE_FIELD_RE, text, mtext), ...(create ? unquotedFlagValues(BASE_FLAG_RE, text, mtext) : [])].filter((b) => b !== '');
-  const distinct = [...new Set(all)];
-  return { base: distinct[0] ?? null, many: distinct.length > 1 ? distinct : [] };
-}
-
 // ---------- a plain commit before the push, in the same command ----------
 
 const COMMIT_GIT = gitCallRe('commit');
@@ -2034,6 +2364,96 @@ function steadyCommand(raw: string, shell: 'bash' | 'pwsh'): boolean {
   return pushesAlone(view, shell) || commitPrecedesPush(view, shell);
 }
 
+/**
+ * Round 3 C4: true when nothing the gate does not model can change HEAD, the branch or the tree before a push runs. Either the command
+ * is the modelled commit-then-push (commitPrecedesPush: the index rule), or every step before the LAST step that names a push is a cd,
+ * a read-only git call or a push, joined by ; && or ||. What follows the last push (a pipe, 2>&1, a git log) cannot change what it
+ * sends. A pipe or a lone & before it, a group, a redirect, another program or any other step before it: false.
+ */
+function stateModelled(raw: string, shell: 'bash' | 'pwsh'): boolean {
+  const r = pushPrefix(raw, shell);
+  return r !== null && !r.localPush && r.pipeOk && (r.plain || commitPrecedesPush(r.prefix, shell));
+}
+/**
+ * The text up to the end of the LAST step that names a push (null when no step names one), whether every step before it is a cd, popd,
+ * a read-only git call or a push joined by ; && or || (`plain`), and whether a push before it goes to a local path (`localPush`). What
+ * follows the last push (a pipe, 2>&1 | Select-Object) cannot change what it sends, so commitPrecedesPush reads the prefix: the
+ * commit-and-push flow with a trailing pipe is the index rule; so is commit && push && commit (the last commit is after the push).
+ * Accepted over-deny: a step after the push that names the word push (git push ... | Select-String push) becomes the last named step.
+ */
+function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plain: boolean; localPush: boolean; pipeOk: boolean } | null {
+  const view = fdBlank(joinContinuations(raw, shell));
+  const masked = maskQuoted(view, shell === 'pwsh' ? 'PowerShell' : 'Bash');
+  const steps: { kind: SegKind | 'popd'; named: boolean; op: string; end: number; raw: string }[] = [];
+  let from = 0;
+  let pending = '';
+  for (const [start, next] of [...[...masked.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index!, m.index! + m[0].length] as const), [view.length, view.length] as const]) {
+    const ms = masked.slice(from, start);
+    const rs = view.slice(from, start);
+    // A step names a push when its quotes-deleted text holds the word (git "push" is a push too).
+    if (ms.trim() !== '') { steps.push({ kind: /^\s*(?:popd|Pop-Location)\s*$/i.test(ms) ? 'popd' : segmentKind(ms, rs), named: /\bpush\b/i.test(squashQuotes(rs)), op: pending, end: start, raw: rs }); pending = ''; } else pending += ms;
+    pending += masked.slice(start, next);
+    from = next;
+  }
+  // Only the steps BEFORE the last step that names a push are C4's business. The words of that step itself (a wrapper, $B, git "push")
+  // are read by the push reader (its tap path and C3), not here.
+  const last = steps.map((s) => s.named).lastIndexOf(true);
+  if (last < 0) return null;
+  // popd and Pop-Location only move the folder: the position reader judges them (position-unknown), so they count as a cd here.
+  const plain = steps.slice(0, last).every((s) => s.kind === 'cd' || s.kind === 'read' || s.kind === 'push' || s.kind === 'popd')
+    && steps.slice(1, last + 1).every((s) => !s.op.includes('|') && !/(?<!&)&(?!&)/.test(s.op));
+  // Seat fix 6: a push step before the last one that pushes to a local path (git push . HEAD:x, git push ../r main) moves a local branch.
+  const tool = shell === 'pwsh' ? 'PowerShell' : 'Bash';
+  const localPush = steps.slice(0, last).some((s) => s.kind === 'push' && pushShapesOf(s.raw, tool).some((p) => LOCAL_REMOTE.test(p.push?.remote ?? '')));
+  // CLI :2394 (Dave 2026-11-15, "Fix now"): both sides of a pipe run at the same time, so a step the last push pipes into can move HEAD
+  // before the push reads it. Each step of that pipe chain must be a listed read-only program (first word of the masked step), with no
+  // file redirect (a null target is fine) and no command substitution or block in it.
+  let pipeOk = true;
+  // Seat read of f1e57235: a single & (background) puts the push in the background with every step joined to it by |, && or ||, so
+  // the next step runs at the same time. A trailing & with no step after it is the same (the push is not done when the next command
+  // runs). The first ; newline or single & after the last push decides: a & refuses; a ; or a newline ends the list, and the push is done.
+  if (backgroundAfter([...steps.slice(last + 1).map((s) => s.op), pending])) pipeOk = false;
+  for (let i = last + 1; i < steps.length && /(?<!\|)\|(?!\|)/.test(steps[i].op); i++) {
+    const ms = masked.slice(steps[i].end - steps[i].raw.length, steps[i].end);
+    if (!PIPE_CONSUMER.test(ms.trim().split(/\s+/)[0] ?? '') || /[$`@({<]/.test(ms.replace(/\$null\b/gi, '')) || fileRedirect(ms)) pipeOk = false;
+  }
+  return { prefix: view.slice(0, steps[last].end), plain, localPush, pipeOk };
+}
+/**
+ * CLI :2394, seat list (2026-11-15): the read-only programs a push may pipe its output into. Not Tee-Object, ForEach-Object, node or git;
+ * not sort (seat read of f1e57235: sort -o writes a file with no redirect; 0 of 588 measured pushes pipe into sort).
+ */
+const PIPE_CONSUMER = /^(?:Select-Object|Select-String|Out-String|Out-Null|tail|head|cut|grep|findstr|wc|more)$/i;
+/** True when, in the separators after the last push, a single & comes before the first ; or newline (the push runs in the background). */
+function backgroundAfter(ops: string[]): boolean {
+  for (const op of ops) {
+    const m = /(?<!&)&(?!&)|[;\r\n]/.exec(op);
+    if (m !== null) return m[0] === '&';
+  }
+  return false;
+}
+/** A > or >> to a file: a target other than $null, /dev/null or NUL. 2>&1 is blanked before (fdBlank). */
+const fileRedirect = (ms: string): boolean => [...ms.matchAll(/[0-9*]?>{1,2}\s*(\S*)/g)].some((m) => !/^(?:\$null|\/dev\/null|nul)$/i.test(m[1]));
+/** A push remote that is a path on this machine, not a remote name: ., .., ./x, ../x, /x, ~, a drive letter, file:, a backslash. */
+const LOCAL_REMOTE = /^(?:\.{1,2}(?:[\\/]|$)|[\\/~]|[A-Za-z]:|file:)|\\/i;
+const PUSH_STATE_WHY = 'a step before this push, or a step that runs at the same time (a pipe, a background &), can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.';
+const PUSH_CHECKOUT_WHY = 'the commit before this push runs in one checkout and the push in another (or the checkout of the push folder cannot be read), so the tree it sends cannot be judged. Commit and push in two commands, or push from the same folder: git commit ...; git push <remote> <branch>.';
+
+/**
+ * Round 3 C4 (R3-b): true when the push folder and every folder the chained commit can run in are one checkout: rev-parse
+ * --show-toplevel is equal (2 git calls for the common case). A failed call is false.
+ */
+function sameCheckout(deps: Deps, commitDirs: string[], dir: string): boolean {
+  const top = (d: string): string | null => {
+    const r = deps.git(d, ['rev-parse', '--path-format=absolute', '--show-toplevel']);
+    return r.status === 0 && r.stdout.trim() !== '' ? r.stdout.trim() : null;
+  };
+  // Seat fix 7: the bound is a count of git calls, not a clock: the push folder and at most 2 commit folders (3 calls). More: false.
+  if (commitDirs.length === 0 || commitDirs.length > 2) return false;
+  const push = top(dir);
+  return push !== null && commitDirs.every((c) => top(c) === push);
+}
+
 const ADD_GIT = gitCallRe('add');
 const ADD_SAFE = safeCallRe('add', PUSH_WRAPPERS, '', 'gi');
 /** segmentKind, plus 'stage' for a git add and 'commit' for any git commit (no group, redirect or expansion): the ship flow text only. */
@@ -2086,10 +2506,14 @@ const ALLOW: Decision = { action: 'allow' };
  */
 function judgeCreate(s: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const route = routeOf(deps, dir, cmd);
-  if (route === 'app') return judgeAppCreate(s.ftext ?? s.text!, s.fmtext ?? s.mtext!, deps, dir, cmd);
+  // Round 3 C1 (seat ruling A): both paths read the head from the raw tail, not from the &-cut text.
+  if (route === 'app') return judgeAppCreate(s.tail ?? s.ftext ?? s.text!, s.pwsh === true, deps, dir, cmd);
   if (route === 'foreign') return deny('repo-foreign', goThereWhy(cmd.repo!));
-  // G4: the CCv3 head is read from the base cut (any & ends it), as in base main 7a0e2f34.
-  const branch = headBranch(s.text!, s.mtext!, deps, dir);
+  // G4: the CCv3 head is read from the base cut (any & ends it), as in base main 7a0e2f34. Round 3 C1: from one known place, once.
+  const cr = createRead(s.tail ?? s.text!, s.pwsh === true);
+  if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
+  if (cr.heads.length > 1) return deny('head-unresolved', createBadWhy(dir, `two head values (${cr.heads.join(', ')}); gh takes the last`));
+  const branch = readBranch(cr.heads[0] ?? null, deps, dir);
   // An empty head (detached HEAD, or no head the text names) cannot be tied to a tap: deny, never allow.
   if (branch === '') return deny('head-unresolved', `the head branch of this create cannot be named in ${dir} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo on a branch.`);
   if (branch === 'main') return ALLOW;
@@ -2107,6 +2531,7 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decisio
   if (route === 'app') return judgeAppMerge(shape, deps, dir, cmd);
   if (route === 'foreign') return deny('repo-foreign', goThereWhy(cmd.repo!));
   if (shape.pr === null) return deny('no-pr', NO_PR_WHY);
+  if (shape.kind === 'merge' && shape.shaBad) return deny('merge-no-head', `PR #${shape.pr}: ${HEAD_UNREAD_WHY(shape.pr)} The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr}).`);
   const sha = shape.sha ?? undefined;
   // A raw merge with no sha= has no head to compare, so an old tap (a head that has since moved) could land a new head. land-pr.ps1 pins the head itself.
   if (shape.kind === 'merge' && !sha) return deny('merge-no-head', `${shape.pr ? `PR #${shape.pr}` : 'this PR'}: a raw merge command names no head, so Dave's tap cannot be tied to the head that would land. Run land-pr.ps1 -Pr ${shape.pr ?? '<n>'} (it pins the head), or pass the tapped head: gh api .../merge -f sha=<head>, gh pr merge --match-head-commit <head>. The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr ?? '<n>'}).`);
@@ -2116,8 +2541,8 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decisio
 }
 
 /** Create in a folder outside CCv3: when covered, "Open draft PR" for (key repo, branch, head). Unlike CCv3, a create from main needs a tap too. */
-function judgeAppCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  return homeRead(inApp(deps, () => appCreate(text, mtext, deps, dir, cmd)));
+function judgeAppCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo): Decision {
+  return homeRead(inApp(deps, () => appCreate(text, pwsh, deps, dir, cmd)));
 }
 /** Fix round 6 (item 1): a deny for a covered folder reads decisions.enforce from the home copy only. */
 const homeRead = (d: Decision): Decision => (d.action === 'deny' ? { ...d, homeFlags: true as const } : d);
@@ -2140,24 +2565,27 @@ function coveredCall(deps: Deps, dir: string, body: (place: Place) => Decision):
     throw new AppScopeError(err instanceof AppScopeError ? err.inner : err, false);
   }
 }
-function appCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  return coveredCall(deps, dir, (place) => appCreateIn(text, mtext, deps, dir, cmd, place));
+function appCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo): Decision {
+  return coveredCall(deps, dir, (place) => appCreateIn(text, pwsh, deps, dir, cmd, place));
 }
-function appCreateIn(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo, place: Place): Decision {
+function appCreateIn(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo, place: Place): Decision {
   // PR 566 round 2 (a): gh takes the LAST of a repeated --head, the gate reads the first. Two different heads: no tap can name the one
   // that opens, so the create is denied before any head is read.
-  const heads = [...new Set(namedHeads(text, mtext))];
+  // Round 3 C1: the head and base are read from one known place, once (createRead); a create the reader cannot read whole is denied.
+  const cr = createRead(text, pwsh);
+  if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
+  const heads = cr.heads;
   if (heads.length > 1) return deny('head-unresolved', appManyHeadsWhy(dir, heads));
   // PR 566 review: an `owner:` head opens the PR from that owner's fork. The tap is keyed on the local branch and its local head, so it
-  // cannot cover another fork's branch: denied before the prefix is dropped (headBranch keeps dropping it for the CCv3 path).
-  const owner = headOwner(text, mtext);
+  // cannot cover another fork's branch: denied before the prefix is dropped (readBranch keeps dropping it for the CCv3 path).
+  const owner = /^([^:\s]+):/.exec(heads[0] ?? '')?.[1] ?? null;
   if (owner !== null) return deny('head-foreign', appHeadOwnerWhy(dir, owner));
   // The head first: every repo deny below then offers open-pr with the branch this create names (--head), not the checked-out one.
-  const branch = headBranch(text, mtext, deps, dir);
+  const branch = readBranch(heads[0] ?? null, deps, dir);
   if (branch === '') return deny('head-unresolved', appHeadWhy(dir));
   // Fix round 5 (F8): the base the create names is in the key and in the offer (repo-identity.mjs openPrKey, the rule of app-ask).
-  const { base, many } = baseBranch(text, mtext);
-  if (many.length > 0) return deny('base-unresolved', appManyBasesWhy(dir, many));
+  if (cr.bases.length > 1) return deny('base-unresolved', appManyBasesWhy(dir, cr.bases));
+  const base = cr.bases[0] ?? null;
   const repo = appRepoFor(cmd, deps, dir, place, { sub: 'open-pr', branch, ...(base === null ? {} : { base }) });
   if ('action' in repo) return repo;
   const r = deps.git(dir, ['rev-parse', `${branch}^{commit}`]);
@@ -2178,6 +2606,7 @@ function appMergeIn(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo, place: 
   if (shape.pr === null) return deny('no-pr', appNoPrWhy(dir));
   const repo = appRepoFor(cmd, deps, dir, place, { sub: 'merge', pr: shape.pr });
   if ('action' in repo) return repo;
+  if (shape.shaBad) return deny('merge-no-head', `PR #${prose(shape.pr)} (folder ${at(dir)}): ${HEAD_UNREAD_WHY(shape.pr)}`);
   const sha = shape.sha ?? null;
   if (!sha) return deny('merge-no-head', appMergeNoHeadWhy(deps, dir, shape.pr, repo.offer));
   const key = decisionKey({ repo: repo.key, pr: shape.pr });
@@ -2265,7 +2694,13 @@ const pushOffer = (p: PushShape): Offer => ({ sub: 'push', remote: p.remote });
  */
 /** `text`, `shell`: the command, for the move targets of each judged folder (ruling B). */
 /** `flow`: the command is the Commit and push flow (shipFlow), so a not-alone push keeps the ship text. */
-interface PushCtx { subagent: boolean; chained: boolean; alone: boolean; flow: boolean; text: string; shell: 'bash' | 'pwsh' }
+/**
+ * `unregistered` (round 3 C3, item 10): every push folder of the call is resolved and under no registry root (pushFoldersUnregistered).
+ * Only there does a push that moves the repo keep the old warning (the R18-C3 narrowing, Dave D1); elsewhere it is a hard deny.
+ */
+interface PushCtx { subagent: boolean; chained: boolean; alone: boolean; flow: boolean; text: string; shell: 'bash' | 'pwsh'; modelled: boolean; commitDirs?: string[]; unregistered?: boolean }
+/** Round 3 C3 (item 10): a deny of a push whose checkout is unknown is hard, unless every push folder is a resolved unregistered one. */
+const hardUnlessUnregistered = (d: Deny, unregistered: boolean | undefined): Deny => (unregistered ? d : hardOf(d));
 function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', ctx: PushCtx): Decision[] {
   const { subagent, chained, alone } = ctx;
   const p = s.push!;
@@ -2274,7 +2709,8 @@ function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', 
   // covered (firstCovered: a CCv3 or uncovered chain folder adds nothing, so the base output stays). It comes first: a git throw in a
   // base folder then ends in the catch, which also reads the chain (pushUnderLiveRoot).
   const chainOnly = chainDirsOf(p, cwd, shell).filter((d) => !dirs.includes(d) && firstCovered(deps, [d]) !== null);
-  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow));
+  const c4: PushCtx = { ...ctx, commitDirs: dirsAfter(cwd, p.cds, shell, p.loose, null) };
+  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow, c4));
   const lost = dirs.find(isUnexpanded);
   if (lost !== undefined) return [unexpandedDeny(deps, [cwd, ...dirs], lost, 'push', 'app-push', softPush(p, subagent))];
   const fixedByDir = p.dir !== null && resolveDir('/a', p.dir, shell) === resolveDir('/b', p.dir, shell);
@@ -2286,7 +2722,7 @@ function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', 
     const app = appPositionAt(deps, all, 'app-push', pushOffer(p));
     if (app.some((d) => d.action === 'deny')) return app;
   }
-  return [...fromChain, ...dirs.map((d) => judgePush(s, deps, d, ctx))];
+  return [...fromChain, ...dirs.map((d) => judgePush(s, deps, d, c4))];
 }
 
 /** A remote name or URL: the upstream (origin, parcadei), the fork (fork, the CCv3 repo URL) or neither. */
@@ -2327,10 +2763,10 @@ function intentDeny(p: PushShape, subagent: boolean, fallback: Deny): Deny {
  */
 const SCAN_MAX_FILES = 2000;
 const SCAN_MAX_BYTES = 1_500_000;
-function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string, chained: boolean): Deny | null {
+function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string, chained: boolean, alone: boolean): Deny | null {
   if (!deps.holdoutIds || !deps.answerKeyHits) return null;
   try {
-    return scanHoldoutRead(p, deps, dir, branch, chained);
+    return scanHoldoutRead(p, deps, dir, branch, chained, alone);
   } catch {
     // Any throw in the scan path (a git timeout, a spawn error) is a hard deny: the catch path of handle() only warns in scope push.
     return hardOf(deny('holdout-scan-unavailable', `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, 'push'));
@@ -2359,11 +2795,34 @@ function chainedAnswerKeyPaths(deps: Deps, dir: string): 'none' | 'hit' | 'unrea
   return deps.answerKeyHits!([...all]).length > 0 ? 'hit' : 'none';
 }
 
-function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, chained: boolean): Deny | null {
-  const isRe = branch.startsWith('re/');
+/** Round 3 C3 (item 15): a ref name without refs/heads/. */
+const headName = (ref: string): string => ref.replace(/^refs\/heads\//, '');
+/**
+ * Round 3 C3 (item 15): the push sends a re/ branch when the destination OR the source is re/. A source of HEAD (or @) is the checked-out
+ * branch: one more git call, only for that form. A failed read of it throws (the scan's catch: a hard deny).
+ */
+function sendsRe(p: PushShape, deps: Deps, dir: string, branch: string): boolean {
+  if (headName(branch).startsWith('re/')) return true;
+  // The push reader gives src null for HEAD (HEAD:dst, or a bare push whose branch is already the current one).
+  // A bare push (no branch) already has the current branch as `branch`: no second git call.
+  if (p.src === null && p.branch === null) return false;
+  const src = headName(p.src ?? 'HEAD');
+  if (src.startsWith('re/')) return true;
+  // Seat fix 4: HEAD or @ alone, or followed by ~, ^ or @ (HEAD~0, @^0, HEAD@{0}) names a commit of the checked-out branch.
+  return /^(?:HEAD|@)(?:$|[~^@])/.test(src) && currentBranch(deps, dir).startsWith('re/');
+}
+const RE_NOT_ALONE_WHY = 'the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.';
+
+function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, chainedCommit: boolean, alone: boolean): Deny | null {
+  const isRe = sendsRe(p, deps, dir, branch);
+  // `alone` is false when the command holds anything but cd, read-only git and pushes (a commit -a, an amend, a merge, a redirect):
+  // such a command can change the branch before the push, so it counts as chained.
+  const chained = chainedCommit || !alone;
   const stop = (pattern: string, why: string): Deny => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, 'push'));
   // A push chained after a commit is scanned at the head BEFORE that commit: its content is not on the branch yet. Fail closed for a re/ branch.
-  if (isRe && chained) return stop('holdout-scan-unavailable', 'the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.');
+  if (isRe && chainedCommit) return stop('holdout-scan-unavailable', 'the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.');
+  // Round 3 C3 (builder A, seat Q4 option b): the same hard deny, with the real cause and its way out. No scan of a prefix (seat ruling).
+  if (isRe && chained) return stop('holdout-scan-unavailable', RE_NOT_ALONE_WHY);
   // Item 4 (seat YES): a chained or not-alone push of a branch that is NOT re/ is scanned at the old head too, so its change can add or edit an
   // answer-key file the scan below never sees (`commit -am`, `git add <new file>`). Read the union of the paths and fail closed.
   if (!isRe && chained) {
@@ -2418,9 +2877,10 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
     const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell, deps.home)) ?? coveredAmong(deps, [dir]);
     if (app !== null) return deny('push-target-unresolved', appPushUnresolvedWhy(app, what), 'app-push');
     // The target is unknown (CCv3 or a folder nobody covers): the intent decides before the folder (card prflow-push-blocks).
-    return intentDeny(p, subagent, d('push-target-unresolved', pushUnresolvedWhy(what)));
+    // Round 3 C3 (item 10): the fallback is hard (a re/ push would go out unscanned), except in a resolved unregistered folder.
+    return intentDeny(p, subagent, hardUnlessUnregistered(d('push-target-unresolved', pushUnresolvedWhy(what)), ctx.unregistered));
   }
-  if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow);
+  if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow, ctx);
   // --repo names the push target, so the remote this gate reads is not where the push goes: a hard deny, before any remote is read.
   if (p.repoOpt) return hardOf(subagent ? d('subagent', SUBAGENT_WHY) : d('push-target-unresolved', PUSH_REPO_OPT_WHY));
   let remote = p.remote;
@@ -2442,6 +2902,8 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
   if (subagent) return hardOf(d('subagent', SUBAGENT_WHY));
   if (p.wideOpt || (p.unsafeOpt && !p.force)) return hardOf(d('push-unsafe', PUSH_UNSAFE_WHY));
   if (outsideHeads(p)) return hardOf(d('push-target-unresolved', PUSH_REFSPEC_WHY));
+  // Round 3 C4 (item 16): a step the gate does not model can move HEAD or the branch first; the head and tree read below would be old.
+  if (!ctx.modelled) return hardOf(d('push-state-unknown', PUSH_STATE_WHY));
   const branch = p.branch ?? currentBranch(deps, dir);
   if (p.force && (branch === 'main' || branch === '')) return hardOf(d('push-unsafe', PUSH_UNSAFE_WHY));
   // The holdout scan runs BEFORE the force return: a force push of a re/ branch must not skip it (the guard's yes would send it out unscanned).
@@ -2449,7 +2911,7 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
   if (branch !== '') {
     // `alone` is false when the command holds anything but cd, read-only git and pushes (a commit -a, an amend, a merge, a redirect):
     // such a command can change the branch before the push, so for a re/ branch it counts as chained.
-    const scanned = scanHoldout(p, deps, dir, branch, chained || !alone);
+    const scanned = scanHoldout(p, deps, dir, branch, chained, alone);
     if (scanned !== null) return scanned;
   }
   if (p.force) return d('push-unsafe', PUSH_UNSAFE_WHY);
@@ -2460,7 +2922,7 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
     tree: (what) => `cannot read the tree of ${what} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`,
     ship: () => pushWhy(branch),
   };
-  return shipTap({ p, deps, dir, chained, alone, key: decisionKey({ branch }), scope: 'push', texts });
+  return shipTap({ p, deps, dir, chained, alone, key: decisionKey({ branch }), scope: 'push', texts, commitDirs: ctx.commitDirs });
 }
 
 function currentBranch(deps: Deps, dir: string): string {
@@ -2475,15 +2937,17 @@ interface ShipTexts { notRef: (ref: string) => string; tree: (what: string) => s
  * stored) equals the commit of the pushed ref. "Commit and push" keeps the tree rule: its chained commit moves the head after the tap.
  * The CCv3 call never sets it, so the CCv3 shipTap and its git calls are unchanged (G4).
  */
-interface ShipCheck { p: PushShape; deps: Deps; dir: string; chained: boolean; alone: boolean; key: string; scope: Scope; texts: ShipTexts; pushOnlyHead?: true }
+interface ShipCheck { p: PushShape; deps: Deps; dir: string; chained: boolean; alone: boolean; key: string; scope: Scope; texts: ShipTexts; pushOnlyHead?: true; commitDirs?: string[] }
 
 /** The ship tap of a push for `key`, bound to the tree being pushed (judgePush). Shared by CCv3 and the app folders; only the key, scope and texts differ. */
-function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead }: ShipCheck): Decision {
+function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead, commitDirs }: ShipCheck): Decision {
   const ref = p.src ?? 'HEAD';
   if (ref.startsWith('-')) return deny('push-target-unresolved', texts.notRef(ref), scope);
+  // Round 3 C4 (R3-b): after a chained commit, a push with its own -C reads the index only when it is proven the same checkout.
+  if (chained && p.dir !== null && !sameCheckout(deps, commitDirs ?? [], dir)) return deny('push-tree-unresolved', PUSH_CHECKOUT_WHY, scope);
   // A plain commit earlier in the same command moves HEAD to the staged tree before this push runs: read the index. The commit lands on the
   // checked-out branch in this directory, so the push must send HEAD or that branch, with no -C of its own. Anything else keeps the HEAD rule.
-  const viaIndex = chained && p.dir === null && (p.src === null || deps.git(dir, ['branch', '--show-current']).stdout.trim() === p.src);
+  const viaIndex = chained && (p.src === null || deps.git(dir, ['branch', '--show-current']).stdout.trim() === p.src);
   const r = viaIndex ? deps.git(dir, ['write-tree']) : deps.git(dir, ['rev-parse', `${ref}^{tree}`]);
   if (r.status !== 0) return deny('push-tree-unresolved', texts.tree(viaIndex ? 'the index (git write-tree)' : ref), scope);
   const tree = r.stdout.trim();
@@ -2503,11 +2967,11 @@ function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead
 }
 
 /** A push in a folder outside CCv3: judged only when covered. A git throw from here on is judged with scope app-push (AppScopeError). */
-function judgeAppPushAt(shape: Shape, deps: Deps, dir: string, subagent: boolean, chained: boolean, alone: boolean, flow: boolean): Decision {
+function judgeAppPushAt(shape: Shape, deps: Deps, dir: string, subagent: boolean, chained: boolean, alone: boolean, flow: boolean, ctx?: PushCtx): Decision {
   const place = appPlace(deps, dir);
   if (!place.covered) return passOf(place, dir, 'app-push');
   try {
-    return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow));
+    return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow, ctx));
   } catch (err) {
     throw new AppScopeError(err);
   }
@@ -2637,7 +3101,7 @@ function configKind(key: string, raw: string, remote: string, p: PushShape): Pus
  * push that surely leaves every default branch of the target alone (pushRisk null) passes with no tree read and no tap. Every deny
  * before it stays. The offer names --remote, --branch and --src (F3). A source @ is the current branch for the index rule (viaIndex).
  */
-function judgeAppPush(shape: Shape, deps: Deps, dir: string, place: Place, subagent: boolean, chained: boolean, alone: boolean, flow: boolean): Decision {
+function judgeAppPush(shape: Shape, deps: Deps, dir: string, place: Place, subagent: boolean, chained: boolean, alone: boolean, flow: boolean, ctx?: PushCtx): Decision {
   const p = shape.push!;
   const d = (pattern: string, why: string): Deny => deny(pattern, why, 'app-push');
   if (subagent) return d('subagent', appSubagentWhy(dir));
@@ -2674,7 +3138,10 @@ function judgeAppPush(shape: Shape, deps: Deps, dir: string, place: Place, subag
   };
   // git reads a source @ as HEAD: a commit chained before `git push up @` moves the current branch, so the index rule applies (item 5).
   const q: PushShape = p.src === '@' ? { ...p, src: null } : p;
-  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey({ repo: k.key, branch: k.branch }), scope: 'app-push', texts, pushOnlyHead: true });
+  // Round 3 C4 (Dave 2026-11-15, "Strict here, soft in apps"): a step the gate does not model can change the tree first. No tap clears it,
+  // but it is a tap-path deny, so decisions.enforceAppPush false still softens it (Dave 11-13, R6-V3: never a hard deny in an app folder).
+  if (ctx !== undefined && !ctx.modelled) return { ...d('push-state-unknown', `${PUSH_STATE_WHY} (folder ${at(dir)})`), tapPath: true as const };
+  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey({ repo: k.key, branch: k.branch }), scope: 'app-push', texts, pushOnlyHead: true, commitDirs: ctx?.commitDirs });
   // Dave 11-13: this is the tap path, the only app-push deny that decisions.enforceAppPush false softens. Every deny above stays hard.
   return r.action === 'deny' ? { ...r, tapPath: true as const } : r;
 }
@@ -2693,13 +3160,14 @@ function movesRepo(text: string): boolean {
 }
 
 /** Every deny of a command. All shapes are judged (no early return), so each deny keeps its scope and decide() applies the flag of that scope. */
-function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] {
+// Item 18 (round 3): `denies` is the caller's sink. Each deny goes in as it is found, so a later throw does not lose it (handle() reads it).
+function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: Deny[] = []): Deny[] {
   const cmd = readCommand(input);
-  if (cmd.kind !== 'command' || cmd.text === '') return [];
+  if (cmd.kind !== 'command' || cmd.text === '') return denies;
   const cwd = input.cwd || process.cwd();
   // Reviewer-2 item 4: the store write denies first, and the shapes are judged on (a force push beside it is not lost). The raw text:
   // a heredoc body is how a store write is spelled.
-  const denies: Deny[] = storeWriteCall(input, deps) ? [deny('store-write', STORE_WHY)] : [];
+  if (storeWriteCall(input, deps)) denies.push(deny('store-write', STORE_WHY));
   const shapes = shapesOf(cmd.text, cmd.tool);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);
@@ -2709,16 +3177,22 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] 
   const add = (d: Deny): void => { if (!denies.some((o) => o.pattern === d.pattern && o.reason === d.reason && o.scope === d.scope && o.tapPath === d.tapPath)) denies.push(d); };
   if (pushes.length > 0 || rest.length > 0) {
     const named = namedRepo(cmd.text, deps.env);
-    const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
+    // Round 3 C4: the chained commit is read up to the end of the last push (a pipe after the push does not undo the index rule).
+    const prefix = pushes.length > 0 ? pushPrefix(cmd.text, shell) : null;
+    const chained = pushes.length > 0 && (commitPrecedesPush(cmd.text, shell) || (prefix !== null && commitPrecedesPush(prefix.prefix, shell)));
     const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
+    const modelled = pushes.length === 0 || stateModelled(cmd.text, shell);
     const moved = movesRepo(cmd.text);
+    // Round 3 C3 (item 10): files only, no git; false when a push folder is CCv3, live, unplaceable or holds a variable.
+    // Read only for a push that moves the repo: a CCv3 push reads no registry (C5 of the app-repos tests).
+    const unregistered = (moved || pushes.some((s) => s.push!.moved)) && pushFoldersUnregistered(input, deps);
     for (const s of [...rest, ...pushes]) {
       // The land script reads no folder, so GIT_DIR and an alias never block it.
       if (moved && s.kind !== 'land') {
-        denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id)));
+        denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id), unregistered));
         continue;
       }
-      const found = s.kind === 'push' ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell }) : judgeAt(s, deps, cwd, shell, named);
+      const found = s.kind === 'push' ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell, modelled, unregistered }) : judgeAt(s, deps, cwd, shell, named);
       for (const d of found) {
         if (d.action === 'deny') add(d);
         else if (d.notice) notes.add(d.notice);
@@ -2729,6 +3203,7 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] 
   // denies (their texts are more precise) and also runs when the text has no shape. A CCv3 or uncovered folder gets nothing (G4).
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
+  for (const d of ghFlagFirstDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   return denies;
 }
 /**
@@ -2757,14 +3232,15 @@ function storeWriteCall(input: HookInput, deps: Deps): boolean {
  * or when the cwd or a known folder is covered (and none is CCv3), else today's. A target that is a CCv3 checkout or names no folder
  * keeps the base path and text.
  */
-function movedDeny(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', text: string, subagent = false): Deny {
+function movedDeny(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', text: string, subagent = false, unregistered = false): Deny {
   const dirs = s.kind === 'push' ? pushDirsOf(s.push!, cwd, shell) : dirsAfter(cwd, s.at!.cds, shell, s.at!.loose);
   // Ruling B names the push: only a push reads the move targets, each resolved from every folder of its path (a cd before it moves the
   // shell first). A create or merge keeps the cwd rule.
   const targets = s.kind === 'push' ? [...new Set([cwd, ...dirs].flatMap((d) => (isUnexpanded(d) ? [] : moveTargets(text, d, shell, deps.home))))] : [];
   const dir = firstCovered(deps, targets) ?? coveredAmong(deps, [cwd, ...dirs].filter((d) => !isUnexpanded(d)));
   if (s.kind === 'push') {
-    return dir === null ? intentDeny(s.push!, subagent, deny('push-target-unresolved', pushUnresolvedWhy(MOVED_WHY), 'push')) : deny('push-target-unresolved', MOVED_WHY + inAppFolder(dir), 'app-push');
+    // Round 3 C3 (item 10): hard, except in a resolved unregistered folder (R18-C3).
+    return dir === null ? intentDeny(s.push!, subagent, hardUnlessUnregistered(deny('push-target-unresolved', pushUnresolvedWhy(MOVED_WHY), 'push'), unregistered)) : deny('push-target-unresolved', MOVED_WHY + inAppFolder(dir), 'app-push');
   }
   return dir === null ? deny('repo-moved', MOVED_WHY) : { ...deny('repo-moved', MOVED_WHY + inAppFolder(dir)), homeFlags: true };
 }
@@ -2776,11 +3252,11 @@ function judgeWrite(input: HookInput, deps: Deps): Deny[] {
   return hit ? [deny('store-write', STORE_WHY)] : [];
 }
 
-/** The raw judgment, as if enforcing: every deny, each with its scope. May throw (git). */
-function judge(input: HookInput, deps: Deps, notes: Set<string>): Deny[] {
+/** The raw judgment, as if enforcing: every deny, each with its scope, put in `sink` as found. May throw (git): `sink` keeps what came before. */
+function judge(input: HookInput, deps: Deps, notes: Set<string>, sink: Deny[]): Deny[] {
   const tool = input.tool_name || input.tool || '';
-  if (WRITE_TOOLS.has(tool)) return judgeWrite(input, deps);
-  return COMMAND_TOOLS.has(tool) ? judgeCommand(input, deps, notes) : [];
+  if (WRITE_TOOLS.has(tool)) { sink.push(...judgeWrite(input, deps)); return sink; }
+  return COMMAND_TOOLS.has(tool) ? judgeCommand(input, deps, notes, sink) : sink;
 }
 
 /**
@@ -2789,11 +3265,11 @@ function judge(input: HookInput, deps: Deps, notes: Set<string>): Deny[] {
  * (hardAppDeny, Dave 11-13). Other denies become an allow with `warn`. With no deny, a missing registry named by LANE_REGISTRY_PATH,
  * seen in a folder outside CCv3, is an allow with `notice` (S5; a corrupt one is the registry-corrupt deny: seat review 1, item 4).
  */
-export function decide(input: HookInput, deps: Deps): Decision {
+export function decide(input: HookInput, deps: Deps, found: Deny[] = []): Decision {
   const notes = new Set<string>();
   const call = perCall(deps);
   CWDS.set(call, input.cwd || process.cwd());
-  const denies = judge(input, call, notes);
+  const denies = judge(input, call, notes, found);
   const notice = notes.size === 0 ? {} : { notice: [...notes][0] };
   if (denies.length === 0) return notes.size === 0 ? ALLOW : { action: 'allow', ...notice };
   const cwd = input.cwd || process.cwd();
@@ -2903,8 +3379,9 @@ export function handle(raw: string, deps: Deps): string {
   } catch {
     return unreadableInput();
   }
+  const found: Deny[] = [];
   try {
-    const d = decide(input, deps);
+    const d = decide(input, deps, found);
     // S5, item 7: the registry line rides on the warn or the deny text of the same call, as its last line; else it is the whole output.
     const tail = d.notice ? `\n${corruptLine(d.notice)}` : '';
     let shown = '{}';
@@ -2920,7 +3397,7 @@ export function handle(raw: string, deps: Deps): string {
     if (d.notice) logGuardDecision(HOOK, input, 'warn', `registry-missing ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
     return shown;
   } catch (err) {
-    return unjudgeable(input, deps, err);
+    return unjudgeable(input, deps, err, found);
   }
 }
 
@@ -2929,7 +3406,8 @@ export function handle(raw: string, deps: Deps): string {
  * A missing cwd (MissingCwdError) is a condition of the call, not a crash of the hook: it is logged as a deny or warn row
  * (reason cwd-missing), so it does not show as an error row in the harness doctor. Any other throw stays an error row.
  */
-function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
+function unjudgeable(input: HookInput, deps: Deps, thrown: unknown, found: Deny[] = []): string {
+  const cwd = input.cwd || process.cwd();
   // A throw in a covered folder after the path test carries scope app-push (AppScopeError); the cause inside it is judged as before.
   // Item 4: a throw before that (git remote -v of isCcv3Checkout) gets app-push too when a push runs in a folder under a live registry
   // root by the path test (no git), so the D2 a block holds. A folder under the continuous-claude root keeps its old scope.
@@ -2940,6 +3418,15 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
   const err = thrown instanceof AppScopeError ? thrown.inner : thrown;
   const gone = err instanceof MissingCwdError;
   if (!gone) { try { logGuardError(HOOK, err); } catch { /* the log never blocks */ } }
+  // Item 18 (round 3, Dave: "Land now, fix first in round 3"): a deny judged before the throw is not lost, and a push the throw kept from
+  // being judged still gets its git-free intent check (an origin push AFTER the throwing member). The first deny that decide() would return
+  // wins (a hard deny, or one whose flag is on). After the error log: a git crash behind a deny is still an error row for the doctor.
+  const prior = found.find((d) => { try { return hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags); } catch { return d.hard === true; } })
+    ?? catchIntentDeny(input);
+  if (prior) {
+    try { logGuardDecision(HOOK, input, 'deny', prior.pattern); } catch { /* the log never blocks */ }
+    return denyOut(prior.reason);
+  }
   const scopes = gatedScopesSafe(input, appPush);
   // Reviewer-2 item 4: a store write no longer returns before the shapes, so a throw there must not drop its scope.
   if (storeWriteCall(input, deps)) scopes.add('other');
@@ -2948,15 +3435,42 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
   const detail = app ? prose(raw) : raw;
   const hint = gone ? 'Run the command from a folder that exists.' : 'Run the command again. If it keeps failing, ask Dave.';
   const why = `could not verify Dave's tap (${detail}). ${hint}`;
-  const cwd = input.cwd || process.cwd();
   // Each gated scope is judged by its own flag. A mixed command denies when either flag is on. Dave 11-13: in a covered folder a call
   // that holds a hard deny (hardAppCall, no git) denies whatever decisions.enforceAppPush says.
-  const live = (app && hardAppCall(input)) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
+  // Item 18: a command that holds a push and threw outside a covered folder is a hard deny: the set git sends cannot be proven. In a covered
+  // folder the line below is unchanged (Dave 11-13: enforceAppPush false softens the tap path only; hardAppCall keeps the hard kinds).
+  // Seat 2026-11-14 20:00 (Dave's D1: the gate acts in live registered projects): a push whose folders are all resolved and all outside every
+  // registry root (CCv3 included) keeps the old result. A missing cwd, a CCv3 root, or a folder the path test cannot place denies.
+  const holdsPush = !app && scopes.has('push') && (gone || !pushFoldersUnregistered(input, deps));
+  const live = holdsPush || (app && hardAppCall(input)) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? 'deny' : 'warn', 'cwd-missing');
+  // Seat 2026-11-14 (read of 2276351b): a push denied only because its check threw says so, so a session does not read it as a policy block.
+  if (holdsPush && !(app && hardAppCall(input)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
+    const again = gone ? 'Run the push again from a folder that exists.' : 'Run the push again. If it fails again, ask Dave.';
+    return denyOut(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
+  }
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has('other') ? 'other' : scopes.has('app-push') ? 'app-push' : 'push');
 }
 
 const gatedScopesSafe = (input: HookInput, app = false): Set<Scope> => { try { return gatedScopes(input, app); } catch { return new Set(); } };
+
+/**
+ * Item 18, the catch: the git-free intent of every push shape of the call (intentDeny: a subagent push, a literal origin or parcadei
+ * remote, a force or unsafe form, a ref outside heads, --repo). A throw in one chain member can stop the judging before a later push is
+ * read, so this reads them all from the text alone. Returns the first hard deny, else null. A reader throw returns null (gatedScopes and
+ * hardAppCall decide then, as before).
+ */
+function catchIntentDeny(input: HookInput): Deny | null {
+  const shapes = catchShapes(input);
+  if (shapes === null) return null;
+  const none = deny('none', '', 'push');
+  for (const s of shapes) {
+    if (s.kind !== 'push' || s.push === undefined) continue;
+    const d = intentDeny(s.push, Boolean(input.agent_id), none);
+    if (d.hard === true) return d;
+  }
+  return null;
+}
 
 /**
  * Dave 11-13 ("Hard denies always deny"), the catch: a git throw in a covered folder leaves no deny to read, so the hard kinds the text
@@ -3009,6 +3523,64 @@ function pushUnderLiveRoot(input: HookInput, deps: Deps): boolean {
     return dirs.some((d) => underLiveRoot(d, reg, scope, { outsideCcv3: true }));
   } catch {
     return false;
+  }
+}
+
+/** The registry key of the CCv3 entry (tap-scope.ts CCV3_ENTRY, not exported there; that file is outside this card). */
+const CCV3_ENTRY_KEY = 'continuous-claude';
+
+/**
+ * Item 18, seat ruling 2026-11-14 20:00: true only when the push folders of the call (the cwd, its cd path, its -C chain, the move targets)
+ * are all known by the path test and none is under a registry root: not the CCv3 root, not a live entry. Files only, no git. False (so the
+ * catch denies) when there is no registry, a reader throw, a folder that is not absolute or holds a variable, or any CCv3 or live root.
+ */
+function pushFoldersUnregistered(input: HookInput, deps: Deps): boolean {
+  try {
+    const scope = deps.tapScope;
+    const cmd = readCommand(input);
+    if (!scope || cmd.kind !== 'command') return false;
+    const pushes = catchShapes(input)?.filter((s) => s.kind === 'push');
+    if (!pushes || pushes.length === 0) return false;
+    const reg = scope.registry();
+    if (reg.state !== 'ok') return false;
+    const cwd = input.cwd || process.cwd();
+    const shell = shellOf(input);
+    const raw = pushes.flatMap((s) => [cwd, ...pushDirsOf(s.push!, cwd, shell), ...chainDirsOf(s.push!, cwd, shell)]).concat(cwd);
+    if (raw.some((d) => isUnexpanded(d))) return false;
+    const paths = knownDirs(raw, deps.home);
+    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
+    if (dirs.length === 0 || dirs.some((d) => !isAbsolute(d) || isUnexpanded(d))) return false;
+    return !dirs.some((d) => underRegistryRoot(d, reg, scope));
+  } catch {
+    return false;
+  }
+}
+/** True when the path test puts `d` under a live registry root or the CCv3 root. Files only. */
+function underRegistryRoot(d: string, reg: ReturnType<TapScopeDeps['registry']>, scope: TapScopeDeps): boolean {
+  // The CCv3 root as a live entry, so the public path test finds it (underLiveRoot never counts the CCv3 key as live).
+  const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: 'active', tapGate: null })) };
+  return underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope);
+}
+/** Round 3 seat fix 2: `d` is an absolute folder with no variable under no registry root (the R18-C3 test for one folder). Never throws. */
+function folderUnregistered(deps: Deps, d: string): boolean {
+  try {
+    const scope = deps.tapScope;
+    if (!scope || !isAbsolute(d) || isUnexpanded(d)) return false;
+    const reg = scope.registry();
+    return reg.state === 'ok' && !underRegistryRoot(d, reg, scope);
+  } catch {
+    return false;
+  }
+}
+/**
+ * Round 3 seat fix 2: a CCv3 checkout, or a folder whose remotes git cannot list and that is not shown to be a resolved folder under
+ * no registry root (fail closed: a throw is no proof of "not CCv3"). Never throws.
+ */
+function ccv3OrUnplaced(deps: Deps, d: string): boolean {
+  try {
+    return isCcv3Checkout(deps, d);
+  } catch {
+    return !folderUnregistered(deps, d);
   }
 }
 

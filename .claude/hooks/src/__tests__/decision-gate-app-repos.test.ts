@@ -680,19 +680,36 @@ describe('C12 a git throw after coverage is known is unjudgeable with scope app-
     // folder under a live root (/x/.git) keeps the base path: scope push (warn).
     const strayThrows: World = { folders: { ...FOLDERS, '/work/stray': { ...FOLDERS['/work/stray'], throwOn: ['remote -v'] } } };
     expect(denyOf(bash(`GIT_DIR=/work/app-x/.git ${PUSH}`, '/work/stray'), strayThrows)?.scope).toBe('app-push');
-    expect(verdict(bash(`GIT_DIR=/x/.git ${PUSH}`, '/work/stray'), strayThrows)).toMatchObject({ action: 'allow', scope: 'push' });
+    // Round 3 C3 (item 10): only a RESOLVED unregistered move target keeps the warning. /x/.git became the drive-relative x: on Windows (not
+    // absolute, so hard) and /x on Linux; /work/none/.git is the same absolute folder under no root on both.
+    expect(verdict(bash(`GIT_DIR=/work/none/.git ${PUSH}`, '/work/stray'), strayThrows)).toMatchObject({ action: 'allow', scope: 'push' });
   });
   it('a throw in the rev-parse of coverage (after the path test) is scope app-push too', () => {
     const out = JSON.parse(handle(JSON.stringify(bash(PUSH)), deps(throwing(['rev-parse --path-format=absolute --show-toplevel --git-common-dir']))));
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
   });
-  it('the path test leaves the rest as before: an unregistered folder, and a live entry inside the continuous-claude root, keep scope push (warn)', () => {
-    for (const dir of ['/work/stray', '/work/ccroot/apps/agentic']) {
-      const w: World = { folders: { ...FOLDERS, [dir]: { ...FOLDERS[dir], throwOn: ['remote -v'] } } };
-      const out = JSON.parse(handle(JSON.stringify(bash(PUSH, dir)), deps(w)));
-      expect(out.hookSpecificOutput.permissionDecision, dir).toBeUndefined();
-      expect(out.hookSpecificOutput.additionalContext, dir).toContain('decisions.enforcePush');
-    }
+  it('the path test leaves the rest as before: an unregistered folder keeps scope push (warn); a live entry inside the continuous-claude root keeps scope push (round 3 item 18: a hard deny)', () => {
+    // Seat 2026-11-14 20:00 (Dave's D1): a resolved folder outside every registry root keeps the old result.
+    const stray: World = { folders: { ...FOLDERS, '/work/stray': { ...FOLDERS['/work/stray'], throwOn: ['remote -v'] } } };
+    const s = JSON.parse(handle(JSON.stringify(bash(PUSH, '/work/stray')), deps(stray)));
+    expect(s.hookSpecificOutput.permissionDecision).toBeUndefined();
+    expect(s.hookSpecificOutput.additionalContext).toContain('decisions.enforcePush');
+    // Round 3 item 18 (Dave: "Land now, fix first in round 3"): under the CCv3 root a push whose judging throws denies whatever
+    // decisions.enforcePush says. The scope stays push: the text is the base text, with no app-folder words.
+    const dir = '/work/ccroot/apps/agentic';
+    const w: World = { folders: { ...FOLDERS, [dir]: { ...FOLDERS[dir], throwOn: ['remote -v'] } } };
+    const out = JSON.parse(handle(JSON.stringify(bash(PUSH, dir)), deps(w)));
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain('push check could not run');
+    expect(out.hookSpecificOutput.permissionDecisionReason).not.toMatch(/app folder/i);
+  });
+
+  it('round 3 item 18 (seat 20:00): an unregistered push whose git throws, chained with an origin push, still denies (the hole stays closed)', () => {
+    // Breaks when: the unregistered-folder exemption also drops the intent check of the other push of the command.
+    const stray: World = { folders: { ...FOLDERS, '/work/stray': { ...FOLDERS['/work/stray'], throwOn: ['remote -v'] } } };
+    const o = JSON.parse(handle(JSON.stringify(bash(`${PUSH} && git push origin main`, '/work/stray')), deps(stray)));
+    expect(o.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(o.hookSpecificOutput.permissionDecisionReason).toMatch(/origin/i);
   });
 });
 
@@ -788,10 +805,14 @@ describe('C14 F1: a repo is read only where gh takes one, in the gh segment itse
     openX();
     expect(passes(bash(`${CREATE} ${BODY_URL}`))).toBe(true);
   });
-  it('a CCv3 create whose heredoc body names another repo is allowed with its tap', () => {
+  // Round 3 C1 (seat GO 07:3x, the first C1 cost): a body made by $(...) is refused even with the tap. A " inside $(...) does not close
+  // the outer quote in bash, so a head flag can hide in it; the deny names the way out (--body-file, -F body=@).
+  it('a CCv3 create whose heredoc body names another repo is head-unresolved even with its tap (round 3 C1 cost)', () => {
     tapCcv3();
     const cmd = `gh pr create --draft --head feat --title t --body "$(cat <<'EOT'\nsee https://github.com/other/lib/pull/3\nEOT\n)"`;
-    expect(passes(bash(cmd, '/work/cc'), ccv3)).toBe(true);
+    const r = denyOf(bash(cmd, '/work/cc'), ccv3);
+    expect(r?.pattern).toBe('head-unresolved');
+    expect(r!.reason).toMatch(/--body-file <path>/);
   });
   it('a CCv3 merge chained to a gh call that names another repo is judged with the CCv3 key', () => {
     tapCcv3();
@@ -822,7 +843,8 @@ describe('C14 F1: a repo is read only where gh takes one, in the gh segment itse
   it('a variable -R of another segment does not make a covered create unreadable; its own -R $R does', () => {
     openX();
     expect(passes(bash(`ls -R $D && ${CREATE}`))).toBe(true);
-    expect(denyOf(bash(`${CREATE} -R $R`))?.pattern).toBe('repo-unreadable');
+    // Round 3 C1: a $ outside quotes is refused by the create reader first (head-unresolved; still a deny, other text).
+    expect(denyOf(bash(`${CREATE} -R $R`))?.pattern).toBe('head-unresolved');
   });
 });
 
@@ -1334,12 +1356,15 @@ describe('C22 a covered push to a branch that is not a default branch of its tar
  * (HEAD or a branch the fake folder has a tree for). Only a row whose source is no ref (`noRef`: an expansion, a glob, a revision
  * suffix) may end at push-tree-unresolved. `tool`: the PowerShell tool reads @name as a splat.
  */
-function tapPath(cmd: string, w: World, o: { cwd?: string; noRef?: boolean; tool?: 'Bash' | 'PowerShell' } = {}): string {
+function tapPath(cmd: string, w: World, o: { cwd?: string; noRef?: boolean; tool?: 'Bash' | 'PowerShell'; state?: boolean } = {}): string {
   const cwd = o.cwd ?? '/work/app-x';
   const r = denyOf(o.tool === 'PowerShell' ? pwsh(cmd, cwd) : bash(cmd, cwd), w);
   expect(r, cmd).not.toBeNull();
   expect(r!.scope, cmd).toBe('app-push');
-  if (o.noRef) expect(['ship', 'push-tree-unresolved'], `${cmd}: ${r!.pattern}`).toContain(r!.pattern);
+  // Round 3 C4 (Dave 2026-11-15, "Strict here, soft in apps"): a step before the push that the gate does not model is push-state-unknown,
+  // still on the tap path (enforceAppPush false softens it: R6-V4b and C4-APP), and no tap clears it.
+  if (o.state) expect(r!.pattern, `${cmd}: ${r!.reason}`).toBe('push-state-unknown');
+  else if (o.noRef) expect(['ship', 'push-tree-unresolved'], `${cmd}: ${r!.pattern}`).toContain(r!.pattern);
   else expect(r!.pattern, `${cmd}: ${r!.reason}`).toBe('ship');
   return r!.reason;
 }
@@ -1489,10 +1514,12 @@ describe('C24 item 3 (G4): the CCv3 texts and the CCv3 head read are those of ba
     });
   }
   // Change that breaks it: the CCv3 head read takes the redirect-aware cut (base cut the create at the & of 2>&1 and read the current branch).
-  it('a CCv3 create with --head after 2>&1 reads the current branch, as base did', () => {
+  // Round 3 C1 (seat pre-read finding 1): this row pinned a hole. gh gets --head other, the base cut read feat (tapped). Any redirect
+  // in the create text is now refused, before any cut.
+  it('a CCv3 create with --head after 2>&1 is head-unresolved (round 3: the old allow was the pre-read hole)', () => {
     tap('open-pr', 'Rev4nchist/Continuous-Claude-v3@feat', HEAD, 'Open draft PR');
     const w = at('/work/cc', { ...CC, heads: { feat: HEAD, other: HEAD2 } });
-    expect(verdict(bash('gh pr create --draft --title t 2>&1 --head other', '/work/cc'), w)).toEqual({ action: 'allow' });
+    expect(denyOf(bash('gh pr create --draft --title t 2>&1 --head other', '/work/cc'), w)?.pattern).toBe('head-unresolved');
   });
   // Change that breaks it: read the repo of a CCv3 create from the base cut too (a -R after 2>&1 still goes to gh: R5c).
   it('a CCv3 create with -R other/lib after 2>&1 is still repo-foreign', () => {
@@ -1502,7 +1529,8 @@ describe('C24 item 3 (G4): the CCv3 texts and the CCv3 head read are those of ba
   // Change that breaks it: the app head read takes the base cut (the gh call gets --head main, the gate would read feat).
   it('the same create in a covered folder reads --head after 2>&1', () => {
     openX();
-    expect(denyOf(bash('gh pr create --draft --title t 2>&1 --head main'))?.pattern).toBe('open-pr');
+    // Round 3 C1: any redirect in the create text is refused (head-unresolved; still a deny).
+    expect(denyOf(bash('gh pr create --draft --title t 2>&1 --head main'))?.pattern).toBe('head-unresolved');
   });
 });
 
@@ -1512,11 +1540,12 @@ describe('C24 item 4 (F2): an unsafe value is left out when app-ask reads it its
   // Change that breaks it: give an unsafe value that is not what app-ask reads by itself a placeholder or a quoting rule again.
   for (const odd of ODD) {
     it(`a create of ${JSON.stringify(odd)} (not the current branch): no offer command, one plain line that says to tell Dave`, () => {
+      // Round 3 C1 (seat ruling A, point 5): a non-ASCII character or a comma outside quotes is refused by the create reader first.
+      // Still no offer command and no quoting rule.
       const r = denyOf(bash(`gh pr create --draft --title t --head ${odd}`), onFeat(odd));
-      expect(r?.pattern).toBe('open-pr');
+      expect(r?.pattern).toBe('head-unresolved');
       expect(commandsIn(r!.reason)).toEqual([]);
-      expect(r!.reason).toContain(`the branch ${odd} ${STOP}`);
-      expect(r!.reason).not.toMatch(/single quotes|fill in|<branch>/);
+      expect(r!.reason).not.toMatch(/single quotes|fill in/);
     });
   }
   it('an unsafe folder that is not the payload cwd: no offer command, the plain line', () => {
@@ -1646,9 +1675,13 @@ describe('C25 item 1: a covered push skips the tap only as git push [listed opti
   // Fix round 4 (fixer K): the GIT_CONFIG_* forms of the dropped CONFIG_TEXT row are here; strictCall (lead-in) and steadyCommand (an
   // assignment segment) keep them off the list.
   it('a lead-in before git, or HOME or GIT_CONFIG_* set earlier in the text, takes the tap path', () => {
-    for (const cmd of ['HOME=/tmp/h git push up topic', 'env A=1 git push up topic', 'echo main | xargs git push up topic', 'export HOME=/tmp/h; git push up topic', 'sudo git push up topic', 'export GIT_CONFIG_PARAMETERS=x; git push up topic']) tapPath(cmd, devX());
+    for (const cmd of ['HOME=/tmp/h git push up topic', 'env A=1 git push up topic', 'sudo git push up topic']) tapPath(cmd, devX());
+    // Round 3 C4 (Dave 2026-11-15): echo piped into xargs, and an export before the push (it changes the config git reads), are steps
+    // before the push the gate does not model: push-state-unknown, on the tap path.
+    for (const cmd of ['echo main | xargs git push up topic', 'export HOME=/tmp/h; git push up topic', 'export GIT_CONFIG_PARAMETERS=x; git push up topic']) tapPath(cmd, devX(), { state: true });
     tapPath('GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push', devX({ pushRef: 'up/topic' }));
-    tapPath('$env:GIT_CONFIG_COUNT=1; git push up topic', devX(), { tool: 'PowerShell' });
+    // Round 3 C4: a $env: setting before the push changes the config git reads: push-state-unknown, on the tap path.
+    tapPath('$env:GIT_CONFIG_COUNT=1; git push up topic', devX(), { tool: 'PowerShell', state: true });
   });
   // Change that breaks it: let a name that starts with tags/ (git reads refs/tags/<n>) be a branch.
   it('git push up tags/v1.0 takes the tap path', () => {
@@ -1712,9 +1745,9 @@ describe('C25 item 1: a covered push skips the tap only as git push [listed opti
   // Change that breaks it: judge a push without the rest of its command (an earlier segment switches the branch of a bare push, makes a
   // tag of the pushed name, or writes the push config the gate reads now). Fixer H, advisor review: only cd, read-only git, plain commits,
   // pushes and a 2>&1 may share the command with a no-tap push.
-  it('a push after a checkout, a tag or a config write in the same command takes the tap path', () => {
+  it('a push after a checkout, a tag or a config write in the same command takes the tap path, as push-state-unknown (round 3 C4)', () => {
     for (const cmd of ['git checkout main && git push', 'git switch main; git push', 'git tag topic && git push up topic', 'git config push.default matching && git push', 'git add -A && git push up topic']) {
-      tapPath(cmd, devX({ pushRef: 'up/topic' }));
+      tapPath(cmd, devX({ pushRef: 'up/topic' }), { state: true });
     }
   });
   it('cd, read-only git, a plain commit and 2>&1 keep a push on the list', () => {
@@ -1898,9 +1931,10 @@ describe('C26 item 2: a global option the push parser does not read gives a push
     expect(r?.scope).toBe('app-push');
   });
   // G4: the CCv3 path is unchanged. These rows pin base behaviour in a CCv3 checkout.
-  it('CCv3: git -p push --force fork feat and git push -oh fork feat pass; git push --mirr fork feat is a hard push-unsafe (card prflow-push-blocks)', () => {
-    expect(verdict(bash('git -p push --force fork feat', '/work/cc'), CC_PUSH)).toEqual({ action: 'allow' });
-    expect(verdict(bash('git push -oh fork feat', '/work/cc'), CC_PUSH)).toEqual({ action: 'allow' });
+  it('CCv3: git -p push --force fork feat and git push -oh fork feat are a hard push-target-unresolved (round 3 C3); git push --mirr fork feat is a hard push-unsafe (card prflow-push-blocks)', () => {
+    // Round 3 C3 (seat Q1, 2026-11-15): a push no shape reads in a CCv3 root is a hard deny, as in a covered folder (item 2 above). Both
+    // passed with no warn (the first one a force push, unread).
+    for (const c of ['git -p push --force fork feat', 'git push -oh fork feat']) expect(denyOf(bash(c, '/work/cc'), CC_PUSH)?.pattern, c).toBe('push-target-unresolved');
     // A prefixed unsafe option (--mirr, --del, --al) is a hard deny in CCv3 now: it used to reach the ship tap and keep the ship deny.
     expect(denyOf(bash('git push --mirr fork feat', '/work/cc'), CC_PUSH)?.pattern).toBe('push-unsafe');
   });
@@ -2084,9 +2118,10 @@ describe('R5 F8: the open-pr key holds the base branch', () => {
     expect(commandsIn(r!.reason)).toEqual([`${ASK} open-pr --remote up --branch feat --base dev --dir '/work/app-x' --json`]);
     expect(allowAfterAsk(bash('gh pr create --draft --head feat --base=dev --title t')).key).toBe('acme/app-x@feat:dev');
     expect(passes(bash('gh api repos/acme/app-x/pulls -X POST -f head=feat -f base=dev -f title=t'))).toBe(true);
+    // Round 3 C1: a $ outside quotes is refused by the create reader first (head-unresolved; still no offer command).
     const v = denyOf(bash('gh pr create --draft --head feat --base $B --title t'));
+    expect(v?.pattern).toBe('head-unresolved');
     expect(commandsIn(v!.reason)).toEqual([]);
-    expect(v!.reason).toContain(`the base $B ${STOP}`);
   });
   // Change that breaks it: read a --base inside quoted prose (a --body that names a base is text).
   // Change that breaks it: read only the first base (gh takes the last --base, and the last base= field), or miss --field=base=.
@@ -2137,10 +2172,12 @@ describe('R5 ruling A: the strict reading of the whole text, and what is no push
   });
   // Re-pinned by fix round 6 (verb rule): a force word counts only in a push segment, so test -f, [ -d ] or chmod +x beside a push is no
   // force: the push off the list takes the tap path and passes with its tap. Change that breaks it: read force words in the whole text.
-  it('test -f, [ -d ] or chmod +x beside a push off the list: the tap path, allowed with the tap', () => {
-    for (const cmd of ['test -f x && git push up topic', '[ -d dist ] && git push up topic', 'chmod +x s.sh && git push up topic']) tapPath(cmd, devX());
+  it('test -f, [ -d ] or chmod +x beside a push off the list: the tap path, and no tap clears it (round 3 C4)', () => {
+    // Round 3 C4 (Dave 2026-11-15, "Strict here, soft in apps"): a step before the push that the gate does not model is push-state-unknown,
+    // so the tap no longer clears these (test, [ and chmod are programs the gate does not model).
+    for (const cmd of ['test -f x && git push up topic', '[ -d dist ] && git push up topic', 'chmod +x s.sh && git push up topic']) tapPath(cmd, devX(), { state: true });
     shipX('Commit and push', 'topic');
-    for (const cmd of ['test -f x && git push up topic', '[ -d dist ] && git push up topic', 'chmod +x s.sh && git push up topic']) allowed(bash(cmd), devX());
+    for (const cmd of ['test -f x && git push up topic', '[ -d dist ] && git push up topic', 'chmod +x s.sh && git push up topic']) tapPath(cmd, devX(), { state: true });
     expect(passes(bash('git push up topic'), devX())).toBe(true);
   });
   // Change that breaks it: count a push in sh -c as read when another push of the text has a shape (a tap for topic licenses it).
@@ -2158,9 +2195,11 @@ describe('R5 ruling A: the strict reading of the whole text, and what is no push
     expect(denyOf(bash("sh -c 'cd /work/app-x && git push up topic'", '/work/stray'), devX())).toMatchObject(unresolved);
   });
   // G4: a CCv3 checkout and an uncovered folder get no raw deny.
-  it('CCv3 unchanged (G4): a push in sh -c, eval or a substitution in a CCv3 checkout passes as in base; an uncovered folder too', () => {
+  it('a push in sh -c, eval or a substitution: a hard deny in a CCv3 checkout (round 3 C3, seat Q1); an uncovered folder passes as in base', () => {
+    // Round 3 C3 (seat Q1, 2026-11-15): this row pinned the CCv3 allow (G4). A push no shape reads in a CCv3 root is now a hard
+    // push-target-unresolved: a re/ push in a payload skipped the holdout scan. Measured (file 45): 17 of 588 pushes in 7 days change, none a real push.
     for (const cmd of ["sh -c 'git push -f fork feat'", 'eval "git push fork feat"', 'echo "$(git push --force fork feat)"']) {
-      expect(verdict(bash(cmd, '/work/cc'), CC_PUSH), cmd).toEqual({ action: 'allow' });
+      expect(denyOf(bash(cmd, '/work/cc'), CC_PUSH)?.pattern, cmd).toBe('push-target-unresolved');
       expect(verdict(bash(cmd, '/work/stray'), CC_PUSH), cmd).toEqual({ action: 'allow' });
     }
   });
@@ -2249,5 +2288,45 @@ describe('Seat review 1, item 3: an app "Push only" tap is bound to the head app
   it('CCv3: a Push only tap with another head still clears a push of the same tree', () => {
     tap('ship', 'Rev4nchist/Continuous-Claude-v3@feat', 'b'.repeat(40), 'Push only', TREE);
     expect(passes(bash('git push fork feat', '/work/cc'), { config: JSON.stringify({ decisions: { enforce: true, enforcePush: true } }) })).toBe(true);
+  });
+});
+
+/**
+ * Round 3 C3 (F-1, seat ruling 2026-11-15 08:55): the folder of a raw payload push is read with its quotes, so a covered folder whose name
+ * holds a space is found (today the reader deletes the quotes and cuts the value at the space). A payload whose folder sits inside an
+ * unpaired quote cannot be read: push-target-unresolved in every folder, an uncovered one too (seat ACCEPTED cost, PR body item 1).
+ */
+describe('C3 (round 3) a raw payload push folder is read whole, or the push is denied', () => {
+  const SPACE: World = {
+    folders: { ...FOLDERS, '/work/My App': { remotes: gh('acme/space'), remoteHead: 'develop', trees: TREES_ALL } },
+    registry: JSON.stringify({ projects: [...REGISTRY.projects, { key: 'space-app', path: '/work/My App' }] }),
+  };
+  // Change that breaks it: rawDirs deletes every quote mark and splits on spaces (the folder is cut to /work/My, which nobody covers).
+  it('C3-F1: sh -c with a quoted -C folder that holds a space reaches the tap path of that covered folder', () => {
+    for (const c of [`sh -c 'git -C "/work/My App" push up main'`, `bash -c "cd '/work/My App' && git push up main"`]) {
+      const r = denyOf(bash(c, '/work/none'), SPACE);
+      expect(r, c).not.toBeNull();
+      expect(r!.scope, c).toBe('app-push');
+      expect(r!.pattern, c).toBe('push-target-unresolved');
+    }
+  });
+  // Change that breaks it: an unpaired quote in a payload push folder falls back to the cut words (an uncovered folder passes).
+  it('C3-F2: a payload push whose folder sits in an unpaired quote is push-target-unresolved, from an uncovered cwd too', () => {
+    const r = denyOf(bash(`sh -c 'git -C "/work/My App push up main'`, '/work/none'), SPACE);
+    expect(r?.pattern).toBe('push-target-unresolved');
+  });
+  // Cost: a payload push in an uncovered folder with a plain readable path keeps its result (today: allow).
+  it('C3-FC1 (cost): a payload push from an uncovered folder to an uncovered folder with a readable path is still allowed', () => {
+    expect(verdict(bash(`sh -c 'git -C "/work/none/x y" push up main'`, '/work/none'), SPACE)).toEqual({ action: 'allow' });
+  });
+});
+
+/** Round 3 C1-12, CLI :1681 (seat word 2026-11-15): a gh flag-first create or merge outside CCv3 keeps the registry-corrupt deny. */
+describe('C1-12 (round 3) a flag-first gh call with a corrupt registry', () => {
+  // Change that breaks it: ghFlagFirstDenies returns nothing for a folder that is not CCv3 when the registry does not parse.
+  it('gh -R <repo> pr create and pr merge in a folder outside CCv3 are registry-corrupt while the registry cannot be read', () => {
+    for (const c of ['gh -R acme/app-x pr create --fill', `gh -R acme/app-x pr merge 7 --squash --match-head-commit ${HEAD}`]) {
+      expect(denyOf(bash(c, '/work/stray'), { registry: '{bad' })?.pattern, c).toBe('registry-corrupt');
+    }
   });
 });
