@@ -210,3 +210,36 @@ test('a time-out ends the run with timedOut in the end row', async () => {
   assert.equal(rows(file)[1].timedOut, true);
   mkdirSync(dir, { recursive: true });
 });
+
+// Temp folder (card headless-run-temp-cleanup): runClaude made a headless-run-* cwd for each run and never removed it.
+test('a run with no cwd of its own removes its temp cwd after a successful run', async () => {
+  // Breaks when: the finally block that removes the temp cwd is removed, or it runs only on a failed run.
+  const dir = tmp();
+  const stub = stubClaude(dir);
+  const res = await runClaude({ prompt: 'p', timeoutMs: 20_000 }, { ledgerPath: path.join(dir, 'ledger.jsonl'), command: process.execPath, prefixArgs: [stub], skipConfigFiles: true });
+  assert.equal(res.ok, true);
+  const { cwd } = JSON.parse(res.result);
+  assert.match(path.basename(cwd), /^headless-run-/);
+  assert.equal(existsSync(cwd), false, `left behind: ${cwd}`);
+});
+
+test('a run with no cwd of its own removes its temp cwd when the spawn throws', async () => {
+  // Breaks when: the removal is not in a finally block (a throw skips it).
+  const dir = tmp();
+  let cwd = null;
+  const spawnFn = (_cmd, _args, opts) => { cwd = opts.cwd; throw new Error('spawn failed'); };
+  await runClaude({ prompt: 'p', timeoutMs: 5_000 }, { ledgerPath: path.join(dir, 'ledger.jsonl'), command: process.execPath, skipConfigFiles: true, spawnFn }).catch(() => {});
+  assert.ok(cwd, 'the spawn was called with a cwd');
+  assert.equal(existsSync(cwd), false, `left behind: ${cwd}`);
+});
+
+test('a cwd that the caller passed in is never removed', async () => {
+  // Breaks when: the removal ignores whether the caller gave deps.cwd (the seeder passes its own cwd and removes it itself).
+  const dir = tmp();
+  const own = mkdtempSync(path.join(dir, 'caller-cwd-'));
+  writeFileSync(path.join(own, 'keep.txt'), 'x');
+  const res = await runClaude({ prompt: 'p', timeoutMs: 20_000 }, { ledgerPath: path.join(dir, 'ledger.jsonl'), command: process.execPath, prefixArgs: [stubClaude(dir)], skipConfigFiles: true, cwd: own });
+  assert.equal(res.ok, true);
+  assert.equal(JSON.parse(res.result).cwd, own);
+  assert.equal(existsSync(path.join(own, 'keep.txt')), true);
+});

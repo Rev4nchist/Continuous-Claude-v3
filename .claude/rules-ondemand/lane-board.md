@@ -32,6 +32,7 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | L2.12 | Mark done only after the merge: `L done <id> --merged <sha>`. A lane with no pull request: `L done <id> --no-pr --evidence <path>`. The path is a file under `.claudedocs/e2e-<lane-id>/`. The command records the SHA of `main` at that time. Both forms meet a dependency. A plain `L done <id>` still works but meets no dependency, and on a met lane it writes nothing. With `--if-state <from>`, `L state <id> done` on a met lane writes nothing only when the lane is in `<from>` (read in code, not run). A wrong `done` opens the dependent lanes until the seat's recheck. | advice; deny for a `--merged` SHA that is not on `main` or an `--evidence` path outside the folder |
 | L2.13 | Hand off: before `/create_handoff`, note the lane with the next step. Write the lane id and your session id in the handoff. Keep the lane. On `/resume_handoff`: run `L mine`. If the lane is not listed, run `L adopt --from <old-session-uuid>`. Adopt works only when this session has the old session's chosen name (not an auto word) or names it as previous, and the old session ended or is quiet 5 minutes. It moves every open lane of the old session. If adopt is refused, do not claim: ask Dave. | advice |
 | L2.14 | Drop a lane you added by mistake: `L done <id> --note "DROPPED: <why>"`. | advice |
+| L2.15 | Every session that holds a card runs a keep-warm timer: `CronCreate` cron `11,41 7-21 * * *`, recurring. A tick with no message above it gets the reply "warm" and no tool. Start the timer at claim, adopt and resume: a session-only cron ends with the session. | advice |
 
 ### Ownership
 
@@ -102,6 +103,11 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | Id | Rule | Level |
 |---|---|---|
 | V7.1 | During a wave, no session changes verb behaviour, exit codes, banner text or `lane-board.md` without the agreement of the seat. | advice |
+| V7.2 | Every START word (PRE-PR START, HOOK BUILD START, HEAVY START) names the free memory the seat measured and an end time. A quiet window has an end time. Start a heavy run only after the START word for it. Send the END word when the run ends. | advice |
+| V7.3 | Memory floor: while a long loop runs, a second heavy run starts only with 6 GB free. Below 5 GB nothing heavy starts. The seat writes the measured number in the START word. | advice |
+| V7.4 | The land word needs the seat's own read of GitHub at that moment, with no pre-pr running. After the land the seat rechecks: merged on GitHub, the sha on `main`, the sync cursor, the live hook hashes and, for a guard, one live payload to the built hook. A "landed" claim to Dave cites the merged sha on `main`. Dave's land tap is single use. | advice |
+| V7.5 | On a pull request that changes a critical file, plan one review and no fix push after it. A fix over 30 lines, or in a critical file, costs a second paid review. Ask the seat before any fix push. A finding of the same class goes to the next card. | advice |
+| V7.6 | A guard that reads shell text fails closed on the raw text and grows no hand parser. When two review rounds each find a new deny-to-allow hole of the same kind in one guard, the fix loop stops and the finding goes to Dave. No fix before the seat's word. | advice |
 <!-- standard-rules:end -->
 
 ## Command path
