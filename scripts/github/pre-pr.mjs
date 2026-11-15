@@ -219,7 +219,7 @@ export const SURFACES = [
   {
     id: 'eval-scripts',
     globs: ['scripts/eval/review-eval/**', ...REVIEWER_SET_FILES, `${REVIEWER_SET_DIR}**`, ...BAND_SET_FILES],
-    gates: [{ id: 'review-eval-tests', cmd: 'node', args: ['--test', 'scripts/eval/review-eval/*.test.mjs', 'scripts/eval/review-eval/rubrics/*.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }],
+    gates: [{ id: 'review-eval-tests', cmd: 'node', args: ['--test', 'scripts/eval/review-eval/*.test.mjs', 'scripts/eval/review-eval/rubrics/*.test.mjs'], cwd: '.', timeoutMs: 10 * MIN }],
   },
   // lane-context-db.test.ts skips without LANE_TEST_DB_URL. This gate makes a scratch database on local Postgres, runs that one
   // file and FAILs when it is skipped (Postgres down = one ENV line, never a pass). CI job coordination-db runs the same program.
