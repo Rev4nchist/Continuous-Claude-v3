@@ -471,6 +471,9 @@ import { createHash } from "crypto";
 import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync4, statSync as statSync2 } from "fs";
 import { dirname as dirname3, isAbsolute, join as join5, posix, resolve as resolve2, win32 } from "path";
 
+// src/shared/gh-open-prefix.ts
+var GH_OPT_PREFIX = String.raw`(?:[^\S\r\n]+[\w.\/:=@-]+){1,6}?`;
+
 // src/pr-opened-review-loop.ts
 import { existsSync, mkdirSync as mkdirSync2, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join as join4 } from "path";
@@ -503,7 +506,7 @@ function routerFlag(cwd, readFile, home, section, key) {
 
 // src/pr-opened-review-loop.ts
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
-var PR_CREATE_RE = /\bgh\s+pr\s+create\b/i;
+var PR_CREATE_RE = new RegExp(String.raw`\bgh(?:\s+|${GH_OPT_PREFIX}[^\S\r\n]+)pr\s+create\b`, "i");
 var GH_API_RE = /\bgh\s+api\b/i;
 var PULLS_PATH_RE = /\/pulls\/?(?=[\s"'?]|$)/i;
 var POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;
@@ -1227,7 +1230,7 @@ function bodyFileOf(command) {
 }
 var OPEN_HEAD = /^\s*gh\s+(?:pr\s+create|api)(?=\s|$)/i;
 var bodyViewOf = (command, tool) => blankInertQuotesAround(command, tool, OPEN_HEAD);
-var OPEN_SEGMENT = /(?:^|[;&|\r\n(]\s*)gh(?:\.exe)?\s+(?:(?:\S+\s+){0,6}?pr\s+create(?=\s|$)|api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))/gi;
+var OPEN_SEGMENT = new RegExp(String.raw`(?:^|[;&|\r\n(\x60]\s*)gh(?:\.exe)?(?:\s+pr\s+create(?=\s|$)|${GH_OPT_PREFIX}[^\S\r\n]+pr\s+create(?=\s|$)|\s+api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))`, "gi");
 function openSegmentOf(text, shell) {
   const view = joinContinuations(joinContinuations(text, "pwsh"), "bash");
   const opens = [...view.matchAll(OPEN_SEGMENT)];

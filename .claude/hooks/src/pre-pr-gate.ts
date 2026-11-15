@@ -81,6 +81,7 @@ import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
+import { GH_OPT_PREFIX } from './shared/gh-open-prefix.js';
 import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
@@ -429,9 +430,9 @@ const OPEN_HEAD = /^\s*gh\s+(?:pr\s+create|api)(?=\s|$)/i;
 const bodyViewOf = (command: string, tool: string | undefined): string => blankInertQuotesAround(command, tool, OPEN_HEAD);
 
 // A gh api call counts as an open only when its path ends at /pulls (the create). A read such as .../pulls/201/comments is no open.
-// A global option before `pr` (`gh -R owner/repo pr create`, `gh --repo owner/repo pr create`) is up to six tokens: counted as an open too. The count only grows, so a
+// A global option before `pr` (`gh -R owner/repo pr create`, `gh --repo owner/repo pr create`) is up to six plain tokens (letters, digits and . / : = @ -) on one line: counted as an open too. Any other character in a token (`;`, `$(`, a quote) ends the match, as on main. The count only grows, so a
 // text with two such opens is denied (fail closed, no option parser): a second create must not ride on the tap or the stamp of the first (PR 576 follow-up, item 1).
-const OPEN_SEGMENT = /(?:^|[;&|\r\n(]\s*)gh(?:\.exe)?\s+(?:(?:\S+\s+){0,6}?pr\s+create(?=\s|$)|api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))/gi;
+const OPEN_SEGMENT = new RegExp(String.raw`(?:^|[;&|\r\n(\x60]\s*)gh(?:\.exe)?(?:\s+pr\s+create(?=\s|$)|${GH_OPT_PREFIX}[^\S\r\n]+pr\s+create(?=\s|$)|\s+api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))`, 'gi');
 
 /**
  * The text of the one open (gh pr create, gh api) from its head to the next segment break outside quotes. The body flags count only there:
