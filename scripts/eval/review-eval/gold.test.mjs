@@ -610,6 +610,16 @@ test('merged head: a control with round null and no merged-head provenance is re
   }
 });
 
+test('merged head: a marked control with round 0, -1 or "1" is refused with the positive-integer problem, and one with a positive integer round loads (breaks if the marker excepts any round value other than exactly null)', () => {
+  for (const [round, found] of [[0, 'a number'], [-1, 'a number'], ['1', 'a string']]) {
+    const err = ctlErr(ctlFile([headControl({ target: { pr: 9002, round, sha40: sha('d') } })]));
+    assert.ok(err instanceof GoldError, JSON.stringify(round));
+    assert.deepEqual(err.problems, [`clean-controls.json[0] target.round: ${found}, expected a positive integer`], JSON.stringify(round));
+  }
+  const withRound = headControl({ target: { pr: 9002, round: 3, sha40: sha('d') } });
+  assert.deepEqual(goldModule.loadCleanControls(ctlFile([withRound])), [withRound]);
+});
+
 test('rule 2: an unknown top-level key is refused, including the gold-row keys (breaks if the control key check is removed or allows source, suite, file)', () => {
   for (const key of ['kind', 'source', 'suite', 'file', 'severity', 'labels']) {
     const err = ctlErr(ctlFile([control({ [key]: 'x' })]));

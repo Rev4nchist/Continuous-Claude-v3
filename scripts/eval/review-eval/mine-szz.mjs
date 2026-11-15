@@ -4,7 +4,7 @@
 //   and maps them to the PR head. One gold candidate is one run of adjacent head lines. A pair that CodeRabbit flagged before
 //   the fix is dropped (seat Q1). A candidate is labelled by the judge (Opus, effort high) in batches, under a daily slot.
 //   The fix diff of a candidate is cut to the hunks near its blamed lines. Each judge prompt is scrubbed of PR references,
-//   masked of fix shas, then guarded: a prompt that still holds a PR number, a fix title or a fix sha is not sent.
+//   masked of fix shas (every commit of a fix PR), then guarded: a prompt that still holds a PR number, a fix title or a fix sha is not sent.
 // Counts only: the report holds no PR number, no file name and no line. A dry run writes nothing.
 // With --write the three gold files are built and checked in memory first, then written: one failed gate writes none.
 // Named limits: review-body CodeRabbit findings have no line and are not read; one model family labels every row.
@@ -123,15 +123,21 @@ export function scrubPrs(text) {
  * prompts. The report says so (NOTES.shortTitles).
  */
 const TITLE_MIN = 8;
-/** A maximal run of 7 to 40 hex characters. One pattern for the mask; the guard looks for a sha prefix anywhere. */
-const HEX_RUN = /(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/gi;
+/** A maximal run of 7 to 64 hex characters (SHA_RE allows a 64-hex sha). One pattern for the mask; the guard looks for a sha prefix anywhere. */
+const HEX_RUN = /(?<![0-9a-f])[0-9a-f]{7,64}(?![0-9a-f])/gi;
 const SHA_RE = /^[0-9a-f]{40,64}$/;
 
-/** The leak terms of a run: the fix shas (lower case) and the fix titles (scrubbed, trimmed, lower case, TITLE_MIN or longer). */
+/**
+ * The leak terms of a run: the fix shas (lower case) and the fix titles. A title is scrubbed and sha-masked the way the prompt is
+ * (the guard sees the masked prompt), then trimmed and lower-cased; one under TITLE_MIN is not guarded. A title that occurs in the
+ * fixed prompt text (templateText) would refuse every prompt: it is dropped and counted in inTemplate (a report note).
+ */
 export function leakTerms(shas, titles) {
-  const t = [...titles].map((x) => scrubPrs(x).trim().toLowerCase()).filter((x) => x.length >= TITLE_MIN);
-  const s = [...shas].map((x) => String(x ?? '').toLowerCase()).filter((x) => SHA_RE.test(x));
-  return { shas: [...new Set(s)], titles: [...new Set(t)] };
+  const s = [...new Set([...shas].map((x) => String(x ?? '').toLowerCase()).filter((x) => SHA_RE.test(x)))];
+  const t = [...new Set([...titles].map((x) => maskShas(scrubPrs(x), s).trim().toLowerCase()).filter((x) => x.length >= TITLE_MIN))];
+  const template = templateText();
+  const kept = t.filter((x) => !template.includes(x));
+  return { shas: s, titles: kept, inTemplate: t.length - kept.length };
 }
 
 /** Replaces each hex run that is a prefix of a fix sha with <sha>. A prefix inside a longer hex run stays: the guard refuses it. */
@@ -193,11 +199,23 @@ const INSTRUCTIONS = [
   'Answer with strict JSON only, one object per pair, no other text: [{"pair": 1, "verdict": "real|noise|unclear", "severity": "critical|major|minor"}]',
 ].join('\n');
 
+/** The fixed text of an item, apart from its data. templateText reads these, so a title that is template text is never a leak term. */
+const ITEM_TEXT = {
+  pair: '### Pair ',
+  defect: 'Defect described (no fix exists yet): ',
+  openBlamed: 'Blamed lines with context (> marks the blamed lines):',
+  fixDiff: 'Fix diff for the file:',
+  fixBlamed: 'Blamed lines as they stand in the reviewed head (> marks the blamed lines):',
+};
+
+/** The fixed text of every prompt, lower case: INSTRUCTIONS and the item strings, never a rendered item (a pair number is data). */
+const templateText = () => [INSTRUCTIONS, ...Object.values(ITEM_TEXT)].join('\n').toLowerCase();
+
 function itemText(item, i) {
-  const head = `### Pair ${i + 1}`;
-  if (item.kind === 'open-bug') return [head, `Defect described (no fix exists yet): ${item.note}`, 'Blamed lines with context (> marks the blamed lines):', item.blamed].join('\n');
+  const head = `${ITEM_TEXT.pair}${i + 1}`;
+  if (item.kind === 'open-bug') return [head, `${ITEM_TEXT.defect}${item.note}`, ITEM_TEXT.openBlamed, item.blamed].join('\n');
   // No fix subject: it is the PR title, a leak. The diff is cut to the hunks near the blamed lines (cutHunks).
-  return [head, 'Fix diff for the file:', item.hunk, 'Blamed lines as they stand in the reviewed head (> marks the blamed lines):', item.blamed].join('\n');
+  return [head, ITEM_TEXT.fixDiff, item.hunk, ITEM_TEXT.fixBlamed, item.blamed].join('\n');
 }
 
 /** The judge prompt for a batch of candidates. The whole text is scrubbed of PR references. */
@@ -434,7 +452,11 @@ function atomicWrite(file, text) {
 
 // ---------- the label cache ----------
 
-/** The cache key of a label. It holds JUDGE_VERSION, so a label of another judge version is asked again. */
+/**
+ * The cache key of a label. It holds JUDGE_VERSION, so a label of another judge version is asked again.
+ * The leak-term list is not part of the cache key on purpose: the guard decides whether a prompt may be sent; it does not change
+ * the label of a prompt that was sent. A changed term list re-checks prompts, it does not invalidate labels.
+ */
 export const labelKey = (c) => `${JUDGE_VERSION}:${c.fixSha}:${c.blamedMergeSha}:${c.file}:${c.line}`;
 
 function readLabelCache(stateDir) {
@@ -574,6 +596,9 @@ function titlesOf(env, sha, withBody) {
 
 /** One escape row to candidates. Returns { cands, dropped } or { reason, blame }. Throws a StepError on a failed git or gh step. */
 async function minePair(env, row) {
+  // Every commit of the fix PR is a leak term, not only fixSha and mergeSha. Read before mapPair: a pair with no candidate still
+  // gives its shas. mapPair reads the same set from the cache. A failed rev-list fails the pair.
+  for (const sha of revSet(env, `${row.mergeSha}^1..${row.mergeSha}^2`)) env.fixShas.add(sha);
   for (const t of [...titlesOf(env, row.fixSha, false), ...(row.mergeSha ? titlesOf(env, row.mergeSha, true) : [])]) env.titles.add(t);
   const mapped = mapPair(env, row);
   if (mapped.reason) return { reason: mapped.reason, blame: true };
@@ -615,7 +640,7 @@ async function mineOpenBug(env, spec, note) {
 /** Applies cached labels, then (with --label) asks the judge for the rest, in batches, under the daily slot. Returns the label stats. */
 async function labelStage(cands, ctx) {
   const cache = readLabelCache(ctx.stateDir);
-  for (const c of cands) { const hit = cache.get(labelKey(c)); if (hit) c.label = { verdict: hit.verdict, severity: hit.severity }; }
+  for (const c of cands) { const hit = cache.get(labelKey(c)); if (hit) applyHit(c, hit); }
   // The slot is counted again before each call, from the ledger and the clock of that moment: a call of another run and a new
   // Chicago day are seen. own: the calls of this run, ledger-shaped; a call takes the ledger id its judge returns, so it counts once.
   // Known limit: two runs can still race between this count and the ledger append in runJudge. Run one miner at a time.
@@ -627,16 +652,55 @@ async function labelStage(cands, ctx) {
   for (const batch of batchItems(cleanItems(cands.filter((c) => !c.label), ctx))) {
     const limit = limitReached(usedNow(), max, own.length, ctx.args.stopAfter);
     if (limit) { Object.assign(slot, limit); break; }
-    const call = { phase: 'start', purpose: 'eval-judge', sessionId: `${LEDGER_TAG}:this-run`, ts: new Date(ctx.now()).toISOString(), id: `this-run-${own.length + 1}` };
     // The second check: the whole built prompt. A refused prompt makes no call, so it takes no slot. Its pairs stay unlabelled.
-    const sent = await sendGuarded(judgePrompt(batch, ctx.leak), ctx.leak, (prompt) => { own.push(call); return ctx.judge(prompt); });
+    const sent = await sendGuarded(judgePrompt(batch, ctx.leak), ctx.leak, (prompt) => askJudge(ctx, own, prompt));
     if (sent.refused) { bump(ctx.stats.failed, 'prompt-guard'); continue; }
-    if (!keepAnswers(batch, sent.res, ctx, call)) bump(ctx.stats.failed, 'label');
-    // The shared headless cap (scripts/lib/headless.mjs) refused the run: no call was made, so it takes no slot. Stop: every next call is refused too.
-    if (sent.res?.reason === 'cap') { own.splice(own.indexOf(call), 1); Object.assign(slot, { stopped: true, stop: 'shared-cap', stopCount: sent.res.count ?? null }); break; }
+    if (!keepAnswers(batch, sent.res, ctx)) bump(ctx.stats.failed, 'label');
+    const stop = refusalStop(sent.res);
+    if (stop) { Object.assign(slot, stop); break; }
   }
   slot.used = usedNow();
   return slot;
+}
+
+/** A cache hit: its label, and the hunk counts of the prompt that was labelled. A row without integer counts keeps this run's cut. */
+function applyHit(c, hit) {
+  c.label = { verdict: hit.verdict, severity: hit.severity };
+  const count = (n) => Number.isSafeInteger(n) && n >= 0;
+  if (count(hit.hunksShown) && count(hit.hunksLeftOut)) Object.assign(c, { hunksShown: hit.hunksShown, hunksLeftOut: hit.hunksLeftOut });
+}
+
+/** A refusal of the shared headless layer: no ledger id, so no call was made. */
+const refusedRun = (res) => res?.ok === false && !res.id;
+
+/**
+ * One judge call under its own slot row in own. A refusal with no ledger id (cap, lock) made no call: its row goes, so it takes
+ * no slot. A null result (the judge threw) keeps its row: a call may have started (fail safe for the slot).
+ */
+async function callOnce(ctx, own, prompt) {
+  own.seq = (own.seq ?? 0) + 1; // a removed row never frees its id: ids stay unique within the run
+  const call = { phase: 'start', purpose: 'eval-judge', sessionId: `${LEDGER_TAG}:this-run`, ts: new Date(ctx.now()).toISOString(), id: `this-run-${own.seq}` };
+  own.push(call);
+  const res = await ctx.judge(prompt);
+  if (res?.id) call.id = res.id;
+  if (refusedRun(res)) { const at = own.indexOf(call); if (at >= 0) own.splice(at, 1); }
+  return res;
+}
+
+/** The judge call of a batch: a busy shared lock (reason lock) is tried once more; refusalStop stops the run after a second one. */
+async function askJudge(ctx, own, prompt) {
+  const res = await callOnce(ctx, own, prompt);
+  return refusedRun(res) && res.reason === 'lock' ? callOnce(ctx, own, prompt) : res;
+}
+
+/**
+ * The stop of a refused run, or null. The shared headless cap (scripts/lib/headless.mjs) refused it: every next call is refused
+ * too. The shared lock stayed busy after one retry: stop, rather than spin on it.
+ */
+function refusalStop(res) {
+  if (res?.reason === 'cap') return { stopped: true, stop: 'shared-cap', stopCount: res.count ?? null };
+  if (refusedRun(res) && res.reason === 'lock') return { stopped: true, stop: 'shared-lock', stopCount: null };
+  return null;
 }
 
 /** The limit that stops the next call, or null: the daily limit of the lane first, then the checkpoint of this run (--stop-after). */
@@ -650,6 +714,7 @@ function limitReached(used, max, ownCalls, stopAfter) {
 function stopText(lc) {
   if (lc.stop === 'checkpoint') return `stopped after ${lc.stopCount} calls (checkpoint)`;
   if (lc.stop === 'shared-cap') return `shared headless cap reached (${lc.stopCount ?? 'count unknown'})`;
+  if (lc.stop === 'shared-lock') return 'shared headless lock busy';
   return `daily limit reached (${lc.stopCount})`;
 }
 
@@ -666,8 +731,7 @@ function cleanItems(items, ctx) {
 }
 
 /** The answer of one judge call. Sets cand.label for each answered pair, and appends the cache rows when the flag allows. Returns false for a failed batch. */
-function keepAnswers(batch, res, ctx, call) {
-  if (res?.id) call.id = res.id;
+function keepAnswers(batch, res, ctx) {
   const answers = res?.ok ? parseAnswer(res.result, batch.length) : null;
   if (!answers) return false;
   batch.forEach((c, i) => { c.label = answers[i]; });
@@ -715,16 +779,51 @@ function pairEnv(args, deps, history) {
 
 /**
  * The escape rows to mine: since the date, primary rows first (only primary with --primary-only).
- * A row with an unreadable fix time cannot be placed: it counts as a failed pair ('fix-time'), never as a silent drop.
+ * A row whose fixSha or mergeSha is not 40 lower-case hex never reaches git (an argument) and would drop out of the leak terms:
+ * it counts as a failed pair ('fix-sha'). A row with an unreadable fix time cannot be placed: it counts as 'fix-time'. Never a silent drop.
  */
 function candidateRows(all, args, stats) {
   const since = Date.parse(args.since ?? SINCE_DEFAULT);
   const wanted = all.filter((r) => !args.primaryOnly || r.primary !== false);
-  const timed = wanted.filter((r) => Number.isFinite(Date.parse(r.fixMergedAt)));
-  stats.pairs += wanted.length - timed.length;
-  if (wanted.length > timed.length) bump(stats.failed, 'fix-time', wanted.length - timed.length);
+  const sha40 = (v) => typeof v === 'string' && SHA40_RE.test(v);
+  const shaOk = keepOrFail(wanted, (r) => sha40(r.fixSha) && sha40(r.mergeSha), 'fix-sha', stats);
+  const timed = keepOrFail(shaOk, (r) => Number.isFinite(Date.parse(r.fixMergedAt)), 'fix-time', stats);
   const rows = timed.filter((r) => Date.parse(r.fixMergedAt) >= since);
   return [...rows.filter((r) => r.primary !== false), ...rows.filter((r) => r.primary === false)];
+}
+
+/** The rows that pass ok. Each other row is a pair that failed for reason (stats.pairs and stats.failed). */
+function keepOrFail(rows, ok, reason, stats) {
+  const kept = rows.filter(ok);
+  const n = rows.length - kept.length;
+  stats.pairs += n;
+  if (n) bump(stats.failed, reason, n);
+  return kept;
+}
+
+/** The start of the control mining window (--control-since), in ms. The default is the group 2 start, so it cannot be forgotten. */
+const controlSinceOf = (args) => Date.parse(args.controlSince ?? GROUP2_FROM);
+
+/**
+ * The control pass: the escape rows from --control-since up to --since go through the mapping step only (mapPair, git, no gh),
+ * so a group 2 fix merged before --since still feeds the unmapped-fix control rule. No label, no candidate, no gold row, no leak
+ * term and no main count. A row that does not map, or whose map fails (fail closed), is an unmapped fix.
+ * Returns { from, pairs, unmappedFixes (count), failed, shas (the unmapped fix merge shas) }.
+ */
+function controlPass(allRows, args, env) {
+  const from = controlSinceOf(args);
+  const since = Date.parse(args.since ?? SINCE_DEFAULT);
+  const ok = (r) => typeof r.fixSha === 'string' && SHA40_RE.test(r.fixSha) && typeof r.mergeSha === 'string' && SHA40_RE.test(r.mergeSha);
+  // A bad sha or time is already a failed pair of the run (candidateRows): it is not counted twice and never reaches git.
+  const rows = allRows.filter((r) => ok(r) && Date.parse(r.fixMergedAt) >= from && Date.parse(r.fixMergedAt) < since);
+  const shas = new Set();
+  let failed = 0;
+  for (const row of rows) {
+    let mapped;
+    try { mapped = mapPair(env, row); } catch { failed += 1; mapped = { reason: 'failed' }; }
+    if (mapped.reason) shas.add(row.mergeSha);
+  }
+  return { from: isoDay(from), pairs: rows.length, unmappedFixes: shas.size, failed, shas };
 }
 
 /** Runs one mining job and keeps the stats. A StepError is a failed pair; any other error is 'other'. */
@@ -745,7 +844,7 @@ async function mineAll(rows, args, env, stats) {
   const seen = new Set();
   const cands = [];
   for (const row of rows) {
-    env.fixShas.add(row.fixSha).add(row.mergeSha); // every fix sha of the run is a leak term, also of a pair with no candidate
+    env.fixShas.add(row.fixSha).add(row.mergeSha); // every fix sha of the run is a leak term, also of a pair with no candidate (minePair adds the PR's other commits)
     cands.push(...await attempt(async () => ({ ...(await minePair(env, row)), fixMergeSha: row.mergeSha }), stats, seen));
   }
   for (const spec of args.openBugs) cands.push(...await attempt(() => mineOpenBug(env, spec, args.openBugNote), stats, seen));
@@ -779,16 +878,16 @@ function datasetPrsOf(args, deps) {
 
 /**
  * The clean controls of the run. blamed: the escape rows plus the gold targets of this run (an open bug is not in the escape rows),
- * so a PR that is a gold target here is never a clean control.
+ * so a PR that is a gold target here is never a clean control. controlFixShas: the unmapped fixes of the control pass.
  */
-async function controlsStage(args, deps, env, history, blamed, stats) {
+async function controlsStage(args, deps, env, history, blamed, stats, controlFixShas) {
   const fixChains = loadFixChains(args, deps);
   const perPr = Array.isArray(fixChains?.perPr) ? fixChains.perPr : [];
   const heads = headsOf(env.git, env.ref);
   const dataset = datasetPrsOf(args, deps);
   const merges = history.merges.map((m) => ({ pr: m.pr, mergeSha: m.mergeSha, mergedAt: m.mergedAt }));
   const failedFixShas = new Set(perPr.filter((p) => FAILURE_REASONS.includes(p.noTarget)).map((p) => p.mergeSha));
-  const noTargetFixShas = new Set([...perPr.filter((p) => p.fix === true && p.rows?.length === 0 && NO_TARGET_REASONS.includes(p.noTarget)).map((p) => p.mergeSha), ...stats.unmappedFixes]);
+  const noTargetFixShas = new Set([...perPr.filter((p) => p.fix === true && p.rows?.length === 0 && NO_TARGET_REASONS.includes(p.noTarget)).map((p) => p.mergeSha), ...stats.unmappedFixes, ...controlFixShas]);
   const filesOf = (sha) => { const r = env.git(['diff', '--name-only', `${sha}^1`, sha]); return r.status === 0 ? lines(r.stdout) : null; };
   // The merged head: the second parent of the first-parent merge, from git (headsOf). Never a sha that gh names.
   const headOf = (m) => heads.get(m.mergeSha) ?? null;
@@ -797,7 +896,27 @@ async function controlsStage(args, deps, env, history, blamed, stats) {
     return rank ? { round: rank, sha40: headOf(m) } : null;
   };
   const built = await buildControls({ datasetPrs: dataset.prs, merges, escapeRows: blamed, failedFixShas, noTargetFixShas, filesOf, roundOf, headOf, cfg: deps.cfg });
-  return { ...built, fixChainsGiven: Array.isArray(fixChains?.perPr), datasetOk: dataset.ok };
+  const fixChainsGiven = Array.isArray(fixChains?.perPr);
+  return { ...built, fixChainsGiven, datasetOk: dataset.ok, coverage: fixChainsGiven ? coverageProblem(perPr, merges) : null };
+}
+
+const isoDay = (t) => new Date(t).toISOString().slice(0, 10);
+
+/**
+ * The 30-day rules remove a group 2 PR for a fix merged after it, so the fix-chains input must hold every fix from the first
+ * group 2 merge on. The input starts at its earliest perPr merge (fix-chains lists every PR it walked, fix or not), dated through
+ * the history. It covers group 2 when it starts at or before the first history merge in the group 2 window. Returns the problem
+ * line or null. No group 2 merge in the history: nothing to cover.
+ */
+function coverageProblem(perPr, merges, from = GROUP2_FROM, until = GROUP2_UNTIL) {
+  const lo = Date.parse(from);
+  const hi = Date.parse(until);
+  const first = merges.map((m) => Date.parse(m.mergedAt)).filter((t) => t >= lo && t <= hi).reduce((a, t) => Math.min(a, t), Infinity);
+  if (first === Infinity) return null;
+  const at = new Map(merges.map((m) => [m.mergeSha, Date.parse(m.mergedAt)]));
+  const start = perPr.map((p) => at.get(p?.mergeSha)).filter(Number.isFinite).reduce((a, t) => Math.min(a, t), Infinity);
+  if (start <= first) return null;
+  return `fix-chains input does not cover group 2 (starts ${start === Infinity ? 'unknown' : isoDay(start)})`;
 }
 
 /** Notes for a run that could not apply a rule or keep a label. */
@@ -806,6 +925,7 @@ function extraNotes(args, controls) {
   if (args.label && !args.allowLabelCacheWrite) notes.push('labels of this run are not kept: --allow-label-cache-write is not set');
   if (!controls.fixChainsGiven) notes.push('partial-failure rule for the controls not applied: no --fix-chains-json');
   if (!controls.datasetOk) notes.push('dataset not read: group 1 of the controls is empty');
+  if (controls.coverage) notes.push(controls.coverage);
   return notes;
 }
 
@@ -817,26 +937,29 @@ function baselineStatus(stateDir, goldDir) {
   return readFileSync(dest).equals(src) ? 'identical' : 'differs';
 }
 
-/** Gold rows from the real candidates, in mined order. */
+/** Gold rows from the real candidates, in mined order. noRecord (report only, not in the row): the blamed PR has no engine record at all. */
 function goldRows(cands, records, deps) {
   const slack = deps.cfg.lineSlack ?? 3;
   return cands.filter((c) => c.label?.verdict === 'real').map((c) => {
     const suite = isRegression(records, { pr: c.blamedPr, file: c.file, line: c.line, endLine: c.endLine }, slack) ? 'regression' : 'capability';
-    return { cand: c, row: goldRowOf({ cand: c, label: c.label, suite, cfg: deps.cfg }) };
+    const noRecord = !records.some((r) => r?.pr === c.blamedPr);
+    return { cand: c, row: goldRowOf({ cand: c, label: c.label, suite, cfg: deps.cfg }), noRecord };
   });
 }
 
 function reportOf(stats, cands, rows, slot, controls, args) {
   const labelled = cands.filter((c) => c.label);
   const counted = cands.filter(isCounted);
-  const rowOf = (c) => rows.find((r) => r.cand === c).row;
+  const entryOf = (c) => rows.find((r) => r.cand === c);
+  const rowOf = (c) => entryOf(c).row;
   const v = tally(labelled, (c) => c.label.verdict);
   return {
     pairs: stats.pairs, crDropped: stats.crDropped, duplicates: stats.duplicates, unmapped: stats.unmapped, failed: stats.failed,
     labelled: labelled.length, unlabelled: cands.length - labelled.length,
     verdicts: { real: v.real ?? 0, noise: v.noise ?? 0, unclear: v.unclear ?? 0 },
     goldRows: rows.length, counted: counted.length,
-    countedBySplit: tally(counted, (c) => rowOf(c).split), countedBySuite: tally(counted, (c) => rowOf(c).suite), countedByBand: tally(counted, (c) => c.band),
+    countedBySplit: tally(counted, (c) => rowOf(c).split), countedBySuite: tally(counted, (c) => rowOf(c).suite),
+    capabilityNoRecord: counted.filter((c) => rowOf(c).suite === 'capability' && entryOf(c).noRecord).length, countedByBand: tally(counted, (c) => c.band),
     yield: tally(counted, (c) => c.cause),
     labelCalls: { used: slot.used, max: slot.max, ...(slot.stopped ? { stopped: true, stop: slot.stop, stopCount: slot.stopCount } : {}) },
     controls: controls.counts, baseline: null, primaryOnly: Boolean(args.primaryOnly), notes: [NOTES.oneFamily, NOTES.reviewBody, NOTES.oneRun, NOTES.goldLines, NOTES.diffCut, NOTES.shortTitles, NOTES.group2From, NOTES.mergedHead], written: [],
@@ -863,11 +986,13 @@ function textReport(rep) {
     `unmapped: ${kv(rep.unmapped)}`, `failed: ${kv(rep.failed)}`,
     `labelled: ${rep.labelled} (real ${rep.verdicts.real}, noise ${rep.verdicts.noise}, unclear ${rep.verdicts.unclear}), unlabelled: ${rep.unlabelled}`,
     `gold rows (real): ${rep.goldRows}`, `counted (real, major or critical): ${rep.counted}`,
-    `counted by split: ${kv(rep.countedBySplit)}`, `counted by suite: ${kv(rep.countedBySuite)}`, `counted by risk band: ${kv(rep.countedByBand)}`,
+    `counted by split: ${kv(rep.countedBySplit)}`, `counted by suite: ${kv(rep.countedBySuite)}`,
+    `capability, no engine record for the PR: ${rep.capabilityNoRecord}`, `counted by risk band: ${kv(rep.countedByBand)}`,
     `yield (counted, by cause): ${kv(rep.yield)}`,
     `label calls today: ${rep.labelCalls.used} of ${rep.labelCalls.max}`,
     ...(rep.labelCalls.stopped ? [`labelling stopped: ${stopText(rep.labelCalls)}`] : []),
     `controls: group1 ${c.group1}, group2 ${c.group2} (from 06-01), merged head without round ${c.noRoundHead}, no merged head ${c.noHead}, removed blamed ${c.removedBlamed}, removed near a failed fix ${c.removedFailedFix}, removed near an unmapped fix ${c.removedUnmappedFix}, round failed ${c.roundFailed}, not on main ${c.notOnMain}, total ${c.total}`,
+    `control mining from ${rep.controlMining.from}: pairs ${rep.controlMining.pairs}, unmapped fixes ${rep.controlMining.unmappedFixes}`,
     `baseline copy: ${rep.baseline}`,
     ...rep.notes,
   ];
@@ -890,6 +1015,9 @@ function gateProblems(ctx) {
   const problems = validateOutputs({ goldRows: ctx.rows.map((r) => r.row), controls: ctx.controls.controls });
   if (!ctx.args.allowPartial) problems.push(...partialProblems(ctx));
   if (!ctx.controls.fixChainsGiven) problems.push('fix-chains: --fix-chains-json (the fix-chains --json dry run) is needed to write the controls: the partial-failure rule has no source');
+  if (ctx.controls.coverage) problems.push(ctx.controls.coverage);
+  // A later window misses group 2 fixes before it: the unmapped-fix rule would keep a control near one of them.
+  if (controlSinceOf(ctx.args) > Date.parse(GROUP2_FROM)) problems.push(`control mining window starts after group 2 (${isoDay(controlSinceOf(ctx.args))})`);
   if (!ctx.controls.datasetOk) problems.push('dataset: cannot read the dataset file');
   if (ctx.controls.controls.length < CONTROLS_MIN) problems.push(`controls under ${CONTROLS_MIN}: ${ctx.controls.controls.length}`);
   return [...problems, ...baselineProblems(ctx.baselineBuf)];
@@ -921,16 +1049,20 @@ function writeStage(run, dirs, args, deps) {
 const USAGE = [
   'usage: node scripts/eval/review-eval/mine-szz.mjs [--since <iso>] [--state-dir <dir>] [--gold-dir <dir>] [--label] [--allow-label-cache-write] [--write]',
   '       [--open-bug <file>:<line> ... --open-bug-note <text>] [--primary-only] [--fix-chains-json <file>] [--dataset <file>] [--records-dir <dir>]',
-  '       [--repo owner/name] [--ref <ref>] [--report <file>] [--json] [--allow-partial] [--daily-calls <n>] [--stop-after <n>]',
+  '       [--repo owner/name] [--ref <ref>] [--report <file>] [--json] [--allow-partial] [--daily-calls <n>] [--stop-after <n>] [--control-since <iso>]',
   '  Without --write it is a dry run: it reads git, gh and the state dir and writes no file.',
+  '  --control-since <iso> (default: the group 2 start, 2026-06-01) maps the escape rows from that date up to --since only to feed the',
+  '  unmapped-fix control rule: no label, no candidate, no gold row. --write refuses a date after the group 2 start.',
   `  --label asks the judge (Opus, effort high) for labels, at most ${SZZ_DAILY_CALLS} calls a Chicago day, 10 pairs a call. It never runs without this flag.`,
   '  --daily-calls <n> sets the daily limit of this lane for the run (a positive integer). The shared headless cap of',
   '  scripts/lib/headless.mjs still applies: its refusal fails the batch and stops the run ("shared headless cap reached").',
+  '  A busy shared lock makes no call and takes no slot; the batch is tried once more, then the run stops ("shared headless lock busy").',
   '  --stop-after <n> stops labelling after n judge calls of this run (a checkpoint). The labels of those calls are kept.',
   '  The first limit reached stops the run; the report names it and its count.',
   '  --allow-label-cache-write keeps the labels in <state-dir>/szz-labels.jsonl. Without it a --label run keeps nothing.',
   '  The judge prompt shows gold line numbers by design. The fix diff is cut to the hunks near the blamed lines (lineSlack of config.json).',
-  '  The judge prompt holds no fix subject. Fix sha prefixes are masked. Each item is guarded alone before the batching: an item that',
+  '  The judge prompt holds no fix subject. Prefixes of every commit of a fix PR are masked, in the prompt and in the fix titles alike.',
+  '  A fix title that occurs in the prompt template is not guarded (the report counts them). Each item is guarded alone before the batching: an item that',
   '  still holds a PR number, a fix title or a fix sha is left out (failed prompt-guard) and stays unlabelled. The whole prompt is',
   `  guarded again before each call. Titles under ${TITLE_MIN} characters are not guarded (named limit).`,
   '  --write builds gold-a.json, clean-controls.json and escape-baseline.json in memory, checks them, then writes all three or none.',
@@ -938,11 +1070,14 @@ const USAGE = [
   '  --report may sit outside the repo, or in .claudedocs/ or .claude/cache/e2e/ of the repo; never in the gold dir or the state dir.',
   '  Run one miner at a time: two runs can race on the daily slot.',
   '  --fix-chains-json: the fix-chains.mjs --json dry run. It names the fix PRs that failed or had no target; --write needs it.',
+  '  It must cover group 2 of the controls (run it with --since 2026-06-01): --write refuses an input whose first PR merged after the',
+  '  first group 2 merge ("fix-chains input does not cover group 2"); a dry run prints the same line as a note.',
+  '  An escape row whose fixSha or mergeSha is not 40 lower-case hex is not mined (failed fix-sha).',
   '  --primary-only mines only primary escape rows (primary rows are always mined first).',
   '  The report holds counts only: no PR number, file name or line.',
 ].join('\n');
 
-const VALUE_FLAGS = { '--since': 'since', '--state-dir': 'stateDir', '--gold-dir': 'goldDir', '--report': 'report', '--dataset': 'dataset', '--fix-chains-json': 'fixChainsJson', '--open-bug-note': 'openBugNote', '--repo': 'repo', '--ref': 'ref', '--records-dir': 'recordsDir', '--daily-calls': 'dailyCalls', '--stop-after': 'stopAfter' };
+const VALUE_FLAGS = { '--since': 'since', '--state-dir': 'stateDir', '--gold-dir': 'goldDir', '--report': 'report', '--dataset': 'dataset', '--fix-chains-json': 'fixChainsJson', '--open-bug-note': 'openBugNote', '--repo': 'repo', '--ref': 'ref', '--records-dir': 'recordsDir', '--daily-calls': 'dailyCalls', '--stop-after': 'stopAfter', '--control-since': 'controlSince' };
 /** The value flags that take a positive integer. checkArgs turns each into a number. */
 const COUNT_FLAGS = { '--daily-calls': 'dailyCalls', '--stop-after': 'stopAfter' };
 const BOOL_FLAGS = { '--label': 'label', '--allow-label-cache-write': 'allowLabelCacheWrite', '--write': 'write', '--allow-partial': 'allowPartial', '--json': 'json', '--primary-only': 'primaryOnly', '--help': 'help', '-h': 'help' };
@@ -967,7 +1102,9 @@ function parseArgs(argv) {
 }
 
 function checkArgs(out) {
-  if (out.since !== undefined && !Number.isFinite(Date.parse(out.since))) return { error: `--since ${JSON.stringify(out.since)} is not a date` };
+  for (const [flag, key] of [['--since', 'since'], ['--control-since', 'controlSince']]) {
+    if (out[key] !== undefined && !Number.isFinite(Date.parse(out[key]))) return { error: `${flag} ${JSON.stringify(out[key])} is not a date` };
+  }
   if (out.openBugs.length && !out.openBugNote) return { error: '--open-bug needs --open-bug-note (the defect text of the card)' };
   if (out.ref?.startsWith('-')) return { error: `--ref ${JSON.stringify(out.ref)} is not a usable git ref` };
   for (const [flag, key] of Object.entries(COUNT_FLAGS)) {
@@ -1018,9 +1155,12 @@ async function mine(args, deps, dirs) {
   const slot = await labelStage(cands, ctx);
   const records = await (deps.readRecords ?? (() => readEngineRecords(args.recordsDir ?? path.join(os.homedir(), '.claude', 'state', 'local-review'))))();
   const rows = goldRows(cands, records, { cfg: deps.cfg });
-  const controls = await controlsStage(args, { ...deps }, env, history, [...allRows, ...env.openBugTargets], stats);
+  // After the labels: the control pass touches no candidate, label or leak term of this run.
+  const { shas: controlFixShas, ...controlMining } = controlPass(allRows, args, env);
+  const controls = await controlsStage(args, { ...deps }, env, history, [...allRows, ...env.openBugTargets], stats, controlFixShas);
   const report = reportOf(stats, cands, rows, slot, controls, args);
-  report.notes.push(...extraNotes(args, controls));
+  report.controlMining = controlMining;
+  report.notes.push(...extraNotes(args, controls), `fix titles that occur in the prompt template are not guarded: ${ctx.leak.inTemplate}`);
   return { cands, rows, controls, report };
 }
 

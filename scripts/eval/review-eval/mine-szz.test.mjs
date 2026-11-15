@@ -17,6 +17,8 @@
 //   S11 the split is not the one of config.json                             -> change goldRowOf
 //   S12 suite regression vs capability                                      -> change isRegression
 //   S12b the engine record reader takes a trace file or an engine run      -> drop a skip rule in readEngineRecords
+//   S12c a capability row with an engine record counts as "no record"      -> count every capability row, or drop the line
+//   S12d a no-record count takes rows with a record, or skips the PR key   -> invert the record check, or match the fix PR
 //   S13 controls: blamed, near a failed fix, near an unmapped fix, under 30 -> change buildControls or the bar
 //   S13c a no-round control is dropped, or kept with no head or a bad one  -> drop the merged-head branch, or skip the sha check
 //   S13e a failed round read counts as "no round", or reads a merged head  -> merge roundFailed into noRoundHead
@@ -34,7 +36,8 @@
 //   S21 the label cache is not reused, or written without the allow flag    -> change the cache read or write guard
 //   L01 the fix subject (the PR title) reaches the judge prompt             -> put the "Fix subject:" line back in itemText
 //   L02 a prompt with a PR number, a fix title or a fix sha is sent         -> drop a check in promptGuard, or call the judge first
-//   L02b a refused prompt takes a daily slot or labels its pairs            -> push the slot row before the guard, or keep the batch
+//   L02b a leaking item alone is sent, takes a slot or is labelled          -> drop the per-item guard (cleanItems)
+//   R3-m2 a batch prompt that leaks only when joined is sent or takes a slot -> drop the whole-prompt guard, or push the slot row first
 //   L02c one leaking item takes the clean items of its batch down with it   -> guard only the whole batch prompt (drop cleanItems)
 //   L03 a fix sha prefix in a diff line reaches the judge                   -> drop maskShas, or mask only full shas
 //   L04 the whole fix diff goes in each pair, so a big diff calls alone     -> keep f.hunk whole in runItem
@@ -46,6 +49,21 @@
 //   P02 --daily-calls is ignored, or a bad value runs                       -> drop the flag or loosen checkArgs
 //   P03 --stop-after is ignored, drops the labels it got, or misnames a stop -> change the label-stage checks
 //   P04 a shared-cap refusal is retried, hidden, or the cap is bypassed     -> keep calling after reason cap, or pass a cap to runJudge
+// Critic round 3 (R3-<finding>):
+//   R3-M1 a fix-chains input that starts after the first group 2 merge writes  -> drop the coverage gate or its dry-run note
+//   R3-M2 a fix title with a fix sha prefix escapes the masked-prompt guard    -> keep titles unmasked in leakTerms
+//   R3-m1 a lock refusal keeps its slot row, is not retried, or does not stop  -> keep the own row for a refusal with no id
+//   R3-m4 a title that is template text refuses every prompt, or is not counted -> drop the template filter or its note
+//   R3-m5 an escape row with a bad fixSha or mergeSha reaches git              -> drop the sha check in candidateRows
+//   R3-n1 a cache hit reports this run's hunk cut, not the labelled prompt's   -> keep the run counts on a cache hit
+//   R3-n2 a 64-hex fix sha in a diff line is not masked                        -> keep HEX_RUN at 7 to 40
+//   R3-n3 a non-tip commit of a fix PR reaches the judge unmasked              -> add only fixSha and mergeSha to the leak terms
+//   M10b the run's lineSlack does not reach the diff cut                       -> pass 0 or a fixed slack to cutHunks in runItem
+// Control mining (--control-since, seat ruling):
+//   C01 a June fix before --since does not feed the unmapped-fix rule          -> drop the control pass, or start it at --since
+//   C02 the control pass adds candidates, labels or leak terms                 -> mine the control rows through minePair or mineAll
+//   C03 a control window after the group 2 start writes                        -> drop the gate, or compare the wrong way
+//   C04 a bad --control-since runs                                             -> drop the date check of checkArgs
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -693,8 +711,12 @@ test('S21: the label cache is reused by a second run, and written only with the 
 // ---------- the three gold files ----------
 
 const DATASET = { prs: [101, 102, 103, 21, 999].map((pr) => ({ pr })), findings: [] };
-/** The fix-chains --json shape: perPr results. PR 171 is a partial-failure fix, PR 170 a fix with no target. */
+/**
+ * The fix-chains --json shape: perPr results, one for each PR it walked. PR 100 (the first merge, 08-01) is a PR with no fix,
+ * so the input covers group 2 (R3-M1). PR 171 is a partial-failure fix, PR 170 a fix with no target.
+ */
 const FIXES = (b) => ({ perPr: [
+  { pr: 100, mergeSha: b.prs[100].mergeSha, rows: [], noTarget: null, fix: false },
   { pr: 171, mergeSha: b.prs[171].mergeSha, rows: [], fix: true, noTarget: 'partial-failure', failed: true },
   { pr: 170, mergeSha: b.prs[170].mergeSha, rows: [], fix: true, noTarget: 'no-removed-lines' },
 ] });
@@ -1253,6 +1275,38 @@ test('R18b: the text report names the group 2 start and the merged-head count in
   assert.match(r.out, /a control with no CodeRabbit round uses its merged head \(Dave, 2026-11-14\)/);
 });
 
+/** Two blamed PRs (11: src/f.txt, 13: src/g.txt) and one fix PR 12 for both. Both rows are real and major, so both are counted. */
+async function noRecordRun(records) {
+  const b = buildRepo([
+    { n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('alpha', 'buggy', 'omega') } }] },
+    { n: 13, at: A_DAY, commits: [{ subject: 'feat: g', files: { 'src/g.txt': lines('one', 'bad', 'two') } }] },
+    { n: 12, at: B_DAY, commits: [{ subject: 'fix: both (#9001)', files: { 'src/f.txt': lines('alpha', 'fixed', 'omega'), 'src/g.txt': lines('one', 'good', 'two') } }] },
+  ]);
+  const reportFile = path.join(tmp('rep'), 'report.txt');
+  const rows = [escRow(b, { fixPr: 12, blamedPr: 11, primary: false }), escRow(b, { fixPr: 12, blamedPr: 13 })];
+  const r = await report(b, { rows, extra: ['--label', '--report', reportFile], deps: { judge: fakeJudge([REAL('major')]), readRecords: () => records } });
+  const text = readFileSync(reportFile, 'utf8').split('\n');
+  const at = text.findIndex((l) => l.startsWith('counted by suite: '));
+  return { ...r, text, at };
+}
+
+test('S12c: a counted capability row counts as "no engine record" only when its blamed PR has no record at all, in the JSON and the text line right after "counted by suite" (breaks if every capability row is counted, or the line is dropped or moved)', async () => {
+  const r = await noRecordRun([{ pr: 11, findings: [{ file: 'src/other.txt', startLine: 50 }] }]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.countedBySuite, { capability: 2 }, 'both rows are capability: the check is not vacuous');
+  assert.equal(r.json.capabilityNoRecord, 1);
+  assert.ok(r.at >= 0, r.text.join('\n'));
+  assert.equal(r.text[r.at + 1], 'capability, no engine record for the PR: 1');
+});
+
+test('S12d: a regression row is never in the no-record count (breaks if the count takes rows that have a record, or keys the record by another PR)', async () => {
+  const r = await noRecordRun([{ pr: 11, findings: [{ file: 'src/f.txt', startLine: 2, endLine: 2 }] }]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.countedBySuite, { regression: 1, capability: 1 }, 'one row of each suite: the check is not vacuous');
+  assert.equal(r.json.capabilityNoRecord, 1, 'only the capability row of the PR with no record');
+  assert.equal(r.text[r.at + 1], 'capability, no engine record for the PR: 1');
+});
+
 test('R19: a written file that is not byte-equal to its staged content rolls back all three files (breaks if the byte check runs after the old files are gone)', async () => {
   const corrupt = (from, to) => { renameSync(from, to); if (from.endsWith('.tmp') && path.basename(to) === 'escape-baseline.json') writeFileSync(to, 'corrupt'); };
   const s = writeSetup({ rename: corrupt });
@@ -1336,7 +1390,7 @@ test('L02: leakTerms keeps scrubbed fix titles and fix shas; promptGuard and sen
   assert.deepEqual(sent, { res: { ok: true, result: clean } });
 });
 
-test('L02b: a fix title in a diff line refuses the call end to end: no judge call, no slot taken, the batch fails as prompt-guard, the pair stays unlabelled (breaks if the guard is skipped or runs after the slot row)', async () => {
+test('L02b: a fix title in a diff line refuses the item end to end: the per-item guard leaves it out, no judge call, no slot taken, prompt-guard counts it, the pair stays unlabelled (breaks if the per-item guard is dropped)', async () => {
   const b = buildRepo([
     { n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('alpha', `log("${TITLE}")`, 'omega') } }] },
     { n: 12, at: B_DAY, commits: [{ subject: `${TITLE} (#9001)`, files: { 'src/f.txt': lines('alpha', 'fixed', 'omega') } }] },
@@ -1470,6 +1524,29 @@ test('L04b: the diff is cut by the blamed lines at the parent of the fix, not by
   assert.deepEqual([row.line, row.hunksShown, row.hunksLeftOut], [20, 1, 2]);
 });
 
+test('M10b: the lineSlack of the run reaches the diff cut end to end: a pure insertion 2 lines past the blamed line is shown with slack 2 and left out with slack 1 (breaks if runItem passes 0 or a fixed slack to cutHunks)', async () => {
+  const b = buildRepo([
+    { n: 10, at: '2026-10-09T10:00:00Z', commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines('l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7') } }] },
+    { n: 11, at: A_DAY, commits: [{ subject: 'feat: bad', files: { 'src/f.txt': lines('l1', 'l2', 'bad', 'l4', 'l5', 'l6', 'l7') } }] },
+    // The fix changes line 3 and inserts a line after line 5: a -5,0 hunk that holds no blamed line.
+    { n: 12, at: B_DAY, commits: [{ subject: 'fix: f (#9001)', files: { 'src/f.txt': lines('l1', 'l2', 'good', 'l4', 'l5', 'inserted', 'l6', 'l7') } }] },
+  ]);
+  const fixSha = b.prs[12].shas[0];
+  assert.match(sh(b.dir, ['diff', '--unified=0', `${fixSha}^`, fixSha]), /^@@ -5,0 /m, 'the second hunk is a pure insertion after line 5: the check is not vacuous');
+  for (const [slack, shown] of [[2, [2, 0]], [1, [1, 1]]]) {
+    const judge = fakeJudge([REAL()]);
+    const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label', '--allow-label-cache-write'], deps: { judge, cfg: { ...CFG, lineSlack: slack } } });
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual([r.json.pairs, r.json.labelled, Object.keys(r.json.failed).length], [1, 1, 0], JSON.stringify(r.json));
+    assert.equal(judge.prompts.length, 1);
+    const p = judge.prompts[0];
+    assert.equal(p.includes('+good'), true, p);
+    assert.equal(p.includes('+inserted'), shown[0] === 2, `slack ${slack}: ${p}`);
+    const [row] = cacheRows(r.state);
+    assert.deepEqual([row.line, row.hunksShown, row.hunksLeftOut], [3, ...shown], `slack ${slack}`);
+  }
+});
+
 test('L05: JUDGE_VERSION is szz-label-v2 and labelKey carries it, so a szz-label-v1 cache row is asked again (breaks if the version is not bumped)', async () => {
   assert.equal(szz.JUDGE_VERSION, 'szz-label-v2');
   const c = { fixSha: 'f'.repeat(40), blamedMergeSha: 'c'.repeat(40), file: 'a.txt', line: 3 };
@@ -1496,4 +1573,234 @@ test('L06: the usage and the text report say the judge prompt shows gold line nu
     assert.match(out, /the fix diff is cut to the hunks near the blamed lines/i);
     assert.match(out, /titles under 8 characters are not guarded/i);
   }
+});
+
+// ---------- critic round 3: one test per finding (R3-<finding>) ----------
+
+test('R3-M1: --write refuses a fix-chains input that starts after the first group 2 merge and names its start; a dry run prints the same line as a note; an input from 06-01 writes (breaks if the coverage gate or its note is dropped)', async () => {
+  // A PR merged 2026-06-15 is the first group 2 merge. FIXES starts at PR 100 (2026-08-01): it misses fixes that could remove PR 90.
+  const b = buildRepo([{ n: 90, at: '2026-06-15T12:00:00Z', commits: [{ subject: 'feat: june', files: { 'june/90.txt': 'j\n' } }] }, ...bigSteps()]);
+  const LINE = 'fix-chains input does not cover group 2 (starts 2026-08-01)';
+  const late = FIXES(b);
+  const bad = await report(b, { rows: bigRows(b), extra: writeArgs, deps: { judge: fakeJudge([REAL()]), fixChains: late, dataset: DATASET } });
+  assert.equal(bad.code, 1, bad.err);
+  assert.ok(bad.err.split('\n').includes(`mine-szz: ${LINE}`), bad.err);
+  assert.equal(existsSync(bad.gold), false, 'nothing written');
+  const dry = setup(b, { rows: bigRows(b), deps: { fixChains: late, dataset: DATASET } });
+  const text = await run(dry.argv.filter((a) => a !== '--json'), dry.deps);
+  assert.equal(text.code, 0, text.err);
+  assert.ok(textOf(text.out).includes(LINE), text.out);
+  // A walk with --since 2026-06-01: its first PR is PR 90, the first group 2 merge.
+  const from0601 = { perPr: [{ pr: 90, mergeSha: b.prs[90].mergeSha, rows: [], noTarget: null, fix: false }, ...late.perPr] };
+  const ok = await report(b, { rows: bigRows(b), extra: writeArgs, deps: { judge: fakeJudge([REAL()]), fixChains: from0601, dataset: DATASET } });
+  assert.equal(ok.code, 0, ok.err);
+  assert.equal(ok.json.notes.some((n) => n.startsWith('fix-chains input does not cover')), false, JSON.stringify(ok.json.notes));
+});
+
+test('R3-M2: a fix title that holds a fix sha prefix is masked like the prompt, so the guard still finds it after the mask (breaks if leakTerms keeps titles unmasked)', () => {
+  const title = `revert ${SHA_A.slice(0, 10)}: quokka drift parser`;
+  const leak = szz.leakTerms([SHA_A], [title]);
+  const prompt = szz.maskShas(buildPrompt([{ kind: 'fix', hunk: `@@ -2 +2 @@\n-log("${title}")\n+fixed`, blamed: '>    2| fixed' }]), leak.shas);
+  assert.equal(prompt.includes(SHA_A.slice(0, 7)), false, 'the sha of the diff line is masked: the check is not vacuous');
+  assert.equal(szz.promptGuard(prompt, leak), 'fix-title');
+});
+
+test('R3-m1: a shared-lock refusal (no ledger id) takes no slot, is tried once more with the same prompt, then stops the run with the lock line; a lock then an answer labels the batch (breaks if the own row stays or the lock is not retried)', async () => {
+  const b = twoHuge();
+  const rows = [escRow(b, { fixPr: 12, blamedPr: 11 })];
+  const prompts = [];
+  const locked = async (prompt) => { prompts.push(prompt); return { ok: false, reason: 'lock' }; };
+  const ledgerPath = path.join(tmp('led'), 'ledger.jsonl');
+  const s = setup(b, { rows, extra: ['--label', '--daily-calls', '99'], deps: { judge: szz.defaultJudge({ ledgerPath, now: () => NOW }, locked), ledgerPath } });
+  const json = JSON.parse((await run(s.argv, s.deps)).out);
+  assert.equal(prompts.length, 2, 'one call and one retry, then the stop');
+  assert.equal(prompts[0], prompts[1], 'the retry sends the same batch');
+  assert.deepEqual([json.labelled, json.labelCalls.used, json.labelCalls.stop], [0, 0, 'shared-lock']);
+  assert.equal(json.failed.label, 1, JSON.stringify(json.failed));
+  const text = await run(s.argv.filter((a) => a !== '--json'), s.deps);
+  assert.equal(text.code, 0, text.err);
+  assert.deepEqual(stopLines(text.out), ['labelling stopped: shared headless lock busy']);
+  let k = 0;
+  const once = async (prompt) => {
+    k += 1;
+    if (k === 1) return { ok: false, reason: 'lock' };
+    const n = [...prompt.matchAll(/^### Pair (\d+)/gm)].length;
+    return { ok: true, id: `id-${k}`, result: JSON.stringify(Array.from({ length: n }, (_, i) => ({ pair: i + 1, ...REAL() }))) };
+  };
+  const s2 = setup(b, { rows, extra: ['--label', '--daily-calls', '99'], deps: { judge: szz.defaultJudge({ ledgerPath, now: () => NOW }, once), ledgerPath } });
+  const j2 = JSON.parse((await run(s2.argv, s2.deps)).out);
+  assert.equal(k, 3, 'a lock, its retry, the second batch');
+  assert.deepEqual([j2.labelled, j2.labelCalls.used, j2.labelCalls.stopped ?? false], [2, 2, false]);
+});
+
+test('R3-m2: when only the batch prompt leaks (each item is clean alone, the joined text holds the title), the whole-prompt guard refuses it: no judge call, no slot, prompt-guard counts the batch once (breaks if the whole-prompt guard is dropped or the slot row is pushed before it)', async () => {
+  // A fix title that matches the header of the second pair only: an item alone is always "### Pair 1".
+  const title = '## Pair 2';
+  assert.deepEqual(szz.leakTerms([], [title]).titles, ['## pair 2'], 'the title is guarded: the check is not vacuous');
+  const body = (fixed) => Array.from({ length: 20 }, (_, i) => ({ 4: fixed ? 'good-a' : 'bad-a', 14: fixed ? 'good-b' : 'bad-b' }[i] ?? `c${i}`));
+  const b = buildRepo([
+    { n: 11, at: A_DAY, commits: [{ subject: 'feat: f', files: { 'src/f.txt': lines(...body(false)) } }] },
+    { n: 12, at: B_DAY, commits: [{ subject: title, files: { 'src/f.txt': lines(...body(true)) } }] },
+  ]);
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 0);
+  assert.equal(r.json.failed['prompt-guard'], 1, JSON.stringify(r.json.failed));
+  assert.equal(r.json.labelCalls.used, 0, 'a refused batch takes no daily slot');
+  assert.deepEqual([r.json.labelled, r.json.unlabelled], [0, 2]);
+});
+
+test('R3-m4: a fix title that occurs in the prompt template is not guarded, so a clean item is still labelled, and the report counts it (breaks if template text refuses every prompt or the note is dropped)', async () => {
+  const b = small({ fixSubject: 'You label code defects' });
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows: [escRow(b, { fixPr: 12, blamedPr: 11 })], extra: ['--label'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 1, JSON.stringify(r.json.failed));
+  assert.equal(r.json.labelled, 1);
+  assert.ok(r.json.notes.includes('fix titles that occur in the prompt template are not guarded: 1'), JSON.stringify(r.json.notes));
+});
+
+test('R3-m5: an escape row whose fixSha or mergeSha is not 40 lower-case hex is not mined and counts failed fix-sha; git never sees it (breaks if the sha check is dropped)', async () => {
+  const b = small();
+  const good = escRow(b, { fixPr: 12, blamedPr: 11 });
+  const rows = [good, { ...good, fixSha: 'not-a-sha' }, { ...good, fixSha: '--all' }, { ...good, mergeSha: good.mergeSha.toUpperCase() }];
+  const seen = [];
+  const git = (args) => { seen.push(args); return b.git(args); };
+  const r = await report(b, { rows, deps: { git } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.failed['fix-sha'], 3, JSON.stringify(r.json.failed));
+  assert.equal(r.json.pairs, 4);
+  const upper = good.mergeSha.toUpperCase();
+  assert.equal(seen.some((a) => a.some((x) => x.includes('not-a-sha') || x.startsWith('--all') || x.includes(upper))), false, 'no bad sha reaches git');
+});
+
+test('R3-n1: on a label cache hit the hunk counts come from the cache row (the labelled prompt), not from this run\'s cut (breaks if a cache hit keeps the run counts)', async () => {
+  const b = big();
+  const s = writeSetup();
+  const hit = { fixSha: b.prs[22].shas[0], blamedMergeSha: b.prs[21].mergeSha, file: 's/a.txt', line: 4 };
+  writeFileSync(path.join(s.state, 'szz-labels.jsonl'), `${JSON.stringify({ key: szz.labelKey(hit), ...hit, hunksShown: 7, hunksLeftOut: 9, verdict: 'real', severity: 'major' })}\n`);
+  const r = await run(s.argv, s.deps);
+  assert.equal(r.code, 0, r.err);
+  const rows = loadGold(s.gold).rows;
+  assert.deepEqual(rows.map((x) => [x.file, x.provenance.hunksShown, x.provenance.hunksLeftOut]), [['s/a.txt', 7, 9], ['s/b.txt', 1, 0], ['s/c.txt', 1, 0]]);
+});
+
+test('R3-n2: a 64-hex fix sha in a diff line is masked whole, also a 50-hex prefix of it, and the guard passes (breaks if HEX_RUN stops at 40)', () => {
+  const SHA64 = `${SHA_A}0123456789abcdef01234567`;
+  assert.equal(SHA64.length, 64);
+  const leak = szz.leakTerms([SHA64], []);
+  assert.deepEqual(leak.shas, [SHA64]);
+  const masked = szz.maskShas(`-ref ${SHA64} x\n+ref ${SHA64.slice(0, 50)} y`, leak.shas);
+  assert.equal(masked, '-ref <sha> x\n+ref <sha> y');
+  assert.equal(szz.promptGuard(masked, leak), null);
+});
+
+test('R3-n3: a diff line that names a non-tip commit of a fix PR comes out masked and the guard passes; a fix title that holds such a prefix is still refused (breaks if only fixSha and mergeSha are leak terms)', async () => {
+  const b = buildRepo([
+    { n: 11, at: A_DAY, commits: [{ subject: 'feat: add f', files: { 'src/f.txt': lines('alpha', 'buggy', 'omega') } }] },
+    { n: 12, at: B_DAY, commits: [{ subject: 'wip: start', files: { 'src/w.txt': 'w\n' } }, { subject: 'fix: correct f', files: { 'src/f.txt': lines('alpha', 'fixed', 'omega') } }] },
+  ]);
+  const wip = b.prs[12].shas[0];
+  const revert = `revert ${wip.slice(0, 10)}: quokka drift parser`;
+  extendRepo(b, [
+    { n: 13, at: '2026-10-12T10:00:00Z', commits: [{ subject: 'feat: g', files: { 'src/g.txt': lines('one', `ref ${wip.slice(0, 12)}`, 'two') } }] },
+    { n: 14, at: '2026-10-13T10:00:00Z', commits: [{ subject: 'fix: g ref', files: { 'src/g.txt': lines('one', 'ref none', 'two') } }] },
+    { n: 15, at: '2026-10-14T10:00:00Z', commits: [{ subject: 'feat: h', files: { 'src/h.txt': lines('one', `log("${revert}")`, 'two') } }] },
+    { n: 16, at: '2026-10-15T10:00:00Z', commits: [{ subject: revert, files: { 'src/h.txt': lines('one', 'log("none")', 'two') } }] },
+  ]);
+  const rows = [escRow(b, { fixPr: 12, blamedPr: 11, fixIdx: 1 }), escRow(b, { fixPr: 14, blamedPr: 13 }), escRow(b, { fixPr: 16, blamedPr: 15 })];
+  const judge = fakeJudge([REAL()]);
+  const r = await report(b, { rows, extra: ['--label'], deps: { judge } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(judge.prompts.length, 1, JSON.stringify(r.json.failed));
+  const prompt = judge.prompts[0];
+  assert.equal(prompt.includes('-ref <sha>'), true, prompt);
+  assert.equal(prompt.includes(wip.slice(0, 7)), false, 'no prefix of the non-tip commit is left');
+  assert.equal(prompt.includes('quokka'), false, 'the item with the title is not in the call');
+  assert.equal(r.json.failed['prompt-guard'], 1, JSON.stringify(r.json.failed));
+  assert.deepEqual([r.json.labelled, r.json.unlabelled], [2, 1]);
+});
+
+// ---------- control mining (--control-since): escape rows before --since feed only the unmapped-fix control rule ----------
+
+/** June: blamed PR 79 (another file), control candidate PR 80 (src/j.txt), fix PR 82 that removes a line PR 80 wrote: its row does not map. */
+const juneRepo = () => buildRepo([
+  { n: 79, at: '2026-06-02T12:00:00Z', commits: [{ subject: 'feat: x', files: { 'src/x.txt': lines('x1', 'x2') } }] },
+  { n: 80, at: '2026-06-05T12:00:00Z', commits: [{ subject: 'feat: j', files: { 'src/j.txt': lines('a', 'b', 'c') } }] },
+  { n: 82, at: '2026-06-20T12:00:00Z', commits: [{ subject: 'fix: j', files: { 'src/j.txt': lines('a', 'B', 'c') } }] },
+]);
+
+test('C01: with the default --control-since (the group 2 start) a June control merged 15 days before an unmapped June fix on the same file is removed; the report line names the window; a failed map fails closed (breaks if the control pass is dropped, starts at --since, or skips a failed row)', async () => {
+  const b = juneRepo();
+  const rows = [escRow(b, { fixPr: 82, blamedPr: 79 })];
+  const r = await report(b, { rows });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.controls.removedUnmappedFix, 1, `PR 80 is near the unmapped June fix: ${JSON.stringify(r.json.controls)}`);
+  assert.equal(r.json.controls.removedBlamed, 1);
+  assert.deepEqual(r.json.controlMining, { from: '2026-06-01', pairs: 1, unmappedFixes: 1, failed: 0 });
+  assert.deepEqual([r.json.pairs, r.json.labelled, r.json.unmapped, r.json.failed], [0, 0, {}, {}], 'the main counts do not see the control pass');
+  const text = await run(r.argv.filter((a) => a !== '--json'), r.deps);
+  assert.equal(text.code, 0, text.err);
+  const out = textOf(text.out);
+  assert.equal(out[out.findIndex((l) => l.startsWith('controls: ')) + 1], 'control mining from 2026-06-01: pairs 1, unmapped fixes 1', text.out);
+  // A window that starts after the fix: no control pair, PR 80 stays.
+  const late = await report(b, { rows, extra: ['--control-since', '2026-06-21'] });
+  assert.equal(late.code, 0, late.err);
+  assert.deepEqual([late.json.controls.removedUnmappedFix, late.json.controlMining.pairs], [0, 0]);
+  // A row whose fix commit git cannot read counts failed in the control pass and as an unmapped fix: fail closed.
+  const broken = await report(b, { rows: [{ ...rows[0], fixSha: 'e'.repeat(40) }] });
+  assert.equal(broken.code, 0, broken.err);
+  assert.deepEqual(broken.json.controlMining, { from: '2026-06-01', pairs: 1, unmappedFixes: 1, failed: 1 });
+  assert.equal(broken.json.controls.removedUnmappedFix, 1);
+  assert.deepEqual(broken.json.failed, {}, 'a control pass failure is not a failed pair of the run');
+});
+
+test('C02: extra June escape rows change neither the judge prompts, the label cache nor gold-a.json, though a June fix title is text of an October item and a June row maps (breaks if the control pass adds candidates, labels or leak terms)', async () => {
+  const QUOKKA = 'zanzibar quokka telemetry';
+  const b = buildRepo([
+    { n: 60, at: '2026-06-03T12:00:00Z', commits: [{ subject: 'feat: m', files: { 'src/m.txt': lines('m1', 'mbad', 'm3') } }] },
+    { n: 61, at: '2026-06-10T12:00:00Z', commits: [{ subject: QUOKKA, files: { 'src/m.txt': lines('m1', 'mgood', 'm3') } }] },
+    ...bigSteps(),
+    { n: 31, at: '2026-10-13T10:00:00Z', commits: [{ subject: 'feat: q', files: { 'src/q.txt': lines('q1', QUOKKA, 'q3') } }] },
+    { n: 32, at: '2026-10-14T10:00:00Z', commits: [{ subject: 'fix: q (#9001)', files: { 'src/q.txt': lines('q1', 'calm', 'q3') } }] },
+  ]);
+  const fixChains = { perPr: [{ pr: 60, mergeSha: b.prs[60].mergeSha, rows: [], noTarget: null, fix: false }, ...FIXES(b).perPr] };
+  const base = [...bigRows(b), escRow(b, { fixPr: 32, blamedPr: 31 })];
+  const june = escRow(b, { fixPr: 61, blamedPr: 60 });
+  const once = async (rows) => {
+    const judge = fakeJudge([REAL('major')]);
+    const r = await report(b, { rows, extra: writeArgs, deps: { judge, fixChains, dataset: DATASET } });
+    assert.equal(r.code, 0, r.err);
+    return { r, prompts: judge.prompts, cache: readFileSync(path.join(r.state, 'szz-labels.jsonl')), gold: readFileSync(path.join(r.gold, 'gold-a.json')) };
+  };
+  const without = await once(base);
+  const withJune = await once([...base, june]);
+  assert.equal(without.prompts.some((p) => p.includes(QUOKKA)), true, 'the October item that holds the June title is labelled: the check is not vacuous');
+  assert.equal(withJune.r.json.controlMining.pairs, without.r.json.controlMining.pairs + 1, 'the June row went through the control pass');
+  assert.deepEqual(withJune.prompts, without.prompts);
+  assert.ok(withJune.cache.equals(without.cache), 'the label cache is byte-equal');
+  assert.ok(withJune.gold.equals(without.gold), 'gold-a.json is byte-equal');
+  assert.deepEqual([withJune.r.json.pairs, withJune.r.json.labelled, withJune.r.json.counted], [without.r.json.pairs, without.r.json.labelled, without.r.json.counted]);
+});
+
+test('C03: --write refuses a --control-since later than the group 2 start with the window line and writes nothing; the group 2 start itself writes (breaks if the gate is dropped or compares the wrong way)', async () => {
+  const bad = await bigRun(['--control-since', '2026-06-02']);
+  assert.equal(bad.code, 1, bad.err);
+  assert.ok(bad.err.split('\n').includes('mine-szz: control mining window starts after group 2 (2026-06-02)'), bad.err);
+  assert.equal(existsSync(bad.gold), false, 'nothing written');
+  const edge = await bigRun(['--control-since', '2026-06-01T00:00:00Z']);
+  assert.equal(edge.code, 0, edge.err);
+});
+
+test('C04: a --control-since that is not a date, or has no value, is a usage error before any git call; the usage names the flag (breaks if the flag is not checked)', async () => {
+  const boom = () => { throw new Error('must not be called'); };
+  const bad = await run(['--control-since', 'x'], { git: boom, gh: boom });
+  assert.equal(bad.code, 2, bad.err);
+  assert.match(bad.err, /--control-since "x" is not a date/);
+  assert.match(bad.err, /usage: /);
+  const none = await run(['--control-since'], { git: boom, gh: boom });
+  assert.equal(none.code, 2);
+  assert.match(none.err, /--control-since needs a value/);
+  assert.match((await run(['--help'])).out, /--control-since <iso>/);
 });

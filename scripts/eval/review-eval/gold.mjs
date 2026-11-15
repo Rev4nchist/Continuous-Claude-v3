@@ -10,6 +10,8 @@
 //   The target has the same two forms as a gold row; repo is refused (a control is one of our own PRs, map.md:678).
 //   One exception (Dave, 2026-11-14): a control may have round null when provenance.head is 'merged-head-no-round'
 //   (no CodeRabbit round on its merged head). Its sha40 is still required and checked. A gold row never has round null.
+//   Only exactly null is excepted: a marked control with round 0, -1 or '1' is refused as not a positive integer, and a
+//   marked control with a positive integer round loads like any other control.
 // `target.repo` is lower case only, with no `.git` suffix and no leading or trailing `.` or `-` in a part: this module
 //   refuses a second spelling of one repository and never folds it (the producer folds before it writes).
 // A file name with `.json` in another case, or a case variant of clean-controls.json or escape-baseline.json, is a problem.
