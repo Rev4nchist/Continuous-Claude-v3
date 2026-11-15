@@ -129,7 +129,7 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync'];
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
@@ -219,7 +219,7 @@ export const SURFACES = [
   {
     id: 'eval-scripts',
     globs: ['scripts/eval/review-eval/**', ...REVIEWER_SET_FILES, `${REVIEWER_SET_DIR}**`, ...BAND_SET_FILES],
-    gates: [{ id: 'review-eval-tests', cmd: 'node', args: ['--test', 'scripts/eval/review-eval/*.test.mjs', 'scripts/eval/review-eval/rubrics/*.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }],
+    gates: [{ id: 'review-eval-tests', cmd: 'node', args: ['--test', 'scripts/eval/review-eval/*.test.mjs', 'scripts/eval/review-eval/rubrics/*.test.mjs'], cwd: '.', timeoutMs: 10 * MIN }],
   },
   // lane-context-db.test.ts skips without LANE_TEST_DB_URL. This gate makes a scratch database on local Postgres, runs that one
   // file and FAILs when it is skipped (Postgres down = one ENV line, never a pass). CI job coordination-db runs the same program.
@@ -701,6 +701,59 @@ export function defaultExec(spec) {
 
 const outputOf = (r) => `${r.stdout ?? ''}${r.stderr ? `\n${r.stderr}` : ''}`;
 
+// ---------- failing-test names on a FAIL line (card coord-prepr-failing-test-name) ----------
+// A FAIL line used to carry only the last 12 output lines: the TAP counts, never the name of the test that failed.
+
+export const FAILING_NAMES_CAP = 10;
+const TAP_NOT_OK = /^\s*not ok \d+ - (.*?)\s*$/;
+const TAP_DIRECTIVE = /\s#\s*(?:SKIP|TODO)\b/i;
+const TAP_NEXT = /^\s*(?:(?:not )?ok \d+ |# Subtest:)/;
+const TAP_LOCATION = /^\s*location:\s*'(.+):(\d+):\d+'\s*$/;
+const VITEST_FAIL = /^\s*FAIL\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+>\s+(.+?)\s*$/;
+// A file that fails before its tests run (an import, a syntax error, a hook that throws): "FAIL  <file> [ <file> ]", no test name.
+const VITEST_FILE_FAIL = /^\s*FAIL\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+\[\s*\S+\s*\]\s*$/;
+
+/** A TAP location path, with its doubled backslashes undone, relative to `root` when it is inside it, always with forward slashes. */
+function locationPath(raw, root) {
+  const abs = raw.replace(/\\\\/g, '\\');
+  const relative = path.relative(root, abs);
+  const inside = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  return (inside ? relative : abs).replace(/\\/g, '/');
+}
+
+/**
+ * The failing tests that a node TAP or a vitest output names, in output order, each once: "<name> (<file>:<line>)" for TAP (the file from
+ * its location line) and "<suite > test> (<file>)" for vitest. A SKIP or TODO line and a parent whose only fault is a failed subtest are
+ * not failures of their own.
+ */
+export function failingTestsOf(output, root) {
+  const lines = String(output ?? '').split(/\r?\n/);
+  const names = [];
+  const add = (name) => { if (!names.includes(name)) names.push(name); };
+  lines.forEach((line, i) => {
+    const v = VITEST_FAIL.exec(line);
+    if (v) return add(`${v[2]} (${v[1]})`);
+    const f = VITEST_FILE_FAIL.exec(line);
+    if (f) return add(`the whole file, it failed before its tests ran (${f[1]})`);
+    const t = TAP_NOT_OK.exec(line);
+    if (!t || TAP_DIRECTIVE.test(t[1])) return undefined;
+    const end = lines.findIndex((l, j) => j > i && TAP_NEXT.test(l));
+    const block = lines.slice(i + 1, end === -1 ? undefined : end);
+    if (block.some((l) => /failureType:\s*'subtestsFailed'/.test(l))) return undefined;
+    const loc = block.map((l) => TAP_LOCATION.exec(l)).find(Boolean);
+    return add(loc ? `${t[1]} (${locationPath(loc[1], root)}:${loc[2]})` : t[1]);
+  });
+  return names;
+}
+
+/** The notes of a FAIL gate: the failing tests (or the line that says none was found), then the last 12 output lines. */
+export function failNotes(clean, root) {
+  const names = failingTestsOf(clean, root);
+  const more = names.length > FAILING_NAMES_CAP ? [`... ${names.length - FAILING_NAMES_CAP} more failing tests`] : [];
+  const head = names.length === 0 ? ['no failing test line found'] : [...names.slice(0, FAILING_NAMES_CAP).map((n) => `failing: ${n}`), ...more];
+  return [...head, ...clean.split(/\r?\n/).filter(Boolean).slice(-12)];
+}
+
 /** Run one gate. PASS on exit 0 (and an empty post-check). The summary line is the runner's own. */
 export function runGate(gate, { root, exec, git }) {
   const step = `gate:${gate.id}`;
@@ -708,16 +761,16 @@ export function runGate(gate, { root, exec, git }) {
   const r = exec({ id: gate.id, cmd: gate.cmd, args: gate.args, cwd: path.join(root, gate.cwd), timeoutMs: gate.timeoutMs, root });
   const out = outputOf(r);
   const base = { output: out, command: shown };
-  if (r.timedOut) return { ...result(step, 'FAIL', `timed out after ${Math.round(gate.timeoutMs / MIN)} min: ${shown}`), ...base };
-  if (r.error) return { ...result(step, 'FAIL', `could not start: ${r.error}`), ...base };
+  const clean = out.replace(ANSI, '');
+  if (r.timedOut) return { ...result(step, 'FAIL', `timed out after ${Math.round(gate.timeoutMs / MIN)} min: ${shown}`, failNotes(clean, root)), ...base };
+  if (r.error) return { ...result(step, 'FAIL', `could not start: ${r.error}`, failNotes(clean, root)), ...base };
   if (r.status !== 0) {
     // `acceptExit` names the one known non-zero exit a gate may pass with (see MODS_TSC_NOT_RUN); it returns the note.
-    const accepted = gate.acceptExit?.(out.replace(ANSI, ''));
+    const accepted = gate.acceptExit?.(clean);
     if (accepted) return { ...result(step, 'PASS', accepted), ...base };
-    const tail = out.replace(ANSI, '').split(/\r?\n/).filter(Boolean).slice(-12);
     // A missing package is the environment, not the change: say so first, so nobody hunts a bug in code that is fine.
-    const env = envPrefix(out.replace(ANSI, ''), { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
-    return { ...result(step, 'FAIL', env ?? `exit ${r.status}: ${summaryLine(out)}`, tail), ...base };
+    const env = envPrefix(clean, { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
+    return { ...result(step, 'FAIL', env ?? `exit ${r.status}: ${summaryLine(out)}`, failNotes(clean, root)), ...base };
   }
   if (gate.postCheck) {
     const posts = gate.postCheck.argv.map((a) => git(a));
@@ -1548,12 +1601,20 @@ function formatLines(results) {
   return results.flatMap((r) => [lineOf(r), ...(r.notes ?? []).map((n) => `    ${n}`)]);
 }
 
-function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
+/** `text` cut to about `max` characters by keeping its first and last halves: the end of a test run holds its failures and counts. */
+export function clipEnds(text, max) {
+  const s = String(text);
+  if (s.length <= max) return s;
+  const half = Math.floor(max / 2);
+  return `${s.slice(0, half)}\n... ${s.length - 2 * half} characters cut ...\n${s.slice(-half)}`;
+}
+
+export function writeLog({ root, now, head, branch, base, bodySha, results, lines }) {
   const dir = path.join(root, '.claude', 'cache', 'e2e');
   mkdirSync(dir, { recursive: true });
   // The time is in the name: a re-run on the same head must not overwrite the log of the run before it.
   const file = path.join(dir, `${dayOf(now)}-pre-pr-${head.slice(0, 7)}-${clockOf(now)}.log`);
-  const outputs = results.filter((r) => r.output).map((r) => `\n===== ${r.step}: ${r.command}\n${clip(r.output.replace(ANSI, ''), 200_000)}`);
+  const outputs = results.filter((r) => r.output).map((r) => `\n===== ${r.step}: ${r.command}\n${clipEnds(r.output.replace(ANSI, ''), 200_000)}`);
   const head2 = [`pre-pr ${now.toISOString()}`, `head ${head}`, `branch ${branch}`, `base ${base} (local ref; fork/${base} fetched first, see git:behind)`, `body_sha256 ${bodySha}`, ''];
   writeFileSync(file, [...head2, ...lines, ...outputs, ''].join('\n'));
   return file;
