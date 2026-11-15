@@ -4,13 +4,15 @@
 // Flow: mutate builds two commits by git plumbing (no checkout, no hooks, no autocrlf):
 //   refs/eval/seed-base/<id>  = the main tree minus every answer-key path (a root commit, so history holds no key either)
 //   refs/eval/seed/<id>       = that tree plus the one mutation (parent: the base ref). The row target is the range between them.
-// verify runs `node --test <one file>` twice at the base and twice at the seed in scratch worktrees, and keeps the seed only when
-// the base passes both times and the seed fails both times. emit validates the row with gold.mjs validateRow before it writes.
+// verify runs `node --test <one file>` twice at the base and twice at the seed. Each ref is exported by `git archive` into a new folder that is
+// its own git repo (no linked worktree: no git common dir points at the real repo), and the child gets an allowlist environment only.
+// A seed is kept only when the base passes twice and the seed fails twice with the same failure lines, a subtest passes, and the failure is
+// no import error or crash. emit validates the row with gold.mjs validateRow, then writes gold-b.json under a lock by temp file and rename.
 // Output is counts or short JSON. It never prints an id from config, dataset or gold, and never a commit sha.
 // The seeder never pushes. check-refs proves no seed ref holds an answer-key path, is reachable from a branch, or sits on a remote.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +30,8 @@ export const SEED_VERSION = 1;
 export const VERIFY_TIMEOUT_MS = 60_000;
 export const LANE_PURPOSE = 're-seed-gold-b';
 export const LANE_DAY_CAP = 8;
+/** The one claim file of the lane day cap (F3): a fixed path, whatever --ledger says. */
+export const DEFAULT_CLAIM_FILE = path.join(os.homedir(), '.claude', 'state', 're-seed-gold-b-claims.jsonl');
 export const CLAUDE_MODEL = 'opus';
 export const CLAUDE_EFFORT = 'high';
 /** A Claude-written bug has no operator, so the seeder sets its severity: a kept bug breaks a test, so it is at least major. */
@@ -252,14 +256,35 @@ export function isAnswerKeyPath(p) {
   return KEY_RUNS.some((run) => hasRun(n.split('/'), run));
 }
 
-// Code that must never be a seed target: the eval harness itself, the headless wrapper, and the lane scripts.
-const PROTECTED_PREFIXES = Object.freeze(['scripts/eval/review-eval/', 'scripts/coordination/']);
-const PROTECTED_FILES = Object.freeze(['scripts/lib/headless.mjs']);
+// Code that must never be a seed target or a verify test (F1): the eval harness, the headless wrapper, the lane scripts, and every script
+// that can delete files, push, change a worktree or a setting, or reach the lane database.
+const PROTECTED_PREFIXES = Object.freeze(['scripts/eval/review-eval/', 'scripts/coordination/', 'scripts/worktree/', 'scripts/settings/', 'scripts/github/']);
+const PROTECTED_FILES = Object.freeze(['scripts/lib/headless.mjs', 'scripts/harness-doctor.mjs']);
 const LANE_SCRIPT = /^\.claude\/scripts\/lane[^/]*\.mjs$/;
 
 export function isProtectedTarget(p) {
   const n = norm(p).toLowerCase();
   return PROTECTED_PREFIXES.some((x) => n.startsWith(x)) || PROTECTED_FILES.includes(n) || LANE_SCRIPT.test(n);
+}
+
+// The content rule (F1), on raw text, failing closed: a file that deletes, pushes with git, or imports a database client is refused
+// as a seed target and as a test file. A false hit only refuses a file.
+const DELETE_CALL = /\b(?:rmSync|rmdirSync|unlinkSync)\b|\b(?:rm|rmdir|unlink)\s*\(/;
+const PUSH_WORD = /['"`]push['"`]|\bgit\s+push\b/;
+const GIT_WORD = /\bgit\b/;
+const DB_PACKAGE = /^(?:pg|postgres|pg-[\w-]+|mysql2?|mongodb|mongoose|ioredis|redis|sqlite3|better-sqlite3|knex|sequelize|typeorm|@prisma\/client|@neondatabase\/serverless|node:sqlite)(?:\/|$)/;
+const DB_MODULE_NAME = /(?:^|[-_])(?:db|database|postgres|pg)(?:$|[-_])/i;
+const IMPORT_SPEC = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g;
+
+function importsDbClient(text) {
+  const isDbModule = (spec) => /^\.{1,2}\//.test(spec) && DB_MODULE_NAME.test(path.posix.basename(spec).replace(/\.\w+$/, ''));
+  return [...text.matchAll(IMPORT_SPEC)].some(([, spec]) => DB_PACKAGE.test(spec) || isDbModule(spec));
+}
+
+/** True when the text deletes files, pushes with git, or imports pg, postgres or another database client module. */
+export function isRiskyContent(text) {
+  const t = String(text);
+  return DELETE_CALL.test(t) || (PUSH_WORD.test(t) && GIT_WORD.test(t)) || importsDbClient(t);
 }
 
 /**
@@ -291,8 +316,28 @@ function findMerge(repo, rev, pr, rows) {
   return out?.trim() || null;
 }
 
+/** Every name that the commits of `range` touched (renames count as the old name and the new one), or null when git fails. */
+function touchedBy(repo, range) {
+  const out = git(repo, ['log', '--no-renames', '--name-only', '--format=', '-z', range], { ok: true });
+  return out === null ? null : nulList(out).map((n) => n.replace(/^\n+/, ''));
+}
+
 /**
- * The files changed by every holdout or reserve PR, from local git: the merge commit of each PR against its first parent.
+ * The files of one PR (F4): the commits from merge-base(first parent, merged head) to the merged head, one by one, plus the net diff against
+ * the first parent (it holds a conflict fix too). A commit with one parent (a squash or rebase merge sha) is read against that parent.
+ * Null when git cannot answer.
+ */
+function prFiles(repo, merge) {
+  const [first, second] = git(repo, ['rev-list', '--parents', '-n', '1', merge], { ok: true })?.trim().split(' ').slice(1) ?? [];
+  if (!first) return null;
+  const base = second ? git(repo, ['merge-base', first, second], { ok: true })?.trim() : first;
+  const net = git(repo, ['diff', '--name-only', '-z', first, merge], { ok: true });
+  const each = base ? touchedBy(repo, `${base}..${second ?? merge}`) : null;
+  return net === null || each === null ? null : [...nulList(net), ...each];
+}
+
+/**
+ * The files changed by every holdout or reserve PR, from local git (see prFiles).
  * Returns { files: Set (lower case), prs, missing }. `missing` counts the PRs whose merge commit was not found: the caller fails closed.
  */
 export function prChangedFiles({ repo, rev, cfg, dataset }) {
@@ -302,18 +347,30 @@ export function prChangedFiles({ repo, rev, cfg, dataset }) {
   let missing = 0;
   for (const pr of prs) {
     const merge = findMerge(repo, rev, pr, rows);
-    const out = merge ? git(repo, ['diff', '--name-only', '-z', `${merge}^1`, merge], { ok: true }) : null;
-    if (out === null) missing += 1;
-    else nulList(out).forEach((f) => files.add(norm(f).toLowerCase()));
+    const found = merge ? prFiles(repo, merge) : null;
+    if (found === null) missing += 1;
+    else found.forEach((f) => files.add(norm(f).toLowerCase()));
   }
   return { files, prs: prs.length, missing };
 }
 
-/** filterFiles with the files of the holdout and reserve PRs. A PR with no merge commit fails the whole run closed: nothing is allowed. */
+/** True when any past name of the file (`git log --follow --name-only` at rev) is in the changed set. A git failure counts as true: it fails closed. */
+function pastNameChanged(repo, rev, file, changed) {
+  const out = git(repo, ['log', '--follow', '--name-only', '--format=', '-z', rev, '--', file], { ok: true });
+  return out === null || nulList(out).some((n) => changed.has(norm(n.replace(/^\n+/, '')).toLowerCase()));
+}
+
+/**
+ * filterFiles with the files of the holdout and reserve PRs, and with every past name of a candidate (F4: a file that a holdout PR changed
+ * and a later commit renamed is refused under its new name). A PR with no merge commit fails the whole run closed: nothing is allowed.
+ */
 export function devFilter({ repo, rev, files, cfg, dataset }) {
   const changed = prChangedFiles({ repo, rev, cfg, dataset });
   if (changed.missing > 0) return { allowed: [], refused: { holdoutReserve: 0, answerKey: 0, protectedTargets: 0 }, missingPrs: changed.missing, failedClosed: true };
-  return { ...filterFiles({ files, cfg, dataset, changed: changed.files }), missingPrs: 0, failedClosed: false };
+  const first = filterFiles({ files, cfg, dataset, changed: changed.files });
+  const allowed = first.allowed.filter((f) => !pastNameChanged(repo, rev, f, changed.files));
+  const renamed = first.allowed.length - allowed.length;
+  return { allowed, refused: { ...first.refused, holdoutReserve: first.refused.holdoutReserve + renamed }, missingPrs: 0, failedClosed: false };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -326,8 +383,14 @@ const NEUTRAL_MESSAGE = 'update';
 
 function gitEnv(extra) {
   const env = { ...process.env, ...GIT_ID };
-  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k];
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete env[k];
   return { ...env, ...extra };
+}
+
+/** stdout of a git command as a Buffer, or null on a failure (a tar stream must not be decoded as text). */
+function gitBuffer(repo, args, timeoutMs = 120_000) {
+  const r = spawnSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd: repo, env: gitEnv(), windowsHide: true, maxBuffer: 1 << 30, timeout: timeoutMs });
+  return r.status === 0 ? r.stdout : null;
 }
 
 /** stdout of a git command (a string). ok: true returns null on a failure or a time-out (timeoutMs). The error text never holds file content. */
@@ -408,7 +471,8 @@ function writeRefs(repo, seedId, { baseSha, seedSha }) {
   const input = `start\ncreate ${seedRefOf(seedId)} ${seedSha}\ncreate ${baseRefOf(seedId)} ${baseSha}\nprepare\ncommit\n`;
   return git(repo, ['update-ref', '--stdin'], { input, ok: true }) !== null;
 }
-const dropRefs = (repo, id) => [baseRefOf(id), seedRefOf(id)].forEach((r) => git(repo, ['update-ref', '-d', r], { ok: true }));
+/** Delete both refs of a seed. True only when every delete worked (F9: a failed delete is reported, not hidden). */
+const dropRefs = (repo, id) => [baseRefOf(id), seedRefOf(id)].map((r) => git(repo, ['update-ref', '-d', r], { ok: true }) !== null).every(Boolean);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // manifests: seeds/<seedId>.json
@@ -427,13 +491,17 @@ function writeManifest(dir, m) {
   writeFileSync(manifestPath(dir, m.seedId), `${JSON.stringify(m, null, 2)}\n`);
 }
 
-/** A site is taken by any manifest on that file and line, except a dropped one: a dropped seed has no ref left and may be retried. */
+const removeManifest = (dir, id) => rmSync(manifestPath(dir, id), { force: true });
+
+/** The manifests of a folder: [{ id, m }] (a file that is not a seed manifest is skipped). */
+function allManifests(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((n) => n.endsWith('.json')).map((n) => ({ id: n.slice(0, -5), m: readManifest(dir, n.slice(0, -5)) })).filter((x) => x.m);
+}
+
+/** A site is taken by any manifest on that file and line, except a dropped or pending one: those have no live ref and may be retried. */
 function siteTaken(dir, file, line) {
-  if (!existsSync(dir)) return false;
-  return readdirSync(dir).filter((n) => n.endsWith('.json')).some((n) => {
-    const m = readManifest(dir, n.slice(0, -5));
-    return m?.stage !== 'dropped' && m?.file === file && m?.line === line;
-  });
+  return allManifests(dir).some(({ m }) => m.stage !== 'dropped' && m.stage !== 'pending' && m.file === file && m.line === line);
 }
 
 const sha1 = (s) => createHash('sha1').update(s).digest('hex');
@@ -455,12 +523,13 @@ function diffIsOneLine(repo, baseSha, seedSha) {
 }
 
 function precheck({ repo, rev, file, site, seedsDir }) {
-  if (isAnswerKeyPath(file)) return no('answer-key-file');
-  if (isProtectedTarget(file)) return no('protected-file');
+  // F5: one reason for every kind of refusal of a file (answer key, protected path, risky text): a caller cannot tell which rule fired.
+  if (isAnswerKeyPath(file) || isProtectedTarget(file)) return no('refused');
   if (TEST_FILE.test(norm(file))) return no('test-file');
   const main = resolveRev(repo, rev);
   const tracked = main ? readTracked(repo, main, file) : null;
   if (!tracked) return no('not-tracked');
+  if (isRiskyContent(tracked.text) || isRiskyContent(site?.after ?? '')) return no('refused');
   if (siteTaken(seedsDir, file, site?.line)) return no('duplicate-site');
   const patch = checkSite(tracked.text, site ?? {});
   return patch.ok ? { ok: true, main, tracked } : patch;
@@ -480,8 +549,15 @@ export function createSeed(a) {
   const text = applySite(pre.tracked.text, site);
   const seedSha = makeSeed(repo, { base: baseSha, file, mode: pre.tracked.mode, text });
   if (!diffIsOneLine(repo, baseSha, seedSha)) return no('diff-check');
-  if (!writeRefs(repo, seedId, { baseSha, seedSha })) return no('ref-write');
+  // F9: the manifest is written as pending before the refs, so a crash never leaves refs with no manifest. beforeRefs and afterRefs are test seams.
   const manifest = buildManifest(a, { seedId, mainSha: pre.main, baseSha, seedSha });
+  writeManifest(a.seedsDir, { ...manifest, stage: 'pending' });
+  a.beforeRefs?.(seedId);
+  if (!writeRefs(repo, seedId, { baseSha, seedSha })) {
+    removeManifest(a.seedsDir, seedId);
+    return no('ref-write');
+  }
+  a.afterRefs?.(seedId);
   writeManifest(a.seedsDir, manifest);
   return { ok: true, manifest };
 }
@@ -501,11 +577,80 @@ function buildManifest(a, { seedId, mainSha, baseSha, seedSha }) {
 // scratch worktrees and verify
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** A detached worktree of `ref` in a new folder under os.tmpdir(). Returns the folder. */
-export function addScratchWorktree(repo, ref) {
-  const dir = path.join(mkdtempSync(path.join(os.tmpdir(), 'seed-wt-')), 'wt');
-  git(repo, ['worktree', 'add', '--detach', '-q', dir, ref]);
-  return dir;
+// verify never uses a linked worktree (F1): a worktree has the real repo as its git common dir. Each ref is exported by `git archive` and
+// unpacked by the code below (no tar program: GNU tar and bsdtar differ by shell, and a symlink entry cannot be created without a privilege).
+// The copy is then made a new repo by `git init`, so its common dir is its own .git folder.
+
+const TAR_BLOCK = 512;
+const cString = (b) => b.toString('utf8').replace(/\0[\s\S]*$/, '');
+const octal = (b) => Number.parseInt(cString(b).trim() || '0', 8);
+
+/** The key/value records of a pax extended header body ("<length> key=value\n" each). */
+function paxRecords(body) {
+  const out = {};
+  for (let at = 0; at < body.length;) {
+    const sp = body.indexOf(32, at);
+    const len = sp < 0 ? 0 : Number(body.subarray(at, sp).toString('latin1'));
+    if (!(len > 0)) break;
+    const rec = body.subarray(sp + 1, at + len - 1).toString('utf8');
+    const eq = rec.indexOf('=');
+    if (eq > 0) out[rec.slice(0, eq)] = rec.slice(eq + 1);
+    at += len;
+  }
+  return out;
+}
+
+function tarHeader(block) {
+  const prefix = cString(block.subarray(345, 500));
+  const name = cString(block.subarray(0, 100));
+  return { name: prefix ? `${prefix}/${name}` : name, mode: octal(block.subarray(100, 108)), size: octal(block.subarray(124, 136)), type: String.fromCharCode(block[156] || 48) };
+}
+
+/** Write one entry under dir. Only regular files and folders are written (a link is skipped). A path that leaves dir throws. Returns 1 for a file. */
+function writeTarEntry(dir, { name, mode, type }, body) {
+  const target = path.resolve(dir, name);
+  if (target !== path.resolve(dir) && !target.startsWith(path.resolve(dir) + path.sep)) throw new Error('an archive entry leaves the folder');
+  if (type === '5') { mkdirSync(target, { recursive: true }); return 0; }
+  if (type !== '0') return 0;
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, body, { mode: mode & 0o777 });
+  return 1;
+}
+
+/** Unpack a tar buffer (the pax form of git archive) into dir. Returns the number of files written. */
+export function untar(buf, dir) {
+  let at = 0;
+  let pax = {};
+  let files = 0;
+  while (at + TAR_BLOCK <= buf.length && buf[at] !== 0) {
+    const h = tarHeader(buf.subarray(at, at + TAR_BLOCK));
+    const body = buf.subarray(at + TAR_BLOCK, at + TAR_BLOCK + h.size);
+    at += TAR_BLOCK + Math.ceil(h.size / TAR_BLOCK) * TAR_BLOCK;
+    if (h.type === 'g') continue;
+    if (h.type === 'x') { pax = paxRecords(body); continue; }
+    files += writeTarEntry(dir, { ...h, name: pax.path ?? h.name }, body);
+    pax = {};
+  }
+  return files;
+}
+
+/**
+ * Export `ref` of the repo into a new folder under os.tmpdir() and make it a new git repo. Returns the folder.
+ * The folder is created inside the try: a failure at any step removes it (F10a). There is no git prune: nothing is registered in the real repo.
+ */
+export function exportRef(repo, ref, { mkdtemp = mkdtempSync, remove = removeScratchDir } = {}) {
+  let dir;
+  try {
+    dir = mkdtemp(path.join(os.tmpdir(), 'seed-ar-'));
+    const tar = gitBuffer(repo, ['archive', '--format=tar', ref]);
+    if (tar === null) throw new Error('git archive failed');
+    untar(tar, dir);
+    git(dir, ['init', '-q']);
+    return dir;
+  } catch (e) {
+    if (dir) try { remove(dir); } catch { /* the OS temp cleanup takes it */ }
+    throw e;
+  }
 }
 
 /** Every symlink or junction inside dir (never followed, `.git` skipped). */
@@ -524,19 +669,19 @@ function unlinkLink(p) {
 const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /**
- * Remove a scratch worktree. Links (a node_modules junction) are unlinked first, so nothing follows them into a shared store.
- * `git worktree remove` runs without --force; only when it refuses on untracked test output and no link is left does the retry use --force.
+ * Remove a scratch copy. Links (a node_modules junction a test made) are unlinked first, so nothing follows them into another store.
+ * A process that still holds a file (Windows) gets a few retries. Throws when the folder is still there.
  */
-export function removeScratchWorktree(repo, dir) {
-  if (existsSync(dir)) findLinks(dir).forEach(unlinkLink);
-  let removed = false;
-  for (let attempt = 0; attempt < 6 && !removed; attempt += 1) {
+export function removeScratchDir(dir) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     if (attempt > 0) sleepMs(300);
-    const flags = attempt >= 2 && (!existsSync(dir) || findLinks(dir).length === 0) ? ['--force'] : [];
-    removed = git(repo, ['worktree', 'remove', ...flags, dir], { ok: true }) !== null || !existsSync(dir);
+    try {
+      if (existsSync(dir)) findLinks(dir).forEach(unlinkLink);
+      rmSync(dir, { recursive: true, force: true });
+    } catch { /* retry */ }
+    if (!existsSync(dir)) return;
   }
-  if (!removed) throw new Error('could not remove the scratch worktree');
-  try { rmdirSync(path.dirname(dir)); } catch { /* the folder holds something else or is gone */ }
+  throw new Error('could not remove the scratch folder');
 }
 
 const FAIL_NOISE = /duration_ms|^\s*location:|^\s*at |^(ok \d|1\.\.\d|# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms))/;
@@ -557,28 +702,42 @@ export function failureLines(output, wt) {
   return kept.slice(Math.max(first, 0), Math.max(first, 0) + 20);
 }
 
-const HOME_VARS = /^(HOME|USERPROFILE|APPDATA|LOCALAPPDATA)$/i;
-// Credentials, Claude session variables, harness controls and the nested-runner marker never reach a test child.
-const STRIPPED_VARS = /^(ANTHROPIC_|CLAUDE_CODE_|CCV3_|NODE_TEST_CONTEXT$|READ_AUDIT_)|_API_KEY$|_AUTH_TOKEN$/i;
+// An ALLOWLIST, not a strip list (F1): a name that is not here never reaches a child. No NODE_OPTIONS, GIT_*, PG*, *_URL, token, SSH_AUTH_SOCK, CLAUDE_* or CCV3_*.
+const SYSTEM_VARS = Object.freeze(['PATH', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'WINDIR', 'TEMP', 'TMP']);
+const REAL_HOME_VARS = Object.freeze(['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']);
 
-/**
- * The env of a test child run (finding 1): a fresh temp home (HOME, USERPROFILE, APPDATA, LOCALAPPDATA), both ledger variables pointed into it,
- * and no API key, no CLAUDE_CODE_* variable, no CCV3_* control. NODE_TEST_CONTEXT is stripped too: a nested runner would then report nothing.
- */
-export function testChildEnv(base, home) {
-  const env = Object.fromEntries(Object.entries(base).filter(([k]) => !HOME_VARS.test(k) && !STRIPPED_VARS.test(k)));
-  return {
-    ...env, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local'),
-    CCV3_HEADLESS_LEDGER: path.join(home, 'headless-review-ledger.jsonl'), READ_AUDIT_LEDGER: path.join(home, 'read-audit-ledger.jsonl'),
-  };
+/** The entries of base whose name (any case: Windows has `Path`) is in `names`. */
+function pickEnv(base, names) {
+  const want = new Set(names);
+  return Object.fromEntries(Object.entries(base).filter(([k, v]) => v !== undefined && want.has(k.toUpperCase())));
 }
 
-/** One `node --test <file>` in cwd, with the env of testChildEnv and a fresh temp home that is removed afterwards. */
-export function runTestOnce(cwd, file, timeoutMs) {
+/**
+ * The env of a test child: the system names above and a fresh temp home (HOME, USERPROFILE, APPDATA, LOCALAPPDATA). On win32 the OS adds
+ * HOMEDRIVE, HOMEPATH, LOGONSERVER, SYSTEMDRIVE, USERDOMAIN and USERNAME to any child env block, so HOMEDRIVE and HOMEPATH are set from the
+ * temp home here (they would name the real home); the other four hold no secret and cannot be removed.
+ */
+export function testChildEnv(base, home) {
+  const env = { ...pickEnv(base, SYSTEM_VARS), HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') };
+  if (process.platform !== 'win32') return env;
+  const { root } = path.parse(home);
+  return { ...env, HOMEDRIVE: root.slice(0, 2), HOMEPATH: home.slice(root.length - 1) };
+}
+
+/** The env of the headless Claude child (F10b): the system names and the real home names (the subscription login lives there). Nothing else. */
+export const claudeChildEnv = (base) => pickEnv(base, [...SYSTEM_VARS, ...REAL_HOME_VARS]);
+
+/** One `node --test <file>` in cwd, with the env of testChildEnv and a fresh temp home that is removed afterwards. baseEnv: tests give a parent env. */
+export function runTestOnce(cwd, file, timeoutMs, baseEnv = process.env) {
   const home = mkdtempSync(path.join(os.tmpdir(), 'seed-home-'));
-  const env = testChildEnv(process.env, home);
-  const child = spawn(process.execPath, ['--test', file], { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
-  return collectRun(child, home, timeoutMs);
+  try {
+    const env = testChildEnv(baseEnv, home);
+    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', file], { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    return collectRun(child, home, timeoutMs);
+  } catch (e) {
+    rmSync(home, { recursive: true, force: true });
+    throw e;
+  }
 }
 
 /** Gather the output of a test child. A time-out kills the whole process tree. Always resolves, and removes the temp home. */
@@ -601,7 +760,7 @@ function collectRun(child, home, timeoutMs) {
     }, timeoutMs);
     for (const s of [child.stdout, child.stderr]) s.on('data', (c) => { output += c; });
     child.on('error', (e) => finish({ status: null, error: String(e.message) }));
-    child.on('close', (code) => finish({ status: timedOut ? null : code }));
+    child.on('close', (code, signal) => finish({ status: timedOut ? null : code, signal: signal ?? null }));
   });
 }
 
@@ -630,13 +789,12 @@ function syntaxOk(wt, file) {
   return spawnSync(process.execPath, ['--check', file], { cwd: wt, windowsHide: true, timeout: 20_000, stdio: 'ignore' }).status === 0;
 }
 
-/** Remove a scratch worktree. A failure runs `git worktree prune` and returns false: it is reported, never thrown (finding 11). */
-function cleanUp(repo, wt, remove) {
+/** Remove a scratch copy. A failure returns false: it is reported, never thrown (finding 11). */
+function cleanUp(dir, remove) {
   try {
-    remove(repo, wt);
+    remove(dir);
     return true;
   } catch {
-    git(repo, ['worktree', 'prune'], { ok: true });
     return false;
   }
 }
@@ -647,12 +805,17 @@ async function attemptAtRef(wt, file, { timeoutMs, run, syntaxFile }) {
   return { results, wt, syntaxOk: syntaxFile ? syntaxOk(wt, syntaxFile) : true };
 }
 
-/** Run a test file twice at a ref, in a scratch worktree. { results, wt, syntaxOk, cleanupFailed } or { missing: true, cleanupFailed } or { error, cleanupFailed }. */
+/** Run a test file twice at a ref, in an archive copy. { results, wt, syntaxOk, cleanupFailed } or { missing: true, cleanupFailed } or { error, cleanupFailed }. */
 async function runAtRef(repo, ref, file, opts) {
-  const wt = addScratchWorktree(repo, ref);
+  let wt = null;
   let out;
-  try { out = await attemptAtRef(wt, file, opts); } catch (e) { out = { error: String(e?.message ?? e) }; }
-  out.cleanupFailed = !cleanUp(repo, wt, opts.remove);
+  try {
+    wt = exportRef(repo, ref, { mkdtemp: opts.mkdtemp, remove: opts.remove });
+    out = await attemptAtRef(wt, file, opts);
+  } catch (e) {
+    out = { error: String(e?.message ?? e) };
+  }
+  out.cleanupFailed = wt !== null && !cleanUp(wt, opts.remove);
   return out;
 }
 
@@ -670,48 +833,83 @@ function judgeRuns(base, seeded) {
   return seeded.every(passed) ? 'no-break' : null;
 }
 
+/** Drop a seed: refs first, then the manifest. A ref that could not be deleted is reported (refsLeft) and written to the manifest (F9). */
 function dropSeed(repo, seedsDir, m, reason) {
-  writeManifest(seedsDir, { ...m, stage: 'dropped', dropReason: reason });
-  dropRefs(repo, m.seedId);
-  return { ok: false, reason, dropped: true };
+  const left = dropRefs(repo, m.seedId) ? {} : { refsLeft: true };
+  writeManifest(seedsDir, { ...m, stage: 'dropped', dropReason: reason, ...left });
+  return { ok: false, reason, dropped: true, ...left };
 }
 
 /** A failure that shows broken code, not a broken behaviour: the seed does not parse, or an import cannot load. */
 const BROKEN_CODE = /SyntaxError|ERR_MODULE_NOT_FOUND/;
+const IMPORT_ERROR = /\b(?:TypeError|ReferenceError|SyntaxError)\b/;
+const DIRECTIVE = /\s#\s*(?:SKIP|TODO)\b/i;
 
-/** The reason to drop a seed from its seed-side outcome (cleanup, syntax, the four runs, broken code), or null to keep it. */
+/** The TAP results of real subtests in an output: { ok, name }. A result named after a code file is the file itself (it failed to load), not a subtest. */
+function subtestsOf(output) {
+  return [...String(output).matchAll(/^\s*(not )?ok \d+ - (.+?)\s*$/gm)].map((m) => ({ ok: !m[1], name: m[2] })).filter((s) => !/\.(?:mjs|js|cjs)$/.test(s.name));
+}
+
+/** A crash is a signal, no exit code, or a nonzero exit with no failing TAP result: the runner did not report a broken test (F8). */
+const crashed = (r) => r.signal != null || r.status === null || (r.status !== 0 && !/^\s*not ok \d+/m.test(r.output));
+
+/** Why a failing pair of seed runs is no proof of a broken behaviour, or null: broken code, a crash, an import-time error, or no passing subtest (F8). */
+function failureReason(results) {
+  const text = results.map((r) => r.output).join('\n');
+  if (BROKEN_CODE.test(text)) return 'broken-code';
+  if (results.some(crashed)) return 'crash';
+  const ran = results.map((r) => subtestsOf(r.output));
+  if (IMPORT_ERROR.test(text) && ran.some((s) => s.length === 0)) return 'import-error';
+  return ran.some((s) => !s.some((x) => x.ok && !DIRECTIVE.test(x.name))) ? 'no-pass-subtest' : null;
+}
+
+const sha256 = (lines) => createHash('sha256').update(lines.join('\n')).digest('hex');
+
+/** The reason to drop a seed from its seed-side outcome (cleanup, syntax, the four runs, the failure kind, an unstable failure), or null to keep it. */
 function seedSideReason(base, seeded) {
   if (seeded.cleanupFailed) return 'cleanup';
   if (seeded.error) return 'run-error';
   if (seeded.missing) return 'test-missing';
   if (!seeded.syntaxOk) return 'syntax-error';
-  const reason = judgeRuns(base.results, seeded.results);
+  const reason = judgeRuns(base.results, seeded.results) ?? failureReason(seeded.results);
   if (reason) return reason;
-  return BROKEN_CODE.test(seeded.results.map((r) => r.output).join('\n')) ? 'broken-code' : null;
+  const [a, b] = seeded.results.map((r) => sha256(failureLines(r.output, seeded.wt)));
+  return a === b ? null : 'unstable-failure';
+}
+
+/** True when the test file is on the refused path list, or its text at the base ref is risky (F1: the --test file is checked like the target). */
+function refusedTest(repo, baseRef, testFile) {
+  if (isProtectedTarget(testFile) || isAnswerKeyPath(testFile)) return true;
+  const tracked = readTracked(repo, baseRef, testFile);
+  return tracked !== null && isRiskyContent(tracked.text);
 }
 
 /**
- * Keep a seed only when `node --test <testFile>` passes twice at the base and fails twice at the seed, the seeded file passes `node --check`,
- * and the failure is no SyntaxError or missing module. testFile must be one *.test.* file other than the seeded file.
- * deps: timeoutMs (default 60 s per run), run(cwd, file, timeoutMs) and remove(repo, wt) for tests. A refused argument drops nothing.
+ * Keep a seed only when `node --test <testFile>` passes twice at the base and fails twice at the seed with the same failure lines, a subtest
+ * passes at the seed, the seeded file passes `node --check`, and the failure is no import error, crash, SyntaxError or missing module.
+ * testFile must be one *.test.* file other than the seeded file, and it must pass the refused list and the content rule.
+ * Each run is in an archive copy of the ref (exportRef) with an allowlist env. deps: timeoutMs (default 60 s per run), run(cwd, file, timeoutMs),
+ * remove(dir) and mkdtemp(prefix) for tests. A refused argument drops nothing.
  */
-export async function verifySeed({ repo, seedId, seedsDir, testFile, timeoutMs = VERIFY_TIMEOUT_MS, run = runTestOnce, remove = removeScratchWorktree }) {
+export async function verifySeed({ repo, seedId, seedsDir, testFile, timeoutMs = VERIFY_TIMEOUT_MS, run = runTestOnce, remove = removeScratchDir, mkdtemp = mkdtempSync }) {
   if (!isSeedId(seedId)) return no('bad-seed-id');
   if (badTestArg(testFile)) return no('bad-test-arg');
   const m = readManifest(seedsDir, seedId);
   if (!m || m.stage !== 'mutated') return no(m ? 'wrong-stage' : 'no-manifest');
   if (testFile === m.file) return no('seeded-file-is-test');
-  const base = await runAtRef(repo, m.baseRef, testFile, { timeoutMs, run, remove });
+  if (refusedTest(repo, m.baseRef, testFile)) return no('refused-test');
+  const opts = { timeoutMs, run, remove, mkdtemp };
+  const base = await runAtRef(repo, m.baseRef, testFile, opts);
   if (base.cleanupFailed) return dropSeed(repo, seedsDir, m, 'cleanup');
   if (base.missing) return no('test-missing');
   const early = base.error ? 'run-error' : judgeRuns(base.results, null);
   if (early) return dropSeed(repo, seedsDir, m, early);
-  const seeded = await runAtRef(repo, m.seedRef, testFile, { timeoutMs, run, remove, syntaxFile: m.file });
+  const seeded = await runAtRef(repo, m.seedRef, testFile, { ...opts, syntaxFile: m.file });
   const reason = seedSideReason(base, seeded);
   if (reason === 'test-missing') return no(reason);
   if (reason) return dropSeed(repo, seedsDir, m, reason);
   const lines = failureLines(seeded.results[0].output, seeded.wt);
-  const test = { command: `node --test ${testFile}`, testFile, failureLines: lines, failureSha256: createHash('sha256').update(lines.join('\n')).digest('hex') };
+  const test = { command: `node --test ${testFile}`, testFile, failureLines: lines, failureSha256: sha256(lines) };
   writeManifest(seedsDir, { ...m, stage: 'verified', test });
   return { ok: true, kept: true, test };
 }
@@ -745,8 +943,33 @@ function readGoldFile(file) {
   } catch { return null; }
 }
 
-/** Build the row of a verified seed, validate it with validateRow, and append it to the gold file. No write on a problem. */
-export function emitRow({ seedId, seedsDir, goldFile, slice, labels = SEED_LABELS }) {
+/** Write the rows to a temp file beside the gold file, then rename it over the gold file. The temp name ends in .tmp: loadGold reads *.json only. */
+function writeGoldAtomic(goldFile, rows, rename) {
+  const tmpFile = `${goldFile}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmpFile, `${JSON.stringify(rows, null, 2)}\n`);
+    rename(tmpFile, goldFile);
+  } catch (e) {
+    rmSync(tmpFile, { force: true });
+    throw e;
+  }
+}
+
+/** The append step of emitRow, run under the gold file lock: read, check the id, write by temp file and rename, mark the manifest. */
+function appendRow({ goldFile, seedsDir, m, row, rename }) {
+  const existing = readGoldFile(goldFile);
+  if (existing === null) return no('bad-gold-file');
+  if (existing.some((r) => r?.id === row.id)) return no('duplicate-row');
+  try { writeGoldAtomic(goldFile, [...existing, row], rename); } catch { return no('write-failed'); }
+  writeManifest(seedsDir, { ...m, stage: 'emitted', rowId: row.id });
+  return { ok: true, row };
+}
+
+/**
+ * Build the row of a verified seed, validate it with validateRow, and append it to the gold file under `<gold file>.lock` (F6: two emitters at
+ * once both land). No write on a problem. lockWaitMs and rename are test seams.
+ */
+export function emitRow({ seedId, seedsDir, goldFile, slice, labels = SEED_LABELS, lockWaitMs = 10_000, rename = renameSync }) {
   if (!isSeedId(seedId)) return no('bad-seed-id');
   const m = readManifest(seedsDir, seedId);
   if (!m) return no('no-manifest');
@@ -754,13 +977,8 @@ export function emitRow({ seedId, seedsDir, goldFile, slice, labels = SEED_LABEL
   const row = buildRow(m, { slice, labels: labels.map((l) => ({ ...l })) });
   const problems = [...validateRow(row), ...labelProblems(labels)];
   if (problems.length) return { ok: false, reason: 'invalid-row', problems: problems.length };
-  const existing = readGoldFile(goldFile);
-  if (existing === null) return no('bad-gold-file');
-  if (existing.some((r) => r?.id === row.id)) return no('duplicate-row');
   mkdirSync(path.dirname(goldFile), { recursive: true });
-  writeFileSync(goldFile, `${JSON.stringify([...existing, row], null, 2)}\n`);
-  writeManifest(seedsDir, { ...m, stage: 'emitted', rowId: row.id });
-  return { ok: true, row };
+  return withLock(goldFile, { lockWaitMs }, () => appendRow({ goldFile, seedsDir, m, row, rename }));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -801,21 +1019,33 @@ function remoteEvalRefs(repo, remote, timeoutMs) {
   return out === null ? null : out.trim().split('\n').filter(Boolean).length;
 }
 
+const refSeedId = (name) => name.replace(/^refs\/eval\/seed(?:-base)?\//, '');
+
+/** Refs by the stage of their manifest (F9): orphanRefs (no manifest), pendingRefs (a crash before the end of createSeed), droppedRefs (a drop that left a ref). */
+function manifestCounts(refs, seedsDir) {
+  const stages = new Map(allManifests(seedsDir).map(({ id, m }) => [id, m.stage]));
+  const stageOf = (r) => stages.get(refSeedId(r.name));
+  const count = (pick) => refs.filter((r) => pick(stageOf(r))).length;
+  return { orphanRefs: count((s) => s === undefined), pendingRefs: count((s) => s === 'pending'), droppedRefs: count((s) => s === 'dropped') };
+}
+
 /**
  * Counts: refs, answerKeyRefs (a ref tree holds an answer-key path), reachable (a ref is inside a branch, a remote-tracking branch or a tag),
- * badParents, remoteRefs (with a remote). ok = all zero. Zero seed refs is not a pass: { ok: false, reason: 'no-refs' } (finding 9).
+ * badParents, orphanRefs, pendingRefs, droppedRefs (see manifestCounts), remoteRefs (with a remote). ok = all zero.
+ * The remote is read first (F2): a remote that holds refs/eval fails even when no local ref is left. Zero seed refs is not a pass (finding 9).
  */
-export function checkRefs({ repo, remote, timeoutMs = REMOTE_TIMEOUT_MS }) {
+export function checkRefs({ repo, remote, timeoutMs = REMOTE_TIMEOUT_MS, seedsDir = path.join(HERE, 'seeds') }) {
+  const remoteRefs = remote === undefined ? undefined : remoteEvalRefs(repo, remote, timeoutMs);
   const refs = seedRefs(repo);
-  if (refs.length === 0) return { ok: false, reason: 'no-refs', refs: 0 };
-  const answerKeyRefs = refs.filter((r) => treeFiles(repo, r.oid).some(isAnswerKeyPath)).length;
-  const reachable = refs.filter((r) => reachableFromRef(repo, r.oid)).length;
-  const result = { refs: refs.length, answerKeyRefs, reachable, badParents: badParentCount(repo, refs) };
-  if (remote !== undefined) {
-    result.remoteRefs = remoteEvalRefs(repo, remote, timeoutMs);
-    if (result.remoteRefs === null) return { ok: false, reason: 'remote-error', ...result, remoteRefs: undefined };
-  }
-  return { ok: answerKeyRefs === 0 && reachable === 0 && result.badParents === 0 && !result.remoteRefs, ...result };
+  if (remoteRefs === null) return { ok: false, reason: 'remote-error', refs: refs.length };
+  const remoteInfo = remoteRefs === undefined ? {} : { remoteRefs };
+  if (refs.length === 0) return { ok: false, reason: remoteRefs ? 'remote-refs' : 'no-refs', refs: 0, ...remoteInfo };
+  const found = {
+    refs: refs.length, answerKeyRefs: refs.filter((r) => treeFiles(repo, r.oid).some(isAnswerKeyPath)).length,
+    reachable: refs.filter((r) => reachableFromRef(repo, r.oid)).length, badParents: badParentCount(repo, refs), ...manifestCounts(refs, seedsDir), ...remoteInfo,
+  };
+  const { refs: total, ...counts } = found;
+  return { ok: Object.values(counts).every((n) => !n), ...found, refs: total };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -886,15 +1116,22 @@ export function laneCount(ledgerPath, now) {
   return countDay(readHeadlessLedger(ledgerPath).entries.filter((e) => e.purpose === LANE_PURPOSE), now);
 }
 
+/** The claim file is one fixed path (F3). Under node --test the default is refused, so a test run never claims in the real state file. */
+export function assertClaimSafe(claimFile, env = process.env) {
+  if (typeof claimFile !== 'string' || claimFile === '') throw new Error('a claim file path is required');
+  if (env.NODE_TEST_CONTEXT && samePath(claimFile, DEFAULT_CLAIM_FILE)) throw new Error('refusing the default lane claim file under node --test');
+}
+
 /**
  * Check the lane day cap and claim a run, as one step under a lock this module owns (finding 14). headless.mjs reserves its own ledger row inside
- * runClaude and has no exported lock around "count, then reserve", and it is not edited here. So the lane keeps its own claim file beside the
- * ledger: the count (the larger of the ledger rows and the claims of today) and the new claim are written under `<claim file>.lock`.
+ * runClaude and has no exported lock around "count, then reserve", and it is not edited here. So the lane keeps its own claim file, ONE fixed
+ * path whatever --ledger says (F3: a cap per ledger path would give 8 runs to each path): the count (the larger of the ledger rows and the
+ * claims of today) and the new claim are written under `<claim file>.lock`.
  * Two sessions that count at the same moment cannot both pass. A claim whose run the ledger then refuses stays counted: the cap errs safe.
  */
-export function claimLaneRun(ledgerPath, now) {
-  const claimFile = `${ledgerPath}.re-seed-lane.jsonl`;
-  mkdirSync(path.dirname(ledgerPath), { recursive: true });
+export function claimLaneRun(ledgerPath, now, claimFile = DEFAULT_CLAIM_FILE) {
+  assertClaimSafe(claimFile);
+  mkdirSync(path.dirname(claimFile), { recursive: true });
   return withLock(claimFile, { lockWaitMs: 10_000 }, () => {
     const used = Math.max(laneCount(ledgerPath, now), countDay(readHeadlessLedger(claimFile).entries, now));
     if (used >= LANE_DAY_CAP) return no('lane-cap');
@@ -960,7 +1197,7 @@ export async function runSeedClaude({ file, fileText, brief, forbidden, ledgerPa
   assertLedgerSafe(ledgerPath);
   const lint = lintInputs({ brief, file, fileText }, forbidden);
   if (!lint.ok) return lint;
-  const claim = claimLaneRun(ledgerPath, (deps.now ?? Date.now)());
+  const claim = claimLaneRun(ledgerPath, (deps.now ?? Date.now)(), deps.claimFile ?? DEFAULT_CLAIM_FILE);
   if (!claim.ok) return no(claim.reason);
   const ownCwd = deps.cwd === undefined;
   const cwd = deps.cwd ?? mkdtempSync(path.join(os.tmpdir(), 'seed-claude-'));
@@ -981,23 +1218,40 @@ function smokeFailure(res) {
   return check.ok ? null : { ok: false, reason: 'smoke-context', markers: check.markers.length, hookEvents: check.hookEvents };
 }
 
-/** The deps of runClaude: project setting sources only, and for a smoke run a spawn that asks for stream-json (headless.mjs buildArgs fixes json). */
+/**
+ * The deps of runClaude: project setting sources only, an allowlist env (F10b: runClaude passes deps.env to childEnv, which then strips the
+ * Anthropic keys), and for a smoke run a spawn that asks for stream-json (headless.mjs buildArgs fixes json).
+ */
 function claudeRunDeps(deps, { ledgerPath, cwd, smoke }) {
   const base = deps.spawnFn ?? spawn;
   const smokeSpawn = (command, args, opts) => base(command, streamJsonArgs(args), opts);
-  return { ...deps, ledgerPath, cwd, prefixArgs: [...SETTING_ARGS, ...(deps.prefixArgs ?? [])], ...(smoke ? { spawnFn: smokeSpawn } : {}) };
+  const env = claudeChildEnv(deps.env ?? process.env);
+  return { ...deps, ledgerPath, cwd, env, prefixArgs: [...SETTING_ARGS, ...(deps.prefixArgs ?? [])], ...(smoke ? { spawnFn: smokeSpawn } : {}) };
 }
 
 // A cap or a run fault stops the batch: each further run would spend a ledger row on the same fault.
 const STOP_REASONS = new Set(['lane-cap', 'ledger-cap', 'served-model', 'no-claude', 'lock']);
 
-/** Run items one after another. The first stop reason ends the batch: no retry. */
-export async function runSeedBatch(items, base, deps = {}) {
+/**
+ * Run items one after another. The first stop reason ends the batch: no retry.
+ * F7: onResult(entry) runs right after each run, so a paid result is planted before the next run starts. Each item is in its own try:
+ * a throw (from the run or from onResult) is recorded as 'item-error' and ends the batch, and the earlier results are kept.
+ */
+export async function runSeedBatch(items, base, deps = {}, onResult = () => {}) {
   const results = [];
   for (const item of items) {
-    const r = await runSeedClaude({ ...item, ...base }, deps);
-    if (STOP_REASONS.has(r.reason)) return { results, stopped: r.reason };
-    results.push({ file: item.file, ...r });
+    const entry = { file: item.file };
+    try {
+      const r = await runSeedClaude({ ...item, ...base }, deps);
+      if (STOP_REASONS.has(r.reason)) return { results, stopped: r.reason };
+      Object.assign(entry, r);
+      results.push(entry);
+      onResult(entry);
+    } catch {
+      if (!results.includes(entry)) results.push(entry);
+      Object.assign(entry, { ok: false, created: false, reason: 'item-error' });
+      return { results, stopped: 'item-error' };
+    }
   }
   return { results };
 }
@@ -1012,7 +1266,7 @@ const USAGE = [
   '  mutate      --repo <dir> --seeds <dir> --config <f> --dataset <f> --file <path> --operator <id> [--index <n>] [--rev <rev>]',
   '  verify      --repo <dir> --seeds <dir> --seed <id> --test <one test file>',
   '  emit        --seeds <dir> --gold-file <file> --seed <id> [--slice security]',
-  '  check-refs  [--repo <dir>] [--remote <name>]      the remote defaults to fork; zero seed refs is not a pass',
+  '  check-refs  [--repo <dir>] [--seeds <dir>] [--remote <name>]      the remote defaults to fork; zero seed refs is not a pass; a ref with no manifest fails',
   '  claude      --confirm-headless --repo <dir> --seeds <dir> --ledger <file> --config <f> --dataset <f> --gold <dir> --files <a,b> --brief <text> [--rev <rev>] [--smoke]',
   `operators: ${OPERATORS.map((o) => o.id).join(', ')}`,
   'Under node --test the repo, seeds, gold, gold-file and ledger flags must be explicit. Exit: 0 ok, 1 refused or failed check, 2 usage.',
@@ -1084,17 +1338,14 @@ const runFilter = (ctx, files) => ({ ...ctx, ...devFilter({ ...ctx, files }) });
 
 const refusalCounts = (f) => ({ refusedHoldoutReserve: f.refused.holdoutReserve, refusedAnswerKey: f.refused.answerKey, refusedProtected: f.refused.protectedTargets, missingPrs: f.missingPrs });
 
-function refusalOf(f) {
-  if (f.failedClosed) return 'missing-pr-merge';
-  if (f.refused.answerKey) return 'answer-key';
-  return f.refused.protectedTargets ? 'protected' : 'holdout-reserve';
-}
+/** The refusal of a single-file verb (F5): one reason, 'refused', whatever rule fired. Only a failed-closed run (no file is the cause) names itself. */
+const refusalOf = (f) => (f.failedClosed ? { reason: 'missing-pr-merge', missingPrs: f.missingPrs } : { reason: 'refused' });
 
 function verbPlan(o, io) {
   const ctx = runContext(o);
   const code = treeFiles(ctx.repo, ctx.rev).filter((f) => CODE_FILE.test(f) && !TEST_FILE.test(f));
   const f = runFilter(ctx, code);
-  if (f.failedClosed) { out(io, { ok: false, reason: refusalOf(f), ...refusalCounts(f) }); return 1; }
+  if (f.failedClosed) { out(io, { ok: false, ...refusalOf(f), ...refusalCounts(f) }); return 1; }
   const texts = readBlobs(f.repo, f.rev, f.allowed);
   const sites = Object.fromEntries(OPERATORS.map((op) => [op.id, [...texts.values()].reduce((n, t) => n + op.find(t).length, 0)]));
   out(io, { files: code.length, allowed: f.allowed.length, ...refusalCounts(f), sites });
@@ -1105,7 +1356,7 @@ function verbMutate(o, io) {
   need(o, ['--file', '--operator']);
   const file = norm(o['--file']);
   const f = runFilter(runContext(o), [file]);
-  if (!f.allowed.length) { out(io, { ok: false, refused: refusalOf(f), ...refusalCounts(f) }); return 1; }
+  if (!f.allowed.length) { out(io, { ok: false, ...refusalOf(f) }); return 1; }
   if (!operatorById(o['--operator'])) throw new UsageError('unknown operator');
   const tracked = readTracked(f.repo, f.rev, file);
   const site = tracked ? pickSite(o['--operator'], tracked.text, Number(o['--index'] ?? 0)) : null;
@@ -1131,7 +1382,7 @@ function verbEmit(o, io) {
 }
 
 function verbCheckRefs(o, io) {
-  const r = checkRefs({ repo: repoOf(o), remote: o['--remote'] ?? DEFAULT_REMOTE });
+  const r = checkRefs({ repo: repoOf(o), remote: o['--remote'] ?? DEFAULT_REMOTE, seedsDir: seedsOf(o) });
   out(io, r);
   return r.ok ? 0 : 1;
 }
@@ -1141,10 +1392,12 @@ function claudeItems(o, repo, sha, allowed) {
   return allowed.filter((f) => texts.has(f)).map((file) => ({ file, fileText: texts.get(file), brief: o['--brief'] }));
 }
 
-function summarise(batch, created, refused) {
+/** The summary of a claude batch. F5: one total of refused files, never a count by category (only plan prints those). */
+function summarise(batch, refused) {
   const dropped = {};
   for (const r of batch.results.filter((x) => !x.created)) dropped[r.reason ?? 'unknown'] = (dropped[r.reason ?? 'unknown'] ?? 0) + 1;
-  return { ran: batch.results.length, created, dropped, refusedHoldoutReserve: refused.holdoutReserve, ...(batch.stopped ? { stopped: batch.stopped } : {}) };
+  const created = batch.results.filter((x) => x.created).length;
+  return { ran: batch.results.length, created, dropped, refused, ...(batch.stopped ? { stopped: batch.stopped } : {}) };
 }
 
 async function verbClaude(o, io) {
@@ -1152,30 +1405,30 @@ async function verbClaude(o, io) {
   need(o, ['--files', '--brief']);
   const ledgerPath = o['--ledger'] ?? defaultHeadlessLedger(io.env);
   assertLedgerSafe(ledgerPath, io.env);
-  const f = runFilter(runContext(o), o['--files'].split(',').map(norm));
+  const deps = io.headlessDeps ?? {};
+  assertClaimSafe(deps.claimFile ?? DEFAULT_CLAIM_FILE, io.env);
+  const files = o['--files'].split(',').map(norm);
+  const f = runFilter(runContext(o), files);
   const items = claudeItems(o, f.repo, f.rev, f.allowed);
-  if (!items.length) { out(io, { ok: false, ran: 0, ...refusalCounts(f) }); return 1; }
+  if (!items.length) { out(io, { ok: false, ran: 0, refused: files.length }); return 1; }
   const forbidden = forbiddenSet({ cfg: f.cfg, dataset: f.dataset, goldRows: goldRowsOf(o) });
-  const batch = await runSeedBatch(items, { forbidden, ledgerPath, smoke: Boolean(o['--smoke']) }, io.headlessDeps ?? {});
-  const created = plantClaudeSeeds({ repo: f.repo, rev: f.rev, seedsDir: seedsOf(o) }, batch);
-  out(io, summarise(batch, created, f.refused));
-  return created > 0 ? 0 : 1;
+  const where = { repo: f.repo, rev: f.rev, seedsDir: seedsOf(o) };
+  const batch = await runSeedBatch(items, { forbidden, ledgerPath, smoke: Boolean(o['--smoke']) }, deps, (entry) => plantOne(where, entry));
+  const summary = summarise(batch, files.length - items.length);
+  out(io, summary);
+  return summary.created > 0 ? 0 : 1;
 }
 
 function goldRowsOf(o) {
   try { return loadGold(o['--gold'] ?? GOLD_DIR).rows; } catch { throw new UsageError('--gold holds a file that loadGold refuses'); }
 }
 
-/** Turn each good Claude patch into a seed. Marks every result with created and the refusal reason. Returns the count created. */
-function plantClaudeSeeds(where, batch) {
-  let created = 0;
-  for (const r of batch.results.filter((x) => x.ok)) {
-    const made = createSeed({ ...where, file: r.file, site: r.site, author: 'claude', truthNote: r.truthNote, model: r.model, effort: r.effort });
-    r.created = made.ok;
-    r.reason = made.ok ? r.reason : made.reason;
-    created += made.ok ? 1 : 0;
-  }
-  return created;
+/** Turn one good Claude patch into a seed, right after its run (F7). Marks the result with created and the refusal reason. A bad patch is left alone. */
+function plantOne(where, r) {
+  if (!r.ok) return;
+  const made = createSeed({ ...where, file: r.file, site: r.site, author: 'claude', truthNote: r.truthNote, model: r.model, effort: r.effort });
+  r.created = made.ok;
+  r.reason = made.ok ? r.reason : made.reason;
 }
 
 const VERBS = { plan: verbPlan, mutate: verbMutate, verify: verbVerify, emit: verbEmit, 'check-refs': verbCheckRefs, claude: verbClaude };
