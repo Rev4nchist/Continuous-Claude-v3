@@ -111,8 +111,9 @@ function tap(step: Step, key: string, head: string, label: string, tree?: string
 }
 const shipTap = (branch = 'feat/x') => tap('ship', `${REPO}@${branch}`, HEAD, 'Commit and push (Recommended)', TREE);
 
-const bash = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: '/repo', ...extra });
-const pwsh = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo', ...extra });
+// Round 3 item 17: every payload carries a session_id (hook-dev rule: without it a child process takes a PID-based id).
+const bash = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: '/repo', session_id: 'push-blocks-test', ...extra });
+const pwsh = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo', session_id: 'push-blocks-test', ...extra });
 const verdict = (input: object, w?: World) => decide(input, deps(w));
 const denied = (input: object, w?: World) => verdict(input, w).action === 'deny';
 const reasonOf = (input: object, w?: World): string => { const d = verdict(input, w); return d.action === 'deny' ? d.reason : ''; };

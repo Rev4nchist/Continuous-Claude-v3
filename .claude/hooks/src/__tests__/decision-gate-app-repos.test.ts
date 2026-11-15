@@ -803,10 +803,14 @@ describe('C14 F1: a repo is read only where gh takes one, in the gh segment itse
     openX();
     expect(passes(bash(`${CREATE} ${BODY_URL}`))).toBe(true);
   });
-  it('a CCv3 create whose heredoc body names another repo is allowed with its tap', () => {
+  // Round 3 C1 (seat GO 07:3x, the first C1 cost): a body made by $(...) is refused even with the tap. A " inside $(...) does not close
+  // the outer quote in bash, so a head flag can hide in it; the deny names the way out (--body-file, -F body=@).
+  it('a CCv3 create whose heredoc body names another repo is head-unresolved even with its tap (round 3 C1 cost)', () => {
     tapCcv3();
     const cmd = `gh pr create --draft --head feat --title t --body "$(cat <<'EOT'\nsee https://github.com/other/lib/pull/3\nEOT\n)"`;
-    expect(passes(bash(cmd, '/work/cc'), ccv3)).toBe(true);
+    const r = denyOf(bash(cmd, '/work/cc'), ccv3);
+    expect(r?.pattern).toBe('head-unresolved');
+    expect(r!.reason).toMatch(/--body-file <path>/);
   });
   it('a CCv3 merge chained to a gh call that names another repo is judged with the CCv3 key', () => {
     tapCcv3();
@@ -837,7 +841,8 @@ describe('C14 F1: a repo is read only where gh takes one, in the gh segment itse
   it('a variable -R of another segment does not make a covered create unreadable; its own -R $R does', () => {
     openX();
     expect(passes(bash(`ls -R $D && ${CREATE}`))).toBe(true);
-    expect(denyOf(bash(`${CREATE} -R $R`))?.pattern).toBe('repo-unreadable');
+    // Round 3 C1: a $ outside quotes is refused by the create reader first (head-unresolved; still a deny, other text).
+    expect(denyOf(bash(`${CREATE} -R $R`))?.pattern).toBe('head-unresolved');
   });
 });
 
@@ -1504,10 +1509,12 @@ describe('C24 item 3 (G4): the CCv3 texts and the CCv3 head read are those of ba
     });
   }
   // Change that breaks it: the CCv3 head read takes the redirect-aware cut (base cut the create at the & of 2>&1 and read the current branch).
-  it('a CCv3 create with --head after 2>&1 reads the current branch, as base did', () => {
+  // Round 3 C1 (seat pre-read finding 1): this row pinned a hole. gh gets --head other, the base cut read feat (tapped). Any redirect
+  // in the create text is now refused, before any cut.
+  it('a CCv3 create with --head after 2>&1 is head-unresolved (round 3: the old allow was the pre-read hole)', () => {
     tap('open-pr', 'Rev4nchist/Continuous-Claude-v3@feat', HEAD, 'Open draft PR');
     const w = at('/work/cc', { ...CC, heads: { feat: HEAD, other: HEAD2 } });
-    expect(verdict(bash('gh pr create --draft --title t 2>&1 --head other', '/work/cc'), w)).toEqual({ action: 'allow' });
+    expect(denyOf(bash('gh pr create --draft --title t 2>&1 --head other', '/work/cc'), w)?.pattern).toBe('head-unresolved');
   });
   // Change that breaks it: read the repo of a CCv3 create from the base cut too (a -R after 2>&1 still goes to gh: R5c).
   it('a CCv3 create with -R other/lib after 2>&1 is still repo-foreign', () => {
@@ -1517,7 +1524,8 @@ describe('C24 item 3 (G4): the CCv3 texts and the CCv3 head read are those of ba
   // Change that breaks it: the app head read takes the base cut (the gh call gets --head main, the gate would read feat).
   it('the same create in a covered folder reads --head after 2>&1', () => {
     openX();
-    expect(denyOf(bash('gh pr create --draft --title t 2>&1 --head main'))?.pattern).toBe('open-pr');
+    // Round 3 C1: any redirect in the create text is refused (head-unresolved; still a deny).
+    expect(denyOf(bash('gh pr create --draft --title t 2>&1 --head main'))?.pattern).toBe('head-unresolved');
   });
 });
 
@@ -1527,11 +1535,12 @@ describe('C24 item 4 (F2): an unsafe value is left out when app-ask reads it its
   // Change that breaks it: give an unsafe value that is not what app-ask reads by itself a placeholder or a quoting rule again.
   for (const odd of ODD) {
     it(`a create of ${JSON.stringify(odd)} (not the current branch): no offer command, one plain line that says to tell Dave`, () => {
+      // Round 3 C1 (seat ruling A, point 5): a non-ASCII character or a comma outside quotes is refused by the create reader first.
+      // Still no offer command and no quoting rule.
       const r = denyOf(bash(`gh pr create --draft --title t --head ${odd}`), onFeat(odd));
-      expect(r?.pattern).toBe('open-pr');
+      expect(r?.pattern).toBe('head-unresolved');
       expect(commandsIn(r!.reason)).toEqual([]);
-      expect(r!.reason).toContain(`the branch ${odd} ${STOP}`);
-      expect(r!.reason).not.toMatch(/single quotes|fill in|<branch>/);
+      expect(r!.reason).not.toMatch(/single quotes|fill in/);
     });
   }
   it('an unsafe folder that is not the payload cwd: no offer command, the plain line', () => {
@@ -2099,9 +2108,10 @@ describe('R5 F8: the open-pr key holds the base branch', () => {
     expect(commandsIn(r!.reason)).toEqual([`${ASK} open-pr --remote up --branch feat --base dev --dir '/work/app-x' --json`]);
     expect(allowAfterAsk(bash('gh pr create --draft --head feat --base=dev --title t')).key).toBe('acme/app-x@feat:dev');
     expect(passes(bash('gh api repos/acme/app-x/pulls -X POST -f head=feat -f base=dev -f title=t'))).toBe(true);
+    // Round 3 C1: a $ outside quotes is refused by the create reader first (head-unresolved; still no offer command).
     const v = denyOf(bash('gh pr create --draft --head feat --base $B --title t'));
+    expect(v?.pattern).toBe('head-unresolved');
     expect(commandsIn(v!.reason)).toEqual([]);
-    expect(v!.reason).toContain(`the base $B ${STOP}`);
   });
   // Change that breaks it: read a --base inside quoted prose (a --body that names a base is text).
   // Change that breaks it: read only the first base (gh takes the last --base, and the last base= field), or miss --field=base=.

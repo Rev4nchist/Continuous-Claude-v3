@@ -20,7 +20,8 @@ import { routerFlag } from './shared/router-config.js';
 
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 
-const PR_CREATE_RE = /\bgh\s+pr\s+create\b/i;
+// Round 3 C1 (F-2): `gh pr new` is an alias of `gh pr create`.
+const PR_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
 const GH_API_RE = /\bgh\s+api\b/i;
 // Only the collection endpoint `.../pulls` opens a PR. `/pulls/5/reviews` and thread replies do not:
 // the path must end at "pulls" (whitespace, a quote, `?` or end of string follows).

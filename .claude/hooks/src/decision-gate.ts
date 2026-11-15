@@ -683,6 +683,10 @@ interface Shape {
   fmtext?: string;
   /** Fixer G, item 5: the GH_REPO assignments of the segments before this one (priorGhRepo, under the Bash and the PowerShell mask). */
   prior?: Prior;
+  /** Round 3 C1, seat ruling A: a create's raw tail (rawTail), read by createRead; it is not cut at a lone & or a CR. */
+  tail?: string;
+  /** Seat item 3: the payload tool is PowerShell (a backslash is literal there). */
+  pwsh?: boolean;
 }
 interface Prior { repos: string[]; nonLiteral: boolean }
 const NO_PRIOR: Prior = { repos: [], nonLiteral: false };
@@ -702,7 +706,7 @@ const SEGMENT_RE = /[;&|\r\n]+/;
 const lastArg = (args: string, re: RegExp): string | null => re.exec(args)?.[1] ?? null;
 
 /** The land and merge shapes of ONE command segment (no && ; | or newline in it), with the PR and the sha read from that segment alone. */
-function landShapesOf(seg: string, textOnly = false, rawSeg = seg): Shape[] {
+function landShapesOf(seg: string, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh = false): Shape[] {
   const out: Shape[] = [];
   // The land script pins its own head: its sha is read as before (round 3 C2 changes only the merge read).
   const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
@@ -711,13 +715,32 @@ function landShapesOf(seg: string, textOnly = false, rawSeg = seg): Shape[] {
   if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out.push({ kind: 'land', pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
   // Round 3 C2: the head is read from the RAW segment, whose quotes are what gh gets. When only the quotes-deleted view shows the merge
-  // (quotes inside its words), the head cannot be read whole: fail closed.
-  const rawCli = MERGE_CLI_RE.exec(rawSeg);
-  if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...(rawCli ? cliMergeHead(rawCli[1]) : UNREAD_HEAD) });
+  // (quotes inside its words), the head cannot be read whole: fail closed. Seat ruling A: the words are read from the raw TAIL (the text up
+  // to the next ; | newline or && outside quotes), not from the segment cut at every & and CR, so a head after 2>&1 is read too.
+  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? TAIL_CLI_RE.exec(tail) : null;
+  if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...(rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD) });
   const api = MERGE_API_RE.exec(seg);
-  const rawApi = MERGE_API_RE.exec(rawSeg);
-  if (api && !GET_RE.test(api[0])) out.push({ kind: 'merge', pr: api[1], ...(rawApi ? apiMergeHead(rawApi[0]) : UNREAD_HEAD) });
+  const rawApi = MERGE_API_RE.exec(rawSeg) ? TAIL_API_RE.exec(tail) : null;
+  if (api && !GET_RE.test(api[0])) out.push({ kind: 'merge', pr: api[1], ...(rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD) });
   return out;
+}
+const TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
+const TAIL_API_RE = /\bgh\s+api\b[\s\S]*$/i;
+
+/**
+ * Seat ruling A: the raw text of the command that starts `text`, up to the first ; | newline or && OUTSIDE quotes (bash and PowerShell
+ * both end a command there). A lone & and a CR are kept in the tail, so the allowlist (unmodelled) refuses them; an open quote runs to
+ * the end, so the pairing refuses it.
+ */
+function rawTail(text: string): string {
+  let q = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === q) q = ''; continue; }
+    if (ch === "'" || ch === '"') { q = ch; continue; }
+    if (ch === ';' || ch === '|' || ch === '\n' || (ch === '&' && text[i + 1] === '&')) return text.slice(0, i);
+  }
+  return text;
 }
 
 // ---------- round 3 C2: the merge head, read from one known place, once ----------
@@ -726,7 +749,7 @@ function landShapesOf(seg: string, textOnly = false, rawSeg = seg): Shape[] {
  * The words of a command text with their quotes paired (bash rules: '...' is literal, "..." takes \ escapes; a \ outside quotes escapes the
  * next character). Null when a quote is not closed: the reader cannot pair it, so the caller fails closed. A redirect word stays a word.
  */
-function pairedWords(text: string): string[] | null {
+function pairedWords(text: string, pwsh = false): string[] | null {
   const words: string[] = [];
   let cur = '';
   let open = false;
@@ -737,12 +760,12 @@ function pairedWords(text: string): string[] | null {
     if (ch === "'") { const end = text.indexOf("'", i + 1); if (end < 0) return null; cur += text.slice(i + 1, end); i = end; continue; }
     if (ch === '"') {
       let j = i + 1;
-      for (; j < text.length && text[j] !== '"'; j++) { if (text[j] === '\\' && j + 1 < text.length) j++; cur += text[j]; }
+      for (; j < text.length && text[j] !== '"'; j++) { if (!pwsh && text[j] === '\\' && j + 1 < text.length) j++; cur += text[j]; }
       if (j >= text.length) return null;
       i = j;
       continue;
     }
-    if (ch === '\\' && i + 1 < text.length) { cur += text[++i]; continue; }
+    if (!pwsh && ch === '\\' && i + 1 < text.length) { cur += text[++i]; continue; }
     cur += ch;
   }
   if (open) words.push(cur);
@@ -750,29 +773,41 @@ function pairedWords(text: string): string[] | null {
 }
 
 /**
- * Round 3 C2, seat findings (a) and (b): true when the text holds a character whose effect the merge reader does not model, so the words
- * gh gets cannot be proven. Inside single quotes nothing is special (bash and PowerShell agree, '' included). Inside double quotes: $, a
- * backtick, a backslash (bash escapes with \, PowerShell with a backtick, so the two pair quotes differently). Outside quotes also a glob
- * or brace word, parens, a comma (a PowerShell array) and an @ that opens a word (a PowerShell splat).
+ * Round 3 C2 and C1, seat ruling A (an allowlist, not a list of bad characters): true unless every character of the text is one whose
+ * effect the reader models the same way in bash and PowerShell. A character not on the list makes the head unread.
+ *   - outside quotes: ASCII letters, digits, space, tab, - _ . / = : and the two quote characters. An @ inside a word (body=@file) is
+ *     literal in both shells; an @ that opens a word is a PowerShell splat, so it is refused.
+ *   - inside '...': printable ASCII and a newline (literal in both shells; '' splits the same in both).
+ *   - inside "...": the same but $, a backtick and a backslash (bash expands $ and escapes with \, PowerShell with a backtick).
+ *   - anywhere: a non-ASCII character (a curly quote is a quote for PowerShell, NBSP and the Unicode spaces are word characters for bash),
+ *     a CR, \v and \f. An open quote at the end is refused by pairedWords, the next step of every reader.
+ * So a redirect (< >), a lone &, # (a comment), $, a backtick, a backslash, a glob, a brace, a paren and a comma outside quotes are refused.
  */
-function unmodelled(text: string): boolean {
-  let q: '' | "'" | '"' = '';
+function unmodelled(text: string, pwsh = false): boolean {
+  let q = '';
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (q === "'") { if (ch === "'") q = ''; continue; }
-    if ('$`\\'.includes(ch)) return true;
-    if (q === '"') { if (ch === '"') q = ''; continue; }
+    // Seat item 3: a backslash next to a quote is refused in every tool (a native program can read \" as an escaped quote).
+    if (ch === '\\' && (QUOTE_CH.has(text[i - 1] ?? '') || QUOTE_CH.has(text[i + 1] ?? ''))) return true;
+    if (q === "'") { if (ch === "'") q = ''; else if (!QUOTED_OK.test(ch)) return true; continue; }
+    if (q === '"') { if (ch === '"') q = ''; else if (!QUOTED_OK.test(ch) || '$`'.includes(ch) || (ch === '\\' && !pwsh)) return true; continue; }
     if (ch === "'" || ch === '"') { q = ch; continue; }
-    if ('*?[]{}(),'.includes(ch)) return true;
-    if (ch === '@' && (i === 0 || /\s/.test(text[i - 1]))) return true;
+    if (ch === '@' && i > 0 && !/[ \t]/.test(text[i - 1])) continue;
+    if (ch === '\\' && pwsh) continue; // seat item 3: literal in PowerShell; the Bash tool refuses it (an escape)
+    if (!BARE_OK.test(ch)) return true;
   }
   return false;
 }
+const QUOTE_CH = new Set(["'", '"']);
+const BARE_OK = /^[A-Za-z0-9 \t\-_./=:]$/;
+const QUOTED_OK = /^[\x20-\x7E\n]$/;
 
 type MergeHead = { sha: string | null; shaBad?: true };
 const UNREAD_HEAD: MergeHead = { sha: null, shaBad: true };
 /** The deny text of a merge whose head cannot be read (CCv3 and covered folders: it names no CCv3 tool). */
-const HEAD_UNREAD_WHY = (pr: string | null): string => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, or an unpaired quote. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : '<n>'} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>.`;
+const HEAD_UNREAD_WHY = (pr: string | null): string => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, an unpaired quote, or a character this gate cannot read the same way in bash and PowerShell. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : '<n>'} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>. ${PLAIN_WAY_OUT}`;
+/** Seat 07:4x, item 2: the exact way out of the two biggest measured costs (a redirect after the call, a $ value). */
+const PLAIN_WAY_OUT = 'For a redirect: run the call with no redirect. For a $ variable or $(...): put the value in the command as plain text or use a body file.';
 const HEX40 = /^[0-9a-f]{40}$/i;
 /** One head from the values found: none is no head; any value that is not a literal 40-hex string, or two different values, is bad. */
 function oneHead(values: string[]): MergeHead {
@@ -785,36 +820,39 @@ const MERGE_BOOL = new Set(['--merge', '-m', '--squash', '-s', '--rebase', '-r',
 const MERGE_VALUE = new Set(['--body', '-b', '--body-file', '-F', '--subject', '-t', '--author-email', '-A', '--match-head-commit', '--repo', '-R']);
 const SHORT_BOOL = 'msrd';
 const SHORT_VALUE = 'bFtAR';
-const REDIRECT_WORD = /^\d*[<>]/;
 
 /**
  * A short-flag cluster (gh takes `-dR x` and `-dRx`): every letter but the last is a known short bool; the last is a bool or a known
  * short value flag, whose value is the rest of the word or the next word. Returns how many next words it uses, or null when unknown.
  */
 function shortCluster(w: string, next: string | undefined): number | null {
+  return clusterOf(w, next, SHORT_BOOL, SHORT_VALUE)?.used ?? null;
+}
+/** The cluster read with the letter sets of one command: the value flag it ends in (letter, value), and how many next words it uses. */
+function clusterOf(w: string, next: string | undefined, bools: string, values: string): { used: number; letter: string | null; value: string | null } | null {
   const letters = w.slice(1);
   for (let k = 0; k < letters.length; k++) {
     const ch = letters[k];
-    if (SHORT_BOOL.includes(ch)) continue;
-    if (!SHORT_VALUE.includes(ch)) return null;
-    if (k < letters.length - 1) return 0; // the rest of the word is the value
-    return next === undefined ? null : 1;
+    if (bools.includes(ch)) continue;
+    if (!values.includes(ch)) return null;
+    if (k < letters.length - 1) return { used: 0, letter: ch, value: letters.slice(k + 1) }; // the rest of the word is the value
+    return next === undefined ? null : { used: 1, letter: ch, value: next };
   }
-  return 0;
+  return { used: 0, letter: null, value: null };
 }
 
 /**
  * `gh pr merge <args>`: the head is the value of --match-head-commit (space or =), and nothing else. Any flag outside the known set, a
  * value flag with no value or an unpaired quote is bad: the reader cannot tell what gh will take as the head. Positionals are not read.
  */
-function cliMergeHead(args: string): MergeHead {
-  if (unmodelled(args)) return UNREAD_HEAD;
-  const words = pairedWords(args);
+function cliMergeHead(args: string, pwsh = false): MergeHead {
+  if (unmodelled(args, pwsh)) return UNREAD_HEAD;
+  const words = pairedWords(args, pwsh);
   if (words === null) return UNREAD_HEAD;
   const heads: string[] = [];
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
-    if (REDIRECT_WORD.test(w) || !w.startsWith('-') || w === '-') continue;
+    if (!w.startsWith('-') || w === '-') continue;
     if (/^-[A-Za-z]{2,}/.test(w)) { const used = shortCluster(w, words[i + 1]); if (used === null) return UNREAD_HEAD; i += used; continue; }
     const eq = w.startsWith('--') ? w.indexOf('=') : -1;
     const name = eq > 0 ? w.slice(0, eq) : w;
@@ -832,26 +870,42 @@ const API_FIELD_EQ = /^(?:--raw-field|--field)=(.*)$/s;
 const API_VALUE = new Set(['-X', '--method', '-H', '--header', '--hostname', '-q', '--jq', '-t', '--template', '--cache', '-p', '--preview']);
 
 /**
- * `gh api .../pulls/<n>/merge <args>`: the head is the value of the `sha` field (-f, -F, --raw-field, --field; space or =). The value of
- * another field (commit_message="sha=...") is never read. --input (the body comes from a file) or an unpaired quote is bad.
+ * The words of a gh api call after `api`, one by one: the endpoint (the first plain word), a known option with its value, or a field
+ * (-f, -F, --raw-field, --field; space, = or attached -fkey=v). `null` field: an option, read and skipped. A word this reader does not
+ * know (an unknown dash word, a second plain word, --input) gives `bad` (seat ruling B: the merge reader denies it, as the create reader does).
  */
-function apiMergeHead(text: string): MergeHead {
+type ApiWord = { bad: string } | { field: string | null; used: number };
+function apiWord(w: string, next: string | undefined, endpointSeen: boolean): ApiWord {
+  if (w === '--input' || w.startsWith('--input=')) return { bad: '--input (the body comes from a file)' };
+  if (API_FIELD.test(w)) return next === undefined ? { bad: 'a field flag with no value' } : { field: next, used: 1 };
+  if (API_FIELD_EQ.test(w)) return { field: API_FIELD_EQ.exec(w)![1], used: 0 };
+  if (/^-[fF][^=]/.test(w)) return { field: w.slice(2), used: 0 };
+  if (API_VALUE.has(w)) return next === undefined ? { bad: `${w} with no value` } : { field: null, used: 1 };
+  if (/^--(?:method|hostname|header|jq|template|cache|preview)=/.test(w) || /^-X./.test(w) || API_BOOL.has(w)) return { field: null, used: 0 };
+  if (!w.startsWith('-') && !endpointSeen) return { field: null, used: -1 };
+  return { bad: `a word this gate does not know on the api call (${w})` };
+}
+
+/**
+ * `gh api .../pulls/<n>/merge <args>`: the head is the value of the `sha` field, and nothing else. The value of another field
+ * (commit_message="sha=...") is never read. An unknown word, --input or an unpaired quote is bad.
+ */
+function apiMergeHead(text: string, pwsh = false): MergeHead {
   const rest = text.replace(/^[\s\S]*?\bapi\b/, '');
   // gh's own placeholders ({owner}, {repo}, {branch}) hold no comma, so bash does not expand them, and they make one word in PowerShell.
-  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'))) return UNREAD_HEAD;
-  const words = pairedWords(rest);
-  if (words === null) return { sha: null, shaBad: true };
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return UNREAD_HEAD;
+  const words = pairedWords(rest, pwsh);
+  if (words === null) return UNREAD_HEAD;
   const heads: string[] = [];
+  let endpoint = false;
   for (let i = 0; i < words.length; i++) {
-    const w = words[i];
-    if (w === '--input' || w.startsWith('--input=')) return { sha: null, shaBad: true };
-    let field: string | undefined;
-    if (API_FIELD.test(w)) field = words[++i];
-    else if (API_FIELD_EQ.test(w)) field = API_FIELD_EQ.exec(w)![1];
-    else if (API_VALUE.has(w)) { i++; continue; }
-    if (field === undefined) continue;
-    const eq = field.indexOf('=');
-    if (eq > 0 && field.slice(0, eq) === 'sha') heads.push(field.slice(eq + 1));
+    const r = apiWord(words[i], words[i + 1], endpoint);
+    if ('bad' in r) return UNREAD_HEAD;
+    if (r.used === -1) { endpoint = true; continue; }
+    i += r.used;
+    if (r.field === null) continue;
+    const eq = r.field.indexOf('=');
+    if (eq > 0 && r.field.slice(0, eq) === 'sha') heads.push(r.field.slice(eq + 1));
   }
   return oneHead(heads);
 }
@@ -1616,6 +1670,8 @@ function shapesOf(raw: string, tool?: string): Shape[] {
     && !PR_NUMBER_IN_TEXT_RE.test(raw)
     && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every(isTextOnlyCommand);
   const out: Shape[] = [];
+  // Seat item 3: the tool decides one fact of the merge and create readers (a backslash is literal in PowerShell).
+  const pwshTool = tool === 'PowerShell';
   const seen = new Set<string>();
   const add = (shape: Shape, id: string): void => { if (!seen.has(id)) { seen.add(id); out.push(shape); } };
   let created = false;
@@ -1625,14 +1681,15 @@ function shapesOf(raw: string, tool?: string): Shape[] {
       const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
       const owns = reads.map(({ masked }) => ownCommand(view, masked, from));
       const prior = priorOf(view, reads.map((r) => r.masked), from);
+      const tail = rawTail(view.slice(from));
       for (const s of new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly, seg)) {
+        for (const shape of landShapesOf(s, textOnly, seg, tail, pwshTool)) {
           for (const own of owns) for (const at of wheres) add({ ...shape, at, ...own, prior }, landId(shape, at, own, prior));
         }
       }
       if (!isPrOpenText(seg)) continue;
       created = true;
-      for (const own of owns) for (const at of wheres) add({ kind: 'create', pr: null, at, ...own, prior }, `create|${whereId(at)}|${own.text}${fullId(own)}${priorId(prior)}`);
+      for (const own of owns) for (const at of wheres) add({ kind: 'create', pr: null, at, ...own, prior, tail, pwsh: pwshTool }, `create|${whereId(at)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
     }
   }
   // A create that no single segment shows (`gh pr` + newline + `create`): judge the whole text in the cwd and in every folder of the cds.
@@ -1640,7 +1697,7 @@ function shapesOf(raw: string, tool?: string): Shape[] {
     const view = views[0];
     const masked = maskQuoted(view, 'Bash');
     for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
-      add({ kind: 'create', pr: null, at, text: view, mtext: masked, ftext: view, fmtext: masked }, `create|${whereId(at)}|${view}`);
+      add({ kind: 'create', pr: null, at, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool }, `create|${whereId(at)}|${view}`);
     }
   }
   out.push(...pushShapesOf(raw, tool));
@@ -2028,69 +2085,116 @@ class AppScopeError extends Error {
   }
 }
 
-const HEAD_FIELD_RE = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/g;
-const HEAD_FLAG_RE = /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/g;
-const PR_CREATE_CMD_RE = /\bgh\s+pr\s+create\b/i;
 
-/** The value of the first flag that is not inside a quoted string: its first character is the same in the masked view (a quoted one is blanked). */
-function unquotedFlagValue(re: RegExp, text: string, mtext: string): string | null {
-  for (const m of text.matchAll(re)) {
-    const at = m.index! + m[0].search(/\S/);
-    if (mtext[at] === text[at]) return m[1];
+// ---------- round 3 C1: the head and base of a create, read from one known place, once ----------
+
+/**
+ * The reading of a create: `bad` is the reason the words gh gets cannot be read whole (head-unresolved). `heads` and `bases`: every
+ * distinct value named (the callers deny two or more, each with its own text).
+ */
+interface CreateRead { bad: string | null; heads: string[]; bases: string[] }
+const CREATE_BOOL = new Set(['--draft', '-d', '--fill', '-f', '--fill-first', '--fill-verbose', '--web', '-w', '--no-maintainer-edit', '--dry-run', '--editor', '-e']);
+const CREATE_VALUE = new Set(['--title', '-t', '--body', '-b', '--body-file', '-F', '--label', '-l', '--assignee', '-a', '--reviewer', '-r',
+  '--milestone', '-m', '--project', '-p', '--head', '-H', '--base', '-B', '--repo', '-R', '--template', '-T', '--recover']);
+const CREATE_SHORT_BOOL = 'dwef';
+const CREATE_SHORT_VALUE = 'tbFlarmpHBRT';
+const API_CREATE_KEYS = new Set(['head', 'base', 'title', 'body', 'draft', 'maintainer_can_modify', 'issue']);
+const API_BOOL = new Set(['--paginate', '--slurp', '--silent', '--verbose', '-i', '--include']);
+const CLI_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
+const API_CMD_RE = /\bgh\s+api\b/i;
+/** A value that is not a literal: cmd.exe %VAR% (the shell forms are caught by unmodelled). */
+const NOT_LITERAL_RE = /%[^%\s]+%/;
+const BAD = (why: string): CreateRead => ({ bad: why, heads: [], bases: [] });
+
+/** `gh pr create|new <args>`: every word is a known flag or a value of one. -F is --body-file. */
+function cliCreateRead(args: string, pwsh: boolean): CreateRead {
+  const words = pairedWords(args, pwsh);
+  if (words === null) return BAD('an unpaired quote');
+  const heads: string[] = [];
+  const bases: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!w.startsWith('-') || w === '-') return BAD(`a word gh pr create does not take (${w})`);
+    if (/^-[A-Za-z]{2,}/.test(w)) {
+      const c = clusterOf(w, words[i + 1], CREATE_SHORT_BOOL, CREATE_SHORT_VALUE);
+      if (c === null) return BAD(`a flag this gate does not know (${w})`);
+      // -dH x and -dHx name a head (-B a base) as the long flag would.
+      if (c.letter === 'H') heads.push(c.value!);
+      if (c.letter === 'B') bases.push(c.value!);
+      i += c.used;
+      continue;
+    }
+    const eq = w.startsWith('--') ? w.indexOf('=') : -1;
+    const name = eq > 0 ? w.slice(0, eq) : w;
+    if (CREATE_BOOL.has(name) && eq < 0) continue;
+    if (!CREATE_VALUE.has(name)) return BAD(`a flag this gate does not know (${name})`);
+    const value = eq > 0 ? w.slice(eq + 1) : words[++i];
+    if (value === undefined) return BAD(`${name} with no value`);
+    if (name === '--head' || name === '-H') heads.push(value);
+    if (name === '--base' || name === '-B') bases.push(value);
   }
-  return null;
+  return headAndBase(heads, bases);
+}
+
+/** A head or base value that is empty or not literal is bad; else every distinct value. An empty base (--base "") counts as none, as before. */
+function headAndBase(heads: string[], bases: string[]): CreateRead {
+  if (heads.some((v) => v === '' || NOT_LITERAL_RE.test(v))) return BAD('a head value that is empty or not a literal');
+  const named = bases.filter((b) => b !== '');
+  if (named.some((v) => NOT_LITERAL_RE.test(v))) return BAD('a base value that is not a literal');
+  return { bad: null, heads: [...new Set(heads)], bases: [...new Set(named)] };
+}
+
+/** `gh api .../pulls <args>`: fields only from the known keys; an unknown word, --input, a head or base from a file (=@) or head_repo is bad. */
+function apiCreateRead(rest: string, pwsh: boolean): CreateRead {
+  const words = pairedWords(rest, pwsh);
+  if (words === null) return BAD('an unpaired quote');
+  const heads: string[] = [];
+  const bases: string[] = [];
+  let endpoint = false;
+  for (let i = 0; i < words.length; i++) {
+    const r = apiWord(words[i], words[i + 1], endpoint);
+    if ('bad' in r) return BAD(r.bad);
+    if (r.used === -1) { endpoint = true; continue; }
+    i += r.used;
+    if (r.field === null) continue;
+    const eq = r.field.indexOf('=');
+    const key = eq > 0 ? r.field.slice(0, eq) : r.field;
+    if (!API_CREATE_KEYS.has(key)) return BAD(`a field this gate does not know (${key})`);
+    const value = eq > 0 ? r.field.slice(eq + 1) : '';
+    if ((key === 'head' || key === 'base') && value.startsWith('@')) return BAD(`a ${key} read from a file (${key}=@...)`);
+    if (key === 'head') heads.push(value);
+    if (key === 'base') bases.push(value);
+  }
+  return headAndBase(heads, bases);
 }
 
 /**
- * The head branch a PR-create command names (`-F head=`, `--head`, `-H`), without an `owner:` prefix; else the checked-out branch.
- * `text` is the create's own command (shapesOf cuts it at the next break outside quotes), so a later command's -H or a quoted `--head` in a
- * title is not read. `mtext` is the same text with its quoted strings blanked.
+ * The head and base a create names, from the raw tail of its command (rawTail: up to the next ; | newline or && outside quotes, so a
+ * head after 2>&1 is in it). The reader is the one of the EARLIER gh call: a quoted title that names gh pr new does not make an api create
+ * a CLI one. A create that only the quotes-deleted view shows, or a text the allowlist refuses (unmodelled), is bad. gh's
+ * {owner}/{repo}/{branch} placeholders are allowed, as in the merge read.
  */
-function namedHead(text: string, mtext: string): string | null {
-  return unquotedFlagValue(HEAD_FIELD_RE, text, mtext)
-    ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+function createRead(text: string, pwsh = false): CreateRead {
+  const cli = CLI_CREATE_RE.exec(text);
+  const api = API_CMD_RE.exec(text);
+  const isCli = cli !== null && (api === null || cli.index < api.index);
+  const m = isCli ? cli : api;
+  if (m === null) return BAD('the create can only be read with its quotes deleted');
+  const rest = text.slice(m.index + m[0].length);
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return BAD(CREATE_CHAR_WHY);
+  return isCli ? cliCreateRead(rest, pwsh) : apiCreateRead(rest, pwsh);
 }
-/** PR 566 round 2 (a): every head value the create names (REST head= fields and, for gh pr create, --head / -H), outside quoted prose. */
-function namedHeads(text: string, mtext: string): string[] {
-  const create = PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text));
-  return [...unquotedFlagValues(HEAD_FIELD_RE, text, mtext), ...(create ? unquotedFlagValues(HEAD_FLAG_RE, text, mtext) : [])]
-    .map((h) => h.replace(/["']+$/, '')).filter((h) => h !== '');
-}
-/** PR 566 review (CodeRabbit, decision-gate.ts:2085): the `owner:` prefix of the head a create names, or null. */
-function headOwner(text: string, mtext: string): string | null {
-  const m = /^([^:\s]+):/.exec(namedHead(text, mtext) ?? '');
-  return m ? m[1] : null;
-}
-function headBranch(text: string, mtext: string, deps: Deps, dir: string): string {
-  const named = namedHead(text, mtext);
-  if (named) return named.replace(/^[^:\s]+:/, '').replace(/["']+$/, '');
+const CREATE_CHAR_WHY = 'a character whose effect this gate cannot read the same way in bash and PowerShell (outside quotes only letters, digits, - _ . / = : and spaces; no $, backtick or backslash in double quotes; no redirect, &, non-ASCII or CR)';
+const createBadWhy = (dir: string, why: string): string =>
+  `the head or base of this create cannot be read as gh reads it in ${dir}: ${why}. Name the head and base once, in the plain form: gh pr create --head <branch> --base <base> ..., or gh api .../pulls -X POST -f head=<branch> -f base=<base> .... A body made by $(...) or a heredoc is refused: pass it as a file with --body-file <path> or -F body=@<path>, with forward slashes in the path. ${PLAIN_WAY_OUT}`;
+
+/** The branch of a named head (its `owner:` prefix dropped), else the checked-out branch. */
+function readBranch(named: string | null, deps: Deps, dir: string): string {
+  if (named) return named.replace(/^[^:\s]+:/, '');
   const r = deps.git(dir, ['branch', '--show-current']);
   if (r.status !== 0) throw new Error('git branch --show-current failed');
   return r.stdout.trim();
 }
-
-/**
- * Fix round 5 (F8): the base branch a covered create names: -f/-F base= of the REST form, or --base / -B of gh pr create, outside quoted
- * prose (unquotedFlagValue). Null when it names none (gh takes the default branch). A value with a variable stays as written: app-ask
- * cannot take it (the offer gives the plain line), and no tap key holds it, so the create stays denied.
- */
-const BASE_FIELD_RE = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:\s*|=)["']?base=["']?([^\s"']*)/g;
-const BASE_FLAG_RE = /(?:^|\s)(?:--base(?:\s+|=)|-B\s*)["']?([^\s"']*)/g;
-/** Every value of the flag that is not inside a quoted string (unquotedFlagValue reads the first only). */
-function unquotedFlagValues(re: RegExp, text: string, mtext: string): string[] {
-  return [...text.matchAll(re)].filter((m) => { const i = m.index! + m[0].search(/\S/); return mtext[i] === text[i]; }).map((m) => m[1]);
-}
-/**
- * The base, or `many` when the create names two or more different bases (gh takes the last --base and the last base= field; the gate
- * does not guess which, it denies: advisor review of fix round 5). An empty value counts as none.
- */
-function baseBranch(text: string, mtext: string): { base: string | null; many: string[] } {
-  const create = PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text));
-  const all = [...unquotedFlagValues(BASE_FIELD_RE, text, mtext), ...(create ? unquotedFlagValues(BASE_FLAG_RE, text, mtext) : [])].filter((b) => b !== '');
-  const distinct = [...new Set(all)];
-  return { base: distinct[0] ?? null, many: distinct.length > 1 ? distinct : [] };
-}
-
 // ---------- a plain commit before the push, in the same command ----------
 
 const COMMIT_GIT = gitCallRe('commit');
@@ -2229,10 +2333,14 @@ const ALLOW: Decision = { action: 'allow' };
  */
 function judgeCreate(s: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const route = routeOf(deps, dir, cmd);
-  if (route === 'app') return judgeAppCreate(s.ftext ?? s.text!, s.fmtext ?? s.mtext!, deps, dir, cmd);
+  // Round 3 C1 (seat ruling A): both paths read the head from the raw tail, not from the &-cut text.
+  if (route === 'app') return judgeAppCreate(s.tail ?? s.ftext ?? s.text!, s.pwsh === true, deps, dir, cmd);
   if (route === 'foreign') return deny('repo-foreign', goThereWhy(cmd.repo!));
-  // G4: the CCv3 head is read from the base cut (any & ends it), as in base main 7a0e2f34.
-  const branch = headBranch(s.text!, s.mtext!, deps, dir);
+  // G4: the CCv3 head is read from the base cut (any & ends it), as in base main 7a0e2f34. Round 3 C1: from one known place, once.
+  const cr = createRead(s.tail ?? s.text!, s.pwsh === true);
+  if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
+  if (cr.heads.length > 1) return deny('head-unresolved', createBadWhy(dir, `two head values (${cr.heads.join(', ')}); gh takes the last`));
+  const branch = readBranch(cr.heads[0] ?? null, deps, dir);
   // An empty head (detached HEAD, or no head the text names) cannot be tied to a tap: deny, never allow.
   if (branch === '') return deny('head-unresolved', `the head branch of this create cannot be named in ${dir} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo on a branch.`);
   if (branch === 'main') return ALLOW;
@@ -2260,8 +2368,8 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decisio
 }
 
 /** Create in a folder outside CCv3: when covered, "Open draft PR" for (key repo, branch, head). Unlike CCv3, a create from main needs a tap too. */
-function judgeAppCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  return homeRead(inApp(deps, () => appCreate(text, mtext, deps, dir, cmd)));
+function judgeAppCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo): Decision {
+  return homeRead(inApp(deps, () => appCreate(text, pwsh, deps, dir, cmd)));
 }
 /** Fix round 6 (item 1): a deny for a covered folder reads decisions.enforce from the home copy only. */
 const homeRead = (d: Decision): Decision => (d.action === 'deny' ? { ...d, homeFlags: true as const } : d);
@@ -2284,24 +2392,27 @@ function coveredCall(deps: Deps, dir: string, body: (place: Place) => Decision):
     throw new AppScopeError(err instanceof AppScopeError ? err.inner : err, false);
   }
 }
-function appCreate(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  return coveredCall(deps, dir, (place) => appCreateIn(text, mtext, deps, dir, cmd, place));
+function appCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo): Decision {
+  return coveredCall(deps, dir, (place) => appCreateIn(text, pwsh, deps, dir, cmd, place));
 }
-function appCreateIn(text: string, mtext: string, deps: Deps, dir: string, cmd: CmdRepo, place: Place): Decision {
+function appCreateIn(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo, place: Place): Decision {
   // PR 566 round 2 (a): gh takes the LAST of a repeated --head, the gate reads the first. Two different heads: no tap can name the one
   // that opens, so the create is denied before any head is read.
-  const heads = [...new Set(namedHeads(text, mtext))];
+  // Round 3 C1: the head and base are read from one known place, once (createRead); a create the reader cannot read whole is denied.
+  const cr = createRead(text, pwsh);
+  if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
+  const heads = cr.heads;
   if (heads.length > 1) return deny('head-unresolved', appManyHeadsWhy(dir, heads));
   // PR 566 review: an `owner:` head opens the PR from that owner's fork. The tap is keyed on the local branch and its local head, so it
-  // cannot cover another fork's branch: denied before the prefix is dropped (headBranch keeps dropping it for the CCv3 path).
-  const owner = headOwner(text, mtext);
+  // cannot cover another fork's branch: denied before the prefix is dropped (readBranch keeps dropping it for the CCv3 path).
+  const owner = /^([^:\s]+):/.exec(heads[0] ?? '')?.[1] ?? null;
   if (owner !== null) return deny('head-foreign', appHeadOwnerWhy(dir, owner));
   // The head first: every repo deny below then offers open-pr with the branch this create names (--head), not the checked-out one.
-  const branch = headBranch(text, mtext, deps, dir);
+  const branch = readBranch(heads[0] ?? null, deps, dir);
   if (branch === '') return deny('head-unresolved', appHeadWhy(dir));
   // Fix round 5 (F8): the base the create names is in the key and in the offer (repo-identity.mjs openPrKey, the rule of app-ask).
-  const { base, many } = baseBranch(text, mtext);
-  if (many.length > 0) return deny('base-unresolved', appManyBasesWhy(dir, many));
+  if (cr.bases.length > 1) return deny('base-unresolved', appManyBasesWhy(dir, cr.bases));
+  const base = cr.bases[0] ?? null;
   const repo = appRepoFor(cmd, deps, dir, place, { sub: 'open-pr', branch, ...(base === null ? {} : { base }) });
   if ('action' in repo) return repo;
   const r = deps.git(dir, ['rev-parse', `${branch}^{commit}`]);
