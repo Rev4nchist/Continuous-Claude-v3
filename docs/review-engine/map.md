@@ -228,7 +228,7 @@ Contracts restated from the 11-05 map, with the owners of this map:
   - Cursor ledger: weekly cap 300 (our own number). Eval and shadow runs stop at 240. The label runs of `re-label-two-family` count in the same 7-day ledger count, and that lane stops at 240 too. Live runs stop at the live cap (below). Dave approved the caps as our own numbers (DP1.2, 2026-11-09). No cap goes up before the pool share is measured.
   - Grok slots: max 2.
   - Cursor eval slot: one token, claimed in the lane note. Only one of these lanes spends at a time: `re-shadow-retro`, `re-verifier-replay` (Cursor backend), `re-label-two-family` (its Cursor runs: Grok 4.7 for CLI-only findings, and a second family that is not Grok for engine findings [Speculation: Composer 2.5]), `re-p4-ab`, `re-p4-winner-evidence`, and the deferred lanes `re-p5-online`, `re-p5-online-hotfile`, `re-p5-online-union`, `re-loop-dryrun` (minibatches) and `re-p7-impact-arms`. This bullet is the one list of the lanes that spend from the slot: `program.mjs ready` reads it.
-  - Headless claude -p: 30 a day, shared with non-RE sessions. The day plan in "Capacity plan" sets the shares. Each lane checks the headless ledger before a batch.
+  - Headless claude -p: 200 a day (Dave, 2026-11-14; it was 30), shared with non-RE sessions. The day plan in "Capacity plan" is a planning aid for the shares, not a limit. Each lane checks the headless ledger before a batch.
 
 Contracts that this map changed or added:
 
@@ -1342,7 +1342,7 @@ Why: Phase 4 arm; one owner of prompt.mjs so the freeze stays valid. Rule 2 read
 - Cost: 0 cursor; claude -p 2/day
 - Needs Dave: no
 
-Scope: Implement the backend contract for claude -p. Reuse the ledger and the 30/day cap from scripts/lib/headless.mjs read-only; do not change its sonnet default. The model comes from the caller (--model or the config.json judge-model map for judges), effort high, never haiku, no fast mode. Arm parity with the Grok arm: cwd = reviewDir, read-only tools (Read, Grep, Glob) only, no Bash, Edit or Write, and a stream trace that yields filesRead.
+Scope: Implement the backend contract for claude -p. Reuse the ledger and the 200/day cap (30 before 2026-11-14) from scripts/lib/headless.mjs read-only; do not change its sonnet default. The model comes from the caller (--model or the config.json judge-model map for judges), effort high, never haiku, no fast mode. Arm parity with the Grok arm: cwd = reviewDir, read-only tools (Read, Grep, Glob) only, no Bash, Edit or Write, and a stream trace that yields filesRead.
 
 Done when: Unit tests pass with a fake runner, run by hand until re-test-globs lands. One live claude -p smoke on a tiny fixture returns parseable findings JSON and a filesRead trace. The smoke context shows no lane-board or SessionStart text. Artifact: .claude/cache/e2e/<date>-re-claude-backend.json.
 
@@ -1525,7 +1525,7 @@ Why: Cross-file-dynamic recall is 0/6. The offline check costs $0 and gates onli
 
 Scope: writeReviewDir runs refs.mjs in the main repo. At HIGH/CRITICAL, run 2 runs with shuffled file and row order. Take their union (never vote), then run the verifier, and record UNCERTAIN Majors. Run one focused pass per changed hot file, with its checklist. Union, shuffle and the hot-file pass sit behind local_review.union_runs and local_review.hotfile_pass (code fallback off) until the P5 online arms pass. trace.mjs records runIds and shuffle seeds. refs.mjs is already in ENGINE_FILES (re-refs-impact).
 
-Done when: An offline stub run with the flags on shows the union, the shuffle seeds and UNCERTAIN in the record. With the flags off, the record matches re-p4-wire output. Headless use stays under 30 a day on a normal day. Artifact: .claude/cache/e2e/<date>-re-p5-multirun.txt.
+Done when: An offline stub run with the flags on shows the union, the shuffle seeds and UNCERTAIN in the record. With the flags off, the record matches re-p4-wire output. Headless use stays under 200 a day on a normal day. Artifact: .claude/cache/e2e/<date>-re-p5-multirun.txt.
 
 Why: Last holder of local-review.mjs; only after the verifier is kept. Flags keep the live engine (re-gate-shadow-run) unchanged until the online arms pass.
 

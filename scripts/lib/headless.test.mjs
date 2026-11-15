@@ -62,10 +62,26 @@ test('F12 the day cap counts the America/Chicago day, not the UTC day', () => {
   const late = Date.parse('2026-11-02T05:30:00Z');
   assert.equal(chicagoDay(late), '2026-11-01');
   for (let i = 0; i < HEADLESS_DAILY_CAP; i += 1) assert.equal(reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => late }).ok, true);
-  const r31 = reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => late });
-  assert.deepEqual([r31.ok, r31.reason], [false, 'cap']);
+  const over = reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => late });
+  assert.deepEqual([over.ok, over.reason], [false, 'cap']);
   // One hour later it is 00:30 on 11-02 in Chicago: a new day. The UTC day has not changed, so a UTC count would refuse.
   assert.equal(reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => late + 3_600_000 }).ok, true);
+});
+
+test('the default day cap is 200: run 31 is allowed, run 201 is refused (Dave, 2026-11-14)', () => {
+  // Breaks when: HEADLESS_DAILY_CAP goes back to 30 (run 31 is refused) or the default cap of reserveHeadless is not the constant.
+  // A temp ledger passed by path; no cap option, so the default applies. The live ledger is never touched.
+  const dir = tmp();
+  const file = path.join(dir, 'ledger.jsonl');
+  const now = Date.parse('2026-11-14T18:00:00Z');
+  const reserve = () => reserveHeadless(file, { purpose: 'eval-judge', model: 'sonnet' }, { now: () => now });
+  for (let i = 1; i <= 30; i += 1) assert.equal(reserve().ok, true, `run ${i}`);
+  const r31 = reserve();
+  assert.deepEqual([r31.ok, r31.count], [true, 31]);
+  for (let i = 32; i <= 200; i += 1) assert.equal(reserve().ok, true, `run ${i}`);
+  const r201 = reserve();
+  assert.deepEqual([r201.ok, r201.reason, r201.count], [false, 'cap', 200]);
+  assert.equal(HEADLESS_DAILY_CAP, 200);
 });
 
 test('13.6 the cap counts every headless run in the ledger, whatever its purpose', () => {

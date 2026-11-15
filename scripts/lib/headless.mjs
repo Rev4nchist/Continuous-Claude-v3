@@ -2,7 +2,8 @@
 // - The prompt goes on stdin (a long argv arrived empty for claude on Windows; trigger-probe.mjs:154).
 // - ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN are deleted from the child env, so the run bills the subscription.
 // - No tools, one turn, strict empty MCP config, hooks off, never --bare, never Opus.
-// - Ledger ~/.claude/state/headless-review-ledger.jsonl. 30 start rows per America/Chicago day, counted under withLock.
+// - Ledger ~/.claude/state/headless-review-ledger.jsonl. 200 start rows per America/Chicago day, counted under withLock
+//   (HEADLESS_DAILY_CAP; Dave, 2026-11-14: "cap 200 - at least"; it was 30).
 //   The cap counts EVERY headless run in that ledger, whatever its purpose.
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { readLedger, runAgent } from '../github/cursor-review.mjs';
 import { withLock } from '../github/lib/file-lock.mjs';
 
-export const HEADLESS_DAILY_CAP = 30;
+export const HEADLESS_DAILY_CAP = 200;
 export const HEADLESS_LEDGER = path.join(os.homedir(), '.claude', 'state', 'headless-review-ledger.jsonl');
 export const defaultHeadlessLedger = (env = process.env) => env.CCV3_HEADLESS_LEDGER || HEADLESS_LEDGER;
 

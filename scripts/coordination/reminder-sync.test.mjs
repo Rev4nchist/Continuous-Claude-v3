@@ -30,6 +30,7 @@ import {
 } from './reminder-sync.mjs';
 import { readState, runTick } from './reminder-tick.mjs';
 import { DONE_POLL_MS as CORE_POLL_MS, pollDue } from './reminder-core.mjs';
+import { HEADLESS_DAILY_CAP } from '../lib/headless.mjs';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'rsync-'));
 // The tick calls the sync only when <state dir>/sync-enabled exists. Tests that go through the tick turn it on here.
@@ -658,13 +659,13 @@ test('F1: the real ledger counts only reminder-sync rows of today for the sub-ca
   assert.match(res.error, /reminder-sync daily cap/);
   assert.equal(t.fake.calls.length, 0);
   writeFileSync(file, '');
-  writeLedger(file, 12, 'eval-judge'); // 12 runs of another job: far under the shared 30, and none are ours
+  writeLedger(file, 12, 'eval-judge'); // 12 runs of another job: far under the shared HEADLESS_DAILY_CAP, and none are ours
   t = mk();
   res = await syncBatch([row()], t.ctx);
   assert.equal(res.ok, true, res.error);
   assert.equal(t.fake.calls.length, 1);
   writeFileSync(file, '');
-  writeLedger(file, 30, 'eval-judge'); // the shared cap of 30 is full
+  writeLedger(file, HEADLESS_DAILY_CAP, 'eval-judge'); // the shared cap (HEADLESS_DAILY_CAP) is full
   t = mk();
   res = await syncBatch([row()], t.ctx);
   assert.equal(res.ok, false);
