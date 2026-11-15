@@ -1355,7 +1355,7 @@ Why: A 2x2 needs a Claude arm with the same tool access as the Grok arm, or the 
 - Depends on: re-critical-model-check, re-gold-schema, re-answer-key-audit
 - Unblocks: re-gold-assemble, re-judge-calibrate
 - Related: seeded-vuln-probes, re-engine-cli-schema, re-gold-assemble, re-judge-calibrate
-- Owns: `scripts/eval/review-eval/seed.mjs`, `scripts/eval/review-eval/seed.test.mjs`, `scripts/eval/review-eval/seeds/**`, `scripts/eval/review-eval/gold/gold-b.json`
+- Owns: `scripts/eval/review-eval/seed.mjs`, `scripts/eval/review-eval/seed.cases.mjs`, `scripts/eval/review-eval/seed-shard-*.test.mjs`, `scripts/eval/review-eval/seeds/**`, `scripts/eval/review-eval/gold/gold-b.json`
 - Do not touch: `scripts/github/local-review.mjs`, `scripts/eval/review-eval/replay.mjs`
 - Cost: 0 cursor; claude -p up to 8/day
 - Needs Dave: Any Grok review runs on the security probes (seeded-vuln-probes item) need the eval budget and your yes.
