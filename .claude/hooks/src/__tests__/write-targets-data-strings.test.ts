@@ -159,3 +159,64 @@ describe('platform and case', () => {
     expect(verdict('Set-Content SRC/A.TS "x"', true).kind).toBe('deny');
   });
 });
+
+// Card coord-file-guard-named-file (seat ruling 2026-11-15, Q3): inside a double-quoted PowerShell string a backtick
+// escape from a short allow list (`n `r `t `` `" `' `0) is plain text, for the PowerShell tool ONLY. An escape that is not
+// on the list, a backtick outside such a string, and every backtick for the Bash reading keep today's result: the whole
+// text is kept, so a write cue before a named held file still denies.
+//
+// Ways this can fail (one group each):
+//  1. A false deny stays: a note or milestone line with a backtick line break that only NAMES a held file.
+//  2. A real write is missed: the held file is the target, a cue stays outside the string, a redirect follows.
+//  3. The default is loosened: an unlisted escape, a backtick-dollar, a backtick outside a string, a single-quoted
+//     backtick, and the Bash reading must all keep the deny.
+const ps = (text: string, fold = false) => classifyShellText(text, HELD, fold, true);
+
+describe('PowerShell backtick escapes in a double-quoted data string', () => {
+  it.each([
+    ['Add-Content -Path C:/x/milestones/own.md -Value "line one names src/a.ts`nline two"'],
+    ['Add-Content -Path own.md -Value "- 08:20 CST: src/a.ts landed`n- next: see src/a.ts`tdone"'],
+    ['Set-Content notes.md "fixed src/a.ts`r`nthen mv x src/a.ts"'],
+    ['Add-Content own.md "a `"quoted`" word and src/a.ts"'],
+    ['Add-Content own.md "a literal `` backtick and src/a.ts"'],
+    ['Add-Content own.md "nul `0 then src/a.ts"'],
+    ['node C:/Users/dkhay/.claude/scripts/lane.mjs note card "mv x src/a.ts`nmore"'],
+  ])('does not deny: %s', (text) => {
+    expect(ps(text).kind).not.toBe('deny');
+  });
+});
+
+describe('PowerShell backtick escapes: a real write still denies', () => {
+  it.each([
+    ['Add-Content src/a.ts "line one`nline two"'],
+    ['Set-Content -Path "src/a.ts" -Value "x`ny"'],
+    ['Add-Content own.md "note`nline"; Set-Content src/a.ts "x"'],
+    ['Add-Content own.md "note`nline"; "x" > src/a.ts'],
+    ['Add-Content own.md "note src/a.ts`nline"; Remove-Item src/a.ts'],
+  ])('denies: %s', (text) => {
+    expect(ps(text).kind).toBe('deny');
+  });
+});
+
+describe('PowerShell backtick escapes: anything off the list keeps today\'s result', () => {
+  it.each([
+    // an escape that is not on the list (`e is ESC in PowerShell 7; `$ keeps a dollar out of expansion)
+    ['Add-Content own.md "see src/a.ts `e[0m"'],
+    ['Add-Content own.md "see src/a.ts `$x"'],
+    ['Add-Content own.md "see src/a.ts `u{41}"'],
+    // a backtick outside a double-quoted string (a line continuation) or in a single-quoted string
+    ['Add-Content own.md `\n  -Value "see src/a.ts"'],
+    ["Add-Content own.md -Value 'see src/a.ts `n'"],
+    // one listed escape does not excuse an unlisted one in the same text
+    ['Add-Content own.md "see src/a.ts `n and `e"'],
+    // a LISTED escape outside every string is still a backtick outside a string (seat diff read item 6)
+    ['Add-Content own.md `n "see src/a.ts"'],
+  ])('keeps the deny: %s', (text) => {
+    expect(ps(text).kind).toBe('deny');
+  });
+
+  it('keeps every backtick as a risk sign for the Bash reading (no pwsh flag)', () => {
+    expect(verdict('Add-Content own.md "see src/a.ts`nline"').kind).toBe('deny');
+    expect(classifyShellText('Add-Content own.md "see src/a.ts`nline"', HELD, false, false).kind).toBe('deny');
+  });
+});
