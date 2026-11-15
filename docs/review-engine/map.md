@@ -1363,7 +1363,7 @@ Why: A 2x2 needs a Claude arm with the same tool access as the Grok arm, or the 
 
 Scope: seed.mjs writes 60-100 seeded bugs as local refs (refs/eval/seed/*), never pushed. Seed both same-file and cross-file kinds, from dev-split code only. Claude seeds, never Grok. Seed part of the set with SWE-smith-style mutation operators, so the Claude arm is not scored only on Claude-written bugs. Report Gold B for the Claude arm apart, as non-gating. Keep a bug only when a named test or probe breaks. The security slice from seeded-vuln-probes stays as its own suite. Rows use the {range} target form; re-engine-cli-schema owns --range. A Grok run on a seed runs only after `re-answer-key-audit` is done, and read-audit.mjs audits its stream.
 
-Done when: gold-b.json has 60+ rows. Each row has a breaking test or probe command with its failure recorded, and an author field (claude or operator). 0 rows come from holdout or reserve PRs. A check shows no seed ref tree holds a gold or seed file. seed.mjs passes cli-smoke. Artifact: .claude/cache/e2e/<date>-re-seed-gold-b.txt.
+Done when: gold-b.json has 40+ rows, at most 6 per target file (Dave, 2026-11-15: fewer rows in this PR; the rest of the bar of 60 moves to card gold-b-followups). Each row has a breaking test command with its failure hash recorded, and an author field (claude or operator). 0 rows come from holdout or reserve PRs (count scan of gold-b.json). seed.mjs check-refs against the fork is ok with every counter 0, so no seed ref tree holds a gold or seed file and no seed ref is on the remote. seed.mjs passes cli-smoke. Artifact: .claudedocs/e2e-re-seed-gold-b/.
 
 Why: Cross-file-dynamic recall is 0/6; we need many controlled cases. Reported apart from Gold A, never the recall headline.
 
