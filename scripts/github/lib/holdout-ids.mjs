@@ -25,6 +25,9 @@ export function holdoutIdsOf(ds, cfg) {
   return [...out];
 }
 
+// Seat read 2 (minor) asked for "PR: n", "pr_n", a JSON "pr": n field and "pull request n" too. Measured on 600 commits of main (2026-11-15):
+// the JSON form adds 10 hits and "PR: n" 2, all short PR numbers: this repo's own JSON (Gold A, eval files) holds CCv3 PR numbers that
+// collide with holdout PR numbers, so those forms would deny ordinary re/ pushes. Not added; a known limit of the matcher.
 const CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 
 /**
@@ -37,22 +40,24 @@ const CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 export function countIdsIn(text, ids) {
   const s = String(text ?? '');
   let runs = null;
+  let low = null;
   let n = 0;
   for (const id of ids) {
     if (typeof id !== 'string' || id === '') continue;
     if (isSha(id)) {
       runs ??= hexRuns(s);
       const want = id.toLowerCase();
-      if (runs.some((r) => want.startsWith(r) || r.startsWith(want))) n += 1;
-    } else if (/^\d+$/.test(id)) { if (digitHit(s, id)) n += 1; } else if (tokenHit(s, id)) n += 1;
+      // A run of 7 to 40 is a sha: either may be the prefix. A longer run (seat read 2, minor) holds a sha anywhere inside it.
+      if (runs.some((r) => (r.length > 40 ? r.includes(want) : want.startsWith(r) || r.startsWith(want)))) n += 1;
+    } else if (/^\d+$/.test(id)) { if (digitHit(s, id)) n += 1; } else if (tokenHit((low ??= s.toLowerCase()), id)) n += 1;
   }
   return n;
 }
 
 const isSha = (id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id);
-/** Every run of 7 to 40 hex characters with no hex character next to it, in lower case. A run over 40 is not a sha and is not read. */
+/** Every run of 7 or more hex characters with no hex character next to it, in lower case. */
 function hexRuns(s) {
-  return [...s.matchAll(/(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
+  return [...s.matchAll(/(?<![0-9a-f])[0-9a-f]{7,}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
 }
 
 /**
@@ -68,6 +73,13 @@ export function checkHoldoutShape(ds, cfg) {
   if (!Array.isArray(ds.prs) || ds.prs.length === 0 || !Array.isArray(ds.findings) || ds.findings.length === 0) bad();
   if (!ds.prs.every((p) => p !== null && typeof p === 'object' && posInt(p.pr))) bad();
   if (!ds.findings.every((f) => f !== null && typeof f === 'object' && posInt(f.pr))) bad();
+  // Seat read 2, item 4, fitted to the real dataset (2026-11-15: of 93 findings, 51 carry a digit comment_id, 32 none, 10 another string; round
+  // is an integer): a comment_id that is present is a positive integer or a non-empty string; a round that is present is a string or an
+  // integer; and at least one finding carries a digit comment_id, so a renamed key throws instead of dropping every comment id.
+  const absent = (v) => v === undefined || v === null;
+  if (!ds.findings.every((f) => absent(f.comment_id) || posInt(f.comment_id) || (typeof f.comment_id === 'string' && f.comment_id !== ''))) bad();
+  if (!ds.findings.every((f) => absent(f.round) || typeof f.round === 'string' || Number.isInteger(f.round))) bad();
+  if (!ds.findings.some((f) => posInt(f.comment_id) || (typeof f.comment_id === 'string' && /^\d+$/.test(f.comment_id)))) bad();
   if (cfg !== null && cfg !== undefined && (typeof cfg !== 'object' || Array.isArray(cfg))) bad();
   for (const k of ['reserve', 'holdoutExclude']) if (cfg?.[k] !== undefined && !Array.isArray(cfg[k])) bad();
 }
@@ -86,8 +98,8 @@ function digitHit(s, id) {
   }
 }
 
-function tokenHit(s, id) {
-  const low = s.toLowerCase();
+/** `low` is the text in lower case, made once by the caller (seat read 2, item 7: not once per id on 8 MB). */
+function tokenHit(low, id) {
   const want = id.toLowerCase();
   const word = /[0-9a-f:]/;
   let from = 0;

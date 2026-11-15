@@ -692,22 +692,23 @@ var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 function countIdsIn(text, ids) {
   const s = String(text ?? "");
   let runs = null;
+  let low = null;
   let n = 0;
   for (const id of ids) {
     if (typeof id !== "string" || id === "") continue;
     if (isSha(id)) {
       runs ??= hexRuns(s);
       const want = id.toLowerCase();
-      if (runs.some((r) => want.startsWith(r) || r.startsWith(want))) n += 1;
+      if (runs.some((r) => r.length > 40 ? r.includes(want) : want.startsWith(r) || r.startsWith(want))) n += 1;
     } else if (/^\d+$/.test(id)) {
       if (digitHit(s, id)) n += 1;
-    } else if (tokenHit(s, id)) n += 1;
+    } else if (tokenHit(low ??= s.toLowerCase(), id)) n += 1;
   }
   return n;
 }
 var isSha = (id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id);
 function hexRuns(s) {
-  return [...s.matchAll(/(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
+  return [...s.matchAll(/(?<![0-9a-f])[0-9a-f]{7,}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
 }
 function checkHoldoutShape(ds, cfg) {
   const bad = () => {
@@ -718,6 +719,10 @@ function checkHoldoutShape(ds, cfg) {
   if (!Array.isArray(ds.prs) || ds.prs.length === 0 || !Array.isArray(ds.findings) || ds.findings.length === 0) bad();
   if (!ds.prs.every((p) => p !== null && typeof p === "object" && posInt(p.pr))) bad();
   if (!ds.findings.every((f) => f !== null && typeof f === "object" && posInt(f.pr))) bad();
+  const absent = (v) => v === void 0 || v === null;
+  if (!ds.findings.every((f) => absent(f.comment_id) || posInt(f.comment_id) || typeof f.comment_id === "string" && f.comment_id !== "")) bad();
+  if (!ds.findings.every((f) => absent(f.round) || typeof f.round === "string" || Number.isInteger(f.round))) bad();
+  if (!ds.findings.some((f) => posInt(f.comment_id) || typeof f.comment_id === "string" && /^\d+$/.test(f.comment_id))) bad();
   if (cfg !== null && cfg !== void 0 && (typeof cfg !== "object" || Array.isArray(cfg))) bad();
   for (const k of ["reserve", "holdoutExclude"]) if (cfg?.[k] !== void 0 && !Array.isArray(cfg[k])) bad();
 }
@@ -734,8 +739,7 @@ function digitHit(s, id) {
     if (long || CONTEXT.test(s.slice(Math.max(0, at - 8), at))) return true;
   }
 }
-function tokenHit(s, id) {
-  const low = s.toLowerCase();
+function tokenHit(low, id) {
   const want = id.toLowerCase();
   const word = /[0-9a-f:]/;
   let from = 0;

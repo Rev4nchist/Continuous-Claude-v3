@@ -2784,14 +2784,38 @@ const SCAN_RESERVE_MS = 1500;
 const SCAN_MIN_READ_MS = 300;
 /** The start of each commit record in both reads (format %x01c5). A token or line that equals it is a commit, not a path or a diff line. */
 const COMMIT_MARK = '\u0001c5';
+/** Seat read 2, item 6: the full ref. A local branch or tag named fork/main would shadow the short name and empty the range. */
+const FORK_MAIN = 'refs/remotes/fork/main';
 const SPLIT_WAY_OUT = 'Every later push of this branch reads the same commits (the range is fork/main..head). Ways out: a new branch from fork/main that does not carry those commits, or a history rewrite with Dave\'s yes.';
+
+/** Thrown by the budgeted git of the scan when the hook budget is gone before a read can start. */
+class ScanClockError extends Error {}
+
+/**
+ * Seat read 2, item 3: EVERY git read of the scan (currentBranch, the chained path reads, rev-parse, show-ref, the logs, the tags) checks the
+ * budget first and gets at most the time left, so their sum ends inside HOOK_BUDGET_MS - SCAN_RESERVE_MS. Absent scanLeft (tests): unchanged.
+ */
+function budgetedDeps(deps: Deps): Deps {
+  if (!deps.scanLeft) return deps;
+  const left = (): number => deps.scanLeft!() - SCAN_RESERVE_MS;
+  return {
+    ...deps,
+    git: (cwd, args, opts) => {
+      const ms = left();
+      if (ms < SCAN_MIN_READ_MS) throw new ScanClockError('budget');
+      return deps.git(cwd, args, { ...opts, timeout: Math.min(opts?.timeout ?? GIT_TIMEOUT_MS, ms) });
+    },
+  };
+}
 
 function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string, chained: boolean, alone: boolean): Deny | null {
   if (!deps.holdoutIds || !deps.answerKeyHits) return null;
   try {
-    return scanHoldoutRead(p, deps, dir, branch, chained, alone);
-  } catch {
-    // Any throw in the scan path (a git timeout, a spawn error) is a hard deny: the catch path of handle() only warns in scope push.
+    return scanHoldoutRead(p, budgetedDeps(deps), dir, branch, chained, alone);
+  } catch (e) {
+    // The budget gone, or a read that timed out: the clock text (a killed hook writes no deny).
+    if (e instanceof ScanClockError || errCode(e) === 'ETIMEDOUT') return clockDeny(branch);
+    // Any other throw in the scan path (a spawn error) is a hard deny: the catch path of handle() only warns in scope push.
     return hardOf(deny('holdout-scan-unavailable', `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, 'push'));
   }
 }
@@ -2803,7 +2827,7 @@ function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string, chai
  */
 function chainedAnswerKeyPaths(deps: Deps, dir: string): 'none' | 'hit' | 'unreadable' | 'too-large' {
   const reads: string[][] = [
-    ['diff', '--name-only', '--no-renames', '-z', 'fork/main...HEAD'],
+    ['diff', '--name-only', '--no-renames', '-z', `${FORK_MAIN}...HEAD`],
     ['diff', '--name-only', '--no-renames', '-z', '--cached'],
     ['diff', '--name-only', '--no-renames', '-z', 'HEAD'],
     ['ls-files', '--others', '--exclude-standard', '-z'],
@@ -2837,16 +2861,48 @@ function sendsRe(p: PushShape, deps: Deps, dir: string, branch: string): boolean
 const RE_NOT_ALONE_WHY = 'the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.';
 
 /**
- * C5 change 3: the push names a tag (refs/tags/<x>, or a name with a local tag of that name), or is a force or wide form, which in CCv3 is how
- * --tags reads. Such a push can send an annotated tag, and its message is not in the commit log.
+ * C5 change 3: the tag refs the push names (refs/tags/<x>, or a name with a local tag of that name). Such a push sends that tag, and an
+ * annotated tag's message is not in the commit log.
  */
-function namesTag(p: PushShape, deps: Deps, dir: string): boolean {
-  return [p.src, p.branch].some((r) => {
-    if (typeof r !== 'string' || r === '') return false;
-    if (r.startsWith('refs/tags/')) return true;
-    if (r.startsWith('refs/') || /^(?:HEAD|@)(?:$|[~^@])/.test(r)) return false;
-    return deps.git(dir, ['show-ref', '--verify', '--quiet', `refs/tags/${r}`]).status === 0;
-  });
+function namedTags(p: PushShape, deps: Deps, dir: string): string[] {
+  const out = new Set<string>();
+  for (const r of [p.src, p.branch]) {
+    if (typeof r !== 'string' || r === '') continue;
+    if (r.startsWith('refs/tags/')) { out.add(r); continue; }
+    if (r.startsWith('refs/') || /^(?:HEAD|@)(?:$|[~^@])/.test(r)) continue;
+    if (deps.git(dir, ['show-ref', '--verify', '--quiet', `refs/tags/${r}`]).status === 0) out.add(`refs/tags/${r}`);
+  }
+  return [...out];
+}
+
+/**
+ * The tag text a scanned push can send (seat read 2, rules T1 to T3). --follow-tags and push.followTags send every annotated tag that points
+ * at a commit reachable from the pushed ref, and main's commits are reachable from every branch. So:
+ *   T1 an annotated tag reachable from the pushed sha (--merged <sha>): its name and its OWN message;
+ *   T2 a lightweight tag: its name only (its %(contents) is a commit message, read in the range or on fork/main already);
+ *   T3 a tag the push names: its target is the pushed sha, so --merged <sha> reads it by T1/T2; a force or wide form (how --tags reads):
+ *      every tag by T1/T2.
+ * A read that times out throws to the scan catch (the clock text).
+ * A read that fails, times out or is over the bound returns a Deny.
+ */
+function tagText(wide: boolean, sha: string, deps: Deps, dir: string, stop: (pattern: string, why: string) => Deny): string | Deny {
+  const fmt = '--format=%(refname)%00%(objecttype)%00%(contents)%00';
+  const reads: string[][] = [wide ? ['for-each-ref', fmt, 'refs/tags'] : ['for-each-ref', fmt, '--merged', sha, 'refs/tags']];
+  let text = '';
+  for (const args of reads) {
+    let t: { status: number; stdout: string };
+    try {
+      t = deps.git(dir, args, { timeout: GIT_TIMEOUT_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
+    } catch (e) {
+      if (errCode(e) === 'ENOBUFS') return stop('holdout-scan-too-large', `its local tags are over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
+      throw e;
+    }
+    if (t.status !== 0) return stop('holdout-scan-unavailable', 'the local tags could not be read. Run the push again from the repo.');
+    const f = t.stdout.split('\0');
+    // Records of three fields: name, object type, contents. Only an annotated tag ("tag") gives its contents (T1, T2).
+    for (let i = 0; i + 2 < f.length; i += 3) text += `${f[i].replace(/^\n+/, '')}\n${f[i + 1] === 'tag' ? `${f[i + 2]}\n` : ''}`;
+  }
+  return text;
 }
 
 /** The hard deny when the hook budget is gone before a read can run: a hook killed at 10 s writes no deny (seat change 2, F6). */
@@ -2884,8 +2940,7 @@ function addedText(log: string): { text: string; binary: boolean } {
 }
 
 function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, chainedCommit: boolean, alone: boolean): Deny | null {
-  // Advisor item 8: the scan's own small reads (sendsRe, namesTag, rev-parse) come first, so the budget is checked before any of them.
-  if (deps.scanLeft && deps.scanLeft() - SCAN_RESERVE_MS < SCAN_MIN_READ_MS) return clockDeny(branch);
+  // The budget of every read here is budgetedDeps (seat read 2, item 3): a spent budget or a timeout throws to scanHoldout's clock deny.
   const isRe = sendsRe(p, deps, dir, branch);
   // `alone` is false when the command holds anything but cd, read-only git and pushes (a commit -a, an amend, a merge, a redirect):
   // such a command can change the branch before the push, so it counts as chained.
@@ -2909,20 +2964,18 @@ function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, 
   const sha = deps.git(dir, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
   // C5 change 3: a push that names a tag is a scanned class (its tag message and its commits). A force or wide form of a scanned push is how
   // --tags reads in CCv3: its log reads start from every local tag too (--tags), so a tagged commit outside the branch is read.
-  const scanned = isRe || namesTag(p, deps, dir);
+  const named = namedTags(p, deps, dir);
+  const scanned = isRe || named.length > 0;
   const allTags = scanned && p.force ? ['--tags'] : [];
   if (sha.status !== 0 || sha.stdout.trim() === '') return scanned ? stop('holdout-scan-unavailable', 'its head could not be read. Run the push again from the repo.') : null;
-  const range = `fork/main..${sha.stdout.trim()}`;
-  const left = (): number => (deps.scanLeft ? deps.scanLeft() : Number.POSITIVE_INFINITY) - SCAN_RESERVE_MS;
-  const clock = (): Deny => clockDeny(branch);
+  const head = sha.stdout.trim();
+  const range = `${FORK_MAIN}..${head}`;
   // C5 read 1 (items 9b, C10): the names and the count of every commit of the range, merge resolutions too (--cc).
-  if (left() < SCAN_MIN_READ_MS) return clock();
   let names: { status: number; stdout: string };
   try {
-    names = deps.git(dir, ['log', '--cc', '--name-only', '--no-renames', '-z', '--format=%x01c5%x00%H', ...allTags, range], { timeout: Math.min(GIT_TIMEOUT_MS, left()), maxBuffer: SCAN_MAX_BYTES + 1 });
+    names = deps.git(dir, ['log', '--cc', '--root', '--name-only', '--no-renames', '-z', '--format=%x01c5%x00%H', ...allTags, range], { timeout: GIT_TIMEOUT_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
   } catch (e) {
     if (errCode(e) === 'ENOBUFS') return stop('holdout-scan-too-large', `its commit list is over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
-    if (errCode(e) === 'ETIMEDOUT') return clock();
     throw e;
   }
   if (names.status !== 0) return stop('holdout-scan-unavailable', 'the commits against fork/main could not be read. Run git fetch fork main in the repo, then push again.');
@@ -2938,27 +2991,27 @@ function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, 
   if (!Array.isArray(ids) || ids.length === 0) return stop('holdout-scan-unavailable', 'the holdout id list is empty, so the scan cannot run.');
   // C5 read 2 (items 9, 12, F1, binary): every added line of every commit, with its message. --text: a binary file is read, not named.
   // --no-textconv, --no-ext-diff: no repo or user config changes what git prints.
-  if (left() < SCAN_MIN_READ_MS) return clock();
   let log: { status: number; stdout: string };
   try {
-    log = deps.git(dir, ['log', '-p', '--cc', '--text', '--no-textconv', '--no-ext-diff', '--unified=0', '--no-color', '--no-renames', '--format=%x01c5 %H%n%w(0,1,1)%B', ...allTags, range], { timeout: Math.min(SCAN_READ_MS, left()), maxBuffer: SCAN_MAX_BYTES + 1 });
+    // Seat read 2, item 2: --root (log.showRoot=false hides the root commit of an orphan branch), --encoding=UTF-8 (i18n.logOutputEncoding).
+    log = deps.git(dir, ['log', '-p', '--cc', '--root', '--encoding=UTF-8', '--text', '--no-textconv', '--no-ext-diff', '--unified=0', '--no-color', '--no-renames', '--format=%x01c5 %H%n%w(0,1,1)%B', ...allTags, range], { timeout: SCAN_READ_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
   } catch (e) {
     if (errCode(e) === 'ENOBUFS') return stop('holdout-scan-too-large', `its commit content is over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
-    if (errCode(e) === 'ETIMEDOUT') return clock();
     throw e;
   }
   if (log.status !== 0) return stop('holdout-scan-unavailable', 'the commit content could not be read. Run the push again from the repo.');
   // C5 change 3: a scanned push can carry annotated tags (--follow-tags, push.followTags, a tag refspec): read the local tag names and messages.
   let tags = '';
   if (scanned) {
-    if (left() < SCAN_MIN_READ_MS) return clock();
-    const t = deps.git(dir, ['for-each-ref', '--format=%(refname)%00%(contents)%00', 'refs/tags'], { timeout: Math.min(GIT_TIMEOUT_MS, left()), maxBuffer: SCAN_MAX_BYTES + 1 });
-    if (t.status !== 0) return stop('holdout-scan-unavailable', 'the local tags could not be read. Run the push again from the repo.');
-    tags = t.stdout;
+    const t = tagText(p.force, head, deps, dir, stop);
+    if (typeof t !== 'string') return t;
+    tags = t;
   }
   const added = addedText(log.stdout);
   if (added.binary) return stop('holdout-scan-unavailable', `it sends a binary file that git prints only as "Binary files differ" (a merge resolution), so its content cannot be read. ${SPLIT_WAY_OUT}`);
-  const count = countIdsIn(`${added.text}\n${files.join('\n')}\n${tags}`, ids);
+  // Seat read 2, item 1: a UTF-16 file prints a NUL between characters under --text. Count the text and the text without NUL (an id counts once).
+  const all = `${added.text}\n${files.join('\n')}\n${tags}`;
+  const count = countIdsIn(`${all}\n${all.replace(/\0/g, '')}`, ids);
   if (count === 0) return null;
   return hardOf(deny('holdout-id', `this push of ${branch} carries ${count} holdout id${count === 1 ? '' : 's'} in the added lines, commit messages, file names or tag messages of what it sends (an older commit of the branch counts too). Remove them from every commit and local tag. ${SPLIT_WAY_OUT} Which ones stays with the seat: this text names a count only.`, 'push'));
 }

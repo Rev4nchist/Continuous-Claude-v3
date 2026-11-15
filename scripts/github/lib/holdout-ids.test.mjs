@@ -60,6 +60,7 @@ test('HS5: a sha matches by prefix in both directions, with a 7-hex floor', () =
   assert.equal(countIdsIn(`merge of ${full} done`, ['abcdef0']), 1, 'stored short sha is a prefix of the text sha');
   assert.equal(countIdsIn('merge of abcdef done', [full]), 0, 'six hex is under the floor');
   assert.equal(countIdsIn('merge of abcdef0aaaa done', [full]), 0, 'a run that is not a prefix');
+  assert.equal(countIdsIn(`hash ${'9'.repeat(12)}${full}${'8'.repeat(12)} end`, [full]), 1, 'a sha inside a hex run longer than 40');
 });
 
 test('HS6: the shape check throws on a dataset or config that would give a short list', () => {
@@ -78,6 +79,12 @@ test('HS6: the shape check throws on a dataset or config that would give a short
     [good, { reserve: { pr: 1 } }],
     [good, { holdoutExclude: 'x' }],
     [good, []],
+    // Seat read 2, item 4: a renamed comment id key, a comment id of the wrong type, a round of the wrong type.
+    [{ prs: good.prs, findings: [{ pr: 9001, commentId: 5 }] }, {}],
+    [{ prs: good.prs, findings: [{ pr: 9001, comment_id: { id: 5 } }] }, {}],
+    [{ prs: good.prs, findings: [{ pr: 9001, comment_id: 5, round: { sha: 'x' } }] }, {}],
   ];
+  // The real shapes pass: a finding with no comment id, a non-digit comment id string, an integer round (2026-11-15 dataset).
+  assert.doesNotThrow(() => checkHoldoutShape({ prs: good.prs, findings: [{ pr: 9001, comment_id: '5', round: 2 }, { pr: 9001 }, { pr: 9001, comment_id: 'r-abc' }] }, {}));
   for (const [ds, cfg] of bad) assert.throws(() => checkHoldoutShape(ds, cfg), /wrong shape/, JSON.stringify([ds, cfg]));
 });

@@ -58,8 +58,9 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+/** Seat read 2, item 8: no hook budget by default, so a loaded machine cannot turn a hit row into a clock deny. Budget rows pass their own. */
 function deps(extra: Partial<Deps> = {}): Deps {
-  return { ...realDeps(), holdoutIds: () => [CID, SHA], answerKeyHits: (paths: string[]) => paths.filter((p) => p === KEY_FILE), ...extra } as Deps;
+  return { ...realDeps(), scanLeft: () => Number.POSITIVE_INFINITY, holdoutIds: () => [CID, SHA], answerKeyHits: (paths: string[]) => paths.filter((p) => p === KEY_FILE), ...extra } as Deps;
 }
 const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command }, cwd: repo, session_id: 'c5-test' });
 const reasonOf = (command: string, d: Deps = deps()): string => { const v = decide(bash(command), d); return v.action === 'deny' ? v.reason : `ALLOW${'warn' in v && v.warn ? ` warn: ${v.warn}` : ''}`; };
@@ -338,5 +339,136 @@ describe('C5: the real buffer, the message indent and false-deny controls (advis
       git: ((cwd: string, args: string[], o?: never) => { if (args[0] === 'log') logged = true; return real.git(cwd, args, o); }) as Deps['git'],
     });
     expect(reasonOf('git push fork feat/f6', d)).toMatch(/time of the hook ran out/);
+  });
+});
+
+describe('C5: the tag read is what a push can send (seat read 1 of aa8bf3f3)', () => {
+  /** A lightweight tag on a commit of fork/main whose message holds the id: main is public, and the push does not send the tag. */
+  function oldMainTag(): void {
+    git('checkout', '-q', 'main');
+    const mainTip = commit(`old main ${CID}`);
+    git('update-ref', 'refs/remotes/fork/main', mainTip);
+    git('tag', 'light-old', mainTip);
+    git('checkout', '-q', '-b', 're/t', mainTip);
+    put('t.txt', 'clean\n'); commit('clean re work');
+  }
+
+  it('C23: a lightweight tag on an old main commit does not deny a re/ push that does not name it', () => {
+    // Breaks when: the tag read takes every local tag (one such tag would deny every re/ push of every builder).
+    oldMainTag();
+    expect(isHit(reasonOf('git push fork re/t'))).toBe(false);
+    expect(isHit(reasonOf('git push --follow-tags fork re/t'))).toBe(false);
+  });
+
+  it('C24: a tag the push names is read by its kind, whatever its target (T3)', () => {
+    // Breaks when: a named tag is not read, or a lightweight tag's commit message (on main) is read as the tag (T2).
+    oldMainTag();
+    expect(isHit(reasonOf('git push fork light-old')), 'lightweight, id only in its main commit message').toBe(false);
+    git('tag', `light-${CID}`, 'refs/remotes/fork/main');
+    expect(isHit(reasonOf(`git push fork light-${CID}`)), 'lightweight, id in its name').toBe(true);
+    git('tag', '-a', 'ann-old', '-m', `release ${CID}`, 'refs/remotes/fork/main');
+    expect(isHit(reasonOf('git push fork refs/tags/ann-old')), 'annotated on main, id in its message').toBe(true);
+  });
+
+  it('C33: an annotated tag on a main commit with the id in its message denies a --follow-tags re/ push (T1)', () => {
+    // Breaks when: the tag read takes only tags not merged into fork/main (--follow-tags sends an annotated tag on any reachable commit).
+    git('tag', '-a', 'ann-main', '-m', `release ${CID}`, 'refs/remotes/fork/main');
+    put('a.txt', 'clean\n'); commit('clean');
+    expect(isHit(reasonOf('git push --follow-tags fork re/x'))).toBe(true);
+  });
+
+  it('C25: an annotated tag in the range with the id in its message denies', () => {
+    // Breaks when: --no-merged fork/main drops a tag whose target is a new commit of the branch.
+    put('a.txt', 'clean\n'); commit('clean');
+    git('tag', '-a', 'v-range', '-m', `range ${CID}`);
+    expect(isHit(reasonOf('git push --follow-tags fork re/x'))).toBe(true);
+  });
+
+  it('C26: a tag read that times out gives the clock text', () => {
+    // Breaks when: the tag read relies on the outer catch (a generic "git read failed" text).
+    put('a.txt', 'clean\n'); commit('clean');
+    const real = realDeps();
+    const d = deps({ git: ((cwd: string, args: string[], o?: never) => {
+      if (args[0] === 'for-each-ref') throw Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
+      return real.git(cwd, args, o);
+    }) as Deps['git'] });
+    expect(reasonOf('git push fork re/x', d)).toMatch(/time of the hook ran out/);
+  });
+});
+
+describe('C5: seat read 2 (encodings, config, budget, real id list, shadowed ref)', () => {
+  it('C27: an id in a UTF-16LE file denies (a NUL between characters under --text)', () => {
+    // Breaks when: the count runs only on the raw text.
+    writeFileSync(join(repo, 'u16.txt'), Buffer.from(`﻿ref ${CID}\n`, 'utf16le')); git('add', 'u16.txt'); commit('utf16');
+    expect(isHit(reasonOf('git push fork re/x'))).toBe(true);
+  });
+
+  it('C28: log.showRoot=false does not hide the root commit of an orphan re/ branch', () => {
+    // Breaks when: the log reads have no --root.
+    git('config', 'log.showRoot', 'false');
+    git('checkout', '-q', '--orphan', 're/orphan');
+    git('rm', '-q', '-rf', '--cached', '.');
+    put('o.txt', `root ${CID}\n`); commit('orphan root');
+    expect(isHit(reasonOf('git push fork re/orphan'))).toBe(true);
+  });
+
+  it('C29: i18n.logOutputEncoding does not re-encode the messages the scan reads', () => {
+    // Breaks when: the content read has no --encoding=UTF-8 (and no NUL strip saves it).
+    git('config', 'i18n.logOutputEncoding', 'UTF-16');
+    commit(`msg ${CID}`);
+    expect(isHit(reasonOf('git push fork re/x')), 'UTF-16 (the NUL strip also saves this one)').toBe(true);
+    // EBCDIC re-encodes the digits themselves: only --encoding=UTF-8 keeps them readable (measured on git 2.47 for Windows).
+    git('config', 'i18n.logOutputEncoding', 'IBM037');
+    expect(isHit(reasonOf('git push fork re/x')), 'IBM037').toBe(true);
+  });
+
+  it('C34: the small reads of the scan path get a budgeted timeout, not the fixed 2 s', () => {
+    // Breaks when: the scan's git is not budgeted (currentBranch, rev-parse and show-ref run at 2 s each, past the budget).
+    put('a.txt', 'clean\n'); commit('clean');
+    const seen: Array<{ args: string[]; timeout?: number }> = [];
+    const real = realDeps();
+    const d = deps({
+      scanLeft: () => 1900, // 400 ms after the 1500 ms reserve: the entry check passes, every read must get at most 400 ms
+      git: ((cwd: string, args: string[], o?: { timeout?: number }) => { seen.push({ args, timeout: o?.timeout }); return real.git(cwd, args, o as never); }) as Deps['git'],
+    });
+    reasonOf('git push fork re/x', d);
+    const scanReads = seen.filter((c) => c.args[0] === 'show-ref' || (c.args[0] === 'rev-parse' && c.args.includes('--end-of-options')));
+    expect(scanReads.length).toBeGreaterThan(0);
+    expect(scanReads.every((c) => c.timeout !== undefined && c.timeout <= 400)).toBe(true);
+  });
+
+  it('C30: every git read slow: a deny is written before the 10 s kill', () => {
+    // Breaks when: the reads of the scan path (currentBranch, rev-parse, show-ref, chained reads) run at a fixed 2 s each past the budget.
+    put('a.txt', 'clean\n'); commit('clean');
+    let t = 0;
+    const spawn = (cmd: string, args: string[], o: { cwd?: string; timeout?: number; maxBuffer?: number }) => {
+      void cmd;
+      t += Math.min(o.timeout ?? 2000, 2000);
+      const r = spawnSync('git', args, { cwd: o.cwd, encoding: 'utf8', windowsHide: true, maxBuffer: o.maxBuffer });
+      return { status: r.status, stdout: r.stdout, error: r.error };
+    };
+    const real = realDeps({ start: 0, now: () => t, spawn: spawn as never });
+    const v = decide(bash('git push fork re/x'), deps({ git: real.git, scanLeft: real.scanLeft }));
+    expect(v.action).toBe('deny');
+    expect(t).toBeLessThan(10_000);
+  });
+
+  it('C31: a dataset of the wrong shape, read by the REAL loadHoldoutIds, denies the push', () => {
+    // Breaks when: the shape call is removed (the real loader returns a short list and the scan passes).
+    mkdirSync(join(repo, '.claudedocs'), { recursive: true });
+    mkdirSync(join(repo, 'scripts', 'eval', 'review-eval'), { recursive: true });
+    writeFileSync(join(repo, '.claudedocs', '2026-11-01-pr-review-dataset.json'), JSON.stringify({ prs: [{ pr: 9001 }] }));
+    writeFileSync(join(repo, 'scripts', 'eval', 'review-eval', 'config.json'), JSON.stringify({ reserve: [], holdoutExclude: [] }));
+    put('a.txt', `ref ${CID}\n`); commit('add');
+    const { holdoutIds: _ignored, ...rest } = deps();
+    const d = { ...rest, holdoutIds: realDeps().holdoutIds } as Deps;
+    expect(reasonOf('git push fork re/x', d)).toMatch(/holdout id list could not be read/);
+  });
+
+  it('C32: a local branch named fork/main does not shadow the range', () => {
+    // Breaks when: the range uses the short name fork/main (refs/heads/fork/main wins and the range is empty).
+    put('a.txt', `ref ${CID}\n`); commit('add');
+    git('branch', 'fork/main', 'HEAD');
+    expect(isHit(reasonOf('git push fork re/x'))).toBe(true);
   });
 });
