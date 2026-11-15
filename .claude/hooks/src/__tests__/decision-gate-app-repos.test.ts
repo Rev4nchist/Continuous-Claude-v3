@@ -2320,3 +2320,13 @@ describe('C3 (round 3) a raw payload push folder is read whole, or the push is d
     expect(verdict(bash(`sh -c 'git -C "/work/none/x y" push up main'`, '/work/none'), SPACE)).toEqual({ action: 'allow' });
   });
 });
+
+/** Round 3 C1-12, CLI :1681 (seat word 2026-11-15): a gh flag-first create or merge outside CCv3 keeps the registry-corrupt deny. */
+describe('C1-12 (round 3) a flag-first gh call with a corrupt registry', () => {
+  // Change that breaks it: ghFlagFirstDenies returns nothing for a folder that is not CCv3 when the registry does not parse.
+  it('gh -R <repo> pr create and pr merge in a folder outside CCv3 are registry-corrupt while the registry cannot be read', () => {
+    for (const c of ['gh -R acme/app-x pr create --fill', `gh -R acme/app-x pr merge 7 --squash --match-head-commit ${HEAD}`]) {
+      expect(denyOf(bash(c, '/work/stray'), { registry: '{bad' })?.pattern, c).toBe('registry-corrupt');
+    }
+  });
+});

@@ -1680,7 +1680,13 @@ function ghFlagFirstDenies(raw: string, tool: string | undefined, deps: Deps, cw
   const app = firstCovered(deps, dirs);
   if (app !== null) return [{ ...deny(pattern, `${GH_FLAG_FIRST_WHY}${inAppFolder(app)}`), homeFlags: true }];
   // Seat fix 2: a folder whose remotes git cannot list counts as CCv3 unless it is a resolved folder under no registry root.
-  return dirs.some((d) => ccv3OrUnplaced(deps, d)) ? [deny(pattern, GH_FLAG_FIRST_WHY)] : [];
+  if (dirs.some((d) => ccv3OrUnplaced(deps, d))) return [deny(pattern, GH_FLAG_FIRST_WHY)];
+  // CLI :1681 (seat word 2026-11-15): outside CCv3 a registry that does not parse denies the call, as for every create and merge.
+  for (const d of dirs) {
+    const place = appPlace(deps, d);
+    if (place.corrupt) return [registryCorruptDeny(place.corrupt, d, 'other')];
+  }
+  return [];
 }
 
 
@@ -2366,7 +2372,7 @@ function steadyCommand(raw: string, shell: 'bash' | 'pwsh'): boolean {
  */
 function stateModelled(raw: string, shell: 'bash' | 'pwsh'): boolean {
   const r = pushPrefix(raw, shell);
-  return r !== null && !r.localPush && (r.plain || commitPrecedesPush(r.prefix, shell));
+  return r !== null && !r.localPush && r.pipeOk && (r.plain || commitPrecedesPush(r.prefix, shell));
 }
 /**
  * The text up to the end of the LAST step that names a push (null when no step names one), whether every step before it is a cd, popd,
@@ -2375,7 +2381,7 @@ function stateModelled(raw: string, shell: 'bash' | 'pwsh'): boolean {
  * commit-and-push flow with a trailing pipe is the index rule; so is commit && push && commit (the last commit is after the push).
  * Accepted over-deny: a step after the push that names the word push (git push ... | Select-String push) becomes the last named step.
  */
-function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plain: boolean; localPush: boolean } | null {
+function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plain: boolean; localPush: boolean; pipeOk: boolean } | null {
   const view = fdBlank(joinContinuations(raw, shell));
   const masked = maskQuoted(view, shell === 'pwsh' ? 'PowerShell' : 'Bash');
   const steps: { kind: SegKind | 'popd'; named: boolean; op: string; end: number; raw: string }[] = [];
@@ -2399,8 +2405,20 @@ function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plai
   // Seat fix 6: a push step before the last one that pushes to a local path (git push . HEAD:x, git push ../r main) moves a local branch.
   const tool = shell === 'pwsh' ? 'PowerShell' : 'Bash';
   const localPush = steps.slice(0, last).some((s) => s.kind === 'push' && pushShapesOf(s.raw, tool).some((p) => LOCAL_REMOTE.test(p.push?.remote ?? '')));
-  return { prefix: view.slice(0, steps[last].end), plain, localPush };
+  // CLI :2394 (Dave 2026-11-15, "Fix now"): both sides of a pipe run at the same time, so a step the last push pipes into can move HEAD
+  // before the push reads it. Each step of that pipe chain must be a listed read-only program (first word of the masked step), with no
+  // file redirect (a null target is fine) and no command substitution or block in it.
+  let pipeOk = true;
+  for (let i = last + 1; i < steps.length && /(?<!\|)\|(?!\|)/.test(steps[i].op); i++) {
+    const ms = masked.slice(steps[i].end - steps[i].raw.length, steps[i].end);
+    if (!PIPE_CONSUMER.test(ms.trim().split(/\s+/)[0] ?? '') || /[$`@({<]/.test(ms.replace(/\$null\b/gi, '')) || fileRedirect(ms)) pipeOk = false;
+  }
+  return { prefix: view.slice(0, steps[last].end), plain, localPush, pipeOk };
 }
+/** CLI :2394, seat list (2026-11-15): the read-only programs a push may pipe its output into. Not Tee-Object, ForEach-Object, node or git. */
+const PIPE_CONSUMER = /^(?:Select-Object|Select-String|Out-String|Out-Null|tail|head|cut|grep|findstr|sort|wc|more)$/i;
+/** A > or >> to a file: a target other than $null, /dev/null or NUL. 2>&1 is blanked before (fdBlank). */
+const fileRedirect = (ms: string): boolean => [...ms.matchAll(/[0-9*]?>{1,2}\s*(\S*)/g)].some((m) => !/^(?:\$null|\/dev\/null|nul)$/i.test(m[1]));
 /** A push remote that is a path on this machine, not a remote name: ., .., ./x, ../x, /x, ~, a drive letter, file:, a backslash. */
 const LOCAL_REMOTE = /^(?:\.{1,2}(?:[\\/]|$)|[\\/~]|[A-Za-z]:|file:)|\\/i;
 const PUSH_STATE_WHY = 'a step before this push can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.';

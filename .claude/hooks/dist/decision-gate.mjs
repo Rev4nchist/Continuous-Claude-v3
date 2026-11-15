@@ -2302,7 +2302,12 @@ function ghFlagFirstDenies(raw, tool, deps, cwd, shell) {
   const dirs = rawDirs(raw, tool, cwd, shell, deps.home).filter((d) => !isUnexpanded(d));
   const app = firstCovered(deps, dirs);
   if (app !== null) return [{ ...deny(pattern, `${GH_FLAG_FIRST_WHY}${inAppFolder(app)}`), homeFlags: true }];
-  return dirs.some((d) => ccv3OrUnplaced(deps, d)) ? [deny(pattern, GH_FLAG_FIRST_WHY)] : [];
+  if (dirs.some((d) => ccv3OrUnplaced(deps, d))) return [deny(pattern, GH_FLAG_FIRST_WHY)];
+  for (const d of dirs) {
+    const place = appPlace(deps, d);
+    if (place.corrupt) return [registryCorruptDeny(place.corrupt, d, "other")];
+  }
+  return [];
 }
 function cmdSegments(view) {
   const out3 = [];
@@ -2754,7 +2759,7 @@ function steadyCommand(raw, shell) {
 }
 function stateModelled(raw, shell) {
   const r = pushPrefix(raw, shell);
-  return r !== null && !r.localPush && (r.plain || commitPrecedesPush(r.prefix, shell));
+  return r !== null && !r.localPush && r.pipeOk && (r.plain || commitPrecedesPush(r.prefix, shell));
 }
 function pushPrefix(raw, shell) {
   const view = fdBlank(joinContinuations(raw, shell));
@@ -2777,8 +2782,15 @@ function pushPrefix(raw, shell) {
   const plain = steps.slice(0, last).every((s) => s.kind === "cd" || s.kind === "read" || s.kind === "push" || s.kind === "popd") && steps.slice(1, last + 1).every((s) => !s.op.includes("|") && !/(?<!&)&(?!&)/.test(s.op));
   const tool = shell === "pwsh" ? "PowerShell" : "Bash";
   const localPush = steps.slice(0, last).some((s) => s.kind === "push" && pushShapesOf(s.raw, tool).some((p) => LOCAL_REMOTE.test(p.push?.remote ?? "")));
-  return { prefix: view.slice(0, steps[last].end), plain, localPush };
+  let pipeOk = true;
+  for (let i = last + 1; i < steps.length && /(?<!\|)\|(?!\|)/.test(steps[i].op); i++) {
+    const ms = masked.slice(steps[i].end - steps[i].raw.length, steps[i].end);
+    if (!PIPE_CONSUMER.test(ms.trim().split(/\s+/)[0] ?? "") || /[$`@({<]/.test(ms.replace(/\$null\b/gi, "")) || fileRedirect(ms)) pipeOk = false;
+  }
+  return { prefix: view.slice(0, steps[last].end), plain, localPush, pipeOk };
 }
+var PIPE_CONSUMER = /^(?:Select-Object|Select-String|Out-String|Out-Null|tail|head|cut|grep|findstr|sort|wc|more)$/i;
+var fileRedirect = (ms) => [...ms.matchAll(/[0-9*]?>{1,2}\s*(\S*)/g)].some((m) => !/^(?:\$null|\/dev\/null|nul)$/i.test(m[1]));
 var LOCAL_REMOTE = /^(?:\.{1,2}(?:[\\/]|$)|[\\/~]|[A-Za-z]:|file:)|\\/i;
 var PUSH_STATE_WHY = "a step before this push can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.";
 var PUSH_CHECKOUT_WHY = "the commit before this push runs in one checkout and the push in another (or the checkout of the push folder cannot be read), so the tree it sends cannot be judged. Commit and push in two commands, or push from the same folder: git commit ...; git push <remote> <branch>.";

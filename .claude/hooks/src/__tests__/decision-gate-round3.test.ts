@@ -628,6 +628,29 @@ describe('C4: no unmodelled state change before a push', () => {
     expect(pushPat('git commit -F m.txt && git push fork feat/x')).toBe('allow');
     expect(pushPat('pwsh -File scripts/git-safe.ps1 commit -F m.txt && pwsh -File scripts/git-safe.ps1 push fork feat/x')).toBe('allow');
   });
+  it('C4-7 (CLI :2394, Dave 2026-11-15 "Fix now"): a pipe after the last push feeds only a listed read-only program, else push-state-unknown', () => {
+    // Breaks when: what follows the last push is ignored. Both sides of a pipe run at the same time, so `| git reset --hard` can move HEAD
+    // before the push reads it (the index rule then passes a tap on the wrong tree).
+    shipTapOn(INDEX);
+    for (const c of ['git commit -F m.txt && git push fork HEAD:feat/x | git reset --hard other', 'git push fork feat/x | ForEach-Object { $_ }',
+      'git push fork feat/x | tail -3 > .git/HEAD', 'git push fork feat/x | Tee-Object out.txt', 'git push fork feat/x | node x.js',
+      'git push fork feat/x | tail -3 >> log.txt', 'git push fork feat/x | Select-String x -Path $(git reset --hard o)', "git push fork feat/x | 'tail' -3"]) {
+      expect(patternOf(c), c).toBe('push-state-unknown');
+    }
+    expect(patternIn(pwsh('git push fork feat/x 2>&1 | ForEach-Object { git reset --hard o }'))).toBe('push-state-unknown');
+  });
+  it('C4-C7 (cost): listed consumers, a chain of them, 2>&1 and a null redirect still pass', () => {
+    // Breaks when: the consumer rule refuses the measured git-safe flows (175 Select-Object and 67 tail of 588 a week).
+    shipTapOn(TREE);
+    for (const c of ['git push fork feat/x | tail -5', 'git push fork feat/x 2>&1 | grep -v x | tail -3', 'git push fork feat/x | tail -3 > /dev/null',
+      'git push fork feat/x | cut -c1-80 | sort | wc -l', 'git push fork feat/x | head -2']) {
+      expect(pushPat(c), c).toBe('allow');
+    }
+    for (const c of ['git push fork feat/x 2>&1 | Select-Object -Last 5', 'git push fork feat/x | Out-String', 'git push fork feat/x | Select-String rejected | Out-Null',
+      'git push fork feat/x 2>&1 | Select-Object -Last 3 > $null']) {
+      expect(patternIn(pwsh(c)), c).toBe('allow');
+    }
+  });
   it('C4-6 (measured flow): commit && push with a pipe AFTER the push is the index rule, not the HEAD tree rule', () => {
     // Breaks when: commitPrecedesPush reads the whole text, so a trailing pipe makes the commit-and-push flow fall to the HEAD tree
     // (an old tap passes the new contents) or to push-state-unknown (the git-safe commit-and-push flow, found by the C4 measure).
