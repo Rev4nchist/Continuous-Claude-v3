@@ -1802,15 +1802,41 @@ export function logDeny(input: PreToolUseInput, result: DecideResult, env: NodeJ
   else logGuardDecision('coderabbit-guard', input, 'deny', result.reason || 'blocked', { command: input.tool_input?.command, env });
 }
 
-function main(): void {
-  let input: PreToolUseInput;
-  try {
-    input = JSON.parse(readStdin());
-  } catch {
-    outputContinue();
-    return;
-  }
+/** The deny for a payload the guard cannot parse (PR 567 finding 5). Fail closed: the guard cannot tell what the call runs. */
+export const UNREAD_PAYLOAD_REASON =
+  'CodeRabbit guard: the hook payload could not be read, so this call is refused. Retry the call; if it repeats, tell Dave.';
+/** The deny for an error inside the guard after a good read, on a call that can hold a review run. */
+export const GUARD_ERROR_REASON =
+  'CodeRabbit guard: an internal error stopped the check, so this call is refused. Retry the call; if it repeats, tell Dave.';
+/** The log reason when an internal error hits a call that cannot hold a review run: the call continues. */
+const GUARD_ERROR_CONTINUE = 'CodeRabbit guard: internal error on a call with no review word; continued';
 
+/** A sign that a command can build or hide a program name: a wrapper, an eval, a call operator or a substitution. */
+const DYNAMIC_SIGN = /(?:^|[\s;|&({])(?:eval|iex|invoke-expression|invoke-command|start-process|bash|sh|pwsh|powershell|cmd|xargs|env|npx|sudo)(?=$|[\s;|)])|(?:^|[\s;|({])[&.]\s|-encodedcommand|\$\(|`/i;
+
+/**
+ * The entry test for an internal error (seat ruling on PR 567 finding 5): a cr or coderabbit word in the payload text with quote
+ * characters and backslashes removed, or a dynamic-call sign that can hide one. Scoped, so a bug in the guard cannot stop every shell call.
+ */
+export function mayHoldReview(input: PreToolUseInput): boolean {
+  const text = input.tool_input?.command ?? JSON.stringify(input.tool_input ?? {});
+  return /\b(?:cr|coderabbit)\b/i.test(text.replace(/["'`\\]/g, '')) || DYNAMIC_SIGN.test(text);
+}
+
+/** Deny with a fixed reason. The log line gets no input: no command, no cwd and no payload text reach it. */
+function denyUnread(reason: string): void {
+  logGuardDecision('coderabbit-guard', null, 'deny', reason);
+  outputDeny(reason);
+}
+
+/** An internal error after a good read: deny only a call that can hold a review run; else continue. The log holds no payload. */
+export function onGuardError(input: PreToolUseInput): void {
+  if (mayHoldReview(input)) return denyUnread(GUARD_ERROR_REASON);
+  logGuardDecision('coderabbit-guard', null, 'allow', GUARD_ERROR_CONTINUE);
+  outputContinue();
+}
+
+function runStep(input: PreToolUseInput): void {
   const result = decide(input);
   if (!result.allow) {
     logDeny(input, result);
@@ -1820,10 +1846,44 @@ function main(): void {
   outputContinue();
 }
 
+/** What the hook does with its stdin text. Tests pass a `step` that throws, to reach the internal-error path. */
+export function handle(raw: string, step: (input: PreToolUseInput) => void = runStep): void {
+  let input: PreToolUseInput;
+  try {
+    input = JSON.parse(raw);
+    if (!input || typeof input !== 'object') throw new Error('payload is not an object');
+  } catch {
+    denyUnread(UNREAD_PAYLOAD_REASON);
+    return;
+  }
+  try {
+    step(input);
+  } catch {
+    onGuardError(input);
+  }
+}
+
+/**
+ * The hook entry. A failure to READ stdin (an fd 0 fault such as EAGAIN) continues: it is an environment fault with no payload
+ * to judge, and a deny there would stop every shell call (seat ruling). It writes one log line: the error code only, no input.
+ */
+export function runMain(read: () => string = readStdin): void {
+  let raw: string;
+  try {
+    raw = read();
+  } catch (e) {
+    const code = String((e as NodeJS.ErrnoException)?.code ?? 'unknown').replace(/[^A-Z0-9_]/gi, '').slice(0, 24) || 'unknown';
+    logGuardDecision('coderabbit-guard', null, 'allow', `stdin-read-failed ${code}`);
+    outputContinue();
+    return;
+  }
+  handle(raw);
+}
+
 if (!process.env.VITEST) {
   try {
-    main();
+    runMain();
   } catch {
-    outputContinue();
+    // The error path itself failed: nothing more can be written.
   }
 }

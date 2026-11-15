@@ -30,6 +30,8 @@ import { answerKeyDeny, classifyCommand, decide, effectiveCwd, gitEnv, logDeny, 
 
 // The env key stays non-CCv3 in every case: the check must come from the git remotes, never from the cap key.
 const NOT_CCV3_KEY = 'x#feature';
+// An explicit session id in every payload (PR 567 finding 6): without it a child gets a PID-based id and state files do not match.
+const TEST_SESSION = 'cr-guard-answer-paths';
 const CCV3_URL = 'https://github.com/Rev4nchist/Continuous-Claude-v3.git';
 const OTHER_URL = 'https://github.com/someone/other-repo.git';
 const GOLD = 'scripts/eval/review-eval/gold/case-a.json';
@@ -102,7 +104,7 @@ function makeRepo(opts: { globs?: string[] | null; baseFiles?: Record<string, st
   // A fresh run counter for every call: a deny from the run cap must never look like a deny from the answer-key check.
   const run = (command = REVIEW, o: { key?: string; cwd?: string; tool?: string } = {}) => {
     rmSync(env.CCV3_CODERABBIT_GUARD_STATE as string, { force: true });
-    return decide({ tool_name: o.tool ?? 'Bash', cwd: o.cwd ?? root, tool_input: { command } }, { ...env, CCV3_CODERABBIT_GUARD_KEY: o.key ?? NOT_CCV3_KEY });
+    return decide({ session_id: TEST_SESSION, tool_name: o.tool ?? 'Bash', cwd: o.cwd ?? root, tool_input: { command } }, { ...env, CCV3_CODERABBIT_GUARD_KEY: o.key ?? NOT_CCV3_KEY });
   };
   return { root, top, base, env, run };
 }
@@ -348,11 +350,12 @@ describe('coderabbit-guard answer-key check', { timeout: 30_000 }, () => {
     put(f.top, GOLD, 'fake gold\n');
     put(f.top, 'notes/claude.md', 'rules\n');
     const fake = slash(join(f.top, GOLD));
-    expect(f.run(`${REVIEW} -c ${slash(join(f.top, 'notes/claude.md'))}`).allow).toBe(true);
+    // Temp paths in quotes (PR 567 finding 1): a temp folder with a space must not split the argument.
+    expect(f.run(`${REVIEW} -c "${slash(join(f.top, 'notes/claude.md'))}"`).allow).toBe(true);
     expect(f.run(`${REVIEW} -c REVIEW.md`).allow).toBe(true);
-    expect(f.run(`${REVIEW} -c ${fake}`).allow).toBe(false);
-    expect(f.run(`${REVIEW} --config REVIEW.md ${fake}`).allow).toBe(false);
-    expect(f.run(`${REVIEW} --config=${fake}`).allow).toBe(false);
+    expect(f.run(`${REVIEW} -c "${fake}"`).allow).toBe(false);
+    expect(f.run(`${REVIEW} --config REVIEW.md "${fake}"`).allow).toBe(false);
+    expect(f.run(`${REVIEW} --config="${fake}"`).allow).toBe(false);
     expect(f.run(`${REVIEW} -c no-such-file.md`).allow).toBe(false);
     expect(f.run(`${REVIEW} -c`).allow).toBe(false);
   });
@@ -579,7 +582,7 @@ describe('coderabbit-guard answer-key allow list (round 2)', { timeout: 30_000 }
     const shapes: Array<[string, string?]> = [
       ['cr review --agent --base main'],
       ['coderabbit review --agent --base main'],
-      [`cd ${here} && cr review --agent --base main`],
+      [`cd "${here}" && cr review --agent --base main`],
       [`cd "${here}" ; cr review --agent --base main`],
       [`cd '${here}';cr review --agent --base main`],
       ['cr review --agent --base=main'],
@@ -905,7 +908,7 @@ const stateOf = (f: Fixture): string => f.env.CCV3_CODERABBIT_GUARD_STATE as str
 const slots = (f: Fixture): number => Object.values(readState(stateOf(f)).counts).reduce((a, b) => a + b, 0);
 /** Like f.run, but the run counter stays: a slot test reads it before and after. */
 function keep(f: Fixture, command: string, o: { cwd?: string; tool?: string } = {}): ReturnType<typeof decide> {
-  return decide({ tool_name: o.tool ?? 'Bash', cwd: o.cwd ?? f.root, tool_input: { command } }, f.env);
+  return decide({ session_id: TEST_SESSION, tool_name: o.tool ?? 'Bash', cwd: o.cwd ?? f.root, tool_input: { command } }, f.env);
 }
 
 describe('coderabbit-guard answer-key round 3', { timeout: 30_000 }, () => {

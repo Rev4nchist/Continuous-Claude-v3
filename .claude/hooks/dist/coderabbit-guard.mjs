@@ -1682,14 +1682,24 @@ function logDeny(input, result, env = process.env) {
   if (result.answerKey) logGuardDecision("coderabbit-guard", { ...input, cwd: void 0 }, "deny", result.reason || "blocked", { env });
   else logGuardDecision("coderabbit-guard", input, "deny", result.reason || "blocked", { command: input.tool_input?.command, env });
 }
-function main() {
-  let input;
-  try {
-    input = JSON.parse(readStdin());
-  } catch {
-    outputContinue();
-    return;
-  }
+var UNREAD_PAYLOAD_REASON = "CodeRabbit guard: the hook payload could not be read, so this call is refused. Retry the call; if it repeats, tell Dave.";
+var GUARD_ERROR_REASON = "CodeRabbit guard: an internal error stopped the check, so this call is refused. Retry the call; if it repeats, tell Dave.";
+var GUARD_ERROR_CONTINUE = "CodeRabbit guard: internal error on a call with no review word; continued";
+var DYNAMIC_SIGN = /(?:^|[\s;|&({])(?:eval|iex|invoke-expression|invoke-command|start-process|bash|sh|pwsh|powershell|cmd|xargs|env|npx|sudo)(?=$|[\s;|)])|(?:^|[\s;|({])[&.]\s|-encodedcommand|\$\(|`/i;
+function mayHoldReview(input) {
+  const text = input.tool_input?.command ?? JSON.stringify(input.tool_input ?? {});
+  return /\b(?:cr|coderabbit)\b/i.test(text.replace(/["'`\\]/g, "")) || DYNAMIC_SIGN.test(text);
+}
+function denyUnread(reason) {
+  logGuardDecision("coderabbit-guard", null, "deny", reason);
+  outputDeny(reason);
+}
+function onGuardError(input) {
+  if (mayHoldReview(input)) return denyUnread(GUARD_ERROR_REASON);
+  logGuardDecision("coderabbit-guard", null, "allow", GUARD_ERROR_CONTINUE);
+  outputContinue();
+}
+function runStep(input) {
   const result = decide(input);
   if (!result.allow) {
     logDeny(input, result);
@@ -1698,15 +1708,43 @@ function main() {
   }
   outputContinue();
 }
+function handle(raw, step = runStep) {
+  let input;
+  try {
+    input = JSON.parse(raw);
+    if (!input || typeof input !== "object") throw new Error("payload is not an object");
+  } catch {
+    denyUnread(UNREAD_PAYLOAD_REASON);
+    return;
+  }
+  try {
+    step(input);
+  } catch {
+    onGuardError(input);
+  }
+}
+function runMain(read = readStdin) {
+  let raw;
+  try {
+    raw = read();
+  } catch (e) {
+    const code = String(e?.code ?? "unknown").replace(/[^A-Z0-9_]/gi, "").slice(0, 24) || "unknown";
+    logGuardDecision("coderabbit-guard", null, "allow", `stdin-read-failed ${code}`);
+    outputContinue();
+    return;
+  }
+  handle(raw);
+}
 if (!process.env.VITEST) {
   try {
-    main();
+    runMain();
   } catch {
-    outputContinue();
   }
 }
 export {
   BILLING_REASON,
+  GUARD_ERROR_REASON,
+  UNREAD_PAYLOAD_REASON,
   WAY_OUT_TEXT,
   answerKeyDeny,
   checkRunCap,
@@ -1717,6 +1755,7 @@ export {
   decide,
   effectiveCwd,
   gitEnv,
+  handle,
   hasForbiddenFlags,
   homeOf,
   isCodeWorkspace,
@@ -1728,7 +1767,9 @@ export {
   joinContinuations,
   lexShell,
   logDeny,
+  mayHoldReview,
   normalizeRemote,
+  onGuardError,
   parseInvocation,
   parseShape,
   parsedOptionCount,
@@ -1739,6 +1780,7 @@ export {
   readState,
   recordRun,
   repoBranchKey,
+  runMain,
   segmentize,
   statePath,
   writeState

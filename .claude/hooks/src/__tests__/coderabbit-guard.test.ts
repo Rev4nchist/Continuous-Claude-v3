@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -14,6 +14,10 @@ import {
   repoBranchKey,
   lexShell,
   joinContinuations,
+  handle,
+  runMain,
+  UNREAD_PAYLOAD_REASON,
+  GUARD_ERROR_REASON,
 } from '../coderabbit-guard.js';
 
 const HOOK = resolve(__dirname, '../../dist/coderabbit-guard.mjs');
@@ -41,13 +45,24 @@ function runHook(
   return { stdout: res.stdout.trim(), status: res.status };
 }
 
+/** Like runHook, but sends raw stdin text, so a test can send a payload that is not JSON. */
+function runRaw(raw: string, extraEnv: Record<string, string> = {}): { stdout: string; status: number | null } {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  delete env.VITEST;
+  delete env.VITEST_WORKER_ID;
+  const res = spawnSync('node', [HOOK], { input: raw, encoding: 'utf8', timeout: 15000, env, cwd: NEUTRAL_CWD });
+  return { stdout: res.stdout.trim(), status: res.status };
+}
+
 function deny(stdout: string): boolean {
   const o = JSON.parse(stdout);
   return o.hookSpecificOutput?.permissionDecision === 'deny';
 }
 
-const bash = (command: string) => ({ tool_name: 'Bash', cwd: NEUTRAL_CWD, tool_input: { command } });
-const pwsh = (command: string) => ({ tool_name: 'PowerShell', cwd: NEUTRAL_CWD, tool_input: { command } });
+// An explicit session id in every payload (PR 567 finding 6). A call site that needs its own id puts it AFTER the spread.
+const TEST_SESSION = 'cr-guard-test';
+const bash = (command: string) => ({ session_id: TEST_SESSION, tool_name: 'Bash', cwd: NEUTRAL_CWD, tool_input: { command } });
+const pwsh = (command: string) => ({ session_id: TEST_SESSION, tool_name: 'PowerShell', cwd: NEUTRAL_CWD, tool_input: { command } });
 
 // Built at runtime so no source line holds the billing flag followed by a value (secret scanners flag that).
 const KEY_FLAG = ['--api', 'key'].join('-');
@@ -344,6 +359,74 @@ describe('coderabbit-guard Skill and delegate', () => {
   });
 });
 
+// Seat ruling on PR 567 finding 5: an internal error after a good read denies ONLY a call that can hold a review run.
+describe('coderabbit-guard internal error is scoped', () => {
+  let dir: string;
+  let out: string[];
+  const saved = process.env.CCV3_GUARD_DECISIONS_LOG;
+  const boom = () => {
+    throw new Error('guard bug');
+  };
+  const verdict = () => JSON.parse(out.at(-1) as string).hookSpecificOutput?.permissionDecision ?? 'continue';
+  const lastLog = () => JSON.parse(readFileSync(join(dir, 'log.jsonl'), 'utf8').trim().split('\n').at(-1) as string);
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-error-'));
+    process.env.CCV3_GUARD_DECISIONS_LOG = join(dir, 'log.jsonl');
+    out = [];
+    vi.spyOn(console, 'log').mockImplementation((s: string) => void out.push(s));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (saved === undefined) delete process.env.CCV3_GUARD_DECISIONS_LOG;
+    else process.env.CCV3_GUARD_DECISIONS_LOG = saved;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a throw on a git status payload continues and logs no payload', () => {
+    handle(JSON.stringify(bash('git status')), boom);
+    expect(verdict()).toBe('continue');
+    expect(lastLog()).toMatchObject({ decision: 'allow' });
+    expect(lastLog().command).toBeUndefined();
+    expect(readFileSync(join(dir, 'log.jsonl'), 'utf8')).not.toContain('git status');
+  });
+
+  it.each([
+    ['a cr review payload', bash('cr review --agent --base main')],
+    ['a quote-split program name', bash('c""r review --agent --base main')],
+    ['a backslash in the program name', bash('c\\r review --agent --base main')],
+    ['a dynamic call that can hide one', pwsh('& $tool review --agent')],
+    ['a Skill payload that names coderabbit', { session_id: TEST_SESSION, tool_name: 'Skill', tool_input: { skill: 'coderabbit:review' } }],
+  ])('a throw on %s denies with the fixed reason', (_n, input) => {
+    handle(JSON.stringify(input), boom);
+    expect(verdict()).toBe('deny');
+    expect(JSON.parse(out.at(-1) as string).hookSpecificOutput.permissionDecisionReason).toBe(GUARD_ERROR_REASON);
+    expect(lastLog().command).toBeUndefined();
+  });
+
+  it.each([['null'], ['42'], ['"text"']])('a payload that is JSON but not an object (%s) denies as unread', (raw) => {
+    handle(raw, boom);
+    expect(JSON.parse(out.at(-1) as string).hookSpecificOutput.permissionDecisionReason).toBe(UNREAD_PAYLOAD_REASON);
+  });
+
+  it('a stdin read fault (EAGAIN) continues and logs only the error code', () => {
+    runMain(() => {
+      throw Object.assign(new Error('read fault: cr review --agent'), { code: 'EAGAIN' });
+    });
+    expect(verdict()).toBe('continue');
+    const line = lastLog();
+    expect(line).toMatchObject({ decision: 'allow', reason: 'stdin-read-failed EAGAIN' });
+    expect(line.command).toBeUndefined();
+    expect(line.cwd).toBeUndefined();
+    expect(readFileSync(join(dir, 'log.jsonl'), 'utf8')).not.toContain('cr review');
+  });
+
+  it('control: with no throw, a git status payload continues', () => {
+    handle(JSON.stringify(bash('git status')));
+    expect(verdict()).toBe('continue');
+  });
+});
+
 describe('coderabbit-guard dist e2e', () => {
   let dir: string;
   let childEnv: Record<string, string>;
@@ -363,51 +446,68 @@ describe('coderabbit-guard dist e2e', () => {
   });
 
   it('blocks use-credits via dist', () => {
-    const r = runHook({ session_id: 'g1', ...bash('cr review --agent --use-credits') }, childEnv);
+    const r = runHook({ ...bash('cr review --agent --use-credits'), session_id: 'g1' }, childEnv);
     expect(deny(r.stdout)).toBe(true);
   });
 
   it('allows review --agent twice then blocks third via dist', () => {
-    const base = { session_id: 'g1', ...bash('cr review --agent') };
+    const base = { ...bash('cr review --agent'), session_id: 'g1' };
     expect(deny(runHook(base, childEnv).stdout)).toBe(false);
     expect(deny(runHook(base, childEnv).stdout)).toBe(false);
     expect(deny(runHook(base, childEnv).stdout)).toBe(true);
   });
 
   it('counts a chained pair as two runs via dist', () => {
-    const chain = { session_id: 'g1', ...bash('cr review --agent && cr review --agent') };
+    const chain = { ...bash('cr review --agent && cr review --agent'), session_id: 'g1' };
     expect(deny(runHook(chain, childEnv).stdout)).toBe(false);
-    expect(deny(runHook({ session_id: 'g1', ...bash('cr review --agent') }, childEnv).stdout)).toBe(true);
+    expect(deny(runHook({ ...bash('cr review --agent'), session_id: 'g1' }, childEnv).stdout)).toBe(true);
   });
 
   it('allows cr doctor and a git push of a cr branch via dist', () => {
-    expect(deny(runHook({ session_id: 'g1', ...bash('cr doctor') }, childEnv).stdout)).toBe(false);
+    expect(deny(runHook({ ...bash('cr doctor'), session_id: 'g1' }, childEnv).stdout)).toBe(false);
     expect(
-      deny(runHook({ session_id: 'g1', ...pwsh('git push fork feat/ccv3-cr-install') }, childEnv).stdout),
+      deny(runHook({ ...pwsh('git push fork feat/ccv3-cr-install'), session_id: 'g1' }, childEnv).stdout),
     ).toBe(false);
   });
 
   it('allows a commit message and a PR body that talk about CodeRabbit, and uses no slot, via dist', () => {
     const commit = bash('git commit -m "feat: add guard (CodeRabbit CLI) for runs"');
     const body = pwsh("gh pr create --body @'\nCodeRabbit gate\ncr review --agent runs are capped at 2.\n'@");
-    expect(deny(runHook({ session_id: 'g1', ...commit }, childEnv).stdout)).toBe(false);
-    expect(deny(runHook({ session_id: 'g1', ...body }, childEnv).stdout)).toBe(false);
+    expect(deny(runHook({ ...commit, session_id: 'g1' }, childEnv).stdout)).toBe(false);
+    expect(deny(runHook({ ...body, session_id: 'g1' }, childEnv).stdout)).toBe(false);
     expect(existsSync(childEnv.CCV3_CODERABBIT_GUARD_STATE)).toBe(false);
   });
 
   it('blocks billing flags behind sudo and Start-Process via dist', () => {
-    expect(deny(runHook({ session_id: 'g1', ...bash('sudo cr review --agent --use-credits') }, childEnv).stdout)).toBe(true);
-    expect(deny(runHook({ session_id: 'g1', ...pwsh('Start-Process cr -ArgumentList "review --agent --use-credits"') }, childEnv).stdout)).toBe(true);
+    expect(deny(runHook({ ...bash('sudo cr review --agent --use-credits'), session_id: 'g1' }, childEnv).stdout)).toBe(true);
+    expect(deny(runHook({ ...pwsh('Start-Process cr -ArgumentList "review --agent --use-credits"'), session_id: 'g1' }, childEnv).stdout)).toBe(true);
   });
 
   it('writes an override line to the decision log, and only for a leading assignment, via dist', () => {
     const log = childEnv.CCV3_GUARD_DECISIONS_LOG;
-    const echoed = runHook({ session_id: 'g1', ...bash('echo SKIP_CODERABBIT_GUARD=1 && cr review --use-credits') }, childEnv);
+    const echoed = runHook({ ...bash('echo SKIP_CODERABBIT_GUARD=1 && cr review --use-credits'), session_id: 'g1' }, childEnv);
     expect(deny(echoed.stdout)).toBe(true);
-    const led = runHook({ session_id: 'g2', ...bash('SKIP_CODERABBIT_GUARD=1 cr review --use-credits') }, childEnv);
+    const led = runHook({ ...bash('SKIP_CODERABBIT_GUARD=1 cr review --use-credits'), session_id: 'g2' }, childEnv);
     expect(deny(led.stdout)).toBe(false);
     const kinds = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l).decision);
     expect(kinds).toEqual(['deny', 'override']);
+  });
+
+  // PR 567 finding 5: a payload the guard cannot parse continued. It must deny, and the log line must hold no payload text.
+  it.each([
+    ['broken JSON that names a review', '{not json cr review --agent --base main'],
+    ['broken JSON with no review word', '{not json'],
+    ['an empty payload', ''],
+  ])('denies %s and logs no payload text, via dist', (_name, raw) => {
+    const r = runRaw(raw, childEnv);
+    expect(deny(r.stdout)).toBe(true);
+    const log = readFileSync(childEnv.CCV3_GUARD_DECISIONS_LOG, 'utf8').trim();
+    const last = JSON.parse(log.split('\n').at(-1) as string);
+    expect(last.decision).toBe('deny');
+    expect(log).not.toContain('not json');
+    expect(log).not.toContain('review --agent');
+    expect(last.command).toBeUndefined();
+    expect(last.cwd).toBeUndefined();
   });
 
   it('blocks autofix skill via dist', () => {
@@ -712,7 +812,7 @@ describe('coderabbit-guard: override', () => {
     ['Bash', bash('SKIP_CODERABBIT_GUARD=1 cr review --use-credits')],
     ['PowerShell', pwsh('$env:SKIP_CODERABBIT_GUARD=1; cr review --use-credits')],
   ])('accepts a leading assignment on %s and writes an override line', (_t, input) => {
-    expect(decide({ session_id: 's1', ...input }, env).allow).toBe(true);
+    expect(decide({ ...input, session_id: 's1' }, env).allow).toBe(true);
     const lines = readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({ hook: 'coderabbit-guard', decision: 'override', session_id: 's1' });
