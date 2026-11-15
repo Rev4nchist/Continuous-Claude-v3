@@ -105,9 +105,9 @@ Made from `docs/coordination/standard.md`, parts 2 to 7. Change the standard fir
 | V7.1 | During a wave, no session changes verb behaviour, exit codes, banner text or `lane-board.md` without the agreement of the seat. | advice |
 | V7.2 | Every START word (PRE-PR START, HOOK BUILD START, HEAVY START) names the free memory the seat measured and an end time. A quiet window has an end time. Start a heavy run only after the START word for it. Send the END word when the run ends. | advice |
 | V7.3 | Memory floor: while a long loop runs, a second heavy run starts only with 6 GB free. Below 5 GB nothing heavy starts. The seat writes the measured number in the START word. | advice |
-| V7.4 | The land word needs the seat's own read of GitHub at that moment, with no pre-pr running. After the land the seat rechecks: merged on GitHub, the sha on `main`, the sync cursor, the live hook hashes. A "landed" claim to Dave cites the merged sha on `main`. Dave's land tap is single use. | advice |
+| V7.4 | The land word needs the seat's own read of GitHub at that moment, with no pre-pr running. After the land the seat rechecks: merged on GitHub, the sha on `main`, the sync cursor, the live hook hashes and, for a guard, one live payload to the built hook. A "landed" claim to Dave cites the merged sha on `main`. Dave's land tap is single use. | advice |
 | V7.5 | On a pull request that changes a critical file, plan one review and no fix push after it. A fix over 30 lines, or in a critical file, costs a second paid review. Ask the seat before any fix push. A finding of the same class goes to the next card. | advice |
-| V7.6 | A guard that reads shell text fails closed on the raw text and grows no hand parser. When a CodeRabbit CLI round finds a second new deny-to-allow hole of the same kind in one guard, the fix loop stops and the finding goes to Dave. No fix before the seat's word. | advice |
+| V7.6 | A guard that reads shell text fails closed on the raw text and grows no hand parser. When two review rounds each find a new deny-to-allow hole of the same kind in one guard, the fix loop stops and the finding goes to Dave. No fix before the seat's word. | advice |
 <!-- standard-rules:end -->
 
 ## Command path
