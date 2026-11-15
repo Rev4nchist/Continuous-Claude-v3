@@ -749,6 +749,26 @@ function pairedWords(text: string): string[] | null {
   return words;
 }
 
+/**
+ * Round 3 C2, seat findings (a) and (b): true when the text holds a character whose effect the merge reader does not model, so the words
+ * gh gets cannot be proven. Inside single quotes nothing is special (bash and PowerShell agree, '' included). Inside double quotes: $, a
+ * backtick, a backslash (bash escapes with \, PowerShell with a backtick, so the two pair quotes differently). Outside quotes also a glob
+ * or brace word, parens, a comma (a PowerShell array) and an @ that opens a word (a PowerShell splat).
+ */
+function unmodelled(text: string): boolean {
+  let q: '' | "'" | '"' = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q === "'") { if (ch === "'") q = ''; continue; }
+    if ('$`\\'.includes(ch)) return true;
+    if (q === '"') { if (ch === '"') q = ''; continue; }
+    if (ch === "'" || ch === '"') { q = ch; continue; }
+    if ('*?[]{}(),'.includes(ch)) return true;
+    if (ch === '@' && (i === 0 || /\s/.test(text[i - 1]))) return true;
+  }
+  return false;
+}
+
 type MergeHead = { sha: string | null; shaBad?: true };
 const UNREAD_HEAD: MergeHead = { sha: null, shaBad: true };
 /** The deny text of a merge whose head cannot be read (CCv3 and covered folders: it names no CCv3 tool). */
@@ -788,6 +808,7 @@ function shortCluster(w: string, next: string | undefined): number | null {
  * value flag with no value or an unpaired quote is bad: the reader cannot tell what gh will take as the head. Positionals are not read.
  */
 function cliMergeHead(args: string): MergeHead {
+  if (unmodelled(args)) return UNREAD_HEAD;
   const words = pairedWords(args);
   if (words === null) return UNREAD_HEAD;
   const heads: string[] = [];
@@ -815,7 +836,10 @@ const API_VALUE = new Set(['-X', '--method', '-H', '--header', '--hostname', '-q
  * another field (commit_message="sha=...") is never read. --input (the body comes from a file) or an unpaired quote is bad.
  */
 function apiMergeHead(text: string): MergeHead {
-  const words = pairedWords(text.replace(/^[\s\S]*?\bapi\b/, ''));
+  const rest = text.replace(/^[\s\S]*?\bapi\b/, '');
+  // gh's own placeholders ({owner}, {repo}, {branch}) hold no comma, so bash does not expand them, and they make one word in PowerShell.
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'))) return UNREAD_HEAD;
+  const words = pairedWords(rest);
   if (words === null) return { sha: null, shaBad: true };
   const heads: string[] = [];
   for (let i = 0; i < words.length; i++) {

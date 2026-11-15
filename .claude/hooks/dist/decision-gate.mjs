@@ -1609,6 +1609,28 @@ function pairedWords(text) {
   if (open) words.push(cur);
   return words;
 }
+function unmodelled(text) {
+  let q = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q === "'") {
+      if (ch === "'") q = "";
+      continue;
+    }
+    if ("$`\\".includes(ch)) return true;
+    if (q === '"') {
+      if (ch === '"') q = "";
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      q = ch;
+      continue;
+    }
+    if ("*?[]{}(),".includes(ch)) return true;
+    if (ch === "@" && (i === 0 || /\s/.test(text[i - 1]))) return true;
+  }
+  return false;
+}
 var UNREAD_HEAD = { sha: null, shaBad: true };
 var HEAD_UNREAD_WHY = (pr) => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, or an unpaired quote. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : "<n>"} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>.`;
 var HEX40 = /^[0-9a-f]{40}$/i;
@@ -1635,6 +1657,7 @@ function shortCluster(w, next) {
   return 0;
 }
 function cliMergeHead(args) {
+  if (unmodelled(args)) return UNREAD_HEAD;
   const words = pairedWords(args);
   if (words === null) return UNREAD_HEAD;
   const heads = [];
@@ -1661,7 +1684,9 @@ var API_FIELD = /^(?:-f|-F|--raw-field|--field)$/;
 var API_FIELD_EQ = /^(?:--raw-field|--field)=(.*)$/s;
 var API_VALUE = /* @__PURE__ */ new Set(["-X", "--method", "-H", "--header", "--hostname", "-q", "--jq", "-t", "--template", "--cache", "-p", "--preview"]);
 function apiMergeHead(text) {
-  const words = pairedWords(text.replace(/^[\s\S]*?\bapi\b/, ""));
+  const rest = text.replace(/^[\s\S]*?\bapi\b/, "");
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"))) return UNREAD_HEAD;
+  const words = pairedWords(rest);
   if (words === null) return { sha: null, shaBad: true };
   const heads = [];
   for (let i = 0; i < words.length; i++) {

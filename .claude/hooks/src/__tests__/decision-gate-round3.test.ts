@@ -231,3 +231,68 @@ describe('C2: the merge head is read from one known place, once', () => {
     }
   });
 });
+
+/**
+ * C2 seat findings (delta read of 429ca031, 2026-11-15): one rule, a character the merge reader does not model makes the head unread.
+ *   - (a) a word the shell can expand ($VAR, "$VAR", $(...), `...`, {a,b}, a glob, @splat) can become more flags, a second head among them
+ *   - (b) PowerShell quoting: a backtick escapes a quote, a backslash does not, so the words gh gets differ from the bash pairing
+ *   - doubled single quotes split the same in bash and PowerShell: a green test, no change
+ */
+const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo', session_id: 'r3-test' });
+const patternIn = (input: object): string => { const d = decide(input, deps()); return d.action === 'deny' ? d.pattern : 'allow'; };
+
+describe('C2 seat findings: a character the merge reader does not model makes the head unread', () => {
+  it('C2-7 (a): an expandable word in a gh pr merge segment denies merge-no-head, for Bash and PowerShell', () => {
+    // Breaks when: cliMergeHead skips a word that does not start with a dash, so a word the shell turns into a second head is not read.
+    landTap(5);
+    for (const extra of ['$EXTRA', '"$EXTRA"', '$(cat f)', '`cat f`', '{--match-head-commit,x}', '--match-head-commi?', '--m*', '${EXTRA}']) {
+      const c = `${MERGE} 5 --squash --match-head-commit ${HEAD} ${extra}`;
+      expect(patternIn(bash(c)), `bash ${extra}`).toBe('merge-no-head');
+    }
+    for (const extra of ['$EXTRA', '@EXTRA', '$(Get-Content f)', '"$EXTRA"']) {
+      const c = `${MERGE} 5 --squash --match-head-commit ${HEAD} ${extra}`;
+      expect(patternIn(pwsh(c)), `pwsh ${extra}`).toBe('merge-no-head');
+    }
+  });
+  it('C2-7b (a, api): an expandable word in a gh api merge segment denies merge-no-head', () => {
+    // Breaks when: apiMergeHead skips a word that is not a field flag, so an expansion that becomes -f sha=<other> is not read.
+    landTap(5);
+    for (const extra of ['$EXTRA', '$(cat f)', '"$EXTRA"', '{-f,sha=x}']) {
+      expect(patternIn(bash(`gh api repos/${REPO}/pulls/5/merge -X PUT -f sha=${HEAD} ${extra}`)), extra).toBe('merge-no-head');
+    }
+  });
+  it('C2-C8 (cost): the gh placeholders {owner}/{repo} in the api path still pass with the tap', () => {
+    // Breaks when: the rule reads gh's own placeholders (no comma: bash does not expand them) as a brace expansion.
+    landTap(5);
+    expect(patternIn(bash(`gh api repos/{owner}/{repo}/pulls/5/merge -X PUT -f sha=${HEAD}`))).toBe('allow');
+  });
+  it('C2-8 (b): a PowerShell backtick quote or a backslash before a quote denies merge-no-head', () => {
+    // Breaks when: the reader pairs quotes by bash rules only. PowerShell: `" is a literal quote and \ escapes nothing, so a second head
+    // that the bash pairing reads as --body text is a real flag for gh (gh takes the last head).
+    landTap(5);
+    const tick = `${MERGE} 5 --squash --match-head-commit ${HEAD} --body \`"x --match-head-commit ${OTHER} --body y\`"`;
+    const slash = `${MERGE} 5 --squash --match-head-commit ${HEAD} --body "x\\" --match-head-commit ${OTHER} \\"y"`;
+    for (const c of [tick, slash]) {
+      expect(patternIn(pwsh(c)), `pwsh ${c}`).toBe('merge-no-head');
+      expect(patternIn(bash(c)), `bash ${c}`).toBe('merge-no-head');
+    }
+  });
+  it('C2-C6 (cost, green today): doubled single quotes split the same in bash and PowerShell, so the one head still passes', () => {
+    // Breaks when: a fix for (b) treats '' as unmodelled. Both shells read 'x '' --match-head-commit B '' y' as ONE body word.
+    landTap(5);
+    const c = `${MERGE} 5 --squash --body 'it''s x '' --match-head-commit ${OTHER} '' y' --match-head-commit ${HEAD}`;
+    expect(patternIn(pwsh(c))).toBe('allow');
+    expect(patternIn(bash(c))).toBe('allow');
+  });
+  it('C2-C7b (cost): a $ or a glob inside single quotes is literal in both shells (api form)', () => {
+    landTap(5);
+    expect(patternIn(bash(`gh api repos/${REPO}/pulls/5/merge -X PUT -f sha=${HEAD} -f commit_message='costs $5 (*)'`))).toBe('allow');
+  });
+  it('C2-C7 (cost): a $ or a glob inside single quotes is literal in both shells and still passes', () => {
+    // Breaks when: the rule reads characters inside single quotes as expandable.
+    landTap(5);
+    const c = `${MERGE} 5 --squash --body 'costs $5 (*)' --match-head-commit ${HEAD}`;
+    expect(patternIn(bash(c))).toBe('allow');
+    expect(patternIn(pwsh(c))).toBe('allow');
+  });
+});
