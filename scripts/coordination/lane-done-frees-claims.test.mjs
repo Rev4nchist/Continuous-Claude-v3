@@ -38,7 +38,7 @@ const s = { url: '', db: null, tmp: '', repo: '', home: '', registry: '', idDir:
 function cleanEnv() {
   const env = { ...process.env };
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'LANE_PROJECT', 'CLAUDE_CODE_ENTRYPOINT',
-    'LANE_SKIP_HOOK_PRECHECK', 'COORDINATION_SESSION_ID', 'COORDINATION_BREAK_GLASS', 'LANE_RELEASE_CLAIM_BIN']) delete env[k];
+    'LANE_SKIP_HOOK_PRECHECK', 'COORDINATION_SESSION_ID', 'COORDINATION_BREAK_GLASS', 'LANE_RELEASE_CLAIM_BIN', 'LANE_CLAIMS_FREE_BUDGET_MS']) delete env[k];
   return Object.assign(env, { CONTINUOUS_CLAUDE_DB_URL: s.url, DATABASE_URL: s.url, OPC_POSTGRES_URL: s.url });
 }
 const gitIn = (cwd, ...args) => execFileSync('git',
@@ -108,7 +108,7 @@ before(async () => {
   s.failBin = path.join(s.tmp, 'fail-release.mjs');
   fs.writeFileSync(s.failBin, "console.error('release-claim: database unavailable, nothing was changed'); process.exit(1);\n");
   gitIn(s.repo, 'init', '-b', 'main');
-  for (const f of ['f.txt', 'g.txt', 'h.txt', 'd.txt', 'k.txt', 'm.txt', 'n.txt']) fs.writeFileSync(path.join(s.repo, f), `${f}\n`);
+  for (const f of ['f.txt', 'g.txt', 'h.txt', 'd.txt', 'k.txt', 'm.txt', 'n.txt', 'p.txt']) fs.writeFileSync(path.join(s.repo, f), `${f}\n`);
   gitIn(s.repo, 'add', '.');
   gitIn(s.repo, 'commit', '-m', 'base');
   s.db = new Client({ connectionString: s.url });
@@ -179,6 +179,20 @@ describe('done --merged frees the caller\'s claims on the merged files', () => {
     const notes = r.err.split('\n').filter((l) => l.startsWith('[lane] note: file claims not freed'));
     assert.equal(notes.length, 1, r.err);
     assert.equal(await holds(X, 'm.txt'), true);
+  });
+
+  it('past the time budget the free stops: exit 0, lane done, one budget note, the claim stays', async () => {
+    const w = worktree('slow');
+    assert.equal(edit(X, w, 'p.txt'), 'allow');
+    const sha = land(w, 'slow', ['p.txt']);
+    const id = await mkLane('slow');
+    // A 1 ms budget: the first git child outlives it, the same path a slow git takes against the 20 s budget.
+    const r = lane(['done', id, '--merged', sha], { env: { LANE_CLAIMS_FREE_BUDGET_MS: '1' } });
+    assert.equal(r.code, 0, r.all);
+    assert.equal((await s.db.query(`SELECT state FROM agentic_os.lane WHERE id=$1`, [id])).rows[0].state, 'done');
+    const notes = r.err.split('\n').filter((l) => l.startsWith('[lane] note: file claims not freed (time budget'));
+    assert.equal(notes.length, 1, r.err);
+    assert.equal(await holds(X, 'p.txt'), true);
   });
 
   it('done --no-pr and a plain done free nothing (passes before and after)', async () => {
