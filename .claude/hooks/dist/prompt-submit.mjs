@@ -8885,12 +8885,12 @@ var CUT_PREFIX = "CUT, NOT READ:";
 function cutStateDir() {
   return process.env.LANE_CUT_STATE_DIR || join16(dirname6(identityDir()), "lane-cut");
 }
-var cutStatePath = (me) => join16(cutStateDir(), `${me.replace(/[^A-Za-z0-9._-]/g, "_")}.json`);
+var cutStatePath = (me) => join16(cutStateDir(), `${safeId(me)}.json`);
 function readCutEntries(me, now) {
   try {
     const raw = JSON.parse(readFileSync12(cutStatePath(me), "utf8"));
     if (!Array.isArray(raw.entries)) return [];
-    return raw.entries.map((e) => ({ id: Number(e?.id), at: Number(e?.at), prints: Number(e?.prints) })).filter((e) => Number.isSafeInteger(e.id) && e.id > 0 && Number.isFinite(e.at) && Number.isFinite(e.prints) && e.prints < CUT_MAX_PRINTS && now - e.at < CUT_TTL_MS);
+    return raw.entries.map((e) => ({ id: Number(e?.id), at: Number(e?.at), prints: Number(e?.prints) })).filter((e) => Number.isSafeInteger(e.id) && e.id > 0 && Number.isFinite(e.at) && Number.isFinite(e.prints) && e.prints >= 0 && e.prints < CUT_MAX_PRINTS && e.at <= now && now - e.at < CUT_TTL_MS);
   } catch {
     return [];
   }
@@ -8905,10 +8905,12 @@ function cutPending(me, now) {
 function recordCuts(me, now, pending, printed, cutIds) {
   try {
     const known = new Set(pending.entries.map((e) => e.id));
-    const entries = pending.entries.map((e) => printed && pending.shown.includes(e.id) ? { ...e, prints: e.prints + 1 } : e).filter((e) => e.prints < CUT_MAX_PRINTS).concat(cutIds.filter((id) => !known.has(id)).map((id) => ({ id, at: now, prints: 0 })));
-    if (!entries.length && !pending.entries.length) return;
+    const counted = printed ? pending.shown : [];
+    const added = cutIds.filter((id) => !known.has(id));
+    if (!counted.length && !added.length) return;
+    const entries = pending.entries.map((e) => counted.includes(e.id) ? { ...e, prints: e.prints + 1 } : e).filter((e) => e.prints < CUT_MAX_PRINTS).concat(added.map((id) => ({ id, at: now, prints: 0 })));
     mkdirSync10(cutStateDir(), { recursive: true });
-    writeFileSync5(cutStatePath(me), JSON.stringify({ entries }), "utf8");
+    atomicWriteSync(cutStatePath(me), JSON.stringify({ entries }));
   } catch {
   }
 }
@@ -9257,6 +9259,7 @@ async function relatedLine(client, held, own) {
   return `Related: ${shown.map((id) => `${id} (${tag(id)})`).join(", ")}${more}`;
 }
 var MASTER_CARD_ID = "re-program";
+var CONTROL_CHARS = new RegExp("[\\u0000-\\u001f\\u007f]", "g");
 async function loadBanner(client, me, board, eventName) {
   const mine = (await client.query(
     `SELECT * FROM agentic_os.lane l WHERE owner_session_id=$1 AND state<>'done' ORDER BY ${laneOrderSql("l")}`,
@@ -9316,7 +9319,7 @@ async function loadBanner(client, me, board, eventName) {
         WHERE id = $1 AND COALESCE(project_key, $3::text) = $2::text AND state <> 'done'`,
       [MASTER_CARD_ID, board, DEFAULT_BOARD]
     )).rows[0];
-    if (row?.owner_session_id && !row.reclaimable) seat = who(row.owner_session_id);
+    if (row?.owner_session_id && !row.reclaimable) seat = who(row.owner_session_id).replace(CONTROL_CHARS, "");
   } catch (err) {
     logLaneContextError(me, eventName, err);
   }
@@ -9412,7 +9415,7 @@ async function boardPage(client, a, ctx) {
   }
   const text = lines.join("\n");
   if (utf8Bytes(text) > budget) return buildOutput(boardFallback(board, a.meLabel, oldestDmId(unread)), a.eventName);
-  recordCuts(me, ctx.now(), a.cut, a.cut.line !== null && lead.includes(a.cut.line), cutOnPage(page));
+  if (!late) recordCuts(me, ctx.now(), a.cut, a.cut.line !== null && lead.includes(a.cut.line), cutOnPage(page));
   if (unread.length && lines.length) {
     await finishCursors(client, ctx, { me, eventName: a.eventName, rows: cursorWrites(me, board, page), late });
   }

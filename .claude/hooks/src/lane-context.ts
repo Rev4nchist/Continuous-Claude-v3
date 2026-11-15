@@ -88,6 +88,7 @@ import { openDepSql } from './shared/lane-dep.js';
 import { bandTag, laneOrderSql } from './shared/lane-sort.js';
 import { resolveDbUrl } from './shared/pg-client.js';
 import { isEngineHost } from './shared/engine-host.js';
+import { atomicWriteSync } from './shared/atomic-write.js';
 import { identityDir, label } from './shared/session-identity.js';
 
 /**
@@ -482,9 +483,12 @@ interface CutPending { line: string | null; shown: number[]; entries: CutEntry[]
 export function cutStateDir(): string {
   return process.env.LANE_CUT_STATE_DIR || join(dirname(identityDir()), 'lane-cut');
 }
-const cutStatePath = (me: string): string => join(cutStateDir(), `${me.replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
+const cutStatePath = (me: string): string => join(cutStateDir(), `${safeId(me)}.json`);
 
-/** The live entries: fewer than 3 prints and younger than 30 minutes. A missing, corrupt or unreadable file gives []. */
+/**
+ * The live entries: 0 to 2 prints, and kept for less than 30 minutes (an `at` in the future is not read). A missing,
+ * corrupt or unreadable file gives [].
+ */
 function readCutEntries(me: string, now: number): CutEntry[] {
   try {
     const raw = JSON.parse(readFileSync(cutStatePath(me), 'utf8')) as { entries?: unknown };
@@ -492,7 +496,7 @@ function readCutEntries(me: string, now: number): CutEntry[] {
     return raw.entries
       .map((e: Partial<CutEntry>) => ({ id: Number(e?.id), at: Number(e?.at), prints: Number(e?.prints) }))
       .filter((e) => Number.isSafeInteger(e.id) && e.id > 0 && Number.isFinite(e.at) && Number.isFinite(e.prints)
-        && e.prints < CUT_MAX_PRINTS && now - e.at < CUT_TTL_MS);
+        && e.prints >= 0 && e.prints < CUT_MAX_PRINTS && e.at <= now && now - e.at < CUT_TTL_MS);
   } catch { return []; }
 }
 
@@ -504,17 +508,23 @@ function cutPending(me: string, now: number): CutPending {
   return { line: `${CUT_PREFIX} ${shown.join(' ')}${more > 0 ? ` +${more} more` : ''}`, shown, entries };
 }
 
-/** After a text went out: one more print for each id on its line, and the ids this page cut. Never throws. */
+/**
+ * After a text went out: one more print for each id on its line, and the ids this page cut. Never throws.
+ * No write when nothing changed. The write is a temp file and a rename: the read above and this write have database
+ * queries between them, so two runs of one session must never leave half a file.
+ */
 function recordCuts(me: string, now: number, pending: CutPending, printed: boolean, cutIds: number[]): void {
   try {
     const known = new Set(pending.entries.map((e) => e.id));
+    const counted = printed ? pending.shown : [];
+    const added = cutIds.filter((id) => !known.has(id));
+    if (!counted.length && !added.length) return;
     const entries = pending.entries
-      .map((e) => (printed && pending.shown.includes(e.id) ? { ...e, prints: e.prints + 1 } : e))
+      .map((e) => (counted.includes(e.id) ? { ...e, prints: e.prints + 1 } : e))
       .filter((e) => e.prints < CUT_MAX_PRINTS)
-      .concat(cutIds.filter((id) => !known.has(id)).map((id) => ({ id, at: now, prints: 0 })));
-    if (!entries.length && !pending.entries.length) return;
+      .concat(added.map((id) => ({ id, at: now, prints: 0 })));
     mkdirSync(cutStateDir(), { recursive: true });
-    writeFileSync(cutStatePath(me), JSON.stringify({ entries }), 'utf8');
+    atomicWriteSync(cutStatePath(me), JSON.stringify({ entries }));
   } catch { /* a state we could not write is a line we do not print; the banner stays */ }
 }
 
@@ -1092,6 +1102,7 @@ interface Banner {
 
 /** The master card: the lane that stands for a program (CONTEXT.md). Its holder is the coordinator seat. */
 const MASTER_CARD_ID = 're-program';
+const CONTROL_CHARS = new RegExp('[\\u0000-\\u001f\\u007f]', 'g');
 
 /** A part of the banner and the one line it becomes when the header is over its budget (C4). */
 interface Section { full: string[]; short: string[] }
@@ -1175,7 +1186,8 @@ async function loadBanner(client: Client, me: string, board: string, eventName: 
         WHERE id = $1 AND COALESCE(project_key, $3::text) = $2::text AND state <> 'done'`,
       [MASTER_CARD_ID, board, DEFAULT_BOARD],
     )).rows[0];
-    if (row?.owner_session_id && !row.reclaimable) seat = who(row.owner_session_id);
+    // A name is read from a file. Control characters (0x00-0x1f, 0x7f) could break the line or paint the terminal.
+    if (row?.owner_session_id && !row.reclaimable) seat = who(row.owner_session_id).replace(CONTROL_CHARS, '');
   } catch (err) { logLaneContextError(me, eventName, err); }
   return { here, elsewhere, peers, claimable, related, reminderLines, seat };
 }
@@ -1300,8 +1312,9 @@ async function boardPage(client: Client, a: BoardPageArgs, ctx: PageCtx): Promis
   }
   const text = lines.join('\n');
   if (utf8Bytes(text) > budget) return buildOutput(boardFallback(board, a.meLabel, oldestDmId(unread)), a.eventName);
-  // The text goes out: count a print for each id on its line, and keep the ids this page cut. Not on a fallback.
-  recordCuts(me, ctx.now(), a.cut, a.cut.line !== null && lead.includes(a.cut.line), cutOnPage(page));
+  // The text goes out: count a print for each id on its line, and keep the ids this page cut. Not on a fallback, and not
+  // when the page is late: the text may never arrive, which is why the cursors are not written then either.
+  if (!late) recordCuts(me, ctx.now(), a.cut, a.cut.line !== null && lead.includes(a.cut.line), cutOnPage(page));
   // Advance the cursors only for what was actually injected. Nothing was
   // shown on a turn that produced no output, so nothing may be marked read.
   // Events cut from the page stay above the cursors (see pageUnread).
