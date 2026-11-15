@@ -2,7 +2,6 @@
   "_comment": "Registered hooks with no test that imports or spawns them (hook-coverage-ratchet.mjs). It may only shrink. Remove a name in the same commit that adds its test. Never add a name. Lowering MAX_UNTESTED in hook-coverage-ratchet.mjs to the new length is part of every shrink. Recorded from a real run on 2026-11-09: 67 registered, 15 untested.",
   "untested": [
     "coordination-notification",
-    "coordination-release",
     "identity-probe",
     "import-validator",
     "mcp-activity-tracker",
