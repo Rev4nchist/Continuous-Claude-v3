@@ -35,6 +35,10 @@ import {
 } from '../package-install-guard.js';
 
 import { checkTyposquat } from '../shared/typosquat-detect.js';
+// Card hooks-timing-tests-under-load. The two in-process scan rows below use CPU time. The UNC rows and the "45 repeated value flags" rows
+// keep wall-clock bounds on purpose: the first test that the hook does NOT block on a network path (blocking costs no CPU) and the second
+// times a hook child process (its CPU is not this process's CPU). Both bounds are loose (8 s and 5 s).
+import { cpuMs } from './helpers/cpu-time.js';
 
 // We also import the malicious packages data to test version blocking
 import maliciousPackages from '../shared/malicious-packages.json' with { type: 'json' };
@@ -2440,10 +2444,10 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     });
     it('changed (round 3 MEDIUM a): 4 option pairs (8 words, the bound) before and after add still match', () => {
       const words = Array(4).fill('-x zz').join(' ');
-      const t0 = Date.now();
+      const t0 = cpuMs(); // CPU time of the process, not wall time (card hooks-timing-tests-under-load)
       expect(isPackageInstallCommand(`dotnet ${words} add ${words} reference`)).toBe(false);
       expect(isPackageInstallCommand(`dotnet ${words} add ${words} package Zz.Fake`)).toBe(true);
-      expect(Date.now() - t0).toBeLessThan(2000);
+      expect(cpuMs() - t0).toBeLessThan(2000);
     });
     it('regression: cargo install is still gated the same way', async () => {
       gated(await runHook('cargo install zz-fake-crate', { stub: OLD }));
@@ -2534,10 +2538,10 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
     });
 
     describe('MEDIUM a/b: no catastrophic backtracking', () => {
-      it('1500 repeated "dotnet add" words scan in under 1 s', () => {
-        const t0 = Date.now();
+      it('1500 repeated "dotnet add" words scan in under 1 s of CPU time', () => {
+        const t0 = cpuMs(); // CPU time of the process, not wall time (card hooks-timing-tests-under-load)
         expect(installSegments('echo' + ' dotnet add'.repeat(1500) + '; npx zz-fake-pkg-a1')).toContain('npx zz-fake-pkg-a1');
-        expect(Date.now() - t0).toBeLessThan(1000);
+        expect(cpuMs() - t0).toBeLessThan(1000);
       }, 60_000);
       it.each([
         'npm' + ' --prefix'.repeat(45) + ' zz; pip install zz-fake-pkg-a1',
