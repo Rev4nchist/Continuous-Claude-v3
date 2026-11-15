@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { runJudge, countDay, defaultHeadlessLedger, readHeadlessLedger } from '../../lib/headless.mjs';
 import { DEFAULT_REPO } from '../../github/cursor-review.mjs';
 import { CODERABBIT_LOGIN } from '../../github/review-status.mjs';
@@ -934,7 +935,11 @@ function baselineStatus(stateDir, goldDir) {
   if (baselineProblems(src).length) return 'source-invalid';
   const dest = path.join(goldDir, BASELINE_FILE);
   if (!existsSync(dest)) return 'absent';
-  return readFileSync(dest).equals(src) ? 'identical' : 'differs';
+  // Rows, not bytes (seat 2026-11-14): core.autocrlf checks the gold file out with CRLF, so a byte compare reports a false
+  // "differs" for the same rows. A copy that does not parse differs.
+  let same = false;
+  try { same = isDeepStrictEqual(JSON.parse(readFileSync(dest, 'utf8')), JSON.parse(src.toString('utf8'))); } catch { same = false; }
+  return same ? 'identical' : 'differs';
 }
 
 /** Gold rows from the real candidates, in mined order. noRecord (report only, not in the row): the blamed PR has no engine record at all. */

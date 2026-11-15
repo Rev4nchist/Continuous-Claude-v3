@@ -780,6 +780,17 @@ test('S15b: a dry run writes nothing, and a failed gate leaves the old files as 
   assert.deepEqual(readdirSync(s.gold), ['gold-a.json'], 'no other file and no temp file');
 });
 
+test('S14b: the baseline status compares the rows, not the bytes: a CRLF copy of the state rows is identical, a changed row differs (breaks if the compare goes back to bytes)', async () => {
+  const ok = await bigRun();
+  const b = big();
+  const status = async () => JSON.parse((await run(['--since', '2026-08-01', '--repo', 'o/r', '--state-dir', ok.state, '--gold-dir', ok.gold, '--json'], { git: b.git, gh: fakeGh(b), fixChains: FIXES(b), dataset: DATASET })).out).baseline;
+  const dest = path.join(ok.gold, 'escape-baseline.json');
+  writeFileSync(dest, readFileSync(path.join(ok.state, 'escape-baseline.json'), 'utf8').replace(/\r?\n/g, '\r\n'));
+  assert.equal(await status(), 'identical', 'a CRLF checkout of the same rows');
+  writeFileSync(dest, baselineText().replace('"prsMerged": 5', '"prsMerged": 7'));
+  assert.equal(await status(), 'differs', 'a changed row');
+});
+
 test('S13d: --write without a fix-chains input refuses to write controls (breaks if the partial-failure source is optional for a write)', async () => {
   const b = big();
   const s = setup(b, { rows: bigRows(b), extra: writeArgs, deps: { judge: fakeJudge([REAL()]), dataset: DATASET } });
