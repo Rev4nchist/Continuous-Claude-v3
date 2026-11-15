@@ -23,8 +23,8 @@ export const offerList: () => Offer[] = store.offerList;
 export const offerWrite: (a: Triple & { spec: object; tree?: string | null; cwd?: string }) => { ok: true; nonce: string } | { ok: false; reason: string } = store.offerWrite;
 export const decisionRead:(t: Triple) => { label: string; at: string } | null = store.decisionRead;
 export const decisionRecord: (t: Triple & { label: string }) => { ok: true } | { ok: false; reason: string } = store.decisionRecord;
-/** Uses the decision up (single use). Call it only after the action it allows is decided. */
-export const decisionUse: (t: Triple) => { ok: true } | { ok: false; reason: string } = store.decisionUse;
+/** Uses the decision up (single use). Call it only after the action it allows is decided. With a label, the row is used only when it still holds that label (reason `label-changed` otherwise). */
+export const decisionUse: (t: Triple & { label?: string }) => { ok: true } | { ok: false; reason: string } = store.decisionUse;
 export const missCount: (t: Triple) => number = store.missCount;
 export const missBump: (t: Triple) => number = store.missBump;
 export const decisionKey: (a: { repo?: string; pr?: number | string; branch?: string }) => string = store.decisionKey;

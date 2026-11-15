@@ -471,6 +471,9 @@ import { createHash } from "crypto";
 import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync4, statSync as statSync2 } from "fs";
 import { dirname as dirname3, isAbsolute, join as join5, posix, resolve as resolve2, win32 } from "path";
 
+// src/shared/gh-open-prefix.ts
+var GH_OPT_PREFIX = String.raw`(?:[^\S\r\n]+[\w.\/:=@-]+){1,6}?`;
+
 // src/pr-opened-review-loop.ts
 import { existsSync, mkdirSync as mkdirSync2, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join as join4 } from "path";
@@ -503,7 +506,7 @@ function routerFlag(cwd, readFile, home, section, key) {
 
 // src/pr-opened-review-loop.ts
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
-var PR_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
+var PR_CREATE_RE = new RegExp(String.raw`\bgh(?:\s+|${GH_OPT_PREFIX}[^\S\r\n]+)pr\s+create\b`, "i");
 var GH_API_RE = /\bgh\s+api\b/i;
 var PULLS_PATH_RE = /\/pulls\/?(?=[\s"'?]|$)/i;
 var POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;
@@ -1034,10 +1037,11 @@ function decisionRead({ step, key, head }) {
   const d = readStore(decisionsPath()).decisions[idOf({ step, key, head })];
   return d && typeof d.label === "string" ? { label: d.label, at: d.at } : null;
 }
-function decisionUse({ step, key, head }) {
+function decisionUse({ step, key, head, label }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: "no-decision" };
   return update((store) => {
     const id = idOf({ step, key, head });
+    if (typeof label === "string" && store.decisions[id] && store.decisions[id].label !== label) return { ok: false, reason: "label-changed" };
     const had = Boolean(store.decisions[id]);
     delete store.decisions[id];
     delete store.offers[id];
@@ -1226,7 +1230,7 @@ function bodyFileOf(command) {
 }
 var OPEN_HEAD = /^\s*gh\s+(?:pr\s+create|api)(?=\s|$)/i;
 var bodyViewOf = (command, tool) => blankInertQuotesAround(command, tool, OPEN_HEAD);
-var OPEN_SEGMENT = /(?:^|[;&|\r\n(]\s*)gh\s+(?:pr\s+create(?=\s|$)|api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))/gi;
+var OPEN_SEGMENT = new RegExp(String.raw`(?:^|[;&|\r\n(\x60]\s*)gh(?:\.exe)?(?:\s+pr\s+create(?=\s|$)|${GH_OPT_PREFIX}[^\S\r\n]+pr\s+create(?=\s|$)|\s+api\s+(?:\S+\s+)*?\S*\/pulls(?=\s|$))`, "gi");
 function openSegmentOf(text, shell) {
   const view = joinContinuations(joinContinuations(text, "pwsh"), "bash");
   const opens = [...view.matchAll(OPEN_SEGMENT)];
@@ -1453,12 +1457,12 @@ function cliSkipKey(deps, top, branch) {
   const name = branch ?? deps.git(top, ["branch", "--show-current"]).stdout.trim();
   return name ? decisionKey2({ branch: name }) : null;
 }
-function cliSkipDecided(deps, key, head) {
+function cliSkipLabelOf(deps, key, head) {
   try {
     const d = deps.decisionRead?.({ step: "cli-skip", key, head }) ?? null;
-    return d !== null && typeof d.label === "string" && CLI_SKIP_LABEL.test(d.label);
+    return d !== null && typeof d.label === "string" && CLI_SKIP_LABEL.test(d.label) ? d.label : null;
   } catch {
-    return false;
+    return null;
   }
 }
 function stampDenyIn(command, deps, ctx, dir) {
@@ -1480,8 +1484,9 @@ function stampDenyIn(command, deps, ctx, dir) {
     let relied = null;
     const decided = () => {
       const key = cliSkipKey(deps, top, branch);
-      if (key !== null && cliSkipDecided(deps, key, head)) {
-        relied = { key, head };
+      const label = key === null ? null : cliSkipLabelOf(deps, key, head);
+      if (key !== null && label !== null) {
+        relied = { key, head, label };
         return true;
       }
       return false;
@@ -1565,7 +1570,7 @@ The stamp comes from: ${RUN}`;
     if (d.action === "override") logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
     if (d.action === "allow" && d.warn) logGuardDecision(HOOK, input, "warn", d.warn, { command });
     if (d.action === "allow" && d.usedCliSkip) {
-      const used = deps.decisionUse?.({ step: "cli-skip", key: d.usedCliSkip.key, head: d.usedCliSkip.head });
+      const used = deps.decisionUse?.({ step: "cli-skip", key: d.usedCliSkip.key, head: d.usedCliSkip.head, label: d.usedCliSkip.label });
       if (used?.ok !== true) {
         logGuardDecision(HOOK, input, "deny", "cli-skip-not-used", { command });
         return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "BLOCKED (pre-pr-gate): Dave's cli-skip decision for this branch and head could not be used up (the decision store was busy or the decision is gone). Run the command again. If it keeps failing, ask Dave with node scripts/github/ship-ask.mjs cli-skip --branch <branch>." } });
