@@ -776,7 +776,7 @@ import { mkdirSync as mkdirSync3, readFileSync as readFileSync2, renameSync, unl
 import os from "node:os";
 import path from "node:path";
 var DECISIONS_ENV = "CCV3_DECISIONS_FILE";
-var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round"]);
+var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round", "cli-skip"]);
 var REPO = "Rev4nchist/Continuous-Claude-v3";
 var MAX_AGE_MS = 7 * 24 * 3600 * 1e3;
 var MISS_TTL_MS = 60 * 60 * 1e3;
@@ -2652,10 +2652,32 @@ function scanHoldout(p, deps, dir, branch, chained) {
     return hardOf(deny("holdout-scan-unavailable", `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, "push"));
   }
 }
+function chainedAnswerKeyPaths(deps, dir) {
+  const reads = [
+    ["diff", "--name-only", "--no-renames", "-z", "fork/main...HEAD"],
+    ["diff", "--name-only", "--no-renames", "-z", "--cached"],
+    ["diff", "--name-only", "--no-renames", "-z", "HEAD"],
+    ["ls-files", "--others", "--exclude-standard", "-z"]
+  ];
+  const all = /* @__PURE__ */ new Set();
+  for (const args of reads) {
+    const r = deps.git(dir, args);
+    if (r.status !== 0) return "unreadable";
+    for (const f of r.stdout.split("\0")) if (f) all.add(f);
+    if (all.size > SCAN_MAX_FILES) return "too-large";
+  }
+  return deps.answerKeyHits([...all]).length > 0 ? "hit" : "none";
+}
 function scanHoldoutRead(p, deps, dir, branch, chained) {
   const isRe = branch.startsWith("re/");
   const stop = (pattern, why) => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, "push"));
   if (isRe && chained) return stop("holdout-scan-unavailable", "the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.");
+  if (!isRe && chained) {
+    const hit = chainedAnswerKeyPaths(deps, dir);
+    if (hit === "unreadable") return stop("holdout-scan-unavailable", "the same command also changes files, and the paths it can change could not be read. Commit first, push in a separate command.");
+    if (hit === "too-large") return stop("holdout-scan-too-large", `the same command also changes more than ${SCAN_MAX_FILES} files. Commit first, push in a separate command.`);
+    if (hit === "hit") return stop("holdout-chained-answer-key", "the same command also changes an answer-key path, so the new content cannot be read yet. Commit first, push in a separate command.");
+  }
   const ref = p.src ?? "HEAD";
   if (ref.startsWith("-")) return null;
   const sha = deps.git(dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);

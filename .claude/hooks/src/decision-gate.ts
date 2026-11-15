@@ -2337,11 +2337,41 @@ function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string, chai
   }
 }
 
+/**
+ * The path union of a chained push: names against fork/main (three dots, HEAD), the staged names, the names changed against HEAD (a `commit -a`)
+ * and the untracked names (a `git add -A` or `git add <new file>` in the chain). 'hit' = an answer-key path is in it; 'unreadable' = a git read
+ * failed; 'too-large' = a list over the bound. No path is returned: the callers print a fixed text.
+ */
+function chainedAnswerKeyPaths(deps: Deps, dir: string): 'none' | 'hit' | 'unreadable' | 'too-large' {
+  const reads: string[][] = [
+    ['diff', '--name-only', '--no-renames', '-z', 'fork/main...HEAD'],
+    ['diff', '--name-only', '--no-renames', '-z', '--cached'],
+    ['diff', '--name-only', '--no-renames', '-z', 'HEAD'],
+    ['ls-files', '--others', '--exclude-standard', '-z'],
+  ];
+  const all = new Set<string>();
+  for (const args of reads) {
+    const r = deps.git(dir, args);
+    if (r.status !== 0) return 'unreadable';
+    for (const f of r.stdout.split('\0')) if (f) all.add(f);
+    if (all.size > SCAN_MAX_FILES) return 'too-large';
+  }
+  return deps.answerKeyHits!([...all]).length > 0 ? 'hit' : 'none';
+}
+
 function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, chained: boolean): Deny | null {
   const isRe = branch.startsWith('re/');
   const stop = (pattern: string, why: string): Deny => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, 'push'));
   // A push chained after a commit is scanned at the head BEFORE that commit: its content is not on the branch yet. Fail closed for a re/ branch.
   if (isRe && chained) return stop('holdout-scan-unavailable', 'the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.');
+  // Item 4 (seat YES): a chained or not-alone push of a branch that is NOT re/ is scanned at the old head too, so its change can add or edit an
+  // answer-key file the scan below never sees (`commit -am`, `git add <new file>`). Read the union of the paths and fail closed.
+  if (!isRe && chained) {
+    const hit = chainedAnswerKeyPaths(deps, dir);
+    if (hit === 'unreadable') return stop('holdout-scan-unavailable', 'the same command also changes files, and the paths it can change could not be read. Commit first, push in a separate command.');
+    if (hit === 'too-large') return stop('holdout-scan-too-large', `the same command also changes more than ${SCAN_MAX_FILES} files. Commit first, push in a separate command.`);
+    if (hit === 'hit') return stop('holdout-chained-answer-key', 'the same command also changes an answer-key path, so the new content cannot be read yet. Commit first, push in a separate command.');
+  }
   const ref = p.src ?? 'HEAD';
   if (ref.startsWith('-')) return null; // shipTap denies a ref that starts with a dash
   const sha = deps.git(dir, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);

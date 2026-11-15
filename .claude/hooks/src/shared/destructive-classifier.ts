@@ -461,12 +461,18 @@ export function normalizeGitWrappers(scan: string): string {
  * KEPT, so a quoted wrapper path ("C:\my repo\scripts\git-safe.ps1") and every spelling the rewrite does not know still ask. The subcommand
  * must be `push` right after the wrapper's own options, so a commit message that names `push --force` stays a message.
  */
-const WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
-const WRAPPER_OPT = String.raw`(?:-C\s+${WRAPPER_VAL}|-UseGitSafe|-Path\s+${WRAPPER_VAL}|-Remote\s+${WRAPPER_VAL}|-WhichAccount\s+${WRAPPER_VAL})`;
+const WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']\S*)`; // a bare value never starts with a quote: backtracking must not read `"fix:` as a value
+// Any option token may stand before `push` (seat delta read, hole 1): an option is `-name`, with one optional value that is not `push`.
+const WRAPPER_OPT = String.raw`-[A-Za-z]\S*(?:\s+(?!push\b)${WRAPPER_VAL})?`;
 const WRAPPER_FORCE_PUSH = new RegExp(
-  String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?(?:\s--(?:force|mirror|all|delete|prune)|\s-[A-Za-z]*[fd][A-Za-z]*(?=\s|$)|\s[+:]\S)`,
+  String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?\s["']?(?:--(?:force|mirror|all|delete|prune)|-[A-Za-z]*[fd][A-Za-z]*(?=[\s"']|$)|[+:]\S)`,
   'i',
 );
+// Hole 2 (`"+feat/x"`, `'--force'`): the force form may start after a quote character, so a quoted argument asks like a bare one.
+// A copy of the whole text with the quotes removed is NOT tested: it turns a quoted commit message into extra tokens.
+function wrapperForcePush(command: string): boolean {
+  return WRAPPER_FORCE_PUSH.test(command);
+}
 
 /**
  * The `$(...)` and (Bash) backtick substitutions of a text block that EXPANDS, i.e. an unquoted heredoc
@@ -731,7 +737,7 @@ function classifyText(command: string, depth: number, tool: string): string | nu
   if (!command || typeof command !== 'string') return null;
   // R2: the top-level scan reads the RAW command, heredoc bodies included, as on fork/main. A body that
   // `cat > x.sh` writes can run on the next line (`bash x.sh`), so prose that names a destructive command asks.
-  if (WRAPPER_FORCE_PUSH.test(command)) return 'git push --force';
+  if (wrapperForcePush(command)) return 'git push --force';
   let scan = normalizeGitGlobalOptions(normalizeGitWrappers(stripQuotedStrings(command, tool)));
   // PowerShell: `` res`et `` runs as reset. Quotes are already stripped, so the escaped letter can go.
   if (tool === 'PowerShell') scan = scan.replace(/`([A-Za-z0-9])/g, '$1');

@@ -120,4 +120,55 @@ describe('W: a command that names the git wrapper with a force push form and can
       expect(askFor(cmd, 'Bash'), cmd).toBe('allow');
     }
   });
+
+  it('W9: an unknown wrapper option before push does not hide a force form (seat delta read, hole 1)', () => {
+    // Breaks when: the rule lists the wrapper options it knows and any other option token before `push` ends the match.
+    for (const cmd of [
+      'pwsh -File scripts/git-safe.ps1 -Verbose push --force fork feat/x',
+      'pwsh -File scripts/git-safe.ps1 -Verbose -C C:/repo push -f fork feat/x',
+      'pwsh -File scripts/git-safe.ps1 -SomeNewOption value push fork +feat/x',
+      'pwsh -File "scripts/git-safe.ps1" -Debug push --mirror fork',
+    ]) {
+      expect(askFor(cmd, 'Bash'), `Bash ${cmd}`).not.toBe('allow');
+      expect(askFor(cmd, 'PowerShell'), `PowerShell ${cmd}`).not.toBe('allow');
+    }
+  });
+
+  it('W10: a quoted force argument asks (seat delta read, hole 2)', () => {
+    // Breaks when: the rule reads the raw text only, so `"+feat/x"` or `'--force'` does not start with the force character.
+    for (const cmd of [
+      'pwsh -File scripts/git-safe.ps1 push fork "+feat/x"',
+      "pwsh -File scripts/git-safe.ps1 push fork '--force'",
+      'pwsh -File scripts/git-safe.ps1 push "--force-with-lease" fork feat/x',
+      "pwsh -File scripts/git-safe.ps1 push fork ':feat/x'",
+    ]) {
+      expect(askFor(cmd, 'Bash'), `Bash ${cmd}`).not.toBe('allow');
+      expect(askFor(cmd, 'PowerShell'), `PowerShell ${cmd}`).not.toBe('allow');
+    }
+  });
+
+  it('W11: the controls of holes 1 and 2 stay allowed', () => {
+    // Breaks when: the wider rule asks for an ordinary push, a refspec of an own branch or a message that names the force word.
+    for (const cmd of [
+      'pwsh -File scripts/git-safe.ps1 -Verbose push fork feat/x',
+      'pwsh -File scripts/git-safe.ps1 push -u fork feat/x',
+      'pwsh -File scripts/git-safe.ps1 push fork HEAD:refs/heads/feat/x',
+      'pwsh -File scripts/git-safe.ps1 push fork "feat/x"',
+      'pwsh -File scripts/git-safe.ps1 -Verbose commit -m "fix: push --force now asks"',
+    ]) {
+      expect(askFor(cmd, 'PowerShell'), cmd).toBe('allow');
+      expect(askFor(cmd, 'Bash'), cmd).toBe('allow');
+    }
+  });
+
+  it('W12: the wrapper rule cost grows linearly with 50,000 option tokens (ratio form, no clock limit)', () => {
+    // Breaks when: the option group backtracks (an unknown option may take a value, so a long run of options is ambiguous).
+    const best = (fn: () => void): number => Math.min(...[0, 1, 2].map(() => { const t = performance.now(); fn(); return performance.now() - t; }));
+    const make = (n: number) => `pwsh -File scripts/git-safe.ps1 ${'-a b '.repeat(n)}commit -m x`;
+    const small = make(12_500);
+    const big = make(50_000);
+    askFor(small, 'PowerShell');
+    const ratio = best(() => askFor(big, 'PowerShell')) / Math.max(best(() => askFor(small, 'PowerShell')), 0.05);
+    expect(ratio, `ratio ${ratio.toFixed(1)}`).toBeLessThan(12);
+  });
 });

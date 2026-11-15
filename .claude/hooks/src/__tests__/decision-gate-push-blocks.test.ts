@@ -59,6 +59,12 @@ interface World {
   ids?: string[] | 'throw';
   /** Which paths the answer-key guard list names (the real list is imported in the source; here a fake). */
   answerKey?: (path: string) => boolean;
+  /** Item 4 path reads of a chained push: `git diff --cached --name-only`, `git diff HEAD --name-only`, `git ls-files --others --exclude-standard`. */
+  cachedFiles?: string[];
+  headFiles?: string[];
+  untracked?: string[];
+  /** The chained-path reads fail (status 128). */
+  chainFails?: boolean;
 }
 
 /** The shipped state: enforce true, enforcePush absent. A fake git and config for a checkout at /repo. */
@@ -79,6 +85,10 @@ function deps(w: World = {}): Deps {
       if (/^rev-parse (.+)\^\{commit\}$/.test(a)) return { status: 0, stdout: `${HEAD}\n` };
       if (/^rev-parse (.+)\^\{tree\}$/.test(a)) return { status: 0, stdout: `${TREE}\n` };
       if (a === 'write-tree') return { status: 128, stdout: '' };
+      const list = (names?: string[]) => (w.chainFails ? { status: 128, stdout: '' } : { status: 0, stdout: `${(names ?? []).join('\0')}${names?.length ? '\0' : ''}` });
+      if (args[0] === 'diff' && args.includes('--name-only') && args.includes('--cached')) return list(w.cachedFiles);
+      if (args[0] === 'diff' && args.includes('--name-only') && args[args.length - 1] === 'HEAD') return list(w.headFiles);
+      if (args[0] === 'ls-files' && args.includes('--others')) return list(w.untracked);
       if (args[0] === 'diff' && args.includes('--name-only')) return w.scanFails ? { status: 128, stdout: '' } : { status: 0, stdout: `${(w.files ?? ['src/app.ts']).join('\0')}\0` };
       if (w.throwOnScan && args[0] === 'diff' && args.includes('--unified=0')) throw new Error('git exploded');
       if (args[0] === 'diff' && args.includes('--unified=0')) return w.scanFails ? { status: 128, stdout: '' } : { status: 0, stdout: w.diff ?? '' };
@@ -333,6 +343,48 @@ describe('HS: the holdout scan on a push of a re/ branch', () => {
     expect(denied(bash(PUSH), { ...RE, diff: `+++ b/src/a.ts\n+++ // PR ${SYNTH}\n` })).toBe(true);
     expect(denied(bash(PUSH), { ...RE, diff: `+++ b/src/a.ts\n++++ #${SYNTH}\n` })).toBe(true);
     expect(verdict(bash(PUSH), { ...RE, diff: '+++ b/src/a.ts\n+++ plain text\n' }).action).toBe('allow');
+  });
+
+  describe('H18 to H21: a chained or not-alone push of a NON-re branch whose change adds or edits an answer-key path (seat YES, item 4)', () => {
+    // The union of paths: fork/main...HEAD + git diff --cached + git diff HEAD + untracked. An answer-key hit = hard deny, commit first.
+    const KEY = { answerKey: (p: string) => p.startsWith('gold/') };
+    const CHAIN = 'git commit -am x && git push fork feat/x';
+    const sepCommand = (c: string, w: World): void => {
+      const d = verdict(bash(c), w);
+      expect(d.action, c).toBe('deny');
+      expect(d.action === 'deny' ? d.reason : '', c).toMatch(/commit first, push in a separate command/i);
+    };
+
+    it('H18: a chained commit -am that changes a tracked answer-key file is a hard deny', () => {
+      // Breaks when: only fork/main...HEAD is read (the -a change is not on the branch yet).
+      shipTap();
+      sepCommand(CHAIN, { ...KEY, headFiles: ['gold/a.json'] });
+      sepCommand('git commit -a -m x ; git push fork feat/x', { ...KEY, headFiles: ['gold/a.json'] });
+    });
+
+    it('H19: a chained git add of a new answer-key file (staged or untracked) is a hard deny', () => {
+      // Breaks when: the staged or the untracked names are not read.
+      shipTap();
+      sepCommand('git add gold/new.json && git commit -m x && git push fork feat/x', { ...KEY, untracked: ['gold/new.json'] });
+      sepCommand('git add -A && git commit -m x && git push fork feat/x', { ...KEY, cachedFiles: ['gold/new.json'] });
+      // The names already on the branch count too.
+      sepCommand(CHAIN, { ...KEY, files: ['gold/on-branch.json'] });
+    });
+
+    it('H20: the controls stay allowed: an ordinary commit and push with no answer-key path, and a push with no chain', () => {
+      // Breaks when: every chained push of a non-re branch is denied (the seat: no blanket deny).
+      shipTap();
+      expect(verdict(bash(CHAIN), { ...KEY, headFiles: ['src/a.ts'], cachedFiles: ['src/b.ts'], untracked: ['notes.md'] }).action).toBe('allow');
+      expect(verdict(bash('git push fork feat/x'), { ...KEY, headFiles: ['gold/a.json'] }).action).toBe('allow');
+    });
+
+    it('H21: a failed git read, or an untracked list over the bound, is a hard deny', () => {
+      // Breaks when: a failed read is read as an empty list (fail open).
+      shipTap();
+      expect(verdict(bash(CHAIN), { ...KEY, chainFails: true }).action).toBe('deny');
+      const many = Array.from({ length: 2001 }, (_, i) => `src/f${i}.ts`);
+      expect(verdict(bash(CHAIN), { ...KEY, untracked: many }).action).toBe('deny');
+    });
   });
 
   it('H11: a re/ push with no id passes with its ship tap only (no question added)', () => {
