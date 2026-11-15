@@ -17,6 +17,8 @@ import {
   reasonFor,
 } from '../destructive-command-guard.js';
 import { installSegments } from '../package-install-guard.js';
+// Card hooks-timing-tests-under-load: the speed rows below measure CPU time of the process, not wall time (a busy suite stalls wall time).
+import { cpuMs } from './helpers/cpu-time.js';
 
 describe('deny text does not teach the agent to override the guard', () => {
   // 59 of 59 agent overrides in the mods usage review followed the old advice in this text.
@@ -347,9 +349,9 @@ describe('parseExecutable: `&>` stays in one segment', () => {
     parseExecutable('x&>y'.repeat(100)); // warm up
     const best = Math.min(
       ...[0, 1, 2].map(() => {
-        const t0 = performance.now();
+        const t0 = cpuMs();
         parseExecutable(input);
-        return performance.now() - t0;
+        return cpuMs() - t0;
       }),
     );
     expect(best).toBeLessThan(250);
@@ -845,10 +847,10 @@ describe('Fabric guard round 2: lead-ins, host-less URLs, trailing slash, PowerS
   describe('lead-in regex stays linear (a hook that hangs bricks the tool call)', () => {
     const shapes = ['if (x) { ', 'A=1 ', '$a = ', 'try { ', '(( ', 'if ('];
     for (const s of shapes) {
-      it(`3000 x "${s}" classifies in under 2 s`, () => {
-        const t0 = Date.now();
+      it(`3000 x "${s}" classifies in under 2 s of CPU time`, () => {
+        const t0 = cpuMs();
         expect(ps(s.repeat(3000) + 'echo hi')).toBeNull();
-        expect(Date.now() - t0).toBeLessThan(2000);
+        expect(cpuMs() - t0).toBeLessThan(2000);
       });
     }
   });
@@ -979,10 +981,10 @@ describe('Fabric guard round 3: substitutions inside text blocks, PowerShell bac
       ['many heredoc openers', 'cat > f <<EOF\nx\nEOF\n'.repeat(1500), 'Bash'],
     ];
     for (const [name, cmd, tool] of blocks) {
-      it(`${name}: under 2 s`, () => {
-        const t0 = Date.now();
+      it(`${name}: under 2 s of CPU time`, () => {
+        const t0 = cpuMs();
         classifyDestructive(cmd, 0, tool);
-        expect(Date.now() - t0).toBeLessThan(2000);
+        expect(cpuMs() - t0).toBeLessThan(2000);
       });
     }
   });
@@ -1114,17 +1116,17 @@ describe('eval bypasses: the guard must not allow these (F01-F06, F14, wrapper q
 });
 
 describe('F16: decide() stays fast on adversarial option runs', () => {
-  it('rm with 28 repeated long options finishes in under 1000 ms', () => {
+  it('rm with 28 repeated long options finishes in under 1000 ms of CPU time', () => {
     const cmd = 'rm ' + '--a '.repeat(28) + 'x';
-    const t0 = performance.now();
+    const t0 = cpuMs();
     decide(cmd, interactiveFor('Bash'), {});
-    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(cpuMs() - t0).toBeLessThan(1000);
   });
-  it('git clean with 28 repeated long options finishes in under 1000 ms', () => {
+  it('git clean with 28 repeated long options finishes in under 1000 ms of CPU time', () => {
     const cmd = 'git clean ' + '--a '.repeat(28) + 'x';
-    const t0 = performance.now();
+    const t0 = cpuMs();
     decide(cmd, interactiveFor('Bash'), {});
-    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(cpuMs() - t0).toBeLessThan(1000);
   });
 });
 
@@ -1195,10 +1197,12 @@ function childTimer(): (fn: 'decide' | 'install', cmd: string) => Promise<number
       `import { installSegments } from './src/package-install-guard.ts';`,
       `import { readFileSync } from 'node:fs';`,
       `const cmd = readFileSync(0, 'utf8');`,
-      `const t0 = performance.now();`,
+      // CPU time of the child (user + system), not wall time: a stall of a busy machine costs wall time only (card hooks-timing-tests-under-load).
+      `const c0 = process.cpuUsage();`,
       `if (process.argv[2] === 'decide') decide(cmd, { tool_name: 'Bash', permission_mode: 'default' }, {});`,
       `else installSegments(cmd, 'Bash');`,
-      `console.log(JSON.stringify({ ms: performance.now() - t0 }));`,
+      `const c1 = process.cpuUsage(c0);`,
+      `console.log(JSON.stringify({ ms: (c1.user + c1.system) / 1000 }));`,
     ].join('\n');
     const out = buildSync({
       stdin: { contents: entry, resolveDir: hooksDir, loader: 'ts', sourcefile: 'c1-entry.ts' },
@@ -1233,10 +1237,10 @@ describe('C1: launcher regexes stay linear (x200 of each overlapping token)', ()
     ['VAR=x item that is also a path-prefixed launcher', 'x=/nohup '.repeat(200) + 'y'],
   ];
   for (const [name, cmd] of cases) {
-    it(`decide(): ${name} finishes in under 1000 ms`, async () => {
+    it(`decide(): ${name} finishes in under 1000 ms of CPU time`, async () => {
       expect(await timeIt('decide', cmd)).toBeLessThan(1000);
     }, 20_000);
-    it(`installSegments(): ${name} finishes in under 1000 ms`, async () => {
+    it(`installSegments(): ${name} finishes in under 1000 ms of CPU time`, async () => {
       expect(await timeIt('install', cmd)).toBeLessThan(1000);
     }, 20_000);
   }
@@ -1339,10 +1343,10 @@ describe('R1: the wrapper payload tail stays linear on a mid-line CR', () => {
     ['cmd /c run', 'cmd' + ' /c x'.repeat(2000) + tail],
   ];
   for (const [name, cmd] of cases) {
-    it(`decide(): ${name} finishes in under 1000 ms`, async () => {
+    it(`decide(): ${name} finishes in under 1000 ms of CPU time`, async () => {
       expect(await timeIt('decide', cmd)).toBeLessThan(1000);
     }, 20_000);
-    it(`installSegments(): ${name} finishes in under 1000 ms`, async () => {
+    it(`installSegments(): ${name} finishes in under 1000 ms of CPU time`, async () => {
       expect(await timeIt('install', cmd)).toBeLessThan(1000);
     }, 20_000);
   }
@@ -1598,10 +1602,10 @@ describe('B3: time/nohup flag runs stay linear (x200)', () => {
     ['nohup flag that is also a path-prefixed launcher', 'nohup ' + '-x/nohup '.repeat(200) + 'z'],
   ];
   for (const [name, cmd] of cases) {
-    it(`decide(): ${name} finishes in under 1000 ms`, async () => {
+    it(`decide(): ${name} finishes in under 1000 ms of CPU time`, async () => {
       expect(await timeIt('decide', cmd)).toBeLessThan(1000);
     }, 20_000);
-    it(`installSegments(): ${name} finishes in under 1000 ms`, async () => {
+    it(`installSegments(): ${name} finishes in under 1000 ms of CPU time`, async () => {
       expect(await timeIt('install', cmd)).toBeLessThan(1000);
     }, 20_000);
   }

@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { classifyDestructive } from '../destructive-command-guard.js';
+import { cpuMs } from './helpers/cpu-time.js';
 
 const bash = (c: string): string | null => classifyDestructive(c, 0, 'Bash');
 const pwsh = (c: string): string | null => classifyDestructive(c, 0, 'PowerShell');
@@ -182,10 +183,11 @@ describe('legit commands near the new rows stay allowed', () => {
 });
 
 describe('the new scans stay fast', () => {
+  // CPU time of the process, not wall time (card hooks-timing-tests-under-load): a busy suite stalls wall time. Limits unchanged.
   const timed = (cmd: string, tool: 'Bash' | 'PowerShell'): number => {
-    const t0 = Date.now();
+    const t0 = cpuMs();
     classifyDestructive(cmd, 0, tool);
-    return Date.now() - t0;
+    return cpuMs() - t0;
   };
   it.each([
     ['>$(a '.repeat(3000), 'Bash'],

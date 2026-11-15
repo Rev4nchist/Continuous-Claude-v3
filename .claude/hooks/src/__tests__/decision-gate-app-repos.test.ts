@@ -81,6 +81,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cpuMs } from './helpers/cpu-time.js';
 import { decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
 import { readRegistry } from '../shared/tap-scope.js';
 import { GitDeadlineError, MissingCwdError, decide, handle, makeGit, pushShapesOf, realDeps, type Decision, type Deps } from '../decision-gate.js';
@@ -2046,21 +2047,23 @@ describe('R5 F6: the default-branch compare ignores case', () => {
 
 describe('R5 F7: a long hostile command is read in linear time', () => {
   // Change that breaks it: an option reader whose alternatives overlap (-C VAL and -ANY_WORD both take -C), so a failed match backtracks.
-  it('R5 F7 60 runs of git with 30 -C words and no verb finish under 1 s', () => {
+  // Card hooks-timing-tests-under-load: CPU time of the process, not wall time (helpers/cpu-time.ts). F7b once took 1021 ms of wall time in a
+  // busy suite against 361 ms alone. The inputs and the 1000 ms limit are unchanged.
+  it('R5 F7 60 runs of git with 30 -C words and no verb finish under 1 s of CPU time', () => {
     const cmd = `git ${'-C '.repeat(30)}status`;
-    const start = Date.now();
+    const start = cpuMs();
     for (let i = 0; i < 60; i++) decide(bash(cmd), deps(devX()));
-    expect(Date.now() - start).toBeLessThan(1000);
+    expect(cpuMs() - start).toBeLessThan(1000);
   });
   // Change that breaks it: a force-bundle regex with a star on each side of [fd] (quadratic on a long -fff...x word), or any reader of
   // the raw rule that backtracks on a long -C run before push.
-  it('R5 F7b 60 runs of a long hostile push command (30 -C words, an 8000-letter bundle) finish under 1 s', () => {
+  it('R5 F7b 60 runs of a long hostile push command (30 -C words, an 8000-letter bundle) finish under 1 s of CPU time', () => {
     // handle(), as the real hook: the -C chain names a folder under the live root that git cannot read, so the call ends in the catch (deny).
     const cmd = JSON.stringify(bash(`git ${'-C '.repeat(30)}push -${'f'.repeat(8000)}x up topic`));
-    const start = Date.now();
+    const start = cpuMs();
     for (let i = 0; i < 60; i++) expect(JSON.parse(handle(cmd, deps(devX()))).hookSpecificOutput.permissionDecision).toBe('deny');
-    const ms = Date.now() - start;
-    expect(ms, `${ms} ms`).toBeLessThan(1000);
+    const ms = cpuMs() - start;
+    expect(ms, `${ms} ms CPU`).toBeLessThan(1000);
   });
 });
 
