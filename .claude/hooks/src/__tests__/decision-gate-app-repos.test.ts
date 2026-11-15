@@ -81,7 +81,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cpuMs } from './helpers/cpu-time.js';
+import { cpuBest, cpuMs, cpuTimed } from './helpers/cpu-time.js';
 import { decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
 import { readRegistry } from '../shared/tap-scope.js';
 import { GitDeadlineError, MissingCwdError, decide, handle, makeGit, pushShapesOf, realDeps, type Decision, type Deps } from '../decision-gate.js';
@@ -2060,10 +2060,12 @@ describe('R5 F7: a long hostile command is read in linear time', () => {
   it('R5 F7b 60 runs of a long hostile push command (30 -C words, an 8000-letter bundle) finish under 1 s of CPU time', () => {
     // handle(), as the real hook: the -C chain names a folder under the live root that git cannot read, so the call ends in the catch (deny).
     const cmd = JSON.stringify(bash(`git ${'-C '.repeat(30)}push -${'f'.repeat(8000)}x up topic`));
-    const start = cpuMs();
-    for (let i = 0; i < 60; i++) expect(JSON.parse(handle(cmd, deps(devX()))).hookSpecificOutput.permissionDecision).toBe('deny');
-    const ms = cpuMs() - start;
-    expect(ms, `${ms} ms CPU`).toBeLessThan(1000);
+    // Little headroom (361 ms alone against 1000): the best of 3 samples. A full-suite run took 1047 ms of CPU in ONE sample while other sessions
+    // ran test files; a real backtracking regex is slow in every sample and still fails.
+    const ms = cpuBest(() => cpuTimed(() => {
+      for (let i = 0; i < 60; i++) expect(JSON.parse(handle(cmd, deps(devX()))).hookSpecificOutput.permissionDecision).toBe('deny');
+    }).ms);
+    expect(ms, `${ms} ms CPU (best of 3)`).toBeLessThan(1000);
   });
 });
 

@@ -18,7 +18,7 @@ import {
 } from '../destructive-command-guard.js';
 import { installSegments } from '../package-install-guard.js';
 // Card hooks-timing-tests-under-load: the speed rows below measure CPU time of the process, not wall time (a busy suite stalls wall time).
-import { cpuMs } from './helpers/cpu-time.js';
+import { cpuBestAsync, cpuMs } from './helpers/cpu-time.js';
 
 describe('deny text does not teach the agent to override the guard', () => {
   // 59 of 59 agent overrides in the mods usage review followed the old advice in this text.
@@ -1351,7 +1351,10 @@ describe('R1: the wrapper payload tail stays linear on a mid-line CR', () => {
     }, 20_000);
   }
   it('decide(): docker compose down x500 finishes in under 200 ms', async () => {
-    expect(await timeIt('decide', 'docker compose down '.repeat(500))).toBeLessThan(200);
+    // The tightest limit in the suite (200 ms against up to 48 ms of CPU in the child, 4.2x): best of 3 child runs, and the Windows CPU
+    // clock ticks in 15.6 ms steps, far below the limit. A real slowdown is slow in all 3.
+    const cmd = 'docker compose down '.repeat(500);
+    expect(await cpuBestAsync(() => timeIt('decide', cmd))).toBeLessThan(200);
   }, 20_000);
   it('the critic repro still asks (the wrapper on the last line is classified)', () => {
     const cmd = 'bash' + ' -c x'.repeat(5) + tail;

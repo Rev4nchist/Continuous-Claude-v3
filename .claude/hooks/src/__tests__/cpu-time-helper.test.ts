@@ -13,7 +13,7 @@
  *  4. cpuTimed does not return the value of the function
  */
 import { describe, it, expect } from 'vitest';
-import { cpuMs, cpuTimed } from './helpers/cpu-time.js';
+import { cpuMs, cpuTimed, cpuBest, cpuBestAsync, BEST_SAMPLES } from './helpers/cpu-time.js';
 
 describe('cpuMs', () => {
   it('1. adds user and system time and gives milliseconds (the usage is in microseconds)', () => {
@@ -35,6 +35,35 @@ describe('cpuMs', () => {
     const wall = Date.now() - w0;
     expect(wall).toBeGreaterThanOrEqual(100);
     expect(cpuMs() - c0).toBeLessThan(wall / 2);
+  });
+});
+
+// Seat condition 1, 11-14 22:4x. A full-suite proof run showed CPU time is not load-proof: R5 F7b took 1047 ms of CPU against 361 ms alone
+// (about 2.9x) while other sessions ran test files. A disturbed sample is only ever SLOWER, so the minimum of 3 samples is the honest reading.
+describe('cpuBest: the minimum CPU time of several samples', () => {
+  it('6. gives the minimum of the samples, so one disturbed (slow) sample does not decide', () => {
+    const seq = [90, 40, 700]; // one sample 17x slower than the best
+    let i = 0;
+    expect(cpuBest(() => seq[i++])).toBe(40);
+  });
+  it('7. takes exactly BEST_SAMPLES samples (3) by default, and a given count when asked', () => {
+    expect(BEST_SAMPLES).toBe(3);
+    let n = 0;
+    cpuBest(() => { n++; return 1; });
+    expect(n).toBe(3);
+    let m = 0;
+    cpuBest(() => { m++; return 1; }, 5);
+    expect(m).toBe(5);
+  });
+  it('8. the async form awaits each sample and gives the minimum', async () => {
+    const seq = [120, 30, 60];
+    let i = 0;
+    expect(await cpuBestAsync(async () => seq[i++])).toBe(30);
+  });
+  it('9. a limit check on the best sample still fails when EVERY sample is slow (a real slowdown is not hidden)', () => {
+    const seq = [1500, 1700, 1600]; // all three over a 1000 ms limit
+    let i = 0;
+    expect(cpuBest(() => seq[i++])).toBeGreaterThan(1000);
   });
 });
 
