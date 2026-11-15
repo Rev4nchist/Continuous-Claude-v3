@@ -434,7 +434,7 @@ test('TG3: a change under scripts/eval/review-eval (code, fixtures, config) runs
 
 test('TG3b: a change to a reviewer-set or band-set file runs review-eval-tests, taken from the engine-version lists (breaks if the trigger list is copied or dropped; PR 574 failed in CI on a one-file reviewer change)', async () => {
   // The paths come from the module the engine freeze reads, so a file added to a set runs the gate with no edit here.
-  const sample = [...REVIEWER_SET_FILES, `${REVIEWER_SET_DIR}backends/x.mjs`, `${REVIEWER_SET_DIR}prompt.mjs`, ...BAND_SET_FILES];
+  const sample = [...REVIEWER_SET_FILES, `${REVIEWER_SET_DIR}backends/x.mjs`, `${REVIEWER_SET_DIR}a/b/deep.mjs`, `${REVIEWER_SET_DIR}prompt.mjs`, ...BAND_SET_FILES];
   assert.ok(sample.length >= 10, 'the lists are not empty');
   for (const p of sample) assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('review-eval-tests'), p);
   // A file outside the sets and outside the eval folder does not start it.

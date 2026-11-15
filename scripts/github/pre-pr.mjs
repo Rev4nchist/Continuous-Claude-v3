@@ -216,11 +216,7 @@ export const SURFACES = [
   // The files of the engine freeze sets run them too: engine-version.test.mjs checks the import closure of those files, and a change
   // to one of them (PR 574 changed one reviewer backend) failed it in CI only. The lists are imported from the engine-version
   // module, never copied. The rubrics subfolder has its own tests, which the top-level pattern does not reach.
-  {
-    id: 'eval-scripts',
-    globs: ['scripts/eval/review-eval/**', ...REVIEWER_SET_FILES, `${REVIEWER_SET_DIR}**`, ...BAND_SET_FILES],
-    gates: [{ id: 'review-eval-tests', cmd: 'node', args: ['--test', 'scripts/eval/review-eval/*.test.mjs', 'scripts/eval/review-eval/rubrics/*.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }],
-  },
+  { id: 'eval-scripts', globs: ['scripts/eval/review-eval/**'], gates: [nodeTest('review-eval-tests', 'scripts/eval/review-eval/*.test.mjs', 5 * MIN)] },
   // lane-context-db.test.ts skips without LANE_TEST_DB_URL. This gate makes a scratch database on local Postgres, runs that one
   // file and FAILs when it is skipped (Postgres down = one ENV line, never a pass). CI job coordination-db runs the same program.
   {

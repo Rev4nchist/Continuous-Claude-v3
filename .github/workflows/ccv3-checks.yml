@@ -135,7 +135,7 @@ jobs:
       # The review eval scorer and its fixtures (about 5 s). The pattern is in single quotes, so Node expands it.
       - name: review eval unit tests
         timeout-minutes: 5
-        run: node --test 'scripts/eval/review-eval/*.test.mjs' 'scripts/eval/review-eval/rubrics/*.test.mjs'
+        run: node --test 'scripts/eval/review-eval/*.test.mjs'
 
   # The hooks are TypeScript that ships as dist/*.mjs. This job type-checks, builds and tests them. Before it no workflow did:
   # a type error or a stale dist reached main if the author skipped pre-pr (lane ts-gates-prepr-ci, part two; part one is the
