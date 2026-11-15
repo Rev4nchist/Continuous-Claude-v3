@@ -506,7 +506,7 @@ var GH_OPT_PREFIX = String.raw`(?:[^\S\r\n]+[\w.\/:=@-]+){1,6}?`;
 
 // src/pr-opened-review-loop.ts
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
-var PR_CREATE_RE = new RegExp(String.raw`\bgh(?:\s+|${GH_OPT_PREFIX}[^\S\r\n]+)pr\s+create\b`, "i");
+var PR_CREATE_RE = new RegExp(String.raw`\bgh(?:\s+|${GH_OPT_PREFIX}[^\S\r\n]+)pr\s+(?:create|new)\b`, "i");
 var GH_API_RE = /\bgh\s+api\b/i;
 var PULLS_PATH_RE = /\/pulls\/?(?=[\s"'?]|$)/i;
 var POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;
@@ -1558,16 +1558,214 @@ var GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
 var SHA_RE = /(?:\bsha=|--match-head-commit(?:\s+|=))["']?([0-9a-f]{40})\b/i;
 var SEGMENT_RE = /[;&|\r\n]+/;
 var lastArg = (args, re) => re.exec(args)?.[1] ?? null;
-function landShapesOf(seg, textOnly = false) {
+function landShapesOf(seg, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh = false) {
   const out3 = [];
   const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
   const pr = lastArg(seg, LAND_PR_RE);
   if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out3.push({ kind: "land", pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
-  if (cli) out3.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), sha });
+  const opens = (m) => m !== null && GH_PREFIX_OK.test(tail.slice(0, m.index)) ? m : null;
+  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? opens(TAIL_CLI_RE.exec(tail)) : null;
+  if (cli) out3.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD });
   const api = MERGE_API_RE.exec(seg);
-  if (api && !GET_RE.test(api[0])) out3.push({ kind: "merge", pr: api[1], sha });
+  const rawApi = MERGE_API_RE.exec(rawSeg) ? opens(TAIL_API_RE.exec(tail)) : null;
+  if (api && !GET_RE.test(api[0])) out3.push({ kind: "merge", pr: api[1], ...rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD });
   return out3;
+}
+var TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
+function quoteOpenAt(text, pos, pwsh) {
+  const esc = pwsh ? "`" : "\\";
+  let q = "";
+  for (let i = 0; i < pos && i < text.length; i++) {
+    const ch = text[i];
+    if (q === "'") {
+      if (ch === "'") q = "";
+      continue;
+    }
+    if (ch === esc) {
+      i++;
+      continue;
+    }
+    if (q === '"') {
+      if (ch === '"') q = "";
+      continue;
+    }
+    if (ch === "'" || ch === '"') q = ch;
+  }
+  return q !== "";
+}
+var GH_PREFIX_OK = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_\-./:]*\s+)*$/;
+var TAIL_API_RE = /\bgh\s+api\b[\s\S]*$/i;
+function rawTail(text) {
+  let q = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === q) q = "";
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      q = ch;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "&" && text[i + 1] === "&") return text.slice(0, i);
+  }
+  return text;
+}
+function pairedWords(text, pwsh = false) {
+  const words = [];
+  let cur = "";
+  let open = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (/\s/.test(ch)) {
+      if (open) {
+        words.push(cur);
+        cur = "";
+        open = false;
+      }
+      continue;
+    }
+    open = true;
+    if (ch === "'") {
+      const end = text.indexOf("'", i + 1);
+      if (end < 0) return null;
+      cur += text.slice(i + 1, end);
+      i = end;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      for (; j < text.length && text[j] !== '"'; j++) {
+        if (!pwsh && text[j] === "\\" && j + 1 < text.length) j++;
+        cur += text[j];
+      }
+      if (j >= text.length) return null;
+      i = j;
+      continue;
+    }
+    if (!pwsh && ch === "\\" && i + 1 < text.length) {
+      cur += text[++i];
+      continue;
+    }
+    cur += ch;
+  }
+  if (open) words.push(cur);
+  return words;
+}
+function unmodelled(text, pwsh = false) {
+  let q = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && (QUOTE_CH.has(text[i - 1] ?? "") || QUOTE_CH.has(text[i + 1] ?? ""))) return true;
+    if (q === "'") {
+      if (ch === "'") q = "";
+      else if (!QUOTED_OK.test(ch)) return true;
+      continue;
+    }
+    if (q === '"') {
+      if (ch === '"') q = "";
+      else if (!QUOTED_OK.test(ch) || "$`".includes(ch) || ch === "\\" && !pwsh) return true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      q = ch;
+      continue;
+    }
+    if (ch === "@" && i > 0 && !/[ \t]/.test(text[i - 1])) continue;
+    if (ch === "\\" && pwsh) continue;
+    if (!BARE_OK.test(ch)) return true;
+  }
+  return false;
+}
+var QUOTE_CH = /* @__PURE__ */ new Set(["'", '"']);
+var BARE_OK = /^[A-Za-z0-9 \t\-_./=:]$/;
+var QUOTED_OK = /^[\x20-\x7E\n]$/;
+var UNREAD_HEAD = { sha: null, shaBad: true };
+var HEAD_UNREAD_WHY = (pr) => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, an unpaired quote, or a character this gate cannot read the same way in bash and PowerShell. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : "<n>"} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>. ${PLAIN_WAY_OUT}`;
+var PLAIN_WAY_OUT = "For a redirect: run the call with no redirect. For a $ variable or $(...): put the value in the command as plain text or use a body file.";
+var HEX40 = /^[0-9a-f]{40}$/i;
+function oneHead(values) {
+  if (values.some((v) => !HEX40.test(v))) return { sha: null, shaBad: true };
+  const set = new Set(values.map((v) => v.toLowerCase()));
+  if (set.size > 1) return { sha: null, shaBad: true };
+  return { sha: [...set][0] ?? null };
+}
+var MERGE_BOOL = /* @__PURE__ */ new Set(["--merge", "-m", "--squash", "-s", "--rebase", "-r", "--auto", "--disable-auto", "--admin", "--delete-branch", "-d"]);
+var MERGE_VALUE = /* @__PURE__ */ new Set(["--body", "-b", "--body-file", "-F", "--subject", "-t", "--author-email", "-A", "--match-head-commit", "--repo", "-R"]);
+var SHORT_BOOL = "msrd";
+var SHORT_VALUE = "bFtAR";
+function shortCluster(w, next) {
+  return clusterOf(w, next, SHORT_BOOL, SHORT_VALUE)?.used ?? null;
+}
+function clusterOf(w, next, bools, values) {
+  const letters = w.slice(1);
+  for (let k = 0; k < letters.length; k++) {
+    const ch = letters[k];
+    if (bools.includes(ch)) continue;
+    if (!values.includes(ch)) return null;
+    if (k < letters.length - 1) return { used: 0, letter: ch, value: letters.slice(k + 1) };
+    return next === void 0 ? null : { used: 1, letter: ch, value: next };
+  }
+  return { used: 0, letter: null, value: null };
+}
+function cliMergeHead(args, pwsh = false) {
+  if (unmodelled(args, pwsh)) return UNREAD_HEAD;
+  const words = pairedWords(args, pwsh);
+  if (words === null) return UNREAD_HEAD;
+  const heads = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!w.startsWith("-") || w === "-") continue;
+    if (/^-[A-Za-z]{2,}/.test(w)) {
+      const used = shortCluster(w, words[i + 1]);
+      if (used === null) return UNREAD_HEAD;
+      i += used;
+      continue;
+    }
+    const eq = w.startsWith("--") ? w.indexOf("=") : -1;
+    const name = eq > 0 ? w.slice(0, eq) : w;
+    if (MERGE_BOOL.has(name) && eq < 0) continue;
+    if (!MERGE_VALUE.has(name)) return { sha: null, shaBad: true };
+    const value = eq > 0 ? w.slice(eq + 1) : words[++i];
+    if (value === void 0) return { sha: null, shaBad: true };
+    if (name === "--match-head-commit") heads.push(value);
+  }
+  return oneHead(heads);
+}
+var API_FIELD = /^(?:-f|-F|--raw-field|--field)$/;
+var API_FIELD_EQ = /^(?:--raw-field|--field)=(.*)$/s;
+var API_VALUE = /* @__PURE__ */ new Set(["-X", "--method", "-H", "--header", "--hostname", "-q", "--jq", "-t", "--template", "--cache", "-p", "--preview"]);
+function apiWord(w, next, endpointSeen) {
+  if (w === "--input" || w.startsWith("--input=")) return { bad: "--input (the body comes from a file)" };
+  if (API_FIELD.test(w)) return next === void 0 ? { bad: "a field flag with no value" } : { field: next, used: 1 };
+  if (API_FIELD_EQ.test(w)) return { field: API_FIELD_EQ.exec(w)[1], used: 0 };
+  if (/^-[fF][^=]/.test(w)) return { field: w.slice(2), used: 0 };
+  if (API_VALUE.has(w)) return next === void 0 ? { bad: `${w} with no value` } : { field: null, used: 1 };
+  if (/^--(?:method|hostname|header|jq|template|cache|preview)=/.test(w) || /^-X./.test(w) || API_BOOL.has(w)) return { field: null, used: 0 };
+  if (!w.startsWith("-") && !endpointSeen) return { field: null, used: -1 };
+  return { bad: `a word this gate does not know on the api call (${w})` };
+}
+function apiMergeHead(text, pwsh = false) {
+  const rest = text.replace(/^[\s\S]*?\bapi\b/, "");
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"), pwsh)) return UNREAD_HEAD;
+  const words = pairedWords(rest, pwsh);
+  if (words === null) return UNREAD_HEAD;
+  const heads = [];
+  let endpoint = false;
+  for (let i = 0; i < words.length; i++) {
+    const r = apiWord(words[i], words[i + 1], endpoint);
+    if ("bad" in r) return UNREAD_HEAD;
+    if (r.used === -1) {
+      endpoint = true;
+      continue;
+    }
+    i += r.used;
+    if (r.field === null) continue;
+    const eq = r.field.indexOf("=");
+    if (eq > 0 && r.field.slice(0, eq) === "sha") heads.push(r.field.slice(eq + 1));
+  }
+  return oneHead(heads);
 }
 var WRAPPERS = String.raw`(?:env(?:\s+(?:-[uCS]\s+\S+|-\S+|\w+=\S*))*|nice(?:\s+-\S+(?:\s+\d+)?)*|timeout(?:\s+-\S+(?:\s+[A-Z0-9]+)?)*\s+[\d.]+[smhd]?|xargs(?:\s+-\S+(?:\s+(?:\d+|\{\}))?)*|setsid(?:\s+-\S+)*|sudo(?:\s+-\S+(?:\s+\w+)?)*)\s+`;
 var PUSH_GIT = new RegExp(String.raw`(${CALL_START}(?:${WRAPPERS})*)(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+push)(?=\s|$)`, "g");
@@ -2052,21 +2250,40 @@ function rawDirs(raw, tool, cwd, shell, home) {
   for (const call of pushCallsIn(raw, mayRunUnderCmd(tool))) {
     for (const base of dirsAfter(cwd, call.cds, shell, true)) out3.push(base, chainDir(base, callDirsOf(call), shell));
   }
-  const words = raw.replace(/["'`^]/g, "").split(/[\s;&|(){}<>]+/);
-  let chained = cwd;
-  for (let i = 0; i + 1 < words.length; i++) {
-    if (!RAW_CD.test(words[i]) && words[i] !== "-C" && !/^-path$/i.test(words[i])) continue;
-    out3.push(chainStep(cwd, words[i + 1], shell));
-    chained = chainStep(chained, words[i + 1], shell);
-    out3.push(chained);
+  const lists = [raw.replace(/["'`^]/g, "").split(/[\s;&|(){}<>]+/), ...payloadWords(raw, shell) ?? []];
+  for (const words of lists) {
+    let chained = cwd;
+    for (let i = 0; i + 1 < words.length; i++) {
+      if (!RAW_CD.test(words[i]) && words[i] !== "-C" && !/^-path$/i.test(words[i])) continue;
+      out3.push(chainStep(cwd, words[i + 1], shell));
+      chained = chainStep(chained, words[i + 1], shell);
+      out3.push(chained);
+    }
   }
   return [.../* @__PURE__ */ new Set([...knownDirs(out3, home), ...moveTargets(raw, cwd, shell, home)])];
 }
+function payloadWords(raw, shell) {
+  const top = pairedWords(raw, shell === "pwsh");
+  if (top === null) return null;
+  const lists = [top];
+  for (const w of top.filter((t) => /\s/.test(t))) {
+    const inner = [pairedWords(w, false), pairedWords(w, true)];
+    if (inner.some((l) => l === null)) return null;
+    lists.push(...inner);
+  }
+  return lists;
+}
+var RAW_PUSH_WHY = "this push sits inside the text of another program (sh -c, bash -c, pwsh -c) or in a quote this gate cannot pair, so its folder, remote and branch cannot be read. Run git push as its own command: git push <remote> <branch>.";
 function rawPushDenies(raw, tool, deps, cwd, shell, subagent) {
   const v = rawVerdict(raw, tool);
   if (v === null || v.kind === "ok" || v.kind === "tap" && !v.unread) return [];
-  const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
-  if (dir === null) return [];
+  const dirs = rawDirs(raw, tool, cwd, shell, deps.home);
+  const dir = firstCovered(deps, dirs);
+  if (dir === null) {
+    if (!v.unread) return [];
+    const hit = payloadWords(raw, shell) === null || dirs.some((d) => !isUnexpanded(d) && ccv3OrUnplaced(deps, d));
+    return hit ? [hardOf(deny("push-target-unresolved", RAW_PUSH_WHY, "push"))] : [];
+  }
   if (v.kind === "unsafe") return [deny("push-unsafe", appRawUnsafeWhy(dir), "app-push")];
   const unread = deny("push-target-unresolved", appUnreadWhy(dir), "app-push");
   return [subagent ? unread : { ...unread, tapPath: true }];
@@ -2075,6 +2292,25 @@ function hiddenGhDenies(raw, tool, deps, cwd, shell) {
   if (!hiddenPieces(raw, tool).some(hiddenGh)) return [];
   const dir = firstCovered(deps, rawDirs(raw, tool, cwd, shell, deps.home));
   return dir === null ? [] : [{ ...deny("position-unknown", unpairedWhy(dir)), homeFlags: true }];
+}
+var GH_FLAG_FIRST = /(?:^|[\s;&|(){}"'])(?:[^\s;&|(){}"']*[\\/])?gh(?:\.exe)?["']?\s+-/i;
+var GH_MERGE_TEXT = /\bpr\s+merge\b|\bapi\b[^\n]*\/merge\b/i;
+var GH_CREATE_TEXT = /\bpr\s+(?:create|new)\b|\bapi\b[^\n]*\/pulls\b/i;
+var GH_FLAG_FIRST_WHY = "a gh flag stands before the subcommand (gh -R <repo> pr ...), so this gate cannot read the call. Put the flag after the subcommand: gh pr create -R <repo> --head <branch> --base <base> ..., or gh pr merge <n> -R <repo> --match-head-commit <sha> ...";
+function ghFlagFirstDenies(raw, tool, deps, cwd, shell) {
+  const text = squashMarks(raw);
+  if (!GH_FLAG_FIRST.test(text) && !GH_FLAG_FIRST.test(raw)) return [];
+  const pattern = GH_MERGE_TEXT.test(text) ? "merge-no-head" : GH_CREATE_TEXT.test(text) ? "head-unresolved" : null;
+  if (pattern === null) return [];
+  const dirs = rawDirs(raw, tool, cwd, shell, deps.home).filter((d) => !isUnexpanded(d));
+  const app = firstCovered(deps, dirs);
+  if (app !== null) return [{ ...deny(pattern, `${GH_FLAG_FIRST_WHY}${inAppFolder(app)}`), homeFlags: true }];
+  if (dirs.some((d) => ccv3OrUnplaced(deps, d))) return [deny(pattern, GH_FLAG_FIRST_WHY)];
+  for (const d of dirs) {
+    const place = appPlace(deps, d);
+    if (place.corrupt) return [registryCorruptDeny(place.corrupt, d, "other")];
+  }
+  return [];
 }
 function cmdSegments(view) {
   const out3 = [];
@@ -2099,13 +2335,14 @@ function priorOf(view, masks, from) {
 }
 var priorId = (p) => p.repos.length === 0 && !p.nonLiteral ? "" : `|GH_REPO=${p.repos.join(",")}${p.nonLiteral ? "$" : ""}`;
 var fullId = (own) => own.ftext === own.text ? "" : `|${own.ftext}`;
-var landId = (shape, at2, own, prior) => `${shape.kind}|${shape.pr}|${shape.sha}|${whereId(at2)}${shape.kind === "merge" ? `|${own.ftext}${priorId(prior)}` : ""}`;
+var landId = (shape, at2, own, prior) => `${shape.kind}|${shape.pr}|${shape.sha}${shape.shaBad ? "!" : ""}|${whereId(at2)}${shape.kind === "merge" ? `|${own.ftext}${priorId(prior)}` : ""}`;
 var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
 function shapesOf(raw, tool) {
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every(isTextOnlyCommand);
   const out3 = [];
+  const pwshTool = tool === "PowerShell";
   const seen = /* @__PURE__ */ new Set();
   const add = (shape, id) => {
     if (!seen.has(id)) {
@@ -2123,21 +2360,22 @@ function shapesOf(raw, tool) {
       const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
       const owns = reads.map(({ masked }) => ownCommand(view, masked, from));
       const prior = priorOf(view, reads.map((r) => r.masked), from);
+      const tail = quoteOpenAt(view, from, pwshTool) ? "" : rawTail(view.slice(from));
       for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly)) {
+        for (const shape of landShapesOf(s, textOnly, seg, tail, pwshTool)) {
           for (const own of owns) for (const at2 of wheres) add({ ...shape, at: at2, ...own, prior }, landId(shape, at2, own, prior));
         }
       }
       if (!isPrOpenText(seg)) continue;
       created = true;
-      for (const own of owns) for (const at2 of wheres) add({ kind: "create", pr: null, at: at2, ...own, prior }, `create|${whereId(at2)}|${own.text}${fullId(own)}${priorId(prior)}`);
+      for (const own of owns) for (const at2 of wheres) add({ kind: "create", pr: null, at: at2, ...own, prior, tail, pwsh: pwshTool }, `create|${whereId(at2)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
     }
   }
   if (!created && isPrOpenCommand(text)) {
     const view = views[0];
     const masked = maskQuoted(view, "Bash");
     for (const at2 of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
-      add({ kind: "create", pr: null, at: at2, text: view, mtext: masked, ftext: view, fmtext: masked }, `create|${whereId(at2)}|${view}`);
+      add({ kind: "create", pr: null, at: at2, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool }, `create|${whereId(at2)}|${view}`);
     }
   }
   out3.push(...pushShapesOf(raw, tool));
@@ -2357,47 +2595,118 @@ var AppScopeError = class extends Error {
   inner;
   push;
 };
-var HEAD_FIELD_RE = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/g;
-var HEAD_FLAG_RE = /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/g;
-var PR_CREATE_CMD_RE = /\bgh\s+pr\s+create\b/i;
-function unquotedFlagValue(re, text, mtext) {
-  for (const m of text.matchAll(re)) {
-    const at2 = m.index + m[0].search(/\S/);
-    if (mtext[at2] === text[at2]) return m[1];
+var CREATE_BOOL = /* @__PURE__ */ new Set(["--draft", "-d", "--fill", "-f", "--fill-first", "--fill-verbose", "--web", "-w", "--no-maintainer-edit", "--dry-run", "--editor", "-e"]);
+var CREATE_VALUE = /* @__PURE__ */ new Set([
+  "--title",
+  "-t",
+  "--body",
+  "-b",
+  "--body-file",
+  "-F",
+  "--label",
+  "-l",
+  "--assignee",
+  "-a",
+  "--reviewer",
+  "-r",
+  "--milestone",
+  "-m",
+  "--project",
+  "-p",
+  "--head",
+  "-H",
+  "--base",
+  "-B",
+  "--repo",
+  "-R",
+  "--template",
+  "-T",
+  "--recover"
+]);
+var CREATE_SHORT_BOOL = "dwef";
+var CREATE_SHORT_VALUE = "tbFlarmpHBRT";
+var API_CREATE_KEYS = /* @__PURE__ */ new Set(["head", "base", "title", "body", "draft", "maintainer_can_modify", "issue"]);
+var API_BOOL = /* @__PURE__ */ new Set(["--paginate", "--slurp", "--silent", "--verbose", "-i", "--include"]);
+var CLI_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
+var API_CMD_RE = /\bgh\s+api\b/i;
+var NOT_LITERAL_RE = /%[^%\s]+%/;
+var BAD = (why) => ({ bad: why, heads: [], bases: [] });
+function cliCreateRead(args, pwsh) {
+  const words = pairedWords(args, pwsh);
+  if (words === null) return BAD("an unpaired quote");
+  const heads = [];
+  const bases = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!w.startsWith("-") || w === "-") return BAD(`a word gh pr create does not take (${w})`);
+    if (/^-[A-Za-z]{2,}/.test(w)) {
+      const c = clusterOf(w, words[i + 1], CREATE_SHORT_BOOL, CREATE_SHORT_VALUE);
+      if (c === null) return BAD(`a flag this gate does not know (${w})`);
+      if (c.letter === "H") heads.push(c.value);
+      if (c.letter === "B") bases.push(c.value);
+      i += c.used;
+      continue;
+    }
+    const eq = w.startsWith("--") ? w.indexOf("=") : -1;
+    const name = eq > 0 ? w.slice(0, eq) : w;
+    if (CREATE_BOOL.has(name) && eq < 0) continue;
+    if (!CREATE_VALUE.has(name)) return BAD(`a flag this gate does not know (${name})`);
+    const value = eq > 0 ? w.slice(eq + 1) : words[++i];
+    if (value === void 0) return BAD(`${name} with no value`);
+    if (name === "--head" || name === "-H") heads.push(value);
+    if (name === "--base" || name === "-B") bases.push(value);
   }
-  return null;
+  return headAndBase(heads, bases);
 }
-function namedHead(text, mtext) {
-  return unquotedFlagValue(HEAD_FIELD_RE, text, mtext) ?? (PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text)) ? unquotedFlagValue(HEAD_FLAG_RE, text, mtext) : null);
+function headAndBase(heads, bases) {
+  if (heads.some((v) => v === "" || NOT_LITERAL_RE.test(v))) return BAD("a head value that is empty or not a literal");
+  const named = bases.filter((b) => b !== "");
+  if (named.some((v) => NOT_LITERAL_RE.test(v))) return BAD("a base value that is not a literal");
+  return { bad: null, heads: [...new Set(heads)], bases: [...new Set(named)] };
 }
-function namedHeads(text, mtext) {
-  const create = PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text));
-  return [...unquotedFlagValues(HEAD_FIELD_RE, text, mtext), ...create ? unquotedFlagValues(HEAD_FLAG_RE, text, mtext) : []].map((h) => h.replace(/["']+$/, "")).filter((h) => h !== "");
+function apiCreateRead(rest, pwsh) {
+  const words = pairedWords(rest, pwsh);
+  if (words === null) return BAD("an unpaired quote");
+  const heads = [];
+  const bases = [];
+  let endpoint = false;
+  for (let i = 0; i < words.length; i++) {
+    const r = apiWord(words[i], words[i + 1], endpoint);
+    if ("bad" in r) return BAD(r.bad);
+    if (r.used === -1) {
+      endpoint = true;
+      continue;
+    }
+    i += r.used;
+    if (r.field === null) continue;
+    const eq = r.field.indexOf("=");
+    const key = eq > 0 ? r.field.slice(0, eq) : r.field;
+    if (!API_CREATE_KEYS.has(key)) return BAD(`a field this gate does not know (${key})`);
+    const value = eq > 0 ? r.field.slice(eq + 1) : "";
+    if ((key === "head" || key === "base") && value.startsWith("@")) return BAD(`a ${key} read from a file (${key}=@...)`);
+    if (key === "head") heads.push(value);
+    if (key === "base") bases.push(value);
+  }
+  return headAndBase(heads, bases);
 }
-function headOwner(text, mtext) {
-  const m = /^([^:\s]+):/.exec(namedHead(text, mtext) ?? "");
-  return m ? m[1] : null;
+function createRead(text, pwsh = false) {
+  const cli = CLI_CREATE_RE.exec(text);
+  const api = API_CMD_RE.exec(text);
+  const isCli = cli !== null && (api === null || cli.index < api.index);
+  const m = isCli ? cli : api;
+  if (m === null) return BAD("the create can only be read with its quotes deleted");
+  if (!GH_PREFIX_OK.test(text.slice(0, m.index))) return BAD("the gh call is run by another program (a wrapper such as bash -c, pwsh -Command or cmd /c), which reads the words again");
+  const rest = text.slice(m.index + m[0].length);
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"), pwsh)) return BAD(CREATE_CHAR_WHY);
+  return isCli ? cliCreateRead(rest, pwsh) : apiCreateRead(rest, pwsh);
 }
-function headBranch(text, mtext, deps, dir) {
-  const named = namedHead(text, mtext);
-  if (named) return named.replace(/^[^:\s]+:/, "").replace(/["']+$/, "");
+var CREATE_CHAR_WHY = "a character whose effect this gate cannot read the same way in bash and PowerShell (outside quotes only letters, digits, - _ . / = : and spaces; no $, backtick or backslash in double quotes; no redirect, &, non-ASCII or CR)";
+var createBadWhy = (dir, why) => `the head or base of this create cannot be read as gh reads it in ${dir}: ${why}. Name the head and base once, in the plain form: gh pr create --head <branch> --base <base> ..., or gh api .../pulls -X POST -f head=<branch> -f base=<base> .... A body made by $(...) or a heredoc is refused: pass it as a file with --body-file <path> or -F body=@<path>, with forward slashes in the path. ${PLAIN_WAY_OUT}`;
+function readBranch(named, deps, dir) {
+  if (named) return named.replace(/^[^:\s]+:/, "");
   const r = deps.git(dir, ["branch", "--show-current"]);
   if (r.status !== 0) throw new Error("git branch --show-current failed");
   return r.stdout.trim();
-}
-var BASE_FIELD_RE = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:\s*|=)["']?base=["']?([^\s"']*)/g;
-var BASE_FLAG_RE = /(?:^|\s)(?:--base(?:\s+|=)|-B\s*)["']?([^\s"']*)/g;
-function unquotedFlagValues(re, text, mtext) {
-  return [...text.matchAll(re)].filter((m) => {
-    const i = m.index + m[0].search(/\S/);
-    return mtext[i] === text[i];
-  }).map((m) => m[1]);
-}
-function baseBranch(text, mtext) {
-  const create = PR_CREATE_CMD_RE.test(text) || PR_CREATE_CMD_RE.test(squashQuotes(text));
-  const all = [...unquotedFlagValues(BASE_FIELD_RE, text, mtext), ...create ? unquotedFlagValues(BASE_FLAG_RE, text, mtext) : []].filter((b) => b !== "");
-  const distinct = [...new Set(all)];
-  return { base: distinct[0] ?? null, many: distinct.length > 1 ? distinct : [] };
 }
 var COMMIT_GIT = gitCallRe("commit");
 var COMMIT_SAFE = safeCallRe("commit", PUSH_WRAPPERS, "", "gi");
@@ -2451,6 +2760,60 @@ function steadyCommand(raw, shell) {
   const view = fdBlank(raw);
   return pushesAlone(view, shell) || commitPrecedesPush(view, shell);
 }
+function stateModelled(raw, shell) {
+  const r = pushPrefix(raw, shell);
+  return r !== null && !r.localPush && r.pipeOk && (r.plain || commitPrecedesPush(r.prefix, shell));
+}
+function pushPrefix(raw, shell) {
+  const view = fdBlank(joinContinuations(raw, shell));
+  const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
+  const steps = [];
+  let from = 0;
+  let pending = "";
+  for (const [start, next] of [...[...masked.matchAll(/[;&|\r\n]+/g)].map((m) => [m.index, m.index + m[0].length]), [view.length, view.length]]) {
+    const ms = masked.slice(from, start);
+    const rs = view.slice(from, start);
+    if (ms.trim() !== "") {
+      steps.push({ kind: /^\s*(?:popd|Pop-Location)\s*$/i.test(ms) ? "popd" : segmentKind(ms, rs), named: /\bpush\b/i.test(squashQuotes(rs)), op: pending, end: start, raw: rs });
+      pending = "";
+    } else pending += ms;
+    pending += masked.slice(start, next);
+    from = next;
+  }
+  const last = steps.map((s) => s.named).lastIndexOf(true);
+  if (last < 0) return null;
+  const plain = steps.slice(0, last).every((s) => s.kind === "cd" || s.kind === "read" || s.kind === "push" || s.kind === "popd") && steps.slice(1, last + 1).every((s) => !s.op.includes("|") && !/(?<!&)&(?!&)/.test(s.op));
+  const tool = shell === "pwsh" ? "PowerShell" : "Bash";
+  const localPush = steps.slice(0, last).some((s) => s.kind === "push" && pushShapesOf(s.raw, tool).some((p) => LOCAL_REMOTE.test(p.push?.remote ?? "")));
+  let pipeOk = true;
+  if (backgroundAfter([...steps.slice(last + 1).map((s) => s.op), pending])) pipeOk = false;
+  for (let i = last + 1; i < steps.length && /(?<!\|)\|(?!\|)/.test(steps[i].op); i++) {
+    const ms = masked.slice(steps[i].end - steps[i].raw.length, steps[i].end);
+    if (!PIPE_CONSUMER.test(ms.trim().split(/\s+/)[0] ?? "") || /[$`@({<]/.test(ms.replace(/\$null\b/gi, "")) || fileRedirect(ms)) pipeOk = false;
+  }
+  return { prefix: view.slice(0, steps[last].end), plain, localPush, pipeOk };
+}
+var PIPE_CONSUMER = /^(?:Select-Object|Select-String|Out-String|Out-Null|tail|head|cut|grep|findstr|wc|more)$/i;
+function backgroundAfter(ops) {
+  for (const op of ops) {
+    const m = /(?<!&)&(?!&)|[;\r\n]/.exec(op);
+    if (m !== null) return m[0] === "&";
+  }
+  return false;
+}
+var fileRedirect = (ms) => [...ms.matchAll(/[0-9*]?>{1,2}\s*(\S*)/g)].some((m) => !/^(?:\$null|\/dev\/null|nul)$/i.test(m[1]));
+var LOCAL_REMOTE = /^(?:\.{1,2}(?:[\\/]|$)|[\\/~]|[A-Za-z]:|file:)|\\/i;
+var PUSH_STATE_WHY = "a step before this push, or a step that runs at the same time (a pipe, a background &), can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.";
+var PUSH_CHECKOUT_WHY = "the commit before this push runs in one checkout and the push in another (or the checkout of the push folder cannot be read), so the tree it sends cannot be judged. Commit and push in two commands, or push from the same folder: git commit ...; git push <remote> <branch>.";
+function sameCheckout(deps, commitDirs, dir) {
+  const top = (d) => {
+    const r = deps.git(d, ["rev-parse", "--path-format=absolute", "--show-toplevel"]);
+    return r.status === 0 && r.stdout.trim() !== "" ? r.stdout.trim() : null;
+  };
+  if (commitDirs.length === 0 || commitDirs.length > 2) return false;
+  const push = top(dir);
+  return push !== null && commitDirs.every((c) => top(c) === push);
+}
 var ADD_GIT = gitCallRe("add");
 var ADD_SAFE = safeCallRe("add", PUSH_WRAPPERS, "", "gi");
 function stageKind(ms, rs) {
@@ -2491,9 +2854,12 @@ var shellOf = (input) => (input.tool_name || input.tool) === "PowerShell" ? "pws
 var ALLOW = { action: "allow" };
 function judgeCreate(s, deps, dir, cmd) {
   const route = routeOf(deps, dir, cmd);
-  if (route === "app") return judgeAppCreate(s.ftext ?? s.text, s.fmtext ?? s.mtext, deps, dir, cmd);
+  if (route === "app") return judgeAppCreate(s.tail ?? s.ftext ?? s.text, s.pwsh === true, deps, dir, cmd);
   if (route === "foreign") return deny("repo-foreign", goThereWhy(cmd.repo));
-  const branch = headBranch(s.text, s.mtext, deps, dir);
+  const cr = createRead(s.tail ?? s.text, s.pwsh === true);
+  if (cr.bad !== null) return deny("head-unresolved", createBadWhy(dir, cr.bad));
+  if (cr.heads.length > 1) return deny("head-unresolved", createBadWhy(dir, `two head values (${cr.heads.join(", ")}); gh takes the last`));
+  const branch = readBranch(cr.heads[0] ?? null, deps, dir);
   if (branch === "") return deny("head-unresolved", `the head branch of this create cannot be named in ${dir} (detached HEAD?), so its open-pr decision cannot be found. Name the head (gh pr create --head <branch>) or run the command from the repo on a branch.`);
   if (branch === "main") return ALLOW;
   const r = deps.git(dir, ["rev-parse", `${branch}^{commit}`]);
@@ -2507,14 +2873,15 @@ function judgeLand(shape, deps, dir, cmd) {
   if (route === "app") return judgeAppMerge(shape, deps, dir, cmd);
   if (route === "foreign") return deny("repo-foreign", goThereWhy(cmd.repo));
   if (shape.pr === null) return deny("no-pr", NO_PR_WHY);
+  if (shape.kind === "merge" && shape.shaBad) return deny("merge-no-head", `PR #${shape.pr}: ${HEAD_UNREAD_WHY(shape.pr)} The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr}).`);
   const sha = shape.sha ?? void 0;
   if (shape.kind === "merge" && !sha) return deny("merge-no-head", `${shape.pr ? `PR #${shape.pr}` : "this PR"}: a raw merge command names no head, so Dave's tap cannot be tied to the head that would land. Run land-pr.ps1 -Pr ${shape.pr ?? "<n>"} (it pins the head), or pass the tapped head: gh api .../merge -f sha=<head>, gh pr merge --match-head-commit <head>. The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr ?? "<n>"}).`);
   const key = decisionKey2({ pr: shape.pr });
   const ok = decisionRows(deps.env).some((r) => r.step === "land" && r.key === key && isLandLabel(r.label) && (!sha || r.head.toLowerCase() === sha));
   return ok ? ALLOW : deny("land", landWhy(shape.pr));
 }
-function judgeAppCreate(text, mtext, deps, dir, cmd) {
-  return homeRead(inApp(deps, () => appCreate(text, mtext, deps, dir, cmd)));
+function judgeAppCreate(text, pwsh, deps, dir, cmd) {
+  return homeRead(inApp(deps, () => appCreate(text, pwsh, deps, dir, cmd)));
 }
 var homeRead = (d) => d.action === "deny" ? { ...d, homeFlags: true } : d;
 function coveredCall(deps, dir, body) {
@@ -2531,18 +2898,20 @@ function coveredCall(deps, dir, body) {
     throw new AppScopeError(err instanceof AppScopeError ? err.inner : err, false);
   }
 }
-function appCreate(text, mtext, deps, dir, cmd) {
-  return coveredCall(deps, dir, (place) => appCreateIn(text, mtext, deps, dir, cmd, place));
+function appCreate(text, pwsh, deps, dir, cmd) {
+  return coveredCall(deps, dir, (place) => appCreateIn(text, pwsh, deps, dir, cmd, place));
 }
-function appCreateIn(text, mtext, deps, dir, cmd, place) {
-  const heads = [...new Set(namedHeads(text, mtext))];
+function appCreateIn(text, pwsh, deps, dir, cmd, place) {
+  const cr = createRead(text, pwsh);
+  if (cr.bad !== null) return deny("head-unresolved", createBadWhy(dir, cr.bad));
+  const heads = cr.heads;
   if (heads.length > 1) return deny("head-unresolved", appManyHeadsWhy(dir, heads));
-  const owner = headOwner(text, mtext);
+  const owner = /^([^:\s]+):/.exec(heads[0] ?? "")?.[1] ?? null;
   if (owner !== null) return deny("head-foreign", appHeadOwnerWhy(dir, owner));
-  const branch = headBranch(text, mtext, deps, dir);
+  const branch = readBranch(heads[0] ?? null, deps, dir);
   if (branch === "") return deny("head-unresolved", appHeadWhy(dir));
-  const { base, many } = baseBranch(text, mtext);
-  if (many.length > 0) return deny("base-unresolved", appManyBasesWhy(dir, many));
+  if (cr.bases.length > 1) return deny("base-unresolved", appManyBasesWhy(dir, cr.bases));
+  const base = cr.bases[0] ?? null;
   const repo = appRepoFor(cmd, deps, dir, place, { sub: "open-pr", branch, ...base === null ? {} : { base } });
   if ("action" in repo) return repo;
   const r = deps.git(dir, ["rev-parse", `${branch}^{commit}`]);
@@ -2561,6 +2930,7 @@ function appMergeIn(shape, deps, dir, cmd, place) {
   if (shape.pr === null) return deny("no-pr", appNoPrWhy(dir));
   const repo = appRepoFor(cmd, deps, dir, place, { sub: "merge", pr: shape.pr });
   if ("action" in repo) return repo;
+  if (shape.shaBad) return deny("merge-no-head", `PR #${prose(shape.pr)} (folder ${at(dir)}): ${HEAD_UNREAD_WHY(shape.pr)}`);
   const sha = shape.sha ?? null;
   if (!sha) return deny("merge-no-head", appMergeNoHeadWhy(deps, dir, shape.pr, repo.offer));
   const key = decisionKey2({ repo: repo.key, pr: shape.pr });
@@ -2611,12 +2981,14 @@ function appPositionAt(deps, dirs, scope, offer) {
   return notice === null ? [] : [{ action: "allow", notice }];
 }
 var pushOffer = (p) => ({ sub: "push", remote: p.remote });
+var hardUnlessUnregistered = (d, unregistered) => unregistered ? d : hardOf(d);
 function judgePushAt(s, deps, cwd, shell, ctx) {
   const { subagent, chained, alone } = ctx;
   const p = s.push;
   const dirs = pushDirsOf(p, cwd, shell);
   const chainOnly = chainDirsOf(p, cwd, shell).filter((d) => !dirs.includes(d) && firstCovered(deps, [d]) !== null);
-  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow));
+  const c4 = { ...ctx, commitDirs: dirsAfter(cwd, p.cds, shell, p.loose, null) };
+  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow, c4));
   const lost = dirs.find(isUnexpanded);
   if (lost !== void 0) return [unexpandedDeny(deps, [cwd, ...dirs], lost, "push", "app-push", softPush(p, subagent))];
   const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
@@ -2627,7 +2999,7 @@ function judgePushAt(s, deps, cwd, shell, ctx) {
     const app = appPositionAt(deps, all, "app-push", pushOffer(p));
     if (app.some((d) => d.action === "deny")) return app;
   }
-  return [...fromChain, ...dirs.map((d) => judgePush(s, deps, d, ctx))];
+  return [...fromChain, ...dirs.map((d) => judgePush(s, deps, d, c4))];
 }
 function remoteKind(remote) {
   const r = remote.toLowerCase();
@@ -2647,10 +3019,10 @@ function intentDeny(p, subagent, fallback) {
 }
 var SCAN_MAX_FILES = 2e3;
 var SCAN_MAX_BYTES = 15e5;
-function scanHoldout(p, deps, dir, branch, chained) {
+function scanHoldout(p, deps, dir, branch, chained, alone) {
   if (!deps.holdoutIds || !deps.answerKeyHits) return null;
   try {
-    return scanHoldoutRead(p, deps, dir, branch, chained);
+    return scanHoldoutRead(p, deps, dir, branch, chained, alone);
   } catch {
     return hardOf(deny("holdout-scan-unavailable", `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, "push"));
   }
@@ -2671,10 +3043,21 @@ function chainedAnswerKeyPaths(deps, dir) {
   }
   return deps.answerKeyHits([...all]).length > 0 ? "hit" : "none";
 }
-function scanHoldoutRead(p, deps, dir, branch, chained) {
-  const isRe = branch.startsWith("re/");
+var headName = (ref) => ref.replace(/^refs\/heads\//, "");
+function sendsRe(p, deps, dir, branch) {
+  if (headName(branch).startsWith("re/")) return true;
+  if (p.src === null && p.branch === null) return false;
+  const src = headName(p.src ?? "HEAD");
+  if (src.startsWith("re/")) return true;
+  return /^(?:HEAD|@)(?:$|[~^@])/.test(src) && currentBranch(deps, dir).startsWith("re/");
+}
+var RE_NOT_ALONE_WHY = "the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.";
+function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
+  const isRe = sendsRe(p, deps, dir, branch);
+  const chained = chainedCommit || !alone;
   const stop = (pattern, why) => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, "push"));
-  if (isRe && chained) return stop("holdout-scan-unavailable", "the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.");
+  if (isRe && chainedCommit) return stop("holdout-scan-unavailable", "the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.");
+  if (isRe && chained) return stop("holdout-scan-unavailable", RE_NOT_ALONE_WHY);
   if (!isRe && chained) {
     const hit = chainedAnswerKeyPaths(deps, dir);
     if (hit === "unreadable") return stop("holdout-scan-unavailable", "the same command also changes files, and the paths it can change could not be read. Commit first, push in a separate command.");
@@ -2717,9 +3100,9 @@ function judgePush(shape, deps, dir, ctx) {
     const what = "--git-dir or --work-tree moves the repo, so the checkout is unknown";
     const app = firstCovered(deps, moveTargets(ctx.text, dir, ctx.shell, deps.home)) ?? coveredAmong(deps, [dir]);
     if (app !== null) return deny("push-target-unresolved", appPushUnresolvedWhy(app, what), "app-push");
-    return intentDeny(p, subagent, d("push-target-unresolved", pushUnresolvedWhy(what)));
+    return intentDeny(p, subagent, hardUnlessUnregistered(d("push-target-unresolved", pushUnresolvedWhy(what)), ctx.unregistered));
   }
-  if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow);
+  if (!isCcv3Checkout(deps, dir)) return judgeAppPushAt(shape, deps, dir, subagent, chained, alone, ctx.flow, ctx);
   if (p.repoOpt) return hardOf(subagent ? d("subagent", SUBAGENT_WHY) : d("push-target-unresolved", PUSH_REPO_OPT_WHY));
   let remote = p.remote;
   if (remote === null) {
@@ -2736,10 +3119,11 @@ function judgePush(shape, deps, dir, ctx) {
   if (subagent) return hardOf(d("subagent", SUBAGENT_WHY));
   if (p.wideOpt || p.unsafeOpt && !p.force) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
   if (outsideHeads(p)) return hardOf(d("push-target-unresolved", PUSH_REFSPEC_WHY));
+  if (!ctx.modelled) return hardOf(d("push-state-unknown", PUSH_STATE_WHY));
   const branch = p.branch ?? currentBranch(deps, dir);
   if (p.force && (branch === "main" || branch === "")) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
   if (branch !== "") {
-    const scanned = scanHoldout(p, deps, dir, branch, chained || !alone);
+    const scanned = scanHoldout(p, deps, dir, branch, chained, alone);
     if (scanned !== null) return scanned;
   }
   if (p.force) return d("push-unsafe", PUSH_UNSAFE_WHY);
@@ -2750,17 +3134,18 @@ function judgePush(shape, deps, dir, ctx) {
     tree: (what) => `cannot read the tree of ${what} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`,
     ship: () => pushWhy(branch)
   };
-  return shipTap({ p, deps, dir, chained, alone, key: decisionKey2({ branch }), scope: "push", texts });
+  return shipTap({ p, deps, dir, chained, alone, key: decisionKey2({ branch }), scope: "push", texts, commitDirs: ctx.commitDirs });
 }
 function currentBranch(deps, dir) {
   const r = deps.git(dir, ["branch", "--show-current"]);
   if (r.status !== 0) throw new Error("git branch --show-current failed");
   return r.stdout.trim();
 }
-function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead }) {
+function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead, commitDirs }) {
   const ref = p.src ?? "HEAD";
   if (ref.startsWith("-")) return deny("push-target-unresolved", texts.notRef(ref), scope);
-  const viaIndex = chained && p.dir === null && (p.src === null || deps.git(dir, ["branch", "--show-current"]).stdout.trim() === p.src);
+  if (chained && p.dir !== null && !sameCheckout(deps, commitDirs ?? [], dir)) return deny("push-tree-unresolved", PUSH_CHECKOUT_WHY, scope);
+  const viaIndex = chained && (p.src === null || deps.git(dir, ["branch", "--show-current"]).stdout.trim() === p.src);
   const r = viaIndex ? deps.git(dir, ["write-tree"]) : deps.git(dir, ["rev-parse", `${ref}^{tree}`]);
   if (r.status !== 0) return deny("push-tree-unresolved", texts.tree(viaIndex ? "the index (git write-tree)" : ref), scope);
   const tree = r.stdout.trim();
@@ -2776,11 +3161,11 @@ function shipTap({ p, deps, dir, chained, alone, key, scope, texts, pushOnlyHead
   const ok = decisionRows(deps.env).some((row) => row.step === "ship" && row.key === key && row.tree !== null && row.tree === tree && (isShipLabel(row.label) || !viaIndex && alone && isPushOnlyLabel(row.label) && pushOnly(row.head)));
   return ok ? ALLOW : deny("ship", texts.ship(), scope);
 }
-function judgeAppPushAt(shape, deps, dir, subagent, chained, alone, flow) {
+function judgeAppPushAt(shape, deps, dir, subagent, chained, alone, flow, ctx) {
   const place = appPlace(deps, dir);
   if (!place.covered) return passOf(place, dir, "app-push");
   try {
-    return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow));
+    return inApp(deps, () => judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow, ctx));
   } catch (err) {
     throw new AppScopeError(err);
   }
@@ -2845,7 +3230,7 @@ function configKind(key, raw, remote, p) {
   if (key === "push.followtags") return on && !p.noFollowTags ? "wider" : "none";
   return "none";
 }
-function judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow) {
+function judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow, ctx) {
   const p = shape.push;
   const d = (pattern, why) => deny(pattern, why, "app-push");
   if (subagent) return d("subagent", appSubagentWhy(dir));
@@ -2874,7 +3259,8 @@ function judgeAppPush(shape, deps, dir, place, subagent, chained, alone, flow) {
     ship: () => alone || chained || flow ? appPushWhy(deps, dir, k.key, k.branch, offer, risk) : appNotAloneWhy(deps, dir, offer)
   };
   const q = p.src === "@" ? { ...p, src: null } : p;
-  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey2({ repo: k.key, branch: k.branch }), scope: "app-push", texts, pushOnlyHead: true });
+  if (ctx !== void 0 && !ctx.modelled) return { ...d("push-state-unknown", `${PUSH_STATE_WHY} (folder ${at(dir)})`), tapPath: true };
+  const r = shipTap({ p: q, deps, dir, chained, alone, key: decisionKey2({ repo: k.key, branch: k.branch }), scope: "app-push", texts, pushOnlyHead: true, commitDirs: ctx?.commitDirs });
   return r.action === "deny" ? { ...r, tapPath: true } : r;
 }
 var MOVE_ENV_MASKED = /(?:^|\W)GIT_(?:DIR|WORK_TREE|COMMON_DIR)(?!\w)/i;
@@ -2884,11 +3270,11 @@ var MOVED_WHY = "GIT_DIR, GIT_WORK_TREE or an alias for cd moves git or the shel
 function movesRepo(text) {
   return MOVE_ENV_RAW.test(text) || ["Bash", "PowerShell"].some((tool) => MOVE_ENV_MASKED.test(maskQuoted(text, tool))) || CD_ALIAS.test(squashQuotes(text));
 }
-function judgeCommand(input, deps, notes) {
+function judgeCommand(input, deps, notes, denies = []) {
   const cmd = readCommand(input);
-  if (cmd.kind !== "command" || cmd.text === "") return [];
+  if (cmd.kind !== "command" || cmd.text === "") return denies;
   const cwd = input.cwd || process.cwd();
-  const denies = storeWriteCall(input, deps) ? [deny("store-write", STORE_WHY)] : [];
+  if (storeWriteCall(input, deps)) denies.push(deny("store-write", STORE_WHY));
   const shapes = shapesOf(cmd.text, cmd.tool);
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));
@@ -2899,15 +3285,18 @@ function judgeCommand(input, deps, notes) {
   };
   if (pushes.length > 0 || rest.length > 0) {
     const named = namedRepo(cmd.text, deps.env);
-    const chained = pushes.length > 0 && commitPrecedesPush(cmd.text, shell);
+    const prefix = pushes.length > 0 ? pushPrefix(cmd.text, shell) : null;
+    const chained = pushes.length > 0 && (commitPrecedesPush(cmd.text, shell) || prefix !== null && commitPrecedesPush(prefix.prefix, shell));
     const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
+    const modelled = pushes.length === 0 || stateModelled(cmd.text, shell);
     const moved = movesRepo(cmd.text);
+    const unregistered = (moved || pushes.some((s) => s.push.moved)) && pushFoldersUnregistered(input, deps);
     for (const s of [...rest, ...pushes]) {
       if (moved && s.kind !== "land") {
-        denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id)));
+        denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id), unregistered));
         continue;
       }
-      const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell }) : judgeAt(s, deps, cwd, shell, named);
+      const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell, modelled, unregistered }) : judgeAt(s, deps, cwd, shell, named);
       for (const d of found) {
         if (d.action === "deny") add(d);
         else if (d.notice) notes.add(d.notice);
@@ -2916,6 +3305,7 @@ function judgeCommand(input, deps, notes) {
   }
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
+  for (const d of ghFlagFirstDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   return denies;
 }
 function subagentDeny(shapes, deps, cwd, shell) {
@@ -2931,12 +3321,12 @@ function storeWriteCall(input, deps) {
     return false;
   }
 }
-function movedDeny(s, deps, cwd, shell, text, subagent = false) {
+function movedDeny(s, deps, cwd, shell, text, subagent = false, unregistered = false) {
   const dirs = s.kind === "push" ? pushDirsOf(s.push, cwd, shell) : dirsAfter(cwd, s.at.cds, shell, s.at.loose);
   const targets = s.kind === "push" ? [...new Set([cwd, ...dirs].flatMap((d) => isUnexpanded(d) ? [] : moveTargets(text, d, shell, deps.home)))] : [];
   const dir = firstCovered(deps, targets) ?? coveredAmong(deps, [cwd, ...dirs].filter((d) => !isUnexpanded(d)));
   if (s.kind === "push") {
-    return dir === null ? intentDeny(s.push, subagent, deny("push-target-unresolved", pushUnresolvedWhy(MOVED_WHY), "push")) : deny("push-target-unresolved", MOVED_WHY + inAppFolder(dir), "app-push");
+    return dir === null ? intentDeny(s.push, subagent, hardUnlessUnregistered(deny("push-target-unresolved", pushUnresolvedWhy(MOVED_WHY), "push"), unregistered)) : deny("push-target-unresolved", MOVED_WHY + inAppFolder(dir), "app-push");
   }
   return dir === null ? deny("repo-moved", MOVED_WHY) : { ...deny("repo-moved", MOVED_WHY + inAppFolder(dir)), homeFlags: true };
 }
@@ -2946,16 +3336,19 @@ function judgeWrite(input, deps) {
   const hit = PATH_FIELDS.some((f) => typeof args[f] === "string" && isStorePath(args[f], deps, cwd));
   return hit ? [deny("store-write", STORE_WHY)] : [];
 }
-function judge(input, deps, notes) {
+function judge(input, deps, notes, sink) {
   const tool = input.tool_name || input.tool || "";
-  if (WRITE_TOOLS.has(tool)) return judgeWrite(input, deps);
-  return COMMAND_TOOLS2.has(tool) ? judgeCommand(input, deps, notes) : [];
+  if (WRITE_TOOLS.has(tool)) {
+    sink.push(...judgeWrite(input, deps));
+    return sink;
+  }
+  return COMMAND_TOOLS2.has(tool) ? judgeCommand(input, deps, notes, sink) : sink;
 }
-function decide(input, deps) {
+function decide(input, deps, found = []) {
   const notes = /* @__PURE__ */ new Set();
   const call = perCall(deps);
   CWDS.set(call, input.cwd || process.cwd());
-  const denies = judge(input, call, notes);
+  const denies = judge(input, call, notes, found);
   const notice = notes.size === 0 ? {} : { notice: [...notes][0] };
   if (denies.length === 0) return notes.size === 0 ? ALLOW : { action: "allow", ...notice };
   const cwd = input.cwd || process.cwd();
@@ -3034,8 +3427,9 @@ function handle(raw, deps) {
   } catch {
     return unreadableInput();
   }
+  const found = [];
   try {
-    const d = decide(input, deps);
+    const d = decide(input, deps, found);
     const tail = d.notice ? `
 ${corruptLine(d.notice)}` : "";
     let shown = "{}";
@@ -3051,10 +3445,11 @@ ${corruptLine(d.notice)}` : "";
     if (d.notice) logGuardDecision(HOOK, input, "warn", `registry-missing ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
     return shown;
   } catch (err) {
-    return unjudgeable(input, deps, err);
+    return unjudgeable(input, deps, err, found);
   }
 }
-function unjudgeable(input, deps, thrown) {
+function unjudgeable(input, deps, thrown, found = []) {
+  const cwd = input.cwd || process.cwd();
   const underRoot = pushUnderLiveRoot(input, deps);
   const app = thrown instanceof AppScopeError || underRoot;
   const appPush = thrown instanceof AppScopeError && thrown.push || underRoot;
@@ -3066,6 +3461,20 @@ function unjudgeable(input, deps, thrown) {
     } catch {
     }
   }
+  const prior = found.find((d) => {
+    try {
+      return hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags);
+    } catch {
+      return d.hard === true;
+    }
+  }) ?? catchIntentDeny(input);
+  if (prior) {
+    try {
+      logGuardDecision(HOOK, input, "deny", prior.pattern);
+    } catch {
+    }
+    return denyOut(prior.reason);
+  }
   const scopes = gatedScopesSafe(input, appPush);
   if (storeWriteCall(input, deps)) scopes.add("other");
   if (scopes.size === 0) return "{}";
@@ -3073,9 +3482,13 @@ function unjudgeable(input, deps, thrown) {
   const detail = app ? prose(raw) : raw;
   const hint = gone ? "Run the command from a folder that exists." : "Run the command again. If it keeps failing, ask Dave.";
   const why = `could not verify Dave's tap (${detail}). ${hint}`;
-  const cwd = input.cwd || process.cwd();
-  const live = app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
+  const holdsPush = !app && scopes.has("push") && (gone || !pushFoldersUnregistered(input, deps));
+  const live = holdsPush || app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? "deny" : "warn", "cwd-missing");
+  if (holdsPush && !(app && hardAppCall(input)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
+    const again = gone ? "Run the push again from a folder that exists." : "Run the push again. If it fails again, ask Dave.";
+    return denyOut(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
+  }
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : scopes.has("app-push") ? "app-push" : "push");
 }
 var gatedScopesSafe = (input, app = false) => {
@@ -3085,6 +3498,17 @@ var gatedScopesSafe = (input, app = false) => {
     return /* @__PURE__ */ new Set();
   }
 };
+function catchIntentDeny(input) {
+  const shapes = catchShapes(input);
+  if (shapes === null) return null;
+  const none = deny("none", "", "push");
+  for (const s of shapes) {
+    if (s.kind !== "push" || s.push === void 0) continue;
+    const d = intentDeny(s.push, Boolean(input.agent_id), none);
+    if (d.hard === true) return d;
+  }
+  return null;
+}
 function hardAppCall(input) {
   try {
     const cmd = readCommand(input);
@@ -3121,6 +3545,49 @@ function pushUnderLiveRoot(input, deps) {
     return dirs.some((d) => underLiveRoot(d, reg, scope, { outsideCcv3: true }));
   } catch {
     return false;
+  }
+}
+var CCV3_ENTRY_KEY = "continuous-claude";
+function pushFoldersUnregistered(input, deps) {
+  try {
+    const scope = deps.tapScope;
+    const cmd = readCommand(input);
+    if (!scope || cmd.kind !== "command") return false;
+    const pushes = catchShapes(input)?.filter((s) => s.kind === "push");
+    if (!pushes || pushes.length === 0) return false;
+    const reg = scope.registry();
+    if (reg.state !== "ok") return false;
+    const cwd = input.cwd || process.cwd();
+    const shell = shellOf(input);
+    const raw = pushes.flatMap((s) => [cwd, ...pushDirsOf(s.push, cwd, shell), ...chainDirsOf(s.push, cwd, shell)]).concat(cwd);
+    if (raw.some((d) => isUnexpanded(d))) return false;
+    const paths = knownDirs(raw, deps.home);
+    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
+    if (dirs.length === 0 || dirs.some((d) => !isAbsolute2(d) || isUnexpanded(d))) return false;
+    return !dirs.some((d) => underRegistryRoot(d, reg, scope));
+  } catch {
+    return false;
+  }
+}
+function underRegistryRoot(d, reg, scope) {
+  const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: "active", tapGate: null })) };
+  return underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope);
+}
+function folderUnregistered(deps, d) {
+  try {
+    const scope = deps.tapScope;
+    if (!scope || !isAbsolute2(d) || isUnexpanded(d)) return false;
+    const reg = scope.registry();
+    return reg.state === "ok" && !underRegistryRoot(d, reg, scope);
+  } catch {
+    return false;
+  }
+}
+function ccv3OrUnplaced(deps, d) {
+  try {
+    return isCcv3Checkout(deps, d);
+  } catch {
+    return !folderUnregistered(deps, d);
   }
 }
 var MissingCwdError = class extends Error {

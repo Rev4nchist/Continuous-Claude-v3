@@ -22,7 +22,8 @@ import { GH_OPT_PREFIX } from './shared/gh-open-prefix.js';
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 
 // A global option may stand before `pr` (`gh -R owner/repo pr create`): GH_OPT_PREFIX, shared with OPEN_SEGMENT in pre-pr-gate.ts (PR 592, finding 2).
-const PR_CREATE_RE = new RegExp(String.raw`\bgh(?:\s+|${GH_OPT_PREFIX}[^\S\r\n]+)pr\s+create\b`, 'i');
+// Round 3 C1 (F-2): `gh pr new` is an alias of `gh pr create`.
+const PR_CREATE_RE = new RegExp(String.raw`\bgh(?:\s+|${GH_OPT_PREFIX}[^\S\r\n]+)pr\s+(?:create|new)\b`, 'i');
 const GH_API_RE = /\bgh\s+api\b/i;
 // Only the collection endpoint `.../pulls` opens a PR. `/pulls/5/reviews` and thread replies do not:
 // the path must end at "pulls" (whitespace, a quote, `?` or end of string follows).
