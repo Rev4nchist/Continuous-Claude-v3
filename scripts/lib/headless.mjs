@@ -6,7 +6,7 @@
 //   (HEADLESS_DAILY_CAP; Dave, 2026-11-14: "cap 200 - at least"; it was 30).
 //   The cap counts EVERY headless run in that ledger, whatever its purpose.
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -126,7 +126,9 @@ export async function runClaude({ prompt, model = 'sonnet', timeoutMs = 180_000,
   }
 
   const args = [...(deps.prefixArgs ?? []), ...buildArgs({ model, effort, mcpConfig, settings })];
-  const cwd = deps.cwd ?? mkdtempSync(path.join(os.tmpdir(), 'headless-run-')); // a temp cwd: no repo CLAUDE.md or settings load
+  // A temp cwd: no repo CLAUDE.md or settings load. It is removed after the run; a cwd the caller passed in is the caller's to remove.
+  const ownCwd = deps.cwd == null;
+  const cwd = ownCwd ? mkdtempSync(path.join(os.tmpdir(), 'headless-run-')) : deps.cwd;
   const spawnFn = deps.spawnFn ?? spawn;
   const withStdin = (cmd, a, opts) => {
     const child = spawnFn(cmd, a, { ...opts, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -134,7 +136,13 @@ export async function runClaude({ prompt, model = 'sonnet', timeoutMs = 180_000,
     child.stdin?.end?.(prompt);
     return child;
   };
-  const run = await runAgent({ command, args, cwd, timeoutMs, env: childEnv(deps.env ?? process.env) }, { spawnFn: withStdin, ...(deps.agentDeps ?? {}) });
+  let run;
+  try {
+    run = await runAgent({ command, args, cwd, timeoutMs, env: childEnv(deps.env ?? process.env) }, { spawnFn: withStdin, ...(deps.agentDeps ?? {}) });
+  } finally {
+    // A child that outlives a kill can still hold the folder on Windows (EBUSY): a failed removal must not turn the result into a throw.
+    if (ownCwd) try { rmSync(cwd, { recursive: true, force: true, maxRetries: 3 }); } catch { /* left for the OS temp cleanup */ }
+  }
   const parsed = readResult(run.stdout);
   const ok = run.status === 0 && !run.timedOut && !run.error && parsed.result !== null && !parsed.isError;
   finishHeadless(ledgerPath, reserved.id, {
