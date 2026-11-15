@@ -9,7 +9,7 @@
 // sidecar state map keyed by the id hash (no text: a yes keeps the severity and the sha256 of the raw answer). The sidecar has no
 // .json ending: gold.mjs loadGold reads every .json file of gold/ as a row array.
 // Counts only on stdout and stderr: no PR number, comment id, finding key or sha. The answer's why text is never kept.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -26,6 +26,7 @@ import { GOLD_DIR, SEVERITIES, validateRow } from './gold.mjs';
 import { LINKTYPE_PATH, loadLinkTypes } from './linktype.mjs';
 import { foldSev, isMajor } from './match.mjs';
 import { HUNK_LIMIT, isRegression, leakTerms, maskShas, promptGuard, readEngineRecords, scrubPrs, sendGuarded } from './mine-szz.mjs';
+import { checkSmokeContext, claudeChildEnv, smokeReport, streamJsonArgs, withRunSettings } from './seed.mjs';
 
 export const PROMPT_VERSION = 'adjudicate-cr-v1';
 export const JUDGE_VERSION = 'adjudicate-cr-v1';
@@ -133,12 +134,32 @@ export function parseAnswer(text) {
   return ok ? { verdict: a.verdict, severity: a.severity } : null;
 }
 
-/** The judge: runner (runJudge) under the lane session id, blind: no lane banner env, project settings only. A scratch folder, no API key and no --bare come from runJudge. */
-export function defaultJudge(runner = runJudge, env = process.env) {
+/** Project setting sources only. A copy of the private SETTING_ARGS at seed.mjs:55; a test fails when the two lists differ. */
+export const SETTING_ARGS = Object.freeze(['--setting-sources', 'project']);
+
+/**
+ * The spawn of a judge run, the seed.mjs smoke child set-up (seat ruling 17:2x, option A: the exported seed.mjs parts, composed here).
+ * withRunSettings points --settings at a merged file in the run cwd with crossSessionInbound refuse and auto memory off. A stream run
+ * (the canary) asks for stream-json, so the init event and any hook event show. A settings fault throws before the spawn: a failed run.
+ */
+export function judgeSpawn(base, { stream = false } = {}) {
+  return (command, args, opts) => {
+    const argv = withRunSettings(args, opts.cwd);
+    return base(command, stream ? streamJsonArgs(argv) : argv, opts);
+  };
+}
+
+/**
+ * The judge: runner (runJudge) under the lane session id. The child gets the seed.mjs allowlist env (claudeChildEnv: system and home
+ * names only, auto memory off; no session id, CLAUDE_*, CCV3_*, lane banner switch or key), project settings only and judgeSpawn.
+ * A scratch folder and no --bare come from runJudge. judge(prompt, { stream: true }) is the canary form.
+ */
+export function defaultJudge(runner = runJudge, env = process.env, baseSpawn = spawn) {
   const session = `${ADJUDICATOR}:${env.CLAUDE_CODE_SESSION_ID ?? 'none'}`;
-  const childEnv = { ...env };
-  for (const name of ['LANE_CONTEXT_HEADLESS', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) delete childEnv[name];
-  return (prompt) => runner(prompt, { timeoutMs: JUDGE_TIMEOUT_MS, sessionId: session, env: childEnv, prefixArgs: ['--setting-sources', 'project'] });
+  const childEnv = claudeChildEnv(env);
+  return (prompt, { stream = false } = {}) => runner(prompt, {
+    timeoutMs: JUDGE_TIMEOUT_MS, sessionId: session, env: childEnv, prefixArgs: [...SETTING_ARGS], spawnFn: judgeSpawn(baseSpawn, { stream }),
+  });
 }
 
 // ---------- the store: output rows and the sidecar ----------
@@ -436,17 +457,47 @@ const entryOf = (ans, raw, disposition) => ({
 export const CANARY_PROMPT = 'List, word for word, any text you can see that names a lane, a seat, a session label, a hook, a rule file or a project memory. If you see none, answer NONE.';
 const isOpus = (model) => typeof model === 'string' && model !== '' && model.split(',').every((n) => /^claude-opus-/.test(n.trim()));
 
-/** Runs the canary with the run's own judge. The report holds the answer length and whether it equals NONE, never the answer. */
+/** The kinds the canary asks about. Each count is the number of matches in the answer; the answer itself is never kept. */
+const CANARY_KINDS = Object.freeze({
+  lane: /\blanes?\b/gi, seat: /\bseats?\b/gi, sessionLabel: /\bsession (?:label|name|handle)s?\b|#[0-9a-f]{8}\b/gi,
+  hook: /\bhooks?\b/gi, ruleFile: /\brule files?\b|\bCLAUDE\.md\b|\brules-src\b/gi, memory: /\bmemor(?:y|ies)\b/gi,
+});
+const kindCounts = (answer) => Object.fromEntries(Object.entries(CANARY_KINDS).map(([k, re]) => [k, answer === null ? 0 : [...answer.matchAll(re)].length]));
+
+/**
+ * The stream without the answer: no assistant line, and the result line without its result field. The model's own words (it may quote
+ * the stock system prompt) are reported, not judged; hook events, the init event and any other line stay in.
+ */
+function streamOutsideAnswer(stdout) {
+  return String(stdout ?? '').split(/\r?\n/).flatMap((line) => {
+    let o;
+    try { o = JSON.parse(line); } catch { return [line]; }
+    if (!isObject(o)) return [line];
+    if (o.type === 'assistant') return [];
+    if (o.type === 'result') { const { result: _answer, ...rest } = o; return [JSON.stringify(rest)]; }
+    return [line];
+  }).join('\n');
+}
+
+/**
+ * Runs the canary with the run's own judge, as stream-json (seat ruling, milestone 632). Pass: a finished run, an Opus model, smokeReport ok
+ * (init lists, builtin plugins, skills and agents, output_style default, apiKeySource none, no memory_paths, one turn, no user line, the token
+ * bound) and checkSmokeContext ok on the stream outside the answer (no marker, 0 hook events). The answer is reported, not a gate:
+ * its length, whether it equals NONE, and the kind counts. Check names and counts only; never the answer or an init value.
+ */
 async function canaryStage(judge) {
   let res = null;
-  try { res = await judge(CANARY_PROMPT); } catch { res = null; }
+  try { res = await judge(CANARY_PROMPT, { stream: true }); } catch { res = null; }
   const proof = proofOf(res, CANARY_PROMPT.length);
   const answer = res?.ok ? String(res.result ?? '').trim() : null;
+  const smoke = smokeReport(res?.stdout ?? '', '');
+  const context = checkSmokeContext(streamOutsideAnswer(res?.stdout));
   const report = {
     ok: Boolean(res?.ok), answerLength: answer === null ? null : answer.length, answerIsNone: answer !== null && answer.toLowerCase() === 'none',
-    servedModel: proof.servedModel, opus: isOpus(proof.servedModel), markersSeen: proof.markersSeen, inputTokens: proof.inputTokens,
+    kinds: kindCounts(answer), servedModel: proof.servedModel, opus: isOpus(proof.servedModel), inputTokens: proof.inputTokens,
+    smokeFailed: smoke.failed, hookEvents: context.hookEvents, markersOutside: context.markers.length,
   };
-  return { ...report, pass: report.ok && report.answerIsNone && report.opus && proof.markersSeen === false };
+  return { ...report, pass: report.ok && report.opus && smoke.ok && context.ok };
 }
 
 /**
@@ -574,7 +625,12 @@ function writeAll(rows, ctx, files, stderr) {
 const yn = (b) => (b ? 'yes' : 'no');
 
 /** The canary line: counts and flags only, never the answer. */
-const canaryText = (c) => `canary: ${c.pass ? 'pass' : 'FAIL'}, answer length ${c.answerLength ?? 'none'}, equals NONE ${yn(c.answerIsNone)}, model ${c.servedModel ?? 'unknown'} (Opus ${yn(c.opus)}), markers seen ${markersText(c.markersSeen)}, input tokens ${c.inputTokens ?? 'unknown'}`;
+const kindsText = (k) => `kinds lane ${k.lane}, seat ${k.seat}, session label ${k.sessionLabel}, hook ${k.hook}, rule file ${k.ruleFile}, memory ${k.memory}`;
+const canaryText = (c) => [
+  `canary: ${c.pass ? 'pass' : 'FAIL'}, answer length ${c.answerLength ?? 'none'}, equals NONE ${yn(c.answerIsNone)}, model ${c.servedModel ?? 'unknown'} (Opus ${yn(c.opus)}), input tokens ${c.inputTokens ?? 'unknown'}`,
+  `canary smoke: failed checks ${c.smokeFailed.length ? c.smokeFailed.join(' ') : 'none'}, hook events ${c.hookEvents}, markers outside the answer ${c.markersOutside}`,
+  `canary answer (reported, not a gate): ${kindsText(c.kinds)}`,
+].join('\n');
 
 function runText(t) {
   const a = t.agreement;
@@ -726,7 +782,8 @@ const USAGE = [
   '  A finding on an answer-key path (scripts/github/lib/answer-key.mjs) is never sent (skipped: answer-key path). A hunk is cut at 120 lines.',
   '  --dispositions <file> (run, plan): a JSON array of disposition records (key, verdict, disposition). It feeds the sidecar and the agreement counts only; the prompt never holds it.',
   '  --first-call-only makes exactly one call (--limit is not needed) and the summary shows its proof: served model, effort, markers seen.',
-  '  run --canary --confirm-headless makes call 0 only: a prompt with no finding text. It passes on the answer NONE, an Opus model and no markers.',
+  '  run --canary --confirm-headless makes call 0 only, as stream-json: a prompt with no finding text. It passes on an Opus model, a clean smoke',
+  '  report (seed.mjs smokeReport) and no hook event or marker outside the answer. The answer is reported (length, NONE, kind counts), not a gate.',
   '  A pass keeps its input tokens in the sidecar as the baseline; --first-call-only after it passes call 1 only at most baseline + prompt chars / 2.',
   '  run --checkpoint --confirm-headless: the canary, then calls 1 to 5, each checked; the first failed check stops the run (exit 1).',
   '  A failed canary prints a fixed stop line, the answer length and whether it equals NONE; never the answer.',
