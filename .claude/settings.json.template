@@ -9,6 +9,19 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "Bash|PowerShell|SendMessage|Artifact|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/holdout-scan.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "EnterPlanMode",
         "hooks": [
           {
