@@ -161,14 +161,38 @@ describe('W: a command that names the git wrapper with a force push form and can
     }
   });
 
-  it('W12: the wrapper rule cost grows linearly with 50,000 option tokens (ratio form, no clock limit)', () => {
-    // Breaks when: the option group backtracks (an unknown option may take a value, so a long run of options is ambiguous).
-    const best = (fn: () => void): number => Math.min(...[0, 1, 2].map(() => { const t = performance.now(); fn(); return performance.now() - t; }));
-    const make = (n: number) => `pwsh -File scripts/git-safe.ps1 ${'-a b '.repeat(n)}commit -m x`;
-    const small = make(12_500);
-    const big = make(50_000);
-    askFor(small, 'PowerShell');
-    const ratio = best(() => askFor(big, 'PowerShell')) / Math.max(best(() => askFor(small, 'PowerShell')), 0.05);
-    expect(ratio, `ratio ${ratio.toFixed(1)}`).toBeLessThan(12);
+  // Seat read 18:4x: the option group was EXPONENTIAL on a NON-match (a dash token read as an option or as the value of the option before it:
+  // every split was tried; about x1.6 per option, 34 options = 200 ms, 50 = minutes). The ratio tests use 14 and 28 options: linear gives about 2,
+  // exponential about 1.6^14 = 700. The fixed 200-option rows come after them, so a regression fails the ratio rows before the 200 rows can hang.
+  const best = (fn: () => void): number => Math.min(...[0, 1, 2].map(() => { const t = performance.now(); fn(); return performance.now() - t; }));
+  const wrapper = (opts: string, tail: string, n: number) => `pwsh -File scripts/git-safe.ps1 ${opts.repeat(n)}${tail}`;
+  const shapes: Array<[string, string, string]> = [
+    ['W12a: options then a subcommand that is not push', '-a ', 'commit -m x'],
+    ['W12b: options then a push with no force form', '-a ', 'push fork feat/x'],
+    ['W12c: options with values then a subcommand that is not push', '-a b ', 'commit -m x'],
+  ];
+  for (const [name, opts, tail] of shapes) {
+    it(`${name} (ratio form: 28 options against 14)`, () => {
+      // Breaks when: a dash token can be read as an option or as a value (every split is tried: exponential on a non-match).
+      const small = wrapper(opts, tail, 14);
+      const big = wrapper(opts, tail, 28);
+      askFor(small, 'PowerShell');
+      const ratio = best(() => askFor(big, 'PowerShell')) / Math.max(best(() => askFor(small, 'PowerShell')), 0.05);
+      expect(ratio, `ratio ${ratio.toFixed(1)}`).toBeLessThan(40);
+    });
+  }
+
+  it('W13: 200 options then a non-push subcommand or a plain push return at once and allow; a force push still asks', () => {
+    // Breaks when: the option group backtracks, or a long run of options hides the force form.
+    expect(askFor(wrapper('-a ', 'commit -m x', 200), 'PowerShell')).toBe('allow');
+    expect(askFor(wrapper('-a ', 'push fork feat/x', 200), 'PowerShell')).toBe('allow');
+    expect(askFor(wrapper('-a ', 'push --force fork feat/x', 200), 'PowerShell')).not.toBe('allow');
+    expect(askFor(wrapper('-a b ', 'push fork +feat/x', 200), 'Bash')).not.toBe('allow');
+  });
+
+  it('W14: a quoted value that starts with a dash still works as an option value', () => {
+    // Breaks when: the "bare value must not start with a dash" fix also drops a QUOTED value that starts with a dash.
+    expect(askFor('pwsh -File scripts/git-safe.ps1 -C "-weird dir" push --force fork feat/x', 'PowerShell')).not.toBe('allow');
+    expect(askFor("pwsh -File scripts/git-safe.ps1 -C '-weird dir' push fork feat/x", 'PowerShell')).toBe('allow');
   });
 });

@@ -827,7 +827,7 @@ function extractShellWrapperPayloads(command) {
     return [];
   }
 }
-var WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']\S*)`;
+var WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'-]\S*)`;
 var WRAPPER_OPT = String.raw`-[A-Za-z]\S*(?:\s+(?!push\b)${WRAPPER_VAL})?`;
 var WRAPPER_FORCE_PUSH = new RegExp(
   String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?\s["']?(?:--(?:force|mirror|all|delete|prune)|-[A-Za-z]*[fd][A-Za-z]*(?=[\s"']|$)|[+:]\S)`,

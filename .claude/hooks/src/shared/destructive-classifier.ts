@@ -461,7 +461,7 @@ export function normalizeGitWrappers(scan: string): string {
  * KEPT, so a quoted wrapper path ("C:\my repo\scripts\git-safe.ps1") and every spelling the rewrite does not know still ask. The subcommand
  * must be `push` right after the wrapper's own options, so a commit message that names `push --force` stays a message.
  */
-const WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']\S*)`; // a bare value never starts with a quote: backtracking must not read `"fix:` as a value
+const WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'-]\S*)`; // a bare value never starts with a quote (backtracking must not read `"fix:` as a value) or a dash (a dash token is always an option: one split only, no exponential backtracking)
 // Any option token may stand before `push` (seat delta read, hole 1): an option is `-name`, with one optional value that is not `push`.
 const WRAPPER_OPT = String.raw`-[A-Za-z]\S*(?:\s+(?!push\b)${WRAPPER_VAL})?`;
 const WRAPPER_FORCE_PUSH = new RegExp(

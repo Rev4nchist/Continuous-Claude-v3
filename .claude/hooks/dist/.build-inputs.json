@@ -106,7 +106,7 @@
     "shared/db-utils-pg.ts": "0fcf1b7ca2a369cbb6f4234e6d2c129b701cc7b606a35afe4d550977a9f2627d",
     "shared/db-utils.ts": "84cc10b397f44fd3ab2782463de896ea2f2ce0b232995be7b0c6a2a0ebb10a48",
     "shared/decisions-store.ts": "aa77a870fe969b4632cb78ff06e0efca1cdf2de327954d7c8f42ea0579201491",
-    "shared/destructive-classifier.ts": "49dac8c6584b2783cb4da1c7a8c4edbf22b85626f459e541b4819c58b070d2ff",
+    "shared/destructive-classifier.ts": "0fd789e07ab1e100b742ab253d81387c34fb4dd896c8673ce6660e5a4bf63afc",
     "shared/dist-freshness.ts": "fc853fa75abc3bf5ae29c64b18abc6ca379c13106cc1aa1c7814adf79c8a8457",
     "shared/doc-heredoc.ts": "8b21641c587f76b60828bca241f7fdeefbdb988fb5513f15c1114a5ece48c655",
     "shared/done-proof.ts": "cd8fbdb11a5b63ff68c44765fbf0272e2f2a7b85234827908a71c96f3b0b081c",
