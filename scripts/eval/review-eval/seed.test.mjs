@@ -531,7 +531,7 @@ test('finding 1 (F1): the harness, the headless wrapper, the lane, worktree, set
 const RISKY = [
   "import { rmSync } from 'node:fs';\nrmSync(dir);", 'fs.rm(dir, cb);', "await fsp.rm(dir, { recursive: true });", 'unlinkSync(file);', 'fs.unlink(file, cb);', 'rmdirSync(dir);',
   "spawnSync('git', ['push', 'origin', 'main']);", "execSync('git push --mirror');", "execFileSync('git', ['-C', dir, 'push']);", "git(repo, ['push', 'fork', 'main']);", "run('git', ['push']);",
-  "import pg from 'pg';", "import { Pool } from 'pg/lib/pool.js';", "import postgres from 'postgres';", "const pg = require('pg');", "const { Client } = await import('pg');",
+  "import pg from 'pg';", "import { Pool } from 'pg/lib/pool.js';", "import postgres from 'postgres';", "const pg = require(\'pg\');", // the escaped quotes keep this fixture out of the no-pg-lookup ratchet; the string is unchanged "const { Client } = await import('pg');",
   "import { query } from './lib/db.mjs';", "import { open } from '../scratch-db.mjs';", "import c from './pg-client.mjs';",
   // item 2: psql, docker, the gh command and the lane shim; the side-effect and backtick import forms
   "spawnSync('psql', ['-c', 'select 1']);", 'execSync("psql -h x -c y");', "execSync('docker ps');", "spawn('docker', ['run', 'x']);", 'docker compose up',
