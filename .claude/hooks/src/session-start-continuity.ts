@@ -6,6 +6,7 @@ import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-saniti
 import { buildHandoffPointer, handoffSkipReason, selectSessionHandoff } from './shared/handoff-select.js';
 import { previousFromClear, readIdentity } from './shared/session-identity.js';
 import { isEngineHost } from './shared/engine-host.js';
+import { applyBreakpoint, readBreakpoint, userHome } from './shared/breakpoint.js';
 
 interface SessionStartInput {
   type?: 'startup' | 'resume' | 'clear' | 'compact';  // Legacy field
@@ -872,6 +873,12 @@ async function main() {
     } catch {
       // Ignore index parsing errors
     }
+  }
+
+  // Card compact-session-breakpoint: after a compact, the state file that pre-compact-breakpoint wrote replaces the ledger
+  // dump, the handoff and the outcome question. No file (or any read error) keeps today's context. Other sources are not touched.
+  if (sessionType === 'compact') {
+    additionalContext = applyBreakpoint(sessionType, additionalContext, readBreakpoint(userHome(), input.session_id));
   }
 
   // Output with proper format per Claude Code docs

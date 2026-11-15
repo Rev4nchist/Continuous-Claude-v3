@@ -705,6 +705,21 @@ function normalizeGitGlobalOptions(scan) {
     "git"
   );
 }
+function normalizeGitWrappers(scan) {
+  return scan.replace(
+    /(?<![^\s"'`;&|(])(?:\bpwsh(?:\.exe)?(?:\s+(?:-NoProfile|-NonInteractive|-NoLogo|-ExecutionPolicy\s+\S+))*\s+-File\s+|&\s*)?(?:[^\s"'`;&|()]*[\\/])?git-(?:safe|for)\.ps1(?:\s+(?:-C\s+\S+|-UseGitSafe|-Path\s+\S+|-Remote\s+\S+|-WhichAccount\s+\S+))*(?=\s)/gi,
+    "git"
+  );
+}
+var WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'-]\S*)`;
+var WRAPPER_OPT = String.raw`-[A-Za-z]\S*(?:\s+(?!push\b)${WRAPPER_VAL})?`;
+var WRAPPER_FORCE_PUSH = new RegExp(
+  String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?\s["']?(?:--(?:force|mirror|all|delete|prune)|-[A-Za-z]*[fd][A-Za-z]*(?=[\s"']|$)|[+:]\S)`,
+  "i"
+);
+function wrapperForcePush(command) {
+  return WRAPPER_FORCE_PUSH.test(command);
+}
 function bodySubstitutions(body, tool) {
   const out = [];
   const esc = tool === "PowerShell" ? "`" : "\\";
@@ -875,7 +890,8 @@ function classifyDestructive(command, depth = 0, tool = "Bash") {
 }
 function classifyText(command, depth, tool) {
   if (!command || typeof command !== "string") return null;
-  let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  if (wrapperForcePush(command)) return "git push --force";
+  let scan = normalizeGitGlobalOptions(normalizeGitWrappers(stripQuotedStrings(command, tool)));
   if (tool === "PowerShell") scan = scan.replace(/`([A-Za-z0-9])/g, "$1");
   const patterns = tool === "PowerShell" ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {

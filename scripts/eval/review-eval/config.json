@@ -37,7 +37,7 @@
     "grok": "opus"
   },
   "cursorHeadroom": 60,
-  "headlessDailyCap": 30,
+  "headlessDailyCap": 200,
   "lineSlack": 3,
   "labelWeekCap": 20,
   "freeze": {

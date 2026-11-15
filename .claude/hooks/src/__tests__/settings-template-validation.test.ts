@@ -247,6 +247,10 @@ describe('settings.json.template', () => {
       ['telemetry-tracker', 'PostToolUse::Skill|Task'],
       // Grep only since 2026-09-23 (P22): the hook's code handles Grep alone.
       ['epistemic-reminder', 'PostToolUse::Grep'],
+      // Card compact-session-breakpoint (CodeRabbit CLI, 11-14): apply-registrations carries hooks FROM the template and refuses
+      // a name the template does not register, so the template must name the hook before Dave applies it to the live settings.
+      // No matcher: it runs for a manual and an automatic compact.
+      ['pre-compact-breakpoint', 'PreCompact::'],
     ];
     for (const [name, expected] of contract) {
       const got = reg.get(name);

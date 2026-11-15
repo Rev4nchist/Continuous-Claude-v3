@@ -1,6 +1,6 @@
 // Step A judge pre-check (decision doc 2026-11-02, sections 3.1-3.3): does our judge agree with human labels on Code Review Bench task 1?
 // - sameIssue only. The rows have no path, line or hunk, so the hunk is empty and `real` is reported as not measured.
-// - Reuses judgePair from judge.mjs and runClaude from scripts/lib/headless.mjs (key strip, shared 30/day Chicago cap).
+// - Reuses judgePair from judge.mjs and runClaude from scripts/lib/headless.mjs (key strip, shared 200/day Chicago cap).
 // - Headless session id is "review-external", purpose "external-judge". It never consumes the P0 eval budget (session "review-eval").
 // - Own ledger .claude/cache/hf-datasets/external-judge-ledger.jsonl: at most --daily-share (default 10) judge calls per Chicago day.
 // - Resumable: a pair with a judged end row in the ledger is skipped, on this day or a later one. Only when the end row's candidateSource is the one the pair has now: an old row judged on another prompt (source all, or none recorded) is judged again.

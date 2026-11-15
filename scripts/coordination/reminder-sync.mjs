@@ -13,7 +13,7 @@
  *   timeout   180 s. The kill goes to that one pid; the sync is a failure.
  *   result    {results:{"<board>/<id>":{count,pageId}}, doneIds:[...]}. Only count == 1 stores notion_page_id.
  *   backoff   5, 15, 60 minutes after a failure, kept in latest.json (failCount, nextSyncAt) by the tick.
- *   ledger    each run takes a row in the shared headless ledger, so the 30 a day cap counts it. The sync has its own share:
+ *   ledger    each run takes a row in the shared headless ledger, so the 200 a day cap counts it. The sync has its own share:
  *             SYNC_DAILY_CAP (12) runs a day, and a run that only polls for Done stops at POLL_ONLY_LIMIT (4), so writes keep 8 runs.
  *   poll      only reminders that have fired (due, needs_dave, failed) and have a page; a future card cannot need a Done check.
  *   stderr    the last 2 KB of the child stderr, token-like text masked, goes into the error text and the ledger end row.
@@ -36,7 +36,7 @@ export const ALLOWED_TOOLS = [
 ];
 export const BACKOFF_MIN = [5, 15, 60];
 export const SYNC_TIMEOUT_MS = 180_000;
-export const SYNC_DAILY_CAP = 12; // of the shared 30 a day: the rest stays for the other headless jobs
+export const SYNC_DAILY_CAP = 12; // of the shared 200 a day: the rest stays for the other headless jobs
 export const POLL_ONLY_LIMIT = 4;
 export const DATA_BEGIN = '<<<DATA_BEGIN>>>';
 export const DATA_END = '<<<DATA_END>>>';
