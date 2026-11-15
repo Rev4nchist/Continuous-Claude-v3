@@ -84,10 +84,17 @@ afterEach(() => {
 
 const CACHE = join('.claude', 'cache', 'pre-pr', 'summary.md');
 
-describe('resolveClaimKey: .claude/cache files keep the per-worktree (old) key', () => {
-  it('returns null for a cache file in the primary and in a worktree, so the caller keeps the raw path', () => {
-    expect(resolveClaimKey(join(primary, CACHE))).toBeNull();
-    expect(resolveClaimKey(join(wt, CACHE))).toBeNull();
+// Card coord-file-claims-cache-key-canonical: a cache file keeps a per-worktree key, now its real absolute path (one key for
+// every spelling: claim-target-cache-canonical.test.ts), not null and not the raw file_path.
+const isAbsoluteKey = (k: { filePath: string } | null): boolean => /^(?:[a-zA-Z]:\/|\/)/.test(k?.filePath ?? '');
+
+describe('resolveClaimKey: .claude/cache files keep a per-worktree key', () => {
+  it('gives a cache file in the primary and in a worktree an absolute key that differs per worktree', () => {
+    const a = resolveClaimKey(join(primary, CACHE));
+    const b = resolveClaimKey(join(wt, CACHE));
+    expect(isAbsoluteKey(a)).toBe(true);
+    expect(isAbsoluteKey(b)).toBe(true);
+    expect(a?.filePath).not.toBe(b?.filePath);
   });
 
   it('keeps ONE key for a tracked file across the primary and the worktree (the hard condition)', () => {
@@ -98,17 +105,18 @@ describe('resolveClaimKey: .claude/cache files keep the per-worktree (old) key',
     expect(a?.filePath).toBe('src/x.ts');
   });
 
-  it('matches only the .claude/cache folder: a sibling keeps the repo key', () => {
-    expect(resolveClaimKey(join(wt, '.claude', 'cachex', 'y.md'))).not.toBeNull();
-    expect(resolveClaimKey(join(wt, 'cache', 'y.md'))).not.toBeNull();
-    expect(resolveClaimKey(join(wt, '.claude', 'cache', 'y.md'))).toBeNull();
-    expect(resolveClaimKey(join(wt, '.claude', 'cache'))).toBeNull();
+  it('matches only the .claude/cache folder: a sibling keeps the repo-relative key', () => {
+    expect(resolveClaimKey(join(wt, '.claude', 'cachex', 'y.md'))?.filePath).toBe('.claude/cachex/y.md');
+    expect(resolveClaimKey(join(wt, 'cache', 'y.md'))?.filePath).toBe('cache/y.md');
+    expect(isAbsoluteKey(resolveClaimKey(join(wt, '.claude', 'cache', 'y.md')))).toBe(true);
+    expect(isAbsoluteKey(resolveClaimKey(join(wt, '.claude', 'cache')))).toBe(true);
   });
 
-  it('folds case on win32 and darwin only', () => {
+  it('reads the cache folder in any case on win32, and only in the exact case on linux', () => {
     const upper = join(wt, '.CLAUDE', 'Cache', 'y.md');
-    expect(resolveClaimKey(upper, { platform: 'win32' })).toBeNull();
-    expect(resolveClaimKey(upper, { platform: 'linux' })).not.toBeNull();
+    expect(isAbsoluteKey(resolveClaimKey(upper, { platform: 'win32' }))).toBe(true);
+    // On linux `.CLAUDE/Cache` is another folder: a repo-relative key, not a cache key.
+    expect(resolveClaimKey(upper, { platform: 'linux' })?.filePath).toBe('.CLAUDE/Cache/y.md');
   });
 
   it('resolves ".." before the test: a tracked file reached through the cache folder is a tracked key', () => {
@@ -119,7 +127,7 @@ describe('resolveClaimKey: .claude/cache files keep the per-worktree (old) key',
 
   // On POSIX a backslash is part of a file name, so this holds on win32 only (as claim-target.test.ts 10b).
   it.skipIf(process.platform !== 'win32')('a Windows separator inside the cache path is still the cache folder', () => {
-    expect(resolveClaimKey(`${wt}\\.claude\\cache\\pre-pr\\summary.md`, { platform: 'win32' })).toBeNull();
+    expect(isAbsoluteKey(resolveClaimKey(`${wt}\\.claude\\cache\\pre-pr\\summary.md`, { platform: 'win32' }))).toBe(true);
   });
 });
 

@@ -294,7 +294,10 @@ async function claimOne(input: PreToolUseInput, filePath: string, sessionId: str
 
   // Messages name the repo-relative path. A file outside any repo keeps the bare file name, so a
   // message never shows another session's absolute path.
-  const rawName = key ? key.filePath : filePath.split(/[/\\]/).pop() || filePath;
+  // A cache file has a key that is an absolute path (card coord-file-claims-cache-key-canonical): it shows as a base name too.
+  const keyIsAbsolute = !key || isStoredAbsolute(key.filePath);
+  const shownPath = key ? key.filePath : filePath;
+  const rawName = keyIsAbsolute ? shownPath.split(/[/\\]/).pop() || shownPath : shownPath;
   const fileName = printable(rawName);
   let output: any;
 
@@ -334,7 +337,7 @@ async function claimOne(input: PreToolUseInput, filePath: string, sessionId: str
 
       const blockMessage = `⚠️ FILE CONFLICT BLOCKED
 
-"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, !key) : ''}
+"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, keyIsAbsolute) : ''}
 
 ${leaseLine}
 Reclaiming needs BOTH an expired lease AND a holder that has stopped
