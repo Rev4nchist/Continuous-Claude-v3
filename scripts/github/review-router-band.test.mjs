@@ -114,6 +114,22 @@ test('B11: matrix.control_plane holds every checkpoint.critical and checkpoint.p
   }
 });
 
+test('B11b: code moved out of a gate file into a lib keeps at least the gate band (answer-paths, review-md)', () => {
+  const RANK = ['LOW', 'MID', 'ELEVATED', 'HIGH', 'CRITICAL'];
+  const moves = [
+    ['scripts/github/lib/answer-paths.mjs', 'scripts/github/review-router.mjs'],
+    ['scripts/github/lib/answer-paths.mjs', 'scripts/github/pre-pr.mjs'],
+    ['scripts/ratchets/lib/review-md.mjs', 'scripts/github/pre-pr.mjs'],
+  ];
+  for (const [lib, origin] of moves) {
+    const a = bandOf([lib], LIVE);
+    const b = bandOf([origin], LIVE);
+    assert.ok(RANK.indexOf(a.band) >= RANK.indexOf(b.band), `${lib} band ${a.band} is below ${origin} band ${b.band}`);
+    assert.equal(a.G, b.G, `${lib} counts as a gate file like ${origin}`);
+    assert.ok(LIVE.checkpoint.critical.includes(lib), `checkpoint.critical lacks ${lib}`);
+  }
+});
+
 test('B12: the section 4 backtest rows get the documented band and G count (fixture band-backtest.json)', () => {
   assert.ok(BACKTEST.prs.length >= 8);
   for (const row of BACKTEST.prs) {

@@ -29,11 +29,11 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { REVIEWER_SET_FILES, computeVersions as realComputeVersions } from '../eval/review-eval/engine-version.mjs';
+import { BAND_SET_FILES, REVIEWER_SET_FILES, computeVersions as realComputeVersions } from '../eval/review-eval/engine-version.mjs';
 import { readLines } from '../eval/review-eval/read-audit.mjs';
 import { checkPin } from './local-review.mjs';
 import {
-  DEFAULT_BAND_COUNTS, FROZEN_LABEL, REHEARSAL_LABEL, SWEEP_EXIT, WEEKLY_LIVE_CAP, liveStarts, main, parseArgs, parseWorktrees, planOrder, proveCopy,
+  DEFAULT_BAND_COUNTS, FROZEN_LABEL, REHEARSAL_LABEL, SWEEP_EXIT, WEEKLY_LIVE_CAP, liveStarts, main, parseArgs, parseWorktrees, planOrder, proveCopy, sweepVersions,
 } from './local-review-sweep.mjs';
 import { parseAgentStream } from './pre-pr.mjs';
 
@@ -298,7 +298,7 @@ function engineRepo({ localReview = {} } = {}) {
   const commit = (marker) => {
     for (const f of REVIEWER_SET_FILES) put(dir, f, f === 'scripts/github/local-review.mjs' ? STUB_SRC(marker) : `// ${f} ${marker}\n`);
     put(dir, 'scripts/github/local-review/prompt.mjs', 'export const PROMPT_VERSION = 1;\n');
-    put(dir, 'scripts/github/review-router.mjs', '// band rules\n');
+    for (const f of BAND_SET_FILES) put(dir, f, f === 'scripts/github/review-router.mjs' ? '// band rules\n' : `// ${f}\n`);
     put(dir, 'review-router.config.json', `${JSON.stringify({ local_review: localReview, matrix: {} })}\n`);
     put(dir, 'docs/outside.md', 'not part of the copy\n');
     gitOk(git, 'add', '-A');
@@ -330,8 +330,8 @@ test('T3 two runs on one engine SHA give two list lines with the engine SHA vers
   assert.equal(await sweep(w, ['--engine-sha', sha], over), SWEEP_EXIT.OK, w.logs.join('\n'));
   const rows = jsonl(listFile(w));
   assert.equal(rows.length, 2);
-  const want = realComputeVersions({ sha, git: repo.git });
-  const atHead = realComputeVersions({ sha: prHead, git: repo.git });
+  const want = sweepVersions({ sha, root: repo.dir, git: repo.git });
+  const atHead = sweepVersions({ sha: prHead, root: repo.dir, git: repo.git });
   assert.notEqual(want.engineVersion, atHead.engineVersion);
   for (const r of rows) {
     assert.equal(r.engineVersion, want.engineVersion);
@@ -361,14 +361,14 @@ test('T4 --engine-sha extracts the engine into <records>/engine/<sha>/, imports 
   assert.equal(row.pinned, true);
   assert.equal(row.engineSha, sha);
   assert.equal(row.head, prHead);
-  assert.equal(row.engineVersion, realComputeVersions({ sha, git: repo.git }).engineVersion);
+  assert.equal(row.engineVersion, sweepVersions({ sha, root: repo.dir, git: repo.git }).engineVersion);
   assert.equal(row.label, FROZEN_LABEL);
   assert.equal(row.counted, true);
   assert.equal(row.kind, 'open-head');
   assert.equal(reportOf(w).mode, 'pinned');
   // F2: the line keeps what the label was tested against, so a later gate can check it against decisions.md.
   assert.equal(row.frozenSha, sha);
-  assert.equal(row.frozenEngineVersion, realComputeVersions({ sha, git: repo.git }).engineVersion);
+  assert.equal(row.frozenEngineVersion, sweepVersions({ sha, root: repo.dir, git: repo.git }).engineVersion);
 });
 
 test('T4b a --frozen-sha whose engineVersion differs gives the rehearsal label', async () => {
@@ -982,8 +982,8 @@ test('T13 end to end, unpinned: the real reviewHead (engineHere) writes a real r
   assert.ok(existsSync(row.recordPath.replace(/\.json$/, '.stream.jsonl.gz')));
   assert.equal(row.pinned, false);
   assert.equal(row.audit, 'pass');
-  assert.equal(row.engineVersion, realComputeVersions({ sha, git: repo.git }).engineVersion, 'unpinned: the version at the checkout HEAD');
-  assert.notEqual(row.engineVersion, realComputeVersions({ sha: prHead, git: repo.git }).engineVersion);
+  assert.equal(row.engineVersion, sweepVersions({ sha, root: repo.dir, git: repo.git }).engineVersion, 'unpinned: the version at the checkout HEAD');
+  assert.notEqual(row.engineVersion, sweepVersions({ sha: prHead, root: repo.dir, git: repo.git }).engineVersion);
   assert.equal(row.label, REHEARSAL_LABEL, 'an unpinned run is always rehearsal, even when its version equals the frozen one');
   assert.equal(row.counted, false);
   assert.match(row.reason, /unpinned/);
@@ -1017,8 +1017,8 @@ test('T13b end to end, pinned: the real engine extracted from a commit runs from
   assert.equal(row.audit, 'pass');
   assert.equal(row.counted, true);
   assert.equal(row.label, FROZEN_LABEL);
-  assert.equal(row.engineVersion, realComputeVersions({ sha, git: repo.git }).engineVersion);
-  assert.notEqual(row.engineVersion, realComputeVersions({ sha: prHead, git: repo.git }).engineVersion);
+  assert.equal(row.engineVersion, sweepVersions({ sha, root: repo.dir, git: repo.git }).engineVersion);
+  assert.notEqual(row.engineVersion, sweepVersions({ sha: prHead, root: repo.dir, git: repo.git }).engineVersion);
 });
 
 // ---------- T14 failed runs ----------
