@@ -447,8 +447,12 @@ describe('C1: a create names its head and base in one known way, once', () => {
     expect(verdictOf(`gh --repo ${REPO} pr create --fill`).action).toBe('deny');
     expect(patternOf(`gh -R ${REPO} pr merge 5 --squash --match-head-commit ${HEAD}`)).toBe('merge-no-head');
     expect(patternIn(pwsh(`gh -R ${REPO} pr new --fill`))).toBe('head-unresolved');
+    // Since PR 592 (merged in at 35342a75) the create reader also finds this create (shared GH_OPT_PREFIX in PR_CREATE_RE), so its
+    // head-unresolved text can come first; the flag-first text is the deny when no create reader sees the call (a merge, a gh path).
     const d = verdictOf(`gh -R ${REPO} pr create --fill`);
-    expect(d.action === 'deny' && d.reason).toMatch(/Put the flag after the subcommand: gh pr create -R <repo>/);
+    expect(d.action === 'deny' && d.reason).toMatch(/Put the flag after the subcommand: gh pr create -R <repo>|cannot be read as gh reads it/);
+    const m = verdictOf(`gh -R ${REPO} pr merge 5 --squash --match-head-commit ${HEAD}`);
+    expect(m.action === 'deny' && m.reason).toMatch(/Put the flag after the subcommand/);
     openTap('feat/x');
     expect(verdictOf(`gh pr create --fill && gh -R ${REPO} pr create --fill`).action).toBe('deny');
     expect(verdictOf(`gh -R ${REPO} pr create --head feat/x --base main --title t --body-file b.md`).action).toBe('deny'); // the tap does not clear it
@@ -639,11 +643,49 @@ describe('C4: no unmodelled state change before a push', () => {
     }
     expect(patternIn(pwsh('git push fork feat/x 2>&1 | ForEach-Object { git reset --hard o }'))).toBe('push-state-unknown');
   });
+  it('C4-8 (seat read of f1e57235): a background & after the last push, or a sort that can write a file, is push-state-unknown', () => {
+    // Breaks when: only a single | after the push is read, so `push & git reset --hard` (both run at the same time) keeps the index rule,
+    // or sort stays on the list (sort -o writes a file with no redirect).
+    shipTapOn(INDEX);
+    for (const c of ['git commit -F m.txt && git push fork HEAD:feat/x & git reset --hard other', 'git commit -F m.txt && git push fork HEAD:feat/x &',
+      'git push fork feat/x & tail -3', 'git push fork feat/x | sort -o .git/HEAD', 'git push fork feat/x | sort']) {
+      expect(patternOf(c), c).toBe('push-state-unknown');
+    }
+    expect(verdictOf('git commit -F m.txt && git push fork HEAD:feat/x & git reset --hard other').action === 'deny'
+      && (verdictOf('git commit -F m.txt && git push fork HEAD:feat/x & git reset --hard other') as { reason: string }).reason).toMatch(/runs at the same time/);
+  });
+  it('C4-8b: a & that ends an && or | list holding the push backgrounds the push too', () => {
+    // Breaks when: only the separator right after the push is read (bash backgrounds the whole and-or list: push && x & reset).
+    shipTapOn(INDEX);
+    for (const c of ['git push fork feat/x && git log -1 & git reset --hard o', 'git push fork feat/x | tail -1 & git reset --hard o']) {
+      expect(patternOf(c), c).toBe('push-state-unknown');
+    }
+  });
+  it('C4-8c (seat word): a backgrounded group or subshell that holds the push is push-state-unknown; a ; inside quotes ends nothing', () => {
+    // The groups deny by the C4 group rule, not by backgroundAfter: the step that opens the group (`( git commit ...`, `{ git commit ...`)
+    // is "other" (segmentKind refuses ( ) { }), so the push is not modelled. The walk reads the quote-masked text, so a quoted ; or &
+    // is no separator: `grep "a;b" & reset` is still a background push, and `grep "x & y"; git status` is not.
+    shipTapOn(INDEX);
+    for (const c of ['( git commit -F m.txt && git push fork HEAD:feat/x ) & git reset --hard other', '{ git commit -F m.txt; git push fork HEAD:feat/x; } & git reset --hard other',
+      'git push fork feat/x | grep "a;b" & git reset --hard o']) {
+      const d = verdictOf(c);
+      expect(d.action === 'deny' && d.pattern, c).toBe('push-state-unknown');
+    }
+    shipTapOn(TREE);
+    expect(pushPat('git push fork feat/x | grep "x & y"; git status')).toBe('allow');
+  });
+  it('C4-C8 (cost): && after the push, 2>&1, and a & after a ; (the push is done by then) are no background push', () => {
+    // The measured case (2 of 588): git-safe push ... 2>&1 | tail -1; cd x && ... & ... (the & comes after the ; that ends the push).
+    shipTapOn(TREE);
+    for (const c of ['git push fork feat/x && git log -1', 'git push fork feat/x 2>&1 && git status', 'git push fork feat/x | tail -1; npm run watch & git status']) {
+      expect(pushPat(c), c).toBe('allow');
+    }
+  });
   it('C4-C7 (cost): listed consumers, a chain of them, 2>&1 and a null redirect still pass', () => {
     // Breaks when: the consumer rule refuses the measured git-safe flows (175 Select-Object and 67 tail of 588 a week).
     shipTapOn(TREE);
     for (const c of ['git push fork feat/x | tail -5', 'git push fork feat/x 2>&1 | grep -v x | tail -3', 'git push fork feat/x | tail -3 > /dev/null',
-      'git push fork feat/x | cut -c1-80 | sort | wc -l', 'git push fork feat/x | head -2']) {
+      'git push fork feat/x | cut -c1-80 | wc -l', 'git push fork feat/x | head -2']) {
       expect(pushPat(c), c).toBe('allow');
     }
     for (const c of ['git push fork feat/x 2>&1 | Select-Object -Last 5', 'git push fork feat/x | Out-String', 'git push fork feat/x | Select-String rejected | Out-Null',
@@ -755,7 +797,9 @@ describe('C3: a push is read whole, or it is denied hard', () => {
     }
   });
   it('C3-C6 (cost, R18-C3 narrowing): the same throw in a resolved folder under no registry root keeps today\'s result', () => {
-    for (const c of ["sh -c 'git push up feat/x'", `gh -R ${REPO} pr create --fill`]) {
+    // The flag-first row uses a merge: since PR 592 the create reader also reads gh -R ... pr create, and a create whose git throws is a
+    // deny there by today's rule (R18-C1), so a create cannot show the flag-first narrowing.
+    for (const c of ["sh -c 'git push up feat/x'", `gh -R ${REPO} pr merge 5 --squash --match-head-commit ${HEAD}`]) {
       expect(run({ ...bash(c), cwd: '/elsewhere/app' }, { throwIn: '/elsewhere' }).permissionDecision, c).toBeUndefined();
     }
   });

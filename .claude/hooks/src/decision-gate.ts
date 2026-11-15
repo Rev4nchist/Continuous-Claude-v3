@@ -2409,19 +2409,34 @@ function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plai
   // before the push reads it. Each step of that pipe chain must be a listed read-only program (first word of the masked step), with no
   // file redirect (a null target is fine) and no command substitution or block in it.
   let pipeOk = true;
+  // Seat read of f1e57235: a single & (background) puts the push in the background with every step joined to it by |, && or ||, so
+  // the next step runs at the same time. A trailing & with no step after it is the same (the push is not done when the next command
+  // runs). The first ; newline or single & after the last push decides: a & refuses; a ; or a newline ends the list, and the push is done.
+  if (backgroundAfter([...steps.slice(last + 1).map((s) => s.op), pending])) pipeOk = false;
   for (let i = last + 1; i < steps.length && /(?<!\|)\|(?!\|)/.test(steps[i].op); i++) {
     const ms = masked.slice(steps[i].end - steps[i].raw.length, steps[i].end);
     if (!PIPE_CONSUMER.test(ms.trim().split(/\s+/)[0] ?? '') || /[$`@({<]/.test(ms.replace(/\$null\b/gi, '')) || fileRedirect(ms)) pipeOk = false;
   }
   return { prefix: view.slice(0, steps[last].end), plain, localPush, pipeOk };
 }
-/** CLI :2394, seat list (2026-11-15): the read-only programs a push may pipe its output into. Not Tee-Object, ForEach-Object, node or git. */
-const PIPE_CONSUMER = /^(?:Select-Object|Select-String|Out-String|Out-Null|tail|head|cut|grep|findstr|sort|wc|more)$/i;
+/**
+ * CLI :2394, seat list (2026-11-15): the read-only programs a push may pipe its output into. Not Tee-Object, ForEach-Object, node or git;
+ * not sort (seat read of f1e57235: sort -o writes a file with no redirect; 0 of 588 measured pushes pipe into sort).
+ */
+const PIPE_CONSUMER = /^(?:Select-Object|Select-String|Out-String|Out-Null|tail|head|cut|grep|findstr|wc|more)$/i;
+/** True when, in the separators after the last push, a single & comes before the first ; or newline (the push runs in the background). */
+function backgroundAfter(ops: string[]): boolean {
+  for (const op of ops) {
+    const m = /(?<!&)&(?!&)|[;\r\n]/.exec(op);
+    if (m !== null) return m[0] === '&';
+  }
+  return false;
+}
 /** A > or >> to a file: a target other than $null, /dev/null or NUL. 2>&1 is blanked before (fdBlank). */
 const fileRedirect = (ms: string): boolean => [...ms.matchAll(/[0-9*]?>{1,2}\s*(\S*)/g)].some((m) => !/^(?:\$null|\/dev\/null|nul)$/i.test(m[1]));
 /** A push remote that is a path on this machine, not a remote name: ., .., ./x, ../x, /x, ~, a drive letter, file:, a backslash. */
 const LOCAL_REMOTE = /^(?:\.{1,2}(?:[\\/]|$)|[\\/~]|[A-Za-z]:|file:)|\\/i;
-const PUSH_STATE_WHY = 'a step before this push can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.';
+const PUSH_STATE_WHY = 'a step before this push, or a step that runs at the same time (a pipe, a background &), can change the branch, HEAD or the tree it sends (a checkout, a reset, a merge, a commit joined by ; or ||, a group, a pipe or another program), and this gate reads them before the command runs. Run the branch change and the push as two commands; run git push as its own command: git push <remote> <branch>. For a commit: commit first, push in a separate command: commit in one command (git add <files> then git commit -F <file>), and push in the next command (git push <remote> <branch>), after the Commit and push question.';
 const PUSH_CHECKOUT_WHY = 'the commit before this push runs in one checkout and the push in another (or the checkout of the push folder cannot be read), so the tree it sends cannot be judged. Commit and push in two commands, or push from the same folder: git commit ...; git push <remote> <branch>.';
 
 /**
