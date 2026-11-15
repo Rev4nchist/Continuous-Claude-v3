@@ -60,6 +60,24 @@ describe('CH: holdout early warning', () => {
     }
   });
 
+  it('CH4: two commits in one command, a feature branch with ids first and then a re/ branch with ids, still ask for the re/ commit; the reverse order is the control (CLI finding, seat word 13:1x)', () => {
+    // Breaks when: a warning on the first commit stops the staged scan, so a later re/ commit loses its ask.
+    const feat = mkRepo(tempDir('pfh-feat'), 'feat/x');
+    const re = mkRepo(tempDir('pfh-re'), 're/re-x');
+    const registryPath = writeRegistry(join(tempDir('reg'), 'project-registry.json'), [{ name: 'p', path: feat, e2e: { command: 'x' } }]);
+    const session = `commit-preflight-holdout-${process.pid}-${Date.now()}-${n++}`;
+    sessions.push(session);
+    const counts = (dir: string) => (dir === feat ? 2 : dir === re ? 3 : 0);
+    for (const order of [[feat, re], [re, feat]]) {
+      const payload = loadFixture('commit-no-proof', { REPO: feat, SESSION: session });
+      payload.tool_input.command = `git -C "${order[0]}" commit -m "chore: a" && git -C "${order[1]}" commit -m "chore: b"`;
+      const out = preflight(payload, { env: {}, registryPath, stagedHoldout: counts } as PreflightOptions);
+      expect(decisionOf(out), `order ${order === undefined ? '' : order.map((d) => (d === feat ? 'feat' : 're')).join(' then ')}`).toBe('ask');
+      expect(reasonOf(out)).toMatch(/on re\/re-x hold 3 holdout ids/);
+      expect((out as any)?.hookSpecificOutput?.additionalContext ?? '').toMatch(/staged lines of this commit hold 2 holdout ids/);
+    }
+  });
+
   it('CH3: a read that fails (null) or finds nothing (0) adds no ask', () => {
     // Breaks when: an unreadable index counts as a hit, or a count of 0 asks.
     for (const answer of [null, 0]) {
