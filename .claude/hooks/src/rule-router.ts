@@ -26,7 +26,7 @@
  * Fails open: any error emits "continue" and the call runs.
  */
 
-import { readFileSync, readdirSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync } from 'fs';
+import { readFileSync, readdirSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync, writeFileSync, rmSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
@@ -196,6 +196,70 @@ function blockedDir(input: HookInput): string {
   return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-blocked-${key}`);
 }
 
+/**
+ * An inject rule of this many bytes or more gets a pointer line, not its full text, after a compact re-arm. Below it
+ * the pointer saves nothing. A deny-first rule and a gate rule never get a pointer: the block reason carries them.
+ */
+export const POINTER_FLOOR_BYTES = 2000;
+
+/**
+ * The ledger of the MAIN agent: one entry per inject rule whose full text this session has had. A re-arm on `compact`
+ * keeps it (that is how a re-send becomes a pointer); a re-arm on `clear` drops it. A session with no id has none.
+ */
+function ledgerDir(input: HookInput): string | null {
+  if (!input.session_id) return null;
+  return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-shown-${input.session_id.replace(/[^A-Za-z0-9_-]/g, '_')}`);
+}
+
+/** True only when the ledger holds a readable, valid entry for this rule. Every doubt is false: the full text goes out. */
+function ledgerHas(input: HookInput, id: string): boolean {
+  const dir = ledgerDir(input);
+  if (!dir) return false;
+  try {
+    const e = JSON.parse(readFileSync(join(dir, `${id}.json`), 'utf8')) as { v?: unknown; id?: unknown };
+    return e.v === 1 && e.id === id;
+  } catch {
+    return false;
+  }
+}
+
+function ledgerWrite(input: HookInput, id: string): void {
+  const dir = ledgerDir(input);
+  if (!dir) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${id}.json`), JSON.stringify({ v: 1, id, at: new Date().toISOString() }));
+  } catch { /* no entry means the next re-arm sends the full text again */ }
+}
+
+function ledgerDrop(input: HookInput): void {
+  const dir = ledgerDir(input);
+  if (!dir) return;
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* a stale entry only risks a pointer after a clear */ }
+}
+
+/** Rule file bytes; a read error throws, and the caller treats that as a doubt (full text). */
+function ruleBytes(entry: RuleEntry, dir: string): number {
+  return entry.files.reduce((n, f) => n + Buffer.byteLength(readFileSync(join(dir, f), 'utf8').trim()), 0);
+}
+
+/** One line: rule name, full absolute path, the instruction. */
+function pointerLine(entry: RuleEntry, dir: string): string {
+  const paths = entry.files.map((f) => join(dir, f).replace(/\\/g, '/')).join(', ');
+  return `[rule-router] ${entry.id}: ${paths} -- Read this file before you act in its area.`;
+}
+
+/** The main-thread inject rules that point after a re-arm: shown before (ledger), big enough, never a gate. */
+function pointerIds(input: HookInput, toShow: RuleEntry[], dir: string): Set<string> {
+  const ids = new Set<string>();
+  if (isSubagent(input)) return ids;
+  for (const r of toShow) {
+    if (r.mode !== 'inject' || r.subagent === 'block' || !ledgerHas(input, r.id)) continue;
+    try { if (ruleBytes(r, dir) >= POINTER_FLOOR_BYTES) ids.add(r.id); } catch { /* doubt: full text */ }
+  }
+  return ids;
+}
+
 /** A call from a subagent: the payload names an agent, or the process runs inside one. */
 function isSubagent(input: HookInput): boolean {
   return !!(input.agent_id || process.env.CLAUDE_AGENT_ID);
@@ -235,11 +299,15 @@ function falseFireFooter(ids: string[]): string {
 }
 
 /** What to emit for the unseen matches. A deny-first match turns the whole emission into a deny. */
-export function decide(matched: RuleEntry[], seen: string[], dir: string): Decision {
-  const fresh = matched.filter((r) => !seen.includes(r.id));
-  if (fresh.length === 0) return { kind: 'none', ids: [], text: '' };
+export function decide(matched: RuleEntry[], seen: string[], dir: string, pointers: ReadonlySet<string> = new Set()): Decision {
+  const unseen = matched.filter((r) => !seen.includes(r.id));
+  if (unseen.length === 0) return { kind: 'none', ids: [], text: '' };
+  // A pointed rule (inject, shown before a compact) is one line. Only the rest carries text, a header and the footer.
+  const lines = unseen.filter((r) => pointers.has(r.id)).map((r) => pointerLine(r, dir));
+  const fresh = unseen.filter((r) => !pointers.has(r.id));
+  if (fresh.length === 0) return { kind: 'inject', ids: unseen.map((r) => r.id), text: lines.join('\n') };
   const ids = fresh.map((r) => r.id);
-  const body = fresh.map((r) => ruleText(r, dir)).join('\n\n') + falseFireFooter(ids);
+  const body = [...lines, ...fresh.map((r) => ruleText(r, dir))].join('\n\n') + falseFireFooter(ids);
   if (fresh.some((r) => r.mode === 'deny-first')) {
     return {
       kind: 'deny',
@@ -307,6 +375,8 @@ export function rearm(input: HookInput): number {
 
 function onSessionStart(input: HookInput): void {
   if (REARM_SOURCES.has(input.source || '')) {
+    // /clear leaves no summary at all, so every rule must come back in full: drop the ledger. /compact keeps it.
+    if (input.source === 'clear') ledgerDrop(input);
     const removed = rearm(input);
     logFire(input, { kind: 'rearm', ids: [], text: '' }, [], { source: input.source, removed });
   }
@@ -338,8 +408,10 @@ export function run(raw: string): void {
     return { ...r, mode: 'inject' };
   });
   let d: Decision;
+  let pointed = new Set<string>();
   try {
-    d = decide(toShow, [], dir);
+    pointed = pointerIds(input, toShow, dir);
+    d = decide(toShow, [], dir, pointed);
   } catch (err) {
     // A rule file could not be read: release the claims so a later call can still show the rule.
     for (const r of won) { try { unlinkSync(join(state, r.id)); } catch { /* already gone */ } }
@@ -347,7 +419,15 @@ export function run(raw: string): void {
     throw err;
   }
   if (d.kind === 'none') { outputContinue(); return; }
-  logFire(input, d, won, downgraded.length ? { downgraded } : {});
+  // The ledger records the full text of an inject rule only after it was built, so a failed read leaves no entry.
+  if (!isSubagent(input)) {
+    for (const r of toShow) if (r.mode === 'inject' && !pointed.has(r.id)) ledgerWrite(input, r.id);
+  }
+  logFire(input, d, won, {
+    ...(downgraded.length ? { downgraded } : {}),
+    ...(pointed.size ? { pointed: [...pointed] } : {}),
+    bytes: d.text.length,
+  });
   if (d.kind === 'deny') {
     logGuardDecision('rule-router', input, 'deny', `rule-block: ${d.ids.join(',')}`);
     outputDeny(d.text, 'deny');
