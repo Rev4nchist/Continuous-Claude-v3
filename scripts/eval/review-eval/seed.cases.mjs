@@ -1,13 +1,16 @@
 // Tests for seed.mjs (Gold B seeder). Every test uses synthetic data in os.tmpdir(): temp git repos, temp ledgers, temp gold files.
 // No test spawns `claude`: the Claude arm gets a fake spawnFn. No test reads config.json, gold/*.json or the real ledger.
 // The failure numbers in the titles (F1..F15) are the failure list of the lane card (the build brief).
+// Run through seed-shard-<n>.test.mjs: each shard imports this file and runs every fourth test in its own process, so node --test runs
+// the four in parallel. One process ran 145 tests in 398 s, over the 5-minute pre-pr gate. The tests set process.env, so one file
+// cannot run them at once. This file alone runs every test (no shard set).
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { after as afterAll, test } from 'node:test';
+import { after as afterAll, test as nodeTest } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TREE_EXCLUDES } from '../../github/cursor-review.mjs';
 import { defaultHeadlessLedger, HEADLESS_DAILY_CAP, HEADLESS_LEDGER } from '../../lib/headless.mjs';
@@ -15,6 +18,15 @@ import { loadGold, SEVERITIES, validateRow } from './gold.mjs';
 import { ANSWER_KEY_SEGMENTS } from './read-audit.mjs';
 import { forbiddenSet } from './rubrics/lint-ids.mjs';
 import * as seed from './seed.mjs';
+
+const SHARD = globalThis.SEED_SHARD ?? { index: 0, count: 1 };
+let caseNo = 0;
+/** node:test's test, registered only in this process's shard: case n runs in shard n % count. */
+function test(...args) {
+  const mine = caseNo % SHARD.count === SHARD.index;
+  caseNo += 1;
+  return mine ? nodeTest(...args) : undefined;
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SEED_CLI = path.join(HERE, 'seed.mjs');
