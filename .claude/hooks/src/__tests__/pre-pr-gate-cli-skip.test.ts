@@ -143,6 +143,53 @@ describe('KS: a CLI skip that Dave decided', () => {
   });
 });
 
+describe('KM: one cli-skip tap serves one create (PR 576 follow-up, item 1)', () => {
+  const REPO = 'Rev4nchist/Continuous-Claude-v3';
+  // Second creates in other spellings: each is a PR open in the eyes of GitHub and must not ride on the tap of the first.
+  const SECOND = [
+    CREATE,
+    `gh -R ${REPO} pr create --body-file ${BODY_ARG}`,
+    `gh.exe pr create --body-file ${BODY_ARG}`,
+    `gh   pr   create --body-file ${BODY_ARG}`,
+    `gh api repos/${REPO}/pulls -X POST -F body=@${BODY_ARG}`,
+    // A second create with no body flag: the body check sees only the first file, so only the count of creates can stop it.
+    'gh pr create --fill',
+    `gh -R ${REPO} pr create --fill`,
+    `gh api repos/${REPO}/pulls -X POST -f title=x -f head=feat/x -f base=main`,
+  ];
+  const JOIN = [' && ', ' ; ', ' || ', '\n'];
+  const verdict = (command: string, s: ReturnType<typeof store>): string =>
+    JSON.parse(handle(JSON.stringify({ tool_name: 'Bash', session_id: 'ks-km', tool_input: { command }, cwd: ROOT }), deps(flagStamp(), s)) || '{}').hookSpecificOutput?.permissionDecision ?? 'allow';
+
+  it('K9: two creates in one command, in any spelling and with any joiner, deny and leave the tap unused', () => {
+    // Breaks when: one tap opens two PRs in one command (same branch and head), or a denied command still uses the tap up.
+    for (const second of SECOND) {
+      for (const join of JOIN) {
+        const s = store({ [tap()]: { label: SKIP_LABEL } });
+        expect(verdict(`${CREATE}${join}${second}`, s), JSON.stringify(`${join}${second}`)).toBe('deny');
+        expect(s.used, JSON.stringify(`${join}${second}`)).toEqual([]);
+      }
+    }
+  });
+
+  it('K9b: control: one create still uses the tap up once', () => {
+    const s = store({ [tap()]: { label: SKIP_LABEL } });
+    expect(verdict(CREATE, s)).not.toBe('deny');
+    expect(s.used).toEqual([tap()]);
+  });
+
+  it('K10: the use call carries the label that was read, so a changed row is not used up by the earlier read', () => {
+    // Breaks when: decisionUse gets no label and deletes whatever row is there (item 2, the read and use race).
+    const s = store({ [tap()]: { label: SKIP_LABEL } });
+    const d = deps(flagStamp(), s);
+    const seen: Array<string | undefined> = [];
+    const inner = d.decisionUse as (t: unknown) => { ok: boolean };
+    (d as { decisionUse: unknown }).decisionUse = (t: { label?: string }) => { seen.push(t.label); return inner(t); };
+    handle(JSON.stringify({ tool_name: 'Bash', session_id: 'ks-k10', tool_input: { command: CREATE }, cwd: ROOT }), d);
+    expect(seen).toEqual([SKIP_LABEL]);
+  });
+});
+
 describe('KR: the tap is used up through the REAL store (CodeRabbit nitpick, PR 576)', () => {
   it('K8: with the real store, one tap allows one create, the second is denied, and another label never allows', async () => {
     // Breaks when: the real store changes its consumption behaviour (K7 uses a small fake that copies it).
@@ -160,13 +207,41 @@ describe('KR: the tap is used up through the REAL store (CodeRabbit nitpick, PR 
         expect(real.decisionRecord({ step: 'cli-skip', key: KEY, head: HEAD, label })).toEqual({ ok: true });
       };
       const realDeps = (): Deps => ({ ...deps(flagStamp()), decisionRead: real.decisionRead, decisionUse: real.decisionUse } as Deps);
-      const raw = JSON.stringify({ tool_name: 'Bash', tool_input: { command: CREATE }, cwd: ROOT });
+      const raw = JSON.stringify({ tool_name: 'Bash', session_id: 'ks-k8-session', tool_input: { command: CREATE }, cwd: ROOT });
       const verdictOf = (): string => JSON.parse(handle(raw, realDeps()) || '{}').hookSpecificOutput?.permissionDecision ?? 'allow';
       record('Keep the CLI review');
       expect(verdictOf()).toBe('deny');
       record(SKIP_LABEL);
       expect(verdictOf()).toBe('allow');
       expect(verdictOf()).toBe('deny');
+    } finally {
+      if (saved === undefined) delete process.env.CCV3_DECISIONS_FILE; else process.env.CCV3_DECISIONS_FILE = saved;
+      rmSync(file, { force: true });
+    }
+  });
+
+  it('K11: with the real store, a use call with a label that differs from the stored row keeps the row; the same label uses it up', async () => {
+    // Breaks when: the store door ignores the label argument (item 2: a tap with another label, recorded between the read and the use, would be used up).
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const real = await import('../shared/decisions-store.js');
+    const file = join(mkdtempSync(join(tmpdir(), 'cli-skip-label-')), 'decisions.json');
+    const saved = process.env.CCV3_DECISIONS_FILE;
+    process.env.CCV3_DECISIONS_FILE = file;
+    try {
+      const spec = { header: 'CLI skip', question: 'Q?', options: [{ label: SKIP_LABEL }, { label: 'Keep the CLI review' }] };
+      const record = (label: string) => {
+        expect(real.offerWrite({ step: 'cli-skip', key: KEY, head: HEAD, spec }).ok).toBe(true);
+        expect(real.decisionRecord({ step: 'cli-skip', key: KEY, head: HEAD, label })).toEqual({ ok: true });
+      };
+      const t = { step: 'cli-skip' as const, key: KEY, head: HEAD };
+      record('Keep the CLI review');
+      expect(real.decisionUse({ ...t, label: SKIP_LABEL })).toEqual({ ok: false, reason: 'label-changed' });
+      expect(real.decisionRead(t)?.label).toBe('Keep the CLI review');
+      record(SKIP_LABEL);
+      expect(real.decisionUse({ ...t, label: SKIP_LABEL })).toEqual({ ok: true });
+      expect(real.decisionUse(t)).toEqual({ ok: false, reason: 'no-decision' });
     } finally {
       if (saved === undefined) delete process.env.CCV3_DECISIONS_FILE; else process.env.CCV3_DECISIONS_FILE = saved;
       rmSync(file, { force: true });
