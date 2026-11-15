@@ -457,7 +457,7 @@ function withLock(file, { lockWaitMs = 5e3, lockStaleMs = 3e4 } = {}, fn) {
 
 // ../../scripts/github/lib/decisions.mjs
 var DECISIONS_ENV = "CCV3_DECISIONS_FILE";
-var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round"]);
+var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round", "cli-skip"]);
 var MAX_REASKS = 2;
 var MAX_AGE_MS = 7 * 24 * 3600 * 1e3;
 var MISS_TTL_MS = 60 * 60 * 1e3;
@@ -584,7 +584,8 @@ var engineOwned = (o) => o.step === "review" || o.step === "paid-round" && o.key
 var prOf = (o) => /#(\d+)/.exec(o.key)?.[1] ?? "";
 var STOP_TAIL = {
   review: "The PR stays a draft.",
-  "paid-round": "Nothing paid runs."
+  "paid-round": "Nothing paid runs.",
+  "cli-skip": "The CLI review skip stays refused."
 };
 function missText(o) {
   const triple = { step: o.step, key: o.key, head: o.head };

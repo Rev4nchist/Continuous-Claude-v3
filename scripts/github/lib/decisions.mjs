@@ -18,7 +18,7 @@ import { withLock } from './file-lock.mjs';
 
 /** The env var that moves the store (tests). */
 export const DECISIONS_ENV = 'CCV3_DECISIONS_FILE';
-export const STEPS = Object.freeze(['ship', 'open-pr', 'review', 'land', 'paid-round']);
+export const STEPS = Object.freeze(['ship', 'open-pr', 'review', 'land', 'paid-round', 'cli-skip']);
 /** Dave may be asked again this many times after a miss. Miss 1 and 2 re-ask; miss 3 stops (missBump returns 3). */
 export const MAX_REASKS = 2;
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
