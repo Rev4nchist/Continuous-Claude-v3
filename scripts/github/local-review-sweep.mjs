@@ -62,7 +62,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { computeVersions as realComputeVersions } from '../eval/review-eval/engine-version.mjs';
+import { computeVersions as realComputeVersions, listsAt } from '../eval/review-eval/engine-version.mjs';
 import { auditReplay, defaultStatePath, newestByRunId, readLines } from '../eval/review-eval/read-audit.mjs';
 import { DEFAULT_REPO, countRuns, readLedger } from './cursor-review.mjs';
 import { LOCAL_REVIEW_DEFAULTS } from './local-review.mjs';
@@ -368,8 +368,16 @@ function blobOf(file) {
   return createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
 }
 
+/**
+ * The versions at a SHA by the file lists of THAT SHA (listsAt), never of this checkout: a pinned copy predates list entries that main
+ * added later (PR 567), and main's lists would refuse the copy and give a null engineVersion, which turns a counted run into rehearsal.
+ */
+export function sweepVersions({ sha, root, git }) {
+  return realComputeVersions({ sha, root, git, lists: listsAt({ sha, git }) });
+}
+
 /** The files the copy must hold with their blob at the SHA: the reviewer set and the band set (computeVersions) and the config file. */
-function wantedBlobs({ sha, git, root, computeVersions }) {
+function wantedBlobs({ sha, git, root, computeVersions = sweepVersions }) {
   const v = computeVersions({ sha, root, git });
   const cfg = String(git(['rev-parse', '--verify', '--quiet', `${sha}:${CONFIG_FILE}`]).stdout ?? '').trim();
   if (!SHA40.test(cfg)) throw new Error(`no ${CONFIG_FILE} at ${sha}`);
@@ -962,7 +970,7 @@ function makeCtx(args, deps) {
     args, env, root, records, repo: DEFAULT_REPO, git: deps.git ?? defaultGit(root), gh: deps.gh ?? defaultGh(), now: deps.now ?? Date.now,
     cursorLedger: deps.cursorLedger ?? env.CURSOR_REVIEW_LEDGER ?? path.join(path.dirname(records), 'cursor-review-ledger.jsonl'),
     tmpRoot: deps.tmpRoot ?? os.tmpdir(), auditStatePath: deps.auditStatePath ?? defaultStatePath(env), importEngine: deps.importEngine ?? ((u) => import(u)),
-    laneState: deps.laneState ?? null, computeVersions: deps.computeVersions ?? realComputeVersions, audit: deps.audit ?? auditReplay,
+    laneState: deps.laneState ?? null, computeVersions: deps.computeVersions ?? sweepVersions, audit: deps.audit ?? auditReplay,
     log: deps.log ?? ((s) => process.stderr.write(`${s}\n`)), out: deps.out ?? ((s) => process.stdout.write(`${s}\n`)),
     runAgent: deps.runAgent, agent: deps.agent, engineDeps: deps.engineDeps ?? {}, versions: new Map(), planBands: new Map(), runsStarted: 0, failed: false,
     readLedgerText: deps.readLedgerText ?? ((f) => readFileSync(f, 'utf8')), appendFile: deps.appendFile ?? appendFileSync,

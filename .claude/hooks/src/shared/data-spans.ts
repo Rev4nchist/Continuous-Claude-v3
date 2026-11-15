@@ -77,22 +77,52 @@ function segmentsOf(masked: string): Segment[] {
   return out;
 }
 
+/** Backtick escapes that PowerShell reads as plain characters in a double-quoted string: `n `r `t `` `" `' `0. */
+const PWSH_PLAIN_ESCAPE = /^`[nrt`"'0]$/;
+
+/**
+ * The text with each listed escape turned into two spaces (same length), when EVERY backtick of the text is a listed escape
+ * inside a double-quoted string, as the PowerShell reading pairs the strings. Any other backtick (an unlisted escape,
+ * one outside a double-quoted string, one in a single-quoted string) returns the text as it is, and the RUNS_TEXT sign
+ * then keeps the whole command. Seat ruling 2026-11-15: an allow list, not a lexer.
+ */
+function plainPwshEscapes(text: string): string {
+  if (!text.includes('`')) return text;
+  const inDouble = quotedSpans(text, 'PowerShell').filter(([s]) => text[s] === '"');
+  const chars = text.split('');
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '`') continue;
+    // Both characters of the pair must lie between the opening and the closing quote of one double-quoted string.
+    const inside = inDouble.some(([s, e]) => i >= s + 1 && i + 1 <= e - 2);
+    if (!inside || !PWSH_PLAIN_ESCAPE.test(text.slice(i, i + 2))) return text;
+    chars[i] = ' ';
+    chars[i + 1] = ' ';
+    i++;
+  }
+  return chars.join('');
+}
+
 /**
  * The command with the inside of each data string replaced by spaces, or the command unchanged when it is not plain
  * (rule 1). Same length, so an offset in the result is an offset in the command. The quote marks stay.
+ * `pwsh` is true for the PowerShell tool only: listed backtick escapes inside a double-quoted string are plain text there.
  */
-export function blankDataStrings(text: string, keep: KeepSpan): string {
-  if (RUNS_TEXT.test(text) || SPECIAL.test(text)) return text;
+export function blankDataStrings(text: string, keep: KeepSpan, pwsh = false): string {
+  const original = text;
+  // Card coord-file-guard-named-file: for the PowerShell tool only, a short list of backtick escapes inside a
+  // double-quoted string is plain text. Anything else with a backtick keeps the text whole (the check below).
+  if (pwsh) text = plainPwshEscapes(text);
+  if (RUNS_TEXT.test(text) || SPECIAL.test(text)) return original;
   const spans = sharedSpans(text);
-  if (!spans || spans.length === 0) return text;
+  if (!spans || spans.length === 0) return original;
   const masked = maskSpans(text, spans);
-  if (OUTSIDE_RISK.test(masked)) return text;
+  if (OUTSIDE_RISK.test(masked)) return original;
   const segs = segmentsOf(masked);
   // Every segment must be a data head or a plain head. One other segment (Set-Alias echo iex, a function name, a
   // wrapper, a variable) could redefine a data word or run what an earlier segment stored, so no string is blanked.
   const headOf = (seg: Segment, re: RegExp): boolean =>
     re.test(masked.slice(seg.from, seg.end)) && re.test(text.slice(seg.from, seg.end));
-  if (!segs.every((seg) => headOf(seg, DATA_HEAD) || headOf(seg, PLAIN_HEAD))) return text;
+  if (!segs.every((seg) => headOf(seg, DATA_HEAD) || headOf(seg, PLAIN_HEAD))) return original;
   let out = text;
   for (const seg of segs) {
     if (seg.piped || !headOf(seg, DATA_HEAD)) continue;
