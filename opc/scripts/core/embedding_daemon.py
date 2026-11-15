@@ -252,28 +252,37 @@ MODEL_LOAD_WAIT_S = 600.0
 # interpreter exit BEFORE atexit runs, so one hung encode kept the process, its commit and the
 # startup lock alive forever with no discovery file (found 2026-11-14). A daemon thread is
 # never joined, and atexit still releases the startup lock.
-_ENCODE_QUEUE: queue.SimpleQueue[tuple[_cf.Future[Any], Any]] = queue.SimpleQueue()
+# Each queue entry is (future, job). The job is a one-item list that holds the callable, so a
+# cancel can empty it: a cancelled job then keeps no request text in the queue while the worker
+# is busy with another encode.
+_ENCODE_QUEUE: queue.SimpleQueue[tuple[_cf.Future[Any], list[Any]]] = queue.SimpleQueue()
 _ENCODE_THREAD: threading.Thread | None = None
 _ENCODE_THREAD_LOCK = threading.Lock()
 
 
 def _encode_worker() -> None:
-    """Run queued encode jobs one by one, forever. Skip a cancelled job (its caller gave up)."""
+    """Run queued encode jobs one by one, forever."""
     while True:
-        fut, fn = _ENCODE_QUEUE.get()
-        if not fut.set_running_or_notify_cancel():
-            continue
-        try:
-            with _EMBED_CALL_LOCK:
-                result = fn()
-        except BaseException as exc:  # noqa: BLE001 — hand every error to the caller, keep the thread
-            fut.set_exception(exc)
-        else:
-            fut.set_result(result)
+        _run_encode_job(*_ENCODE_QUEUE.get())
 
 
-def _submit_encode(fn: Any) -> _cf.Future[Any]:
-    """Queue ``fn()`` for the one encode thread (started on first use) and return its future."""
+def _run_encode_job(fut: _cf.Future[Any], job: list[Any]) -> None:
+    """Run one job, unless it was cancelled (its caller gave up). Its locals end with this call."""
+    # A cancel can win only before this point; once running, the job is never emptied.
+    if not fut.set_running_or_notify_cancel():
+        return
+    fn = job.pop()
+    try:
+        with _EMBED_CALL_LOCK:
+            result = fn()
+    except BaseException as exc:  # noqa: BLE001 — hand every error to the caller, keep the thread
+        fut.set_exception(exc)
+    else:
+        fut.set_result(result)
+
+
+def _submit_encode(fn: Any) -> tuple[_cf.Future[Any], list[Any]]:
+    """Queue ``fn()`` for the one encode thread (started on first use). Returns (future, job)."""
     global _ENCODE_THREAD
     with _ENCODE_THREAD_LOCK:
         if _ENCODE_THREAD is None or not _ENCODE_THREAD.is_alive():
@@ -282,21 +291,24 @@ def _submit_encode(fn: Any) -> _cf.Future[Any]:
             )
             _ENCODE_THREAD.start()
     fut: _cf.Future[Any] = _cf.Future()
-    _ENCODE_QUEUE.put((fut, fn))
-    return fut
+    job: list[Any] = [fn]
+    _ENCODE_QUEUE.put((fut, job))
+    return fut, job
 
 
 def _on_encode_thread(fn: Any, *args: Any, timeout: float = ENCODE_WAIT_S) -> Any:
     """Run ``fn(*args)`` on the encode thread under _EMBED_CALL_LOCK and return its result.
 
     Raises fn's own exception, or concurrent.futures.TimeoutError after ``timeout`` seconds. On a
-    timeout a job that has not started is cancelled, so it never runs for a caller that has left.
+    timeout a job that has not started is cancelled and emptied, so it never runs for a caller
+    that has left and keeps no request data in the queue.
     """
-    fut = _submit_encode(lambda: fn(*args))
+    fut, job = _submit_encode(lambda: fn(*args))
     try:
         return fut.result(timeout=timeout)
     except _cf.TimeoutError:
-        fut.cancel()
+        if fut.cancel():
+            job.clear()
         raise _cf.TimeoutError(f"encode_timeout after {timeout:g} s") from None
 
 

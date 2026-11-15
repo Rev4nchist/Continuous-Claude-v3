@@ -1292,8 +1292,9 @@ describe('G16 the push flag and the other flag act alone', () => {
     expect(d.action === 'deny' && d.reason).toContain('PR #12');
     expect(decide(bash(`${PUSHC} && ${LANDC}`), deps({ enforce: false, enforcePush: true })).action).toBe('allow');
   });
-  it('subagent: a push follows enforcePush, a create follows enforce', () => {
-    expect(decide(bash(PUSHC, { agent_id: 'a1' }), deps({ enforce: true, ...ABSENT })).action).toBe('allow');
+  it('subagent: a push is a hard deny (card prflow-push-blocks), a create follows enforce', () => {
+    // A subagent push to the fork denies whatever enforcePush says (it used to warn while the flag was absent).
+    expect(decide(bash(PUSHC, { agent_id: 'a1' }), deps({ enforce: true, ...ABSENT })).action).toBe('deny');
     expect(decide(bash(PUSHC, { agent_id: 'a1' }), deps({ enforce: false, enforcePush: true })).action).toBe('deny');
     expect(decide(bash(CREATE, { agent_id: 'a1' }), deps({ enforce: true, ...ABSENT })).action).toBe('deny');
     expect(decide(bash(CREATE, { agent_id: 'a1' }), deps({ enforce: false, enforcePush: true })).action).toBe('allow');

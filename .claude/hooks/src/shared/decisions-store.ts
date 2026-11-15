@@ -9,7 +9,7 @@ import { readFileSync } from 'fs';
 // @ts-ignore TS7016: decisions.mjs has no declaration file.
 import * as store from '../../../../scripts/github/lib/decisions.mjs';
 
-export type Step = 'ship' | 'open-pr' | 'review' | 'land' | 'paid-round';
+export type Step = 'ship' | 'open-pr' | 'review' | 'land' | 'paid-round' | 'cli-skip';
 export interface Triple { step: Step; key: string; head: string }
 export interface Offer extends Triple {
   nonce: string;
@@ -23,6 +23,8 @@ export const offerList: () => Offer[] = store.offerList;
 export const offerWrite: (a: Triple & { spec: object; tree?: string | null; cwd?: string }) => { ok: true; nonce: string } | { ok: false; reason: string } = store.offerWrite;
 export const decisionRead:(t: Triple) => { label: string; at: string } | null = store.decisionRead;
 export const decisionRecord: (t: Triple & { label: string }) => { ok: true } | { ok: false; reason: string } = store.decisionRecord;
+/** Uses the decision up (single use). Call it only after the action it allows is decided. */
+export const decisionUse: (t: Triple) => { ok: true } | { ok: false; reason: string } = store.decisionUse;
 export const missCount: (t: Triple) => number = store.missCount;
 export const missBump: (t: Triple) => number = store.missBump;
 export const decisionKey: (a: { repo?: string; pr?: number | string; branch?: string }) => string = store.decisionKey;

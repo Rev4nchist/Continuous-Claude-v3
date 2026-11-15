@@ -67,6 +67,7 @@ const prOf = (o: Offer): string => /#(\d+)/.exec(o.key)?.[1] ?? '';
 const STOP_TAIL: Record<string, string> = {
   review: 'The PR stays a draft.',
   'paid-round': 'Nothing paid runs.',
+  'cli-skip': 'The CLI review skip stays refused.',
 };
 
 function missText(o: Offer): string {
