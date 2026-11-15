@@ -1189,12 +1189,12 @@ describe('G17 a working folder (cwd) that does not exist', () => {
     expect(o.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(textOf(o)).toContain(missing());
   });
-  it('warn mode: the command runs, with a warning that names the cwd', () => {
+  it('enforcePush absent (round 3 item 18): a push from a missing cwd is a hard deny, and the reason names the cwd', () => {
+    // Round 3 item 18 (Dave: "Land now, fix first in round 3"): a throw in a command that holds a push never ends in a warning.
     const o = run(bash(PUSH, { cwd: missing() }), { enforcePush: undefined });
-    expect(o.hookSpecificOutput.permissionDecision).toBeUndefined();
+    expect(o.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(textOf(o), 'names the cwd').toContain(missing());
     expect(textOf(o), 'no ENOENT').not.toMatch(/ENOENT/);
-    expect(textOf(o)).toContain('decisions.enforcePush');
   });
   it('a cd target that is missing is named, not the payload cwd', () => {
     const target = missing();
@@ -1300,16 +1300,16 @@ describe('G16 the push flag and the other flag act alone', () => {
     expect(decide(bash(CREATE, { agent_id: 'a1' }), deps({ enforce: false, enforcePush: true })).action).toBe('allow');
     expect(decide(bash(`${PUSHC} && ${LANDC}`, { agent_id: 'a1' }), deps({ enforce: true, ...ABSENT })).action).toBe('deny');
   });
-  it('catch path: a push that cannot be judged follows enforcePush, any other shape follows enforce', () => {
+  it('catch path: a push that cannot be judged is a hard deny (round 3 item 18), any other shape follows enforce', () => {
     const permission = (input: object, w: World) => out(input, { ...w, gitFails: true }).hookSpecificOutput?.permissionDecision;
-    expect(permission(bash(PUSHC), { enforce: true, ...ABSENT })).toBeUndefined();
-    expect(out(bash(PUSHC), { enforce: true, gitFails: true, ...ABSENT }).hookSpecificOutput?.additionalContext).toContain('could not verify');
+    expect(permission(bash(PUSHC), { enforce: true, ...ABSENT })).toBe('deny');
+    expect(permission(bash(PUSHC), { enforce: false, enforcePush: false })).toBe('deny');
     expect(permission(bash(PUSHC), { enforce: false, enforcePush: true })).toBe('deny');
     expect(permission(bash(CREATE), { enforce: true, enforcePush: false })).toBe('deny');
     expect(permission(bash(CREATE), { enforce: false, enforcePush: true })).toBeUndefined();
     expect(permission(bash(`${PUSHC} && ${CREATE}`), { enforce: true, ...ABSENT })).toBe('deny');
     expect(permission(bash(`${PUSHC} && ${CREATE}`), { enforce: false, enforcePush: true })).toBe('deny');
-    expect(permission(bash(`${PUSHC} && ${CREATE}`), { enforce: false, enforcePush: false })).toBeUndefined();
+    expect(permission(bash(`${PUSHC} && ${CREATE}`), { enforce: false, enforcePush: false })).toBe('deny');
   });
   it('handle(): a push warn is logged as warn, a push deny as deny', () => {
     expect(out(bash(PUSHC), { enforce: true, ...ABSENT }).hookSpecificOutput?.permissionDecision).toBeUndefined();

@@ -2693,13 +2693,14 @@ function movesRepo(text: string): boolean {
 }
 
 /** Every deny of a command. All shapes are judged (no early return), so each deny keeps its scope and decide() applies the flag of that scope. */
-function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>): Deny[] {
+// Item 18 (round 3): `denies` is the caller's sink. Each deny goes in as it is found, so a later throw does not lose it (handle() reads it).
+function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: Deny[] = []): Deny[] {
   const cmd = readCommand(input);
-  if (cmd.kind !== 'command' || cmd.text === '') return [];
+  if (cmd.kind !== 'command' || cmd.text === '') return denies;
   const cwd = input.cwd || process.cwd();
   // Reviewer-2 item 4: the store write denies first, and the shapes are judged on (a force push beside it is not lost). The raw text:
   // a heredoc body is how a store write is spelled.
-  const denies: Deny[] = storeWriteCall(input, deps) ? [deny('store-write', STORE_WHY)] : [];
+  if (storeWriteCall(input, deps)) denies.push(deny('store-write', STORE_WHY));
   const shapes = shapesOf(cmd.text, cmd.tool);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);
@@ -2776,11 +2777,11 @@ function judgeWrite(input: HookInput, deps: Deps): Deny[] {
   return hit ? [deny('store-write', STORE_WHY)] : [];
 }
 
-/** The raw judgment, as if enforcing: every deny, each with its scope. May throw (git). */
-function judge(input: HookInput, deps: Deps, notes: Set<string>): Deny[] {
+/** The raw judgment, as if enforcing: every deny, each with its scope, put in `sink` as found. May throw (git): `sink` keeps what came before. */
+function judge(input: HookInput, deps: Deps, notes: Set<string>, sink: Deny[]): Deny[] {
   const tool = input.tool_name || input.tool || '';
-  if (WRITE_TOOLS.has(tool)) return judgeWrite(input, deps);
-  return COMMAND_TOOLS.has(tool) ? judgeCommand(input, deps, notes) : [];
+  if (WRITE_TOOLS.has(tool)) { sink.push(...judgeWrite(input, deps)); return sink; }
+  return COMMAND_TOOLS.has(tool) ? judgeCommand(input, deps, notes, sink) : sink;
 }
 
 /**
@@ -2789,11 +2790,11 @@ function judge(input: HookInput, deps: Deps, notes: Set<string>): Deny[] {
  * (hardAppDeny, Dave 11-13). Other denies become an allow with `warn`. With no deny, a missing registry named by LANE_REGISTRY_PATH,
  * seen in a folder outside CCv3, is an allow with `notice` (S5; a corrupt one is the registry-corrupt deny: seat review 1, item 4).
  */
-export function decide(input: HookInput, deps: Deps): Decision {
+export function decide(input: HookInput, deps: Deps, found: Deny[] = []): Decision {
   const notes = new Set<string>();
   const call = perCall(deps);
   CWDS.set(call, input.cwd || process.cwd());
-  const denies = judge(input, call, notes);
+  const denies = judge(input, call, notes, found);
   const notice = notes.size === 0 ? {} : { notice: [...notes][0] };
   if (denies.length === 0) return notes.size === 0 ? ALLOW : { action: 'allow', ...notice };
   const cwd = input.cwd || process.cwd();
@@ -2903,8 +2904,9 @@ export function handle(raw: string, deps: Deps): string {
   } catch {
     return unreadableInput();
   }
+  const found: Deny[] = [];
   try {
-    const d = decide(input, deps);
+    const d = decide(input, deps, found);
     // S5, item 7: the registry line rides on the warn or the deny text of the same call, as its last line; else it is the whole output.
     const tail = d.notice ? `\n${corruptLine(d.notice)}` : '';
     let shown = '{}';
@@ -2920,7 +2922,7 @@ export function handle(raw: string, deps: Deps): string {
     if (d.notice) logGuardDecision(HOOK, input, 'warn', `registry-missing ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
     return shown;
   } catch (err) {
-    return unjudgeable(input, deps, err);
+    return unjudgeable(input, deps, err, found);
   }
 }
 
@@ -2929,7 +2931,8 @@ export function handle(raw: string, deps: Deps): string {
  * A missing cwd (MissingCwdError) is a condition of the call, not a crash of the hook: it is logged as a deny or warn row
  * (reason cwd-missing), so it does not show as an error row in the harness doctor. Any other throw stays an error row.
  */
-function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
+function unjudgeable(input: HookInput, deps: Deps, thrown: unknown, found: Deny[] = []): string {
+  const cwd = input.cwd || process.cwd();
   // A throw in a covered folder after the path test carries scope app-push (AppScopeError); the cause inside it is judged as before.
   // Item 4: a throw before that (git remote -v of isCcv3Checkout) gets app-push too when a push runs in a folder under a live registry
   // root by the path test (no git), so the D2 a block holds. A folder under the continuous-claude root keeps its old scope.
@@ -2940,6 +2943,15 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
   const err = thrown instanceof AppScopeError ? thrown.inner : thrown;
   const gone = err instanceof MissingCwdError;
   if (!gone) { try { logGuardError(HOOK, err); } catch { /* the log never blocks */ } }
+  // Item 18 (round 3, Dave: "Land now, fix first in round 3"): a deny judged before the throw is not lost, and a push the throw kept from
+  // being judged still gets its git-free intent check (an origin push AFTER the throwing member). The first deny that decide() would return
+  // wins (a hard deny, or one whose flag is on). After the error log: a git crash behind a deny is still an error row for the doctor.
+  const prior = found.find((d) => { try { return hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags); } catch { return d.hard === true; } })
+    ?? catchIntentDeny(input);
+  if (prior) {
+    try { logGuardDecision(HOOK, input, 'deny', prior.pattern); } catch { /* the log never blocks */ }
+    return denyOut(prior.reason);
+  }
   const scopes = gatedScopesSafe(input, appPush);
   // Reviewer-2 item 4: a store write no longer returns before the shapes, so a throw there must not drop its scope.
   if (storeWriteCall(input, deps)) scopes.add('other');
@@ -2948,15 +2960,37 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown): string {
   const detail = app ? prose(raw) : raw;
   const hint = gone ? 'Run the command from a folder that exists.' : 'Run the command again. If it keeps failing, ask Dave.';
   const why = `could not verify Dave's tap (${detail}). ${hint}`;
-  const cwd = input.cwd || process.cwd();
   // Each gated scope is judged by its own flag. A mixed command denies when either flag is on. Dave 11-13: in a covered folder a call
   // that holds a hard deny (hardAppCall, no git) denies whatever decisions.enforceAppPush says.
-  const live = (app && hardAppCall(input)) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
+  // Item 18: a command that holds a push and threw outside a covered folder is a hard deny: the set git sends cannot be proven. In a covered
+  // folder the line below is unchanged (Dave 11-13: enforceAppPush false softens the tap path only; hardAppCall keeps the hard kinds).
+  // Seat 2026-11-14 20:00 (Dave's D1: the gate acts in live registered projects): a push whose folders are all resolved and all outside every
+  // registry root (CCv3 included) keeps the old result. A missing cwd, a CCv3 root, or a folder the path test cannot place denies.
+  const holdsPush = !app && scopes.has('push') && (gone || !pushFoldersUnregistered(input, deps));
+  const live = holdsPush || (app && hardAppCall(input)) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? 'deny' : 'warn', 'cwd-missing');
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has('other') ? 'other' : scopes.has('app-push') ? 'app-push' : 'push');
 }
 
 const gatedScopesSafe = (input: HookInput, app = false): Set<Scope> => { try { return gatedScopes(input, app); } catch { return new Set(); } };
+
+/**
+ * Item 18, the catch: the git-free intent of every push shape of the call (intentDeny: a subagent push, a literal origin or parcadei
+ * remote, a force or unsafe form, a ref outside heads, --repo). A throw in one chain member can stop the judging before a later push is
+ * read, so this reads them all from the text alone. Returns the first hard deny, else null. A reader throw returns null (gatedScopes and
+ * hardAppCall decide then, as before).
+ */
+function catchIntentDeny(input: HookInput): Deny | null {
+  const shapes = catchShapes(input);
+  if (shapes === null) return null;
+  const none = deny('none', '', 'push');
+  for (const s of shapes) {
+    if (s.kind !== 'push' || s.push === undefined) continue;
+    const d = intentDeny(s.push, Boolean(input.agent_id), none);
+    if (d.hard === true) return d;
+  }
+  return null;
+}
 
 /**
  * Dave 11-13 ("Hard denies always deny"), the catch: a git throw in a covered folder leaves no deny to read, so the hard kinds the text
@@ -3007,6 +3041,38 @@ function pushUnderLiveRoot(input: HookInput, deps: Deps): boolean {
     const paths = knownDirs((pushes ?? []).flatMap((s) => [cwd, ...pushDirsOf(s.push!, cwd, shell), ...chainDirsOf(s.push!, cwd, shell)]).concat(cwd), deps.home);
     const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
     return dirs.some((d) => underLiveRoot(d, reg, scope, { outsideCcv3: true }));
+  } catch {
+    return false;
+  }
+}
+
+/** The registry key of the CCv3 entry (tap-scope.ts CCV3_ENTRY, not exported there; that file is outside this card). */
+const CCV3_ENTRY_KEY = 'continuous-claude';
+
+/**
+ * Item 18, seat ruling 2026-11-14 20:00: true only when the push folders of the call (the cwd, its cd path, its -C chain, the move targets)
+ * are all known by the path test and none is under a registry root: not the CCv3 root, not a live entry. Files only, no git. False (so the
+ * catch denies) when there is no registry, a reader throw, a folder that is not absolute or holds a variable, or any CCv3 or live root.
+ */
+function pushFoldersUnregistered(input: HookInput, deps: Deps): boolean {
+  try {
+    const scope = deps.tapScope;
+    const cmd = readCommand(input);
+    if (!scope || cmd.kind !== 'command') return false;
+    const pushes = catchShapes(input)?.filter((s) => s.kind === 'push');
+    if (!pushes || pushes.length === 0) return false;
+    const reg = scope.registry();
+    if (reg.state !== 'ok') return false;
+    const cwd = input.cwd || process.cwd();
+    const shell = shellOf(input);
+    const raw = pushes.flatMap((s) => [cwd, ...pushDirsOf(s.push!, cwd, shell), ...chainDirsOf(s.push!, cwd, shell)]).concat(cwd);
+    if (raw.some((d) => isUnexpanded(d))) return false;
+    const paths = knownDirs(raw, deps.home);
+    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
+    if (dirs.length === 0 || dirs.some((d) => !isAbsolute(d) || isUnexpanded(d))) return false;
+    // The CCv3 root as a live entry, so the public path test finds it (underLiveRoot never counts the CCv3 key as live).
+    const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: 'active', tapGate: null })) };
+    return !dirs.some((d) => underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope));
   } catch {
     return false;
   }

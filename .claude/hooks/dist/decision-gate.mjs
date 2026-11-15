@@ -2881,11 +2881,11 @@ var MOVED_WHY = "GIT_DIR, GIT_WORK_TREE or an alias for cd moves git or the shel
 function movesRepo(text) {
   return MOVE_ENV_RAW.test(text) || ["Bash", "PowerShell"].some((tool) => MOVE_ENV_MASKED.test(maskQuoted(text, tool))) || CD_ALIAS.test(squashQuotes(text));
 }
-function judgeCommand(input, deps, notes) {
+function judgeCommand(input, deps, notes, denies = []) {
   const cmd = readCommand(input);
-  if (cmd.kind !== "command" || cmd.text === "") return [];
+  if (cmd.kind !== "command" || cmd.text === "") return denies;
   const cwd = input.cwd || process.cwd();
-  const denies = storeWriteCall(input, deps) ? [deny("store-write", STORE_WHY)] : [];
+  if (storeWriteCall(input, deps)) denies.push(deny("store-write", STORE_WHY));
   const shapes = shapesOf(cmd.text, cmd.tool);
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));
@@ -2943,16 +2943,19 @@ function judgeWrite(input, deps) {
   const hit = PATH_FIELDS.some((f) => typeof args[f] === "string" && isStorePath(args[f], deps, cwd));
   return hit ? [deny("store-write", STORE_WHY)] : [];
 }
-function judge(input, deps, notes) {
+function judge(input, deps, notes, sink) {
   const tool = input.tool_name || input.tool || "";
-  if (WRITE_TOOLS.has(tool)) return judgeWrite(input, deps);
-  return COMMAND_TOOLS2.has(tool) ? judgeCommand(input, deps, notes) : [];
+  if (WRITE_TOOLS.has(tool)) {
+    sink.push(...judgeWrite(input, deps));
+    return sink;
+  }
+  return COMMAND_TOOLS2.has(tool) ? judgeCommand(input, deps, notes, sink) : sink;
 }
-function decide(input, deps) {
+function decide(input, deps, found = []) {
   const notes = /* @__PURE__ */ new Set();
   const call = perCall(deps);
   CWDS.set(call, input.cwd || process.cwd());
-  const denies = judge(input, call, notes);
+  const denies = judge(input, call, notes, found);
   const notice = notes.size === 0 ? {} : { notice: [...notes][0] };
   if (denies.length === 0) return notes.size === 0 ? ALLOW : { action: "allow", ...notice };
   const cwd = input.cwd || process.cwd();
@@ -3031,8 +3034,9 @@ function handle(raw, deps) {
   } catch {
     return unreadableInput();
   }
+  const found = [];
   try {
-    const d = decide(input, deps);
+    const d = decide(input, deps, found);
     const tail = d.notice ? `
 ${corruptLine(d.notice)}` : "";
     let shown = "{}";
@@ -3048,10 +3052,11 @@ ${corruptLine(d.notice)}` : "";
     if (d.notice) logGuardDecision(HOOK, input, "warn", `registry-missing ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
     return shown;
   } catch (err) {
-    return unjudgeable(input, deps, err);
+    return unjudgeable(input, deps, err, found);
   }
 }
-function unjudgeable(input, deps, thrown) {
+function unjudgeable(input, deps, thrown, found = []) {
+  const cwd = input.cwd || process.cwd();
   const underRoot = pushUnderLiveRoot(input, deps);
   const app = thrown instanceof AppScopeError || underRoot;
   const appPush = thrown instanceof AppScopeError && thrown.push || underRoot;
@@ -3063,6 +3068,20 @@ function unjudgeable(input, deps, thrown) {
     } catch {
     }
   }
+  const prior = found.find((d) => {
+    try {
+      return hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags);
+    } catch {
+      return d.hard === true;
+    }
+  }) ?? catchIntentDeny(input);
+  if (prior) {
+    try {
+      logGuardDecision(HOOK, input, "deny", prior.pattern);
+    } catch {
+    }
+    return denyOut(prior.reason);
+  }
   const scopes = gatedScopesSafe(input, appPush);
   if (storeWriteCall(input, deps)) scopes.add("other");
   if (scopes.size === 0) return "{}";
@@ -3070,8 +3089,8 @@ function unjudgeable(input, deps, thrown) {
   const detail = app ? prose(raw) : raw;
   const hint = gone ? "Run the command from a folder that exists." : "Run the command again. If it keeps failing, ask Dave.";
   const why = `could not verify Dave's tap (${detail}). ${hint}`;
-  const cwd = input.cwd || process.cwd();
-  const live = app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
+  const holdsPush = !app && scopes.has("push") && (gone || !pushFoldersUnregistered(input, deps));
+  const live = holdsPush || app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? "deny" : "warn", "cwd-missing");
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : scopes.has("app-push") ? "app-push" : "push");
 }
@@ -3082,6 +3101,17 @@ var gatedScopesSafe = (input, app = false) => {
     return /* @__PURE__ */ new Set();
   }
 };
+function catchIntentDeny(input) {
+  const shapes = catchShapes(input);
+  if (shapes === null) return null;
+  const none = deny("none", "", "push");
+  for (const s of shapes) {
+    if (s.kind !== "push" || s.push === void 0) continue;
+    const d = intentDeny(s.push, Boolean(input.agent_id), none);
+    if (d.hard === true) return d;
+  }
+  return null;
+}
 function hardAppCall(input) {
   try {
     const cmd = readCommand(input);
@@ -3116,6 +3146,29 @@ function pushUnderLiveRoot(input, deps) {
     const paths = knownDirs((pushes ?? []).flatMap((s) => [cwd, ...pushDirsOf(s.push, cwd, shell), ...chainDirsOf(s.push, cwd, shell)]).concat(cwd), deps.home);
     const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
     return dirs.some((d) => underLiveRoot(d, reg, scope, { outsideCcv3: true }));
+  } catch {
+    return false;
+  }
+}
+var CCV3_ENTRY_KEY = "continuous-claude";
+function pushFoldersUnregistered(input, deps) {
+  try {
+    const scope = deps.tapScope;
+    const cmd = readCommand(input);
+    if (!scope || cmd.kind !== "command") return false;
+    const pushes = catchShapes(input)?.filter((s) => s.kind === "push");
+    if (!pushes || pushes.length === 0) return false;
+    const reg = scope.registry();
+    if (reg.state !== "ok") return false;
+    const cwd = input.cwd || process.cwd();
+    const shell = shellOf(input);
+    const raw = pushes.flatMap((s) => [cwd, ...pushDirsOf(s.push, cwd, shell), ...chainDirsOf(s.push, cwd, shell)]).concat(cwd);
+    if (raw.some((d) => isUnexpanded(d))) return false;
+    const paths = knownDirs(raw, deps.home);
+    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
+    if (dirs.length === 0 || dirs.some((d) => !isAbsolute2(d) || isUnexpanded(d))) return false;
+    const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: "active", tapGate: null })) };
+    return !dirs.some((d) => underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope));
   } catch {
     return false;
   }

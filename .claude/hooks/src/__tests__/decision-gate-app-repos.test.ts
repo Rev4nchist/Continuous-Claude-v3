@@ -685,13 +685,28 @@ describe('C12 a git throw after coverage is known is unjudgeable with scope app-
     const out = JSON.parse(handle(JSON.stringify(bash(PUSH)), deps(throwing(['rev-parse --path-format=absolute --show-toplevel --git-common-dir']))));
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
   });
-  it('the path test leaves the rest as before: an unregistered folder, and a live entry inside the continuous-claude root, keep scope push (warn)', () => {
-    for (const dir of ['/work/stray', '/work/ccroot/apps/agentic']) {
-      const w: World = { folders: { ...FOLDERS, [dir]: { ...FOLDERS[dir], throwOn: ['remote -v'] } } };
-      const out = JSON.parse(handle(JSON.stringify(bash(PUSH, dir)), deps(w)));
-      expect(out.hookSpecificOutput.permissionDecision, dir).toBeUndefined();
-      expect(out.hookSpecificOutput.additionalContext, dir).toContain('decisions.enforcePush');
-    }
+  it('the path test leaves the rest as before: an unregistered folder keeps scope push (warn); a live entry inside the continuous-claude root keeps scope push (round 3 item 18: a hard deny)', () => {
+    // Seat 2026-11-14 20:00 (Dave's D1): a resolved folder outside every registry root keeps the old result.
+    const stray: World = { folders: { ...FOLDERS, '/work/stray': { ...FOLDERS['/work/stray'], throwOn: ['remote -v'] } } };
+    const s = JSON.parse(handle(JSON.stringify(bash(PUSH, '/work/stray')), deps(stray)));
+    expect(s.hookSpecificOutput.permissionDecision).toBeUndefined();
+    expect(s.hookSpecificOutput.additionalContext).toContain('decisions.enforcePush');
+    // Round 3 item 18 (Dave: "Land now, fix first in round 3"): under the CCv3 root a push whose judging throws denies whatever
+    // decisions.enforcePush says. The scope stays push: the text is the base text, with no app-folder words.
+    const dir = '/work/ccroot/apps/agentic';
+    const w: World = { folders: { ...FOLDERS, [dir]: { ...FOLDERS[dir], throwOn: ['remote -v'] } } };
+    const out = JSON.parse(handle(JSON.stringify(bash(PUSH, dir)), deps(w)));
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("could not verify Dave's tap");
+    expect(out.hookSpecificOutput.permissionDecisionReason).not.toMatch(/app folder/i);
+  });
+
+  it('round 3 item 18 (seat 20:00): an unregistered push whose git throws, chained with an origin push, still denies (the hole stays closed)', () => {
+    // Breaks when: the unregistered-folder exemption also drops the intent check of the other push of the command.
+    const stray: World = { folders: { ...FOLDERS, '/work/stray': { ...FOLDERS['/work/stray'], throwOn: ['remote -v'] } } };
+    const o = JSON.parse(handle(JSON.stringify(bash(`${PUSH} && git push origin main`, '/work/stray')), deps(stray)));
+    expect(o.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(o.hookSpecificOutput.permissionDecisionReason).toMatch(/origin/i);
   });
 });
 
