@@ -127,6 +127,7 @@ import { parseBand, parseExpect, parseP0List, parsePriority } from './lane-band.
 import { landedShaSql, laneMetSql, openDepSql, waitsOnSql } from './lane-dep.mjs';
 import { findCycle, parseSeedFile } from './lane-seed-file.mjs';
 import { bandTag, laneOrderSql } from './lane-sort.mjs';
+import { tickMarker } from './tick-marker.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import {
   assertFuture, fmtCT, isDbUnreachable, overdueLabel, parseAction, parseDue, parseFor, remindDetail, resolvePri,
@@ -415,7 +416,7 @@ function laneLine(l, myId, showBoard = false) {
   // no part: it can hold a stale PARKED prefix. A park that ended, or a lease that ran out, shows as a plain lease or LAPSED.
   const parked = lease > LEASE_MINUTES + 1;
   const leaseTag = l.owner_session_id
-    ? (lease === null ? '' : parked ? ` parked to ${fmtCT(l.lease_expires_at)}` : lease > 0 ? ` ${lease}m` : ` LAPSED`)
+    ? (lease === null ? '' : parked ? ` parked to ${fmtCT(l.lease_expires_at)}` : lease > 0 ? ` ${lease}m${tickMarker(l) ? ` ${tickMarker(l)}` : ''}` : ` LAPSED`)
     : '';
   const head = `${STATE_MARK[l.state] || '·'} ${bandTag(l.band)} ${l.id.padEnd(26)} ${String(l.state).padEnd(8)} ${(who + leaseTag).padEnd(30)}`;
   const lines = [`${head} ${showBoard ? `[${l.project_key}] ` : ''}${l.title}`];
