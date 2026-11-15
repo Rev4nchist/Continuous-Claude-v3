@@ -219,6 +219,22 @@ test('CO1: a scripts/coordination change runs the same coordination test files a
   assert.equal(ids(gatesFor(['docs/x.md'], REPO_ROOT)).some((id) => id.startsWith('coordination-')), false);
 });
 
+test('CO2: reminder-sync.test.mjs runs in the pre-pr coordination-tests gate and in a CI step of job coordination-db (no gate ran it before)', async () => {
+  // Breaks when the file leaves COORDINATION_TESTS, or when no step of the CI job names it. CO1 cannot see this: it compares the two lists with each other.
+  const file = 'scripts/coordination/reminder-sync.test.mjs';
+  assert.ok(existsSync(path.join(REPO_ROOT, file)), file);
+  const g = gatesFor(['scripts/coordination/reminder-sync.mjs'], REPO_ROOT).find((x) => x.id === 'coordination-tests');
+  assert.ok(g, 'a reminder-sync.mjs change plans coordination-tests');
+  assert.ok(g.args.includes(file), `coordination-tests args hold ${file}`);
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  const start = wf.indexOf('\n  coordination-db:');
+  assert.ok(start >= 0, 'the workflow has the coordination-db job');
+  const rest = wf.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [\w-]+:/);
+  const job = (next < 0 ? rest : rest.slice(0, next + 1)).split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n');
+  assert.ok(job.includes(file), `a step of CI job coordination-db runs ${file}`);
+});
+
 // ---------- dependency routing: a path that feeds a gate selects it, even when the diff never touches that gate's own folder ----------
 
 test('GR1: a hooks dependency (store link script, hooks package files, tsconfig, any workflow) runs hooks-tsc, hooks-build and hooks-vitest (#352 shipped a stale dist because none ran)', async () => {
