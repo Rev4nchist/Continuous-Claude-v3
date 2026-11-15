@@ -193,11 +193,11 @@ function isHeldSpelling(content: string, claims: readonly HeldClaim[], fold: boo
  * Classify shell text against the claims other sessions hold. The text is read as a whole: backslashes
  * are folded to slashes, and case is folded when the file system folds it (`fold`).
  */
-export function classifyShellText(text: string, claims: readonly HeldClaim[], fold: boolean): ShellVerdict {
+export function classifyShellText(text: string, claims: readonly HeldClaim[], fold: boolean, pwsh = false): ShellVerdict {
   if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: 'none' };
   // A held path inside text that a data head prints or stores is no write (card coord-file-claims-text-false-match).
   // A string that IS a held path stays: it is the operand of the write.
-  text = blankDataStrings(text, (s) => isHeldSpelling(s, claims, fold));
+  text = blankDataStrings(text, (s) => isHeldSpelling(s, claims, fold), pwsh);
   let t = text.replace(/\\/g, '/');
   if (fold) t = t.toLowerCase();
   const tl = t.toLowerCase();

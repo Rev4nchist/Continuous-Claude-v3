@@ -21,6 +21,7 @@
 import { readFileSync } from 'fs';
 import { basename, isAbsolute, relative, resolve as resolvePath } from 'path';
 import { resolveFileClaim, listBlockingClaims } from './shared/db-utils-pg.js';
+import { holderHoldsOpenLane } from './shared/holder-lane.js';
 import { resolveSessionId, canonicalProject } from './shared/session-id.js';
 import { resolveClaimKey, resolveRepoContext, listWorktreeTops } from './shared/claim-target.js';
 import { directWritePaths, classifyShellText, type HeldClaim } from './shared/write-targets.js';
@@ -134,17 +135,36 @@ const isStoredAbsolute = (filePath: string): boolean => isAbsolute(filePath) || 
 /** What a message shows for a stored path: a cache claim is an absolute path, so only its base name. */
 const shown = (filePath: string): string => (isStoredAbsolute(filePath) ? basename(filePath) : filePath);
 
-function shellDeny(input: PreToolUseInput, filePath: string, holder: string, cue: string): any {
+async function shellDeny(input: PreToolUseInput, filePath: string, holder: string, cue: string): Promise<any> {
+  const lines = holder === 'another session' ? '' : await holderLines(holder, shown(filePath));
   const reason = `⚠️ FILE CONFLICT BLOCKED
 
 This command may write "${shown(filePath)}", which is held by session ${holder}. It holds the write cue "${cue}".
 The claim is live: their lease runs, or that session is still alive.
-This check reads the command text and does not run it, so it can be wrong. If you only read the file, split the command.
+This check reads the command text and does not run it, so it can be wrong. If you only read the file, split the command.${lines}
 
 Coordinate with that session, or work on something else.
 To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
   logGuardDecision('file-claims', input, 'deny', `file-conflict-shell: cue=${cue} held by ${holder}`);
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } };
+}
+
+/**
+ * Lines for a deny text (card coord-file-guard-named-file): the holder's handle and the exact release command. A release
+ * stays the holder's act; this guard never frees a claim. "the holder's card is done" only when the holder owns no open lane.
+ * Any error leaves the deny as it was (the lookup is a hint, never a gate).
+ */
+async function holderLines(holder: string, filePath: string): Promise<string> {
+  const handle = `#${String(holder).slice(0, 8)}`;
+  let cardDone = false;
+  try {
+    cardDone = (await holderHoldsOpenLane(holder)) === false;
+  } catch {
+    cardDone = false;
+  }
+  const release = `Holder: ${handle}. Only the holder frees a claim: it runs\n  node C:/Users/dkhay/.claude/hooks/dist/release-claim.mjs ${filePath}`;
+  const done = "This claim is a leftover: the holder's card is done and it holds no open lane.";
+  return `\n${release}${cardDone ? `\n${done}` : ''}`;
 }
 
 const FOLDS_CASE = process.platform === 'win32' || process.platform === 'darwin';
@@ -217,9 +237,11 @@ async function mainShell(input: PreToolUseInput, cmd: ReturnType<typeof readShel
       : [...new Set(topsOf(c.project).flatMap((top) => formsOf(top, cwd, c.filePath)))],
     ciForms: isStoredAbsolute(c.filePath) ? [] : formsOf(c.project, cwd, c.filePath),
   }));
-  const verdict = classifyShellText(cmd.text, held, FOLDS_CASE);
+  // Card coord-file-guard-named-file: only the PowerShell tool reads a backtick escape as plain text. Desktop Commander
+  // may run cmd.exe or bash, so it keeps every backtick as a risk sign.
+  const verdict = classifyShellText(cmd.text, held, FOLDS_CASE, cmd.tool === 'PowerShell');
   if (verdict.kind === 'deny' && !BREAK_GLASS) {
-    console.log(JSON.stringify(shellDeny(input, verdict.filePath, verdict.holder ?? 'another session', verdict.cue)));
+    console.log(JSON.stringify(await shellDeny(input, verdict.filePath, verdict.holder ?? 'another session', verdict.cue)));
     return;
   }
   if (verdict.kind === 'deny') {
@@ -302,7 +324,7 @@ async function claimOne(input: PreToolUseInput, filePath: string, sessionId: str
 
       const blockMessage = `⚠️ FILE CONFLICT BLOCKED
 
-"${fileName}" is held by session ${decision.holder}
+"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName) : ''}
 
 ${leaseLine}
 Reclaiming needs BOTH an expired lease AND a holder that has stopped
