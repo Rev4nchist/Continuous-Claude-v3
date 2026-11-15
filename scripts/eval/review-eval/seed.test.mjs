@@ -1396,27 +1396,34 @@ test('F7 the Claude patch that does not apply or changes two sites is dropped', 
   }
 });
 
-test('F9 the lane day cap of 8 stops the batch before a spawn; yesterday and other purposes do not count; no retry', async () => {
+test('seat cap ruling 2026-11-14: the lane day cap is 60 (about 45 Claude runs plus margin fit in one day), under the shared cap', () => {
+  // Breaks when: the lane cap is not the seat's 60, or it rises above the shared headless cap.
+  assert.equal(seed.LANE_DAY_CAP, 60);
+  assert.ok(seed.LANE_DAY_CAP <= HEADLESS_DAILY_CAP);
+});
+
+test('F9 the lane day cap (LANE_DAY_CAP) stops the batch before a spawn; yesterday and other purposes do not count; no retry', async () => {
   // Breaks when: the lane cap is not checked, counts every purpose, counts other days, or the batch retries after a stop.
+  const cap = seed.LANE_DAY_CAP;
   const dir = tmp();
   const items = [{ file: 'src/calc.mjs', fileText: CALC, brief: 'b' }, { file: 'src/calc.mjs', fileText: CALC, brief: 'b' }];
   const run = (ledger, calls) => seed.runSeedBatch(items, { forbidden: forbidden(), ledgerPath: ledger }, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER }), ledger));
   const full = path.join(dir, 'full.jsonl');
-  ledgerRows(full, 8, 're-seed-gold-b');
+  ledgerRows(full, cap, 're-seed-gold-b');
   const c1 = [];
   const stopped = await run(full, c1);
   assert.equal(stopped.stopped, 'lane-cap');
   assert.equal(c1.length, 0);
-  assert.equal(readFileSync(full, 'utf8').trim().split('\n').length, 8, 'no start row was added');
+  assert.equal(readFileSync(full, 'utf8').trim().split('\n').length, cap, 'no start row was added');
   const room = path.join(dir, 'room.jsonl');
-  ledgerRows(room, 7, 're-seed-gold-b');
+  ledgerRows(room, cap - 1, 're-seed-gold-b');
   const c2 = [];
   const partial = await run(room, c2);
-  assert.equal(c2.length, 1, 'the 8th run starts, the 9th does not');
+  assert.equal(c2.length, 1, 'the last run under the cap starts, the next does not');
   assert.equal(partial.stopped, 'lane-cap');
   assert.equal(partial.results.length, 1);
   const old = path.join(dir, 'old.jsonl');
-  ledgerRows(old, 8, 're-seed-gold-b', NOW - 2 * DAY);
+  ledgerRows(old, cap, 're-seed-gold-b', NOW - 2 * DAY);
   ledgerRows(path.join(dir, 'other.jsonl'), 10, 'eval-judge');
   const c3 = [];
   assert.equal((await run(old, c3)).stopped, undefined);
@@ -1538,23 +1545,24 @@ test('finding 14: the lane cap is checked and claimed under one lock the lane ow
   assert.equal(first.ok, true, JSON.stringify(first));
   assert.equal(readFileSync(claimFile, 'utf8').trim().split('\n').length, 1, 'one claim for one run');
   assert.equal(existsSync(`${claimFile}.lock`), false, 'the lock is released');
-  ledgerRows(claimFile, 8, 're-seed-gold-b');
+  ledgerRows(claimFile, seed.LANE_DAY_CAP, 're-seed-gold-b');
   const refused = await seed.runSeedClaude(args, deps());
   assert.equal(refused.reason, 'lane-cap');
-  assert.equal(calls.length, 1, 'eight claims and an empty ledger: no spawn');
+  assert.equal(calls.length, 1, 'a full claim file and an empty ledger: no spawn');
 });
 
-test('F3 the day cap counts one claim file whatever the ledger path is: eight runs over four ledgers use it up', async () => {
-  // Breaks when: the claim file is derived from the ledger path (each ledger then gets its own 8 runs a day).
+test('F3 the day cap counts one claim file whatever the ledger path is: runs over four ledgers use it up', async () => {
+  // Breaks when: the claim file is derived from the ledger path (each ledger then gets its own day cap).
   const dir = tmp();
   const claimFile = path.join(dir, 'claims.jsonl');
+  ledgerRows(claimFile, seed.LANE_DAY_CAP - 4, 're-seed-gold-b');
   const calls = [];
   const run = (ledger) => seed.runSeedClaude({ file: 'src/calc.mjs', fileText: CALC, brief: 'b', forbidden: forbidden(), ledgerPath: ledger }, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER }), ledger, { claimFile }));
-  for (let i = 0; i < 8; i += 1) assert.equal((await run(path.join(dir, `ledger-${i % 4}.jsonl`))).ok, true, `run ${i}`);
-  const ninth = await run(path.join(dir, 'ledger-new.jsonl'));
-  assert.equal(ninth.reason, 'lane-cap');
-  assert.equal(calls.length, 8);
-  assert.equal(readFileSync(claimFile, 'utf8').trim().split('\n').length, 8);
+  for (let i = 0; i < 4; i += 1) assert.equal((await run(path.join(dir, `ledger-${i}.jsonl`))).ok, true, `run ${i}`);
+  const next = await run(path.join(dir, 'ledger-new.jsonl'));
+  assert.equal(next.reason, 'lane-cap');
+  assert.equal(calls.length, 4);
+  assert.equal(readFileSync(claimFile, 'utf8').trim().split('\n').length, seed.LANE_DAY_CAP);
 });
 
 test('F3 the default claim file is one fixed path under the home state folder, and it is refused under node --test', async () => {
@@ -2010,6 +2018,23 @@ test('item 2 a one-line patch that points an import at a risky module is caught 
   assert.deepEqual(readdirSync(ctx.seeds), [], 'and no manifest');
   const control = plantImport('clean2');
   assert.equal(control.ok, true, `control: an import of a clean module plants: ${JSON.stringify(control)}`);
+});
+
+test('seat item 2 (674afbb0 read): a patch with no import spec whose line is harmless alone but risky with the rest of the file is caught at the seed ref', () => {
+  // Breaks when: the seed-ref closure check runs only when the patched line holds a literal import spec. The base file names git, the new
+  // line adds a 'push' word: neither text alone is risky (precheck passes), the seed file is (a git push), so only the seed-ref check refuses.
+  const ctx = makeRepo();
+  commitMany(ctx, {
+    'src/uses.mjs': "export const tool = 'git';\nexport const args = ['status'];\n",
+    'src/uses.test.mjs': "import { test } from 'node:test';\nimport './uses.mjs';\ntest('x', () => {});\n",
+  });
+  const r = seed.createSeed({
+    repo: ctx.repo, rev: ctx.sha, file: 'src/uses.mjs', site: { line: 2, before: "export const args = ['status'];", after: "export const args = ['push'];" },
+    author: 'claude', truthNote: 'x', seedsDir: ctx.seeds, testFile: 'src/uses.test.mjs',
+  });
+  assert.equal(r.reason, 'refused-test', JSON.stringify(r));
+  assert.deepEqual(refsOf(ctx.repo), [], 'no ref is planted');
+  assert.deepEqual(readdirSync(ctx.seeds), [], 'and no manifest');
 });
 
 test('item 3 and 4 the test child env: TEMP, TMP and TMPDIR in the temp home, a minimal PATH, no system git config, an empty global config, no prompt, an empty gh folder and a dead docker host', () => {

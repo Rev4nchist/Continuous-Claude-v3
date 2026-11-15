@@ -31,7 +31,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SEED_VERSION = 1;
 export const VERIFY_TIMEOUT_MS = 60_000;
 export const LANE_PURPOSE = 're-seed-gold-b';
-export const LANE_DAY_CAP = 8;
+// Seat ruling 2026-11-14 21:3x: about 45 Claude runs plus margin in one day; the shared headless cap (200) stays the hard limit.
+export const LANE_DAY_CAP = 60;
 /** The one claim file of the lane day cap (F3): a fixed path, whatever --ledger says. */
 export const DEFAULT_CLAIM_FILE = path.join(os.homedir(), '.claude', 'state', 're-seed-gold-b-claims.jsonl');
 export const CLAUDE_MODEL = 'opus';
@@ -623,11 +624,10 @@ function refusedAt(repo, rev, testFile, file) {
   return closureRefused(repo, rev, [testFile, file]);
 }
 
-const hasImportSpec = (line) => [...String(line).matchAll(IMPORT_SPEC)].length > 0;
-
 /**
- * The base and the seed commit (objects only, no ref), or a refusal. Order of the test refusal: at the BASE commit first; then, when the patch
- * touches a line with an import spec, at the SEED commit too (a one-line patch can point an import at a risky module).
+ * The base and the seed commit (objects only, no ref), or a refusal. Order of the test refusal: at the BASE commit first, then at the SEED
+ * commit for every seed (seat item 2): a one-line patch can point an import at a risky module or make a computed load that no literal
+ * spec shows, so the plant-time check never depends on the patch text.
  */
 function buildCommits(a, pre) {
   const { repo, file, site, testFile } = a;
@@ -635,8 +635,7 @@ function buildCommits(a, pre) {
   if (refusedAt(repo, baseSha, testFile, file)) return no('refused-test');
   const seedSha = makeSeed(repo, { base: baseSha, file, mode: pre.tracked.mode, text: applySite(pre.tracked.text, site) });
   if (!diffIsOneLine(repo, baseSha, seedSha)) return no('diff-check');
-  const importChanged = hasImportSpec(site.before) || hasImportSpec(site.after);
-  if (importChanged && refusedAt(repo, seedSha, testFile, file)) return no('refused-test');
+  if (refusedAt(repo, seedSha, testFile, file)) return no('refused-test');
   return { ok: true, baseSha, seedSha };
 }
 
