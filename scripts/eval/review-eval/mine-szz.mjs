@@ -626,7 +626,8 @@ function mapPair(env, row) {
   }
   if (!runs.length) return { reason: pickReason(reasons) };
   // The same lines at an earlier commit (the Q2 last-round mapping): every line found at the head must be found there by its
-  // blame origin, else null. Found by origin means the line text is the same and its origin commit is inside that commit.
+  // blame origin, else null. Found by origin means the same blame origin under blame -w (a whitespace-only change still matches),
+  // and its origin commit is inside that commit.
   const at = (sha) => {
     const out = [];
     for (const { f, kept } of found) {
@@ -1307,6 +1308,19 @@ export function reportPathProblem(args, goldDir, stateDir, root = REPO_ROOT) {
 }
 
 /**
+ * --allow-partial skips the partial-run gate, so a run with failed pairs could replace a full gold-a.json with a short one.
+ * It may write only to a scratch folder: a gold dir inside any checkout (a folder above it holds a .git folder or a worktree
+ * .git file) is refused before any read. Resolved like the report path (realish: trailing dots and spaces, junctions).
+ */
+export function partialWriteProblem(args, goldDir) {
+  if (!args.write || !args.allowPartial) return null;
+  for (let d = realish(goldDir); ; d = path.dirname(d)) {
+    if (existsSync(path.join(d, '.git'))) return `--write --allow-partial refused: the gold dir ${goldDir} is inside a checkout; a partial write goes only to a scratch folder`;
+    if (path.dirname(d) === d) return null;
+  }
+}
+
+/**
  * The path as Windows opens it: each part without trailing dots and spaces (Windows drops them, so `gold.\x` is `gold\x`),
  * and the longest existing start resolved through junctions and links (realpath). The rest is joined on unchanged.
  */
@@ -1364,7 +1378,7 @@ export async function main(argv, deps = {}) {
   if (args.help) { stdout(USAGE); return 0; }
   if (args.error) { stderr(`mine-szz: ${args.error}\n${USAGE}`); return 2; }
   const dirs = { stateDir: stateDirOf(args.stateDir, deps.env ?? process.env), goldDir: args.goldDir ?? GOLD_DIR };
-  const bad = reportPathProblem(args, dirs.goldDir, dirs.stateDir);
+  const bad = reportPathProblem(args, dirs.goldDir, dirs.stateDir) ?? partialWriteProblem(args, dirs.goldDir);
   if (bad) { stderr(`mine-szz: ${bad}`); return 2; }
   try {
     const run = await mine(args, { ...deps, cfg: deps.cfg ?? loadConfig() }, dirs);

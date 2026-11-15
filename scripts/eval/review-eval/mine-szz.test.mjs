@@ -771,6 +771,16 @@ test('B4: the last ancestor round is taken, not the first; a later round that is
   assert.match(judge.prompts[0], /omega2/, 'the blamed text comes from the second round (c2), not the first');
 });
 
+test('B6: a merge-base failure that is not yes or no (exit 128, a round commit missing from the clone) fails the pair as merge-base, never reads as "not an ancestor" (breaks if any non-zero exit means no)', async () => {
+  const b = roundRepo('other');
+  const git = (args) => (args[0] === 'merge-base' && args[1] === '--is-ancestor' ? { status: 128, stdout: '', stderr: 'fatal: Not a valid commit name' } : b.git(args));
+  const r = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { git, judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews: { 31: [b.prs[31].shas[0]] } }) } });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.failed['merge-base'], 1, JSON.stringify(r.json));
+  assert.equal(r.json.unmapped['head-not-reviewed'] ?? 0, 0);
+  assert.equal(r.json.labelled, 0);
+});
+
 test('B5: a CodeRabbit comment 2 lines from the open bug does not drop it (rule i, open-bug rows only); the same comment drops a fix pair, and rule ii (same line range) is only counted (breaks if rule i is wider, or the count is wrong)', async () => {
   const b = roundRepo('other');
   const c1 = b.prs[31].shas[0];
@@ -779,6 +789,10 @@ test('B5: a CodeRabbit comment 2 lines from the open bug does not drop it (rule 
   const fix = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh: gh() } });
   assert.equal(fix.json.crDropped, 1);
   assert.equal(fix.json.crSameRangeKept, 1, 'rule ii would keep it: the comment is not on the blamed line');
+  const onLine = { ...near, line: 2 };
+  const fix2 = await report(b, { rows: [escRow(b, { fixPr: 32, blamedPr: 31 })], extra: ['--label'], deps: { judge: fakeJudge([REAL()]), gh: fakeGh(b, { reviews: { 31: [c1] }, comments: { 31: [onLine] } }) } });
+  assert.equal(fix2.json.crDropped, 1);
+  assert.equal(fix2.json.crSameRangeKept, 0, 'a comment ON the blamed line drops it under rule ii too');
   const ob = buildRepo([{ n: 31, at: A_DAY, commits: [
     { subject: 'feat: add f', files: { 'src/f.txt': lines('alpha', 'bug', 'omega', 'tail') } },
     { subject: 'feat: tweak f', files: { 'src/f.txt': lines('alpha', 'bug', 'omega', 'tail2') } },
@@ -1103,6 +1117,25 @@ test('R02: a failed rename of the second gold file restores all three old files;
   const r2 = await run(fresh.argv, fresh.deps);
   assert.equal(r2.code, 2, r2.err);
   assert.deepEqual(existsSync(fresh.gold) ? readdirSync(fresh.gold) : [], [], 'the file renamed in first is removed again');
+});
+
+test('G8: --write --allow-partial into a gold dir inside a checkout (a .git folder, or a worktree .git file) is refused before any read; a scratch dir outside a checkout is not (breaks if the partial write can reach a real gold folder)', async () => {
+  for (const kind of ['dir', 'file']) {
+    const repo = tmp(`checkout-${kind}`);
+    if (kind === 'dir') mkdirSync(path.join(repo, '.git')); else writeFileSync(path.join(repo, '.git'), 'gitdir: C:/x/.git/worktrees/y\n');
+    const gold = path.join(repo, 'scripts', 'eval', 'review-eval', 'gold');
+    plantOld(gold);
+    const s = writeSetup({}, [...writeArgs, '--allow-partial']);
+    const argv = s.argv.map((a) => (a === s.gold ? gold : a));
+    const r = await run(argv, s.deps);
+    assert.equal(r.code, 2, `${kind}: ${r.err}`);
+    assert.match(r.err, /--allow-partial/);
+    assert.equal(s.deps.gh.calls.length, 0, 'refused before any gh read');
+    for (const n of GOLD_FILES) assert.equal(readFileSync(path.join(gold, n), 'utf8'), `OLD ${n}\n`, `${kind}: ${n} untouched`);
+  }
+  const ok = writeSetup({}, [...writeArgs, '--allow-partial']);
+  const r = await run(ok.argv, ok.deps);
+  assert.equal(r.code, 0, `a scratch gold dir outside a checkout stays allowed: ${r.err}`);
 });
 
 test('R03: --write refuses a run with an unlabelled candidate or a failed pair, unless --allow-partial is given (breaks if the gate ignores either count)', async () => {
