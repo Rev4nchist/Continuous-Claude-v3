@@ -396,6 +396,13 @@ describe('coderabbit-guard internal error is scoped', () => {
     ['a quote-split program name', bash('c""r review --agent --base main')],
     ['a backslash in the program name', bash('c\\r review --agent --base main')],
     ['a dynamic call that can hide one', pwsh('& $tool review --agent')],
+    // Seat read of 3d3c46e6: a program name built with a plain variable is cr at run time, and its text holds no cr word.
+    ['a name built with ${u}', bash('c${u}r review --agent --base main')],
+    ['a name built with $u and empty quotes', bash('c$u""r review --agent')],
+    ['a name built with $@', bash('c$@r review --agent')],
+    ['a PowerShell $env: name', pwsh('& "c$env:U" review --agent')],
+    // Accepted over-deny (seat): any plain variable is a sign, so a throw on this payload denies too. The error path is rare.
+    ['echo $HOME (accepted over-deny)', bash('echo $HOME')],
     ['a Skill payload that names coderabbit', { session_id: TEST_SESSION, tool_name: 'Skill', tool_input: { skill: 'coderabbit:review' } }],
   ])('a throw on %s denies with the fixed reason', (_n, input) => {
     handle(JSON.stringify(input), boom);
@@ -404,7 +411,7 @@ describe('coderabbit-guard internal error is scoped', () => {
     expect(lastLog().command).toBeUndefined();
   });
 
-  it.each([['null'], ['42'], ['"text"']])('a payload that is JSON but not an object (%s) denies as unread', (raw) => {
+  it.each([['null'], ['42'], ['"text"'], ['[]'], ['[{"tool_name":"Bash"}]']])('a payload that is JSON but not an object (%s) denies as unread', (raw) => {
     handle(raw, boom);
     expect(JSON.parse(out.at(-1) as string).hookSpecificOutput.permissionDecisionReason).toBe(UNREAD_PAYLOAD_REASON);
   });

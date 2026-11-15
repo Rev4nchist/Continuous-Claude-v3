@@ -1811,8 +1811,11 @@ export const GUARD_ERROR_REASON =
 /** The log reason when an internal error hits a call that cannot hold a review run: the call continues. */
 const GUARD_ERROR_CONTINUE = 'CodeRabbit guard: internal error on a call with no review word; continued';
 
-/** A sign that a command can build or hide a program name: a wrapper, an eval, a call operator or a substitution. */
-const DYNAMIC_SIGN = /(?:^|[\s;|&({])(?:eval|iex|invoke-expression|invoke-command|start-process|bash|sh|pwsh|powershell|cmd|xargs|env|npx|sudo)(?=$|[\s;|)])|(?:^|[\s;|({])[&.]\s|-encodedcommand|\$\(|`/i;
+/**
+ * A sign that a command can build or hide a program name: a wrapper, an eval, a call operator, a substitution, or a variable
+ * (`${u}`, `$u`, `$@`, `$*`, PowerShell `$env:U`): `c${u}r` is cr at run time (seat read of 3d3c46e6).
+ */
+const DYNAMIC_SIGN = /(?:^|[\s;|&({])(?:eval|iex|invoke-expression|invoke-command|start-process|bash|sh|pwsh|powershell|cmd|xargs|env|npx|sudo)(?=$|[\s;|)])|(?:^|[\s;|({])[&.]\s|-encodedcommand|\$\(|\$\{|\$[A-Za-z_@*]|`/i;
 
 /**
  * The entry test for an internal error (seat ruling on PR 567 finding 5): a cr or coderabbit word in the payload text with quote
@@ -1851,7 +1854,7 @@ export function handle(raw: string, step: (input: PreToolUseInput) => void = run
   let input: PreToolUseInput;
   try {
     input = JSON.parse(raw);
-    if (!input || typeof input !== 'object') throw new Error('payload is not an object');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('payload is not an object');
   } catch {
     denyUnread(UNREAD_PAYLOAD_REASON);
     return;

@@ -1685,7 +1685,7 @@ function logDeny(input, result, env = process.env) {
 var UNREAD_PAYLOAD_REASON = "CodeRabbit guard: the hook payload could not be read, so this call is refused. Retry the call; if it repeats, tell Dave.";
 var GUARD_ERROR_REASON = "CodeRabbit guard: an internal error stopped the check, so this call is refused. Retry the call; if it repeats, tell Dave.";
 var GUARD_ERROR_CONTINUE = "CodeRabbit guard: internal error on a call with no review word; continued";
-var DYNAMIC_SIGN = /(?:^|[\s;|&({])(?:eval|iex|invoke-expression|invoke-command|start-process|bash|sh|pwsh|powershell|cmd|xargs|env|npx|sudo)(?=$|[\s;|)])|(?:^|[\s;|({])[&.]\s|-encodedcommand|\$\(|`/i;
+var DYNAMIC_SIGN = /(?:^|[\s;|&({])(?:eval|iex|invoke-expression|invoke-command|start-process|bash|sh|pwsh|powershell|cmd|xargs|env|npx|sudo)(?=$|[\s;|)])|(?:^|[\s;|({])[&.]\s|-encodedcommand|\$\(|\$\{|\$[A-Za-z_@*]|`/i;
 function mayHoldReview(input) {
   const text = input.tool_input?.command ?? JSON.stringify(input.tool_input ?? {});
   return /\b(?:cr|coderabbit)\b/i.test(text.replace(/["'`\\]/g, "")) || DYNAMIC_SIGN.test(text);
@@ -1712,7 +1712,7 @@ function handle(raw, step = runStep) {
   let input;
   try {
     input = JSON.parse(raw);
-    if (!input || typeof input !== "object") throw new Error("payload is not an object");
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("payload is not an object");
   } catch {
     denyUnread(UNREAD_PAYLOAD_REASON);
     return;
