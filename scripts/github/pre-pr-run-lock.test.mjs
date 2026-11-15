@@ -7,10 +7,12 @@
 //   late call          the lock is asked after the first gate, so a refused start still loads the machine (call it later)
 //   help takes a lock  --help or a missing body file leaves a lock behind                      (call it before the argument checks)
 //   refused leaves one a refused start leaves a lock file, or a granted one is not freed at exit (skip the release)
+//   wait exit code     "the lock says wait" exits 3, like pre-pr's own error; it must exit 75      (process.exit(3))
+//   head               the lock record has no head, or the word HEAD when the repo has no commit  (no head, or no exit-status check)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,7 +43,7 @@ test('grant mode: a refused start stops before any gate, says why, and leaves no
   writeFileSync(join(sb.store, 'last-grant.json'), JSON.stringify({ at: Date.now(), kind: 'pre-pr', pid: 1 })); // a grant a moment ago: the 2 minute spacing refuses
   const r = run(sb, ['--body', sb.body]);
   const out = `${r.stdout}\n${r.stderr}`;
-  assert.equal(r.status, 3, out);
+  assert.equal(r.status, 75, out); // 75 is "the lock says wait"; exit 3 stays pre-pr's own "stopped by an error"
   assert.match(out, /run-lock: WAIT .*last grant at/); // other reasons (load, slots) may come first on a busy machine
   assert.match(out, /try again after \d\d:\d\d \S+/); // the zone name comes from the system: CST, CDT, UTC or GMT+1
   assert.match(out, /NOTE samples come from RUN_LOCK_TEST_SAMPLES/, 'the hook is visible in the output');
@@ -65,7 +67,7 @@ test('warn mode: the same refusal is only logged, the run goes on, and its lock 
 });
 
 test('a broken store (RUN_LOCK_DIR is a file) fails open: the run says so and goes on', () => {
-  // Fails if takeRunLock stops catching an acquire error, or if a lock error becomes exit 3 (remove the catch).
+  // Fails if takeRunLock stops catching an acquire error, or if a lock error becomes the "wait" exit 75 (remove the catch).
   const sb = sandbox();
   const notAFolder = join(sb.repo, 'store-is-a-file');
   writeFileSync(notAFolder, 'not a folder');
@@ -73,8 +75,31 @@ test('a broken store (RUN_LOCK_DIR is a file) fails open: the run says so and go
   const out = `${r.stdout}\n${r.stderr}`;
   assert.match(out, /pre-pr: the run lock is not available .*the run goes on/);
   assert.doesNotMatch(out, /stopped before any gate/);
-  // Not asserted: the exit code. pre-pr also exits 3 for its own "stopped by an error" in this empty temp repo.
+  // The exit code can be 1 or 3 here (the empty temp repo ends the run); a lock error must never look like "wait".
+  assert.notEqual(r.status, 75, out);
   assert.match(out, /pre-pr: stopped by an error|git:branch|git:clean|RESULT/, 'the run started');
+});
+
+// The head goes into the warn-log row (the lock file is freed at exit, the log stays). A repo with no commit gives null.
+const warnRow = (sb) => JSON.parse(readFileSync(join(sb.store, 'warn-log.jsonl'), 'utf8').trim().split('\n').pop());
+const recentGrant = (sb) => writeFileSync(join(sb.store, 'last-grant.json'), JSON.stringify({ at: Date.now(), kind: 'pre-pr', pid: 1 }));
+
+test('the lock record carries the short head of the repo, 8 characters', () => {
+  const sb = sandbox();
+  const commit = spawnSync('git', ['-C', sb.repo, '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-q', '-m', 'c'], { encoding: 'utf8' });
+  assert.equal(commit.status, 0, commit.stderr);
+  const head = spawnSync('git', ['-C', sb.repo, 'rev-parse', '--short=8', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+  assert.match(head, /^[0-9a-f]{8}$/);
+  recentGrant(sb);
+  run(sb, ['--body', sb.body]);
+  assert.equal(warnRow(sb).head, head);
+});
+
+test('a repo with no commit gives a null head, never the word HEAD', () => {
+  const sb = sandbox();
+  recentGrant(sb);
+  run(sb, ['--body', sb.body]);
+  assert.equal(warnRow(sb).head, null);
 });
 
 test('--help and a missing body file take no lock', () => {

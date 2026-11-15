@@ -1749,16 +1749,21 @@ function repoRoot() {
   return r.status === 0 && r.stdout.trim() ? path.resolve(r.stdout.trim()) : SCRIPT_ROOT;
 }
 
+const EXIT_LOCK_WAIT = 75; // "the run lock said wait". Same code as the run-lock CLI (EXIT_WAIT in run-lock.mjs).
+
 /**
  * First step of a run (card coord-run-lock-and-go-row): ask the run lock for a slot. Warn mode only logs a refusal and the
- * run goes on. Grant mode stops here, before any gate, with the reason and the time to try again (exit 3). The lock is freed
+ * run goes on. Grant mode stops here, before any gate, with the reason and the time to try again (exit 75, EXIT_LOCK_WAIT;
+ * exit 3 stays pre-pr's own "stopped by an error", so a caller can tell the two apart). The lock is freed
  * at exit. A lock that cannot run (a broken store) never stops pre-pr: it is cooperative. GRANTED is not safe from a change of
  * main: the CodeRabbit step still fails when main changes during a CLI run.
  */
 async function takeRunLock(bodyPath) {
   let r;
   try {
-    r = await acquireRunLock({ kind: 'pre-pr', pid: process.pid, holder: `pre-pr ${path.basename(bodyPath)}` });
+    const headRead = spawnSync('git', ['rev-parse', '--short=8', 'HEAD'], { encoding: 'utf8', windowsHide: true });
+    const head = headRead.status === 0 && /^[0-9a-f]{8}$/.test(headRead.stdout.trim()) ? headRead.stdout.trim() : null; // null: no repo or no commit
+    r = await acquireRunLock({ kind: 'pre-pr', pid: process.pid, holder: `pre-pr ${path.basename(bodyPath)}`, head });
   } catch (err) {
     console.error(`pre-pr: the run lock is not available (${String(err?.message ?? err).split('\n')[0]}); the run goes on`);
     return;
@@ -1766,7 +1771,7 @@ async function takeRunLock(bodyPath) {
   for (const line of r.lines) console.error(`run-lock: ${line}`);
   if (!r.granted) {
     console.error('pre-pr: stopped before any gate (the run lock said wait); run it again after the time above');
-    process.exit(3);
+    process.exit(EXIT_LOCK_WAIT);
   }
   // An 'exit' handler waits for no promise, so the release is synchronous. A signal ends the process without an 'exit'
   // event unless a handler asks for one. A kill -9 or a crash leaves the file: the next acquire drops it (dead pid).
