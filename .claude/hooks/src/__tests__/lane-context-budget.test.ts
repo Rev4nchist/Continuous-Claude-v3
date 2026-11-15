@@ -529,6 +529,8 @@ describe('C3: each budget holds from both sides (a DM that just fits is whole; o
   /** The text for one DM of `pad` bytes, and whether it is cut. */
   const page = async (event: string, cwd: string, pad: number): Promise<{ t: string; cut: boolean }> => {
     fake.calls.length = 0;
+    // Each probe is a fresh look: a cut page leaves an id in the CUT, NOT READ state, and its line would shrink the next page.
+    rmSync(join(tmp, 'lane-cut'), { recursive: true, force: true });
     fake.unread = [dm(101, 'w'.repeat(pad))];
     const t = await run(event, cwd);
     return { t, cut: /\[cut,/.test(t) };
