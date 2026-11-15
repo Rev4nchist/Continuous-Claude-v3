@@ -188,6 +188,82 @@ describe('KM: one cli-skip tap serves one create (PR 576 follow-up, item 1)', ()
     handle(JSON.stringify({ tool_name: 'Bash', session_id: 'ks-k10', tool_input: { command: CREATE }, cwd: ROOT }), d);
     expect(seen).toEqual([SKIP_LABEL]);
   });
+
+  it('K12: an earlier gh call with the stamped body file, a separator, then a create with another body: deny and the tap stays unused', () => {
+    // Breaks when: the option prefix of OPEN_SEGMENT crosses a separator, so the open text starts at the EARLIER gh call and its stamped
+    // body file is read as the body of the later create (CodeRabbit finding 1 on PR 592; deny turns into allow).
+    const OTHER = '/work/other-body.md';
+    const FIRSTS = [`gh issue comment 1 --body-file ${BODY_ARG}`, `gh x --body-file ${BODY_ARG}`, `gh a b c --body-file ${BODY_ARG}`];
+    for (const first of FIRSTS) {
+      for (const join of [' ; ', ' && ', ' || ', ' | ']) {
+        for (const create of [`gh pr create --body-file ${OTHER}`, 'gh pr create --fill', 'gh pr create --title t --body inline']) {
+          const s = store({ [tap()]: { label: SKIP_LABEL } });
+          const command = `${first}${join}${create}`;
+          expect(verdict(command, s), JSON.stringify(command)).toBe('deny');
+          expect(s.used, JSON.stringify(command)).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it('K12c: the same with a line end between the earlier call and the create: deny and the tap stays unused', () => {
+    // Breaks when: the space between prefix tokens takes a line end, so the open text starts at the earlier gh call (seat round, item 1).
+    for (const first of [`gh x --body-file ${BODY_ARG}`, `gh a b c --body-file ${BODY_ARG}`]) {
+      for (const nl of ['\n', '\r\n']) {
+        const s = store({ [tap()]: { label: SKIP_LABEL } });
+        const command = `${first}${nl}gh pr create --fill`;
+        expect(verdict(command, s), JSON.stringify(command)).toBe('deny');
+        expect(s.used, JSON.stringify(command)).toEqual([]);
+      }
+    }
+  });
+
+  it('K12d: the create inside a command substitution after an earlier stamped call: deny and the tap stays unused', () => {
+    // Breaks when: the token class is a deny-list, so `$(gh` is one more token and the open text starts at the earlier gh call (seat round, item 2).
+    const s = store({ [tap()]: { label: SKIP_LABEL } });
+    const command = `gh x --body-file ${BODY_ARG} $(gh pr create --fill)`;
+    expect(verdict(command, s), JSON.stringify(command)).toBe('deny');
+    expect(s.used, JSON.stringify(command)).toEqual([]);
+  });
+
+  it('K12e: the create inside a backtick substitution after an earlier stamped call: deny and the tap stays unused', () => {
+    // Breaks when: the backtick is no anchor of OPEN_SEGMENT, so no open is found, the whole text is the body view, and the earlier stamped file is read
+    // as the body of the create. This form was ALLOWED on main before this change (seat round, backtick).
+    for (const create of ['gh pr create --fill', 'gh pr create --title t --body inline']) {
+      const s = store({ [tap()]: { label: SKIP_LABEL } });
+      const command = `gh x --body-file ${BODY_ARG} \`${create}\``;
+      expect(verdict(command, s), JSON.stringify(command)).toBe('deny');
+      expect(s.used, JSON.stringify(command)).toEqual([]);
+    }
+  });
+
+  it('K13: a create with a global option before pr, alone and with no stamp or tap, is gated: deny', () => {
+    // Breaks when: the recognizer (isPrOpenCommand) misses `gh -R <repo> pr create`, so the gate returns {} and the create passes with no stamp (CodeRabbit finding 2).
+    const REPO = 'Rev4nchist/Continuous-Claude-v3';
+    for (const command of [`gh -R ${REPO} pr create --fill`, `gh --repo ${REPO} pr create --fill`, `gh --repo=${REPO} pr create --title t --body inline`, `gh.exe -R ${REPO} pr create --fill`]) {
+      const s = store();
+      expect(verdict(command, s), command).toBe('deny');
+      expect(s.used, command).toEqual([]);
+    }
+  });
+
+  it('K13b: controls: a read with a global option is no open and is not gated', () => {
+    // Breaks when: the widened recognizer takes a list or a view for a create.
+    for (const command of ['gh pr list -R Rev4nchist/Continuous-Claude-v3', 'gh -R Rev4nchist/Continuous-Claude-v3 pr view 1', 'gh -R Rev4nchist/Continuous-Claude-v3 pr list']) {
+      const s = store();
+      expect(verdict(command, s), command).toBe('allow');
+      expect(s.used, command).toEqual([]);
+    }
+  });
+
+  it('K12b: control: an earlier gh call that is no create, then a create with the stamped body, uses the tap once', () => {
+    // Breaks when: the separator class is too strict and a plain earlier gh call hides or doubles the create.
+    for (const first of ['gh pr list', 'gh x', 'gh issue view 1']) {
+      const s = store({ [tap()]: { label: SKIP_LABEL } });
+      expect(verdict(`${first} ; gh pr create --draft --body-file ${BODY_ARG}`, s), first).not.toBe('deny');
+      expect(s.used, first).toEqual([tap()]);
+    }
+  });
 });
 
 describe('KR: the tap is used up through the REAL store (CodeRabbit nitpick, PR 576)', () => {
