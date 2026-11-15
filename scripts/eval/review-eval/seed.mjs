@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Gold B seeder (re-seed-gold-b): plant one bug per local git ref, keep it only when a named test breaks, emit one gold row.
-// Verbs: plan, mutate, verify, emit, check-refs, claude. Run with --help for the flags.
+// Verbs: plan, mutate, verify, emit, check-refs, drop, claude. Run with --help for the flags.
+// The test is chosen up front: mutate and claude take it (--test, --tests), refuse it at the base commit BEFORE any ref is made, and record it
+// in the manifest. verify runs that test only. drop deletes one seed (two refs, one manifest) by id.
 // Flow: mutate builds two commits by git plumbing (no checkout, no hooks, no autocrlf):
 //   refs/eval/seed-base/<id>  = the main tree minus every answer-key path (a root commit, so history holds no key either)
 //   refs/eval/seed/<id>       = that tree plus the one mutation (parent: the base ref). The row target is the range between them.
@@ -504,8 +506,8 @@ function readBlobs(repo, sha, files) {
   return out;
 }
 
-/** Build a commit from a temp index: read the tree of `from`, run `edit(env)`, write the tree, commit it. */
-function commitFrom(repo, { from, parent, message, edit }) {
+/** Build a commit from a temp index: read the tree of `from`, run `edit(env)`, write the tree, commit it. The temp folder is removed on every path. */
+export function commitFrom(repo, { from, parent, message, edit }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'seed-idx-'));
   const env = { GIT_INDEX_FILE: path.join(dir, 'index') };
   try {
@@ -606,25 +608,63 @@ function precheck({ repo, rev, file, site, seedsDir }) {
   return patch.ok ? { ok: true, main, tracked } : patch;
 }
 
+/** The reason a test argument is refused before any commit exists, or null: it is not one *.test.* file path, or it is the file to seed. */
+function testArgProblem(testFile, file) {
+  if (badTestArg(testFile)) return 'bad-test-arg';
+  return testFile === file ? 'seeded-file-is-test' : null;
+}
+
 /**
- * Plant one seed. a: { repo, rev, file, site: {line, before, after}, author: 'claude'|'operator', operator?, seedsDir, severity?, truthNote?, model?, effort? }.
- * Returns { ok: true, manifest } or { ok: false, reason }. A refusal makes no ref and no manifest.
+ * True when the test file is on the refused path list, or the closure of its relative imports and of the target's (item 2) is refused at `rev`.
+ * It fails closed (item 1): a test path that is not the exact tracked name, or text that cannot be read, is a refusal.
+ */
+function refusedAt(repo, rev, testFile, file) {
+  if (isProtectedTarget(testFile) || isAnswerKeyPath(testFile)) return true;
+  return closureRefused(repo, rev, [testFile, file]);
+}
+
+const hasImportSpec = (line) => [...String(line).matchAll(IMPORT_SPEC)].length > 0;
+
+/**
+ * The base and the seed commit (objects only, no ref), or a refusal. Order of the test refusal: at the BASE commit first; then, when the patch
+ * touches a line with an import spec, at the SEED commit too (a one-line patch can point an import at a risky module).
+ */
+function buildCommits(a, pre) {
+  const { repo, file, site, testFile } = a;
+  const baseSha = makeBase(repo, pre.main);
+  if (refusedAt(repo, baseSha, testFile, file)) return no('refused-test');
+  const seedSha = makeSeed(repo, { base: baseSha, file, mode: pre.tracked.mode, text: applySite(pre.tracked.text, site) });
+  if (!diffIsOneLine(repo, baseSha, seedSha)) return no('diff-check');
+  const importChanged = hasImportSpec(site.before) || hasImportSpec(site.after);
+  if (importChanged && refusedAt(repo, seedSha, testFile, file)) return no('refused-test');
+  return { ok: true, baseSha, seedSha };
+}
+
+/**
+ * Plant one seed. a: { repo, rev, file, testFile (the one test that must break), site: {line, before, after}, author: 'claude'|'operator', operator?,
+ * seedsDir, severity?, truthNote?, model?, effort? }. Returns { ok: true, manifest } or { ok: false, reason }.
+ * A refusal makes no ref and no manifest, the refusal of the test included: it is checked before anything is planted.
  */
 export function createSeed(a) {
   const pre = precheck(a);
   if (!pre.ok) return pre;
   const { repo, file, site, author, operator: opId } = a;
+  const argProblem = testArgProblem(a.testFile, file);
+  if (argProblem) return no(argProblem);
   const seedId = seedIdOf({ author, operator: opId, file, line: site.line, after: site.after });
   if (git(repo, ['rev-parse', '--verify', '--quiet', seedRefOf(seedId)], { ok: true })) return no('duplicate-site');
-  const baseSha = makeBase(repo, pre.main);
-  const text = applySite(pre.tracked.text, site);
-  const seedSha = makeSeed(repo, { base: baseSha, file, mode: pre.tracked.mode, text });
-  if (!diffIsOneLine(repo, baseSha, seedSha)) return no('diff-check');
+  const commits = buildCommits(a, pre);
+  return commits.ok ? publishSeed(a, { seedId, mainSha: pre.main, baseSha: commits.baseSha, seedSha: commits.seedSha }) : commits;
+}
+
+/** Write the manifest as pending, then both refs, then the final manifest. A failed ref write removes the pending manifest. */
+function publishSeed(a, ids) {
+  const { seedId, baseSha, seedSha } = ids;
   // F9: the manifest is written as pending before the refs, so a crash never leaves refs with no manifest. beforeRefs and afterRefs are test seams.
-  const manifest = buildManifest(a, { seedId, mainSha: pre.main, baseSha, seedSha });
+  const manifest = buildManifest(a, ids);
   writeManifest(a.seedsDir, { ...manifest, stage: 'pending' });
   a.beforeRefs?.(seedId);
-  if (!writeRefs(repo, seedId, { baseSha, seedSha })) {
+  if (!writeRefs(a.repo, seedId, { baseSha, seedSha })) {
     removeManifest(a.seedsDir, seedId);
     return no('ref-write');
   }
@@ -638,7 +678,7 @@ function buildManifest(a, { seedId, mainSha, baseSha, seedSha }) {
   const op = opId ? operatorById(opId) : null;
   return {
     seedId, stage: 'mutated', author, ...(opId ? { operator: opId } : {}), severity: a.severity ?? op?.severity ?? CLAUDE_SEVERITY,
-    file, line: site.line, before: site.before, after: site.after, truthNote: a.truthNote ?? (op ? describeOperator(op, site) : 'a seeded bug'),
+    file, testFile: a.testFile, line: site.line, before: site.before, after: site.after, truthNote: a.truthNote ?? (op ? describeOperator(op, site) : 'a seeded bug'),
     mainSha, baseSha, seedSha, baseRef: baseRefOf(seedId), seedRef: seedRefOf(seedId), seedVersion: SEED_VERSION,
     ...(a.model ? { model: a.model } : {}), ...(a.effort ? { effort: a.effort } : {}),
   };
@@ -1002,30 +1042,42 @@ function seedSideReason(base, seeded) {
   return a === b ? null : 'unstable-failure';
 }
 
-/**
- * True when the test file is on the refused path list, or the closure of its relative imports and of the target's (item 2) is refused at the base
- * ref or at the seed ref (a one-line patch can change an import spec). It fails closed (item 1): a test path that is not the exact tracked name,
- * or text that cannot be read, is a refusal.
- */
+/** The refusal of a test at both refs of a manifest (createSeed refused it at the base commit and, for an import change, at the seed commit already: this guards a changed manifest). */
 function refusedTest(repo, m, testFile) {
-  if (isProtectedTarget(testFile) || isAnswerKeyPath(testFile)) return true;
-  return [m.baseRef, m.seedRef].some((ref) => closureRefused(repo, ref, [testFile, m.file]));
+  return [m.baseRef, m.seedRef].some((ref) => refusedAt(repo, ref, testFile, m.file));
+}
+
+/** The test of a verify call is the recorded one. A manifest with no recorded test is refused (drop it), and so is a --test that differs from the record. */
+function recordedTest(m, testFile) {
+  if (typeof m.testFile !== 'string') return no('no-recorded-test');
+  if (testFile !== undefined && testFile !== m.testFile) return no('test-mismatch');
+  return badTestArg(m.testFile) ? no('bad-test-arg') : { ok: true, testFile: m.testFile };
+}
+
+/** The manifest and the test of a verify call, or a refusal. A refused argument drops nothing. */
+function verifyInputs({ repo, seedId, seedsDir, asked }) {
+  if (!isSeedId(seedId)) return no('bad-seed-id');
+  if (asked !== undefined && badTestArg(asked)) return no('bad-test-arg');
+  const m = readManifest(seedsDir, seedId);
+  if (!m || m.stage !== 'mutated') return no(m ? 'wrong-stage' : 'no-manifest');
+  const recorded = recordedTest(m, asked);
+  if (!recorded.ok) return recorded;
+  if (recorded.testFile === m.file) return no('seeded-file-is-test');
+  return refusedTest(repo, m, recorded.testFile) ? no('refused-test') : { ok: true, m, testFile: recorded.testFile };
 }
 
 /**
  * Keep a seed only when `node --test <testFile>` passes twice at the base and fails twice at the seed with the same failure lines, a subtest
  * passes at the seed, the seeded file passes `node --check`, and the failure is no import error, crash, SyntaxError or missing module.
- * testFile must be one *.test.* file other than the seeded file, and it must pass the refused list and the content rule.
+ * The test is the one that createSeed recorded: testFile may be left out, and a different one is refused (test-mismatch). It must be one *.test.* file
+ * other than the seeded file, and it must pass the refused list and the content rule.
  * Each run is in an archive copy of the ref (exportRef) with an allowlist env. deps: timeoutMs (default 60 s per run), run(cwd, file, timeoutMs),
  * remove(dir) and mkdtemp(prefix) for tests. A refused argument drops nothing.
  */
-export async function verifySeed({ repo, seedId, seedsDir, testFile, timeoutMs = VERIFY_TIMEOUT_MS, run = runTestOnce, remove = removeScratchDir, mkdtemp = mkdtempSync }) {
-  if (!isSeedId(seedId)) return no('bad-seed-id');
-  if (badTestArg(testFile)) return no('bad-test-arg');
-  const m = readManifest(seedsDir, seedId);
-  if (!m || m.stage !== 'mutated') return no(m ? 'wrong-stage' : 'no-manifest');
-  if (testFile === m.file) return no('seeded-file-is-test');
-  if (refusedTest(repo, m, testFile)) return no('refused-test');
+export async function verifySeed({ repo, seedId, seedsDir, testFile: asked, timeoutMs = VERIFY_TIMEOUT_MS, run = runTestOnce, remove = removeScratchDir, mkdtemp = mkdtempSync }) {
+  const inputs = verifyInputs({ repo, seedId, seedsDir, asked });
+  if (!inputs.ok) return inputs;
+  const { m, testFile } = inputs;
   const opts = { timeoutMs, run, remove, mkdtemp };
   const base = await runAtRef(repo, m.baseRef, testFile, opts);
   if (base.cleanupFailed) return dropSeed(repo, seedsDir, m, 'cleanup');
@@ -1040,6 +1092,31 @@ export async function verifySeed({ repo, seedId, seedsDir, testFile, timeoutMs =
   const test = { command: `node --test ${testFile}`, testFile, failureLines: lines, failureSha256: sha256(lines) };
   writeManifest(seedsDir, { ...m, stage: 'verified', test });
   return { ok: true, kept: true, test };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// drop: remove one seed by id
+// ---------------------------------------------------------------------------------------------------------------------
+
+const refExists = (repo, ref) => git(repo, ['show-ref', '--verify', '--quiet', ref], { ok: true }) !== null;
+
+/** Delete refs in one transaction: all go or none. True when it worked. */
+const deleteRefs = (repo, refs) => git(repo, ['update-ref', '--stdin'], { input: `start\n${refs.map((r) => `delete ${r}\n`).join('')}prepare\ncommit\n`, ok: true }) !== null;
+
+/**
+ * Delete one seed: refs/eval/seed-base/<id> and refs/eval/seed/<id> (each only when it exists, in one transaction) and the manifest of that id.
+ * Both ref names are built from the checked id, so no ref outside refs/eval can be named. A seed with no manifest is refused, and so is an
+ * emitted one (its gold row names the range of the refs). A failed delete keeps the manifest, so no ref is left with no manifest.
+ * Returns { ok: true, refsDeleted, manifestsDeleted } or { ok: false, reason }.
+ */
+export function dropSeedById({ repo, seedsDir, seedId }) {
+  if (!isSeedId(seedId)) return no('bad-seed-id');
+  if (!existsSync(manifestPath(seedsDir, seedId))) return no('no-manifest');
+  if (readManifest(seedsDir, seedId)?.stage === 'emitted') return no('emitted');
+  const present = [baseRefOf(seedId), seedRefOf(seedId)].filter((ref) => refExists(repo, ref));
+  if (present.length > 0 && !deleteRefs(repo, present)) return no('ref-delete');
+  removeManifest(seedsDir, seedId);
+  return { ok: true, refsDeleted: present.length, manifestsDeleted: 1 };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1542,19 +1619,22 @@ export async function runSeedBatch(items, base, deps = {}, onResult = () => {}) 
 const USAGE = [
   'usage: node scripts/eval/review-eval/seed.mjs <verb> [flags]',
   '  plan        --config <f> --dataset <f> [--repo <dir>] [--rev <rev>]      counts of dev files and operator sites',
-  '  mutate      --repo <dir> --seeds <dir> --config <f> --dataset <f> --file <path> --operator <id> [--index <n>] [--rev <rev>]',
-  '  verify      --repo <dir> --seeds <dir> --seed <id> --test <one test file>',
+  '  mutate      --repo <dir> --seeds <dir> --config <f> --dataset <f> --file <path> --test <one test file> --operator <id> [--index <n>] [--rev <rev>]',
+  '              the test is refused (nothing planted) before any ref is made, and it is recorded in the manifest',
+  '  verify      --repo <dir> --seeds <dir> --seed <id> [--test <one test file>]      runs the recorded test; a different --test is refused',
   '  emit        --seeds <dir> --gold-file <file> --seed <id> [--slice security]',
   '  check-refs  [--repo <dir>] [--seeds <dir>] [--remote <name>]      the remote defaults to fork; zero seed refs is not a pass; a ref with no manifest fails',
-  '  claude      --confirm-headless --repo <dir> --seeds <dir> --ledger <file> --config <f> --dataset <f> --gold <dir> --files <a,b> --brief <text> [--rev <rev>] [--smoke --smoke-out <file>]',
+  '  drop        --repo <dir> --seeds <dir> --seed <id>      deletes the two refs under refs/eval and the manifest of that seed; prints counts; refuses an emitted seed',
+  '  claude      --confirm-headless --repo <dir> --seeds <dir> --ledger <file> --config <f> --dataset <f> --gold <dir> --files <a,b> --tests <a=a.test.mjs,b=b.test.mjs> --brief <text> [--rev <rev>] [--smoke --smoke-out <file>]',
+  '              --tests gives one test file for each file of --files (checked before any run is spent)',
   '              --smoke saves the stream-json init line of each run to --smoke-out (required with --smoke) and fails a run that breaks the smoke rule (see smokeReport)',
   `operators: ${OPERATORS.map((o) => o.id).join(', ')}`,
   'Under node --test the repo, seeds, gold, gold-file and ledger flags must be explicit. Exit: 0 ok, 1 refused or failed check, 2 usage.',
 ].join('\n');
 
-const VALUE_FLAGS = ['--repo', '--rev', '--seeds', '--config', '--dataset', '--gold', '--gold-file', '--file', '--files', '--operator', '--index', '--seed', '--test', '--slice', '--remote', '--ledger', '--brief', '--smoke-out'];
+const VALUE_FLAGS = ['--repo', '--rev', '--seeds', '--config', '--dataset', '--gold', '--gold-file', '--file', '--files', '--tests', '--operator', '--index', '--seed', '--test', '--slice', '--remote', '--ledger', '--brief', '--smoke-out'];
 const BOOL_FLAGS = ['--confirm-headless', '--smoke'];
-const EXPLICIT = { mutate: ['--repo', '--seeds'], verify: ['--repo', '--seeds'], emit: ['--seeds', '--gold-file'], claude: ['--repo', '--seeds', '--ledger', '--gold'] };
+const EXPLICIT = { mutate: ['--repo', '--seeds'], verify: ['--repo', '--seeds'], drop: ['--repo', '--seeds'], emit: ['--seeds', '--gold-file'], claude: ['--repo', '--seeds', '--ledger', '--gold'] };
 const DEFAULT_REMOTE = 'fork';
 
 class UsageError extends Error {}
@@ -1633,7 +1713,7 @@ function verbPlan(o, io) {
 }
 
 function verbMutate(o, io) {
-  need(o, ['--file', '--operator']);
+  need(o, ['--file', '--operator', '--test']);
   const file = norm(o['--file']);
   const f = runFilter(runContext(o), [file]);
   if (!f.allowed.length) { out(io, { ok: false, ...refusalOf(f) }); return 1; }
@@ -1641,16 +1721,22 @@ function verbMutate(o, io) {
   const tracked = readTracked(f.repo, f.rev, file);
   const site = tracked ? pickSite(o['--operator'], tracked.text, Number(o['--index'] ?? 0)) : null;
   if (!site) { out(io, { ok: false, reason: tracked ? 'no-site' : 'not-tracked' }); return 1; }
-  const r = createSeed({ repo: f.repo, rev: f.rev, file, site, author: 'operator', operator: o['--operator'], seedsDir: seedsOf(o) });
+  const r = createSeed({ repo: f.repo, rev: f.rev, file, testFile: o['--test'], site, author: 'operator', operator: o['--operator'], seedsDir: seedsOf(o) });
   out(io, r.ok ? { ok: true, seedId: r.manifest.seedId, file, line: site.line, operator: o['--operator'] } : r);
   return r.ok ? 0 : 1;
 }
 
 async function verbVerify(o, io) {
-  need(o, ['--test']);
   const seedId = seedFlag(o);
   const r = await verifySeed({ repo: repoOf(o), seedId, seedsDir: seedsOf(o), testFile: o['--test'] });
   out(io, r.ok ? { ok: true, kept: true, seedId, command: r.test.command, failureLines: r.test.failureLines.length } : { ...r, kept: false, seedId });
+  return r.ok ? 0 : 1;
+}
+
+function verbDrop(o, io) {
+  const seedId = seedFlag(o);
+  const r = dropSeedById({ repo: repoOf(o), seedsDir: seedsOf(o), seedId });
+  out(io, r.ok ? { ok: true, seedId, refsDeleted: r.refsDeleted, manifestsDeleted: r.manifestsDeleted } : { ...r, seedId });
   return r.ok ? 0 : 1;
 }
 
@@ -1667,9 +1753,27 @@ function verbCheckRefs(o, io) {
   return r.ok ? 0 : 1;
 }
 
-function claudeItems(o, repo, sha, allowed) {
+/**
+ * The test of each file from --tests <file>=<test>,...: Map(file -> test). A usage error, before any claim or run, unless the files of --tests are
+ * exactly the files of --files and every test is one valid test file path.
+ */
+function testsOf(o, files) {
+  need(o, ['--tests']);
+  const map = new Map();
+  for (const pair of o['--tests'].split(',')) {
+    const [file, test, ...extra] = pair.split('=');
+    if (!file || !test || extra.length > 0 || badTestArg(test) || map.has(norm(file))) throw new UsageError('--tests must be <file>=<one test file>,... with one valid test for each file');
+    map.set(norm(file), test);
+  }
+  if (map.size !== files.length || files.some((f) => !map.has(f))) throw new UsageError('--tests must name exactly the files of --files, one test each');
+  return map;
+}
+
+/** The files a run may start for: readable at `sha`, with a test that createSeed would not refuse (checked now so a refused test spends no paid run). */
+function claudeItems(o, repo, sha, allowed, tests) {
   const texts = readBlobs(repo, sha, allowed);
-  return allowed.filter((f) => texts.has(f)).map((file) => ({ file, fileText: texts.get(file), brief: o['--brief'] }));
+  const usable = (f) => texts.has(f) && testArgProblem(tests.get(f), f) === null && !refusedAt(repo, sha, tests.get(f), f);
+  return allowed.filter(usable).map((file) => ({ file, fileText: texts.get(file), brief: o['--brief'] }));
 }
 
 /** The summary of a claude batch. F5: one total of refused files, never a count by category (only plan prints those). */
@@ -1691,18 +1795,19 @@ function startSmokeFile(o) {
 async function verbClaude(o, io) {
   if (!o['--confirm-headless']) throw new UsageError('claude spends headless runs: it needs --confirm-headless');
   need(o, ['--files', '--brief']);
+  const files = o['--files'].split(',').map(norm);
+  const tests = testsOf(o, files);
   startSmokeFile(o);
   const ledgerPath = o['--ledger'] ?? defaultHeadlessLedger(io.env);
   assertLedgerSafe(ledgerPath, io.env);
   const deps = io.headlessDeps ?? {};
   assertClaimSafe(deps.claimFile ?? DEFAULT_CLAIM_FILE, io.env);
-  const files = o['--files'].split(',').map(norm);
   const f = runFilter(runContext(o), files);
-  const items = claudeItems(o, f.repo, f.rev, f.allowed);
+  const items = claudeItems(o, f.repo, f.rev, f.allowed, tests);
   if (!items.length) { out(io, { ok: false, ran: 0, refused: files.length }); return 1; }
   const forbidden = forbiddenSet({ cfg: f.cfg, dataset: f.dataset, goldRows: goldRowsOf(o) });
   const where = { repo: f.repo, rev: f.rev, seedsDir: seedsOf(o) };
-  const batch = await runSeedBatch(items, { forbidden, ledgerPath, smoke: Boolean(o['--smoke']), smokeOut: o['--smoke-out'] }, deps, (entry) => plantOne(where, entry));
+  const batch = await runSeedBatch(items, { forbidden, ledgerPath, smoke: Boolean(o['--smoke']), smokeOut: o['--smoke-out'] }, deps, (entry) => plantOne(where, tests, entry));
   const summary = summarise(batch, files.length - items.length);
   out(io, summary);
   return summary.created > 0 ? 0 : 1;
@@ -1713,14 +1818,14 @@ function goldRowsOf(o) {
 }
 
 /** Turn one good Claude patch into a seed, right after its run (F7). Marks the result with created and the refusal reason. A bad patch is left alone. */
-function plantOne(where, r) {
+function plantOne(where, tests, r) {
   if (!r.ok) return;
-  const made = createSeed({ ...where, file: r.file, site: r.site, author: 'claude', truthNote: r.truthNote, model: r.model, effort: r.effort });
+  const made = createSeed({ ...where, file: r.file, testFile: tests.get(r.file), site: r.site, author: 'claude', truthNote: r.truthNote, model: r.model, effort: r.effort });
   r.created = made.ok;
   r.reason = made.ok ? r.reason : made.reason;
 }
 
-const VERBS = { plan: verbPlan, mutate: verbMutate, verify: verbVerify, emit: verbEmit, 'check-refs': verbCheckRefs, claude: verbClaude };
+const VERBS = { plan: verbPlan, mutate: verbMutate, verify: verbVerify, emit: verbEmit, 'check-refs': verbCheckRefs, drop: verbDrop, claude: verbClaude };
 
 const defaultIo = () => ({ write: (s) => process.stdout.write(s), writeErr: (s) => process.stderr.write(s), env: process.env });
 

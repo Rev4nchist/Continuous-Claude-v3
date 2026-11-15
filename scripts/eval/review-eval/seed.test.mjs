@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { after as afterAll, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TREE_EXCLUDES } from '../../github/cursor-review.mjs';
 import { defaultHeadlessLedger, HEADLESS_DAILY_CAP, HEADLESS_LEDGER } from '../../lib/headless.mjs';
@@ -18,7 +18,38 @@ import * as seed from './seed.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SEED_CLI = path.join(HERE, 'seed.mjs');
-const tmp = (p = 'seed-test-') => mkdtempSync(path.join(os.tmpdir(), p));
+// Temp folders (item 3). This file runs with ONE private temp root: TEMP, TMP and TMPDIR name it, so os.tmpdir() inside this process (the fixtures
+// and every mkdtemp of seed.mjs) lands in it. tmp() records each fixture folder. afterAll removes them, then asserts that the root holds nothing
+// else: a folder left there was made by code under test, or by a fixture that bypassed tmp(). The shared temp folder is never listed.
+const ROOT = mkdtempSync(path.join(os.tmpdir(), 'seedtest-root-'));
+for (const k of ['TEMP', 'TMP', 'TMPDIR']) process.env[k] = ROOT;
+const made = [];
+const tmp = (p = 'seed-test-') => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), p));
+  made.push(dir);
+  return dir;
+};
+// headless.mjs (not seed.mjs) writes trigger-probe-*-<pid>.json into the temp folder when a run has no skipConfigFiles. It is not edited here.
+const EXTERNAL_LEFTOVER = /^trigger-probe-[a-z-]+-\d+\.json$/;
+
+afterAll(() => {
+  const fixtures = made.length;
+  made.splice(0).reverse().forEach((dir) => { try { seed.removeScratchDir(dir); } catch { /* counted below: it stays in ROOT */ } });
+  const left = readdirSync(ROOT);
+  const external = left.filter((n) => EXTERNAL_LEFTOVER.test(n));
+  try { seed.removeScratchDir(ROOT); } catch { /* the OS temp cleanup takes it */ }
+  assert.deepEqual(left.filter((n) => !EXTERNAL_LEFTOVER.test(n)), [], `folders left in the private temp root after ${fixtures} fixture folders were removed`);
+  process.stderr.write(`# temp: ${fixtures} fixture folders removed, ${external.length} headless.mjs probe files, 0 left\n`);
+});
+
+// Runs fn with a fresh empty temp root. Returns what is left in it: code that removes its own temp folder leaves [].
+async function leftInTemp(fn) {
+  const sub = tmp('seed-priv-');
+  const saved = process.env.TEMP;
+  for (const k of ['TEMP', 'TMP', 'TMPDIR']) process.env[k] = sub;
+  try { await fn(); } finally { for (const k of ['TEMP', 'TMP', 'TMPDIR']) process.env[k] = saved; }
+  return readdirSync(sub).filter((n) => !EXTERNAL_LEFTOVER.test(n));
+}
 // The default headless ledger of this test process is a temp file, so no code path of a test can reach the real ledger by falling back to it.
 process.env.CCV3_HEADLESS_LEDGER = path.join(tmp('seed-default-ledger-'), 'default-ledger.jsonl');
 const NOW = Date.parse('2026-11-14T18:00:00Z');
@@ -93,7 +124,7 @@ function makeRepo({ prs = false } = {}) {
 
 /** Plant a commit with the given files on a ref, by plumbing (no checkout). parent: a commit sha or none. */
 function plant(repo, ref, { files, parent }) {
-  const env = { GIT_INDEX_FILE: path.join(tmp('seed-idx-'), 'index') };
+  const env = { GIT_INDEX_FILE: path.join(tmp('fx-idx-'), 'index') };
   for (const [name, content] of Object.entries(files)) {
     const oid = git(repo, ['hash-object', '-w', '--stdin'], { input: content, env });
     git(repo, ['update-index', '--add', '--cacheinfo', `100644,${oid},${name}`], { env });
@@ -107,13 +138,21 @@ function plant(repo, ref, { files, parent }) {
 const refsOf = (repo) => git(repo, ['for-each-ref', '--format=%(refname)', 'refs/eval']).split('\n').filter(Boolean);
 const filesAt = (repo, ref) => git(repo, ['ls-tree', '-r', '--name-only', ref]).split('\n').filter(Boolean);
 
-function seedOne(ctx, { file = 'src/calc.mjs', operator = 'cmp-flip', index = 0 } = {}) {
+// Item 1: createSeed takes the test file up front. Tests that do not care which test it is use calc.test.mjs.
+const CALC_TEST_FILE = 'src/calc.test.mjs';
+const createSeedT = (a) => seed.createSeed({ testFile: CALC_TEST_FILE, ...a });
+
+function seedOne(ctx, { file = 'src/calc.mjs', operator = 'cmp-flip', index = 0, testFile = CALC_TEST_FILE } = {}) {
   const text = git(ctx.repo, ['show', `${ctx.sha}:${file}`]);
   const site = seed.pickSite(operator, text, index);
-  return seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file, site, author: 'operator', operator, seedsDir: ctx.seeds });
+  return seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file, site, author: 'operator', operator, seedsDir: ctx.seeds, testFile });
 }
 
 const manifestOf = (ctx, id) => JSON.parse(readFileSync(path.join(ctx.seeds, `${id}.json`), 'utf8'));
+/** Rewrite the recorded test of a manifest by hand: the only way to reach the verify-side refusal of a test that createSeed would have refused. */
+function recordTest(ctx, manifest, testFile) {
+  writeFileSync(path.join(ctx.seeds, `${manifest.seedId}.json`), `${JSON.stringify({ ...manifestOf(ctx, manifest.seedId), testFile }, null, 2)}\n`);
+}
 // A failing run: one passing subtest (ok 1), then the failing one (not ok 2). The seed is kept only when a subtest passes (F8).
 const TAP_FAIL = 'TAP version 13\n# Subtest: fine\nok 1 - fine\n# Subtest: boom\nnot ok 2 - boom\n  ---\n  duration_ms: 0.9\n  failureType: \'testCodeFailure\'\n  error: boom\n  code: \'ERR_ASSERTION\'\n  stack: |-\n    at x (file:///C:/tmp/a.mjs:1:1)\n  ...\n# fail 1\n';
 const TAP_PASS = 'TAP version 13\n# Subtest: fine\nok 1 - fine\n# pass 1\n';
@@ -409,7 +448,7 @@ test('F7 a patch that does not apply, or changes more than the one site, is drop
     'multi-site': { line: 2, before: '  return n < max;', after: '  retur m <= mac;' },
   };
   for (const [reason, site] of Object.entries(bad)) {
-    const r = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+    const r = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
     assert.equal(r.ok, false, reason);
     assert.equal(r.reason, reason);
   }
@@ -435,7 +474,7 @@ test('F6 a patch that adds a comment is refused; an existing comment that stays 
   assert.equal(seed.checkPatch(text, { ...add, after: 'const a = 2; /* bug */' }, 'f.mjs').reason, 'adds-comment');
   const keep = { file: 'f.mjs', line: 2, before: 'if (x < y) { // keep', after: 'if (x <= y) { // keep', truthNote: 'n' };
   assert.equal(seed.checkPatch(text, keep, 'f.mjs').ok, true);
-  const direct = seed.createSeed({ repo: makeRepo().repo, rev: 'HEAD', file: 'src/calc.mjs', site: { line: 2, before: '  return n < max;', after: '  return n <= max; // bug' }, author: 'claude', seedsDir: tmp(), operator: undefined });
+  const direct = createSeedT({ repo: makeRepo().repo, rev: 'HEAD', file: 'src/calc.mjs', site: { line: 2, before: '  return n < max;', after: '  return n <= max; // bug' }, author: 'claude', seedsDir: tmp(), operator: undefined });
   assert.equal(direct.ok, false);
   assert.equal(direct.reason, 'adds-comment');
 });
@@ -446,7 +485,7 @@ test('F8 two seeds on one file and line: the second is refused and makes no ref'
   const first = seedOne(ctx, { operator: 'cmp-flip' });
   assert.equal(first.ok, true);
   assert.equal(refsOf(ctx.repo).length, 2);
-  const other = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site: { line: 2, before: '  return n < max;', after: '' }, author: 'operator', operator: 'drop-guard', seedsDir: ctx.seeds });
+  const other = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site: { line: 2, before: '  return n < max;', after: '' }, author: 'operator', operator: 'drop-guard', seedsDir: ctx.seeds });
   assert.equal(other.ok, false);
   assert.equal(other.reason, 'duplicate-site');
   assert.equal(refsOf(ctx.repo).length, 2);
@@ -458,9 +497,9 @@ test('createSeed refuses an answer-key file and a file that is not tracked', () 
   // Breaks when: the seeder mutates an answer-key file or a missing path.
   const ctx = makeRepo();
   const site = { line: 1, before: '[]', after: '[1]' };
-  const key = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'scripts/eval/review-eval/gold/gold-b.json', site, author: 'operator', operator: 'x', seedsDir: ctx.seeds });
+  const key = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'scripts/eval/review-eval/gold/gold-b.json', site, author: 'operator', operator: 'x', seedsDir: ctx.seeds });
   assert.equal(key.reason, 'refused', 'F5: one reason, no category');
-  const miss = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/none.mjs', site, author: 'operator', operator: 'x', seedsDir: ctx.seeds });
+  const miss = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/none.mjs', site, author: 'operator', operator: 'x', seedsDir: ctx.seeds });
   assert.equal(miss.reason, 'not-tracked');
   assert.deepEqual(refsOf(ctx.repo), []);
 });
@@ -477,7 +516,7 @@ test('finding 1 (F1): the harness, the headless wrapper, the lane, worktree, set
   const ctx = makeRepo();
   const site = { line: 1, before: 'x', after: 'y' };
   for (const file of PROTECTED) {
-    const r = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file, site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+    const r = createSeedT({ repo: ctx.repo, rev: ctx.sha, file, site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
     assert.equal(r.reason, 'refused', file);
   }
   assert.deepEqual(refsOf(ctx.repo), []);
@@ -530,9 +569,9 @@ test('F1 createSeed refuses a target whose text is risky, and a Claude line that
   const ctx = makeRepo();
   commitFile(ctx, 'src/danger.mjs', "import { rmSync } from 'node:fs';\nexport const f = (n, m) => n < m;\nexport const g = (p) => rmSync(p);\n");
   const site = { line: 2, before: 'export const f = (n, m) => n < m;', after: 'export const f = (n, m) => n <= m;' };
-  const r = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/danger.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  const r = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/danger.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
   assert.equal(r.reason, 'refused');
-  const added = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site: { line: 2, before: '  return n < max;', after: '  return rmSync < max;' }, author: 'claude', truthNote: 'x', seedsDir: ctx.seeds });
+  const added = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site: { line: 2, before: '  return n < max;', after: '  return rmSync < max;' }, author: 'claude', truthNote: 'x', seedsDir: ctx.seeds });
   assert.equal(added.reason, 'refused');
   assert.deepEqual(refsOf(ctx.repo), []);
   assert.deepEqual(readdirSync(ctx.seeds), []);
@@ -542,7 +581,7 @@ test('finding 5: a *.test.* file is never a seed target', () => {
   // Breaks when: createSeed accepts a test file as the file to mutate (a mutated test would "break" itself).
   const ctx = makeRepo();
   const site = { line: 1, before: "import assert from 'node:assert/strict';", after: "import assert from 'node:assert';" };
-  const r = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.test.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  const r = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.test.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
   assert.equal(r.reason, 'test-file');
   assert.deepEqual(refsOf(ctx.repo), []);
 });
@@ -564,7 +603,7 @@ test('finding 12: both refs are written in one transaction: a conflict on the se
   const site = { line: 2, before: '  return n < max;', after: '  return n <= max;' };
   const id = seed.seedIdOf({ author: 'operator', operator: 'cmp-flip', file: 'src/calc.mjs', line: 2, after: site.after });
   plant(ctx.repo, `refs/eval/seed-base/${id}/blocker`, { files: { 'a.txt': 'x' } });
-  const r = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  const r = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
   assert.equal(r.reason, 'ref-write');
   assert.deepEqual(refsOf(ctx.repo), [`refs/eval/seed-base/${id}/blocker`]);
   assert.deepEqual(readdirSync(ctx.seeds), []);
@@ -615,7 +654,7 @@ test('F1 positive control and failure record: a seed that breaks its test is kep
 test('F1 the seed breaks no test: dropped, counted in the manifest, and both refs removed', async () => {
   // Breaks when: a seed whose runs all pass is kept, or the dropped refs stay in the repo.
   const ctx = makeRepo();
-  const { manifest } = seedOne(ctx);
+  const { manifest } = seedOne(ctx, { testFile: 'src/other.test.mjs' });
   const r = await seed.verifySeed({ repo: ctx.repo, seedId: manifest.seedId, seedsDir: ctx.seeds, testFile: 'src/other.test.mjs' });
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'no-break');
@@ -675,7 +714,7 @@ test('F14 a test over the time limit is dropped, its process tree is killed, and
   const pidFile = path.join(tmp('seed-pid-'), 'pid.txt');
   const sleeper = `import { writeFileSync } from 'node:fs';\nimport { test } from 'node:test';\ntest('sleeps', async () => {\n  writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n  await new Promise((r) => setTimeout(r, 30000));\n});\n`;
   commitFile(ctx, 'src/sleep.test.mjs', sleeper);
-  const { manifest } = seedOne(ctx);
+  const { manifest } = seedOne(ctx, { testFile: 'src/sleep.test.mjs' });
   const started = Date.now();
   const r = await seed.verifySeed({ repo: ctx.repo, seedId: manifest.seedId, seedsDir: ctx.seeds, testFile: 'src/sleep.test.mjs', timeoutMs: 1500 });
   assert.equal(r.ok, false);
@@ -715,7 +754,7 @@ const leakyParent = () => ({ ...process.env, ...Object.fromEntries(LEAKS.map((k)
 
 test('F1 a test child gets an allowlist environment and a fresh temp home: nothing else of the parent reaches a real child', async () => {
   // Breaks when: the child env is a copy of the parent with a strip list (NODE_OPTIONS, GIT_*, PG*, *_URL, tokens, SSH_AUTH_SOCK, CLAUDE_* then pass), or the real home is given.
-  const home = tmp('seed-home-check-');
+  const home = tmp('fx-homechk-');
   const env = seed.testChildEnv(leakyParent(), home);
   for (const k of Object.keys(env)) assert.ok([...ALLOWED_KEYS, 'HOMEDRIVE', 'HOMEPATH'].includes(k.toUpperCase()), `unit: ${k} is not on the allowlist`);
   assert.equal(env.HOME, home);
@@ -776,6 +815,7 @@ test('F1 verify refuses a test file on the refused path list or with risky text,
   const { manifest } = seedOne(ctx);
   const calls = [];
   for (const testFile of ['scripts/github/x.test.mjs', 'scripts/eval/review-eval/seed.test.mjs', 'scripts/coordination/a.test.mjs', 'scripts/settings/a.test.mjs', 'scripts/worktree/a.test.mjs', 'src/danger.test.mjs']) {
+    recordTest(ctx, manifest, testFile);
     const r = await seed.verifySeed({ repo: ctx.repo, seedId: manifest.seedId, seedsDir: ctx.seeds, testFile, run: sequenceRun([0, 0, 1, 1], calls) });
     assert.equal(r.ok, false, testFile);
     assert.equal(r.reason, 'refused-test', testFile);
@@ -788,7 +828,7 @@ test('F1 a test that needs a package the archive copy does not hold fails at bas
   // Breaks when: a base failure is read as a pass or as the seed breaking the test (the copy has no node_modules, so such a test cannot pass at base).
   const ctx = makeRepo();
   commitFile(ctx, 'src/dep.test.mjs', "import { test } from 'node:test';\nimport nothing from 'left-pad-not-installed-xyz';\ntest('uses it', () => { nothing(); });\n");
-  const { manifest } = seedOne(ctx);
+  const { manifest } = seedOne(ctx, { testFile: 'src/dep.test.mjs' });
   const r = await seed.verifySeed({ repo: ctx.repo, seedId: manifest.seedId, seedsDir: ctx.seeds, testFile: 'src/dep.test.mjs' });
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'base-fails');
@@ -859,7 +899,7 @@ test('finding 5: verify refuses a test file that is not *.test.*, and a test fil
 test('finding 17: a seed whose file does not parse, or whose failure is a SyntaxError or a missing module, is dropped', async () => {
   // Breaks when: a seed that breaks the build counts as a seed that breaks a behaviour (the reviewer would see a syntax error, not a bug).
   const syntax = makeRepo();
-  const broken = seed.createSeed({ repo: syntax.repo, rev: syntax.sha, file: 'src/calc.mjs', site: { line: 2, before: '  return n < max;', after: '  return n < ;' }, author: 'operator', operator: 'cmp-flip', seedsDir: syntax.seeds });
+  const broken = createSeedT({ repo: syntax.repo, rev: syntax.sha, file: 'src/calc.mjs', site: { line: 2, before: '  return n < max;', after: '  return n < ;' }, author: 'operator', operator: 'cmp-flip', seedsDir: syntax.seeds });
   assert.equal(broken.ok, true, JSON.stringify(broken));
   const r = await seed.verifySeed({ repo: syntax.repo, seedId: broken.manifest.seedId, seedsDir: syntax.seeds, testFile: 'src/calc.test.mjs', run: sequenceRun([0, 0, 1, 1]) });
   assert.equal(r.reason, 'syntax-error');
@@ -889,7 +929,7 @@ test('finding 11: a failed removal of the scratch copy drops the seed with reaso
 test('finding 19: a dropped seed does not claim its file and line: the same site can be seeded again', async () => {
   // Breaks when: siteTaken counts a dropped manifest (a seed whose test did not break could then never be retried with another test).
   const ctx = makeRepo();
-  const first = seedOne(ctx);
+  const first = seedOne(ctx, { testFile: 'src/other.test.mjs' });
   const dropped = await seed.verifySeed({ repo: ctx.repo, seedId: first.manifest.seedId, seedsDir: ctx.seeds, testFile: 'src/other.test.mjs', run: sequenceRun([0, 0, 0, 0]) });
   assert.equal(dropped.reason, 'no-break');
   const again = seedOne(ctx);
@@ -902,7 +942,7 @@ test('removeScratchDir removes the folder and keeps the target of a node_modules
   // Breaks when: the link is followed (the shared store is emptied) or the folder stays.
   const target = tmp('seed-store-');
   writeFileSync(path.join(target, 'sentinel.txt'), 'keep');
-  const dir = tmp('seed-ar-link-');
+  const dir = tmp('fx-arlink-');
   mkdirSync(path.join(dir, 'src'));
   writeFileSync(path.join(dir, 'src', 'a.txt'), 'x');
   symlinkSync(target, path.join(dir, 'node_modules'), 'junction');
@@ -1052,24 +1092,24 @@ test('F9 createSeed writes the manifest as pending before the refs; a pending ma
   const ctx = makeRepo();
   const seen = [];
   const site = { line: 2, before: '  return n < max;', after: '  return n <= max;' };
-  const make = (extra = {}) => seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds, ...extra });
+  const make = (extra = {}) => createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds, ...extra });
   const r = make({ beforeRefs: (id) => seen.push({ manifest: manifestOf(ctx, id).stage, refs: refsOf(ctx.repo).length }) });
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.deepEqual(seen, [{ manifest: 'pending', refs: 0 }]);
   assert.equal(manifestOf(ctx, r.manifest.seedId).stage, 'mutated');
   const ctx2 = makeRepo();
-  const crash = () => seed.createSeed({ repo: ctx2.repo, rev: ctx2.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx2.seeds, beforeRefs: () => { throw new Error('killed'); } });
+  const crash = () => createSeedT({ repo: ctx2.repo, rev: ctx2.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx2.seeds, beforeRefs: () => { throw new Error('killed'); } });
   assert.throws(crash, /killed/);
   assert.equal(readdirSync(ctx2.seeds).length, 1, 'the pending manifest is left by the crash');
   assert.deepEqual(refsOf(ctx2.repo), []);
-  assert.equal(seed.createSeed({ repo: ctx2.repo, rev: ctx2.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx2.seeds }).ok, true, 'a retry after the crash works');
+  assert.equal(createSeedT({ repo: ctx2.repo, rev: ctx2.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx2.seeds }).ok, true, 'a retry after the crash works');
 });
 
 test('F9 a crash after the refs leaves a pending manifest: check-refs fails on it', () => {
   // Breaks when: check-refs passes refs whose manifest is still pending (the seed was never finished, and a retry reports duplicate-site).
   const ctx = makeRepo();
   const site = { line: 2, before: '  return n < max;', after: '  return n <= max;' };
-  const make = (extra) => seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds, ...extra });
+  const make = (extra) => createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds, ...extra });
   assert.throws(() => make({ afterRefs: () => { throw new Error('killed'); } }), /killed/);
   assert.equal(refsOf(ctx.repo).length, 2);
   const r = checkRefs(ctx);
@@ -1093,7 +1133,7 @@ test('F9 check-refs fails on a seed ref that has no manifest, and counts it', ()
 test('F9 a failed ref delete in a drop is reported and written to the manifest', async () => {
   // Breaks when: dropRefs hides a failed delete (the seed is then reported as dropped while its refs stay).
   const ctx = makeRepo();
-  const { manifest } = seedOne(ctx);
+  const { manifest } = seedOne(ctx, { testFile: 'src/other.test.mjs' });
   const lock = path.join(ctx.repo, '.git', `${manifest.seedRef}.lock`);
   writeFileSync(lock, '');
   const r = await seed.verifySeed({ repo: ctx.repo, seedId: manifest.seedId, seedsDir: ctx.seeds, testFile: 'src/other.test.mjs', run: sequenceRun([0, 0, 0, 0]) });
@@ -1103,7 +1143,7 @@ test('F9 a failed ref delete in a drop is reported and written to the manifest',
   assert.equal(checkRefs(ctx).ok, false, 'check-refs still sees the ref that was not deleted');
   rmSync(lock);
   const ctx2 = makeRepo();
-  const clean = seedOne(ctx2);
+  const clean = seedOne(ctx2, { testFile: 'src/other.test.mjs' });
   const dropped = await seed.verifySeed({ repo: ctx2.repo, seedId: clean.manifest.seedId, seedsDir: ctx2.seeds, testFile: 'src/other.test.mjs', run: sequenceRun([0, 0, 0, 0]) });
   assert.equal(dropped.refsLeft, undefined, 'control: a clean drop reports nothing');
 });
@@ -1160,7 +1200,7 @@ test('S1 every seeded row is within-hunk, operator and Claude alike, and records
   for (const [operator, file] of [['cmp-flip', 'src/calc.mjs'], ['logic-flip', 'src/calc.mjs'], ['cmp-flip', 'src/crlf.mjs']]) operatorIds.push(await verifiedSeed(ctx, { operator, file }));
   const claudeSite = { line: 2, before: '  return n < max;', after: '  return n <= max;' };
   const ctx2 = makeRepo();
-  const claude = seed.createSeed({ repo: ctx2.repo, rev: ctx2.sha, file: 'src/calc.mjs', site: claudeSite, author: 'claude', truthNote: 'the bound is now inclusive', model: 'opus', effort: 'high', seedsDir: ctx2.seeds });
+  const claude = createSeedT({ repo: ctx2.repo, rev: ctx2.sha, file: 'src/calc.mjs', site: claudeSite, author: 'claude', truthNote: 'the bound is now inclusive', model: 'opus', effort: 'high', seedsDir: ctx2.seeds });
   assert.equal(claude.ok, true, JSON.stringify(claude));
   const v = await seed.verifySeed({ repo: ctx2.repo, seedId: claude.manifest.seedId, seedsDir: ctx2.seeds, testFile: 'src/calc.test.mjs', run: sequenceRun([0, 0, 1, 1]) });
   assert.equal(v.ok, true);
@@ -1646,7 +1686,7 @@ test('CLI answers --help with usage and exit 0; no arguments or a bad verb give 
   const help = run(['--help']);
   assert.equal(help.status, 0);
   assert.match(help.stdout + help.stderr, /usage/i);
-  for (const verb of ['plan', 'mutate', 'verify', 'emit', 'check-refs', 'claude']) assert.ok((help.stdout + help.stderr).includes(verb), verb);
+  for (const verb of ['plan', 'mutate', 'verify', 'emit', 'check-refs', 'drop', 'claude']) assert.ok((help.stdout + help.stderr).includes(verb), verb);
   for (const args of [[], ['nonsense'], ['mutate', '--no-such-flag']]) {
     const r = run(args);
     assert.equal(r.status, 2, args.join(' '));
@@ -1684,16 +1724,16 @@ test('CLI end to end: plan, mutate, verify, emit and check-refs print counts or 
   assert.equal(plan.json().allowed, 2);
   assert.ok(plan.json().sites['cmp-flip'] >= 2);
 
-  const late = await call(['mutate', ...common, '--rev', ctx.sha, '--file', 'src/late.mjs', '--operator', 'bool-invert']);
+  const late = await call(['mutate', ...common, '--rev', ctx.sha, '--file', 'src/late.mjs', '--test', 'src/calc.test.mjs', '--operator', 'bool-invert']);
   assert.equal(late.code, 1);
   assert.equal(late.json().reason, 'refused');
 
-  const refused = await call(['mutate', ...common, '--rev', ctx.sha, '--file', 'src/hold.mjs', '--operator', 'bool-invert', '--index', '0']);
+  const refused = await call(['mutate', ...common, '--rev', ctx.sha, '--file', 'src/hold.mjs', '--test', 'src/calc.test.mjs', '--operator', 'bool-invert', '--index', '0']);
   assert.equal(refused.code, 1);
   assert.equal(refused.json().reason, 'refused');
   assert.deepEqual(refsOf(ctx.repo), []);
 
-  const mutate = await call(['mutate', ...common, '--rev', ctx.sha, '--file', 'src/calc.mjs', '--operator', 'cmp-flip', '--index', '0']);
+  const mutate = await call(['mutate', ...common, '--rev', ctx.sha, '--file', 'src/calc.mjs', '--test', 'src/calc.test.mjs', '--operator', 'cmp-flip', '--index', '0']);
   assert.equal(mutate.code, 0, outText(mutate.io));
   const { seedId } = mutate.json();
   assert.equal(seed.isSeedId(seedId), true, 'mutate prints a seed id of the checked form');
@@ -1724,7 +1764,7 @@ test('S3 through the CLI: a holdout PR with no merge commit fails mutate closed 
   const f = cliFiles(ctx);
   writeFileSync(f.ds, JSON.stringify({ ...SPLIT_DATA, prs: [...SPLIT_DATA.prs, { pr: 77777 }] }));
   const io = cliIo();
-  const code = await seed.main(['mutate', '--repo', ctx.repo, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--rev', ctx.sha, '--file', 'src/calc.mjs', '--operator', 'cmp-flip'], io);
+  const code = await seed.main(['mutate', '--repo', ctx.repo, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--rev', ctx.sha, '--file', 'src/calc.mjs', '--test', 'src/calc.test.mjs', '--operator', 'cmp-flip'], io);
   assert.equal(code, 1);
   const result = JSON.parse(io.out.join('').trim());
   assert.equal(result.reason, 'missing-pr-merge');
@@ -1743,10 +1783,10 @@ test('F5 a single-file verb gives the one reason refused, whatever the cause; on
   const claudeOut = [];
   for (const file of files) {
     const io = cliIo();
-    assert.equal(await seed.main(['mutate', ...common, '--file', file, '--operator', 'bool-invert'], io), 1, file);
+    assert.equal(await seed.main(['mutate', ...common, '--file', file, '--test', 'src/calc.test.mjs', '--operator', 'bool-invert'], io), 1, file);
     mutateOut.push(io.out.join(''));
     const cio = cliIo({ headlessDeps: claudeDeps(fakeSpawn([], { answer: GOOD_ANSWER }), f.ledger) });
-    const argv = ['claude', ...common, '--gold', ctx.goldDir, '--files', file, '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
+    const argv = ['claude', ...common, '--gold', ctx.goldDir, '--files', file, '--tests', `${file}=src/calc.test.mjs`, '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
     assert.equal(await seed.main(argv, cio), 1, file);
     claudeOut.push(cio.out.join(''));
   }
@@ -1759,7 +1799,7 @@ test('F5 a single-file verb gives the one reason refused, whatever the cause; on
   const counts = JSON.parse(plan.out.join('').trim());
   for (const key of ['refusedHoldoutReserve', 'refusedAnswerKey', 'refusedProtected']) assert.equal(typeof counts[key], 'number', key);
   const mixed = cliIo({ headlessDeps: claudeDeps(fakeSpawn([], { answer: GOOD_ANSWER }), f.ledger) });
-  const mixedArgv = ['claude', ...common, '--gold', ctx.goldDir, '--files', 'src/calc.mjs,src/hold.mjs,scripts/lib/headless.mjs', '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
+  const mixedArgv = ['claude', ...common, '--gold', ctx.goldDir, '--files', 'src/calc.mjs,src/hold.mjs,scripts/lib/headless.mjs', '--tests', 'src/calc.mjs=src/calc.test.mjs,src/hold.mjs=src/calc.test.mjs,scripts/lib/headless.mjs=src/calc.test.mjs', '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
   assert.equal(await seed.main(mixedArgv, mixed), 0, outText(mixed));
   const summary = JSON.parse(mixed.out.join('').trim().split('\n').pop());
   assert.equal(summary.created, 1);
@@ -1779,7 +1819,7 @@ test('F7 through the CLI: the first seed has its refs when the second paid run s
     return fakeSpawn([], { answer: n === 1 ? GOOD_ANSWER : second })(command, args, opts);
   };
   const io = cliIo({ headlessDeps: claudeDeps(spawnFn, f.ledger) });
-  const argv = ['claude', '--repo', ctx.repo, '--rev', ctx.sha, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--gold', ctx.goldDir, '--files', 'src/calc.mjs,src/crlf.mjs', '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
+  const argv = ['claude', '--repo', ctx.repo, '--rev', ctx.sha, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--gold', ctx.goldDir, '--files', 'src/calc.mjs,src/crlf.mjs', '--tests', 'src/calc.mjs=src/calc.test.mjs,src/crlf.mjs=src/calc.test.mjs', '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
   assert.equal(await seed.main(argv, io), 0, outText(io));
   assert.equal(refsAtSecond, 2, 'the refs of the first seed exist before the second run starts');
   assert.equal(JSON.parse(io.out.join('').trim().split('\n').pop()).created, 2);
@@ -1792,7 +1832,7 @@ test('CLI refuses a dataset with no findings: the dev filter would refuse nothin
   const f = cliFiles(ctx);
   writeFileSync(f.ds, JSON.stringify({ prs: [], findings: [] }));
   const io = cliIo();
-  const code = await seed.main(['mutate', '--repo', ctx.repo, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--file', 'src/hold.mjs', '--operator', 'bool-invert'], io);
+  const code = await seed.main(['mutate', '--repo', ctx.repo, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--file', 'src/hold.mjs', '--test', 'src/calc.test.mjs', '--operator', 'bool-invert'], io);
   assert.equal(code, 2);
   assert.match(io.err.join(''), /no findings/);
   assert.deepEqual(refsOf(ctx.repo), []);
@@ -1818,7 +1858,7 @@ test('CLI claude needs --confirm-headless, refuses the default ledger under node
   // Breaks when: the verb runs without the flag, the default ledger is used in a test, or the patch is not turned into a seed.
   const ctx = makeRepo({ prs: true });
   const f = cliFiles(ctx);
-  const base = ['claude', '--repo', ctx.repo, '--rev', ctx.sha, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--gold', ctx.goldDir, '--files', 'src/calc.mjs', '--brief', 'Flip one comparison.'];
+  const base = ['claude', '--repo', ctx.repo, '--rev', ctx.sha, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--gold', ctx.goldDir, '--files', 'src/calc.mjs', '--tests', 'src/calc.mjs=src/calc.test.mjs', '--brief', 'Flip one comparison.'];
   const noFlag = cliIo();
   assert.equal(await seed.main([...base, '--ledger', f.ledger], noFlag), 2);
   assert.match(noFlag.err.join(''), /--confirm-headless/);
@@ -1840,7 +1880,7 @@ test('CLI claude needs --confirm-headless, refuses the default ledger under node
   assert.equal(manifest.effort, 'high');
   assert.equal(manifest.severity, 'major');
   const refusedHold = cliIo({ headlessDeps: claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER }), f.ledger) });
-  const none = await seed.main(base.map((a) => (a === 'src/calc.mjs' ? 'src/hold.mjs' : a)).concat(['--ledger', f.ledger, '--confirm-headless']), refusedHold);
+  const none = await seed.main(base.map((a) => a.replace('src/calc.mjs', 'src/hold.mjs')).concat(['--ledger', f.ledger, '--confirm-headless']), refusedHold);
   assert.equal(none, 1);
   assert.equal(calls.length, 1, 'a holdout file never reaches the model');
 });
@@ -1867,14 +1907,22 @@ test('item 1 refusedTest fails closed: a --test path in another case, or a test 
   // Breaks when: refusedTest lets a file through when readTracked gives null (ls-tree is case-sensitive, NTFS is not; a non-UTF-8 text has no content to scan).
   const ctx = makeRepo();
   commitMany(ctx, { 'src/bin.test.mjs': nonUtf8("import { test } from 'node:test';\n// ", "\ntest('x', () => {});\n") });
+  const forms = ['SRC/calc.test.mjs', 'src/Calc.test.mjs', 'src/CALC.test.mjs', 'src/bin.test.mjs', 'src/missing.test.mjs'];
+  for (const testFile of forms) {
+    assert.equal(seedOne(ctx, { testFile }).reason, 'refused-test', `createSeed ${testFile}`);
+    assert.deepEqual(refsOf(ctx.repo), [], testFile);
+    assert.deepEqual(readdirSync(ctx.seeds), [], testFile);
+  }
   const { manifest } = seedOne(ctx);
   const calls = [];
-  for (const testFile of ['SRC/calc.test.mjs', 'src/Calc.test.mjs', 'src/CALC.test.mjs', 'src/bin.test.mjs', 'src/missing.test.mjs']) {
+  for (const testFile of forms) {
+    recordTest(ctx, manifest, testFile);
     const r = await verifyTest(ctx, manifest, testFile, calls);
-    assert.equal(r.reason, 'refused-test', testFile);
+    assert.equal(r.reason, 'refused-test', `verify ${testFile}`);
   }
   assert.equal(calls.length, 0);
   assert.equal(manifestOf(ctx, manifest.seedId).stage, 'mutated');
+  recordTest(ctx, manifest, CALC_TEST_FILE);
   const control = await verifyTest(ctx, manifest, 'src/calc.test.mjs', calls);
   assert.equal(control.ok, true, `control: the exact name still runs: ${JSON.stringify(control)}`);
 });
@@ -1884,10 +1932,10 @@ test('item 1 the target check fails closed on a case variant and on a target tha
   const ctx = makeRepo();
   commitMany(ctx, { 'src/bin.mjs': nonUtf8('// ', '\nexport const f = (n, m) => n < m;\n') });
   const site = { line: 2, before: 'export const f = (n, m) => n < m;', after: 'export const f = (n, m) => n <= m;' };
-  const bin = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/bin.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  const bin = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/bin.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
   assert.equal(bin.reason, 'not-tracked');
   const calcSite = seed.pickSite('cmp-flip', CALC, 0);
-  const upper = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'SRC/CALC.MJS', site: calcSite, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  const upper = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'SRC/CALC.MJS', site: calcSite, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
   assert.equal(upper.reason, 'not-tracked');
   assert.deepEqual(refsOf(ctx.repo), []);
   assert.deepEqual(readdirSync(ctx.seeds), []);
@@ -1914,11 +1962,21 @@ test('item 2 verify scans the closure of relative imports of the test file and t
   };
   const ok = { 'src/ok1.test.mjs': "import './clean.mjs';", 'src/ok2.test.mjs': "import './cyc-a.mjs';", 'src/ok3.test.mjs': "import './c0.mjs';" };
   commitMany(ctx, Object.fromEntries(Object.entries({ ...forms, ...ok }).map(([f, form]) => [f, importing(form)])));
-  const { manifest } = seedOne(ctx);
+  for (const f of Object.keys(forms)) {
+    assert.equal(seedOne(ctx, { testFile: f }).reason, 'refused-test', `createSeed ${f}`);
+    assert.deepEqual(refsOf(ctx.repo), [], f);
+  }
+  assert.deepEqual(readdirSync(ctx.seeds), [], 'a refused test plants no manifest');
+  const { manifest } = seedOne(ctx, { testFile: 'src/ok1.test.mjs' });
+  assert.ok(manifest, 'control: a clean closure plants');
   const calls = [];
-  for (const f of Object.keys(forms)) assert.equal((await verifyTest(ctx, manifest, f, calls)).reason, 'refused-test', f);
+  for (const f of Object.keys(forms)) {
+    recordTest(ctx, manifest, f);
+    assert.equal((await verifyTest(ctx, manifest, f, calls)).reason, 'refused-test', `verify ${f}`);
+  }
   assert.equal(calls.length, 0);
   for (const f of Object.keys(ok)) {
+    recordTest(ctx, manifest, f);
     const r = await verifyTest(ctx, manifest, f);
     assert.equal(r.reason === 'refused-test', false, `control ${f}: ${JSON.stringify(r)}`);
   }
@@ -1929,30 +1987,34 @@ test('item 2 the closure of the target is scanned too: createSeed refuses a targ
   const ctx = makeRepo();
   commitMany(ctx, { 'src/helper.mjs': RISKY_HELPER, 'src/uses.mjs': "import './helper.mjs';\nexport const f = (n, m) => n < m;\n" });
   const site = { line: 2, before: 'export const f = (n, m) => n < m;', after: 'export const f = (n, m) => n <= m;' };
-  const r = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/uses.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  const r = createSeedT({ repo: ctx.repo, rev: ctx.sha, file: 'src/uses.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
   assert.equal(r.reason, 'refused');
   assert.deepEqual(refsOf(ctx.repo), []);
 });
 
-test('item 2 a one-line patch that points an import at a risky module is caught at the seed ref, not only at the base', async () => {
+test('item 2 a one-line patch that points an import at a risky module is caught at the seed ref, not only at the base', () => {
   // Breaks when: the closure is scanned at the base ref only (the seed runs execute the changed import).
   const ctx = makeRepo();
   commitMany(ctx, {
-    'src/clean.mjs': 'export const x = 1;\n', 'src/risky.mjs': `${RISKY_HELPER}export const x = 2;\n`,
+    'src/clean.mjs': 'export const x = 1;\n', 'src/clean2.mjs': 'export const x = 3;\n', 'src/risky.mjs': `${RISKY_HELPER}export const x = 2;\n`,
     'src/uses.mjs': "import { x } from './clean.mjs';\nexport const f = (n) => n + x;\n",
     'src/uses.test.mjs': "import { test } from 'node:test';\nimport './uses.mjs';\ntest('x', () => {});\n",
   });
-  const site = { line: 1, before: "import { x } from './clean.mjs';", after: "import { x } from './risky.mjs';" };
-  const made = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/uses.mjs', site, author: 'claude', truthNote: 'x', seedsDir: ctx.seeds });
-  assert.equal(made.ok, true, JSON.stringify(made));
-  const calls = [];
-  assert.equal((await verifyTest(ctx, made.manifest, 'src/uses.test.mjs', calls)).reason, 'refused-test');
-  assert.equal(calls.length, 0);
+  const plantImport = (to) => seed.createSeed({
+    repo: ctx.repo, rev: ctx.sha, file: 'src/uses.mjs', site: { line: 1, before: "import { x } from './clean.mjs';", after: `import { x } from './${to}.mjs';` },
+    author: 'claude', truthNote: 'x', seedsDir: ctx.seeds, testFile: 'src/uses.test.mjs',
+  });
+  const risky = plantImport('risky');
+  assert.equal(risky.reason, 'refused-test', JSON.stringify(risky));
+  assert.deepEqual(refsOf(ctx.repo), [], 'a patch that adds a risky import plants no ref');
+  assert.deepEqual(readdirSync(ctx.seeds), [], 'and no manifest');
+  const control = plantImport('clean2');
+  assert.equal(control.ok, true, `control: an import of a clean module plants: ${JSON.stringify(control)}`);
 });
 
 test('item 3 and 4 the test child env: TEMP, TMP and TMPDIR in the temp home, a minimal PATH, no system git config, an empty global config, no prompt, an empty gh folder and a dead docker host', () => {
   // Breaks when: a real temp, PATH, git, gh or docker setting reaches the child, a name is set twice in two cases, or a folder or file the env names is not created.
-  const home = tmp('seed-home-check-');
+  const home = tmp('fx-homechk-');
   const env = seed.testChildEnv({ ...leakyParent(), Path: 'C:\\evil\\bin', PATH: '/evil/bin', TMPDIR: '/evil/tmp', TEMP: '/evil/tmp' }, home);
   const inHome = (p) => path.resolve(p).startsWith(path.resolve(home) + path.sep);
   for (const k of ['TEMP', 'TMP', 'TMPDIR']) {
@@ -2139,7 +2201,7 @@ test('item 5 through the CLI: --smoke needs --smoke-out; a clean smoke prints th
   const ctx = makeRepo({ prs: true });
   const f = cliFiles(ctx);
   const out = path.join(tmp(), 'init.jsonl');
-  const base = ['claude', '--repo', ctx.repo, '--rev', ctx.sha, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--gold', ctx.goldDir, '--files', 'src/calc.mjs', '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
+  const base = ['claude', '--repo', ctx.repo, '--rev', ctx.sha, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--gold', ctx.goldDir, '--files', 'src/calc.mjs', '--tests', 'src/calc.mjs=src/calc.test.mjs', '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
   const calls = [];
   for (const extra of [['--smoke'], ['--smoke-out', out]]) {
     const io = cliIo({ headlessDeps: claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER, extraLines: [initOf()] }), f.ledger) });
@@ -2391,3 +2453,250 @@ test('settings rule: withRunSettings appends --settings when the argv has none, 
   assert.throws(() => seed.withRunSettings(['--settings', 'a.json', '--settings', 'a.json'], dir));
   assert.throws(() => seed.withRunSettings(['-p', '--settings'], dir));
 });
+
+// =========================================================================================================
+// fix round 4 (seat rulings of 2026-11-14): refuse the test before planting, the drop verb, no temp folder left
+// =========================================================================================================
+
+const nothingPlanted = (ctx, label) => {
+  assert.deepEqual(refsOf(ctx.repo), [], `${label}: no ref`);
+  assert.deepEqual(readdirSync(ctx.seeds), [], `${label}: no manifest`);
+};
+
+test('round 4 item 1: a refused test plants nothing (no ref, no manifest), and the test is a required, valid argument', () => {
+  // Breaks when: createSeed plants first and checks the test later (the refs stay when verify refuses), ignores the test argument, or lets a test that
+  // verify would refuse (a path that is no test file, a protected path, risky text, an unreadable file) through.
+  const ctx = makeRepo();
+  commitFile(ctx, 'src/danger.test.mjs', "import { rmSync } from 'node:fs';\nimport { test } from 'node:test';\ntest('x', () => { rmSync('nothing', { force: true }); });\n");
+  const site = seed.pickSite('cmp-flip', CALC, 0);
+  const plantWith = (extra) => seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/calc.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds, ...extra });
+  const cases = [
+    [{}, 'bad-test-arg'], [{ testFile: undefined }, 'bad-test-arg'], [{ testFile: 'src/*.test.mjs' }, 'bad-test-arg'], [{ testFile: 'src/calc.mjs' }, 'bad-test-arg'],
+    [{ testFile: 'src/calc.test.mjs;ls' }, 'bad-test-arg'], [{ testFile: 'src/danger.test.mjs' }, 'refused-test'], [{ testFile: 'scripts/github/x.test.mjs' }, 'refused-test'],
+    [{ testFile: 'src/missing.test.mjs' }, 'refused-test'], [{ testFile: 'SRC/calc.test.mjs' }, 'refused-test'],
+  ];
+  for (const [extra, reason] of cases) {
+    assert.equal(plantWith(extra).reason, reason, JSON.stringify(extra));
+    nothingPlanted(ctx, JSON.stringify(extra));
+  }
+  const ok = plantWith({ testFile: 'src/calc.test.mjs' });
+  assert.equal(ok.ok, true, `control: a clean test plants: ${JSON.stringify(ok)}`);
+  assert.equal(refsOf(ctx.repo).length, 2);
+});
+
+test('round 4 item 1: the manifest records the test, and verify takes that test only', async () => {
+  // Breaks when: the manifest does not record the test, verify runs a test other than the recorded one, a manifest with no recorded test is accepted
+  // (a caller could then pick any test again), or a refused --test drops the seed.
+  const ctx = makeRepo();
+  const { manifest } = seedOne(ctx);
+  assert.equal(manifest.testFile, 'src/calc.test.mjs');
+  assert.equal(manifestOf(ctx, manifest.seedId).testFile, 'src/calc.test.mjs');
+  const calls = [];
+  const other = await verifyTest(ctx, manifest, 'src/other.test.mjs', calls);
+  assert.equal(other.reason, 'test-mismatch');
+  assert.equal(calls.length, 0);
+  assert.equal(manifestOf(ctx, manifest.seedId).stage, 'mutated', 'a refused --test does not drop the seed');
+  assert.equal(refsOf(ctx.repo).length, 2);
+  const noArg = await seed.verifySeed({ repo: ctx.repo, seedId: manifest.seedId, seedsDir: ctx.seeds, run: sequenceRun([0, 0, 1, 1], calls) });
+  assert.equal(noArg.ok, true, `control: verify with no --test uses the recorded one: ${JSON.stringify(noArg)}`);
+  assert.equal(noArg.test.testFile, 'src/calc.test.mjs');
+  const bare = makeRepo();
+  const legacy = seedOne(bare);
+  const { testFile, ...rest } = manifestOf(bare, legacy.manifest.seedId);
+  writeFileSync(path.join(bare.seeds, `${legacy.manifest.seedId}.json`), JSON.stringify(rest));
+  assert.equal((await verifyTest(bare, legacy.manifest, 'src/calc.test.mjs', calls)).reason, 'no-recorded-test');
+  assert.equal((await seed.verifySeed({ repo: bare.repo, seedId: legacy.manifest.seedId, seedsDir: bare.seeds })).reason, 'no-recorded-test');
+  assert.equal(calls.length, 4, 'only the control run started a test');
+});
+
+const dropCall = (ctx, seedId) => seed.dropSeedById({ repo: ctx.repo, seedsDir: ctx.seeds, seedId });
+
+test('round 4 item 2: drop deletes the two refs and the manifest of a seed, and prints counts', () => {
+  // Breaks when: a ref or the manifest stays, or the counts are wrong.
+  const ctx = makeRepo();
+  const { manifest } = seedOne(ctx);
+  const r = dropCall(ctx, manifest.seedId);
+  assert.deepEqual([r.ok, r.refsDeleted, r.manifestsDeleted], [true, 2, 1], JSON.stringify(r));
+  assert.deepEqual(refsOf(ctx.repo), []);
+  assert.deepEqual(readdirSync(ctx.seeds), []);
+  assert.equal(dropCall(ctx, manifest.seedId).reason, 'no-manifest', 'a second drop finds nothing');
+});
+
+test('round 4 item 2: drop refuses an id with no manifest or a bad id, and touches nothing', () => {
+  // Breaks when: an id with no manifest deletes the refs that carry its name, or a bad id reaches a ref name.
+  const ctx = makeRepo();
+  const { manifest } = seedOne(ctx);
+  const ghost = 'op-cmp-flip-0a1b2c3d';
+  plant(ctx.repo, `refs/eval/seed/${ghost}`, { files: { 'a.txt': 'x' } });
+  const before = refsOf(ctx.repo);
+  assert.equal(dropCall(ctx, ghost).reason, 'no-manifest');
+  for (const id of ['../evil', 'a/b', 'op-cmp-flip-0a1b2c3', '', undefined]) assert.equal(dropCall(ctx, id).reason, 'bad-seed-id', String(id));
+  assert.deepEqual(refsOf(ctx.repo), before);
+  assert.deepEqual(readdirSync(ctx.seeds), [`${manifest.seedId}.json`]);
+});
+
+test('round 4 item 2: drop never deletes a ref outside refs/eval, even one with the same id text', () => {
+  // Breaks when: the delete names a ref by the id alone, or by a pattern.
+  const ctx = makeRepo();
+  const { manifest } = seedOne(ctx);
+  const id = manifest.seedId;
+  const keep = [`refs/heads/${id}`, `refs/tags/${id}`, `refs/eval/other/${id}`, `refs/remotes/fork/${id}`];
+  for (const ref of keep) plant(ctx.repo, ref, { files: { 'a.txt': ref } });
+  const r = dropCall(ctx, id);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const left = git(ctx.repo, ['for-each-ref', '--format=%(refname)']).split('\n').filter((n) => keep.includes(n) || n.includes(id));
+  assert.deepEqual(left.sort(), [...keep].sort());
+});
+
+test('round 4 item 2: drop works on a seed with one ref or none, and keeps the manifest when a delete fails', () => {
+  // Breaks when: a missing ref makes the whole delete fail, or a failed delete still removes the manifest (the refs would have no manifest).
+  const one = makeRepo();
+  const a = seedOne(one);
+  git(one.repo, ['update-ref', '-d', a.manifest.baseRef]);
+  const r1 = dropCall(one, a.manifest.seedId);
+  assert.deepEqual([r1.ok, r1.refsDeleted, r1.manifestsDeleted], [true, 1, 1], JSON.stringify(r1));
+  assert.deepEqual(refsOf(one.repo), []);
+  const none = makeRepo();
+  const b = seedOne(none);
+  git(none.repo, ['update-ref', '-d', b.manifest.baseRef]);
+  git(none.repo, ['update-ref', '-d', b.manifest.seedRef]);
+  const r0 = dropCall(none, b.manifest.seedId);
+  assert.deepEqual([r0.ok, r0.refsDeleted, r0.manifestsDeleted], [true, 0, 1], JSON.stringify(r0));
+  const locked = makeRepo();
+  const c = seedOne(locked);
+  writeFileSync(path.join(locked.repo, '.git', `${c.manifest.seedRef}.lock`), '');
+  const r2 = dropCall(locked, c.manifest.seedId);
+  assert.equal(r2.reason, 'ref-delete');
+  assert.equal(refsOf(locked.repo).length, 2, 'the delete is one transaction: neither ref went');
+  assert.equal(readdirSync(locked.seeds).length, 1, 'the manifest stays');
+});
+
+test('round 4 item 2: drop refuses a seed that was emitted into gold, and the CLI prints counts and never a sha', async () => {
+  // Breaks when: a seed with a gold row loses its refs (the row would name a range that no longer exists), or the CLI prints a sha.
+  const ctx = makeRepo();
+  const id = await verifiedSeed(ctx);
+  assert.equal(seed.emitRow({ seedId: id, seedsDir: ctx.seeds, goldFile: path.join(ctx.goldDir, 'gold-b.json') }).ok, true);
+  assert.equal(dropCall(ctx, id).reason, 'emitted');
+  assert.equal(refsOf(ctx.repo).length, 2);
+  const fresh = makeRepo();
+  const { manifest } = seedOne(fresh);
+  const io = cliIo();
+  assert.equal(await seed.main(['drop', '--repo', fresh.repo, '--seeds', fresh.seeds, '--seed', manifest.seedId], io), 0, outText(io));
+  assert.deepEqual(JSON.parse(io.out.join('')), { ok: true, seedId: manifest.seedId, refsDeleted: 2, manifestsDeleted: 1 });
+  assert.equal(outText(io).includes(fresh.sha), false);
+  const bad = cliIo();
+  assert.equal(await seed.main(['drop', '--repo', fresh.repo, '--seeds', fresh.seeds, '--seed', manifest.seedId], bad), 1);
+  assert.equal(JSON.parse(bad.out.join('')).reason, 'no-manifest');
+  const implicit = cliIo();
+  assert.equal(await seed.main(['drop', '--seed', manifest.seedId], implicit), 2, 'under node --test the repo and seeds flags must be explicit');
+  assert.match(implicit.err.join(''), /explicit/);
+});
+
+test('round 4 item 1 through the CLI: mutate needs --test, a refused test plants nothing, verify takes the recorded test and refuses another', async () => {
+  // Breaks when: mutate runs without --test, plants before it checks the test, or verify runs a test other than the recorded one.
+  const ctx = makeRepo({ prs: true });
+  commitFile(ctx, 'src/danger.test.mjs', "import { rmSync } from 'node:fs';\nimport { test } from 'node:test';\ntest('x', () => { rmSync('nothing', { force: true }); });\n");
+  const f = cliFiles(ctx);
+  const common = ['--repo', ctx.repo, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--rev', ctx.sha, '--file', 'src/calc.mjs', '--operator', 'cmp-flip'];
+  const run = async (argv) => { const io = cliIo(); return { code: await seed.main(argv, io), io }; };
+  const missing = await run(['mutate', ...common]);
+  assert.equal(missing.code, 2);
+  assert.match(missing.io.err.join(''), /--test/);
+  nothingPlanted(ctx, 'no --test');
+  const refused = await run(['mutate', ...common, '--test', 'src/danger.test.mjs']);
+  assert.equal(refused.code, 1);
+  assert.equal(JSON.parse(refused.io.out.join('')).reason, 'refused-test');
+  nothingPlanted(ctx, 'a refused test');
+  const made = await run(['mutate', ...common, '--test', 'src/calc.test.mjs']);
+  assert.equal(made.code, 0, outText(made.io));
+  const seedId = JSON.parse(made.io.out.join('')).seedId;
+  const verifyArgs = ['verify', '--repo', ctx.repo, '--seeds', ctx.seeds, '--seed', seedId];
+  const other = await run([...verifyArgs, '--test', 'src/other.test.mjs']);
+  assert.equal(other.code, 1);
+  assert.equal(JSON.parse(other.io.out.join('')).reason, 'test-mismatch');
+  assert.equal(refsOf(ctx.repo).length, 2, 'a refused --test drops nothing');
+  const same = await run([...verifyArgs]);
+  assert.equal(same.code, 0, `verify with no --test uses the recorded test: ${outText(same.io)}`);
+  assert.equal(JSON.parse(same.io.out.join('')).command, 'node --test src/calc.test.mjs');
+});
+
+test('round 4 item 1 through the CLI: claude takes one test per file (--tests file=test,...), checks it before any run, and a refused test spends no run', async () => {
+  // Breaks when: the claude verb plants with no test, a file with no test starts a paid run, or a refused test reaches the model.
+  const ctx = makeRepo({ prs: true });
+  commitFile(ctx, 'src/danger.test.mjs', "import { rmSync } from 'node:fs';\nimport { test } from 'node:test';\ntest('x', () => { rmSync('nothing', { force: true }); });\n");
+  const f = cliFiles(ctx);
+  const base = ['claude', '--repo', ctx.repo, '--rev', ctx.sha, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--gold', ctx.goldDir, '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
+  const calls = [];
+  const run = async (extra) => { const io = cliIo({ headlessDeps: claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER }), f.ledger) }); return { code: await seed.main([...base, ...extra], io), io }; };
+  for (const extra of [['--files', 'src/calc.mjs'], ['--files', 'src/calc.mjs', '--tests', 'src/crlf.mjs=src/calc.test.mjs'], ['--files', 'src/calc.mjs', '--tests', 'src/calc.mjs=src/calc.mjs'], ['--files', 'src/calc.mjs,src/crlf.mjs', '--tests', 'src/calc.mjs=src/calc.test.mjs']]) {
+    const r = await run(extra);
+    assert.equal(r.code, 2, extra.join(' '));
+    assert.match(r.io.err.join(''), /--tests/);
+  }
+  assert.equal(calls.length, 0, 'a usage error spends no run');
+  const refused = await run(['--files', 'src/calc.mjs', '--tests', 'src/calc.mjs=src/danger.test.mjs']);
+  assert.equal(refused.code, 1, outText(refused.io));
+  assert.equal(calls.length, 0, 'a refused test never reaches the model');
+  nothingPlanted(ctx, 'a refused test');
+  const ok = await run(['--files', 'src/calc.mjs', '--tests', 'src/calc.mjs=src/calc.test.mjs']);
+  assert.equal(ok.code, 0, outText(ok.io));
+  assert.equal(calls.length, 1);
+  assert.equal(manifestOf(ctx, readdirSync(ctx.seeds)[0].replace(/\.json$/, '')).testFile, 'src/calc.test.mjs');
+});
+
+// ---- item 3: every temp folder of seed.mjs is removed on success and on each error path (the folders are found in a private empty temp root) ----
+
+test('round 4 item 3 commitFrom (seed-idx-): its temp index folder is removed when the work succeeds and when edit throws', async () => {
+  // Breaks when: the try/finally around the temp index folder is removed.
+  const ctx = makeRepo();
+  const ran = [];
+  const left = await leftInTemp(() => {
+    assert.throws(() => seed.commitFrom(ctx.repo, { from: ctx.sha, message: 'x', edit: (env) => { ran.push(env.GIT_INDEX_FILE); throw new Error('edit boom'); } }), /edit boom/);
+    assert.match(seed.commitFrom(ctx.repo, { from: ctx.sha, message: 'x', edit: (env) => ran.push(env.GIT_INDEX_FILE) }), /^[0-9a-f]{40}$/);
+  });
+  assert.equal(ran.length, 2, 'both paths ran');
+  assert.deepEqual(left, []);
+  for (const f of ran) assert.equal(existsSync(path.dirname(f)), false);
+});
+
+test('round 4 item 3 runTestOnce (seed-home-): the temp home is removed after a run, after a failed spawn and after a throw before the spawn', async () => {
+  // Breaks when: the catch around the env build is removed, or a failed spawn leaves the home.
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'ok.test.mjs'), "import { test } from 'node:test';\ntest('ok', () => {});\n");
+  const hostile = new Proxy({}, { ownKeys() { throw new Error('env boom'); } });
+  const left = await leftInTemp(async () => {
+    assert.equal((await seed.runTestOnce(dir, 'ok.test.mjs', 30_000)).status, 0, 'control: a real run passes');
+    const missing = await seed.runTestOnce(path.join(dir, 'no-such-folder'), 'ok.test.mjs', 30_000);
+    assert.ok(missing.error, 'a failed spawn is a run error');
+    assert.throws(() => seed.runTestOnce(dir, 'ok.test.mjs', 30_000, hostile), /env boom/);
+  });
+  assert.deepEqual(left, []);
+});
+
+test('round 4 item 3 lintInputs (seed-lint-): its temp folder is removed when the scan succeeds and when the scan throws', async () => {
+  // Breaks when: the finally around the lint folder is removed.
+  class ThrowingSet extends Set { [Symbol.iterator]() { throw new Error('scan boom'); } }
+  const left = await leftInTemp(() => {
+    assert.equal(seed.lintInputs({ brief: 'b', file: 'src/calc.mjs', fileText: CALC }, forbidden()).ok, true, 'control');
+    assert.equal(seed.lintInputs({ brief: 'b', file: 'src/calc.mjs', fileText: CALC }, new ThrowingSet(['x'])).reason, 'lint-error');
+  });
+  assert.deepEqual(left, []);
+});
+
+test('round 4 item 3 runSeedClaude (seed-claude-): its own scratch cwd is removed after a run and after a spawn that throws', async () => {
+  // Breaks when: the finally that removes the cwd is removed, or a throw between the mkdtemp and the try leaves it.
+  const ledger = path.join(tmp(), 'ledger.jsonl');
+  const cwds = [];
+  const args = { file: 'src/calc.mjs', fileText: CALC, brief: 'b', forbidden: forbidden(), ledgerPath: ledger };
+  const ok = (command, a, opts) => { cwds.push(opts.cwd); return fakeSpawn([], { answer: GOOD_ANSWER })(command, a, opts); };
+  const boom = (command, a, opts) => { cwds.push(opts.cwd); throw new Error('spawn boom'); };
+  const left = await leftInTemp(async () => {
+    const first = await seed.runSeedClaude(args, claudeDeps(ok, ledger));
+    assert.equal(first.ok, true, `control: ${JSON.stringify(first)}`);
+    assert.equal((await seed.runSeedClaude(args, claudeDeps(boom, ledger))).ok, false);
+  });
+  assert.equal(cwds.length, 2, 'both runs reached the spawn');
+  assert.deepEqual(left, []);
+  for (const c of cwds) assert.equal(existsSync(c), false);
+});
+
