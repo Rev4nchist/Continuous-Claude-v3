@@ -1775,6 +1775,9 @@ async function takeRunLock(bodyPath) {
   }
   // An 'exit' handler waits for no promise, so the release is synchronous. A signal ends the process without an 'exit'
   // event unless a handler asks for one. A kill -9 or a crash leaves the file: the next acquire drops it (dead pid).
+  // The signal handlers run only after a blocking gate child (spawnSync) returns: the event loop is busy until then, so a
+  // SIGINT or SIGTERM waits for the child. Before this point no handler exists, so a signal ends the process at once and
+  // a lock written by then stays. The next acquire drops it (dead pid).
   process.on('exit', () => { try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ } });
   for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) process.on(signal, () => process.exit(code));
 }

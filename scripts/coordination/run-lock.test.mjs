@@ -9,7 +9,17 @@
 //   floor              a heavy run starts under 5 GB                                      (drop the floor)
 //   light kind         a hook build takes or is refused by a slot                         (count every kind)
 //   spacing            two grants inside 2 minutes both pass                              (drop the spacing)
-//   dead run           a dead pid, a reused pid or a past expiry keeps a slot             (trust the file)
+//   dead run           a dead pid or a reused pid keeps a slot                            (trust the file)
+//   R3 expiry          a past expiry removes the lock of a run that is alive; or --minutes Infinity, 0 or a negative number is taken
+//                      (expiry as the only test; no check of the minutes)
+//   R1 unlocked age    a pre-pr in its own acquire (younger than 2 minutes, no lock) counts as an unlocked run (drop the age rule)
+//   R2 wedged gate     a gate of a live holder is never broken, so one stuck or linked-back gate stops every acquire (no age limit);
+//                      a failed gate remove is tried once only (no retry)
+//   S1 re-read         the gate is moved aside after a change that the judgment did not see (no re-read before the move)
+//   S2 CLI release     a release by hand leaves no log line (no log in the CLI release)
+//   S3 pgrep           a failed pgrep gives a fake run with pid NaN (no pid filter)
+//   S4 samples hook    the test hook works with the default store (no store check)
+//   R4 hygiene         a temp folder or a junction stays after the run (no after step, no unlink of the link)
 //   race               two builders that measure in the same minute both start           (drop the gate file)
 //   register           a loop already running is not counted, or is refused               (refuse, or skip the file)
 //   unlocked run       an old-code pre-pr with no lock file is not counted                (count lock files only)
@@ -17,7 +27,7 @@
 //   refusal text       a WAIT without the reason or the retry time                        (drop a field)
 //   break              a break without a reason, or with no log line                      (skip the log)
 //   unknown read       a failed process read ("unknown") removes the lock of a live run   (treat unknown as dead)
-//   gate steal         a gate of a live holder is broken because its file is old          (age-based steal)
+//   gate steal         a gate of a live holder is broken while its file is under 120 s old (a shorter age limit)
 //   gate foreign       the finally step removes a gate file that another process now owns (remove without a check)
 //   gate snapshot      process reads (pidStart, prePrProcs) run while the gate is held   (read inside the gate)
 //   race               two processes both start; run behind a barrier, not in one process (drop the gate file)
@@ -47,12 +57,12 @@
 //
 // Gate file contract these tests pin: gate.lock holds JSON {"pid": N, "pidStart": M} of its holder.
 // The "unknown" value these tests pin: pidStart(pid) returns the string 'unknown' when the read fails.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync, rmdirSync, symlinkSync, unlinkSync, utimesSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import os, { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as RL from './run-lock.mjs';
@@ -62,8 +72,19 @@ const T0 = Date.parse('2026-11-15T15:00:00Z');
 const MIN = 60_000;
 const RUN_LOCK = join(dirname(fileURLToPath(import.meta.url)), 'run-lock.mjs');
 
+// Test hygiene (R4): every temp folder of this file is made here and removed in the after step. A link is unlinked FIRST:
+// a recursive remove through a junction would empty the folder it points at (the real scripts/coordination).
+const made = [];
+const links = [];
+const mk = (prefix) => { const p = mkdtempSync(join(tmpdir(), prefix)); made.push(p); return p; };
+const unlinkLink = (p) => { try { unlinkSync(p); } catch { try { rmdirSync(p); } catch { /* already gone */ } } };
+after(() => {
+  for (const l of links) unlinkLink(l);
+  for (const p of made) { try { rmSync(p, { recursive: true, force: true }); } catch { /* a leftover shows in the folder count */ } }
+});
+
 function setup(over = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'runlock-'));
+  const dir = mk('runlock-');
   const st = { now: T0, free: 8, load: 10, alive: new Map(), procs: [], ...over };
   const three = (v) => (Array.isArray(v) ? v : [v, v, v]);
   const d = {
@@ -226,7 +247,7 @@ test('spacing: a second grant inside 2 minutes waits and names the retry time; a
   assert.equal((await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d)).granted, true);
 });
 
-test('a dead pid, a reused pid (other start time) and a past expiry each lose their slot', async () => {
+test('a dead pid and a reused pid (other start time) lose their slot; a past expiry keeps the lock of a run that is alive (R3)', async () => {
   const ctx = setup({ free: 6 });
   ctx.mode('grant');
   await take(ctx, 'pre-pr', 100);
@@ -237,8 +258,101 @@ test('a dead pid, a reused pid (other start time) and a past expiry each lose th
   assert.equal((await list(ctx.d)).live.length, 0);
   assert.equal(lockFiles(ctx.dir).length, 0, 'the files are removed');
   await take(ctx, 'pre-pr', 102);
-  ctx.st.now += 60 * MIN; // past the 45 minute default expiry, pid still alive
-  assert.equal((await list(ctx.d)).live.length, 0);
+  ctx.st.now += 60 * MIN; // past the 45 minute default expiry, pid still alive and still the same process
+  assert.equal((await list(ctx.d)).live.length, 1, 'a run proven alive keeps its lock past the expiry (a long pre-pr, a sleep, a loop with no renew)');
+  assert.equal(lockFiles(ctx.dir).length, 1);
+});
+
+test('R3: a past expiry removes the lock only when the holder is not proven alive (pid gone, other start, unknown read)', async () => {
+  for (const [name, pidStart] of [['gone', () => null], ['other start', () => 424242], ['unknown read', () => 'unknown']]) {
+    const ctx = setup({ free: 6 });
+    ctx.mode('grant');
+    await take(ctx, 'pre-pr', 100);
+    assert.equal(lockFiles(ctx.dir).length, 1);
+    ctx.st.now += 60 * MIN;
+    ctx.d.pidStart = pidStart;
+    assert.equal((await list(ctx.d)).live.length, 0, `${name}: the expired lock is removed`);
+    assert.equal(lockFiles(ctx.dir).length, 0, name);
+  }
+});
+
+test('R3: a lock with no finite expiry counts as expired: removed when the holder is not proven alive, kept when it is', async () => {
+  // Breaks when: a non-finite expiresAt (old code, --minutes Infinity) makes the lock immortal for a holder that is not proven alive.
+  const old = (ctx) => { const f = join(ctx.dir, lockFiles(ctx.dir)[0]); const rec = JSON.parse(readFileSync(f, 'utf8')); rec.expiresAt = null; writeFileSync(f, JSON.stringify(rec)); };
+  const a = setup({ free: 6 });
+  a.mode('grant');
+  await take(a, 'pre-pr', 100);
+  old(a);
+  a.d.pidStart = () => 'unknown'; // an unknown read is no proof
+  assert.equal((await list(a.d)).live.length, 0, 'no expiry and no proof of life: removed');
+  const b = setup({ free: 6 });
+  b.mode('grant');
+  await take(b, 'pre-pr', 101);
+  old(b);
+  assert.equal((await list(b.d)).live.length, 1, 'no expiry but proven alive: kept');
+});
+
+test('R2: the gate age limit is 120 s: a live holder gate of 119 s is kept, one of 121 s is broken', async () => {
+  // Breaks when: GATE_MAX_MS moves anywhere between 91 s and 199 s (the loose 90 s and 200 s tests cannot see it).
+  const mk2 = (ageS) => {
+    const ctx = setup();
+    ctx.mode('grant');
+    live(ctx, 101);
+    live(ctx, 102);
+    const gate = join(ctx.dir, 'gate.lock');
+    writeFileSync(gate, gateBody(102, 1102)); // pid 102 runs and its start matches: a live holder
+    const t0 = new Date(Date.now() - ageS * 1000);
+    utimesSync(gate, t0, t0);
+    return { ctx, gate };
+  };
+  const old = mk2(121);
+  assert.equal((await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, old.ctx.d)).granted, true, '121 s: broken');
+  const young = mk2(119);
+  const outcome = acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, young.ctx.d).then((x) => ({ x }), (e) => ({ e }));
+  await new Promise((res) => setTimeout(res, 150));
+  assert.equal(lockFiles(young.ctx.dir).length, 0, '119 s: a live holder keeps its gate, so no lock is written yet');
+  rmSync(young.gate);
+  assert.equal((await outcome).x?.granted, true);
+});
+
+test('R3: two expired locks of live runs still fill the slots in acquire', async () => {
+  const ctx = setup({ free: 6 });
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100);
+  await take(ctx, 'pre-pr', 101);
+  ctx.st.now += 60 * MIN;
+  live(ctx, 102);
+  const r = await acquire({ kind: 'pre-pr', pid: 102, holder: 't' }, ctx.d);
+  assert.equal(r.granted, false, 'the runs are alive, so their slots count');
+  assert.match(r.lines.join('\n'), /2 live heavy runs/);
+});
+
+test('R3: --minutes must be finite and above 0, in acquire and register (no null expiry, no silent default)', async () => {
+  for (const minutes of [Infinity, -Infinity, 0, -5, NaN]) {
+    const ctx = setup();
+    ctx.mode('grant');
+    live(ctx, 100);
+    await assert.rejects(acquire({ kind: 'hook-build', pid: 100, holder: 't', minutes }, ctx.d), /--minutes/, `acquire ${minutes}`);
+    await assert.rejects(register({ kind: 'loop', pid: 100, holder: 't', minutes }, ctx.d), /--minutes/, `register ${minutes}`);
+    assert.equal(lockFiles(ctx.dir).length, 0, `${minutes}: no lock written`);
+  }
+  const ok = setup();
+  live(ok, 100);
+  assert.equal((await acquire({ kind: 'hook-build', pid: 100, holder: 't', minutes: 5 }, ok.d)).granted, true);
+});
+
+test('R3: the CLI refuses --minutes Infinity, 0, a negative number and text with exit 1 and no lock', () => {
+  for (const bad of ['Infinity', '0', '-3', 'abc']) {
+    const store = mk('runlock-cli-');
+    writeFileSync(join(store, 'MODE'), 'grant');
+    for (const verb of ['acquire', 'register']) {
+      const kind = verb === 'acquire' ? 'hook-build' : 'loop';
+      const r = runCli([verb, '--kind', kind, '--pid', String(process.pid), '--minutes', bad], store);
+      assert.equal(r.status, 1, `${verb} --minutes ${bad}: ${r.stdout}${r.stderr}`);
+      assert.match(r.stderr, /--minutes/);
+    }
+    assert.equal(lockFiles(store).length, 0, `--minutes ${bad}: no lock`);
+  }
 });
 
 // Two real processes. Each child holds at its first clock read until one shared wall-clock instant, so both leave the
@@ -279,8 +393,8 @@ const waitFor = async (check, ms) => {
 };
 
 async function raceRound() {
-  const store = mkdtempSync(join(tmpdir(), 'runlock-race-store-'));
-  const bar = mkdtempSync(join(tmpdir(), 'runlock-race-bar-'));
+  const store = mk('runlock-race-store-');
+  const bar = mk('runlock-race-bar-');
   writeFileSync(join(store, 'MODE'), 'grant');
   const script = join(bar, 'child.mjs');
   writeFileSync(script, RACE_CHILD(pathToFileURL(RUN_LOCK).href));
@@ -556,7 +670,7 @@ test('item 6: "constructor", "__proto__" and "toString" are not kinds, in acquir
 });
 
 test('item 7: the CLI refuses acquire and register with no --pid, and writes no lock', () => {
-  const store = mkdtempSync(join(tmpdir(), 'runlock-cli-'));
+  const store = mk('runlock-cli-');
   for (const verb of ['acquire', 'register']) {
     const r = runCli([verb, '--kind', 'pre-pr'], store);
     assert.equal(r.status, 1, `${verb}: ${r.stdout}${r.stderr}`);
@@ -567,7 +681,7 @@ test('item 7: the CLI refuses acquire and register with no --pid, and writes no 
 
 test('item 7: the CLI with --pid for a live process still grants and writes the lock', () => {
   // A hook build is a light kind: it takes no slot, so the real process table (other live pre-pr runs) cannot refuse it.
-  const store = mkdtempSync(join(tmpdir(), 'runlock-cli-'));
+  const store = mk('runlock-cli-');
   writeFileSync(join(store, 'MODE'), 'grant');
   const r = runCli(['acquire', '--kind', 'hook-build', '--pid', String(process.pid), '--holder', 'cli test'], store);
   assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
@@ -587,12 +701,18 @@ test('F1: three unlocked pre-pr runs refuse a heavy start and not a hook build (
 });
 
 test('item 8: the CLI runs when its path is a junction or link to the folder (real paths compare)', () => {
-  const store = mkdtempSync(join(tmpdir(), 'runlock-cli-'));
-  const link = join(mkdtempSync(join(tmpdir(), 'runlock-link-')), 'linked');
+  const store = mk('runlock-cli-');
+  const link = join(mk('runlock-link-'), 'linked');
   symlinkSync(dirname(RUN_LOCK), link, 'junction');
-  const viaLink = spawnSync(process.execPath, [join(link, 'run-lock.mjs'), 'summary'], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, RUN_LOCK_DIR: store } });
-  assert.equal(viaLink.status, 0, `${viaLink.stdout}${viaLink.stderr}`);
-  assert.match(viaLink.stdout, /"total": 0/, 'the CLI printed its answer; it did not exit 0 with no output');
+  links.push(link);
+  try {
+    const viaLink = spawnSync(process.execPath, [join(link, 'run-lock.mjs'), 'summary'], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, RUN_LOCK_DIR: store } });
+    assert.equal(viaLink.status, 0, `${viaLink.stdout}${viaLink.stderr}`);
+    assert.match(viaLink.stdout, /"total": 0/, 'the CLI printed its answer; it did not exit 0 with no output');
+  } finally {
+    unlinkLink(link); // first the link, so no later remove can follow it into the real folder
+    assert.equal(existsSync(RUN_LOCK), true, 'the real run-lock.mjs is still there');
+  }
 });
 
 test('item 8: classifyEntry says main, import or miss; a miss is named, not silent', () => {
@@ -837,7 +957,7 @@ test('F4: a lock file rewritten under the same name after the snapshot (an unkno
 });
 
 test('F5: the CLI exits 75 when the lock says wait, 1 on a usage error, and names 75 in its usage text', () => {
-  const store = mkdtempSync(join(tmpdir(), 'runlock-cli-'));
+  const store = mk('runlock-cli-');
   writeFileSync(join(store, 'MODE'), 'grant');
   const wait = runCli(['acquire', '--kind', 'pre-pr', '--pid', String(process.pid)], store, { RUN_LOCK_TEST_SAMPLES: SAMPLES_ENV(8, 95) });
   assert.equal(wait.status, 75, `${wait.stdout}${wait.stderr}`);
@@ -940,7 +1060,7 @@ test('F6b: a gate of an unknown start whose pid is gone is broken at once; an un
   live(unreadable, 101);
   const gate = join(unreadable.dir, 'gate.lock');
   writeFileSync(gate, gateBody(102, 'unknown'));
-  const longAgo = new Date(Date.now() - 120_000);
+  const longAgo = new Date(Date.now() - 90_000); // under the 120 s age limit for any gate (R2)
   utimesSync(gate, longAgo, longAgo);
   unreadable.d.pidStart = (p) => (p === 102 ? 'unknown' : unreadable.st.alive.get(p) ?? null);
   const outcome = acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, unreadable.d).then((x) => ({ x }), (e) => ({ e }));
@@ -971,7 +1091,7 @@ test('low: at exactly 5.0 GB with a loop live a heavy run is granted (the floor 
 });
 
 test('low: the CLI refuses release and break with no --pid', () => {
-  const store = mkdtempSync(join(tmpdir(), 'runlock-cli-'));
+  const store = mk('runlock-cli-');
   for (const args of [['release'], ['break', '--reason', 'r', '--who', 'w'], ['release', '--pid', 'abc']]) {
     const r = runCli(args, store);
     assert.equal(r.status, 1, `${args.join(' ')}: ${r.stdout}${r.stderr}`);
@@ -980,8 +1100,8 @@ test('low: the CLI refuses release and break with no --pid', () => {
 });
 
 test('low: a classifyEntry miss prints one note on stderr and still runs the CLI', () => {
-  const store = mkdtempSync(join(tmpdir(), 'runlock-cli-'));
-  const wrapper = join(mkdtempSync(join(tmpdir(), 'runlock-miss-')), 'run-lock.mjs'); // named run-lock.mjs, not this file
+  const store = mk('runlock-cli-');
+  const wrapper = join(mk('runlock-miss-'), 'run-lock.mjs'); // named run-lock.mjs, not this file
   writeFileSync(wrapper, `import ${JSON.stringify(pathToFileURL(RUN_LOCK).href)};\n`);
   const r = spawnSync(process.execPath, [wrapper, 'summary'], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, RUN_LOCK_DIR: store } });
   assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
@@ -1003,4 +1123,178 @@ test('low: the warn log row holds the head of the run', async () => {
   live(ctx, 100);
   await acquire({ kind: 'pre-pr', pid: 100, holder: 't', head: 'abc12345' }, ctx.d);
   assert.equal(JSON.parse(readFileSync(join(ctx.dir, 'warn-log.jsonl'), 'utf8').trim()).head, 'abc12345');
+});
+
+// ---------- seat list R1, R2, S1 to S4 ----------
+
+test('R1: a pre-pr process younger than 2 minutes with no lock is not counted as an unlocked run; one older is', async () => {
+  const ctx = setup({ free: 6 });
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100); // one live lock; the clock is now 3 minutes later
+  const now = ctx.st.now;
+  // two processes in their own acquire (6 seconds of samples, no lock yet): not slots
+  ctx.st.procs = [{ pid: 501, start: now - 5_000 }, { pid: 502, start: now - 30_000 }];
+  live(ctx, 101);
+  const fresh = await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d);
+  assert.equal(fresh.granted, true, fresh.lines.join('\n'));
+  assert.ok(!fresh.lines.some((l) => /UNLOCKED RUN seen/.test(l)), fresh.lines.join('\n'));
+  assert.equal((await list(ctx.d)).unlocked.length, 0, 'list agrees');
+  // one process of 3 minutes with no lock is an old-code run: it takes the second slot
+  const old = setup({ free: 6 });
+  old.mode('grant');
+  await take(old, 'pre-pr', 100);
+  old.st.procs = [{ pid: 503, start: old.st.now - 3 * MIN }];
+  live(old, 101);
+  const stale = await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, old.d);
+  assert.equal(stale.granted, false);
+  assert.ok(stale.lines.some((l) => /UNLOCKED RUN seen.*503/.test(l)), stale.lines.join('\n'));
+  assert.equal((await list(old.d)).unlocked.length, 1);
+});
+
+test('R1: the age limit is more than 2 minutes; a start we cannot read is not counted', async () => {
+  const ctx = setup({ free: 6 });
+  await take(ctx, 'pre-pr', 100);
+  const now = ctx.st.now;
+  ctx.st.procs = [{ pid: 601, start: now - 2 * MIN }, { pid: 602, start: NaN }, { pid: 603, start: 'unknown' }, { pid: 604, start: null }];
+  assert.equal((await list(ctx.d)).unlocked.length, 0, 'exactly 2 minutes, NaN, unknown and null are not counted');
+  ctx.st.procs = [{ pid: 605, start: now - 2 * MIN - 1 }];
+  assert.equal((await list(ctx.d)).unlocked.length, 1, '1 ms over 2 minutes is counted');
+});
+
+test('R1: in warn mode fresh unlocked processes cause no false WOULD WAIT line and no warn-log row', async () => {
+  const ctx = setup({ free: 6 });
+  await take(ctx, 'pre-pr', 100);
+  const now = ctx.st.now;
+  ctx.st.procs = [{ pid: 501, start: now - 1_000 }, { pid: 502, start: now - 2_000 }];
+  live(ctx, 101);
+  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d);
+  assert.equal(r.granted, true);
+  assert.equal(r.warned, false, r.lines.join('\n'));
+  assert.ok(!r.lines.some((l) => /WOULD WAIT/.test(l)), r.lines.join('\n'));
+  assert.equal(existsSync(join(ctx.dir, 'warn-log.jsonl')), false);
+});
+
+const OLD_GATE_S = 200; // older than the 120 s limit
+
+test('R2: a gate older than 120 s is broken even when its holder is alive and the same process', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 101);
+  live(ctx, 102);
+  const gate = join(ctx.dir, 'gate.lock');
+  writeFileSync(gate, gateBody(102, 1102)); // pid 102 runs and its start matches: a live holder
+  const longAgo = new Date(Date.now() - OLD_GATE_S * 1000);
+  utimesSync(gate, longAgo, longAgo);
+  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d).then((x) => ({ x }), (e) => ({ e }));
+  assert.equal(r.x?.granted, true, r.e?.message ?? 'the gated part is file work only: 200 s is a wedge, not a long hold');
+  assert.equal(existsSync(gate), false);
+});
+
+test('R2: a live holder gate that a breaker links back after the holder ended does not wedge every acquire', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 101);
+  live(ctx, 102);
+  const gate = join(ctx.dir, 'gate.lock');
+  writeFileSync(gate, gateBody(555, 5555)); // dead holder: this breaker judges it dead
+  const liveBody = gateBody(102, 1102);
+  let aged = false;
+  // The file we moved aside is another text (a live holder's gate, whose own finally already ran): the breaker puts it back
+  // and nobody removes it. Its file age is old, as a wedged gate is.
+  ctx.d.afterGateRename = () => {
+    if (aged) return;
+    aged = true;
+    const old = new Date(Date.now() - OLD_GATE_S * 1000);
+    for (const f of readdirSync(ctx.dir).filter((n) => n.startsWith('gate.lock.broken-'))) {
+      writeFileSync(join(ctx.dir, f), liveBody);
+      utimesSync(join(ctx.dir, f), old, old);
+    }
+  };
+  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d).then((x) => ({ x }), (e) => ({ e }));
+  assert.equal(aged, true, 'the test did run the moved-aside window');
+  assert.equal(r.x?.granted, true, r.e?.message);
+  assert.deepEqual(readdirSync(ctx.dir).filter((f) => f.startsWith('gate.lock')), [], 'no gate and no renamed leftover');
+});
+
+test('R2: the finally step retries a failed gate remove a few times, and gives up quietly', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 101);
+  let calls = 0;
+  ctx.d.rmFile = (p) => { calls++; if (calls < 3) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); rmSync(p); };
+  assert.equal((await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d)).granted, true);
+  assert.equal(calls, 3, 'two EBUSY failures, then the third try removes the gate');
+  assert.equal(existsSync(join(ctx.dir, 'gate.lock')), false);
+
+  const stuck = setup();
+  stuck.mode('grant');
+  live(stuck, 101);
+  let tries = 0;
+  stuck.d.rmFile = () => { tries++; throw Object.assign(new Error('busy'), { code: 'EPERM' }); };
+  assert.equal((await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, stuck.d)).granted, true, 'a failed remove never fails the grant');
+  assert.ok(tries > 1 && tries <= 10, `bounded retry, got ${tries} tries`);
+});
+
+test('S1: a gate that changes between the judgment and the move is left alone: no move, no put-back', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 101);
+  live(ctx, 102);
+  const gate = join(ctx.dir, 'gate.lock');
+  const liveBody = gateBody(102, 1102);
+  writeFileSync(gate, gateBody(555, 5555));
+  let swapped = false;
+  let moved = 0;
+  ctx.d.beforeGateBreak = () => { if (!swapped) { swapped = true; writeFileSync(gate, liveBody); } };
+  ctx.d.afterGateRename = () => { moved++; };
+  const outcome = acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d).then((r) => ({ r }), (e) => ({ e }));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(swapped, true);
+  assert.equal(moved, 0, 'the re-read sees another text, so the live gate is never moved aside');
+  assert.equal(readFileSync(gate, 'utf8'), liveBody);
+  rmSync(gate);
+  assert.equal((await outcome).r?.granted, true);
+});
+
+test('S2: a CLI release writes one line to the break log with the pid, the kind and who', () => {
+  const store = mk('runlock-cli-');
+  writeFileSync(join(store, 'MODE'), 'grant');
+  assert.equal(runCli(['acquire', '--kind', 'hook-build', '--pid', String(process.pid), '--holder', 'h'], store).status, 0);
+  const rel = runCli(['release', '--pid', String(process.pid), '--who', 'RE seat'], store);
+  assert.equal(rel.status, 0, `${rel.stdout}${rel.stderr}`);
+  const lines = readFileSync(join(store, 'break-log.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  const row = JSON.parse(lines[0]);
+  assert.equal(row.pid, process.pid);
+  assert.equal(row.who, 'RE seat');
+  assert.equal(row.kind, 'release');
+  assert.deepEqual(row.files.map((f) => f.kind), ['hook-build']);
+  assert.equal(lockFiles(store).length, 0, 'the lock is removed');
+  // no --who: the row still names someone
+  runCli(['acquire', '--kind', 'hook-build', '--pid', String(process.pid), '--holder', 'h'], store);
+  runCli(['release', '--pid', String(process.pid)], store);
+  const last = JSON.parse(readFileSync(join(store, 'break-log.jsonl'), 'utf8').trim().split('\n').pop());
+  assert.ok(typeof last.who === 'string' && last.who.length > 0);
+});
+
+test('S3: a failed pgrep gives no process; a bad or non-positive pid in its output is dropped', () => {
+  const calls = [];
+  const failed = (cmd) => { calls.push(cmd); return { status: null, error: new Error('spawn pgrep ENOENT'), stdout: null, stderr: null }; };
+  assert.deepEqual(RL.realPrePrProcs({ spawn: failed, platform: 'linux' }), [], 'no fake run with pid NaN');
+  assert.ok(calls.includes('pgrep'), 'the injected spawn was used');
+  const mixed = (cmd) => (cmd === 'pgrep' ? { status: 0, stdout: 'abc\n4242\n0\n-5\n' } : { status: 0, stdout: 'Sat Nov 15 09:00:00 2026\n' });
+  const procs = RL.realPrePrProcs({ spawn: mixed, platform: 'linux' });
+  assert.deepEqual(procs.map((p) => p.pid), [4242]);
+});
+
+test('S4: RUN_LOCK_TEST_SAMPLES is ignored when RUN_LOCK_DIR is the default store', async () => {
+  const defaultStore = join(os.homedir(), '.claude', 'state', 'run-locks');
+  const sep = process.platform === 'win32' ? '\\' : '/';
+  for (const text of [defaultStore, `${defaultStore}${sep}`, process.platform === 'win32' ? defaultStore.toUpperCase() : defaultStore]) {
+    const ctx = setup();
+    live(ctx, 100);
+    const { samples, ...noSamples } = ctx.d; // the store stays the temp folder: the test never touches the real one
+    const r = await acquire({ kind: 'hook-build', pid: 100, holder: 't' }, { ...noSamples, env: { RUN_LOCK_TEST_SAMPLES: SAMPLES_ENV(8, 95), RUN_LOCK_DIR: text } });
+    assert.doesNotMatch(r.lines.join('\n'), /RUN_LOCK_TEST_SAMPLES/, `the hook is ignored for ${text}`);
+  }
 });

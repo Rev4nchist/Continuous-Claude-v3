@@ -9,10 +9,10 @@
 //   refused leaves one a refused start leaves a lock file, or a granted one is not freed at exit (skip the release)
 //   wait exit code     "the lock says wait" exits 3, like pre-pr's own error; it must exit 75      (process.exit(3))
 //   head               the lock record has no head, or the word HEAD when the repo has no commit  (no head, or no exit-status check)
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,9 +20,16 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PRE_PR = resolve(HERE, 'pre-pr.mjs');
 
+// Test hygiene: every temp folder is made here and removed in the after step. None holds a link, so a plain recursive remove is safe.
+const made = [];
+const mk = (prefix) => { const p = mkdtempSync(join(tmpdir(), prefix)); made.push(p); return p; };
+after(() => {
+  for (const p of made) { try { rmSync(p, { recursive: true, force: true }); } catch { /* a leftover shows in the folder count */ } }
+});
+
 function sandbox() {
-  const store = mkdtempSync(join(tmpdir(), 'prepr-lock-store-'));
-  const repo = mkdtempSync(join(tmpdir(), 'prepr-lock-repo-'));
+  const store = mk('prepr-lock-store-');
+  const repo = mk('prepr-lock-repo-');
   const git = spawnSync('git', ['init', '-q', '-b', 'main', repo], { encoding: 'utf8' });
   assert.equal(git.status, 0, 'git init');
   const body = join(repo, 'body.md');

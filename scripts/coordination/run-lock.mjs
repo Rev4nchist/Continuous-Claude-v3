@@ -13,17 +13,26 @@
  *                               of its holder. Only file work runs inside it: every process read runs BEFORE it.
  *   MODE                        "warn" or "grant". Missing or any other text: warn. Only the seat changes it.
  *   warn-log.jsonl              one line per start that grant mode would have refused (counts for the warn days)
- *   break-log.jsonl             one line per break: who, why, and each removed file with its kind and holder. This log is
+ *   break-log.jsonl             one line per break or CLI release: who, why (a break), and each removed file with its kind and holder. This log is
  *                               the whole control on break: a file store cannot check who runs it.
  *
  * Test hook: RUN_LOCK_TEST_SAMPLES='{"free":[8,8,8],"load":[10,10,10]}' replaces the three real samples (no 6 second wait).
- * It works only when RUN_LOCK_DIR is set too (a test store). An output line says when it is used. A bad value is ignored.
+ * It works only when RUN_LOCK_DIR is set to a test store: not unset, and not the default store. An output line says when it
+ * is used. A bad value is ignored.
  *
  * GRANTED is not safe from a move of main (see CAVEAT). A run on old code holds no lock, so an UNLOCKED RUN seen
- * (a running pre-pr.mjs with no lock file) is counted as a slot in grant mode.
+ * (a running pre-pr.mjs with no lock file) is counted as a slot in grant mode, but only when it started more than 2 minutes
+ * ago: a younger one may still be in its own acquire.
+ *
+ * Expiry: a past expiresAt removes a lock only when its holder is not proven alive (pid gone, other start, or a failed read).
+ * A run that is alive keeps its lock. --minutes must be a finite number above 0.
+ * Gate age: a gate file older than 120 seconds is broken whoever holds it (a wedge). Gated work is file work and takes milliseconds.
+ *
+ * Exit 1 of the CLI is a usage error or an error of the lock. A caller treats it as "run" (fail open), as pre-pr does: the lock
+ * is cooperative and must never stop work because it is broken. Only exit 75 means wait.
  *
  * Usage: node scripts/coordination/run-lock.mjs acquire --kind pre-pr --pid N [--head sha] [--holder name] [--session label] [--minutes N] [--wait]
- *        ... release --pid N | register --kind loop --pid N [--holder name] [--session label] [--minutes N] | list | summary
+ *        ... release --pid N [--who name] | register --kind loop --pid N [--holder name] [--session label] [--minutes N] | list | summary
  *        ... break --pid N --reason "why" --who name
  * --pid is required for acquire, register, release and break: it is the process that holds the run. The parent shell of a CLI call ends with the call.
  * Exit: 0 granted, 75 the lock says wait (EX_TEMPFAIL), 1 usage or error. Exit 3 is not used: pre-pr uses it for its own error.
@@ -32,13 +41,16 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const MIN = 60_000;
 const GATE_STALE_MS = 10_000; // age limit for a gate file that holds no readable holder
 const GATE_UNKNOWN_MS = 60_000; // age limit for a gate whose holder has no usable start time (pid reuse cannot be seen)
 export const EXIT_WAIT = 75; // "the lock says wait". Exit 3 stays free for an error of the caller (pre-pr uses 3).
+const GATE_MAX_MS = 120_000; // a gate older than this is broken whoever holds it: the gated part is file work only
+const GATE_RM_TRIES = 5; // the finally step tries this often to remove our gate (EBUSY, EPERM)
+const UNLOCKED_MIN_AGE_MS = 2 * MIN; // a lock-less pre-pr younger than this may still be in its own acquire
 const GATE_CHECK_EVERY = 10; // a waiter checks whether the gate holder is dead on every 10th try
 const SPACING_MS = 2 * MIN;
 const FUTURE_SKEW_MS = MIN; // a last-grant time later than now plus this is a bad file, not a recent grant
@@ -84,7 +96,9 @@ export function classifyEntry(argv1, metaUrl) {
   return basename(argv1).toLowerCase() === basename(here).toLowerCase() ? 'miss' : 'import';
 }
 
-export const defaultDir = () => process.env.RUN_LOCK_DIR || join(os.homedir(), '.claude', 'state', 'run-locks');
+const defaultStore = () => join(os.homedir(), '.claude', 'state', 'run-locks');
+export const defaultDir = () => process.env.RUN_LOCK_DIR || defaultStore();
+const sameFolder = (a, b) => { const n = (p) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p)); return n(a) === n(b); };
 
 // ---------- real machine reads (every one is injectable) ----------
 
@@ -118,14 +132,17 @@ export function realPidStart(pid, io = {}) {
   return r.status === 0 && Number.isFinite(t) ? t : UNKNOWN;
 }
 
-/** Running pre-pr.mjs processes: [{pid, start}]. Used only to see a run on old code that holds no lock file. A failed read gives []. */
-export function realPrePrProcs() {
-  if (process.platform === 'win32') {
-    const out = ps("Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'scripts[\\\\/]github[\\\\/]pre-pr\\.mjs' } | ForEach-Object { \"$($_.ProcessId)|$($_.CreationDate.ToUniversalTime().ToString('o'))\" }");
+/** Running pre-pr.mjs processes: [{pid, start}]. Used only to see a run on old code that holds no lock file. A failed read gives []. io.spawn and io.platform let a test feed each case. */
+export function realPrePrProcs(io = {}) {
+  const spawn = io.spawn || spawnSync;
+  if ((io.platform || process.platform) === 'win32') {
+    const out = ps("Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'scripts[\\\\/]github[\\\\/]pre-pr\\.mjs' } | ForEach-Object { \"$($_.ProcessId)|$($_.CreationDate.ToUniversalTime().ToString('o'))\" }", spawn);
     return (out || '').split(/\r?\n/).filter(Boolean).map((l) => { const [pid, at] = l.split('|'); return { pid: Number(pid), start: Date.parse(at) }; }).filter((p) => p.pid > 0);
   }
-  const r = spawnSync('pgrep', ['-f', 'scripts/github/pre-pr\\.mjs'], { encoding: 'utf8' });
-  return String(r.stdout).split(/\s+/).filter(Boolean).map((p) => ({ pid: Number(p), start: realPidStart(Number(p)) }));
+  const r = spawn('pgrep', ['-f', 'scripts/github/pre-pr\\.mjs'], { encoding: 'utf8' });
+  // A failed pgrep has no stdout: it gives no process, never one fake run with pid NaN.
+  return String(r.stdout ?? '').split(/\s+/).filter(Boolean).map(Number).filter((pid) => Number.isInteger(pid) && pid > 0)
+    .map((pid) => ({ pid, start: realPidStart(pid, io) }));
 }
 
 const cpuTimes = () => os.cpus().reduce((a, c) => { const t = c.times; a.idle += t.idle; a.total += t.user + t.nice + t.sys + t.idle + t.irq; return a; }, { idle: 0, total: 0 });
@@ -146,9 +163,9 @@ export async function realSamples(sleep = (ms) => new Promise((r) => setTimeout(
   return { free, load };
 }
 
-/** Samples from the test hook, or null when it is unset or bad. It works only when RUN_LOCK_DIR is set too: a test store. */
+/** Samples from the test hook, or null when it is unset or bad. It works only when RUN_LOCK_DIR is set to a test store: not unset, not the default store. */
 function hookedSamples(env) {
-  if (!env.RUN_LOCK_DIR) return null;
+  if (!env.RUN_LOCK_DIR || sameFolder(env.RUN_LOCK_DIR, defaultStore())) return null;
   try {
     const s = JSON.parse(env.RUN_LOCK_TEST_SAMPLES);
     const ok = (a) => Array.isArray(a) && a.length > 0 && a.every((n) => Number.isFinite(n));
@@ -173,6 +190,7 @@ function defaults(deps = {}) {
     selfPid: deps.selfPid ?? process.pid,
     beforeGateBreak: deps.beforeGateBreak,
     afterGateRename: deps.afterGateRename,
+    rmFile: deps.rmFile || rmSync, // test seam: the finally step removes our gate with this
   };
 }
 
@@ -215,18 +233,38 @@ function isDead(file, rec, starts) {
   return Math.abs(seen.start - rec.pidStart) >= SAME_PROCESS_MS;
 }
 
-/** Remove the lock files of a dead run or a past expiry. File work only. Return the live ones. */
+/** Is the holder proven alive: the snapshot has this exact file and the start time still matches? Gone, other start and unknown are not proof. */
+function provenAlive(file, rec, starts) {
+  const seen = starts.get(file);
+  if (!seen || seen.startedAt !== rec.startedAt) return false;
+  return typeof seen.start === 'number' && typeof rec.pidStart === 'number' && Math.abs(seen.start - rec.pidStart) < SAME_PROCESS_MS;
+}
+
+/**
+ * Remove the lock files of a dead run. A past expiry removes a lock only when the holder is NOT proven alive: a long pre-pr,
+ * a machine sleep or a loop with no renew must keep its slot. A lock with no finite expiry counts as expired, so only proof of life keeps it. File work only.
+ * Return the live ones.
+ */
 function sweep(d, starts) {
   const now = d.now();
   const live = [];
   for (const { file, rec } of lockRecords(d.dir)) {
-    if (isDead(file, rec, starts) || rec.expiresAt <= now) { try { rmSync(join(d.dir, file)); } catch { /* another session removed it */ } continue; }
+    const expired = !Number.isFinite(rec.expiresAt) || rec.expiresAt <= now; // no finite expiry (old code) counts as expired; a proven-alive holder still keeps the lock
+    if (isDead(file, rec, starts) || (expired && !provenAlive(file, rec, starts))) { try { rmSync(join(d.dir, file)); } catch { /* another session removed it */ } continue; }
     live.push({ ...rec, file });
   }
   return live;
 }
 
-const unlockedRuns = (d, live, procs) => procs.filter((p) => p.pid !== d.selfPid && !live.some((l) => l.pid === p.pid));
+/**
+ * A pre-pr process with no lock file, other than the caller. It counts only when its start is a number more than 2 minutes
+ * old: a younger one may be in its own acquire (6 seconds of samples, no lock yet), and counting it makes parallel starts
+ * refuse each other. A start we cannot read (NaN, unknown, null) is not counted: the lock fails open, as it does elsewhere.
+ */
+const unlockedRuns = (d, live, procs) => {
+  const now = d.now();
+  return procs.filter((p) => p.pid !== d.selfPid && !live.some((l) => l.pid === p.pid) && Number.isFinite(p.start) && now - p.start > UNLOCKED_MIN_AGE_MS);
+};
 const unlockedLine = (u) => `UNLOCKED RUN seen: ${u.length} pre-pr.mjs process(es) with no lock file (pid ${u.map((p) => p.pid).join(', ')}); counted as a slot in grant mode`;
 
 // ---------- the gate ----------
@@ -244,6 +282,7 @@ function gateOlderThan(gate, limitMs) {
  * far more than file work needs).
  */
 function gateHolderDead(d, text, gate) {
+  if (gateOlderThan(gate, GATE_MAX_MS)) return true; // a live holder never keeps a gate this long: file work takes milliseconds. It is a wedge.
   const holder = parseGate(text);
   if (!holder) return gateOlderThan(gate, GATE_STALE_MS); // no readable holder (half-written, or an old format): only age can tell
   const start = d.pidStart(holder.pid);
@@ -258,12 +297,17 @@ function gateHolderDead(d, text, gate) {
  * move the file to a unique name first (one process wins the move), then compare what we moved with what we judged.
  * Same text: drop it. Other text: it is a live holder's gate, so put it back (a hard link cannot overwrite a gate that a
  * third process took in the meantime).
+ * The slow process read of the judgment sits before the move, so read the gate again right before the move and stop when
+ * it changed. This narrows the window, it does not close it: a third process can still win the gate name between our
+ * rename and the put-back. Then the put-back fails and that process owns the name. If the moved file was a live gate whose
+ * holder already ended, the put-back makes a gate that nobody removes: the 120 second age limit breaks it.
  */
 function breakDeadGate(d, gate) {
   let text;
   try { text = readFileSync(gate, 'utf8'); } catch { return false; }
   if (!gateHolderDead(d, text, gate)) return false;
   d.beforeGateBreak?.(); // test seam: runs in the window between the judgment and the move
+  try { if (readFileSync(gate, 'utf8') !== text) return false; } catch { return false; } // changed or gone since the judgment
   const aside = `${gate}.broken-${randomUUID()}`;
   try { renameSync(gate, aside); } catch { return false; } // gone, or another process broke it first
   d.afterGateRename?.(); // test seam: runs after the move and before the compare. A live holder may take the free name here.
@@ -288,7 +332,14 @@ async function withGate(d, selfStart, fn) {
     }
   }
   try { return await fn(); } finally {
-    try { if (readFileSync(gate, 'utf8') === body) rmSync(gate); } catch { /* already gone */ }
+    // A remove can fail for a moment (EBUSY, EPERM: a virus scanner, an indexer). Try a few times, then give up: the gate
+    // is then older than 120 seconds for the next process, which breaks it. A manual loop: rmSync maxRetries needs recursive.
+    for (let i = 0; i < GATE_RM_TRIES; i++) {
+      try { if (readFileSync(gate, 'utf8') === body) d.rmFile(gate); break; } catch (e) {
+        if (e.code === 'ENOENT') break; // already gone
+        await d.sleep(20);
+      }
+    }
   }
 }
 
@@ -324,10 +375,17 @@ function knownKind(name) {
   return KINDS[name];
 }
 
+/** --minutes is a finite number above 0, or not given. Infinity would write a null expiry, 0 would fall back to the default without a word. */
+function checkMinutes(minutes) {
+  if (minutes == null) return;
+  if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0) throw new Error(`--minutes must be a finite number above 0 (got ${minutes})`);
+}
+
 /** Ask for a slot. Returns { granted, warned, lines, retryAt, reasons, file }. Throws on an unknown kind or a dead pid. */
 export async function acquire(opts, deps) {
   const d = defaults(deps);
   const kind = knownKind(opts.kind);
+  checkMinutes(opts.minutes);
   const pid = opts.pid ?? d.selfPid;
   const start = d.pidStart(pid);
   if (start === null) throw new Error(`pid ${pid} is not running`);
@@ -381,6 +439,7 @@ export async function acquire(opts, deps) {
 export async function register(opts, deps) {
   const d = defaults(deps);
   knownKind(opts.kind);
+  checkMinutes(opts.minutes);
   const start = d.pidStart(opts.pid);
   if (start === null) throw new Error(`pid ${opts.pid} is not running`);
   const selfStart = opts.pid === d.selfPid ? start : d.pidStart(d.selfPid);
@@ -406,6 +465,22 @@ export function releaseSync(opts, deps) {
 
 export async function release(opts, deps) {
   return releaseSync(opts, deps);
+}
+
+/**
+ * The CLI release: log one line to break-log.jsonl BEFORE the removal (pid, kind 'release', who, each file), then release.
+ * A release by hand has no other trace. The pre-pr exit handler calls releaseSync, not this, so a normal run writes no line.
+ * who is --who, else the session label, else "unknown". A failed log write does not block the release: the lock must go.
+ */
+export async function releaseLogged(opts, deps) {
+  const d = defaults(deps);
+  const listed = lockRecords(d.dir).filter(({ rec }) => rec.pid === opts.pid).map(({ file, rec }) => ({ file, kind: rec.kind, holder: rec.holder || 'unknown' }));
+  const who = String(opts.who || '').trim() || sessionLabel({}, d) || 'unknown';
+  try {
+    mkdirSync(d.dir, { recursive: true });
+    appendLine(d.dir, 'break-log.jsonl', { ts: d.now(), kind: 'release', who, pid: opts.pid, removed: listed.length, files: listed });
+  } catch { /* the store is not writable: the release below finds nothing or fails too */ }
+  return release({ pid: opts.pid }, d);
 }
 
 /** Remove a lock by hand. A reason and a name are required. The log line holds who, why and each removed file with its kind and holder: that is the whole control. */
@@ -470,7 +545,7 @@ async function cli(argv) {
   const a = parseArgs(argv);
   const verb = a._[0];
   const pid = a.pid ? Number(a.pid) : undefined;
-  const minutes = a.minutes ? Number(a.minutes) : undefined;
+  const minutes = 'minutes' in a ? Number(a.minutes) : undefined; // a bad value (0, text, Infinity, no value) reaches checkMinutes and is a usage error
   const print = (lines) => { for (const l of lines) console.log(l); };
   if (['acquire', 'register', 'release', 'break'].includes(verb) && !(Number.isInteger(pid) && pid > 0)) {
     throw new Error(`${verb} needs --pid N: the process that holds the run. The parent shell of this call ends with the call.`);
@@ -487,7 +562,7 @@ async function cli(argv) {
     }
   }
   if (verb === 'register') { print((await register({ kind: a.kind, pid, head: a.head, holder: a.holder, session: a.session, minutes })).lines); return 0; }
-  if (verb === 'release') { const r = await release({ pid }); console.log(`released ${r.removed} lock(s) of pid ${pid}`); return 0; }
+  if (verb === 'release') { const r = await releaseLogged({ pid, who: a.who }); console.log(`released ${r.removed} lock(s) of pid ${pid}`); return 0; }
   if (verb === 'break') { const r = await breakLock({ pid, reason: a.reason, who: a.who }); console.log(`broke ${r.removed} lock(s) of pid ${pid}`); return 0; }
   if (verb === 'list') { print((await list()).lines); return 0; }
   if (verb === 'summary') { console.log(JSON.stringify(warnSummary(), null, 1)); return 0; }
