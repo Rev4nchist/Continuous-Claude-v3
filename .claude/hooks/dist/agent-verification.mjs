@@ -59,6 +59,7 @@ var HOT_PROGRAMS = [
   "destructive-command-guard",
   "git-commit-roadmap",
   "file-claims",
+  "holdout-scan",
   "hook-health-monitor",
   "identity-probe",
   "lane-agent-tag",

@@ -46,7 +46,7 @@ export const TRACE_MARKER = '__CCV3_HOOK_TRACE_V1__';
 /** Programs the template registers on SessionStart, or on PreToolUse/PostToolUse for Bash or PowerShell. Update with the template. */
 export const HOT_PROGRAMS: readonly string[] = [
   'architecture-stats-sync', 'commit-preflight', 'decision-gate', 'destructive-command-guard', 'git-commit-roadmap',
-  'file-claims', 'hook-health-monitor', 'identity-probe', 'lane-agent-tag', 'lane-board-republish-reminder', 'lane-context',
+  'file-claims', 'holdout-scan', 'hook-health-monitor', 'identity-probe', 'lane-agent-tag', 'lane-board-republish-reminder', 'lane-context',
   'mcp-activity-tracker', 'msys-crash-capture', 'package-install-guard', 'periodic-extract', 'pr-opened-review-loop',
   'pre-pr-gate', 'roadmap-completion', 'roadmap-reconcile', 'rule-router', 'scan-scope-guard', 'session-register',
   'session-start-context-loaders', 'session-start-continuity', 'session-start-docker', 'session-start-init-check',
