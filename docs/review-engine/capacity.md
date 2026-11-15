@@ -42,7 +42,9 @@ This file holds the section "Capacity plan" of the lane map ([map.md](map.md)). 
 
 ### Headless claude -p day plan
 
-Cap 30 a day, shared with non-RE sessions. Each lane checks its slot in the headless ledger before a batch. 60 seeds at 8 a day take 8 days or more.
+Cap 200 a day (`HEADLESS_DAILY_CAP` in `scripts/lib/headless.mjs`), shared with non-RE sessions. DECIDED (Dave, 2026-11-14): "cap 200 - at least - it can be as high as needed to run through testing". Before, the cap was 30.
+
+The slots below are a planning aid, not a limit. The code enforces only the day cap of 200, counted over every headless run in the ledger. A lane may run past its slot when the day count leaves room. Each lane still reads the headless ledger before a batch. Lane caps of their own are not this cap: the seed day cap of 8 in `seed.mjs` stays, so 60 seeds at 8 a day still take 8 days or more.
 
 | Day type | When | Slots | Sum |
 |---|---|---|---|
@@ -50,10 +52,10 @@ Cap 30 a day, shared with non-RE sessions. Each lane checks its slot in the head
 | B | seeding weeks, even days | seed-gold-b 8, hf-judge-precheck 8, verifier-replay 4 (Claude backend only), escape labels 2, non-RE reserve 6 | 28 |
 | C | after seeding ends | gold-assemble 6, rubric-runners 4, judge-calibrate 6, label-two-family 4, escape labels 2, non-RE reserve 6 | 28 |
 | D | eval-run days: shadow retro, P4 A/B (Grok-only), winner evidence | same-issue judge 10, judge-calibrate 6, rule-docs 2, escape labels 2, non-RE reserve 6 | 26 |
-
-- DECIDED (Dave, 2026-11-11): until `re-seed-gold-b` starts, `hf-judge-precheck` runs 8 judge calls a day on odd days too. The cap of 30 a day stays, and the lane checks the headless ledger before each batch.
 | E | P4 A/B, 2x2 only | P4 Claude arm 10, same-issue judge 10, escape labels 2, non-RE reserve 6 | 28 |
 | F | after DP2, live verifier on claude -p only | live verifier 12, label-two-family 4, escape labels 2, non-RE reserve 6 | 24 |
+
+- DECIDED (Dave, 2026-11-11): until `re-seed-gold-b` starts, `hf-judge-precheck` runs 8 judge calls a day on odd days too. The lane checks the headless ledger before each batch. (The day cap was 30 then; it is 200 since 2026-11-14.)
 
 "Same-issue judge" is judgeSameIssue in judge.mjs (lines 59-71), with the sonnet judgeModel from config.json. It runs for the shadow retro rows, the P4 scoring and the winner evidence. judge.mjs takes an injected runJudge, so the slot applies when that runner is headless [Speculation: the lanes use the headless runner]. "Escape labels" are the band-state severity labels from `re-prepr-cli-consumer`.
 
