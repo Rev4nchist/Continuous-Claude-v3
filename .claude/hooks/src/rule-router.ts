@@ -41,6 +41,13 @@ export interface RuleEntry {
   subagent?: 'block';
   command?: string[];
   segment?: string[];
+  /**
+   * 'skip': this rule's `segment` tests do not run on a segment that starts with `node <path>lane.mjs`. The `segment`
+   * regexes keep quotes, so a lane note that NAMES a script (`lane.mjs note x "... pre-pr.mjs"`) fired the rule.
+   * Opt-in, never the default: a rule with no key fires on a lane segment, so a new deny-first rule cannot go quiet
+   * unseen. Never honoured for `subagent: "block"` rules. Set only on pr-review-loop and coderabbit-cli.
+   */
+  laneSegment?: 'skip';
   agent?: string[];
   skill?: string[];
   tools?: string[];
@@ -142,6 +149,20 @@ const test = (patterns: string[] | undefined, value: string): boolean =>
   !!patterns && patterns.some((p) => new RegExp(p).test(value));
 
 /**
+ * A segment whose first executed word is `node` and whose script is lane.mjs (a bare, a path or a quoted path, with
+ * node flags allowed). Anchored at the segment head: it reads no quoted text, so a note cannot make a segment a lane
+ * segment. A segment that follows `;`, `|` or `&` is a separate segment and is judged on its own head.
+ */
+const LANE_SEGMENT = /^node(?:\.exe)?(?:\s+-[\w-]+(?:=\S+)?)*\s+(?:"[^"]*[\\/]lane\.mjs"|'[^']*[\\/]lane\.mjs'|(?:[^\s"']*[\\/])?lane\.mjs)(?:\s|$)/;
+export const isLaneSegment = (segment: string): boolean => LANE_SEGMENT.test(segment);
+
+/** The `segment` tests of a rule on one segment. An opted-in rule skips a lane segment; a gate rule never does. */
+function segmentHit(r: RuleEntry, seg: string): boolean {
+  if (r.laneSegment === 'skip' && r.subagent !== 'block' && isLaneSegment(seg)) return false;
+  return test(r.segment, seg);
+}
+
+/**
  * The manifest entries this tool call matches, in manifest order. `command` regexes see each
  * segment without its quoted strings; `segment` regexes see it with quotes kept (for a quoted
  * script path). Both are anchored to an EXECUTED segment, never to text an `echo` prints: a
@@ -155,7 +176,7 @@ export function matchRules(input: HookInput, manifest: Manifest): RuleEntry[] {
       const command = typeof ti.command === 'string' ? ti.command : '';
       if (!command) return false;
       return commandSegments(command, tool).some((seg) => test(r.command, seg))
-        || quotedSegments(command, tool).some((seg) => test(r.segment, seg));
+        || quotedSegments(command, tool).some((seg) => segmentHit(r, seg));
     }
     if (AGENT_TOOLS.has(tool)) return test(r.agent, String(ti.subagent_type || ''));
     if (tool === 'Skill') return test(r.skill, String(ti.skill || ''));
@@ -243,7 +264,7 @@ export function triggerWords(input: HookInput, fired: RuleEntry[]): string {
   if (!COMMAND_TOOLS.has(tool)) return String(ti.subagent_type ?? ti.skill ?? tool).slice(0, 60);
   const segs = quotedSegments(String(ti.command ?? ''), tool);
   const plain = (seg: string) => stripLeaders(stripQuotedStrings(seg, tool));
-  const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || test(r.segment, seg)));
+  const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || segmentHit(r, seg)));
   const seg = hit ?? segs[0] ?? '';
   const [cmd = '', arg] = plain(seg).split(/\s+/);
   // The second word stays only when it is a plain word or flag (`commit`, `-File`, `exec`). A URL,

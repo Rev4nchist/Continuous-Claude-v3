@@ -1410,7 +1410,9 @@ Query with: \`uv run python ~/.claude/scripts/core/core/project_memory.py query 
     }
   }
   if (sessionType === "compact") {
-    additionalContext = applyBreakpoint(sessionType, additionalContext, readBreakpoint(userHome(), input.session_id));
+    const breakpointText = readBreakpoint(userHome(), input.session_id);
+    additionalContext = applyBreakpoint(sessionType, additionalContext, breakpointText);
+    message = compactStatusLine(sessionType, message, breakpointText);
   }
   const output = { result: "continue" };
   if (message) {
@@ -1424,6 +1426,10 @@ Query with: \`uv run python ~/.claude/scripts/core/core/project_memory.py query 
     };
   }
   console.log(JSON.stringify(output));
+}
+function compactStatusLine(sessionType, message, breakpointText) {
+  if (sessionType !== "compact" || !breakpointText || !breakpointText.trim()) return message;
+  return "[compact] Session breakpoint loaded (decisions, lane goal, last typed lines). Handoff text not injected.";
 }
 async function readStdin() {
   return new Promise((resolve3) => {
@@ -1439,6 +1445,7 @@ main().catch((err) => {
 });
 export {
   buildHandoffDirName,
+  compactStatusLine,
   extractGuardedCurrentFocus,
   extractLedgerSection,
   extractNotesSections,

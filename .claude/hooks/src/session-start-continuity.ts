@@ -878,7 +878,9 @@ async function main() {
   // Card compact-session-breakpoint: after a compact, the state file that pre-compact-breakpoint wrote replaces the ledger
   // dump, the handoff and the outcome question. No file (or any read error) keeps today's context. Other sources are not touched.
   if (sessionType === 'compact') {
-    additionalContext = applyBreakpoint(sessionType, additionalContext, readBreakpoint(userHome(), input.session_id));
+    const breakpointText = readBreakpoint(userHome(), input.session_id);
+    additionalContext = applyBreakpoint(sessionType, additionalContext, breakpointText);
+    message = compactStatusLine(sessionType, message, breakpointText);
   }
 
   // Output with proper format per Claude Code docs
@@ -897,6 +899,16 @@ async function main() {
   }
 
   console.log(JSON.stringify(output));
+}
+
+/**
+ * Card compact-status-line-says-breakpoint: the visible line after a compact names what the model got.
+ * Same test as applyBreakpoint: a non-empty breakpoint file replaces the context, so the line says so.
+ * Any other case keeps the line it had.
+ */
+export function compactStatusLine(sessionType: string | undefined, message: string, breakpointText: string | null): string {
+  if (sessionType !== 'compact' || !breakpointText || !breakpointText.trim()) return message;
+  return '[compact] Session breakpoint loaded (decisions, lane goal, last typed lines). Handoff text not injected.';
 }
 
 async function readStdin(): Promise<string> {
