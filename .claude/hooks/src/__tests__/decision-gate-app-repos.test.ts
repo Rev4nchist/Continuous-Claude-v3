@@ -697,7 +697,7 @@ describe('C12 a git throw after coverage is known is unjudgeable with scope app-
     const w: World = { folders: { ...FOLDERS, [dir]: { ...FOLDERS[dir], throwOn: ['remote -v'] } } };
     const out = JSON.parse(handle(JSON.stringify(bash(PUSH, dir)), deps(w)));
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("could not verify Dave's tap");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain('push check could not run');
     expect(out.hookSpecificOutput.permissionDecisionReason).not.toMatch(/app folder/i);
   });
 

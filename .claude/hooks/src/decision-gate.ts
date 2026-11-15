@@ -668,6 +668,8 @@ interface PushShape {
 interface Where { cds: string[]; unknown: boolean; loose: boolean }
 interface Shape {
   kind: 'create' | 'land' | 'merge' | 'store' | 'push'; pr: string | null; sha?: string | null; push?: PushShape;
+  /** Round 3 C2, a merge only: the head cannot be read as gh reads it (two values, a non-literal, an unknown flag, an unpaired quote). */
+  shaBad?: true;
   /** Create, land and merge: where the shape runs. */
   at?: Where;
   /**
@@ -700,17 +702,134 @@ const SEGMENT_RE = /[;&|\r\n]+/;
 const lastArg = (args: string, re: RegExp): string | null => re.exec(args)?.[1] ?? null;
 
 /** The land and merge shapes of ONE command segment (no && ; | or newline in it), with the PR and the sha read from that segment alone. */
-function landShapesOf(seg: string, textOnly = false): Shape[] {
+function landShapesOf(seg: string, textOnly = false, rawSeg = seg): Shape[] {
   const out: Shape[] = [];
+  // The land script pins its own head: its sha is read as before (round 3 C2 changes only the merge read).
   const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
   // textOnly: the whole command only prints or reads text (isTextOnlyCommand), so the script name is a mention. A mention that names a PR (-Pr 12) stays a land shape.
   const pr = lastArg(seg, LAND_PR_RE);
   if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out.push({ kind: 'land', pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
-  if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), sha });
+  // Round 3 C2: the head is read from the RAW segment, whose quotes are what gh gets. When only the quotes-deleted view shows the merge
+  // (quotes inside its words), the head cannot be read whole: fail closed.
+  const rawCli = MERGE_CLI_RE.exec(rawSeg);
+  if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...(rawCli ? cliMergeHead(rawCli[1]) : UNREAD_HEAD) });
   const api = MERGE_API_RE.exec(seg);
-  if (api && !GET_RE.test(api[0])) out.push({ kind: 'merge', pr: api[1], sha });
+  const rawApi = MERGE_API_RE.exec(rawSeg);
+  if (api && !GET_RE.test(api[0])) out.push({ kind: 'merge', pr: api[1], ...(rawApi ? apiMergeHead(rawApi[0]) : UNREAD_HEAD) });
   return out;
+}
+
+// ---------- round 3 C2: the merge head, read from one known place, once ----------
+
+/**
+ * The words of a command text with their quotes paired (bash rules: '...' is literal, "..." takes \ escapes; a \ outside quotes escapes the
+ * next character). Null when a quote is not closed: the reader cannot pair it, so the caller fails closed. A redirect word stays a word.
+ */
+function pairedWords(text: string): string[] | null {
+  const words: string[] = [];
+  let cur = '';
+  let open = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (/\s/.test(ch)) { if (open) { words.push(cur); cur = ''; open = false; } continue; }
+    open = true;
+    if (ch === "'") { const end = text.indexOf("'", i + 1); if (end < 0) return null; cur += text.slice(i + 1, end); i = end; continue; }
+    if (ch === '"') {
+      let j = i + 1;
+      for (; j < text.length && text[j] !== '"'; j++) { if (text[j] === '\\' && j + 1 < text.length) j++; cur += text[j]; }
+      if (j >= text.length) return null;
+      i = j;
+      continue;
+    }
+    if (ch === '\\' && i + 1 < text.length) { cur += text[++i]; continue; }
+    cur += ch;
+  }
+  if (open) words.push(cur);
+  return words;
+}
+
+type MergeHead = { sha: string | null; shaBad?: true };
+const UNREAD_HEAD: MergeHead = { sha: null, shaBad: true };
+/** The deny text of a merge whose head cannot be read (CCv3 and covered folders: it names no CCv3 tool). */
+const HEAD_UNREAD_WHY = (pr: string | null): string => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, or an unpaired quote. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : '<n>'} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>.`;
+const HEX40 = /^[0-9a-f]{40}$/i;
+/** One head from the values found: none is no head; any value that is not a literal 40-hex string, or two different values, is bad. */
+function oneHead(values: string[]): MergeHead {
+  if (values.some((v) => !HEX40.test(v))) return { sha: null, shaBad: true };
+  const set = new Set(values.map((v) => v.toLowerCase()));
+  if (set.size > 1) return { sha: null, shaBad: true };
+  return { sha: [...set][0] ?? null };
+}
+const MERGE_BOOL = new Set(['--merge', '-m', '--squash', '-s', '--rebase', '-r', '--auto', '--disable-auto', '--admin', '--delete-branch', '-d']);
+const MERGE_VALUE = new Set(['--body', '-b', '--body-file', '-F', '--subject', '-t', '--author-email', '-A', '--match-head-commit', '--repo', '-R']);
+const SHORT_BOOL = 'msrd';
+const SHORT_VALUE = 'bFtAR';
+const REDIRECT_WORD = /^\d*[<>]/;
+
+/**
+ * A short-flag cluster (gh takes `-dR x` and `-dRx`): every letter but the last is a known short bool; the last is a bool or a known
+ * short value flag, whose value is the rest of the word or the next word. Returns how many next words it uses, or null when unknown.
+ */
+function shortCluster(w: string, next: string | undefined): number | null {
+  const letters = w.slice(1);
+  for (let k = 0; k < letters.length; k++) {
+    const ch = letters[k];
+    if (SHORT_BOOL.includes(ch)) continue;
+    if (!SHORT_VALUE.includes(ch)) return null;
+    if (k < letters.length - 1) return 0; // the rest of the word is the value
+    return next === undefined ? null : 1;
+  }
+  return 0;
+}
+
+/**
+ * `gh pr merge <args>`: the head is the value of --match-head-commit (space or =), and nothing else. Any flag outside the known set, a
+ * value flag with no value or an unpaired quote is bad: the reader cannot tell what gh will take as the head. Positionals are not read.
+ */
+function cliMergeHead(args: string): MergeHead {
+  const words = pairedWords(args);
+  if (words === null) return UNREAD_HEAD;
+  const heads: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (REDIRECT_WORD.test(w) || !w.startsWith('-') || w === '-') continue;
+    if (/^-[A-Za-z]{2,}/.test(w)) { const used = shortCluster(w, words[i + 1]); if (used === null) return UNREAD_HEAD; i += used; continue; }
+    const eq = w.startsWith('--') ? w.indexOf('=') : -1;
+    const name = eq > 0 ? w.slice(0, eq) : w;
+    if (MERGE_BOOL.has(name) && eq < 0) continue;
+    if (!MERGE_VALUE.has(name)) return { sha: null, shaBad: true };
+    const value: string | undefined = eq > 0 ? w.slice(eq + 1) : words[++i];
+    if (value === undefined) return { sha: null, shaBad: true };
+    if (name === '--match-head-commit') heads.push(value);
+  }
+  return oneHead(heads);
+}
+
+const API_FIELD = /^(?:-f|-F|--raw-field|--field)$/;
+const API_FIELD_EQ = /^(?:--raw-field|--field)=(.*)$/s;
+const API_VALUE = new Set(['-X', '--method', '-H', '--header', '--hostname', '-q', '--jq', '-t', '--template', '--cache', '-p', '--preview']);
+
+/**
+ * `gh api .../pulls/<n>/merge <args>`: the head is the value of the `sha` field (-f, -F, --raw-field, --field; space or =). The value of
+ * another field (commit_message="sha=...") is never read. --input (the body comes from a file) or an unpaired quote is bad.
+ */
+function apiMergeHead(text: string): MergeHead {
+  const words = pairedWords(text.replace(/^[\s\S]*?\bapi\b/, ''));
+  if (words === null) return { sha: null, shaBad: true };
+  const heads: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w === '--input' || w.startsWith('--input=')) return { sha: null, shaBad: true };
+    let field: string | undefined;
+    if (API_FIELD.test(w)) field = words[++i];
+    else if (API_FIELD_EQ.test(w)) field = API_FIELD_EQ.exec(w)![1];
+    else if (API_VALUE.has(w)) { i++; continue; }
+    if (field === undefined) continue;
+    const eq = field.indexOf('=');
+    if (eq > 0 && field.slice(0, eq) === 'sha') heads.push(field.slice(eq + 1));
+  }
+  return oneHead(heads);
 }
 
 // ---------- the push shape ----------
@@ -1450,7 +1569,7 @@ const priorId = (p: Prior): string => (p.repos.length === 0 && !p.nonLiteral ? '
 const fullId = (own: Own): string => (own.ftext === own.text ? '' : `|${own.ftext}`);
 /** A merge keeps its own command in the id (F1): two merges of one PR and head with different -R values are two shapes. */
 const landId = (shape: Shape, at: Where, own: Own, prior: Prior): string =>
-  `${shape.kind}|${shape.pr}|${shape.sha}|${whereId(at)}${shape.kind === 'merge' ? `|${own.ftext}${priorId(prior)}` : ''}`;
+  `${shape.kind}|${shape.pr}|${shape.sha}${shape.shaBad ? '!' : ''}|${whereId(at)}${shape.kind === 'merge' ? `|${own.ftext}${priorId(prior)}` : ''}`;
 /** The folders a segment may run in, one `Where` per distinct reading of the cds before it. */
 const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
 
@@ -1483,7 +1602,7 @@ function shapesOf(raw: string, tool?: string): Shape[] {
       const owns = reads.map(({ masked }) => ownCommand(view, masked, from));
       const prior = priorOf(view, reads.map((r) => r.masked), from);
       for (const s of new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly)) {
+        for (const shape of landShapesOf(s, textOnly, seg)) {
           for (const own of owns) for (const at of wheres) add({ ...shape, at, ...own, prior }, landId(shape, at, own, prior));
         }
       }
@@ -2107,6 +2226,7 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decisio
   if (route === 'app') return judgeAppMerge(shape, deps, dir, cmd);
   if (route === 'foreign') return deny('repo-foreign', goThereWhy(cmd.repo!));
   if (shape.pr === null) return deny('no-pr', NO_PR_WHY);
+  if (shape.kind === 'merge' && shape.shaBad) return deny('merge-no-head', `PR #${shape.pr}: ${HEAD_UNREAD_WHY(shape.pr)} The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr}).`);
   const sha = shape.sha ?? undefined;
   // A raw merge with no sha= has no head to compare, so an old tap (a head that has since moved) could land a new head. land-pr.ps1 pins the head itself.
   if (shape.kind === 'merge' && !sha) return deny('merge-no-head', `${shape.pr ? `PR #${shape.pr}` : 'this PR'}: a raw merge command names no head, so Dave's tap cannot be tied to the head that would land. Run land-pr.ps1 -Pr ${shape.pr ?? '<n>'} (it pins the head), or pass the tapped head: gh api .../merge -f sha=<head>, gh pr merge --match-head-commit <head>. The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr ?? '<n>'}).`);
@@ -2178,6 +2298,7 @@ function appMergeIn(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo, place: 
   if (shape.pr === null) return deny('no-pr', appNoPrWhy(dir));
   const repo = appRepoFor(cmd, deps, dir, place, { sub: 'merge', pr: shape.pr });
   if ('action' in repo) return repo;
+  if (shape.shaBad) return deny('merge-no-head', `PR #${prose(shape.pr)} (folder ${at(dir)}): ${HEAD_UNREAD_WHY(shape.pr)}`);
   const sha = shape.sha ?? null;
   if (!sha) return deny('merge-no-head', appMergeNoHeadWhy(deps, dir, shape.pr, repo.offer));
   const key = decisionKey({ repo: repo.key, pr: shape.pr });
@@ -2969,6 +3090,11 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown, found: Deny[
   const holdsPush = !app && scopes.has('push') && (gone || !pushFoldersUnregistered(input, deps));
   const live = holdsPush || (app && hardAppCall(input)) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? 'deny' : 'warn', 'cwd-missing');
+  // Seat 2026-11-14 (read of 2276351b): a push denied only because its check threw says so, so a session does not read it as a policy block.
+  if (holdsPush && !(app && hardAppCall(input)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
+    const again = gone ? 'Run the push again from a folder that exists.' : 'Run the push again. If it fails again, ask Dave.';
+    return denyOut(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
+  }
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has('other') ? 'other' : scopes.has('app-push') ? 'app-push' : 'push');
 }
 

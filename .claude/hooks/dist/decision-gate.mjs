@@ -1555,16 +1555,130 @@ var GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
 var SHA_RE = /(?:\bsha=|--match-head-commit(?:\s+|=))["']?([0-9a-f]{40})\b/i;
 var SEGMENT_RE = /[;&|\r\n]+/;
 var lastArg = (args, re) => re.exec(args)?.[1] ?? null;
-function landShapesOf(seg, textOnly = false) {
+function landShapesOf(seg, textOnly = false, rawSeg = seg) {
   const out3 = [];
   const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
   const pr = lastArg(seg, LAND_PR_RE);
   if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out3.push({ kind: "land", pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
-  if (cli) out3.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), sha });
+  const rawCli = MERGE_CLI_RE.exec(rawSeg);
+  if (cli) out3.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...rawCli ? cliMergeHead(rawCli[1]) : UNREAD_HEAD });
   const api = MERGE_API_RE.exec(seg);
-  if (api && !GET_RE.test(api[0])) out3.push({ kind: "merge", pr: api[1], sha });
+  const rawApi = MERGE_API_RE.exec(rawSeg);
+  if (api && !GET_RE.test(api[0])) out3.push({ kind: "merge", pr: api[1], ...rawApi ? apiMergeHead(rawApi[0]) : UNREAD_HEAD });
   return out3;
+}
+function pairedWords(text) {
+  const words = [];
+  let cur = "";
+  let open = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (/\s/.test(ch)) {
+      if (open) {
+        words.push(cur);
+        cur = "";
+        open = false;
+      }
+      continue;
+    }
+    open = true;
+    if (ch === "'") {
+      const end = text.indexOf("'", i + 1);
+      if (end < 0) return null;
+      cur += text.slice(i + 1, end);
+      i = end;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      for (; j < text.length && text[j] !== '"'; j++) {
+        if (text[j] === "\\" && j + 1 < text.length) j++;
+        cur += text[j];
+      }
+      if (j >= text.length) return null;
+      i = j;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < text.length) {
+      cur += text[++i];
+      continue;
+    }
+    cur += ch;
+  }
+  if (open) words.push(cur);
+  return words;
+}
+var UNREAD_HEAD = { sha: null, shaBad: true };
+var HEAD_UNREAD_WHY = (pr) => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, or an unpaired quote. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : "<n>"} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>.`;
+var HEX40 = /^[0-9a-f]{40}$/i;
+function oneHead(values) {
+  if (values.some((v) => !HEX40.test(v))) return { sha: null, shaBad: true };
+  const set = new Set(values.map((v) => v.toLowerCase()));
+  if (set.size > 1) return { sha: null, shaBad: true };
+  return { sha: [...set][0] ?? null };
+}
+var MERGE_BOOL = /* @__PURE__ */ new Set(["--merge", "-m", "--squash", "-s", "--rebase", "-r", "--auto", "--disable-auto", "--admin", "--delete-branch", "-d"]);
+var MERGE_VALUE = /* @__PURE__ */ new Set(["--body", "-b", "--body-file", "-F", "--subject", "-t", "--author-email", "-A", "--match-head-commit", "--repo", "-R"]);
+var SHORT_BOOL = "msrd";
+var SHORT_VALUE = "bFtAR";
+var REDIRECT_WORD = /^\d*[<>]/;
+function shortCluster(w, next) {
+  const letters = w.slice(1);
+  for (let k = 0; k < letters.length; k++) {
+    const ch = letters[k];
+    if (SHORT_BOOL.includes(ch)) continue;
+    if (!SHORT_VALUE.includes(ch)) return null;
+    if (k < letters.length - 1) return 0;
+    return next === void 0 ? null : 1;
+  }
+  return 0;
+}
+function cliMergeHead(args) {
+  const words = pairedWords(args);
+  if (words === null) return UNREAD_HEAD;
+  const heads = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (REDIRECT_WORD.test(w) || !w.startsWith("-") || w === "-") continue;
+    if (/^-[A-Za-z]{2,}/.test(w)) {
+      const used = shortCluster(w, words[i + 1]);
+      if (used === null) return UNREAD_HEAD;
+      i += used;
+      continue;
+    }
+    const eq = w.startsWith("--") ? w.indexOf("=") : -1;
+    const name = eq > 0 ? w.slice(0, eq) : w;
+    if (MERGE_BOOL.has(name) && eq < 0) continue;
+    if (!MERGE_VALUE.has(name)) return { sha: null, shaBad: true };
+    const value = eq > 0 ? w.slice(eq + 1) : words[++i];
+    if (value === void 0) return { sha: null, shaBad: true };
+    if (name === "--match-head-commit") heads.push(value);
+  }
+  return oneHead(heads);
+}
+var API_FIELD = /^(?:-f|-F|--raw-field|--field)$/;
+var API_FIELD_EQ = /^(?:--raw-field|--field)=(.*)$/s;
+var API_VALUE = /* @__PURE__ */ new Set(["-X", "--method", "-H", "--header", "--hostname", "-q", "--jq", "-t", "--template", "--cache", "-p", "--preview"]);
+function apiMergeHead(text) {
+  const words = pairedWords(text.replace(/^[\s\S]*?\bapi\b/, ""));
+  if (words === null) return { sha: null, shaBad: true };
+  const heads = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w === "--input" || w.startsWith("--input=")) return { sha: null, shaBad: true };
+    let field;
+    if (API_FIELD.test(w)) field = words[++i];
+    else if (API_FIELD_EQ.test(w)) field = API_FIELD_EQ.exec(w)[1];
+    else if (API_VALUE.has(w)) {
+      i++;
+      continue;
+    }
+    if (field === void 0) continue;
+    const eq = field.indexOf("=");
+    if (eq > 0 && field.slice(0, eq) === "sha") heads.push(field.slice(eq + 1));
+  }
+  return oneHead(heads);
 }
 var WRAPPERS = String.raw`(?:env(?:\s+(?:-[uCS]\s+\S+|-\S+|\w+=\S*))*|nice(?:\s+-\S+(?:\s+\d+)?)*|timeout(?:\s+-\S+(?:\s+[A-Z0-9]+)?)*\s+[\d.]+[smhd]?|xargs(?:\s+-\S+(?:\s+(?:\d+|\{\}))?)*|setsid(?:\s+-\S+)*|sudo(?:\s+-\S+(?:\s+\w+)?)*)\s+`;
 var PUSH_GIT = new RegExp(String.raw`(${CALL_START}(?:${WRAPPERS})*)(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+push)(?=\s|$)`, "g");
@@ -2096,7 +2210,7 @@ function priorOf(view, masks, from) {
 }
 var priorId = (p) => p.repos.length === 0 && !p.nonLiteral ? "" : `|GH_REPO=${p.repos.join(",")}${p.nonLiteral ? "$" : ""}`;
 var fullId = (own) => own.ftext === own.text ? "" : `|${own.ftext}`;
-var landId = (shape, at2, own, prior) => `${shape.kind}|${shape.pr}|${shape.sha}|${whereId(at2)}${shape.kind === "merge" ? `|${own.ftext}${priorId(prior)}` : ""}`;
+var landId = (shape, at2, own, prior) => `${shape.kind}|${shape.pr}|${shape.sha}${shape.shaBad ? "!" : ""}|${whereId(at2)}${shape.kind === "merge" ? `|${own.ftext}${priorId(prior)}` : ""}`;
 var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
 function shapesOf(raw, tool) {
   const text = normalizeGh(blankInertQuotes(raw, tool));
@@ -2121,7 +2235,7 @@ function shapesOf(raw, tool) {
       const owns = reads.map(({ masked }) => ownCommand(view, masked, from));
       const prior = priorOf(view, reads.map((r) => r.masked), from);
       for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly)) {
+        for (const shape of landShapesOf(s, textOnly, seg)) {
           for (const own of owns) for (const at2 of wheres) add({ ...shape, at: at2, ...own, prior }, landId(shape, at2, own, prior));
         }
       }
@@ -2504,6 +2618,7 @@ function judgeLand(shape, deps, dir, cmd) {
   if (route === "app") return judgeAppMerge(shape, deps, dir, cmd);
   if (route === "foreign") return deny("repo-foreign", goThereWhy(cmd.repo));
   if (shape.pr === null) return deny("no-pr", NO_PR_WHY);
+  if (shape.kind === "merge" && shape.shaBad) return deny("merge-no-head", `PR #${shape.pr}: ${HEAD_UNREAD_WHY(shape.pr)} The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr}).`);
   const sha = shape.sha ?? void 0;
   if (shape.kind === "merge" && !sha) return deny("merge-no-head", `${shape.pr ? `PR #${shape.pr}` : "this PR"}: a raw merge command names no head, so Dave's tap cannot be tied to the head that would land. Run land-pr.ps1 -Pr ${shape.pr ?? "<n>"} (it pins the head), or pass the tapped head: gh api .../merge -f sha=<head>, gh pr merge --match-head-commit <head>. The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr ?? "<n>"}).`);
   const key = decisionKey2({ pr: shape.pr });
@@ -2558,6 +2673,7 @@ function appMergeIn(shape, deps, dir, cmd, place) {
   if (shape.pr === null) return deny("no-pr", appNoPrWhy(dir));
   const repo = appRepoFor(cmd, deps, dir, place, { sub: "merge", pr: shape.pr });
   if ("action" in repo) return repo;
+  if (shape.shaBad) return deny("merge-no-head", `PR #${prose(shape.pr)} (folder ${at(dir)}): ${HEAD_UNREAD_WHY(shape.pr)}`);
   const sha = shape.sha ?? null;
   if (!sha) return deny("merge-no-head", appMergeNoHeadWhy(deps, dir, shape.pr, repo.offer));
   const key = decisionKey2({ repo: repo.key, pr: shape.pr });
@@ -3092,6 +3208,10 @@ function unjudgeable(input, deps, thrown, found = []) {
   const holdsPush = !app && scopes.has("push") && (gone || !pushFoldersUnregistered(input, deps));
   const live = holdsPush || app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? "deny" : "warn", "cwd-missing");
+  if (holdsPush && !(app && hardAppCall(input)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
+    const again = gone ? "Run the push again from a folder that exists." : "Run the push again. If it fails again, ask Dave.";
+    return denyOut(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
+  }
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : scopes.has("app-push") ? "app-push" : "push");
 }
 var gatedScopesSafe = (input, app = false) => {
