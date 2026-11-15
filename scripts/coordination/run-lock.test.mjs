@@ -1361,3 +1361,20 @@ test('S4: RUN_LOCK_TEST_SAMPLES is ignored when RUN_LOCK_DIR is the default stor
     assert.doesNotMatch(r.lines.join('\n'), /RUN_LOCK_TEST_SAMPLES/, `the hook is ignored for ${text}`);
   }
 });
+
+test('list has a short gate budget: a live gate holder of unknown start delays it by seconds, not by the 10 s of acquire', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 100);
+  const lock = await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, ctx.d);
+  assert.equal(lock.granted, true);
+  const gate = join(ctx.dir, 'gate.lock');
+  writeFileSync(gate, gateBody(100, 'unknown')); // a live holder whose start time is unknown: the gate is not broken before 60 s
+  ctx.d.sleep = (ms) => new Promise((r) => setTimeout(r, ms)); // a real clock: the budget is time
+  const t0 = Date.now();
+  const out = await list(ctx.d);
+  const took = Date.now() - t0;
+  assert.ok(took < 5000, `list took ${took} ms behind a held gate; the budget is about 2 s`);
+  assert.equal(out.live.length, 1, 'the listing still shows the live lock (it removes nothing)');
+  assert.equal(readFileSync(gate, 'utf8'), gateBody(100, 'unknown'), 'the gate file is the holder\'s, untouched');
+});

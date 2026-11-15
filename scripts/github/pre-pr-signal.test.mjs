@@ -46,7 +46,7 @@ const TREE_SLEEPER = (pidFile) => `import { spawn } from 'node:child_process'; i
 spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000)', ${JSON.stringify(`${pidFile}.gc`)}], { stdio: 'ignore', detached: process.platform === 'win32' }).unref();
 writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000);`;
 
-test('SIGTERM: the handler stops the live CodeRabbit child, and only then is the lock freed', { timeout: 120_000 }, async () => {
+test('SIGTERM: the handler stops the live CodeRabbit child, and the lock is freed at exit', { timeout: 120_000 }, async () => {
   const dir = mk('prepr-signal-');
   const store = join(dir, 'store');
   const pidFile = join(dir, 'cr.pid');
@@ -116,4 +116,19 @@ test('the registry holds the child while it runs: killActiveCr stops that child 
   } finally {
     if (isAlive(crPid)) { try { process.kill(crPid, 'SIGKILL'); } catch { /* gone */ } }
   }
+});
+
+test('the registry forgets the child when the run settles by timeout, even if the child never closes', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const dir = mk('prepr-signal-');
+  const child = Object.assign(new EventEmitter(), { pid: 1, stdout: new PassThrough(), stderr: new PassThrough(), kill() {} });
+  const r = await defaultCrRunner(
+    { cwd: dir, args: REVIEW, timeoutMs: 50 },
+    { spawnFn: () => child, killer: () => {}, killGraceMs: 50, tickMs: 1000 },
+  );
+  assert.equal(r.timedOut, true, 'the run settled by the timeout; the child never emitted close');
+  let killed = 0;
+  assert.equal(killActiveCr(() => { killed += 1; }), false, 'a settled run leaves no child in the registry');
+  assert.equal(killed, 0);
 });

@@ -869,6 +869,7 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
     function finish(status) {
       if (settled) return;
       settled = true;
+      if (child && activeCr === child) activeCr = null; // a timeout settles with no close event: the signal handler must not stop a dead child
       clearInterval(ticker);
       clearTimeout(limit);
       file?.end();

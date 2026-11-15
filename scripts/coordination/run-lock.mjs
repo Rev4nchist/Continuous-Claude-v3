@@ -47,6 +47,7 @@ import { fileURLToPath } from 'node:url';
 const MIN = 60_000;
 const GATE_STALE_MS = 10_000; // age limit for a gate file that holds no readable holder
 const GATE_UNKNOWN_MS = 60_000; // age limit for a gate whose holder has no usable start time (pid reuse cannot be seen)
+const LIST_GATE_MS = 2_000; // list is a read: it waits this long for the gate, then lists the live runs and removes nothing
 export const EXIT_WAIT = 75; // "the lock says wait". Exit 3 stays free for an error of the caller (pre-pr uses 3).
 const GATE_MAX_MS = 120_000; // a gate older than this is broken whoever holds it: the gated part is file work only
 const GATE_RM_TRIES = 5; // the finally step tries this often to remove our gate (EBUSY, EPERM)
@@ -326,15 +327,16 @@ function breakDeadGate(d, gate) {
   return moved === text;
 }
 
-/** Run fn while we hold gate.lock. The gate holds our pid, start time and a nonce; we remove it only if it still holds that text. */
-async function withGate(d, selfStart, fn) {
+/** Run fn while we hold gate.lock. budgetMs (list only) ends the wait early: the caller then fails open. The gate holds our pid, start time and a nonce; we remove it only if it still holds that text. */
+async function withGate(d, selfStart, fn, budgetMs = null) {
   mkdirSync(d.dir, { recursive: true });
+  const began = Date.now();
   const gate = join(d.dir, 'gate.lock');
   const body = JSON.stringify({ pid: d.selfPid, pidStart: selfStart, nonce: randomUUID() });
   for (let i = 0; ; i++) {
     try { writeFileSync(gate, body, { flag: 'wx' }); break; } catch (e) {
       if (e.code !== 'EEXIST') throw e;
-      if (i >= 499) throw new Error('run-lock: the gate file stays held');
+      if (i >= 499 || (budgetMs !== null && Date.now() - began > budgetMs)) throw new Error('run-lock: the gate file stays held');
       if (i % GATE_CHECK_EVERY === 0 && breakDeadGate(d, gate)) continue;
       await d.sleep(20);
     }
@@ -513,7 +515,7 @@ export async function breakLock(opts, deps) {
 async function sweepGated(d, starts) {
   if (!existsSync(d.dir)) return sweep(d, starts, false);
   const selfStart = d.pidStart(d.selfPid);
-  try { return await withGate(d, selfStart, () => sweep(d, starts)); } catch { return sweep(d, starts, false); }
+  try { return await withGate(d, selfStart, () => sweep(d, starts), LIST_GATE_MS); } catch { return sweep(d, starts, false); }
 }
 
 export async function list(deps) {
