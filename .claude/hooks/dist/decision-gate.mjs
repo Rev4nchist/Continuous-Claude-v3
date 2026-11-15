@@ -2644,10 +2644,18 @@ function intentDeny(p, subagent, fallback) {
 }
 var SCAN_MAX_FILES = 2e3;
 var SCAN_MAX_BYTES = 15e5;
-function scanHoldout(p, deps, dir, branch) {
+function scanHoldout(p, deps, dir, branch, chained) {
   if (!deps.holdoutIds || !deps.answerKeyHits) return null;
+  try {
+    return scanHoldoutRead(p, deps, dir, branch, chained);
+  } catch {
+    return hardOf(deny("holdout-scan-unavailable", `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, "push"));
+  }
+}
+function scanHoldoutRead(p, deps, dir, branch, chained) {
   const isRe = branch.startsWith("re/");
   const stop = (pattern, why) => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, "push"));
+  if (isRe && chained) return stop("holdout-scan-unavailable", "the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.");
   const ref = p.src ?? "HEAD";
   if (ref.startsWith("-")) return null;
   const sha = deps.git(dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
@@ -2669,7 +2677,7 @@ function scanHoldout(p, deps, dir, branch) {
   const log = deps.git(dir, ["log", "--format=%B", `fork/main..${sha.stdout.trim()}`]);
   if (diff.status !== 0 || log.status !== 0) return stop("holdout-scan-unavailable", "the diff or the commit messages could not be read. Run the push again from the repo.");
   if (diff.stdout.length > SCAN_MAX_BYTES) return stop("holdout-scan-too-large", `its diff is over ${SCAN_MAX_BYTES} bytes. Push in parts: fewer commits or files in each push.`);
-  const added = diff.stdout.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).join("\n");
+  const added = diff.stdout.split("\n").filter((l) => l.startsWith("+")).join("\n");
   const count = countIdsIn2(`${added}
 ${log.stdout}
 ${files.join("\n")}`, ids);
@@ -2705,8 +2713,8 @@ function judgePush(shape, deps, dir, ctx) {
   if (outsideHeads(p)) return hardOf(d("push-target-unresolved", PUSH_REFSPEC_WHY));
   const branch = p.branch ?? currentBranch(deps, dir);
   if (p.force && (branch === "main" || branch === "")) return hardOf(d("push-unsafe", PUSH_UNSAFE_WHY));
-  if (branch !== "" && branch !== "main") {
-    const scanned = scanHoldout(p, deps, dir, branch);
+  if (branch !== "") {
+    const scanned = scanHoldout(p, deps, dir, branch, chained || !alone);
     if (scanned !== null) return scanned;
   }
   if (p.force) return d("push-unsafe", PUSH_UNSAFE_WHY);

@@ -711,6 +711,12 @@ function normalizeGitWrappers(scan) {
     "git"
   );
 }
+var WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+var WRAPPER_OPT = String.raw`(?:-C\s+${WRAPPER_VAL}|-UseGitSafe|-Path\s+${WRAPPER_VAL}|-Remote\s+${WRAPPER_VAL}|-WhichAccount\s+${WRAPPER_VAL})`;
+var WRAPPER_FORCE_PUSH = new RegExp(
+  String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?(?:\s--(?:force|mirror|all|delete|prune)|\s-[A-Za-z]*[fd][A-Za-z]*(?=\s|$)|\s[+:]\S)`,
+  "i"
+);
 function bodySubstitutions(body, tool) {
   const out = [];
   const esc = tool === "PowerShell" ? "`" : "\\";
@@ -881,6 +887,7 @@ function classifyDestructive(command, depth = 0, tool = "Bash") {
 }
 function classifyText(command, depth, tool) {
   if (!command || typeof command !== "string") return null;
+  if (WRAPPER_FORCE_PUSH.test(command)) return "git push --force";
   let scan = normalizeGitGlobalOptions(normalizeGitWrappers(stripQuotedStrings(command, tool)));
   if (tool === "PowerShell") scan = scan.replace(/`([A-Za-z0-9])/g, "$1");
   const patterns = tool === "PowerShell" ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;

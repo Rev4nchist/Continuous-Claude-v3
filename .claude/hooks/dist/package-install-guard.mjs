@@ -824,6 +824,12 @@ function taggedWrapperPayloads(segments) {
 function wrapperPayloadsFromSegments(segments) {
   return taggedWrapperPayloads(segments).map((w) => w.payload);
 }
+var WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+var WRAPPER_OPT = String.raw`(?:-C\s+${WRAPPER_VAL}|-UseGitSafe|-Path\s+${WRAPPER_VAL}|-Remote\s+${WRAPPER_VAL}|-WhichAccount\s+${WRAPPER_VAL})`;
+var WRAPPER_FORCE_PUSH = new RegExp(
+  String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?(?:\s--(?:force|mirror|all|delete|prune)|\s-[A-Za-z]*[fd][A-Za-z]*(?=\s|$)|\s[+:]\S)`,
+  "i"
+);
 function bodySubstitutions(body, tool) {
   const out = [];
   const esc = tool === "PowerShell" ? "`" : "\\";

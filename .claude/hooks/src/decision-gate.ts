@@ -2327,10 +2327,21 @@ function intentDeny(p: PushShape, subagent: boolean, fallback: Deny): Deny {
  */
 const SCAN_MAX_FILES = 2000;
 const SCAN_MAX_BYTES = 1_500_000;
-function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string): Deny | null {
+function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string, chained: boolean): Deny | null {
   if (!deps.holdoutIds || !deps.answerKeyHits) return null;
+  try {
+    return scanHoldoutRead(p, deps, dir, branch, chained);
+  } catch {
+    // Any throw in the scan path (a git timeout, a spawn error) is a hard deny: the catch path of handle() only warns in scope push.
+    return hardOf(deny('holdout-scan-unavailable', `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, 'push'));
+  }
+}
+
+function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, chained: boolean): Deny | null {
   const isRe = branch.startsWith('re/');
   const stop = (pattern: string, why: string): Deny => hardOf(deny(pattern, `this push of ${branch} cannot be checked for holdout ids: ${why}`, 'push'));
+  // A push chained after a commit is scanned at the head BEFORE that commit: its content is not on the branch yet. Fail closed for a re/ branch.
+  if (isRe && chained) return stop('holdout-scan-unavailable', 'the same command also commits or changes the branch, so the new content cannot be read yet. Commit first, then push in a separate command.');
   const ref = p.src ?? 'HEAD';
   if (ref.startsWith('-')) return null; // shipTap denies a ref that starts with a dash
   const sha = deps.git(dir, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
@@ -2339,16 +2350,18 @@ function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string): Den
   const names = deps.git(dir, ['diff', '--name-only', '--no-renames', '-z', range]);
   if (names.status !== 0) return stop('holdout-scan-unavailable', 'the changed files against fork/main could not be read. Run git fetch fork main in the repo, then push again.');
   const files = names.stdout.split('\0').filter(Boolean);
-  if (!isRe && deps.answerKeyHits(files).length === 0) return null;
+  if (!isRe && deps.answerKeyHits!(files).length === 0) return null;
   if (files.length > SCAN_MAX_FILES) return stop('holdout-scan-too-large', `it changes ${files.length} files, over the bound of ${SCAN_MAX_FILES}. Push in parts: fewer files in each push.`);
   let ids: string[];
-  try { ids = deps.holdoutIds(dir); } catch { return stop('holdout-scan-unavailable', 'the holdout id list could not be read, so the scan cannot run.'); }
+  try { ids = deps.holdoutIds!(dir); } catch { return stop('holdout-scan-unavailable', 'the holdout id list could not be read, so the scan cannot run.'); }
   if (!Array.isArray(ids) || ids.length === 0) return stop('holdout-scan-unavailable', 'the holdout id list is empty, so the scan cannot run.');
   const diff = deps.git(dir, ['diff', '--unified=0', '--no-color', '--no-renames', range]);
   const log = deps.git(dir, ['log', '--format=%B', `fork/main..${sha.stdout.trim()}`]);
   if (diff.status !== 0 || log.status !== 0) return stop('holdout-scan-unavailable', 'the diff or the commit messages could not be read. Run the push again from the repo.');
   if (diff.stdout.length > SCAN_MAX_BYTES) return stop('holdout-scan-too-large', `its diff is over ${SCAN_MAX_BYTES} bytes. Push in parts: fewer commits or files in each push.`);
-  const added = diff.stdout.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
+  // Every line that starts with + counts, the +++ file headers too: a header holds only a path (scanned anyway), and an added line whose
+  // content starts with ++ must not be dropped (CLI round 1, item d).
+  const added = diff.stdout.split('\n').filter((l) => l.startsWith('+')).join('\n');
   const count = countIdsIn(`${added}\n${log.stdout}\n${files.join('\n')}`, ids);
   if (count === 0) return null;
   return hardOf(deny('holdout-id', `this push of ${branch} carries ${count} holdout id${count === 1 ? '' : 's'} in added lines, commit messages or file names. Remove them, or push without them. Which ones stays with the seat: this text names a count only.`, 'push'));
@@ -2402,8 +2415,11 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
   const branch = p.branch ?? currentBranch(deps, dir);
   if (p.force && (branch === 'main' || branch === '')) return hardOf(d('push-unsafe', PUSH_UNSAFE_WHY));
   // The holdout scan runs BEFORE the force return: a force push of a re/ branch must not skip it (the guard's yes would send it out unscanned).
-  if (branch !== '' && branch !== 'main') {
-    const scanned = scanHoldout(p, deps, dir, branch);
+  // It also runs for main: a push of main whose diff touches an answer-key path is scanned (CLI round 1, item a).
+  if (branch !== '') {
+    // `alone` is false when the command holds anything but cd, read-only git and pushes (a commit -a, an amend, a merge, a redirect):
+    // such a command can change the branch before the push, so for a re/ branch it counts as chained.
+    const scanned = scanHoldout(p, deps, dir, branch, chained || !alone);
     if (scanned !== null) return scanned;
   }
   if (p.force) return d('push-unsafe', PUSH_UNSAFE_WHY);

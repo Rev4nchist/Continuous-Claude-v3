@@ -86,3 +86,38 @@ describe('W: normalizeGitWrappers cost grows linearly (seat read 16:0x: a regex 
     ] as const) expect(normalizeGitWrappers(text), text).toBe(want);
   });
 });
+
+describe('W: a command that names the git wrapper with a force push form and cannot be fully parsed must ASK (CLI round 1, item e; seat: fail closed, no quoted-path spelling list)', () => {
+  const askFor = (cmd: string, tool: 'Bash' | 'PowerShell') => decide(cmd, interactiveFor(tool), {}).decision;
+  const FORCE_ROWS = [
+    String.raw`pwsh -File "C:\my repo\scripts\git-safe.ps1" push --force fork feat/x`,
+    String.raw`pwsh -File 'C:\my repo\scripts\git-safe.ps1' push -f fork feat/x`,
+    'pwsh -File "C:/my repo/scripts/git-safe.ps1" push --force-with-lease fork feat/x',
+    "& 'C:/my repo/scripts/git-safe.ps1' push --delete fork feat/x",
+    'pwsh -NoProfile -File "scripts/git-for.ps1" -UseGitSafe push --mirror fork',
+    'pwsh -File "scripts/git-safe.ps1" -C "C:/my repo" push fork +feat/x',
+    'pwsh -File "scripts/git-safe.ps1" push fork :feat/x',
+    'pwsh -File scripts/git-safe.ps1 push -uf fork feat/x',
+    'pwsh -File "scripts/git-safe.ps1" push --all fork',
+  ];
+  it('W7: each force push form through a quoted or odd wrapper spelling asks, in both shells', () => {
+    // Breaks when: only the spellings the rewrite knows are caught (a quoted path is stripped before the rewrite).
+    for (const cmd of FORCE_ROWS) {
+      expect(askFor(cmd, 'Bash'), `Bash ${cmd}`).not.toBe('allow');
+      expect(askFor(cmd, 'PowerShell'), `PowerShell ${cmd}`).not.toBe('allow');
+    }
+  });
+
+  it('W8: the controls stay allowed: a plain wrapper push, a quoted plain push, a commit message that names the wrapper and a force word', () => {
+    // Breaks when: the fail-closed rule asks for every wrapper call.
+    for (const cmd of [
+      'pwsh -File "C:/my repo/scripts/git-safe.ps1" push fork feat/x',
+      String.raw`pwsh -File "C:\my repo\scripts\git-safe.ps1" -C "C:\my repo" push fork feat/x`,
+      'pwsh -File scripts/git-safe.ps1 commit -m "fix: the force push guard"',
+      'pwsh -File "scripts/git-safe.ps1" status',
+    ]) {
+      expect(askFor(cmd, 'PowerShell'), cmd).toBe('allow');
+      expect(askFor(cmd, 'Bash'), cmd).toBe('allow');
+    }
+  });
+});

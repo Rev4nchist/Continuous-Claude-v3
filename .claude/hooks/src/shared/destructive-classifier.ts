@@ -456,6 +456,19 @@ export function normalizeGitWrappers(scan: string): string {
 }
 
 /**
+ * Fail closed on the raw text (CLI round 1, item e): a command that names the git wrapper, whose subcommand is `push`, with a force form
+ * (--force*, --mirror, --all, --delete, --prune, a short bundle with f or d, a +refspec or a :refspec). It is read on the text with the quotes
+ * KEPT, so a quoted wrapper path ("C:\my repo\scripts\git-safe.ps1") and every spelling the rewrite does not know still ask. The subcommand
+ * must be `push` right after the wrapper's own options, so a commit message that names `push --force` stays a message.
+ */
+const WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+const WRAPPER_OPT = String.raw`(?:-C\s+${WRAPPER_VAL}|-UseGitSafe|-Path\s+${WRAPPER_VAL}|-Remote\s+${WRAPPER_VAL}|-WhichAccount\s+${WRAPPER_VAL})`;
+const WRAPPER_FORCE_PUSH = new RegExp(
+  String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?(?:\s--(?:force|mirror|all|delete|prune)|\s-[A-Za-z]*[fd][A-Za-z]*(?=\s|$)|\s[+:]\S)`,
+  'i',
+);
+
+/**
  * The `$(...)` and (Bash) backtick substitutions of a text block that EXPANDS, i.e. an unquoted heredoc
  * or a PowerShell `@"` here-string: the shell runs those. A backslash (Bash) or backtick (PowerShell)
  * before the `$` makes it literal. Quotes inside the prose are plain text, so this scans by hand.
@@ -718,6 +731,7 @@ function classifyText(command: string, depth: number, tool: string): string | nu
   if (!command || typeof command !== 'string') return null;
   // R2: the top-level scan reads the RAW command, heredoc bodies included, as on fork/main. A body that
   // `cat > x.sh` writes can run on the next line (`bash x.sh`), so prose that names a destructive command asks.
+  if (WRAPPER_FORCE_PUSH.test(command)) return 'git push --force';
   let scan = normalizeGitGlobalOptions(normalizeGitWrappers(stripQuotedStrings(command, tool)));
   // PowerShell: `` res`et `` runs as reset. Quotes are already stripped, so the escaped letter can go.
   if (tool === 'PowerShell') scan = scan.replace(/`([A-Za-z0-9])/g, '$1');

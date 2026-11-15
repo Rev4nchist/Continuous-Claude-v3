@@ -827,6 +827,12 @@ function extractShellWrapperPayloads(command) {
     return [];
   }
 }
+var WRAPPER_VAL = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+var WRAPPER_OPT = String.raw`(?:-C\s+${WRAPPER_VAL}|-UseGitSafe|-Path\s+${WRAPPER_VAL}|-Remote\s+${WRAPPER_VAL}|-WhichAccount\s+${WRAPPER_VAL})`;
+var WRAPPER_FORCE_PUSH = new RegExp(
+  String.raw`git-(?:safe|for)\.ps1["']?(?:\s+${WRAPPER_OPT})*\s+push\b[^\n;&|]*?(?:\s--(?:force|mirror|all|delete|prune)|\s-[A-Za-z]*[fd][A-Za-z]*(?=\s|$)|\s[+:]\S)`,
+  "i"
+);
 var INTERPRETERS = [
   { word: /(?<![\w.-])(?:bash|sh|zsh|dash|ksh|ash)(?:\.exe)?\b/i, flag: new RegExp(POSIX_EXEC_FLAG) },
   { word: /(?<![\w.-])(?:pwsh|powershell)(?:\.exe)?\b/i, flag: new RegExp(PWSH_EXEC_FLAG, "i") },

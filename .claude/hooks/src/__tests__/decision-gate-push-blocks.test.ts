@@ -53,6 +53,8 @@ interface World {
   files?: string[];
   /** The scan git calls fail. */
   scanFails?: boolean;
+  /** The diff read THROWS (makeGit throws on a timeout or a spawn error). */
+  throwOnScan?: boolean;
   /** The id list: absent = a list with SYNTH and 42; 'throw' = unreadable. */
   ids?: string[] | 'throw';
   /** Which paths the answer-key guard list names (the real list is imported in the source; here a fake). */
@@ -78,6 +80,7 @@ function deps(w: World = {}): Deps {
       if (/^rev-parse (.+)\^\{tree\}$/.test(a)) return { status: 0, stdout: `${TREE}\n` };
       if (a === 'write-tree') return { status: 128, stdout: '' };
       if (args[0] === 'diff' && args.includes('--name-only')) return w.scanFails ? { status: 128, stdout: '' } : { status: 0, stdout: `${(w.files ?? ['src/app.ts']).join('\0')}\0` };
+      if (w.throwOnScan && args[0] === 'diff' && args.includes('--unified=0')) throw new Error('git exploded');
       if (args[0] === 'diff' && args.includes('--unified=0')) return w.scanFails ? { status: 128, stdout: '' } : { status: 0, stdout: w.diff ?? '' };
       if (args[0] === 'log' && args.some((x) => x.startsWith('--format'))) return w.scanFails ? { status: 128, stdout: '' } : { status: 0, stdout: w.messages ?? '' };
       return { status: 1, stdout: '' };
@@ -290,6 +293,46 @@ describe('HS: the holdout scan on a push of a re/ branch', () => {
     }
     // A clean force push of a re/ branch stays the soft push-unsafe (the guard asks Dave), never a hard deny.
     expect(verdict(bash('git push --force fork re/re-x'), { ...RE, diff: '+++ b/src/a.ts\n+const a = 1;\n' }).action).toBe('allow');
+  });
+
+  it('H14: a push of main is scanned too when its diff touches an answer-key path (CLI round 1, item a)', () => {
+    // Breaks when: the main ALLOW comes before the scan.
+    const w = { branch: 'main', files: ['gold/a.json'], answerKey: (p: string) => p.startsWith('gold/') };
+    expect(denied(bash('git push fork main'), { ...w, diff: `+++ b/gold/a.json\n+// PR ${SYNTH}\n` })).toBe(true);
+    expect(verdict(bash('git push fork main'), { ...w, diff: '+++ b/gold/a.json\n+{}\n' }).action).toBe('allow');
+    // A plain main push with no answer-key path is unchanged.
+    expect(verdict(bash('git push fork main'), { branch: 'main', files: ['src/a.ts'] }).action).toBe('allow');
+  });
+
+  it('H15: a THROW anywhere in the scan path is a hard deny, never an exception or a warning (item b)', () => {
+    // Breaks when: scanHoldout lets a git throw escape (the catch path only warns in scope push).
+    tapRe();
+    const d = () => verdict(bash(PUSH), { ...RE, throwOnScan: true });
+    expect(d).not.toThrow();
+    expect(d().action).toBe('deny');
+    // A throw while reading the id list is a deny too.
+    expect(denied(bash(PUSH), { ...RE, ids: 'throw' })).toBe(true);
+  });
+
+  it('H16: a push chained after a commit on a re/ branch is a hard deny: commit first, push in a separate command (item c)', () => {
+    // Breaks when: the chained push is scanned at the pre-commit head (the new commit is never read).
+    tapRe();
+    for (const c of ['git commit -F m.txt && git push fork re/re-x', 'git commit -am x && git push fork re/re-x', 'pwsh -File scripts/git-safe.ps1 commit -F m.txt && pwsh -File scripts/git-safe.ps1 push fork re/re-x']) {
+      const d = verdict(c.startsWith('pwsh') ? pwsh(c) : bash(c), RE);
+      expect(d.action, c).toBe('deny');
+      expect(d.action === 'deny' ? d.reason : '', c).toMatch(/separate command/);
+    }
+    // The control: the same chain on an own feature branch with no answer-key path is not touched.
+    shipTap();
+    expect(verdict(bash('git commit -F m.txt && git push fork feat/x')).action).toBe('allow');
+  });
+
+  it('H17: an added line whose content starts with ++ is scanned (the +++ header filter dropped it) (item d)', () => {
+    // Breaks when: lines that start with +++ are dropped from the added text.
+    tapRe();
+    expect(denied(bash(PUSH), { ...RE, diff: `+++ b/src/a.ts\n+++ // PR ${SYNTH}\n` })).toBe(true);
+    expect(denied(bash(PUSH), { ...RE, diff: `+++ b/src/a.ts\n++++ #${SYNTH}\n` })).toBe(true);
+    expect(verdict(bash(PUSH), { ...RE, diff: '+++ b/src/a.ts\n+++ plain text\n' }).action).toBe('allow');
   });
 
   it('H11: a re/ push with no id passes with its ship tap only (no question added)', () => {
