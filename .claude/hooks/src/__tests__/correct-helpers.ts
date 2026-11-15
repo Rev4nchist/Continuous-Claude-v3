@@ -3,15 +3,35 @@
  * (no git spawn, so the tests exercise the same file-reading path as the hook), verify sidecars,
  * registries and the real hook payload fixtures in fixtures/correct/.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { afterAll } from 'vitest';
 
 export const SHA = '0123456789abcdef0123456789abcdef01234567';
 
+/** Every folder this module made in this test file. Only these are removed, never a prefix match. */
+const made: string[] = [];
+
 export function tempDir(label: string): string {
-  return mkdtempSync(join(tmpdir(), `ccv3-correct-${label}-`));
+  const dir = mkdtempSync(join(tmpdir(), `ccv3-correct-${label}-`));
+  made.push(dir);
+  return dir;
 }
+
+/** Remove the folders `tempDir` made. A locked file must not fail a test, so errors are dropped. */
+export function removeTempDirs(): void {
+  for (const dir of made.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      /* leave it for the next run: a leak is better than a failed test */
+    }
+  }
+}
+
+// Each test file imports this module at the top level, so this hook runs once per file.
+afterAll(removeTempDirs);
 
 /** A repo whose HEAD is `branch` at SHA. `.git` is a directory. */
 export function mkRepo(dir: string, branch: string, sha: string | null = SHA): string {
