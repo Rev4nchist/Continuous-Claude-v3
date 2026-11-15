@@ -43,13 +43,21 @@ describe('CH: holdout early warning', () => {
     expect(reasonOf(preflight(one.payload, one.opts))).toMatch(/hold 1 holdout id\./);
   });
 
-  it('CH2: a commit on a non-re branch makes no staged read', () => {
-    // Breaks when: the trigger widens to every branch (a git read on each ordinary commit).
+  it('CH2: a commit on a non-re branch with staged holdout ids WARNS with a count and never asks (card coord-holdout-scan-warn, seat Q2)', () => {
+    // Breaks when: the staged read stays re/-only, or a non-re branch gets an ask instead of a warning, or the text holds more than a count.
     let calls = 0;
     const c = ctx('feat/x', () => { calls += 1; return 3; });
     const out = preflight(c.payload, c.opts);
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
     expect(reasonOf(out)).not.toMatch(/holdout/);
+    const context: string = (out as any)?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context).toMatch(/hold 3 holdout ids/);
+    expect(context).not.toMatch(/push will be refused/);
+    expect(context).not.toMatch(/\d{5,}/);
+    for (const answer of [null, 0]) {
+      const z = ctx('feat/x', () => answer);
+      expect(((preflight(z.payload, z.opts) as any)?.hookSpecificOutput?.additionalContext ?? '')).not.toMatch(/holdout/);
+    }
   });
 
   it('CH3: a read that fails (null) or finds nothing (0) adds no ask', () => {

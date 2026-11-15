@@ -354,7 +354,7 @@ function bootTrace(env = process.env, _bootCall) {
 if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
 
 // src/holdout-scan.ts
-import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync as readFileSync2, readSync } from "fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync as readFileSync2, readSync, writeFileSync } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname2, join as join4 } from "path";
 
@@ -524,7 +524,7 @@ function countHits(text, ids) {
   const shas = ids.filter((id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id));
   const rest = ids.filter((id) => !shas.includes(id));
   const runs = [...text.matchAll(HEX_RUN)].map((m) => m[0].toLowerCase());
-  const shaHits = shas.filter((s) => runs.some((r) => s.toLowerCase().startsWith(r))).length;
+  const shaHits = shas.map((s) => s.toLowerCase()).filter((s) => runs.some((r) => s.startsWith(r) || r.startsWith(s))).length;
   const counted = countIdsIn2(text, rest);
   const bareDigits = rest.filter((id) => /^\d{3,}$/.test(id) && new RegExp(`(?<!\\d)${id}(?!\\d)`).test(text)).length;
   return { count: counted + shaHits, bare: Math.max(0, bareDigits - counted) };
@@ -543,6 +543,22 @@ function writeLog(logPath, row) {
   } catch {
   }
 }
+function firstOffInSession(home, sessionId) {
+  const dir = join4(home, ".claude", "state", "holdout-scan");
+  const marker = join4(dir, `${(sessionId || "no-session").replace(/[^A-Za-z0-9-]/g, "_")}.off`);
+  try {
+    if (existsSync(marker)) return false;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(marker, "");
+  } catch {
+  }
+  return true;
+}
+var inCcv3 = (cwd, env) => {
+  const root = fwd2(primaryRepo(env)).toLowerCase();
+  const dir = fwd2(cwd).toLowerCase().replace(/\/+$/, "");
+  return dir === root || dir.startsWith(`${root}/`);
+};
 var wrap = (text) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: text } });
 function scanInput(data, deps = {}) {
   const env = deps.env ?? process.env;
@@ -550,6 +566,8 @@ function scanInput(data, deps = {}) {
   const logPath = deps.logPath ?? join4(home, ".claude", "logs", "holdout-scan.jsonl");
   const now = deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
   const tool = str(data.tool_name);
+  const cwd = data.cwd || process.cwd();
+  const ccv3 = inCcv3(cwd, env);
   const out = outgoingText(tool, data.tool_input ?? {});
   if (!out) return { output: null };
   const readFile = (p) => {
@@ -559,16 +577,17 @@ function scanInput(data, deps = {}) {
       return null;
     }
   };
-  if (routerFlag(data.cwd || process.cwd(), readFile, home, "holdoutScan", "off")) return { output: null };
+  if (routerFlag(cwd, readFile, home, "holdoutScan", "off")) return { output: null };
   let ids;
   try {
     ids = loadHoldoutIds(primaryRepo(env));
   } catch {
-    writeLog(logPath, { ts: now(), tool, error: "list", mode: "warn" });
+    writeLog(logPath, { ts: now(), tool, error: "list", mode: "warn", ccv3 });
+    if (!firstOffInSession(home, str(data.session_id))) return { output: null };
     return { output: wrap("holdout-scan off: the holdout id list could not be read; this input was not scanned (warn mode).") };
   }
   const { count, bare } = countHits(out.text, ids);
-  if (count > 0 || bare > 0) writeLog(logPath, { ts: now(), tool, count, bare, mode: "warn" });
+  if (count > 0 || bare > 0) writeLog(logPath, { ts: now(), tool, count, bare, mode: "warn", ccv3 });
   const text = warnText(tool, count, out.tailBytes);
   return { output: text ? wrap(text) : null };
 }

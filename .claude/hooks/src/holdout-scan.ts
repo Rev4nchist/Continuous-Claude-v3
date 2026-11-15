@@ -8,7 +8,7 @@
  * A failed list read gives a warning that the scan is off (seat Q3: differs from the scope text, a broken list must not stop every tool).
  * Off switch: holdoutScan.off = true in review-router.config.json. The staged diff at commit is commit-preflight's (seat Q2).
  */
-import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync } from 'fs';
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { countIdsIn, loadHoldoutIds } from './shared/holdout-ids.js';
@@ -23,7 +23,7 @@ const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
 const EXEMPT = [/\/scripts\/eval\/review-eval\/gold\//i, /\/\.claude\/state\/review-engine\//i, /\/2026-11-01-pr-review-dataset\.json$/i];
 
 type Env = Record<string, string | undefined>;
-interface HookInput { tool_name?: string; tool_input?: Record<string, unknown>; cwd?: string }
+interface HookInput { tool_name?: string; tool_input?: Record<string, unknown>; cwd?: string; session_id?: string }
 interface Deps { env?: Env; logPath?: string; now?: () => string }
 interface Output { hookSpecificOutput: { hookEventName: 'PreToolUse'; additionalContext: string } }
 interface Scanned { text: string; tailBytes: number }
@@ -76,7 +76,8 @@ export function countHits(text: string, ids: string[]): { count: number; bare: n
   const shas = ids.filter((id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id));
   const rest = ids.filter((id) => !shas.includes(id));
   const runs = [...text.matchAll(HEX_RUN)].map((m) => m[0].toLowerCase());
-  const shaHits = shas.filter((s) => runs.some((r) => s.toLowerCase().startsWith(r))).length;
+  // Either one may be the prefix (seat R1): a short stored sha inside a full text sha, or a text prefix of a stored full sha. 7 hex floor.
+  const shaHits = shas.map((s) => s.toLowerCase()).filter((s) => runs.some((r) => s.startsWith(r) || r.startsWith(s))).length;
   const counted = countIdsIn(text, rest);
   const bareDigits = rest.filter((id) => /^\d{3,}$/.test(id) && new RegExp(`(?<!\\d)${id}(?!\\d)`).test(text)).length;
   return { count: counted + shaHits, bare: Math.max(0, bareDigits - counted) };
@@ -93,6 +94,25 @@ function writeLog(logPath: string, row: Record<string, unknown>): void {
   try { mkdirSync(dirname(logPath), { recursive: true }); appendFileSync(logPath, `${JSON.stringify(row)}\n`); } catch { /* a log failure never blocks a tool */ }
 }
 
+/** True only the first time this session hits an unreadable list (seat R2): a marker file per session id, written only then. */
+function firstOffInSession(home: string, sessionId: string): boolean {
+  const dir = join(home, '.claude', 'state', 'holdout-scan');
+  const marker = join(dir, `${(sessionId || 'no-session').replace(/[^A-Za-z0-9-]/g, '_')}.off`);
+  try {
+    if (existsSync(marker)) return false;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(marker, '');
+  } catch { /* an unwritable marker means the warning may repeat; never block */ }
+  return true;
+}
+
+/** True when the cwd is the primary checkout or below it (its worktrees): the log splits false fires of other repos (seat S1). */
+const inCcv3 = (cwd: string, env: Env): boolean => {
+  const root = fwd(primaryRepo(env)).toLowerCase();
+  const dir = fwd(cwd).toLowerCase().replace(/\/+$/, '');
+  return dir === root || dir.startsWith(`${root}/`);
+};
+
 const wrap = (text: string): Output => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: text } });
 
 /** One hook call: { output } is the JSON to print, or null for silence. Never throws. */
@@ -102,17 +122,20 @@ export function scanInput(data: HookInput, deps: Deps = {}): { output: Output | 
   const logPath = deps.logPath ?? join(home, '.claude', 'logs', 'holdout-scan.jsonl');
   const now = deps.now ?? (() => new Date().toISOString());
   const tool = str(data.tool_name);
+  const cwd = data.cwd || process.cwd();
+  const ccv3 = inCcv3(cwd, env);
   const out = outgoingText(tool, data.tool_input ?? {});
   if (!out) return { output: null };
   const readFile = (p: string): string | null => { try { return readFileSync(p, 'utf8'); } catch { return null; } };
-  if (routerFlag(data.cwd || process.cwd(), readFile, home, 'holdoutScan', 'off')) return { output: null };
+  if (routerFlag(cwd, readFile, home, 'holdoutScan', 'off')) return { output: null };
   let ids: string[];
   try { ids = loadHoldoutIds(primaryRepo(env)); } catch {
-    writeLog(logPath, { ts: now(), tool, error: 'list', mode: 'warn' });
+    writeLog(logPath, { ts: now(), tool, error: 'list', mode: 'warn', ccv3 });
+    if (!firstOffInSession(home, str(data.session_id))) return { output: null };
     return { output: wrap('holdout-scan off: the holdout id list could not be read; this input was not scanned (warn mode).') };
   }
   const { count, bare } = countHits(out.text, ids);
-  if (count > 0 || bare > 0) writeLog(logPath, { ts: now(), tool, count, bare, mode: 'warn' });
+  if (count > 0 || bare > 0) writeLog(logPath, { ts: now(), tool, count, bare, mode: 'warn', ccv3 });
   const text = warnText(tool, count, out.tailBytes);
   return { output: text ? wrap(text) : null };
 }

@@ -886,6 +886,7 @@ function preflight(input, opts = {}) {
     let judged = false;
     let mainText = null;
     let holdoutText = null;
+    let holdoutWarn = null;
     for (const call of calls) {
       const dir = callDir(command, masked, call, cwd);
       const head = dir ? resolveHead(dir) : null;
@@ -901,9 +902,11 @@ function preflight(input, opts = {}) {
         });
         warn = verdict.kind === "proven" ? null : `commit-preflight: ${verdict.message}`;
       }
-      if (!holdoutText && head.branch?.startsWith("re/")) {
+      if (!holdoutText && !holdoutWarn) {
         const n = (opts.stagedHoldout ?? stagedHoldoutCount)(dir, head.mainRoot);
-        if (n !== null && n > 0) holdoutText = `The staged lines of this commit on ${head.branch} hold ${n} holdout id${n === 1 ? "" : "s"}. The push will be refused. Remove them before you commit.`;
+        const ids = `${n} holdout id${n === 1 ? "" : "s"}`;
+        if (n !== null && n > 0 && head.branch?.startsWith("re/")) holdoutText = `The staged lines of this commit on ${head.branch} hold ${ids}. The push will be refused. Remove them before you commit.`;
+        else if (n !== null && n > 0) holdoutWarn = `holdout-scan: the staged lines of this commit hold ${ids}. Remove them before the commit leaves this machine (count only, warn mode).`;
       }
       if (mainText || !head.branch || !PROTECTED_BRANCHES.has(head.branch)) continue;
       const msg = messageHead(command, masked, call, [dir, cwd]);
@@ -917,11 +920,11 @@ function preflight(input, opts = {}) {
           hookEventName: "PreToolUse",
           permissionDecision: "ask",
           permissionDecisionReason: askText,
-          ...warn ? { additionalContext: warn } : {}
+          ...warn || holdoutWarn ? { additionalContext: [warn, holdoutWarn].filter(Boolean).join("\n") } : {}
         }
       };
     }
-    const context = [warn, askText].filter(Boolean).join("\n");
+    const context = [warn, askText, holdoutWarn].filter(Boolean).join("\n");
     if (!context) return null;
     return { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: context } };
   } catch {

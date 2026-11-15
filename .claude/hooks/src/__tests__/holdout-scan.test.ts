@@ -11,6 +11,9 @@
 //   HS7 a read-only Artifact action or another tool is scanned        -> scan every action or every tool
 //   HS8 the off flag does not stop the scan                           -> ignore holdoutScan.off
 //   HS9 any output holds a permission decision                        -> deny or ask instead of warn
+//   HS10 a short stored sha is missed when the text holds the full sha -> match one direction only (seat R1)
+//   HS11 the scan-off warning repeats on every call of a session       -> drop the session marker (seat R2)
+//   HS12 the log row does not say whether the cwd is a CCv3 checkout   -> drop the ccv3 field (seat S1)
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -35,8 +38,8 @@ function plantDataset(root: string, ok = true): void {
   writeFileSync(join(repo, 'scripts', 'eval', 'review-eval', 'config.json'), JSON.stringify({ holdoutExclude: [11], reserve: [] }));
 }
 
-const run = (tool_name: string, tool_input: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
-  scanInput({ tool_name, tool_input, cwd: home }, { env: { CCV3_USER_HOME: home }, logPath, now: () => '2026-11-15T12:00:00.000Z', ...extra });
+const run = (tool_name: string, tool_input: Record<string, unknown>, extra: Record<string, unknown> = {}, cwd?: string) =>
+  scanInput({ tool_name, tool_input, cwd: cwd ?? home, session_id: 'sess-1' }, { env: { CCV3_USER_HOME: home }, logPath, now: () => '2026-11-15T12:00:00.000Z', ...extra });
 
 const logRows = (): Record<string, unknown>[] => (existsSync(logPath) ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 
@@ -71,7 +74,7 @@ describe('holdout-scan', () => {
   it('HS2: a bare 4-digit number (a line number) does not warn, but the log row counts it as bare', () => {
     const r = run('Bash', { command: `sed -n ${FAKE_PR},4300p file.ts` });
     expect(r.output).toBeNull();
-    expect(logRows()).toEqual([{ ts: '2026-11-15T12:00:00.000Z', tool: 'Bash', count: 0, bare: 1, mode: 'warn' }]);
+    expect(logRows()).toEqual([{ ts: '2026-11-15T12:00:00.000Z', tool: 'Bash', count: 0, bare: 1, mode: 'warn', ccv3: false }]);
   });
 
   it('HS3: a write into the gold store, the review-engine state dir or the dataset does not warn', () => {
@@ -98,7 +101,7 @@ describe('holdout-scan', () => {
     const text = JSON.stringify(out) + readFileSync(logPath, 'utf8');
     expect(out?.hookSpecificOutput.additionalContext).toMatch(/holdout-scan: 3 holdout id/);
     for (const s of [FAKE_PR, FAKE_COMMENT, FAKE_SHA, FAKE_SHA.slice(0, 7), 'context-words', 'tail']) expect(text, s).not.toContain(s);
-    expect(Object.keys(logRows()[0]).sort()).toEqual(['bare', 'count', 'mode', 'tool', 'ts']);
+    expect(Object.keys(logRows()[0]).sort()).toEqual(['bare', 'ccv3', 'count', 'mode', 'tool', 'ts']);
   });
 
   it('HS6: a file larger than the read limit is scanned to the limit and the warning names the unread tail', () => {
@@ -128,5 +131,34 @@ describe('holdout-scan', () => {
 
   it('HS9: no output ever holds a permission decision', () => {
     for (const cmd of [`PR #${FAKE_PR}`, 'plain']) expect(JSON.stringify(run('Bash', { command: cmd }).output ?? {})).not.toMatch(/permissionDecision/);
+  });
+  it('HS10: a sha matches in both directions with a floor of 7 hex: a text prefix of a stored full sha, and a stored short sha inside a full text sha', () => {
+    expect(run('Bash', { command: `git show ${FAKE_SHA.slice(0, 7)}` }).output?.hookSpecificOutput.additionalContext).toMatch(/1 holdout id/);
+    expect(run('Bash', { command: `git show ${FAKE_SHA.slice(0, 6)}` }).output, 'under the 7-hex floor').toBeNull();
+    const short = 'fedcba98';
+    const full = `${short}76543210fedcba9876543210fedcba98`;
+    const repo = join(home, 'continuous-claude');
+    writeFileSync(join(repo, '.claudedocs', '2026-11-01-pr-review-dataset.json'), JSON.stringify({ prs: [{ pr: 4242 }], findings: [{ pr: 4242, comment_id: 7777777, round: short }] }));
+    expect(run('Bash', { command: `git log ${full}` }).output?.hookSpecificOutput.additionalContext).toMatch(/1 holdout id/);
+    expect(run('Bash', { command: `git log ${short.slice(0, 6)}0000` }).output, 'no prefix relation').toBeNull();
+  });
+
+  it('HS11: with an unreadable list the scan-off warning comes once per session, and every call is logged', () => {
+    rmSync(join(home, 'continuous-claude', '.claudedocs', '2026-11-01-pr-review-dataset.json'));
+    const a = run('Bash', { command: 'echo one' }).output;
+    const b = run('Write', { file_path: join(home, 'x.md'), content: 'two' }).output;
+    expect(a?.hookSpecificOutput.additionalContext).toMatch(/holdout-scan off/);
+    expect(b).toBeNull();
+    expect(logRows().filter((r) => r.error === 'list')).toHaveLength(2);
+    expect(existsSync(join(home, '.claude', 'state', 'holdout-scan'))).toBe(true);
+    const other = scanInput({ tool_name: 'Bash', tool_input: { command: 'x' }, cwd: home, session_id: 'sess-2' }, { env: { CCV3_USER_HOME: home }, logPath }).output;
+    expect(other?.hookSpecificOutput.additionalContext, 'another session warns once too').toMatch(/holdout-scan off/);
+  });
+
+  it('HS12: the log row says whether the cwd is inside a CCv3 checkout (true or false, no path)', () => {
+    run('Bash', { command: `echo PR #${FAKE_PR}` }, {}, join(home, 'continuous-claude', '.claude', 'worktrees', 'w1'));
+    run('Bash', { command: `echo PR #${FAKE_PR}` }, {}, join(home, 'other-repo'));
+    expect(logRows().map((r) => r.ccv3)).toEqual([true, false]);
+    expect(readFileSync(logPath, 'utf8')).not.toMatch(/other-repo|worktrees/);
   });
 });
