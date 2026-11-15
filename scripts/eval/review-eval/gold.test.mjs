@@ -579,6 +579,47 @@ test('rule 2: provenance is open, any key is accepted (breaks if provenance gets
   assert.equal(goldModule.loadCleanControls(ctlFile([control({ provenance: { anyKey: 1, other: [2] } })])).length, 1);
 });
 
+// --- Merged-head controls (Dave, 2026-11-14): a control with no CodeRabbit round uses its merged head ---
+
+const HEAD_MARK = 'merged-head-no-round';
+const headControl = (over = {}) => control({ target: { pr: 9002, round: null, sha40: sha('d') }, provenance: { why: 'made up', head: HEAD_MARK }, ...over });
+
+test('merged head: a control with round null, a valid sha40 and provenance.head merged-head-no-round loads (breaks if the control round check refuses null in every case)', () => {
+  const c = headControl();
+  assert.deepEqual(goldModule.loadCleanControls(ctlFile([c, control({ id: 'c-old' })])), [c, control({ id: 'c-old' })], 'an old control with a round still loads beside it');
+});
+
+test('merged head: a gold row with round null is refused by validateRow, also with the merged-head provenance (breaks if the null round leaks from controls into gold rows)', () => {
+  const problems = validateRow(row({ target: { pr: 9001, round: null, sha40: sha('a') }, provenance: { head: HEAD_MARK } }));
+  assert.deepEqual(problems, ['target.round: null, expected a positive integer']);
+});
+
+test('merged head: a control with round null and no sha40, or a bad sha40, is refused for the sha40 only (breaks if null round skips the sha40 check)', () => {
+  const noSha = ctlErr(ctlFile([headControl({ target: { pr: 9002, round: null } })]));
+  assert.deepEqual(noSha.problems, ['clean-controls.json[0] target.sha40: required']);
+  const badSha = ctlErr(ctlFile([headControl({ target: { pr: 9002, round: null, sha40: 'abc' } })]));
+  assert.deepEqual(badSha.problems, ['clean-controls.json[0] target.sha40: a string, expected 40 lowercase hex characters']);
+});
+
+test('merged head: a control with round null and no merged-head provenance is refused, and the problem holds no value (breaks if null round is allowed without the marker)', () => {
+  for (const provenance of [{ why: 'made up' }, { why: 'made up', head: MARK }, MARK]) {
+    const err = ctlErr(ctlFile([headControl({ provenance })]));
+    assert.ok(err instanceof GoldError, JSON.stringify(provenance));
+    assert.ok(err.problems.includes('clean-controls.json[0] target.round: null, expected a positive integer'), JSON.stringify(err.problems));
+    assert.ok(!err.message.includes(MARK), err.message);
+  }
+});
+
+test('merged head: a marked control with round 0, -1 or "1" is refused with the positive-integer problem, and one with a positive integer round loads (breaks if the marker excepts any round value other than exactly null)', () => {
+  for (const [round, found] of [[0, 'a number'], [-1, 'a number'], ['1', 'a string']]) {
+    const err = ctlErr(ctlFile([headControl({ target: { pr: 9002, round, sha40: sha('d') } })]));
+    assert.ok(err instanceof GoldError, JSON.stringify(round));
+    assert.deepEqual(err.problems, [`clean-controls.json[0] target.round: ${found}, expected a positive integer`], JSON.stringify(round));
+  }
+  const withRound = headControl({ target: { pr: 9002, round: 3, sha40: sha('d') } });
+  assert.deepEqual(goldModule.loadCleanControls(ctlFile([withRound])), [withRound]);
+});
+
 test('rule 2: an unknown top-level key is refused, including the gold-row keys (breaks if the control key check is removed or allows source, suite, file)', () => {
   for (const key of ['kind', 'source', 'suite', 'file', 'severity', 'labels']) {
     const err = ctlErr(ctlFile([control({ [key]: 'x' })]));
