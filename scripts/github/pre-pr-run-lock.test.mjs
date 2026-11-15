@@ -27,8 +27,11 @@ function sandbox() {
   writeFileSync(body, 'Proof type: docs\n');
   return { store, repo, body };
 }
+// RUN_LOCK_TEST_SAMPLES gives the lock its three samples at once: no 6 second wait per run, and no dependence on the real
+// memory and load of the machine. The lock prints a NOTE line when the hook is used.
+const SAMPLES = JSON.stringify({ free: [8, 8, 8], load: [10, 10, 10] });
 const run = (sb, args, env = {}) => spawnSync(process.execPath, [PRE_PR, ...args], {
-  cwd: sb.repo, encoding: 'utf8', timeout: 120_000, env: { ...process.env, RUN_LOCK_DIR: sb.store, ...env },
+  cwd: sb.repo, encoding: 'utf8', timeout: 120_000, env: { ...process.env, RUN_LOCK_DIR: sb.store, RUN_LOCK_TEST_SAMPLES: SAMPLES, ...env },
 });
 const locks = (store) => readdirSync(store).filter((f) => f.endsWith('.lock') && f !== 'gate.lock');
 
@@ -40,7 +43,8 @@ test('grant mode: a refused start stops before any gate, says why, and leaves no
   const out = `${r.stdout}\n${r.stderr}`;
   assert.equal(r.status, 3, out);
   assert.match(out, /run-lock: WAIT .*last grant at/); // other reasons (load, slots) may come first on a busy machine
-  assert.match(out, /try again after \d\d:\d\d CST/);
+  assert.match(out, /try again after \d\d:\d\d \S+/); // the zone name comes from the system: CST, CDT, UTC or GMT+1
+  assert.match(out, /NOTE samples come from RUN_LOCK_TEST_SAMPLES/, 'the hook is visible in the output');
   assert.match(out, /stopped before any gate/);
   assert.doesNotMatch(out, /git:branch|git:clean|RESULT/, 'no check ran');
   assert.equal(locks(sb.store).length, 0);
@@ -58,6 +62,19 @@ test('warn mode: the same refusal is only logged, the run goes on, and its lock 
   assert.doesNotMatch(out, /stopped before any gate/);
   assert.equal(locks(sb.store).length, 0, 'the lock is freed when pre-pr exits');
   assert.match(readdirSync(sb.store).join(' '), /warn-log\.jsonl/);
+});
+
+test('a broken store (RUN_LOCK_DIR is a file) fails open: the run says so and goes on', () => {
+  // Fails if takeRunLock stops catching an acquire error, or if a lock error becomes exit 3 (remove the catch).
+  const sb = sandbox();
+  const notAFolder = join(sb.repo, 'store-is-a-file');
+  writeFileSync(notAFolder, 'not a folder');
+  const r = run(sb, ['--body', sb.body], { RUN_LOCK_DIR: notAFolder });
+  const out = `${r.stdout}\n${r.stderr}`;
+  assert.match(out, /pre-pr: the run lock is not available .*the run goes on/);
+  assert.doesNotMatch(out, /stopped before any gate/);
+  // Not asserted: the exit code. pre-pr also exits 3 for its own "stopped by an error" in this empty temp repo.
+  assert.match(out, /pre-pr: stopped by an error|git:branch|git:clean|RESULT/, 'the run started');
 });
 
 test('--help and a missing body file take no lock', () => {
