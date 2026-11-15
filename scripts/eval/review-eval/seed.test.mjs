@@ -145,7 +145,8 @@ function commitFile(ctx, name, content, message = 'add') {
 
 // ---- Claude arm fakes ----
 // extraLines: lines of the run stream that come before the result line (a stream-json run shows an init event and hook events there).
-function fakeSpawn(calls, { answer, served = ['claude-opus-5-5'], isError = false, extraLines = [] } = {}) {
+const USAGE_FIXTURE = { input_tokens: 3, cache_read_input_tokens: 40, cache_creation_input_tokens: 5, output_tokens: 7 };
+function fakeSpawn(calls, { answer, served = ['claude-opus-5-5'], isError = false, extraLines = [], usage = USAGE_FIXTURE } = {}) {
   return (command, args, opts) => {
     const call = { command, args, opts, prompt: null };
     calls.push(call);
@@ -155,7 +156,7 @@ function fakeSpawn(calls, { answer, served = ['claude-opus-5-5'], isError = fals
     child.stderr = stream();
     child.kill = () => {};
     const line = JSON.stringify({
-      type: 'result', is_error: isError, result: typeof answer === 'string' ? answer : JSON.stringify(answer), total_cost_usd: 0.01,
+      type: 'result', is_error: isError, result: typeof answer === 'string' ? answer : JSON.stringify(answer), total_cost_usd: 0.01, usage,
       modelUsage: served ? Object.fromEntries(served.map((n) => [n, { inputTokens: 1 }])) : undefined,
     });
     const payload = [...extraLines, line].join('\n');
@@ -460,8 +461,9 @@ test('createSeed refuses an answer-key file and a file that is not tracked', () 
 const PROTECTED = [
   'scripts/eval/review-eval/seed.mjs', 'scripts/eval/review-eval/rubrics/lint-ids.mjs', 'scripts/lib/headless.mjs', 'scripts/coordination/claims.mjs', '.claude/scripts/lane.mjs', '.claude/scripts/lane-sync.mjs',
   'scripts/eval/review-eval/judge.mjs', 'scripts/worktree/shared-deps.mjs', 'scripts/settings/remove-registrations.mjs', 'scripts/github/land-pr.mjs', 'scripts/github/lib/proc.mjs', 'scripts/harness-doctor.mjs',
+  'scripts/review-engine/lib/source.mjs', 'scripts/review-engine/args.mjs',
 ];
-const NOT_PROTECTED = ['src/calc.mjs', '.claude/scripts/other.mjs', '.claude/scripts/lanes/x.mjs', 'scripts/githubx/a.mjs', 'scripts/worktrees/a.mjs', 'scripts/settingsx/a.mjs', 'scripts/lib/other.mjs', 'scripts/harness-doctor-x.mjs'];
+const NOT_PROTECTED = ['scripts/review-enginex/a.mjs', 'scripts/review/a.mjs','src/calc.mjs', '.claude/scripts/other.mjs', '.claude/scripts/lanes/x.mjs', 'scripts/githubx/a.mjs', 'scripts/worktrees/a.mjs', 'scripts/settingsx/a.mjs', 'scripts/lib/other.mjs', 'scripts/harness-doctor-x.mjs'];
 
 test('finding 1 (F1): the harness, the headless wrapper, the lane, worktree, settings and github scripts are never a seed target', () => {
   // Breaks when: createSeed or the dev filter accepts one of these files, a prefix look-alike is refused, or a path of the list is dropped.
@@ -485,10 +487,16 @@ const RISKY = [
   "spawnSync('git', ['push', 'origin', 'main']);", "execSync('git push --mirror');", "execFileSync('git', ['-C', dir, 'push']);", "git(repo, ['push', 'fork', 'main']);", "run('git', ['push']);",
   "import pg from 'pg';", "import { Pool } from 'pg/lib/pool.js';", "import postgres from 'postgres';", "const pg = require('pg');", "const { Client } = await import('pg');",
   "import { query } from './lib/db.mjs';", "import { open } from '../scratch-db.mjs';", "import c from './pg-client.mjs';",
+  // item 2: psql, docker, the gh command and the lane shim; the side-effect and backtick import forms
+  "spawnSync('psql', ['-c', 'select 1']);", 'execSync("psql -h x -c y");', "execSync('docker ps');", "spawn('docker', ['run', 'x']);", 'docker compose up',
+  "spawnSync('gh', ['pr', 'list']);", "execSync('gh pr list');", 'run("gh", args);', "execFileSync('gh.exe', ['auth', 'status']);", "execSync('echo hi && gh api x');",
+  "spawn('node', ['.claude/scripts/lane.mjs', 'claim']);", "import lane from './lane.mjs';", "import 'pg';", "import './lib/db.mjs';", 'await import(`pg`);', 'const x = require(`./db.mjs`);',
 ];
 const CLEAN = [
   "import { readFileSync } from 'node:fs';\nreadFileSync(f);", 'items.push(1);', 'const ok = confirm(x); perform(1); form(y);', "import x from './dbx.mjs';", "import p from 'pgx';",
   "const msg = 'remove the file';", "spawnSync('git', ['status']);",
+  // item 2 controls: look-alikes of the new words
+  'const weight = 3;', "const ghost = 'high';", 'const gh = 1;', "spawnSync('ghx', []);", "const s = 'gh-pages';", 'const dockerless = 1;', "const f = 'plane.mjs';", "import './util.mjs';", "import('./util.mjs');",
 ];
 
 test('F1 the content rule refuses text that deletes files, pushes with git, or imports a database client; plain code passes', () => {
@@ -670,12 +678,16 @@ async function processGone(pid) {
 }
 
 // The allowlist of the task (F1): a literal list on purpose, not read from the code under test.
-const ALLOWED_KEYS = ['PATH', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA'];
+const ALLOWED_KEYS = [
+  'PATH', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
+  // items 3 and 4: the names the seeder sets itself
+  'TMPDIR', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_TERMINAL_PROMPT', 'GH_CONFIG_DIR', 'DOCKER_HOST',
+];
 // On win32 the OS adds these six to any child env block (probed: they come back from the real user even when the parent env omits them).
 // HOMEDRIVE and HOMEPATH name the home, so testChildEnv sets both from the temp home; the other four hold no secret and cannot be removed.
 const WIN_ADDED = process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH', 'LOGONSERVER', 'SYSTEMDRIVE', 'USERDOMAIN', 'USERNAME'] : [];
 const LEAKS = [
-  'NODE_OPTIONS', 'NODE_PATH', 'GIT_DIR', 'GIT_COMMON_DIR', 'GIT_CONFIG_GLOBAL', 'PGHOST', 'PGPASSWORD', 'PGDATABASE', 'DATABASE_URL', 'CONTINUOUS_CLAUDE_DB_URL', 'OPC_POSTGRES_URL',
+  'NODE_OPTIONS', 'NODE_PATH', 'GIT_DIR', 'GIT_COMMON_DIR', 'GIT_TEMPLATE_DIR', 'PGHOST', 'PGPASSWORD', 'PGDATABASE', 'DATABASE_URL', 'CONTINUOUS_CLAUDE_DB_URL', 'OPC_POSTGRES_URL',
   'GH_TOKEN', 'GITHUB_TOKEN', 'SSH_AUTH_SOCK', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECT_DIR', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_X', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY',
   'CCV3_HEADLESS_LEDGER', 'CCV3_GROK_GATE', 'READ_AUDIT_LEDGER', 'AWS_SECRET_ACCESS_KEY', 'SERVICE_URL', 'API_TOKEN', 'KEEP',
 ];
@@ -802,9 +814,10 @@ test('F10a a failed temp folder creation is a run error, not a throw, and a fail
   assert.equal(calls.length, 0);
   const ctx2 = makeRepo();
   const second = seedOne(ctx2);
-  git(ctx2.repo, ['update-ref', '-d', second.manifest.baseRef]);
   const before = scratchLeftovers();
-  const r = await seed.verifySeed({ repo: ctx2.repo, seedId: second.manifest.seedId, seedsDir: ctx2.seeds, testFile: 'src/calc.test.mjs', run: sequenceRun([0, 0, 1, 1]) });
+  // The base ref is deleted after the refusal check and before the export: the temp folder exists, `git archive` fails, the folder must go.
+  const mkdtemp = (prefix) => { const d = mkdtempSync(prefix); git(ctx2.repo, ['update-ref', '-d', second.manifest.baseRef]); return d; };
+  const r = await seed.verifySeed({ repo: ctx2.repo, seedId: second.manifest.seedId, seedsDir: ctx2.seeds, testFile: 'src/calc.test.mjs', run: sequenceRun([0, 0, 1, 1]), mkdtemp });
   assert.equal(r.reason, 'run-error');
   assert.equal(scratchLeftovers(), before, 'no scratch folder is left');
 });
@@ -1551,7 +1564,7 @@ test('finding 18: the scratch cwd of a Claude run is removed when the run ends; 
   assert.equal(existsSync(mine), true, 'a cwd the caller gave is not removed');
 });
 
-const INIT_EVENT = JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', tools: [], mcp_servers: [] });
+const INIT_EVENT = JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', tools: [], mcp_servers: [], plugins: [] });
 const HOOK_EVENT = JSON.stringify({ type: 'system', subtype: 'hook_response', hook_name: 'x', output: 'text' });
 // The seat list (S4). A literal list on purpose: the test must not read the list from the code under test.
 const SMOKE_MARKER_LIST = ['MULTI-SESSION COORDINATION', 'Lane board', 'MEMORY MATCH', 'SESSION FOCUS', 'system-reminder', 'SessionStart', 'Reminders due'];
@@ -1579,7 +1592,7 @@ test('S4 a smoke run asks for stream-json and refuses a run whose stream shows a
   const ledger = path.join(tmp(), 'ledger.jsonl');
   const run = (extraLines, smoke) => {
     const calls = [];
-    const args = { file: 'src/calc.mjs', fileText: CALC, brief: 'b', forbidden: forbidden(), ledgerPath: ledger, smoke };
+    const args = { file: 'src/calc.mjs', fileText: CALC, brief: 'b', forbidden: forbidden(), ledgerPath: ledger, smoke, smokeOut: path.join(tmp(), 'smoke-init.jsonl') };
     return seed.runSeedClaude(args, claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER, extraLines }), ledger)).then((r) => ({ r, calls }));
   };
   const clean = await run([INIT_EVENT], true);
@@ -1806,4 +1819,319 @@ test('CLI claude needs --confirm-headless, refuses the default ledger under node
   const none = await seed.main(base.map((a) => (a === 'src/calc.mjs' ? 'src/hold.mjs' : a)).concat(['--ledger', f.ledger, '--confirm-headless']), refusedHold);
   assert.equal(none, 1);
   assert.equal(calls.length, 1, 'a holdout file never reaches the model');
+});
+
+// =========================================================================================================
+// fix round 3 (the seat critic review of f548df98)
+// =========================================================================================================
+
+/** Commit many files on main at once. Content may be a string or a Buffer. Updates ctx.sha. */
+function commitMany(ctx, files) {
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(ctx.repo, name)), { recursive: true });
+    writeFileSync(path.join(ctx.repo, name), content);
+  }
+  git(ctx.repo, ['add', '-A']);
+  git(ctx.repo, ['commit', '-q', '--no-verify', '-m', 'add files']);
+  ctx.sha = git(ctx.repo, ['rev-parse', 'HEAD']);
+}
+
+const verifyTest = (ctx, manifest, testFile, calls = []) => seed.verifySeed({ repo: ctx.repo, seedId: manifest.seedId, seedsDir: ctx.seeds, testFile, run: sequenceRun([0, 0, 1, 1], calls) });
+const nonUtf8 = (head, tail) => Buffer.concat([Buffer.from(head), Buffer.from([0xff, 0xfe]), Buffer.from(tail)]);
+
+test('item 1 refusedTest fails closed: a --test path in another case, or a test file that is not UTF-8, is refused and starts no run', async () => {
+  // Breaks when: refusedTest lets a file through when readTracked gives null (ls-tree is case-sensitive, NTFS is not; a non-UTF-8 text has no content to scan).
+  const ctx = makeRepo();
+  commitMany(ctx, { 'src/bin.test.mjs': nonUtf8("import { test } from 'node:test';\n// ", "\ntest('x', () => {});\n") });
+  const { manifest } = seedOne(ctx);
+  const calls = [];
+  for (const testFile of ['SRC/calc.test.mjs', 'src/Calc.test.mjs', 'src/CALC.test.mjs', 'src/bin.test.mjs', 'src/missing.test.mjs']) {
+    const r = await verifyTest(ctx, manifest, testFile, calls);
+    assert.equal(r.reason, 'refused-test', testFile);
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(manifestOf(ctx, manifest.seedId).stage, 'mutated');
+  const control = await verifyTest(ctx, manifest, 'src/calc.test.mjs', calls);
+  assert.equal(control.ok, true, `control: the exact name still runs: ${JSON.stringify(control)}`);
+});
+
+test('item 1 the target check fails closed on a case variant and on a target that is not UTF-8', () => {
+  // Breaks when: createSeed mutates a file it cannot read as text, or one named in another case.
+  const ctx = makeRepo();
+  commitMany(ctx, { 'src/bin.mjs': nonUtf8('// ', '\nexport const f = (n, m) => n < m;\n') });
+  const site = { line: 2, before: 'export const f = (n, m) => n < m;', after: 'export const f = (n, m) => n <= m;' };
+  const bin = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/bin.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  assert.equal(bin.reason, 'not-tracked');
+  const calcSite = seed.pickSite('cmp-flip', CALC, 0);
+  const upper = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'SRC/CALC.MJS', site: calcSite, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  assert.equal(upper.reason, 'not-tracked');
+  assert.deepEqual(refsOf(ctx.repo), []);
+  assert.deepEqual(readdirSync(ctx.seeds), []);
+});
+
+const importing = (form) => `import { test } from 'node:test';\n${form}\ntest('x', () => {});\n`;
+const RISKY_HELPER = "import { rmSync } from 'node:fs';\nexport const h = (p) => rmSync(p);\n";
+const chainFile = (i, last) => (i === last ? 'export const c = 1;\n' : `import './c${i + 1}.mjs';\nexport const c = ${i};\n`);
+const chain = (n) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`src/c${i}.mjs`, chainFile(i, n - 1)]));
+
+test('item 2 verify scans the closure of relative imports of the test file and the target: a risky, protected, unreadable or unresolved module refuses it', async () => {
+  // Breaks when: only the text of the test file is scanned, an import form is missed (side-effect, from, require, backtick, extensionless, folder), a module under a protected path passes, a case variant resolves to nothing, or a cap is not a refusal.
+  const ctx = makeRepo();
+  commitMany(ctx, {
+    'src/helper.mjs': RISKY_HELPER, 'src/helper2.js': RISKY_HELPER, 'src/lib/index.js': RISKY_HELPER, 'src/mid.mjs': "import './helper.mjs';\nexport const m = 1;\n",
+    'scripts/github/x.mjs': 'export const x = 1;\n', 'scripts/review-engine/lib/source.mjs': 'export const s = 1;\n', 'src/bin.mjs': nonUtf8('// ', '\nexport const b = 1;\n'),
+    'src/clean.mjs': 'export const k = 1;\n', 'src/cyc-a.mjs': "import './cyc-b.mjs';\nexport const a = 1;\n", 'src/cyc-b.mjs': "import './cyc-a.mjs';\nexport const b = 1;\n", ...chain(4), ...Object.fromEntries(Object.entries(chain(12)).map(([k, v]) => [k.replace('/c', '/d'), v.replaceAll('./c', './d')])),
+  });
+  const forms = {
+    'src/f1.test.mjs': "import './helper.mjs';", 'src/f2.test.mjs': "import { m } from './mid.mjs';", 'src/f3.test.mjs': "const h = require('./helper.mjs');", 'src/f4.test.mjs': 'await import(`./helper.mjs`);',
+    'src/f5.test.mjs': "const h = require('./helper2');", 'src/f6.test.mjs': "const h = require('./lib');", 'src/f7.test.mjs': "import '../scripts/github/x.mjs';",
+    'src/f8.test.mjs': "import '../scripts/review-engine/lib/source.mjs';", 'src/f9.test.mjs': "import './HELPER.mjs';", 'src/f10.test.mjs': "import './nothing.mjs';", 'src/f11.test.mjs': "import './bin.mjs';",
+    'src/f12.test.mjs': "import '../../outside.mjs';", 'src/f13.test.mjs': "import './d0.mjs';",
+  };
+  const ok = { 'src/ok1.test.mjs': "import './clean.mjs';", 'src/ok2.test.mjs': "import './cyc-a.mjs';", 'src/ok3.test.mjs': "import './c0.mjs';" };
+  commitMany(ctx, Object.fromEntries(Object.entries({ ...forms, ...ok }).map(([f, form]) => [f, importing(form)])));
+  const { manifest } = seedOne(ctx);
+  const calls = [];
+  for (const f of Object.keys(forms)) assert.equal((await verifyTest(ctx, manifest, f, calls)).reason, 'refused-test', f);
+  assert.equal(calls.length, 0);
+  for (const f of Object.keys(ok)) {
+    const r = await verifyTest(ctx, manifest, f);
+    assert.equal(r.reason === 'refused-test', false, `control ${f}: ${JSON.stringify(r)}`);
+  }
+});
+
+test('item 2 the closure of the target is scanned too: createSeed refuses a target that imports a risky module', () => {
+  // Breaks when: the target check reads only the text of the target file.
+  const ctx = makeRepo();
+  commitMany(ctx, { 'src/helper.mjs': RISKY_HELPER, 'src/uses.mjs': "import './helper.mjs';\nexport const f = (n, m) => n < m;\n" });
+  const site = { line: 2, before: 'export const f = (n, m) => n < m;', after: 'export const f = (n, m) => n <= m;' };
+  const r = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/uses.mjs', site, author: 'operator', operator: 'cmp-flip', seedsDir: ctx.seeds });
+  assert.equal(r.reason, 'refused');
+  assert.deepEqual(refsOf(ctx.repo), []);
+});
+
+test('item 2 a one-line patch that points an import at a risky module is caught at the seed ref, not only at the base', async () => {
+  // Breaks when: the closure is scanned at the base ref only (the seed runs execute the changed import).
+  const ctx = makeRepo();
+  commitMany(ctx, {
+    'src/clean.mjs': 'export const x = 1;\n', 'src/risky.mjs': `${RISKY_HELPER}export const x = 2;\n`,
+    'src/uses.mjs': "import { x } from './clean.mjs';\nexport const f = (n) => n + x;\n",
+    'src/uses.test.mjs': "import { test } from 'node:test';\nimport './uses.mjs';\ntest('x', () => {});\n",
+  });
+  const site = { line: 1, before: "import { x } from './clean.mjs';", after: "import { x } from './risky.mjs';" };
+  const made = seed.createSeed({ repo: ctx.repo, rev: ctx.sha, file: 'src/uses.mjs', site, author: 'claude', truthNote: 'x', seedsDir: ctx.seeds });
+  assert.equal(made.ok, true, JSON.stringify(made));
+  const calls = [];
+  assert.equal((await verifyTest(ctx, made.manifest, 'src/uses.test.mjs', calls)).reason, 'refused-test');
+  assert.equal(calls.length, 0);
+});
+
+test('item 3 and 4 the test child env: TEMP, TMP and TMPDIR in the temp home, a minimal PATH, no system git config, an empty global config, no prompt, an empty gh folder and a dead docker host', () => {
+  // Breaks when: a real temp, PATH, git, gh or docker setting reaches the child, a name is set twice in two cases, or a folder or file the env names is not created.
+  const home = tmp('seed-home-check-');
+  const env = seed.testChildEnv({ ...leakyParent(), Path: 'C:\\evil\\bin', PATH: '/evil/bin', TMPDIR: '/evil/tmp', TEMP: '/evil/tmp' }, home);
+  const inHome = (p) => path.resolve(p).startsWith(path.resolve(home) + path.sep);
+  for (const k of ['TEMP', 'TMP', 'TMPDIR']) {
+    assert.equal(inHome(env[k]), true, k);
+    assert.equal(existsSync(env[k]), true, `${k} folder exists`);
+  }
+  assert.equal(Object.keys(env).filter((k) => k.toUpperCase() === 'PATH').length, 1, 'one PATH key only');
+  const sysRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
+  const expected = process.platform === 'win32' ? [path.dirname(process.execPath), path.join(sysRoot, 'System32')] : [path.dirname(process.execPath), '/usr/bin', '/bin'];
+  assert.deepEqual(env.PATH.split(path.delimiter), expected);
+  assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+  assert.equal(env.GIT_TERMINAL_PROMPT, '0');
+  assert.equal(inHome(env.GIT_CONFIG_GLOBAL), true);
+  assert.equal(readFileSync(env.GIT_CONFIG_GLOBAL, 'utf8'), '', 'the global git config is an empty file');
+  assert.equal(inHome(env.GH_CONFIG_DIR), true);
+  assert.deepEqual(readdirSync(env.GH_CONFIG_DIR), [], 'the gh config folder is empty');
+  assert.equal(env.DOCKER_HOST, 'tcp://127.0.0.1:9');
+  for (const k of Object.keys(env)) assert.ok([...ALLOWED_KEYS, 'HOMEDRIVE', 'HOMEPATH'].includes(k.toUpperCase()), `${k} is not on the allowlist`);
+});
+
+test('item 3 a real test child sees os.tmpdir() inside its temp home, a minimal PATH and the git, gh and docker names of the seeder', async () => {
+  // Breaks when: the child os.tmpdir() is the real user temp folder that live sessions share, or the names do not reach a real child.
+  const dir = tmp('seed-envtest-');
+  writeFileSync(path.join(dir, 'tmp.test.mjs'), [
+    "import { existsSync, writeFileSync } from 'node:fs';", "import os from 'node:os';", "import { test } from 'node:test';",
+    "test('tmp', () => { const e = process.env; writeFileSync('tmp.json', JSON.stringify({ tmpdir: os.tmpdir(), exists: existsSync(os.tmpdir()), home: os.homedir(), path: e.PATH ?? e.Path, git: [e.GIT_CONFIG_NOSYSTEM, e.GIT_TERMINAL_PROMPT, e.GH_CONFIG_DIR, e.DOCKER_HOST, e.GIT_CONFIG_GLOBAL] })); });", '',
+  ].join('\n'));
+  const res = await seed.runTestOnce(dir, 'tmp.test.mjs', 30_000, leakyParent());
+  assert.equal(res.status, 0, res.output);
+  const seen = JSON.parse(readFileSync(path.join(dir, 'tmp.json'), 'utf8'));
+  const inside = (p, root) => path.resolve(p).toLowerCase().startsWith(path.resolve(root).toLowerCase() + path.sep);
+  assert.equal(inside(seen.tmpdir, seen.home), true, `child tmpdir ${path.basename(seen.tmpdir)} is inside its home`);
+  assert.equal(seen.exists, true, 'the child temp folder exists');
+  assert.notEqual(path.resolve(seen.tmpdir).toLowerCase(), path.resolve(os.tmpdir()).toLowerCase(), 'not the temp folder of this process');
+  assert.equal(seen.path.split(path.delimiter)[0], path.dirname(process.execPath));
+  assert.equal(seen.git[0], '1');
+  assert.equal(seen.git[1], '0');
+  assert.equal(inside(seen.git[2], seen.home), true);
+  assert.equal(seen.git[3], 'tcp://127.0.0.1:9');
+  assert.equal(inside(seen.git[4], seen.home), true);
+});
+
+test('item 6 syntaxOk runs node --check with the allowlist env: NODE_OPTIONS of the parent does not reach it', async () => {
+  // Breaks when: node --check gets the full parent env (a --require in NODE_OPTIONS would then run in the check).
+  const where = tmp('seed-preload-');
+  const marker = path.join(where, 'marker.txt');
+  const preload = path.join(where, 'preload.cjs');
+  writeFileSync(preload, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
+  const was = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `--require=${preload.replaceAll('\\', '/')}`;
+  try {
+    spawnSync(process.execPath, ['-e', '0'], { env: process.env });
+    assert.equal(existsSync(marker), true, 'control: the preload runs in a child with the full env');
+    rmSync(marker);
+    const ctx = makeRepo();
+    const { manifest } = seedOne(ctx);
+    const r = await verifyTest(ctx, manifest, 'src/calc.test.mjs');
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(existsSync(marker), false, 'node --check did not load the NODE_OPTIONS preload');
+  } finally {
+    if (was === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = was;
+  }
+});
+
+test('item 6 git init of an export folder copies no template hooks, whatever GIT_TEMPLATE_DIR says', () => {
+  // Breaks when: git init gets the parent env and a template dir (a hook of the template would then sit in the export copy).
+  const tpl = tmp('seed-tpl-');
+  mkdirSync(path.join(tpl, 'hooks'));
+  writeFileSync(path.join(tpl, 'hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n');
+  const control = tmp('seed-tplctl-');
+  spawnSync('git', ['init', '-q', control], { env: { ...process.env, GIT_TEMPLATE_DIR: tpl } });
+  assert.equal(existsSync(path.join(control, '.git', 'hooks', 'pre-commit')), true, 'control: a plain git init copies the template hook');
+  const ctx = makeRepo();
+  const was = process.env.GIT_TEMPLATE_DIR;
+  process.env.GIT_TEMPLATE_DIR = tpl;
+  let dir;
+  try {
+    dir = seed.exportRef(ctx.repo, ctx.sha);
+    assert.equal(existsSync(path.join(dir, '.git', 'hooks', 'pre-commit')), false, 'no template hook in the export copy');
+    assert.equal(existsSync(path.join(dir, 'src', 'calc.mjs')), true, 'control: the export has the files');
+  } finally {
+    if (was === undefined) delete process.env.GIT_TEMPLATE_DIR; else process.env.GIT_TEMPLATE_DIR = was;
+    if (dir) seed.removeScratchDir(dir);
+  }
+});
+
+/** One tar entry: a 512-byte header (no checksum: untar reads none) and the body padded to 512. */
+function tarEntry(name, type, body = '') {
+  const header = Buffer.alloc(512);
+  header.write(name, 0, 'utf8');
+  header.write('0000644\0', 100);
+  header.write(`${Buffer.byteLength(body).toString(8).padStart(11, '0')}\0`, 124);
+  header.write(type, 156);
+  const data = Buffer.alloc(Math.ceil(Buffer.byteLength(body) / 512) * 512);
+  data.write(body);
+  return Buffer.concat([header, data]);
+}
+
+test('item 6 untar skips an entry type it does not know and counts it, with no throw; links are counted apart; nothing is written for them', () => {
+  // Breaks when: an unknown type (a device, a fifo, a sparse file) throws, is written as a file, or is not counted.
+  const dir = tmp('seed-untar-');
+  const tar = Buffer.concat([
+    tarEntry('d/', '5'), tarEntry('d/a.txt', '0', 'hi'), tarEntry('sym', '2'), tarEntry('hard', '1'), tarEntry('dev', '3'), tarEntry('fifo', '6'), tarEntry('sparse.bin', 'S', 'zz'), tarEntry('after.txt', '0', 'ok'), Buffer.alloc(1024),
+  ]);
+  const r = seed.untar(tar, dir);
+  assert.deepEqual(r, { files: 2, links: 2, unknown: 3 });
+  assert.equal(readFileSync(path.join(dir, 'd', 'a.txt'), 'utf8'), 'hi');
+  assert.equal(readFileSync(path.join(dir, 'after.txt'), 'utf8'), 'ok', 'an entry after the unknown ones is still written');
+  for (const n of ['sym', 'hard', 'dev', 'fifo', 'sparse.bin']) assert.equal(existsSync(path.join(dir, n)), false, n);
+});
+
+// ---- item 5: the smoke report ----
+const initOf = (over = {}) => JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', tools: [], mcp_servers: [], plugins: [], ...over });
+const resultOf = (usage = USAGE_FIXTURE) => JSON.stringify({ type: 'result', result: '{}', ...(usage ? { usage } : {}) });
+const streamOf = (init, usage) => [...(init === null ? [] : [init]), resultOf(usage)].join('\n');
+
+test('item 5 smokeReport: empty lists pass and show their lengths and the token counts; each non-empty list fails; a missing init event or field is unknown and fails', () => {
+  // Breaks when: a non-empty tools, mcp_servers or plugins list passes, a missing init event passes, a missing field counts as empty, or a field name variant is not read.
+  const clean = seed.smokeReport(streamOf(initOf()));
+  assert.deepEqual({ ok: clean.ok, init: clean.init, tools: clean.tools, mcp_servers: clean.mcp_servers, plugins: clean.plugins }, { ok: true, init: true, tools: 0, mcp_servers: 0, plugins: 0 });
+  assert.deepEqual([clean.inputTokens, clean.cacheReadTokens, clean.cacheCreationTokens], [3, 40, 5]);
+  assert.equal(clean.initLine, initOf(), 'the raw init line is kept for the file');
+  for (const [field, key] of [['tools', 'tools'], ['mcp_servers', 'mcp_servers'], ['plugins', 'plugins']]) {
+    const r = seed.smokeReport(streamOf(initOf({ [field]: [{ name: 'x' }, { name: 'y' }] })));
+    assert.equal(r.ok, false, field);
+    assert.equal(r[key], 2, field);
+  }
+  assert.equal(seed.smokeReport(streamOf(initOf({ mcpServers: [{ name: 'x' }], mcp_servers: undefined }))).mcp_servers, 1, 'the camelCase variant is read');
+  const none = seed.smokeReport(streamOf(null));
+  assert.deepEqual([none.ok, none.init, none.tools, none.mcp_servers, none.plugins, none.initLine], [false, false, 'unknown', 'unknown', 'unknown', null]);
+  for (const field of ['tools', 'mcp_servers', 'plugins']) {
+    const r = seed.smokeReport(streamOf(initOf({ [field]: undefined })));
+    assert.equal(r[field], 'unknown', field);
+    assert.equal(r.ok, false, `${field} missing fails`);
+  }
+  assert.equal(seed.smokeReport(streamOf(initOf({ plugins: 'none' }))).ok, false, 'a value that is not a list is unknown, not empty');
+  const noUsage = seed.smokeReport(streamOf(initOf(), null));
+  assert.deepEqual([noUsage.ok, noUsage.inputTokens], [true, 'unknown']);
+});
+
+const smokeArgs = (ledger, out) => ({ file: 'src/calc.mjs', fileText: CALC, brief: 'b', forbidden: forbidden(), ledgerPath: ledger, smoke: true, smokeOut: out });
+
+test('item 5 a smoke run saves the init line to --smoke-out, one line per run, and refuses a run whose init lists tools, mcp_servers or plugins or is missing', async () => {
+  // Breaks when: the init line is not saved or is overwritten, a non-empty list does not fail the run, or a missing init event passes.
+  const ledger = path.join(tmp(), 'ledger.jsonl');
+  const out = path.join(tmp(), 'init.jsonl');
+  const run = (init, args = smokeArgs(ledger, out)) => seed.runSeedClaude(args, claudeDeps(fakeSpawn([], { answer: GOOD_ANSWER, extraLines: init === null ? [] : [init] }), ledger));
+  const first = await run(initOf());
+  assert.equal(first.ok, true, JSON.stringify(first));
+  assert.deepEqual([first.smoke.tools, first.smoke.mcp_servers, first.smoke.plugins, first.smoke.inputTokens], [0, 0, 0, 3]);
+  await run(initOf({ session_id: 'second' }));
+  assert.deepEqual(readFileSync(out, 'utf8').trim().split('\n').map((l) => JSON.parse(l).session_id), [undefined, 'second'], 'one init line per run');
+  for (const field of ['tools', 'mcp_servers', 'plugins']) {
+    const r = await run(initOf({ [field]: ['x'] }));
+    assert.equal(r.ok, false, field);
+    assert.equal(r.reason, 'smoke-init', field);
+    assert.equal(r.smoke[field], 1, field);
+  }
+  const before = readFileSync(out, 'utf8');
+  const missing = await run(null);
+  assert.equal(missing.reason, 'smoke-init');
+  assert.equal(missing.smoke.init, false);
+  assert.equal(readFileSync(out, 'utf8'), before, 'a missing init event writes nothing');
+  const noFile = await seed.runSeedClaude({ ...smokeArgs(ledger, out), smokeOut: undefined }, claudeDeps(fakeSpawn([], { answer: GOOD_ANSWER, extraLines: [initOf()] }), ledger));
+  assert.equal(noFile.reason, 'no-smoke-out');
+});
+
+test('item 5 a failed smoke init stops the batch before the next run, and the failing run still reports its counts', async () => {
+  // Breaks when: smoke-init is not a stop reason (the next run would spend a ledger row), or the stopped run prints nothing.
+  const ledger = path.join(tmp(), 'ledger.jsonl');
+  const out = path.join(tmp(), 'init.jsonl');
+  const calls = [];
+  const spawnFn = fakeSpawn(calls, { answer: GOOD_ANSWER, extraLines: [initOf({ plugins: [{ name: 'p' }] })] });
+  const items = ['a', 'b', 'c'].map((n) => ({ file: 'src/calc.mjs', fileText: CALC, brief: n }));
+  const batch = await seed.runSeedBatch(items, { forbidden: forbidden(), ledgerPath: ledger, smoke: true, smokeOut: out }, claudeDeps(spawnFn, ledger));
+  assert.equal(batch.stopped, 'smoke-init');
+  assert.equal(calls.length, 1, 'no second run');
+  assert.equal(batch.smoke.plugins, 1);
+  assert.equal(readFileSync(out, 'utf8').trim().split('\n').length, 1, 'the init line of the failing run is saved');
+});
+
+test('item 5 through the CLI: --smoke needs --smoke-out; a clean smoke prints the counts; a dirty one stops with smoke-init', async () => {
+  // Breaks when: --smoke runs without a file to save the init line to, --smoke-out is ignored without --smoke, or the summary hides the field counts.
+  const ctx = makeRepo({ prs: true });
+  const f = cliFiles(ctx);
+  const out = path.join(tmp(), 'init.jsonl');
+  const base = ['claude', '--repo', ctx.repo, '--rev', ctx.sha, '--seeds', ctx.seeds, '--config', f.cfg, '--dataset', f.ds, '--gold', ctx.goldDir, '--files', 'src/calc.mjs', '--brief', 'b', '--ledger', f.ledger, '--confirm-headless'];
+  const calls = [];
+  for (const extra of [['--smoke'], ['--smoke-out', out]]) {
+    const io = cliIo({ headlessDeps: claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER, extraLines: [initOf()] }), f.ledger) });
+    assert.equal(await seed.main([...base, ...extra], io), 2, extra.join(' '));
+    assert.match(io.err.join(''), /--smoke-out/);
+  }
+  assert.equal(calls.length, 0, 'a refused call spawns nothing');
+  assert.equal(existsSync(f.ledger), false, 'and reserves no ledger row');
+  const io = cliIo({ headlessDeps: claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER, extraLines: [initOf()] }), f.ledger) });
+  assert.equal(await seed.main([...base, '--smoke', '--smoke-out', out], io), 0, outText(io));
+  const summary = JSON.parse(io.out.join('').trim().split('\n').pop());
+  assert.deepEqual([summary.smoke[0].tools, summary.smoke[0].mcp_servers, summary.smoke[0].plugins, summary.smoke[0].inputTokens], [0, 0, 0, 3]);
+  assert.equal(readFileSync(out, 'utf8').trim().split('\n').length, 1);
+  const dirty = cliIo({ headlessDeps: claudeDeps(fakeSpawn(calls, { answer: GOOD_ANSWER, extraLines: [initOf({ tools: ['Bash'] })] }), f.ledger) });
+  assert.equal(await seed.main([...base, '--smoke', '--smoke-out', out], dirty), 1);
+  const bad = JSON.parse(dirty.out.join('').trim().split('\n').pop());
+  assert.equal(bad.stopped, 'smoke-init');
+  assert.equal(bad.smoke.at(-1).tools, 1);
 });

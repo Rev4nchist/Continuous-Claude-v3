@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { TREE_EXCLUDES } from '../../github/cursor-review.mjs';
 import { withLock } from '../../github/lib/file-lock.mjs';
 import { killTree } from '../../github/lib/proc.mjs';
-import { countDay, defaultHeadlessLedger, HEADLESS_LEDGER, readHeadlessLedger, runClaude, servedMatches, servedModelOf } from '../../lib/headless.mjs';
+import { countDay, defaultHeadlessLedger, HEADLESS_LEDGER, readHeadlessLedger, readResult, runClaude, servedMatches, servedModelOf } from '../../lib/headless.mjs';
 import { setOf } from './dataset.mjs';
 import { GOLD_DIR, loadGold, validateRow } from './gold.mjs';
 import { ANSWER_KEY_SEGMENTS } from './read-audit.mjs';
@@ -258,7 +258,7 @@ export function isAnswerKeyPath(p) {
 
 // Code that must never be a seed target or a verify test (F1): the eval harness, the headless wrapper, the lane scripts, and every script
 // that can delete files, push, change a worktree or a setting, or reach the lane database.
-const PROTECTED_PREFIXES = Object.freeze(['scripts/eval/review-eval/', 'scripts/coordination/', 'scripts/worktree/', 'scripts/settings/', 'scripts/github/']);
+const PROTECTED_PREFIXES = Object.freeze(['scripts/eval/review-eval/', 'scripts/coordination/', 'scripts/worktree/', 'scripts/settings/', 'scripts/github/', 'scripts/review-engine/']);
 const PROTECTED_FILES = Object.freeze(['scripts/lib/headless.mjs', 'scripts/harness-doctor.mjs']);
 const LANE_SCRIPT = /^\.claude\/scripts\/lane[^/]*\.mjs$/;
 
@@ -274,17 +274,80 @@ const PUSH_WORD = /['"`]push['"`]|\bgit\s+push\b/;
 const GIT_WORD = /\bgit\b/;
 const DB_PACKAGE = /^(?:pg|postgres|pg-[\w-]+|mysql2?|mongodb|mongoose|ioredis|redis|sqlite3|better-sqlite3|knex|sequelize|typeorm|@prisma\/client|@neondatabase\/serverless|node:sqlite)(?:\/|$)/;
 const DB_MODULE_NAME = /(?:^|[-_])(?:db|database|postgres|pg)(?:$|[-_])/i;
-const IMPORT_SPEC = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g;
+// Every import form with a literal spec: `from 'x'`, `import 'x'`, `import('x')`, `require('x')`, in any quote or a backtick.
+const IMPORT_SPEC = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"`]([^'"`]+)['"`]/g;
+// Item 2: a database shell, a container, the GitHub CLI as a command, and the lane shim reach real state with no import to see.
+const PSQL_WORD = /\bpsql\b/;
+const DOCKER_WORD = /\bdocker\b/;
+const GH_COMMAND = /['"`]gh(?:\.exe)?(?:['"`]|\s)|[&|;(]\s*gh\s+\w/;
+const LANE_SHIM = /\blane[\w-]*\.mjs\b/;
+const RISKY_WORDS = Object.freeze([DELETE_CALL, PSQL_WORD, DOCKER_WORD, GH_COMMAND, LANE_SHIM]);
 
 function importsDbClient(text) {
   const isDbModule = (spec) => /^\.{1,2}\//.test(spec) && DB_MODULE_NAME.test(path.posix.basename(spec).replace(/\.\w+$/, ''));
   return [...text.matchAll(IMPORT_SPEC)].some(([, spec]) => DB_PACKAGE.test(spec) || isDbModule(spec));
 }
 
-/** True when the text deletes files, pushes with git, or imports pg, postgres or another database client module. */
+/** True when the text deletes files, pushes with git, imports pg, postgres or another database client module, or names psql, docker, the gh command or lane.mjs. */
 export function isRiskyContent(text) {
   const t = String(text);
-  return DELETE_CALL.test(t) || (PUSH_WORD.test(t) && GIT_WORD.test(t)) || importsDbClient(t);
+  return RISKY_WORDS.some((re) => re.test(t)) || (PUSH_WORD.test(t) && GIT_WORD.test(t)) || importsDbClient(t);
+}
+
+// The closure of relative imports (item 2). The test file and the target run with every module they import, so each one is judged like the
+// test file: a protected or answer-key path, risky text, a module that cannot be read as text, or a relative import that names no tracked file
+// is a refusal, and so is a closure deeper than IMPORT_DEPTH_CAP or larger than IMPORT_FILE_CAP files. Names are matched in lower case:
+// ls-tree is case-sensitive and NTFS is not, so `./HELPER.mjs` loads helper.mjs there.
+const IMPORT_DEPTH_CAP = 8;
+const IMPORT_FILE_CAP = 300;
+const RESOLVE_SUFFIXES = Object.freeze(['', '.js', '.mjs', '.cjs', '.json', '/index.js', '/index.mjs', '/index.cjs']);
+const relativeSpecs = (text) => [...text.matchAll(IMPORT_SPEC)].map((m) => m[1]).filter((s) => /^\.{1,2}(?:\/|$)/.test(s));
+
+/** Map(lower-case name -> tracked names) of a ref, or null when git cannot list it. */
+function nameIndex(repo, ref) {
+  const out = git(repo, ['ls-tree', '-r', '-z', '--name-only', ref], { ok: true });
+  if (out === null) return null;
+  const index = new Map();
+  for (const name of nulList(out)) index.set(name.toLowerCase(), [...(index.get(name.toLowerCase()) ?? []), name]);
+  return index;
+}
+
+/** Every tracked name that a relative spec can load from `from` (any case, any extension of RESOLVE_SUFFIXES). Empty: nothing to scan, the caller refuses. */
+function resolveImport(index, from, spec) {
+  const base = path.posix.join(path.posix.dirname(from), spec.replace(/\/$/, ''));
+  if (base === '..' || base.startsWith('../')) return [];
+  return RESOLVE_SUFFIXES.flatMap((suffix) => index.get(`${base}${suffix}`.toLowerCase()) ?? []);
+}
+
+/** The files that `file` imports by a relative spec, or null when `file` itself is refused or one of its imports names no tracked file. */
+function importsOf(repo, ref, index, file) {
+  if (isProtectedTarget(file) || isAnswerKeyPath(file)) return null;
+  const tracked = readTracked(repo, ref, file);
+  if (tracked === null || isRiskyContent(tracked.text)) return null;
+  if (!CODE_FILE.test(file)) return [];
+  const found = relativeSpecs(tracked.text).map((spec) => resolveImport(index, file, spec));
+  return found.some((names) => names.length === 0) ? null : found.flat();
+}
+
+/** True when `roots` or anything they import (relative specs, at `ref`, transitively) is refused. A visited set ends a cycle. */
+function closureRefused(repo, ref, roots) {
+  const index = nameIndex(repo, ref);
+  if (index === null) return true;
+  const seen = new Set();
+  let level = roots;
+  for (let depth = 0; level.length > 0; depth += 1) {
+    if (depth > IMPORT_DEPTH_CAP) return true;
+    const next = [];
+    for (const file of level) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const found = seen.size > IMPORT_FILE_CAP ? null : importsOf(repo, ref, index, file);
+      if (found === null) return true;
+      next.push(...found);
+    }
+    level = next;
+  }
+  return false;
 }
 
 /**
@@ -407,11 +470,14 @@ const resolveRev = (repo, rev) => git(repo, ['rev-parse', '--verify', '--quiet',
 const nulList = (s) => s.split(NUL).filter(Boolean);
 const treeFiles = (repo, ref) => nulList(git(repo, ['ls-tree', '-r', '-z', '--name-only', ref]));
 
-/** { mode, oid, text } of a tracked regular file at a commit, or null. A text that is not valid UTF-8 is refused (null). */
+/**
+ * { mode, oid, text } of a tracked regular file at a commit, or null. A text that is not valid UTF-8 is refused (null), and so is a path that is
+ * not the exact name ls-tree prints (ls-tree is case-sensitive, NTFS is not): every caller treats null as a refusal.
+ */
 function readTracked(repo, sha, file) {
   const entry = git(repo, ['ls-tree', '-z', sha, '--', file], { ok: true });
-  const m = /^(100644|100755) blob ([0-9a-f]+)\t/.exec(entry ?? '');
-  if (!m) return null;
+  const m = /^(100644|100755) blob ([0-9a-f]+)\t([^\u0000]*)/.exec(entry ?? '');
+  if (!m || m[3] !== file) return null;
   const r = spawnSync('git', ['cat-file', 'blob', m[2]], { cwd: repo, windowsHide: true, maxBuffer: 1 << 28, env: gitEnv() });
   const text = r.status === 0 ? r.stdout.toString('utf8') : null;
   return text === null || text.includes('�') ? null : { mode: m[1], oid: m[2], text };
@@ -529,7 +595,7 @@ function precheck({ repo, rev, file, site, seedsDir }) {
   const main = resolveRev(repo, rev);
   const tracked = main ? readTracked(repo, main, file) : null;
   if (!tracked) return no('not-tracked');
-  if (isRiskyContent(tracked.text) || isRiskyContent(site?.after ?? '')) return no('refused');
+  if (isRiskyContent(tracked.text) || isRiskyContent(site?.after ?? '') || closureRefused(repo, main, [file])) return no('refused');
   if (siteTaken(seedsDir, file, site?.line)) return no('duplicate-site');
   const patch = checkSite(tracked.text, site ?? {});
   return patch.ok ? { ok: true, main, tracked } : patch;
@@ -606,32 +672,49 @@ function tarHeader(block) {
   return { name: prefix ? `${prefix}/${name}` : name, mode: octal(block.subarray(100, 108)), size: octal(block.subarray(124, 136)), type: String.fromCharCode(block[156] || 48) };
 }
 
-/** Write one entry under dir. Only regular files and folders are written (a link is skipped). A path that leaves dir throws. Returns 1 for a file. */
+/**
+ * Write one entry under dir. Only regular files and folders are written. A path that leaves dir throws. Returns what the entry was:
+ * 'file', 'dir', 'link' (a hard link or a symlink: skipped) or 'unknown' (any other type: skipped, never thrown).
+ */
 function writeTarEntry(dir, { name, mode, type }, body) {
   const target = path.resolve(dir, name);
   if (target !== path.resolve(dir) && !target.startsWith(path.resolve(dir) + path.sep)) throw new Error('an archive entry leaves the folder');
-  if (type === '5') { mkdirSync(target, { recursive: true }); return 0; }
-  if (type !== '0') return 0;
+  if (type === '5') { mkdirSync(target, { recursive: true }); return 'dir'; }
+  if (type === '1' || type === '2') return 'link';
+  if (type !== '0') return 'unknown';
   mkdirSync(path.dirname(target), { recursive: true });
   writeFileSync(target, body, { mode: mode & 0o777 });
-  return 1;
+  return 'file';
 }
 
-/** Unpack a tar buffer (the pax form of git archive) into dir. Returns the number of files written. */
+const TALLY = Object.freeze({ file: 'files', link: 'links', unknown: 'unknown' });
+
+/** Unpack a tar buffer (the pax form of git archive) into dir. Returns { files, links, unknown }: the files written and the entries skipped. */
 export function untar(buf, dir) {
   let at = 0;
   let pax = {};
-  let files = 0;
+  const count = { files: 0, links: 0, unknown: 0 };
   while (at + TAR_BLOCK <= buf.length && buf[at] !== 0) {
     const h = tarHeader(buf.subarray(at, at + TAR_BLOCK));
     const body = buf.subarray(at + TAR_BLOCK, at + TAR_BLOCK + h.size);
     at += TAR_BLOCK + Math.ceil(h.size / TAR_BLOCK) * TAR_BLOCK;
     if (h.type === 'g') continue;
     if (h.type === 'x') { pax = paxRecords(body); continue; }
-    files += writeTarEntry(dir, { ...h, name: pax.path ?? h.name }, body);
+    const key = TALLY[writeTarEntry(dir, { ...h, name: pax.path ?? h.name }, body)];
+    if (key) count[key] += 1;
     pax = {};
   }
-  return files;
+  return count;
+}
+
+// Item 6: git init of an export folder takes an allowlist env (no GIT_TEMPLATE_DIR, no parent hooks path) and no template at all.
+const INIT_ENV_VARS = Object.freeze(['PATH', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE']);
+
+/** `git init` in dir with an empty template (no sample hooks) and an allowlist env. Throws on a failure. */
+function initRepo(dir) {
+  const env = { ...pickEnv(process.env, INIT_ENV_VARS), GIT_CONFIG_NOSYSTEM: '1' };
+  const r = spawnSync('git', ['init', '-q', '--template=', dir], { cwd: dir, env, windowsHide: true });
+  if (r.status !== 0) throw new Error('git init failed');
 }
 
 /**
@@ -645,7 +728,7 @@ export function exportRef(repo, ref, { mkdtemp = mkdtempSync, remove = removeScr
     const tar = gitBuffer(repo, ['archive', '--format=tar', ref]);
     if (tar === null) throw new Error('git archive failed');
     untar(tar, dir);
-    git(dir, ['init', '-q']);
+    initRepo(dir);
     return dir;
   } catch (e) {
     if (dir) try { remove(dir); } catch { /* the OS temp cleanup takes it */ }
@@ -712,13 +795,46 @@ function pickEnv(base, names) {
   return Object.fromEntries(Object.entries(base).filter(([k, v]) => v !== undefined && want.has(k.toUpperCase())));
 }
 
+// Items 3, 4 and 6: the test child and the syntax check get these system names only. PATH, TEMP and TMP are built, never copied.
+const CHILD_SYSTEM_VARS = Object.freeze(['SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'WINDIR']);
+const DEAD_DOCKER_HOST = 'tcp://127.0.0.1:9';
+
+/** The PATH of a test child: the folder of this node, and the system folder (win32: SystemRoot\System32; else /usr/bin and /bin). No git, gh, ssh or docker folder. */
+function minimalPath(base) {
+  if (process.platform !== 'win32') return [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter);
+  const root = Object.entries(base).find(([k]) => k.toUpperCase() === 'SYSTEMROOT')?.[1] ?? 'C:\\Windows';
+  return [path.dirname(process.execPath), path.join(root, 'System32')].join(path.delimiter);
+}
+
+/** The allowlist env of a short child that needs no home (node --check): the system names and the minimal PATH. */
+const checkEnv = (base) => ({ ...pickEnv(base, CHILD_SYSTEM_VARS), PATH: minimalPath(base) });
+
+/** Make what the child env names, inside the temp home: a temp folder, an EMPTY global git config file and an empty gh config folder. */
+function prepareHome(home) {
+  const made = { tmp: path.join(home, 'tmp'), gh: path.join(home, 'gh-config'), gitConfig: path.join(home, 'empty.gitconfig') };
+  mkdirSync(made.tmp, { recursive: true });
+  mkdirSync(made.gh, { recursive: true });
+  writeFileSync(made.gitConfig, '');
+  return made;
+}
+
+/** The git, gh and docker names of a test child: no system git config, an empty global one, no prompt, an empty gh folder, a docker host that nothing answers. */
+const toolEnv = (made) => ({
+  GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: made.gitConfig, GIT_TERMINAL_PROMPT: '0', GH_CONFIG_DIR: made.gh, DOCKER_HOST: DEAD_DOCKER_HOST,
+});
+
 /**
- * The env of a test child: the system names above and a fresh temp home (HOME, USERPROFILE, APPDATA, LOCALAPPDATA). On win32 the OS adds
+ * The env of a test child: CHILD_SYSTEM_VARS, a minimal PATH, a fresh temp home (HOME, USERPROFILE, APPDATA, LOCALAPPDATA) with TEMP, TMP and
+ * TMPDIR inside it, and the toolEnv names. It creates the folders and the empty gitconfig file in `home`. On win32 the OS adds
  * HOMEDRIVE, HOMEPATH, LOGONSERVER, SYSTEMDRIVE, USERDOMAIN and USERNAME to any child env block, so HOMEDRIVE and HOMEPATH are set from the
  * temp home here (they would name the real home); the other four hold no secret and cannot be removed.
  */
 export function testChildEnv(base, home) {
-  const env = { ...pickEnv(base, SYSTEM_VARS), HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') };
+  const made = prepareHome(home);
+  const env = {
+    ...checkEnv(base), TEMP: made.tmp, TMP: made.tmp, TMPDIR: made.tmp, HOME: home, USERPROFILE: home,
+    APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local'), ...toolEnv(made),
+  };
   if (process.platform !== 'win32') return env;
   const { root } = path.parse(home);
   return { ...env, HOMEDRIVE: root.slice(0, 2), HOMEPATH: home.slice(root.length - 1) };
@@ -786,7 +902,7 @@ const isFile = (p) => existsSync(p) && statSync(p).isFile();
 /** `node --check` of a code file inside a worktree. A file that is not code (by extension) passes. */
 function syntaxOk(wt, file) {
   if (!CODE_FILE.test(file)) return true;
-  return spawnSync(process.execPath, ['--check', file], { cwd: wt, windowsHide: true, timeout: 20_000, stdio: 'ignore' }).status === 0;
+  return spawnSync(process.execPath, ['--check', file], { cwd: wt, env: checkEnv(process.env), windowsHide: true, timeout: 20_000, stdio: 'ignore' }).status === 0;
 }
 
 /** Remove a scratch copy. A failure returns false: it is reported, never thrown (finding 11). */
@@ -877,11 +993,14 @@ function seedSideReason(base, seeded) {
   return a === b ? null : 'unstable-failure';
 }
 
-/** True when the test file is on the refused path list, or its text at the base ref is risky (F1: the --test file is checked like the target). */
-function refusedTest(repo, baseRef, testFile) {
+/**
+ * True when the test file is on the refused path list, or the closure of its relative imports and of the target's (item 2) is refused at the base
+ * ref or at the seed ref (a one-line patch can change an import spec). It fails closed (item 1): a test path that is not the exact tracked name,
+ * or text that cannot be read, is a refusal.
+ */
+function refusedTest(repo, m, testFile) {
   if (isProtectedTarget(testFile) || isAnswerKeyPath(testFile)) return true;
-  const tracked = readTracked(repo, baseRef, testFile);
-  return tracked !== null && isRiskyContent(tracked.text);
+  return [m.baseRef, m.seedRef].some((ref) => closureRefused(repo, ref, [testFile, m.file]));
 }
 
 /**
@@ -897,7 +1016,7 @@ export async function verifySeed({ repo, seedId, seedsDir, testFile, timeoutMs =
   const m = readManifest(seedsDir, seedId);
   if (!m || m.stage !== 'mutated') return no(m ? 'wrong-stage' : 'no-manifest');
   if (testFile === m.file) return no('seeded-file-is-test');
-  if (refusedTest(repo, m.baseRef, testFile)) return no('refused-test');
+  if (refusedTest(repo, m, testFile)) return no('refused-test');
   const opts = { timeoutMs, run, remove, mkdtemp };
   const base = await runAtRef(repo, m.baseRef, testFile, opts);
   if (base.cleanupFailed) return dropSeed(repo, seedsDir, m, 'cleanup');
@@ -1164,6 +1283,42 @@ export function checkSmokeContext(streamText) {
   return { ok: markers.length === 0 && hookEvents === 0, markers, hookEvents };
 }
 
+// Item 5: the init event of a stream-json run lists what the session loaded. Field names as the repo reads them (scripts/github/local-review/backends/claude.mjs
+// reads tools, mcp_servers and plugins of the init event; scripts/coordination/coord-drill-2/metrics.mjs reads input_tokens, cache_read_input_tokens and
+// cache_creation_input_tokens of a usage object). The camelCase variants are accepted too. A field that is missing, or not a list, is 'unknown'.
+const SMOKE_FIELDS = Object.freeze({ tools: ['tools'], mcp_servers: ['mcp_servers', 'mcpServers'], plugins: ['plugins'] });
+const UNKNOWN = 'unknown';
+
+/** { line, event } of the first system/init line of a stream, or null. */
+function initEvent(streamText) {
+  for (const line of String(streamText ?? '').split(/\r?\n/)) {
+    try {
+      const o = JSON.parse(line);
+      if (o && typeof o === 'object' && o.type === 'system' && o.subtype === 'init') return { line, event: o };
+    } catch { /* not a JSON line */ }
+  }
+  return null;
+}
+
+const listCount = (event, names) => names.map((n) => event[n]).find(Array.isArray)?.length ?? UNKNOWN;
+const tokenCount = (usage, names) => names.map((n) => usage?.[n]).find((v) => Number.isFinite(v)) ?? UNKNOWN;
+
+/**
+ * The smoke report of a stream-json run: { ok, init, tools, mcp_servers, plugins, inputTokens, cacheReadTokens, cacheCreationTokens, initLine }.
+ * The three lists are counts. ok is true only when an init event exists and all three counts are 0 (unknown fails). The token counts come from the
+ * usage of the result line; input_tokens alone leaves out cached context, so both cache counts are reported. A missing token count does not fail.
+ */
+export function smokeReport(streamText) {
+  const init = initEvent(streamText);
+  const lists = Object.fromEntries(Object.entries(SMOKE_FIELDS).map(([key, names]) => [key, init ? listCount(init.event, names) : UNKNOWN]));
+  const { usage } = readResult(streamText);
+  return {
+    ok: init !== null && Object.values(lists).every((n) => n === 0), init: init !== null, ...lists,
+    inputTokens: tokenCount(usage, ['input_tokens', 'inputTokens']), cacheReadTokens: tokenCount(usage, ['cache_read_input_tokens', 'cacheReadInputTokens']),
+    cacheCreationTokens: tokenCount(usage, ['cache_creation_input_tokens', 'cacheCreationInputTokens']), initLine: init?.line ?? null,
+  };
+}
+
 /** The claude argv of a smoke run: the result format becomes stream-json (it needs --verbose), so hook events and the init event show in the stream. */
 export function streamJsonArgs(args) {
   const out = [...args];
@@ -1193,8 +1348,9 @@ function interpretRun(res, file, fileText) {
  * args: { file, fileText, brief, forbidden, ledgerPath }. deps go to headless.mjs runClaude (tests: spawnFn, command, now, skipConfigFiles, agentDeps).
  * Never retries. Returns { ok: true, site, truthNote, ... } or { ok: false, reason }.
  */
-export async function runSeedClaude({ file, fileText, brief, forbidden, ledgerPath, smoke = false }, deps = {}) {
+export async function runSeedClaude({ file, fileText, brief, forbidden, ledgerPath, smoke = false, smokeOut }, deps = {}) {
   assertLedgerSafe(ledgerPath);
+  if (smoke && !smokeOut) return no('no-smoke-out');
   const lint = lintInputs({ brief, file, fileText }, forbidden);
   if (!lint.ok) return lint;
   const claim = claimLaneRun(ledgerPath, (deps.now ?? Date.now)(), deps.claimFile ?? DEFAULT_CLAIM_FILE);
@@ -1206,10 +1362,22 @@ export async function runSeedClaude({ file, fileText, brief, forbidden, ledgerPa
       { prompt: buildSeedPrompt(fileText, brief, file), model: CLAUDE_MODEL, effort: CLAUDE_EFFORT, purpose: LANE_PURPOSE, timeoutMs: deps.timeoutMs ?? 300_000 },
       claudeRunDeps(deps, { ledgerPath, cwd, smoke }),
     );
-    return (smoke && smokeFailure(res)) || interpretRun(res, file, fileText);
+    const interpret = () => interpretRun(res, file, fileText);
+    return smoke && !res.reason ? judgeSmoke(res, smokeOut, interpret) : interpret();
   } finally {
     if (ownCwd) rmSync(cwd, { recursive: true, force: true });
   }
+}
+
+/**
+ * The smoke judgement of a run that happened (no cap, lock or missing claude): the init line is saved first (one line per run), then a bad init
+ * (a tool, an MCP server or a plugin, or no init event) refuses the run, then a context marker or hook event does. The report rides on the result.
+ */
+function judgeSmoke(res, smokeOut, interpret) {
+  const { initLine, ...smoke } = smokeReport(res.stdout);
+  if (initLine !== null) appendFileSync(smokeOut, `${initLine}\n`);
+  if (!smoke.ok) return { ok: false, reason: 'smoke-init', smoke };
+  return { ...(smokeFailure(res) ?? interpret()), smoke };
 }
 
 /** A refusal result when the run stream shows session or lane context; null when it is clean. */
@@ -1230,7 +1398,8 @@ function claudeRunDeps(deps, { ledgerPath, cwd, smoke }) {
 }
 
 // A cap or a run fault stops the batch: each further run would spend a ledger row on the same fault.
-const STOP_REASONS = new Set(['lane-cap', 'ledger-cap', 'served-model', 'no-claude', 'lock']);
+// A smoke run whose init lists a tool, an MCP server or a plugin (or has no init) stops too: the next run would show the same context.
+const STOP_REASONS = new Set(['lane-cap', 'ledger-cap', 'served-model', 'no-claude', 'lock', 'smoke-init', 'no-smoke-out']);
 
 /**
  * Run items one after another. The first stop reason ends the batch: no retry.
@@ -1243,7 +1412,7 @@ export async function runSeedBatch(items, base, deps = {}, onResult = () => {}) 
     const entry = { file: item.file };
     try {
       const r = await runSeedClaude({ ...item, ...base }, deps);
-      if (STOP_REASONS.has(r.reason)) return { results, stopped: r.reason };
+      if (STOP_REASONS.has(r.reason)) return { results, stopped: r.reason, ...(r.smoke ? { smoke: r.smoke } : {}) };
       Object.assign(entry, r);
       results.push(entry);
       onResult(entry);
@@ -1267,12 +1436,13 @@ const USAGE = [
   '  verify      --repo <dir> --seeds <dir> --seed <id> --test <one test file>',
   '  emit        --seeds <dir> --gold-file <file> --seed <id> [--slice security]',
   '  check-refs  [--repo <dir>] [--seeds <dir>] [--remote <name>]      the remote defaults to fork; zero seed refs is not a pass; a ref with no manifest fails',
-  '  claude      --confirm-headless --repo <dir> --seeds <dir> --ledger <file> --config <f> --dataset <f> --gold <dir> --files <a,b> --brief <text> [--rev <rev>] [--smoke]',
+  '  claude      --confirm-headless --repo <dir> --seeds <dir> --ledger <file> --config <f> --dataset <f> --gold <dir> --files <a,b> --brief <text> [--rev <rev>] [--smoke --smoke-out <file>]',
+  '              --smoke saves the stream-json init line of each run to --smoke-out (required with --smoke) and fails a run whose init lists a tool, an MCP server or a plugin',
   `operators: ${OPERATORS.map((o) => o.id).join(', ')}`,
   'Under node --test the repo, seeds, gold, gold-file and ledger flags must be explicit. Exit: 0 ok, 1 refused or failed check, 2 usage.',
 ].join('\n');
 
-const VALUE_FLAGS = ['--repo', '--rev', '--seeds', '--config', '--dataset', '--gold', '--gold-file', '--file', '--files', '--operator', '--index', '--seed', '--test', '--slice', '--remote', '--ledger', '--brief'];
+const VALUE_FLAGS = ['--repo', '--rev', '--seeds', '--config', '--dataset', '--gold', '--gold-file', '--file', '--files', '--operator', '--index', '--seed', '--test', '--slice', '--remote', '--ledger', '--brief', '--smoke-out'];
 const BOOL_FLAGS = ['--confirm-headless', '--smoke'];
 const EXPLICIT = { mutate: ['--repo', '--seeds'], verify: ['--repo', '--seeds'], emit: ['--seeds', '--gold-file'], claude: ['--repo', '--seeds', '--ledger', '--gold'] };
 const DEFAULT_REMOTE = 'fork';
@@ -1397,12 +1567,21 @@ function summarise(batch, refused) {
   const dropped = {};
   for (const r of batch.results.filter((x) => !x.created)) dropped[r.reason ?? 'unknown'] = (dropped[r.reason ?? 'unknown'] ?? 0) + 1;
   const created = batch.results.filter((x) => x.created).length;
-  return { ran: batch.results.length, created, dropped, refused, ...(batch.stopped ? { stopped: batch.stopped } : {}) };
+  const smoke = [...batch.results.map((r) => r.smoke), batch.smoke].filter(Boolean);
+  return { ran: batch.results.length, created, dropped, refused, ...(smoke.length ? { smoke } : {}), ...(batch.stopped ? { stopped: batch.stopped } : {}) };
+}
+
+/** --smoke needs --smoke-out, and --smoke-out needs --smoke: checked before any claim or spawn. The file is emptied, so it holds this invocation only. */
+function startSmokeFile(o) {
+  if (Boolean(o['--smoke']) !== (o['--smoke-out'] !== undefined)) throw new UsageError('--smoke and --smoke-out go together: --smoke needs --smoke-out <file>');
+  if (!o['--smoke']) return;
+  try { writeFileSync(o['--smoke-out'], ''); } catch { throw new UsageError('--smoke-out cannot be written'); }
 }
 
 async function verbClaude(o, io) {
   if (!o['--confirm-headless']) throw new UsageError('claude spends headless runs: it needs --confirm-headless');
   need(o, ['--files', '--brief']);
+  startSmokeFile(o);
   const ledgerPath = o['--ledger'] ?? defaultHeadlessLedger(io.env);
   assertLedgerSafe(ledgerPath, io.env);
   const deps = io.headlessDeps ?? {};
@@ -1413,7 +1592,7 @@ async function verbClaude(o, io) {
   if (!items.length) { out(io, { ok: false, ran: 0, refused: files.length }); return 1; }
   const forbidden = forbiddenSet({ cfg: f.cfg, dataset: f.dataset, goldRows: goldRowsOf(o) });
   const where = { repo: f.repo, rev: f.rev, seedsDir: seedsOf(o) };
-  const batch = await runSeedBatch(items, { forbidden, ledgerPath, smoke: Boolean(o['--smoke']) }, deps, (entry) => plantOne(where, entry));
+  const batch = await runSeedBatch(items, { forbidden, ledgerPath, smoke: Boolean(o['--smoke']), smokeOut: o['--smoke-out'] }, deps, (entry) => plantOne(where, entry));
   const summary = summarise(batch, files.length - items.length);
   out(io, summary);
   return summary.created > 0 ? 0 : 1;
