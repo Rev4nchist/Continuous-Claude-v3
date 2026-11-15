@@ -23,7 +23,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { resolveClaimKey, resolveRepoContext } from '../shared/claim-target.js';
+import { realFilePath, resolveClaimKey, resolveRepoContext } from '../shared/claim-target.js';
 import * as leases from '../shared/leases.js';
 
 const FOLDS = process.platform === 'win32' || process.platform === 'darwin';
@@ -164,6 +164,32 @@ describe('the index is never held (Edit and Write)', () => {
     const fresh = `${slash(claudeDir)}/projects/p9/memory/MEMORY.md`;
     expect(denied(await run('Write', { file_path: fresh }))).toBe(false);
     expect(seen.claimCalls).toEqual([]);
+  });
+});
+
+describe('one real-path step for the key and for the index test (seat item 2: they cannot drift)', () => {
+  it('2h. realFilePath and resolveClaimKey agree on every spelling of the index (2a to 2e)', () => {
+    const link = join(root, 'outside-link');
+    symlinkSync(join(claudeDir, 'projects', 'p1', 'memory'), link, 'junction');
+    const top = resolveRepoContext(claudeDir)!.top;
+    const spellings: Array<[string, string]> = [
+      [slash(indexFile), claudeDir],
+      [back(indexFile), claudeDir],
+      ['p1/memory/MEMORY.md', join(claudeDir, 'projects')],
+      [`${slash(claudeDir)}/src/../projects/p1/memory/MEMORY.md`, claudeDir],
+      [`${slash(link)}/MEMORY.md`, root],
+    ];
+    const norm = (s: string) => (FOLDS ? slash(s).toLowerCase() : slash(s));
+    const seenStrings = new Set<string>();
+    for (const [spelling, cwd] of spellings) {
+      const key = resolveClaimKey(spelling, { cwd })!;
+      expect(key).not.toBeNull();
+      const fromKey = norm(`${top}/${key.filePath}`);
+      const fromStep = norm(realFilePath(spelling, cwd)!);
+      expect(fromStep).toBe(fromKey);
+      seenStrings.add(fromStep);
+    }
+    expect(seenStrings.size).toBe(1); // five spellings, one string
   });
 });
 
