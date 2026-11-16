@@ -3,7 +3,7 @@
  * review-engine eval before it leaves (a command, a message, a published page, a file write). WARN ONLY: it never denies or asks.
  *
  * Ids: the push gate list (shared/holdout-ids.ts, read from the primary checkout on every call; about 2 ms, no cache, so no file ever
- * holds the ids). Matcher: countIdsIn (a short PR number counts only after #, PR, pull/...), plus a sha prefix of 7 or more hex.
+ * holds the ids). Matcher: countIdsIn (a short PR number counts only after #, PR, pull/...; a sha prefix of 7 or more hex), shared with the gate.
  * The warning line and the log row hold a count, the tool and a time. Never an id, never the matched text, never a slice of the input.
  * A failed list read gives a warning that the scan is off (seat Q3: differs from the scope text, a broken list must not stop every tool).
  * Off switch: holdoutScan.off = true in review-router.config.json. The staged diff at commit is commit-preflight's (seat Q2).
@@ -70,18 +70,16 @@ function artifactText(input: Record<string, unknown>): Scanned | null {
   return { text: [page.text, str(input.title), str(input.description)].join('\n'), tailBytes: page.tailBytes };
 }
 
-const HEX_RUN = /(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/gi;
-
-/** Holdout ids in the text: countIdsIn for the digit ids and keys, plus each sha that a hex run of 7 or more is a prefix of. */
+/**
+ * Holdout ids in the text: countIdsIn, the one matcher of the push gate, commit-preflight and this hook (card
+ * coord-decision-gate-round3-content-scan, seat S-Q1). It holds the sha prefix rule (seat R1). `bare`: digit ids that stand in the text with no
+ * context word (not counted, reported as a hint).
+ */
 export function countHits(text: string, ids: string[]): { count: number; bare: number } {
-  const shas = ids.filter((id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id));
-  const rest = ids.filter((id) => !shas.includes(id));
-  const runs = [...text.matchAll(HEX_RUN)].map((m) => m[0].toLowerCase());
-  // Either one may be the prefix (seat R1): a short stored sha inside a full text sha, or a text prefix of a stored full sha. 7 hex floor.
-  const shaHits = shas.map((s) => s.toLowerCase()).filter((s) => runs.some((r) => s.startsWith(r) || r.startsWith(s))).length;
-  const counted = countIdsIn(text, rest);
+  const rest = ids.filter((id) => !(/^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id)));
+  const counted = countIdsIn(text, ids);
   const bareDigits = rest.filter((id) => /^\d{3,}$/.test(id) && new RegExp(`(?<!\\d)${id}(?!\\d)`).test(text)).length;
-  return { count: counted + shaHits, bare: Math.max(0, bareDigits - counted) };
+  return { count: counted, bare: Math.max(0, bareDigits - countIdsIn(text, rest)) };
 }
 
 function warnText(tool: string, count: number, tailBytes: number): string | null {

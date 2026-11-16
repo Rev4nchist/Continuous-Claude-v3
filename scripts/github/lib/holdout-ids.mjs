@@ -25,21 +25,63 @@ export function holdoutIdsOf(ds, cfg) {
   return [...out];
 }
 
+// Seat read 2 (minor) asked for "PR: n", "pr_n", a JSON "pr": n field and "pull request n" too. Measured on 600 commits of main (2026-11-15):
+// the JSON form adds 10 hits and "PR: n" 2, all short PR numbers: this repo's own JSON (Gold A, eval files) holds CCv3 PR numbers that
+// collide with holdout PR numbers, so those forms would deny ordinary re/ pushes. Not added; a known limit of the matcher.
 const CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 
 /**
  * How many ids of the list stand in the text. Each id counts once. Forms: a digit id of 7 or more digits (a comment id) matches as a whole
- * digit run; a shorter digit id (a PR number) matches only right after #, "PR", "pull/" or "pulls/"; a finding key (<pr>:<id>) and a sha
- * (7 to 40 hex characters) match as a whole token. A bare small number never matches. The count is returned, never the id.
+ * digit run; a shorter digit id (a PR number) matches only right after #, "PR", "pull/" or "pulls/"; a finding key (<pr>:<id>) matches as a
+ * whole token. A sha (7 to 40 hex characters with a letter) matches when a hex run of 7 or more in the text is a prefix of it, or it is a
+ * prefix of the run (card coord-decision-gate-round3-content-scan, F1: a short sha in a commit message; the holdout-scan hook rule, seat R1).
+ * A bare small number never matches. The count is returned, never the id. The one matcher of the push gate, commit-preflight and holdout-scan.
  */
 export function countIdsIn(text, ids) {
   const s = String(text ?? '');
+  let runs = null;
+  let low = null;
   let n = 0;
   for (const id of ids) {
     if (typeof id !== 'string' || id === '') continue;
-    if (/^\d+$/.test(id)) { if (digitHit(s, id)) n += 1; } else if (tokenHit(s, id)) n += 1;
+    if (isSha(id)) {
+      runs ??= hexRuns(s);
+      const want = id.toLowerCase();
+      // A run of 7 to 40 is a sha: either may be the prefix. A longer run (seat read 2, minor) holds a sha anywhere inside it.
+      if (runs.some((r) => (r.length > 40 ? r.includes(want) : want.startsWith(r) || r.startsWith(want)))) n += 1;
+    } else if (/^\d+$/.test(id)) { if (digitHit(s, id)) n += 1; } else if (tokenHit((low ??= s.toLowerCase()), id)) n += 1;
   }
   return n;
+}
+
+const isSha = (id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id);
+/** Every run of 7 or more hex characters with no hex character next to it, in lower case. */
+function hexRuns(s) {
+  return [...s.matchAll(/(?<![0-9a-f])[0-9a-f]{7,}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
+}
+
+/**
+ * The shape check of the scan input (card coord-decision-gate-round3-content-scan, item 14). Throws a fixed text when the dataset or the
+ * config cannot give the whole id list: a missing findings key gives the PR numbers only, so the scan would pass comment ids and shas.
+ * Rules: the dataset is an object; prs and findings are non-empty arrays; each pr is a positive integer; reserve and holdoutExclude are
+ * arrays when present. The text never holds a value from the files.
+ */
+export function checkHoldoutShape(ds, cfg) {
+  const bad = () => { throw new Error('the holdout dataset or its config has the wrong shape'); };
+  const posInt = (v) => Number.isInteger(v) && v > 0;
+  if (ds === null || typeof ds !== 'object' || Array.isArray(ds)) bad();
+  if (!Array.isArray(ds.prs) || ds.prs.length === 0 || !Array.isArray(ds.findings) || ds.findings.length === 0) bad();
+  if (!ds.prs.every((p) => p !== null && typeof p === 'object' && posInt(p.pr))) bad();
+  if (!ds.findings.every((f) => f !== null && typeof f === 'object' && posInt(f.pr))) bad();
+  // Seat read 2, item 4, fitted to the real dataset (2026-11-15: of 93 findings, 51 carry a digit comment_id, 32 none, 10 another string; round
+  // is an integer): a comment_id that is present is a positive integer or a non-empty string; a round that is present is a string or an
+  // integer; and at least one finding carries a digit comment_id, so a renamed key throws instead of dropping every comment id.
+  const absent = (v) => v === undefined || v === null;
+  if (!ds.findings.every((f) => absent(f.comment_id) || posInt(f.comment_id) || (typeof f.comment_id === 'string' && f.comment_id !== ''))) bad();
+  if (!ds.findings.every((f) => absent(f.round) || typeof f.round === 'string' || Number.isInteger(f.round))) bad();
+  if (!ds.findings.some((f) => posInt(f.comment_id) || (typeof f.comment_id === 'string' && /^\d+$/.test(f.comment_id)))) bad();
+  if (cfg !== null && cfg !== undefined && (typeof cfg !== 'object' || Array.isArray(cfg))) bad();
+  for (const k of ['reserve', 'holdoutExclude']) if (cfg?.[k] !== undefined && !Array.isArray(cfg[k])) bad();
 }
 
 function digitHit(s, id) {
@@ -56,8 +98,8 @@ function digitHit(s, id) {
   }
 }
 
-function tokenHit(s, id) {
-  const low = s.toLowerCase();
+/** `low` is the text in lower case, made once by the caller (seat read 2, item 7: not once per id on 8 MB). */
+function tokenHit(low, id) {
   const want = id.toLowerCase();
   const word = /[0-9a-f:]/;
   let from = 0;

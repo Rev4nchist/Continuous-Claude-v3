@@ -16,14 +16,16 @@ export const EVAL_CONFIG_REL = 'scripts/eval/review-eval/config.json';
 export const countIdsIn: (text: string, ids: string[]) => number = lib.countIdsIn;
 
 /**
- * The ids of the holdout PRs read from the primary checkout at `mainRoot`. Throws a fixed text on any problem (missing or malformed file, no
- * id): the error never holds file content, so a caller can show it. An empty list is a problem: a scan with no ids would pass everything.
+ * The ids of the holdout PRs read from the primary checkout at `mainRoot`. Throws a fixed text on any problem (missing or malformed file, a
+ * dataset or config of the wrong shape, no id): the error never holds file content, so a caller can show it. An empty list is a problem: a scan with no ids would pass everything.
  */
 export function loadHoldoutIds(mainRoot: string): string[] {
   let ids: string[];
   try {
     const ds = JSON.parse(readFileSync(join(mainRoot, DATASET_REL), 'utf8'));
     const cfg = JSON.parse(readFileSync(join(mainRoot, EVAL_CONFIG_REL), 'utf8'));
+    // Item 14 (card coord-decision-gate-round3-content-scan): the shape is checked first; a partial list would pass ids unseen.
+    lib.checkHoldoutShape(ds, cfg);
     ids = lib.holdoutIdsOf(ds, cfg) as string[];
   } catch {
     throw new Error('the holdout id list could not be read');

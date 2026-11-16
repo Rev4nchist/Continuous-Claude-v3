@@ -54,20 +54,24 @@ export interface PreflightOptions {
   now?: number;
   /**
    * The early warning of the push scan (card prflow-push-blocks): how many holdout ids stand in the STAGED added lines of a commit on a `re/`
-   * branch, or null when it cannot be read (fail open: this is feedback, the push check is the gate). Default: a git read of the index.
+   * branch, or null when it cannot be read (fail open: this is feedback, the push check is the gate), or 'too-large' when the staged lines are
+   * over STAGED_MAX_BYTES and were not read (the warning says so: card coord-decision-gate-round3-content-scan). Default: a git read of the index.
    */
-  stagedHoldout?: (dir: string, mainRoot: string) => number | null;
+  stagedHoldout?: (dir: string, mainRoot: string) => number | null | 'too-large';
 }
 
-/** Staged added lines above this size are not read (the warning stays silent; the push check bounds the real scan). */
+/** Staged added lines above this size are not read: the warning says so, and the push check reads them (it has its own bound). */
 const STAGED_MAX_BYTES = 1_500_000;
 
 /** Default for PreflightOptions.stagedHoldout: one git read of the index. A count only; never an id. Fail open (null). */
-function stagedHoldoutCount(dir: string, mainRoot: string): number | null {
+export function stagedHoldoutCount(dir: string, mainRoot: string): number | null | 'too-large' {
   try {
     const r = spawnSync('git', ['diff', '--cached', '--unified=0', '--no-color', '--no-renames'], { cwd: dir, encoding: 'utf8', windowsHide: true, maxBuffer: STAGED_MAX_BYTES * 2, timeout: 5000 });
-    if (r.status !== 0 || typeof r.stdout !== 'string' || r.stdout.length > STAGED_MAX_BYTES) return null;
-    const added = r.stdout.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
+    if ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' || (typeof r.stdout === 'string' && Buffer.byteLength(r.stdout, 'utf8') > STAGED_MAX_BYTES)) return 'too-large';
+    if (r.status !== 0 || typeof r.stdout !== 'string') return null;
+    // Item 12 (card coord-decision-gate-round3-content-scan): every line that starts with + counts. An added line whose content starts with ++
+    // shows as +++; the +++ file headers hold only a path, which may hold an id too.
+    const added = r.stdout.split('\n').filter((l) => l.startsWith('+')).join('\n');
     return countIdsIn(added, loadHoldoutIds(mainRoot));
   } catch {
     return null;
@@ -299,7 +303,8 @@ export function preflight(input: HookInput | null | undefined, opts: PreflightOp
       if (isRe ? !holdoutText : !holdoutWarn) {
         const n = (opts.stagedHoldout ?? stagedHoldoutCount)(dir, head.mainRoot);
         const ids = `${n} holdout id${n === 1 ? '' : 's'}`;
-        if (n !== null && n > 0 && isRe) holdoutText = `The staged lines of this commit on ${head.branch} hold ${ids}. The push will be refused. Remove them before you commit.`;
+        if (n === 'too-large') holdoutWarn ??= `holdout-scan: the staged lines of this commit are over ${STAGED_MAX_BYTES} bytes and were not read. The push check reads them.`;
+        else if (n !== null && n > 0 && isRe) holdoutText = `The staged lines of this commit on ${head.branch} hold ${ids}. The push will be refused. Remove them before you commit.`;
         else if (n !== null && n > 0 && !holdoutWarn) holdoutWarn = `holdout-scan: the staged lines of this commit hold ${ids}. Remove them before the commit leaves this machine (count only, warn mode).`;
       }
       if (mainText || !head.branch || !PROTECTED_BRANCHES.has(head.branch)) continue;

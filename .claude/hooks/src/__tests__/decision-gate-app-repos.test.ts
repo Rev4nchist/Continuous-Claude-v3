@@ -1800,9 +1800,17 @@ describe('C25 item 4: the 7 s git deadline applies to app-folder git only', () =
       if (a === 'rev-parse feat^{tree}') return { status: 0, stdout: `${TREE}\n` };
       return { status: 1, stdout: '' };
     };
-    const v = decide(bash('git push fork feat', '/cc'), realDeps({ start: 0, now: () => 8000, spawn, exists: () => true }));
+    // The CCv3 runner throws no deadline error: at 3 s the push still runs its git and reaches the ship rule.
+    const v = decide(bash('git push fork feat', '/cc'), realDeps({ start: 0, now: () => 3000, spawn, exists: () => true }));
     expect(seen).toContain('rev-parse feat^{tree}');
     expect(v.action === 'deny' ? v.pattern : (v.warn ?? '').split(':')[0]).toBe('ship');
+    // C5 (seat change 2 and F6, 2026-11-15): past the hook budget the gate writes a HARD clock deny before the 10 s kill, in place of
+    // reads that could be killed with no deny written. At 8 s the ship read does not start.
+    seen.length = 0;
+    const late = decide(bash('git push fork feat', '/cc'), realDeps({ start: 0, now: () => 8000, spawn, exists: () => true }));
+    // decide drops the hard mark from its output; a deny that comes out with scope push while enforcePush is absent is a hard one.
+    expect(late.action === "deny" && late.scope === "push" && /time of the hook ran out/.test(late.reason)).toBe(true);
+    expect(seen).not.toContain('rev-parse feat^{tree}');
   });
   // Change that breaks it: route an app-folder git call through the base runner, or a CCv3 call through the app runner.
   it('a covered push runs its git through the app runner (deadline: unjudgeable, denied); a CCv3 push in the same Deps never does', () => {

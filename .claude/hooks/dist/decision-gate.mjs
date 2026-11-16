@@ -854,14 +854,40 @@ function holdoutIdsOf(ds, cfg) {
 var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 function countIdsIn(text, ids) {
   const s = String(text ?? "");
+  let runs = null;
+  let low = null;
   let n = 0;
   for (const id of ids) {
     if (typeof id !== "string" || id === "") continue;
-    if (/^\d+$/.test(id)) {
+    if (isSha(id)) {
+      runs ??= hexRuns(s);
+      const want = id.toLowerCase();
+      if (runs.some((r) => r.length > 40 ? r.includes(want) : want.startsWith(r) || r.startsWith(want))) n += 1;
+    } else if (/^\d+$/.test(id)) {
       if (digitHit(s, id)) n += 1;
-    } else if (tokenHit(s, id)) n += 1;
+    } else if (tokenHit(low ??= s.toLowerCase(), id)) n += 1;
   }
   return n;
+}
+var isSha = (id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id);
+function hexRuns(s) {
+  return [...s.matchAll(/(?<![0-9a-f])[0-9a-f]{7,}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
+}
+function checkHoldoutShape(ds, cfg) {
+  const bad = () => {
+    throw new Error("the holdout dataset or its config has the wrong shape");
+  };
+  const posInt = (v) => Number.isInteger(v) && v > 0;
+  if (ds === null || typeof ds !== "object" || Array.isArray(ds)) bad();
+  if (!Array.isArray(ds.prs) || ds.prs.length === 0 || !Array.isArray(ds.findings) || ds.findings.length === 0) bad();
+  if (!ds.prs.every((p) => p !== null && typeof p === "object" && posInt(p.pr))) bad();
+  if (!ds.findings.every((f) => f !== null && typeof f === "object" && posInt(f.pr))) bad();
+  const absent = (v) => v === void 0 || v === null;
+  if (!ds.findings.every((f) => absent(f.comment_id) || posInt(f.comment_id) || typeof f.comment_id === "string" && f.comment_id !== "")) bad();
+  if (!ds.findings.every((f) => absent(f.round) || typeof f.round === "string" || Number.isInteger(f.round))) bad();
+  if (!ds.findings.some((f) => posInt(f.comment_id) || typeof f.comment_id === "string" && /^\d+$/.test(f.comment_id))) bad();
+  if (cfg !== null && cfg !== void 0 && (typeof cfg !== "object" || Array.isArray(cfg))) bad();
+  for (const k of ["reserve", "holdoutExclude"]) if (cfg?.[k] !== void 0 && !Array.isArray(cfg[k])) bad();
 }
 function digitHit(s, id) {
   const long = id.length >= 7;
@@ -876,8 +902,7 @@ function digitHit(s, id) {
     if (long || CONTEXT.test(s.slice(Math.max(0, at2 - 8), at2))) return true;
   }
 }
-function tokenHit(s, id) {
-  const low = s.toLowerCase();
+function tokenHit(low, id) {
   const want = id.toLowerCase();
   const word = /[0-9a-f:]/;
   let from = 0;
@@ -901,6 +926,7 @@ function loadHoldoutIds(mainRoot) {
   try {
     const ds = JSON.parse(readFileSync4(join5(mainRoot, DATASET_REL), "utf8"));
     const cfg = JSON.parse(readFileSync4(join5(mainRoot, EVAL_CONFIG_REL), "utf8"));
+    checkHoldoutShape(ds, cfg);
     ids = holdoutIdsOf(ds, cfg);
   } catch {
     throw new Error("the holdout id list could not be read");
@@ -3019,18 +3045,40 @@ function intentDeny(p, subagent, fallback) {
   return fallback;
 }
 var SCAN_MAX_FILES = 2e3;
-var SCAN_MAX_BYTES = 15e5;
+var SCAN_MAX_COMMITS = 200;
+var SCAN_MAX_BYTES = 8e6;
+var SCAN_READ_MS = 6e3;
+var SCAN_RESERVE_MS = 1500;
+var SCAN_MIN_READ_MS = 300;
+var COMMIT_MARK = "c5";
+var FORK_MAIN = "refs/remotes/fork/main";
+var SPLIT_WAY_OUT = "Every later push of this branch reads the same commits (the range is fork/main..head). Ways out: a new branch from fork/main that does not carry those commits, or a history rewrite with Dave's yes.";
+var ScanClockError = class extends Error {
+};
+function budgetedDeps(deps) {
+  if (!deps.scanLeft) return deps;
+  const left = () => deps.scanLeft() - SCAN_RESERVE_MS;
+  return {
+    ...deps,
+    git: (cwd, args, opts) => {
+      const ms = left();
+      if (ms < SCAN_MIN_READ_MS) throw new ScanClockError("budget");
+      return deps.git(cwd, args, { ...opts, timeout: Math.min(opts?.timeout ?? GIT_TIMEOUT_MS, ms) });
+    }
+  };
+}
 function scanHoldout(p, deps, dir, branch, chained, alone) {
   if (!deps.holdoutIds || !deps.answerKeyHits) return null;
   try {
-    return scanHoldoutRead(p, deps, dir, branch, chained, alone);
-  } catch {
+    return scanHoldoutRead(p, budgetedDeps(deps), dir, branch, chained, alone);
+  } catch (e) {
+    if (e instanceof ScanClockError || errCode(e) === "ETIMEDOUT") return clockDeny(branch);
     return hardOf(deny("holdout-scan-unavailable", `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, "push"));
   }
 }
 function chainedAnswerKeyPaths(deps, dir) {
   const reads = [
-    ["diff", "--name-only", "--no-renames", "-z", "fork/main...HEAD"],
+    ["diff", "--name-only", "--no-renames", "-z", `${FORK_MAIN}...HEAD`],
     ["diff", "--name-only", "--no-renames", "-z", "--cached"],
     ["diff", "--name-only", "--no-renames", "-z", "HEAD"],
     ["ls-files", "--others", "--exclude-standard", "-z"]
@@ -3053,6 +3101,78 @@ function sendsRe(p, deps, dir, branch) {
   return /^(?:HEAD|@)(?:$|[~^@])/.test(src) && currentBranch(deps, dir).startsWith("re/");
 }
 var RE_NOT_ALONE_WHY = "the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.";
+function namedTags(p, deps, dir) {
+  const out3 = /* @__PURE__ */ new Set();
+  for (const r of [p.src, p.branch]) {
+    if (typeof r !== "string" || r === "") continue;
+    if (r.startsWith("refs/tags/")) {
+      out3.add(r);
+      continue;
+    }
+    if (r.startsWith("refs/") || /^(?:HEAD|@)(?:$|[~^@])/.test(r)) continue;
+    if (r.startsWith("tags/")) {
+      out3.add(`refs/${r}`);
+      continue;
+    }
+    if (deps.git(dir, ["show-ref", "--verify", "--quiet", `refs/tags/${r}`]).status === 0) out3.add(`refs/tags/${r}`);
+  }
+  return [...out3];
+}
+function tagText(wide, sha, deps, dir, stop) {
+  const fmt = "--format=%(refname)%00%(objecttype)%00%(contents)%00";
+  const reads = [wide ? ["for-each-ref", fmt, "refs/tags"] : ["for-each-ref", fmt, "--merged", sha, "refs/tags"]];
+  let text = "";
+  for (const args of reads) {
+    let t;
+    try {
+      t = deps.git(dir, args, { timeout: GIT_TIMEOUT_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
+    } catch (e) {
+      if (errCode(e) === "ENOBUFS") return stop("holdout-scan-too-large", `its local tags are over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
+      throw e;
+    }
+    if (t.status !== 0) return stop("holdout-scan-unavailable", "the local tags could not be read. Run the push again from the repo.");
+    const f = t.stdout.split("\0");
+    for (let i = 0; i + 2 < f.length; i += 3) text += `${f[i].replace(/^\n+/, "")}
+${f[i + 1] === "tag" ? `${f[i + 2]}
+` : ""}`;
+  }
+  return text;
+}
+var clockDeny = (branch) => hardOf(deny("holdout-scan-unavailable", `this push of ${branch} cannot be checked: the time of the hook ran out before its reads could run. Run the push again when the machine is less busy.`, "push"));
+var SHIP_RESERVE_MS = 1500;
+var errCode = (e) => String(e?.code ?? "");
+function addedText(log) {
+  const out3 = [];
+  let inDiff = false;
+  let binary = false;
+  let width = 0;
+  for (const line of log.split("\n")) {
+    if (line.startsWith(COMMIT_MARK)) {
+      inDiff = false;
+      width = 0;
+      out3.push(line);
+      continue;
+    }
+    if (line.startsWith("diff --")) {
+      inDiff = true;
+      width = 0;
+      out3.push(line);
+      continue;
+    }
+    const at2 = inDiff ? /^(@{2,}) /.exec(line) : null;
+    if (at2) {
+      width = at2[1].length - 1;
+      continue;
+    }
+    if (inDiff && width === 0 && /^Binary files (?:.* )?differ$/.test(line)) binary = true;
+    if (width === 0) {
+      out3.push(line);
+      continue;
+    }
+    if (line.slice(0, width) === "+".repeat(width)) out3.push(line);
+  }
+  return { text: out3.join("\n"), binary };
+}
 function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
   const isRe = sendsRe(p, deps, dir, branch);
   const chained = chainedCommit || !alone;
@@ -3066,15 +3186,28 @@ function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
     if (hit === "hit") return stop("holdout-chained-answer-key", "the same command also changes an answer-key path, so the new content cannot be read yet. Commit first, push in a separate command.");
   }
   const ref = p.src ?? "HEAD";
-  if (ref.startsWith("-")) return null;
+  if (ref.startsWith("-")) return stop("holdout-scan-unavailable", "its source ref starts with a dash. Name the branch: git push <remote> <branch>.");
   const sha = deps.git(dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
-  if (sha.status !== 0 || sha.stdout.trim() === "") return isRe ? stop("holdout-scan-unavailable", "its head could not be read. Run the push again from the repo.") : null;
-  const range = `fork/main...${sha.stdout.trim()}`;
-  const names = deps.git(dir, ["diff", "--name-only", "--no-renames", "-z", range]);
-  if (names.status !== 0) return stop("holdout-scan-unavailable", "the changed files against fork/main could not be read. Run git fetch fork main in the repo, then push again.");
-  const files = names.stdout.split("\0").filter(Boolean);
-  if (!isRe && deps.answerKeyHits(files).length === 0) return null;
-  if (files.length > SCAN_MAX_FILES) return stop("holdout-scan-too-large", `it changes ${files.length} files, over the bound of ${SCAN_MAX_FILES}. Push in parts: fewer files in each push.`);
+  const named = namedTags(p, deps, dir);
+  const scanned = isRe || named.length > 0 || p.force;
+  const allTags = scanned && p.force ? ["--tags"] : [];
+  if (sha.status !== 0 || sha.stdout.trim() === "") return scanned ? stop("holdout-scan-unavailable", "its head could not be read. Run the push again from the repo.") : null;
+  const head = sha.stdout.trim();
+  const range = `${FORK_MAIN}..${head}`;
+  let names;
+  try {
+    names = deps.git(dir, ["log", "--cc", "--root", "--name-only", "--no-renames", "-z", "--format=%x01c5%x00%H", ...allTags, range], { timeout: GIT_TIMEOUT_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
+  } catch (e) {
+    if (errCode(e) === "ENOBUFS") return stop("holdout-scan-too-large", `its commit list is over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
+    throw e;
+  }
+  if (names.status !== 0) return stop("holdout-scan-unavailable", "the commits against fork/main could not be read. Run git fetch fork main in the repo, then push again.");
+  const tokens = names.stdout.split("\0").map((t) => t.replace(/^\n+/, ""));
+  const commits = tokens.filter((t) => t === COMMIT_MARK).length;
+  const files = tokens.filter((t, i) => t !== "" && t !== COMMIT_MARK && tokens[i - 1] !== COMMIT_MARK);
+  if (!scanned && deps.answerKeyHits(files).length === 0) return null;
+  if (commits > SCAN_MAX_COMMITS) return stop("holdout-scan-too-large", `it sends ${commits} commits, over the bound of ${SCAN_MAX_COMMITS}. ${SPLIT_WAY_OUT}`);
+  if (new Set(files).size > SCAN_MAX_FILES) return stop("holdout-scan-too-large", `it changes ${new Set(files).size} files, over the bound of ${SCAN_MAX_FILES}. ${SPLIT_WAY_OUT}`);
   let ids;
   try {
     ids = deps.holdoutIds(dir);
@@ -3082,16 +3215,27 @@ function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
     return stop("holdout-scan-unavailable", "the holdout id list could not be read, so the scan cannot run.");
   }
   if (!Array.isArray(ids) || ids.length === 0) return stop("holdout-scan-unavailable", "the holdout id list is empty, so the scan cannot run.");
-  const diff = deps.git(dir, ["diff", "--unified=0", "--no-color", "--no-renames", range]);
-  const log = deps.git(dir, ["log", "--format=%B", `fork/main..${sha.stdout.trim()}`]);
-  if (diff.status !== 0 || log.status !== 0) return stop("holdout-scan-unavailable", "the diff or the commit messages could not be read. Run the push again from the repo.");
-  if (diff.stdout.length > SCAN_MAX_BYTES) return stop("holdout-scan-too-large", `its diff is over ${SCAN_MAX_BYTES} bytes. Push in parts: fewer commits or files in each push.`);
-  const added = diff.stdout.split("\n").filter((l) => l.startsWith("+")).join("\n");
-  const count = countIdsIn2(`${added}
-${log.stdout}
-${files.join("\n")}`, ids);
+  let log;
+  try {
+    log = deps.git(dir, ["log", "-p", "--cc", "--root", "--encoding=UTF-8", "--text", "--no-textconv", "--no-ext-diff", "--unified=0", "--no-color", "--no-renames", "--format=%x01c5 %H%n%w(0,1,1)%B", ...allTags, range], { timeout: SCAN_READ_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
+  } catch (e) {
+    if (errCode(e) === "ENOBUFS") return stop("holdout-scan-too-large", `its commit content is over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
+    throw e;
+  }
+  if (log.status !== 0) return stop("holdout-scan-unavailable", "the commit content could not be read. Run the push again from the repo.");
+  const tags = tagText(p.force, head, deps, dir, stop);
+  if (typeof tags !== "string") return tags;
+  const added = addedText(log.stdout);
+  if (added.binary) return stop("holdout-scan-unavailable", `it sends a binary file that git prints only as "Binary files differ" (a merge resolution), so its content cannot be read. ${SPLIT_WAY_OUT}`);
+  const all = `${added.text}
+${files.join("\n")}
+${tags}
+${named.join("\n")}
+${p.branch ?? ""}`;
+  const count = countIdsIn2(`${all}
+${all.replace(/\0/g, "")}`, ids);
   if (count === 0) return null;
-  return hardOf(deny("holdout-id", `this push of ${branch} carries ${count} holdout id${count === 1 ? "" : "s"} in added lines, commit messages or file names. Remove them, or push without them. Which ones stays with the seat: this text names a count only.`, "push"));
+  return hardOf(deny("holdout-id", `this push of ${branch} carries ${count} holdout id${count === 1 ? "" : "s"} in the added lines, commit messages, file names or tag messages of what it sends (an older commit of the branch counts too). Remove them from every commit and local tag. ${SPLIT_WAY_OUT} Which ones stays with the seat: this text names a count only.`, "push"));
 }
 function judgePush(shape, deps, dir, ctx) {
   const { subagent, chained, alone } = ctx;
@@ -3130,6 +3274,7 @@ function judgePush(shape, deps, dir, ctx) {
   if (p.force) return d("push-unsafe", PUSH_UNSAFE_WHY);
   if (branch === "") return d("push-target-unresolved", pushUnresolvedWhy("the branch of this push cannot be named (detached HEAD?)"));
   if (branch === "main") return ALLOW;
+  if (deps.scanLeft && deps.scanLeft() < SHIP_RESERVE_MS) return clockDeny(branch);
   const texts = {
     notRef: (ref) => pushUnresolvedWhy(`${ref} is not a ref`),
     tree: (what) => `cannot read the tree of ${what} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`,
@@ -3364,13 +3509,13 @@ var hardAppDeny = (d) => d.hard === true || d.scope === "app-push" && d.tapPath 
 function perCall(deps) {
   const seen = /* @__PURE__ */ new Map();
   const mode = { app: false };
-  const git = (cwd, args) => {
+  const git = (cwd, args, opts) => {
     const run = mode.app && deps.appGit ? deps.appGit : deps.git;
-    const key = `${run === deps.git ? "" : "app\0"}${cwd}\0${args.join("\0")}`;
+    const key = `${run === deps.git ? "" : "app\0"}${cwd}\0${args.join("\0")}${opts ? `\0${JSON.stringify(opts)}` : ""}`;
     let hit = seen.get(key);
     if (!hit) {
       try {
-        hit = { ok: run(cwd, args) };
+        hit = { ok: opts ? run(cwd, args, opts) : run(cwd, args) };
       } catch (err) {
         hit = { err };
       }
@@ -3612,21 +3757,25 @@ function makeGit(opts = {}) {
   const now = opts.now ?? Date.now;
   const spawn = opts.spawn ?? ((_cmd, args, o) => spawnSync("git", args, o));
   const exists = opts.exists ?? existsSync2;
-  return (cwd, args) => {
-    const left = opts.deadline === void 0 ? GIT_TIMEOUT_MS : opts.deadline - now();
+  return (cwd, args, read = {}) => {
+    const own = read.timeout ?? GIT_TIMEOUT_MS;
+    const left = opts.deadline === void 0 ? own : opts.deadline - now();
     if (left <= 0) throw new GitDeadlineError(args);
     if (!exists(cwd)) throw new MissingCwdError(cwd);
-    const r = spawn("git", args, { cwd, encoding: "utf8", timeout: Math.min(GIT_TIMEOUT_MS, left), windowsHide: true });
+    const r = spawn("git", args, { cwd, encoding: "utf8", timeout: Math.min(own, left), windowsHide: true, ...read.maxBuffer ? { maxBuffer: read.maxBuffer } : {} });
     if (r.error) throw r.error;
     return { status: r.status ?? 1, stdout: r.stdout ?? "" };
   };
 }
 function realDeps(opts = {}) {
   const { start, ...run } = opts;
+  const t0 = start ?? Date.now();
+  const clock = run.now ?? Date.now;
   let registry = null;
   return {
     git: makeGit(run),
-    appGit: makeGit({ ...run, deadline: (start ?? Date.now()) + HOOK_BUDGET_MS }),
+    scanLeft: () => t0 + HOOK_BUDGET_MS - clock(),
+    appGit: makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS }),
     readFile: (p) => {
       try {
         return existsSync2(p) ? readFileSync6(p, "utf8") : null;
