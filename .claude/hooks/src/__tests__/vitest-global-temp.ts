@@ -7,8 +7,8 @@
  *             (TMPDIR is the one that counts on Linux CI), and keeps the old value in CCV3_REAL_TEMP.
  *             Workers start after globalSetup and inherit the env, and vitest-run-temp.test.ts proves it inside a worker.
  * teardown(): removes only the path setup() recorded. Never a delete by name, age or prefix, never a scan of the real temp dir,
- *             and never through a link: every junction or symlink under the run folder is unlinked first, and a link that
- *             cannot be unlinked stops the remove.
+ *             and never through a link: every junction or symlink under the run folder is unlinked first. A link that
+ *             cannot be unlinked, or a folder that cannot be read (only ENOENT is fine), stops the remove: one folder stays.
  * A crashed run (kill -9, power loss) leaves that one folder with its owner.json; the cleaner of card machine-hygiene-tool
  * reaps it by owner pid, not this file.
  */
@@ -54,13 +54,23 @@ function unlinkOne(path: string): boolean {
   }
 }
 
-/** Unlink every junction or symlink under `dir`, without following one. False when a link could not be removed. */
-function unlinkLinks(dir: string): boolean {
+/** The one read the tree walk makes. A test passes its own to simulate a folder that cannot be read. */
+export interface TreeIo {
+  readdir: (dir: string) => Dirent[];
+}
+
+const realIo: TreeIo = { readdir: (dir) => readdirSync(dir, { withFileTypes: true }) };
+
+/**
+ * Unlink every junction or symlink under `dir`, without following one. False when a link could not be removed
+ * or a folder could not be read: an unreadable folder can hold a link, so only ENOENT (already gone) counts as fine.
+ */
+function unlinkLinks(dir: string, io: TreeIo): boolean {
   let entries: Dirent[];
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return true;
+    entries = io.readdir(dir);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT';
   }
   let ok = true;
   for (const entry of entries) {
@@ -68,15 +78,15 @@ function unlinkLinks(dir: string): boolean {
     if (entry.isSymbolicLink() || isLink(path)) {
       if (!unlinkOne(path)) ok = false;
     } else if (entry.isDirectory()) {
-      if (!unlinkLinks(path)) ok = false;
+      if (!unlinkLinks(path, io)) ok = false;
     }
   }
   return ok;
 }
 
-/** Remove a folder and everything in it, never through a link. False (and nothing removed) when a link would not unlink. */
-export function removeTree(dir: string): boolean {
-  if (!unlinkLinks(dir)) return false;
+/** Remove a folder and everything in it, never through a link. False (and nothing removed) when a link would not unlink or a folder could not be read. */
+export function removeTree(dir: string, io: TreeIo = realIo): boolean {
+  if (!unlinkLinks(dir, io)) return false;
   try {
     rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
   } catch {

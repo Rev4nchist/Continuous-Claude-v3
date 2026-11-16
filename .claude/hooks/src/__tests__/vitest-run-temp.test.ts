@@ -79,6 +79,34 @@ describe('teardown never deletes through a link (condition 1)', () => {
   });
 });
 
+describe('teardown fails closed when a folder cannot be read', () => {
+  /** A read that throws `code` for the folder named `locked` and reads every other folder for real. */
+  const readFailing = (code: string) => ({
+    readdir: (dir: string) => {
+      if (basename(dir) === 'locked') throw Object.assign(new Error(code), { code });
+      return readdirSync(dir, { withFileTypes: true });
+    },
+  });
+
+  it('an unreadable folder (EACCES) may hold a link, so nothing is removed and the run folder stays', () => {
+    const run = makeRunRoot(realTempDir('unreadable'));
+    mkdirSync(join(run, 'locked'));
+    writeFileSync(join(run, 'locked', 'f.txt'), 'x');
+    writeFileSync(join(run, 'own.txt'), 'own');
+    expect(removeTree(run, readFailing('EACCES'))).toBe(false);
+    expect(existsSync(join(run, 'locked', 'f.txt'))).toBe(true);
+    expect(existsSync(join(run, 'own.txt'))).toBe(true);
+    expect(existsSync(join(run, 'owner.json'))).toBe(true);
+  });
+
+  it('a folder that is already gone (ENOENT) is fine and the remove goes on', () => {
+    const run = makeRunRoot(realTempDir('gone'));
+    mkdirSync(join(run, 'locked'));
+    expect(removeTree(run, readFailing('ENOENT'))).toBe(true);
+    expect(existsSync(run)).toBe(false);
+  });
+});
+
 describe('teardown removes only its own recorded folder', () => {
   it('removeRunRoot refuses a folder that is not a run folder of this base', () => {
     const base = realTempDir('refuse');
