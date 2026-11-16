@@ -30,6 +30,7 @@ import { GOLD_DIR, GoldError, loadCleanControls, loadGold, SEVERITIES, SOURCES, 
 import { exportPairs, ingestLabels } from './labels.mjs';
 import { LINKTYPE_PATH, loadLinkTypes } from './linktype.mjs';
 import { isMajor } from './match.mjs';
+import { readEngineRecords } from './mine-szz.mjs';
 import { makeGit, replayRun as realReplayRun } from './replay.mjs';
 import { archiveFile, rescoreArchive, treeCheck } from './rescore.mjs';
 import { evaluateRuns, scorecard } from './score.mjs';
@@ -281,18 +282,53 @@ function goldD(records) {
   return labeled.length === 0 ? null : { value: fixed / labeled.length, fixed, withDisposition: labeled.length };
 }
 
+/** The default folder of the engine records (local-review.mjs writes them; mine-szz.mjs readEngineRecords reads them). */
+const ENGINE_RECORDS_DIR = path.join(os.homedir(), '.claude', 'state', 'local-review');
+
+/**
+ * The number of gold rows whose pull request has an engine record (the producer rule of map.md:216 matches by PR), or null when the records
+ * cannot be read. A missing folder is a failed read: "no records" must come from a folder that was read. Counts only.
+ */
+export function engineTargetCount(rows, read) {
+  let records;
+  try { records = read(); } catch { return null; }
+  if (!Array.isArray(records)) return null;
+  const prs = new Set(records.map((r) => r?.pr).filter(Number.isInteger));
+  // The records are of this repository only. A row with target.repo (Gold C) is a PR of another repository: its number can equal one of
+  // ours by chance. A range target has no PR. Known limit: the match is by PR number, not by head (the fail-closed side).
+  const ours = (r) => !r.target?.repo && Number.isInteger(r.target?.pr);
+  return rows.filter((r) => ours(r) && prs.has(r.target.pr)).length;
+}
+
+const realEngineRecords = (dir) => () => {
+  if (!existsSync(dir)) throw new Error('no records folder');
+  return readEngineRecords(dir);
+};
+
+/**
+ * The regression row (map, re-gold-assemble Done when, Dave 2026-11-15). A non-empty suite passes. An empty suite fails when a gold target
+ * has an engine record, and is "not yet possible" (state not-yet, no fail) while none has one. A failed records read always fails.
+ */
+function regressionBar(c) {
+  const name = 'regression suite non-empty';
+  const n = c.bySuite.regression;
+  if (c.engineTargets === null) return { name, pass: false, detail: 'engine records cannot be read' };
+  if (n === 0 && c.engineTargets === 0) return { name, pass: true, state: 'not-yet', detail: 'not yet possible: 0 gold targets have an engine record' };
+  return { name, pass: n > 0, detail: `${n}; gold targets with an engine record ${c.engineTargets}` };
+}
+
 function goldBars(c) {
   const abc = c.majors.bySource.A + c.majors.bySource.B + c.majors.bySource.C;
   return [
     { name: 'majors across A/B/C >= 50', pass: abc >= 50, detail: String(abc) },
     { name: 'every Gold B row has a breaking test', pass: c.goldB.rows > 0 && c.goldB.missingBreakingTest === 0, detail: `${c.goldB.withBreakingTest} of ${c.goldB.rows}` },
-    { name: 'regression suite non-empty', pass: c.bySuite.regression > 0, detail: String(c.bySuite.regression) },
+    regressionBar(c),
     { name: 'capability suite non-empty', pass: c.bySuite.capability > 0, detail: String(c.bySuite.capability) },
     { name: 'clean controls >= 30', pass: c.cleanControls >= 30, detail: String(c.cleanControls) },
   ];
 }
 
-function goldCounts(rows, controls, records) {
+function goldCounts(rows, controls, records, engineTargets) {
   const majors = rows.filter((r) => isMajor(r.severity));
   const goldB = rows.filter((r) => r.source === 'B');
   const tested = goldB.filter(hasBreakingTest).length;
@@ -306,6 +342,7 @@ function goldCounts(rows, controls, records) {
     goldB: { rows: goldB.length, withBreakingTest: tested, missingBreakingTest: goldB.length - tested },
     cleanControls: controls.length,
     goldD: goldD(records),
+    engineTargets,
   };
   return { ...c, bars: goldBars(c) };
 }
@@ -322,7 +359,7 @@ function goldText(c) {
     `gold B breaking test: ${c.goldB.withBreakingTest} with, ${c.goldB.missingBreakingTest} missing`,
     `clean controls ${c.cleanControls}`,
     d ? `gold D resolved by merge: ${d.value.toFixed(2)} (${d.fixed}/${d.withDisposition}; reported apart, no bar reads it)` : 'gold D: no disposition records',
-    ...c.bars.map((b) => `${b.pass ? 'PASS' : 'FAIL'} ${b.name} (${b.detail})`),
+    ...c.bars.map((b) => `${b.state === 'not-yet' ? 'NOT YET' : b.pass ? 'PASS' : 'FAIL'} ${b.name} (${b.detail})`),
   ].join('\n');
 }
 
@@ -339,15 +376,21 @@ function readDispositions(file) {
 }
 
 function goldCmd(argv, io) {
-  const usage = 'gold: use report [--json] [--gold-dir D] [--dispositions F]';
+  const usage = 'gold: use report [--json] [--gold-dir D] [--dispositions F] [--records-dir D]';
   if (argv[1] !== 'report') { io.stderr(usage); return 2; }
   const dir = flagValue(argv, '--gold-dir');
   const disp = flagValue(argv, '--dispositions');
-  if (dir.error || disp.error) { io.stderr(`gold: ${dir.error ?? disp.error}`); return 2; }
+  const recDir = flagValue(argv, '--records-dir');
+  const bad = dir.error ?? disp.error ?? recDir.error;
+  if (bad) { io.stderr(`gold: ${bad}`); return 2; }
   const records = disp.value === undefined ? io.dispositions : readDispositions(disp.value);
   if (!records && disp.value !== undefined) { io.stderr('gold: --dispositions needs a file that holds a JSON array'); return 1; }
   const goldFolder = dir.value ?? GOLD_DIR;
-  const c = goldCounts(loadGold(goldFolder).rows, loadCleanControls(goldFolder), records);
+  const rows = loadGold(goldFolder).rows;
+  const controls = loadCleanControls(goldFolder);
+  // --records-dir wins over io.readEngineRecords (tests), which wins over the real folder. Read after the gold load: a gold error stays exit 1.
+  const read = recDir.value !== undefined ? realEngineRecords(recDir.value) : io.readEngineRecords ?? realEngineRecords(ENGINE_RECORDS_DIR);
+  const c = goldCounts(rows, controls, records, engineTargetCount(rows, read));
   io.stdout(argv.includes('--json') ? JSON.stringify(c, null, 1) : goldText(c));
   return c.bars.every((b) => b.pass) ? 0 : 3;
 }

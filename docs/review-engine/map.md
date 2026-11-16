@@ -1117,6 +1117,8 @@ Scope (11-05 content, restated) for the cells chosen at DP1.6 (Grok-only: v1 and
 - The Claude cell (2x2 only) uses a judge from another family.
 - If the bar passes, run 1 week of shadow on the winner, then flip PROMPT_VERSION in prompt.mjs (a one-line PR) and re-run cli freeze.
 
+Regression bar (moved from `re-gold-assemble`, Dave 2026-11-15): after the first screen the regression suite holds 1 row or more, by the producer rule of the gold-row contract. A count of 0 is a finding for the seat, not a pass.
+
 Changes: the v1 arm runs on the 15 or more clean controls of the cut (DECIDED, Dave, 2026-11-10; before: 30 or more), and that rate is the clean baseline. Print per-class recall (same-file, cross-file, in-file) for the DP2.4 trigger. A kill keeps v1 as the frozen version. A keep flips PROMPT_VERSION and re-runs cli freeze. The fresh-holdout scoring moved to `re-p4-winner-evidence`.
 
 Changes from the premortem:
@@ -1417,7 +1419,7 @@ Why: The self-improving loop judges against fixed rubrics. Waits for the tree ex
 
 Scope: Wire the mine, seed, dispositions and gold subcommands into cli.mjs. Load A/B/C and the clean controls through gold.mjs. Adjudicate the CodeRabbit-derived set with an agent and keep only real introduced defects (gold/adjudicated-cr.json, model labels). Add a Gold D "resolved by merge" precision proxy as a report row. Add two-rater model linkType labels for the new gold Majors. Add line data to the two dataset rows that match on file only.
 
-Done when: P3 pass bar: the cli gold report shows 50+ gold Majors across A/B/C. Every Gold B row has a recorded breaking test. The regression and capability suites are both non-empty. There are 30+ clean controls. Artifact: .claude/cache/e2e/<date>-re-gold-assemble.json.
+Done when: P3 pass bar: the cli gold report shows 50+ gold Majors across A/B/C. Every Gold B row has a recorded breaking test. The capability suite is non-empty. The regression suite may be empty in this lane: no gold target has an engine record before `re-p4-ab` (Dave, 2026-11-15). The gold report prints the regression row with the count of gold targets that have an engine record, and fails on an empty suite only when that count is above 0. There are 30+ clean controls. Artifact: .claude/cache/e2e/<date>-re-gold-assemble.json.
 
 Why: P3 must reach 50 gold Majors before any P4 keep-or-kill call. Second holder of cli.mjs, before re-p4-harness.
 

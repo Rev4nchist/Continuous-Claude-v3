@@ -5,7 +5,7 @@
 //  replay needs --pr and --round (or --all-majors) -> missing args start a run
 //  labels export over the week cap exits 2      -> main maps the refusal to 0
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -447,9 +447,10 @@ function goldDir(rows, controls = 30) {
   writeFileSync(path.join(dir, 'clean-controls.json'), JSON.stringify(list));
   return dir;
 }
-async function report(rows, { controls = 30, extra = [], io = {} } = {}) {
+/** records: the engine records the report reads (io.readEngineRecords); the default is none, so no test reads the real records folder. */
+async function report(rows, { controls = 30, extra = [], io = {}, records = [] } = {}) {
   const sink = quiet();
-  const code = await main(['gold', 'report', '--gold-dir', goldDir(rows, controls), ...extra], { ...sink, cfg: {}, ...io });
+  const code = await main(['gold', 'report', '--gold-dir', goldDir(rows, controls), ...extra], { ...sink, cfg: {}, readEngineRecords: () => records, ...io });
   return { code, text: sink.out.join('\n') };
 }
 
@@ -501,13 +502,76 @@ const edges = {
 for (const [key, make] of Object.entries(edges)) {
   test(`gold report exits 3 when only "${BARS[key]}" is missed at its edge (breaks if the bar is off by one, reads the wrong field, or fails another line)`, async () => {
     const { rows, controls } = make();
-    const { code, text } = await report(rows, { controls });
+    // One gold target has an engine record, so an empty regression suite is a real miss (map, re-gold-assemble Done when).
+    const { code, text } = await report(rows, { controls, records: [{ pr: 900001, findings: [] }] });
     assert.equal(code, 3);
     const fails = text.split('\n').filter((l) => l.startsWith('FAIL'));
     assert.equal(fails.length, 1);
     assert.ok(fails[0].includes(BARS[key]), fails[0]);
   });
 }
+
+test('an empty regression suite with 0 gold targets that have an engine record prints NOT YET and does not fail the report (breaks if it still fails, or prints PASS)', async () => {
+  const rows = baseRows().map((r) => ({ ...r, suite: 'capability' }));
+  const { code, text } = await report(rows, { records: [{ pr: 123, findings: [] }] });
+  assert.equal(code, 0);
+  assert.ok(text.split('\n').includes('NOT YET regression suite non-empty (not yet possible: 0 gold targets have an engine record)'), text);
+  assert.doesNotMatch(text, /FAIL/);
+  const json = JSON.parse((await report(rows, { extra: ['--json'] })).text);
+  const bar = json.bars.find((b) => b.name === BARS.regression);
+  assert.deepEqual({ pass: bar.pass, state: bar.state, engineTargets: json.engineTargets }, { pass: true, state: 'not-yet', engineTargets: 0 });
+});
+
+test('the regression row prints the count of gold targets with an engine record, matched by pull request, and passes on a non-empty suite (breaks if the count reads the wrong field or a record of another PR counts)', async () => {
+  const records = [{ pr: 900001, findings: [] }, { pr: 900002, findings: [] }, { pr: 900002, findings: [] }, { pr: 7, findings: [] }];
+  const { code, text } = await report(baseRows(), { records });
+  assert.equal(code, 0);
+  assert.match(text, /PASS regression suite non-empty \(21; gold targets with an engine record 2\)/);
+});
+
+test('a Gold C row of another repository never counts as a target with an engine record, even when its number equals a record number; an A or CR row with that number counts (breaks if the match ignores target.repo)', async () => {
+  const rows = baseRows().map((r) => ({ ...r, suite: 'capability' }));
+  const cRow = rows.find((r) => r.source === 'C');
+  const onlyC = await report(rows, { records: [{ pr: cRow.target.pr, findings: [] }] });
+  assert.equal(onlyC.code, 0, 'the C number matches a record of this repository by chance: still 0 targets');
+  assert.match(onlyC.text, /NOT YET regression suite non-empty \(not yet possible: 0 gold targets have an engine record\)/);
+  const crRow = rows.find((r) => r.source === 'CR');
+  const aRow = rows.find((r) => r.source === 'A');
+  for (const t of [crRow, aRow]) {
+    const hit = await report(rows, { records: [{ pr: t.target.pr, findings: [] }] });
+    assert.equal(hit.code, 3, `${t.source} row counts`);
+    assert.match(hit.text, /FAIL regression suite non-empty \(0; gold targets with an engine record 1\)/);
+  }
+  const range = rows.map((r) => (r === aRow ? { ...r, target: { range: `${'c'.repeat(40)}..${'d'.repeat(40)}` } } : r));
+  assert.equal((await report(range, { records: [{ pr: aRow.target.pr, findings: [] }] })).code, 0, 'a range target has no pull request');
+});
+
+test('a failed read of the engine records is a FAIL of the regression row, never NOT YET (breaks if a read error counts as 0 targets)', async () => {
+  const rows = baseRows().map((r) => ({ ...r, suite: 'capability' }));
+  const { code, text } = await report(rows, { io: { readEngineRecords: () => { throw new Error('EACCES PR 900001'); } } });
+  assert.equal(code, 3);
+  assert.ok(text.split('\n').includes('FAIL regression suite non-empty (engine records cannot be read)'), text);
+  assert.doesNotMatch(text, /NOT YET|EACCES|900001/);
+  const full = await report(baseRows(), { io: { readEngineRecords: () => { throw new Error('x'); } } });
+  assert.equal(full.code, 3, 'a failed read fails even with a non-empty suite: the count is unknown');
+});
+
+test('gold report reads the engine records of --records-dir; a missing folder is a failed read (breaks if the flag is ignored or a missing folder counts as no records)', async () => {
+  const rows = baseRows().map((r) => ({ ...r, suite: 'capability' }));
+  const sink = quiet();
+  const recDir = tmp();
+  const head = path.join(recDir, 'fx-branch', 'a'.repeat(40));
+  mkdirSync(head, { recursive: true });
+  writeFileSync(path.join(head, 'run.json'), JSON.stringify({ pr: 900001, head: 'a'.repeat(40), findings: [] }));
+  const code = await main(['gold', 'report', '--gold-dir', goldDir(rows), '--records-dir', recDir], { ...sink, cfg: {} });
+  assert.equal(code, 3, 'one target has a record and the suite is empty');
+  assert.match(sink.out.join('\n'), /FAIL regression suite non-empty \(0; gold targets with an engine record 1\)/);
+  const missing = quiet();
+  assert.equal(await main(['gold', 'report', '--gold-dir', goldDir(rows), '--records-dir', path.join(recDir, 'nope')], { ...missing, cfg: {} }), 3);
+  assert.match(missing.out.join('\n'), /FAIL regression suite non-empty \(engine records cannot be read\)/);
+  const empty = quiet();
+  assert.equal(await main(['gold', 'report', '--gold-dir', goldDir(rows), '--records-dir'], { ...empty, cfg: {} }), 2, '--records-dir needs a value');
+});
 
 test('gold report counts a Gold B row as tested only when provenance.test and provenance.failureSha256 are both present (breaks if one field is enough)', async () => {
   const rows = baseRows();
@@ -647,7 +711,7 @@ test('mine, seed, dispositions, gold and adjudicate-cr run before the config is 
   for (const name of ['mine', 'dispositions', 'adjudicate-cr']) assert.equal(await main([name, '--x'], io), 0);
   assert.equal(calls.length, 4);
   const sink = quiet();
-  assert.equal(await main(['gold', 'report', '--gold-dir', goldDir(baseRows())], { ...sink, loadConfig: io.loadConfig }), 0);
+  assert.equal(await main(['gold', 'report', '--gold-dir', goldDir(baseRows())], { ...sink, loadConfig: io.loadConfig, readEngineRecords: () => [] }), 0);
   assert.match(sink.out.join('\n'), /gold rows 51/);
   assert.equal(io.out.join('\n').includes('9001'), false);
 });
