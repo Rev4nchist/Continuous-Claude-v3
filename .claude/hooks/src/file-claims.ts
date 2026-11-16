@@ -21,9 +21,10 @@
 import { readFileSync } from 'fs';
 import { basename, isAbsolute, relative, resolve as resolvePath } from 'path';
 import { resolveFileClaim, listBlockingClaims } from './shared/db-utils-pg.js';
+import { isMemoryIndexPath } from './shared/leases.js';
 import { holderHoldsOpenLane } from './shared/holder-lane.js';
 import { resolveSessionId, canonicalProject } from './shared/session-id.js';
-import { resolveClaimKey, resolveRepoContext, listWorktreeTops } from './shared/claim-target.js';
+import { realFilePath, resolveClaimKey, resolveRepoContext, listWorktreeTops } from './shared/claim-target.js';
 import { directWritePaths, classifyShellText, type HeldClaim } from './shared/write-targets.js';
 import { readShellCommand } from './shared/shell-tools.js';
 import { isEngineHost } from './shared/engine-host.js';
@@ -178,6 +179,23 @@ async function holderLines(holder: string, filePath: string, listForm: boolean):
 
 const FOLDS_CASE = process.platform === 'win32' || process.platform === 'darwin';
 
+/**
+ * The canonical real path of a path a tool names (card coord-file-claims-memory-index): the realFilePath step
+ * of shared/claim-target.ts, the same one resolveClaimKey uses, with forward slashes. Every spelling of one file
+ * gives one string. Empty string for a network path or any error: the caller then claims as before.
+ */
+function canonicalRealPath(rawPath: string, cwd?: string): string {
+  try {
+    return (realFilePath(rawPath, cwd) ?? '').replace(/\\/g, '/');
+  } catch {
+    return '';
+  }
+}
+
+/** A held row for a memory index (a session that started before this change wrote it): it blocks nobody. */
+const isIndexRow = (c: { project: string; filePath: string }): boolean =>
+  isMemoryIndexPath(`${c.project}/${c.filePath}`, FOLDS_CASE) || isMemoryIndexPath(c.filePath, FOLDS_CASE);
+
 /** The spellings of one held file that shell text can use. */
 function formsOf(top: string, cwd: string, filePath: string): string[] {
   const full = `${top}/${filePath}`;
@@ -216,7 +234,9 @@ async function mainShell(input: PreToolUseInput, cmd: ReturnType<typeof readShel
   const ctx = resolveRepoContext(cwd);
   const sessionId = resolveSessionId(input.session_id);
   // Database down: continue with NO text (a warning on every shell call would bury the banner).
-  const { claims, degraded } = await listBlockingClaims(sessionId, STALE_THRESHOLD_MS);
+  const { claims: allClaims, degraded } = await listBlockingClaims(sessionId, STALE_THRESHOLD_MS);
+  // An old row for a memory index (card coord-file-claims-memory-index) blocks no shell write.
+  const claims = allClaims.filter((c) => !isIndexRow(c));
   if (degraded || claims.length === 0) {
     console.log(JSON.stringify(cont));
     return;
@@ -270,6 +290,12 @@ async function mainShell(input: PreToolUseInput, cmd: ReturnType<typeof readShel
 
 /** One claim for one path: the Edit and Write logic, unchanged. */
 async function claimOne(input: PreToolUseInput, filePath: string, sessionId: string): Promise<{ output: any; denied: boolean }> {
+  // The per-project memory index is one append point every session shares: it is never claimed, so
+  // nothing holds it (card coord-file-claims-memory-index). The canonical real path decides, not the spelling.
+  if (isMemoryIndexPath(canonicalRealPath(filePath, input.cwd), FOLDS_CASE)) {
+    return { output: { result: 'continue' }, denied: false };
+  }
+
   // Claim under the SAME identity heartbeat registers, so isSessionActive() can
   // actually find the owner alive. (sessionId is resolved once by the caller.)
 
