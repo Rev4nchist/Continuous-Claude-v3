@@ -123,7 +123,8 @@ describe('the index is never held (Edit and Write)', () => {
     expect(seen.claimCalls).toEqual([]);
   });
 
-  it('2a. a backslash spelling is the index too', async () => {
+  // On Linux and macOS a backslash is a file name character, not a separator: a backslash spelling is another path there.
+  it.skipIf(process.platform !== 'win32')('2a. a backslash spelling is the index too (win32)', async () => {
     expect(denied(await run('Edit', { file_path: back(indexFile) }))).toBe(false);
     expect(seen.claimCalls).toEqual([]);
   });
@@ -174,7 +175,8 @@ describe('one real-path step for the key and for the index test (seat item 2: th
     const top = resolveRepoContext(claudeDir)!.top;
     const spellings: Array<[string, string]> = [
       [slash(indexFile), claudeDir],
-      [back(indexFile), claudeDir],
+      // The backslash spelling is a path only on win32 (on POSIX it is one odd file name).
+      ...(process.platform === 'win32' ? ([[back(indexFile), claudeDir]] as Array<[string, string]>) : []),
       ['p1/memory/MEMORY.md', join(claudeDir, 'projects')],
       [`${slash(claudeDir)}/src/../projects/p1/memory/MEMORY.md`, claudeDir],
       [`${slash(link)}/MEMORY.md`, root],
