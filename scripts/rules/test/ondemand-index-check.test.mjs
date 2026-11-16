@@ -116,6 +116,65 @@ test('a name in a loaded rule that is itself over the hook cap does not count', 
   assert.match(problems.join('\n'), /full\.md.*reference only.*no loaded rule file.*names it/);
 });
 
+test('a path that only starts like the name (full.md.bak) is no link', () => {
+  const problems = refCheck({ texts: { 'core.md': 'see C:/x/.claude/rules-ondemand/full.md.bak', [REF]: 'long' } });
+  assert.match(problems.join('\n'), /full\.md.*reference only.*names it/);
+});
+
+test('a link written with backslashes counts', () => {
+  assert.deepEqual(refCheck({ texts: { 'core.md': 'see C:\\x\\.claude\\rules-ondemand\\full.md', [REF]: 'long' } }), []);
+});
+
+test('a ## section of the reference file with no line in the loaded namer is reported', () => {
+  const problems = refCheck({ texts: { 'core.md': 'rules-ondemand/full.md\n- Alpha: when to read', [REF]: '## Alpha\n\n## Beta (2026-11-16)\n' } });
+  assert.match(problems.join('\n'), /full\.md.*no line for its section.*Beta/);
+  assert.doesNotMatch(problems.join('\n'), /Alpha/);
+});
+
+test('a heading with a date or an aside is matched by its plain name', () => {
+  assert.deepEqual(refCheck({ texts: { 'core.md': 'rules-ondemand/full.md\n- Paid reviews', [REF]: '## Paid reviews (Dave, 2026-10-30)\n## Thread — verify\n' } }).filter((p) => /Paid/.test(p)), []);
+});
+
+// The router joins the rules that fire on one call. Two rules that share an identical trigger pattern fire together.
+const group = (aChars, bChars, over = {}) => checkIndex({
+  manifest: { rules: [{ ...rule('a', ['a.md']), command: ['^x\\b'] }, { ...rule('b', ['b.md']), command: ['^x\\b'], ...over }] },
+  indexText: index(['| `a.md` | x | inject |', `| \`b.md\` | x | ${over.mode === 'deny-first' ? 'block' : 'inject'} |`]),
+  files: ['a.md', 'b.md'],
+  sizes: { 'a.md': aChars, 'b.md': bChars },
+  knownCofire: [],
+});
+
+test('two inject rules that share a trigger and join over the hook cap are reported', () => {
+  assert.match(group(4000, 6000).join('\n'), /a and b fire on one call and join to 11002 characters/);
+});
+
+test('two inject rules that share a trigger and join under the hook cap are not reported', () => {
+  assert.deepEqual(group(3000, 5000), []);
+});
+
+test('a deny-first rule in the group makes the output a deny reason, which is not cut', () => {
+  assert.deepEqual(group(4000, 6000, { mode: 'deny-first', subagent: 'block' }), []);
+});
+
+test('rules with different trigger patterns are not a group', () => {
+  const problems = checkIndex({
+    manifest: { rules: [{ ...rule('a', ['a.md']), command: ['^x\\b'] }, { ...rule('b', ['b.md']), command: ['^y\\b'] }] },
+    indexText: index(['| `a.md` | x | inject |', '| `b.md` | x | inject |']),
+    files: ['a.md', 'b.md'], sizes: { 'a.md': 6000, 'b.md': 6000 },
+  });
+  assert.deepEqual(problems, []);
+});
+
+test('a known over-cap group is not reported while it is over, and is reported when it fits', () => {
+  const run = (a, b) => checkIndex({
+    manifest: { rules: [{ ...rule('a', ['a.md']), command: ['^x'] }, { ...rule('b', ['b.md']), command: ['^x'] }] },
+    indexText: index(['| `a.md` | x | inject |', '| `b.md` | x | inject |']),
+    files: ['a.md', 'b.md'], sizes: { 'a.md': a, 'b.md': b }, knownCofire: ['a+b'],
+  });
+  assert.deepEqual(run(4000, 6000), []);
+  assert.match(run(1000, 1000).join('\n'), /a\+b: listed in KNOWN_COFIRE_OVER.*not over the cap now/);
+});
+
 test('a rule file that is not on the reference-only list and that nobody loads is still reported', () => {
   assert.match(refCheck({ files: ['core.md', REF, 'stray.md'] }).join('\n'), /stray\.md.*no manifest entry loads it/);
 });

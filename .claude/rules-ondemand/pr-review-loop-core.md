@@ -6,9 +6,9 @@ Read the matching section of the full rule with the Read tool BEFORE the open, t
 
 ## Decisions this page settles
 
-- The review pick is Dave's tap, asked through `pr_checkpoint {pr, body}`. Never ask it yourself. Never add a `review:` label by hand.
-- Below risk band HIGH the recommended pick is none (no bot review). At HIGH and CRITICAL only his tap records it. Do not ask him "which review?" in chat.
-- Never post `@coderabbitai review` or any paid review without his tap on the Paid round question.
+- The review pick is Dave's tap. Call `pr_checkpoint {pr, body}`. It returns his question: ask it with AskUserQuestion word for word, then call `pr_checkpoint` again with the same arguments. Never write your own review question. Never add a `review:` label by hand.
+- Below risk band HIGH the recommended pick is none (no bot review). The tool sets the recommendation, and most HIGH PRs get none too. Only his tap records a pick. Do not ask him "which review?" in chat.
+- Post a plain `@coderabbitai review` only when the `pr_watch` line says a round is left or Dave allowed round N, and never when the free-slot queue holds the PR. A paid round (`--use-credits`) needs `cr-paid.mjs check` to print ALLOW and his tap on the Paid round question.
 - Only Dave merges. Land only after his Land tap, with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. Say "ready" only when `node scripts/github/review-status.mjs <N>` prints READY.
 - Open a PR as a draft, with a body file (`-F body=@<file>`), after `node scripts/github/pre-pr.mjs --body <file>` passed on the head. Then call `pr_watch {pr}` and `pr_checkpoint` in the same turn.
 

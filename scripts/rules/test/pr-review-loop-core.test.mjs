@@ -3,10 +3,10 @@
 // session can lose the rule again.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HOOK_CONTEXT_CAP, ROUTER_OVERHEAD } from '../ondemand-index-check.mjs';
+import { HOOK_CONTEXT_CAP, KNOWN_COFIRE_OVER, REFERENCE_ONLY, ROUTER_OVERHEAD, checkIndex } from '../ondemand-index-check.mjs';
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.claude', 'rules-ondemand');
 const read = (f) => readFileSync(join(DIR, f), 'utf8');
@@ -37,38 +37,34 @@ test('the core file carries the decision that stops the wrong question: below ri
   assert.match(core, /Only Dave merges/);
 });
 
-/** A heading without its date or aside: "Paid PR reviews (Dave, 2026-10-30)" becomes "Paid PR reviews". */
-const plain = (h) => h.replace(/\s+[(—].*$/, '').trim();
-
-test('every ## section of the full file has a line in the core index, so a new section cannot hide', () => {
-  const headings = full.split(/\r?\n/).filter((l) => /^## /.test(l)).map((l) => plain(l.slice(3)));
-  assert.ok(headings.length >= 10, `read only ${headings.length} headings`);
-  const missing = headings.filter((h) => !core.includes(h));
-  assert.deepEqual(missing, [], `the core index has no line for: ${missing.join('; ')}`);
+test('the core file tells the session to ask the question that pr_checkpoint returns and to call it again (checkpoint.ledger is true)', () => {
+  const config = JSON.parse(readFileSync(join(DIR, '..', '..', 'review-router.config.json'), 'utf8'));
+  assert.equal(config.checkpoint.ledger, true, 'the core text assumes checkpoint.ledger true; update the core when the flag changes');
+  assert.match(core, /It returns his question: ask it with AskUserQuestion word for word, then call `pr_checkpoint` again/);
 });
 
-// A command that opens or starts the PR flow. The router joins every rule that fires on one call into ONE text, and
-// Claude Code cuts that text above 10,000 characters. It tests `command` regexes on the segment and `segment` regexes
-// on the segment with quotes kept. A deny-first rule makes the whole output a deny reason, which is not cut.
-const ENTRY_COMMANDS = [
-  'gh pr create --draft --title t -F body=@b.md',
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F draft=true -F body=@b.md',
-  'node scripts/github/pre-pr.mjs --body b.md',
-  'node scripts/github/review-status.mjs 12',
-  'node scripts/github/ship-ask.mjs open-pr --json',
-];
+test('the core file allows a plain review request only when a round is left, and a paid one only after ALLOW and a tap', () => {
+  assert.match(core, /plain `@coderabbitai review` only when the `pr_watch` line says a round is left/);
+  assert.match(core, /`--use-credits`\) needs `cr-paid\.mjs check` to print ALLOW and his tap/);
+});
 
-const hit = (patterns, s) => (patterns || []).some((p) => new RegExp(p).test(s));
+// The gate (ondemand-index-check.mjs) holds the rest: the section index, the path link and the joined text of rules that
+// fire together. It runs on every edit under .claude/rules-ondemand, so the real repo must pass it.
+test('the real manifest, index and rule files pass the index gate, including the section index and the co-fire sizes', () => {
+  const indexText = readFileSync(join(DIR, '..', 'rules-src', 'on-demand-rules.md'), 'utf8');
+  const files = readdirSync(DIR).filter((f) => f.endsWith('.md'));
+  const sizes = Object.fromEntries(files.map((f) => [f, size(f)]));
+  const texts = Object.fromEntries(files.map((f) => [f, read(f)]));
+  assert.deepEqual(checkIndex({ manifest, indexText, files, sizes, texts, referenceOnly: REFERENCE_ONLY, knownCofire: KNOWN_COFIRE_OVER }), []);
+});
 
-test('the joined text of every rule that fires with pr-review-loop on a PR entry command is under the hook cap', () => {
-  const rows = [];
-  for (const cmd of ENTRY_COMMANDS) {
-    const matched = manifest.rules.filter((r) => hit(r.command, cmd) || hit(r.segment, cmd));
+test('the PR entry commands that start a session fit the hook cap with the rules that fire beside the core file', () => {
+  const entry = ['gh pr create --draft', 'gh api repos/o/r/pulls -X POST', 'node scripts/github/pre-pr.mjs', 'node scripts/github/review-status.mjs 1', 'node scripts/github/ship-ask.mjs open-pr'];
+  const test1 = (patterns, s) => (patterns || []).some((p) => new RegExp(p).test(s));
+  for (const cmd of entry) {
+    const matched = manifest.rules.filter((r) => test1(r.command, cmd) || test1(r.segment, cmd));
     assert.ok(matched.some((r) => r.id === 'pr-review-loop'), `pr-review-loop does not fire on: ${cmd}`);
-    if (matched.some((r) => r.mode === 'deny-first')) continue;
     const chars = matched.reduce((n, r) => n + r.files.reduce((m, f) => m + size(f), 0) + ROUTER_OVERHEAD, 0) + 2 * (matched.length - 1);
-    rows.push({ cmd, ids: matched.map((r) => r.id).join('+'), chars });
+    assert.ok(chars <= HOOK_CONTEXT_CAP, `${cmd}: ${matched.map((r) => r.id).join('+')} join to ${chars}`);
   }
-  const over = rows.filter((r) => r.chars > HOOK_CONTEXT_CAP);
-  assert.deepEqual(over, [], `joined text over ${HOOK_CONTEXT_CAP}: ${JSON.stringify(over)}`);
 });
