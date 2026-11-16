@@ -713,8 +713,10 @@ describe('render-board.mjs against a scratch database', () => {
 
   // The page header counts the claude.exe processes of THIS machine and joins them to ~/.claude/state/identity. Sessions, workflow agents and
   // headless runs start and end all day, so a render that reads them differs from the next render (the old flake of the test above).
-  // renderPage must pin both. On a machine that cannot list processes (not Windows) the live list is never read and the two pages match anyway.
-  it('a render reads no live process list and no live identity folder (the default page equals the page of an empty list and an empty folder)', () => {
+  // renderPage pins both. This test guards the process list: with the pin removed the default page shows this machine's count (Windows) or no
+  // counter (Linux) where the pinned page shows 0/0, so it fails on both. The identity folder only matters when a list has rows (it maps a pid to a
+  // session), so it is pinned for the tests that pass their own list; an empty list cannot show it, and this test does not claim to.
+  it('a render reads no live process list (the default page equals the page of an empty list)', () => {
     const nodeArgs = ['--import', freezeClock()];
     const emptyDir = fs.mkdtempSync(path.join(E2E.tmp, 'ident-'));
     const page = (name, env) => {
