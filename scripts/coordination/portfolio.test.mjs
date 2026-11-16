@@ -50,10 +50,6 @@ describe('twins and borrowed constants', () => {
   it('has a first master card id for tickWord to borrow', () => {
     assert.equal(typeof MASTER_LANES[0], 'string');
   });
-  it('treats a session with a null last_alive as quiet', () => {
-    const r = call({ lanes: [master({ lease_expires_at: iso(now, -10) })], sessions: [{ id: SID_A, last_alive: null }] })[0];
-    assert.equal(r.holder, null);
-  });
 });
 
 describe('seatRows', () => {

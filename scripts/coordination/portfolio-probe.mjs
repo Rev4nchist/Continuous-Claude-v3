@@ -52,8 +52,9 @@ async function seed(db, keys) {
   await db.query(`DELETE FROM agentic_os.lane WHERE project_key = ANY($1::text[])`, [Object.values(keys)]);
   // ON CONFLICT: a second run on the same scratch database must not fail on the fixed session ids.
   for (const s of ['a', 'b', 'c']) await db.query(`INSERT INTO sessions (id, project) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, [SID[s], `/zz-pfprobe/${s}`]);
-  // Board c: the holder has been quiet for an hour. The session age query must make its lapsed lease reclaimable.
-  await db.query(`UPDATE sessions SET last_heartbeat = now() - interval '1 hour', last_activity_at = now() - interval '1 hour' WHERE id = $1`, [SID.c]);
+  // Board c: the holder has no heartbeat and no activity time at all (both columns NULL), so its age is NULL.
+  // A NULL age must count as quiet, as in lane.mjs; with a lapsed lease the card then shows no holder.
+  await db.query(`UPDATE sessions SET last_heartbeat = NULL, last_activity_at = NULL WHERE id = $1`, [SID.c]);
   const lane = (key, id, state, owner, lease) => db.query(
     `INSERT INTO agentic_os.lane (project_key, id, title, state, owner_session_id, lease_expires_at, note)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`, [key, id, `title ${id}`, state, owner, lease, SECRET]);

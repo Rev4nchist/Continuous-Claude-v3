@@ -11,7 +11,8 @@
  *
  *   --out <file>          default <repo>/portfolio.html (the same repo folder rule as render-board.mjs; gitignored)
  *   --master-lanes <ids>  comma list of master card ids; env PORTFOLIO_MASTER_LANES; default MASTER_LANES of tick-marker.mjs
- *   PORTFOLIO_NOW         a fixed clock (an ISO time) for a probe, so the tick hours do not depend on when it runs
+ *   PORTFOLIO_NOW         a fixed clock (an ISO time) for a probe, so the tick hours do not depend on when it runs.
+ *                         Session ages come from the database clock and are shifted onto this clock; real runs never set it.
  */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
