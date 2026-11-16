@@ -11,11 +11,11 @@
 //  F10 parquet is read as if it were JSON                      -> no extension check
 //  G1-G10 the prompt gives the label away (one action per row, same shape), kappa, hard split, bySource, console line, stale end rows
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { JUDGE_MODEL, loadRows, parseArgs, pickAction, rowToPair, run, sampleIds, summarize, toFinding, wilson } from './external-judge.mjs';
 import { judgePrompt } from './judge.mjs';
 import { JUDGE_PROMPT_V1_FILLED_SHA256, JUDGE_PROMPT_V1_SHA256, judgePromptV1 } from './judge-prompt-v1.mjs';
@@ -23,7 +23,23 @@ import { pullPinned, PullRefusal } from './external-pull.mjs';
 
 const SHA = 'a'.repeat(40);
 const ID = 'owner/name';
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'ext-judge-'));
+// Every folder this file makes. Only these are removed after the file ends, never a prefix match.
+const made = [];
+const tmp = () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ext-judge-'));
+  made.push(dir);
+  return dir;
+};
+// A locked folder must not fail a test, so a remove error is dropped.
+after(() => {
+  for (const dir of made.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      /* leave it: a leak is better than a failed test */
+    }
+  }
+});
 const silent = { stdout: () => {}, stderr: () => {} };
 // 2026-11-02 18:00 UTC is 12:00 on 2 November in Chicago.
 const NOW = Date.parse('2026-11-02T18:00:00Z');
