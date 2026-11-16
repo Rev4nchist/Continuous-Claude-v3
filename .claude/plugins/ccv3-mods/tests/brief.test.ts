@@ -1226,6 +1226,24 @@ describe('brief_set in the mod', () => {
     expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
   })
 
+  test('E6d a pending AskUserQuestion makes the snapshot chip waiting-on-dave while it is open, with no brief ask; a plain tool in flight stays working', async ($, on) => {
+    const seen = world(on)
+    on('tool.call', { tool: 'AskUserQuestion' }, async () => {
+      await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+      return { result: { type: 'text' } } as never
+    })
+    await startMod($, true)
+    await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which one?', header: 'Pick', options: [{ label: 'a', description: 'a' }, { label: 'b', description: 'b' }], multiSelect: false }] } as never)
+    const during = snapshots(seen).find(write => JSON.parse(write.text).brief?.goal === 'g')
+    expect(JSON.parse(during?.text ?? '{}').chip).toBe('waiting-on-dave')
+    seen.inRead = async () => {
+      await $.tool.call({ tool: BRIEF_TOOL, goal: 'h' })
+    }
+    await $.tool.call({ tool: 'Read', file_path: 'C:/r/a.md' })
+    seen.inRead = undefined
+    expect(JSON.parse(snapshots(seen).find(write => JSON.parse(write.text).brief?.goal === 'h')?.text ?? '{}').chip).toBe('working')
+  })
+
   test('E7 no secret reaches the state file through any field', async ($, on) => {
     const seen = world(on)
     await startMod($, true)

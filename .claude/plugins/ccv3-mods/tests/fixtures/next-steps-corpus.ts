@@ -48,4 +48,9 @@ export const CORPUS: CorpusRow[] = [
   { id: 'R61c', text: steps('1. None - waiting on CI. I rule on it after you pick'), asks: ['after you pick'], source: 'seat guard 1: names you' },
   { id: 'R61d', text: steps('1. None - waiting on CI. I wait. Paste the build log'), asks: ['Paste the build log'], source: 'seat guard 1: a second sentence' },
   { id: 'R61e', text: steps('1. None - waiting on CI. Should I rule on it?'), asks: ['Should I rule on it?'], source: 'seat guard 1: a question mark' },
+  { id: 'R61f', text: steps('1. None - waiting on CI. I rule after Dave picks'), asks: ['I rule after Dave picks'], source: 'seat guard 1: a first-person tail that names Dave' },
+  { id: 'R61g', text: steps('1. None - waiting on CI. I rule on your reply'), asks: ['I rule on your reply'], source: 'seat guard 1: a first-person tail that names your' },
+  { id: 'R61h', text: steps('1. None - waiting on CI. I rule on it after the long review of the whole change set after the long review of the whole change set after the long review of the whole change set after the long review of the whole change set after the long review of the whole change set'), asks: ['after the long review'], source: 'tail bound: over 160 characters stays an ask' },
+  { id: 'N61d', text: steps('1. None - waiting on CI. We rule after the build'), asks: [], source: 'first person plural' },
+  { id: 'R61i', text: steps('1. None - waiting on CI. It rules after the build'), asks: ['It rules after the build'], source: 'a tail that does not start with I or We stays an ask' },
 ]
