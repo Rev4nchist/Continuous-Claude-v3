@@ -302,13 +302,14 @@ export const isAskStale = (brief: Brief, now: number, lastActivity?: number | nu
 
 /**
  * Prompt origins that are NOT Dave typing: a scheduled task or cron tick, a Monitor notification, a message from another session. Such a
- * prompt answers no ask. It still counts as activity (the turn it starts renews the 24 hour clock). The list holds only the kinds that
- * the engine's type file (PromptOrigin) and the origin probe (.claudedocs/e2e-coord-status-band-fixes/origin-probe.jsonl) show are not
- * Dave. `auto-continuation` is not listed: the engine defines it as a follow-up to Dave's own UI action. Anything else answers, as
- * before: no origin (an old engine), `composer`, `bridge`, and a kind added later (fail to the old behaviour).
- * Known trade-off: a seat's relay of Dave's decision by SendMessage arrives as `peer-send-message` and answers no ask.
+ * prompt answers no ask. It still counts as activity (the turn it starts renews the 24 hour clock). The list holds only the kinds the
+ * origin probe saw on a live prompt (2026-11-16, .claudedocs/e2e-coord-status-band-fixes/02-origin-probe-output.jsonl): a cron tick
+ * is `scheduled-trigger`, a Monitor line is `task-notification`, a SendMessage from another session is `peer`. `auto-continuation` is
+ * not listed: the engine defines it as a follow-up to Dave's own UI action. Every other kind answers, as before: no origin (an old
+ * engine), `composer`, `bridge`, `peer-send-message` (typed, not seen), and a kind added later (fail to the old behaviour).
+ * Known trade-off: a seat's relay of Dave's decision by SendMessage arrives as `peer` and answers no ask.
  */
-export const NOT_DAVE_ORIGINS: readonly string[] = ['scheduled-trigger', 'task-notification', 'peer', 'peer-send-message']
+export const NOT_DAVE_ORIGINS: readonly string[] = ['scheduled-trigger', 'task-notification', 'peer']
 
 export const answersAsks = (origin: { kind?: unknown } | null | undefined): boolean =>
   typeof origin?.kind !== 'string' || !NOT_DAVE_ORIGINS.includes(origin.kind)

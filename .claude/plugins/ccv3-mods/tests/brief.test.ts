@@ -1630,13 +1630,13 @@ describe('turn.step answers in the mod', () => {
   test('CL15 a prompt that is not Dave (a cron tick, a peer message, a Monitor notification) leaves the asks open; composer and bridge answer them; no origin answers them (an old engine)', async ($, on) => {
     const seen = world(on)
     await startMod($, true)
-    for (const kind of ['scheduled-trigger', 'task-notification', 'peer', 'peer-send-message'] as const) {
+    for (const kind of ['scheduled-trigger', 'task-notification', 'peer'] as const) {
       await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
       await $.prompt.submit({ text: 'tick', wait: false, origin: { kind } } as never)
       expect(lastSnapshot(seen).brief.ask[0], kind).toMatchObject({ text: 'Approve the merge of PR 12?' })
       expect(lastSnapshot(seen).brief.ask[0].answered, kind).toBeFalsy()
     }
-    for (const kind of ['composer', 'bridge', 'auto-continuation'] as const) {
+    for (const kind of ['composer', 'bridge', 'auto-continuation', 'peer-send-message'] as const) {
       await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
       await $.prompt.submit({ text: 'go ahead', wait: false, origin: { kind } } as never)
       expect(lastSnapshot(seen).brief.ask.find((one: { answered?: boolean }) => !one.answered), kind).toBeUndefined()
@@ -1646,9 +1646,9 @@ describe('turn.step answers in the mod', () => {
     expect(lastSnapshot(seen).brief.ask.find((one: { answered?: boolean }) => !one.answered)).toBeUndefined()
   })
 
-  test('CL15u answersAsks: no origin, a missing kind, composer, bridge, auto-continuation and an unknown kind answer; each listed non-Dave kind does not', () => {
-    for (const origin of [undefined, null, {}, { kind: 7 }, { kind: 'composer' }, { kind: 'bridge' }, { kind: 'auto-continuation' }, { kind: 'brand-new-kind' }]) expect(answersAsks(origin as never), JSON.stringify(origin)).toBe(true)
-    expect([...NOT_DAVE_ORIGINS].sort()).toEqual(['peer', 'peer-send-message', 'scheduled-trigger', 'task-notification'])
+  test('CL15u answersAsks: no origin, a missing kind, composer, bridge, auto-continuation, peer-send-message (not seen) and an unknown kind answer; each probed non-Dave kind does not', () => {
+    for (const origin of [undefined, null, {}, { kind: 7 }, { kind: 'composer' }, { kind: 'bridge' }, { kind: 'auto-continuation' }, { kind: 'peer-send-message' }, { kind: 'brand-new-kind' }]) expect(answersAsks(origin as never), JSON.stringify(origin)).toBe(true)
+    expect([...NOT_DAVE_ORIGINS].sort()).toEqual(['peer', 'scheduled-trigger', 'task-notification'])
     for (const kind of NOT_DAVE_ORIGINS) expect(answersAsks({ kind }), kind).toBe(false)
   })
 
