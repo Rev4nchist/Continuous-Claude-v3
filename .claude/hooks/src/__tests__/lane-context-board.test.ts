@@ -721,8 +721,8 @@ describe('P: the banner pages unread events without losing any', () => {
     expect(inserts()).toHaveLength(1);
     expect(inserts()[0].params).toEqual([SENT, 232]);
     // Row 46: a cold page that cuts a DM and 12 board events. The board events show later only while they stay in the newest 12.
-    expect(t).toContain('  (13 more unread, 1 direct to you. Later prompts show the direct ones, oldest first. The board events show only while they are among the newest 12 of this board.)');
-    expect(t).not.toMatch(/inbox/);
+    // Card coord-banner-dm-never-cut (G2): a waiting DM on a board always names the inbox command, with no board row too.
+    expect(t).toContain('  (13 more unread, 1 direct to you. Later prompts show the direct ones, oldest first, or run: node C:/Users/Tester/.claude/scripts/lane.mjs inbox. The board events show only while they are among the newest 12 of this board.)');
     // No board row is written, so the cold line waits for the page that writes it.
     expect(t).not.toMatch(/not shown on your first look/);
   });
@@ -866,24 +866,23 @@ describe('P: the banner pages unread events without losing any', () => {
   });
 
   const COLD_CUT_LINE = (cut: number, cutDm: number): string =>
-    `  (${cut} more unread, ${cutDm} direct to you. Later prompts show the direct ones, oldest first. The board events show only while they are among the newest 12 of this board.)`;
+    `  (${cut} more unread, ${cutDm} direct to you. Later prompts show the direct ones, oldest first, or run: node C:/Users/Tester/.claude/scripts/lane.mjs inbox. The board events show only while they are among the newest 12 of this board.)`;
 
-  it('P18 (row 46): cold board page, 13 DMs and 3 broadcasts: the cut DM and the cut broadcasts get the new line, with no command', async () => {
+  it('P18 (row 46): cold board page, 13 DMs and 3 broadcasts: the cut DM and the cut broadcasts get the new line, with the inbox command (G2)', async () => {
     fake.unread = [...bcs(201, 203, null), ...dms(211, 223, null)];
     const t = text(await run('UserPromptSubmit', ccv3));
     expect(tags(t)).toEqual(seq('dm', 211, 222));
     // 1 cut DM + 3 broadcasts that wait behind it.
     expect(t.split('\n')).toContain(COLD_CUT_LINE(4, 1));
-    expect(t).not.toMatch(/inbox/);
     expect(t).not.toContain(String.fromCharCode(0x2014));
     expect(inserts()).toHaveLength(1);
     expect(inserts()[0].params).toEqual([SENT, 222]);
   });
 
-  it('P18b (row 46): cold board page that cuts only a DM (no board event is cut) keeps today\'s line', async () => {
+  it('P18b (row 46): cold board page that cuts only a DM (no board event is cut) keeps today\'s line, and names the inbox command (G2)', async () => {
     fake.unread = dms(101, 113, null);
     const t = text(await run('UserPromptSubmit', ccv3));
-    expect(t).toContain('  (1 more unread, 1 direct to you. Later prompts show them, oldest first.)');
+    expect(t).toContain(`  (1 more unread, 1 direct to you. Later prompts show them, oldest first, or run: ${MORE_CMD}`);
     expect(t).not.toMatch(/newest 12/);
   });
 

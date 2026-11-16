@@ -6649,19 +6649,20 @@ async function finishCursors(client, ctx, o) {
   }
   logLaneContextError(o.me, o.eventName, new Error(`late ${ctx.age().toFixed(2)}s: cursor write skipped`));
 }
-function moreLine(page, withCmd, coldBoard) {
+function moreLine(page, withCmd, coldBoard, onBoard = true) {
+  const inbox = `${laneCliCmd()} inbox`;
   if (coldBoard && page.cutDm > 0 && page.cut > page.cutDm) {
-    return `  (${page.cut} more unread, ${page.cutDm} direct to you. Later prompts show the direct ones, oldest first. The board events show only while they are among the newest ${MAX_EVENTS} of this board.)`;
+    return `  (${page.cut} more unread, ${page.cutDm} direct to you. Later prompts show the direct ones, oldest first, or run: ${inbox}. The board events show only while they are among the newest ${MAX_EVENTS} of this board.)`;
   }
   const direct = page.cutDm > 0 ? `, ${page.cutDm} direct to you` : "";
-  const cmd = withCmd ? `, or run: ${laneCliCmd()} inbox` : ".";
+  const cmd = withCmd || onBoard && page.cutDm > 0 ? `, or run: ${inbox}` : ".";
   return `  (${page.cut} more unread${direct}. Later prompts show them, oldest first${cmd})`;
 }
 function unreadLines(page, board, opts) {
   const here = board ?? DEFAULT_BOARD;
   const lines = [countLine(page.events.length + page.cut)];
   for (const e of page.events) lines.push(eventPrefix(e, here) + (page.bodies?.get(e.id) ?? e.body ?? ""));
-  if (page.cut > 0) lines.push(moreLine(page, opts.withCmd, opts.coldBoard));
+  if (page.cut > 0) lines.push(moreLine(page, opts.withCmd, opts.coldBoard, board !== null));
   if (page.skipped > 0 && page.boardRow !== null) lines.push(coldLine(page.skipped));
   if (page.events.some((e) => e.to_session_id)) lines.push(REPLY_FOOTER);
   return lines;
@@ -6870,9 +6871,18 @@ async function boardPage(client, a, ctx) {
   const late = ctx.late();
   const budget = header.length ? ctx.budgets.start : ctx.budgets.prompt;
   const cold = unread.length > 0 && unread[0].board_wm === null;
-  const lead = header.length ? header : a.cut.line && unread.length ? [a.cut.line] : [];
-  const headBytes = lead.length ? utf8Bytes(lead.join("\n")) + 2 : 0;
-  const page = pageUnread(unread, { cold, bytes: eventBytes(budget - headBytes - pageReserve(unread), board) });
+  const lead1 = header.length ? header : a.cut.line && unread.length ? [a.cut.line] : [];
+  const pageFor = (lead2) => pageUnread(unread, { cold, bytes: eventBytes(budget - (lead2.length ? utf8Bytes(lead2.join("\n")) + 2 : 0) - pageReserve(unread), board) });
+  let lead = lead1;
+  let page = pageFor(lead1);
+  const shownDms = (p) => p.events.filter((e) => e.to_session_id).length;
+  if (header.length && a.collapsedHeader && page.cutDm > 0) {
+    const page2 = pageFor(a.collapsedHeader);
+    if (shownDms(page2) > shownDms(page)) {
+      lead = a.collapsedHeader;
+      page = page2;
+    }
+  }
   const withCmd = namesInbox({ rowBefore: !cold, rowWritten: !late && page.boardRow !== null });
   const lines = [...lead];
   if (unread.length) {
@@ -6925,8 +6935,10 @@ async function runLaneContext(raw, opts = {}) {
     const unread = await readUnread(client, UNREAD_BOARD_SQL, [me, board, wmKey(me, board)]);
     const meLabel = who(me, payload.session_title || void 0);
     const cut = cutPending(me, ctx.now());
-    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets, cut.line) : [];
-    return await boardPage(client, { me, meLabel, board, eventName, unread, header, cut }, ctx);
+    const banner = isStart ? await loadBanner(client, me, board, eventName) : null;
+    const header = banner ? buildHeader(banner, meLabel, board, ctx.budgets, cut.line) : [];
+    const collapsedHeader = banner && unread.some((e) => e.to_session_id) ? buildHeader(banner, meLabel, board, { ...ctx.budgets, header: 0 }, cut.line) : void 0;
+    return await boardPage(client, { me, meLabel, board, eventName, unread, header, collapsedHeader, cut }, ctx);
   } catch (err) {
     logLaneContextError(me, eventName, err);
     return {};

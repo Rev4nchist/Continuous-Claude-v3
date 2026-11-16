@@ -976,6 +976,15 @@ describe('DMF: direct messages before the header (card coord-banner-dm-never-cut
     expect(moreLine(t)).toBe(`  (${8 - shown.length} more unread, ${8 - shown.length} direct to you. Later prompts show them, oldest first, or run: ${SHIM} inbox)`);
   });
 
+  it('DMF7: a tie keeps the full header: a 9,000-byte DM shows alone (cut) under either header, so the collapse gains no DM', async () => {
+    mid();
+    fake.unread = [dm(101, 'x'.repeat(9000)), dm(102, 'short')];
+    const t = await run('SessionStart', ccv3);
+    expect(tags(t)).toEqual(['dm101']);
+    expect(t.split(NL).some((l) => l.startsWith('     scope: '))).toBe(true);
+    expect(t).toContain('Claimable (claim by id):\n');
+  });
+
   it('DMF6: a cold board with 3 DMs of 3,000 bytes: the more line names the inbox command', async () => {
     fake.unread = dms(3, 3000, null);
     const t = await run('SessionStart', ccv3);
