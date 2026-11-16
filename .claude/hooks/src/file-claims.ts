@@ -30,7 +30,7 @@ import { realFilePath, resolveClaimKey, resolveRepoContext, listWorktreeTops } f
 import { directWritePaths, classifyShellText, type HeldClaim } from './shared/write-targets.js';
 import { readShellCommand } from './shared/shell-tools.js';
 import { isEngineHost } from './shared/engine-host.js';
-import { firstWarning } from './shared/claim-warned.js';
+import { firstWarning, wasWarned } from './shared/claim-warned.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
 import { logGuardDecision } from './shared/guard-log.js';
 
@@ -119,6 +119,7 @@ export async function main(): Promise<void> {
 /** Scratch folder of this session: `<tmp>/claude/<hash>/<session>/scratchpad`, found by one directory read. */
 function findScratchFolder(sessionId: string): string | undefined {
   try {
+    if (!sessionId) return undefined;
     const base = join(tmpdir(), 'claude');
     for (const hash of readdirSync(base)) {
       const p = join(base, hash, sessionId, 'scratchpad');
@@ -131,8 +132,28 @@ function findScratchFolder(sessionId: string): string | undefined {
 }
 
 /**
+ * The primary checkout of a top folder. A linked worktree has a `.git` FILE: `gitdir: <primary>/.git/worktrees/<name>`.
+ * Real case from the file system, not the lower-cased project key (listWorktreeTops needs a real folder).
+ */
+function primaryTopOf(top: string): string {
+  try {
+    const text = readFileSync(join(top, '.git'), 'utf8');
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(text);
+    if (m) {
+      const dir = m[1].replace(/\\/g, '/');
+      const i = dir.search(/\/\.git\/worktrees\//i);
+      if (i > 0) return dir.slice(0, i);
+    }
+  } catch {
+    // a .git folder (the primary checkout) cannot be read as a file: the top is the primary
+  }
+  return top.replace(/\\/g, '/');
+}
+
+/**
  * Judge a subagent's write (card coord-subagent-write-guard). Returns true when a deny was printed and the call is
- * over. A warn wraps the next console.log so the claim check's own output carries it. Any error: not judged.
+ * over. A warn wraps the next console.log so the claim check's own output carries it, and the path counts as warned
+ * only when that output is printed. Any error: not judged.
  */
 function subagentJudged(rawInput: PreToolUseInput): boolean {
   try {
@@ -141,16 +162,18 @@ function subagentJudged(rawInput: PreToolUseInput): boolean {
     const cwd = resolvePath(typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd());
     const sessionId = typeof input.session_id === 'string' ? input.session_id : '';
     const ctx = resolveRepoContext(cwd);
-    const tops = [...new Set([...(ctx ? [ctx.top, ...listWorktreeTops(ctx.project)] : [])])];
+    const primary = ctx ? primaryTopOf(ctx.top) : '';
+    const tops = ctx ? [...new Set([primary, ctx.top, ...listWorktreeTops(primary)])] : [];
+    const canon = (p: string): string => canonicalRealPath(p, cwd) || p.replace(/\\/g, '/');
     const deps: SubagentDeps = {
-      home: homedir(),
-      tmp: tmpdir(),
+      home: canon(homedir()),
+      tmp: canon(tmpdir()),
       tops,
       sessionId,
       cwd,
       fold: FOLDS_CASE,
       realPath: canonicalRealPath,
-      firstWarn: (p) => firstWarning(sessionId, 'subagent-write', p),
+      warned: (p) => wasWarned(sessionId, 'subagent-write', p),
       scratchFolder: findScratchFolder(sessionId),
     };
     const direct = directWritePaths(input);
@@ -160,7 +183,7 @@ function subagentJudged(rawInput: PreToolUseInput): boolean {
     } else {
       const cmd = readShellCommand(input);
       if (cmd.kind !== 'command') return false;
-      verdict = judgeShell(input, cmd.text, cmd.tool === 'PowerShell', deps);
+      verdict = judgeShell(input, cmd.text, deps);
     }
     if (verdict.kind === 'deny') {
       logGuardDecision('file-claims', input, 'deny', 'subagent-write-protected');
@@ -168,14 +191,16 @@ function subagentJudged(rawInput: PreToolUseInput): boolean {
       return true;
     }
     if (verdict.kind === 'warn') {
-      const text = verdict.text;
+      const { text, path } = verdict;
       const orig = console.log;
       console.log = (line?: unknown) => {
         console.log = orig;
         try {
-          const out = JSON.parse(String(line)) as { message?: string; hookSpecificOutput?: { permissionDecision?: string } };
+          const out = JSON.parse(String(line)) as { message?: string; hookSpecificOutput?: Record<string, unknown> };
           if (out.hookSpecificOutput?.permissionDecision === 'deny') return orig(line);
+          firstWarning(sessionId, 'subagent-write', path);
           out.message = [text, out.message].filter(Boolean).join('\n');
+          out.hookSpecificOutput = { ...(out.hookSpecificOutput ?? {}), hookEventName: 'PreToolUse', additionalContext: text };
           return orig(JSON.stringify(out));
         } catch {
           return orig(line);
