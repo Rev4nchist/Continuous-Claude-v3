@@ -37,7 +37,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { handle as ledger } from '../decision-ledger.js';
 import { decide, realDeps } from '../decision-gate.js';
 
@@ -77,9 +77,17 @@ function makeRepo(name: string, remotes: Record<string, string>, body = name, re
   return d;
 }
 
+// Card tests-flaky-under-load-1115: one home per ATTEMPT. vitest --retry=2 re-runs a failed row and its beforeEach, but never its beforeAll.
+// A home made in beforeAll kept the repos of the failed attempt, so the retry died at `git remote add ... already exists` and hid the first error.
+// The paths are recorded, and afterEach removes only those (no folder is found by name or age).
+const madeHomes: string[] = [];
 beforeAll(() => {
-  home = mkdtempSync(join(tmpdir(), 'dg-ch-')).replace(/\\/g, '/');
   for (const k of ENV_KEYS) saved[k] = process.env[k];
+});
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), 'dg-ch-')).replace(/\\/g, '/');
+  madeHomes.push(home);
+  projects.length = 0;
   delete process.env.CLAUDE_AGENT_ID;
   delete process.env.APP_ASK_TEST;
   process.env.CCV3_DECISIONS_FILE = `${home}/decisions.json`;
@@ -90,9 +98,11 @@ beforeAll(() => {
   mkdirSync(`${home}/continuous-claude`, { recursive: true });
   writeFileSync(`${home}/continuous-claude/review-router.config.json`, cfg);
 });
+afterEach(() => {
+  for (const h of madeHomes.splice(0)) rmSync(h, { recursive: true, force: true });
+});
 afterAll(() => {
   for (const k of ENV_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
-  rmSync(home, { recursive: true, force: true });
 });
 
 /** The real Deps with the temp folder as home, so the gate never reads the developer's home config (absent on a CI runner). */

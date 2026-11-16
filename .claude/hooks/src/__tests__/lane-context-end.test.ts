@@ -70,33 +70,37 @@ describe('lane-context: a slow client.end() after the watermark write', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns the output without waiting for end()', async () => {
-    const result = await Promise.race([
-      runLaneContext(PAYLOAD),
-      new Promise((res) => setTimeout(() => res('STUCK'), 1000)),
-    ]);
+  // Card tests-flaky-under-load-1115. The old row raced runLaneContext against a 1000 ms timer: a loaded machine made the work before
+  // end() slower than that and the row read it as "waited for end()". These rows judge the ORDER: the output settles although the fake
+  // end() promise never does. The timer is only a backstop, so that code that really waits for end() fails and does not hang.
+  const BACKSTOP_MS = 25_000;
+  async function settleOrBackstop(p: Promise<unknown>): Promise<unknown> {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const stuck = new Promise((res) => { t = setTimeout(() => res('STUCK'), BACKSTOP_MS); t.unref?.(); });
+    try { return await Promise.race([p, stuck]); } finally { clearTimeout(t); }
+  }
+  /** The output returns while end() is pending: end() was called, and the returned value still came back. */
+  function expectOutputBeforeEndSettles(result: unknown): void {
     expect(result, 'runLaneContext waited for client.end()').not.toBe('STUCK');
     expect(JSON.stringify(result)).toContain('DM-BODY');
     expect(fake.queries.some((q) => /INSERT INTO agentic_os\.lane_watermark/.test(q)), 'watermark was written').toBe(true);
     expect(fake.endCalled, 'end() was still called').toBe(true);
+  }
+
+  it('returns the output without waiting for end()', async () => {
+    expectOutputBeforeEndSettles(await settleOrBackstop(runLaneContext(PAYLOAD)));
   });
 
-  // Card tests-flaky-under-load-1115. A loaded machine makes the work before end() slow. The row above gave it 1000 ms and read a slow
-  // run as "waited for end()". The fake end() never resolves, so a long budget keeps the meaning. A 1200 ms connect stands for the load.
-  // Change that turns it red: a budget of 1000 ms or less in the race above.
+  // Red before the change: the old 1000 ms bar read this slow connect (1200 ms, a loaded machine) as a wait for end().
   it('a slow connect (1200 ms, a loaded machine) is not read as a wait for end()', async () => {
     fake.connectDelayMs = 1200;
-    const result = await Promise.race([
-      runLaneContext(PAYLOAD),
-      new Promise((res) => setTimeout(() => res('STUCK'), 1000)),
-    ]);
-    expect(result, 'runLaneContext waited for client.end()').not.toBe('STUCK');
-    expect(JSON.stringify(result)).toContain('DM-BODY');
-    expect(fake.endCalled, 'end() was still called').toBe(true);
+    expectOutputBeforeEndSettles(await settleOrBackstop(runLaneContext(PAYLOAD)));
   });
 
+  // The deadline is an input of the code under test (runPromptSubmit), so a time limit stays here. 4000 ms (was 600) lets a loaded
+  // machine finish the work before it; a run that waits for end() still reaches the deadline and reads status timeout.
   it('prompt-submit keeps the output: status ok, not timeout, when the deadline falls after the watermark write', async () => {
-    const { output, report } = await runPromptSubmit(PAYLOAD, [{ name: 'lane-context', run: runLaneContext }], 600);
+    const { output, report } = await runPromptSubmit(PAYLOAD, [{ name: 'lane-context', run: runLaneContext }], 4000);
     expect(report[0].status).toBe('ok');
     expect(JSON.stringify(output)).toContain('DM-BODY');
   });
