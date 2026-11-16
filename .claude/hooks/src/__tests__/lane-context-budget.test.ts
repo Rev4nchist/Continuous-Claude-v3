@@ -882,3 +882,104 @@ describe('F13: the time check (C10)', () => {
     });
   });
 });
+
+// Card coord-banner-dm-never-cut. G1: on SessionStart the header (up to 5,000 bytes) came BEFORE the direct messages, so a big
+// header hid DMs behind "N more unread". Now, when DMs wait, the optional header sections (peers and their scopes, Claimable,
+// Reminders) collapse to one line each and the page that shows strictly more whole DMs wins. G2: the more line names inbox
+// whenever a DM waits. The 8,000-byte start budget stays. Seat conditions: the reserved lines never collapse; the page not chosen
+// marks nothing read; with the same DM count the full header stays.
+// Change that turns each row red: DMF1, DMF5, DMF6: no second page (the full header always wins); DMF2: the collapse also drops a
+// reserved line; DMF3 and DMF4: the collapse runs when it gains no DM; DMF5: the cursor follows the page that was not sent; DMF6: the
+// cold more line names no inbox.
+describe('DMF: direct messages before the header (card coord-banner-dm-never-cut)', () => {
+  const long = (p: string): string => `${p}-${'z'.repeat(70)}`;
+  const held = (id: string, board = 'continuous-claude'): Row =>
+    ({ id, title: 't', track: 'x', state: 'active', scope: 'RELATES TO: r-1, r-2, r-3', band: 'P1', project_key: board, owner_session_id: ME });
+  /** The same hostile header as F9: over 5,000 bytes before any collapse. */
+  const hostile = (): void => {
+    fake.mine = [...Array.from({ length: 11 }, (_, i) => held(`my-${i + 1}`)), held(long('mylong')),
+      held(long('far'), 'zz-board'), held('far-2', 'zz-board')];
+    fake.lanes = [{ id: 'r-1', owner_session_id: PEER, reclaimable: false }];
+    fake.peers = Array.from({ length: 10 }, (_, i) => ({
+      sid: `bbbbbbbb-0000-4000-8000-00000000000${i}`,
+      lanes: [`p${i}-a`, `p${i}-b`, long(`p${i}`), `p${i}-c`, `p${i}-d`].join(', '),
+      scopes: 's'.repeat(2000), total: 14,
+    }));
+    const past = new Date(Date.now() - 3 * 3600_000).toISOString();
+    fake.reminders = Array.from({ length: 5 }, (_, i) => ({
+      id: i === 0 ? long('rem') : `rem-${i}`, title: 'r'.repeat(300), band: 'P1', due_at: past,
+      remind_state: 'scheduled', action_id: null, total: 7,
+    }));
+    fake.claimable = Array.from({ length: 5 }, (_, i) => ({ id: i === 0 ? long('cl') : `cl-${i}`, title: 'c'.repeat(300), band: 'P2' }));
+  };
+  /** A header that stays whole under its 5,000-byte budget (4,117 bytes) and leaves the DMs about 3,700 bytes. Fully collapsed: 1,371 bytes. */
+  const mid = (): void => { hostile(); fake.reminders = []; fake.claimable = fake.claimable.slice(0, 3); };
+  const SCOPES = `     scopes: ${SHIM} board`;
+  const dms = (n: number, size: number, wm: number | null = 100): Row[] =>
+    Array.from({ length: n }, (_, i) => dm(101 + i, 'x'.repeat(size), wm));
+  const moreLine = (t: string): string | undefined => t.split(NL).find((l) => /more unread/.test(l));
+
+  it('DMF1: a 4,117-byte header and 5 DMs of 1,000 bytes: all 5 show whole, there is no more line, the text is within 8,000 bytes', async () => {
+    mid();
+    fake.unread = dms(5, 1000);
+    const t = await run('SessionStart', ccv3);
+    expect(tags(t)).toEqual(['dm101', 'dm102', 'dm103', 'dm104', 'dm105']);
+    expect(moreLine(t)).toBeUndefined();
+    expect(bytes(t), `text is ${bytes(t)} bytes`).toBeLessThanOrEqual(8000);
+    expect(t).not.toContain('Lane text over its budget');
+  });
+
+  it('DMF2: the reserved lines never collapse when the header collapses: heading, You are, You hold, Milestone, Related, Commands', async () => {
+    mid();
+    fake.unread = dms(5, 1000);
+    const lines = (await run('SessionStart', ccv3)).split(NL);
+    expect(lines[0]).toBe('## Lane board continuous-claude (concurrent sessions on this board)');
+    expect(lines).toContain('You are #aaaaaaaa.');
+    expect(lines.some((l) => l.startsWith('You hold: '))).toBe(true);
+    expect(lines.some((l) => l.startsWith('Milestone ('))).toBe(true);
+    expect(lines.some((l) => l.startsWith('Related: '))).toBe(true);
+    expect(lines.some((l) => l.startsWith(`Commands: ${SHIM} board`))).toBe(true);
+    // The optional sections are one line each and each names the command to read it in full.
+    expect(lines).toContain(SCOPES);
+    expect(lines).toContain(`Claimable (claim by id): ${SHIM} next`);
+  });
+
+  it('DMF3: the same DM count keeps the full header: 2 small DMs change no section', async () => {
+    mid();
+    fake.unread = dms(2, 200);
+    const t = await run('SessionStart', ccv3);
+    expect(tags(t)).toEqual(['dm101', 'dm102']);
+    expect(t.split(NL).some((l) => l.startsWith('     scope: '))).toBe(true);
+    expect(t).toContain('Claimable (claim by id):\n');
+  });
+
+  it('DMF4: no DM waiting (a board event only): the full header stays', async () => {
+    mid();
+    fake.unread = [bc(101, 'x'.repeat(200))];
+    const t = await run('SessionStart', ccv3);
+    expect(t.split(NL).some((l) => l.startsWith('     scope: '))).toBe(true);
+    expect(t).toContain('Claimable (claim by id):\n');
+  });
+
+  it('DMF5: only the DMs of the page that was sent are marked read: 8 DMs of 1,000 bytes show a prefix, the cursor stops at its last DM', async () => {
+    mid();
+    fake.unread = dms(8, 1000);
+    const t = await run('SessionStart', ccv3);
+    const shown = tags(t);
+    expect(shown.length, `shown ${shown.join(',')}`).toBeGreaterThan(3);
+    expect(shown.length).toBeLessThan(8);
+    expect(shown).toEqual(Array.from({ length: shown.length }, (_, i) => `dm${101 + i}`));
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0].params).toContain(100 + shown.length);
+    expect(inserts()[0].params).not.toContain(108);
+    // The rest wait behind one line that names the count and the inbox command.
+    expect(moreLine(t)).toBe(`  (${8 - shown.length} more unread, ${8 - shown.length} direct to you. Later prompts show them, oldest first, or run: ${SHIM} inbox)`);
+  });
+
+  it('DMF6: a cold board with 3 DMs of 3,000 bytes: the more line names the inbox command', async () => {
+    fake.unread = dms(3, 3000, null);
+    const t = await run('SessionStart', ccv3);
+    expect(moreLine(t), t).toBeDefined();
+    expect(moreLine(t)).toContain(`${SHIM} inbox`);
+  });
+});
