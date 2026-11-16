@@ -7,11 +7,14 @@
 //   5. the list is not cleared, so a second call removes a new folder at a recorded path
 //   6. registerTempCleanup() registers nothing, so the file ends with the folders still there
 //   7. makeTempDir() ignores its prefix or base
+//   8. a recorded folder swapped for a link is followed, and the link's target loses its files
+//   9. a link that will not unlink is left in the tree and the recursive remove runs anyway
+//  10. a folder that cannot be read is treated as holding no links and removed
 // Every test uses its own scratch base folder, never the real temp dir.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -115,12 +118,52 @@ test('a second removeTempDirs is safe and does not touch a new folder at a recor
   assert.equal(readFileSync(join(dir, 'keep.txt'), 'utf8'), 'keep');
 });
 
-test('a missing folder does not throw', () => {
-  // Breaks if the cleanup stats or reads the folder without a guard (4).
+test('a recorded folder that was swapped for a link loses only the link, and the target keeps its files', () => {
+  // Breaks if the cleanup follows a recorded path that is now a link (8).
   const base = scratch();
-  const dir = makeTempDir('tt-gone-', base);
+  const target = join(base, 'tt-swap-target');
+  mkdirSync(join(target, 'deep'), { recursive: true });
+  writeFileSync(join(target, 'deep', 'keep.txt'), 'keep');
+  const dir = makeTempDir('tt-swap-', base);
   rmSync(dir, { recursive: true });
-  assert.doesNotThrow(() => removeTempDirs());
+  symlinkSync(target, dir, 'junction');
+  let rmCalls = 0;
+  removeTempDirs({ rm: (d, o) => { rmCalls += 1; rmSync(d, o); } });
+  assert.equal(lstatSync(dir, { throwIfNoEntry: false }), undefined); // the link is gone
+  assert.equal(rmCalls, 0); // no recursive remove ran
+  assert.equal(readFileSync(join(target, 'deep', 'keep.txt'), 'utf8'), 'keep');
+});
+
+test('a link that will not unlink leaves the whole folder in place and runs no recursive remove', () => {
+  // Breaks if the recursive remove still runs after an unlink failure (9).
+  const base = scratch();
+  const target = join(base, 'tt-stuck-target');
+  mkdirSync(target);
+  writeFileSync(join(target, 'keep.txt'), 'keep');
+  const dir = makeTempDir('tt-stuck-', base);
+  writeFileSync(join(dir, 'f.txt'), 'x');
+  const link = join(dir, 'store');
+  symlinkSync(target, link, 'junction');
+  const refuse = () => { throw Object.assign(new Error('EBUSY: locked'), { code: 'EBUSY' }); };
+  let rmCalls = 0;
+  removeTempDirs({ rmdir: refuse, unlink: refuse, rm: () => { rmCalls += 1; } });
+  assert.equal(rmCalls, 0);
+  assert.equal(existsSync(join(dir, 'f.txt')), true);
+  assert.equal(readFileSync(join(target, 'keep.txt'), 'utf8'), 'keep');
+  removeTempDirs(); // the folder was dropped from the list: this call has nothing to do
+  rmdirSync(link); // this test's own cleanup: unlink the link first, then the scratch folder goes at the end
+});
+
+test('a folder that cannot be read is left in place and runs no recursive remove', () => {
+  // Breaks if a readdir failure is treated as "no links here" (10).
+  const base = scratch();
+  const dir = makeTempDir('tt-unreadable-', base);
+  writeFileSync(join(dir, 'f.txt'), 'x');
+  let rmCalls = 0;
+  const deny = () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); };
+  removeTempDirs({ readdir: deny, rm: () => { rmCalls += 1; } });
+  assert.equal(rmCalls, 0);
+  assert.equal(existsSync(join(dir, 'f.txt')), true);
 });
 
 test('registerTempCleanup removes the folders a test file made when that file ends, and only those', () => {

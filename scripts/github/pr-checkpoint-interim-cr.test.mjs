@@ -20,16 +20,14 @@
 //   bandOf hides the label or the trust files that the rule needs                           -> I15
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recommend, pathFiltersFrom, confirmProblem, ledgerMonthFiles } from './pr-checkpoint.mjs';
 import { bandOf } from './review-router.mjs';
 import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
 
-// Remove the temp folders made through makeTempDir() when this file ends (never a prefix or age sweep).
 registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

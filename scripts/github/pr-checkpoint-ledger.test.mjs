@@ -25,14 +25,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
 import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
 
-// Remove the temp folders made through makeTempDir() when this file ends (never a prefix or age sweep).
 registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

@@ -20,35 +20,62 @@ export function makeTempDir(prefix, base = tmpdir()) {
   return dir;
 }
 
-// Unlink every junction or symlink under dir. It never follows one, so the target keeps its files.
-function unlinkLinks(dir) {
-  let entries;
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    const path = join(dir, name);
-    try {
-      const st = lstatSync(path);
-      if (st.isSymbolicLink()) {
-        try { rmdirSync(path); } catch { unlinkSync(path); } // a directory junction needs rmdir on some systems
-      } else if (st.isDirectory()) {
-        unlinkLinks(path);
-      }
-    } catch {
-      /* a vanished or locked entry: the remove below decides */
-    }
-  }
+const REAL = { rm: rmSync, rmdir: rmdirSync, unlink: unlinkSync, readdir: readdirSync, lstat: lstatSync };
+
+// Unlink one junction or symlink without following it. Returns true when the link is gone.
+function unlinkOne(path, o) {
+  try { o.rmdir(path); return true; } catch { /* a file symlink: rmdir refuses it */ }
+  try { o.unlink(path); return true; } catch { return false; }
 }
 
-/** Remove the folders makeTempDir made, then forget them. A remove error is dropped: a leak is better than a failed test. */
-export function removeTempDirs({ rm = rmSync } = {}) {
+// Unlink every junction or symlink under dir. It never follows one, so the target keeps its files.
+// It returns true only when dir was read and every link was unlinked. A false return means "leave this folder":
+// a recursive remove over a tree that still holds a live link could follow it.
+function unlinkLinks(dir, o) {
+  let entries;
+  try {
+    entries = o.readdir(dir);
+  } catch (e) {
+    return e?.code === 'ENOENT'; // already gone is fine; a folder that cannot be read is left alone
+  }
+  let ok = true;
+  for (const name of entries) {
+    const path = join(dir, name);
+    let st;
+    try {
+      st = o.lstat(path);
+    } catch (e) {
+      if (e?.code !== 'ENOENT') ok = false;
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      if (!unlinkOne(path, o)) ok = false;
+    } else if (st.isDirectory() && !unlinkLinks(path, o)) {
+      ok = false;
+    }
+  }
+  return ok;
+}
+
+/**
+ * Remove the folders makeTempDir made, then forget them. A recorded path that is now a link loses only the link, never its target.
+ * A folder that cannot be read, or that holds a link that will not unlink, is left in place: a leak is better than a followed link.
+ * A remove error is dropped: a leak is better than a failed test. `over` replaces the fs calls (tests only).
+ */
+export function removeTempDirs(over = {}) {
+  const o = { ...REAL, ...over };
   for (const dir of made.splice(0)) {
     try {
-      unlinkLinks(dir);
-      rm(dir, { recursive: true, force: true, maxRetries: 3 });
+      let st;
+      try {
+        st = o.lstat(dir);
+      } catch {
+        continue; // gone
+      }
+      if (st.isSymbolicLink()) { unlinkOne(dir, o); continue; }
+      if (!st.isDirectory()) continue;
+      if (!unlinkLinks(dir, o)) continue;
+      o.rm(dir, { recursive: true, force: true, maxRetries: 3 });
     } catch {
       /* leave it: a leak is better than a failed test */
     }

@@ -24,14 +24,12 @@
 //   the wait text says "count is null"                                                               -> CP14
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
 
-// Remove the temp folders made through makeTempDir() when this file ends (never a prefix or age sweep).
 registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
