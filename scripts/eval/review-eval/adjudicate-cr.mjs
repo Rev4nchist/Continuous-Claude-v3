@@ -4,7 +4,8 @@
 //   run --limit N --confirm-headless     one judge call (Opus, effort high) for each of the next N findings not yet adjudicated.
 // A prompt holds a neutral index, the file, the diff hunk of the round, the comment text, its severity and (if given) the outcome word.
 // The comment text is scrubbed of PR references and github links. The whole prompt is guarded before the call: a PR reference, a fix
-// sha prefix, any 40-hex sha, a github url, the comment id or the finding key refuses it. The first refusal stops the run (no retry).
+// sha prefix, any 40-hex sha, a github url, the comment id or the finding key refuses it. A refused prompt is never sent and never retried;
+// it is marked and the run goes on, and 3 refusals in one run stop it.
 // Only verdict yes becomes a gold row (gold/adjudicated-cr.json). no and unclear, and a yes that waits for its linkType, are kept in a
 // sidecar state map keyed by the id hash (no text: a yes keeps the severity and the sha256 of the raw answer). The sidecar has no
 // .json ending: gold.mjs loadGold reads every .json file of gold/ as a row array.
@@ -28,8 +29,12 @@ import { foldSev, isMajor } from './match.mjs';
 import { HUNK_LIMIT, isRegression, leakTerms, maskShas, promptGuard, readEngineRecords, scrubPrs, sendGuarded } from './mine-szz.mjs';
 import { checkSmokeContext, claudeChildEnv, smokeReport, streamJsonArgs, withRunSettings } from './seed.mjs';
 
-export const PROMPT_VERSION = 'adjudicate-cr-v1';
-export const JUDGE_VERSION = 'adjudicate-cr-v1';
+// v2 (seat ruling, 2026-11-15): ten lines of context, and the cumulative PR diff when the round commit does not change the path.
+export const PROMPT_VERSION = 'adjudicate-cr-v2';
+export const JUDGE_VERSION = 'adjudicate-cr-v2';
+/** The version of a state entry with no promptVersion field: every entry written before v2. */
+const LEGACY_VERSION = 'adjudicate-cr-v1';
+const versionOf = (entry) => entry?.promptVersion ?? LEGACY_VERSION;
 const ADJUDICATOR = 'adjudicate-cr';
 const OUT_NAME = 'adjudicated-cr.json';
 const JUDGE_TIMEOUT_MS = 180_000;
@@ -203,7 +208,9 @@ function loadStore(files) {
   return { rows, state, rowIds: new Set(rows.map((r) => r?.id)) };
 }
 
-const isDone = (store, f) => Object.hasOwn(store.state, f.id) || store.rowIds.has(f.id);
+/** An unclear of an older prompt version is no verdict: it is pending again under the current version. A yes, no or refusal stays done. */
+const isStaleUnclear = (entry) => entry?.verdict === 'unclear' && versionOf(entry) !== PROMPT_VERSION;
+const isDone = (store, f) => store.rowIds.has(f.id) || (Object.hasOwn(store.state, f.id) && !isStaleUnclear(store.state[f.id]));
 const isRefused = (store, f) => store.state[f.id]?.verdict === 'refused';
 const hasSha = (f) => SHA40.test(String(f.sha40 ?? ''));
 /** True for a path under an answer-key glob (scripts/github/lib/answer-key.mjs): such a finding is never sent to the judge. */
@@ -371,14 +378,43 @@ export function hunksNear(text, f, slack) {
 }
 
 const NO_HUNK_NEAR = Symbol('no hunk near the line');
+const NO_ROUND_DIFF = Symbol('no diff in the round commit');
+/** Lines of context around each change (seat F2). The 120-line cap and the cut mark still apply. */
+const CONTEXT_LINES = 10;
 
-/** The diff of the file at the round sha (git show), from the first @@ line (the header holds hex runs), cut near the finding. null when there is no hunk, NO_HUNK_NEAR when none is near the line. */
-async function hunkOf(f, git, slack) {
-  const r = await git(['show', '--format=', '--unified=3', f.sha40, '--', f.path]);
+/** The diff text from its first @@ line (the header holds hex runs), or null when the read failed or holds no hunk. */
+const fromFirstHunk = (r) => {
   const at = r.status === 0 ? /^@@/m.exec(r.stdout) : null;
-  if (!at) return null;
-  const near = hunksNear(r.stdout.slice(at.index), f, slack);
+  return at ? r.stdout.slice(at.index) : null;
+};
+
+/**
+ * The diff of the file the reviewer saw at the round, cut near the finding. First the round commit (git show). When it does not change
+ * the path, the cumulative PR diff of the path: git diff <base>...<round sha> (merge-base form, seat F1). Every range ends at the round
+ * sha, so the judge never sees code after the round (the fix). No base or no diff: NO_ROUND_DIFF. NO_HUNK_NEAR when no hunk is near the line.
+ */
+async function hunkOf(f, git, slack, baseOf) {
+  const round = fromFirstHunk(await git(['show', '--format=', `--unified=${CONTEXT_LINES}`, f.sha40, '--', f.path]));
+  const roundNear = round === null ? '' : hunksNear(round, f, slack);
+  if (roundNear !== '') return capHunk(roundNear);
+  // The round commit does not change the path, or changes it far from the line (seat ruling 18:08): the cumulative diff of the PR.
+  // Its new-side line numbers are the file at the round sha, so the near pick holds.
+  const miss = round === null ? NO_ROUND_DIFF : NO_HUNK_NEAR;
+  const base = await baseOf(f);
+  if (!SHA40.test(String(base ?? ''))) return miss;
+  const cumulative = fromFirstHunk(await git(['diff', `--unified=${CONTEXT_LINES}`, `${base}...${f.sha40}`, '--', f.path]));
+  if (cumulative === null) return miss;
+  const near = hunksNear(cumulative, f, slack);
   return near === '' ? NO_HUNK_NEAR : capHunk(near);
+}
+
+/** The base sha of the finding's PR (gh pulls read, quiet caller), once per PR. A failed read is counted by countingGh and gives null. */
+function baseReader(gh) {
+  const memo = new Map();
+  return (f) => {
+    if (!memo.has(f.pr)) memo.set(f.pr, Promise.resolve().then(() => gh(['api', `repos/${DEFAULT_REPO}/pulls/${f.pr}`])).then((p) => p?.base?.sha ?? null, () => null));
+    return memo.get(f.pr);
+  };
 }
 
 /** At most HUNK_MAX_LINES lines and HUNK_LIMIT characters. A cut hunk ends with a cut mark, so the judge knows it is partial. */
@@ -396,12 +432,15 @@ async function bodyOf(f, gh) {
   return text ? text.slice(0, BODY_LIMIT) : null;
 }
 
-/** { hunk, body }, { noHunkNear: true }, or null when the path, the hunk or the comment text is missing or a read fails (no judge call in any of the last two). */
-async function evidenceOf(f, { deps, slack }) {
+/** { hunk, body }, { noHunkNear: true }, { noRoundDiff: true }, or null when the path, the hunk or the comment text is missing or a read fails (no judge call in any of these). */
+async function evidenceOf(f, ctx) {
+  const { deps, slack } = ctx;
   if (typeof f.path !== 'string' || f.path === '') return null;
+  ctx.baseOf ??= baseReader(deps.gh);
   try {
-    const hunk = await hunkOf(f, deps.git, slack);
+    const hunk = await hunkOf(f, deps.git, slack, ctx.baseOf);
     if (hunk === NO_HUNK_NEAR) return { noHunkNear: true };
+    if (hunk === NO_ROUND_DIFF) return { noRoundDiff: true };
     const body = hunk ? await bodyOf(f, deps.gh) : null;
     return hunk && body ? { hunk, body } : null;
   } catch { return null; }
@@ -410,7 +449,7 @@ async function evidenceOf(f, { deps, slack }) {
 // ---------- the run ----------
 
 const newTally = () => ({
-  judged: 0, yes: 0, no: 0, unclear: 0, unparsed: 0, judgeFailed: 0, evidenceFailed: 0, refused: 0, skippedRefusals: 0, skippedAnswerKey: 0, skippedNoLine: 0, skippedNoHunk: 0, noSha: 0,
+  judged: 0, yes: 0, no: 0, unclear: 0, unparsed: 0, judgeFailed: 0, evidenceFailed: 0, refused: 0, refusedKinds: {}, skippedRefusals: 0, skippedAnswerKey: 0, skippedNoLine: 0, skippedNoHunk: 0, skippedNoRoundDiff: 0, noSha: 0,
   waitingLinktype: 0, lookupsFailed: 0, promptsBuilt: 0, bareNumberPrompts: 0, rowsAdded: 0, rowsInvalid: 0, rowsInFile: 0, stop: null, calls: [], canary: null,
   agreement: { yesFixed: 0, noWrong: 0, yesWrong: 0, noFixed: 0, unclear: 0, none: 0, other: 0 },
 });
@@ -470,7 +509,7 @@ const dispositionOf = (ctx, f) => { const d = ctx.deps.dispositionOf?.(f) ?? ctx
 
 /** A sidecar entry. The disposition is kept for every verdict (the prompt never shows it); no text is kept. */
 const entryOf = (ans, raw, disposition) => ({
-  verdict: ans.verdict,
+  verdict: ans.verdict, promptVersion: PROMPT_VERSION,
   ...(ans.verdict === 'yes' ? { severity: ans.severity, answerSha256: sha256(raw) } : {}),
   ...(disposition ? { disposition } : {}),
 });
@@ -594,13 +633,20 @@ function saveState(ctx) {
   atomicWrite(ctx.files.state, ctx.store.state);
 }
 
-/** A refused prompt is marked in the state (a kind from REFUSAL_KINDS, nothing else), so a re-run does not build the same prompt again. */
+/** The run stops at this many refusals (seat ruling 18:08 CST: one refusal no longer stops a run; the prompt is never sent). */
+const MAX_REFUSALS = 3;
+
+/**
+ * A refused prompt is marked in the state (a kind from REFUSAL_KINDS, nothing else), so a re-run does not build the same prompt again.
+ * The prompt is never sent, so the run goes on; MAX_REFUSALS in one run is a stop.
+ */
 function markRefused(f, kind, ctx) {
   const safe = refusalKindOf(kind);
   ctx.store.state[f.id] = { verdict: 'refused', kind: safe };
   saveState(ctx);
   ctx.tally.refused += 1;
-  return `prompt refused by the guard (${safe})`;
+  ctx.tally.refusedKinds[safe] = (ctx.tally.refusedKinds[safe] ?? 0) + 1;
+  return ctx.tally.refused >= MAX_REFUSALS ? `${MAX_REFUSALS} prompts refused by the guard` : null;
 }
 
 /** Returns a stop reason, or null to go on. A finding with no hunk, or none near its line, uses no call. */
@@ -608,6 +654,7 @@ async function adjudicateOne(f, ctx) {
   const ev = await evidenceOf(f, ctx);
   if (!ev) { ctx.tally.evidenceFailed += 1; return null; }
   if (ev.noHunkNear) { ctx.tally.skippedNoHunk += 1; return null; }
+  if (ev.noRoundDiff) { ctx.tally.skippedNoRoundDiff += 1; return null; }
   const disposition = dispositionOf(ctx, f);
   const prompt = buildPrompt({ label: labelOf(f.id), file: f.path, hunk: ev.hunk, body: ev.body, severity: foldSev(f.severity), sha: f.sha40 });
   ctx.tally.promptsBuilt += 1;
@@ -630,11 +677,12 @@ function rowOf(f, entry, linkType, ctx) {
   const t = { pr: f.pr, file: f.path, line: f.startLine, endLine: f.endLine ?? f.startLine };
   // A finding with no line never counts as regression: isRegression would compare a null line as 0.
   const suite = known && isRegression(ctx.records, t, ctx.slack) ? 'regression' : 'capability';
-  const provenance = { adjudicator: ADJUDICATOR, model: 'opus', effort: 'high', promptVersion: PROMPT_VERSION, ...(entry.disposition ? { disposition: entry.disposition } : {}), answerSha256: entry.answerSha256 };
+  // The versions of the answer, not of this run: a v1 yes that waited for its linkType keeps v1 (prompt and judge versions move together).
+  const provenance = { adjudicator: ADJUDICATOR, model: 'opus', effort: 'high', promptVersion: versionOf(entry), ...(entry.disposition ? { disposition: entry.disposition } : {}), answerSha256: entry.answerSha256 };
   return {
     id: f.id, source: 'CR', suite, split: f.split, target: { pr: f.pr, round: f.roundRank ?? Number(f.round), sha40: f.sha40 },
     file: f.path, ...(known ? { line: f.startLine } : {}), severity: entry.severity, linkType,
-    labels: [{ by: 'claude', verdict: 'real', judgeVersion: JUDGE_VERSION }], provenance,
+    labels: [{ by: 'claude', verdict: 'real', judgeVersion: versionOf(entry) }], provenance,
   };
 }
 
@@ -685,7 +733,7 @@ function runText(t) {
   const lines = [
     `adjudicate-cr run: judged ${t.judged}, yes ${t.yes}, no ${t.no}, unclear ${t.unclear}, unparsed ${t.unparsed}, judge-failed ${t.judgeFailed}`,
     `agreement of verdict and disposition: yes&fixed ${a.yesFixed}, no&wrong ${a.noWrong}, yes&wrong ${a.yesWrong}, no&fixed ${a.noFixed}, unclear ${a.unclear}, none ${a.none}, other ${a.other}`,
-    `evidence-failed ${t.evidenceFailed}, refused ${t.refused}, skipped refusals: ${t.skippedRefusals}, skipped: answer-key path ${t.skippedAnswerKey}, skipped: no line data ${t.skippedNoLine}, skipped: no hunk near the line ${t.skippedNoHunk}, no-sha ${t.noSha}, waiting-linktype ${t.waitingLinktype}`,
+    `evidence-failed ${t.evidenceFailed}, refused ${t.refused}${t.refused ? ` (kinds ${Object.entries(t.refusedKinds).map(([k, n]) => `${k} ${n}`).join(', ')})` : ''}, skipped refusals: ${t.skippedRefusals}, skipped: answer-key path ${t.skippedAnswerKey}, skipped: no line data ${t.skippedNoLine}, skipped: no hunk near the line ${t.skippedNoHunk}, skipped: no diff in the round commit ${t.skippedNoRoundDiff}, no-sha ${t.noSha}, waiting-linktype ${t.waitingLinktype}`,
     `prompts with a bare number equal to a dataset PR number: ${t.bareNumberPrompts} of ${t.promptsBuilt}`,
     `gh lookups failed ${t.lookupsFailed}`,
     `rows written ${t.rowsAdded}, rows invalid ${t.rowsInvalid}, rows in file ${t.rowsInFile}`,

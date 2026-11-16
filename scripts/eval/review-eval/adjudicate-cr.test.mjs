@@ -89,9 +89,9 @@ for (const [name, plant] of Object.entries(PLANTS)) {
   test(`the guard refuses a prompt with ${name}, and the judge is never called (breaks if that check is removed from the send path)`, async () => {
     const h = diffPer(setup([finding(1)], { body: plant.body }), { 'src/f1.js': (plant.diff ?? (() => DIFF()))() });
     const res = await runWith(h);
-    assert.equal(res.code, 1);
+    assert.equal(res.code, 0, 'one refusal is recorded and the run goes on (seat ruling 18:08)');
     assert.equal(h.judge.calls.length, 0);
-    assert.match(res.err + res.out, /refused/);
+    assert.match(res.err + res.out, /refused 1/);
     assert.equal(rowsOf(h), null);
     assert.equal((res.out + res.err + JSON.stringify(stateOf(h))).includes('9001'), false, 'the refusal kind and the marker hold no PR number');
     const marker = stateOf(h)[idOf(finding(1).key)];
@@ -160,25 +160,39 @@ test('run without --confirm-headless exits 2 and never calls the judge, git or g
 
 // ---------- 4 and 5: stops ----------
 
-test('a refused prompt stops the run with exit 1, is not retried, and the rows done before it are written (breaks if the loop goes on after a refusal or drops the earlier rows)', async () => {
+test('a refused prompt is never sent, is recorded, and the run goes on to the next finding; the kinds print as counts (breaks if a refusal stops the run, the prompt is sent, or the kind count is missing)', async () => {
   const h = diffPer(setup([finding(1), finding(2), finding(3)]), { 'src/f2.js': DIFF('+// fixes PR #9001') });
   const res = await runWith(h);
-  assert.equal(res.code, 1);
-  assert.equal(h.judge.calls.length, 1);
-  assert.equal(h.gitCalls.length, 2, 'git read the hunk of finding 1 and of finding 2 only');
-  const rows = rowsOf(h);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].file, 'src/f1.js');
-  assert.match(res.err + res.out, /stop[^\n]*refused/i);
+  assert.equal(res.code, 0);
+  assert.equal(h.judge.calls.length, 2, 'findings 1 and 3; the refused prompt of finding 2 is not sent');
+  assert.equal(h.judge.calls.some((p) => p.includes('9001')), false);
+  assert.deepEqual(rowsOf(h).map((r) => r.file), ['src/f1.js', 'src/f3.js']);
+  assert.match(res.out, /refused 1 \(kinds pr-number 1\)/);
+  assert.doesNotMatch(res.out, /stop:/);
 });
 
-test('a refused finding is marked in the state (kind only), a re-run skips it with no judge call and goes on to the next finding (breaks if a refusal blocks the queue or the marker keeps text)', async () => {
+test('3 refusals in one run stop it with a fixed line and exit 1; the next finding is not sent and the rows before are written (breaks if the cap is missing or off by one)', async () => {
+  const leak = DIFF('+// fixes PR #9001');
+  const fs = [1, 2, 3, 4, 5].map((n) => finding(n));
+  const h = diffPer(setup(fs), { 'src/f2.js': leak, 'src/f3.js': leak, 'src/f4.js': leak });
+  const res = await runWith(h);
+  assert.equal(res.code, 1);
+  assert.match(res.out, /stop: 3 prompts refused by the guard/);
+  assert.equal(h.judge.calls.length, 1, 'finding 1 only; finding 5 comes after the cap');
+  assert.deepEqual(rowsOf(h).map((r) => r.file), ['src/f1.js']);
+  assert.match(res.out, /refused 3 \(kinds pr-number 3\)/);
+  const two = diffPer(setup(fs), { 'src/f2.js': leak, 'src/f3.js': leak });
+  assert.equal((await runWith(two)).code, 0, 'two refusals do not stop');
+  assert.equal(two.judge.calls.length, 3);
+});
+
+test('a refused finding is marked in the state (kind only), a re-run skips it with no judge call (breaks if a refusal blocks the queue or the marker keeps text)', async () => {
   const h = diffPer(setup([finding(1), finding(2), finding(3)]), { 'src/f2.js': DIFF('+// fixes PR #9001') });
-  assert.equal((await runWith(h)).code, 1);
+  assert.equal((await runWith(h)).code, 0);
   assert.deepEqual(stateOf(h)[idOf(finding(2).key)], { verdict: 'refused', kind: 'pr-number' });
   const again = await runWith(h);
   assert.equal(again.code, 0);
-  assert.equal(h.judge.calls.length, 2, 'finding 3 was judged, finding 2 was not asked again');
+  assert.equal(h.judge.calls.length, 2, 'the re-run asks nothing: finding 2 is refused, findings 1 and 3 are done');
   assert.deepEqual(rowsOf(h).map((r) => r.file), ['src/f1.js', 'src/f3.js']);
   assert.match(again.out, /skipped refusals: 1/);
   const asJson = JSON.parse((await runWith(h, ['--limit', '10', '--confirm-headless', '--json'])).out);
@@ -194,7 +208,7 @@ test('--limit counts judge calls, not findings: findings with no hunk do not use
   assert.equal(h.judge.calls.length, 1);
   assert.ok(h.judge.calls[0].includes(`### Finding ${idOf(finding(2).key).slice(3, 11)}\n`));
   assert.deepEqual(rowsOf(h).map((r) => r.file), ['src/f2.js']);
-  assert.match(res.out, /evidence-failed 1/);
+  assert.match(res.out, /skipped: no diff in the round commit 1/, 'an empty round diff with no known base');
 });
 
 test('the hunk of the prompt is the one near the finding lines, not the first hunk of the diff (breaks if the diff is only cut to a length)', async () => {
@@ -419,7 +433,8 @@ test('a missing hunk, a missing comment body or an unresolved sha makes no judge
   const res = await runWith(h);
   assert.equal(res.code, 0);
   assert.equal(h.judge.calls.length, 1);
-  assert.match(res.out, /evidence-failed 2/);
+  assert.match(res.out, /evidence-failed 1/, 'the blank comment body');
+  assert.match(res.out, /skipped: no diff in the round commit 1/, 'the empty hunk, with no known base');
   assert.match(res.out, /no-sha 1/);
 });
 
@@ -584,13 +599,125 @@ test('a hunk over 120 lines is cut at 120 and the prompt carries the cut mark; a
   assert.ok(short.includes('+line 100'));
 });
 
+// ---------- F1: the cumulative PR diff when the round commit does not change the path ----------
+
+const SHA_BASE = 'b'.repeat(40);
+const EMPTY = { status: 0, stdout: '', stderr: '' };
+/** git: the round commit has no diff for the path; the three-dot diff from the base gives DIFF(). */
+function cumulativeGit(h, { cumulative = DIFF() } = {}) {
+  return (args) => {
+    h.gitCalls.push(args);
+    if (args[0] === 'show') return EMPTY;
+    if (args[0] === 'diff') return okDiff(cumulative);
+    return { status: 1, stdout: '', stderr: '' };
+  };
+}
+/** gh: the pull read gives the base sha; a comment read gives the body. */
+const baseGh = (base) => async (args) => (/\/pulls\/\d+$/.test(String(args[1])) ? (base ? { base: { sha: base } } : {}) : { body: BODY });
+const shasIn = (calls) => calls.flatMap((a) => a.join(' ').match(/[0-9a-f]{40}/g) ?? []);
+
+test('a path with no diff in the round commit takes the cumulative PR diff, base...round sha (three dots), and is judged (breaks if the round-commit-only read stays)', async () => {
+  const h = setup([finding(1)]);
+  const res = await runWith(h, ['--limit', '10', '--confirm-headless'], { git: cumulativeGit(h), gh: baseGh(SHA_BASE) });
+  assert.equal(res.code, 0);
+  assert.equal(h.judge.calls.length, 1);
+  assert.ok(h.judge.calls[0].includes('+const b = 2;'), 'the cumulative hunk is in the prompt');
+  assert.deepEqual(h.gitCalls[1], ['diff', '--unified=10', `${SHA_BASE}...${SHA_A}`, '--', 'src/f1.js']);
+});
+
+test('the evidence never reads a sha after the round sha: the only shas in any git call are the round sha and the base, and every range ends at the round sha (breaks if the judge could see the fix)', async () => {
+  const h = setup([finding(1), finding(2)]);
+  await runWith(h, ['--limit', '10', '--confirm-headless'], { git: cumulativeGit(h), gh: baseGh(SHA_BASE) });
+  assert.ok(h.gitCalls.length >= 2);
+  assert.deepEqual([...new Set(shasIn(h.gitCalls))].sort(), [SHA_A, SHA_BASE].sort());
+  for (const a of h.gitCalls.filter((c) => c[0] === 'diff')) assert.match(a[2], new RegExp(`\\.\\.\\.${SHA_A}$`));
+});
+
+test('no known base, or no diff from the base either: no call, counted as skipped: no diff in the round commit (breaks if a guessed hunk is sent or the count is lost)', async () => {
+  const noBase = setup([finding(1)]);
+  const a = await runWith(noBase, ['--limit', '10', '--confirm-headless'], { git: cumulativeGit(noBase), gh: baseGh(null) });
+  assert.equal(noBase.judge.calls.length, 0);
+  assert.match(a.out, /skipped: no diff in the round commit 1/);
+  assert.equal(noBase.gitCalls.some((c) => c[0] === 'diff'), false, 'no diff without a base');
+  const empty = setup([finding(1)]);
+  const b = await runWith(empty, ['--limit', '10', '--confirm-headless'], { git: cumulativeGit(empty, { cumulative: '' }), gh: baseGh(SHA_BASE) });
+  assert.equal(empty.judge.calls.length, 0);
+  assert.match(b.out, /skipped: no diff in the round commit 1/);
+});
+
+// The round commit changes the path far from finding(1) (lines 10 to 12); the cumulative diff has a hunk near it.
+const FAR = ['@@ -500,2 +500,3 @@', ' z', '+FARMARK'].join('\n');
+const NEAR = ['@@ -8,2 +8,4 @@', ' y', '+NEARMARK'].join('\n');
+function twoDiffGit(h, { round = FAR, cumulative = NEAR } = {}) {
+  return (args) => {
+    h.gitCalls.push(args);
+    if (args[0] === 'show') return okDiff(round);
+    if (args[0] === 'diff') return okDiff(cumulative);
+    return { status: 1, stdout: '', stderr: '' };
+  };
+}
+
+test('a round diff with no hunk near the line tries the cumulative diff, and its near hunk is sent (breaks if NO_HUNK_NEAR returns before the cumulative read)', async () => {
+  const h = setup([finding(1)]);
+  const res = await runWith(h, ['--limit', '10', '--confirm-headless'], { git: twoDiffGit(h), gh: baseGh(SHA_BASE) });
+  assert.equal(res.code, 0);
+  assert.equal(h.judge.calls.length, 1);
+  assert.ok(h.judge.calls[0].includes('NEARMARK') && !h.judge.calls[0].includes('FARMARK'));
+  assert.deepEqual(h.gitCalls[1], ['diff', '--unified=10', `${SHA_BASE}...${SHA_A}`, '--', 'src/f1.js']);
+});
+
+test('round and cumulative both far, or no base: no call, counted as no hunk near the line, not as no diff in the round commit (breaks if the counts swap or a far hunk is sent)', async () => {
+  const far = setup([finding(1)]);
+  const a = await runWith(far, ['--limit', '10', '--confirm-headless'], { git: twoDiffGit(far, { cumulative: FAR }), gh: baseGh(SHA_BASE) });
+  assert.equal(far.judge.calls.length, 0);
+  assert.match(a.out, /skipped: no hunk near the line 1, skipped: no diff in the round commit 0/);
+  const noBase = setup([finding(1)]);
+  const b = await runWith(noBase, ['--limit', '10', '--confirm-headless'], { git: twoDiffGit(noBase), gh: baseGh(null) });
+  assert.equal(noBase.judge.calls.length, 0);
+  assert.match(b.out, /skipped: no hunk near the line 1, skipped: no diff in the round commit 0/);
+  assert.equal(noBase.gitCalls.some((c) => c[0] === 'diff'), false);
+});
+
+// ---------- prompt version 2 ----------
+
+test('PROMPT_VERSION and JUDGE_VERSION are v2; a v1 unclear entry is pending again, a v1 yes or no stays done, and a new entry carries v2 (breaks if decided verdicts are re-judged or unclear ones are not)', async () => {
+  assert.equal(adj.PROMPT_VERSION, 'adjudicate-cr-v2');
+  assert.equal(JUDGE_VERSION, 'adjudicate-cr-v2');
+  const fs = [finding(1), finding(2), finding(3)];
+  const h = setup(fs, { script: [verdictOnly('no')] });
+  mkdirSync(path.dirname(h.files.state), { recursive: true });
+  writeFileSync(h.files.state, JSON.stringify({ [idOf(fs[0].key)]: { verdict: 'unclear' }, [idOf(fs[1].key)]: { verdict: 'no' } }));
+  const res = await runWith(h);
+  assert.equal(res.code, 0);
+  assert.equal(h.judge.calls.length, 2, 'the v1 unclear and the new finding; the v1 no is not re-judged');
+  const st = stateOf(h);
+  assert.equal(st[idOf(fs[1].key)].promptVersion, undefined, 'the v1 no is kept as it was');
+  assert.equal(st[idOf(fs[0].key)].promptVersion, 'adjudicate-cr-v2');
+  assert.equal(st[idOf(fs[2].key)].promptVersion, 'adjudicate-cr-v2');
+});
+
+test('a row built from a v1 yes entry carries prompt and judge version v1, and a row from a new yes carries v2 (breaks if a row is stamped with the version at build time)', async () => {
+  const fs = [finding(1), finding(2)];
+  const h = setup(fs, { linkTypes: { [fs[1].key]: 'within-hunk' } });
+  mkdirSync(path.dirname(h.files.state), { recursive: true });
+  writeFileSync(h.files.state, JSON.stringify({ [idOf(fs[0].key)]: { verdict: 'yes', severity: 'major', answerSha256: 'f'.repeat(64) } }));
+  await runWith(h);
+  writeLinkTypeLabels(h.files.linktype, { [fs[0].key]: 'within-hunk', [fs[1].key]: 'within-hunk' }, { 'agent-claude': CLAUDE });
+  await runWith(h);
+  const byId = Object.fromEntries(rowsOf(h).map((r) => [r.id, r]));
+  assert.equal(byId[idOf(fs[0].key)].provenance.promptVersion, 'adjudicate-cr-v1');
+  assert.equal(byId[idOf(fs[0].key)].labels[0].judgeVersion, 'adjudicate-cr-v1');
+  assert.equal(byId[idOf(fs[1].key)].provenance.promptVersion, 'adjudicate-cr-v2');
+  assert.equal(byId[idOf(fs[1].key)].labels[0].judgeVersion, 'adjudicate-cr-v2');
+});
+
 test('a finding on an answer-key path is not sent: no git read, no judge call, counted as skipped: answer-key path (breaks if the path list is not checked before the call or a normal path is skipped)', async () => {
   const fs = [finding(1, { path: 'scripts/eval/review-eval/gold/x.json' }), finding(2, { path: 'scripts/eval/review-eval/seeds/y.mjs' }), finding(3, { path: 'src/normal.js' })];
   const h = diffPer(setup(fs));
   const res = await runWith(h);
   assert.equal(res.code, 0);
   assert.equal(h.judge.calls.length, 1);
-  assert.deepEqual(h.gitCalls, [['show', '--format=', '--unified=3', SHA_A, '--', 'src/normal.js']]);
+  assert.deepEqual(h.gitCalls, [['show', '--format=', '--unified=10', SHA_A, '--', 'src/normal.js']], 'ten lines of context (seat F2)');
   assert.match(res.out, /skipped: answer-key path 2/);
   assert.deepEqual(rowsOf(h).map((r) => r.file), ['src/normal.js']);
   const plan = JSON.parse((await exec(h, 'plan', ['--json'])).out);
