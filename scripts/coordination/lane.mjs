@@ -2244,7 +2244,7 @@ const commands = {
     // L2.6: the scope holds an OWNS: part and a NEVER: part. Test only the text the caller gave; warn, never refuse.
     if (typeof flags.scope === 'string' && flags.scope.trim() !== '') {
       const miss = [/\bOWNS\s*:/i.test(flags.scope) ? null : 'OWNS:', /\bNEVER\s*:/i.test(flags.scope) ? null : 'NEVER:'].filter(Boolean);
-      if (miss.length) process.stderr.write(`WARNING: lane ${id} scope has no ${miss.join(' or ')} part. L2.6 wants "OWNS: ..." and "NEVER: ...". The lane is saved anyway.\n`);
+      if (miss.length) process.stderr.write(`WARNING: lane ${id} scope has no ${miss.join(' or ')} part. Rule L2.6 asks for "OWNS: ..." and "NEVER: ...". lane.mjs saved the lane.\n`);
     }
     if (JSON_OUT) return rows[0];
     const l = rows[0];

@@ -52,7 +52,7 @@ function laneEnv() {
 }
 /** Run lane.mjs as ME. */
 function lane(args) {
-  const r = spawnSync(process.execPath, [LANE, ...args], { cwd: s.repo, env: laneEnv(), encoding: 'utf8', windowsHide: true });
+  const r = spawnSync(process.execPath, [LANE, ...args], { cwd: s.repo, env: laneEnv(), encoding: 'utf8', windowsHide: true, timeout: 60_000 });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
 const q = (sql, params) => s.db.query(sql, params);
@@ -68,7 +68,7 @@ const quiet = (id, minutesAgo) => q(
    VALUES ($1,'probe','probe', now() - make_interval(mins => $2::int), NULL)`, [id, minutesAgo]);
 
 before(async () => {
-  const c = spawnSync(process.execPath, [SCRATCH, 'create', '--through', '6'], { encoding: 'utf8' });
+  const c = spawnSync(process.execPath, [SCRATCH, 'create', '--through', '6'], { encoding: 'utf8', windowsHide: true });
   assert.equal(c.status, 0, `scratch create failed: ${c.stderr}`);
   s.url = JSON.parse(c.stdout).url;
   assertScratchUrl(s.url);
@@ -89,7 +89,7 @@ before(async () => {
 
 after(async () => {
   await s.db?.end().catch(() => {});
-  if (s.url) { assertScratchUrl(s.url); spawnSync(process.execPath, [SCRATCH, 'drop', s.url], { encoding: 'utf8' }); }
+  if (s.url) { assertScratchUrl(s.url); spawnSync(process.execPath, [SCRATCH, 'drop', s.url], { encoding: 'utf8', windowsHide: true }); }
   if (s.tmp) fs.rmSync(s.tmp, { recursive: true, force: true });
 });
 
@@ -150,6 +150,14 @@ describe('say --to: a quiet or parked holder, or an unknown name, names a fallba
     assert.equal(await events(), n);
   });
 
+  it('control for rows 1 and 3: the same name with a fresh heartbeat resolves and gets the message (exit 0)', async () => {
+    const { holder } = await parkedHolder('zz-parked-c');
+    await q(`UPDATE sessions SET last_heartbeat = now(), last_activity_at = now() WHERE id = $1`, [holder]);
+    const r = lane(['say', 'hello woken', '--to', 'zz-parked-c']);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /^sent to /);
+  });
+
   it('row 6 (guard, passes before and after): a live session still gets the message', async () => {
     const live = sid();
     idFile(live, { name: 'zz-live-a' });
@@ -163,7 +171,8 @@ describe('say --to: a quiet or parked holder, or an unknown name, names a fallba
 
 describe('add: a scope with no OWNS: or no NEVER: warns on stderr and still saves (gap 5, lane half)', () => {
   const add = (id, scope, extra = []) => lane(['add', id, '--title', `title ${id}`, ...(scope === undefined ? [] : ['--scope', scope]), ...extra]);
-  const warns = (r) => r.err.split('\n').filter((l) => /^WARNING: /.test(l));
+  // Every case that calls warns() expects exit 0, so a crash in add cannot pass as "silent".
+  const warns = (r) => { assert.equal(r.code, 0, r.err); return r.err.split('\n').filter((l) => /^WARNING: /.test(l)); };
 
   it('row 7: OWNS only names NEVER:; NEVER only names OWNS:; RELATES TO only names both', async () => {
     const a = add(nid('ws-a'), 'OWNS: a.txt');
@@ -179,6 +188,7 @@ describe('add: a scope with no OWNS: or no NEVER: warns on stderr and still save
   it('row 8: a one-line scope, lower case and a WAITS ON prefix stay silent; WAITS ON with NEVER only warns', async () => {
     assert.equal(warns(add(nid('ws-d'), 'WAITS ON: zz-a OWNS: x NEVER: y')).length, 0);
     assert.equal(warns(add(nid('ws-e'), 'waits on: zz-a owns: x never: y')).length, 0);
+    assert.equal(warns(add(nid('ws-e2'), 'OWNS : x NEVER : y')).length, 0, 'a space before the colon counts');
     const w = add(nid('ws-f'), 'WAITS ON: zz-a NEVER: y');
     assert.match(warns(w)[0] ?? '', /scope has no OWNS: part/, w.err);
   });
@@ -208,6 +218,12 @@ describe('add: a scope with no OWNS: or no NEVER: warns on stderr and still save
     assert.equal(warns(add(nid('ws-m'), 'x')).length, 1);
   });
 
+  it('row 11: a bare --scope (no value) is skipped: exit 0, no WARNING', async () => {
+    const r = lane(['add', nid('ws-q'), '--title', 't', '--scope']);
+    assert.equal(warns(r).length, 0, r.err);
+    assert.doesNotMatch(r.err, /TypeError/);
+  });
+
   it('row 12: with --json stdout is JSON and the WARNING is on stderr only', async () => {
     const id = nid('ws-n');
     const r = add(id, 'OWNS: only', ['--json']);
@@ -219,12 +235,12 @@ describe('add: a scope with no OWNS: or no NEVER: warns on stderr and still save
 
   it('row 13: the warning does not block: exit 0, exactly one WARNING line, row written, seeded event logged', async () => {
     const id = nid('ws-o');
-    const before = await events();
+    const n0 = await events();
     const r = add(id, 'OWNS: only');
     assert.equal(r.code, 0, r.err);
     assert.equal(warns(r).length, 1, r.err);
     assert.equal((await row(id)).scope, 'OWNS: only');
-    assert.equal(await events(), before + 1);
+    assert.equal(await events(), n0 + 1);
     assert.equal((await q(`SELECT 1 FROM agentic_os.lane_event WHERE lane_id=$1 AND kind='seeded'`, [id])).rowCount, 1);
   });
 
@@ -235,7 +251,7 @@ describe('add: a scope with no OWNS: or no NEVER: warns on stderr and still save
     const r = add(id, 'x');
     assert.equal(r.code, 4, r.err);
     assert.match(r.err.split('\n')[0], /^REFUSED add \S+ \[not-holder\] -- /);
-    assert.equal(warns(r).length, 0, r.err);
+    assert.equal(r.err.split('\n').filter((l) => /^WARNING: /.test(l)).length, 0, r.err);
     assert.equal((await row(id)).scope, 'OWNS: x NEVER: y');
   });
 });
