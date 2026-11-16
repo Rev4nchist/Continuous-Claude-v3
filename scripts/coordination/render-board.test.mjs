@@ -246,7 +246,7 @@ describe('source twins', () => {
 
 const loadPg = () => requireDep('pg', { repoRoot: REPO });
 
-const E2E = { url: '', tmp: '', registry: '', home: '', rootA: '', rootC: '', rootArt: '', rootBad: '', noBoard: '' };
+const E2E = { url: '', tmp: '', registry: '', home: '', identity: '', rootA: '', rootC: '', rootArt: '', rootBad: '', noBoard: '' };
 const fwd = (p) => p.replace(/\\/g, '/');
 
 // The made-up list of the mask tests. The file names are the ones the hook reads (board-mask.test.mjs ties them to the hook text).
@@ -275,6 +275,10 @@ function renderPage(args, { cwd = E2E.rootC, env = {}, script = RENDER, nodeArgs
       CCV3_USER_HOME: E2E.home,
       LANE_PROJECT: '',
       CLAUDE_CODE_ENTRYPOINT: '',
+      // The header counts this machine's claude.exe processes and joins them to the identity folder. A render reads neither live list: both are
+      // pinned (an empty list, an empty folder), so two renders differ only in what the generator writes. A test that needs a list passes its own.
+      LANE_CLAUDE_PROCESSES: '[]',
+      CCV3_IDENTITY_DIR: E2E.identity,
       ...env,
     },
   });
@@ -310,6 +314,8 @@ describe('render-board.mjs against a scratch database', () => {
     E2E.url = JSON.parse(created.stdout).url;
     assertScratchUrl(E2E.url);
     E2E.tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rb-e2e-'));
+    E2E.identity = path.join(E2E.tmp, 'identity'); // empty: the renders read no live identity file
+    fs.mkdirSync(E2E.identity);
     for (const n of ['rootA', 'rootC', 'rootArt', 'rootBad', 'noBoard']) {
       E2E[n] = path.join(E2E.tmp, n);
       fs.mkdirSync(E2E[n]);
@@ -703,6 +709,27 @@ describe('render-board.mjs against a scratch database', () => {
     assert.equal(renderPage(['--project', 'continuous-claude', '--out', base], { nodeArgs, env: { TZ: 'UTC' } }).code, 0);
     assert.equal(renderPage(['--project', 'continuous-claude', '--interactive', '--out', flagged], { nodeArgs, env: { TZ: 'UTC' } }).code, 0);
     assert.equal(maskPage(fs.readFileSync(flagged, 'utf8')), maskPage(fs.readFileSync(base, 'utf8')));
+  });
+
+  // The page header counts the claude.exe processes of THIS machine and joins them to ~/.claude/state/identity. Sessions, workflow agents and
+  // headless runs start and end all day, so a render that reads them differs from the next render (the old flake of the test above).
+  // renderPage pins both. This test guards the process list: with the pin removed the default page shows this machine's count (Windows) or no
+  // counter (Linux) where the pinned page shows 0/0, so it fails on both. The identity folder only matters when a list has rows (it maps a pid to a
+  // session), so it is pinned for the tests that pass their own list; an empty list cannot show it, and this test does not claim to.
+  it('a render reads no live process list (the default page equals the page of an empty list)', () => {
+    const nodeArgs = ['--import', freezeClock()];
+    const emptyDir = fs.mkdtempSync(path.join(E2E.tmp, 'ident-'));
+    const page = (name, env) => {
+      const out = path.join(E2E.tmp, `procs-${name}.html`);
+      const r = renderPage(['--project', 'continuous-claude', '--out', out], { nodeArgs, env: { TZ: 'UTC', ...env } });
+      assert.equal(r.code, 0, r.all);
+      return maskPage(fs.readFileSync(out, 'utf8'));
+    };
+    const pinned = page('pinned', { LANE_CLAUDE_PROCESSES: '[]', CCV3_IDENTITY_DIR: emptyDir });
+    const byDefault = page('default', {});
+    const oneProcess = page('one', { LANE_CLAUDE_PROCESSES: '[{"pid":4242,"startMs":1}]', CCV3_IDENTITY_DIR: emptyDir });
+    assert.notEqual(oneProcess, pinned, 'the process list must show in the page, or this test proves nothing');
+    assert.equal(byDefault, pinned);
   });
 
   // Opt-in golden. The default page must not change outside the kanban script. The "before" is the generator of a git ref
