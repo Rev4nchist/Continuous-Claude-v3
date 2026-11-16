@@ -168,7 +168,7 @@
     {
       "id": "pr-review-loop",
       "files": [
-        "pr-review-loop.md"
+        "pr-review-loop-core.md"
       ],
       "mode": "inject",
       "laneSegment": "skip",
