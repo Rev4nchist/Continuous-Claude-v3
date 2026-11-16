@@ -132,6 +132,20 @@ const run = async (event: string, opts?: Parameters<typeof runLaneContext>[1]): 
   ((await runLaneContext(JSON.stringify({ session_id: ME, hook_event_name: event, cwd: ccv3 }), opts)) as Out)
     .hookSpecificOutput?.additionalContext ?? '';
 
+/**
+ * Card coord-banner-dm-never-cut (seat condition 2): a header that is whole under its 5,000-byte budget but leaves the DMs little room.
+ * When DMs wait, the optional sections collapse to make room. SEAT, CUT and the other reserved lines never move.
+ */
+const roomyHeader = (): void => {
+  fake.claimable = Array.from({ length: 5 }, (_, i) => ({ id: `card-${i}`, title: 'c'.repeat(100), band: null }));
+  fake.peers = Array.from({ length: 10 }, (_, i) => ({ sid: `bbbbbbbb-0000-4000-8000-00000000000${i}`, lanes: `lane-${i}`, scopes: 's'.repeat(2000), total: 1 }));
+};
+const dmRow = (id: number): Row => ({
+  id, occurred_at: '', lane_id: null, kind: 'note', session_id: PEER, to_session_id: ME,
+  body: `<dm${id}>${'d'.repeat(1000)}`, project_key: 'continuous-claude', board_wm: 1,
+});
+const dmTags = (t: string): string[] => [...t.matchAll(/<(dm\d+)>/g)].map((m) => m[1]);
+
 describe('SEAT', () => {
   it('S1: the first line of the SessionStart text is SEAT: <name> #<sid8> of the master card holder', async () => {
     writeIdentity(BOSS, { name: 'trex' });
@@ -221,6 +235,17 @@ describe('SEAT', () => {
     const text = await run('SessionStart');
     expect(text).not.toContain('SEAT:');
     expect(text).toBe(base);
+  });
+
+  it('S10: DMs make the header collapse (card coord-banner-dm-never-cut): the SEAT line stays the first line, all 6 DMs show, 8,000 bytes hold', async () => {
+    writeIdentity(BOSS, { name: 'trex' });
+    fake.seat = [seatRow(BOSS)];
+    roomyHeader();
+    fake.unread = [101, 102, 103, 104, 105, 106].map(dmRow);
+    const text = await run('SessionStart');
+    expect(text.split('\n')[0]).toBe('SEAT: trex #cccccccc');
+    expect(dmTags(text)).toEqual(['dm101', 'dm102', 'dm103', 'dm104', 'dm105', 'dm106']);
+    expect(utf8Bytes(text)).toBeLessThanOrEqual(8000);
   });
 
   it('S5: the prompt path and the mid-turn path print no SEAT line', async () => {
@@ -355,6 +380,22 @@ describe('CUT', () => {
     expect(cutLineOf(page)).toBeUndefined();
     fake.unread = [];
     expect(cutLineOf(await run('SessionStart', at(2 * MIN)))).toBeUndefined();
+  });
+
+  it('C14: DMs make the header collapse (card coord-banner-dm-never-cut): SEAT stays line 1, CUT line 2, the id is counted once, all 6 DMs show', async () => {
+    writeIdentity(BOSS, { name: 'trex' });
+    fake.seat = [seatRow(BOSS)];
+    roomyHeader();
+    await cutIt(41);
+    fake.unread = [101, 102, 103, 104, 105, 106].map(dmRow);
+    const text = await run('SessionStart', at(MIN));
+    const lines = text.split('\n');
+    expect(lines[0]).toBe('SEAT: trex #cccccccc');
+    expect(lines[1]).toBe('CUT, NOT READ: 41');
+    expect(dmTags(text)).toEqual(['dm101', 'dm102', 'dm103', 'dm104', 'dm105', 'dm106']);
+    // One text went out, so the id has one more print, not two (the page that was not sent counts nothing).
+    const entry = (JSON.parse(readFileSync(cutFile(), 'utf8')) as { entries: Array<{ id: number; prints: number }> }).entries.find((e) => e.id === 41);
+    expect(entry?.prints).toBe(1);
   });
 
   it('C6: at most 8 ids print, then +N more; ids that did not print keep their prints', async () => {
