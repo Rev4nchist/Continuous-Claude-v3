@@ -21,6 +21,10 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
+
+// Remove the temp folders made through makeTempDir() when this file ends (never a prefix or age sweep).
+registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -106,7 +110,7 @@ test('N2: the none option at HIGH and CRITICAL says what READY needs (CI and pro
 // ---------- the CLI: --confirm ----------
 
 function confirm(pathway, by, { paths, labels = [] }) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-noreview-'));
+  const dir = makeTempDir('checkpoint-noreview-');
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
   const factsFile = path.join(dir, 'facts.json');

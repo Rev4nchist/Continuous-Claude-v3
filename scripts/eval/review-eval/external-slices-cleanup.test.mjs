@@ -21,7 +21,7 @@ test('external-slices.test.mjs removes every temp folder it made and leaves a fo
     // NODE_TEST_CONTEXT is set inside a node:test child. Left in, the nested run would not execute the file's tests.
     const env = { ...process.env, TEMP: scratch, TMP: scratch, TMPDIR: scratch };
     delete env.NODE_TEST_CONTEXT;
-    const r = spawnSync(process.execPath, ['--test', TARGET], { env, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', TARGET], { env, encoding: 'utf8' });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /# pass [1-9]\d*\r?\n/, 'the target tests ran');
     const left = readdirSync(scratch);

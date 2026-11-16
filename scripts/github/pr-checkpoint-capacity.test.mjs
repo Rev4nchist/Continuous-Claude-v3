@@ -29,6 +29,10 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
+
+// Remove the temp folders made through makeTempDir() when this file ends (never a prefix or age sweep).
+registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -50,7 +54,7 @@ const ok = (data) => ({ status: 0, stdout: JSON.stringify(data), stderr: '' });
 
 /** Fake deps. `posted` collects every gh call. The comment list changes after the post, like the real thread. */
 function fakeDeps({ comments = [], reply = null, ghFails = false, usage = null, slot = null } = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'capacity-'));
+  const dir = makeTempDir('capacity-');
   const calls = [];
   let postedAt = null;
   const gh = (args) => {
@@ -447,7 +451,7 @@ function wiredRun(repo, { author = 'Rev4nchist', noProbe = false, args = ['--pro
 }
 
 function wiredRepo({ autoConfirm = false } = {}) {
-  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'capacity-wired-')));
+  const repo = realpathSync(makeTempDir('capacity-wired-'));
   const git = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...a], { cwd: repo, encoding: 'utf8' });
   const config = JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, checkpoint: { ...LIVE.checkpoint, autoConfirm } });
   git('init', '-q', '-b', 'main');

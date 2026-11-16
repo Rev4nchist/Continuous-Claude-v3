@@ -27,6 +27,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recommend, pathFiltersFrom, confirmProblem, ledgerMonthFiles } from './pr-checkpoint.mjs';
 import { bandOf } from './review-router.mjs';
+import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
+
+// Remove the temp folders made through makeTempDir() when this file ends (never a prefix or age sweep).
+registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -174,7 +178,7 @@ test('I12: --by default cannot record none at HIGH or CRITICAL even when none is
 });
 
 test('I13: the CLI (--facts) prints the cap reason from the ledger_month_files fact', () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'interim-cr-'));
+  const dir = makeTempDir('interim-cr-');
   const factsFile = path.join(dir, 'facts.json');
   const cfg = path.join(dir, 'config.json');
   writeFileSync(factsFile, JSON.stringify({ head: HEAD, now: NOW, stamp: STAMP, files: files20.map((p) => file(p)), labels: ['risk:high'], cli: { bySeverity: { minor: 1 } }, dependabot: false, config_drift: false, ledger_month_files: 150 }));
@@ -187,7 +191,7 @@ test('I13: the CLI (--facts) prints the cap reason from the ledger_month_files f
 });
 
 test('I14b: a PR row with a missing, negative or fractional files value makes the month unreadable (null), so the checkpoint recommends none', () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'interim-ledger-bad-'));
+  const dir = makeTempDir('interim-ledger-bad-');
   const ledger = path.join(dir, 'ledger.jsonl');
   const row = (files) => JSON.stringify({ ts: '2026-11-01T10:00:00.000Z', date: '2026-11-01', pr: 1, head: HEAD, ...(files === undefined ? {} : { files }), cost: 1, session: 's' });
   for (const files of [undefined, -5, 2.5]) {
@@ -207,7 +211,7 @@ test('I4b: a rename whose OLD name is security-tier and whose new name is anothe
 });
 
 test('I14: ledgerMonthFiles reads the Chicago month of now from the ledger file (env seam or deps), and a bad ledger gives null, not 0', () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'interim-ledger-'));
+  const dir = makeTempDir('interim-ledger-');
   const ledger = path.join(dir, 'ledger.jsonl');
   const row = (date, files, extra = {}) => JSON.stringify({ ts: `${date}T10:00:00.000Z`, date, pr: 1, head: HEAD, files, cost: files / 4, session: 's', ...extra });
   writeFileSync(ledger, [row('2026-11-01', 30), row('2026-11-03', 20), row('2026-10-31', 99), row('2026-11-02', 50, { kind: 'cli', branch: 'b', pr: undefined })].join('\n') + '\n');

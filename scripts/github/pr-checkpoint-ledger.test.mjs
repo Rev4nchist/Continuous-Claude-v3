@@ -30,6 +30,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
+import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
+
+// Remove the temp folders made through makeTempDir() when this file ends (never a prefix or age sweep).
+registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -54,7 +58,7 @@ const review = (head = HEAD) => ({ step: 'review', key: KEY, head });
 const pick = (pathway, head = HEAD) => ({ step: 'paid-round', key: `${KEY}!pick:${pathway}`, head });
 
 function setup({ ledger = true, labels = ['risk:high'], paths = FIVE, head = HEAD, config = {} } = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'ledger-'));
+  const dir = makeTempDir('ledger-');
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
   const factsFile = path.join(dir, 'facts.json');

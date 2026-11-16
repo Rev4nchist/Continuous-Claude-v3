@@ -134,6 +134,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_REPO, matchGlob } from './review-router.mjs';
+import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
+
+// Remove the temp folders made through makeTempDir() when this file ends (never a prefix or age sweep).
+registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -648,7 +652,7 @@ test('T20c (PR B): PATHWAY_REL sits next to the stamp, and is the path the hook 
 // ---------- CLI: the way the harness runs it ----------
 
 function runCli(args, factsObj) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-'));
+  const dir = makeTempDir('checkpoint-');
   const factsFile = path.join(dir, 'facts.json');
   const cfgFile = path.join(dir, 'config.json');
   if (factsObj) writeFileSync(factsFile, JSON.stringify(factsObj));
@@ -784,7 +788,7 @@ test('T29 (CLI): --dependabot sets the flag the mod passes, and the result is no
 
 test('T30 (CLI): bad usage exits 2: an unknown flag, or --facts or --config without a value', () => {
   const cli = path.join(HERE, 'pr-checkpoint.mjs');
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-usage-'));
+  const dir = makeTempDir('checkpoint-usage-');
   for (const args of [['--bogus'], ['--facts'], ['--config'], ['--facts', '--json'], ['--json', '--config']]) {
     const r = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', cwd: dir });
     assert.equal(r.status, 2, `${args.join(' ')}: ${r.stdout} ${r.stderr}`);
@@ -841,7 +845,7 @@ const RECORD_KEYS = ['at', 'body_sha256', 'budget', 'class', 'decided_by', 'head
  *   (a string is written raw); false = no stamp key in the facts and no stamp.json. stampAt: the dir that gets stamp.json instead of the state dir.
  */
 function runB(mode, { files = R5_FILES, facts: factOver = {}, pol = {}, body = BODY_TEXT, env = {}, noBody = false, noStateDir = false, cwd = null, stampFile, stampAt = null } = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-b-'));
+  const dir = makeTempDir('checkpoint-b-');
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
   const factsFile = path.join(dir, 'facts.json');
@@ -996,7 +1000,7 @@ test('TB8: with no stamp in the facts, --confirm reads <state-dir>/stamp.json: a
 });
 
 test('TB9: with no --state-dir, --confirm reads stamp.json and writes pathway.json under the git toplevel of the cwd (where pre-pr.mjs and the hook look), from a subdirectory too', () => {
-  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'checkpoint-repo-')));
+  const repo = realpathSync(makeTempDir('checkpoint-repo-'));
   const init = spawnSync('git', ['init', '-q', repo], { encoding: 'utf8' });
   assert.equal(init.status, 0, init.stderr);
   const sub = path.join(repo, 'sub', 'dir');
@@ -1009,7 +1013,7 @@ test('TB9: with no --state-dir, --confirm reads stamp.json and writes pathway.js
   assert.ok(!existsSync(path.join(sub, ...PATHWAY_PATH.split('/'))), 'not under the cwd');
   assert.ok(!existsSync(r.pathwayFile), 'not in the fixture state dir, which this run never passed');
   // The stamp READ uses the same default dir: no facts stamp, stamp.json under the toplevel's .claude/cache/pre-pr, cwd in a subdirectory.
-  const repo2 = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'checkpoint-repo-')));
+  const repo2 = realpathSync(makeTempDir('checkpoint-repo-'));
   assert.equal(spawnSync('git', ['init', '-q', repo2], { encoding: 'utf8' }).status, 0);
   const sub2 = path.join(repo2, 'sub');
   mkdirSync(sub2, { recursive: true });
@@ -1183,7 +1187,7 @@ test('TA4b: apply with no record, or a record with an unknown pathway or no head
 
 /** The wired CLI: a fake gh script (env PR_CHECKPOINT_GH) logs every call to a file and prints a canned PR view. */
 function runApply({ record = RECORD, view = { isDraft: true, headRefOid: HEAD }, pr = '999999' } = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-apply-'));
+  const dir = makeTempDir('checkpoint-apply-');
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
   if (record) writeFileSync(path.join(state, 'pathway.json'), JSON.stringify(record));
@@ -1232,7 +1236,7 @@ test('TA6 (CLI): --apply exits 1 with no mutation when pathway.json is missing, 
 });
 
 test('TB10 (critic): the facts (head, files, config drift, CLI output) come from the git toplevel of the cwd, the checkout the state dir belongs to, not from the checkout that holds the script', () => {
-  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'checkpoint-facts-')));
+  const repo = realpathSync(makeTempDir('checkpoint-facts-'));
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd: repo, encoding: 'utf8' });
   assert.equal(git('init', '-q', '-b', 'main').status, 0);
   writeFileSync(path.join(repo, 'a.txt'), 'one\n');
