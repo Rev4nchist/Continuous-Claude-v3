@@ -1249,6 +1249,9 @@ async function idleNote(c, to) {
     + 'To wake an idle session, also use SendMessage; a session in another permission-mode class holds it for Dave.';
 }
 
+/** Added to both "no session" refusals of `say --to` (M4.12): a parked holder is quiet over 2 hours, a wrong name never existed. */
+const NO_SESSION_FALLBACK = 'It may be parked or quiet over 2 hours. Reach it by SendMessage to its name, or ask Dave.';
+
 /**
  * Who does `--to <want>` mean? A name first (exact, recent sessions), then a uuid prefix.
  * Several sessions with the name: prefer the one on this board; otherwise ask for `name@board`.
@@ -1269,7 +1272,7 @@ async function resolveRecipient(c, want, board) {
     const there = await sessionsOnBoard(c, byName, wantBoard);
     if (there.length === 1) return there[0];
     throw new Error(there.length ? `"${want}" still names ${there.length} sessions: ${there.map(L).join(', ')}. Use #sid8 or the uuid prefix.`
-      : `no live session named "${name}" on board ${wantBoard}`);
+      : `no live session named "${name}" on board ${wantBoard}. ${NO_SESSION_FALLBACK}`);
   }
   if (byName.length > 1) {
     const here = await sessionsOnBoard(c, byName, board.key);
@@ -1284,7 +1287,7 @@ async function resolveRecipient(c, want, board) {
      AND ${ALIVE_AT()} > now() - interval '2 hours'
      ORDER BY ${ALIVE_AT()} DESC LIMIT 2`, [prefix],
   );
-  if (m.rows.length === 0) throw new Error(`no recent session matching "${want}"`);
+  if (m.rows.length === 0) throw new Error(`no recent session matching "${want}". ${NO_SESSION_FALLBACK}`);
   if (m.rows.length > 1) throw new Error(`"${want}" is ambiguous -- give more characters`);
   return m.rows[0].id;
 }
@@ -2238,6 +2241,11 @@ const commands = {
     }
     await c.query('COMMIT');
     await logEvent(c, { laneId: id, kind: 'seeded', sessionId: myId, body: flags.title });
+    // L2.6: the scope holds an OWNS: part and a NEVER: part. Test only the text the caller gave; warn, never refuse.
+    if (typeof flags.scope === 'string' && flags.scope.trim() !== '') {
+      const miss = [/\bOWNS\s*:/i.test(flags.scope) ? null : 'OWNS:', /\bNEVER\s*:/i.test(flags.scope) ? null : 'NEVER:'].filter(Boolean);
+      if (miss.length) process.stderr.write(`WARNING: lane ${id} scope has no ${miss.join(' or ')} part. L2.6 wants "OWNS: ..." and "NEVER: ...". The lane is saved anyway.\n`);
+    }
     if (JSON_OUT) return rows[0];
     const l = rows[0];
     return `lane ${id} upserted on board ${board.key} (${'band' in l ? `band ${l.band ?? 'none'}, ` : ''}priority ${l.priority})`;
