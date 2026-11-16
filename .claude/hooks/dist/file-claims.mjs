@@ -6017,6 +6017,10 @@ function isHarnessPath(filePath) {
   if (/^settings[^/]*\.json$/.test(base)) return true;
   return false;
 }
+function isMemoryIndexPath(canonicalPath, fold) {
+  const p = canonicalPath.replace(/\\/g, "/");
+  return (fold ? /(^|\/)\.claude\/projects\/[^/]+\/memory\/memory\.md$/i : /(^|\/)\.claude\/projects\/[^/]+\/memory\/MEMORY\.md$/).test(p);
+}
 function leaseFor(filePath) {
   return isHarnessPath(filePath) ? { leaseClass: "harness:src", ttlMs: HARNESS_LEASE_MS } : { leaseClass: "file", ttlMs: FILE_LEASE_MS };
 }
@@ -6384,15 +6388,20 @@ function commonDirOf(top) {
   const common = resolve2(gitdir, readFileSync2(commonFile, "utf8").trim());
   return existsSync(common) ? common : null;
 }
+function realFilePath(rawPath, cwd) {
+  if (isNetworkPath(rawPath)) return null;
+  const abs = cwd ? resolve2(cwd, rawPath) : resolve2(rawPath);
+  if (isNetworkPath(abs)) return null;
+  const anchor = nearestExisting(abs);
+  if (!anchor) return null;
+  return join4(real(anchor), relative(anchor, abs));
+}
 function resolveClaimKey(rawPath, options = {}) {
   try {
     const platform = options.platform ?? process.platform;
-    if (isNetworkPath(rawPath)) return null;
+    const realFile = realFilePath(rawPath, options.cwd);
+    if (realFile === null) return null;
     const abs = options.cwd ? resolve2(options.cwd, rawPath) : resolve2(rawPath);
-    if (isNetworkPath(abs)) return null;
-    const anchor = nearestExisting(abs);
-    if (!anchor) return null;
-    const realFile = join4(real(anchor), relative(anchor, abs));
     let dir = dirname2(realFile);
     for (; ; ) {
       const common = commonDirOf(dir);
@@ -6835,6 +6844,14 @@ async function holderLines(holder, filePath, listForm) {
 ${release}${lane}`;
 }
 var FOLDS_CASE2 = process.platform === "win32" || process.platform === "darwin";
+function canonicalRealPath(rawPath, cwd) {
+  try {
+    return (realFilePath(rawPath, cwd) ?? "").replace(/\\/g, "/");
+  } catch {
+    return "";
+  }
+}
+var isIndexRow = (c) => isMemoryIndexPath(`${c.project}/${c.filePath}`, FOLDS_CASE2) || isMemoryIndexPath(c.filePath, FOLDS_CASE2);
 function formsOf(top, cwd, filePath) {
   const full = `${top}/${filePath}`;
   const forms = /* @__PURE__ */ new Set([full]);
@@ -6864,7 +6881,8 @@ async function mainShell(input, cmd) {
   const cwd = resolvePath(typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
   const ctx = resolveRepoContext(cwd);
   const sessionId = resolveSessionId(input.session_id);
-  const { claims, degraded } = await listBlockingClaims(sessionId, STALE_THRESHOLD_MS);
+  const { claims: allClaims, degraded } = await listBlockingClaims(sessionId, STALE_THRESHOLD_MS);
+  const claims = allClaims.filter((c) => !isIndexRow(c));
   if (degraded || claims.length === 0) {
     console.log(JSON.stringify(cont));
     return;
@@ -6909,6 +6927,9 @@ async function mainShell(input, cmd) {
   console.log(JSON.stringify(cont));
 }
 async function claimOne(input, filePath, sessionId) {
+  if (isMemoryIndexPath(canonicalRealPath(filePath, input.cwd), FOLDS_CASE2)) {
+    return { output: { result: "continue" }, denied: false };
+  }
   const key = resolveClaimKey(filePath, { cwd: input.cwd });
   const claimPath = key ? key.filePath : filePath;
   const project = key ? key.project : canonicalProject(input.cwd);
