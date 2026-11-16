@@ -327,6 +327,8 @@ fastmcp-*.png
 /lane-board.html
 # Per-board pages: render-board.mjs --project <key> writes lane-board-<key>.html for every board but continuous-claude.
 /lane-board-*.html
+# Local seat page from scripts/coordination/render-portfolio.mjs; a build artifact.
+/portfolio.html
 
 # Session scratch that research and QA runs leave in the repo root (Opus 5.5 eval, P39).
 # Agents should write these to the session scratchpad instead.
