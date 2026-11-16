@@ -17,12 +17,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const fake = vi.hoisted(() => ({
   queries: [] as string[],
   endCalled: false,
+  connectDelayMs: 0,
 }));
 
 vi.mock('pg', () => {
   class Client {
     on(): this { return this; }
-    async connect(): Promise<void> { /* connected */ }
+    async connect(): Promise<void> {
+      if (fake.connectDelayMs > 0) await new Promise((res) => setTimeout(res, fake.connectDelayMs));
+    }
     async query(sql: string): Promise<{ rows: unknown[] }> {
       fake.queries.push(sql);
       if (/FROM agentic_os\.lane_event/.test(sql)) {
@@ -56,6 +59,7 @@ describe('lane-context: a slow client.end() after the watermark write', () => {
     delete process.env.CLAUDE_CODE_ENTRYPOINT;
     fake.queries.length = 0;
     fake.endCalled = false;
+    fake.connectDelayMs = 0;
     process.env.CONTINUOUS_CLAUDE_DB_URL = 'postgres://fake@localhost:1/fake';
   });
   afterEach(() => {
@@ -74,6 +78,20 @@ describe('lane-context: a slow client.end() after the watermark write', () => {
     expect(result, 'runLaneContext waited for client.end()').not.toBe('STUCK');
     expect(JSON.stringify(result)).toContain('DM-BODY');
     expect(fake.queries.some((q) => /INSERT INTO agentic_os\.lane_watermark/.test(q)), 'watermark was written').toBe(true);
+    expect(fake.endCalled, 'end() was still called').toBe(true);
+  });
+
+  // Card tests-flaky-under-load-1115. A loaded machine makes the work before end() slow. The row above gave it 1000 ms and read a slow
+  // run as "waited for end()". The fake end() never resolves, so a long budget keeps the meaning. A 1200 ms connect stands for the load.
+  // Change that turns it red: a budget of 1000 ms or less in the race above.
+  it('a slow connect (1200 ms, a loaded machine) is not read as a wait for end()', async () => {
+    fake.connectDelayMs = 1200;
+    const result = await Promise.race([
+      runLaneContext(PAYLOAD),
+      new Promise((res) => setTimeout(() => res('STUCK'), 1000)),
+    ]);
+    expect(result, 'runLaneContext waited for client.end()').not.toBe('STUCK');
+    expect(JSON.stringify(result)).toContain('DM-BODY');
     expect(fake.endCalled, 'end() was still called').toBe(true);
   });
 

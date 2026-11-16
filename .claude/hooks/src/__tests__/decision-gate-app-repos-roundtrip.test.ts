@@ -123,6 +123,15 @@ function roundTrip(cwd: string, command: string, pattern: string, facts?: object
 
 // Each row starts git and node several times (0.7 to 1.6 s on Windows when idle): a long limit keeps a loaded machine from a false red.
 describe('the deny text, the real app-ask CLI and the real ledger give the key the gate reads (fix round 1, fixer C)', { timeout: 30_000 }, () => {
+  // Card tests-flaky-under-load-1115. Same defect as the chain test: vitest --retry=2 runs a retried row in the SAME home (beforeAll),
+  // so its fixed repo name exists and `git remote add` fails "remote already exists". Change that turns it red: one home for all attempts.
+  let retryAttempt = 0;
+  it('RTR a retried row can build its repo again (one home per attempt)', { retry: 1 }, () => {
+    retryAttempt += 1;
+    makeRepo('rt-retry', { up: 'https://github.com/acme/rt-retry.git' });
+    if (retryAttempt === 1) throw new Error('first attempt fails on purpose, to force the retry');
+    expect(retryAttempt, 'the retry ran').toBe(2);
+  });
   it('RT1 a bare push with an upstream (@{push} = up/feat)', () => {
     const d = makeRepo('rt-bare', { up: 'https://github.com/acme/rt-bare.git' });
     git(d, 'update-ref', 'refs/remotes/up/feat', 'main');

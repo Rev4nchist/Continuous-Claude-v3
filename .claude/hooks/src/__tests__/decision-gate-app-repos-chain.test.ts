@@ -145,6 +145,16 @@ function chain(cwd: string, command: string, pattern: string, facts?: object): s
 
 // Each row starts git and node several times (about 1 s each): a long limit keeps a loaded machine from a false red.
 describe('gate deny -> parsed app-ask command -> real app-ask -> real ledger -> gate allow (fix round 1, fixer D, F9)', { timeout: 30_000 }, () => {
+  // Card tests-flaky-under-load-1115. CI and pre-pr run vitest with --retry=2. A retried row runs again in the SAME home (beforeAll),
+  // so its fixed repo name exists and `git remote add` fails "remote already exists": the first error is gone.
+  // Change that turns it red: one home for all attempts (a repo built twice in one home fails).
+  let retryAttempt = 0;
+  it('CHR a retried row can build its repo again (one home per attempt)', { retry: 1 }, () => {
+    retryAttempt += 1;
+    makeRepo('ch-retry', { up: 'https://github.com/acme/ch-retry.git' });
+    if (retryAttempt === 1) throw new Error('first attempt fails on purpose, to force the retry');
+    expect(retryAttempt, 'the retry ran').toBe(2);
+  });
   it('CH1 a bare push with an upstream (@{push} = up/feat)', () => {
     const d = makeRepo('ch-bare', { up: 'https://github.com/acme/ch-bare.git' });
     git(d, 'update-ref', 'refs/remotes/up/feat', 'main');
