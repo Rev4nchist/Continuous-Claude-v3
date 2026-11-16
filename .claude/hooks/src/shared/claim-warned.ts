@@ -50,3 +50,13 @@ export function firstWarning(sessionId: string, project: string, filePath: strin
     return true;
   }
 }
+
+/** True when this session already recorded this project and path. Records nothing. Any error: false (show the warning). */
+export function wasWarned(sessionId: string, project: string, filePath: string): boolean {
+  try {
+    const file = join(stateDir(), `${safeName(sessionId)}.txt`);
+    return existsSync(file) && readFileSync(file, 'utf8').split('\n').includes(`${project}|${filePath}`);
+  } catch {
+    return false;
+  }
+}

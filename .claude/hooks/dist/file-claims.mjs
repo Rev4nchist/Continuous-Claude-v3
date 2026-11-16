@@ -5841,8 +5841,207 @@ var require_lib2 = __commonJS({
 
 // src/file-claims.ts
 init_trace_boot();
-import { readFileSync as readFileSync4 } from "fs";
-import { basename as basename2, isAbsolute as isAbsolute2, relative as relative2, resolve as resolvePath } from "path";
+import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync4 } from "fs";
+import { homedir as homedir5, tmpdir } from "os";
+import { basename as basename3, isAbsolute as isAbsolute2, join as join6, relative as relative2, resolve as resolvePath } from "path";
+
+// src/shared/subagent-write.ts
+init_trace_boot();
+import { basename as basename2, dirname as dirname2 } from "path";
+var READ_ONLY_AGENT_TYPES = [
+  "architect",
+  "cma-operator",
+  "critic",
+  "deployer",
+  "grok-adversary",
+  "grok-worker",
+  "judge",
+  "liaison",
+  "oracle",
+  "pathfinder",
+  "phoenix",
+  "plan-reviewer",
+  "principal-reviewer",
+  "profiler",
+  "react-perf-reviewer",
+  "scout",
+  "security-refuter",
+  "sleuth",
+  "surveyor",
+  "ui-compliance-reviewer"
+];
+var ALLOW = { kind: "allow" };
+var fwd = (s) => s.replace(/\\/g, "/").replace(/\/+$/, "");
+function classOf(input) {
+  if (typeof input.agent_id !== "string" || !input.agent_id) return "main";
+  if (typeof input.agent_type !== "string" || !input.agent_type) return "untyped";
+  return READ_ONLY_AGENT_TYPES.includes(input.agent_type) ? "readonly" : "other";
+}
+function protectedKind(real2, deps, repoRoot) {
+  const norm = (s) => deps.fold ? fwd(s).toLowerCase() : fwd(s);
+  const p = norm(real2);
+  const home = norm(deps.home);
+  if (p === `${home}/.claude/state` || p.startsWith(`${home}/.claude/state/`)) return "state";
+  if (p.startsWith(`${home}/.claude/rules-ondemand/`) || p === `${home}/.claude/rules-ondemand`) return "rules-ondemand";
+  if (p.startsWith(`${home}/.claude/rules/`) || p === `${home}/.claude/rules`) return "rules";
+  if (dirname2(p) === `${home}/.claude` && basename2(p).startsWith("settings")) return "settings";
+  if (repoRoot) {
+    const dir = dirname2(p);
+    if (deps.tops.some((t) => norm(t) === dir)) return "repo-root";
+  }
+  return null;
+}
+function insideScratch(real2, deps) {
+  const norm = (s) => deps.fold ? fwd(s).toLowerCase() : fwd(s);
+  const p = norm(real2);
+  const tmp = norm(deps.tmp);
+  if (!tmp || !(p === tmp || p.startsWith(`${tmp}/`))) return false;
+  if (!deps.sessionId) return false;
+  const rest = p.slice(tmp.length + 1);
+  const sid = norm(deps.sessionId);
+  return new RegExp(`^claude/[^/]+/${sid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/scratchpad(/|$)`).test(rest);
+}
+var printable = (s) => s.replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]/g, "?");
+function scratchText(deps) {
+  return deps.scratchFolder ? printable(deps.scratchFolder) : `${printable(fwd(deps.tmp))}/claude/<hash>/${printable(deps.sessionId)}/scratchpad`;
+}
+var KIND_TEXT = {
+  state: "the state folder",
+  settings: "a settings file",
+  rules: "the rules folder",
+  "rules-ondemand": "the on-demand rules folder",
+  "repo-root": "the root of a checkout"
+};
+function denyFor(path, kind, deps) {
+  return {
+    kind: "deny",
+    reason: `SUBAGENT WRITE BLOCKED: "${printable(path)}" is in ${KIND_TEXT[kind]}. A subagent does not write there. Write the file in your scratch folder instead: ${scratchText(deps)}. This check reads the call and cannot see what a script writes inside.`
+  };
+}
+function warnFor(path, deps) {
+  return {
+    kind: "warn",
+    path,
+    text: `[WARN] subagent write: "${printable(path)}" is outside your scratch folder ${scratchText(deps)}. It is not stopped. This warning shows once per path.`
+  };
+}
+function judgeRealPath(real2, cls, deps) {
+  if (insideScratch(real2, deps)) return ALLOW;
+  const kind = protectedKind(real2, deps, cls === "readonly");
+  if (kind) return denyFor(real2, kind, deps);
+  if (cls === "readonly" && !deps.warned(real2)) return warnFor(real2, deps);
+  return ALLOW;
+}
+function judgeDirect(input, paths, deps) {
+  const cls = classOf(input);
+  if (cls === "main" || cls === "other") return ALLOW;
+  let warn = ALLOW;
+  for (const p of paths) {
+    if (typeof p !== "string" || !p) continue;
+    const v = judgeRealPath(deps.realPath(p, deps.cwd) || fwd(p), cls, deps);
+    if (v.kind === "deny") return v;
+    if (v.kind === "warn" && warn.kind === "allow") warn = v;
+  }
+  return warn;
+}
+var SIZE_CAP = 64 * 1024;
+var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function homeForms(home) {
+  const h = fwd(home);
+  const forms = [h, "~", "$HOME", "${HOME}", "$env:USERPROFILE", "%USERPROFILE%"];
+  const drive = /^([a-z]):\/(.*)$/i.exec(h);
+  if (drive) forms.push(`/${drive[1].toLowerCase()}/${drive[2]}`);
+  return forms;
+}
+function expandHome(token, home) {
+  const h = fwd(home);
+  for (const form of homeForms(home)) {
+    if (form !== h && token.toLowerCase().startsWith(`${form.toLowerCase()}/`)) return `${h}${token.slice(form.length)}`;
+  }
+  return token;
+}
+function unmsys(p, fold) {
+  const m = fold ? /^\/([a-z])\/(.*)$/i.exec(p) : null;
+  return m ? `${m[1].toUpperCase()}:/${m[2]}` : p;
+}
+function topForms(top) {
+  const t = fwd(top);
+  const drive = /^([a-z]):\/(.*)$/i.exec(t);
+  return drive ? [t, `/${drive[1].toLowerCase()}/${drive[2]}`] : [t];
+}
+var PATH_CHARS2 = `[^\\s'"|;&<>)]*`;
+var TOKEN_START = "(?<![\\w./-])";
+function protectedTokens(text, deps, repoRoot) {
+  const t = text.replace(/\\/g, "/");
+  const flags = deps.fold ? "gi" : "g";
+  const out = /* @__PURE__ */ new Set();
+  const homeAlt = homeForms(deps.home).map(esc).join("|");
+  const re = new RegExp(`${TOKEN_START}(?:${homeAlt})/\\.claude/(?:state|rules-ondemand|rules)(?:/${PATH_CHARS2})?(?![\\w.-])`, flags);
+  for (const m of t.matchAll(re)) out.add(m[0]);
+  const re1 = new RegExp(`${TOKEN_START}(?:${homeAlt})/\\.claude/settings[\\w.-]*(?![\\w./-])`, flags);
+  for (const m of t.matchAll(re1)) out.add(m[0]);
+  if (repoRoot) {
+    for (const top of deps.tops) {
+      for (const form of topForms(top)) {
+        const re2 = new RegExp(`${TOKEN_START}${esc(form)}/[^\\s'"|;&<>)/]+(?![\\w./-])`, flags);
+        for (const m of t.matchAll(re2)) out.add(m[0]);
+      }
+    }
+  }
+  return [...out];
+}
+var REDIRECT_OP = "(?<![-=<>])>{1,2}\\|?(?!&)";
+var COPY_VERBS = "(?:cp|copy|copy-item)";
+var WRITE_VERBS = "(?:tee|tee-object|set-content|add-content|clear-content|out-file|mv|move|move-item|rm|del|erase|ri|remove-item|sed\\s+(?:-\\S+\\s+)*-i\\S*|git\\s+checkout|git\\s+restore|git\\s+apply)";
+function writesToken(text, token, fold) {
+  const t = text.replace(/\\/g, "/");
+  const tk = esc(token.replace(/\\/g, "/"));
+  const flags = fold ? "i" : "";
+  if (new RegExp(`${REDIRECT_OP}\\s*['"]?${tk}(?![\\w./-])`, flags).test(t)) return true;
+  const start = "(?<![\\w./-])";
+  const end = "(?![\\w./-])";
+  const op = "(?:\\s+-\\S+)*\\s+";
+  const other = `['"]?[^\\s'"|;&<>]+['"]?\\s+`;
+  const target = `['"]?${tk}${end}`;
+  const patterns = [
+    `${start}${WRITE_VERBS}${end}${op}${target}`,
+    `${start}${WRITE_VERBS}${end}${op}${other}${target}`,
+    `${start}${COPY_VERBS}${end}${op}${other}${target}`
+  ];
+  return patterns.some((p) => new RegExp(p, flags).test(t));
+}
+function redirectTargets(text) {
+  const bare = text.replace(/(?<!>\s*)(["'])(?:(?!\1)[^\\])*\1/g, " ");
+  const out = [];
+  for (const m of bare.matchAll(new RegExp(`${REDIRECT_OP}\\s*['"]?([^\\s'"|;&<>)]+)`, "g"))) {
+    const p = m[1];
+    if (/^(\/dev\/|\$null$|nul$|&)/i.test(p)) continue;
+    out.push(p);
+  }
+  return out;
+}
+function judgeShell(input, text, deps) {
+  const cls = classOf(input);
+  if (cls === "main" || cls === "other" || typeof text !== "string" || !text || text.length > SIZE_CAP) return ALLOW;
+  const repoRoot = cls === "readonly";
+  for (const token of protectedTokens(text, deps, repoRoot)) {
+    if (!writesToken(text, token, deps.fold)) continue;
+    const expanded = unmsys(expandHome(token, deps.home), deps.fold);
+    const real2 = deps.realPath(expanded, deps.cwd) || expanded;
+    const kind = protectedKind(real2, deps, repoRoot);
+    if (kind) return denyFor(token, kind, deps);
+  }
+  let warn = ALLOW;
+  for (const target of redirectTargets(text)) {
+    const expanded = unmsys(expandHome(target, deps.home), deps.fold);
+    const real2 = deps.realPath(expanded, deps.cwd) || fwd(expanded);
+    if (insideScratch(real2, deps)) continue;
+    const kind = protectedKind(real2, deps, repoRoot);
+    if (kind) return denyFor(target, kind, deps);
+    if (cls === "readonly" && warn.kind === "allow" && !deps.warned(real2)) warn = warnFor(real2, deps);
+  }
+  return warn;
+}
 
 // src/shared/db-utils-pg.ts
 init_trace_boot();
@@ -6351,7 +6550,7 @@ function normalizeProjectKey(p) {
 // src/shared/claim-target.ts
 init_trace_boot();
 import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, realpathSync } from "fs";
-import { dirname as dirname2, isAbsolute, join as join4, relative, resolve as resolve2 } from "path";
+import { dirname as dirname3, isAbsolute, join as join4, relative, resolve as resolve2 } from "path";
 var isNetworkPath = (p) => /^[\\/]{2}/.test(p);
 var FOLDS_CASE = /* @__PURE__ */ new Set(["win32", "darwin"]);
 var real = (p) => realpathSync.native(p);
@@ -6363,7 +6562,7 @@ function nearestExisting(abs) {
   let cur = abs;
   for (; ; ) {
     if (existsSync(cur)) return cur;
-    const up = dirname2(cur);
+    const up = dirname3(cur);
     if (up === cur) return null;
     cur = up;
   }
@@ -6402,7 +6601,7 @@ function resolveClaimKey(rawPath, options = {}) {
     const realFile = realFilePath(rawPath, options.cwd);
     if (realFile === null) return null;
     const abs = options.cwd ? resolve2(options.cwd, rawPath) : resolve2(rawPath);
-    let dir = dirname2(realFile);
+    let dir = dirname3(realFile);
     for (; ; ) {
       const common = commonDirOf(dir);
       if (common === null) return null;
@@ -6421,7 +6620,7 @@ function resolveClaimKey(rawPath, options = {}) {
         if (FOLDS_CASE.has(platform)) rel = rel.toLowerCase();
         return { filePath: rel, project };
       }
-      const up = dirname2(dir);
+      const up = dirname3(dir);
       if (up === dir) return null;
       dir = up;
     }
@@ -6442,7 +6641,7 @@ function resolveRepoContext(dir) {
         const project = normalizeProjectKey(real(common).replace(/\\/g, "/").replace(/\/?\.git\/?$/, ""));
         return { top: cur.replace(/\\/g, "/"), project };
       }
-      const up = dirname2(cur);
+      const up = dirname3(cur);
       if (up === cur) return null;
       cur = up;
     }
@@ -6458,7 +6657,7 @@ function listWorktreeTops(top) {
     for (const name of readdirSync(dir)) {
       try {
         const gitFile = readFileSync2(join4(dir, name, "gitdir"), "utf8").trim();
-        if (gitFile) out.push(dirname2(gitFile).replace(/\\/g, "/"));
+        if (gitFile) out.push(dirname3(gitFile).replace(/\\/g, "/"));
       } catch {
       }
     }
@@ -6597,7 +6796,7 @@ function directWritePaths(input) {
   }
   return out;
 }
-var SIZE_CAP = 64 * 1024;
+var SIZE_CAP2 = 64 * 1024;
 var B_START = "(?<![\\w./-])";
 var B_END = "(?![\\w./-])";
 var CUE_DEFS = [
@@ -6675,7 +6874,7 @@ function isHeldSpelling(content, claims, fold) {
   });
 }
 function classifyShellText(text, claims, fold, pwsh = false) {
-  if (!text || claims.length === 0 || text.length > SIZE_CAP) return { kind: "none" };
+  if (!text || claims.length === 0 || text.length > SIZE_CAP2) return { kind: "none" };
   text = blankDataStrings(text, (s) => isHeldSpelling(s, claims, fold), pwsh);
   let t = text.replace(/\\/g, "/");
   if (fold) t = t.toLowerCase();
@@ -6757,6 +6956,14 @@ function firstWarning(sessionId, project, filePath) {
     return true;
   }
 }
+function wasWarned(sessionId, project, filePath) {
+  try {
+    const file = join5(stateDir(), `${safeName(sessionId)}.txt`);
+    return existsSync2(file) && readFileSync3(file, "utf8").split("\n").includes(`${project}|${filePath}`);
+  } catch {
+    return false;
+  }
+}
 
 // src/file-claims.ts
 init_guard_log();
@@ -6778,6 +6985,7 @@ async function main() {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
+  if (subagentJudged(input)) return;
   const direct = directWritePaths(input);
   if (direct !== null) {
     await mainDirect(input, direct);
@@ -6793,6 +7001,87 @@ async function main() {
     return;
   }
   await mainShell(input, cmd);
+}
+function findScratchFolder(sessionId) {
+  try {
+    if (!sessionId) return void 0;
+    const base = join6(tmpdir(), "claude");
+    for (const hash of readdirSync3(base)) {
+      const p = join6(base, hash, sessionId, "scratchpad");
+      if (existsSync3(p)) return p.replace(/\\/g, "/");
+    }
+  } catch {
+  }
+  return void 0;
+}
+function primaryTopOf(top) {
+  try {
+    const text = readFileSync4(join6(top, ".git"), "utf8");
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(text);
+    if (m) {
+      const dir = m[1].replace(/\\/g, "/");
+      const i = dir.search(/\/\.git\/worktrees\//i);
+      if (i > 0) return dir.slice(0, i);
+    }
+  } catch {
+  }
+  return top.replace(/\\/g, "/");
+}
+function subagentJudged(rawInput) {
+  try {
+    const input = rawInput;
+    if (typeof input.agent_id !== "string" || !input.agent_id) return false;
+    const cwd = resolvePath(typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
+    const sessionId = typeof input.session_id === "string" ? input.session_id : "";
+    const ctx = resolveRepoContext(cwd);
+    const primary = ctx ? primaryTopOf(ctx.top) : "";
+    const tops = ctx ? [.../* @__PURE__ */ new Set([primary, ctx.top, ...listWorktreeTops(primary)])] : [];
+    const canon = (p) => canonicalRealPath(p, cwd) || p.replace(/\\/g, "/");
+    const deps = {
+      home: canon(homedir5()),
+      tmp: canon(tmpdir()),
+      tops,
+      sessionId,
+      cwd,
+      fold: FOLDS_CASE2,
+      realPath: canonicalRealPath,
+      warned: (p) => wasWarned(sessionId, "subagent-write", p),
+      scratchFolder: findScratchFolder(sessionId)
+    };
+    const direct = directWritePaths(input);
+    let verdict;
+    if (direct !== null) {
+      verdict = judgeDirect(input, direct, deps);
+    } else {
+      const cmd = readShellCommand(input);
+      if (cmd.kind !== "command") return false;
+      verdict = judgeShell(input, cmd.text, deps);
+    }
+    if (verdict.kind === "deny") {
+      logGuardDecision("file-claims", input, "deny", "subagent-write-protected");
+      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: verdict.reason } }));
+      return true;
+    }
+    if (verdict.kind === "warn") {
+      const { text, path } = verdict;
+      const orig = console.log;
+      console.log = (line) => {
+        console.log = orig;
+        try {
+          const out = JSON.parse(String(line));
+          if (out.hookSpecificOutput?.permissionDecision === "deny") return orig(line);
+          firstWarning(sessionId, "subagent-write", path);
+          out.message = [text, out.message].filter(Boolean).join("\n");
+          out.hookSpecificOutput = { ...out.hookSpecificOutput ?? {}, hookEventName: "PreToolUse", additionalContext: text };
+          return orig(JSON.stringify(out));
+        } catch {
+          return orig(line);
+        }
+      };
+    }
+  } catch {
+  }
+  return false;
 }
 async function mainDirect(input, paths) {
   if (paths.length === 0) {
@@ -6812,8 +7101,8 @@ async function mainDirect(input, paths) {
   console.log(JSON.stringify(keep2));
 }
 var isStoredAbsolute = (filePath) => isAbsolute2(filePath) || /^[a-z]:[\\/]/i.test(filePath);
-var printable = (s) => s.replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]/g, "?");
-var shown = (filePath) => printable(isStoredAbsolute(filePath) ? basename2(filePath) : filePath);
+var printable2 = (s) => s.replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]/g, "?");
+var shown = (filePath) => printable2(isStoredAbsolute(filePath) ? basename3(filePath) : filePath);
 async function shellDeny(input, filePath, holder, cue) {
   const lines = holder === "another session" ? "" : await holderLines(holder, filePath, isStoredAbsolute(filePath));
   const reason = `\u26A0\uFE0F FILE CONFLICT BLOCKED
@@ -6944,7 +7233,7 @@ async function claimOne(input, filePath, sessionId) {
   const keyIsAbsolute = !key || isStoredAbsolute(key.filePath);
   const shownPath = key ? key.filePath : filePath;
   const rawName = keyIsAbsolute ? shownPath.split(/[/\\]/).pop() || shownPath : shownPath;
-  const fileName = printable(rawName);
+  const fileName = printable2(rawName);
   let output;
   switch (decision.outcome) {
     case "blocked": {
