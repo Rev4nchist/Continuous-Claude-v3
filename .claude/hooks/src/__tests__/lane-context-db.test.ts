@@ -359,10 +359,13 @@ describe.skipIf(!usable)('lane-context paging on a scratch database (D6 and up)'
     await many('bc', 63, 100, 'continuous-claude', false);
     const p1 = await prompt(ccv3);
     expect(tags(p1)).toEqual(seq('dm', 50, 61));
-    // Page 1 writes no board row: no cold line yet, and no `inbox` (it has no cold rule). A cold page that cuts a
-    // direct message and board events (ROW 46) must not promise that the board events show later.
-    expect(p1).toContain('  (13 more unread, 1 direct to you. Later prompts show the direct ones, oldest first. The board events show only while they are among the newest 12 of this board.)');
-    expect(p1).not.toMatch(/inbox|not shown on your first look/);
+    // Page 1 writes no board row: no cold line yet. A cold page that cuts a direct message and board events (ROW 46) must not promise
+    // that the board events show later. Card coord-banner-dm-never-cut (G2): the waiting DM is one command away, and with no board row that
+    // command is the read-only `inbox --id <oldest cut DM>` (a plain inbox would print every broadcast and move the board cursor).
+    const m1 = /\(13 more unread, 1 direct to you\. Later prompts show the direct ones, oldest first, or run: .*lane\.mjs inbox --id (\d+)\. The board events show only while they are among the newest 12 of this board\.\)/.exec(p1);
+    expect(m1, p1).not.toBeNull();
+    expect(Number(m1![1])).toBe(ids.dm62);
+    expect(p1).not.toMatch(/not shown on your first look/);
     expect(await marks()).toEqual({ [SENT]: ids.dm61 });
     const p2 = await prompt(ccv3);
     expect(tags(p2)).toEqual(['dm62', ...seq('bc', 89, 99)]);
