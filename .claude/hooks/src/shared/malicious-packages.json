@@ -21468,6 +21468,48 @@
       "reason": "Malicious code in testpackage83 (npm) (GHSA-ccgw-9w4v-vqh2)",
       "date": "2026-11-14",
       "advisory": "https://github.com/advisories/GHSA-ccgw-9w4v-vqh2"
+    },
+    "baileys-clean": {
+      "blocked_all": true,
+      "reason": "Malicious code in baileys-clean (npm) (GHSA-72cg-f236-g9g4)",
+      "date": "2026-11-16",
+      "advisory": "https://github.com/advisories/GHSA-72cg-f236-g9g4"
+    },
+    "tg-msg-effect": {
+      "blocked_all": true,
+      "reason": "Malicious code in tg-msg-effect (npm) (GHSA-79jw-734h-5fvr)",
+      "date": "2026-11-16",
+      "advisory": "https://github.com/advisories/GHSA-79jw-734h-5fvr"
+    },
+    "@xzvbailss/baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in @xzvbailss/baileys (npm) (GHSA-grg7-4c3w-pv5j)",
+      "date": "2026-11-16",
+      "advisory": "https://github.com/advisories/GHSA-grg7-4c3w-pv5j"
+    },
+    "hstdemotests": {
+      "blocked_all": true,
+      "reason": "Malicious code in hstdemotests (npm) (GHSA-v63h-mgc2-6vj4)",
+      "date": "2026-11-16",
+      "advisory": "https://github.com/advisories/GHSA-v63h-mgc2-6vj4"
+    },
+    "hstdemotest": {
+      "blocked_all": true,
+      "reason": "Malicious code in hstdemotest (npm) (GHSA-g3w3-wrvj-rr9w)",
+      "date": "2026-11-16",
+      "advisory": "https://github.com/advisories/GHSA-g3w3-wrvj-rr9w"
+    },
+    "@univerjs-pro/sheets-pivot-chart": {
+      "blocked_all": true,
+      "reason": "Malware in @univerjs-pro/sheets-pivot-chart (GHSA-h6jf-g8cj-x4v3)",
+      "date": "2026-11-16",
+      "advisory": "https://github.com/advisories/GHSA-h6jf-g8cj-x4v3"
+    },
+    "pmhq-dist-win-x64": {
+      "blocked_all": true,
+      "reason": "Malware in pmhq-dist-win-x64 (GHSA-xxrh-88wg-7qf4)",
+      "date": "2026-11-16",
+      "advisory": "https://github.com/advisories/GHSA-xxrh-88wg-7qf4"
     }
   }
 }
