@@ -1713,6 +1713,8 @@ function handle(raw, step = runStep) {
   try {
     input = JSON.parse(raw);
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("payload is not an object");
+    const command = input.tool_input?.command;
+    if (command != null && typeof command !== "string") throw new Error("command is not a string");
   } catch {
     denyUnread(UNREAD_PAYLOAD_REASON);
     return;

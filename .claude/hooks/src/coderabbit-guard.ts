@@ -1855,6 +1855,9 @@ export function handle(raw: string, step: (input: PreToolUseInput) => void = run
   try {
     input = JSON.parse(raw);
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('payload is not an object');
+    // A present command that is not a string throws at every later stage and gives no decision (CLI run 1 at 57889ead). Null or missing: no text.
+    const command: unknown = input.tool_input?.command;
+    if (command != null && typeof command !== 'string') throw new Error('command is not a string');
   } catch {
     denyUnread(UNREAD_PAYLOAD_REASON);
     return;

@@ -416,6 +416,28 @@ describe('coderabbit-guard internal error is scoped', () => {
     expect(JSON.parse(out.at(-1) as string).hookSpecificOutput.permissionDecisionReason).toBe(UNREAD_PAYLOAD_REASON);
   });
 
+  // CLI run 1 at 57889ead (seat ruling: fix): a present command that is not a string threw at every later stage and gave no
+  // decision, which the host reads as allow. It must deny as unread, on the real step, before any check reads it.
+  it.each([
+    ['a number', 42],
+    ['an object', { text: 'cr review --agent' }],
+    ['a boolean', true],
+  ])('a Bash payload whose command is %s denies as unread', (_n, command) => {
+    handle(JSON.stringify({ session_id: TEST_SESSION, tool_name: 'Bash', tool_input: { command } }));
+    expect(verdict()).toBe('deny');
+    expect(JSON.parse(out.at(-1) as string).hookSpecificOutput.permissionDecisionReason).toBe(UNREAD_PAYLOAD_REASON);
+    expect(lastLog().command).toBeUndefined();
+  });
+
+  // Today's result kept: a null or missing command holds no command text, so the call continues (no review to check).
+  it.each([
+    ['null', { command: null }],
+    ['missing', {}],
+  ])('a Bash payload whose command is %s keeps today\'s result: continue', (_n, toolInput) => {
+    handle(JSON.stringify({ session_id: TEST_SESSION, tool_name: 'Bash', tool_input: toolInput }));
+    expect(verdict()).toBe('continue');
+  });
+
   it('a stdin read fault (EAGAIN) continues and logs only the error code', () => {
     runMain(() => {
       throw Object.assign(new Error('read fault: cr review --agent'), { code: 'EAGAIN' });
