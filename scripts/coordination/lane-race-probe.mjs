@@ -92,7 +92,7 @@ function db() {
 function run(verb, laneId, asSession, extra = []) {
   return new Promise((resolve) => {
     execFile(process.execPath, [CLI, verb, laneId, ...extra, '--as', asSession],
-      { cwd: REPO }, (err, stdout, stderr) => {
+      { cwd: REPO, env: { ...process.env, LANE_ALLOW_AS: '1' } }, (err, stdout, stderr) => { // gap 4: racers act as other sessions with --as
         resolve({ code: err ? (err.code ?? 1) : 0, out: String(stdout), err: String(stderr) });
       });
   });
@@ -288,6 +288,15 @@ async function doneRaceChecks() {
 async function overrideRollbackChecks() {
   const [H, S, id] = ['H', 'S', 'lane'].map((n) => `${PREFIX}f6-${n}`);
   await heldLane(id, H);
+  // Gap 4: --override is for the holder of the master card (or, on a board with none, for a quiet holder: H is live here). S is the seat.
+  // The master card id has no probe prefix, so it is removed here and not by the prefix cleanup.
+  await c.query(`DELETE FROM agentic_os.lane WHERE id='re-program'`);
+  await mkLane('re-program', 'active');
+  await c.query(`UPDATE agentic_os.lane SET owner_session_id=$1, lease_expires_at = now() + interval '90 minutes' WHERE id='re-program'`, [S]);
+  try { await overrideRollbackBody(H, S, id); } finally { await c.query(`DELETE FROM agentic_os.lane WHERE id='re-program'`); }
+}
+
+async function overrideRollbackBody(H, S, id) {
   const argv = ['review', '--override', '--reason', 'probe handover'];
   const failed = await withDdl(`ALTER TABLE agentic_os.lane_event ADD CONSTRAINT zz_probe_block CHECK (kind <> 'state_changed') NOT VALID`,
     `ALTER TABLE agentic_os.lane_event DROP CONSTRAINT IF EXISTS zz_probe_block`, () => run('state', id, S, argv));
