@@ -1,0 +1,84 @@
+{
+ "cr-58f22a079915": {
+  "verdict": "no"
+ },
+ "cr-f0b4eb8137b0": {
+  "verdict": "yes",
+  "severity": "minor",
+  "answerSha256": "9ae5dfb8e696116bf689234c68b07416dab39474aaac58061fb028af047a63a9",
+  "disposition": "fixed"
+ },
+ "cr-a57903f46c1f": {
+  "verdict": "unclear",
+  "promptVersion": "adjudicate-cr-v2",
+  "disposition": "fixed"
+ },
+ "cr-0007e2fbe613": {
+  "verdict": "yes",
+  "promptVersion": "adjudicate-cr-v2",
+  "severity": "major",
+  "answerSha256": "eac443b9175964a817bb00e8847bb477aebd15ec87b52765148569ff7119d0eb"
+ },
+ "cr-d1cca377ae08": {
+  "verdict": "yes",
+  "severity": "major",
+  "answerSha256": "d6411346ea8766f713abe0de5591539b703b6803bc798667e9f70fad8cf14906",
+  "disposition": "fixed"
+ },
+ "_canary": {
+  "inputTokens": 2337,
+  "servedModel": "claude-opus-5-5"
+ },
+ "cr-ba95898d8f9d": {
+  "verdict": "unclear",
+  "promptVersion": "adjudicate-cr-v2"
+ },
+ "cr-491fbf8f53ae": {
+  "verdict": "no",
+  "promptVersion": "adjudicate-cr-v2"
+ },
+ "cr-ec77099b8508": {
+  "verdict": "unclear",
+  "promptVersion": "adjudicate-cr-v2",
+  "disposition": "fixed"
+ },
+ "cr-a23c656a0653": {
+  "verdict": "refused",
+  "kind": "pr-number"
+ },
+ "cr-4a9a3495bd66": {
+  "verdict": "yes",
+  "promptVersion": "adjudicate-cr-v2",
+  "severity": "major",
+  "answerSha256": "6c8d8eb88092f60377bccc28e927ac980c7d9644d9333ca4a8996347df7c9480",
+  "disposition": "fixed"
+ },
+ "cr-386c1f2ee569": {
+  "verdict": "yes",
+  "promptVersion": "adjudicate-cr-v2",
+  "severity": "major",
+  "answerSha256": "81f862b4a0b847a92fcf31a81299a7e01b44c9ea337f7d127b9b73d6e032a990"
+ },
+ "cr-2367211407c2": {
+  "verdict": "yes",
+  "promptVersion": "adjudicate-cr-v2",
+  "severity": "minor",
+  "answerSha256": "b933dd4d8eafda77158cbfad93f3d271f2086fa9ebba5dba6e7164126f8ef59a",
+  "disposition": "fixed"
+ },
+ "cr-28d45a3cc7fc": {
+  "verdict": "refused",
+  "kind": "pr-number"
+ },
+ "cr-a3f108e207b7": {
+  "verdict": "refused",
+  "kind": "repo-url"
+ },
+ "cr-3326aad68553": {
+  "verdict": "yes",
+  "promptVersion": "adjudicate-cr-v2",
+  "severity": "minor",
+  "answerSha256": "a02bc964e06bbbfee336297405e4e8924a15b905e578e7942e0cf0354e16c7e0",
+  "disposition": "fixed"
+ }
+}

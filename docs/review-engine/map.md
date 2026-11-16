@@ -1412,7 +1412,7 @@ Why: The self-improving loop judges against fixed rubrics. Waits for the tree ex
 - Depends on: re-eval-contract, re-szz-miner, re-seed-gold-b, re-gold-c-external, re-dispositions
 - Unblocks: re-p4-harness, re-aggregate, re-p4-ab, re-scoreboard, re-p7-calibrated-cutoff
 - Related: re-score-paired, re-p4-ab, re-aggregate, re-gold-schema
-- Owns: `scripts/eval/review-eval/cli.mjs`, `scripts/eval/review-eval/cli.test.mjs`, `scripts/eval/review-eval/linktype.mjs`, `scripts/eval/review-eval/linktype.test.mjs`, `scripts/eval/review-eval/linktype-labels.json`, `scripts/eval/review-eval/adjudicate-cr.mjs`, `scripts/eval/review-eval/adjudicate-cr.test.mjs`, `.claudedocs/2026-11-01-pr-review-dataset.json`, `scripts/eval/review-eval/gold/adjudicated-cr.json`
+- Owns: `scripts/eval/review-eval/cli.mjs`, `scripts/eval/review-eval/cli.test.mjs`, `scripts/eval/review-eval/linktype.mjs`, `scripts/eval/review-eval/linktype.test.mjs`, `scripts/eval/review-eval/linktype-labels.json`, `scripts/eval/review-eval/adjudicate-cr.mjs`, `scripts/eval/review-eval/adjudicate-cr.test.mjs`, `.claudedocs/2026-11-01-pr-review-dataset.json`, `scripts/eval/review-eval/gold/adjudicated-cr.json`, `scripts/eval/review-eval/gold/adjudicated-cr.state`
 - Do not touch: `scripts/eval/review-eval/config.json`, `scripts/eval/review-eval/gold/gold-a.json`, `scripts/eval/review-eval/gold/gold-b.json`, `scripts/eval/review-eval/gold/gold-c.json`, `scripts/eval/review-eval/gold/clean-controls.json`
 - Cost: 0 cursor; claude -p up to 6/day for labels
 - Needs Dave: no

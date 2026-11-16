@@ -1,0 +1,210 @@
+[
+ {
+  "id": "cr-f0b4eb8137b0",
+  "source": "CR",
+  "suite": "capability",
+  "split": "holdout",
+  "target": {
+   "pr": 200,
+   "round": 3,
+   "sha40": "f0b67364d2cdb58ee01035cb73d2944b6541b438"
+  },
+  "file": "apps/agentic-os/src/server/sources/safe-message.ts",
+  "line": 44,
+  "severity": "minor",
+  "linkType": "within-hunk",
+  "labels": [
+   {
+    "by": "claude",
+    "verdict": "real",
+    "judgeVersion": "adjudicate-cr-v1"
+   }
+  ],
+  "provenance": {
+   "adjudicator": "adjudicate-cr",
+   "model": "opus",
+   "effort": "high",
+   "promptVersion": "adjudicate-cr-v1",
+   "disposition": "fixed",
+   "answerSha256": "9ae5dfb8e696116bf689234c68b07416dab39474aaac58061fb028af047a63a9"
+  }
+ },
+ {
+  "id": "cr-d1cca377ae08",
+  "source": "CR",
+  "suite": "capability",
+  "split": "dev",
+  "target": {
+   "pr": 222,
+   "round": 1,
+   "sha40": "91b0b4c84fc07b977448a0304262f7f9a934d86f"
+  },
+  "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts",
+  "line": 421,
+  "severity": "major",
+  "linkType": "within-hunk",
+  "labels": [
+   {
+    "by": "claude",
+    "verdict": "real",
+    "judgeVersion": "adjudicate-cr-v1"
+   }
+  ],
+  "provenance": {
+   "adjudicator": "adjudicate-cr",
+   "model": "opus",
+   "effort": "high",
+   "promptVersion": "adjudicate-cr-v1",
+   "disposition": "fixed",
+   "answerSha256": "d6411346ea8766f713abe0de5591539b703b6803bc798667e9f70fad8cf14906"
+  }
+ },
+ {
+  "id": "cr-4a9a3495bd66",
+  "source": "CR",
+  "suite": "capability",
+  "split": "holdout",
+  "target": {
+   "pr": 211,
+   "round": 1,
+   "sha40": "2aabe283010c28c51873efa7c0b68166642d3a02"
+  },
+  "file": "scripts/settings/remove-maestro-registrations.mjs",
+  "line": 2,
+  "severity": "major",
+  "linkType": "within-hunk",
+  "labels": [
+   {
+    "by": "claude",
+    "verdict": "real",
+    "judgeVersion": "adjudicate-cr-v2"
+   }
+  ],
+  "provenance": {
+   "adjudicator": "adjudicate-cr",
+   "model": "opus",
+   "effort": "high",
+   "promptVersion": "adjudicate-cr-v2",
+   "disposition": "fixed",
+   "answerSha256": "6c8d8eb88092f60377bccc28e927ac980c7d9644d9333ca4a8996347df7c9480"
+  }
+ },
+ {
+  "id": "cr-0007e2fbe613",
+  "source": "CR",
+  "suite": "capability",
+  "split": "dev",
+  "target": {
+   "pr": 217,
+   "round": 1,
+   "sha40": "2b51c197be81d09e5a7f6b112a4d9ae06cebbe2d"
+  },
+  "file": "scripts/github/review-router.mjs",
+  "line": 206,
+  "severity": "major",
+  "linkType": "cross-file-dynamic",
+  "labels": [
+   {
+    "by": "claude",
+    "verdict": "real",
+    "judgeVersion": "adjudicate-cr-v2"
+   }
+  ],
+  "provenance": {
+   "adjudicator": "adjudicate-cr",
+   "model": "opus",
+   "effort": "high",
+   "promptVersion": "adjudicate-cr-v2",
+   "answerSha256": "eac443b9175964a817bb00e8847bb477aebd15ec87b52765148569ff7119d0eb"
+  }
+ },
+ {
+  "id": "cr-386c1f2ee569",
+  "source": "CR",
+  "suite": "capability",
+  "split": "dev",
+  "target": {
+   "pr": 217,
+   "round": 2,
+   "sha40": "017a6c6f0335a1ce13c5498426803f18c7719bd3"
+  },
+  "file": "scripts/github/review-router.mjs",
+  "line": 208,
+  "severity": "major",
+  "linkType": "cross-file-dynamic",
+  "labels": [
+   {
+    "by": "claude",
+    "verdict": "real",
+    "judgeVersion": "adjudicate-cr-v2"
+   }
+  ],
+  "provenance": {
+   "adjudicator": "adjudicate-cr",
+   "model": "opus",
+   "effort": "high",
+   "promptVersion": "adjudicate-cr-v2",
+   "answerSha256": "81f862b4a0b847a92fcf31a81299a7e01b44c9ea337f7d127b9b73d6e032a990"
+  }
+ },
+ {
+  "id": "cr-2367211407c2",
+  "source": "CR",
+  "suite": "capability",
+  "split": "dev",
+  "target": {
+   "pr": 222,
+   "round": 1,
+   "sha40": "91b0b4c84fc07b977448a0304262f7f9a934d86f"
+  },
+  "file": ".claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts",
+  "line": 437,
+  "severity": "minor",
+  "linkType": "within-hunk",
+  "labels": [
+   {
+    "by": "claude",
+    "verdict": "real",
+    "judgeVersion": "adjudicate-cr-v2"
+   }
+  ],
+  "provenance": {
+   "adjudicator": "adjudicate-cr",
+   "model": "opus",
+   "effort": "high",
+   "promptVersion": "adjudicate-cr-v2",
+   "disposition": "fixed",
+   "answerSha256": "b933dd4d8eafda77158cbfad93f3d271f2086fa9ebba5dba6e7164126f8ef59a"
+  }
+ },
+ {
+  "id": "cr-3326aad68553",
+  "source": "CR",
+  "suite": "capability",
+  "split": "holdout",
+  "target": {
+   "pr": 227,
+   "round": 2,
+   "sha40": "e038f042ec705296425a34ca954c98af2e672121"
+  },
+  "file": ".claude/plugins/ccv3-mods/hooks/pr-loop/model.ts",
+  "line": 402,
+  "severity": "minor",
+  "linkType": "within-hunk",
+  "labels": [
+   {
+    "by": "claude",
+    "verdict": "real",
+    "judgeVersion": "adjudicate-cr-v2"
+   }
+  ],
+  "provenance": {
+   "adjudicator": "adjudicate-cr",
+   "model": "opus",
+   "effort": "high",
+   "promptVersion": "adjudicate-cr-v2",
+   "disposition": "fixed",
+   "answerSha256": "a02bc964e06bbbfee336297405e4e8924a15b905e578e7942e0cf0354e16c7e0"
+  }
+ }
+]
