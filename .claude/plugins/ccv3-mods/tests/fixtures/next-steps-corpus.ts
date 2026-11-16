@@ -65,5 +65,7 @@ export const CORPUS: CorpusRow[] = [
   { id: 'R62j', text: steps('1. None - waiting on CI. I rule.Paste the log'), asks: ['Paste the log'], source: 'critic: a period with no space' },
   { id: 'R62k', text: steps('1. None, waiting on Dave\'s approval'), asks: ['Dave\'s approval'], source: 'critic: comma separator, object names Dave' },
   { id: 'R62l', text: steps('1. None, waiting on your yes'), asks: ['your yes'], source: 'critic: comma separator, object names you' },
+  { id: 'R62m', text: steps('1. None - waiting on CI. I rule on yours'), asks: ['I rule on yours'], source: 'yours is not an own-action tail' },
+  { id: 'R62n', text: steps('1. None - waiting on CI. I rule on it, paste the build log'), asks: ['paste the build log'], source: 'a comma opens a second clause' },
   { id: 'N62a', text: steps("1. None - waiting on CI. I'll rule on it after the build"), asks: [], source: 'contraction I\'ll with an own action' },
 ]
