@@ -46,7 +46,8 @@ import { runPromptSubmit } from '../prompt-submit.js';
 
 const PAYLOAD = JSON.stringify({ session_id: 'me-session', hook_event_name: 'UserPromptSubmit', prompt: 'hello there friend' });
 
-describe('lane-context: a slow client.end() after the watermark write', () => {
+// The limit (40 s) is above the 25 s backstop below, so a run that waits for end() prints STUCK and does not end as a plain time-out (the default is 5 s).
+describe('lane-context: a slow client.end() after the watermark write', { timeout: 40_000 }, () => {
   const saved = process.env.CONTINUOUS_CLAUDE_DB_URL;
   const savedEnv = { reg: process.env.LANE_REGISTRY_PATH, cache: process.env.LANE_BOARD_CACHE, ep: process.env.CLAUDE_CODE_ENTRYPOINT };
   let dir = '';
