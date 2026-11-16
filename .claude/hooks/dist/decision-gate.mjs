@@ -3225,7 +3225,8 @@ function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
   if (added.binary) return stop("holdout-scan-unavailable", `it sends a binary file that git prints only as "Binary files differ" (a merge resolution), so its content cannot be read. ${SPLIT_WAY_OUT}`);
   const all = `${added.text}
 ${files.join("\n")}
-${tags}`;
+${tags}
+${named.join("\n")}`;
   const count = countIdsIn2(`${all}
 ${all.replace(/\0/g, "")}`, ids);
   if (count === 0) return null;

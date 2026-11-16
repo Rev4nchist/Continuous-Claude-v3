@@ -137,4 +137,11 @@ describe('CH: the default staged reader', () => {
     stage(w.repo, 'big.txt', `${'x'.repeat(1_600_000)}\n`);
     expect(stagedHoldoutCount(w.repo, w.mainRoot)).toBe('too-large');
   });
+
+  it('CH10: staged lines over the bound in UTF-8 bytes but under it in string length give too-large (PR 612 review, minor)', () => {
+    // Breaks when: the bound counts UTF-16 code units (600,000 euro signs are 600,000 units but 1,800,000 bytes).
+    const w = world(GOOD);
+    stage(w.repo, 'euro.txt', `${'€'.repeat(600_000)}\n`);
+    expect(stagedHoldoutCount(w.repo, w.mainRoot)).toBe('too-large');
+  });
 });

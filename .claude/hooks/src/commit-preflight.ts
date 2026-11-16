@@ -67,7 +67,7 @@ const STAGED_MAX_BYTES = 1_500_000;
 export function stagedHoldoutCount(dir: string, mainRoot: string): number | null | 'too-large' {
   try {
     const r = spawnSync('git', ['diff', '--cached', '--unified=0', '--no-color', '--no-renames'], { cwd: dir, encoding: 'utf8', windowsHide: true, maxBuffer: STAGED_MAX_BYTES * 2, timeout: 5000 });
-    if ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' || (typeof r.stdout === 'string' && r.stdout.length > STAGED_MAX_BYTES)) return 'too-large';
+    if ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' || (typeof r.stdout === 'string' && Buffer.byteLength(r.stdout, 'utf8') > STAGED_MAX_BYTES)) return 'too-large';
     if (r.status !== 0 || typeof r.stdout !== 'string') return null;
     // Item 12 (card coord-decision-gate-round3-content-scan): every line that starts with + counts. An added line whose content starts with ++
     // shows as +++; the +++ file headers hold only a path, which may hold an id too.

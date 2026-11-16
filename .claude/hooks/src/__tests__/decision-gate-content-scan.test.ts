@@ -138,6 +138,13 @@ describe('C5: every outgoing commit is read', () => {
     expect(reads.filter((r) => r === 'for-each-ref')).toEqual([]);
   });
 
+  it('C37: a push to a destination tag name that holds an id, with no local tag of that name, denies (PR 612 review, major)', () => {
+    // Breaks when: the matcher input leaves out the tag names the push names (namedTags), so only local tag text is counted.
+    git('checkout', '-q', '-b', 'feat/v');
+    put('v.txt', 'v\n'); commit('plain change');
+    expect(isHit(reasonOf(`git push fork feat/v:refs/tags/rel-${CID}`))).toBe(true);
+  });
+
   it('C6: an added line whose content starts with ++ denies (item 12, gate side)', () => {
     // Breaks when: lines that start with +++ are dropped.
     put('p.txt', `++ ${CID}\n`); commit('plusplus');

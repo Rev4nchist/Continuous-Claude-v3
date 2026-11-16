@@ -3008,7 +3008,8 @@ function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, 
   const added = addedText(log.stdout);
   if (added.binary) return stop('holdout-scan-unavailable', `it sends a binary file that git prints only as "Binary files differ" (a merge resolution), so its content cannot be read. ${SPLIT_WAY_OUT}`);
   // Seat read 2, item 1: a UTF-16 file prints a NUL between characters under --text. Count the text and the text without NUL (an id counts once).
-  const all = `${added.text}\n${files.join('\n')}\n${tags}`;
+  // PR 612 review (major): a tag name the push names leaves too, with or without a local tag of that name (tagText reads local tags only).
+  const all = `${added.text}\n${files.join('\n')}\n${tags}\n${named.join('\n')}`;
   const count = countIdsIn(`${all}\n${all.replace(/\0/g, '')}`, ids);
   if (count === 0) return null;
   return hardOf(deny('holdout-id', `this push of ${branch} carries ${count} holdout id${count === 1 ? '' : 's'} in the added lines, commit messages, file names or tag messages of what it sends (an older commit of the branch counts too). Remove them from every commit and local tag. ${SPLIT_WAY_OUT} Which ones stays with the seat: this text names a count only.`, 'push'));

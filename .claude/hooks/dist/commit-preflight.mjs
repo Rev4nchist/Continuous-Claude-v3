@@ -796,7 +796,7 @@ var STAGED_MAX_BYTES = 15e5;
 function stagedHoldoutCount(dir, mainRoot) {
   try {
     const r = spawnSync("git", ["diff", "--cached", "--unified=0", "--no-color", "--no-renames"], { cwd: dir, encoding: "utf8", windowsHide: true, maxBuffer: STAGED_MAX_BYTES * 2, timeout: 5e3 });
-    if (r.error?.code === "ENOBUFS" || typeof r.stdout === "string" && r.stdout.length > STAGED_MAX_BYTES) return "too-large";
+    if (r.error?.code === "ENOBUFS" || typeof r.stdout === "string" && Buffer.byteLength(r.stdout, "utf8") > STAGED_MAX_BYTES) return "too-large";
     if (r.status !== 0 || typeof r.stdout !== "string") return null;
     const added = r.stdout.split("\n").filter((l) => l.startsWith("+")).join("\n");
     return countIdsIn2(added, loadHoldoutIds(mainRoot));
