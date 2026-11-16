@@ -65,6 +65,7 @@ function laneEnv(url) {
   return Object.assign(env, {
     CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url,
     LANE_REGISTRY_PATH: s.registry, CCV3_IDENTITY_DIR: s.idDir, CLAUDE_CODE_SESSION_ID: ME,
+    LANE_ALLOW_AS: '1', // gap 4: the helper acts as other sessions with --as; lane-holder-flags.test.mjs tests the refusal
   });
 }
 /** Run the worktree lane.mjs in the temp repo against one scratch database. `as` is the session id of the caller. */

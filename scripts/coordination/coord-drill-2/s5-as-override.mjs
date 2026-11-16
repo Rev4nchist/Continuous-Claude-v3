@@ -97,7 +97,8 @@ export async function run(ctx) {
 
   // Probe 2: B puts A's id in --as. lane.mjs reads --as before CLAUDE_CODE_SESSION_ID, so the env says B and the flag says A.
   const env2 = { ...ctx.env, CLAUDE_CODE_SESSION_ID: B };
-  const p2 = await judge(ctx, laneId, start, lane({ ...ctx, env: env2 }, ['note', laneId, NOTE_PROBE], A));
+  // allowAs false: this probe tests the refusal of --as itself (LANE_ALLOW_AS is how the drill harness acts as other sessions).
+  const p2 = await judge(ctx, laneId, start, lane({ ...ctx, env: env2 }, ['note', laneId, NOTE_PROBE], A, { allowAs: false }));
   await reset(ctx, laneId, A);
 
   // Probe 3: B passes --override on release, which has its own path to the same rule.
