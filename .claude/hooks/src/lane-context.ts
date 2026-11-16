@@ -605,7 +605,7 @@ export function noBoardFallback(oldestDmId: number): string {
   return `A direct message waits. Run: ${laneCliCmd()} inbox --id ${oldestDmId}`;
 }
 
-/** C9: the "more unread" line names `inbox` only when a board row exists after this page. */
+/** C9: the "more unread" line names the plain `inbox` only when a board row exists after this page (G2: without one it names `inbox --id <N>` when a DM waits, see moreLine). */
 export function namesInbox(o: { rowBefore: boolean; rowWritten: boolean }): boolean {
   return o.rowBefore || o.rowWritten;
 }
@@ -948,19 +948,25 @@ async function finishCursors(
 
 /**
  * The "(N more unread ...)" line. The cut events stay unread, so a later prompt shows them, oldest first.
- * `withCmd` adds the inbox command. It is true only when the board has a cursor row: `inbox` with no row
- * prints every broadcast since event 1, and with no board it cannot run at all.
+ * `withCmd` adds the plain inbox command. It is true only when the board has a cursor row: `inbox` with no row
+ * prints every broadcast since event 1 and moves the board cursor, and with no board it cannot run at all.
+ * G2 exception (card coord-banner-dm-never-cut): with no cursor row a waiting DM is still one command away, as the read-only
+ * `inbox --id <oldest cut DM>` (`firstDm`), which prints one event and writes no cursor.
  *
  * `coldBoard`: a board page with no cursor row. When it cuts a DM and a board event, the cut board events
  * come back only while they are among the newest MAX_EVENTS of the board (the cold start skips the rest).
  */
-function moreLine(page: Pick<UnreadPage<unknown>, 'cut' | 'cutDm'>, withCmd: boolean, coldBoard: boolean): string {
+function moreLine(page: Pick<UnreadPage<unknown>, 'cut' | 'cutDm'>, withCmd: boolean, coldBoard: boolean, onBoard = true, firstDm?: number): string {
+  // G2 (card coord-banner-dm-never-cut): on a board, a waiting DM is always one command away, with or without a cursor row.
+  // With a row: plain `inbox`. Without one: `inbox --id <firstDm>`, which reads one event and moves no cursor (plain `inbox` would print every
+  // broadcast and skip the board cursor to the newest event). A session with no board (`onBoard` false) has no inbox to read: that line stays as it was.
+  const inbox = withCmd || firstDm === undefined ? `${laneCliCmd()} inbox` : `${laneCliCmd()} inbox --id ${firstDm}`;
   if (coldBoard && page.cutDm > 0 && page.cut > page.cutDm) {
-    return `  (${page.cut} more unread, ${page.cutDm} direct to you. Later prompts show the direct ones, oldest first. `
+    return `  (${page.cut} more unread, ${page.cutDm} direct to you. Later prompts show the direct ones, oldest first, or run: ${inbox}. `
       + `The board events show only while they are among the newest ${MAX_EVENTS} of this board.)`;
   }
   const direct = page.cutDm > 0 ? `, ${page.cutDm} direct to you` : '';
-  const cmd = withCmd ? `, or run: ${laneCliCmd()} inbox` : '.';
+  const cmd = withCmd || (onBoard && page.cutDm > 0) ? `, or run: ${inbox}` : '.';
   return `  (${page.cut} more unread${direct}. Later prompts show them, oldest first${cmd})`;
 }
 
@@ -969,6 +975,8 @@ interface UnreadLineOpts {
   withCmd: boolean;
   /** A board page with no cursor row yet. Always false on the no-board path. */
   coldBoard: boolean;
+  /** The id of the oldest DM that this page cuts (see moreLine). */
+  firstDm?: number;
 }
 
 /**
@@ -979,7 +987,7 @@ function unreadLines(page: UnreadPage<EventRow>, board: string | null, opts: Unr
   const here = board ?? DEFAULT_BOARD;
   const lines = [countLine(page.events.length + page.cut)];
   for (const e of page.events) lines.push(eventPrefix(e, here) + (page.bodies?.get(e.id) ?? e.body ?? ''));
-  if (page.cut > 0) lines.push(moreLine(page, opts.withCmd, opts.coldBoard));
+  if (page.cut > 0) lines.push(moreLine(page, opts.withCmd, opts.coldBoard, board !== null, opts.firstDm));
   // The cold line prints once: on the page that writes the board row. A page that writes only the sentinel stays cold.
   if (page.skipped > 0 && page.boardRow !== null) lines.push(coldLine(page.skipped));
   if (page.events.some((e) => e.to_session_id)) lines.push(REPLY_FOOTER);
@@ -1001,9 +1009,13 @@ function eventPrefix(e: EventRow, here: string): string {
  * C5: bytes of the fixed page lines at their longest (the count line, the longest "more unread" line, the cold line,
  * the reply footer), each with its newline. The event space is the budget less this and less the header.
  */
-function pageReserve(unread: EventRow[]): number {
+function pageReserve(unread: EventRow[], cold: boolean): number {
   const shape = { cut: unread.length, cutDm: unread.filter((e) => e.to_session_id).length };
-  const more = Math.max(lineBytes(moreLine(shape, true, false)), lineBytes(moreLine(shape, false, true)));
+  // A warm board (or the no-board path) prints only the plain-inbox form. A cold board can also print the cold forms, and the cold form
+  // names `inbox --id <oldest cut DM>` (G2, critic F3): its width is that of the largest id of the unread set.
+  const widest = unread.reduce((m, e) => Math.max(m, e.id), 0);
+  const warm = lineBytes(moreLine(shape, true, false));
+  const more = cold ? Math.max(warm, lineBytes(moreLine(shape, false, true, true, widest))) : warm;
   return more + [countLine(unread.length), coldLine(unread.length), REPLY_FOOTER].reduce((n, l) => n + lineBytes(l), 0);
 }
 
@@ -1030,7 +1042,7 @@ async function directMessagesOnly(client: Client, me: string, eventName: string,
   const late = ctx.late();
   const budget = ctx.budgets.noBoard;
   // The sentinel moves to the newest DM shown. A DM that waits stays above it for the next prompt.
-  const page = pageUnread(dms, { cold: false, noBoard: true, bytes: eventBytes(budget - pageReserve(dms), null) });
+  const page = pageUnread(dms, { cold: false, noBoard: true, bytes: eventBytes(budget - pageReserve(dms, false), null) });
   const text = unreadLines(page, null, { withCmd: false, coldBoard: false }).join('\n');
   // C2: built and measured first. Over its budget: the fallback, and no cursor moves.
   if (utf8Bytes(text) > budget) return buildOutput(noBoardFallback(dms[0].id), eventName);
@@ -1286,6 +1298,11 @@ interface BoardPageArgs {
   unread: EventRow[];
   /** The SessionStart header, or [] on the prompt path. */
   header: string[];
+  /**
+   * The same header with every optional section (peers, Claimable, Reminders) at its one-line form. Set on SessionStart when a
+   * DM waits (card coord-banner-dm-never-cut): the page uses it only when it shows strictly more whole DMs than `header` does.
+   */
+  collapsedHeader?: string[];
   /** The CUT, NOT READ ids this text may print (the header already holds the line on SessionStart). */
   cut: CutPending;
 }
@@ -1301,14 +1318,27 @@ async function boardPage(client: Client, a: BoardPageArgs, ctx: PageCtx): Promis
   const budget = header.length ? ctx.budgets.start : ctx.budgets.prompt;
   const cold = unread.length > 0 && unread[0].board_wm === null;
   // The prompt path has no header: it leads with the CUT line when the page has text, so a prompt with no news stays silent.
-  const lead = header.length ? header : (a.cut.line && unread.length ? [a.cut.line] : []);
-  const headBytes = lead.length ? utf8Bytes(lead.join('\n')) + 2 : 0;
-  const page = pageUnread(unread, { cold, bytes: eventBytes(budget - headBytes - pageReserve(unread), board) });
+  const lead1 = header.length ? header : (a.cut.line && unread.length ? [a.cut.line] : []);
+  const pageFor = (lead: string[]): UnreadPage<EventRow> =>
+    pageUnread(unread, { cold, bytes: eventBytes(budget - (lead.length ? utf8Bytes(lead.join('\n')) + 2 : 0) - pageReserve(unread, cold), board) });
+  let lead = lead1;
+  let page = pageFor(lead1);
+  // G1 (card coord-banner-dm-never-cut): DMs come before the optional header sections. When DMs wait behind the full header, page once more
+  // with those sections at one line each. Both pages are pure: nothing is written or counted until the text below is chosen. The collapsed
+  // page wins only when it shows strictly more whole DMs; with the same count the full header stays.
+  // A DM that pageUnread shows alone and cut (C5b) is not whole: it does not count, and it opens the second page too.
+  const isCutDm = (p: UnreadPage<EventRow>, e: EventRow): boolean => !!e.to_session_id && cutOnPage(p).includes(e.id);
+  const wholeDms = (p: UnreadPage<EventRow>): number => p.events.filter((e) => e.to_session_id && !isCutDm(p, e)).length;
+  if (header.length && a.collapsedHeader && (page.cutDm > 0 || page.events.some((e) => isCutDm(page, e)))) {
+    const page2 = pageFor(a.collapsedHeader);
+    if (wholeDms(page2) > wholeDms(page)) { lead = a.collapsedHeader; page = page2; }
+  }
   const withCmd = namesInbox({ rowBefore: !cold, rowWritten: !late && page.boardRow !== null });
   const lines = [...lead];
   if (unread.length) {
     if (lines.length) lines.push('');
-    lines.push(...unreadLines(page, board, { withCmd, coldBoard: cold }));
+    const firstDm = unread.find((e) => e.to_session_id && !page.events.includes(e))?.id;
+    lines.push(...unreadLines(page, board, { withCmd, coldBoard: cold, firstDm }));
   }
   const text = lines.join('\n');
   if (utf8Bytes(text) > budget) return buildOutput(boardFallback(board, a.meLabel, oldestDmId(unread)), a.eventName);
@@ -1392,8 +1422,12 @@ export async function runLaneContext(raw: string, opts: RunOpts = {}): Promise<o
     const unread = await readUnread(client, UNREAD_BOARD_SQL, [me, board, wmKey(me, board)]);
     const meLabel = who(me, payload.session_title || undefined);
     const cut = cutPending(me, ctx.now());
-    const header = isStart ? buildHeader(await loadBanner(client, me, board, eventName), meLabel, board, ctx.budgets, cut.line) : [];
-    return await boardPage(client, { me, meLabel, board, eventName, unread, header, cut }, ctx);
+    const banner = isStart ? await loadBanner(client, me, board, eventName) : null;
+    const header = banner ? buildHeader(banner, meLabel, board, ctx.budgets, cut.line) : [];
+    // G1: with a DM waiting, the one-line form of every optional section is the page's second choice (see boardPage).
+    const collapsedHeader = banner && unread.some((e) => e.to_session_id)
+      ? buildHeader(banner, meLabel, board, { ...ctx.budgets, header: 0 }, cut.line) : undefined;
+    return await boardPage(client, { me, meLabel, board, eventName, unread, header, collapsedHeader, cut }, ctx);
   } catch (err) {
     // Nothing on stdout by contract. No database, no tables, no lanes, slow connect — all
     // the same answer: say nothing and let the turn proceed. One throttled line in the
