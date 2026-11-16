@@ -888,9 +888,10 @@ describe('F13: the time check (C10)', () => {
 // Reminders) collapse to one line each and the page that shows strictly more whole DMs wins. G2: the more line names inbox
 // whenever a DM waits. The 8,000-byte start budget stays. Seat conditions: the reserved lines never collapse; the page not chosen
 // marks nothing read; with the same DM count the full header stays.
-// Change that turns each row red: DMF1, DMF5, DMF6: no second page (the full header always wins); DMF2: the collapse also drops a
-// reserved line; DMF3 and DMF4: the collapse runs when it gains no DM; DMF5: the cursor follows the page that was not sent; DMF6: the
-// cold more line names no inbox.
+// Change that turns each row red: DMF1, DMF5, DMF8, DMF9: no second page (the full header always wins); DMF2: the collapse also drops a
+// reserved line; DMF3 and DMF4: the collapse runs when it gains no DM; DMF5: the cursor follows the page that was not sent; DMF6 and
+// DMF10 (G2): the cold more line names no inbox, or the plain inbox; DMF8: a DM shown cut counts as whole; DMF9: a DM cut alone does not
+// open the second page.
 describe('DMF: direct messages before the header (card coord-banner-dm-never-cut)', () => {
   const long = (p: string): string => `${p}-${'z'.repeat(70)}`;
   const held = (id: string, board = 'continuous-claude'): Row =>
@@ -990,5 +991,31 @@ describe('DMF: direct messages before the header (card coord-banner-dm-never-cut
     const t = await run('SessionStart', ccv3);
     expect(moreLine(t), t).toBeDefined();
     expect(moreLine(t)).toContain(`${SHIM} inbox`);
+  });
+
+  it('DMF8: two DMs of 5,000 bytes: the second page shows the first whole, not cut (critic F1: a cut DM is not a whole one)', async () => {
+    mid();
+    fake.unread = [dm(101, 'x'.repeat(5000), 100), dm(102, 'y'.repeat(5000), 100)];
+    const t = await run('SessionStart', ccv3);
+    expect(tags(t)).toEqual(['dm101']);
+    expect(t).toContain('x'.repeat(5000));
+    expect(t.split(NL).some((l) => l.startsWith('     scope: '))).toBe(false);
+  });
+
+  it('DMF9: ONE DM of 5,000 bytes, cut alone under the full header, shows whole when the header collapses (critic F4)', async () => {
+    mid();
+    fake.unread = [dm(101, 'x'.repeat(5000), 100)];
+    const t = await run('SessionStart', ccv3);
+    expect(tags(t)).toEqual(['dm101']);
+    expect(t).toContain('x'.repeat(5000));
+  });
+
+  it('DMF10: a cold board names the read-only inbox --id of the oldest cut DM, never the plain inbox (critic F3)', async () => {
+    fake.unread = dms(3, 3000, null);
+    const t = await run('SessionStart', ccv3);
+    const shown = tags(t).length;
+    expect(moreLine(t), t).toBeDefined();
+    expect(moreLine(t)).toContain(`${SHIM} inbox --id ${101 + shown}`);
+    expect(moreLine(t)).not.toContain(`${SHIM} inbox)`);
   });
 });
