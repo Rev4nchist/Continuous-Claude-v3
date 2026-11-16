@@ -97,6 +97,22 @@ export function isHarnessPath(filePath: string): boolean {
 }
 
 /**
+ * The per-project memory index: `<any>/.claude/projects/<one folder>/memory/MEMORY.md`.
+ *
+ * It is one append point that EVERY session shares, so the file guard never holds it (card
+ * coord-file-claims-memory-index). A short lease would not do: a takeover needs an expired lease AND a
+ * holder quiet for 5 minutes, so an alive session keeps the file for as long as it works.
+ *
+ * Pass the CANONICAL path: the real path (links resolved), forward slashes. `fold` is true on a file
+ * system that ignores case (win32, darwin). Narrow on purpose: another memory file, a MEMORY.md outside a
+ * `memory` folder and one in a sub folder of `memory` are not the index. A string test only: no file read.
+ */
+export function isMemoryIndexPath(canonicalPath: string, fold: boolean): boolean {
+  const p = canonicalPath.replace(/\\/g, '/');
+  return (fold ? /(^|\/)\.claude\/projects\/[^/]+\/memory\/memory\.md$/i : /(^|\/)\.claude\/projects\/[^/]+\/memory\/MEMORY\.md$/).test(p);
+}
+
+/**
  * The lease a claim on this path should carry.
  */
 export function leaseFor(filePath: string): Lease {
