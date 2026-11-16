@@ -145,6 +145,32 @@ describe('C5: every outgoing commit is read', () => {
     expect(isHit(reasonOf(`git push fork feat/v:refs/tags/rel-${CID}`))).toBe(true);
   });
 
+  it('C38: a local tag pushed to a short destination name that holds an id denies (PR 612 critic hole 1)', () => {
+    // Breaks when: the destination name (p.branch) is left out of the matcher input, so git's new remote tag name leaves unread.
+    git('checkout', '-q', '-b', 'feat/u');
+    put('u.txt', 'u\n'); commit('plain change');
+    git('tag', 'v-src');
+    expect(isHit(reasonOf(`git push fork v-src:rel-${CID}`))).toBe(true);
+  });
+
+  it('C39: a tags/<t> name is a tag push: the annotated tag message is read on a branch that is not re/ (PR 612 critic hole 2)', () => {
+    // Breaks when: namedTags looks up refs/tags/tags/<t> only, so git's refs/<name> resolution of tags/<t> goes unseen.
+    git('checkout', '-q', '-b', 'feat/s');
+    put('s.txt', 's\n'); commit('plain change');
+    git('tag', '-a', 'v-ann', '-m', `release ${CID}`);
+    expect(isHit(reasonOf('git push fork tags/v-ann'))).toBe(true);
+  });
+
+  it('C40: --tags on a branch that is not re/ reads a tagged commit that is not on the branch (PR 612 critic hole 3)', () => {
+    // Breaks when: scanned stays isRe || named, so a force or wide push of a feature branch is not read at all.
+    git('checkout', '-q', '-b', 'side', 'refs/remotes/fork/main');
+    put('s.txt', `side ${CID}\n`); commit('side only');
+    git('tag', 'light-probe');
+    git('checkout', '-q', '-b', 'feat/t', 're/x');
+    put('t.txt', 't\n'); commit('feature work');
+    expect(isHit(reasonOf('git push --tags fork feat/t'))).toBe(true);
+  });
+
   it('C6: an added line whose content starts with ++ denies (item 12, gate side)', () => {
     // Breaks when: lines that start with +++ are dropped.
     put('p.txt', `++ ${CID}\n`); commit('plusplus');

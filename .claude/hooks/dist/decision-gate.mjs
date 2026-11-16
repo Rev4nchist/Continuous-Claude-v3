@@ -3110,6 +3110,10 @@ function namedTags(p, deps, dir) {
       continue;
     }
     if (r.startsWith("refs/") || /^(?:HEAD|@)(?:$|[~^@])/.test(r)) continue;
+    if (r.startsWith("tags/")) {
+      out3.add(`refs/${r}`);
+      continue;
+    }
     if (deps.git(dir, ["show-ref", "--verify", "--quiet", `refs/tags/${r}`]).status === 0) out3.add(`refs/tags/${r}`);
   }
   return [...out3];
@@ -3185,7 +3189,7 @@ function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
   if (ref.startsWith("-")) return stop("holdout-scan-unavailable", "its source ref starts with a dash. Name the branch: git push <remote> <branch>.");
   const sha = deps.git(dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
   const named = namedTags(p, deps, dir);
-  const scanned = isRe || named.length > 0;
+  const scanned = isRe || named.length > 0 || p.force;
   const allTags = scanned && p.force ? ["--tags"] : [];
   if (sha.status !== 0 || sha.stdout.trim() === "") return scanned ? stop("holdout-scan-unavailable", "its head could not be read. Run the push again from the repo.") : null;
   const head = sha.stdout.trim();
@@ -3226,7 +3230,8 @@ function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
   const all = `${added.text}
 ${files.join("\n")}
 ${tags}
-${named.join("\n")}`;
+${named.join("\n")}
+${p.branch ?? ""}`;
   const count = countIdsIn2(`${all}
 ${all.replace(/\0/g, "")}`, ids);
   if (count === 0) return null;

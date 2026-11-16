@@ -2870,6 +2870,8 @@ function namedTags(p: PushShape, deps: Deps, dir: string): string[] {
     if (typeof r !== 'string' || r === '') continue;
     if (r.startsWith('refs/tags/')) { out.add(r); continue; }
     if (r.startsWith('refs/') || /^(?:HEAD|@)(?:$|[~^@])/.test(r)) continue;
+    // PR 612 critic hole 2: git resolves `tags/<t>` through its refs/<name> rule, so it names refs/tags/<t>.
+    if (r.startsWith('tags/')) { out.add(`refs/${r}`); continue; }
     if (deps.git(dir, ['show-ref', '--verify', '--quiet', `refs/tags/${r}`]).status === 0) out.add(`refs/tags/${r}`);
   }
   return [...out];
@@ -2965,7 +2967,8 @@ function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, 
   // C5 change 3: a push that names a tag is a scanned class (its tag message and its commits). A force or wide form of a scanned push is how
   // --tags reads in CCv3: its log reads start from every local tag too (--tags), so a tagged commit outside the branch is read.
   const named = namedTags(p, deps, dir);
-  const scanned = isRe || named.length > 0;
+  // PR 612 critic hole 3: a force or wide form (--tags) is scanned on every branch, not only a re/ one (B9 ruling: no change to WIDE_LONG).
+  const scanned = isRe || named.length > 0 || p.force;
   const allTags = scanned && p.force ? ['--tags'] : [];
   if (sha.status !== 0 || sha.stdout.trim() === '') return scanned ? stop('holdout-scan-unavailable', 'its head could not be read. Run the push again from the repo.') : null;
   const head = sha.stdout.trim();
@@ -3009,7 +3012,7 @@ function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, 
   if (added.binary) return stop('holdout-scan-unavailable', `it sends a binary file that git prints only as "Binary files differ" (a merge resolution), so its content cannot be read. ${SPLIT_WAY_OUT}`);
   // Seat read 2, item 1: a UTF-16 file prints a NUL between characters under --text. Count the text and the text without NUL (an id counts once).
   // PR 612 review (major): a tag name the push names leaves too, with or without a local tag of that name (tagText reads local tags only).
-  const all = `${added.text}\n${files.join('\n')}\n${tags}\n${named.join('\n')}`;
+  const all = `${added.text}\n${files.join('\n')}\n${tags}\n${named.join('\n')}\n${p.branch ?? ''}`;
   const count = countIdsIn(`${all}\n${all.replace(/\0/g, '')}`, ids);
   if (count === 0) return null;
   return hardOf(deny('holdout-id', `this push of ${branch} carries ${count} holdout id${count === 1 ? '' : 's'} in the added lines, commit messages, file names or tag messages of what it sends (an older commit of the branch counts too). Remove them from every commit and local tag. ${SPLIT_WAY_OUT} Which ones stays with the seat: this text names a count only.`, 'push'));
