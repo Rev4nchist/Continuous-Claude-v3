@@ -82,7 +82,7 @@ describe('band line 1: the session label', () => {
   test('S3 a long name is clipped to 16 at first and to 8 before cost goes', () => {
     const name = 'a-very-long-session-name'
     expect(text(one({ who: { name, short: '0d40499c' } }, 120))).toContain('a-very-long-ses… #0d40499c')
-    // WAITING ON DAVE 17 + 2 + name 8 + ctx 7 + cost 6 + 2 separators of 3 = 46: the name is cut to 8 at 46 with cost kept, cost goes at 45.
+    // WAITING FOR YOU 17 + 2 + name 8 + ctx 7 + cost 6 + 2 separators of 3 = 46: the name is cut to 8 at 46 with cost kept, cost goes at 45.
     const waiting = { chip: 'waiting-on-dave' as const, who: { name, short: '0d40499c' } }
     expect(text(one(waiting, 46))).toContain('a-very-…')
     expect(text(one(waiting, 46))).toContain('$98.61')
@@ -119,15 +119,15 @@ describe('band line 1: ctx goes last of all', () => {
   const waiting = { chip: 'waiting-on-dave' as const, who: { name: 'a-very-long-session-name', short: '0d40499c' }, laneCount: 1 }
   const narrow = (width: number): string => text(lineOne(state(waiting), width))
 
-  test('S9 at the narrowest width where WAITING ON DAVE and ctx fit, ctx stays and the name goes', () => {
-    // WAITING ON DAVE 17 + 2 + ctx 54% 7 = 26.
+  test('S9 at the narrowest width where WAITING FOR YOU and ctx fit, ctx stays and the name goes', () => {
+    // WAITING FOR YOU 17 + 2 + ctx 54% 7 = 26.
     const line = narrow(26)
-    expect(line).toBe(' WAITING ON DAVE   ctx 54%')
+    expect(line).toBe(' WAITING FOR YOU   ctx 54%')
     expect(line.length).toBeLessThanOrEqual(26)
   })
 
   test('S9 one cell narrower, ctx is the last to go: the chip stands alone', () => {
-    expect(narrow(25)).toBe(' WAITING ON DAVE ')
+    expect(narrow(25)).toBe(' WAITING FOR YOU ')
   })
 
   test('S9 the name is clipped to the room beside ctx before it drops, and ctx never goes while the chip and ctx fit', () => {

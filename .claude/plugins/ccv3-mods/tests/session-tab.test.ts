@@ -136,7 +136,7 @@ describe('session tab: STATE', () => {
       'waiting-on-dave': 'Waiting for you',
       blocked: 'Stuck: a step cannot go on',
       done: 'Done: every step is proven',
-      idle: 'Idle',
+      idle: 'Resting',
     }
     for (const chip of Object.keys(words) as TabState['chip'][]) expect(all(section(sessionTab({ ...rich(), chip }, NOW, 80, 40), 'STATE')), chip).toContain(words[chip])
   })
@@ -192,7 +192,7 @@ describe('session tab: NOW', () => {
     expect(now(empty({ view: { ...empty().view, turn }, agentRuns: [run('r1', 'running', MIN)] }))).toContain('Thinking')
     const two = empty({ view: { ...empty().view, agents: [{ id: 'a', description: 'x', type: 'scout', status: 'running' }, { id: 'b', description: 'y', type: 'scout', status: 'running' }] }, agentRuns: [run('r1', 'running', MIN), run('r2', 'running', MIN)] })
     expect(now(two)).toContain('2 helpers running')
-    expect(now(empty())).toMatch(/Idle|nothing running/)
+    expect(now(empty())).toMatch(/Resting|nothing running/)
     expect(now(empty())).not.toMatch(/Thinking|helpers running/)
   })
 })

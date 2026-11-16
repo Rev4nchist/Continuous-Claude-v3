@@ -78,14 +78,14 @@ describe('chipWord', () => {
       'waiting-on-dave': 'Waiting for you',
       blocked: 'Stuck: a step cannot go on',
       done: 'Done: every step is proven',
-      idle: 'Idle',
+      idle: 'Resting',
     }
     for (const [chip, word] of Object.entries(words)) expect(chipWord(chip as Chip)).toBe(word)
   })
 
-  test('W2 an unknown chip reads Idle', () => {
-    expect(chipWord('bogus' as never)).toBe('Idle')
-    expect(chipWord(undefined as never)).toBe('Idle')
+  test('W2 an unknown chip reads Resting', () => {
+    expect(chipWord('bogus' as never)).toBe('Resting')
+    expect(chipWord(undefined as never)).toBe('Resting')
   })
 })
 

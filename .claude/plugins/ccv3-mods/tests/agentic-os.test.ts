@@ -140,7 +140,7 @@ describe('agentic-os core band', () => {
   test('C1 a session with no brief draws both core lines with GOAL not set, idle, and no widget line', async ($, on) => {
     world(on)
     const got = await core($)
-    expect(got.line1).toContain('IDLE')
+    expect(got.line1).toContain('RESTING')
     expect(got.line2).toContain('GOAL not set')
     expect(got.line2).toMatch(/PLAN [▱]+ 0\/0/)
     expect(got.widget).toBeUndefined()
@@ -160,7 +160,7 @@ describe('agentic-os core band', () => {
     expect(got.line2).toContain('ASK 1')
     expect(got.line2).toContain('UNPROVEN 1')
     expect(got.line2).toMatch(/PLAN ▰ 1\/1/)
-    expect(got.line1).toContain('WAITING ON DAVE')
+    expect(got.line1).toContain('WAITING FOR YOU')
     // The widget line still carries the task progress (the existing band), below the core lines.
     expect(got.widget).toContain('1/1 done')
     expect(got.keys).toEqual(['row-core-1', 'row-core-2', 'row-band'])
@@ -190,7 +190,7 @@ describe('agentic-os core band', () => {
       reason: 'end_turn',
     } as never)
     const got = await core($)
-    expect(got.line1).toContain('WAITING ON DAVE')
+    expect(got.line1).toContain('WAITING FOR YOU')
     expect(got.line2).toMatch(/GOAL ship\S* .*\[parsed\]/)
     expect(got.line2).toContain('ASK 1')
     expect(got.all).not.toContain(SECRET)

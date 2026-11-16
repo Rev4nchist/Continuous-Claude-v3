@@ -374,9 +374,24 @@ describe('deriveChip', () => {
     expect(deriveChip(state({ brief }))).toBe('idle')
   })
 
-  test('C4 an open ask with a tool running is working', () => {
+  test('C4 an open ask beats a tool, a turn and a running agent: the chip says waiting (glossary: Waiting for you wins over running work)', () => {
     const brief = apply(null, { ask: [{ kind: 'question', text: 'q' }] })
-    expect(deriveChip(state({ brief, toolRunning: true }))).toBe('working')
+    expect(deriveChip(state({ brief, toolRunning: true }))).toBe('waiting-on-dave')
+    expect(deriveChip(state({ brief, turnActive: true }))).toBe('waiting-on-dave')
+    expect(deriveChip({ ...state({ brief }), agentRuns: [{ status: 'running' }] })).toBe('waiting-on-dave')
+  })
+
+  test('C4b an AskUserQuestion step in flight is waiting, with no brief at all (a dialog is open for Dave)', () => {
+    expect(deriveChip({ ...state({ toolRunning: true }), dialogOpen: true })).toBe('waiting-on-dave')
+    expect(deriveChip({ ...state({ toolRunning: true, turnActive: true }), dialogOpen: true })).toBe('waiting-on-dave')
+    // Without the dialog flag a running tool is only working: the flag is the whole difference.
+    expect(deriveChip(state({ toolRunning: true }))).toBe('working')
+  })
+
+  test('C4c blocked still beats a dialog, and a stale ask still lets running work show', () => {
+    expect(deriveChip({ ...state({ blocked: true }), dialogOpen: true })).toBe('blocked')
+    const brief = apply(null, { ask: [{ kind: 'question', text: 'q' }] })
+    expect(deriveChip(state({ brief, turnActive: true, now: NOW + 24 * 3600_000 }))).toBe('working')
   })
 
   test('C5 an open ask with no tool running is waiting-on-dave', () => {
@@ -1196,7 +1211,7 @@ describe('brief_set in the mod', () => {
     expect(after.chip).not.toBe('waiting-on-dave')
   })
 
-  test('E6c an open ask with another tool still running is working; with none running it is waiting-on-dave', async ($, on) => {
+  test('E6c an open ask with another tool still running is waiting-on-dave (it beats running work); with none running it is too', async ($, on) => {
     const seen = world(on)
     await startMod($, true)
     // A Read that is still running when the model calls brief_set: the brief_set step does not count, the Read does.
@@ -1206,7 +1221,7 @@ describe('brief_set in the mod', () => {
     await $.tool.call({ tool: 'Read', file_path: 'C:/r/a.md' })
     seen.inRead = undefined
     const during = snapshots(seen).find(write => JSON.parse(write.text).brief?.ask?.length === 1)
-    expect(JSON.parse(during?.text ?? '{}').chip).toBe('working')
+    expect(JSON.parse(during?.text ?? '{}').chip).toBe('waiting-on-dave')
     await $.tool.call({ tool: BRIEF_TOOL, ask: [{ kind: 'question', text: 'which one?' }] })
     expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
   })
@@ -1590,6 +1605,36 @@ describe('turn.step answers in the mod', () => {
     expect(brief.ask.map((one: { text: string }) => one.text)).toEqual(['Pick the release name?'])
     expect(brief.cleared).toHaveLength(1)
     expect(brief.cleared[0]).toMatchObject({ kind: 'approval', text: 'Approve the merge of PR 12?', answeredAt: 2000, how: 'prompted' })
+  })
+
+  test('CL15 a prompt that is not Dave (a cron tick, a peer message, a Monitor notification) leaves the asks open; composer and bridge answer them; no origin answers them (an old engine)', async ($, on) => {
+    const seen = world(on)
+    await startMod($, true)
+    for (const kind of ['scheduled-trigger', 'task-notification', 'peer', 'peer-send-message', 'auto-continuation'] as const) {
+      await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+      await $.prompt.submit({ text: 'tick', wait: false, origin: { kind } } as never)
+      expect(lastSnapshot(seen).brief.ask[0], kind).toMatchObject({ text: 'Approve the merge of PR 12?' })
+      expect(lastSnapshot(seen).brief.ask[0].answered, kind).toBeFalsy()
+    }
+    for (const kind of ['composer', 'bridge'] as const) {
+      await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+      await $.prompt.submit({ text: 'go ahead', wait: false, origin: { kind } } as never)
+      expect(lastSnapshot(seen).brief.ask.find((one: { answered?: boolean }) => !one.answered), kind).toBeUndefined()
+    }
+    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    await $.prompt.submit({ text: 'go ahead', wait: false } as never)
+    expect(lastSnapshot(seen).brief.ask.find((one: { answered?: boolean }) => !one.answered)).toBeUndefined()
+  })
+
+  test('CL15b an origin the mod does not know answers like today (fail to the old behaviour); a mod submission never answers', async ($, on) => {
+    const seen = world(on)
+    await startMod($, true)
+    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    await $.prompt.submit({ text: 'x', wait: false, origin: { kind: 'brand-new-kind' } } as never)
+    expect(lastSnapshot(seen).brief.ask.find((one: { answered?: boolean }) => !one.answered)).toBeUndefined()
+    await turnEnd($, '## Next steps\n1. Pick the release name?')
+    await $.prompt.submit({ text: 'PR watcher: #12 head abc1234 is READY', wait: false, origin: { kind: 'composer' } } as never)
+    expect(lastSnapshot(seen).brief.ask.find((one: { text: string }) => one.text === 'Pick the release name?').answered).toBeFalsy()
   })
 
   test('CL14b a brief_set that lands while the prompt waits for the clock is kept, and the ask is still marked answered', async ($, on) => {

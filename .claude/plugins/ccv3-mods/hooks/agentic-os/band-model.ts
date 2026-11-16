@@ -32,18 +32,20 @@ export type BandState = {
   now: number
   /** When the session last did anything: an ask stays fresh 24 hours from it. */
   activeAt: number | null
-  /** Helpers running now. Absent or 0 draws no helper text on the compact line. */
+  /** Helpers running now. Absent or 0 draws no helper text on the compact line. Line 1 shows it only beside a waiting chip. */
   helpers?: number
+  /** The HUD row draws below the core lines, with ctx and cost when known: line 1 leaves out a known ctx and a known cost. An unknown one still reads as a dash there. Absent or false: line 1 draws both. */
+  hud?: boolean
   /** The HUD's limits. null or absent: not known yet (the compact line reads a dash). A list without a window draws nothing for it. */
   limits?: HudLimit[] | null
 }
 
 export const CHIP: Record<Chip, { word: string; tone: Tone }> = {
   working: { word: 'WORKING', tone: 'chipDoing' },
-  'waiting-on-dave': { word: 'WAITING ON DAVE', tone: 'chipWarn' },
-  blocked: { word: 'BLOCKED', tone: 'chipBad' },
+  'waiting-on-dave': { word: 'WAITING FOR YOU', tone: 'chipWarn' },
+  blocked: { word: 'STUCK', tone: 'chipBad' },
   done: { word: 'DONE', tone: 'chipOk' },
-  idle: { word: 'IDLE', tone: 'chipDim' },
+  idle: { word: 'RESTING', tone: 'chipDim' },
 }
 
 /** Below this many columns the band is the chip and the goal. */
@@ -126,10 +128,10 @@ const barSpans = (steps: Step[], cells: number): Span[] => {
 
 // --- Line 1 ---
 
-type Item = { key: 'who' | 'lane' | 'ctx' | 'cost'; spans: Span[] }
+type Item = { key: 'who' | 'lane' | 'ctx' | 'cost' | 'helpers'; spans: Span[] }
 
 /** What line 1 still draws. Cut order under width pressure: `#sid8`, the lane, the name to MIN_NAME, cost, the name to the room beside ctx (gone below 3), then ctx last of all. */
-type Shape = { sid: boolean; lane: boolean; nameMax: number; cost: boolean; ctx: boolean }
+type Shape = { sid: boolean; lane: boolean; nameMax: number; cost: boolean; ctx: boolean; helpers: boolean }
 
 /** `name #sid8`: the name in the accent tone, `#sid8` dim; no name reads `unnamed` in amber. */
 const whoSpans = (who: NonNullable<BandState['who']>, nameMax: number, sid: boolean): Span[] => {
@@ -146,11 +148,13 @@ const laneText = (s: BandState): string => {
 const items = (s: BandState, shape: Shape): Item[] => {
   const ctx = typeof s.ctx === 'number' && Number.isFinite(s.ctx) ? s.ctx : null
   const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
+  const helpers = typeof s.helpers === 'number' && Number.isFinite(s.helpers) ? Math.floor(s.helpers) : 0
   const all: (Item | null)[] = [
+    shape.helpers && s.chip === 'waiting-on-dave' && helpers > 0 ? { key: 'helpers', spans: [sp(`${helpers} ${helpers === 1 ? 'helper' : 'helpers'} running`, 'doing')] } : null,
     s.who === undefined ? null : { key: 'who', spans: whoSpans(s.who, shape.nameMax, shape.sid) },
     shape.lane ? { key: 'lane', spans: [sp(laneText(s), 'dim')] } : null,
-    shape.ctx ? { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] } : null,
-    shape.cost ? { key: 'cost', spans: [sp(cost === null ? '$-' : `$${cost.toFixed(2)}`, 'dim')] } : null,
+    shape.ctx && !(s.hud === true && ctx !== null) ? { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] } : null,
+    shape.cost && !(s.hud === true && cost !== null) ? { key: 'cost', spans: [sp(cost === null ? '$-' : `$${cost.toFixed(2)}`, 'dim')] } : null,
   ]
   return all.filter((one): one is Item => one !== null)
 }
@@ -160,12 +164,13 @@ const chipSpan = (chip: Chip): Span => sp(` ${(CHIP[chip] ?? CHIP.idle).word} `,
 /** Line 1 for a drawing `width` wide (the core band calls it from 40 columns; exported for the narrow-width test). */
 export const lineOne = (s: BandState, width: number): Span[] => {
   const chip = chipSpan(s.chip)
-  const shape: Shape = { sid: true, lane: true, nameMax: NAME_MAX, cost: true, ctx: true }
+  const shape: Shape = { sid: true, lane: true, nameMax: NAME_MAX, cost: true, ctx: true, helpers: true }
   const rest = () => items(s, shape)
   const widthOf = (list: Item[]) => chip.text.length + (list.length > 0 ? SEP.length + len(join(list.map(one => one.spans), sp(DOT, 'track'))) : 0)
   const total = () => widthOf(rest())
   const withoutName = () => rest().filter(one => one.key !== 'who')
   const cuts: (() => void)[] = [
+    () => { shape.helpers = false },
     () => { shape.sid = false },
     () => { shape.lane = false },
     () => { shape.nameMax = MIN_NAME },

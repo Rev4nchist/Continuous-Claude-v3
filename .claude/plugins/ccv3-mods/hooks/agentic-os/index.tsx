@@ -9,7 +9,7 @@ import { ledgerBandSpans, settle } from '../agent-ledger/model'
 import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
-import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact, tapDecisions, withTaps } from './brief'
+import { answersAsks, applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact, tapDecisions, withTaps } from './brief'
 import { hudOrSeed, seedHud } from '../hud/seed'
 import { bandLines, compactLine } from './band-model'
 import type { BandState } from './band-model'
@@ -239,6 +239,7 @@ const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { work
     brief: await read($, brief),
     tasks: now.tasks,
     toolRunning: (await read($, steps)).some(one => one.id !== opts.except),
+    dialogOpen: (await read($, steps)).some(one => one.id !== opts.except && one.tool === 'AskUserQuestion'),
     turnActive: now.turn !== null || opts.working === true,
     blocked: await read($, refused),
     now: at,
@@ -613,10 +614,13 @@ const learnFromAnswer = async ($: EngineInterface, answer: unknown): Promise<voi
 }
 
 /** Dave's prompt answers every open ask. The mod's own report lines (the PR watcher) are not Dave. */
-const answerAsks = async ($: EngineInterface, text: unknown): Promise<void> => {
+const answerAsks = async ($: EngineInterface, text: unknown, origin?: unknown): Promise<void> => {
   try {
     // The mod's own report lines are not activity of Dave's; any other prompt is.
     if (!(typeof text === 'string' && isModSubmission(text))) await touch($)
+    // A cron tick, a peer message or a Monitor notification is not Dave: it answers nothing. It still counts as activity: the turn it starts
+    // renews the 24 hour clock through turn.start and tool.call anyway, so withholding the touch here would change nothing.
+    if (!answersAsks(origin as { kind?: unknown } | null | undefined)) return
     // The clock is read before the brief: no await sits between that read and the update, so a brief_set or a parsed turn end
     // that lands while the clock answers is not overwritten. The update is a function of the live brief for the same reason.
     const at = await $.clock.now()
@@ -932,7 +936,7 @@ export const agenticOs = (on: On) => {
 
   // The one unmatched prompt.submit hook of the plugin. Observer: the prompt goes on unchanged.
   on('prompt.submit', async ($, e, next) => {
-    if (!(await isOff($))) await answerAsks($, e.text)
+    if (!(await isOff($))) await answerAsks($, e.text, (e as { origin?: unknown }).origin)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -976,6 +980,8 @@ export const agenticOs = (on: On) => {
       activeAt: await read($, activeAt),
       helpers: runs.filter(run => run.status === 'running').length,
       limits: hudNow?.limits ?? null,
+      // The HUD row draws ctx and cost below the core lines: line 1 leaves them out then (one source, drawn once).
+      hud: hudNow !== null,
     }
     const cores = bandLines(bandState, e.props.bodyColumns)
     // The core lines (PRD 5.3) draw when they fit with the HUD row: two lines + HUD = 3 rows (HUD off: 2). Under 40 columns there is one

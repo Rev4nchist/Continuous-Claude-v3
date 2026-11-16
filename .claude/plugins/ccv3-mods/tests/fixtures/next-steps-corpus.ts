@@ -39,4 +39,13 @@ export const CORPUS: CorpusRow[] = [
   { id: 'N27c', text: done("1. I'm waiting on the CodeRabbit review."), asks: [], source: 'P27' },
   { id: 'N26', text: "Pushed the fix.\n\n## Next steps\n1. None for now. I'm waiting on the workflow.", asks: [], source: 'P26' },
   { id: 'N29', text: 'Done.\n\n## Next steps\nNothing for you to do. Waiting on the CI run.', asks: [], source: 'P29' },
+  // Coord status band fixes, fix 3 (2026-11-16): a peer wait with a one-sentence first-person tail is no ask; any other tail stays an ask.
+  { id: 'N61a', text: steps('1. None - waiting on the end word from Coord hooks. I rule on its findings before any fix push'), asks: [], source: 'band review 04, live seat 14:15:39' },
+  { id: 'N61b', text: steps('1. None for the seat'), asks: [], source: 'band review 04, fix 3' },
+  { id: 'N61c', text: steps('1. None, waiting on CI'), asks: [], source: 'band review 04, fix 3' },
+  { id: 'R61a', text: steps('1. None - waiting on CI. Paste the build log'), asks: ['Paste the build log'], source: 'seat guard 1: an order in the tail' },
+  { id: 'R61b', text: steps('1. None - waiting on CI. Dave picks the band after'), asks: ['Dave picks the band after'], source: 'seat guard 1: names Dave' },
+  { id: 'R61c', text: steps('1. None - waiting on CI. I rule on it after you pick'), asks: ['after you pick'], source: 'seat guard 1: names you' },
+  { id: 'R61d', text: steps('1. None - waiting on CI. I wait. Paste the build log'), asks: ['Paste the build log'], source: 'seat guard 1: a second sentence' },
+  { id: 'R61e', text: steps('1. None - waiting on CI. Should I rule on it?'), asks: ['Should I rule on it?'], source: 'seat guard 1: a question mark' },
 ]
