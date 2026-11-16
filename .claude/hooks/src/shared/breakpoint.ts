@@ -191,6 +191,47 @@ export interface BreakpointInput {
   typed: TypedLine[];
   /** Decision lines of the previous state file (`carriedDecisionLines`), older than `decisions`. */
   carried?: string[];
+  /** Card coord-seat-role-on-holder: the seat's role block (`seatRoleLines`), placed after the head. It takes room before the decisions. */
+  roleLines?: string[];
+  /** Where all decisions can be read (the transcript). With it, a file that drops decision lines says how many (seat condition A). */
+  fullListPath?: string;
+}
+
+// ---------------------------------------------------------------- the seat role card (card coord-seat-role-on-holder)
+
+/** The lane that stands for the program: the holder is the seat. Design rule 2: the role is keyed to holding it. */
+export const MASTER_CARD_ID = 're-program';
+export const SEAT_CARD_FILE = 'seat-role.md';
+/** Room for the short block: the real size (about 900 bytes) plus a margin, so a wording change does not break the caps (seat 11-15). */
+export const SEAT_BLOCK_MAX = 1000;
+const SEAT_POINTER = 'Seat role card (full text): ~/.claude/rules-ondemand/seat-role.md';
+const BLOCK_START = '<!-- short-card:start -->';
+const BLOCK_END = '<!-- short-card:end -->';
+
+/** The short block of the card file between its markers, or null (no file, no markers, a read error). Never throws. */
+export function readSeatShortCard(home: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(home, '.claude', 'rules-ondemand', SEAT_CARD_FILE), 'utf8');
+    const from = text.indexOf(BLOCK_START);
+    const to = text.indexOf(BLOCK_END);
+    if (from < 0 || to < from) return null;
+    const block = text.slice(from + BLOCK_START.length, to).trim();
+    return block ? block : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The seat block of the state file.
+ *  - read ok and the session holds the master card: the short card (masked, at most SEAT_BLOCK_MAX), else the pointer line
+ *  - read ok and no master card: nothing
+ *  - the board read failed or timed out: the pointer line only (holder unknown; fail open, never wait)
+ */
+export function seatRoleLines(state: { boardOk: boolean; lanes: LaneFacts[] }, card: string | null): string[] {
+  if (!state.boardOk) return ['## Seat role', SEAT_POINTER];
+  if (!state.lanes.some((l) => l.id === MASTER_CARD_ID)) return [];
+  return ['## Seat role', card ? cut(maskSecrets(card), SEAT_BLOCK_MAX) : SEAT_POINTER];
 }
 
 /** hh:mm of an ISO UTC timestamp, marked with Z (the transcript times are UTC). */
@@ -229,21 +270,33 @@ export function buildBreakpoint(input: BreakpointInput): string {
   const resume = ['## Resume', 'Resume: continue with the NEXT step of the lane note. Do not re-ask a decision above.'];
   // Budget order (seat review 11-14): decisions are the purpose of the file, so they take the room FIRST, newest first. The lane
   // block takes what is left (fields cut to fit, down to the ids), then the typed lines (newest first, one by one).
-  let room = MAX_FILE_CHARS - size(head) - size(resume) - 40;
+  const role = input.roleLines ?? [];
+  let room = MAX_FILE_CHARS - size(head) - size(resume) - size(role) - 40;
   // Older decisions first (carried from the previous file: the tail read of a long transcript may not reach them), then the new
   // ones. The same decision gives the same line, so it is listed once.
   const fresh = input.decisions.map(decisionLine);
   const freshSet = new Set(fresh);
   const lines = [...(input.carried ?? []).filter((l) => !freshSet.has(l)), ...fresh];
   const decHead = '## Decisions made (Do not ask these again)';
-  const kept: string[] = [];
   // The lane ids never drop out: the ids-only lane block is reserved before the decisions take the room (seat tweak 11-14).
-  let decRoom = room - size(laneBlock(input.lanes, 0)) - decHead.length - 1;
-  for (let i = lines.length - 1; i >= 0 && lines[i].length + 1 <= decRoom; i--) {
-    kept.unshift(lines[i]);
-    decRoom -= lines[i].length + 1;
+  const baseRoom = room - size(laneBlock(input.lanes, 0)) - decHead.length - 1;
+  const keep = (decRoom: number): string[] => {
+    const out: string[] = [];
+    for (let i = lines.length - 1; i >= 0 && lines[i].length + 1 <= decRoom; i--) {
+      out.unshift(lines[i]);
+      decRoom -= lines[i].length + 1;
+    }
+    return out;
+  };
+  let kept = keep(baseRoom);
+  // Seat condition A (11-15): no silent drop. A file that pushes decision lines out says how many and where all of them are.
+  let dropNote: string[] = [];
+  if (kept.length < lines.length && input.fullListPath) {
+    const note = (n: number): string => `${n} decision lines not shown: full list ${cut(oneLine(input.fullListPath ?? ''), 200)}`;
+    kept = keep(baseRoom - note(lines.length).length - 1);
+    dropNote = [note(lines.length - kept.length)];
   }
-  const decisions = kept.length ? [decHead, ...kept] : [];
+  const decisions = kept.length || dropNote.length ? [decHead, ...dropNote, ...kept] : [];
   room -= size(decisions);
   const lanes = [LANE_FIELD_CUT, 80, 0].map((c) => laneBlock(input.lanes, c)).find((b) => size(b) <= room) ?? laneBlock(input.lanes, 0);
   room -= size(lanes);
@@ -255,7 +308,7 @@ export function buildBreakpoint(input: BreakpointInput): string {
     typedRoom -= typedLines[i].length + 1;
   }
   const typed = typedKept.length ? [`## ${TYPED_HEADER}`, ...typedKept] : [];
-  const text = [...head, ...lanes, ...decisions, ...typed, ...resume].join('\n') + '\n';
+  const text = [...head, ...role, ...lanes, ...decisions, ...typed, ...resume].join('\n') + '\n';
   return text.length > MAX_FILE_CHARS ? text.slice(0, MAX_FILE_CHARS - 1) : text;
 }
 

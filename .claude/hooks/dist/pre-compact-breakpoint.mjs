@@ -500,6 +500,29 @@ function laneFactsFrom(board, sessionId) {
   }
   return out;
 }
+var MASTER_CARD_ID = "re-program";
+var SEAT_CARD_FILE = "seat-role.md";
+var SEAT_BLOCK_MAX = 1e3;
+var SEAT_POINTER = "Seat role card (full text): ~/.claude/rules-ondemand/seat-role.md";
+var BLOCK_START = "<!-- short-card:start -->";
+var BLOCK_END = "<!-- short-card:end -->";
+function readSeatShortCard(home) {
+  try {
+    const text = fs2.readFileSync(path.join(home, ".claude", "rules-ondemand", SEAT_CARD_FILE), "utf8");
+    const from = text.indexOf(BLOCK_START);
+    const to = text.indexOf(BLOCK_END);
+    if (from < 0 || to < from) return null;
+    const block = text.slice(from + BLOCK_START.length, to).trim();
+    return block ? block : null;
+  } catch {
+    return null;
+  }
+}
+function seatRoleLines(state, card) {
+  if (!state.boardOk) return ["## Seat role", SEAT_POINTER];
+  if (!state.lanes.some((l) => l.id === MASTER_CARD_ID)) return [];
+  return ["## Seat role", card ? cut(maskSecrets(card), SEAT_BLOCK_MAX) : SEAT_POINTER];
+}
 var hhmm = (at) => {
   const m = /T(\d\d:\d\d)/.exec(at)?.[1];
   return m ? `${m}Z` : "";
@@ -530,18 +553,29 @@ function buildBreakpoint(input) {
     ...input.branch ? [`branch: ${mask(input.branch, 100)}`] : []
   ];
   const resume = ["## Resume", "Resume: continue with the NEXT step of the lane note. Do not re-ask a decision above."];
-  let room = MAX_FILE_CHARS - size(head) - size(resume) - 40;
+  const role = input.roleLines ?? [];
+  let room = MAX_FILE_CHARS - size(head) - size(resume) - size(role) - 40;
   const fresh = input.decisions.map(decisionLine);
   const freshSet = new Set(fresh);
   const lines = [...(input.carried ?? []).filter((l) => !freshSet.has(l)), ...fresh];
   const decHead = "## Decisions made (Do not ask these again)";
-  const kept = [];
-  let decRoom = room - size(laneBlock(input.lanes, 0)) - decHead.length - 1;
-  for (let i = lines.length - 1; i >= 0 && lines[i].length + 1 <= decRoom; i--) {
-    kept.unshift(lines[i]);
-    decRoom -= lines[i].length + 1;
+  const baseRoom = room - size(laneBlock(input.lanes, 0)) - decHead.length - 1;
+  const keep2 = (decRoom) => {
+    const out = [];
+    for (let i = lines.length - 1; i >= 0 && lines[i].length + 1 <= decRoom; i--) {
+      out.unshift(lines[i]);
+      decRoom -= lines[i].length + 1;
+    }
+    return out;
+  };
+  let kept = keep2(baseRoom);
+  let dropNote = [];
+  if (kept.length < lines.length && input.fullListPath) {
+    const note = (n) => `${n} decision lines not shown: full list ${cut(oneLine(input.fullListPath ?? ""), 200)}`;
+    kept = keep2(baseRoom - note(lines.length).length - 1);
+    dropNote = [note(lines.length - kept.length)];
   }
-  const decisions = kept.length ? [decHead, ...kept] : [];
+  const decisions = kept.length || dropNote.length ? [decHead, ...dropNote, ...kept] : [];
   room -= size(decisions);
   const lanes = [LANE_FIELD_CUT, 80, 0].map((c) => laneBlock(input.lanes, c)).find((b) => size(b) <= room) ?? laneBlock(input.lanes, 0);
   room -= size(lanes);
@@ -553,7 +587,7 @@ function buildBreakpoint(input) {
     typedRoom -= typedLines[i].length + 1;
   }
   const typed = typedKept.length ? [`## ${TYPED_HEADER}`, ...typedKept] : [];
-  const text = [...head, ...lanes, ...decisions, ...typed, ...resume].join("\n") + "\n";
+  const text = [...head, ...role, ...lanes, ...decisions, ...typed, ...resume].join("\n") + "\n";
   return text.length > MAX_FILE_CHARS ? text.slice(0, MAX_FILE_CHARS - 1) : text;
 }
 function carriedDecisionLines(fileText) {
@@ -1060,10 +1094,10 @@ async function lanesOf(sessionId, cwd, deps) {
   try {
     const env = { ...process.env, CLAUDE_CODE_SESSION_ID: sessionId };
     const run = await deps.runner(["board", "--json"], { cwd, env, timeoutMs: CALL_TIMEOUT_MS2 });
-    if (run.code !== 0) return [];
-    return laneFactsFrom(JSON.parse(run.stdout), sessionId);
+    if (run.code !== 0) return { lanes: [], boardOk: false };
+    return { lanes: laneFactsFrom(JSON.parse(run.stdout), sessionId), boardOk: true };
   } catch {
-    return [];
+    return { lanes: [], boardOk: false };
   }
 }
 function readExisting(file) {
@@ -1086,7 +1120,7 @@ async function runPreCompactBreakpoint(input, deps) {
     if (!sessionId || !file) return skipped2("no usable session id");
     const cwd = input.cwd || process.cwd();
     const { decisions, typed } = parseTranscriptTail(readTranscriptTail(input.transcript_path));
-    const lanes = await lanesOf(sessionId, cwd, deps);
+    const { lanes, boardOk } = await lanesOf(sessionId, cwd, deps);
     const existing = readExisting(file);
     const facts = {
       sessionId,
@@ -1095,7 +1129,9 @@ async function runPreCompactBreakpoint(input, deps) {
       lanes,
       branch: deps.branchOf(cwd),
       decisions,
-      typed
+      typed,
+      roleLines: seatRoleLines({ boardOk, lanes }, readSeatShortCard(deps.home)),
+      ...input.transcript_path ? { fullListPath: input.transcript_path } : {}
     };
     if (!shouldReplace(existing, buildBreakpoint(facts))) return { continue: true, systemMessage: "[PreCompact] breakpoint kept (nothing new to save)" };
     writeAtomic(file, buildBreakpoint({ ...facts, carried: carriedDecisionLines(existing) }));
