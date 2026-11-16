@@ -258,7 +258,7 @@ describe('real vitest runs on the fixture (conditions 3 and 4)', () => {
     expect(run.output()).toContain('FX deliberate failure');
   }, 120_000);
 
-  it('stopChildren stops a run that is still going, and the run leaves no folder behind it', async () => {
+  it('stopChildren stops a run that is still going', async () => {
     const scratch = realTempDir('stop');
     const run = runFixture(scratch, 0, { FX_RELEASE_FILE: join(scratch, 'never-created') });
     expect(await waitFor(() => runFolders(scratch).some((n) => readdirSync(join(scratch, n)).some((e) => e.startsWith('fx-'))), 60_000)).toBe(true);
