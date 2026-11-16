@@ -1194,7 +1194,8 @@ test('a hidden HTML block that crosses the 4,000 character cut sends no part of 
   const h = diffPer(setup([finding(1)], { body: () => text }));
   assert.equal((await runWith(h)).code, 0);
   assert.equal(h.judge.calls.length, 1);
-  assert.doesNotMatch(h.judge.calls[0], /HIDDENSTART|HIDDENEND|yyyy|<!--/);
+  // Plain includes, not a regex literal: opengrep's parser reads a regex that holds an HTML comment opener as a comment (scan-error).
+  for (const bad of ['HIDDENSTART', 'HIDDENEND', 'yyyy', '<' + '!--']) assert.equal(h.judge.calls[0].includes(bad), false, `sent ${bad}`);
 });
 
 test('about 4,000 characters of hidden HTML blocks then reviewer text: the reviewer text reaches the judge (breaks if the cut runs before the strip)', async () => {
@@ -1203,7 +1204,7 @@ test('about 4,000 characters of hidden HTML blocks then reviewer text: the revie
   assert.equal((await runWith(h)).code, 0);
   assert.equal(h.judge.calls.length, 1);
   assert.match(h.judge.calls[0], /REVIEWERTEXT the null check is missing\./);
-  assert.doesNotMatch(h.judge.calls[0], /<!--|zzzz/);
+  for (const bad of ['zzzz', '<' + '!--']) assert.equal(h.judge.calls[0].includes(bad), false, `sent ${bad}`);
 });
 
 test('stripBody drops an unclosed <!-- to the end of the text (breaks if only closed blocks are dropped)', () => {
