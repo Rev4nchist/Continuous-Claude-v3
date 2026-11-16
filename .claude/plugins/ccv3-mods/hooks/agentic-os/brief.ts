@@ -301,11 +301,14 @@ export const isAskStale = (brief: Brief, now: number, lastActivity?: number | nu
   brief.ask.some(isOpen) && now - Math.max(brief.updatedAt, lastActivity ?? 0) >= STALE_ASK_MS
 
 /**
- * Prompt origins that are provably NOT Dave: a cron tick, a peer message, a Monitor notification. Such a prompt neither answers an ask
- * nor renews the 24 hour clock. The list holds only the kinds proven by the origin probe (.claudedocs/e2e-coord-status-band-fixes/).
- * Anything else answers, as before: no origin (an old engine), `composer`, `bridge`, and a kind added later (fail to the old behaviour).
+ * Prompt origins that are NOT Dave typing: a scheduled task or cron tick, a Monitor notification, a message from another session. Such a
+ * prompt answers no ask. It still counts as activity (the turn it starts renews the 24 hour clock). The list holds only the kinds that
+ * the engine's type file (PromptOrigin) and the origin probe (.claudedocs/e2e-coord-status-band-fixes/origin-probe.jsonl) show are not
+ * Dave. `auto-continuation` is not listed: the engine defines it as a follow-up to Dave's own UI action. Anything else answers, as
+ * before: no origin (an old engine), `composer`, `bridge`, and a kind added later (fail to the old behaviour).
+ * Known trade-off: a seat's relay of Dave's decision by SendMessage arrives as `peer-send-message` and answers no ask.
  */
-export const NOT_DAVE_ORIGINS: readonly string[] = ['scheduled-trigger', 'task-notification', 'peer', 'peer-send-message', 'auto-continuation']
+export const NOT_DAVE_ORIGINS: readonly string[] = ['scheduled-trigger', 'task-notification', 'peer', 'peer-send-message']
 
 export const answersAsks = (origin: { kind?: unknown } | null | undefined): boolean =>
   typeof origin?.kind !== 'string' || !NOT_DAVE_ORIGINS.includes(origin.kind)
@@ -481,9 +484,11 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
 const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s)(?:[^?;,!:–—\s]|\s)){1,80}`
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
 const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
-/** The one sentence that may follow a peer wait: first person ("I rule on its findings ..."), 160 characters at most, no second sentence, and it never names you, your or Dave. */
-const WAIT_TAIL = String.raw`(?:\.\s+(?:i|we)(?:['’]\w+)?(?![\w'’])(?:(?!\.\s|\b(?:you|your|dave)\b)[^?!;]){0,160})`
-const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+)${WAIT_CLAUSE}${WAIT_OBJECT}${WAIT_TAIL}?$)`, 'i')
+/** What the model may say it does itself while it waits. A closed set: a tail with any other verb ("I need ...", "I'd like ...") stays an ask. */
+const OWN_ACTION = String.raw`(?:rule|decide|review|check|merge|continue|resume|report|read|record|send|wait|keep|run|answer|act|post|land|reply|look|go|stay)`
+/** The one sentence that may follow a peer wait: first person, an own action above, 160 characters at most, one clause (no dash, comma, colon, period, question or exclamation mark), no and/then/or/but/unless/if/whether, and never you, yours, your or Dave. */
+const WAIT_TAIL = String.raw`(?:\.\s+(?:i|we)(?:['’]ll)?\s+(?:will\s+)?${OWN_ACTION}\b(?:(?!\b(?:and|then|or|but|unless|if|whether|you(?:rs?)?|dave)\b)[^?!;.,:–—-]){0,160})`
+const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+(?!${WAIT_CLAUSE}(?:your?|dave)\\b))${WAIT_CLAUSE}${WAIT_OBJECT}${WAIT_TAIL}?$)`, 'i')
 const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}(?!(?:your?|dave)\\b)${WAIT_OBJECT}$`, 'i')
 /** A question mark makes any item an ask, whatever its words. */
 const noAsk = (text: string): boolean => {

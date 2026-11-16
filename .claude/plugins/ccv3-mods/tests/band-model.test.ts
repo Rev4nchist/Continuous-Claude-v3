@@ -228,7 +228,7 @@ describe('band line 2: ASK and UNPROVEN', () => {
     expect(lineOf({ tasks: [task('1', 'a', 'pending'), task('2', 'b', 'in_progress')] })).toContain('UNPROVEN 0')
   })
 
-  test('L11 ASK and UNPROVEN: dim at zero, UNPROVEN warning above, ASK amber only on WAITING ON DAVE, red ASK on a blocked chip, green at zero on DONE', () => {
+  test('L11 ASK and UNPROVEN: dim at zero, UNPROVEN warning above, ASK amber only on WAITING FOR YOU, red ASK on a blocked chip, green at zero on DONE', () => {
     const tone = (line: Span[] | undefined, label: string) => line?.find(span => span.text.startsWith(label))?.tone
     const zero = bandLines(state(), 120)[1]
     expect(tone(zero, 'ASK')).toBe('dim')
@@ -590,11 +590,17 @@ describe('status band fixes (coord-status-band-fixes)', () => {
     expect(line).not.toContain('$')
   })
 
-  test('SB1b the compact line keeps ctx and cost even with the HUD flag, and line 1 keeps both when no HUD row draws', () => {
+  test('SB1b the compact line keeps ctx and cost even with the HUD flag, and line 1 keeps both when the HUD flag is absent', () => {
     expect(text(bandLines(state(), 120)[0])).toContain('ctx 41%')
     expect(text(bandLines(state(), 120)[0])).toContain('$1.84')
     expect(text(compactLine(hudOn() as BandState, 120))).toContain('ctx 41%')
     expect(text(compactLine(hudOn() as BandState, 120))).toContain('$1.84')
+  })
+
+  test('SB1c with the HUD flag, an unknown ctx and an unknown cost still read as a dash on line 1 (the HUD row draws neither)', () => {
+    const line = text(bandLines(hudOn({ ctx: null, costUsd: null }), 120)[0])
+    expect(line).toContain('ctx -')
+    expect(line).toContain('$-')
   })
 
   test('SB2 a waiting chip with helpers running shows "N helpers running" beside it on line 1; a working chip and a waiting chip with none do not', () => {

@@ -915,8 +915,12 @@ export const agenticOs = (on: On) => {
     await update($, activeAt, () => startedAt)
     await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt }])
     const headBefore = await headOf($, tool, input).catch(() => null)
-    const ran = await next(e)
-    await update($, steps, list => list.filter(one => one.id !== id))
+    let ran: Awaited<ReturnType<typeof next>>
+    try {
+      ran = await next(e)
+    } finally {
+      await update($, steps, list => list.filter(one => one.id !== id))
+    }
     await watch($, tool, input, headBefore, ran)
     // A refusal (not Dave dismissing his own question) blocks the chip until the next turn.
     if (ran.deny !== undefined && tool !== 'AskUserQuestion') await update($, refused, () => true)
