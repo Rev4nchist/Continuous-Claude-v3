@@ -1,7 +1,6 @@
 /**
  * Hooks vitest globalSetup: ONE run-owned temp folder for the whole run, removed at the end.
  * Why: the hook tests made about two folders per test in the real temp dir and never removed them (about 355,000 pig-* folders).
- * Design note: .claudedocs/e2e-temp-leak-round3/01-design-note.md
  *
  * setup():    makes <real temp>/ccv3-vt-<pid>-<random6> with an owner.json, points TEMP, TMP and TMPDIR at it
  *             (TMPDIR is the one that counts on Linux CI), and keeps the old value in CCV3_REAL_TEMP.

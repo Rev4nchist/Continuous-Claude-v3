@@ -1,6 +1,6 @@
 /**
  * The hooks vitest run keeps all test temp folders in ONE run-owned folder (vitest-global-temp.ts) and removes it at the end.
- * Failures this file catches (design note: .claudedocs/e2e-temp-leak-round3/01-design-note.md):
+ * Failures this file catches:
  *  1. the env set in globalSetup does not reach a test worker (a silent no-op);
  *  2. the teardown follows a junction or symlink and deletes files outside the run folder;
  *  3. the teardown removes a folder it did not make (a prefix or age rule, or a path outside the real temp dir);
@@ -9,6 +9,7 @@
  * Paths use join(), so the file passes on Windows and on Linux (TMPDIR is the variable that counts there).
  */
 import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -22,7 +23,8 @@ const FIXTURE_CONFIG = join(HOOKS_DIR, 'src', '__tests__', 'fixtures', 'vitest-r
 
 /** Folders this file made outside the run folder. Only these are removed here, never a prefix match. */
 const outside: string[] = [];
-afterAll(() => {
+afterAll(async () => {
+  await stopChildren(); // a child still running could write into a folder removed below
   for (const dir of outside.splice(0)) {
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
@@ -150,12 +152,59 @@ describe('teardown removes only its own recorded folder', () => {
 });
 
 /** Run vitest on the fixture config in a child process with TEMP, TMP and TMPDIR set to `scratch`. */
-function runFixture(scratch: string, waitMs: number): { done: Promise<number | null> } {
+interface Fixture {
+  done: Promise<number | null>;
+  /** The last 20,000 characters the child wrote to stdout and stderr: put it in an assertion message. */
+  output: () => string;
+}
+
+/** Every child this file started and that has not ended yet. stopChildren stops only these, by their own pid. */
+const children = new Set<ChildProcess>();
+
+function runFixture(scratch: string, waitMs: number, extraEnv: Record<string, string> = {}): Fixture {
   const vitestBin = join(dirname(createRequire(import.meta.url).resolve('vitest/package.json')), 'vitest.mjs');
-  const env: Record<string, string | undefined> = { ...process.env, TEMP: scratch, TMP: scratch, TMPDIR: scratch, FX_WAIT_MS: String(waitMs) };
+  const env: Record<string, string | undefined> = { ...process.env, TEMP: scratch, TMP: scratch, TMPDIR: scratch, FX_WAIT_MS: String(waitMs), ...extraEnv };
   for (const key of Object.keys(env)) if (key.startsWith('VITEST')) delete env[key];
-  const child = spawn(process.execPath, [vitestBin, 'run', '--config', FIXTURE_CONFIG], { cwd: HOOKS_DIR, env, stdio: 'ignore', windowsHide: true });
-  return { done: new Promise((resolve) => child.on('exit', (code) => resolve(code))) };
+  const child = spawn(process.execPath, [vitestBin, 'run', '--config', FIXTURE_CONFIG], { cwd: HOOKS_DIR, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  children.add(child);
+  let out = '';
+  const keep = (chunk: Buffer): void => {
+    out = (out + chunk.toString()).slice(-20_000);
+  };
+  child.stdout?.on('data', keep);
+  child.stderr?.on('data', keep);
+  const done = new Promise<number | null>((resolve) => {
+    let settled = false;
+    const finish = (code: number | null): void => {
+      if (settled) return;
+      settled = true;
+      children.delete(child);
+      resolve(code);
+    };
+    child.on('close', finish);
+    // A grandchild can keep the pipes open, so 'close' may never come: one second after 'exit' is enough to drain them.
+    child.on('exit', (code) => setTimeout(() => finish(code), 1000));
+  });
+  return { done, output: () => out };
+}
+
+/** Stop every child this file started and has not seen end, then wait up to 10 s for each to exit. */
+async function stopChildren(): Promise<void> {
+  const running = [...children].filter((child) => child.exitCode === null && child.signalCode === null);
+  for (const child of running) child.kill();
+  await Promise.all(
+    running.map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) return resolve();
+          const timer = setTimeout(resolve, 10_000);
+          child.once('exit', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        }),
+    ),
+  );
 }
 
 const runFolders = (scratch: string): string[] => readdirSync(scratch).filter((n) => n.startsWith(RUN_PREFIX));
@@ -173,27 +222,48 @@ async function waitFor(check: () => boolean, ms: number): Promise<boolean> {
 describe('real vitest runs on the fixture (conditions 3 and 4)', () => {
   it('one run leaves no run folder behind after it ends', async () => {
     const scratch = realTempDir('one');
-    const code = await runFixture(scratch, 0).done;
-    expect(code).toBe(0);
+    const run = runFixture(scratch, 0);
+    expect(await run.done, run.output()).toBe(0);
     expect(runFolders(scratch)).toEqual([]);
   }, 120_000);
 
   it('two runs at once get two folders, and the end of one leaves the other whole', async () => {
     const scratch = realTempDir('both');
-    const quick = runFixture(scratch, 1500);
-    const slow = runFixture(scratch, 12_000);
-    const two = await waitFor(() => runFolders(scratch).length === 2 && runFolders(scratch).every((n) => readdirSync(join(scratch, n)).some((e) => e.startsWith('fx-'))), 60_000);
-    expect(two).toBe(true);
-    const names = runFolders(scratch);
-    expect(new Set(names).size).toBe(2);
-    expect(await quick.done).toBe(0);
+    const quickRelease = join(scratch, 'release-quick');
+    const slowRelease = join(scratch, 'release-slow');
+    // Each run waits for its own release file, so no fixed sleep decides who ends first. The slow run also boots late on purpose.
+    const quick = runFixture(scratch, 0, { FX_RELEASE_FILE: quickRelease });
+    const slow = runFixture(scratch, 0, { FX_RELEASE_FILE: slowRelease, FX_START_DELAY_MS: '4000' });
+    const hasFixtureFolder = (n: string): boolean => readdirSync(join(scratch, n)).some((e) => e.startsWith('fx-'));
+    const two = await waitFor(() => runFolders(scratch).length === 2 && runFolders(scratch).every(hasFixtureFolder), 90_000);
+    expect(two, `${quick.output()}\n${slow.output()}`).toBe(true);
+    expect(new Set(runFolders(scratch)).size).toBe(2);
+    writeFileSync(quickRelease, '');
+    expect(await quick.done, quick.output()).toBe(0);
     // The quick run is over. The slow run is still going, so exactly its folder remains, with its files.
     const left = runFolders(scratch);
     expect(left).toHaveLength(1);
     const owner = JSON.parse(readFileSync(join(scratch, left[0], 'owner.json'), 'utf8'));
     expect(typeof owner.pid).toBe('number');
-    expect(readdirSync(join(scratch, left[0])).some((e) => e.startsWith('fx-'))).toBe(true);
-    expect(await slow.done).toBe(0);
+    expect(hasFixtureFolder(left[0])).toBe(true);
+    writeFileSync(slowRelease, '');
+    expect(await slow.done, slow.output()).toBe(0);
     expect(runFolders(scratch)).toEqual([]);
   }, 180_000);
+
+  it('a failing fixture run puts its own output in the failure message', async () => {
+    const scratch = realTempDir('fail');
+    const run = runFixture(scratch, 0, { FX_FAIL: '1' });
+    expect(await run.done).not.toBe(0);
+    expect(run.output()).toContain('FX deliberate failure');
+  }, 120_000);
+
+  it('stopChildren stops a run that is still going, and the run leaves no folder behind it', async () => {
+    const scratch = realTempDir('stop');
+    const run = runFixture(scratch, 0, { FX_RELEASE_FILE: join(scratch, 'never-created') });
+    expect(await waitFor(() => runFolders(scratch).some((n) => readdirSync(join(scratch, n)).some((e) => e.startsWith('fx-'))), 60_000)).toBe(true);
+    await stopChildren();
+    const result = await Promise.race([run.done, sleep(15_000).then(() => 'still running')]);
+    expect(result).not.toBe('still running');
+  }, 120_000);
 });
