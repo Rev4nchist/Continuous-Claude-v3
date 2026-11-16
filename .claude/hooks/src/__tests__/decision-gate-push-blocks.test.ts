@@ -67,6 +67,13 @@ interface World {
   chainFails?: boolean;
 }
 
+/**
+ * The C5 content read of one commit: its record line, its message (indented one space, as %w(0,1,1) prints it) and a diff whose file headers
+ * each get a hunk header, so a `-` line is a removed line and a `+` line an added one.
+ */
+const c5Log = (messages: string, diff: string): string =>
+  `\u0001c5 ${HEAD}\n${messages.split('\n').map((l) => ` ${l}`).join('\n')}\ndiff --git a/x b/x\n${diff.replace(/^(\+\+\+ b\/[^\n]*\n)/gm, '$1@@ -1 +1 @@\n')}`;
+
 /** The shipped state: enforce true, enforcePush absent. A fake git and config for a checkout at /repo. */
 function deps(w: World = {}): Deps {
   const config = JSON.stringify({ decisions: { enforce: true } });
@@ -75,9 +82,19 @@ function deps(w: World = {}): Deps {
     env: { ...process.env, CCV3_DECISIONS_FILE: join(dir, 'decisions.json') },
     home: '/home/nobody',
     readFile: (p: string) => (p.replace(/\\/g, '/') === '/repo/review-router.config.json' ? config : null),
-    git: (cwd: string, args: string[]) => {
+    git: (cwd: string, args: string[], opts?: { maxBuffer?: number }) => {
       w.calls?.push({ cwd, args });
       const a = args.join(' ');
+      // C5 (card coord-decision-gate-round3-content-scan): the names read and the content read are one git log each, built from the same World.
+      if (args[0] === 'log' && args.includes('--name-only')) return w.scanFails ? { status: 128, stdout: '' } : { status: 0, stdout: `\u0001c5\0${HEAD}\0\0${(w.files ?? ['src/app.ts']).join('\0')}\0` };
+      if (w.throwOnScan && args[0] === 'log' && args.includes('-p')) throw new Error('git exploded');
+      if (args[0] === 'log' && args.includes('-p')) {
+        if (w.scanFails) return { status: 128, stdout: '' };
+        const text = c5Log(w.messages ?? '', w.diff ?? '');
+        if (opts?.maxBuffer !== undefined && text.length > opts.maxBuffer) throw Object.assign(new Error('spawnSync git ENOBUFS'), { code: 'ENOBUFS' });
+        return { status: 0, stdout: text };
+      }
+      if (args[0] === 'for-each-ref') return { status: 0, stdout: '' };
       if (a === 'remote -v') return { status: 0, stdout: `fork\thttps://github.com/${REPO}.git (push)\n` };
       if (a === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
       if (a === 'branch --show-current') return { status: 0, stdout: `${branch}\n` };
@@ -250,13 +267,14 @@ describe('HS: the holdout scan on a push of a re/ branch', () => {
     expect(denied(bash(PUSH), { ...RE, scanFails: true })).toBe(true);
   });
 
-  it('H7: a diff over the size bound denies with the plain way to push in parts, no clock involved', () => {
+  it('H7: a content read over the size bound denies with the bound and the real ways out, no clock involved', () => {
     // Breaks when: the git work is unbounded (a huge diff is read whole) or bounded by a timeout instead of by size.
+    // C5 change 1: "push in parts" cannot shrink fork/main..head, so the text names a new branch from fork/main or a history rewrite.
     tapRe();
-    const huge = `+++ b/src/a.ts\n${'+x'.repeat(2_000_000)}\n`;
+    const huge = `+++ b/src/a.ts\n${'+x'.repeat(4_100_000)}\n`;
     const r = reasonOf(bash(PUSH), { ...RE, diff: huge });
-    expect(r).not.toBe('');
-    expect(r).toMatch(/parts/);
+    expect(r).toMatch(/over 8000000 bytes/);
+    expect(r).toMatch(/new branch from fork\/main/);
   });
 
   it('H8: the deny text holds a count only: no id, no file path, no title', () => {
@@ -270,12 +288,14 @@ describe('HS: the holdout scan on a push of a re/ branch', () => {
     expect(r).toMatch(/\b1\b/);
   });
 
-  it('H9: a feature branch with no answer-key path makes no scan call', () => {
-    // Breaks when: the trigger widens to every push (a git diff and log call on each ordinary push).
+  it('H9: a feature branch with no answer-key path makes no content read', () => {
+    // Breaks when: the trigger widens to every push (a content read on each ordinary push). C5 item 9b: the names of every commit are read
+    // (one git log --name-only), so an answer-key file changed and reverted inside the range still triggers the scan.
     shipTap();
     const calls: GitCall[] = [];
     expect(verdict(bash('git push fork feat/x'), { calls, files: ['src/app.ts'] }).action).toBe('allow');
-    expect(calls.some((c) => c.args[0] === 'log' || c.args.includes('--unified=0'))).toBe(false);
+    expect(calls.some((c) => (c.args[0] === 'log' && c.args.includes('-p')) || c.args.includes('--unified=0'))).toBe(false);
+    expect(calls.filter((c) => c.args[0] === 'log' && c.args.includes('--name-only'))).toHaveLength(1);
   });
 
   it('H10: a feature branch whose diff touches an answer-key path is scanned too', () => {

@@ -691,14 +691,40 @@ function holdoutIdsOf(ds, cfg) {
 var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 function countIdsIn(text, ids) {
   const s = String(text ?? "");
+  let runs = null;
+  let low = null;
   let n = 0;
   for (const id of ids) {
     if (typeof id !== "string" || id === "") continue;
-    if (/^\d+$/.test(id)) {
+    if (isSha(id)) {
+      runs ??= hexRuns(s);
+      const want = id.toLowerCase();
+      if (runs.some((r) => r.length > 40 ? r.includes(want) : want.startsWith(r) || r.startsWith(want))) n += 1;
+    } else if (/^\d+$/.test(id)) {
       if (digitHit(s, id)) n += 1;
-    } else if (tokenHit(s, id)) n += 1;
+    } else if (tokenHit(low ??= s.toLowerCase(), id)) n += 1;
   }
   return n;
+}
+var isSha = (id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id);
+function hexRuns(s) {
+  return [...s.matchAll(/(?<![0-9a-f])[0-9a-f]{7,}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
+}
+function checkHoldoutShape(ds, cfg) {
+  const bad = () => {
+    throw new Error("the holdout dataset or its config has the wrong shape");
+  };
+  const posInt = (v) => Number.isInteger(v) && v > 0;
+  if (ds === null || typeof ds !== "object" || Array.isArray(ds)) bad();
+  if (!Array.isArray(ds.prs) || ds.prs.length === 0 || !Array.isArray(ds.findings) || ds.findings.length === 0) bad();
+  if (!ds.prs.every((p) => p !== null && typeof p === "object" && posInt(p.pr))) bad();
+  if (!ds.findings.every((f) => f !== null && typeof f === "object" && posInt(f.pr))) bad();
+  const absent = (v) => v === void 0 || v === null;
+  if (!ds.findings.every((f) => absent(f.comment_id) || posInt(f.comment_id) || typeof f.comment_id === "string" && f.comment_id !== "")) bad();
+  if (!ds.findings.every((f) => absent(f.round) || typeof f.round === "string" || Number.isInteger(f.round))) bad();
+  if (!ds.findings.some((f) => posInt(f.comment_id) || typeof f.comment_id === "string" && /^\d+$/.test(f.comment_id))) bad();
+  if (cfg !== null && cfg !== void 0 && (typeof cfg !== "object" || Array.isArray(cfg))) bad();
+  for (const k of ["reserve", "holdoutExclude"]) if (cfg?.[k] !== void 0 && !Array.isArray(cfg[k])) bad();
 }
 function digitHit(s, id) {
   const long = id.length >= 7;
@@ -713,8 +739,7 @@ function digitHit(s, id) {
     if (long || CONTEXT.test(s.slice(Math.max(0, at - 8), at))) return true;
   }
 }
-function tokenHit(s, id) {
-  const low = s.toLowerCase();
+function tokenHit(low, id) {
   const want = id.toLowerCase();
   const word = /[0-9a-f:]/;
   let from = 0;
@@ -738,6 +763,7 @@ function loadHoldoutIds(mainRoot) {
   try {
     const ds = JSON.parse(readFileSync3(join6(mainRoot, DATASET_REL), "utf8"));
     const cfg = JSON.parse(readFileSync3(join6(mainRoot, EVAL_CONFIG_REL), "utf8"));
+    checkHoldoutShape(ds, cfg);
     ids = holdoutIdsOf(ds, cfg);
   } catch {
     throw new Error("the holdout id list could not be read");
@@ -770,8 +796,9 @@ var STAGED_MAX_BYTES = 15e5;
 function stagedHoldoutCount(dir, mainRoot) {
   try {
     const r = spawnSync("git", ["diff", "--cached", "--unified=0", "--no-color", "--no-renames"], { cwd: dir, encoding: "utf8", windowsHide: true, maxBuffer: STAGED_MAX_BYTES * 2, timeout: 5e3 });
-    if (r.status !== 0 || typeof r.stdout !== "string" || r.stdout.length > STAGED_MAX_BYTES) return null;
-    const added = r.stdout.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).join("\n");
+    if (r.error?.code === "ENOBUFS" || typeof r.stdout === "string" && Buffer.byteLength(r.stdout, "utf8") > STAGED_MAX_BYTES) return "too-large";
+    if (r.status !== 0 || typeof r.stdout !== "string") return null;
+    const added = r.stdout.split("\n").filter((l) => l.startsWith("+")).join("\n");
     return countIdsIn2(added, loadHoldoutIds(mainRoot));
   } catch {
     return null;
@@ -907,7 +934,8 @@ function preflight(input, opts = {}) {
       if (isRe ? !holdoutText : !holdoutWarn) {
         const n = (opts.stagedHoldout ?? stagedHoldoutCount)(dir, head.mainRoot);
         const ids = `${n} holdout id${n === 1 ? "" : "s"}`;
-        if (n !== null && n > 0 && isRe) holdoutText = `The staged lines of this commit on ${head.branch} hold ${ids}. The push will be refused. Remove them before you commit.`;
+        if (n === "too-large") holdoutWarn ??= `holdout-scan: the staged lines of this commit are over ${STAGED_MAX_BYTES} bytes and were not read. The push check reads them.`;
+        else if (n !== null && n > 0 && isRe) holdoutText = `The staged lines of this commit on ${head.branch} hold ${ids}. The push will be refused. Remove them before you commit.`;
         else if (n !== null && n > 0 && !holdoutWarn) holdoutWarn = `holdout-scan: the staged lines of this commit hold ${ids}. Remove them before the commit leaves this machine (count only, warn mode).`;
       }
       if (mainText || !head.branch || !PROTECTED_BRANCHES.has(head.branch)) continue;
@@ -958,5 +986,6 @@ if (!process.env.VITEST) {
 }
 export {
   commitMessageHead,
-  preflight
+  preflight,
+  stagedHoldoutCount
 };

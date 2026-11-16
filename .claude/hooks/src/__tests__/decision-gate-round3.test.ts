@@ -60,9 +60,10 @@ function deps(w: World = {}): Deps {
       if (a === 'remote -v') return { status: 0, stdout: `fork\thttps://github.com/${REPO}.git (push)\n` };
       if (a === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
       if (a === 'branch --show-current') return { status: 0, stdout: `${w.branch ?? 'feat/x'}\n` };
-      if (w.scan && a.startsWith('diff --name-only')) return { status: 0, stdout: 'src/x.ts\0' };
-      if (w.scan && a.startsWith('diff --unified=0')) return { status: 0, stdout: `+++ b/src/x.ts\n+${w.scan.added}\n` };
-      if (w.scan && a.startsWith('log --format=%B')) return { status: 0, stdout: 'a message\n' };
+      // C5 (card coord-decision-gate-round3-content-scan): the names read and the content read are one git log each.
+      if (w.scan && args[0] === 'log' && args.includes('--name-only')) return { status: 0, stdout: `\u0001c5\0${HEAD}\0\0src/x.ts\0` };
+      if (w.scan && args[0] === 'log' && args.includes('-p')) return { status: 0, stdout: `\u0001c5 ${HEAD}\n a message\ndiff --git a/src/x.ts b/src/x.ts\n+++ b/src/x.ts\n@@ -0,0 +1 @@\n+${w.scan.added}\n` };
+      if (w.scan && args[0] === 'for-each-ref') return { status: 0, stdout: '' };
       if (w.scan && a.startsWith('ls-files')) return { status: 0, stdout: '' };
       if (a === 'rev-parse --abbrev-ref @{push}') return { status: 128, stdout: '' };
       // A remote name the text does not show as upstream: only git can tell that `up` points at parcadei (R18-5).

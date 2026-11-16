@@ -386,14 +386,40 @@ function holdoutIdsOf(ds, cfg) {
 var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 function countIdsIn(text, ids) {
   const s = String(text ?? "");
+  let runs = null;
+  let low = null;
   let n = 0;
   for (const id of ids) {
     if (typeof id !== "string" || id === "") continue;
-    if (/^\d+$/.test(id)) {
+    if (isSha(id)) {
+      runs ??= hexRuns(s);
+      const want = id.toLowerCase();
+      if (runs.some((r) => r.length > 40 ? r.includes(want) : want.startsWith(r) || r.startsWith(want))) n += 1;
+    } else if (/^\d+$/.test(id)) {
       if (digitHit(s, id)) n += 1;
-    } else if (tokenHit(s, id)) n += 1;
+    } else if (tokenHit(low ??= s.toLowerCase(), id)) n += 1;
   }
   return n;
+}
+var isSha = (id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id);
+function hexRuns(s) {
+  return [...s.matchAll(/(?<![0-9a-f])[0-9a-f]{7,}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
+}
+function checkHoldoutShape(ds, cfg) {
+  const bad = () => {
+    throw new Error("the holdout dataset or its config has the wrong shape");
+  };
+  const posInt = (v) => Number.isInteger(v) && v > 0;
+  if (ds === null || typeof ds !== "object" || Array.isArray(ds)) bad();
+  if (!Array.isArray(ds.prs) || ds.prs.length === 0 || !Array.isArray(ds.findings) || ds.findings.length === 0) bad();
+  if (!ds.prs.every((p) => p !== null && typeof p === "object" && posInt(p.pr))) bad();
+  if (!ds.findings.every((f) => f !== null && typeof f === "object" && posInt(f.pr))) bad();
+  const absent = (v) => v === void 0 || v === null;
+  if (!ds.findings.every((f) => absent(f.comment_id) || posInt(f.comment_id) || typeof f.comment_id === "string" && f.comment_id !== "")) bad();
+  if (!ds.findings.every((f) => absent(f.round) || typeof f.round === "string" || Number.isInteger(f.round))) bad();
+  if (!ds.findings.some((f) => posInt(f.comment_id) || typeof f.comment_id === "string" && /^\d+$/.test(f.comment_id))) bad();
+  if (cfg !== null && cfg !== void 0 && (typeof cfg !== "object" || Array.isArray(cfg))) bad();
+  for (const k of ["reserve", "holdoutExclude"]) if (cfg?.[k] !== void 0 && !Array.isArray(cfg[k])) bad();
 }
 function digitHit(s, id) {
   const long = id.length >= 7;
@@ -408,8 +434,7 @@ function digitHit(s, id) {
     if (long || CONTEXT.test(s.slice(Math.max(0, at - 8), at))) return true;
   }
 }
-function tokenHit(s, id) {
-  const low = s.toLowerCase();
+function tokenHit(low, id) {
   const want = id.toLowerCase();
   const word = /[0-9a-f:]/;
   let from = 0;
@@ -433,6 +458,7 @@ function loadHoldoutIds(mainRoot) {
   try {
     const ds = JSON.parse(readFileSync(join2(mainRoot, DATASET_REL), "utf8"));
     const cfg = JSON.parse(readFileSync(join2(mainRoot, EVAL_CONFIG_REL), "utf8"));
+    checkHoldoutShape(ds, cfg);
     ids = holdoutIdsOf(ds, cfg);
   } catch {
     throw new Error("the holdout id list could not be read");
@@ -520,15 +546,11 @@ function artifactText(input) {
   const page = str(input.file_path) ? readCapped(str(input.file_path)) : { text: "", tailBytes: 0 };
   return { text: [page.text, str(input.title), str(input.description)].join("\n"), tailBytes: page.tailBytes };
 }
-var HEX_RUN = /(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/gi;
 function countHits(text, ids) {
-  const shas = ids.filter((id) => /^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id));
-  const rest = ids.filter((id) => !shas.includes(id));
-  const runs = [...text.matchAll(HEX_RUN)].map((m) => m[0].toLowerCase());
-  const shaHits = shas.map((s) => s.toLowerCase()).filter((s) => runs.some((r) => s.startsWith(r) || r.startsWith(s))).length;
-  const counted = countIdsIn2(text, rest);
+  const rest = ids.filter((id) => !(/^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id)));
+  const counted = countIdsIn2(text, ids);
   const bareDigits = rest.filter((id) => /^\d{3,}$/.test(id) && new RegExp(`(?<!\\d)${id}(?!\\d)`).test(text)).length;
-  return { count: counted + shaHits, bare: Math.max(0, bareDigits - counted) };
+  return { count: counted, bare: Math.max(0, bareDigits - countIdsIn2(text, rest)) };
 }
 function warnText(tool, count, tailBytes) {
   const ids = `${count} holdout id${count === 1 ? "" : "s"}`;

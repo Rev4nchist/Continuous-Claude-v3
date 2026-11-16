@@ -18,7 +18,7 @@ message, a page design, a CMA job). The hook fires at the tool call, too late fo
 | `opencli-first.md` | web fetch and search | inject |
 | `harness-update.md` | updates to the Grok CLI or its models | inject |
 | `git-merge-workflow.md` | merges and branch cleanup | inject |
-| `pr-review-loop.md` | opening PRs; landing; the `pr_checkpoint` tool and `ship-ask.mjs`; Greptile | inject |
+| `pr-review-loop-core.md` | opening PRs; landing; `pr_checkpoint`; `ship-ask.mjs`; Greptile | inject |
 | `coderabbit-cli.md` | CodeRabbit CLI (`cr`, `coderabbit`) | inject |
 | `cross-terminal-db.md` | local Postgres (sessions, claims) | inject |
 | `headless-claude-mcp.md` | headless `claude -p` | inject |
