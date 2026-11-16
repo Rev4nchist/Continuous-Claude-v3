@@ -20,11 +20,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
+
+registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -135,7 +137,7 @@ test('AC6: a recommendation other than none (wait on a high count, a paid pathwa
 // ---------- the CLI: --confirm ... --by auto ----------
 
 function confirmAuto(pathway, by, { paths = MID, factOver = {}, autoConfirm = true } = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-auto-'));
+  const dir = makeTempDir('checkpoint-auto-');
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
   const factsFile = path.join(dir, 'facts.json');
@@ -217,7 +219,7 @@ test('AC10: a PR below HIGH that touches a security-tier file is never auto-elig
 
 /** A temp repo whose main holds `mainConfig` (undefined: no file), and a branch with one docs file. Runs the live-facts path. */
 function liveDrift(mainConfig) {
-  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'checkpoint-drift-')));
+  const repo = realpathSync(makeTempDir('checkpoint-drift-'));
   const git = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...a], { cwd: repo, encoding: 'utf8' });
   git('init', '-q', '-b', 'main');
   writeFileSync(path.join(repo, 'a.txt'), 'one\n');
@@ -232,7 +234,7 @@ function liveDrift(mainConfig) {
   const head = git('rev-parse', 'HEAD').stdout.trim();
   mkdirSync(path.join(repo, '.claude', 'cache', 'pre-pr'), { recursive: true });
   writeFileSync(path.join(repo, '.claude', 'cache', 'pre-pr', 'stamp.json'), JSON.stringify({ head, body_sha256: 'f'.repeat(64), results: [] }));
-  const outside = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-drift-cfg-'));
+  const outside = makeTempDir('checkpoint-drift-cfg-');
   const cfg = path.join(outside, 'cfg.json');
   writeFileSync(cfg, DRIFT_CONFIG);
   const gh = path.join(outside, 'fake-gh.mjs');
