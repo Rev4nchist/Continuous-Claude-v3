@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Review eval CLI. Exit 0 ok, 1 failed, 2 refused, 3 cap.
+// Review eval CLI. Exit 0 ok, 1 failed, 2 refused or a usage error, 3 cap (replay, judge) or, for `gold report`, a done-when bar not met.
+// mine, seed, dispositions and adjudicate-cr return the exit code of their own main.
 //   freeze                                    record the prompt hash in config.json
 //   resolve --dataset F [--out F]             resolve the dataset findings to sha and lines (read-only gh)
 //   replay --pr N --round K [--build-only]    replay one round; --all-majors [--build-only] replays every real Major
@@ -12,6 +13,9 @@
 //   report --dir D [--report F] [--out F]     the scorecard as a short Markdown table (--report: the Markdown file; --out: the JSON scorecard)
 //   budget --dataset F [--ledger F] [--gold-dir D] [--json]   read only: per-phase eval scopes, the phase 4 need and the four cut cases
 //   score ... --holdout-spend [--scope P4] [--spend-ledger F]  also write one holdout-spend line per frozen arm
+//   mine ... | seed ... | dispositions ... | adjudicate-cr ...   hand the rest of argv to mine-szz.mjs, seed.mjs, dispositions.mjs or adjudicate-cr.mjs and return their exit code
+//   gold report [--json] [--gold-dir D] [--dispositions F]   read only: gold and control counts (no ids) and the done-when lines; exit 3 when a bar is not met
+//                                             --dispositions F: a JSON array of disposition records (verdict, disposition) for the Gold D line
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,9 +25,12 @@ import { budgetFromFile, EVAL_SCOPES, p4Plan } from './budget.mjs';
 import { CONFIG_PATH, judgeModelFor, loadConfig } from './config.mjs';
 import { loadDataset, mergeGold, prCounts, realMajors, reserveSources, resolveFindings, setOf, splitSets, zeroMajorPrs } from './dataset.mjs';
 import { frozenEngineSha, LEGACY_ENGINE_VERSION, recordEngineFreeze, recordFreeze, recordVersionedFreeze } from './freeze.mjs';
-import { GOLD_DIR, loadCleanControls, loadGold } from './gold.mjs';
+import { VERDICT_OF } from './dispositions.mjs';
+import { GOLD_DIR, GoldError, loadCleanControls, loadGold, SEVERITIES, SOURCES, SPLITS, SUITES } from './gold.mjs';
 import { exportPairs, ingestLabels } from './labels.mjs';
 import { LINKTYPE_PATH, loadLinkTypes } from './linktype.mjs';
+import { isMajor } from './match.mjs';
+import { readEngineRecords } from './mine-szz.mjs';
 import { makeGit, replayRun as realReplayRun } from './replay.mjs';
 import { archiveFile, rescoreArchive, treeCheck } from './rescore.mjs';
 import { evaluateRuns, scorecard } from './score.mjs';
@@ -203,11 +210,197 @@ function budgetText(r) {
 }
 
 function budgetCmd(argv, io, cfg) {
+  const gold = flagValue(argv, '--gold-dir');
+  if (gold.error) { io.stderr(`budget: ${gold.error}`); return 2; }
   const dsFile = flag(argv, '--dataset', null);
   if (!dsFile) { io.stderr('budget: --dataset <the CodeRabbit dataset file> is required'); return 2; }
-  const r = budgetReport({ cfg, ledger: flag(argv, '--ledger', defaultLedgerPath()), ds: loadDataset(dsFile), goldDir: flag(argv, '--gold-dir', GOLD_DIR), now: io.now?.() ?? Date.now() });
+  const r = budgetReport({ cfg, ledger: flag(argv, '--ledger', defaultLedgerPath()), ds: loadDataset(dsFile), goldDir: gold.value ?? GOLD_DIR, now: io.now?.() ?? Date.now() });
   io.stdout(argv.includes('--json') ? JSON.stringify(r, null, 1) : budgetText(r));
   return 0;
+}
+
+// ---------- gold report and the pass-through tools (card re-gold-assemble) ----------
+// gold report is read only and prints counts only. The pass-through tools (mine, seed, dispositions, adjudicate-cr) do what their own
+// usage says (some write files or spend calls) and return their own exit code. None of the five reads config.json through this file.
+
+const TOOLS = { mine: () => import('./mine-szz.mjs'), seed: () => import('./seed.mjs'), dispositions: () => import('./dispositions.mjs'), 'adjudicate-cr': () => import('./adjudicate-cr.mjs') };
+
+/**
+ * The output hooks a tool main accepts as its second argument. mine, dispositions and adjudicate-cr read { stdout, stderr } (one line a call);
+ * seed reads { write, writeErr } (text with its own newline).
+ */
+function toolDeps(cmd, io) {
+  if (cmd !== 'seed') return { stdout: io.stdout, stderr: io.stderr };
+  const line = (s) => String(s).replace(/\n$/, '');
+  return { write: (s) => io.stdout(line(s)), writeErr: (s) => io.stderr(line(s)) };
+}
+
+/**
+ * Hand argv after the command name to the tool's own main. io.mains.<name> replaces it in tests.
+ * A throw from the tool prints one fixed line, never the error text (it can hold a PR number or a comment id), and returns 1.
+ */
+async function toolCmd(cmd, argv, io) {
+  try {
+    const run = io.mains?.[cmd] ?? (await TOOLS[cmd]()).main;
+    return (await run(argv.slice(1), toolDeps(cmd, io))) ?? 1;
+  } catch {
+    io.stderr(`${cmd} failed (internal)`);
+    return 1;
+  }
+}
+
+/** The value of a flag that needs one: { value } (undefined when the flag is absent) or { error } when the value is missing or starts with "--". */
+function flagValue(argv, name) {
+  const i = argv.indexOf(name);
+  if (i < 0) return { value: undefined };
+  const v = argv[i + 1];
+  return v === undefined || v.startsWith('--') ? { error: `${name} needs a value` } : { value: v };
+}
+
+/**
+ * The gold rows as the scorer reads them: a Gold B row gets an in-memory truth.note from provenance.truthNote. Never mutates, never written.
+ * No production caller yet: the rubric runners and the P4 harness will read it.
+ */
+export function goldView(rows) {
+  const hasNote = (r) => r.source === 'B' && typeof r.provenance?.truthNote === 'string';
+  return rows.map((r) => (hasNote(r) ? { ...r, truth: { note: r.provenance.truthNote } } : r));
+}
+
+const tally = (keys, rows, pick) => Object.fromEntries(keys.map((k) => [k, rows.filter((r) => pick(r) === k).length]));
+const hasText = (v) => typeof v === 'string' && v !== '';
+const hasBreakingTest = (r) => hasText(r.provenance?.test) && hasText(r.provenance?.failureSha256);
+
+/** The disposition of each verdict: VERDICT_OF turned around (real is fixed, noise is wrong, unclear is wont_fix). */
+const DISPOSITION_OF = Object.fromEntries(Object.entries(VERDICT_OF).filter(([, v]) => v !== null).map(([d, v]) => [v, d]));
+const COUNTED = ['fixed', 'wont_fix', 'wrong'];
+
+/** Gold D: records fixed over records with a counted disposition (fixed, wont_fix, wrong). null when there is none. Reported apart; no bar reads it. */
+function goldD(records) {
+  const kind = (r) => r?.disposition ?? DISPOSITION_OF[r?.verdict];
+  const labeled = (records ?? []).map(kind).filter((d) => COUNTED.includes(d));
+  const fixed = labeled.filter((d) => d === 'fixed').length;
+  return labeled.length === 0 ? null : { value: fixed / labeled.length, fixed, withDisposition: labeled.length };
+}
+
+/** The default folder of the engine records (local-review.mjs writes them; mine-szz.mjs readEngineRecords reads them). */
+const ENGINE_RECORDS_DIR = path.join(os.homedir(), '.claude', 'state', 'local-review');
+
+/**
+ * The number of gold rows whose pull request has an engine record (the producer rule of map.md:216 matches by PR), or null when the records
+ * cannot be read. A missing folder is a failed read: "no records" must come from a folder that was read. Counts only.
+ */
+export function engineTargetCount(rows, read) {
+  let records;
+  try { records = read(); } catch { return null; }
+  if (!Array.isArray(records)) return null;
+  const prs = new Set(records.map((r) => r?.pr).filter(Number.isInteger));
+  // The records are of this repository only. A row with target.repo (Gold C) is a PR of another repository: its number can equal one of
+  // ours by chance. A range target has no PR. Known limit: the match is by PR number, not by head (the fail-closed side).
+  const ours = (r) => !r.target?.repo && Number.isInteger(r.target?.pr);
+  return rows.filter((r) => ours(r) && prs.has(r.target.pr)).length;
+}
+
+const realEngineRecords = (dir) => () => {
+  if (!existsSync(dir)) throw new Error('no records folder');
+  return readEngineRecords(dir);
+};
+
+/**
+ * The regression row (map, re-gold-assemble Done when, Dave 2026-11-15). A non-empty suite passes. An empty suite fails when a gold target
+ * has an engine record, and is "not yet possible" (state not-yet, no fail) while none has one. A failed records read always fails.
+ */
+function regressionBar(c) {
+  const name = 'regression suite non-empty';
+  const n = c.bySuite.regression;
+  if (c.engineTargets === null) return { name, pass: false, detail: 'engine records cannot be read' };
+  if (n === 0 && c.engineTargets === 0) return { name, pass: true, state: 'not-yet', detail: 'not yet possible: 0 gold targets have an engine record' };
+  return { name, pass: n > 0, detail: `${n}; gold targets with an engine record ${c.engineTargets}` };
+}
+
+function goldBars(c) {
+  const abc = c.majors.bySource.A + c.majors.bySource.B + c.majors.bySource.C;
+  return [
+    { name: 'majors across A/B/C >= 50', pass: abc >= 50, detail: String(abc) },
+    { name: 'every Gold B row has a breaking test', pass: c.goldB.rows > 0 && c.goldB.missingBreakingTest === 0, detail: `${c.goldB.withBreakingTest} of ${c.goldB.rows}` },
+    regressionBar(c),
+    { name: 'capability suite non-empty', pass: c.bySuite.capability > 0, detail: String(c.bySuite.capability) },
+    { name: 'clean controls >= 30', pass: c.cleanControls >= 30, detail: String(c.cleanControls) },
+  ];
+}
+
+function goldCounts(rows, controls, records, engineTargets) {
+  const majors = rows.filter((r) => isMajor(r.severity));
+  const goldB = rows.filter((r) => r.source === 'B');
+  const tested = goldB.filter(hasBreakingTest).length;
+  const c = {
+    rows: rows.length,
+    bySource: tally(SOURCES, rows, (r) => r.source),
+    bySuite: tally(SUITES, rows, (r) => r.suite),
+    bySeverity: tally(SEVERITIES, rows, (r) => r.severity),
+    bySplit: tally(SPLITS, rows, (r) => r.split),
+    majors: { total: majors.length, bySource: tally(SOURCES, majors, (r) => r.source) },
+    goldB: { rows: goldB.length, withBreakingTest: tested, missingBreakingTest: goldB.length - tested },
+    cleanControls: controls.length,
+    goldD: goldD(records),
+    engineTargets,
+  };
+  return { ...c, bars: goldBars(c) };
+}
+
+function goldText(c) {
+  const list = (o) => Object.entries(o).map(([k, n]) => `${k} ${n}`).join(', ');
+  const d = c.goldD;
+  return [
+    `gold rows ${c.rows}: source ${list(c.bySource)}`,
+    `suite ${list(c.bySuite)}`,
+    `severity ${list(c.bySeverity)}`,
+    `split ${list(c.bySplit)}`,
+    `majors ${c.majors.total} (${list(c.majors.bySource)})`,
+    `gold B breaking test: ${c.goldB.withBreakingTest} with, ${c.goldB.missingBreakingTest} missing`,
+    `clean controls ${c.cleanControls}`,
+    d ? `gold D resolved by merge: ${d.value.toFixed(2)} (${d.fixed}/${d.withDisposition}; reported apart, no bar reads it)` : 'gold D: no disposition records',
+    ...c.bars.map((b) => `${b.state === 'not-yet' ? 'NOT YET' : b.pass ? 'PASS' : 'FAIL'} ${b.name} (${b.detail})`),
+  ].join('\n');
+}
+
+/**
+ * The records of --dispositions: a JSON array, or the `findings` array of a dispositions.mjs sweep file ({ ...summary, findings, unparsed }).
+ * null when the file cannot be read or holds neither.
+ */
+function readDispositions(file) {
+  try {
+    const list = JSON.parse(readFileSync(file, 'utf8'));
+    if (Array.isArray(list)) return list;
+    return Array.isArray(list?.findings) ? list.findings : null;
+  } catch { return null; }
+}
+
+function goldCmd(argv, io) {
+  const usage = 'gold: use report [--json] [--gold-dir D] [--dispositions F] [--records-dir D]';
+  if (argv[1] !== 'report') { io.stderr(usage); return 2; }
+  const dir = flagValue(argv, '--gold-dir');
+  const disp = flagValue(argv, '--dispositions');
+  const recDir = flagValue(argv, '--records-dir');
+  const bad = dir.error ?? disp.error ?? recDir.error;
+  if (bad) { io.stderr(`gold: ${bad}`); return 2; }
+  const records = disp.value === undefined ? io.dispositions : readDispositions(disp.value);
+  if (!records && disp.value !== undefined) { io.stderr('gold: --dispositions needs a file that holds a JSON array'); return 1; }
+  const goldFolder = dir.value ?? GOLD_DIR;
+  const rows = loadGold(goldFolder).rows;
+  const controls = loadCleanControls(goldFolder);
+  // --records-dir wins over io.readEngineRecords (tests), which wins over the real folder. Read after the gold load: a gold error stays exit 1.
+  const read = recDir.value !== undefined ? realEngineRecords(recDir.value) : io.readEngineRecords ?? realEngineRecords(ENGINE_RECORDS_DIR);
+  const c = goldCounts(rows, controls, records, engineTargetCount(rows, read));
+  io.stdout(argv.includes('--json') ? JSON.stringify(c, null, 1) : goldText(c));
+  return c.bars.every((b) => b.pass) ? 0 : 3;
+}
+
+/** goldCmd with a fixed line for any failure: a GoldError message holds positions and field names only, never a value. */
+function goldSafe(argv, io) {
+  try { return goldCmd(argv, io); } catch (e) {
+    io.stderr(e instanceof GoldError ? `review-eval gold: ${e.message}` : 'gold failed (internal)');
+    return 1;
+  }
 }
 
 /** The real path: follows symlinks and junctions in the nearest existing ancestor, then appends the missing segments. */
@@ -234,9 +427,13 @@ function rescoreCmd(argv, io, root) {
 export async function main(argv, io = {}) {
   io = { stdout: (s) => console.log(s), stderr: (s) => console.error(s), ...io };
   const [cmd, sub] = argv;
+  // These five read no config.json here. They run before it is loaded: a broken config blocks none of them, and a --config for seed is seed's own.
+  if (Object.hasOwn(TOOLS, cmd)) return toolCmd(cmd, argv, io);
+  if (cmd === 'gold') return goldSafe(argv, io);
   const root = io.root ?? flag(argv, '--root', process.cwd());
   let cfg;
-  try { cfg = io.cfg ?? loadConfig(flag(argv, '--config', CONFIG_PATH)); } catch (e) { io.stderr(`cannot read the config: ${e.message}`); return 2; }
+  // A config error prints a fixed line: its own text can quote the file.
+  try { cfg = io.cfg ?? (io.loadConfig ?? loadConfig)(flag(argv, '--config', CONFIG_PATH)); } catch { io.stderr('cannot read the config (missing, or not valid JSON)'); return 2; }
   try {
     switch (cmd) {
       case 'freeze': {
@@ -304,7 +501,7 @@ export async function main(argv, io = {}) {
         return 0;
       }
       default:
-        io.stderr(`review-eval: unknown command ${JSON.stringify(cmd)}. Use freeze | resolve | replay | shadow | judge | labels | score | budget | rescore | report`);
+        io.stderr(`review-eval: unknown command ${JSON.stringify(cmd)}. Use freeze | resolve | replay | shadow | judge | labels | score | budget | rescore | report | mine | seed | dispositions | adjudicate-cr | gold`);
         return 1;
     }
   } catch (e) {

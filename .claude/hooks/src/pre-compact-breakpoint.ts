@@ -21,7 +21,9 @@ import {
   laneFactsFrom,
   parseTranscriptTail,
   pruneOld,
+  readSeatShortCard,
   readTranscriptTail,
+  seatRoleLines,
   shouldReplace,
   userHome,
   type LaneFacts,
@@ -48,14 +50,15 @@ export interface BreakpointDeps {
 const CALL_TIMEOUT_MS = 4000;
 const skipped = (why: string): HookOutput => ({ continue: true, systemMessage: `[PreCompact] breakpoint skipped: ${why}` });
 
-async function lanesOf(sessionId: string, cwd: string, deps: BreakpointDeps): Promise<LaneFacts[]> {
+/** The lanes of this session. boardOk is false when the read failed or timed out: the holder is then unknown (seat item 6). */
+async function lanesOf(sessionId: string, cwd: string, deps: BreakpointDeps): Promise<{ lanes: LaneFacts[]; boardOk: boolean }> {
   try {
     const env = { ...process.env, CLAUDE_CODE_SESSION_ID: sessionId };
     const run = await deps.runner(['board', '--json'], { cwd, env, timeoutMs: CALL_TIMEOUT_MS });
-    if (run.code !== 0) return [];
-    return laneFactsFrom(JSON.parse(run.stdout), sessionId);
+    if (run.code !== 0) return { lanes: [], boardOk: false };
+    return { lanes: laneFactsFrom(JSON.parse(run.stdout), sessionId), boardOk: true };
   } catch {
-    return [];
+    return { lanes: [], boardOk: false };
   }
 }
 
@@ -77,7 +80,7 @@ export async function runPreCompactBreakpoint(input: PreCompactInput, deps: Brea
     if (!sessionId || !file) return skipped('no usable session id');
     const cwd = input.cwd || process.cwd();
     const { decisions, typed } = parseTranscriptTail(readTranscriptTail(input.transcript_path));
-    const lanes = await lanesOf(sessionId, cwd, deps);
+    const { lanes, boardOk } = await lanesOf(sessionId, cwd, deps);
     const existing = readExisting(file);
     const facts = {
       sessionId,
@@ -87,6 +90,8 @@ export async function runPreCompactBreakpoint(input: PreCompactInput, deps: Brea
       branch: deps.branchOf(cwd),
       decisions,
       typed,
+      roleLines: seatRoleLines({ boardOk, lanes }, readSeatShortCard(deps.home)),
+      ...(input.transcript_path ? { fullListPath: input.transcript_path } : {}),
     };
     // Never replace with less: judge only what THIS compact found. Carried decisions are not new information, so a compact that
     // found nothing keeps the old file as it is (with its lanes and typed lines).
