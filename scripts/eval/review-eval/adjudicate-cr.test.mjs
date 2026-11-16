@@ -30,6 +30,11 @@ const BODY = 'Possible null dereference before use.';
 const yes = (extra = {}) => ({ ok: true, result: JSON.stringify({ verdict: 'yes', severity: 'major', why: 'Null is dereferenced.', ...extra }) });
 const verdictOnly = (verdict) => ({ ok: true, result: JSON.stringify({ verdict, severity: 'minor', why: 'Handled above.' }) });
 const failed = (reason) => ({ ok: false, reason });
+// Every mode checks each call (seat ruling 2026-11-15), so a finished fake call carries an Opus model and a small input token count, as a real
+// call does. A result that names its own servedModel (the proof tests) is left as it is.
+const withProof = (r) => (r?.ok && r.servedModel === undefined
+  ? { ...r, servedModel: 'claude-opus-5-5', exit: 0, stdout: JSON.stringify({ type: 'result', result: 'x', usage: { input_tokens: 100 } }) }
+  : r);
 
 /** A judge that returns script[i] for call i (the last entry repeats). An entry may be a function of the prompt. */
 function fakeJudge(script) {
@@ -37,7 +42,7 @@ function fakeJudge(script) {
   const judge = async (prompt) => {
     calls.push(prompt);
     const a = script[calls.length - 1] ?? script.at(-1);
-    return typeof a === 'function' ? a(prompt) : a;
+    return withProof(typeof a === 'function' ? a(prompt) : a);
   };
   judge.calls = calls;
   return judge;
@@ -66,9 +71,23 @@ async function exec(h, sub, flags = [], over = {}) {
   return { code, out: out.join('\n'), err: err.join('\n') };
 }
 const gitOf = (h) => (args) => { h.gitCalls.push(args); return okDiff(h.diffOf(args)); };
-const runWith = (h, flags = ['--limit', '10', '--confirm-headless'], over = {}) => exec(h, 'run', flags, { git: gitOf(h), ...over });
+const rawStateOf = (h) => (existsSync(h.files.state) ? JSON.parse(readFileSync(h.files.state, 'utf8')) : null);
+/** The state without the kept canary baseline: the finding entries only. null when there is no state file. */
+const stateOf = (h) => { const s = rawStateOf(h); if (s) delete s._canary; return s; };
+const canaryOf = (h) => rawStateOf(h)?._canary;
+/** A current-version baseline in the state, merged into any state the test wrote (a plain run is refused without one). 100 tokens equal a fake call. */
+function seedBaseline(h, over = {}) {
+  const state = rawStateOf(h) ?? {};
+  if (state._canary) return;
+  mkdirSync(path.dirname(h.files.state), { recursive: true });
+  writeFileSync(h.files.state, JSON.stringify({ ...state, _canary: { inputTokens: 100, servedModel: 'claude-opus-5-5', promptVersion: adj.PROMPT_VERSION, ...over } }));
+}
+const ownsCanary = (flags) => flags.includes('--canary') || flags.includes('--checkpoint');
+function runWith(h, flags = ['--limit', '10', '--confirm-headless'], over = {}) {
+  if (!ownsCanary(flags)) seedBaseline(h);
+  return exec(h, 'run', flags, { git: gitOf(h), ...over });
+}
 const rowsOf = (h) => (existsSync(h.files.out) ? JSON.parse(readFileSync(h.files.out, 'utf8')) : null);
-const stateOf = (h) => (existsSync(h.files.state) ? JSON.parse(readFileSync(h.files.state, 'utf8')) : null);
 const diffPer = (h, perPath = {}) => { h.diffOf = (args) => (perPath[args.at(-1)] ?? DIFF()); return h; };
 
 // ---------- 1 and 2: the prompt and the guard ----------
@@ -124,9 +143,9 @@ function setup2() {
   return diffPer(setup([finding(1)]));
 }
 
-test('buildPrompt holds path, hunk, comment text, severity, the neutral index and the outcome word, and none of the ids (breaks if a field is dropped or an id or the github url is left in)', () => {
+test('buildPrompt holds path, hunk, comment text, severity and the neutral index, never the outcome, and none of the ids (breaks if a field is dropped or an id or the github url is left in)', () => {
   const body = 'Fix the null check. See PR #9001 and https://github.com/someone/somerepo/pull/9001 for more.';
-  const p = buildPrompt({ label: 'abcd1234', file: 'src/f1.js', hunk: '@@ -1 +1 @@\n+const b = 2;', body, severity: 'major', disposition: 'fixed', sha: SHA_A });
+  const p = buildPrompt({ label: 'abcd1234', file: 'src/f1.js', hunk: '@@ -1 +1 @@\n+const b = 2;', body, severity: 'major', sha: SHA_A });
   for (const want of ['src/f1.js', '+const b = 2;', 'Fix the null check', 'major']) assert.ok(p.includes(want), `missing ${want}`);
   assert.match(p, /### Finding abcd1234\n/);
   for (const nope of ['9001', 'github.com', SHA_A]) assert.equal(p.includes(nope), false, `leaked ${nope}`);
@@ -405,7 +424,8 @@ test('a finding with a line and no hunk near it is not sent and not given the wh
 
 test('the refusal kind of the sidecar is from a frozen list and is never free text (breaks if a kind outside the list can be written, or the marker holds another field)', () => {
   assert.ok(Object.isFrozen(adj.REFUSAL_KINDS));
-  assert.deepEqual([...adj.REFUSAL_KINDS].sort(), ['comment-id', 'finding-key', 'fix-sha', 'fix-title', 'other', 'pr-number', 'pr-term', 'repo-url', 'sha']);
+  assert.deepEqual([...adj.REFUSAL_KINDS].sort(), ['comment-id', 'finding-key', 'fix-marker', 'fix-sha', 'fix-title', 'other', 'pr-number', 'pr-term', 'repo-url', 'sha']);
+  assert.equal(adj.refusalKindOf('fix-marker'), 'fix-marker');
   assert.equal(adj.refusalKindOf('pr-term'), 'pr-term');
   assert.equal(adj.refusalKindOf('some free text with 9001'), 'other');
   assert.equal(adj.refusalKindOf(undefined), 'other');
@@ -438,13 +458,13 @@ test('a missing hunk, a missing comment body or an unresolved sha makes no judge
   assert.match(res.out, /no-sha 1/);
 });
 
-test('an answer that is not the strict JSON is counted unparsed and keeps no state (breaks if a bad answer is stored as a verdict)', async () => {
+test('an answer that is not the strict JSON is asked once more; when the retry is also unparsed it is counted unparsed and stored as no verdict and no row (breaks if a bad answer is stored as a verdict)', async () => {
   const h = diffPer(setup([finding(1)], { script: [{ ok: true, result: 'maybe yes' }] }));
   const res = await runWith(h);
   assert.equal(res.code, 0);
   assert.match(res.out, /unparsed 1/);
   assert.equal(rowsOf(h), null);
-  assert.equal(stateOf(h), null);
+  assert.deepEqual(stateOf(h), { [idOf(finding(1).key)]: { verdict: 'unparsed', promptVersion: adj.PROMPT_VERSION } });
 });
 
 test('parseAnswer takes the strict object and refuses everything else, without throwing (breaks if a wrong verdict, a long why, an array or non-JSON passes)', () => {
@@ -545,7 +565,7 @@ test('plan prints counts only: by split, adjudicated, with lines, file only, no 
   for (const want of [/candidates 4/, /dev 1/, /holdout 2/, /reserve 1/, /adjudicated 1/, /with lines 3/, /file only 1/, /no sha 1/]) assert.match(res.out, want);
   for (const id of ['9001', '9002', '9003', '70000000']) assert.equal((res.out + res.err).includes(id), false, `printed ${id}`);
   const json = JSON.parse((await exec(h, 'plan', ['--json'], { judge: throwing })).out);
-  assert.deepEqual(json, { candidates: 4, bySplit: { dev: 1, holdout: 2, reserve: 1 }, adjudicated: 1, refused: 0, answerKeySkipped: 0, lookupsFailed: 0, noLineSkipped: 1, withDisposition: 0, pending: 1, pendingBySplit: { dev: 1, holdout: 0, reserve: 0 }, withLines: 3, fileOnly: 1, unresolved: 1 });
+  assert.deepEqual(json, { candidates: 4, bySplit: { dev: 1, holdout: 2, reserve: 1 }, adjudicated: 1, refused: 0, unparsed: 0, answerKeySkipped: 0, lookupsFailed: 0, noLineSkipped: 1, withDisposition: 0, pending: 1, pendingBySplit: { dev: 1, holdout: 0, reserve: 0 }, withLines: 3, fileOnly: 1, unresolved: 1 });
 });
 
 // ---------- gh failures: no raw gh text ----------
@@ -680,9 +700,9 @@ test('round and cumulative both far, or no base: no call, counted as no hunk nea
 
 // ---------- prompt version 2 ----------
 
-test('PROMPT_VERSION and JUDGE_VERSION are v2; a v1 unclear entry is pending again, a v1 yes or no stays done, and a new entry carries v2 (breaks if decided verdicts are re-judged or unclear ones are not)', async () => {
-  assert.equal(adj.PROMPT_VERSION, 'adjudicate-cr-v2');
-  assert.equal(JUDGE_VERSION, 'adjudicate-cr-v2');
+test('PROMPT_VERSION and JUDGE_VERSION are v3; a v1 unclear entry is pending again, a v1 yes or no stays done, and a new entry carries v3 (breaks if decided verdicts are re-judged or unclear ones are not)', async () => {
+  assert.equal(adj.PROMPT_VERSION, 'adjudicate-cr-v3');
+  assert.equal(JUDGE_VERSION, 'adjudicate-cr-v3');
   const fs = [finding(1), finding(2), finding(3)];
   const h = setup(fs, { script: [verdictOnly('no')] });
   mkdirSync(path.dirname(h.files.state), { recursive: true });
@@ -692,11 +712,11 @@ test('PROMPT_VERSION and JUDGE_VERSION are v2; a v1 unclear entry is pending aga
   assert.equal(h.judge.calls.length, 2, 'the v1 unclear and the new finding; the v1 no is not re-judged');
   const st = stateOf(h);
   assert.equal(st[idOf(fs[1].key)].promptVersion, undefined, 'the v1 no is kept as it was');
-  assert.equal(st[idOf(fs[0].key)].promptVersion, 'adjudicate-cr-v2');
-  assert.equal(st[idOf(fs[2].key)].promptVersion, 'adjudicate-cr-v2');
+  assert.equal(st[idOf(fs[0].key)].promptVersion, 'adjudicate-cr-v3');
+  assert.equal(st[idOf(fs[2].key)].promptVersion, 'adjudicate-cr-v3');
 });
 
-test('a row built from a v1 yes entry carries prompt and judge version v1, and a row from a new yes carries v2 (breaks if a row is stamped with the version at build time)', async () => {
+test('a row built from a v1 yes entry carries prompt and judge version v1, and a row from a new yes carries v3 (breaks if a row is stamped with the version at build time)', async () => {
   const fs = [finding(1), finding(2)];
   const h = setup(fs, { linkTypes: { [fs[1].key]: 'within-hunk' } });
   mkdirSync(path.dirname(h.files.state), { recursive: true });
@@ -707,8 +727,8 @@ test('a row built from a v1 yes entry carries prompt and judge version v1, and a
   const byId = Object.fromEntries(rowsOf(h).map((r) => [r.id, r]));
   assert.equal(byId[idOf(fs[0].key)].provenance.promptVersion, 'adjudicate-cr-v1');
   assert.equal(byId[idOf(fs[0].key)].labels[0].judgeVersion, 'adjudicate-cr-v1');
-  assert.equal(byId[idOf(fs[1].key)].provenance.promptVersion, 'adjudicate-cr-v2');
-  assert.equal(byId[idOf(fs[1].key)].labels[0].judgeVersion, 'adjudicate-cr-v2');
+  assert.equal(byId[idOf(fs[1].key)].provenance.promptVersion, 'adjudicate-cr-v3');
+  assert.equal(byId[idOf(fs[1].key)].labels[0].judgeVersion, 'adjudicate-cr-v3');
 });
 
 test('a finding on an answer-key path is not sent: no git read, no judge call, counted as skipped: answer-key path (breaks if the path list is not checked before the call or a normal path is skipped)', async () => {
@@ -732,22 +752,23 @@ test('the default output file and sidecar sit under an answer-key glob (breaks i
   assert.equal(answerKeyHitsOf(['scripts/eval/review-eval/gold/adjudicated-cr.state']).length, 1);
 });
 
-// A run of one finding each: 'ok' is a yes, 'timeout' a judge failure, 'bad' an answer that does not parse.
+// A run of one finding each: 'ok' is a yes, 'timeout' a judge failure, 'bad' an answer that does not parse twice (the retry is a second call).
 const STEP = { ok: () => yes(), timeout: () => failed('timeout'), bad: () => ({ ok: true, result: 'maybe' }) };
 async function runSteps(steps) {
   const fs = steps.map((_, i) => finding(i + 1));
-  const h = diffPer(setup(fs, { script: steps.map((s) => STEP[s]()) }));
+  const h = diffPer(setup(fs, { script: steps.flatMap((s) => (s === 'bad' ? [STEP.bad(), STEP.bad()] : [STEP[s]()])) }));
   const res = await runWith(h);
   return { h, res };
 }
 
 test('2 failed calls in a row go on, 3 in a row stop the run with exit 1 and the earlier rows are written (breaks if the streak limit is 2 or 4, or the stop drops the rows)', async () => {
-  const two = await runSteps(['timeout', 'bad', 'ok', 'ok']);
+  // Two timeouts, not a timeout and an unparsed finding: that one takes two calls, so 5 calls ran at finding 4 and the 20 percent rate stops it.
+  const two = await runSteps(['timeout', 'timeout', 'ok', 'ok']);
   assert.equal(two.res.code, 0);
   assert.equal(two.h.judge.calls.length, 4);
   const three = await runSteps(['ok', 'timeout', 'bad', 'timeout', 'ok']);
   assert.equal(three.res.code, 1);
-  assert.equal(three.h.judge.calls.length, 4);
+  assert.equal(three.h.judge.calls.length, 5, 'ok, timeout, bad and its retry, timeout; the streak counts findings, not calls');
   assert.match(three.res.out, /stop: 3 failed calls in a row/);
   assert.equal(rowsOf(three.h).length, 1);
 });
@@ -758,9 +779,9 @@ test('once 5 calls ran, 1 failed of 5 goes on and 2 failed of 5 stop the run wit
   assert.equal(one.h.judge.calls.length, 6);
   const two = await runSteps(['ok', 'timeout', 'ok', 'bad', 'ok', 'ok']);
   assert.equal(two.res.code, 1);
-  assert.equal(two.h.judge.calls.length, 5);
+  assert.equal(two.h.judge.calls.length, 5, 'ok, timeout, ok, bad and its retry');
   assert.match(two.res.out, /stop: failure rate over 20 percent \(2 of 5 calls\)/);
-  assert.equal(rowsOf(two.h).length, 3);
+  assert.equal(rowsOf(two.h).length, 2, 'the unparsed finding and its retry are calls 4 and 5, so the rate stops the run before finding 5');
 });
 
 test('the summary counts prompts with a bare number equal to a dataset PR number, prints no number, and still sends the prompt (breaks if the count is missing, the number is printed, or such a prompt is refused)', async () => {
@@ -858,7 +879,8 @@ test('run --canary makes call 0 only, as stream-json: it passes on a clean smoke
     { pass: c.pass, len: c.answerLength, none: c.answerIsNone, user: c.userUnknown, drop: c.tokensDropped, tokens: c.inputTokens, smoke: c.smokeFailed, hooks: c.hookEvents, markers: c.markersOutside },
     { pass: true, len: CLEAN_ANSWER.length, none: true, user: true, drop: true, tokens: 100, smoke: [], hooks: 0, markers: 0 },
   );
-  assert.equal(stateOf(h)._canary.inputTokens, 100);
+  assert.equal(canaryOf(h).inputTokens, 100);
+  assert.equal(canaryOf(h).promptVersion, adj.PROMPT_VERSION, 'the kept baseline carries the prompt version');
   assert.equal(h.gitCalls.length, 0);
 });
 
@@ -957,7 +979,7 @@ test('a canary at exactly 2000 tokens under the reference passes, and its tokens
   const usage = { input_tokens: 6788, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   const h = withJudge(diffPer(setup([finding(1)])), canaryJudge(canaryRes({}, { result: { usage } })));
   assert.equal((await runWith(h, CANARY)).code, 0);
-  assert.equal(stateOf(h)._canary.inputTokens, 6788);
+  assert.equal(canaryOf(h).inputTokens, 6788);
 });
 
 test('the probe line passes with markdown or a full stop around USER: UNKNOWN (breaks if a clean child that formats its last line fails the canary)', async () => {
@@ -1131,5 +1153,266 @@ test('plan prints "with a disposition N of M" and the split of the pending findi
   for (const id of ['9001', '9002', '9003', '70000000']) assert.equal((res.out + res.err).includes(id), false, `printed ${id}`);
   const json = JSON.parse((await exec(h, 'plan', ['--json', '--dispositions', file])).out);
   assert.deepEqual({ w: json.withDisposition, split: json.pendingBySplit }, { w: 2, split: { dev: 1, holdout: 0, reserve: 1 } });
+});
+
+// ---------- v3 (seat ruling 2026-11-15): the judge never sees an outcome ----------
+
+const CHECK = '✅';
+const MARK = `${CHECK} Addressed in commit abc1234`;
+const bodyFor = (n, text) => (id) => (id === String(cid(n)) ? text : BODY);
+
+test('buildPrompt drops every line with "addressed in commit(s)" in any case or form, and every HTML comment block (also over several lines), and keeps the other lines, CRLF included (breaks if either strip is removed, or narrowed to the exact marker line)', () => {
+  const body = ['Possible null dereference.', MARK, 'this was Addressed in commit later', '<!-- fingerprint abc -->', 'Kept <!--\nmulti line\nblock --> text', 'Keep this line.'].join('\r\n');
+  const p = buildPrompt({ label: 'abcd1234', file: 'src/f1.js', hunk: '@@ -1 +1 @@\n+x', body, severity: 'major', sha: SHA_A });
+  assert.doesNotMatch(p, /addressed|<!--|-->|multi line|fingerprint|abc1234/i);
+  for (const want of ['Possible null dereference.', 'Keep this line.', 'Kept  text']) assert.ok(p.includes(want), `missing ${want}`);
+});
+
+test('a marker line in the comment is stripped, the judge is called with the clean prompt, and the summary counts lines stripped and HTML blocks stripped, as text and in --json (breaks if the strip is missing or the counters are not summed per prompt)', async () => {
+  const text = `${BODY}\n${MARK}\n<!-- a -->\n<!--\nb\n-->`;
+  const h = diffPer(setup([finding(1), finding(2)], { body: bodyFor(1, text) }));
+  const res = await runWith(h, ['--limit', '10', '--confirm-headless', '--json']);
+  assert.equal(res.code, 0);
+  assert.equal(h.judge.calls.length, 2);
+  assert.doesNotMatch(h.judge.calls[0], /addressed|<!--|abc1234/i);
+  const t = JSON.parse(res.out);
+  assert.deepEqual({ lines: t.linesStripped, blocks: t.htmlBlocksStripped }, { lines: 1, blocks: 2 });
+  assert.match((await runWith(diffPer(setup([finding(1)], { body: bodyFor(1, text) })))).out, /lines stripped 1, HTML blocks stripped 2/);
+});
+
+test('an HTML comment that holds "addressed in commit abc1234" is stripped and the prompt is sent, not refused (breaks if the comment text is tested before the HTML strip)', async () => {
+  const h = diffPer(setup([finding(1)], { body: () => `${BODY} <!-- Addressed in commit abc1234 -->` }));
+  const res = await runWith(h);
+  assert.equal(res.code, 0);
+  assert.equal(h.judge.calls.length, 1);
+  assert.doesNotMatch(h.judge.calls[0], /addressed|abc1234|<!--/i);
+  assert.doesNotMatch(res.out, /refused [1-9]/);
+});
+
+test('a marker line inside a fenced block of the comment is stripped by the line rule and the fence lines stay (breaks if the strip follows fences, or drops the fence)', async () => {
+  const h = diffPer(setup([finding(1)], { body: () => `Before\n\`\`\`\n${MARK}\n\`\`\`\nAfter` }));
+  assert.equal((await runWith(h)).code, 0);
+  assert.equal(h.judge.calls.length, 1);
+  assert.doesNotMatch(h.judge.calls[0], /addressed|abc1234/i);
+  assert.ok(h.judge.calls[0].includes('Before\n```\n```\nAfter'));
+});
+
+test('a hunk that holds "resolved" or "outdated" with a clean comment is sent, not refused: the plain words are tested on the comment only (breaks if the plain words are tested on the whole prompt)', async () => {
+  const h = diffPer(setup([finding(1)]), { 'src/f1.js': DIFF('+// resolved the outdated value') });
+  const res = await runWith(h);
+  assert.equal(res.code, 0);
+  assert.equal(h.judge.calls.length, 1);
+  assert.match(h.judge.calls[0], /resolved the outdated value/);
+});
+
+const COMMENT_REFUSALS = {
+  'a line with "addressed" and no "in commit"': 'This is addressed already.',
+  'the word resolved': 'The null case is now resolved.',
+  'the words fixed in': 'It was fixed in the next push.',
+  'the word outdated': 'This thread is outdated.',
+  'a check mark with no marker words': `${CHECK} done`,
+  'a heavy check mark': '✔ done',
+  'a ballot box check mark': '☑ done',
+};
+for (const [name, text] of Object.entries(COMMENT_REFUSALS)) {
+  test(`the comment text with ${name} is refused as fix-marker and never sent (breaks if the comment guard misses that outcome word)`, async () => {
+    const h = diffPer(setup([finding(1)], { body: () => `${BODY}\n${text}` }));
+    const res = await runWith(h);
+    assert.equal(res.code, 0);
+    assert.equal(h.judge.calls.length, 0);
+    assert.deepEqual(stateOf(h)[idOf(finding(1).key)], { verdict: 'refused', kind: 'fix-marker' });
+    assert.match(res.out, /refused 1 \(kinds fix-marker 1\)/);
+  });
+}
+
+const HUNK_REFUSALS = { 'a check mark': `+// ${CHECK} ok`, 'a heavy check mark': '+// ✔ ok', 'a ballot box check mark': '+// ☑ ok', 'the words addressed in commit': '+// Addressed in commit abc1234' };
+for (const [name, extra] of Object.entries(HUNK_REFUSALS)) {
+  test(`a hunk with ${name} is refused as fix-marker through the whole-prompt guard and never sent (breaks if the whole raw prompt is not tested for marker forms)`, async () => {
+    const h = diffPer(setup([finding(1)]), { 'src/f1.js': DIFF(extra) });
+    const res = await runWith(h);
+    assert.equal(res.code, 0);
+    assert.equal(h.judge.calls.length, 0);
+    assert.deepEqual(stateOf(h)[idOf(finding(1).key)], { verdict: 'refused', kind: 'fix-marker' });
+  });
+}
+
+test('the outcome lists are exported, carry no global flag, and a neutral prompt matches neither (breaks if the instructions gain an outcome word or a regex gets the g flag)', () => {
+  for (const re of [adj.OUTCOME_WORDS_RE, adj.MARKER_FORMS_RE]) assert.equal(re.global, false);
+  const p = buildPrompt({ label: 'abcd1234', file: 'src/f1.js', hunk: '@@ -1 +1 @@\n+const b = 2;', body: BODY, severity: 'major', sha: SHA_A });
+  assert.doesNotMatch(p, adj.OUTCOME_WORDS_RE);
+  assert.doesNotMatch(p, adj.MARKER_FORMS_RE);
+  assert.ok(adj.OUTCOME_WORDS_RE.test('Resolved in the next round'));
+  assert.equal(adj.MARKER_FORMS_RE.test('plainly resolved'), false);
+});
+
+// ---------- void-marked: no judge call, counts only ----------
+
+const LONG_MARKED = `${'x'.repeat(4500)}\n${MARK}`;
+function voidSetup() {
+  const fs = [1, 2, 3, 4, 5, 8].map((n) => finding(n));
+  const bodies = { 1: LONG_MARKED, 2: 'This was Addressed in commit later.', 3: BODY, 4: BODY, 8: `${BODY}\n${MARK}` };
+  const h = setup(fs, { body: (id) => bodies[Number(id) - 700000000] ?? BODY });
+  const gh = h.gh;
+  h.gh = async (args) => { if (String(args.at(-1)).endsWith(`/${cid(5)}`)) throw new Error('gh: HTTP 502'); return gh(args); };
+  const id = (n) => idOf(finding(n).key);
+  const row = (n) => ({ id: id(n), file: `src/f${n}.js` });
+  mkdirSync(path.dirname(h.files.state), { recursive: true });
+  const state = {
+    _canary: { inputTokens: 100, promptVersion: 'adjudicate-cr-v3' }, [id(1)]: { verdict: 'yes' }, [id(2)]: { verdict: 'no' }, [id(3)]: { verdict: 'unclear' }, [id(4)]: { verdict: 'yes' },
+    [id(5)]: { verdict: 'yes' }, [id(6)]: { verdict: 'refused', kind: 'pr-number' }, [id(7)]: { verdict: 'unparsed', promptVersion: 'adjudicate-cr-v3' },
+  };
+  writeFileSync(h.files.state, JSON.stringify(state));
+  writeFileSync(h.files.out, JSON.stringify([row(1), row(4), row(5), row(8)]));
+  return { h, id, state };
+}
+const voidMarked = (h, flags = [], over = {}) => exec(h, 'void-marked', flags, { judge: async () => { throw new Error('void-marked must not call the judge'); }, ...over });
+
+test('void-marked deletes the verdict and the row of a marked comment (also a long one, with the marker after 4000 characters, and a mid-sentence one), keeps clean ones, counts a failed read as not checked and exits 1, and leaves refused, unparsed and the canary alone, with no judge call (breaks if the body is cut before the marker test, a read failure voids, or a non-verdict entry is touched)', async () => {
+  const { h, id } = voidSetup();
+  const res = await voidMarked(h);
+  assert.equal(res.code, 1, 'one body could not be read');
+  assert.match(res.out, /void-marked: checked 5, voided 3 \(yes 2, no 1, unclear 0\), rows removed 2, not checked 1, clean 2/);
+  const state = rawStateOf(h);
+  assert.deepEqual(Object.keys(state).sort(), ['_canary', id(3), id(4), id(5), id(6), id(7)].sort());
+  assert.deepEqual(state[id(6)], { verdict: 'refused', kind: 'pr-number' });
+  assert.deepEqual(rowsOf(h).map((r) => r.id).sort(), [id(4), id(5)].sort());
+  assert.equal((res.out + res.err).includes('9001'), false);
+  const again = JSON.parse((await voidMarked(h, ['--json'])).out);
+  assert.deepEqual({ voided: again.voided, notChecked: again.notChecked }, { voided: 0, notChecked: 1 });
+});
+
+test('void-marked writes nothing when nothing is voided (breaks if it rewrites the files on a clean pass)', async () => {
+  const { h } = voidSetup();
+  const stateBefore = readFileSync(h.files.state, 'utf8');
+  const outBefore = readFileSync(h.files.out, 'utf8');
+  const res = await voidMarked(h, [], { gh: async () => ({ body: BODY }) });
+  assert.equal(res.code, 0);
+  assert.equal(readFileSync(h.files.state, 'utf8'), stateBefore);
+  assert.equal(readFileSync(h.files.out, 'utf8'), outBefore);
+  assert.equal(readdirSync(path.dirname(h.files.state)).filter((n) => n.includes('.tmp-')).length, 0);
+});
+
+test('void-marked counts a verdict whose finding is no longer a candidate as not checked (breaks if an unknown id is skipped quietly)', async () => {
+  const { h } = voidSetup();
+  const res = await voidMarked(h, ['--json'], { resolveFindings: async () => h.findings.slice(0, 2) });
+  const counts = JSON.parse(res.out);
+  assert.deepEqual({ checked: counts.checked, notChecked: counts.notChecked }, { checked: 2, notChecked: 4 }, 'findings 3, 4, 5 and 8 are not candidates');
+  assert.equal(res.code, 1);
+});
+
+// ---------- unparsed answers: one retry, then a state entry ----------
+
+const BAD = { ok: true, result: 'maybe' };
+
+test('an unparsed answer is asked once more at once: unparsed then parsed keeps the second answer (2 calls); unparsed twice stores an unparsed entry (2 calls); a parsed answer takes 1 call (breaks if there is no retry, a third call, or the second answer is dropped)', async () => {
+  const parsed = diffPer(setup([finding(1)], { script: [yes()] }));
+  await runWith(parsed);
+  assert.equal(parsed.judge.calls.length, 1);
+  const second = diffPer(setup([finding(1)], { script: [BAD, yes()] }));
+  const a = JSON.parse((await runWith(second, ['--limit', '10', '--confirm-headless', '--json'])).out);
+  assert.equal(second.judge.calls.length, 2);
+  assert.equal(second.judge.calls[0], second.judge.calls[1], 'the same prompt');
+  assert.equal(stateOf(second)[idOf(finding(1).key)].verdict, 'yes');
+  assert.equal(rowsOf(second).length, 1);
+  assert.deepEqual({ judged: a.judged, unparsed: a.unparsed }, { judged: 2, unparsed: 0 });
+  const twice = diffPer(setup([finding(1)], { script: [BAD] }));
+  await runWith(twice);
+  assert.equal(twice.judge.calls.length, 2);
+  assert.deepEqual(stateOf(twice)[idOf(finding(1).key)], { verdict: 'unparsed', promptVersion: adj.PROMPT_VERSION });
+});
+
+test('a finding stored as unparsed makes no judge call in a later run, and plan counts it as unparsed, not adjudicated (breaks if the entry is not read as done)', async () => {
+  const h = diffPer(setup([finding(1), finding(2)], { script: [BAD, BAD, yes()] }));
+  await runWith(h);
+  assert.equal(h.judge.calls.length, 3, 'finding 1 twice, finding 2 once');
+  const again = await runWith(h);
+  assert.equal(again.code, 0);
+  assert.equal(h.judge.calls.length, 3, 'a re-run asks nothing');
+  const plan = JSON.parse((await exec(h, 'plan', ['--json'])).out);
+  assert.deepEqual({ unparsed: plan.unparsed, adjudicated: plan.adjudicated, pending: plan.pending }, { unparsed: 1, adjudicated: 1, pending: 0 });
+  assert.match((await exec(h, 'plan')).out, /unparsed 1/);
+});
+
+test('the retry never passes --limit: --first-call-only with an unparsed answer makes 1 call and stores nothing (breaks if the retry ignores the limit)', async () => {
+  const h = diffPer(setup([finding(1)], { script: [BAD] }));
+  await runWith(h, ['--first-call-only', '--confirm-headless']);
+  assert.equal(h.judge.calls.length, 1);
+  assert.deepEqual(stateOf(h), {});
+});
+
+// ---------- checkpoint: a call with no verdict stops the run ----------
+
+/** The canary prompt gets a clean canary; call k gets steps[k - 1], else a yes with 200 input tokens. */
+function checkpointJudge(steps) {
+  const calls = [];
+  const judge = async (prompt) => {
+    calls.push(prompt);
+    if (prompt === adj.CANARY_PROMPT) return canaryRes();
+    return steps[calls.length - 2] ?? callRes(200);
+  };
+  judge.calls = calls;
+  return judge;
+}
+
+test('--checkpoint stops with exit 1 at the first call that gives no verdict (a judge failure or an unparsed answer), with no retry and no further call (breaks if only a failed check stops it, or a 1 in 5 failure passes)', async () => {
+  const fs = [1, 2, 3, 4, 5, 6].map((n) => finding(n));
+  const fail = withJudge(diffPer(setup(fs)), checkpointJudge([callRes(200), callRes(200), failed('timeout')]));
+  const a = await runWith(fail, ['--checkpoint', '--confirm-headless']);
+  assert.equal(a.code, 1);
+  assert.equal(fail.judge.calls.length, 4, 'the canary and calls 1 to 3');
+  assert.match(a.out, /stop: call 3 gave no verdict/);
+  assert.equal(rowsOf(fail).length, 2);
+  const bad = withJudge(diffPer(setup(fs)), checkpointJudge([callRes(200), { ...callRes(200), result: 'maybe' }]));
+  const b = await runWith(bad, ['--checkpoint', '--confirm-headless']);
+  assert.equal(b.code, 1);
+  assert.equal(bad.judge.calls.length, 3, 'the canary and calls 1 and 2: an unparsed call is not retried in a checkpoint');
+  assert.match(b.out, /stop: call 2 gave no verdict/);
+});
+
+// ---------- the per-call check in every mode ----------
+
+const runRaw = (h, flags = ['--limit', '10', '--confirm-headless'], over = {}) => exec(h, 'run', flags, { git: gitOf(h), ...over });
+const REFUSED_NO_BASELINE = /run --canary --confirm-headless/;
+
+test('a plain run and --first-call-only are refused with exit 2 and 0 calls when no kept baseline exists, or it is for another prompt version or has none (breaks if a run goes on without a baseline)', async () => {
+  const none = diffPer(setup([finding(1)]));
+  const a = await runRaw(none);
+  assert.equal(a.code, 2);
+  assert.match(a.err, REFUSED_NO_BASELINE);
+  assert.equal(none.judge.calls.length, 0);
+  assert.equal((await runRaw(none, ['--first-call-only', '--confirm-headless'])).code, 2);
+  for (const version of ['adjudicate-cr-v2', undefined]) {
+    const old = diffPer(setup([finding(1)]));
+    mkdirSync(path.dirname(old.files.state), { recursive: true });
+    writeFileSync(old.files.state, JSON.stringify({ _canary: { inputTokens: 100, servedModel: 'claude-opus-5-5', ...(version ? { promptVersion: version } : {}) } }));
+    const res = await runRaw(old);
+    assert.equal(res.code, 2, String(version));
+    assert.match(res.err, REFUSED_NO_BASELINE);
+    assert.equal(old.judge.calls.length, 0);
+  }
+});
+
+test('a plain run with a current baseline checks every call: a call over the bar stops the run with exit 1 and its answer is not recorded (breaks if a plain run is unchecked)', async () => {
+  const fs = [1, 2, 3, 4].map((n) => finding(n));
+  const h = withJudge(diffPer(setup(fs)), canaryJudge(canaryRes(), [200, 9000, 200]));
+  seedBaseline(h);
+  const res = await runRaw(h);
+  assert.equal(res.code, 1);
+  assert.match(res.out, /stop: call 2 failed its check \(input tokens over the canary bar\)/);
+  assert.equal(h.judge.calls.length, 2);
+  assert.equal(rowsOf(h).length, 1);
+  assert.match(res.out, /margin/, 'the margin shows in every mode');
+});
+
+test('a failed canary, kept (--canary) or checkpoint, deletes the kept baseline and keeps the finding entries (breaks if a stale baseline outlives a failed canary)', async () => {
+  const bad = canaryRes({ servedModel: 'claude-sonnet-5-5' });
+  const entry = { [idOf(finding(1).key)]: { verdict: 'no' } };
+  for (const flags of [CANARY, ['--checkpoint', '--confirm-headless']]) {
+    const h = withJudge(diffPer(setup([finding(1)])), canaryJudge(bad));
+    seedBaseline(h);
+    writeFileSync(h.files.state, JSON.stringify({ ...rawStateOf(h), ...entry }));
+    assert.equal((await runRaw(h, flags)).code, 1);
+    assert.deepEqual(rawStateOf(h), entry, flags.join(' '));
+  }
 });
 

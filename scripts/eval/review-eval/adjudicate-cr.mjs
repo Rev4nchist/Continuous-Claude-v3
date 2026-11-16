@@ -2,10 +2,12 @@
 // adjudicate-cr.mjs: turns CodeRabbit dataset findings (Major or higher) into Gold CR rows.
 //   plan [--dataset F] [--json]          counts only: candidates by split, adjudicated, with lines, file only, no sha. No judge call.
 //   run --limit N --confirm-headless     one judge call (Opus, effort high) for each of the next N findings not yet adjudicated.
-// A prompt holds a neutral index, the file, the diff hunk of the round, the comment text, its severity and (if given) the outcome word.
-// The comment text is scrubbed of PR references and github links. The whole prompt is guarded before the call: a PR reference, a fix
-// sha prefix, any 40-hex sha, a github url, the comment id or the finding key refuses it. A refused prompt is never sent and never retried;
-// it is marked and the run goes on, and 3 refusals in one run stop it.
+//   void-marked [--dataset F] [--json]   no judge call: deletes the verdict and the row of a finding whose live comment holds a fix marker.
+// A prompt holds a neutral index, the file, the diff hunk of the round, the comment text and its severity. It never holds the outcome:
+// the comment text loses its HTML comment blocks and every "Addressed in commit" line, and is scrubbed of PR references and github links.
+// The whole prompt is guarded before the call: a PR reference, a fix sha prefix, any 40-hex sha, a github url, the comment id, the finding
+// key, or a fix marker (an outcome word in the comment text, a check mark or "addressed in commit" anywhere) refuses it. A refused prompt is
+// never sent and never retried; it is marked and the run goes on, and 3 refusals in one run stop it.
 // Only verdict yes becomes a gold row (gold/adjudicated-cr.json). no and unclear, and a yes that waits for its linkType, are kept in a
 // sidecar state map keyed by the id hash (no text: a yes keeps the severity and the sha256 of the raw answer). The sidecar has no
 // .json ending: gold.mjs loadGold reads every .json file of gold/ as a row array.
@@ -30,8 +32,10 @@ import { HUNK_LIMIT, isRegression, leakTerms, maskShas, promptGuard, readEngineR
 import { checkSmokeContext, claudeChildEnv, smokeReport, streamJsonArgs, withRunSettings } from './seed.mjs';
 
 // v2 (seat ruling, 2026-11-15): ten lines of context, and the cumulative PR diff when the round commit does not change the path.
-export const PROMPT_VERSION = 'adjudicate-cr-v2';
-export const JUDGE_VERSION = 'adjudicate-cr-v2';
+// v3 (seat ruling, 2026-11-15): the live comment body carries marker lines ("Addressed in commit ...") that leak the outcome. They and the
+// HTML comment blocks are stripped, and a prompt that still holds a fix marker is refused.
+export const PROMPT_VERSION = 'adjudicate-cr-v3';
+export const JUDGE_VERSION = 'adjudicate-cr-v3';
 /** The version of a state entry with no promptVersion field: every entry written before v2. */
 const LEGACY_VERSION = 'adjudicate-cr-v1';
 const versionOf = (entry) => entry?.promptVersion ?? LEGACY_VERSION;
@@ -76,13 +80,34 @@ const stripLinks = (text) => String(text).replace(/https?:\/\/(?:www\.)?github\.
 const cleanBody = (text) => scrubPrs(stripLinks(text));
 
 /**
- * The judge prompt of one finding. Only the comment text is scrubbed; the whole prompt is guarded before the call (send).
- * The judge is blind: the prompt never holds what happened to the finding (a disposition). That word stays in the sidecar.
+ * The outcome words (seat ruling 2026-11-15). OUTCOME_WORDS_RE is tested on the comment text after the strip; MARKER_FORMS_RE on the whole
+ * raw prompt, hunk and fences included, so the plain words are never tested on code. Each is one line to change. No g flag (.test keeps state).
+ */
+export const OUTCOME_WORDS_RE = /addressed in commits?|\baddressed\b|\bresolved\b|\bfixed in\b|\boutdated\b|[✅✔☑]/i;
+export const MARKER_FORMS_RE = /addressed in commits?|[✅✔☑]/i;
+const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+const MARKED_LINE = /addressed in commits?/i;
+
+/**
+ * The comment body without the bot metadata and without the fix marker CodeRabbit appends after a fix: every HTML comment block, then every
+ * line with "addressed in commit(s)" in any case (wider than parseMarker of dispositions.mjs, which reads the exact marker line only).
+ * { text, lines, blocks }: the counts are of what was dropped.
+ */
+export function stripBody(body) {
+  const noHtml = String(body ?? '').replace(HTML_COMMENT, '');
+  const all = noHtml.split(/\r?\n/);
+  const kept = all.filter((l) => !MARKED_LINE.test(l));
+  return { text: kept.join('\n'), lines: all.length - kept.length, blocks: (String(body ?? '').match(HTML_COMMENT) ?? []).length };
+}
+
+/**
+ * The judge prompt of one finding. Only the comment text is stripped and scrubbed; the whole prompt is guarded before the call (send).
+ * The judge is blind: the prompt never holds what happened to the finding (a disposition or a fix marker). That word stays in the sidecar.
  * label: the first 8 hex of the id hash (labelOf). It is the same in every run, so a re-run sends the same text for the same finding.
  */
 export function buildPrompt({ label, file, hunk, body, severity, sha }) {
   const lines = [INSTRUCTIONS, '', `### Finding ${label}`, `File: ${file}`, `Reviewer severity: ${severity}`];
-  lines.push('Diff hunk at the reviewed round:', hunk, 'Reviewer comment:', cleanBody(body));
+  lines.push('Diff hunk at the reviewed round:', hunk, 'Reviewer comment:', cleanBody(stripBody(body).text));
   const text = lines.join('\n');
   return sha ? maskShas(text, [String(sha).toLowerCase()]) : text;
 }
@@ -110,15 +135,18 @@ export function extraGuard(prompt, f) {
 
 /**
  * The refusal kinds the sidecar may hold: promptGuard (pr-number, fix-title, fix-sha) and extraGuard (sha, repo-url, pr-term, comment-id,
- * finding-key). A kind outside the list is written as 'other'. A kind is never free text and never holds a number.
+ * finding-key) and outcomeGuard (fix-marker). A kind outside the list is written as 'other'. A kind is never free text and never holds a number.
  */
-export const REFUSAL_KINDS = Object.freeze(['pr-number', 'fix-title', 'fix-sha', 'sha', 'repo-url', 'pr-term', 'comment-id', 'finding-key', 'other']);
+export const REFUSAL_KINDS = Object.freeze(['pr-number', 'fix-title', 'fix-sha', 'sha', 'repo-url', 'pr-term', 'comment-id', 'finding-key', 'fix-marker', 'other']);
 export const refusalKindOf = (kind) => (REFUSAL_KINDS.includes(kind) ? kind : 'other');
 
-/** { refused: kind } with the judge not called, or { res } (null on a throw). The mine-szz guard first, then extraGuard. A kind never holds a number. */
-async function send(prompt, f, judge) {
+/** 'fix-marker' when the whole raw prompt holds a marker form, or the comment text (after the strip and scrub) holds an outcome word. Else null. */
+const outcomeGuard = (prompt, comment) => (MARKER_FORMS_RE.test(prompt) || OUTCOME_WORDS_RE.test(comment) ? 'fix-marker' : null);
+
+/** { refused: kind } with the judge not called, or { res } (null on a throw). outcomeGuard, the mine-szz guard, then extraGuard. A kind never holds a number. */
+async function send(prompt, f, judge, comment) {
   const leak = leakTerms([f.sha40], []);
-  const refused = promptGuard(prompt, leak) ?? extraGuard(prompt, f);
+  const refused = outcomeGuard(prompt, comment) ?? promptGuard(prompt, leak) ?? extraGuard(prompt, f);
   return refused ? { refused } : sendGuarded(prompt, leak, judge);
 }
 
@@ -212,6 +240,8 @@ function loadStore(files) {
 const isStaleUnclear = (entry) => entry?.verdict === 'unclear' && versionOf(entry) !== PROMPT_VERSION;
 const isDone = (store, f) => store.rowIds.has(f.id) || (Object.hasOwn(store.state, f.id) && !isStaleUnclear(store.state[f.id]));
 const isRefused = (store, f) => store.state[f.id]?.verdict === 'refused';
+/** Two calls gave no strict JSON answer: the entry has no text and, like a refusal, ends the asking (a later run skips it). */
+const isUnparsed = (store, f) => store.state[f.id]?.verdict === 'unparsed';
 const hasSha = (f) => SHA40.test(String(f.sha40 ?? ''));
 /** True for a path under an answer-key glob (scripts/github/lib/answer-key.mjs): such a finding is never sent to the judge. */
 const isAnswerKeyPath = (f) => typeof f.path === 'string' && answerKeyHitsOf([f.path]).length > 0;
@@ -299,9 +329,10 @@ function splitCounts(list) {
 export function planCounts(cands, store, lookupsFailed = 0, dispositions = null) {
   const withLines = cands.filter(hasLines).length;
   const refused = cands.filter((f) => isRefused(store, f)).length;
+  const unparsed = cands.filter((f) => isUnparsed(store, f)).length;
   const pending = pendingOf(cands, store);
   return {
-    candidates: cands.length, bySplit: splitCounts(cands), adjudicated: cands.filter((f) => isDone(store, f)).length - refused, refused,
+    candidates: cands.length, bySplit: splitCounts(cands), adjudicated: cands.filter((f) => isDone(store, f)).length - refused - unparsed, refused, unparsed,
     answerKeySkipped: answerKeyOf(cands, store).length, lookupsFailed, noLineSkipped: noLineOf(cands, store).length,
     withDisposition: dispositions ? cands.filter((f) => dispositions.has(f.key)).length : 0,
     pending: pending.length, pendingBySplit: splitCounts(pending), withLines, fileOnly: cands.length - withLines,
@@ -342,7 +373,7 @@ function planText(c) {
   return [
     `adjudicate-cr plan: candidates ${c.candidates} (CodeRabbit findings of severity Major or higher)`,
     `split: dev ${c.bySplit.dev}, holdout ${c.bySplit.holdout}, reserve ${c.bySplit.reserve}`,
-    `adjudicated ${c.adjudicated}, refused ${c.refused}, skipped: answer-key path ${c.answerKeySkipped}, skipped: no line data ${c.noLineSkipped}, pending ${c.pending}`,
+    `adjudicated ${c.adjudicated}, refused ${c.refused}, unparsed ${c.unparsed}, skipped: answer-key path ${c.answerKeySkipped}, skipped: no line data ${c.noLineSkipped}, pending ${c.pending}`,
     `pending by split: dev ${c.pendingBySplit.dev}, holdout ${c.pendingBySplit.holdout}, reserve ${c.pendingBySplit.reserve}`,
     `with a disposition ${c.withDisposition} of ${c.candidates}`,
     `with lines ${c.withLines}, file only ${c.fileOnly} (no start or end line), no sha ${c.unresolved}`,
@@ -424,11 +455,16 @@ export function capHunk(text) {
   return byLines.length > HUNK_LIMIT ? `${byLines.slice(0, HUNK_LIMIT)}\n[hunk cut at ${HUNK_LIMIT} characters]` : byLines;
 }
 
-async function bodyOf(f, gh) {
+/** The live comment body, trimmed and not cut: '' when it has none, null when the finding has no comment id. A failed read throws. */
+async function rawBodyOf(f, gh) {
   const id = commentIdOf(f);
   if (!id) return null;
   const c = await gh(['api', `repos/${DEFAULT_REPO}/pulls/comments/${id}`]);
-  const text = typeof c?.body === 'string' ? c.body.trim() : '';
+  return typeof c?.body === 'string' ? c.body.trim() : '';
+}
+
+async function bodyOf(f, gh) {
+  const text = await rawBodyOf(f, gh);
   return text ? text.slice(0, BODY_LIMIT) : null;
 }
 
@@ -449,7 +485,7 @@ async function evidenceOf(f, ctx) {
 // ---------- the run ----------
 
 const newTally = () => ({
-  judged: 0, yes: 0, no: 0, unclear: 0, unparsed: 0, judgeFailed: 0, evidenceFailed: 0, refused: 0, refusedKinds: {}, skippedRefusals: 0, skippedAnswerKey: 0, skippedNoLine: 0, skippedNoHunk: 0, skippedNoRoundDiff: 0, noSha: 0,
+  judged: 0, yes: 0, no: 0, unclear: 0, unparsed: 0, retried: 0, linesStripped: 0, htmlBlocksStripped: 0, judgeFailed: 0, evidenceFailed: 0, refused: 0, refusedKinds: {}, skippedRefusals: 0, skippedAnswerKey: 0, skippedNoLine: 0, skippedNoHunk: 0, skippedNoRoundDiff: 0, noSha: 0,
   waitingLinktype: 0, lookupsFailed: 0, promptsBuilt: 0, bareNumberPrompts: 0, rowsAdded: 0, rowsInvalid: 0, rowsInFile: 0, stop: null, calls: [], canary: null,
   agreement: { yesFixed: 0, noWrong: 0, yesWrong: 0, noFixed: 0, unclear: 0, none: 0, other: 0 },
 });
@@ -607,25 +643,59 @@ function failureStop(ctx, failed) {
   return rate ? `failure rate over ${FAIL_RATE_MAX * 100} percent (${bad} of ${t.judged} calls)` : null;
 }
 
-/** Records one judge result. info: { disposition, promptChars }. Returns a stop reason, or null to go on. */
-function takeAnswer(f, res, ctx, info) {
-  const { tally, store } = ctx;
+/**
+ * Records one judge call: counts it, keeps its proof and runs its check (every mode, seat ruling 2026-11-15).
+ * { stop } after a failed check, else { ans }: the parsed answer, or null for a failed call or an answer that does not parse.
+ */
+function recordCall(res, ctx, promptChars) {
+  const { tally } = ctx;
   tally.judged += 1;
-  const proof = proofOf(res, info.promptChars);
+  const proof = proofOf(res, promptChars);
   if (ctx.check) proof.margin = marginOf(proof, ctx.check.baseline);
   tally.calls.push(proof);
   const failed = ctx.check && res?.ok ? checkFailure(proof, ctx.check.baseline) : null;
-  if (failed) return `call ${tally.judged} failed its check (${failed})`;
-  const ans = res?.ok ? parseAnswer(res.result) : null;
+  if (failed) return { stop: `call ${tally.judged} failed its check (${failed})` };
+  return { ans: res?.ok ? parseAnswer(res.result) : null };
+}
+
+/**
+ * Settles a finding after its last call. info: { disposition, retried }. A verdict is stored. An answer that did not parse twice is stored
+ * as { verdict: 'unparsed' } with no text, so a later run does not ask again. Returns a stop reason, or null to go on.
+ * A checkpoint stops at any call with no verdict (a failed call, a timeout or an unparsed answer).
+ */
+function settle(f, res, ans, ctx, info) {
+  const { tally, store } = ctx;
   if (ans) {
     store.state[f.id] = entryOf(ans, res.result, info.disposition);
-    saveState(ctx);
     tally[ans.verdict] += 1;
     tally.agreement[agreementKey(ans.verdict, info.disposition)] += 1;
-  } else if (res?.ok) tally.unparsed += 1;
-  else tally.judgeFailed += 1;
+    saveState(ctx);
+  } else if (res?.ok) {
+    tally.unparsed += 1;
+    if (info.retried) { store.state[f.id] = { verdict: 'unparsed', promptVersion: PROMPT_VERSION }; saveState(ctx); }
+  } else tally.judgeFailed += 1;
   if (!res?.ok && STOP_REASONS.has(res?.reason)) return `judge ${res.reason}`;
+  if (ctx.checkpoint && ans === null) return `call ${tally.judged} gave no verdict`;
   return failureStop(ctx, ans === null);
+}
+
+/**
+ * The call or calls of one finding. ask() sends the same guarded prompt. An answer that does not parse is asked once more at once (one more
+ * call, kept inside --limit; never in a checkpoint, which stops on it). info: { disposition, promptChars }. Returns a stop reason, or null.
+ */
+async function askJudge(f, ask, ctx, info) {
+  let sent = await ask();
+  if (sent.refused) return markRefused(f, sent.refused, ctx);
+  let call = recordCall(sent.res, ctx, info.promptChars);
+  if (call.stop) return call.stop;
+  const retried = Boolean(sent.res?.ok) && call.ans === null && !ctx.checkpoint && ctx.tally.judged < ctx.limit;
+  if (retried) {
+    ctx.tally.retried += 1;
+    sent = await ask();
+    call = recordCall(sent.res, ctx, info.promptChars);
+    if (call.stop) return call.stop;
+  }
+  return settle(f, sent.res, call.ans, ctx, { disposition: info.disposition, retried });
 }
 
 /** The sidecar is saved (temp file and rename) after each judge call, so a crash keeps every verdict already paid for. */
@@ -657,10 +727,11 @@ async function adjudicateOne(f, ctx) {
   if (ev.noRoundDiff) { ctx.tally.skippedNoRoundDiff += 1; return null; }
   const disposition = dispositionOf(ctx, f);
   const prompt = buildPrompt({ label: labelOf(f.id), file: f.path, hunk: ev.hunk, body: ev.body, severity: foldSev(f.severity), sha: f.sha40 });
-  ctx.tally.promptsBuilt += 1;
+  const stripped = stripBody(ev.body);
+  Object.assign(ctx.tally, { promptsBuilt: ctx.tally.promptsBuilt + 1, linesStripped: ctx.tally.linesStripped + stripped.lines, htmlBlocksStripped: ctx.tally.htmlBlocksStripped + stripped.blocks });
   if (hasBareNumber([f.path, ev.hunk, ev.body], ctx.prNumbers)) ctx.tally.bareNumberPrompts += 1;
-  const sent = await send(prompt, f, ctx.judge);
-  return sent.refused ? markRefused(f, sent.refused, ctx) : takeAnswer(f, sent.res, ctx, { disposition, promptChars: prompt.length });
+  const comment = cleanBody(stripped.text);
+  return askJudge(f, () => send(prompt, f, ctx.judge, comment), ctx, { disposition, promptChars: prompt.length });
 }
 
 /** Walks the pending findings until `limit` judge calls are made: a finding with no evidence uses no call. */
@@ -731,9 +802,10 @@ const canaryText = (c) => [
 function runText(t) {
   const a = t.agreement;
   const lines = [
-    `adjudicate-cr run: judged ${t.judged}, yes ${t.yes}, no ${t.no}, unclear ${t.unclear}, unparsed ${t.unparsed}, judge-failed ${t.judgeFailed}`,
+    `adjudicate-cr run: judged ${t.judged}, yes ${t.yes}, no ${t.no}, unclear ${t.unclear}, unparsed ${t.unparsed}, retried ${t.retried}, judge-failed ${t.judgeFailed}`,
     `agreement of verdict and disposition: yes&fixed ${a.yesFixed}, no&wrong ${a.noWrong}, yes&wrong ${a.yesWrong}, no&fixed ${a.noFixed}, unclear ${a.unclear}, none ${a.none}, other ${a.other}`,
     `evidence-failed ${t.evidenceFailed}, refused ${t.refused}${t.refused ? ` (kinds ${Object.entries(t.refusedKinds).map(([k, n]) => `${k} ${n}`).join(', ')})` : ''}, skipped refusals: ${t.skippedRefusals}, skipped: answer-key path ${t.skippedAnswerKey}, skipped: no line data ${t.skippedNoLine}, skipped: no hunk near the line ${t.skippedNoHunk}, skipped: no diff in the round commit ${t.skippedNoRoundDiff}, no-sha ${t.noSha}, waiting-linktype ${t.waitingLinktype}`,
+    `comment text: lines stripped ${t.linesStripped}, HTML blocks stripped ${t.htmlBlocksStripped}`,
     `prompts with a bare number equal to a dataset PR number: ${t.bareNumberPrompts} of ${t.promptsBuilt}`,
     `gh lookups failed ${t.lookupsFailed}`,
     `rows written ${t.rowsAdded}, rows invalid ${t.rowsInvalid}, rows in file ${t.rowsInFile}`,
@@ -751,6 +823,7 @@ function runContext(args, deps, cfg, files, store, { prNumbers, dispositions }) 
   try { linkTypes = loadLinkTypes(files.linktype); } catch { throw new UserError('the linkType file cannot be read or has a bad class'); }
   return {
     deps: { ...deps, git: deps.git ?? makeGit(process.cwd()) }, judge: deps.judge ?? defaultJudge(), store, files, prNumbers, dispositions, streak: 0, tally: newTally(), linkTypes,
+    limit: args.limit, checkpoint: Boolean(args.checkpoint),
     slack: cfg.lineSlack ?? 3, records: memo(async () => (deps.readRecords ? deps.readRecords() : readEngineRecords(recordsDir))),
   };
 }
@@ -761,31 +834,51 @@ function withCountedGh(deps) {
   return { wired: { ...deps, gh: countingGh(deps.gh ?? quietGh(), lookups) }, lookups };
 }
 
-/** The canary alone (call 0). On a pass the input tokens are kept in the sidecar as the baseline for a later --first-call-only. No dataset is read. */
+/** Deletes the kept baseline after a failed canary, so a later run cannot lean on a stale one. Writes only when there was one. */
+function dropBaseline(store, files) {
+  if (!Object.hasOwn(store.state, CANARY_KEY)) return;
+  delete store.state[CANARY_KEY];
+  atomicWrite(files.state, store.state);
+}
+
+/**
+ * The canary alone (call 0). On a pass the input tokens are kept in the sidecar, with the prompt version, as the baseline of every later
+ * call (a run needs one for its version). A fail deletes the kept baseline. No dataset is read.
+ */
 async function canaryCmd(args, deps, io, files) {
   const store = loadStore(files);
   const canary = await canaryStage(deps.judge ?? defaultJudge());
-  if (canary.pass) atomicWrite(files.state, { ...store.state, [CANARY_KEY]: { inputTokens: canary.inputTokens, servedModel: canary.servedModel } });
+  if (canary.pass) atomicWrite(files.state, { ...store.state, [CANARY_KEY]: { inputTokens: canary.inputTokens, servedModel: canary.servedModel, promptVersion: PROMPT_VERSION } });
+  else dropBaseline(store, files);
   const tally = { ...newTally(), canary, stop: canary.pass ? null : 'canary failed' };
   io.stdout(args.json ? JSON.stringify({ canary, stop: tally.stop }, null, 1) : [canaryText(canary), tally.stop ? `stop: ${tally.stop}` : 'canary baseline kept'].join('\n'));
   return canary.pass ? 0 : 1;
 }
 
-/** The check of each call, or null. --checkpoint: the canary of this run gives the baseline. --first-call-only: the baseline kept by an earlier --canary, if any. */
-const checkOf = (args, canary, store) => {
-  const kept = store.state[CANARY_KEY]?.inputTokens;
-  const baseline = canary?.inputTokens ?? (Number.isFinite(kept) ? kept : null);
-  return args.checkpoint || (args.firstCallOnly && baseline !== null) ? { baseline } : null;
-};
+/** The kept baseline (input tokens) when it is for the current prompt version, else null. */
+function keptBaseline(store) {
+  const kept = store.state[CANARY_KEY];
+  return kept?.promptVersion === PROMPT_VERSION && Number.isFinite(kept.inputTokens) ? kept.inputTokens : null;
+}
+
+/** A run with calls and no --checkpoint needs the baseline kept by `run --canary` for this prompt version. Fixed message, exit 2, before any call. */
+function requireBaseline(args, store) {
+  if (args.checkpoint || keptBaseline(store) !== null) return;
+  throw new UserError(`no canary baseline for ${PROMPT_VERSION}: run \`run --canary --confirm-headless\` first`);
+}
+
+/** The check of each call, in every mode. --checkpoint: the canary of this run gives the baseline. Else the baseline kept by `run --canary`. */
+const checkOf = (args, canary, store) => ({ baseline: args.checkpoint ? canary.inputTokens : keptBaseline(store) });
 
 async function runCmd(args, rawDeps, io, files) {
   if (args.canary) return canaryCmd(args, rawDeps, io, files);
   const cfg = rawDeps.cfg ?? loadConfig();
   const { wired: deps, lookups } = withCountedGh(rawDeps);
   const dispositions = dispositionMap(args);
+  const store = loadStore(files);
+  requireBaseline(args, store);
   const ds = readDataset(args);
   const cands = await loadCandidates(ds, deps, cfg);
-  const store = loadStore(files);
   const pending = pendingOf(cands, store);
   const ctx = runContext(args, deps, cfg, files, store, { prNumbers: prNumbersOf(ds, cands), dispositions });
   Object.assign(ctx.tally, {
@@ -794,7 +887,7 @@ async function runCmd(args, rawDeps, io, files) {
   });
   if (args.checkpoint) {
     ctx.tally.canary = await canaryStage(ctx.judge);
-    if (!ctx.tally.canary.pass) ctx.tally.stop = 'canary failed';
+    if (!ctx.tally.canary.pass) { ctx.tally.stop = 'canary failed'; dropBaseline(store, files); }
   }
   ctx.check = checkOf(args, ctx.tally.canary, store);
   // The engine records are read before the first call: a failed read must not come after paid calls.
@@ -863,26 +956,92 @@ async function planCmd(args, rawDeps, io, files) {
   return 0;
 }
 
+// ---------- void-marked: a verdict made on a prompt whose live comment holds a fix marker ----------
+
+const VOIDABLE = ['yes', 'no', 'unclear'];
+const verdictOfId = (store, id) => (VOIDABLE.includes(store.state[id]?.verdict) ? store.state[id].verdict : 'yes');
+
+/** The ids to read: every yes, no or unclear of the state, and every row of the output file (so a half-finished void heals on a re-run). */
+const voidIdsOf = (store) => new Set([
+  ...Object.keys(store.state).filter((id) => VOIDABLE.includes(store.state[id]?.verdict)),
+  ...store.rows.map((r) => r?.id).filter((id) => typeof id === 'string'),
+]);
+
+/**
+ * 'marked', 'clean' or 'unread'. The whole live body is read (bodyOf cuts at BODY_LIMIT and the marker comes last). A finding that is no
+ * longer a candidate, a failed read and an empty body are 'unread': the verdict stays. /addressed in commits?/i covers what parseMarker reads.
+ */
+async function markOf(f, gh) {
+  try {
+    const body = f ? await rawBodyOf(f, gh) : null;
+    if (!body) return 'unread';
+    return MARKED_LINE.test(body) ? 'marked' : 'clean';
+  } catch { return 'unread'; }
+}
+
+/** Deletes the state entry (a yes, no or unclear) and the row of every id in `gone`. Writes a file only when it changed. Returns the rows removed. */
+function applyVoid(store, files, gone) {
+  const entries = [...gone].filter((id) => VOIDABLE.includes(store.state[id]?.verdict));
+  entries.forEach((id) => { delete store.state[id]; });
+  const rows = store.rows.filter((r) => !gone.has(r?.id));
+  if (entries.length > 0) atomicWrite(files.state, store.state);
+  if (rows.length !== store.rows.length) atomicWrite(files.out, rows);
+  return store.rows.length - rows.length;
+}
+
+const voidText = (c) => `void-marked: checked ${c.checked}, voided ${c.voided} (yes ${c.yes}, no ${c.no}, unclear ${c.unclear}), rows removed ${c.rowsRemoved}, not checked ${c.notChecked}, clean ${c.clean}`;
+
+/** No judge call, counts only. Exit 1 when a body could not be read (not checked above 0): that verdict stays and a re-run reads it again. */
+async function voidMarkedCmd(args, rawDeps, io, files) {
+  const cfg = rawDeps.cfg ?? loadConfig();
+  const { wired: deps } = withCountedGh(rawDeps);
+  const byId = new Map((await loadCandidates(readDataset(args), deps, cfg)).map((f) => [f.id, f]));
+  const store = loadStore(files);
+  const c = { checked: 0, voided: 0, yes: 0, no: 0, unclear: 0, rowsRemoved: 0, notChecked: 0, clean: 0 };
+  const gone = new Set();
+  for (const id of voidIdsOf(store)) {
+    const mark = await markOf(byId.get(id), deps.gh);
+    if (mark === 'unread') { c.notChecked += 1; continue; }
+    c.checked += 1;
+    if (mark === 'clean') { c.clean += 1; continue; }
+    gone.add(id);
+    c.voided += 1;
+    c[verdictOfId(store, id)] += 1;
+  }
+  c.rowsRemoved = applyVoid(store, files, gone);
+  io.stdout(args.json ? JSON.stringify(c, null, 1) : voidText(c));
+  return c.notChecked > 0 ? 1 : 0;
+}
+
 // ---------- the command line ----------
 
 const USAGE = [
   'usage: node scripts/eval/review-eval/adjudicate-cr.mjs plan [--dataset <file>] [--out <file>] [--json]',
+  '       node scripts/eval/review-eval/adjudicate-cr.mjs void-marked [--dataset <file>] [--out <file>] [--state <file>] [--json]',
   '       node scripts/eval/review-eval/adjudicate-cr.mjs run --limit <n> --confirm-headless [--dataset <file>] [--out <file>] [--state <file>]',
   '                                                          [--linktype <file>] [--records-dir <dir>] [--json]',
   '  --dataset defaults to the dataset path of mine-szz.mjs (the home folder, continuous-claude/.claudedocs).',
   '  plan prints counts only and makes no judge call.',
   '  run makes at most n judge calls (Opus, effort high), one for each finding not yet adjudicated. It never runs without --confirm-headless.',
-  '  A finding with no hunk or comment text uses no call. The first refused prompt (marked in the state, skipped later) or a judge error',
-  '  cap or served-model stops the run: the rows done so far are written, exit 1. So do 3 failed calls in a row (timeout or an answer that',
-  '  does not parse), or a failure rate over 20 percent once 5 calls ran.',
+  '  A finding with no hunk or comment text uses no call. A refused prompt is never sent: it is marked in the state (a kind, no text) and skipped',
+  '  later, and 3 refusals in one run stop it. The kinds: pr-number, fix-title, fix-sha, sha, repo-url, pr-term, comment-id, finding-key, fix-marker.',
+  '  fix-marker: an outcome word in the comment text (addressed, resolved, fixed in, outdated, a check mark), or a check mark or "addressed in',
+  '  commit" anywhere in the prompt. The comment text first loses its HTML comment blocks and every "Addressed in commit" line (counted).',
+  '  A judge error (cap, served-model, no-claude, lock) stops the run: the rows done so far are written, exit 1. So do 3 failed calls in a row',
+  '  (timeout or an answer that does not parse), or a failure rate over 20 percent once 5 calls ran.',
+  '  An answer that does not parse is asked once more at once (inside --limit; never in --checkpoint). Unparsed twice: the finding is stored as',
+  '  unparsed (no text) and later runs skip it. void-marked [--dataset <file>] [--json]: no judge call; for each verdict and row, reads the live',
+  '  comment and deletes both when it holds "addressed in commit". Counts only. A body it cannot read stays and is counted (not checked): exit 1.',
+  '  Every run mode checks each call against the canary baseline. run (not --checkpoint) is refused (exit 2) until `run --canary --confirm-headless`',
+  '  has kept a baseline for this prompt version (adjudicate-cr-v3). A failed canary deletes the kept baseline.',
   '  A finding on an answer-key path (scripts/github/lib/answer-key.mjs) is never sent (skipped: answer-key path). A hunk is cut at 120 lines.',
   '  --dispositions <file> (run, plan): a JSON array of disposition records (key, verdict, disposition). It feeds the sidecar and the agreement counts only; the prompt never holds it.',
-  '  --first-call-only makes exactly one call (--limit is not needed) and the summary shows its proof: served model, effort, markers seen.',
+  '  --first-call-only makes exactly one call (--limit is not needed, no retry) and the summary shows its proof: served model, effort, markers seen.',
   '  run --canary --confirm-headless makes call 0 only, as stream-json: a prompt with no finding text. It passes on an Opus model, a clean smoke',
   '  report (seed.mjs smokeReport) and no hook event or marker outside the answer. The answer is reported (length, NONE, kind counts), not a gate.',
   '  The canary also needs its last line USER: UNKNOWN and input tokens at least 2000 under 8788 (the user CLAUDE.md is excluded).',
-  '  A pass keeps its input tokens in the sidecar as the baseline; a later call passes only at most baseline + prompt chars / 1.5 (margin printed).',
-  '  run --checkpoint --confirm-headless: the canary, then calls 1 to 5, each checked; the first failed check stops the run (exit 1).',
+  '  A pass keeps its input tokens and the prompt version in the sidecar as the baseline; a later call passes only at most baseline + prompt chars / 1.5 (margin printed).',
+  '  run --checkpoint --confirm-headless: its own canary, then calls 1 to 5, each checked; the first failed check, or the first call with no verdict, stops the run (exit 1).',
   '  A failed canary prints a fixed stop line, the answer length and whether it equals NONE; never the answer.',
   '  lines [--write] [--dataset <file>]: gives start_line and end_line to Major findings that have none, from the comment data (gh). Counts only.',
   '  Without --write it is a dry run. A finding that still has no line is not sent by run (skipped: no line data). The judge prompt holds no disposition.',
@@ -893,7 +1052,7 @@ const USAGE = [
 
 const VALUE_FLAGS = { '--dataset': 'dataset', '--out': 'out', '--state': 'state', '--records-dir': 'recordsDir', '--linktype': 'linktype', '--limit': 'limit', '--dispositions': 'dispositions' };
 const BOOL_FLAGS = { '--confirm-headless': 'confirm', '--json': 'json', '--first-call-only': 'firstCallOnly', '--canary': 'canary', '--checkpoint': 'checkpoint', '--write': 'write' };
-const COMMANDS = { plan: planCmd, run: runCmd, lines: linesCmd };
+const COMMANDS = { plan: planCmd, run: runCmd, lines: linesCmd, 'void-marked': voidMarkedCmd };
 const CANARY_KEY = '_canary';
 const CHECKPOINT_CALLS = 5;
 
