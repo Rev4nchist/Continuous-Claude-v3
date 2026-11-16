@@ -85,9 +85,12 @@ const cleanBody = (text) => scrubPrs(stripLinks(text));
  */
 export const OUTCOME_WORDS_RE = /addressed in commits?|\baddressed\b|\bresolved\b|\bfixed in\b|\boutdated\b|[✅✔☑]/i;
 export const MARKER_FORMS_RE = /addressed in commits?|[✅✔☑]/i;
-const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+// Built from strings, not regex literals: a regex literal that holds the HTML comment opener makes the semgrep and opengrep
+// JavaScript parsers fail the whole file (a scan-error in the CI ratchet).
+const OPENER = '<' + '!--';
+const HTML_COMMENT = new RegExp(`${OPENER}[\\s\\S]*?--${'>'}`, 'g');
 /** An HTML comment with no end runs to the end of the text (seat ruling 2026-11-15): all of it is hidden text. */
-const OPEN_COMMENT = /<!--[\s\S]*$/;
+const OPEN_COMMENT = new RegExp(`${OPENER}[\\s\\S]*$`);
 const MARKED_LINE = /addressed in commits?/i;
 
 /**
