@@ -5,14 +5,21 @@
 //  replay needs --pr and --round (or --all-majors) -> missing args start a run
 //  labels export over the week cap exits 2      -> main maps the refusal to 0
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
-import { main } from './cli.mjs';
+import { after, test } from 'node:test';
+import { goldView, main } from './cli.mjs';
 
-const tmp = () => mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'cli-'));
+// Every folder a test makes is recorded here and removed after the run: only folders this file created.
+const made = [];
+const tmp = () => {
+  const dir = mkdtempSync(path.join(process.env.REVIEW_EVAL_TMP || os.tmpdir(), 'cli-'));
+  made.push(dir);
+  return dir;
+};
+after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 const quiet = () => { const out = []; return { out, stdout: (s) => out.push(String(s)), stderr: (s) => out.push(String(s)) }; };
 
 test('an unknown subcommand exits 1', async () => {
@@ -399,4 +406,348 @@ test('budget without --dataset exits 2 and names the flag', async () => {
   const io = quiet();
   assert.equal(await main(['budget', '--ledger', path.join(tmp(), 'l.jsonl')], { ...io, cfg: loadConfig() }), 2);
   assert.match(io.out.join('\n'), /--dataset/);
+});
+
+// ---------- pass-through commands, gold report, goldView (card re-gold-assemble phase 1) ----------
+
+const fakeMains = (calls, exits) => Object.fromEntries(Object.entries(exits).map(([name, exit]) => [name, async (a) => { calls.push([name, a]); return exit; }]));
+
+test('mine, seed and dispositions pass argv.slice(1) to their own main and return its exit code (breaks if the command name is passed along, the args are dropped, or the exit is mapped to 0)', async () => {
+  const calls = [];
+  const io = { ...quiet(), cfg: {}, mains: fakeMains(calls, { mine: 0, seed: 2, dispositions: 3 }) };
+  assert.equal(await main(['mine', '--from', '1', '--flag'], io), 0);
+  assert.equal(await main(['seed', 'create', '--x', 'y'], io), 2);
+  assert.equal(await main(['dispositions', 'sweep', '--json'], io), 3);
+  assert.deepEqual(calls, [['mine', ['--from', '1', '--flag']], ['seed', ['create', '--x', 'y']], ['dispositions', ['sweep', '--json']]]);
+});
+
+test('adjudicate-cr passes argv.slice(1) to its own main and returns its exit code (breaks if the command name is passed along, the args are dropped, or the exit is mapped to 0)', async () => {
+  const calls = [];
+  const io = { ...quiet(), cfg: {}, mains: fakeMains(calls, { 'adjudicate-cr': 2 }) };
+  assert.equal(await main(['adjudicate-cr', 'run', '--limit', '3', '--confirm-headless'], io), 2);
+  assert.deepEqual(calls, [['adjudicate-cr', ['run', '--limit', '3', '--confirm-headless']]]);
+  io.mains = fakeMains(calls, { 'adjudicate-cr': 0 });
+  assert.equal(await main(['adjudicate-cr', 'plan', '--json'], io), 0);
+  assert.deepEqual(calls.at(-1), ['adjudicate-cr', ['plan', '--json']]);
+});
+
+const SHA = 'a'.repeat(40);
+const goldRow = (i, over = {}) => ({ id: `fx-${i}`, source: 'A', suite: 'regression', split: 'dev', target: { pr: 900000 + i, round: 1, sha40: SHA }, file: 'src/a.mjs', severity: 'major', linkType: 'within-hunk', labels: [], provenance: { fx: true }, ...over });
+const goldRun = (from, count, over = {}) => Array.from({ length: count }, (_, k) => goldRow(from + k, over));
+const B_PROV = { test: 'node --test fx.test.mjs', failureSha256: 'b'.repeat(64) };
+/** 20 A + 15 B + 15 C majors, one CR critical: majors 51, majors across A/B/C 50. Every done-when bar is met. */
+function baseRows() {
+  const c = goldRun(36, 15, { source: 'C', suite: 'capability', split: 'reserve' }).map((r) => ({ ...r, target: { ...r.target, repo: 'fx/repo' } }));
+  return [...goldRun(1, 20), ...goldRun(21, 15, { source: 'B', suite: 'capability', split: 'holdout', provenance: { ...B_PROV } }), ...c, goldRow(51, { source: 'CR', severity: 'critical' })];
+}
+function goldDir(rows, controls = 30) {
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'rows.json'), JSON.stringify(rows));
+  const list = Array.from({ length: controls }, (_, i) => ({ id: `fx-c${i}`, split: 'dev', target: { pr: 800000 + i, round: 1, sha40: SHA }, provenance: { fx: true } }));
+  writeFileSync(path.join(dir, 'clean-controls.json'), JSON.stringify(list));
+  return dir;
+}
+/** records: the engine records the report reads (io.readEngineRecords); the default is none, so no test reads the real records folder. */
+async function report(rows, { controls = 30, extra = [], io = {}, records = [] } = {}) {
+  const sink = quiet();
+  const code = await main(['gold', 'report', '--gold-dir', goldDir(rows, controls), ...extra], { ...sink, cfg: {}, readEngineRecords: () => records, ...io });
+  return { code, text: sink.out.join('\n') };
+}
+
+test('gold report counts rows by source, suite, severity and split, majors by source, Gold B tests and controls (breaks if a count reads the wrong field or a zero key is dropped)', async () => {
+  const { code, text } = await report(baseRows(), { extra: ['--json'] });
+  const r = JSON.parse(text);
+  assert.equal(code, 0);
+  assert.deepEqual(r.bySource, { A: 20, B: 15, C: 15, CR: 1 });
+  assert.deepEqual(r.bySuite, { regression: 21, capability: 30 });
+  assert.deepEqual(r.bySeverity, { critical: 1, major: 50, minor: 0 });
+  assert.deepEqual(r.bySplit, { dev: 21, holdout: 15, reserve: 15 });
+  assert.deepEqual(r.majors, { total: 51, bySource: { A: 20, B: 15, C: 15, CR: 1 } });
+  assert.deepEqual(r.goldB, { rows: 15, withBreakingTest: 15, missingBreakingTest: 0 });
+  assert.equal(r.cleanControls, 30);
+  const plain = (await report(baseRows())).text;
+  assert.match(plain, /source A 20, B 15, C 15, CR 1/);
+  assert.match(plain, /clean controls 30/);
+});
+
+test('gold report never prints a row id, a PR number or a sha, as text or JSON (breaks if the report lists rows or targets)', async () => {
+  for (const extra of [[], ['--json']]) {
+    const { code, text } = await report(baseRows(), { extra });
+    assert.equal(code, 0);
+    assert.match(text, extra.length ? /"rows": 51/ : /gold rows 51/);
+    assert.doesNotMatch(text, /fx-/);
+    assert.doesNotMatch(text, /9000\d\d|8000\d\d/);
+    assert.equal(text.includes(SHA), false);
+    assert.equal(text.includes('b'.repeat(64)), false);
+  }
+});
+
+const BARS = { majors: 'majors across A/B/C >= 50', breaking: 'every Gold B row has a breaking test', regression: 'regression suite non-empty', capability: 'capability suite non-empty', controls: 'clean controls >= 30' };
+
+test('gold report exits 0 and prints PASS on every done-when line when all bars are met (breaks if a bar is off by one or a PASS line is missing)', async () => {
+  const { code, text } = await report(baseRows());
+  assert.equal(code, 0);
+  for (const name of Object.values(BARS)) assert.ok(text.split('\n').some((l) => l.startsWith(`PASS ${name}`)), name);
+  assert.doesNotMatch(text, /FAIL/);
+});
+
+const edges = {
+  majors: () => { const rows = baseRows(); rows[40] = { ...rows[40], severity: 'minor' }; return { rows }; },
+  breaking: () => { const rows = baseRows(); rows[25] = { ...rows[25], provenance: { failureSha256: B_PROV.failureSha256 } }; return { rows }; },
+  regression: () => ({ rows: baseRows().map((r) => ({ ...r, suite: 'capability' })) }),
+  capability: () => ({ rows: baseRows().map((r) => ({ ...r, suite: 'regression' })) }),
+  controls: () => ({ rows: baseRows(), controls: 29 }),
+};
+
+for (const [key, make] of Object.entries(edges)) {
+  test(`gold report exits 3 when only "${BARS[key]}" is missed at its edge (breaks if the bar is off by one, reads the wrong field, or fails another line)`, async () => {
+    const { rows, controls } = make();
+    // One gold target has an engine record, so an empty regression suite is a real miss (map, re-gold-assemble Done when).
+    const { code, text } = await report(rows, { controls, records: [{ pr: 900001, findings: [] }] });
+    assert.equal(code, 3);
+    const fails = text.split('\n').filter((l) => l.startsWith('FAIL'));
+    assert.equal(fails.length, 1);
+    assert.ok(fails[0].includes(BARS[key]), fails[0]);
+  });
+}
+
+test('an empty regression suite with 0 gold targets that have an engine record prints NOT YET and does not fail the report (breaks if it still fails, or prints PASS)', async () => {
+  const rows = baseRows().map((r) => ({ ...r, suite: 'capability' }));
+  const { code, text } = await report(rows, { records: [{ pr: 123, findings: [] }] });
+  assert.equal(code, 0);
+  assert.ok(text.split('\n').includes('NOT YET regression suite non-empty (not yet possible: 0 gold targets have an engine record)'), text);
+  assert.doesNotMatch(text, /FAIL/);
+  const json = JSON.parse((await report(rows, { extra: ['--json'] })).text);
+  const bar = json.bars.find((b) => b.name === BARS.regression);
+  assert.deepEqual({ pass: bar.pass, state: bar.state, engineTargets: json.engineTargets }, { pass: true, state: 'not-yet', engineTargets: 0 });
+});
+
+test('the regression row prints the count of gold targets with an engine record, matched by pull request, and passes on a non-empty suite (breaks if the count reads the wrong field or a record of another PR counts)', async () => {
+  const records = [{ pr: 900001, findings: [] }, { pr: 900002, findings: [] }, { pr: 900002, findings: [] }, { pr: 7, findings: [] }];
+  const { code, text } = await report(baseRows(), { records });
+  assert.equal(code, 0);
+  assert.match(text, /PASS regression suite non-empty \(21; gold targets with an engine record 2\)/);
+});
+
+test('a Gold C row of another repository never counts as a target with an engine record, even when its number equals a record number; an A or CR row with that number counts (breaks if the match ignores target.repo)', async () => {
+  const rows = baseRows().map((r) => ({ ...r, suite: 'capability' }));
+  const cRow = rows.find((r) => r.source === 'C');
+  const onlyC = await report(rows, { records: [{ pr: cRow.target.pr, findings: [] }] });
+  assert.equal(onlyC.code, 0, 'the C number matches a record of this repository by chance: still 0 targets');
+  assert.match(onlyC.text, /NOT YET regression suite non-empty \(not yet possible: 0 gold targets have an engine record\)/);
+  const crRow = rows.find((r) => r.source === 'CR');
+  const aRow = rows.find((r) => r.source === 'A');
+  for (const t of [crRow, aRow]) {
+    const hit = await report(rows, { records: [{ pr: t.target.pr, findings: [] }] });
+    assert.equal(hit.code, 3, `${t.source} row counts`);
+    assert.match(hit.text, /FAIL regression suite non-empty \(0; gold targets with an engine record 1\)/);
+  }
+  const range = rows.map((r) => (r === aRow ? { ...r, target: { range: `${'c'.repeat(40)}..${'d'.repeat(40)}` } } : r));
+  assert.equal((await report(range, { records: [{ pr: aRow.target.pr, findings: [] }] })).code, 0, 'a range target has no pull request');
+});
+
+test('a failed read of the engine records is a FAIL of the regression row, never NOT YET (breaks if a read error counts as 0 targets)', async () => {
+  const rows = baseRows().map((r) => ({ ...r, suite: 'capability' }));
+  const { code, text } = await report(rows, { io: { readEngineRecords: () => { throw new Error('EACCES PR 900001'); } } });
+  assert.equal(code, 3);
+  assert.ok(text.split('\n').includes('FAIL regression suite non-empty (engine records cannot be read)'), text);
+  assert.doesNotMatch(text, /NOT YET|EACCES|900001/);
+  const full = await report(baseRows(), { io: { readEngineRecords: () => { throw new Error('x'); } } });
+  assert.equal(full.code, 3, 'a failed read fails even with a non-empty suite: the count is unknown');
+});
+
+test('gold report reads the engine records of --records-dir; a missing folder is a failed read (breaks if the flag is ignored or a missing folder counts as no records)', async () => {
+  const rows = baseRows().map((r) => ({ ...r, suite: 'capability' }));
+  const sink = quiet();
+  const recDir = tmp();
+  const head = path.join(recDir, 'fx-branch', 'a'.repeat(40));
+  mkdirSync(head, { recursive: true });
+  writeFileSync(path.join(head, 'run.json'), JSON.stringify({ pr: 900001, head: 'a'.repeat(40), findings: [] }));
+  const code = await main(['gold', 'report', '--gold-dir', goldDir(rows), '--records-dir', recDir], { ...sink, cfg: {} });
+  assert.equal(code, 3, 'one target has a record and the suite is empty');
+  assert.match(sink.out.join('\n'), /FAIL regression suite non-empty \(0; gold targets with an engine record 1\)/);
+  const missing = quiet();
+  assert.equal(await main(['gold', 'report', '--gold-dir', goldDir(rows), '--records-dir', path.join(recDir, 'nope')], { ...missing, cfg: {} }), 3);
+  assert.match(missing.out.join('\n'), /FAIL regression suite non-empty \(engine records cannot be read\)/);
+  const empty = quiet();
+  assert.equal(await main(['gold', 'report', '--gold-dir', goldDir(rows), '--records-dir'], { ...empty, cfg: {} }), 2, '--records-dir needs a value');
+});
+
+test('gold report counts a Gold B row as tested only when provenance.test and provenance.failureSha256 are both present (breaks if one field is enough)', async () => {
+  const rows = baseRows();
+  rows[20] = { ...rows[20], provenance: { test: B_PROV.test } };
+  rows[21] = { ...rows[21], provenance: { failureSha256: B_PROV.failureSha256 } };
+  const r = JSON.parse((await report(rows, { extra: ['--json'] })).text);
+  assert.deepEqual(r.goldB, { rows: 15, withBreakingTest: 13, missingBreakingTest: 2 });
+});
+
+test('gold D reports fixed over records with a disposition and never changes the exit (breaks if unlabeled records count, a verdict-only record is ignored, or the bars move)', async () => {
+  const dispositions = [{ disposition: 'fixed' }, { disposition: 'fixed' }, { verdict: 'real' }, { disposition: 'wrong' }, { disposition: 'unlabeled' }];
+  const text = await report(baseRows(), { io: { dispositions } });
+  assert.equal(text.code, 0);
+  assert.match(text.text, /gold D[^\n]*0\.75[^\n]*3\/4/);
+  const json = JSON.parse((await report(baseRows(), { extra: ['--json'], io: { dispositions } })).text);
+  assert.deepEqual(json.goldD, { value: 0.75, fixed: 3, withDisposition: 4 });
+});
+
+test('gold D with no records prints the no-records line and no number (breaks if it prints 0 or NaN)', async () => {
+  for (const io of [{}, { dispositions: [] }]) {
+    const { text } = await report(baseRows(), { io });
+    assert.match(text, /gold D: no disposition records/);
+    assert.doesNotMatch(text, /gold D[^\n]*\d/);
+  }
+  const json = JSON.parse((await report(baseRows(), { extra: ['--json'] })).text);
+  assert.equal(json.goldD, null);
+});
+
+test('gold with no subcommand exits 2 and a bad gold folder exits 1 (breaks if a usage error or a load error maps to 0)', async () => {
+  assert.equal(await main(['gold'], { ...quiet(), cfg: {} }), 2);
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'rows.json'), '{ not json');
+  assert.equal(await main(['gold', 'report', '--gold-dir', dir], { ...quiet(), cfg: {} }), 1);
+});
+
+test('goldView adds truth.note to a Gold B row with provenance.truthNote and changes nothing else (breaks if A or C rows get truth, a B row with no truthNote gets one, or the input is mutated)', () => {
+  const b = goldRow(1, { source: 'B', provenance: { ...B_PROV, truthNote: 'the bound flips' } });
+  const bNo = goldRow(2, { source: 'B', provenance: { ...B_PROV } });
+  const bNum = goldRow(3, { source: 'B', provenance: { ...B_PROV, truthNote: 7 } });
+  const a = goldRow(4, { provenance: { truthNote: 'not a B row' } });
+  const c = goldRow(5, { source: 'C' });
+  const rows = [b, bNo, bNum, a, c];
+  const before = JSON.stringify(rows);
+  const out = goldView(rows);
+  assert.equal(JSON.stringify(rows), before);
+  assert.deepEqual(out[0].truth, { note: 'the bound flips' });
+  assert.deepEqual({ ...out[0], truth: undefined }, { ...b, truth: undefined });
+  assert.deepEqual(out.slice(1), [bNo, bNum, a, c]);
+  assert.equal(Object.hasOwn(out[1], 'truth'), false);
+  assert.equal(Object.hasOwn(b, 'truth'), false);
+});
+
+test('the unknown-command usage lists mine, seed, dispositions and gold (breaks if a new command is missing from the usage line)', async () => {
+  const io = quiet();
+  assert.equal(await main(['bogus'], { ...io, cfg: {} }), 1);
+  for (const name of ['mine', 'seed', 'dispositions', 'gold', 'adjudicate-cr']) assert.match(io.out.join('\n'), new RegExp(`\\b${name}\\b`));
+});
+
+// ---------- seat fix round (card re-gold-assemble phase 2) ----------
+
+const TOOL_NAMES = ['mine', 'seed', 'dispositions', 'adjudicate-cr'];
+const BOOM = 'boom PR 9001 comment 123456789 key 9001:123456789';
+
+test('the Gold B bar fails when there is no Gold B row (breaks if zero rows count as "every row has a breaking test")', async () => {
+  const rows = [...baseRows().filter((r) => r.source !== 'B'), ...goldRun(100, 15)];
+  const { code, text } = await report(rows);
+  assert.equal(code, 3);
+  const fails = text.split('\n').filter((l) => l.startsWith('FAIL'));
+  assert.equal(fails.length, 1);
+  assert.ok(fails[0].includes(BARS.breaking), fails[0]);
+});
+
+const dispositionsFile = (content) => {
+  const file = path.join(tmp(), 'dispositions.json');
+  writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
+  return file;
+};
+
+test('gold report --dispositions reads a JSON array of records for Gold D (breaks if the flag is ignored or the file is not read)', async () => {
+  const file = dispositionsFile([{ disposition: 'fixed' }, { disposition: 'wrong' }, { verdict: 'real' }, { disposition: 'wont_fix' }]);
+  const { code, text } = await report(baseRows(), { extra: ['--json', '--dispositions', file] });
+  assert.equal(code, 0);
+  assert.deepEqual(JSON.parse(text).goldD, { value: 0.5, fixed: 2, withDisposition: 4 });
+});
+
+test('gold report --dispositions accepts the sweep file shape { findings: [records], unparsed }, counts it, and prints no key or number; an object with no findings array is exit 1 (breaks if only a bare array is read)', async () => {
+  const records = [{ key: '9001:123456789', pr: 9001, disposition: 'fixed', verdict: 'real' }, { key: '9001:123456790', disposition: 'wrong' }, { key: '9002:5', verdict: 'real' }, { key: '9002:6', disposition: 'wont_fix' }];
+  const file = dispositionsFile({ generatedAt: 'x', findings: records, unparsed: [{ key: '9001:1', reason: 'bad_shape' }] });
+  const { code, text } = await report(baseRows(), { extra: ['--json', '--dispositions', file] });
+  assert.equal(code, 0);
+  assert.deepEqual(JSON.parse(text).goldD, { value: 0.5, fixed: 2, withDisposition: 4 });
+  assert.doesNotMatch(text, /9001|123456789|9002/);
+  for (const bad of [{ findings: 'x' }, { records }, { unparsed: [] }]) {
+    const res = await report(baseRows(), { extra: ['--dispositions', dispositionsFile(bad)] });
+    assert.equal(res.code, 1);
+    assert.match(res.text, /--dispositions/);
+  }
+});
+
+test('gold report --dispositions with no value, or a value that starts with --, is a usage error with exit 2 (breaks if the next flag is taken as the file)', async () => {
+  for (const extra of [['--dispositions'], ['--dispositions', '--json']]) {
+    const { code, text } = await report(baseRows(), { extra });
+    assert.equal(code, 2, extra.join(' '));
+    assert.match(text, /--dispositions/);
+  }
+});
+
+test('gold report --dispositions with a file that does not parse, or is not an array, exits 1 with a fixed message that holds no file content (breaks if the parse error text is printed)', async () => {
+  for (const content of ['SECRETCONTENT { not json 9001', '{"SECRETCONTENT": 9001}']) {
+    const { code, text } = await report(baseRows(), { extra: ['--dispositions', dispositionsFile(content)] });
+    assert.equal(code, 1);
+    assert.match(text, /--dispositions/);
+    assert.doesNotMatch(text, /SECRETCONTENT|9001|at position|token/i);
+  }
+});
+
+test('Gold D counts only fixed, wont_fix and wrong, and maps a verdict through VERDICT_OF (breaks if unlabeled, an unknown word or an unknown verdict counts)', async () => {
+  const dispositions = [{ disposition: 'fixed' }, { disposition: 'garbage' }, { disposition: 'unlabeled' }, { verdict: 'noise' }, { verdict: 'unclear' }, { verdict: 'bogus' }, { disposition: 'wont_fix' }];
+  const json = JSON.parse((await report(baseRows(), { extra: ['--json'], io: { dispositions } })).text);
+  assert.deepEqual(json.goldD, { value: 0.25, fixed: 1, withDisposition: 4 });
+});
+
+test('a tool that throws prints one fixed line, exit 1, and never the error text (breaks if e.message reaches stdout or stderr)', async () => {
+  for (const name of TOOL_NAMES) {
+    const io = { ...quiet(), cfg: {}, mains: { [name]: async () => { throw new Error(BOOM); } } };
+    assert.equal(await main([name, 'x'], io), 1);
+    assert.equal(io.out.join('\n'), `${name} failed (internal)`);
+    for (const id of ['9001', '123456789', 'boom']) assert.equal(io.out.join('\n').includes(id), false, id);
+  }
+});
+
+test('mine, seed, dispositions, gold and adjudicate-cr run before the config is read: a config that throws blocks none of them and its text is never printed (breaks if loadConfig runs first)', async () => {
+  const calls = [];
+  const io = { ...quiet(), loadConfig: () => { throw new Error('{ not json PR 9001'); }, mains: fakeMains(calls, { mine: 0, seed: 2, dispositions: 0, 'adjudicate-cr': 0 }) };
+  assert.equal(await main(['seed', '--config', path.join(tmp(), 'bad.json'), 'plan'], io), 2);
+  assert.deepEqual(calls, [['seed', ['--config', calls[0][1][1], 'plan']]]);
+  for (const name of ['mine', 'dispositions', 'adjudicate-cr']) assert.equal(await main([name, '--x'], io), 0);
+  assert.equal(calls.length, 4);
+  const sink = quiet();
+  assert.equal(await main(['gold', 'report', '--gold-dir', goldDir(baseRows())], { ...sink, loadConfig: io.loadConfig, readEngineRecords: () => [] }), 0);
+  assert.match(sink.out.join('\n'), /gold rows 51/);
+  assert.equal(io.out.join('\n').includes('9001'), false);
+});
+
+test('a config that fails to load for another command exits 2 with a fixed line and no parse text (breaks if e.message is printed)', async () => {
+  const io = { ...quiet(), loadConfig: () => { throw new Error('Unexpected token SECRET at position 9001'); } };
+  assert.equal(await main(['score', '--dir', tmp()], io), 2);
+  assert.equal(io.out.join('\n').includes('SECRET'), false);
+  assert.match(io.out.join('\n'), /cannot read the config/);
+});
+
+for (const [name, usage] of [['mine', /mine-szz\.mjs/], ['seed', /seed\.mjs <verb>/], ['dispositions', /dispositions\.mjs/], ['adjudicate-cr', /adjudicate-cr\.mjs/]]) {
+  test(`${name} --help reaches the real module and its usage text comes through io.stdout or io.stderr (breaks if the tool is not given the output hooks, or the command name is passed along)`, async () => {
+    const io = quiet();
+    const code = await main([name, '--help'], { ...io });
+    assert.equal(code, 0);
+    assert.match(io.out.join('\n'), usage);
+  });
+}
+
+test('--gold-dir with no value or a value that starts with -- is refused with exit 2, for gold report and budget (breaks if it falls back to the real gold folder)', async () => {
+  const ds = path.join(tmp(), 'ds.json');
+  writeFileSync(ds, JSON.stringify({ prs: [], findings: [] }));
+  const cases = [['budget', '--dataset', ds, '--gold-dir'], ['budget', '--dataset', ds, '--gold-dir', '--json'], ['gold', 'report', '--gold-dir'], ['gold', 'report', '--gold-dir', '--json']];
+  for (const argv of cases) {
+    const io = quiet();
+    assert.equal(await main(argv, { ...io, cfg: {} }), 2, argv.join(' '));
+    assert.match(io.out.join('\n'), /--gold-dir needs a value/);
+  }
+});
+
+test('a gold file that fails validateRow gives an error that holds no row id (breaks if the GoldError text carries an id or a value)', async () => {
+  const dir = tmp();
+  writeFileSync(path.join(dir, 'rows.json'), JSON.stringify([goldRow('x', { id: 'fx-secret-9001', severity: 'huge' })]));
+  const io = quiet();
+  assert.equal(await main(['gold', 'report', '--gold-dir', dir], { ...io, cfg: {} }), 1);
+  assert.match(io.out.join('\n'), /severity/);
+  assert.doesNotMatch(io.out.join('\n'), /fx-secret|9001|huge/);
 });
