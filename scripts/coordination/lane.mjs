@@ -64,7 +64,7 @@
  *                                                       # release or done ends it (state <id> active resumes). A hold of more than 7 days is release --blocked, not a park.
  *                                                       # Warns when the active hook ~/.claude/hooks/dist/lane-context.mjs lacks GREATEST(lease_expires_at (the old hook cuts a park)
  *   node scripts/coordination/lane.mjs done <id> [--note "evidence"]   # plain: meets no dependency; a lane already met is not written
- *   node scripts/coordination/lane.mjs done <id> --merged <sha> [--note "..."]   # <sha> must be on local main of the board root (the cwd only when the board has no root); meets dependencies
+ *   node scripts/coordination/lane.mjs done <id> --merged <sha> [--note "..."]   # <sha> must be on local main of the board root (the cwd only when the board has no root); meets dependencies; then frees the caller's own file claims on the merged files
  *   node scripts/coordination/lane.mjs done <id> --no-pr --evidence <path> [--note "..."]   # <path>: a file under .claudedocs/e2e-<id>/; records the main SHA
  *                                                       # a rule refusal prints `REFUSED done <id> [token] -- text` and exits 4; --merged, --evidence, --reason need a value
  *   node scripts/coordination/lane.mjs renew            # push my leases out to now+90m; a later lease (a park) stays
@@ -125,6 +125,7 @@ import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, res
 import { planKanban } from './kanban-apply.mjs';
 import { parseBand, parseExpect, parseP0List, parsePriority } from './lane-band.mjs';
 import { landedShaSql, laneMetSql, openDepSql, waitsOnSql } from './lane-dep.mjs';
+import { freeMergedClaims } from './lane-claims-free.mjs';
 import { findCycle, parseSeedFile } from './lane-seed-file.mjs';
 import { bandTag, laneOrderSql } from './lane-sort.mjs';
 import { tickMarker } from './tick-marker.mjs';
@@ -813,6 +814,39 @@ async function writeDone(c, { board, id, myId, note, body, detail, owner }) {
   });
 }
 
+/** Other holders of merged files that are live: active in the last 5 minutes, or holding a live lease. */
+async function liveHolders(c, holders) {
+  const ids = [...holders.keys()];
+  if (!ids.length) return [];
+  const { rows } = await c.query(
+    `SELECT u.sid FROM unnest($1::text[]) AS u(sid)
+      WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.id = u.sid AND s.ended_at IS NULL
+                      AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - interval '5 minutes')
+         OR EXISTS (SELECT 1 FROM file_claims fc WHERE fc.session_id = u.sid AND fc.expires_at > NOW())`,
+    [ids],
+  );
+  return rows.map((r) => ({ label: L(r.sid), count: holders.get(r.sid) }));
+}
+
+/**
+ * After the done is committed: free the caller's own claims on the merged files (card coord-land-frees-claims).
+ * Never throws: a failed free must not fail the done or the land. It prints one note line instead.
+ */
+async function freeOwnMergedClaims(c, dir, merged, myId) {
+  try {
+    const r = freeMergedClaims({ dir, sha: merged, sessionId: myId, repoRoot: REPO });
+    // The holder lookup only names peers. Its failure must not hide the deletes that are already done.
+    const others = await liveHolders(c, r.holders).catch(() => []);
+    if (r.freed) process.stderr.write(`[lane] note: freed ${r.freed} of your file claims on the merged files\n`);
+    if (r.dirty) process.stderr.write(`[lane] note: kept the claims on ${r.dirty} merged file(s) with uncommitted work in a worktree\n`);
+    for (const o of others) process.stderr.write(`[lane] note: ${o.label} holds ${o.count} merged file(s); ask it to free them (M4.11)\n`);
+    return { freed: r.freed, kept: r.kept, dirty: r.dirty, others };
+  } catch (e) {
+    process.stderr.write(`[lane] note: file claims not freed (${String(e?.message ?? e).split('\n')[0]})\n`);
+    return { freed: 0, kept: 0, dirty: 0, others: [], error: String(e?.message ?? e) };
+  }
+}
+
 /** `done <id> --merged <sha>` and `done <id> --no-pr --evidence <path>`. Git and the evidence rule run before any write. */
 async function doneLanded(c) {
   const myId = me();
@@ -832,7 +866,8 @@ async function doneLanded(c) {
   const detail = { state: 'done', merged, main, ...(noPr ? { noPr: true, evidence } : {}) };
   const body = `${id} -> done (${how})${note ? ` (${note})` : ''}`;
   const row = await writeDone(c, { board, id, myId, note, body, detail, owner });
-  if (JSON_OUT) return { ...row, merged, main };
+  const claims = noPr ? null : await freeOwnMergedClaims(c, dir, merged, myId);
+  if (JSON_OUT) return { ...row, merged, main, ...(claims ? { claims } : {}) };
   return `${id} -> done (${noPr ? `no PR; main ${main.slice(0, 12)}` : `merged ${merged.slice(0, 12)} on main`}; released)`;
 }
 
