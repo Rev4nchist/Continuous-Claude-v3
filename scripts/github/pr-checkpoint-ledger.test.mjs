@@ -25,11 +25,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
+import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
+
+registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -54,7 +56,7 @@ const review = (head = HEAD) => ({ step: 'review', key: KEY, head });
 const pick = (pathway, head = HEAD) => ({ step: 'paid-round', key: `${KEY}!pick:${pathway}`, head });
 
 function setup({ ledger = true, labels = ['risk:high'], paths = FIVE, head = HEAD, config = {} } = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'ledger-'));
+  const dir = makeTempDir('ledger-');
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
   const factsFile = path.join(dir, 'facts.json');

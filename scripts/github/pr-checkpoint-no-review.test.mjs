@@ -16,11 +16,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
+
+registerTempCleanup();
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -106,7 +108,7 @@ test('N2: the none option at HIGH and CRITICAL says what READY needs (CI and pro
 // ---------- the CLI: --confirm ----------
 
 function confirm(pathway, by, { paths, labels = [] }) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-noreview-'));
+  const dir = makeTempDir('checkpoint-noreview-');
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
   const factsFile = path.join(dir, 'facts.json');

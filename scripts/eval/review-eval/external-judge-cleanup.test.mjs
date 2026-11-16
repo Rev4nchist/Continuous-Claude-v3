@@ -31,7 +31,7 @@ function runTarget(beforeRun) {
   const env = { ...process.env, TEMP: home, TMP: home, TMPDIR: home };
   // A child that inherits the runner context would report to this runner instead of printing its own result.
   for (const k of Object.keys(env)) if (k.startsWith('NODE_TEST')) delete env[k];
-  const child = spawnSync(process.execPath, ['--test', TARGET], { env, encoding: 'utf8', timeout: 120_000 });
+  const child = spawnSync(process.execPath, ['--test', '--test-reporter=tap', TARGET], { env, encoding: 'utf8', timeout: 120_000 });
   return { home, child };
 }
 

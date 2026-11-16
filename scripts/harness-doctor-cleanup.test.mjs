@@ -27,7 +27,7 @@ function runTarget() {
   mkdirSync(foreign);
   const env = { ...process.env, TEMP: scratch, TMP: scratch, TMPDIR: scratch };
   delete env.NODE_TEST_CONTEXT; // else the child runs as a subtest of this run and prints no summary
-  const args = ['--test', ...PATTERNS.flatMap((p) => ['--test-name-pattern', p]), TARGET];
+  const args = ['--test', '--test-reporter=tap', ...PATTERNS.flatMap((p) => ['--test-name-pattern', p]), TARGET];
   const r = spawnSync(process.execPath, args, { env, encoding: 'utf8', windowsHide: true, timeout: 240000 });
   return { scratch, foreign, r };
 }
