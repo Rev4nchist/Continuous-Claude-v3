@@ -86,6 +86,8 @@ const cleanBody = (text) => scrubPrs(stripLinks(text));
 export const OUTCOME_WORDS_RE = /addressed in commits?|\baddressed\b|\bresolved\b|\bfixed in\b|\boutdated\b|[✅✔☑]/i;
 export const MARKER_FORMS_RE = /addressed in commits?|[✅✔☑]/i;
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+/** An HTML comment with no end runs to the end of the text (seat ruling 2026-11-15): all of it is hidden text. */
+const OPEN_COMMENT = /<!--[\s\S]*$/;
 const MARKED_LINE = /addressed in commits?/i;
 
 /**
@@ -94,10 +96,13 @@ const MARKED_LINE = /addressed in commits?/i;
  * { text, lines, blocks }: the counts are of what was dropped.
  */
 export function stripBody(body) {
-  const noHtml = String(body ?? '').replace(HTML_COMMENT, '');
+  const raw = String(body ?? '');
+  const closed = raw.replace(HTML_COMMENT, '');
+  const noHtml = closed.replace(OPEN_COMMENT, '');
   const all = noHtml.split(/\r?\n/);
   const kept = all.filter((l) => !MARKED_LINE.test(l));
-  return { text: kept.join('\n'), lines: all.length - kept.length, blocks: (String(body ?? '').match(HTML_COMMENT) ?? []).length };
+  const blocks = (raw.match(HTML_COMMENT) ?? []).length + (noHtml === closed ? 0 : 1);
+  return { text: kept.join('\n'), lines: all.length - kept.length, blocks };
 }
 
 /**
@@ -463,12 +468,23 @@ async function rawBodyOf(f, gh) {
   return typeof c?.body === 'string' ? c.body.trim() : '';
 }
 
+/**
+ * The comment text the judge may see: the whole raw body is stripped first, then cut to BODY_LIMIT (seat ruling 2026-11-15). A cut
+ * before the strip could open a hidden block with no end, and the hidden blocks would use up the limit before the reviewer text.
+ * { text, lines, blocks } (the strip counts), or null when no text is left.
+ */
 async function bodyOf(f, gh) {
-  const text = await rawBodyOf(f, gh);
-  return text ? text.slice(0, BODY_LIMIT) : null;
+  const raw = await rawBodyOf(f, gh);
+  if (!raw) return null;
+  const s = stripBody(raw);
+  const text = s.text.trim().slice(0, BODY_LIMIT);
+  return text ? { text, lines: s.lines, blocks: s.blocks } : null;
 }
 
-/** { hunk, body }, { noHunkNear: true }, { noRoundDiff: true }, or null when the path, the hunk or the comment text is missing or a read fails (no judge call in any of these). */
+/**
+ * { hunk, body: { text, lines, blocks } } (the body already stripped and cut, bodyOf), { noHunkNear: true }, { noRoundDiff: true },
+ * or null when the path, the hunk or the comment text is missing or a read fails (no judge call in any of these).
+ */
 async function evidenceOf(f, ctx) {
   const { deps, slack } = ctx;
   if (typeof f.path !== 'string' || f.path === '') return null;
@@ -726,11 +742,11 @@ async function adjudicateOne(f, ctx) {
   if (ev.noHunkNear) { ctx.tally.skippedNoHunk += 1; return null; }
   if (ev.noRoundDiff) { ctx.tally.skippedNoRoundDiff += 1; return null; }
   const disposition = dispositionOf(ctx, f);
-  const prompt = buildPrompt({ label: labelOf(f.id), file: f.path, hunk: ev.hunk, body: ev.body, severity: foldSev(f.severity), sha: f.sha40 });
-  const stripped = stripBody(ev.body);
-  Object.assign(ctx.tally, { promptsBuilt: ctx.tally.promptsBuilt + 1, linesStripped: ctx.tally.linesStripped + stripped.lines, htmlBlocksStripped: ctx.tally.htmlBlocksStripped + stripped.blocks });
-  if (hasBareNumber([f.path, ev.hunk, ev.body], ctx.prNumbers)) ctx.tally.bareNumberPrompts += 1;
-  const comment = cleanBody(stripped.text);
+  // ev.body.text is stripped already; buildPrompt strips again, which changes nothing on stripped text.
+  const prompt = buildPrompt({ label: labelOf(f.id), file: f.path, hunk: ev.hunk, body: ev.body.text, severity: foldSev(f.severity), sha: f.sha40 });
+  Object.assign(ctx.tally, { promptsBuilt: ctx.tally.promptsBuilt + 1, linesStripped: ctx.tally.linesStripped + ev.body.lines, htmlBlocksStripped: ctx.tally.htmlBlocksStripped + ev.body.blocks });
+  if (hasBareNumber([f.path, ev.hunk, ev.body.text], ctx.prNumbers)) ctx.tally.bareNumberPrompts += 1;
+  const comment = cleanBody(ev.body.text);
   return askJudge(f, () => send(prompt, f, ctx.judge, comment), ctx, { disposition, promptChars: prompt.length });
 }
 

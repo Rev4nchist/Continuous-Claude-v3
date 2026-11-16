@@ -1189,6 +1189,29 @@ test('an HTML comment that holds "addressed in commit abc1234" is stripped and t
   assert.doesNotMatch(res.out, /refused [1-9]/);
 });
 
+test('a hidden HTML block that crosses the 4,000 character cut sends no part of the block (breaks if the body is cut before the strip, or an unclosed <!-- is kept)', async () => {
+  const text = `${BODY}\n${'x'.repeat(3950)}\n<!-- HIDDENSTART ${'y'.repeat(200)} HIDDENEND -->\nTail`;
+  const h = diffPer(setup([finding(1)], { body: () => text }));
+  assert.equal((await runWith(h)).code, 0);
+  assert.equal(h.judge.calls.length, 1);
+  assert.doesNotMatch(h.judge.calls[0], /HIDDENSTART|HIDDENEND|yyyy|<!--/);
+});
+
+test('about 4,000 characters of hidden HTML blocks then reviewer text: the reviewer text reaches the judge (breaks if the cut runs before the strip)', async () => {
+  const hidden = Array.from({ length: 39 }, (_, i) => `<!-- block ${i} ${'z'.repeat(85)} -->`).join('\n');
+  const h = diffPer(setup([finding(1)], { body: () => `${hidden}\nREVIEWERTEXT the null check is missing.` }));
+  assert.equal((await runWith(h)).code, 0);
+  assert.equal(h.judge.calls.length, 1);
+  assert.match(h.judge.calls[0], /REVIEWERTEXT the null check is missing\./);
+  assert.doesNotMatch(h.judge.calls[0], /<!--|zzzz/);
+});
+
+test('stripBody drops an unclosed <!-- to the end of the text (breaks if only closed blocks are dropped)', () => {
+  const s = adj.stripBody('Keep me.\n<!-- open block with no end\nmore hidden');
+  assert.equal(s.text.trim(), 'Keep me.');
+  assert.equal(s.blocks, 1);
+});
+
 test('a marker line inside a fenced block of the comment is stripped by the line rule and the fence lines stay (breaks if the strip follows fences, or drops the fence)', async () => {
   const h = diffPer(setup([finding(1)], { body: () => `Before\n\`\`\`\n${MARK}\n\`\`\`\nAfter` }));
   assert.equal((await runWith(h)).code, 0);
