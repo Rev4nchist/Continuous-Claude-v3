@@ -7,6 +7,8 @@
 //        [--root <projects dir>] [--exclude <sessionPrefix>]...
 // Read-only over transcripts. Writes only --out/--json. Output stays repo-local
 // (docs/self-improvement/audits) because it contains session text.
+// --counts: counts only. No incident, no typed text, no previous text, no project or session reference (card coord-seat-counts, part B).
+//        It cannot be used with --dump (every human turn) and its --json has no incidents, only counts and `corrections`.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,6 +22,8 @@ const DAYS = Number(opt('--days', 30));
 const OUT = opt('--out', null);
 const JSON_OUT = opt('--json', null);
 const DUMP = opt('--dump', null);
+const COUNTS = args.includes('--counts');
+if (COUNTS && DUMP) { console.error('failure-audit: --counts cannot be used with --dump'); process.exit(1); }
 const dumpRows = [];
 const ROOT = opt('--root', path.join(os.homedir(), '.claude', 'projects'));
 const EXCLUDE = args.flatMap((a, i) => (a === '--exclude' && args[i + 1] ? [args[i + 1]] : []));
@@ -141,16 +145,20 @@ for (const [id, label] of CLASSES) {
 }
 md += `\n## Class x model\n\n| Class | ${rows.map(([k]) => k).join(' | ')} |\n|---|${rows.map(() => '---').join('|')}|\n`;
 for (const [id] of CLASSES) md += `| ${id} | ${rows.map(([, m]) => m.byClass[id] || 0).join(' | ')} |\n`;
-md += `\n## Incidents (most recent 80; text truncated; ref = project/session)\n\n`;
-incidents.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
-for (const i of incidents.slice(0, 80)) {
-  md += `- **${i.cls}** | ${i.model} | ${i.ts?.slice(0, 10)} | \`${i.project}/${i.session.slice(0, 8)}\`\n  - user: ${i.text}\n  - before: ${i.prev.slice(0, 160) || '(none)'}\n`;
+if (COUNTS) {
+  md += `\n## Next\n\nCounts only: this run printed no incident text. Run without --counts to read the incidents (that output stays repo-local).\n`;
+} else {
+  md += `\n## Incidents (most recent 80; text truncated; ref = project/session)\n\n`;
+  incidents.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+  for (const i of incidents.slice(0, 80)) {
+    md += `- **${i.cls}** | ${i.model} | ${i.ts?.slice(0, 10)} | \`${i.project}/${i.session.slice(0, 8)}\`\n  - user: ${i.text}\n  - before: ${i.prev.slice(0, 160) || '(none)'}\n`;
+  }
+  md += `\n## Next\n\nRead the incidents for each "yes" class. Confirm they are real corrections. Propose ONE rule edit per class with a bad/good pair. Keep this file repo-local: it contains session text.\n`;
 }
-md += `\n## Next\n\nRead the incidents for each "yes" class. Confirm they are real corrections. Propose ONE rule edit per class with a bad/good pair. Keep this file repo-local: it contains session text.\n`;
 
 if (OUT) fs.writeFileSync(OUT, md); else process.stdout.write(md);
 if (DUMP) fs.writeFileSync(DUMP, dumpRows.map((r) => JSON.stringify(r)).join('\n') + '\n');
-if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify({ days: DAYS, files: files.length, sessions, humanMsgs, perModel, classTotals, incidents }, null, 1));
+if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(COUNTS ? { days: DAYS, files: files.length, sessions, humanMsgs, corrections: incidents.length, perModel, classTotals } : { days: DAYS, files: files.length, sessions, humanMsgs, perModel, classTotals, incidents }, null, 1));
 
 // --dump <file>: write every human turn (model, prev assistant snippet, text) as JSONL so an
 // LLM pass can classify corrections. Regex above is the cheap first pass; this is the real one.

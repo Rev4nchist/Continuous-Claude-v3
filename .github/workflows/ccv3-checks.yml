@@ -274,10 +274,10 @@ jobs:
         timeout-minutes: 5
         run: npm ci --ignore-scripts --no-audit --no-fund
       # Explicit file names, not a glob: a missing file fails the step, so this gate cannot pass by finding nothing.
-      - name: lane board DB tests (render-board, lane-project, lane-dep-claim, lane-dep-done, lane-dep-seed, scratch-db, lane-inbox-id, lane-holder-flags, lane-parked-scope)
+      - name: lane board DB tests (render-board, lane-project, lane-dep-claim, lane-dep-done, lane-dep-seed, scratch-db, lane-inbox-id, lane-holder-flags, lane-parked-scope, learning-counts-db)
         timeout-minutes: 5
-        run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/lane-dep-claim.test.mjs scripts/coordination/lane-dep-done.test.mjs scripts/coordination/lane-dep-seed.test.mjs scripts/coordination/scratch-db.test.mjs scripts/coordination/lane-inbox-id.test.mjs scripts/coordination/lane-holder-flags.test.mjs scripts/coordination/lane-parked-scope.test.mjs
-      # These 19 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
+        run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/lane-dep-claim.test.mjs scripts/coordination/lane-dep-done.test.mjs scripts/coordination/lane-dep-seed.test.mjs scripts/coordination/scratch-db.test.mjs scripts/coordination/lane-inbox-id.test.mjs scripts/coordination/lane-holder-flags.test.mjs scripts/coordination/lane-parked-scope.test.mjs scripts/coordination/learning-counts-db.test.mjs
+      # These 21 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
       # They sit in this job because it already has the checkout with full history and the hooks install.
       - name: lane board tests without a database (kanban, lane-shim,path guard, registry drift, session label, probe boards, probe scratch guard)
         if: ${{ !cancelled() }}   # run even when the DB step failed, so one red step does not hide the other
@@ -303,6 +303,8 @@ jobs:
           scripts/coordination/tick-marker.test.mjs
           scripts/coordination/board-band-view.test.mjs
           scripts/coordination/ask-ledger.test.mjs
+          scripts/coordination/stall-alarm-log.test.mjs
+          scripts/coordination/learning-counts.test.mjs
       # lane-context-db.test.ts skips without LANE_TEST_DB_URL, and vitest exits 0 on a skipped file. The program makes a scratch
       # database on this job's service, runs the one file, drops the database, and fails unless every test ran and passed.
       - name: lane-context cursor tests on a scratch database (fails when the file is skipped)

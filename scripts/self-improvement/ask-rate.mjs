@@ -11,6 +11,7 @@
 // --project takes a directory (encoded the way Claude Code names project folders) or a folder
 // name under the projects root. Default: the repo this script lives in.
 // Read-only over transcripts. Writes only --json/--out.
+// --counts: counts only. No session prefixes (top sessions), no project folder name, no exclude list (card coord-seat-counts, part B).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -68,6 +69,7 @@ function parseArgs(argv) {
   return {
     days: Number(opt('--days', 30)),
     all: argv.includes('--all'),
+    counts: argv.includes('--counts'),
     project: fs.existsSync(project) ? encodeProject(project) : project,
     root: opt('--root', path.join(os.homedir(), '.claude', 'projects')),
     exclude: argv.flatMap((a, i) => (a === '--exclude' && argv[i + 1] ? [argv[i + 1]] : [])),
@@ -115,11 +117,15 @@ export function interactiveHeadline(by) {
 function render(cfg, by, files, since) {
   const per = (n, d) => (d ? (n / d).toFixed(2) : '0.00');
   const h = interactiveHeadline(by);
-  let md = `# Ask rate, last ${cfg.days} days\n\n`;
-  md += `Cutoff ${new Date(since).toISOString()}. Scope ${cfg.all ? 'all projects' : cfg.project}. Excluded session prefixes: ${cfg.exclude.join(', ') || '(none)'}. Transcripts ${files}.\n\n`;
-  md += `| Entrypoint | Sessions | With ask | Asks | Asks/session | Plain final ? | Top sessions |\n|---|---|---|---|---|---|---|\n`;
+  let md = `# Ask rate, last ${cfg.days} days${cfg.counts ? ' (counts only)' : ''}\n\n`;
+  md += cfg.counts
+    ? `Cutoff ${new Date(since).toISOString()}. Transcripts ${files}.\n\n`
+    : `Cutoff ${new Date(since).toISOString()}. Scope ${cfg.all ? 'all projects' : cfg.project}. Excluded session prefixes: ${cfg.exclude.join(', ') || '(none)'}. Transcripts ${files}.\n\n`;
+  md += cfg.counts
+    ? `| Entrypoint | Sessions | With ask | Asks | Asks/session | Plain final ? |\n|---|---|---|---|---|---|\n`
+    : `| Entrypoint | Sessions | With ask | Asks | Asks/session | Plain final ? | Top sessions |\n|---|---|---|---|---|---|---|\n`;
   for (const [k, e] of Object.entries(by)) {
-    md += `| ${k} | ${e.sessions} | ${e.withAsk} | ${e.asks} | ${per(e.asks, e.sessions)} | ${e.plainQ} | ${e.top.map((t) => `${t.session.slice(0, 8)}:${t.asks}`).join(' ') || '-'} |\n`;
+    md += `| ${k} | ${e.sessions} | ${e.withAsk} | ${e.asks} | ${per(e.asks, e.sessions)} | ${e.plainQ} |${cfg.counts ? '' : ` ${e.top.map((t) => `${t.session.slice(0, 8)}:${t.asks}`).join(' ') || '-'} |`}\n`;
   }
   md += `\nAsks per interactive session (entrypoint other than sdk-cli): ${per(h.asks, h.sessions)} (${h.asks} asks, ${h.sessions} sessions).\n`;
   return `${md}Asks plus plain final questions per interactive session: ${per(h.asks + h.plainQ, h.sessions)} (${h.asks} asks, ${h.plainQ} plain, ${h.sessions} sessions).\n`;
@@ -139,7 +145,12 @@ async function main() {
   const by = summarize(rows);
   const md = render(cfg, by, rows.length, since);
   if (cfg.out) fs.writeFileSync(cfg.out, md); else process.stdout.write(md);
-  if (cfg.json) fs.writeFileSync(cfg.json, JSON.stringify({ days: cfg.days, since: new Date(since).toISOString(), exclude: cfg.exclude, interactive: interactiveHeadline(by), byEntrypoint: by }, null, 1));
+  if (cfg.json) {
+    const counted = Object.fromEntries(Object.entries(by).map(([k, e]) => [k, { sessions: e.sessions, withAsk: e.withAsk, asks: e.asks, plainQ: e.plainQ }]));
+    fs.writeFileSync(cfg.json, JSON.stringify(cfg.counts
+      ? { days: cfg.days, since: new Date(since).toISOString(), interactive: interactiveHeadline(by), byEntrypoint: counted }
+      : { days: cfg.days, since: new Date(since).toISOString(), exclude: cfg.exclude, interactive: interactiveHeadline(by), byEntrypoint: by }, null, 1));
+  }
 }
 
 const isDirectRun = Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
