@@ -5,6 +5,7 @@ import type { Brief } from '../hooks/agentic-os/brief'
 import * as bandModel from '../hooks/agentic-os/band-model'
 import type { BandState } from '../hooks/agentic-os/band-model'
 import type { Span } from '../hooks/agentic-os/pane-model'
+import { chipWord } from '../hooks/agentic-os/plain'
 import { TONE } from '../hooks/shared/tones'
 import type { OsTask } from '../types'
 
@@ -83,10 +84,10 @@ describe('band line 1', () => {
     // Mockup: WORKING is a blue chip. Amber is only for a person being needed (waiting-on-dave).
     const chips = {
       working: ['WORKING', 'chipDoing'],
-      'waiting-on-dave': ['WAITING ON DAVE', 'chipWarn'],
-      blocked: ['BLOCKED', 'chipBad'],
+      'waiting-on-dave': ['WAITING FOR YOU', 'chipWarn'],
+      blocked: ['STUCK', 'chipBad'],
       done: ['DONE', 'chipOk'],
-      idle: ['IDLE', 'chipDim'],
+      idle: ['RESTING', 'chipDim'],
     } as const
     for (const [chip, [word, tone]] of Object.entries(chips)) {
       const [one] = bandLines(state({ chip: chip as BandState['chip'] }), 120)
@@ -227,7 +228,7 @@ describe('band line 2: ASK and UNPROVEN', () => {
     expect(lineOf({ tasks: [task('1', 'a', 'pending'), task('2', 'b', 'in_progress')] })).toContain('UNPROVEN 0')
   })
 
-  test('L11 ASK and UNPROVEN: dim at zero, UNPROVEN warning above, ASK amber only on WAITING ON DAVE, red ASK on a blocked chip, green at zero on DONE', () => {
+  test('L11 ASK and UNPROVEN: dim at zero, UNPROVEN warning above, ASK amber only on WAITING FOR YOU, red ASK on a blocked chip, green at zero on DONE', () => {
     const tone = (line: Span[] | undefined, label: string) => line?.find(span => span.text.startsWith(label))?.tone
     const zero = bandLines(state(), 120)[1]
     expect(tone(zero, 'ASK')).toBe('dim')
@@ -312,7 +313,7 @@ describe('band width', () => {
 
   test('L8 the chip word is whole at every width', () => {
     for (let width = 20; width <= 120; width += 5) {
-      expect(text(bandLines(state({ chip: 'waiting-on-dave', brief: full().brief }), width)[0])).toContain('WAITING ON DAVE')
+      expect(text(bandLines(state({ chip: 'waiting-on-dave', brief: full().brief }), width)[0])).toContain('WAITING FOR YOU')
     }
   })
 
@@ -399,7 +400,7 @@ describe('band compact line', () => {
   })
 
   test('CL3 the chip is whole, first and in its own tone at every width, for every state', () => {
-    const words = { working: 'WORKING', 'waiting-on-dave': 'WAITING ON DAVE', blocked: 'BLOCKED', done: 'DONE', idle: 'IDLE' } as const
+    const words = { working: 'WORKING', 'waiting-on-dave': 'WAITING FOR YOU', blocked: 'STUCK', done: 'DONE', idle: 'RESTING' } as const
     const tones = { working: 'chipDoing', 'waiting-on-dave': 'chipWarn', blocked: 'chipBad', done: 'chipOk', idle: 'chipDim' } as const
     for (const chip of Object.keys(words) as (keyof typeof words)[]) {
       for (let width = 20; width <= 120; width += 5) {
@@ -489,7 +490,7 @@ describe('band compact line: ctx, 5h and 7d', () => {
   })
 
   test('CL10 the chip and ctx stay at every width from 20 to 200, with limits, with long fields', () => {
-    const words = { working: 'WORKING', 'waiting-on-dave': 'WAITING ON DAVE', blocked: 'BLOCKED', done: 'DONE', idle: 'IDLE' } as const
+    const words = { working: 'WORKING', 'waiting-on-dave': 'WAITING FOR YOU', blocked: 'STUCK', done: 'DONE', idle: 'RESTING' } as const
     for (const chip of Object.keys(words) as (keyof typeof words)[]) {
       for (let width = 20; width <= 200; width++) {
         const line = text(compactLine(state({ chip, repo: 'r'.repeat(80), ...({ helpers: 12, limits: BOTH } as object) }), width))
@@ -576,5 +577,43 @@ describe('band compact line: ctx, 5h and 7d', () => {
       expect(got).not.toContain('5h')
       expect(got).not.toContain('7d')
     }
+  })
+})
+
+describe('status band fixes (coord-status-band-fixes)', () => {
+  const hudOn = (over: Partial<BandState> = {}) => state({ ...({ hud: true } as object), ...over })
+
+  test('SB1 when the HUD row draws, line 1 holds no ctx and no cost: the HUD row holds them (one source, drawn once)', () => {
+    const line = text(bandLines(hudOn(), 120)[0])
+    expect(line).toContain('WORKING')
+    expect(line).not.toContain('ctx')
+    expect(line).not.toContain('$')
+  })
+
+  test('SB1b the compact line keeps ctx and cost even with the HUD flag, and line 1 keeps both when the HUD flag is absent', () => {
+    expect(text(bandLines(state(), 120)[0])).toContain('ctx 41%')
+    expect(text(bandLines(state(), 120)[0])).toContain('$1.84')
+    expect(text(compactLine(hudOn() as BandState, 120))).toContain('ctx 41%')
+    expect(text(compactLine(hudOn() as BandState, 120))).toContain('$1.84')
+  })
+
+  test('SB1c with the HUD flag, an unknown ctx and an unknown cost still read as a dash on line 1 (the HUD row draws neither)', () => {
+    const line = text(bandLines(hudOn({ ctx: null, costUsd: null }), 120)[0])
+    expect(line).toContain('ctx -')
+    expect(line).toContain('$-')
+  })
+
+  test('SB2 a waiting chip with helpers running shows "N helpers running" beside it on line 1; a working chip and a waiting chip with none do not', () => {
+    expect(text(bandLines(hudOn({ chip: 'waiting-on-dave', helpers: 2 } as Partial<BandState>), 120)[0])).toContain('2 helpers running')
+    expect(text(bandLines(hudOn({ chip: 'waiting-on-dave', helpers: 1 } as Partial<BandState>), 120)[0])).toContain('1 helper running')
+    expect(text(bandLines(hudOn({ chip: 'waiting-on-dave', helpers: 0 } as Partial<BandState>), 120)[0])).not.toContain('helper')
+    expect(text(bandLines(hudOn({ chip: 'working', helpers: 2 } as Partial<BandState>), 120)[0])).not.toContain('helper')
+  })
+
+  test('SB3 the band and the pane use the same five words, whatever the case', () => {
+    const chips = ['working', 'waiting-on-dave', 'blocked', 'done', 'idle'] as const
+    const first = (chip: (typeof chips)[number]) => (chipWord(chip).split(':')[0] ?? '').trim().toUpperCase()
+    for (const chip of chips) expect(bandModel.CHIP[chip].word, chip).toBe(first(chip))
+    expect(chips.map(chip => bandModel.CHIP[chip].word)).toEqual(['WORKING', 'WAITING FOR YOU', 'STUCK', 'DONE', 'RESTING'])
   })
 })

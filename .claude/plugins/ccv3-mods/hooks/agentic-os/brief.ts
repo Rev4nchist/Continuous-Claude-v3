@@ -300,6 +300,21 @@ const clearLeavers = (cleared: readonly ClearedAsk[] | undefined, old: readonly 
 export const isAskStale = (brief: Brief, now: number, lastActivity?: number | null): boolean =>
   brief.ask.some(isOpen) && now - Math.max(brief.updatedAt, lastActivity ?? 0) >= STALE_ASK_MS
 
+/**
+ * Prompt origins that are Dave's own act: typing in the composer, a message through the phone bridge, and `auto-continuation` (the engine
+ * defines it as a follow-up to Dave's own UI action). Only these answer an open ask, and a prompt with no origin at all (an old engine)
+ * answers too. Every other kind answers nothing: a hidden question is worse than a false one. A new Dave kind leaves an ask open until
+ * the next turn end parses the Next steps again; a new machine kind cannot hide a question.
+ * Probe on a live session (2026-11-16, .claudedocs/e2e-coord-status-band-fixes/02-origin-probe-output.jsonl): Dave's typing is
+ * `composer`; a cron tick is `scheduled-trigger`; a Monitor line is `task-notification`; a SendMessage from another session is `peer`.
+ * A not-Dave prompt still counts as activity (the turn it starts renews the 24 hour clock), so a timer can keep an ask fresh. Known limit.
+ * Known trade-off: a seat's relay of Dave's decision by SendMessage arrives as `peer` and answers no ask.
+ */
+export const DAVE_ORIGINS: readonly string[] = ['composer', 'bridge', 'auto-continuation']
+
+export const answersAsks = (origin: { kind?: unknown } | null | undefined): boolean =>
+  typeof origin?.kind !== 'string' || DAVE_ORIGINS.includes(origin.kind)
+
 /** The mod's own submissions arrive as prompts too: they are not Dave's answer to a brief ask.
  *  Both come from hooks/pr-loop/index.ts: the PR watcher report line, and the /land fallback
  *  text (`Dave pressed "Land" on ...`). Keep this list in step with its `$.prompt.submit` calls. */
@@ -317,18 +332,20 @@ export type ChipState = {
   activeAt?: number | null
   /** The agents the pane lists (subagents and workflow agents). One with status running keeps the chip working with no turn and no tool. */
   agentRuns?: { status: string }[]
+  /** An AskUserQuestion step is in flight: a dialog waits for Dave, so the chip reads waiting whatever else runs. */
+  dialogOpen?: boolean
 }
 
 /**
- * PRD 5.2. Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (an open ask and no tool running), then working (a tool, the main turn or a running agent run),
- * then done (every task and plan step done AND proven, and at least one exists), else idle.
+ * PRD 5.2, glossary "Session chip" (2026-11-16). Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (an AskUserQuestion open, or a fresh open ask:
+ * it wins over running work), then working (a tool, the main turn or a running agent run), then done (every task and plan step done AND proven, and at least one exists), else idle.
  */
 export const deriveChip = (state: ChipState): Chip => {
   const { brief } = state
   const plan = brief?.plan ?? []
   // A blocked plan step counts only when the plan is the source (no task).
   if (state.blocked || (state.tasks.length === 0 && plan.some(one => one.status === 'blocked'))) return 'blocked'
-  if (brief !== null && !state.toolRunning && brief.ask.some(isOpen) && !isAskStale(brief, state.now, state.activeAt)) return 'waiting-on-dave'
+  if (state.dialogOpen === true || (brief !== null && brief.ask.some(isOpen) && !isAskStale(brief, state.now, state.activeAt))) return 'waiting-on-dave'
   if (state.toolRunning || state.turnActive || state.agentRuns?.some(one => one.status === 'running')) return 'working'
   const items = weighedOf(state.tasks, plan)
   return items.length > 0 && items.every(one => one.done && isProven(brief, one)) ? 'done' : 'idle'
@@ -460,7 +477,9 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
 /**
  * A Next steps item that asks nothing of Dave. The set is closed: the WHOLE item (one final period allowed) must match, or it is an ask.
  * (a) A lead: "None", "None for now/today/yet/right now", "Nothing (for you/Dave) to do", "Nothing required/yet/for now", "No action/input/reply needed/required".
- *     After the lead come at most a sentence end, " - ", " — " or ":" and ONE waiting clause: "None for now. I'm waiting on X", "None — waiting on your merge yes".
+ *     After the lead come at most a sentence end, " - ", " — ", ":" or ", " and ONE waiting clause: "None for now. I'm waiting on X", "None, waiting on CI". The ", " form never takes you, yours or Dave.
+ *     Also "None for the seat". A second sentence after the wait ("None - waiting on CI. I rule on it after") stays an ASK: a false ask is better than a hidden one,
+ *     and two review rounds found a new hidden-question hole in each try at a tail grammar. Known limit; the cure is `brief_set` with `ask: []`, not a bigger parser.
  * (b) A bare waiting clause, "(I'm) Waiting on/for X", where X does not start with you, your or Dave ("Waiting on Dave's approval" asks Dave).
  * X is 1 to 80 characters with no ? ; , ! : – —, no sentence end (". "), no dash separator and no " then ", " and ", " or ", " but ".
  * Anything else stays an ask: "Waiting on CI, then approve PR 12", "None for now. Paste the build log", "None, but review the diff", "None of the options fit".
@@ -468,9 +487,9 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
  */
 const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s)(?:[^?;,!:–—\s]|\s)){1,80}`
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
-const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+now|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
-const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
-const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}(?!(?:your?|dave)\\b)${WAIT_OBJECT}$`, 'i')
+const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
+const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+(?!${WAIT_CLAUSE}(?:you(?:rs?)?|dave)\\b))${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
+const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}(?!(?:you(?:rs?)?|dave)\\b)${WAIT_OBJECT}$`, 'i')
 /** A question mark makes any item an ask, whatever its words. */
 const noAsk = (text: string): boolean => {
   const whole = text.replace(/\.$/, '')

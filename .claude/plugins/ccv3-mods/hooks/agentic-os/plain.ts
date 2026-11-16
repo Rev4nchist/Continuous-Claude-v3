@@ -26,10 +26,10 @@ const CHIP_WORDS: Record<Chip, string> = {
   'waiting-on-dave': 'Waiting for you',
   blocked: 'Stuck: a step cannot go on',
   done: 'Done: every step is proven',
-  idle: 'Idle',
+  idle: 'Resting',
 }
 
-export const chipWord = (chip: Chip): string => (typeof chip === 'string' && Object.hasOwn(CHIP_WORDS, chip) ? CHIP_WORDS[chip] : 'Idle')
+export const chipWord = (chip: Chip): string => (typeof chip === 'string' && Object.hasOwn(CHIP_WORDS, chip) ? CHIP_WORDS[chip] : 'Resting')
 
 // --- Changes (pull requests) ---
 

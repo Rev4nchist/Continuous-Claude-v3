@@ -262,7 +262,7 @@ describe('os overview', () => {
     const text = all(rows)
     expect(text).toContain('GOAL not set')
     expect(rows.find(one => one.key === 'ov-goal')?.left.find(one => one.text.includes('not set'))?.tone).toBe('warn')
-    expect(keyed(rows, 'ov-chip')).toContain('Idle')
+    expect(keyed(rows, 'ov-chip')).toContain('Resting')
     expect(text).not.toContain('NaN')
     expect(text).not.toContain('undefined')
     expect(text).not.toContain('null')
@@ -749,16 +749,16 @@ describe('os overview with only a helper running', () => {
     expect(keyed(tabRows('overview', empty(), NOW, 100, 60), 'now')).not.toMatch(/running/)
   })
 
-  test('O20 the chip row beside a working chip does not say Idle while a helper runs', () => {
+  test('O20 the chip row beside a working chip does not say Resting while a helper runs', () => {
     const rows = rowsWith('running')
     expect(keyed(rows, 'ov-chip')).toContain('Working')
-    expect(keyed(rows, 'ov-chip')).not.toMatch(/Idle/)
+    expect(keyed(rows, 'ov-chip')).not.toMatch(/Resting/)
   })
 
-  test('O20b a helper that waits is not running: NOW does not count it and the chip row reads Idle', () => {
+  test('O20b a helper that waits is not running: NOW does not count it and the chip row reads Resting', () => {
     const rows = rowsWith('waiting')
     expect(keyed(rows, 'now')).not.toMatch(/running/)
-    expect(keyed(rows, 'ov-chip')).toContain('Idle')
+    expect(keyed(rows, 'ov-chip')).toContain('Resting')
     expect(keyed(rows, 'ov-chip')).not.toContain('Working')
   })
 

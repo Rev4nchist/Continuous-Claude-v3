@@ -53,7 +53,7 @@ const nowText = (s: TabState): string => {
   if (doing !== undefined) return stepSentence({ state: 'doing', subject: doing.activeForm ?? doing.subject, proven: false })
   if (s.view.turn !== null) return 'Thinking'
   const running = s.view.agents.filter(one => one.status === 'running').length
-  return running > 0 ? `${running} ${running === 1 ? 'helper' : 'helpers'} running` : 'Idle'
+  return running > 0 ? `${running} ${running === 1 ? 'helper' : 'helpers'} running` : 'Resting'
 }
 
 const nowSection = (s: TabState, columns: number): Section => ({

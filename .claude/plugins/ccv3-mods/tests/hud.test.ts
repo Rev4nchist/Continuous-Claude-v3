@@ -190,6 +190,16 @@ describe('hud', () => {
     expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
   })
 
+  // Status band fixes: ctx and cost draw once. The HUD row holds a known cost; line 1 of the core band does not repeat it.
+  test('H4m a known cost draws on the HUD row and not again on core line 1', async ($, on) => {
+    world(on)
+    await start($)
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+    const got = await hudOn($, 'terminal')
+    expect(got.text).toContain('$4.10')
+    expect(got.core).not.toContain('$4.10')
+  })
+
   // H4c a new conversation in the same process: the old one's count and cost go, the row stays.
   test('H4c /clear and a resume start the advisor count and the cost over', async ($, on) => {
     world(on)
