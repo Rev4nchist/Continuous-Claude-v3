@@ -175,11 +175,11 @@ describe('subagent-write: the shell text', () => {
     expect(shell(critic, 'node scripts/review-engine/probe.mjs').kind).toBe('allow');
   });
 
-  it('4d: stderr redirects and /dev/null are no write (breaks if the digit lookbehind or the /dev filter is dropped)', () => {
+  it('4d: stderr to /dev/null is no write, a stderr log file is one (breaks if the /dev filter is dropped or 2> is skipped)', () => {
     expect(shell(critic, 'git status 2>/dev/null').kind).toBe('allow');
     expect(shell(critic, 'cmd > /dev/null 2>&1').kind).toBe('allow');
-    expect(shell(critic, `node x 2> ${TOP}/src/err.log`).kind).toBe('allow');
-    expect(shell(critic, `node x 2>> ${TOP}/src/err.log`).kind).toBe('allow');
+    expect(shell(critic, `node x 2> ${TOP}/src/err.log`).kind).toBe('warn');
+    expect(shell(critic, `node x 2>> ${TOP}/src/err.log`).kind).toBe('warn');
   });
 
   it('4f: a ">" inside quotes is data, not a redirect (breaks if quoted text is scanned)', () => {
@@ -197,6 +197,47 @@ describe('subagent-write: the shell text', () => {
   it('a text over the size cap is not scanned', () => {
     const big = `echo x > ${HOME}/.claude/state/a ${'x'.repeat(70 * 1024)}`;
     expect(shell(critic, big).kind).toBe('allow');
+  });
+});
+
+describe('subagent-write: every redirect form (seat finding 2026-11-16 14:1x)', () => {
+  const FORMS = ['>', '>>', '2>', '1>>', '&>', '&>>', '>|', '*>', '*>>'];
+
+  it.each(FORMS)('15: "%s" into a protected path by its home spelling is a write (breaks if the token test drops this form)', (op) => {
+    expect(shell(critic, `echo x ${op} ${HOME}/.claude/state/a.json`).kind).toBe('deny');
+    expect(shell(untyped, `node x.mjs ${op} ~/.claude/state/err.log`).kind).toBe('deny');
+  });
+
+  it.each(FORMS)('15b: "%s" into a protected path by a ".." spelling is a write (breaks if the target scan drops this form)', (op) => {
+    // "/tmp/../home/dave/..." is no home spelling, so only the target scan can see it.
+    expect(shell(untyped, `echo x ${op} /tmp/../home/dave/.claude/state/a.json`).kind).toBe('deny');
+    expect(shell(critic, `echo x ${op} /tmp/../work/ccv3/notes.txt`).kind).toBe('deny');
+  });
+
+  it.each(FORMS)('15c: "%s" outside the scratchpad warns for the read-only class (breaks if the target scan drops this form)', (op) => {
+    expect(shell(critic, `echo x ${op} ${TOP}/src/out.txt`).kind).toBe('warn');
+  });
+
+  it('15d: a duplicate of a descriptor and the null sinks are no redirect target (breaks if the (?!&) guard or the sink filter is dropped)', () => {
+    for (const text of [
+      'cmd 2>&1',
+      'cmd >&2',
+      'cmd > /dev/null 2>&1',
+      'cmd 2> /dev/null',
+      'cmd *> $null',
+      'cmd > nul',
+      'cmd &> /dev/null',
+      `cat ${HOME}/.claude/state/a.json 2>&1`,
+      `cat ${HOME}/.claude/state/a.json 2>&1 | head`,
+    ]) {
+      expect(shell(critic, text).kind, text).toBe('allow');
+    }
+  });
+
+  it('15e: an arrow is no redirect (breaks if the lookbehind on - and = is dropped)', () => {
+    expect(shell(critic, `node -e "x => y"`).kind).toBe('allow');
+    expect(shell(critic, `echo a->b ${HOME}/.claude/state/a.json`).kind).toBe('allow');
+    expect(shell(critic, `echo a=>b ${HOME}/.claude/state/a.json`).kind).toBe('allow');
   });
 });
 

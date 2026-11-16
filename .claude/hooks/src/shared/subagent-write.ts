@@ -232,6 +232,14 @@ function protectedTokens(text: string, deps: SubagentDeps, repoRoot: boolean): s
 }
 
 /**
+ * A redirect operator: `>`, `>>`, `>|`, and the same behind a descriptor, an ampersand or a star (`2>`, `1>>`, `&>`,
+ * `&>>`, `*>`, `*>>`): the prefix is any character except `-`, `=`, `<` and `>`, so only the `>` is matched. Not `->`
+ * or `=>`, and not a duplicate of a descriptor (`2>&1`, `>&2`: a `&` straight after the `>`; the target pattern also
+ * refuses a target that starts with `&`). One source for the token test and the target scan, so the two cannot drift.
+ */
+const REDIRECT_OP = '(?<![-=<>])>{1,2}\\|?(?!&)';
+
+/**
  * Verbs that write an operand. COPY_VERBS only read their first operand, so the protected path must be the second.
  * Every other verb may name the protected path as its first or second operand (`mv a b` writes both).
  */
@@ -244,7 +252,7 @@ function writesToken(text: string, token: string, fold: boolean): boolean {
   const t = text.replace(/\\/g, '/');
   const tk = esc(token.replace(/\\/g, '/'));
   const flags = fold ? 'i' : '';
-  if (new RegExp(`(?<![-=\\d&>])>>?\\s*['"]?${tk}(?![\\w./-])`, flags).test(t)) return true;
+  if (new RegExp(`${REDIRECT_OP}\\s*['"]?${tk}(?![\\w./-])`, flags).test(t)) return true;
   const start = '(?<![\\w./-])';
   const end = '(?![\\w./-])';
   const op = '(?:\\s+-\\S+)*\\s+';
@@ -263,7 +271,7 @@ function redirectTargets(text: string): string[] {
   // A quoted segment is data (`node -e "1 > 0"`), unless a redirect points straight at it.
   const bare = text.replace(/(?<!>\s*)(["'])(?:(?!\1)[^\\])*\1/g, ' ');
   const out: string[] = [];
-  for (const m of bare.matchAll(/(?<![-=\d&>])>>?\s*['"]?([^\s'"|;&<>)]+)/g)) {
+  for (const m of bare.matchAll(new RegExp(`${REDIRECT_OP}\\s*['"]?([^\\s'"|;&<>)]+)`, 'g'))) {
     const p = m[1];
     if (/^(\/dev\/|\$null$|nul$|&)/i.test(p)) continue;
     out.push(p);

@@ -176,7 +176,7 @@
     "shared/skill-router-types.ts": "3c4f9be674b7a75273c983a249a90bb4e90d445fcb448e0b62bf953dfe8ccf9c",
     "shared/skill-usage.ts": "6ae31c8b1e69c2e137c9acb5d9534acb614c6e2230219665d4159c6a9695f205",
     "shared/spec-context.ts": "ac776eb62afb95abe765f209d872cf9bb0e83e760ed18431ccca2faa9165605f",
-    "shared/subagent-write.ts": "fdc9bcbddd9d8a027efae08532cfd9078fa78ffeefe40c91af47fe5e62474217",
+    "shared/subagent-write.ts": "c3e2961980d3aefb78011085360b055db389de8833d3c52e5d38746afc3259b3",
     "shared/tap-scope.ts": "3796dfbee98250099a73b04ad7166bf6abda1e499b8ee3ea9197e08bde0e8fb1",
     "shared/task-detector.ts": "0670520cfd1e4006084e6a6bb168974323bed7b2c40c2276bdc57905a4f0aa2f",
     "shared/test-run-state.ts": "ce51e59f0f10c3bfeb6131a9097583235e72a7e2a089a5d74ef5bd6ab3ca18ee",

@@ -5990,13 +5990,14 @@ function protectedTokens(text, deps, repoRoot) {
   }
   return [...out];
 }
+var REDIRECT_OP = "(?<![-=<>])>{1,2}\\|?(?!&)";
 var COPY_VERBS = "(?:cp|copy|copy-item)";
 var WRITE_VERBS = "(?:tee|tee-object|set-content|add-content|clear-content|out-file|mv|move|move-item|rm|del|erase|ri|remove-item|sed\\s+(?:-\\S+\\s+)*-i\\S*|git\\s+checkout|git\\s+restore|git\\s+apply)";
 function writesToken(text, token, fold) {
   const t = text.replace(/\\/g, "/");
   const tk = esc(token.replace(/\\/g, "/"));
   const flags = fold ? "i" : "";
-  if (new RegExp(`(?<![-=\\d&>])>>?\\s*['"]?${tk}(?![\\w./-])`, flags).test(t)) return true;
+  if (new RegExp(`${REDIRECT_OP}\\s*['"]?${tk}(?![\\w./-])`, flags).test(t)) return true;
   const start = "(?<![\\w./-])";
   const end = "(?![\\w./-])";
   const op = "(?:\\s+-\\S+)*\\s+";
@@ -6012,7 +6013,7 @@ function writesToken(text, token, fold) {
 function redirectTargets(text) {
   const bare = text.replace(/(?<!>\s*)(["'])(?:(?!\1)[^\\])*\1/g, " ");
   const out = [];
-  for (const m of bare.matchAll(/(?<![-=\d&>])>>?\s*['"]?([^\s'"|;&<>)]+)/g)) {
+  for (const m of bare.matchAll(new RegExp(`${REDIRECT_OP}\\s*['"]?([^\\s'"|;&<>)]+)`, "g"))) {
     const p = m[1];
     if (/^(\/dev\/|\$null$|nul$|&)/i.test(p)) continue;
     out.push(p);
