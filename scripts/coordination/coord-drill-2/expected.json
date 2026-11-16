@@ -3,7 +3,7 @@
   "rows": {
     "2": "PASS",
     "3": "FAIL",
-    "5": "FAIL",
+    "5": "PASS",
     "7": "FAIL",
     "8": "FAIL"
   }

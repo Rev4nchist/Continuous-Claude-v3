@@ -254,8 +254,15 @@ export const WRITE_TOOLS: ReadonlySet<string> = new Set(['Write', 'Edit', 'Noteb
 const PATH_FIELDS = ['file_path', 'notebook_path', 'path', 'destination', 'source', 'outputPath'];
 const GIT_TIMEOUT_MS = 2000;
 
+/** The options of one git read (card coord-decision-gate-round3-content-scan, F5): only the push scan sets them; absent keeps the defaults. */
+export interface GitReadOpts { maxBuffer?: number; timeout?: number }
 export interface Deps {
-  git: (cwd: string, args: string[]) => { status: number; stdout: string };
+  git: (cwd: string, args: string[], opts?: GitReadOpts) => { status: number; stdout: string };
+  /**
+   * The ms left of the hook budget (HOOK_BUDGET_MS from the hook start). The push scan gives its reads no more than this, and denies when it
+   * is gone before a read can run: a hook killed at 10 s writes no deny. Absent (tests): no budget.
+   */
+  scanLeft?: () => number;
   readFile: (path: string) => string | null;
   env: NodeJS.ProcessEnv;
   home: string;
@@ -2761,14 +2768,54 @@ function intentDeny(p: PushShape, subagent: boolean, fallback: Deny): Deny {
  * Every failure is a hard deny: the id list unreadable or empty, a git read that fails, a diff over the size bound. The bound is by size
  * (files, bytes), never by a clock. The deny text and the log hold a COUNT only: no id, no title, no path.
  */
+/** The most changed file names the scan reads (the names of every commit of the range, C5 read 1). */
 const SCAN_MAX_FILES = 2000;
-const SCAN_MAX_BYTES = 1_500_000;
+/**
+ * C5 bounds (card coord-decision-gate-round3-content-scan, seat S-Q2): by size, never by a clock. The last 60 real branches on main had at
+ * most 27 commits and 936,270 bytes of log text. A read over a bound is a hard deny with the bound in the text; a prefix is never scanned.
+ */
+const SCAN_MAX_COMMITS = 200;
+const SCAN_MAX_BYTES = 8_000_000;
+/** The content read gets min(SCAN_READ_MS, budget left - SCAN_RESERVE_MS); the names read min(GIT_TIMEOUT_MS, the same). */
+const SCAN_READ_MS = 6000;
+/** Kept back from the hook budget for the match (about 1.1 s on 10 MB) and the deny write, so a deny is written before the 10 s kill. */
+const SCAN_RESERVE_MS = 1500;
+/** Below this many ms for a read, the scan does not start it: it writes the clock deny instead. */
+const SCAN_MIN_READ_MS = 300;
+/** The start of each commit record in both reads (format %x01c5). A token or line that equals it is a commit, not a path or a diff line. */
+const COMMIT_MARK = '\u0001c5';
+/** Seat read 2, item 6: the full ref. A local branch or tag named fork/main would shadow the short name and empty the range. */
+const FORK_MAIN = 'refs/remotes/fork/main';
+const SPLIT_WAY_OUT = 'Every later push of this branch reads the same commits (the range is fork/main..head). Ways out: a new branch from fork/main that does not carry those commits, or a history rewrite with Dave\'s yes.';
+
+/** Thrown by the budgeted git of the scan when the hook budget is gone before a read can start. */
+class ScanClockError extends Error {}
+
+/**
+ * Seat read 2, item 3: EVERY git read of the scan (currentBranch, the chained path reads, rev-parse, show-ref, the logs, the tags) checks the
+ * budget first and gets at most the time left, so their sum ends inside HOOK_BUDGET_MS - SCAN_RESERVE_MS. Absent scanLeft (tests): unchanged.
+ */
+function budgetedDeps(deps: Deps): Deps {
+  if (!deps.scanLeft) return deps;
+  const left = (): number => deps.scanLeft!() - SCAN_RESERVE_MS;
+  return {
+    ...deps,
+    git: (cwd, args, opts) => {
+      const ms = left();
+      if (ms < SCAN_MIN_READ_MS) throw new ScanClockError('budget');
+      return deps.git(cwd, args, { ...opts, timeout: Math.min(opts?.timeout ?? GIT_TIMEOUT_MS, ms) });
+    },
+  };
+}
+
 function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string, chained: boolean, alone: boolean): Deny | null {
   if (!deps.holdoutIds || !deps.answerKeyHits) return null;
   try {
-    return scanHoldoutRead(p, deps, dir, branch, chained, alone);
-  } catch {
-    // Any throw in the scan path (a git timeout, a spawn error) is a hard deny: the catch path of handle() only warns in scope push.
+    return scanHoldoutRead(p, budgetedDeps(deps), dir, branch, chained, alone);
+  } catch (e) {
+    // The budget gone, or a read that timed out: the clock text (a killed hook writes no deny).
+    if (e instanceof ScanClockError || errCode(e) === 'ETIMEDOUT') return clockDeny(branch);
+    // Any other throw in the scan path (a spawn error) is a hard deny: the catch path of handle() only warns in scope push.
     return hardOf(deny('holdout-scan-unavailable', `this push of ${branch} cannot be checked for holdout ids: a git read failed. Run the push again from the repo.`, 'push'));
   }
 }
@@ -2780,7 +2827,7 @@ function scanHoldout(p: PushShape, deps: Deps, dir: string, branch: string, chai
  */
 function chainedAnswerKeyPaths(deps: Deps, dir: string): 'none' | 'hit' | 'unreadable' | 'too-large' {
   const reads: string[][] = [
-    ['diff', '--name-only', '--no-renames', '-z', 'fork/main...HEAD'],
+    ['diff', '--name-only', '--no-renames', '-z', `${FORK_MAIN}...HEAD`],
     ['diff', '--name-only', '--no-renames', '-z', '--cached'],
     ['diff', '--name-only', '--no-renames', '-z', 'HEAD'],
     ['ls-files', '--others', '--exclude-standard', '-z'],
@@ -2813,7 +2860,89 @@ function sendsRe(p: PushShape, deps: Deps, dir: string, branch: string): boolean
 }
 const RE_NOT_ALONE_WHY = 'the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.';
 
+/**
+ * C5 change 3: the tag refs the push names (refs/tags/<x>, or a name with a local tag of that name). Such a push sends that tag, and an
+ * annotated tag's message is not in the commit log.
+ */
+function namedTags(p: PushShape, deps: Deps, dir: string): string[] {
+  const out = new Set<string>();
+  for (const r of [p.src, p.branch]) {
+    if (typeof r !== 'string' || r === '') continue;
+    if (r.startsWith('refs/tags/')) { out.add(r); continue; }
+    if (r.startsWith('refs/') || /^(?:HEAD|@)(?:$|[~^@])/.test(r)) continue;
+    // PR 612 critic hole 2: git resolves `tags/<t>` through its refs/<name> rule, so it names refs/tags/<t>.
+    if (r.startsWith('tags/')) { out.add(`refs/${r}`); continue; }
+    if (deps.git(dir, ['show-ref', '--verify', '--quiet', `refs/tags/${r}`]).status === 0) out.add(`refs/tags/${r}`);
+  }
+  return [...out];
+}
+
+/**
+ * The tag text a scanned push can send (seat read 2, rules T1 to T3). --follow-tags and push.followTags send every annotated tag that points
+ * at a commit reachable from the pushed ref, and main's commits are reachable from every branch. So:
+ *   T1 an annotated tag reachable from the pushed sha (--merged <sha>): its name and its OWN message;
+ *   T2 a lightweight tag: its name only (its %(contents) is a commit message, read in the range or on fork/main already);
+ *   T3 a tag the push names: its target is the pushed sha, so --merged <sha> reads it by T1/T2; a force or wide form (how --tags reads):
+ *      every tag by T1/T2.
+ * A read that times out throws to the scan catch (the clock text).
+ * A read that fails, times out or is over the bound returns a Deny.
+ */
+function tagText(wide: boolean, sha: string, deps: Deps, dir: string, stop: (pattern: string, why: string) => Deny): string | Deny {
+  const fmt = '--format=%(refname)%00%(objecttype)%00%(contents)%00';
+  const reads: string[][] = [wide ? ['for-each-ref', fmt, 'refs/tags'] : ['for-each-ref', fmt, '--merged', sha, 'refs/tags']];
+  let text = '';
+  for (const args of reads) {
+    let t: { status: number; stdout: string };
+    try {
+      t = deps.git(dir, args, { timeout: GIT_TIMEOUT_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
+    } catch (e) {
+      if (errCode(e) === 'ENOBUFS') return stop('holdout-scan-too-large', `its local tags are over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
+      throw e;
+    }
+    if (t.status !== 0) return stop('holdout-scan-unavailable', 'the local tags could not be read. Run the push again from the repo.');
+    const f = t.stdout.split('\0');
+    // Records of three fields: name, object type, contents. Only an annotated tag ("tag") gives its contents (T1, T2).
+    for (let i = 0; i + 2 < f.length; i += 3) text += `${f[i].replace(/^\n+/, '')}\n${f[i + 1] === 'tag' ? `${f[i + 2]}\n` : ''}`;
+  }
+  return text;
+}
+
+/** The hard deny when the hook budget is gone before a read can run: a hook killed at 10 s writes no deny (seat change 2, F6). */
+const clockDeny = (branch: string): Deny => hardOf(deny('holdout-scan-unavailable', `this push of ${branch} cannot be checked: the time of the hook ran out before its reads could run. Run the push again when the machine is less busy.`, 'push'));
+/** F6 (seat 15:2x): shipTap makes at most two more git reads (2 s each). Below this many ms of budget the push is denied on the clock first. */
+const SHIP_RESERVE_MS = 1500;
+
+/** The error code of a failed git read (makeGit throws spawnSync's error: ENOBUFS over maxBuffer, ETIMEDOUT on the timeout). */
+const errCode = (e: unknown): string => String((e as NodeJS.ErrnoException | undefined)?.code ?? '');
+
+/**
+ * The added text of a `git log -p --cc` output: commit records, file headers and every hunk line whose prefix columns hold a +. A removed or
+ * context line is not read (it is in a parent, which is in the range or on fork/main). The prefix width is the count of @ in the hunk header
+ * minus one: 1 for a normal diff, the parent count for a combined diff. The message is indented one space (%w(0,1,1)), so no message line can
+ * start a diff or a hunk; a hunk header counts only inside a diff.
+ */
+function addedText(log: string): { text: string; binary: boolean } {
+  const out: string[] = [];
+  let inDiff = false;
+  let binary = false;
+  let width = 0; // 0: not in a hunk (a commit record or a file header: read whole)
+  for (const line of log.split('\n')) {
+    if (line.startsWith(COMMIT_MARK)) { inDiff = false; width = 0; out.push(line); continue; }
+    if (line.startsWith('diff --')) { inDiff = true; width = 0; out.push(line); continue; }
+    const at = inDiff ? /^(@{2,}) /.exec(line) : null;
+    if (at) { width = at[1].length - 1; continue; }
+    // --cc ignores --text: a binary file in a merge prints only this line, so its resolution cannot be read (measured on git 2.47).
+    if (inDiff && width === 0 && /^Binary files (?:.* )?differ$/.test(line)) binary = true;
+    if (width === 0) { out.push(line); continue; }
+    // Only a line that is new against EVERY parent: a column with no + means the line equals that parent's line, which is read in its own
+    // commit of the range or is on fork/main (a merge of main must not deny on main's own lines).
+    if (line.slice(0, width) === '+'.repeat(width)) out.push(line);
+  }
+  return { text: out.join('\n'), binary };
+}
+
 function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, chainedCommit: boolean, alone: boolean): Deny | null {
+  // The budget of every read here is budgetedDeps (seat read 2, item 3): a spent budget or a timeout throws to scanHoldout's clock deny.
   const isRe = sendsRe(p, deps, dir, branch);
   // `alone` is false when the command holds anything but cd, read-only git and pushes (a commit -a, an amend, a merge, a redirect):
   // such a command can change the branch before the push, so it counts as chained.
@@ -2832,28 +2961,61 @@ function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, 
     if (hit === 'hit') return stop('holdout-chained-answer-key', 'the same command also changes an answer-key path, so the new content cannot be read yet. Commit first, push in a separate command.');
   }
   const ref = p.src ?? 'HEAD';
-  if (ref.startsWith('-')) return null; // shipTap denies a ref that starts with a dash
+  // C5 F2: a source that starts with a dash was trusted to shipTap, which a push to main never reaches. Deny it here (git takes no such ref).
+  if (ref.startsWith('-')) return stop('holdout-scan-unavailable', 'its source ref starts with a dash. Name the branch: git push <remote> <branch>.');
   const sha = deps.git(dir, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
-  if (sha.status !== 0 || sha.stdout.trim() === '') return isRe ? stop('holdout-scan-unavailable', 'its head could not be read. Run the push again from the repo.') : null;
-  const range = `fork/main...${sha.stdout.trim()}`;
-  const names = deps.git(dir, ['diff', '--name-only', '--no-renames', '-z', range]);
-  if (names.status !== 0) return stop('holdout-scan-unavailable', 'the changed files against fork/main could not be read. Run git fetch fork main in the repo, then push again.');
-  const files = names.stdout.split('\0').filter(Boolean);
-  if (!isRe && deps.answerKeyHits!(files).length === 0) return null;
-  if (files.length > SCAN_MAX_FILES) return stop('holdout-scan-too-large', `it changes ${files.length} files, over the bound of ${SCAN_MAX_FILES}. Push in parts: fewer files in each push.`);
+  // C5 change 3: a push that names a tag is a scanned class (its tag message and its commits). A force or wide form of a scanned push is how
+  // --tags reads in CCv3: its log reads start from every local tag too (--tags), so a tagged commit outside the branch is read.
+  const named = namedTags(p, deps, dir);
+  // PR 612 critic hole 3: a force or wide form (--tags) is scanned on every branch, not only a re/ one (B9 ruling: no change to WIDE_LONG).
+  const scanned = isRe || named.length > 0 || p.force;
+  const allTags = scanned && p.force ? ['--tags'] : [];
+  if (sha.status !== 0 || sha.stdout.trim() === '') return scanned ? stop('holdout-scan-unavailable', 'its head could not be read. Run the push again from the repo.') : null;
+  const head = sha.stdout.trim();
+  const range = `${FORK_MAIN}..${head}`;
+  // C5 read 1 (items 9b, C10): the names and the count of every commit of the range, merge resolutions too (--cc).
+  let names: { status: number; stdout: string };
+  try {
+    names = deps.git(dir, ['log', '--cc', '--root', '--name-only', '--no-renames', '-z', '--format=%x01c5%x00%H', ...allTags, range], { timeout: GIT_TIMEOUT_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
+  } catch (e) {
+    if (errCode(e) === 'ENOBUFS') return stop('holdout-scan-too-large', `its commit list is over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
+    throw e;
+  }
+  if (names.status !== 0) return stop('holdout-scan-unavailable', 'the commits against fork/main could not be read. Run git fetch fork main in the repo, then push again.');
+  const tokens = names.stdout.split('\0').map((t) => t.replace(/^\n+/, ''));
+  const commits = tokens.filter((t) => t === COMMIT_MARK).length;
+  const files = tokens.filter((t, i) => t !== '' && t !== COMMIT_MARK && tokens[i - 1] !== COMMIT_MARK);
+  // The trigger first: a push outside both scanned classes is not bounded here (main let a long feature branch pass; advisor item 2).
+  if (!scanned && deps.answerKeyHits!(files).length === 0) return null;
+  if (commits > SCAN_MAX_COMMITS) return stop('holdout-scan-too-large', `it sends ${commits} commits, over the bound of ${SCAN_MAX_COMMITS}. ${SPLIT_WAY_OUT}`);
+  if (new Set(files).size > SCAN_MAX_FILES) return stop('holdout-scan-too-large', `it changes ${new Set(files).size} files, over the bound of ${SCAN_MAX_FILES}. ${SPLIT_WAY_OUT}`);
   let ids: string[];
   try { ids = deps.holdoutIds!(dir); } catch { return stop('holdout-scan-unavailable', 'the holdout id list could not be read, so the scan cannot run.'); }
   if (!Array.isArray(ids) || ids.length === 0) return stop('holdout-scan-unavailable', 'the holdout id list is empty, so the scan cannot run.');
-  const diff = deps.git(dir, ['diff', '--unified=0', '--no-color', '--no-renames', range]);
-  const log = deps.git(dir, ['log', '--format=%B', `fork/main..${sha.stdout.trim()}`]);
-  if (diff.status !== 0 || log.status !== 0) return stop('holdout-scan-unavailable', 'the diff or the commit messages could not be read. Run the push again from the repo.');
-  if (diff.stdout.length > SCAN_MAX_BYTES) return stop('holdout-scan-too-large', `its diff is over ${SCAN_MAX_BYTES} bytes. Push in parts: fewer commits or files in each push.`);
-  // Every line that starts with + counts, the +++ file headers too: a header holds only a path (scanned anyway), and an added line whose
-  // content starts with ++ must not be dropped (CLI round 1, item d).
-  const added = diff.stdout.split('\n').filter((l) => l.startsWith('+')).join('\n');
-  const count = countIdsIn(`${added}\n${log.stdout}\n${files.join('\n')}`, ids);
+  // C5 read 2 (items 9, 12, F1, binary): every added line of every commit, with its message. --text: a binary file is read, not named.
+  // --no-textconv, --no-ext-diff: no repo or user config changes what git prints.
+  let log: { status: number; stdout: string };
+  try {
+    // Seat read 2, item 2: --root (log.showRoot=false hides the root commit of an orphan branch), --encoding=UTF-8 (i18n.logOutputEncoding).
+    log = deps.git(dir, ['log', '-p', '--cc', '--root', '--encoding=UTF-8', '--text', '--no-textconv', '--no-ext-diff', '--unified=0', '--no-color', '--no-renames', '--format=%x01c5 %H%n%w(0,1,1)%B', ...allTags, range], { timeout: SCAN_READ_MS, maxBuffer: SCAN_MAX_BYTES + 1 });
+  } catch (e) {
+    if (errCode(e) === 'ENOBUFS') return stop('holdout-scan-too-large', `its commit content is over ${SCAN_MAX_BYTES} bytes. ${SPLIT_WAY_OUT}`);
+    throw e;
+  }
+  if (log.status !== 0) return stop('holdout-scan-unavailable', 'the commit content could not be read. Run the push again from the repo.');
+  // C5 change 3: a scanned push can carry annotated tags (--follow-tags, push.followTags, a tag refspec): read the local tag names and messages.
+  // CLI finding at 8263b158 (seat ruling 18:48): every push that reaches this line is triggered (line `!scanned && ... return null` above),
+  // the answer-key trigger of a push that is not re/ included, so the tag text is read for each one.
+  const tags = tagText(p.force, head, deps, dir, stop);
+  if (typeof tags !== 'string') return tags;
+  const added = addedText(log.stdout);
+  if (added.binary) return stop('holdout-scan-unavailable', `it sends a binary file that git prints only as "Binary files differ" (a merge resolution), so its content cannot be read. ${SPLIT_WAY_OUT}`);
+  // Seat read 2, item 1: a UTF-16 file prints a NUL between characters under --text. Count the text and the text without NUL (an id counts once).
+  // PR 612 review (major): a tag name the push names leaves too, with or without a local tag of that name (tagText reads local tags only).
+  const all = `${added.text}\n${files.join('\n')}\n${tags}\n${named.join('\n')}\n${p.branch ?? ''}`;
+  const count = countIdsIn(`${all}\n${all.replace(/\0/g, '')}`, ids);
   if (count === 0) return null;
-  return hardOf(deny('holdout-id', `this push of ${branch} carries ${count} holdout id${count === 1 ? '' : 's'} in added lines, commit messages or file names. Remove them, or push without them. Which ones stays with the seat: this text names a count only.`, 'push'));
+  return hardOf(deny('holdout-id', `this push of ${branch} carries ${count} holdout id${count === 1 ? '' : 's'} in the added lines, commit messages, file names or tag messages of what it sends (an older commit of the branch counts too). Remove them from every commit and local tag. ${SPLIT_WAY_OUT} Which ones stays with the seat: this text names a count only.`, 'push'));
 }
 
 /**
@@ -2917,6 +3079,9 @@ function judgePush(shape: Shape, deps: Deps, dir: string, ctx: PushCtx): Decisio
   if (p.force) return d('push-unsafe', PUSH_UNSAFE_WHY);
   if (branch === '') return d('push-target-unresolved', pushUnresolvedWhy('the branch of this push cannot be named (detached HEAD?)'));
   if (branch === 'main') return ALLOW;
+  // F6 (card coord-decision-gate-round3-content-scan, seat word): the reads of shipTap must end before the 10 s kill, or its deny is never
+  // written. Budget at most 7000 ms from the start; shipTap's two reads take at most 4000 ms more.
+  if (deps.scanLeft && deps.scanLeft() < SHIP_RESERVE_MS) return clockDeny(branch);
   const texts: ShipTexts = {
     notRef: (ref) => pushUnresolvedWhy(`${ref} is not a ref`),
     tree: (what) => `cannot read the tree of ${what} in ${dir}, so its ship decision cannot be found. Run the command again from the repo.`,
@@ -3295,13 +3460,14 @@ const hardAppDeny = (d: Deny): boolean => d.hard === true || (d.scope === 'app-p
 function perCall(deps: Deps): Deps {
   const seen = new Map<string, { ok: ReturnType<Deps['git']> } | { err: unknown }>();
   const mode = { app: false };
-  const git: Deps['git'] = (cwd, args) => {
+  const git: Deps['git'] = (cwd, args, opts) => {
     // The runner is in the key: a deadline throw of the app runner is never the answer of a CCv3 call (fix round 3, item 4).
     const run = mode.app && deps.appGit ? deps.appGit : deps.git;
-    const key = `${run === deps.git ? '' : 'app\0'}${cwd}\0${args.join('\0')}`;
+    // C5 (F5): the read options go through, and are in the key: a read with its own buffer or timeout is not the answer of a default read.
+    const key = `${run === deps.git ? '' : 'app\0'}${cwd}\0${args.join('\0')}${opts ? `\0${JSON.stringify(opts)}` : ''}`;
     let hit = seen.get(key);
     if (!hit) {
-      try { hit = { ok: run(cwd, args) }; } catch (err) { hit = { err }; }
+      try { hit = { ok: opts ? run(cwd, args, opts) : run(cwd, args) }; } catch (err) { hit = { err }; }
       seen.set(key, hit);
     }
     if ('err' in hit) throw hit.err;
@@ -3605,7 +3771,7 @@ export class GitDeadlineError extends Error {
 
 /** Every git call of one hook run ends by this many ms after the hook start (the hook itself is killed at 10 s). */
 const HOOK_BUDGET_MS = 7000;
-type Spawn = (cmd: string, args: string[], opts: { cwd?: string; encoding: 'utf8'; timeout?: number; windowsHide?: boolean }) => { status: number | null; stdout?: string | null; error?: Error };
+type Spawn = (cmd: string, args: string[], opts: { cwd?: string; encoding: 'utf8'; timeout?: number; windowsHide?: boolean; maxBuffer?: number }) => { status: number | null; stdout?: string | null; error?: Error };
 export interface GitOptions {
   /** Epoch ms after which no git call starts (GitDeadlineError). Absent: no deadline, each call keeps its own 2 s timeout. */
   deadline?: number;
@@ -3619,11 +3785,13 @@ export function makeGit(opts: GitOptions = {}): Deps['git'] {
   // PR 566 CI (semgrep detect-child-process): the default runs only git, as a literal. makeGit calls spawn with 'git' alone.
   const spawn: Spawn = opts.spawn ?? ((_cmd, args, o) => spawnSync('git', args, o));
   const exists = opts.exists ?? existsSync;
-  return (cwd, args) => {
-    const left = opts.deadline === undefined ? GIT_TIMEOUT_MS : opts.deadline - now();
+  return (cwd, args, read = {}) => {
+    const own = read.timeout ?? GIT_TIMEOUT_MS;
+    const left = opts.deadline === undefined ? own : opts.deadline - now();
     if (left <= 0) throw new GitDeadlineError(args);
     if (!exists(cwd)) throw new MissingCwdError(cwd);
-    const r = spawn('git', args, { cwd, encoding: 'utf8', timeout: Math.min(GIT_TIMEOUT_MS, left), windowsHide: true });
+    // F5 (card coord-decision-gate-round3-content-scan): maxBuffer only when the caller names one, so every other read keeps Node's default.
+    const r = spawn('git', args, { cwd, encoding: 'utf8', timeout: Math.min(own, left), windowsHide: true, ...(read.maxBuffer ? { maxBuffer: read.maxBuffer } : {}) });
     if (r.error) throw r.error;
     return { status: r.status ?? 1, stdout: r.stdout ?? '' };
   };
@@ -3636,10 +3804,13 @@ export function makeGit(opts: GitOptions = {}): Deps['git'] {
  */
 export function realDeps(opts: { start?: number } & Pick<GitOptions, 'now' | 'spawn' | 'exists'> = {}): Deps {
   const { start, ...run } = opts;
+  const t0 = start ?? Date.now();
+  const clock = run.now ?? Date.now;
   let registry: Registry | null = null;
   return {
     git: makeGit(run),
-    appGit: makeGit({ ...run, deadline: (start ?? Date.now()) + HOOK_BUDGET_MS }),
+    scanLeft: () => t0 + HOOK_BUDGET_MS - clock(),
+    appGit: makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS }),
     readFile: (p) => { try { return existsSync(p) ? readFileSync(p, 'utf8') : null; } catch { return null; } },
     env: process.env,
     home: homedir(),

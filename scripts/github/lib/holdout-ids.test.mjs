@@ -6,13 +6,15 @@
 //   a form is missed or a bare small number matches                                                            -> HS1
 //   the lib has an import, an entry guard or a file read (it is bundled into a hook)                          -> HS3
 //   the matcher returns an id instead of a count                                                               -> HS4
+//   a short sha form is missed, in either direction (card coord-decision-gate-round3-content-scan, F1)         -> HS5
+//   a dataset or config of the wrong shape gives a short list instead of a throw (item 14)                     -> HS6
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setOf } from '../../eval/review-eval/dataset.mjs';
-import { countIdsIn, holdoutIdsOf } from './holdout-ids.mjs';
+import { checkHoldoutShape, countIdsIn, holdoutIdsOf } from './holdout-ids.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,4 +51,40 @@ test('HS4: the matcher returns a count, never an id', () => {
   const n = countIdsIn('PR 9990001', ['9990001']);
   assert.equal(typeof n, 'number');
   assert.equal(n, 1);
+});
+
+test('HS5: a sha matches by prefix in both directions, with a 7-hex floor', () => {
+  // Breaks when: a stored sha matches only as a whole token (a commit message cites the first 8 hex).
+  const full = 'abcdef0123456789abcdef0123456789abcdef01';
+  assert.equal(countIdsIn('merge of abcdef01 done', [full]), 1, 'text holds a prefix of the stored sha');
+  assert.equal(countIdsIn(`merge of ${full} done`, ['abcdef0']), 1, 'stored short sha is a prefix of the text sha');
+  assert.equal(countIdsIn('merge of abcdef done', [full]), 0, 'six hex is under the floor');
+  assert.equal(countIdsIn('merge of abcdef0aaaa done', [full]), 0, 'a run that is not a prefix');
+  assert.equal(countIdsIn(`hash ${'9'.repeat(12)}${full}${'8'.repeat(12)} end`, [full]), 1, 'a sha inside a hex run longer than 40');
+});
+
+test('HS6: the shape check throws on a dataset or config that would give a short list', () => {
+  // Breaks when: a missing findings key, an empty list, a string pr or a non-array config field passes the check.
+  const good = { prs: [{ pr: 9001 }], findings: [{ pr: 9001, comment_id: 5 }] };
+  assert.doesNotThrow(() => checkHoldoutShape(good, { reserve: [], holdoutExclude: [] }));
+  assert.doesNotThrow(() => checkHoldoutShape(good, undefined));
+  const bad = [
+    [{ prs: [{ pr: 9001 }] }, {}],
+    [{ prs: [], findings: good.findings }, {}],
+    [{ prs: good.prs, findings: [] }, {}],
+    [{ prs: [{ pr: '9001' }], findings: good.findings }, {}],
+    [{ prs: good.prs, findings: [{ pr: 0 }] }, {}],
+    [null, {}],
+    [[], {}],
+    [good, { reserve: { pr: 1 } }],
+    [good, { holdoutExclude: 'x' }],
+    [good, []],
+    // Seat read 2, item 4: a renamed comment id key, a comment id of the wrong type, a round of the wrong type.
+    [{ prs: good.prs, findings: [{ pr: 9001, commentId: 5 }] }, {}],
+    [{ prs: good.prs, findings: [{ pr: 9001, comment_id: { id: 5 } }] }, {}],
+    [{ prs: good.prs, findings: [{ pr: 9001, comment_id: 5, round: { sha: 'x' } }] }, {}],
+  ];
+  // The real shapes pass: a finding with no comment id, a non-digit comment id string, an integer round (2026-11-15 dataset).
+  assert.doesNotThrow(() => checkHoldoutShape({ prs: good.prs, findings: [{ pr: 9001, comment_id: '5', round: 2 }, { pr: 9001 }, { pr: 9001, comment_id: 'r-abc' }] }, {}));
+  for (const [ds, cfg] of bad) assert.throws(() => checkHoldoutShape(ds, cfg), /wrong shape/, JSON.stringify([ds, cfg]));
 });

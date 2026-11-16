@@ -243,11 +243,15 @@ export function runNode(script, args = [], { env, input, cwd, harness = false, t
  * without ctx.env: a child with no env inherits the live database url. It tracks the session id
  * for the live-board zero check.
  */
-export function lane(ctx, args, asSession) {
+export function lane(ctx, args, asSession, { allowAs = true } = {}) {
   if (ctx?.aborted) throw new HarnessError('lane: refused, the drill was aborted after a timeout');
   if (!ctx?.env) throw new HarnessError('lane: ctx.env is missing; a child without the scratch env would reach the live board');
   track(ctx, 'session', asSession);
-  return runNode(PATHS.LANE, [...args, '--as', asSession], { env: ctx.env, cwd: ctx.sandbox.projectDir });
+  // Gap 4: lane.mjs refuses a write verb with --as <other session> unless LANE_ALLOW_AS=1. The drill acts as many sessions, so it sets it;
+  // a row that tests the refusal itself passes { allowAs: false }.
+  const env = { ...ctx.env };
+  if (allowAs) env.LANE_ALLOW_AS = '1'; else delete env.LANE_ALLOW_AS;
+  return runNode(PATHS.LANE, [...args, '--as', asSession], { env, cwd: ctx.sandbox.projectDir });
 }
 
 // ---------------------------------------------------------------- fixtures

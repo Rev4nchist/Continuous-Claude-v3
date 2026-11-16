@@ -36,7 +36,8 @@
  * it, so every session reading it would answer with the same id and the lock
  * would be coordinating one imaginary session with itself. That is precisely the
  * identity bug this project spent a session root-causing (8,179 claims, 0 owned
- * by a live session). Explicit `--as <id>` is the only override.
+ * by a live session). Explicit `--as <id>` is the only override. A read verb takes it freely; a write verb takes `--as` only with the
+ * caller's own id or with LANE_ALLOW_AS=1 (drills, probes, tests), else `REFUSED <verb> <id> [as-refused]`, exit 4 (gap 4).
  *
  * FAILURE POSTURE
  * ---------------
@@ -55,8 +56,9 @@
  *   node scripts/coordination/lane.mjs compact <id> "text"   # log a compaction as an event; the note stays (PreCompact hook)
  *   node scripts/coordination/lane.mjs state <id> <backlog|ready|active|blocked|review|done> [--if-state <from>] [--reason "..."] [--override --reason "..."]
  *                                                       # state, release and done change a lane only for its holder. A lane with no holder opens for any session; a quiet
- *                                                       # holder or an unowned blocked lane needs --reason; --override --reason (cooperative) also changes a held lane and
- *                                                       # sends the old holder a DM. A refusal prints `REFUSED <verb> <id> [not-holder|needs-reason|if-state] -- text`, exit 4
+ *                                                       # holder or an unowned blocked lane needs --reason; --override --reason also changes a held lane and
+ *                                                       # sends the old holder a DM, but only for the holder of re-program on the board (on a board with no re-program lane: only on
+ *                                                       # a holder quiet 5 minutes). A refusal prints `REFUSED <verb> <id> [not-holder|needs-reason|if-state|override-not-seat] -- text`, exit 4
  *   node scripts/coordination/lane.mjs release <id> [--note "why"]   # state ready
  *   node scripts/coordination/lane.mjs release <id> --blocked --reason "text"   # holder only: state blocked, no owner, no lease, note = text, in one statement
  *   node scripts/coordination/lane.mjs park <id> [--until <time> | --for 2h..7d] --reason "text"   # holder only; you keep the lane and the lease runs to the end (default 24h).
@@ -97,7 +99,8 @@
  *   node scripts/coordination/lane.mjs remind clear <id>  # the lane stops being a reminder; band and notion_page_id stay
  *   node scripts/coordination/lane.mjs remind sync on|off|status  # the Notion sync switch (default off): a file in the reminder state folder, no database
  *   node scripts/coordination/lane.mjs remind tick [--dry-run] [--no-sync]  # the 5-minute job: fire due reminders on every board, event, toast P0/P1. Exit 2: database down or no migration 0005
- *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add; items may carry band and priority (omitted = keep)
+ *   node scripts/coordination/lane.mjs seed <file.json> # idempotent bulk add; items may carry band and priority (omitted = keep). A lane in the file that another live session holds
+ *                                                       # refuses the whole file (`REFUSED seed <id> [not-holder]`, exit 4), unless the caller holds re-program on the board
  *   node scripts/coordination/lane.mjs peers [--all]    # who else is live on this board (--all: on the machine)
  *   node scripts/coordination/lane.mjs whoami           # my label, uuid and lanes
  *   node scripts/coordination/lane.mjs adopt --from <old-uuid>
@@ -192,7 +195,7 @@ function me() {
   const id = typeof flags.as === 'string' ? flags.as : process.env.CLAUDE_CODE_SESSION_ID;
   if (!id) {
     throw new Error(
-      'no session id. CLAUDE_CODE_SESSION_ID is unset and --as was not given.\n' +
+      'no session id. CLAUDE_CODE_SESSION_ID is unset. Set it; --as serves read verbs only (a write verb refuses --as of another session).\n' +
       'Deliberately NOT falling back to ~/.claude/.coordination-session-id -- that\n' +
       'file is global and would make every session claim the same identity.',
     );
@@ -401,6 +404,25 @@ const reclaimableSql = (alias) => `(
 )`;
 const RECLAIMABLE = reclaimableSql('l');
 
+/** The master card of a program board (rule B6.5): its holder is the seat. One constant, so a rename touches one line. */
+const MASTER_CARD = 're-program';
+/** SQL: the master card row of the board of lane `l`. */
+const MASTER_ROW = `m.id = '${MASTER_CARD}' AND m.project_key = l.project_key`;
+/** SQL boolean: the session `me` (a bound parameter name) holds the master card on the board of lane `l`. */
+const holdsMasterSql = (me) => `EXISTS (SELECT 1 FROM agentic_os.lane m WHERE ${MASTER_ROW} AND m.owner_session_id = ${me}::text)`;
+/**
+ * SQL boolean: may `me` use --override on lane `l` (gap 4, rule L2.10; seat ruling 2026-11-16)?
+ * A board WITH a master card: only its holder. A board with NO master card has no seat: override passes only when the
+ * holder of `l` is not active in the last STALE_MINUTES (the RECLAIMABLE activity test without its lease part), so the
+ * way out of a parked lane whose owner is gone stays open. Tested in the same UPDATE as the holder test.
+ */
+const overrideAllowedSql = (me) => `(
+  ${holdsMasterSql(me)}
+  OR (NOT EXISTS (SELECT 1 FROM agentic_os.lane m WHERE ${MASTER_ROW})
+      AND NOT EXISTS (SELECT 1 FROM sessions hs WHERE hs.id = l.owner_session_id
+                        AND ${ALIVE_AT('hs.')} > now() - interval '${STALE_MINUTES} minutes'))
+)`;
+
 // ---------------------------------------------------------------- render
 
 const STATE_MARK = {
@@ -573,10 +595,10 @@ function ownerFlags() {
  */
 function ownerWhere(p, { holderOnly = false, unownedBlockedFree = false, ifState = false } = {}) {
   const open = holderOnly
-    ? `(l.owner_session_id = ${p.me}::text OR ${p.override}::boolean)`
+    ? `(l.owner_session_id = ${p.me}::text OR (${p.override}::boolean AND ${overrideAllowedSql(p.me)}))`
     : `(l.owner_session_id = ${p.me}::text
          OR (${RECLAIMABLE} AND (${p.reason}::text IS NOT NULL OR (l.owner_session_id IS NULL${unownedBlockedFree ? '' : " AND l.state <> 'blocked'"})))
-         OR ${p.override}::boolean)`;
+         OR (${p.override}::boolean AND ${overrideAllowedSql(p.me)}))`;
   return `AND ${open}${ifState ? ` AND (${p.ifState}::text IS NULL OR l.state = ${p.ifState}::text)` : ''}`;
 }
 
@@ -670,13 +692,23 @@ const unparkedNote = (col) => `(CASE WHEN ${col} LIKE 'PARKED until %' THEN subs
  */
 async function ownerRefusal(c, { verb, id, board, myId, reason, override, ifState = null, holderOnly = false, unownedBlockedFree = false }) {
   const cur = (await c.query(
-    `SELECT l.owner_session_id AS owner, l.state, ${RECLAIMABLE} AS reclaimable FROM agentic_os.lane l WHERE l.id=$1 AND l.project_key=$2`,
-    [id, board.key],
+    `SELECT l.owner_session_id AS owner, l.state, ${RECLAIMABLE} AS reclaimable,
+            ${overrideAllowedSql('$3')} AS override_ok, EXISTS (SELECT 1 FROM agentic_os.lane m WHERE ${MASTER_ROW}) AS has_master
+       FROM agentic_os.lane l WHERE l.id=$1 AND l.project_key=$2`,
+    [id, board.key, myId],
   )).rows[0];
   if (!cur) return await noLane(c, id, board);
   const { owner } = cur;
-  if (!override) {
-    if (holderOnly ? owner !== myId : owner && owner !== myId && !cur.reclaimable) return notHolderRefusal(verb, id, owner, myId);
+  // An --override that the seat rule does not allow counts as no override: the holder, the reclaimable-plus-reason path and --if-state
+  // then decide as for a plain call (the UPDATE of ownerWhere does the same). Only a refusal that --override would have avoided is
+  // named [override-not-seat].
+  const denied = override && !cur.override_ok;
+  const overrideRefusal = () => refusal(verb, id, 'override-not-seat',
+    cur.has_master ? `only the holder of ${MASTER_CARD} may use --override on this board`
+      : `the holder ${L(owner)} is live (active in the last ${STALE_MINUTES} minutes), and this board has no ${MASTER_CARD} lane`,
+    'Ask the holder or the seat. --override is not for a live holder.', { holder: owner });
+  if (!override || denied) {
+    if (holderOnly ? owner !== myId : owner && owner !== myId && !cur.reclaimable) return denied ? overrideRefusal() : notHolderRefusal(verb, id, owner, myId);
     const free = owner === null && (unownedBlockedFree || cur.state !== 'blocked');
     if (cur.reclaimable && owner !== myId && reason === null && !free) {
       return refusal(verb, id, 'needs-reason',
@@ -1279,6 +1311,33 @@ async function checkSeedItems(c, items, board) {
 // ---------------------------------------------------------------- seed
 
 /**
+ * The holder test of seed (gap 4, rule L2.10). A lane in the file that another session holds, and that is not reclaimable (L2.8),
+ * refuses the WHOLE file: exit 4, `REFUSED seed <id> [not-holder]`, nothing written. The holder of the master card passes (the seat
+ * seeds edges and map changes for lanes that builders hold, L2.6); on a board with no master card nobody does. Every lane of the file
+ * is locked (FOR UPDATE) first, in the transaction of the seed, so a claim between this test and the write waits. Call it inside BEGIN.
+ */
+async function refuseHeldSeed(c, ids, board, myId) {
+  // 1. Lock EVERY lane of the file that exists, held or not: a claim of an unowned lane then waits until the seed commits.
+  //    FOR UPDATE locks only the rows its SELECT returns, so the holder filter must come in a second statement.
+  await c.query(`SELECT l.id FROM agentic_os.lane l WHERE l.id = ANY($1::text[]) AND l.project_key = $2 ORDER BY l.id FOR UPDATE OF l`, [ids, board.key]);
+  // 2. The holder test, on the rows as they are after any wait (a new statement, a new snapshot).
+  const held = (await c.query(
+    `SELECT l.id, l.owner_session_id AS owner FROM agentic_os.lane l
+      WHERE l.id = ANY($1::text[]) AND l.project_key = $2
+        AND l.owner_session_id IS NOT NULL AND l.owner_session_id <> $3::text
+        AND NOT ${RECLAIMABLE}
+        AND NOT ${holdsMasterSql('$3')}
+      ORDER BY l.id`,
+    [ids, board.key, myId],
+  )).rows;
+  if (held.length) {
+    const e = notHolderRefusal('seed', held[0].id, held[0].owner, myId, { withOverride: false });
+    e.message += `\n  The whole file was refused and nothing was written${held.length > 1 ? `; ${held.length} lanes in it are held: ${held.map((r) => r.id).join(', ')}` : ''}.`;
+    throw e;
+  }
+}
+
+/**
  * One lane item of a seed file as an upsert. Deliberately asymmetric on conflict: descriptive columns are refreshed
  * from the seed, but `state`, `note` and every ownership column are NOT.
  * Re-seeding must never revert a live claim or overwrite the status line
@@ -1359,6 +1418,7 @@ async function seedObject(c, { lanes, edges, dropped }, { file, board, myId }) {
   try {
     await c.query(`SELECT pg_advisory_xact_lock(hashtext('lane_dep:' || $1::text))`, [board.key]);
     await refuseForeignEdges(c, edges, board);
+    await refuseHeldSeed(c, lanes.map((it) => it.id), board, myId);
     for (const it of lanes) await upsertSeedLane(c, it, board, withBand);
     await replaceEdges(c, lanes, edges, board);
     await refuseCycle(c, board);
@@ -2308,7 +2368,12 @@ const commands = {
     if (parsed.form === 'object') return seedObject(c, parsed, { file, board, myId });
     await checkSeedItems(c, parsed.lanes, board);
     const withBand = parsed.lanes.some((it) => parseBand(it.band) !== undefined);
-    for (const it of parsed.lanes) await upsertSeedLane(c, it, board, withBand);
+    // One transaction, so the holder test and the writes see the same locked rows (gap 4).
+    await inLaneTx(c, async () => {
+      await refuseHeldSeed(c, parsed.lanes.map((it) => it.id), board, myId);
+      for (const it of parsed.lanes) await upsertSeedLane(c, it, board, withBand);
+      return { value: null };
+    });
     await logEvent(c, { kind: 'seeded', sessionId: myId, body: `seeded ${parsed.lanes.length} lanes from ${file}` });
     return `seeded ${parsed.lanes.length} lane(s) on board ${board.key}`;
   },
@@ -2728,7 +2793,27 @@ const FOREIGN_FLAGS = {
   note: ['override'], add: ['override'], claim: ['override'],
 };
 
+/** Verbs that only read: `--as <id>` stays open for them (the /os pane runs `board --json --as <sid>` with no session env). */
+const READ_VERBS = new Set(['board', 'peers', 'whoami', 'next', 'mine']);
+/** `inbox` reads only with --peek or --id; a plain `inbox` moves the read cursor of the session it acts as, so it is a write. */
+const isReadVerb = (verb) => READ_VERBS.has(verb) || (verb === 'inbox' && (flags.peek === true || flags.id !== undefined));
+
+/**
+ * Gap 4, rule L2.10: a write verb run `--as <id>` that is not the caller's own session id (CLAUDE_CODE_SESSION_ID, unset counts as no
+ * own id) is refused unless LANE_ALLOW_AS is exactly "1": drills, probes and tests set it. Cooperative, not security: a session
+ * can set the variable. It stops the accident and the open door. `--as <own id>` is not touched.
+ */
+function assertAsAllowed(verb) {
+  if (typeof flags.as !== 'string' || isReadVerb(verb)) return;
+  if (flags.as === process.env.CLAUDE_CODE_SESSION_ID || process.env.LANE_ALLOW_AS === '1') return;
+  const own = process.env.CLAUDE_CODE_SESSION_ID;
+  throw refusal(verb, positional[1] ?? '-', 'as-refused',
+    `--as ${flags.as.slice(0, 8)} is not this session (${own ? `#${own.slice(0, 8)}` : 'no CLAUDE_CODE_SESSION_ID'}); a write verb acts only as its own session`,
+    'Drop --as. Drills and probes set LANE_ALLOW_AS=1.');
+}
+
 try {
+  assertAsAllowed(cmd);
   const foreign = (FOREIGN_FLAGS[cmd] ?? []).find((k) => flags[k] !== undefined);
   if (foreign) throw new Error(`--${foreign} does not apply to ${cmd} (usage error; nothing was run)`);
   if (BARE_TEXT_FLAG) throw new Error(`--${BARE_TEXT_FLAG} needs a value (usage error; nothing was run)`);

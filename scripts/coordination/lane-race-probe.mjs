@@ -92,7 +92,7 @@ function db() {
 function run(verb, laneId, asSession, extra = []) {
   return new Promise((resolve) => {
     execFile(process.execPath, [CLI, verb, laneId, ...extra, '--as', asSession],
-      { cwd: REPO }, (err, stdout, stderr) => {
+      { cwd: REPO, env: { ...process.env, LANE_ALLOW_AS: '1' } }, (err, stdout, stderr) => { // gap 4: racers act as other sessions with --as
         resolve({ code: err ? (err.code ?? 1) : 0, out: String(stdout), err: String(stderr) });
       });
   });
@@ -288,6 +288,25 @@ async function doneRaceChecks() {
 async function overrideRollbackChecks() {
   const [H, S, id] = ['H', 'S', 'lane'].map((n) => `${PREFIX}f6-${n}`);
   await heldLane(id, H);
+  // Gap 4: --override is for the holder of the master card (or, on a board with none, for a quiet holder: H is live here). S is the seat.
+  // The master card id has no probe prefix, so it is removed here and not by the prefix cleanup. assertScratchUrl reads the URL text, and a
+  // socket URL with a db query parameter can pass it: ask the server which database this connection is in before the first write, and
+  // never delete a master card that was already there.
+  const dbName = (await c.query('SELECT current_database() AS n')).rows[0].n;
+  if (!dbName.startsWith('lanes_pr1_')) {
+    process.stderr.write(`lane-race-probe: refusing the F6 master card write: the server says this is database '${dbName}', not a lanes_pr1_ scratch database.\n`);
+    process.exit(2);
+  }
+  if ((await c.query(`SELECT 1 FROM agentic_os.lane WHERE id='re-program'`)).rowCount) {
+    process.stderr.write(`lane-race-probe: refusing F6: a re-program lane already exists in '${dbName}'; the probe does not delete a master card it did not make.\n`);
+    process.exit(2);
+  }
+  await mkLane('re-program', 'active');
+  await c.query(`UPDATE agentic_os.lane SET owner_session_id=$1, lease_expires_at = now() + interval '90 minutes' WHERE id='re-program'`, [S]);
+  try { await overrideRollbackBody(H, S, id); } finally { await c.query(`DELETE FROM agentic_os.lane WHERE id='re-program' AND owner_session_id=$1`, [S]); }
+}
+
+async function overrideRollbackBody(H, S, id) {
   const argv = ['review', '--override', '--reason', 'probe handover'];
   const failed = await withDdl(`ALTER TABLE agentic_os.lane_event ADD CONSTRAINT zz_probe_block CHECK (kind <> 'state_changed') NOT VALID`,
     `ALTER TABLE agentic_os.lane_event DROP CONSTRAINT IF EXISTS zz_probe_block`, () => run('state', id, S, argv));

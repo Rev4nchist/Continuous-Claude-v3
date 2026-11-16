@@ -527,7 +527,7 @@ describe('owner rule on done: F3 and S3', () => {
     assert.equal((await events(id)).at(-1).detail.prevOwner, HOLDER);
   });
 
-  it('F6 and met: done --merged --override on a live-held lane writes the DM first and the done event last, and the lane is met', async () => {
+  it('F6 and met: done --merged --override on a lane held by a QUIET holder (no sessions row; a plain board) writes the DM first and the done event last, and the lane is met', async () => {
     const id = await mk('ovm'); await hold(id, HOLDER);
     const r = lane(['done', id, '--merged', s.A, '--override', '--reason', 'builder idle']);
     assert.equal(r.code, 0, r.all);
