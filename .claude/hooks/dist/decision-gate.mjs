@@ -3219,12 +3219,8 @@ function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
     throw e;
   }
   if (log.status !== 0) return stop("holdout-scan-unavailable", "the commit content could not be read. Run the push again from the repo.");
-  let tags = "";
-  if (scanned) {
-    const t = tagText(p.force, head, deps, dir, stop);
-    if (typeof t !== "string") return t;
-    tags = t;
-  }
+  const tags = tagText(p.force, head, deps, dir, stop);
+  if (typeof tags !== "string") return tags;
   const added = addedText(log.stdout);
   if (added.binary) return stop("holdout-scan-unavailable", `it sends a binary file that git prints only as "Binary files differ" (a merge resolution), so its content cannot be read. ${SPLIT_WAY_OUT}`);
   const all = `${added.text}

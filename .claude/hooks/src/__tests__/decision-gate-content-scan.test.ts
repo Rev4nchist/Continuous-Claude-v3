@@ -117,6 +117,27 @@ describe('C5: every outgoing commit is read', () => {
     expect(isHit(reasonOf('git push fork feat/y'))).toBe(true);
   });
 
+  it('C35: a non-re/ push started by an answer-key path reads the tag messages it can send (CLI finding 8263b158, major)', () => {
+    // Breaks when: the tag read runs only for a re/ push or a named tag, not for every push the answer-key trigger starts.
+    git('checkout', '-q', '-b', 'feat/z');
+    mkdirSync(join(repo, 'probe'));
+    put(KEY_FILE, '{"note":"clean"}\n'); commit('key change');
+    git('tag', '-a', 'v-feat', '-m', `release ${CID}`);
+    expect(isHit(reasonOf('git push --follow-tags fork feat/z'))).toBe(true);
+  });
+
+  it('C36: a non-re/ push with no answer-key path and no named tag reads no tag text (seat ruling 18:48: cost stays put)', () => {
+    // Breaks when: the tag read moves above the answer-key trigger, so every push pays for it.
+    git('checkout', '-q', '-b', 'feat/w');
+    put('w.txt', 'w\n'); commit('plain change');
+    git('tag', '-a', 'v-plain', '-m', `release ${CID}`);
+    const reads: string[] = [];
+    const real = realDeps().git;
+    const d = deps({ git: ((dir: string, args: string[], opts?: unknown) => { reads.push(args[0]); return (real as (...a: unknown[]) => ReturnType<Deps['git']>)(dir, args, opts); }) as Deps['git'] });
+    expect(isHit(reasonOf('git push --follow-tags fork feat/w', d))).toBe(false);
+    expect(reads.filter((r) => r === 'for-each-ref')).toEqual([]);
+  });
+
   it('C6: an added line whose content starts with ++ denies (item 12, gate side)', () => {
     // Breaks when: lines that start with +++ are dropped.
     put('p.txt', `++ ${CID}\n`); commit('plusplus');

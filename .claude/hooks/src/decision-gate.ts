@@ -3001,12 +3001,10 @@ function scanHoldoutRead(p: PushShape, deps: Deps, dir: string, branch: string, 
   }
   if (log.status !== 0) return stop('holdout-scan-unavailable', 'the commit content could not be read. Run the push again from the repo.');
   // C5 change 3: a scanned push can carry annotated tags (--follow-tags, push.followTags, a tag refspec): read the local tag names and messages.
-  let tags = '';
-  if (scanned) {
-    const t = tagText(p.force, head, deps, dir, stop);
-    if (typeof t !== 'string') return t;
-    tags = t;
-  }
+  // CLI finding at 8263b158 (seat ruling 18:48): every push that reaches this line is triggered (line `!scanned && ... return null` above),
+  // the answer-key trigger of a push that is not re/ included, so the tag text is read for each one.
+  const tags = tagText(p.force, head, deps, dir, stop);
+  if (typeof tags !== 'string') return tags;
   const added = addedText(log.stdout);
   if (added.binary) return stop('holdout-scan-unavailable', `it sends a binary file that git prints only as "Binary files differ" (a merge resolution), so its content cannot be read. ${SPLIT_WAY_OUT}`);
   // Seat read 2, item 1: a UTF-16 file prints a NUL between characters under --text. Count the text and the text without NUL (an id counts once).
