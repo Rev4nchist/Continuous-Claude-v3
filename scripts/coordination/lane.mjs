@@ -195,7 +195,7 @@ function me() {
   const id = typeof flags.as === 'string' ? flags.as : process.env.CLAUDE_CODE_SESSION_ID;
   if (!id) {
     throw new Error(
-      'no session id. CLAUDE_CODE_SESSION_ID is unset and --as was not given.\n' +
+      'no session id. CLAUDE_CODE_SESSION_ID is unset. Set it; --as serves read verbs only (a write verb refuses --as of another session).\n' +
       'Deliberately NOT falling back to ~/.claude/.coordination-session-id -- that\n' +
       'file is global and would make every session claim the same identity.',
     );
@@ -699,14 +699,16 @@ async function ownerRefusal(c, { verb, id, board, myId, reason, override, ifStat
   )).rows[0];
   if (!cur) return await noLane(c, id, board);
   const { owner } = cur;
-  if (override && !cur.override_ok) {
-    return refusal(verb, id, 'override-not-seat',
-      cur.has_master ? `only the holder of ${MASTER_CARD} may use --override on this board`
-        : `the holder ${L(owner)} is live (active in the last ${STALE_MINUTES} minutes), and this board has no ${MASTER_CARD} lane`,
-      'Ask the holder or the seat. --override is not for a live holder.', { holder: owner });
-  }
-  if (!override) {
-    if (holderOnly ? owner !== myId : owner && owner !== myId && !cur.reclaimable) return notHolderRefusal(verb, id, owner, myId);
+  // An --override that the seat rule does not allow counts as no override: the holder, the reclaimable-plus-reason path and --if-state
+  // then decide as for a plain call (the UPDATE of ownerWhere does the same). Only a refusal that --override would have avoided is
+  // named [override-not-seat].
+  const denied = override && !cur.override_ok;
+  const overrideRefusal = () => refusal(verb, id, 'override-not-seat',
+    cur.has_master ? `only the holder of ${MASTER_CARD} may use --override on this board`
+      : `the holder ${L(owner)} is live (active in the last ${STALE_MINUTES} minutes), and this board has no ${MASTER_CARD} lane`,
+    'Ask the holder or the seat. --override is not for a live holder.', { holder: owner });
+  if (!override || denied) {
+    if (holderOnly ? owner !== myId : owner && owner !== myId && !cur.reclaimable) return denied ? overrideRefusal() : notHolderRefusal(verb, id, owner, myId);
     const free = owner === null && (unownedBlockedFree || cur.state !== 'blocked');
     if (cur.reclaimable && owner !== myId && reason === null && !free) {
       return refusal(verb, id, 'needs-reason',
@@ -1311,17 +1313,21 @@ async function checkSeedItems(c, items, board) {
 /**
  * The holder test of seed (gap 4, rule L2.10). A lane in the file that another session holds, and that is not reclaimable (L2.8),
  * refuses the WHOLE file: exit 4, `REFUSED seed <id> [not-holder]`, nothing written. The holder of the master card passes (the seat
- * seeds edges and map changes for lanes that builders hold, L2.6); on a board with no master card nobody does. The rows are locked
- * (FOR UPDATE) in the transaction of the seed, so a claim between this test and the write waits. Call it inside BEGIN.
+ * seeds edges and map changes for lanes that builders hold, L2.6); on a board with no master card nobody does. Every lane of the file
+ * is locked (FOR UPDATE) first, in the transaction of the seed, so a claim between this test and the write waits. Call it inside BEGIN.
  */
 async function refuseHeldSeed(c, ids, board, myId) {
+  // 1. Lock EVERY lane of the file that exists, held or not: a claim of an unowned lane then waits until the seed commits.
+  //    FOR UPDATE locks only the rows its SELECT returns, so the holder filter must come in a second statement.
+  await c.query(`SELECT l.id FROM agentic_os.lane l WHERE l.id = ANY($1::text[]) AND l.project_key = $2 ORDER BY l.id FOR UPDATE OF l`, [ids, board.key]);
+  // 2. The holder test, on the rows as they are after any wait (a new statement, a new snapshot).
   const held = (await c.query(
     `SELECT l.id, l.owner_session_id AS owner FROM agentic_os.lane l
       WHERE l.id = ANY($1::text[]) AND l.project_key = $2
         AND l.owner_session_id IS NOT NULL AND l.owner_session_id <> $3::text
         AND NOT ${RECLAIMABLE}
         AND NOT ${holdsMasterSql('$3')}
-      ORDER BY l.id FOR UPDATE OF l`,
+      ORDER BY l.id`,
     [ids, board.key, myId],
   )).rows;
   if (held.length) {
@@ -2788,7 +2794,9 @@ const FOREIGN_FLAGS = {
 };
 
 /** Verbs that only read: `--as <id>` stays open for them (the /os pane runs `board --json --as <sid>` with no session env). */
-const READ_VERBS = new Set(['board', 'peers', 'whoami', 'next', 'mine', 'inbox']);
+const READ_VERBS = new Set(['board', 'peers', 'whoami', 'next', 'mine']);
+/** `inbox` reads only with --peek or --id; a plain `inbox` moves the read cursor of the session it acts as, so it is a write. */
+const isReadVerb = (verb) => READ_VERBS.has(verb) || (verb === 'inbox' && (flags.peek === true || flags.id !== undefined));
 
 /**
  * Gap 4, rule L2.10: a write verb run `--as <id>` that is not the caller's own session id (CLAUDE_CODE_SESSION_ID, unset counts as no
@@ -2796,7 +2804,7 @@ const READ_VERBS = new Set(['board', 'peers', 'whoami', 'next', 'mine', 'inbox']
  * can set the variable. It stops the accident and the open door. `--as <own id>` is not touched.
  */
 function assertAsAllowed(verb) {
-  if (typeof flags.as !== 'string' || READ_VERBS.has(verb)) return;
+  if (typeof flags.as !== 'string' || isReadVerb(verb)) return;
   if (flags.as === process.env.CLAUDE_CODE_SESSION_ID || process.env.LANE_ALLOW_AS === '1') return;
   const own = process.env.CLAUDE_CODE_SESSION_ID;
   throw refusal(verb, positional[1] ?? '-', 'as-refused',

@@ -19,7 +19,7 @@
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -66,6 +66,15 @@ function lane(args, { as, env = {}, board } = {}) {
   const r = spawnSync(process.execPath, argv, { cwd: s.repo, env: e, encoding: 'utf8', windowsHide: true });
   return { code: r.status, out: r.stdout, err: r.stderr, line1: r.stderr.split('\n')[0] };
 }
+/** The same run as `lane`, as a promise, so a test can do other work while the child waits. */
+lane.async = (args, { as, env = {}, board } = {}) => new Promise((resolve) => {
+  const argv = [LANE, ...args, ...(as ? ['--as', as] : []), ...(board ? ['--project', board] : [])];
+  const p = spawn(process.execPath, argv, { cwd: s.repo, env: { ...laneEnv(), ...env }, windowsHide: true });
+  let err = '';
+  p.stderr.on('data', (d) => { err += d; });
+  p.stdout.on('data', () => {});
+  p.on('close', (code) => resolve({ code, err }));
+});
 const q = (sql, params) => s.db.query(sql, params);
 const one = async (sql, params) => (await q(sql, params)).rows[0];
 let seq = 0;
@@ -156,6 +165,14 @@ describe('--as on a write verb', () => {
     const id = await mk('as-e', { owner: HOLDER });
     await assertRefused(['note', id, 'x'], 'as-refused', id, { as: HOLDER, env: { CLAUDE_CODE_SESSION_ID: undefined } });
   });
+  it('plain inbox moves a read cursor, so --as <other> is refused; inbox --peek and inbox --id stay open', async () => {
+    const n = await events();
+    const r = lane(['inbox'], { as: HOLDER });
+    assert.equal(r.code, 4, r.err);
+    assert.match(r.line1, /^REFUSED inbox \S+ \[as-refused\] -- /, r.err);
+    assert.equal(await events(), n);
+    assert.equal(lane(['inbox', '--peek'], { as: HOLDER }).code, 0);
+  });
   it('a read verb keeps --as with no flag, also with no session env (the /os pane)', () => {
     for (const env of [{}, { CLAUDE_CODE_SESSION_ID: undefined }]) {
       const r = lane(['board', '--json'], { as: HOLDER, env });
@@ -194,6 +211,18 @@ describe('--override', () => {
       assert.equal(r.code, 0, `${args.join(' ')}: ${r.err}`);
       assert.ok((await events()) >= before + 2, `${args.join(' ')} writes the DM and the board event`);
     }
+  });
+  it('every write path refuses a stranger --override on a live holder: release, release --blocked, done, done --merged, done --no-pr', async () => {
+    const forms = [['release'], ['release', '--blocked'], ['done'], ['done', '--merged', '1234567'], ['done', '--no-pr', '--evidence', 'x']];
+    for (const f of forms) {
+      const id = await mk('ov-w', { owner: HOLDER });
+      await assertRefused([f[0], id, ...f.slice(1), '--override', '--reason', 'x'], 'override-not-seat', id);
+    }
+  });
+  it('a holder who adds --override to their own done --merged keeps the plain-call answer, not [override-not-seat]', async () => {
+    const id = await mk('ov-h', { board: GC_MASTER, owner: ME });
+    const r = lane(['done', id, '--merged', '1234567', '--override', '--reason', 'x'], { board: GC_MASTER });
+    assert.doesNotMatch(r.err, /override-not-seat/, r.err);
   });
   it('the seat of one board gets nothing on a plain board with a live holder', async () => {
     const id = await mk('ov-e', { owner: HOLDER });
@@ -244,6 +273,23 @@ describe('seed on a held lane', () => {
       const r = lane(['seed', f], { as: SEAT, env: { LANE_ALLOW_AS: '1' }, board: GC_MASTER });
       assert.equal(r.code, 0, r.err);
       assert.equal((await row(held)).scope, 'SEAT');
+    });
+    it(`${form} form: a claim that commits while the seed waits is seen by the holder test (the lock covers unowned lanes too)`, async () => {
+      const free = await mk('sd-r', { state: 'ready' });
+      const f = file(`${form}-race.json`, body([{ id: free, title: 'rewritten', track: 'zz', scope: 'RACE' }]));
+      const holdTx = new Client({ connectionString: s.url });
+      await holdTx.connect();
+      await holdTx.query(`SELECT set_config('lane.client_version','test',false)`);
+      await holdTx.query('BEGIN');
+      await holdTx.query(`SELECT 1 FROM agentic_os.lane WHERE id=$1 FOR UPDATE`, [free]);
+      const seeding = lane.async(['seed', f]);
+      await new Promise((r) => setTimeout(r, 1500)); // the seed is now waiting on the row lock
+      await holdTx.query(`UPDATE agentic_os.lane SET owner_session_id=$1, state='active', lease_expires_at = now() + interval '1 hour' WHERE id=$2`, [HOLDER, free]);
+      await holdTx.query('COMMIT');
+      await holdTx.end();
+      const r = await seeding;
+      assert.equal(r.code, 4, r.err);
+      assert.notEqual((await row(free)).scope, 'RACE');
     });
     it(`${form} form: on a master board a stranger is refused`, async () => {
       const held = await mk('sd-f', { board: GC_MASTER, owner: HOLDER });
