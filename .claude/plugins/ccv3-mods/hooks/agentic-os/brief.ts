@@ -301,18 +301,19 @@ export const isAskStale = (brief: Brief, now: number, lastActivity?: number | nu
   brief.ask.some(isOpen) && now - Math.max(brief.updatedAt, lastActivity ?? 0) >= STALE_ASK_MS
 
 /**
- * Prompt origins that are NOT Dave typing: a scheduled task or cron tick, a Monitor notification, a message from another session. Such a
- * prompt answers no ask. It still counts as activity (the turn it starts renews the 24 hour clock). The list holds only the kinds the
- * origin probe saw on a live prompt (2026-11-16, .claudedocs/e2e-coord-status-band-fixes/02-origin-probe-output.jsonl): a cron tick
- * is `scheduled-trigger`, a Monitor line is `task-notification`, a SendMessage from another session is `peer`. `auto-continuation` is
- * not listed: the engine defines it as a follow-up to Dave's own UI action. Every other kind answers, as before: no origin (an old
- * engine), `composer`, `bridge`, `peer-send-message` (typed, not seen), and a kind added later (fail to the old behaviour).
+ * Prompt origins that are Dave's own act: typing in the composer, a message through the phone bridge, and `auto-continuation` (the engine
+ * defines it as a follow-up to Dave's own UI action). Only these answer an open ask, and a prompt with no origin at all (an old engine)
+ * answers too. Every other kind answers nothing: a hidden question is worse than a false one. A new Dave kind leaves an ask open until
+ * the next turn end parses the Next steps again; a new machine kind cannot hide a question.
+ * Probe on a live session (2026-11-16, .claudedocs/e2e-coord-status-band-fixes/02-origin-probe-output.jsonl): Dave's typing is
+ * `composer`; a cron tick is `scheduled-trigger`; a Monitor line is `task-notification`; a SendMessage from another session is `peer`.
+ * A not-Dave prompt still counts as activity (the turn it starts renews the 24 hour clock), so a timer can keep an ask fresh. Known limit.
  * Known trade-off: a seat's relay of Dave's decision by SendMessage arrives as `peer` and answers no ask.
  */
-export const NOT_DAVE_ORIGINS: readonly string[] = ['scheduled-trigger', 'task-notification', 'peer']
+export const DAVE_ORIGINS: readonly string[] = ['composer', 'bridge', 'auto-continuation']
 
 export const answersAsks = (origin: { kind?: unknown } | null | undefined): boolean =>
-  typeof origin?.kind !== 'string' || !NOT_DAVE_ORIGINS.includes(origin.kind)
+  typeof origin?.kind !== 'string' || DAVE_ORIGINS.includes(origin.kind)
 
 /** The mod's own submissions arrive as prompts too: they are not Dave's answer to a brief ask.
  *  Both come from hooks/pr-loop/index.ts: the PR watcher report line, and the /land fallback
