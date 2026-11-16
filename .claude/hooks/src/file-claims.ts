@@ -18,8 +18,10 @@
  * Part of the coordination layer architecture (Phase 3).
  */
 
-import { readFileSync } from 'fs';
-import { basename, isAbsolute, relative, resolve as resolvePath } from 'path';
+import { existsSync, readdirSync, readFileSync } from 'fs';
+import { homedir, tmpdir } from 'os';
+import { basename, isAbsolute, join, relative, resolve as resolvePath } from 'path';
+import { judgeDirect, judgeShell, type SubagentDeps, type Verdict } from './shared/subagent-write.js';
 import { resolveFileClaim, listBlockingClaims } from './shared/db-utils-pg.js';
 import { isMemoryIndexPath } from './shared/leases.js';
 import { holderHoldsOpenLane } from './shared/holder-lane.js';
@@ -85,6 +87,10 @@ export async function main(): Promise<void> {
     return;
   }
 
+  // Card coord-subagent-write-guard: a subagent's write is judged first. A deny ends the call; a warn rides on
+  // whatever the claim check prints next.
+  if (subagentJudged(input)) return;
+
   // Group A: the tool names the path (Edit, Write, NotebookEdit, three Desktop Commander tools).
   const direct = directWritePaths(input);
   if (direct !== null) {
@@ -108,6 +114,78 @@ export async function main(): Promise<void> {
     return;
   }
   await mainShell(input, cmd);
+}
+
+/** Scratch folder of this session: `<tmp>/claude/<hash>/<session>/scratchpad`, found by one directory read. */
+function findScratchFolder(sessionId: string): string | undefined {
+  try {
+    const base = join(tmpdir(), 'claude');
+    for (const hash of readdirSync(base)) {
+      const p = join(base, hash, sessionId, 'scratchpad');
+      if (existsSync(p)) return p.replace(/\\/g, '/');
+    }
+  } catch {
+    // no scratch folder to show: the message names the pattern
+  }
+  return undefined;
+}
+
+/**
+ * Judge a subagent's write (card coord-subagent-write-guard). Returns true when a deny was printed and the call is
+ * over. A warn wraps the next console.log so the claim check's own output carries it. Any error: not judged.
+ */
+function subagentJudged(rawInput: PreToolUseInput): boolean {
+  try {
+    const input = rawInput as PreToolUseInput & { agent_id?: string; agent_type?: string };
+    if (typeof input.agent_id !== 'string' || !input.agent_id) return false;
+    const cwd = resolvePath(typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd());
+    const sessionId = typeof input.session_id === 'string' ? input.session_id : '';
+    const ctx = resolveRepoContext(cwd);
+    const tops = [...new Set([...(ctx ? [ctx.top, ...listWorktreeTops(ctx.project)] : [])])];
+    const deps: SubagentDeps = {
+      home: homedir(),
+      tmp: tmpdir(),
+      tops,
+      sessionId,
+      cwd,
+      fold: FOLDS_CASE,
+      realPath: canonicalRealPath,
+      firstWarn: (p) => firstWarning(sessionId, 'subagent-write', p),
+      scratchFolder: findScratchFolder(sessionId),
+    };
+    const direct = directWritePaths(input);
+    let verdict: Verdict;
+    if (direct !== null) {
+      verdict = judgeDirect(input, direct, deps);
+    } else {
+      const cmd = readShellCommand(input);
+      if (cmd.kind !== 'command') return false;
+      verdict = judgeShell(input, cmd.text, cmd.tool === 'PowerShell', deps);
+    }
+    if (verdict.kind === 'deny') {
+      logGuardDecision('file-claims', input, 'deny', 'subagent-write-protected');
+      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: verdict.reason } }));
+      return true;
+    }
+    if (verdict.kind === 'warn') {
+      const text = verdict.text;
+      const orig = console.log;
+      console.log = (line?: unknown) => {
+        console.log = orig;
+        try {
+          const out = JSON.parse(String(line)) as { message?: string; hookSpecificOutput?: { permissionDecision?: string } };
+          if (out.hookSpecificOutput?.permissionDecision === 'deny') return orig(line);
+          out.message = [text, out.message].filter(Boolean).join('\n');
+          return orig(JSON.stringify(out));
+        } catch {
+          return orig(line);
+        }
+      };
+    }
+  } catch {
+    // a guard never fails closed on its own error
+  }
+  return false;
 }
 
 /** Group A: one claim per named path. The first deny wins; else the first takeover message. */
