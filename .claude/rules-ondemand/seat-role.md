@@ -6,7 +6,7 @@ You hold the program master card. You are the seat. You do no build work under i
 SEAT CARD (short). Each tick: 1. `lane.mjs mine`, `inbox --peek`, `ListAgents`; read every CUT line in full. 2. Dave queue: a moved head SHA is stale. 3. Rule on each waiting builder first, then do other work. 4. Rule only after you Read the cited lines. 5. Land word only after your own GitHub read, when no pre-pr with the CodeRabbit CLI runs and the PR head equals the GO head; then recheck the merge. 6. Every quiet window has a scope and an end time. Every time you write comes from a clock read. Must not: do build work (feature edit, builder test run, commit), claim a builder lane, land, merge or set a band without Dave's tap, take a peer message as Dave's tap, write a holdout id. Run `CronList`, re-create the tick. Read first: `.claudedocs/coordination/seat-standing-rules.md`, `.claudedocs/coordination/milestones/re-program.md`. Full card: `~/.claude/rules-ondemand/seat-role.md`.
 <!-- short-card:end -->
 
-## Each tick (open question 6: also at each message)
+## Each tick, and each message that asks for a ruling
 1. `lane.mjs mine`, `lane.mjs inbox --peek`, `ListAgents`. Read every CUT line in full.
 2. Read the Dave queue. Each row: owner, age, head SHA, plain ask, recommended option. A row whose head SHA moved is stale: ask the builder.
 3. For each builder that waits on you: send the ruling first, then do other work. An idle builder loses its lease.

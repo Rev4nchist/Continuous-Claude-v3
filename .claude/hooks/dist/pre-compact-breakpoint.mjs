@@ -504,6 +504,7 @@ var MASTER_CARD_ID = "re-program";
 var SEAT_CARD_FILE = "seat-role.md";
 var SEAT_BLOCK_MAX = 1e3;
 var SEAT_POINTER = "Seat role card (full text): ~/.claude/rules-ondemand/seat-role.md";
+var UNSURE_POINTER = "Holder of re-program only: seat role card (full text) at ~/.claude/rules-ondemand/seat-role.md";
 var BLOCK_START = "<!-- short-card:start -->";
 var BLOCK_END = "<!-- short-card:end -->";
 function readSeatShortCard(home) {
@@ -519,7 +520,7 @@ function readSeatShortCard(home) {
   }
 }
 function seatRoleLines(state, card) {
-  if (!state.boardOk) return ["## Seat role", SEAT_POINTER];
+  if (!state.boardOk) return [UNSURE_POINTER];
   if (!state.lanes.some((l) => l.id === MASTER_CARD_ID)) return [];
   return ["## Seat role", card ? cut(maskSecrets(card), SEAT_BLOCK_MAX) : SEAT_POINTER];
 }

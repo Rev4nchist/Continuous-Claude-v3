@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runPreCompactBreakpoint, type BreakpointDeps } from '../pre-compact-breakpoint.js';
-import { injectionText, MAX_FILE_CHARS, MAX_INJECT_CHARS } from '../shared/breakpoint.js';
+import { carriedDecisionLines, injectionText, MAX_FILE_CHARS, MAX_INJECT_CHARS } from '../shared/breakpoint.js';
 
 const SID = '7e7549ed-0b86-4552-af79-7c1a0a9f59ac';
 const OTHER = '11111111-0b86-4552-af79-7c1a0a9f59ac';
@@ -139,5 +139,24 @@ describe('T5: a secret in the card text is masked before the write', () => {
     const { text } = await run(setup({ card }));
     expect(text).toContain(LATE);
     expect(text).not.toContain(secret);
+  });
+});
+
+describe('seat item 1: two compacts in a row keep one count line and carry no note as a decision', () => {
+  it('a file with a drop note, fed as the previous file, gives exactly one note and no note among the decision lines', async () => {
+    const s = setup({ decisions: 60 });
+    const first = await run(s);
+    expect((first.text.match(/decision lines not shown/g) ?? []).length).toBe(1);
+    expect(carriedDecisionLines(first.text).some((l) => /not shown/.test(l))).toBe(false);
+    const second = await run(s);
+    expect((second.text.match(/decision lines not shown/g) ?? []).length).toBe(1);
+    expect(carriedDecisionLines(second.text).some((l) => /not shown/.test(l))).toBe(false);
+  });
+});
+
+describe('seat item 2: a failed board read must not read as a role for a builder', () => {
+  it('the line says it is for the holder of re-program only', async () => {
+    const { text } = await run(setup({ runner: async () => ({ code: 124, stdout: '', stderr: 'timeout' }) }));
+    expect(text).toMatch(/Holder of re-program only/);
   });
 });

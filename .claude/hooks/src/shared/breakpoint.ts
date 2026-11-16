@@ -205,7 +205,8 @@ export const SEAT_CARD_FILE = 'seat-role.md';
 /** Room for the short block: the real size (about 900 bytes) plus a margin, so a wording change does not break the caps (seat 11-15). */
 export const SEAT_BLOCK_MAX = 1000;
 const SEAT_POINTER = 'Seat role card (full text): ~/.claude/rules-ondemand/seat-role.md';
-const BLOCK_START = '<!-- short-card:start -->';
+const UNSURE_POINTER = 'Holder of re-program only: seat role card (full text) at ~/.claude/rules-ondemand/seat-role.md';
+const BLOCK_START ='<!-- short-card:start -->';
 const BLOCK_END = '<!-- short-card:end -->';
 
 /** The short block of the card file between its markers, or null (no file, no markers, a read error). Never throws. */
@@ -229,7 +230,8 @@ export function readSeatShortCard(home: string): string | null {
  *  - the board read failed or timed out: the pointer line only (holder unknown; fail open, never wait)
  */
 export function seatRoleLines(state: { boardOk: boolean; lanes: LaneFacts[] }, card: string | null): string[] {
-  if (!state.boardOk) return ['## Seat role', SEAT_POINTER];
+  // Holder unknown: any session can get this line, so it says who it is for (seat item 2). No heading that reads as a role.
+  if (!state.boardOk) return [UNSURE_POINTER];
   if (!state.lanes.some((l) => l.id === MASTER_CARD_ID)) return [];
   return ['## Seat role', card ? cut(maskSecrets(card), SEAT_BLOCK_MAX) : SEAT_POINTER];
 }

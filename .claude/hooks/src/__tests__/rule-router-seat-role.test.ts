@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { matchRules, type Manifest } from '../rule-router.js';
+import { readSeatShortCard, seatRoleLines, SEAT_BLOCK_MAX } from '../shared/breakpoint.js';
 
 const CLAUDE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const manifest = JSON.parse(readFileSync(join(CLAUDE, 'rules-ondemand', 'manifest.json'), 'utf8')) as Manifest;
@@ -72,5 +73,16 @@ describe('T6: card hygiene (seat condition B)', () => {
     expect(text).not.toMatch(/land-pr/i);
     expect(text).not.toMatch(/review-engine[\\/]/i);
     expect(text).not.toMatch(/holdout-ids|answer-key/i);
+  });
+});
+
+describe('seat item 4: the real short block fits its budget whole', () => {
+  it('is at most SEAT_BLOCK_MAX bytes and cut() leaves it unchanged', () => {
+    const home = join(CLAUDE, '..');
+    const block = readSeatShortCard(home);
+    expect(block).not.toBeNull();
+    expect(Buffer.byteLength(block ?? '')).toBeLessThanOrEqual(SEAT_BLOCK_MAX);
+    const lines = seatRoleLines({ boardOk: true, lanes: [{ id: 're-program', title: '', goal: '', next: '', milestone: null }] }, block);
+    expect(lines.join('\n')).toContain(block ?? 'x');
   });
 });
