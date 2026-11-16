@@ -835,7 +835,8 @@ async function liveHolders(c, holders) {
 async function freeOwnMergedClaims(c, dir, merged, myId) {
   try {
     const r = freeMergedClaims({ dir, sha: merged, sessionId: myId, repoRoot: REPO });
-    const others = await liveHolders(c, r.holders);
+    // The holder lookup only names peers. Its failure must not hide the deletes that are already done.
+    const others = await liveHolders(c, r.holders).catch(() => []);
     if (r.freed) process.stderr.write(`[lane] note: freed ${r.freed} of your file claims on the merged files\n`);
     if (r.dirty) process.stderr.write(`[lane] note: kept the claims on ${r.dirty} merged file(s) with uncommitted work in a worktree\n`);
     for (const o of others) process.stderr.write(`[lane] note: ${o.label} holds ${o.count} merged file(s); ask it to free them (M4.11)\n`);

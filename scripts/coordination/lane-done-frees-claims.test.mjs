@@ -108,7 +108,7 @@ before(async () => {
   s.failBin = path.join(s.tmp, 'fail-release.mjs');
   fs.writeFileSync(s.failBin, "console.error('release-claim: database unavailable, nothing was changed'); process.exit(1);\n");
   gitIn(s.repo, 'init', '-b', 'main');
-  for (const f of ['f.txt', 'g.txt', 'h.txt', 'd.txt', 'k.txt', 'm.txt', 'n.txt', 'p.txt']) fs.writeFileSync(path.join(s.repo, f), `${f}\n`);
+  for (const f of ['f.txt', 'g.txt', 'h.txt', 'd.txt', 'k.txt', 'm.txt', 'n.txt', 'p.txt', 'r.txt', 'q1.txt', 'q2.txt']) fs.writeFileSync(path.join(s.repo, f), `${f}\n`);
   gitIn(s.repo, 'add', '.');
   gitIn(s.repo, 'commit', '-m', 'base');
   s.db = new Client({ connectionString: s.url });
@@ -169,6 +169,44 @@ describe('done --merged frees the caller\'s claims on the merged files', () => {
     assert.equal(r.code, 0, r.all);
     assert.equal(await holds(X, 'u.txt'), true, 'u has untracked work in a live worktree: X keeps it');
     assert.deepEqual(JSON.parse(r.out).claims, { freed: 0, kept: 0, dirty: 1, others: [] });
+    gitIn(s.repo, 'worktree', 'remove', '--force', v);
+  });
+
+  it('a merge renames r to r2: X\'s claim on the old path r is freed (CLI finding 1, a2dffd1e)', async () => {
+    // --no-renames lists the old path as a delete. It also turns off copy detection, so a copy (-C) never hides a path.
+    const w = worktree('r');
+    assert.equal(edit(X, w, 'r.txt'), 'allow');
+    assert.equal(await holds(X, 'r.txt'), true);
+    gitIn(w, 'mv', 'r.txt', 'r2.txt');
+    gitIn(w, 'commit', '-m', 'rename r');
+    gitIn(s.repo, 'merge', '--no-ff', '-m', 'Merge r', 'b-r');
+    gitIn(s.repo, 'worktree', 'remove', w);
+    const sha = gitIn(s.repo, 'rev-parse', 'HEAD');
+    const id = await mkLane('rename');
+    const r = lane(['done', id, '--merged', sha, '--json']);
+    assert.equal(r.code, 0, r.all);
+    assert.equal(await holds(X, 'r.txt'), false, 'the claim on the old path of a rename is freed');
+    assert.equal(JSON.parse(r.out).claims.freed, 1);
+  });
+
+  it('the holder lookup fails after the free: the counts stay true (CLI finding 2, a2dffd1e)', async () => {
+    const w = worktree('q');
+    const v = worktree('q2');
+    assert.equal(edit(X, w, 'q1.txt'), 'allow');
+    assert.equal(edit(Z, v, 'q2.txt'), 'allow');
+    const sha = land(w, 'q', ['q1.txt', 'q2.txt']);
+    const id = await mkLane('lookup');
+    // Only the holder lookup in lane.mjs reads file_claims.expires_at in this path; release-claim does not.
+    await s.db.query('ALTER TABLE file_claims RENAME COLUMN expires_at TO expires_at_off');
+    let r;
+    try { r = lane(['done', id, '--merged', sha, '--json']); }
+    finally { await s.db.query('ALTER TABLE file_claims RENAME COLUMN expires_at_off TO expires_at'); }
+    assert.equal(r.code, 0, r.all);
+    assert.equal(await holds(X, 'q1.txt'), false, 'X\'s claim is freed');
+    assert.equal(await holds(Z, 'q2.txt'), true, 'Z keeps its claim');
+    assert.deepEqual(JSON.parse(r.out).claims, { freed: 1, kept: 1, dirty: 0, others: [] });
+    assert.match(r.err, /^\[lane\] note: freed 1 of your file claims on the merged files/m);
+    assert.doesNotMatch(r.err, /file claims not freed/);
     gitIn(s.repo, 'worktree', 'remove', '--force', v);
   });
 

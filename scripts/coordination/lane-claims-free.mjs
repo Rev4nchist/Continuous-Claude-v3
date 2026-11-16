@@ -46,9 +46,12 @@ function git(dir, args, left = NO_BUDGET) {
   return r.stdout;
 }
 
-/** The files a merge commit brought to main: its diff against the first parent. */
+/**
+ * The files a merge commit brought to main: its diff against the first parent. --no-renames lists the old path of a
+ * rename as a delete (without it --name-only gives only the new path), and turns off copy detection too.
+ */
 export function mergedFiles(dir, sha, left = NO_BUDGET) {
-  return git(dir, ['diff', '--name-only', '-z', `${sha}^1`, sha], left).split('\0').filter(Boolean);
+  return git(dir, ['diff', '--name-only', '--no-renames', '-z', `${sha}^1`, sha], left).split('\0').filter(Boolean);
 }
 
 /** Repo-relative names with uncommitted changes, untracked files included, in any live worktree of the clone. A rename counts both names. */
