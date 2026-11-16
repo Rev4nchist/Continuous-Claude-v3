@@ -156,6 +156,22 @@ describe('done --merged frees the caller\'s claims on the merged files', () => {
     assert.match(r.err, new RegExp(`^\\[lane\\] note: .*#${Z.slice(0, 8)}.* holds 1 merged file`, 'm'), 'the live holder is named with its count');
   });
 
+  it('a merge adds u, another live worktree holds an untracked u: X keeps the claim (CLI finding, f0eef5ac)', async () => {
+    const w = worktree('u');
+    const v = worktree('u2');
+    fs.writeFileSync(path.join(w, 'u.txt'), 'new in w\n');
+    assert.equal(edit(X, w, 'u.txt'), 'allow');
+    assert.equal(await holds(X, 'u.txt'), true);
+    fs.writeFileSync(path.join(v, 'u.txt'), 'unfinished untracked work in u2\n');
+    const sha = land(w, 'u', ['u.txt']);
+    const id = await mkLane('untracked');
+    const r = lane(['done', id, '--merged', sha, '--json']);
+    assert.equal(r.code, 0, r.all);
+    assert.equal(await holds(X, 'u.txt'), true, 'u has untracked work in a live worktree: X keeps it');
+    assert.deepEqual(JSON.parse(r.out).claims, { freed: 0, kept: 0, dirty: 1, others: [] });
+    gitIn(s.repo, 'worktree', 'remove', '--force', v);
+  });
+
   it('--json adds the claim counts', async () => {
     const w = worktree('j');
     assert.equal(edit(X, w, 'k.txt'), 'allow');

@@ -51,7 +51,7 @@ export function mergedFiles(dir, sha, left = NO_BUDGET) {
   return git(dir, ['diff', '--name-only', '-z', `${sha}^1`, sha], left).split('\0').filter(Boolean);
 }
 
-/** Repo-relative names with uncommitted changes in any live worktree of the clone. A rename counts both names. */
+/** Repo-relative names with uncommitted changes, untracked files included, in any live worktree of the clone. A rename counts both names. */
 export function dirtyFiles(dir, left = NO_BUDGET) {
   const dirty = new Set();
   const blocks = git(dir, ['worktree', 'list', '--porcelain'], left).split(/\n\n+/);
@@ -59,7 +59,8 @@ export function dirtyFiles(dir, left = NO_BUDGET) {
     const lines = b.split('\n');
     const wt = lines.find((l) => l.startsWith('worktree '))?.slice(9);
     if (!wt || lines.includes('bare') || !fs.existsSync(wt)) continue;
-    const parts = git(wt, ['status', '--porcelain', '-z', '--untracked-files=no'], left).split('\0');
+    // -uall: an untracked file with a merged name is unfinished work too; each one is listed by its own path.
+    const parts = git(wt, ['status', '--porcelain', '-z', '--untracked-files=all'], left).split('\0');
     for (let i = 0; i < parts.length; i++) {
       const e = parts[i];
       if (e.length < 4) continue;
