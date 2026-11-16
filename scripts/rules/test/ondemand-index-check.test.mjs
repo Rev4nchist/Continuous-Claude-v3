@@ -48,12 +48,11 @@ test('an inject rule whose row does not say inject is reported', () => {
 
 // Claude Code cuts a hook additionalContext string above 10,000 characters to a 2,000 character
 // preview. An inject rule over that size never reaches the session (findings row 56, 2026-11-11).
-const sized = (mode, chars, knownOver = [], subagent = undefined) => checkIndex({
+const sized = (mode, chars, subagent = undefined) => checkIndex({
   manifest: { rules: [{ ...rule('big', ['big.md'], mode), ...(subagent ? { subagent } : {}) }] },
   indexText: index([`| \`big.md\` | x | ${mode === 'deny-first' ? 'block' : 'inject'} |`]),
   files: ['big.md'],
   sizes: { 'big.md': chars },
-  knownOver,
 });
 
 test('an inject rule whose emitted text is over the hook cap is reported', () => {
@@ -65,7 +64,7 @@ test('an inject rule that fits under the hook cap with the router lines is not r
 });
 
 test('a deny-first rule with subagent block over the cap is not reported (a deny reason is not cut)', () => {
-  assert.deepEqual(sized('deny-first', 30000, [], 'block'), []);
+  assert.deepEqual(sized('deny-first', 30000, 'block'), []);
 });
 
 test('a deny-first rule over the cap with no subagent block is reported (the router sends it to a subagent as inject)', () => {
@@ -76,12 +75,49 @@ test('a deny-first rule under the cap needs no subagent block', () => {
   assert.deepEqual(sized('deny-first', 3000), []);
 });
 
-test('a known over-cap inject file is not a problem while it is still over', () => {
-  assert.deepEqual(sized('inject', 64000, ['big.md']), []);
+// A reference-only file is a long rule that no manifest entry loads. A short loaded rule names it by its active path
+// and tells the session to read it (lane pr-review-loop-10k-cut). Each test is one way that link can break.
+const REF = 'full.md';
+const refCheck = (over = {}) => checkIndex({
+  manifest: { rules: [rule('core', ['core.md'])] },
+  indexText: index(['| `core.md` | x | inject |']),
+  files: ['core.md', REF],
+  sizes: { 'core.md': 3000, [REF]: 64000 },
+  texts: { 'core.md': 'Full rule: C:/Users/x/.claude/rules-ondemand/full.md', [REF]: 'long' },
+  referenceOnly: [REF],
+  ...over,
 });
 
-test('a known over-cap file that fits now is reported, so the list cannot go stale', () => {
-  assert.match(sized('inject', 5000, ['big.md']).join('\n'), /big\.md.*known over the cap.*fits now/);
+test('a reference-only file that exists, is not loaded, and is named by a loaded rule that fits is clean', () => {
+  assert.deepEqual(refCheck(), []);
+});
+
+test('a reference-only file that a manifest entry also loads is reported', () => {
+  const problems = refCheck({ manifest: { rules: [rule('core', ['core.md']), rule('both', [REF])] }, indexText: index(['| `core.md` | x | inject |', `| \`${REF}\` | x | inject |`]), sizes: { 'core.md': 3000, [REF]: 3000 } });
+  assert.match(problems.join('\n'), /full\.md.*reference only.*also loaded/);
+});
+
+test('a reference-only file that is not on disk is reported', () => {
+  assert.match(refCheck({ files: ['core.md'] }).join('\n'), /full\.md.*reference only.*missing from rules-ondemand/);
+});
+
+test('a reference-only file that no loaded rule file names is reported', () => {
+  const problems = refCheck({ texts: { 'core.md': 'nothing here', [REF]: 'long' } });
+  assert.match(problems.join('\n'), /full\.md.*reference only.*no loaded rule file.*names it/);
+});
+
+test('a name in a file that no manifest entry loads does not count', () => {
+  const problems = refCheck({ files: ['core.md', REF, 'other.md'], texts: { 'core.md': 'nothing', 'other.md': 'rules-ondemand/full.md', [REF]: 'long' } });
+  assert.match(problems.join('\n'), /full\.md.*reference only.*no loaded rule file.*names it/);
+});
+
+test('a name in a loaded rule that is itself over the hook cap does not count', () => {
+  const problems = refCheck({ sizes: { 'core.md': 12000, [REF]: 64000 } });
+  assert.match(problems.join('\n'), /full\.md.*reference only.*no loaded rule file.*names it/);
+});
+
+test('a rule file that is not on the reference-only list and that nobody loads is still reported', () => {
+  assert.match(refCheck({ files: ['core.md', REF, 'stray.md'] }).join('\n'), /stray\.md.*no manifest entry loads it/);
 });
 
 test('with no sizes given, no size check runs', () => {

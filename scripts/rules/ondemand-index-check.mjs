@@ -13,7 +13,8 @@
  *   - every file an index row names exists
  *   - every rule file in rules-ondemand/ is loaded by some manifest entry
  *   - a row says "block" for a deny-first rule and "inject" for an inject rule
- *   - an inject rule fits under the hook text cap (see HOOK_CONTEXT_CAP), or is on the known list
+ *   - an inject rule fits under the hook text cap (see HOOK_CONTEXT_CAP)
+ *   - a reference-only file (REFERENCE_ONLY) exists, is loaded by no entry, and is named by a loaded rule file that fits
  *
  * Usage: node scripts/rules/ondemand-index-check.mjs [--repo <dir>]   exit 1 on any problem
  */
@@ -38,18 +39,24 @@ function indexRows(indexText) {
 export const HOOK_CONTEXT_CAP = 10000;
 /** Upper bound for what rule-router adds to one rule: its header, the path line and the false-fire footer. */
 export const ROUTER_OVERHEAD = 500;
-/** Inject files that are over the cap today. Lane `pr-review-loop-10k-cut` owns the fix. Remove a name when its file fits. */
-export const KNOWN_OVER_CAP = ['pr-review-loop.md'];
+/**
+ * Rule files that no manifest entry loads. They are too long for a hook, so a short loaded rule names each one by its
+ * active path and tells the session to read it. The check keeps that link: the file exists, it is not loaded, and a
+ * loaded rule file that fits the hook cap names it. A file on the list is exempt from "no manifest entry loads it".
+ */
+export const REFERENCE_ONLY = ['pr-review-loop.md'];
 
 /**
  * @param {{ manifest: { rules: { id: string, files: string[], mode: string }[] }, indexText: string, files: string[],
- *   sizes?: Record<string, number>, knownOver?: string[] }} input  `sizes` is characters per rule file; without it no size check runs
+ *   sizes?: Record<string, number>, texts?: Record<string, string>, referenceOnly?: string[] }} input
+ *   `sizes` is characters per rule file; without it no size check runs. `texts` is the text per rule file; it is read
+ *   only to find which loaded file names a reference-only file.
  * @returns {string[]} one line per problem; empty when the index and manifest agree
  */
-export function checkIndex({ manifest, indexText, files, sizes = null, knownOver = KNOWN_OVER_CAP }) {
+export function checkIndex({ manifest, indexText, files, sizes = null, texts = {}, referenceOnly = [] }) {
   const problems = [];
+  const overCap = new Set();
   if (sizes) {
-    const stillOver = new Set();
     // Limit: the router joins every rule that fires on one call into one text. Two inject rules that
     // each fit can pass the cap together. This check reads one rule at a time.
     for (const r of manifest.rules) {
@@ -58,16 +65,10 @@ export function checkIndex({ manifest, indexText, files, sizes = null, knownOver
       if (r.mode === 'deny-first' && r.subagent === 'block') continue;
       const chars = r.files.reduce((n, f) => n + (sizes[f] ?? 0), 0) + ROUTER_OVERHEAD;
       if (chars <= HOOK_CONTEXT_CAP) continue;
-      const known = r.files.filter((f) => knownOver.includes(f));
-      known.forEach((f) => stillOver.add(f));
-      if (known.length === 0) {
-        const who = r.mode === 'deny-first' ? 'a subagent gets it as inject text' : 'inject text';
-        problems.push(`${r.files.join(', ')} (rule ${r.id}): ${who} of ${chars} characters with the router lines, over the 10,000 character hook cap. `
-          + 'The reader gets a 2,000 character preview. Make the rule deny-first with "subagent": "block", or shorten the file');
-      }
-    }
-    for (const f of knownOver) {
-      if (!stillOver.has(f)) problems.push(`${f}: listed as known over the cap, but it fits now or is not an inject rule; remove it from KNOWN_OVER_CAP`);
+      overCap.add(r.id);
+      const who = r.mode === 'deny-first' ? 'a subagent gets it as inject text' : 'inject text';
+      problems.push(`${r.files.join(', ')} (rule ${r.id}): ${who} of ${chars} characters with the router lines, over the 10,000 character hook cap. `
+        + 'The reader gets a 2,000 character preview. Make the rule deny-first with "subagent": "block", or shorten the file');
     }
   }
   const onDisk = new Set(files);
@@ -89,7 +90,16 @@ export function checkIndex({ manifest, indexText, files, sizes = null, knownOver
   for (const r of rows) {
     for (const f of r.files) if (!onDisk.has(f)) problems.push(`${f}: index row names a file that is not in rules-ondemand/`);
   }
-  for (const f of files) if (!loaded.has(f)) problems.push(`${f}: in rules-ondemand/, but no manifest entry loads it`);
+  for (const f of referenceOnly) {
+    if (!onDisk.has(f)) problems.push(`${f}: listed as reference only, but missing from rules-ondemand/`);
+    const loader = manifest.rules.find((r) => r.files.includes(f));
+    if (loader) problems.push(`${f}: listed as reference only, but it is also loaded by rule ${loader.id}; remove it from one of the two`);
+    // The namer must be a loaded file of a rule that fits the hook cap itself: a name in a file the router never sends,
+    // or in a preview that is cut, does not reach the session.
+    const namers = manifest.rules.filter((r) => !overCap.has(r.id) && r.files.some((lf) => (texts[lf] || '').includes(`rules-ondemand/${f}`)));
+    if (namers.length === 0) problems.push(`${f}: listed as reference only, but no loaded rule file that fits the hook cap names it by its path (rules-ondemand/${f})`);
+  }
+  for (const f of files) if (!loaded.has(f) && !referenceOnly.includes(f)) problems.push(`${f}: in rules-ondemand/, but no manifest entry loads it`);
   return [...new Set(problems)];
 }
 
@@ -103,11 +113,11 @@ function main() {
   const files = readdirSync(dir).filter((f) => f.endsWith('.md'));
   // The router sends the trimmed text of the file as it is on disk, so count that.
   const sizes = Object.fromEntries(files.map((f) => [f, readFileSync(join(dir, f), 'utf8').trim().length]));
-  const problems = checkIndex({ manifest, indexText, files, sizes });
+  const texts = Object.fromEntries(files.map((f) => [f, readFileSync(join(dir, f), 'utf8')]));
+  const problems = checkIndex({ manifest, indexText, files, sizes, texts, referenceOnly: REFERENCE_ONLY });
   const fileCount = new Set(manifest.rules.flatMap((r) => r.files)).size;
   if (problems.length === 0) {
-    console.log(`ondemand-index-check: OK (${manifest.rules.length} manifest entries, ${fileCount} rule files, all indexed)`);
-    for (const f of KNOWN_OVER_CAP) console.log(`  note: ${f} is ${sizes[f]} characters, over the hook cap of ${HOOK_CONTEXT_CAP}: a session gets a preview only (lane pr-review-loop-10k-cut)`);
+    console.log(`ondemand-index-check: OK (${manifest.rules.length} manifest entries, ${fileCount} rule files, all indexed, ${REFERENCE_ONLY.length} reference only)`);
     process.exit(0);
   }
   console.log(`ondemand-index-check: ${problems.length} problem(s) between manifest.json and on-demand-rules.md`);
