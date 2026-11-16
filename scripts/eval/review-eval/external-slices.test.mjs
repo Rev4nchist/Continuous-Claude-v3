@@ -33,10 +33,10 @@
 //  S15b a pure-deletion hunk (+c,0) gives a line range                                                  -> Math.max(len, 1) restored
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { datasetDirName } from './external-pull.mjs';
 import { assertUniqueIds, FILE_SHA256, GH_CALL_CAP, main, parseHunks, PINS, PRS_FILE, PRS_VERSION, QODO_DATASET_AT, SEVERITY_MAP_VERSION, SLICE_EXTS } from './external-slices.mjs';
 import { loadGold, validateRow } from './gold.mjs';
@@ -45,7 +45,23 @@ const NOW = Date.parse('2026-11-13T12:00:00Z');
 const HEAD = 'f'.repeat(40);
 const BASE = 'e'.repeat(40);
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'ext-slices-'));
+// Every folder this file makes. Only these are removed after the file ends, never a prefix match.
+const made = [];
+const tmp = () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ext-slices-'));
+  made.push(dir);
+  return dir;
+};
+function removeTempDirs() {
+  for (const dir of made.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      // A locked folder must not fail a test: a leak is better than a red run.
+    }
+  }
+}
+after(removeTempDirs);
 const rowsOf = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
 function writeDataset(root, pin, rows, manifestOver = {}) {

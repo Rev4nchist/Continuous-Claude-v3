@@ -352,6 +352,7 @@ var init_trace_boot = __esm({
       "destructive-command-guard",
       "git-commit-roadmap",
       "file-claims",
+      "holdout-scan",
       "hook-health-monitor",
       "identity-probe",
       "lane-agent-tag",

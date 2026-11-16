@@ -46,7 +46,7 @@
 //          lane-board-stop-gate and apply-registrations --only); a changed matcher (WARN); a non-lane hook missing (ignored); no template / no live file (WARN)
 //   hooks:dist-parity: the lane hook dists in the home equal the repo dists (PASS, CRLF folded); different / missing in either (WARN)
 //   lanes:relative-path-guard: at or under the ratchet baseline (PASS); a file over it (WARN naming the file); no baseline (WARN)
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, symlinkSync, rmdirSync, unlinkSync, renameSync, rmSync } from 'node:fs';
@@ -60,6 +60,24 @@ import {
   reminderSyncCheck, fleetopsSize,
 } from './harness-doctor.mjs';
 import { assertScratchUrl } from './coordination/scratch-db.mjs';
+
+// Every folder this file makes. Only these are removed after the file ends, never a prefix match.
+const madeTempDirs = [];
+const tempDir = (prefix) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  madeTempDirs.push(dir);
+  return dir;
+};
+// A locked folder must not fail a test, so a remove error is dropped.
+after(() => {
+  for (const dir of madeTempDirs.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      /* leave it: a leak is better than a failed test */
+    }
+  }
+});
 
 const DOCTOR = join(dirname(fileURLToPath(import.meta.url)), 'harness-doctor.mjs');
 const HOUR = 3600 * 1000;
@@ -172,7 +190,7 @@ function seedLaneAssets(repo, home) {
  * (null: never committed).
  */
 function fixture({ blocklistDaysAgo = 0 } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'hdoc-'));
+  const root = tempDir('hdoc-');
   const repo = join(root, 'repo');
   const home = join(root, 'home');
   const schtasks = join(root, 'schtasks');
@@ -664,7 +682,7 @@ test('repo:branch is a PASS on main, a WARN naming the branch on another branch,
 
 // ---- schedule (the real scheduleChecks with a fake schtasks) ----
 const schedRepo = (tasksJson) => {
-  const repo = mkdtempSync(join(tmpdir(), 'hdoc-sched-'));
+  const repo = tempDir('hdoc-sched-');
   if (tasksJson !== undefined) put(join(repo, 'scripts', 'scheduled', 'tasks.json'), typeof tasksJson === 'string' ? tasksJson : JSON.stringify(tasksJson));
   return { repo };
 };
@@ -1037,7 +1055,7 @@ test('F15: a tasks.json entry with hidden that is not true or false is a WARN on
 // ---- F8: the Notion sync of the reminder tick must be visible when it keeps failing ----
 // The sync switch is the file ~/.claude/state/reminders/sync-enabled. The helper turns it on unless told not to.
 const reminderHome = (state, { syncOn = true } = {}) => {
-  const home = mkdtempSync(join(tmpdir(), 'rem-home-'));
+  const home = tempDir('rem-home-');
   if (syncOn) put(join(home, '.claude', 'state', 'reminders', 'sync-enabled'), 'on');
   if (state !== undefined) put(join(home, '.claude', 'state', 'reminders', 'latest.json'), typeof state === 'string' ? state : JSON.stringify(state));
   return { home };
@@ -2191,7 +2209,7 @@ test('hooks:trace-fresh is the off WARN when CCV3_HOOK_TRACE is 0 in the process
 
 // ---- fleetops export size (fleetops-lanes-file-size part 2)
 const dashHome = (files = {}) => {
-  const home = mkdtempSync(join(tmpdir(), 'dash-home-'));
+  const home = tempDir('dash-home-');
   for (const [name, body] of Object.entries(files)) put(join(home, '.claude', 'state', 'lane-dash', name), typeof body === 'string' ? body : JSON.stringify(body));
   return { home };
 };

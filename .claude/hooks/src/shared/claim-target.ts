@@ -107,6 +107,22 @@ function commonDirOf(top: string): string | null | undefined {
 }
 
 /**
+ * The real path of `rawPath` (card coord-file-claims-memory-index): resolved against `cwd`, the nearest existing
+ * parent through realpath, plus the part that does not exist yet. Native separators. Null for a network path (no
+ * file read at all) or when nothing on the path exists. It throws on a file system error: callers wrap it.
+ * resolveClaimKey and the memory-index test of file-claims both use this one step, so they cannot drift.
+ */
+export function realFilePath(rawPath: string, cwd?: string): string | null {
+  if (isNetworkPath(rawPath)) return null; // before any file read
+  const abs = cwd ? resolve(cwd, rawPath) : resolve(rawPath);
+  if (isNetworkPath(abs)) return null; // a relative path under a cwd on a share
+  const anchor = nearestExisting(abs);
+  if (!anchor) return null;
+  // Real parent plus the part that does not exist yet (a new file in a new folder).
+  return join(real(anchor), relative(anchor, abs));
+}
+
+/**
  * Resolve the claim key of `rawPath`, or null when the file is outside any repo or the repo cannot
  * be read (the caller keeps the old key, raw path plus cwd project). A file under `.claude/cache` (a
  * per-worktree file) gets its real absolute path as the key, so it differs per worktree and is one
@@ -115,13 +131,9 @@ function commonDirOf(top: string): string | null | undefined {
 export function resolveClaimKey(rawPath: string, options: ClaimKeyOptions = {}): ClaimKey | null {
   try {
     const platform = options.platform ?? process.platform;
-    if (isNetworkPath(rawPath)) return null; // before any file read
+    const realFile = realFilePath(rawPath, options.cwd);
+    if (realFile === null) return null; // a network path, or nothing on the path exists
     const abs = options.cwd ? resolve(options.cwd, rawPath) : resolve(rawPath);
-    if (isNetworkPath(abs)) return null; // a relative path under a cwd on a share
-    const anchor = nearestExisting(abs);
-    if (!anchor) return null;
-    // Real parent plus the part that does not exist yet (a new file in a new folder).
-    const realFile = join(real(anchor), relative(anchor, abs));
 
     let dir = dirname(realFile);
     for (;;) {

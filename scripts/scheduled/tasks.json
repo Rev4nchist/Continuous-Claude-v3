@@ -13,12 +13,13 @@
     {
       "name": "CCv3-Blocklist-Update",
       "script": ".claude/scripts/scheduled/scheduled-blocklist-update.bat",
-      "trigger": "daily 09:00",
+      "trigger": "daily 06:30",
       "execLimitMin": 30,
       "allowedExit": [0],
       "maxAgeHours": 48,
       "llm": false,
-      "wake": false
+      "battery": true,
+      "wake": true
     },
     {
       "name": "CCv3-RuleRouter-Audit",

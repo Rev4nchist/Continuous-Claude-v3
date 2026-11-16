@@ -352,6 +352,7 @@ var init_trace_boot = __esm({
       "destructive-command-guard",
       "git-commit-roadmap",
       "file-claims",
+      "holdout-scan",
       "hook-health-monitor",
       "identity-probe",
       "lane-agent-tag",
@@ -5998,15 +5999,20 @@ function commonDirOf(top) {
   const common = resolve2(gitdir, readFileSync(commonFile, "utf8").trim());
   return existsSync(common) ? common : null;
 }
+function realFilePath(rawPath, cwd) {
+  if (isNetworkPath(rawPath)) return null;
+  const abs = cwd ? resolve2(cwd, rawPath) : resolve2(rawPath);
+  if (isNetworkPath(abs)) return null;
+  const anchor = nearestExisting(abs);
+  if (!anchor) return null;
+  return join2(real(anchor), relative(anchor, abs));
+}
 function resolveClaimKey(rawPath, options = {}) {
   try {
     const platform = options.platform ?? process.platform;
-    if (isNetworkPath(rawPath)) return null;
+    const realFile = realFilePath(rawPath, options.cwd);
+    if (realFile === null) return null;
     const abs = options.cwd ? resolve2(options.cwd, rawPath) : resolve2(rawPath);
-    if (isNetworkPath(abs)) return null;
-    const anchor = nearestExisting(abs);
-    if (!anchor) return null;
-    const realFile = join2(real(anchor), relative(anchor, abs));
     let dir = dirname(realFile);
     for (; ; ) {
       const common = commonDirOf(dir);

@@ -110,9 +110,9 @@ This fetches from:
 
 Requires `gh` CLI authenticated (`gh auth status`).
 
-### Scheduled (daily at 9am)
+### Scheduled (daily at 06:30)
 
-A Windows Task Scheduler job runs `<machine profile home>\.claude\scripts\scheduled\scheduled-blocklist-update.bat` (the `.claude` folder of the profile that runs the task) daily at 9am.
+A Windows Task Scheduler job runs `<machine profile home>\.claude\scripts\scheduled\scheduled-blocklist-update.bat` (the `.claude` folder of the profile that runs the task) daily at 06:30, before the morning checks.
 The repo source is `.claude/scripts/scheduled/`; the forward sync (`scripts/sync-to-active.sh`, from `main` only)
 installs it, so the job that runs is always main's version, not the primary checkout's branch. The .bat keeps
 the durable log (`.claude/logs/blocklist-update.log`) and passes its arguments unchanged to `scheduled-blocklist-update.ps1`.
@@ -134,7 +134,10 @@ It refuses if the installed .bat is missing and saves the old task XML under `~/
 
 Task name: `CCv3-Blocklist-Update`. Check status: `schtasks /query /tn "CCv3-Blocklist-Update"`
 
-If the machine is off at 9am, it runs when the machine next wakes up (`-StartWhenAvailable`).
+The task wakes a sleeping laptop at 06:30 (`wake: true`) and may start on battery (`battery: true`), both set in
+`scripts/scheduled/tasks.json` and applied by `register-ccv3-tasks.ps1`. A wake on battery also needs the power
+plan setting "Allow wake timers" on for battery. If the machine is off at 06:30, it runs when the machine next
+starts (`-StartWhenAvailable`).
 
 ### Manual
 
