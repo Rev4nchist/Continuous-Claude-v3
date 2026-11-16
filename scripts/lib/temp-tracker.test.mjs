@@ -14,7 +14,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -151,7 +151,9 @@ test('a link that will not unlink leaves the whole folder in place and runs no r
   assert.equal(existsSync(join(dir, 'f.txt')), true);
   assert.equal(readFileSync(join(target, 'keep.txt'), 'utf8'), 'keep');
   removeTempDirs(); // the folder was dropped from the list: this call has nothing to do
-  rmdirSync(link); // this test's own cleanup: unlink the link first, then the scratch folder goes at the end
+  // This test's own cleanup: unlink the link first, then the scratch folder goes at the end.
+  // A junction is a directory on Windows (rmdir); on Linux it is a symlink (rmdir throws ENOTDIR, so unlink).
+  try { rmdirSync(link); } catch { unlinkSync(link); }
 });
 
 test('a folder that cannot be read is left in place and runs no recursive remove', () => {
