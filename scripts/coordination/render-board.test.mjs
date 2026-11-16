@@ -78,6 +78,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl } from './scratch-db.mjs';
 import { stripClientComments } from './kanban-strip.mjs';
+import { cardDiff, hashFields } from './kanban-place.mjs';
 import { DONE_NOTE_MAX } from './board-done-view.mjs';
 import { TEMPLATE_FILES, boardStamp, defaultOut, parseBoardStamp, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
 
@@ -1877,6 +1878,53 @@ describe('render-board.mjs against a scratch database', () => {
         fs.rmSync(path.join(E2E.rootA, '.claudedocs'), { recursive: true, force: true });
         fs.rmSync(path.join(E2E.rootA, 'scripts'), { recursive: true, force: true });
       }
+    });
+
+    // The kanban sync and the page client never read a masked field back (seat question, S5 read of 6bd35c47). Three ways it could, one test each:
+    //   - the card hash (data-hash, what a Plain English answer was written from) is made from the MASKED text, so a mask makes every answer look stale
+    //   - an untouched card of the masked page makes a sync diff (a change that Dave never made)
+    //   - the client starts to put a lane's title, scope or note into a form box or a write (today it reads them only for the read-only Plain English prompt)
+    it('the card hash is made from the raw lane fields, so the mask does not make an answer look stale', async () => {
+      await addLane();
+      try {
+        const out = path.join(E2E.tmp, 'mask-hash.html');
+        assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
+        const html = fs.readFileSync(out, 'utf8');
+        const card = new RegExp(`<li class="card kb-card" data-id="zz-rb-mask-lane" data-state="ready" data-hash="([^"]*)"`).exec(html);
+        assert.ok(card, 'no editable card for the masked lane');
+        const raw = hashFields(['title with PR 4242', `scope names pull/4242 and ${MASK_SHA}`, 'ready', 'note says PR 4242 and 9000000123']);
+        assert.equal(card[1], raw, 'the hash is not the hash of the raw lane fields');
+        const masked = hashFields(['title with PR masked-id', 'scope names pull/masked-id and masked-id', 'ready', 'note says PR masked-id and masked-id']);
+        assert.notEqual(card[1], masked, 'the hash follows the masked text');
+      } finally { await dropLane(); }
+    });
+
+    it('an untouched card of the masked page gives an empty sync diff', async () => {
+      await addLane();
+      try {
+        const out = path.join(E2E.tmp, 'mask-diff.html');
+        assert.equal(renderPage(['--project', 'continuous-claude', '--out', out]).code, 0);
+        const html = fs.readFileSync(out, 'utf8');
+        const kb = JSON.parse(/<script type="application\/json" id="kb-data">([\s\S]*?)<\/script>/.exec(html)[1]);
+        const lane = kb.find((l) => l.id === 'zz-rb-mask-lane');
+        assert.ok(lane, 'the masked lane is not in kb-data');
+        assert.ok(lane.note.includes('masked-id'), 'the lane note on the page is not masked');
+        // The form of an untouched card: the boxes start empty or from the SAVED card doc (kanban-client.js:724), never from the lane note.
+        assert.deepEqual(cardDiff(null, { status: '', band: '', note: '', question: '' }, lane.state, lane.band), {});
+        // A card doc that Dave saved and the sync already applied: the same form gives no change either.
+        const doc = { note: 'Dave wrote this', appliedNote: 'Dave wrote this', syncedAt: '2026-11-15T00:00:00.000Z', updatedAt: '2026-11-14T00:00:00.000Z' };
+        assert.deepEqual(cardDiff(doc, { status: '', band: '', note: 'Dave wrote this', question: '' }, lane.state, lane.band), {});
+      } finally { await dropLane(); }
+    });
+
+    it('the client reads a lane title, scope or note only for the read-only Plain English prompt, and fills its boxes from the saved card doc', () => {
+      const lines = fs.readFileSync(path.join(HERE, 'kanban-client.js'), 'utf8').split('\n');
+      const reads = lines.filter((l) => l.includes('LANE_BY_ID[') && !/LANE_BY_ID\[l\.id\] = l;/.test(l));
+      assert.ok(reads.length >= 4, 'the client no longer reads LANE_BY_ID the way this test knows');
+      for (const l of reads) assert.ok(/LANE_BY_ID\[id\]\.(state|band)\b/.test(l) || l.includes('plainPrompt(LANE_BY_ID[id]'), `a new read of the lane facts: ${l.trim()}`);
+      const boxes = lines.filter((l) => /\.kb-(note|q)'\)\.value\s*=/.test(l));
+      assert.equal(boxes.length, 2, 'the form boxes are set from another place');
+      for (const l of boxes) assert.ok(/typeof d\.(note|question) === 'string'/.test(l), `a box is not set from the saved card doc: ${l.trim()}`);
     });
 
     it('board-mask.mjs is a generator file, so the page stamp changes when it changes', () => {
