@@ -34,7 +34,8 @@ import {
   placeLanes, stampMs, isPending, syncState, fnv1a, hashFields, cardBase, cardDiff, plainPrompt,
   boardMismatch, boardWriteKind, mergeUnknownColumns, bandAhead, doneChip,
 } from './kanban-place.mjs';
-import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, renderBoardCmd, resolveBoard } from './lane-board.mjs';
+import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, loadRegistry, renderBoardCmd, resolveBoard } from './lane-board.mjs';
+import { finishPage, readIdList } from './board-mask.mjs';
 import { boardStamp, defaultOut, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import { compareLanes, laneOrderSql } from './lane-sort.mjs';
@@ -1292,5 +1293,15 @@ ${procSummary ? `      <span class="ctr${procSummary.unmatchedPids.length ? ' is
 ${kbScript}
 </script>` : ''}`;
 
-writeAtomic(OUT, html);
-console.log(`wrote ${OUT} (${(html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${procSummary ? `${procSummary.matched}/${procSummary.total} claude.exe matched, ` : ''}${events.length} events`);
+// The listed-id mask (card coord-board-mask-listed-ids): the whole page is masked and checked once, here, just before the write. The list is read
+// from the root of THIS board's registry entry (the primary checkout for continuous-claude), the same two files the holdout-scan hook reads.
+// Board continuous-claude: a list problem or a hit left is exit 3 and no file. Another board: an absent list renders with one note.
+const maskRoot = (loadRegistry().find((e) => e.key === BOARD.via && e.status.toLowerCase() !== 'inactive') ?? {}).path ?? BOARD.root;
+const finished = finishPage({ html, board: KEY, defaultBoard: DEFAULT_BOARD, readList: () => readIdList(maskRoot) });
+if (!finished.ok) {
+  console.error(finished.line);
+  process.exit(finished.exit);
+}
+if (finished.left === null) console.error(finished.line);
+writeAtomic(OUT, finished.html);
+console.log(`wrote ${OUT} (${(finished.html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${procSummary ? `${procSummary.matched}/${procSummary.total} claude.exe matched, ` : ''}${events.length} events${finished.left === 0 ? `; ${finished.line}` : ''}`);
