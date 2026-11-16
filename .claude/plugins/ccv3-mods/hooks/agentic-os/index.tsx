@@ -919,7 +919,7 @@ export const agenticOs = (on: On) => {
     try {
       ran = await next(e)
     } finally {
-      await update($, steps, list => list.filter(one => one.id !== id))
+      await update($, steps, list => list.filter(one => one.id !== id)).catch(() => undefined)
     }
     await watch($, tool, input, headBefore, ran)
     // A refusal (not Dave dismissing his own question) blocks the chip until the next turn.

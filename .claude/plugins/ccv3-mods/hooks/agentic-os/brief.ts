@@ -476,7 +476,9 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
 /**
  * A Next steps item that asks nothing of Dave. The set is closed: the WHOLE item (one final period allowed) must match, or it is an ask.
  * (a) A lead: "None", "None for now/today/yet/right now", "Nothing (for you/Dave) to do", "Nothing required/yet/for now", "No action/input/reply needed/required".
- *     After the lead come at most a sentence end, " - ", " — " or ":" and ONE waiting clause: "None for now. I'm waiting on X", "None — waiting on your merge yes".
+ *     After the lead come at most a sentence end, " - ", " — ", ":" or ", " and ONE waiting clause: "None for now. I'm waiting on X", "None, waiting on CI". The ", " form never takes you, yours or Dave.
+ *     Also "None for the seat". A second sentence after the wait ("None - waiting on CI. I rule on it after") stays an ASK: a false ask is better than a hidden one,
+ *     and two review rounds found a new hidden-question hole in each try at a tail grammar. Known limit; the cure is `brief_set` with `ask: []`, not a bigger parser.
  * (b) A bare waiting clause, "(I'm) Waiting on/for X", where X does not start with you, your or Dave ("Waiting on Dave's approval" asks Dave).
  * X is 1 to 80 characters with no ? ; , ! : – —, no sentence end (". "), no dash separator and no " then ", " and ", " or ", " but ".
  * Anything else stays an ask: "Waiting on CI, then approve PR 12", "None for now. Paste the build log", "None, but review the diff", "None of the options fit".
@@ -485,12 +487,8 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
 const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s)(?:[^?;,!:–—\s]|\s)){1,80}`
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
 const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
-/** What the model may say it does itself while it waits. A closed set: a tail with any other verb ("I need ...", "I'd like ...") stays an ask. */
-const OWN_ACTION = String.raw`(?:rule|decide|review|check|merge|continue|resume|report|read|record|send|wait|keep|run|answer|act|post|land|reply|look|go|stay)`
-/** The one sentence that may follow a peer wait: first person, an own action above, 160 characters at most, one clause (no dash, comma, colon, period, question or exclamation mark), no and/then/or/but/unless/if/whether, and never you, yours, your or Dave. */
-const WAIT_TAIL = String.raw`(?:\.\s+(?:i|we)(?:['’]ll)?\s+(?:will\s+)?${OWN_ACTION}\b(?:(?!\b(?:and|then|or|but|unless|if|whether|you(?:rs?)?|dave)\b)[^?!;.,:–—-]){0,160})`
-const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+(?!${WAIT_CLAUSE}(?:your?|dave)\\b))${WAIT_CLAUSE}${WAIT_OBJECT}${WAIT_TAIL}?$)`, 'i')
-const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}(?!(?:your?|dave)\\b)${WAIT_OBJECT}$`, 'i')
+const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+(?!${WAIT_CLAUSE}(?:you(?:rs?)?|dave)\\b))${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
+const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}(?!(?:you(?:rs?)?|dave)\\b)${WAIT_OBJECT}$`, 'i')
 /** A question mark makes any item an ask, whatever its words. */
 const noAsk = (text: string): boolean => {
   const whole = text.replace(/\.$/, '')

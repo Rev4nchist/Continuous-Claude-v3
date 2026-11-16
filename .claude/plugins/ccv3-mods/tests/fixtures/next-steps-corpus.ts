@@ -40,7 +40,7 @@ export const CORPUS: CorpusRow[] = [
   { id: 'N26', text: "Pushed the fix.\n\n## Next steps\n1. None for now. I'm waiting on the workflow.", asks: [], source: 'P26' },
   { id: 'N29', text: 'Done.\n\n## Next steps\nNothing for you to do. Waiting on the CI run.', asks: [], source: 'P29' },
   // Coord status band fixes, fix 3 (2026-11-16): a peer wait with a one-sentence first-person tail is no ask; any other tail stays an ask.
-  { id: 'N61a', text: steps('1. None - waiting on the end word from Coord hooks. I rule on its findings before any fix push'), asks: [], source: 'band review 04, live seat 14:15:39' },
+  { id: 'R63a', text: steps('1. None - waiting on the end word from Coord hooks. I rule on its findings before any fix push'), asks: ['I rule on its findings'], source: 'band review 04, live seat 14:15:39: a second sentence stays an ask (known limit, no tail grammar)' },
   { id: 'N61b', text: steps('1. None for the seat'), asks: [], source: 'band review 04, fix 3' },
   { id: 'N61c', text: steps('1. None, waiting on CI'), asks: [], source: 'band review 04, fix 3' },
   { id: 'R61a', text: steps('1. None - waiting on CI. Paste the build log'), asks: ['Paste the build log'], source: 'seat guard 1: an order in the tail' },
@@ -51,7 +51,7 @@ export const CORPUS: CorpusRow[] = [
   { id: 'R61f', text: steps('1. None - waiting on CI. I rule after Dave picks'), asks: ['I rule after Dave picks'], source: 'seat guard 1: a first-person tail that names Dave' },
   { id: 'R61g', text: steps('1. None - waiting on CI. I rule on your reply'), asks: ['I rule on your reply'], source: 'seat guard 1: a first-person tail that names your' },
   { id: 'R61h', text: steps('1. None - waiting on CI. I rule on it after the long review of the whole change set after the long review of the whole change set after the long review of the whole change set after the long review of the whole change set after the long review of the whole change set'), asks: ['after the long review'], source: 'tail bound: over 160 characters stays an ask' },
-  { id: 'N61d', text: steps('1. None - waiting on CI. We rule after the build'), asks: [], source: 'first person plural' },
+  { id: 'R63b', text: steps('1. None - waiting on CI. We decide the band after the build'), asks: ['We decide the band'], source: 'critic round 2: we can include Dave' },
   { id: 'R61i', text: steps('1. None - waiting on CI. It rules after the build'), asks: ['It rules after the build'], source: 'a tail that does not start with I or We stays an ask' },
   { id: 'R62a', text: steps('1. None - waiting on CI. I need the log pasted'), asks: ['I need the log pasted'], source: 'critic: a need is an ask' },
   { id: 'R62b', text: steps('1. None - waiting on CI. I\'d like a yes'), asks: ['I\'d like a yes'], source: 'critic: a wish is an ask' },
@@ -67,5 +67,8 @@ export const CORPUS: CorpusRow[] = [
   { id: 'R62l', text: steps('1. None, waiting on your yes'), asks: ['your yes'], source: 'critic: comma separator, object names you' },
   { id: 'R62m', text: steps('1. None - waiting on CI. I rule on yours'), asks: ['I rule on yours'], source: 'yours is not an own-action tail' },
   { id: 'R62n', text: steps('1. None - waiting on CI. I rule on it, paste the build log'), asks: ['paste the build log'], source: 'a comma opens a second clause' },
-  { id: 'N62a', text: steps("1. None - waiting on CI. I'll rule on it after the build"), asks: [], source: 'contraction I\'ll with an own action' },
+  { id: 'R63c', text: steps("1. None - waiting on CI. I'll rule on it after the build"), asks: ['rule on it after the build'], source: 'no tail grammar: a contraction tail stays an ask' },
+  { id: 'R63d', text: steps('1. None - waiting on CI. I post the PR after approval'), asks: ['after approval'], source: 'critic round 2: a hidden approval' },
+  { id: 'R63e', text: steps('1. None, waiting on yours'), asks: ['waiting on yours'], source: 'critic round 2: yours' },
+  { id: 'R63f', text: steps('1. Waiting on yours'), asks: ['Waiting on yours'], source: 'critic round 2: yours, bare form' },
 ]
