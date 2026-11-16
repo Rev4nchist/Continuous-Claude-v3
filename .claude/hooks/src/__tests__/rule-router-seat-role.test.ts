@@ -86,3 +86,19 @@ describe('seat item 4: the real short block fits its budget whole', () => {
     expect(lines.join('\n')).toContain(block ?? 'x');
   });
 });
+
+describe('CLI findings 1 and 2: the card is for the holder only and names the installed shim', () => {
+  const text = existsSync(CARD) ? readFileSync(CARD, 'utf8') : '';
+  it('the first sentence of the full card is conditional on lane re-program, and says it does not apply to builders', () => {
+    const first = text.split('\n').find((l) => l.trim() && !l.startsWith('#')) ?? '';
+    expect(first).toMatch(/^If you hold the program master card \(lane `re-program`\)/);
+    expect(first).toMatch(/does not apply to you/);
+  });
+  it('the short block starts with the condition', () => {
+    expect(readSeatShortCard(join(CLAUDE, '..'))).toMatch(/^If you hold lane re-program:/);
+  });
+  it('no tick line uses a bare lane.mjs command: each one names the installed shim', () => {
+    const bare = text.split('\n').filter((l) => /lane\.mjs/.test(l) && !/C:\/Users\/dkhay\/\.claude\/scripts\/lane\.mjs/.test(l));
+    expect(bare).toEqual([]);
+  });
+});
