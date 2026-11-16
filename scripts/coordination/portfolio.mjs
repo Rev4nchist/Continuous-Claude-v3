@@ -37,7 +37,7 @@ function reclaimable(lane, sessions, now) {
   const left = leaseLeft(lane, now);
   if (left !== null && left > 0) return false;
   const s = sessions.find((x) => x.id === lane.owner_session_id);
-  const alive = s ? ms(s.last_alive) : NaN;
+  const alive = s && s.last_alive ? ms(s.last_alive) : NaN;
   return !Number.isFinite(alive) || (now.getTime() - alive) / 60000 >= STALE_MINUTES;
 }
 

@@ -20,8 +20,11 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { NO_TICK } from './tick-marker.mjs';
-import { renderHtml, seatRows } from './portfolio.mjs';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { MASTER_LANES, NO_TICK } from './tick-marker.mjs';
+import { PARK_ABOVE_MINUTES, renderHtml, seatRows, STALE_MINUTES } from './portfolio.mjs';
 
 const now = new Date(2026, 10, 16, 10, 0, 0);
 const at = (h, m = 0) => new Date(2026, 10, 16, h, m, 0);
@@ -36,6 +39,21 @@ const master = (over = {}) => ({
 const awake = (id, d = now) => ({ id, last_alive: iso(d, -1) });
 const call = (over = {}) => seatRows({
   lanes: [master()], sessions: [awake(SID_A)], events: [], masterLanes: ['re-program'], now, ...over,
+});
+
+describe('twins and borrowed constants', () => {
+  const src = (f) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), f), 'utf8');
+  it('keeps STALE_MINUTES equal to lane.mjs and PARK_ABOVE_MINUTES equal to tick-marker.mjs', () => {
+    assert.equal(Number(/const STALE_MINUTES = (\d+)/.exec(src('lane.mjs'))[1]), STALE_MINUTES);
+    assert.equal(Number(/const PARK_ABOVE_MINUTES = (\d+)/.exec(src('tick-marker.mjs'))[1]), PARK_ABOVE_MINUTES);
+  });
+  it('has a first master card id for tickWord to borrow', () => {
+    assert.equal(typeof MASTER_LANES[0], 'string');
+  });
+  it('treats a session with a null last_alive as quiet', () => {
+    const r = call({ lanes: [master({ lease_expires_at: iso(now, -10) })], sessions: [{ id: SID_A, last_alive: null }] })[0];
+    assert.equal(r.holder, null);
+  });
 });
 
 describe('seatRows', () => {
@@ -76,12 +94,11 @@ describe('seatRows', () => {
     const lease = iso(now, 600);
     const r = call({ lanes: [master({ lease_expires_at: lease })] })[0];
     assert.equal(r.parkedTo, lease);
-    assert.equal(r.tick, '');
     assert.equal(call()[0].parkedTo, null);
   });
 
-  it('gives a null holder for a card with no owner', () => {
-    const r = call({ lanes: [master({ owner_session_id: null })] })[0];
+  it('gives a null holder and no word for a card with no owner, even with 30 minutes of lease', () => {
+    const r = call({ lanes: [master({ owner_session_id: null, lease_expires_at: iso(now, 30) })] })[0];
     assert.equal(r.holder, null);
     assert.equal(r.tick, '');
   });

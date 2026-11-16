@@ -55,14 +55,15 @@ async function readBoard(c, board, masterLanes, now) {
   const events = (await c.query(
     `SELECT project_key, lane_id, max(occurred_at) AS occurred_at FROM agentic_os.lane_event
       WHERE project_key = $1::text AND lane_id = ANY($2::text[]) GROUP BY project_key, lane_id`, [board, masterLanes])).rows;
-  const sessions = ages.map((r) => ({ id: r.id, last_alive: new Date(now.getTime() - r.age_s * 1000).toISOString() }));
+  // A NULL age (no heartbeat, no activity) is a quiet session, as in lane.mjs: never "alive now".
+  const sessions = ages.map((r) => ({ id: r.id, last_alive: r.age_s == null ? null : new Date(now.getTime() - r.age_s * 1000).toISOString() }));
   return { lanes, sessions, events };
 }
 
 async function connect() {
   const { Client } = requireDep('pg', { repoRoot: REPO });
   const c = new Client({
-    connectionString: process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL
+    connectionString: process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL
       || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude',
     connectionTimeoutMillis: 5000,
   });
@@ -96,6 +97,7 @@ async function main() {
   const now = process.env.PORTFOLIO_NOW ? new Date(process.env.PORTFOLIO_NOW) : new Date();
   if (!Number.isFinite(now.getTime())) usage('PORTFOLIO_NOW is not a time');
   const boards = activeBoards();
+  if (!boards.length) { console.error('portfolio: no active board in the project registry; nothing written'); process.exit(1); }
   const got = await readAll(boards, masterLanes, now);
   const rows = seatRows({ lanes: got.lanes, sessions: got.sessions, events: got.events, masterLanes, identities: listIdentities(), now });
   const out = args.out || join(REPO, 'portfolio.html');
