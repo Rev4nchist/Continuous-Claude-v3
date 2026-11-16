@@ -117,6 +117,7 @@ import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 import { ANSWER_KEY_GLOBS, answerKeyGlobs, answerKeyCheck, slashLower } from './lib/answer-paths.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
+import { acquire as acquireRunLock, releaseSync as releaseRunLockSync } from '../coordination/run-lock.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -128,7 +129,7 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock', 'tick-marker', 'board-band-view'];
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
@@ -868,6 +869,7 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
     function finish(status) {
       if (settled) return;
       settled = true;
+      if (child && activeCr === child) activeCr = null; // a timeout settles with no close event: the signal handler must not stop a dead child
       clearInterval(ticker);
       clearTimeout(limit);
       file?.end();
@@ -881,6 +883,8 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
       finish(null);
       return;
     }
+    activeCr = child;
+    const forget = () => { if (activeCr === child) activeCr = null; };
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
@@ -892,8 +896,8 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
       for (const line of lines) lastEvent = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1] ?? lastEvent;
     });
     child.stderr.on('data', (chunk) => { if (!settled) stderr += chunk; });
-    child.on('error', (err) => { error = String(err.message); errorCode = err.code; finish(null); });
-    child.on('close', (code) => finish(code));
+    child.on('error', (err) => { forget(); error = String(err.message); errorCode = err.code; finish(null); });
+    child.on('close', (code) => { forget(); finish(code); });
   });
 }
 
@@ -1720,6 +1724,68 @@ function repoRoot() {
   return r.status === 0 && r.stdout.trim() ? path.resolve(r.stdout.trim()) : SCRIPT_ROOT;
 }
 
+const EXIT_LOCK_WAIT = 75; // "the run lock said wait". Same code as the run-lock CLI (EXIT_WAIT in run-lock.mjs).
+
+/**
+ * First step of a run (card coord-run-lock-and-go-row): ask the run lock for a slot. Warn mode only logs a refusal and the
+ * run goes on. Grant mode stops here, before any gate, with the reason and the time to try again (exit 75, EXIT_LOCK_WAIT;
+ * exit 3 stays pre-pr's own "stopped by an error", so a caller can tell the two apart). The lock is freed
+ * at exit. A lock that cannot run (a broken store) never stops pre-pr: it is cooperative. GRANTED is not safe from a change of
+ * main: the CodeRabbit step still fails when main changes during a CLI run.
+ */
+async function takeRunLock(bodyPath) {
+  let r;
+  try {
+    const headRead = spawnSync('git', ['rev-parse', '--short=8', 'HEAD'], { encoding: 'utf8', windowsHide: true });
+    const head = headRead.status === 0 && /^[0-9a-f]{8,40}$/.test(headRead.stdout.trim()) ? headRead.stdout.trim() : null; // null: no repo or no commit
+    r = await acquireRunLock({ kind: 'pre-pr', pid: process.pid, holder: `pre-pr ${path.basename(bodyPath)}`, head });
+  } catch (err) {
+    console.error(`pre-pr: the run lock is not available (${String(err?.message ?? err).split('\n')[0]}); the run goes on`);
+    return;
+  }
+  for (const line of r.lines) console.error(`run-lock: ${line}`);
+  if (!r.granted) {
+    console.error('pre-pr: stopped before any gate (the run lock said wait); run it again after the time above');
+    process.exit(EXIT_LOCK_WAIT);
+  }
+  installRunLockHandlers();
+}
+
+/**
+ * The live CodeRabbit child, or null. defaultCrRunner sets it when the child starts and clears it when the child ends.
+ * The signal handler of the run lock reads it: a signal must stop the review before the lock is freed.
+ */
+let activeCr = null;
+
+/**
+ * Stop the live CodeRabbit child and its process tree, then forget it. Returns false when none runs. Never throws: the caller
+ * is a signal handler and must reach process.exit. killer is a test seam.
+ */
+export function killActiveCr(killer = (c) => killTree(c.pid)) {
+  const child = activeCr;
+  if (!child) return false;
+  activeCr = null;
+  try { killer(child); } catch { /* the child may be gone already */ }
+  try { child.kill(); } catch { /* already gone */ }
+  return true;
+}
+
+/**
+ * Free the run lock at exit and on SIGINT or SIGTERM. An 'exit' handler waits for no promise, so the release is synchronous.
+ * A signal ends the process without an 'exit' event unless a handler asks for one. A kill -9 or a crash leaves the file: the
+ * next acquire drops it (dead pid).
+ * A signal handler runs at once while the async CodeRabbit step runs. It waits only for a blocking gate child (spawnSync):
+ * the event loop is busy until that child returns. The handler stops the CodeRabbit child FIRST, then exits. The 'exit'
+ * handler then frees the lock, so a second pre-pr cannot start beside a live review. Before this function runs no handler
+ * exists, so a signal ends the process at once and a lock written by then stays. The next acquire drops it (dead pid).
+ */
+export function installRunLockHandlers() {
+  process.on('exit', () => { try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ } });
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    process.on(signal, () => { killActiveCr(); process.exit(code); });
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); process.exit(0); }
@@ -1732,6 +1798,7 @@ async function main() {
   }
   const timeoutProblem = crTimeoutProblem(args);
   if (timeoutProblem) console.error(`pre-pr: ${timeoutProblem}`);
+  await takeRunLock(bodyPath);
   const run = await runPrePr({
     root: repoRoot(), base: option(args, '--base') ?? 'main', bodyText, bodyPath: path.resolve(bodyPath), skipCr: args.includes('--skip-cr'),
     keepGoing: args.includes('--keep-going'), crTimeout: crTimeoutMs(args), log: (line) => console.error(line),
