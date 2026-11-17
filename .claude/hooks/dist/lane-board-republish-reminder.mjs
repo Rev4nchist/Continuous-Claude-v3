@@ -6713,8 +6713,8 @@ function decide(payload, pending, env = process.env, candidates = [DEFAULT_BOARD
   if (!lc) return NONE;
   const board = boardOfChange(payload, lc, env, ownedBoard);
   if (!board) return NONE;
-  const artifact = boardArtifact(board, { env });
-  if (!artifact) return { action: "render", verb: lc.verb, board, message: renderOnly(lc.verb, board) };
+  const hasPage = boardArtifact(board, { env }) !== null || boardArtifactProblem(board, { env }) !== null;
+  if (!hasPage) return { action: "render", verb: lc.verb, board, message: renderOnly(lc.verb, board) };
   const mark = { action: "mark", verb: lc.verb, board };
   if (!ASK_VERBS.has(lc.verb)) return mark;
   const asked = typeof pending === "function" ? pending(board) : pending;
