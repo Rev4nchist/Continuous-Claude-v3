@@ -105,7 +105,7 @@ A kanban drag, Do next and Move to change rank only. By band keeps band first, s
 | Context-injection hook | `.claude/hooks/src/lane-context.ts` |
 | Correctness gate (34 properties) | `scripts/coordination/lane-race-probe.mjs` |
 | Board renderer | `scripts/coordination/render-board.mjs` |
-| Published board | generated artifact `RtrTNVfAq9uowmb2tfbzid` (`https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`) |
+| Published board | generated artifact: the url of the `agentic-os-lane-board` entry in `.claude/artifacts.json` (primary checkout) |
 
 The old triage artifact `9eb25020-1959-47b9-b51f-6589e0c0515a` is retired. It holds saved
 triage decisions. Never publish the lane board over it.
@@ -118,9 +118,9 @@ only prints that hint. To refresh the `continuous-claude` page, first read the l
 node C:/Users/dkhay/continuous-claude/scripts/coordination/render-board.mjs --project continuous-claude
 ```
 
-Then publish `lane-board.html` with the Artifact tool, passing
-`url=https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid`. The URL keeps the same link instead of
-minting a second board. For another board, render with `--project <key>`, publish `lane-board-<key>.html` to that board's `laneArtifact`
+Then publish `lane-board.html` with the Artifact tool, passing as `url` the url of the
+`agentic-os-lane-board` entry in `.claude/artifacts.json`. The Stop gate prints that url. The URL keeps the same link instead of
+minting a second board. The url changes with the claude.ai account, so no doc names a fixed page id. For another board, render with `--project <key>`, publish `lane-board-<key>.html` to that board's `laneArtifact`
 url and pass no `capabilities`. A board with no `laneArtifact` renders `lane-board-<key>.html` with no artifact. It shows a read-only Priorities section drawn from lane state and priority.
 
 The lane-board Stop gate may add one line to its block reason: "FleetOps data is stale (<when>). Tell Dave in one line. Run the fleetops-refresh skill only if he asks."
