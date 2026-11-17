@@ -447,29 +447,18 @@ var BUILTIN_AGENTS = /* @__PURE__ */ new Set([
   "Plan",
   "statusline-setup",
   "claude-code-guide",
-  "claude"
+  "claude",
+  "web-fetch",
+  "fork"
 ]);
+var HINT_MAX_EDITS = 2;
+var HINT_MIN_LENGTH = 4;
 function readStdin() {
   return readFileSync(0, "utf-8");
 }
-function outputContinue() {
-  const output = {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow"
-    }
-  };
-  console.log(JSON.stringify(output));
-}
-function outputBlock(reason) {
-  const output = {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason
-    }
-  };
-  console.log(JSON.stringify(output));
+function buildOutput(decision) {
+  if (!decision.hint) return {};
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: decision.hint } };
 }
 function agentDirs(cwd, env) {
   const roots = [typeof cwd === "string" ? cwd : void 0, env.projectDir];
@@ -504,9 +493,10 @@ function listAgents(dir) {
 }
 function findSimilarAgents(agentType, available) {
   const lower = agentType.toLowerCase();
+  if (lower.length < HINT_MIN_LENGTH) return [];
   return available.filter((a) => {
     const aLower = a.toLowerCase();
-    return aLower.includes(lower) || lower.includes(aLower) || levenshteinDistance(lower, aLower) <= 3;
+    return aLower !== lower && levenshteinDistance(lower, aLower) <= HINT_MAX_EDITS;
   }).slice(0, 3);
 }
 function levenshteinDistance(a, b) {
@@ -534,29 +524,36 @@ function levenshteinDistance(a, b) {
   }
   return matrix[b.length][a.length];
 }
+function findShadow(builtin, dirs) {
+  const lower = builtin.toLowerCase();
+  for (const dir of dirs) {
+    const hit = listAgents(dir).find((name) => name.toLowerCase() === lower);
+    if (hit) return join3(dir, `${hit}.md`);
+  }
+  return void 0;
+}
+function decideBuiltin(agentType, dirs) {
+  const shadow = findShadow(agentType, dirs);
+  if (!shadow) return { allow: true };
+  return { allow: true, shadow, hint: `${agentType} is overridden by ${shadow}; its tools may differ from the built-in.` };
+}
 function decide(input, env) {
   if (input?.tool_name !== "Agent" && input?.tool_name !== "Task") return { allow: true };
   const agentType = input.tool_input?.subagent_type;
   if (typeof agentType !== "string" || !agentType) return { allow: true };
-  if (BUILTIN_AGENTS.has(agentType) || agentType.includes(":")) return { allow: true };
+  if (agentType.includes(":")) return { allow: true };
   try {
     const dirs = agentDirs(input.cwd, env);
+    if (BUILTIN_AGENTS.has(agentType)) return decideBuiltin(agentType, dirs);
     const safeName = !/[\\/]|\.\./.test(agentType);
     if (safeName) {
       for (const dir of dirs) {
         if (fileExists(join3(dir, `${agentType}.md`))) return { allow: true };
       }
     }
-    const available = [...new Set(dirs.flatMap(listAgents))];
-    const similar = findSimilarAgents(agentType, available);
-    let message = `Agent "${agentType}" not found in ${dirs.join(" or ")}`;
-    if (similar.length > 0) message += `
-
-Did you mean: ${similar.join(", ")}?`;
-    message += `
-
-Available custom agents: ${available.slice(0, 10).join(", ")}${available.length > 10 ? "..." : ""}`;
-    return { allow: false, reason: message };
+    const similar = safeName ? findSimilarAgents(agentType, [...new Set(dirs.flatMap(listAgents))]) : [];
+    if (similar.length === 0) return { allow: true, unknown: true };
+    return { allow: true, unknown: true, hint: `Agent "${agentType}" is not a custom agent. Did you mean: ${similar.join(", ")}?` };
   } catch {
     return { allow: true };
   }
@@ -566,15 +563,14 @@ function main() {
   try {
     input = JSON.parse(readStdin());
   } catch {
-    outputContinue();
+    console.log("{}");
     return;
   }
   const decision = decide(input, { home: homedir3(), projectDir: process.env.CLAUDE_PROJECT_DIR });
-  if (decision.allow) outputContinue();
-  else {
-    logGuardDecision("agent-model-guard", input, "deny", `agent-not-found: ${String(input.tool_input?.subagent_type).slice(0, 60)}`);
-    outputBlock(decision.reason);
-  }
+  const name = String(input.tool_input?.subagent_type).slice(0, 60);
+  if (decision.unknown) logGuardDecision("agent-model-guard", input, "warn", `agent-unknown: ${name}`);
+  if (decision.shadow) logGuardDecision("agent-model-guard", input, "warn", `builtin-shadowed: ${name}`);
+  console.log(JSON.stringify(buildOutput(decision)));
 }
 function isDirectRun() {
   try {
@@ -587,11 +583,12 @@ if (isDirectRun()) {
   try {
     main();
   } catch {
-    outputContinue();
+    console.log("{}");
   }
 }
 export {
   BUILTIN_AGENTS,
   agentDirs,
+  buildOutput,
   decide
 };

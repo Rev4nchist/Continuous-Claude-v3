@@ -67,9 +67,9 @@ export function buildSuggestion(url?: string): string {
   }
 
   return [
-    'Web lookup failed. Consider using opencli if this is a supported platform.',
+    'Web lookup failed. Follow web-research.md: a permission deny or a policy block means stop and report; a missing tool or a network failure means the next tool in its list.',
     siteHint,
-    'Run `opencli list` to see available commands, or `opencli generate <url> --goal "<goal>"` to create a new adapter.',
+    'opencli is the last step, only when `opencli --version` runs (do not install it): `opencli list`, or `opencli generate <url> --goal "<goal>"`.',
   ].filter(Boolean).join('\n');
 }
 
