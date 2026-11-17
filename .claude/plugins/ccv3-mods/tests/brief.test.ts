@@ -945,6 +945,14 @@ describe('parseTurnEnd on real answers', () => {
     }
   })
 
+  test('P22c a wrapped item past the 2,000 character line cap (80 indented lines in the 16 KB tail) stays fast and is one ask', () => {
+    const wrapped = ['## Next steps', '1. None - waiting on CI.', ...Array.from({ length: 80 }, () => '   ' + 'y'.repeat(150))].join('\n')
+    const started = Date.now()
+    const parsed = parseTurnEnd(wrapped)
+    expect(Date.now() - started).toBeLessThan(300)
+    expect(parsed.ask?.length).toBe(1)
+  })
+
   test('P23 the instruction text of CLAUDE.md is not a restate', () => {
     const parsed = parseTurnEnd('Restate the ask before non-trivial work. One line: what you will build, where, and where you will stop.')
     expect(parsed.goal).toBeUndefined()
