@@ -54,11 +54,12 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
    - Read `out/manifest.json`. Keep `exportedAt`.
 5. Preflight. `notion-fetch` the page id. If the call fails, stop and report "Notion MCP not connected to the FleetOps workspace". Write nothing.
 6. Upload and write, in this one turn (an upload expires after 1 hour if it is not placed).
-   1. Read `out/fleetops.html` with the Read tool. Call `notion-create-attachment` with `content` = that text unchanged and `filename` = `FleetOps live board.html`. Keep the `file-upload://<id>` it returns.
+   1. Read `out/fleetops.html` with the Read tool and `allow_large: true`, so the whole file comes back in one read (it is about 55 KB). Call `notion-create-attachment` with `content` = that text unchanged and `filename` = `FleetOps live board.html`. Keep the `file-upload://<id>` it returns.
+      - Compare the returned `content_length` with `htmlBytes` in `out/manifest.json`. If they differ, the copy is not exact: do not place the upload (it expires by itself), stop and report.
    2. Read `out/page.md`. Replace the single line `{{FLEETOPS_EMBED}}` with `<embed source="file-upload://<id>" />`. Change nothing else.
    3. Call `notion-update-page` with `command: "replace_content"`, `page_id` = the page id, `new_str` = that text, `allow_async: false`. Do not pass `allow_deleting_content`. A refusal that lists child pages or databases: stop and report the list. Do not retry.
 7. Read back.
-   1. `notion-fetch` the page id again. Save the text between `<content>` and `</content>` to `<your scratchpad folder>/out/readback.md` with the Write tool.
+   1. `notion-fetch` the page id again. The result is JSON: take its `text` field as plain text (real line breaks and quotes, not `\n` and `\"`). Save the part between `<content>` and `</content>` to `<your scratchpad folder>/out/readback.md` with the Write tool.
    2. `node R/scripts/coordination/fleetops-html.mjs --check <your scratchpad folder>/out/readback.md --stamp <exportedAt>`
       It prints `check: listed N, stamp yes|no, embeds M, h2 K` and exits 0 only when no listed id is in the decoded text, the stamp is present and the embed is there.
    3. Fail with a listed id above 0: this is a leak. Replace the page body at once with the single line `FleetOps is being rebuilt.` Tell Dave the page history in Notion still holds the leaked version and that he must remove it there. Leave the pending flag on. Stop.
