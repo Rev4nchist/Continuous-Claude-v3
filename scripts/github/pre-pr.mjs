@@ -129,7 +129,7 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock', 'tick-marker', 'board-band-view', 'ask-ledger', 'stall-alarm-log', 'learning-counts', 'board-mask'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock', 'tick-marker', 'board-band-view', 'ask-ledger', 'stall-alarm-log', 'learning-counts', 'board-mask', 'board-done-view', 'board-scheduled-view', 'portfolio'];
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id', 'lane-holder-flags', 'lane-parked-scope', 'learning-counts-db'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
@@ -212,8 +212,8 @@ export const SURFACES = [
   // scripts/lib holds the shared dependency resolver (its tests build real git worktrees under the temp folder), and the headless and
   // stop-process-tree tests (PowerShell on Windows). The gate runs every scripts/lib/*.test.mjs; the id keeps its old name.
   { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/*.test.mjs')] },
-  // One file only (card coord-seat-counts): the privacy test of the --counts mode. The other tests of this folder are in no gate yet.
-  { id: 'self-improvement-scripts', globs: ['scripts/self-improvement/**'], gates: [nodeTest('counts-mode-test', 'scripts/self-improvement/test/counts-mode.test.mjs')] },
+  // Five files joined in step 2a of card coord-test-gate-coverage (the privacy test of the --counts mode and four more).
+  { id: 'self-improvement-scripts', globs: ['scripts/self-improvement/**'], gates: [{ id: 'self-improvement-tests', cmd: 'node', args: ['--test', 'scripts/self-improvement/test/counts-mode.test.mjs', 'scripts/self-improvement/test/append-digest.test.mjs', 'scripts/self-improvement/test/ask-rate.test.mjs', 'scripts/self-improvement/test/failure-audit.test.mjs', 'scripts/self-improvement/triage/test/assemble.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }] },
   // Every tracked test file is in a gate or on the named skip list (card coord-test-gate-coverage). It runs when a test file, a gate source or the skip list
   // changes: a new test file in no gate fails here, before CI.
   {

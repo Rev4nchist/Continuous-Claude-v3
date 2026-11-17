@@ -254,14 +254,6 @@
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/coordination/board-done-view.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/coordination/board-scheduled-view.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
       "path": "scripts/coordination/coord-drill-2/abort.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
@@ -323,11 +315,7 @@
     },
     {
       "path": "scripts/coordination/lane-done-frees-claims.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/coordination/portfolio.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+      "reason": "pending join: step 2b of card coord-test-gate-coverage. It makes its own scratch database (scratch-db.mjs create) and runs the real lane.mjs, so it joins the database gate"
     },
     {
       "path": "scripts/coordination/reminder-core.test.mjs",
@@ -604,22 +592,6 @@
     {
       "path": "scripts/scheduled/scheduled-reminder-tick.test.mjs",
       "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/self-improvement/test/append-digest.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/self-improvement/test/ask-rate.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/self-improvement/test/failure-audit.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/self-improvement/triage/test/assemble.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
       "path": "scripts/settings/apply-registrations.test.mjs",
