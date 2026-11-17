@@ -1,4 +1,4 @@
-// Tests for the gold part of shared/holdout-ids.ts (card coord-content-scan-followups, item gold ids; design note
+// Tests for shared/gold-ids.ts and the unchanged shared/holdout-ids.ts (card coord-content-scan-followups, item gold ids; design note
 // .claudedocs/coordination/2026-11-16-coord-gold-ids-design.md, option 2: warn and mask, NO new deny). Every id here is made up.
 //
 // Failure modes and the change that would break each test:
@@ -7,6 +7,7 @@
 //   L3 a broken gold file gives a short list or an error with file text     -> swallow the error, or put text in the message
 //   L4 the deny list (push gate, commit-preflight) gets gold ids            -> add gold ids to loadHoldoutIds
 //   L5 the deny callers are wired to the wider list, or the warn hook is not -> name loadListedIds in decision-gate.ts or commit-preflight.ts
+//   L6 the built bundles of the deny hooks hold gold code                    -> import gold-ids.ts from the deny path, or put gold code in holdout-ids.ts
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';

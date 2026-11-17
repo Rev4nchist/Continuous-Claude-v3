@@ -2,15 +2,17 @@
  * holdout-scan (PreToolUse, card coord-holdout-scan-warn, seat ruling 2026-11-15): warns when a tool input holds a holdout id of the
  * review-engine eval before it leaves (a command, a message, a published page, a file write). WARN ONLY: it never denies or asks.
  *
- * Ids: the push gate list (shared/holdout-ids.ts, read from the primary checkout on every call; about 2 ms, no cache, so no file ever
- * holds the ids). Matcher: countIdsIn (a short PR number counts only after #, PR, pull/...; a sha prefix of 7 or more hex), shared with the gate.
+ * Ids: the holdout ids of the push gate list (shared/holdout-ids.ts) and the gold ids (shared/gold-ids.ts: shas, and PR numbers of 4 digits or more;
+ * card coord-content-scan-followups, item gold ids), read from the primary checkout on every scanned call (about 1 MB of gold files, no cache, so no
+ * file ever holds the ids). The push gate and commit-preflight keep the holdout ids only. Matcher: countIdsIn (a short PR number counts only after
+ * #, PR, pull/...; a sha prefix of 7 or more hex), shared with the gate. A write into any answer-key path is exempt (the gold files hold their ids).
  * The warning line and the log row hold a count, the tool and a time. Never an id, never the matched text, never a slice of the input.
  * A failed list read gives a warning that the scan is off (seat Q3: differs from the scope text, a broken list must not stop every tool).
  * Off switch: holdoutScan.off = true in review-router.config.json. The staged diff at commit is commit-preflight's (seat Q2).
  */
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, posix } from 'path';
 import { answerKeyHitsOf } from './shared/answer-paths-door.js';
 import { loadListedIds } from './shared/gold-ids.js';
 import { countIdsIn } from './shared/holdout-ids.js';
@@ -21,8 +23,8 @@ export const SCAN_TOOLS = new Set(['Bash', 'PowerShell', 'SendMessage', 'Artifac
 /** The most bytes read from a file named by a tool input (a published page). A larger file says its tail was not scanned. */
 export const FILE_READ_LIMIT = 1024 * 1024;
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
-/** Where ids belong: a write there is not a leak. A write into any answer-key path is exempt too (isAnswerKeyPath). */
-const EXEMPT = [/\/scripts\/eval\/review-eval\/gold\//i, /\/\.claude\/state\/review-engine\//i, /\/2026-11-01-pr-review-dataset\.json$/i];
+/** Where ids belong: a write there is not a leak. A write into any answer-key path (the gold store included) is exempt too: isAnswerKeyPath. */
+const EXEMPT = [/\/\.claude\/state\/review-engine\//i, /\/2026-11-01-pr-review-dataset\.json$/i];
 
 type Env = Record<string, string | undefined>;
 interface HookInput { tool_name?: string; tool_input?: Record<string, unknown>; cwd?: string; session_id?: string }
@@ -39,7 +41,7 @@ const fwd = (p: string): string => p.replace(/\\/g, '/');
  * each tail of the path (the globs are repo-relative). The gold files hold the gold ids by design, so a write there never warns.
  */
 export function isAnswerKeyPath(p: string): boolean {
-  const segments = fwd(p).split('/');
+  const segments = posix.normalize(fwd(p)).split('/'); // normalized first: a ".." path through an answer-key folder is not an answer-key path
   for (let i = 0; i < segments.length; i++) if (answerKeyHitsOf([segments.slice(i).join('/')]).length > 0) return true;
   return false;
 }
@@ -64,8 +66,9 @@ function readCapped(path: string): Scanned {
 export function outgoingText(tool: string, input: Record<string, unknown>): Scanned | null {
   if (!SCAN_TOOLS.has(tool)) return null;
   if (WRITE_TOOLS.has(tool)) {
-    const target = str(input.file_path) || str(input.notebook_path);
-    if (EXEMPT.some((re) => re.test(fwd(target))) || isAnswerKeyPath(target)) return null;
+    const raw = fwd(str(input.file_path) || str(input.notebook_path));
+    // ".." is resolved before the exempt list is tried; isAnswerKeyPath resolves it itself.
+    if (EXEMPT.some((re) => re.test(posix.normalize(raw))) || isAnswerKeyPath(raw)) return null;
   }
   switch (tool) {
     case 'Bash': case 'PowerShell': return { text: str(input.command), tailBytes: 0 };

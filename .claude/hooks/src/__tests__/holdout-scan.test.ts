@@ -214,6 +214,15 @@ describe('holdout-scan with gold ids', () => {
     // A worktree copy of the same path, in a backslash spelling, is the same answer-key path.
     expect(run('Edit', { file_path: join(repo, '.claude', 'worktrees', 'w1', 'scripts', 'eval', 'review-eval', 'gold', 'gold-b.json').replace(/\//g, '\\'), old_string: 'a', new_string: `sha ${GOLD_SHA}` }).output).toBeNull();
     for (const p of ['scripts/eval/review-eval/score.mjs', 'docs/gold/gold-a.json', 'notes.md']) expect(warnOf('Write', { file_path: join(repo, p), content: `sha ${GOLD_SHA}` }), p).toMatch(/holdout-scan: 1 holdout id/);
+    // Backslashes in a rubrics path (also on Linux CI, where join gives slashes), and a NotebookEdit into seeds: exempt as well.
+    expect(run('Write', { file_path: `${repo.replace(/\//g, '\\')}\\scripts\\eval\\review-eval\\rubrics\\x.md`, content: `sha ${GOLD_SHA}` }).output).toBeNull();
+    expect(run('NotebookEdit', { notebook_path: join(repo, 'scripts', 'eval', 'review-eval', 'seeds', 'n.ipynb'), new_source: `x = "${GOLD_SHA}"` }).output).toBeNull();
+    // A ".." path that starts in an answer-key folder and ends elsewhere is NOT an answer-key path: it warns.
+    expect(warnOf('Write', { file_path: `${repo}/scripts/eval/review-eval/rubrics/../../../../notes.md`, content: `sha ${GOLD_SHA}` })).toMatch(/holdout-scan: 1 holdout id/);
+    expect(warnOf('Write', { file_path: `${repo}/scripts/eval/review-eval/gold/../score.mjs`, content: `sha ${GOLD_SHA}` })).toMatch(/holdout-scan: 1 holdout id/);
+    // The same for the older exempt places: a ".." path out of the review-engine state folder or beside the dataset is not exempt.
+    expect(warnOf('Write', { file_path: `${home}/.claude/state/review-engine/../../notes.md`, content: `sha ${GOLD_SHA}` })).toMatch(/holdout-scan: 1 holdout id/);
+    expect(run('Write', { file_path: `${home}/.claude/state/review-engine/x/../escapes.jsonl`, content: `sha ${GOLD_SHA}` }).output).toBeNull(); // still inside: exempt
   });
 
   it('HS17: a gold folder that cannot be read gives the scan-off warning, never a partial scan', () => {

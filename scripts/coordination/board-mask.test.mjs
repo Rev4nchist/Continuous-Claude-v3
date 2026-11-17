@@ -242,12 +242,13 @@ describe('readIdList: the gold folder adds its ids (a missing folder adds none; 
   const kind = (fn) => { try { fn(); } catch (e) { return [e.kind, e.message]; } return null; };
 
   it('GM1: every json file of the gold folder but the non-row file adds its shas and its 4-digit PR numbers', async () => {
-    const gold = await goldMap({ 'gold-a.json': [{ target: { pr: 8888, sha40: GOLD_SHA, round: 1 }, provenance: { fixSha: OTHER_SHA } }, { target: { pr: 77 } }], 'clean-controls.json': [{ target: { pr: 9999, sha40: GOLD_SHA } }], 'escape-baseline.json': [{ note: 'abcdef0123456789abcdef0123456789abcdef99' }] });
+    const gold = await goldMap({ 'gold-a.json': [{ target: { pr: 8888, sha40: GOLD_SHA, round: 1 }, provenance: { fixSha: OTHER_SHA, head: SHA } }, { target: { pr: 77 } }], 'clean-controls.json': [{ target: { pr: 9999, sha40: GOLD_SHA } }], 'escape-baseline.json': [{ note: 'abcdef0123456789abcdef0123456789abcdef99' }] });
     const ids = readIdList('/some/root', reader({ ...baseFiles, ...gold }), list(['gold-a.json', 'clean-controls.json', 'escape-baseline.json', 'adjudicated-cr.state']));
     for (const id of ['4242', SHA, GOLD_SHA, OTHER_SHA, '8888', '9999']) assert.ok(ids.includes(id), id);
     assert.ok(!ids.includes('77'), 'a 2-digit gold PR number is not listed');
     assert.ok(!ids.includes('abcdef0123456789abcdef0123456789abcdef99'), 'the non-row file is not read');
     assert.equal(new Set(ids).size, ids.length);
+    assert.equal(ids.filter((x) => x === SHA).length, 1, 'an id in both lists stands once');
   });
 
   it('GM2: a missing gold folder adds no id and leaves the holdout list as it was', async () => {

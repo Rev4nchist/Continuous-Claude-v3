@@ -30,10 +30,9 @@ export function loadGoldIds(mainRoot: string): string[] {
     throw new Error(GOLD_UNREADABLE);
   }
   try {
-    const files = names.filter((n) => n.endsWith('.json') && !GOLD_NON_ROW_FILES.includes(n)).sort()
+    const files = names.filter((n) => n.endsWith('.json') && !GOLD_NON_ROW_FILES.includes(n))
       .map((n) => JSON.parse(readFileSync(join(mainRoot, GOLD_DIR_REL, n), 'utf8')));
-    lib.checkGoldShape(files);
-    return lib.goldIdsOf(files) as string[];
+    return lib.checkGoldShape(files) as string[]; // throws on a wrong shape, else the ids
   } catch {
     throw new Error(GOLD_UNREADABLE);
   }

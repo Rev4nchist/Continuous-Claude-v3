@@ -52,8 +52,9 @@ export function goldIdsOf(files) {
 }
 
 /**
- * The shape check of the gold input: throws one fixed text, never a value, when `files` is not a non-empty list of lists of objects or when no
- * sha is found at all (a renamed field would give a short list that passes ids unseen: the same reason as checkHoldoutShape).
+ * The shape check of the gold input: throws one fixed text, never a value, when `files` is not a list of lists of objects or when no sha is found
+ * at all (a renamed field would give a short list that passes ids unseen: the same reason as checkHoldoutShape). It returns the ids (goldIdsOf),
+ * so a loader walks the rows once.
  */
 export function checkGoldShape(files) {
   const bad = () => { throw new Error('the gold id files have the wrong shape'); };
@@ -62,7 +63,9 @@ export function checkGoldShape(files) {
     if (!Array.isArray(rows)) bad();
     for (const row of rows) if (row === null || typeof row !== 'object' || Array.isArray(row)) bad();
   }
-  if (!goldIdsOf(files).some((id) => isSha(id))) bad();
+  const ids = goldIdsOf(files);
+  if (!ids.some((id) => isSha(id))) bad();
+  return ids;
 }
 
 // Seat read 2 (minor) asked for "PR: n", "pr_n", a JSON "pr": n field and "pull request n" too. Measured on 600 commits of main (2026-11-15):

@@ -153,4 +153,13 @@ test('GD6: tie to the real gold files and to lint-ids: every gold sha and every 
   const missing = [...parts.goldSha].filter((s) => !ids.has(s)).length + [...parts.goldPr].filter((p) => p.length >= MIN_GOLD_PR_DIGITS && !ids.has(p)).length;
   assert.equal(missing, 0);
   assert.equal([...ids].filter((x) => /^\d+$/.test(x) && x.length < MIN_GOLD_PR_DIGITS).length, 0);
+  // Tie: the one non-row file of the gold loaders is the one non-row file of gold.mjs that is not the clean controls (those hold rows with ids).
+  const { GOLD_NON_ROW_FILES } = await import('../../coordination/board-mask.mjs');
+  assert.deepEqual(NON_ROW_FILES.filter((f) => f !== 'clean-controls.json').sort(), [...GOLD_NON_ROW_FILES].sort());
+  // Data guard: goldIdsOf reads values, never object keys. No gold row may use a sha as a key (checked by count, nothing printed).
+  const isShaKey = (k) => /^[0-9a-f]{7,40}$/i.test(k) && /[a-f]/i.test(k);
+  let shaKeys = 0;
+  const walkKeys = (v) => { if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (!Array.isArray(v) && isShaKey(k)) shaKeys++; walkKeys(x); } };
+  files.forEach(walkKeys);
+  assert.equal(shaKeys, 0, 'a gold row uses a sha as an object key: goldIdsOf must read keys too');
 });

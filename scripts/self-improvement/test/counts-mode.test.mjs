@@ -158,5 +158,15 @@ test('B7: --counts also stops on a gold id (a made-up gold sha in a model name);
   assert.equal(a.status, 3, a.stderr);
   assert.ok(!fs.existsSync(out), 'a file was written after exit 3');
   assert.ok(!a.stderr.includes(GOLD_SHA) && !a.stdout.includes(GOLD_SHA), 'an id reached stdout or stderr');
+  // The other --counts script: a gold sha as an entrypoint word of a transcript. The control (no gold folder) was the audit run above.
+  const rateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'counts-gold-rate-'));
+  t0cleanup(rateRoot);
+  fs.mkdirSync(path.join(rateRoot, PROJECT), { recursive: true });
+  const rl = [{ type: 'assistant', timestamp: at(0), entrypoint: GOLD_SHA, message: { role: 'assistant', model: 'claude-test', content: [{ type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: { questions: [{ question: 'Which?', options: [] }] } }] } }];
+  fs.writeFileSync(path.join(rateRoot, PROJECT, `${SESSION}.jsonl`), rl.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const outR = path.join(tmp, 'b7-rate.md');
+  const r = spawnSync(process.execPath, [RATE, '--days', '36500', '--root', rateRoot, '--project', PROJECT, '--counts', '--id-root', idRoot, '--out', outR], { encoding: 'utf8' });
+  assert.equal(r.status, 3, r.stderr);
+  assert.ok(!fs.existsSync(outR) && !r.stderr.includes(GOLD_SHA) && !r.stdout.includes(GOLD_SHA));
 });
 function t0cleanup(...dirs) { after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); }); }

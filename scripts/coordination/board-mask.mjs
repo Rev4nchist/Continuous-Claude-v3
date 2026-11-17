@@ -4,8 +4,10 @@
  * A published lane page must carry no listed id (an id of the review-engine answer key). The hook holdout-scan counts them in the first 1 MiB of
  * a publish; this module masks them in the WHOLE page before render-board.mjs writes it, so a later lane note cannot put one back.
  *
- * Source of the list: the same two files and the same matcher as the hook. The matcher is scripts/github/lib/holdout-ids.mjs (imported, not
- * copied). The two file names are repeated here (the hook reader is TypeScript) and a test ties them to the hook text. The sha-prefix rule of the
+ * Source of the list: the same files and the same matcher as the warn hook: the dataset and the eval config (the holdout ids) and the tracked gold
+ * folder (the gold ids: card coord-content-scan-followups, item gold ids). The matcher is scripts/github/lib/holdout-ids.mjs (imported, not
+ * copied). The file and folder names are repeated here (the hook readers are TypeScript: shared/holdout-ids.ts and shared/gold-ids.ts) and tests
+ * tie them to the hook text. The sha-prefix rule of the
  * hook (holdout-scan.ts countHits) is repeated in shaHit below and a test ties it to the hook text too.
  *
  * Nothing here prints, returns in a message or logs an id. A caller gets counts (masked, left, bytes) and fixed texts. The token holds no digit and
@@ -13,11 +15,11 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkGoldShape, countIdsIn, goldIdsOf, holdoutIdsOf } from '../github/lib/holdout-ids.mjs';
+import { checkGoldShape, countIdsIn, holdoutIdsOf } from '../github/lib/holdout-ids.mjs';
 
 export const DATASET_REL = '.claudedocs/2026-11-01-pr-review-dataset.json';
 export const EVAL_CONFIG_REL = 'scripts/eval/review-eval/config.json';
-/** The tracked gold answer keys and the one json file of that folder with no rows (the hook repeats both: .claude/hooks/src/shared/holdout-ids.ts; a test ties them). */
+/** The tracked gold answer keys and the one json file of that folder with no rows (the hook repeats both: .claude/hooks/src/shared/gold-ids.ts; a test ties them). */
 export const GOLD_DIR_REL = 'scripts/eval/review-eval/gold';
 export const GOLD_NON_ROW_FILES = Object.freeze(['escape-baseline.json']);
 export const TOKEN = 'masked-id';
@@ -77,9 +79,8 @@ function readGoldIds(root, read, list) {
     throw listError('bad', MSG_BAD);
   }
   try {
-    const files = names.filter((n) => n.endsWith('.json') && !GOLD_NON_ROW_FILES.includes(n)).sort().map((n) => JSON.parse(read(join(dir, n))));
-    checkGoldShape(files);
-    return goldIdsOf(files);
+    const files = names.filter((n) => n.endsWith('.json') && !GOLD_NON_ROW_FILES.includes(n)).map((n) => JSON.parse(read(join(dir, n))));
+    return checkGoldShape(files); // throws on a wrong shape, else the ids
   } catch {
     throw listError('bad', MSG_BAD);
   }

@@ -357,7 +357,7 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 // src/holdout-scan.ts
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync as readFileSync3, readSync, writeFileSync } from "fs";
 import { homedir as homedir3 } from "os";
-import { dirname as dirname2, join as join5 } from "path";
+import { dirname as dirname2, join as join5, posix } from "path";
 
 // ../../scripts/github/lib/answer-key.mjs
 var ANSWER_KEY_GLOBS = Object.freeze([
@@ -417,10 +417,6 @@ function goldIdsOf(files) {
       for (const part of v.split(/\.{2,3}/)) if (isSha(part)) out.add(part.toLowerCase());
       return;
     }
-    if (Array.isArray(v)) {
-      v.forEach(walk);
-      return;
-    }
     if (v !== null && typeof v === "object") Object.values(v).forEach(walk);
   };
   for (const rows of Array.isArray(files) ? files : []) {
@@ -437,12 +433,14 @@ function checkGoldShape(files) {
   const bad = () => {
     throw new Error("the gold id files have the wrong shape");
   };
-  if (!Array.isArray(files) || files.length === 0) bad();
+  if (!Array.isArray(files)) bad();
   for (const rows of files) {
     if (!Array.isArray(rows)) bad();
     for (const row of rows) if (row === null || typeof row !== "object" || Array.isArray(row)) bad();
   }
-  if (!goldIdsOf(files).some((id) => isSha(id))) bad();
+  const ids = goldIdsOf(files);
+  if (!ids.some((id) => isSha(id))) bad();
+  return ids;
 }
 var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 function countIdsIn(text, ids) {
@@ -543,9 +541,8 @@ function loadGoldIds(mainRoot) {
     throw new Error(GOLD_UNREADABLE);
   }
   try {
-    const files = names.filter((n) => n.endsWith(".json") && !GOLD_NON_ROW_FILES.includes(n)).sort().map((n) => JSON.parse(readFileSync2(join3(mainRoot, GOLD_DIR_REL, n), "utf8")));
-    checkGoldShape(files);
-    return goldIdsOf(files);
+    const files = names.filter((n) => n.endsWith(".json") && !GOLD_NON_ROW_FILES.includes(n)).map((n) => JSON.parse(readFileSync2(join3(mainRoot, GOLD_DIR_REL, n), "utf8")));
+    return checkGoldShape(files);
   } catch {
     throw new Error(GOLD_UNREADABLE);
   }
@@ -591,11 +588,11 @@ function routerFlag(cwd, readFile, home, section, key) {
 var SCAN_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell", "SendMessage", "Artifact", "Write", "Edit", "NotebookEdit"]);
 var FILE_READ_LIMIT = 1024 * 1024;
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "NotebookEdit"]);
-var EXEMPT = [/\/scripts\/eval\/review-eval\/gold\//i, /\/\.claude\/state\/review-engine\//i, /\/2026-11-01-pr-review-dataset\.json$/i];
+var EXEMPT = [/\/\.claude\/state\/review-engine\//i, /\/2026-11-01-pr-review-dataset\.json$/i];
 var str = (v) => typeof v === "string" ? v : "";
 var fwd2 = (p) => p.replace(/\\/g, "/");
 function isAnswerKeyPath(p) {
-  const segments = fwd2(p).split("/");
+  const segments = posix.normalize(fwd2(p)).split("/");
   for (let i = 0; i < segments.length; i++) if (answerKeyHitsOf2([segments.slice(i).join("/")]).length > 0) return true;
   return false;
 }
@@ -616,8 +613,8 @@ function readCapped(path) {
 function outgoingText(tool, input) {
   if (!SCAN_TOOLS.has(tool)) return null;
   if (WRITE_TOOLS.has(tool)) {
-    const target = str(input.file_path) || str(input.notebook_path);
-    if (EXEMPT.some((re) => re.test(fwd2(target))) || isAnswerKeyPath(target)) return null;
+    const raw = fwd2(str(input.file_path) || str(input.notebook_path));
+    if (EXEMPT.some((re) => re.test(posix.normalize(raw))) || isAnswerKeyPath(raw)) return null;
   }
   switch (tool) {
     case "Bash":
