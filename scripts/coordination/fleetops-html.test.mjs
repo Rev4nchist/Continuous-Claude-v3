@@ -251,6 +251,32 @@ describe('--verify-upload', () => {
     } finally { await srv.close(); }
   });
 
+  it('11a2. @file: the url is read from the file, the file is deleted, and the match holds (break: @ not read, or the file kept)', async () => {
+    const srv = await serve(html);
+    const d = mkdtempSync(join(tmpdir(), 'fleetops-url-'));
+    try {
+      const urlFile = join(d, 'url.txt');
+      writeFileSync(urlFile, `${srv.url}\n`);
+      const r = await verify(`@${urlFile}`);
+      assert.equal(r.code, 0);
+      assert.equal(r.out, `verify-upload: sha ok, bytes ${html.length}`);
+      assert.equal(existsSync(urlFile), false);
+    } finally { rmSync(d, { recursive: true, force: true }); await srv.close(); }
+  });
+
+  it('11a3. @file that is missing or holds no http url: exit 1, no sha line (break: a bad url file passes)', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'fleetops-url-'));
+    try {
+      const bad = join(d, 'bad.txt');
+      writeFileSync(bad, 'not a url');
+      for (const arg of [`@${join(d, 'missing.txt')}`, `@${bad}`]) {
+        const r = await verify(arg);
+        assert.equal(r.code, 1, arg);
+        assert.ok(!r.out.includes('sha ok'), arg);
+      }
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
   it('11b. other bytes are a MISMATCH, exit 1 (break: a mismatch passes)', async () => {
     const other = Buffer.from('<!doctype html><title>y</title>!');
     const srv = await serve(other);

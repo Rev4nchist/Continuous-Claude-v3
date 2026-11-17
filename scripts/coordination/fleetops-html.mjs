@@ -9,7 +9,8 @@
  *     writes <outdir>/fleetops.html, page.md and manifest.json ({exportedAt, masked, htmlBytes, pageBytes, sha256Html, sha256Page}).
  *   node scripts/coordination/fleetops-html.mjs --check <file> --stamp <exportedAt> [--ids-root <repo root>]
  *     the read-back check of the skill: prints `check: listed N, stamp yes|no, embeds M, h2 K`; exit 0 only when N is 0, the stamp is there and M >= 1.
- *   node scripts/coordination/fleetops-html.mjs --verify-upload <url> --manifest <manifest.json>
+ *   node scripts/coordination/fleetops-html.mjs --verify-upload <url | @file> --manifest <manifest.json>
+ *     (@file: the url is read from that file and the file is deleted, so a signed url never stands on a command line)
  *     the one NETWORKED mode: fetches the url (the signed download url of the uploaded file), compares its sha256 with sha256Html of the manifest and
  *     prints `verify-upload: sha ok|MISMATCH, bytes N`; exit 0 only on a match. The render and the check never touch the network.
  * Exit 1 and no output file at all: a usage error, a file missing or from another export, the id list absent, bad or empty, or a listed id left in
@@ -302,7 +303,7 @@ function parseArgs(argv) {
   }
   if (o.verify) {
     if (!o.manifest || o.dir || o.out || o.check || o.stamp) throw usageError('--verify-upload takes a url and --manifest only');
-    if (!/^https?:\/\//i.test(o.verify)) throw usageError('the url must be http or https');
+    if (!/^https?:\/\//i.test(o.verify) && !/^@./.test(o.verify)) throw usageError('the url must be http or https, or @<file that holds it>');
   } else if (o.manifest) throw usageError('--manifest goes with --verify-upload');
   else if (o.check) {
     if (!o.stamp || o.dir || o.out) throw usageError('--check takes a file and --stamp only');
@@ -341,14 +342,29 @@ function runCheck(o, out) {
   return r.ok ? 0 : 1;
 }
 
+/**
+ * The url to verify. `@<path>` reads it from a file and deletes the file, so a signed url (it carries a token) never stands on a
+ * command line or stays on disk. A plain value is used as the url (tests on 127.0.0.1).
+ */
+function urlOf(arg) {
+  if (!arg.startsWith('@')) return arg;
+  const path = arg.slice(1);
+  let url;
+  try { url = readFileSync(path, 'utf8').trim(); } catch { throw new Error('the url file could not be read'); }
+  try { rmSync(path, { force: true }); } catch { /* the url expires in minutes; a left file is not a hard error */ }
+  if (!/^https?:\/\//.test(url)) throw new Error('the url file holds no http url');
+  return url;
+}
+
 /** The upload check: the bytes of the url against sha256Html of the manifest. No url or answer text goes into a message. */
 async function runVerify(o, out) {
   let manifest;
   try { manifest = JSON.parse(readFileSync(o.manifest, 'utf8')); } catch { throw new Error('the manifest could not be read'); }
   const want = manifest?.sha256Html;
   if (typeof want !== 'string' || !/^[0-9a-f]{64}$/.test(want)) throw new Error('the manifest has no sha256Html');
+  const url = urlOf(o.verify);
   let res;
-  try { res = await fetch(o.verify, { signal: AbortSignal.timeout(30000) }); } catch { throw new Error('the url could not be fetched'); }
+  try { res = await fetch(url, { signal: AbortSignal.timeout(30000) }); } catch { throw new Error('the url could not be fetched'); }
   if (!res.ok) throw new Error(`the url answered http ${res.status}`);
   if (Number(res.headers.get('content-length')) > MAX_DOWNLOAD_BYTES) throw new Error('the download is over 2 MB');
   const bytes = Buffer.from(await res.arrayBuffer());

@@ -29,7 +29,7 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
 - Lane titles, lane goals and holder names go on the page (Dave decided).
 - A refresh changes data only. A design change goes through the template in `scripts/coordination/fleetops/` and a pull request.
 - Never pass `allow_deleting_content: true`. If a write asks for it, stop and report: someone added a child page or database.
-- Use only `node`, the Read and Write tools, and the four `notion` server tools above. Put no credential anywhere.
+- Use only `node` (run from your shell tool), the Read and Write tools, and the four `notion` server tools above. Put no credential anywhere.
 
 ## Steps
 
@@ -60,11 +60,12 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
    2. Read `out/page.md`. Replace the single line `{{FLEETOPS_EMBED}}` with `<embed source="file-upload://<id>" />`. Change nothing else.
    3. Call `notion-update-page` with `command: "replace_content"`, `page_id` = the page id, `new_str` = that text, `allow_async: false`. Do not pass `allow_deleting_content`. A refusal that lists child pages or databases: stop and report the list. Do not retry.
 7. Read back.
-   1. `notion-fetch` the page id again. The result is JSON: take its `text` field as plain text (real line breaks and quotes, not `\n` and `\"`). Save the part between `<content>` and `</content>` to `<your scratchpad folder>/out/readback.md` with the Write tool.
+   1. `notion-fetch` the page id again. The result is JSON: take its `text` field as plain text (real line breaks and quotes, not `\n` and `\"`). Save the part between `<content>` and `</content>` (blank lines at its ends may stay) to `<your scratchpad folder>/out/readback.md` with the Write tool.
    2. `node R/scripts/coordination/fleetops-html.mjs --check <your scratchpad folder>/out/readback.md --stamp <exportedAt>`
       It prints `check: listed N, stamp yes|no, embeds M, h2 K` and exits 0 only when no listed id is in the decoded text, the stamp is present, the embed is there and both sections are there.
-   3. Check the uploaded file itself. Call `notion-get-file-download-urls` with the `notion-file-block://...` source of the embed from the read-back. Then run:
-      `node R/scripts/coordination/fleetops-html.mjs --verify-upload <download url> --manifest <your scratchpad folder>/out/manifest.json`
+   3. Check the uploaded file itself. Call `notion-get-file-download-urls` with the `notion-file-block://...` source of the embed from the read-back. The signed url carries a token and expires in about 5 minutes: never put it on a command line or in a message. Write it alone to `<your scratchpad folder>/out/upload-url.txt` with the Write tool, then run at once:
+      `node R/scripts/coordination/fleetops-html.mjs --verify-upload @<your scratchpad folder>/out/upload-url.txt --manifest <your scratchpad folder>/out/manifest.json`
+      The script reads the url from the file and deletes the file.
       It prints `verify-upload: sha ok|MISMATCH, bytes N` and exits 0 only when the uploaded file is byte-identical to the rendered file. A MISMATCH means the copy into the upload was not exact: run steps 6 and 7 again once. A second MISMATCH: follow step 7.5.
    4. Fail with a listed id above 0: this is a leak. Replace the page body at once with the single line `FleetOps is being rebuilt.` Tell Dave the page history in Notion still holds the leaked version and that he must remove it there. Leave the pending flag on. Stop.
    5. Fail for another reason: leave the pending flag on and report what differed. Notion keeps the page history; Dave can restore an older version.
