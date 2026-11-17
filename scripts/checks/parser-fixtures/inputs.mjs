@@ -300,7 +300,7 @@ const ACTIONS = [
   ['Approve', 'the draft'], ['Merge', 'the branch'], ['Run', 'the probe'], ['Paste', 'the log'],
   ['Review', 'the diff'], ['Reply', 'with your pick'], ['Confirm', 'the date'],
 ];
-const WAITS = ['Waiting on CI', "I'm waiting on the build", 'Waiting for the deploy', 'I\u2019m waiting for the sync', 'waiting on review'];
+const WAITS = ['Waiting on CI', "I'm waiting on the build", 'Waiting for the workflow run', 'I\u2019m waiting for the sync', 'waiting on the review bot'];
 const LEADS = [
   'None', 'none', 'NONE', 'None for now', 'None today', 'None yet', 'None right now', 'Nothing to do', 'Nothing for you to do',
   'Nothing for Dave to do', 'Nothing required', 'Nothing yet', 'Nothing for now', 'No action needed', 'No input required', 'No reply needed',
