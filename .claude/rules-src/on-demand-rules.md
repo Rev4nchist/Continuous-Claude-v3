@@ -15,7 +15,7 @@ message, a page design, a CMA job). The hook fires at the tool call, too late fo
 | `pr-and-commit-style.md` | commits and PR creation | inject |
 | `design-work.md` | design, deck and chart skills; paid kie.ai images block | inject / block |
 | `browser-automation.md` | browser automation; claude-in-chrome blocks | inject / block |
-| `opencli-first.md` | web fetch and search | inject |
+| `web-research.md` | web search, page reads (`web-fetch`) | inject |
 | `harness-update.md` | updates to the Grok CLI or its models | inject |
 | `git-merge-workflow.md` | merges and branch cleanup | inject |
 | `pr-review-loop-core.md` | opening PRs; landing; `pr_checkpoint`; `ship-ask.mjs`; Greptile | inject |
@@ -38,7 +38,7 @@ Decisions these rules shape before any tool call:
 
 ## Folded into skills
 
-- New platform access: prefer a native CLI, then OpenCLI, then MCP; browser automation last. Detail: `cli-integration` skill.
+- New platform integration: native CLI, OpenCLI, MCP, then browser. Detail: `cli-integration` skill.
 - Structural code questions (who calls X, what breaks): run `tldr`, then Read the 2-4 files it names. Detail: `tldr-code` skill.
 - Project paths, ports and commands: read `.claude/project-registry.json` (repo copy is canonical). Detail: `project-registry` skill.
 

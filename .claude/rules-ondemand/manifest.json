@@ -317,13 +317,16 @@
       ]
     },
     {
-      "id": "opencli",
+      "id": "web",
       "files": [
-        "opencli-first.md"
+        "web-research.md"
       ],
       "mode": "inject",
       "tools": [
         "^(WebFetch|WebSearch)$"
+      ],
+      "agent": [
+        "^web-fetch$"
       ],
       "command": [
         "^opencli(\\s|$)"
@@ -336,7 +339,7 @@
       ],
       "mode": "inject",
       "agent": [
-        "^"
+        "^(?!web-fetch$)"
       ]
     },
     {
