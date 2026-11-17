@@ -126,12 +126,13 @@ describe('web-lookup-advisor', () => {
 
     it('handles undefined URL gracefully', () => {
       const suggestion = buildSuggestion(undefined);
-      expect(suggestion).toContain('opencli');
+      expect(suggestion).toContain('web-research.md');
+      expect(suggestion).toContain('only when `opencli --version` runs');
     });
 
     it('handles invalid URL gracefully', () => {
       const suggestion = buildSuggestion('not-a-url');
-      expect(suggestion).toContain('opencli');
+      expect(suggestion).toContain('web-research.md');
     });
   });
 
@@ -178,7 +179,7 @@ describe('web-lookup-advisor', () => {
       };
       const result = handlePostToolUse(input) as any;
       expect(result).not.toBeNull();
-      expect(result.hookSpecificOutput.additionalContext).toContain('opencli');
+      expect(result.hookSpecificOutput.additionalContext).toContain('a permission deny or a policy block means stop and report');
     });
   });
 });
