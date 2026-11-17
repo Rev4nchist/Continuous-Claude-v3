@@ -264,7 +264,8 @@ const askSign = (s: BandState): Span[] => (freshAsks(s) > 0 ? [sp(' ', 'dim'), s
 
 /**
  * The chip a one-row line draws. The terminal cuts a row at its right end, and the Q n sign sits there. When the wait chip and a fresh ask's sign do not
- * both fit in `width` (20 to 22 columns, wider with 10 or more tasks), the line reads WAITING FOR YOU instead: the true fail-safe, never a hidden question.
+ * both fit in `width`, the line reads WAITING FOR YOU instead: the true fail-safe, never a hidden question. With one ask (sign ` Q 1`, 4 cells) the
+ * swap is at 20 to 22 columns for 1 task (chip 19 cells), 20 to 23 for 2 to 9 tasks (20 cells), 20 to 24 for 10 or more (21 cells); a longer sign widens it.
  */
 const chipFor = (s: BandState, width: number): Chip =>
   s.chip === 'waiting-on-work' && freshAsks(s) > 0 && chipSpan(s.chip, s.waitTasks).text.length + len(askSign(s)) > width ? 'waiting-on-dave' : s.chip

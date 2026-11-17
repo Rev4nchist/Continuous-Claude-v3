@@ -8,7 +8,6 @@ import type { ChipState } from '../hooks/agentic-os/brief'
 import * as bandModel from '../hooks/agentic-os/band-model'
 import type { BandState } from '../hooks/agentic-os/band-model'
 import type { Span } from '../hooks/agentic-os/pane-model'
-import { chipWord } from '../hooks/agentic-os/plain'
 import type { OsAskItem, OsBrief } from '../types'
 
 // Fix 5 of the status band: the band knows a system wait (card coord-status-band-2). The session ends its turn while a background
@@ -46,6 +45,9 @@ const T0 = 1_700_000_000_000
 const MIN = 60_000
 // A namespace read keeps a missing export from failing the whole file at load.
 const BG_WAIT_MAX_MS = (briefModel as unknown as { BG_WAIT_MAX_MS: number }).BG_WAIT_MAX_MS
+const { waitLapsed } = briefModel as unknown as {
+  waitLapsed: (tasks: { id: string; type: string }[], seen: Record<string, number>, from: number, to: number) => boolean
+}
 const { bandLines, compactLine, CHIP } = bandModel as unknown as {
   bandLines: (s: BandState, width: number) => Span[][]
   compactLine: (s: BandState, width: number) => Span[]
@@ -143,6 +145,16 @@ describe('system wait: deriveChip', () => {
     expect(chipOf({ toolRunning: true, ...wait })).toBe('working')
   })
 
+  test('P6 a running agent run keeps the chip at working: a shell and a running helper, no ask, read working; with a parsed ask waiting-on-dave', () => {
+    const wait = { bgTasks: [shellTask()], bgSeen: seenNow('b1') }
+    const running = { agentRuns: [{ status: 'running' }] }
+    expect(chipOf({ ...running, ...wait })).toBe('working')
+    expect(chipOf({ ...running, brief: briefOf(ask()), ...wait })).toBe('waiting-on-dave')
+    // A helper that is not running (done, failed) changes nothing: the wait shows.
+    expect(chipOf({ agentRuns: [{ status: 'completed' }], ...wait })).toBe('waiting-on-work')
+    expect(chipOf({ agentRuns: [], ...wait })).toBe('waiting-on-work')
+  })
+
   test('P7 blocked outranks the wait', () => {
     expect(chipOf({ blocked: true, bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('blocked')
   })
@@ -172,14 +184,10 @@ describe('system wait: band words and tones', () => {
     }
   })
 
-  test('B1 the table entry has the plain word and the dim tone (grey: not amber, not blue)', () => {
-    expect(CHIP['waiting-on-work']).toEqual({ word: 'WAITING ON TASKS', tone: 'chipDim' })
+  test('B1 the wait chip is grey: the dim tone, not the amber of waiting-on-dave and not the blue of working', () => {
+    expect(CHIP['waiting-on-work']?.tone).toBe('chipDim')
     expect(CHIP['waiting-on-work']?.tone).not.toBe(CHIP['waiting-on-dave']?.tone)
     expect(CHIP['waiting-on-work']?.tone).not.toBe(CHIP.working?.tone)
-  })
-
-  test('B1 the plain pane word names the wait', () => {
-    expect(chipWord('waiting-on-work')).toBe('Waiting on background tasks')
   })
 
   test('B2 QUESTIONS stays amber under the wait chip for a fresh ask, and dim for none or a stale one', () => {
@@ -823,17 +831,42 @@ describe('system wait: the age limit', () => {
     expect((await view($)).line1).toContain('WAITING ON 1 TASK')
   })
 
-  // Both SessionStart handlers (resume and clear, startup compact and fork) forget the first-seen times.
-  for (const source of ['clear', 'resume', 'startup', 'compact', 'fork']) {
-    test(`P5 a SessionStart (${source}) forgets the first-seen times as well`, async ($, on) => {
+  // Both SessionStart handlers empty the list. Only a startup forgets the first-seen times: a compact, fork, resume or clear keeps the age of a shell
+  // that never ends, or each one would give it another 30 minutes.
+  for (const source of ['compact', 'fork', 'resume', 'clear']) {
+    test(`P5 a SessionStart (${source}) keeps the first-seen times: a 40 minute old shell stays aged out`, async ($, on) => {
       const seen = world(on)
       await standing($, seen)
       await seen.clock.advance(40 * MIN)
       await $.classic.SessionStart({ source } as never)
+      expect((await view($)).line1).toContain('WAITING FOR YOU')
       await stop($, { background_tasks: [shell('s1')] })
-      expect((await view($)).line1).toContain('WAITING ON 1 TASK')
+      const got = await view($)
+      expect(got.line1).toContain('WAITING FOR YOU')
+      expect(got.line1).not.toContain('WAITING ON')
     })
   }
+
+  test('P5 a SessionStart (startup) forgets the first-seen times: the same id counts again from its next Stop', async ($, on) => {
+    const seen = world(on)
+    await standing($, seen)
+    await seen.clock.advance(40 * MIN)
+    await $.classic.SessionStart({ source: 'startup' } as never)
+    await stop($, { background_tasks: [shell('s1')] })
+    expect((await view($)).line1).toContain('WAITING ON 1 TASK')
+  })
+
+  test('P5 a shell 10 minutes old still counts after a compact (the age is kept, not reset)', async ($, on) => {
+    const seen = world(on)
+    await standing($, seen)
+    await seen.clock.advance(10 * MIN)
+    await $.classic.SessionStart({ source: 'compact' } as never)
+    await stop($, { background_tasks: [shell('s1')] })
+    expect((await view($)).line1).toContain('WAITING ON 1 TASK')
+    await seen.clock.advance(21 * MIN)
+    await stop($, { background_tasks: [shell('s1')] })
+    expect((await view($)).line1).toContain('WAITING FOR YOU')
+  })
 
   test('P14 one Stop and no more: the shell stops counting at the limit when the band redraws', async ($, on) => {
     const seen = world(on)
@@ -855,5 +888,45 @@ describe('system wait: the age limit', () => {
     await band.unmount()
     expect(after).toContain('RESTING')
     expect(after).not.toContain('WAITING ON')
+  })
+
+  test('E the redraw at the age limit happens once, not on every pulse after it (it is measured from the last redraw)', async ($, on) => {
+    const seen = world(on)
+    await start($)
+    await stop($, { background_tasks: [shell('s1')] })
+    await seen.clock.advance(BG_WAIT_MAX_MS - 5 * MIN)
+    const before = seen.atoms.length
+    await seen.clock.advance(10 * MIN)
+    // Only the tick atom moves while the session is idle: one number per redraw.
+    const ticks = seen.atoms.slice(before).filter(text => /^\d+$/.test(text))
+    expect(ticks).toHaveLength(1)
+  })
+})
+
+describe('system wait: waitLapsed', () => {
+  const tasks = [{ id: 's1', type: 'shell' }]
+  const last = T0 + BG_WAIT_MAX_MS // the last instant the shell still counts
+
+  test('E a window that holds the limit finds it, however long the window is (a machine that slept)', () => {
+    expect(waitLapsed(tasks, { s1: T0 }, last - 1_000, last + 1_000)).toBe(true)
+    expect(waitLapsed(tasks, { s1: T0 }, last - 3 * 3600_000, last + 3 * 3600_000)).toBe(true)
+    expect(waitLapsed(tasks, { s1: T0 }, T0, last + 8 * 3600_000)).toBe(true)
+  })
+
+  test('E a window the limit is not in finds nothing: before it, after it (a redraw already closed it), or empty', () => {
+    expect(waitLapsed(tasks, { s1: T0 }, T0, last - 1)).toBe(false)
+    expect(waitLapsed(tasks, { s1: T0 }, last + 1, last + 5_000)).toBe(false)
+    expect(waitLapsed(tasks, { s1: T0 }, last + 1, last + 8 * 3600_000)).toBe(false)
+  })
+
+  test('E the window edges: the last counting instant is in [from, to), so from = it finds it and to = it does not', () => {
+    expect(waitLapsed(tasks, { s1: T0 }, last, last + 1)).toBe(true)
+    expect(waitLapsed(tasks, { s1: T0 }, last - 1_000, last)).toBe(false)
+  })
+
+  test('E only counted types with a first-seen time can lapse', () => {
+    for (const type of ['monitor', 'subagent', 'mystery']) expect(waitLapsed([{ id: 's1', type }], { s1: T0 }, T0, last + 1_000)).toBe(false)
+    expect(waitLapsed(tasks, {}, 0, last + 1_000)).toBe(false)
+    expect(waitLapsed([{ id: 'w1', type: 'workflow' }], { w1: T0 }, T0, last + 1_000)).toBe(true)
   })
 })

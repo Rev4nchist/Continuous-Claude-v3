@@ -79,7 +79,10 @@ export type WaitTask = { id: string; type: string }
 export const countWaitTasks = (tasks: readonly WaitTask[], seen: Readonly<Record<string, number>>, now: number): number =>
   tasks.filter(one => WAIT_TYPES.includes(one.type) && Object.hasOwn(seen, one.id) && now - (seen[one.id] ?? -Infinity) <= BG_WAIT_MAX_MS).length
 
-/** True when a counted task crossed its age limit in the window [from, to): the idle pulse redraws the band for it. */
+/**
+ * True when a counted task crossed its age limit in the window [from, to): `from` is the time of the last redraw, `to` is now, so a pulse that comes late
+ * (a machine that slept) still redraws once, and a window that a redraw already closed finds nothing.
+ */
 export const waitLapsed = (tasks: readonly WaitTask[], seen: Readonly<Record<string, number>>, from: number, to: number): boolean =>
   tasks.some(one => {
     const at = Object.hasOwn(seen, one.id) ? (seen[one.id] ?? 0) + BG_WAIT_MAX_MS : -Infinity
@@ -365,7 +368,7 @@ export type ChipState = {
 /**
  * PRD 5.2, glossary "Session chip" (2026-11-16). Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (an AskUserQuestion open, or a fresh open ask
  * that is not a parsed guess: it wins over running work), then waiting-on-work (fix 5: the main agent stopped while a counted background task still runs, and no turn and no tool
- * call run), then waiting-on-dave for a fresh open PARSED ask, then working (a tool, the main turn or a running agent run), then done (every task and plan step done AND proven,
+ * call run, and no agent run running), then waiting-on-dave for a fresh open PARSED ask, then working (a tool, the main turn or a running agent run), then done (every task and plan step done AND proven,
  * and at least one exists), else idle. A parsed ask is the parser's reading of a closing line ("Waiting on CI, then you get the Land question"): it can name a wait that is not on Dave.
  * An ask with no source (an old state file) is never treated as parsed, so it is never hidden.
  */
@@ -376,7 +379,9 @@ export const deriveChip = (state: ChipState): Chip => {
   if (state.blocked || (state.tasks.length === 0 && plan.some(one => one.status === 'blocked'))) return 'blocked'
   const fresh = brief !== null && !isAskStale(brief, state.now, state.activeAt) ? brief.ask.filter(isOpen) : []
   if (state.dialogOpen === true || fresh.some(one => one.source !== 'parsed')) return 'waiting-on-dave'
-  if (!state.turnActive && !state.toolRunning && countWaitTasks(state.bgTasks ?? [], state.bgSeen ?? {}, state.now) > 0) return 'waiting-on-work'
+  // A running helper keeps the chip at working (the same list as before fix 5): a shell and a subagent with no ask must not read as waiting.
+  const helperRuns = state.agentRuns?.some(one => one.status === 'running') === true
+  if (!state.turnActive && !state.toolRunning && !helperRuns && countWaitTasks(state.bgTasks ?? [], state.bgSeen ?? {}, state.now) > 0) return 'waiting-on-work'
   if (fresh.length > 0) return 'waiting-on-dave'
   if (state.toolRunning || state.turnActive || state.agentRuns?.some(one => one.status === 'running')) return 'working'
   const items = weighedOf(state.tasks, plan)

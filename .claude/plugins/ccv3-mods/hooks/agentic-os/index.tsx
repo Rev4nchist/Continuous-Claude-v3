@@ -76,7 +76,8 @@ const activeAt = atom({ plugin: 'ccv3-mods', key: 'activeAt' } as const, null as
 /**
  * Fix 5, the system wait: the background tasks (id and type only) the last main-agent Stop listed, and when each id was FIRST seen.
  * The age of a task runs from its first sight and a later Stop never renews it. A turn start, a prompt and a SessionStart empty the list;
- * only a SessionStart also empties the first-seen map (a turn start comes before every Stop, so clearing it there would renew every shell's age).
+ * only a SessionStart with source startup also empties the first-seen map (a turn start comes before every Stop, so clearing it there would renew every
+ * shell's age, and a compact, fork, resume or clear must not give a never-ending shell another 30 minutes).
  * Never the description, command, prompt or server text of a task: free text, and the mod puts nothing of it on screen or in a file.
  */
 const bgTasks = atom({ plugin: 'ccv3-mods', key: 'bgTasks' } as const, [] as WaitTask[])
@@ -533,8 +534,9 @@ const pulse = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   if ((await read($, turn)) === null && (await read($, steps)).length === 0) {
     if ((await read($, cache)).lastUsedAt !== null && now - (await read($, tick)) >= IDLE_PULSE_MS) await update($, tick, () => now)
-    // A counted task that passed its age limit in the last minute: the band redraws (nothing else would, and the chip reads the clock only when it draws).
-    if (waitLapsed(await read($, bgTasks), await read($, bgSeen), now - IDLE_PULSE_MS, now)) await update($, tick, () => now)
+    // A counted task that passed its age limit since the last redraw (`tick`): the band redraws once (nothing else would, and the chip reads the clock only
+    // when it draws). Measured from the last redraw, not from a minute ago, so a pulse that comes late (a machine that slept) does not miss it.
+    if (waitLapsed(await read($, bgTasks), await read($, bgSeen), await read($, tick), now)) await update($, tick, () => now)
     if ((await read($, agentRuns)).some(run => run.status === 'running') || (await read($, agents)).some(one => one.status === 'running')) await refreshAgents($)
     return
   }
@@ -873,7 +875,7 @@ export const agenticOs = (on: On) => {
     try {
       // A resume can return to an id that ended earlier in this process: it is live again, so its file takes writes again.
       endedIds.delete(await $.session.id())
-      await clearWait($, true)
+      await clearWait($, false)
       if (!(await isOff($))) await refreshGit($)
     } catch {
       // Observer only.
@@ -884,7 +886,8 @@ export const agenticOs = (on: On) => {
   // The session name, from every SessionStart (the resume and clear handler above reads it too) and every prompt: a /rename shows at the next prompt.
   // The hud module holds the unmatched classic.SessionStart, so these sources are matched.
   on('classic.SessionStart', { source: ['startup', 'compact', 'fork'] }, async ($, e, next) => {
-    await clearWait($, true)
+    // Every SessionStart empties the task list; only a startup also forgets the first-seen times (a compact, fork, resume or clear keeps the same shell's age).
+    await clearWait($, e.source === 'startup')
     return readNameAfter($, e, next)
   }).catch(($, e, next) => next(e))
 
