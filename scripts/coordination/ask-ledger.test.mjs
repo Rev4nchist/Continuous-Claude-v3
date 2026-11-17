@@ -366,5 +366,6 @@ describe('gold ids in the id list (card coord-content-scan-followups, item gold 
     assert.equal(bad.code, 3);
     assert.equal(bad.out, '');
     assert.ok(!bad.err.includes(GOLD_SHA));
+    assert.ok(bad.err.includes('a listed id reached the output'), 'exit 3 came from a list-read failure, not the id match');
   });
 });
