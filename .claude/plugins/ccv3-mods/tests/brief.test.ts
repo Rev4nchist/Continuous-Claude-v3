@@ -937,7 +937,7 @@ describe('parseTurnEnd on real answers', () => {
   })
 
   test('P22b long closing lines (1,900 characters, under the line cap) stay fast, with a long run of dashes, spaces and banned words', () => {
-    const lines = ['None - waiting on ' + 'x '.repeat(900), 'Waiting on ' + 'a-b '.repeat(450), 'Waiting on CI' + ' -'.repeat(900), 'None - waiting on ' + 'you '.repeat(450)]
+    const lines = ['None - waiting on ' + 'x '.repeat(900), 'Waiting on ' + 'a-b '.repeat(450), 'Waiting on CI' + ' -'.repeat(900), 'None - waiting on ' + 'you '.repeat(450), 'Waiting on CI ' + 'a-'.repeat(940) + 'a!']
     for (const line of lines) {
       const started = Date.now()
       parseTurnEnd(`## Next steps\n1. ${line}`)

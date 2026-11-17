@@ -488,7 +488,7 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
  * on a green light" is a no-ask by design (a Known limit); the cure for a hidden question is `brief_set` with `ask: []`, never a longer word list.
  * Both forms: white space runs count as one space; the object is 1 to 80 ASCII letters, digits, spaces, an apostrophe, a hash and a hyphen BETWEEN letters or digits, nothing else
  * (no ( ) / | > . ? ; , ! : and no dash or arrow, and no non-ASCII letter); it holds no " then ", " and ", " or ", " but ", and never a word that starts with you or Dave.
- * An item longer than the line cap is an ask.
+ * A wrapped item is joined only while it stays inside the line cap; a longer one is left as separate lines (a line with a ? is still an ask).
  * Anything else stays an ask: "Waiting on CI, then approve PR 12", "None for now. Paste the build log", "None, but review the diff", "None of the options fit".
  * Every part is bounded or anchored, with no nested quantifier: linear on a long line.
  */
@@ -497,12 +497,11 @@ const WAIT_OBJECT = String.raw`(?:(?!${WAIT_BAN})(?:[A-Za-z0-9#'’]|\s|(?<=[A-Z
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
 const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
 const WAIT_SUBJECT = String.raw`(?:(?:the|a|an|my)\s+)?(?:ci|checks?|build|workflow|runs?|jobs?|tests?|pipeline|coderabbit|greptile|semgrep|pre-pr|sync|seat|peer|critic|agent|helper|scout|session|review\s+bot)(?:['’]s)?(?![A-Za-z0-9-])`
-const WAIT_TAIL_WORD = String.raw`(?:\s+(?!(?:you|dave)|(?:then|and|or|but)\b)[A-Za-z0-9#'’]+(?:-[A-Za-z0-9]+)*)?`
+const WAIT_TAIL_WORD = String.raw`(?:\s+(?!(?:you|dave)|(?:then|and|or|but)\b)(?:(?!\b(?:you|dave))[A-Za-z0-9#'’]|(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])){1,40})?`
 const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
 const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}${WAIT_SUBJECT}${WAIT_TAIL_WORD}$`, 'i')
 /** A question mark makes any item an ask, whatever its words. */
 const noAsk = (text: string): boolean => {
-  if (text.length > LINE_CHARS) return false
   const whole = text.replace(/\s+/g, ' ').replace(/\.$/, '')
   return !whole.includes('?') && (LEAD_ITEM.test(whole) || BARE_WAIT.test(whole))
 }
@@ -517,7 +516,7 @@ const nextSteps = (lines: string[]): AskItem[] | undefined => {
   const logical: string[] = []
   for (const raw of lines.slice(start + 1)) {
     const before = logical[logical.length - 1]
-    if (/^\s+\S/.test(raw) && !ITEM.test(raw) && !/^\s*#{1,6}\s/.test(raw) && before !== undefined && ITEM.test(before)) logical[logical.length - 1] = `${before} ${raw.trim()}`.slice(0, LINE_CHARS + 1)
+    if (/^\s+\S/.test(raw) && !ITEM.test(raw) && !/^\s*#{1,6}\s/.test(raw) && before !== undefined && ITEM.test(before) && before.length + raw.trim().length < LINE_CHARS) logical[logical.length - 1] = `${before} ${raw.trim()}`
     else logical.push(raw)
   }
   for (const raw of logical) {
