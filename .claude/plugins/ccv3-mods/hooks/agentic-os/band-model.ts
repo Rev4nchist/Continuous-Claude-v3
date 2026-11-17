@@ -1,6 +1,6 @@
 import type { HudLimit, OsBrief, OsTask } from '../../types'
 import { redact } from '../shared/redact'
-import { isAskStale, isProven, isTodoStale } from './brief'
+import { isAskStale, isProven, isTodo, isTodoStale } from './brief'
 import type { Chip } from './brief'
 import { gaugeTone } from './pane-model'
 import type { Span, Tone } from './pane-model'
@@ -212,8 +212,8 @@ type Counts = { asks: number; answered: number; stale: boolean; todos: number; t
 
 const countsOf = (s: BandState, steps: Step[]): Counts => {
   const list = s.brief?.ask ?? []
-  const todos = list.filter(one => one.kind === 'todo' && one.answered !== true).length
-  const questions = list.filter(one => one.kind !== 'todo')
+  const todos = list.filter(one => isTodo(one) && one.answered !== true).length
+  const questions = list.filter(one => !isTodo(one))
   const asks = questions.filter(one => one.answered !== true).length
   return {
     asks,

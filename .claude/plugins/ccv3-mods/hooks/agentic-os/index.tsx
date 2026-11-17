@@ -534,7 +534,7 @@ const briefSchema = {
     ask: {
       type: 'array',
       maxItems: 8,
-      description: 'Replaces the whole list of open items for Dave. [] clears it. A question needs his answer. Kind todo is an action for him that needs no answer (a todo with a recommendation or a question mark is kept as a question). Max 8 items.',
+      description: 'Replaces the whole list of open items for Dave: send every open question together with the todos. [] clears it. A question needs his answer. Kind todo is an action for him that needs no answer (a todo with a recommendation, or a question mark anywhere, is kept as a question). Max 8 items.',
       items: {
         type: 'object',
         additionalProperties: false,

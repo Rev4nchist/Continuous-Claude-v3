@@ -835,3 +835,20 @@ describe('digest fold', () => {
     expect(dump(go({ asks: longAsks(3) }, { columns: 40 }))).not.toMatch(/\+\d+ more/)
   })
 })
+
+describe('digest: to-dos (card coord-status-band-2, seat finding F4)', () => {
+  test('N9 a todo is listed with a dim mark and is not counted in the header; only to-dos still read "nothing needs you"', () => {
+    const only = go({ asks: [ask('Run /compact here', 3 * MIN, { kind: 'todo' })] })
+    expect(only.needs.rows.map(rowText)[0]).toBe('nothing needs you')
+    expect(dump(only)).toContain('To do: Run /compact here')
+    expect(only.needs.head.right).toBeUndefined()
+    const mixed = go({ asks: [ask('Run /compact here', 3 * MIN, { kind: 'todo' }), ask('Which branch should PR 5 start from?', 5 * MIN)] })
+    expect(mixed.needs.head.right?.map(one => one.text)).toEqual(['1'])
+    const [first, second] = mixed.needs.items
+    expect(rowText(first![0]!)).toContain('Which branch')
+    expect(first![0]!.left[1]?.tone).toBe('warn')
+    expect(rowText(second![0]!)).toContain('To do:')
+    expect(second![0]!.left[1]?.tone).toBe('dim')
+    expect(second![0]!.left[1]?.text.trim()).toBe('-')
+  })
+})

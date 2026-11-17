@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
-import { applyBrief, deriveChip, emptyBrief, isAskStale, isTodoStale, markAsksAnswered, parseTurnEnd, briefSummary } from '../hooks/agentic-os/brief'
+import { DAVE_ORIGINS, answersAsks, applyBrief, deriveChip, emptyBrief, isAskStale, isTodoStale, markAsksAnswered, mergeParsed, parseTurnEnd, briefSummary } from '../hooks/agentic-os/brief'
 import type { Brief } from '../hooks/agentic-os/brief'
 import { bandLines } from '../hooks/agentic-os/band-model'
 import type { BandState } from '../hooks/agentic-os/band-model'
@@ -80,7 +80,7 @@ describe('brief: the todo kind', () => {
     expect(markAsksAnswered(only, 2_000)).toBe(only)
   })
 
-  test('T4 staleness counts questions only; a todo has its own 24 hour clock', () => {
+  test('T4 staleness counts questions only; the to-do check reads the same 24 hour clock', () => {
     const day = 24 * 3600_000
     const onlyTodo = briefWith({ ask: [TODO] })
     expect(isAskStale(onlyTodo, 1_000 + day + 1, 1_000)).toBe(false)
@@ -106,15 +106,49 @@ describe('brief: the todo kind', () => {
         { kind: 'todo', text: 'Run /compact here', recommend: 'now' },
         { kind: 'todo', text: 'Should I land it?  ' },
         { kind: 'todo', text: 'Paste the log' },
-        { kind: 'todo', text: 'What about ? the middle' },
+        { kind: 'todo', text: 'Land PR 12? Reply yes or no' },
       ],
     })
-    expect(made.ask.map(one => one.kind)).toEqual(['question', 'question', 'todo', 'todo'])
+    expect(made.ask.map(one => one.kind)).toEqual(['question', 'question', 'todo', 'question'])
     expect(chipOf(briefWith({ ask: [{ kind: 'todo', text: 'Open the PR?' }] }))).toBe('waiting-on-dave')
     expect(markAsksAnswered(briefWith({ ask: [{ kind: 'todo', text: 'Open the PR?' }] }), 2_000).ask[0]?.answered).toBe(true)
     const said = briefSummary(made, [])
-    expect(said).toContain('2 open asks')
-    expect(said).toContain('2 to-dos')
+    expect(said).toContain('3 open asks')
+    expect(said).toContain('1 to-do')
+  })
+
+  test('T8 a todo never switches the closing-line parser off: a question after a todo-only brief_set is read (seat finding F1)', () => {
+    const todoOnly = briefWith({ ask: [TODO] })
+    const parsed = parseTurnEnd('## Next steps\n1. Approve the merge of PR 12?')
+    const merged = mergeParsed(todoOnly, parsed, 2_000)
+    expect(merged.ask.filter(one => one.kind !== 'todo').length).toBe(1)
+    expect(merged.ask.some(one => one.kind === 'todo' && one.text === TODO.text)).toBe(true)
+    expect(chipOf(merged, { now: 2_000, activeAt: 2_000 })).toBe('waiting-on-dave')
+    // The same todo survives a second parse (the parser never makes a todo and never drops one).
+    const again = mergeParsed(merged, parsed, 3_000)
+    expect(again.ask.filter(one => one.kind === 'todo').length).toBe(1)
+    // A brief_set list WITH an open question still wins over the parser, as before.
+    const asked = briefWith({ ask: [TODO, QUESTION] })
+    expect(mergeParsed(asked, parsed, 2_000)).toBe(asked)
+    // A todo does not enter the cleared list when a new brief_set replaces the list.
+    const next = briefWith({ ask: [QUESTION] }, todoOnly, 2_000)
+    expect(next.cleared ?? []).toEqual([])
+  })
+
+  test('T9 only a prompt of Dave answers a question, and no prompt of any origin answers a todo', () => {
+    const base = briefWith({ ask: [TODO, QUESTION] })
+    for (const kind of ['composer', 'bridge', 'auto-continuation', 'peer', 'scheduled-trigger', 'task-notification', 'channel']) {
+      const after = answersAsks({ kind }) ? markAsksAnswered(base, 2_000) : base
+      expect(after.ask.find(one => one.kind === 'todo')?.answered).toBeUndefined()
+      expect(after.ask.find(one => one.kind === 'question')?.answered === true).toBe(DAVE_ORIGINS.includes(kind))
+    }
+  })
+
+  test('T10 an older brief that holds a todo loads: a plan-only brief_set keeps it, and the old serialization keeps its fields', () => {
+    const old = JSON.parse(JSON.stringify(briefWith({ ask: [TODO] }))) as Brief
+    const next = briefWith({ goal: 'g' }, old, 2_000)
+    expect(next.ask).toEqual(old.ask)
+    expect(chipOf(next)).toBe('idle')
   })
 
   test('T6 the brief summary names the open to-dos apart from the open asks', () => {
@@ -223,6 +257,8 @@ describe('brief_set tool texts', () => {
     expect(String(schema?.properties.goal.description)).toContain('80')
     expect(String(seen?.description)).toContain('todo')
     expect(String(schema?.properties.ask.description)).toContain('kept as a question')
+    expect(String(schema?.properties.ask.description)).toContain('question mark anywhere')
+    expect(String(schema?.properties.ask.description)).toContain('send every open question together with the todos')
   })
 })
 
@@ -233,7 +269,7 @@ describe('pane: a todo row uses the to-do clock (seat finding 2)', () => {
       .map(row => [...row.left, ...(row.right ?? [])].map(span => span.text).join(''))
       .join('\n')
 
-  test('P2 only a todo is stale: the todo row says stale and the question row does not; and the other way round', () => {
+  test('P2 a todo row is marked stale by the same 24 hour clock as a question row, and fresh before it', () => {
     const todoOnly = briefWith({ ask: [TODO] })
     const old = rows(todoOnly, 1_000 + day + 1)
     expect(old).toMatch(/todo\s*·\s*stale/)

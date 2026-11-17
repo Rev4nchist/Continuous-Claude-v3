@@ -1174,3 +1174,18 @@ describe('os tabs: dispatch and determinism', () => {
     for (const tab of TABS_LIVE) expect(() => osPane(tab, frozen, NOW, 60, 30), tab).not.toThrow()
   })
 })
+
+const askHead = (rows: PaneRow[]): string => (rows.find(one => one.key === 'h-asks')?.right ?? []).map(one => one.text).join('')
+
+describe('decisions tab: to-dos (card coord-status-band-2)', () => {
+  test('O20 a todo is not in the open count and its kind label is dim; a question beside it is counted and amber', () => {
+    const brief = briefWith({ ask: [{ kind: 'todo', text: 'Run /compact here' }, { kind: 'question', text: 'Open the PR?' }] })
+    const rows = tabRows('decisions', empty({ brief, activeAt: NOW }), NOW, 100, 30)
+    expect(askHead(rows)).toContain('1 open')
+    const kind = (word: string) => rows.flatMap(one => one.left).find(one => one.text.trim() === word)
+    expect(kind('todo')?.tone).toBe('dim')
+    expect(kind('question')?.tone).toBe('warn')
+    const onlyTodo = tabRows('decisions', empty({ brief: briefWith({ ask: [{ kind: 'todo', text: 'Run /compact here' }] }), activeAt: NOW }), NOW, 100, 30)
+    expect(askHead(onlyTodo)).toContain('0 open')
+  })
+})

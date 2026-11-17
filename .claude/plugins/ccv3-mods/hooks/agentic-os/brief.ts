@@ -234,9 +234,9 @@ export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], no
   if (input.stopAt !== undefined) setField(next, 'stopAt', input.stopAt)
   if (input.plan !== undefined) next.plan = input.plan
   if (input.ask !== undefined) {
-    // A todo that carries a recommendation or ends with a question mark is a question: structure, not words (V7.6). More questions, never fewer.
+    // A todo that carries a recommendation or holds a question mark is a question: structure, not words (V7.6). More questions, never fewer.
     const asKind = (one: { kind: AskKind; text: string; recommend?: string }): AskKind =>
-      one.kind === 'todo' && ((one.recommend ?? '').trim() !== '' || one.text.trim().endsWith('?')) ? 'question' : one.kind
+      one.kind === 'todo' && ((one.recommend ?? '').trim() !== '' || one.text.includes('?')) ? 'question' : one.kind
     const fresh = input.ask.map(one => ({ ...one, kind: asKind(one), source: 'brief_set' as const }))
     // A re-sent ask (same kind and text) is open again, not a leaver: brief_set is an explicit re-ask.
     const cleared = clearLeavers(base.cleared, base.ask, fresh, now)
@@ -257,9 +257,9 @@ export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], no
 
 const isOpen = (one: AskItem): boolean => one.answered !== true
 /** `todo`: an action for Dave that needs no answer (card coord-status-band-2). Only brief_set declares it; the turn-end parser never does. */
-const isTodo = (one: AskItem): boolean => one.kind === 'todo'
+export const isTodo = (one: AskItem): boolean => one.kind === 'todo'
 /** An open ask that waits for an answer from Dave. A todo does not. */
-const isQuestion = (one: AskItem): boolean => isOpen(one) && !isTodo(one)
+export const isQuestion = (one: AskItem): boolean => isOpen(one) && !isTodo(one)
 
 /**
  * Dave's prompt arrived at `now`: every open question becomes `answered?` (dim, not counted) until the next brief_set, and keeps the time.
@@ -281,7 +281,7 @@ const clearLeavers = (cleared: readonly ClearedAsk[] | undefined, old: readonly 
   const stay = new Set(kept.map(askKey))
   const byKey = new Map<string, ClearedAsk>()
   for (const one of old) {
-    if (stay.has(askKey(one))) continue
+    if (stay.has(askKey(one)) || isTodo(one)) continue // a todo never enters `cleared`: it would push question history out
     byKey.delete(askKey(one)) // two old asks with one key: the later one wins and goes last
     byKey.set(askKey(one), {
       kind: one.kind,
@@ -585,13 +585,16 @@ export const mergeParsed = (brief: Brief | null, parsed: ParsedTurnEnd, now: num
       changed = true
     }
   }
-  if (parsed.ask && base.sources.ask !== 'brief_set') {
+  // A brief_set list of only todos does not lock the parser out (a closing-line question would hide). ask [] still does: it is the cure for a false question.
+  if (parsed.ask && (base.sources.ask !== 'brief_set' || (base.ask.some(isTodo) && !base.ask.some(isQuestion)))) {
     // An ask with the same kind and text as an answered one keeps answered and answeredAt: a repeated block does not re-open it.
     const before = new Map(base.ask.map(one => [askKey(one), one]))
-    const carried = parsed.ask.map(one => {
+    const asked = parsed.ask.map(one => {
       const was = before.get(askKey(one))
       return was?.answered === true ? { ...one, answered: true as const, ...(was.answeredAt === undefined ? {} : { answeredAt: was.answeredAt }) } : one
     })
+    // The parser never makes a todo: an open todo was declared by brief_set and stays until the next brief_set ask.
+    const carried = [...asked, ...base.ask.filter(one => isTodo(one) && isOpen(one))]
     if (JSON.stringify(carried) !== JSON.stringify(base.ask)) {
       const cleared = clearLeavers(base.cleared, base.ask, carried, now)
       if (cleared !== undefined) next.cleared = cleared

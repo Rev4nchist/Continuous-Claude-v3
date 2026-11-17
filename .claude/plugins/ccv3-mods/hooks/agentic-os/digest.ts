@@ -113,7 +113,8 @@ const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n =
 type Body = { text: string; next?: string; more?: boolean }
 
 /** An item before it is drawn. `make` runs only for the items that are shown, so a long list costs a sort, not a redaction each. `home` names the tab that holds the full text. */
-type Item = { rank: number; at: number | undefined; home: string; derived: boolean; tone: Tone; make: () => Body }
+/** `todo`: an action for Dave that needs no answer (ask kind todo): a dim mark, and it is not in the header count. */
+type Item = { rank: number; at: number | undefined; home: string; derived: boolean; tone: Tone; make: () => Body; todo?: boolean }
 
 /**
  * The `home` of an item whose text the home tab does not hold in full: no hint. A helper item is this: the Swarm tab draws a helper in one row, hides the done helpers
@@ -139,7 +140,7 @@ const MARKS: Record<DigestBlock['id'], { mark: string; tone: Tone }> = {
 const itemRows = (key: string, it: Item, id: DigestBlock['id'], now: number, columns: number, lineCap: number): PaneRow[] => {
   const body = it.make()
   const age = ageOf(now, it.at)
-  const { mark, tone } = MARKS[id]
+  const { mark, tone } = it.todo === true ? { mark: '-', tone: 'dim' as Tone } : MARKS[id]
   const lead = [sp('  ', 'dim'), sp(`${mark} `, tone)]
   const text = `${it.derived ? '[derived] ' : ''}${body.text === '' ? '(no text)' : body.text}`
   const right = age === undefined ? {} : { right: [sp(age, 'dim')] }
@@ -158,8 +159,10 @@ const block = (id: DigestBlock['id'], title: string, empty: string, items: Item[
   const groups = sorted.slice(0, shown).map((one, i) => itemRows(`brief-${id}-${i}`, one, id, now, columns, lineCap))
   const rows: PaneRow[] = groups.flat()
   if (more > 0) rows.push({ key: `brief-${id}-more`, left: [sp(`  +${more} more`, 'dim')] })
-  if (sorted.length === 0) rows.push({ key: `brief-${id}-none`, left: [sp(empty.slice(0, columns), 'dim')] })
-  const count = sorted.length > 0 && columns >= 24 ? [sp(String(sorted.length), 'dim')] : undefined
+  // To-dos are listed but never counted: with only to-dos the block still says nothing needs an answer.
+  const counted = sorted.filter(one => one.todo !== true).length
+  if (counted === 0) rows.unshift({ key: `brief-${id}-none`, left: [sp(empty.slice(0, columns), 'dim')] })
+  const count = counted > 0 && columns >= 24 ? [sp(String(counted), 'dim')] : undefined
   const head: PaneRow = { key: `brief-${id}-head`, left: [sp(title.slice(0, columns), 'head')], ...(count ? { right: count } : {}) }
   return { id, title, total: sorted.length, shown, more, head, items: groups, rows }
 }
@@ -213,12 +216,13 @@ const RANK = { ask: 0, ready: 1, approval: 2, blocked: 3, failed: 4, limited: 5,
 const askItems = (asks: DigestAsk[]): Item[] =>
   asks
     .filter(one => one.answered !== true)
-    .map(one =>
-      item(one.kind === 'approval' ? RANK.approval : one.kind === 'todo' ? RANK.todo : RANK.ask, one.at, WORDS.decisions.label, one.kind === 'todo' ? 'dim' : 'warn', () => {
+    .map(one => ({
+      ...item(one.kind === 'approval' ? RANK.approval : one.kind === 'todo' ? RANK.todo : RANK.ask, one.at, WORDS.decisions.label, one.kind === 'todo' ? 'dim' : 'warn', () => {
         const said = askSentence({ kind: one.kind, text: one.text, recommend: one.recommend }, false)
         return { text: said.text, ...(said.next === undefined ? {} : { next: said.next }), more: oneLine(one.recommend) !== '' }
       }),
-    )
+      ...(one.kind === 'todo' ? { todo: true } : {}),
+    }))
 
 const needsPrItems = (prs: DigestPr[]): Item[] => {
   const out: Item[] = []
