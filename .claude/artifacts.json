@@ -53,17 +53,28 @@
   "artifacts": [
     {
       "id": "agentic-os-lane-board",
-      "url": "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid",
+      "url": "https://claude.ai/artifact/5GSyWPUKLBqS83WdUkqQG1",
       "source": "scripts/coordination/render-board.mjs",
       "render": "node scripts/coordination/render-board.mjs",
       "publish_from": "lane-board.html",
       "title": "Agentic OS — Lane Board",
       "favicon": "🛤️",
-      "description": "Live lane board generated from agentic_os.lane: every lane by track, who holds what right now, and the reconciliation query behind every number.",
+      "icon": "board",
+      "capabilities": { "db": {}, "sample": {} },
+      "description": "Live lane board generated from agentic_os.lane: every lane by band and track, who holds what right now, and the query behind every number.",
       "session": "*",
       "refresh": "at-handoff",
       "content_model": "generated",
-      "last_published": "2026-10-30",
+      "last_published": "2026-11-17",
+      "NEW_ACCOUNT_2026-11-17": {
+        "found": "2026-11-17 09:34 CST by the RE program seat #7e7549ed: Dave changed claude.ai account on the night of 2026-11-16 and stays on it for days. An Artifact read of the old page gave 'artifact not found'; the Artifact list of this account did not hold it. Every Stop gate publish request failed.",
+        "decided_by": "Dave, AskUserQuestion taps in the seat session 2026-11-17 09:3x CST: make a new page on this account; no kanban change on the old page is missing from the lane database.",
+        "done_by": "Coord standard #1c9e68d0, card coord-board-page-account.",
+        "what_was_done": "Rendered from the primary checkout at main 019c348e (node scripts/coordination/render-board.mjs: 515 lanes, 2376046 bytes, masked 30, left 0). A publish to the old url was refused as deleted. Published WITHOUT url as a new page, capabilities db and sample (kanban-client.js calls claude.use('db') and claude.use('sample'); no user call), icon 'board' (the tool takes a word, not the old emoji favicon).",
+        "verified_before_recording": "Artifact list shows 'Agentic OS — Lane Board — https://claude.ai/artifact/5GSyWPUKLBqS83WdUkqQG1'. Artifact read: version 1794929921-5085, 2,376,592 bytes, stored capabilities {db, sample}, meta stamp board=continuous-claude;template=c4275794;generated=2026-11-17T15:38:30.120Z. ArtifactData list of 'kanban' and 'cards': empty, as a new page should be.",
+        "old_url_note": "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid belongs to the first account. It is not readable from this account. Do not publish to it, delete it or pass force. It may work again only if Dave returns to that account.",
+        "not_changed_here": "The same old id is also written in the resolver twins (scripts/coordination/lane-board.mjs, .claude/hooks/src/shared/lane-board.ts), the built Stop gate and republish-reminder hooks, scripts/coordination/lane-dash.config.json, COORDINATION.md, rules-ondemand/lane-board.md and the kanban-sync skill. Those are outside this card's write set; the seat decides."
+      },
       "DIVERGENCE_2026-10-30": {
         "found": "2026-10-30",
         "by_session": "12d3a42b",
