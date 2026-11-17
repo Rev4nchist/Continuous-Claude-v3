@@ -230,6 +230,69 @@ describe('readIdList: the list from a root, with the file reader passed in', () 
   });
 });
 
+// ---- gold ids (card coord-content-scan-followups, item gold ids): the gold files add their ids to the list. Every id is made up. ----
+describe('readIdList: the gold folder adds its ids (a missing folder adds none; a broken one throws)', () => {
+  const GOLD_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
+  const OTHER_SHA = '0a1b2c3d4e5f60718293a4b5c6d7e8f901234567';
+  const enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; return e; };
+  const baseFiles = { [DATASET_REL]: JSON.stringify(DS), [EVAL_CONFIG_REL]: JSON.stringify({}) };
+  const reader = (map) => (p) => { for (const [k, v] of Object.entries(map)) if (p.replace(/\\/g, '/').endsWith(k)) return v; throw enoent(); };
+  const goldMap = async (extra) => { const { GOLD_DIR_REL } = await import('./board-mask.mjs'); return Object.fromEntries(Object.entries(extra).map(([n, v]) => [`${GOLD_DIR_REL}/${n}`, typeof v === 'string' ? v : JSON.stringify(v)])); };
+  const list = (names) => () => names;
+  const kind = (fn) => { try { fn(); } catch (e) { return [e.kind, e.message]; } return null; };
+
+  it('GM1: every json file of the gold folder but the non-row file adds its shas and its 4-digit PR numbers', async () => {
+    const gold = await goldMap({ 'gold-a.json': [{ target: { pr: 8888, sha40: GOLD_SHA, round: 1 }, provenance: { fixSha: OTHER_SHA, head: SHA } }, { target: { pr: 77 } }], 'clean-controls.json': [{ target: { pr: 9999, sha40: GOLD_SHA } }], 'escape-baseline.json': [{ note: 'abcdef0123456789abcdef0123456789abcdef99' }] });
+    const ids = readIdList('/some/root', reader({ ...baseFiles, ...gold }), list(['gold-a.json', 'clean-controls.json', 'escape-baseline.json', 'adjudicated-cr.state']));
+    for (const id of ['4242', SHA, GOLD_SHA, OTHER_SHA, '8888', '9999']) assert.ok(ids.includes(id), id);
+    assert.ok(!ids.includes('77'), 'a 2-digit gold PR number is not listed');
+    assert.ok(!ids.includes('abcdef0123456789abcdef0123456789abcdef99'), 'the non-row file is not read');
+    assert.equal(new Set(ids).size, ids.length);
+    assert.equal(ids.filter((x) => x === SHA).length, 1, 'an id in both lists stands once');
+  });
+
+  it('GM2: a missing gold folder adds no id and leaves the holdout list as it was', async () => {
+    const noFolder = () => { throw enoent(); };
+    assert.deepEqual(readIdList('/some/root', reader(baseFiles), noFolder).sort(), readIdList('/some/root', reader(baseFiles)).sort());
+    assert.ok(readIdList('/some/root', reader(baseFiles), noFolder).includes('4242'));
+  });
+
+  it('GM3: a gold folder that cannot be read, a broken file and a wrong shape are kind bad with a fixed text and no file content', async () => {
+    const secret = 'zebra-quartz-secret';
+    const text = 'the listed id list could not be read';
+    const denied = () => { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; };
+    assert.deepEqual(kind(() => readIdList('/some/root', reader(baseFiles), denied)), ['bad', text]);
+    for (const value of [`{ not json ${secret}`, [{ target: { pr: 8888 } }], { rows: secret }]) {
+      const gold = await goldMap({ 'gold-a.json': value });
+      assert.deepEqual(kind(() => readIdList('/some/root', reader({ ...baseFiles, ...gold }), list(['gold-a.json']))), ['bad', text]);
+    }
+    const missingFile = reader(baseFiles); // the folder lists a file that cannot be read
+    assert.deepEqual(kind(() => readIdList('/some/root', missingFile, list(['gold-a.json']))), ['bad', text]);
+  });
+
+  it('GM4: a gold sha in a page is counted and masked like a holdout id', async () => {
+    const gold = await goldMap({ 'gold-a.json': [{ target: { sha40: GOLD_SHA } }] });
+    const ids = readIdList('/some/root', reader({ ...baseFiles, ...gold }), list(['gold-a.json']));
+    const page = `<p>fix ${GOLD_SHA.slice(0, 10)} and ${SHA}</p>`;
+    assert.equal(countListed(page, ids), 2);
+    const m = maskListed(page, ids);
+    assert.equal(countListed(m.text, ids), 0);
+    assert.ok(!m.text.includes(GOLD_SHA.slice(0, 10)));
+  });
+
+  it('GM5: a root with no dataset is still absent, whatever the gold folder holds', async () => {
+    const gold = await goldMap({ 'gold-a.json': [{ target: { sha40: GOLD_SHA } }] });
+    assert.deepEqual(kind(() => readIdList('/some/root', reader({ [EVAL_CONFIG_REL]: '{}', ...gold }), list(['gold-a.json']))), ['absent', 'the listed id list is absent']);
+  });
+
+  it('GM6: tie: the gold folder name and the non-row file are the ones the hook reads (shared/gold-ids.ts)', async () => {
+    const hookIds = readFileSync(join(REPO, '.claude/hooks/src/shared/gold-ids.ts'), 'utf8');
+    const { GOLD_DIR_REL, GOLD_NON_ROW_FILES } = await import('./board-mask.mjs');
+    assert.ok(hookIds.includes(`'${GOLD_DIR_REL}'`), 'the gold folder name drifted from shared/gold-ids.ts');
+    for (const name of GOLD_NON_ROW_FILES) assert.ok(hookIds.includes(`'${name}'`), 'a non-row file name drifted from shared/gold-ids.ts');
+  });
+});
+
 describe('tie tests: the hook text and this module stay in step', () => {
   const hookIds = readFileSync(join(REPO, '.claude/hooks/src/shared/holdout-ids.ts'), 'utf8');
   const holdoutLib = readFileSync(join(REPO, 'scripts/github/lib/holdout-ids.mjs'), 'utf8');
