@@ -1313,6 +1313,9 @@ async function checkSeedItems(c, items, board) {
 
 // ---------------------------------------------------------------- seed
 
+/** A copy of the seed items in id order: refuseHeldSeed locks in id order, so the upserts write in it too and two seeds cannot wait on each other. The caller list keeps the file order. */
+const seedOrder = (lanes) => [...lanes].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+
 /**
  * SQL: lane `l` is held by a live session other than `me` ($n, text), and the caller is not the seat of its board. The ONE fragment of the
  * seed holder test: refuseHeldSeed selects with it and the conflict clause of upsertSeedLane negates it, so the two cannot drift.
@@ -1438,7 +1441,7 @@ async function seedObject(c, { lanes, edges, dropped }, { file, board, myId }) {
     await c.query(`SELECT pg_advisory_xact_lock(hashtext('lane_dep:' || $1::text))`, [board.key]);
     await refuseForeignEdges(c, edges, board);
     await refuseHeldSeed(c, lanes.map((it) => it.id), board, myId);
-    for (const it of lanes) await upsertSeedLane(c, it, board, withBand, myId);
+    for (const it of seedOrder(lanes)) await upsertSeedLane(c, it, board, withBand, myId);
     await replaceEdges(c, lanes, edges, board);
     await refuseCycle(c, board);
     missing = await missingDeps(c, edges);
@@ -2395,7 +2398,7 @@ const commands = {
     // One transaction, so the holder test and the writes see the same locked rows (gap 4).
     await inLaneTx(c, async () => {
       await refuseHeldSeed(c, parsed.lanes.map((it) => it.id), board, myId);
-      for (const it of parsed.lanes) await upsertSeedLane(c, it, board, withBand, myId);
+      for (const it of seedOrder(parsed.lanes)) await upsertSeedLane(c, it, board, withBand, myId);
       return { value: null };
     });
     await logEvent(c, { kind: 'seeded', sessionId: myId, body: `seeded ${parsed.lanes.length} lanes from ${file}` });

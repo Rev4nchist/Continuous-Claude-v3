@@ -77,12 +77,12 @@ export function inferOutcomes(rows, facts, { windowMin = 30, now = Date.now() } 
       acted = ((facts && facts.events) || []).some((e) => e.laneId === r.subject && e.kind !== 'seeded' && inWindow(e.at));
     } else {
       const p = ((facts && facts.prs) || {})[r.subject];
-      // ci-failed: the PR closed, or a new head was pushed inside the window. With a commits list (commitHeads) ANY commit with another head
-      // inside the window counts, so a second push after the window cannot turn an acted row into none. A facts file with no list keeps the
-      // old rule: only the newest head (head8, headAt).
-      const newHead = (q) => (Array.isArray(q.commits)
-        ? q.commits.some((x) => x && x.head8 !== r.head8 && inWindow(x.at))
-        : Boolean(q.head8 && r.head8 && q.head8 !== r.head8 && inWindow(q.headAt)));
+      // ci-failed: the PR closed, or a new head was pushed inside the window. ANY commit of the list (commitHeads) with another head inside the
+      // window counts, so a second push after the window cannot turn an acted row into none. The old rule (the newest head: head8, headAt) stays
+      // as well: a PR with more than 100 commits has a cut list. A row with no head cannot tell a change (validRow accepts head8 null).
+      const newHead = (q) => Boolean(r.head8) && (
+        (Array.isArray(q.commits) && q.commits.some((x) => x && x.head8 !== r.head8 && inWindow(x.at)))
+        || Boolean(q.head8 && q.head8 !== r.head8 && inWindow(q.headAt)));
       if (p) acted = inWindow(p.mergedAt) || (r.kind === 'ci-failed' && (inWindow(p.closedAt) || newHead(p)));
     }
     return { ...r, outcome: acted ? 'acted' : now < end(r) ? 'open' : 'none' };
@@ -178,6 +178,9 @@ export function commitHeads(list) {
   return out.sort((a, b) => a.at - b.at);
 }
 
+// livePrs runs the gh CLI against GitHub: it is MANUAL-ONLY (no test runs it; the pure parts, commitHeads and inferOutcomes, are tested).
+// Known limit: a commit time is not a push time. A commit made before the alarm and pushed inside the window reads none, and a rebase or an
+// amend after the window replaces the in-window commit and gives new commit times, so an acted row can read none.
 function livePrs(rows) {
   const prs = {};
   for (const n of new Set(rows.filter((r) => r.kind === 'pr-green' || r.kind === 'ci-failed').map((r) => r.subject))) {

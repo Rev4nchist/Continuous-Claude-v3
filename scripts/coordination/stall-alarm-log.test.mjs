@@ -177,7 +177,12 @@ describe('part A: outcomes from later events', () => {
     assert.deepEqual(await g([c('cccccccc', T + 300 * MIN)]), ['none']); // only a push after the window
     assert.deepEqual(await g([c('bbbbbbbb', T - 10 * MIN)]), ['none']); // a push before the alarm
     assert.deepEqual(await g([c('aaaaaaaa', T + 10 * MIN)]), ['none']); // the same head is no change
-    assert.deepEqual(await g([]), ['none']); // no commits, and the old head fields do not rescue it
+    assert.deepEqual(await g([]), ['none']); // no commits, and the newest head came after the window (headAt T+300): the old rule says none too
+    // A PR of more than 100 commits: the list is cut and has no in-window commit, but the newest head (head8, headAt) is a change inside the window.
+    assert.deepEqual(await g([c('cccccccc', T + 300 * MIN)], { head8: 'bbbbbbbb', headAt: T + 10 * MIN }), ['acted']);
+    // A row with no head (validRow accepts null) cannot tell a head change: no commit counts.
+    const noHead = await infer([row('ci-failed', '624', { head8: null })], { events: [], prs: { 624: { mergedAt: null, closedAt: null, head8: 'bbbbbbbb', headAt: T + 10 * MIN, commits: [c('bbbbbbbb', T + 10 * MIN)] } } });
+    assert.deepEqual(noHead, ['none']);
     assert.deepEqual(await g([c('cccccccc', T + 300 * MIN)], { mergedAt: T + 10 * MIN }), ['acted']); // merged inside the window, as before
     assert.deepEqual(await g([c('cccccccc', T + 300 * MIN)], { closedAt: T + 10 * MIN }), ['acted']); // closed inside the window, as before
   });

@@ -98,8 +98,8 @@ const events = async () => (await one(`SELECT count(*)::int AS n FROM agentic_os
  * True when a backend of the scratch database waits on a lock in a statement that holds `fragment` (card coord-lane-cli-followups, item 2:
  * a fixed sleep proves nothing under load). Polls every 50 ms for up to 15 s and returns at the first hit; false when none was seen.
  */
-async function seenWaiting(fragment) {
-  for (const end = Date.now() + 15000; Date.now() < end; await new Promise((ok) => setTimeout(ok, 50))) {
+async function seenWaiting(fragment, timeoutMs = 15000) {
+  for (const end = Date.now() + timeoutMs; Date.now() < end; await new Promise((ok) => setTimeout(ok, 50))) {
     const n = (await one(
       `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
          AND pid <> pg_backend_pid() AND query LIKE $1`, [`%${fragment}%`])).n;
@@ -275,14 +275,15 @@ describe('seed on a held lane', () => {
       const free = await mk('sd-c', { state: 'ready' });
       const dead = await mk('sd-d', { owner: sid(), lapsed: true });
       const fresh = newId();
-      const f = file(`${form}-2.json`, body([mine, free, dead, fresh].map((id) => ({ id, title: `t ${id}`, track: 'zz', scope: 'SEEDED' }))));
+      // A band on every item runs the withBand conflict clause (the caller id is $15 there, $13 without a band): the holder passes only with the right index.
+      const f = file(`${form}-2.json`, body([mine, free, dead, fresh].map((id) => ({ id, title: `t ${id}`, track: 'zz', scope: 'SEEDED', band: 'P1' }))));
       const r = lane(['seed', f]);
       assert.equal(r.code, 0, r.err);
       for (const id of [mine, free, dead, fresh]) assert.equal((await row(id)).scope, 'SEEDED', id);
     });
     it(`${form} form: the master card holder seeds a lane a builder holds`, async () => {
       const held = await mk('sd-e', { board: GC_MASTER, owner: HOLDER });
-      const f = file(`${form}-3.json`, body([{ id: held, title: 'by the seat', track: 'zz', scope: 'SEAT' }]));
+      const f = file(`${form}-3.json`, body([{ id: held, title: 'by the seat', track: 'zz', scope: 'SEAT', band: 'P2' }])); // with a band: the withBand parameter index
       const r = lane(['seed', f], { as: SEAT, env: { LANE_ALLOW_AS: '1' }, board: GC_MASTER });
       assert.equal(r.code, 0, r.err);
       assert.equal((await row(held)).scope, 'SEAT');
@@ -306,8 +307,13 @@ describe('seed on a held lane', () => {
       assert.notEqual((await row(free)).scope, 'RACE');
     });
     it(`${form} form: a peer that creates and claims a NEW id while the seed waits keeps its title, track and scope (item 1)`, async () => {
-      const fresh = newId();
-      const f = file(`${form}-newrace.json`, body([{ id: fresh, title: 'rewritten', track: 'zz', scope: 'RACE' }]));
+      // Two ids: `early` sorts before `fresh`, so it is written first in the seed transaction; the refusal on `fresh` must roll it back (array and object form).
+      const early = `sd-na-${++seq}`;
+      const fresh = `sd-nb-${++seq}`;
+      const f = file(`${form}-newrace.json`, body([
+        { id: early, title: 'early', track: 'zz', scope: 'EARLY' },
+        { id: fresh, title: 'rewritten', track: 'zz', scope: 'RACE' },
+      ]));
       const peer = new Client({ connectionString: s.url });
       await peer.connect();
       await peer.query(`SELECT set_config('lane.client_version','test',false)`);
@@ -328,6 +334,62 @@ describe('seed on a held lane', () => {
       assert.equal(after.title, 'peer title');
       assert.equal(after.scope, 'PEER SCOPE');
       assert.equal(after.owner, HOLDER);
+      assert.equal(await row(early), undefined, 'the first lane of the file is rolled back with the refusal');
+    });
+    it(`${form} form: a peer that creates the id on ANOTHER board while the seed waits gives the foreign-id error, not not-holder (item 1)`, async () => {
+      const fresh = newId();
+      const f = file(`${form}-foreignrace.json`, body([{ id: fresh, title: 'rewritten', track: 'zz', scope: 'RACE' }]));
+      const peer = new Client({ connectionString: s.url });
+      await peer.connect();
+      await peer.query(`SELECT set_config('lane.client_version','test',false)`);
+      await peer.query('BEGIN');
+      // The checks before the transaction see no row, so the INSERT meets the peer's row (another board, held) only after the wait.
+      await peer.query(
+        `INSERT INTO agentic_os.lane (id,title,track,scope,state,project_key,owner_session_id,lease_expires_at)
+         VALUES ($1,'peer title','peer-track','PEER SCOPE','active',$2,$3, now() + interval '1 hour')`, [fresh, GC_MASTER, HOLDER]);
+      const seeding = lane.async(['seed', f]);
+      const waiting = await seenWaiting('INSERT INTO agentic_os.lane');
+      await peer.query('COMMIT');
+      await peer.end();
+      const r = await seeding;
+      assert.ok(waiting, 'the seed INSERT was never seen waiting on the peer row: the test would prove nothing');
+      assert.notEqual(r.code, 0, r.err);
+      assert.doesNotMatch(r.err, /\[not-holder\]/, r.err);
+      assert.match(r.err, /belongs to board/, r.err);
+      assert.equal((await row(fresh)).scope, 'PEER SCOPE');
+    });
+    it(`${form} form: the lanes of a seed are written in id order, so two files with the same new ids in opposite order cannot deadlock (item 1, critic finding)`, async () => {
+      const a = `sd-oa-${++seq}`;
+      const b = `sd-ob-${++seq}`;
+      const f = file(`${form}-order.json`, body([{ id: b, title: 'b', track: 'zz', scope: 'B' }, { id: a, title: 'a', track: 'zz', scope: 'A' }])); // file order: b, a
+      const peer = new Client({ connectionString: s.url });
+      const peer2 = new Client({ connectionString: s.url });
+      await peer.connect();
+      await peer2.connect();
+      let second = null;
+      try {
+        for (const c of [peer, peer2]) await c.query(`SELECT set_config('lane.client_version','test',false)`);
+        // The peer holds an uncommitted row for `b`. In id order the seed writes `a` first and then waits on `b`; in file order it waits on `b` at once and never writes `a`.
+        await peer.query('BEGIN');
+        await peer.query(`INSERT INTO agentic_os.lane (id,title,track,state,project_key) VALUES ($1,'peer','zz','ready',$2)`, [b, GC_PLAIN]);
+        const seeding = lane.async(['seed', f]);
+        // A second writer wants `a`: it waits only when the seed has already written `a` (and holds it uncommitted).
+        assert.ok(await seenWaiting('INSERT INTO agentic_os.lane'), 'the seed INSERT was never seen waiting on the peer row: the test would prove nothing');
+        second = peer2.query(`/* order-probe */ INSERT INTO agentic_os.lane (id,title,track,state,project_key) VALUES ($1,'second','zz','ready',$2) ON CONFLICT (id) DO NOTHING`, [a, GC_PLAIN]);
+        const sawIt = await seenWaiting('/* order-probe */', 6000);
+        await peer.query('ROLLBACK'); // the seed can now write `b` and commit
+        const r = await seeding;
+        await second;
+        assert.ok(sawIt, 'the seed did not write the lane that sorts first before it waited: the lanes are not written in id order');
+        assert.equal(r.code, 0, r.err);
+        assert.equal((await row(a)).title, 'a');
+        assert.equal((await row(b)).title, 'b');
+      } finally {
+        await peer.query('ROLLBACK').catch(() => {});
+        await Promise.resolve(second).catch(() => {});
+        await peer.end().catch(() => {});
+        await peer2.end().catch(() => {});
+      }
     });
     it(`${form} form: an id that another board owns is still the foreign-id error, not not-holder (item 1)`, async () => {
       const other = await mk('sd-g', { board: GC_MASTER, owner: HOLDER });
