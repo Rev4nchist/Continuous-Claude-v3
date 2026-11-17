@@ -21,7 +21,7 @@ export { redact }
 export type Source = OsBriefSource
 export type PlanStatus = OsPlanStep['status']
 export type AskKind = OsAskItem['kind']
-export type Chip = 'working' | 'waiting-on-dave' | 'blocked' | 'done' | 'idle'
+export type Chip = 'working' | 'waiting-on-dave' | 'waiting-on-work' | 'blocked' | 'done' | 'idle'
 
 // The shapes live in types/index.d.ts (PluginState needs them); they are named here for the pure functions.
 export type PlanStep = OsPlanStep
@@ -62,6 +62,29 @@ export const LIMITS = {
 } as const
 
 export const STALE_ASK_MS = 24 * 3600_000
+
+/**
+ * A background task counts toward the waiting-on-work chip for this long after the Stop that FIRST listed it. A later Stop never renews it
+ * (the age is per task id), so a server or watcher that never ends cannot keep a parsed ask off the chip all day.
+ */
+export const BG_WAIT_MAX_MS = 30 * 60 * 1000
+
+/** Only these task types end by themselves. `subagent`, `monitor` and any unknown label never count: they may stand for hours (fail to the ask). */
+const WAIT_TYPES: readonly string[] = ['shell', 'workflow']
+
+/** What the mod keeps of one background task: its id and its type label. Never its description, command, prompt or server (free text). */
+export type WaitTask = { id: string; type: string }
+
+/** The tasks that count now: a counted type, first seen within BG_WAIT_MAX_MS. A task with no first-seen time does not count. */
+export const countWaitTasks = (tasks: readonly WaitTask[], seen: Readonly<Record<string, number>>, now: number): number =>
+  tasks.filter(one => WAIT_TYPES.includes(one.type) && Object.hasOwn(seen, one.id) && now - (seen[one.id] ?? -Infinity) <= BG_WAIT_MAX_MS).length
+
+/** True when a counted task crossed its age limit in the window [from, to): the idle pulse redraws the band for it. */
+export const waitLapsed = (tasks: readonly WaitTask[], seen: Readonly<Record<string, number>>, from: number, to: number): boolean =>
+  tasks.some(one => {
+    const at = Object.hasOwn(seen, one.id) ? (seen[one.id] ?? 0) + BG_WAIT_MAX_MS : -Infinity
+    return WAIT_TYPES.includes(one.type) && at < to && at >= from
+  })
 
 const KINDS: readonly string[] = ['question', 'approval', 'decision', 'block']
 const STATUSES: readonly string[] = ['todo', 'doing', 'done', 'blocked']
@@ -334,18 +357,27 @@ export type ChipState = {
   agentRuns?: { status: string }[]
   /** An AskUserQuestion step is in flight: a dialog waits for Dave, so the chip reads waiting whatever else runs. */
   dialogOpen?: boolean
+  /** The background tasks the last main-agent Stop listed (id and type), and when each id was first seen. Absent: no wait (an old engine). */
+  bgTasks?: readonly WaitTask[]
+  bgSeen?: Readonly<Record<string, number>>
 }
 
 /**
- * PRD 5.2, glossary "Session chip" (2026-11-16). Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (an AskUserQuestion open, or a fresh open ask:
- * it wins over running work), then working (a tool, the main turn or a running agent run), then done (every task and plan step done AND proven, and at least one exists), else idle.
+ * PRD 5.2, glossary "Session chip" (2026-11-16). Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (an AskUserQuestion open, or a fresh open ask
+ * that is not a parsed guess: it wins over running work), then waiting-on-work (fix 5: the main agent stopped while a counted background task still runs, and no turn and no tool
+ * call run), then waiting-on-dave for a fresh open PARSED ask, then working (a tool, the main turn or a running agent run), then done (every task and plan step done AND proven,
+ * and at least one exists), else idle. A parsed ask is the parser's reading of a closing line ("Waiting on CI, then you get the Land question"): it can name a wait that is not on Dave.
+ * An ask with no source (an old state file) is never treated as parsed, so it is never hidden.
  */
 export const deriveChip = (state: ChipState): Chip => {
   const { brief } = state
   const plan = brief?.plan ?? []
   // A blocked plan step counts only when the plan is the source (no task).
   if (state.blocked || (state.tasks.length === 0 && plan.some(one => one.status === 'blocked'))) return 'blocked'
-  if (state.dialogOpen === true || (brief !== null && brief.ask.some(isOpen) && !isAskStale(brief, state.now, state.activeAt))) return 'waiting-on-dave'
+  const fresh = brief !== null && !isAskStale(brief, state.now, state.activeAt) ? brief.ask.filter(isOpen) : []
+  if (state.dialogOpen === true || fresh.some(one => one.source !== 'parsed')) return 'waiting-on-dave'
+  if (!state.turnActive && !state.toolRunning && countWaitTasks(state.bgTasks ?? [], state.bgSeen ?? {}, state.now) > 0) return 'waiting-on-work'
+  if (fresh.length > 0) return 'waiting-on-dave'
   if (state.toolRunning || state.turnActive || state.agentRuns?.some(one => one.status === 'running')) return 'working'
   const items = weighedOf(state.tasks, plan)
   return items.length > 0 && items.every(one => one.done && isProven(brief, one)) ? 'done' : 'idle'

@@ -24,6 +24,7 @@ const piece = (value: unknown, fallback = NO_TEXT): string => oneLine(value) || 
 const CHIP_WORDS: Record<Chip, string> = {
   working: 'Working',
   'waiting-on-dave': 'Waiting for you',
+  'waiting-on-work': 'Waiting on background tasks',
   blocked: 'Stuck: a step cannot go on',
   done: 'Done: every step is proven',
   idle: 'Resting',
