@@ -339,3 +339,24 @@ describe('part A: privacy and failing loud', () => {
     assert.equal(run(args(empty)).code, 3);
   });
 });
+
+describe('part A: gold ids in the id list (card coord-content-scan-followups, item gold ids)', () => {
+  it('A15: a made-up gold sha as a lane id stops --append with exit 3 and no file; with no gold folder the same run passes', async () => {
+    const { GOLD_DIR_REL } = await import('./board-mask.mjs');
+    const GOLD_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
+    const root = listRoot();
+    const d = folder();
+    const st = path.join(d, 'state.json');
+    const log = path.join(d, 'alarms.jsonl');
+    write(st, state({ [`waits ${GOLD_SHA} ${NOTE_AT}`]: T }));
+    assert.equal(run(['--append', '--state', st, '--log', log, '--root', root]).code, 0); // control: not listed yet
+    fs.rmSync(log, { force: true });
+    fs.mkdirSync(path.join(root, GOLD_DIR_REL), { recursive: true });
+    write(path.join(root, GOLD_DIR_REL, 'gold-a.json'), [{ target: { sha40: GOLD_SHA, pr: 8888 } }]);
+    const bad = run(['--append', '--state', st, '--log', log, '--root', root]);
+    assert.equal(bad.code, 3);
+    assert.equal(bad.out, '');
+    assert.ok(!fs.existsSync(log), 'a file was written after exit 3');
+    assert.ok(!bad.err.includes(GOLD_SHA));
+  });
+});
