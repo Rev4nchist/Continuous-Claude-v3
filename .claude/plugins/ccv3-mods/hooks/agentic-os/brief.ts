@@ -63,7 +63,7 @@ export const LIMITS = {
 
 export const STALE_ASK_MS = 24 * 3600_000
 
-const KINDS: readonly string[] = ['question', 'approval', 'decision', 'block']
+const KINDS: readonly string[] = ['question', 'approval', 'decision', 'block', 'todo']
 const STATUSES: readonly string[] = ['todo', 'doing', 'done', 'blocked']
 const TOP_KEYS = ['title', 'goal', 'stopAt', 'plan', 'ask', 'decision', 'proof']
 
@@ -253,14 +253,18 @@ export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], no
 // --- Ask lifecycle and chip ---
 
 const isOpen = (one: AskItem): boolean => one.answered !== true
+/** `todo`: an action for Dave that needs no answer (card coord-status-band-2). Only brief_set declares it; the turn-end parser never does. */
+const isTodo = (one: AskItem): boolean => one.kind === 'todo'
+/** An open ask that waits for an answer from Dave. A todo does not. */
+const isQuestion = (one: AskItem): boolean => isOpen(one) && !isTodo(one)
 
 /**
- * Dave's prompt arrived at `now`: every open ask becomes `answered?` (dim, not counted) until the next brief_set, and keeps the time.
- * An ask that is already answered keeps its first time. The prompt may not address the ask.
+ * Dave's prompt arrived at `now`: every open question becomes `answered?` (dim, not counted) until the next brief_set, and keeps the time.
+ * An ask that is already answered keeps its first time. The prompt may not address the ask. A todo needs no answer and stays open.
  */
 export const markAsksAnswered = (brief: Brief, now: number): Brief =>
-  brief.ask.some(isOpen)
-    ? { ...brief, ask: brief.ask.map(one => (isOpen(one) ? { ...one, answered: true as const, answeredAt: now } : one)) }
+  brief.ask.some(isQuestion)
+    ? { ...brief, ask: brief.ask.map(one => (isQuestion(one) ? { ...one, answered: true as const, answeredAt: now } : one)) }
     : brief
 
 const askKey = (one: { kind: string; text: string }): string => `${one.kind}\u0000${one.text}`
@@ -297,8 +301,14 @@ const clearLeavers = (cleared: readonly ClearedAsk[] | undefined, old: readonly 
  * the later of the last brief change and `lastActivity` (the mod's own record of the last prompt, turn or tool call).
  * With no `lastActivity` it starts at the brief change.
  */
-export const isAskStale = (brief: Brief, now: number, lastActivity?: number | null): boolean =>
-  brief.ask.some(isOpen) && now - Math.max(brief.updatedAt, lastActivity ?? 0) >= STALE_ASK_MS
+const quiet = (brief: Brief, now: number, lastActivity?: number | null): boolean => now - Math.max(brief.updatedAt, lastActivity ?? 0) >= STALE_ASK_MS
+
+/** Questions only: a todo is not a question. */
+export const isAskStale = (brief: Brief, now: number, lastActivity?: number | null): boolean => brief.ask.some(isQuestion) && quiet(brief, now, lastActivity)
+
+/** The same 24 hour clock for the to-dos. */
+export const isTodoStale = (brief: Brief, now: number, lastActivity?: number | null): boolean =>
+  brief.ask.some(one => isOpen(one) && isTodo(one)) && quiet(brief, now, lastActivity)
 
 /**
  * Prompt origins that are Dave's own act: typing in the composer, a message through the phone bridge, and `auto-continuation` (the engine
@@ -345,7 +355,7 @@ export const deriveChip = (state: ChipState): Chip => {
   const plan = brief?.plan ?? []
   // A blocked plan step counts only when the plan is the source (no task).
   if (state.blocked || (state.tasks.length === 0 && plan.some(one => one.status === 'blocked'))) return 'blocked'
-  if (state.dialogOpen === true || (brief !== null && brief.ask.some(isOpen) && !isAskStale(brief, state.now, state.activeAt))) return 'waiting-on-dave'
+  if (state.dialogOpen === true || (brief !== null && brief.ask.some(isQuestion) && !isAskStale(brief, state.now, state.activeAt))) return 'waiting-on-dave'
   if (state.toolRunning || state.turnActive || state.agentRuns?.some(one => one.status === 'running')) return 'working'
   const items = weighedOf(state.tasks, plan)
   return items.length > 0 && items.every(one => one.done && isProven(brief, one)) ? 'done' : 'idle'
@@ -354,12 +364,14 @@ export const deriveChip = (state: ChipState): Chip => {
 /** One line for the model after a good call: what the brief holds now. */
 export const briefSummary = (brief: Brief, tasks: OsTask[]): string => {
   const items = weighedOf(tasks, brief.plan)
-  const open = brief.ask.filter(isOpen).length
+  const open = brief.ask.filter(isQuestion).length
+  const todos = brief.ask.filter(one => isOpen(one) && isTodo(one)).length
   const parts = [
     brief.goal ? `goal: ${brief.goal}` : 'goal not set',
     brief.stopAt ? `stop-at: ${brief.stopAt}` : null,
     `plan ${brief.plan.length} step${brief.plan.length === 1 ? '' : 's'}`,
     `${open} open ask${open === 1 ? '' : 's'}`,
+    todos > 0 ? `${todos} to-do${todos === 1 ? '' : 's'}` : null,
     `${items.filter(one => isProven(brief, one)).length} of ${items.length} proven`,
   ]
   return `Brief saved. ${parts.filter(Boolean).join(' · ')}`

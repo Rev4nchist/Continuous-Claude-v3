@@ -514,7 +514,7 @@ const briefSchema = {
   additionalProperties: false,
   properties: {
     title: { type: 'string', description: 'Short session title, shown in the Fleet. Max 80 characters.' },
-    goal: { type: 'string', description: 'One line: what this session is for. Max 240 characters.' },
+    goal: { type: 'string', description: 'One plain sentence, under 80 characters, no first person: what Dave gets. Max 240 characters.' },
     stopAt: { type: 'string', description: "Dave's literal stop point, in his words. Max 240 characters." },
     plan: {
       type: 'array',
@@ -534,12 +534,12 @@ const briefSchema = {
     ask: {
       type: 'array',
       maxItems: 8,
-      description: 'Replaces the whole list of open questions for Dave. [] clears it. Max 8 items.',
+      description: 'Replaces the whole list of open items for Dave. [] clears it. A question needs his answer. Kind todo is an action for him that needs no answer. Max 8 items.',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          kind: { type: 'string', enum: ['question', 'approval', 'decision', 'block'] },
+          kind: { type: 'string', enum: ['question', 'approval', 'decision', 'block', 'todo'] },
           text: { type: 'string', description: 'Max 300 characters.' },
           recommend: { type: 'string', description: 'Your recommended answer.' },
         },
@@ -565,7 +565,7 @@ const briefSchema = {
 
 const BRIEF_DESCRIPTION =
   "Records what this session is for, so Dave sees it in the Agentic OS band and the Fleet. Call it when the goal, the stop-at (Dave's literal stop point), the title, the plan or an open question changes, and when a task is proven. " +
-  'Every field is optional; send at least one. plan and ask replace their whole list, so ask [] clears the open questions once Dave answered. decision appends to the log. proof marks a task or plan step proven (taskId is a task id, a plan step id or the exact task subject). ' +
+  'Every field is optional; send at least one. plan and ask replace their whole list, so ask [] clears the open questions once Dave answered. Use ask kind todo for an action Dave must do that needs no answer (it never makes the band wait for him). decision appends to the log. proof marks a task or plan step proven (taskId is a task id, a plan step id or the exact task subject). ' +
   'Secrets in any string are removed before storage. The answer is the saved summary, or "brief_set failed:" with the reason (a proof that matches nothing lists the valid ids).'
 
 /** A mod-served tool answers with a list of content blocks (the engine refuses the MCP object); see hooks/pr-loop. */

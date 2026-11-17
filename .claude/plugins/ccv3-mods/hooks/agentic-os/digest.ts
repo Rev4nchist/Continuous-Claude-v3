@@ -208,13 +208,13 @@ const stepItems = (brief: Brief | null, tasks: OsTask[]): Item[] => {
 
 // --- NEEDS YOU ---
 
-const RANK = { ask: 0, ready: 1, approval: 2, blocked: 3, failed: 4, limited: 5 } as const
+const RANK = { ask: 0, ready: 1, approval: 2, blocked: 3, failed: 4, limited: 5, todo: 6 } as const
 
 const askItems = (asks: DigestAsk[]): Item[] =>
   asks
     .filter(one => one.answered !== true)
     .map(one =>
-      item(one.kind === 'approval' ? RANK.approval : RANK.ask, one.at, WORDS.decisions.label, 'warn', () => {
+      item(one.kind === 'approval' ? RANK.approval : one.kind === 'todo' ? RANK.todo : RANK.ask, one.at, WORDS.decisions.label, one.kind === 'todo' ? 'dim' : 'warn', () => {
         const said = askSentence({ kind: one.kind, text: one.text, recommend: one.recommend }, false)
         return { text: said.text, ...(said.next === undefined ? {} : { next: said.next }), more: oneLine(one.recommend) !== '' }
       }),

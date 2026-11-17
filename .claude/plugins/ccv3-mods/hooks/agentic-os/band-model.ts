@@ -1,6 +1,6 @@
 import type { HudLimit, OsBrief, OsTask } from '../../types'
 import { redact } from '../shared/redact'
-import { isAskStale, isProven } from './brief'
+import { isAskStale, isProven, isTodoStale } from './brief'
 import type { Chip } from './brief'
 import { gaugeTone } from './pane-model'
 import type { Span, Tone } from './pane-model'
@@ -208,15 +208,19 @@ const goalOf = (s: BandState): Goal => {
   return { label, fixed: [], clippable: goal, clippableTone: 'todo', tail: parsed ? [sp(' [parsed]', 'dim')] : [] }
 }
 
-type Counts = { asks: number; answered: number; stale: boolean; unproven: number; done: number; total: number }
+type Counts = { asks: number; answered: number; stale: boolean; todos: number; todoStale: boolean; unproven: number; done: number; total: number }
 
 const countsOf = (s: BandState, steps: Step[]): Counts => {
   const list = s.brief?.ask ?? []
-  const asks = list.filter(one => one.answered !== true).length
+  const todos = list.filter(one => one.kind === 'todo' && one.answered !== true).length
+  const questions = list.filter(one => one.kind !== 'todo')
+  const asks = questions.filter(one => one.answered !== true).length
   return {
     asks,
-    answered: list.length - asks,
+    answered: questions.length - asks,
     stale: s.brief !== null && isAskStale(s.brief, s.now, s.activeAt),
+    todos,
+    todoStale: s.brief !== null && isTodoStale(s.brief, s.now, s.activeAt),
     unproven: steps.filter(one => one.unproven).length,
     done: steps.filter(one => one.done).length,
     total: steps.length,
@@ -237,15 +241,19 @@ const lineTwo = (s: BandState, steps: Step[], width: number): Span[] => {
     ...barSpans(steps, cellCount),
     sp(`${cellCount > 0 ? ' ' : ''}${c.done}/${c.total}`, 'todo'),
   ]
+  // No steps: no PLAN bar and no UNPROVEN count (they read 0/0 and 0, noise). Fix 8 of the status band review.
+  const showPlan = steps.length > 0
   const counts: Span[][] = [
-    [sp(`ASK ${c.asks}${c.stale && c.asks > 0 ? ' stale' : ''}`, askTone(c, s.chip))],
+    [sp(`QUESTIONS ${c.asks}${c.stale && c.asks > 0 ? ' stale' : ''}`, askTone(c, s.chip))],
     ...(c.answered > 0 ? [[sp(`${c.answered} answered?`, 'dim')]] : []),
-    [sp(`UNPROVEN ${c.unproven}`, unprovenTone(c, s.chip))],
+    // Never amber or red: nothing waits on an answer.
+    ...(c.todos > 0 ? [[sp(`TO DO ${c.todos}${c.todoStale ? ' stale' : ''}`, 'dim')]] : []),
+    ...(showPlan ? [[sp(`UNPROVEN ${c.unproven}`, unprovenTone(c, s.chip))]] : []),
   ]
   const build = (variant: { cells: number; label: boolean }, room: number | null): Span[] => {
     const text = room === null ? goal.clippable : clip(goal.clippable, Math.max(0, room))
     const head: Span[] = [goal.label, ...goal.fixed, ...(text === '' ? [] : [sp(text, goal.clippableTone)]), ...goal.tail]
-    return join([head, plan(variant.cells, variant.label), ...counts], sp(SEP, 'dim'))
+    return join([head, ...(showPlan ? [plan(variant.cells, variant.label)] : []), ...counts], sp(SEP, 'dim'))
   }
   const variants = [
     { cells, label: true },

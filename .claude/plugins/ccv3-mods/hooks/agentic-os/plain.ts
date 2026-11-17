@@ -86,6 +86,8 @@ export const askSentence = (ask: AskFact, stale: boolean): { text: string; next?
       return { text: oneLine(rec === '' ? `Decide: ${text}` : `Decide: ${text.replace(/[.!?]$/, '')}. I suggest ${rec.replace(/[.!?]$/, '')}.`) }
     case 'block':
       return { text: oneLine(`Stuck: ${text}`) }
+    case 'todo':
+      return { text: oneLine(`To do: ${text}`) }
     default:
       return { text }
   }

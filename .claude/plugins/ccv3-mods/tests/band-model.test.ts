@@ -126,7 +126,7 @@ describe('band line 2: goal', () => {
     const line = bandLines(state(), 120)[1] ?? []
     expect(text(line)).toContain('GOAL not set')
     expect(line.find(span => span.text.includes('not set'))?.tone).toBe('warn')
-    expect(text(line)).toMatch(/GOAL not set\s+PLAN/)
+    expect(text(line)).toMatch(/GOAL not set\s+QUESTIONS 0/)
   })
 
   test('L4 a brief_set goal has no marker; a parsed goal is marked parsed', () => {
@@ -149,14 +149,14 @@ describe('band line 2: ASK and UNPROVEN', () => {
   ]
 
   test('L5 open asks are counted', () => {
-    expect(lineOf({ brief: briefWith({ ask: asks }) })).toContain('ASK 2')
+    expect(lineOf({ brief: briefWith({ ask: asks }) })).toContain('QUESTIONS 2')
   })
 
   test('L5 answered asks are not counted, and show dim as answered?', () => {
     const answered = markAsksAnswered(briefWith({ ask: asks }), 1_000)
     const line = bandLines(state({ brief: answered }), 120)[1] ?? []
-    expect(text(line)).toContain('ASK 0')
-    expect(text(line)).not.toContain('ASK 2')
+    expect(text(line)).toContain('QUESTIONS 0')
+    expect(text(line)).not.toContain('QUESTIONS 2')
     expect(line.find(span => span.text.includes('answered?'))?.tone).toBe('dim')
     expect(text(line)).toContain('2 answered?')
   })
@@ -165,7 +165,7 @@ describe('band line 2: ASK and UNPROVEN', () => {
     const first = markAsksAnswered(briefWith({ ask: [asks[0]] }), 1_000)
     const next: Brief = { ...first, ask: [...first.ask, { kind: 'question', text: 'New?', source: 'brief_set' }] }
     const got = lineOf({ brief: next })
-    expect(got).toContain('ASK 1')
+    expect(got).toContain('QUESTIONS 1')
     expect(got).toContain('1 answered?')
   })
 
@@ -173,8 +173,8 @@ describe('band line 2: ASK and UNPROVEN', () => {
     const brief = briefWith({ ask: asks })
     const day = 24 * 3600_000
     const line = bandLines(state({ brief, now: 1_000 + day, activeAt: 1_000 }), 120)[1] ?? []
-    expect(text(line)).toContain('ASK 2 stale')
-    expect(line.find(span => span.text.includes('ASK'))?.tone).toBe('dim')
+    expect(text(line)).toContain('QUESTIONS 2 stale')
+    expect(line.find(span => span.text.includes('QUESTIONS'))?.tone).toBe('dim')
   })
 
   test('L6 a done task with no proof is unproven; a proven one is not', () => {
@@ -230,21 +230,21 @@ describe('band line 2: ASK and UNPROVEN', () => {
 
   test('L11 ASK and UNPROVEN: dim at zero, UNPROVEN warning above, ASK amber only on WAITING FOR YOU, red ASK on a blocked chip, green at zero on DONE', () => {
     const tone = (line: Span[] | undefined, label: string) => line?.find(span => span.text.startsWith(label))?.tone
-    const zero = bandLines(state(), 120)[1]
-    expect(tone(zero, 'ASK')).toBe('dim')
+    const zero = bandLines(state({ tasks: [task('1', 'a', 'pending')] }), 120)[1]
+    expect(tone(zero, 'QUESTIONS')).toBe('dim')
     expect(tone(zero, 'UNPROVEN')).toBe('dim')
     // Mockup: while WORKING an open ask is dim. Only the waiting-on-dave state draws ASK amber.
     const ask = briefWith({ ask: [{ kind: 'question', text: 'q?' }] })
     const busy = bandLines(state({ brief: ask, tasks: [task('1', 'a', 'completed')] }), 120)[1]
-    expect(tone(busy, 'ASK')).toBe('dim')
+    expect(tone(busy, 'QUESTIONS')).toBe('dim')
     expect(tone(busy, 'UNPROVEN')).toBe('warn')
-    for (const chip of ['idle', 'done'] as const) expect(tone(bandLines(state({ chip, brief: ask }), 120)[1], 'ASK')).toBe('dim')
+    for (const chip of ['idle', 'done'] as const) expect(tone(bandLines(state({ chip, brief: ask }), 120)[1], 'QUESTIONS')).toBe('dim')
     const waiting = bandLines(state({ chip: 'waiting-on-dave', brief: ask }), 120)[1]
-    expect(tone(waiting, 'ASK')).toBe('warn')
+    expect(tone(waiting, 'QUESTIONS')).toBe('warn')
     const blocked = bandLines(state({ chip: 'blocked', brief: briefWith({ ask: [{ kind: 'block', text: 'q?' }] }) }), 120)[1]
-    expect(tone(blocked, 'ASK')).toBe('bad')
-    const done = bandLines(state({ chip: 'done' }), 120)[1]
-    expect(tone(done, 'ASK')).toBe('done')
+    expect(tone(blocked, 'QUESTIONS')).toBe('bad')
+    const done = bandLines(state({ chip: 'done', tasks: [task('1', 'a', 'pending')] }), 120)[1]
+    expect(tone(done, 'QUESTIONS')).toBe('done')
     expect(tone(done, 'UNPROVEN')).toBe('done')
   })
 })
@@ -261,8 +261,11 @@ describe('band line 2: plan bar', () => {
     expect(lineOf({ tasks })).toMatch(/PLAN ▰▰▱ 1\/3/)
   })
 
-  test('L7 no plan and no tasks reads 0/0, not a missing bar', () => {
-    expect(lineOf({})).toMatch(/PLAN ▱+ 0\/0/)
+  test('L7 no plan and no tasks draws no PLAN bar and no UNPROVEN count (status band review, fix 8: they read 0/0 and 0)', () => {
+    const line = lineOf({})
+    expect(line).not.toContain('PLAN')
+    expect(line).not.toContain('UNPROVEN')
+    expect(line).toContain('QUESTIONS 0')
   })
 
   test('L7 a long plan keeps the bar to 10 cells and the true count', () => {
@@ -320,7 +323,7 @@ describe('band width', () => {
   test('L8 the goal is cut first, with an ellipsis, and ASK and UNPROVEN stay', () => {
     const line = text(bandLines(full(), 80)[1])
     expect(line).toContain('…')
-    expect(line).toContain('ASK 1')
+    expect(line).toContain('QUESTIONS 1')
     expect(line).toContain('UNPROVEN 1')
     expect(line).toContain('1/1')
     expect(line.indexOf('…')).toBeLessThan(line.indexOf('PLAN'))

@@ -376,7 +376,7 @@ const decisions = (s: TabState, now: number, columns: number, rows: number): Pan
   const { brief } = s
   const log = [...(brief?.decisions ?? [])].sort((a, b) => b.at - a.at)
   const asks = brief?.ask ?? []
-  const open = asks.filter(one => one.answered !== true).length
+  const open = asks.filter(one => one.answered !== true && one.kind !== 'todo').length
   const stale = brief !== null && isAskStale(brief, now, s.activeAt)
 
   const decisionGroups: PaneRow[][] = log.length
@@ -386,7 +386,7 @@ const decisions = (s: TabState, now: number, columns: number, rows: number): Pan
   const askGroups: PaneRow[][] = asks.length
     ? asks.map((one, i) => {
         const answeredAsk = one.answered === true
-        const fresh = !answeredAsk && !stale
+        const fresh = !answeredAsk && !stale && one.kind !== 'todo'
         const mark = answeredAsk ? ' · answered?' : stale ? ' · stale' : ''
         return [
           ...wrapRows(`a-${i}`, [sp('  ', 'dim'), sp(one.kind, fresh ? 'warn' : 'dim'), ...(mark ? [sp(mark, 'dim')] : []), sp('  ', 'dim')], one.text, fresh ? 'todo' : 'dim', columns, LINES),

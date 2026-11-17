@@ -18,7 +18,7 @@ export type OsPlanStep = { id: string; text: string; status: 'todo' | 'doing' | 
  * block does not re-open it. Only a brief_set re-ask or a change of kind or text re-opens it (design 2026-11-09, F2).
  */
 export type OsAskItem = {
-  kind: 'question' | 'approval' | 'decision' | 'block'
+  kind: 'question' | 'approval' | 'decision' | 'block' | 'todo'
   text: string
   recommend?: string
   source: OsBriefSource
