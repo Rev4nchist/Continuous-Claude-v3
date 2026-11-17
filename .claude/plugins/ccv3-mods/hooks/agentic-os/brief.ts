@@ -482,7 +482,7 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
  *     and two review rounds found a new hidden-question hole in each try at a tail grammar. Known limit; the cure is `brief_set` with `ask: []`, not a bigger parser.
  * (b) A bare waiting clause, "(I'm) Waiting on/for X", with NO None lead: nothing states that Dave is free, so it is a no-ask ONLY when X starts with a known
  *     non-human subject (CI, check, build, workflow, run, job, test, pipeline, CodeRabbit, Greptile, semgrep, pre-pr, sync, seat, peer, critic, agent, helper, scout,
- *     session, review bot), with the, a, an or my before it and at most ONE more word after it. "Waiting on a green light", "Waiting on the memory wait" and
+ *     session, review bot), with the, a, an or my before it and at most ONE more word after it, from a closed list of output nouns (run, runs, review, reviews, result, results, report, scan, check, checks, status, findings, output, build, job, end, word, go, ruling, reply). "Waiting on a green light", "Waiting on the memory wait" and
  *     "Waiting on the seat's land word" are questions (the last two are false ones: a false question beats a hidden one).
  * The lead form (a) is the author's own statement that Dave has nothing to do: free text cannot carry intent, so its object has NO list of request words. "None - waiting
  * on a green light" is a no-ask by design (a Known limit); the cure for a hidden question is `brief_set` with `ask: []`, never a longer word list.
@@ -497,7 +497,7 @@ const WAIT_OBJECT = String.raw`(?:(?!${WAIT_BAN})(?:[A-Za-z0-9#'’]|\s|(?<=[A-Z
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
 const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
 const WAIT_SUBJECT = String.raw`(?:(?:the|a|an|my)\s+)?(?:ci|checks?|build|workflow|runs?|jobs?|tests?|pipeline|coderabbit|greptile|semgrep|pre-pr|sync|seat|peer|critic|agent|helper|scout|session|review\s+bot)(?:['’]s)?(?![A-Za-z0-9-])`
-const WAIT_TAIL_WORD = String.raw`(?:\s+(?!(?:you|dave)|(?:then|and|or|but)\b)(?:(?!\b(?:you|dave))[A-Za-z0-9#'’]|(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])){1,40})?`
+const WAIT_TAIL_WORD = String.raw`(?:\s+(?:run|runs|review|reviews|result|results|report|scan|check|checks|status|findings|output|build|job|end|word|go|ruling|reply)(?![A-Za-z0-9-]))?`
 const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
 const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}${WAIT_SUBJECT}${WAIT_TAIL_WORD}$`, 'i')
 /** A question mark makes any item an ask, whatever its words. */
