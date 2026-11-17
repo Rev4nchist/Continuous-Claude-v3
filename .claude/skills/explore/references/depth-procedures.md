@@ -9,21 +9,24 @@ Fast structure overview using tldr commands. No agents spawned.
 **Best for:** Initial orientation, quick questions about structure, finding where things are.
 
 ```bash
-# 1. File tree
-tldr tree ${PATH:-src/} --ext .py
+# 1. File tree (set EXT to the code type of the repo, for example .ts or .mjs)
+tldr tree ${TARGET_DIR:-src/} --ext ${EXT:-.ts}
 
-# 2. Code structure (codemaps)
-tldr structure ${PATH:-src/} --lang python
+# 2. Code structure (codemaps). Pass the language the folder holds (TLDR_LANG, not LANG: that is the locale variable).
+#    structure scans no .mjs file: for .mjs use tree, search and extract.
+tldr structure ${TARGET_DIR:-src/} --lang ${TLDR_LANG:-typescript}
 
-# 3. Focused search (if --focus provided)
-tldr search "${FOCUS}" ${PATH:-src/}
+# 3. Focused search (if --focus provided). search also reads .mjs, .md and .json.
+tldr search "${FOCUS}" ${TARGET_DIR:-src/}
 ```
+
+An empty tldr result is not absence. A wrong --lang, or an .mjs file under structure, returns nothing: confirm with Grep before you report that something is missing.
 
 **Implementation:**
 ```bash
 depth=quick
-tldr tree ${src_dir} --ext .py
-tldr structure ${src_dir} --lang python
+tldr tree ${src_dir} --ext ${EXT}
+tldr structure ${src_dir} --lang ${TLDR_LANG}
 if [ -n "$focus" ]; then
     tldr search "$focus" ${src_dir}
 fi
@@ -48,7 +51,7 @@ if [ ! -f .claude/cache/tldr/meta.json ]; then
 fi
 
 # 2. Structure analysis
-tldr structure src/ --lang python
+tldr structure src/ --lang ${TLDR_LANG:-typescript}
 tldr calls src/
 
 # 3. Research patterns (via scout agent)
@@ -67,7 +70,7 @@ if [ ! -f .claude/cache/tldr/meta.json ]; then
 fi
 
 # 2. Structure
-tldr structure src/ --lang python
+tldr structure src/ --lang ${TLDR_LANG:-typescript}
 
 # 3. Research (spawn scout agent)
 # Task tool with subagent_type: "scout"
@@ -92,15 +95,15 @@ Architecture-focused analysis with layer detection. No agent spawned — pure tl
 
 ```bash
 # 1. Architecture detection
-tldr arch ${PATH:-src/}
+tldr arch ${TARGET_DIR:-src/}
 # Returns: entry_layer, middle_layer, leaf_layer, circular_deps
 
 # 2. Call graph
-tldr calls ${PATH:-src/}
+tldr calls ${TARGET_DIR:-src/}
 # Returns: edges, nodes
 
 # 3. Impact analysis from entry point (if --entry provided)
-tldr impact ${ENTRY} ${PATH:-src/} --depth 3
+tldr impact ${ENTRY} ${TARGET_DIR:-src/} --depth 3
 ```
 
 **Implementation:**

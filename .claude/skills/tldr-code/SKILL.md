@@ -12,14 +12,16 @@ Token-efficient code analysis. Measured, 30 days to 2026-09-30: the Read hook re
 
 Advanced features (daemon, semantic search, Python API, language table): `references/advanced-features.md`
 
-> **Canonical entry point.** This is the single skill for TLDR usage. Routine analysis (call graph injection, AST-summarized reads, post-edit diagnostics) is handled automatically by 3 live hooks: `tldr-read-enforcer` (denies code Reads over 8 KB and returns an AST summary; fails open), `smart-search-router`, `post-edit-diagnostics`. `tldr-context-inject`, `impact-refactor`, `arch-context-inject`, `edit-context-inject` and `signature-helper` are not registered; do not expect them to fire. Don't add new `tldr-*` sub-skills; extend this one or extend a hook.
+**An empty `tldr` result is not absence.** `tldr structure` scans no `.mjs` file, and a wrong `--lang` returns nothing. For `.mjs` use `tldr tree --ext .mjs`, `tldr search` and `tldr extract <file>`. Confirm with Grep before you report that something is missing.
+
+> **Canonical entry point.** This is the single skill for TLDR usage. Routine analysis (call graph injection, AST-summarized reads, post-edit diagnostics) is handled automatically by 3 live hooks: `tldr-read-enforcer` (denies code Reads over 8 KB and returns an AST summary; fails open), `smart-search-router` (redirects nothing; feeds search context to `tldr-read-enforcer` for unscoped Greps), `post-edit-diagnostics` (live for `.ts` under a tsconfig, for example `.claude/hooks`; skips plain `.mjs`). `tldr-context-inject`, `impact-refactor`, `arch-context-inject`, `edit-context-inject` and `signature-helper` are not registered; do not expect them to fire. Don't add new `tldr-*` sub-skills; extend this one or extend a hook.
 
 ## Quick Reference
 
 | Task | Command |
 |------|---------|
 | File tree | `tldr tree src/` |
-| Code structure | `tldr structure . --lang python` |
+| Code structure | `tldr structure . --lang typescript` (or javascript, python, go, rust; not `.mjs`) |
 | Search code | `tldr search "pattern" .` |
 | Call graph | `tldr calls src/` |
 | Who calls X? | `tldr impact func_name .` |
@@ -32,7 +34,7 @@ Advanced features (daemon, semantic search, Python API, language table): `refere
 | Who imports X? | `tldr importers module_name .` |
 | Affected tests | `tldr change-impact --git` |
 | Type check | `tldr diagnostics file.py` |
-| Semantic search | `tldr semantic search "auth flow"` |
+| Semantic search | `tldr semantic search "auth flow"` (needs an index; this repo has none: use Grep) |
 
 ---
 
@@ -55,8 +57,8 @@ Total:              ~1,200 tokens  vs 23,000 raw (one sample file; not a measure
 ### Navigation & Search
 
 ```bash
-tldr tree src/ --ext .py .ts           # File tree, filter by extension
-tldr structure . --lang python          # Code structure (codemaps)
+tldr tree src/ --ext .ts .mjs          # File tree, filter by extension
+tldr structure . --lang typescript      # Code structure (codemaps); scans no .mjs
 tldr search "def process" src/          # Text search
 tldr search "TODO" . -C 3              # 3 lines context
 tldr semantic search "auth flow"        # Natural language search
@@ -82,7 +84,7 @@ tldr slice src/processor.py process_data 42 --var result # Track specific variab
 ### Codebase Analysis
 
 ```bash
-tldr calls src/ --lang python           # Cross-file call graph
+tldr calls src/ --lang typescript       # Cross-file call graph
 tldr impact process_data src/ --depth 5 # Who calls this function?
 tldr dead src/ --entry main cli test_   # Find unreachable code
 tldr arch src/                          # Detect architectural layers
@@ -120,7 +122,7 @@ tldr change-impact --run                # Actually run affected tests
 | Reverse deps | `tldr impact func` | - |
 | Complexity analysis | `tldr cfg file func` | - |
 | Variable tracking | `tldr dfg file func` | - |
-| Natural language query | `tldr semantic search` | - |
+| Natural language query | `tldr semantic search` (needs an index; none here) | Grep |
 
 ---
 
@@ -228,13 +230,13 @@ tldr change-impact [files...]       # Find tests affected by changes
 
 ## Languages
 
-Supports: `python`, `typescript`, `go`, `rust`
+Supports: `python`, `typescript`, `javascript`, `go`, `rust`. `structure` scans `.js` but no `.mjs`; `extract` and `search` read `.mjs`.
 
 ## Example Workflow
 
 ```bash
 # 1. See project structure
-tldr tree src/ --ext .py
+tldr tree src/ --ext .ts
 
 # 2. Find relevant code
 tldr search "process_data" src/
@@ -278,13 +280,13 @@ Analyzes call patterns to detect:
 
 ### Import Analysis
 ```bash
-tldr imports <file> [--lang python]
+tldr imports <file> [--lang <lang>]
 ```
 Parses all import statements from a file. Returns JSON with module names, imported names, aliases.
 
 ### Reverse Import Lookup
 ```bash
-tldr importers <module> [path] [--lang python]
+tldr importers <module> [path] [--lang <lang>]
 ```
 Finds all files that import a given module. Complements `tldr impact` which tracks function *calls* - this tracks *imports*.
 

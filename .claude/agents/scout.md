@@ -24,10 +24,15 @@ If no path is named, start from the current working directory.
 
 ## Search order
 
-1. `Grep` and `Glob`. Set `glob` or `path` so the search is narrow.
-2. `tldr` through Bash, for structure, calls and impact. Example: `tldr structure <dir>`.
-3. `rg` through Bash, with `-g '!node_modules' -g '!dist' -g '!archive' -g '!.venv'`.
-4. `Read` only the files that the search names.
+Pick the first step by the question. Every `tldr` call passes an explicit `--lang`.
+
+1. Who calls X, who imports X, what breaks: `tldr impact`, `tldr importers` or `tldr change-impact --git`. Then `Read` the 2 to 4 files it names.
+2. Literal text, file names, config keys, and any `.mjs`, `.md` or `.json` content: `Grep` and `Glob`. Set `glob` or `path` so the search is narrow. For one `.mjs` file `tldr extract <file>` or `tldr search` also work.
+3. Structure of a folder: `tldr structure <dir> --lang <lang>` for `.ts`, `.js`, `.py`, `.go` or `.rs` files only. It scans no `.mjs` file: use `tldr tree --ext .mjs` or `Grep`.
+4. `rg` through Bash, with `-g '!node_modules' -g '!dist' -g '!archive' -g '!.venv'`.
+5. `Read` only the files that the search names.
+
+An empty `tldr` result is not absence. Confirm with `Grep` on the same paths before you report absent.
 
 ## Budget
 
@@ -53,4 +58,4 @@ End the final message with exactly one fenced JSON block:
 - If the task prompt names a JSON shape, return that shape and add `status` and `not_searched` to it.
 - Otherwise use these four keys exactly: `status`, `answer`, `facts`, `not_searched`.
 - Every fact has a `file:line` anchor. If you have no anchor, do not list the fact.
-- Status `complete` with empty `facts` means "confirmed absent". Name every searched location in `answer`.
+- Status `complete` with empty `facts` means "confirmed absent", and only after `Grep` ran on the same paths. Name every searched location in `answer`.
