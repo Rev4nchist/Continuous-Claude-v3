@@ -358,5 +358,6 @@ describe('part A: gold ids in the id list (card coord-content-scan-followups, it
     assert.equal(bad.out, '');
     assert.ok(!fs.existsSync(log), 'a file was written after exit 3');
     assert.ok(!bad.err.includes(GOLD_SHA));
+    assert.ok(bad.err.includes('a listed id reached the output'), 'exit 3 came from a list-read failure, not the id match');
   });
 });
