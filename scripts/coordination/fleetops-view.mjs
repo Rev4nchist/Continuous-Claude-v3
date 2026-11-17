@@ -17,7 +17,6 @@ export const TZ = 'America/Chicago';
 export const OLD_DAYS = 7;
 export const CUT = Object.freeze({ title: 60, goal: 90, holder: 40, name: 40 });
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const SPARK = '▁▂▃▄▅▆▇█';
 const NEVER_EDGES = Object.freeze([1, 3, 7]);
 const NEVER_LABELS = Object.freeze(['Under 1 d', '1–3 d', '3–7 d', '7 d or more']);
 const FOLD_MIN = 3;
@@ -43,8 +42,13 @@ export function cstDayDiff(fromIso, toIso) {
   return Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86400000);
 }
 
-/** One space between words; no zero-width character (U+200B-200D, U+2060, U+FEFF, U+00AD), so an id split by one is whole again. */
-const clean = (s) => String(s ?? '').replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, '').replace(/\s+/g, ' ').trim();
+/** The invisible characters: every Default_Ignorable_Code_Point (zero-width, LRM, tag characters, variation selectors, soft hyphen) and the bidi controls. */
+export const INVISIBLE = new RegExp('[\\p{Default_Ignorable_Code_Point}\\u202a-\\u202e\\u2066-\\u2069]', 'gu');
+/**
+ * One space between words. NFKC first (a fullwidth "#\uff14\uff12\uff14\uff12" becomes "#4242"), then the invisible characters are stripped, so an id split by one is
+ * whole again and the mask can see it.
+ */
+const clean = (s) => String(s ?? '').normalize('NFKC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
 const dayLabel = (iso) => { const p = cstParts(iso); return `${p.d} ${MONTHS[p.m - 1]}`; };
 const ymdLabel = (ymd) => { const [, m, d] = String(ymd).split('-'); return `${+d} ${MONTHS[+m - 1]}`; };
 const stampLabel = (ms) => { const p = cstParts(new Date(ms).toISOString()); return `${p.wd} ${p.d} ${MONTHS[p.m - 1]}, ${p.hh}:${p.mm} ${p.tz}`; };
@@ -87,7 +91,7 @@ function makeCtx(files, ids) {
 function askRow(l, c) {
   const age = c.age(l.dave_ask_at);
   return {
-    title: c.title(l.title), id: c.id(l.id), project: c.project(l.project), band: l.band ?? null, state: clean(l.state),
+    title: c.title(l.title), id: c.id(l.id), project: c.project(l.project), band: l.band == null ? null : c.mask(l.band), state: c.mask(l.state),
     p0: l.band === 'P0', asked: c.day(l.dave_ask_at), askedAt: l.dave_ask_at, age, old: age > OLD_DAYS,
   };
 }
@@ -110,12 +114,6 @@ function buildAsks(lanes, c) {
   };
 }
 
-function sparkOf(values) {
-  const lo = Math.min(...values);
-  const hi = Math.max(...values);
-  return values.map((v) => SPARK[hi === lo ? 3 : Math.round(((v - lo) / (hi - lo)) * 7)]).join('');
-}
-
 /** The calendar day `n` days before the 'YYYY-MM-DD' day `day` (date arithmetic only: no time zone). */
 function dayMinus(day, n) {
   const [y, m, d] = day.split('-').map(Number);
@@ -135,7 +133,7 @@ function buildPile(snaps, c) {
   const open = s.map((r) => r.open);
   return {
     count: s.length, sincePeak: open[open.length - 1] - Math.max(...open), span: (Date.parse(s[s.length - 1].day) - Date.parse(s[0].day)) / 86400000, from: open[0], to: open[open.length - 1], change: open[open.length - 1] - open[0], min: Math.min(...open), max: Math.max(...open),
-    spark: sparkOf(open), first: ymdLabel(s[0].day), last: ymdLabel(s[s.length - 1].day), partialDay: s[s.length - 1].day === c.meta.today,
+    first: ymdLabel(s[0].day), last: ymdLabel(s[s.length - 1].day), partialDay: s[s.length - 1].day === c.meta.today,
     days: s.map((r, i) => ({ label: ymdLabel(r.day), open: r.open, change: i === 0 ? null : r.open - s[i - 1].open })),
   };
 }
@@ -146,10 +144,9 @@ function buildNever(lanes, c) {
   for (const l of never) counts[NEVER_EDGES.filter((e) => c.age(l.created_at) >= e).length] += 1;
   const top = new Map();
   for (const l of never) top.set(c.project(l.project), (top.get(c.project(l.project)) ?? 0) + 1);
-  const peak = Math.max(1, ...counts);
   return {
     total: never.length, open: lanes.length, old: counts[3],
-    buckets: counts.map((n, i) => ({ label: NEVER_LABELS[i], count: n, width: n ? Math.max(1, Math.round((n / peak) * 20)) : 0, old: i === 3 })),
+    buckets: counts.map((n, i) => ({ label: NEVER_LABELS[i], count: n, old: i === 3 })),
     top: [...top].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 4).map(([name, count]) => ({ name, count })),
   };
 }
@@ -159,7 +156,7 @@ function buildWip(lanes, c) {
   const rows = lanes.filter((l) => l.held).map((l) => {
     const lapsed = Boolean(l.lease_expires_at) && Date.parse(l.lease_expires_at) < now;
     return {
-      title: c.title(l.title), id: c.id(l.id), project: c.project(l.project), goal: l.goal ? c.goal(l.goal) : '', holder: l.holder ? c.holder(l.holder) : '', state: clean(l.state),
+      title: c.title(l.title), id: c.id(l.id), project: c.project(l.project), goal: l.goal ? c.goal(l.goal) : '', holder: l.holder ? c.holder(l.holder) : '', state: c.mask(l.state),
       lapsed, leaseAt: l.lease_expires_at ?? '', lapsedOn: lapsed ? c.day(l.lease_expires_at) : '', lapsedDays: lapsed ? c.age(l.lease_expires_at) : 0,
     };
   });

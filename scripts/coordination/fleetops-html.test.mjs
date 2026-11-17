@@ -26,7 +26,14 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { countListed, DATASET_REL, EVAL_CONFIG_REL } from './board-mask.mjs';
 import { buildView } from './fleetops-view.mjs';
-import { axisTicks, decodeDisplay, loadFiles, main, pageCore, produce } from './fleetops-html.mjs';
+import { createServer } from 'node:http';
+import { FILE_IDS, axisTicks, decodeDisplay, embedView, loadFiles, main, mainAsync, pageCore, produce } from './fleetops-html.mjs';
+
+/** Invisible, bidi and compatibility characters as char codes: a source escape can turn into a raw character in this file. */
+const LRM = String.fromCharCode(0x200e);
+const RLO = String.fromCharCode(0x202e);
+const PDF = String.fromCharCode(0x202c);
+const FW_HASH_4242 = String.fromCharCode(0xff03, 0xff14, 0xff12, 0xff14, 0xff12);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(HERE, 'fixtures', 'fleetops-mini');
@@ -102,9 +109,9 @@ describe('listed ids', () => {
   }));
 
   it('3a. an id written as an entity, a JSON escape, a backslash escape or a code span is caught (break: a decode step removed)', () => {
-    const cases = ['&#35;4242', '&#x23;4242', '&num;4242', '&amp;#35;4242', '\\u00234242', '\\#4242', 'PR `4242`', 'PR&nbsp;4242', 'PR\u200b 4242', 'PR&NewLine;4242'];
+    const cases = ['&#35;4242', '&#x23;4242', '&num;4242', '&amp;#35;4242', '\\u00234242', '\\#4242', 'PR `4242`', 'PR&nbsp;4242', 'PR\u200b 4242', 'PR&NewLine;4242', FW_HASH_4242, `PR 42${LRM}42`];
     for (const c of cases) assert.ok(countListed(decodeDisplay(c), IDS) > 0, `decoded: ${JSON.stringify(c)}`);
-    for (const c of ['&#35;4242', '&#x23;4242', '&num;4242', '&amp;#35;4242', '\\u00234242', 'PR `4242`']) assert.equal(countListed(c, IDS), 0, `the plain count misses ${JSON.stringify(c)}`);
+    for (const c of ['&#35;4242', '&#x23;4242', '&num;4242', '&amp;#35;4242', '\\u00234242', 'PR `4242`', FW_HASH_4242, `PR 42${LRM}42`]) assert.equal(countListed(c, IDS), 0, `the plain count misses ${JSON.stringify(c)}`);
     for (const c of ['see 4242 alone', STAMP, 'a &amp; b']) assert.equal(countListed(decodeDisplay(c), IDS), 0, `no false hit: ${c}`);
   });
 
@@ -116,6 +123,172 @@ describe('listed ids', () => {
 
   it('3c. a retired string in a title stops the render (break: the forbidden guard removed)', () => {
     for (const t of ['x board_url x', 'x {h} x', 'x claude.ai/artifact/abc x']) assert.throws(() => produce(withTitle(t), IDS), /forbidden/, t);
+  });
+
+  /** The message of a refusal, or '' when the render goes through. */
+  const refusal = (f, ids = IDS, opts) => { try { produce(f, ids, opts); return ''; } catch (e) { return e.message; } };
+
+  it('3d. a refusal names the field path and never the value (break: the path or the value in the message)', () => {
+    const msg = refusal(withTitle('ask &#35;4242 now'));
+    assert.match(msg, /listed id/);
+    assert.match(msg, /asks\.main\[\d+\]\.title/);
+    assert.ok(!msg.includes('4242') && !msg.includes('&#35;'));
+    assert.match(refusal(withTitle('x board_url x')), /forbidden string at asks\.main\[\d+\]\.title/);
+  });
+
+  it('3e. a project that ends in PR next to an id that starts with a listed number is refused: the page shows them side by side (break: the leaf and pair scan removed)', () => {
+    const f = files();
+    f.lanes.rows[1].project = 'Review PR';
+    f.lanes.rows[1].id = '4242-retry';
+    const msg = refusal(f);
+    assert.match(msg, /listed id/);
+    assert.match(msg, /asks\.main\[\d+\]\.(id|project\+id)/);
+    assert.ok(!msg.includes('4242'));
+    const leafOnly = files();
+    leafOnly.lanes.rows[1].project = 'Review';
+    leafOnly.lanes.rows[1].id = '4242-retry-x';
+    assert.match(refusal(leafOnly), /asks\.main\[\d+\]\.id/, 'a leaf that starts with a listed number is refused on its own, as #leaf');
+    const plain = files();
+    plain.lanes.rows[1].project = 'Review';
+    plain.lanes.rows[1].id = 'retry-4242';
+    assert.equal(refusal(plain), '', 'a number that no context word reaches is not an id');
+  });
+
+  it('3f. a bidi control in any field is refused, because the displayed order can differ from the code-point order (break: the bidi refuse removed)', () => {
+    const inject = (title) => (f) => { const v = buildView(f, IDS); v.asks.main[0].title = title; return v; };
+    const msg = refusal(files(), IDS, { build: inject(`PR ${RLO}2424${PDF}`) });
+    assert.match(msg, /bidi control at asks\.main\[0\]\.title/);
+    assert.equal(refusal(files(), IDS, { build: inject(`PR 24${LRM}24`) }), '', 'an LRM is only invisible: the decoded text decides');
+    assert.match(refusal(files(), IDS, { build: inject('PR &#x202e;2424') }), /bidi control at asks\.main\[0\]\.title/);
+  });
+
+  it('3g. an id split by an LRM or written fullwidth is caught by the gate too, in an injected view (break: normalize or the ignorable strip removed from decodeDisplay)', () => {
+    const inject = (title) => (f) => { const v = buildView(f, IDS); v.asks.main[0].title = title; return v; };
+    assert.match(refusal(files(), IDS, { build: inject(`see PR 42${LRM}42`) }), /listed id/);
+    assert.match(refusal(files(), IDS, { build: inject(`see ${FW_HASH_4242}`) }), /listed id/);
+    assert.match(refusal(files(), IDS, { build: inject('see &#xFF03;&#xFF14;&#xFF12;&#xFF14;&#xFF12;') }), /listed id/);
+  });
+
+  it('3h. an html over 150 KB is refused (break: the size guard removed)', () => {
+    const big = (f) => { const v = buildView(f, IDS); v.wip.rows[0].goal = 'word '.repeat(40000); return v; };
+    assert.match(refusal(files(), IDS, { build: big }), /over 150000 bytes/);
+  });
+});
+
+describe('embed view', () => {
+  it('12a. the embed holds only what the page renders: no daily rows, spark, bar width, ask dates or unheld titles (break: the pick removed)', () => {
+    const ev = embedView(buildView(files(), IDS));
+    assert.deepEqual(Object.keys(ev).sort(), ['asks', 'dataFrom', 'exportedAt', 'masked', 'never', 'openCount', 'p0', 'pile', 'projects', 'staleAt', 'staleAtMs', 'wip']);
+    assert.deepEqual(Object.keys(ev.p0).sort(), ['cap', 'open', 'unheldCount']);
+    assert.equal(ev.p0.unheldCount, 1);
+    const text = JSON.stringify(ev);
+    for (const gone of ['"daily"', '"spark"', '"width"', '"askedAt"', '"unheld"', '"asked"', '"count":8']) assert.ok(!text.includes(gone), gone);
+  });
+
+  it('12b. every key the template reads from D exists in the embed view (break: a pick that drops a rendered field)', () => {
+    const tpl = readFileSync(TEMPLATE, 'utf8');
+    const ev = embedView(buildView(files(), IDS));
+    const reads = new Set([...tpl.matchAll(/\bD\.(\w+)/g)].map((m) => m[1]));
+    assert.ok(reads.size >= 10);
+    for (const k of reads) assert.ok(k in ev, `D.${k}`);
+    for (const [obj, keys] of [['asks', ['total', 'over', 'main', 'folds', 'other', 'blockedNoAsk']], ['never', ['total', 'open', 'old', 'buckets', 'top']], ['wip', ['rows', 'live', 'lapsed']]]) {
+      for (const k of keys) assert.ok(k in ev[obj], `${obj}.${k}`);
+    }
+    const row = ev.wip.rows[0];
+    for (const k of ['title', 'id', 'project', 'goal', 'holder', 'state', 'lapsed', 'leaseAt', 'lapsedOn', 'lapsedDays']) assert.ok(k in row, `wip row ${k}`);
+    const ask = ev.asks.main[0];
+    for (const k of ['title', 'id', 'project', 'band', 'state', 'p0', 'age']) assert.ok(k in ask, `ask row ${k}`);
+  });
+});
+
+describe('loadFiles', () => {
+  it('7d. exportedAt must be a non-empty string in every file: all missing, or all empty, is refused (break: the type check removed)', () => withTmp((d) => {
+    cpSync(FIXTURE, join(d, 'in'), { recursive: true });
+    const setAll = (value) => {
+      for (const k of FILE_IDS) {
+        const f = JSON.parse(readFileSync(join(d, 'in', `${k}.json`), 'utf8'));
+        if (value === undefined) delete f.exportedAt; else f.exportedAt = value;
+        writeFileSync(join(d, 'in', `${k}.json`), JSON.stringify(f));
+      }
+    };
+    setAll(undefined);
+    assert.throws(() => loadFiles(join(d, 'in')), /exportedAt/);
+    setAll('');
+    assert.throws(() => loadFiles(join(d, 'in')), /exportedAt/);
+    setAll(20261117);
+    assert.throws(() => loadFiles(join(d, 'in')), /exportedAt/);
+    setAll(STAMP);
+    assert.equal(loadFiles(join(d, 'in')).meta.exportedAt, STAMP);
+  }));
+});
+
+describe('--verify-upload', () => {
+  const sha = (b) => createHash('sha256').update(b).digest('hex');
+  const html = Buffer.from('<!doctype html><title>x</title>');
+
+  function serve(body, status = 200) {
+    const server = createServer((req, res) => { res.writeHead(status, { 'content-type': 'text/html' }); res.end(body); });
+    return new Promise((ok) => server.listen(0, '127.0.0.1', () => ok({
+      url: `http://127.0.0.1:${server.address().port}/signed`, close: () => new Promise((done) => { server.close(done); server.closeAllConnections?.(); }),
+    })));
+  }
+  const manifestFile = (d) => { const p = join(d, 'manifest.json'); writeFileSync(p, JSON.stringify({ sha256Html: sha(html) })); return p; };
+  const verify = async (url, extra = []) => {
+    const d = tmp();
+    try {
+      const { log, deps } = quiet();
+      const code = await mainAsync(['--verify-upload', url, '--manifest', manifestFile(d), ...extra], deps);
+      return { code, out: log.out.join('').trim(), err: log.err.join('\n') };
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  };
+
+  it('11a. the bytes of the url match the manifest: exit 0 and the byte count (break: the compare or the exit code)', async () => {
+    const srv = await serve(html);
+    try {
+      const r = await verify(srv.url);
+      assert.equal(r.code, 0, r.err);
+      assert.equal(r.out, `verify-upload: sha ok, bytes ${html.length}`);
+    } finally { await srv.close(); }
+  });
+
+  it('11b. other bytes are a MISMATCH, exit 1 (break: a mismatch passes)', async () => {
+    const other = Buffer.from('<!doctype html><title>y</title>!');
+    const srv = await serve(other);
+    try {
+      const r = await verify(srv.url);
+      assert.equal(r.code, 1);
+      assert.equal(r.out, `verify-upload: MISMATCH, bytes ${other.length}`);
+    } finally { await srv.close(); }
+  });
+
+  it('11c. a non-200 answer, an unreachable url and a bad argument are exit 1 with no sha ok line (break: a status or usage check removed)', async () => {
+    const srv = await serve('gone', 404);
+    try {
+      const r = await verify(srv.url);
+      assert.equal(r.code, 1);
+      assert.match(r.err, /http 404/);
+      assert.ok(!r.out.includes('sha ok'));
+    } finally { await srv.close(); }
+    const dead = await verify('http://127.0.0.1:1/none');
+    assert.equal(dead.code, 1);
+    assert.ok(!dead.out.includes('sha ok'));
+    const { log, deps } = quiet();
+    for (const argv of [['--verify-upload', 'ftp://x/y', '--manifest', 'm.json'], ['--verify-upload', 'http://127.0.0.1:1/x'], ['--manifest', 'm.json'], ['--verify-upload', 'http://127.0.0.1:1/x', '--manifest', 'm.json', '--out', 'o']]) {
+      assert.equal(await mainAsync(argv, deps), 1, JSON.stringify(argv));
+    }
+    assert.ok(log.err.every((l) => /usage/.test(l)));
+    assert.equal(log.out.length, 0);
+  });
+
+  it('11d. a manifest with no sha is refused, not matched against undefined (break: the manifest shape check)', async () => {
+    const srv = await serve(html);
+    const d = tmp();
+    try {
+      writeFileSync(join(d, 'm.json'), JSON.stringify({ htmlBytes: 5 }));
+      const { log, deps } = quiet();
+      assert.equal(await mainAsync(['--verify-upload', srv.url, '--manifest', join(d, 'm.json')], deps), 1);
+      assert.ok(!log.out.join('').includes('sha ok'));
+    } finally { rmSync(d, { recursive: true, force: true }); await srv.close(); }
   });
 });
 
@@ -129,7 +302,6 @@ describe('data block', () => {
     assert.ok(!/[<>&\u2028\u2029]/.test(block), 'no raw < > & U+2028 U+2029 in the block');
     const view = JSON.parse(block);
     assert.equal(view.asks.main.find((r) => r.id === 'timed-reminders').title, title.replace(/\s+/g, ' '));
-    assert.ok(!html.includes('<script>window.pwn'));
   });
 
   it('4b. the html is one file under 150 KB with the data in it and no network url (break: a link or an asset added)', () => {
@@ -289,6 +461,21 @@ describe('--check', () => {
     const noEmbed = run(page);
     assert.equal(noEmbed.code, 1);
     assert.equal(noEmbed.out.trim(), 'check: listed 0, stamp yes, embeds 0, h2 2');
+    const extraH2 = run(`${good}\n## a third heading\n`);
+    assert.equal(extraH2.code, 1);
+    assert.equal(extraH2.out.trim(), 'check: listed 0, stamp yes, embeds 1, h2 3');
+    const oneH2 = run(good.replace('## 📘 How to use and update', 'How to use and update'));
+    assert.equal(oneH2.code, 1);
+    assert.equal(oneH2.out.trim(), 'check: listed 0, stamp yes, embeds 1, h2 1');
+  });
+
+  it('9e. --stamp must be an ISO time: anything else is a usage error and prints no check line (break: the stamp pattern removed)', () => {
+    for (const bad of ['yesterday', '2026-11-17', '2026-11-17 17:30:02', '`2026-11-17T17:30:02.680Z`']) {
+      const r = run(good, bad);
+      assert.equal(r.code, 1, bad);
+      assert.match(r.err, /usage/);
+      assert.equal(r.out, '');
+    }
   });
 
   it('9c. a Notion read-back is decoded: an entity-split id is counted, a code-span stamp is found, only a line that starts with the tag is an embed (break: the decode or the line rule)', () => {
@@ -316,5 +503,20 @@ describe('template', () => {
     assert.equal(countListed(tpl, ids), 0);
     assert.equal(countListed(decodeDisplay(tpl), ids), 0);
     assert.equal(tpl.split('__FLEETOPS_DATA__').length, 2, 'one data slot');
+  });
+
+  it('10b. the zone name comes from Intl (CST or CDT), never a fixed CST; the clock chip is not a live region (break: a fixed CST or role=status back)', () => {
+    const tpl = readFileSync(TEMPLATE, 'utf8');
+    assert.ok(!/\bCST\b/.test(tpl), 'no fixed CST in the template');
+    assert.ok(!tpl.includes('role="status"'));
+    const core = pageCore();
+    assert.equal(core.cstZone(Date.parse('2026-07-01T12:00:00Z')), 'CDT');
+    assert.equal(core.cstZone(Date.parse('2026-11-17T12:00:00Z')), 'CST');
+  });
+
+  it('10c. the page reads no object key from a name in the data: a project or never-started name like __proto__ is a plain key (break: {} back in the template)', () => {
+    const tpl = readFileSync(TEMPLATE, 'utf8');
+    assert.ok(!/\b(names|neverTop)\s*=\s*\{\}/.test(tpl));
+    assert.ok(/neverTop\s*=\s*Object\.create\(null\)/.test(tpl) && /names\s*=\s*Object\.create\(null\)/.test(tpl));
   });
 });

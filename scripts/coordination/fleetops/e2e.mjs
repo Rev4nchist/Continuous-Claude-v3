@@ -6,7 +6,8 @@
  *   <outdir> holds fleetops.html and manifest.json of a real render (fleetops-html.mjs --out <outdir>). The script also renders the fixture
  *   into <outdir>/fixture (a fake id root), then opens each page at 1280, 760, 430 and 390 px, light and dark, with the clock at export + 30 min.
  *   Each page opens twice: inside an iframe sandbox="allow-scripts" (like the Notion embed; 500 px tall at 760 and up, 900 px below) and direct.
- * Saves the screenshots and results.json (counts only, no page text) in <outdir>. Exit 1 when a check fails.
+ * Saves the screenshots and results.json in <outdir>. results.json holds numbers, the clock chip text, the pile subtitle and the lease texts; it holds
+ * no lane title, goal, holder or id. Exit 1 when a check fails.
  * Checks: no console error, no failed request, no horizontal overflow, the 5 tiles inside the first 500 px at 760 and 1280, 4 ask rows whose bottom
  * edge is at or above 500 px at 760, no two chart texts that overlap, and the 3 clock states (snapshot, behind, stale).
  */

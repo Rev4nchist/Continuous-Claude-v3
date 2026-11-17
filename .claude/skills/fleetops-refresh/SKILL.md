@@ -20,7 +20,7 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
 
 ## Either account
 
-The page lives in Dave's Notion workspace, not in a claude.ai account. The `notion` MCP server of this machine reaches it from a session on either claude.ai account. It is set in user scope (`~/.claude.json`), not in `.claude/machine-config/mcp.json`. Use only its tools `notion-fetch`, `notion-create-attachment` and `notion-update-page`. Never use the claude.ai Notion connector: it belongs to one claude.ai account. If the `notion` server is missing in this session, stop and report it.
+The page lives in Dave's Notion workspace, not in a claude.ai account. The `notion` MCP server of this machine reaches it from a session on either claude.ai account. It is set in user scope (`~/.claude.json`), not in `.claude/machine-config/mcp.json`. Use only its tools `notion-fetch`, `notion-create-attachment`, `notion-update-page` and `notion-get-file-download-urls`. Never use the claude.ai Notion connector: it belongs to one claude.ai account. If the `notion` server is missing in this session, stop and report it.
 
 ## Rules
 
@@ -29,7 +29,7 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
 - Lane titles, lane goals and holder names go on the page (Dave decided).
 - A refresh changes data only. A design change goes through the template in `scripts/coordination/fleetops/` and a pull request.
 - Never pass `allow_deleting_content: true`. If a write asks for it, stop and report: someone added a child page or database.
-- Use only `node`, the Read and Write tools, and the three `notion` server tools above. Put no credential anywhere.
+- Use only `node`, the Read and Write tools, and the four `notion` server tools above. Put no credential anywhere.
 
 ## Steps
 
@@ -54,6 +54,7 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
    - Read `out/manifest.json`. Keep `exportedAt`.
 5. Preflight. `notion-fetch` the page id. If the call fails, stop and report "Notion MCP not connected to the FleetOps workspace". Write nothing.
 6. Upload and write, in this one turn (an upload expires after 1 hour if it is not placed).
+   0. Read `refresh.json` again. If its `key` is not the manifest `exportedAt`, a newer export ran: start again from step 3 with new copies. This keeps an older render from overwriting a newer one.
    1. Read `out/fleetops.html` with the Read tool and `allow_large: true`, so the whole file comes back in one read (it is about 55 KB). Call `notion-create-attachment` with `content` = that text unchanged and `filename` = `FleetOps live board.html`. Keep the `file-upload://<id>` it returns.
       - Compare the returned `content_length` with `htmlBytes` in `out/manifest.json`. If they differ, the copy is not exact: do not place the upload (it expires by itself), stop and report.
    2. Read `out/page.md`. Replace the single line `{{FLEETOPS_EMBED}}` with `<embed source="file-upload://<id>" />`. Change nothing else.
@@ -61,14 +62,17 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
 7. Read back.
    1. `notion-fetch` the page id again. The result is JSON: take its `text` field as plain text (real line breaks and quotes, not `\n` and `\"`). Save the part between `<content>` and `</content>` to `<your scratchpad folder>/out/readback.md` with the Write tool.
    2. `node R/scripts/coordination/fleetops-html.mjs --check <your scratchpad folder>/out/readback.md --stamp <exportedAt>`
-      It prints `check: listed N, stamp yes|no, embeds M, h2 K` and exits 0 only when no listed id is in the decoded text, the stamp is present and the embed is there.
-   3. Fail with a listed id above 0: this is a leak. Replace the page body at once with the single line `FleetOps is being rebuilt.` Tell Dave the page history in Notion still holds the leaked version and that he must remove it there. Leave the pending flag on. Stop.
-   4. Fail for another reason: leave the pending flag on and report what differed. Notion keeps the page history; Dave can restore an older version.
+      It prints `check: listed N, stamp yes|no, embeds M, h2 K` and exits 0 only when no listed id is in the decoded text, the stamp is present, the embed is there and both sections are there.
+   3. Check the uploaded file itself. Call `notion-get-file-download-urls` with the `notion-file-block://...` source of the embed from the read-back. Then run:
+      `node R/scripts/coordination/fleetops-html.mjs --verify-upload <download url> --manifest <your scratchpad folder>/out/manifest.json`
+      It prints `verify-upload: sha ok|MISMATCH, bytes N` and exits 0 only when the uploaded file is byte-identical to the rendered file. A MISMATCH means the copy into the upload was not exact: run steps 6 and 7 again once. A second MISMATCH: follow step 7.5.
+   4. Fail with a listed id above 0: this is a leak. Replace the page body at once with the single line `FleetOps is being rebuilt.` Tell Dave the page history in Notion still holds the leaked version and that he must remove it there. Leave the pending flag on. Stop.
+   5. Fail for another reason: leave the pending flag on and report what differed. Notion keeps the page history; Dave can restore an older version.
 8. Clear the pending flag. Only when step 7 passed. Use the `key` from your last read of `refresh.json`.
    `node R/scripts/coordination/fleetops-auto-tick.mjs --record-upload <your scratchpad folder>`
-   - It exits 1 and stores nothing when a copy has an `exportedAt` that is not the `key` of `refresh.json`. A newer export ran: start again from step 1.
+   - It exits 1 and stores nothing when a copy has an `exportedAt` that is not the `key` of `refresh.json`. A newer export ran while you wrote: the page may now hold older data than another session placed. Start again from step 3 with new copies (not step 1), so the newest export ends on the page.
    `node R/scripts/coordination/export-dash-data.mjs --clear-refresh <key>`
-   - A key mismatch means a newer export ran. Start again from step 1.
+   - A key mismatch means a newer export ran. Start again from step 3 with new copies.
    - The message `export lock is held` means an export runs now. Wait 1 minute and run this step again.
 9. Report. Give the export time in CST, the masked count from step 4, the check line from step 7, and the page link.
 
@@ -77,4 +81,4 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
 - Docker is down in step 2: the old data stays on the page. Report it.
 - The `notion` server is missing in this session: report it. Do not use another Notion connector.
 - The upload worked and the page write failed: the unplaced upload expires by itself in 1 hour. Report it.
-- The write worked and the read-back failed: follow step 7.3 or 7.4. Never clear the flag.
+- The write worked and the read-back failed: follow step 7.4 or 7.5. Never clear the flag.

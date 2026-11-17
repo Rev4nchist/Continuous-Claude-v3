@@ -70,6 +70,46 @@ describe('listed ids', () => {
   });
 });
 
+/** Invisible and bidi characters, written as char codes: a source escape can turn into a raw character in this file. */
+const LRM = String.fromCharCode(0x200e);
+const RLO = String.fromCharCode(0x202e);
+const PDF = String.fromCharCode(0x202c);
+const TAG_A = String.fromCodePoint(0xe0041);
+const fullwidth = (s) => [...s].map((c) => (c === '#' ? String.fromCharCode(0xff03) : /\d/.test(c) ? String.fromCharCode(0xff10 + Number(c)) : c)).join('');
+
+describe('invisible, bidi and compatibility characters', () => {
+  const titleOf = (title) => viewOf(withTitle(title)).asks.main.find((r) => r.id === 'timed-reminders').title;
+  const withTitle = (title) => { const f = files(); f.lanes.rows[1].title = title; return f; };
+
+  it('2c. an id split by a left-to-right mark is masked (break: the Default_Ignorable strip is only the zero-width list)', () => {
+    assert.equal(titleOf(`see PR 42${LRM}42 now`), 'see PR masked-id now');
+  });
+
+  it('2d. a fullwidth id is masked: NFKC turns it into #4242 (break: normalize removed from clean)', () => {
+    assert.equal(fullwidth('#4242'), String.fromCharCode(0xff03, 0xff14, 0xff12, 0xff14, 0xff12));
+    assert.equal(titleOf(`see ${fullwidth('#4242')} now`), 'see #masked-id now');
+  });
+
+  it('2e. a bidi override leaves the view: the title shows the plain code-point order and holds no control (break: the bidi range removed)', () => {
+    const t = titleOf(`see PR ${RLO}2424${PDF} now`);
+    assert.equal(t, 'see PR 2424 now');
+    assert.ok(![...t].some((c) => [0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069].includes(c.codePointAt(0))));
+  });
+
+  it('2f. a tag character (U+E0000 range) and a variation selector are stripped (break: the \\p{Default_Ignorable_Code_Point} class removed)', () => {
+    assert.equal(titleOf(`see PR 42${TAG_A}42 now`), 'see PR masked-id now');
+    assert.equal(titleOf(`a${String.fromCharCode(0xfe0f)}b`), 'ab');
+  });
+
+  it('2g. band and state are masked too (break: band or state shown without c.mask)', () => {
+    const f = files();
+    f.lanes.rows[4].band = 'P1 #4242';
+    f.lanes.rows[4].state = 'PR 4242';
+    const row = viewOf(f).asks.main.find((r) => r.id === 'old-ask-lane');
+    assert.deepEqual([row.band, row.state], ['P1 #masked-id', 'PR masked-id']);
+  });
+});
+
 describe('ages', () => {
   it('3. a 23:30 CST ask is 11 d, a DST change does not move a day (break: UTC date diff)', () => {
     assert.equal(cstDayDiff('2026-11-07T05:30:00.000Z', '2026-11-17T17:30:02.680Z'), 11);

@@ -235,7 +235,7 @@ button,select{font:inherit;color:inherit}
   <noscript>FleetOps needs scripts. Open the board in the Notion app or in a browser.</noscript>
   <header class="top">
     <div class="brand"><h1>FleetOps</h1><span class="sub" id="openLine"></span></div>
-    <div class="clock"><span id="dataFrom"></span><span class="state" id="state" role="status"><span class="dot" aria-hidden="true"></span><span id="stateWord"></span></span></div>
+    <div class="clock"><span id="dataFrom"></span><span class="state" id="state"><span class="dot" aria-hidden="true"></span><span id="stateWord"></span></span></div>
   </header>
 
   <section class="strip" id="strip" aria-label="Key numbers"></section>
@@ -250,7 +250,7 @@ button,select{font:inherit;color:inherit}
       <div class="pb" id="asks"></div>
     </section>
     <section class="panel" aria-labelledby="h-wip">
-      <div class="ph"><h2 id="h-wip">In progress</h2><span class="count" id="wipCount"></span><span class="aside">Lease times in CST</span></div>
+      <div class="ph"><h2 id="h-wip">In progress</h2><span class="count" id="wipCount"></span><span class="aside" id="leaseAside"></span></div>
       <div class="pb" id="wip"></div>
     </section>
   </div>
@@ -295,6 +295,13 @@ button,select{font:inherit;color:inherit}
   var BEHIND_MS = 90 * 60 * 1000;
   var cstClock = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Chicago", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   function cstHM(ms){ return isNaN(ms) ? "" : cstClock.format(ms); }
+  /* The Chicago zone name at a time, from Intl (the winter or the summer name). */
+  var zoneFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", timeZoneName: "short" });
+  function cstZone(ms){
+    var p = zoneFmt.formatToParts(ms);
+    for (var i = 0; i < p.length; i++) if (p[i].type === "timeZoneName") return p[i].value;
+    return "CT";
+  }
   function plural(n, one, many){ return n + " " + (n === 1 ? one : (many || one + "s")); }
   /* The data state at the clock `now` (ms): snapshot (under 90 min), behind (to the stale time), stale (past it). */
   function clockState(now, exportedMs, staleAtMs){
@@ -365,6 +372,7 @@ button,select{font:inherit;color:inherit}
   function renderHeader(){
     $("openLine").textContent = plural(D.openCount, "open lane");
     $("dataFrom").textContent = "Data from " + D.dataFrom;
+    $("leaseAside").textContent = "Lease times in " + cstZone(Date.parse(D.exportedAt));
     var st = clockState(NOW, Date.parse(D.exportedAt), D.staleAtMs);
     var text = clockText(st, D.staleAt);
     $("state").className = "state " + (st.kind === "stale" ? "stale" : st.kind === "behind" ? "behind" : "live");
@@ -421,13 +429,13 @@ button,select{font:inherit;color:inherit}
       for (var i = 0; i < Math.max(Z.cap, Z.open); i++){ var c = h("i", ""); if (i < Z.open) c.className = i < Z.cap ? "on" : "over"; m.appendChild(c); }
     }
     var over = Z.cap != null && Z.open > Z.cap;
-    var p0note = Z.unheld.length ? [{ t: plural(Z.unheld.length, "P0") + " with no holder", cls: "ink-act" }] : [{ t: "All P0 lanes held", cls: "ink-ok" }];
+    var p0note = Z.unheldCount ? [{ t: plural(Z.unheldCount, "P0") + " with no holder", cls: "ink-act" }] : [{ t: "All P0 lanes held", cls: "ink-ok" }];
     s.appendChild(tile(over ? "act" : "", "P0 lanes", Z.open, Z.cap != null ? "of " + Z.cap + (over ? ", over cap" : "") : "", notes(p0note), m));
   }
 
   /* ---------- filter ---------- */
   function renderFilter(){
-    var sel = $("proj"), names = {};
+    var sel = $("proj"), names = Object.create(null);
     D.projects.forEach(function(p){ names[p.name] = 1; });
     allAsks().forEach(function(r){ if (r.project) names[r.project] = 1; });
     D.wip.rows.forEach(function(r){ if (r.project) names[r.project] = 1; });
@@ -593,7 +601,7 @@ button,select{font:inherit;color:inherit}
   function parseEnded(s){ var m = /^(\d+) of (\d+)$/.exec(s || ""); return m ? { a: +m[1], b: +m[2] } : null; }
   function renderProjects(){
     var box = $("projects"); box.textContent = "";
-    var asks = allAsks(), neverTop = {}; D.never.top.forEach(function(p){ neverTop[p.name] = p.count; });
+    var asks = allAsks(), neverTop = Object.create(null); D.never.top.forEach(function(p){ neverTop[p.name] = p.count; });
     var list = D.projects.filter(function(p){ return !filter || p.name === filter; });
     $("projCount").textContent = plural(D.projects.length, "project") + ", " + decisions() + " to decide";
     list.forEach(function(p, pi){
@@ -629,7 +637,7 @@ button,select{font:inherit;color:inherit}
 
   function renderFooter(){
     var t = Date.parse(D.exportedAt);
-    $("footer").textContent = "Exported " + cstDay.format(t) + ", " + cstHM(t) + " CST. Goes stale " + D.staleAt + ". " + plural(D.masked, "id") + " masked.";
+    $("footer").textContent = "Exported " + cstDay.format(t) + ", " + cstHM(t) + " " + cstZone(t) + ". Goes stale " + D.staleAt + ". " + plural(D.masked, "id") + " masked.";
   }
 
   renderHeader(); renderStrip(); renderFilter(); renderAsks(); renderWip(); renderPile(); renderNever(); renderProjects(); renderFooter();
