@@ -936,6 +936,15 @@ describe('parseTurnEnd on real answers', () => {
     expect(parsed.ask).toEqual([])
   })
 
+  test('P22b long closing lines (1,900 characters, under the line cap) stay fast, with a long run of dashes, spaces and banned words', () => {
+    const lines = ['None - waiting on ' + 'x '.repeat(900), 'Waiting on ' + 'a-b '.repeat(450), 'Waiting on CI' + ' -'.repeat(900), 'None - waiting on ' + 'you '.repeat(450)]
+    for (const line of lines) {
+      const started = Date.now()
+      parseTurnEnd(`## Next steps\n1. ${line}`)
+      expect(Date.now() - started, line.slice(0, 20)).toBeLessThan(300)
+    }
+  })
+
   test('P23 the instruction text of CLAUDE.md is not a restate', () => {
     const parsed = parseTurnEnd('Restate the ask before non-trivial work. One line: what you will build, where, and where you will stop.')
     expect(parsed.goal).toBeUndefined()

@@ -481,20 +481,24 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
  *     Also "None for the seat". A second sentence after the wait ("None - waiting on CI. I rule on it after") stays an ASK: a false ask is better than a hidden one,
  *     and two review rounds found a new hidden-question hole in each try at a tail grammar. Known limit; the cure is `brief_set` with `ask: []`, not a bigger parser.
  * (b) A bare waiting clause, "(I'm) Waiting on/for X".
- * X is 1 to 80 characters: letters, digits, spaces, an apostrophe, a hash and a hyphen, nothing else (no ( ) / | > . ? ; , ! : and no dash or arrow). It holds no sentence end,
- * no dash separator, no " then ", " and ", " or ", " but ", and never the words you, your, yours or Dave anywhere ("Waiting on Dave's approval" and "Waiting on CI before you
- * approve" ask Dave). White space runs count as one space. A plain line with a symbol ("Waiting on CI (run 12)") is a false question: a false question beats a hidden one.
+ * X is 1 to 80 characters: Latin letters, digits, spaces, an apostrophe, a hash, and a hyphen BETWEEN letters or digits, nothing else (no ( ) / | > . ? ; , ! : and no dash or arrow).
+ * It holds no sentence end, no dash separator and none of the words in WAIT_BAN: a joining word (then, and, or, but, so, if, when, while, unless, until, once, meanwhile, please),
+ * a person (you, yours, yourself, u, y'all, Dave, David, user, owner, operator, human, someone, anyone, his, her) or a request (approval, approve, yes, go-ahead, tap, answer, reply,
+ * decide, decision, choice, permission, confirm, sign off, input). A word ban matches the start of a word ("Daves", "youre"). Text is normalised first: NFKC, white space runs count as one space.
+ * A plain line with a symbol ("Waiting on CI (run 12)") or a banned word ("Waiting on Greptile approval") is a false question: a false question beats a hidden one.
+ * This ban list is not a grammar and is never complete: a free-text wait cannot be proven to ask nothing. The cure is `brief_set` with `ask: []`, which no line text can undo.
  * Anything else stays an ask: "Waiting on CI, then approve PR 12", "None for now. Paste the build log", "None, but review the diff", "None of the options fit".
  * Every part is bounded or anchored, with no nested quantifier: linear on a long line.
  */
-const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s|\b(?:you(?:rs?)?|dave)\b)(?:[\p{L}\p{N}#'’-]|\s)){1,80}`
+const WAIT_BAN = String.raw`\b(?:you|dave|david|u\b|y['’]?all|his\b|her\b|user|owner|operator|human|someone|anyone|approv|yes\b|go-?ahead|tap|answer|repl(?:y|ie)|decid|decision|choice|permission|confirm|sign[- ]?off|input|then\b|and\b|or\b|but\b|so\b|if\b|when\b|while\b|unless\b|until\b|once\b|meanwhile\b|please\b)`
+const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|${WAIT_BAN})(?:[\p{Script=Latin}\p{N}#'’]|\s|(?<=[\p{L}\p{N}])-(?=[\p{L}\p{N}]))){1,80}`
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
 const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
 const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'iu')
 const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}${WAIT_OBJECT}$`, 'iu')
 /** A question mark makes any item an ask, whatever its words. */
 const noAsk = (text: string): boolean => {
-  const whole = text.replace(/\s+/g, ' ').replace(/\.$/, '')
+  const whole = text.normalize('NFKC').replace(/\s+/g, ' ').replace(/\.$/, '')
   return !whole.includes('?') && (LEAD_ITEM.test(whole) || BARE_WAIT.test(whole))
 }
 
@@ -504,7 +508,14 @@ const nextSteps = (lines: string[]): AskItem[] | undefined => {
   if (start < 0) return undefined
   const items: AskItem[] = []
   let none = false
+  // A wrapped item: an indented line right after an item belongs to that item ("1. None - waiting on CI." then "   Then paste the log." is ONE item, an ask).
+  const logical: string[] = []
   for (const raw of lines.slice(start + 1)) {
+    const before = logical[logical.length - 1]
+    if (/^\s+\S/.test(raw) && !ITEM.test(raw) && !/^\s*#{1,6}\s/.test(raw) && before !== undefined && ITEM.test(before)) logical[logical.length - 1] = `${before} ${raw.trim()}`
+    else logical.push(raw)
+  }
+  for (const raw of logical) {
     if (/^\s*#{1,6}\s/.test(raw)) break
     const item = ITEM.exec(raw)
     const text = item ? lineOf(item[1] ?? '') : ''
