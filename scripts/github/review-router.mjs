@@ -86,16 +86,42 @@ export function classify(paths, config) {
 
 // ---------- review band (.claudedocs/2026-11-01-review-matrix.md sections 2.1 to 2.3, option A) ----------
 
-/** Review-engine trust boundary (engine spec 13.4): a change here can change what the review trusts, so it forces CRITICAL.
- *  cursor-review.mjs is the review-tree boundary (AGENT_FILES strip, buildAgentEnv secret strip, prepareReview).
- *  checkpoint.critical is NOT added: it holds the gate files that give the floor (aegis + critic), not the CRITICAL band.
- *  prompt.mjs and context.mjs stay on matrix.control_plane only, so a prompt-tuning PR is not CRITICAL. */
-export const CRITICAL_TRUST_BOUNDARY = ['scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/local-review/record.mjs', 'scripts/github/review-filter.mjs', 'scripts/github/lib/**'];
+const LAND_STEP = 'scripts/github/' + ['land', 'pr'].join('-') + '.ps1';
+
+/** The ONE trust-boundary list (seat ruling D1, card prflow-trust-list), in two parts. No second list elsewhere.
+ *  - engine (engine spec 13.4): a non-test file here forces CRITICAL. cursor-review.mjs is the review-tree boundary (AGENT_FILES
+ *    strip, buildAgentEnv secret strip, prepareReview); backends/** joined 2026-11-17 (card engine-backend-trust-band). prompt.mjs and
+ *    context.mjs stay on matrix.control_plane only, so a prompt-tuning PR is not CRITICAL. lib/** also holds the decision store.
+ *  - tap: forces no band. These files keep Dave's tap at every risk band (D1): the named guard hooks (Dave 2026-11-17: only the named
+ *    guards, not every hook) with the built dist that runs, the decision gate and ledger, the land step, the review router, its
+ *    config, READY and the review-pick record. They do not force CRITICAL: CRITICAL plus a trust file earns a paid CodeRabbit review
+ *    (pr-checkpoint.mjs crTrigger), and Dave's 2026-11-04 rule keeps CodeRabbit scarce (seat ruling 2026-11-17, option A).
+ *  bandOf reports both parts in tapFiles; the prflow cards read tapFiles. checkpoint.critical stays the aegis + critic floor. */
+export const TRUST_BOUNDARY = Object.freeze({
+  engine: Object.freeze([
+    'scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/local-review/record.mjs', 'scripts/github/review-filter.mjs',
+    'scripts/github/lib/**', 'scripts/github/local-review/backends/**',
+  ]),
+  tap: Object.freeze([
+    // named guard hooks: source and built dist
+    '.claude/hooks/src/*-guard.ts', '.claude/hooks/src/pre-pr-gate.ts', '.claude/hooks/dist/*-guard.mjs', '.claude/hooks/dist/pre-pr-gate.mjs',
+    // decision gate and ledger (the store is lib/decisions.mjs, in the engine part through lib/**)
+    '.claude/hooks/src/decision-gate.ts', '.claude/hooks/src/decision-ledger.ts',
+    '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs', 'scripts/github/ship-ask.mjs',
+    // land step
+    LAND_STEP, 'scripts/github/land-recheck.mjs', 'scripts/github/land-none-check.mjs',
+    // review router, its config, READY, the review-pick record
+    'scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', 'scripts/github/pr-checkpoint.mjs',
+  ]),
+});
+/** The engine part: the files that force CRITICAL. The name stays for its importers. */
+export const CRITICAL_TRUST_BOUNDARY = TRUST_BOUNDARY.engine;
 
 const anyGlob = (globs = []) => { const res = globs.map(globToRegExp); return (p) => res.some((re) => re.test(p)); };
 
 /**
- * bandOf(files, config, { labels, r }) -> { band, score, G, C, K, L, labelHigh, trustFiles, gateFiles, securityTier } | null
+ * bandOf(files, config, { labels, r }) -> { band, score, G, C, K, L, labelHigh, trustFiles, tapFiles, gateFiles, securityTier } | null
+ *   tapFiles: the non-test files on either part of TRUST_BOUNDARY (engine or tap), same rename rule. It changes no band.
  *   files: path strings or { filename, previous_filename? } objects. A rename is ONE changed file with two names: it counts once,
  *   and a gate / config / logic test looks at both names (a rename into or out of the control plane counts).
  *   G gate files: non-test files on matrix.control_plane, any extension. C: a non-test review, merge or reviewer config file changed.
@@ -128,11 +154,13 @@ export function bandOf(files, config, { labels = [], r = 0 } = {}) {
   const K = entries.some((names) => hit(names, isLogic)) ? 1 : 0;
   const labelHigh = labels.includes('risk:high');
   const trustFiles = entries.map((names) => hit(names, inTrust)).filter(Boolean);
+  const inTap = anyGlob([...TRUST_BOUNDARY.engine, ...TRUST_BOUNDARY.tap]);
+  const tapFiles = entries.map((names) => hit(names, inTap)).filter(Boolean);
   const L = labelHigh || classify(entries.flat(), config).class === 'r3' || trustFiles.length > 0;
   const gate = m.gate_score.reduce((best, [min, score]) => (G >= min && score > best ? score : best), 0);
   const score = gate + m.weights.config * C + m.weights.code * K + (Number.isFinite(r) && r > 0 ? r : 0);
   const band = L ? 'CRITICAL' : score >= m.bands.high ? 'HIGH' : score >= m.bands.elevated ? 'ELEVATED' : score >= m.bands.mid ? 'MID' : 'LOW';
-  return { band, score, G, C, K, L, labelHigh, trustFiles, gateFiles, securityTier };
+  return { band, score, G, C, K, L, labelHigh, trustFiles, tapFiles, gateFiles, securityTier };
 }
 
 // ---------- credits ----------
