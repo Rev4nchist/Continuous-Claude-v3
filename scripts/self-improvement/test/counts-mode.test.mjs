@@ -86,7 +86,7 @@ test('B4: ask-rate --counts drops the session prefixes, the project folder name 
   assert.ok(r.md.includes('Asks per interactive session'));
 });
 
-test('B5: --counts stops with exit 3 and writes nothing when a listed id stands in the output (a model name, an entrypoint word) or the id list cannot be read', async () => {
+test('B5: --counts stops with exit 3 and writes nothing when a listed id stands in the output (a model name, an entrypoint word) or the id list cannot be read', async (t) => {
   const { DATASET_REL, EVAL_CONFIG_REL } = await import('../../coordination/board-mask.mjs');
   const idRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'counts-ids-'));
   fs.mkdirSync(path.join(idRoot, '.claudedocs'), { recursive: true });
@@ -94,6 +94,7 @@ test('B5: --counts stops with exit 3 and writes nothing when a listed id stands 
   fs.writeFileSync(path.join(idRoot, DATASET_REL), JSON.stringify({ prs: [{ pr: 7654321 }], findings: [{ pr: 7654321, comment_id: 1234567890 }] }));
   fs.writeFileSync(path.join(idRoot, EVAL_CONFIG_REL), '{}');
   const hot = fs.mkdtempSync(path.join(os.tmpdir(), 'counts-hot-'));
+  t.after(() => { fs.rmSync(idRoot, { recursive: true, force: true }); fs.rmSync(hot, { recursive: true, force: true }); }); // also when an assertion fails
   fs.mkdirSync(path.join(hot, PROJECT), { recursive: true });
   const lines = [
     { type: 'assistant', timestamp: at(0), entrypoint: '1234567890', message: { role: 'assistant', model: '1234567890', content: [{ type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: { questions: [{ question: 'Which?', options: [] }] } }] } },
@@ -118,6 +119,4 @@ test('B5: --counts stops with exit 3 and writes nothing when a listed id stands 
   const bad = go(AUDIT, ['--root', tmp, '--counts', '--id-root', idRoot, '--out', path.join(tmp, 'b5-bad.md')]);
   assert.equal(bad.status, 3);
   assert.ok(!bad.stderr.includes('4242'));
-  fs.rmSync(idRoot, { recursive: true, force: true });
-  fs.rmSync(hot, { recursive: true, force: true });
 });

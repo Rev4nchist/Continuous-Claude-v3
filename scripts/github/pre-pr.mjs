@@ -212,6 +212,8 @@ export const SURFACES = [
   // scripts/lib holds the shared dependency resolver (its tests build real git worktrees under the temp folder), and the headless and
   // stop-process-tree tests (PowerShell on Windows). The gate runs every scripts/lib/*.test.mjs; the id keeps its old name.
   { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/*.test.mjs')] },
+  // One file only (card coord-seat-counts): the privacy test of the --counts mode. The other tests of this folder are in no gate yet.
+  { id: 'self-improvement-scripts', globs: ['scripts/self-improvement/**'], gates: [nodeTest('counts-mode-test', 'scripts/self-improvement/test/counts-mode.test.mjs')] },
   // scripts/eval/review-eval: every file below (fixtures, config) runs the eval node tests. The folder runs in about 5 s.
   // The files of the engine freeze sets run them too: engine-version.test.mjs checks the import closure of those files, and a change
   // to one of them (PR 574 changed one reviewer backend) failed it in CI only. The lists are imported from the engine-version
