@@ -123,6 +123,8 @@ export const TRUST_BOUNDARY = Object.freeze({
     'scripts/settings/render-settings.mjs', 'machine/*.json',
     'scripts/github/cr-fix.mjs', 'scripts/github/slot-queue.mjs', '.claude/plugins/*/hooks/pr-loop/model.ts', '.claude/plugins/*/hooks/pr-loop/slot.ts',
     '.coderabbit.yaml', '.claude/agents/aegis.md', '.claude/agents/critic.md', '.claude/agents/security-refuter.md',
+    // the agent .json mirrors also carry the model (every-surface checklist, row Agents); critic has no tracked mirror
+    '.claude/agents/aegis.json', '.claude/agents/security-refuter.json',
   ]),
 });
 /** The engine part: the files that force CRITICAL. The name stays for its importers. */

@@ -461,7 +461,8 @@ const TAP_CLASSES = {
   // Dave 2026-11-17 ("All of both groups"): PR 642 critic and the prflow-review-pick aegis pass.
   'settings render and machine overlay': ['scripts/settings/render-settings.mjs', 'machine/personal.json'],
   'paid run path': ['scripts/github/cr-fix.mjs', 'scripts/github/slot-queue.mjs', '.claude/plugins/ccv3-mods/hooks/pr-loop/model.ts', '.claude/plugins/ccv3-mods/hooks/pr-loop/slot.ts'],
-  'review bot config and reviewer agents': ['.coderabbit.yaml', '.claude/agents/aegis.md', '.claude/agents/critic.md', '.claude/agents/security-refuter.md'],
+  'review bot config and reviewer agents': ['.coderabbit.yaml', '.claude/agents/aegis.md', '.claude/agents/critic.md', '.claude/agents/security-refuter.md',
+    '.claude/agents/aegis.json', '.claude/agents/security-refuter.json'],
   'decision gate and ledger': ['.claude/hooks/src/decision-gate.ts', '.claude/hooks/src/decision-ledger.ts', '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs', 'scripts/github/ship-ask.mjs'],
   'review router and its config': ['scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', 'scripts/github/pr-checkpoint.mjs'],
 };
@@ -498,7 +499,7 @@ test('B42: test files and near-miss paths of the trust classes do not force CRIT
     '.github/workflows/ccv3-checks.yml', 'scripts/github/land-decision.test.mjs', '.claude/plugins/ccv3-mods/tests/plain.test.ts',
     // near misses that pin the width of the plugin and agent globs (PR 642 delta critic)
     '.claude/plugins/ccv3-mods/hooks/pr-loop/index.tsx', '.claude/plugins/a/b/hooks/pr-checkpoint/x.ts',
-    '.claude/agents/scout.md', 'machine/README.md', 'scripts/settings/apply-registrations.test.mjs',
+    '.claude/agents/scout.md', '.claude/agents/scout.json', 'machine/README.md', 'scripts/settings/apply-registrations.test.mjs',
   ];
   for (const f of notTrust) {
     const b = bandOf([f], LIVE);
