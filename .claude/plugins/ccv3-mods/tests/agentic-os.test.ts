@@ -198,6 +198,33 @@ describe('agentic-os core band', () => {
     expect(got.texts.join('\n')).not.toContain('a'.repeat(40))
   })
 
+  test('C11 a closing line equal to a declared to-do is not a question; a different line is (to-do list, design v2)', async ($, on) => {
+    world(on)
+    on('turn.complete', (_$, e) => ({ text: e.answer }))
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g', todo: [{ text: 'Run /compact here' }] })
+    const end = (answer: string, turnId: string) => $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId, reason: 'end_turn' } as never)
+    await end('## Next steps\n1. Run /compact here.\n', 't1')
+    let got = await core($)
+    expect(got.line2).toContain('QUESTIONS 0')
+    expect(got.line2).toContain('TO DO 1')
+    expect(got.line1).not.toContain('WAITING FOR YOU')
+    await end('## Next steps\n1. Approve the merge.\n', 't2')
+    got = await core($)
+    expect(got.line2).toContain('QUESTIONS 1')
+    expect(got.line2).toContain('TO DO 1')
+    expect(got.line1).toContain('WAITING FOR YOU')
+  })
+
+  test('C12 the answer of brief_set names a to-do that was moved into the ask list', async ($, on) => {
+    world(on)
+    const moved = await $.tool.call({ tool: BRIEF_TOOL, todo: [{ text: 'Did CI pass?' }, { text: 'Run /compact here' }] })
+    expect(JSON.stringify(moved)).toContain('todo 1 moved to ask')
+    const got = await core($)
+    expect(got.line2).toContain('QUESTIONS 1')
+    expect(got.line2).toContain('TO DO 1')
+    expect(got.line1).toContain('WAITING FOR YOU')
+  })
+
   test('C6 with one row of room only the first core line draws, and survey time draws nothing', async ($, on) => {
     world(on)
     const one = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows: 1 } })

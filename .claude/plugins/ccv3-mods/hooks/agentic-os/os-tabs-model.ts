@@ -1,6 +1,7 @@
 import type { AgentRun, BoardLane, FileTouch, HudLimit, KeeperRecord, OsBrief, OsProof } from '../../types'
 import { CHIP } from './band-model'
 import { isAskStale, proofOf } from './brief'
+import { todoStale } from './todo'
 import type { Chip } from './brief'
 import { MAX_ITEMS, MIN_ITEMS, digest, fold } from './digest'
 import type { Digest, DigestBlock, DigestCommit, DigestLane, DigestPr } from './digest'
@@ -399,13 +400,24 @@ const decisions = (s: TabState, now: number, columns: number, rows: number): Pan
   const headD: PaneRow = { key: 'h-decisions', left: [sp(WORDS.decisions.head, 'head')], ...(log.length ? { right: [sp(`${log.length} recorded`, 'dim')] } : {}) }
   const headA: PaneRow = { key: 'h-asks', left: [sp('OPEN ASKS', 'head')], ...(askRight ? { right: askRight } : {}) }
 
+  // The to-do list is its own group below the asks. With no to-dos the layout is the one it always was.
+  const todos = brief?.todos ?? []
+  const todoRows: PaneRow[] =
+    todos.length === 0
+      ? []
+      : [
+          gap('gap-todos'),
+          { key: 'h-todos', left: [sp('TO DO FOR YOU', 'head')], right: [sp(`${todos.length}${brief !== null && todoStale(brief, now, s.activeAt) ? ' · stale' : ''}`, 'dim')] },
+          ...todos.flatMap((one, i) => wrapRows(`t-${i}`, [sp('  ', 'dim')], one.text, 'dim', columns, LINES)),
+        ]
+
   const needD = decisionGroups.reduce((n, g) => n + g.length, 0)
   const needA = askGroups.reduce((n, g) => n + g.length, 0)
-  const room = rows - 2
-  if (needD + needA + 1 <= room) return [headD, ...decisionGroups.flat(), gap('gap-asks'), headA, ...askGroups.flat()]
+  const room = rows - 2 - todoRows.length
+  if (needD + needA + 1 <= room) return [headD, ...decisionGroups.flat(), gap('gap-asks'), headA, ...askGroups.flat(), ...todoRows]
   // Not everything fits: the asks take what they need up to half the room, the decisions the rest.
   const askShare = Math.min(needA, Math.max(Math.ceil(room / 2), room - needD))
-  return [headD, ...takeGroups(decisionGroups, room - askShare, 'more-decisions'), headA, ...takeGroups(askGroups, askShare, 'more-asks')]
+  return [headD, ...takeGroups(decisionGroups, room - askShare, 'more-decisions'), headA, ...takeGroups(askGroups, askShare, 'more-asks'), ...todoRows]
 }
 
 // --- Entry points ---

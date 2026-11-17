@@ -1,4 +1,5 @@
 import { redact } from '../shared/redact'
+import { TODO_LIMITS, holdsQuestionMark } from './todo'
 import type { OsAskItem, OsBrief, OsBriefSource, OsClearedAsk, OsPlanStep, OsProof, OsTask } from '../../types'
 
 // The brief: what the session says about itself (PRD 5.1, 5.2, 5.5). Pure functions, no engine imports,
@@ -39,6 +40,8 @@ export type BriefInput = {
   stopAt?: string
   plan?: PlanStep[]
   ask?: { kind: AskKind; text: string; recommend?: string }[]
+  /** `question`: the RAW text held a question mark (tested before redaction); applyBrief moves such an item into the ask list. */
+  todo?: { text: string; question: boolean }[]
   decision?: { text: string; by: string }
   proof?: { taskId: string; artifact: string }
 }
@@ -65,7 +68,7 @@ export const STALE_ASK_MS = 24 * 3600_000
 
 const KINDS: readonly string[] = ['question', 'approval', 'decision', 'block']
 const STATUSES: readonly string[] = ['todo', 'doing', 'done', 'blocked']
-const TOP_KEYS = ['title', 'goal', 'stopAt', 'plan', 'ask', 'decision', 'proof']
+const TOP_KEYS = ['title', 'goal', 'stopAt', 'plan', 'ask', 'todo', 'decision', 'proof']
 
 export const emptyBrief = (now: number): Brief => ({ sources: {}, plan: [], ask: [], decisions: [], proofs: [], updatedAt: now })
 
@@ -118,6 +121,12 @@ const askItem = (value: unknown, i: number): NonNullable<BriefInput['ask']>[numb
   }
 }
 
+/** A to-do item has only `text`: no kind, no recommend. The question mark is tested on the raw text, before `text()` redacts it. */
+const todoItem = (value: unknown, i: number): NonNullable<BriefInput['todo']>[number] => {
+  const one = record(value, `todo[${i}]`, ['text'])
+  return { text: text(one.text, `todo[${i}].text`, TODO_LIMITS.text, true), question: typeof one.text === 'string' && holdsQuestionMark(one.text) }
+}
+
 const parseInput = (raw: unknown): BriefInput => {
   const one = record(raw, 'brief_set input', TOP_KEYS)
   if (TOP_KEYS.every(key => one[key] === undefined)) bad(`brief_set needs at least one of: ${TOP_KEYS.join(', ')}`)
@@ -132,6 +141,7 @@ const parseInput = (raw: unknown): BriefInput => {
     if (twice !== undefined) bad(`plan has the id "${twice}" twice`)
   }
   if (one.ask !== undefined) out.ask = list(one.ask, 'ask', LIMITS.askItems).map(askItem)
+  if (one.todo !== undefined) out.todo = list(one.todo, 'todo', TODO_LIMITS.items).map(todoItem)
   if (one.decision !== undefined) {
     const d = record(one.decision, 'decision', ['text', 'by'])
     out.decision = { text: text(d.text, 'decision.text', LIMITS.decisionText, true), by: text(d.by, 'decision.by', LIMITS.by, true) }
@@ -223,10 +233,15 @@ const withProof = (brief: Brief, proof: NonNullable<BriefInput['proof']>, tasks:
  * A proof joins on a task id, a plan step id or an exact subject; with no match nothing changes and the error lists the valid ids.
  * `prev` is never mutated. `now` is the engine clock: this file reads no clock.
  */
-export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], now: number): { brief: Brief } | { error: string } => {
+export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], now: number): { brief: Brief; note?: string } | { error: string } => {
   const checked = validateBrief(raw)
   if ('error' in checked) return checked
-  const input = checked.input
+  // A to-do that holds a question mark is a question: it joins the ask list (more questions, never fewer). Tested on the raw text in parseInput.
+  const moved = (checked.input.todo ?? []).filter(one => one.question).map(one => ({ kind: 'question' as const, text: one.text }))
+  if (checked.input.ask !== undefined && checked.input.ask.length + moved.length > LIMITS.askItems) {
+    return { error: `the ask list would hold ${checked.input.ask.length + moved.length} items with the to-do that holds a question mark; the limit is ${LIMITS.askItems}` }
+  }
+  const input = moved.length > 0 && checked.input.ask !== undefined ? { ...checked.input, ask: [...checked.input.ask, ...moved] } : checked.input
   const base = prev ?? emptyBrief(now)
   let next: Brief = { ...base, sources: { ...base.sources }, updatedAt: now }
   if (input.title !== undefined) setField(next, 'title', input.title)
@@ -247,7 +262,18 @@ export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], no
     if (typeof proved === 'string') return { error: proved }
     next = proved
   }
-  return { brief: next }
+  if (input.todo !== undefined) {
+    next.todos = input.todo.filter(one => !one.question).map(one => ({ text: one.text, at: now }))
+    // No ask in this call: the moved questions join the open asks, and the list is brief_set's, so a later parse cannot drop them.
+    if (input.ask === undefined && moved.length > 0) {
+      if (next.ask.length + moved.length > LIMITS.askItems) return { error: `the ask list would hold ${next.ask.length + moved.length} items with the to-do that holds a question mark; the limit is ${LIMITS.askItems}` }
+      next.ask = [...next.ask, ...moved.map(one => ({ ...one, source: 'brief_set' as const }))]
+      next.sources.ask = 'brief_set'
+    }
+  }
+  const places = (input.todo ?? []).flatMap((one, i) => (one.question ? [i + 1] : []))
+  const note = places.length > 0 ? `todo ${places.join(', ')} moved to ask (it holds a question mark)` : undefined
+  return { brief: next, ...(note === undefined ? {} : { note }) }
 }
 
 // --- Ask lifecycle and chip ---
@@ -360,6 +386,7 @@ export const briefSummary = (brief: Brief, tasks: OsTask[]): string => {
     brief.stopAt ? `stop-at: ${brief.stopAt}` : null,
     `plan ${brief.plan.length} step${brief.plan.length === 1 ? '' : 's'}`,
     `${open} open ask${open === 1 ? '' : 's'}`,
+    (brief.todos?.length ?? 0) > 0 ? `${brief.todos?.length} to-do${brief.todos?.length === 1 ? '' : 's'}` : null,
     `${items.filter(one => isProven(brief, one)).length} of ${items.length} proven`,
   ]
   return `Brief saved. ${parts.filter(Boolean).join(' · ')}`

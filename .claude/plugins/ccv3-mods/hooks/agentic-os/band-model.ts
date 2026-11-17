@@ -1,6 +1,7 @@
 import type { HudLimit, OsBrief, OsTask } from '../../types'
 import { redact } from '../shared/redact'
 import { isAskStale, isProven } from './brief'
+import { todoStale } from './todo'
 import type { Chip } from './brief'
 import { gaugeTone } from './pane-model'
 import type { Span, Tone } from './pane-model'
@@ -222,7 +223,7 @@ const goalOf = (s: BandState): Goal => {
   }
 }
 
-type Counts = { asks: number; answered: number; stale: boolean; unproven: number; done: number; total: number }
+type Counts = { asks: number; answered: number; stale: boolean; todos: number; todoStale: boolean; unproven: number; done: number; total: number }
 
 const countsOf = (s: BandState, steps: Step[]): Counts => {
   const list = s.brief?.ask ?? []
@@ -231,6 +232,8 @@ const countsOf = (s: BandState, steps: Step[]): Counts => {
     asks,
     answered: list.length - asks,
     stale: s.brief !== null && isAskStale(s.brief, s.now, s.activeAt),
+    todos: s.brief?.todos?.length ?? 0,
+    todoStale: s.brief !== null && todoStale(s.brief, s.now, s.activeAt),
     unproven: steps.filter(one => one.unproven).length,
     done: steps.filter(one => one.done).length,
     total: steps.length,
@@ -256,6 +259,8 @@ const lineTwo = (s: BandState, steps: Step[], width: number): Span[] => {
   const counts: Span[][] = [
     [sp(`QUESTIONS ${c.asks}${c.stale && c.asks > 0 ? ' stale' : ''}`, askTone(c, s.chip))],
     ...(c.answered > 0 ? [[sp(`${c.answered} answered?`, 'dim')]] : []),
+    // The to-do list is its own group. Never amber or red: nothing waits on an answer.
+    ...(c.todos > 0 ? [[sp(`TO DO ${c.todos}${c.todoStale ? ' stale' : ''}`, 'dim')]] : []),
     ...(showPlan ? [[sp(`UNPROVEN ${c.unproven}`, unprovenTone(c, s.chip))]] : []),
   ]
   const build = (variant: { cells: number; label: boolean }, room: number | null): Span[] => {

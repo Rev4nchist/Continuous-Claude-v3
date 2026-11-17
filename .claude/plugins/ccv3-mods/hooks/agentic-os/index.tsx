@@ -10,6 +10,7 @@ import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
 import { answersAsks, applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact, tapDecisions, withTaps } from './brief'
+import { withoutDeclaredTodos } from './todo'
 import { hudOrSeed, seedHud } from '../hud/seed'
 import { bandLines, compactLine } from './band-model'
 import type { BandState } from './band-model'
@@ -107,7 +108,7 @@ const uiArmed = atom({ plugin: 'ccv3-mods', key: 'uiArmed' } as const, false)
 
 const PANE = 'agentic-os'
 /** The only fields the handler reads off the brief_set call: the rest of the event is the engine's. */
-const BRIEF_KEYS = ['title', 'goal', 'stopAt', 'plan', 'ask', 'decision', 'proof'] as const
+const BRIEF_KEYS = ['title', 'goal', 'stopAt', 'plan', 'ask', 'todo', 'decision', 'proof'] as const
 const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
 const PULSE_MS = 5000
 /** Idle, the band still redraws this often: the cache countdown is in minutes. */
@@ -524,7 +525,7 @@ const briefSchema = {
   additionalProperties: false,
   properties: {
     title: { type: 'string', description: 'Short session title, shown in the Fleet. Max 80 characters.' },
-    goal: { type: 'string', description: 'One line: what this session is for. Max 240 characters.' },
+    goal: { type: 'string', description: 'One plain sentence, under 80 characters, no first person: what Dave gets. Max 240 characters.' },
     stopAt: { type: 'string', description: "Dave's literal stop point, in his words. Max 240 characters." },
     plan: {
       type: 'array',
@@ -544,7 +545,7 @@ const briefSchema = {
     ask: {
       type: 'array',
       maxItems: 8,
-      description: 'Replaces the whole list of open questions for Dave. [] clears it. Max 8 items.',
+      description: 'Replaces the whole list of open questions for Dave. [] clears it; send every open question each time, because this call replaces the list. Max 8 items.',
       items: {
         type: 'object',
         additionalProperties: false,
@@ -554,6 +555,18 @@ const briefSchema = {
           recommend: { type: 'string', description: 'Your recommended answer.' },
         },
         required: ['kind', 'text'],
+      },
+    },
+    todo: {
+      type: 'array',
+      maxItems: 8,
+      description:
+        'Replaces the whole to-do list: actions for Dave that need no answer from him ("To do for you"). [] clears it. Each item needs no answer; a text with a question mark is moved to ask as a question. If Dave must reply, use ask. Max 8 items.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { text: { type: 'string', description: 'Max 300 characters.' } },
+        required: ['text'],
       },
     },
     decision: {
@@ -575,7 +588,7 @@ const briefSchema = {
 
 const BRIEF_DESCRIPTION =
   "Records what this session is for, so Dave sees it in the Agentic OS band and the Fleet. Call it when the goal, the stop-at (Dave's literal stop point), the title, the plan or an open question changes, and when a task is proven. " +
-  'Every field is optional; send at least one. plan and ask replace their whole list, so ask [] clears the open questions once Dave answered. decision appends to the log. proof marks a task or plan step proven (taskId is a task id, a plan step id or the exact task subject). ' +
+  'Every field is optional; send at least one. plan and ask replace their whole list, so ask [] clears the open questions once Dave answered. todo lists actions for Dave that need no answer (the band never waits on them) and replaces its own list. decision appends to the log. proof marks a task or plan step proven (taskId is a task id, a plan step id or the exact task subject). ' +
   'Secrets in any string are removed before storage. The answer is the saved summary, or "brief_set failed:" with the reason (a proof that matches nothing lists the valid ids).'
 
 /** A mod-served tool answers with a list of content blocks (the engine refuses the MCP object); see hooks/pr-loop. */
@@ -605,7 +618,7 @@ const briefCall = async ($: EngineInterface, e: unknown) => {
   // A brief_set is the one thing that restarts the steward's counts. The turn-end parser also moves updatedAt, so it is not the version.
   await update($, steward, state => ({ ...state, briefAt: result.brief.updatedAt, activity: NO_ACTIVITY }))
   await writeSnapshot($, typeof given.tool_use_id === 'string' ? { except: given.tool_use_id } : {})
-  return textResult(briefSummary(result.brief, list))
+  return textResult(`${briefSummary(result.brief, list)}${result.note === undefined ? '' : `. ${result.note}`}`)
 }
 
 /** A turn ended: the model's own restate line and Next steps block fill what brief_set did not set. */
@@ -617,7 +630,8 @@ const learnFromAnswer = async ($: EngineInterface, answer: unknown): Promise<voi
     // A headless run with no brief writes no file: nothing prunes the folder.
     if (current === null && (await read($, mode)) !== 'interactive') return
     const at = await $.clock.now()
-    await update($, brief, now => mergeParsed(now, parsed, at))
+    // A line equal to a declared to-do is not a question (todo.ts). mergeParsed gets the filtered result and is not changed.
+    await update($, brief, now => mergeParsed(now, withoutDeclaredTodos(parsed, now?.todos), at))
   } catch {
     // Observer only: a parser failure never touches the turn.
   }

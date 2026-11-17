@@ -55,6 +55,9 @@ export type OsSteward = {
 }
 
 /** What the session says about itself, set by the brief_set tool (hooks/agentic-os/brief.ts). Every string is redacted. */
+/** An action for Dave that needs no answer ("To do for you"). A list of its own in the brief: no ask path reads it. */
+export type OsTodo = { text: string; at: number }
+
 export type OsBrief = {
   title?: string
   goal?: string
@@ -66,6 +69,8 @@ export type OsBrief = {
   decisions: { text: string; by: string; at: number }[]
   /** The last 5 asks that left the open list, oldest first. Absent until the first ask leaves. */
   cleared?: OsClearedAsk[]
+  /** The to-dos for Dave (brief_set `todo`). Absent until the first call that sends it; a brief without it reads as []. */
+  todos?: OsTodo[]
   proofs: OsProof[]
   updatedAt: number
 }
