@@ -74,7 +74,7 @@ describe('twin drift', () => {
   it('both copies export the same names', () => {
     expect(Object.keys(mjsTwin).sort()).toEqual(Object.keys(tsTwin).sort());
     expect(Object.keys(tsTwin).sort()).toEqual([
-      'DEFAULT_BOARD', 'artifactIdOf', 'boardArtifact', 'boardRoots', 'isHeadless', 'laneCliCmd', 'laneShimPath', 'loadRegistry',
+      'DEFAULT_BOARD', 'artifactIdOf', 'boardArtifact', 'boardArtifactProblem', 'boardRoots', 'isHeadless', 'laneCliCmd', 'laneShimPath', 'loadRegistry',
       'normalizeRoot', 'pendingKey', 'primaryRepo', 'renderBoardCmd', 'resolveBoard', 'wmKey',
     ]);
   });
@@ -173,28 +173,65 @@ describe('derived helpers (PR2 exports), both twins', () => {
       expect(run('zz-board', { artifactsPath: f })).toBeNull();
     });
 
-    it('a board with no entry has no artifact (null), except the default board', () => {
-      const f = write({ artifacts: [] });
-      expect(run('greymatter', { artifactsPath: f })).toBeNull();
-      expect(run('continuous-claude', { artifactsPath: f })).toEqual({
-        id: 'RtrTNVfAq9uowmb2tfbzid', url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid', publishFrom: 'lane-board.html',
-      });
+    /** boardArtifactProblem on both twins, equal output. */
+    const problem = (board: string, opts: Parameters<typeof tsTwin.boardArtifactProblem>[1] = {}) => {
+      const o = { ...opts, env: { CCV3_USER_HOME: hermeticHome(), ...opts.env } };
+      const p = tsTwin.boardArtifactProblem(board, o);
+      expect(mjsTwin.boardArtifactProblem(board, o)).toEqual(p);
+      return p;
+    };
+
+    // Card coord-board-id-followup: no fixed fallback id. A fixed id names the wrong page after an account switch.
+    it('F1: a missing file gives null and the reason "missing or unreadable" for the default board', () => {
+      const missing = path.join(tmp, 'nope.json');
+      expect(run('continuous-claude', { artifactsPath: missing })).toBeNull();
+      expect(problem('continuous-claude', { artifactsPath: missing })).toBe(`${missing} is missing or unreadable`);
     });
 
-    it('a missing or corrupt file gives the fallback for the default board and null for others', () => {
-      const missing = path.join(tmp, 'nope.json');
+    it('F2: a file that is not JSON gives null and the reason "not valid JSON"', () => {
       const corrupt = write('{not json');
-      for (const f of [missing, corrupt]) {
-        expect(run('greymatter', { artifactsPath: f })).toBeNull();
-        expect(run('continuous-claude', { artifactsPath: f })?.id).toBe('RtrTNVfAq9uowmb2tfbzid');
+      expect(run('continuous-claude', { artifactsPath: corrupt })).toBeNull();
+      expect(problem('continuous-claude', { artifactsPath: corrupt })).toBe(`${corrupt} is not valid JSON`);
+    });
+
+    it('F2b: no agentic-os-lane-board entry (none, or only another id) gives null and the reason "no entry"', () => {
+      for (const body of [{ artifacts: [] }, { artifacts: [{ id: 'something-else', board: 'continuous-claude', url: 'https://claude.ai/artifact/NEW999' }] }, {}]) {
+        const f = write(body);
+        expect(run('continuous-claude', { artifactsPath: f })).toBeNull();
+        expect(problem('continuous-claude', { artifactsPath: f })).toBe(`${f} has no agentic-os-lane-board entry`);
       }
     });
 
-    it('the artifacts.json entry overrides the fallback; an entry with another id does not', () => {
+    it('F3: a url that is not strict https://claude.ai/artifact/<id> gives null and the strict-url reason (behaviour change: the loose /artifact/<id> match is gone)', () => {
+      for (const url of ['https://evil.example/artifact/XYZ1', 'https://claude.ai/artifact/XYZ1?x=1', 'claude.ai/artifact/XYZ1', 42]) {
+        const f = write({ artifacts: [{ id: 'agentic-os-lane-board', url, publish_from: 'lane-board.html' }] });
+        expect(run('continuous-claude', { artifactsPath: f })).toBeNull();
+        expect(problem('continuous-claude', { artifactsPath: f })).toBe(
+          `the agentic-os-lane-board url in ${f} is not https://claude.ai/artifact/<id>`,
+        );
+      }
+    });
+
+    it('F3b: the live entry of this repo passes the strict check', () => {
+      const live = path.resolve(__dirname, '../../../artifacts.json');
+      const page = run('continuous-claude', { artifactsPath: live });
+      expect(page?.url).toMatch(/^https:\/\/claude\.ai\/artifact\/[A-Za-z0-9_-]+$/);
+      expect(problem('continuous-claude', { artifactsPath: live })).toBeNull();
+    });
+
+    it('F4: a good entry gives the page and no reason', () => {
       const f = write({ artifacts: [{ id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/NEW999', publish_from: 'lane-board.html' }] });
-      expect(run('continuous-claude', { artifactsPath: f })?.id).toBe('NEW999');
-      const g = write({ artifacts: [{ id: 'something-else', board: 'continuous-claude', url: 'https://claude.ai/artifact/NEW999', publish_from: 'lane-board.html' }] });
-      expect(run('continuous-claude', { artifactsPath: g })?.id).toBe('RtrTNVfAq9uowmb2tfbzid');
+      expect(run('continuous-claude', { artifactsPath: f })).toEqual({
+        id: 'NEW999', url: 'https://claude.ai/artifact/NEW999', publishFrom: 'lane-board.html',
+      });
+      expect(problem('continuous-claude', { artifactsPath: f })).toBeNull();
+    });
+
+    it('F5: another board never gets a reason, whatever artifacts.json holds', () => {
+      for (const f of [path.join(tmp, 'nope.json'), write('{not json'), write({ artifacts: [] })]) {
+        expect(run('greymatter', { artifactsPath: f })).toBeNull();
+        expect(problem('greymatter', { artifactsPath: f })).toBeNull();
+      }
     });
 
     it('finds <primaryRepo>/.claude/artifacts.json through opts.env', () => {
