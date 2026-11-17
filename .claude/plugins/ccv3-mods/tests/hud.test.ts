@@ -162,7 +162,7 @@ describe('hud', () => {
     await start($)
     await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
     await step($, { model: 'claude-sonnet-5-5', effort: 'high', agentId: 'sub1' }, 3)
-    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor calls 2')
   })
 
   // H4b session.start fires again on a reload, a worker respawn or an enable; the turns' count must survive it.
@@ -171,7 +171,7 @@ describe('hud', () => {
     await start($)
     await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
     await start($)
-    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor calls 2')
   })
 
   // H4e a re-run start keeps the count but reads the settings as they are now: an advisor switched off or blocked since is not drawn "on".
@@ -184,10 +184,10 @@ describe('hud', () => {
     await start($)
     const off = (await hudOn($, 'terminal')).text ?? ''
     expect(off).toContain('advisor off')
-    expect(off).not.toContain('×')
+    expect(off).not.toContain('calls')
     w.settings = { advisorModel: 'fable' }
     await start($)
-    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor calls 2')
   })
 
   // Status band fixes: ctx and cost draw once. The HUD row holds a known cost; line 1 of the core band does not repeat it.
@@ -209,11 +209,11 @@ describe('hud', () => {
       await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
       const before = (await hudOn($, 'terminal')).text ?? ''
       expect(before).toContain('$4.10')
-      expect(before).toContain('×2')
+      expect(before).toContain('calls 2')
       await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
       const after = (await hudOn($, 'terminal')).text ?? ''
       expect(after).not.toContain('$4.10')
-      expect(after).not.toContain('×')
+      expect(after).not.toContain('calls')
       expect(after).toContain('Fable advisor')
       // The row keeps the last step's model chip: a null atom would re-seed it with no effort.
       expect(after).toContain('· medium')
@@ -389,7 +389,7 @@ describe('hud', () => {
     expect((await hudOn($, 'terminal')).text).toContain('blocked')
     await step($, { model: 'claude-opus-5-5', effort: 'high' }, 1)
     const text = (await hudOn($, 'terminal')).text ?? ''
-    expect(text).toContain('Fable advisor ×1')
+    expect(text).toContain('Fable advisor calls 1')
     expect(text).not.toContain('blocked')
   })
 

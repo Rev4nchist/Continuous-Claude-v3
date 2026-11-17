@@ -167,7 +167,7 @@ export const cacheLabel = (view: CacheView): { text: string; tone: Tone } => {
   if (view.status === 'off') return { text: 'cache off', tone: 'warn' }
   if (view.status === 'cold') return { text: view.coldUsd === null ? 'cache COLD' : `cache COLD · next ≈${fmtUsd(view.coldUsd)}`, tone: 'warn' }
   if (view.status === 'miss') return { text: `cache ${view.hitPct}% · MISS ${fmtTokens(view.missTokens)}`, tone: 'warn' }
-  return { text: `cache ${view.hitPct}% · ${view.minutesLeft}m`, tone: view.isLow ? 'warn' : 'todo' }
+  return { text: `cache ${view.hitPct}% · cold in ${view.minutesLeft}m`, tone: view.isLow ? 'warn' : 'todo' }
 }
 
 const span = (ms: number): string => {

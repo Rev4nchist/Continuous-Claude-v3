@@ -46,7 +46,7 @@ const advisorLabel = (advisor: HudAdvisor): string => {
   if (advisor.state === 'off') return 'advisor off'
   const who = advisor.model === undefined ? 'advisor' : `${TIER_LABEL[tierOf(advisor.model)]} advisor`
   if (advisor.state === 'blocked') return `${who} blocked: ${advisor.reason ?? ''}`.trim()
-  return advisor.calls > 0 ? `${who} ×${advisor.calls}` : who
+  return advisor.calls > 0 ? `${who} calls ${advisor.calls}` : who
 }
 
 /** The HUD row's parts, left to right: model chip, advisor, context, cost, cache, limits. */
@@ -57,13 +57,13 @@ export const hudParts = (hud: HudState, ctx: number | null, cache: CacheView | n
     // Two short numbers, never a date: claude-opus-5-5 is "5.5", claude-opus-4-20250514 is "4".
     const version = /(\d+)(?:[-.](\d{1,2}))?(?!\d)/.exec(hud.model)
     const name = version ? `${label} ${version[1]}${version[2] === undefined ? '' : `.${version[2]}`}` : label
-    const text = hud.effort === null ? name : `${name} · ${hud.effort}`
+    const text = hud.effort === null ? name : effortDrift(hud.effort) ? `${name} · ${hud.effort} (not high)` : `${name} · ${hud.effort}`
     parts.push({ kind: 'chip', key: 'hud-model', text, tone: effortDrift(hud.effort) ? 'chipBad' : 'chip' })
   }
   const advisorTone: Tone = hud.advisor.state === 'on' ? 'advisor' : hud.advisor.state === 'blocked' ? 'warn' : 'dim'
   parts.push({ kind: 'text', key: 'hud-advisor', text: advisorLabel(hud.advisor), tone: advisorTone })
   if (ctx !== null) parts.push({ kind: 'ring', key: 'hud-ctx', percent: ctx, label: `ctx ${ctx}%`, tone: gaugeTone(ctx) })
-  if (hud.costUsd !== null) parts.push({ kind: 'text', key: 'hud-cost', text: fmtUsd(hud.costUsd), tone: 'todo' })
+  if (hud.costUsd !== null) parts.push({ kind: 'text', key: 'hud-cost', text: `est ${fmtUsd(hud.costUsd)}`, tone: 'todo' })
   if (cache !== null) parts.push({ kind: 'text', key: 'hud-cache', ...cacheLabel(cache) })
   for (const limit of hud.limits) {
     const pct = Math.round(limit.percentUsed)
