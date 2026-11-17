@@ -243,8 +243,8 @@ Artifact tool:
 ```
 
 5. **VERIFY BEFORE YOU RECORD. REQUIRED.** Do not treat the publish call returning as proof it
-   published. Read the result back two ways: **WebFetch the returned URL** (it works on artifacts
-   you own, verified 2026-08-05), **and** confirm the id appears in `Artifact action:"list"`. Only
+   published. Read the result back two ways: **read the returned URL with the Artifact tool, action
+   `read`** (as in step 2, never a web read), **and** confirm the id appears in `Artifact action:"list"`. Only
    after both pass do you write anything to `.claude/artifacts.json`.
 
    *Why this step exists:* on 2026-08-05 every other step here was followed, and the registry

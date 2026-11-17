@@ -73,7 +73,7 @@ Or write the config by hand. On Windows, run `npx` through `cmd`. Pin the versio
 
 ### Playwright MCP (For Visual Exploration)
 
-Use `@playwright/mcp` (tools `mcp__playwright__*`) for interactive theme exploration. `claude-in-chrome` is deprecated here. See `rules-ondemand/browser-automation.md`. Falls back to WebFetch for basic page info when unavailable.
+Use `@playwright/mcp` (tools `mcp__playwright__*`) for interactive theme exploration. `claude-in-chrome` is deprecated here. See `rules-ondemand/browser-automation.md`. Falls back to a web read (WebFetch, else the web-fetch agent) for basic page info when unavailable.
 
 ---
 
@@ -102,7 +102,7 @@ Use CLI directly when:
   - Installing blocks
   - Automating component installation
 
-Use WebFetch fallback when:
+Use the web read fallback (WebFetch, else the Agent tool with `subagent_type: "web-fetch"`; if a tool is refused, stop; see `rules-ondemand/web-research.md`) when:
   - @playwright/mcp unavailable
   - Need basic page structure info
   - Verifying platform options
