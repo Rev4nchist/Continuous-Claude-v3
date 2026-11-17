@@ -120,3 +120,13 @@ test('B5: --counts stops with exit 3 and writes nothing when a listed id stands 
   assert.equal(bad.status, 3);
   assert.ok(!bad.stderr.includes('4242'));
 });
+
+test('B6: failure-audit with a transcripts folder that does not exist exits 2 with one line and no stack trace (the cli-smoke gate runs it with a stub home)', () => {
+  for (const extra of [[], ['--counts']]) {
+    const r = spawnSync(process.execPath, [AUDIT, '--root', path.join(tmp, 'no-such-folder'), '--days', '30', ...extra], { encoding: 'utf8' });
+    assert.equal(r.status, 2, r.stderr);
+    assert.equal(r.stdout, '');
+    assert.equal(r.stderr.trim().split('\n').length, 1);
+    assert.ok(!/^\s+at\s/m.test(r.stderr) && !/Node\.js v\d/.test(r.stderr), 'a stack trace reached stderr');
+  }
+});

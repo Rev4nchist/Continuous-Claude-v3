@@ -76,6 +76,9 @@ const textOf = (o) => {
   return c.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
 };
 
+// A missing transcripts folder is one line and exit 2, not a stack trace (the cli-smoke gate runs this script with a stub home folder).
+if (!fs.existsSync(ROOT)) { console.error('failure-audit: the transcripts folder does not exist'); process.exit(2); }
+
 const files = [];
 (function walk(d) {
   for (const e of fs.readdirSync(d, { withFileTypes: true })) {
