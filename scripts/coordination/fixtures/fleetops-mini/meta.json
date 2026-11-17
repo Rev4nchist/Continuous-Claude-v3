@@ -1,0 +1,14 @@
+{
+ "sql": "fixture",
+ "exportedAt": "2026-11-17T17:30:05.000Z",
+ "rows": [
+  {
+   "exported_at": "2026-11-17T17:30:02.680Z",
+   "today": "2026-11-17",
+   "stale_after_hours": 36,
+   "timezone": "America/Chicago",
+   "board": "fixture-board",
+   "board_url": "https://claude.ai/artifact/FAKE-ARTIFACT-ID"
+  }
+ ]
+}

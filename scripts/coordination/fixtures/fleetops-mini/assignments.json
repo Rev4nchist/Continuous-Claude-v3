@@ -1,0 +1,14 @@
+{
+ "sql": "fixture",
+ "exportedAt": "2026-11-17T17:30:05.000Z",
+ "rows": [
+  {
+   "at": "2026-11-16T10:00:00.000Z",
+   "day": "2026-11-16",
+   "lane_id": "phone-page",
+   "who": "trex",
+   "how": "claim",
+   "reassigned": false
+  }
+ ]
+}
