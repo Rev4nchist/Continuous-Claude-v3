@@ -40,11 +40,15 @@ export type BandState = {
   hud?: boolean
   /** The HUD's limits. null or absent: not known yet (the compact line reads a dash). A list without a window draws nothing for it. */
   limits?: HudLimit[] | null
+  /** How many background tasks count (`countWaitTasks`). The waiting-on-work chip reads it: WAITING ON 1 TASK / WAITING ON n TASKS. Absent: the plain word. */
+  waitTasks?: number
 }
 
 export const CHIP: Record<Chip, { word: string; tone: Tone }> = {
   working: { word: 'WORKING', tone: 'chipDoing' },
   'waiting-on-dave': { word: 'WAITING FOR YOU', tone: 'chipWarn' },
+  // Grey: the session waits on its own background work, not on a person. The count joins the word in chipSpan.
+  'waiting-on-work': { word: 'WAITING ON TASKS', tone: 'chipDim' },
   blocked: { word: 'STUCK', tone: 'chipBad' },
   done: { word: 'DONE', tone: 'chipOk' },
   idle: { word: 'RESTING', tone: 'chipDim' },
@@ -161,11 +165,17 @@ const items = (s: BandState, shape: Shape): Item[] => {
   return all.filter((one): one is Item => one !== null)
 }
 
-const chipSpan = (chip: Chip): Span => sp(` ${(CHIP[chip] ?? CHIP.idle).word} `, (CHIP[chip] ?? CHIP.idle).tone)
+/** The chip word. waiting-on-work carries the task count when it is known: `WAITING ON 1 TASK`, `WAITING ON 2 TASKS`. */
+const chipWordOf = (chip: Chip, waitTasks?: number): string =>
+  chip === 'waiting-on-work' && typeof waitTasks === 'number' && Number.isFinite(waitTasks) && waitTasks >= 1
+    ? `WAITING ON ${Math.floor(waitTasks)} ${Math.floor(waitTasks) === 1 ? 'TASK' : 'TASKS'}`
+    : (CHIP[chip] ?? CHIP.idle).word
+
+const chipSpan = (chip: Chip, waitTasks?: number): Span => sp(` ${chipWordOf(chip, waitTasks)} `, (CHIP[chip] ?? CHIP.idle).tone)
 
 /** Line 1 for a drawing `width` wide (the core band calls it from 40 columns; exported for the narrow-width test). */
 export const lineOne = (s: BandState, width: number): Span[] => {
-  const chip = chipSpan(s.chip)
+  const chip = chipSpan(s.chip, s.waitTasks)
   const shape: Shape = { sid: true, lane: true, nameMax: NAME_MAX, cost: true, ctx: true, helpers: true }
   const rest = () => items(s, shape)
   const widthOf = (list: Item[]) => chip.text.length + (list.length > 0 ? SEP.length + len(join(list.map(one => one.spans), sp(DOT, 'track'))) : 0)
@@ -237,9 +247,28 @@ const countsOf = (s: BandState, steps: Step[]): Counts => {
   }
 }
 
-/** Amber only when a person is needed (the waiting-on-dave chip); red on a blocked chip; dim in every other state. */
+/** Amber when a person may be needed (the waiting-on-dave chip, or waiting-on-work: a parsed ask can hide behind it, so it stays amber); red on a blocked chip; dim in every other state. */
 const askTone = (c: Counts, chip: Chip): Tone =>
-  c.asks === 0 ? (chip === 'done' ? 'done' : 'dim') : c.stale ? 'dim' : chip === 'blocked' ? 'bad' : chip === 'waiting-on-dave' ? 'warn' : 'dim'
+  c.asks === 0
+    ? chip === 'done' ? 'done' : 'dim'
+    : c.stale ? 'dim' : chip === 'blocked' ? 'bad' : chip === 'waiting-on-dave' || chip === 'waiting-on-work' ? 'warn' : 'dim'
+
+/** The fresh open asks: the number the compact and narrow lines draw as an amber `Q n`, under any chip. 0 for no ask, an answered one or a stale one. */
+const freshAsks = (s: BandState): number => {
+  const c = countsOf(s, [])
+  return c.stale ? 0 : c.asks
+}
+
+/** `Q n`, amber, with the space before it; empty when no fresh ask is open. */
+const askSign = (s: BandState): Span[] => (freshAsks(s) > 0 ? [sp(' ', 'dim'), sp(`Q ${freshAsks(s)}`, 'warn')] : [])
+
+/**
+ * The chip a one-row line draws. The terminal cuts a row at its right end, and the Q n sign sits there. When the wait chip and a fresh ask's sign do not
+ * both fit in `width`, the line reads WAITING FOR YOU instead: the true fail-safe, never a hidden question. With one ask (sign ` Q 1`, 4 cells) the
+ * swap is at 20 to 22 columns for 1 task (chip 19 cells), 20 to 23 for 2 to 9 tasks (20 cells), 20 to 24 for 10 or more (21 cells); a longer sign widens it.
+ */
+const chipFor = (s: BandState, width: number): Chip =>
+  s.chip === 'waiting-on-work' && freshAsks(s) > 0 && chipSpan(s.chip, s.waitTasks).text.length + len(askSign(s)) > width ? 'waiting-on-dave' : s.chip
 const unprovenTone = (c: Counts, chip: Chip): Tone => (c.unproven > 0 ? 'warn' : chip === 'done' ? 'done' : 'dim')
 
 const lineTwo = (s: BandState, steps: Step[], width: number): Span[] => {
@@ -278,13 +307,16 @@ const lineTwo = (s: BandState, steps: Step[], width: number): Span[] => {
   return clipSpans(build(last, Math.max(0, width - len(build(last, 0)))), width)
 }
 
+// The `Q n` sign comes right after the chip and is never cut: a parsed ask must leave a sign at every width (fix 5). When the wait chip and the sign
+// do not both fit, chipFor swaps the chip for WAITING FOR YOU. Only that chip plus the sign (21 cells) can pass a width of 20.
 const narrow = (s: BandState, width: number): Span[] => {
-  const chip = chipSpan(s.chip)
+  const chip = chipSpan(chipFor(s, width), s.waitTasks)
+  const sign = askSign(s)
   const goal = goalOf(s)
-  const room = width - chip.text.length - SEP.length - goal.label.text.length
-  if (room < 3) return [chip]
+  const room = width - chip.text.length - len(sign) - SEP.length - goal.label.text.length
+  if (room < 3) return [chip, ...sign]
   const body = [...goal.fixed, ...(goal.clippable === '' ? [] : [sp(goal.clippable, goal.clippableTone)]), ...goal.tail]
-  return [chip, sp(SEP, 'dim'), goal.label, ...clipSpans(body, room)]
+  return [chip, ...sign, sp(SEP, 'dim'), goal.label, ...clipSpans(body, room)]
 }
 
 // --- Compact line ---
@@ -292,7 +324,7 @@ const narrow = (s: BandState, width: number): Span[] => {
 // with the HUD up). Chip, name (cut to 8), repo, ctx, 5h, 7d, cost, helpers. Cut order when the width is short: helpers, cost, repo,
 // 7d, 5h, name. The chip and ctx stay; a chip too wide for ctx at 20 columns keeps the line inside the width and drops ctx last of all.
 
-type CompactKey = 'name' | 'repo' | 'ctx' | 'five' | 'seven' | 'cost' | 'helpers'
+type CompactKey = 'ask' | 'name' | 'repo' | 'ctx' | 'five' | 'seven' | 'cost' | 'helpers'
 type CompactField = { key: CompactKey; spans: Span[] }
 
 const MIN_REPO = 4
@@ -317,6 +349,7 @@ const compactFields = (s: BandState, roomy: boolean): CompactField[] => {
   const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
   const helpers = typeof s.helpers === 'number' && Number.isFinite(s.helpers) ? Math.floor(s.helpers) : 0
   const fields: (CompactField | null)[] = [
+    freshAsks(s) > 0 ? { key: 'ask', spans: [sp(`Q ${freshAsks(s)}`, 'warn')] } : null,
     s.who === undefined ? null : { key: 'name', spans: whoSpans(s.who, COMPACT_NAME, false) },
     roomy ? { key: 'repo', spans: [sp(clean(s.repo) || '-', 'todo')] } : null,
     { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] },
@@ -331,7 +364,7 @@ const compactFields = (s: BandState, roomy: boolean): CompactField[] => {
 /** The compact band line for a drawing `width` wide. Never wider than `max(width, 20)`; the chip is never cut. */
 export const compactLine = (state: BandState, width: number): Span[] => {
   const wide = Math.max(MIN_WIDTH, Number.isFinite(width) ? Math.floor(width) : MIN_WIDTH)
-  const chip = chipSpan(state.chip)
+  const chip = chipSpan(chipFor(state, wide), state.waitTasks)
   let fields = compactFields(state, wide >= NARROW)
   // Every field costs its text and one space in front of it.
   const total = () => chip.text.length + fields.reduce((n, one) => n + 1 + len(one.spans), 0)

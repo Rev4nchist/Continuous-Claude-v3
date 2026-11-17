@@ -342,6 +342,45 @@ jobs:
           scripts/work-tracker/test/apply-rows.test.mjs
           .claude/skills/session-review/scripts/test/extract.test.mjs
           .claude/skills/session-review/scripts/test/render-html.test.mjs
+      # Step 2c of card coord-test-gate-coverage: 33 test files with mocked transports. About 4 s together.
+      - name: project-cards and report-registry tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: >-
+          node --test
+          scripts/project-cards/test/aliases.test.mjs
+          scripts/project-cards/test/assemble.test.mjs
+          scripts/project-cards/test/bind.test.mjs
+          scripts/project-cards/test/cockpit-pair.test.mjs
+          scripts/project-cards/test/cockpit.test.mjs
+          scripts/project-cards/test/digest.test.mjs
+          scripts/project-cards/test/history.test.mjs
+          scripts/project-cards/test/mobile-brief.test.mjs
+          scripts/project-cards/test/notion-create.test.mjs
+          scripts/project-cards/test/notion-query.test.mjs
+          scripts/project-cards/test/notion-section.test.mjs
+          scripts/project-cards/test/page-lock.test.mjs
+          scripts/project-cards/test/pm-notes-queue.test.mjs
+          scripts/project-cards/test/queue.test.mjs
+          scripts/project-cards/test/refresh-batch.test.mjs
+          scripts/project-cards/test/state.test.mjs
+          scripts/project-cards/test/sweep.test.mjs
+          scripts/project-cards/test/triage.test.mjs
+          scripts/project-cards/test/util.test.mjs
+          scripts/report-registry/test/artifact-url.test.mjs
+          scripts/report-registry/test/backfill.test.mjs
+          scripts/report-registry/test/check-drift.test.mjs
+          scripts/report-registry/test/conventions.test.mjs
+          scripts/report-registry/test/detector-coverage-matrix.test.mjs
+          scripts/report-registry/test/emit-run.test.mjs
+          scripts/report-registry/test/health-mirror.test.mjs
+          scripts/report-registry/test/make-run.test.mjs
+          scripts/report-registry/test/reconcile.test.mjs
+          scripts/report-registry/test/refresh-pages.test.mjs
+          scripts/report-registry/test/trust-metrics.test.mjs
+          scripts/report-registry/test/upsert.test.mjs
+          scripts/report-registry/test/watchdog.test.mjs
+          scripts/report-registry/test/weekend-plan.test.mjs
       # lane-context-db.test.ts skips without LANE_TEST_DB_URL, and vitest exits 0 on a skipped file. The program makes a scratch
       # database on this job's service, runs the one file, drops the database, and fails unless every test ran and passed.
       - name: lane-context cursor tests on a scratch database (fails when the file is skipped)
