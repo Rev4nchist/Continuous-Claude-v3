@@ -156,7 +156,8 @@ Guardrails stop risky actions before they run.
   known-malicious list that a scheduled job updates, OSV.dev advisories and package age. A package
   under 24 hours old is blocked.
 - `plan-mode-approval-gate` asks for approval before a session leaves plan mode.
-- `agent-model-guard` denies a spawn of an agent that has no definition. `no-haiku-enforcer`
+- `agent-model-guard` never denies: Claude Code rejects an unknown agent type itself. The hook adds a
+  "did you mean" hint and a warn row. `no-haiku-enforcer`
   denies a spawn on `haiku`, and any spawn while a global model override is set.
 - The `rule-router` `deny-first` mode puts the matching safety rule in front of the model before
   a paid API run, or a commit message.
