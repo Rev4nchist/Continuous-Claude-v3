@@ -24,9 +24,9 @@ If no path is named, start from the current working directory.
 
 ## Search order
 
-Pick the first step by the question. Every `tldr` call passes an explicit `--lang`.
+Pick the first step by the question. Every `tldr structure`, `impact`, `calls`, `importers` and `change-impact` call passes an explicit `--lang`.
 
-1. Who calls X, who imports X, what breaks: `tldr impact`, `tldr importers` or `tldr change-impact --git`. Then `Read` the 2 to 4 files it names.
+1. Who calls X, who imports X, what breaks, in `.ts`, `.py`, `.go` or `.rs` code: `tldr impact`, `tldr importers` or `tldr change-impact --git`. Then `Read` the 2 to 4 files it names. In JavaScript and `.mjs` code `tldr impact` found no function when tested with tldr 1.5.2: use `Grep`.
 2. Literal text, file names, config keys, and any `.mjs`, `.md` or `.json` content: `Grep` and `Glob`. Set `glob` or `path` so the search is narrow. For one `.mjs` file `tldr extract <file>` or `tldr search` also work.
 3. Structure of a folder: `tldr structure <dir> --lang <lang>` for `.ts`, `.js`, `.py`, `.go` or `.rs` files only. It scans no `.mjs` file: use `tldr tree --ext .mjs` or `Grep`.
 4. `rg` through Bash, with `-g '!node_modules' -g '!dist' -g '!archive' -g '!.venv'`.

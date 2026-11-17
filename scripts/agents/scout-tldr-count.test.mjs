@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { countTranscript, guardOutput, readScoutRuns, summarize, tldrCalls } from './scout-tldr-count.mjs';
+import { countTranscript, guardOutput, projectDirs, readScoutRuns, summarize, tldrCalls } from './scout-tldr-count.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, 'scout-tldr-count.mjs');
@@ -35,13 +35,14 @@ describe('scout-tldr-count', () => {
     dir = path.join(tmp, 'projects');
     rootNoList = path.join(tmp, 'root-no-list');
     fs.mkdirSync(rootNoList);
-    // Run A (scout): 2 Grep, 1 Glob, 1 Read, 2 Bash. One Grep line is repeated (a streamed copy of the same tool id).
+    // Run A (scout): 2 Grep, 1 Glob, 1 Read, 2 Bash, 1 other tool. One Grep line is repeated (a streamed copy of the same tool id).
     writeRun(`sess-${MARK}`, 'agent-a', 'scout', [
       tool('t1', 'Grep', { pattern: MARK }),
       tool('t1', 'Grep', { pattern: MARK }),
       tool('t2', 'Grep'), tool('t3', 'Glob'), tool('t4', 'Read'),
       tool('t5', 'Bash', { command: `tldr impact foo src/ --lang typescript # ${MARK}` }),
       tool('t6', 'Bash', { command: 'cd src && tldr structure . --lang javascript; tldr tree . --ext .mjs' }),
+      tool('t7', 'WebFetch'),
     ], new Date('2026-11-16T12:00:00Z'));
     // Run B (scout): 3 Grep calls, no tldr, written long ago.
     writeRun('sess-b', 'agent-b', 'scout', [tool('u1', 'Grep'), tool('u2', 'Grep'), tool('u3', 'Grep')], new Date('2026-01-01T00:00:00Z'));
@@ -54,9 +55,24 @@ describe('scout-tldr-count', () => {
     assert.deepEqual(tldrCalls('tldr structure . --lang typescript'), [{ sub: 'structure', lang: true }]);
     assert.deepEqual(tldrCalls('cd a && tldr tree . --ext .mjs; tldr.exe calls src --lang=go'), [{ sub: 'tree', lang: false }, { sub: 'calls', lang: true }]);
     assert.deepEqual(tldrCalls('tldr frobnicate x'), [{ sub: 'other', lang: false }]);
-    assert.deepEqual(tldrCalls('rg tldr src; echo tldr; grep -n tldr structure x'), [], 'the word tldr as an argument is not a tldr call');
-    assert.deepEqual(tldrCalls('C:/Users/x/.local/bin/tldr.exe impact f . --lang go'), [{ sub: 'impact', lang: true }], 'a path before tldr is allowed');
-    assert.deepEqual(tldrCalls('TLDR_QUIET=1 timeout 60 tldr search q src'), [{ sub: 'search', lang: false }], 'env assignments and timeout before tldr are allowed');
+  });
+
+  it('tldrCalls: the word tldr as an argument is not a call; a quoted pipe is not a split', () => {
+    assert.deepEqual(tldrCalls('rg tldr src; echo tldr; grep -n tldr structure x'), []);
+    assert.deepEqual(tldrCalls('rg "a|tldr search" .'), [], 'tldr inside a quoted pattern');
+    assert.deepEqual(tldrCalls('tldr search "a|b" . --lang ts'), [{ sub: 'search', lang: true }], 'a quoted pipe must not drop --lang');
+  });
+
+  it('tldrCalls: the usual shell prefixes before tldr are still a call', () => {
+    const one = (cmd, sub) => assert.deepEqual(tldrCalls(cmd), [{ sub, lang: false }], cmd);
+    one('C:/Users/x/.local/bin/tldr.exe impact f .', 'impact');
+    one('TLDR_QUIET=1 timeout 60 tldr search q src', 'search');
+    one('timeout 60s tldr arch src', 'arch');
+    one('x=$(tldr arch src)', 'arch');
+    one('(tldr tree src)', 'tree');
+    one('if true; then tldr calls src; fi', 'calls');
+    one('uv run tldr extract f.mjs', 'extract');
+    one('rg x src | tldr search y .', 'search');
   });
 
   it('countTranscript counts each tool id once (a streamed copy must not double the count)', () => {
@@ -68,33 +84,58 @@ describe('scout-tldr-count', () => {
   });
 
   it('counts the two scout runs exactly and leaves the critic run out', () => {
-    const s = summarize(readScoutRuns(dir), null);
+    const s = summarize(readScoutRuns([dir]), null);
     assert.equal(s.runs, 2);
     assert.equal(s.runsWithTldr, 1);
-    assert.equal(s.toolCalls, 9);
-    assert.deepEqual(s.byTool, { Grep: 5, Glob: 1, Read: 1, Bash: 2, other: 0 });
-    assert.equal(s.tldrCalls, 3);
-    assert.equal(s.tldrWithLang, 2);
-    assert.deepEqual(s.tldrBySubcommand, { impact: 1, structure: 1, tree: 1 });
-    assert.equal(s.medianToolCallsPerRun, 6);
     assert.equal(s.runsWithTldrPercent, 50);
+    assert.equal(s.toolCalls, 10);
+    assert.deepEqual(s.byTool, { Grep: 5, Glob: 1, Read: 1, Bash: 2, other: 1 });
+    assert.equal(s.tldrCalls, 3);
+    assert.deepEqual(s.tldrBySubcommand, { impact: 1, structure: 1, tree: 1 });
+    assert.equal(s.tldrLangRequired, 2, 'impact and structure take --lang; tree does not');
+    assert.equal(s.tldrLangGiven, 2);
+    assert.equal(s.medianToolCallsPerRun, 5, 'runs of 7 and 3 calls: the median of an even count is the mean of the two middle values');
   });
 
-  it('--since keeps only runs written at or after the date', () => {
+  it('--since keeps only runs written at or after the date; the date is printed normalised', () => {
     const r = cli(['--dir', dir, '--root', rootNoList, '--since', '2026-06-01']);
     assert.equal(r.code, 0, r.err);
     const s = JSON.parse(r.out);
     assert.equal(s.runs, 1);
-    assert.equal(s.toolCalls, 6);
+    assert.equal(s.toolCalls, 7);
+    assert.equal(s.since, '2026-06-01T00:00:00.000Z');
   });
 
   it('the output holds no command text, no prompt text, no session folder name and no path', () => {
     const r = cli(['--dir', dir, '--root', rootNoList]);
     assert.equal(r.code, 0, r.err);
-    for (const forbidden of [MARK, 'tldr impact', 'foo', 'src/', tmp.replace(/\\/g, '/'), tmp, 'sess-']) {
+    const forms = (p) => [p, p.replace(/\\/g, '/'), JSON.stringify(p).slice(1, -1)];
+    for (const forbidden of [MARK, 'tldr impact', 'foo', 'src/', 'sess-', path.basename(tmp), ...forms(tmp)]) {
       assert.ok(!r.out.includes(forbidden), `the output holds "${forbidden}"`);
     }
     assert.match(r.err, /no listed-id list in this root/);
+  });
+
+  it('a transcript that cannot be read is skipped and counted, and does not stop the run', () => {
+    const d2 = path.join(tmp, 'projects-bad');
+    const sub = path.join(d2, 'sess', 'subagents');
+    fs.mkdirSync(path.join(sub, 'agent-d.jsonl'), { recursive: true }); // a folder where the transcript should be: reading it fails
+    fs.writeFileSync(path.join(sub, 'agent-d.meta.json'), JSON.stringify({ agentType: 'scout' }));
+    fs.writeFileSync(path.join(sub, 'agent-e.meta.json'), JSON.stringify({ agentType: 'scout' }));
+    fs.writeFileSync(path.join(sub, 'agent-e.jsonl'), `${tool('w1', 'Grep')}\n`);
+    const s = summarize(readScoutRuns([d2]), null);
+    assert.equal(s.runs, 1);
+    assert.equal(s.unreadableTranscripts, 1);
+  });
+
+  it('projectDirs: the project folder and its worktree folders, nothing else', () => {
+    const projects = path.join(tmp, 'all-projects');
+    const primary = path.join(tmp, 'repo');
+    const slug = primary.replace(/[^A-Za-z0-9]/g, '-');
+    for (const n of [slug, `${slug}--claude-worktrees-one`, `${slug}--claude-worktrees-two`, `${slug}-other`, 'unrelated']) fs.mkdirSync(path.join(projects, n), { recursive: true });
+    const names = projectDirs(projects, primary).map((p) => path.basename(p)).sort();
+    assert.deepEqual(names, [slug, `${slug}--claude-worktrees-one`, `${slug}--claude-worktrees-two`].sort());
+    assert.deepEqual(projectDirs(path.join(tmp, 'no-such-folder'), primary), []);
   });
 
   it('exit 2 when no scout run is in the window', () => {
@@ -114,12 +155,6 @@ describe('scout-tldr-count', () => {
     assert.equal(guardOutput('{"note":"PR 100"}', ['100']), false);
     assert.equal(guardOutput('{"toolCalls":100}', ['100']), true);
     assert.equal(guardOutput('{"toolCalls":100}', null), true);
-  });
-
-  it('the printed date is normalised: free text in --since cannot reach the output', () => {
-    const r = cli(['--dir', dir, '--root', rootNoList, '--since', '2026-06-01']);
-    assert.equal(r.code, 0, r.err);
-    assert.equal(JSON.parse(r.out).since, '2026-06-01T00:00:00.000Z');
   });
 
   it('a list with an unreadable shape stops the run with exit 3 and no output', () => {

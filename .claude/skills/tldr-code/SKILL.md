@@ -12,9 +12,9 @@ Token-efficient code analysis. Measured, 30 days to 2026-09-30: the Read hook re
 
 Advanced features (daemon, semantic search, Python API, language table): `references/advanced-features.md`
 
-**An empty `tldr` result is not absence.** `tldr structure` scans no `.mjs` file, and a wrong `--lang` returns nothing. For `.mjs` use `tldr tree --ext .mjs`, `tldr search` and `tldr extract <file>`. Confirm with Grep before you report that something is missing.
+**An empty `tldr` result is not absence.** `tldr structure` scans no `.mjs` file, and a wrong `--lang` returns nothing. For `.mjs` use `tldr tree --ext .mjs`, `tldr search` and `tldr extract <file>`. `tldr impact` found no function in JavaScript or `.mjs` code when tested with tldr 1.5.2; it works on TypeScript. Confirm with Grep before you report that something is missing.
 
-> **Canonical entry point.** This is the single skill for TLDR usage. Routine analysis (call graph injection, AST-summarized reads, post-edit diagnostics) is handled automatically by 3 live hooks: `tldr-read-enforcer` (denies code Reads over 8 KB and returns an AST summary; fails open), `smart-search-router` (redirects nothing; feeds search context to `tldr-read-enforcer` for unscoped Greps), `post-edit-diagnostics` (live for `.ts` under a tsconfig, for example `.claude/hooks`; skips plain `.mjs`). `tldr-context-inject`, `impact-refactor`, `arch-context-inject`, `edit-context-inject` and `signature-helper` are not registered; do not expect them to fire. Don't add new `tldr-*` sub-skills; extend this one or extend a hook.
+> **Canonical entry point.** This is the single skill for TLDR usage. Routine analysis (call graph injection, AST-summarized reads, post-edit diagnostics) is handled automatically by 3 live hooks: `tldr-read-enforcer` (denies code Reads over 8 KB and returns an AST summary; fails open), `smart-search-router` (redirects nothing; feeds search context to `tldr-read-enforcer` for unscoped Greps), `post-edit-diagnostics` (runs tsc for `.ts`, `.js` and `.mjs` files under the nearest tsconfig, for example `.claude/hooks`, and skips them when there is none; Python goes through the TLDR daemon). `tldr-context-inject`, `impact-refactor`, `arch-context-inject`, `edit-context-inject` and `signature-helper` are not registered; do not expect them to fire. Don't add new `tldr-*` sub-skills; extend this one or extend a hook.
 
 ## Quick Reference
 
@@ -176,7 +176,7 @@ Need to validate changes?
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this
 tool. The evidence trail, version pins, probe archaeology and long caveats live here, and
-load only once this skill does. Verbatim snapshot, so nothing that was trimmed is lost:
+load only once this skill does. Snapshot of the trimmed text (language facts edited, see the top of this file), so nothing that was trimmed is lost:
 
 ````markdown
 # TLDR CLI - Code Analysis Tool
@@ -215,8 +215,8 @@ tldr change-impact [files...]       # Find tests affected by changes
 
 ## When to Use
 
-- **Before reading files**: Run `tldr structure .` to see what exists
-- **Finding code**: Use `tldr search "pattern"` instead of grep for structured results
+- **Before reading files**: Run `tldr structure . --lang <lang>` to see what exists (superseded for scouts by the Search order of `.claude/agents/scout.md`; `structure` scans no `.mjs` file)
+- **Finding code**: Use `tldr search "pattern"` for structured results; Grep stays the choice for literal text and `.mjs`, `.md`, `.json` files
 - **Understanding functions**: Use `tldr cfg` for complexity, `tldr dfg` for data flow
 - **Debugging**: Use `tldr slice file.py func 42` to find what affects line 42
 - **Context for tasks**: Use `tldr context entry_point` to get relevant code
