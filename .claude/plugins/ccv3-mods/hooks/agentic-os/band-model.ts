@@ -237,15 +237,17 @@ const lineTwo = (s: BandState, steps: Step[], width: number): Span[] => {
     ...barSpans(steps, cellCount),
     sp(`${cellCount > 0 ? ' ' : ''}${c.done}/${c.total}`, 'todo'),
   ]
+  // No steps: no PLAN bar and no UNPROVEN count (they read 0/0 and 0, noise). Fix 8 of the status band review.
+  const showPlan = steps.length > 0
   const counts: Span[][] = [
-    [sp(`ASK ${c.asks}${c.stale && c.asks > 0 ? ' stale' : ''}`, askTone(c, s.chip))],
+    [sp(`QUESTIONS ${c.asks}${c.stale && c.asks > 0 ? ' stale' : ''}`, askTone(c, s.chip))],
     ...(c.answered > 0 ? [[sp(`${c.answered} answered?`, 'dim')]] : []),
-    [sp(`UNPROVEN ${c.unproven}`, unprovenTone(c, s.chip))],
+    ...(showPlan ? [[sp(`UNPROVEN ${c.unproven}`, unprovenTone(c, s.chip))]] : []),
   ]
   const build = (variant: { cells: number; label: boolean }, room: number | null): Span[] => {
     const text = room === null ? goal.clippable : clip(goal.clippable, Math.max(0, room))
     const head: Span[] = [goal.label, ...goal.fixed, ...(text === '' ? [] : [sp(text, goal.clippableTone)]), ...goal.tail]
-    return join([head, plan(variant.cells, variant.label), ...counts], sp(SEP, 'dim'))
+    return join([head, ...(showPlan ? [plan(variant.cells, variant.label)] : []), ...counts], sp(SEP, 'dim'))
   }
   const variants = [
     { cells, label: true },
