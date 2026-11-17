@@ -18,6 +18,7 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { checkCounts } from './counts-guard.mjs';
 
 const SURVEY = /how did this session go/i;
 const NEXT_STEPS = /\n?^#{1,6}\s*Next steps\b[\s\S]*$/im;
@@ -70,6 +71,7 @@ function parseArgs(argv) {
     days: Number(opt('--days', 30)),
     all: argv.includes('--all'),
     counts: argv.includes('--counts'),
+    idRoot: opt('--id-root', null),
     project: fs.existsSync(project) ? encodeProject(project) : project,
     root: opt('--root', path.join(os.homedir(), '.claude', 'projects')),
     exclude: argv.flatMap((a, i) => (a === '--exclude' && argv[i + 1] ? [argv[i + 1]] : [])),
@@ -144,13 +146,17 @@ async function main() {
   }
   const by = summarize(rows);
   const md = render(cfg, by, rows.length, since);
-  if (cfg.out) fs.writeFileSync(cfg.out, md); else process.stdout.write(md);
-  if (cfg.json) {
-    const counted = Object.fromEntries(Object.entries(by).map(([k, e]) => [k, { sessions: e.sessions, withAsk: e.withAsk, asks: e.asks, plainQ: e.plainQ }]));
-    fs.writeFileSync(cfg.json, JSON.stringify(cfg.counts
-      ? { days: cfg.days, since: new Date(since).toISOString(), interactive: interactiveHeadline(by), byEntrypoint: counted }
-      : { days: cfg.days, since: new Date(since).toISOString(), exclude: cfg.exclude, interactive: interactiveHeadline(by), byEntrypoint: by }, null, 1));
+  const counted = Object.fromEntries(Object.entries(by).map(([k, e]) => [k, { sessions: e.sessions, withAsk: e.withAsk, asks: e.asks, plainQ: e.plainQ }]));
+  const jsonText = cfg.json ? JSON.stringify(cfg.counts
+    ? { days: cfg.days, since: new Date(since).toISOString(), interactive: interactiveHeadline(by), byEntrypoint: counted }
+    : { days: cfg.days, since: new Date(since).toISOString(), exclude: cfg.exclude, interactive: interactiveHeadline(by), byEntrypoint: by }, null, 1) : '';
+  if (cfg.counts) { // the final pass: no listed id in a counts output (entrypoint words come from transcripts)
+    const g = checkCounts([md, jsonText], cfg.idRoot);
+    if (g.line) console.error(g.line);
+    if (!g.ok) process.exit(g.code);
   }
+  if (cfg.out) fs.writeFileSync(cfg.out, md); else process.stdout.write(md);
+  if (cfg.json) fs.writeFileSync(cfg.json, jsonText);
 }
 
 const isDirectRun = Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));

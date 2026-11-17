@@ -92,6 +92,17 @@ describe('part A: reading the state file', () => {
     assert.deepEqual(lines(log).map((l) => JSON.parse(l).alarmAt), [T, T + 61 * MIN]);
   });
 
+  it('A3b: two start alarms of one lane at one time (PRE-PR and HOOK BUILD) are two rows', () => {
+    const d = folder();
+    const st = path.join(d, 'state.json');
+    const log = path.join(d, 'alarms.jsonl');
+    write(st, state({ [`start PRE-PR lane-a ${NOTE_AT}`]: T }));
+    run(['--append', '--state', st, '--log', log, '--root', EMPTY]);
+    write(st, state({ [`start PRE-PR lane-a ${NOTE_AT}`]: T, [`start HOOK BUILD lane-a ${NOTE_AT}`]: T })); // the second run adds an alarm of the other kind at the same time
+    run(['--append', '--state', st, '--log', log, '--root', EMPTY]);
+    assert.deepEqual(lines(log).map((l) => JSON.parse(l).sub).sort(), ['HOOK BUILD', 'PRE-PR']);
+  });
+
   it('A4: the log is appended, never rewritten: old lines stay byte for byte', () => {
     const d = folder();
     const st = path.join(d, 'state.json');
@@ -103,6 +114,18 @@ describe('part A: reading the state file', () => {
     const now = fs.readFileSync(log, 'utf8');
     assert.ok(now.startsWith(old), 'the old lines changed');
     assert.equal(now.slice(old.length).split('\n').filter(Boolean).length, 1);
+  });
+});
+
+describe('part A: the log file', () => {
+  it('A4b: a log whose last line has no newline keeps both rows readable after an append', () => {
+    const d = folder();
+    const st = path.join(d, 'state.json');
+    const log = path.join(d, 'alarms.jsonl');
+    write(log, '{"kind":"waits-on-seat","sub":null,"subject":"old-1","head8":null,"alarmAt":1}'); // no final newline
+    write(st, state({ [`waits lane-b ${NOTE_AT}`]: T }));
+    assert.equal(run(['--append', '--state', st, '--log', log, '--root', EMPTY]).code, 0);
+    assert.deepEqual(lines(log).map((l) => JSON.parse(l).subject), ['old-1', 'lane-b']);
   });
 });
 
@@ -136,7 +159,12 @@ describe('part A: outcomes from later events', () => {
     assert.deepEqual(await g({ 624: { mergedAt: T + 40 * MIN, closedAt: T + 40 * MIN, head8: 'aaaaaaaa' } }), ['none']);
     assert.deepEqual(await g({ 624: { mergedAt: null, closedAt: null, head8: 'aaaaaaaa' } }), ['none']);
     assert.deepEqual(await g({ 624: { mergedAt: null, closedAt: T + 5 * MIN, head8: 'aaaaaaaa' } }, 'ci-failed', { head8: 'aaaaaaaa' }), ['acted']);
-    assert.deepEqual(await g({ 624: { mergedAt: null, closedAt: null, head8: 'bbbbbbbb' } }, 'ci-failed', { head8: 'aaaaaaaa' }), ['acted']);
+    const head = (headAt) => g({ 624: { mergedAt: null, closedAt: null, head8: 'bbbbbbbb', headAt } }, 'ci-failed', { head8: 'aaaaaaaa' });
+    assert.deepEqual(await head(T + 10 * MIN), ['acted']);
+    assert.deepEqual(await head(T + 40 * MIN), ['none']); // a push hours later is not an answer to the alarm
+    assert.deepEqual(await head(null), ['none']);
+    assert.deepEqual(await head(T - MIN), ['none']);
+    assert.deepEqual(await g({ 624: { mergedAt: null, closedAt: T + 5 * MIN, head8: 'aaaaaaaa' } }, 'pr-green'), ['none']); // closed, not merged: the green alarm is not answered
     assert.deepEqual(await g({ 624: { mergedAt: null, closedAt: null, head8: 'aaaaaaaa' } }, 'ci-failed', { head8: 'aaaaaaaa' }), ['none']);
     assert.deepEqual(await g({}, 'pr-green'), ['none']); // no fact for this PR: no claim of action
     assert.deepEqual(await infer([row('watch-error', 'github')], { events: [], prs: {} }), ['na']);
@@ -168,11 +196,11 @@ describe('part A: privacy and failing loud', () => {
       'start PRE-PR some free note text here 2026-11-16T21:40:00.000Z': T, // too many words
       'waits Not_A.Lane-Id 2026-11-16T21:40:00.000Z': T, // the lane token is not a lane id
       'start HOOK BUILD Not_A.Lane-Id 2026-11-16T21:40:00.000Z': T, // the lane token is not a lane id
-      'ci-failed 624@not-a-sha': T, 'whatever 1 2': T, 'waits lane-c': T, [`waits lane-a ${NOTE_AT}`]: T,
+      'ci-failed 624@not-a-sha': T, 'whatever 1 2': T, 'waits lane-c': T, [`waits lane-d ${NOTE_AT}`]: String(T), [`waits lane-a ${NOTE_AT}`]: T,
     }));
     const ok = run(['--append', '--state', st, '--log', log, '--root', EMPTY]);
     assert.equal(ok.code, 0);
-    assert.equal(JSON.parse(ok.out).skipped, 7);
+    assert.equal(JSON.parse(ok.out).skipped, 8);
     assert.deepEqual(lines(log).map((l) => JSON.parse(l).subject), ['lane-a']);
     assert.ok(!fs.readFileSync(log, 'utf8').includes('free note text'));
     const root = listRoot();
@@ -218,5 +246,57 @@ describe('part A: privacy and failing loud', () => {
     assert.equal(j.totals['waits-on-seat'].acted, 1);
     assert.equal(j.totals['pr-green'].none, 1);
     assert.ok(!r.out.includes('lane-a') && !r.out.includes('624'), 'a subject reached the report');
+  });
+  it('A13: --days, --window and --now are read; a log line that is not the shape of this script is ignored; a doubled row counts once', () => {
+    const d = folder();
+    const log = path.join(d, 'alarms.jsonl');
+    const row = (subject, alarmAt, extra = {}) => ({ kind: 'waits-on-seat', sub: null, subject, head8: null, alarmAt, ...extra });
+    const lines2 = [
+      row('lane-a', T), row('lane-a', T), // the same alarm twice (two runs of --append at one time)
+      row('lane-old', T - 3 * 86_400_000), // older than --days 1
+      { kind: 'free text kind', sub: null, subject: 'lane-a', head8: null, alarmAt: T }, // foreign kind
+      row('free text subject here', T), // foreign subject
+    ];
+    write(log, lines2.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const ev = path.join(d, 'events.json');
+    const prs = path.join(d, 'prs.json');
+    write(ev, [{ laneId: 'lane-a', kind: 'note', at: T + 10 * MIN }]);
+    write(prs, {});
+    const now = new Date(T + 3 * 60 * MIN).toISOString();
+    const rep = (extra) => run(['--report', '--log', log, '--events-file', ev, '--prs-file', prs, '--now', now, '--root', EMPTY, ...extra]);
+    const a = rep(['--days', '1']);
+    assert.equal(a.code, 0, a.err);
+    const j = JSON.parse(a.out);
+    assert.deepEqual(Object.keys(j.totals), ['waits-on-seat']); // the foreign kind is not a key of the report
+    assert.equal(j.totals['waits-on-seat'].rows, 1); // old row, foreign kind, foreign subject and the double are out
+    assert.equal(j.totals['waits-on-seat'].acted, 1); // the default window of 30 minutes sees the event at +10
+    assert.equal(JSON.parse(rep(['--days', '1', '--window', '5']).out).totals['waits-on-seat'].none, 1); // a window of 5 minutes does not
+    assert.equal(JSON.parse(rep(['--days', '5']).out).totals['waits-on-seat'].rows, 2); // --days 5 takes the old row too
+    for (const bad of [['--days', '0'], ['--days', 'x'], ['--window', '0'], ['--window', 'x'], ['--now', 'not a time'], ['--days']]) assert.equal(rep(bad).code, 1, JSON.stringify(bad));
+    // --now is read: a report as of a time before the alarm sees no row.
+    assert.equal(run(['--report', '--log', log, '--events-file', ev, '--prs-file', prs, '--now', new Date(T - 60 * MIN).toISOString(), '--days', '1', '--root', EMPTY]).code, 2);
+  });
+
+  it('A14: the report needs a readable id list: an unreadable or empty list stops it with exit 3 and no output', () => {
+    const d = folder();
+    const log = path.join(d, 'alarms.jsonl');
+    write(log, JSON.stringify({ kind: 'waits-on-seat', sub: null, subject: '1234567890', head8: null, alarmAt: T }) + '\n');
+    const ev = path.join(d, 'events.json');
+    const prs = path.join(d, 'prs.json');
+    write(ev, []);
+    write(prs, {});
+    const args = (root) => ['--report', '--log', log, '--events-file', ev, '--prs-file', prs, '--now', new Date(T + 3 * 60 * MIN).toISOString(), '--root', root];
+    // The report prints no subject, so a listed id cannot reach it: the pass is a guard for a later change of the output. A good list passes.
+    assert.equal(run(args(listRoot())).code, 0);
+    // A list that cannot be read stops the run, and so does an empty one.
+    const broken = listRoot();
+    write(path.join(broken, DATASET_REL), '{ not json 4242');
+    const bad = run(args(broken));
+    assert.equal(bad.code, 3);
+    assert.equal(bad.out, '');
+    assert.ok(!bad.err.includes('4242'));
+    const empty = listRoot();
+    write(path.join(empty, DATASET_REL), { prs: [], findings: [] });
+    assert.equal(run(args(empty)).code, 3);
   });
 });

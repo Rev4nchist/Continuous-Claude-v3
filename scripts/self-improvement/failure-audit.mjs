@@ -15,6 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 import { endsWithQuestion, isSurvey } from './ask-rate.mjs';
+import { checkCounts } from './counts-guard.mjs';
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
@@ -23,6 +24,7 @@ const OUT = opt('--out', null);
 const JSON_OUT = opt('--json', null);
 const DUMP = opt('--dump', null);
 const COUNTS = args.includes('--counts');
+const ID_ROOT = opt('--id-root', null); // counts mode: the repo root of the listed-id list (default: the primary checkout)
 if (COUNTS && DUMP) { console.error('failure-audit: --counts cannot be used with --dump'); process.exit(1); }
 const dumpRows = [];
 const ROOT = opt('--root', path.join(os.homedir(), '.claude', 'projects'));
@@ -156,9 +158,15 @@ if (COUNTS) {
   md += `\n## Next\n\nRead the incidents for each "yes" class. Confirm they are real corrections. Propose ONE rule edit per class with a bad/good pair. Keep this file repo-local: it contains session text.\n`;
 }
 
+const jsonText = JSON.stringify(COUNTS ? { days: DAYS, files: files.length, sessions, humanMsgs, corrections: incidents.length, perModel, classTotals } : { days: DAYS, files: files.length, sessions, humanMsgs, perModel, classTotals, incidents }, null, 1);
+if (COUNTS) { // the final pass: no listed id in a counts output (model names come from transcripts)
+  const g = checkCounts([md, jsonText], ID_ROOT);
+  if (g.line) console.error(g.line);
+  if (!g.ok) process.exit(g.code);
+}
 if (OUT) fs.writeFileSync(OUT, md); else process.stdout.write(md);
 if (DUMP) fs.writeFileSync(DUMP, dumpRows.map((r) => JSON.stringify(r)).join('\n') + '\n');
-if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(COUNTS ? { days: DAYS, files: files.length, sessions, humanMsgs, corrections: incidents.length, perModel, classTotals } : { days: DAYS, files: files.length, sessions, humanMsgs, perModel, classTotals, incidents }, null, 1));
+if (JSON_OUT) fs.writeFileSync(JSON_OUT, jsonText);
 
 // --dump <file>: write every human turn (model, prev assistant snippet, text) as JSONL so an
 // LLM pass can classify corrections. Regex above is the cheap first pass; this is the real one.

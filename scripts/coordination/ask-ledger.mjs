@@ -127,7 +127,9 @@ function splitLabels(ans, labels) {
     for (const l of byLen) {
       if (rest === l) { found = [l]; break; }
       if (rest.startsWith(`${l}, `)) {
-        const tail = go(rest.slice(l.length + 2));
+        const next = rest.slice(l.length + 2);
+        if (!next.length) continue; // an answer that ends in ", " is not a list of labels
+        const tail = go(next);
         if (tail) { found = [l, ...tail]; break; }
       }
     }

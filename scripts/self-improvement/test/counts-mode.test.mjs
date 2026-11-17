@@ -85,3 +85,39 @@ test('B4: ask-rate --counts drops the session prefixes, the project folder name 
   assert.equal(r.json.byEntrypoint.cli.top, undefined);
   assert.ok(r.md.includes('Asks per interactive session'));
 });
+
+test('B5: --counts stops with exit 3 and writes nothing when a listed id stands in the output (a model name, an entrypoint word) or the id list cannot be read', async () => {
+  const { DATASET_REL, EVAL_CONFIG_REL } = await import('../../coordination/board-mask.mjs');
+  const idRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'counts-ids-'));
+  fs.mkdirSync(path.join(idRoot, '.claudedocs'), { recursive: true });
+  fs.mkdirSync(path.join(idRoot, 'scripts', 'eval', 'review-eval'), { recursive: true });
+  fs.writeFileSync(path.join(idRoot, DATASET_REL), JSON.stringify({ prs: [{ pr: 7654321 }], findings: [{ pr: 7654321, comment_id: 1234567890 }] }));
+  fs.writeFileSync(path.join(idRoot, EVAL_CONFIG_REL), '{}');
+  const hot = fs.mkdtempSync(path.join(os.tmpdir(), 'counts-hot-'));
+  fs.mkdirSync(path.join(hot, PROJECT), { recursive: true });
+  const lines = [
+    { type: 'assistant', timestamp: at(0), entrypoint: '1234567890', message: { role: 'assistant', model: '1234567890', content: [{ type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: { questions: [{ question: 'Which?', options: [] }] } }] } },
+    { type: 'user', timestamp: at(5), entrypoint: '1234567890', message: { role: 'user', content: 'that is not what i asked' } },
+  ];
+  fs.writeFileSync(path.join(hot, PROJECT, `${SESSION}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const go = (script, extra) => spawnSync(process.execPath, [script, '--days', '36500', ...extra], { encoding: 'utf8' });
+  const outA = path.join(tmp, 'b5-a.md');
+  const outR = path.join(tmp, 'b5-r.md');
+  const a = go(AUDIT, ['--root', hot, '--counts', '--id-root', idRoot, '--out', outA]);
+  const r = go(RATE, ['--root', hot, '--project', PROJECT, '--counts', '--id-root', idRoot, '--out', outR]);
+  for (const x of [a, r]) {
+    assert.equal(x.status, 3, x.stderr);
+    assert.ok(!x.stderr.includes('1234567890') && !x.stdout.includes('1234567890'), 'an id reached stdout or stderr');
+  }
+  assert.ok(!fs.existsSync(outA) && !fs.existsSync(outR), 'a file was written after exit 3');
+  // A clean fixture passes the same guard.
+  const a2 = go(AUDIT, ['--root', tmp, '--counts', '--id-root', idRoot, '--out', path.join(tmp, 'b5-ok.md')]);
+  assert.equal(a2.status, 0, a2.stderr);
+  // An id list that cannot be read stops the run too.
+  fs.writeFileSync(path.join(idRoot, DATASET_REL), '{ not json 4242');
+  const bad = go(AUDIT, ['--root', tmp, '--counts', '--id-root', idRoot, '--out', path.join(tmp, 'b5-bad.md')]);
+  assert.equal(bad.status, 3);
+  assert.ok(!bad.stderr.includes('4242'));
+  fs.rmSync(idRoot, { recursive: true, force: true });
+  fs.rmSync(hot, { recursive: true, force: true });
+});
