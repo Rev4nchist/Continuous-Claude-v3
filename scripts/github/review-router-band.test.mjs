@@ -33,7 +33,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bandOf, decide, ledgerLine, matchGlob, CRITICAL_TRUST_BOUNDARY } from './review-router.mjs';
+import { bandOf, decide, ledgerLine, matchGlob, CRITICAL_TRUST_BOUNDARY, TRUST_BOUNDARY } from './review-router.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -442,6 +442,91 @@ test('B40: an engine trust-boundary file forces CRITICAL; prompt.mjs, context.mj
   // a rename out of the trust boundary still counts, and backslashes are normalised
   assert.equal(bandOf([{ filename: 'scripts/github/old.mjs', previous_filename: 'scripts/github/review-filter.mjs' }], LIVE).band, 'CRITICAL');
   assert.equal(bandOf(['scripts\\github\\local-review.mjs'], LIVE).band, 'CRITICAL');
+});
+
+// ---------- prflow-trust-list (C0): one trust list for every D1 class (seat ruling D1; Dave 2026-11-17: only the named guards) ----------
+
+const LAND_STEP = ['scripts', 'github', ['land', 'pr'].join('-') + '.ps1'].join('/');
+// Engine part: forces CRITICAL. Tap part: keeps Dave's tap (tapFiles) and forces no band (seat ruling 2026-11-17, option A).
+const ENGINE_CLASSES = {
+  'engine backends': ['scripts/github/local-review/backends/cursor.mjs', 'scripts/github/local-review/backends/claude.mjs'],
+  'decision store (lib/**)': ['scripts/github/lib/decisions.mjs'],
+};
+const TAP_CLASSES = {
+  'named guard hooks (source)': ['.claude/hooks/src/package-install-guard.ts', '.claude/hooks/src/agent-model-guard.ts', '.claude/hooks/src/pre-pr-gate.ts'],
+  'named guard hooks (built dist)': ['.claude/hooks/dist/package-install-guard.mjs', '.claude/hooks/dist/pre-pr-gate.mjs'],
+  'land step': [LAND_STEP, 'scripts/github/land-recheck.mjs', 'scripts/github/land-none-check.mjs', 'scripts/github/land-decision.mjs', 'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1'],
+  'hook registration': ['.claude/settings.json.template', 'scripts/settings/apply-registrations.mjs'],
+  'tap screen and paid review': ['.claude/plugins/ccv3-mods/hooks/pr-checkpoint/ask.ts', '.claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx', 'scripts/github/cr-paid.mjs'],
+  'decision gate and ledger': ['.claude/hooks/src/decision-gate.ts', '.claude/hooks/src/decision-ledger.ts', '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs', 'scripts/github/ship-ask.mjs'],
+  'review router and its config': ['scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', 'scripts/github/pr-checkpoint.mjs'],
+};
+
+test('B41a: a one-file change of each engine class forces CRITICAL and is named in trustFiles and tapFiles', () => {
+  for (const [cls, files] of Object.entries(ENGINE_CLASSES)) {
+    for (const f of files) {
+      const b = bandOf([f], LIVE);
+      assert.equal(b.band, 'CRITICAL', `${cls}: ${f}`);
+      assert.deepEqual(b.trustFiles, [f], `${cls}: trustFiles`);
+      assert.deepEqual(b.tapFiles, [f], `${cls}: tapFiles`);
+    }
+  }
+});
+
+test('B41b: a one-file change of each tap class is named in tapFiles only: not CRITICAL, L false, empty trustFiles', () => {
+  for (const [cls, files] of Object.entries(TAP_CLASSES)) {
+    for (const f of files) {
+      const b = bandOf([f], LIVE);
+      assert.notEqual(b.band, 'CRITICAL', `${cls}: ${f}`);
+      assert.equal(b.L, false, `${cls}: ${f}`);
+      assert.deepEqual(b.trustFiles, [], `${cls}: trustFiles`);
+      assert.deepEqual(b.tapFiles, [f], `${cls}: tapFiles`);
+    }
+  }
+});
+
+test('B42: test files and near-miss paths of the trust classes do not force CRITICAL', () => {
+  const notTrust = [
+    '.claude/hooks/src/__tests__/decision-gate.test.ts', 'scripts/github/local-review/backends/cursor.test.mjs',
+    'scripts/github/ship-ask.test.mjs', 'scripts/github/land-notes.mjs', '.claude/hooks/src/guardrail-report.ts',
+    '.claude/hooks/src/decision-gate-helper.ts', '.claude/hooks/dist/lane-context.mjs', '.claude/hooks/src/lane-context.ts',
+    'scripts/github/local-review/prompt.mjs', 'scripts/github/local-review/verify.mjs', 'scripts/github/pre-pr.mjs',
+    '.github/workflows/ccv3-checks.yml', 'scripts/github/land-decision.test.mjs', '.claude/plugins/ccv3-mods/tests/plain.test.ts',
+  ];
+  for (const f of notTrust) {
+    const b = bandOf([f], LIVE);
+    assert.notEqual(b.band, 'CRITICAL', f);
+    assert.deepEqual(b.trustFiles, [], f);
+    assert.deepEqual(b.tapFiles, [], f);
+  }
+});
+
+test('B43: a dist-only change of decision-gate.mjs is in tapFiles (dist is not logic code; the tap match does not use isLogic) and is not CRITICAL', () => {
+  const b = bandOf(['.claude/hooks/dist/decision-gate.mjs'], LIVE);
+  assert.equal(b.K, 0, 'dist output is not logic (B3)');
+  assert.deepEqual(b.tapFiles, ['.claude/hooks/dist/decision-gate.mjs']);
+  assert.notEqual(b.band, 'CRITICAL');
+  // A rename into or out of the list counts by either name, and backslashes are normalised.
+  assert.deepEqual(bandOf([{ filename: 'scripts/github/ship-ask-v2.mjs', previous_filename: 'scripts/github/ship-ask.mjs' }], LIVE).tapFiles, ['scripts/github/ship-ask.mjs']);
+  assert.deepEqual(bandOf(['.claude\\hooks\\src\\decision-gate.ts'], LIVE).tapFiles, ['.claude/hooks/src/decision-gate.ts']);
+});
+
+test('B44: every entry of both trust parts matches at least one tracked file (a dead entry hides a rename)', () => {
+  const tracked = spawnSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+  assert.ok(tracked.length > 100, 'git ls-files read the repo');
+  assert.equal(CRITICAL_TRUST_BOUNDARY, TRUST_BOUNDARY.engine, 'the old export is the engine part');
+  const dead = [...TRUST_BOUNDARY.engine, ...TRUST_BOUNDARY.tap].filter((g) => !tracked.some((p) => matchGlob(g, p)));
+  assert.deepEqual(dead, []);
+});
+
+test('B45: a tap file in a CRITICAL PR earns no paid CodeRabbit trigger (crTrigger reads trustFiles and security_tier, not tapFiles)', async () => {
+  // The r3 path makes the band CRITICAL, so bandRule reaches crTrigger. ship-ask.mjs is a tap file and not on matrix.security_tier.
+  const r = await recommendFor(['scripts/github/ship-ask.mjs', 'db/migrations/001_init.sql']);
+  assert.equal(r.band.band, 'CRITICAL');
+  assert.deepEqual(r.band.tapFiles, ['scripts/github/ship-ask.mjs']);
+  assert.deepEqual(r.band.securityTier, []);
+  assert.equal(r.recommended, 'none');
+  assert.ok(!r.why.some((w) => /CodeRabbit trigger|Cause:/i.test(w)), r.why.join(' | '));
 });
 
 test('B40: checkpoint.critical alone does not force CRITICAL (it gives the floor, not the band)', () => {

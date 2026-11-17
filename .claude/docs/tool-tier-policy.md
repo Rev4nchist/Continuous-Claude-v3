@@ -18,7 +18,7 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 
 | `kind` | Behavior | Examples |
 |--------|----------|----------|
-| `gate` | PreToolUse with allow/deny decision | `package-install-guard.ts`, `plan-to-ralph-enforcer.ts`, `agent-model-guard.ts`, `explore-to-scout.ts`, `no-haiku-enforcer.ts`, `ralph-delegation-enforcer.ts` |
+| `gate` | PreToolUse with allow/deny decision | `package-install-guard.ts`, `plan-to-ralph-enforcer.ts`, `explore-to-scout.ts`, `no-haiku-enforcer.ts`, `ralph-delegation-enforcer.ts` |
 | `injector` | PostToolUse or PreToolUse adding `additionalContext` | `tldr-context-inject.ts`, `tldr-read-enforcer.ts`, `react-perf-context.ts`, `pre-tool-knowledge.ts`, `memory-awareness.ts`, `epistemic-reminder.ts`, `signature-helper.ts` |
 | `orchestrator` | Multi-step state mgmt across hook events | `ralph-task-monitor.ts`, `ralph-progress-inject.ts`, `ralph-watchdog.ts`, `plan-exit-tracker.ts`, `roadmap-reconcile.ts`, `roadmap-completion.ts` |
 | `telemetry` | Logs/observes only; never blocks | `hook-health-monitor.ts`, `mcp-activity-tracker.ts`, `telemetry-tracker.ts`, `periodic-extract.ts`, `session-outcome.ts`, `heartbeat.mjs`, planned `hook-trace.ts` |
@@ -85,7 +85,7 @@ When adding any new capability, walk this matrix top-to-bottom. The first row th
 | Capability shape | Tier | Why | Example |
 |------------------|------|-----|---------|
 | **Always-on context injection** triggered by tool use | Hook (PostToolUse `additionalContext`) | The user does not request it; it has to fire automatically on every Edit/Read/Grep | `tldr-context-inject` (injects call graph before agent calls), `react-perf-context` (auto-loads react-perf skill on `.tsx` reads), `epistemic-reminder` (warns after Grep), `pre-tool-knowledge` (knowledge tree context before agent spawn) |
-| **Per-tool gate** (allow/deny) | Hook (PreToolUse `permissionDecision`) | Only hooks can deny | `plan-to-ralph-enforcer` (blocks Edit/Write after plan approval unless Ralph), `package-install-guard` (blocks malicious package installs), `agent-model-guard` / `no-haiku-enforcer` (blocks haiku model), `explore-to-scout` (forces scout instead of Explore) |
+| **Per-tool gate** (allow/deny) | Hook (PreToolUse `permissionDecision`) | Only hooks can deny | `plan-to-ralph-enforcer` (blocks Edit/Write after plan approval unless Ralph), `package-install-guard` (blocks malicious package installs), `no-haiku-enforcer` (blocks haiku model), `explore-to-scout` (forces scout instead of Explore) |
 | **State across hook events** | Hook (orchestrator with state file) | Multi-event coordination needs a shared state file in `$TEMP` | `plan-exit-tracker` + `plan-to-ralph-enforcer` (plan-approved state file), `ralph-task-monitor` + `ralph-watchdog` |
 | **External authenticated service** with vendor-maintained API | MCP | Auth, rate limits, API surface lives elsewhere | Notion (claude.ai bundled), Linear (`mcp.linear.app`), Sentry (`mcp.sentry.dev`), Neon (`mcp.neon.tech`), GitHub (npx server) |
 | **External authenticated service** with batch/scripted use | CLI + skill + safety rule | 32x token savings, predictable structured output | `vercel`, `railway`, `gh`, `linearis`, `sentry-cli`, `neonctl`, `tldr`, `opencli`, `qlty` |
@@ -181,7 +181,7 @@ These are the shapes that break the tier model. Catching them early is cheap; ca
 
 **Mitigation.** When two gate-hooks target the same tool, document the priority and the joint contract. Prefer composing into one hook rather than ordering two.
 
-**Real example.** `agent-model-guard.ts` and `no-haiku-enforcer.ts` both block haiku at PreToolUse:Agent — the map flags this as "Redundant enforcement". R5 in composition design proposes consolidation.
+**Real example (corrected 2026-11-17).** The map flagged `agent-model-guard.ts` and `no-haiku-enforcer.ts` as two haiku blocks ("Redundant enforcement"). Only `no-haiku-enforcer.ts` blocks haiku. `agent-model-guard.ts` gives an agent-name hint and never denies.
 
 ### A6. MCP that requires a vendor app to be running, treated as always-available
 
@@ -231,7 +231,7 @@ These rules already codify pieces of this policy. This document does not duplica
 - `.claude/skills/cli-integration/SKILL.md` — CLI vs MCP vs OpenCLI decision tree (sections 1-6) and current 21-tool inventory (the rule was folded into it 2026-09-24)
 - `.claude/rules/hook-dev-lifecycle.md` — full hook workflow (scaffold, build, register, test, sync, verify) and event-type contracts
 - (`nia-first-external.md` was removed 2026-09-23: the Nia MCP server was down and the rule was followed about 1 time in 260.)
-- `.claude/rules-ondemand/opencli-first.md` — OpenCLI for structured web data (44 platforms)
+- `.claude/rules-ondemand/web-research.md` — which tool for web search and page reads; OpenCLI last, only when it runs
 - `.claude/rules/plan-to-ralph-enforcement.md` — gate-hook example with bypass-permissions interaction caveat
 - `docs/hooks/package-install-guard.md` — gate-hook example with 4-layer security check
 - `.claude/rules-ondemand/sentry-safety.md`, `.claude/rules-ondemand/linear-safety.md`, `.claude/rules-ondemand/neonctl-safety.md`, `.claude/rules-ondemand/railway-deploy.md` — destructive-CLI gating patterns (skill body + rule + agent quarantine)
