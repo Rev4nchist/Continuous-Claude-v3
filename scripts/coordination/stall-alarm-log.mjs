@@ -77,8 +77,13 @@ export function inferOutcomes(rows, facts, { windowMin = 30, now = Date.now() } 
       acted = ((facts && facts.events) || []).some((e) => e.laneId === r.subject && e.kind !== 'seeded' && inWindow(e.at));
     } else {
       const p = ((facts && facts.prs) || {})[r.subject];
-      // ci-failed: the PR closed, or a new head was pushed (its commit time headAt), inside the window.
-      if (p) acted = inWindow(p.mergedAt) || (r.kind === 'ci-failed' && (inWindow(p.closedAt) || Boolean(p.head8 && r.head8 && p.head8 !== r.head8 && inWindow(p.headAt))));
+      // ci-failed: the PR closed, or a new head was pushed inside the window. ANY commit of the list (commitHeads) with another head inside the
+      // window counts, so a second push after the window cannot turn an acted row into none. The old rule (the newest head: head8, headAt) stays
+      // as well: a PR with more than 100 commits has a cut list. A row with no head cannot tell a change (validRow accepts head8 null).
+      const newHead = (q) => Boolean(r.head8) && (
+        (Array.isArray(q.commits) && q.commits.some((x) => x && x.head8 !== r.head8 && inWindow(x.at)))
+        || Boolean(q.head8 && q.head8 !== r.head8 && inWindow(q.headAt)));
+      if (p) acted = inWindow(p.mergedAt) || (r.kind === 'ci-failed' && (inWindow(p.closedAt) || newHead(p)));
     }
     return { ...r, outcome: acted ? 'acted' : now < end(r) ? 'open' : 'none' };
   });
@@ -158,17 +163,38 @@ async function liveEvents(rows) {
   }
 }
 
+/**
+ * The commits of a PR as [{ head8, at }], oldest first: the first 8 hex of each sha and its commit time. Nothing else of a commit is kept (no
+ * message, no author). An entry with no 8-hex sha or no readable time is skipped; anything that is not a list gives [].
+ */
+export function commitHeads(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const x of list) {
+    const head8 = x && typeof x.sha === 'string' ? x.sha.slice(0, 8).toLowerCase() : '';
+    const date = x && x.commit && x.commit.committer ? Date.parse(x.commit.committer.date) : NaN;
+    if (/^[0-9a-f]{8}$/.test(head8) && Number.isFinite(date)) out.push({ head8, at: date });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+// livePrs runs the gh CLI against GitHub: it is MANUAL-ONLY (no test runs it; the pure parts, commitHeads and inferOutcomes, are tested).
+// Known limit: a commit time is not a push time. A commit made before the alarm and pushed inside the window reads none, and a rebase or an
+// amend after the window replaces the in-window commit and gives new commit times, so an acted row can read none.
 function livePrs(rows) {
   const prs = {};
   for (const n of new Set(rows.filter((r) => r.kind === 'pr-green' || r.kind === 'ci-failed').map((r) => r.subject))) {
     const j = JSON.parse(execFileSync('gh', ['api', `repos/${REPO_SLUG}/pulls/${n}`], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] }));
     const sha = String((j.head && j.head.sha) || '');
     let headAt = null;
-    if (rows.some((r) => r.kind === 'ci-failed' && r.subject === n)) { // the head commit time, to see WHEN a new head came
+    let commits;
+    if (rows.some((r) => r.kind === 'ci-failed' && r.subject === n)) { // the head commit time, and every commit with its time: the FIRST head change counts
       const c = JSON.parse(execFileSync('gh', ['api', `repos/${REPO_SLUG}/commits/${sha}`], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] }));
       headAt = c.commit && c.commit.committer && c.commit.committer.date ? Date.parse(c.commit.committer.date) : null;
+      // The first 100 commits of the PR (one page, oldest first). Known limit: a PR with more than 100 commits can miss a late push.
+      commits = commitHeads(JSON.parse(execFileSync('gh', ['api', `repos/${REPO_SLUG}/pulls/${n}/commits?per_page=100`], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] })));
     }
-    prs[n] = { mergedAt: j.merged_at ? Date.parse(j.merged_at) : null, closedAt: j.closed_at ? Date.parse(j.closed_at) : null, head8: sha.slice(0, 8), headAt };
+    prs[n] = { mergedAt: j.merged_at ? Date.parse(j.merged_at) : null, closedAt: j.closed_at ? Date.parse(j.closed_at) : null, head8: sha.slice(0, 8), headAt, ...(commits ? { commits } : {}) };
   }
   return prs;
 }

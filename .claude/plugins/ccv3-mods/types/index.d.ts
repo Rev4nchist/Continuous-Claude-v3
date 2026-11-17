@@ -112,7 +112,8 @@ export type PrWatch = {
 }
 
 /** One rate-limit window as the HUD shows it (`five_hour`, `seven_day`, a spend limit). */
-export type HudLimit = { kind: string; percentUsed: number }
+/** `resetsAt`: when the window resets, an ISO 8601 time from the engine (optional: a seed or an old reading has none). */
+export type HudLimit = { kind: string; percentUsed: number; resetsAt?: string }
 
 /**
  * The advisor as the HUD shows it. `blocked` names the env var that keeps it off even though

@@ -142,7 +142,8 @@ describe('agentic-os core band', () => {
     const got = await core($)
     expect(got.line1).toContain('RESTING')
     expect(got.line2).toContain('GOAL not set')
-    expect(got.line2).toMatch(/PLAN [▱]+ 0\/0/)
+    expect(got.line2).not.toContain('PLAN')
+    expect(got.line2).toContain('QUESTIONS 0')
     expect(got.widget).toBeUndefined()
     expect(got.keys.indexOf('row-core-1')).toBeLessThan(got.keys.indexOf('row-core-2'))
   })
@@ -157,7 +158,7 @@ describe('agentic-os core band', () => {
     const got = await core($)
     expect(got.line2).toContain('GOAL prove P1a')
     expect(got.line2).not.toContain('not set')
-    expect(got.line2).toContain('ASK 1')
+    expect(got.line2).toContain('QUESTIONS 1')
     expect(got.line2).toContain('UNPROVEN 1')
     expect(got.line2).toMatch(/PLAN ▰ 1\/1/)
     expect(got.line1).toContain('WAITING FOR YOU')
@@ -172,7 +173,7 @@ describe('agentic-os core band', () => {
     await $.tool.call({ tool: BRIEF_TOOL, goal: `ship ${SECRET}`, ask: [{ kind: 'question', text: `use ${SECRET}?`, recommend: SECRET }] })
     let got = await core($)
     expect(got.line2).toContain('GOAL ship')
-    expect(got.line2).toContain('ASK 1')
+    expect(got.line2).toContain('QUESTIONS 1')
     expect(got.all).not.toContain(SECRET)
     expect(got.texts.join('\n')).not.toContain(SECRET)
     expect(got.texts.join('\n')).not.toContain('a'.repeat(40))
@@ -191,8 +192,8 @@ describe('agentic-os core band', () => {
     } as never)
     const got = await core($)
     expect(got.line1).toContain('WAITING FOR YOU')
-    expect(got.line2).toMatch(/GOAL ship\S* .*\[parsed\]/)
-    expect(got.line2).toContain('ASK 1')
+    expect(got.line2).toMatch(/GOAL ship\S* .*\[guessed\]/)
+    expect(got.line2).toContain('QUESTIONS 1')
     expect(got.all).not.toContain(SECRET)
     expect(got.texts.join('\n')).not.toContain('a'.repeat(40))
   })
@@ -732,12 +733,13 @@ describe('agentic-os hud in the state file', () => {
   test('H1 an interactive session writes hud with the cost and every limit', async ($, on) => {
     const seen = hudWorld(on, { cost: { usd: 3.84 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 12 }] })
     const snapshot = await hudSnapshot($, seen)
-    expect(snapshot.hud).toEqual({ costUsd: 3.84, limits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 12 }] })
+    expect(snapshot.hud).toMatchObject({ costUsd: 3.84, limits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 12 }] })
+    expect(snapshot.hud).toMatchObject({ model: 'claude-opus-5-5', effort: null, advisorCalls: 0 }) // the state file carries what the HUD row draws (status band review, fix 9)
   })
 
   test('H1 a usage with no cost writes costUsd null and keeps the limits', async ($, on) => {
     const seen = hudWorld(on, { rateLimits: [{ kind: 'five_hour', percentUsed: 38 }] })
-    expect((await hudSnapshot($, seen)).hud).toEqual({ costUsd: null, limits: [{ kind: 'five_hour', percentUsed: 38 }] })
+    expect((await hudSnapshot($, seen)).hud).toMatchObject({ costUsd: null, limits: [{ kind: 'five_hour', percentUsed: 38 }] })
   })
 
   test('H2 a headless run writes hud: null', async ($, on) => {
@@ -758,7 +760,7 @@ describe('agentic-os hud in the state file', () => {
       cost: { usd: '3.84' },
       rateLimits: [{ kind: 'five_hour', percentUsed: '38' }, { kind: 'seven_day', percentUsed: 12 }],
     })
-    expect((await hudSnapshot($, seen)).hud).toEqual({ costUsd: null, limits: [{ kind: 'seven_day', percentUsed: 12 }] })
+    expect((await hudSnapshot($, seen)).hud).toMatchObject({ costUsd: null, limits: [{ kind: 'seven_day', percentUsed: 12 }] })
   })
 
   test('H5 a measure after the turn-end snapshot moves the new cost and limits into the file', async ($, on) => {
@@ -769,8 +771,8 @@ describe('agentic-os hud in the state file', () => {
     await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
     expect(lastSnapshot(seen).hud.costUsd).toBe(3.84)
     // The engine measures after the turn ends, so the turn-end snapshot above holds the previous turn's figures.
-    await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, cost: { usd: 9.99 }, rateLimits: [{ kind: 'five_hour', percentUsed: 77 }], changed: ['cost', 'rateLimits'] } as never)
-    expect(lastSnapshot(seen).hud).toEqual({ costUsd: 9.99, limits: [{ kind: 'five_hour', percentUsed: 77 }] })
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, cost: { usd: 9.99 }, rateLimits: [{ kind: 'five_hour', percentUsed: 77, resetsAt: '2026-11-17T04:00:00.000Z' }], changed: ['cost', 'rateLimits'] } as never)
+    expect(lastSnapshot(seen).hud).toMatchObject({ costUsd: 9.99, limits: [{ kind: 'five_hour', percentUsed: 77, resetsAt: '2026-11-17T04:00:00.000Z' }] })
   })
 
   test('H5 a measure that changes nothing in the HUD writes no new snapshot', async ($, on) => {
@@ -792,7 +794,7 @@ describe('agentic-os hud in the state file', () => {
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
     const snapshot = lastSnapshot(seen)
     expect(snapshot.brief.goal).toBe('g')
-    expect(snapshot.hud).toEqual({ costUsd: 2.5, limits: [] })
+    expect(snapshot.hud).toMatchObject({ costUsd: 2.5, limits: [] })
   })
 
   test('H6 a null entry inside limits is skipped and the snapshot is still written', async ($, on) => {
@@ -803,7 +805,7 @@ describe('agentic-os hud in the state file', () => {
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
     const snapshot = lastSnapshot(seen)
     expect(snapshot.brief.goal).toBe('g')
-    expect(snapshot.hud).toEqual({ costUsd: 2.5, limits: [{ kind: 'five_hour', percentUsed: 38 }] })
+    expect(snapshot.hud).toMatchObject({ costUsd: 2.5, limits: [{ kind: 'five_hour', percentUsed: 38 }] })
   })
 
   test('H7 the writer keeps 8 limits and clips a kind to 60 characters', async ($, on) => {

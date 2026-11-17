@@ -350,3 +350,22 @@ describe('label split (card coord-seat-counts, item D1: the CLI minor of the ask
     assert.equal(by.ChainComma.answerKind, 'typed');
   });
 });
+
+describe('gold ids in the id list (card coord-content-scan-followups, item gold ids)', () => {
+  it('16: a made-up gold sha as a session id stops the run with exit 3 and no output; with no gold folder the same run passes', async () => {
+    const { GOLD_DIR_REL } = await import('./board-mask.mjs');
+    const GOLD_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
+    const root = listRoot();
+    const d = folder();
+    const a = [q('Gold', ['A', 'B'])];
+    put(d, 's16.jsonl', [useEntry(GOLD_SHA, 'g1', 0, a), resultEntry(GOLD_SHA, 'g1', 5, a, { [a[0].question]: 'A' })]);
+    assert.equal(run(['--dir', d, '--root', root]).code, 0); // control: not listed yet
+    fs.mkdirSync(path.join(root, GOLD_DIR_REL), { recursive: true });
+    fs.writeFileSync(path.join(root, GOLD_DIR_REL, 'gold-a.json'), JSON.stringify([{ target: { sha40: GOLD_SHA, pr: 8888 } }]));
+    const bad = run(['--dir', d, '--root', root]);
+    assert.equal(bad.code, 3);
+    assert.equal(bad.out, '');
+    assert.ok(!bad.err.includes(GOLD_SHA));
+    assert.ok(bad.err.includes('a listed id reached the output'), 'exit 3 came from a list-read failure, not the id match');
+  });
+});
