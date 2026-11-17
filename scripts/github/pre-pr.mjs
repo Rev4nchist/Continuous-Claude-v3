@@ -129,8 +129,8 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock', 'tick-marker', 'board-band-view', 'ask-ledger'];
-const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id', 'lane-holder-flags', 'lane-parked-scope'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock', 'tick-marker', 'board-band-view', 'ask-ledger', 'stall-alarm-log', 'learning-counts'];
+const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id', 'lane-holder-flags', 'lane-parked-scope', 'learning-counts-db'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
 // validate-mods exits 1 when its typecheck cannot run. On Claude Code 2.1.296 and later no command writes the
@@ -212,6 +212,8 @@ export const SURFACES = [
   // scripts/lib holds the shared dependency resolver (its tests build real git worktrees under the temp folder), and the headless and
   // stop-process-tree tests (PowerShell on Windows). The gate runs every scripts/lib/*.test.mjs; the id keeps its old name.
   { id: 'lib-scripts', globs: ['scripts/lib/**'], gates: [nodeTest('resolve-deps-tests', 'scripts/lib/*.test.mjs')] },
+  // One file only (card coord-seat-counts): the privacy test of the --counts mode. The other tests of this folder are in no gate yet.
+  { id: 'self-improvement-scripts', globs: ['scripts/self-improvement/**'], gates: [nodeTest('counts-mode-test', 'scripts/self-improvement/test/counts-mode.test.mjs')] },
   // scripts/eval/review-eval: every file below (fixtures, config) runs the eval node tests. The folder runs in about 5 s.
   // The files of the engine freeze sets run them too: engine-version.test.mjs checks the import closure of those files, and a change
   // to one of them (PR 574 changed one reviewer backend) failed it in CI only. The lists are imported from the engine-version

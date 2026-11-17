@@ -115,18 +115,28 @@ function readTranscripts(dir) {
   return { names, uses, results, badLines, unreadable };
 }
 
-// A multiSelect answer joins the chosen labels with ", ", and a label can hold ", " itself: take the longest label first.
+// A multiSelect answer joins the chosen labels with ", ", and a label can hold ", " itself. Try the longest label first and
+// BACK UP when the rest cannot be split (labels "One", "One, Two", "Two, Three" and the answer "One, Two, Three" is One + "Two, Three").
 function splitLabels(ans, labels) {
-  const byLen = [...labels].sort((x, y) => y.length - x.length);
-  const got = [];
-  let rest = ans;
-  while (rest.length) {
-    const hit = byLen.find((l) => l.length && (rest === l || rest.startsWith(`${l}, `)));
-    if (!hit) return null;
-    got.push(hit);
-    rest = rest === hit ? '' : rest.slice(hit.length + 2);
-  }
-  return got;
+  const byLen = [...new Set(labels)].filter((l) => l.length).sort((x, y) => y.length - x.length);
+  const memo = new Map();
+  const go = (rest) => {
+    if (!rest.length) return [];
+    if (memo.has(rest)) return memo.get(rest);
+    let found = null;
+    for (const l of byLen) {
+      if (rest === l) { found = [l]; break; }
+      if (rest.startsWith(`${l}, `)) {
+        const next = rest.slice(l.length + 2);
+        if (!next.length) continue; // an answer that ends in ", " is not a list of labels
+        const tail = go(next);
+        if (tail) { found = [l, ...tail]; break; }
+      }
+    }
+    memo.set(rest, found);
+    return found;
+  };
+  return go(ans);
 }
 
 function answerOf(q, ans) {
