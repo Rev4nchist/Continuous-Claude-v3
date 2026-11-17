@@ -162,10 +162,56 @@ describe('payload log: which marked calls it records', () => {
     expect(lines().length).toBe(PAYLOAD_LOG_CAP);
   });
 
-  it('9: a folder in the place of the log does not throw (breaks if the write is not guarded)', () => {
+  it('9: an unreadable log (a folder in its place) does not throw (breaks if the outer guard is dropped)', () => {
     setFlag(MARK);
     mkdirSync(log);
     expect(() => logPayloadIfMarked(marked())).not.toThrow();
+  });
+
+  it('15: a marker that the line text itself holds is refused (breaks if fixedText is not checked)', () => {
+    const today = new Date().toISOString().slice(0, 10);
+    for (const word of ['transcript', 'permission', 'general-purpose', 'principal-reviewer', today]) {
+      setFlag(word);
+      logPayloadIfMarked({ tool_name: 'Write', tool_input: { file_path: `/x/${word}.txt` } });
+    }
+    expect(lines()).toEqual([]);
+    setFlag(MARK);
+    logPayloadIfMarked(marked());
+    expect(lines().length).toBe(1);
+  });
+
+  it('16: a hostile tool_name and permission_mode become other (breaks if TOOL_RE or the closed list is dropped)', () => {
+    setFlag(MARK);
+    logPayloadIfMarked(marked({ tool_name: '/very/private/x"', permission_mode: 'sk-live-X' }));
+    const row = JSON.parse(lines()[0]) as { tool: string; permission_mode: string };
+    expect(row.tool).toBe('other');
+    expect(row.permission_mode).toBe('other');
+    expect(readFileSync(log, 'utf8')).not.toContain('sk-live');
+  });
+
+  it('17: 30 keys of 40 characters still log (breaks if MAX_LINE is cut below the key limit)', () => {
+    setFlag(MARK);
+    const wide: Record<string, unknown> = {};
+    for (let i = 0; i < 28; i++) wide[`k${String(i).padStart(2, '0')}${'a'.repeat(37)}`] = 1;
+    logPayloadIfMarked({ tool_name: 'Write', tool_input: { file_path: `/x/${MARK}.txt` }, ...wide });
+    const row = JSON.parse(lines()[0]) as { keys: string[] };
+    expect(row.keys.length).toBe(30);
+  });
+
+  it('18: a big flag file or a big log is not read or appended (breaks if the size caps are dropped)', () => {
+    setFlag(`${MARK}${' '.repeat(100)}`);
+    logPayloadIfMarked(marked());
+    expect(lines()).toEqual([]);
+    setFlag(MARK);
+    writeFileSync(log, 'x'.repeat(131_000));
+    logPayloadIfMarked(marked());
+    expect(readFileSync(log, 'utf8').length).toBe(131_000);
+  });
+
+  it('19: a non-object payload or a missing tool_input logs nothing and does not throw', () => {
+    setFlag(MARK);
+    for (const bad of [null, 42, 'text', undefined, { tool_name: 'Write' }]) expect(() => logPayloadIfMarked(bad)).not.toThrow();
+    expect(lines()).toEqual([]);
   });
 
   it('10: an empty agent_id is absent, a real one is present (breaks if the empty string counts)', () => {

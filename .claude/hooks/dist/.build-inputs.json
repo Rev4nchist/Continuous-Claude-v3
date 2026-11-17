@@ -149,7 +149,7 @@
     "shared/pageindex-client.ts": "c1f909e1cd2b3773dd96bf5b2425435ff67f2fc2db0fe16d5df244b96957e7b1",
     "shared/pattern-router.ts": "ab1d747fb3ae599e240142ef950fac59f0d3a69a7f7512db070231dd1bc807fc",
     "shared/pattern-selector.ts": "e2f8f3ed29dcdfdc5febd0e86edf06dfca2d3d43da732572735cd9c008dbf43a",
-    "shared/payload-log.ts": "dde6cdf4bbbf1d7c68cfaecd602f78cb35bfbcd2033cfb1c4365fb50b0d0f54f",
+    "shared/payload-log.ts": "b9ebf2770e60036b8bf5ebdaa73a78d2ff3c98347aa482670fdb43d40484de0b",
     "shared/pg-client.ts": "656e422158d828eeac7519cacc56b3dd9259f45f6349ceda5adb46e5e296e9fc",
     "shared/project-id.ts": "21201d0211bfc5301b76a934b4652a1ee3d5fd9f5cd8dcb7f4e184b7de4cd724",
     "shared/project-relevance.ts": "c37db568e215a09c427339fb980bd6e8978948fe85103aa65bf8ea0755161b40",

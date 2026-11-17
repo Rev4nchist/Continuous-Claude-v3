@@ -16,7 +16,7 @@
  * the marker. Cap: about PAYLOAD_LOG_CAP lines; no rotation, no lock (two sessions that append at once may pass it by
  * a few lines). Off: delete the flag file. Any error is ignored: a log never blocks a tool call.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { READ_ONLY_AGENT_TYPES } from './subagent-write.js';
@@ -26,7 +26,9 @@ const MARKER_RE = /^[a-z0-9-]{8,40}$/;
 const KEY_RE = /^[a-z0-9_]{1,40}$/;
 const TOOL_RE = /^[A-Za-z0-9_:.-]{1,60}$/;
 const MAX_KEYS = 30;
-const MAX_LINE = 600;
+const MAX_LINE = 2000; // 30 keys of 40 characters fit
+const MAX_FLAG_BYTES = 64;
+const MAX_LOG_BYTES = 130_000;
 const PERMISSION_MODES: readonly string[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'auto'];
 /** The read-only types the guard knows (imported, so the list cannot drift), plus the types a builder or a default agent has. */
 const AGENT_TYPES: readonly string[] = [...READ_ONLY_AGENT_TYPES, 'general-purpose', 'claude', 'Explore', 'Plan', 'kraken', 'spark'];
@@ -34,6 +36,10 @@ const AGENT_TYPES: readonly string[] = [...READ_ONLY_AGENT_TYPES, 'general-purpo
 type Payload = Record<string, unknown>;
 
 const userHome = (): string => process.env.CCV3_USER_HOME || homedir();
+
+/** The words the line itself holds. A marker that is one of them (or the date) could not be told from the log text: refused. */
+const fixedText = (): string =>
+  ['ts', 'n', 'tool', 'keys', 'agent_id', 'agent_type', 'permission_mode', 'session', 'transcript', 'present', 'absent', 'other', 'same', 'diff', ...AGENT_TYPES, ...PERMISSION_MODES, new Date().toISOString()].join(' ')
 
 const present = (v: unknown): string => (typeof v === 'string' && v !== '' ? 'present' : 'absent');
 
@@ -54,13 +60,14 @@ export function logPayloadIfMarked(rawInput: unknown): void {
   try {
     const dir = join(userHome(), '.claude', 'state');
     const flag = join(dir, 'payload-log.flag');
-    if (!existsSync(flag)) return;
+    if (!existsSync(flag) || statSync(flag).size > MAX_FLAG_BYTES) return;
     const marker = readFileSync(flag, 'utf8').trim();
-    if (!MARKER_RE.test(marker)) return;
+    if (!MARKER_RE.test(marker) || fixedText().includes(marker)) return;
     if (rawInput === null || typeof rawInput !== 'object') return;
     const input = rawInput as Payload;
     if (!JSON.stringify(input.tool_input ?? null).includes(marker)) return;
     const path = join(dir, 'payload-log.jsonl');
+    if (existsSync(path) && statSync(path).size > MAX_LOG_BYTES) return;
     const have = existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean).length : 0;
     if (have >= PAYLOAD_LOG_CAP) return;
     const tool = typeof input.tool_name === 'string' && TOOL_RE.test(input.tool_name) ? input.tool_name : 'other';

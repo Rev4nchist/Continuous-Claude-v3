@@ -6970,7 +6970,7 @@ init_guard_log();
 
 // src/shared/payload-log.ts
 init_trace_boot();
-import { appendFileSync as appendFileSync3, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4 } from "fs";
+import { appendFileSync as appendFileSync3, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4, statSync as statSync2 } from "fs";
 import { homedir as homedir5 } from "os";
 import { join as join6 } from "path";
 var PAYLOAD_LOG_CAP = 200;
@@ -6978,10 +6978,13 @@ var MARKER_RE = /^[a-z0-9-]{8,40}$/;
 var KEY_RE = /^[a-z0-9_]{1,40}$/;
 var TOOL_RE = /^[A-Za-z0-9_:.-]{1,60}$/;
 var MAX_KEYS = 30;
-var MAX_LINE = 600;
+var MAX_LINE = 2e3;
+var MAX_FLAG_BYTES = 64;
+var MAX_LOG_BYTES = 13e4;
 var PERMISSION_MODES = ["default", "acceptEdits", "plan", "bypassPermissions", "auto"];
 var AGENT_TYPES = [...READ_ONLY_AGENT_TYPES, "general-purpose", "claude", "Explore", "Plan", "kraken", "spark"];
 var userHome = () => process.env.CCV3_USER_HOME || homedir5();
+var fixedText = () => ["ts", "n", "tool", "keys", "agent_id", "agent_type", "permission_mode", "session", "transcript", "present", "absent", "other", "same", "diff", ...AGENT_TYPES, ...PERMISSION_MODES, (/* @__PURE__ */ new Date()).toISOString()].join(" ");
 var present = (v) => typeof v === "string" && v !== "" ? "present" : "absent";
 function classOf2(v, list) {
   if (v === void 0 || v === null || v === "") return "absent";
@@ -6996,13 +6999,14 @@ function logPayloadIfMarked(rawInput) {
   try {
     const dir = join6(userHome(), ".claude", "state");
     const flag = join6(dir, "payload-log.flag");
-    if (!existsSync3(flag)) return;
+    if (!existsSync3(flag) || statSync2(flag).size > MAX_FLAG_BYTES) return;
     const marker = readFileSync4(flag, "utf8").trim();
-    if (!MARKER_RE.test(marker)) return;
+    if (!MARKER_RE.test(marker) || fixedText().includes(marker)) return;
     if (rawInput === null || typeof rawInput !== "object") return;
     const input = rawInput;
     if (!JSON.stringify(input.tool_input ?? null).includes(marker)) return;
     const path = join6(dir, "payload-log.jsonl");
+    if (existsSync3(path) && statSync2(path).size > MAX_LOG_BYTES) return;
     const have = existsSync3(path) ? readFileSync4(path, "utf8").split("\n").filter(Boolean).length : 0;
     if (have >= PAYLOAD_LOG_CAP) return;
     const tool = typeof input.tool_name === "string" && TOOL_RE.test(input.tool_name) ? input.tool_name : "other";
