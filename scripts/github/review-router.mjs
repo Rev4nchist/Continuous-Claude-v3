@@ -92,11 +92,13 @@ const LAND_STEP = 'scripts/github/' + ['land', 'pr'].join('-') + '.ps1';
  *  - engine (engine spec 13.4): a non-test file here forces CRITICAL. cursor-review.mjs is the review-tree boundary (AGENT_FILES
  *    strip, buildAgentEnv secret strip, prepareReview); backends/** joined 2026-11-17 (card engine-backend-trust-band). prompt.mjs and
  *    context.mjs stay on matrix.control_plane only, so a prompt-tuning PR is not CRITICAL. lib/** also holds the decision store.
- *  - tap: forces no band. These files keep Dave's tap at every risk band (D1): the named guard hooks (Dave 2026-11-17: only the named
- *    guards, not every hook) with the built dist that runs, the decision gate and ledger, the land step, the review router, its
- *    config, READY and the review-pick record. They do not force CRITICAL: CRITICAL plus a trust file earns a paid CodeRabbit review
- *    (pr-checkpoint.mjs crTrigger), and Dave's 2026-11-04 rule keeps CodeRabbit scarce (seat ruling 2026-11-17, option A).
- *  bandOf reports both parts in tapFiles; the prflow cards read tapFiles. checkpoint.critical stays the aegis + critic floor. */
+ *  - tap: forces no band. These files are meant to keep Dave's tap at every risk band (D1): the named guard hooks (Dave 2026-11-17:
+ *    only the named guards, not every hook) with the built dist that runs, the decision gate and ledger, the land step and the scripts
+ *    it runs, hook registration, the review router, its config, READY, the review-pick record and its question screen, paid review
+ *    spend. They do not force CRITICAL: CRITICAL plus a trust file earns a paid CodeRabbit review (pr-checkpoint.mjs crTrigger), and
+ *    Dave's 2026-11-04 rule keeps CodeRabbit scarce (seat ruling 2026-11-17, option A).
+ *  bandOf reports both parts in tapFiles. NOT IN FORCE YET: no code reads tapFiles; the prflow cards will. Until then the tap part
+ *  changes nothing. checkpoint.critical stays the aegis + critic floor. */
 export const TRUST_BOUNDARY = Object.freeze({
   engine: Object.freeze([
     'scripts/github/local-review.mjs', 'scripts/github/cursor-review.mjs', 'scripts/github/local-review/record.mjs', 'scripts/github/review-filter.mjs',
@@ -108,10 +110,14 @@ export const TRUST_BOUNDARY = Object.freeze({
     // decision gate and ledger (the store is lib/decisions.mjs, in the engine part through lib/**)
     '.claude/hooks/src/decision-gate.ts', '.claude/hooks/src/decision-ledger.ts',
     '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs', 'scripts/github/ship-ask.mjs',
-    // land step
-    LAND_STEP, 'scripts/github/land-recheck.mjs', 'scripts/github/land-none-check.mjs',
-    // review router, its config, READY, the review-pick record
+    // land step and the scripts it runs: the land-tap check, the migration gate, the push wrapper
+    LAND_STEP, 'scripts/github/land-recheck.mjs', 'scripts/github/land-none-check.mjs', 'scripts/github/land-decision.mjs',
+    'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1',
+    // hook registration: a removed entry turns a guard off without a change to the guard (Dave 2026-11-17)
+    '.claude/settings.json.template', 'scripts/settings/apply-registrations.mjs',
+    // review router, its config, READY, the review-pick record, the pick question screen, paid review spend (Dave 2026-11-17)
     'scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', 'scripts/github/pr-checkpoint.mjs',
+    '.claude/plugins/*/hooks/pr-checkpoint/**', 'scripts/github/cr-paid.mjs',
   ]),
 });
 /** The engine part: the files that force CRITICAL. The name stays for its importers. */
