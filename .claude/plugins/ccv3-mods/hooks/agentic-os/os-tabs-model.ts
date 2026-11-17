@@ -1,6 +1,6 @@
 import type { AgentRun, BoardLane, FileTouch, HudLimit, KeeperRecord, OsBrief, OsProof } from '../../types'
 import { CHIP } from './band-model'
-import { isAskStale, proofOf } from './brief'
+import { isAskStale, isTodoStale, proofOf } from './brief'
 import type { Chip } from './brief'
 import { MAX_ITEMS, MIN_ITEMS, digest, fold } from './digest'
 import type { Digest, DigestBlock, DigestCommit, DigestLane, DigestPr } from './digest'
@@ -378,6 +378,7 @@ const decisions = (s: TabState, now: number, columns: number, rows: number): Pan
   const asks = brief?.ask ?? []
   const open = asks.filter(one => one.answered !== true && one.kind !== 'todo').length
   const stale = brief !== null && isAskStale(brief, now, s.activeAt)
+  const todoStale = brief !== null && isTodoStale(brief, now, s.activeAt)
 
   const decisionGroups: PaneRow[][] = log.length
     ? log.map((one, i) => [...wrapRows(`d-${i}`, [sp('  • ', 'dim')], one.text, 'todo', columns, LINES), line(`d-${i}-by`, sp(`    ${one.by} · ${ago(now, one.at)}`, 'dim'))])
@@ -386,8 +387,10 @@ const decisions = (s: TabState, now: number, columns: number, rows: number): Pan
   const askGroups: PaneRow[][] = asks.length
     ? asks.map((one, i) => {
         const answeredAsk = one.answered === true
-        const fresh = !answeredAsk && !stale && one.kind !== 'todo'
-        const mark = answeredAsk ? ' · answered?' : stale ? ' · stale' : ''
+        const isTodoRow = one.kind === 'todo'
+        const rowStale = isTodoRow ? todoStale : stale
+        const fresh = !answeredAsk && !rowStale && !isTodoRow
+        const mark = answeredAsk ? ' · answered?' : rowStale ? ' · stale' : ''
         return [
           ...wrapRows(`a-${i}`, [sp('  ', 'dim'), sp(one.kind, fresh ? 'warn' : 'dim'), ...(mark ? [sp(mark, 'dim')] : []), sp('  ', 'dim')], one.text, fresh ? 'todo' : 'dim', columns, LINES),
           ...(one.recommend ? wrapRows(`a-${i}-rec`, [sp('    recommend: ', 'dim')], one.recommend, 'dim', columns, LINES) : []),

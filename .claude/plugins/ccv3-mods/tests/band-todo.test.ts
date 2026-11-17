@@ -6,6 +6,7 @@ import type { Brief } from '../hooks/agentic-os/brief'
 import { bandLines } from '../hooks/agentic-os/band-model'
 import type { BandState } from '../hooks/agentic-os/band-model'
 import { askSentence } from '../hooks/agentic-os/plain'
+import { tabRows } from '../hooks/agentic-os/os-tabs-model'
 import { hudParts } from '../hooks/hud/model'
 import type { HudState } from '../types'
 import type { Span } from '../hooks/agentic-os/pane-model'
@@ -97,6 +98,23 @@ describe('brief: the todo kind', () => {
       for (const ask of parsed.ask ?? []) expect(ask.kind).not.toBe('todo')
     }
     expect(parseTurnEnd('## Next steps\n1. Run /compact in this session.').ask?.every(one => one.kind !== 'todo')).toBe(true)
+  })
+
+  test('T7 a todo with a recommend or a trailing question mark is stored as a question; a plain todo stays (seat finding 1)', () => {
+    const made = briefWith({
+      ask: [
+        { kind: 'todo', text: 'Run /compact here', recommend: 'now' },
+        { kind: 'todo', text: 'Should I land it?  ' },
+        { kind: 'todo', text: 'Paste the log' },
+        { kind: 'todo', text: 'What about ? the middle' },
+      ],
+    })
+    expect(made.ask.map(one => one.kind)).toEqual(['question', 'question', 'todo', 'todo'])
+    expect(chipOf(briefWith({ ask: [{ kind: 'todo', text: 'Open the PR?' }] }))).toBe('waiting-on-dave')
+    expect(markAsksAnswered(briefWith({ ask: [{ kind: 'todo', text: 'Open the PR?' }] }), 2_000).ask[0]?.answered).toBe(true)
+    const said = briefSummary(made, [])
+    expect(said).toContain('2 open asks')
+    expect(said).toContain('2 to-dos')
   })
 
   test('T6 the brief summary names the open to-dos apart from the open asks', () => {
@@ -204,6 +222,27 @@ describe('brief_set tool texts', () => {
     expect(String(schema?.properties.goal.description)).toContain('plain')
     expect(String(schema?.properties.goal.description)).toContain('80')
     expect(String(seen?.description)).toContain('todo')
+    expect(String(schema?.properties.ask.description)).toContain('kept as a question')
+  })
+})
+
+describe('pane: a todo row uses the to-do clock (seat finding 2)', () => {
+  const day = 24 * 3600_000
+  const rows = (brief: Brief, now: number) =>
+    tabRows('decisions', { brief, activeAt: 1_000, tasks: [], agents: [], now } as never, now, 100, 30)
+      .map(row => [...row.left, ...(row.right ?? [])].map(span => span.text).join(''))
+      .join('\n')
+
+  test('P2 only a todo is stale: the todo row says stale and the question row does not; and the other way round', () => {
+    const todoOnly = briefWith({ ask: [TODO] })
+    const old = rows(todoOnly, 1_000 + day + 1)
+    expect(old).toMatch(/todo\s*·\s*stale/)
+    const mixed = briefWith({ ask: [TODO, QUESTION] })
+    const both = rows(mixed, 1_000 + day + 1)
+    expect(both).toMatch(/todo\s*·\s*stale/)
+    expect(both).toMatch(/question\s*·\s*stale/)
+    const fresh = rows(mixed, 1_000 + day - 1)
+    expect(fresh).not.toContain('stale')
   })
 })
 

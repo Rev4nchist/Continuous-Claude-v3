@@ -234,7 +234,10 @@ export const applyBrief = (prev: Brief | null, raw: unknown, tasks: OsTask[], no
   if (input.stopAt !== undefined) setField(next, 'stopAt', input.stopAt)
   if (input.plan !== undefined) next.plan = input.plan
   if (input.ask !== undefined) {
-    const fresh = input.ask.map(one => ({ ...one, source: 'brief_set' as const }))
+    // A todo that carries a recommendation or ends with a question mark is a question: structure, not words (V7.6). More questions, never fewer.
+    const asKind = (one: { kind: AskKind; text: string; recommend?: string }): AskKind =>
+      one.kind === 'todo' && ((one.recommend ?? '').trim() !== '' || one.text.trim().endsWith('?')) ? 'question' : one.kind
+    const fresh = input.ask.map(one => ({ ...one, kind: asKind(one), source: 'brief_set' as const }))
     // A re-sent ask (same kind and text) is open again, not a leaver: brief_set is an explicit re-ask.
     const cleared = clearLeavers(base.cleared, base.ask, fresh, now)
     if (cleared !== undefined) next.cleared = cleared
