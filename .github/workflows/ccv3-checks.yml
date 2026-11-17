@@ -284,7 +284,7 @@ jobs:
       - name: lane board DB tests (render-board, lane-project, lane-dep-claim, lane-dep-done, lane-dep-seed, scratch-db, lane-inbox-id, lane-holder-flags, lane-parked-scope, learning-counts-db)
         timeout-minutes: 5
         run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/lane-dep-claim.test.mjs scripts/coordination/lane-dep-done.test.mjs scripts/coordination/lane-dep-seed.test.mjs scripts/coordination/scratch-db.test.mjs scripts/coordination/lane-inbox-id.test.mjs scripts/coordination/lane-holder-flags.test.mjs scripts/coordination/lane-parked-scope.test.mjs scripts/coordination/learning-counts-db.test.mjs
-      # These 22 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
+      # These 25 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
       # They sit in this job because it already has the checkout with full history and the hooks install.
       - name: lane board tests without a database (kanban, lane-shim,path guard, registry drift, session label, probe boards, probe scratch guard)
         if: ${{ !cancelled() }}   # run even when the DB step failed, so one red step does not hide the other
@@ -313,11 +313,14 @@ jobs:
           scripts/coordination/stall-alarm-log.test.mjs
           scripts/coordination/learning-counts.test.mjs
           scripts/coordination/board-mask.test.mjs
+          scripts/coordination/board-done-view.test.mjs
+          scripts/coordination/board-scheduled-view.test.mjs
+          scripts/coordination/portfolio.test.mjs
       # The privacy test of the --counts mode of failure-audit and ask-rate (card coord-seat-counts). The other tests of that folder run in no gate yet.
-      - name: counts-only audits (scripts/self-improvement/test/counts-mode.test.mjs)
+      - name: self-improvement tests (counts-mode, append-digest, ask-rate, failure-audit, triage assemble)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
-        run: node --test scripts/self-improvement/test/counts-mode.test.mjs
+        run: node --test scripts/self-improvement/test/counts-mode.test.mjs scripts/self-improvement/test/append-digest.test.mjs scripts/self-improvement/test/ask-rate.test.mjs scripts/self-improvement/test/failure-audit.test.mjs scripts/self-improvement/triage/test/assemble.test.mjs
       # lane-context-db.test.ts skips without LANE_TEST_DB_URL, and vitest exits 0 on a skipped file. The program makes a scratch
       # database on this job's service, runs the one file, drops the database, and fails unless every test ran and passed.
       - name: lane-context cursor tests on a scratch database (fails when the file is skipped)
