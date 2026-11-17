@@ -284,7 +284,7 @@ jobs:
       - name: lane board DB tests (render-board, lane-project, lane-dep-claim, lane-dep-done, lane-dep-seed, scratch-db, lane-inbox-id, lane-holder-flags, lane-parked-scope, learning-counts-db)
         timeout-minutes: 5
         run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/lane-dep-claim.test.mjs scripts/coordination/lane-dep-done.test.mjs scripts/coordination/lane-dep-seed.test.mjs scripts/coordination/scratch-db.test.mjs scripts/coordination/lane-inbox-id.test.mjs scripts/coordination/lane-holder-flags.test.mjs scripts/coordination/lane-parked-scope.test.mjs scripts/coordination/learning-counts-db.test.mjs
-      # These 21 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
+      # These 22 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
       # They sit in this job because it already has the checkout with full history and the hooks install.
       - name: lane board tests without a database (kanban, lane-shim,path guard, registry drift, session label, probe boards, probe scratch guard)
         if: ${{ !cancelled() }}   # run even when the DB step failed, so one red step does not hide the other

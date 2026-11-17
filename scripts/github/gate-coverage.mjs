@@ -3,16 +3,24 @@
  * gate-coverage -- every tracked test file is in a gate or on a named skip list (card coord-test-gate-coverage).
  * Design note: .claudedocs/coordination/2026-11-16-coord-test-gate-coverage-design.md. Read-only: it writes nothing.
  *
- * A test file is GATED when a gate runs it: a pre-pr gate (SURFACES and ALWAYS_GATES of pre-pr.mjs: any test path or glob in a gate's args, or a
- * runner of RUNNERS below whose gate exists), or a CI command (a `run:` command of .github/workflows/*.yml that names the path or a glob, or a
- * runner step). A file that no gate runs must be on the skip list (scripts/github/gate-coverage-skip.json, `skip`: a path or glob and a reason).
- * A file that only pre-pr runs must be on `ciGaps` (a path or glob and a reason): CI has no runner for it. The check fails when:
- *   ungated           a test file is in no gate and on no skip entry
- *   stale-skip        a skip entry matches no test file, or an entry has no reason
- *   gated-and-skipped a file is gated and also on the skip list (the skip entry must go)
- *   pre-pr-only       a file only pre-pr runs is on no ciGaps entry
- *   stale-ci-gap      a ciGaps entry matches no pre-pr-only file
- *   no-test-files / no-gated-files / no-workflow-command / no-pre-pr-gate   a reader found nothing (it must not pass on nothing)
+ * A test file is GATED when a gate runs it. The reader counts only commands that RUN tests: a pre-pr gate (SURFACES and ALWAYS_GATES of pre-pr.mjs)
+ * or a `run:` command of .github/workflows/*.yml whose command word is a runner (node, bash, sh, pwsh, powershell, python, uv, npx, claude, vitest,
+ * pytest, playwright) and that names the test path or a glob. `npm run <script>` counts through the text of that package.json script, and only when a
+ * gate calls it: a script that nothing calls is not a gate. A path inside echo, git, rm or a comment is not run. Runners that run a whole folder
+ * (RUNNERS) count when their pre-pr gate exists. A file that no gate runs must be on the skip list (scripts/github/gate-coverage-skip.json, `skip`:
+ * a path or glob and a reason). A file that only pre-pr runs must be on `ciGaps` (a path or glob and a reason): CI has no runner for it.
+ * The check fails when:
+ *   ungated            a test file is in no gate and on no skip entry
+ *   stale-skip         a skip entry matches no test file
+ *   duplicate-entry    the same path is listed twice in skip or in ciGaps
+ *   gated-and-skipped  a file is gated and also on the skip list (the skip entry must go)
+ *   pre-pr-only        a file only pre-pr runs is on no ciGaps entry
+ *   stale-ci-gap       a ciGaps entry matches no pre-pr-only file
+ *   dead-gate-glob     a gate or CI command names a test glob that matches no tracked file and `deadGates` does not name it
+ *   stale-dead-gate    a `deadGates` entry names a glob that is no longer dead
+ *   missing-gate-file  a gate or CI command names a test file that is not tracked
+ *   skip-file          an entry has no path or no reason, or the file is malformed
+ *   no-test-files / no-gated-files   a reader found nothing (it must not pass on nothing)
  * The exit line always prints the counts it read. Exit: 0 ok | 1 problems | 2 a source could not be read.
  *
  * Usage: node scripts/github/gate-coverage.mjs [--list]    (--list prints the file names of every problem)
@@ -48,10 +56,10 @@ export function commandsOfWorkflow(text) {
   const lines = text.split(/\r?\n/);
   const out = [];
   for (let i = 0; i < lines.length; i += 1) {
-    const m = /^(\s*)(?:-\s+)?run:\s*(.*)$/.exec(lines[i]);
+    const m = /^(\s*)(-\s+)?run:\s*(.*)$/.exec(lines[i]);
     if (!m) continue;
-    const indent = m[1].length + (lines[i].includes('- run:') ? 2 : 0);
-    const value = m[2].trim();
+    const indent = m[1].length + (m[2] ? m[2].length : 0);
+    const value = m[3].trim();
     if (/^[|>][+-]?$/.test(value)) {
       const body = [];
       for (let j = i + 1; j < lines.length; j += 1) {
@@ -65,15 +73,64 @@ export function commandsOfWorkflow(text) {
   return out;
 }
 
-/** The test paths and test globs that one command names (quotes removed; flags and other words left out). */
-export function pathTokens(command) {
-  const out = [];
-  for (const raw of command.split(/\s+/)) {
-    const t = raw.replace(/^["']+|["';,)&|]+$/g, '').replace(/^\.\//, '');
-    if (!t || t.startsWith('-')) continue;
-    if (isTestFile(t.replace(/[*?]+/g, 'x'))) out.push(t);
+// Command words that run tests. A segment whose command word is not here (echo, git, rm, cat, test, ls) runs nothing.
+const RUNNER_WORDS = new Set(['node', 'bash', 'sh', 'pwsh', 'powershell', 'python', 'python3', 'uv', 'npx', 'claude', 'vitest', 'pytest', 'playwright']);
+const NPM_WORDS = new Set(['npm', 'pnpm', 'yarn']);
+
+/** The words of a segment after env assignments and the wrappers `timeout N`, `time`, `exec`. */
+function commandWords(segment) {
+  const w = segment.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < w.length) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w[i])) i += 1;
+    else if (w[i] === 'timeout' && /^\d+[smh]?$/.test(w[i + 1] ?? '')) i += 2;
+    else if (w[i] === 'time' || w[i] === 'exec') i += 1;
+    else break;
   }
-  return out;
+  return w.slice(i).map((x) => x.replace(/^["'(]+|["';,)]+$/g, ''));
+}
+
+/**
+ * The test paths and test globs that a command RUNS, and the npm scripts it calls: {paths, npm}. Segments split at ; & | and line ends; only a segment
+ * whose command word is a runner counts. Quotes are removed; flags and other words are left out.
+ */
+export function runsOf(command) {
+  const paths = [];
+  const npm = [];
+  for (const seg of String(command).replace(/(^|\s)#[^\n]*/g, '$1').split(/[;&|\n]+/)) {
+    const w = commandWords(seg);
+    if (!w.length) continue;
+    const head = w[0].replace(/^.*[\\/]/, '').replace(/\.exe$/i, '');
+    if (NPM_WORDS.has(head)) {
+      const rest = w.slice(1).filter((x) => !x.startsWith('-'));
+      if (rest[0] === 'run' || rest[0] === 'run-script') { if (rest[1]) npm.push(rest[1]); } else if (rest[0] === 'test' || rest[0] === 't') npm.push('test');
+      continue;
+    }
+    if (!RUNNER_WORDS.has(head)) continue;
+    for (const raw of w.slice(1)) {
+      const t = raw.replace(/^\.\//, '');
+      if (!t || t.startsWith('-')) continue;
+      if (isTestFile(t.replace(/[*?]+/g, 'x'))) paths.push(t);
+    }
+  }
+  return { paths, npm };
+}
+
+/** The runs of many commands, with npm scripts expanded through `scripts` ({name: command[]}) when a command calls them (depth 3). */
+export function expandRuns(commands, scripts = {}) {
+  const paths = [];
+  const called = new Set();
+  let level = commands;
+  for (let depth = 0; depth < 3 && level.length; depth += 1) {
+    const next = [];
+    for (const c of level) {
+      const r = runsOf(c);
+      paths.push(...r.paths);
+      for (const n of r.npm) if (!called.has(n)) { called.add(n); next.push(...(scripts[n] ?? [])); }
+    }
+    level = next;
+  }
+  return { paths, called: [...called] };
 }
 
 /** The files that some token names (exactly, or by glob). */
@@ -86,27 +143,34 @@ export function gatedBy(files, tokens) {
 }
 
 // Runners that run a whole folder. `gate` says which pre-pr gate runs it (the runner counts only when that gate exists); `ci` says whether a workflow
-// command runs it too. Pinned to the real sources by gate-coverage.test.mjs (a rename must fail there, not drop coverage here).
+// command runs it too; `files(f, ctx)` is the set it covers (ctx.playwrightPure: the testMatch globs of the pure config, read from the config).
+// Pinned to the real sources by gate-coverage.test.mjs: a rename must fail there, not drop coverage here.
+// opc pytest is NOT a runner: its pre-pr gate runs only the opc test files a change touches (appendTouched), never the whole folder.
 export const RUNNERS = [
   { id: 'hooks-vitest', gate: (g) => g.cmd === 'npx' && (g.args ?? []).includes('vitest') && g.cwd === '.claude/hooks', files: (f) => /^\.claude\/hooks\/src\/__tests__\/.+\.test\.ts$/.test(f), ci: (cmds) => cmds.some((c) => /\bvitest run\b/.test(c)) },
-  { id: 'opc-pytest', gate: (g) => g.cmd === 'uv' && (g.args ?? []).includes('pytest') && g.cwd === 'opc', files: (f) => /^opc\/.*(\/test_[^/]+\.py|_test\.py)$/.test(f), ci: (cmds) => cmds.some((c) => /\bpytest\b/.test(c)) },
   { id: 'mods-plugin-test', gate: (g) => g.id === 'mods-validate', files: (f) => /^\.claude\/plugins\/ccv3-mods\/tests\/.+\.test\.ts$/.test(f), ci: () => false },
-  { id: 'playwright-pure', gate: (g) => (g.args ?? []).includes('apps/agentic-os/playwright.pure.config.ts'), files: (f) => /^apps\/agentic-os\/e2e\/(safe-message[^/]*\.spec\.ts|lane-coord-drift\.spec\.ts|pr-feed-parse\.spec\.ts)$/.test(f), ci: (cmds) => cmds.some((c) => c.includes('playwright.pure.config.ts')) },
+  { id: 'playwright-pure', gate: (g) => (g.args ?? []).includes('apps/agentic-os/playwright.pure.config.ts'), files: (f, ctx = {}) => (ctx.playwrightPure ?? []).some((g) => globToRegExp(`apps/agentic-os/e2e/${g}`).test(f)), ci: (cmds) => cmds.some((c) => c.includes('playwright.pure.config.ts')) },
 ];
 
 /** The files the runners cover, for the pre-pr gates given. */
-export function runnerFiles(files, gates) {
+export function runnerFiles(files, gates, ctx = {}) {
   const set = new Set();
-  for (const r of RUNNERS) if (gates.some((g) => r.gate(g))) for (const f of files) if (r.files(f)) set.add(f);
+  for (const r of RUNNERS) if (gates.some((g) => r.gate(g))) for (const f of files) if (r.files(f, ctx)) set.add(f);
   return set;
 }
-function runnerFilesCi(files, gates, cmds) {
+function runnerFilesCi(files, gates, cmds, ctx) {
   const set = new Set();
-  for (const r of RUNNERS) if (gates.some((g) => r.gate(g)) && r.ci(cmds)) for (const f of files) if (r.files(f)) set.add(f);
+  for (const r of RUNNERS) if (gates.some((g) => r.gate(g)) && r.ci(cmds)) for (const f of files) if (r.files(f, ctx)) set.add(f);
   return set;
 }
 
-/** The skip file: { skip: [{path, reason}], ciGaps: [{path, reason}] }. A missing reason is a problem. */
+/** The testMatch globs of a Playwright config text (strings of the testMatch array). */
+export function testMatchOf(configText) {
+  const m = /testMatch:\s*\[([^\]]*)\]/.exec(configText);
+  return m ? [...m[1].matchAll(/'([^']+)'|"([^"]+)"/g)].map((x) => x[1] ?? x[2]) : [];
+}
+
+/** The skip file: { skip: [{path, reason}], ciGaps: [{path, reason}] }. A missing reason or a duplicate path is a problem. */
 export function parseSkipFile(json) {
   const problems = [];
   const read = (key, required) => {
@@ -114,19 +178,25 @@ export function parseSkipFile(json) {
     if (list === undefined && !required) return [];
     if (!Array.isArray(list)) { problems.push({ kind: 'skip-file', message: `"${key}" is not a list` }); return []; }
     const ok = [];
+    const seen = new Set();
     for (const e of list) {
       if (!e || typeof e.path !== 'string' || !e.path.trim()) problems.push({ kind: 'skip-file', message: `an entry of "${key}" has no path` });
       else if (typeof e.reason !== 'string' || !e.reason.trim()) problems.push({ kind: 'skip-file', message: `the entry ${e.path} of "${key}" has no reason` });
-      else ok.push({ path: e.path.replace(/^\.\//, ''), reason: e.reason.trim() });
+      else {
+        const p = e.path.replace(/^\.\//, '');
+        if (seen.has(p)) problems.push({ kind: 'duplicate-entry', message: `the path ${p} is listed twice in "${key}"` });
+        seen.add(p);
+        ok.push({ path: p, reason: e.reason.trim() });
+      }
     }
     return ok;
   };
   if (!json || typeof json !== 'object') problems.push({ kind: 'skip-file', message: 'the skip file is not an object' });
-  return { skip: read('skip', true), ciGaps: read('ciGaps', false), problems };
+  return { skip: read('skip', true), ciGaps: read('ciGaps', false), deadGates: read('deadGates', false), problems };
 }
 
-/** The verdict: problems and counts. `ci` and `prepr` are the sets of files each side gates. */
-export function evaluate({ files, ci, prepr, skip, ciGaps }) {
+/** The verdict: problems and counts. `ci` and `prepr` are the sets of files each side gates; `tokens` the test paths and globs the gates name. */
+export function evaluate({ files, ci, prepr, skip, ciGaps, deadGates = [], tokens = [] }) {
   const problems = [];
   const counts = { files: files.length, gated: 0, skipped: 0, ciGaps: 0, ungated: 0 };
   if (!files.length) return { problems: [{ kind: 'no-test-files', message: 'no test file was read' }], counts };
@@ -152,29 +222,45 @@ export function evaluate({ files, ci, prepr, skip, ciGaps }) {
   if (unnamed.length) problems.push({ kind: 'pre-pr-only', message: `${unnamed.length} file(s) only pre-pr runs and no ciGaps entry names them`, files: unnamed });
   const staleGaps = gapM.filter((m) => !preOnly.some((f) => m.re.test(f))).map((m) => m.e.path);
   if (staleGaps.length) problems.push({ kind: 'stale-ci-gap', message: `ciGaps entries that match no pre-pr-only file: ${staleGaps.join(', ')}`, entries: staleGaps });
+  const fileSet = new Set(files);
+  const dead = [...new Set(tokens.filter((t) => /[*?]/.test(t)))].filter((t) => !files.some((f) => globToRegExp(t).test(f)));
+  const allowedDead = new Set(deadGates.map((e) => e.path));
+  const deadGlobs = dead.filter((t) => !allowedDead.has(t));
+  if (deadGlobs.length) problems.push({ kind: 'dead-gate-glob', message: `test globs named by a gate that match no tracked file: ${deadGlobs.join(', ')}`, entries: deadGlobs });
+  const staleDead = [...allowedDead].filter((p) => !dead.includes(p));
+  if (staleDead.length) problems.push({ kind: 'stale-dead-gate', message: `deadGates entries whose glob is not dead any more: ${staleDead.join(', ')}`, entries: staleDead });
+  const missing = [...new Set(tokens.filter((t) => !/[*?]/.test(t)))].filter((t) => !fileSet.has(t));
+  if (missing.length) problems.push({ kind: 'missing-gate-file', message: `test files named by a gate that are not tracked: ${missing.join(', ')}`, entries: missing });
   return { problems, counts };
 }
 
 // ---- real sources
 
-const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split(/\r?\n/).filter(Boolean);
+const gitLines = (root, ...args) => execFileSync('git', ['-C', root, '-c', 'core.quotepath=false', ...args, '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter(Boolean);
 
 /** Reads the real sources. Throws (exit 2) when one cannot be read: a reader that found nothing must not pass. */
 export async function readSources(root) {
-  const files = git(root, 'ls-files').map((f) => f.replace(/\\/g, '/')).filter(isTestFile);
+  const tracked = gitLines(root, 'ls-files').map((f) => f.replace(/\\/g, '/'));
+  const files = tracked.filter(isTestFile);
   const wfDir = path.join(root, '.github', 'workflows');
   const ciCommands = fs.readdirSync(wfDir).filter((n) => n.endsWith('.yml')).flatMap((n) => commandsOfWorkflow(fs.readFileSync(path.join(wfDir, n), 'utf8')));
   if (!ciCommands.length) throw new Error('no workflow command was read from .github/workflows');
   const pre = await import(new URL('./pre-pr.mjs', import.meta.url).href);
   const gates = [...(pre.ALWAYS_GATES ?? []), ...(pre.SURFACES ?? []).flatMap((s) => s.gates ?? [])];
   if (!gates.length) throw new Error('no pre-pr gate was read from pre-pr.mjs');
-  const preTokens = gates.flatMap((g) => (g.args ?? []).flatMap((a) => pathTokens(String(a))));
-  const pkgs = git(root, 'ls-files').filter((f) => /(^|\/)package\.json$/.test(f));
-  const pkgCommands = pkgs.flatMap((p) => { try { return Object.values(JSON.parse(fs.readFileSync(path.join(root, p), 'utf8')).scripts ?? {}).map(String); } catch { return []; } });
-  const ciTokens = [...ciCommands, ...pkgCommands].flatMap(pathTokens);
-  const ci = new Set([...gatedBy(files, ciTokens), ...runnerFilesCi(files, gates, ciCommands)]);
-  const prepr = new Set([...gatedBy(files, preTokens), ...runnerFiles(files, gates)]);
-  return { files, ci, prepr, gates };
+  const scripts = {};
+  for (const p of tracked.filter((f) => /(^|\/)package\.json$/.test(f))) {
+    try { for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(path.join(root, p), 'utf8')).scripts ?? {})) (scripts[k] ||= []).push(String(v)); } catch { /* an unreadable package.json has no scripts */ }
+  }
+  const preCommands = gates.map((g) => [g.cmd, ...(g.args ?? []).map(String)].join(' '));
+  const preRuns = expandRuns(preCommands, scripts);
+  const ciRuns = expandRuns(ciCommands, scripts);
+  let playwrightPure = [];
+  try { playwrightPure = testMatchOf(fs.readFileSync(path.join(root, 'apps', 'agentic-os', 'playwright.pure.config.ts'), 'utf8')); } catch { /* no pure config: its runner covers nothing */ }
+  const ctx = { playwrightPure };
+  const ci = new Set([...gatedBy(files, ciRuns.paths), ...runnerFilesCi(files, gates, ciCommands, ctx)]);
+  const prepr = new Set([...gatedBy(files, preRuns.paths), ...runnerFiles(files, gates, ctx)]);
+  return { files, ci, prepr, gates, tokens: [...ciRuns.paths, ...preRuns.paths] };
 }
 
 export function readSkipFile(root) {
@@ -184,7 +270,7 @@ export function readSkipFile(root) {
 export async function check(root = REPO) {
   const src = await readSources(root);
   const skipFile = readSkipFile(root);
-  const r = evaluate({ files: src.files, ci: src.ci, prepr: src.prepr, skip: skipFile.skip, ciGaps: skipFile.ciGaps });
+  const r = evaluate({ files: src.files, ci: src.ci, prepr: src.prepr, skip: skipFile.skip, ciGaps: skipFile.ciGaps, deadGates: skipFile.deadGates, tokens: src.tokens });
   return { problems: [...skipFile.problems, ...r.problems], counts: r.counts };
 }
 
@@ -207,4 +293,9 @@ export async function main(argv) {
   return 1;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main(process.argv.slice(2)).then((c) => { process.exitCode = c; });
+// The same direct-run test as pre-pr.mjs: real paths, so a junction or a drive-letter case cannot make the check silently not run.
+export function isDirectRun(argv1 = process.argv[1], here = fileURLToPath(import.meta.url)) {
+  if (!argv1) return false;
+  try { return fs.realpathSync(argv1) === fs.realpathSync(here); } catch { return path.resolve(argv1) === path.resolve(here); }
+}
+if (isDirectRun()) main(process.argv.slice(2)).then((c) => { process.exitCode = c; });

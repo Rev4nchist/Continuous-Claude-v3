@@ -218,7 +218,7 @@ export const SURFACES = [
   // changes: a new test file in no gate fails here, before CI.
   {
     id: 'gate-coverage',
-    globs: ['**/*.test.*', '**/*.spec.*', '**/test_*.py', '**/*_test.py', '.github/workflows/*.yml', 'scripts/github/pre-pr.mjs', 'scripts/github/gate-coverage*'],
+    globs: ['**/*.test.*', '**/*.spec.*', '**/test_*.py', '**/*_test.py', '.github/workflows/*.yml', 'scripts/github/pre-pr.mjs', 'scripts/github/gate-coverage*', '**/package.json', 'apps/agentic-os/playwright.pure.config.ts', '.claude/hooks/vitest.config.ts'],
     gates: [cheapGate('gate-coverage', 'scripts/github/gate-coverage.mjs')],
   },
   // scripts/eval/review-eval: every file below (fixtures, config) runs the eval node tests. The folder runs in about 5 s.

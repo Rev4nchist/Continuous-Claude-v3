@@ -1,5 +1,5 @@
 {
-  "_note": "Named skip list of scripts/github/gate-coverage.mjs. skip: a test file that no gate runs, with the reason. ciGaps: a test file that only pre-pr runs (CI has no step). An entry that matches no file, or has no reason, fails the check; an entry for a file that a gate runs fails too. An entry leaves this file only when its files join a gate.",
+  "_note": "Named skip list of scripts/github/gate-coverage.mjs. skip: a test file that no gate runs, with the reason. ciGaps: a test file that only pre-pr runs (CI has no step). deadGates: a test glob a gate names that matches no file. An entry that matches nothing, has no reason or is listed twice fails the check; an entry for a file that a gate runs fails too. An entry leaves this file only when its files join a gate.",
   "skip": [
     {
       "path": "archive/**",
@@ -10,7 +10,11 @@
       "reason": "archived hook tests of pruned hooks; not live"
     },
     {
-      "path": ".claude/skills/systematic-debugging/evals/files/**",
+      "path": ".claude/skills/systematic-debugging/evals/files/flaky-vitest/hook-state.test.ts",
+      "reason": "fixture: a flaky vitest project for a skill eval, flaky on purpose"
+    },
+    {
+      "path": ".claude/skills/systematic-debugging/evals/files/flaky-vitest/session-cache.test.ts",
       "reason": "fixture: a flaky vitest project for a skill eval, flaky on purpose"
     },
     {
@@ -110,19 +114,67 @@
       "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
     },
     {
-      "path": ".claude/skills/skill-forge/tests/**",
+      "path": ".claude/skills/skill-forge/tests/test_eval_intake.py",
       "reason": "pytest outside opc: needs a Python environment; no gate runs it"
     },
     {
-      "path": ".claude/skills/vet-skill/scripts/test_*.py",
+      "path": ".claude/skills/skill-forge/tests/test_eval_runner.py",
       "reason": "pytest outside opc: needs a Python environment; no gate runs it"
     },
     {
-      "path": "ai-report-card/scripts/test_*.py",
+      "path": ".claude/skills/skill-forge/tests/test_eval_validity.py",
       "reason": "pytest outside opc: needs a Python environment; no gate runs it"
     },
     {
-      "path": "opc/scripts/dashboard/frontend/src/**/*.test.ts*",
+      "path": ".claude/skills/skill-forge/tests/test_init_skill.py",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": ".claude/skills/skill-forge/tests/test_quick_validate.py",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": ".claude/skills/vet-skill/scripts/test_extract_triggers.py",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": ".claude/skills/vet-skill/scripts/test_register_skill.py",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": "ai-report-card/scripts/test_ai_narrator.py",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": "ai-report-card/scripts/test_weekly_run_emit.py",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": "opc/scripts/dashboard/frontend/src/components/__tests__/ErrorBoundary.test.tsx",
+      "reason": "vitest of the opc dashboard frontend: the vitest gate covers .claude/hooks only; no gate runs these"
+    },
+    {
+      "path": "opc/scripts/dashboard/frontend/src/components/activity/__tests__/ActivityFeed.test.tsx",
+      "reason": "vitest of the opc dashboard frontend: the vitest gate covers .claude/hooks only; no gate runs these"
+    },
+    {
+      "path": "opc/scripts/dashboard/frontend/src/components/notifications/__tests__/NotificationBell.test.tsx",
+      "reason": "vitest of the opc dashboard frontend: the vitest gate covers .claude/hooks only; no gate runs these"
+    },
+    {
+      "path": "opc/scripts/dashboard/frontend/src/components/pillars/__tests__/AgentsDetail.test.tsx",
+      "reason": "vitest of the opc dashboard frontend: the vitest gate covers .claude/hooks only; no gate runs these"
+    },
+    {
+      "path": "opc/scripts/dashboard/frontend/src/components/pillars/__tests__/HandoffsDetail.test.tsx",
+      "reason": "vitest of the opc dashboard frontend: the vitest gate covers .claude/hooks only; no gate runs these"
+    },
+    {
+      "path": "opc/scripts/dashboard/frontend/src/components/pillars/__tests__/SessionsDetail.test.tsx",
+      "reason": "vitest of the opc dashboard frontend: the vitest gate covers .claude/hooks only; no gate runs these"
+    },
+    {
+      "path": "opc/scripts/dashboard/frontend/src/stores/__tests__/activityStore.test.ts",
       "reason": "vitest of the opc dashboard frontend: the vitest gate covers .claude/hooks only; no gate runs these"
     },
     {
@@ -178,15 +230,27 @@
       "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
     },
     {
-      "path": ".claude/skills/session-review/scripts/test/*.test.mjs",
+      "path": "opc/**/test_*.py",
+      "reason": "opc pytest: the pre-pr gate opc-pytest runs only the opc test files a change touches (appendTouched, pre-pr.mjs), never the whole folder; CI has no pytest step"
+    },
+    {
+      "path": ".claude/scripts/security/cf-validate.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": ".claude/scripts/security/sink-spy.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": ".claude/skills/session-review/scripts/test/extract.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": ".claude/skills/session-review/scripts/test/render-html.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
       "path": "scripts/check-agent-model-drift.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/start-embedding-daemon-pipe.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
@@ -198,8 +262,64 @@
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
+      "path": "scripts/coordination/coord-drill-2/abort.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/coord-drill-2/judge.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/coord-drill-2/lib.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/coord-drill-2/metrics.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/coord-drill-2/scenarios.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
       "path": "scripts/coordination/export-dash-data.db.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/export-dash-data.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/export-factory-data.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/factory-rows.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/fleetops-auto-core.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/fleetops-auto-tick.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/lane-dash-config.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/lane-dash-flow.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/lane-dash-metrics.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/lane-dash-project.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
     },
     {
       "path": "scripts/coordination/lane-done-frees-claims.test.mjs",
@@ -210,12 +330,20 @@
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/coordination/coord-drill-2/*.test.mjs",
+      "path": "scripts/coordination/reminder-core.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/coordination/reminder-tick.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/fourthos-weekly/test/publish-local.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/fourthos-weekly/test/*.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+      "path": "scripts/harness-doctor-cleanup.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
     },
     {
       "path": "scripts/hooks/hook-trace-report.test.mjs",
@@ -226,12 +354,256 @@
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/project-cards/test/*.test.mjs",
+      "path": "scripts/measurement/cost-reconcile-parity.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/measurement/cost-reconcile.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/msys/reap-retire.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/pricing/refresh-prices.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/project-cards/test/aliases.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/report-registry/test/*.test.mjs",
+      "path": "scripts/project-cards/test/assemble.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/bind.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/cockpit-pair.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/cockpit.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/digest.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/history.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/mobile-brief.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/notion-create.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/notion-query.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/notion-section.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/page-lock.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/pm-notes-queue.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/queue.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/refresh-batch.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/state.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/sweep.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/triage.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/util.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/artifact-url.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/backfill.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/check-drift.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/conventions.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/detector-coverage-matrix.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/emit-run.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/health-mirror.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/make-run.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/reconcile.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/refresh-pages.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/trust-metrics.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/upsert.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/watchdog.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/weekend-plan.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/review-engine/args.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/board-check.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/claims.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/contract-seam.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/db-board.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/diff.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/facts-holds.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/lane-cli.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/map-check.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/map-parse.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/orphans.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/pack-rank.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/program-cli.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/ready.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/rule-trigger.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/seed-file.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/source.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/status.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/review-engine/sync.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/scheduled/register-ccv3-tasks.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/scheduled/scheduled-blocklist-update.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/scheduled/scheduled-cost-reconcile.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/scheduled/scheduled-health-check.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/scheduled/scheduled-lane-snapshot.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/scheduled/scheduled-open-prs.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/scheduled/scheduled-reminder-tick.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
     },
     {
       "path": "scripts/self-improvement/test/append-digest.test.mjs",
@@ -246,23 +618,35 @@
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/self-improvement/triage/test/*.test.mjs",
+      "path": "scripts/self-improvement/triage/test/assemble.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/tools/test/*.test.mjs",
+      "path": "scripts/settings/apply-registrations.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/settings/remove-registrations.test.mjs",
+      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/start-embedding-daemon-pipe.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/tri-model/*.test.mjs",
+      "path": "scripts/tools/test/safe-replace.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/usage/*.test.mjs",
+      "path": "scripts/tri-model/sync-current-state.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "scripts/work-tracker/test/*.test.mjs",
+      "path": "scripts/usage/token-report.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/work-tracker/test/apply-rows.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
@@ -270,7 +654,59 @@
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
-      "path": "tests/workflow-tests/suites/*.test.mjs",
+      "path": "tests/workflow-tests/suites/browser-automation.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/cdp-cli.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/cli-strategy.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/deployer-agent.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/docker.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/gh-cli.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/neonctl.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/opencli.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/qlty.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/railway-cli.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/skill-rules.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/stale-refs.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/tldr.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/vercel-cli.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     }
   ],
@@ -278,10 +714,6 @@
     {
       "path": ".claude/plugins/ccv3-mods/tests/**",
       "reason": "plugin tests: pre-pr runs them through scripts/mods/validate-mods.mjs (claude plugin test); CI has no claude binary and no step. Open item: plugin tests in CI."
-    },
-    {
-      "path": "opc/**/test_*.py",
-      "reason": "opc pytest: pre-pr runs uv run pytest in opc; CI has no pytest step. Open item: opc pytest in CI."
     },
     {
       "path": "scripts/agents/check-agent-body.test.mjs",
@@ -490,6 +922,12 @@
     {
       "path": "scripts/sync-to-active-cursor.test.sh",
       "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    }
+  ],
+  "deadGates": [
+    {
+      "path": "scripts/trex/**/*.test.mjs",
+      "reason": "the pre-pr surface trex runs gate trex-tests on this glob, and no tracked file matches it: that gate runs nothing. Open item for the seat: remove or repair the trex surface."
     }
   ]
 }
