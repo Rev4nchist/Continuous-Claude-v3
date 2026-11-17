@@ -24,6 +24,8 @@ export type BandState = {
   who?: { name: string | null; short: string | null }
   /** The first lane this session holds. */
   lane: string | null
+  /** The title of that lane (the title only, never its note or scope). The band goal reads it when brief_set set no goal. */
+  laneTitle?: string | null
   /** How many lanes this session holds; more than 1 draws `+N` after the lane (N = count - 1). */
   laneCount?: number
   /** Context used, 0-100. */
@@ -202,10 +204,22 @@ type Goal = { label: Span; fixed: Span[]; clippable: string; clippableTone: Tone
 /** What the goal part is made of: `clippable` is the text that gives way first. */
 const goalOf = (s: BandState): Goal => {
   const label = sp('GOAL ', 'dim')
-  const goal = clean(s.brief?.goal)
-  if (goal === '') return { label, fixed: [sp('not set', 'warn')], clippable: '', clippableTone: 'dim', tail: [] }
+  // Order (the app has the same): the brief_set goal, then the lane title, then the parsed goal, which is only a guess.
   const parsed = s.brief?.sources.goal === 'parsed'
-  return { label, fixed: [], clippable: goal, clippableTone: 'todo', tail: parsed ? [sp(' [parsed]', 'dim')] : [] }
+  const said = parsed ? '' : clean(s.brief?.goal)
+  const title = clean(s.laneTitle)
+  const guess = parsed ? clean(s.brief?.goal) : ''
+  const goal = said !== '' ? said : title !== '' ? title : guess
+  if (goal === '') return { label, fixed: [sp('not set', 'warn')], clippable: '', clippableTone: 'dim', tail: [] }
+  // The stop-at gives way first with the goal text (it is part of the clippable text), and never stands alone.
+  const stop = clean(s.brief?.stopAt)
+  return {
+    label,
+    fixed: [],
+    clippable: stop === '' ? goal : `${goal} · stop at: ${stop}`,
+    clippableTone: 'todo',
+    tail: said === '' && title === '' && guess !== '' ? [sp(' [guessed]', 'dim')] : [],
+  }
 }
 
 type Counts = { asks: number; answered: number; stale: boolean; unproven: number; done: number; total: number }
