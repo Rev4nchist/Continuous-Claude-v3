@@ -331,3 +331,22 @@ describe('--out and the metrics meter', () => {
     assert.equal(facts.openAsks[0][1] - facts.openAsks[0][0], j.rows.find((r) => r.answerKind === 'open').waitSec * 1000);
   });
 });
+
+describe('label split (card coord-seat-counts, item D1: the CLI minor of the ask-ledger pull request)', () => {
+  it('15: a multiSelect answer whose labels share a ", " prefix chain is read with backtracking (a tap, not typed)', () => {
+    const d = folder();
+    const labels = ['One', 'One, Two', 'Two, Three', 'Two'];
+    const c = [q('Chain', labels, { multiSelect: true })];
+    const e = [q('ChainBad', labels, { multiSelect: true })];
+    const f = [q('ChainComma', labels, { multiSelect: true })];
+    put(d, 's15.jsonl', [
+      useEntry('s15', 'c', 0, c), resultEntry('s15', 'c', 5, c, { [c[0].question]: 'One, Two, Three' }), // One + Two, Three: greedy takes "One, Two" and fails on "Three"
+      useEntry('s15', 'e', 10, e), resultEntry('s15', 'e', 15, e, { [e[0].question]: 'One, Three' }), // no way to split into labels: typed
+      useEntry('s15', 'f', 20, f), resultEntry('s15', 'f', 25, f, { [f[0].question]: 'One, ' }), // ends in a comma and a space: typed
+    ]);
+    const by = Object.fromEntries(ledger(d).rows.map((r) => [r.class, r]));
+    assert.equal(by.Chain.answerKind, 'tap');
+    assert.equal(by.ChainBad.answerKind, 'typed');
+    assert.equal(by.ChainComma.answerKind, 'typed');
+  });
+});
