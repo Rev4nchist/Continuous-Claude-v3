@@ -11,7 +11,9 @@
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
-import { countIdsIn, loadHoldoutIds } from './shared/holdout-ids.js';
+import { answerKeyHitsOf } from './shared/answer-paths-door.js';
+import { loadListedIds } from './shared/gold-ids.js';
+import { countIdsIn } from './shared/holdout-ids.js';
 import { primaryRepo } from './shared/lane-board.js';
 import { routerFlag } from './shared/router-config.js';
 
@@ -19,7 +21,7 @@ export const SCAN_TOOLS = new Set(['Bash', 'PowerShell', 'SendMessage', 'Artifac
 /** The most bytes read from a file named by a tool input (a published page). A larger file says its tail was not scanned. */
 export const FILE_READ_LIMIT = 1024 * 1024;
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
-/** Where ids belong: a write there is not a leak. */
+/** Where ids belong: a write there is not a leak. A write into any answer-key path is exempt too (isAnswerKeyPath). */
 const EXEMPT = [/\/scripts\/eval\/review-eval\/gold\//i, /\/\.claude\/state\/review-engine\//i, /\/2026-11-01-pr-review-dataset\.json$/i];
 
 type Env = Record<string, string | undefined>;
@@ -31,6 +33,16 @@ interface Scanned { text: string; tailBytes: number }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const fwd = (p: string): string => p.replace(/\\/g, '/');
+
+/**
+ * An answer-key path in any spelling (absolute, a worktree copy, backslashes): the matcher of answer-key.mjs, the one list of those paths, tried on
+ * each tail of the path (the globs are repo-relative). The gold files hold the gold ids by design, so a write there never warns.
+ */
+export function isAnswerKeyPath(p: string): boolean {
+  const segments = fwd(p).split('/');
+  for (let i = 0; i < segments.length; i++) if (answerKeyHitsOf([segments.slice(i).join('/')]).length > 0) return true;
+  return false;
+}
 
 /** The first FILE_READ_LIMIT bytes of a file, and how many bytes were left unread. An unreadable file gives no text. */
 function readCapped(path: string): Scanned {
@@ -51,7 +63,10 @@ function readCapped(path: string): Scanned {
 /** The outgoing text of one tool input, or null when the call sends nothing out (another tool, a read action, an exempt write). */
 export function outgoingText(tool: string, input: Record<string, unknown>): Scanned | null {
   if (!SCAN_TOOLS.has(tool)) return null;
-  if (WRITE_TOOLS.has(tool) && EXEMPT.some((re) => re.test(fwd(str(input.file_path) || str(input.notebook_path))))) return null;
+  if (WRITE_TOOLS.has(tool)) {
+    const target = str(input.file_path) || str(input.notebook_path);
+    if (EXEMPT.some((re) => re.test(fwd(target))) || isAnswerKeyPath(target)) return null;
+  }
   switch (tool) {
     case 'Bash': case 'PowerShell': return { text: str(input.command), tailBytes: 0 };
     case 'SendMessage': return { text: str(input.message), tailBytes: 0 };
@@ -133,7 +148,7 @@ export function scanInput(data: HookInput, deps: Deps = {}): { output: Output | 
   const readFile = (p: string): string | null => { try { return readFileSync(p, 'utf8'); } catch { return null; } };
   if (routerFlag(cwd, readFile, home, 'holdoutScan', 'off')) return { output: null };
   let ids: string[];
-  try { ids = loadHoldoutIds(rootOf()); } catch {
+  try { ids = loadListedIds(rootOf()); } catch {
     writeLog(logPath, { ts: now(), tool, error: 'list', mode: 'warn', ccv3 });
     if (!firstOffInSession(home, str(data.session_id))) return { output: null };
     return { output: wrap('holdout-scan off: the holdout id list could not be read; this input was not scanned (warn mode).') };

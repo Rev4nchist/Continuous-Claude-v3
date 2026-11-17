@@ -25,6 +25,46 @@ export function holdoutIdsOf(ds, cfg) {
   return [...out];
 }
 
+/** A gold PR number shorter than this is not listed: our own PR references ("#123") would hit it (design note, section 4; seat ruling 2026-11-16). */
+export const MIN_GOLD_PR_DIGITS = 4;
+
+/**
+ * The gold ids as text, from the parsed gold files (card coord-content-scan-followups, item gold ids; the warn and mask guards only, never the deny
+ * list). `files` is a list of parsed files, each a list of rows. A sha is any string of 7 to 40 hex with a letter, in ANY field of a row (target,
+ * provenance, a head map, both sides of a range written "a..b" or "a...b"); a 64-hex hash is not one. A PR number is `target.pr` when it is an
+ * integer of MIN_GOLD_PR_DIGITS digits or more. Sorted, each once. Pure like the rest of this file: no import, no file access, no output of an id.
+ */
+export function goldIdsOf(files) {
+  const out = new Set();
+  const walk = (v) => {
+    if (typeof v === 'string') { for (const part of v.split(/\.{2,3}/)) if (isSha(part)) out.add(part.toLowerCase()); return; }
+    if (v !== null && typeof v === 'object') Object.values(v).forEach(walk); // an array too: Object.values lists its items
+  };
+  for (const rows of Array.isArray(files) ? files : []) {
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      walk(row);
+      const pr = row?.target?.pr;
+      if (Number.isInteger(pr) && pr > 0 && String(pr).length >= MIN_GOLD_PR_DIGITS) out.add(String(pr));
+    }
+  }
+  return [...out].sort();
+}
+
+/**
+ * The shape check of the gold input: throws one fixed text, never a value, when `files` is not a non-empty list of lists of objects or when no
+ * sha is found at all (a renamed field would give a short list that passes ids unseen: the same reason as checkHoldoutShape).
+ */
+export function checkGoldShape(files) {
+  const bad = () => { throw new Error('the gold id files have the wrong shape'); };
+  if (!Array.isArray(files)) bad();
+  for (const rows of files) {
+    if (!Array.isArray(rows)) bad();
+    for (const row of rows) if (row === null || typeof row !== 'object' || Array.isArray(row)) bad();
+  }
+  if (!goldIdsOf(files).some((id) => isSha(id))) bad();
+}
+
 // Seat read 2 (minor) asked for "PR: n", "pr_n", a JSON "pr": n field and "pull request n" too. Measured on 600 commits of main (2026-11-15):
 // the JSON form adds 10 hits and "PR: n" 2, all short PR numbers: this repo's own JSON (Gold A, eval files) holds CCv3 PR numbers that
 // collide with holdout PR numbers, so those forms would deny ordinary re/ pushes. Not added; a known limit of the matcher.

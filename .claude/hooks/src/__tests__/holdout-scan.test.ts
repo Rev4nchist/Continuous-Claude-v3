@@ -171,3 +171,68 @@ describe('holdout-scan', () => {
     expect(readFileSync(logPath, 'utf8')).not.toMatch(/other-repo|worktrees/);
   });
 });
+
+// ---- gold ids (card coord-content-scan-followups, item gold ids; design note .claudedocs/coordination/2026-11-16-coord-gold-ids-design.md) ----
+// The warn hook reads the wider list: the holdout ids and the gold ids. Every gold id here is made up.
+//   HS14 a gold sha or a 4-digit gold PR number in a tool input gives no warning     -> read loadHoldoutIds instead of loadListedIds
+//   HS15 a short gold PR number or a bare number warns                                -> list the 1 to 3 digit gold PR numbers (the false-deny class)
+//   HS16 a write into an answer-key path warns, or a write elsewhere does not          -> drop the answer-key matcher, or match any file name
+//   HS17 a broken gold folder gives a partial scan                                    -> swallow the gold read error
+//   HS18 a gold id reaches the warning or the log row                                 -> put the match in the text
+//   HS19 the holdout warning changes when a gold folder exists                        -> change the holdout path
+const GOLD_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
+const GOLD_PR_LONG = 8888;
+const GOLD_PR_SHORT = 123;
+
+function plantGold(files: Record<string, unknown> = { 'gold-a.json': [{ target: { pr: GOLD_PR_LONG, sha40: GOLD_SHA } }, { target: { pr: GOLD_PR_SHORT } }] }): void {
+  const dir = join(home, 'continuous-claude', 'scripts', 'eval', 'review-eval', 'gold');
+  mkdirSync(dir, { recursive: true });
+  for (const [name, value] of Object.entries(files)) writeFileSync(join(dir, name), typeof value === 'string' ? value : JSON.stringify(value));
+}
+const warnOf = (tool: string, input: Record<string, unknown>): string | undefined => run(tool, input).output?.hookSpecificOutput.additionalContext;
+
+describe('holdout-scan with gold ids', () => {
+  beforeEach(() => plantGold());
+
+  it('HS14: a gold sha and a 4-digit gold PR number after a context word warn with a count, in each outgoing tool input', () => {
+    for (const [tool, input] of [
+      ['Bash', { command: `echo ${GOLD_SHA.slice(0, 12)}` }],
+      ['SendMessage', { to: 'peer', message: `the fix is PR #${GOLD_PR_LONG}` }],
+      ['Write', { file_path: join(home, 'notes.md'), content: `sha ${GOLD_SHA}` }],
+    ] as [string, Record<string, unknown>][]) expect(warnOf(tool, input), tool).toMatch(/holdout-scan: 1 holdout id/);
+  });
+
+  it('HS15: a 3-digit gold PR number and a bare 4-digit number do not warn (short numbers stay out of the list)', () => {
+    expect(warnOf('Bash', { command: `echo "PR #${GOLD_PR_SHORT} and pull/${GOLD_PR_SHORT}"` })).toBeUndefined();
+    expect(run('Bash', { command: `sed -n ${GOLD_PR_LONG},9000p file.ts` }).output).toBeNull();
+  });
+
+  it('HS16: a write into an answer-key path (the gold store, rubrics, seeds, the link labels) does not warn; a write elsewhere does', () => {
+    const repo = join(home, 'continuous-claude');
+    const key = ['scripts/eval/review-eval/gold/gold-a.json', 'scripts/eval/review-eval/rubrics/x.md', 'scripts/eval/review-eval/seeds/s.json', 'scripts/eval/review-eval/linktype-labels.json'];
+    for (const p of key) expect(run('Write', { file_path: join(repo, p), content: `sha ${GOLD_SHA}` }).output, p).toBeNull();
+    // A worktree copy of the same path, in a backslash spelling, is the same answer-key path.
+    expect(run('Edit', { file_path: join(repo, '.claude', 'worktrees', 'w1', 'scripts', 'eval', 'review-eval', 'gold', 'gold-b.json').replace(/\//g, '\\'), old_string: 'a', new_string: `sha ${GOLD_SHA}` }).output).toBeNull();
+    for (const p of ['scripts/eval/review-eval/score.mjs', 'docs/gold/gold-a.json', 'notes.md']) expect(warnOf('Write', { file_path: join(repo, p), content: `sha ${GOLD_SHA}` }), p).toMatch(/holdout-scan: 1 holdout id/);
+  });
+
+  it('HS17: a gold folder that cannot be read gives the scan-off warning, never a partial scan', () => {
+    plantGold({ 'gold-a.json': '{ not json' });
+    const out = run('Bash', { command: `echo PR #4242 ${GOLD_SHA}` }).output;
+    expect(out?.hookSpecificOutput.additionalContext).toMatch(/holdout-scan off: the holdout id list could not be read/);
+    expect(JSON.stringify(out)).not.toMatch(/permissionDecision/);
+    expect(logRows()[0]).toMatchObject({ tool: 'Bash', error: 'list' });
+  });
+
+  it('HS18: no gold id and no slice of one in the warning or the log row', () => {
+    const out = run('SendMessage', { to: 'peer', message: `${GOLD_SHA} and PR #${GOLD_PR_LONG} and more words` }).output;
+    const text = JSON.stringify(out) + readFileSync(logPath, 'utf8');
+    expect(out?.hookSpecificOutput.additionalContext).toMatch(/holdout-scan: 2 holdout id/);
+    for (const s of [GOLD_SHA, GOLD_SHA.slice(0, 7), String(GOLD_PR_LONG), 'more words']) expect(text, s).not.toContain(s);
+  });
+
+  it('HS19: a holdout id warns as before, and a text with a holdout id and a gold id counts both', () => {
+    expect(warnOf('Bash', { command: `echo PR #${FAKE_PR}` })).toMatch(/holdout-scan: 1 holdout id/);
+    expect(warnOf('Bash', { command: `echo PR #${FAKE_PR} and ${GOLD_SHA}` })).toMatch(/holdout-scan: 2 holdout ids/);
+  });
+});

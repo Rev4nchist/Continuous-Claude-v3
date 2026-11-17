@@ -88,3 +88,69 @@ test('HS6: the shape check throws on a dataset or config that would give a short
   assert.doesNotThrow(() => checkHoldoutShape({ prs: good.prs, findings: [{ pr: 9001, comment_id: '5', round: 2 }, { pr: 9001 }, { pr: 9001, comment_id: 'r-abc' }] }, {}));
   for (const [ds, cfg] of bad) assert.throws(() => checkHoldoutShape(ds, cfg), /wrong shape/, JSON.stringify([ds, cfg]));
 });
+
+// ---- gold ids (card coord-content-scan-followups, item gold ids; design note .claudedocs/coordination/2026-11-16-coord-gold-ids-design.md) ----
+// Every id below is made up. GD1..GD6 are the failure list of the pure part: goldIdsOf and checkGoldShape.
+const gold = () => import('./holdout-ids.mjs'); // dynamic: a missing export fails one test, not the whole file
+
+const GSHA1 = 'fedcba9876543210fedcba9876543210fedcba98';
+const GSHA2 = '0a1b2c3d4e5f60718293a4b5c6d7e8f901234567';
+const GSHA3 = '1234567890abcdef1234567890abcdef12345678';
+const GSHA4 = 'a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0';
+const HASH64 = 'ab'.repeat(32);
+
+test('GD1: a sha comes from any field of a row, nested or not, in lower case; short hex, digit-only hex and 64-hex hashes do not', async () => {
+  const { goldIdsOf, checkGoldShape, MIN_GOLD_PR_DIGITS } = await gold();
+  // Breaks when: only target.sha40 is read (the provenance shas are missed), the hex form rule changes, or a sha256 hash is taken as an id.
+  const rows = [{ id: 'x', target: { pr: 1, sha40: GSHA1.toUpperCase() }, provenance: { fixSha: GSHA2, hunks: [{ head: GSHA3 }], sha256: HASH64, short: 'abc123', digits: '1234567890123456789012345678901234567890' } }];
+  assert.deepEqual(goldIdsOf([rows]), [GSHA2, GSHA1, GSHA3].sort()); // GSHA3 stands only inside an array of a nested field
+});
+
+test('GD2: a PR number is taken at 4 digits or more; 1 to 3 digits and non-integers are not', async () => {
+  const { goldIdsOf, checkGoldShape, MIN_GOLD_PR_DIGITS } = await gold();
+  // Breaks when: the digit floor moves (a short number would deny or warn on ordinary PR references), or a string number is taken.
+  assert.equal(MIN_GOLD_PR_DIGITS, 4);
+  const rows = [3, 99, 100, 999, 1000, 20000, '5555', 4.5, null, 0, -1000, -20000].map((pr) => ({ target: { pr } }));
+  rows.push({ target: { pr: 1000 } });
+  assert.deepEqual(goldIdsOf([rows]), ['1000', '20000']);
+});
+
+test('GD3: a range gives both sides, with two or three dots', async () => {
+  const { goldIdsOf, checkGoldShape, MIN_GOLD_PR_DIGITS } = await gold();
+  assert.deepEqual(goldIdsOf([[{ target: { range: `${GSHA1}..${GSHA2}` } }, { target: { range: `${GSHA3}...${GSHA4}` } }]]), [GSHA1, GSHA2, GSHA3, GSHA4].sort());
+});
+
+test('GD4: the list is unique and sorted, whatever the order of files and rows', async () => {
+  const { goldIdsOf, checkGoldShape, MIN_GOLD_PR_DIGITS } = await gold();
+  const a = [{ target: { sha40: GSHA1, pr: 4444 } }];
+  const b = [{ target: { sha40: GSHA2, pr: 4444 } }, { target: { sha40: GSHA1 } }];
+  assert.deepEqual(goldIdsOf([a, b]), goldIdsOf([b, a]));
+  assert.deepEqual(goldIdsOf([a, b]), ['4444', GSHA2, GSHA1].sort());
+});
+
+test('GD5: checkGoldShape throws one fixed text when a file is not a list of rows, a row is not an object, or no sha is found; the text holds no value', async () => {
+  const { goldIdsOf, checkGoldShape, MIN_GOLD_PR_DIGITS } = await gold();
+  // Breaks when: a renamed key gives a short list instead of a throw (the scan would pass ids unseen), or the error quotes the file.
+  const text = 'the gold id files have the wrong shape';
+  const secret = 'zebra-quartz-secret';
+  const bad = [[{ a: secret }], [[], { target: {} }], [{ target: { pr: 4444 } }], [], [secret], [[null]], [[null, { target: { sha40: GSHA1 } }]], [[secret, { target: { sha40: GSHA1 } }]], [[[{ target: { sha40: GSHA1 } }]]]];
+  for (const files of bad) assert.throws(() => checkGoldShape(files), (e) => e instanceof Error && e.message === text, JSON.stringify(files).slice(0, 40));
+  for (const notAList of ['rows', 5, null, undefined, {}]) assert.throws(() => checkGoldShape(notAList), (e) => e instanceof Error && e.message === text, String(notAList));
+  assert.doesNotThrow(() => checkGoldShape([[{ target: { sha40: GSHA1 } }]]));
+});
+
+test('GD6: tie to the real gold files and to lint-ids: every gold sha and every gold PR number of 4 digits or more of forbiddenParts is in goldIdsOf', async () => {
+  const { goldIdsOf, checkGoldShape, MIN_GOLD_PR_DIGITS } = await gold();
+  // Breaks when: gold.mjs or lint-ids.mjs reads a field that goldIdsOf does not (a drift alarm; no id is printed).
+  const { forbiddenParts } = await import('../../eval/review-eval/rubrics/lint-ids.mjs');
+  const { GOLD_DIR, loadGold, NON_ROW_FILES } = await import('../../eval/review-eval/gold.mjs');
+  const { readdirSync } = await import('node:fs');
+  const files = readdirSync(GOLD_DIR).filter((f) => f.endsWith('.json') && f !== 'escape-baseline.json').map((f) => JSON.parse(readFileSync(path.join(GOLD_DIR, f), 'utf8')));
+  assert.ok(NON_ROW_FILES.includes('escape-baseline.json'), 'the one non-row file this test and the loader skip');
+  const ids = new Set(goldIdsOf(files));
+  assert.ok(ids.size > 0);
+  const parts = forbiddenParts({ cfg: {}, dataset: { prs: [], findings: [] }, goldRows: loadGold(GOLD_DIR).rows });
+  const missing = [...parts.goldSha].filter((s) => !ids.has(s)).length + [...parts.goldPr].filter((p) => p.length >= MIN_GOLD_PR_DIGITS && !ids.has(p)).length;
+  assert.equal(missing, 0);
+  assert.equal([...ids].filter((x) => /^\d+$/.test(x) && x.length < MIN_GOLD_PR_DIGITS).length, 0);
+});

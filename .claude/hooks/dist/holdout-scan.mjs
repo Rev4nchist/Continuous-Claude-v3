@@ -355,13 +355,39 @@ function bootTrace(env = process.env, _bootCall) {
 if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
 
 // src/holdout-scan.ts
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync as readFileSync2, readSync, writeFileSync } from "fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync as readFileSync3, readSync, writeFileSync } from "fs";
 import { homedir as homedir3 } from "os";
-import { dirname as dirname2, join as join4 } from "path";
+import { dirname as dirname2, join as join5 } from "path";
 
-// src/shared/holdout-ids.ts
-import { readFileSync } from "fs";
-import { join as join2 } from "path";
+// ../../scripts/github/lib/answer-key.mjs
+var ANSWER_KEY_GLOBS = Object.freeze([
+  "scripts/eval/review-eval/gold/**",
+  "scripts/eval/review-eval/seeds/**",
+  "scripts/eval/review-eval/rubrics/**",
+  "scripts/eval/review-eval/linktype-labels.json"
+]);
+var slashLower = (p) => String(p).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+function matches(glob, p) {
+  if (glob.endsWith("/**")) {
+    const prefix = glob.slice(0, -2);
+    return p.length > prefix.length && p.startsWith(prefix);
+  }
+  return glob === p;
+}
+function answerKeyHitsOf(paths, globs = ANSWER_KEY_GLOBS) {
+  const list = globs.map(slashLower);
+  return paths.filter((p) => {
+    const n = slashLower(p);
+    return list.some((g) => matches(g, n));
+  });
+}
+
+// src/shared/answer-paths-door.ts
+var answerKeyHitsOf2 = answerKeyHitsOf;
+
+// src/shared/gold-ids.ts
+import { readdirSync, readFileSync as readFileSync2 } from "fs";
+import { join as join3 } from "path";
 
 // ../../scripts/github/lib/holdout-ids.mjs
 function holdoutIdsOf(ds, cfg) {
@@ -382,6 +408,41 @@ function holdoutIdsOf(ds, cfg) {
   out.delete("undefined");
   out.delete("null");
   return [...out];
+}
+var MIN_GOLD_PR_DIGITS = 4;
+function goldIdsOf(files) {
+  const out = /* @__PURE__ */ new Set();
+  const walk = (v) => {
+    if (typeof v === "string") {
+      for (const part of v.split(/\.{2,3}/)) if (isSha(part)) out.add(part.toLowerCase());
+      return;
+    }
+    if (Array.isArray(v)) {
+      v.forEach(walk);
+      return;
+    }
+    if (v !== null && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  for (const rows of Array.isArray(files) ? files : []) {
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      walk(row);
+      const pr = row?.target?.pr;
+      if (Number.isInteger(pr) && pr > 0 && String(pr).length >= MIN_GOLD_PR_DIGITS) out.add(String(pr));
+    }
+  }
+  return [...out].sort();
+}
+function checkGoldShape(files) {
+  const bad = () => {
+    throw new Error("the gold id files have the wrong shape");
+  };
+  if (!Array.isArray(files) || files.length === 0) bad();
+  for (const rows of files) {
+    if (!Array.isArray(rows)) bad();
+    for (const row of rows) if (row === null || typeof row !== "object" || Array.isArray(row)) bad();
+  }
+  if (!goldIdsOf(files).some((id) => isSha(id))) bad();
 }
 var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 function countIdsIn(text, ids) {
@@ -450,6 +511,8 @@ function tokenHit(low, id) {
 }
 
 // src/shared/holdout-ids.ts
+import { readFileSync } from "fs";
+import { join as join2 } from "path";
 var DATASET_REL = ".claudedocs/2026-11-01-pr-review-dataset.json";
 var EVAL_CONFIG_REL = "scripts/eval/review-eval/config.json";
 var countIdsIn2 = countIdsIn;
@@ -467,6 +530,30 @@ function loadHoldoutIds(mainRoot) {
   return ids;
 }
 
+// src/shared/gold-ids.ts
+var GOLD_DIR_REL = "scripts/eval/review-eval/gold";
+var GOLD_NON_ROW_FILES = ["escape-baseline.json"];
+var GOLD_UNREADABLE = "the gold id list could not be read";
+function loadGoldIds(mainRoot) {
+  let names;
+  try {
+    names = readdirSync(join3(mainRoot, GOLD_DIR_REL));
+  } catch (e) {
+    if (e?.code === "ENOENT") return [];
+    throw new Error(GOLD_UNREADABLE);
+  }
+  try {
+    const files = names.filter((n) => n.endsWith(".json") && !GOLD_NON_ROW_FILES.includes(n)).sort().map((n) => JSON.parse(readFileSync2(join3(mainRoot, GOLD_DIR_REL, n), "utf8")));
+    checkGoldShape(files);
+    return goldIdsOf(files);
+  } catch {
+    throw new Error(GOLD_UNREADABLE);
+  }
+}
+function loadListedIds(mainRoot) {
+  return [.../* @__PURE__ */ new Set([...loadHoldoutIds(mainRoot), ...loadGoldIds(mainRoot)])];
+}
+
 // src/shared/lane-board.ts
 import * as os from "node:os";
 var fwd = (p) => String(p).replace(/\\/g, "/").replace(/\/+$/, "");
@@ -476,18 +563,18 @@ function primaryRepo(env = process.env) {
 }
 
 // src/shared/router-config.ts
-import { dirname, join as join3 } from "path";
+import { dirname, join as join4 } from "path";
 var CONFIG_REL = "review-router.config.json";
 function routerConfigText(cwd, readFile, home) {
   let dir = cwd;
   for (let i = 0; i < 40; i++) {
-    const text = readFile(join3(dir, CONFIG_REL));
+    const text = readFile(join4(dir, CONFIG_REL));
     if (text !== null) return text;
     const up = dirname(dir);
     if (up === dir) break;
     dir = up;
   }
-  return readFile(join3(home, "continuous-claude", CONFIG_REL));
+  return readFile(join4(home, "continuous-claude", CONFIG_REL));
 }
 function routerFlag(cwd, readFile, home, section, key) {
   const text = routerConfigText(cwd, readFile, home);
@@ -507,6 +594,11 @@ var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "NotebookEdit"]);
 var EXEMPT = [/\/scripts\/eval\/review-eval\/gold\//i, /\/\.claude\/state\/review-engine\//i, /\/2026-11-01-pr-review-dataset\.json$/i];
 var str = (v) => typeof v === "string" ? v : "";
 var fwd2 = (p) => p.replace(/\\/g, "/");
+function isAnswerKeyPath(p) {
+  const segments = fwd2(p).split("/");
+  for (let i = 0; i < segments.length; i++) if (answerKeyHitsOf2([segments.slice(i).join("/")]).length > 0) return true;
+  return false;
+}
 function readCapped(path) {
   let fd = null;
   try {
@@ -523,7 +615,10 @@ function readCapped(path) {
 }
 function outgoingText(tool, input) {
   if (!SCAN_TOOLS.has(tool)) return null;
-  if (WRITE_TOOLS.has(tool) && EXEMPT.some((re) => re.test(fwd2(str(input.file_path) || str(input.notebook_path))))) return null;
+  if (WRITE_TOOLS.has(tool)) {
+    const target = str(input.file_path) || str(input.notebook_path);
+    if (EXEMPT.some((re) => re.test(fwd2(target))) || isAnswerKeyPath(target)) return null;
+  }
   switch (tool) {
     case "Bash":
     case "PowerShell":
@@ -567,8 +662,8 @@ function writeLog(logPath, row) {
   }
 }
 function firstOffInSession(home, sessionId) {
-  const dir = join4(home, ".claude", "state", "holdout-scan");
-  const marker = join4(dir, `${(sessionId || "no-session").replace(/[^A-Za-z0-9-]/g, "_")}.off`);
+  const dir = join5(home, ".claude", "state", "holdout-scan");
+  const marker = join5(dir, `${(sessionId || "no-session").replace(/[^A-Za-z0-9-]/g, "_")}.off`);
   try {
     if (existsSync(marker)) return false;
     mkdirSync(dir, { recursive: true });
@@ -590,7 +685,7 @@ var wrap = (text) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", addit
 function scanInput(data, deps = {}) {
   const env = deps.env ?? process.env;
   const home = env.CCV3_USER_HOME || homedir3();
-  const logPath = deps.logPath ?? join4(home, ".claude", "logs", "holdout-scan.jsonl");
+  const logPath = deps.logPath ?? join5(home, ".claude", "logs", "holdout-scan.jsonl");
   const now = deps.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
   const tool = str(data.tool_name);
   const cwd = data.cwd || process.cwd();
@@ -600,7 +695,7 @@ function scanInput(data, deps = {}) {
   const ccv3 = inCcv3(cwd, rootOf);
   const readFile = (p) => {
     try {
-      return readFileSync2(p, "utf8");
+      return readFileSync3(p, "utf8");
     } catch {
       return null;
     }
@@ -608,7 +703,7 @@ function scanInput(data, deps = {}) {
   if (routerFlag(cwd, readFile, home, "holdoutScan", "off")) return { output: null };
   let ids;
   try {
-    ids = loadHoldoutIds(rootOf());
+    ids = loadListedIds(rootOf());
   } catch {
     writeLog(logPath, { ts: now(), tool, error: "list", mode: "warn", ccv3 });
     if (!firstOffInSession(home, str(data.session_id))) return { output: null };
@@ -622,7 +717,7 @@ function scanInput(data, deps = {}) {
 function main() {
   let data = {};
   try {
-    data = JSON.parse(readFileSync2(0, "utf8") || "{}");
+    data = JSON.parse(readFileSync3(0, "utf8") || "{}");
   } catch {
     return;
   }
@@ -637,6 +732,7 @@ export {
   FILE_READ_LIMIT,
   SCAN_TOOLS,
   countHits,
+  isAnswerKeyPath,
   outgoingText,
   scanInput
 };
