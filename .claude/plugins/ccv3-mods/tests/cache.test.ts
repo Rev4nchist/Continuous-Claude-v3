@@ -295,7 +295,7 @@ describe('cache element', () => {
     await step($, { input: 0, read: 0, write: 100_000 })
     await step($, { input: 0, read: 100_000, write: 0 })
     await step($, { input: 0, read: 0, write: 900_000 }, { agentId: 'sub1' })
-    expect((await band($)).hud).toContain('cache 50% · 60m')
+    expect((await band($)).hud).toContain('cache 50% · cold in 60m')
   })
 
   test('K2 a rewrite in the newest turn shows MISS with its size; a clean next turn clears it', async ($, on) => {
@@ -346,9 +346,9 @@ describe('cache element', () => {
     await step($, { input: 0, read: 0, write: 360_000 })
     const mounted = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
     const text = async () => (await mounted.find({ key: 'row-hud' }))?.text ?? ''
-    expect(await text()).toContain('· 60m')
+    expect(await text()).toContain('· cold in 60m')
     await clock.advance(18 * 60_000)
-    expect(await text()).toContain('· 42m')
+    expect(await text()).toContain('· cold in 42m')
     await clock.advance(43 * 60_000)
     // 360k tokens rewritten at the 1-hour write rate on Opus: 360_000 × $4 × 2 ÷ 1M.
     expect(await text()).toContain('cache COLD · next ≈$2.88')
@@ -414,7 +414,7 @@ describe('cache element', () => {
     world(on, {}, [{ kind: 'spend_limit', percentUsed: 40 }])
     await start($)
     await step($, { input: 0, read: 0, write: 100_000 })
-    expect((await band($)).hud).toContain('· 5m')
+    expect((await band($)).hud).toContain('· cold in 5m')
     expect(isSubscription(['spend_limit'])).toBe(false)
     expect(isSubscription(['seven_day'])).toBe(true)
     expect(isSubscription([])).toBe(false)
@@ -424,7 +424,7 @@ describe('cache element', () => {
     const clock = world(on, { CCV3_CACHE_TTL_MIN: '30' })
     await start($)
     await step($, { input: 0, read: 0, write: 100_000 })
-    expect((await band($)).hud).toContain('· 30m')
+    expect((await band($)).hud).toContain('· cold in 30m')
     await clock.advance(31 * 60_000)
     // A subscription still writes 1-hour entries: 100_000 × $4 × 2 ÷ 1M.
     expect((await band($)).hud).toContain('cache COLD · next ≈$0.80')
@@ -438,7 +438,7 @@ describe('cache element', () => {
     await step($, { input: 0, read: 0, write: 100_000 })
     beneath.usageFails = true
     await step($, { input: 0, read: 100_000, write: 1_000 })
-    expect((await band($)).hud).toContain('· 60m')
+    expect((await band($)).hud).toContain('· cold in 60m')
     await clock.advance(61 * 60_000)
     // Still a subscription: 101_000 × $4 × 2 ÷ 1M, not the 5-minute rate ($0.51).
     expect((await band($)).hud).toContain('cache COLD · next ≈$0.81')
@@ -577,8 +577,8 @@ describe('cache model', () => {
 
   test('K2 the label, the low-time tone and the report read the same state', () => {
     const state = addRequest(warm(), request({ read: 100_000, write: 0, at: 120_000 }))
-    expect(cacheLabel(cacheView(state, 120_000)!)).toEqual({ text: 'cache 50% · 60m', tone: 'todo' })
-    expect(cacheLabel(cacheView(state, 120_000 + 55 * 60_000)!)).toEqual({ text: 'cache 50% · 5m', tone: 'warn' })
+    expect(cacheLabel(cacheView(state, 120_000)!)).toEqual({ text: 'cache 50% · cold in 60m', tone: 'todo' })
+    expect(cacheLabel(cacheView(state, 120_000 + 55 * 60_000)!)).toEqual({ text: 'cache 50% · cold in 5m', tone: 'warn' })
     // A five-minute lifetime warns in its last half minute.
     const five = addRequest(EMPTY_CACHE, request({ read: 0, write: 100_000, at: 60_000, ttlMin: 5, oneHour: false }))
     expect(cacheLabel(cacheView(five, 60_000 + 4 * 60_000)!).tone).toBe('todo')
