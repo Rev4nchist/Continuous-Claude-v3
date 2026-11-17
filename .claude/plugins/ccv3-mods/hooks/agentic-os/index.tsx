@@ -9,7 +9,8 @@ import { ledgerBandSpans, settle } from '../agent-ledger/model'
 import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
-import { answersAsks, applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact, tapDecisions, withTaps } from './brief'
+import { answersAsks, applyBrief, briefSummary, countWaitTasks, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact, tapDecisions, waitLapsed, withTaps } from './brief'
+import type { WaitTask } from './brief'
 import { hudOrSeed, seedHud } from '../hud/seed'
 import { bandLines, compactLine } from './band-model'
 import type { BandState } from './band-model'
@@ -71,6 +72,21 @@ const brief = atom({ plugin: 'ccv3-mods', key: 'brief' } as const, null as OsBri
 const refused = atom({ plugin: 'ccv3-mods', key: 'refused' } as const, false)
 /** When the session last did anything: a prompt, a turn start or end, a main-loop tool call. An open ask stays fresh 24 hours from it. */
 const activeAt = atom({ plugin: 'ccv3-mods', key: 'activeAt' } as const, null as number | null)
+
+/**
+ * Fix 5, the system wait: the background tasks (id and type only) the last main-agent Stop listed, and when each id was FIRST seen.
+ * The age of a task runs from its first sight and a later Stop never renews it. A turn start, a prompt and a SessionStart empty the list;
+ * only a SessionStart with source startup also empties the first-seen map (a turn start comes before every Stop, so clearing it there would renew every
+ * shell's age, and a compact, fork, resume or clear must not give a never-ending shell another 30 minutes).
+ * Never the description, command, prompt or server text of a task: free text, and the mod puts nothing of it on screen or in a file.
+ */
+const bgTasks = atom({ plugin: 'ccv3-mods', key: 'bgTasks' } as const, [] as WaitTask[])
+const bgSeen = atom({ plugin: 'ccv3-mods', key: 'bgSeen' } as const, {} as Record<string, number>)
+/**
+ * Bumped by every clear, before the clear's first await. A Stop reads it before `await next(e)` and writes only if it did not move: a clear that lands
+ * while the settings hooks run is never overwritten by the late write. A module variable, not an atom: the engine resets atoms after session.end.
+ */
+let bgGen = 0
 
 /** Repo, branch and worktree of the session folder: read from the .git files at the session start and at each turn start. */
 const git = atom({ plugin: 'ccv3-mods', key: 'git' } as const, null as OsGit | null)
@@ -230,11 +246,11 @@ const view = async ($: EngineInterface): Promise<OsView> => ({
 })
 
 /**
- * The chip, one way for the snapshot and the band, so the two cannot disagree.
+ * The chip, one way for the snapshot and the band, so the two cannot disagree. One difference, on purpose: `forFile` (the state file) leaves the system wait out.
  * `working`: Dave's prompt just arrived, so a turn is about to start and the chip leaves waiting-on-dave at once.
  * `except`: the call that is writing (brief_set is itself a running step while its handler answers).
  */
-const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { working?: boolean; except?: string } = {}) =>
+const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { working?: boolean; except?: string; forFile?: boolean } = {}) =>
   deriveChip({
     brief: await read($, brief),
     tasks: now.tasks,
@@ -245,7 +261,52 @@ const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { work
     now: at,
     activeAt: await read($, activeAt),
     agentRuns: now.agents.filter(agent => agent.status === 'running'),
+    // The state file never holds waiting-on-work (the app reads five chips): `forFile` leaves the wait out.
+    ...(opts.forFile === true ? {} : { bgTasks: await read($, bgTasks), bgSeen: await read($, bgSeen) }),
   })
+
+/** Fix 5: empties the task list (and, at a SessionStart, the first-seen map). The bump comes first, so a Stop that is waiting for next(e) sees it. Never throws. */
+const clearWait = async ($: EngineInterface, forget: boolean): Promise<void> => {
+  try {
+    bgGen += 1
+    if (await isOff($)) return
+    await update($, bgTasks, () => [])
+    if (forget) await update($, bgSeen, () => ({}))
+  } catch {
+    // Observer only.
+  }
+}
+
+const MAX_WAIT_TASKS = 50
+
+/** The id and the type of each task a Stop lists; an entry with no id or no type is skipped. Nothing else of the entry is read. */
+const taskIds = (list: unknown[]): WaitTask[] => {
+  const found = new Map<string, WaitTask>()
+  for (const one of list) {
+    const id = (one as { id?: unknown } | null)?.id
+    const type = (one as { type?: unknown } | null)?.type
+    if (typeof id !== 'string' || id === '' || id.length > 100 || typeof type !== 'string') continue
+    if (!found.has(id) && found.size < MAX_WAIT_TASKS) found.set(id, { id, type: type.slice(0, 40) })
+  }
+  return [...found.values()]
+}
+
+/**
+ * The write of a main-agent Stop: the tasks it lists, each with its first-seen time (an id seen before keeps its time; an id the Stop no longer lists is forgotten).
+ * `gen` is the counter read before next(e): a clear that landed since wins. Both updaters check it, so no await sits between the check and the write.
+ * A missing or non-array list changes nothing (an old engine). Never throws.
+ */
+const noteWait = async ($: EngineInterface, list: unknown, gen: number): Promise<void> => {
+  try {
+    if (!Array.isArray(list) || (await isOff($))) return
+    const at = await $.clock.now()
+    const tasks = taskIds(list)
+    await update($, bgSeen, seen => (gen !== bgGen ? seen : Object.fromEntries(tasks.map(one => [one.id, Object.hasOwn(seen, one.id) ? (seen[one.id] ?? at) : at]))))
+    await update($, bgTasks, before => (gen !== bgGen ? before : tasks))
+  } catch {
+    // Observer only: the band keeps what it had.
+  }
+}
 
 /**
  * Repo, branch and worktree from the .git files of the session folder: file reads only, no process.
@@ -300,7 +361,7 @@ const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; exce
     const at = opts.end?.at ?? (await $.clock.now())
     const now = await view($)
     const current = await read($, brief)
-    const chip = await chipNow($, now, at, opts)
+    const chip = await chipNow($, now, at, { ...opts, forFile: true })
     const where = await read($, git)
     const snapshot = {
       sessionId,
@@ -473,6 +534,9 @@ const pulse = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   if ((await read($, turn)) === null && (await read($, steps)).length === 0) {
     if ((await read($, cache)).lastUsedAt !== null && now - (await read($, tick)) >= IDLE_PULSE_MS) await update($, tick, () => now)
+    // A counted task that passed its age limit since the last redraw (`tick`): the band redraws once (nothing else would, and the chip reads the clock only
+    // when it draws). Measured from the last redraw, not from a minute ago, so a pulse that comes late (a machine that slept) does not miss it.
+    if (waitLapsed(await read($, bgTasks), await read($, bgSeen), await read($, tick), now)) await update($, tick, () => now)
     if ((await read($, agentRuns)).some(run => run.status === 'running') || (await read($, agents)).some(one => one.status === 'running')) await refreshAgents($)
     return
   }
@@ -811,6 +875,7 @@ export const agenticOs = (on: On) => {
     try {
       // A resume can return to an id that ended earlier in this process: it is live again, so its file takes writes again.
       endedIds.delete(await $.session.id())
+      await clearWait($, false)
       if (!(await isOff($))) await refreshGit($)
     } catch {
       // Observer only.
@@ -820,12 +885,27 @@ export const agenticOs = (on: On) => {
 
   // The session name, from every SessionStart (the resume and clear handler above reads it too) and every prompt: a /rename shows at the next prompt.
   // The hud module holds the unmatched classic.SessionStart, so these sources are matched.
-  on('classic.SessionStart', { source: ['startup', 'compact', 'fork'] }, ($, e, next) => readNameAfter($, e, next))
-    .catch(($, e, next) => next(e))
+  on('classic.SessionStart', { source: ['startup', 'compact', 'fork'] }, async ($, e, next) => {
+    // Every SessionStart empties the task list; only a startup also forgets the first-seen times (a compact, fork, resume or clear keeps the same shell's age).
+    await clearWait($, e.source === 'startup')
+    return readNameAfter($, e, next)
+  }).catch(($, e, next) => next(e))
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
+    // The session runs again: the system wait is over (the next Stop writes it new). The first-seen times stay.
+    await clearWait($, false)
     if (!(await isOff($))) await noteName($, e.session_title)
     return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Fix 5: a MAIN-agent Stop lists the background work still in flight. Observer only: the settings hooks run first (next(e)), the result goes on
+  // unchanged, and nothing is written when the result blocks (the turn goes on) or stops the session. A Stop that carries agent_id is a subagent's. The
+  // write sits in noteWait, which never throws: a throw after next(e) would reach the .catch and run the settings hooks a second time.
+  on('classic.Stop', async ($, e, next) => {
+    const gen = bgGen
+    const result = await next(e)
+    if (e.agent_id === undefined && result?.block === undefined && result?.preventContinuation !== true) await noteWait($, e.background_tasks, gen)
+    return result
   }).catch(($, e, next) => next(e))
 
   on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
@@ -865,6 +945,7 @@ export const agenticOs = (on: On) => {
       await beacon($, 'turn')
       await update($, turnBeaconed, () => true).catch(() => undefined)
     }
+    await clearWait($, false)
     const startedAt = await $.clock.now()
     await update($, turn, () => ({ id: e.turnId, startedAt }))
     await update($, activeAt, () => startedAt)
@@ -995,6 +1076,7 @@ export const agenticOs = (on: On) => {
       activeAt: await read($, activeAt),
       helpers: runs.filter(run => run.status === 'running').length,
       limits: hudNow?.limits ?? null,
+      waitTasks: countWaitTasks(await read($, bgTasks), await read($, bgSeen), at),
       // The HUD row draws ctx and cost below the core lines: line 1 leaves them out then (one source, drawn once).
       hud: hudNow !== null,
     }

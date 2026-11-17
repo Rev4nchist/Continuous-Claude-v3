@@ -388,6 +388,10 @@ declare module 'claude-code' {
       refused: boolean
       /** When the session last did anything (a prompt, a turn start or end, a main-loop tool call): an open ask stays fresh 24 hours from it. */
       activeAt: number | null
+      /** The background tasks the last main-agent classic.Stop listed (agentic-os, fix 5): id and type only, never description, command, prompt or server text. Cleared by a turn start, a prompt and a SessionStart. */
+      bgTasks: { id: string; type: string }[]
+      /** When each task id was first seen by a Stop (epoch ms): the age of a task runs from here, and a later Stop does not renew it. Kept across a turn start and a prompt, pruned to the ids a Stop lists, emptied at SessionStart. */
+      bgSeen: Record<string, number>
       /** The Claude Code session name (agentic-os): from `session_title` of classic.SessionStart and classic.UserPromptSubmit, else the identity file. Null: unnamed. */
       sessionName: string | null
       /** Repo, branch and worktree of the session folder (agentic-os): the band's line 1 and the snapshot's `repo`, `branch`, `worktree`. */
