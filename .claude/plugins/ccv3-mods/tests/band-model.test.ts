@@ -349,13 +349,15 @@ describe('band width', () => {
     expect(small).toContain('ctx 41%')
   })
 
-  test('L9 below 40 columns only the chip and the goal are drawn, on one line', () => {
+  test('L9 below 40 columns only the chip, the Q n sign of a fresh ask and the goal are drawn, on one line', () => {
     for (const width of [20, 30, 39]) {
       const lines = bandLines(full(), width)
       expect(lines.length).toBe(1)
       const got = text(lines[0])
       expect(got).toContain('WORKING')
-      expect(got).toContain('GOAL')
+      // Fix 5: full() holds a fresh open ask, so the sign stays at every width and the goal gets what room is left (none at 20 columns).
+      expect(got).toContain('Q 1')
+      if (width > 20) expect(got).toContain('GOAL')
       for (const word of ['ctx', 'PLAN', 'ASK', 'UNPROVEN', 'lane', '$']) expect(got).not.toContain(word)
       expect(got.length).toBeLessThanOrEqual(width)
     }

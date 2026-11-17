@@ -133,6 +133,9 @@ const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kan
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id', 'lane-holder-flags', 'lane-parked-scope', 'learning-counts-db', 'lane-done-frees-claims'];
 // Step 2b of card coord-test-gate-coverage: the drill tests need no database. The names are explicit: a missing file fails the gate.
 const COORD_DRILL_TESTS = ['abort', 'judge', 'lib', 'metrics', 'scenarios'].map((n) => `scripts/coordination/coord-drill-2/${n}.test.mjs`);
+// Step 2c of card coord-test-gate-coverage: every test file of two folders, by name (a missing file fails the gate). Each ran alone in under 0.2 s; their transports are mocked.
+const PROJECT_CARDS_TESTS = ['aliases', 'assemble', 'bind', 'cockpit-pair', 'cockpit', 'digest', 'history', 'mobile-brief', 'notion-create', 'notion-query', 'notion-section', 'page-lock', 'pm-notes-queue', 'queue', 'refresh-batch', 'state', 'sweep', 'triage', 'util'].map((n) => `scripts/project-cards/test/${n}.test.mjs`);
+const REPORT_REGISTRY_TESTS = ['artifact-url', 'backfill', 'check-drift', 'conventions', 'detector-coverage-matrix', 'emit-run', 'health-mirror', 'make-run', 'reconcile', 'refresh-pages', 'trust-metrics', 'upsert', 'watchdog', 'weekend-plan'].map((n) => `scripts/report-registry/test/${n}.test.mjs`);
 // Step 2b: small test files of folders that had no gate. Each ran alone in under 4 s (1.5 s for most).
 const SCRIPTS_MISC_TESTS = ['scripts/check-agent-model-drift.test.mjs', 'scripts/hooks/hook-trace-report.test.mjs', 'scripts/hooks/trace-marker-check.test.mjs', 'scripts/tools/test/safe-replace.test.mjs', 'scripts/usage/token-report.test.mjs', 'scripts/tri-model/sync-current-state.test.mjs', 'scripts/fourthos-weekly/test/publish-local.test.mjs', 'scripts/work-tracker/test/apply-rows.test.mjs', '.claude/skills/session-review/scripts/test/extract.test.mjs', '.claude/skills/session-review/scripts/test/render-html.test.mjs'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
@@ -226,6 +229,8 @@ export const SURFACES = [
     globs: ['scripts/check-agent-model-drift*', 'scripts/hooks/**', 'scripts/tools/**', 'scripts/usage/**', 'scripts/tri-model/**', 'scripts/fourthos-weekly/**', 'scripts/work-tracker/**', '.claude/skills/session-review/**'],
     gates: [{ id: 'scripts-misc-tests', cmd: 'node', args: ['--test', ...SCRIPTS_MISC_TESTS], cwd: '.', timeoutMs: 5 * MIN }],
   },
+  { id: 'project-cards', globs: ['scripts/project-cards/**'], gates: [{ id: 'project-cards-tests', cmd: 'node', args: ['--test', ...PROJECT_CARDS_TESTS], cwd: '.', timeoutMs: 5 * MIN }] },
+  { id: 'report-registry', globs: ['scripts/report-registry/**'], gates: [{ id: 'report-registry-tests', cmd: 'node', args: ['--test', ...REPORT_REGISTRY_TESTS], cwd: '.', timeoutMs: 5 * MIN }] },
   {
     id: 'gate-coverage',
     globs: ['**/*.test.*', '**/*.spec.*', '**/test_*.py', '**/*_test.py', '.github/workflows/*.yml', 'scripts/github/pre-pr.mjs', 'scripts/github/gate-coverage*', '**/package.json', 'apps/agentic-os/playwright.pure.config.ts', '.claude/hooks/vitest.config.ts'],

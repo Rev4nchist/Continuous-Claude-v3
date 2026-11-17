@@ -134,6 +134,7 @@ describe('session tab: STATE', () => {
     const words: Record<TabState['chip'], string> = {
       working: 'Working',
       'waiting-on-dave': 'Waiting for you',
+      'waiting-on-work': 'Waiting on background tasks',
       blocked: 'Stuck: a step cannot go on',
       done: 'Done: every step is proven',
       idle: 'Resting',
