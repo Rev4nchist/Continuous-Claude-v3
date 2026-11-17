@@ -1,0 +1,495 @@
+{
+  "_note": "Named skip list of scripts/github/gate-coverage.mjs. skip: a test file that no gate runs, with the reason. ciGaps: a test file that only pre-pr runs (CI has no step). An entry that matches no file, or has no reason, fails the check; an entry for a file that a gate runs fails too. An entry leaves this file only when its files join a gate.",
+  "skip": [
+    {
+      "path": "archive/**",
+      "reason": "archived code kept for history; not live"
+    },
+    {
+      "path": ".claude/hooks/archive/**",
+      "reason": "archived hook tests of pruned hooks; not live"
+    },
+    {
+      "path": ".claude/skills/systematic-debugging/evals/files/**",
+      "reason": "fixture: a flaky vitest project for a skill eval, flaky on purpose"
+    },
+    {
+      "path": "e2e/example.spec.ts",
+      "reason": "placeholder spec named in AGENTS.md; it tests nothing of this repo"
+    },
+    {
+      "path": "apps/agentic-os/e2e/board-review.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/board.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/chip-word.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/cost-labels.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/fleet-data.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/fleet-gpaa.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/fleet-join.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/fleet-layout.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/fleet-level1.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/fleet-review.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/fleet.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/flow.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/pr-panel.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/pr-row.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/project-label.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/raw-project.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/session-detail-review.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/session-detail.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/session-name.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/smoke.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/spend.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/strip-render.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": "apps/agentic-os/e2e/theme.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
+      "path": ".claude/skills/skill-forge/tests/**",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": ".claude/skills/vet-skill/scripts/test_*.py",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": "ai-report-card/scripts/test_*.py",
+      "reason": "pytest outside opc: needs a Python environment; no gate runs it"
+    },
+    {
+      "path": "opc/scripts/dashboard/frontend/src/**/*.test.ts*",
+      "reason": "vitest of the opc dashboard frontend: the vitest gate covers .claude/hooks only; no gate runs these"
+    },
+    {
+      "path": "scripts/agentic-os/fleet-app.test.ps1",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/code-intel.test.sh",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/github/accounts-routing.test.ps1",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/github/land-pr-e2e-copy.test.ps1",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/github/land-pr-ledger.test.ps1",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/github/land-pr-lock.test.ps1",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/github/land-pr-recheck.test.ps1",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/github/land-pr-red-check.test.ps1",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/github/land-pr-worktree-links.test.ps1",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/install-hooks.test.sh",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/precommit-build-guard.test.sh",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/sync-claude-mapping.test.sh",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": "scripts/verify-setup-db-url.test.sh",
+      "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
+    },
+    {
+      "path": ".claude/skills/session-review/scripts/test/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/check-agent-model-drift.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/start-embedding-daemon-pipe.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/board-done-view.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/board-scheduled-view.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/export-dash-data.db.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/lane-done-frees-claims.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/portfolio.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/coord-drill-2/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/fourthos-weekly/test/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/hooks/hook-trace-report.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/hooks/trace-marker-check.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/project-cards/test/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/report-registry/test/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/self-improvement/test/append-digest.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/self-improvement/test/ask-rate.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/self-improvement/test/failure-audit.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/self-improvement/triage/test/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/tools/test/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/tri-model/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/usage/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/work-tracker/test/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/worktree/orphans.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "tests/workflow-tests/suites/*.test.mjs",
+      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    }
+  ],
+  "ciGaps": [
+    {
+      "path": ".claude/plugins/ccv3-mods/tests/**",
+      "reason": "plugin tests: pre-pr runs them through scripts/mods/validate-mods.mjs (claude plugin test); CI has no claude binary and no step. Open item: plugin tests in CI."
+    },
+    {
+      "path": "opc/**/test_*.py",
+      "reason": "opc pytest: pre-pr runs uv run pytest in opc; CI has no pytest step. Open item: opc pytest in CI."
+    },
+    {
+      "path": "scripts/agents/check-agent-body.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/agents/scout-tldr-count.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/checks/catchers.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/checks/changed-lines.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/checks/cli-smoke.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/checks/parser-fixtures.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/checks/typecheck-changed.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/app-ask.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/cursor-review-hardening.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/cursor-review-model.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/cursor-review.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/decisions.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/land-decision.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lane-context-db-gate.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/ledger-report.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/answer-key.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/answer-paths.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/findings-repair.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/grok-slots.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/holdout-ids.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/osv-advisory.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/pr-summary.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/proc.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/pssa-advisory.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/lib/zizmor-advisory.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/local-review-sweep-own-lists.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/local-review-sweep.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/migration-gate.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/pr-checkpoint-auto.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/pr-checkpoint-capacity.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/pr-checkpoint-interim-cr.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/pr-checkpoint-ledger.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/pr-loop-sync.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/pre-pr-failing-tests.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/pre-pr-gate-limits.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/pre-pr-gate-stats.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/reply-thread.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/repo-identity.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/ship-ask-cli-skip.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/ship-ask.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/github/waiver-phrase.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/mods/claude-hud-config.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/mods/validate-mods.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/ratchets/semgrep-ccv3-opengrep.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/rules/test/coderabbit-cli-content.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/rules/test/context-budget-guard.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/rules/test/ondemand-index-check.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/rules/test/pr-review-loop-core.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/rules/test/rule-router-audit.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/skills/audit-skills.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/skills/trigger-probe.test.mjs",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    },
+    {
+      "path": "scripts/sync-to-active-cursor.test.sh",
+      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+    }
+  ]
+}

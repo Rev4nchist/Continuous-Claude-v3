@@ -106,6 +106,13 @@ jobs:
       - name: no-pg-lookup unit tests
         timeout-minutes: 5
         run: node --test scripts/ratchets/no-pg-lookup.test.mjs
+      # Every tracked test file is in a gate or on the named skip list (scripts/github/gate-coverage-skip.json). The check reads git ls-files, pre-pr.mjs and the workflows.
+      - name: gate coverage (every test file is in a gate or on the skip list)
+        timeout-minutes: 5
+        run: node scripts/github/gate-coverage.mjs
+      - name: gate-coverage unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/gate-coverage.test.mjs
       # Pre-PR checks built from CodeRabbit Majors (C1 scrubber grid, C2 Semgrep pack, C5 state tables).
       # semgrep-ccv3 unit tests also read the Semgrep digest above (SG2): they fail when the two digests differ.
       - name: semgrep-ccv3 wrapper unit tests
@@ -305,8 +312,10 @@ jobs:
           scripts/coordination/ask-ledger.test.mjs
           scripts/coordination/stall-alarm-log.test.mjs
           scripts/coordination/learning-counts.test.mjs
+          scripts/coordination/board-mask.test.mjs
       # The privacy test of the --counts mode of failure-audit and ask-rate (card coord-seat-counts). The other tests of that folder run in no gate yet.
       - name: counts-only audits (scripts/self-improvement/test/counts-mode.test.mjs)
+        if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: node --test scripts/self-improvement/test/counts-mode.test.mjs
       # lane-context-db.test.ts skips without LANE_TEST_DB_URL, and vitest exits 0 on a skipped file. The program makes a scratch
