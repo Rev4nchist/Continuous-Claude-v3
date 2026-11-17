@@ -130,7 +130,11 @@ const MIN = 60_000;
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
 const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock', 'tick-marker', 'board-band-view', 'ask-ledger', 'stall-alarm-log', 'learning-counts', 'board-mask', 'board-done-view', 'board-scheduled-view', 'portfolio'];
-const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id', 'lane-holder-flags', 'lane-parked-scope', 'learning-counts-db'];
+const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id', 'lane-holder-flags', 'lane-parked-scope', 'learning-counts-db', 'lane-done-frees-claims'];
+// Step 2b of card coord-test-gate-coverage: the drill tests need no database. The names are explicit: a missing file fails the gate.
+const COORD_DRILL_TESTS = ['abort', 'judge', 'lib', 'metrics', 'scenarios'].map((n) => `scripts/coordination/coord-drill-2/${n}.test.mjs`);
+// Step 2b: small test files of folders that had no gate. Each ran alone in under 4 s (1.5 s for most).
+const SCRIPTS_MISC_TESTS = ['scripts/check-agent-model-drift.test.mjs', 'scripts/hooks/hook-trace-report.test.mjs', 'scripts/hooks/trace-marker-check.test.mjs', 'scripts/tools/test/safe-replace.test.mjs', 'scripts/usage/token-report.test.mjs', 'scripts/tri-model/sync-current-state.test.mjs', 'scripts/fourthos-weekly/test/publish-local.test.mjs', 'scripts/work-tracker/test/apply-rows.test.mjs', '.claude/skills/session-review/scripts/test/extract.test.mjs', '.claude/skills/session-review/scripts/test/render-html.test.mjs'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 
 // validate-mods exits 1 when its typecheck cannot run. On Claude Code 2.1.296 and later no command writes the
@@ -216,6 +220,12 @@ export const SURFACES = [
   { id: 'self-improvement-scripts', globs: ['scripts/self-improvement/**'], gates: [{ id: 'self-improvement-tests', cmd: 'node', args: ['--test', 'scripts/self-improvement/test/counts-mode.test.mjs', 'scripts/self-improvement/test/append-digest.test.mjs', 'scripts/self-improvement/test/ask-rate.test.mjs', 'scripts/self-improvement/test/failure-audit.test.mjs', 'scripts/self-improvement/triage/test/assemble.test.mjs'], cwd: '.', timeoutMs: 5 * MIN }] },
   // Every tracked test file is in a gate or on the named skip list (card coord-test-gate-coverage). It runs when a test file, a gate source or the skip list
   // changes: a new test file in no gate fails here, before CI.
+  // Step 2b of card coord-test-gate-coverage. One gate for ten files of folders with no gate of their own.
+  {
+    id: 'scripts-misc',
+    globs: ['scripts/check-agent-model-drift*', 'scripts/hooks/**', 'scripts/tools/**', 'scripts/usage/**', 'scripts/tri-model/**', 'scripts/fourthos-weekly/**', 'scripts/work-tracker/**', '.claude/skills/session-review/**'],
+    gates: [{ id: 'scripts-misc-tests', cmd: 'node', args: ['--test', ...SCRIPTS_MISC_TESTS], cwd: '.', timeoutMs: 5 * MIN }],
+  },
   {
     id: 'gate-coverage',
     globs: ['**/*.test.*', '**/*.spec.*', '**/test_*.py', '**/*_test.py', '.github/workflows/*.yml', 'scripts/github/pre-pr.mjs', 'scripts/github/gate-coverage*', '**/package.json', 'apps/agentic-os/playwright.pure.config.ts', '.claude/hooks/vitest.config.ts'],
@@ -316,6 +326,9 @@ export const SURFACES = [
     globs: ['scripts/coordination/**', 'scripts/**/*-probe.mjs', '.claude/scripts/lane.mjs', 'docker/init-schema.sql', 'apps/agentic-os/drizzle/**'],
     gates: [
       { id: 'coordination-tests', cmd: 'node', args: ['--test', ...COORDINATION_TESTS.map(coordTest)], cwd: '.', timeoutMs: 5 * MIN },
+      // Step 2b. Their own gate ids: test CO1 compares the coordination-* gates with the plain file names of CI job coordination-db.
+      { id: 'drill-tests', cmd: 'node', args: ['--test', ...COORD_DRILL_TESTS], cwd: '.', timeoutMs: 5 * MIN },
+      { id: 'dash-export-db-test', cmd: 'node', args: ['--test', 'scripts/coordination/export-dash-data.db.test.mjs'], cwd: '.', timeoutMs: 5 * MIN },
       // These build a throwaway database on local Postgres. Postgres down = FAIL with ECONNREFUSED, never a skip: start it with
       // docker compose up -d in docker/. pg comes from .claude/hooks/node_modules (npm ci there).
       { id: 'coordination-db-tests', cmd: 'node', args: ['--test', ...COORDINATION_DB_TESTS.map(coordTest)], cwd: '.', timeoutMs: 10 * MIN },
