@@ -242,42 +242,6 @@
       "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
     },
     {
-      "path": ".claude/skills/session-review/scripts/test/extract.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": ".claude/skills/session-review/scripts/test/render-html.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/check-agent-model-drift.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/coordination/coord-drill-2/abort.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/coordination/coord-drill-2/judge.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/coordination/coord-drill-2/lib.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/coordination/coord-drill-2/metrics.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/coordination/coord-drill-2/scenarios.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/coordination/export-dash-data.db.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
       "path": "scripts/coordination/export-dash-data.test.mjs",
       "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
     },
@@ -314,10 +278,6 @@
       "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
     },
     {
-      "path": "scripts/coordination/lane-done-frees-claims.test.mjs",
-      "reason": "pending join: step 2b of card coord-test-gate-coverage. It makes its own scratch database (scratch-db.mjs create) and runs the real lane.mjs, so it joins the database gate"
-    },
-    {
       "path": "scripts/coordination/reminder-core.test.mjs",
       "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
     },
@@ -326,20 +286,8 @@
       "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
     },
     {
-      "path": "scripts/fourthos-weekly/test/publish-local.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
       "path": "scripts/harness-doctor-cleanup.test.mjs",
       "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/hooks/hook-trace-report.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/hooks/trace-marker-check.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
     },
     {
       "path": "scripts/measurement/cost-reconcile-parity.test.mjs",
@@ -603,27 +551,11 @@
     },
     {
       "path": "scripts/start-embedding-daemon-pipe.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/tools/test/safe-replace.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/tri-model/sync-current-state.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/usage/token-report.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
-    },
-    {
-      "path": "scripts/work-tracker/test/apply-rows.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+      "reason": "starts a stub daemon through powershell.exe and kills it; Windows only (it skips elsewhere). Seat rule: a daemon stays skipped"
     },
     {
       "path": "scripts/worktree/orphans.test.mjs",
-      "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+      "reason": "slow: 59.6 s alone on Windows (git init, clones, links), at the 60 s line of the seat. It comes to the seat to rule"
     },
     {
       "path": "tests/workflow-tests/suites/browser-automation.test.mjs",

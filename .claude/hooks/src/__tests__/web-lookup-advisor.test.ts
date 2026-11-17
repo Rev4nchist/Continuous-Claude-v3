@@ -126,12 +126,20 @@ describe('web-lookup-advisor', () => {
 
     it('handles undefined URL gracefully', () => {
       const suggestion = buildSuggestion(undefined);
-      expect(suggestion).toContain('opencli');
+      expect(suggestion).toContain('web-research.md');
+      expect(suggestion).toContain('only when `opencli --version` runs');
+    });
+
+    it('puts a site hint after the "opencli is the last step" line, and only as "If opencli runs"', () => {
+      const suggestion = buildSuggestion('https://twitter.com/x');
+      expect(suggestion).toContain('If opencli runs: `opencli twitter');
+      expect(suggestion.indexOf('If opencli runs')).toBeGreaterThan(suggestion.indexOf('opencli is the last step'));
+      expect(suggestion).not.toContain('Try:');
     });
 
     it('handles invalid URL gracefully', () => {
       const suggestion = buildSuggestion('not-a-url');
-      expect(suggestion).toContain('opencli');
+      expect(suggestion).toContain('web-research.md');
     });
   });
 
@@ -178,7 +186,7 @@ describe('web-lookup-advisor', () => {
       };
       const result = handlePostToolUse(input) as any;
       expect(result).not.toBeNull();
-      expect(result.hookSpecificOutput.additionalContext).toContain('opencli');
+      expect(result.hookSpecificOutput.additionalContext).toContain('a sandbox or domain block means stop and report');
     });
   });
 });

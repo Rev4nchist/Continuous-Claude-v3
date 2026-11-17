@@ -283,8 +283,8 @@ jobs:
       # Explicit file names, not a glob: a missing file fails the step, so this gate cannot pass by finding nothing.
       - name: lane board DB tests (render-board, lane-project, lane-dep-claim, lane-dep-done, lane-dep-seed, scratch-db, lane-inbox-id, lane-holder-flags, lane-parked-scope, learning-counts-db)
         timeout-minutes: 5
-        run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/lane-dep-claim.test.mjs scripts/coordination/lane-dep-done.test.mjs scripts/coordination/lane-dep-seed.test.mjs scripts/coordination/scratch-db.test.mjs scripts/coordination/lane-inbox-id.test.mjs scripts/coordination/lane-holder-flags.test.mjs scripts/coordination/lane-parked-scope.test.mjs scripts/coordination/learning-counts-db.test.mjs
-      # These 25 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
+        run: node --test scripts/coordination/render-board.test.mjs scripts/coordination/lane-project.test.mjs scripts/coordination/lane-dep-claim.test.mjs scripts/coordination/lane-dep-done.test.mjs scripts/coordination/lane-dep-seed.test.mjs scripts/coordination/scratch-db.test.mjs scripts/coordination/lane-inbox-id.test.mjs scripts/coordination/lane-holder-flags.test.mjs scripts/coordination/lane-parked-scope.test.mjs scripts/coordination/learning-counts-db.test.mjs scripts/coordination/export-dash-data.db.test.mjs scripts/coordination/lane-done-frees-claims.test.mjs
+      # These 30 files need no database. They ran only on Dave's Windows machine before this step (lane ci-coordination-no-db-tests).
       # They sit in this job because it already has the checkout with full history and the hooks install.
       - name: lane board tests without a database (kanban, lane-shim,path guard, registry drift, session label, probe boards, probe scratch guard)
         if: ${{ !cancelled() }}   # run even when the DB step failed, so one red step does not hide the other
@@ -316,11 +316,32 @@ jobs:
           scripts/coordination/board-done-view.test.mjs
           scripts/coordination/board-scheduled-view.test.mjs
           scripts/coordination/portfolio.test.mjs
+          scripts/coordination/coord-drill-2/abort.test.mjs
+          scripts/coordination/coord-drill-2/judge.test.mjs
+          scripts/coordination/coord-drill-2/lib.test.mjs
+          scripts/coordination/coord-drill-2/metrics.test.mjs
+          scripts/coordination/coord-drill-2/scenarios.test.mjs
       # The privacy test of the --counts mode of failure-audit and ask-rate (card coord-seat-counts). The other tests of that folder run in no gate yet.
       - name: self-improvement tests (counts-mode, append-digest, ask-rate, failure-audit, triage assemble)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: node --test scripts/self-improvement/test/counts-mode.test.mjs scripts/self-improvement/test/append-digest.test.mjs scripts/self-improvement/test/ask-rate.test.mjs scripts/self-improvement/test/failure-audit.test.mjs scripts/self-improvement/triage/test/assemble.test.mjs
+      # Step 2b of card coord-test-gate-coverage: ten test files of folders with no gate. About 5 s together.
+      - name: small script tests (drift, hook trace, safe-replace, token report, tri-model, weekly publish, work tracker, session review)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: >-
+          node --test
+          scripts/check-agent-model-drift.test.mjs
+          scripts/hooks/hook-trace-report.test.mjs
+          scripts/hooks/trace-marker-check.test.mjs
+          scripts/tools/test/safe-replace.test.mjs
+          scripts/usage/token-report.test.mjs
+          scripts/tri-model/sync-current-state.test.mjs
+          scripts/fourthos-weekly/test/publish-local.test.mjs
+          scripts/work-tracker/test/apply-rows.test.mjs
+          .claude/skills/session-review/scripts/test/extract.test.mjs
+          .claude/skills/session-review/scripts/test/render-html.test.mjs
       # lane-context-db.test.ts skips without LANE_TEST_DB_URL, and vitest exits 0 on a skipped file. The program makes a scratch
       # database on this job's service, runs the one file, drops the database, and fails unless every test ran and passed.
       - name: lane-context cursor tests on a scratch database (fails when the file is skipped)
