@@ -295,16 +295,16 @@ describe('readIdList: the gold folder adds its ids (a missing folder adds none; 
 
 describe('tie tests: the hook text and this module stay in step', () => {
   const hookIds = readFileSync(join(REPO, '.claude/hooks/src/shared/holdout-ids.ts'), 'utf8');
-  const hookScan = readFileSync(join(REPO, '.claude/hooks/src/holdout-scan.ts'), 'utf8');
+  const holdoutLib = readFileSync(join(REPO, 'scripts/github/lib/holdout-ids.mjs'), 'utf8');
 
   it('the two file names are the ones the hook reads', () => {
     assert.ok(hookIds.includes(`'${DATASET_REL}'`), 'the dataset name drifted from shared/holdout-ids.ts');
     assert.ok(hookIds.includes(`'${EVAL_CONFIG_REL}'`), 'the config name drifted from shared/holdout-ids.ts');
   });
 
-  it('the sha rule is the one of holdout-scan.ts countHits (7 to 40 hex, a prefix in either direction, a letter in the stored sha)', () => {
-    assert.ok(hookScan.includes('[0-9a-f]{7,40}'), 'the hex run changed in holdout-scan.ts');
-    assert.ok(hookScan.includes('s.startsWith(r) || r.startsWith(s)'), 'the prefix rule changed in holdout-scan.ts');
-    assert.ok(hookScan.includes("/^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id)"), 'the stored-sha rule changed in holdout-scan.ts');
+  it('the sha rule is the one of scripts/github/lib/holdout-ids.mjs countIdsIn (7 to 40 hex, a prefix in either direction, a letter in the stored sha)', () => {
+    assert.ok(holdoutLib.includes('[0-9a-f]{7,40}'), 'the hex run changed in holdout-ids.mjs');
+    assert.ok(holdoutLib.includes('want.startsWith(r) || r.startsWith(want)'), 'the prefix rule changed in holdout-ids.mjs');
+    assert.ok(holdoutLib.includes('/^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id)'), 'the stored-sha rule changed in holdout-ids.mjs');
   });
 });
