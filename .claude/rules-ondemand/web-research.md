@@ -36,8 +36,9 @@ In a subagent: use the WebFetch and WebSearch tools you have. Skip items 5 and 7
 - These are refusals:
   - a permission deny or a policy block;
   - a hook block;
-  - a tool removed by a deny rule or a `tools:` list;
+  - a tool removed by a deny rule, or by the `tools:` list of the agent that runs;
   - a sandbox or domain block. It can look like a network error.
+- A session that never had WebFetch uses the web-fetch agent (item 5). That is not a refusal.
 - On a refusal: Stop. Report the tool, the URL or query, and the reason text. Do not use another tool to get around it.
 - A real outage: report it, then use the next tool in the list. Say which tool and why. A network error is an outage only when a second public URL also fails.
 - Bash `curl` is the last fallback after a real outage, for a public URL only. Never send it to a host that another tool refused. Write its output to the scratchpad and say so in the report.

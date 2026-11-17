@@ -60,7 +60,7 @@ Use this when explore shows an API but you are unsure what auth tier it needs.
 |-----------|--------|
 | Site has a built-in adapter (`opencli list`) | Use it directly |
 | Repeatable structured query on a new site | Run `opencli generate` |
-| One-off page read | Use WebFetch, else the Agent tool with `subagent_type: "web-fetch"` |
+| One-off page read | Use WebFetch, else the Agent tool with `subagent_type: "web-fetch"`. If a tool is refused, stop (`web-research.md`) |
 | Complex multi-step interaction | Use Claude-in-Chrome instead |
 | Internal dashboard behind SSO | Run `opencli explore` (uses your Chrome session) |
 

@@ -49,7 +49,7 @@ opencli doctor                  # Health check (daemon, extension, Chrome)
 ## Anti-Patterns
 
 - Do not use opencli for one-off browser automation -- use Claude-in-Chrome or Playwright MCP instead.
-- When `opencli --version` runs, do not use WebSearch/WebFetch for data opencli already covers (44 adapters). It is not installed by default: do not install it; see `rules-ondemand/web-research.md`.
+- opencli is the last choice for structured site data, only when `opencli --version` runs. Never install it; see `rules-ondemand/web-research.md`.
 - Do not build MCP servers for sites that opencli can handle via explore/synthesize.
 - Do not assume `hn` works -- the command is `hackernews` (full name).
 - Do not assume `tw` works -- the command is `twitter` (full name).

@@ -102,7 +102,7 @@ Use CLI directly when:
   - Installing blocks
   - Automating component installation
 
-Use the web read fallback (WebFetch, else the Agent tool with `subagent_type: "web-fetch"`; see `rules-ondemand/web-research.md`) when:
+Use the web read fallback (WebFetch, else the Agent tool with `subagent_type: "web-fetch"`; if a tool is refused, stop; see `rules-ondemand/web-research.md`) when:
   - @playwright/mcp unavailable
   - Need basic page structure info
   - Verifying platform options
