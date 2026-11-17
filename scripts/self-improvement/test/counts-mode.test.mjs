@@ -130,3 +130,45 @@ test('B6: failure-audit with a transcripts folder that does not exist exits 2 wi
     assert.ok(!/^\s+at\s/m.test(r.stderr) && !/Node\.js v\d/.test(r.stderr), 'a stack trace reached stderr');
   }
 });
+
+test('B7: --counts also stops on a gold id (a made-up gold sha in a model name); with no gold folder the same run passes', async () => {
+  const { DATASET_REL, EVAL_CONFIG_REL, GOLD_DIR_REL } = await import('../../coordination/board-mask.mjs');
+  const GOLD_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
+  const idRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'counts-gold-ids-'));
+  const hot = fs.mkdtempSync(path.join(os.tmpdir(), 'counts-gold-hot-'));
+  t0cleanup(idRoot, hot);
+  fs.mkdirSync(path.join(idRoot, '.claudedocs'), { recursive: true });
+  fs.mkdirSync(path.join(idRoot, 'scripts', 'eval', 'review-eval'), { recursive: true });
+  fs.writeFileSync(path.join(idRoot, DATASET_REL), JSON.stringify({ prs: [{ pr: 7654321 }], findings: [{ pr: 7654321, comment_id: 1234567890 }] }));
+  fs.writeFileSync(path.join(idRoot, EVAL_CONFIG_REL), '{}');
+  fs.mkdirSync(path.join(hot, PROJECT), { recursive: true });
+  const lines = [
+    { type: 'assistant', timestamp: at(0), entrypoint: 'cli', message: { role: 'assistant', model: GOLD_SHA, content: [{ type: 'text', text: 'hello' }] } },
+    { type: 'user', timestamp: at(5), entrypoint: 'cli', message: { role: 'user', content: 'that is not what i asked' } },
+  ];
+  fs.writeFileSync(path.join(hot, PROJECT, `${SESSION}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const go = (script, extra) => spawnSync(process.execPath, [script, '--days', '36500', '--root', hot, '--counts', '--id-root', idRoot, ...extra], { encoding: 'utf8' });
+  const out = path.join(tmp, 'b7.md');
+  // Control: no gold folder, so the sha is not a listed id.
+  assert.equal(go(AUDIT, ['--out', out]).status, 0);
+  fs.rmSync(out, { force: true });
+  fs.mkdirSync(path.join(idRoot, GOLD_DIR_REL), { recursive: true });
+  fs.writeFileSync(path.join(idRoot, GOLD_DIR_REL, 'gold-a.json'), JSON.stringify([{ target: { sha40: GOLD_SHA, pr: 8888 } }]));
+  const a = go(AUDIT, ['--out', out]);
+  assert.equal(a.status, 3, a.stderr);
+  assert.ok(!fs.existsSync(out), 'a file was written after exit 3');
+  assert.ok(!a.stderr.includes(GOLD_SHA) && !a.stdout.includes(GOLD_SHA), 'an id reached stdout or stderr');
+  assert.ok(a.stderr.includes('a listed id reached the output'), 'exit 3 came from a list-read failure, not the id match');
+  // The other --counts script: a gold sha as an entrypoint word of a transcript. The control (no gold folder) was the audit run above.
+  const rateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'counts-gold-rate-'));
+  t0cleanup(rateRoot);
+  fs.mkdirSync(path.join(rateRoot, PROJECT), { recursive: true });
+  const rl = [{ type: 'assistant', timestamp: at(0), entrypoint: GOLD_SHA, message: { role: 'assistant', model: 'claude-test', content: [{ type: 'tool_use', id: 'q', name: 'AskUserQuestion', input: { questions: [{ question: 'Which?', options: [] }] } }] } }];
+  fs.writeFileSync(path.join(rateRoot, PROJECT, `${SESSION}.jsonl`), rl.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const outR = path.join(tmp, 'b7-rate.md');
+  const r = spawnSync(process.execPath, [RATE, '--days', '36500', '--root', rateRoot, '--project', PROJECT, '--counts', '--id-root', idRoot, '--out', outR], { encoding: 'utf8' });
+  assert.equal(r.status, 3, r.stderr);
+  assert.ok(!fs.existsSync(outR) && !r.stderr.includes(GOLD_SHA) && !r.stdout.includes(GOLD_SHA));
+  assert.ok(r.stderr.includes('a listed id reached the output'), 'exit 3 came from a list-read failure, not the id match');
+});
+function t0cleanup(...dirs) { after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); }); }

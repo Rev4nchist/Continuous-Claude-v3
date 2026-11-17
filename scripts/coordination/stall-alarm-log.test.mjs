@@ -170,6 +170,45 @@ describe('part A: outcomes from later events', () => {
     assert.deepEqual(await infer([row('watch-error', 'github')], { events: [], prs: {} }), ['na']);
   });
 
+  it('A18: a ci-failed row stays acted when a second push comes after the window (the first head change counts, not the newest)', async () => {
+    const g = (commits, extra = {}) => infer([row('ci-failed', '624', { head8: 'aaaaaaaa' })], { events: [], prs: { 624: { mergedAt: null, closedAt: null, head8: 'cccccccc', headAt: T + 300 * MIN, commits, ...extra } } });
+    const c = (head8, at) => ({ head8, at });
+    assert.deepEqual(await g([c('bbbbbbbb', T + 10 * MIN), c('cccccccc', T + 300 * MIN)]), ['acted']); // push inside, a second push hours later
+    assert.deepEqual(await g([c('cccccccc', T + 300 * MIN)]), ['none']); // only a push after the window
+    assert.deepEqual(await g([c('bbbbbbbb', T - 10 * MIN)]), ['none']); // a push before the alarm
+    assert.deepEqual(await g([c('aaaaaaaa', T + 10 * MIN)]), ['none']); // the same head is no change
+    assert.deepEqual(await g([]), ['none']); // no commits, and the newest head came after the window (headAt T+300): the old rule says none too
+    // A PR of more than 100 commits: the list is cut and has no in-window commit, but the newest head (head8, headAt) is a change inside the window.
+    assert.deepEqual(await g([c('cccccccc', T + 300 * MIN)], { head8: 'bbbbbbbb', headAt: T + 10 * MIN }), ['acted']);
+    // A row with no head (validRow accepts null) cannot tell a head change: no commit counts.
+    const noHead = await infer([row('ci-failed', '624', { head8: null })], { events: [], prs: { 624: { mergedAt: null, closedAt: null, head8: 'bbbbbbbb', headAt: T + 10 * MIN, commits: [c('bbbbbbbb', T + 10 * MIN)] } } });
+    assert.deepEqual(noHead, ['none']);
+    assert.deepEqual(await g([c('cccccccc', T + 300 * MIN)], { mergedAt: T + 10 * MIN }), ['acted']); // merged inside the window, as before
+    assert.deepEqual(await g([c('cccccccc', T + 300 * MIN)], { closedAt: T + 10 * MIN }), ['acted']); // closed inside the window, as before
+  });
+
+  it('A19: a pr-green row ignores commits, and a facts file with no commits list keeps the old head rule', async () => {
+    const green = await infer([row('pr-green', '624')], { events: [], prs: { 624: { mergedAt: null, closedAt: null, head8: 'bbbbbbbb', commits: [{ head8: 'bbbbbbbb', at: T + 10 * MIN }] } } });
+    assert.deepEqual(green, ['none']);
+    const old = await infer([row('ci-failed', '624', { head8: 'aaaaaaaa' })], { events: [], prs: { 624: { mergedAt: null, closedAt: null, head8: 'bbbbbbbb', headAt: T + 10 * MIN } } });
+    assert.deepEqual(old, ['acted']);
+  });
+
+  it('A20: commitHeads keeps only the 8-hex head and the commit time of each commit, in time order', async () => {
+    const m = await load();
+    const list = [
+      { sha: 'cccccccc11223344', commit: { committer: { date: '2026-11-16T22:30:00Z' }, message: 'a message that must not be kept', author: { email: 'x@example.invalid' } } },
+      { sha: 'bbbbbbbb11223344', commit: { committer: { date: '2026-11-16T22:10:00Z' } } },
+      { sha: 'dddddddd11223344', commit: { committer: { date: 'not a time' } } },
+      { sha: 'zz', commit: { committer: { date: '2026-11-16T22:20:00Z' } } },
+      null,
+    ];
+    const out = m.commitHeads(list);
+    assert.deepEqual(out, [{ head8: 'bbbbbbbb', at: Date.parse('2026-11-16T22:10:00Z') }, { head8: 'cccccccc', at: Date.parse('2026-11-16T22:30:00Z') }]);
+    assert.ok(!JSON.stringify(out).includes('message'), 'no text of a commit is kept');
+    assert.deepEqual(m.commitHeads('nope'), []);
+  });
+
   it('A9: the report groups by Chicago day, counts each outcome, and never says "false alarm"', async () => {
     const m = await load();
     const rows = [
@@ -298,5 +337,27 @@ describe('part A: privacy and failing loud', () => {
     const empty = listRoot();
     write(path.join(empty, DATASET_REL), { prs: [], findings: [] });
     assert.equal(run(args(empty)).code, 3);
+  });
+});
+
+describe('part A: gold ids in the id list (card coord-content-scan-followups, item gold ids)', () => {
+  it('A15: a made-up gold sha as a lane id stops --append with exit 3 and no file; with no gold folder the same run passes', async () => {
+    const { GOLD_DIR_REL } = await import('./board-mask.mjs');
+    const GOLD_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
+    const root = listRoot();
+    const d = folder();
+    const st = path.join(d, 'state.json');
+    const log = path.join(d, 'alarms.jsonl');
+    write(st, state({ [`waits ${GOLD_SHA} ${NOTE_AT}`]: T }));
+    assert.equal(run(['--append', '--state', st, '--log', log, '--root', root]).code, 0); // control: not listed yet
+    fs.rmSync(log, { force: true });
+    fs.mkdirSync(path.join(root, GOLD_DIR_REL), { recursive: true });
+    write(path.join(root, GOLD_DIR_REL, 'gold-a.json'), [{ target: { sha40: GOLD_SHA, pr: 8888 } }]);
+    const bad = run(['--append', '--state', st, '--log', log, '--root', root]);
+    assert.equal(bad.code, 3);
+    assert.equal(bad.out, '');
+    assert.ok(!fs.existsSync(log), 'a file was written after exit 3');
+    assert.ok(!bad.err.includes(GOLD_SHA));
+    assert.ok(bad.err.includes('a listed id reached the output'), 'exit 3 came from a list-read failure, not the id match');
   });
 });

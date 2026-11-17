@@ -4,19 +4,24 @@
  * A published lane page must carry no listed id (an id of the review-engine answer key). The hook holdout-scan counts them in the first 1 MiB of
  * a publish; this module masks them in the WHOLE page before render-board.mjs writes it, so a later lane note cannot put one back.
  *
- * Source of the list: the same two files and the same matcher as the hook. The matcher is scripts/github/lib/holdout-ids.mjs (imported, not
- * copied). The two file names are repeated here (the hook reader is TypeScript) and a test ties them to the hook text. The sha-prefix rule of the
+ * Source of the list: the same files and the same matcher as the warn hook: the dataset and the eval config (the holdout ids) and the tracked gold
+ * folder (the gold ids: card coord-content-scan-followups, item gold ids). The matcher is scripts/github/lib/holdout-ids.mjs (imported, not
+ * copied). The file and folder names are repeated here (the hook readers are TypeScript: shared/holdout-ids.ts and shared/gold-ids.ts) and tests
+ * tie them to the hook text. The sha-prefix rule of the
  * hook (holdout-scan.ts countHits) is repeated in shaHit below and a test ties it to the hook text too.
  *
  * Nothing here prints, returns in a message or logs an id. A caller gets counts (masked, left, bytes) and fixed texts. The token holds no digit and
  * no hex run, so the matcher never counts it, and it stays valid inside JSON strings, HTML attributes and link paths.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { countIdsIn, holdoutIdsOf } from '../github/lib/holdout-ids.mjs';
+import { checkGoldShape, countIdsIn, holdoutIdsOf } from '../github/lib/holdout-ids.mjs';
 
 export const DATASET_REL = '.claudedocs/2026-11-01-pr-review-dataset.json';
 export const EVAL_CONFIG_REL = 'scripts/eval/review-eval/config.json';
+/** The tracked gold answer keys and the one json file of that folder with no rows (the hook repeats both: .claude/hooks/src/shared/gold-ids.ts; a test ties them). */
+export const GOLD_DIR_REL = 'scripts/eval/review-eval/gold';
+export const GOLD_NON_ROW_FILES = Object.freeze(['escape-baseline.json']);
 export const TOKEN = 'masked-id';
 
 const MSG_BAD = 'the listed id list could not be read';
@@ -37,11 +42,13 @@ function listError(kind, message) {
 }
 
 /**
- * The listed ids of the board root `root`: the dataset and the eval config in it. `read` is the file reader (passed in, so a test needs no disk).
+ * The listed ids of the board root `root`: the holdout ids of the dataset and the eval config in it, and the gold ids of its gold folder (card
+ * coord-content-scan-followups, item gold ids). `read` is the file reader and `list` the folder lister (passed in, so a test needs no disk).
+ * A gold folder that does not exist adds no id; one that exists and cannot be read, or holds a broken file, is kind 'bad'.
  * Throws an Error with `.kind` ('absent' when the dataset file does not exist, 'bad' for any other read or parse problem or a missing config,
  * 'empty' for no ids) and a fixed message that holds no file content.
  */
-export function readIdList(root, read = (p) => readFileSync(p, 'utf8')) {
+export function readIdList(root, read = (p) => readFileSync(p, 'utf8'), list = (d) => readdirSync(d)) {
   let datasetText;
   try {
     datasetText = read(join(root, DATASET_REL));
@@ -58,7 +65,25 @@ export function readIdList(root, read = (p) => readFileSync(p, 'utf8')) {
     throw listError('bad', MSG_BAD);
   }
   if (!Array.isArray(ids) || ids.length === 0) throw listError('empty', MSG_EMPTY);
-  return ids;
+  return [...new Set([...ids, ...readGoldIds(root, read, list)])];
+}
+
+/** The gold ids of the gold folder of `root`: [] when the folder does not exist, kind 'bad' when it cannot be read or holds a broken file. */
+function readGoldIds(root, read, list) {
+  const dir = join(root, GOLD_DIR_REL);
+  let names;
+  try {
+    names = list(dir);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return [];
+    throw listError('bad', MSG_BAD);
+  }
+  try {
+    const files = names.filter((n) => n.endsWith('.json') && !GOLD_NON_ROW_FILES.includes(n)).map((n) => JSON.parse(read(join(dir, n))));
+    return checkGoldShape(files); // throws on a wrong shape, else the ids
+  } catch {
+    throw listError('bad', MSG_BAD);
+  }
 }
 
 /** The stored shas of the list: 7 to 40 hex characters with at least one letter (the rule of holdout-scan.ts countHits). */
