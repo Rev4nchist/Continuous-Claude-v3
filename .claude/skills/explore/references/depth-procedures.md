@@ -9,21 +9,24 @@ Fast structure overview using tldr commands. No agents spawned.
 **Best for:** Initial orientation, quick questions about structure, finding where things are.
 
 ```bash
-# 1. File tree
-tldr tree ${PATH:-src/} --ext .py
+# 1. File tree (set EXT to the code type of the repo, for example .ts or .mjs)
+tldr tree ${TARGET_DIR:-.} --ext ${EXT:-.ts}
 
-# 2. Code structure (codemaps)
-tldr structure ${PATH:-src/} --lang python
+# 2. Code structure (codemaps). Pass the language the folder holds (TLDR_LANG, not LANG: that is the locale variable).
+#    structure scans no .mjs file: for .mjs use tree, search and extract.
+tldr structure ${TARGET_DIR:-.} --lang ${TLDR_LANG:-typescript}
 
-# 3. Focused search (if --focus provided)
-tldr search "${FOCUS}" ${PATH:-src/}
+# 3. Focused search (if --focus provided). search also reads .mjs, .md and .json.
+tldr search "${FOCUS}" ${TARGET_DIR:-.}
 ```
+
+An empty tldr result is not absence. A wrong --lang, or an .mjs file under structure, returns nothing: confirm with Grep before you report that something is missing.
 
 **Implementation:**
 ```bash
 depth=quick
-tldr tree ${src_dir} --ext .py
-tldr structure ${src_dir} --lang python
+tldr tree ${src_dir:-.} --ext ${EXT:-.ts}
+tldr structure ${src_dir:-.} --lang ${TLDR_LANG:-typescript}
 if [ -n "$focus" ]; then
     tldr search "$focus" ${src_dir}
 fi
@@ -48,8 +51,8 @@ if [ ! -f .claude/cache/tldr/meta.json ]; then
 fi
 
 # 2. Structure analysis
-tldr structure src/ --lang python
-tldr calls src/
+tldr structure src/ --lang ${TLDR_LANG:-typescript}
+tldr calls src/ --lang ${TLDR_LANG:-typescript}
 
 # 3. Research patterns (via scout agent)
 # Task: research-codebase -> "Document existing patterns in ${FOCUS:-codebase}"
@@ -67,7 +70,7 @@ if [ ! -f .claude/cache/tldr/meta.json ]; then
 fi
 
 # 2. Structure
-tldr structure src/ --lang python
+tldr structure src/ --lang ${TLDR_LANG:-typescript}
 
 # 3. Research (spawn scout agent)
 # Task tool with subagent_type: "scout"
@@ -92,23 +95,23 @@ Architecture-focused analysis with layer detection. No agent spawned — pure tl
 
 ```bash
 # 1. Architecture detection
-tldr arch ${PATH:-src/}
+tldr arch ${TARGET_DIR:-.} --lang ${TLDR_LANG:-typescript}
 # Returns: entry_layer, middle_layer, leaf_layer, circular_deps
 
 # 2. Call graph
-tldr calls ${PATH:-src/}
+tldr calls ${TARGET_DIR:-.} --lang ${TLDR_LANG:-typescript}
 # Returns: edges, nodes
 
 # 3. Impact analysis from entry point (if --entry provided)
-tldr impact ${ENTRY} ${PATH:-src/} --depth 3
+tldr impact ${ENTRY} ${TARGET_DIR:-.} --depth 3 --lang ${TLDR_LANG:-typescript}
 ```
 
 **Implementation:**
 ```bash
-arch_output=$(tldr arch ${src_dir})
-calls_output=$(tldr calls ${src_dir})
+arch_output=$(tldr arch ${src_dir} --lang ${TLDR_LANG:-typescript})
+calls_output=$(tldr calls ${src_dir} --lang ${TLDR_LANG:-typescript})
 if [ -n "$entry" ]; then
-    impact_output=$(tldr impact $entry ${src_dir} --depth 3)
+    impact_output=$(tldr impact $entry ${src_dir} --depth 3 --lang ${TLDR_LANG:-typescript})
 fi
 # Synthesize and write output
 ```
@@ -216,10 +219,10 @@ uv tool install llm-tldr
 # or: pip install llm-tldr
 ```
 
-**No Python files found:**
+**Empty structure result (not absence):**
 ```bash
-# Adjust --lang flag
-tldr structure src/ --lang typescript  # or go, rust
+# Check --lang. structure scans no .mjs file: use tree, search or extract for .mjs
+tldr structure src/ --lang typescript  # or javascript for .js, python, go, rust
 ```
 
 **Empty architecture output:**
