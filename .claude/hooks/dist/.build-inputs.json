@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "inputs": {
     "agent-error-capture.ts": "b3424185d8403a35497741b9bd8b90d0e9897879e729e5d618ba45b0314b4d64",
-    "agent-model-guard.ts": "0bf386235e194987a850cb8fb15fe2e0257989ab899b30def92a3d8f1842274f",
+    "agent-model-guard.ts": "121f602ba4f7f081db49a1c8f6ece0acd92b61b107ca6ac77d0aa23ffe5e77bf",
     "agent-recall-injector.ts": "dc0dbe2cb73b9fc552aed61fe1af3bf94ab78f07d02b21b1f60288303175b309",
     "agent-verification.ts": "4a5d7c07206f6c9f6e3d9114df312d9ab48b575082390bd2f27afbc4892c8df9",
     "architecture-stats-sync.ts": "3b065d93b76c83fe3ac7b549549603878a610b9beb4ff3a36e28bfa07684072e",
@@ -199,6 +199,6 @@
     "tree-invalidate.ts": "efdcff70d106c48fe10e0b0febbdcce79bcf8d7e8688005f185dbc2cf209e019",
     "user-confirmation-detector.ts": "d0dc39cb3229c3b9f7173beb963149a1452ef4459e8ada1e36b850c623651bd3",
     "vercel-deploy-context.ts": "6a63ae3ef8189c4be8da9354a64cbc828b965c13c059e6705a4a4214795387f0",
-    "web-lookup-advisor.ts": "52bf69824c62323d2984ae50f2d64e44548ece9976cf885ff8fd6a330f07d4be"
+    "web-lookup-advisor.ts": "0ad144b1e18cfd5c3579ba666f868cd5ec231dd7a18833fa9bdd4819e12ee1e1"
   }
 }

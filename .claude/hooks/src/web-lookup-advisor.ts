@@ -59,7 +59,7 @@ export function buildSuggestion(url?: string): string {
       const hostname = new URL(url).hostname.replace('www.', '');
       const match = Object.entries(SITE_MAP).find(([domain]) => hostname.includes(domain));
       if (match) {
-        siteHint = `\nTry: \`${match[1]} <command> -f json\``;
+        siteHint = `If opencli runs: \`${match[1]} <command> -f json\``;
       }
     } catch {
       // Invalid URL -- skip site hint
@@ -67,9 +67,9 @@ export function buildSuggestion(url?: string): string {
   }
 
   return [
-    'Web lookup failed. Follow web-research.md: a permission deny or a policy block means stop and report; a missing tool or a network failure means the next tool in its list.',
-    siteHint,
+    'Web lookup failed. Follow web-research.md: a permission deny, a hook block, a tool removed by a deny rule or a tools: list, or a sandbox or domain block means stop and report; only a real outage means the next tool in its list.',
     'opencli is the last step, only when `opencli --version` runs (do not install it): `opencli list`, or `opencli generate <url> --goal "<goal>"`.',
+    siteHint,
   ].filter(Boolean).join('\n');
 }
 

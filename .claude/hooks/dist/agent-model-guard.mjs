@@ -129,6 +129,37 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
   } catch {
   }
 }
+var ERROR_FIELD_CHARS = 200;
+function oneLine(text) {
+  return maskSecrets(text).replace(/\s+/g, " ").trim().slice(0, ERROR_FIELD_CHARS);
+}
+function errorMessage(err) {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : safeJson(err);
+  return oneLine(String(raw).split(/\r?\n/)[0]);
+}
+function safeJson(value) {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+function firstFrame(err) {
+  const stack = err instanceof Error ? err.stack : void 0;
+  const frame = typeof stack === "string" ? stack.split(/\r?\n/).find((l) => /^\s*at\s/.test(l)) : void 0;
+  return frame ? oneLine(frame) : "";
+}
+function logGuardError(hook, err, opts = {}) {
+  try {
+    const env = opts.env ?? process.env;
+    if (!shouldWrite(env)) return;
+    const entry = { ts: (/* @__PURE__ */ new Date()).toISOString(), hook, kind: "error", message: errorMessage(err), stack: firstFrame(err), source: guardSource(env) };
+    const path = guardLogPath(env);
+    mkdirSync(dirname(path), { recursive: true, mode: 448 });
+    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+  } catch {
+  }
+}
 
 // src/lib/trace-boot.ts
 var TRACE_MARKER = "__CCV3_HOOK_TRACE_V1__";
@@ -453,6 +484,18 @@ var BUILTIN_AGENTS = /* @__PURE__ */ new Set([
 ]);
 var HINT_MAX_EDITS = 2;
 var HINT_MIN_LENGTH = 4;
+var NAME_MAX = 60;
+var PATH_MAX = 200;
+function contextText(text, max) {
+  const clean = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  return clean.length > max ? clean.slice(0, max) + "..." : clean;
+}
+function contextPath(path, home) {
+  const norm = path.replace(/\\/g, "/");
+  const homeNorm = home.replace(/\\/g, "/").replace(/\/+$/, "");
+  const short = homeNorm && norm.toLowerCase().startsWith(homeNorm.toLowerCase() + "/") ? "~" + norm.slice(homeNorm.length) : norm;
+  return contextText(short, PATH_MAX);
+}
 function readStdin() {
   return readFileSync(0, "utf-8");
 }
@@ -494,10 +537,7 @@ function listAgents(dir) {
 function findSimilarAgents(agentType, available) {
   const lower = agentType.toLowerCase();
   if (lower.length < HINT_MIN_LENGTH) return [];
-  return available.filter((a) => {
-    const aLower = a.toLowerCase();
-    return aLower !== lower && levenshteinDistance(lower, aLower) <= HINT_MAX_EDITS;
-  }).slice(0, 3);
+  return available.filter((a) => a !== agentType).map((a) => ({ a, d: levenshteinDistance(lower, a.toLowerCase()) })).filter((x) => x.d <= HINT_MAX_EDITS).sort((x, y) => x.d - y.d || x.a.localeCompare(y.a)).slice(0, 3).map((x) => x.a);
 }
 function levenshteinDistance(a, b) {
   if (a.length === 0) return b.length;
@@ -532,10 +572,14 @@ function findShadow(builtin, dirs) {
   }
   return void 0;
 }
-function decideBuiltin(agentType, dirs) {
+function decideBuiltin(agentType, dirs, home) {
   const shadow = findShadow(agentType, dirs);
   if (!shadow) return { allow: true };
-  return { allow: true, shadow, hint: `${agentType} is overridden by ${shadow}; its tools may differ from the built-in.` };
+  return {
+    allow: true,
+    shadow,
+    hint: `${agentType} may be overridden by ${contextPath(shadow, home)}; its tools may differ from the built-in.`
+  };
 }
 function decide(input, env) {
   if (input?.tool_name !== "Agent" && input?.tool_name !== "Task") return { allow: true };
@@ -544,18 +588,19 @@ function decide(input, env) {
   if (agentType.includes(":")) return { allow: true };
   try {
     const dirs = agentDirs(input.cwd, env);
-    if (BUILTIN_AGENTS.has(agentType)) return decideBuiltin(agentType, dirs);
+    if (BUILTIN_AGENTS.has(agentType)) return decideBuiltin(agentType, dirs, env.home);
     const safeName = !/[\\/]|\.\./.test(agentType);
     if (safeName) {
       for (const dir of dirs) {
-        if (fileExists(join3(dir, `${agentType}.md`))) return { allow: true };
+        if (fileExists(join3(dir, `${agentType}.md`)) && listAgents(dir).includes(agentType)) return { allow: true };
       }
     }
     const similar = safeName ? findSimilarAgents(agentType, [...new Set(dirs.flatMap(listAgents))]) : [];
     if (similar.length === 0) return { allow: true, unknown: true };
-    return { allow: true, unknown: true, hint: `Agent "${agentType}" is not a custom agent. Did you mean: ${similar.join(", ")}?` };
-  } catch {
-    return { allow: true };
+    const shown = contextText(agentType, NAME_MAX);
+    return { allow: true, unknown: true, hint: `Agent "${shown}" is not a custom agent. Did you mean: ${similar.join(", ")}?` };
+  } catch (e) {
+    return { allow: true, error: e };
   }
 }
 function main() {
@@ -568,6 +613,7 @@ function main() {
   }
   const decision = decide(input, { home: homedir3(), projectDir: process.env.CLAUDE_PROJECT_DIR });
   const name = String(input.tool_input?.subagent_type).slice(0, 60);
+  if (decision.error !== void 0) logGuardError("agent-model-guard", decision.error);
   if (decision.unknown) logGuardDecision("agent-model-guard", input, "warn", `agent-unknown: ${name}`);
   if (decision.shadow) logGuardDecision("agent-model-guard", input, "warn", `builtin-shadowed: ${name}`);
   console.log(JSON.stringify(buildOutput(decision)));
@@ -582,7 +628,8 @@ function isDirectRun() {
 if (isDirectRun()) {
   try {
     main();
-  } catch {
+  } catch (e) {
+    logGuardError("agent-model-guard", e);
     console.log("{}");
   }
 }
@@ -590,5 +637,7 @@ export {
   BUILTIN_AGENTS,
   agentDirs,
   buildOutput,
+  contextPath,
+  contextText,
   decide
 };

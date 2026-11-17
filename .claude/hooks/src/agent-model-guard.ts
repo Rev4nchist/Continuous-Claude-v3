@@ -23,7 +23,7 @@ import { readFileSync, readdirSync, statSync, realpathSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
-import { logGuardDecision } from './shared/guard-log.js';
+import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 
 interface TaskInput {
   tool_name?: string;
@@ -35,12 +35,16 @@ interface TaskInput {
   };
 }
 
-/** Always an allow. `unknown`: the name was not found (warn row). `shadow`: the file that shadows a built-in (warn row). */
+/**
+ * Always an allow. `unknown`: the name was not found (warn row). `shadow`: the file that may shadow a built-in
+ * (warn row). `error`: an fs error made the lookup fail open (error row); never set together with `unknown`.
+ */
 export interface Decision {
   allow: true;
   hint?: string;
   unknown?: true;
   shadow?: string;
+  error?: unknown;
 }
 
 export interface DecideEnv {
@@ -65,6 +69,25 @@ export const BUILTIN_AGENTS = new Set([
 const HINT_MAX_EDITS = 2;
 /** Shortest typed name that gets a hint; a shorter one matches too much. */
 const HINT_MIN_LENGTH = 4;
+/** Longest typed agent name that goes back into model context (same cut as the log row). */
+const NAME_MAX = 60;
+/** Longest path that goes back into model context. */
+const PATH_MAX = 200;
+
+/** Text for model context: control characters removed, then cut to `max` characters. */
+export function contextText(text: string, max: number): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+  return clean.length > max ? clean.slice(0, max) + '...' : clean;
+}
+
+/** A path for model context: the home dir as ~, then contextText. */
+export function contextPath(path: string, home: string): string {
+  const norm = path.replace(/\\/g, '/');
+  const homeNorm = home.replace(/\\/g, '/').replace(/\/+$/, '');
+  const short = homeNorm && norm.toLowerCase().startsWith(homeNorm.toLowerCase() + '/') ? '~' + norm.slice(homeNorm.length) : norm;
+  return contextText(short, PATH_MAX);
+}
 
 function readStdin(): string {
   return readFileSync(0, 'utf-8');
@@ -114,16 +137,20 @@ function listAgents(dir: string): string[] {
   }
 }
 
-/** Custom agents within HINT_MAX_EDITS of the typed name, case-insensitive. No substring rule. */
+/**
+ * Custom agents within HINT_MAX_EDITS of the typed name, case-insensitive, nearest first. No substring rule.
+ * A name that differs only in case (Scout for scout) is a candidate at distance 0.
+ */
 function findSimilarAgents(agentType: string, available: string[]): string[] {
   const lower = agentType.toLowerCase();
   if (lower.length < HINT_MIN_LENGTH) return [];
   return available
-    .filter(a => {
-      const aLower = a.toLowerCase();
-      return aLower !== lower && levenshteinDistance(lower, aLower) <= HINT_MAX_EDITS;
-    })
-    .slice(0, 3);
+    .filter(a => a !== agentType)
+    .map(a => ({ a, d: levenshteinDistance(lower, a.toLowerCase()) }))
+    .filter(x => x.d <= HINT_MAX_EDITS)
+    .sort((x, y) => x.d - y.d || x.a.localeCompare(y.a))
+    .slice(0, 3)
+    .map(x => x.a);
 }
 
 function levenshteinDistance(a: string, b: string): number {
@@ -165,10 +192,18 @@ function findShadow(builtin: string, dirs: string[]): string | undefined {
   return undefined;
 }
 
-function decideBuiltin(agentType: string, dirs: string[]): Decision {
+/**
+ * The check matches file names. Claude Code may key an agent by its frontmatter `name:` instead, so the hint
+ * says "may be overridden", not "is overridden".
+ */
+function decideBuiltin(agentType: string, dirs: string[], home: string): Decision {
   const shadow = findShadow(agentType, dirs);
   if (!shadow) return { allow: true };
-  return { allow: true, shadow, hint: `${agentType} is overridden by ${shadow}; its tools may differ from the built-in.` };
+  return {
+    allow: true,
+    shadow,
+    hint: `${agentType} may be overridden by ${contextPath(shadow, home)}; its tools may differ from the built-in.`,
+  };
 }
 
 /** Pure decision. Always allows. Sets `unknown` only on the not-found path, never on the fs-error path. */
@@ -180,19 +215,21 @@ export function decide(input: TaskInput, env: DecideEnv): Decision {
 
   try {
     const dirs = agentDirs(input.cwd, env);
-    if (BUILTIN_AGENTS.has(agentType)) return decideBuiltin(agentType, dirs);
+    if (BUILTIN_AGENTS.has(agentType)) return decideBuiltin(agentType, dirs, env.home);
     // A name with a path separator or ".." never names a file in an agents dir.
     const safeName = !/[\\/]|\.\./.test(agentType);
     if (safeName) {
       for (const dir of dirs) {
-        if (fileExists(join(dir, `${agentType}.md`))) return { allow: true };
+        // Exact case only: NTFS would also find Scout.md for "scout", and a case-only match is a typo.
+        if (fileExists(join(dir, `${agentType}.md`)) && listAgents(dir).includes(agentType)) return { allow: true };
       }
     }
     const similar = safeName ? findSimilarAgents(agentType, [...new Set(dirs.flatMap(listAgents))]) : [];
     if (similar.length === 0) return { allow: true, unknown: true };
-    return { allow: true, unknown: true, hint: `Agent "${agentType}" is not a custom agent. Did you mean: ${similar.join(', ')}?` };
-  } catch {
-    return { allow: true };
+    const shown = contextText(agentType, NAME_MAX);
+    return { allow: true, unknown: true, hint: `Agent "${shown}" is not a custom agent. Did you mean: ${similar.join(', ')}?` };
+  } catch (e) {
+    return { allow: true, error: e };
   }
 }
 
@@ -206,6 +243,7 @@ function main(): void {
   }
   const decision = decide(input, { home: homedir(), projectDir: process.env.CLAUDE_PROJECT_DIR });
   const name = String(input.tool_input?.subagent_type).slice(0, 60);
+  if (decision.error !== undefined) logGuardError('agent-model-guard', decision.error);
   if (decision.unknown) logGuardDecision('agent-model-guard', input, 'warn', `agent-unknown: ${name}`);
   if (decision.shadow) logGuardDecision('agent-model-guard', input, 'warn', `builtin-shadowed: ${name}`);
   console.log(JSON.stringify(buildOutput(decision)));
@@ -223,7 +261,8 @@ function isDirectRun(): boolean {
 if (isDirectRun()) {
   try {
     main();
-  } catch {
+  } catch (e) {
+    logGuardError('agent-model-guard', e);
     console.log('{}');
   }
 }

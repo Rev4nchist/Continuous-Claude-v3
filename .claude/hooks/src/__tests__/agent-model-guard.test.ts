@@ -27,8 +27,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { spawnSync } from 'child_process';
 
-import { decide, agentDirs, buildOutput, BUILTIN_AGENTS } from '../agent-model-guard.js';
+import { decide, agentDirs, buildOutput, contextText, contextPath, BUILTIN_AGENTS } from '../agent-model-guard.js';
 
 let root: string;
 let home: string;
@@ -108,13 +109,27 @@ describe('agent-model-guard decide(): built-ins', () => {
     expect(d.allow).toBe(true);
     expect(d.unknown).toBeUndefined();
     expect(d.shadow).toBe(path.join(project, '.claude', 'agents', 'Web-Fetch.md'));
-    expect(d.hint).toContain('web-fetch is overridden by');
+    expect(d.hint).toContain('web-fetch may be overridden by');
   });
 
-  it('finds a shadow in the home agents dir too', () => {
+  it('finds a shadow in the home agents dir and shows it as ~/..., not the home path', () => {
     agentFile(home, 'fork');
     const d = decide(call('fork', project) as never, { home });
     expect(d.shadow).toBe(path.join(home, '.claude', 'agents', 'fork.md'));
+    expect(d.hint).toContain('~/.claude/agents/fork.md');
+    expect(d.hint).not.toContain(home.replace(/\\/g, '/'));
+    expect(d.hint).not.toContain(home);
+  });
+
+  it('contextPath: home becomes ~, a long path is cut to 200 characters, control characters go', () => {
+    // Pure string test: Windows cannot create a folder with a control character or this long a path.
+    const h = 'C:\\Users\\someone';
+    expect(contextPath('C:\\Users\\someone\\.claude\\agents\\fork.md', h)).toBe('~/.claude/agents/fork.md');
+    expect(contextPath('c:/users/SOMEONE/.claude/agents/fork.md', h)).toBe('~/.claude/agents/fork.md');
+    expect(contextPath('C:\\Users\\someone2\\x.md', h)).toBe('C:/Users/someone2/x.md');
+    const long = contextPath('/work/' + 'x'.repeat(250) + '\u0007bell/.claude/agents/Plan.md', '/home/u');
+    expect(long.length).toBe(203);
+    expect(long).not.toMatch(/[\u0000-\u001f]/);
   });
 });
 
@@ -128,9 +143,29 @@ describe('agent-model-guard decide(): unknown names never deny', () => {
     expect(decide(call('brand-new-builtin-xyz', project) as never, { home })).toEqual({ allow: true, unknown: true });
   });
 
-  it('ignores a relative or non-string cwd and still allows', () => {
-    expect(decide({ ...call('nope'), cwd: 42 } as never, { home }).allow).toBe(true);
-    expect(decide({ ...call('nope'), cwd: '.' } as never, { home }).allow).toBe(true);
+  it('ignores a relative or non-string cwd: still allows and flags the name unknown', () => {
+    expect(decide({ ...call('nope'), cwd: 42 } as never, { home })).toEqual({ allow: true, unknown: true });
+    expect(decide({ ...call('nope'), cwd: '.' } as never, { home })).toEqual({ allow: true, unknown: true });
+  });
+
+  it('hints a name that differs only in case, on every filesystem (Scout for scout)', () => {
+    const d = decide(call('Scout', project) as never, { home });
+    expect(d.unknown).toBe(true);
+    expect(d.hint).toContain('Did you mean: scout');
+  });
+
+  it('lists the nearest custom agent first, not the first in folder order', () => {
+    for (const n of ['aaaken', 'bbaken', 'ccaken', 'krakxn']) agentFile(home, n);
+    const d = decide(call('kraken', project) as never, { home });
+    expect(d.hint).toContain('Did you mean: krakxn,');
+  });
+
+  it('cuts the typed name in a hint to 60 characters and strips control characters', () => {
+    agentFile(home, 'a'.repeat(65));
+    const d = decide(call('a'.repeat(64) + '\u0007', project) as never, { home });
+    expect(d.hint).toBeDefined();
+    expect(d.hint).toContain(`Agent "${'a'.repeat(60)}..."`);
+    expect(d.hint).not.toMatch(/[\u0000-\u001f]/);
   });
 
   it('hints a near typo of a custom agent', () => {
@@ -161,15 +196,18 @@ describe('agent-model-guard decide(): unknown names never deny', () => {
     fs.mkdirSync(path.join(project, '.claude', 'agents'), { recursive: true });
     fs.writeFileSync(path.join(project, '.claude', 'secret.md'), 'x');
     const d = decide(call('../secret', project) as never, { home });
-    expect(d.allow).toBe(true);
-    expect(d.unknown).toBe(true);
-    expect(d.hint ?? '').not.toContain('secret');
+    expect(d).toEqual({ allow: true, unknown: true });
+    // scou/ is 1 edit from scout: without the separator check it would get a hint that echoes it.
+    expect(decide(call('scou/', project) as never, { home })).toEqual({ allow: true, unknown: true });
   });
 
-  it('fails open on a non-ENOENT fs error and does not flag it unknown', () => {
+  it('fails open on a non-ENOENT fs error: returns the error, never flags it unknown', () => {
     // A NUL byte in the path makes statSync throw ERR_INVALID_ARG_VALUE, which is not ENOENT.
     const d = decide(call('ghost', project + '\0bad') as never, { home });
-    expect(d).toEqual({ allow: true });
+    expect(d.allow).toBe(true);
+    expect(d.unknown).toBeUndefined();
+    expect(d.hint).toBeUndefined();
+    expect(d.error).toBeInstanceOf(Error);
   });
 
   it('allows non-Agent tools and empty subagent_type with no flag', () => {
@@ -188,6 +226,66 @@ describe('agent-model-guard buildOutput()', () => {
     const out = buildOutput({ allow: true, unknown: true, hint: 'Did you mean: scout?' }) as Record<string, any>;
     expect(out).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'Did you mean: scout?' } });
     expect(JSON.stringify(out)).not.toContain('permissionDecision');
+  });
+});
+
+describe('agent-model-guard contextText()', () => {
+  it('strips control characters and cuts with an ellipsis', () => {
+    expect(contextText('ab\u0000c\nd\u009b', 10)).toBe('abcd');
+    expect(contextText('x'.repeat(12), 10)).toBe('x'.repeat(10) + '...');
+  });
+});
+
+// The built hook, run as Claude Code runs it: stdin payload, stdout JSON, rows in the guard log.
+const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'dist', 'agent-model-guard.mjs');
+
+function runDist(payload: object, logPath: string, homeDir: string) {
+  const env: NodeJS.ProcessEnv = { ...process.env, CCV3_GUARD_DECISIONS_LOG: logPath, HOME: homeDir, USERPROFILE: homeDir };
+  delete env.VITEST;
+  delete env.CLAUDE_PROJECT_DIR;
+  const r = spawnSync(process.execPath, [DIST], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 15_000 });
+  return { status: r.status, out: r.stdout.trim() };
+}
+
+function rows(logPath: string): Array<Record<string, unknown>> {
+  if (!fs.existsSync(logPath)) return [];
+  return fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
+describe.skipIf(!fs.existsSync(DIST))('agent-model-guard built hook (main)', () => {
+  it('writes a warn row for an unknown name and prints {}', () => {
+    const log = path.join(root, 'log.jsonl');
+    const r = runDist({ session_id: 't', tool_name: 'Agent', cwd: project, tool_input: { subagent_type: 'no-such-agent-xyz' } }, log, home);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.out)).toEqual({});
+    const got = rows(log);
+    expect(got.map(x => x.reason)).toEqual(['agent-unknown: no-such-agent-xyz']);
+    expect(got[0].decision).toBe('warn');
+  });
+
+  it('writes a builtin-shadowed warn row and prints the hint as additionalContext only', () => {
+    const log = path.join(root, 'log.jsonl');
+    agentFile(project, 'web-fetch');
+    const r = runDist({ session_id: 't', tool_name: 'Agent', cwd: project, tool_input: { subagent_type: 'web-fetch' } }, log, home);
+    const out = JSON.parse(r.out);
+    expect(Object.keys(out.hookSpecificOutput).sort()).toEqual(['additionalContext', 'hookEventName']);
+    expect(rows(log).map(x => x.reason)).toEqual(['builtin-shadowed: web-fetch']);
+  });
+
+  it('writes an error row (no warn row) when the lookup fails open, and prints {}', () => {
+    const log = path.join(root, 'log.jsonl');
+    const r = runDist({ session_id: 't', tool_name: 'Agent', cwd: project + '\u0000bad', tool_input: { subagent_type: 'ghost' } }, log, home);
+    expect(JSON.parse(r.out)).toEqual({});
+    const got = rows(log);
+    expect(got.map(x => x.kind ?? x.decision)).toEqual(['error']);
+  });
+
+  it('still prints {} with exit 0 when the guard log itself cannot be written', () => {
+    const logDir = path.join(root, 'log-is-a-dir');
+    fs.mkdirSync(logDir);
+    const r = runDist({ session_id: 't', tool_name: 'Agent', cwd: project + '\u0000bad', tool_input: { subagent_type: 'ghost' } }, logDir, home);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.out)).toEqual({});
   });
 });
 
