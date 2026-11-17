@@ -929,7 +929,7 @@ describe('parseTurnEnd on real answers', () => {
   })
 
   test('P22 a restate in a full answer with a None block gives goal, stop-at and no ask', () => {
-    const answer = [PR_LINE, '', 'Opened the PR and wrote the evidence.', '', '## Next steps', '1. None — waiting on your merge yes.'].join('\n')
+    const answer = [PR_LINE, '', 'Opened the PR and wrote the evidence.', '', '## Next steps', '1. None — waiting on the CI run.'].join('\n')
     const parsed = parseTurnEnd(answer)
     expect(parsed.goal?.text ?? '').toContain('rawProject')
     expect(parsed.stopAt?.text ?? '').toContain('open PR')

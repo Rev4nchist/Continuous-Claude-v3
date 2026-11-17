@@ -480,19 +480,21 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
  *     After the lead come at most a sentence end, " - ", " — ", ":" or ", " and ONE waiting clause: "None for now. I'm waiting on X", "None, waiting on CI". The ", " form never takes you, yours or Dave.
  *     Also "None for the seat". A second sentence after the wait ("None - waiting on CI. I rule on it after") stays an ASK: a false ask is better than a hidden one,
  *     and two review rounds found a new hidden-question hole in each try at a tail grammar. Known limit; the cure is `brief_set` with `ask: []`, not a bigger parser.
- * (b) A bare waiting clause, "(I'm) Waiting on/for X", where X does not start with you, your or Dave ("Waiting on Dave's approval" asks Dave).
- * X is 1 to 80 characters with no ? ; , ! : – —, no sentence end (". "), no dash separator and no " then ", " and ", " or ", " but ".
+ * (b) A bare waiting clause, "(I'm) Waiting on/for X".
+ * X is 1 to 80 characters: letters, digits, spaces, an apostrophe, a hash and a hyphen, nothing else (no ( ) / | > . ? ; , ! : and no dash or arrow). It holds no sentence end,
+ * no dash separator, no " then ", " and ", " or ", " but ", and never the words you, your, yours or Dave anywhere ("Waiting on Dave's approval" and "Waiting on CI before you
+ * approve" ask Dave). White space runs count as one space. A plain line with a symbol ("Waiting on CI (run 12)") is a false question: a false question beats a hidden one.
  * Anything else stays an ask: "Waiting on CI, then approve PR 12", "None for now. Paste the build log", "None, but review the diff", "None of the options fit".
  * Every part is bounded or anchored, with no nested quantifier: linear on a long line.
  */
-const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s)(?:[^?;,!:–—\s]|\s)){1,80}`
+const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s|\b(?:you(?:rs?)?|dave)\b)(?:[\p{L}\p{N}#'’-]|\s)){1,80}`
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
 const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
-const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+(?!${WAIT_CLAUSE}(?:you(?:rs?)?|dave)\\b))${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
-const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}(?!(?:you(?:rs?)?|dave)\\b)${WAIT_OBJECT}$`, 'i')
+const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'iu')
+const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}${WAIT_OBJECT}$`, 'iu')
 /** A question mark makes any item an ask, whatever its words. */
 const noAsk = (text: string): boolean => {
-  const whole = text.replace(/\.$/, '')
+  const whole = text.replace(/\s+/g, ' ').replace(/\.$/, '')
   return !whole.includes('?') && (LEAD_ITEM.test(whole) || BARE_WAIT.test(whole))
 }
 
