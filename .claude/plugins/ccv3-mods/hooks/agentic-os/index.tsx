@@ -262,15 +262,25 @@ const refreshGit = async ($: EngineInterface): Promise<void> => {
 }
 
 /** The part of the HUD the state file carries (cost and limits). The atom only: a seed read here would use up the retries HS7 and M7 count. The atom is null for a headless run, with the HUD off, or on a resume before the seed (an interactive start fills it through hooks/hud session.start); a null atom writes null. A limit kind is redacted, then clipped; a value that is not a finite number is null (cost) or drops the limit. */
-const hudForState = (state: HudState | null): { costUsd: number | null; limits: HudLimit[] } | null =>
+export const hudForState = (
+  state: HudState | null,
+): { costUsd: number | null; model: string | null; effort: string | null; advisorCalls: number | null; limits: HudLimit[] } | null =>
   state === null
     ? null
     : {
         costUsd: typeof state.costUsd === 'number' && Number.isFinite(state.costUsd) ? state.costUsd : null,
+        // The model, the effort and the advisor count are what the HUD row draws: the app reads them from the file too (status band review, fix 9).
+        model: typeof state.model === 'string' && state.model !== '' ? redact(state.model).text.slice(0, 60) : null,
+        effort: typeof state.effort === 'string' && state.effort !== '' ? redact(state.effort).text.slice(0, 60) : null,
+        advisorCalls: typeof state.advisor?.calls === 'number' && Number.isFinite(state.advisor.calls) ? state.advisor.calls : null,
         limits: (Array.isArray(state.limits) ? state.limits : [])
           .filter(limit => limit != null && typeof limit.percentUsed === 'number' && Number.isFinite(limit.percentUsed))
           .slice(0, 8)
-          .map(limit => ({ kind: redact(String(limit.kind)).text.slice(0, 60), percentUsed: limit.percentUsed })),
+          .map(limit => ({
+            kind: redact(String(limit.kind)).text.slice(0, 60),
+            percentUsed: limit.percentUsed,
+            ...(typeof limit.resetsAt === 'string' && limit.resetsAt !== '' ? { resetsAt: limit.resetsAt.slice(0, 40) } : {}),
+          })),
       }
 
 /**
@@ -898,7 +908,7 @@ export const agenticOs = (on: On) => {
     await update($, hud, now =>
       now === null
         ? now
-        : { ...now, costUsd: e.cost?.usd ?? now.costUsd, limits: e.rateLimits.map(({ kind, percentUsed }) => ({ kind, percentUsed })) },
+        : { ...now, costUsd: e.cost?.usd ?? now.costUsd, limits: e.rateLimits.map(({ kind, percentUsed, resetsAt }) => ({ kind, percentUsed, ...(resetsAt === undefined ? {} : { resetsAt }) })) },
     )
     // The engine measures after the turn-end snapshot, so an idle session's file would keep the last turn's cost and limits.
     if (JSON.stringify(await read($, hud)) !== before && (await worthSnapshot($))) await writeSnapshot($)
@@ -977,6 +987,7 @@ export const agenticOs = (on: On) => {
       repo: (await read($, git))?.repo ?? null,
       who: { name: await read($, sessionName), short: (await $.session.id().catch(() => null))?.slice(0, 8) ?? null },
       lane: now.lanes?.[0]?.id ?? null,
+      laneTitle: now.lanes?.[0]?.title ?? null,
       laneCount: now.lanes?.length ?? 0,
       ctx: now.ctx,
       costUsd: hudNow?.costUsd ?? null,

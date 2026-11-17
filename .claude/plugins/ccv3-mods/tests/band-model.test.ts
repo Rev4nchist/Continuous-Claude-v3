@@ -129,11 +129,11 @@ describe('band line 2: goal', () => {
     expect(text(line)).toMatch(/GOAL not set\s+QUESTIONS 0/)
   })
 
-  test('L4 a brief_set goal has no marker; a parsed goal is marked parsed', () => {
+  test('L4 a brief_set goal has no marker; a parsed goal is marked guessed (never parsed)', () => {
     const set = briefWith({ goal: 'Add session header' })
-    expect(lineOf({ brief: set })).not.toContain('parsed')
+    expect(lineOf({ brief: set })).not.toContain('guessed')
     const parsed = mergeParsed(null, { goal: { text: 'Add session header', source: 'parsed' } }, 1_000)
-    expect(lineOf({ brief: parsed })).toMatch(/GOAL Add session header\s+\[parsed\]/)
+    expect(lineOf({ brief: parsed })).toMatch(/GOAL Add session header\s+\[guessed\]/)
   })
 
   test('L4 a blank goal reads as not set', () => {
