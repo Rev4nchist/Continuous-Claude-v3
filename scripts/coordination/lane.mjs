@@ -1314,6 +1314,12 @@ async function checkSeedItems(c, items, board) {
 // ---------------------------------------------------------------- seed
 
 /**
+ * SQL: lane `l` is held by a live session other than `me` ($n, text), and the caller is not the seat of its board. The ONE fragment of the
+ * seed holder test: refuseHeldSeed selects with it and the conflict clause of upsertSeedLane negates it, so the two cannot drift.
+ */
+const heldByOtherSql = (me) => `(l.owner_session_id IS NOT NULL AND l.owner_session_id <> ${me}::text AND NOT ${RECLAIMABLE} AND NOT ${holdsMasterSql(me)})`;
+
+/**
  * The holder test of seed (gap 4, rule L2.10). A lane in the file that another session holds, and that is not reclaimable (L2.8),
  * refuses the WHOLE file: exit 4, `REFUSED seed <id> [not-holder]`, nothing written. The holder of the master card passes (the seat
  * seeds edges and map changes for lanes that builders hold, L2.6); on a board with no master card nobody does. Every lane of the file
@@ -1327,9 +1333,7 @@ async function refuseHeldSeed(c, ids, board, myId) {
   const held = (await c.query(
     `SELECT l.id, l.owner_session_id AS owner FROM agentic_os.lane l
       WHERE l.id = ANY($1::text[]) AND l.project_key = $2
-        AND l.owner_session_id IS NOT NULL AND l.owner_session_id <> $3::text
-        AND NOT ${RECLAIMABLE}
-        AND NOT ${holdsMasterSql('$3')}
+        AND ${heldByOtherSql('$3')}
       ORDER BY l.id`,
     [ids, board.key, myId],
   )).rows;
@@ -1349,32 +1353,44 @@ async function refuseHeldSeed(c, ids, board, myId) {
  * Name the band column only when some item carries a band (withBand), so a seed with no bands works before migration 0005.
  * An omitted band or priority (undefined) keeps the stored value on conflict; a new lane gets NULL / 50.
  */
-async function upsertSeedLane(c, it, board, withBand) {
+async function upsertSeedLane(c, it, board, withBand, myId) {
   const band = parseBand(it.band);
   const priority = parsePriority(it.priority);
+  const meParam = withBand ? '$15' : '$13'; // the caller's session id, after the band parameters when they are sent
   let res;
   try {
+    // The conflict clause repeats the holder test of refuseHeldSeed (one fragment, heldByOtherSql): a peer that creates and claims a NEW id
+    // between that test (which can lock only rows that exist) and this INSERT must not get its title, track and scope replaced (item 1).
     res = await c.query(
-      `INSERT INTO agentic_os.lane (id,title,track,scope,branch,state,priority,note,rationale,done_when,project_key${withBand ? ',band' : ''})
+      `INSERT INTO agentic_os.lane AS l (id,title,track,scope,branch,state,priority,note,rationale,done_when,project_key${withBand ? ',band' : ''})
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11${withBand ? ',$13' : ''})
        ON CONFLICT (id) DO UPDATE SET
          title=EXCLUDED.title, track=EXCLUDED.track,
-         scope=COALESCE(EXCLUDED.scope, agentic_os.lane.scope),
-         branch=COALESCE(EXCLUDED.branch, agentic_os.lane.branch),
-         priority=CASE WHEN $12::boolean THEN EXCLUDED.priority ELSE agentic_os.lane.priority END,
-         ${withBand ? 'band=CASE WHEN $14::boolean THEN EXCLUDED.band ELSE agentic_os.lane.band END,' : ''}
-         note=COALESCE(agentic_os.lane.note, EXCLUDED.note),
-         rationale=COALESCE(EXCLUDED.rationale, agentic_os.lane.rationale),
-         done_when=COALESCE(EXCLUDED.done_when, agentic_os.lane.done_when),
+         scope=COALESCE(EXCLUDED.scope, l.scope),
+         branch=COALESCE(EXCLUDED.branch, l.branch),
+         priority=CASE WHEN $12::boolean THEN EXCLUDED.priority ELSE l.priority END,
+         ${withBand ? 'band=CASE WHEN $14::boolean THEN EXCLUDED.band ELSE l.band END,' : ''}
+         note=COALESCE(l.note, EXCLUDED.note),
+         rationale=COALESCE(EXCLUDED.rationale, l.rationale),
+         done_when=COALESCE(EXCLUDED.done_when, l.done_when),
          updated_at=now()
-       WHERE agentic_os.lane.project_key = EXCLUDED.project_key`,
+       WHERE l.project_key = EXCLUDED.project_key AND NOT (${heldByOtherSql(meParam)})`,
       [it.id, it.title, it.track || 'unsorted', it.scope || null, it.branch || null,
        LANE_STATES.includes(it.state) ? it.state : 'backlog', priority ?? 50, it.note || null,
        it.rationale || null, it.doneWhen || null, board.key, priority !== undefined,
-       ...(withBand ? [band ?? null, band !== undefined] : [])],
+       ...(withBand ? [band ?? null, band !== undefined] : []), myId],
     );
   } catch (e) { throw bandMigrationError(e); }
-  if (res.rowCount === 0) throw await foreignId(c, it.id);
+  if (res.rowCount === 0) {
+    // Two causes give no row: the id belongs to another board, or a peer holds it (a claim that came after the holder test).
+    const hit = (await c.query(`SELECT project_key, owner_session_id AS owner FROM agentic_os.lane WHERE id=$1`, [it.id])).rows[0];
+    if (hit && hit.project_key === board.key) {
+      const e = notHolderRefusal('seed', it.id, hit.owner, myId, { withOverride: false });
+      e.message += '\n  The whole file was refused and nothing was written.';
+      throw e;
+    }
+    throw await foreignId(c, it.id);
+  }
 }
 
 /** Rule 7 (contract t2.1, point 1.4): an edge to a lane that another board owns is refused, before any write. */
@@ -1422,7 +1438,7 @@ async function seedObject(c, { lanes, edges, dropped }, { file, board, myId }) {
     await c.query(`SELECT pg_advisory_xact_lock(hashtext('lane_dep:' || $1::text))`, [board.key]);
     await refuseForeignEdges(c, edges, board);
     await refuseHeldSeed(c, lanes.map((it) => it.id), board, myId);
-    for (const it of lanes) await upsertSeedLane(c, it, board, withBand);
+    for (const it of lanes) await upsertSeedLane(c, it, board, withBand, myId);
     await replaceEdges(c, lanes, edges, board);
     await refuseCycle(c, board);
     missing = await missingDeps(c, edges);
@@ -2379,7 +2395,7 @@ const commands = {
     // One transaction, so the holder test and the writes see the same locked rows (gap 4).
     await inLaneTx(c, async () => {
       await refuseHeldSeed(c, parsed.lanes.map((it) => it.id), board, myId);
-      for (const it of parsed.lanes) await upsertSeedLane(c, it, board, withBand);
+      for (const it of parsed.lanes) await upsertSeedLane(c, it, board, withBand, myId);
       return { value: null };
     });
     await logEvent(c, { kind: 'seeded', sessionId: myId, body: `seeded ${parsed.lanes.length} lanes from ${file}` });

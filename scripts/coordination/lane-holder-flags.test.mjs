@@ -94,6 +94,19 @@ const session = (id, minutesAgo = 0) => q(
    ON CONFLICT (id) DO UPDATE SET last_heartbeat = EXCLUDED.last_heartbeat, last_activity_at = EXCLUDED.last_activity_at`, [id, minutesAgo]);
 const row = (id) => one(`SELECT id, title, scope, state, owner_session_id AS owner, note FROM agentic_os.lane WHERE id=$1`, [id]);
 const events = async () => (await one(`SELECT count(*)::int AS n FROM agentic_os.lane_event`)).n;
+/**
+ * True when a backend of the scratch database waits on a lock in a statement that holds `fragment` (card coord-lane-cli-followups, item 2:
+ * a fixed sleep proves nothing under load). Polls every 50 ms for up to 15 s and returns at the first hit; false when none was seen.
+ */
+async function seenWaiting(fragment) {
+  for (const end = Date.now() + 15000; Date.now() < end; await new Promise((ok) => setTimeout(ok, 50))) {
+    const n = (await one(
+      `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
+         AND pid <> pg_backend_pid() AND query LIKE $1`, [`%${fragment}%`])).n;
+    if (n > 0) return true;
+  }
+  return false;
+}
 
 /** exit 4, line 1 `REFUSED <verb> ... [token] -- `, the row unchanged and no event written. */
 async function assertRefused(args, token, id, opts) {
@@ -283,13 +296,46 @@ describe('seed on a held lane', () => {
       await holdTx.query('BEGIN');
       await holdTx.query(`SELECT 1 FROM agentic_os.lane WHERE id=$1 FOR UPDATE`, [free]);
       const seeding = lane.async(['seed', f]);
-      await new Promise((r) => setTimeout(r, 1500)); // the seed is now waiting on the row lock
+      const waiting = await seenWaiting('FOR UPDATE OF l'); // the seed is waiting on the row lock: seen, not guessed (item 2)
       await holdTx.query(`UPDATE agentic_os.lane SET owner_session_id=$1, state='active', lease_expires_at = now() + interval '1 hour' WHERE id=$2`, [HOLDER, free]);
       await holdTx.query('COMMIT');
       await holdTx.end();
       const r = await seeding;
+      assert.ok(waiting, 'the seed was never seen waiting on the row lock: the test would prove nothing');
       assert.equal(r.code, 4, r.err);
       assert.notEqual((await row(free)).scope, 'RACE');
+    });
+    it(`${form} form: a peer that creates and claims a NEW id while the seed waits keeps its title, track and scope (item 1)`, async () => {
+      const fresh = newId();
+      const f = file(`${form}-newrace.json`, body([{ id: fresh, title: 'rewritten', track: 'zz', scope: 'RACE' }]));
+      const peer = new Client({ connectionString: s.url });
+      await peer.connect();
+      await peer.query(`SELECT set_config('lane.client_version','test',false)`);
+      await peer.query('BEGIN');
+      // The id has no row yet, so the holder test of the seed has nothing to lock. The peer's insert (not committed) makes the seed INSERT wait.
+      await peer.query(
+        `INSERT INTO agentic_os.lane (id,title,track,scope,state,project_key,owner_session_id,lease_expires_at)
+         VALUES ($1,'peer title','peer-track','PEER SCOPE','active',$2,$3, now() + interval '1 hour')`, [fresh, GC_PLAIN, HOLDER]);
+      const seeding = lane.async(['seed', f]);
+      const waiting = await seenWaiting('INSERT INTO agentic_os.lane'); // the seed INSERT, old text and the text with an alias alike
+      await peer.query('COMMIT');
+      await peer.end();
+      const r = await seeding;
+      assert.ok(waiting, 'the seed INSERT was never seen waiting on the peer row: the test would prove nothing');
+      assert.equal(r.code, 4, r.err);
+      assert.match(r.err.split('\n')[0], /^REFUSED seed \S+ \[not-holder\] -- /, r.err);
+      const after = await row(fresh);
+      assert.equal(after.title, 'peer title');
+      assert.equal(after.scope, 'PEER SCOPE');
+      assert.equal(after.owner, HOLDER);
+    });
+    it(`${form} form: an id that another board owns is still the foreign-id error, not not-holder (item 1)`, async () => {
+      const other = await mk('sd-g', { board: GC_MASTER, owner: HOLDER });
+      const f = file(`${form}-foreign.json`, body([{ id: other, title: 'x', track: 'zz', scope: 'NO' }]));
+      const r = lane(['seed', f]); // the caller's board is GC_PLAIN
+      assert.notEqual(r.code, 0, r.err);
+      assert.doesNotMatch(r.err, /\[not-holder\]/, r.err);
+      assert.notEqual((await row(other)).scope, 'NO');
     });
     it(`${form} form: on a master board a stranger is refused`, async () => {
       const held = await mk('sd-f', { board: GC_MASTER, owner: HOLDER });
