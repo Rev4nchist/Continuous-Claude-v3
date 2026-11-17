@@ -254,7 +254,7 @@ Archived in `_archived/2026-04-26-tldr-cleanup/`: `tldr-router`, `tldr-overview`
 | guardrail-enforcer | UserPromptSubmit | SOFT BLOCK 1x/session — requires systematic-debugging / databases / code-review skills |
 | skill-activation-prompt | UserPromptSubmit | RECOMMEND skill via skill-rules.json + LLM validation |
 | react-perf-context | PostToolUse(Read) | INJECT — auto-loads react-perf skill on .tsx read |
-| agent-model-guard | PreToolUse(Task) | HARD BLOCK on unknown `subagent_type` (agent file existence check; renamed from `agent-validate.ts` in R5, 2026-04-26 — name is historical, behavior is existence validation, not model gating) |
+| agent-model-guard | PreToolUse(Task) | Hint only, never denies (2026-11-17): "did you mean" and a warn row for an unknown `subagent_type`; Claude Code rejects unknown types itself (renamed from `agent-validate.ts` in R5, 2026-04-26 — name is historical, not model gating) |
 | no-haiku-enforcer | PreToolUse(Task) | HARD BLOCK on `model: haiku` (this is the actual haiku gate) |
 | agent-verification | PostToolUse(Task) | VERIFY agent output quality |
 | plan-exit-tracker | PostToolUse(ExitPlanMode) | WRITE state file on plan approval |

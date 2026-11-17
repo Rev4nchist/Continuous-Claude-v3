@@ -40,7 +40,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | Hook | Matcher | Description |
 |------|---------|-------------|
 | pre-plan-memory | EnterPlanMode | Recall relevant memories before planning |
-| agent-model-guard | Agent | Validate agent type and configuration |
+| agent-model-guard | Agent | Hint only: "did you mean" and a warn row for an unknown agent name; never denies |
 | explore-to-scout | Agent | Redirect Explore agent to scout |
 | no-haiku-enforcer | Agent | Block haiku model selection for agents |
 | navigator-validate | Agent | Validate navigator agent configuration |
@@ -82,7 +82,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | mcp-activity-tracker | * | Track MCP server tool usage |
 | vercel-deploy-context | Bash | Inject Vercel deployment context after deploy commands |
 | post-edit-diagnostics | Edit\|Write | Run type check and lint after code edits |
-| web-lookup-advisor | WebFetch\|WebSearch | Suggest context7 before web lookups |
+| web-lookup-advisor | WebFetch\|WebSearch | After a failed web lookup, point to web-research.md |
 
 ## PreCompact
 
