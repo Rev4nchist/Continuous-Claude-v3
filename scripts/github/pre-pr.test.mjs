@@ -4381,7 +4381,7 @@ const writeManifest = (manifest) => {
 };
 
 test('BI-F7a: a change set with only an external input of the hooks build selects the hooks gates', () => {
-  const root = writeManifest(JSON.stringify({ version: 1, inputs: {}, external: { [BI_LIB]: 'a'.repeat(64) } }));
+  const root = writeManifest(JSON.stringify({ version: 1, inputs: {}, external: { [BI_LIB]: { sha256: 'a'.repeat(64) } } })); // the PR B format: keys are paths, values objects
   const externals = PRE.buildInputExternals(root);
   assert.deepEqual(externals, [BI_LIB]);
   const ids = PRE.gatesFor([BI_LIB], externals).map((g) => g.id);

@@ -1654,3 +1654,68 @@ test('L1: waitForGrant reads its options again at every attempt when they come a
   assert.equal(r.granted, true);
   assert.equal(recOf(ctx, r.file).head, 'cccccccc', 'the lock holds the head of the last attempt');
 });
+
+// ---------- seat first read 14:05: the LIMITS file and the wait sleep cap ----------
+// LIMITS: only the seat writes it; it can only LOWER the two pre-pr limits. How it fails, one test each:
+//   LIM1  a LIMITS of {test:1, heavy:1} is ignored: a second test-phase pre-pr is granted             (limits read from code only)
+//   LIM2  a value above the code limits, under 1, heavy above test, or bad JSON raises or keeps 2      (no clamp: anything else gives 1 and 1)
+//   LIM3  no file keeps the code limits 2 and 1                                                        (a missing file read as bad)
+//   LIM4  the WAIT line does not name the limit in force and where it came from                        (text without the source)
+//   WS1   the wait sleep reaches the 10 minute life of the wait record, so the queue place is lost     (sleep to retryAt with no cap)
+const writeLimits = (ctx, text) => writeFileSync(join(ctx.dir, 'LIMITS'), text);
+
+test('LIM1: a LIMITS file of test 1 refuses a second test-phase pre-pr that the code limit 2 would grant', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  writeLimits(ctx, JSON.stringify({ test: 1, heavy: 1 }));
+  assert.equal((await take(ctx, 'pre-pr', 100)).granted, true);
+  live(ctx, 101);
+  const second = await prePr(ctx, 101);
+  assert.equal(second.granted, false);
+  assert.match(second.lines.join('\n'), /1 pre-pr runs in the test phase, the limit in force is 1 \(LIMITS file\)/);
+});
+
+test('LIM2: a LIMITS file can only lower: raise, under 1, heavy above test, a non-integer and bad JSON all give 1 and 1', () => {
+  for (const text of [JSON.stringify({ test: 3, heavy: 1 }), JSON.stringify({ test: 2, heavy: 2 }), JSON.stringify({ test: 0, heavy: 0 }), JSON.stringify({ test: 1, heavy: 2 }), JSON.stringify({ test: 1.5, heavy: 1 }), JSON.stringify({ heavy: 1 }), '{bad', '[]']) {
+    const ctx = setup();
+    writeLimits(ctx, text);
+    const l = RL.readLimits(ctx.dir);
+    assert.deepEqual([l.test, l.heavy], [1, 1], `LIMITS ${text}`);
+    assert.match(l.source, /LIMITS file not valid/);
+  }
+  const ok = setup();
+  writeLimits(ok, JSON.stringify({ test: 1, heavy: 1 }));
+  assert.deepEqual(RL.readLimits(ok.dir), { test: 1, heavy: 1, source: 'LIMITS file' });
+  const two = setup();
+  writeLimits(two, JSON.stringify({ test: 2, heavy: 1 }));
+  assert.deepEqual(RL.readLimits(two.dir), { test: 2, heavy: 1, source: 'LIMITS file' }, 'equal to the code limits is allowed');
+});
+
+test('LIM3: no LIMITS file keeps the code limits 2 and 1', () => {
+  assert.deepEqual(RL.readLimits(setup().dir), { test: 2, heavy: 1, source: 'code' });
+});
+
+test('LIM4: with no file the WAIT line names the code limit; a heavy refusal names the heavy limit in force', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  assert.equal((await take(ctx, 'pre-pr', 100)).granted, true);
+  assert.equal((await take(ctx, 'pre-pr', 101)).granted, true);
+  live(ctx, 102);
+  assert.match((await prePr(ctx, 102)).lines.join('\n'), /the limit in force is 2 \(code\)/);
+  const h = setup({ free: 8 });
+  h.mode('grant');
+  live(h, 100);
+  assert.equal((await prePr(h, 100, { heavy: true })).granted, true);
+  h.st.now += 3 * MIN;
+  live(h, 101);
+  assert.match((await prePr(h, 101, { heavy: true })).lines.join('\n'), /heavy limit in force is 1 \(code\)/);
+});
+
+test('WS1: the wait sleep stays under the life of the wait record, whatever the retry time', () => {
+  const now = 1_000_000;
+  const cap = RL.WAIT_MAX_SLEEP_MS;
+  assert.ok(cap < 10 * MIN, `the cap ${cap} ms is under the 10 minute record life`);
+  assert.equal(RL.waitSleepMs(now + 30 * MIN, now, 60 * MIN), cap, 'a far retry time sleeps only the cap');
+  assert.equal(RL.waitSleepMs(now + 10_000, now, 60 * MIN), 30_000, 'a near retry time sleeps the 30 s minimum');
+  assert.equal(RL.waitSleepMs(now + 30 * MIN, now, 2 * MIN), 2 * MIN, 'never past the time left');
+});
