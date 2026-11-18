@@ -19,7 +19,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +27,7 @@ import { createHash } from 'node:crypto';
 import { countListed, DATASET_REL, EVAL_CONFIG_REL } from './board-mask.mjs';
 import { buildView } from './fleetops-view.mjs';
 import { createServer } from 'node:http';
+import * as H from './fleetops-html.mjs';
 import { FILE_IDS, axisTicks, decodeDisplay, embedView, loadFiles, main, mainAsync, pageCore, produce } from './fleetops-html.mjs';
 
 /** Invisible, bidi and compatibility characters as char codes: a source escape can turn into a raw character in this file. */
@@ -545,4 +546,231 @@ describe('template', () => {
     assert.ok(!/\b(names|neverTop)\s*=\s*\{\}/.test(tpl));
     assert.ok(/neverTop\s*=\s*Object\.create\(null\)/.test(tpl) && /names\s*=\s*Object\.create\(null\)/.test(tpl));
   });
+});
+
+/* ---------- live refresh (card coord-fleetops-live-refresh): LF render, publication lock, badge ---------- */
+
+const CR = 13;
+const countCr = (buf) => buf.reduce((n, b) => n + (b === CR ? 1 : 0), 0);
+const SENTINEL = '<!-- crlf-sentinel-7c1f -->';
+
+/** A CRLF copy of the real template with a sentinel line, so the test does not depend on the checkout line endings. */
+function crlfTemplate(dir) {
+  const lf = readFileSync(TEMPLATE, 'utf8').replace(/\r\n/g, '\n');
+  const p = join(dir, 'crlf.template.html');
+  writeFileSync(p, `${SENTINEL}\n${lf}`.replace(/\n/g, '\r\n'));
+  return p;
+}
+
+describe('R5: the render writes LF only', () => {
+  it('R5a. a CRLF template renders with 0 CR bytes and the manifest equals the written file (break: no CRLF normalisation, or a template path that is ignored)', () => withTmp((d) => {
+    const tpl = crlfTemplate(d);
+    assert.ok(countCr(readFileSync(tpl)) > 600, 'the test template really has CRLF');
+    const q = quiet({ template: tpl });
+    const code = main([FIXTURE, '--out', join(d, 'out'), '--ids-root', fakeRoot(join(d, 'root'))], q.deps);
+    assert.equal(code, 0, q.log.err.join('\n'));
+    const html = readFileSync(join(d, 'out', 'fleetops.html'));
+    assert.ok(html.includes(SENTINEL), 'the injected template was used');
+    assert.equal(countCr(html), 0);
+    const m = JSON.parse(read(join(d, 'out'), 'manifest.json'));
+    assert.equal(m.htmlBytes, html.length);
+    assert.equal(m.sha256Html, createHash('sha256').update(html).digest('hex'));
+  }));
+
+  it('R5b. renderHtml with a CRLF template has no CR, and the real template on disk renders with no CR whatever its line endings (break: normalisation only in one of the two reads)', () => withTmp((d) => {
+    const view = embedView(buildView(files(), IDS));
+    const html = H.renderHtml(view, JSON.stringify(view), crlfTemplate(d));
+    assert.ok(html.includes(SENTINEL));
+    assert.equal(html.includes('\r'), false);
+    assert.equal(H.renderHtml(view).includes('\r'), false);
+  }));
+});
+
+describe('D4: the badge is readable', () => {
+  it('D4a. .badge uses the act wash with the act ink and an act border, not white on act (break: the old white-on-orange rule)', () => {
+    const tpl = readFileSync(TEMPLATE, 'utf8').replace(/\r\n/g, '\n');
+    const rule = /\.badge\{([^}]*)\}/.exec(tpl);
+    assert.ok(rule, 'a .badge rule exists');
+    const decl = rule[1];
+    assert.match(decl, /background:var\(--act-wash\)/);
+    assert.match(decl, /color:var\(--act-ink\)/);
+    assert.match(decl, /border:1px solid var\(--act\)/);
+    assert.ok(!/color:white/.test(decl));
+  });
+});
+
+/* ---- the publication lock ---- */
+
+const MIN = 60_000;
+const T0 = Date.parse('2026-11-17T20:00:00.000Z');
+const SID_A = 'aaaaaaaa';
+const SID_B = 'bbbbbbbb';
+const SID_C = 'cccccccc';
+const KEY = '2026-11-17T17:30:02.680Z';
+const lockPath = (d) => join(d, 'publish.lock');
+const pubPath = (d) => join(d, 'publish.json');
+const json = (d, n) => JSON.parse(readFileSync(join(d, n), 'utf8'));
+const lockCli = (args, env = {}) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env, LANE_DASH_STATE_DIR: '', ...env } });
+const acquireArgs = (d, sid, key = KEY) => ['--lock-acquire', key, '--session', sid, '--dir', d];
+const releaseArgs = (d, sid, outcome, extra = []) => ['--lock-release', outcome, '--session', sid, '--dir', d, ...extra];
+const staleLockText = (session, ageMs, now = T0) => JSON.stringify({ session, key: KEY, at: new Date(now - ageMs).toISOString() });
+
+describe('lock: acquire and release through the CLI', () => {
+  it('L1. acquire writes publish.lock and publish.json state writing with no pid (break: the file names, the fields, a pid back)', () => withTmp((d) => {
+    const r = lockCli(acquireArgs(d, SID_A));
+    assert.equal(r.status, 0, r.stderr);
+    const lock = json(d, 'publish.lock');
+    assert.deepEqual([lock.session, lock.key], [SID_A, KEY]);
+    assert.ok(!Number.isNaN(Date.parse(lock.at)));
+    const pub = json(d, 'publish.json');
+    assert.deepEqual(Object.keys(pub).sort(), ['at', 'key', 'session', 'state']);
+    assert.deepEqual([pub.state, pub.session, pub.key], ['writing', SID_A, KEY]);
+  }));
+
+  it('L2. a second acquire exits 3 with one line that names the holder, and changes nothing (break: no wx create)', () => withTmp((d) => {
+    assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
+    const before = readFileSync(lockPath(d), 'utf8');
+    const r = lockCli(acquireArgs(d, SID_B));
+    assert.equal(r.status, 3, r.stderr);
+    assert.equal(r.stderr.trim().split('\n').length, 1);
+    assert.ok(r.stderr.includes(SID_A));
+    assert.ok(!/nothing written/.test(r.stderr));
+    assert.equal(readFileSync(lockPath(d), 'utf8'), before);
+    assert.equal(json(d, 'publish.json').session, SID_A);
+  }));
+
+  it('L3. a release by a session that does not hold the lock exits 3 and changes nothing (break: holder check)', () => withTmp((d) => {
+    assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
+    const snap = [readFileSync(lockPath(d), 'utf8'), readFileSync(pubPath(d), 'utf8')];
+    for (const outcome of ['ok', 'failed']) {
+      const r = lockCli(releaseArgs(d, SID_B, outcome));
+      assert.equal(r.status, 3, r.stderr);
+      assert.deepEqual([readFileSync(lockPath(d), 'utf8'), readFileSync(pubPath(d), 'utf8')], snap);
+    }
+  }));
+
+  it('L3b. a release with no lock at all exits 3 (break: a missing lock counted as held)', () => withTmp((d) => {
+    assert.equal(lockCli(releaseArgs(d, SID_A, 'ok')).status, 3);
+    assert.equal(existsSync(pubPath(d)), false);
+  }));
+
+  it('L4. release ok by the holder removes both files, and the lock can be taken again (break: a file left)', () => withTmp((d) => {
+    assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
+    assert.equal(lockCli(releaseArgs(d, SID_A, 'ok')).status, 0);
+    assert.deepEqual(readdirSync(d), []);
+    assert.equal(lockCli(acquireArgs(d, SID_B)).status, 0);
+  }));
+
+  it('L5. release failed keeps publish.json with state failed, the key and the step, and removes the lock (break: failed state lost)', () => withTmp((d) => {
+    assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
+    const r = lockCli(releaseArgs(d, SID_A, 'failed', ['--step', '7.3']));
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(existsSync(lockPath(d)), false);
+    const pub = json(d, 'publish.json');
+    assert.deepEqual([pub.state, pub.session, pub.key, String(pub.step)], ['failed', SID_A, KEY, '7.3']);
+    assert.ok(!Number.isNaN(Date.parse(pub.at)));
+    assert.equal(Object.hasOwn(pub, 'pid'), false);
+    assert.equal(lockCli(acquireArgs(d, SID_B)).status, 0, 'a failed state does not block a new writer');
+  }));
+
+  it('L5b. release failed with no step writes no step field', () => withTmp((d) => {
+    assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
+    assert.equal(lockCli(releaseArgs(d, SID_A, 'failed')).status, 0);
+    assert.equal(Object.hasOwn(json(d, 'publish.json'), 'step'), false);
+  }));
+
+  it('L6. a bad session, key, outcome or step is a usage error (exit 1) and writes nothing (break: a session that becomes a path)', () => withTmp((d) => {
+    for (const args of [
+      acquireArgs(d, '../evil'), acquireArgs(d, 'abc'), acquireArgs(d, 'AAAAAAAA'), acquireArgs(d, SID_A, ''), acquireArgs(d, SID_A, 'a b'),
+      ['--lock-acquire', KEY, '--dir', d], ['--lock-acquire', '--session', SID_A, '--dir', d],
+      releaseArgs(d, SID_A, 'maybe'), releaseArgs(d, SID_A, 'failed', ['--step', '../x']), ['--lock-release', 'ok', '--dir', d],
+      [...acquireArgs(d, SID_A), '--bogus'], ['--lock-acquire', KEY, '--lock-release', 'ok', '--session', SID_A, '--dir', d],
+    ]) {
+      const r = lockCli(args);
+      assert.equal(r.status, 1, JSON.stringify(args));
+      assert.match(r.stderr, /usage/);
+    }
+    assert.deepEqual(readdirSync(d), []);
+  }));
+
+  it('L7. the default dir is LANE_DASH_STATE_DIR (break: a test that writes the real state dir)', () => withTmp((d) => {
+    const r = lockCli(['--lock-acquire', KEY, '--session', SID_A], { LANE_DASH_STATE_DIR: d });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(lockPath(d)));
+  }));
+});
+
+describe('lock: the 20 minute rule and the takeover (injected clock)', () => {
+  const take = (d, sid, now) => H.lockAcquire({ dir: d, key: KEY, session: sid, now });
+  const seed = (d, session, ageMs) => writeFileSync(lockPath(d), staleLockText(session, ageMs));
+
+  it('L8. a lock 19 minutes old is live (exit 3); one 21 minutes old is taken over (break: the age limit or its direction)', () => withTmp((d) => {
+    seed(d, SID_A, 19 * MIN);
+    const live = take(d, SID_B, T0);
+    assert.equal(live.code, 3);
+    assert.ok(live.msg.includes(SID_A));
+    assert.equal(json(d, 'publish.lock').session, SID_A);
+    seed(d, SID_A, 21 * MIN);
+    const got = take(d, SID_B, T0);
+    assert.equal(got.code, 0, got.msg);
+    assert.equal(json(d, 'publish.lock').session, SID_B);
+    assert.deepEqual([json(d, 'publish.json').state, json(d, 'publish.json').session], ['writing', SID_B]);
+    assert.deepEqual(readdirSync(d).sort(), ['publish.json', 'publish.lock'], 'no taken copy is left');
+  }));
+
+  it('L8b. exactly 20 minutes old is still live; a lock dated in the future is live', () => withTmp((d) => {
+    seed(d, SID_A, 20 * MIN);
+    assert.equal(take(d, SID_B, T0).code, 3);
+    seed(d, SID_A, -5 * MIN);
+    assert.equal(take(d, SID_B, T0).code, 3);
+  }));
+
+  it('L9. two takers that BOTH passed the stale read: A renames first, B gets ENOENT, exactly one holder (break: a plain overwrite of the lock)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    const snapA = H.lockSnapshot(d, T0);
+    const snapB = H.lockSnapshot(d, T0);
+    assert.equal(snapA.state, 'stale');
+    assert.equal(snapB.state, 'stale');
+    let b;
+    const a = H.lockTake(d, snapA, { key: KEY, session: SID_A, now: T0 }, { afterRename: () => { b = H.lockTake(d, snapB, { key: KEY, session: SID_B, now: T0 }); } });
+    assert.equal(b.code, 3, 'B lost the rename');
+    assert.equal(a.code, 0, a.msg);
+    assert.equal(json(d, 'publish.lock').session, SID_A);
+    assert.equal(json(d, 'publish.json').session, SID_A);
+    assert.deepEqual(readdirSync(d).sort(), ['publish.json', 'publish.lock']);
+  }));
+
+  it('L10. B passed both stale reads, A finishes its takeover, then B renames: B finds a fresh lock, puts it back and exits 3 (break: no content compare after the rename)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    const snapA = H.lockSnapshot(d, T0);
+    const snapB = H.lockSnapshot(d, T0);
+    const a = H.lockTake(d, snapA, { key: KEY, session: SID_A, now: T0 });
+    assert.equal(a.code, 0, a.msg);
+    const lockBefore = readFileSync(lockPath(d), 'utf8');
+    const b = H.lockTake(d, snapB, { key: KEY, session: SID_B, now: T0 });
+    assert.equal(b.code, 3, b.msg);
+    assert.equal(readFileSync(lockPath(d), 'utf8'), lockBefore, 'A still holds the same lock');
+    assert.equal(json(d, 'publish.json').session, SID_A);
+    assert.deepEqual(readdirSync(d).sort(), ['publish.json', 'publish.lock'], 'B left no taken copy');
+    assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'ok' }).code, 0, 'A can still release');
+  }));
+
+  it('L11. the lock changes between the two reads: not stale, not taken (break: one read only)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    const snap = H.lockSnapshot(d, T0, { betweenReads: () => seed(d, SID_A, 1 * MIN) });
+    assert.notEqual(snap.state, 'stale');
+    assert.equal(json(d, 'publish.lock').session, SID_A);
+  }));
+
+  it('L12. an empty lock file is live when new and stale when its mtime is over 20 minutes old (break: a crash between create and write blocks for ever, or a half-written lock is taken)', () => withTmp((d) => {
+    writeFileSync(lockPath(d), '');
+    assert.equal(take(d, SID_B, Date.now()).code, 3);
+    const old = new Date(Date.now() - 25 * MIN);
+    utimesSync(lockPath(d), old, old);
+    assert.equal(take(d, SID_B, Date.now()).code, 0);
+    writeFileSync(lockPath(d), 'not json');
+    utimesSync(lockPath(d), old, old);
+    assert.equal(take(d, SID_C, Date.now()).code, 0);
+    assert.equal(json(d, 'publish.lock').session, SID_C);
+  }));
 });
