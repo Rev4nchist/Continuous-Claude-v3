@@ -3,17 +3,17 @@ import type { EngineInterface } from 'claude-code'
 
 import { SNAPSHOT_THROTTLE_MS, decide, openThrottle, requestSnapshot, trailingDue } from '../hooks/shared/snapshot-port'
 
-// The throttle of the snapshot port on its own (card coord-status-band-2, fix 4; design 2026-11-16-coord-status-band-2-fix4-design.md, section 4).
+// The throttle of the snapshot port on its own (card coord-status-band-2, fix 4; design rev 2: .claudedocs/coordination/2026-11-18-coord-status-band-2-fix4-design-rev2.md).
 // `decide` and `trailingDue` are pure, so every branch is reached with the real code and no engine. The mod-level tests (a real spawn, a real
 // snapshot file, the engine clock) are in snapshot-on-spawn.test.ts.
 //
 // Ways it can fail, one test each, with the change that breaks it:
-// U3  a burst writes once per request: the `now - t.lastAt` test is removed, or each request arms its own timer (the `t.dueAt` wait is removed)
+// U3  a burst writes once per request: the `now - t.lastAt` test is removed, or each request arms its own timer (the `t.dueAt !== null` wait is removed)
 // U4  the trailing write is lost, early, or twice: `trailingDue` ignores `dueAt`, or the delay `due - now` is wrong
 // U4b a write after the arm leaves the old timer alive: `decide` does not clear `dueAt` on a write
-// U6  a broken clock or a failing atom write reaches the caller: the try/catch in `requestSnapshot` or `bump` is removed
+// U6  the bump throws into the caller (a state write that throws, or no state): the try/catch in `requestSnapshot` is removed
 // U11 a clock that went back (a new engine) keeps the throttle shut: the `now < t.lastAt` test is removed
-// U12 a timer the engine dropped blocks every later trailing write: `dueAt` is held as a bare flag (the `now < t.dueAt` test is removed)
+// U12 a timer the engine dropped blocks every later request: the `t.dueAt !== null` wait is moved above the window test in `decide`
 // U13 a new throttle is not open: `openThrottle` starts with a time in it
 
 describe('snapshot port: the throttle', () => {

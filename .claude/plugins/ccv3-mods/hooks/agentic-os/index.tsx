@@ -401,7 +401,7 @@ const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
 /** The trailing write of a burst of snapshot wishes. The writer's own guards (worthSnapshot, the session-end check) still apply. Never throws. */
 const writeTrailing = async ($: EngineInterface, due: number): Promise<void> => {
   try {
-    if (trailingDue(wishes, due, due) && (await worthSnapshot($))) await writeSnapshot($)
+    if (trailingDue(wishes, due, await $.clock.now()) && (await worthSnapshot($))) await writeSnapshot($)
   } catch {
     // Observer only.
   }
@@ -841,6 +841,7 @@ export const agenticOs = (on: On) => {
   on('state.set', { plugin: 'ccv3-mods', key: 'snapshotWanted' } as const, async ($, e, next) => {
     const result = await next(e)
     try {
+      if (await isOff($)) return result
       const step = decide(wishes, await $.clock.now())
       if (step.kind === 'write' && (await worthSnapshot($))) await writeSnapshot($)
       // The trailing write: the last wish of a burst is in it. It runs here, with this hook's `$`, as the pulse does.
@@ -852,6 +853,8 @@ export const agenticOs = (on: On) => {
   }).catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
+    // A new session starts with an open throttle: the module state outlives a session in the same process.
+    Object.assign(wishes, openThrottle())
     await beacon($, 'enter', { isInteractive: e.isInteractive, surface: e.surface ?? null })
     try {
       if (await isOff($)) return next(e)
@@ -877,6 +880,8 @@ export const agenticOs = (on: On) => {
   // A /clear or a resume in the same process then starts a new conversation: the old tasks and plan are not its own.
   // The engine keeps the process, so these atoms would outlive the conversation (the HUD resets ctx and the cache the same way).
   on('session.end', async ($, e, next) => {
+    // A trailing snapshot armed in this session must not fire into the next one (a /clear or a resume keeps the process).
+    wishes.dueAt = null
     if (!(await isOff($))) {
       await writeFinalSnapshot($, e.sessionId, next.budget.remainingMs)
       if (e.reason === 'clear' || e.reason === 'resume') {

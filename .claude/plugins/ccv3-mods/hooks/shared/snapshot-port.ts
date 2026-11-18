@@ -40,7 +40,8 @@ export const decide = (t: Throttle, now: number): Step => {
     t.dueAt = null
     return { kind: 'write' }
   }
-  if (t.dueAt !== null && now < t.dueAt) return { kind: 'wait' }
+  // Inside the window a trailing write is already armed (a dropped timer is past `due`, so the window test above has let that request write).
+  if (t.dueAt !== null) return { kind: 'wait' }
   const due = t.lastAt + SNAPSHOT_THROTTLE_MS
   t.dueAt = due
   return { kind: 'arm', ms: due - now, due }
