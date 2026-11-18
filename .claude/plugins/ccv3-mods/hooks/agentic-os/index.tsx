@@ -356,11 +356,13 @@ export const hudForState = (
  * lane read. It guarantees: a write that reaches its check after the end began does not land. It does not guarantee: a file write
  * already handed to the filesystem when the end begins is not recalled; that one can still land first and the final write follows.
  */
-const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; except?: string; end?: { sessionId: string; at: number } } = {}): Promise<void> => {
+const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; except?: string; only?: string; end?: { sessionId: string; at: number } } = {}): Promise<void> => {
   try {
     const home = await homeDir($)
     if (!home) return
     const sessionId = opts.end?.sessionId ?? (await $.session.id())
+    // `only`: the write is for that session (a trailing write: a /clear in the gap must not send it to the next session's file).
+    if (opts.only !== undefined && sessionId !== opts.only) return
     const at = opts.end?.at ?? (await $.clock.now())
     const now = await view($)
     const current = await read($, brief)
@@ -398,10 +400,10 @@ const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
   (await read($, plan)) !== null ||
   (await read($, brief)) !== null
 
-/** The trailing write of a burst of snapshot wishes. The writer's own guards (worthSnapshot, the session-end check) still apply. Never throws. */
-const writeTrailing = async ($: EngineInterface, due: number): Promise<void> => {
+/** The trailing write of a burst of snapshot wishes, for the session that armed it. The writer's own guards (worthSnapshot, the session-end check) still apply. Never throws. */
+const writeTrailing = async ($: EngineInterface, due: number, sessionId: string): Promise<void> => {
   try {
-    if (trailingDue(wishes, due, await $.clock.now()) && (await worthSnapshot($))) await writeSnapshot($)
+    if (trailingDue(wishes, due, await $.clock.now()) && (await worthSnapshot($))) await writeSnapshot($, { only: sessionId })
   } catch {
     // Observer only.
   }
@@ -842,10 +844,14 @@ export const agenticOs = (on: On) => {
     const result = await next(e)
     try {
       if (await isOff($)) return result
+      // Eligibility first: a wish the writer would refuse must not use the throttle window (it would hold back the first eligible wish).
+      // The trailing write keeps its own check: eligibility can change while its timer waits.
+      if (!(await worthSnapshot($))) return result
+      const armedFor = await $.session.id()
       const step = decide(wishes, await $.clock.now())
-      if (step.kind === 'write' && (await worthSnapshot($))) await writeSnapshot($)
+      if (step.kind === 'write') await writeSnapshot($)
       // The trailing write: the last wish of a burst is in it. It runs here, with this hook's `$`, as the pulse does.
-      if (step.kind === 'arm') $.clock.after(step.ms, () => void writeTrailing($, step.due))
+      if (step.kind === 'arm') $.clock.after(step.ms, () => void writeTrailing($, step.due, armedFor))
     } catch {
       // Observer only.
     }
@@ -881,7 +887,8 @@ export const agenticOs = (on: On) => {
   // The engine keeps the process, so these atoms would outlive the conversation (the HUD resets ctx and the cache the same way).
   on('session.end', async ($, e, next) => {
     // A trailing snapshot armed in this session must not fire into the next one (a /clear or a resume keeps the process).
-    wishes.dueAt = null
+    // The write time goes too: a /clear runs no session.start, and the next conversation starts with an open throttle.
+    Object.assign(wishes, openThrottle())
     if (!(await isOff($))) {
       await writeFinalSnapshot($, e.sessionId, next.budget.remainingMs)
       if (e.reason === 'clear' || e.reason === 'resume') {
@@ -970,7 +977,8 @@ export const agenticOs = (on: On) => {
       await update($, agentRuns, runs => runs.map(run => (run.id === resumed && run.status !== 'running' ? { ...run, status: 'running', endedAt: null } : run)))
       // The list can still hold it as waiting, and the list wins for an id it holds: the turn is the newer fact.
       await update($, agents, list => list.map(agent => (agent.id === resumed && agent.status !== 'running' ? { ...agent, status: 'running' } : agent)))
-      await requestSnapshot($)
+      // Not awaited: the turn must not wait for a file write (requestSnapshot never throws), as at the spawn.
+      void requestSnapshot($)
       return next(e)
     }
     if (!(await read($, turnBeaconed).catch(() => false))) {
