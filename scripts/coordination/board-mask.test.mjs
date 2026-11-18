@@ -21,8 +21,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { holdoutIdsOf } from '../github/lib/holdout-ids.mjs';
+import { countIdsIn, holdoutIdsOf } from '../github/lib/holdout-ids.mjs';
+import * as boardMask from './board-mask.mjs';
 import { DATASET_REL, EVAL_CONFIG_REL, TOKEN, countListed, finishPage, maskListed, readIdList } from './board-mask.mjs';
+
+// New export of card coord-board-mask-ids. Read off the namespace so the RED run on main fails per test, not at import.
+const maskLaneRows = (...a) => {
+  if (typeof boardMask.maskLaneRows !== 'function') throw new Error('maskLaneRows is not exported');
+  return boardMask.maskLaneRows(...a);
+};
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -306,5 +313,153 @@ describe('tie tests: the hook text and this module stay in step', () => {
     assert.ok(holdoutLib.includes('[0-9a-f]{7,40}'), 'the hex run changed in holdout-ids.mjs');
     assert.ok(holdoutLib.includes('want.startsWith(r) || r.startsWith(want)'), 'the prefix rule changed in holdout-ids.mjs');
     assert.ok(holdoutLib.includes('/^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id)'), 'the stored-sha rule changed in holdout-ids.mjs');
+  });
+});
+
+// ---- card coord-board-mask-ids (design .claudedocs/coordination/2026-11-17-coord-board-mask-ids-design.md, revision 2) ----
+// Every id below is MADE UP. The mask must be exactly as wide as countIdsIn: no listed form left, no ordinary text changed.
+
+const HEX64_FREE = '0123456789abcdef'.repeat(4); // 64 hex, holds no made-up sha
+const STR_ID = 'zz-mask_probe.id+x&y'; // a made-up non-digit, non-hex id with regex and HTML characters
+const STR_IDS = [...IDS, STR_ID];
+const DIGIT_SHA = '1234567abcdef0123456789abcdef0123456789a'; // a made-up stored sha that starts with digits
+const STRKEY_IDS = holdoutIdsOf({ prs: [{ pr: 4242 }], findings: [{ pr: 4242, comment_id: 'beadfacebeadfacebeadface', round: SHA }] }, {});
+
+describe('coord-board-mask-ids: a hex run over 40 characters (D2)', () => {
+  const runs = [
+    ['the sha at the start', SHA + 'ff00ff00ff'],
+    ['the sha in the middle', 'ff00ff00ff' + SHA + 'ff00ff00ff'],
+    ['the sha at the end', 'ff00ff00ff' + SHA],
+  ];
+  for (const [name, run] of runs) {
+    it(`${name}: counted before the mask, the whole run masked, 0 after`, () => {
+      const text = `hash ${run} end`;
+      assert.ok(run.length > 40, 'setup: the run is over 40');
+      assert.ok(countListed(text, IDS) > 0, 'the count misses a listed sha inside a long run');
+      const r = maskListed(text, IDS);
+      assert.equal(r.text, `hash ${TOKEN} end`);
+      assert.equal(countListed(r.text, IDS), 0);
+    });
+  }
+  it('a 64-hex run with no listed sha stays as it is', () => {
+    const text = `content hash ${HEX64_FREE}`;
+    assert.equal(maskListed(text, IDS).text, text);
+    assert.equal(countListed(text, IDS), 0);
+  });
+});
+
+describe('coord-board-mask-ids: an all-digit run that is a prefix of a stored sha (critic 5)', () => {
+  it('is counted by the matcher, so the mask takes it', () => {
+    const ids = holdoutIdsOf({ findings: [{ pr: 88, round: DIGIT_SHA }] }, {});
+    const text = 'ref 1234567 here';
+    assert.ok(countIdsIn(text, ids) > 0, 'setup: the matcher counts it');
+    assert.equal(maskListed(text, ids).text, `ref ${TOKEN} here`);
+  });
+});
+
+describe('coord-board-mask-ids: a listed id that is not digits, a key or a sha (D1)', () => {
+  it('is masked, in any letter case, and 0 is left', () => {
+    for (const form of [STR_ID, STR_ID.toUpperCase()]) {
+      const r = maskListed(`see ${form} here`, STR_IDS);
+      assert.equal(r.text, `see ${TOKEN} here`, form);
+      assert.equal(countListed(r.text, STR_IDS), 0);
+    }
+  });
+  it('inside a longer word (a hex letter or digit next to it) it is neither masked nor counted: parity with the matcher', () => {
+    for (const text of [`a${STR_ID}`, `${STR_ID}7`, `B${STR_ID}`]) {
+      assert.equal(countIdsIn(text, STR_IDS), 0, 'setup: the matcher does not count it');
+      assert.equal(maskListed(text, STR_IDS).text, text);
+    }
+  });
+  it('a <pr>:<string id> key is masked whole', () => {
+    const r = maskListed('finding 4242:beadfacebeadfacebeadface open', STRKEY_IDS);
+    assert.equal(r.text, `finding ${TOKEN} open`);
+    assert.equal(countListed(r.text, STRKEY_IDS), 0);
+  });
+});
+
+describe('coord-board-mask-ids: the invariant of mask and count (seat item 3)', () => {
+  const sample = [
+    'landed in #4242 today', 'PR 4242', 'comment 9000000123', 'finding 4242:9000000123', `head ${SHA}`, 'head abcdef1',
+    `hash ${SHA}00ff00ff00`, `hash 00ff00ff00${SHA}00ff`, `see ${STR_ID} and ${STR_ID.toUpperCase()}`, 'ref 1234567 x',
+    'a bare 4242 and 2026-11-17 and 1700000000000', `content ${HEX64_FREE}`, `a${STR_ID}`, 'plain words only',
+    `see ${STR_ID.replace('k', 'K')} now`, // critic 2-6: the Kelvin sign lowercases to k in the matcher
+  ];
+  const ids = [...STR_IDS, ...holdoutIdsOf({ findings: [{ pr: 88, round: DIGIT_SHA }] }, {})];
+  it('the masked text of every sample has a count of 0', () => {
+    for (const x of sample) assert.equal(countIdsIn(maskListed(x, ids).text, ids), 0, x.slice(0, 20));
+  });
+  it('a sample with a count of 0 is not changed', () => {
+    for (const x of sample) if (countIdsIn(x, ids) === 0) assert.equal(maskListed(x, ids).text, x, x.slice(0, 20));
+  });
+  it('countListed is the matcher (no second rule to drift)', () => {
+    for (const x of sample) assert.equal(countListed(x, ids), countIdsIn(x, ids), x.slice(0, 20));
+  });
+});
+
+describe('coord-board-mask-ids: maskLaneRows masks every displayed lane text at the source', () => {
+  it('lane title, scope, note, track; session working_on and its lanes; event body. Ids, uuids and times stay', () => {
+    const uuid = 'f0f0f0f0-0000-4000-8000-000000000001'; // no hex run of it is a prefix of the made-up sha
+    const lanes = [{ id: 'lane-a', title: 'fix #4242', scope: `sha ${SHA}`, note: `see ${STR_ID}`, track: 'PR 4242', owner_session_id: uuid, waits_on: ['lane-b'] }];
+    const sessions = [{ id: uuid, working_on: 'on #4242', lanes: [{ id: 'lane-a', title: 'PR 4242', scope: 'x 9000000123', note: 'ok' }] }];
+    const events = [{ id: 1, lane_id: 'lane-a', session_id: uuid, body: `pushed ${SHA}`, occurred_at: '2026-11-17T00:00:00Z' }];
+    const n = maskLaneRows({ lanes, sessions, events }, STR_IDS);
+    assert.ok(n >= 7, `masked count ${n}`);
+    const all = JSON.stringify({ lanes, sessions, events });
+    assert.equal(countIdsIn(all, STR_IDS), 0, 'a listed id is left in the rows');
+    assert.equal(lanes[0].owner_session_id, uuid);
+    assert.equal(events[0].session_id, uuid);
+    assert.deepEqual(lanes[0].waits_on, ['lane-b']);
+    assert.equal(lanes[0].id, 'lane-a');
+  });
+  it('critic 2-1: a run of spaces or an invisible mark that the browser collapses is masked at the source', () => {
+    const lanes = [
+      { id: 'l1', note: 'see PR       4242 now' }, // 7 spaces: the matcher's 8-character look-back misses it; the browser shows "PR 4242"
+      { id: 'l2', note: 'see PR ͏4242 now' }, // a combining grapheme joiner (default ignorable) before the number
+      { id: 'l3', branch: 'fix/PR 4242', done_when: 'PR 4242 lands', rationale: 'see #4242' }, // the other lane text fields
+    ];
+    maskLaneRows({ lanes, sessions: [], events: [] }, IDS);
+    for (const l of lanes) for (const k of ['note', 'branch', 'done_when', 'rationale']) if (l[k]) assert.ok(!l[k].includes('4242'), `${l.id}.${k} keeps the id`);
+  });
+  it('rows with no listed id are not changed, and null fields stay null', () => {
+    const lanes = [{ id: 'l', title: 'plain', scope: null, note: undefined, track: 'coord' }];
+    const before = JSON.stringify(lanes);
+    assert.equal(maskLaneRows({ lanes, sessions: [], events: [] }, IDS), 0);
+    assert.equal(JSON.stringify(lanes), before);
+  });
+});
+
+describe('coord-board-mask-ids: finishPage counts the display text too (D3, critic P0)', () => {
+  const page = (body) => `<!doctype html><html><body>${body}</body></html>`;
+  const run = (html) => finishPage({ html, board: DEFAULT_BOARD, defaultBoard: DEFAULT_BOARD, readList: () => IDS });
+  it('an id behind a numeric entity (#) is refused: exit 3, no page', () => {
+    const r = run(page('landed in &#35;4242 today'));
+    assert.equal(r.exit, 3);
+    assert.equal(r.html, null);
+  });
+  it('an id split by a JSON escape in an application/json block is refused', () => {
+    const json = JSON.stringify([{ note: 'PR\n4242' }]);
+    const r = run(page(`<script type="application/json" id="kb-data">${json}</script>`));
+    assert.equal(r.exit, 3);
+  });
+  it('an id in fullwidth digits or split by a zero-width space is refused', () => {
+    assert.equal(run(page('see #４２４２ now')).exit, 3);
+    assert.equal(run(page('see PR 42​42 now')).exit, 3);
+  });
+  it('a normal page with entities, apostrophes, an empty JSON block and a bad code point publishes', () => {
+    const html = page(`a &middot; b &#8942; it&#39;s &amp; done &#99999999; <script type="application/json" id="kb-data"></script><script type="application/json" id="kb-sched">[]</script>`);
+    const r = run(html);
+    assert.equal(r.exit, 0, r.line);
+    assert.equal(r.html, html);
+  });
+  it('critic 2-1: a run of spaces between PR and a listed number is refused (the browser collapses it)', () => {
+    assert.equal(run(page('see PR       4242 now')).exit, 3);
+  });
+  it('critic 2-7: two JSON strings are counted one by one, so "...PR" then "4242..." in the next field is no hit', () => {
+    const json = JSON.stringify([{ title: 'a title that ends with PR' }, { note: '4242 is a bare number here' }]);
+    assert.equal(run(page(`<script type="application/json" id="kb-data">${json}</script>`)).exit, 0);
+  });
+  it('a JSON block that does not parse is refused (the browser could not read it either)', () => {
+    assert.equal(run(page('<script type="application/json" id="kb-data">[{"a":</script>')).exit, 3);
   });
 });
