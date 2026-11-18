@@ -128,6 +128,34 @@ describe('build manifest: external inputs (item 14)', () => {
     expect(keys.every(k => !k.includes('\\') && !k.startsWith('.') && !k.startsWith('/'))).toBe(true);
   }));
 
+  // Follow-up of PR 656 (CodeRabbit CLI finding 1): a non-.ts input under hooks/src, such as src/shared/malicious-packages.json
+  // (a json import that the daily blocklist job edits), was skipped by the src filter and never hashed.
+  const JSON_KEY = '.claude/hooks/src/shared/data.json';
+  const withJson = (f: Fixture) => {
+    mkdirSync(join(f.src, 'shared'), { recursive: true });
+    writeFileSync(join(f.src, 'shared', 'data.json'), '{"npm":{}}\n');
+    writeMeta(f, [...ALL_INPUTS, 'src/shared/data.json']);
+  };
+
+  it('G1. a non-.ts input under hooks/src is recorded in external and a .ts src input is not (break: the in-src filter drops every src file)', () => withFixture((f) => {
+    withJson(f);
+    expect(runWriter(f).status).toBe(0);
+    const m = manifest(f);
+    expect(m.external[JSON_KEY]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(Object.keys(m.external).filter(k => k.endsWith('.ts'))).toEqual([]);
+    expect(Object.keys(m.inputs)).not.toContain('shared/data.json');
+  }));
+
+  it('G2. editing that json makes the tree stale and names it (break: the json is not hashed)', () => withFixture((f) => {
+    withJson(f);
+    runWriter(f);
+    expect(assessTreeFreshness(f.src, f.dist, f.repo).state).toBe('fresh');
+    writeFileSync(join(f.src, 'shared', 'data.json'), '{"npm":{"evil":1}}\n');
+    const r = assessTreeFreshness(f.src, f.dist, f.repo);
+    expect(r.state).toBe('stale');
+    expect(r.staleExternal).toEqual([JSON_KEY]);
+  }));
+
   it('Wiring. the build script writes the metafile the writer reads (break: --metafile dropped from package.json)', () => {
     const build: string = JSON.parse(readFileSync(join(hooksRoot, 'package.json'), 'utf8')).scripts.build;
     expect(build).toContain('--metafile=.build-meta.json');

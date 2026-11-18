@@ -75,7 +75,7 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
    - Until this republish, an open page still shows the band it was drawn with. Dave may see the old band in the Band select for a short time. The new page shows the applied band. A band saved on an In progress card applies only after the session releases the lane.
 
 8. Dashboard line. Read `~/.claude/state/lane-dash/refresh.json`. Skip this step when the file is missing, empty or not valid JSON.
-   - Read `~/.claude/state/lane-dash/publish.json` first. A refresh failed when it has `state` `failed` and its `key` equals the `key` of `refresh.json`, or `state` `writing` and its `failedKey` equals that `key` (a forced run that stopped keeps the failure). Then say "FleetOps refresh failed at <time> (step <step>)", with `at` and `step` (or `failedAt` and `failedStep`), and skip the stale check.
+   - Read `~/.claude/state/lane-dash/publish.json` first. A refresh failed when it has `state` `failed` and its `key` equals the `key` of `refresh.json`, or `state` `writing` and its `failedKey` equals that `key` (a forced run that stopped keeps the failure). Then say "FleetOps refresh failed at <time> (step <step>)". For a `failed` record take the time from `at` and the step from `step`. For a `writing` record take the time from `failedAt` and the step from `failedStep`. Then skip the stale check.
    - The data is stale when `pending` is `true`, or `exported_at` is over 36 hours old.
    - When it is stale, say so in the report. Use "FleetOps data is stale (exported <time>, not uploaded)" or "FleetOps data is stale (exported <time>, older than 36 hours)".
    - Give the time in Central time.
