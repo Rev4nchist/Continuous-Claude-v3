@@ -28,9 +28,9 @@
  *   block is not eligible (autoOf: kill switch checkpoint.autoConfirm, band LOW/MID/ELEVATED, no security-tier or critical file, no drift, labels read). The state dir holds stamp.json and pathway.json. Default:
  *   <git toplevel of the cwd>/.claude/cache/pre-pr. --facts and --config work as above (tests).
  *   Flag checkpoint.ledger (review-router.config.json, default false): see lib/checkpoint-ledger.mjs. With it true, `--json --pr N` adds a `ledger` block (the
- *   two-call protocol: state ask, confirm-paid, record, kept-draft, stop or none; `ledger.ask` is the AskUserQuestion spec) and writes the offer to the decision
- *   store; --no-ledger turns that off for one run; --ask-anyway keeps the question open for an auto-eligible PR (the mod passes it after a failed auto-confirm). And a confirm by dave with --pr N records only when Dave's tap for the pathway is in the store (a paid
- *   pathway also needs his Yes on the paid confirm); --by default records nothing. The taps are used up after the record.
+ *   two-call protocol: state ask, record, kept-draft, stop or none; `ledger.ask` is the AskUserQuestion spec) and writes the offer to the decision
+ *   store; --no-ledger turns that off for one run; --ask-anyway keeps the question open for an auto-eligible PR (the mod passes it after a failed auto-confirm). And a confirm by dave with --pr N records only when Dave's tap for the pathway is in the store (a tap on a paid
+ *   row carries its price and is the paid yes); --by default records nothing. The tap is used up after the record.
  * node scripts/github/pr-checkpoint.mjs --apply <pr> [--state-dir <dir>]
  *   Reads pathway.json, checks the live PR (a draft, at the recorded head), adds the review label, then marks it ready. The label
  *   comes first, and a failed label never reaches ready. gh is the real gh, or `node $PR_CHECKPOINT_GH` (tests).
@@ -48,7 +48,7 @@ import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayM
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
-import { ledgerConfirmProblem, ledgerStep, ledgerUse } from './lib/checkpoint-ledger.mjs';
+import { ledgerConfirmProblem, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
 
 export { capacityFact, parseRateLimitReply };
 
@@ -898,11 +898,15 @@ function usageProblem(o) {
   return stray ? `${stray} needs --confirm or --apply` : null;
 }
 
-/** One line for the live capacity fact: free now, the next slot, or unknown with the last notice. */
-function slotText(cap) {
+/**
+ * One line for the live capacity fact: free now, the next slot, or unknown with the last notice. With a clock (`nowMs`) the line follows the
+ * same slot rule as the question rows (slotStateOf), so a free fact that has aged out never reads "free now" beside a paid row. With no clock the fact reads as printed.
+ */
+function slotText(cap, nowMs = null) {
   const cli = typeof cap.cliRemaining === 'number' ? ` CLI reviews left: ${cap.cliRemaining}.` : '';
-  if (cap.state === 'free') return `free now (${cap.factSource}).${cli}`;
-  if (cap.state === 'wait') return `no free slot${cap.nextSlotAt ? `, next about ${cap.nextSlotAt} (in ${cap.minutesToSlot} min)` : ''} (${cap.factSource}).${cli}`;
+  const state = slotStateOf(cap, nowMs);
+  if (state === 'free') return `free now (${cap.factSource}).${cli}`;
+  if (state === 'wait') return `no free slot${cap.nextSlotAt ? `, next about ${cap.nextSlotAt} (in ${cap.minutesToSlot} min)` : ''} (${cap.factSource}).${cli}`;
   return `unknown${cap.lastNoticeAt ? `, last notice ${cap.lastNoticeAt}` : ''}.${cli}`;
 }
 
@@ -932,6 +936,9 @@ function inputsOf(o, stateDir, probe = false) {
 /** The two-call protocol (lib/checkpoint-ledger.mjs) runs only for the literal true in checkpoint.ledger. */
 const ledgerOn = (policy) => policy.checkpoint?.ledger === true;
 
+/** The clock of the question in ms: facts.now (a fixture sets it, a live run reads it once). The CodeRabbit slot fact is judged at this time. */
+const clockMs = (facts) => (Number.isFinite(Date.parse(facts.now)) ? Date.parse(facts.now) : Date.now());
+
 const refuse = (message) => { console.error(`pr-checkpoint: refused: ${message}`); process.exitCode = 1; };
 
 function runConfirm(o) {
@@ -941,12 +948,12 @@ function runConfirm(o) {
   try { bodyText = readFileSync(o['--body'], 'utf8'); } catch { return refuse(`cannot read the body file ${o['--body']}`); }
   const args = { result: recommend(facts, policy), facts, pathway: o['--confirm'], by: o['--by'], bodySha: bodyHash(bodyText) };
   const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
-  const problem = confirmProblem(args) ?? (ledgerOn(policy) ? ledgerConfirmProblem({ pr, head: facts.head, pathway: args.pathway, by: args.by }) : null);
+  const problem = confirmProblem(args) ?? (ledgerOn(policy) ? ledgerConfirmProblem({ pr, head: facts.head, pathway: args.pathway, by: args.by, result: args.result, now: clockMs(facts) }) : null);
   if (problem) return refuse(problem);
   const record = confirmRecord(args);
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), `${JSON.stringify(record, null, 2)}\n`);
-  if (ledgerOn(policy)) ledgerUse({ pr, head: facts.head, pathway: args.pathway });
+  if (ledgerOn(policy)) ledgerUse({ pr, head: facts.head });
   console.log(JSON.stringify(record));
 }
 
@@ -964,7 +971,7 @@ function runRecommend(o) {
   const { facts, policy } = inputsOf(o, defaultStateDir(), o['--probe'] === true && o['--json'] === true);
   const result = recommend(facts, policy);
   const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
-  const ledger = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy) ? ledgerStep({ pr, result, slotLine: slotText(result.capacity), askAnyway: o['--ask-anyway'] === true }) : null;
+  const ledger = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy) ? ledgerStep({ pr, result, slotLine: slotText(result.capacity, clockMs(facts)), askAnyway: o['--ask-anyway'] === true, now: clockMs(facts) }) : null;
   console.log(o['--json'] ? JSON.stringify(ledger ? { ...result, ledger } : result) : renderText(result));
 }
 

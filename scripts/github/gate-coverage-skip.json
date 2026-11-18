@@ -388,6 +388,10 @@
       "reason": "pre-pr gate only; CI has no step"
     },
     {
+      "path": "scripts/github/checkpoint-two-copy.test.mjs",
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
       "path": "scripts/github/cursor-review-hardening.test.mjs",
       "reason": "pre-pr gate only; CI has no step"
     },

@@ -2,14 +2,15 @@
 // checkpoint.ledger is true in review-router.config.json. Tests: scripts/github/pr-checkpoint-ledger.test.mjs.
 //
 // Call 1 of `pr_checkpoint {pr}` gets a question spec. The model asks it with AskUserQuestion. The AskUserQuestion hook records Dave's tap
-// in the decision store (decisions.mjs). Call 2 reads the tap. A paid pick (coderabbit, both) needs a second tap on a paid confirm.
-// Only when the taps exist does the engine let `--confirm <pathway> --by dave` record (ledgerConfirmProblem).
+// (decisions.mjs). Call 2 reads the tap. There is ONE question: the label of a paid row carries its price, and Dave's tap on it records the
+// pick (card prflow-review-pick). A paid run asks Dave again later (ship-ask paid-round). A paid row is never row 0: a dialog that returns
+// row 0 with no tap records nothing.
+// Only when the tap exists does the engine let `--confirm <pathway> --by dave` record (ledgerConfirmProblem).
 //
-// Store bindings: the review question is step `review`, key `<repo>#<pr>`, head. The paid confirm of a pick is step `paid-round`, key
-// `<repo>#<pr>!pick:<pathway>`, head. (The plain key `<repo>#<pr>` of step `paid-round` is the ship-ask question for a paid round.)
+// Binding: the review question is step `review`, key `<repo>#<pr>`, head. (The plain key `<repo>#<pr>` of step `paid-round` is the
+// ship-ask question for a paid round. The cr-paid.mjs limits stay hard stops when a paid round runs.)
 import * as store from './decisions.mjs';
 
-const PAID = ['coderabbit', 'both'];
 const PER_FILE = 0.25;
 const GREPTILE_CREDITS = 3;
 const usd = (n) => `$${n.toFixed(2)}`;
@@ -19,13 +20,39 @@ const RECOMMENDED = ' (Recommended)';
 
 const NAMES = { none: 'No review, land on CI', coderabbit: 'CodeRabbit review', both: 'CodeRabbit + Greptile', wait: 'Keep as draft' };
 
-/** The label of a pathway row, with its cost. */
-function labelOf(pathway, result) {
+/** A free fact older than this is no longer a fact: the slot may have gone. The same figure as FREE_FACT_MAX_AGE_MS in the mod (model.ts). */
+const FREE_FACT_MAX_AGE_MS = 5 * 60_000;
+/** A checkedAt this far after the clock is clock skew and still fresh. Further ahead it cannot be trusted. The same figure as FUTURE_SKEW_MS in the mod. */
+const FUTURE_SKEW_MS = 60_000;
+
+/**
+ * The CodeRabbit slot state at `nowMs`: 'free', 'wait' or 'unknown'. The same rule as slotOf in the mod (model.ts), so both copies of the question
+ * read one fact the same way. A free fact with no readable checkedAt, one older than 5 minutes, or one more than 1 minute after the clock is unknown
+ * (it fails closed, so the row is paid). So is a wait fact whose nextSlotAt has passed. A wait fact with no readable nextSlotAt has no time to pass,
+ * so it ages out the way a free fact does. A null clock reads the fact as printed.
+ */
+export function slotStateOf(capacity, nowMs) {
+  const cap = capacity && typeof capacity === 'object' ? capacity : {};
+  const printed = cap.state === 'free' || cap.state === 'wait' ? cap.state : 'unknown';
+  if (nowMs === null || nowMs === undefined) return printed;
+  const checked = typeof cap.checkedAt === 'string' ? Date.parse(cap.checkedAt) : Number.NaN;
+  const next = typeof cap.nextSlotAt === 'string' ? Date.parse(cap.nextSlotAt) : Number.NaN;
+  const stale = !(nowMs - checked <= FREE_FACT_MAX_AGE_MS && checked - nowMs <= FUTURE_SKEW_MS);
+  if (printed === 'free') return stale ? 'unknown' : 'free';
+  if (printed === 'wait') return (Number.isFinite(next) ? next <= nowMs : stale) ? 'unknown' : 'wait';
+  return 'unknown';
+}
+
+/** A paid row spends money: Greptile credits always, CodeRabbit unless the slot is free. `slot` is slotStateOf of the result's capacity. */
+const isPaid = (pathway, slot) => pathway === 'both' || (pathway === 'coderabbit' && slot !== 'free');
+
+/** The label of a pathway row, with its cost. The words are the mod's (model.ts labelFor): both copies must give one text. */
+function labelOf(pathway, result, slot) {
   const up = usd(result.size.files * PER_FILE);
   if (pathway === 'none') return 'No review, land on CI ($0)';
   if (pathway === 'wait') return 'Keep as draft ($0)';
-  if (pathway === 'both') return `CodeRabbit + Greptile (up to ${up} + ${GREPTILE_CREDITS} credits)`;
-  return result.capacity?.state === 'free' ? 'CodeRabbit now (free slot, $0)' : `CodeRabbit review (up to ${up})`;
+  if (pathway === 'both') return `CodeRabbit + Greptile (may cost up to ${up} + ${GREPTILE_CREDITS} credits)`;
+  return slot === 'free' ? 'CodeRabbit now (free slot, $0)' : `CodeRabbit review (may cost up to ${up})`;
 }
 
 /** The recommendation of the question. A held recommendation (not among the open options) falls back to the safe pick: Keep as draft. */
@@ -35,20 +62,26 @@ function recommendedOf(result) {
   return rec === 'wait' || open ? rec : 'wait';
 }
 
-/** The pathways of the question, recommended first: the open rows, then Keep as draft, then none. At most 4. */
-function rowsOf(result) {
+/**
+ * The pathways of the question, at most 4. Row 0 is Keep as draft, or none when none is the recommendation: both cost $0. Then the free-slot
+ * CodeRabbit row, then the paid rows (the recommendation first), then none. A paid row is never row 0. The free-slot and the paid CodeRabbit row
+ * have different labels. The order depends only on the result and the clock, so a re-ask at the same time shows the same rows.
+ */
+function rowsOf(result, slot) {
   const open = result.options.filter((o) => o.available && o.pathway !== 'wait').map((o) => o.pathway);
   const rec = recommendedOf(result);
-  const first = [rec];
-  const rest = [...open.filter((p) => p !== 'none'), 'wait', ...(open.includes('none') ? ['none'] : [])];
-  return [...first, ...rest.filter((p) => !first.includes(p))];
+  const crs = open.filter((p) => p !== 'none');
+  const paid = crs.filter((p) => isPaid(p, slot)).sort((a, b) => Number(b === rec) - Number(a === rec));
+  const lead = rec === 'none' ? ['none'] : [];
+  return [...new Set([...lead, 'wait', ...crs.filter((p) => !isPaid(p, slot)), ...paid, ...(open.includes('none') ? ['none'] : [])])];
 }
 
-function describe(pathway, result, first) {
+function describe(pathway, result, first, slot) {
   const o = result.options.find((x) => x.pathway === pathway);
   const base = pathway === 'wait' ? 'Records nothing. The PR stays a draft.' : one(o?.reason ?? '');
+  const spend = isPaid(pathway, slot) ? ' This tap records it and can cost money.' : '';
   const drift = first && result.config_drift ? ` Warning: ${result.config_drift_why ?? 'branch config differs from main'}.` : '';
-  return `${base}${drift}`.trim() || 'No details.';
+  return `${base}${spend}${drift}`.trim() || 'No details.';
 }
 
 function questionOf(pr, result, slotLine) {
@@ -65,81 +98,84 @@ function questionOf(pr, result, slotLine) {
 
 /**
  * The review question. { header, question, options, values }: values maps each label to its pathway and stays in the store (the print drops it).
- * The recommendation is first and carries " (Recommended)". 2 to 4 options.
+ * The recommendation carries " (Recommended)" at its row. Row 0 is a $0 row (Keep as draft, or none when it is the recommendation). 2 to 4 options.
+ * `now` is the clock in ms: the CodeRabbit slot is read at that time (slotStateOf). Tests inject it.
  */
-export function askSpecOf(pr, result, slotLine) {
-  const rows = rowsOf(result);
-  const options = rows.map((p, i) => ({ label: `${labelOf(p, result)}${i === 0 ? RECOMMENDED : ''}`, description: describe(p, result, i === 0) }));
+export function askSpecOf(pr, result, slotLine, now = Date.now()) {
+  const slot = slotStateOf(result.capacity, now);
+  const rows = rowsOf(result, slot);
+  const rec = recommendedOf(result);
+  const options = rows.map((p, i) => ({ label: `${labelOf(p, result, slot)}${p === rec ? RECOMMENDED : ''}`, description: describe(p, result, i === 0, slot) }));
   const values = Object.fromEntries(rows.map((p, i) => [options[i].label, p]));
   return { header: clip(`PR #${pr}`, 12), question: questionOf(pr, result, slotLine), options, values };
 }
 
-/** The paid confirm of one pick. The FIRST option is "No, keep the PR a draft (Recommended)". */
-export function paidConfirmSpecOf(pr, pathway, result) {
-  const up = usd(result.size.files * PER_FILE);
-  const no = `No, keep the PR a draft${RECOMMENDED}`;
-  const yes = `Yes, record ${pathway} (up to ${up})`;
-  const question = [`PR #${pr}: record ${NAMES[pathway]} (up to ${up})?`, 'It can cost money.', 'If you say No, nothing is recorded and the PR stays a draft.'].join('\n');
-  return {
-    header: clip(`PR #${pr}`, 12), question, values: { [no]: 'no', [yes]: 'yes' },
-    options: [{ label: no, description: 'Records nothing. The PR stays a draft. No money is spent.' }, { label: yes, description: `Records ${pathway}, labels the PR and marks it ready for review.` }],
-  };
-}
-
 const printable = ({ header, question, options }) => ({ header, question, options });
 const keyOf = (pr) => store.decisionKey({ pr });
-const pickKey = (pr, pathway) => `${keyOf(pr)}!pick:${pathway}`;
 const valueOf = (triple, d) => d.offerRead(triple)?.spec?.values?.[d.decisionRead(triple)?.label] ?? null;
 
-/** Opens (or re-opens) the question. An open offer with no tap is a miss: count it, and stop after MAX_REASKS re-asks. */
-function askAgain(pr, triple, spec, d) {
+/**
+ * Opens (or re-opens) the question. An open offer with no tap is a miss: count it, and stop after MAX_REASKS re-asks.
+ * `note` says why Dave sees the question again (a tap that was not recorded). It leads the text for the model and is also its own field.
+ */
+function askAgain(pr, triple, spec, d, note = null) {
   const reopened = d.offerRead(triple)?.open === true;
   const missed = reopened ? d.missBump(triple) : d.missCount(triple);
   if (missed > d.MAX_REASKS) return { state: 'stop', text: `Stop. PR #${pr} stays a draft. Nothing was recorded. Tell Dave.` };
   const w = d.offerWrite({ ...triple, spec, tree: null, cwd: process.cwd() });
   if (!w.ok) return { state: 'stop', text: `Stop. The question could not be saved (${w.reason}). PR #${pr} stays a draft. Nothing was recorded. Tell Dave.` };
   const again = missed > 0 ? ` No answer matched an option. This is re-ask ${missed} of ${d.MAX_REASKS}.` : '';
-  return { state: triple.step === 'review' ? 'ask' : 'confirm-paid', ask: printable(spec), reasked: missed, text: `Call AskUserQuestion with ask, word for word.${again} Then call pr_checkpoint {pr} again.` };
+  const lead = note ? `${note} ` : '';
+  return { state: 'ask', ask: printable(spec), reasked: missed, ...(note ? { note } : {}), text: `${lead}Call AskUserQuestion with ask, word for word, with the options in the order given.${again} Then call pr_checkpoint {pr} again.` };
 }
+
+const SLOT_CHANGED_NOTE = 'The CodeRabbit slot changed. Your tap was not recorded.';
 
 const kept = (pr, d, triples) => { triples.forEach((t) => d.decisionUse(t)); return { state: 'kept-draft', text: `Nothing was recorded. PR #${pr} stays a draft. Call pr_checkpoint {pr} when Dave wants to pick again.` }; };
 
 /**
- * ledgerStep({ pr, result, slotLine, askAnyway, d }) -> { state, ask?, pathway?, by?, reasked?, text }. d is the decisions module (a test seam).
+ * ledgerStep({ pr, result, slotLine, askAnyway, now, d }) -> { state, ask?, pathway?, by?, reasked?, text }. d is the decisions module (a test seam).
+ * now is the clock in ms: the slot is read at that time (default Date.now(); a test injects it).
+ * Call 2 builds the question again from the current result. A tap records only when its label is still a row of that question with the same
+ * pathway (a free-slot tap is no yes once the slot is gone). Otherwise the tap is used up and the question is asked again with a `note` that
+ * says the slot changed and the tap was not recorded; that is no miss.
+ * Keep as draft records nothing, so it stays kept whatever the slot does.
  * askAnyway skips the auto-eligible short-circuit: the mod passes it (--ask-anyway) when auto-confirm failed, so Dave still gets the question.
- * state: none (no question: a stop or an auto-confirm), ask, confirm-paid (ask holds the paid confirm), record (run --confirm <pathway> --by dave),
+ * state: none (no question: a stop or an auto-confirm), ask, record (run --confirm <pathway> --by dave; the tap records the pick),
  * kept-draft (nothing recorded), stop (the re-asks are used up).
  */
-export function ledgerStep({ pr, result, slotLine, askAnyway = false, d = store }) {
+export function ledgerStep({ pr, result, slotLine, askAnyway = false, now = Date.now(), d = store }) {
   if (result.recommended === null || (result.auto?.eligible === true && askAnyway !== true) || result.options.length === 0) return { state: 'none', text: 'No question is needed.' };
   const triple = { step: 'review', key: keyOf(pr), head: result.head };
+  const spec = askSpecOf(pr, result, slotLine, now);
   const pathway = valueOf(triple, d);
-  if (pathway === null) return askAgain(pr, triple, askSpecOf(pr, result, slotLine), d);
+  if (pathway === null) return askAgain(pr, triple, spec, d);
   if (pathway === 'wait') return kept(pr, d, [triple]);
-  const record = { state: 'record', pathway, by: 'dave', text: `Dave picked ${pathway}. Record it.` };
-  if (!PAID.includes(pathway)) return record;
-  const paid = { step: 'paid-round', key: pickKey(pr, pathway), head: result.head };
-  const answer = valueOf(paid, d);
-  if (answer === null) return askAgain(pr, paid, paidConfirmSpecOf(pr, pathway, result), d);
-  return answer === 'yes' ? record : kept(pr, d, [paid, triple]);
+  if (spec.values[d.decisionRead(triple)?.label] !== pathway) {
+    d.decisionUse(triple);
+    return askAgain(pr, triple, spec, d, SLOT_CHANGED_NOTE);
+  }
+  return { state: 'record', pathway, by: 'dave', text: `Dave picked ${pathway}. Record it.` };
 }
 
 /**
  * Why `--confirm <pathway> --by <by>` must refuse while the ledger flag is on, or null. Dave's pick needs his tap on the review question
- * (and, for a paid pathway, his Yes on the paid confirm). --by default never records. --by auto is not a tap and keeps its own rules.
+ * (the label of a paid row carries its price; the tap records the pick, and a paid run asks Dave again later). --by default never records. --by auto is not a tap and keeps its own rules.
+ * With `result` (and `now`, in ms) the tapped label must also be a row of the question as it stands now, with the same pathway: a tap on a
+ * free-slot row is refused once the slot is gone. Without `result` only the tap is checked. A refusal does not use the tap up (ledgerStep does).
  */
-export function ledgerConfirmProblem({ pr, head, pathway, by, d = store }) {
+export function ledgerConfirmProblem({ pr, head, pathway, by, result = null, now = Date.now(), d = store }) {
   if (by === 'auto') return null;
   if (by === 'default') return 'checkpoint.ledger is on: --by default records nothing. Only Dave\'s tap (--by dave) or an eligible auto-confirm records.';
   if (pr === null) return 'checkpoint.ledger is on: --confirm needs --pr <number>, the PR whose question Dave answered.';
-  const tapped = valueOf({ step: 'review', key: keyOf(pr), head }, d);
-  if (tapped !== pathway) return `No tap of Dave's for ${pathway} on PR #${pr} at ${String(head).slice(0, 7)}. Call pr_checkpoint {pr}: it asks Dave.`;
-  if (!PAID.includes(pathway)) return null;
-  return valueOf({ step: 'paid-round', key: pickKey(pr, pathway), head }, d) === 'yes' ? null : `${pathway} is paid and Dave has not said Yes to the paid confirm. Call pr_checkpoint {pr}: it asks Dave.`;
+  const triple = { step: 'review', key: keyOf(pr), head };
+  if (valueOf(triple, d) !== pathway) return `No tap of Dave's for ${pathway} on PR #${pr} at ${String(head).slice(0, 7)}. Call pr_checkpoint {pr}: it asks Dave.`;
+  if (result === null) return null;
+  const row = askSpecOf(pr, result, '', now).values[d.decisionRead(triple)?.label];
+  return row === pathway ? null : `Dave's tap for ${pathway} on PR #${pr} is no longer a row of the question (the CodeRabbit slot changed). Nothing was recorded. Call pr_checkpoint {pr}: it asks Dave again.`;
 }
 
-/** Uses up the taps of a recorded pathway. Call it after --confirm wrote the record. */
-export function ledgerUse({ pr, head, pathway, d = store }) {
+/** Uses up the tap of a recorded pathway. Call it after --confirm wrote the record. */
+export function ledgerUse({ pr, head, d = store }) {
   d.decisionUse({ step: 'review', key: keyOf(pr), head });
-  if (PAID.includes(pathway)) d.decisionUse({ step: 'paid-round', key: pickKey(pr, pathway), head });
 }
