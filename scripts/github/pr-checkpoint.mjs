@@ -52,7 +52,7 @@ import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayM
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
-import { ledgerConfirmCheck, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
+import { askSpecOf, ledgerConfirmCheck, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
 import { DECISIONS_ENV, decisionKey, decisionsPath, dropKey } from './lib/decisions.mjs';
 
 export { capacityFact, parseRateLimitReply };
@@ -982,6 +982,16 @@ const fixtureRun = (o) => o['--facts'] !== undefined || o['--config'] !== undefi
  */
 const fixtureBlocked = (o) => fixtureRun(o) && !seamsOn();
 
+/**
+ * The clock of the USE of a tap, in ms. facts.now of a live run was read before the capacity probe, so the slot is judged again at the use (the lock wait is up to 5 s).
+ * A fixture run (--facts) has no other clock than facts.now; in test mode PR_CHECKPOINT_CONSUME_NOW (an ISO time) moves it. Test seam only.
+ */
+function consumeClock(o, facts) {
+  const seam = Date.parse(process.env.PR_CHECKPOINT_CONSUME_NOW ?? '');
+  if (seamsOn() && Number.isFinite(seam)) return seam;
+  return o['--facts'] === undefined ? Date.now() : clockMs(facts);
+}
+
 function runConfirm(o) {
   const stateDir = o['--state-dir'] ?? defaultStateDir();
   const { facts, policy } = inputsOf(o, stateDir);
@@ -999,7 +1009,9 @@ function runConfirm(o) {
   // Dave's tap is used up BEFORE the record is written, and a failed use refuses: a tap that stays after a record would let a second --confirm write again.
   // A record write that fails after the use leaves no tap and no record, so the next call asks again. --by auto has no tap and keeps its order.
   if (ledger && args.by === 'dave') {
-    const used = ledgerUse({ pr, head: facts.head, label: check.label });
+    // The tap must be the one that was read (label AND time), and its row must still be a row of the question at THIS clock (a free slot can go while the lock waits).
+    const rowNow = (row) => askSpecOf(pr, args.result, '', consumeClock(o, facts)).values[row.label] === args.pathway;
+    const used = ledgerUse({ pr, head: facts.head, label: check.label, at: check.at, check: rowNow });
     if (!used.ok) return refuse(`Dave's tap for ${args.pathway} on PR #${pr} could not be used up (${used.reason}). Nothing was recorded. Call pr_checkpoint {pr} again.`);
   }
   writeFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), `${JSON.stringify(record, null, 2)}\n`);
@@ -1029,12 +1041,13 @@ function runApply(o) {
 }
 
 function runRecommend(o) {
+  const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
+  // The ledger step (an offer, a miss, a use of a tap) is refused for a fixture run outside test mode, even with the ledger flag off in the fixture config.
+  // It comes BEFORE the facts are read: the probe inside inputsOf can post a comment, and a refused run must post nothing.
+  if (o['--json'] && pr !== null && !o['--no-ledger'] && fixtureBlocked(o)) return refuse(FIXTURE_REFUSED);
   // The probe may post only in the JSON run the mod makes. The text plan and --confirm never post.
   const { facts, policy } = inputsOf(o, defaultStateDir(), o['--probe'] === true && o['--json'] === true);
   const result = recommend(facts, policy);
-  const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
-  // The ledger step (an offer, a miss, a use of a tap) is refused for a fixture run outside test mode, even with the ledger flag off in the fixture config.
-  if (o['--json'] && pr !== null && !o['--no-ledger'] && fixtureBlocked(o)) return refuse(FIXTURE_REFUSED);
   const asks = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy);
   const ledger = asks ? ledgerStep({ pr, result, slotLine: slotText(result.capacity, clockMs(facts)), askAnyway: o['--ask-anyway'] === true, now: clockMs(facts), repickSince: o['--repick-since'] ?? null }) : null;
   console.log(o['--json'] ? JSON.stringify(ledger ? { ...result, ledger } : result) : renderText(result));

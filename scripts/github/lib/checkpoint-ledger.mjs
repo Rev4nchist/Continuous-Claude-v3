@@ -188,15 +188,15 @@ export function ledgerStep({ pr, result, slotLine, askAnyway = false, now = Date
 }
 
 /**
- * Why `--confirm <pathway> --by <by>` must refuse while the ledger flag is on, and the label of the tap it read. { problem, label }: problem is null when the
- * confirm may go on; label is the tap's label (null for --by auto, which has no tap), the one ledgerUse must use up.
+ * Why `--confirm <pathway> --by <by>` must refuse while the ledger flag is on, and the tap it read. { problem, label, at }: problem is null when the
+ * confirm may go on; label and at are the tap's label and time (null for --by auto, which has no tap), the ones ledgerUse must use up.
  * Dave's pick needs his tap on the review question (the label of a paid row carries its price; the tap records the pick). One question; a paid row shows its price.
  * --by default never records. --by auto is not a tap and keeps its own rules. A tap made before `repickSince` (see ledgerStep) is refused with REPICK_NOTE.
  * With `result` (and `now`, in ms) the tapped label must also be a row of the question as it stands now, with the same pathway: a tap on a
  * free-slot row is refused once the slot is gone. Without `result` only the tap is checked. A refusal does not use the tap up (ledgerStep does).
  */
 export function ledgerConfirmCheck({ pr, head, pathway, by, result = null, now = Date.now(), repickSince = null, d = store }) {
-  const no = (problem) => ({ problem, label: null });
+  const no = (problem) => ({ problem, label: null, at: null });
   if (by === 'auto') return no(null);
   if (by === 'default') return no("checkpoint.ledger is on: --by default records nothing. Only Dave's tap (--by dave) or an eligible auto-confirm records.");
   if (pr === null) return no('checkpoint.ledger is on: --confirm needs --pr <number>, the PR whose question Dave answered.');
@@ -204,9 +204,9 @@ export function ledgerConfirmCheck({ pr, head, pathway, by, result = null, now =
   const tapped = d.decisionRead(triple);
   if (valueOf(triple, d, tapped) !== pathway) return no(`No tap of Dave's for ${pathway} on PR #${pr} at ${String(head).slice(0, 7)}. Call pr_checkpoint {pr}: it asks Dave.`);
   if (isStale(tapped, repickSince)) return no(`${REPICK_NOTE} Call pr_checkpoint {pr}: it asks Dave again.`);
-  if (result === null) return { problem: null, label: tapped.label };
+  if (result === null) return { problem: null, label: tapped.label, at: tapped.at };
   const row = askSpecOf(pr, result, '', now).values[tapped.label];
-  return row === pathway ? { problem: null, label: tapped.label } : no(`Dave's tap for ${pathway} on PR #${pr} is no longer a row of the question (the CodeRabbit slot changed). Nothing was recorded. Call pr_checkpoint {pr}: it asks Dave again.`);
+  return row === pathway ? { problem: null, label: tapped.label, at: tapped.at } : no(`Dave's tap for ${pathway} on PR #${pr} is no longer a row of the question (the CodeRabbit slot changed). Nothing was recorded. Call pr_checkpoint {pr}: it asks Dave again.`);
 }
 
 /** The refusal text of ledgerConfirmCheck, or null. */
@@ -216,7 +216,9 @@ export const ledgerConfirmProblem = (args) => ledgerConfirmCheck(args).problem;
  * Uses up the tap of a pathway and returns the result of decisionUse: { ok: true }, or { ok: false, reason } (no-decision, label-changed, lock).
  * --confirm --by dave calls it BEFORE it writes the record and refuses on a failure, so one tap never gives two records. `label` is the label that
  * ledgerConfirmCheck read: a tap Dave made in between is label-changed and stays. No label: the tap is used whatever its label (--by auto).
+ * `at` (the tap time ledgerConfirmCheck read) makes a newer tap of the SAME label tap-changed. `check(row)` is judged inside the store lock: false is
+ * slot-changed (see decisionUse). Both optional.
  */
-export function ledgerUse({ pr, head, label, d = store }) {
-  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label });
+export function ledgerUse({ pr, head, label, at, check, d = store }) {
+  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label, at, check });
 }

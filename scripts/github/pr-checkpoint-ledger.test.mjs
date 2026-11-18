@@ -760,7 +760,10 @@ test('m5: with the recommendation held the engine marks Keep as draft (the mod c
 //   the real store path in another spelling (case on win32, dots) counts as a temp store                                        -> F3
 test('F3: PR_CHECKPOINT_TEST=1 with CCV3_DECISIONS_FILE at the REAL store path is not test mode, in any spelling of the path', () => {
   const real = D.decisionsPath({});
-  const spellings = [real, path.join(path.dirname(real), '..', path.basename(path.dirname(real)), path.basename(real))];
+  // Joined as text: path.join would fold the '..' away, and the child would get the real string again (on every platform). '/' is a separator on win32 and POSIX.
+  const alt = `${path.dirname(real)}/../${path.basename(path.dirname(real))}/${path.basename(real)}`;
+  assert.notEqual(alt, real, 'the alternate spelling is a different string from the real path');
+  const spellings = [real, alt];
   if (process.platform === 'win32') spellings.push(real.toUpperCase(), real.toLowerCase(), real.replace(/\\/g, '/'));
   const t = setup(); // a confirm with no tap writes nothing even when the guard is broken: it reads the real store and refuses
   for (const spelling of spellings) {
@@ -788,23 +791,91 @@ test('F4: the ledger flag of a fixture config is not trusted: with it OFF a fixt
   assert.equal(t.confirm('none').status, 0, 'test mode: the flag-off fixture run still works');
 });
 
+/**
+ * Runs `--confirm coderabbit --by dave` in a child that waits on the held store lock, calls `swap()` once the child is AT the consume, then frees the lock.
+ * The signal: runConfirm makes the state folder right after the check and right before the consume, so a folder that does not exist yet is the
+ * child's "I am at the consume" (no fixed delay: a slow start cannot make the swap early). The wait is bounded; the lock is freed on success and on failure.
+ */
+async function confirmAtConsume(t, swap) {
+  const stateDir = path.join(t.dir, 'late-state');
+  holdLock(t);
+  const child = spawn(process.execPath, [ENGINE, '--confirm', 'coderabbit', '--by', 'dave', '--body', t.bodyFile, '--pr', String(PR), '--state-dir', stateDir, '--facts', t.factsFile, '--config', t.cfgFile], { cwd: t.dir, env: t.envOf() });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const closed = new Promise((resolve) => child.on('close', resolve));
+  try {
+    const began = Date.now();
+    while (!existsSync(stateDir)) {
+      if (Date.now() - began > 4000) throw new Error(`the child never reached the consume: ${stderr}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    swap();
+  } catch (err) {
+    child.kill();
+    throw err;
+  } finally {
+    freeLock(t);
+  }
+  return { code: await closed, stderr, record: path.join(stateDir, 'pathway.json') };
+}
+
+const rewriteTap = (t, change) => {
+  const store = JSON.parse(readFileSync(t.storeFile, 'utf8'));
+  for (const row of Object.values(store.decisions)) change(row);
+  writeFileSync(t.storeFile, JSON.stringify(store));
+};
+
 test('B7: the tap label changes between the check and the use (Dave taps another row): exit 1 label-changed, the new tap stays, no record', async () => {
   const t = setup();
   paidTap(t);
   const other = labelOf(D.offerRead(review()).spec, /^No review/);
-  holdLock(t); // the engine reads the tap, then waits for the lock at the use
-  const child = spawn(process.execPath, [ENGINE, '--confirm', 'coderabbit', '--by', 'dave', '--body', t.bodyFile, '--pr', String(PR), '--state-dir', t.stateDir, '--facts', t.factsFile, '--config', t.cfgFile], { cwd: t.dir, env: t.envOf() });
-  let stderr = '';
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-  const closed = new Promise((resolve) => child.on('close', resolve));
-  await new Promise((resolve) => setTimeout(resolve, 2500)); // the lock wait is 5 s: the check is long done
-  const store = JSON.parse(readFileSync(t.storeFile, 'utf8'));
-  for (const row of Object.values(store.decisions)) row.label = other; // Dave's new tap
-  writeFileSync(t.storeFile, JSON.stringify(store));
-  freeLock(t);
-  const code = await closed;
-  assert.equal(code, 1, stderr);
-  assert.match(stderr, /could not be used up \(label-changed\)\. Nothing was recorded\./);
+  const ran = await confirmAtConsume(t, () => rewriteTap(t, (row) => { row.label = other; })); // Dave's new tap
+  assert.equal(ran.code, 1, ran.stderr);
+  assert.match(ran.stderr, /could not be used up \(label-changed\)\. Nothing was recorded\./);
   assert.equal(D.decisionRead(review()).label, other, 'the new tap stays');
+  assert.ok(!existsSync(ran.record), 'no record');
+});
+
+// ---- fix round of PR 1 taps (CodeRabbit CLI findings F6, F9, F10) ------------------------------------------------------------------------------
+// How it can fail, and the test that catches it:
+//   a newer tap with the SAME label (Dave tapped the same row again) is used up by the confirm that read the older one        -> TC1
+//   ledgerConfirmCheck does not hand back the `at` of the tap it read                                                            -> TC2
+//   a free-slot row that expired between the check and the use still records (the slot is judged at the early clock only)         -> TC3
+test('TC1 F10: a newer tap of the SAME label between the check and the use: exit 1 tap-changed, the newer tap stays, no record', async () => {
+  const t = setup();
+  const label = paidTap(t);
+  const older = D.decisionRead(review()).at;
+  const newer = iso(Date.parse(older) + 5000); // Dave tapped the same row again: same label, later time
+  const ran = await confirmAtConsume(t, () => rewriteTap(t, (row) => { row.at = newer; }));
+  assert.equal(ran.code, 1, ran.stderr);
+  assert.match(ran.stderr, /could not be used up \(tap-changed\)\. Nothing was recorded\./);
+  assert.deepEqual(D.decisionRead(review()), { label, at: newer }, 'the newer tap stays');
+  assert.ok(!existsSync(ran.record), 'no record');
+});
+
+test('TC2: ledgerConfirmCheck returns the label AND the time of the tap it read; ledgerUse with that time uses it up, with an older time it does not', () => {
+  const t = setup();
+  const label = paidTap(t);
+  const read = D.decisionRead(review());
+  const check = L.ledgerConfirmCheck({ pr: PR, head: HEAD, pathway: 'coderabbit', by: 'dave' });
+  assert.deepEqual([check.label, check.at], [label, read.at]);
+  assert.deepEqual(L.ledgerUse({ pr: PR, head: HEAD, label, at: iso(Date.parse(read.at) - 1000) }), { ok: false, reason: 'tap-changed' });
+  assert.deepEqual(L.ledgerUse({ pr: PR, head: HEAD, label, at: check.at }), { ok: true });
+});
+
+test('TC3 F6: a free-slot tap whose slot expired between the check and the use (the clock at the use, PR_CHECKPOINT_CONSUME_NOW) is refused slot-changed: no record, the tap stays', () => {
+  const t = setup({ capacity: FRESH_FREE });
+  const free = 'CodeRabbit now (free slot, $0) (Recommended)';
+  assert.equal(t.call().ledger.ask.options[1].label, free);
+  tap(review(), free);
+  const later = iso(NOW_MS + 600_000); // the free fact was checked 60 s before NOW: 11 minutes old at the use
+  const refused = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { PR_CHECKPOINT_CONSUME_NOW: later });
+  assert.equal(refused.status, 1, `${refused.stdout} ${refused.stderr}`);
+  assert.match(refused.stderr, /could not be used up \(slot-changed\)\. Nothing was recorded\./);
   assert.ok(!existsSync(t.pathwayFile), 'no record');
+  assert.equal(D.decisionRead(review()).label, free, 'the tap stays');
+  // Controls: the same tap with no later clock (the fixture clock) and with a clock inside the 5 minutes records.
+  const soon = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { PR_CHECKPOINT_CONSUME_NOW: iso(NOW_MS + 120_000) });
+  assert.equal(soon.status, 0, `${soon.stdout} ${soon.stderr}`);
+  assert.equal(JSON.parse(readFileSync(t.pathwayFile, 'utf8')).decided_by, 'dave');
 });

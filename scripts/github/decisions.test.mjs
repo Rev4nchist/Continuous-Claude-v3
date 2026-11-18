@@ -277,3 +277,50 @@ test('DK3: dropKey is one locked update: with the lock held it returns lock and 
   assert.equal(readFileSync(file, 'utf8'), before);
   assert.deepEqual(d.dropKey({ steps: ['land'], key: KEY }), { ok: true, dropped: 2 });
 });
+
+// ---- decisionUse: the tap that was read, and the slot at the use (fix round of PR 1 taps, CodeRabbit CLI findings F6 and F10) ------------------
+// How it can fail, and the test that catches it:
+//   a newer tap with the SAME label is used up by the call that read the older one (the label check cannot tell them apart)      -> DU1
+//   a `check` that says no still uses the tap up, or runs outside the lock on a row that is not the stored one                   -> DU2
+//   the old call shapes (no label, a label only) change: they must behave as before                                               -> DU3
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const tapped = async (d, label) => { assert.equal(offer(d).ok, true); assert.equal(d.decisionRecord({ ...triple(), label }).ok, true); return d.decisionRead(triple()); };
+
+test('DU1: decisionUse with `at` refuses a newer tap of the same label (tap-changed) and keeps it; the tap that was read is used up', async () => {
+  fresh();
+  const d = await load();
+  const first = await tapped(d, 'Keep open');
+  await sleep(15); // the tap time has millisecond resolution: the second tap must differ
+  const second = await tapped(d, 'Keep open');
+  assert.notEqual(second.at, first.at, 'the two taps differ in time');
+  assert.deepEqual(d.decisionUse({ ...triple(), label: 'Keep open', at: first.at }), { ok: false, reason: 'tap-changed' });
+  assert.deepEqual(d.decisionRead(triple()), second, 'the newer tap stays');
+  assert.deepEqual(d.decisionUse({ ...triple(), label: 'Keep open', at: second.at }), { ok: true });
+  assert.equal(d.decisionRead(triple()), null);
+});
+
+test('DU2: decisionUse with `check` refuses when it says no (slot-changed) and keeps the tap; check gets the stored row', async () => {
+  fresh();
+  const d = await load();
+  const row = await tapped(d, 'Keep open');
+  const seen = [];
+  assert.deepEqual(d.decisionUse({ ...triple(), label: 'Keep open', check: (r) => { seen.push(r); return false; } }), { ok: false, reason: 'slot-changed' });
+  assert.deepEqual(d.decisionRead(triple()), row, 'the tap stays');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].label, 'Keep open');
+  assert.equal(seen[0].at, row.at);
+  assert.deepEqual(d.decisionUse({ ...triple(), label: 'Keep open', at: row.at, check: () => true }), { ok: true });
+  assert.equal(d.decisionRead(triple()), null);
+  assert.deepEqual(d.decisionUse({ ...triple(), label: 'Keep open', check: () => false }), { ok: false, reason: 'no-decision' }, 'no row: no-decision, and check is not asked');
+});
+
+test('DU3: the old call shapes work as before: no label, a label only, a changed label', async () => {
+  fresh();
+  const d = await load();
+  await tapped(d, 'Keep open');
+  assert.deepEqual(d.decisionUse({ ...triple(), label: 'Land now (Recommended)' }), { ok: false, reason: 'label-changed' });
+  assert.deepEqual(d.decisionUse({ ...triple(), label: 'Keep open' }), { ok: true });
+  await tapped(d, 'Land now (Recommended)');
+  assert.deepEqual(d.decisionUse(triple()), { ok: true });
+  assert.deepEqual(d.decisionUse(triple()), { ok: false, reason: 'no-decision' });
+});

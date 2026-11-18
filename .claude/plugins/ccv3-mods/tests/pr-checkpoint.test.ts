@@ -143,6 +143,8 @@ type Opts = {
   throwDelete?: string
   /** The first `store.set` whose key starts with this text throws; later ones work. */
   throwSetOnce?: string
+  /** A `store.set` for which this returns true throws (a write that fails for one value only, or every time). */
+  throwSetWhen?: (key: string, value: unknown) => boolean
   /** A file write whose path contains this text throws (a full disk, a locked file). */
   throwWrite?: string
   /** A pending promise: the fake `gh pr comment` and the engine `--confirm` answer only after it settles (a slow call, so two presses overlap). */
@@ -251,6 +253,7 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('store.set', (_$, e) => {
     if (fail.set && e.key.startsWith('checkpoint:pr:')) throw new Error('store.set failed')
+    if (opts.throwSetWhen?.(e.key, e.value)) throw new Error('store.set failed (throwSetWhen)')
     if (opts.throwSetOnce && !fail.setOnceDone && e.key.startsWith(opts.throwSetOnce)) {
       fail.setOnceDone = true
       throw new Error('store.set failed once')
@@ -4441,14 +4444,15 @@ describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draf
     expect(ledgerCalls(marked.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
   })
 
+  // F2 (fix round): a marker with no readable time is repaired before the offer (a fresh marker with a readable time, a drop, the flag).
+  // The old rule sent an unparseable value, so the engine read even a tap on the new offer as stale and Dave could never get through.
   for (const bad of [{ head: HEAD }, { head: HEAD, at: 'soon' }, { head: HEAD, at: 1e18 }, { head: HEAD, at: null }]) {
-    test(`AM4b a marker with no readable time sends a value that does not parse: ${JSON.stringify(bad)}`, async ($, on) => {
+    test(`AM4b a marker with no readable time is repaired, so the ledger call carries a value that parses: ${JSON.stringify(bad)}`, async ($, on) => {
       const w = world(on, { files: LEDGER, store: { [MARKER]: bad }, ledgerSeq: [ASK] })
       await start($)
       await call($)
-      const flag = ledgerCalls(w.seen).at(-1)!.match(/--repick-since (\S+)$/)
-      expect(flag).not.toBeNull()
-      expect(Number.isNaN(Date.parse(flag![1]!))).toBe(true)
+      expect(ledgerCalls(w.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
+      expect(w.store.get(MARKER)).toMatchObject({ at: NOW, dropped: true })
     })
   }
 
@@ -4505,5 +4509,215 @@ describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draf
     await start($)
     const ran = await slash($, '7 coderabbit\nplease go ahead')
     expect(ran.text ?? '').toContain('Ignored: "please go ahead".')
+  })
+})
+
+// ---- fix round of PR 1 taps: the CodeRabbit CLI findings F1 to F5 on the re-pick marker ------------------------------------------------------
+// One shared cleanup (cleanupReturn) runs after a mod undo and after a return to draft by hand. The marker is a small state machine.
+// How it can fail, and the test that catches it (C = control: it passes before the fix and pins what must stay):
+// FR1  (C) a fresh PR (no marker, no applied record) gets a cleanup
+// FR2  F1  a return by hand clears only the taps: the round grant and the free-slot queue entry of the old record stay
+// FR3  (C) a marker that says dropped, with proof as new as the return, drops again (twice), or one with no applied record does
+// FR4  F3  a marker with dropped:true from an EARLIER return is trusted when the applied record is newer: the taps of the ready period stay
+// FR5  (C) a marker without dropped does not drop again, or drops and never flags it
+// FR6  F2  a marker with an unreadable time keeps the engine rejecting every new tap; a failed repair write still offers
+// FR8  F5  a good drop whose flag write fails still offers a choice, so the tap on it is dropped by the next call
+// FR9  a grant delete that throws skips the queue drop
+// FR10 to FR13  F4  a stored pending checkpoint or a typed pick reaches the question or a record while the cleanup is outstanding
+describe('pr-checkpoint PR 1 taps fix round: the re-pick marker state machine', () => {
+  const call = ($: Engine) => callTool($, { pr: 7, body: 'pr-body.md' })
+  const LEDGER = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false, ledger: true } }) }
+  const RECORD = { pr: 7, state: 'applied', head: HEAD, pathway: 'none', label: 'review:none', budget: [0, 0], decided_by: 'dave', via: 'dialog', session: SESSION, at: '2026-11-06T20:55:00.000Z' }
+  const BACK = 'Return to draft and pick again'
+  const MARKER = 'checkpoint:repick:7'
+  const GRANT = 'checkpoint:grant:7'
+  const GRANT_ROW = { round: 1, head: HEAD, at: NOW }
+  const SINCE = new Date(NOW).toISOString()
+  const ASK = { stdout: JSON.stringify({ ...engineJson(), ledger: { state: 'ask', ask: { header: 'PR #7', question: 'q', options: [{ label: 'Keep as draft ($0)', description: 'a' }, { label: 'No review, land on CI ($0)', description: 'b' }] }, reasked: 0, text: 'ask' } }) }
+  const drops = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.includes('--drop-taps'))
+  const at = (seen: { run: Run[] }, pred: (r: Run) => boolean) => seen.run.findIndex(pred)
+  const isSlotDrop = (r: Run) => r.argv.some(a => a.includes('slot-queue.mjs')) && r.argv.includes('drop')
+  const isLedgerCall = (r: Run) => r.argv.some(a => a.includes('pr-checkpoint.mjs')) && r.argv.includes('--json') && !r.argv.includes('--no-ledger')
+  const ledgerCalls = (seen: { run: Run[] }) => seen.run.filter(isLedgerCall).map(r => r.argv.slice(2).join(' '))
+  const SECOND = `--json --pr 7 --ask-anyway --repick-since ${SINCE}`
+  const STOP = (reason: string) => `The taps of PR #7 could not be cleared (${reason}). Nothing was recorded. The PR stays a draft. Tell Dave.`
+  const MARKER_STOP = /re-pick marker of PR #7 could not be saved.*Nothing was asked/
+  const FLAG_STOP = /taps of PR #7 were cleared, but the proof of it could not be saved.*Nothing was asked/
+  /** A PR returned by hand: a draft now (the default view), with an applied record of this head. */
+  const byHand = (over: Parameters<typeof world>[1] = {}) => ({ files: LEDGER, json: autoJson(), store: { 'checkpoint:pr:7': RECORD, [GRANT]: GRANT_ROW }, ledgerSeq: [ASK, ASK, ASK], answer: 'dismiss' as const, ...over })
+  const withStore = (extra: Rec, over: Parameters<typeof world>[1] = {}) => byHand({ ...over, store: { ...(over.store ?? { 'checkpoint:pr:7': RECORD, [GRANT]: GRANT_ROW }), ...extra } })
+
+  test('FR1 (control) a fresh PR gets no cleanup: no drop, no marker, the grant stays, a plain ledger call', async ($, on) => {
+    const w = world(on, { files: LEDGER, store: { [GRANT]: GRANT_ROW }, ledgerSeq: [ASK] })
+    await start($)
+    await call($)
+    expect(drops(w.seen)).toEqual([])
+    expect(w.seen.run.some(isSlotDrop)).toBe(false)
+    expect(w.store.get(MARKER)).toBeUndefined()
+    expect(w.store.get(GRANT)).toEqual(GRANT_ROW)
+    expect(ledgerCalls(w.seen)).toEqual(['--json --pr 7'])
+  })
+
+  test('FR2 F1: a return to draft by hand deletes the round grant and drops the queue entry too, before the tap drop', async ($, on) => {
+    const w = world(on, byHand())
+    await start($)
+    await call($)
+    expect(w.store.get(GRANT)).toBeUndefined()
+    const [slot, tap] = [at(w.seen, isSlotDrop), at(w.seen, r => r.argv.includes('--drop-taps'))]
+    expect(slot).toBeGreaterThanOrEqual(0)
+    expect(tap).toBeGreaterThan(slot)
+    expect(drops(w.seen).length).toBe(1)
+    expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW, dropped: true })
+  })
+
+  test('FR3 (control) a dropped marker with no applied record is trusted: no cleanup, no drop, the ask carries the marker time', async ($, on) => {
+    const w = world(on, { files: LEDGER, store: { [MARKER]: { at: NOW, dropped: true }, [GRANT]: GRANT_ROW }, ledgerSeq: [ASK] })
+    await start($)
+    await call($)
+    expect(drops(w.seen)).toEqual([])
+    expect(w.seen.run.some(isSlotDrop)).toBe(false)
+    expect(w.store.get(GRANT)).toEqual(GRANT_ROW)
+    expect(ledgerCalls(w.seen)).toEqual([SECOND])
+  })
+
+  test('FR3b (control) a dropped marker that is as new as the applied record (appliedAt before the marker) is trusted: no drop', async ($, on) => {
+    const w = world(on, withStore({ 'checkpoint:pr:7': { ...RECORD, appliedAt: NOW - 1000 }, [MARKER]: { at: NOW, dropped: true } }))
+    await start($)
+    await call($)
+    expect(drops(w.seen)).toEqual([])
+    expect(w.seen.run.some(isSlotDrop)).toBe(false)
+    expect(w.store.get(GRANT)).toEqual(GRANT_ROW)
+    expect(ledgerCalls(w.seen)).toEqual([SECOND])
+  })
+
+  test('FR4 F3: a dropped marker older than the applied record is stale proof: the full cleanup runs again and the marker is new', async ($, on) => {
+    const w = world(on, withStore({ 'checkpoint:pr:7': { ...RECORD, appliedAt: NOW - 1000 }, [MARKER]: { at: NOW - 5000, dropped: true } }))
+    await start($)
+    await call($)
+    expect(drops(w.seen).length).toBe(1)
+    expect(w.seen.run.some(isSlotDrop)).toBe(true)
+    expect(w.store.get(GRANT)).toBeUndefined()
+    expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW, dropped: true })
+    expect(ledgerCalls(w.seen)).toEqual([SECOND])
+  })
+
+  test('FR5 (control) a marker without dropped runs the drop once and flags it; the next call drops nothing', async ($, on) => {
+    const w = world(on, { files: LEDGER, store: { [MARKER]: { head: HEAD, at: NOW } }, ledgerSeq: [ASK, ASK] })
+    await start($)
+    await call($)
+    expect(drops(w.seen).length).toBe(1)
+    expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW, dropped: true })
+    await call($)
+    expect(drops(w.seen).length).toBe(1)
+  })
+
+  for (const bad of [{ head: HEAD }, { head: HEAD, at: 'soon' }, { head: HEAD, at: 1e18 }, { head: HEAD, at: null }]) {
+    for (const flagged of [false, true]) {
+      test(`FR6 F2: a marker with no readable time is repaired first (fresh time, drop, flag), flagged=${flagged}: ${JSON.stringify(bad)}`, async ($, on) => {
+        const w = world(on, { files: LEDGER, store: { [MARKER]: { ...bad, ...(flagged ? { dropped: true } : {}) } }, ledgerSeq: [ASK] })
+        await start($)
+        await call($)
+        expect(w.store.get(MARKER)).toMatchObject({ at: NOW, dropped: true })
+        expect(drops(w.seen).length).toBe(1)
+        expect(ledgerCalls(w.seen)).toEqual([SECOND])
+      })
+    }
+  }
+
+  test('FR6b F2: the repair write fails: a stop text, no offer, no ledger call, no dialog; the marker stays unreadable (old taps stay rejected)', async ($, on) => {
+    const w = world(on, { files: LEDGER, store: { [MARKER]: { head: HEAD, dropped: true } }, ledgerSeq: [ASK], throwSetWhen: key => key === MARKER })
+    await start($)
+    const told = await call($)
+    expect(told.text).toMatch(MARKER_STOP)
+    expect(ledgerCalls(w.seen)).toEqual([])
+    expect(w.seen.dialogs.length).toBe(0)
+    expect(w.store.get(MARKER)).toEqual({ head: HEAD, dropped: true })
+  })
+
+  test('FR7 (control) a failed drop after the cleanup is the stop text, with no offer, in the manual-return path too', async ($, on) => {
+    const w = world(on, byHand({ drop: { exitCode: 1, stderr: 'boom\n' } }))
+    await start($)
+    const told = await call($)
+    expect(told.text).toContain(STOP('boom'))
+    expect(ledgerCalls(w.seen)).toEqual([])
+    expect(w.store.get(MARKER)).not.toHaveProperty('dropped')
+  })
+
+  test('FR8 F5: a good drop whose flag write fails is a retryable stop (no offer); the next call drops again, flags, and then asks', async ($, on) => {
+    let failed = false
+    const failOnce = (key: string, value: unknown) => {
+      if (key !== MARKER || (value as Rec).dropped !== true || failed) return false
+      failed = true
+      return true
+    }
+    const w = world(on, byHand({ viewSeq: [viewJson({ isDraft: false })], store: { 'checkpoint:pr:7': RECORD }, answer: BACK, throwSetWhen: failOnce }))
+    await start($)
+    const first = await call($)
+    expect(first.text).toMatch(FLAG_STOP)
+    expect(ledgerCalls(w.seen)).toEqual([])
+    expect(w.seen.dialogs.length).toBe(1) // only the change-the-pick question Dave answered
+    expect(w.store.get(MARKER)).not.toHaveProperty('dropped')
+    const second = await call($)
+    expect(drops(w.seen).length).toBe(2)
+    expect(w.store.get(MARKER)).toMatchObject({ dropped: true })
+    expect(second.text).toContain('Keep as draft ($0)')
+  })
+
+  test('FR9: a grant delete that throws still drops the queue entry, and the taps', async ($, on) => {
+    const w = world(on, byHand({ throwDelete: 'checkpoint:grant:' }))
+    await start($)
+    await call($)
+    expect(w.seen.run.some(isSlotDrop)).toBe(true)
+    expect(drops(w.seen).length).toBe(1)
+    expect(w.store.get(MARKER)).toMatchObject({ dropped: true })
+  })
+
+  // ---- F4: the same guard on the paths that open the question or record a typed pick ----------------------------------------------------
+  const PENDING_FIX = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+
+  test('FR10 F4: ledger off, a saved pending checkpoint, a marker not dropped and the drop fails: a bare /pathway opens no question', async ($, on) => {
+    const w = world(on, { store: { [PENDING]: PENDING_FIX, [MARKER]: { head: HEAD, at: NOW } }, drop: { exitCode: 1, stderr: 'boom\n' }, answer: /^Keep as draft/ })
+    await start($)
+    const ran = await slash($, '')
+    expect(ran.text ?? '').toContain(STOP('boom'))
+    expect(w.seen.dialogs.length).toBe(0)
+    expect(w.seen.opens).toEqual([])
+  })
+
+  test('FR11 F4: the same bare /pathway after a good drop: the saved question opens and the marker is flagged', async ($, on) => {
+    const w = world(on, { store: { [PENDING]: PENDING_FIX, [MARKER]: { head: HEAD, at: NOW } }, answer: /^Keep as draft/ })
+    await start($)
+    await slash($, '')
+    expect(drops(w.seen).length).toBe(1)
+    expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW, dropped: true })
+    expect(w.seen.dialogs.length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('FR12 F4: a typed pick records nothing while the cleanup is outstanding (the drop fails): no --confirm, no record', async ($, on) => {
+    const w = world(on, { store: { [MARKER]: { head: HEAD, at: NOW } }, drop: { exitCode: 1, stderr: 'boom\n' } })
+    await start($)
+    const ran = await slash($, '7 none --body pr-body.md')
+    expect(ran.text ?? '').toContain(STOP('boom'))
+    expect(w.seen.run.filter(r => r.argv.includes('--confirm'))).toEqual([])
+    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(w.seen.dialogs.length).toBe(0)
+  })
+
+  test('FR12b F4: the same typed pick runs the drop first and then records, once the drop works', async ($, on) => {
+    const w = world(on, { store: { [MARKER]: { head: HEAD, at: NOW } } })
+    await start($)
+    await slash($, '7 none --body pr-body.md')
+    expect(drops(w.seen).length).toBe(1)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+  })
+
+  test('FR13 (control) a saved pending checkpoint of a PR that is READY with an applied record: a bare /pathway cleans nothing (no draft proof)', async ($, on) => {
+    const w = world(on, { store: { [PENDING]: PENDING_FIX, 'checkpoint:pr:7': RECORD, [GRANT]: GRANT_ROW }, isDraft: false, answer: /^Keep as draft/ })
+    await start($)
+    await slash($, '')
+    expect(drops(w.seen)).toEqual([])
+    expect(w.seen.run.some(isSlotDrop)).toBe(false)
+    expect(w.store.get(GRANT)).toEqual(GRANT_ROW)
+    expect(w.store.get(MARKER)).toBeUndefined()
   })
 })

@@ -113,6 +113,12 @@ export const repickSinceOf = (marker: unknown): string | null => {
 /** The drop of the taps of a PR returned to draft (the engine deletes the review and paid-round taps, offers and misses of the PR). */
 export const dropTapsFlags = (pr: number): string[] => ['--drop-taps', '--pr', String(pr)]
 export const dropFailedText = (pr: number, why: string): string => `The taps of PR #${pr} could not be cleared (${why}). Nothing was recorded. The PR stays a draft. Tell Dave.`
+/** The re-pick marker had no readable time and its repair could not be saved: the engine keeps rejecting old taps, so nothing is asked. A new call retries. */
+export const markerFailedText = (pr: number): string =>
+  `The re-pick marker of PR #${pr} could not be saved. Nothing was asked. Nothing was recorded. The PR stays a draft. Call pr_checkpoint again.`
+/** The drop worked but its proof could not be saved: a question now would lose the tap on it at the next call. Nothing was asked; a new call retries. */
+export const flagFailedText = (pr: number): string =>
+  `The taps of PR #${pr} were cleared, but the proof of it could not be saved. Nothing was asked. Nothing was recorded. The PR stays a draft. Call pr_checkpoint again.`
 
 export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,labels,number', '-R', REPO]
 

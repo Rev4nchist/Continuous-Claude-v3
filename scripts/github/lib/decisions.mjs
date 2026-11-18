@@ -143,12 +143,17 @@ export function decisionRead({ step, key, head }) {
  * decisionUse({ step, key, head, label? }) -> { ok: true } | { ok: false, reason }. Uses the decision up (call it AFTER the action succeeds). Resets the miss count.
  * With a label, the row is used only when its label is that one, else { ok: false, reason: 'label-changed' } and the row stays: a tap that Dave recorded
  * between the read and the use is not used up by the decision that was read (PR 576 follow-up, item 2). No label: the row is used whatever its label.
+ * Two more guards, both optional (an old call behaves as before), both judged inside the lock on the stored row, after the label check:
+ * `at` (the tap time that was read): a row with another time is a newer tap of the same label, { ok: false, reason: 'tap-changed' } and it stays.
+ * `check(row) -> boolean`: false is { ok: false, reason: 'slot-changed' } and the row stays (the caller judges the row against a clock read at the use).
  */
-export function decisionUse({ step, key, head, label }) {
+export function decisionUse({ step, key, head, label, at, check }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-decision' };
   return update((store) => {
     const id = idOf({ step, key, head });
     if (typeof label === 'string' && store.decisions[id] && store.decisions[id].label !== label) return { ok: false, reason: 'label-changed' };
+    if (typeof at === 'string' && store.decisions[id] && store.decisions[id].at !== at) return { ok: false, reason: 'tap-changed' };
+    if (typeof check === 'function' && store.decisions[id] && check(store.decisions[id]) !== true) return { ok: false, reason: 'slot-changed' };
     const had = Boolean(store.decisions[id]);
     delete store.decisions[id];
     delete store.offers[id];
