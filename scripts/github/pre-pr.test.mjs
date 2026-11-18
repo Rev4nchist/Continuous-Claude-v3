@@ -81,6 +81,9 @@ const REVIEW_MD = readFileSync(path.join(REPO_ROOT, 'REVIEW.md'), 'utf8');
 // Never read or write Dave's real paid ledger: every run here that could touch it gets a temp one.
 // Safety net: a run that forgets gateLogPath still writes to a temp file, never to Dave's real pre-pr-gates.jsonl.
 process.env.PRE_PR_GATE_LOG = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-gatelog-env-')), 'pre-pr-gates.jsonl');
+// Same net for the run lock: a spawned pre-pr.mjs (X1, R3) takes the lock and logs START to runs.jsonl. It must reach a temp store, never
+// the live ~/.claude/state/run-locks (seat finding 14:30 CST 11-18: X1 children left START rows there). Children inherit process.env.
+process.env.RUN_LOCK_DIR = mkdtempSync(path.join(os.tmpdir(), 'prepr-runlock-env-'));
 const tempLedger = () => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
 
 const HEAD = 'a'.repeat(40);
@@ -4365,6 +4368,39 @@ process.exit(3);
     await sleep(300);
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* a process still holds a file: the temp folder is cleaned by the system */ }
   }
+});
+
+// ---------- seat finding 14:30 CST: no test run of the check script may reach the live run-lock store ----------
+// How it fails: RL-ISO a test file that starts scripts/github/pre-pr.mjs as a process sets no RUN_LOCK_DIR, so the child writes lock files and
+// START rows into ~/.claude/state/run-locks (break: drop the RUN_LOCK_DIR line of a spawning file).
+test('RL-ISO: every test file that starts pre-pr.mjs as a process sends its run lock to a temp store', () => {
+  const testFiles = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) return e.name === 'node_modules' || e.name.startsWith('.') ? [] : testFiles(p);
+    return e.name.endsWith('.test.mjs') ? [p] : [];
+  });
+  // A spawn of the script: a spawn or exec call whose arguments name pre-pr.mjs, or a module text that imports it to run its handlers.
+  const SPAWNS = /(spawnSync|spawn|execFileSync|execFile)\([^;]*pre-pr\.mjs|installRunLockHandlers.*pre-pr\.mjs|PRE_PR\s*=\s*resolve\([^)]*pre-pr\.mjs/s;
+  const spawning = testFiles(path.join(REPO_ROOT, 'scripts')).filter((f) => SPAWNS.test(readFileSync(f, 'utf8')));
+  assert.ok(spawning.length >= 3, `found the spawning files (${spawning.map((f) => path.basename(f)).join(', ')})`);
+  const bare = spawning.filter((f) => !/RUN_LOCK_DIR/.test(readFileSync(f, 'utf8')));
+  assert.deepEqual(bare.map((f) => path.relative(REPO_ROOT, f)), [], 'these files start pre-pr.mjs with no temp RUN_LOCK_DIR');
+  assert.notEqual(path.resolve(process.env.RUN_LOCK_DIR), path.join(os.homedir(), '.claude', 'state', 'run-locks'), 'this file points the store at a temp folder');
+});
+
+// RL-ISO2 (behaviour): a spawned run that stops with exit 3 (as X1 does) writes its START row into this file's temp store. Break: drop the
+// process.env.RUN_LOCK_DIR line at the top of this file (the row then goes to the live store, and this temp store has none).
+test('RL-ISO2: a spawned exit-3 run writes its START row to the temp store of this file, not the live one', () => {
+  assert.ok(process.env.RUN_LOCK_DIR, 'the file sets RUN_LOCK_DIR');
+  const repo = makeRepo();
+  const body = path.join(repo.dir, '..', `body-iso-${Date.now()}.md`);
+  writeFileSync(body, 'Proof type: docs\n');
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--skip-cr'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+  assert.equal(r.status, 3, r.stderr);
+  const runs = path.join(process.env.RUN_LOCK_DIR, 'runs.jsonl');
+  assert.ok(existsSync(runs), 'the child wrote runs.jsonl in the temp store');
+  const rows = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.ok(rows.some((row) => row.event === 'start'), 'a START row is in the temp store');
 });
 
 // ---------- part 4 of the hooks build-inputs note (Coord hooks, taken into card prflow-prepr-speed) ----------
