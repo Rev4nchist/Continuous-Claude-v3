@@ -41,7 +41,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(HERE, 'fleetops', 'page.template.html');
 const SLOT = '__FLEETOPS_DATA__';
 const RETIRED = Object.freeze(['claude.ai/artifact/', 'board_url', 'no_end', '{h}']);
-const USAGE = 'usage: node fleetops-html.mjs <folder> --out <outdir> [--ids-root <root>] | --check <file> --stamp <exportedAt> [--ids-root <root>] | --lock-acquire <key> --session <sid8> [--dir <dir>] | --lock-release ok|failed --session <sid8> [--step <n>] [--dir <dir>]';
+const USAGE = 'usage: node fleetops-html.mjs <folder> --out <outdir> [--ids-root <root>] | --check <file> --stamp <exportedAt> [--ids-root <root>] | --lock-acquire <key> --session <sid8> [--force] [--dir <dir>] | --lock-release ok|failed --session <sid8> [--step <n>] [--dir <dir>]';
 
 /** Reads the 7 files of `dir`. Throws when one is missing or when they come from more than one export. */
 export function loadFiles(dir) {
@@ -285,13 +285,16 @@ export function checkText(text, stamp, ids) {
 /**
  * Files in the lane-dash state dir (LANE_DASH_STATE_DIR, else ~/.claude/state/lane-dash):
  *   publish.lock  {session, key, at}                  the lock; its holder is the one session that writes the page
- *   publish.json  {state: writing|failed, session, key, at, step?}   read by the Stop-gate hook (lane-dash-refresh.ts); no pid
+ *   publish.json  {state: writing|failed|ok, session, key, at, step?}   read by the Stop-gate hook (lane-dash-refresh.ts, failed only); no pid
  * Acquire is an exclusive create (flag wx). A lock over 20 minutes old counts as dead. The takeover reads the lock twice and renames
  * the STALE file to a name only this taker uses (publish.lock.taken.<session>): of two takers only one rename can win, the other gets ENOENT.
  * A taker that renamed a lock which is not the stale one it read (a fresh lock made after its reads) puts that lock back and exits 3.
- * Exit codes: 0 ok, 1 usage or an I/O error, 3 refused (another session holds the lock, or this session does not).
+ * One refresh an hour: after `--lock-release ok` publish.json stays with state ok. `--lock-acquire` exits 4 while that record is under 60 minutes
+ * old; `--force` skips only this check (the skill passes it only when Dave's own message asked for the refresh).
+ * Exit codes: 0 ok, 1 usage or an I/O error, 3 refused (another session holds the lock, or this session does not), 4 refused (last refresh under an hour ago).
  */
 export const LOCK_STALE_MS = 20 * 60 * 1000;
+export const REFRESH_EVERY_MS = 60 * 60 * 1000;
 export const LOCK_FILE = 'publish.lock';
 export const PUBLISH_FILE = 'publish.json';
 const SESSION_RE = /^[0-9a-f]{8}$/;
@@ -379,9 +382,31 @@ export function lockTake(dir, snap, who, hooks = {}) {
   return { code: 0, msg: `fleetops-html: lock taken over from a dead holder (${snap.holder}, over 20 minutes old); session ${who.session} writes now` };
 }
 
-/** Acquire: exclusive create; on EEXIST a live lock refuses, a stale one is taken over. Returns { code, msg }. */
-export function lockAcquire({ dir, key, session, now = Date.now() }, hooks = {}) {
+/** The time (ms) of the last finished refresh when publish.json says state ok and that was under one hour ago; else null (a bad or future time does not block). */
+function recentRefresh(dir, now) {
+  const raw = readText(join(dir, PUBLISH_FILE));
+  const rec = raw === null ? null : parseLock(raw);
+  if (rec?.state !== 'ok') return null;
+  const at = Date.parse(rec.at);
+  const age = now - at;
+  return Number.isNaN(at) || age < 0 || age >= REFRESH_EVERY_MS ? null : at;
+}
+
+/** "14:00 CST" in America/Chicago (CST or CDT by the date), 24-hour clock. */
+function clockChicago(ms) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(new Date(ms));
+  const p = (t) => parts.find((x) => x.type === t)?.value ?? '';
+  return `${p('hour')}:${p('minute')} ${p('timeZoneName')}`;
+}
+
+/**
+ * Acquire: exclusive create; on EEXIST a live lock refuses, a stale one is taken over. Returns { code, msg }.
+ * Dave's limit, at most one refresh an hour on this machine: an `ok` publish.json under one hour old refuses with code 4. `force` skips only that check.
+ */
+export function lockAcquire({ dir, key, session, now = Date.now(), force = false }, hooks = {}) {
   mkdirSync(dir, { recursive: true });
+  const last = force ? null : recentRefresh(dir, now);
+  if (last !== null) return { code: 4, msg: `fleetops-html: last refresh at ${clockChicago(last)}, under 1 hour ago` };
   const who = { key, session, now };
   for (let i = 0; i < 3; i += 1) {
     try { newLock(dir, who); writing(dir, who); return { code: 0, msg: `fleetops-html: lock acquired by ${session}` }; } catch (e) { if (e.code !== 'EEXIST') throw e; }
@@ -392,13 +417,16 @@ export function lockAcquire({ dir, key, session, now = Date.now() }, hooks = {})
   return refused('unknown');
 }
 
-/** Release: only the holder. `ok` removes publish.json and the lock; `failed` writes publish.json state failed (with the key and the step) and removes the lock. */
+/**
+ * Release: only the holder. `ok` writes publish.json state ok (the hour limit reads it; the hook ignores any state but failed) and removes the lock;
+ * `failed` writes publish.json state failed (with the key and the step) and removes the lock.
+ */
 export function lockRelease({ dir, session, outcome, step = null, now = Date.now() }) {
   const raw = readText(join(dir, LOCK_FILE));
   const lock = raw === null ? null : parseLock(raw);
   if (!lock || lock.session !== session) return { code: 3, msg: `fleetops-html: session ${session} does not hold the lock. Nothing changed.` };
   if (outcome === 'failed') writePublish(dir, session, { state: 'failed', session, key: lock.key, at: isoAt(now), ...(step ? { step } : {}) });
-  else rmSync(join(dir, PUBLISH_FILE), { force: true });
+  else writePublish(dir, session, { state: 'ok', session, key: lock.key, at: isoAt(now) });
   rmSync(join(dir, LOCK_FILE), { force: true });
   return { code: 0, msg: `fleetops-html: lock released (${outcome})` };
 }
@@ -406,7 +434,7 @@ export function lockRelease({ dir, session, outcome, step = null, now = Date.now
 const isLockArgv = (argv) => argv.some((a) => a === '--lock-acquire' || a === '--lock-release');
 
 function parseLockArgs(argv) {
-  const o = { acquire: null, release: null, session: null, step: null, dir: null };
+  const o = { acquire: null, release: null, session: null, step: null, dir: null, force: false };
   const value = (i, flag) => {
     const v = argv[i];
     if (v === undefined || v.startsWith('--')) throw usageError(`${flag} needs a value`);
@@ -419,6 +447,7 @@ function parseLockArgs(argv) {
     else if (a === '--session') o.session = value(++i, a);
     else if (a === '--step') o.step = value(++i, a);
     else if (a === '--dir') o.dir = value(++i, a);
+    else if (a === '--force') o.force = true;
     else throw usageError(`unknown argument ${a.startsWith('--') ? a : 'in a lock command'}`);
   }
   if (o.acquire !== null && o.release !== null) throw usageError('--lock-acquire and --lock-release do not go together');
@@ -427,6 +456,7 @@ function parseLockArgs(argv) {
     if (!LOCK_KEY_RE.test(o.acquire)) throw usageError('the key must be 1 to 64 characters of letters, digits and : . + _ -');
     if (o.step !== null) throw usageError('--step goes with --lock-release');
   } else {
+    if (o.force) throw usageError('--force goes with --lock-acquire');
     if (o.release !== 'ok' && o.release !== 'failed') throw usageError('--lock-release takes ok or failed');
     if (o.step !== null && (o.release !== 'failed' || !STEP_RE.test(o.step))) throw usageError('--step is a step number such as 7 or 7.3, with failed');
   }
@@ -439,7 +469,7 @@ function runLockCli(argv, { out, err, env, now }) {
     const o = parseLockArgs(argv);
     const dir = o.dir ?? laneDashDir(env);
     const r = o.acquire !== null
-      ? lockAcquire({ dir, key: o.acquire, session: o.session, now: now() })
+      ? lockAcquire({ dir, key: o.acquire, session: o.session, now: now(), force: o.force })
       : lockRelease({ dir, session: o.session, outcome: o.release, step: o.step, now: now() });
     (r.code === 0 ? out : err)(r.msg);
     return r.code;

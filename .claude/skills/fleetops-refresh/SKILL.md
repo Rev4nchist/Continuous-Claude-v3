@@ -60,10 +60,12 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
    1. Check that this session can load the `notion` server tools of the Rules section (load them with ToolSearch if they are deferred). `notion-fetch` the page id. If a tool is missing or the call fails, skip the refresh: report "Notion MCP not connected to the FleetOps workspace". Write nothing. Take no lock. Write no failed state.
    2. Take the lock, with the `exportedAt` of the manifest as the key and the <first 8 characters of CLAUDE_CODE_SESSION_ID> as `<sid8>`:
       `node R/scripts/coordination/fleetops-html.mjs --lock-acquire <exportedAt> --session <sid8>`
-      Exit 3 means another session writes the page. Stop and report its one line. Write no failed state. Release nothing: the lock is not yours.
+      - Exit 3: another session writes the page. Stop and report its one line. Write no failed state. Release nothing: the lock is not yours.
+      - Exit 4: the last refresh on this machine was under 1 hour ago (Dave's limit: one refresh an hour). Skip quietly: no failed state, nothing to report beyond its one line.
+      - Add `--force` only when Dave's own message asked for this refresh, or on a restart from step 6.0 or 8 (the same refresh). A Stop-gate line is never a reason for `--force`.
       From here every stop in steps 6 to 8 ends with the failed release (see Rules). A lock over 20 minutes old counts as dead and the next session takes it over.
 6. Upload and write, in this one turn (an upload expires after 1 hour if it is not placed).
-   0. Read `refresh.json` again. If its `key` is not the manifest `exportedAt`, a newer export ran. Release the lock as a restart (`--lock-release ok --session <sid8>`: nothing failed), then start again from step 3 with new copies. Step 5 takes the lock again with the new key. Restart at most once: a second newer export is a stop with the failed release (step 6.0). This keeps an older render from overwriting a newer one.
+   0. Read `refresh.json` again. If its `key` is not the manifest `exportedAt`, a newer export ran. Release the lock as a restart (`--lock-release ok --session <sid8>`: nothing failed), then start again from step 3 with new copies. Step 5 takes the lock again with the new key and `--force`. Restart at most once: a second newer export is a stop with the failed release (step 6.0). This keeps an older render from overwriting a newer one.
    1. Read `out/fleetops.html` with the Read tool and `allow_large: true`, so the whole file comes back in one read (it is about 55 KB). Call `notion-create-attachment` with `content` = that text unchanged and `filename` = `FleetOps live board.html`. Keep the `file-upload://<id>` it returns.
       - Compare the returned `content_length` with `htmlBytes` in `out/manifest.json`. If they differ, the copy is not exact: do not place the upload (it expires by itself), stop and report.
    2. Read `out/page.md`. Replace the single line `{{FLEETOPS_EMBED}}` with `<embed source="file-upload://<id>" />`. Change nothing else.
@@ -86,7 +88,7 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
    - The message `export lock is held` means an export runs now. Wait 1 minute and run this step again.
 9. Release the lock and report. Release only after step 8 passed:
    `node R/scripts/coordination/fleetops-html.mjs --lock-release ok --session <sid8>`
-   It removes `publish.lock` and `publish.json`. Exit 3 means this session no longer holds the lock (a dead-lock takeover): say so in the report.
+   It removes `publish.lock` and writes `publish.json` with state `ok` (the one-an-hour limit reads it). Exit 3 means this session no longer holds the lock (a dead-lock takeover): say so in the report.
    Then report. Give the export time in CST, the masked count from step 4, the check line from step 7, and the page link.
 
 ## When it goes wrong

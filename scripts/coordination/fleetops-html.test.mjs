@@ -655,11 +655,12 @@ describe('lock: acquire and release through the CLI', () => {
     assert.equal(existsSync(pubPath(d)), false);
   }));
 
-  it('L4. release ok by the holder removes both files, and the lock can be taken again (break: a file left)', () => withTmp((d) => {
+  it('L4. release ok by the holder removes the lock and leaves publish.json with state ok; a forced acquire takes the lock again (break: the lock left)', () => withTmp((d) => {
     assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
     assert.equal(lockCli(releaseArgs(d, SID_A, 'ok')).status, 0);
-    assert.deepEqual(readdirSync(d), []);
-    assert.equal(lockCli(acquireArgs(d, SID_B)).status, 0);
+    assert.deepEqual(readdirSync(d), ['publish.json']);
+    assert.equal(json(d, 'publish.json').state, 'ok');
+    assert.equal(lockCli([...acquireArgs(d, SID_B), '--force']).status, 0);
   }));
 
   it('L5. release failed keeps publish.json with state failed, the key and the step, and removes the lock (break: failed state lost)', () => withTmp((d) => {
@@ -773,5 +774,82 @@ describe('lock: the 20 minute rule and the takeover (injected clock)', () => {
     utimesSync(lockPath(d), old, old);
     assert.equal(take(d, SID_C, Date.now()).code, 0);
     assert.equal(json(d, 'publish.lock').session, SID_C);
+  }));
+});
+
+describe('lock: one refresh an hour (injected clock)', () => {
+  const acq = (d, sid, now, force = false) => H.lockAcquire({ dir: d, key: KEY, session: sid, now, force });
+  /** A finished refresh at T0: acquire, then release ok. */
+  const refreshed = (d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'ok', now: T0 }).code, 0);
+  };
+
+  it('H1. release ok leaves publish.json {state ok, session, key, at} and no lock (break: the file deleted, as before)', () => withTmp((d) => {
+    refreshed(d);
+    assert.equal(existsSync(lockPath(d)), false);
+    const pub = json(d, 'publish.json');
+    assert.deepEqual(Object.keys(pub).sort(), ['at', 'key', 'session', 'state']);
+    assert.deepEqual([pub.state, pub.session, pub.key, pub.at], ['ok', SID_A, KEY, new Date(T0).toISOString()]);
+  }));
+
+  it('H2. an acquire 59 minutes after an ok refresh exits 4 with one line that gives the time, and changes nothing (break: no hour check)', () => withTmp((d) => {
+    refreshed(d);
+    const before = readFileSync(pubPath(d), 'utf8');
+    const r = acq(d, SID_B, T0 + 59 * MIN);
+    assert.equal(r.code, 4);
+    assert.match(r.msg, /last refresh at 14:00 CST, under 1 hour ago/);
+    assert.ok(!r.msg.includes('\n'));
+    assert.equal(existsSync(lockPath(d)), false);
+    assert.equal(readFileSync(pubPath(d), 'utf8'), before);
+  }));
+
+  it('H3. 61 minutes after an ok refresh the acquire works; exactly 60 minutes works too (break: the limit or its direction)', () => withTmp((d) => {
+    refreshed(d);
+    assert.equal(acq(d, SID_B, T0 + 60 * MIN).code, 0);
+    assert.equal(json(d, 'publish.json').state, 'writing');
+    assert.equal(H.lockRelease({ dir: d, session: SID_B, outcome: 'ok', now: T0 + 60 * MIN }).code, 0);
+    assert.equal(acq(d, SID_C, T0 + 60 * MIN + 61 * MIN).code, 0);
+  }));
+
+  it('H4. force at 1 minute after an ok refresh works (break: force ignored)', () => withTmp((d) => {
+    refreshed(d);
+    assert.equal(acq(d, SID_B, T0 + 1 * MIN).code, 4);
+    assert.equal(acq(d, SID_B, T0 + 1 * MIN, true).code, 0);
+    assert.equal(json(d, 'publish.lock').session, SID_B);
+  }));
+
+  it('H5. a failed state does not block an acquire (break: any publish.json blocks)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'failed', step: '7', now: T0 }).code, 0);
+    assert.equal(acq(d, SID_B, T0 + 1 * MIN).code, 0);
+  }));
+
+  it('H6. force does not skip a live lock: a second writer still exits 3 (break: force skips the lock)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    assert.equal(acq(d, SID_B, T0 + 1 * MIN, true).code, 3);
+  }));
+
+  it('H7. an ok record with a bad or future time does not block (break: a corrupt record blocks for ever)', () => withTmp((d) => {
+    for (const at of ['not a date', new Date(T0 + 5 * 60 * MIN).toISOString()]) {
+      writeFileSync(pubPath(d), JSON.stringify({ state: 'ok', session: SID_A, key: KEY, at }));
+      assert.equal(acq(d, SID_B, T0).code, 0, at);
+      assert.equal(H.lockRelease({ dir: d, session: SID_B, outcome: 'failed', now: T0 }).code, 0);
+    }
+    writeFileSync(pubPath(d), '{broken');
+    assert.equal(acq(d, SID_B, T0).code, 0);
+  }));
+
+  it('H8. through the CLI: acquire right after an ok release exits 4 with one stderr line, --force exits 0, and --force with a release is a usage error', () => withTmp((d) => {
+    assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
+    assert.equal(lockCli(releaseArgs(d, SID_A, 'ok')).status, 0);
+    const r = lockCli(acquireArgs(d, SID_B));
+    assert.equal(r.status, 4, r.stderr);
+    assert.equal(r.stderr.trim().split('\n').length, 1);
+    assert.match(r.stderr, /last refresh at \d\d:\d\d C[SD]T, under 1 hour ago/);
+    assert.equal(lockCli([...acquireArgs(d, SID_B), '--force']).status, 0);
+    const bad = lockCli([...releaseArgs(d, SID_B, 'ok'), '--force']);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /usage/);
   }));
 });
