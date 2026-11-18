@@ -1038,11 +1038,13 @@ function decisionRead({ step, key, head }) {
   const d = readStore(decisionsPath()).decisions[idOf({ step, key, head })];
   return d && typeof d.label === "string" ? { label: d.label, at: d.at } : null;
 }
-function decisionUse({ step, key, head, label }) {
+function decisionUse({ step, key, head, label, at, check }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: "no-decision" };
   return update((store) => {
     const id = idOf({ step, key, head });
     if (typeof label === "string" && store.decisions[id] && store.decisions[id].label !== label) return { ok: false, reason: "label-changed" };
+    if (typeof at === "string" && store.decisions[id] && store.decisions[id].at !== at) return { ok: false, reason: "tap-changed" };
+    if (typeof check === "function" && store.decisions[id] && check(store.decisions[id]) !== true) return { ok: false, reason: "slot-changed" };
     const had = Boolean(store.decisions[id]);
     delete store.decisions[id];
     delete store.offers[id];

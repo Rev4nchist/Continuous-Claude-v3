@@ -119,7 +119,7 @@ function confirm(pathway, by, { paths, labels = [] }) {
   // The live config, kill switch as shipped: autoConfirm false. N4 also pins it TRUE, the worst case for a self-record.
   writeFileSync(cfgFile, JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: null, reviews_7d_manual_date: null }, checkpoint: { ...LIVE.checkpoint, autoConfirm: true } }));
   const args = [path.join(HERE, 'pr-checkpoint.mjs'), '--confirm', pathway, '--by', by, '--body', bodyFile, '--state-dir', state, '--facts', factsFile, '--config', cfgFile];
-  const r = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: dir, env: { ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir } });
+  const r = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: dir, env: { ...process.env, PR_CHECKPOINT_TEST: '1', CCV3_DECISIONS_FILE: path.join(dir, 'decisions.json'), GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir } });
   return { ...r, pathwayFile: path.join(state, 'pathway.json') };
 }
 
