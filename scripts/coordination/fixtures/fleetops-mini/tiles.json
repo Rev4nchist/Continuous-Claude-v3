@@ -1,0 +1,69 @@
+{
+ "sql": "fixture",
+ "exportedAt": "2026-11-17T17:30:05.000Z",
+ "rows": [
+  {
+   "id": "pile.growth",
+   "tile": 1,
+   "kind": "text",
+   "rank": null,
+   "value": 7777,
+   "text": "grew by 7777",
+   "tone": null
+  },
+  {
+   "id": "pile.trend.note",
+   "tile": 1,
+   "kind": "text",
+   "rank": null,
+   "value": 7777,
+   "text": "grew by 7777",
+   "tone": null
+  },
+  {
+   "id": "pile.history_note",
+   "tile": 1,
+   "kind": "text",
+   "rank": null,
+   "value": 7777,
+   "text": "grew by 7777",
+   "tone": null
+  },
+  {
+   "id": "proj.history_note",
+   "tile": 1,
+   "kind": "text",
+   "rank": null,
+   "value": 7777,
+   "text": "grew by 7777",
+   "tone": null
+  },
+  {
+   "id": "verdict.growth",
+   "tile": 1,
+   "kind": "text",
+   "rank": null,
+   "value": 7777,
+   "text": "grew by 7777",
+   "tone": null
+  },
+  {
+   "id": "page.stale.sentence",
+   "tile": 1,
+   "kind": "text",
+   "rank": null,
+   "value": 7777,
+   "text": "Stale after {h} hours.",
+   "tone": null
+  },
+  {
+   "id": "page.takeaway",
+   "tile": 1,
+   "kind": "text",
+   "rank": null,
+   "value": 7777,
+   "text": "The pile grew by 7777.",
+   "tone": null
+  }
+ ]
+}

@@ -1,0 +1,12 @@
+{
+ "sql": "fixture",
+ "exportedAt": "2026-11-17T17:30:05.000Z",
+ "rows": [
+  {
+   "key": "p0_cap",
+   "value": 5,
+   "label": "P0 cap",
+   "source": "fixture"
+  }
+ ]
+}

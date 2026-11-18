@@ -1,72 +1,85 @@
 ---
 name: fleetops-refresh
-description: Refreshes the data on Dave's FleetOps lane dashboard from the lane export. Use when Dave says "refresh FleetOps" or asks for a FleetOps refresh.
+description: Rewrites Dave's FleetOps Notion page (a designed HTML embed plus a short summary) from the lane export. Use when Dave says "refresh FleetOps" or asks for a FleetOps refresh.
 ---
 
 # FleetOps refresh
 
-FleetOps is Dave's lane dashboard: https://claude.ai/artifact/Vnf8urTCv7awKXwNT423F8. It is a Claude Dashboard artifact, registered in `.claude/artifacts.json` as `fleetops-dashboard`. A refresh changes only its 7 data files. It never changes the page. For a page change, read the Dashboard type's `SKILL.md` on that artifact first.
+FleetOps is Dave's lane dashboard. It is a Notion page:
+https://app.notion.com/p/41b76fd7ac828067959afa940d32dc54 (page id `41b76fd7ac828067959afa940d32dc54`).
+It is registered in `.claude/artifacts.json` as `fleetops-dashboard`. The old claude.ai Dashboard artifact is retired. Never write to it.
 
-The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It writes the 7 files to `~/.claude/state/lane-dash` and uploads nothing. This skill does the upload. The task also writes `flow.json` and `factory.json` for the Fleet app. They are not dashboard sources: never copy or upload them.
+The page has three parts, all rendered by one script from the same data:
+- a short native summary at the top (data age, one headline sentence, 4 numbers), readable on the phone with no tap;
+- `## 📊 FleetOps live board`: one self-contained HTML file shown as an embed (inline on desktop, a file card on the phone that opens full screen);
+- `## 📘 How to use and update`: the rules for Dave and for sessions.
 
-The task `CCv3-FleetOps-Auto`, when Dave enables it, runs the export every 30 minutes. It clears the pending flag when the data did not change. It uploads nothing.
+A refresh renders a new HTML file and a new page body, uploads the file, and replaces the whole page body. The page holds no child page and no database. A frame height that Dave dragged resets on each refresh.
+
+The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It writes the 7 files to `~/.claude/state/lane-dash` and uploads nothing. The task also writes `flow.json` and `factory.json` for the Fleet app. They are not page sources: never read them here. The task `CCv3-FleetOps-Auto`, when enabled, runs the export every 30 minutes and leaves the pending flag on when the data changed. It writes nothing to Notion.
+
+## Either account
+
+The page lives in Dave's Notion workspace, not in a claude.ai account. The `notion` MCP server of this machine reaches it from a session on either claude.ai account. It is set in user scope (`~/.claude.json`), not in `.claude/machine-config/mcp.json`. Use only its tools `notion-fetch`, `notion-create-attachment`, `notion-update-page` and `notion-get-file-download-urls`. Never use the claude.ai Notion connector: it belongs to one claude.ai account. If the `notion` server is missing in this session, stop and report it.
 
 ## Rules
 
-- Anyone who can open the dashboard can read the 7 files. They hold lane titles. Dave decided that.
 - Ask Dave with AskUserQuestion before step 2 (the export), unless Dave's own message asked for the refresh.
-- A refresh writes to a shared dashboard. Ask Dave with AskUserQuestion before step 4. Skip the question when Dave's own message asked for the refresh.
-- Never render, screenshot or browse the real dashboard. Read only its `check` and `runs` documents.
-- Never change `files/index.html` in a refresh.
-- Use only `Artifact`, `ArtifactData` and `node`. Put no credential anywhere.
+- The page leaves this machine. The renderer masks every listed id (`board-mask.mjs`), counts listed ids on the text a viewer sees, and refuses to write when one is left. Never upload or write text that the renderer did not print. Never edit the page by hand.
+- Lane titles, lane goals and holder names go on the page (Dave decided).
+- A refresh changes data only. A design change goes through the template in `scripts/coordination/fleetops/` and a pull request.
+- Never pass `allow_deleting_content: true`. If a write asks for it, stop and report: someone added a child page or database.
+- Use only `node` (run from your shell tool), the Read and Write tools, and the four `notion` server tools above. Put no credential anywhere.
 
 ## Steps
 
-1. Read `~/.claude/state/lane-dash/refresh.json`. If it is missing, treat the data as stale. A missing file means no export has run yet; go to step 2 after Dave's ask.
-   - `pending: true` means the files are newer than the last upload. Go to step 3. If Dave asked for a fresh export, go to step 2 instead.
-   - `pending: false` and `exported_at` under 1 hour old: tell Dave nothing is stale. Stop, unless Dave asked for a refresh.
-2. Export new files. Do this only when nothing is pending and the data is stale, or Dave asked for a fresh export.
-   `node C:/Users/dkhay/continuous-claude/scripts/coordination/export-dash-data.mjs`
+`R` means the primary checkout, `C:/Users/dkhay/continuous-claude`. Never run a worktree copy of the scripts.
+
+1. Read `~/.claude/state/lane-dash/refresh.json`. If it is missing, treat the data as stale and go to step 2 after Dave's ask.
+   - `pending: true`: the files are newer than the page. Go to step 3. If Dave asked for a fresh export, go to step 2 instead.
+   - `pending: false` and `exported_at` under 1 hour old: tell Dave the page is current. Stop, unless Dave asked for a refresh.
+   - `pending: false` and `exported_at` 1 hour old or more: go to step 2 after Dave's ask.
+2. Export new files.
+   `node R/scripts/coordination/export-dash-data.mjs`
    It needs Docker Postgres. On exit 1, stop and report the one-line message. Then read `refresh.json` again.
 3. Copy and check the files. Keep the `key` from `refresh.json`.
-   1. Copy `lanes tiles assignments projects targets meta snapshots` (each `<id>.json`) from `~/.claude/state/lane-dash` to a new folder in your scratchpad. A nightly run can replace the originals during your upload. Upload only the copies.
-   2. Check the copies. Pass your scratchpad folder as the argument. Each file must parse, have an `exportedAt` equal to `key`, and `tiles` must have rows. The command exits 1 when a check fails.
+   1. Copy `lanes tiles assignments projects targets meta snapshots` (each `<id>.json`) from `~/.claude/state/lane-dash` to a new folder in your scratchpad. Use only the copies.
+   2. Check the copies. Each file must parse, have an `exportedAt` equal to `key`, and `tiles` must have rows. The command exits 1 when a check fails.
       `node -e "const fs=require('fs'),p=process.argv[1],h=process.env.USERPROFILE;const key=JSON.parse(fs.readFileSync(h+'/.claude/state/lane-dash/refresh.json','utf8')).key;let bad=0;for(const i of ['lanes','tiles','assignments','projects','targets','meta','snapshots']){const d=JSON.parse(fs.readFileSync(p+'/'+i+'.json','utf8'));const ok=d.exportedAt===key&&(i!=='tiles'||(d.rows||[]).length>0);if(!ok)bad++;console.log(i,d.exportedAt,(d.rows||[]).length,ok?'ok':'BAD')}process.exit(bad?1:0)" <your scratchpad folder>`
    3. Stop if the command exits 1 or a file is missing. Then start again from step 1.
-4. Upload and switch the 7 sources.
-   1. `ArtifactData list` on collection `datasets`. Check the 7 ids exist and each `source.kind` is `file`. If one is missing, stop and report. Never write a document that does not exist. Keep each `version` and each old `source`, `updated`, `edit` and `schedule`. The old `source.url` is `/_blob/<assetId>`.
-   2. For each id, call `Artifact` with `url` = the dashboard url, `asset: true` and `file_path` = the scratchpad copy. Make one call per file. Keep each result `url` exactly as given.
-   3. Get the time: `node -p "new Date().toISOString()"`.
-   4. Send one `ArtifactData batch` with 7 `update` entries, each with its `if_version`. Each entry sets:
-      - `source`: `{kind: "file", url: <new url>, name: "<id>.json", format: "json"}`
-      - `updated`: `{at: <time>, by: "claude"}`
-      - `edit`: `{via: "claude", at: <time>}`
-      - `schedule`: `Exported nightly at 23:55 Central by CCv3-Lane-Snapshot. Uploaded on request by a Claude session.`
-      - `staleAfterHours`: `48`
-      A version conflict writes nothing. Read `refresh.json` again. If `key` changed, a newer export exists: start again from step 1. If it is the same, run `list` again and resend the whole batch.
-5. Check the dashboard. Read collection `data/users/me`, doc `runs`, then doc `check`.
-   - `runs` is the main signal. Fix a `failed` or `refused` dataset only from your own result.
-   - `check` can stay empty or unchanged after a data-only write. That is normal. Read it 5 times at most.
-   - On `failed` in `check`, fix only what the code confirms. Fix 2 times at most.
-   - Never say the page works from a missing document.
-   - If `runs` shows a failed or refused dataset, or `check` shows a failure you could not fix, roll back and stop. Do not go on to step 6.
-     1. `ArtifactData list` on `datasets`. For each id whose `source.url` is still the url you uploaded in step 4, send one `update` pinned with its current `version`. It restores the old `source`, `updated`, `edit` and `schedule` from step 4.1. Never touch a source someone else changed.
-     2. Delete the new uploads you made in step 4.
-     3. Leave the pending flag on. Report the failing ids.
-6. Clear the pending flag. Do this only when step 5 found no failure. Use the `key` from your last read of `refresh.json`.
-   First record the upload. The timed task uses it to see that the data did not change.
-   `node C:/Users/dkhay/continuous-claude/scripts/coordination/fleetops-auto-tick.mjs --record-upload <your scratchpad folder>`
-   - It reads the 7 copies you uploaded. It exits 1 and stores nothing when a copy has an `exportedAt` that is not the `key` of `refresh.json`. A newer export ran: start again from step 1.
-   Then clear the flag:
-   `node C:/Users/dkhay/continuous-claude/scripts/coordination/export-dash-data.mjs --clear-refresh <key>`
-   - A key mismatch means a newer export ran. Start again from step 1.
+4. Render.
+   `node R/scripts/coordination/fleetops-html.mjs <your scratchpad folder> --out <your scratchpad folder>/out`
+   - It writes `out/fleetops.html`, `out/page.md` and `out/manifest.json`, and prints one line. It sends nothing.
+   - Exit 1 means a missing or mixed file, an id list it cannot read, or a listed id left in the text a viewer sees. Nothing is written. Stop and report the line.
+   - Read `out/manifest.json`. Keep `exportedAt`.
+5. Preflight. `notion-fetch` the page id. If the call fails, stop and report "Notion MCP not connected to the FleetOps workspace". Write nothing.
+6. Upload and write, in this one turn (an upload expires after 1 hour if it is not placed).
+   0. Read `refresh.json` again. If its `key` is not the manifest `exportedAt`, a newer export ran: start again from step 3 with new copies. This keeps an older render from overwriting a newer one.
+   1. Read `out/fleetops.html` with the Read tool and `allow_large: true`, so the whole file comes back in one read (it is about 55 KB). Call `notion-create-attachment` with `content` = that text unchanged and `filename` = `FleetOps live board.html`. Keep the `file-upload://<id>` it returns.
+      - Compare the returned `content_length` with `htmlBytes` in `out/manifest.json`. If they differ, the copy is not exact: do not place the upload (it expires by itself), stop and report.
+   2. Read `out/page.md`. Replace the single line `{{FLEETOPS_EMBED}}` with `<embed source="file-upload://<id>" />`. Change nothing else.
+   3. Call `notion-update-page` with `command: "replace_content"`, `page_id` = the page id, `new_str` = that text, `allow_async: false`. Do not pass `allow_deleting_content`. A refusal that lists child pages or databases: stop and report the list. Do not retry.
+7. Read back.
+   1. `notion-fetch` the page id again. The result is JSON: take its `text` field as plain text (real line breaks and quotes, not `\n` and `\"`). Save the part between `<content>` and `</content>` (blank lines at its ends may stay) to `<your scratchpad folder>/out/readback.md` with the Write tool.
+   2. `node R/scripts/coordination/fleetops-html.mjs --check <your scratchpad folder>/out/readback.md --stamp <exportedAt>`
+      It prints `check: listed N, stamp yes|no, embeds M, h2 K` and exits 0 only when no listed id is in the decoded text, the stamp is present, the embed is there and both sections are there.
+   3. Check the uploaded file itself. Call `notion-get-file-download-urls` with the `notion-file-block://...` source of the embed from the read-back. The signed url carries a token and expires in about 5 minutes: never put it on a command line or in a message. Write it alone to `<your scratchpad folder>/out/upload-url.txt` with the Write tool, then run at once:
+      `node R/scripts/coordination/fleetops-html.mjs --verify-upload @<your scratchpad folder>/out/upload-url.txt --manifest <your scratchpad folder>/out/manifest.json`
+      The script reads the url from the file and deletes the file.
+      It prints `verify-upload: sha ok|MISMATCH, bytes N` and exits 0 only when the uploaded file is byte-identical to the rendered file. A MISMATCH means the copy into the upload was not exact: run steps 6 and 7 again once. A second MISMATCH: follow step 7.5.
+   4. Fail with a listed id above 0: this is a leak. Replace the page body at once with the single line `FleetOps is being rebuilt.` Tell Dave the page history in Notion still holds the leaked version and that he must remove it there. Leave the pending flag on. Stop.
+   5. Fail for another reason: leave the pending flag on and report what differed. Notion keeps the page history; Dave can restore an older version.
+8. Clear the pending flag. Only when step 7 passed. Use the `key` from your last read of `refresh.json`.
+   `node R/scripts/coordination/fleetops-auto-tick.mjs --record-upload <your scratchpad folder>`
+   - It exits 1 and stores nothing when a copy has an `exportedAt` that is not the `key` of `refresh.json`. A newer export ran while you wrote: the page may now hold older data than another session placed. Start again from step 3 with new copies (not step 1), so the newest export ends on the page.
+   `node R/scripts/coordination/export-dash-data.mjs --clear-refresh <key>`
+   - A key mismatch means a newer export ran. Start again from step 3 with new copies.
    - The message `export lock is held` means an export runs now. Wait 1 minute and run this step again.
-7. Delete the old uploads. Do this last, after step 5 passed. Use `Artifact` with `action: "delete"`, `url` = the dashboard url, and `path` = the old asset id (the part after `/_blob/`). Delete only the 7 ids you replaced.
-8. Report. Give the export time, the `tiles` row count, the 7 sources you switched, and what `runs` and `check` said. Say the page was not rendered.
+9. Report. Give the export time in CST, the masked count from step 4, the check line from step 7, and the page link.
 
 ## When it goes wrong
 
-- An upload or `ArtifactData` write is refused because you are not an editor: say so. Do not retry.
-- Some uploads worked and the batch failed for a reason other than a version conflict: the old sources still work. Delete the new uploads. Then report.
-- A delete failed after the batch worked: the sources point at the new files. Report the stray asset ids.
-- Docker is down in step 2: the old data stays on the dashboard. Report it.
+- Docker is down in step 2: the old data stays on the page. Report it.
+- The `notion` server is missing in this session: report it. Do not use another Notion connector.
+- The upload worked and the page write failed: the unplaced upload expires by itself in 1 hour. Report it.
+- The write worked and the read-back failed: follow step 7.4 or 7.5. Never clear the flag.
