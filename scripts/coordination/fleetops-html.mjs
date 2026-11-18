@@ -24,7 +24,8 @@
  *     backslashes and code spans removed).
  * maskListed cannot mask a string id such as "PRRC_x": the render REFUSES when one is left.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +41,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(HERE, 'fleetops', 'page.template.html');
 const SLOT = '__FLEETOPS_DATA__';
 const RETIRED = Object.freeze(['claude.ai/artifact/', 'board_url', 'no_end', '{h}']);
-const USAGE = 'usage: node fleetops-html.mjs <folder> --out <outdir> [--ids-root <root>] | --check <file> --stamp <exportedAt> [--ids-root <root>]';
+const USAGE = 'usage: node fleetops-html.mjs <folder> --out <outdir> [--ids-root <root>] | --check <file> --stamp <exportedAt> [--ids-root <root>] | --lock-acquire <key> --session <sid8> [--dir <dir>] | --lock-release ok|failed --session <sid8> [--step <n>] [--dir <dir>]';
 
 /** Reads the 7 files of `dir`. Throws when one is missing or when they come from more than one export. */
 export function loadFiles(dir) {
@@ -57,17 +58,25 @@ export function loadFiles(dir) {
 
 /* ---------- the page code that a node test can run ---------- */
 
+/**
+ * The template text with LF line ends. `core.autocrlf` gives a Windows checkout a CRLF template; the page must be the same bytes on every
+ * checkout, so the manifest `htmlBytes` and `sha256Html` equal an LF upload (R5).
+ */
+const readTemplate = (path) => readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');
+
 let coreCache = null;
-/** The pure functions of the page (the CORE block of the template), run in a vm. A test calls the real page code, not a copy. */
-export function pageCore() {
-  if (coreCache) return coreCache;
-  const tpl = readFileSync(TEMPLATE_PATH, 'utf8');
+/** The pure functions of the page (the CORE block of the template), run in a vm. A test calls the real page code, not a copy. `templatePath` is for a test; only the default is cached. */
+export function pageCore(templatePath = TEMPLATE_PATH) {
+  const isDefault = templatePath === TEMPLATE_PATH;
+  if (isDefault && coreCache) return coreCache;
+  const tpl = readTemplate(templatePath);
   const from = tpl.indexOf('/*CORE-START*/');
   const to = tpl.indexOf('/*CORE-END*/');
   if (from < 0 || to < from) throw new Error('the template has no CORE block');
   const names = ['clockState', 'clockText', 'leaseState', 'pileParts', 'pileSubtitle', 'axisTicks', 'cstHM', 'cstZone', 'plural'];
-  coreCache = vm.runInNewContext(`${tpl.slice(from, to)}\n({ ${names.join(', ')} })`, {});
-  return coreCache;
+  const core = vm.runInNewContext(`${tpl.slice(from, to)}\n({ ${names.join(', ')} })`, {});
+  if (isDefault) coreCache = core;
+  return core;
 }
 
 export const axisTicks = (count, width, minGap) => Array.from(pageCore().axisTicks(count, width, minGap));
@@ -117,8 +126,8 @@ const leftIn = (texts, ids) => Math.max(0, ...texts.map((t) => countListed(t, id
 /** JSON that is safe inside a script block: < > & and the two line separators are written as \uXXXX (still valid JSON). */
 const scriptJson = (json) => json.replace(/[<>&\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
-export function renderHtml(view, rawJson = JSON.stringify(view)) {
-  const parts = readFileSync(TEMPLATE_PATH, 'utf8').split(SLOT);
+export function renderHtml(view, rawJson = JSON.stringify(view), templatePath = TEMPLATE_PATH) {
+  const parts = readTemplate(templatePath).split(SLOT);
   if (parts.length !== 2) throw new Error('the template must hold exactly one data slot');
   return `${parts[0]}${scriptJson(rawJson)}${parts[1]}`;
 }
@@ -241,12 +250,12 @@ export function scanView(ev, ids) {
  * a listed id left in the display text, or an html over the size limit. `build` is injectable for a test (buildView with an empty list is the
  * unmasked case).
  */
-export function produce(files, ids, { build = buildView } = {}) {
+export function produce(files, ids, { build = buildView, template = TEMPLATE_PATH } = {}) {
   const view = embedView(build(files, ids));
   const bad = scanView(view, ids);
   if (bad) throw new Error(`${bad.msg} at ${bad.path}`);
   const rawJson = JSON.stringify(view);
-  const html = renderHtml(view, rawJson);
+  const html = renderHtml(view, rawJson, template);
   const page = renderPageMd(view);
   if (leftIn([rawJson, decodeDisplay(rawJson), html, decodeDisplay(html)], ids) > 0) throw new Error('a listed id is left in the display text of the html');
   if (leftIn([page, decodeDisplay(page)], ids) > 0) throw new Error('a listed id is left in the display text of page.md');
@@ -269,6 +278,175 @@ export function checkText(text, stamp, ids) {
   r.ok = r.listed === 0 && r.stamp && r.embeds >= 1 && r.h2 === 2;
   r.line = `check: listed ${r.listed}, stamp ${r.stamp ? 'yes' : 'no'}, embeds ${r.embeds}, h2 ${r.h2}`;
   return r;
+}
+
+/* ---------- the publication lock (one writer for the FleetOps page) ---------- */
+
+/**
+ * Files in the lane-dash state dir (LANE_DASH_STATE_DIR, else ~/.claude/state/lane-dash):
+ *   publish.lock  {session, key, at}                  the lock; its holder is the one session that writes the page
+ *   publish.json  {state: writing|failed, session, key, at, step?}   read by the Stop-gate hook (lane-dash-refresh.ts); no pid
+ * Acquire is an exclusive create (flag wx). A lock over 20 minutes old counts as dead. The takeover reads the lock twice and renames
+ * the STALE file to a name only this taker uses (publish.lock.taken.<session>): of two takers only one rename can win, the other gets ENOENT.
+ * A taker that renamed a lock which is not the stale one it read (a fresh lock made after its reads) puts that lock back and exits 3.
+ * Exit codes: 0 ok, 1 usage or an I/O error, 3 refused (another session holds the lock, or this session does not).
+ */
+export const LOCK_STALE_MS = 20 * 60 * 1000;
+export const LOCK_FILE = 'publish.lock';
+export const PUBLISH_FILE = 'publish.json';
+const SESSION_RE = /^[0-9a-f]{8}$/;
+const LOCK_KEY_RE = /^[A-Za-z0-9:.+_-]{1,64}$/;
+const STEP_RE = /^\d{1,2}(\.\d{1,2})?$/;
+
+export function laneDashDir(env = process.env) {
+  if (env.LANE_DASH_STATE_DIR) return env.LANE_DASH_STATE_DIR;
+  return join(env.HOME || env.USERPROFILE || homedir(), '.claude', 'state', 'lane-dash');
+}
+
+const readText = (p) => {
+  try { return readFileSync(p, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+};
+const parseLock = (raw) => {
+  try { const o = JSON.parse(raw); return o !== null && typeof o === 'object' && !Array.isArray(o) ? o : null; } catch { return null; }
+};
+/** The session of a lock text, for a message: eight hex characters or "unknown". Nothing else from the file is printed. */
+const holderOf = (raw) => { const s = parseLock(raw)?.session; return typeof s === 'string' && SESSION_RE.test(s) ? s : 'unknown'; };
+const isoAt = (now) => new Date(now).toISOString();
+const refused = (holder) => ({ code: 3, msg: `fleetops-html: another session writes the page (holder ${holder}). Stop and report. Write no failed state.` });
+
+/** Stale = more than 20 minutes old by `at`; a lock with no usable `at` (empty, half written, corrupt) is judged by its mtime. A future time is live. */
+function lockIsStale(raw, mtimeMs, now) {
+  const at = Date.parse(parseLock(raw)?.at);
+  return now - (Number.isNaN(at) ? mtimeMs : at) > LOCK_STALE_MS;
+}
+
+/** Atomic write of publish.json: a temp file, then a rename. */
+function writePublish(dir, session, record) {
+  const tmp = join(dir, `${PUBLISH_FILE}.${session}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(record)}\n`);
+    renameSync(tmp, join(dir, PUBLISH_FILE));
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
+/**
+ * The state of the lock: { state: 'free' } | { state: 'live', holder } | { state: 'stale', raw, holder }.
+ * A stale verdict needs two reads with equal text. `hooks.betweenReads` runs between them (a test changes the lock there).
+ */
+export function lockSnapshot(dir, now = Date.now(), hooks = {}) {
+  const file = join(dir, LOCK_FILE);
+  let raw1;
+  let mtime;
+  try { raw1 = readFileSync(file, 'utf8'); mtime = statSync(file).mtimeMs; } catch (e) { if (e.code === 'ENOENT') return { state: 'free' }; throw e; }
+  const holder = holderOf(raw1);
+  if (!lockIsStale(raw1, mtime, now)) return { state: 'live', holder };
+  if (hooks.betweenReads) hooks.betweenReads();
+  const raw2 = readText(file);
+  if (raw2 === null) return { state: 'free' };
+  return raw2 === raw1 ? { state: 'stale', raw: raw1, holder } : { state: 'live', holder: holderOf(raw2) };
+}
+
+const newLock = (dir, { key, session, now }) => writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ session, key, at: isoAt(now) }), { flag: 'wx' });
+const writing = (dir, { key, session, now }) => writePublish(dir, session, { state: 'writing', session, key, at: isoAt(now) });
+
+/**
+ * Takes over the stale lock of `snap`. `hooks.afterRename` runs right after the rename (a test forces an interleave there).
+ * ENOENT on the rename: another taker won. A taken file that differs from the stale read is a fresh lock of another session: it goes back.
+ */
+export function lockTake(dir, snap, who, hooks = {}) {
+  const file = join(dir, LOCK_FILE);
+  const taken = join(dir, `${LOCK_FILE}.taken.${who.session}`);
+  try { renameSync(file, taken); } catch (e) {
+    if (e.code === 'ENOENT') return { code: 3, msg: 'fleetops-html: another session took the stale lock first. Stop and report. Write no failed state.' };
+    throw e;
+  }
+  if (hooks.afterRename) hooks.afterRename();
+  if (readText(taken) !== snap.raw) {
+    try { linkSync(taken, file); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    rmSync(taken, { force: true });
+    return refused(holderOf(readText(file) ?? ''));
+  }
+  try { newLock(dir, who); } catch (e) {
+    rmSync(taken, { force: true });
+    if (e.code === 'EEXIST') return refused(holderOf(readText(file) ?? ''));
+    throw e;
+  }
+  rmSync(taken, { force: true });
+  writing(dir, who);
+  return { code: 0, msg: `fleetops-html: lock taken over from a dead holder (${snap.holder}, over 20 minutes old); session ${who.session} writes now` };
+}
+
+/** Acquire: exclusive create; on EEXIST a live lock refuses, a stale one is taken over. Returns { code, msg }. */
+export function lockAcquire({ dir, key, session, now = Date.now() }, hooks = {}) {
+  mkdirSync(dir, { recursive: true });
+  const who = { key, session, now };
+  for (let i = 0; i < 3; i += 1) {
+    try { newLock(dir, who); writing(dir, who); return { code: 0, msg: `fleetops-html: lock acquired by ${session}` }; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    const snap = lockSnapshot(dir, now, hooks);
+    if (snap.state === 'live') return refused(snap.holder);
+    if (snap.state === 'stale') return lockTake(dir, snap, who, hooks);
+  }
+  return refused('unknown');
+}
+
+/** Release: only the holder. `ok` removes publish.json and the lock; `failed` writes publish.json state failed (with the key and the step) and removes the lock. */
+export function lockRelease({ dir, session, outcome, step = null, now = Date.now() }) {
+  const raw = readText(join(dir, LOCK_FILE));
+  const lock = raw === null ? null : parseLock(raw);
+  if (!lock || lock.session !== session) return { code: 3, msg: `fleetops-html: session ${session} does not hold the lock. Nothing changed.` };
+  if (outcome === 'failed') writePublish(dir, session, { state: 'failed', session, key: lock.key, at: isoAt(now), ...(step ? { step } : {}) });
+  else rmSync(join(dir, PUBLISH_FILE), { force: true });
+  rmSync(join(dir, LOCK_FILE), { force: true });
+  return { code: 0, msg: `fleetops-html: lock released (${outcome})` };
+}
+
+const isLockArgv = (argv) => argv.some((a) => a === '--lock-acquire' || a === '--lock-release');
+
+function parseLockArgs(argv) {
+  const o = { acquire: null, release: null, session: null, step: null, dir: null };
+  const value = (i, flag) => {
+    const v = argv[i];
+    if (v === undefined || v.startsWith('--')) throw usageError(`${flag} needs a value`);
+    return v;
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--lock-acquire') o.acquire = value(++i, a);
+    else if (a === '--lock-release') o.release = value(++i, a);
+    else if (a === '--session') o.session = value(++i, a);
+    else if (a === '--step') o.step = value(++i, a);
+    else if (a === '--dir') o.dir = value(++i, a);
+    else throw usageError(`unknown argument ${a.startsWith('--') ? a : 'in a lock command'}`);
+  }
+  if (o.acquire !== null && o.release !== null) throw usageError('--lock-acquire and --lock-release do not go together');
+  if (o.session === null || !SESSION_RE.test(o.session)) throw usageError('--session must be 8 lowercase hex characters');
+  if (o.acquire !== null) {
+    if (!LOCK_KEY_RE.test(o.acquire)) throw usageError('the key must be 1 to 64 characters of letters, digits and : . + _ -');
+    if (o.step !== null) throw usageError('--step goes with --lock-release');
+  } else {
+    if (o.release !== 'ok' && o.release !== 'failed') throw usageError('--lock-release takes ok or failed');
+    if (o.step !== null && (o.release !== 'failed' || !STEP_RE.test(o.step))) throw usageError('--step is a step number such as 7 or 7.3, with failed');
+  }
+  return o;
+}
+
+/** The lock verbs. Exit 3 is a refusal, not an error: it prints one line and no "nothing written" suffix. */
+function runLockCli(argv, { out, err, env, now }) {
+  try {
+    const o = parseLockArgs(argv);
+    const dir = o.dir ?? laneDashDir(env);
+    const r = o.acquire !== null
+      ? lockAcquire({ dir, key: o.acquire, session: o.session, now: now() })
+      : lockRelease({ dir, session: o.session, outcome: o.release, step: o.step, now: now() });
+    (r.code === 0 ? out : err)(r.msg);
+    return r.code;
+  } catch (e) {
+    err(`fleetops-html: ${e.message}`);
+    return 1;
+  }
 }
 
 /* ---------- CLI ---------- */
@@ -324,10 +502,10 @@ function writeAtomic(outDir, contents) {
   }
 }
 
-function runRender(o, build, err) {
+function runRender(o, build, template, err) {
   if (existsSync(o.out)) for (const n of OUT_NAMES) rmSync(join(o.out, n), { force: true });
   const ids = readIdList(o.idsRoot);
-  const { view, html, page, masked } = produce(loadFiles(o.dir), ids, { build });
+  const { view, html, page, masked } = produce(loadFiles(o.dir), ids, { build, template });
   const manifest = { exportedAt: view.exportedAt, masked, htmlBytes: Buffer.byteLength(html), pageBytes: Buffer.byteLength(page), sha256Html: sha(html), sha256Page: sha(page) };
   writeAtomic(o.out, { 'fleetops.html': html, 'page.md': page, 'manifest.json': `${JSON.stringify(manifest, null, 2)}\n` });
   err(`fleetops-html: masked ${masked} listed id(s), html ${manifest.htmlBytes} bytes, page ${manifest.pageBytes} bytes, listed ids left 0`);
@@ -375,16 +553,18 @@ async function runVerify(o, out) {
 }
 
 const defaultDeps = (deps) => ({
-  build: buildView, out: (s) => process.stdout.write(`${s}\n`), err: (s) => process.stderr.write(`${s}\n`), ...deps,
+  build: buildView, template: TEMPLATE_PATH, env: process.env, now: () => Date.now(), out: (s) => process.stdout.write(`${s}\n`), err: (s) => process.stderr.write(`${s}\n`), ...deps,
 });
 
 /** The offline CLI (render and --check). `deps` is injectable for a test: build (the view builder), out (stdout line), err (stderr line). Returns the exit code. */
 export function main(argv, deps = {}) {
-  const { build, out, err } = defaultDeps(deps);
+  const d = defaultDeps(deps);
+  const { build, template, out, err } = d;
+  if (isLockArgv(argv)) return runLockCli(argv, d);
   try {
     const o = parseArgs(argv);
     if (o.verify) throw usageError('--verify-upload needs the async entry');
-    return o.check ? runCheck(o, out) : runRender(o, build, err);
+    return o.check ? runCheck(o, out) : runRender(o, build, template, err);
   } catch (e) {
     err(`fleetops-html: ${e.message}${e.usage || argv.includes('--check') ? '' : '; nothing written'}`);
     return 1;
@@ -394,6 +574,7 @@ export function main(argv, deps = {}) {
 /** The whole CLI, with the one networked mode (--verify-upload). The other modes go to main. */
 export async function mainAsync(argv, deps = {}) {
   const { out, err } = defaultDeps(deps);
+  if (isLockArgv(argv)) return main(argv, deps);
   let o;
   try { o = parseArgs(argv); } catch (e) { err(`fleetops-html: ${e.message}`); return 1; }
   if (!o.verify) return main(argv, deps);
