@@ -219,9 +219,9 @@ export const clip = (text: string, width: number): string => (width > 3 && text.
 
 // ---- the questions ----------------------------------------------------------------------------------------------------------------
 // Spike S2 (2026-11-04): a mod may only use $.ui.ask, which takes labels and no descriptions. So the cost sits in each label, the
-// recommendation is first with " (Recommended)", and a short overview sits in the question. Only an exact match of a label records.
+// recommendation carries " (Recommended)" (row 0 is always a $0 row), and a short overview sits in the question. Only an exact match of a label records.
 
-/** The marker the first label carries when it is the recommendation. */
+/** The marker the label of the recommended row carries. */
 export const RECOMMENDED = ' (Recommended)'
 /** A paid CodeRabbit round costs about this much per changed file (pr-review-loop.md "Billing facts"); path_filters are ignored, so it is "up to". */
 export const PAID_PER_FILE = 0.25
@@ -253,10 +253,13 @@ const textOrNull = (value: unknown): string | null => (typeof value === 'string'
 
 /** A free fact older than this is no longer a fact: the slot may have gone. */
 export const FREE_FACT_MAX_AGE_MS = 5 * 60_000
+/** A `checkedAt` this far after the clock is clock skew and still fresh. Further ahead it cannot be trusted. The engine has the same figure (FUTURE_SKEW_MS). */
+export const FUTURE_SKEW_MS = 60_000
 
 /**
  * The slot fact, read at `now` (ms; null reads the fact as printed). Keep as draft leaves the pending entry, so a bare /pathway can ask
- * again hours later from the stored fact. At `now`, a `free` fact with no readable `checkedAt` or one older than 5 minutes is unknown,
+ * again hours later from the stored fact. At `now`, a `free` fact with no readable `checkedAt`, one older than 5 minutes or one more than
+ * 1 minute after `now` (it fails closed) is unknown,
  * and so is a `wait` fact whose `nextSlotAt` has passed. A `wait` fact with no readable `nextSlotAt` has no time to pass, so it ages out
  * the same way a `free` fact does.
  */
@@ -266,8 +269,9 @@ export const slotOf = (raw: unknown, now: number | null = null): SlotFact => {
   const printed = cap.state === 'free' || cap.state === 'wait' ? cap.state : 'unknown'
   const checked = typeof cap.checkedAt === 'string' ? Date.parse(cap.checkedAt) : Number.NaN
   const next = typeof cap.nextSlotAt === 'string' ? Date.parse(cap.nextSlotAt) : Number.NaN
-  const staleFree = printed === 'free' && now !== null && !(now - checked <= FREE_FACT_MAX_AGE_MS)
-  const pastWait = printed === 'wait' && now !== null && (Number.isFinite(next) ? next <= now : !(now - checked <= FREE_FACT_MAX_AGE_MS))
+  const stale = now !== null && !(now - checked <= FREE_FACT_MAX_AGE_MS && checked - now <= FUTURE_SKEW_MS)
+  const staleFree = printed === 'free' && stale
+  const pastWait = printed === 'wait' && now !== null && (Number.isFinite(next) ? next <= now : stale)
   const state = staleFree || pastWait ? 'unknown' : printed
   return { state, nextSlotAt: textOrNull(cap.nextSlotAt), minutesToSlot: minutes, lastNoticeAt: textOrNull(cap.lastNoticeAt) }
 }
@@ -302,16 +306,39 @@ export const slotLine = (slot: SlotFact, now: number | null): string => {
   return `CodeRabbit slot: no free slot, ${minutes === null ? 'next time unknown' : `next in about ${minutes} min`}.`
 }
 
-/** The label of one open pathway. The CodeRabbit row follows the slot: free is $0, no free slot is paid, unknown keeps the "up to" price. */
+/** A Greptile pass costs this many credits (the engine has the same figure: GREPTILE_CREDITS in scripts/github/lib/checkpoint-ledger.mjs). */
+export const GREPTILE_CREDITS = 3
+
+/**
+ * The label of one open pathway. The CodeRabbit row follows the slot: free is $0, any other state is "may cost up to". The words are the engine's
+ * (labelOf in scripts/github/lib/checkpoint-ledger.mjs): both copies of the question must give one text, and a test compares them.
+ */
 const labelFor = (one: CheckpointOption, files: number, slot: SlotFact): string => {
   if (one.pathway === 'none' || one.pathway === 'wait') return `${nameOf(one.pathway)} ($0)`
-  const price = files > 0 || one.cost[0] + one.cost[1] > 0 ? upTo(files) : '$0'
+  const price = upTo(files)
   if (one.pathway === 'coderabbit' && slot.state === 'free') return 'CodeRabbit now (free slot, $0)'
-  if (one.pathway === 'coderabbit' && slot.state === 'wait') return `CodeRabbit now, paid (${price})`
-  return `${nameOf(one.pathway)} (${price})`
+  if (one.pathway === 'both') return `${nameOf('both')} (may cost ${price} + ${GREPTILE_CREDITS} credits)`
+  return `${nameOf(one.pathway)} (may cost ${price})`
 }
 
 const WAIT_OPTION: CheckpointOption = { pathway: 'wait', label: null, available: true, cost: [0, 0], reason: '' }
+
+/** A paid row spends money: Greptile always, CodeRabbit unless the slot is free. Its label carries the price. The tap records the pick; a paid run asks Dave again later. */
+const isPaidRow = (one: CheckpointOption, slot: SlotFact): boolean => one.pathway === 'both' || (one.pathway === 'coderabbit' && slot.state !== 'free')
+
+/**
+ * The rows of the question. Row 0 is Keep as draft, or "No review" when none is the recommendation: both cost $0. Then the free-slot CodeRabbit row,
+ * then the paid rows (the recommendation first), then "No review". A paid row is never row 0: a dialog that returns row 0 with no tap records nothing
+ * paid. The free-slot and the paid CodeRabbit row have different labels. The order depends on the result and on the clock (the slot fact ages), so a re-ask at the same time shows the same rows.
+ */
+const rowsOf = (buttons: CheckpointOption[], slot: SlotFact, recommendedFirst: boolean): CheckpointOption[] => {
+  const open = buttons.filter(one => one.pathway !== 'wait')
+  const crs = open.filter(one => one.pathway !== 'none')
+  const first = buttons[0]
+  const lead = recommendedFirst && first?.pathway === 'none' ? [first] : []
+  const rows = [...lead, WAIT_OPTION, ...crs.filter(one => !isPaidRow(one, slot)), ...crs.filter(one => isPaidRow(one, slot)), ...open.filter(one => one.pathway === 'none')]
+  return rows.filter((one, i) => rows.findIndex(other => other.pathway === one.pathway) === i)
+}
 
 /** Line 1 of the question: PR, band and file count. The band is the one the engine printed at auto-confirm. */
 const overview = (pr: number, result: CheckpointResult): string => {
@@ -339,23 +366,17 @@ const questionLines = (pr: number, result: CheckpointResultWithDrift, held: Chec
  * The checkpoint question, or null when there is nothing to choose: no recommendation (R0), or no open pathway. The question has 3 lines: the PR,
  * the recommendation with its reason, and the CodeRabbit slot (`now` is the clock in ms, for the minutes left). A second reason, a held pathway
  * and a warning each add a line below them: Dave must see them before he picks. The labels are 2 to 4:
- * the open pathways (at most 3), one "Keep as draft", and "No review, land on CI" last when the engine offers it and it is not the recommendation. When the recommendation is open it is first, with " (Recommended)".
- * Every pick is `--by dave`, and a paid pick asks a second question (needsPaidConfirm). When it is held, no label is marked.
+ * the open pathways, one "Keep as draft", and "No review, land on CI" last when the engine offers it (rowsOf gives the order). When the recommendation
+ * is open its row carries " (Recommended)". Row 0 is a $0 row (Keep as draft, or none when it is the recommendation). A paid row carries its price and is never row 0: the tap on it records the pick
+ * (there is no second question; a paid run asks Dave again later). Every pick is `--by dave`. When the recommendation is held, no label is marked.
  */
 export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, now: number | null = null): PathwayAsk | null => {
   const { buttons, held, recommendedFirst } = optionsInOrder(result)
   const open = buttons.filter(one => one.pathway !== 'wait')
   if (result.recommended === null || open.length === 0) return null
-  const keepFirst = recommendedFirst && buttons[0]?.pathway === 'wait'
-  // "No review, land on CI" is the last label at every band, unless it IS the recommendation (a LOW to ELEVATED PR, or a HIGH or CRITICAL PR that
-  // earns no CodeRabbit under the interim rule), and then it is first.
-  const noneIsRecommended = recommendedFirst && result.recommended === 'none'
-  const noReview = noneIsRecommended ? [] : open.filter(one => one.pathway === 'none')
-  const paid = open.filter(one => noneIsRecommended || one.pathway !== 'none').slice(0, 3 - noReview.length)
-  const ordered = keepFirst ? [WAIT_OPTION, ...paid, ...noReview] : [...paid, WAIT_OPTION, ...noReview]
   const slot = slotOf(result.capacity, now)
-  const choices: PathwayChoice[] = ordered.map((one, i) => ({
-    label: `${labelFor(one, result.size.files, slot)}${recommendedFirst && i === 0 ? RECOMMENDED : ''}`,
+  const choices: PathwayChoice[] = rowsOf(buttons, slot, recommendedFirst).map(one => ({
+    label: `${labelFor(one, result.size.files, slot)}${recommendedFirst && one.pathway === result.recommended ? RECOMMENDED : ''}`,
     pathway: one.pathway,
     by: 'dave',
   }))
@@ -413,8 +434,8 @@ export const slotDropArgv = (script: string, pr: number): string[] => ['node', s
 
 // M1: the engine's ledger block (the two-call protocol behind checkpoint.ledger). The engine writes the offer and reads the tap.
 export type LedgerAsk = { header: string; question: string; options: { label: string; description?: string }[] }
-export type LedgerBlock = { state: 'none' | 'ask' | 'confirm-paid' | 'record' | 'kept-draft' | 'stop'; ask: LedgerAsk | null; pathway: string | null; reasked: number; text: string }
-const LEDGER_STATES = ['none', 'ask', 'confirm-paid', 'record', 'kept-draft', 'stop']
+export type LedgerBlock = { state: 'none' | 'ask' | 'record' | 'kept-draft' | 'stop'; ask: LedgerAsk | null; pathway: string | null; reasked: number; text: string; note?: string | null }
+const LEDGER_STATES = ['none', 'ask', 'record', 'kept-draft', 'stop']
 
 const ledgerAskOf = (value: unknown): LedgerAsk | null => {
   if (!isObject(value) || typeof value.header !== 'string' || typeof value.question !== 'string' || !Array.isArray(value.options)) return null
@@ -431,13 +452,15 @@ export const ledgerOf = (value: unknown): LedgerBlock | null => {
     pathway: typeof value.pathway === 'string' ? value.pathway : null,
     reasked: typeof value.reasked === 'number' ? value.reasked : 0,
     text: typeof value.text === 'string' ? value.text : '',
+    note: typeof value.note === 'string' && value.note !== '' ? value.note : null,
   }
 }
 
 /** The tool text of call 1: the question for the model to ask, word for word. A re-ask says so. The model never records. */
 export const ledgerAskText = (ledger: LedgerBlock & { ask: LedgerAsk }): string =>
   [
-    'Ask Dave now with AskUserQuestion. Pass this question word for word and change nothing.',
+    ...(ledger.note ? [`Tell Dave first: ${ledger.note}`] : []),
+    'Ask Dave now with AskUserQuestion. Pass this question word for word and change nothing. Keep the options in the order given: the first option never spends money.',
     JSON.stringify(ledger.ask),
     ...(ledger.reasked > 0 ? [`Dave's last answer matched no option. This is re-ask ${ledger.reasked} of ${MAX_REASKS}.`] : []),
     'Then call pr_checkpoint again with the same pr and body. Never record, label or mark the PR ready yourself.',
@@ -472,7 +495,7 @@ export type AskSpec = { header: string; question: string; choices: AskChoice[] }
 export const askOrder = (_kind: CheckpointAsk['kind']): ['no', 'yes'] => ['no', 'yes']
 
 const askLabel = (kind: CheckpointAsk['kind'], answer: 'yes' | 'no', files: number | null): string => {
-  if (kind === 'greptile') return answer === 'yes' ? 'Yes, ask Greptile (3 credits)' : 'No, skip Greptile ($0)'
+  if (kind === 'greptile') return answer === 'yes' ? `Yes, ask Greptile (${GREPTILE_CREDITS} credits)` : 'No, skip Greptile ($0)'
   if (kind === 'opening') return answer === 'yes' ? `Yes, post the review (free slot $0, or ${upTo(files)})` : 'No, do not post ($0)'
   return answer === 'yes' ? `Yes, one more review (free slot $0, or ${upTo(files)})` : 'No, stay in budget ($0)'
 }
@@ -492,28 +515,10 @@ export const answerOfLabel = (spec: AskSpec, answer: unknown): 'yes' | 'no' | nu
 export const RETRY_LABELS = ['Retry', 'Leave as draft'] as const
 
 /**
- * True for every paid pick, the recommended row too: a pathway that is neither none nor wait. A mis-tap spends money (PRs 315 and 316), and
- * one dialog return once picked the recommended row with no tap at all (PR 349, M9), so a paid pick always asks a second time.
+ * A paid pathway: coderabbit or both. A typed paid word has no label with a price, so it raises the one question (Dave sees the price, his tap
+ * on the paid row is the yes). A mis-tap spent money once (PRs 315 and 316), which is why a paid row is never row 0.
  */
-export const needsPaidConfirm = (choice: PathwayChoice): boolean => choice.pathway !== 'none' && choice.pathway !== 'wait'
-
-/** The two labels of the paid confirm. The first is No, the free row, so a dialog that returns row 0 twice records nothing. Only the second records. */
-export const paidConfirmLabels = (choice: PathwayChoice): readonly [string, string] => [`No, keep the PR a draft${RECOMMENDED}`, `Yes, record ${choice.pathway}`]
-
-/** The paid confirm question. `choice.label` holds the pathway name and its cost. */
-export const paidConfirmQuestion = (pr: number, choice: PathwayChoice): string =>
-  `PR #${pr}: you picked ${choice.label.replace(RECOMMENDED, '')}. It can cost money. Record it? If you say No, nothing is recorded and the PR stays a draft.`
-
-/** The tool text when the paid confirm records nothing. `typed` is what Dave wrote under Other, shown to the model like `otherText`. */
-export const paidUnconfirmedText = (pr: number, pathway: string, how: 'no' | 'closed' | 'empty' | 'other', typed = ''): string => {
-  const said = {
-    no: `Dave answered No to ${pathway} for #${pr}`,
-    closed: `Dave closed the confirm for ${pathway} on #${pr}`,
-    empty: `No valid answer came back to the confirm for ${pathway} on #${pr}`,
-    other: `Dave wrote: ${clip(typed.replace(/\s+/g, ' '), 400)}`,
-  }[how]
-  return `${said}. Nothing recorded. The PR stays a draft. Call pr_checkpoint with pr ${pr} to ask again, only when Dave wants to.`
-}
+export const isPaidPathway = (pathway: string): boolean => pathway === 'coderabbit' || pathway === 'both'
 
 /** A watcher ask Dave closed three ways: the quiet time before it may come back, and how often it comes back at all. */
 export const ASK_DEFER_MS = 30 * 60_000

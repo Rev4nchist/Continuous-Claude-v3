@@ -456,13 +456,17 @@ const TAP_CLASSES = {
   'named guard hooks (source)': ['.claude/hooks/src/package-install-guard.ts', '.claude/hooks/src/agent-model-guard.ts', '.claude/hooks/src/pre-pr-gate.ts'],
   'named guard hooks (built dist)': ['.claude/hooks/dist/package-install-guard.mjs', '.claude/hooks/dist/pre-pr-gate.mjs'],
   'land step': [LAND_STEP, 'scripts/github/land-recheck.mjs', 'scripts/github/land-none-check.mjs', 'scripts/github/land-decision.mjs', 'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1'],
-  'hook registration': ['.claude/settings.json.template', 'scripts/settings/apply-registrations.mjs'],
+  'hook registration': ['.claude/settings.json.template', 'scripts/settings/apply-registrations.mjs', 'scripts/settings/remove-registrations.mjs'],
   'tap screen and paid review': ['.claude/plugins/ccv3-mods/hooks/pr-checkpoint/ask.ts', '.claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx', 'scripts/github/cr-paid.mjs'],
   // Dave 2026-11-17 ("All of both groups"): PR 642 critic and the prflow-review-pick aegis pass.
-  'settings render and machine overlay': ['scripts/settings/render-settings.mjs', 'machine/personal.json'],
-  'paid run path': ['scripts/github/cr-fix.mjs', 'scripts/github/slot-queue.mjs', '.claude/plugins/ccv3-mods/hooks/pr-loop/model.ts', '.claude/plugins/ccv3-mods/hooks/pr-loop/slot.ts'],
+  'settings render and machine overlay': ['scripts/settings/render-settings.mjs', 'machine/personal.json', 'scripts/settings/machine-profile.mjs'],
+  'paid run path': ['scripts/github/cr-fix.mjs', 'scripts/github/slot-queue.mjs', '.claude/plugins/ccv3-mods/hooks/pr-loop/model.ts', '.claude/plugins/ccv3-mods/hooks/pr-loop/slot.ts',
+    // Dave 2026-11-17 ("Tap list 2: All of them"): the queue rules and the pay, wait and drop question model
+    'scripts/github/slot-queue-model.mjs', '.claude/plugins/ccv3-mods/hooks/pr-loop/slot-model.ts'],
   'review bot config and reviewer agents': ['.coderabbit.yaml', '.claude/agents/aegis.md', '.claude/agents/critic.md', '.claude/agents/security-refuter.md',
-    '.claude/agents/aegis.json', '.claude/agents/security-refuter.json'],
+    '.claude/agents/aegis.json', '.claude/agents/security-refuter.json',
+    // Dave 2026-11-17 ("Tap list 2"): the second bot config and the reviewer files in config_files
+    '.greptile/config.json', '.claude/agents/principal-reviewer.md', 'REVIEW.md', '.claude/skills/security/SKILL.md', '.claude/rules-ondemand/pr-review-loop.md'],
   'decision gate and ledger': ['.claude/hooks/src/decision-gate.ts', '.claude/hooks/src/decision-ledger.ts', '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs', 'scripts/github/ship-ask.mjs'],
   'review router and its config': ['scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', 'scripts/github/pr-checkpoint.mjs'],
 };
@@ -498,8 +502,11 @@ test('B42: test files and near-miss paths of the trust classes do not force CRIT
     'scripts/github/local-review/prompt.mjs', 'scripts/github/local-review/verify.mjs', 'scripts/github/pre-pr.mjs',
     '.github/workflows/ccv3-checks.yml', 'scripts/github/land-decision.test.mjs', '.claude/plugins/ccv3-mods/tests/plain.test.ts',
     // near misses that pin the width of the plugin and agent globs (PR 642 delta critic)
-    '.claude/plugins/ccv3-mods/hooks/pr-loop/index.tsx', '.claude/plugins/a/b/hooks/pr-checkpoint/x.ts',
+    '.claude/plugins/ccv3-mods/hooks/pr-loop/index.ts', '.claude/plugins/a/b/hooks/pr-checkpoint/x.ts',
     '.claude/agents/scout.md', '.claude/agents/scout.json', 'machine/README.md', 'scripts/settings/apply-registrations.test.mjs',
+    // width pins for the overlay and settings globs, and the Tap list 2 entries (PR 646 critic items 4 and 5)
+    'machine/sub/x.json', 'scripts/settings/hook-parity.mjs', '.claude/rules-ondemand/pr-review-loop-core.md',
+    '.claude/skills/security/references/x.md', 'docs/REVIEW.md', '.claude/plugins/ccv3-mods/hooks/pr-loop/ask.ts',
   ];
   for (const f of notTrust) {
     const b = bandOf([f], LIVE);
