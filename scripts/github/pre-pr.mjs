@@ -2044,16 +2044,36 @@ export async function takeRunLock({ bodyPath, wait = false, factsOf, lock = LIVE
   const facts = factsOf();
   say(`PRE-PR START pid ${pid} head ${facts.head ?? 'none'} ${facts.heavy ? 'heavy' : 'light'} free ${r.freeGB} load ${r.loadPct} mode ${r.mode}`);
   lock.logRun({ event: 'start', pid, head: facts.head, heavy: facts.heavy, free: r.freeGB, load: r.loadPct, mode: r.mode });
+  if (lock === LIVE_LOCK) runLog.started = { pid, head: facts.head ?? null, at: Date.now() }; // a test's fake lock leaves the process state alone
   return { file: r.file, onPhase: (phase) => lock.setPhase({ file: r.file, pid, phase }) };
 }
 
+/** The START/END state of this process's row pair: started ({ pid, head, at }) once START is logged, ended once END is logged. */
+export const newRunLogState = () => ({ started: null, ended: false });
+const runLog = newRunLogState();
+
 /** The END line and its row in runs.jsonl: result, the first failing step and the wall time in minutes (one decimal), so the seat reads one file. */
-export function reportRunEnd({ pid, head, run, startedAt, now = Date.now(), lock = LIVE_LOCK, say = console.error }) {
+export function reportRunEnd({ pid, head, run, startedAt, now = Date.now(), lock = LIVE_LOCK, say = console.error, state = runLog }) {
   const failing = run.results.find((x) => x.status === 'FAIL')?.step ?? null;
   const result = run.ok ? 'PASS' : 'FAIL';
   const minutes = Number(((now - startedAt) / MIN).toFixed(1));
+  state.ended = true;
   say(`PRE-PR END pid ${pid} head ${head ?? 'none'} ${result} ${failing ?? '-'} ${minutes.toFixed(1)}`);
   try { lock.logRun({ event: 'end', pid, head: head ?? null, result, failing, minutes }); } catch { /* a log problem never stops the run */ }
+}
+
+/**
+ * At exit: the END row of a run that logged START and no END (an error exit 3, a signal stop 130 or 143, any other process.exit). Result ERROR
+ * with the exit code. Synchronous (an 'exit' handler waits for no promise) and never throws. Returns true when it wrote the row.
+ */
+export function endRowAtExit(code, { state = runLog, lock = LIVE_LOCK, now = Date.now() } = {}) {
+  try {
+    if (!state.started || state.ended) return false;
+    state.ended = true;
+    const { pid, head, at } = state.started;
+    lock.logRun({ event: 'end', pid, head: head ?? null, result: 'ERROR', failing: null, exitCode: code, minutes: Number(((now - at) / MIN).toFixed(1)) });
+    return true;
+  } catch { return false; }
 }
 
 /**
@@ -2086,8 +2106,9 @@ export function killActiveCr(killer = (c) => killTree(c.pid)) {
  */
 export function installRunLockHandlers() {
   // An error exit, or any exit with a review alive, must stop the review first: a review left alone costs a slot and its output is lost.
-  process.on('exit', () => {
+  process.on('exit', (code) => {
     try { killActiveCr(); } catch { /* the child may be gone already */ }
+    endRowAtExit(code); // START with no END (exit 3, a signal): one ERROR row, so the seat's END check never reads an open run
     try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ }
   });
   for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {

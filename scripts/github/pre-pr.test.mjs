@@ -4401,6 +4401,36 @@ test('RL-ISO2: a spawned exit-3 run writes its START row to the temp store of th
   assert.ok(existsSync(runs), 'the child wrote runs.jsonl in the temp store');
   const rows = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   assert.ok(rows.some((row) => row.event === 'start'), 'a START row is in the temp store');
+  // Seat ruling 14:44 (e): the exit-3 run also has exactly one END row, result ERROR with the exit code. Break: drop the END write of the exit
+  // handler (endRowAtExit), and the run leaves a START row with no END row.
+  const childPid = rows.filter((row) => row.event === 'start').at(-1).pid; // the store is shared by this file: X1 may have written rows before
+  const mine = rows.filter((row) => row.pid === childPid);
+  assert.equal(mine.filter((row) => row.event === 'start').length, 1, 'one START row');
+  const ends = mine.filter((row) => row.event === 'end');
+  assert.equal(ends.length, 1, 'one END row for the exit-3 run');
+  assert.equal(ends[0].result, 'ERROR');
+  assert.equal(ends[0].exitCode, 3);
+});
+
+// Seat ruling 14:44 (a)-(d): the exit handler writes END only when START was logged and END was not; it never throws; a normal end and a
+// signal stop give one END row each. Breaks: write END with no START; write a second END after reportRunEnd; let a log error throw.
+test('RL-END: endRowAtExit writes one ERROR row only after START and before any END, and never throws', () => {
+  const rows = [];
+  const lock = { logRun: (row) => rows.push(row) };
+  const st = PRE.newRunLogState();
+  assert.equal(PRE.endRowAtExit(3, { state: st, lock }), false, 'no START: no END row');
+  st.started = { pid: 41, head: 'abcd1234', at: 0 };
+  assert.equal(PRE.endRowAtExit(130, { state: st, lock, now: 6 * 60_000 }), true, 'a signal stop (exit 130) after START writes END');
+  assert.deepEqual(rows, [{ event: 'end', pid: 41, head: 'abcd1234', result: 'ERROR', failing: null, exitCode: 130, minutes: 6 }]);
+  assert.equal(PRE.endRowAtExit(130, { state: st, lock }), false, 'a second call writes no second row');
+  const st2 = PRE.newRunLogState();
+  st2.started = { pid: 42, head: null, at: 0 };
+  PRE.reportRunEnd({ pid: 42, head: null, run: { ok: true, results: [] }, startedAt: 0, now: 60_000, lock, say: () => {}, state: st2 });
+  assert.equal(PRE.endRowAtExit(0, { state: st2, lock }), false, 'after a normal END the exit handler writes nothing');
+  assert.equal(rows.filter((r) => r.pid === 42 && r.event === 'end').length, 1, 'a normal run has exactly one END row');
+  const st3 = PRE.newRunLogState();
+  st3.started = { pid: 43, head: null, at: 0 };
+  assert.doesNotThrow(() => PRE.endRowAtExit(1, { state: st3, lock: { logRun: () => { throw new Error('disk'); } } }), 'a log error never throws');
 });
 
 // ---------- part 4 of the hooks build-inputs note (Coord hooks, taken into card prflow-prepr-speed) ----------
