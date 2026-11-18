@@ -4366,3 +4366,37 @@ process.exit(3);
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* a process still holds a file: the temp folder is cleaned by the system */ }
   }
 });
+
+// ---------- part 4 of the hooks build-inputs note (Coord hooks, taken into card prflow-prepr-speed) ----------
+// A file outside .claude/hooks that a hook bundle imports is listed in `external` of the committed dist/.build-inputs.json. A change set
+// with only such a file must still run the hooks gates (the build and its dist diff), or a stale dist passes pre-pr and fails in CI.
+// How it fails: BI-F7a the hooks surface matches by its globs only (no external read); BI-F7b a manifest with no `external`, or one that
+// does not parse, adds a match or throws.
+const BI_LIB = 'scripts/github/lib/answer-paths.mjs';
+const writeManifest = (manifest) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'prepr-bi-'));
+  mkdirSync(path.join(root, '.claude', 'hooks', 'dist'), { recursive: true });
+  if (manifest !== undefined) writeFileSync(path.join(root, '.claude', 'hooks', 'dist', '.build-inputs.json'), manifest);
+  return root;
+};
+
+test('BI-F7a: a change set with only an external input of the hooks build selects the hooks gates', () => {
+  const root = writeManifest(JSON.stringify({ version: 1, inputs: {}, external: { [BI_LIB]: 'a'.repeat(64) } }));
+  const externals = PRE.buildInputExternals(root);
+  assert.deepEqual(externals, [BI_LIB]);
+  const ids = PRE.gatesFor([BI_LIB], externals).map((g) => g.id);
+  assert.ok(ids.includes('hooks-build'), `hooks-build runs (got ${ids.join(', ')})`);
+  assert.ok(ids.includes('hooks-vitest'), 'hooks-vitest runs');
+  assert.equal(PRE.isHeavyRun([BI_LIB], externals), true, 'the run is heavy');
+  assert.ok(!PRE.gatesFor([BI_LIB]).some((g) => g.id === 'hooks-build'), 'control: without the list, the globs alone do not select it');
+});
+
+test('BI-F7b: no manifest, no external field, a bad external or bad JSON add nothing and never throw', () => {
+  for (const m of [undefined, JSON.stringify({ version: 1, inputs: {} }), JSON.stringify({ version: 1, external: ['x.mjs'] }), JSON.stringify({ version: 1, external: null }), '{not json']) {
+    const externals = PRE.buildInputExternals(writeManifest(m));
+    assert.deepEqual(externals, [], `manifest ${String(m).slice(0, 30)}: no externals`);
+    assert.ok(!PRE.gatesFor([BI_LIB], externals).some((g) => g.id === 'hooks-build'), 'no hooks gate');
+  }
+  const back = PRE.buildInputExternals(writeManifest(JSON.stringify({ version: 1, external: { 'a\\b.mjs': 'x' } })));
+  assert.deepEqual(back, ['a/b.mjs'], 'a backslash key is read as a posix path');
+});

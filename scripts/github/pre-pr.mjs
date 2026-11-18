@@ -413,10 +413,24 @@ function resolveGate(gate, paths) {
 }
 
 /**
+ * The repo paths outside .claude/hooks that a hook bundle imports: the keys of `external` in the committed
+ * .claude/hooks/dist/.build-inputs.json under root (part 4 of the hooks build-inputs note). No file, bad JSON, or no `external` object: [].
+ * Never throws: the field arrives with a later hooks PR, and a run must pass before and after it.
+ */
+export function buildInputExternals(root) {
+  try {
+    const m = JSON.parse(readFileSync(path.join(root, '.claude', 'hooks', 'dist', '.build-inputs.json'), 'utf8'));
+    const ext = m?.external;
+    return ext && typeof ext === 'object' && !Array.isArray(ext) ? Object.keys(ext).map(norm) : [];
+  } catch { return []; }
+}
+
+/**
  * The gates a change set needs: the touched surfaces' gates once each, then the always gates. The cheap gates (`cheap: true`)
  * come first, each group in table order, so a FAIL of a static check shows before the minutes-long gates start.
+ * `externals` (buildInputExternals) adds the hooks surface for a changed file that a hook bundle imports, so its dist is checked.
  */
-export function gatesFor(changed) {
+export function gatesFor(changed, externals = []) {
   const paths = changed.map(norm);
   const out = [];
   const add = (gate) => {
@@ -424,7 +438,9 @@ export function gatesFor(changed) {
     const resolved = resolveGate(gate, paths);
     if (resolved) out.push(resolved);
   };
-  for (const s of SURFACES) if (touches(s, paths)) (s.gates ?? []).forEach(add);
+  const ext = new Set(Array.isArray(externals) ? externals.map(norm) : []); // older callers pass a root string here: it adds nothing
+  const bundled = paths.some((p) => ext.has(p));
+  for (const s of SURFACES) if (touches(s, paths) || (s.id === 'hooks' && bundled)) (s.gates ?? []).forEach(add);
   ALWAYS_GATES.forEach(add);
   return [...out.filter((g) => g.cheap), ...out.filter((g) => !g.cheap)];
 }
@@ -1802,7 +1818,7 @@ export function logCliMissing(entry, env = process.env) {
 }
 
 /** True when this change set runs the hooks-vitest gate: the heavy part of a run (the run lock counts it apart). */
-export const isHeavyRun = (paths) => gatesFor(paths).some((g) => g.id === 'hooks-vitest');
+export const isHeavyRun = (paths, externals = []) => gatesFor(paths, externals).some((g) => g.id === 'hooks-vitest');
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -1882,7 +1898,7 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   const stopCause = () => (keepGoing ? undefined : results.find((r) => r.status === 'FAIL' && r !== settledByGates));
   // The env step (after git:clean, before the gates): each gate that will run must find its packages. A missing one is ONE FAIL
   // line that names the package, the folders tried and the fix, and that gate does not run. A clean primary or CI adds no line.
-  const envRes = envCheck({ root, gates: gatesFor(changes.paths), changed: changes.paths });
+  const envRes = envCheck({ root, gates: gatesFor(changes.paths, buildInputExternals(root)), changed: changes.paths });
   if (envRes.fail) results.push(result('env', 'FAIL', envRes.fail, envRes.others));
   if (envRes.note) results.push(result('env', 'NOTE', envRes.note));
   const crArgs = () => ({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseCommit}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseCommit, crStore });
@@ -1992,7 +2008,7 @@ export function runFacts(root, base) {
   const head = headRead.status === 0 && /^[0-9a-f]{8,40}$/.test(headRead.stdout.trim()) ? headRead.stdout.trim() : null;
   const baseCommit = head ? resolveBaseCommit(git, base) : '';
   const changed = baseCommit ? changedFiles(git, base, baseCommit) : null;
-  return { head, heavy: changed ? isHeavyRun(changed.paths) : true };
+  return { head, heavy: changed ? isHeavyRun(changed.paths, buildInputExternals(root)) : true };
 }
 
 /**
