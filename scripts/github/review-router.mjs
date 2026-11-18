@@ -94,8 +94,9 @@ const LAND_STEP = 'scripts/github/' + ['land', 'pr'].join('-') + '.ps1';
  *    context.mjs stay on matrix.control_plane only, so a prompt-tuning PR is not CRITICAL. lib/** also holds the decision store.
  *  - tap: forces no band. These files are meant to keep Dave's tap at every risk band (D1): the named guard hooks (Dave 2026-11-17:
  *    only the named guards, not every hook) with the built dist that runs, the decision gate and ledger, the land step and the scripts
- *    it runs, hook registration, the review router, its config, READY, the review-pick record and its question screen, paid review
- *    spend. They do not force CRITICAL: CRITICAL plus a trust file earns a paid CodeRabbit review (pr-checkpoint.mjs crTrigger), and
+ *    it runs, hook registration and its removal, the review router, its config, READY, the review-pick record and its question screen,
+ *    paid review spend, the settings render with its machine overlay and overlay chooser, the paid run path with its queue rules and
+ *    pay question model, the review bot configs (CodeRabbit, Greptile) and the reviewer agents and files. They do not force CRITICAL: CRITICAL plus a trust file earns a paid CodeRabbit review (pr-checkpoint.mjs crTrigger), and
  *    Dave's 2026-11-04 rule keeps CodeRabbit scarce (seat ruling 2026-11-17, option A).
  *  bandOf reports both parts in tapFiles. NOT IN FORCE YET: no code reads tapFiles; the prflow cards will. Until then the tap part
  *  changes nothing. checkpoint.critical stays the aegis + critic floor. */
@@ -125,6 +126,11 @@ export const TRUST_BOUNDARY = Object.freeze({
     '.coderabbit.yaml', '.claude/agents/aegis.md', '.claude/agents/critic.md', '.claude/agents/security-refuter.md',
     // the agent .json mirrors also carry the model (every-surface checklist, row Agents); critic has no tracked mirror
     '.claude/agents/aegis.json', '.claude/agents/security-refuter.json',
+    // Dave 2026-11-17 ("Tap list 2: All of them"; PR 646 aegis and critic): the overlay chooser, the registration remover, the queue
+    // rules and the pay question model, the second bot config and the reviewer files in config_files. pre-pr.mjs stays off (Dave).
+    'scripts/settings/machine-profile.mjs', 'scripts/settings/remove-registrations.mjs',
+    'scripts/github/slot-queue-model.mjs', '.claude/plugins/*/hooks/pr-loop/slot-model.ts',
+    '.greptile/**', '.claude/agents/principal-reviewer.md', 'REVIEW.md', '.claude/skills/security/SKILL.md', '.claude/rules-ondemand/pr-review-loop.md',
   ]),
 });
 /** The engine part: the files that force CRITICAL. The name stays for its importers. */
