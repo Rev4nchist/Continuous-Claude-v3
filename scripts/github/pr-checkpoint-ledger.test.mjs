@@ -361,6 +361,7 @@ test('LD21: free-slot and paid CodeRabbit rows never share a label; the free-slo
 //   call 2 records a tap on a label that is no row of the question as it stands now (the slot went)                               -> LD23, LD24
 //   the stale tap is not used up, or the re-ask is counted as a miss, or --confirm accepts it                                    -> LD23, LD24
 const FRESH_FREE = { state: 'free', checkedAt: iso(NOW_MS - 60_000) };
+const SLOT_NOTE = 'The CodeRabbit slot changed. Your tap was not recorded.';
 const resultFor = (capacity, recommended) => ({
   recommended, why: ['Critical file x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity,
   options: ['none', 'coderabbit', 'both', 'wait'].map((pathway) => ({ pathway, available: true, reason: `${pathway} reason` })),
@@ -375,6 +376,8 @@ test('LD22: recommendation x slot fact: the rows and their order follow the fact
     ['free, checked 10 min ago', { state: 'free', checkedAt: iso(NOW_MS - 600_000) }, paid],
     ['free, no checkedAt', { state: 'free' }, paid],
     ['free, checkedAt unreadable', { state: 'free', checkedAt: 'soon' }, paid],
+    ['free, checked 30 s ahead (clock skew)', { state: 'free', checkedAt: iso(NOW_MS + 30_000) }, free],
+    ['free, checked 2 min ahead', { state: 'free', checkedAt: iso(NOW_MS + 120_000) }, paid],
     ['wait, next slot passed', { state: 'wait', checkedAt: iso(NOW_MS - 600_000), nextSlotAt: iso(NOW_MS - 60_000) }, paid],
     ['wait, next slot ahead', { state: 'wait', checkedAt: iso(NOW_MS - 60_000), nextSlotAt: iso(NOW_MS + 600_000) }, paid],
     ['unknown', { state: 'unknown' }, paid],
@@ -401,6 +404,11 @@ test('LD22b: slotStateOf mirrors the mod rule: free ages out after 5 minutes, a 
   assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS - 900_000), nextSlotAt: iso(NOW_MS) }), 'unknown', 'a slot time equal to now has passed');
   assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS - 60_000) }), 'wait', 'no slot time, fresh');
   assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS - 600_000) }), 'unknown', 'no slot time, old');
+  // A checkedAt in the future is clock skew up to 1 minute; beyond that the fact cannot be trusted and fails closed (unknown, so paid).
+  assert.equal(at({ state: 'free', checkedAt: iso(NOW_MS + 60_000) }), 'free', '1 minute ahead is skew');
+  assert.equal(at({ state: 'free', checkedAt: iso(NOW_MS + 60_001) }), 'unknown', 'more than 1 minute ahead is stale');
+  assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS + 120_000) }), 'unknown', 'a wait with no slot time and a far-future checkedAt');
+  assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS + 120_000), nextSlotAt: iso(NOW_MS + 600_000) }), 'wait', 'a wait with a slot time ahead does not read checkedAt');
   assert.equal(at({ state: 'maybe' }), 'unknown');
   assert.equal(at(undefined), 'unknown');
   assert.equal(L.slotStateOf({ state: 'free' }, null), 'free', 'a null clock reads the fact as printed, as the mod does');
@@ -421,6 +429,9 @@ test('LD23: call 2 after the slot went: the tap on the free-slot row is used up,
   assert.ok(!existsSync(t.pathwayFile));
   const second = t.call().ledger;
   assert.deepEqual([second.state, second.reasked], ['ask', 0], 'asked again, and the re-ask is no miss');
+  assert.equal(second.note, SLOT_NOTE, 'the re-ask says why');
+  assert.ok(second.text.includes(SLOT_NOTE), 'the text field carries the note');
+  assert.ok(!('note' in first) && !first.text.includes(SLOT_NOTE), 'a normal first ask has no such line');
   assert.deepEqual(second.ask.options.map((o) => o.label), ['Keep as draft ($0)', paid, 'No review, land on CI ($0)']);
   assert.equal(D.decisionRead(review()), null, 'the stale tap is used up');
   assert.equal(D.offerRead(review()).open, true);
@@ -457,6 +468,23 @@ test('LD24: ledgerConfirmProblem refuses a tap whose label is no row of the ques
   assert.match(problem({ result, now: NOW_MS + 600_000 }), /no longer a row/);
   assert.equal(L.ledgerConfirmProblem({ pr: PR, head: HEAD, pathway: 'none', by: 'auto', result, now: NOW_MS + 600_000 }), null);
   assert.equal(D.decisionRead(review()).label, free, 'a refusal does not use the tap up');
+});
+
+test('LD25: the slot line of the question is built from the clocked slot state: a stale free fact never prints "free now" beside a paid row', () => {
+  const slotLineOf = (capacity, nowMs) => {
+    const t = setup({ capacity });
+    t.retime(iso(nowMs));
+    const ask = t.call().ledger.ask;
+    return { line: ask.question.split('\n')[2], labels: ask.options.map((o) => o.label) };
+  };
+  const fresh = slotLineOf(FRESH_FREE, NOW_MS);
+  assert.match(fresh.line, /^CodeRabbit slot: free now/);
+  assert.ok(fresh.labels.some((l) => /^CodeRabbit now \(free slot/.test(l)));
+  const stale = slotLineOf(FRESH_FREE, NOW_MS + 600_000);
+  assert.match(stale.line, /^CodeRabbit slot: unknown/, stale.line);
+  assert.ok(stale.labels.some((l) => /^CodeRabbit review \(may cost/.test(l)) && !stale.labels.some((l) => /free slot/.test(l)));
+  const passed = slotLineOf({ state: 'wait', checkedAt: iso(NOW_MS - 600_000), nextSlotAt: iso(NOW_MS - 60_000), minutesToSlot: 3 }, NOW_MS);
+  assert.match(passed.line, /^CodeRabbit slot: unknown/, 'a wait whose slot passed is unknown too');
 });
 
 // Every text the engine, the status script and the land scripts build must send Dave to a tap, never to a typed command (Dave 2026-11-06).

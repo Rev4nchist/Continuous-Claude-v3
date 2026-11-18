@@ -48,7 +48,7 @@ import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayM
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
-import { ledgerConfirmProblem, ledgerStep, ledgerUse } from './lib/checkpoint-ledger.mjs';
+import { ledgerConfirmProblem, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
 
 export { capacityFact, parseRateLimitReply };
 
@@ -898,11 +898,15 @@ function usageProblem(o) {
   return stray ? `${stray} needs --confirm or --apply` : null;
 }
 
-/** One line for the live capacity fact: free now, the next slot, or unknown with the last notice. */
-function slotText(cap) {
+/**
+ * One line for the live capacity fact: free now, the next slot, or unknown with the last notice. With a clock (`nowMs`) the line follows the
+ * same slot rule as the question rows (slotStateOf), so a free fact that has aged out never reads "free now" beside a paid row. With no clock the fact reads as printed.
+ */
+function slotText(cap, nowMs = null) {
   const cli = typeof cap.cliRemaining === 'number' ? ` CLI reviews left: ${cap.cliRemaining}.` : '';
-  if (cap.state === 'free') return `free now (${cap.factSource}).${cli}`;
-  if (cap.state === 'wait') return `no free slot${cap.nextSlotAt ? `, next about ${cap.nextSlotAt} (in ${cap.minutesToSlot} min)` : ''} (${cap.factSource}).${cli}`;
+  const state = slotStateOf(cap, nowMs);
+  if (state === 'free') return `free now (${cap.factSource}).${cli}`;
+  if (state === 'wait') return `no free slot${cap.nextSlotAt ? `, next about ${cap.nextSlotAt} (in ${cap.minutesToSlot} min)` : ''} (${cap.factSource}).${cli}`;
   return `unknown${cap.lastNoticeAt ? `, last notice ${cap.lastNoticeAt}` : ''}.${cli}`;
 }
 
@@ -967,7 +971,7 @@ function runRecommend(o) {
   const { facts, policy } = inputsOf(o, defaultStateDir(), o['--probe'] === true && o['--json'] === true);
   const result = recommend(facts, policy);
   const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
-  const ledger = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy) ? ledgerStep({ pr, result, slotLine: slotText(result.capacity), askAnyway: o['--ask-anyway'] === true, now: clockMs(facts) }) : null;
+  const ledger = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy) ? ledgerStep({ pr, result, slotLine: slotText(result.capacity, clockMs(facts)), askAnyway: o['--ask-anyway'] === true, now: clockMs(facts) }) : null;
   console.log(o['--json'] ? JSON.stringify(ledger ? { ...result, ledger } : result) : renderText(result));
 }
 

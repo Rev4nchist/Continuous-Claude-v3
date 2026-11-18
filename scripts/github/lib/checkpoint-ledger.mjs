@@ -2,8 +2,9 @@
 // checkpoint.ledger is true in review-router.config.json. Tests: scripts/github/pr-checkpoint-ledger.test.mjs.
 //
 // Call 1 of `pr_checkpoint {pr}` gets a question spec. The model asks it with AskUserQuestion. The AskUserQuestion hook records Dave's tap
-// (decisions.mjs). Call 2 reads the tap. There is ONE question: the label of a paid row carries its price, so Dave's tap on that row is the
-// paid yes (card prflow-review-pick). A paid row is never row 0: a dialog that returns row 0 with no tap records nothing.
+// (decisions.mjs). Call 2 reads the tap. There is ONE question: the label of a paid row carries its price, and Dave's tap on it records the
+// pick (card prflow-review-pick). A paid run asks Dave again later (ship-ask paid-round). A paid row is never row 0: a dialog that returns
+// row 0 with no tap records nothing.
 // Only when the tap exists does the engine let `--confirm <pathway> --by dave` record (ledgerConfirmProblem).
 //
 // Binding: the review question is step `review`, key `<repo>#<pr>`, head. (The plain key `<repo>#<pr>` of step `paid-round` is the
@@ -21,11 +22,14 @@ const NAMES = { none: 'No review, land on CI', coderabbit: 'CodeRabbit review', 
 
 /** A free fact older than this is no longer a fact: the slot may have gone. The same figure as FREE_FACT_MAX_AGE_MS in the mod (model.ts). */
 const FREE_FACT_MAX_AGE_MS = 5 * 60_000;
+/** A checkedAt this far after the clock is clock skew and still fresh. Further ahead it cannot be trusted. The same figure as FUTURE_SKEW_MS in the mod. */
+const FUTURE_SKEW_MS = 60_000;
 
 /**
  * The CodeRabbit slot state at `nowMs`: 'free', 'wait' or 'unknown'. The same rule as slotOf in the mod (model.ts), so both copies of the question
- * read one fact the same way. A free fact with no readable checkedAt, or one older than 5 minutes, is unknown. So is a wait fact whose nextSlotAt has
- * passed. A wait fact with no readable nextSlotAt has no time to pass, so it ages out the way a free fact does. A null clock reads the fact as printed.
+ * read one fact the same way. A free fact with no readable checkedAt, one older than 5 minutes, or one more than 1 minute after the clock is unknown
+ * (it fails closed, so the row is paid). So is a wait fact whose nextSlotAt has passed. A wait fact with no readable nextSlotAt has no time to pass,
+ * so it ages out the way a free fact does. A null clock reads the fact as printed.
  */
 export function slotStateOf(capacity, nowMs) {
   const cap = capacity && typeof capacity === 'object' ? capacity : {};
@@ -33,7 +37,7 @@ export function slotStateOf(capacity, nowMs) {
   if (nowMs === null || nowMs === undefined) return printed;
   const checked = typeof cap.checkedAt === 'string' ? Date.parse(cap.checkedAt) : Number.NaN;
   const next = typeof cap.nextSlotAt === 'string' ? Date.parse(cap.nextSlotAt) : Number.NaN;
-  const stale = !(nowMs - checked <= FREE_FACT_MAX_AGE_MS);
+  const stale = !(nowMs - checked <= FREE_FACT_MAX_AGE_MS && checked - nowMs <= FUTURE_SKEW_MS);
   if (printed === 'free') return stale ? 'unknown' : 'free';
   if (printed === 'wait') return (Number.isFinite(next) ? next <= nowMs : stale) ? 'unknown' : 'wait';
   return 'unknown';
@@ -110,16 +114,22 @@ const printable = ({ header, question, options }) => ({ header, question, option
 const keyOf = (pr) => store.decisionKey({ pr });
 const valueOf = (triple, d) => d.offerRead(triple)?.spec?.values?.[d.decisionRead(triple)?.label] ?? null;
 
-/** Opens (or re-opens) the question. An open offer with no tap is a miss: count it, and stop after MAX_REASKS re-asks. */
-function askAgain(pr, triple, spec, d) {
+/**
+ * Opens (or re-opens) the question. An open offer with no tap is a miss: count it, and stop after MAX_REASKS re-asks.
+ * `note` says why Dave sees the question again (a tap that was not recorded). It leads the text for the model and is also its own field.
+ */
+function askAgain(pr, triple, spec, d, note = null) {
   const reopened = d.offerRead(triple)?.open === true;
   const missed = reopened ? d.missBump(triple) : d.missCount(triple);
   if (missed > d.MAX_REASKS) return { state: 'stop', text: `Stop. PR #${pr} stays a draft. Nothing was recorded. Tell Dave.` };
   const w = d.offerWrite({ ...triple, spec, tree: null, cwd: process.cwd() });
   if (!w.ok) return { state: 'stop', text: `Stop. The question could not be saved (${w.reason}). PR #${pr} stays a draft. Nothing was recorded. Tell Dave.` };
   const again = missed > 0 ? ` No answer matched an option. This is re-ask ${missed} of ${d.MAX_REASKS}.` : '';
-  return { state: 'ask', ask: printable(spec), reasked: missed, text: `Call AskUserQuestion with ask, word for word, with the options in the order given.${again} Then call pr_checkpoint {pr} again.` };
+  const lead = note ? `${note} ` : '';
+  return { state: 'ask', ask: printable(spec), reasked: missed, ...(note ? { note } : {}), text: `${lead}Call AskUserQuestion with ask, word for word, with the options in the order given.${again} Then call pr_checkpoint {pr} again.` };
 }
+
+const SLOT_CHANGED_NOTE = 'The CodeRabbit slot changed. Your tap was not recorded.';
 
 const kept = (pr, d, triples) => { triples.forEach((t) => d.decisionUse(t)); return { state: 'kept-draft', text: `Nothing was recorded. PR #${pr} stays a draft. Call pr_checkpoint {pr} when Dave wants to pick again.` }; };
 
@@ -127,10 +137,11 @@ const kept = (pr, d, triples) => { triples.forEach((t) => d.decisionUse(t)); ret
  * ledgerStep({ pr, result, slotLine, askAnyway, now, d }) -> { state, ask?, pathway?, by?, reasked?, text }. d is the decisions module (a test seam).
  * now is the clock in ms: the slot is read at that time (default Date.now(); a test injects it).
  * Call 2 builds the question again from the current result. A tap records only when its label is still a row of that question with the same
- * pathway (a free-slot tap is no yes once the slot is gone). Otherwise the tap is used up and the question is asked again; that is no miss.
+ * pathway (a free-slot tap is no yes once the slot is gone). Otherwise the tap is used up and the question is asked again with a `note` that
+ * says the slot changed and the tap was not recorded; that is no miss.
  * Keep as draft records nothing, so it stays kept whatever the slot does.
  * askAnyway skips the auto-eligible short-circuit: the mod passes it (--ask-anyway) when auto-confirm failed, so Dave still gets the question.
- * state: none (no question: a stop or an auto-confirm), ask, record (run --confirm <pathway> --by dave; a tap on a paid row is the paid yes),
+ * state: none (no question: a stop or an auto-confirm), ask, record (run --confirm <pathway> --by dave; the tap records the pick),
  * kept-draft (nothing recorded), stop (the re-asks are used up).
  */
 export function ledgerStep({ pr, result, slotLine, askAnyway = false, now = Date.now(), d = store }) {
@@ -142,14 +153,14 @@ export function ledgerStep({ pr, result, slotLine, askAnyway = false, now = Date
   if (pathway === 'wait') return kept(pr, d, [triple]);
   if (spec.values[d.decisionRead(triple)?.label] !== pathway) {
     d.decisionUse(triple);
-    return askAgain(pr, triple, spec, d);
+    return askAgain(pr, triple, spec, d, SLOT_CHANGED_NOTE);
   }
   return { state: 'record', pathway, by: 'dave', text: `Dave picked ${pathway}. Record it.` };
 }
 
 /**
  * Why `--confirm <pathway> --by <by>` must refuse while the ledger flag is on, or null. Dave's pick needs his tap on the review question
- * (a tap on a paid row carries its price and is the paid yes). --by default never records. --by auto is not a tap and keeps its own rules.
+ * (the label of a paid row carries its price; the tap records the pick, and a paid run asks Dave again later). --by default never records. --by auto is not a tap and keeps its own rules.
  * With `result` (and `now`, in ms) the tapped label must also be a row of the question as it stands now, with the same pathway: a tap on a
  * free-slot row is refused once the slot is gone. Without `result` only the tap is checked. A refusal does not use the tap up (ledgerStep does).
  */

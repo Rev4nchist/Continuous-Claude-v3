@@ -521,7 +521,7 @@
     },
     {
       "path": "scripts/github/checkpoint-two-copy.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/cursor-review-hardening.test.mjs",

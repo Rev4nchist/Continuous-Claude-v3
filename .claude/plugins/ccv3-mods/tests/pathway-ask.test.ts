@@ -12,6 +12,7 @@ import {
   changeStopText,
   ignoredText,
   ledgerAskText,
+  ledgerOf,
   ledgerCommandNote,
   ledgerCommandText,
   keptDraftText,
@@ -166,6 +167,23 @@ describe('buildPathwayAsk: three lines and the slot state', () => {
     expect(old.choices.find(one => one.pathway === 'coderabbit')!.label).toBe('CodeRabbit review (may cost up to $1.75) (Recommended)')
   })
 
+  // A checkedAt after the clock is skew up to 1 minute; beyond that the fact fails closed. The engine reads it the same way (checkpoint-two-copy.test.mjs).
+  test('P4e a free fact checked more than 1 minute after the clock reads unknown; within 1 minute it stays free', () => {
+    const at = (ahead: number) => buildPathwayAsk(328, result({ ...FREE, checkedAt: new Date(NOW + ahead).toISOString() }), NOW)!
+    const row = (a: PathwayAsk) => a.choices.find(one => one.pathway === 'coderabbit')!.label
+    expect(row(at(60_000))).toBe('CodeRabbit now (free slot, $0) (Recommended)')
+    expect(at(60_000).question.split('\n')[2]).toBe('CodeRabbit slot: free now.')
+    expect(row(at(60_001))).toBe('CodeRabbit review (may cost up to $1.75) (Recommended)')
+    expect(at(120_000).question.split('\n')[2]).toMatch(/^CodeRabbit slot: unknown/)
+  })
+
+  test('P5 with 0 files and no cost the paid labels still print the engine form "may cost up to $0.00"', () => {
+    const free0 = result(WAIT, { size: { files: 0, lines: 0 }, options: [opt('none'), opt('coderabbit', { cost: [0, 0] }), opt('both', { cost: [0, 0] }), opt('wait')] })
+    const rows = buildPathwayAsk(328, free0, NOW)!.choices
+    expect(rows.find(one => one.pathway === 'coderabbit')!.label).toBe('CodeRabbit review (may cost up to $0.00) (Recommended)')
+    expect(rows.find(one => one.pathway === 'both')!.label).toBe('CodeRabbit + Greptile (may cost up to $0.00 + 3 credits)')
+  })
+
   test('P3 a band the engine did not print reads unknown', () => {
     expect(ask(FREE, { auto: { eligible: false, band: null, reason: '' } }).question.split('\n')[0]).toBe('PR #328, band unknown, 7 files.')
   })
@@ -219,6 +237,17 @@ describe('buildPathwayAsk: three lines and the slot state', () => {
 })
 
 describe('keptDraftText', () => {
+  test('P6b a re-ask after a slot change carries the engine note in the text for the model; a normal ask has no such line', () => {
+    const ask = { header: 'PR #7', question: 'Q', options: [{ label: 'A ($0)' }, { label: 'B' }] }
+    const note = 'The CodeRabbit slot changed. Your tap was not recorded.'
+    const block = ledgerOf({ state: 'ask', ask, reasked: 0, text: 't', note })!
+    expect(block.note).toBe(note)
+    expect(ledgerAskText({ ...block, ask: block.ask! })).toContain(note)
+    const plain = ledgerOf({ state: 'ask', ask, reasked: 0, text: 't' })!
+    expect(plain.note ?? null).toBeNull()
+    expect(ledgerAskText({ ...plain, ask: plain.ask! })).not.toContain('slot changed')
+  })
+
   test('P6 says nothing is recorded and the question is not repeated, and does not tell Dave to type the command', () => {
     const text = keptDraftText(328)
     expect(text).toMatch(/kept #328 as a draft/i)

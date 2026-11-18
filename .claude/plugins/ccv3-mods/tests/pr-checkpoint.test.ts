@@ -3757,6 +3757,7 @@ describe('pr-checkpoint v2: checkpoint.ledger on, the model asks the question (M
     expect(told.text).toContain('CodeRabbit review (may cost up to $1.75) (Recommended)')
     expect(told.text).toContain('Keep as draft ($0)')
     expect(told.text).toMatch(/Keep the options in the order given/)
+    expect(told.text).not.toContain('slot changed')
     expect(told.text).toMatch(/AskUserQuestion/)
     expect(told.text).toMatch(/pr_checkpoint/)
     expect(told.text).toMatch(/same pr and body/)
@@ -3776,6 +3777,16 @@ describe('pr-checkpoint v2: checkpoint.ledger on, the model asks the question (M
     expect(told.text).toMatch(/tell Dave/i)
     expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
     expect(w.store.get(PENDING)).toBeUndefined()
+  })
+
+  test('L1d a re-ask after a slot change tells the model why, so Dave hears it; the first ask has no such line', async ($, on) => {
+    const note = 'The CodeRabbit slot changed. Your tap was not recorded.'
+    const w = world(on, { files: LEDGER_ON, json: withLedger({ state: 'ask', ask: SPEC, reasked: 0, text: `${note} Call AskUserQuestion.`, note }) })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs).toEqual([])
+    expect(told.text).toContain(note)
+    expect(told.text).toMatch(/AskUserQuestion/)
   })
 
   test('L1c a row 0 that is a $0 row with the Recommended mark is asked (L1 covers the unmarked one)', async ($, on) => {
