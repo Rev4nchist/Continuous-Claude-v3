@@ -383,6 +383,7 @@ describe('coord-board-mask-ids: the invariant of mask and count (seat item 3)', 
     'landed in #4242 today', 'PR 4242', 'comment 9000000123', 'finding 4242:9000000123', `head ${SHA}`, 'head abcdef1',
     `hash ${SHA}00ff00ff00`, `hash 00ff00ff00${SHA}00ff`, `see ${STR_ID} and ${STR_ID.toUpperCase()}`, 'ref 1234567 x',
     'a bare 4242 and 2026-11-17 and 1700000000000', `content ${HEX64_FREE}`, `a${STR_ID}`, 'plain words only',
+    `see ${STR_ID.replace('k', 'K')} now`, // critic 2-6: the Kelvin sign lowercases to k in the matcher
   ];
   const ids = [...STR_IDS, ...holdoutIdsOf({ findings: [{ pr: 88, round: DIGIT_SHA }] }, {})];
   it('the masked text of every sample has a count of 0', () => {
@@ -410,6 +411,15 @@ describe('coord-board-mask-ids: maskLaneRows masks every displayed lane text at 
     assert.equal(events[0].session_id, uuid);
     assert.deepEqual(lanes[0].waits_on, ['lane-b']);
     assert.equal(lanes[0].id, 'lane-a');
+  });
+  it('critic 2-1: a run of spaces or an invisible mark that the browser collapses is masked at the source', () => {
+    const lanes = [
+      { id: 'l1', note: 'see PR       4242 now' }, // 7 spaces: the matcher's 8-character look-back misses it; the browser shows "PR 4242"
+      { id: 'l2', note: 'see PR ͏4242 now' }, // a combining grapheme joiner (default ignorable) before the number
+      { id: 'l3', branch: 'fix/PR 4242', done_when: 'PR 4242 lands', rationale: 'see #4242' }, // the other lane text fields
+    ];
+    maskLaneRows({ lanes, sessions: [], events: [] }, IDS);
+    for (const l of lanes) for (const k of ['note', 'branch', 'done_when', 'rationale']) if (l[k]) assert.ok(!l[k].includes('4242'), `${l.id}.${k} keeps the id`);
   });
   it('rows with no listed id are not changed, and null fields stay null', () => {
     const lanes = [{ id: 'l', title: 'plain', scope: null, note: undefined, track: 'coord' }];
@@ -441,6 +451,13 @@ describe('coord-board-mask-ids: finishPage counts the display text too (D3, crit
     const r = run(html);
     assert.equal(r.exit, 0, r.line);
     assert.equal(r.html, html);
+  });
+  it('critic 2-1: a run of spaces between PR and a listed number is refused (the browser collapses it)', () => {
+    assert.equal(run(page('see PR       4242 now')).exit, 3);
+  });
+  it('critic 2-7: two JSON strings are counted one by one, so "...PR" then "4242..." in the next field is no hit', () => {
+    const json = JSON.stringify([{ title: 'a title that ends with PR' }, { note: '4242 is a bare number here' }]);
+    assert.equal(run(page(`<script type="application/json" id="kb-data">${json}</script>`)).exit, 0);
   });
   it('a JSON block that does not parse is refused (the browser could not read it either)', () => {
     assert.equal(run(page('<script type="application/json" id="kb-data">[{"a":</script>')).exit, 3);

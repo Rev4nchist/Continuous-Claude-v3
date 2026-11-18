@@ -153,7 +153,8 @@ export function maskListed(text, ids) {
   let out = replaceWhere(src, KEY_RUN, (m) => keys.has(m));
   total += out.n;
   for (const w of words) {
-    out = replaceWhere(out.text, new RegExp(`(?<![0-9a-f:])${escapeRe(w)}(?![0-9a-f:])`, 'gi'), () => true);
+    // 'u' too: the matcher lowercases with toLowerCase, which folds the Kelvin sign to k; /i alone does not (critic pass 2, item 6).
+    out = replaceWhere(out.text, new RegExp(`(?<![0-9a-f:])${escapeRe(w)}(?![0-9a-f:])`, 'giu'), () => true);
     total += out.n;
   }
   out = replaceWhere(out.text, HEX_RUN, (m) => shaHit(m, shas));
@@ -167,8 +168,11 @@ export function maskListed(text, ids) {
   return { text: out.text, masked: total };
 }
 
-const LANE_TEXT = ['title', 'scope', 'note', 'track'];
+const LANE_TEXT = ['title', 'scope', 'note', 'track', 'branch', 'done_when', 'rationale'];
 const SESSION_LANE_TEXT = ['title', 'scope', 'note'];
+
+/** The text as a reader sees it: compatibility forms folded (fullwidth digits), invisible marks removed, each white-space run one space. */
+const readerView = (s) => s.normalize('NFKC').replace(/\p{Default_Ignorable_Code_Point}/gu, '').replace(/\s+/g, ' ');
 
 /**
  * Masks, in place, every lane text the page shows, at the source: right after the DB read, before any HTML escape, JSON.stringify or cut
@@ -179,10 +183,15 @@ const SESSION_LANE_TEXT = ['title', 'scope', 'note'];
 export function maskLaneRows({ lanes = [], sessions = [], events = [] } = {}, ids) {
   if (!Array.isArray(ids) || ids.length === 0) return 0;
   let n = 0;
+  // A text whose reader view (white space collapsed, invisible marks gone, as the browser shows it) holds more ids than the text itself is
+  // replaced by the masked reader view (critic pass 2, item 1: "PR", 7 spaces, a number escapes the 8-character look-back of the matcher).
   const field = (row, key) => {
     if (!row || typeof row[key] !== 'string' || row[key] === '') return;
     const m = maskListed(row[key], ids);
-    if (m.masked > 0) { row[key] = m.text; n += m.masked; }
+    const flat = readerView(row[key]);
+    const f = flat === row[key] ? m : maskListed(flat, ids);
+    const best = f.masked > m.masked ? f : m;
+    if (best.masked > 0) { row[key] = best.text; n += best.masked; }
   };
   for (const l of lanes) for (const k of LANE_TEXT) field(l, k);
   for (const s of sessions) {
@@ -204,10 +213,7 @@ function decodeOnce(s) {
   });
 }
 
-/** The text with compatibility forms folded (fullwidth digits) and invisible format characters (zero width, bidi) removed. */
-const foldedView = (s) => s.normalize('NFKC').replace(/\p{Cf}/gu, '');
-
-/** The string values of every application/json block, joined; null when a block does not parse. An empty block holds no data. */
+/** The string values of every application/json block, as a list; null when a block does not parse. An empty block holds no data. */
 function jsonStrings(html) {
   const out = [];
   for (const m of html.matchAll(/<script\b[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
@@ -220,7 +226,7 @@ function jsonStrings(html) {
     };
     walk(v);
   }
-  return out.join('\n');
+  return out;
 }
 
 /**
@@ -245,12 +251,13 @@ export function finishPage({ html, board, defaultBoard, readList, mask = maskLis
   if (!Array.isArray(ids) || ids.length === 0) return fail(LINE_NO_PAGE);
   const m = mask(html, ids);
   // Count what the reader sees, not only the source (card coord-board-mask-ids, D3): the HTML as written, the HTML with entities decoded once,
-  // that copy folded (fullwidth, zero width), and the string values of each JSON data block (and their folded copy). Count only, never masked:
-  // a hit in any view is exit 3 and no page.
+  // its reader view (fullwidth folded, invisible marks gone, white space collapsed), and each string value of each JSON data block on its own
+  // (and its reader view; one by one, so a context cannot cross two fields). Count only, never masked: a hit in any view is exit 3, no page.
   const strings = jsonStrings(m.text);
   if (strings === null) return fail(LINE_JSON);
   const decoded = decodeOnce(m.text);
-  const views = [m.text, decoded, foldedView(decoded), strings, foldedView(strings)];
+  const views = [m.text, decoded, readerView(decoded)];
+  for (const s of strings) views.push(s, readerView(s));
   const left = views.reduce((sum, v) => sum + count(v, ids), 0);
   if (left > 0) return fail(LINE_LEFT);
   const bytes = Buffer.byteLength(m.text);

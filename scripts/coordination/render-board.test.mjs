@@ -1919,7 +1919,9 @@ describe('render-board.mjs against a scratch database', () => {
     //   - the card hash (data-hash, what a Plain English answer was written from) is made from the MASKED text, so a mask makes every answer look stale
     //   - an untouched card of the masked page makes a sync diff (a change that Dave never made)
     //   - the client starts to put a lane's title, scope or note into a form box or a write (today it reads them only for the read-only Plain English prompt)
-    it('the card hash is made from the raw lane fields, so the mask does not make an answer look stale', async () => {
+    // Card coord-board-mask-ids, critic pass 2 item 2 (replaces the raw-hash rule of coord-board-mask-listed-ids): a hash of the raw text plus
+    // its length lets a reader recover a short masked id offline, so the card hash is the hash of the shown (masked) fields.
+    it('the card hash is made from the masked lane fields the page shows, never from the raw text', async () => {
       await addLane();
       try {
         const out = path.join(E2E.tmp, 'mask-hash.html');
@@ -1928,9 +1930,9 @@ describe('render-board.mjs against a scratch database', () => {
         const card = new RegExp(`<li class="card kb-card" data-id="zz-rb-mask-lane" data-state="ready" data-hash="([^"]*)"`).exec(html);
         assert.ok(card, 'no editable card for the masked lane');
         const raw = hashFields(['title with PR 4242', `scope names pull/4242 and ${MASK_SHA}`, 'ready', MASK_NOTE]);
-        assert.equal(card[1], raw, 'the hash is not the hash of the raw lane fields');
-        const masked = hashFields(['title with PR masked-id', 'scope names pull/masked-id and masked-id', 'ready', 'note says PR masked-id and masked-id']);
-        assert.notEqual(card[1], masked, 'the hash follows the masked text');
+        assert.notEqual(card[1], raw, 'the hash is the hash of the raw lane fields');
+        const kb = JSON.parse(/<script type="application\/json" id="kb-data">([\s\S]*?)<\/script>/.exec(html)[1]).find((l) => l.id === 'zz-rb-mask-lane');
+        assert.equal(card[1], hashFields([kb.title, kb.scope, 'ready', kb.note]), 'the hash is not the hash of the shown fields');
       } finally { await dropLane(); }
     });
 

@@ -229,8 +229,9 @@ await c.end();
 const maskRoot = (loadRegistry().find((e) => e.key === BOARD.via && e.status.toLowerCase() !== 'inactive') ?? {}).path ?? BOARD.root;
 let sourceIds = [];
 try { sourceIds = readIdList(maskRoot); } catch { sourceIds = []; }
-// The card hash stays the hash of the RAW lane fields (the sync compares it with the database text), so it is taken before the mask.
-const RAW_CARD_HASH = new Map(lanes.map((l) => [l.id, hashFields([l.title, l.scope, l.state, l.note])]));
+// The card hash is made from the MASKED fields: a hash of the raw text (a 32-bit FNV plus the exact length, kanban-place.mjs hashFields) would let
+// a reader recover a short masked id offline (critic pass 2, item 2). Its one reader is the Plain English answer cache (kanban-client.js:978): an
+// answer made from raw text goes stale once and is made again from the masked text, which is the safe outcome.
 const maskedAtSource = maskLaneRows({ lanes, sessions, events }, sourceIds);
 
 // ------------------------------------------------------------------ derive
@@ -332,7 +333,7 @@ const kbSchedJson = KANBAN ? JSON.stringify(SPLIT.scheduled.map(({ lane: l }) =>
 const KB_STATUS =['backlog', 'ready', 'blocked', 'done'];
 // Hash of what a Plain English answer was written from. Computed here, read from
 // data-hash by the page, so the page never rebuilds it from DOM text.
-const kbHash = (l) => RAW_CARD_HASH.get(l.id) ?? hashFields([l.title, l.scope, l.state, l.note]);
+const kbHash = (l) => hashFields([l.title, l.scope, l.state, l.note]);
 let kbSeq = 0;
 
 // The holder line of an In progress card: who holds it and how long the lease has left.
