@@ -14,7 +14,7 @@ import type { Engine } from 'claude-code/testing'
 // K2  Accept does not run --confirm <rec> --by dave (a tap is always dave; v2) then --apply, or the work waits on a timer (decision: press work runs INLINE)
 // K3  another option does not run --by dave
 // K4  headless runs --confirm, --apply or gh, opens a pane, or returns no text plan
-// K5  /pathway <pr> none costs a model turn (prompt.submit) or does not record; K5b accept (a paid one asks the paid confirm, records by dave); K5c usage text
+// K5  /pathway <pr> none costs a model turn (prompt.submit) or does not record; K5b accept (a paid one raises the one question; his tap on the paid row records by dave); K5c usage text
 // K6  dismiss records something   K7 wait records something   K8 a refused --confirm still applies   K9 a refused --apply loses the retry
 // K10 an R0 result shows option Buttons   K11 a non-draft PR, a moved head or an unreadable PR opens the pane
 // K12 a held option is pressable   K12b --json exit 3, bad JSON or a timeout opens the pane   K12c a missing body file runs the engine
@@ -433,14 +433,13 @@ const PRESS: Record<string, Answer> = {
   'opt-wait': /^Keep as draft/,
   dismiss: 'dismiss',
 }
-/** The answer to the second question that a press of a paid row raises (v2: every paid pick asks again; the Yes is the second label). */
-const FOLLOW_PRESS: Record<string, Answer> = { 'opt-coderabbit': /^Yes, record coderabbit/, 'opt-both': /^Yes, record both/ }
-/** v2: the recommended row of the default fixture is paid, so a record needs two taps: the recommended row, then the paid confirm's Yes. */
+/** PR C: a paid row carries its price and its tap is the paid yes, so a press raises no second question. */
 /** An Esc is asked again twice (v2, Dave 2026-11-06): the default test answer, a closed dialog, raises the question this many times. */
 const ESC_ASKS = 3
-/** The engine result when none is the recommendation: a tap on it records at once (no paid confirm). */
+/** The engine result when none is the recommendation: a tap on it records at once. */
 const NONE_REC_JSON = { stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], budget: [0, 0] })) }
-const PICK_YES: Answer[] = [/\(Recommended\)$/, /^Yes, record/]
+/** PR C: one question. The Recommended row of the default fixture is the paid row, and the tap on it records. */
+const PICK_YES: Answer[] = [/\(Recommended\)$/]
 const PICK_YES_TWICE: Answer[] = [...PICK_YES, ...PICK_YES]
 const argvOf = (seen: { run: Run[] }, part: string) => seen.run.filter(r => r.argv.some(a => a.includes(part))).map(r => r.argv)
 const engineCalls = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('pr-checkpoint.mjs'))).map(r => r.argv.slice(2).join(' '))
@@ -471,14 +470,14 @@ const openPane = async ($: Engine) => {
     pane: {
       press: async ({ key }: { key: string }) => {
         dialog!.answer(PRESS[key]!)
-        // A paid pick asks a second question (its Yes records), and a closed dialog is asked again twice. The press answers those as the same Dave would.
+        // A closed dialog is asked again twice. The press closes those as the same Dave would.
         let ended = false
         void told.then(() => (ended = true))
         for (let next = 1; !ended; ) {
           await new Promise(resolve => (globalThis as unknown as { setTimeout: (f: () => void, ms: number) => unknown }).setTimeout(() => resolve(undefined), 2))
           const later = lastSeen!.dialogs[next]
           if (later) {
-            later.answer(FOLLOW_PRESS[key] ?? 'dismiss')
+            later.answer('dismiss')
             next += 1
           }
         }
@@ -513,9 +512,10 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     // The prepare call posts the rate-limit probe for this PR. The text plan and the record calls never do.
     expect(engineCalls(seen)[0]).toBe('--json --pr 7 --probe --no-ledger')
     expect(seen.opens).toEqual([])
-    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
-    expect(dialog!.labels[0]).toMatch(/\(Recommended\)$/)
-    expect(dialog!.labels.slice(1).some(label => label.includes('(Recommended)'))).toBe(false)
+    // PR C: a paid recommendation is row 1; row 0 is Keep as draft, which records nothing.
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['Keep as draft', 'CodeRabbit review', 'No review, land on CI'])
+    expect(dialog!.labels[1]).toMatch(/\(Recommended\)$/)
+    expect(dialog!.labels.filter(label => label.includes('(Recommended)')).length).toBe(1)
     expect(dialog!.header).toBe('PR #7')
     expect(dialog!.question).toContain('#7')
     expect(dialog!.question).toMatch(/7 files/)
@@ -584,7 +584,7 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     expect(told.text).toContain('Run pre-pr.mjs')
   })
 
-  test('K2 the recommended label, then Yes on the paid confirm, runs --confirm <recommended> --by dave then --apply, inline (no timer), and records the store', async ($, on) => {
+  test('K2 the recommended label (its tap is the paid yes) runs --confirm <recommended> --by dave then --apply, inline (no timer), and records the store', async ($, on) => {
     const { seen, store } = world(on)
     const { pane } = await openPane($)
     await pane.press({ key: 'opt-coderabbit' })
@@ -608,7 +608,7 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     expect(record.appliedAt).toBe(NOW)
     expect(store.get(PENDING)).toBeUndefined()
     expect(seen.writes.filter(path => path.includes('review-ledger'))).toEqual([])
-    expect(seen.asks.length).toBe(2)
+    expect(seen.asks.length).toBe(1)
     expect(seen.toasts.some(text => /#7/.test(text))).toBe(true)
   })
 
@@ -684,7 +684,7 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     const held = engineJson({ recommended: 'both', options: [option('none'), option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' })] })
     const { seen } = world(on, { json: { stdout: JSON.stringify(held) } })
     const { dialog, pane } = await openPane($)
-    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['Keep as draft', 'CodeRabbit review', 'No review, land on CI'])
     expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
     expect(dialog!.question).toContain('Greptile held: credits unknown')
     await pane.press({ key: 'opt-none' })
@@ -728,7 +728,7 @@ describe('pr-checkpoint: the PR branch checked out in another worktree', () => {
     expect(cwdOf(seen, 'log').filter(cwd => cwd !== undefined)).toEqual([WT])
     expect(seen.run.find(r => r.argv[0] === 'git' && r.argv.includes('diff'))?.cwd).toBe(WT)
     expect(seen.run.find(r => r.argv[0] === 'git' && r.argv.includes('worktree'))?.cwd).toBe(ROOT)
-    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['Keep as draft', 'CodeRabbit review', 'No review, land on CI'])
     await pane.press({ key: 'dismiss' })
   })
 
@@ -898,8 +898,8 @@ describe('pr-checkpoint: /pathway', () => {
     expect(ran.text).toContain('none')
   })
 
-  test('K5b /pathway 7 accept records the paid recommendation with --by dave, after the paid confirm', async ($, on) => {
-    const { seen } = world(on, { answer: /^Yes, record/ })
+  test('K5b /pathway 7 accept raises the one question; the tap on the paid row records the paid recommendation with --by dave', async ($, on) => {
+    const { seen } = world(on, { answer: /^CodeRabbit review/ })
     await start($)
     await slash($, '7 accept --body pr-body.md')
     expect(engineCalls(seen).some(call => /^--confirm coderabbit --by dave /.test(call))).toBe(true)
@@ -2152,7 +2152,7 @@ describe('pr-checkpoint: auto-confirm', () => {
     expect(store.get(PENDING)).toBeDefined()
     expect(told.text).toMatch(/auto-confirm/i)
     expect(told.text).toMatch(/waits for Dave/)
-    expect(seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No review, land on CI', 'CodeRabbit review', 'Keep as draft'])
+    expect(seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No review, land on CI', 'Keep as draft', 'CodeRabbit review'])
   })
 
   test('AU3 a refused apply raises the question with the error in the tool text; the record stays confirmed', async ($, on) => {
@@ -2343,8 +2343,8 @@ describe('pr-checkpoint: /pathway from a surface that is not the composer (mobil
     expect(ran.text ?? '').toMatch(/recorded/)
   })
 
-  test('M3b a bridge /pathway 7 accept for the pending PR records the paid recommendation with --by dave, after the paid confirm', async ($, on) => {
-    const { seen } = world(on, wtOpts({ answers: ['dismiss', 'dismiss', 'dismiss', /^Yes, record/] }))
+  test('M3b a bridge /pathway 7 accept for the pending PR raises the one question; the tap on the paid row records with --by dave', async ($, on) => {
+    const { seen } = world(on, wtOpts({ answers: ['dismiss', 'dismiss', 'dismiss', /^CodeRabbit review/] }))
     await start($)
     await callTool($, { pr: 7, body: 'pr-body.md' })
     await slash($, '7 accept', 'bridge')
@@ -2494,7 +2494,7 @@ describe('pr-checkpoint: every dialog leaves one log line', () => {
     const [picked, typed] = askLines(w.written)
     const shown = w.seen.dialogs[0]!.labels
     expect(picked!.options).toEqual(shown)
-    expect(picked!.chosen).toBe(shown[0])
+    expect(picked!.chosen).toBe(shown.find(label => /Recommended/.test(label)))
     expect(typed!.options).toEqual(w.seen.dialogs[1]!.labels)
     expect(typed!.chosen).toBeNull()
   })
@@ -2600,14 +2600,15 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
   const REC = /\(Recommended\)$/
   const call = ($: Engine, extra: Rec = {}) => callTool($, { pr: 7, body: 'pr-body.md', ...extra })
 
-  test('T1 the recommended label, then Yes, records --by dave, with its cost in the label; the tool text names the pathway', async ($, on) => {
+  test('T1 the recommended label records --by dave with one tap, with its cost in the label; the tool text names the pathway', async ($, on) => {
     const w = world(on, { answers: PICK_YES })
     await start($)
     const told = await call($)
-    expect(w.seen.dialogs.length).toBe(2)
+    expect(w.seen.dialogs.length).toBe(1)
     const [dialog] = w.seen.dialogs
-    expect(dialog!.labels[0]).toMatch(/^CodeRabbit review \(up to \$1\.75\)/)
-    expect(dialog!.labels[0]).toMatch(REC)
+    expect(dialog!.labels[0]).toMatch(/^Keep as draft/)
+    expect(dialog!.labels[1]).toMatch(/^CodeRabbit review \(up to \$1\.75\)/)
+    expect(dialog!.labels[1]).toMatch(REC)
     expect(dialog!.labels.filter(label => REC.test(label)).length).toBe(1)
     expect(dialog!.labels.length).toBeGreaterThanOrEqual(2)
     expect(dialog!.labels.length).toBeLessThanOrEqual(4)
@@ -2671,7 +2672,8 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     await start($)
     await call($)
     const [dialog] = w.seen.dialogs
-    expect(dialog!.labels[0]).toBe('CodeRabbit now, paid (up to $1.75) (Recommended)')
+    expect(dialog!.labels[0]).toMatch(/^Keep as draft/)
+    expect(dialog!.labels[1]).toBe('CodeRabbit now, paid (up to $1.75) (Recommended)')
     expect(dialog!.question.split('\n')[2]).toMatch(/^CodeRabbit slot: next about \d\d:\d\d C[SD]T \(in 38 min\)\.$/)
     expect(dialog!.labels.some(label => /wait for/i.test(label))).toBe(false)
     expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
@@ -2885,9 +2887,9 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     const w = world(on, { answers: [...PICK_YES, /^Retry/], applySeq: [{ exitCode: 1, stderr: 'pr-checkpoint: refused: The head of PR #7 moved.\n' }] })
     await start($)
     const told = await call($)
-    expect(w.seen.dialogs.length).toBe(3)
-    expect(w.seen.dialogs[2]!.question).toMatch(/Retry/)
-    expect(w.seen.dialogs[2]!.question).toContain('The head of PR #7 moved.')
+    expect(w.seen.dialogs.length).toBe(2)
+    expect(w.seen.dialogs[1]!.question).toMatch(/Retry/)
+    expect(w.seen.dialogs[1]!.question).toContain('The head of PR #7 moved.')
     expect(counts(w.seen).confirm).toBe(1)
     expect(counts(w.seen).apply).toBe(2)
     expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
@@ -2908,7 +2910,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     const w = world(on, { store: { [PENDING]: pending }, answers: PICK_YES })
     await start($)
     const ran = await slash($, '', 'bridge')
-    expect(w.seen.dialogs.length).toBe(2)
+    expect(w.seen.dialogs.length).toBe(1)
     expect(w.seen.opens).toEqual([])
     expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
     expect(ran.text ?? '').toMatch(/coderabbit/)
@@ -2947,7 +2949,8 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     const labels = w.seen.dialogs[0]!.labels
     expect(labels.length).toBeLessThanOrEqual(4)
     expect(labels.filter(l => /^Keep as draft/.test(l)).length).toBe(1)
-    expect(labels[0]).toMatch(/^CodeRabbit \+ Greptile .*\(Recommended\)$/)
+    expect(labels[0]).toMatch(/^Keep as draft/)
+    expect(labels.find(label => label.includes('(Recommended)'))).toMatch(/^CodeRabbit \+ Greptile \(up to \$1\.75/)
   })
 
   test('P1 no ccv3-mods hook answers a model AskUserQuestion: the call reaches the engine bottom unchanged', async ($, on) => {
@@ -2960,17 +2963,16 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
   })
 })
 
-// ---- a paid pick that is not the recommendation asks again (Dave 2026-11-05; PRs 315 and 316 recorded coderabbit 7 s and 20 s after the dialog opened) ----
-// With none recommended the labels are [none (Recommended), paid, Keep as draft]: a mis-tap on the paid row spends money.
+// ---- a paid pick that is not the recommendation asks ONE question (Dave 2026-11-05; PRs 315 and 316 recorded coderabbit 7 s and 20 s after the dialog opened) ----
+// PR C: the price is in the label of the paid row, so the tap on it is the paid yes, and a paid row is never row 0. A mis-tap is still visible.
+// With none recommended the labels are [none (Recommended), Keep as draft, paid].
 // How it can fail, and the test that catches it:
-// C1 the paid pick records with no second question, or the confirm asks the wrong thing   C2 No on the confirm records, or loses the pending checkpoint
-// C3 Esc on the confirm records                                                         C4 words typed on the confirm record, or reach the log
+// C1 the paid pick records with a second question, or none                      C2 a second Yes/No question is asked
+// C3 Esc on the question records                                               C4 words typed on the question record, or reach the log
 // C5 the Recommended row asks again   C6 none asks again when a paid pathway is recommended   C7 Keep as draft asks again
-describe('pr-checkpoint: a paid pick that is not the recommendation asks again', () => {
+describe('pr-checkpoint: a paid pick that is not the recommendation asks one question', () => {
   const noneRecommended = { stdout: JSON.stringify(engineJson({ recommended: 'none', options: [option('none'), option('coderabbit')], budget: [0, 0] })) }
   const PAID = /^CodeRabbit review/
-  const YES = 'Yes, record coderabbit'
-  const NO = 'No, keep the PR a draft (Recommended)'
   const call = ($: Engine) => callTool($, { pr: 7, body: 'pr-body.md' })
   const confirms = (seen: { run: Run[] }) => engineCalls(seen).filter(c => c.startsWith('--confirm'))
   const nothingRecorded = (w: ReturnType<typeof world>) => {
@@ -2980,51 +2982,44 @@ describe('pr-checkpoint: a paid pick that is not the recommendation asks again',
     expect(w.store.get(PENDING)).toBeDefined()
   }
 
-  test('C1 none recommended, the paid row picked, Yes on the confirm: two dialogs, the paid pathway is recorded', async ($, on) => {
-    const w = world(on, { json: noneRecommended, answers: [PAID, YES] })
+  test('C1 none recommended, the paid row picked: one dialog, the paid pathway is recorded', async ($, on) => {
+    const w = world(on, { json: noneRecommended, answers: [PAID] })
     await start($)
     const told = await call($)
-    expect(w.seen.dialogs.length).toBe(2)
-    expect(w.seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No review, land on CI', 'CodeRabbit review', 'Keep as draft'])
-    const second = w.seen.dialogs[1]!
-    expect(second.labels).toEqual([NO, YES])
-    expect(second.header).toBe('PR #7')
-    expect(second.question).toContain('CodeRabbit review (up to $1.75)')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No review, land on CI', 'Keep as draft', 'CodeRabbit review'])
+    expect(w.seen.dialogs[0]!.labels[2]).toBe('CodeRabbit review (up to $1.75)')
     expect(confirms(w.seen)).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
     expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
     expect(told.text).toMatch(/Dave chose coderabbit for #7/)
   })
 
-  test('C2 No on the confirm: two dialogs, nothing recorded, no label, the pending checkpoint stays, the text says draft', async ($, on) => {
-    const w = world(on, { json: noneRecommended, answers: [PAID, NO] })
+  test('C2 no second question: no Yes or No confirm label is ever shown', async ($, on) => {
+    const w = world(on, { json: noneRecommended, answers: [PAID] })
     await start($)
-    const told = await call($)
-    expect(w.seen.dialogs.length).toBe(2)
-    nothingRecorded(w)
-    expect(told.text).toMatch(/stays a draft/i)
-    expect(told.text).toMatch(/Nothing recorded/i)
-    expect(told.text).toContain('pr_checkpoint')
+    await call($)
+    expect(w.seen.dialogs.flatMap(dialog => dialog.labels).some(label => /^(Yes|No), /.test(label))).toBe(false)
   })
 
-  test('C3 Esc on the confirm records nothing', async ($, on) => {
-    const w = world(on, { json: noneRecommended, answers: [PAID, 'dismiss'] })
+  test('C3 Esc on the question records nothing', async ($, on) => {
+    const w = world(on, { json: noneRecommended, answers: ['dismiss'] })
     await start($)
     const told = await call($)
-    expect(w.seen.dialogs.length).toBe(1 + ESC_ASKS)
+    expect(w.seen.dialogs.length).toBe(ESC_ASKS)
     nothingRecorded(w)
     expect(told.text).toMatch(/stays a draft/i)
   })
 
-  test('C4 words typed on the confirm record nothing and the log keeps no typed word', async ($, on) => {
+  test('C4 words typed on the question record nothing and the log keeps no typed word', async ($, on) => {
     const typed = 'yes go ahead and spend it'
-    const w = world(on, { json: noneRecommended, answers: [PAID, { other: typed }] })
+    const w = world(on, { json: noneRecommended, answers: [{ other: typed }] })
     await start($)
     const told = await call($)
-    expect(w.seen.dialogs.length).toBe(1 + ESC_ASKS)
+    expect(w.seen.dialogs.length).toBe(ESC_ASKS)
     nothingRecorded(w)
     expect(told.text).toMatch(/Nothing (was )?recorded/i)
     const lines = askLines(w.written)
-    expect(lines.map(line => line.matched)).toEqual([1, null, null, null])
+    expect(lines.map(line => line.matched)).toEqual([null, null, null])
     expect(w.written[ASK_LOG]).not.toContain(typed)
   })
 
@@ -3219,9 +3214,9 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
       world(on, { json: highJson(band) })
       const { dialog, pane } = await openPane($)
       expect(dialog!.labels.at(-1)).toBe(NO_REVIEW)
-      expect(dialog!.labels[0]).toMatch(/^CodeRabbit review .*\(Recommended\)$/)
+      expect(dialog!.labels[1]).toMatch(/^CodeRabbit review .*\(Recommended\)$/)
       expect(dialog!.labels.filter(label => label.includes('(Recommended)')).length).toBe(1)
-      expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'CodeRabbit + Greptile', 'Keep as draft', 'No review, land on CI'])
+      expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['Keep as draft', 'CodeRabbit review', 'CodeRabbit + Greptile', 'No review, land on CI'])
       await pane.press({ key: 'dismiss' })
     })
 
@@ -3333,7 +3328,7 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
     })
     const { seen } = world(on, { json: held })
     const { dialog, pane } = await openPane($)
-    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['CodeRabbit review', 'Keep as draft', 'No review, land on CI'])
+    expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['Keep as draft', 'CodeRabbit review', 'No review, land on CI'])
     expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
     await pane.press({ key: 'opt-none' })
     expect(engineCalls(seen).find(call => call.startsWith('--confirm'))).toMatch(/^--confirm none --by dave /)
@@ -3502,53 +3497,55 @@ describe('pr-checkpoint: via, and the plugin store lock', () => {
 
 // ---- pathway flow v2 (Dave 2026-11-06): every decision is a tap ----------------------------------------------------------------------
 // How it can fail, and the test that catches it:
-// W1  (T11) one dialog return marks a paid PR ready: row 0 twice on a recommended paid pick records something
-// W2  the paid confirm cannot be said Yes to, or a Yes records by default
+// W1  (T11) one dialog return marks a paid PR ready: row 0 on a recommended paid pick records something (PR C: row 0 is Keep as draft)
+// W2  the tap on the paid row cannot record, or records by default (PR C: one question)
 // W3  a free-text, Esc or empty answer is not asked again, or is asked more than 2 more times, or the stop does not say the PR stays a draft
 // W4  (M6) the lines after the first one change the pick, or are not named
-// W5  a typed paid word records with no confirm
+// W5  a typed paid word records with no question that shows the price
 // R1  (M2) a ready PR with a record cannot be changed, or the undo runs without Dave's answer, or the PR stays ready after a re-pick
 // R2  the mod's own undo is seen by Lock B or a shell hook
 // L1  (M1) the flag on: the tool opens a dialog itself, records on call 1, or does not return the question for the model
 // L2  the flag on: the tap is recorded without --by dave --pr, or twice, or a stop/kept-draft records
 // L3  the flag on: a typed /pathway raises a dialog whose tap the engine would refuse
-describe('pr-checkpoint v2: a paid pick asks again, one dialog return never records a paid pick', () => {
+describe('pr-checkpoint v2: a paid pick asks one question, one dialog return never records a paid pick', () => {
   const call = ($: Engine) => callTool($, { pr: 7, body: 'pr-body.md' })
-  const NO = 'No, keep the PR a draft (Recommended)'
   const row0 = (labels: string[]) => labels[0]!
+  const waitSlot = { stdout: JSON.stringify(engineJson({ capacity: { count: 38, band: 'ok', warning: null, source: 'manual', date: '2026-10-25', state: 'wait', nextSlotAt: new Date(NOW + 38 * MIN).toISOString(), minutesToSlot: 38, checkedAt: new Date(NOW).toISOString() } })) }
 
-  test('W1 row 0 twice on a recommended paid pick records nothing and spends nothing', async ($, on) => {
-    const w = world(on, { answer: row0 })
+  for (const [name, json] of [['an unknown slot', undefined], ['no free slot', waitSlot]] as const) {
+    test(`W1 row 0 on a recommended paid pick records nothing and spends nothing (${name})`, async ($, on) => {
+      const w = world(on, { ...(json ? { json } : {}), answer: row0 })
+      await start($)
+      const told = await call($)
+      expect(w.seen.dialogs.length).toBe(1)
+      expect(w.seen.dialogs[0]!.labels[0]).toMatch(/^Keep as draft/)
+      expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+      expect(w.seen.run.some(r => r.argv[0] === 'gh' && (r.argv[2] === 'edit' || r.argv[2] === 'ready' || r.argv[2] === 'comment'))).toBe(false)
+      expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+      expect(told.text).toMatch(/Nothing recorded/)
+      expect(told.text).toMatch(/kept #7 as a draft/)
+    })
+  }
+
+  test('W2 the tap on the paid row records by dave, once, then applies', async ($, on) => {
+    const w = world(on, { answers: [/\(Recommended\)$/] })
     await start($)
     const told = await call($)
-    expect(w.seen.dialogs.length).toBe(2)
-    expect(w.seen.dialogs[0]!.labels[0]).toMatch(/^CodeRabbit review.*\(Recommended\)$/)
-    expect(w.seen.dialogs[1]!.labels[0]).toBe(NO)
-    expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
-    expect(w.seen.run.some(r => r.argv[0] === 'gh' && (r.argv[2] === 'edit' || r.argv[2] === 'ready' || r.argv[2] === 'comment'))).toBe(false)
-    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
-    expect(told.text).toMatch(/Nothing recorded/)
-    expect(told.text).toMatch(/stays a draft/)
-  })
-
-  test('W2 Yes on the paid confirm records by dave, once, then applies', async ($, on) => {
-    const w = world(on, { answers: [/\(Recommended\)$/, /^Yes, record coderabbit/] })
-    await start($)
-    const told = await call($)
-    expect(w.seen.dialogs.length).toBe(2)
+    expect(w.seen.dialogs.length).toBe(1)
     expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
     expect(counts(w.seen).apply).toBe(1)
     expect((w.store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
     expect(told.text).toMatch(/by dave/)
   })
 
-  test('W2 a free-slot CodeRabbit pick asks again as well', async ($, on) => {
+  test('W2 a free-slot CodeRabbit pick is the $0 row: it is row 0 and its tap records at once', async ($, on) => {
     const free = { stdout: JSON.stringify(engineJson({ capacity: { count: 38, band: 'ok', warning: null, source: 'manual', date: '2026-10-25', state: 'free', checkedAt: new Date(NOW).toISOString() } })) }
-    const w = world(on, { json: free, answers: [/^CodeRabbit now \(free slot/, /^No, keep/] })
+    const w = world(on, { json: free, answers: [/^CodeRabbit now \(free slot/] })
     await start($)
     await call($)
-    expect(w.seen.dialogs.length).toBe(2)
-    expect(counts(w.seen).confirm).toBe(0)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.seen.dialogs[0]!.labels[0]).toBe('CodeRabbit now (free slot, $0) (Recommended)')
+    expect(counts(w.seen).confirm).toBe(1)
   })
 
   test('W2 none recommended and picked records at once by dave: no second question', async ($, on) => {
@@ -3594,11 +3591,11 @@ describe('pr-checkpoint v2: a paid pick asks again, one dialog return never reco
     expect(counts(w.seen).confirm).toBe(0)
   })
 
-  test('W3 a miss on the paid confirm is asked again, and three misses record nothing', async ($, on) => {
-    const w = world(on, { answers: [/\(Recommended\)$/, { other: 'yes' }, 'dismiss', 'empty'] })
+  test('W3 a typed yes on the one question is a miss, and three misses record nothing', async ($, on) => {
+    const w = world(on, { answers: [{ other: 'yes' }, 'dismiss', 'empty'] })
     await start($)
     const told = await call($)
-    expect(w.seen.dialogs.length).toBe(4)
+    expect(w.seen.dialogs.length).toBe(3)
     expect(counts(w.seen).confirm).toBe(0)
     expect(told.text).toMatch(/stays a draft/)
   })
@@ -3624,19 +3621,20 @@ describe('pr-checkpoint v2: a paid pick asks again, one dialog return never reco
     })
   }
 
-  test('W5 a typed paid word from the composer asks the paid confirm first', async ($, on) => {
+  test('W5 a typed paid word from the composer asks the one question (price in the label), not a Yes or No confirm', async ($, on) => {
     const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
-    const w = world(on, { store: { [PENDING]: pending }, answer: /^No, keep/ })
+    const w = world(on, { store: { [PENDING]: pending }, answer: /^Keep as draft/ })
     await start($)
     await slash($, '7 coderabbit')
     expect(w.seen.dialogs.length).toBe(1)
-    expect(w.seen.dialogs[0]!.labels[0]).toBe(NO)
+    expect(w.seen.dialogs[0]!.labels[0]).toMatch(/^Keep as draft/)
+    expect(w.seen.dialogs[0]!.labels.some(label => /^(Yes|No), /.test(label))).toBe(false)
     expect(counts(w.seen).confirm).toBe(0)
   })
 
-  test('W5 Yes on that confirm records by dave', async ($, on) => {
+  test('W5 the tap on the paid row of that question records by dave', async ($, on) => {
     const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
-    const w = world(on, { store: { [PENDING]: pending }, answer: /^Yes, record coderabbit/ })
+    const w = world(on, { store: { [PENDING]: pending }, answer: /^CodeRabbit review/ })
     await start($)
     await slash($, '7 coderabbit')
     expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
@@ -4046,11 +4044,11 @@ describe('pr-checkpoint: who raised an AskUserQuestion (GPAA P3, T0)', () => {
     await settle()
     expect(seen.origins.length).toBeGreaterThanOrEqual(2)
     expect(seen.origins[0]).toEqual({ plugin: 'engine', tier: 'core' })
-    // Every dialog of the mod (the pick and the paid confirm) reads the same.
+    // Every dialog of the mod (the pick) reads the same.
     for (const origin of seen.origins.slice(1)) expect(origin).toEqual({ plugin: 'ccv3-mods', tier: 'user' })
   })
 
-  // TAP11: the agentic-os tap writer skips a dialog whose origin is not the engine. Without the skip, the pick and the paid confirm of
+  // TAP11: the agentic-os tap writer skips a dialog whose origin is not the engine. Without the skip, the pick of
   // the mod would be stored as taps by Dave. The model call at the end proves the writer is live in this world (a control).
   test('TAP11 the own dialogs of the mod are not stored as taps; a model call in the same session is', async ($, on) => {
     const { seen, written } = world(on, { answers: [...PICK_YES, 'Alpha'] })
@@ -4058,9 +4056,98 @@ describe('pr-checkpoint: who raised an AskUserQuestion (GPAA P3, T0)', () => {
     const everything = () => Object.values(written).join('\n')
     await callTool($, { pr: 7, body: 'pr-body.md' })
     await settle()
-    expect(seen.origins.length).toBeGreaterThanOrEqual(2)
+    expect(seen.origins.length).toBeGreaterThanOrEqual(1)
     expect(everything()).not.toContain('Dave (tap)')
     await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which one?', header: 'Test', options: [{ label: 'Alpha', description: 'a' }, { label: 'Beta', description: 'b' }], multiSelect: false }] } as never)
     expect(everything()).toContain('Test: Alpha')
+  })
+})
+
+// ---- one question for a paid pick (card prflow-review-pick, PR C) -----------------------------------------------------------------------
+// The price is in the label of the paid row, so Dave's tap on it is the paid yes. No second "paid confirm" dialog exists, and row 0 is never a paid row.
+// How it can fail, and the test that catches it:
+// X1  a paid row is row 0, or a paid label has no price, or the question does not name the recommendation
+// X2  a dialog that returns row 0 with no tap records or spends something
+// X3  a paid tap asks a second question, or does not record by dave once
+// X4  a PR returned to draft (change pick) is auto-confirmed, in the dialog mode or in the ledger mode, on call 1 or on call 2
+// X5  a typed paid word records with no question that shows the price
+describe('pr-checkpoint PR C: a paid pick asks one question', () => {
+  const call = ($: Engine) => callTool($, { pr: 7, body: 'pr-body.md' })
+  const LEDGER = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false, ledger: true } }) }
+  const RECORD = { pr: 7, state: 'applied', head: HEAD, pathway: 'none', label: 'review:none', budget: [0, 0], decided_by: 'dave', via: 'dialog', session: SESSION, at: '2026-11-06T20:55:00.000Z' }
+  const BACK = 'Return to draft and pick again'
+  const ready = viewJson({ isDraft: false })
+  const ASK = { stdout: JSON.stringify({ ...engineJson(), ledger: { state: 'ask', ask: { header: 'PR #7', question: 'q', options: [{ label: 'Keep as draft ($0)', description: 'a' }, { label: 'No review, land on CI ($0)', description: 'b' }] }, reasked: 0, text: 'ask' } }) }
+  const jsonCalls = (seen: { run: Run[] }) => engineCalls(seen).filter(c => c.includes('--json'))
+  const autoConfirms = (seen: { run: Run[] }) => confirms(seen).filter(r => r.argv.includes('auto'))
+
+  test('X1 one dialog: the paid label carries its price, row 0 is Keep as draft, the question names the recommendation', async ($, on) => {
+    const w = world(on, { answer: 'dismiss' })
+    await start($)
+    await call($)
+    const first = w.seen.dialogs[0]!
+    expect(first.labels[0]).toMatch(/^Keep as draft/)
+    expect(first.labels[0]).not.toMatch(/Recommended/)
+    expect(first.labels.find(label => /^CodeRabbit review/.test(label))).toBe('CodeRabbit review (up to $1.75) (Recommended)')
+    expect(first.question).toContain('Recommended: CodeRabbit review')
+  })
+
+  test('X2 row 0 on the question records nothing: one dialog, no confirm, no apply, no label', async ($, on) => {
+    const w = world(on, { answer: labels => labels[0]! })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+    expect(w.store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(told.text).toMatch(/kept #7 as a draft/)
+  })
+
+  test('X3 the tap on the paid row records by dave, once, then applies: one dialog, no Yes or No confirm', async ($, on) => {
+    const w = world(on, { answer: /^CodeRabbit review/ })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
+    expect(counts(w.seen).apply).toBe(1)
+    expect(w.seen.dialogs.flatMap(d => d.labels).some(label => /^(Yes|No), /.test(label))).toBe(false)
+    expect(told.text).toMatch(/Dave chose coderabbit/)
+  })
+
+  test('X4 dialog mode: a PR returned to draft asks the pick and is not auto-confirmed', async ($, on) => {
+    const w = world(on, { json: autoJson(), store: { 'checkpoint:pr:7': RECORD }, viewSeq: [ready], answers: [BACK, /^Keep as draft/] })
+    await start($)
+    const told = await call($)
+    expect(w.seen.dialogs.length).toBe(2)
+    expect(autoConfirms(w.seen)).toEqual([])
+    expect(told.text).toMatch(/kept #7 as a draft/i)
+  })
+
+  test('X4 ledger mode, call 1: a PR returned to draft is not auto-confirmed and the engine is asked with --ask-anyway', async ($, on) => {
+    const w = world(on, { files: LEDGER, json: autoJson(), store: { 'checkpoint:pr:7': RECORD }, viewSeq: [ready], answer: BACK, ledgerSeq: [ASK] })
+    await start($)
+    const told = await call($)
+    expect(autoConfirms(w.seen)).toEqual([])
+    expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
+    expect(told.text).toContain('Keep as draft ($0)')
+  })
+
+  test('X4 ledger mode, call 2 (the PR is a draft now): still no auto-confirm, still --ask-anyway', async ($, on) => {
+    const w = world(on, { files: LEDGER, json: autoJson(), store: { 'checkpoint:pr:7': RECORD }, viewSeq: [ready], answer: BACK, ledgerSeq: [ASK, ASK] })
+    await start($)
+    await call($)
+    const second = await call($)
+    expect(autoConfirms(w.seen)).toEqual([])
+    expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
+    expect(second.text).toContain('Keep as draft ($0)')
+  })
+
+  test('X5 a typed paid word asks the one question (price in the label) and records nothing without a tap', async ($, on) => {
+    const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+    const w = world(on, { store: { [PENDING]: pending }, answer: /^Keep as draft/ })
+    await start($)
+    await slash($, '7 coderabbit')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.seen.dialogs[0]!.labels.some(label => /^CodeRabbit review \(up to \$1\.75\)/.test(label))).toBe(true)
+    expect(counts(w.seen).confirm).toBe(0)
   })
 })

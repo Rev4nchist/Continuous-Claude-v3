@@ -7,12 +7,12 @@
 //   the flag is false or missing (or --no-ledger is given) and the output still changes or an offer is written             -> LD1
 //   call 1 prints a spec that breaks AskUserQuestion limits, hides the recommendation, or leaks the label map              -> LD2
 //   call 1 writes no offer, or binds it to another key or head                                                              -> LD2
-//   a paid pick (coderabbit, both) records on one tap; the confirm is missing or has the paid row first                     -> LD3
-//   "No, keep the PR a draft" on the confirm (row 0 twice) still records a paid pathway                                     -> LD4, LD6
-//   a "Yes" on the confirm does not reach the record state                                                                   -> LD5
+//   a paid record is written with no tap, or with a tap for another pathway                                                   -> LD3
+//   a recorded paid pick leaves its tap, so a second record spends again                                                      -> LD4 and LD6
+//   a tap on a paid row does not reach the record state (the one question; see also LD17 to LD21)                             -> LD5
 //   none or "Keep as draft" asks a paid confirm, or Keep as draft leaves the decision in the store                          -> LD7
 //   a call with no answer is not counted, the re-asks do not stop after 2, or a stop does not say the PR stays a draft     -> LD8
-//   --confirm --by dave records with no tap, with a tap for another pathway or head, with no paid yes, or with no --pr      -> LD9
+//   --confirm --by dave records with no tap, with a tap for another pathway or head, or with no --pr                         -> LD9
 //   --confirm --by default records while the flag is on                                                                      -> LD9
 //   a successful --confirm leaves the taps in the store, so they pay twice                                                   -> LD9
 //   a tap for an old head counts for the new head                                                                            -> LD10
@@ -101,64 +101,35 @@ test('LD2: call 1 asks the review question: recommended first, AskUserQuestion l
   assert.ok(s.header.length <= 12 && s.header === `PR #${PR}`);
   assert.ok(s.question.split('\n').length <= 3, s.question);
   assert.ok(s.options.length >= 2 && s.options.length <= 4);
-  assert.ok(s.options[0].label.endsWith(' (Recommended)'));
-  assert.match(s.options[0].label, /^CodeRabbit review \(up to \$1\.25\) \(Recommended\)$/);
-  assert.deepEqual(s.options.slice(1).map((o) => o.label), ['Keep as draft ($0)', 'No review, land on CI ($0)']);
+  assert.equal(s.options[0].label, 'Keep as draft ($0)', 'a paid recommendation is not row 0 (PR C)');
+  assert.match(s.options[1].label, /^CodeRabbit review \(up to \$1\.25\) \(Recommended\)$/);
+  assert.deepEqual(s.options.map((o) => o.label).filter((_, i) => i !== 1), ['Keep as draft ($0)', 'No review, land on CI ($0)']);
   assert.ok(s.options.every((o) => o.description.length > 0));
   assert.match(s.question, /^PR #349, band CRITICAL, 5 files\.\nRecommended: CodeRabbit review, because /);
   assert.match(s.question, /CodeRabbit slot: unknown/);
   const offer = D.offerRead(review());
   assert.equal(offer.open, true);
   assert.deepEqual(offer.labels, s.options.map((o) => o.label));
-  assert.equal(offer.spec.values[s.options[0].label], 'coderabbit');
+  assert.equal(offer.spec.values[s.options[1].label], 'coderabbit');
   const none = setup({ labels: [] }).call().ledger.ask;
   assert.match(none.options[0].label, /^No review, land on CI \(\$0\) \(Recommended\)$/, 'HIGH with no trigger is recommended none: none first');
 });
 
-test('LD3: a tap on a paid row opens a paid confirm whose FIRST option is "No, keep the PR a draft (Recommended)"; the review tap alone never reaches record', () => {
+test('LD3: a paid record with no tap, or with the tap of another pathway, is refused and writes nothing', () => {
   const t = setup();
-  const first = t.call().ledger.ask;
-  tap(review(), first.options[0].label);
-  const second = t.call().ledger;
-  assert.equal(second.state, 'confirm-paid');
-  assert.equal(second.ask.options[0].label, 'No, keep the PR a draft (Recommended)');
-  assert.match(second.ask.options[1].label, /^Yes, record coderabbit \(up to \$1\.25\)$/);
-  assert.ok(second.ask.question.split('\n').length <= 3);
-  assert.equal(D.offerRead(pick('coderabbit')).open, true);
-  assert.equal(t.confirm('coderabbit').status, 1, 'the engine refuses the record with only the review tap');
+  assert.equal(t.confirm('coderabbit').status, 1, 'no tap');
+  tap(review(), labelOf(t.call().ledger.ask, /^No review/));
+  assert.equal(t.confirm('coderabbit').status, 1, 'the tap is for none');
   assert.ok(!existsSync(t.pathwayFile));
 });
 
-test('LD4 and LD6: a dialog that returns row 0 twice records nothing paid', () => {
+test('LD4 and LD6: a recorded paid pick uses its tap up: a second record is refused and the next call asks afresh', () => {
   const t = setup();
-  const first = t.call().ledger.ask;
-  tap(review(), first.options[0].label);
-  const confirm = t.call().ledger.ask;
-  tap(pick('coderabbit'), confirm.options[0].label);
-  const out = t.call().ledger;
-  assert.equal(out.state, 'kept-draft');
-  assert.match(out.text, /stays a draft/);
-  assert.equal(D.decisionRead(review()), null, 'both taps are used up');
-  assert.equal(D.decisionRead(pick('coderabbit')), null);
-  const r = t.confirm('coderabbit');
-  assert.equal(r.status, 1, `${r.stdout} ${r.stderr}`);
-  assert.ok(!existsSync(t.pathwayFile));
+  tap(review(), labelOf(t.call().ledger.ask, /^CodeRabbit review/));
+  assert.equal(t.confirm('coderabbit').status, 0);
+  const again = t.confirm('coderabbit');
+  assert.equal(again.status, 1, `${again.stdout} ${again.stderr}`);
   assert.equal(t.call().ledger.state, 'ask', 'the next call asks afresh');
-});
-
-test('LD5: "Yes, record coderabbit" reaches the record state; --confirm then records by dave and uses both taps up (LD9)', () => {
-  const t = setup();
-  tap(review(), t.call().ledger.ask.options[0].label);
-  const confirm = t.call().ledger.ask;
-  tap(pick('coderabbit'), labelOf(confirm, /^Yes, record/));
-  const out = t.call().ledger;
-  assert.deepEqual([out.state, out.pathway, out.by], ['record', 'coderabbit', 'dave']);
-  const r = t.confirm('coderabbit');
-  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
-  const rec = JSON.parse(readFileSync(t.pathwayFile, 'utf8'));
-  assert.deepEqual([rec.pathway, rec.decided_by, rec.head], ['coderabbit', 'dave', HEAD]);
-  assert.equal(D.decisionRead(review()), null, 'the review tap is used up');
-  assert.equal(D.decisionRead(pick('coderabbit')), null, 'the paid tap is used up');
 });
 
 test('LD7: none records with no paid confirm; Keep as draft records nothing and clears the tap', () => {
@@ -190,20 +161,17 @@ test('LD8: a call with no answer counts a miss; re-ask 1 of 2, re-ask 2 of 2, th
   assert.equal(D.missCount(review()), 3);
 });
 
-test('LD9: --confirm --by dave needs the matching tap, --pr and (paid) the confirm; --by default is refused while the flag is on', () => {
+test('LD9: --confirm --by dave needs the matching tap and --pr; --by default is refused while the flag is on', () => {
   const t = setup();
   const refused = (r, re, name) => { assert.equal(r.status, 1, `${name}: ${r.stdout} ${r.stderr}`); assert.match(r.stderr, re, name); assert.ok(!existsSync(t.pathwayFile), `${name}: nothing written`); };
   refused(t.confirm('none'), /no tap|tap/i, 'no tap at all');
   const ask = t.call().ledger.ask;
-  tap(review(), ask.options[0].label); // coderabbit
+  tap(review(), labelOf(ask, /^CodeRabbit review/));
   refused(t.confirm('none'), /tap/i, 'a tap for another pathway');
   refused(t.confirm('both'), /held|tap/i, 'both is held here and has no tap');
   refused(t.confirm('coderabbit', 'dave', []), /--pr/, 'no --pr');
   refused(t.confirm('coderabbit', 'default'), /ledger|default/i, '--by default');
-  refused(t.confirm('coderabbit'), /paid|confirm/i, 'review tap without the paid yes');
-  const confirmSpec = t.call().ledger.ask;
-  tap(pick('coderabbit'), labelOf(confirmSpec, /^Yes/));
-  assert.equal(t.confirm('coderabbit').status, 0);
+  assert.equal(t.confirm('coderabbit').status, 0, 'the tap on the paid row is the paid yes');
 });
 
 test('LD10: a tap for an old head does not count for the new head', () => {
@@ -267,7 +235,9 @@ test('LD14: when the recommendation is held, row 0 is "Keep as draft ($0) (Recom
   assert.doesNotMatch(spec.question, /Recommended: CodeRabbit \+ Greptile/);
   assert.ok(spec.options.length <= 4 && spec.question.split('\n').length <= 3);
   const open = { ...result, options: [option('coderabbit', true), option('both', true), option('wait', true), option('none', true)] };
-  assert.match(L.askSpecOf(PR, open, 'unknown.').options[0].label, /^CodeRabbit \+ Greptile .* \(Recommended\)$/, 'an open recommendation stays first');
+  const openSpec = L.askSpecOf(PR, open, 'unknown.');
+  assert.equal(openSpec.options[0].label, 'CodeRabbit now (free slot, $0)', 'the $0 row leads; the open paid recommendation is not row 0 (PR C)');
+  assert.match(openSpec.options[2].label, /^CodeRabbit \+ Greptile \(up to \$1\.25 \+ 3 credits\) \(Recommended\)$/);
 });
 
 test('LD15: --ask-anyway opens the question for an auto-eligible PR whose auto-confirm failed; only with the flag, only with the ledger on, never for a stopped result', () => {
@@ -287,6 +257,88 @@ test('LD15: --ask-anyway opens the question for an auto-eligible PR whose auto-c
   const facts = JSON.parse(readFileSync(path.join(stopped.dir, 'facts.json'), 'utf8'));
   writeFileSync(path.join(stopped.dir, 'facts.json'), JSON.stringify({ ...facts, stamp: STAMP(OLD) }));
   assert.equal(stopped.call(['--ask-anyway']).ledger.state, 'none', 'a stopped result opens no question');
+});
+
+// ---- one question for a paid pick (card prflow-review-pick, PR C) ---------------------------------------------------------------------
+// The price is in the label of the paid row, so Dave's tap on it is the paid yes. No second "paid confirm" question exists.
+// How the unit can fail, and the test that catches it:
+//   a paid row is row 0, so a dialog that returns row 0 with no tap spends money                                                  -> LD17, LD18
+//   a paid label has no price                                                                                                       -> LD17
+//   a paid tap still opens a paid confirm (state confirm-paid), or --confirm still wants the paid tap                              -> LD19
+//   the spec Dave sees differs from the offer the hook matches, or a paid-round offer is opened                                    -> LD19
+//   the decision row of a paid pick loses the price of the label Dave tapped                                                        -> LD20
+//   the free-slot and the paid row share a label or a position, or a re-ask shuffles the rows                                       -> LD21
+const PAID_PATHWAYS = ['coderabbit', 'both'];
+const pathwayAt = (triple, spec, i) => D.offerRead(triple).spec.values[spec.options[i].label];
+
+test('LD17: HIGH fixture: one question; every paid row carries its price; row 0 is no paid row; the question names the recommendation', () => {
+  const t = setup();
+  const { ledger } = t.call();
+  const spec = ledger.ask;
+  const paidRows = spec.options.filter((_, i) => PAID_PATHWAYS.includes(pathwayAt(review(), spec, i)));
+  assert.ok(paidRows.length > 0, 'the fixture offers a paid row');
+  for (const row of paidRows) assert.match(row.label, /\(up to \$1\.25\)/);
+  assert.equal(PAID_PATHWAYS.includes(pathwayAt(review(), spec, 0)), false, `row 0 is "${spec.options[0].label}"`);
+  assert.match(spec.question, /Recommended: CodeRabbit review, because /);
+  assert.equal(spec.options.filter((o) => o.label.endsWith(' (Recommended)')).length, 1, 'one Recommended row');
+});
+
+test('LD18: a dialog that returns row 0 with no tap records no spend: kept-draft, --confirm refused, no paid-round offer', () => {
+  const t = setup();
+  tap(review(), t.call().ledger.ask.options[0].label);
+  const out = t.call().ledger;
+  assert.equal(out.state, 'kept-draft');
+  assert.equal(D.offerRead(pick('coderabbit')), null, 'no paid confirm was opened');
+  for (const p of PAID_PATHWAYS) assert.equal(t.confirm(p).status, 1, p);
+  assert.ok(!existsSync(t.pathwayFile));
+});
+
+test('LD19: a tap on the paid row is the paid yes: states ask then record, no confirm-paid, --confirm records by dave and uses the tap up', () => {
+  const t = setup();
+  const first = t.call().ledger;
+  tap(review(), labelOf(first.ask, /^CodeRabbit review/));
+  const second = t.call().ledger;
+  assert.deepEqual([first.state, second.state, second.pathway, second.by], ['ask', 'record', 'coderabbit', 'dave']);
+  assert.equal(D.offerRead(pick('coderabbit')), null, 'no paid-round offer for the pick');
+  assert.deepEqual(first.ask, (({ header, question, options }) => ({ header, question, options }))(D.offerRead(review()).spec), 'the printed question is the stored offer');
+  const r = t.confirm('coderabbit');
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.equal(JSON.parse(readFileSync(t.pathwayFile, 'utf8')).decided_by, 'dave');
+  assert.equal(D.decisionRead(review()), null, 'the tap is used up');
+});
+
+test('LD20: the decision row of a paid pick holds the label Dave tapped, with its price', () => {
+  const t = setup();
+  const label = labelOf(t.call().ledger.ask, /^CodeRabbit review/);
+  tap(review(), label);
+  const row = D.decisionRead(review());
+  assert.equal(row.label, label);
+  assert.match(row.label, /\$1\.25/);
+});
+
+test('LD21: free-slot and paid CodeRabbit rows never share a label or a position; a re-ask shows the same order', async () => {
+  const L = await import(pathToFileURL(path.join(HERE, 'lib', 'checkpoint-ledger.mjs')).href);
+  const option = (pathway) => ({ pathway, available: true, reason: `${pathway} reason` });
+  const resultOf = (recommended, state) => ({ recommended, why: ['Critical file x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity: { state }, options: [option('coderabbit'), option('both'), option('wait'), option('none')] });
+  const seen = [];
+  for (const recommended of ['coderabbit', 'none']) {
+    const at = {};
+    for (const state of ['free', 'wait']) {
+      const spec = L.askSpecOf(PR, resultOf(recommended, state), 'unknown.');
+      const cr = spec.options.findIndex((o) => /^CodeRabbit (now|review)/.test(o.label));
+      at[state] = { cr, label: spec.options[cr].label };
+      assert.ok(spec.options.length <= 4);
+      assert.equal(new Set(spec.options.map((o) => o.label)).size, spec.options.length, 'labels differ inside one question');
+      assert.deepEqual(spec.options.map((o) => o.label), L.askSpecOf(PR, resultOf(recommended, state), 'unknown.').options.map((o) => o.label), 're-ask: same order');
+      if (state === 'wait') assert.notEqual(spec.values[spec.options[0].label], 'coderabbit', `${recommended}: paid row is not row 0`);
+      seen.push(spec.options.map((o) => o.label).join(' | '));
+    }
+    assert.notEqual(at.free.label, at.wait.label, `${recommended}: label`);
+    assert.notEqual(at.free.cr, at.wait.cr, `${recommended}: position`);
+  }
+  const t = setup();
+  const again = [t.call().ledger.ask, t.call().ledger.ask];
+  assert.deepEqual(again[0].options.map((o) => o.label), again[1].options.map((o) => o.label), 'a second call re-asks with the same rows');
 });
 
 // Every text the engine, the status script and the land scripts build must send Dave to a tap, never to a typed command (Dave 2026-11-06).

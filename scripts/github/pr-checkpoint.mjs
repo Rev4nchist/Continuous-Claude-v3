@@ -28,9 +28,9 @@
  *   block is not eligible (autoOf: kill switch checkpoint.autoConfirm, band LOW/MID/ELEVATED, no security-tier or critical file, no drift, labels read). The state dir holds stamp.json and pathway.json. Default:
  *   <git toplevel of the cwd>/.claude/cache/pre-pr. --facts and --config work as above (tests).
  *   Flag checkpoint.ledger (review-router.config.json, default false): see lib/checkpoint-ledger.mjs. With it true, `--json --pr N` adds a `ledger` block (the
- *   two-call protocol: state ask, confirm-paid, record, kept-draft, stop or none; `ledger.ask` is the AskUserQuestion spec) and writes the offer to the decision
- *   store; --no-ledger turns that off for one run; --ask-anyway keeps the question open for an auto-eligible PR (the mod passes it after a failed auto-confirm). And a confirm by dave with --pr N records only when Dave's tap for the pathway is in the store (a paid
- *   pathway also needs his Yes on the paid confirm); --by default records nothing. The taps are used up after the record.
+ *   two-call protocol: state ask, record, kept-draft, stop or none; `ledger.ask` is the AskUserQuestion spec) and writes the offer to the decision
+ *   store; --no-ledger turns that off for one run; --ask-anyway keeps the question open for an auto-eligible PR (the mod passes it after a failed auto-confirm). And a confirm by dave with --pr N records only when Dave's tap for the pathway is in the store (a tap on a paid
+ *   row carries its price and is the paid yes); --by default records nothing. The tap is used up after the record.
  * node scripts/github/pr-checkpoint.mjs --apply <pr> [--state-dir <dir>]
  *   Reads pathway.json, checks the live PR (a draft, at the recorded head), adds the review label, then marks it ready. The label
  *   comes first, and a failed label never reaches ready. gh is the real gh, or `node $PR_CHECKPOINT_GH` (tests).
@@ -946,7 +946,7 @@ function runConfirm(o) {
   const record = confirmRecord(args);
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), `${JSON.stringify(record, null, 2)}\n`);
-  if (ledgerOn(policy)) ledgerUse({ pr, head: facts.head, pathway: args.pathway });
+  if (ledgerOn(policy)) ledgerUse({ pr, head: facts.head });
   console.log(JSON.stringify(record));
 }
 

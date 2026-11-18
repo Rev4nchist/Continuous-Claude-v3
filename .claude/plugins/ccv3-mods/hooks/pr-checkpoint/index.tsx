@@ -62,13 +62,10 @@ import {
   namesPathway,
   namesSlotWrite,
   namesStore,
-  needsPaidConfirm,
+  isPaidPathway,
   noQuestionText,
   notDraftText,
   onlyDaveRecordsNone,
-  paidConfirmLabels,
-  paidConfirmQuestion,
-  paidUnconfirmedText,
   parseCheckpointArgs,
   parseGrantArgs,
   parseResult,
@@ -117,7 +114,7 @@ const sessionId = async ($: EngineInterface): Promise<string> => $.session.id()
 // ---- store -----------------------------------------------------------------------------------------------------------------
 
 /** riskHigh: whether the PR carried risk:high when the checkpoint read it (null: unread; absent: a pending stored by an older mod). A flip makes the recommendation stale. */
-type Pending = { pr: number; body: string; root: string; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string; at: number; riskHigh?: boolean | null; dependabot?: boolean }
+type Pending = { pr: number; body: string; root: string; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string; at: number; riskHigh?: boolean | null; dependabot?: boolean; repick?: boolean }
 
 const isPending = (value: unknown): value is Pending => {
   const p = value as Partial<Pending> | null | undefined
@@ -428,20 +425,6 @@ const recordChoice = async ($: EngineInterface, pending: Pending, choice: Pathwa
 }
 
 /**
- * The second question for every paid pick, the recommended row too (M9). The first label is No, so a dialog that returns row 0 twice records
- * nothing. Null when Dave said the exact Yes; otherwise the answer that records nothing. A miss asks again, twice at most. The pending
- * checkpoint stays. The caller holds the dialog flag.
- */
-async function confirmPaid($: EngineInterface, pr: number, choice: PathwayChoice): Promise<Asked | null> {
-  const labels = paidConfirmLabels(choice)
-  const heard = await askUntil($, paidConfirmQuestion(pr, choice), labels, clip(`PR #${pr}`, 12), text => (labels.includes(text) ? text : null))
-  if ('hit' in heard && heard.hit === labels[1]) return null
-  const how = 'hit' in heard ? 'no' : heard.miss
-  return { text: paidUnconfirmedText(pr, choice.pathway, how, 'hit' in heard ? '' : heard.typed), recorded: null }
-}
-
-
-/**
  * Raises the checkpoint question for a pending checkpoint and acts on the answer. The caller holds the dialog flag. The pending checkpoint is
  * stored first, so a closed question comes back with a bare /pathway. With no recommendation or no open pathway nothing is asked.
  * An answer that matches no row (free text, Esc, empty) records nothing and the question comes back, twice at most; then the PR stays a draft.
@@ -456,17 +439,13 @@ const askCheckpoint = async ($: EngineInterface, pending: Pending): Promise<Aske
   return actOnChoice($, pending, heard.hit)
 }
 
-/** Acts on Dave's pick: Keep as draft records nothing; a paid pick asks the paid confirm; then the pick records. */
+/** Acts on Dave's pick: Keep as draft records nothing; any other pick records. A paid label carries its price, so the tap is the paid yes. */
 const actOnChoice = async ($: EngineInterface, pending: Pending, choice: PathwayChoice): Promise<Asked> => {
   const { pr } = pending
   if (choice.pathway === 'wait') {
     // The pending checkpoint stays: a bare /pathway raises the question again, and the stored copy is what that command reads.
     $.ui.toast(`PR #${pr} stays a draft`, { timeoutMs: 10_000 })
     return { text: keptDraftText(pr), recorded: null }
-  }
-  if (needsPaidConfirm(choice)) {
-    const refused = await confirmPaid($, pr, choice)
-    if (refused) return refused
   }
   return recordChoice($, pending, choice)
 }
@@ -506,15 +485,24 @@ async function releaseReturned($: EngineInterface, pr: number): Promise<void> {
   }
 }
 
-/** `prepare`, and for a ready PR with a record the change question first. A string is the final answer; a Prepared goes on. */
+/**
+ * `prepare`, and for a ready PR with a record the change question first. A string is the final answer; a Prepared goes on.
+ * A PR Dave returned to draft carries `repick`: auto-confirm must not record it, Dave is asked (R3). The mark stays in the pending checkpoint, so the
+ * next call for the same PR and head (after his tap, or a re-ask) still asks.
+ */
 const prepareChanging = async ($: EngineInterface, root: string, pr: number, body: string): Promise<Prepared | string> => {
   let prepared = await prepare($, root, pr, body)
+  let repick = false
   if (!prepared.ok && prepared.notDraft !== undefined) {
     const text = await changePick($, root, pr, prepared.notDraft)
     if (text !== null) return text
     prepared = await prepare($, root, pr, body)
+    repick = true
   }
-  return prepared.ok ? prepared : prepared.text
+  if (!prepared.ok) return prepared.text
+  const old = await loadPending($)
+  const carried = old?.repick === true && old.pr === pr && old.prHead === prepared.pending.prHead
+  return repick || carried ? { ok: true, pending: { ...prepared.pending, repick: true } } : prepared
 }
 
 // ---- the question, asked by the model (M1, checkpoint.ledger) --------------------------------------------------------------------------
@@ -558,14 +546,16 @@ const interactiveText = async ($: EngineInterface, root: string, pr: number, bod
   if (typeof prepared === 'string') return prepared
   // The flag is read where the engine runs (the PR checkout), not in the session root: the two configs may differ.
   const ledgerFlag = await ledgerOn($, prepared.pending.root)
-  const auto = await autoConfirm($, prepared.pending)
+  // A PR returned to draft is never auto-confirmed: Dave changed his pick, so he is asked (the question opens with --ask-anyway).
+  const repick = prepared.pending.repick === true
+  const auto = repick ? null : await autoConfirm($, prepared.pending)
   if (auto?.kind === 'done') {
     await finishAuto($, auto.record, prepared.pending.result.auto.band)
     return `The checkpoint for #${pr} was auto-confirmed: band ${prepared.pending.result.auto.band ?? 'unknown'}, none (${auto.record.label ?? 'no label'}). The mod added the label and marked the PR ready. No answer is needed. pr_watch continues. Do not merge.`
   }
   const lead = auto ? `Auto-confirm was not possible (${auto.why}), so the checkpoint for #${pr} waits for Dave. ` : ''
   // An auto-eligible PR that was not recorded (auto failed, or the engine recommends another pathway) still needs Dave's answer.
-  const ledger = ledgerFlag ? await ledgerBlock($, root, prepared.pending, prepared.pending.result.auto.eligible === true) : null
+  const ledger = ledgerFlag ? await ledgerBlock($, root, prepared.pending, repick || prepared.pending.result.auto.eligible === true) : null
   if (typeof ledger === 'string') return `${lead}${ledger}`
   const asked = ledger ? await ledgerCheckpoint($, prepared.pending, ledger) : await askCheckpoint($, prepared.pending)
   return `${lead}${asked.text}`
@@ -746,18 +736,6 @@ const ledgerRoute = async ($: EngineInterface, e: CommandEvent, pr: number, trac
   return sayer(trace)('ledger', ledgerCommandText(pr), [ledgerCommandNote(pr)])
 }
 
-/** A typed paid word asks the paid confirm first (M9). Null when the confirm said Yes or the pathway is free. */
-const typedPaidConfirm = async ($: EngineInterface, pending: Pending, pathway: string): Promise<Asked | null> => {
-  if (!takeDialog()) return { text: BUSY_TEXT, recorded: null }
-  try {
-    const row = buildPathwayAsk(pending.pr, pending.result, await $.clock.now())?.choices.find(one => one.pathway === pathway)
-    const choice: PathwayChoice = row ?? { label: pathway, pathway, by: 'dave' }
-    return needsPaidConfirm(choice) ? await confirmPaid($, pending.pr, choice) : null
-  } finally {
-    freeDialog()
-  }
-}
-
 const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): Promise<CommandReply> => {
   const say = sayer(trace)
   const grant = parseGrantArgs(e.args)
@@ -805,13 +783,11 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   // At HIGH and CRITICAL "no review" records only from Dave's own composer. A bridge command (the phone, a relay) raises the dialog instead,
   // so only his tap on the exact label records.
   if (pathway === 'none' && e.origin.kind !== 'composer' && isQueueBand(result.auto.band)) return askPending($, next, trace)
-  // A paid pick asks the paid confirm below, and Dave's Yes there is a tap: it records `dave`. Only a free `accept` (none) stays `default`.
-  const paid = needsPaidConfirm({ label: pathway, pathway, by: 'dave' })
-  const by = parsed.word === 'accept' && !paid && !onlyDaveRecordsNone(pathway, result.auto.band) ? 'default' : 'dave'
+  // A typed paid word shows no price, so it raises the one question: his tap on the paid row (price in the label) is the yes.
+  if (isPaidPathway(pathway)) return askPending($, next, trace)
+  const by = parsed.word === 'accept' && !onlyDaveRecordsNone(pathway, result.auto.band) ? 'default' : 'dave'
   // Only a composer command or a bridge command for the pending PR gets here (the check above). The bridge is Remote Control, not Dave's keyboard.
   const via = e.origin.kind === 'bridge' ? 'bridge' : 'composer'
-  const refused = await typedPaidConfirm($, next, pathway)
-  if (refused) return say('not-recorded', refused.text)
   const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by, via)
   if (out.stage !== 'done') {
     return say('not-recorded', out.stage === 'apply' ? `PR #${pr}: ${pathway} is confirmed, but --apply was refused: ${out.text}` : `PR #${pr}: ${pathway} was not recorded: ${out.text}`)

@@ -313,6 +313,23 @@ const labelFor = (one: CheckpointOption, files: number, slot: SlotFact): string 
 
 const WAIT_OPTION: CheckpointOption = { pathway: 'wait', label: null, available: true, cost: [0, 0], reason: '' }
 
+/** A paid row spends money: Greptile always, CodeRabbit unless the slot is free. Its label carries the price, so a tap on it is the paid yes. */
+const isPaidRow = (one: CheckpointOption, slot: SlotFact): boolean => one.pathway === 'both' || (one.pathway === 'coderabbit' && slot.state !== 'free')
+
+/**
+ * The rows of the question. The $0 rows come first (the recommendation when it is free, the free-slot CodeRabbit row), then Keep as draft, then the
+ * paid rows (the recommendation first), then "No review". A paid row is never row 0: a dialog that returns row 0 with no tap records nothing
+ * paid. The free-slot and the paid CodeRabbit row never share a position. The order depends only on the result, so a re-ask shows the same rows.
+ */
+const rowsOf = (buttons: CheckpointOption[], slot: SlotFact, recommendedFirst: boolean): CheckpointOption[] => {
+  const open = buttons.filter(one => one.pathway !== 'wait')
+  const crs = open.filter(one => one.pathway !== 'none')
+  const first = buttons[0]
+  const lead = recommendedFirst && first && !isPaidRow(first, slot) ? [first.pathway === 'wait' ? WAIT_OPTION : first] : []
+  const rows = [...lead, ...crs.filter(one => !isPaidRow(one, slot)), WAIT_OPTION, ...crs.filter(one => isPaidRow(one, slot)), ...open.filter(one => one.pathway === 'none')]
+  return rows.filter((one, i) => rows.findIndex(other => other.pathway === one.pathway) === i)
+}
+
 /** Line 1 of the question: PR, band and file count. The band is the one the engine printed at auto-confirm. */
 const overview = (pr: number, result: CheckpointResult): string => {
   const files = result.size.files
@@ -339,23 +356,17 @@ const questionLines = (pr: number, result: CheckpointResultWithDrift, held: Chec
  * The checkpoint question, or null when there is nothing to choose: no recommendation (R0), or no open pathway. The question has 3 lines: the PR,
  * the recommendation with its reason, and the CodeRabbit slot (`now` is the clock in ms, for the minutes left). A second reason, a held pathway
  * and a warning each add a line below them: Dave must see them before he picks. The labels are 2 to 4:
- * the open pathways (at most 3), one "Keep as draft", and "No review, land on CI" last when the engine offers it and it is not the recommendation. When the recommendation is open it is first, with " (Recommended)".
- * Every pick is `--by dave`, and a paid pick asks a second question (needsPaidConfirm). When it is held, no label is marked.
+ * the open pathways, one "Keep as draft", and "No review, land on CI" last when the engine offers it (rowsOf gives the order). When the recommendation
+ * is open its row carries " (Recommended)": row 0 unless it is paid. A paid row carries its price and is never row 0: the tap on it is the paid yes,
+ * and there is no second question. Every pick is `--by dave`. When the recommendation is held, no label is marked.
  */
 export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, now: number | null = null): PathwayAsk | null => {
   const { buttons, held, recommendedFirst } = optionsInOrder(result)
   const open = buttons.filter(one => one.pathway !== 'wait')
   if (result.recommended === null || open.length === 0) return null
-  const keepFirst = recommendedFirst && buttons[0]?.pathway === 'wait'
-  // "No review, land on CI" is the last label at every band, unless it IS the recommendation (a LOW to ELEVATED PR, or a HIGH or CRITICAL PR that
-  // earns no CodeRabbit under the interim rule), and then it is first.
-  const noneIsRecommended = recommendedFirst && result.recommended === 'none'
-  const noReview = noneIsRecommended ? [] : open.filter(one => one.pathway === 'none')
-  const paid = open.filter(one => noneIsRecommended || one.pathway !== 'none').slice(0, 3 - noReview.length)
-  const ordered = keepFirst ? [WAIT_OPTION, ...paid, ...noReview] : [...paid, WAIT_OPTION, ...noReview]
   const slot = slotOf(result.capacity, now)
-  const choices: PathwayChoice[] = ordered.map((one, i) => ({
-    label: `${labelFor(one, result.size.files, slot)}${recommendedFirst && i === 0 ? RECOMMENDED : ''}`,
+  const choices: PathwayChoice[] = rowsOf(buttons, slot, recommendedFirst).map(one => ({
+    label: `${labelFor(one, result.size.files, slot)}${recommendedFirst && one.pathway === result.recommended ? RECOMMENDED : ''}`,
     pathway: one.pathway,
     by: 'dave',
   }))
@@ -492,28 +503,10 @@ export const answerOfLabel = (spec: AskSpec, answer: unknown): 'yes' | 'no' | nu
 export const RETRY_LABELS = ['Retry', 'Leave as draft'] as const
 
 /**
- * True for every paid pick, the recommended row too: a pathway that is neither none nor wait. A mis-tap spends money (PRs 315 and 316), and
- * one dialog return once picked the recommended row with no tap at all (PR 349, M9), so a paid pick always asks a second time.
+ * A paid pathway: coderabbit or both. A typed paid word has no label with a price, so it raises the one question (Dave sees the price, his tap
+ * on the paid row is the yes). A mis-tap spent money once (PRs 315 and 316), which is why a paid row is never row 0.
  */
-export const needsPaidConfirm = (choice: PathwayChoice): boolean => choice.pathway !== 'none' && choice.pathway !== 'wait'
-
-/** The two labels of the paid confirm. The first is No, the free row, so a dialog that returns row 0 twice records nothing. Only the second records. */
-export const paidConfirmLabels = (choice: PathwayChoice): readonly [string, string] => [`No, keep the PR a draft${RECOMMENDED}`, `Yes, record ${choice.pathway}`]
-
-/** The paid confirm question. `choice.label` holds the pathway name and its cost. */
-export const paidConfirmQuestion = (pr: number, choice: PathwayChoice): string =>
-  `PR #${pr}: you picked ${choice.label.replace(RECOMMENDED, '')}. It can cost money. Record it? If you say No, nothing is recorded and the PR stays a draft.`
-
-/** The tool text when the paid confirm records nothing. `typed` is what Dave wrote under Other, shown to the model like `otherText`. */
-export const paidUnconfirmedText = (pr: number, pathway: string, how: 'no' | 'closed' | 'empty' | 'other', typed = ''): string => {
-  const said = {
-    no: `Dave answered No to ${pathway} for #${pr}`,
-    closed: `Dave closed the confirm for ${pathway} on #${pr}`,
-    empty: `No valid answer came back to the confirm for ${pathway} on #${pr}`,
-    other: `Dave wrote: ${clip(typed.replace(/\s+/g, ' '), 400)}`,
-  }[how]
-  return `${said}. Nothing recorded. The PR stays a draft. Call pr_checkpoint with pr ${pr} to ask again, only when Dave wants to.`
-}
+export const isPaidPathway = (pathway: string): boolean => pathway === 'coderabbit' || pathway === 'both'
 
 /** A watcher ask Dave closed three ways: the quiet time before it may come back, and how often it comes back at all. */
 export const ASK_DEFER_MS = 30 * 60_000

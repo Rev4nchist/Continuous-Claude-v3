@@ -16,9 +16,7 @@ import {
   ledgerCommandText,
   keptDraftText,
   movedText,
-  needsPaidConfirm,
-  paidConfirmLabels,
-  paidUnconfirmedText,
+  isPaidPathway,
   parseCheckpointArgs,
   pathwayOfAnswer,
   notDraftText,
@@ -150,13 +148,13 @@ describe('buildPathwayAsk: three lines and the slot state', () => {
     expect(later(3).question.split('\n')[2]).toBe('CodeRabbit slot: free now.')
     const stale = later(6)
     expect(stale.question.split('\n')[2]).toBe('CodeRabbit slot: unknown (no notice seen).')
-    expect(stale.choices[0]!.label).not.toMatch(/free slot/)
+    expect(stale.choices.find(one => one.pathway === 'coderabbit')!.label).not.toMatch(/free slot/)
   })
 
   test('P4c a wait fact whose next slot is in the past reads unknown: line 3 and the label', () => {
     const past = buildPathwayAsk(328, result(WAIT), Date.parse('2026-11-06T20:30:00Z'))!
     expect(past.question.split('\n')[2]).toBe('CodeRabbit slot: unknown (last notice 13:10 CST).')
-    expect(past.choices[0]!.label).not.toMatch(/paid/)
+    expect(past.choices.find(one => one.pathway === 'coderabbit')!.label).not.toMatch(/paid/)
   })
 
   test('P4d a wait fact with no slot time reads unknown once it is older than 5 minutes', () => {
@@ -165,7 +163,7 @@ describe('buildPathwayAsk: three lines and the slot state', () => {
     const old = buildPathwayAsk(328, result(noTime), NOW + 6 * 60_000)!
     expect(fresh.question.split('\n')[2]).toMatch(/^CodeRabbit slot: no free slot/)
     expect(old.question.split('\n')[2]).toMatch(/^CodeRabbit slot: unknown \(/)
-    expect(old.choices[0]!.label).not.toMatch(/paid/)
+    expect(old.choices.find(one => one.pathway === 'coderabbit')!.label).not.toMatch(/paid/)
   })
 
   test('P3 a band the engine did not print reads unknown', () => {
@@ -187,13 +185,16 @@ describe('buildPathwayAsk: three lines and the slot state', () => {
 
   test('P5 the CodeRabbit label follows the slot state', () => {
     expect(ask(FREE).choices[0]!.label).toBe('CodeRabbit now (free slot, $0) (Recommended)')
-    expect(ask(WAIT).choices[0]!.label).toBe('CodeRabbit now, paid (up to $1.75) (Recommended)')
-    expect(ask(UNKNOWN).choices[0]!.label).toBe('CodeRabbit review (up to $1.75) (Recommended)')
-    expect(ask(null).choices[0]!.label).toBe('CodeRabbit review (up to $1.75) (Recommended)')
+    // PR C: a paid recommendation is row 1 (row 0 is Keep as draft), so the paid rows are read by pathway.
+    const row = (a: PathwayAsk) => a.choices.find(one => one.pathway === 'coderabbit')!.label
+    expect(row(ask(WAIT))).toBe('CodeRabbit now, paid (up to $1.75) (Recommended)')
+    expect(row(ask(UNKNOWN))).toBe('CodeRabbit review (up to $1.75) (Recommended)')
+    expect(row(ask(null))).toBe('CodeRabbit review (up to $1.75) (Recommended)')
   })
 
   test('P5 no wait-for-slot row is added at any state: Keep as draft is the only waiting label', () => {
-    for (const slot of [FREE, WAIT, UNKNOWN]) expect(ask(slot).choices.map(one => one.pathway)).toEqual(['coderabbit', 'wait', 'none'])
+    expect(ask(FREE).choices.map(one => one.pathway)).toEqual(['coderabbit', 'wait', 'none'])
+    for (const slot of [WAIT, UNKNOWN]) expect(ask(slot).choices.map(one => one.pathway)).toEqual(['wait', 'coderabbit', 'none'])
   })
 })
 
@@ -211,8 +212,8 @@ describe('keptDraftText', () => {
 // ---- pathway flow v2 (Dave 2026-11-06): every decision is a tap ----------------------------------------------------------------------
 // How it can fail, and the test that catches it:
 // V1  a tap records `--by default` (the recommended row), so one dialog return can mark a paid PR ready        (M9)
-// V2  a paid pick, the recommended one too, records with no second tap                                           (M9)
-// V3  the paid confirm lists Yes first, so a dialog that returns row 0 twice records a paid pick                 (M9)
+// V2  a paid row shows no price (PR C: one question, the tap on the paid row is the yes)                           (M9)
+// V3  a paid row is row 0, so one dialog return with no tap records a paid pick                                  (M9, PR C)
 // V4  a typed answer is read past its first line, or the ignored text is not named                              (M6)
 // V5  an ask that can spend lists the spending row first                                                         (item 5)
 // V6  a text for the model or Dave tells him to type or paste a command                                          (M10)
@@ -229,16 +230,20 @@ describe('v2: a tap is always Dave\'s and a paid pick asks again', () => {
     expect(pathwayOfAnswer(first, ask(FREE))?.by).toBe('dave')
   })
 
-  test('V2 every paid pick asks again, the recommended row included; none and Keep as draft do not', () => {
-    const rows = ask(FREE, { options: [opt('none'), opt('coderabbit'), opt('both'), opt('wait')] }).choices
-    expect(rows.filter(needsPaidConfirm).map(choice => choice.pathway)).toEqual(['coderabbit', 'both'])
-    expect(rows[0]!.label).toMatch(/\(Recommended\)$/)
+  test('V2 every paid row (coderabbit, both) shows its price in the label; none and Keep as draft are $0', () => {
+    const rows = ask(WAIT, { options: [opt('none'), opt('coderabbit'), opt('both'), opt('wait')] }).choices
+    expect(rows.filter(choice => isPaidPathway(choice.pathway)).map(choice => choice.pathway)).toEqual(['coderabbit', 'both'])
+    for (const choice of rows) expect(choice.label, choice.pathway).toMatch(isPaidPathway(choice.pathway) ? /\(up to \$1\.75\)/ : /\(\$0\)/)
   })
 
-  test('V3 the paid confirm lists No first, marked Recommended, and Yes second', () => {
-    const [no, yes] = paidConfirmLabels(ask(FREE).choices[0]!)
-    expect(no).toBe('No, keep the PR a draft (Recommended)')
-    expect(yes).toBe('Yes, record coderabbit')
+  test('V3 a paid row is never row 0: the first row is a $0 row whatever the recommendation and the slot', () => {
+    for (const recommended of ['coderabbit', 'both', 'none']) {
+      for (const slot of [FREE, WAIT, UNKNOWN]) {
+        const first = ask(slot, { recommended, options: [opt('none'), opt('coderabbit'), opt('both'), opt('wait')] }).choices[0]!
+        expect(first.label, recommended).toMatch(/\$0\)/)
+        expect(first.label, recommended).not.toMatch(/up to/)
+      }
+    }
   })
 })
 
@@ -291,7 +296,6 @@ describe('v2: no text tells Dave to type or paste a command', () => {
       stopText(7, 'other', 'free text'),
       stopText(7, 'closed'),
       stopText(7, 'empty'),
-      ...(['no', 'closed', 'empty', 'other'] as const).map(how => paidUnconfirmedText(7, 'coderabbit', how, 'typed words')),
       NEED_PR,
       STORE_DENY,
       changeKeptText(7, 'review:coderabbit'),
