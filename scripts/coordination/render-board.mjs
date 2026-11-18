@@ -35,7 +35,7 @@ import {
   boardMismatch, boardWriteKind, mergeUnknownColumns, bandAhead, doneChip,
 } from './kanban-place.mjs';
 import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, loadRegistry, renderBoardCmd, resolveBoard } from './lane-board.mjs';
-import { finishPage, readIdList } from './board-mask.mjs';
+import { finishPage, maskLaneRows, readIdList } from './board-mask.mjs';
 import { boardStamp, defaultOut, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import { compareLanes, laneOrderSql } from './lane-sort.mjs';
@@ -222,6 +222,17 @@ const eventKinds = (await c.query(
 
 await c.end();
 
+// The listed-id mask at the SOURCE (card coord-board-mask-ids): every lane text the page shows is masked here, before any HTML escape, the kb-data
+// JSON block or a cut, so no escape or slice can split an id away from the mask. The list is read from the root of THIS board's registry entry
+// (the primary checkout for continuous-claude). A list problem masks nothing here: finishPage below decides (exit 3 on continuous-claude, a note
+// on another board). These rows are the render's own copy; nothing writes them back to the lane database.
+const maskRoot = (loadRegistry().find((e) => e.key === BOARD.via && e.status.toLowerCase() !== 'inactive') ?? {}).path ?? BOARD.root;
+let sourceIds = [];
+try { sourceIds = readIdList(maskRoot); } catch { sourceIds = []; }
+// The card hash stays the hash of the RAW lane fields (the sync compares it with the database text), so it is taken before the mask.
+const RAW_CARD_HASH = new Map(lanes.map((l) => [l.id, hashFields([l.title, l.scope, l.state, l.note])]));
+const maskedAtSource = maskLaneRows({ lanes, sessions, events }, sourceIds);
+
 // ------------------------------------------------------------------ derive
 
 const open = lanes.filter((l) => l.state !== 'done');
@@ -321,7 +332,7 @@ const kbSchedJson = KANBAN ? JSON.stringify(SPLIT.scheduled.map(({ lane: l }) =>
 const KB_STATUS =['backlog', 'ready', 'blocked', 'done'];
 // Hash of what a Plain English answer was written from. Computed here, read from
 // data-hash by the page, so the page never rebuilds it from DOM text.
-const kbHash = (l) => hashFields([l.title, l.scope, l.state, l.note]);
+const kbHash = (l) => RAW_CARD_HASH.get(l.id) ?? hashFields([l.title, l.scope, l.state, l.note]);
 let kbSeq = 0;
 
 // The holder line of an In progress card: who holds it and how long the lease has left.
@@ -1296,7 +1307,6 @@ ${kbScript}
 // The listed-id mask (card coord-board-mask-listed-ids): the whole page is masked and checked once, here, just before the write. The list is read
 // from the root of THIS board's registry entry (the primary checkout for continuous-claude), the same two files the holdout-scan hook reads.
 // Board continuous-claude: a list problem or a hit left is exit 3 and no file. Another board: an absent list renders with one note.
-const maskRoot = (loadRegistry().find((e) => e.key === BOARD.via && e.status.toLowerCase() !== 'inactive') ?? {}).path ?? BOARD.root;
 const finished = finishPage({ html, board: KEY, defaultBoard: DEFAULT_BOARD, readList: () => readIdList(maskRoot) });
 if (!finished.ok) {
   console.error(finished.line);
@@ -1304,4 +1314,4 @@ if (!finished.ok) {
 }
 if (finished.left === null) console.error(finished.line);
 writeAtomic(OUT, finished.html);
-console.log(`wrote ${OUT} (${(finished.html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${procSummary ? `${procSummary.matched}/${procSummary.total} claude.exe matched, ` : ''}${events.length} events${finished.left === 0 ? `; ${finished.line}` : ''}`);
+console.log(`wrote ${OUT} (${(finished.html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${procSummary ? `${procSummary.matched}/${procSummary.total} claude.exe matched, ` : ''}${events.length} events${finished.left === 0 ? `; masked at source ${maskedAtSource}, ${finished.line}` : ''}`);
