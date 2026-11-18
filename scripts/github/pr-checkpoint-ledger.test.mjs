@@ -24,7 +24,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -75,13 +75,13 @@ function setup({ ledger = true, labels = ['risk:high'], paths = FIVE, head = HEA
   // PR_CHECKPOINT_TEST=1 is the test mode of --facts and --config (PR 1 taps, fixture guard). `mode.on = false` drops it and keeps the temp store.
   const mode = { on: true };
   const envOf = () => ({ ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, CCV3_DECISIONS_FILE: storeFile, PR_CHECKPOINT_NO_PROBE: '1', ...(mode.on ? { PR_CHECKPOINT_TEST: '1' } : { PR_CHECKPOINT_TEST: '' }) });
-  const run = (args) => spawnSync(process.execPath, [ENGINE, ...args, ...(args.includes('--confirm') ? ['--state-dir', state] : []), '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir, env: envOf() });
+  const run = (args, envOver = {}) => spawnSync(process.execPath, [ENGINE, ...args, ...(args.includes('--confirm') ? ['--state-dir', state] : []), '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir, env: { ...envOf(), ...envOver } });
   // A drop run reads no facts and no config: only the store. It must never need --facts.
   const drop = (extra = ['--pr', String(PR)]) => spawnSync(process.execPath, [ENGINE, '--drop-taps', ...extra], { encoding: 'utf8', cwd: dir, env: envOf() });
   const call = (extra = []) => { const r = run(['--json', '--pr', String(PR), ...extra]); assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`); return JSON.parse(r.stdout); };
-  const confirm = (pathway, by = 'dave', extra = ['--pr', String(PR)]) => run(['--confirm', pathway, '--by', by, '--body', bodyFile, ...extra]);
+  const confirm = (pathway, by = 'dave', extra = ['--pr', String(PR)], envOver = {}) => run(['--confirm', pathway, '--by', by, '--body', bodyFile, ...extra], envOver);
   const retime = (now) => writeFileSync(factsFile, factsAt(now));
-  return { dir, call, confirm, retime, run, drop, mode, stateDir: state, pathwayFile: path.join(state, 'pathway.json'), storeFile };
+  return { dir, call, confirm, retime, run, drop, mode, envOf, state, bodyFile, factsFile, cfgFile, stateDir: state, pathwayFile: path.join(state, 'pathway.json'), storeFile };
 }
 
 /** Dave taps the option of `label` on the open offer of `triple`. */
@@ -751,4 +751,60 @@ test('m5: with the recommendation held the engine marks Keep as draft (the mod c
   const result = { recommended: 'both', why: ['x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity: { state: 'wait', checkedAt: iso(NOW_MS - 60_000), nextSlotAt: iso(NOW_MS + 600_000) }, options: [option('coderabbit', true), option('both', false), option('wait', true), option('none', true)] };
   const labels = L.askSpecOf(PR, result, 'x', NOW_MS).options.map((o) => o.label);
   assert.deepEqual(labels.filter((l) => l.endsWith(' (Recommended)')), ['Keep as draft ($0) (Recommended)']);
+});
+
+// ---- critic fixes of PR 1 (review of 5858daba) --------------------------------------------------------------------------------------------
+// How it can fail, and the test that catches it:
+//   a fixture config with the ledger flag OFF lets --confirm --by dave record with no tap, outside test mode                  -> F4
+//   the tap label changes between the check and the use (Dave taps another row) and the confirm still writes                 -> B7
+//   the real store path in another spelling (case on win32, dots) counts as a temp store                                        -> F3
+test('F3: PR_CHECKPOINT_TEST=1 with CCV3_DECISIONS_FILE at the REAL store path is not test mode, in any spelling of the path', () => {
+  const real = D.decisionsPath({});
+  const spellings = [real, path.join(path.dirname(real), '..', path.basename(path.dirname(real)), path.basename(real))];
+  if (process.platform === 'win32') spellings.push(real.toUpperCase(), real.toLowerCase(), real.replace(/\\/g, '/'));
+  const t = setup(); // a confirm with no tap writes nothing even when the guard is broken: it reads the real store and refuses
+  for (const spelling of spellings) {
+    const r = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { CCV3_DECISIONS_FILE: spelling });
+    assert.equal(r.status, 1, `${spelling}: ${r.stdout} ${r.stderr}`);
+    assert.match(r.stderr, /refused: --facts and --config are for tests\. A live question reads GitHub\./, spelling);
+  }
+  const temp = t.confirm('coderabbit', 'dave', ['--pr', String(PR)]);
+  assert.match(temp.stderr, /No tap of Dave's/, 'a temp store is test mode: the run goes on and finds no tap');
+});
+
+test('F4: the ledger flag of a fixture config is not trusted: with it OFF a fixture --confirm and the ledger step are still refused outside test mode', () => {
+  const t = setup({ ledger: false });
+  t.mode.on = false;
+  const confirm = t.confirm('none');
+  assert.equal(confirm.status, 1, `${confirm.stdout} ${confirm.stderr}`);
+  assert.match(confirm.stderr, /refused: --facts and --config are for tests\. A live question reads GitHub\./);
+  assert.ok(!existsSync(t.pathwayFile), 'no record with no tap');
+  const step = t.run(['--json', '--pr', String(PR)]);
+  assert.equal(step.status, 1, `${step.stdout} ${step.stderr}`);
+  assert.match(step.stderr, /refused: --facts and --config are for tests/);
+  assert.equal(t.run(['--json', '--pr', String(PR), '--no-ledger']).status, 0, 'no ledger step: nothing to guard');
+  assert.equal(t.run(['--json']).status, 0, 'a read-only run with no PR');
+  t.mode.on = true;
+  assert.equal(t.confirm('none').status, 0, 'test mode: the flag-off fixture run still works');
+});
+
+test('B7: the tap label changes between the check and the use (Dave taps another row): exit 1 label-changed, the new tap stays, no record', async () => {
+  const t = setup();
+  paidTap(t);
+  const other = labelOf(D.offerRead(review()).spec, /^No review/);
+  holdLock(t); // the engine reads the tap, then waits for the lock at the use
+  const child = spawn(process.execPath, [ENGINE, '--confirm', 'coderabbit', '--by', 'dave', '--body', t.bodyFile, '--pr', String(PR), '--state-dir', t.stateDir, '--facts', t.factsFile, '--config', t.cfgFile], { cwd: t.dir, env: t.envOf() });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const closed = new Promise((resolve) => child.on('close', resolve));
+  await new Promise((resolve) => setTimeout(resolve, 2500)); // the lock wait is 5 s: the check is long done
+  const store = JSON.parse(readFileSync(t.storeFile, 'utf8'));
+  for (const row of Object.values(store.decisions)) row.label = other; // Dave's new tap
+  writeFileSync(t.storeFile, JSON.stringify(store));
+  freeLock(t);
+  const code = await closed;
+  assert.equal(code, 1, stderr);
+  assert.match(stderr, /could not be used up \(label-changed\)\. Nothing was recorded\./);
+  assert.equal(D.decisionRead(review()).label, other, 'the new tap stays');
+  assert.ok(!existsSync(t.pathwayFile), 'no record');
 });

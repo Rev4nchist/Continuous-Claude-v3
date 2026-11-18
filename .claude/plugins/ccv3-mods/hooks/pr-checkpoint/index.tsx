@@ -508,8 +508,10 @@ const dropTaps = async ($: EngineInterface, root: string, pr: number): Promise<s
  * Run it after the undo succeeded; the marker also makes the engine read an older tap as stale (--repick-since), whatever the drop did.
  */
 async function releaseReturned($: EngineInterface, root: string, pr: number): Promise<string | null> {
+  let marker: Record<string, unknown> = {}
   try {
-    await $.store.set(`${REPICK_PREFIX}${pr}`, { at: await $.clock.now() })
+    marker = { at: await $.clock.now() }
+    await $.store.set(`${REPICK_PREFIX}${pr}`, marker)
   } catch {
     // The marker is only the second layer; the drop below still runs.
   }
@@ -520,7 +522,23 @@ async function releaseReturned($: EngineInterface, root: string, pr: number): Pr
   } catch {
     // Diagnostics are the queue's own toast; the re-pick goes on.
   }
-  return dropTaps($, root, pr)
+  return dropOnce($, root, pr, marker)
+}
+
+/**
+ * The drop, and the proof that it worked: after a good drop the marker gets `dropped: true`. A marker without it means no drop has succeeded yet, so
+ * every call that finds such a marker runs the drop again (a stale review tap and a paid-round row must not outlive the return to draft). A failed
+ * write of the flag only costs one more drop on the next call. Null: done. A string: the stop text.
+ */
+const dropOnce = async ($: EngineInterface, root: string, pr: number, marker: Record<string, unknown>): Promise<string | null> => {
+  const stop = await dropTaps($, root, pr)
+  if (stop !== null) return stop
+  try {
+    await $.store.set(`${REPICK_PREFIX}${pr}`, { ...marker, dropped: true })
+  } catch {
+    // The next call drops again; the question goes on.
+  }
+  return null
 }
 
 /** `prepare`, and for a ready PR with a record the change question first. A string is the final answer; a Prepared goes on. */
@@ -540,14 +558,24 @@ const prepareChanging = async ($: EngineInterface, root: string, pr: number, bod
  */
 const returnedToDraft = async ($: EngineInterface, pending: Pending): Promise<{ repick: boolean; stop: string | null }> => {
   // The re-pick marker outlives the record state and the head: a failed --apply leaves the record `confirmed`, and a new push changes the head.
-  if ((await $.store.get(`${REPICK_PREFIX}${pending.pr}`)) != null) return { repick: true, stop: null }
+  const stored = await $.store.get(`${REPICK_PREFIX}${pending.pr}`)
+  if (stored != null) {
+    // A marker with `dropped: true` means a drop succeeded. Without it (the drop failed, or the marker is older than the flag) the drop runs again.
+    const marker = typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {}
+    return { repick: true, stop: marker.dropped === true ? null : await dropOnce($, pending.root, pending.pr, marker) }
+  }
   const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pending.pr}`))
   const returned = record !== null && record.state === 'applied' && record.head === pending.prHead
   if (!returned) return { repick: false, stop: null }
-  await $.store.set(`${REPICK_PREFIX}${pending.pr}`, { head: pending.prHead, at: await $.clock.now() })
-  // An undo by another session or by hand: no mod code ran, so no drop ran. It runs once, when the marker is first set. A later call sees the marker
-  // and does not drop again; the marker time (--repick-since) then makes the engine read an older tap as stale.
-  return { repick: true, stop: await dropTaps($, pending.root, pending.pr) }
+  // An undo by another session or by hand: no mod code ran, so no drop ran. The marker is set (its own try: a failed write must not skip the drop),
+  // then the drop runs. The marker time (--repick-since) makes the engine read an older tap as stale whatever the drop does.
+  const marker = { head: pending.prHead, at: await $.clock.now() }
+  try {
+    await $.store.set(`${REPICK_PREFIX}${pending.pr}`, marker)
+  } catch {
+    // The next call finds the applied record again and sets the marker then.
+  }
+  return { repick: true, stop: await dropOnce($, pending.root, pending.pr, marker) }
 }
 
 // ---- the question, asked by the model (M1, checkpoint.ledger) --------------------------------------------------------------------------

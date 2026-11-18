@@ -955,24 +955,37 @@ const clockMs = (facts) => (Number.isFinite(Date.parse(facts.now)) ? Date.parse(
 
 const refuse = (message) => { console.error(`pr-checkpoint: refused: ${message}`); process.exitCode = 1; };
 
+/** A path in one spelling for a comparison: absolute, real (a folder link resolved, also when the file is not there yet), lower case on win32. */
+function sameForm(file) {
+  let full = path.resolve(file);
+  try { full = realpathSync.native(full); } catch {
+    try { full = path.join(realpathSync.native(path.dirname(full)), path.basename(full)); } catch { /* keep the resolved path */ }
+  }
+  return process.platform === 'win32' ? full.toLowerCase() : full;
+}
+
 /**
- * True only when PR_CHECKPOINT_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one (the same rule as seamsOn in ship-ask.mjs).
- * --facts and --config are test seams: outside test mode a run that carries one must not write the decision store, because a fixture could then
- * open a real offer with any price or slot.
+ * True only when PR_CHECKPOINT_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one (the same rule as seamsOn in ship-ask.mjs,
+ * with the paths compared in one form: the real store in another case or spelling is still the real store).
+ * --facts and --config are test seams: outside test mode a run that carries one writes nothing to the decision store, because a fixture could then
+ * open a real offer with any price or slot, or record a pick with no tap.
  */
 function seamsOn(env = process.env) {
   if (env.PR_CHECKPOINT_TEST !== '1' || !env[DECISIONS_ENV]) return false;
-  return path.resolve(env[DECISIONS_ENV]) !== path.resolve(decisionsPath({}));
+  return sameForm(env[DECISIONS_ENV]) !== sameForm(decisionsPath({}));
 }
 const FIXTURE_REFUSED = '--facts and --config are for tests. A live question reads GitHub.';
 const fixtureRun = (o) => o['--facts'] !== undefined || o['--config'] !== undefined;
-/** The store-writing part of a ledger run is refused for a fixture run outside test mode. */
-const fixtureBlocked = (o, policy) => ledgerOn(policy) && fixtureRun(o) && !seamsOn();
+/**
+ * A fixture run outside test mode is refused, whatever its config says: the ledger flag comes from the --config file the fixture controls, so a flag of
+ * false must not open the door (a fixture config with the ledger off would let a confirm by dave record with no tap).
+ */
+const fixtureBlocked = (o) => fixtureRun(o) && !seamsOn();
 
 function runConfirm(o) {
   const stateDir = o['--state-dir'] ?? defaultStateDir();
   const { facts, policy } = inputsOf(o, stateDir);
-  if (fixtureBlocked(o, policy)) return refuse(FIXTURE_REFUSED);
+  if (fixtureBlocked(o)) return refuse(FIXTURE_REFUSED);
   let bodyText;
   try { bodyText = readFileSync(o['--body'], 'utf8'); } catch { return refuse(`cannot read the body file ${o['--body']}`); }
   const args = { result: recommend(facts, policy), facts, pathway: o['--confirm'], by: o['--by'], bodySha: bodyHash(bodyText) };
@@ -1020,8 +1033,9 @@ function runRecommend(o) {
   const { facts, policy } = inputsOf(o, defaultStateDir(), o['--probe'] === true && o['--json'] === true);
   const result = recommend(facts, policy);
   const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
+  // The ledger step (an offer, a miss, a use of a tap) is refused for a fixture run outside test mode, even with the ledger flag off in the fixture config.
+  if (o['--json'] && pr !== null && !o['--no-ledger'] && fixtureBlocked(o)) return refuse(FIXTURE_REFUSED);
   const asks = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy);
-  if (asks && fixtureBlocked(o, policy)) return refuse(FIXTURE_REFUSED);
   const ledger = asks ? ledgerStep({ pr, result, slotLine: slotText(result.capacity, clockMs(facts)), askAnyway: o['--ask-anyway'] === true, now: clockMs(facts), repickSince: o['--repick-since'] ?? null }) : null;
   console.log(o['--json'] ? JSON.stringify(ledger ? { ...result, ledger } : result) : renderText(result));
 }

@@ -189,9 +189,7 @@ export function missBump({ step, key, head }) {
  */
 export function dropKey({ steps, key } = {}) {
   if (!Array.isArray(steps) || steps.length === 0 || !steps.every((s) => STEPS.includes(s)) || !isText(key)) return { ok: false, reason: 'bad-drop: steps and key are needed' };
-  const prefixes = steps.map((step) => `${step}
-${key}
-`);
+  const prefixes = steps.map((step) => `${step}\n${key}\n`); // the id of idOf, up to the head
   return update((store) => {
     let dropped = 0;
     for (const group of [store.offers, store.decisions, store.misses]) {

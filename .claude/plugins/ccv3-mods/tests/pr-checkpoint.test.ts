@@ -165,6 +165,8 @@ type Opts = {
   undo?: Reply
   /** What the engine's `--drop-taps` answers (the tap drop of a PR returned to draft). Unset: success. */
   drop?: Reply
+  /** Replies for the first `--drop-taps` calls, in order; later calls answer by `drop`. */
+  dropSeq?: Reply[]
   /** Replies for the first engine `--json` calls that carry --no-ledger (the prepare call), in order; later calls answer by `json`. */
   jsonSeq?: Reply[]
   /** Replies for the first engine `--json` calls WITHOUT --no-ledger (the ledger step), in order; later calls answer by `json`. */
@@ -348,7 +350,7 @@ const world = (on: On, opts: Opts = {}) => {
       return done(shape)
     }
     if (line.includes('pr-checkpoint.mjs')) {
-      if (argv.includes('--drop-taps')) return done(opts.drop ?? { stdout: '{"ok":true,"dropped":0}\n' })
+      if (argv.includes('--drop-taps')) return done(opts.dropSeq?.shift() ?? opts.drop ?? { stdout: '{"ok":true,"dropped":0}\n' })
       if (argv.includes('--json')) {
         // The real engine adds the ledger block only without --no-ledger (pr-checkpoint.mjs runRecommend).
         const noLedger = argv.includes('--no-ledger')
@@ -4332,6 +4334,7 @@ describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draf
     expect(drop).toBeGreaterThan(undo)
     expect(ask).toBeGreaterThan(drop)
     expect(told.text).toContain('Keep as draft ($0)')
+    expect(w.store.get(MARKER)).toEqual({ at: NOW, dropped: true }) // only a good drop sets the flag
     await call($)
     expect(drops(w.seen).length).toBe(1) // the second call does not drop again
   })
@@ -4348,7 +4351,7 @@ describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draf
     const w = world(on, returned({ viewSeq: [], answer: 'dismiss' }))
     await start($)
     await call($)
-    expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW })
+    expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW, dropped: true })
     expect(drops(w.seen).map(r => r.argv.slice(2).join(' '))).toEqual(['--drop-taps --pr 7'])
     await call($)
     await call($)
@@ -4372,11 +4375,44 @@ describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draf
     expect(ledgerCalls(w.seen)).toEqual([])
     expect(autoConfirms(w.seen)).toEqual([])
     expect(w.seen.dialogs.length).toBe(1) // only the Change-the-pick question that Dave answered
-    // The marker holds: the next call asks (layer 2 stales the old tap), and it does not run the drop again.
+    expect(w.store.get(MARKER)).not.toHaveProperty('dropped') // no good drop yet
+    // The marker has no `dropped` flag, so the next call runs the drop AGAIN (a stale tap and a paid-round row must not outlive the return to draft).
     const next = await call($)
+    expect(drops(w.seen).length).toBe(2)
+    expect(next.text).toContain('could not be cleared')
+    expect(ledgerCalls(w.seen)).toEqual([])
+  })
+
+  test('AM3d a failed drop is retried on the next call; after a good one the marker says dropped, the question is asked, and no third drop runs', async ($, on) => {
+    const w = world(on, returned({ dropSeq: [{ exitCode: 1, stderr: 'boom\n' }] }))
+    await start($)
+    const first = await call($)
+    expect(first.text).toContain(STOP('boom'))
+    const second = await call($)
+    expect(drops(w.seen).length).toBe(2)
+    expect(w.store.get(MARKER)).toEqual({ at: NOW, dropped: true })
     expect(ledgerCalls(w.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
-    expect(next.text).toContain('Keep as draft ($0)')
+    expect(second.text).toContain('Keep as draft ($0)')
+    await call($)
+    expect(drops(w.seen).length).toBe(2)
+  })
+
+  test('AM6 a marker with no dropped flag (the drop never succeeded) runs the drop once, then marks it', async ($, on) => {
+    const w = world(on, { files: LEDGER, store: { [MARKER]: { head: HEAD, at: NOW } }, ledgerSeq: [ASK, ASK] })
+    await start($)
+    await call($)
     expect(drops(w.seen).length).toBe(1)
+    expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW, dropped: true })
+    await call($)
+    expect(drops(w.seen).length).toBe(1)
+  })
+
+  test('AM7 a marker write that throws when a PR is found returned by hand: the drop still runs and the question is asked', async ($, on) => {
+    const w = world(on, returned({ viewSeq: [], throwSetOnce: MARKER, answer: 'dismiss' }))
+    await start($)
+    const told = await call($)
+    expect(drops(w.seen).length).toBe(1)
+    expect(told.text).toContain('Keep as draft ($0)')
   })
 
   test('AM3b a drop that cannot run (a timeout) is a failure too: the stop text names the cause', async ($, on) => {
@@ -4457,6 +4493,10 @@ describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draf
     expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
     expect(w.seen.run.some(isSlotDrop)).toBe(true)
     expect(drops(w.seen).length).toBeGreaterThanOrEqual(1)
+    // The drop of releaseReturned runs before the ledger call of the same pass, as in AM1.
+    const [undo, drop, ask] = [at(w.seen, isUndo), at(w.seen, r => r.argv.includes('--drop-taps')), at(w.seen, isLedgerCall)]
+    expect(drop).toBeGreaterThan(undo)
+    expect(ask).toBeGreaterThan(drop)
   })
 
   test('m4 a typed paid word with more lines asks the one question and says what it ignored', async ($, on) => {
