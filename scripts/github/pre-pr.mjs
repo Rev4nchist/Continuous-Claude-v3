@@ -161,7 +161,12 @@ export const SCRIPTS_WINDOWS_TESTS = [
   'scripts/review-engine/diff.test.mjs',
 ];
 // Its scripts/coordination files are named one by one (test and source): a change elsewhere in that folder does not add the 72 s gate.
-const SCRIPTS_WINDOWS_COORD = SCRIPTS_WINDOWS_TESTS.filter((f) => f.startsWith('scripts/coordination/')).flatMap((f) => [f, f.replace(/\.test\.mjs$/, '.mjs')]);
+// The last five are modules that the tested code imports (PR 648 critic finding 2): a change to lane-dep.mjs must run contract-seam.test.mjs.
+const SCRIPTS_WINDOWS_COORD = [
+  ...SCRIPTS_WINDOWS_TESTS.filter((f) => f.startsWith('scripts/coordination/')).flatMap((f) => [f, f.replace(/\.test\.mjs$/, '.mjs')]),
+  'scripts/coordination/lane-dep.mjs', 'scripts/coordination/lane-seed-file.mjs', 'scripts/coordination/canon-home.mjs',
+  'scripts/coordination/session-label.mjs', 'scripts/coordination/lane-board.mjs',
+];
 
 // validate-mods exits 1 when its typecheck cannot run. On Claude Code 2.1.296 and later no command writes the
 // .claude-plugin/types folder tsc needs, so this machine has none. Accept that one case, and only that case: validate
@@ -199,6 +204,8 @@ export const SURFACES = [
   {
     id: 'hooks',
     globs: ['.claude/hooks/src/**', '.claude/hooks/dist/**', '.claude/hooks/package.json', '.claude/hooks/vitest.config.ts', '.claude/settings.json.template',
+      // The flake ledger reporter, its lib and its fixture: hooks-vitest loads them (card coord-flake-ledger).
+      '.claude/hooks/test-support/**',
       // Dependencies of the build and the vitest run: a change here can leave dist stale or break a test without touching hooks/src (#352 -> #353).
       '.claude/hooks/package-lock.json', '.claude/hooks/tsconfig*.json', 'scripts/worktree/**/*.mjs', '.github/workflows/*.yml', '.github/workflows/*.yaml', // code and YAML only: a README beside them is docs and runs no gate
     ],
@@ -217,8 +224,14 @@ export const SURFACES = [
       },
       // Several dist-integration tests spawn node and use real timers. Alone they take about 3 s; in the full parallel
       // suite on a busy machine they pass vitest's 5 s default (msys-crash-capture, 2026-10-28). --testTimeout gives
-      // them room, and --retry covers a rare timer race.
-      { id: 'hooks-vitest', cmd: 'npx', args: ['vitest', 'run', '--retry=2', '--testTimeout=30000'], cwd: '.claude/hooks', timeoutMs: 20 * MIN },
+      // them room, and --retry covers a rare timer race. The flake ledger reporter (card coord-flake-ledger) records each test that passed
+      // only on a retry and fails the run the second time in 7 days; --includeTaskLocation gives its file:line. alsoLine puts its
+      // FLAKE LEDGER lines (run line, WARN, FAIL) in the detail. Named reporters replace vitest's own pick (it chose "agent" under Claude
+      // Code), so the output is the default reporter's. The same args run in CI (ccv3-checks.yml, Hooks tests (vitest)).
+      {
+        id: 'hooks-vitest', cmd: 'npx', cwd: '.claude/hooks', timeoutMs: 20 * MIN, alsoLine: /^FLAKE LEDGER(?::| WARN | FAIL )/,
+        args: ['vitest', 'run', '--retry=2', '--testTimeout=30000', '--includeTaskLocation', '--reporter=default', '--reporter=./test-support/flake-ledger-reporter.mjs'],
+      },
     ],
   },
   {
@@ -330,13 +343,14 @@ export const SURFACES = [
     id: 'trex',
     globs: ['.trex/**', 'scripts/trex/**', 'docker/trex/**', 'apps/agentic-os/.trex/**', 'apps/agentic-os/e2e/trex-*.spec.ts', 'apps/agentic-os/playwright.trex.config.ts', 'scripts/checks/test-map.mjs'],
     gates: [],
-    manual: 'no gate runs the TREX flows: run the trex flow you changed by hand and keep its output',
+    manual: 'no gate runs the TREX flows: run the trex flow you changed by hand and keep its output; for scripts/checks/test-map.mjs, run the flows it selects',
   },
   // Step 3 of card coord-test-gate-coverage: Windows pre-pr only (Dave, 2026-11-17). CI never runs pre-pr; a test that needs Windows skips itself.
   {
     id: 'scripts-windows',
-    globs: ['scripts/review-engine/**', 'scripts/scheduled/**', 'scripts/settings/**', 'scripts/measurement/**', 'scripts/msys/**', 'scripts/pricing/**', '.claude/scripts/security/**', 'scripts/harness-doctor*.mjs', ...SCRIPTS_WINDOWS_COORD],
-    gates: [{ id: 'test-scripts', cmd: 'node', args: ['--test', ...SCRIPTS_WINDOWS_TESTS], cwd: '.', timeoutMs: 5 * MIN }],
+    // .claude/scripts/scheduled/** holds the wrappers the 7 scheduled tests run (PR 648 critic finding 1).
+    globs: ['scripts/review-engine/**', 'scripts/scheduled/**', '.claude/scripts/scheduled/**', 'scripts/settings/**', 'scripts/measurement/**', 'scripts/msys/**', 'scripts/pricing/**', '.claude/scripts/security/**', 'scripts/harness-doctor*.mjs', ...SCRIPTS_WINDOWS_COORD],
+    gates: [{ id: 'test-scripts', cmd: 'node', args: ['--test', ...SCRIPTS_WINDOWS_TESTS], cwd: '.', timeoutMs: 10 * MIN }],
   },
   {
     id: 'mod',
@@ -833,14 +847,23 @@ export function runGate(gate, { root, exec, git }) {
     if (accepted) return { ...result(step, 'PASS', accepted), ...base };
     // A missing package is the environment, not the change: say so first, so nobody hunts a bug in code that is fine.
     const env = envPrefix(clean, { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
-    return { ...result(step, 'FAIL', env ?? `exit ${r.status}: ${summaryLine(out)}`, failNotes(clean, root)), ...base };
+    return { ...result(step, 'FAIL', env ?? withAlso(`exit ${r.status}: ${summaryLine(out)}`, gate, clean), failNotes(clean, root)), ...base };
   }
   if (gate.postCheck) {
     const posts = gate.postCheck.argv.map((a) => git(a));
     const files = posts.flatMap((p) => p.stdout.split(/\r?\n/).filter(Boolean));
     if (posts.some((p) => p.status !== 0) || files.length > 0) return { ...result(step, 'FAIL', `${gate.postCheck.failText} (${files.length})`, files.slice(0, 10)), ...base };
   }
-  return { ...result(step, 'PASS', summaryLine(out)), ...base };
+  return { ...result(step, 'PASS', withAlso(summaryLine(out), gate, clean)), ...base };
+}
+
+/**
+ * `alsoLine` (hooks-vitest only): every output line that matches it joins the detail, so a flake ledger WARN or FAIL is not silent and a run
+ * that fails only by the ledger does not read "Tests N passed". A gate without the field keeps its detail unchanged.
+ */
+function withAlso(detail, gate, clean) {
+  const also = gate.alsoLine ? clean.split(/\r?\n/).map((l) => l.trim()).filter((l) => gate.alsoLine.test(l)) : [];
+  return [detail, ...also].join('; ');
 }
 
 // ---------- CodeRabbit CLI review ----------
