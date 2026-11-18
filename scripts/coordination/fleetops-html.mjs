@@ -295,11 +295,13 @@ export function checkText(text, stamp, ids) {
  * A failed export is not retried: an acquire on the key of a failed publish.json exits 5. `--force` skips exits 4 and 5 only (never a live lock).
  * A rekey (a restart on a newer export) and a touch (a keep-alive) are for the holder only.
  * Exit codes: 0 ok, 1 usage or an I/O error, 3 refused (another session holds the lock, or this session does not), 4 last refresh under an hour ago,
- * 5 this export key already failed.
+ * 5 this export key already failed, 6 busy (a live takeover mutex: release, rekey and touch wait up to 1 second, then answer 6; nothing changed).
  */
 export const LOCK_STALE_MS = 20 * 60 * 1000;
 export const REFRESH_EVERY_MS = 60 * 60 * 1000;
 export const MUTEX_STALE_MS = 10 * 1000;
+/** An ok time this far ahead of the caller clock still blocks: another process on this machine wrote it a moment ago with its own reading of the clock. */
+const FUTURE_SLACK_MS = 5 * 1000;
 export const LOCK_FILE = 'publish.lock';
 export const PUBLISH_FILE = 'publish.json';
 export const MUTEX_FILE = 'publish.takeover';
@@ -383,7 +385,7 @@ function clockChicago(ms) {
 function acquireRefusal(dir, key, now) {
   const rec = readPublish(dir);
   const ok = lastOkMs(rec);
-  if (ok !== null && now - ok >= 0 && now - ok < REFRESH_EVERY_MS) return { code: 4, msg: `fleetops-html: last refresh at ${clockChicago(ok)}, under 1 hour ago` };
+  if (ok !== null && now - ok >= -FUTURE_SLACK_MS && now - ok < REFRESH_EVERY_MS) return { code: 4, msg: `fleetops-html: last refresh at ${clockChicago(ok)}, under 1 hour ago` };
   if (rec?.state === 'failed' && rec.key === key) {
     const at = Date.parse(rec.at);
     const when = Number.isNaN(at) ? '' : ` at ${clockChicago(at)}`;
@@ -414,27 +416,39 @@ export function lockSnapshot(dir, now = Date.now(), hooks = {}) {
 
 /**
  * Creates publish.takeover (wx). A mutex over 10 seconds old is dead: it is removed once two reads agree, then the create is tried again.
- * `waitMs` > 0 polls every 50 ms for a live mutex. Returns true when this call holds the mutex.
+ * `waitMs` > 0 polls every 50 ms for a live mutex. A mutex that cannot be read (a directory, say) is live. Returns the text this call wrote, or null when
+ * another session holds the mutex.
  */
 function takeMutex(dir, who, waitMs) {
   const file = join(dir, MUTEX_FILE);
+  const text = JSON.stringify({ session: who.session, at: isoAt(who.now) });
   const deadline = Date.now() + waitMs;
   for (let tries = 0; tries < 200; tries += 1) {
-    try { writeFileSync(file, JSON.stringify({ session: who.session, at: isoAt(who.now) }), { flag: 'wx' }); return true; } catch (e) { if (e.code !== 'EEXIST') throw e; }
-    let raw;
+    try { writeFileSync(file, text, { flag: 'wx' }); return text; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    let raw = null;
     let mtime = 0;
-    try { raw = readFileSync(file, 'utf8'); mtime = statSync(file).mtimeMs; } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
-    if (lockIsStale(raw, mtime, who.now, MUTEX_STALE_MS) && readText(file) === raw) { rmSync(file, { force: true }); continue; }
-    if (Date.now() >= deadline) return false;
+    try { raw = readFileSync(file, 'utf8'); mtime = statSync(file).mtimeMs; } catch (e) { if (e.code === 'ENOENT') continue; }
+    if (raw !== null && lockIsStale(raw, mtime, who.now, MUTEX_STALE_MS) && readText(file) === raw) { rmSync(file, { force: true }); continue; }
+    if (Date.now() >= deadline) return null;
     sleepSync(50);
   }
-  return false;
+  return null;
 }
 
-/** Runs `fn` while this call holds the mutex; the mutex is removed in a finally. `busy` is the result when the mutex is held by another session. */
-function withMutex(dir, who, waitMs, fn, busy) {
-  if (!takeMutex(dir, who, waitMs)) return busy;
-  try { return fn(); } finally { rmSync(join(dir, MUTEX_FILE), { force: true }); }
+/**
+ * Runs `fn` while this call holds the mutex. `busy` is the result when another session holds it. `hooks.afterMutex` (a test) runs first.
+ * The mutex is removed in a finally, only while its text is still ours, and an error from that remove is swallowed: the result of `fn` stands.
+ */
+function withMutex(dir, who, waitMs, fn, busy, hooks = {}) {
+  const text = takeMutex(dir, who, waitMs);
+  if (text === null) return busy;
+  const file = join(dir, MUTEX_FILE);
+  try {
+    if (hooks.afterMutex) hooks.afterMutex();
+    return fn();
+  } finally {
+    try { if (readText(file) === text) rmSync(file, { force: true }); } catch { /* a leftover mutex dies after 10 seconds */ }
+  }
 }
 
 /* ---- create, take over, release ---- */
@@ -474,7 +488,6 @@ function putBack(file, taken) {
 function takeUnderMutex(dir, snap, who, hooks) {
   const file = join(dir, LOCK_FILE);
   const taken = join(dir, `${LOCK_FILE}.taken.${who.session}`);
-  if (hooks.afterMutex) hooks.afterMutex();
   const cur = readText(file);
   if (cur !== null && cur !== snap.raw) return refused(holderOf(cur));
   if (cur !== null) {
@@ -497,7 +510,7 @@ function takeUnderMutex(dir, snap, who, hooks) {
  */
 export function lockTake(dir, snap, who, hooks = {}) {
   const busy = { code: 3, msg: 'fleetops-html: another session is taking over the lock now. Stop and report. Write no failed state.' };
-  return withMutex(dir, who, 0, () => takeUnderMutex(dir, snap, who, hooks), busy);
+  return withMutex(dir, who, 0, () => takeUnderMutex(dir, snap, who, hooks), busy, hooks);
 }
 
 /**
@@ -520,38 +533,47 @@ export function lockAcquire({ dir, key, session, now = Date.now(), force = false
   return refused('unknown');
 }
 
-/**
- * Release: only the holder. `ok` writes publish.json state ok with lastOkAt = now (the hour limit reads it; the hook ignores any state but failed);
- * `failed` writes publish.json state failed (the key and the step; lastOkAt carried). The lock is removed in a finally, also when the write fails.
- */
-export function lockRelease({ dir, session, outcome, step = null, now = Date.now() }) {
-  const file = join(dir, LOCK_FILE);
+const busy6 = { code: 6, msg: 'fleetops-html: the lock is busy (a takeover or another lock command runs). Nothing changed. Wait 2 seconds and try once more.' };
+/** The parsed lock when `session` holds it, else null. A missing file is null. */
+const heldBy = (file, session) => {
   const raw = readText(file);
   const lock = raw === null ? null : parseLock(raw);
-  if (!lock || lock.session !== session) return notHolder(session);
-  try {
-    const rec = outcome === 'failed'
-      ? withLastOk({ state: 'failed', session, key: lock.key, at: isoAt(now), ...(step ? { step } : {}) }, lastOkMs(readPublish(dir)))
-      : { state: 'ok', session, key: lock.key, at: isoAt(now), lastOkAt: isoAt(now) };
-    writePublish(dir, session, rec);
-  } finally {
-    rmSync(file, { force: true });
-  }
-  return { code: 0, msg: `fleetops-html: lock released (${outcome})` };
+  return lock !== null && lock.session === session ? lock : null;
+};
+
+/**
+ * Release: only the holder, under the takeover mutex (waits up to `waitMs`, 1000 by default; a live mutex gives code 6, busy). The lock is read again inside
+ * the mutex. `ok` writes publish.json state ok with lastOkAt = now (the hour limit reads it; the hook ignores any state but failed);
+ * `failed` writes publish.json state failed (the key and the step; lastOkAt carried). The lock is removed in a finally, also when the write fails.
+ */
+export function lockRelease({ dir, session, outcome, step = null, now = Date.now(), waitMs = 1000 }, hooks = {}) {
+  const file = join(dir, LOCK_FILE);
+  if (heldBy(file, session) === null) return notHolder(session);
+  return withMutex(dir, { session, now }, waitMs, () => {
+    const lock = heldBy(file, session);
+    if (lock === null) return notHolder(session);
+    try {
+      const rec = outcome === 'failed'
+        ? withLastOk({ state: 'failed', session, key: lock.key, at: isoAt(now), ...(step ? { step } : {}) }, lastOkMs(readPublish(dir)))
+        : { state: 'ok', session, key: lock.key, at: isoAt(now), lastOkAt: isoAt(now) };
+      writePublish(dir, session, rec);
+    } finally {
+      rmSync(file, { force: true });
+    }
+    return { code: 0, msg: `fleetops-html: lock released (${outcome})` };
+  }, busy6, hooks);
 }
 
-/** The holder rewrites its lock (a new key, a new time) under the mutex, so a takeover cannot interleave. */
-function rewriteHolder({ dir, session, key, now }, done) {
+/** The holder rewrites its lock (a new key, a new time) under the mutex, so a takeover cannot interleave. A live mutex gives code 6, busy. */
+function rewriteHolder({ dir, session, key, now, waitMs }, done, hooks) {
   const file = join(dir, LOCK_FILE);
-  const busy = { code: 3, msg: 'fleetops-html: the lock is busy (a takeover runs). Nothing changed. Stop and report.' };
-  return withMutex(dir, { session, now }, 1000, () => {
-    const raw = readText(file);
-    const lock = raw === null ? null : parseLock(raw);
-    if (!lock || lock.session !== session) return notHolder(session);
-    const newKey = key ?? lock.key;
+  if (heldBy(file, session) === null) return notHolder(session);
+  return withMutex(dir, { session, now }, waitMs, () => {
+    const lock = heldBy(file, session);
+    if (lock === null) return notHolder(session);
     const tmp = join(dir, `${LOCK_FILE}.${session}.tmp`);
     try {
-      writeFileSync(tmp, JSON.stringify({ session, key: newKey, at: isoAt(now) }));
+      writeFileSync(tmp, JSON.stringify({ session, key: key ?? lock.key, at: isoAt(now) }));
       renameRetry(tmp, file);
     } catch (e) {
       rmSync(tmp, { force: true });
@@ -559,14 +581,14 @@ function rewriteHolder({ dir, session, key, now }, done) {
     }
     if (key !== null) writePublish(dir, session, withLastOk({ state: 'writing', session, key, at: isoAt(now) }, lastOkMs(readPublish(dir))));
     return { code: 0, msg: done };
-  }, busy);
+  }, busy6, hooks);
 }
 
 /** Restart on a newer export: the holder keeps the lock, sets the new key and a new time. Only the holder may run it. */
-export const lockRekey = ({ dir, session, key, now = Date.now() }) => rewriteHolder({ dir, session, key, now }, `fleetops-html: lock rekeyed to ${key}`);
+export const lockRekey = ({ dir, session, key, now = Date.now(), waitMs = 1000 }, hooks = {}) => rewriteHolder({ dir, session, key, now, waitMs }, `fleetops-html: lock rekeyed to ${key}`, hooks);
 
 /** Keep-alive: the holder sets a new time on its lock. Only the holder may run it. */
-export const lockTouch = ({ dir, session, now = Date.now() }) => rewriteHolder({ dir, session, key: null, now }, 'fleetops-html: lock touched');
+export const lockTouch = ({ dir, session, now = Date.now(), waitMs = 1000 }, hooks = {}) => rewriteHolder({ dir, session, key: null, now, waitMs }, 'fleetops-html: lock touched', hooks);
 
 const LOCK_VERBS = Object.freeze(['--lock-acquire', '--lock-release', '--lock-rekey', '--lock-touch']);
 const isLockArgv = (argv) => argv.some((a) => LOCK_VERBS.includes(a));

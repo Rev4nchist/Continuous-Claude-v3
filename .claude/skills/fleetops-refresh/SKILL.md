@@ -30,7 +30,12 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
   `node R/scripts/coordination/fleetops-html.mjs --lock-release failed --session <sid8> --step <n>`
   It writes `publish.json` with state `failed`, the export key and the step, and removes the lock. The Stop gate then shows one "refresh failed" line for that export, and no run line. The lock refuses a retry of that export (exit 5). A new export clears it.
   Keep the lock alive: before step 6 and before step 8 run `node R/scripts/coordination/fleetops-html.mjs --lock-touch --session <sid8>`. It sets a new time on your lock. Exit 3 means you lost the lock: stop and report, release nothing.
-  Exit 1 from a lock command at the acquire or the release step: stop and report its one line.
+- A stop during a restart runs the failed release with that step number. A restart keeps the lock, so a stop at step 3.3, 4 or 5.1 after the restart began needs the release too.
+- Exits of `--lock-touch`, `--lock-rekey` and `--lock-release`:
+  - 0: done.
+  - 1: an error. After a touch or a rekey, run the failed release with the step number, then stop. After a release, report the error: the lock may still be there.
+  - 3: this session does not hold the lock. After a touch or a rekey, stop, report it and release nothing. After a release, report it: another session holds the lock.
+  - 6: busy, a takeover runs. Nothing changed. Wait 2 seconds and run the same command once more. A second 6 from a touch or a rekey: run the failed release with the step number, then stop. A second 6 from a release: report it.
 - The page leaves this machine. The renderer masks every listed id (`board-mask.mjs`), counts listed ids on the text a viewer sees, and refuses to write when one is left. Never upload or write text that the renderer did not print. Never edit the page by hand.
 - Lane titles, lane goals and holder names go on the page (Dave decided).
 - A refresh changes data only. A design change goes through the template in `scripts/coordination/fleetops/` and a pull request.
@@ -101,4 +106,5 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
 - Docker is down in step 2: the old data stays on the page. Report it.
 - The `notion` server is missing in this session, or the preflight fetch fails (step 5.1): skip the refresh and report it. No lock, no failed state. Do not use another Notion connector.
 - The upload worked and the page write failed: run the failed release with step 6.3. The unplaced upload expires by itself in 1 hour. Report it.
+- A lock command prints `lock conflict`: another session moved a fresh lock aside. The file `publish.lock.taken.<session>` stays in `~/.claude/state/lane-dash`. Stop and report. Dave can delete that file when no refresh runs.
 - The write worked and the read-back failed: follow step 7.4 or 7.5 (each runs the failed release). Never clear the flag.
