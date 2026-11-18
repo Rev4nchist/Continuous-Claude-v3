@@ -5,6 +5,7 @@ import type { AgentRun, BoardLane, CacheState, FileTouch, HudLimit, HudState, Ke
 import { EMPTY_CACHE, cacheView, hitRate } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
+import { decide, openThrottle, requestSnapshot, trailingDue } from '../shared/snapshot-port'
 import { ledgerBandSpans, settle } from '../agent-ledger/model'
 import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
@@ -116,6 +117,8 @@ const endedId = atom({ plugin: 'ccv3-mods', key: 'endedId' } as const, null as s
  * `endedHere` in hooks/hud/seed.ts). A plugin reload drops it; the atom still holds the last id then. A resume back to an ended id removes it (classic.SessionStart).
  */
 const endedIds = new Set<string>()
+/** The throttle of the snapshot wishes (hooks/shared/snapshot-port.ts): one write per 2 s of the engine clock, and one trailing write. */
+const wishes = openThrottle()
 
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 /** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
@@ -394,6 +397,15 @@ const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
   (await read($, tasks)).length > 0 ||
   (await read($, plan)) !== null ||
   (await read($, brief)) !== null
+
+/** The trailing write of a burst of snapshot wishes. The writer's own guards (worthSnapshot, the session-end check) still apply. Never throws. */
+const writeTrailing = async ($: EngineInterface, due: number): Promise<void> => {
+  try {
+    if (trailingDue(wishes, due, await $.clock.now()) && (await worthSnapshot($))) await writeSnapshot($)
+  } catch {
+    // Observer only.
+  }
+}
 
 /** The final write needs this much of the session.end bound (1.5 s, shared with every other hook): less, and the web falls back to the database's ended_at. */
 const FINAL_WRITE_MIN_MS = 300
@@ -825,7 +837,24 @@ const startUi = async ($: EngineInterface) => {
 }
 
 export const agenticOs = (on: On) => {
+  // The port (hooks/shared/snapshot-port.ts): agent-ledger's agent.spawn hook asks for a snapshot by bumping `snapshotWanted`. The writer keeps its guards.
+  on('state.set', { plugin: 'ccv3-mods', key: 'snapshotWanted' } as const, async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (await isOff($)) return result
+      const step = decide(wishes, await $.clock.now())
+      if (step.kind === 'write' && (await worthSnapshot($))) await writeSnapshot($)
+      // The trailing write: the last wish of a burst is in it. It runs here, with this hook's `$`, as the pulse does.
+      if (step.kind === 'arm') $.clock.after(step.ms, () => void writeTrailing($, step.due))
+    } catch {
+      // Observer only.
+    }
+    return result
+  }).catch(($, e, next) => next(e))
+
   on('session.start', async ($, e, next) => {
+    // A new session starts with an open throttle: the module state outlives a session in the same process.
+    Object.assign(wishes, openThrottle())
     await beacon($, 'enter', { isInteractive: e.isInteractive, surface: e.surface ?? null })
     try {
       if (await isOff($)) return next(e)
@@ -851,6 +880,8 @@ export const agenticOs = (on: On) => {
   // A /clear or a resume in the same process then starts a new conversation: the old tasks and plan are not its own.
   // The engine keeps the process, so these atoms would outlive the conversation (the HUD resets ctx and the cache the same way).
   on('session.end', async ($, e, next) => {
+    // A trailing snapshot armed in this session must not fire into the next one (a /clear or a resume keeps the process).
+    wishes.dueAt = null
     if (!(await isOff($))) {
       await writeFinalSnapshot($, e.sessionId, next.budget.remainingMs)
       if (e.reason === 'clear' || e.reason === 'resume') {
@@ -939,6 +970,7 @@ export const agenticOs = (on: On) => {
       await update($, agentRuns, runs => runs.map(run => (run.id === resumed && run.status !== 'running' ? { ...run, status: 'running', endedAt: null } : run)))
       // The list can still hold it as waiting, and the list wins for an id it holds: the turn is the newer fact.
       await update($, agents, list => list.map(agent => (agent.id === resumed && agent.status !== 'running' ? { ...agent, status: 'running' } : agent)))
+      await requestSnapshot($)
       return next(e)
     }
     if (!(await read($, turnBeaconed).catch(() => false))) {

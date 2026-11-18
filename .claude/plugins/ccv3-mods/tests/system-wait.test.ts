@@ -775,6 +775,32 @@ describe('system wait: the state file', () => {
   })
 })
 
+/**
+ * The atoms of this feature as stores a test controls, the way heldHud (hud.test.ts) and heldGit (agentic-os.test.ts) do it: the kit keeps atoms
+ * across a SessionStart, the real engine wipes them. state.get and state.set answer from `held`; `wipe()` puts every default back.
+ */
+const heldAtoms = (on: On) => {
+  const defaults: Record<string, unknown> = { bgSeen: {}, bgTasks: [], brief: null }
+  const held: Record<string, { value: unknown; version: number }> = {}
+  for (const key of Object.keys(defaults)) {
+    held[key] = { value: defaults[key], version: 0 }
+    const ref = { plugin: 'ccv3-mods', key } as never
+    on('state.get', ref, (() => ({ value: { value: held[key]?.value, version: held[key]?.version } })) as never)
+    on('state.set', ref, ((_$: unknown, e: { value: unknown; ifVersion?: number }) => {
+      const mine = held[key] as { value: unknown; version: number }
+      if (e.ifVersion !== undefined && e.ifVersion !== mine.version) return { value: { isSet: false, version: mine.version } }
+      mine.value = e.value
+      mine.version += 1
+      return { value: { isSet: true, version: mine.version } }
+    }) as never)
+  }
+  return {
+    wipe: () => {
+      for (const key of Object.keys(defaults)) held[key] = { value: defaults[key], version: (held[key]?.version ?? 0) + 1 }
+    },
+  }
+}
+
 describe('system wait: the age limit', () => {
   const standing = async ($: Engine, seen: Seen) => {
     // The real order: a turn starts (it clears the list), the turn ends, the Stop reports the same shell again.
@@ -831,9 +857,13 @@ describe('system wait: the age limit', () => {
     expect((await view($)).line1).toContain('WAITING ON 1 TASK')
   })
 
-  // Both SessionStart handlers empty the list. Only a startup forgets the first-seen times: a compact, fork, resume or clear keeps the age of a shell
-  // that never ends, or each one would give it another 30 minutes.
-  for (const source of ['compact', 'fork', 'resume', 'clear']) {
+  // Both SessionStart handlers empty the list. Only a startup forgets the first-seen times by code: a compact or fork keeps the age of a shell that
+  // never ends, or each one would give it another 30 minutes. A resume or a clear starts a new session id and the ENGINE wipes the plugin's atoms first
+  // (live probe, engine 2.1.327, 2026-11-18, headless stream-json run: atom n went 3 to 0 at classic.SessionStart source clear while the module counter
+  // kept going, so the module did not reload; clear proven, resume unverified: it also starts a new id, so it is treated the same).
+  // The kit keeps atoms across a SessionStart, so the resume and clear cases below wipe the three atoms of this feature the way heldGit and heldHud
+  // do in agentic-os.test.ts and hud.test.ts.
+  for (const source of ['compact', 'fork']) {
     test(`P5 a SessionStart (${source}) keeps the first-seen times: a 40 minute old shell stays aged out`, async ($, on) => {
       const seen = world(on)
       await standing($, seen)
@@ -844,6 +874,25 @@ describe('system wait: the age limit', () => {
       const got = await view($)
       expect(got.line1).toContain('WAITING FOR YOU')
       expect(got.line1).not.toContain('WAITING ON')
+    })
+  }
+
+  // Source change that makes a case fail: the first-seen times kept outside the atom (a module-level map in index.tsx), so a wiped atom no longer
+  // forgets them (the shell would stay aged out and the band would not read WAITING ON 1 TASK).
+  for (const source of ['resume', 'clear']) {
+    test(`P5 a ${source} wipes the atoms first (live, 2.1.327): the shell's first-seen time is gone, so it counts again from its next Stop, for up to 30 minutes`, async ($, on) => {
+      const seen = world(on)
+      const held = heldAtoms(on)
+      await standing($, seen)
+      await seen.clock.advance(31 * MIN)
+      // What the engine does at /clear and a resume: the atoms are empty before classic.SessionStart runs.
+      held.wipe()
+      await $.classic.SessionStart({ source } as never)
+      // The ask went with the brief atom: nothing to wait for, no wait chip.
+      expect((await view($)).line1).toContain('RESTING')
+      await stop($, { background_tasks: [shell('s1')] })
+      expect((await view($)).line1).toContain('WAITING ON 1 TASK')
+      // From this first sight it counts for up to 30 minutes again (the age limit itself is pinned by the P5 tests above).
     })
   }
 
