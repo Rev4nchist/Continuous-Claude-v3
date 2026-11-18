@@ -212,6 +212,20 @@ describe('fleetopsLine with publish.json (the failed line, card coord-fleetops-l
     expect(dash.fleetopsLine(env, NOW)).toBe(FAILED_LINE);
   });
 
+  it('a forced run that died keeps the failure: state writing with failedKey on this key gives the failed line (break: only state failed is read; PR 654 CLI finding)', () => {
+    const writing = JSON.stringify({ state: 'writing', session: 'bbbbbbbb', key: KEY_A, at: '2026-11-08T21:35:00.000Z', failedKey: KEY_A, failedAt: FAILED_AT, failedStep: '7.3' });
+    const { env } = setup(pendingA, writing);
+    expect(dash.fleetopsLine(env, NOW)).toBe(FAILED_LINE);
+  });
+
+  it('a writing record with no failedKey, or a failedKey of another export, adds no failed line (break: any writing record read as a failure)', () => {
+    const plain = JSON.stringify({ state: 'writing', session: 'bbbbbbbb', key: KEY_A, at: FAILED_AT });
+    expect(dash.parsePublishFailed(plain)).toBeNull();
+    const other = JSON.stringify({ state: 'writing', session: 'bbbbbbbb', key: KEY_A, at: FAILED_AT, failedKey: KEY_B, failedAt: FAILED_AT });
+    const { env } = setup(pendingA, other);
+    expect(dash.fleetopsLine(env, NOW)).toContain('not uploaded');
+  });
+
   it('failed on key A while refresh.json holds key B: the failed state is ignored, the pending line shows', () => {
     const { env } = setup({ pending: true, key: KEY_B, exported_at: KEY_B }, failed());
     const line = dash.fleetopsLine(env, NOW);

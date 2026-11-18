@@ -380,7 +380,9 @@ function loadBuildInputs(distDir) {
     if (parsed.version !== 1 || parsed.algorithm !== "sha256" || !parsed.inputs || typeof parsed.inputs !== "object") {
       return null;
     }
-    return { version: 1, algorithm: "sha256", inputs: parsed.inputs };
+    const ext = parsed.external;
+    const external = ext && typeof ext === "object" && !Array.isArray(ext) ? ext : {};
+    return { version: 1, algorithm: "sha256", inputs: parsed.inputs, external };
   } catch {
     return null;
   }
@@ -516,10 +518,10 @@ function formatHealthReport(results) {
   return lines.join("\n");
 }
 async function readStdin() {
-  return new Promise((resolve3) => {
+  return new Promise((resolve4) => {
     let data = "";
     process.stdin.on("data", (chunk) => data += chunk);
-    process.stdin.on("end", () => resolve3(data));
+    process.stdin.on("end", () => resolve4(data));
   });
 }
 async function main() {
