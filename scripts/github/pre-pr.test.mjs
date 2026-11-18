@@ -60,7 +60,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as PRE from './pre-pr.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
 import { REGISTRY } from '../checks/parser-fixtures/registry.mjs';
@@ -90,7 +90,9 @@ const HEAD = 'a'.repeat(40);
 // The answer-key guard reads REVIEW.md in the root and a both-sides path list. Tests that pass no list get a clean one; a test that passes
 // changedPaths (or its own guardPaths) is checked on that list.
 const CLEAN_PATHS = ['src/clean.mjs'];
-const runCodeRabbit = (o) => runCodeRabbitLive({ crStore: null, ...(o.changedPaths === undefined && !('guardPaths' in o) ? { guardPaths: CLEAN_PATHS } : {}), ...o });
+// The CLI reads a PINNED base commit (card prflow-prepr-speed): a unit call with no repo gets this id.
+const BASE40 = 'b'.repeat(40);
+const runCodeRabbit = (o) => runCodeRabbitLive({ crStore: null, baseCommit: BASE40, ...(o.changedPaths === undefined && !('guardPaths' in o) ? { guardPaths: CLEAN_PATHS } : {}), ...o });
 const runPrePr = (o) => runPrePrLive({ crStore: null, ...o });
 
 function fakeGit(map) {
@@ -770,13 +772,13 @@ test('C1: the run uses cr review --agent and never --use-credits or --api-key', 
   assert.deepEqual(f.calls[0].args.slice(0, 2), ['review', '--agent']);
   assert.equal(f.calls[0].args.some((a) => /use-credits|api-key/.test(a)), false);
   assert.ok(f.calls[0].timeoutMs >= 15 * 60_000);
-  assert.deepEqual(CR_ARGS('main'), ['review', '--agent', '--committed', '--base', 'main']);
-  assert.deepEqual(f.calls[0].args, CR_ARGS('main'));
+  assert.deepEqual(CR_ARGS(BASE40), ['review', '--agent', '--committed', '--base-commit', BASE40]);
+  assert.deepEqual(f.calls[0].args, CR_ARGS(BASE40));
   assert.deepEqual(CR_USAGE_ARGS, ['usage', '--agent']);
   assert.throws(() => assertSafeCrArgs(['usage', '--agent', '--use-credits']), /forbidden/i);
   assert.throws(() => assertSafeCrArgs(['usage']), /forbidden/i);
   assertSafeCrArgs(['usage', '--agent']);
-  assertSafeCrArgs(CR_ARGS('main'));
+  assertSafeCrArgs(CR_ARGS(BASE40));
   for (const bad of ['--use-credits', '--api-key', '--api-key=abc', 'code']) {
     assert.throws(() => assertSafeCrArgs(['review', '--agent', bad]), /forbidden/i, bad);
   }
@@ -1856,7 +1858,10 @@ test('R2b: a failing gate fails the run, and the gate summary is in its line', a
   const { result, crCalls } = (await prePr(repo, { exec: () => ({ status: 1, stdout: 'bad\n# fail 2\n', stderr: '' }) }));
   assert.equal(result.ok, false);
   assert.ok(result.lines.some((l) => /^FAIL gate:context-budget.*# fail 2/.test(l)), result.lines.join('\n'));
-  assert.equal(crCalls.length, 0);
+  // Card prflow-prepr-speed: the review starts beside the gates, so a failing gate no longer stops it (it was crCalls 0). PRE_PR_SERIAL_CR=1 keeps the old rule.
+  assert.equal(crCalls.length, 1);
+  const serial = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: () => ({ status: 1, stdout: 'bad\n# fail 2\n', stderr: '' }) });
+  assert.equal(serial.crCalls.length, 0);
 });
 
 test('R2c: a gate that times out is a FAIL that says so', async () => {
@@ -3177,7 +3182,11 @@ test('GL4: a FAIL gate row has status FAIL and a wall time in ms', async () => {
   assert.equal(row.status, 'FAIL');
   assert.equal(typeof row.ms, 'number');
   assert.ok(row.ms >= 10, `ms was ${row.ms}`);
-  assert.equal(rowsOf(file).find((r) => r.step === 'coderabbit').status, 'SKIP');
+  // The review started beside the gate and ended on its own (it was SKIP earlier-step-failed; PRE_PR_SERIAL_CR=1 still gives that).
+  assert.equal(rowsOf(file).find((r) => r.step === 'coderabbit').status, 'PASS');
+  const serialFile = tempGateLog();
+  await prePr(makeRepo(), { gateLogPath: serialFile, env: { PRE_PR_SERIAL_CR: '1' }, exec: slowFail() });
+  assert.equal(rowsOf(serialFile).find((r) => r.step === 'coderabbit').status, 'SKIP');
 });
 
 test('GL5: a token and the PR body never reach a row, and a detail stops at 200 chars', async () => {
@@ -3669,16 +3678,16 @@ function repoWithStaleMain() {
   return repo;
 }
 
-test('A15: a stale local main that pulls another PR\'s gold path in is a FAIL that says to update local main; the CLI never starts', async () => {
+// Card prflow-prepr-speed (R1): the pin is the merge base with fork/main, so a stale local main no longer pulls another PR's gold path into the
+// range. A15 was "FAIL: update local main"; the range the CLI reads is now the right one, and the run goes on.
+test('A15: a stale local main that holds another PR\'s gold path no longer reaches the guard: the pinned range is the branch\'s own change, and the CLI runs on it', async () => {
   const repo = repoWithStaleMain();
   const run = await prePr(repo);
-  assert.equal(crStep(run).status, 'FAIL', run.result.lines.join('\n'));
+  assert.equal(crStep(run).status, 'PASS', run.result.lines.join('\n'));
   assert.equal(crStep(run).skipReason, undefined);
-  assert.match(crStep(run).detail, /gold\/other\.md, 1 in all/);
-  assert.match(crStep(run).detail, /update local main/);
-  assert.match(crStep(run).detail, /git fetch fork main/);
-  assert.equal(run.crCalls.length, 0);
-  assert.equal(run.result.ok, false);
+  assert.equal(run.crCalls.length, 1);
+  assert.equal(run.crCalls[0].args.at(-1), git(repo.dir, 'rev-parse', 'refs/remotes/fork/main'), 'the CLI reads from fork/main');
+  assert.equal(run.result.ok, true);
 });
 
 test('A16: with fork/main present, an answer-key path that is also in the fork/main list still earns the skip; an unreadable fork list is a FAIL', async () => {
@@ -3722,7 +3731,7 @@ test('A17: an accepted answer-key skip writes one guardLog row (decision, count,
 // The guard checks the diff before the lock, but the usage preflight is awaited before the review starts. A commit or a checkout in that
 // window changes the committed diff the CLI would read, so HEAD is read again right before the CLI starts.
 function crInRepo(repo, runner, extra = {}) {
-  return { root: repo.dir, branch: 'feat/x', head: repo.head, base: 'main', now: new Date('2026-10-27T10:00:00Z'), runner, ledgerPath: tempLedger(), headGit: makeGit(repo.dir), crStore: null, guardPaths: CLEAN_PATHS, ...extra };
+  return { root: repo.dir, branch: 'feat/x', head: repo.head, base: 'main', now: new Date('2026-10-27T10:00:00Z'), runner, ledgerPath: tempLedger(), headGit: makeGit(repo.dir), crStore: null, guardPaths: CLEAN_PATHS, baseCommit: git(repo.dir, 'rev-parse', 'main'), ...extra };
 }
 const commitDuring = (repo, rel) => {
   mkdirSync(path.dirname(path.join(repo.dir, rel)), { recursive: true });
@@ -3786,30 +3795,30 @@ test('A20: runPrePr hands its git to the CodeRabbit step: a HEAD that moves in t
   assert.equal(run.result.ok, false);
 });
 
-// The base ref moves too: every worktree shares refs/heads/main, and landed PRs move it all day. The base is resolved to a commit before the guard
-// runs and read again right before the CLI starts (`--base main` is read by name, so the CLI would review a diff the guard did not inspect).
+// The base ref moves too: every worktree shares refs/heads/main, and landed PRs move it all day.
 const shaOf = (repo, ref) => git(repo.dir, 'rev-parse', ref);
 const moveBase = (repo) => git(repo.dir, 'update-ref', 'refs/heads/main', git(repo.dir, 'commit-tree', 'main^{tree}', '-p', 'main', '-m', 'main moved'));
 
-test('A21: the base ref moved during the usage preflight starts no CLI and gives the run slot back', async () => {
+// Card prflow-prepr-speed (R1): the base is PINNED. runPrePr reads baseCommit = `git merge-base HEAD fork/<base>` once, after the fetch
+// (the local base when there is no fork ref), and the changes step, the guard and `cr review --base-commit` all use it. A move of the base
+// ref during the run changes nothing the run reads, so it is no FAIL any more. Only HEAD is checked at the last moment.
+// A21..A25 below were "a base that moved is a FAIL" tests; each now holds the new rule.
+test('A21: the base ref moved during the usage preflight changes nothing: the CLI starts on the pinned base commit and the slot is used', async () => {
   const repo = makeRepo();
+  const pinned = shaOf(repo, 'main');
   const seen = [];
   const runner = (o) => {
-    seen.push(o.args[0]);
+    seen.push(o.args);
     if (o.args[0] === 'usage') moveBase(repo);
     return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' };
   };
-  const r = await runCodeRabbitLive(crInRepo(repo, runner, { baseSha: shaOf(repo, 'main') }));
-  assert.equal(r.status, 'FAIL');
-  assert.equal(r.skipReason, undefined);
-  assert.match(r.detail, /main moved during the preflight/);
-  assert.match(r.detail, /run pre-pr again/);
-  assert.deepEqual(seen, ['usage'], 'the review is never called');
-  assert.equal(JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs.length, 0, 'not counted');
-  assert.equal(existsSync(crPaths(repo.dir, 'feat/x').lock), false);
+  const r = await runCodeRabbitLive(crInRepo(repo, runner, { baseCommit: pinned }));
+  assert.equal(r.status, 'PASS', r.detail);
+  assert.deepEqual(seen.at(-1), ['review', '--agent', '--committed', '--base-commit', pinned]);
+  assert.equal(JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs.length, 1, 'counted');
 });
 
-test('A22: an empty head or base that cannot be read FAILs before any equality test; a steady base runs the CLI', async () => {
+test('A22: an empty head that cannot be re-read FAILs before any equality test; a missing or malformed base commit FAILs closed with no CLI call', async () => {
   const repo = makeRepo();
   const seen = [];
   const runner = (o) => { seen.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
@@ -3818,70 +3827,110 @@ test('A22: an empty head or base that cannot be read FAILs before any equality t
   assert.equal(emptyHead.status, 'FAIL', 'head empty and the re-read failed: not "equal"');
   assert.match(emptyHead.detail, /HEAD could not be re-read/);
   assert.deepEqual(seen, ['usage']);
-  const noBase = await runCodeRabbitLive(crInRepo(makeRepo(), runner, { baseSha: null }));
-  assert.equal(noBase.status, 'FAIL');
-  assert.match(noBase.detail, /main could not be read/);
-  const steady = makeRepo();
+  for (const bad of ['', 'main', 'abc123', `${'a'.repeat(39)}g`]) {
+    seen.length = 0;
+    const noBase = await runCodeRabbitLive(crInRepo(makeRepo(), runner, { baseCommit: bad }));
+    assert.equal(noBase.status, 'FAIL', String(bad));
+    assert.match(noBase.detail, /no pinned base commit/);
+    assert.deepEqual(seen, [], `${bad}: no CLI call, not even the usage preflight`);
+  }
+  // No base commit given (a direct call): it is read from the checkout. In a folder that is no checkout the read fails and the step FAILs closed.
   seen.length = 0;
-  assert.equal((await runCodeRabbitLive(crInRepo(steady, runner, { baseSha: shaOf(steady, 'main') }))).status, 'PASS');
+  const direct = makeRepo();
+  const { baseCommit: _given, ...noBase } = crInRepo(direct, runner);
+  assert.equal((await runCodeRabbitLive(noBase)).status, 'PASS');
   assert.deepEqual(seen, ['usage', 'review']);
+  seen.length = 0;
+  const lost = await runCodeRabbitLive({ ...noBase, root: crFixture().root, headGit: null });
+  assert.equal(lost.status, 'FAIL');
+  assert.match(lost.detail, /no pinned base commit \(none\)/);
+  assert.deepEqual(seen, [], 'no CLI call at all');
 });
 
-test('A23: runPrePr resolves the base to a commit and re-checks it: a base that moves in the preflight gives no CLI start', async () => {
-  // Breaks when: runPrePr drops baseSha from its runCodeRabbit call.
+test('A23: runPrePr pins the base: the CLI gets --base-commit <merge-base of HEAD and fork/main>, and the guard reads the same range, whatever the refs do after', async () => {
   const repo = makeRepo();
-  const crCalls = [];
+  git(repo.dir, 'update-ref', 'refs/remotes/fork/main', 'main');
+  const pinned = shaOf(repo, 'fork/main');
+  const real = makeGit(repo.dir);
+  const ranges = [];
+  const reviewArgs = [];
   const crRunner = (o) => {
-    if (o.args[0] === 'usage') { moveBase(repo); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
-    crCalls.push(o);
+    if (o.args[0] === 'usage') { moveBase(repo); git(repo.dir, 'update-ref', 'refs/remotes/fork/main', 'main'); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+    reviewArgs.push(o.args);
     return { status: 0, stdout: NDJSON_OK, stderr: '' };
   };
-  const run = await prePr(repo, { crRunner });
-  assert.equal(crStep(run).status, 'FAIL');
-  assert.match(crStep(run).detail, /main moved during the preflight/);
-  assert.equal(crCalls.length, 0);
-  const cleanRepo = makeRepo();
-  const real = makeGit(cleanRepo.dir);
-  const ranges = [];
-  const clean = await prePr(cleanRepo, { git: (args) => { if (args.includes('--no-renames')) ranges.push(args.at(-1)); return real(args); } });
-  assert.equal(crStep(clean).status, 'PASS', 'a steady base still runs the CLI');
-  assert.deepEqual(ranges, [`${shaOf(cleanRepo, 'main')}...HEAD`], 'the guard reads the range from the resolved base commit, not the branch name');
+  const run = await prePr(repo, { crRunner, git: (args) => { if (args.includes('--no-renames')) ranges.push(args.at(-1)); return real(args); } });
+  assert.equal(crStep(run).status, 'PASS', run.result.lines.join('\n'));
+  assert.deepEqual(reviewArgs, [['review', '--agent', '--committed', '--base-commit', pinned]]);
+  assert.ok(ranges.length >= 1 && ranges.every((r) => r === `${pinned}...HEAD`), `the guard reads ${pinned}...HEAD: ${ranges.join(', ')}`);
+  assert.equal(run.result.ok, true);
+  assert.equal(stampOf(repo).base_commit, pinned, 'the stamp names the base commit');
 });
 
-// The base can also move BEFORE it is resolved: git:behind passed, then a land elsewhere moved main while the gates ran. baseSha is then a
-// commit HEAD does not contain, so base...HEAD (from the merge base) misses the landed paths, while `--base main` can diff against the tip.
-// The last-moment check also asks that HEAD contains the base commit (critic and aegis, PR 552 internal pass).
-test('A24: a resolved base that HEAD does not contain starts no CLI and gives the run slot back', async () => {
-  // Breaks when: headMoved drops the merge-base --is-ancestor test.
-  const repo = makeRepo();
-  moveBase(repo);
-  const seen = [];
-  const runner = (o) => { seen.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
-  const r = await runCodeRabbitLive(crInRepo(repo, runner, { baseSha: shaOf(repo, 'main') }));
-  assert.equal(r.status, 'FAIL');
-  assert.equal(r.skipReason, undefined);
-  assert.match(r.detail, /HEAD does not contain main/);
-  assert.match(r.detail, /merge main/);
-  assert.deepEqual(seen, ['usage'], 'the review is never called');
-  assert.equal(JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs.length, 0, 'not counted');
-});
-
-test('A25: runPrePr with a base that moves after git:behind and before it is resolved gives no CLI start', async () => {
-  // Breaks when: runPrePr resolves the base before the gates again without the ancestry test, or the test leaves headMoved.
-  const repo = makeRepo();
+// R2: the guard sees exactly the diff the CLI reads and still runs before the spawn.
+test('PIN3: the guard paths are the paths of git diff --name-only <baseCommit>...HEAD, read before the first CLI call, and a moved fork/main changes neither', async () => {
+  const repo = repoWithStaleMain();
+  const pinned = git(repo.dir, 'merge-base', 'HEAD', 'refs/remotes/fork/main');
+  const order = [];
   const real = makeGit(repo.dir);
-  let baseReads = 0;
-  const git = (args) => {
-    // The 1st read of the base ref is git:behind, the 2nd is resolveBase: the land happens between them.
-    if (args.join(' ') === 'rev-parse --verify --quiet main' && ++baseReads === 2) moveBase(repo);
-    return real(args);
-  };
-  const run = await prePr(repo, { git });
-  assert.equal(baseReads >= 2, true, 'the base was read twice');
-  assert.equal(crStep(run).status, 'FAIL');
-  assert.match(crStep(run).detail, /HEAD does not contain main/);
-  assert.equal(run.crCalls.length, 0);
-  assert.equal(run.result.ok, false);
+  const git2 = (args) => { if (args.includes('--no-renames')) order.push(`guard ${args.at(-1)}`); return real(args); };
+  const crRunner = (o) => { order.push(`cr ${o.args[0]}`); if (o.args[0] === 'usage') moveBase(repo); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  const run = await prePr(repo, { crRunner, git: git2 });
+  const expected = git(repo.dir, 'diff', '--name-only', '--no-renames', `${pinned}...HEAD`).split('\n').filter(Boolean);
+  assert.deepEqual(expected, ['docs/mine.md'], 'the other PR\'s gold file is not in the range the CLI reads');
+  assert.equal(order[0], `guard ${pinned}...HEAD`, 'the guard runs first, on the pinned range');
+  assert.ok(order.indexOf('cr usage') > order.indexOf(`guard ${pinned}...HEAD`));
+  assert.equal(crStep(run).status, 'PASS', run.result.lines.join('\n'));
+  assert.equal(order.filter((x) => x === 'cr review').length, 1);
+});
+
+test('A24: the pin is the merge base, not the tip of a base that HEAD does not contain: a moved local main is not read', async () => {
+  const repo = makeRepo();
+  const pinned = shaOf(repo, 'main');
+  moveBase(repo);
+  assert.equal(PRE.resolveBaseCommit(makeGit(repo.dir), 'main'), pinned, 'merge-base HEAD main, not the new tip');
+  git(repo.dir, 'update-ref', 'refs/remotes/fork/main', 'main');
+  assert.equal(PRE.resolveBaseCommit(makeGit(repo.dir), 'main'), pinned, 'fork/main is the new tip (not in HEAD): the merge base stays');
+  assert.equal(PRE.resolveBaseCommit(() => ({ status: 128, stdout: '', stderr: 'fatal' }), 'main'), '', 'a failed read is the empty string');
+  assert.equal(PRE.resolveBaseCommit(() => ({ status: 0, stdout: 'not a sha\n', stderr: '' }), 'main'), '', 'text that is no commit is the empty string');
+});
+
+test('A25 and F21: main moves during the gates and the run still PASSES, on the pinned base commit; HEAD moving still FAILs', async () => {
+  const repo = makeRepo();
+  git(repo.dir, 'update-ref', 'refs/remotes/fork/main', 'main');
+  const pinned = shaOf(repo, 'main');
+  const moved = [];
+  const run = await prePr(repo, { exec: () => { if (moved.length === 0) { moveBase(repo); git(repo.dir, 'update-ref', 'refs/remotes/fork/main', 'main'); moved.push(1); } return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; } });
+  assert.equal(moved.length, 1, 'the base moved in the gates');
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.equal(crStep(run).status, 'PASS');
+  assert.equal(stampOf(repo).base_commit, pinned);
+  assert.equal(run.crCalls.at(-1).args.at(-1), pinned);
+  const headMoves = makeRepo();
+  const bad = await prePr(headMoves, { crRunner: (o) => { if (o.args[0] === 'usage') commitDuring(headMoves, 'docs/during.md'); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; } });
+  assert.equal(bad.result.ok, false);
+});
+
+test('PIN1: no fork ref: the pin is the merge base with the local base; a merge base git cannot read fails the changes step closed with no CLI call', async () => {
+  const repo = makeRepo();
+  const pinned = shaOf(repo, 'main');
+  const run = await prePr(repo);
+  assert.equal(run.crCalls.at(-1).args.at(-1), pinned);
+  assert.equal(stampOf(repo).base_commit, pinned);
+  const none = makeRepo();
+  const real = makeGit(none.dir);
+  const broken = await prePr(none, { git: (args) => (args[0] === 'merge-base' ? { status: 128, stdout: '', stderr: 'fatal: no merge base' } : real(args)) });
+  assert.equal(broken.result.ok, false);
+  assert.equal(broken.crCalls.length, 0);
+  assert.match(broken.result.lines.join('\n'), /FAIL changes - .*base commit/);
+});
+
+test('PIN2: assertSafeCrArgs lets --base-commit pass only with a 40 character commit id', () => {
+  assertSafeCrArgs(['review', '--agent', '--committed', '--base-commit', 'a'.repeat(40)]);
+  for (const bad of ['main', '--use-credits', 'A'.repeat(40), 'a'.repeat(39), '']) {
+    assert.throws(() => assertSafeCrArgs(['review', '--agent', '--committed', '--base-commit', bad]), /forbidden/i, bad);
+  }
+  assert.throws(() => assertSafeCrArgs(['review', '--agent', '--committed', '--base-commit']), /forbidden/i);
 });
 
 test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {
@@ -3893,4 +3942,427 @@ test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: 
   assert.match(crStep(run).detail, /could not check the diff/);
   assert.equal(run.crCalls.length, 0);
   assert.equal((await prePr(makeRepo())).crCalls.length, 1, 'a clean branch still runs the CLI');
+});
+
+// ---------- card prflow-prepr-speed, Q1: a review whose run failed a test gate ----------
+// The review starts beside the test gates. When a gate fails, the review has spent its run on a head that cannot pass. Its counter row gets
+// gateFailed: true and uses no slot, but only ONE such free row per branch per Chicago day: the next one counts as a normal slot.
+// A gateFailed row must never count toward cr_finished_runs or cr_partial_earned (the hook accepts a cap skip on cr_finished_runs >= 1).
+//
+// How it can fail, one test each, with the source change that makes it fail:
+//   Q1a  a gateFailed row uses a slot                              (count every row)
+//   Q1b  every gateFailed row is free, so a failing head costs nothing for ever   (no bound)
+//   Q1c  the day is the UTC or the machine day, not the Chicago day               (dayOf or slice(0, 10) of the ISO time)
+//   Q1d  a gateFailed row counts as a finished run or a partial run               (no exclusion in finishedRuns and partialEarnedFor)
+const hexOf = (c) => c.repeat(40);
+const gfRow = (c, at, extra = {}) => ({ head: hexOf(c), at, outcome: 'finished', complete: true, newCode: true, gateFailed: true, ...extra });
+const okRow = (c, at) => ({ head: hexOf(c), at, outcome: 'finished', complete: true, newCode: true });
+function seedCounter(f, rows) {
+  const file = crPaths(f.root, 'feat/x').counter;
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ branch: 'feat/x', runs: rows }));
+}
+const MORNING = '2026-10-27T15:00:00.000Z'; // 10:00 in Chicago on 10-27
+
+test('Q1a: one gateFailed row and one normal row use ONE slot: a third head is still reviewed', async () => {
+  const f = crFixture();
+  seedCounter(f, [gfRow('1', MORNING), okRow('2', MORNING)]);
+  const r = await runCodeRabbit(crOpts(f, { head: hexOf('3') }));
+  assert.equal(r.status, 'PASS', r.detail);
+  assert.equal(f.calls.length, 1);
+});
+
+test('Q1b: a second gateFailed row on the same Chicago day counts as a normal slot', async () => {
+  const f = crFixture();
+  seedCounter(f, [gfRow('1', MORNING), gfRow('2', '2026-10-27T16:00:00.000Z'), okRow('3', MORNING)]);
+  const r = await runCodeRabbit(crOpts(f, { head: hexOf('4') }));
+  assert.equal(r.skipReason, 'cap', 'the free row is 1, rows 2 and 3 are 2 slots');
+  assert.equal(f.calls.length, 0);
+});
+
+test('Q1c: the free row is one per CHICAGO day: 22:30 on 10-27 and 05:00 on 10-27 in Chicago are one day (two UTC days), 10-26 evening is another', async () => {
+  const same = crFixture();
+  seedCounter(same, [gfRow('1', '2026-10-27T10:00:00.000Z'), gfRow('2', '2026-10-28T03:30:00.000Z')]); // Chicago 10-27 05:00 and 10-27 22:30
+  const sameRun = await runCodeRabbit(crOpts(same, { head: hexOf('3') }));
+  assert.equal(sameRun.status, 'PASS', 'free row + 1 slot = 1 counted: a run is left');
+  seedCounter(same, [gfRow('1', '2026-10-27T10:00:00.000Z'), gfRow('2', '2026-10-28T03:30:00.000Z'), okRow('4', MORNING)]);
+  assert.equal((await runCodeRabbit(crOpts(same, { head: hexOf('5') }))).skipReason, 'cap', 'same Chicago day: the second row counts, so 2 counted');
+  const days = crFixture();
+  seedCounter(days, [gfRow('1', '2026-10-27T10:00:00.000Z'), gfRow('2', '2026-10-27T03:00:00.000Z'), okRow('4', MORNING)]); // 10-27 and 10-26 in Chicago, plus one normal
+  assert.equal((await runCodeRabbit(crOpts(days, { head: hexOf('6') }))).status, 'PASS', 'two Chicago days: both rows are free, 1 counted');
+});
+
+test('Q1d: a gateFailed row is never a finished run and never earns a partial cap skip', () => {
+  const f = crFixture();
+  seedCounter(f, [gfRow('1', MORNING), okRow('2', MORNING)]);
+  assert.equal(finishedRuns(f.root, 'feat/x'), 1, 'only the normal row finished');
+  seedCounter(f, [gfRow('1', MORNING)]);
+  assert.equal(finishedRuns(f.root, 'feat/x'), 0);
+  const repo = makeRepo();
+  const partial = { head: repo.head, partial: true, reviewed: 3, unreviewed: 1, findings: [], gateFailed: true };
+  assert.equal(PRE.partialEarnedFor(repo.dir, [{ ...partial, gateFailed: undefined }], repo.head).earned, 1, 'the same row without the flag earns (the control)');
+  assert.deepEqual(PRE.partialEarnedFor(repo.dir, [partial], repo.head), { earned: 0, unreviewed: 0 });
+});
+
+test('Q1e: markGateFailed marks only the row of this run, by its time and head', () => {
+  const f = crFixture();
+  const rows = [okRow('1', MORNING), okRow('2', '2026-10-27T16:00:00.000Z')];
+  seedCounter(f, rows);
+  const paths = crPaths(f.root, 'feat/x');
+  PRE.markGateFailed(paths.counter, { head: hexOf('2'), at: '2026-10-27T16:00:00.000Z' });
+  const after = JSON.parse(readFileSync(paths.counter, 'utf8')).runs;
+  assert.deepEqual(after.map((r) => r.gateFailed === true), [false, true]);
+  assert.equal(PRE.markGateFailed(paths.counter, { head: hexOf('9'), at: MORNING }), false, 'a row that is not there');
+});
+
+// ---------- card prflow-prepr-speed: the review runs beside the test gates ----------
+// A test gate is a blocking spawnSync: while it runs, the event loop of pre-pr does not run. The review child must not need the loop.
+// The review call (fileStdio: true) gives the child a FILE for stdout and one for stderr, so nobody has to read a pipe. The usage call keeps pipes.
+//
+// How it can fail, one test each, with the source change that makes it fail:
+//   F6   the child blocks on a full pipe while a gate blocks the loop           (stdio pipe)
+//   F7   the time limit fires late after a long gate                            (checked: it fires when the loop runs again, with the child dead)
+//   M1   a late limit timer kills a review that ended in time and reports a time-out   (no exit check in the limit handler)
+//   M5   stderr lines land in the parsed stream                                 (one file for both)
+//   F24  two runs write one running file                                        (no pid in the name)
+const blockFor = (ms) => spawnSync(process.execPath, ['-e', `setTimeout(() => {}, ${ms})`], { windowsHide: true });
+const tmpFile = (name) => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-fstdio-')), name);
+
+test('F6: a review child that writes 1 MB is not blocked while a gate blocks the event loop for 3 s (file stdio)', async () => {
+  const marker = tmpFile('done.txt');
+  const script = fakeCr(`import { writeSync, writeFileSync } from 'node:fs';
+const chunk = 'x'.repeat(65536);
+for (let i = 0; i < 17; i += 1) writeSync(1, chunk);
+writeFileSync(${JSON.stringify(marker)}, String(Date.now()));`);
+  const streamTo = tmpFile('run.txt');
+  const running = defaultCrRunner({ cwd: os.tmpdir(), args: REVIEW, timeoutMs: 60_000, streamTo, fileStdio: true }, asFake(script));
+  blockFor(3000);
+  const blockEnd = Date.now();
+  const doneAt = existsSync(marker) ? Number(readFileSync(marker, 'utf8')) : null;
+  const r = await running;
+  assert.ok(doneAt !== null && doneAt <= blockEnd, 'the child finished while the loop was blocked');
+  assert.equal(r.status, 0);
+  assert.ok(r.stdout.length >= 1_000_000, `the runner read ${r.stdout.length} characters`);
+  assert.equal(readFileSync(streamTo, 'utf8').length, r.stdout.length, 'the stream file is the stdout');
+});
+
+test('F7 and M1: a review that ended in time is not a time-out when the limit timer fires late (gate of 2 s, limit 1 s); a child that runs on is stopped', async () => {
+  const quick = fakeCr('console.log(\'{"type":"complete","status":"review_completed"}\'); setTimeout(() => process.exit(0), 300);');
+  const ended = defaultCrRunner({ cwd: os.tmpdir(), args: REVIEW, timeoutMs: 1000, streamTo: tmpFile('quick.txt'), fileStdio: true }, asFake(quick));
+  blockFor(2000);
+  const r = await ended;
+  assert.equal(r.timedOut, false, 'the child had ended: no kill, no time-out');
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /complete/);
+  const hangs = fakeCr('setInterval(() => console.log(\'{"type":"heartbeat"}\'), 100);');
+  const stuck = defaultCrRunner({ cwd: os.tmpdir(), args: REVIEW, timeoutMs: 1000, streamTo: tmpFile('stuck.txt'), fileStdio: true }, asFake(hangs));
+  blockFor(2000);
+  const s = await stuck;
+  assert.equal(s.timedOut, true);
+  assert.match(s.stdout, /heartbeat/, 'the partial stream is kept');
+});
+
+test('M5: with file stdio stderr goes to <name>.err and never into the parsed stdout; ticks read the last event from the file', async () => {
+  const script = fakeCr('console.error("E-LINE"); let i = 0; const t = setInterval(() => { console.log(\'{"type":"heartbeat"}\'); if (++i === 8) { clearInterval(t); } }, 80);');
+  const streamTo = tmpFile('run.txt');
+  const ticks = [];
+  const r = await defaultCrRunner({ cwd: os.tmpdir(), args: REVIEW, timeoutMs: 20_000, streamTo, fileStdio: true, onTick: (t) => ticks.push(t) }, asFake(script));
+  assert.equal(r.status, 0);
+  assert.doesNotMatch(r.stdout, /E-LINE/);
+  assert.match(r.stderr, /E-LINE/);
+  assert.match(readFileSync(`${streamTo}.err`, 'utf8'), /E-LINE/);
+  assert.doesNotMatch(readFileSync(streamTo, 'utf8'), /E-LINE/);
+  assert.ok(ticks.some((t) => t.lastEvent === 'heartbeat'), JSON.stringify(ticks));
+});
+
+test('file stdio: a missing binary is still ENOENT and leaves no open handle that blocks removing the files', async () => {
+  const streamTo = tmpFile('gone.txt');
+  const gone = await defaultCrRunner({ cwd: os.tmpdir(), args: REVIEW, timeoutMs: 20_000, streamTo, fileStdio: true }, { command: 'definitely-not-a-binary-xyz', prefixArgs: [] });
+  assert.equal(gone.errorCode, 'ENOENT');
+  unlinkSync(streamTo);
+  unlinkSync(`${streamTo}.err`);
+});
+
+test('F24: the review call asks for file stdio and a running file named with the pid of this run; the usage call keeps pipes', async () => {
+  const f = crFixture();
+  const seen = [];
+  const runner = (o) => { seen.push(o); return f.runner(o); };
+  const r = await runCodeRabbit(crOpts(f, { runner }));
+  assert.equal(r.status, 'PASS', r.detail);
+  const usage = seen.find((o) => o.args[0] === 'usage');
+  const review = seen.find((o) => o.args[0] === 'review');
+  assert.equal(usage.fileStdio, undefined);
+  assert.equal(review.fileStdio, true);
+  assert.equal(path.basename(review.streamTo), `2026-10-27-pre-pr-cr-aaaaaaa-${process.pid}.running.txt`);
+  const left = readdirSync(path.join(f.root, '.claude', 'cache', 'e2e')).filter((n) => /running/.test(n) || /\.err$/.test(n));
+  assert.deepEqual(left, [], 'the running file and its .err file are removed when the output is saved');
+});
+
+// ---------- card prflow-prepr-speed: the CodeRabbit step starts before the first test gate ----------
+// How it can fail, one test each, with the source change that makes it fail:
+//   F1   a fast step fails and a review still starts                         (start the review before the fast steps are known)
+//   F2   the review does not start before the first gate                     (an await before the spawn is not waited for, or the old order)
+//   F3   git:stable runs before the review ends                              (push git:stable before the await)
+//   F4   a gate FAIL stops or loses the review output, or prints nothing at once   (kill the review at the first FAIL)
+//   F5   a rerun on the same head spends a new review                        (reuse reads .failed.txt only, or the counter is rewritten)
+//   F22  a stale GREEN run (settled by the gates) starts the review early     (no settledByGates test in the early start)
+//   F23  an error exit leaves the review alive                               (no killActiveCr in the exit handler)
+//   Q1f  the counter row of a review whose run failed a gate is not marked, or another row is marked
+//   SER  PRE_PR_SERIAL_CR=1 does not restore today's order                    (no switch)
+//   PH   the phase is not set to cr after the last gate, or is set when no review runs
+const gateFail = (events) => () => { events?.push('gate'); return { status: 1, stdout: 'bad\n# fail 1\n', stderr: '' }; };
+const slowReview = (events, ms = 300) => async (o) => {
+  if (o.args[0] === 'usage') { await sleep(5); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+  events.push('review-start');
+  await sleep(ms);
+  events.push('review-end');
+  return { status: 0, stdout: NDJSON_OK, stderr: '' };
+};
+const e2eFiles = (repo) => readdirSync(path.join(repo.dir, '.claude', 'cache', 'e2e'));
+const counterRows = (repo) => JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs;
+
+test('F1: a fast step that FAILs (evidence) starts no review at all: the runner is never called, not even for usage', async () => {
+  const repo = makeRepo({ files: { 'src/a.ts': 'export const a = 1;\n' } });
+  const calls = [];
+  const run = await prePr(repo, { bodyText: 'Proof type: feature\n', crRunner: (o) => { calls.push(o.args[0]); return { status: 0, stdout: USAGE_OK, stderr: '' }; } });
+  assert.equal(run.result.ok, false);
+  assert.ok(run.result.results.some((r) => r.step === 'evidence' && r.status === 'FAIL'), run.result.lines.join('\n'));
+  assert.deepEqual(calls, []);
+  assert.equal(crStep(run).skipReason, 'earlier-step-failed');
+});
+
+test('F2: the review child is running before the first test gate starts (real runner, a stub command, an async preflight)', async () => {
+  const repo = makeRepo();
+  const pidFile = tmpFile('cr.pid');
+  const script = fakeCr(`import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.stdout.write(${JSON.stringify(NDJSON_OK)});`);
+  const crRunner = async (o) => {
+    if (o.args[0] === 'usage') { await sleep(60); return { status: 0, stdout: USAGE_OK, stderr: '' }; }
+    return defaultCrRunner(o, asFake(script));
+  };
+  const seen = [];
+  const exec = () => { blockFor(1500); seen.push(existsSync(pidFile)); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
+  const run = await prePr(repo, { crRunner, exec });
+  assert.deepEqual(seen, [true], 'the stub child had started and written its pid file while the first gate blocked');
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.equal(crStep(run).status, 'PASS');
+});
+
+test('F3: git:stable is the last step and comes after a slow review; the review sits after the gates in the results', async () => {
+  const repo = makeRepo();
+  const events = [];
+  const run = await prePr(repo, { crRunner: slowReview(events, 250) });
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  const steps = run.result.results.map((r) => r.step);
+  assert.equal(steps.at(-1), 'git:stable');
+  assert.ok(steps.indexOf('coderabbit') > steps.indexOf('gate:context-budget'), steps.join(' '));
+  assert.ok(steps.indexOf('coderabbit') < steps.indexOf('git:stable'));
+  assert.deepEqual(events, ['review-start', 'review-end']);
+});
+
+test('F4 and Q1f: a gate FAILs while the review runs: the line is printed at once, the review ends on its own and its output is saved, no stamp, only this run\'s row is marked gateFailed', async () => {
+  const repo = makeRepo();
+  const events = [];
+  const earlier = { head: hexOf('7'), at: '2026-10-25T15:00:00.000Z', outcome: 'finished', complete: true, newCode: true };
+  mkdirSync(path.dirname(crPaths(repo.dir, 'feat/x').counter), { recursive: true });
+  writeFileSync(crPaths(repo.dir, 'feat/x').counter, JSON.stringify({ branch: 'feat/x', runs: [earlier] }));
+  const run = await prePr(repo, { exec: gateFail(events), crRunner: slowReview(events, 400), log: (l) => events.push(`log: ${l}`) });
+  assert.equal(run.result.ok, false);
+  const failedAt = events.findIndex((e) => /^log: pre-pr: gate context-budget FAILED; waiting for the CLI review to end so its output is saved$/.test(e));
+  assert.ok(failedAt >= 0, events.join('\n'));
+  assert.ok(failedAt < events.indexOf('review-end'), 'the FAILED line comes before the review ends');
+  assert.ok(events.indexOf('review-start') < events.indexOf('gate'), 'the review started before the gate');
+  assert.equal(crStep(run).status, 'PASS', 'the review ended on its own: it was not stopped');
+  assert.ok(e2eFiles(repo).some((n) => /pre-pr-cr-[0-9a-f]{7}\.txt$/.test(n)), 'the output is saved');
+  assert.equal(existsSync(stampFile(repo)), false);
+  assert.deepEqual(counterRows(repo).map((r) => r.gateFailed === true), [false, true]);
+});
+
+test('F5: a rerun on the same head reuses the saved output: no review call, no new counter row, and it passes when the gate passes', async () => {
+  const repo = makeRepo();
+  await prePr(repo, { exec: gateFail(), crRunner: slowReview([], 100) });
+  assert.equal(counterRows(repo).length, 1);
+  const second = await prePr(repo);
+  assert.equal(second.crCalls.length, 0);
+  assert.equal(second.result.ok, true, second.result.lines.join('\n'));
+  assert.match(crStep(second).detail, /reused the saved CLI output/);
+  assert.equal(counterRows(repo).length, 1);
+  assert.equal(stampOf(repo).cr_finished_runs, 0, 'a gateFailed row is not a finished run');
+});
+
+test('F22: a stale GREEN (settled by the gates) keeps the old order: no usage and no review call before the last gate', async () => {
+  const repo = mergedRepo();
+  const events = [];
+  const crRunner = (o) => { events.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
+  const exec = () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
+  const { result } = await runWithBodyFile(repo, greenBody({ green: repo.old }), { skipCr: false, crRunner, exec });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.deepEqual(events, ['gate', 'usage', 'review']);
+});
+
+test('SER: PRE_PR_SERIAL_CR=1 keeps today\'s order (gates, then the review); without it the review comes first', async () => {
+  const early = [];
+  await prePr(makeRepo(), { exec: gateFail(early), crRunner: slowReview(early, 50) });
+  assert.deepEqual(early.filter((e) => e !== 'review-end'), ['review-start', 'gate'], 'default: the review starts first');
+  const serial = [];
+  const run = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: gateFail(serial), crRunner: slowReview(serial, 50) });
+  assert.deepEqual(serial, ['gate'], 'serial: a failed gate means no review');
+  assert.equal(crStep(run).skipReason, 'earlier-step-failed');
+});
+
+test('PH: the phase becomes cr after the last gate while the review runs; no review, no phase change', async () => {
+  const events = [];
+  await prePr(makeRepo(), { onPhase: (p) => events.push(`phase ${p}`), exec: () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; }, crRunner: slowReview(events, 300) });
+  assert.deepEqual(events, ['review-start', 'gate', 'phase cr', 'review-end']);
+  const none = [];
+  await prePr(makeRepo(), { skipCr: true, onPhase: (p) => none.push(p) });
+  assert.deepEqual(none, []);
+});
+
+// ---------- card prflow-prepr-speed: the run lock wiring (heavy, START and END lines, waiting, errors) ----------
+// takeRunLock gets a fake lock, a fake exit and a fake clock: no test here opens the live store (~/.claude/state/run-locks).
+//
+// How it can fail, one test each, with the source change that makes it fail:
+//   M2   heavy is decided by a path test and not by the hooks-vitest gate        (a path test)
+//   F17  the START or END line is missing or wrong                               (no line, no failing step)
+//   L1   head and heavy are read once, before a wait of up to 60 minutes         (a value, not a function, for the wait)
+//   M6   a lock error in grant mode lets the run go on with no limit             (catch and go on in every mode)
+//   WL   --wait-lock waits when it is not asked for, or does not wait when it is  (always acquire once)
+const fakeLock = (over = {}) => {
+  const calls = { acquire: [], wait: [], phase: [], log: [] };
+  const lock = {
+    calls,
+    mode: () => 'grant',
+    acquire: async (o) => { calls.acquire.push(o); return { granted: true, mode: 'grant', file: 'pre-pr-1-2.lock', freeGB: 8.2, loadPct: 14, lines: ['GRANTED pre-pr'] }; },
+    waitForGrant: async (o) => { calls.wait.push(o); return { granted: true, mode: 'grant', file: 'pre-pr-1-2.lock', freeGB: 8.2, loadPct: 14, lines: ['GRANTED pre-pr'] }; },
+    setPhase: (o) => { calls.phase.push(o); return { changed: true }; },
+    logRun: (row) => calls.log.push(row),
+    ...over,
+  };
+  return lock;
+};
+const lockRun = (lock, extra = {}) => {
+  const said = [];
+  const exits = [];
+  const sleeps = [];
+  const args = { bodyPath: '/x/body.md', wait: false, factsOf: () => ({ head: 'abcd1234', heavy: false }), lock, say: (l) => said.push(l), exit: (c) => exits.push(c), sleep: async (ms) => { sleeps.push(ms); }, install: () => {}, pid: 4242, ...extra };
+  return { said, exits, sleeps, done: PRE.takeRunLock(args) };
+};
+
+test('M2: heavy means the change set runs the hooks-vitest gate, not that a path is under .claude/hooks', () => {
+  assert.equal(PRE.isHeavyRun(['.claude/hooks/src/x.ts']), true);
+  assert.equal(PRE.isHeavyRun(['.claude\\hooks\\src\\x.ts']), true, 'a Windows path');
+  assert.equal(PRE.isHeavyRun(['docs/a.md']), false);
+  // The template is no hooks path, yet it runs the hooks-vitest gate: a path test would call it light.
+  assert.ok(gatesFor(['.claude/settings.json.template']).some((g) => g.id === 'hooks-vitest'), 'the premise: the template runs hooks-vitest');
+  assert.equal(PRE.isHeavyRun(['.claude/settings.json.template']), true);
+});
+
+test('F17: a grant prints the START line with pid, head, heavy or light, free memory, load and mode, and logs it; the END line names the failing step and the minutes', async () => {
+  const lock = fakeLock();
+  const r = lockRun(lock, { factsOf: () => ({ head: 'abcd1234', heavy: true }) });
+  const info = await r.done;
+  assert.ok(r.said.includes('PRE-PR START pid 4242 head abcd1234 heavy free 8.2 load 14 mode grant'), r.said.join('\n'));
+  assert.deepEqual(lock.calls.log.map((x) => [x.event, x.pid, x.head, x.heavy]), [['start', 4242, 'abcd1234', true]]);
+  assert.equal(info.file, 'pre-pr-1-2.lock');
+  const said = [];
+  const run = { ok: false, results: [{ step: 'git:branch', status: 'PASS' }, { step: 'gate:hooks-vitest', status: 'FAIL' }, { step: 'coderabbit', status: 'PASS' }] };
+  PRE.reportRunEnd({ pid: 4242, head: 'abcd1234', run, startedAt: 1_000, now: 1_000 + 4.25 * 60_000, lock, say: (l) => said.push(l) });
+  assert.deepEqual(said, ['PRE-PR END pid 4242 head abcd1234 FAIL gate:hooks-vitest 4.3']);
+  assert.deepEqual(lock.calls.log.at(-1), { event: 'end', pid: 4242, head: 'abcd1234', result: 'FAIL', failing: 'gate:hooks-vitest', minutes: 4.3 });
+  const pass = [];
+  PRE.reportRunEnd({ pid: 4242, head: 'abcd1234', run: { ok: true, results: [] }, startedAt: 0, now: 60_000, lock: fakeLock(), say: (l) => pass.push(l) });
+  assert.deepEqual(pass, ['PRE-PR END pid 4242 head abcd1234 PASS - 1.0']);
+});
+
+test('F17b: the phase callback of a grant sets the phase of exactly this lock file; a refusal exits 75 with the old text and no START line', async () => {
+  const lock = fakeLock();
+  const r = lockRun(lock);
+  const info = await r.done;
+  info.onPhase('cr');
+  assert.deepEqual(lock.calls.phase, [{ file: 'pre-pr-1-2.lock', pid: 4242, phase: 'cr' }]);
+  const refused = fakeLock({ acquire: async () => ({ granted: false, lines: ['WAIT load 80 percent'] }) });
+  const x = lockRun(refused);
+  await x.done;
+  assert.deepEqual(x.exits, [75]);
+  assert.ok(x.said.some((l) => /stopped before any gate \(the run lock said wait\)/.test(l)), x.said.join('\n'));
+  assert.equal(x.said.some((l) => /PRE-PR START/.test(l)), false);
+});
+
+test('L1 and WL: with --wait-lock the wait takes a function that reads head and heavy at each attempt; without it the lock is asked once', async () => {
+  let n = 0;
+  const heads = ['11111111', '22222222'];
+  const lock = fakeLock({ waitForGrant: async (o) => { assert.equal(typeof o, 'function', 'a function: the facts are read again at each attempt'); const first = o(); const second = o(); lock.calls.wait.push([first.head, second.head]); return { granted: true, mode: 'grant', file: 'f.lock', freeGB: 8, loadPct: 1, lines: [] }; } });
+  const r = lockRun(lock, { wait: true, factsOf: () => ({ head: heads[n++ % 2], heavy: false }) });
+  await r.done;
+  assert.deepEqual(lock.calls.wait, [['11111111', '22222222']]);
+  assert.equal(lock.calls.acquire.length, 0);
+  const once = fakeLock();
+  await lockRun(once, { wait: false }).done;
+  assert.equal(once.calls.acquire.length, 1);
+  assert.equal(once.calls.wait.length, 0);
+  const timedOut = lockRun(fakeLock({ waitForGrant: async () => ({ granted: false, exit: 75, timedOut: true, lines: ['WAIT slots'] }) }), { wait: true });
+  await timedOut.done;
+  assert.deepEqual(timedOut.exits, [75]);
+});
+
+test('M6: in grant mode a lock error is tried 3 more times, 10 s apart, then exits 75; in warn mode the run goes on at once', async () => {
+  let tries = 0;
+  const lock = fakeLock({ acquire: async () => { tries += 1; throw new Error('gate stays held'); } });
+  const r = lockRun(lock);
+  await r.done;
+  assert.equal(tries, 4, 'the first try and 3 more');
+  assert.deepEqual(r.sleeps, [10_000, 10_000, 10_000]);
+  assert.deepEqual(r.exits, [75]);
+  assert.ok(r.said.some((l) => /run lock is not available/.test(l)));
+  let warnTries = 0;
+  const warn = lockRun(fakeLock({ mode: () => 'warn', acquire: async () => { warnTries += 1; throw new Error('boom'); } }));
+  const out = await warn.done;
+  assert.equal(out, undefined);
+  assert.equal(warnTries, 1);
+  assert.deepEqual(warn.exits, []);
+  assert.ok(warn.said.some((l) => /the run goes on/.test(l)), warn.said.join('\n'));
+  let later = 0;
+  const heals = lockRun(fakeLock({ acquire: async () => { later += 1; if (later < 3) throw new Error('blip'); return { granted: true, mode: 'grant', file: 'f.lock', freeGB: 8, loadPct: 1, lines: [] }; } }));
+  assert.equal((await heals.done).file, 'f.lock');
+  assert.deepEqual(heals.exits, []);
+});
+
+test('PH2: an onPhase that throws (a lock file busy) changes no result: the review is not stopped and the run passes', async () => {
+  const lines = [];
+  const run = await prePr(makeRepo(), { onPhase: () => { throw new Error('EBUSY: resource busy'); }, log: (l) => lines.push(l), crRunner: slowReview([], 150) });
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.equal(crStep(run).status, 'PASS');
+  assert.ok(lines.some((l) => /could not set the run lock phase \(EBUSY/.test(l)), lines.join('\n'));
+});
+
+test('F23: an error exit (exit 3) stops the live review child: the exit handler calls killActiveCr', { timeout: 120_000 }, async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'prepr-f23-'));
+  const pidFile = path.join(dir, 'cr.pid');
+  const sleeper = path.join(dir, 'fake-cr.mjs');
+  // The grandchild breaks away from the job object of Windows (detached): only a real tree kill reaches it, as in pre-pr-signal.test.mjs.
+  writeFileSync(sleeper, `import { spawn } from 'node:child_process'; import { writeFileSync } from 'node:fs';
+spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000)', ${JSON.stringify(`${pidFile}.gc`)}], { stdio: 'ignore', detached: process.platform === 'win32' }).unref();
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000);`);
+  const script = path.join(dir, 'child.mjs');
+  writeFileSync(script, `import { existsSync } from 'node:fs';
+import { installRunLockHandlers, defaultCrRunner } from ${JSON.stringify(pathToFileURL(path.join(HERE, 'pre-pr.mjs')).href)};
+installRunLockHandlers();
+defaultCrRunner({ cwd: process.argv[3], args: ${JSON.stringify(REVIEW)}, timeoutMs: 60000, streamTo: process.argv[4], fileStdio: true }, { command: process.execPath, prefixArgs: [process.argv[2]] });
+while (!existsSync(process.argv[5]) || !existsSync(process.argv[5] + '.gc')) await new Promise((r) => setTimeout(r, 50));
+process.exit(3);
+`);
+  const r = spawnSync(process.execPath, [script, sleeper, dir, path.join(dir, 'run.txt'), pidFile], { encoding: 'utf8', timeout: 100_000, env: { ...process.env, RUN_LOCK_DIR: path.join(dir, 'store') } });
+  const pidOf = (file) => (existsSync(file) ? Number(readFileSync(file, 'utf8')) || 0 : 0);
+  const [crPid, gcPid] = [pidOf(pidFile), pidOf(`${pidFile}.gc`)];
+  try {
+    assert.equal(r.status, 3, `${r.stdout}\n${r.stderr}`);
+    assert.ok(crPid > 0 && gcPid > 0, 'the fake cr and its grandchild started');
+    let alive = true;
+    for (let i = 0; i < 80 && alive; i += 1) { try { process.kill(gcPid, 0); await sleep(100); } catch { alive = false; } }
+    assert.equal(alive, false, `the grandchild of the fake cr (pid ${gcPid}) still runs after the error exit`);
+  } finally {
+    for (const p of [crPid, gcPid]) if (p > 0) { try { process.kill(p, 'SIGKILL'); } catch { /* gone */ } }
+    await sleep(300);
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* a process still holds a file: the temp folder is cleaned by the system */ }
+  }
 });

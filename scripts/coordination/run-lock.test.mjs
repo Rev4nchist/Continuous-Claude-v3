@@ -185,13 +185,14 @@ test('maxSlots follows V7.3: 9 GB 4, 7 GB 3, below 7 GB 2 (the under 5 GB loop f
   assert.equal(maxSlots(4.99), 2, 'with no loop live, below 7 GB still allows 2');
 });
 
+// The V7.3 tiers apply to the other heavy kinds (suite, label run, loop). A pre-pr has its own limits (see the pre-pr phases tests).
 test('slot count at 9.5, 7.5 and 6 GB: the next heavy run after the limit waits and names the count', async () => {
   for (const [free, limit] of [[9.5, 4], [7.5, 3], [6, 2]]) {
     const ctx = setup({ free });
     ctx.mode('grant');
-    for (let i = 0; i < limit; i++) assert.equal((await take(ctx, 'pre-pr', 100 + i)).granted, true, `${free} GB grant ${i + 1}`);
+    for (let i = 0; i < limit; i++) assert.equal((await take(ctx, 'suite', 100 + i)).granted, true, `${free} GB grant ${i + 1}`);
     live(ctx, 200);
-    const r = await acquire({ kind: 'pre-pr', pid: 200, holder: 't' }, ctx.d);
+    const r = await acquire({ kind: 'suite', pid: 200, holder: 't' }, ctx.d);
     assert.equal(r.granted, false, `${free} GB: grant ${limit + 1} waits`);
     assert.match(r.lines.join('\n'), new RegExp(`${limit} live heavy runs`));
   }
@@ -200,10 +201,10 @@ test('slot count at 9.5, 7.5 and 6 GB: the next heavy run after the limit waits 
 test('V7.3 as written: under 5 GB with no loop live a heavy run starts; 2 slots; the third waits', async () => {
   const ctx = setup({ free: 4.9 });
   ctx.mode('grant');
-  assert.equal((await take(ctx, 'pre-pr', 100)).granted, true, 'first heavy run under 5 GB, no loop live');
-  assert.equal((await take(ctx, 'pre-pr', 101)).granted, true, 'second heavy run');
+  assert.equal((await take(ctx, 'suite', 100)).granted, true, 'first heavy run under 5 GB, no loop live');
+  assert.equal((await take(ctx, 'suite', 101)).granted, true, 'second heavy run');
   live(ctx, 102);
-  const third = await acquire({ kind: 'pre-pr', pid: 102, holder: 't' }, ctx.d);
+  const third = await acquire({ kind: 'suite', pid: 102, holder: 't' }, ctx.d);
   assert.equal(third.granted, false);
   assert.match(third.lines.join('\n'), /2 live heavy runs/);
 });
@@ -843,7 +844,7 @@ test('item 12: RUN_LOCK_TEST_SAMPLES gives the samples with no 6 second wait, an
   assert.match(r.lines.join('\n'), /RUN_LOCK_TEST_SAMPLES/, 'a faked sample is visible in the output');
   // a garbage value is ignored: the real sampler runs (injected here so the test stays fast)
   let real = 0;
-  const bad = await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, { ...ctx.d, samples: async () => { real++; return { free: [8, 8, 8], load: [10, 10, 10] }; }, env: { RUN_LOCK_TEST_SAMPLES: 'not json' } });
+  const bad = await acquire({ kind: 'hook-build', pid: 100, holder: 't' }, { ...ctx.d, samples: async () => { real++; return { free: [8, 8, 8], load: [10, 10, 10] }; }, env: { RUN_LOCK_TEST_SAMPLES: 'not json' } });
   assert.equal(bad.granted, true);
   assert.equal(real, 1);
 });
@@ -1377,4 +1378,279 @@ test('list has a short gate budget: a live gate holder of unknown start delays i
   assert.ok(took < 5000, `list took ${took} ms behind a held gate; the budget is about 2 s`);
   assert.equal(out.live.length, 1, 'the listing still shows the live lock (it removes nothing)');
   assert.equal(readFileSync(gate, 'utf8'), gateBody(100, 'unknown'), 'the gate file is the holder\'s, untouched');
+});
+
+// ---------- card prflow-prepr-speed: pre-pr phases (version 17 in code) ----------
+/** The start of a lock file name: `<kind>-<pid>-`. Built, not typed, so the text holds no kind-number token. */
+const lockPrefix = (kind, pid) => [kind, pid, ''].join('-');
+// A pre-pr in the test phase is the only heavy part. At most 2 may run in it, at most 1 of them heavy (it runs the hooks-vitest gate).
+// A run in phase cr (the CodeRabbit step: no local load) and a waiting run (phase wait) take no place.
+//
+// How it can fail, one test each, with the source change that makes it fail:
+//   F8   a third test-phase pre-pr is granted                    (keep the V7.3 tiers only)
+//   F9   a second heavy pre-pr is granted                        (no heavy count)
+//   F10  a run in phase cr still counts                          (count every live pre-pr)
+//   F11  a phase change by a pid that does not hold the lock     (match by pid only, or by a file name that does not hold the start time)
+//   F12  a dead owner holds a place                              (no sweep)
+//   F13  one low read passes (a load spike)                      (one read, or the best of two reads)
+//   F16  an old-code run with no lock is not counted as heavy    (count lock files only)
+//   F18  --wait-lock waits for ever                              (no 60 minute limit)
+//   F19  two waiters refuse each other (no lock file, counted as unlocked runs)    (no wait record)
+//   F20  a newer waiter gets the place first                     (no order)
+//   F25  an old-code lock with no phase frees a place            (a missing phase reads as cr)
+//   L2   setPhase writes the file in place or matches the pid only  (no temp file and rename; no start time in the name)
+// F14 (HOLD) has no test: the seat dropped the hold and unhold verbs.
+
+const prePr = (ctx, pid, extra = {}) => acquire({ kind: 'pre-pr', pid, holder: 't', ...extra }, ctx.d);
+const recOf = (ctx, file) => JSON.parse(readFileSync(join(ctx.dir, file), 'utf8'));
+
+test('F8: a third test-phase pre-pr is refused in grant mode, at 8 GB where the V7.3 tier would allow 3', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  assert.equal((await take(ctx, 'pre-pr', 100)).granted, true);
+  assert.equal((await take(ctx, 'pre-pr', 101)).granted, true);
+  live(ctx, 102);
+  const third = await prePr(ctx, 102);
+  assert.equal(third.granted, false);
+  assert.match(third.lines.join('\n'), /2 pre-pr runs in the test phase/);
+});
+
+test('F9: a second heavy pre-pr is refused, a light one is granted; the lock record holds heavy and phase test', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  const first = await prePr(ctx, 100, { heavy: true });
+  assert.equal(first.granted, true);
+  assert.deepEqual([recOf(ctx, first.file).heavy, recOf(ctx, first.file).phase], [true, 'test']);
+  ctx.st.now += 3 * MIN;
+  live(ctx, 101);
+  const heavy = await prePr(ctx, 101, { heavy: true });
+  assert.equal(heavy.granted, false);
+  assert.match(heavy.lines.join('\n'), /1 heavy pre-pr/);
+  const light = await prePr(ctx, 101);
+  assert.equal(light.granted, true);
+  assert.equal(recOf(ctx, light.file).heavy, false);
+});
+
+test('F10: a pre-pr in phase cr takes no place: with two locks, one in phase cr, a third is granted', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  const a = await take(ctx, 'pre-pr', 100);
+  await take(ctx, 'pre-pr', 101);
+  assert.equal(RL.setPhase({ file: a.file, pid: 100, phase: 'cr' }, ctx.d).changed, true);
+  live(ctx, 102);
+  assert.equal((await prePr(ctx, 102)).granted, true);
+});
+
+test('F11: setPhase by a pid that does not hold the lock changes nothing, and a reused pid with another start time is not the holder', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  const a = await take(ctx, 'pre-pr', 100);
+  const before = readFileSync(join(ctx.dir, a.file), 'utf8');
+  assert.equal(RL.setPhase({ file: a.file, pid: 999, phase: 'cr' }, ctx.d).changed, false, 'another pid');
+  assert.equal(RL.setPhase({ file: 'pre-pr-100-9999.lock', pid: 100, phase: 'cr' }, ctx.d).changed, false, 'same pid, other start time: no such file');
+  assert.equal(readFileSync(join(ctx.dir, a.file), 'utf8'), before);
+  assert.throws(() => RL.setPhase({ file: a.file, pid: 100, phase: 'bogus' }, ctx.d), /phase/);
+});
+
+test('L2: setPhase writes through a temp file and a rename: the record stays valid and no temp file is left', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  const a = await take(ctx, 'pre-pr', 100);
+  RL.setPhase({ file: a.file, pid: 100, phase: 'cr' }, ctx.d);
+  const rec = recOf(ctx, a.file);
+  assert.equal(rec.phase, 'cr');
+  assert.equal(rec.pid, 100);
+  assert.deepEqual(readdirSync(ctx.dir).filter((f) => !f.endsWith('.lock') && !['MODE', 'last-grant.json'].includes(f)), [], 'no temp file');
+});
+
+test('F12: a lock whose owner is gone holds no place: the acquire is granted and the file is removed', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100);
+  const dead = await take(ctx, 'pre-pr', 101);
+  ctx.st.alive.delete(101);
+  live(ctx, 102);
+  assert.equal((await prePr(ctx, 102)).granted, true);
+  assert.equal(existsSync(join(ctx.dir, dead.file)), false);
+});
+
+test('F13: one low read does not pass: 74 then 27 is refused, 27 then 74 is refused, and the second read comes 30 s later', async () => {
+  for (const loads of [[74, 27], [27, 74]]) {
+    const ctx = setup();
+    ctx.mode('grant');
+    live(ctx, 100);
+    const sleeps = [];
+    let n = 0;
+    ctx.d.samples = async () => { const l = loads[Math.min(n++, 1)]; return { free: [8, 8, 8], load: [l, l, l] }; };
+    ctx.d.sleep = (ms) => { sleeps.push(ms); return new Promise((r) => setTimeout(r, 1)); };
+    const r = await prePr(ctx, 100);
+    assert.equal(r.granted, false, JSON.stringify(loads));
+    assert.match(r.lines.join('\n'), /load 74 percent/);
+    if (loads[0] === 27) { assert.equal(n, 2); assert.ok(sleeps.includes(30_000), 'the second read waits 30 s'); }
+  }
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 100);
+  let reads = 0;
+  ctx.d.samples = async () => { reads++; return { free: [8, 8, 8], load: [10, 10, 10] }; };
+  assert.equal((await prePr(ctx, 100)).granted, true);
+  assert.equal(reads, 2, 'two reads for a pre-pr');
+  live(ctx, 101);
+  reads = 0;
+  await acquire({ kind: 'hook-build', pid: 101, holder: 't' }, ctx.d);
+  assert.equal(reads, 1, 'another kind keeps one read');
+});
+
+test('F13b: samples from the test hook take no 30 s gap, and under 5 GB a pre-pr is refused', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  live(ctx, 100);
+  const sleeps = [];
+  const { samples, ...noSamples } = ctx.d;
+  const env = { RUN_LOCK_DIR: ctx.dir, RUN_LOCK_TEST_SAMPLES: JSON.stringify({ free: [8, 8, 8], load: [10, 10, 10] }) };
+  const r = await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, { ...noSamples, env, sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); } });
+  assert.equal(r.granted, true);
+  assert.equal(sleeps.includes(30_000), false);
+  const low = setup({ free: 4.5 });
+  low.mode('grant');
+  live(low, 100);
+  const refused = await prePr(low, 100);
+  assert.equal(refused.granted, false);
+  assert.match(refused.lines.join('\n'), /free memory 4\.5 GB under 5 GB/);
+});
+
+test('F16: an old-code pre-pr with no lock file, older than 2 minutes, counts as one heavy test-phase run', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  ctx.st.procs = [{ pid: 555, start: T0 - 5 * MIN }];
+  live(ctx, 100);
+  const heavy = await prePr(ctx, 100, { heavy: true });
+  assert.equal(heavy.granted, false);
+  assert.match(heavy.lines.join('\n'), /UNLOCKED RUN/);
+  live(ctx, 101);
+  const light = await prePr(ctx, 101);
+  assert.equal(light.granted, true, 'a light run still fits beside it');
+  ctx.st.now += 3 * MIN;
+  live(ctx, 102);
+  assert.equal((await prePr(ctx, 102)).granted, false, 'the unlocked run and the light run fill the 2 places');
+});
+
+test('F25: an old-code pre-pr lock with no phase and no heavy field counts as heavy, phase test', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  writeFileSync(join(ctx.dir, 'pre-pr-100-1100.lock'), JSON.stringify({ kind: 'pre-pr', pid: 100, pidStart: 1100, holder: 'old', head: null, session: null, startedAt: T0, expiresAt: T0 + 45 * MIN }));
+  live(ctx, 101);
+  const heavy = await prePr(ctx, 101, { heavy: true });
+  assert.equal(heavy.granted, false);
+  const light = await prePr(ctx, 101);
+  assert.equal(light.granted, true);
+});
+
+test('F19: two waiters are no unlocked runs and are granted in turn, F20: the oldest waiter first', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100);
+  await take(ctx, 'pre-pr', 101);
+  live(ctx, 200);
+  live(ctx, 201);
+  const a = await prePr(ctx, 200, { wait: true });
+  assert.equal(a.granted, false);
+  ctx.st.now += MIN;
+  const b = await prePr(ctx, 201, { wait: true });
+  assert.equal(b.granted, false);
+  assert.equal(recOf(ctx, readdirSync(ctx.dir).find((f) => f.startsWith(lockPrefix('pre-pr', 200)))).phase, 'wait');
+  ctx.st.now += 3 * MIN;
+  ctx.st.procs = [{ pid: 200, start: T0 - 9 * MIN }, { pid: 201, start: T0 - 9 * MIN }]; // the waiters run: they must not read as unlocked runs
+  releaseSync({ pid: 100 }, ctx.d);
+  const newer = await prePr(ctx, 201, { wait: true });
+  assert.equal(newer.granted, false, 'a place is free, but an older waiter comes first');
+  assert.match(newer.lines.join('\n'), /older waiter/);
+  const older = await prePr(ctx, 200, { wait: true });
+  assert.equal(older.granted, true);
+  assert.equal(recOf(ctx, older.file).phase, 'test', 'the wait record became the lock');
+  ctx.st.now += 3 * MIN;
+  releaseSync({ pid: 101 }, ctx.d);
+  assert.equal((await prePr(ctx, 201, { wait: true })).granted, true);
+  assert.equal(readdirSync(ctx.dir).filter((f) => f.startsWith('pre-pr-')).length, 2);
+});
+
+test('a waiter whose process is gone is swept: it does not block the next grant', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100);
+  await take(ctx, 'pre-pr', 101);
+  live(ctx, 200);
+  await prePr(ctx, 200, { wait: true });
+  ctx.st.alive.delete(200);
+  ctx.st.now += 3 * MIN;
+  releaseSync({ pid: 100 }, ctx.d);
+  live(ctx, 201);
+  assert.equal((await prePr(ctx, 201, { wait: true })).granted, true);
+});
+
+test('a refusal in warn mode writes no wait record', async () => {
+  const ctx = setup({ free: 8, load: 90 });
+  live(ctx, 100);
+  const r = await prePr(ctx, 100, { wait: true });
+  assert.equal(r.granted, true);
+  assert.equal(recOf(ctx, r.file).phase, 'test');
+});
+
+test('F18: waitForGrant gives up after 60 minutes with exit 75 and removes its wait record', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100);
+  await take(ctx, 'pre-pr', 101);
+  live(ctx, 200);
+  const t0 = ctx.st.now;
+  let tries = 0;
+  const d = { ...ctx.d, sleep: async (ms) => { ctx.st.now += ms; }, samples: async () => { tries++; return { free: [8, 8, 8], load: [10, 10, 10] }; } };
+  const r = await RL.waitForGrant({ kind: 'pre-pr', pid: 200, holder: 't' }, d, { maxMs: 60 * MIN });
+  assert.equal(r.granted, false);
+  assert.equal(r.exit, 75);
+  assert.ok(ctx.st.now - t0 >= 60 * MIN, 'the clock ran 60 minutes');
+  assert.ok(tries >= 3, `asked again and again (${tries})`);
+  assert.equal(readdirSync(ctx.dir).filter((f) => f.startsWith(lockPrefix('pre-pr', 200))).length, 0, 'the wait record is gone');
+});
+
+test('waitForGrant returns the grant when a place frees up', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100);
+  await take(ctx, 'pre-pr', 101);
+  live(ctx, 200);
+  const d = { ...ctx.d, sleep: async (ms) => { ctx.st.now += ms; releaseSync({ pid: 100 }, ctx.d); } };
+  const r = await RL.waitForGrant({ kind: 'pre-pr', pid: 200, holder: 't' }, d, { maxMs: 60 * MIN });
+  assert.equal(r.granted, true);
+});
+
+test('list shows the phase of a pre-pr lock; a new pre-pr lock is good for 60 minutes; logRun appends one row to runs.jsonl', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  const a = await take(ctx, 'pre-pr', 100);
+  const rec = recOf(ctx, a.file);
+  assert.equal(rec.expiresAt - rec.startedAt, 60 * MIN);
+  assert.match((await list(ctx.d)).lines.join('\n'), /pre-pr pid 100 .*phase test/);
+  RL.logRun({ event: 'start', pid: 100, head: 'abc12345' }, ctx.d);
+  RL.logRun({ event: 'end', pid: 100, minutes: 4.2 }, ctx.d);
+  const rows = readFileSync(join(ctx.dir, 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((r) => r.event), ['start', 'end']);
+  assert.ok(rows.every((r) => Number.isFinite(r.ts)));
+  assert.equal(RL.lockMode(ctx.dir), 'grant');
+});
+
+test('L1: waitForGrant reads its options again at every attempt when they come as a function (the head changes while we wait)', async () => {
+  const ctx = setup({ free: 8 });
+  ctx.mode('grant');
+  await take(ctx, 'pre-pr', 100);
+  await take(ctx, 'pre-pr', 101);
+  live(ctx, 200);
+  const heads = ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'];
+  let n = 0;
+  const d = { ...ctx.d, sleep: async (ms) => { ctx.st.now += ms; if (ms !== 30_000 && n === 2) releaseSync({ pid: 100 }, ctx.d); } }; // 30 s is the second machine read, not the wait
+  const r = await RL.waitForGrant(() => ({ kind: 'pre-pr', pid: 200, holder: 't', head: heads[n++] }), d, { maxMs: 60 * MIN });
+  assert.equal(r.granted, true);
+  assert.equal(recOf(ctx, r.file).head, 'cccccccc', 'the lock holds the head of the last attempt');
 });
