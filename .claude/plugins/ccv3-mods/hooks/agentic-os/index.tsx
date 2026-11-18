@@ -851,6 +851,7 @@ export const agenticOs = (on: On) => {
       const step = decide(wishes, await $.clock.now())
       if (step.kind === 'write') await writeSnapshot($)
       // The trailing write: the last wish of a burst is in it. It runs here, with this hook's `$`, as the pulse does.
+      // Known limit: $.clock.after gives back {cancel} only, no refusal signal; a timer the engine drops is not seen. The next wish or pulse writes again (seat ruling, finding 4).
       if (step.kind === 'arm') $.clock.after(step.ms, () => void writeTrailing($, step.due, armedFor))
     } catch {
       // Observer only.
@@ -932,8 +933,8 @@ export const agenticOs = (on: On) => {
   on('classic.UserPromptSubmit', async ($, e, next) => {
     // The session runs again: the system wait is over (the next Stop writes it new). The first-seen times stay.
     await clearWait($, false)
-    if (!(await isOff($))) await noteName($, e.session_title)
-    return next(e)
+    // The heartbeat hook rewrites the identity file inside next(e) (a /rename with no session_title): read the name after it.
+    return readNameAfter($, e, next)
   }).catch(($, e, next) => next(e))
 
   // Fix 5: a MAIN-agent Stop lists the background work still in flight. Observer only: the settings hooks run first (next(e)), the result goes on

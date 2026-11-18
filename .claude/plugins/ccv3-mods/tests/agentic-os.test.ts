@@ -1087,6 +1087,23 @@ describe('agentic-os session identity', () => {
     expect(got).not.toContain('trex')
   })
 
+  // I8 a /rename with no session_title: the heartbeat hook rewrites the identity file inside next(e). The name must be read after next(e),
+  // or the band keeps the old name until the next prompt.
+  test('I8 a /rename that reaches only the identity file (written inside next(e)) shows on the same prompt', async ($, on) => {
+    const seen = gitWorld(on, { [FILE]: JSON.stringify({ uuid: 'test-session', name: 'before' }) })
+    on('classic.SessionStart', () => ({}))
+    on('classic.UserPromptSubmit', () => {
+      seen.files[FILE] = JSON.stringify({ uuid: 'test-session', name: 'after' })
+      return {}
+    })
+    await start($)
+    expect(await line1($)).toContain('before #test-ses')
+    await $.classic.UserPromptSubmit({ prompt: '/rename after' } as never)
+    const got = await line1($)
+    expect(got).toContain('after #test-ses')
+    expect(got).not.toContain('before')
+  })
+
   test('I3 with no session_title the identity file names the session; a session_title beats the file', async ($, on) => {
     world2(on, { [FILE]: JSON.stringify({ uuid: 'test-session', name: 'fromfile' }) })
     await start($)
