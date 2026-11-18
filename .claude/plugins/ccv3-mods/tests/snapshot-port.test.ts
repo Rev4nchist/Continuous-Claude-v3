@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { EngineInterface } from 'claude-code'
+import type { EngineInterface, On } from 'claude-code'
 
+import { agentLedger } from '../hooks/agent-ledger/index'
 import { SNAPSHOT_THROTTLE_MS, decide, openThrottle, requestSnapshot, trailingDue } from '../hooks/shared/snapshot-port'
 
 // The throttle of the snapshot port on its own (card coord-status-band-2, fix 4; design rev 2: .claudedocs/coordination/2026-11-18-coord-status-band-2-fix4-design-rev2.md).
@@ -11,7 +12,8 @@ import { SNAPSHOT_THROTTLE_MS, decide, openThrottle, requestSnapshot, trailingDu
 // U3  a burst writes once per request: the `now - t.lastAt` test is removed, or each request arms its own timer (the `t.dueAt !== null` wait is removed)
 // U4  the trailing write is lost, early, or twice: `trailingDue` ignores `dueAt`, or the delay `due - now` is wrong
 // U4b a write after the arm leaves the old timer alive: `decide` does not clear `dueAt` on a write
-// U6  the bump throws into the caller (a state write that throws, or no state): the try/catch in `requestSnapshot` is removed
+// U5 / F5 no listener for snapshotWanted: a spawn through the real agent-ledger hook changes its answer, throws, or writes a file: `requestSnapshot` rethrows, or writes the file itself
+// U6 / F6 the bump throws into the caller (a state write that throws, or no state): the try/catch in `requestSnapshot` is removed
 // U11 a clock that went back (a new engine) keeps the throttle shut: the `now < t.lastAt` test is removed
 // U12 a timer the engine dropped blocks every later request: the `t.dueAt !== null` wait is moved above the window test in `decide`
 // U13 a new throttle is not open: `openThrottle` starts with a time in it
@@ -73,8 +75,58 @@ describe('snapshot port: the throttle', () => {
   })
 })
 
+describe('snapshot port: no listener', () => {
+  // The real agentLedger(on) is given an `on` that only collects its hooks; the agent.spawn hook is then run with a `$` of an engine that has
+  // only agent-ledger: state in a map, no state.set hook, no agentic-os. The kit cannot load one module of the plugin, so the module is loaded here.
+  test('U5 / F5 with no listener for snapshotWanted (agent-ledger alone), a spawn returns the unchanged answer, no call fails and no snapshot file is written', async () => {
+    const hooks: Record<string, (...args: unknown[]) => Promise<unknown>> = {}
+    const collect = ((event: string, ...rest: unknown[]) => {
+      hooks[event] = rest.at(-1) as (...args: unknown[]) => Promise<unknown>
+      const registered: { catch: () => unknown } = { catch: () => registered }
+      return registered
+    }) as unknown as On
+    agentLedger(collect)
+
+    const store = new Map<string, { value: unknown; version: number }>()
+    const calls = { write: [] as string[], set: [] as string[] }
+    const key = (ref: { plugin: string; key: string }) => `${ref.plugin}/${ref.key}`
+    const $ = {
+      env: { get: async () => undefined },
+      clock: { now: async () => 1_000 },
+      session: { root: async () => '/repo' },
+      fs: {
+        exists: async () => false,
+        read: async () => '',
+        write: async (path: string) => {
+          calls.write.push(path)
+        },
+      },
+      state: {
+        get: async (ref: { plugin: string; key: string }) => store.get(key(ref)) ?? { value: undefined, version: 0 },
+        set: async (ref: { plugin: string; key: string }, value: unknown) => {
+          calls.set.push(ref.key)
+          store.set(key(ref), { value, version: (store.get(key(ref))?.version ?? 0) + 1 })
+          return { isSet: true, version: 1 }
+        },
+      },
+    } as unknown as EngineInterface
+
+    const answer = { model: 'claude-sonnet-5-5', agentId: 'a1' }
+    const event = { tool_use_id: 't', prompt: 'p', description: 'map the hooks', subagentType: 'scout', parentModel: 'claude-opus-5-5', background: false, fork: false }
+    const result = await hooks['agent.spawn']?.($, event, async () => answer)
+    // Let the bump that the spawn does not wait for finish.
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+
+    expect(JSON.stringify(result)).toBe(JSON.stringify(answer))
+    // The run was recorded and the bump ran (so the test did reach requestSnapshot), and nothing wrote a file.
+    expect(calls.set).toContain('agentRuns')
+    expect(calls.set).toContain('snapshotWanted')
+    expect(calls.write).toEqual([])
+  })
+})
+
 describe('snapshot port: it never throws', () => {
-  test('U6 an atom write that throws does not break the caller', async () => {
+  test('U6 / F6 a bump whose state write throws, or a $ with no state, does not break the caller (this is the throw case, not item 5)', async () => {
     const broken = { state: { get: async () => { throw new Error('no state') }, set: async () => { throw new Error('no state') } } } as unknown as EngineInterface
     await expect(requestSnapshot(broken)).resolves.toBeUndefined()
     await expect(requestSnapshot({} as EngineInterface)).resolves.toBeUndefined()

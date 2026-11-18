@@ -15,7 +15,7 @@ import type { Engine } from 'claude-code/testing'
 // F2  RED   a resumed subagent turn writes no snapshot: the requestSnapshot call in the subagent turn.start branch is removed
 // F3  RED   a burst of 50 spawns writes 50 files, or none: the `decide` throttle in the state.set hook is removed, or the hook never writes
 // F4  RED   the trailing write is lost: the `$.clock.after` arm in the state.set hook is removed or its delay is wrong
-// F5  (snapshot-port.test.ts, U6) no state at all: the bump throws nothing. The mod always loads its listener, so "no listener" is a bump on a `$` with no state
+// F5  (snapshot-port.test.ts, 'U5 / F5') no listener for snapshotWanted: the real agent-ledger hook runs alone on a stub `$`; the answer is unchanged, nothing throws, no file is written
 // F6a GUARD (weak) a refused state write reaches the spawn. The engine skips a hook that throws and ignored a `deny` here, so the bump itself cannot be made to fail: only the spawn result, the count and the ledger are checked
 // F6b GUARD a timer that cannot be armed reaches the spawn: the try/catch in the state.set hook and the one in requestSnapshot are both removed
 // F7  GUARD a spawn after the session end rewrites the final file: writeSnapshot's endedIds check is removed
