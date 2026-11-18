@@ -522,12 +522,17 @@ const ledgerBlock = async ($: EngineInterface, root: string, pending: Pending, a
   return parseResult(ran.out)?.ledger ?? null
 }
 
+/** A $0 row: the label ends with "($0)", with or without the Recommended mark. */
+const ZERO_ROW = /\(\$0\)( \(Recommended\))?$/
+
 /** The text for a ledger block, and the record when the state is `record`. */
 const ledgerCheckpoint = async ($: EngineInterface, pending: Pending, ledger: LedgerBlock): Promise<Asked> => {
   const { pr } = pending
   if (ledger.state === 'record' && ledger.pathway) return recordChoice($, pending, { label: ledger.pathway, pathway: ledger.pathway, by: 'dave' })
-  if (ledger.state === 'ask' || ledger.state === 'confirm-paid') {
+  if (ledger.state === 'ask') {
     if (!ledger.ask) return { text: `The engine gave no question for #${pr}. Nothing was recorded. The PR stays a draft.`, recorded: null }
+    // Row 0 must cost $0: a dialog that returns row 0 with no tap must never spend. Refuse a question whose first option is not a $0 row.
+    if (!ZERO_ROW.test(ledger.ask.options[0]?.label ?? '')) return { text: `The engine's question for #${pr} has a first option that is not a $0 row. Nothing was recorded. Do not ask it. Stop and tell Dave.`, recorded: null }
     await $.store.set(`${PENDING_PREFIX}${await sessionId($)}`, pending)
     return { text: ledgerAskText({ ...ledger, ask: ledger.ask }), recorded: null }
   }

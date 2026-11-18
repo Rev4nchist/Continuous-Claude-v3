@@ -932,6 +932,9 @@ function inputsOf(o, stateDir, probe = false) {
 /** The two-call protocol (lib/checkpoint-ledger.mjs) runs only for the literal true in checkpoint.ledger. */
 const ledgerOn = (policy) => policy.checkpoint?.ledger === true;
 
+/** The clock of the question in ms: facts.now (a fixture sets it, a live run reads it once). The CodeRabbit slot fact is judged at this time. */
+const clockMs = (facts) => (Number.isFinite(Date.parse(facts.now)) ? Date.parse(facts.now) : Date.now());
+
 const refuse = (message) => { console.error(`pr-checkpoint: refused: ${message}`); process.exitCode = 1; };
 
 function runConfirm(o) {
@@ -941,7 +944,7 @@ function runConfirm(o) {
   try { bodyText = readFileSync(o['--body'], 'utf8'); } catch { return refuse(`cannot read the body file ${o['--body']}`); }
   const args = { result: recommend(facts, policy), facts, pathway: o['--confirm'], by: o['--by'], bodySha: bodyHash(bodyText) };
   const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
-  const problem = confirmProblem(args) ?? (ledgerOn(policy) ? ledgerConfirmProblem({ pr, head: facts.head, pathway: args.pathway, by: args.by }) : null);
+  const problem = confirmProblem(args) ?? (ledgerOn(policy) ? ledgerConfirmProblem({ pr, head: facts.head, pathway: args.pathway, by: args.by, result: args.result, now: clockMs(facts) }) : null);
   if (problem) return refuse(problem);
   const record = confirmRecord(args);
   mkdirSync(stateDir, { recursive: true });
@@ -964,7 +967,7 @@ function runRecommend(o) {
   const { facts, policy } = inputsOf(o, defaultStateDir(), o['--probe'] === true && o['--json'] === true);
   const result = recommend(facts, policy);
   const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
-  const ledger = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy) ? ledgerStep({ pr, result, slotLine: slotText(result.capacity), askAnyway: o['--ask-anyway'] === true }) : null;
+  const ledger = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy) ? ledgerStep({ pr, result, slotLine: slotText(result.capacity), askAnyway: o['--ask-anyway'] === true, now: clockMs(facts) }) : null;
   console.log(o['--json'] ? JSON.stringify(ledger ? { ...result, ledger } : result) : renderText(result));
 }
 

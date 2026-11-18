@@ -124,7 +124,7 @@ export const TRUST_BOUNDARY = Object.freeze({
     'scripts/settings/render-settings.mjs', 'machine/*.json',
     'scripts/github/cr-fix.mjs', 'scripts/github/slot-queue.mjs', '.claude/plugins/*/hooks/pr-loop/model.ts', '.claude/plugins/*/hooks/pr-loop/slot.ts',
     '.coderabbit.yaml', '.claude/agents/aegis.md', '.claude/agents/critic.md', '.claude/agents/security-refuter.md',
-    // the agent .json mirrors also carry the model (every-surface checklist, row Agents); critic has no tracked mirror
+    // the agent .json mirrors also carry the model (every-surface checklist, row Agents); neither critic nor principal-reviewer has a tracked .json mirror
     '.claude/agents/aegis.json', '.claude/agents/security-refuter.json',
     // Dave 2026-11-17 ("Tap list 2: All of them"; PR 646 aegis and critic): the overlay chooser, the registration remover, the queue
     // rules and the pay question model, the second bot config and the reviewer files in config_files. pre-pr.mjs stays off (Dave).

@@ -2607,7 +2607,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     expect(w.seen.dialogs.length).toBe(1)
     const [dialog] = w.seen.dialogs
     expect(dialog!.labels[0]).toMatch(/^Keep as draft/)
-    expect(dialog!.labels[1]).toMatch(/^CodeRabbit review \(up to \$1\.75\)/)
+    expect(dialog!.labels[1]).toMatch(/^CodeRabbit review \(may cost up to \$1\.75\)/)
     expect(dialog!.labels[1]).toMatch(REC)
     expect(dialog!.labels.filter(label => REC.test(label)).length).toBe(1)
     expect(dialog!.labels.length).toBeGreaterThanOrEqual(2)
@@ -2661,7 +2661,8 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     await start($)
     await call($)
     const [dialog] = w.seen.dialogs
-    expect(dialog!.labels[0]).toBe('CodeRabbit now (free slot, $0) (Recommended)')
+    expect(dialog!.labels[0]).toBe('Keep as draft ($0)')
+    expect(dialog!.labels[1]).toBe('CodeRabbit now (free slot, $0) (Recommended)')
     expect(dialog!.question.split('\n')[2]).toBe('CodeRabbit slot: free now.')
     expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
   })
@@ -2673,7 +2674,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     await call($)
     const [dialog] = w.seen.dialogs
     expect(dialog!.labels[0]).toMatch(/^Keep as draft/)
-    expect(dialog!.labels[1]).toBe('CodeRabbit now, paid (up to $1.75) (Recommended)')
+    expect(dialog!.labels[1]).toBe('CodeRabbit review (may cost up to $1.75) (Recommended)')
     expect(dialog!.question.split('\n')[2]).toMatch(/^CodeRabbit slot: next about \d\d:\d\d C[SD]T \(in 38 min\)\.$/)
     expect(dialog!.labels.some(label => /wait for/i.test(label))).toBe(false)
     expect(engineCalls(w.seen).filter(c => c.startsWith('--confirm'))).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
@@ -2709,7 +2710,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
   })
 
   test('T4c a comma-joined answer records nothing', async ($, on) => {
-    const w = world(on, { answer: { other: 'CodeRabbit review (up to $1.75) (Recommended), No review, land on CI ($0)' } })
+    const w = world(on, { answer: { other: 'CodeRabbit review (may cost up to $1.75) (Recommended), No review, land on CI ($0)' } })
     await start($)
     await call($)
     expect(counts(w.seen).confirm).toBe(0)
@@ -2717,7 +2718,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
 
   // Dave 2026-11-06: a dialog answer records only when it is an exact label. A label without case or price, a row number, a pathway word with
   // the PR, or a label with a trailing space is a miss: it records nothing and the question comes back twice at most.
-  for (const text of ['coderabbit review (up to $1.75) (Recommended)', 'CodeRabbit review (up to $1.75)', 'CodeRabbit review (up to $1.75) (Recommended) ', '1', '2', 'none', '7:coderabbit', 'coderabbit 7', 'accept']) {
+  for (const text of ['coderabbit review (may cost up to $1.75) (Recommended)', 'CodeRabbit review (may cost up to $1.75)', 'CodeRabbit review (may cost up to $1.75) (Recommended) ','1', '2', 'none', '7:coderabbit', 'coderabbit 7', 'accept']) {
     test(`T4d a loose typed answer records nothing and asks again: ${JSON.stringify(text)}`, async ($, on) => {
       const w = world(on, { answer: { other: text } })
       await start($)
@@ -2758,7 +2759,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     const w = world(on, { answer: 'dismiss' })
     await start($)
     const question = 'PR #7: which review?'
-    const options = ['CodeRabbit review (up to $1.75) (Recommended)', 'No review, land on CI ($0)'].map(label => ({ label, description: label }))
+    const options = ['CodeRabbit review (may cost up to $1.75) (Recommended)', 'No review, land on CI ($0)'].map(label => ({ label, description: label }))
     await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question, header: 'PR #7', options, multiSelect: false }], answers: { [question]: options[0]!.label } } as never).catch(() => undefined)
     await settle()
     expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
@@ -2950,7 +2951,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
     expect(labels.length).toBeLessThanOrEqual(4)
     expect(labels.filter(l => /^Keep as draft/.test(l)).length).toBe(1)
     expect(labels[0]).toMatch(/^Keep as draft/)
-    expect(labels.find(label => label.includes('(Recommended)'))).toMatch(/^CodeRabbit \+ Greptile \(up to \$1\.75/)
+    expect(labels.find(label => label.includes('(Recommended)'))).toMatch(/^CodeRabbit \+ Greptile \(may cost up to \$1\.75 \+ 3 credits\)/)
   })
 
   test('P1 no ccv3-mods hook answers a model AskUserQuestion: the call reaches the engine bottom unchanged', async ($, on) => {
@@ -2988,7 +2989,7 @@ describe('pr-checkpoint: a paid pick that is not the recommendation asks one que
     const told = await call($)
     expect(w.seen.dialogs.length).toBe(1)
     expect(w.seen.dialogs[0]!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['No review, land on CI', 'Keep as draft', 'CodeRabbit review'])
-    expect(w.seen.dialogs[0]!.labels[2]).toBe('CodeRabbit review (up to $1.75)')
+    expect(w.seen.dialogs[0]!.labels[2]).toBe('CodeRabbit review (may cost up to $1.75)')
     expect(confirms(w.seen)).toEqual([expect.stringMatching(/^--confirm coderabbit --by dave /)])
     expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
     expect(told.text).toMatch(/Dave chose coderabbit for #7/)
@@ -3249,7 +3250,7 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
   })
 
   test('N-M4 a comma-joined pair that holds the none label records nothing', async ($, on) => {
-    const w = world(on, { json: highJson('HIGH'), answer: { other: `CodeRabbit review (up to $1.75) (Recommended), ${NO_REVIEW}` } })
+    const w = world(on, { json: highJson('HIGH'), answer: { other: `CodeRabbit review (may cost up to $1.75) (Recommended), ${NO_REVIEW}` } })
     await start($)
     await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(counts(w.seen).confirm).toBe(0)
@@ -3538,13 +3539,14 @@ describe('pr-checkpoint v2: a paid pick asks one question, one dialog return nev
     expect(told.text).toMatch(/by dave/)
   })
 
-  test('W2 a free-slot CodeRabbit pick is the $0 row: it is row 0 and its tap records at once', async ($, on) => {
+  test('W2 a free-slot CodeRabbit pick is a $0 row: it is row 1, after Keep as draft, and its tap records at once', async ($, on) => {
     const free = { stdout: JSON.stringify(engineJson({ capacity: { count: 38, band: 'ok', warning: null, source: 'manual', date: '2026-10-25', state: 'free', checkedAt: new Date(NOW).toISOString() } })) }
     const w = world(on, { json: free, answers: [/^CodeRabbit now \(free slot/] })
     await start($)
     await call($)
     expect(w.seen.dialogs.length).toBe(1)
-    expect(w.seen.dialogs[0]!.labels[0]).toBe('CodeRabbit now (free slot, $0) (Recommended)')
+    expect(w.seen.dialogs[0]!.labels[0]).toBe('Keep as draft ($0)')
+    expect(w.seen.dialogs[0]!.labels[1]).toBe('CodeRabbit now (free slot, $0) (Recommended)')
     expect(counts(w.seen).confirm).toBe(1)
   })
 
@@ -3738,8 +3740,8 @@ describe('pr-checkpoint v2: checkpoint.ledger on, the model asks the question (M
     header: 'PR #7',
     question: 'PR #7, band MID, 7 files.\nRecommended: CodeRabbit review.\nCodeRabbit slot: unknown (no notice seen).',
     options: [
-      { label: 'CodeRabbit review (up to $1.75) (Recommended)', description: 'a' },
       { label: 'Keep as draft ($0)', description: 'b' },
+      { label: 'CodeRabbit review (may cost up to $1.75) (Recommended)', description: 'a' },
       { label: 'No review, land on CI ($0)', description: 'c' },
     ],
   }
@@ -3752,7 +3754,7 @@ describe('pr-checkpoint v2: checkpoint.ledger on, the model asks the question (M
     const told = await call($)
     expect(w.seen.dialogs).toEqual([])
     expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
-    expect(told.text).toContain('CodeRabbit review (up to $1.75) (Recommended)')
+    expect(told.text).toContain('CodeRabbit review (may cost up to $1.75) (Recommended)')
     expect(told.text).toContain('Keep as draft ($0)')
     expect(told.text).toMatch(/Keep the options in the order given/)
     expect(told.text).toMatch(/AskUserQuestion/)
@@ -3761,14 +3763,26 @@ describe('pr-checkpoint v2: checkpoint.ledger on, the model asks the question (M
     expect(w.store.get(PENDING)).toBeDefined()
   })
 
-  test('L1 the paid confirm comes back the same way, No first', async ($, on) => {
-    const confirmSpec = { header: 'PR #7', question: 'PR #7: record CodeRabbit review (up to $1.75)?', options: [{ label: 'No, keep the PR a draft (Recommended)', description: 'a' }, { label: 'Yes, record coderabbit (up to $1.75)', description: 'b' }] }
-    const w = world(on, { files: LEDGER_ON, json: withLedger({ state: 'confirm-paid', ask: confirmSpec, reasked: 0, text: 'Call AskUserQuestion with ask, word for word. Then call pr_checkpoint {pr} again.' }) })
+  // Row 0 must be a $0 row. A question whose row 0 can spend money is refused: nothing is stored, nothing is asked, the model tells Dave.
+  test('L1b a question whose row 0 is not a $0 row is refused: no question text, no pending, nothing recorded', async ($, on) => {
+    const paidFirst = { ...SPEC, options: [SPEC.options[1]!, SPEC.options[0]!, SPEC.options[2]!] }
+    const w = world(on, { files: LEDGER_ON, json: withLedger({ state: 'ask', ask: paidFirst, reasked: 0, text: 'ask' }) })
     await start($)
     const told = await call($)
     expect(w.seen.dialogs).toEqual([])
-    expect(told.text.indexOf('No, keep the PR a draft (Recommended)')).toBeGreaterThan(-1)
-    expect(told.text.indexOf('No, keep the PR a draft (Recommended)')).toBeLessThan(told.text.indexOf('Yes, record coderabbit'))
+    expect(told.text).not.toContain('AskUserQuestion')
+    expect(told.text).toMatch(/row 0|first option/i)
+    expect(told.text).toMatch(/Nothing was recorded/)
+    expect(told.text).toMatch(/tell Dave/i)
+    expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
+    expect(w.store.get(PENDING)).toBeUndefined()
+  })
+
+  test('L1c a row 0 that is a $0 row with the Recommended mark is asked (L1 covers the unmarked one)', async ($, on) => {
+    const marked = { ...SPEC, options: [{ label: 'No review, land on CI ($0) (Recommended)', description: 'a' }, SPEC.options[0]!, SPEC.options[1]!] }
+    world(on, { files: LEDGER_ON, json: withLedger({ state: 'ask', ask: marked, reasked: 0, text: 'ask' }) })
+    await start($)
+    expect((await call($)).text).toMatch(/Ask Dave now with AskUserQuestion/)
   })
 
   test('L2 call 2 with the tap records by dave with --pr, once, and applies; no dialog', async ($, on) => {
@@ -3873,8 +3887,8 @@ describe('pr-checkpoint v2: prepare asks the engine for facts only; the ledger s
     header: 'PR #7',
     question: 'PR #7, band MID, 7 files.\nRecommended: CodeRabbit review.\nCodeRabbit slot: unknown (no notice seen).',
     options: [
-      { label: 'CodeRabbit review (up to $1.75) (Recommended)', description: 'a' },
       { label: 'Keep as draft ($0)', description: 'b' },
+      { label: 'CodeRabbit review (may cost up to $1.75) (Recommended)', description: 'a' },
       { label: 'No review, land on CI ($0)', description: 'c' },
     ],
   }
@@ -4089,7 +4103,7 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     const first = w.seen.dialogs[0]!
     expect(first.labels[0]).toMatch(/^Keep as draft/)
     expect(first.labels[0]).not.toMatch(/Recommended/)
-    expect(first.labels.find(label => /^CodeRabbit review/.test(label))).toBe('CodeRabbit review (up to $1.75) (Recommended)')
+    expect(first.labels.find(label => /^CodeRabbit review/.test(label))).toBe('CodeRabbit review (may cost up to $1.75) (Recommended)')
     expect(first.question).toContain('Recommended: CodeRabbit review')
   })
 
@@ -4162,7 +4176,8 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     expect(autoConfirms(w.seen)).toEqual([])
   })
 
-  test('g a refused --apply then a second call after the slot changed: the free-slot and the paid CodeRabbit row differ in label and position, row 0 is never paid', async ($, on) => {
+  // Order (a): the free-slot and the paid CodeRabbit row now sit at the same place (after Keep as draft), so the label alone tells them apart.
+  test('g a refused --apply then a second call after the slot changed: the free-slot and the paid CodeRabbit row differ in label, row 0 is Keep as draft', async ($, on) => {
     const slot = (over: Rec) => ({ stdout: JSON.stringify(engineJson({ capacity: { count: 38, band: 'ok', warning: null, source: 'manual', date: '2026-10-25', checkedAt: new Date(NOW).toISOString(), ...over } })) })
     const w = world(on, {
       jsonSeq: [slot({ state: 'free' }), slot({ state: 'wait', nextSlotAt: new Date(NOW + 38 * MIN).toISOString(), minutesToSlot: 38 })],
@@ -4174,10 +4189,9 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     await call($)
     const [free, retry, paid] = w.seen.dialogs
     expect(retry!.question).toMatch(/Retry/)
-    const at = (labels: string[]) => ({ index: labels.findIndex(label => /^CodeRabbit now/.test(label)), label: labels.find(label => /^CodeRabbit now/.test(label))!.replace(/ \(Recommended\)$/, '') })
-    expect([free!.labels[0], paid!.labels[0]]).toEqual(['CodeRabbit now (free slot, $0) (Recommended)', 'Keep as draft ($0)'])
-    expect(at(free!.labels).label).not.toBe(at(paid!.labels).label)
-    expect(at(free!.labels).index).not.toBe(at(paid!.labels).index)
+    const crRow = (labels: string[]) => labels.find(label => /^CodeRabbit (now|review)/.test(label))!.replace(/ \(Recommended\)$/, '')
+    expect([free!.labels[0], paid!.labels[0]]).toEqual(['Keep as draft ($0)', 'Keep as draft ($0)'])
+    expect([crRow(free!.labels), crRow(paid!.labels)]).toEqual(['CodeRabbit now (free slot, $0)', 'CodeRabbit review (may cost up to $1.75)'])
   })
 
   test('X5 a typed paid word asks the one question (price in the label) and records nothing without a tap', async ($, on) => {
@@ -4186,7 +4200,7 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     await start($)
     await slash($, '7 coderabbit')
     expect(w.seen.dialogs.length).toBe(1)
-    expect(w.seen.dialogs[0]!.labels.some(label => /^CodeRabbit review \(up to \$1\.75\)/.test(label))).toBe(true)
+    expect(w.seen.dialogs[0]!.labels.some(label => /^CodeRabbit review \(may cost up to \$1\.75\)/.test(label))).toBe(true)
     expect(counts(w.seen).confirm).toBe(0)
   })
 })

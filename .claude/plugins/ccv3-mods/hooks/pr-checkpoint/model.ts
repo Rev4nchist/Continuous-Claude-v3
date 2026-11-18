@@ -302,13 +302,19 @@ export const slotLine = (slot: SlotFact, now: number | null): string => {
   return `CodeRabbit slot: no free slot, ${minutes === null ? 'next time unknown' : `next in about ${minutes} min`}.`
 }
 
-/** The label of one open pathway. The CodeRabbit row follows the slot: free is $0, no free slot is paid, unknown keeps the "up to" price. */
+/** A Greptile pass costs this many credits (the engine has the same figure: GREPTILE_CREDITS in scripts/github/lib/checkpoint-ledger.mjs). */
+export const GREPTILE_CREDITS = 3
+
+/**
+ * The label of one open pathway. The CodeRabbit row follows the slot: free is $0, any other state is "may cost up to". The words are the engine's
+ * (labelOf in scripts/github/lib/checkpoint-ledger.mjs): both copies of the question must give one text, and a test compares them.
+ */
 const labelFor = (one: CheckpointOption, files: number, slot: SlotFact): string => {
   if (one.pathway === 'none' || one.pathway === 'wait') return `${nameOf(one.pathway)} ($0)`
   const price = files > 0 || one.cost[0] + one.cost[1] > 0 ? upTo(files) : '$0'
   if (one.pathway === 'coderabbit' && slot.state === 'free') return 'CodeRabbit now (free slot, $0)'
-  if (one.pathway === 'coderabbit' && slot.state === 'wait') return `CodeRabbit now, paid (${price})`
-  return `${nameOf(one.pathway)} (${price})`
+  if (one.pathway === 'both') return `${nameOf('both')} (may cost ${price} + ${GREPTILE_CREDITS} credits)`
+  return `${nameOf(one.pathway)} (may cost ${price})`
 }
 
 const WAIT_OPTION: CheckpointOption = { pathway: 'wait', label: null, available: true, cost: [0, 0], reason: '' }
@@ -317,16 +323,16 @@ const WAIT_OPTION: CheckpointOption = { pathway: 'wait', label: null, available:
 const isPaidRow = (one: CheckpointOption, slot: SlotFact): boolean => one.pathway === 'both' || (one.pathway === 'coderabbit' && slot.state !== 'free')
 
 /**
- * The rows of the question. The $0 rows come first (the recommendation when it is free, the free-slot CodeRabbit row), then Keep as draft, then the
- * paid rows (the recommendation first), then "No review". A paid row is never row 0: a dialog that returns row 0 with no tap records nothing
- * paid. The free-slot and the paid CodeRabbit row never share a position. The order depends only on the result, so a re-ask shows the same rows.
+ * The rows of the question. Row 0 is Keep as draft, or "No review" when none is the recommendation: both cost $0. Then the free-slot CodeRabbit row,
+ * then the paid rows (the recommendation first), then "No review". A paid row is never row 0: a dialog that returns row 0 with no tap records nothing
+ * paid. The free-slot and the paid CodeRabbit row have different labels. The order depends only on the result, so a re-ask shows the same rows.
  */
 const rowsOf = (buttons: CheckpointOption[], slot: SlotFact, recommendedFirst: boolean): CheckpointOption[] => {
   const open = buttons.filter(one => one.pathway !== 'wait')
   const crs = open.filter(one => one.pathway !== 'none')
   const first = buttons[0]
-  const lead = recommendedFirst && first && !isPaidRow(first, slot) ? [first.pathway === 'wait' ? WAIT_OPTION : first] : []
-  const rows = [...lead, ...crs.filter(one => !isPaidRow(one, slot)), WAIT_OPTION, ...crs.filter(one => isPaidRow(one, slot)), ...open.filter(one => one.pathway === 'none')]
+  const lead = recommendedFirst && first?.pathway === 'none' ? [first] : []
+  const rows = [...lead, WAIT_OPTION, ...crs.filter(one => !isPaidRow(one, slot)), ...crs.filter(one => isPaidRow(one, slot)), ...open.filter(one => one.pathway === 'none')]
   return rows.filter((one, i) => rows.findIndex(other => other.pathway === one.pathway) === i)
 }
 
@@ -357,7 +363,7 @@ const questionLines = (pr: number, result: CheckpointResultWithDrift, held: Chec
  * the recommendation with its reason, and the CodeRabbit slot (`now` is the clock in ms, for the minutes left). A second reason, a held pathway
  * and a warning each add a line below them: Dave must see them before he picks. The labels are 2 to 4:
  * the open pathways, one "Keep as draft", and "No review, land on CI" last when the engine offers it (rowsOf gives the order). When the recommendation
- * is open its row carries " (Recommended)": row 0 unless it is paid. A paid row carries its price and is never row 0: the tap on it is the paid yes,
+ * is open its row carries " (Recommended)". Row 0 is a $0 row (Keep as draft, or none when it is the recommendation). A paid row carries its price and is never row 0: the tap on it is the paid yes,
  * and there is no second question. Every pick is `--by dave`. When the recommendation is held, no label is marked.
  */
 export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, now: number | null = null): PathwayAsk | null => {
@@ -424,8 +430,8 @@ export const slotDropArgv = (script: string, pr: number): string[] => ['node', s
 
 // M1: the engine's ledger block (the two-call protocol behind checkpoint.ledger). The engine writes the offer and reads the tap.
 export type LedgerAsk = { header: string; question: string; options: { label: string; description?: string }[] }
-export type LedgerBlock = { state: 'none' | 'ask' | 'confirm-paid' | 'record' | 'kept-draft' | 'stop'; ask: LedgerAsk | null; pathway: string | null; reasked: number; text: string }
-const LEDGER_STATES = ['none', 'ask', 'confirm-paid', 'record', 'kept-draft', 'stop']
+export type LedgerBlock = { state: 'none' | 'ask' | 'record' | 'kept-draft' | 'stop'; ask: LedgerAsk | null; pathway: string | null; reasked: number; text: string }
+const LEDGER_STATES = ['none', 'ask', 'record', 'kept-draft', 'stop']
 
 const ledgerAskOf = (value: unknown): LedgerAsk | null => {
   if (!isObject(value) || typeof value.header !== 'string' || typeof value.question !== 'string' || !Array.isArray(value.options)) return null
@@ -483,7 +489,7 @@ export type AskSpec = { header: string; question: string; choices: AskChoice[] }
 export const askOrder = (_kind: CheckpointAsk['kind']): ['no', 'yes'] => ['no', 'yes']
 
 const askLabel = (kind: CheckpointAsk['kind'], answer: 'yes' | 'no', files: number | null): string => {
-  if (kind === 'greptile') return answer === 'yes' ? 'Yes, ask Greptile (3 credits)' : 'No, skip Greptile ($0)'
+  if (kind === 'greptile') return answer === 'yes' ? `Yes, ask Greptile (${GREPTILE_CREDITS} credits)` : 'No, skip Greptile ($0)'
   if (kind === 'opening') return answer === 'yes' ? `Yes, post the review (free slot $0, or ${upTo(files)})` : 'No, do not post ($0)'
   return answer === 'yes' ? `Yes, one more review (free slot $0, or ${upTo(files)})` : 'No, stay in budget ($0)'
 }

@@ -43,6 +43,8 @@ const NOW = '2026-11-06T12:00:00.000Z';
 const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
 const PR = 349;
+const NOW_MS = Date.parse(NOW);
+const iso = (ms) => new Date(ms).toISOString();
 const KEY = `${DEFAULT_REPO}#${PR}`;
 const BODY_TEXT = 'PR body\n';
 const BODY_SHA = createHash('sha256').update(BODY_TEXT).digest('hex');
@@ -55,14 +57,15 @@ const LOW = ['apps/x/README.txt'];
 const review = (head = HEAD) => ({ step: 'review', key: KEY, head });
 const pick = (pathway, head = HEAD) => ({ step: 'paid-round', key: `${KEY}!pick:${pathway}`, head });
 
-function setup({ ledger = true, labels = ['risk:high'], paths = FIVE, head = HEAD, config = {} } = {}) {
+function setup({ ledger = true, labels = ['risk:high'], paths = FIVE, head = HEAD, config = {}, capacity = null } = {}) {
   const dir = makeTempDir('ledger-');
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
   const factsFile = path.join(dir, 'facts.json');
   const cfgFile = path.join(dir, 'config.json');
   const bodyFile = path.join(dir, 'body.md');
-  writeFileSync(factsFile, JSON.stringify({ head, now: NOW, stamp: STAMP(head), files: paths.map(file), cli: { bySeverity: { minor: 1 } }, dependabot: false, config_drift: false, labels }));
+  const factsAt = (now) => JSON.stringify({ head, now, stamp: STAMP(head), files: paths.map(file), cli: { bySeverity: { minor: 1 } }, dependabot: false, config_drift: false, labels, ...(capacity ? { capacity } : {}) });
+  writeFileSync(factsFile, factsAt(NOW));
   writeFileSync(bodyFile, BODY_TEXT);
   const checkpoint = { ...LIVE.checkpoint, autoConfirm: false, ...(ledger === 'omit' ? {} : { ledger }) };
   if (ledger === 'omit') delete checkpoint.ledger;
@@ -73,7 +76,8 @@ function setup({ ledger = true, labels = ['risk:high'], paths = FIVE, head = HEA
   const run = (args) => spawnSync(process.execPath, [ENGINE, ...args, ...(args.includes('--confirm') ? ['--state-dir', state] : []), '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir, env });
   const call = (extra = []) => { const r = run(['--json', '--pr', String(PR), ...extra]); assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`); return JSON.parse(r.stdout); };
   const confirm = (pathway, by = 'dave', extra = ['--pr', String(PR)]) => run(['--confirm', pathway, '--by', by, '--body', bodyFile, ...extra]);
-  return { dir, call, confirm, pathwayFile: path.join(state, 'pathway.json'), storeFile };
+  const retime = (now) => writeFileSync(factsFile, factsAt(now));
+  return { dir, call, confirm, retime, pathwayFile: path.join(state, 'pathway.json'), storeFile };
 }
 
 /** Dave taps the option of `label` on the open offer of `triple`. */
@@ -102,7 +106,7 @@ test('LD2: call 1 asks the review question: the recommendation marked (a paid on
   assert.ok(s.question.split('\n').length <= 3, s.question);
   assert.ok(s.options.length >= 2 && s.options.length <= 4);
   assert.equal(s.options[0].label, 'Keep as draft ($0)', 'a paid recommendation is not row 0 (PR C)');
-  assert.match(s.options[1].label, /^CodeRabbit review \(up to \$1\.25\) \(Recommended\)$/);
+  assert.match(s.options[1].label, /^CodeRabbit review \(may cost up to \$1\.25\) \(Recommended\)$/);
   assert.deepEqual(s.options.map((o) => o.label).filter((_, i) => i !== 1), ['Keep as draft ($0)', 'No review, land on CI ($0)']);
   assert.ok(s.options.every((o) => o.description.length > 0));
   assert.match(s.question, /^PR #349, band CRITICAL, 5 files\.\nRecommended: CodeRabbit review, because /);
@@ -224,10 +228,10 @@ test('LD14: when the recommendation is held, row 0 is "Keep as draft ($0) (Recom
   const L = await import(pathToFileURL(path.join(HERE, 'lib', 'checkpoint-ledger.mjs')).href);
   const option = (pathway, available) => ({ pathway, available, reason: `${pathway} reason` });
   const result = {
-    recommended: 'both', why: ['Critical file x.'], size: { files: 5, lines: 50 }, auto: { band: 'CRITICAL', eligible: false }, capacity: { state: 'free' },
+    recommended: 'both', why: ['Critical file x.'], size: { files: 5, lines: 50 }, auto: { band: 'CRITICAL', eligible: false }, capacity: { state: 'free', checkedAt: iso(NOW_MS - 60_000) },
     options: [option('coderabbit', true), option('both', false), option('wait', true), option('none', true)],
   };
-  const spec = L.askSpecOf(PR, result, 'unknown.');
+  const spec = L.askSpecOf(PR, result, 'unknown.', NOW_MS);
   assert.equal(spec.options[0].label, 'Keep as draft ($0) (Recommended)');
   assert.equal(spec.values[spec.options[0].label], 'wait');
   assert.equal(spec.options.filter((o) => o.label.endsWith(' (Recommended)')).length, 1, 'one Recommended row');
@@ -235,9 +239,8 @@ test('LD14: when the recommendation is held, row 0 is "Keep as draft ($0) (Recom
   assert.doesNotMatch(spec.question, /Recommended: CodeRabbit \+ Greptile/);
   assert.ok(spec.options.length <= 4 && spec.question.split('\n').length <= 3);
   const open = { ...result, options: [option('coderabbit', true), option('both', true), option('wait', true), option('none', true)] };
-  const openSpec = L.askSpecOf(PR, open, 'unknown.');
-  assert.equal(openSpec.options[0].label, 'CodeRabbit now (free slot, $0)', 'the $0 row leads; the open paid recommendation is not row 0 (PR C)');
-  assert.match(openSpec.options[2].label, /^CodeRabbit \+ Greptile \(up to \$1\.25 \+ 3 credits\) \(Recommended\)$/);
+  const openSpec = L.askSpecOf(PR, open, 'unknown.', NOW_MS);
+  assert.deepEqual(openSpec.options.map((o) => o.label), ['Keep as draft ($0)', 'CodeRabbit now (free slot, $0)', 'CodeRabbit + Greptile (may cost up to $1.25 + 3 credits) (Recommended)', 'No review, land on CI ($0)'], 'Keep as draft leads, then the free-slot row, then the paid rows, then none');
 });
 
 test('LD15: --ask-anyway opens the question for an auto-eligible PR whose auto-confirm failed; only with the flag, only with the ledger on, never for a stopped result', () => {
@@ -267,7 +270,8 @@ test('LD15: --ask-anyway opens the question for an auto-eligible PR whose auto-c
 //   a paid tap still opens a paid confirm (state confirm-paid), or --confirm still wants the paid tap                              -> LD19
 //   the spec Dave sees differs from the offer the hook matches, or a paid-round offer is opened                                    -> LD19
 //   the decision row of a paid pick loses the price of the label Dave tapped                                                        -> LD20
-//   the free-slot and the paid row share a label or a position, or a re-ask shuffles the rows                                       -> LD21
+//   the free-slot and the paid row share a label, or a re-ask shuffles the rows                                                     -> LD21
+//   (the order of card prflow-review-pick puts both CodeRabbit rows after Keep as draft, so they share a position: the label tells them apart)
 const PAID_PATHWAYS = ['coderabbit', 'both'];
 const pathwayAt = (triple, spec, i) => D.offerRead(triple).spec.values[spec.options[i].label];
 
@@ -277,7 +281,7 @@ test('LD17: HIGH fixture: one question; every paid row carries its price; row 0 
   const spec = ledger.ask;
   const paidRows = spec.options.filter((_, i) => PAID_PATHWAYS.includes(pathwayAt(review(), spec, i)));
   assert.ok(paidRows.length > 0, 'the fixture offers a paid row');
-  for (const row of paidRows) assert.match(row.label, /\(up to \$1\.25\)/);
+  for (const row of paidRows) assert.match(row.label, /\(may cost up to \$1\.25/);
   assert.equal(PAID_PATHWAYS.includes(pathwayAt(review(), spec, 0)), false, `row 0 is "${spec.options[0].label}"`);
   assert.match(spec.question, /Recommended: CodeRabbit review, because /);
   assert.equal(spec.options.filter((o) => o.label.endsWith(' (Recommended)')).length, 1, 'one Recommended row');
@@ -321,29 +325,138 @@ test('LD20: the decision row of a paid pick holds the label Dave tapped, with it
   assert.match(row.label, /\$1\.25/);
 });
 
-test('LD21: free-slot and paid CodeRabbit rows never share a label or a position; a re-ask shows the same order', async () => {
-  const L = await import(pathToFileURL(path.join(HERE, 'lib', 'checkpoint-ledger.mjs')).href);
+const L = await import(pathToFileURL(path.join(HERE, 'lib', 'checkpoint-ledger.mjs')).href);
+const ROW0 = /\(\$0\)( \(Recommended\))?$/;
+
+test('LD21: free-slot and paid CodeRabbit rows never share a label; the free-slot row is $0 and sits after Keep as draft; a re-ask shows the same order', () => {
   const option = (pathway) => ({ pathway, available: true, reason: `${pathway} reason` });
-  const resultOf = (recommended, state) => ({ recommended, why: ['Critical file x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity: { state }, options: [option('coderabbit'), option('both'), option('wait'), option('none')] });
-  const seen = [];
+  const resultOf = (recommended, state) => ({ recommended, why: ['Critical file x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity: { state, checkedAt: iso(NOW_MS - 60_000), nextSlotAt: iso(NOW_MS + 600_000) }, options: [option('coderabbit'), option('both'), option('wait'), option('none')] });
   for (const recommended of ['coderabbit', 'none']) {
     const at = {};
     for (const state of ['free', 'wait']) {
-      const spec = L.askSpecOf(PR, resultOf(recommended, state), 'unknown.');
-      const cr = spec.options.findIndex((o) => /^CodeRabbit (now|review)/.test(o.label));
-      at[state] = { cr, label: spec.options[cr].label };
-      assert.ok(spec.options.length <= 4);
-      assert.equal(new Set(spec.options.map((o) => o.label)).size, spec.options.length, 'labels differ inside one question');
-      assert.deepEqual(spec.options.map((o) => o.label), L.askSpecOf(PR, resultOf(recommended, state), 'unknown.').options.map((o) => o.label), 're-ask: same order');
-      if (state === 'wait') assert.notEqual(spec.values[spec.options[0].label], 'coderabbit', `${recommended}: paid row is not row 0`);
-      seen.push(spec.options.map((o) => o.label).join(' | '));
+      const spec = L.askSpecOf(PR, resultOf(recommended, state), 'unknown.', NOW_MS);
+      const labels = spec.options.map((o) => o.label);
+      const cr = labels.findIndex((l) => /^CodeRabbit (now|review)/.test(l));
+      at[state] = { cr, label: labels[cr] };
+      assert.ok(labels.length <= 4);
+      assert.equal(new Set(labels).size, labels.length, 'labels differ inside one question');
+      assert.deepEqual(labels, L.askSpecOf(PR, resultOf(recommended, state), 'unknown.', NOW_MS).options.map((o) => o.label), 're-ask: same order');
+      assert.match(labels[0], ROW0, `${recommended}/${state}: row 0 is a $0 row`);
+      assert.notEqual(spec.values[labels[0]], 'coderabbit', `${recommended}/${state}: the CodeRabbit row is not row 0`);
     }
     assert.notEqual(at.free.label, at.wait.label, `${recommended}: label`);
-    assert.notEqual(at.free.cr, at.wait.cr, `${recommended}: position`);
+    assert.ok(at.free.cr > 0 && at.free.label.includes('$0'), `${recommended}: the free-slot row is $0 and not row 0`);
+    const freeLabels = L.askSpecOf(PR, resultOf(recommended, 'free'), 'x', NOW_MS).options.map((o) => o.label);
+    assert.match(freeLabels[at.free.cr - 1], /^Keep as draft/, `${recommended}: Keep as draft sits right before the free-slot row`);
   }
   const t = setup();
   const again = [t.call().ledger.ask, t.call().ledger.ask];
   assert.deepEqual(again[0].options.map((o) => o.label), again[1].options.map((o) => o.label), 'a second call re-asks with the same rows');
+});
+
+// ---- the freshness rule and the second look at call 2 (card prflow-review-pick) ------------------------------------------------------
+// The engine reads the CodeRabbit slot by the same rule as the mod (model.ts slotOf), at the time of the call. How it can fail:
+//   a free fact older than 5 minutes, or with no readable checkedAt, still prints the $0 row                                      -> LD22
+//   the order of the rows differs for the same fact, so row 0 is a paid row or the free row leads Keep as draft                    -> LD22
+//   call 2 records a tap on a label that is no row of the question as it stands now (the slot went)                               -> LD23, LD24
+//   the stale tap is not used up, or the re-ask is counted as a miss, or --confirm accepts it                                    -> LD23, LD24
+const FRESH_FREE = { state: 'free', checkedAt: iso(NOW_MS - 60_000) };
+const resultFor = (capacity, recommended) => ({
+  recommended, why: ['Critical file x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity,
+  options: ['none', 'coderabbit', 'both', 'wait'].map((pathway) => ({ pathway, available: true, reason: `${pathway} reason` })),
+});
+
+test('LD22: recommendation x slot fact: the rows and their order follow the fact read at the time of the call; row 0 is always a $0 row', () => {
+  const free = 'CodeRabbit now (free slot, $0)';
+  const paid = 'CodeRabbit review (may cost up to $1.25)';
+  const both = 'CodeRabbit + Greptile (may cost up to $1.25 + 3 credits)';
+  const facts = [
+    ['free, checked 1 min ago', FRESH_FREE, free],
+    ['free, checked 10 min ago', { state: 'free', checkedAt: iso(NOW_MS - 600_000) }, paid],
+    ['free, no checkedAt', { state: 'free' }, paid],
+    ['free, checkedAt unreadable', { state: 'free', checkedAt: 'soon' }, paid],
+    ['wait, next slot passed', { state: 'wait', checkedAt: iso(NOW_MS - 600_000), nextSlotAt: iso(NOW_MS - 60_000) }, paid],
+    ['wait, next slot ahead', { state: 'wait', checkedAt: iso(NOW_MS - 60_000), nextSlotAt: iso(NOW_MS + 600_000) }, paid],
+    ['unknown', { state: 'unknown' }, paid],
+  ];
+  for (const rec of ['coderabbit', 'none']) {
+    for (const [name, capacity, crLabel] of facts) {
+      const labels = L.askSpecOf(PR, resultFor(capacity, rec), 'x', NOW_MS).options.map((o) => o.label);
+      const mark = (l, p) => (p === rec ? `${l} (Recommended)` : l);
+      const expected = rec === 'none'
+        ? [mark('No review, land on CI ($0)', 'none'), 'Keep as draft ($0)', crLabel, both]
+        : ['Keep as draft ($0)', mark(crLabel, 'coderabbit'), both, 'No review, land on CI ($0)'];
+      assert.deepEqual(labels, expected, `rec ${rec}, ${name}`);
+    }
+  }
+});
+
+test('LD22b: slotStateOf mirrors the mod rule: free ages out after 5 minutes, a wait whose slot passed is unknown, a wait with no slot time ages like free', () => {
+  const at = (cap) => L.slotStateOf(cap, NOW_MS);
+  assert.equal(at({ state: 'free', checkedAt: iso(NOW_MS - 300_000) }), 'free', 'exactly 5 minutes is still fresh');
+  assert.equal(at({ state: 'free', checkedAt: iso(NOW_MS - 300_001) }), 'unknown');
+  assert.equal(at({ state: 'free' }), 'unknown');
+  assert.equal(at({ state: 'free', checkedAt: 'x' }), 'unknown');
+  assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS - 900_000), nextSlotAt: iso(NOW_MS + 1) }), 'wait');
+  assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS - 900_000), nextSlotAt: iso(NOW_MS) }), 'unknown', 'a slot time equal to now has passed');
+  assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS - 60_000) }), 'wait', 'no slot time, fresh');
+  assert.equal(at({ state: 'wait', checkedAt: iso(NOW_MS - 600_000) }), 'unknown', 'no slot time, old');
+  assert.equal(at({ state: 'maybe' }), 'unknown');
+  assert.equal(at(undefined), 'unknown');
+  assert.equal(L.slotStateOf({ state: 'free' }, null), 'free', 'a null clock reads the fact as printed, as the mod does');
+});
+
+test('LD23: call 2 after the slot went: the tap on the free-slot row is used up, nothing is recorded, the question is asked again with the new rows', () => {
+  const free = 'CodeRabbit now (free slot, $0) (Recommended)';
+  const paid = 'CodeRabbit review (may cost up to $1.25) (Recommended)';
+  const t = setup({ capacity: FRESH_FREE });
+  const first = t.call().ledger;
+  assert.equal(first.state, 'ask');
+  assert.deepEqual(first.ask.options.map((o) => o.label), ['Keep as draft ($0)', free, 'No review, land on CI ($0)']);
+  tap(review(), free);
+  t.retime(iso(NOW_MS + 600_000));
+  // --confirm at the later time: the label is no row of the question now, so it is refused and nothing is written.
+  const late = t.confirm('coderabbit');
+  assert.equal(late.status, 1, `${late.stdout} ${late.stderr}`);
+  assert.ok(!existsSync(t.pathwayFile));
+  const second = t.call().ledger;
+  assert.deepEqual([second.state, second.reasked], ['ask', 0], 'asked again, and the re-ask is no miss');
+  assert.deepEqual(second.ask.options.map((o) => o.label), ['Keep as draft ($0)', paid, 'No review, land on CI ($0)']);
+  assert.equal(D.decisionRead(review()), null, 'the stale tap is used up');
+  assert.equal(D.offerRead(review()).open, true);
+  assert.deepEqual(D.offerRead(review()).labels, second.ask.options.map((o) => o.label));
+  assert.equal(D.missCount(review()), 0);
+  assert.ok(!existsSync(t.pathwayFile), 'nothing was recorded');
+  tap(review(), paid);
+  const third = t.call().ledger;
+  assert.deepEqual([third.state, third.pathway, third.by], ['record', 'coderabbit', 'dave'], 'a tap on the row as it stands is the paid yes');
+  assert.equal(t.confirm('coderabbit').status, 0);
+});
+
+test('LD23b: with the slot unchanged the same tap records; Keep as draft stays kept when the slot went', () => {
+  const same = setup({ capacity: FRESH_FREE });
+  tap(review(), same.call().ledger.ask.options[1].label);
+  same.retime(iso(NOW_MS + 120_000));
+  assert.equal(same.call().ledger.state, 'record', 'still fresh 2 minutes later');
+  const kept = setup({ capacity: FRESH_FREE });
+  tap(review(), labelOf(kept.call().ledger.ask, /^Keep as draft/));
+  kept.retime(iso(NOW_MS + 600_000));
+  assert.equal(kept.call().ledger.state, 'kept-draft', 'Keep as draft records nothing, so a changed slot does not undo it');
+});
+
+test('LD24: ledgerConfirmProblem refuses a tap whose label is no row of the question as it stands; with no result it checks the tap only; --by auto is untouched', () => {
+  setup();
+  const result = resultFor(FRESH_FREE, 'coderabbit');
+  const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  const free = spec.options.find((o) => /^CodeRabbit now/.test(o.label)).label;
+  tap(review(), free);
+  const problem = (extra) => L.ledgerConfirmProblem({ pr: PR, head: HEAD, pathway: 'coderabbit', by: 'dave', ...extra });
+  assert.equal(problem({}), null, 'old call shape: the tap decides');
+  assert.equal(problem({ result, now: NOW_MS + 60_000 }), null, 'the label is still a row');
+  assert.match(problem({ result, now: NOW_MS + 600_000 }), /no longer a row/);
+  assert.equal(L.ledgerConfirmProblem({ pr: PR, head: HEAD, pathway: 'none', by: 'auto', result, now: NOW_MS + 600_000 }), null);
+  assert.equal(D.decisionRead(review()).label, free, 'a refusal does not use the tap up');
 });
 
 // Every text the engine, the status script and the land scripts build must send Dave to a tap, never to a typed command (Dave 2026-11-06).
