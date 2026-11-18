@@ -81,6 +81,16 @@
  * carries usageCost with costCents above 0, the step appends one {kind: "cli"} row to ~/.claude/state/coderabbit-paid.jsonl
  * (cr-paid.mjs recordCliSpend) and prints "billed $X.XX" in its line. Before a run it sums today's cli rows (America/Chicago).
  * A cap key that is missing or not a number means no cap.
+ * Order (card prflow-prepr-speed): the CodeRabbit step starts BEFORE the first test gate when every fast step passed (summary, git, changes,
+ * evidence, env) and no stale GREEN waits for the gates. The review child writes to files (.running.txt, .running.txt.err), so it runs on while a
+ * gate blocks the event loop; the gates run beside it and the run waits for the review before git:stable. A gate FAIL prints "gate <id> FAILED;
+ * waiting for the CLI review to end so its output is saved" and the review is NOT stopped. The counter row of that review gets gateFailed: it
+ * uses no slot (one such row per branch per Chicago day) and is never a finished run. PRE_PR_SERIAL_CR=1 restores the old order (gates, then review).
+ * The base is PINNED: baseCommit = git merge-base HEAD fork/<base> (local base with no fork ref), read once after the fetch. The changes step, the
+ * answer-key guard and "cr review --base-commit" use it, so a move of the base ref during the run changes nothing the run reads. The stamp holds
+ * base_commit. Only HEAD is checked at the last moment. --wait-lock (or PRE_PR_WAIT_LOCK=1) waits up to 60 minutes for a run-lock place in turn.
+ * Run-lock lines on stderr: PRE-PR START pid <pid> head <sha8> <heavy|light> free <GB> load <pct> mode <warn|grant>, PRE-PR END pid <pid> head <sha8>
+ * <PASS|FAIL> <first failing step> <minutes>; both are also rows of run-locks/runs.jsonl.
  * Exit 0 = no step failed and a stamp was written. Exit 1 = a step failed (any old stamp is removed).
  * Exit 2 = bad usage (no --body, or the body file cannot be read). Exit 3 = an internal error (an exception inside the run,
  * for example a missing review-router.config.json); the message goes to stderr.
@@ -101,7 +111,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findOsv as defaultFindOsv, osvAdvisory } from './lib/osv-advisory.mjs';
@@ -117,7 +127,7 @@ import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 import { ANSWER_KEY_GLOBS, answerKeyGlobs, answerKeyCheck, slashLower } from './lib/answer-paths.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
-import { acquire as acquireRunLock, releaseSync as releaseRunLockSync } from '../coordination/run-lock.mjs';
+import { acquire as acquireRunLock, lockMode, logRun, releaseSync as releaseRunLockSync, setPhase, waitForGrant } from '../coordination/run-lock.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -403,10 +413,24 @@ function resolveGate(gate, paths) {
 }
 
 /**
+ * The repo paths outside .claude/hooks that a hook bundle imports: the keys of `external` in the committed
+ * .claude/hooks/dist/.build-inputs.json under root (part 4 of the hooks build-inputs note). No file, bad JSON, or no `external` object: [].
+ * Never throws: the field arrives with a later hooks PR, and a run must pass before and after it.
+ */
+export function buildInputExternals(root) {
+  try {
+    const m = JSON.parse(readFileSync(path.join(root, '.claude', 'hooks', 'dist', '.build-inputs.json'), 'utf8'));
+    const ext = m?.external;
+    return ext && typeof ext === 'object' && !Array.isArray(ext) ? Object.keys(ext).map(norm) : [];
+  } catch { return []; }
+}
+
+/**
  * The gates a change set needs: the touched surfaces' gates once each, then the always gates. The cheap gates (`cheap: true`)
  * come first, each group in table order, so a FAIL of a static check shows before the minutes-long gates start.
+ * `externals` (buildInputExternals) adds the hooks surface for a changed file that a hook bundle imports, so its dist is checked.
  */
-export function gatesFor(changed) {
+export function gatesFor(changed, externals = []) {
   const paths = changed.map(norm);
   const out = [];
   const add = (gate) => {
@@ -414,7 +438,9 @@ export function gatesFor(changed) {
     const resolved = resolveGate(gate, paths);
     if (resolved) out.push(resolved);
   };
-  for (const s of SURFACES) if (touches(s, paths)) (s.gates ?? []).forEach(add);
+  const ext = new Set(Array.isArray(externals) ? externals.map(norm) : []); // older callers pass a root string here: it adds nothing
+  const bundled = paths.some((p) => ext.has(p));
+  for (const s of SURFACES) if (touches(s, paths) || (s.id === 'hooks' && bundled)) (s.gates ?? []).forEach(add);
   ALWAYS_GATES.forEach(add);
   return [...out.filter((g) => g.cheap), ...out.filter((g) => !g.cheap)];
 }
@@ -577,9 +603,9 @@ function checkBehind(git, base, fetched = null) {
   return result('git:behind', 'PASS', `0 commits behind ${counts.map((c) => c.name).join(' and ')} (${caveat})`);
 }
 
-/** { result, paths }: `git diff --name-only <base>...HEAD`. No files is a FAIL. */
-export function changedFiles(git, base) {
-  const r = git(['diff', '--name-only', `${base}...HEAD`]);
+/** { result, paths }: `git diff --name-only <from>...HEAD` (`from` is the pinned base commit, else the base name). No files is a FAIL. */
+export function changedFiles(git, base, from = base) {
+  const r = git(['diff', '--name-only', `${from}...HEAD`]);
   const paths = r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (r.status !== 0) return { paths: [], result: result('changes', 'FAIL', `git diff ${base}...HEAD failed: ${clip(r.stderr.trim(), 120)}`) };
   if (paths.length === 0) return { paths, result: result('changes', 'FAIL', `no files differ from ${base}: nothing to open a PR for`) };
@@ -878,8 +904,12 @@ export const CR_TICK_MS = 60_000;
 const USAGE_TIMEOUT_MS = 60_000;
 export const STAMP_REL = '.claude/cache/pre-pr/stamp.json';
 
-/** --committed: only the committed work (the gate needs a clean tree). --base is explicit: this checkout has only the fork remote. */
-export const CR_ARGS = (base) => ['review', '--agent', '--committed', '--base', base];
+/**
+ * --committed: only the committed work (the gate needs a clean tree). The base is a PINNED commit (--base-commit, as cr-fix.mjs does), not a branch
+ * name: the CLI reads the diff the guard checked, even when the base ref moves during the run.
+ */
+export const CR_ARGS = (baseCommit) => ['review', '--agent', '--committed', '--base-commit', baseCommit];
+const COMMIT_ID = /^[0-9a-f]{40}$/;
 /** Read-only and free: how many included reviews are left. */
 export const CR_USAGE_ARGS = ['usage', '--agent'];
 
@@ -891,6 +921,8 @@ export function assertSafeCrArgs(args) {
   }
   const bad = args.find((a) => /^--(?:use-credits|api-key)\b/.test(a) || a === 'code');
   if (bad || args[0] !== 'review') throw new Error(`forbidden CodeRabbit argument: ${bad ?? args[0]}`);
+  const at = args.indexOf('--base-commit');
+  if (at >= 0 && !COMMIT_ID.test(args[at + 1] ?? '')) throw new Error(`forbidden CodeRabbit argument: --base-commit needs a 40 character commit id (got ${args[at + 1] ?? 'nothing'})`);
 }
 
 /** coderabbit-cli.md: a review needs a time limit of at least 15 minutes, or a normal review is cut off and a run is wasted. */
@@ -920,19 +952,41 @@ export function crTimeoutProblem(argv, env = process.env) {
   return `${name}=${raw} is not used: the time limit must be a number of at least ${CR_TIMEOUT_MIN_FLOOR} minutes. Using ${CR_TIMEOUT_MIN_DEFAULT}.`;
 }
 
+/** The type of the last event line in the tail of an NDJSON file, or null. Reads at most the last 16 KB. Never throws. */
+function lastEventOfFile(file) {
+  try {
+    const size = statSync(file).size;
+    const fd = openSync(file, 'r');
+    try {
+      const len = Math.min(size, 16 * 1024);
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, size - len);
+      const lines = buf.toString('utf8').split('\n').filter(Boolean);
+      for (let i = lines.length - 1; i >= 0; i -= 1) { const m = /"type"\s*:\s*"([^"]+)"/.exec(lines[i]); if (m) return m[1]; }
+      return null;
+    } finally { closeSync(fd); }
+  } catch { return null; }
+}
+
+const readTextOrEmpty = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
+
 /**
  * Runs `cr` as a child process and resolves when it ends. Stdout is streamed into `streamTo` as it arrives, so the file
  * is a live log, and `onTick({ elapsedSec, lastEvent })` runs every `tickMs`. The hard `timeoutMs` stops the child and its
  * whole process tree (killTree). A non-zero exit, a timeout and a spawn error are results, never throws; the partial stdout
  * is kept. Nothing is written to the stream file once the run has settled, and a stream error is returned as `streamError`.
+ * With `fileStdio` (and a `streamTo`) the child gets FILES, not pipes: stdout is `streamTo`, stderr is `<streamTo>.err`. The OS writes them, so
+ * a review runs on while a blocking test gate holds the event loop of pre-pr, and stderr never enters the parsed stream. The runner reads both
+ * files when the child ends. A limit timer that fires late checks first whether the child already ended, and then settles with its exit code.
  * The second argument is for tests: another binary, a faster tick, a fake spawn, killer or stream.
  */
-export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick = null }, {
+export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick = null, fileStdio = false }, {
   command = 'cr', prefixArgs = [], tickMs = CR_TICK_MS, killGraceMs = 5000, spawnFn = spawn, killer = (c) => killTree(c.pid), openStream = createWriteStream,
 } = {}) {
   return new Promise((resolve) => {
     assertSafeCrArgs(args);
-    const file = streamTo ? openStream(streamTo) : null;
+    const useFiles = Boolean(fileStdio && streamTo);
+    const file = streamTo && !useFiles ? openStream(streamTo) : null;
     const started = Date.now();
     let stdout = '';
     let stderr = '';
@@ -944,13 +998,25 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
     let errorCode;
     let streamError;
     let child;
+    const fds = [];
+    const closeFds = () => { for (const fd of fds.splice(0)) { try { closeSync(fd); } catch { /* already closed */ } } };
     file?.on('error', (err) => { streamError ??= String(err.message); });
-    const ticker = setInterval(() => onTick?.({ elapsedSec: Math.round((Date.now() - started) / 1000), lastEvent }), tickMs);
-    const limit = setTimeout(() => {
+    const ticker = setInterval(() => onTick?.({ elapsedSec: Math.round((Date.now() - started) / 1000), lastEvent: useFiles ? lastEventOfFile(streamTo) ?? lastEvent : lastEvent }), tickMs);
+    const exited = () => child && child.exitCode !== null && child.exitCode !== undefined;
+    const stopChild = () => {
       timedOut = true;
       try { killer(child); } catch { /* the grace timer below ends the wait */ }
       try { child?.kill(); } catch { /* already gone */ }
       setTimeout(() => finish(null), killGraceMs).unref();
+    };
+    const limit = setTimeout(() => {
+      // The timer can run late (a blocking gate held the loop), before the exit event of a child that ended in time: that is no time-out.
+      // The exit event comes in the poll phase of the same loop turn, so look one turn later (setImmediate runs after it).
+      setImmediate(() => {
+        if (settled) return;
+        if (useFiles && exited()) { finish(child.exitCode); return; } // file mode: the output is in the file already
+        stopChild(); // pipe mode: a grandchild may hold the pipe, so the old stop and grace time stay
+      });
     }, timeoutMs);
     function finish(status) {
       if (settled) return;
@@ -959,18 +1025,26 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
       clearInterval(ticker);
       clearTimeout(limit);
       file?.end();
+      closeFds();
+      if (useFiles) { stdout = readTextOrEmpty(streamTo); stderr = readTextOrEmpty(`${streamTo}.err`); }
       resolve({ status, stdout, stderr, timedOut, error, errorCode, streamError });
     }
     try {
-      child = spawnFn(command, [...prefixArgs, ...args], { cwd, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+      if (useFiles) fds.push(openSync(streamTo, 'w'), openSync(`${streamTo}.err`, 'w'));
+      const stdio = useFiles ? ['ignore', fds[0], fds[1]] : ['ignore', 'pipe', 'pipe'];
+      child = spawnFn(command, [...prefixArgs, ...args], { cwd, windowsHide: true, detached: process.platform !== 'win32', stdio });
     } catch (err) {
       error = String(err.message);
       errorCode = err.code;
       finish(null);
       return;
     }
+    closeFds(); // the child holds its own copies of the two files
     activeCr = child;
     const forget = () => { if (activeCr === child) activeCr = null; };
+    child.on('error', (err) => { forget(); error = String(err.message); errorCode = err.code; finish(null); });
+    child.on('close', (code) => { forget(); finish(code); });
+    if (useFiles) return;
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
@@ -982,8 +1056,6 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
       for (const line of lines) lastEvent = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1] ?? lastEvent;
     });
     child.stderr.on('data', (chunk) => { if (!settled) stderr += chunk; });
-    child.on('error', (err) => { forget(); error = String(err.message); errorCode = err.code; finish(null); });
-    child.on('close', (code) => { forget(); finish(code); });
   });
 }
 
@@ -1122,7 +1194,7 @@ function crVerdict(p, { exitProblem, base, docsOnly = false }) {
   }
   if (exitProblem) return fail(`the CLI did not finish: ${exitProblem}; the ${p.findings.length} finding(s) read before the stop are kept.`);
   if (!c) return fail(`INCOMPLETE: no complete event in the stream (${p.findings.length} finding(s) kept).`);
-  if (c.status === 'review_skipped') return skipped('no-changes', `the CLI found no changes to review with --committed --base ${base}: check --base and that the work is committed.`);
+  if (c.status === 'review_skipped') return skipped('no-changes', `the CLI found no changes to review with --committed --base-commit (the merge base of HEAD and ${FORK}/${base}): check --base and that the work is committed.`);
   if (c.outcome === 'failed' || Number(c.unreviewedFileCount) > 0) {
     return fail(`INCOMPLETE: outcome ${c.outcome ?? 'unknown'}, ${Number(c.unreviewedFileCount) || 0} file(s) not reviewed${c.message ? ` (${clip(String(c.message), 100)})` : ''}.`);
   }
@@ -1180,7 +1252,7 @@ export function partialEarnedFor(root, rows, head) {
   let earned = 0;
   let unreviewed = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
-    if (row?.partial !== true) continue;
+    if (row?.partial !== true || row.gateFailed === true) continue;
     if (!Number.isInteger(row.reviewed) || row.reviewed < 1) continue;
     if (!Number.isInteger(row.unreviewed) || row.unreviewed < 1) continue;
     if (typeof row.head !== 'string' || !/^[0-9a-f]{40}$/.test(row.head)) continue;
@@ -1243,9 +1315,41 @@ export function crPaths(root, branch, base = 'main') {
   return { dir, counter: path.join(dir, `cr-runs-${name}.json`), lock: path.join(dir, `cr-lock-${name}.json`) };
 }
 
-/** How many CLI runs on this branch finished with a PASS (the cap counts only these for the hook). 0 when there is no counter. */
+/**
+ * How many CLI runs on this branch finished with a PASS (the cap counts only these for the hook). 0 when there is no counter. A run whose head failed a
+ * test gate (gateFailed) is never counted: the pre-pr-gate hook accepts a cap skip on one finished run, and that run did not vouch for a head that passed.
+ */
 export function finishedRuns(root, branch, base = 'main') {
-  try { return readCounter(crPaths(root, branch, base).counter, branch).runs.filter((r) => r.complete === true).length; } catch { return 0; }
+  try { return readCounter(crPaths(root, branch, base).counter, branch).runs.filter((r) => r.complete === true && r.gateFailed !== true).length; } catch { return 0; }
+}
+
+const CHICAGO_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
+/** The Chicago calendar day of an ISO time ("2026-10-27"), or '' when the time cannot be read. An explicit zone: the machine zone is not the rule. */
+const chicagoDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? CHICAGO_DAY.format(t) : ''; };
+
+/**
+ * How many rows use a slot of the cap. A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) uses none
+ * either, but only the first such row of each Chicago day: the next one counts as a normal slot. A time that cannot be read counts (fail closed).
+ */
+export function countedRuns(rows) {
+  const freeDays = new Set();
+  let counted = 0;
+  for (const r of rows.filter((x) => x.newCode !== false)) {
+    const day = r.gateFailed === true ? chicagoDay(r.at) : '';
+    if (day !== '' && !freeDays.has(day)) { freeDays.add(day); continue; }
+    counted += 1;
+  }
+  return counted;
+}
+
+/** Mark the counter row of this run (same head and time) gateFailed. Returns false when there is no such row. Only that row changes. */
+export function markGateFailed(counterFile, { head, at }) {
+  const doc = readCounter(counterFile, '');
+  const row = doc.runs.find((r) => r.head === head && r.at === at);
+  if (!row) return false;
+  row.gateFailed = true;
+  writeFileSync(counterFile, JSON.stringify(doc, null, 2));
+  return true;
 }
 
 /** An empty or half-written lock younger than this may still be in its writer's hands (wx creates, then writes). */
@@ -1404,19 +1508,24 @@ export function bothSidePaths(git, range) {
 }
 
 /**
- * What the guard needs to trust the base...HEAD range: whether --base is an override (not main), and the fork/<base>...HEAD path list
- * (undefined: no fork ref to compare with; null: git failed).
+ * What the guard needs to trust the pinned range: whether --base is an override (not main). The fork/<base>...HEAD path list is not read any more: the
+ * range is the merge base with fork/<base>, taken once, so a move of fork/<base> after the pin must not turn a hit into a FAIL.
  */
-export function guardBaseOf(git, base) {
-  const forkRef = `refs/remotes/${FORK}/${base}`;
-  const hasFork = git(['rev-parse', '--verify', '--quiet', forkRef]).status === 0;
-  return { override: base !== 'main', forkPaths: hasFork ? bothSidePaths(git, `${forkRef}...HEAD`) : undefined };
+export function guardBaseOf(_git, base) {
+  return { override: base !== 'main', forkPaths: undefined };
 }
 
-/** The commit a base ref names now, or '' when git cannot say. runPrePr reads it before the guard; the last-moment check reads it again. */
-export function resolveBase(git, base) {
-  const r = git(['rev-parse', '--verify', '--quiet', base]);
-  return r.status === 0 ? r.stdout.trim() : '';
+/**
+ * The PINNED base of a run: `git merge-base HEAD fork/<base>` (the local base when there is no fork ref), or '' when git cannot say. runPrePr reads
+ * it once, after the fetch. The changes step, the answer-key guard and `cr review --base-commit` all use this one commit, so a move of the base
+ * ref during the run changes nothing the run reads. The merge base is an ancestor of HEAD by construction.
+ */
+export function resolveBaseCommit(git, base) {
+  const forkRef = `refs/remotes/${FORK}/${base}`;
+  const ref = git(['rev-parse', '--verify', '--quiet', forkRef]).status === 0 ? forkRef : base;
+  const r = git(['merge-base', 'HEAD', ref]);
+  const sha = r.stdout.trim();
+  return r.status === 0 && COMMIT_ID.test(sha) ? sha : '';
 }
 
 /** For cr-fix.mjs: the guard detail for the commits `from..HEAD` in `cwd`, or null. */
@@ -1516,7 +1625,15 @@ function storeNote(store, before, { verdict, parsed, root }) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, guardBase = undefined, headGit = null, baseSha = undefined, crStore = liveCrStore() }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, guardBase = undefined, headGit = null, baseCommit = undefined, crStore = liveCrStore(), onSpawned = undefined }) {
+  try {
+    return await codeRabbitStep({ root, branch, head, base, now, runner, skip, timeoutMs, log, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, guardPaths, guardBase, headGit, baseCommit, crStore, onSpawned });
+  } finally {
+    onSpawned?.(); // the step ended without a review (a skip, a reuse, a cap, a failed preflight): the caller must not wait for a spawn
+  }
+}
+
+async function codeRabbitStep({ root, branch, head, base, now, runner, skip, timeoutMs, log, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, guardPaths, guardBase, headGit, baseCommit, crStore, onSpawned }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const keyCheck = answerKeyCheck({ root, paths: guardPaths === undefined ? changedPaths : guardPaths });
   if (keyCheck) return answerKeyStep(keyCheck, guardBase, base);
@@ -1524,11 +1641,15 @@ export async function runCodeRabbit({ root, branch, head, base, now, runner, ski
   const e2e = path.join(root, '.claude', 'cache', 'e2e');
   const saved = savedReviewFor(e2e, short);
   if (saved) return reusedReview({ root, e2e, saved, base, why: `reused the saved CLI output for ${short} (no run, no slot used)` });
+  // A caller that gives no base commit (a direct call) gets the merge base of HEAD and fork/<base> read from the checkout; a value that is given and is not a
+  // commit id, or a read that fails, is a FAIL: the CLI reads a pinned diff, so no CLI review starts without one.
+  const pin = baseCommit === undefined ? resolveBaseCommit(makeGit(root), base) : baseCommit;
+  if (!COMMIT_ID.test(pin ?? '')) return result('coderabbit', 'FAIL', `no pinned base commit (${pin || 'none'}): the CLI reads a pinned diff, so no CLI review starts without one`);
   const paths = crPaths(root, branch, base);
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseSha, crStore });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseCommit: pin, crStore, onSpawned });
   } finally {
     rmSync(paths.lock, { force: true });
   }
@@ -1562,30 +1683,27 @@ function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
 }
 
 /**
- * A FAIL when HEAD or the base ref is not what the guards checked, else null. The usage preflight is awaited after the answer-key guard, and
- * `--committed --base <name>` reads the committed diff of HEAD against the base ref by name, so a commit, a checkout, or a landed PR that moves
- * the base in that window would change what the CLI reads. runPrePr resolves the base to a commit (`baseSha`) before the guard runs. A read
- * that fails or is empty is a FAIL, tested before any equality (an empty head and an empty re-read are not "equal"). With no `git` (a direct
- * call) there is no check; with no `baseSha` (undefined) only HEAD is checked. The caller gives the run slot back and starts no CLI.
+ * A FAIL when HEAD is not what the guards checked, else null. The usage preflight is awaited after the answer-key guard, so a commit or a
+ * checkout in that window would change the committed diff the CLI reads. The base is pinned (baseCommit), so the base ref is not checked: a move
+ * of fork/<base> changes nothing this run reads. A read that fails or is empty is a FAIL, tested before any equality (an empty head and an empty
+ * re-read are not "equal"). With no `git` (a direct call) there is no check. The caller gives the run slot back and starts no CLI.
  */
-function headMoved(git, { head, base, baseSha }) {
+function headMoved(git, { head }) {
   if (!git) return null;
   const stale = (why) => result('coderabbit', 'FAIL', `${why}, so no CLI review was started; run pre-pr again`);
-  const sha = (args) => { const r = git(args); return r.status === 0 ? r.stdout.trim() : ''; };
-  const now = sha(['rev-parse', 'HEAD']);
+  const r = git(['rev-parse', 'HEAD']);
+  const now = r.status === 0 ? r.stdout.trim() : '';
   if (now === '' || !head) return stale('HEAD could not be re-read before the CLI start');
   if (now !== head) return stale(`HEAD moved during the preflight (it was ${head.slice(0, 7)}, it is ${now.slice(0, 7)})`);
-  if (baseSha === undefined) return null;
-  const baseNow = sha(['rev-parse', '--verify', '--quiet', base]);
-  if (baseNow === '' || !baseSha) return stale(`${base} could not be read before the CLI start`);
-  if (baseNow !== baseSha) return stale(`${base} moved during the preflight (it was ${baseSha.slice(0, 7)}, it is ${baseNow.slice(0, 7)})`);
-  // A base that moved after git:behind and before resolveBase: base...HEAD (from the merge base) misses what landed, and the CLI can diff
-  // against the tip. With HEAD containing the base, both diffs are the same, so the guard saw what the CLI reads.
-  if (git(['merge-base', '--is-ancestor', baseSha, head]).status !== 0) return stale(`HEAD does not contain ${base} (${baseSha.slice(0, 7)}; it moved after the behind check). Next: merge ${base} into the branch`);
   return null;
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseSha, crStore }) {
+/** Remove the running file and its .err file. A grandchild may still hold one on Windows (EBUSY): the output is saved already, so leave it. */
+function removeRunningFiles(running) {
+  for (const file of [running, `${running}.err`]) { try { rmSync(file, { force: true }); } catch { /* held by a process: harmless */ } }
+}
+
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseCommit, crStore, onSpawned }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
@@ -1597,7 +1715,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   if (savedLast) {
     return reusedReview({ root, e2e, saved: savedLast, base, why: `reused the saved CLI output for ${lastReviewed.slice(0, 7)}, the last reviewed head: no new code since (only docs, evidence, PR body, test snapshots or a clean merge of ${base} came after it); no run, no slot used` });
   }
-  const counted = counter.runs.filter((r) => r.newCode !== false).length;
+  const counted = countedRuns(counter.runs);
   if (counted >= CR_RUN_LIMIT) {
     // Rule A: a partial run whose findings the branch changed earns the cap skip. Earning is read only here, at the cap.
     const earn = partialEarnedFor(root, counter.runs, head);
@@ -1625,11 +1743,13 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   mkdirSync(path.dirname(counterFile), { recursive: true });
   writeFileSync(counterFile, JSON.stringify(counter, null, 2));
   mkdirSync(e2e, { recursive: true });
-  const running = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}.running.txt`);
+  const running = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}-${process.pid}.running.txt`);
   const onTick = (t) => log(`pre-pr: cr review still running (${t.elapsedSec}s${t.lastEvent ? `, last event: ${t.lastEvent}` : ''}); limit ${Math.round(timeoutMs / MIN)} min`);
-  const moved = headMoved(headGit, { head, base, baseSha });
+  const moved = headMoved(headGit, { head });
   if (moved) { giveBack(); return moved; }
-  const r = await runner({ cwd: root, args: CR_ARGS(base), timeoutMs, streamTo: running, onTick });
+  const pending = runner({ cwd: root, args: CR_ARGS(baseCommit), timeoutMs, streamTo: running, onTick, fileStdio: true });
+  onSpawned?.(); // the runner started the child when it was called (defaultCrRunner spawns in its executor): the caller may go on
+  const r = await pending;
   if (r.error && !r.timedOut && NOT_STARTED.test(String(r.errorCode ?? r.error))) {
     giveBack();
     const missing = MISSING.test(String(r.errorCode ?? r.error));
@@ -1641,7 +1761,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   const verdict = crVerdict(parsed, { exitProblem, base, docsOnly });
   const out = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}${verdict.status === 'PASS' ? '' : '.failed'}.txt`);
   writeFileSync(out, r.stderr && verdict.status !== 'PASS' ? `${stdout}\n[stderr]\n${r.stderr}` : stdout);
-  rmSync(running, { force: true });
+  removeRunningFiles(running);
   const logNote = logCliSpend({ branch, head, parsed, now, ledgerPath });
   const storeLine = storeNote(crStore, storeBefore, { verdict, parsed, root });
   verdict.notes = [...(verdict.notes ?? []), estimateText.replace(/^pre-pr: /, ''), ...(logNote ? [logNote] : []), ...(storeLine ? [storeLine] : [])];
@@ -1652,7 +1772,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
     Object.assign(run, partialRowOf({ verdict, parsed, exitProblem, changedPaths: changedPaths ?? [] }) ?? {});
     writeFileSync(counterFile, JSON.stringify(counter, null, 2));
   }
-  return withOutput(verdict, rel(root, out));
+  return { ...withOutput(verdict, rel(root, out)), ...(run.outcome === 'started' ? {} : { runAt: run.at }) };
 }
 
 // ---------- the whole run ----------
@@ -1697,8 +1817,52 @@ export function logCliMissing(entry, env = process.env) {
   } catch { /* a log problem never stops the run */ }
 }
 
-/** Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }. */
-export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined }) {
+/** True when this change set runs the hooks-vitest gate: the heavy part of a run (the run lock counts it apart). */
+export const isHeavyRun = (paths, externals = []) => gatesFor(paths, externals).some((g) => g.id === 'hooks-vitest');
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * Starts the CodeRabbit step beside the test gates and returns when the review child exists (or the step ended with no review: a skip, a reuse,
+ * a cap). The wait is the free usage preflight (seconds). `done` turns true when the step ends. The caller awaits `promise` later.
+ */
+async function startCrStep(args) {
+  const state = { done: false, t0: performance.now() };
+  let spawned;
+  const ready = new Promise((resolve) => { spawned = resolve; });
+  state.promise = runCodeRabbit({ ...args, onSpawned: spawned }).finally(() => { state.done = true; spawned(); });
+  state.promise.catch(() => {}); // awaited later: a rejection in between must not be an unhandled one
+  await ready;
+  return state;
+}
+
+/** The one line printed when a gate FAILs while the review still runs: the builder can start the fix, and knows why the run is not over. */
+const gateFailedWhileReviewLine = (gateId) => `pre-pr: gate ${gateId} FAILED; waiting for the CLI review to end so its output is saved`;
+
+/**
+ * Runs every step. Writes the log always and the stamp only on a full pass. Returns { ok, results, lines, head, branch, logPath, stampPath }.
+ * The CodeRabbit step starts BEFORE the first test gate when every fast step passed (summary, git, changes, evidence, env) and PRE_PR_SERIAL_CR is not 1;
+ * the gates run beside it and the run waits for it before git:stable. A review that is alive when this function throws is stopped (H4).
+ */
+export async function runPrePr(opts) {
+  const ctl = { cr: null };
+  try { return await runPrePrSteps(opts, ctl); } finally { if (ctl.cr && !ctl.cr.done) killActiveCr(); }
+}
+
+/** The step result of a review that started early, with its wall time from its start. */
+async function awaitEarlyCr(cr, durations) {
+  const r = await cr.promise;
+  if (r && typeof r === 'object') durations.set(r, Math.round(performance.now() - cr.t0));
+  return r;
+}
+
+/** markGateFailed for the run's own row. A counter that cannot be written never stops the run: the row then counts as a normal slot (fail closed). */
+function markRunGateFailed(root, branch, base, head, at) {
+  try { markGateFailed(crPaths(root, branch, base).counter, { head, at }); } catch { /* the row stays a normal slot */ }
+}
+
+async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined, env = process.env, onPhase = () => {} }, ctl) {
+  const serialCr = env.PRE_PR_SERIAL_CR === '1';
   const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
   const stampPath = path.join(root, STAMP_REL);
   const runId = randomUUID();
@@ -1719,8 +1883,11 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const results = [summary.result, ...checkGit(git, base, fetched)];
   // The fetch is the slow part of git:behind, so its time is the fetch plus the three git checks. git:branch and git:clean stay null.
   durations.set(results.find((r) => r.step === 'git:behind') ?? results[0], Math.round(performance.now() - gitT0));
-  const changes = head ? measure(() => changedFiles(git, base)) : { paths: [], result: result('changes', 'FAIL', 'cannot read HEAD') };
-  if (head) durations.set(changes.result, durations.get(changes));
+  // R1: the base is pinned once, after the fetch. The changes step, the guard and the CLI all read this commit.
+  const baseCommit = head ? resolveBaseCommit(git, base) : '';
+  const noBase = head && !baseCommit ? { paths: [], result: result('changes', 'FAIL', `cannot resolve the base commit (git merge-base HEAD ${FORK}/${base} failed): no change set and no CLI review without it`) } : null;
+  const changes = noBase ?? (head ? measure(() => changedFiles(git, base, baseCommit)) : { paths: [], result: result('changes', 'FAIL', 'cannot read HEAD') });
+  if (head && !noBase) durations.set(changes.result, durations.get(changes));
   results.push(changes.result);
   const docsVerified = isDocsOnly(changes.paths, cfg);
   const evidenceAt = results.length;
@@ -1731,14 +1898,25 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
   const stopCause = () => (keepGoing ? undefined : results.find((r) => r.status === 'FAIL' && r !== settledByGates));
   // The env step (after git:clean, before the gates): each gate that will run must find its packages. A missing one is ONE FAIL
   // line that names the package, the folders tried and the fix, and that gate does not run. A clean primary or CI adds no line.
-  const env = envCheck({ root, gates: gatesFor(changes.paths), changed: changes.paths });
-  if (env.fail) results.push(result('env', 'FAIL', env.fail, env.others));
-  if (env.note) results.push(result('env', 'NOTE', env.note));
-  for (const gate of env.gates) {
+  const envRes = envCheck({ root, gates: gatesFor(changes.paths, buildInputExternals(root)), changed: changes.paths });
+  if (envRes.fail) results.push(result('env', 'FAIL', envRes.fail, envRes.others));
+  if (envRes.note) results.push(result('env', 'NOTE', envRes.note));
+  const crArgs = () => ({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseCommit}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseCommit, crStore });
+  // The review starts before the first test gate when no fast step failed. A stale GREEN (settledByGates) is an evidence FAIL: it keeps the old order.
+  if (!serialCr && !skipCr && head !== null && !results.some((r) => r.status === 'FAIL')) ctl.cr = await startCrStep(crArgs());
+  let warnedGate = false;
+  for (const gate of envRes.gates) {
     const cause = stopCause();
-    results.push(env.blocked.has(gate.id) ? result(`gate:${gate.id}`, 'SKIP', 'not run: env failed, a package this gate needs is missing (see the env line)')
+    const gateResult = envRes.blocked.has(gate.id) ? result(`gate:${gate.id}`, 'SKIP', 'not run: env failed, a package this gate needs is missing (see the env line)')
       : cause ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL (pass --keep-going to run every gate)`)
-        : measure(() => runGate(withBase(gate, base), { root, exec, git })));
+        : measure(() => runGate(withBase(gate, base), { root, exec, git }));
+    results.push(gateResult);
+    if (ctl.cr && !ctl.cr.done && gateResult.status === 'FAIL' && !warnedGate) { warnedGate = true; log(gateFailedWhileReviewLine(gate.id)); }
+    if (ctl.cr) await tick(); // one loop turn between gates: the review's timers and events run (M1)
+  }
+  if (ctl.cr && !ctl.cr.done) {
+    // The last test gate ended and the review still runs: the run lock stops counting this run as heavy. A lock write that fails (EBUSY, EPERM) must not stop the run.
+    try { onPhase('cr'); } catch (err) { log(`pre-pr: could not set the run lock phase (${String(err?.message ?? err).split('\n')[0]}); the run goes on`); }
   }
   // A stale GREEN sha after a merge of the base: fix the body file once the gates passed on this head.
   const green = head ? updateGreen({ git, base, bodyPath, bodyText, head, paths: changes.paths, config: cfg, results, evidence: results[evidenceAt] }) : null;
@@ -1760,12 +1938,13 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const pssa = measure(() => pssaAdvisory({ root, paths: changes.paths, module: findPssa(), run: pssaRun }));
     if (pssa) results.push(pssa);
   }
-  const baseSha = resolveBase(git, base);
   const failedBefore = results.some((r) => r.status === 'FAIL');
-  results.push(await measureAsync(async () => (failedBefore && !skipCr
+  results.push(ctl.cr ? await awaitEarlyCr(ctl.cr, durations) : await measureAsync(async () => (failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseSha || base}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseSha, crStore }))));
+    : await runCodeRabbit(crArgs()))));
   const crStep = results[results.length - 1];
+  // Q1: a review that ran while a test gate failed is marked on its counter row, so it uses no slot (the first of a Chicago day) and is no finished run.
+  if (ctl.cr && crStep.runAt && results.some((r) => r.step.startsWith('gate:') && r.status === 'FAIL')) markRunGateFailed(root, branch, base, head, crStep.runAt);
   const crFinished = finishedRuns(root, branch, base);
   const partialSkip = crStep.skipReason === 'cap' ? { earned: crStep.partialEarned ?? 0, unreviewed: crStep.unreviewedFiles ?? 0 } : { earned: 0, unreviewed: 0 };
   // Rule A: a cap skip that only a partial run earns needs the PR body line. A finished run earns it with no line.
@@ -1791,14 +1970,14 @@ export async function runPrePr({ root, base = 'main', bodyText, bodyPath = null,
     const slim = results.map(({ step, status, detail }) => ({ step, status, detail }));
     const cr = results.find((r) => r.step === 'coderabbit');
     const crSkipped = cr?.status === 'SKIP';
-    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: crFinished, cr_partial_earned: partialSkip.earned, cr_unreviewed_files: partialSkip.unreviewed, cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', cr_answer_key: crSkipped && cr.skipReason === 'answer-key', answer_key_paths: crSkipped && cr.skipReason === 'answer-key' ? cr.answerKeyPaths ?? 0 : 0, docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
+    writeFileSync(stampPath, JSON.stringify({ head, branch, at: now.toISOString(), body_sha256: bodySha, base_commit: baseCommit || null, summary_sha256: summary.sha ?? null, summary_ok: summary.ok === true, cr_finished_runs: crFinished, cr_partial_earned: partialSkip.earned, cr_unreviewed_files: partialSkip.unreviewed, cr_skipped: crSkipped, cr_skip_reason: crSkipped ? cr.skipReason ?? null : null, cr_docs_only: crSkipped && cr.skipReason === 'docs-only', cr_answer_key: crSkipped && cr.skipReason === 'answer-key', answer_key_paths: crSkipped && cr.skipReason === 'answer-key' ? cr.answerKeyPaths ?? 0 : 0, docs_verified: docsVerified, cr_retry_minutes: crSkipped ? cr.retryMinutes ?? null : null, results: slim }, null, 2));
   }
   return { ok, results, lines, head, branch, logPath, stampPath: ok ? stampPath : null };
 }
 
 // ---------- CLI ----------
 
-const USAGE = 'usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--json]';
+const USAGE = 'usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--wait-lock] [--json]';
 
 function option(args, name) {
   const i = args.indexOf(name);
@@ -1812,29 +1991,89 @@ function repoRoot() {
 
 const EXIT_LOCK_WAIT = 75; // "the run lock said wait". Same code as the run-lock CLI (EXIT_WAIT in run-lock.mjs).
 
+const LOCK_ERROR_RETRIES = 3; // grant mode: a lock error is tried this often more, then the run stops (exit 75)
+const LOCK_ERROR_GAP_MS = 10_000;
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The run lock functions pre-pr uses. A test passes a fake: no test opens the live store. */
+const LIVE_LOCK = { mode: () => lockMode(), acquire: acquireRunLock, waitForGrant, setPhase, logRun };
+
+/**
+ * The facts the run lock records: the short head (null: no repo or no commit) and heavy (the change set runs the hooks-vitest gate). Read again at
+ * every attempt of a wait (L1). A change set that cannot be read counts as heavy: a run that is not known to be light waits rather than overloads.
+ */
+export function runFacts(root, base) {
+  const git = makeGit(root);
+  const headRead = git(['rev-parse', '--short=8', 'HEAD']);
+  const head = headRead.status === 0 && /^[0-9a-f]{8,40}$/.test(headRead.stdout.trim()) ? headRead.stdout.trim() : null;
+  const baseCommit = head ? resolveBaseCommit(git, base) : '';
+  const changed = baseCommit ? changedFiles(git, base, baseCommit) : null;
+  return { head, heavy: changed ? isHeavyRun(changed.paths, buildInputExternals(root)) : true };
+}
+
 /**
  * First step of a run (card coord-run-lock-and-go-row): ask the run lock for a slot. Warn mode only logs a refusal and the
  * run goes on. Grant mode stops here, before any gate, with the reason and the time to try again (exit 75, EXIT_LOCK_WAIT;
- * exit 3 stays pre-pr's own "stopped by an error", so a caller can tell the two apart). The lock is freed
- * at exit. A lock that cannot run (a broken store) never stops pre-pr: it is cooperative. GRANTED is not safe from a change of
- * main: the CodeRabbit step still fails when main changes during a CLI run.
+ * exit 3 stays pre-pr's own "stopped by an error", so a caller can tell the two apart). With `wait` (--wait-lock) the run waits up to 60 minutes for a
+ * place in turn, then exits 75. A lock error: in warn mode the run goes on; in grant mode it is tried 3 more times, 10 s apart, then exit 75 (M6).
+ * The lock is freed at exit. GRANTED is not safe from a change of main: the pin keeps the run on its base, and git:behind is a check at the start.
+ * Returns { file, onPhase } on a grant: onPhase(phase) writes the phase of this lock (test, then cr). Every dep is a seam for a test.
  */
-async function takeRunLock(bodyPath) {
+export async function takeRunLock({ bodyPath, wait = false, factsOf, lock = LIVE_LOCK, say = console.error, exit = process.exit, sleep = sleepMs, install = installRunLockHandlers, pid = process.pid }) {
+  install(); // before a wait: a wait record is freed at exit and on a signal
+  const holder = `pre-pr ${path.basename(bodyPath)}`;
+  const optsNow = () => ({ kind: 'pre-pr', pid, holder, ...factsOf() });
   let r;
-  try {
-    const headRead = spawnSync('git', ['rev-parse', '--short=8', 'HEAD'], { encoding: 'utf8', windowsHide: true });
-    const head = headRead.status === 0 && /^[0-9a-f]{8,40}$/.test(headRead.stdout.trim()) ? headRead.stdout.trim() : null; // null: no repo or no commit
-    r = await acquireRunLock({ kind: 'pre-pr', pid: process.pid, holder: `pre-pr ${path.basename(bodyPath)}`, head });
-  } catch (err) {
-    console.error(`pre-pr: the run lock is not available (${String(err?.message ?? err).split('\n')[0]}); the run goes on`);
-    return;
+  for (let attempt = 0; r === undefined; attempt += 1) {
+    try {
+      r = wait ? await lock.waitForGrant(optsNow) : await lock.acquire(optsNow());
+    } catch (err) {
+      const why = String(err?.message ?? err).split('\n')[0];
+      if (lock.mode() !== 'grant') { say(`pre-pr: the run lock is not available (${why}); the run goes on`); return undefined; }
+      if (attempt >= LOCK_ERROR_RETRIES) { say(`pre-pr: the run lock is not available (${why}) after ${attempt + 1} tries, in grant mode: stopped before any gate`); exit(EXIT_LOCK_WAIT); return undefined; }
+      say(`pre-pr: the run lock is not available (${why}); trying again in ${LOCK_ERROR_GAP_MS / 1000} s`);
+      await sleep(LOCK_ERROR_GAP_MS);
+    }
   }
-  for (const line of r.lines) console.error(`run-lock: ${line}`);
+  for (const line of r.lines ?? []) say(`run-lock: ${line}`);
   if (!r.granted) {
-    console.error('pre-pr: stopped before any gate (the run lock said wait); run it again after the time above');
-    process.exit(EXIT_LOCK_WAIT);
+    say('pre-pr: stopped before any gate (the run lock said wait); run it again after the time above');
+    exit(EXIT_LOCK_WAIT);
+    return undefined;
   }
-  installRunLockHandlers();
+  const facts = factsOf();
+  say(`PRE-PR START pid ${pid} head ${facts.head ?? 'none'} ${facts.heavy ? 'heavy' : 'light'} free ${r.freeGB} load ${r.loadPct} mode ${r.mode}`);
+  lock.logRun({ event: 'start', pid, head: facts.head, heavy: facts.heavy, free: r.freeGB, load: r.loadPct, mode: r.mode });
+  if (lock === LIVE_LOCK) runLog.started = { pid, head: facts.head ?? null, at: Date.now() }; // a test's fake lock leaves the process state alone
+  return { file: r.file, onPhase: (phase) => lock.setPhase({ file: r.file, pid, phase }) };
+}
+
+/** The START/END state of this process's row pair: started ({ pid, head, at }) once START is logged, ended once END is logged. */
+export const newRunLogState = () => ({ started: null, ended: false });
+const runLog = newRunLogState();
+
+/** The END line and its row in runs.jsonl: result, the first failing step and the wall time in minutes (one decimal), so the seat reads one file. */
+export function reportRunEnd({ pid, head, run, startedAt, now = Date.now(), lock = LIVE_LOCK, say = console.error, state = runLog }) {
+  const failing = run.results.find((x) => x.status === 'FAIL')?.step ?? null;
+  const result = run.ok ? 'PASS' : 'FAIL';
+  const minutes = Number(((now - startedAt) / MIN).toFixed(1));
+  state.ended = true;
+  say(`PRE-PR END pid ${pid} head ${head ?? 'none'} ${result} ${failing ?? '-'} ${minutes.toFixed(1)}`);
+  try { lock.logRun({ event: 'end', pid, head: head ?? null, result, failing, minutes }); } catch { /* a log problem never stops the run */ }
+}
+
+/**
+ * At exit: the END row of a run that logged START and no END (an error exit 3, a signal stop 130 or 143, any other process.exit). Result ERROR
+ * with the exit code. Synchronous (an 'exit' handler waits for no promise) and never throws. Returns true when it wrote the row.
+ */
+export function endRowAtExit(code, { state = runLog, lock = LIVE_LOCK, now = Date.now() } = {}) {
+  try {
+    if (!state.started || state.ended) return false;
+    state.ended = true;
+    const { pid, head, at } = state.started;
+    lock.logRun({ event: 'end', pid, head: head ?? null, result: 'ERROR', failing: null, exitCode: code, minutes: Number(((now - at) / MIN).toFixed(1)) });
+    return true;
+  } catch { return false; }
 }
 
 /**
@@ -1866,7 +2105,12 @@ export function killActiveCr(killer = (c) => killTree(c.pid)) {
  * exists, so a signal ends the process at once and a lock written by then stays. The next acquire drops it (dead pid).
  */
 export function installRunLockHandlers() {
-  process.on('exit', () => { try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ } });
+  // An error exit, or any exit with a review alive, must stop the review first: a review left alone costs a slot and its output is lost.
+  process.on('exit', (code) => {
+    try { killActiveCr(); } catch { /* the child may be gone already */ }
+    endRowAtExit(code); // START with no END (exit 3, a signal): one ERROR row, so the seat's END check never reads an open run
+    try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ }
+  });
   for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
     process.on(signal, () => { killActiveCr(); process.exit(code); });
   }
@@ -1884,11 +2128,18 @@ async function main() {
   }
   const timeoutProblem = crTimeoutProblem(args);
   if (timeoutProblem) console.error(`pre-pr: ${timeoutProblem}`);
-  await takeRunLock(bodyPath);
+  const root = repoRoot();
+  const base = option(args, '--base') ?? 'main';
+  const wait = args.includes('--wait-lock') || process.env.PRE_PR_WAIT_LOCK === '1';
+  const startedAt = Date.now();
+  const held = await takeRunLock({ bodyPath, wait, factsOf: () => runFacts(root, base) });
+  // The wait can take up to 60 minutes: read the body again after the grant (L1).
+  try { bodyText = readFileSync(path.resolve(bodyPath), 'utf8'); } catch (err) { console.error(`pre-pr: cannot read the body file ${bodyPath} after the wait (${String(err.message).split('\n')[0]})`); process.exit(2); }
   const run = await runPrePr({
-    root: repoRoot(), base: option(args, '--base') ?? 'main', bodyText, bodyPath: path.resolve(bodyPath), skipCr: args.includes('--skip-cr'),
-    keepGoing: args.includes('--keep-going'), crTimeout: crTimeoutMs(args), log: (line) => console.error(line),
+    root, base, bodyText, bodyPath: path.resolve(bodyPath), skipCr: args.includes('--skip-cr'),
+    keepGoing: args.includes('--keep-going'), crTimeout: crTimeoutMs(args), log: (line) => console.error(line), ...(held ? { onPhase: held.onPhase } : {}),
   });
+  if (held) reportRunEnd({ pid: process.pid, head: run.head ? run.head.slice(0, 8) : null, run, startedAt });
   if (args.includes('--json')) {
     console.log(JSON.stringify({ ok: run.ok, head: run.head, branch: run.branch, logPath: run.logPath, stampPath: run.stampPath, results: run.results.map(({ step, status, detail, notes }) => ({ step, status, detail, notes })) }));
   } else {
