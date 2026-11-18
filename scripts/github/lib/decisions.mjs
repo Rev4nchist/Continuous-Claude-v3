@@ -143,12 +143,17 @@ export function decisionRead({ step, key, head }) {
  * decisionUse({ step, key, head, label? }) -> { ok: true } | { ok: false, reason }. Uses the decision up (call it AFTER the action succeeds). Resets the miss count.
  * With a label, the row is used only when its label is that one, else { ok: false, reason: 'label-changed' } and the row stays: a tap that Dave recorded
  * between the read and the use is not used up by the decision that was read (PR 576 follow-up, item 2). No label: the row is used whatever its label.
+ * Two more guards, both optional (an old call behaves as before), both judged inside the lock on the stored row, after the label check:
+ * `at` (the tap time that was read): a row with another time is a newer tap of the same label, { ok: false, reason: 'tap-changed' } and it stays.
+ * `check(row) -> boolean`: false is { ok: false, reason: 'slot-changed' } and the row stays (the caller judges the row against a clock read at the use).
  */
-export function decisionUse({ step, key, head, label }) {
+export function decisionUse({ step, key, head, label, at, check }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-decision' };
   return update((store) => {
     const id = idOf({ step, key, head });
     if (typeof label === 'string' && store.decisions[id] && store.decisions[id].label !== label) return { ok: false, reason: 'label-changed' };
+    if (typeof at === 'string' && store.decisions[id] && store.decisions[id].at !== at) return { ok: false, reason: 'tap-changed' };
+    if (typeof check === 'function' && store.decisions[id] && check(store.decisions[id]) !== true) return { ok: false, reason: 'slot-changed' };
     const had = Boolean(store.decisions[id]);
     delete store.decisions[id];
     delete store.offers[id];
@@ -171,11 +176,34 @@ export function missBump({ step, key, head }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return MAX_REASKS + 1;
   const r = update((store) => {
     const id = idOf({ step, key, head });
-    const count = liveMisses(store.misses[id]) + 1;
-    store.misses[id] = { count, at: new Date().toISOString() };
+    const prior = store.misses[id];
+    const count = liveMisses(prior) + 1;
+    // Once the count is above MAX_REASKS the stop is on: a later miss must not restart its window (MISS_TTL_MS counts from `at`).
+    const at = count - 1 > MAX_REASKS ? prior.at : new Date().toISOString();
+    store.misses[id] = { count, at };
     return { ok: true, count };
   });
   return r.ok === true ? r.count : MAX_REASKS + 1;
+}
+
+/**
+ * dropKey({ steps, key }) -> { ok: true, dropped } | { ok: false, reason }. Removes every decision, offer and miss of the listed steps for the key,
+ * at ALL heads, in ONE locked update (a crash cannot leave half a drop). `dropped` is the number of rows removed. A bad call (no steps, an unknown
+ * step, no key) removes nothing and returns reason 'bad-drop: ...'. The key matches whole: PR 7 never takes the rows of PR 70.
+ * Used when a PR goes back to draft: a tap Dave made for the old question must not record for the new one (card prflow-paid-run-guard).
+ */
+export function dropKey({ steps, key } = {}) {
+  if (!Array.isArray(steps) || steps.length === 0 || !steps.every((s) => STEPS.includes(s)) || !isText(key)) return { ok: false, reason: 'bad-drop: steps and key are needed' };
+  const prefixes = steps.map((step) => `${step}\n${key}\n`); // the id of idOf, up to the head
+  return update((store) => {
+    let dropped = 0;
+    for (const group of [store.offers, store.decisions, store.misses]) {
+      for (const id of Object.keys(group)) {
+        if (prefixes.some((prefix) => id.startsWith(prefix))) { delete group[id]; dropped += 1; }
+      }
+    }
+    return { ok: true, dropped };
+  });
 }
 
 /** The open offers: [{ nonce, step, key, head, tree, cwd, spec, labels, at }]. The AskUserQuestion hook matches an answer against them. */

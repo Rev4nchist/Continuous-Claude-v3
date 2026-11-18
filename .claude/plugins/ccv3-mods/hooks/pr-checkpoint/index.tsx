@@ -38,10 +38,13 @@ import {
   clip,
   costText,
   coversRows,
+  dropFailedText,
+  dropTapsFlags,
   editedPr,
   engineArgv,
   factsFlags,
   firstLine,
+  flagFailedText,
   ignoredNote,
   isPathwayFile,
   isSlotStateFile,
@@ -56,6 +59,7 @@ import {
   ledgerFlags,
   lockDeny,
   lockWarn,
+  markerFailedText,
   mayBeGated,
   movedText,
   namesMarker,
@@ -73,6 +77,9 @@ import {
   pathwayOfAnswer,
   pressNotice,
   recordAllowsLabel,
+  REPICK_UNREADABLE,
+  repickFlags,
+  repickSinceOf,
   resolveBody,
   riskHighOf,
   slotDropArgv,
@@ -272,7 +279,15 @@ const applyRecord = async ($: EngineInterface, root: string, record: CheckpointR
   if (ran.code !== 0) return { stage: 'apply', text: lastLine(ran.err || ran.out) || `--apply exited ${ran.code}` }
   const applied: CheckpointRecord = { ...record, state: 'applied', appliedAt: await $.clock.now() }
   await $.store.set(`${RECORD_PREFIX}${record.pr}`, applied)
-  if (applied.decided_by === 'dave') await $.store.delete(`${REPICK_PREFIX}${record.pr}`) // Dave's pick is applied: the re-pick is done
+  if (applied.decided_by === 'dave') {
+    // Dave's pick is applied: the re-pick is done. A delete that throws must not turn a good apply into "not recorded" or skip the queue add:
+    // the marker then stays, and the next call asks again (a stale marker only costs one more question).
+    try {
+      await $.store.delete(`${REPICK_PREFIX}${record.pr}`)
+    } catch {
+      // Own try: the record above is applied and is reported.
+    }
+  }
   await enqueueApplied($, applied)
   return { stage: 'done', record: applied }
 }
@@ -295,7 +310,8 @@ const recordPathway = async (
 ): Promise<Outcome> => {
   // Always --pr: with the ledger on the engine looks for Dave's tap under it, with the flag off it ignores it. The mod and the engine may
   // read different configs (session root against the PR checkout), so the mod never guesses which one is on.
-  const prFlag = ['--pr', String(a.pr)]
+  // A re-pick marker adds --repick-since: a tap made before the PR went back to draft is refused (the engine fails closed on an unreadable value).
+  const prFlag = ['--pr', String(a.pr), ...repickFlags(repickSinceOf(await $.store.get(`${REPICK_PREFIX}${a.pr}`)))]
   const ran = await run($, engineArgv(await engineRoot($, a.root), '--confirm', pathway, '--by', by, '--body', a.body, ...prFlag), a.root, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return { stage: 'confirm', text: `--confirm could not run (${ran.text})` }
   if (ran.code !== 0) return { stage: 'confirm', text: lastLine(ran.err || ran.out) || `--confirm exited ${ran.code}` }
@@ -471,23 +487,67 @@ async function changePick($: EngineInterface, root: string, pr: number, head: st
   const undone = await run($, undoArgv(pr), root, VIEW_TIMEOUT_MS)
   if (!undone.ok) return undoFailedText(pr, undone.text)
   if (undone.code !== 0) return undoFailedText(pr, firstLine(undone.err || undone.out) || `gh exited ${undone.code}`)
-  await releaseReturned($, pr)
-  return null
+  return cleanupReturn($, root, pr, null)
 }
 
 /**
- * A PR Dave returned to draft loses its round grant and its place in the free-slot queue: the queue posts `@coderabbitai review` for an item it
- * holds, and a PR in draft must get no review request. A failure never stops the new question (the queue ticks on and reports a stuck item).
+ * Asks the engine to drop the stored taps of a PR that went back to draft (`--drop-taps`: review and paid-round, every head). Null: done.
+ * A string is the stop text: the taps could not be cleared, so nothing is asked and nothing is recorded. Never throws.
  */
-async function releaseReturned($: EngineInterface, pr: number): Promise<void> {
+const dropTaps = async ($: EngineInterface, root: string, pr: number): Promise<string | null> => {
   try {
-    await $.store.set(`${REPICK_PREFIX}${pr}`, { at: await $.clock.now() })
+    const ran = await run($, engineArgv(await engineRoot($, root), ...dropTapsFlags(pr)), root, ENGINE_TIMEOUT_MS)
+    if (!ran.ok) return dropFailedText(pr, ran.text)
+    return ran.code === 0 ? null : dropFailedText(pr, lastLine(ran.err || ran.out) || `exit ${ran.code}`)
+  } catch (err) {
+    return dropFailedText(pr, message(err))
+  }
+}
+
+/**
+ * The cleanup of a PR that went back to draft, the same steps for a mod undo and for a return by hand: a fresh re-pick marker `{ head?, at }`, the round
+ * grant deleted, the PR's entry dropped from the free-slot queue (it posts `@coderabbitai review` for an item it holds, and a PR in draft must get no
+ * review request), then the stored taps dropped, then the proof `dropped: true`. The grant and the queue steps each have their own try, so a failure of
+ * one never skips the next. The marker time also makes the engine read an older tap as stale (--repick-since), whatever the drop did.
+ * `strict`: the marker was unreadable, so its repair must be saved: a failed write is a stop (the old marker keeps the engine rejecting old taps).
+ * Otherwise a failed marker write is tolerated (only the second layer; the drop below still runs). Null: done. A string: the stop text.
+ */
+const cleanupReturn = async ($: EngineInterface, root: string, pr: number, head: string | null, strict = false): Promise<string | null> => {
+  const marker: Record<string, unknown> = { ...(head === null ? {} : { head }), at: await $.clock.now() }
+  try {
+    await $.store.set(`${REPICK_PREFIX}${pr}`, marker)
+  } catch {
+    if (strict) return markerFailedText(pr)
+  }
+  try {
     await $.store.delete(`${GRANT_PREFIX}${pr}`)
+  } catch {
+    // The grant belongs to the old record; the queue drop below still runs.
+  }
+  try {
     const found = await slotScript($)
     if (found) await run($, slotDropArgv(found.script, pr), found.root, VIEW_TIMEOUT_MS)
   } catch {
     // Diagnostics are the queue's own toast; the re-pick goes on.
   }
+  return dropOnce($, root, pr, marker)
+}
+
+/**
+ * The drop, and the proof that it worked: after a good drop the marker gets `dropped: true`. A marker without it means no drop has succeeded yet, so
+ * every call that finds such a marker runs the drop again (a stale review tap and a paid-round row must not outlive the return to draft). If the flag
+ * cannot be saved the answer is a stop (the taps are cleared, nothing is asked): a question now would get a tap that the next call drops as stale.
+ * Null: done. A string: the stop text.
+ */
+const dropOnce = async ($: EngineInterface, root: string, pr: number, marker: Record<string, unknown>): Promise<string | null> => {
+  const stop = await dropTaps($, root, pr)
+  if (stop !== null) return stop
+  try {
+    await $.store.set(`${REPICK_PREFIX}${pr}`, { ...marker, dropped: true })
+  } catch {
+    return flagFailedText(pr)
+  }
+  return null
 }
 
 /** `prepare`, and for a ready PR with a record the change question first. A string is the final answer; a Prepared goes on. */
@@ -505,13 +565,27 @@ const prepareChanging = async ($: EngineInterface, root: string, pr: number, bod
  * A draft PR whose applied record is of this head was returned to draft (the change pick, R3): Dave changed his pick, so auto-confirm must not record
  * it for him. The record outlives the undo, so the test holds on every later call, whichever session makes it and whatever failed in between.
  */
-const returnedToDraft = async ($: EngineInterface, pending: Pending): Promise<boolean> => {
+const returnedToDraft = async ($: EngineInterface, pending: Pending, drafted = true): Promise<{ repick: boolean; stop: string | null }> => {
+  const { pr, prHead, root } = pending
+  // `drafted`: the PR was just read as a draft (prepare). A stored pending checkpoint (a bare /pathway, the phone) proves no draft, so an applied record
+  // alone is no proof of a return there: only a marker the mod already wrote counts.
+  const record = drafted ? readRecord(await $.store.get(`${RECORD_PREFIX}${pr}`)) : null
+  const applied = record !== null && record.state === 'applied' && record.head === prHead ? record : null
   // The re-pick marker outlives the record state and the head: a failed --apply leaves the record `confirmed`, and a new push changes the head.
-  if ((await $.store.get(`${REPICK_PREFIX}${pending.pr}`)) != null) return true
-  const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pending.pr}`))
-  const returned = record !== null && record.state === 'applied' && record.head === pending.prHead
-  if (returned) await $.store.set(`${REPICK_PREFIX}${pending.pr}`, { head: pending.prHead, at: await $.clock.now() })
-  return returned
+  const stored = await $.store.get(`${REPICK_PREFIX}${pr}`)
+  if (stored == null) {
+    if (applied === null) return { repick: false, stop: null }
+    // An undo by another session or by hand: no mod code ran, so no cleanup ran. The marker time makes the engine read an older tap as stale.
+    return { repick: true, stop: await cleanupReturn($, root, pr, prHead) }
+  }
+  const marker = typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {}
+  // A marker with no readable time keeps the engine rejecting every tap, even one on the new offer, so it is repaired first (flag or no flag).
+  if (repickSinceOf(marker) === REPICK_UNREADABLE) return { repick: true, stop: await cleanupReturn($, root, pr, prHead, true) }
+  // `dropped: true` is the proof of ONE return. A record applied after the marker is a later ready period: its taps are not cleaned yet.
+  const appliedAt = applied?.appliedAt
+  if (typeof appliedAt === 'number' && Number.isFinite(appliedAt) && appliedAt > (marker.at as number)) return { repick: true, stop: await cleanupReturn($, root, pr, prHead) }
+  // Without the flag (the drop failed, or the marker is older than the flag) the drop runs again.
+  return { repick: true, stop: marker.dropped === true ? null : await dropOnce($, root, pr, marker) }
 }
 
 // ---- the question, asked by the model (M1, checkpoint.ledger) --------------------------------------------------------------------------
@@ -525,7 +599,9 @@ const returnedToDraft = async ($: EngineInterface, pending: Pending): Promise<bo
  * Null: the engine printed no ledger block (the flag is off for that checkout, or an old engine), so the caller asks in the dialog as before.
  */
 const ledgerBlock = async ($: EngineInterface, root: string, pending: Pending, askAnyway: boolean): Promise<LedgerBlock | string | null> => {
-  const ran = await run($, engineArgv(root, ...ledgerFlags(pending.pr, askAnyway, pending.dependabot === true)), pending.root, ENGINE_TIMEOUT_MS)
+  // The marker time reaches the engine as --repick-since: a tap made before the PR went back to draft is stale there, even when the drop did not run.
+  const since = repickSinceOf(await $.store.get(`${REPICK_PREFIX}${pending.pr}`))
+  const ran = await run($, engineArgv(root, ...ledgerFlags(pending.pr, askAnyway, pending.dependabot === true, since)), pending.root, ENGINE_TIMEOUT_MS)
   if (!ran.ok) return `pr-checkpoint did not finish the question (timed out or failed to start: ${ran.text}). Nothing was recorded. The PR stays a draft.`
   if (ran.code !== 0) return `pr-checkpoint exited ${ran.code}: ${lastLine(ran.err || ran.out)}. Nothing was recorded. The PR stays a draft.`
   return parseResult(ran.out)?.ledger ?? null
@@ -561,7 +637,9 @@ const interactiveText = async ($: EngineInterface, root: string, pr: number, bod
   // The flag is read where the engine runs (the PR checkout), not in the session root: the two configs may differ.
   const ledgerFlag = await ledgerOn($, prepared.pending.root)
   // A PR returned to draft is never auto-confirmed: Dave changed his pick, so he is asked (the question opens with --ask-anyway).
-  const repick = await returnedToDraft($, prepared.pending)
+  const returned = await returnedToDraft($, prepared.pending)
+  if (returned.stop !== null) return returned.stop // the taps could not be cleared: ask nothing, record nothing
+  const repick = returned.repick
   const auto = repick ? null : await autoConfirm($, prepared.pending)
   if (auto?.kind === 'done') {
     await finishAuto($, auto.record, prepared.pending.result.auto.band)
@@ -702,10 +780,13 @@ const sayer = (trace: Trace) => (outcome: string, text: string, context?: string
 }
 
 /** The checkpoint question for a pending checkpoint, from a command. The reply carries what was recorded; the model gets the same line as hidden context. */
-const askPending = async ($: EngineInterface, pending: Pending, trace: Trace): Promise<CommandReply> => {
+const askPending = async ($: EngineInterface, pending: Pending, trace: Trace, drafted = true): Promise<CommandReply> => {
   const say = sayer(trace)
   if (!takeDialog()) return say('busy', BUSY_TEXT)
   try {
+    // The same guard as the tool: an outstanding cleanup of a PR that went back to draft (a drop that failed, a flag not saved) opens no question.
+    const returned = await returnedToDraft($, pending, drafted)
+    if (returned.stop !== null) return say('refused', returned.stop)
     const asked = await askCheckpoint($, pending)
     return asked.recorded ? say('recorded', asked.text, [asked.text]) : say('asked', asked.text)
   } finally {
@@ -726,7 +807,7 @@ const bareCommand = async ($: EngineInterface, e: CommandEvent, live: boolean, p
   if (pending) {
     trace.root = await rootOf($)
     trace.checkout = pending.root
-    return (await ledgerRoute($, e, pending.pr, trace)) ?? askPending($, pending, trace)
+    return (await ledgerRoute($, e, pending.pr, trace)) ?? askPending($, pending, trace, false) // a stored pending checkpoint: no fresh draft read
   }
   if ((await loadAsks($)).length === 0) return say('need-pr', NEED_PR)
   if (!takeDialog()) return say('busy', BUSY_TEXT)
@@ -781,7 +862,7 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   }
   if (phone && parsed.word === null) {
     trace.checkout = phone.root
-    return askPending($, phone, trace)
+    return askPending($, phone, trace, false) // a stored pending checkpoint: no fresh draft read
   }
   const prepared = await prepare($, root, pr, body)
   if (!prepared.ok) return say('refused', prepared.text)
@@ -798,8 +879,14 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   // so only his tap on the exact label records.
   if (pathway === 'none' && e.origin.kind !== 'composer' && isQueueBand(result.auto.band)) return askPending($, next, trace)
   // A typed paid word shows no price, so it raises the one question: his tap on the paid row (price in the label) is the yes.
-  if (isPaidPathway(pathway)) return askPending($, next, trace)
+  if (isPaidPathway(pathway)) {
+    const reply = await askPending($, next, trace)
+    return { ...reply, text: `${reply.text}${ignoredNote(e.args)}` }
+  }
   const by = parsed.word === 'accept' && !onlyDaveRecordsNone(pathway, result.auto.band) ? 'default' : 'dave'
+  // The same guard as the tool: an outstanding cleanup of a PR that went back to draft records nothing. `next` was just read as a draft (prepare).
+  const returned = await returnedToDraft($, next)
+  if (returned.stop !== null) return say('refused', returned.stop)
   // Only a composer command or a bridge command for the pending PR gets here (the check above). The bridge is Remote Control, not Dave's keyboard.
   const via = e.origin.kind === 'bridge' ? 'bridge' : 'composer'
   const out = await recordPathway($, { pr, root: next.root, body: next.body, result }, pathway, by, via)
