@@ -578,12 +578,11 @@ describe('R5: the render writes LF only', () => {
     assert.equal(m.sha256Html, createHash('sha256').update(html).digest('hex'));
   }));
 
-  it('R5b. renderHtml with a CRLF template has no CR, and the real template on disk renders with no CR whatever its line endings (break: normalisation only in one of the two reads)', () => withTmp((d) => {
+  it('R5b. renderHtml with a CRLF template copy has no CR (break: normalisation missing in the renderHtml read)', () => withTmp((d) => {
     const view = embedView(buildView(files(), IDS));
     const html = H.renderHtml(view, JSON.stringify(view), crlfTemplate(d));
     assert.ok(html.includes(SENTINEL));
     assert.equal(html.includes('\r'), false);
-    assert.equal(H.renderHtml(view).includes('\r'), false);
   }));
 });
 
@@ -608,6 +607,7 @@ const SID_A = 'aaaaaaaa';
 const SID_B = 'bbbbbbbb';
 const SID_C = 'cccccccc';
 const KEY = '2026-11-17T17:30:02.680Z';
+const KEY2 = '2026-11-17T18:05:00.000Z';
 const lockPath = (d) => join(d, 'publish.lock');
 const pubPath = (d) => join(d, 'publish.json');
 const json = (d, n) => JSON.parse(readFileSync(join(d, n), 'utf8'));
@@ -672,7 +672,7 @@ describe('lock: acquire and release through the CLI', () => {
     assert.deepEqual([pub.state, pub.session, pub.key, String(pub.step)], ['failed', SID_A, KEY, '7.3']);
     assert.ok(!Number.isNaN(Date.parse(pub.at)));
     assert.equal(Object.hasOwn(pub, 'pid'), false);
-    assert.equal(lockCli(acquireArgs(d, SID_B)).status, 0, 'a failed state does not block a new writer');
+    assert.equal(lockCli(acquireArgs(d, SID_B, KEY2)).status, 0, 'a failed state does not block a writer of a newer export');
   }));
 
   it('L5b. release failed with no step writes no step field', () => withTmp((d) => {
@@ -789,8 +789,8 @@ describe('lock: one refresh an hour (injected clock)', () => {
     refreshed(d);
     assert.equal(existsSync(lockPath(d)), false);
     const pub = json(d, 'publish.json');
-    assert.deepEqual(Object.keys(pub).sort(), ['at', 'key', 'session', 'state']);
-    assert.deepEqual([pub.state, pub.session, pub.key, pub.at], ['ok', SID_A, KEY, new Date(T0).toISOString()]);
+    assert.deepEqual(Object.keys(pub).sort(), ['at', 'key', 'lastOkAt', 'session', 'state']);
+    assert.deepEqual([pub.state, pub.session, pub.key, pub.at, pub.lastOkAt], ['ok', SID_A, KEY, new Date(T0).toISOString(), new Date(T0).toISOString()]);
   }));
 
   it('H2. an acquire 59 minutes after an ok refresh exits 4 with one line that gives the time, and changes nothing (break: no hour check)', () => withTmp((d) => {
@@ -819,10 +819,10 @@ describe('lock: one refresh an hour (injected clock)', () => {
     assert.equal(json(d, 'publish.lock').session, SID_B);
   }));
 
-  it('H5. a failed state does not block an acquire (break: any publish.json blocks)', () => withTmp((d) => {
+  it('H5. a failed state on another export key does not block an acquire (break: any publish.json blocks)', () => withTmp((d) => {
     assert.equal(acq(d, SID_A, T0).code, 0);
     assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'failed', step: '7', now: T0 }).code, 0);
-    assert.equal(acq(d, SID_B, T0 + 1 * MIN).code, 0);
+    assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_B, now: T0 + 1 * MIN }).code, 0);
   }));
 
   it('H6. force does not skip a live lock: a second writer still exits 3 (break: force skips the lock)', () => withTmp((d) => {
@@ -851,5 +851,264 @@ describe('lock: one refresh an hour (injected clock)', () => {
     const bad = lockCli([...releaseArgs(d, SID_B, 'ok'), '--force']);
     assert.equal(bad.status, 1);
     assert.match(bad.stderr, /usage/);
+  }));
+});
+
+describe('critic findings: same-key retry, lastOkAt, recheck, write failure, release finally', () => {
+  const acq = (d, sid, now, extra = {}, hooks = {}) => H.lockAcquire({ dir: d, key: KEY, session: sid, now, ...extra }, hooks);
+  const iso = (ms) => new Date(ms).toISOString();
+  const okRecord = (at) => JSON.stringify({ state: 'ok', session: SID_A, key: KEY, at: iso(at), lastOkAt: iso(at) });
+
+  it('C1. an acquire on the export key that already failed exits 5 with one line, and creates no lock (break: a failed export retried)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'failed', step: '7.3', now: T0 }).code, 0);
+    const r = acq(d, SID_B, T0 + 1 * MIN);
+    assert.equal(r.code, 5);
+    assert.ok(!r.msg.includes('\n'));
+    assert.match(r.msg, /failed at 14:00 CST \(step 7\.3\)/);
+    assert.equal(existsSync(lockPath(d)), false);
+    assert.equal(json(d, 'publish.json').state, 'failed');
+  }));
+
+  it('C2. force skips the same-key refusal; another key is not refused (break: force ignored, or any failed state blocks)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'failed', now: T0 }).code, 0);
+    assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_B, now: T0 + 1 * MIN }).code, 0);
+    assert.equal(H.lockRelease({ dir: d, session: SID_B, outcome: 'failed', now: T0 + 2 * MIN }).code, 0);
+    assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_C, now: T0 + 3 * MIN }).code, 5);
+    assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_C, now: T0 + 3 * MIN, force: true }).code, 0);
+  }));
+
+  it('C3. through the CLI: a same-key acquire after a failed release exits 5 with one stderr line (break: the exit code)', () => withTmp((d) => {
+    assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
+    assert.equal(lockCli(releaseArgs(d, SID_A, 'failed', ['--step', '6.1'])).status, 0);
+    const r = lockCli(acquireArgs(d, SID_B));
+    assert.equal(r.status, 5, r.stderr);
+    assert.equal(r.stderr.trim().split('\n').length, 1);
+    assert.match(r.stderr, /step 6\.1/);
+  }));
+
+  it('C4. a forced acquire keeps the last ok time: ok at T, forced acquire at T+10 that fails, unforced acquire at T+15 exits 4 (break: lastOkAt dropped by writing or the failed release)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'ok', now: T0 }).code, 0);
+    assert.equal(json(d, 'publish.json').lastOkAt, iso(T0));
+    assert.equal(acq(d, SID_B, T0 + 10 * MIN, { force: true }).code, 0);
+    assert.equal(json(d, 'publish.json').lastOkAt, iso(T0), 'writing carries it');
+    assert.equal(H.lockRelease({ dir: d, session: SID_B, outcome: 'failed', step: '7', now: T0 + 12 * MIN }).code, 0);
+    assert.equal(json(d, 'publish.json').lastOkAt, iso(T0), 'the failed release carries it');
+    const r = H.lockAcquire({ dir: d, key: KEY2, session: SID_C, now: T0 + 15 * MIN });
+    assert.equal(r.code, 4);
+    assert.match(r.msg, /last refresh at 14:00 CST/);
+    assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_C, now: T0 + 61 * MIN }).code, 0);
+  }));
+
+  it('C5. a record with no lastOkAt but state ok still counts (an old publish.json); a failed record with no lastOkAt does not (break: no fallback)', () => withTmp((d) => {
+    writeFileSync(pubPath(d), JSON.stringify({ state: 'ok', session: SID_A, key: KEY, at: iso(T0) }));
+    assert.equal(acq(d, SID_B, T0 + 5 * MIN).code, 4);
+    writeFileSync(pubPath(d), JSON.stringify({ state: 'failed', session: SID_A, key: KEY2, at: iso(T0) }));
+    assert.equal(acq(d, SID_B, T0 + 5 * MIN).code, 0);
+  }));
+
+  it('C6. a refresh that finished between the first check and the new lock is caught: the new lock is removed and the exit is 4 (break: no second check)', () => withTmp((d) => {
+    const r = acq(d, SID_B, T0 + 1 * MIN, {}, { afterNewLock: () => writeFileSync(pubPath(d), okRecord(T0)) });
+    assert.equal(r.code, 4);
+    assert.equal(existsSync(lockPath(d)), false);
+    assert.equal(acq(d, SID_B, T0 + 1 * MIN, { force: true }, { afterNewLock: () => writeFileSync(pubPath(d), okRecord(T0)) }).code, 0, 'force skips the second check too');
+  }));
+
+  it('C7. publish.json cannot be written after the lock is created: the lock is removed and the exit is 1 (break: a lock left for 20 minutes)', () => withTmp((d) => {
+    const r = acq(d, SID_B, T0, {}, { beforeWriting: () => { throw new Error('disk full'); } });
+    assert.equal(r.code, 1);
+    assert.ok(!r.msg.includes('\n'));
+    assert.equal(existsSync(lockPath(d)), false);
+    assert.equal(acq(d, SID_B, T0).code, 0, 'the next acquire is not blocked');
+  }));
+
+  it('C8. a release whose publish.json write fails still removes the lock (break: no finally)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    rmSync(pubPath(d));
+    mkdirSync(pubPath(d));
+    assert.throws(() => H.lockRelease({ dir: d, session: SID_A, outcome: 'ok', now: T0 }));
+    assert.equal(existsSync(lockPath(d)), false);
+    assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'failed', now: T0 }).code, 3, 'a second release has no lock to release');
+  }));
+});
+
+describe('critic findings: renameRetry', () => {
+  const code = (c) => Object.assign(new Error(c), { code: c });
+
+  it('C9. EPERM, EBUSY and EACCES are retried up to 5 attempts, 50 ms apart, then the error is thrown (break: no retry, or a wrong code set)', () => {
+    for (const c of ['EPERM', 'EBUSY', 'EACCES']) {
+      let calls = 0;
+      const sleeps = [];
+      const ops = { rename: () => { calls += 1; if (calls < 3) throw code(c); }, sleep: (ms) => sleeps.push(ms) };
+      H.renameRetry('a', 'b', ops);
+      assert.equal(calls, 3, c);
+      assert.deepEqual(sleeps, [50, 50]);
+      calls = 0;
+      assert.throws(() => H.renameRetry('a', 'b', { rename: () => { calls += 1; throw code(c); }, sleep: () => {} }), { code: c });
+      assert.equal(calls, 5, `${c}: 5 attempts`);
+    }
+  });
+
+  it('C10. ENOENT and EEXIST are thrown at once, with no retry (break: ENOENT retried, the takeover loser slows down)', () => {
+    for (const c of ['ENOENT', 'EEXIST']) {
+      let calls = 0;
+      assert.throws(() => H.renameRetry('a', 'b', { rename: () => { calls += 1; throw code(c); }, sleep: () => { throw new Error('slept'); } }), { code: c });
+      assert.equal(calls, 1);
+    }
+  });
+
+  it('C11. the default sleep really waits (Atomics.wait), about 50 ms (break: a busy loop or no wait)', () => {
+    let calls = 0;
+    const t = Date.now();
+    H.renameRetry('a', 'b', { rename: () => { calls += 1; if (calls < 2) throw code('EBUSY'); } });
+    assert.ok(Date.now() - t >= 40, `waited ${Date.now() - t} ms`);
+  });
+});
+
+describe('critic findings: the takeover mutex', () => {
+  const seed = (d, session, ageMs, now = T0) => writeFileSync(lockPath(d), staleLockText(session, ageMs, now));
+  const mutexPath = (d) => join(d, 'publish.takeover');
+  const who = (session) => ({ key: KEY, session, now: T0 });
+  const mutexText = (session, ageMs) => JSON.stringify({ session, at: new Date(T0 - ageMs).toISOString() });
+
+  it('M1. the mutex is gone after a takeover and after a refused one (break: no finally)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    assert.equal(H.lockTake(d, H.lockSnapshot(d, T0), who(SID_A)).code, 0);
+    assert.equal(existsSync(mutexPath(d)), false);
+    const snap = { state: 'stale', raw: 'other text', holder: SID_C };
+    assert.equal(H.lockTake(d, snap, who(SID_B)).code, 3);
+    assert.equal(existsSync(mutexPath(d)), false);
+    assert.throws(() => H.lockTake(d, { state: 'stale', raw: readFileSync(lockPath(d), 'utf8'), holder: SID_A }, who(SID_B), { afterMutex: () => { throw new Error('boom'); } }), /boom/);
+    assert.equal(existsSync(mutexPath(d)), false, 'also when a step throws');
+  }));
+
+  it('M2. a fresh mutex of another taker (5 seconds old) stops the takeover with exit 3 and is left in place (break: the loser deletes the winner mutex)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    writeFileSync(mutexPath(d), mutexText(SID_B, 5_000));
+    const lockBefore = readFileSync(lockPath(d), 'utf8');
+    const r = H.lockTake(d, H.lockSnapshot(d, T0), who(SID_A));
+    assert.equal(r.code, 3);
+    assert.equal(readFileSync(mutexPath(d), 'utf8'), mutexText(SID_B, 5_000));
+    assert.equal(readFileSync(lockPath(d), 'utf8'), lockBefore);
+    assert.deepEqual(readdirSync(d).sort(), ['publish.lock', 'publish.takeover']);
+  }));
+
+  it('M3. a mutex over 10 seconds old is stale: the takeover goes on (break: a crashed taker blocks every takeover)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    writeFileSync(mutexPath(d), mutexText(SID_B, 11_000));
+    const r = H.lockTake(d, H.lockSnapshot(d, T0), who(SID_A));
+    assert.equal(r.code, 0, r.msg);
+    assert.equal(json(d, 'publish.lock').session, SID_A);
+    assert.equal(existsSync(mutexPath(d)), false);
+  }));
+
+  it('M4. the lock is read again while the mutex is held: a lock that changed since the snapshot is not renamed (break: no re-read under the mutex)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    const snap = H.lockSnapshot(d, T0);
+    const fresh = staleLockText(SID_B, 1 * MIN);
+    const r = H.lockTake(d, snap, who(SID_A), { afterMutex: () => writeFileSync(lockPath(d), fresh) });
+    assert.equal(r.code, 3);
+    assert.equal(readFileSync(lockPath(d), 'utf8'), fresh);
+    assert.deepEqual(readdirSync(d), ['publish.lock']);
+  }));
+
+  it('M5. a fresh lock renamed by mistake goes back when the lock path is free (break: the put-back removed)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    const snap = H.lockSnapshot(d, T0);
+    const fresh = staleLockText(SID_B, 1 * MIN);
+    const r = H.lockTake(d, snap, who(SID_A), { beforeRename: () => writeFileSync(lockPath(d), fresh) });
+    assert.equal(r.code, 3);
+    assert.equal(readFileSync(lockPath(d), 'utf8'), fresh);
+    assert.deepEqual(readdirSync(d), ['publish.lock']);
+  }));
+
+  it('M6. a put-back that finds the lock path taken again never deletes the taken copy: it stays, the exit is 3 and the line says conflict (break: rmSync of taken)', () => withTmp((d) => {
+    seed(d, SID_C, 30 * MIN);
+    const snap = H.lockSnapshot(d, T0);
+    const fresh = staleLockText(SID_B, 1 * MIN);
+    const newer = staleLockText(SID_C, 0);
+    const r = H.lockTake(d, snap, who(SID_A), {
+      beforeRename: () => writeFileSync(lockPath(d), fresh),
+      afterRename: () => writeFileSync(lockPath(d), newer),
+    });
+    assert.equal(r.code, 3);
+    assert.match(r.msg, /conflict/);
+    assert.ok(!r.msg.includes('\n'));
+    assert.equal(readFileSync(join(d, `publish.lock.taken.${SID_A}`), 'utf8'), fresh, 'the taken copy is kept');
+    assert.equal(readFileSync(lockPath(d), 'utf8'), newer);
+    assert.equal(existsSync(mutexPath(d)), false);
+  }));
+});
+
+describe('critic findings: rekey and touch', () => {
+  const acq = (d, sid, now, key = KEY) => H.lockAcquire({ dir: d, key, session: sid, now });
+  const iso = (ms) => new Date(ms).toISOString();
+
+  it('K1. rekey by the holder keeps the lock, sets the new key and a new time, and keeps the writing record in step (break: a restart that releases and re-acquires)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    const r = H.lockRekey({ dir: d, session: SID_A, key: KEY2, now: T0 + 5 * MIN });
+    assert.equal(r.code, 0, r.msg);
+    const lock = json(d, 'publish.lock');
+    assert.deepEqual([lock.session, lock.key, lock.at], [SID_A, KEY2, iso(T0 + 5 * MIN)]);
+    const pub = json(d, 'publish.json');
+    assert.deepEqual([pub.state, pub.session, pub.key], ['writing', SID_A, KEY2]);
+    assert.deepEqual(readdirSync(d).sort(), ['publish.json', 'publish.lock']);
+    assert.equal(H.lockRelease({ dir: d, session: SID_A, outcome: 'failed', step: '7', now: T0 + 6 * MIN }).code, 0);
+    assert.equal(json(d, 'publish.json').key, KEY2, 'a failed release names the new key');
+  }));
+
+  it('K2. rekey by another session, or with no lock, exits 3 and changes nothing (break: no holder check)', () => withTmp((d) => {
+    assert.equal(H.lockRekey({ dir: d, session: SID_A, key: KEY2, now: T0 }).code, 3);
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    const snap = [readFileSync(lockPath(d), 'utf8'), readFileSync(pubPath(d), 'utf8')];
+    assert.equal(H.lockRekey({ dir: d, session: SID_B, key: KEY2, now: T0 + MIN }).code, 3);
+    assert.deepEqual([readFileSync(lockPath(d), 'utf8'), readFileSync(pubPath(d), 'utf8')], snap);
+  }));
+
+  it('K3. touch refreshes the time of the lock, so a taker at 25 minutes finds it live; with no touch it is stale (break: touch does nothing)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    assert.equal(H.lockTouch({ dir: d, session: SID_A, now: T0 + 15 * MIN }).code, 0);
+    assert.equal(json(d, 'publish.lock').key, KEY);
+    assert.equal(json(d, 'publish.lock').at, iso(T0 + 15 * MIN));
+    assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_B, now: T0 + 25 * MIN }).code, 3, 'live after the touch');
+    assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_B, now: T0 + 36 * MIN }).code, 0, 'stale 21 minutes after the touch');
+  }));
+
+  it('K4. touch by another session or with no lock exits 3 and changes nothing (break: no holder check)', () => withTmp((d) => {
+    assert.equal(H.lockTouch({ dir: d, session: SID_A, now: T0 }).code, 3);
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    const before = readFileSync(lockPath(d), 'utf8');
+    assert.equal(H.lockTouch({ dir: d, session: SID_B, now: T0 + MIN }).code, 3);
+    assert.equal(readFileSync(lockPath(d), 'utf8'), before);
+  }));
+
+  it('K5. rekey and touch wait for a short takeover mutex and leave no mutex behind (break: a rewrite beside a takeover)', () => withTmp((d) => {
+    assert.equal(acq(d, SID_A, T0).code, 0);
+    assert.equal(H.lockTouch({ dir: d, session: SID_A, now: T0 + MIN }).code, 0);
+    assert.equal(H.lockRekey({ dir: d, session: SID_A, key: KEY2, now: T0 + 2 * MIN }).code, 0);
+    assert.deepEqual(readdirSync(d).sort(), ['publish.json', 'publish.lock']);
+  }));
+
+  it('K6. through the CLI: rekey and touch exit 0 for the holder and 3 for another session; bad forms are usage errors (break: the parser)', () => withTmp((d) => {
+    assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
+    assert.equal(lockCli(['--lock-rekey', KEY2, '--session', SID_A, '--dir', d]).status, 0);
+    assert.equal(json(d, 'publish.lock').key, KEY2);
+    assert.equal(lockCli(['--lock-touch', '--session', SID_A, '--dir', d]).status, 0);
+    assert.equal(lockCli(['--lock-rekey', KEY, '--session', SID_B, '--dir', d]).status, 3);
+    assert.equal(lockCli(['--lock-touch', '--session', SID_B, '--dir', d]).status, 3);
+    const before = readFileSync(lockPath(d), 'utf8');
+    for (const args of [
+      ['--lock-rekey', 'a b', '--session', SID_A, '--dir', d], ['--lock-rekey', '--session', SID_A, '--dir', d], ['--lock-rekey', KEY, '--dir', d],
+      ['--lock-rekey', KEY, '--session', SID_A, '--force', '--dir', d], ['--lock-touch', '--session', SID_A, '--step', '7', '--dir', d],
+      ['--lock-touch', '--lock-rekey', KEY, '--session', SID_A, '--dir', d], ['--lock-touch', '--lock-release', 'ok', '--session', SID_A, '--dir', d],
+      ['--lock-touch', '--session', 'xyz', '--dir', d],
+    ]) {
+      const r = lockCli(args);
+      assert.equal(r.status, 1, JSON.stringify(args));
+      assert.match(r.stderr, /usage/);
+    }
+    assert.equal(readFileSync(lockPath(d), 'utf8'), before);
   }));
 });

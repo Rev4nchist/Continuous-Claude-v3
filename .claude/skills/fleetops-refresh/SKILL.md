@@ -24,11 +24,13 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
 
 ## Rules
 
-- Dave's tap ("Auto refresh: Yes, with these limits"): a session may run steps 3 to 9 on its own when the Stop-gate line says FleetOps data is "not uploaded" and to run this skill. The limits: one refresh an hour per machine (the Stop gate shows that line once an hour), one writer (the lock in step 5), never in a headless run, data only, no spend. If this is a headless run (`claude -p`), skip the refresh.
+- Dave's tap ("Auto refresh: Yes, with these limits"): a session may run steps 3 to 9 on its own when the Stop-gate line says FleetOps data is "not uploaded" and to run this skill. The limits: one refresh an hour per machine (the lock refuses with exit 4 inside the hour), one writer (the lock in step 5), never in a headless run, data only, no spend. If this is a headless run (`claude -p`), skip the refresh.
 - Step 2 (the export) still needs Dave's ask: ask with AskUserQuestion before step 2, unless Dave's own message asked for the refresh. An "older than 36 hours" line or a "refresh failed" line is not a reason to run this skill: tell Dave in one line.
 - The lock: step 5 takes it and step 9 releases it. Every stop in steps 6 to 8 (a failed check, a refusal, an error, a leak in 7.4, a failure in 7.5) runs the failed release before the report. `<n>` is the step number, such as 6.1 or 7.3:
   `node R/scripts/coordination/fleetops-html.mjs --lock-release failed --session <sid8> --step <n>`
-  It writes `publish.json` with state `failed`, the export key and the step, and removes the lock. The Stop gate then shows one "refresh failed" line for that export, and no run line. A new export clears it. Do not retry until a new export.
+  It writes `publish.json` with state `failed`, the export key and the step, and removes the lock. The Stop gate then shows one "refresh failed" line for that export, and no run line. The lock refuses a retry of that export (exit 5). A new export clears it.
+  Keep the lock alive: before step 6 and before step 8 run `node R/scripts/coordination/fleetops-html.mjs --lock-touch --session <sid8>`. It sets a new time on your lock. Exit 3 means you lost the lock: stop and report, release nothing.
+  Exit 1 from a lock command at the acquire or the release step: stop and report its one line.
 - The page leaves this machine. The renderer masks every listed id (`board-mask.mjs`), counts listed ids on the text a viewer sees, and refuses to write when one is left. Never upload or write text that the renderer did not print. Never edit the page by hand.
 - Lane titles, lane goals and holder names go on the page (Dave decided).
 - A refresh changes data only. A design change goes through the template in `scripts/coordination/fleetops/` and a pull request.
@@ -62,14 +64,17 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
       `node R/scripts/coordination/fleetops-html.mjs --lock-acquire <exportedAt> --session <sid8>`
       - Exit 3: another session writes the page. Stop and report its one line. Write no failed state. Release nothing: the lock is not yours.
       - Exit 4: the last refresh on this machine was under 1 hour ago (Dave's limit: one refresh an hour). Skip quietly: no failed state, nothing to report beyond its one line.
-      - Add `--force` only when Dave's own message asked for this refresh, or on a restart from step 6.0 or 8 (the same refresh). A Stop-gate line is never a reason for `--force`.
+      - Exit 5: this export already failed. The lock refuses a retry. Skip quietly: no failed state, nothing to report beyond its one line.
+      - Exit 1: an I/O error. Stop and report its one line. Write no failed state.
+      - Add `--force` only when Dave's own message asked for this refresh. It skips exits 4 and 5, never a live lock. A Stop-gate line is never a reason for `--force`.
+      - A restart (step 6.0 or 8) already holds the lock: run `node R/scripts/coordination/fleetops-html.mjs --lock-rekey <exportedAt> --session <sid8>` in place of the acquire. Exit 3 means you lost the lock: stop and report, release nothing.
       From here every stop in steps 6 to 8 ends with the failed release (see Rules). A lock over 20 minutes old counts as dead and the next session takes it over.
-6. Upload and write, in this one turn (an upload expires after 1 hour if it is not placed).
-   0. Read `refresh.json` again. If its `key` is not the manifest `exportedAt`, a newer export ran. Release the lock as a restart (`--lock-release ok --session <sid8>`: nothing failed), then start again from step 3 with new copies. Step 5 takes the lock again with the new key and `--force`. Restart at most once: a second newer export is a stop with the failed release (step 6.0). This keeps an older render from overwriting a newer one.
+6. Upload and write, in this one turn (an upload expires after 1 hour if it is not placed). First run `node R/scripts/coordination/fleetops-html.mjs --lock-touch --session <sid8>` (exit 3: you lost the lock; stop and report, release nothing).
+   0. Read `refresh.json` again. If its `key` is not the manifest `exportedAt`, a newer export ran. Keep the lock (no release). Start again from step 3 with new copies; step 5.2 rekeys the lock to the new `exportedAt`. Restart at most once: on a second newer export, run the failed release with step 6.0. This keeps an older render from overwriting a newer one.
    1. Read `out/fleetops.html` with the Read tool and `allow_large: true`, so the whole file comes back in one read (it is about 55 KB). Call `notion-create-attachment` with `content` = that text unchanged and `filename` = `FleetOps live board.html`. Keep the `file-upload://<id>` it returns.
-      - Compare the returned `content_length` with `htmlBytes` in `out/manifest.json`. If they differ, the copy is not exact: do not place the upload (it expires by itself), stop and report.
+      - Compare the returned `content_length` with `htmlBytes` in `out/manifest.json`. If they differ, the copy is not exact: do not place the upload (it expires by itself), run the failed release with step 6.1, and report.
    2. Read `out/page.md`. Replace the single line `{{FLEETOPS_EMBED}}` with `<embed source="file-upload://<id>" />`. Change nothing else.
-   3. Call `notion-update-page` with `command: "replace_content"`, `page_id` = the page id, `new_str` = that text, `allow_async: false`. Do not pass `allow_deleting_content`. A refusal that lists child pages or databases: stop and report the list. Do not retry.
+   3. Call `notion-update-page` with `command: "replace_content"`, `page_id` = the page id, `new_str` = that text, `allow_async: false`. Do not pass `allow_deleting_content`. A refusal that lists child pages or databases: run the failed release with step 6.3, and report the list. Do not retry.
 7. Read back.
    1. `notion-fetch` the page id again. The result is JSON: take its `text` field as plain text (real line breaks and quotes, not `\n` and `\"`). Save the part between `<content>` and `</content>` (blank lines at its ends may stay) to `<your scratchpad folder>/out/readback.md` with the Write tool.
    2. `node R/scripts/coordination/fleetops-html.mjs --check <your scratchpad folder>/out/readback.md --stamp <exportedAt>`
@@ -77,18 +82,18 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
    3. Check the uploaded file itself. Call `notion-get-file-download-urls` with the `notion-file-block://...` source of the embed from the read-back. The signed url carries a token and expires in about 5 minutes: never put it on a command line or in a message. Write it alone to `<your scratchpad folder>/out/upload-url.txt` with the Write tool, then run at once:
       `node R/scripts/coordination/fleetops-html.mjs --verify-upload @<your scratchpad folder>/out/upload-url.txt --manifest <your scratchpad folder>/out/manifest.json`
       The script reads the url from the file and deletes the file.
-      It prints `verify-upload: sha ok|MISMATCH, bytes N` and exits 0 only when the uploaded file is byte-identical to the rendered file. A MISMATCH means the copy into the upload was not exact: run steps 6 and 7 again once. A second MISMATCH: follow step 7.5.
-   4. Fail with a listed id above 0: this is a leak. Replace the page body at once with the single line `FleetOps is being rebuilt.` Tell Dave the page history in Notion still holds the leaked version and that he must remove it there. Leave the pending flag on. Stop.
-   5. Fail for another reason: leave the pending flag on and report what differed. Notion keeps the page history; Dave can restore an older version.
-8. Clear the pending flag. Only when step 7 passed. Use the `key` from your last read of `refresh.json`.
+      It prints `verify-upload: sha ok|MISMATCH, bytes N` and exits 0 only when the uploaded file is byte-identical to the rendered file. A MISMATCH means the copy into the upload was not exact: run steps 6 and 7 again once. A second MISMATCH: follow step 7.5 (it runs the failed release).
+   4. Fail with a listed id above 0: this is a leak. Replace the page body at once with the single line `FleetOps is being rebuilt.` Tell Dave the page history in Notion still holds the leaked version and that he must remove it there. Leave the pending flag on. Run the failed release with step 7.4. Stop.
+   5. Fail for another reason: leave the pending flag on, run the failed release with step 7.5, and report what differed. Notion keeps the page history; Dave can restore an older version.
+8. Clear the pending flag. Only when step 7 passed. First run `node R/scripts/coordination/fleetops-html.mjs --lock-touch --session <sid8>` (exit 3: you lost the lock; stop and report, release nothing). Use the `key` from your last read of `refresh.json`.
    `node R/scripts/coordination/fleetops-auto-tick.mjs --record-upload <your scratchpad folder>`
-   - It exits 1 and stores nothing when a copy has an `exportedAt` that is not the `key` of `refresh.json`. A newer export ran while you wrote: the page may now hold older data than another session placed. Release the lock as a restart (`--lock-release ok --session <sid8>`), then start again from step 3 with new copies (not step 1), so the newest export ends on the page. Restart at most once.
+   - It exits 1 and stores nothing when a copy has an `exportedAt` that is not the `key` of `refresh.json`. A newer export ran while you wrote: the page may now hold older data than another session placed. Keep the lock (no release), then start again from step 3 with new copies (not step 1), so the newest export ends on the page. Step 5.2 rekeys the lock. Restart at most once: on a second mismatch, run the failed release with step 8.
    `node R/scripts/coordination/export-dash-data.mjs --clear-refresh <key>`
-   - A key mismatch means a newer export ran. Release the lock as a restart, then start again from step 3 with new copies.
-   - The message `export lock is held` means an export runs now. Wait 1 minute and run this step again.
+   - A key mismatch means a newer export ran. Keep the lock, then start again from step 3 with new copies (the same restart rule: at most once, then the failed release with step 8).
+   - The message `export lock is held` means an export runs now. Wait 1 minute and run this step again. Try at most 3 times; after the third try run the failed release with step 8, and report.
 9. Release the lock and report. Release only after step 8 passed:
    `node R/scripts/coordination/fleetops-html.mjs --lock-release ok --session <sid8>`
-   It removes `publish.lock` and writes `publish.json` with state `ok` (the one-an-hour limit reads it). Exit 3 means this session no longer holds the lock (a dead-lock takeover): say so in the report.
+   It removes `publish.lock` and writes `publish.json` with state `ok` (the one-an-hour limit reads it). Exit 3 means this session no longer holds the lock (a dead-lock takeover): say so in the report. Exit 1: stop and report its one line.
    Then report. Give the export time in CST, the masked count from step 4, the check line from step 7, and the page link.
 
 ## When it goes wrong
@@ -96,4 +101,4 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
 - Docker is down in step 2: the old data stays on the page. Report it.
 - The `notion` server is missing in this session, or the preflight fetch fails (step 5.1): skip the refresh and report it. No lock, no failed state. Do not use another Notion connector.
 - The upload worked and the page write failed: run the failed release with step 6.3. The unplaced upload expires by itself in 1 hour. Report it.
-- The write worked and the read-back failed: follow step 7.4 or 7.5, with the failed release. Never clear the flag.
+- The write worked and the read-back failed: follow step 7.4 or 7.5 (each runs the failed release). Never clear the flag.

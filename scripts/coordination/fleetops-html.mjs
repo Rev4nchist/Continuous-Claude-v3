@@ -27,7 +27,7 @@
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { readIdList, countListed } from './board-mask.mjs';
@@ -41,7 +41,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(HERE, 'fleetops', 'page.template.html');
 const SLOT = '__FLEETOPS_DATA__';
 const RETIRED = Object.freeze(['claude.ai/artifact/', 'board_url', 'no_end', '{h}']);
-const USAGE = 'usage: node fleetops-html.mjs <folder> --out <outdir> [--ids-root <root>] | --check <file> --stamp <exportedAt> [--ids-root <root>] | --lock-acquire <key> --session <sid8> [--force] [--dir <dir>] | --lock-release ok|failed --session <sid8> [--step <n>] [--dir <dir>]';
+const USAGE = 'usage: node fleetops-html.mjs <folder> --out <outdir> [--ids-root <root>] | --check <file> --stamp <exportedAt> [--ids-root <root>] | --lock-acquire <key> --session <sid8> [--force] [--dir <dir>] | --lock-release ok|failed --session <sid8> [--step <n>] [--dir <dir>] | --lock-rekey <key> --session <sid8> | --lock-touch --session <sid8>';
 
 /** Reads the 7 files of `dir`. Throws when one is missing or when they come from more than one export. */
 export function loadFiles(dir) {
@@ -284,19 +284,25 @@ export function checkText(text, stamp, ids) {
 
 /**
  * Files in the lane-dash state dir (LANE_DASH_STATE_DIR, else ~/.claude/state/lane-dash):
- *   publish.lock  {session, key, at}                  the lock; its holder is the one session that writes the page
- *   publish.json  {state: writing|failed|ok, session, key, at, step?}   read by the Stop-gate hook (lane-dash-refresh.ts, failed only); no pid
- * Acquire is an exclusive create (flag wx). A lock over 20 minutes old counts as dead. The takeover reads the lock twice and renames
- * the STALE file to a name only this taker uses (publish.lock.taken.<session>): of two takers only one rename can win, the other gets ENOENT.
- * A taker that renamed a lock which is not the stale one it read (a fresh lock made after its reads) puts that lock back and exits 3.
- * One refresh an hour: after `--lock-release ok` publish.json stays with state ok. `--lock-acquire` exits 4 while that record is under 60 minutes
- * old; `--force` skips only this check (the skill passes it only when Dave's own message asked for the refresh).
- * Exit codes: 0 ok, 1 usage or an I/O error, 3 refused (another session holds the lock, or this session does not), 4 refused (last refresh under an hour ago).
+ *   publish.lock      {session, key, at}   the lock; its holder is the one session that writes the page
+ *   publish.json      {state: writing|failed|ok, session, key, at, step?, lastOkAt?}   read by the Stop-gate hook (lane-dash-refresh.ts, failed only); no pid.
+ *                     lastOkAt is the time of the last ok refresh; writing and a failed release carry it, so a forced run cannot erase the hour limit.
+ *   publish.takeover  {session, at}        a mutex for a takeover, a rekey and a touch; dead after 10 seconds
+ * Acquire is an exclusive create (flag wx). A lock over 20 minutes old counts as dead. The takeover holds the mutex, reads the lock a third time,
+ * and renames the STALE file to a name only this taker uses (publish.lock.taken.<session>). A taken file that is not the stale one goes back with a
+ * link that never overwrites; when the lock path is taken again the copy stays on disk and the exit is 3 with a conflict line.
+ * One refresh an hour: a release ok leaves publish.json with state ok. An acquire exits 4 while the last ok is under 60 minutes old.
+ * A failed export is not retried: an acquire on the key of a failed publish.json exits 5. `--force` skips exits 4 and 5 only (never a live lock).
+ * A rekey (a restart on a newer export) and a touch (a keep-alive) are for the holder only.
+ * Exit codes: 0 ok, 1 usage or an I/O error, 3 refused (another session holds the lock, or this session does not), 4 last refresh under an hour ago,
+ * 5 this export key already failed.
  */
 export const LOCK_STALE_MS = 20 * 60 * 1000;
 export const REFRESH_EVERY_MS = 60 * 60 * 1000;
+export const MUTEX_STALE_MS = 10 * 1000;
 export const LOCK_FILE = 'publish.lock';
 export const PUBLISH_FILE = 'publish.json';
+export const MUTEX_FILE = 'publish.takeover';
 const SESSION_RE = /^[0-9a-f]{8}$/;
 const LOCK_KEY_RE = /^[A-Za-z0-9:.+_-]{1,64}$/;
 const STEP_RE = /^\d{1,2}(\.\d{1,2})?$/;
@@ -316,11 +322,25 @@ const parseLock = (raw) => {
 const holderOf = (raw) => { const s = parseLock(raw)?.session; return typeof s === 'string' && SESSION_RE.test(s) ? s : 'unknown'; };
 const isoAt = (now) => new Date(now).toISOString();
 const refused = (holder) => ({ code: 3, msg: `fleetops-html: another session writes the page (holder ${holder}). Stop and report. Write no failed state.` });
+const notHolder = (session) => ({ code: 3, msg: `fleetops-html: session ${session} does not hold the lock. Nothing changed.` });
 
-/** Stale = more than 20 minutes old by `at`; a lock with no usable `at` (empty, half written, corrupt) is judged by its mtime. A future time is live. */
-function lockIsStale(raw, mtimeMs, now) {
+const sleepSync = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+const RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+/** renameSync that retries on EPERM, EBUSY and EACCES (a scanner or an editor holds the file on Windows): 5 attempts, 50 ms apart. Other errors, ENOENT included, go up at once. */
+export function renameRetry(from, to, { rename = renameSync, sleep = sleepSync } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { rename(from, to); return; } catch (e) {
+      if (!RETRY_CODES.has(e.code) || attempt >= 5) throw e;
+      sleep(50);
+    }
+  }
+}
+
+/** Stale = older than `limit` by `at`; a file with no usable `at` (empty, half written, corrupt) is judged by its mtime. A future time is live. */
+function lockIsStale(raw, mtimeMs, now, limit = LOCK_STALE_MS) {
   const at = Date.parse(parseLock(raw)?.at);
-  return now - (Number.isNaN(at) ? mtimeMs : at) > LOCK_STALE_MS;
+  return now - (Number.isNaN(at) ? mtimeMs : at) > limit;
 }
 
 /** Atomic write of publish.json: a temp file, then a rename. */
@@ -328,11 +348,49 @@ function writePublish(dir, session, record) {
   const tmp = join(dir, `${PUBLISH_FILE}.${session}.tmp`);
   try {
     writeFileSync(tmp, `${JSON.stringify(record)}\n`);
-    renameSync(tmp, join(dir, PUBLISH_FILE));
+    renameRetry(tmp, join(dir, PUBLISH_FILE));
   } catch (e) {
     rmSync(tmp, { force: true });
     throw e;
   }
+}
+
+/** publish.json as an object; null for a missing, unreadable or corrupt file. */
+function readPublish(dir) {
+  try { const raw = readText(join(dir, PUBLISH_FILE)); return raw === null ? null : parseLock(raw); } catch { return null; }
+}
+
+/** The time (ms) of the last ok refresh in a publish.json record: lastOkAt, else the time of an ok record; null when unknown. */
+function lastOkMs(rec) {
+  const t = Date.parse(rec?.lastOkAt);
+  if (!Number.isNaN(t)) return t;
+  const a = rec?.state === 'ok' ? Date.parse(rec.at) : NaN;
+  return Number.isNaN(a) ? null : a;
+}
+const withLastOk = (record, okMs) => (okMs === null ? record : { ...record, lastOkAt: isoAt(okMs) });
+
+/** "14:00 CST" in America/Chicago (CST or CDT by the date), 24-hour clock. */
+function clockChicago(ms) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(new Date(ms));
+  const p = (t) => parts.find((x) => x.type === t)?.value ?? '';
+  return `${p('hour')}:${p('minute')} ${p('timeZoneName')}`;
+}
+
+/**
+ * Why an acquire must not start, as { code, msg }, or null. Code 4: the last ok refresh is under an hour old (a bad or future time does not block).
+ * Code 5: publish.json says this export key already failed. Run before the lock is made and again right after, so a refresh that ended in between is caught.
+ */
+function acquireRefusal(dir, key, now) {
+  const rec = readPublish(dir);
+  const ok = lastOkMs(rec);
+  if (ok !== null && now - ok >= 0 && now - ok < REFRESH_EVERY_MS) return { code: 4, msg: `fleetops-html: last refresh at ${clockChicago(ok)}, under 1 hour ago` };
+  if (rec?.state === 'failed' && rec.key === key) {
+    const at = Date.parse(rec.at);
+    const when = Number.isNaN(at) ? '' : ` at ${clockChicago(at)}`;
+    const step = typeof rec.step === 'string' && STEP_RE.test(rec.step) ? ` (step ${rec.step})` : '';
+    return { code: 5, msg: `fleetops-html: this export already failed${when}${step}. Do not retry until a new export. Skip the run.` };
+  }
+  return null;
 }
 
 /**
@@ -352,64 +410,109 @@ export function lockSnapshot(dir, now = Date.now(), hooks = {}) {
   return raw2 === raw1 ? { state: 'stale', raw: raw1, holder } : { state: 'live', holder: holderOf(raw2) };
 }
 
-const newLock = (dir, { key, session, now }) => writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ session, key, at: isoAt(now) }), { flag: 'wx' });
-const writing = (dir, { key, session, now }) => writePublish(dir, session, { state: 'writing', session, key, at: isoAt(now) });
+/* ---- the takeover mutex ---- */
 
 /**
- * Takes over the stale lock of `snap`. `hooks.afterRename` runs right after the rename (a test forces an interleave there).
- * ENOENT on the rename: another taker won. A taken file that differs from the stale read is a fresh lock of another session: it goes back.
+ * Creates publish.takeover (wx). A mutex over 10 seconds old is dead: it is removed once two reads agree, then the create is tried again.
+ * `waitMs` > 0 polls every 50 ms for a live mutex. Returns true when this call holds the mutex.
  */
-export function lockTake(dir, snap, who, hooks = {}) {
-  const file = join(dir, LOCK_FILE);
-  const taken = join(dir, `${LOCK_FILE}.taken.${who.session}`);
-  try { renameSync(file, taken); } catch (e) {
-    if (e.code === 'ENOENT') return { code: 3, msg: 'fleetops-html: another session took the stale lock first. Stop and report. Write no failed state.' };
-    throw e;
+function takeMutex(dir, who, waitMs) {
+  const file = join(dir, MUTEX_FILE);
+  const deadline = Date.now() + waitMs;
+  for (let tries = 0; tries < 200; tries += 1) {
+    try { writeFileSync(file, JSON.stringify({ session: who.session, at: isoAt(who.now) }), { flag: 'wx' }); return true; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    let raw;
+    let mtime = 0;
+    try { raw = readFileSync(file, 'utf8'); mtime = statSync(file).mtimeMs; } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+    if (lockIsStale(raw, mtime, who.now, MUTEX_STALE_MS) && readText(file) === raw) { rmSync(file, { force: true }); continue; }
+    if (Date.now() >= deadline) return false;
+    sleepSync(50);
   }
-  if (hooks.afterRename) hooks.afterRename();
-  if (readText(taken) !== snap.raw) {
-    try { linkSync(taken, file); } catch (e) { if (e.code !== 'EEXIST') throw e; }
-    rmSync(taken, { force: true });
-    return refused(holderOf(readText(file) ?? ''));
+  return false;
+}
+
+/** Runs `fn` while this call holds the mutex; the mutex is removed in a finally. `busy` is the result when the mutex is held by another session. */
+function withMutex(dir, who, waitMs, fn, busy) {
+  if (!takeMutex(dir, who, waitMs)) return busy;
+  try { return fn(); } finally { rmSync(join(dir, MUTEX_FILE), { force: true }); }
+}
+
+/* ---- create, take over, release ---- */
+
+const newLock = (dir, { key, session, now }) => writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ session, key, at: isoAt(now) }), { flag: 'wx' });
+const writing = (dir, { key, session, now }) => writePublish(dir, session, withLastOk({ state: 'writing', session, key, at: isoAt(now) }, lastOkMs(readPublish(dir))));
+
+/**
+ * Makes the lock and the writing record. Returns null when the lock exists (EEXIST), else { code, msg }.
+ * Right after the create the refusal check runs again (code 4 or 5 removes the new lock). A write failure removes the lock and gives code 1.
+ */
+function createLock(dir, who, hooks, okMsg) {
+  try { newLock(dir, who); } catch (e) { if (e.code === 'EEXIST') return null; throw e; }
+  try {
+    if (hooks.afterNewLock) hooks.afterNewLock();
+    const again = who.force ? null : acquireRefusal(dir, who.key, who.now);
+    if (again) { rmSync(join(dir, LOCK_FILE), { force: true }); return again; }
+    if (hooks.beforeWriting) hooks.beforeWriting();
+    writing(dir, who);
+  } catch (e) {
+    rmSync(join(dir, LOCK_FILE), { force: true });
+    return { code: 1, msg: `fleetops-html: could not write publish.json (${typeof e.code === 'string' ? e.code : 'error'}); the lock was removed. Stop and report.` };
   }
-  try { newLock(dir, who); } catch (e) {
-    rmSync(taken, { force: true });
-    if (e.code === 'EEXIST') return refused(holderOf(readText(file) ?? ''));
+  return { code: 0, msg: okMsg };
+}
+
+/** Puts a taken file back as the lock without overwriting. When the lock path is taken again, the copy stays on disk and the exit is 3 with a conflict line. */
+function putBack(file, taken) {
+  try { linkSync(taken, file); } catch (e) {
+    if (e.code === 'EEXIST') return { code: 3, msg: `fleetops-html: lock conflict: a fresh lock was moved aside and the lock path is taken again. The copy stays as ${basename(taken)}. Stop and report. Write no failed state.` };
     throw e;
   }
   rmSync(taken, { force: true });
-  writing(dir, who);
-  return { code: 0, msg: `fleetops-html: lock taken over from a dead holder (${snap.holder}, over 20 minutes old); session ${who.session} writes now` };
+  return refused(holderOf(readText(file) ?? ''));
 }
 
-/** The time (ms) of the last finished refresh when publish.json says state ok and that was under one hour ago; else null (a bad or future time does not block). */
-function recentRefresh(dir, now) {
-  const raw = readText(join(dir, PUBLISH_FILE));
-  const rec = raw === null ? null : parseLock(raw);
-  if (rec?.state !== 'ok') return null;
-  const at = Date.parse(rec.at);
-  const age = now - at;
-  return Number.isNaN(at) || age < 0 || age >= REFRESH_EVERY_MS ? null : at;
+function takeUnderMutex(dir, snap, who, hooks) {
+  const file = join(dir, LOCK_FILE);
+  const taken = join(dir, `${LOCK_FILE}.taken.${who.session}`);
+  if (hooks.afterMutex) hooks.afterMutex();
+  const cur = readText(file);
+  if (cur !== null && cur !== snap.raw) return refused(holderOf(cur));
+  if (cur !== null) {
+    if (hooks.beforeRename) hooks.beforeRename();
+    try { renameRetry(file, taken); } catch (e) {
+      if (e.code === 'ENOENT') return { code: 3, msg: 'fleetops-html: another session took the stale lock first. Stop and report. Write no failed state.' };
+      throw e;
+    }
+    if (hooks.afterRename) hooks.afterRename();
+    if (readText(taken) !== snap.raw) return putBack(file, taken);
+    rmSync(taken, { force: true });
+  }
+  const made = createLock(dir, who, hooks, `fleetops-html: lock taken over from a dead holder (${snap.holder}, over 20 minutes old); session ${who.session} writes now`);
+  return made ?? refused(holderOf(readText(file) ?? ''));
 }
 
-/** "14:00 CST" in America/Chicago (CST or CDT by the date), 24-hour clock. */
-function clockChicago(ms) {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(new Date(ms));
-  const p = (t) => parts.find((x) => x.type === t)?.value ?? '';
-  return `${p('hour')}:${p('minute')} ${p('timeZoneName')}`;
+/**
+ * Takes over the stale lock of `snap`, under the takeover mutex. `hooks` (for a test): afterMutex, beforeRename, afterRename, afterNewLock, beforeWriting.
+ * ENOENT on the rename: another taker won. A taken file that differs from the stale read is a fresh lock of another session: it goes back (see putBack).
+ */
+export function lockTake(dir, snap, who, hooks = {}) {
+  const busy = { code: 3, msg: 'fleetops-html: another session is taking over the lock now. Stop and report. Write no failed state.' };
+  return withMutex(dir, who, 0, () => takeUnderMutex(dir, snap, who, hooks), busy);
 }
 
 /**
  * Acquire: exclusive create; on EEXIST a live lock refuses, a stale one is taken over. Returns { code, msg }.
- * Dave's limit, at most one refresh an hour on this machine: an `ok` publish.json under one hour old refuses with code 4. `force` skips only that check.
+ * Code 4: the last ok refresh is under an hour old (Dave's limit: one refresh an hour on this machine). Code 5: this export key already failed.
+ * `force` skips codes 4 and 5 only.
  */
 export function lockAcquire({ dir, key, session, now = Date.now(), force = false }, hooks = {}) {
   mkdirSync(dir, { recursive: true });
-  const last = force ? null : recentRefresh(dir, now);
-  if (last !== null) return { code: 4, msg: `fleetops-html: last refresh at ${clockChicago(last)}, under 1 hour ago` };
-  const who = { key, session, now };
+  const who = { key, session, now, force };
+  const first = force ? null : acquireRefusal(dir, key, now);
+  if (first) return first;
   for (let i = 0; i < 3; i += 1) {
-    try { newLock(dir, who); writing(dir, who); return { code: 0, msg: `fleetops-html: lock acquired by ${session}` }; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    const made = createLock(dir, who, hooks, `fleetops-html: lock acquired by ${session}`);
+    if (made !== null) return made;
     const snap = lockSnapshot(dir, now, hooks);
     if (snap.state === 'live') return refused(snap.holder);
     if (snap.state === 'stale') return lockTake(dir, snap, who, hooks);
@@ -418,59 +521,98 @@ export function lockAcquire({ dir, key, session, now = Date.now(), force = false
 }
 
 /**
- * Release: only the holder. `ok` writes publish.json state ok (the hour limit reads it; the hook ignores any state but failed) and removes the lock;
- * `failed` writes publish.json state failed (with the key and the step) and removes the lock.
+ * Release: only the holder. `ok` writes publish.json state ok with lastOkAt = now (the hour limit reads it; the hook ignores any state but failed);
+ * `failed` writes publish.json state failed (the key and the step; lastOkAt carried). The lock is removed in a finally, also when the write fails.
  */
 export function lockRelease({ dir, session, outcome, step = null, now = Date.now() }) {
-  const raw = readText(join(dir, LOCK_FILE));
+  const file = join(dir, LOCK_FILE);
+  const raw = readText(file);
   const lock = raw === null ? null : parseLock(raw);
-  if (!lock || lock.session !== session) return { code: 3, msg: `fleetops-html: session ${session} does not hold the lock. Nothing changed.` };
-  if (outcome === 'failed') writePublish(dir, session, { state: 'failed', session, key: lock.key, at: isoAt(now), ...(step ? { step } : {}) });
-  else writePublish(dir, session, { state: 'ok', session, key: lock.key, at: isoAt(now) });
-  rmSync(join(dir, LOCK_FILE), { force: true });
+  if (!lock || lock.session !== session) return notHolder(session);
+  try {
+    const rec = outcome === 'failed'
+      ? withLastOk({ state: 'failed', session, key: lock.key, at: isoAt(now), ...(step ? { step } : {}) }, lastOkMs(readPublish(dir)))
+      : { state: 'ok', session, key: lock.key, at: isoAt(now), lastOkAt: isoAt(now) };
+    writePublish(dir, session, rec);
+  } finally {
+    rmSync(file, { force: true });
+  }
   return { code: 0, msg: `fleetops-html: lock released (${outcome})` };
 }
 
-const isLockArgv = (argv) => argv.some((a) => a === '--lock-acquire' || a === '--lock-release');
+/** The holder rewrites its lock (a new key, a new time) under the mutex, so a takeover cannot interleave. */
+function rewriteHolder({ dir, session, key, now }, done) {
+  const file = join(dir, LOCK_FILE);
+  const busy = { code: 3, msg: 'fleetops-html: the lock is busy (a takeover runs). Nothing changed. Stop and report.' };
+  return withMutex(dir, { session, now }, 1000, () => {
+    const raw = readText(file);
+    const lock = raw === null ? null : parseLock(raw);
+    if (!lock || lock.session !== session) return notHolder(session);
+    const newKey = key ?? lock.key;
+    const tmp = join(dir, `${LOCK_FILE}.${session}.tmp`);
+    try {
+      writeFileSync(tmp, JSON.stringify({ session, key: newKey, at: isoAt(now) }));
+      renameRetry(tmp, file);
+    } catch (e) {
+      rmSync(tmp, { force: true });
+      throw e;
+    }
+    if (key !== null) writePublish(dir, session, withLastOk({ state: 'writing', session, key, at: isoAt(now) }, lastOkMs(readPublish(dir))));
+    return { code: 0, msg: done };
+  }, busy);
+}
+
+/** Restart on a newer export: the holder keeps the lock, sets the new key and a new time. Only the holder may run it. */
+export const lockRekey = ({ dir, session, key, now = Date.now() }) => rewriteHolder({ dir, session, key, now }, `fleetops-html: lock rekeyed to ${key}`);
+
+/** Keep-alive: the holder sets a new time on its lock. Only the holder may run it. */
+export const lockTouch = ({ dir, session, now = Date.now() }) => rewriteHolder({ dir, session, key: null, now }, 'fleetops-html: lock touched');
+
+const LOCK_VERBS = Object.freeze(['--lock-acquire', '--lock-release', '--lock-rekey', '--lock-touch']);
+const isLockArgv = (argv) => argv.some((a) => LOCK_VERBS.includes(a));
 
 function parseLockArgs(argv) {
-  const o = { acquire: null, release: null, session: null, step: null, dir: null, force: false };
+  const o = { verb: null, arg: null, session: null, step: null, dir: null, force: false };
   const value = (i, flag) => {
     const v = argv[i];
     if (v === undefined || v.startsWith('--')) throw usageError(`${flag} needs a value`);
     return v;
   };
+  const verb = (a, v) => {
+    if (o.verb !== null) throw usageError('one lock verb only');
+    o.verb = a;
+    o.arg = v;
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--lock-acquire') o.acquire = value(++i, a);
-    else if (a === '--lock-release') o.release = value(++i, a);
+    if (a === '--lock-acquire' || a === '--lock-release' || a === '--lock-rekey') verb(a, value(++i, a));
+    else if (a === '--lock-touch') verb(a, null);
     else if (a === '--session') o.session = value(++i, a);
     else if (a === '--step') o.step = value(++i, a);
     else if (a === '--dir') o.dir = value(++i, a);
     else if (a === '--force') o.force = true;
     else throw usageError(`unknown argument ${a.startsWith('--') ? a : 'in a lock command'}`);
   }
-  if (o.acquire !== null && o.release !== null) throw usageError('--lock-acquire and --lock-release do not go together');
   if (o.session === null || !SESSION_RE.test(o.session)) throw usageError('--session must be 8 lowercase hex characters');
-  if (o.acquire !== null) {
-    if (!LOCK_KEY_RE.test(o.acquire)) throw usageError('the key must be 1 to 64 characters of letters, digits and : . + _ -');
-    if (o.step !== null) throw usageError('--step goes with --lock-release');
-  } else {
-    if (o.force) throw usageError('--force goes with --lock-acquire');
-    if (o.release !== 'ok' && o.release !== 'failed') throw usageError('--lock-release takes ok or failed');
-    if (o.step !== null && (o.release !== 'failed' || !STEP_RE.test(o.step))) throw usageError('--step is a step number such as 7 or 7.3, with failed');
-  }
+  if (o.force && o.verb !== '--lock-acquire') throw usageError('--force goes with --lock-acquire');
+  if (o.verb === '--lock-acquire' || o.verb === '--lock-rekey') {
+    if (!LOCK_KEY_RE.test(o.arg)) throw usageError('the key must be 1 to 64 characters of letters, digits and : . + _ -');
+  } else if (o.verb === '--lock-release' && o.arg !== 'ok' && o.arg !== 'failed') throw usageError('--lock-release takes ok or failed');
+  if (o.step !== null && (o.verb !== '--lock-release' || o.arg !== 'failed' || !STEP_RE.test(o.step))) throw usageError('--step is a step number such as 7 or 7.3, with --lock-release failed');
   return o;
 }
 
-/** The lock verbs. Exit 3 is a refusal, not an error: it prints one line and no "nothing written" suffix. */
+/** The lock verbs. A refusal (exit 3, 4 or 5) prints one line and no "nothing written" suffix. */
 function runLockCli(argv, { out, err, env, now }) {
   try {
     const o = parseLockArgs(argv);
     const dir = o.dir ?? laneDashDir(env);
-    const r = o.acquire !== null
-      ? lockAcquire({ dir, key: o.acquire, session: o.session, now: now(), force: o.force })
-      : lockRelease({ dir, session: o.session, outcome: o.release, step: o.step, now: now() });
+    const base = { dir, session: o.session, now: now() };
+    let r;
+    if (o.verb === '--lock-acquire') r = lockAcquire({ ...base, key: o.arg, force: o.force });
+    else if (o.verb === '--lock-rekey') r = lockRekey({ ...base, key: o.arg });
+    else if (o.verb === '--lock-touch') r = lockTouch(base);
+    else r = lockRelease({ ...base, outcome: o.arg, step: o.step });
     (r.code === 0 ? out : err)(r.msg);
     return r.code;
   } catch (e) {
