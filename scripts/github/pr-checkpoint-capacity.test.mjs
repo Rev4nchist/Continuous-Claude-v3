@@ -426,7 +426,7 @@ test('CP11: the reason names the real trigger: the label, the critical file, a g
  * The real engine in a temp git repo with a stamp, a fake gh (env PR_CHECKPOINT_GH) that serves PR 7 and its comments, no `cr` and no slot file.
  * The fake gh keeps a call log and a flag file: after a POST, the comment list holds the bot's reply.
  */
-function wiredRun(repo, { author = 'Rev4nchist', noProbe = false, args = ['--probe', '--pr', '7'], draft = true, state = 'OPEN', json = true } = {}) {
+function wiredRun(repo, { author = 'Rev4nchist', noProbe = false, args = ['--probe', '--pr', '7'], draft = true, state = 'OPEN', json = true, testMode = true } = {}) {
   const script = path.join(repo, 'fake-gh.mjs');
   const log = path.join(repo, 'gh-calls.jsonl');
   const reply = JSON.stringify({ body: WAIT_REPLY, user: BOT });
@@ -441,11 +441,14 @@ function wiredRun(repo, { author = 'Rev4nchist', noProbe = false, args = ['--pro
   ].join('\n'));
   const env = {
     ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(repo, 'no-slot.json'),
+    // --config is a test seam: with the ledger on the engine writes the decision store only in test mode, to a temp store (never the real one).
+    // testMode false: the variable is empty, so the --config run is a fixture run outside test mode (the guard refuses it). The gh stays the fake below.
+    PR_CHECKPOINT_TEST: testMode ? '1' : '', CCV3_DECISIONS_FILE: path.join(repo, 'decisions.json'),
     PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_AUTHOR: author, FAKE_GH_STATE: state, FAKE_GH_DRAFT: draft ? '1' : '0', FAKE_GH_REPLY: reply, ...(noProbe ? { PR_CHECKPOINT_NO_PROBE: '1' } : {}),
   };
   const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), ...(json ? ['--json'] : []), ...args, '--config', path.join(repo, 'cfg.json')], { cwd: repo, encoding: 'utf8', env });
   const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
-  return { r, out: r.status === 0 && json ? JSON.parse(r.stdout) : null, posts: calls.filter((c) => c.includes('POST')) };
+  return { r, out: r.status === 0 && json ? JSON.parse(r.stdout) : null, posts: calls.filter((c) => c.includes('POST')), calls };
 }
 
 function wiredRepo({ autoConfirm = false } = {}) {
@@ -510,7 +513,7 @@ test('CP12c (wired): no post without --probe, without --pr, for a non-draft or c
   const read = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   const before = read().length;
   const confirm = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--confirm', 'none', '--by', 'dave', '--body', path.join(repo, 'a.txt'), '--probe', '--pr', '7', '--config', path.join(repo, 'cfg.json')], {
-    cwd: repo, encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(repo, 'no-slot.json'), PR_CHECKPOINT_GH: path.join(repo, 'fake-gh.mjs'), FAKE_GH_LOG: path.join(repo, 'gh-calls.jsonl') },
+    cwd: repo, encoding: 'utf8', env: { ...process.env, PR_CHECKPOINT_TEST: '1', CCV3_DECISIONS_FILE: path.join(repo, 'decisions.json'), GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(repo, 'no-slot.json'), PR_CHECKPOINT_GH: path.join(repo, 'fake-gh.mjs'), FAKE_GH_LOG: path.join(repo, 'gh-calls.jsonl') },
   });
   assert.ok(read().length > before, `--confirm read through the fake gh (${confirm.stderr})`);
   assert.equal(read().filter((c) => c.includes('POST')).length, 0, '--confirm never posts');
@@ -518,6 +521,19 @@ test('CP12c (wired): no post without --probe, without --pr, for a non-draft or c
   assert.equal(text.r.status, 0, text.r.stderr);
   assert.equal(text.posts.length, 0, 'the text plan (no --json) never posts');
   assert.equal(wiredRun(wiredRepo(), {}).posts.length, 1, 'control: the same repo with --json --probe --pr does post');
+});
+
+test('CP12e (wired): a fixture run (--config) outside test mode is refused BEFORE any gh call: no probe, no post, not even a read (fix round, F9)', () => {
+  // Every gh call here goes to the fake script (PR_CHECKPOINT_GH): nothing can reach GitHub, and the fake logs each call.
+  const refused = wiredRun(wiredRepo(), { testMode: false });
+  assert.equal(refused.r.status, 1, `${refused.r.stdout} ${refused.r.stderr}`);
+  assert.match(refused.r.stderr, /refused: --facts and --config are for tests\. A live question reads GitHub\./);
+  assert.equal(refused.posts.length, 0, 'no probe comment');
+  assert.deepEqual(refused.calls, [], 'no gh call at all: the refusal comes before the facts are read');
+  // Control: the same repo and flags in test mode answer and post once (CP12).
+  const control = wiredRun(wiredRepo());
+  assert.equal(control.r.status, 0, control.r.stderr);
+  assert.equal(control.posts.length, 1, 'control: test mode posts exactly once through the fake gh');
 });
 
 test('CP12d (wired): a bad --pr value is a usage error (exit 2)', () => {

@@ -8,7 +8,8 @@
 //   one copy reads the slot fact by another rule (free older than 5 minutes, a wait whose slot passed)       -> TC1
 //   one copy orders the rows another way, so row 0 or the place of a paid row differs                         -> TC1
 //   one copy words a label another way (the price part, the Greptile credits)                                  -> TC1
-//   the child cannot load a copy, or it runs fewer than the 8 cases (a vacuous pass)                           -> TC2
+//   the child cannot load a copy, or it runs fewer than the 45 cases (a vacuous pass)                           -> TC2
+//   a held recommendation is marked in one copy and not in the other (Keep as draft carries the mark in both)  -> TC5
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -32,14 +33,14 @@ const CASES = [
   ['wait, no next slot, checked 1 min ago', { state: 'wait', checkedAt: iso(NOW - 60_000) }],
   ['wait, no next slot, checked 10 min ago', { state: 'wait', checkedAt: iso(NOW - 600_000) }],
 ];
-// Every case runs for these recommendations at 4 files, and for coderabbit at 0 files (all costs 0): 9 x 3 + 9 = 36 questions.
+// Every case runs for these recommendations at 4 files, for coderabbit at 0 files (all costs 0), and for a held `both` recommendation: 9 x 3 + 9 + 9 = 45 questions.
 const RECOMMENDATIONS = ['coderabbit', 'none', 'both'];
-const EXPECTED_CASES = CASES.length * RECOMMENDATIONS.length + CASES.length;
+const EXPECTED_CASES = CASES.length * RECOMMENDATIONS.length + CASES.length * 2;
 
 const option = (pathway, cost) => ({ pathway, label: null, available: true, cost, reason: `${pathway} reason` });
-const resultOf = (capacity, recommended, files = 4) => ({
+const resultOf = (capacity, recommended, files = 4, heldBoth = false) => ({
   recommended, why: ['Band HIGH'], size: { files, lines: files * 10 }, auto: { band: 'HIGH', eligible: false }, config_drift: false,
-  options: files === 0 ? [option('none', [0, 0]), option('coderabbit', [0, 0]), option('both', [0, 0])] : [option('none', [0, 0]), option('coderabbit', [1, 0]), option('both', [1, 1])],
+  options: files === 0 ? [option('none', [0, 0]), option('coderabbit', [0, 0]), option('both', [0, 0])] : [option('none', [0, 0]), option('coderabbit', [1, 0]), { ...option('both', [1, 1]), available: !heldBoth }],
   capacity: { count: null, band: null, warning: null, source: null, date: null, ...capacity },
 });
 
@@ -51,6 +52,7 @@ async function childRows() {
   const add = (name, result) => rows.push({ name, engine: askSpecOf(7, result, 'slot line', NOW).options.map((o) => o.label), mod: buildPathwayAsk(7, result, NOW).choices.map((c) => c.label) });
   for (const recommended of RECOMMENDATIONS) for (const [name, capacity] of CASES) add(`rec ${recommended}, ${name}`, resultOf(capacity, recommended));
   for (const [name, capacity] of CASES) add(`rec coderabbit, 0 files, ${name}`, resultOf(capacity, 'coderabbit', 0));
+  for (const [name, capacity] of CASES) add(`rec both held, ${name}`, resultOf(capacity, 'both', 4, true));
   process.stdout.write(JSON.stringify(rows));
 }
 
@@ -62,9 +64,9 @@ if (process.argv[2] === '--rows') {
 const run = spawnSync(process.execPath, ['--experimental-strip-types', '--no-warnings', SELF, '--rows'], { encoding: 'utf8', cwd: ROOT });
 const rows = run.status === 0 ? JSON.parse(run.stdout) : [];
 
-test('TC2: the child loaded both copies and ran all 36 cases', () => {
+test('TC2: the child loaded both copies and ran all 45 cases', () => {
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
-  assert.equal(EXPECTED_CASES, 36);
+  assert.equal(EXPECTED_CASES, 45);
   assert.equal(rows.length, EXPECTED_CASES);
 });
 
@@ -85,4 +87,12 @@ test('TC4: the edge facts read the same, and right, in both copies: a checkedAt 
 
 test('TC3: row 0 of both copies is a $0 row, in every case', () => {
   for (const row of rows) for (const copy of ['engine', 'mod']) assert.match(row[copy][0], /\(\$0\)( \(Recommended\))?$/, `${row.name}, ${copy}`);
+});
+
+test('TC5: a held recommendation marks Keep as draft in both copies, and no other row', () => {
+  for (const row of rows.filter((r) => r.name.startsWith('rec both held'))) {
+    for (const copy of ['engine', 'mod']) {
+      assert.deepEqual(row[copy].filter((l) => l.endsWith(' (Recommended)')), ['Keep as draft ($0) (Recommended)'], `${row.name}, ${copy}`);
+    }
+  }
 });

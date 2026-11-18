@@ -24,8 +24,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
@@ -72,12 +72,16 @@ function setup({ ledger = true, labels = ['risk:high'], paths = FIVE, head = HEA
   writeFileSync(cfgFile, JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: null, reviews_7d_manual_date: null }, checkpoint, ...config }));
   const storeFile = path.join(dir, 'decisions.json');
   process.env.CCV3_DECISIONS_FILE = storeFile;
-  const env = { ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, CCV3_DECISIONS_FILE: storeFile, PR_CHECKPOINT_NO_PROBE: '1' };
-  const run = (args) => spawnSync(process.execPath, [ENGINE, ...args, ...(args.includes('--confirm') ? ['--state-dir', state] : []), '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir, env });
+  // PR_CHECKPOINT_TEST=1 is the test mode of --facts and --config (PR 1 taps, fixture guard). `mode.on = false` drops it and keeps the temp store.
+  const mode = { on: true };
+  const envOf = () => ({ ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, CCV3_DECISIONS_FILE: storeFile, PR_CHECKPOINT_NO_PROBE: '1', ...(mode.on ? { PR_CHECKPOINT_TEST: '1' } : { PR_CHECKPOINT_TEST: '' }) });
+  const run = (args, envOver = {}) => spawnSync(process.execPath, [ENGINE, ...args, ...(args.includes('--confirm') ? ['--state-dir', state] : []), '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir, env: { ...envOf(), ...envOver } });
+  // A drop run reads no facts and no config: only the store. It must never need --facts.
+  const drop = (extra = ['--pr', String(PR)]) => spawnSync(process.execPath, [ENGINE, '--drop-taps', ...extra], { encoding: 'utf8', cwd: dir, env: envOf() });
   const call = (extra = []) => { const r = run(['--json', '--pr', String(PR), ...extra]); assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`); return JSON.parse(r.stdout); };
-  const confirm = (pathway, by = 'dave', extra = ['--pr', String(PR)]) => run(['--confirm', pathway, '--by', by, '--body', bodyFile, ...extra]);
+  const confirm = (pathway, by = 'dave', extra = ['--pr', String(PR)], envOver = {}) => run(['--confirm', pathway, '--by', by, '--body', bodyFile, ...extra], envOver);
   const retime = (now) => writeFileSync(factsFile, factsAt(now));
-  return { dir, call, confirm, retime, pathwayFile: path.join(state, 'pathway.json'), storeFile };
+  return { dir, call, confirm, retime, run, drop, mode, envOf, state, bodyFile, factsFile, cfgFile, stateDir: state, pathwayFile: path.join(state, 'pathway.json'), storeFile };
 }
 
 /** Dave taps the option of `label` on the open offer of `triple`. */
@@ -499,4 +503,379 @@ test('LD16: no built text of the engine, status, router, ask, land and slot-queu
     });
   }
   assert.deepEqual(hits, []);
+});
+
+// ---- PR 1 "taps" of card prflow-paid-run-guard ----------------------------------------------------------------------------------------
+// A stored tap must not record after the PR went back to draft (A), a failed tap consume must not let a second confirm write (B), and a fixture
+// run outside test mode must not write the real store (F). Every A test STORES a tap, unlike X4 of the mod tests. How it can fail:
+//   the drop verb is missing, or leaves a tap, an offer or a miss of the PR (any head, either step)                                -> A1, A2, A3
+//   the drop deletes the rows of another PR (349 against 3490) or of another step                                                  -> A3
+//   a tap made after the drop is not read                                                                                         -> A4
+//   a failed drop (store locked) exits 0 or says nothing                                                                          -> A5
+//   a tap older than --repick-since records, a bad value passes it, or a newer tap is refused                                     -> A6
+//   --confirm writes the record before the tap is used up, or ignores a failed consume                                             -> B1, B2, B3, B4
+//   a record that throws after the consume leaves the tap, so the next confirm writes again                                      -> B4
+//   the happy path, or --by auto, changes                                                                                         -> B5, B6
+//   --facts or --config writes the store outside test mode, or the guard blocks a run that writes nothing                           -> F1, F2
+//   the miss window of a stop restarts; the re-ask note names the wrong cause; the held recommendation is marked in one copy only    -> m6, m7, m5
+const STALE_NOTE = 'The PR went back to draft. Your earlier tap was not recorded.';
+const QUESTION_NOTE = 'The question changed. Your tap was not recorded.';
+const holdLock = (t) => writeFileSync(`${t.storeFile}.lock`, `${process.pid} held-by-test`);
+const freeLock = (t) => unlinkSync(`${t.storeFile}.lock`);
+const paidTap = (t) => { const label = labelOf(t.call().ledger.ask, /^CodeRabbit review/); tap(review(), label); return label; };
+const anOffer = { header: 'h', question: 'q', options: [{ label: 'a' }, { label: 'b' }], values: { a: 'none', b: 'wait' } };
+
+test('A1: a tap at the head, a return to draft, call 1 at the same head: the drop ran, so the question is asked (it recorded before)', () => {
+  const t = setup();
+  paidTap(t);
+  const dropped = t.drop();
+  assert.equal(dropped.status, 0, `${dropped.stdout} ${dropped.stderr}`);
+  assert.equal(D.decisionRead(review()), null, 'the tap is gone');
+  const out = t.call().ledger;
+  assert.deepEqual([out.state, out.reasked], ['ask', 0], 'asked afresh, no miss');
+});
+
+test('A2: a tap, a return to draft, then a direct --confirm --by dave with no flag is refused "No tap" and writes nothing', () => {
+  const t = setup();
+  paidTap(t);
+  assert.equal(t.drop().status, 0);
+  const r = t.confirm('coderabbit');
+  assert.equal(r.status, 1, `${r.stdout} ${r.stderr}`);
+  assert.match(r.stderr, /No tap of Dave's for coderabbit/);
+  assert.ok(!existsSync(t.pathwayFile));
+});
+
+test('A3: the drop removes decisions, offers and misses of review and paid-round for this PR at every head, and nothing else', () => {
+  const t = setup();
+  const seed = (triple, label) => { assert.equal(D.offerWrite({ ...triple, spec: anOffer, tree: null, cwd: '/x' }).ok, true); if (label) tap(triple, label); };
+  const paidRound = (key, head = HEAD) => ({ step: 'paid-round', key, head });
+  const other = `${DEFAULT_REPO}#${PR}0`; // a prefix match would drop it
+  seed(review(), 'a');
+  seed(review(OLD), 'a');
+  seed(paidRound(KEY), 'a');
+  seed(paidRound(KEY, OLD));
+  assert.equal(D.missBump(review()), 1);
+  assert.equal(D.missBump(paidRound(KEY)), 1);
+  seed({ ...review(), key: other }, 'a');
+  seed({ step: 'land', key: KEY, head: HEAD }, 'a');
+  const r = t.drop();
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  for (const triple of [review(), review(OLD), paidRound(KEY), paidRound(KEY, OLD)]) {
+    assert.deepEqual([D.decisionRead(triple), D.offerRead(triple), D.missCount(triple)], [null, null, 0], JSON.stringify(triple));
+  }
+  assert.ok(D.decisionRead({ ...review(), key: other }), 'another PR keeps its tap');
+  assert.ok(D.decisionRead({ step: 'land', key: KEY, head: HEAD }), 'another step keeps its tap');
+});
+
+test('A4: Dave taps again after the return: call 2 records the new tap, and --confirm writes the record', () => {
+  const t = setup();
+  paidTap(t);
+  assert.equal(t.drop().status, 0);
+  assert.equal(t.call().ledger.state, 'ask');
+  tap(review(), labelOf(D.offerRead(review()).spec, /^CodeRabbit review/));
+  const second = t.call().ledger;
+  assert.deepEqual([second.state, second.pathway], ['record', 'coderabbit']);
+  assert.equal(t.confirm('coderabbit').status, 0);
+});
+
+test('A5: the drop fails (the store is locked): exit 1 with the reason, the tap stays, and the verb works once the lock is free', () => {
+  const t = setup();
+  const label = paidTap(t);
+  holdLock(t);
+  const failed = t.drop();
+  assert.equal(failed.status, 1, `${failed.stdout} ${failed.stderr}`);
+  assert.match(failed.stderr, /refused: the taps of PR #349 could not be cleared \(lock\)/);
+  assert.equal(D.decisionRead(review()).label, label, 'nothing was dropped');
+  freeLock(t);
+  assert.equal(t.drop().status, 0);
+  assert.equal(D.decisionRead(review()), null);
+});
+
+test('A5b: --drop-taps needs a good --pr and no other mode, and it reads no facts', () => {
+  const t = setup();
+  assert.equal(t.drop([]).status, 2, 'no --pr');
+  assert.equal(t.drop(['--pr', '0']).status, 2, 'a bad PR number');
+  assert.equal(t.drop(['--pr', String(PR), '--confirm', 'none', '--by', 'dave', '--body', 'x']).status, 2, 'with --confirm');
+  assert.equal(t.drop(['--pr', String(PR), '--json']).status, 2, 'with --json');
+  assert.equal(t.drop(['--pr', String(PR)]).status, 0, 'a good call with no fixture flags');
+});
+
+test('A6: --repick-since: a tap made before it is used up and asked again (no miss); a newer tap records; a bad value is stale; --confirm refuses a stale tap', () => {
+  const future = new Date(Date.now() + 3_600_000).toISOString();
+  const past = new Date(Date.now() - 3_600_000).toISOString();
+  for (const [name, since, stale] of [['marker after the tap', future, true], ['bad value', 'not-a-date', true], ['marker before the tap', past, false]]) {
+    const t = setup();
+    const label = paidTap(t);
+    if (stale) {
+      const refused = t.confirm('coderabbit', 'dave', ['--pr', String(PR), '--repick-since', since]);
+      assert.equal(refused.status, 1, `${name}: ${refused.stdout} ${refused.stderr}`);
+      assert.ok(refused.stderr.includes(STALE_NOTE), name);
+      assert.ok(!existsSync(t.pathwayFile), name);
+      assert.equal(D.decisionRead(review()).label, label, `${name}: a refusal does not use the tap up`);
+      const out = t.call(['--repick-since', since]).ledger;
+      assert.deepEqual([out.state, out.reasked, out.note], ['ask', 0, STALE_NOTE], name);
+      assert.ok(out.text.startsWith(STALE_NOTE), name);
+      assert.equal(D.decisionRead(review()), null, `${name}: the stale tap is used up`);
+      assert.equal(D.missCount(review()), 0, `${name}: no miss`);
+    } else {
+      assert.equal(t.call(['--repick-since', since]).ledger.state, 'record', name);
+      assert.equal(t.confirm('coderabbit', 'dave', ['--pr', String(PR), '--repick-since', since]).status, 0, name);
+    }
+  }
+});
+
+test('B1: the lock is held when the tap is consumed: --confirm is refused, nothing is recorded, a second confirm is refused too, and the tap survives for the retry', () => {
+  const t = setup();
+  const label = paidTap(t);
+  holdLock(t);
+  for (const round of [1, 2]) {
+    const r = t.confirm('coderabbit');
+    assert.equal(r.status, 1, `round ${round}: ${r.stdout} ${r.stderr}`);
+    assert.match(r.stderr, /Dave's tap for coderabbit on PR #349 could not be used up \(lock\)\. Nothing was recorded\. Call pr_checkpoint \{pr\} again\./);
+    assert.ok(!existsSync(t.pathwayFile), `round ${round}: no record`);
+  }
+  freeLock(t);
+  assert.equal(D.decisionRead(review()).label, label, 'the refused confirms did not burn the tap');
+  assert.equal(t.confirm('coderabbit').status, 0, 'one record once the lock is free');
+  assert.equal(t.confirm('coderabbit').status, 1, 'and the tap is used up now');
+});
+
+test('B2 and B3: ledgerUse returns the result of the consume: label-changed (the new tap stays) when Dave tapped again in between, then no-decision when the tap is gone', () => {
+  const t = setup();
+  const label = paidTap(t);
+  const check = L.ledgerConfirmCheck({ pr: PR, head: HEAD, pathway: 'coderabbit', by: 'dave' });
+  assert.equal(check.problem, null);
+  assert.equal(check.label, label, 'the check hands back the label it read');
+  // B3: Dave answers a new question before the consume.
+  assert.equal(D.offerWrite({ ...review(), spec: D.offerRead(review()).spec, tree: null, cwd: '/x' }).ok, true);
+  const other = D.offerRead(review()).spec.options.find((o) => /^No review/.test(o.label)).label;
+  tap(review(), other);
+  assert.deepEqual(L.ledgerUse({ pr: PR, head: HEAD, label: check.label }), { ok: false, reason: 'label-changed' });
+  assert.equal(D.decisionRead(review()).label, other, 'the new tap stays');
+  // B2: nothing left to use.
+  assert.deepEqual(L.ledgerUse({ pr: PR, head: HEAD, label: other }), { ok: true });
+  assert.deepEqual(L.ledgerUse({ pr: PR, head: HEAD, label: other }), { ok: false, reason: 'no-decision' });
+});
+
+test('B4: the record write throws after the consume: no record and no tap, so the next confirm is refused "No tap"', () => {
+  const t = setup();
+  paidTap(t);
+  mkdirSync(t.pathwayFile); // a folder where the record file goes: the write throws
+  const broke = t.confirm('coderabbit');
+  assert.notEqual(broke.status, 0, `${broke.stdout} ${broke.stderr}`);
+  assert.equal(D.decisionRead(review()), null, 'the tap is used up');
+  rmdirSync(t.pathwayFile);
+  const again = t.confirm('coderabbit');
+  assert.equal(again.status, 1, `${again.stdout} ${again.stderr}`);
+  assert.match(again.stderr, /No tap of Dave's for coderabbit/);
+  assert.ok(!existsSync(t.pathwayFile), 'no record at all');
+});
+
+test('B5: the happy path: one record by dave, the tap is used up, a second confirm is refused and the record stays', () => {
+  const t = setup();
+  paidTap(t);
+  const r = t.confirm('coderabbit');
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  const record = readFileSync(t.pathwayFile, 'utf8');
+  assert.equal(JSON.parse(record).decided_by, 'dave');
+  assert.equal(D.decisionRead(review()), null);
+  assert.equal(t.confirm('coderabbit').status, 1);
+  assert.equal(readFileSync(t.pathwayFile, 'utf8'), record);
+});
+
+test('B6: --by auto is unchanged: it needs no tap, records, and still uses up a tap of the PR when one is there', () => {
+  const t = setup({ paths: LOW, labels: [], config: { checkpoint: { ...LIVE.checkpoint, autoConfirm: 'low', ledger: true } } });
+  assert.equal(D.offerWrite({ ...review(), spec: anOffer, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), 'a');
+  const r = t.confirm('none', 'auto');
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.equal(JSON.parse(readFileSync(t.pathwayFile, 'utf8')).decided_by, 'auto');
+  assert.equal(D.decisionRead(review()), null, 'the old order: record, then use the tap up');
+});
+
+test('F1: a fixture run (--facts, --config) outside test mode writes no offer and no decision, and says why; a run that writes nothing still works', () => {
+  const t = setup();
+  const label = paidTap(t); // test mode on: the offer and the tap exist
+  const before = readFileSync(t.storeFile, 'utf8');
+  t.mode.on = false;
+  for (const r of [t.run(['--json', '--pr', String(PR)]), t.confirm('coderabbit')]) {
+    assert.equal(r.status, 1, `${r.stdout} ${r.stderr}`);
+    assert.match(r.stderr, /refused: --facts and --config are for tests\. A live question reads GitHub\./);
+  }
+  assert.equal(readFileSync(t.storeFile, 'utf8'), before, 'the store is byte for byte the same');
+  assert.equal(D.decisionRead(review()).label, label);
+  assert.ok(!existsSync(t.pathwayFile));
+  const quiet = t.run(['--json', '--pr', String(PR), '--no-ledger']);
+  assert.equal(quiet.status, 0, `${quiet.stdout} ${quiet.stderr}`);
+  const fresh = setup();
+  fresh.mode.on = false;
+  assert.equal(fresh.run(['--json', '--pr', String(PR)]).status, 1, 'a clean store gets no offer either');
+  assert.deepEqual(D.offerList(), []);
+});
+
+test('F2: the same run in test mode works: it writes the offer', () => {
+  const t = setup();
+  assert.equal(t.call().ledger.state, 'ask');
+  assert.equal(D.offerRead(review()).open, true);
+});
+
+test('m6: missBump keeps the first time once the count is above the re-asks, so the stop window does not restart', async () => {
+  const t = setup();
+  const atOf = () => JSON.parse(readFileSync(t.storeFile, 'utf8')).misses[`review\n${KEY}\n${HEAD}`].at;
+  assert.deepEqual([D.missBump(review()), D.missBump(review()), D.missBump(review())], [1, 2, 3]);
+  const stopAt = atOf();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(D.missBump(review()), 4);
+  assert.equal(atOf(), stopAt, 'the window of the stop did not restart');
+});
+
+test('m7: the re-ask note names its cause: the slot, or the question (a tapped label that is no row for another reason)', () => {
+  const free = 'CodeRabbit now (free slot, $0) (Recommended)';
+  const t = setup({ capacity: FRESH_FREE });
+  assert.equal(t.call().ledger.ask.options[1].label, free);
+  tap(review(), free);
+  t.retime(iso(NOW_MS + 600_000));
+  assert.equal(t.call().ledger.note, SLOT_NOTE, 'the slot went');
+  // A label that no slot state of the question can give: the question changed.
+  const priced = setup();
+  const odd = 'CodeRabbit review (may cost up to $0.75)';
+  assert.equal(D.offerWrite({ ...review(), spec: { header: 'h', question: 'q', options: [{ label: odd }, { label: 'Keep as draft ($0)' }], values: { [odd]: 'coderabbit' } }, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), odd);
+  const out = priced.call().ledger;
+  assert.equal(out.state, 'ask');
+  assert.equal(out.note, QUESTION_NOTE);
+});
+
+test('m5: with the recommendation held the engine marks Keep as draft (the mod copy does the same: checkpoint-two-copy)', () => {
+  const option = (pathway, available) => ({ pathway, available, reason: `${pathway} reason` });
+  const result = { recommended: 'both', why: ['x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity: { state: 'wait', checkedAt: iso(NOW_MS - 60_000), nextSlotAt: iso(NOW_MS + 600_000) }, options: [option('coderabbit', true), option('both', false), option('wait', true), option('none', true)] };
+  const labels = L.askSpecOf(PR, result, 'x', NOW_MS).options.map((o) => o.label);
+  assert.deepEqual(labels.filter((l) => l.endsWith(' (Recommended)')), ['Keep as draft ($0) (Recommended)']);
+});
+
+// ---- critic fixes of PR 1 (review of 5858daba) --------------------------------------------------------------------------------------------
+// How it can fail, and the test that catches it:
+//   a fixture config with the ledger flag OFF lets --confirm --by dave record with no tap, outside test mode                  -> F4
+//   the tap label changes between the check and the use (Dave taps another row) and the confirm still writes                 -> B7
+//   the real store path in another spelling (case on win32, dots) counts as a temp store                                        -> F3
+test('F3: PR_CHECKPOINT_TEST=1 with CCV3_DECISIONS_FILE at the REAL store path is not test mode, in any spelling of the path', () => {
+  const real = D.decisionsPath({});
+  // Joined as text: path.join would fold the '..' away, and the child would get the real string again (on every platform). '/' is a separator on win32 and POSIX.
+  const alt = `${path.dirname(real)}/../${path.basename(path.dirname(real))}/${path.basename(real)}`;
+  assert.notEqual(alt, real, 'the alternate spelling is a different string from the real path');
+  const spellings = [real, alt];
+  if (process.platform === 'win32') spellings.push(real.toUpperCase(), real.toLowerCase(), real.replace(/\\/g, '/'));
+  const t = setup(); // a confirm with no tap writes nothing even when the guard is broken: it reads the real store and refuses
+  for (const spelling of spellings) {
+    const r = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { CCV3_DECISIONS_FILE: spelling });
+    assert.equal(r.status, 1, `${spelling}: ${r.stdout} ${r.stderr}`);
+    assert.match(r.stderr, /refused: --facts and --config are for tests\. A live question reads GitHub\./, spelling);
+  }
+  const temp = t.confirm('coderabbit', 'dave', ['--pr', String(PR)]);
+  assert.match(temp.stderr, /No tap of Dave's/, 'a temp store is test mode: the run goes on and finds no tap');
+});
+
+test('F4: the ledger flag of a fixture config is not trusted: with it OFF a fixture --confirm and the ledger step are still refused outside test mode', () => {
+  const t = setup({ ledger: false });
+  t.mode.on = false;
+  const confirm = t.confirm('none');
+  assert.equal(confirm.status, 1, `${confirm.stdout} ${confirm.stderr}`);
+  assert.match(confirm.stderr, /refused: --facts and --config are for tests\. A live question reads GitHub\./);
+  assert.ok(!existsSync(t.pathwayFile), 'no record with no tap');
+  const step = t.run(['--json', '--pr', String(PR)]);
+  assert.equal(step.status, 1, `${step.stdout} ${step.stderr}`);
+  assert.match(step.stderr, /refused: --facts and --config are for tests/);
+  assert.equal(t.run(['--json', '--pr', String(PR), '--no-ledger']).status, 0, 'no ledger step: nothing to guard');
+  assert.equal(t.run(['--json']).status, 0, 'a read-only run with no PR');
+  t.mode.on = true;
+  assert.equal(t.confirm('none').status, 0, 'test mode: the flag-off fixture run still works');
+});
+
+/**
+ * Runs `--confirm coderabbit --by dave` in a child that waits on the held store lock, calls `swap()` once the child is AT the consume, then frees the lock.
+ * The signal: runConfirm makes the state folder right after the check and right before the consume, so a folder that does not exist yet is the
+ * child's "I am at the consume" (no fixed delay: a slow start cannot make the swap early). The wait is bounded; the lock is freed on success and on failure.
+ */
+async function confirmAtConsume(t, swap) {
+  const stateDir = path.join(t.dir, 'late-state');
+  holdLock(t);
+  const child = spawn(process.execPath, [ENGINE, '--confirm', 'coderabbit', '--by', 'dave', '--body', t.bodyFile, '--pr', String(PR), '--state-dir', stateDir, '--facts', t.factsFile, '--config', t.cfgFile], { cwd: t.dir, env: t.envOf() });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const closed = new Promise((resolve) => child.on('close', resolve));
+  try {
+    const began = Date.now();
+    while (!existsSync(stateDir)) {
+      if (Date.now() - began > 4000) throw new Error(`the child never reached the consume: ${stderr}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    swap();
+  } catch (err) {
+    child.kill();
+    throw err;
+  } finally {
+    freeLock(t);
+  }
+  return { code: await closed, stderr, record: path.join(stateDir, 'pathway.json') };
+}
+
+const rewriteTap = (t, change) => {
+  const store = JSON.parse(readFileSync(t.storeFile, 'utf8'));
+  for (const row of Object.values(store.decisions)) change(row);
+  writeFileSync(t.storeFile, JSON.stringify(store));
+};
+
+test('B7: the tap label changes between the check and the use (Dave taps another row): exit 1 label-changed, the new tap stays, no record', async () => {
+  const t = setup();
+  paidTap(t);
+  const other = labelOf(D.offerRead(review()).spec, /^No review/);
+  const ran = await confirmAtConsume(t, () => rewriteTap(t, (row) => { row.label = other; })); // Dave's new tap
+  assert.equal(ran.code, 1, ran.stderr);
+  assert.match(ran.stderr, /could not be used up \(label-changed\)\. Nothing was recorded\./);
+  assert.equal(D.decisionRead(review()).label, other, 'the new tap stays');
+  assert.ok(!existsSync(ran.record), 'no record');
+});
+
+// ---- fix round of PR 1 taps (CodeRabbit CLI findings F6, F9, F10) ------------------------------------------------------------------------------
+// How it can fail, and the test that catches it:
+//   a newer tap with the SAME label (Dave tapped the same row again) is used up by the confirm that read the older one        -> TC1
+//   ledgerConfirmCheck does not hand back the `at` of the tap it read                                                            -> TC2
+//   a free-slot row that expired between the check and the use still records (the slot is judged at the early clock only)         -> TC3
+test('TC1 F10: a newer tap of the SAME label between the check and the use: exit 1 tap-changed, the newer tap stays, no record', async () => {
+  const t = setup();
+  const label = paidTap(t);
+  const older = D.decisionRead(review()).at;
+  const newer = iso(Date.parse(older) + 5000); // Dave tapped the same row again: same label, later time
+  const ran = await confirmAtConsume(t, () => rewriteTap(t, (row) => { row.at = newer; }));
+  assert.equal(ran.code, 1, ran.stderr);
+  assert.match(ran.stderr, /could not be used up \(tap-changed\)\. Nothing was recorded\./);
+  assert.deepEqual(D.decisionRead(review()), { label, at: newer }, 'the newer tap stays');
+  assert.ok(!existsSync(ran.record), 'no record');
+});
+
+test('TC2: ledgerConfirmCheck returns the label AND the time of the tap it read; ledgerUse with that time uses it up, with an older time it does not', () => {
+  const t = setup();
+  const label = paidTap(t);
+  const read = D.decisionRead(review());
+  const check = L.ledgerConfirmCheck({ pr: PR, head: HEAD, pathway: 'coderabbit', by: 'dave' });
+  assert.deepEqual([check.label, check.at], [label, read.at]);
+  assert.deepEqual(L.ledgerUse({ pr: PR, head: HEAD, label, at: iso(Date.parse(read.at) - 1000) }), { ok: false, reason: 'tap-changed' });
+  assert.deepEqual(L.ledgerUse({ pr: PR, head: HEAD, label, at: check.at }), { ok: true });
+});
+
+test('TC3 F6: a free-slot tap whose slot expired between the check and the use (the clock at the use, PR_CHECKPOINT_CONSUME_NOW) is refused slot-changed: no record, the tap stays', () => {
+  const t = setup({ capacity: FRESH_FREE });
+  const free = 'CodeRabbit now (free slot, $0) (Recommended)';
+  assert.equal(t.call().ledger.ask.options[1].label, free);
+  tap(review(), free);
+  const later = iso(NOW_MS + 600_000); // the free fact was checked 60 s before NOW: 11 minutes old at the use
+  const refused = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { PR_CHECKPOINT_CONSUME_NOW: later });
+  assert.equal(refused.status, 1, `${refused.stdout} ${refused.stderr}`);
+  assert.match(refused.stderr, /could not be used up \(slot-changed\)\. Nothing was recorded\./);
+  assert.ok(!existsSync(t.pathwayFile), 'no record');
+  assert.equal(D.decisionRead(review()).label, free, 'the tap stays');
+  // Controls: the same tap with no later clock (the fixture clock) and with a clock inside the 5 minutes records.
+  const soon = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { PR_CHECKPOINT_CONSUME_NOW: iso(NOW_MS + 120_000) });
+  assert.equal(soon.status, 0, `${soon.stdout} ${soon.stderr}`);
+  assert.equal(JSON.parse(readFileSync(t.pathwayFile, 'utf8')).decided_by, 'dave');
 });

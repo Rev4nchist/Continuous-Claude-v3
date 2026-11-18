@@ -152,7 +152,7 @@ function confirmAuto(pathway, by, { paths = MID, factOver = {}, autoConfirm = tr
     checkpoint: autoConfirm === 'omit' ? (({ autoConfirm: _drop, ...rest }) => rest)(LIVE.checkpoint) : { ...LIVE.checkpoint, autoConfirm },
   }));
   const args = [path.join(HERE, 'pr-checkpoint.mjs'), '--confirm', pathway, '--by', by, '--body', bodyFile, '--state-dir', state, '--facts', factsFile, '--config', cfgFile];
-  const r = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: dir, env: { ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir } });
+  const r = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: dir, env: { ...process.env, PR_CHECKPOINT_TEST: '1', CCV3_DECISIONS_FILE: path.join(dir, 'decisions.json'), GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir } });
   return { ...r, pathwayFile: path.join(state, 'pathway.json') };
 }
 
