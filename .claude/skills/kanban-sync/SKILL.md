@@ -78,7 +78,7 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
    - The data is stale when `pending` is `true`, or `exported_at` is over 36 hours old.
    - When it is stale, say so in the report. Use "FleetOps data is stale (exported <time>, not uploaded)" or "FleetOps data is stale (exported <time>, older than 36 hours)".
    - Give the time in Central time.
-   - Offer the `fleetops-refresh` skill. Never run it unless Dave asks.
+   - When `pending` is `true`, when it is only over 36 hours old, or when a refresh failed: tell Dave in one line. Do not run `fleetops-refresh` from here: the Stop-gate line starts it.
    - Otherwise say nothing about FleetOps.
 
 9. Report. Say how many priority, state, band and note changes you applied. Name each skipped card and its reason. A refused card is one card: it is in `results` and in `skipped` with reason `open dependency`. Name it once, with its lane id and the reason `refused: open dependency`, so that Dave's tap does not vanish. If the command printed a `[lane] warn: migration 0006` line, relay it. Quote each new question from Dave with its lane id.

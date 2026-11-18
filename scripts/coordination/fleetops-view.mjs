@@ -164,11 +164,17 @@ function buildWip(lanes, c) {
   return { rows, live: rows.filter((r) => !r.lapsed).length, lapsed: rows.filter((r) => r.lapsed).length };
 }
 
+/** The P0 cap: an integer 1..100, as a number or as a trimmed string of digits only; anything else is null (not true, hex, an exponent or a fraction). */
+export function capOf(value) {
+  const n = typeof value === 'number' ? value : typeof value === 'string' && /^\d{1,3}$/.test(value.trim()) ? Number(value.trim()) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 100 ? n : null;
+}
+
 function buildP0(lanes, targets, c) {
   const p0 = lanes.filter((l) => l.band === 'P0');
   const cap = targets.rows.find((t) => t.key === 'p0_cap');
   return {
-    open: p0.length, cap: cap && Number.isFinite(Number(cap.value)) ? Number(cap.value) : null,
+    open: p0.length, cap: capOf(cap?.value),
     unheld: p0.filter((l) => !l.held).map((l) => ({ title: c.title(l.title), id: c.id(l.id), age: l.dave_ask_at ? c.age(l.dave_ask_at) : null })),
   };
 }

@@ -24,9 +24,10 @@
  *     backslashes and code spans removed).
  * maskListed cannot mask a string id such as "PRRC_x": the render REFUSES when one is left.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { readIdList, countListed } from './board-mask.mjs';
@@ -40,7 +41,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(HERE, 'fleetops', 'page.template.html');
 const SLOT = '__FLEETOPS_DATA__';
 const RETIRED = Object.freeze(['claude.ai/artifact/', 'board_url', 'no_end', '{h}']);
-const USAGE = 'usage: node fleetops-html.mjs <folder> --out <outdir> [--ids-root <root>] | --check <file> --stamp <exportedAt> [--ids-root <root>]';
+const USAGE = 'usage: node fleetops-html.mjs <folder> --out <outdir> [--ids-root <root>] | --check <file> --stamp <exportedAt> [--ids-root <root>] | --lock-acquire <key> --session <sid8> [--force] [--dir <dir>] | --lock-release ok|failed --session <sid8> [--step <n>] [--dir <dir>] | --lock-rekey <key> --session <sid8> | --lock-touch --session <sid8>';
 
 /** Reads the 7 files of `dir`. Throws when one is missing or when they come from more than one export. */
 export function loadFiles(dir) {
@@ -57,17 +58,25 @@ export function loadFiles(dir) {
 
 /* ---------- the page code that a node test can run ---------- */
 
+/**
+ * The template text with LF line ends. `core.autocrlf` gives a Windows checkout a CRLF template; the page must be the same bytes on every
+ * checkout, so the manifest `htmlBytes` and `sha256Html` equal an LF upload (R5).
+ */
+const readTemplate = (path) => readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');
+
 let coreCache = null;
-/** The pure functions of the page (the CORE block of the template), run in a vm. A test calls the real page code, not a copy. */
-export function pageCore() {
-  if (coreCache) return coreCache;
-  const tpl = readFileSync(TEMPLATE_PATH, 'utf8');
+/** The pure functions of the page (the CORE block of the template), run in a vm. A test calls the real page code, not a copy. `templatePath` is for a test; only the default is cached. */
+export function pageCore(templatePath = TEMPLATE_PATH) {
+  const isDefault = templatePath === TEMPLATE_PATH;
+  if (isDefault && coreCache) return coreCache;
+  const tpl = readTemplate(templatePath);
   const from = tpl.indexOf('/*CORE-START*/');
   const to = tpl.indexOf('/*CORE-END*/');
   if (from < 0 || to < from) throw new Error('the template has no CORE block');
   const names = ['clockState', 'clockText', 'leaseState', 'pileParts', 'pileSubtitle', 'axisTicks', 'cstHM', 'cstZone', 'plural'];
-  coreCache = vm.runInNewContext(`${tpl.slice(from, to)}\n({ ${names.join(', ')} })`, {});
-  return coreCache;
+  const core = vm.runInNewContext(`${tpl.slice(from, to)}\n({ ${names.join(', ')} })`, {});
+  if (isDefault) coreCache = core;
+  return core;
 }
 
 export const axisTicks = (count, width, minGap) => Array.from(pageCore().axisTicks(count, width, minGap));
@@ -117,8 +126,8 @@ const leftIn = (texts, ids) => Math.max(0, ...texts.map((t) => countListed(t, id
 /** JSON that is safe inside a script block: < > & and the two line separators are written as \uXXXX (still valid JSON). */
 const scriptJson = (json) => json.replace(/[<>&\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
-export function renderHtml(view, rawJson = JSON.stringify(view)) {
-  const parts = readFileSync(TEMPLATE_PATH, 'utf8').split(SLOT);
+export function renderHtml(view, rawJson = JSON.stringify(view), templatePath = TEMPLATE_PATH) {
+  const parts = readTemplate(templatePath).split(SLOT);
   if (parts.length !== 2) throw new Error('the template must hold exactly one data slot');
   return `${parts[0]}${scriptJson(rawJson)}${parts[1]}`;
 }
@@ -241,12 +250,12 @@ export function scanView(ev, ids) {
  * a listed id left in the display text, or an html over the size limit. `build` is injectable for a test (buildView with an empty list is the
  * unmasked case).
  */
-export function produce(files, ids, { build = buildView } = {}) {
+export function produce(files, ids, { build = buildView, template = TEMPLATE_PATH } = {}) {
   const view = embedView(build(files, ids));
   const bad = scanView(view, ids);
   if (bad) throw new Error(`${bad.msg} at ${bad.path}`);
   const rawJson = JSON.stringify(view);
-  const html = renderHtml(view, rawJson);
+  const html = renderHtml(view, rawJson, template);
   const page = renderPageMd(view);
   if (leftIn([rawJson, decodeDisplay(rawJson), html, decodeDisplay(html)], ids) > 0) throw new Error('a listed id is left in the display text of the html');
   if (leftIn([page, decodeDisplay(page)], ids) > 0) throw new Error('a listed id is left in the display text of page.md');
@@ -269,6 +278,369 @@ export function checkText(text, stamp, ids) {
   r.ok = r.listed === 0 && r.stamp && r.embeds >= 1 && r.h2 === 2;
   r.line = `check: listed ${r.listed}, stamp ${r.stamp ? 'yes' : 'no'}, embeds ${r.embeds}, h2 ${r.h2}`;
   return r;
+}
+
+/* ---------- the publication lock (one writer for the FleetOps page) ---------- */
+
+/**
+ * Files in the lane-dash state dir (LANE_DASH_STATE_DIR, else ~/.claude/state/lane-dash):
+ *   publish.lock      {session, key, at}   the lock; its holder is the one session that writes the page
+ *   publish.json      {state: writing|failed|ok, session, key, at, step?, lastOkAt?}   read by the Stop-gate hook (lane-dash-refresh.ts, failed only); no pid.
+ *                     lastOkAt is the time of the last ok refresh; writing and a failed release carry it, so a forced run cannot erase the hour limit.
+ *   publish.takeover  {session, at}        a mutex for a takeover, a rekey and a touch; dead after 10 seconds
+ * Acquire is an exclusive create (flag wx). A lock over 20 minutes old counts as dead. The takeover holds the mutex, reads the lock a third time,
+ * and renames the STALE file to a name only this taker uses (publish.lock.taken.<session>). A taken file that is not the stale one goes back with a
+ * link that never overwrites; when the lock path is taken again the copy stays on disk and the exit is 3 with a conflict line.
+ * One refresh an hour: a release ok leaves publish.json with state ok. An acquire exits 4 while the last ok is under 60 minutes old.
+ * A failed export is not retried: an acquire on the key of a failed publish.json exits 5. `--force` skips exits 4 and 5 only (never a live lock).
+ * A rekey (a restart on a newer export) and a touch (a keep-alive) are for the holder only.
+ * Exit codes: 0 ok, 1 usage or an I/O error, 3 refused (another session holds the lock, or this session does not), 4 last refresh under an hour ago,
+ * 5 this export key already failed, 6 busy (a live takeover mutex: release, rekey and touch wait up to 1 second, then answer 6; nothing changed).
+ */
+export const LOCK_STALE_MS = 20 * 60 * 1000;
+export const REFRESH_EVERY_MS = 60 * 60 * 1000;
+export const MUTEX_STALE_MS = 10 * 1000;
+/** An ok time this far ahead of the caller clock still blocks: another process on this machine wrote it a moment ago with its own reading of the clock. */
+const FUTURE_SLACK_MS = 5 * 1000;
+export const LOCK_FILE = 'publish.lock';
+export const PUBLISH_FILE = 'publish.json';
+export const MUTEX_FILE = 'publish.takeover';
+const SESSION_RE = /^[0-9a-f]{8}$/;
+const LOCK_KEY_RE = /^[A-Za-z0-9:.+_-]{1,64}$/;
+const STEP_RE = /^\d{1,2}(\.\d{1,2})?$/;
+
+export function laneDashDir(env = process.env) {
+  if (env.LANE_DASH_STATE_DIR) return env.LANE_DASH_STATE_DIR;
+  return join(env.HOME || env.USERPROFILE || homedir(), '.claude', 'state', 'lane-dash');
+}
+
+const readText = (p) => {
+  try { return readFileSync(p, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+};
+const parseLock = (raw) => {
+  try { const o = JSON.parse(raw); return o !== null && typeof o === 'object' && !Array.isArray(o) ? o : null; } catch { return null; }
+};
+/** The session of a lock text, for a message: eight hex characters or "unknown". Nothing else from the file is printed. */
+const holderOf = (raw) => { const s = parseLock(raw)?.session; return typeof s === 'string' && SESSION_RE.test(s) ? s : 'unknown'; };
+const isoAt = (now) => new Date(now).toISOString();
+const refused = (holder) => ({ code: 3, msg: `fleetops-html: another session writes the page (holder ${holder}). Stop and report. Write no failed state.` });
+const notHolder = (session) => ({ code: 3, msg: `fleetops-html: session ${session} does not hold the lock. Nothing changed.` });
+
+const sleepSync = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+const RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+/** renameSync that retries on EPERM, EBUSY and EACCES (a scanner or an editor holds the file on Windows): 5 attempts, 50 ms apart. Other errors, ENOENT included, go up at once. */
+export function renameRetry(from, to, { rename = renameSync, sleep = sleepSync } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { rename(from, to); return; } catch (e) {
+      if (!RETRY_CODES.has(e.code) || attempt >= 5) throw e;
+      sleep(50);
+    }
+  }
+}
+
+/** Stale = older than `limit` by `at`; a file with no usable `at` (empty, half written, corrupt) is judged by its mtime. A future time is live. */
+function lockIsStale(raw, mtimeMs, now, limit = LOCK_STALE_MS) {
+  const at = Date.parse(parseLock(raw)?.at);
+  return now - (Number.isNaN(at) ? mtimeMs : at) > limit;
+}
+
+/** Atomic write of publish.json: a temp file, then a rename. */
+function writePublish(dir, session, record) {
+  const tmp = join(dir, `${PUBLISH_FILE}.${session}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(record)}\n`);
+    renameRetry(tmp, join(dir, PUBLISH_FILE));
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
+/** publish.json as an object; null for a missing, unreadable or corrupt file. */
+function readPublish(dir) {
+  try { const raw = readText(join(dir, PUBLISH_FILE)); return raw === null ? null : parseLock(raw); } catch { return null; }
+}
+
+/** The time (ms) of the last ok refresh in a publish.json record: lastOkAt, else the time of an ok record; null when unknown. */
+function lastOkMs(rec) {
+  const t = Date.parse(rec?.lastOkAt);
+  if (!Number.isNaN(t)) return t;
+  const a = rec?.state === 'ok' ? Date.parse(rec.at) : NaN;
+  return Number.isNaN(a) ? null : a;
+}
+const withLastOk = (record, okMs) => (okMs === null ? record : { ...record, lastOkAt: isoAt(okMs) });
+
+/** "14:00 CST" in America/Chicago (CST or CDT by the date), 24-hour clock. */
+function clockChicago(ms) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).formatToParts(new Date(ms));
+  const p = (t) => parts.find((x) => x.type === t)?.value ?? '';
+  return `${p('hour')}:${p('minute')} ${p('timeZoneName')}`;
+}
+
+/**
+ * Why an acquire must not start, as { code, msg }, or null. Code 4: the last ok refresh is under an hour old (a bad or future time does not block).
+ * Code 5: publish.json says this export key already failed. Run before the lock is made and again right after, so a refresh that ended in between is caught.
+ */
+function acquireRefusal(dir, key, now) {
+  const rec = readPublish(dir);
+  const ok = lastOkMs(rec);
+  if (ok !== null && now - ok >= -FUTURE_SLACK_MS && now - ok < REFRESH_EVERY_MS) return { code: 4, msg: `fleetops-html: last refresh at ${clockChicago(ok)}, under 1 hour ago` };
+  if (rec?.state === 'failed' && rec.key === key) {
+    const at = Date.parse(rec.at);
+    const when = Number.isNaN(at) ? '' : ` at ${clockChicago(at)}`;
+    const step = typeof rec.step === 'string' && STEP_RE.test(rec.step) ? ` (step ${rec.step})` : '';
+    return { code: 5, msg: `fleetops-html: this export already failed${when}${step}. Do not retry until a new export. Skip the run.` };
+  }
+  return null;
+}
+
+/**
+ * The state of the lock: { state: 'free' } | { state: 'live', holder } | { state: 'stale', raw, holder }.
+ * A stale verdict needs two reads with equal text. `hooks.betweenReads` runs between them (a test changes the lock there).
+ */
+export function lockSnapshot(dir, now = Date.now(), hooks = {}) {
+  const file = join(dir, LOCK_FILE);
+  let raw1;
+  let mtime;
+  try { raw1 = readFileSync(file, 'utf8'); mtime = statSync(file).mtimeMs; } catch (e) { if (e.code === 'ENOENT') return { state: 'free' }; throw e; }
+  const holder = holderOf(raw1);
+  if (!lockIsStale(raw1, mtime, now)) return { state: 'live', holder };
+  if (hooks.betweenReads) hooks.betweenReads();
+  const raw2 = readText(file);
+  if (raw2 === null) return { state: 'free' };
+  return raw2 === raw1 ? { state: 'stale', raw: raw1, holder } : { state: 'live', holder: holderOf(raw2) };
+}
+
+/* ---- the takeover mutex ---- */
+
+/**
+ * Creates publish.takeover (wx). A mutex over 10 seconds old is dead: it is removed once two reads agree, then the create is tried again.
+ * `waitMs` > 0 polls every 50 ms for a live mutex. A mutex that cannot be read (a directory, say) is live. Returns the text this call wrote, or null when
+ * another session holds the mutex.
+ */
+function takeMutex(dir, who, waitMs) {
+  const file = join(dir, MUTEX_FILE);
+  const text = JSON.stringify({ session: who.session, at: isoAt(who.now) });
+  const deadline = Date.now() + waitMs;
+  for (let tries = 0; tries < 200; tries += 1) {
+    try { writeFileSync(file, text, { flag: 'wx' }); return text; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    let raw = null;
+    let mtime = 0;
+    try { raw = readFileSync(file, 'utf8'); mtime = statSync(file).mtimeMs; } catch (e) { if (e.code === 'ENOENT') continue; }
+    if (raw !== null && lockIsStale(raw, mtime, who.now, MUTEX_STALE_MS) && readText(file) === raw) { rmSync(file, { force: true }); continue; }
+    if (Date.now() >= deadline) return null;
+    sleepSync(50);
+  }
+  return null;
+}
+
+/**
+ * Runs `fn` while this call holds the mutex. `busy` is the result when another session holds it. `hooks.afterMutex` (a test) runs first.
+ * The mutex is removed in a finally, only while its text is still ours, and an error from that remove is swallowed: the result of `fn` stands.
+ */
+function withMutex(dir, who, waitMs, fn, busy, hooks = {}) {
+  const text = takeMutex(dir, who, waitMs);
+  if (text === null) return busy;
+  const file = join(dir, MUTEX_FILE);
+  try {
+    if (hooks.afterMutex) hooks.afterMutex();
+    return fn();
+  } finally {
+    try { if (readText(file) === text) rmSync(file, { force: true }); } catch { /* a leftover mutex dies after 10 seconds */ }
+  }
+}
+
+/* ---- create, take over, release ---- */
+
+const newLock = (dir, { key, session, now }) => writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ session, key, at: isoAt(now) }), { flag: 'wx' });
+const writing = (dir, { key, session, now }) => writePublish(dir, session, withLastOk({ state: 'writing', session, key, at: isoAt(now) }, lastOkMs(readPublish(dir))));
+
+/**
+ * Makes the lock and the writing record. Returns null when the lock exists (EEXIST), else { code, msg }.
+ * Right after the create the refusal check runs again (code 4 or 5 removes the new lock). A write failure removes the lock and gives code 1.
+ */
+function createLock(dir, who, hooks, okMsg) {
+  try { newLock(dir, who); } catch (e) { if (e.code === 'EEXIST') return null; throw e; }
+  try {
+    if (hooks.afterNewLock) hooks.afterNewLock();
+    const again = who.force ? null : acquireRefusal(dir, who.key, who.now);
+    if (again) { rmSync(join(dir, LOCK_FILE), { force: true }); return again; }
+    if (hooks.beforeWriting) hooks.beforeWriting();
+    writing(dir, who);
+  } catch (e) {
+    rmSync(join(dir, LOCK_FILE), { force: true });
+    return { code: 1, msg: `fleetops-html: could not write publish.json (${typeof e.code === 'string' ? e.code : 'error'}); the lock was removed. Stop and report.` };
+  }
+  return { code: 0, msg: okMsg };
+}
+
+/** Puts a taken file back as the lock without overwriting. When the lock path is taken again, the copy stays on disk and the exit is 3 with a conflict line. */
+function putBack(file, taken) {
+  try { linkSync(taken, file); } catch (e) {
+    if (e.code === 'EEXIST') return { code: 3, msg: `fleetops-html: lock conflict: a fresh lock was moved aside and the lock path is taken again. The copy stays as ${basename(taken)}. Stop and report. Write no failed state.` };
+    throw e;
+  }
+  rmSync(taken, { force: true });
+  return refused(holderOf(readText(file) ?? ''));
+}
+
+function takeUnderMutex(dir, snap, who, hooks) {
+  const file = join(dir, LOCK_FILE);
+  const taken = join(dir, `${LOCK_FILE}.taken.${who.session}`);
+  const cur = readText(file);
+  if (cur !== null && cur !== snap.raw) return refused(holderOf(cur));
+  if (cur !== null) {
+    if (hooks.beforeRename) hooks.beforeRename();
+    try { renameRetry(file, taken); } catch (e) {
+      if (e.code === 'ENOENT') return { code: 3, msg: 'fleetops-html: another session took the stale lock first. Stop and report. Write no failed state.' };
+      throw e;
+    }
+    if (hooks.afterRename) hooks.afterRename();
+    if (readText(taken) !== snap.raw) return putBack(file, taken);
+    rmSync(taken, { force: true });
+  }
+  const made = createLock(dir, who, hooks, `fleetops-html: lock taken over from a dead holder (${snap.holder}, over 20 minutes old); session ${who.session} writes now`);
+  return made ?? refused(holderOf(readText(file) ?? ''));
+}
+
+/**
+ * Takes over the stale lock of `snap`, under the takeover mutex. `hooks` (for a test): afterMutex, beforeRename, afterRename, afterNewLock, beforeWriting.
+ * ENOENT on the rename: another taker won. A taken file that differs from the stale read is a fresh lock of another session: it goes back (see putBack).
+ */
+export function lockTake(dir, snap, who, hooks = {}) {
+  const busy = { code: 3, msg: 'fleetops-html: another session is taking over the lock now. Stop and report. Write no failed state.' };
+  return withMutex(dir, who, 0, () => takeUnderMutex(dir, snap, who, hooks), busy, hooks);
+}
+
+/**
+ * Acquire: exclusive create; on EEXIST a live lock refuses, a stale one is taken over. Returns { code, msg }.
+ * Code 4: the last ok refresh is under an hour old (Dave's limit: one refresh an hour on this machine). Code 5: this export key already failed.
+ * `force` skips codes 4 and 5 only.
+ */
+export function lockAcquire({ dir, key, session, now = Date.now(), force = false }, hooks = {}) {
+  mkdirSync(dir, { recursive: true });
+  const who = { key, session, now, force };
+  const first = force ? null : acquireRefusal(dir, key, now);
+  if (first) return first;
+  for (let i = 0; i < 3; i += 1) {
+    const made = createLock(dir, who, hooks, `fleetops-html: lock acquired by ${session}`);
+    if (made !== null) return made;
+    const snap = lockSnapshot(dir, now, hooks);
+    if (snap.state === 'live') return refused(snap.holder);
+    if (snap.state === 'stale') return lockTake(dir, snap, who, hooks);
+  }
+  return refused('unknown');
+}
+
+const busy6 = { code: 6, msg: 'fleetops-html: the lock is busy (a takeover or another lock command runs). Nothing changed. Wait 2 seconds and try once more.' };
+/** The parsed lock when `session` holds it, else null. A missing file is null. */
+const heldBy = (file, session) => {
+  const raw = readText(file);
+  const lock = raw === null ? null : parseLock(raw);
+  return lock !== null && lock.session === session ? lock : null;
+};
+
+/**
+ * Release: only the holder, under the takeover mutex (waits up to `waitMs`, 1000 by default; a live mutex gives code 6, busy). The lock is read again inside
+ * the mutex. `ok` writes publish.json state ok with lastOkAt = now (the hour limit reads it; the hook ignores any state but failed);
+ * `failed` writes publish.json state failed (the key and the step; lastOkAt carried). The lock is removed in a finally, also when the write fails.
+ */
+export function lockRelease({ dir, session, outcome, step = null, now = Date.now(), waitMs = 1000 }, hooks = {}) {
+  const file = join(dir, LOCK_FILE);
+  if (heldBy(file, session) === null) return notHolder(session);
+  return withMutex(dir, { session, now }, waitMs, () => {
+    const lock = heldBy(file, session);
+    if (lock === null) return notHolder(session);
+    try {
+      const rec = outcome === 'failed'
+        ? withLastOk({ state: 'failed', session, key: lock.key, at: isoAt(now), ...(step ? { step } : {}) }, lastOkMs(readPublish(dir)))
+        : { state: 'ok', session, key: lock.key, at: isoAt(now), lastOkAt: isoAt(now) };
+      writePublish(dir, session, rec);
+    } finally {
+      rmSync(file, { force: true });
+    }
+    return { code: 0, msg: `fleetops-html: lock released (${outcome})` };
+  }, busy6, hooks);
+}
+
+/** The holder rewrites its lock (a new key, a new time) under the mutex, so a takeover cannot interleave. A live mutex gives code 6, busy. */
+function rewriteHolder({ dir, session, key, now, waitMs }, done, hooks) {
+  const file = join(dir, LOCK_FILE);
+  if (heldBy(file, session) === null) return notHolder(session);
+  return withMutex(dir, { session, now }, waitMs, () => {
+    const lock = heldBy(file, session);
+    if (lock === null) return notHolder(session);
+    const tmp = join(dir, `${LOCK_FILE}.${session}.tmp`);
+    try {
+      writeFileSync(tmp, JSON.stringify({ session, key: key ?? lock.key, at: isoAt(now) }));
+      renameRetry(tmp, file);
+    } catch (e) {
+      rmSync(tmp, { force: true });
+      throw e;
+    }
+    if (key !== null) writePublish(dir, session, withLastOk({ state: 'writing', session, key, at: isoAt(now) }, lastOkMs(readPublish(dir))));
+    return { code: 0, msg: done };
+  }, busy6, hooks);
+}
+
+/** Restart on a newer export: the holder keeps the lock, sets the new key and a new time. Only the holder may run it. */
+export const lockRekey = ({ dir, session, key, now = Date.now(), waitMs = 1000 }, hooks = {}) => rewriteHolder({ dir, session, key, now, waitMs }, `fleetops-html: lock rekeyed to ${key}`, hooks);
+
+/** Keep-alive: the holder sets a new time on its lock. Only the holder may run it. */
+export const lockTouch = ({ dir, session, now = Date.now(), waitMs = 1000 }, hooks = {}) => rewriteHolder({ dir, session, key: null, now, waitMs }, 'fleetops-html: lock touched', hooks);
+
+const LOCK_VERBS = Object.freeze(['--lock-acquire', '--lock-release', '--lock-rekey', '--lock-touch']);
+const isLockArgv = (argv) => argv.some((a) => LOCK_VERBS.includes(a));
+
+function parseLockArgs(argv) {
+  const o = { verb: null, arg: null, session: null, step: null, dir: null, force: false };
+  const value = (i, flag) => {
+    const v = argv[i];
+    if (v === undefined || v.startsWith('--')) throw usageError(`${flag} needs a value`);
+    return v;
+  };
+  const verb = (a, v) => {
+    if (o.verb !== null) throw usageError('one lock verb only');
+    o.verb = a;
+    o.arg = v;
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--lock-acquire' || a === '--lock-release' || a === '--lock-rekey') verb(a, value(++i, a));
+    else if (a === '--lock-touch') verb(a, null);
+    else if (a === '--session') o.session = value(++i, a);
+    else if (a === '--step') o.step = value(++i, a);
+    else if (a === '--dir') o.dir = value(++i, a);
+    else if (a === '--force') o.force = true;
+    else throw usageError(`unknown argument ${a.startsWith('--') ? a : 'in a lock command'}`);
+  }
+  if (o.session === null || !SESSION_RE.test(o.session)) throw usageError('--session must be 8 lowercase hex characters');
+  if (o.force && o.verb !== '--lock-acquire') throw usageError('--force goes with --lock-acquire');
+  if (o.verb === '--lock-acquire' || o.verb === '--lock-rekey') {
+    if (!LOCK_KEY_RE.test(o.arg)) throw usageError('the key must be 1 to 64 characters of letters, digits and : . + _ -');
+  } else if (o.verb === '--lock-release' && o.arg !== 'ok' && o.arg !== 'failed') throw usageError('--lock-release takes ok or failed');
+  if (o.step !== null && (o.verb !== '--lock-release' || o.arg !== 'failed' || !STEP_RE.test(o.step))) throw usageError('--step is a step number such as 7 or 7.3, with --lock-release failed');
+  return o;
+}
+
+/** The lock verbs. A refusal (exit 3, 4 or 5) prints one line and no "nothing written" suffix. */
+function runLockCli(argv, { out, err, env, now }) {
+  try {
+    const o = parseLockArgs(argv);
+    const dir = o.dir ?? laneDashDir(env);
+    const base = { dir, session: o.session, now: now() };
+    let r;
+    if (o.verb === '--lock-acquire') r = lockAcquire({ ...base, key: o.arg, force: o.force });
+    else if (o.verb === '--lock-rekey') r = lockRekey({ ...base, key: o.arg });
+    else if (o.verb === '--lock-touch') r = lockTouch(base);
+    else r = lockRelease({ ...base, outcome: o.arg, step: o.step });
+    (r.code === 0 ? out : err)(r.msg);
+    return r.code;
+  } catch (e) {
+    err(`fleetops-html: ${e.message}`);
+    return 1;
+  }
 }
 
 /* ---------- CLI ---------- */
@@ -324,10 +696,10 @@ function writeAtomic(outDir, contents) {
   }
 }
 
-function runRender(o, build, err) {
+function runRender(o, build, template, err) {
   if (existsSync(o.out)) for (const n of OUT_NAMES) rmSync(join(o.out, n), { force: true });
   const ids = readIdList(o.idsRoot);
-  const { view, html, page, masked } = produce(loadFiles(o.dir), ids, { build });
+  const { view, html, page, masked } = produce(loadFiles(o.dir), ids, { build, template });
   const manifest = { exportedAt: view.exportedAt, masked, htmlBytes: Buffer.byteLength(html), pageBytes: Buffer.byteLength(page), sha256Html: sha(html), sha256Page: sha(page) };
   writeAtomic(o.out, { 'fleetops.html': html, 'page.md': page, 'manifest.json': `${JSON.stringify(manifest, null, 2)}\n` });
   err(`fleetops-html: masked ${masked} listed id(s), html ${manifest.htmlBytes} bytes, page ${manifest.pageBytes} bytes, listed ids left 0`);
@@ -375,16 +747,18 @@ async function runVerify(o, out) {
 }
 
 const defaultDeps = (deps) => ({
-  build: buildView, out: (s) => process.stdout.write(`${s}\n`), err: (s) => process.stderr.write(`${s}\n`), ...deps,
+  build: buildView, template: TEMPLATE_PATH, env: process.env, now: () => Date.now(), out: (s) => process.stdout.write(`${s}\n`), err: (s) => process.stderr.write(`${s}\n`), ...deps,
 });
 
 /** The offline CLI (render and --check). `deps` is injectable for a test: build (the view builder), out (stdout line), err (stderr line). Returns the exit code. */
 export function main(argv, deps = {}) {
-  const { build, out, err } = defaultDeps(deps);
+  const d = defaultDeps(deps);
+  const { build, template, out, err } = d;
+  if (isLockArgv(argv)) return runLockCli(argv, d);
   try {
     const o = parseArgs(argv);
     if (o.verify) throw usageError('--verify-upload needs the async entry');
-    return o.check ? runCheck(o, out) : runRender(o, build, err);
+    return o.check ? runCheck(o, out) : runRender(o, build, template, err);
   } catch (e) {
     err(`fleetops-html: ${e.message}${e.usage || argv.includes('--check') ? '' : '; nothing written'}`);
     return 1;
@@ -394,6 +768,7 @@ export function main(argv, deps = {}) {
 /** The whole CLI, with the one networked mode (--verify-upload). The other modes go to main. */
 export async function mainAsync(argv, deps = {}) {
   const { out, err } = defaultDeps(deps);
+  if (isLockArgv(argv)) return main(argv, deps);
   let o;
   try { o = parseArgs(argv); } catch (e) { err(`fleetops-html: ${e.message}`); return 1; }
   if (!o.verify) return main(argv, deps);

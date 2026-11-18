@@ -35,7 +35,8 @@ const HOUR = 60 * MIN;
 const iso = (ms: number) => new Date(ms).toISOString();
 const payload = (sid = 'sess-1', extra: Record<string, unknown> = {}) => ({ session_id: sid, hook_event_name: 'Stop', ...extra });
 const STALE = /FleetOps data is stale/;
-const SKILL = 'Tell Dave in one line. Run the fleetops-refresh skill only if he asks.';
+const SKILL = "Run the fleetops-refresh skill now (Dave's standing yes, data only). Skip it in a headless run.";
+const SKILL_AGE = 'Tell Dave in one line. Run the fleetops-refresh skill only if he asks.';
 
 let tmp = '';
 let pendingDir = '';
@@ -119,7 +120,8 @@ describe('stop gate with a stale FleetOps line', () => {
     expect(reason).toMatch(STALE);
     expect(reason).toContain('older than 36 hours');
     expect(reason).not.toContain('not uploaded');
-    expect(reason).toContain(SKILL);
+    expect(reason).toContain(SKILL_AGE);
+    expect(reason).not.toContain(SKILL);
   });
 
   it('F8: pending false and an export 35 h old says nothing', () => {
