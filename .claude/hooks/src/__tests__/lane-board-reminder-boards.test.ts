@@ -430,10 +430,24 @@ describe('R11: note|state|release|done in a cwd with no board use the board of t
       { name: 'CCv3', key: 'continuous-claude', path: path.join(tmp, 'cc'), status: 'active' },
       { name: 'ZZ', key: 'zz-board', path: zz, status: 'active' },
     ] }));
+    // The CCv3 board has a recorded page: its artifacts.json entry (there is no fixed fallback id, card coord-board-id-followup).
+    fs.writeFileSync(path.join(home, 'continuous-claude', '.claude', 'artifacts.json'), JSON.stringify({ artifacts: [
+      { id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/R11Page_1', publish_from: 'lane-board.html' },
+    ] }));
     env = { LANE_REGISTRY_PATH: path.join(tmp, 'reg.json'), LANE_BOARD_PENDING_DIR: path.join(tmp, 'pending'), CCV3_USER_HOME: home, LANE_RENDER_SCRIPT: path.join(tmp, 'r.mjs') };
     spawned.length = 0;
   });
   afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+  it('U4: a default board whose artifacts.json entry is missing still writes the pending file and reminds', () => {
+    // Breaks if an unrecorded default board falls to render-only: then no pending file is written and the Stop gate
+    // never gives its "not recorded ... Do not publish" fix line (card coord-board-id-followup, pre-pr 2026-11-17).
+    fs.writeFileSync(path.join(home, 'continuous-claude', '.claude', 'artifacts.json'), JSON.stringify({ artifacts: [] }));
+    const r = call('node C:/Users/dkhay/.claude/scripts/lane.mjs done L1', nowhere, { ownedBoard: 'continuous-claude' });
+    expect(r.decision).toMatchObject({ action: 'remind', board: 'continuous-claude', verb: 'done' });
+    expect(fs.existsSync(path.join(tmp, 'pending', `${SID}.json`))).toBe(true);
+    expect(call('node lane.mjs done L1', nowhere, { ownedBoard: 'zz-board' }).decision.action).toBe('render');
+  });
 
   it('laneChange reads the lane id and --as after the verb, past global flags', () => {
     expect(laneChange('node lane.mjs done L1', 'Bash')).toMatchObject({ verb: 'done', laneId: 'L1', as: null });

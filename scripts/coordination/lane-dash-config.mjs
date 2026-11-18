@@ -6,9 +6,11 @@
  * Anything else that is not null throws, so a typo cannot silently turn a limit off or on.
  *
  * Every target row has {key, value, label, source}. The source column says where the number came from.
- * Importing this file does no I/O.
+ * Importing this file does no I/O. normalizeConfig does none; loadConfig reads the config and, when it has no
+ * board_url, artifacts.json through the resolver.
  */
 import { readFileSync } from 'node:fs';
+import { boardArtifact } from './lane-board.mjs';
 
 export const LIMIT_KEYS = ['wip_limit', 'never_started_cap', 'dave_queue_cap'];
 
@@ -81,20 +83,33 @@ export function normalizeConfig(raw) {
 }
 
 /**
+ * A config with no board_url takes the board's page url from the resolver (lane-board.mjs boardArtifact): for the
+ * default board, the agentic-os-lane-board entry of artifacts.json. A fixed url in the config names the wrong page
+ * after each switch of claude.ai account (card coord-board-id-followup). No page: board_url stays null.
+ */
+function withBoardUrl(cfg, artifactOpts) {
+  if (cfg.board_url) return cfg;
+  return { ...cfg, board_url: boardArtifact(cfg.board, artifactOpts)?.url ?? null };
+}
+
+/**
  * Read a config file. A missing file gives the defaults, unless `required` is set (the caller named the path
  * on the command line): then it throws. Bad JSON or a bad value throws, naming the file.
+ * `artifactOpts` goes to boardArtifact (tests pass { artifactsPath } or { env }).
  */
-export function loadConfig(file, { required = false } = {}) {
+export function loadConfig(file, { required = false, artifactOpts = {} } = {}) {
   let raw;
   try {
     raw = JSON.parse(readFileSync(file, 'utf8'));
   } catch (e) {
-    if (e?.code === 'ENOENT' && !required) return normalizeConfig({});
+    if (e?.code === 'ENOENT' && !required) return withBoardUrl(normalizeConfig({}), artifactOpts);
     throw new Error(`${file}: ${e.message}`);
   }
+  let cfg;
   try {
-    return normalizeConfig(raw);
+    cfg = normalizeConfig(raw);
   } catch (e) {
     throw new Error(`${file}: ${e.message}`);
   }
+  return withBoardUrl(cfg, artifactOpts);
 }

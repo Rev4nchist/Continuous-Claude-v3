@@ -37,29 +37,40 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { decide, handle } from '../lane-board-republish-reminder.js';
 import { boardArtifact, renderBoardCmd } from '../shared/lane-board.js';
 
-const BOARD_ARTIFACT_URL = boardArtifact('continuous-claude')?.url as string;
-const RENDER_COMMAND = renderBoardCmd('continuous-claude');
+// Hermetic home: the default board's page comes only from <home>/continuous-claude/.claude/artifacts.json (no fixed
+// fallback id). Seed it here, so no test reads the real primary checkout (CI on Linux has none: PR 644).
+const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'reminder-home-'));
+fs.mkdirSync(path.join(TEST_HOME, 'continuous-claude', '.claude'), { recursive: true });
+fs.writeFileSync(path.join(TEST_HOME, 'continuous-claude', '.claude', 'artifacts.json'), JSON.stringify({ artifacts: [
+  { id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/ReminderTestPage_1', publish_from: 'lane-board.html' },
+] }));
+const HOME_ENV = { ...process.env, CCV3_USER_HOME: TEST_HOME };
+const BOARD_ARTIFACT_URL = boardArtifact('continuous-claude', { env: HOME_ENV })?.url as string;
+const RENDER_COMMAND = renderBoardCmd('continuous-claude', HOME_ENV);
+afterAll(() => { fs.rmSync(TEST_HOME, { recursive: true, force: true }); });
 
 // Hermetic board: a temp registry whose continuous-claude root covers the test cwd, so decide() resolves a
 // board without reading the real ~/.claude/project-registry.json. decide() never spawns a render.
 let tmpRoot = '';
-const savedEnv = { reg: process.env.LANE_REGISTRY_PATH, ep: process.env.CLAUDE_CODE_ENTRYPOINT };
+const savedEnv = { reg: process.env.LANE_REGISTRY_PATH, ep: process.env.CLAUDE_CODE_ENTRYPOINT, home: process.env.CCV3_USER_HOME };
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'reminder-'));
   fs.writeFileSync(path.join(tmpRoot, 'registry.json'), JSON.stringify({ projects: [
     { name: 'CCv3', key: 'continuous-claude', path: process.cwd(), status: 'active' },
   ] }));
   process.env.LANE_REGISTRY_PATH = path.join(tmpRoot, 'registry.json');
+  process.env.CCV3_USER_HOME = TEST_HOME;
   delete process.env.CLAUDE_CODE_ENTRYPOINT;
 });
 afterEach(() => {
   if (savedEnv.reg === undefined) delete process.env.LANE_REGISTRY_PATH; else process.env.LANE_REGISTRY_PATH = savedEnv.reg;
   if (savedEnv.ep === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT; else process.env.CLAUDE_CODE_ENTRYPOINT = savedEnv.ep;
+  if (savedEnv.home === undefined) delete process.env.CCV3_USER_HOME; else process.env.CCV3_USER_HOME = savedEnv.home;
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
