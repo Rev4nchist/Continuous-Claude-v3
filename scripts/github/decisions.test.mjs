@@ -17,7 +17,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -217,4 +217,63 @@ test('D12: offerWrite at a new head closes the older open offers of the same ste
   assert.deepEqual(d.decisionRecord({ ...triple(), label: 'Keep open' }), { ok: false, reason: 'no-open-offer' });
   assert.equal(d.decisionRead(triple()), null, 'the old tap records nothing');
   assert.deepEqual(d.decisionRecord({ ...triple({ head: B }), label: 'Keep open' }), { ok: true });
+});
+
+// ---- dropKey (card prflow-paid-run-guard, PR 1 taps) -------------------------------------------------------------------------------------
+// How dropKey can fail, and the test that catches it:
+//   it leaves a decision, an offer or a miss of a listed step and the key, at any head                              -> DK1
+//   it takes the rows of another key (a prefix: PR 7 against PR 70), of another step, or of another head's key      -> DK1
+//   a bad call (no step, an unknown step, no key) deletes something                                                  -> DK2
+//   it needs more than one store update, so a crash between two leaves half a drop                                   -> DK3
+test('DK1: dropKey removes decisions, offers and misses of the listed steps for the key at every head, and nothing else', async () => {
+  const file = fresh();
+  const d = await load();
+  const seed = (over, label) => { assert.equal(offer(d, over).ok, true); if (label) assert.equal(d.decisionRecord({ ...triple(over), label }).ok, true); };
+  const PR7 = 'Rev4nchist/Continuous-Claude-v3#7';
+  const PR70 = 'Rev4nchist/Continuous-Claude-v3#70';
+  for (const step of ['review', 'paid-round']) for (const head of [HEAD, 'b'.repeat(40)]) seed({ step, key: PR7, head }, 'Keep open');
+  d.missBump(triple({ step: 'review', key: PR7 }));
+  d.missBump(triple({ step: 'paid-round', key: PR7 }));
+  seed({ step: 'review', key: PR70 }, 'Keep open');
+  seed({ step: 'land', key: PR7 }, 'Keep open');
+  seed({ step: 'review', key: PR7, head: 'c'.repeat(40) }); // an open offer with no tap yet
+  const r = d.dropKey({ steps: ['review', 'paid-round'], key: PR7 });
+  assert.equal(r.ok, true);
+  const store = JSON.parse(readFileSync(file, 'utf8'));
+  const left = (group) => Object.keys(store[group]).map((id) => id.split('\n').slice(0, 2).join(' '));
+  for (const group of ['offers', 'decisions', 'misses']) {
+    assert.ok(!left(group).some((id) => id === `review ${PR7}` || id === `paid-round ${PR7}`), `${group}: nothing of the key is left`);
+  }
+  assert.ok(left('decisions').includes(`review ${PR70}`), 'PR 70 keeps its tap');
+  assert.ok(left('decisions').includes(`land ${PR7}`), 'the land step keeps its tap');
+  assert.ok(left('offers').includes(`review ${PR70}`) && left('offers').includes(`land ${PR7}`));
+  assert.equal(d.dropKey({ steps: ['review', 'paid-round'], key: PR7 }).ok, true, 'a second drop of an empty key is fine');
+});
+
+test('DK2: a bad call deletes nothing: no steps, an unknown step, no key', async () => {
+  const file = fresh();
+  const d = await load();
+  assert.equal(offer(d).ok, true);
+  assert.equal(d.decisionRecord({ ...triple(), label: 'Keep open' }).ok, true);
+  const before = readFileSync(file, 'utf8');
+  for (const bad of [{ steps: [], key: KEY }, { steps: ['nope'], key: KEY }, { steps: ['land'], key: '' }, { steps: 'land', key: KEY }, { key: KEY }, {}]) {
+    const r = d.dropKey(bad);
+    assert.equal(r.ok, false, JSON.stringify(bad));
+    assert.match(r.reason, /bad-drop/);
+  }
+  assert.equal(readFileSync(file, 'utf8'), before);
+});
+
+test('DK3: dropKey is one locked update: with the lock held it returns lock and changes nothing', async () => {
+  const file = fresh();
+  const d = await load();
+  assert.equal(offer(d).ok, true);
+  assert.equal(d.decisionRecord({ ...triple(), label: 'Keep open' }).ok, true);
+  const before = readFileSync(file, 'utf8');
+  writeFileSync(`${file}.lock`, `${process.pid} held-by-test`);
+  try {
+    assert.deepEqual(d.dropKey({ steps: ['land'], key: KEY }), { ok: false, reason: 'lock', detail: `the lock ${file}.lock is held by another session` });
+  } finally { unlinkSync(`${file}.lock`); }
+  assert.equal(readFileSync(file, 'utf8'), before);
+  assert.deepEqual(d.dropKey({ steps: ['land'], key: KEY }), { ok: true, dropped: 2 });
 });

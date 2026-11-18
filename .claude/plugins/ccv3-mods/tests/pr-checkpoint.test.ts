@@ -139,6 +139,10 @@ type Opts = {
   /** The label names `gh pr view` answers with. Unset: none. */
   labels?: string[]
   throwStore?: string
+  /** A `store.delete` whose key starts with this text throws (a store that fails after a good apply). */
+  throwDelete?: string
+  /** The first `store.set` whose key starts with this text throws; later ones work. */
+  throwSetOnce?: string
   /** A file write whose path contains this text throws (a full disk, a locked file). */
   throwWrite?: string
   /** A pending promise: the fake `gh pr comment` and the engine `--confirm` answer only after it settles (a slow call, so two presses overlap). */
@@ -159,6 +163,8 @@ type Opts = {
   applySeq?: Reply[]
   /** What the mod's own call that returns a ready PR to draft answers. Unset: success. */
   undo?: Reply
+  /** What the engine's `--drop-taps` answers (the tap drop of a PR returned to draft). Unset: success. */
+  drop?: Reply
   /** Replies for the first engine `--json` calls that carry --no-ledger (the prepare call), in order; later calls answer by `json`. */
   jsonSeq?: Reply[]
   /** Replies for the first engine `--json` calls WITHOUT --no-ledger (the ledger step), in order; later calls answer by `json`. */
@@ -235,7 +241,7 @@ const world = (on: On, opts: Opts = {}) => {
   const files: Record<string, string> = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false } }), ...(opts.files ?? {}) }
   const statuses = opts.statuses ?? {}
   // Armed by a test after `start`, so only the call under test throws.
-  const fail = { exists: false, root: false, set: false, env: false }
+  const fail = { exists: false, root: false, set: false, env: false, setOnceDone: false }
 
   on('store.get', (_$, e) => {
     if (opts.throwStore && e.key.startsWith(opts.throwStore)) throw new Error('store failed')
@@ -243,10 +249,15 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('store.set', (_$, e) => {
     if (fail.set && e.key.startsWith('checkpoint:pr:')) throw new Error('store.set failed')
+    if (opts.throwSetOnce && !fail.setOnceDone && e.key.startsWith(opts.throwSetOnce)) {
+      fail.setOnceDone = true
+      throw new Error('store.set failed once')
+    }
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
     return { value: undefined }
   })
   on('store.delete', (_$, e) => {
+    if (opts.throwDelete && e.key.startsWith(opts.throwDelete)) throw new Error('store.delete failed')
     store.delete(e.key)
     return { value: undefined }
   })
@@ -337,6 +348,7 @@ const world = (on: On, opts: Opts = {}) => {
       return done(shape)
     }
     if (line.includes('pr-checkpoint.mjs')) {
+      if (argv.includes('--drop-taps')) return done(opts.drop ?? { stdout: '{"ok":true,"dropped":0}\n' })
       if (argv.includes('--json')) {
         // The real engine adds the ledger block only without --no-ledger (pr-checkpoint.mjs runRecommend).
         const noLedger = argv.includes('--no-ledger')
@@ -680,12 +692,13 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
   })
 
-  test('K1c a recommendation that is held marks no label Recommended, and every pick is --by dave', async ($, on) => {
+  // m5 (card prflow-paid-run-guard): the engine marks Keep as draft when the recommendation is held; the mod does the same (one rule, two copies).
+  test('K1c a recommendation that is held marks Keep as draft Recommended, and every pick is --by dave', async ($, on) => {
     const held = engineJson({ recommended: 'both', options: [option('none'), option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' })] })
     const { seen } = world(on, { json: { stdout: JSON.stringify(held) } })
     const { dialog, pane } = await openPane($)
     expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['Keep as draft', 'CodeRabbit review', 'No review, land on CI'])
-    expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
+    expect(dialog!.labels.filter(label => label.includes('(Recommended)'))).toEqual(['Keep as draft ($0) (Recommended)'])
     expect(dialog!.question).toContain('Greptile held: credits unknown')
     await pane.press({ key: 'opt-none' })
     const confirm = engineCalls(seen).find(call => call.startsWith('--confirm'))
@@ -4106,6 +4119,8 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
   const ASK = { stdout: JSON.stringify({ ...engineJson(), ledger: { state: 'ask', ask: { header: 'PR #7', question: 'q', options: [{ label: 'Keep as draft ($0)', description: 'a' }, { label: 'No review, land on CI ($0)', description: 'b' }] }, reasked: 0, text: 'ask' } }) }
   const jsonCalls = (seen: { run: Run[] }) => engineCalls(seen).filter(c => c.includes('--json'))
   const autoConfirms = (seen: { run: Run[] }) => confirms(seen).filter(r => r.argv.includes('auto'))
+  /** The marker's `at` is the mock clock (ms); the mod hands it to the engine as an ISO time (--repick-since). */
+  const SINCE = new Date(NOW).toISOString()
 
   test('X1 one dialog: the paid label carries its price, row 0 is Keep as draft, the question names the recommendation', async ($, on) => {
     const w = world(on, { answer: 'dismiss' })
@@ -4153,7 +4168,7 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     await start($)
     const told = await call($)
     expect(autoConfirms(w.seen)).toEqual([])
-    expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
+    expect(jsonCalls(w.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
     expect(told.text).toContain('Keep as draft ($0)')
   })
 
@@ -4163,7 +4178,7 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     await call($)
     const second = await call($)
     expect(autoConfirms(w.seen)).toEqual([])
-    expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
+    expect(jsonCalls(w.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
     expect(second.text).toContain('Keep as draft ($0)')
   })
 
@@ -4173,7 +4188,7 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     await call($)
     const second = await call($)
     expect(autoConfirms(w.seen)).toEqual([])
-    expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
+    expect(jsonCalls(w.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
     expect(second.text).toContain('Keep as draft ($0)')
   })
 
@@ -4183,8 +4198,9 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     await start($)
     await call($)
     w.store.set(PENDING, other)
-    await call($)
+    const second = await call($)
     expect(autoConfirms(w.seen)).toEqual([])
+    expect(second.text).toContain('Keep as draft ($0)') // m9: the second call is checked, not only the first
   })
 
   // One re-pick marker per PR (`checkpoint:repick:<pr>`): set when a PR with an applied record is returned to draft, cleared only when Dave's pick is applied.
@@ -4220,11 +4236,11 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     await start($)
     await call($)
     expect(autoConfirms(w.seen)).toEqual([])
-    expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
+    expect(jsonCalls(w.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
   })
 
   test('X6 the first LOW auto-confirm of a fresh PR (no marker) still works and sets no marker', async ($, on) => {
-    const w = world(on, { json: autoJson() })
+    const w = world(on, { json: autoJson({ auto: { ...AUTO, band: 'LOW' } }) }) // the fixture reports the band the test names
     await start($)
     const told = await call($)
     expect(autoConfirms(w.seen).length).toBe(1)
@@ -4269,5 +4285,182 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     expect(w.seen.dialogs.length).toBe(1)
     expect(w.seen.dialogs[0]!.labels.some(label => /^CodeRabbit review \(may cost up to \$1\.75\)/.test(label))).toBe(true)
     expect(counts(w.seen).confirm).toBe(0)
+  })
+})
+
+// ---- PR 1 "taps" of card prflow-paid-run-guard ------------------------------------------------------------------------------------------
+// A stored tap must not record after a PR went back to draft. The engine owns the store (its tests keep the real taps: pr-checkpoint-ledger.test.mjs
+// A1 to A6); the mod owns WHEN the drop runs and what Dave and the model are told. The fake engine here is stateless, so these tests pin the calls.
+// How it can fail, and the test that catches it:
+// AM1  the drop does not run after the undo (before the question is built), or runs more than once, or before the undo succeeded
+// AM2  a PR returned to draft by hand (a record applied at this head, the PR a draft) gets no drop, or one on every call, or a fresh PR gets one
+// AM3  a failed drop still asks Dave or still builds a question, or loses the marker, or says nothing
+// AM4  the marker time does not reach the engine (--repick-since), an unreadable marker omits the flag, or a fresh PR passes one
+// AM5  the confirm of a re-picked PR does not carry --repick-since
+// m1   a marker delete that throws after a good apply reports "not recorded" and skips the queue add
+// m2   a marker write that throws skips the grant delete, the queue drop and the tap drop
+// m4   the typed paid word drops the extra lines of the answer without a note
+describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draft', () => {
+  const call = ($: Engine) => callTool($, { pr: 7, body: 'pr-body.md' })
+  const LEDGER = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false, ledger: true } }) }
+  const RECORD = { pr: 7, state: 'applied', head: HEAD, pathway: 'none', label: 'review:none', budget: [0, 0], decided_by: 'dave', via: 'dialog', session: SESSION, at: '2026-11-06T20:55:00.000Z' }
+  const BACK = 'Return to draft and pick again'
+  const MARKER = 'checkpoint:repick:7'
+  const SINCE = new Date(NOW).toISOString()
+  const ready = viewJson({ isDraft: false })
+  const ledgerReply = (ledger: Rec, over: Rec = {}) => ({ stdout: JSON.stringify({ ...engineJson(over), ledger }) })
+  const ASK = ledgerReply({ state: 'ask', ask: { header: 'PR #7', question: 'q', options: [{ label: 'Keep as draft ($0)', description: 'a' }, { label: 'No review, land on CI ($0)', description: 'b' }] }, reasked: 0, text: 'ask' })
+  const RECORDED = (over: Rec = {}) => ledgerReply({ state: 'record', ask: null, pathway: 'coderabbit', reasked: 0, text: 'Dave picked coderabbit. Record it.' }, over)
+  const STOP = (reason: string) => `The taps of PR #7 could not be cleared (${reason}). Nothing was recorded. The PR stays a draft. Tell Dave.`
+  const autoConfirms = (seen: { run: Run[] }) => confirms(seen).filter(r => r.argv.includes('auto'))
+  const drops = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.includes('--drop-taps'))
+  const at = (seen: { run: Run[] }, pred: (r: Run) => boolean) => seen.run.findIndex(pred)
+  const isUndo = (r: Run) => r.argv[0] === 'gh' && r.argv.includes('--undo')
+  const isLedgerCall = (r: Run) => r.argv.some(a => a.includes('pr-checkpoint.mjs')) && r.argv.includes('--json') && !r.argv.includes('--no-ledger')
+  const isSlotDrop = (r: Run) => r.argv.some(a => a.includes('slot-queue.mjs')) && r.argv.includes('drop')
+  const ledgerCalls = (seen: { run: Run[] }) => seen.run.filter(isLedgerCall).map(r => r.argv.slice(2).join(' '))
+  const returned = (over: Parameters<typeof world>[1] = {}) => ({ files: LEDGER, json: autoJson(), store: { 'checkpoint:pr:7': RECORD }, viewSeq: [ready], answer: BACK, ledgerSeq: [ASK, ASK], ...over })
+
+  test('AM1 a return to draft in the mod: undo, then ONE --drop-taps --pr 7, then the question is built', async ($, on) => {
+    const w = world(on, returned())
+    await start($)
+    const told = await call($)
+    expect(drops(w.seen).map(r => r.argv.slice(2).join(' '))).toEqual(['--drop-taps --pr 7'])
+    const [undo, drop, ask] = [at(w.seen, isUndo), at(w.seen, r => r.argv.includes('--drop-taps')), at(w.seen, isLedgerCall)]
+    expect(undo).toBeGreaterThanOrEqual(0)
+    expect(drop).toBeGreaterThan(undo)
+    expect(ask).toBeGreaterThan(drop)
+    expect(told.text).toContain('Keep as draft ($0)')
+    await call($)
+    expect(drops(w.seen).length).toBe(1) // the second call does not drop again
+  })
+
+  test('AM1b a failed undo drops nothing: the PR is still ready and no tap is cleared', async ($, on) => {
+    const w = world(on, returned({ undo: { exitCode: 1, stderr: 'gh: no\n' } }))
+    await start($)
+    await call($)
+    expect(drops(w.seen)).toEqual([])
+    expect(w.store.get(MARKER)).toBeUndefined()
+  })
+
+  test('AM2 a PR returned to draft by hand (an applied record of this head, a draft now): one drop when the marker is first set, never again', async ($, on) => {
+    const w = world(on, returned({ viewSeq: [], answer: 'dismiss' }))
+    await start($)
+    await call($)
+    expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW })
+    expect(drops(w.seen).map(r => r.argv.slice(2).join(' '))).toEqual(['--drop-taps --pr 7'])
+    await call($)
+    await call($)
+    expect(drops(w.seen).length).toBe(1)
+  })
+
+  test('AM2b a fresh PR (no record, no marker) runs no drop', async ($, on) => {
+    const w = world(on, { files: LEDGER, ledgerSeq: [ASK] })
+    await start($)
+    await call($)
+    expect(drops(w.seen)).toEqual([])
+    expect(w.store.get(MARKER)).toBeUndefined()
+  })
+
+  test('AM3 the drop fails after the mod undo: the stop text, the marker stays, no question is built and Dave is asked nothing', async ($, on) => {
+    const w = world(on, returned({ drop: { exitCode: 1, stderr: 'pr-checkpoint: refused: the taps of PR #7 could not be cleared (lock). Nothing was recorded.\n' } }))
+    await start($)
+    const told = await call($)
+    expect(told.text).toContain(STOP('pr-checkpoint: refused: the taps of PR #7 could not be cleared (lock). Nothing was recorded.'))
+    expect(w.store.get(MARKER)).toBeDefined()
+    expect(ledgerCalls(w.seen)).toEqual([])
+    expect(autoConfirms(w.seen)).toEqual([])
+    expect(w.seen.dialogs.length).toBe(1) // only the Change-the-pick question that Dave answered
+    // The marker holds: the next call asks (layer 2 stales the old tap), and it does not run the drop again.
+    const next = await call($)
+    expect(ledgerCalls(w.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
+    expect(next.text).toContain('Keep as draft ($0)')
+    expect(drops(w.seen).length).toBe(1)
+  })
+
+  test('AM3b a drop that cannot run (a timeout) is a failure too: the stop text names the cause', async ($, on) => {
+    const w = world(on, returned({ drop: 'throw' }))
+    await start($)
+    const told = await call($)
+    expect(told.text).toMatch(/The taps of PR #7 could not be cleared \(.*timed out.*\)\. Nothing was recorded\. The PR stays a draft\. Tell Dave\./)
+    expect(ledgerCalls(w.seen)).toEqual([])
+  })
+
+  test('AM3c a PR returned to draft by hand and a failed drop: the stop text, the marker is set, no question', async ($, on) => {
+    const w = world(on, returned({ viewSeq: [], drop: { exitCode: 1, stderr: 'boom\n' } }))
+    await start($)
+    const told = await call($)
+    expect(told.text).toContain(STOP('boom'))
+    expect(w.store.get(MARKER)).toBeDefined()
+    expect(ledgerCalls(w.seen)).toEqual([])
+    expect(w.seen.dialogs.length).toBe(0)
+  })
+
+  test('AM4 the ledger call carries the marker time as an ISO value', async ($, on) => {
+    const marked = world(on, { files: LEDGER, store: { [MARKER]: { head: HEAD, at: NOW } }, ledgerSeq: [ASK] })
+    await start($)
+    await call($)
+    expect(ledgerCalls(marked.seen).at(-1)).toBe(`--json --pr 7 --ask-anyway --repick-since ${SINCE}`)
+  })
+
+  for (const bad of [{ head: HEAD }, { head: HEAD, at: 'soon' }, { head: HEAD, at: 1e18 }, { head: HEAD, at: null }]) {
+    test(`AM4b a marker with no readable time sends a value that does not parse: ${JSON.stringify(bad)}`, async ($, on) => {
+      const w = world(on, { files: LEDGER, store: { [MARKER]: bad }, ledgerSeq: [ASK] })
+      await start($)
+      await call($)
+      const flag = ledgerCalls(w.seen).at(-1)!.match(/--repick-since (\S+)$/)
+      expect(flag).not.toBeNull()
+      expect(Number.isNaN(Date.parse(flag![1]!))).toBe(true)
+    })
+  }
+
+  test('AM4c a fresh PR with no marker passes no --repick-since', async ($, on) => {
+    const w = world(on, { files: LEDGER, ledgerSeq: [ASK] })
+    await start($)
+    await call($)
+    expect(ledgerCalls(w.seen).at(-1)).toBe('--json --pr 7')
+  })
+
+  test('AM5 the confirm of a re-picked PR carries --repick-since; the confirm of a fresh PR does not', async ($, on) => {
+    const marked = world(on, { files: LEDGER, store: { [MARKER]: { head: HEAD, at: NOW } }, ledgerSeq: [RECORDED()] })
+    await start($)
+    await call($)
+    expect(engineCalls(marked.seen).find(c => c.startsWith('--confirm'))).toMatch(new RegExp(`^--confirm coderabbit --by dave --body .* --pr 7 --repick-since ${SINCE}$`))
+  })
+
+  test('AM5b a fresh PR confirm has no --repick-since', async ($, on) => {
+    const w = world(on, { files: LEDGER, ledgerSeq: [RECORDED()] })
+    await start($)
+    await call($)
+    const confirm = engineCalls(w.seen).find(c => c.startsWith('--confirm'))
+    expect(confirm).toMatch(/--pr 7$/)
+  })
+
+  test('m1 a marker delete that throws after a good apply still reports the record and queues the PR', async ($, on) => {
+    const high = { auto: { eligible: false, band: 'HIGH', reason: 'x' } }
+    const w = world(on, { files: LEDGER, store: { [MARKER]: { head: HEAD, at: NOW } }, ledgerSeq: [RECORDED(high)], throwDelete: 'checkpoint:repick:' })
+    await start($)
+    const told = await call($)
+    expect(told.text).toContain('Dave chose coderabbit')
+    expect(told.text).not.toContain('was not recorded')
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(w.seen.run.some(r => r.argv.some(a => a.includes('slot-queue.mjs')) && r.argv.includes('add'))).toBe(true)
+  })
+
+  test('m2 a marker write that throws still deletes the grant, drops the queue item and clears the taps', async ($, on) => {
+    const w = world(on, returned({ store: { 'checkpoint:pr:7': RECORD, 'checkpoint:grant:7': { round: 1, head: HEAD, at: NOW } }, throwSetOnce: MARKER }))
+    await start($)
+    await call($)
+    expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+    expect(w.seen.run.some(isSlotDrop)).toBe(true)
+    expect(drops(w.seen).length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('m4 a typed paid word with more lines asks the one question and says what it ignored', async ($, on) => {
+    const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+    world(on, { store: { [PENDING]: pending }, answer: /^Keep as draft/ })
+    await start($)
+    const ran = await slash($, '7 coderabbit\nplease go ahead')
+    expect(ran.text ?? '').toContain('Ignored: "please go ahead".')
   })
 })
