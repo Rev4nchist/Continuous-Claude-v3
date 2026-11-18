@@ -35,7 +35,7 @@ import {
   boardMismatch, boardWriteKind, mergeUnknownColumns, bandAhead, doneChip,
 } from './kanban-place.mjs';
 import { DEFAULT_BOARD, boardArtifact, boardRoots, laneCliCmd, loadRegistry, renderBoardCmd, resolveBoard } from './lane-board.mjs';
-import { finishPage, readIdList } from './board-mask.mjs';
+import { finishPage, maskLaneRows, readIdList } from './board-mask.mjs';
 import { boardStamp, defaultOut, parseRenderArgs, templateHash, writeAtomic } from './render-board-args.mjs';
 import { processMatchSummary } from './process-match.mjs';
 import { compareLanes, laneOrderSql } from './lane-sort.mjs';
@@ -221,6 +221,18 @@ const eventKinds = (await c.query(
 )).rows;
 
 await c.end();
+
+// The listed-id mask at the SOURCE (card coord-board-mask-ids): every lane text the page shows is masked here, before any HTML escape, the kb-data
+// JSON block or a cut, so no escape or slice can split an id away from the mask. The list is read from the root of THIS board's registry entry
+// (the primary checkout for continuous-claude). A list problem masks nothing here: finishPage below decides (exit 3 on continuous-claude, a note
+// on another board). These rows are the render's own copy; nothing writes them back to the lane database.
+const maskRoot = (loadRegistry().find((e) => e.key === BOARD.via && e.status.toLowerCase() !== 'inactive') ?? {}).path ?? BOARD.root;
+let sourceIds = [];
+try { sourceIds = readIdList(maskRoot); } catch { sourceIds = []; }
+// The card hash is made from the MASKED fields: a hash of the raw text (a 32-bit FNV plus the exact length, kanban-place.mjs hashFields) would let
+// a reader recover a short masked id offline (critic pass 2, item 2). Its one reader is the Plain English answer cache (kanban-client.js:978): an
+// answer made from raw text goes stale once and is made again from the masked text, which is the safe outcome.
+const maskedAtSource = maskLaneRows({ lanes, sessions, events }, sourceIds);
 
 // ------------------------------------------------------------------ derive
 
@@ -1296,7 +1308,6 @@ ${kbScript}
 // The listed-id mask (card coord-board-mask-listed-ids): the whole page is masked and checked once, here, just before the write. The list is read
 // from the root of THIS board's registry entry (the primary checkout for continuous-claude), the same two files the holdout-scan hook reads.
 // Board continuous-claude: a list problem or a hit left is exit 3 and no file. Another board: an absent list renders with one note.
-const maskRoot = (loadRegistry().find((e) => e.key === BOARD.via && e.status.toLowerCase() !== 'inactive') ?? {}).path ?? BOARD.root;
 const finished = finishPage({ html, board: KEY, defaultBoard: DEFAULT_BOARD, readList: () => readIdList(maskRoot) });
 if (!finished.ok) {
   console.error(finished.line);
@@ -1304,4 +1315,4 @@ if (!finished.ok) {
 }
 if (finished.left === null) console.error(finished.line);
 writeAtomic(OUT, finished.html);
-console.log(`wrote ${OUT} (${(finished.html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${procSummary ? `${procSummary.matched}/${procSummary.total} claude.exe matched, ` : ''}${events.length} events${finished.left === 0 ? `; ${finished.line}` : ''}`);
+console.log(`wrote ${OUT} (${(finished.html.length / 1024).toFixed(1)}kb) -- board ${KEY}, ${lanes.length} lanes, ${sessions.length} active sessions, ${quietCount} open, quiet, ${procSummary ? `${procSummary.matched}/${procSummary.total} claude.exe matched, ` : ''}${events.length} events${finished.left === 0 ? `; masked at source ${maskedAtSource}, ${finished.line}` : ''}`);
