@@ -321,6 +321,26 @@ export async function gatherOpenPr({ branch }) {
   };
 }
 
+const CHICAGO_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
+/** The Chicago calendar day of an ISO time ("2026-10-27"), or '' when the time cannot be read. An explicit zone: the machine zone is not the rule. */
+const chicagoDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? CHICAGO_DAY.format(t) : ''; };
+
+/**
+ * How many counter rows use a slot of the run cap, as pre-pr.mjs counts them (countedRuns on the prepr-speed branch; this copy is read until that
+ * lands, and then it can import it). A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) uses none either,
+ * but only the first such row of each Chicago day: the next one counts. A time that cannot be read counts (fail closed).
+ */
+export function countedRuns(rows) {
+  const freeDays = new Set();
+  let counted = 0;
+  for (const r of rows.filter((x) => x?.newCode !== false)) {
+    const day = r?.gateFailed === true ? chicagoDay(r.at) : '';
+    if (day !== '' && !freeDays.has(day)) { freeDays.add(day); continue; }
+    counted += 1;
+  }
+  return counted;
+}
+
 /** { branch, head, stampHead, stampSkip, runsSpent, unreviewed } for cli-skip: the stamp of this checkout and the run counter of the branch. */
 export async function gatherCliSkip({ branch }) {
   const t = branchTarget(branch, process.cwd());
@@ -336,7 +356,7 @@ export async function gatherCliSkip({ branch }) {
   const unreviewed = counts.length > 0 ? Math.max(...counts) : null;
   return {
     branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null,
-    stampSkip: stamp?.cr_skipped === true ? stamp.cr_skip_reason ?? null : null, runsSpent: runs.filter((r) => r?.newCode !== false).length, unreviewed,
+    stampSkip: stamp?.cr_skipped === true ? stamp.cr_skip_reason ?? null : null, runsSpent: countedRuns(runs), unreviewed,
   };
 }
 

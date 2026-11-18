@@ -314,6 +314,44 @@ test('DU2: decisionUse with `check` refuses when it says no (slot-changed) and k
   assert.deepEqual(d.decisionUse({ ...triple(), label: 'Keep open', check: () => false }), { ok: false, reason: 'no-decision' }, 'no row: no-decision, and check is not asked');
 });
 
+// ---- dropKey on a store that cannot be read (card prflow-paid-run-guard, PR 2 group A, item 3) ---------------------------------------------
+// How it can fail, and the test that catches it (C = control: it passes before the change and pins what must stay):
+//   a store that exists but cannot be read or parsed is replaced by an empty one: the taps of every other PR are lost       -> DK4
+//   a store that is not there is refused (it is a good empty drop)                                                          -> DK4b (C)
+//   the refusal leaks to the other writers: a corrupt store must still be repaired by the next offer (documented design D9) -> DK4c (C)
+test('DK4: dropKey on a store file that exists but cannot be read, parsed or used refuses and leaves the file as it was', async () => {
+  const file = fresh();
+  const d = await load();
+  const PR70 = 'Rev4nchist/Continuous-Claude-v3#70';
+  assert.equal(offer(d, { step: 'review', key: PR70 }).ok, true);
+  const good = readFileSync(file, 'utf8');
+  for (const [name, text] of [['malformed JSON', '{"version":1,"decisions":'], ['an empty file', ''], ['a JSON array', '[]'], ['a section that is not an object', JSON.stringify({ version: 1, offers: [], decisions: {}, misses: {} })]]) {
+    writeFileSync(file, text);
+    const r = d.dropKey({ steps: ['review', 'paid-round'], key: 'Rev4nchist/Continuous-Claude-v3#7' });
+    assert.equal(r.ok, false, name);
+    assert.equal(r.reason, 'unreadable-store', name);
+    assert.equal(readFileSync(file, 'utf8'), text, `${name}: nothing was written`);
+  }
+  writeFileSync(file, good);
+  assert.equal(d.dropKey({ steps: ['review'], key: 'Rev4nchist/Continuous-Claude-v3#7' }).ok, true, 'a readable store drops');
+  assert.equal(d.offerRead({ step: 'review', key: PR70, head: HEAD })?.open, true, 'the offer of PR 70 stays');
+});
+
+test('DK4b (control): a store file that is not there is a good empty drop', async () => {
+  const file = fresh();
+  const d = await load();
+  assert.deepEqual(d.dropKey({ steps: ['review'], key: KEY }), { ok: true, dropped: 0 });
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).version, 1);
+});
+
+test('DK4c (control): the other writers still repair a corrupt store (an offer opens on it)', async () => {
+  const file = fresh();
+  const d = await load();
+  writeFileSync(file, '{"version":1,"decisions":');
+  assert.equal(offer(d).ok, true);
+  assert.equal(d.offerRead(triple())?.open, true);
+});
+
 test('DU3: the old call shapes work as before: no label, a label only, a changed label', async () => {
   fresh();
   const d = await load();

@@ -107,6 +107,48 @@ test('S5: gatherCliSkip reads the real stamp and run counter of a temp checkout 
   }
 });
 
+test('S7: the runs spent in the question follow the cap rule of the run counter: a gateFailed row uses no slot, the first one of each Chicago day (card prflow-paid-run-guard, PR 2 item 10)', async () => {
+  // Breaks when: gatherCliSkip counts every row with newCode !== false, so the question says "2 CLI runs spent of 2" (and recommends the skip) while the cap has a slot left.
+  // The rule is the one of pre-pr.mjs countedRuns on the prepr-speed branch; until it lands here the counter rows are read by ship-ask.mjs itself.
+  const { execFileSync } = await import('node:child_process');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { gatherCliSkip, cliSkipSpec } = await import('./ship-ask.mjs');
+  const { crPaths } = await import('./pre-pr.mjs');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'cli-skip-gate-'));
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: dir, encoding: 'utf8', windowsHide: true }).trim();
+  git('init', '-q', '-b', 'main');
+  writeFileSync(path.join(dir, 'a.txt'), 'a\n');
+  git('add', '.'); git('commit', '-q', '-m', 'base');
+  git('checkout', '-q', '-b', 'feat/s7');
+  const head = git('rev-parse', 'HEAD');
+  mkdirSync(path.join(dir, '.claude', 'cache', 'pre-pr'), { recursive: true });
+  writeFileSync(path.join(dir, '.claude', 'cache', 'pre-pr', 'stamp.json'), JSON.stringify({ head, branch: 'feat/s7', cr_skipped: true, cr_skip_reason: 'flag', results: [] }));
+  const counter = crPaths(dir, 'feat/s7').counter;
+  mkdirSync(path.dirname(counter), { recursive: true });
+  const row = (over = {}) => ({ head, outcome: 'failed', complete: false, newCode: true, at: '2026-11-03T15:00:00.000Z', ...over });
+  const MORNING = '2026-11-03T15:00:00.000Z'; // 09:00 on 3 Nov in Chicago
+  const EVENING = '2026-11-04T01:00:00.000Z'; // 19:00 on 3 Nov in Chicago: the same Chicago day, the next UTC day
+  const NEXT_DAY = '2026-11-04T07:00:00.000Z'; // 01:00 on 4 Nov in Chicago
+  const before = process.cwd();
+  process.chdir(dir);
+  try {
+    const spent = async (rows) => { writeFileSync(counter, JSON.stringify({ branch: 'feat/s7', runs: rows })); return (await gatherCliSkip({ branch: undefined })).runsSpent; };
+    assert.equal(await spent([row({ gateFailed: true }), row()]), 1, 'the first gateFailed row of the day uses no slot');
+    assert.equal(await spent([row({ gateFailed: true, at: MORNING }), row({ gateFailed: true, at: EVENING }), row()]), 2, 'the second gateFailed row of the same Chicago day counts');
+    assert.equal(await spent([row({ gateFailed: true, at: MORNING }), row({ gateFailed: true, at: NEXT_DAY })]), 0, 'a gateFailed row on another Chicago day is free again');
+    assert.equal(await spent([row({ gateFailed: true, at: 'soon' }), row()]), 2, 'a time that cannot be read counts (fail closed)');
+    assert.equal(await spent([row(), row({ newCode: false, gateFailed: true })]), 1, 'a row with no new code is not a spent run, whatever else it says');
+    assert.equal(await spent([row(), row()]), 2, 'two ordinary rows are two runs');
+    // The sentence and the recommended option follow the count.
+    writeFileSync(counter, JSON.stringify({ branch: 'feat/s7', runs: [row({ gateFailed: true }), row({ unreviewed: 3 })] }));
+    const spec = cliSkipSpec(await gatherCliSkip({ branch: undefined }));
+    assert.match(spec.question, /1 CLI run spent of 2/);
+    assert.equal(spec.options[0].label.startsWith(KEEP), true, 'a slot is left: keeping the CLI review is first');
+  } finally {
+    process.chdir(before);
+  }
+});
+
 test('S6: a missing counter reads as UNKNOWN coverage, never as 0 files unreviewed (CodeRabbit, PR 576)', async () => {
   // Breaks when: gatherCliSkip or cliSkipSpec turns "no coverage count on record" into 0 (the question would understate the skipped scope).
   const { execFileSync } = await import('node:child_process');

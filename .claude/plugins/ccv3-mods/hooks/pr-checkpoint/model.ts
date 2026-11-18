@@ -120,6 +120,13 @@ export const markerFailedText = (pr: number): string =>
 export const flagFailedText = (pr: number): string =>
   `The taps of PR #${pr} were cleared, but the proof of it could not be saved. Nothing was asked. Nothing was recorded. The PR stays a draft. Call pr_checkpoint again.`
 
+/** A step of the cleanup of a PR that went back to draft failed (the round grant, the queued asks, the queue entry): the cleanup stays open and a new call runs every step again. */
+export const cleanupOpenText = (pr: number, what: string[]): string =>
+  `The cleanup of PR #${pr} is not finished: ${what.join(' and ')} could not be cleared. Nothing was asked. Nothing was recorded. The PR stays a draft. Call pr_checkpoint again.`
+/** The fresh read before a cleanup did not show a draft at the head: nothing is cleaned, asked or recorded. */
+export const cleanupUncheckedText = (pr: number, why: string): string =>
+  `PR #${pr} could not be checked before the cleanup (${why}). Nothing was cleaned, asked or recorded. Call pr_checkpoint again.`
+
 export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,labels,number', '-R', REPO]
 
 /** Whether the `labels` of a gh pr view carry risk:high (the one label the band reads), or null when the list is absent or malformed. */
@@ -148,8 +155,8 @@ export const worktreeFor = (porcelain: string, branch: string): string | null =>
   return null
 }
 
-/** The PR's state and head, read before a late Yes posts a review request. */
-export const stateArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'state,headRefOid', '-R', REPO]
+/** The PR's state, head and draft flag, read before a late Yes posts a review request or stores a grant: only an open PR that is not a draft, at the asked head, may act. */
+export const stateArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'state,headRefOid,isDraft', '-R', REPO]
 
 export const commentArgv = (pr: number, body: string): string[] => ['gh', 'pr', 'comment', String(pr), '-R', REPO, '--body', body]
 

@@ -955,13 +955,26 @@ const clockMs = (facts) => (Number.isFinite(Date.parse(facts.now)) ? Date.parse(
 
 const refuse = (message) => { console.error(`pr-checkpoint: refused: ${message}`); process.exitCode = 1; };
 
-/** A path in one spelling for a comparison: absolute, real (a folder link resolved, also when the file is not there yet), lower case on win32. */
+/**
+ * A path in one spelling for a comparison: absolute, real, lower case on win32. The nearest ancestor that exists is resolved (a folder link above a
+ * folder that is not there yet is still a link), then the missing parts are appended as written: an alias of the real store compares equal to it
+ * even before its folder exists, and two temp stores stay two.
+ */
 function sameForm(file) {
-  let full = path.resolve(file);
-  try { full = realpathSync.native(full); } catch {
-    try { full = path.join(realpathSync.native(path.dirname(full)), path.basename(full)); } catch { /* keep the resolved path */ }
+  const full = path.resolve(file);
+  const missing = [];
+  let probe = full;
+  let real = null;
+  while (real === null) {
+    try { real = realpathSync.native(probe); } catch {
+      const up = path.dirname(probe);
+      if (up === probe) break;
+      missing.unshift(path.basename(probe));
+      probe = up;
+    }
   }
-  return process.platform === 'win32' ? full.toLowerCase() : full;
+  const resolved = real === null ? full : path.join(real, ...missing);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 /**
@@ -1027,7 +1040,7 @@ function runConfirm(o) {
 function runDrop(o) {
   const pr = Number(o['--pr']);
   const r = dropKey({ steps: ['review', 'paid-round'], key: decisionKey({ pr }) });
-  if (!r.ok) return refuse(`the taps of PR #${pr} could not be cleared (${r.reason}). Nothing was dropped.`);
+  if (!r.ok) return refuse(`the taps of PR #${pr} could not be cleared (${r.reason}). Nothing was dropped.${r.reason === 'unreadable-store' && r.detail ? ` ${r.detail}.` : ''}`);
   console.log(JSON.stringify({ ok: true, dropped: r.dropped }));
 }
 

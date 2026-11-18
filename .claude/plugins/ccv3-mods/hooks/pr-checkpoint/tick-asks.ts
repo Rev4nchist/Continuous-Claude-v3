@@ -156,14 +156,14 @@ export async function enqueueRound($: EngineInterface, record: CheckpointRecord 
 type Staleness = { kind: 'open' } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
 
 /**
- * Whether a Yes may post: the PR must be open at the asked head. A post spends a review, so a state that cannot be read fails closed
- * (the question stays queued), as the post failure below does.
+ * Whether a Yes may act: the PR must be open, not a draft, at the asked head. A post spends a review and a round grant allows one, so a state that
+ * cannot be read fails closed (the question stays queued), as the post failure below does. A draft PR is gone for a Yes: it was returned to draft.
  */
 async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): Promise<Staleness> {
   const ran = await run($, stateArgv(ask.pr), root, VIEW_TIMEOUT_MS)
   if (!ran.ok) return { kind: 'unreadable', why: ran.text }
   if (ran.code !== 0) return { kind: 'unreadable', why: firstLine(ran.err || ran.out) || `gh exited ${ran.code}` }
-  let info: { state?: unknown; headRefOid?: unknown }
+  let info: { state?: unknown; headRefOid?: unknown; isDraft?: unknown }
   try {
     info = JSON.parse(ran.out)
   } catch {
@@ -172,6 +172,8 @@ async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): 
   if (typeof info.state !== 'string' || typeof info.headRefOid !== 'string') return { kind: 'unreadable', why: 'gh printed no state or head' }
   if (info.state.toUpperCase() !== 'OPEN') return { kind: 'gone', why: `the PR is ${info.state.toLowerCase()}` }
   if (info.headRefOid !== ask.head) return { kind: 'gone', why: `the head moved to ${info.headRefOid.slice(0, 7)}` }
+  if (typeof info.isDraft !== 'boolean') return { kind: 'unreadable', why: 'gh printed no draft state' }
+  if (info.isDraft) return { kind: 'gone', why: 'the PR is a draft' }
   return { kind: 'open' }
 }
 
@@ -197,6 +199,17 @@ async function dropAsk($: EngineInterface, queue: CheckpointAsk[], ask: Checkpoi
 }
 
 /**
+ * The queued asks of a PR that went back to draft leave the queue, and so does this session's lease on it: nothing queued for the old ready period may act.
+ * Only this session's queue is read (each session has its own key); an ask of another session meets the PR read of its own Yes (applyAnswer).
+ */
+export async function dropAsksOfPr($: EngineInterface, pr: number): Promise<void> {
+  const queue = await loadAsks($)
+  const rest = queue.filter(one => one.pr !== pr)
+  if (rest.length !== queue.length) await saveAsks($, rest)
+  await releaseLease($, pr)
+}
+
+/**
  * Applies Dave's Yes or No to the ask the dialog showed (not to whatever heads the queue now). The ask must still be queued at the same head,
  * or the answer is dropped with a toast. A Yes that posts a comment and fails leaves the question queued. Returns the text for Dave and the model.
  */
@@ -211,21 +224,25 @@ async function applyAnswer($: EngineInterface, ask: CheckpointAsk, answer: 'yes'
   const key = `${RECORD_PREFIX}${ask.pr}`
   const stored = readRecord(await $.store.get(key))
   let next: CheckpointRecord | null = stored
-  if (ask.kind !== 'round' && answer === 'yes') {
+  if (answer === 'yes') {
     const root = await rootOf($)
-    // A question can wait for days (restore keeps it): a late Yes spends a review only on a PR that is still open at the asked head.
-    const seen = root ? await staleness($, root, ask) : null
+    // A question can wait for days (restore keeps it): a late Yes acts only on a PR that is still open, not a draft, at the asked head. A round Yes
+    // writes a grant and may queue a review, so it reads the PR too; with no checkout to read it in, it fails closed.
+    const seen = root ? await staleness($, root, ask) : ask.kind === 'round' ? { kind: 'unreadable' as const, why: 'no checkout' } : null
     if (seen && seen.kind === 'unreadable') {
-      const text = `PR #${ask.pr}: could not read the PR state (${seen.why}); nothing posted, the question stays queued`
+      const text = `PR #${ask.pr}: could not read the PR state (${seen.why}); nothing ${ask.kind === 'round' ? 'granted' : 'posted'}, the question stays queued`
       $.ui.toast(text, { timeoutMs: 10_000 })
       return text
     }
     if (seen && seen.kind === 'gone') {
       await dropAsk($, queue, ask)
-      const text = `PR #${ask.pr}: question dropped, nothing posted (${seen.why})`
+      const text = `PR #${ask.pr}: question dropped, nothing ${ask.kind === 'round' ? 'granted' : 'posted'} (${seen.why})`
       $.ui.toast(text, { timeoutMs: 10_000 })
       return text
     }
+  }
+  if (ask.kind !== 'round' && answer === 'yes') {
+    const root = await rootOf($)
     const ran = root ? await run($, commentArgv(ask.pr, ask.kind === 'opening' ? '@coderabbitai review' : '@greptileai'), root, VIEW_TIMEOUT_MS) : null
     if (!ran || !ran.ok || ran.code !== 0) {
       const text = `PR #${ask.pr}: could not post the request (${ran ? (ran.ok ? firstLine(ran.err) : ran.text) : 'no checkout'}); it stays queued`

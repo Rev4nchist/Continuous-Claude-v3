@@ -136,7 +136,9 @@ function askAgain(pr, triple, spec, d, note = null) {
   return { state: 'ask', ask: printable(spec), reasked: missed, ...(note ? { note } : {}), text: `${lead}Call AskUserQuestion with ask, word for word, with the options in the order given.${again} Then call pr_checkpoint {pr} again.` };
 }
 
-const SLOT_CHANGED_NOTE = 'The CodeRabbit slot changed. Your tap was not recorded.';
+/** How many times one call judges a tap that Dave replaced meanwhile, before it stops. */
+const MAX_JUDGED = 3;
+const SLOT_CHANGED_NOTE ='The CodeRabbit slot changed. Your tap was not recorded.';
 const QUESTION_CHANGED_NOTE = 'The question changed. Your tap was not recorded.';
 const REPICK_NOTE = 'The PR went back to draft. Your earlier tap was not recorded.';
 
@@ -157,6 +159,8 @@ function changedNote(result, label, pathway) {
 
 /**
  * ledgerStep({ pr, result, slotLine, askAnyway, now, repickSince, d }) -> { state, ask?, pathway?, by?, reasked?, text }. d is the decisions module (a test seam).
+ * A refused tap is used up only if it is still the tap that was judged (same label and time, under the store lock). A newer tap made meanwhile stays
+ * and is judged by a second pass (at most MAX_JUDGED); the old call used the tap up whatever it was and the re-ask then deleted the newer one.
  * repickSince is an ISO time (--repick-since, the mod's re-pick marker): a tap made before it is used up and the question is asked again with a note
  * (REPICK_NOTE); a value that does not parse makes every tap stale. Null: no marker.
  * now is the clock in ms: the slot is read at that time (default Date.now(); a test injects it).
@@ -168,22 +172,27 @@ function changedNote(result, label, pathway) {
  * state: none (no question: a stop or an auto-confirm), ask, record (run --confirm <pathway> --by dave; the tap records the pick),
  * kept-draft (nothing recorded), stop (the re-asks are used up).
  */
-export function ledgerStep({ pr, result, slotLine, askAnyway = false, now = Date.now(), repickSince = null, d = store }) {
+export function ledgerStep(args) {
+  const { pr, result, slotLine, askAnyway = false, now = Date.now(), repickSince = null, d = store, judged = 0 } = args;
   if (result.recommended === null || (result.auto?.eligible === true && askAnyway !== true) || result.options.length === 0) return { state: 'none', text: 'No question is needed.' };
   const triple = { step: 'review', key: keyOf(pr), head: result.head };
   const spec = askSpecOf(pr, result, slotLine, now);
   const tapped = d.decisionRead(triple);
   const pathway = valueOf(triple, d, tapped);
   if (pathway === null) return askAgain(pr, triple, spec, d);
-  if (isStale(tapped, repickSince)) {
-    d.decisionUse(triple);
-    return askAgain(pr, triple, spec, d, REPICK_NOTE);
-  }
+  // A tap that is refused is used up and the question is asked again. The use names the tap it judged (label and time): when Dave tapped again meanwhile,
+  // the newer tap stays and is judged on its own (a re-ask would reopen the offer and delete it).
+  const refuse = (note) => {
+    const used = d.decisionUse({ ...triple, label: tapped.label, at: tapped.at });
+    if (used.ok === false && (used.reason === 'tap-changed' || used.reason === 'label-changed')) {
+      if (judged >= MAX_JUDGED) return { state: 'stop', text: `Stop. Dave's tap on PR #${pr} changed ${MAX_JUDGED} times while it was judged. PR #${pr} stays a draft. Nothing was recorded. Call pr_checkpoint {pr} again.` };
+      return ledgerStep({ ...args, judged: judged + 1 });
+    }
+    return askAgain(pr, triple, spec, d, note);
+  };
+  if (isStale(tapped, repickSince)) return refuse(REPICK_NOTE);
   if (pathway === 'wait') return kept(pr, d, [triple]);
-  if (spec.values[tapped.label] !== pathway) {
-    d.decisionUse(triple);
-    return askAgain(pr, triple, spec, d, changedNote(result, tapped.label, pathway));
-  }
+  if (spec.values[tapped.label] !== pathway) return refuse(changedNote(result, tapped.label, pathway));
   return { state: 'record', pathway, by: 'dave', text: `Dave picked ${pathway}. Record it.` };
 }
 

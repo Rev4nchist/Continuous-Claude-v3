@@ -67,12 +67,37 @@ function prune(store, now) {
   }
 }
 
-/** Runs fn(store) under the lock and saves the store. Returns fn's value, or { ok: false, reason: 'lock' }. */
-function update(fn) {
+/**
+ * The store for a writer that must not replace what it cannot read. { store } when the file is not there (a missing store is an empty one) or reads
+ * well. { unreadable: true } for any other read error (a lock held by a scanner, a folder in its place), text that does not parse, or a store of the
+ * wrong shape: such a file may hold taps of other PRs.
+ */
+function readStoreStrict(file) {
+  let text;
+  try { text = readFileSync(file, 'utf8'); } catch (err) { return err?.code === 'ENOENT' ? { store: empty() } : { unreadable: true }; }
+  try {
+    const s = JSON.parse(text);
+    if (!isPlain(s)) return { unreadable: true };
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? { store } : { unreadable: true };
+  } catch { return { unreadable: true }; }
+}
+
+/**
+ * Runs fn(store) under the lock and saves the store. Returns fn's value, or { ok: false, reason: 'lock' }.
+ * `strict` (opt-in; every old call is unchanged): a store that exists but cannot be read is refused, nothing is written: { ok: false, reason: 'unreadable-store' }.
+ * The other writers keep the design of the header: an unreadable store reads as empty and their write repairs it.
+ */
+function update(fn, { strict = false } = {}) {
   const file = decisionsPath();
   mkdirSync(path.dirname(file), { recursive: true });
   const locked = withLock(file, {}, () => {
-    const store = readStore(file);
+    let store;
+    if (strict) {
+      const read = readStoreStrict(file);
+      if (read.unreadable) return { ok: false, reason: 'unreadable-store', detail: `the decision store ${file} exists but cannot be read or parsed: repair or delete it` };
+      store = read.store;
+    } else store = readStore(file);
     prune(store, Date.now());
     const out = fn(store);
     writeStore(file, store);
@@ -190,6 +215,8 @@ export function missBump({ step, key, head }) {
  * dropKey({ steps, key }) -> { ok: true, dropped } | { ok: false, reason }. Removes every decision, offer and miss of the listed steps for the key,
  * at ALL heads, in ONE locked update (a crash cannot leave half a drop). `dropped` is the number of rows removed. A bad call (no steps, an unknown
  * step, no key) removes nothing and returns reason 'bad-drop: ...'. The key matches whole: PR 7 never takes the rows of PR 70.
+ * A store file that exists but cannot be read or parsed is refused (reason 'unreadable-store') and left as it was: replacing it with an empty store
+ * would lose the taps of every other PR. A store that is not there is a good empty drop.
  * Used when a PR goes back to draft: a tap Dave made for the old question must not record for the new one (card prflow-paid-run-guard).
  */
 export function dropKey({ steps, key } = {}) {
@@ -203,7 +230,7 @@ export function dropKey({ steps, key } = {}) {
       }
     }
     return { ok: true, dropped };
-  });
+  }, { strict: true });
 }
 
 /** The open offers: [{ nonce, step, key, head, tree, cwd, spec, labels, at }]. The AskUserQuestion hook matches an answer against them. */

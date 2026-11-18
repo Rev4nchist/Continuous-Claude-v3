@@ -25,7 +25,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
@@ -878,4 +878,126 @@ test('TC3 F6: a free-slot tap whose slot expired between the check and the use (
   const soon = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { PR_CHECKPOINT_CONSUME_NOW: iso(NOW_MS + 120_000) });
   assert.equal(soon.status, 0, `${soon.stdout} ${soon.stderr}`);
   assert.equal(JSON.parse(readFileSync(t.pathwayFile, 'utf8')).decided_by, 'dave');
+});
+
+// ---- PR 2 group A (card prflow-paid-run-guard): items 3, 4 and 9 -------------------------------------------------------------------------
+// How it can fail, and the test that catches it (C = control: it passes before the change and pins what must stay):
+//   --drop-taps replaces a store that exists but cannot be read with an empty one, so the taps of other PRs are lost        -> PG1 (PG1b C: a missing store is a good empty drop)
+//   the re-ask of a stale tap deletes the newer tap that Dave made while the call judged the old one                         -> PG2
+//   the re-ask of a tap that is no row any more (the slot changed) deletes the newer tap the same way                        -> PG3
+//   a stale tap with no newer tap stops being used up and re-asked                                                           -> PG4 (C)
+//   an alias path above a missing folder reads as a second store, so a fixture run writes the real store                     -> PG5 (the same test: a separate temp store stays test mode)
+test('PG1: --drop-taps on a store file that exists but cannot be read exits 1 and leaves the file as it was (the taps of other PRs stay)', () => {
+  const t = setup();
+  paidTap(t);
+  for (const [name, text] of [['malformed JSON', '{"version":1,"decisions":'], ['an empty file', ''], ['a section that is not an object', JSON.stringify({ version: 1, offers: [], decisions: {}, misses: {} })]]) {
+    writeFileSync(t.storeFile, text);
+    const failed = t.drop();
+    assert.equal(failed.status, 1, `${name}: ${failed.stdout} ${failed.stderr}`);
+    assert.ok(failed.stderr.includes(`refused: the taps of PR #${PR} could not be cleared (unreadable-store`), `${name}: ${failed.stderr}`);
+    assert.equal(readFileSync(t.storeFile, 'utf8'), text, `${name}: nothing was written`);
+  }
+});
+
+test('PG1b (control): a store file that is not there is a good empty drop', () => {
+  const t = setup();
+  assert.ok(!existsSync(t.storeFile));
+  const r = t.drop();
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.equal(JSON.parse(r.stdout).dropped, 0);
+});
+
+const pause = (ms) => { const end = Date.now() + ms; while (Date.now() < end) { /* the tap time has a resolution of one millisecond */ } };
+function raceResult({ recommended = 'none', capacity = { state: 'unknown' } } = {}) {
+  const option = (pathway) => ({ pathway, available: true, reason: `${pathway} reason` });
+  return { head: HEAD, recommended, why: ['x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity, options: [option('none'), option('coderabbit'), option('wait')], config_drift: false };
+}
+/** The decisions module with one change: the first read of a tap is followed, at once, by a newer tap on the same question (Dave answers while the call judges the old one). */
+function withNewerTap(spec, label, box) {
+  return { ...D, decisionRead: (triple) => {
+    const seen = D.decisionRead(triple);
+    if (!box.fired) {
+      box.fired = true;
+      pause(15);
+      assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+      tap(review(), label);
+    }
+    return seen;
+  } };
+}
+
+test('PG2: a stale tap is replaced by a newer valid tap while the call judges it: the newer tap is judged and records, it is not deleted', () => {
+  setup();
+  const result = raceResult();
+  const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+  const none = spec.options.find((o) => /^No review/.test(o.label)).label;
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), none);
+  const first = D.decisionRead(review());
+  const since = iso(Date.parse(first.at) + 5); // the first tap is before the marker, the newer one is after it
+  const out = L.ledgerStep({ pr: PR, result, slotLine: 'x', now: NOW_MS, repickSince: since, d: withNewerTap(spec, none, {}) });
+  assert.equal(out.state, 'record', JSON.stringify(out));
+  assert.equal(out.pathway, 'none');
+  const kept = D.decisionRead(review());
+  assert.ok(kept, 'the newer tap is still in the store');
+  assert.notEqual(kept.at, first.at);
+});
+
+test('PG3: a tap that is no row of the question now (the slot changed) is replaced by a newer valid tap during the call: the newer tap records, it is not deleted', () => {
+  setup();
+  const free = raceResult({ recommended: 'coderabbit', capacity: { state: 'free', checkedAt: iso(NOW_MS - 60_000) } });
+  const spec = L.askSpecOf(PR, free, 'x', NOW_MS);
+  const slotRow = spec.options.find((o) => /free slot/.test(o.label)).label;
+  const none = spec.options.find((o) => /^No review/.test(o.label)).label;
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), slotRow);
+  const first = D.decisionRead(review());
+  const out = L.ledgerStep({ pr: PR, result: free, slotLine: 'x', now: NOW_MS + 600_000, d: withNewerTap(spec, none, {}) }); // 10 minutes later the free fact is stale: the row is gone
+  assert.equal(out.state, 'record', JSON.stringify(out));
+  assert.equal(out.pathway, 'none');
+  const kept = D.decisionRead(review());
+  assert.ok(kept, 'the newer tap is still in the store');
+  assert.notEqual(kept.at, first.at);
+});
+
+test('PG4 (control): a stale tap with no newer tap is used up and the question is asked again with the re-pick note', () => {
+  setup();
+  const result = raceResult();
+  const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+  const none = spec.options.find((o) => /^No review/.test(o.label)).label;
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), none);
+  const since = iso(Date.parse(D.decisionRead(review()).at) + 5);
+  const out = L.ledgerStep({ pr: PR, result, slotLine: 'x', now: NOW_MS, repickSince: since });
+  assert.equal(out.state, 'ask');
+  assert.match(out.note, /went back to draft/);
+  assert.equal(D.decisionRead(review()), null, 'the stale tap is gone');
+});
+
+/** A folder link: a junction on win32 (no privilege needed), a directory symlink elsewhere. False when the platform cannot make one. */
+function makeFolderLink(target, link) {
+  try { symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir'); return true; } catch { return false; }
+}
+function dropFolderLink(link) {
+  try { unlinkSync(link); } catch { try { rmdirSync(link); } catch { /* the temp cleanup removes what is left */ } }
+}
+
+test('PG5: an alias path above a missing folder is the real store, so a fixture --confirm is refused outside test mode; a separate temp store stays test mode', (ctx) => {
+  const home = realpathSync(makeTempDir('ledger-home-')); // the real store is <home>/.claude/state/ccv3-mods/decisions.json: its folder is not there
+  const alias = path.join(makeTempDir('ledger-alias-'), 'home-link');
+  if (!makeFolderLink(home, alias)) return ctx.skip('this platform cannot make a folder link (junction or directory symlink) in the temp folder');
+  try {
+    const t = setup();
+    const homeEnv = { USERPROFILE: home, HOME: home };
+    const real = path.join(home, '.claude', 'state', 'ccv3-mods', 'decisions.json');
+    assert.ok(!existsSync(path.dirname(real)), 'the folder above the real store is missing');
+    const viaAlias = path.join(alias, '.claude', 'state', 'ccv3-mods', 'decisions.json');
+    const refused = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { ...homeEnv, CCV3_DECISIONS_FILE: viaAlias });
+    assert.equal(refused.status, 1, `${refused.stdout} ${refused.stderr}`);
+    assert.match(refused.stderr, /refused: --facts and --config are for tests\. A live question reads GitHub\./);
+    const temp = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { ...homeEnv, CCV3_DECISIONS_FILE: t.storeFile });
+    assert.match(temp.stderr, /No tap of Dave's/, 'a separate temp store is test mode: the run goes on and finds no tap');
+  } finally {
+    dropFolderLink(alias);
+  }
 });

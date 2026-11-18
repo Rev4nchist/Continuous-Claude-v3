@@ -35,6 +35,8 @@ import {
   changeQuestion,
   changeStopText,
   chicagoTime,
+  cleanupOpenText,
+  cleanupUncheckedText,
   clip,
   costText,
   coversRows,
@@ -94,7 +96,7 @@ import {
   worktreeFor,
 } from './model'
 import type { LedgerBlock, LockPattern, LockShapes, PathwayChoice } from './model'
-import { GRANT_PREFIX, RECORD_PREFIX, allowedRound, askNotice, coverDecline, currentHead, enqueueRound, keptNotice, loadAsks, raiseQueued, rootOf, saveAsks } from './tick-asks'
+import { GRANT_PREFIX, RECORD_PREFIX, allowedRound, askNotice, coverDecline, currentHead, dropAsksOfPr, enqueueRound, keptNotice, loadAsks, raiseQueued, rootOf, saveAsks } from './tick-asks'
 
 /** The same atom the other modules declare (same plugin and key, same default): an atom is read only where it is declared. */
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
@@ -505,10 +507,10 @@ const dropTaps = async ($: EngineInterface, root: string, pr: number): Promise<s
 }
 
 /**
- * The cleanup of a PR that went back to draft, the same steps for a mod undo and for a return by hand: a fresh re-pick marker `{ head?, at }`, the round
- * grant deleted, the PR's entry dropped from the free-slot queue (it posts `@coderabbitai review` for an item it holds, and a PR in draft must get no
- * review request), then the stored taps dropped, then the proof `dropped: true`. The grant and the queue steps each have their own try, so a failure of
- * one never skips the next. The marker time also makes the engine read an older tap as stale (--repick-since), whatever the drop did.
+ * The cleanup of a PR that went back to draft, the same steps for a mod undo and for a return by hand (a shell undo, the land tap, the GitHub page): a fresh
+ * re-pick marker `{ head?, at }`, then `cleanSteps`: the PR's queued asks, the round grant, the free-slot queue entry (it posts `@coderabbitai review` for an
+ * item it holds, and a PR in draft must get no review request), the stored taps, then the proof `dropped: true` (only when every step worked).
+ * The marker time also makes the engine read an older tap as stale (--repick-since), whatever the drop did.
  * `strict`: the marker was unreadable, so its repair must be saved: a failed write is a stop (the old marker keeps the engine rejecting old taps).
  * Otherwise a failed marker write is tolerated (only the second layer; the drop below still runs). Null: done. A string: the stop text.
  */
@@ -519,29 +521,48 @@ const cleanupReturn = async ($: EngineInterface, root: string, pr: number, head:
   } catch {
     if (strict) return markerFailedText(pr)
   }
-  try {
-    await $.store.delete(`${GRANT_PREFIX}${pr}`)
-  } catch {
-    // The grant belongs to the old record; the queue drop below still runs.
-  }
-  try {
-    const found = await slotScript($)
-    if (found) await run($, slotDropArgv(found.script, pr), found.root, VIEW_TIMEOUT_MS)
-  } catch {
-    // Diagnostics are the queue's own toast; the re-pick goes on.
-  }
-  return dropOnce($, root, pr, marker)
+  return cleanSteps($, root, pr, marker)
 }
 
 /**
- * The drop, and the proof that it worked: after a good drop the marker gets `dropped: true`. A marker without it means no drop has succeeded yet, so
- * every call that finds such a marker runs the drop again (a stale review tap and a paid-round row must not outlive the return to draft). If the flag
- * cannot be saved the answer is a stop (the taps are cleared, nothing is asked): a question now would get a tap that the next call drops as stale.
- * Null: done. A string: the stop text.
+ * Every step of the cleanup after the marker: the PR's queued asks (and this session's lease), the round grant, the free-slot queue entry, then the
+ * taps. Each step has its own try, so a failure of one never skips the next. A step that fails keeps the cleanup open: no `dropped: true`, a stop text,
+ * and a call that finds the marker with no flag runs every step again (an entry that is already absent from the queue is complete).
  */
-const dropOnce = async ($: EngineInterface, root: string, pr: number, marker: Record<string, unknown>): Promise<string | null> => {
+const cleanSteps = async ($: EngineInterface, root: string, pr: number, marker: Record<string, unknown>): Promise<string | null> => {
+  const open: string[] = []
+  try {
+    await dropAsksOfPr($, pr)
+  } catch {
+    open.push('the queued asks')
+  }
+  try {
+    await $.store.delete(`${GRANT_PREFIX}${pr}`)
+  } catch {
+    open.push('the round grant')
+  }
+  try {
+    const found = await slotScript($)
+    if (found) {
+      const ran = await run($, slotDropArgv(found.script, pr), found.root, VIEW_TIMEOUT_MS)
+      if (!ran.ok || ran.code !== 0) open.push('the queue entry')
+    }
+  } catch {
+    open.push('the queue entry')
+  }
+  return dropOnce($, root, pr, marker, open)
+}
+
+/**
+ * The drop, and the proof that it worked: after a good drop AND a finished cleanup (`open` is empty) the marker gets `dropped: true`. A marker without it
+ * means the cleanup is not done, so every call that finds such a marker runs every step again (a stale review tap, a paid-round row, a grant and a queue
+ * entry must not outlive the return to draft). If the flag cannot be saved the answer is a stop (the taps are cleared, nothing is asked): a question
+ * now would get a tap that the next call drops as stale. Null: done. A string: the stop text.
+ */
+const dropOnce = async ($: EngineInterface, root: string, pr: number, marker: Record<string, unknown>, open: string[] = []): Promise<string | null> => {
   const stop = await dropTaps($, root, pr)
   if (stop !== null) return stop
+  if (open.length > 0) return cleanupOpenText(pr, open)
   try {
     await $.store.set(`${REPICK_PREFIX}${pr}`, { ...marker, dropped: true })
   } catch {
@@ -562,30 +583,57 @@ const prepareChanging = async ($: EngineInterface, root: string, pr: number, bod
 }
 
 /**
- * A draft PR whose applied record is of this head was returned to draft (the change pick, R3): Dave changed his pick, so auto-confirm must not record
- * it for him. The record outlives the undo, so the test holds on every later call, whichever session makes it and whatever failed in between.
+ * A draft PR that has an applied record (of any head) was returned to draft (the change pick, R3, or a hand that ran no mod code): Dave changed his pick, so
+ * auto-confirm must not record it for him. The record outlives the undo and a later push, so the test holds on every later call, whichever session makes
+ * it and whatever failed in between. Every cleanup is guarded by a fresh read of the PR (`cleaning`).
  */
-const returnedToDraft = async ($: EngineInterface, pending: Pending, drafted = true): Promise<{ repick: boolean; stop: string | null }> => {
+const returnedToDraft = async ($: EngineInterface, pending: Pick<Pending, 'pr' | 'prHead' | 'root'>, drafted = true): Promise<{ repick: boolean; stop: string | null }> => {
   const { pr, prHead, root } = pending
-  // `drafted`: the PR was just read as a draft (prepare). A stored pending checkpoint (a bare /pathway, the phone) proves no draft, so an applied record
-  // alone is no proof of a return there: only a marker the mod already wrote counts.
-  const record = drafted ? readRecord(await $.store.get(`${RECORD_PREFIX}${pr}`)) : null
-  const applied = record !== null && record.state === 'applied' && record.head === prHead ? record : null
+  // The applied record of ANY head: a return by hand at head A followed by a push of head B leaves a record of A, and the PR is still the one that was ready.
+  // The record is read first, the PR after it (`cleaning`): the record is the candidate, the fresh read decides.
+  const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pr}`))
+  const applied = record !== null && record.state === 'applied' ? record : null
   // The re-pick marker outlives the record state and the head: a failed --apply leaves the record `confirmed`, and a new push changes the head.
   const stored = await $.store.get(`${REPICK_PREFIX}${pr}`)
+  // Every cleanup first reads the PR again and runs only on a draft at the expected head (another session may have applied the same head since `prepare`
+  // read it, and its queue entry must stay). `drafted`: the caller read the PR as a draft; a stored pending checkpoint (a bare /pathway, the phone) did not,
+  // so a PR that is no draft there, or moved, is no cleanup and no stop: only a read that fails is a stop (the return would go unseen).
+  const cleaning = async (repick: boolean, clean: () => Promise<string | null>) => {
+    const fresh = await draftAtHead($, root, pr, prHead)
+    if (fresh === null) return { repick: true, stop: await clean() }
+    if (!drafted && !fresh.unreadable) return { repick, stop: null }
+    return { repick, stop: cleanupUncheckedText(pr, fresh.why) }
+  }
   if (stored == null) {
     if (applied === null) return { repick: false, stop: null }
-    // An undo by another session or by hand: no mod code ran, so no cleanup ran. The marker time makes the engine read an older tap as stale.
-    return { repick: true, stop: await cleanupReturn($, root, pr, prHead) }
+    // An undo by another session, by hand, by the land tap or on the GitHub page: no mod code ran, so no cleanup ran. The marker time makes the engine read an older tap as stale.
+    return cleaning(false, () => cleanupReturn($, root, pr, prHead))
   }
   const marker = typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {}
   // A marker with no readable time keeps the engine rejecting every tap, even one on the new offer, so it is repaired first (flag or no flag).
-  if (repickSinceOf(marker) === REPICK_UNREADABLE) return { repick: true, stop: await cleanupReturn($, root, pr, prHead, true) }
+  if (repickSinceOf(marker) === REPICK_UNREADABLE) return cleaning(true, () => cleanupReturn($, root, pr, prHead, true))
   // `dropped: true` is the proof of ONE return. A record applied after the marker is a later ready period: its taps are not cleaned yet.
   const appliedAt = applied?.appliedAt
-  if (typeof appliedAt === 'number' && Number.isFinite(appliedAt) && appliedAt > (marker.at as number)) return { repick: true, stop: await cleanupReturn($, root, pr, prHead) }
-  // Without the flag (the drop failed, or the marker is older than the flag) the drop runs again.
-  return { repick: true, stop: marker.dropped === true ? null : await dropOnce($, root, pr, marker) }
+  if (typeof appliedAt === 'number' && Number.isFinite(appliedAt) && appliedAt > (marker.at as number)) return cleaning(true, () => cleanupReturn($, root, pr, prHead))
+  // Without the flag (a step failed, or the marker is older than the flag) every step of the cleanup runs again, on the marker as it is.
+  if (marker.dropped === true) return { repick: true, stop: null }
+  return cleaning(true, () => cleanSteps($, root, pr, marker))
+}
+
+/** One fresh read of the PR: null when it is a draft at `head`, else why it is not (and whether the read itself failed). Never throws. */
+const draftAtHead = async ($: EngineInterface, root: string, pr: number, head: string): Promise<{ why: string; unreadable: boolean } | null> => {
+  const ran = await run($, viewArgv(pr), root, VIEW_TIMEOUT_MS)
+  if (!ran.ok) return { why: ran.text, unreadable: true }
+  if (ran.code !== 0) return { why: firstLine(ran.err || ran.out) || `gh exited ${ran.code}`, unreadable: true }
+  let info: { isDraft?: unknown; headRefOid?: unknown }
+  try {
+    info = JSON.parse(ran.out)
+  } catch {
+    return { why: 'gh printed no JSON', unreadable: true }
+  }
+  if (info.isDraft !== true) return { why: 'the PR is no longer a draft', unreadable: false }
+  if (info.headRefOid !== head) return { why: `the head moved to ${typeof info.headRefOid === 'string' ? info.headRefOid.slice(0, 7) : 'an unknown commit'}`, unreadable: false }
+  return null
 }
 
 // ---- the question, asked by the model (M1, checkpoint.ledger) --------------------------------------------------------------------------
@@ -807,11 +855,17 @@ const bareCommand = async ($: EngineInterface, e: CommandEvent, live: boolean, p
   if (pending) {
     trace.root = await rootOf($)
     trace.checkout = pending.root
-    return (await ledgerRoute($, e, pending.pr, trace)) ?? askPending($, pending, trace, false) // a stored pending checkpoint: no fresh draft read
+    return (await ledgerRoute($, e, pending.pr, trace)) ?? askPending($, pending, trace, false) // a stored pending checkpoint: the draft state is read live only when a return needs a cleanup
   }
   if ((await loadAsks($)).length === 0) return say('need-pr', NEED_PR)
   if (!takeDialog()) return say('busy', BUSY_TEXT)
   try {
+    // The same guard as askPending, on the PR of the first queued ask: a PR returned to draft gets its cleanup (which empties its queued asks) before any
+    // question, and a cleanup that cannot finish opens none.
+    const ask = (await loadAsks($))[0]
+    const root = await rootOf($)
+    const returned = ask && root ? await returnedToDraft($, { pr: ask.pr, prHead: ask.head, root }, false) : null
+    if (returned && returned.stop !== null) return say('refused', returned.stop)
     const text = await raiseQueued($)
     return text === null ? say('need-pr', NEED_PR) : say('asked', text)
   } finally {
@@ -862,7 +916,7 @@ const commandReply = async ($: EngineInterface, e: CommandEvent, trace: Trace): 
   }
   if (phone && parsed.word === null) {
     trace.checkout = phone.root
-    return askPending($, phone, trace, false) // a stored pending checkpoint: no fresh draft read
+    return askPending($, phone, trace, false) // a stored pending checkpoint: the draft state is read live only when a return needs a cleanup
   }
   const prepared = await prepare($, root, pr, body)
   if (!prepared.ok) return say('refused', prepared.text)
