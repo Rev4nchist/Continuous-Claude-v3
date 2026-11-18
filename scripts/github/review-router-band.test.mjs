@@ -458,6 +458,11 @@ const TAP_CLASSES = {
   'land step': [LAND_STEP, 'scripts/github/land-recheck.mjs', 'scripts/github/land-none-check.mjs', 'scripts/github/land-decision.mjs', 'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1'],
   'hook registration': ['.claude/settings.json.template', 'scripts/settings/apply-registrations.mjs'],
   'tap screen and paid review': ['.claude/plugins/ccv3-mods/hooks/pr-checkpoint/ask.ts', '.claude/plugins/ccv3-mods/hooks/pr-checkpoint/index.tsx', 'scripts/github/cr-paid.mjs'],
+  // Dave 2026-11-17 ("All of both groups"): PR 642 critic and the prflow-review-pick aegis pass.
+  'settings render and machine overlay': ['scripts/settings/render-settings.mjs', 'machine/personal.json'],
+  'paid run path': ['scripts/github/cr-fix.mjs', 'scripts/github/slot-queue.mjs', '.claude/plugins/ccv3-mods/hooks/pr-loop/model.ts', '.claude/plugins/ccv3-mods/hooks/pr-loop/slot.ts'],
+  'review bot config and reviewer agents': ['.coderabbit.yaml', '.claude/agents/aegis.md', '.claude/agents/critic.md', '.claude/agents/security-refuter.md',
+    '.claude/agents/aegis.json', '.claude/agents/security-refuter.json'],
   'decision gate and ledger': ['.claude/hooks/src/decision-gate.ts', '.claude/hooks/src/decision-ledger.ts', '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs', 'scripts/github/ship-ask.mjs'],
   'review router and its config': ['scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', 'scripts/github/pr-checkpoint.mjs'],
 };
@@ -492,6 +497,9 @@ test('B42: test files and near-miss paths of the trust classes do not force CRIT
     '.claude/hooks/src/decision-gate-helper.ts', '.claude/hooks/dist/lane-context.mjs', '.claude/hooks/src/lane-context.ts',
     'scripts/github/local-review/prompt.mjs', 'scripts/github/local-review/verify.mjs', 'scripts/github/pre-pr.mjs',
     '.github/workflows/ccv3-checks.yml', 'scripts/github/land-decision.test.mjs', '.claude/plugins/ccv3-mods/tests/plain.test.ts',
+    // near misses that pin the width of the plugin and agent globs (PR 642 delta critic)
+    '.claude/plugins/ccv3-mods/hooks/pr-loop/index.tsx', '.claude/plugins/a/b/hooks/pr-checkpoint/x.ts',
+    '.claude/agents/scout.md', '.claude/agents/scout.json', 'machine/README.md', 'scripts/settings/apply-registrations.test.mjs',
   ];
   for (const f of notTrust) {
     const b = bandOf([f], LIVE);

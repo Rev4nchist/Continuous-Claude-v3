@@ -48,7 +48,10 @@
     "",
     "content_model \"dashboard-store\" (added 2026-11-08): a Claude Dashboard artifact. Its page and data live in the artifact store, not in a file",
     "you publish. Never publish a page file to it. A data upload (asset: true) is not a page publish. Handoff step 3 has a dashboard-store bullet that skips file publishing. Its session is \"fleetops\", which no handoff folder uses today.",
-    "To refresh its data, run the skill named in the entry (`refresh_skill`). To change the page, read the Dashboard type SKILL.md on the artifact first."
+    "To refresh its data, run the skill named in the entry (`refresh_skill`). To change the page, read the Dashboard type SKILL.md on the artifact first.",
+    "",
+    "content_model \"notion-page\" (added 2026-11-17): a Notion page, not a claude.ai artifact. Never pass its `url` to the Artifact tool and never publish a file to it.",
+    "Only the skill named in `refresh_skill` writes it, through the tools of the machine `notion` MCP server. Its session is \"fleetops\", which no handoff folder uses, so handoff step 3 never selects it. If a handoff ever does: skip it, never hand its url to the Artifact tool, and record no `last_published` from a publish."
   ],
   "artifacts": [
     {
@@ -200,23 +203,21 @@
     },
     {
       "id": "fleetops-dashboard",
-      "url": "https://claude.ai/artifact/Vnf8urTCv7awKXwNT423F8",
-      "source": null,
+      "url": "https://app.notion.com/p/41b76fd7ac828067959afa940d32dc54",
+      "source": "scripts/coordination/fleetops-html.mjs",
+      "render": "node scripts/coordination/fleetops-html.mjs <folder with the 7 export copies> --out <folder>/out",
       "title": "FleetOps",
       "favicon": "chart",
       "description": "Dave's lane dashboard: what waits on Dave, the weekly pile, never-started lanes, work in progress, P0 and projects.",
       "session": "fleetops",
       "refresh": "on-request",
-      "content_model": "dashboard-store",
+      "content_model": "notion-page",
       "refresh_skill": ".claude/skills/fleetops-refresh/SKILL.md",
       "data_source": "~/.claude/state/lane-dash (written nightly at 23:55 Central by the CCv3-Lane-Snapshot task)",
-      "page_copy": "C:/Users/dkhay/scratch/fleetops-build/page/index.html (machine-local build copy; the live page is in the store at files/index.html)",
-      "last_published": "2026-11-08",
       "notes": [
-        "Private artifact, owned by Dave. Attached data files are readable by everyone who can open it and hold lane titles (Dave decided, 2026-11-08).",
-        "Never render or screenshot the real dashboard. Read its check and runs documents (data/users/me) after a write.",
-        "Page look: Notion style, built from frame tokens only. Before changing the page, read the Dashboard SKILL.md, design-defaults.md and one-writer.md on the artifact.",
-        "Data refresh is manual for now. Run the fleetops-refresh skill. The stop gate adds a stale-data line at most once an hour (lane-board-stop-gate)."
+        "2026-11-17 (Dave, card coord-fleetops-notion): FleetOps is this Notion page. It holds a short native summary, one self-contained HTML embed (design A, template in scripts/coordination/fleetops/) and a how-to section, all rendered by `source` from the lane export. Every listed id is masked (board-mask.mjs) and counted on the text a viewer sees; the render refuses on any hit.",
+        "Refresh: the skill uploads the HTML with notion-create-attachment and replaces the page body, using the machine `notion` MCP server, so a session on either claude.ai account can refresh it. Lane titles, goals and holder names show on the page (Dave's choice). Dave gave a standing yes for data-only refreshes; the automatic trigger is a later step of the card (seat ruling).",
+        "RETIRED 2026-11-17: the old claude.ai Dashboard artifact https://claude.ai/artifact/Vnf8urTCv7awKXwNT423F8 (content_model dashboard-store). Kept, not deleted. Never write to it."
       ]
     },
     {

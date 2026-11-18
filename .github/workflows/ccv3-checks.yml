@@ -316,6 +316,8 @@ jobs:
           scripts/coordination/board-done-view.test.mjs
           scripts/coordination/board-scheduled-view.test.mjs
           scripts/coordination/portfolio.test.mjs
+          scripts/coordination/fleetops-view.test.mjs
+          scripts/coordination/fleetops-html.test.mjs
           scripts/coordination/coord-drill-2/abort.test.mjs
           scripts/coordination/coord-drill-2/judge.test.mjs
           scripts/coordination/coord-drill-2/lib.test.mjs
