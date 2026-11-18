@@ -41,7 +41,8 @@
  * Order at each Stop, after the early approves:
  *   1. Candidates.
  *      Own: a pending file of this session with no stopBlocked, whose board has a phone page
- *      (boardArtifact(board) is not null), and whose verbs hold an ask verb (claim, release, done, park).
+ *      (boardArtifact(board) is not null, or the default board's artifacts.json entry is bad: then the block holds
+ *      the fix line of blockReason, keyed UNRECORDED_PAGE_ID), and whose verbs hold an ask verb (claim, release, done, park).
  *      A new-shape file (marker `v: 2`, written by the reminder) also asks with `askAt` alone: the ask verb
  *      dropped out of a full list. With no ask signal it never asks, also with 50 verbs.
  *      An old-shape file (no marker) with no verbs list, or with 50 verbs, counts as an ask.
@@ -93,8 +94,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  DEFAULT_BOARD, boardArtifact, pendingKey, primaryRepo, renderBoardCmd, resolveBoard, type BoardArtifact,
+  DEFAULT_BOARD, boardArtifact, boardArtifactProblem, pendingKey, primaryRepo, renderBoardCmd, resolveBoard, type BoardArtifact,
 } from './shared/lane-board.js';
+
+/**
+ * Budget key of the default board while its page is not recorded (card coord-board-id-followup). The gate then
+ * asks once with the fix line instead of the publish steps, under the same 10-minute window and stopBlocked flag.
+ */
+export const UNRECORDED_PAGE_ID = 'unrecorded-default-board-page';
 import { MAX_BYTES, fleetopsLine } from './shared/lane-dash-refresh.js';
 import {
   listPending, pendingDir, pendingFile, readPending, sweepStalePending, type Pending, type PendingEntry,
@@ -398,7 +405,16 @@ interface Candidate {
  */
 export function blockReason(board: string, env: Env = process.env, foreign: boolean = false): string {
   const a = boardArtifact(board, { env });
-  if (!a) return '';
+  if (!a) {
+    // The default board with a bad artifacts.json entry: no publish steps. Many sessions editing one shared file is
+    // the fault the file-claims hook exists for, so the line sends the fix to the seat or Dave (seat, 2026-11-17).
+    const problem = boardArtifactProblem(board, { env });
+    if (!problem) return '';
+    return (
+      `The lane board page of ${board} is not recorded: ${problem}. Do not publish. ` +
+      `Tell the seat (or Dave): the agentic-os-lane-board entry of ${primaryRepo(env)}/.claude/artifacts.json needs a fix.`
+    );
+  }
   const why = foreign
     ? `Another session changed the lane DB and did not publish. The lane board page for board ${board} is out of date. `
     : `The lane board page for board ${board} is out of date: this session changed the lane DB and has not republished it. `;
@@ -470,7 +486,11 @@ function foreignAsks(e: StopEntry, lastAsk: number | undefined, now: number): bo
 function findCandidates(own: StopEntry[], foreign: StopEntry[], env: Env, view: BudgetView, now: number): Candidate[] {
   const pages = new Map<string, BoardArtifact | null>();
   const pageOf = (board: string): BoardArtifact | null => {
-    if (!pages.has(board)) pages.set(board, boardArtifact(board, { env }));
+    if (!pages.has(board)) {
+      const page = boardArtifact(board, { env });
+      const unrecorded = !page && boardArtifactProblem(board, { env }) !== null;
+      pages.set(board, unrecorded ? { id: UNRECORDED_PAGE_ID, url: '', publishFrom: '' } : page);
+    }
     return pages.get(board) ?? null;
   };
   const pick = (list: StopEntry[], isForeign: boolean): Candidate[] => {

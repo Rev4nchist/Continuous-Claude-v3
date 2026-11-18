@@ -116,6 +116,42 @@ describe('loadConfig', () => {
   });
 });
 
+describe('board_url comes from artifacts.json (card coord-board-id-followup)', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-url-'));
+  const cfgFile = path.join(tmp, 'c.json');
+  fs.writeFileSync(cfgFile, JSON.stringify({ version: 1, board: 'continuous-claude' }));
+  const artifacts = (entry) => {
+    const f = path.join(tmp, `a-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(f, JSON.stringify({ artifacts: entry ? [entry] : [] }));
+    return { artifactsPath: f };
+  };
+
+  it('a config with no board_url takes the agentic-os-lane-board url', () => {
+    // Breaks if the loader keeps null (the dashboard loses its board link) or reads another entry.
+    const cfg = loadConfig(cfgFile, { artifactOpts: artifacts({ id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/NewPage_1' }) });
+    assert.equal(cfg.board_url, 'https://claude.ai/artifact/NewPage_1');
+  });
+
+  it('a missing entry or a bad url leaves board_url null, never a fixed id', () => {
+    // Breaks if a fixed fallback id comes back into the loader or the resolver.
+    assert.equal(loadConfig(cfgFile, { artifactOpts: artifacts(null) }).board_url, null);
+    assert.equal(loadConfig(cfgFile, { artifactOpts: artifacts({ id: 'agentic-os-lane-board', url: 'http://x/y' }) }).board_url, null);
+  });
+
+  it('a board_url set in the config wins over artifacts.json', () => {
+    // Breaks if the resolver overwrites a url the config names on purpose.
+    const f = path.join(tmp, 'set.json');
+    fs.writeFileSync(f, JSON.stringify({ version: 1, board_url: 'https://example.test/b' }));
+    const cfg = loadConfig(f, { artifactOpts: artifacts({ id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/NewPage_1' }) });
+    assert.equal(cfg.board_url, 'https://example.test/b');
+  });
+
+  it('the committed config sets no board_url', () => {
+    // Breaks if a fixed page url is committed to lane-dash.config.json again.
+    assert.equal(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')).board_url, undefined);
+  });
+});
+
 describe('the real config and the real project rules agree (fleetops-lanes-file-size part 1)', () => {
   const rules = loadProjectRules(path.join(HERE, 'lane-projects.json'));
 

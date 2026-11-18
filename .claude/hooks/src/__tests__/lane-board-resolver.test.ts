@@ -9,6 +9,7 @@
  * roots, so some registry roots deliberately point at folders that do not exist.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -74,7 +75,7 @@ describe('twin drift', () => {
   it('both copies export the same names', () => {
     expect(Object.keys(mjsTwin).sort()).toEqual(Object.keys(tsTwin).sort());
     expect(Object.keys(tsTwin).sort()).toEqual([
-      'DEFAULT_BOARD', 'artifactIdOf', 'boardArtifact', 'boardRoots', 'isHeadless', 'laneCliCmd', 'laneShimPath', 'loadRegistry',
+      'DEFAULT_BOARD', 'artifactIdOf', 'boardArtifact', 'boardArtifactProblem', 'boardRoots', 'isHeadless', 'laneCliCmd', 'laneShimPath', 'loadRegistry',
       'normalizeRoot', 'pendingKey', 'primaryRepo', 'renderBoardCmd', 'resolveBoard', 'wmKey',
     ]);
   });
@@ -173,28 +174,65 @@ describe('derived helpers (PR2 exports), both twins', () => {
       expect(run('zz-board', { artifactsPath: f })).toBeNull();
     });
 
-    it('a board with no entry has no artifact (null), except the default board', () => {
-      const f = write({ artifacts: [] });
-      expect(run('greymatter', { artifactsPath: f })).toBeNull();
-      expect(run('continuous-claude', { artifactsPath: f })).toEqual({
-        id: 'RtrTNVfAq9uowmb2tfbzid', url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid', publishFrom: 'lane-board.html',
-      });
+    /** boardArtifactProblem on both twins, equal output. */
+    const problem = (board: string, opts: Parameters<typeof tsTwin.boardArtifactProblem>[1] = {}) => {
+      const o = { ...opts, env: { CCV3_USER_HOME: hermeticHome(), ...opts.env } };
+      const p = tsTwin.boardArtifactProblem(board, o);
+      expect(mjsTwin.boardArtifactProblem(board, o)).toEqual(p);
+      return p;
+    };
+
+    // Card coord-board-id-followup: no fixed fallback id. A fixed id names the wrong page after an account switch.
+    it('F1: a missing file gives null and the reason "missing or unreadable" for the default board', () => {
+      const missing = path.join(tmp, 'nope.json');
+      expect(run('continuous-claude', { artifactsPath: missing })).toBeNull();
+      expect(problem('continuous-claude', { artifactsPath: missing })).toBe(`${missing} is missing or unreadable`);
     });
 
-    it('a missing or corrupt file gives the fallback for the default board and null for others', () => {
-      const missing = path.join(tmp, 'nope.json');
+    it('F2: a file that is not JSON gives null and the reason "not valid JSON"', () => {
       const corrupt = write('{not json');
-      for (const f of [missing, corrupt]) {
-        expect(run('greymatter', { artifactsPath: f })).toBeNull();
-        expect(run('continuous-claude', { artifactsPath: f })?.id).toBe('RtrTNVfAq9uowmb2tfbzid');
+      expect(run('continuous-claude', { artifactsPath: corrupt })).toBeNull();
+      expect(problem('continuous-claude', { artifactsPath: corrupt })).toBe(`${corrupt} is not valid JSON`);
+    });
+
+    it('F2b: no agentic-os-lane-board entry (none, or only another id) gives null and the reason "no entry"', () => {
+      for (const body of [{ artifacts: [] }, { artifacts: [{ id: 'something-else', board: 'continuous-claude', url: 'https://claude.ai/artifact/NEW999' }] }, {}]) {
+        const f = write(body);
+        expect(run('continuous-claude', { artifactsPath: f })).toBeNull();
+        expect(problem('continuous-claude', { artifactsPath: f })).toBe(`${f} has no agentic-os-lane-board entry`);
       }
     });
 
-    it('the artifacts.json entry overrides the fallback; an entry with another id does not', () => {
+    it('F3: a url that is not strict https://claude.ai/artifact/<id> gives null and the strict-url reason (behaviour change: the loose /artifact/<id> match is gone)', () => {
+      for (const url of ['https://evil.example/artifact/XYZ1', 'https://claude.ai/artifact/XYZ1?x=1', 'claude.ai/artifact/XYZ1', 42]) {
+        const f = write({ artifacts: [{ id: 'agentic-os-lane-board', url, publish_from: 'lane-board.html' }] });
+        expect(run('continuous-claude', { artifactsPath: f })).toBeNull();
+        expect(problem('continuous-claude', { artifactsPath: f })).toBe(
+          `the agentic-os-lane-board url in ${f} is not https://claude.ai/artifact/<id>`,
+        );
+      }
+    });
+
+    it('F3b: the live entry of this repo passes the strict check', () => {
+      const live = path.resolve(__dirname, '../../../artifacts.json');
+      const page = run('continuous-claude', { artifactsPath: live });
+      expect(page?.url).toMatch(/^https:\/\/claude\.ai\/artifact\/[A-Za-z0-9_-]+$/);
+      expect(problem('continuous-claude', { artifactsPath: live })).toBeNull();
+    });
+
+    it('F4: a good entry gives the page and no reason', () => {
       const f = write({ artifacts: [{ id: 'agentic-os-lane-board', url: 'https://claude.ai/artifact/NEW999', publish_from: 'lane-board.html' }] });
-      expect(run('continuous-claude', { artifactsPath: f })?.id).toBe('NEW999');
-      const g = write({ artifacts: [{ id: 'something-else', board: 'continuous-claude', url: 'https://claude.ai/artifact/NEW999', publish_from: 'lane-board.html' }] });
-      expect(run('continuous-claude', { artifactsPath: g })?.id).toBe('RtrTNVfAq9uowmb2tfbzid');
+      expect(run('continuous-claude', { artifactsPath: f })).toEqual({
+        id: 'NEW999', url: 'https://claude.ai/artifact/NEW999', publishFrom: 'lane-board.html',
+      });
+      expect(problem('continuous-claude', { artifactsPath: f })).toBeNull();
+    });
+
+    it('F5: another board never gets a reason, whatever artifacts.json holds', () => {
+      for (const f of [path.join(tmp, 'nope.json'), write('{not json'), write({ artifacts: [] })]) {
+        expect(run('greymatter', { artifactsPath: f })).toBeNull();
+        expect(problem('greymatter', { artifactsPath: f })).toBeNull();
+      }
     });
 
     it('finds <primaryRepo>/.claude/artifacts.json through opts.env', () => {
@@ -722,5 +760,49 @@ describe('CLI board selection (--project / LANE_PROJECT)', () => {
     const a = mk('a');
     const registry = writeRegistry([entry('A', a)]);
     expect(both(a, { registryPath: registry, env: { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', LANE_PROJECT: 'a' } })).toBeNull();
+  });
+});
+
+/**
+ * Grep gate (card coord-board-id-followup): no tracked file names the first account's lane board page id as the page
+ * in use. The page url lives only in the agentic-os-lane-board entry of .claude/artifacts.json and changes with the
+ * claude.ai account. Every file that may still hold the old id is named here with its reason. A new file that names it
+ * fails this test: read the url from artifacts.json, or add the file here with a reason.
+ */
+describe('grep gate: the old lane board page id', () => {
+  const OLD_ID = ['RtrTNVfAq9', 'uowmb2tfbzid'].join('');
+  const FIXTURE = 'hook test fixture: a page id inside a temp artifacts.json, not the page in use';
+  const ALLOWED: Record<string, string> = {
+    '.claude/artifacts.json': 'the dated NEW_ACCOUNT_2026-11-17 note keeps the old url so the first account can be restored',
+    'docs/codemap/codemap.json': 'generated snapshot of 2026-11-06, refreshed by its own job (seat ruling 2026-11-17 12:27)',
+    'docs/codemap/codemap.html': 'generated snapshot of 2026-11-06, refreshed by its own job (seat ruling 2026-11-17 12:27)',
+    '.claude/hooks/src/__tests__/lane-board-reminder-boards.test.ts': FIXTURE,
+    '.claude/hooks/src/__tests__/lane-board-republish-reminder.test.ts': FIXTURE,
+    '.claude/hooks/src/__tests__/lane-board-resolver.test.ts': FIXTURE,
+    '.claude/hooks/src/__tests__/lane-board-stop-gate-fleetops.test.ts': FIXTURE,
+    '.claude/hooks/src/__tests__/lane-board-stop-gate.test.ts': FIXTURE,
+  };
+  const repoRoot = path.resolve(__dirname, '../../../..');
+
+  const filesNamingOldId = (): string[] => {
+    try {
+      const out = execFileSync('git', ['grep', '-l', '-F', '-e', OLD_ID], { cwd: repoRoot, encoding: 'utf8' });
+      return out.split('\n').map((s) => s.trim()).filter(Boolean);
+    } catch (e) {
+      if ((e as { status?: number }).status === 1) return []; // git grep: no match
+      throw e;
+    }
+  };
+
+  it('every tracked file that names the old id is on the named allow list', () => {
+    // Breaks if a doc, config or source names the old page as the page in use again (the bug this card fixed).
+    const found = filesNamingOldId();
+    expect(found.length).toBeGreaterThan(0); // the allow-listed files exist: a git grep that finds nothing is no proof
+    expect(found.filter((f) => !(f in ALLOWED))).toEqual([]);
+  });
+
+  it('every allow list entry has a reason', () => {
+    // Breaks if an entry is added with an empty reason.
+    for (const [file, reason] of Object.entries(ALLOWED)) expect(reason.length, file).toBeGreaterThan(20);
   });
 });

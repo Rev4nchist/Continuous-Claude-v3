@@ -67,7 +67,7 @@ import * as path from 'path';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 // The gate file holds the budget helpers. Its main() runs only under its own file name, so this import is safe.
 import { ASK_VERBS, PENDING_SHAPE, VERB_CAP, holdsAskVerb, updateBudget, type AskPending } from './lane-board-stop-gate.js';
-import { DEFAULT_BOARD, artifactIdOf, boardArtifact, loadRegistry, pendingKey, primaryRepo, resolveBoard } from './shared/lane-board.js';
+import { DEFAULT_BOARD, artifactIdOf, boardArtifact, boardArtifactProblem, loadRegistry, pendingKey, primaryRepo, resolveBoard } from './shared/lane-board.js';
 import { listPending, pendingDir, pendingFile, readPending } from './shared/lane-board-pending.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { detectToolError, exitCodeOf } from './shared/tool-error.js';
@@ -327,8 +327,10 @@ export function decide(
   const board = boardOfChange(payload, lc, env, ownedBoard);
   if (!board) return NONE;
 
-  const artifact = boardArtifact(board, { env });
-  if (!artifact) return { action: 'render', verb: lc.verb, board, message: renderOnly(lc.verb, board) };
+  // A default board whose artifacts.json entry is bad still has a page: it is only unrecorded. Keep the mark path so
+  // the pending file is written and the Stop gate gives its fix line. Only a board with no page at all is render-only.
+  const hasPage = boardArtifact(board, { env }) !== null || boardArtifactProblem(board, { env }) !== null;
+  if (!hasPage) return { action: 'render', verb: lc.verb, board, message: renderOnly(lc.verb, board) };
   const mark: Decision = { action: 'mark', verb: lc.verb, board };
   if (!ASK_VERBS.has(lc.verb)) return mark;
   const asked = typeof pending === 'function' ? pending(board) : pending;

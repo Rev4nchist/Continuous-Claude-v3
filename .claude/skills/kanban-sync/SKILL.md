@@ -14,7 +14,7 @@ The artifact db is reachable only through your `ArtifactData` tool. You read it,
 - The lane CLI path is the shim: `node C:/Users/dkhay/.claude/scripts/lane.mjs`. It works from any folder. Never use a relative path to lane.mjs: it fails outside this repo and runs a stale copy inside a worktree.
 - Every board has its own page and its own db. `<key>` is the board key: the `--project` value, else the board of your folder. Pass `--project <key>` to `apply-kanban`, `render-board` and `next`.
 - Find the page: `node C:/Users/dkhay/.claude/scripts/lane.mjs project which --json [--project <key>]`. In a nested project's folder this returns the nested entry, which has no `artifact`. So take `board` from the output as `<key>`, then run it again with `--project <key>` to get the entry that owns the board. Read `entry.artifact` (the `laneArtifact` url of that entry) and call it `<url>`.
-  - `continuous-claude` has no `laneArtifact`. Its page is the `agentic-os-lane-board` entry in `.claude/artifacts.json` of the primary checkout: https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid.
+  - `continuous-claude` has no `laneArtifact`. Its page is the url of the `agentic-os-lane-board` entry in `.claude/artifacts.json` of the primary checkout. Read the url there: it changes with the claude.ai account.
   - Any other board with `entry.artifact` null has no phone page. Its kanban is read-only: nothing is saved and `apply-kanban` has nothing to read. Stop and report. Dave starts a page with `/publish-board <key>`. Never publish it to another board's url.
 
 ## Safety
