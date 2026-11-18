@@ -208,7 +208,8 @@ const digestOf = (s: TabState, now: number, columns: number, lineCap: 1 | 3): Di
     prs,
     s.agentRuns ?? [],
     peers,
-    (brief?.ask ?? []).map(one => ({ kind: one.kind, text: one.text, recommend: one.recommend, source: one.source, at, answered: one.answered })),
+    // A stored parsed ask is a guess, not a question (PR D): the digest lists real asks only.
+    (brief?.ask ?? []).filter(one => one.source !== 'parsed').map(one => ({ kind: one.kind, text: one.text, recommend: one.recommend, source: one.source, at, answered: one.answered })),
     (brief?.decisions ?? []).map(one => ({ text: one.text, by: one.by, at: one.at })),
     (brief?.proofs ?? []).map(one => ({ id: one.id, kind: one.kind, subject: one.subject, artifact: one.artifact, at: one.at })),
     { now, columns, limit: MAX_ITEMS, lineCap, commits: s.feed?.commits, compactions: s.compactions },
@@ -375,7 +376,8 @@ const proof = (s: TabState, columns: number, rows: number): PaneRow[] => {
 const decisions = (s: TabState, now: number, columns: number, rows: number): PaneRow[] => {
   const { brief } = s
   const log = [...(brief?.decisions ?? [])].sort((a, b) => b.at - a.at)
-  const asks = brief?.ask ?? []
+  // A stored parsed ask is a guess, not a question (PR D): Choices lists real asks only.
+  const asks = (brief?.ask ?? []).filter(one => one.source !== 'parsed')
   const open = asks.filter(one => one.answered !== true).length
   const stale = brief !== null && isAskStale(brief, now, s.activeAt)
 
