@@ -266,13 +266,6 @@ export interface BoardArtifact {
 /** The artifacts.json entry that holds the default board's phone page. */
 const ARTIFACT_ID = 'agentic-os-lane-board';
 
-/** The phone page of the default board when `.claude/artifacts.json` cannot be read. */
-const FALLBACK_ARTIFACT: BoardArtifact = {
-  id: 'RtrTNVfAq9uowmb2tfbzid',
-  url: 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid',
-  publishFrom: 'lane-board.html',
-};
-
 const LANE_ARTIFACT_RE = /^https:\/\/claude\.ai\/artifact\/([A-Za-z0-9_-]+)$/;
 const BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -304,41 +297,67 @@ function registryBoardArtifact(
   return { id, url: `https://claude.ai/artifact/${id}`, publishFrom: `lane-board-${board}.html` };
 }
 
+type ArtifactOpts = { env?: Env; artifactsPath?: string; registryPath?: string };
+
+/**
+ * The default board's page from `<primaryRepo>/.claude/artifacts.json`: the entry whose id is ARTIFACT_ID and whose
+ * url is a strict `https://claude.ai/artifact/<id>` url. There is no fixed fallback id: a fixed id names the wrong
+ * page after each switch of claude.ai account (card coord-board-id-followup, 2026-11-17). On any failure the page is
+ * null and `problem` says why. Result: { page, problem }, exactly one of them not null.
+ */
+function readDefaultArtifact(
+  opts: ArtifactOpts,
+  env: Env,
+): { page: BoardArtifact | null; problem: string | null } {
+  const file = opts.artifactsPath || `${primaryRepo(env)}/.claude/artifacts.json`;
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
+  } catch {
+    return { page: null, problem: `${file} is missing or unreadable` };
+  }
+  let list: unknown;
+  try {
+    list = (JSON.parse(text) as { artifacts?: unknown }).artifacts;
+  } catch {
+    return { page: null, problem: `${file} is not valid JSON` };
+  }
+  const entry = Array.isArray(list)
+    ? (list.find((a) => a && typeof a === 'object' && (a as Record<string, unknown>).id === ARTIFACT_ID) as
+        | Record<string, unknown>
+        | undefined)
+    : undefined;
+  if (!entry) return { page: null, problem: `${file} has no ${ARTIFACT_ID} entry` };
+  const id = artifactIdOf(typeof entry.url === 'string' ? entry.url : null);
+  if (!id) return { page: null, problem: `the ${ARTIFACT_ID} url in ${file} is not https://claude.ai/artifact/<id>` };
+  const publishFrom = typeof entry.publish_from === 'string' && entry.publish_from ? entry.publish_from : 'lane-board.html';
+  return { page: { id, url: `https://claude.ai/artifact/${id}`, publishFrom }, problem: null };
+}
+
 /**
  * The published artifact of a board, or null when the board has none.
  *
- * The default board (continuous-claude) is the existing registry entry whose id is ARTIFACT_ID in
- * `<primaryRepo>/.claude/artifacts.json`; its url and publish_from come from that entry, and the known fallback
- * applies when the file or the entry is missing. artifacts.json gains NO new field: the primary checkout edits
- * that file too, and a PR2 hunk made land-pr's ff-merge refuse.
+ * The default board (continuous-claude) is the entry whose id is ARTIFACT_ID in `<primaryRepo>/.claude/artifacts.json`;
+ * its url and publish_from come from that entry. A missing file, bad JSON, no entry or a url that is not a strict
+ * artifact url gives null (boardArtifactProblem says why). artifacts.json gains NO new field: the primary checkout
+ * edits that file too, and a PR2 hunk made land-pr's ff-merge refuse.
  *
  * Any other board has a page only when its own project-registry entry carries `laneArtifact` (see
- * registryBoardArtifact). There is no fallback: no field, no page (null, render-only).
+ * registryBoardArtifact). No field, no page (null, render-only).
  */
-export function boardArtifact(
-  board: string,
-  opts: { env?: Env; artifactsPath?: string; registryPath?: string } = {},
-): BoardArtifact | null {
+export function boardArtifact(board: string, opts: ArtifactOpts = {}): BoardArtifact | null {
   const env: Env = opts.env ?? process.env;
   if (board !== DEFAULT_BOARD) return registryBoardArtifact(board, opts, env);
-  const file = opts.artifactsPath || `${primaryRepo(env)}/.claude/artifacts.json`;
-  try {
-    const text = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
-    const list = (JSON.parse(text) as { artifacts?: unknown }).artifacts;
-    if (Array.isArray(list)) {
-      for (const a of list) {
-        if (!a || typeof a !== 'object') continue;
-        const e: Record<string, unknown> = a as Record<string, unknown>;
-        if (e.id !== ARTIFACT_ID || typeof e.url !== 'string') continue;
-        const id = /\/artifact\/([A-Za-z0-9_-]+)/.exec(e.url)?.[1];
-        if (!id) continue;
-        return { id, url: e.url, publishFrom: typeof e.publish_from === 'string' && e.publish_from ? e.publish_from : 'lane-board.html' };
-      }
-    }
-  } catch {
-    // missing or corrupt file: fall through to the known artifact
-  }
-  return { ...FALLBACK_ARTIFACT };
+  return readDefaultArtifact(opts, env).page;
+}
+
+/**
+ * Why the default board has no page, or null. Null for every other board (no laneArtifact is not a fault) and for
+ * a default board whose artifacts.json entry is good.
+ */
+export function boardArtifactProblem(board: string, opts: ArtifactOpts = {}): string | null {
+  if (board !== DEFAULT_BOARD) return null;
+  return readDefaultArtifact(opts, opts.env ?? process.env).problem;
 }
 
 /** File name stem of a pending-publish file: the watermark key, sanitised for a file name. */

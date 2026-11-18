@@ -1,8 +1,7 @@
 {
   "version": 1,
-  "note": "Settings for the lane dashboard export (scripts/coordination/export-dash-data.mjs). A limit is null until Dave sets a number: wip_limit, never_started_cap, dave_queue_cap. There is no default of 3. Only the P0 cap of 5 can turn a figure red until Dave sets a limit.",
+  "note": "Settings for the lane dashboard export (scripts/coordination/export-dash-data.mjs). A limit is null until Dave sets a number: wip_limit, never_started_cap, dave_queue_cap. There is no default of 3. Only the P0 cap of 5 can turn a figure red until Dave sets a limit. board_url is not set here: the loader takes the board page url from the agentic-os-lane-board entry of .claude/artifacts.json.",
   "board": "continuous-claude",
-  "board_url": "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid",
   "stale_after_hours": 36,
   "projects_stale_after_hours": 168,
   "band_history_start": "2026-11-07",
