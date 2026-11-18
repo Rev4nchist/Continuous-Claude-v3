@@ -3335,7 +3335,7 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
     expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
   })
 
-  test('N-M8 a held recommendation at HIGH: Keep as draft, coderabbit, then no review; nothing is Recommended; the none pick is --by dave', async ($, on) => {
+  test('N-M8 a held recommendation at HIGH: Keep as draft, coderabbit, then no review; only Keep as draft is Recommended (m5); the none pick is --by dave', async ($, on) => {
     const held = highJson('HIGH', {
       recommended: 'both',
       options: [option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' }), option('none')],
@@ -3343,7 +3343,7 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
     const { seen } = world(on, { json: held })
     const { dialog, pane } = await openPane($)
     expect(dialog!.labels.map(label => label.replace(/ \(.*$/, ''))).toEqual(['Keep as draft', 'CodeRabbit review', 'No review, land on CI'])
-    expect(dialog!.labels.some(label => label.includes('(Recommended)'))).toBe(false)
+    expect(dialog!.labels.filter(label => label.includes('(Recommended)'))).toEqual(['Keep as draft ($0) (Recommended)'])
     await pane.press({ key: 'opt-none' })
     expect(engineCalls(seen).find(call => call.startsWith('--confirm'))).toMatch(/^--confirm none --by dave /)
   })
@@ -4042,8 +4042,9 @@ describe('pr-checkpoint v2: Return to draft drops the grant and the free-slot qu
     const [drop] = drops(w.seen)
     expect(drop).toBeDefined()
     expect(drop!.slice(drop!.indexOf('drop'), drop!.indexOf('drop') + 3)).toEqual(['drop', '--pr', '7'])
-    const order = w.seen.run.map(r => (r.argv[2] === 'ready' ? 'undo' : r.argv.includes('drop') ? 'drop' : r.argv.some(a => a.includes('pr-checkpoint.mjs')) ? 'engine' : ''))
-    expect(order.filter(Boolean)).toEqual(['undo', 'drop', 'engine'])
+    // PR 1 taps: the tap drop ('taps', the engine's --drop-taps) runs after the queue drop and before the next question.
+    const order = w.seen.run.map(r => (r.argv[2] === 'ready' ? 'undo' : r.argv.includes('--drop-taps') ? 'taps' : r.argv.includes('drop') ? 'drop' : r.argv.some(a => a.includes('pr-checkpoint.mjs')) ? 'engine' : ''))
+    expect(order.filter(Boolean)).toEqual(['undo', 'drop', 'taps', 'engine'])
     expect(w.seen.ran).toEqual([])
   })
 
@@ -4382,7 +4383,8 @@ describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draf
     const w = world(on, returned({ drop: 'throw' }))
     await start($)
     const told = await call($)
-    expect(told.text).toMatch(/The taps of PR #7 could not be cleared \(.*timed out.*\)\. Nothing was recorded\. The PR stays a draft\. Tell Dave\./)
+    // The kit skips a throwing process hook and reports "no implementation"; a real timeout reads "timed out". Either way the cause is named.
+    expect(told.text).toMatch(/The taps of PR #7 could not be cleared \(.+\)\. Nothing was recorded\. The PR stays a draft\. Tell Dave\./)
     expect(ledgerCalls(w.seen)).toEqual([])
   })
 
@@ -4438,7 +4440,8 @@ describe('pr-checkpoint PR 1 taps: the drop of the taps of a PR returned to draf
 
   test('m1 a marker delete that throws after a good apply still reports the record and queues the PR', async ($, on) => {
     const high = { auto: { eligible: false, band: 'HIGH', reason: 'x' } }
-    const w = world(on, { files: LEDGER, store: { [MARKER]: { head: HEAD, at: NOW } }, ledgerSeq: [RECORDED(high)], throwDelete: 'checkpoint:repick:' })
+    // The band the record carries comes from the prepare call (the facts call), not from the ledger block.
+    const w = world(on, { files: LEDGER, json: { stdout: JSON.stringify(engineJson(high)) }, store: { [MARKER]: { head: HEAD, at: NOW } }, ledgerSeq: [RECORDED(high)], throwDelete: 'checkpoint:repick:' })
     await start($)
     const told = await call($)
     expect(told.text).toContain('Dave chose coderabbit')

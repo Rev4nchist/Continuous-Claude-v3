@@ -88,7 +88,31 @@ export const engineArgv = (root: string, ...flags: string[]): string[] => ['node
  */
 export const factsFlags = (pr: number, dependabot: boolean): string[] => ['--json', '--pr', String(pr), '--probe', '--no-ledger', ...(dependabot ? ['--dependabot'] : [])]
 /** The ledger call sees the same facts as the facts call: a Dependabot PR (the author, read by prepare) changes the options, so the flag goes again. */
-export const ledgerFlags = (pr: number, askAnyway: boolean, dependabot: boolean): string[] => ['--json', '--pr', String(pr), ...(dependabot ? ['--dependabot'] : []), ...(askAnyway ? ['--ask-anyway'] : [])]
+export const ledgerFlags = (pr: number, askAnyway: boolean, dependabot: boolean, repickSince: string | null = null): string[] => [
+  '--json', '--pr', String(pr), ...(dependabot ? ['--dependabot'] : []), ...(askAnyway ? ['--ask-anyway'] : []), ...repickFlags(repickSince),
+]
+
+/** `--repick-since <ISO>`: a tap made before it is stale (the PR went back to draft). Null: no marker, no flag. */
+export const repickFlags = (repickSince: string | null): string[] => (repickSince === null ? [] : ['--repick-since', repickSince])
+
+/** The text the engine gets when a marker holds no readable time. It does not parse, so the engine reads every tap as stale (fail closed). */
+export const REPICK_UNREADABLE = 'unreadable'
+
+/** The marker's `at` (ms, from `$.clock.now()`) as an ISO time for `--repick-since`. A time that is not a finite date gives REPICK_UNREADABLE, never no flag. */
+export const repickSinceOf = (marker: unknown): string | null => {
+  if (marker === null || marker === undefined) return null
+  const at = (marker as { at?: unknown }).at
+  if (typeof at !== 'number' || !Number.isFinite(at)) return REPICK_UNREADABLE
+  try {
+    return new Date(at).toISOString()
+  } catch {
+    return REPICK_UNREADABLE
+  }
+}
+
+/** The drop of the taps of a PR returned to draft (the engine deletes the review and paid-round taps, offers and misses of the PR). */
+export const dropTapsFlags = (pr: number): string[] => ['--drop-taps', '--pr', String(pr)]
+export const dropFailedText = (pr: number, why: string): string => `The taps of PR #${pr} could not be cleared (${why}). Nothing was recorded. The PR stays a draft. Tell Dave.`
 
 export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,labels,number', '-R', REPO]
 
@@ -323,7 +347,7 @@ const labelFor = (one: CheckpointOption, files: number, slot: SlotFact): string 
 
 const WAIT_OPTION: CheckpointOption = { pathway: 'wait', label: null, available: true, cost: [0, 0], reason: '' }
 
-/** A paid row spends money: Greptile always, CodeRabbit unless the slot is free. Its label carries the price. The tap records the pick; a paid run asks Dave again later. */
+/** A paid row spends money: Greptile always, CodeRabbit unless the slot is free. Its label carries the price. The tap records the pick: one question; a paid row shows its price. */
 const isPaidRow = (one: CheckpointOption, slot: SlotFact): boolean => one.pathway === 'both' || (one.pathway === 'coderabbit' && slot.state !== 'free')
 
 /**
@@ -340,6 +364,12 @@ const rowsOf = (buttons: CheckpointOption[], slot: SlotFact, recommendedFirst: b
   return rows.filter((one, i) => rows.findIndex(other => other.pathway === one.pathway) === i)
 }
 
+/**
+ * Which row carries " (Recommended)": the recommendation when it is open; when it is held, Keep as draft (the safe pick). The engine marks the same
+ * rows (recommendedOf in scripts/github/lib/checkpoint-ledger.mjs), and a test compares the two copies.
+ */
+const marked = (pathway: string, result: CheckpointResult, recommendedFirst: boolean): boolean => pathway === (recommendedFirst ? result.recommended : 'wait')
+
 /** Line 1 of the question: PR, band and file count. The band is the one the engine printed at auto-confirm. */
 const overview = (pr: number, result: CheckpointResult): string => {
   const files = result.size.files
@@ -352,7 +382,7 @@ const questionLines = (pr: number, result: CheckpointResultWithDrift, held: Chec
   const [why, ...also] = result.why.map(one => one.replace(/[.\s]+$/, '')).filter(one => one !== '')
   const second = recommendedFirst
     ? `Recommended: ${nameOf(result.recommended ?? '')}${why ? `, because ${why}` : ''}.`
-    : `The engine recommends ${result.recommended}, but it is held. Nothing is marked.`
+    : `Recommended: Keep as draft, because ${nameOf(result.recommended ?? '')} is held.`
   const lines = [overview(pr, result), second, slotLine(slotOf(result.capacity, now), now)]
   if (recommendedFirst) lines.push(...also.map(one => `Also: ${one}.`))
   if (held.length > 0) lines.push(`Held: ${held.map(one => `${nameOf(one.pathway)} (${one.reason})`).join('; ')}.`)
@@ -368,7 +398,7 @@ const questionLines = (pr: number, result: CheckpointResultWithDrift, held: Chec
  * and a warning each add a line below them: Dave must see them before he picks. The labels are 2 to 4:
  * the open pathways, one "Keep as draft", and "No review, land on CI" last when the engine offers it (rowsOf gives the order). When the recommendation
  * is open its row carries " (Recommended)". Row 0 is a $0 row (Keep as draft, or none when it is the recommendation). A paid row carries its price and is never row 0: the tap on it records the pick
- * (there is no second question; a paid run asks Dave again later). Every pick is `--by dave`. When the recommendation is held, no label is marked.
+ * (one question; a paid row shows its price). Every pick is `--by dave`. When the recommendation is held, Keep as draft is marked Recommended.
  */
 export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, now: number | null = null): PathwayAsk | null => {
   const { buttons, held, recommendedFirst } = optionsInOrder(result)
@@ -376,7 +406,7 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, n
   if (result.recommended === null || open.length === 0) return null
   const slot = slotOf(result.capacity, now)
   const choices: PathwayChoice[] = rowsOf(buttons, slot, recommendedFirst).map(one => ({
-    label: `${labelFor(one, result.size.files, slot)}${recommendedFirst && one.pathway === result.recommended ? RECOMMENDED : ''}`,
+    label: `${labelFor(one, result.size.files, slot)}${marked(one.pathway, result, recommendedFirst) ? RECOMMENDED : ''}`,
     pathway: one.pathway,
     by: 'dave',
   }))
