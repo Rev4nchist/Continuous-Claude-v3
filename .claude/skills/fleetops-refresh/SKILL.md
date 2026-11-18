@@ -20,7 +20,7 @@ The nightly task `CCv3-Lane-Snapshot` runs the export at 23:55 Central. It write
 
 ## Either account
 
-The page lives in Dave's Notion workspace, not in a claude.ai account. The `notion` MCP server of this machine reaches it from a session on either claude.ai account. It is set in user scope (`~/.claude.json`), not in `.claude/machine-config/mcp.json`. Use only its tools `notion-fetch`, `notion-create-attachment`, `notion-update-page` and `notion-get-file-download-urls`. Never use the claude.ai Notion connector: it belongs to one claude.ai account. If the `notion` server is missing in this session, skip the refresh (step 5): take no lock, write no failed state, report it.
+The page lives in Dave's Notion workspace, not in a claude.ai account. The `notion` MCP server of this machine reaches it from a session on either claude.ai account. It is set in user scope (`~/.claude.json`), not in `.claude/machine-config/mcp.json`. Use only its tools `notion-fetch`, `notion-create-attachment`, `notion-update-page` and `notion-get-file-download-urls`. In the session their runtime names are `mcp__notion__notion-fetch`, `mcp__notion__notion-create-attachment`, `mcp__notion__notion-update-page` and `mcp__notion__notion-get-file-download-urls`. A tool named `mcp__claude_ai_Notion__...` is the connector: never call it here. Never use the claude.ai Notion connector: it belongs to one claude.ai account. If the `notion` server is missing in this session, skip the refresh (step 5): take no lock, write no failed state, report it.
 
 ## Rules
 
@@ -64,7 +64,7 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
    - Exit 1 means a missing or mixed file, an id list it cannot read, or a listed id left in the text a viewer sees. Nothing is written. Stop and report the line.
    - Read `out/manifest.json`. Keep `exportedAt`.
 5. Preflight and lock.
-   1. Check that this session can load the `notion` server tools of the Rules section (load them with ToolSearch if they are deferred). `notion-fetch` the page id. If a tool is missing or the call fails, skip the refresh: report "Notion MCP not connected to the FleetOps workspace". Write nothing. Take no lock. Write no failed state.
+   1. Check that this session can load the `notion` server tools of the Rules section (load them with ToolSearch if they are deferred). `notion-fetch` the page id. If a tool is missing or the call fails, skip the refresh: report "Notion MCP not connected to the FleetOps workspace". Write nothing. Take no lock. Write no failed state. On a restart (step 6.0 or 8) you already hold the lock: run the failed release with step 5.1 first, then report.
    2. Take the lock, with the `exportedAt` of the manifest as the key and the <first 8 characters of CLAUDE_CODE_SESSION_ID> as `<sid8>`:
       `node R/scripts/coordination/fleetops-html.mjs --lock-acquire <exportedAt> --session <sid8>`
       - Exit 3: another session writes the page. Stop and report its one line. Write no failed state. Release nothing: the lock is not yours.
@@ -104,7 +104,7 @@ The page lives in Dave's Notion workspace, not in a claude.ai account. The `noti
 ## When it goes wrong
 
 - Docker is down in step 2: the old data stays on the page. Report it.
-- The `notion` server is missing in this session, or the preflight fetch fails (step 5.1): skip the refresh and report it. No lock, no failed state. Do not use another Notion connector.
+- The `notion` server is missing in this session, or the preflight fetch fails (step 5.1): skip the refresh and report it. No lock, no failed state. On a restart you hold the lock: run the failed release with step 5.1 first. Do not use another Notion connector.
 - The upload worked and the page write failed: run the failed release with step 6.3. The unplaced upload expires by itself in 1 hour. Report it.
 - A lock command prints `lock conflict`: another session moved a fresh lock aside. The file `publish.lock.taken.<session>` stays in `~/.claude/state/lane-dash`. Stop and report. Dave can delete that file when no refresh runs.
 - The write worked and the read-back failed: follow step 7.4 or 7.5 (each runs the failed release). Never clear the flag.

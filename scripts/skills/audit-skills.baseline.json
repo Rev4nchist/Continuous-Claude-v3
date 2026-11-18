@@ -198,9 +198,10 @@
      }
     },
     "G28": {
-     "count": 6,
+     "count": 7,
      "skills": {
       "databases": 1,
+      "fleetops-refresh": 1,
       "knowledge-base": 1,
       "neonctl": 1,
       "shadcn-create": 2,

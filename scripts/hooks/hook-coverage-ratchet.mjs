@@ -181,7 +181,7 @@ function tokenToRegex(token) {
   return new RegExp(`^${body}$`);
 }
 
-/** Regexes for every script test that CI runs: named in package.json test:scripts or in ccv3-checks.yml. */
+/** Regexes for every wired script test: named in ccv3-checks.yml (CI runs these) or in package.json test:scripts (a local run only; no workflow runs it). */
 function wiredScriptTests(repoRoot) {
   const texts = [];
   try { texts.push(String(JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).scripts?.['test:scripts'] ?? '')); } catch { /* no wiring */ }
