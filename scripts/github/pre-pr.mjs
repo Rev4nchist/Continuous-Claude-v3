@@ -139,6 +139,29 @@ const REPORT_REGISTRY_TESTS = ['artifact-url', 'backfill', 'check-drift', 'conve
 // Step 2b: small test files of folders that had no gate. Each ran alone in under 4 s (1.5 s for most).
 const SCRIPTS_MISC_TESTS = ['scripts/check-agent-model-drift.test.mjs', 'scripts/hooks/hook-trace-report.test.mjs', 'scripts/hooks/trace-marker-check.test.mjs', 'scripts/tools/test/safe-replace.test.mjs', 'scripts/usage/token-report.test.mjs', 'scripts/tri-model/sync-current-state.test.mjs', 'scripts/fourthos-weekly/test/publish-local.test.mjs', 'scripts/work-tracker/test/apply-rows.test.mjs', '.claude/skills/session-review/scripts/test/extract.test.mjs', '.claude/skills/session-review/scripts/test/render-html.test.mjs'];
 const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
+// Step 3 of card coord-test-gate-coverage (Dave, 2026-11-17: a pre-pr gate on Windows, not CI): the files that only `npm run test:scripts`
+// named, by name and in its order (a missing file fails the gate). The 8 other test:scripts files already run in a CI step, so the gate does not
+// run the npm script (239 s against 72 s for these 46). Tests WS2 and WS3 keep this list and package.json in step.
+export const SCRIPTS_WINDOWS_TESTS = [
+  'scripts/harness-doctor-cleanup.test.mjs', 'scripts/settings/apply-registrations.test.mjs', 'scripts/settings/remove-registrations.test.mjs',
+  'scripts/scheduled/scheduled-health-check.test.mjs', 'scripts/scheduled/register-ccv3-tasks.test.mjs', 'scripts/scheduled/scheduled-reminder-tick.test.mjs',
+  'scripts/scheduled/scheduled-lane-snapshot.test.mjs', 'scripts/scheduled/scheduled-open-prs.test.mjs', 'scripts/coordination/reminder-tick.test.mjs',
+  'scripts/coordination/reminder-core.test.mjs', 'scripts/coordination/lane-dash-project.test.mjs', 'scripts/coordination/lane-dash-metrics.test.mjs',
+  'scripts/coordination/lane-dash-flow.test.mjs', 'scripts/coordination/lane-dash-config.test.mjs', 'scripts/coordination/export-dash-data.test.mjs',
+  'scripts/pricing/refresh-prices.test.mjs', 'scripts/measurement/cost-reconcile.test.mjs', 'scripts/measurement/cost-reconcile-parity.test.mjs',
+  'scripts/scheduled/scheduled-cost-reconcile.test.mjs', 'scripts/scheduled/scheduled-blocklist-update.test.mjs', 'scripts/msys/reap-retire.test.mjs',
+  '.claude/scripts/security/cf-validate.test.mjs', '.claude/scripts/security/sink-spy.test.mjs', 'scripts/coordination/factory-rows.test.mjs',
+  'scripts/coordination/export-factory-data.test.mjs', 'scripts/coordination/fleetops-auto-core.test.mjs', 'scripts/coordination/fleetops-auto-tick.test.mjs',
+  'scripts/review-engine/map-parse.test.mjs', 'scripts/review-engine/map-check.test.mjs', 'scripts/review-engine/seed-file.test.mjs',
+  'scripts/review-engine/program-cli.test.mjs', 'scripts/review-engine/rule-trigger.test.mjs', 'scripts/review-engine/pack-rank.test.mjs',
+  'scripts/review-engine/facts-holds.test.mjs', 'scripts/review-engine/ready.test.mjs', 'scripts/review-engine/sync.test.mjs',
+  'scripts/review-engine/board-check.test.mjs', 'scripts/review-engine/claims.test.mjs', 'scripts/review-engine/orphans.test.mjs',
+  'scripts/review-engine/status.test.mjs', 'scripts/review-engine/contract-seam.test.mjs', 'scripts/review-engine/args.test.mjs',
+  'scripts/review-engine/db-board.test.mjs', 'scripts/review-engine/lane-cli.test.mjs', 'scripts/review-engine/source.test.mjs',
+  'scripts/review-engine/diff.test.mjs',
+];
+// Its scripts/coordination files are named one by one (test and source): a change elsewhere in that folder does not add the 72 s gate.
+const SCRIPTS_WINDOWS_COORD = SCRIPTS_WINDOWS_TESTS.filter((f) => f.startsWith('scripts/coordination/')).flatMap((f) => [f, f.replace(/\.test\.mjs$/, '.mjs')]);
 
 // validate-mods exits 1 when its typecheck cannot run. On Claude Code 2.1.296 and later no command writes the
 // .claude-plugin/types folder tsc needs, so this machine has none. Accept that one case, and only that case: validate
@@ -301,7 +324,20 @@ export const SURFACES = [
   // Dependency row: scripts/github tests read scripts/coordination (CI github-tests caught a drift that #343 never ran locally).
   // Only github-tests, not the lib and local-review suites. scripts/github/pre-pr.mjs is already owned by github-scripts above.
   { id: 'github-deps', globs: ['scripts/coordination/**'], gates: [GITHUB_TESTS] },
-  { id: 'trex', globs: ['.trex/**', 'scripts/trex/**', 'docker/trex/**', 'apps/agentic-os/.trex/**', 'apps/agentic-os/e2e/trex-*.spec.ts', 'apps/agentic-os/playwright.trex.config.ts', 'scripts/checks/test-map.mjs'], gates: [nodeTest('trex-tests', 'scripts/trex/**/*.test.mjs')] },
+  // The trex-tests gate went in step 3 of card coord-test-gate-coverage (Dave, 2026-11-17): scripts/trex does not exist, so it ran nothing.
+  // test-map.mjs keeps its own gate test-map-tests in the checks-scripts surface.
+  {
+    id: 'trex',
+    globs: ['.trex/**', 'scripts/trex/**', 'docker/trex/**', 'apps/agentic-os/.trex/**', 'apps/agentic-os/e2e/trex-*.spec.ts', 'apps/agentic-os/playwright.trex.config.ts', 'scripts/checks/test-map.mjs'],
+    gates: [],
+    manual: 'no gate runs the TREX flows: run the trex flow you changed by hand and keep its output',
+  },
+  // Step 3 of card coord-test-gate-coverage: Windows pre-pr only (Dave, 2026-11-17). CI never runs pre-pr; a test that needs Windows skips itself.
+  {
+    id: 'scripts-windows',
+    globs: ['scripts/review-engine/**', 'scripts/scheduled/**', 'scripts/settings/**', 'scripts/measurement/**', 'scripts/msys/**', 'scripts/pricing/**', '.claude/scripts/security/**', 'scripts/harness-doctor*.mjs', ...SCRIPTS_WINDOWS_COORD],
+    gates: [{ id: 'test-scripts', cmd: 'node', args: ['--test', ...SCRIPTS_WINDOWS_TESTS], cwd: '.', timeoutMs: 5 * MIN }],
+  },
   {
     id: 'mod',
     globs: ['.claude/plugins/ccv3-mods/**'],
