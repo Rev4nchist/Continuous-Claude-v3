@@ -204,6 +204,8 @@ export const SURFACES = [
   {
     id: 'hooks',
     globs: ['.claude/hooks/src/**', '.claude/hooks/dist/**', '.claude/hooks/package.json', '.claude/hooks/vitest.config.ts', '.claude/settings.json.template',
+      // The flake ledger reporter, its lib and its fixture: hooks-vitest loads them (card coord-flake-ledger).
+      '.claude/hooks/test-support/**',
       // Dependencies of the build and the vitest run: a change here can leave dist stale or break a test without touching hooks/src (#352 -> #353).
       '.claude/hooks/package-lock.json', '.claude/hooks/tsconfig*.json', 'scripts/worktree/**/*.mjs', '.github/workflows/*.yml', '.github/workflows/*.yaml', // code and YAML only: a README beside them is docs and runs no gate
     ],
@@ -224,9 +226,10 @@ export const SURFACES = [
       // suite on a busy machine they pass vitest's 5 s default (msys-crash-capture, 2026-10-28). --testTimeout gives
       // them room, and --retry covers a rare timer race. The flake ledger reporter (card coord-flake-ledger) records each test that passed
       // only on a retry and fails the run the second time in 7 days; --includeTaskLocation gives its file:line. alsoLine puts its
-      // FLAKE LEDGER lines (the run line and any WARN) in the PASS detail. The same args run in CI (ccv3-checks.yml, Hooks tests (vitest)).
+      // FLAKE LEDGER lines (run line, WARN, FAIL) in the detail. Named reporters replace vitest's own pick (it chose "agent" under Claude
+      // Code), so the output is the default reporter's. The same args run in CI (ccv3-checks.yml, Hooks tests (vitest)).
       {
-        id: 'hooks-vitest', cmd: 'npx', cwd: '.claude/hooks', timeoutMs: 20 * MIN, alsoLine: /^FLAKE LEDGER(?::| WARN )/,
+        id: 'hooks-vitest', cmd: 'npx', cwd: '.claude/hooks', timeoutMs: 20 * MIN, alsoLine: /^FLAKE LEDGER(?::| WARN | FAIL )/,
         args: ['vitest', 'run', '--retry=2', '--testTimeout=30000', '--includeTaskLocation', '--reporter=default', '--reporter=./test-support/flake-ledger-reporter.mjs'],
       },
     ],
@@ -844,16 +847,23 @@ export function runGate(gate, { root, exec, git }) {
     if (accepted) return { ...result(step, 'PASS', accepted), ...base };
     // A missing package is the environment, not the change: say so first, so nobody hunts a bug in code that is fine.
     const env = envPrefix(clean, { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
-    return { ...result(step, 'FAIL', env ?? `exit ${r.status}: ${summaryLine(out)}`, failNotes(clean, root)), ...base };
+    return { ...result(step, 'FAIL', env ?? withAlso(`exit ${r.status}: ${summaryLine(out)}`, gate, clean), failNotes(clean, root)), ...base };
   }
   if (gate.postCheck) {
     const posts = gate.postCheck.argv.map((a) => git(a));
     const files = posts.flatMap((p) => p.stdout.split(/\r?\n/).filter(Boolean));
     if (posts.some((p) => p.status !== 0) || files.length > 0) return { ...result(step, 'FAIL', `${gate.postCheck.failText} (${files.length})`, files.slice(0, 10)), ...base };
   }
-  // `alsoLine` (hooks-vitest only): every output line that matches it joins the PASS detail, so a flake ledger WARN is not silent.
+  return { ...result(step, 'PASS', withAlso(summaryLine(out), gate, clean)), ...base };
+}
+
+/**
+ * `alsoLine` (hooks-vitest only): every output line that matches it joins the detail, so a flake ledger WARN or FAIL is not silent and a run
+ * that fails only by the ledger does not read "Tests N passed". A gate without the field keeps its detail unchanged.
+ */
+function withAlso(detail, gate, clean) {
   const also = gate.alsoLine ? clean.split(/\r?\n/).map((l) => l.trim()).filter((l) => gate.alsoLine.test(l)) : [];
-  return { ...result(step, 'PASS', [summaryLine(out), ...also].join('; ')), ...base };
+  return [detail, ...also].join('; ');
 }
 
 // ---------- CodeRabbit CLI review ----------

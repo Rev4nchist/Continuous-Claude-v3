@@ -45,6 +45,9 @@ afterAll(() => {
   if (tmp) rmSync(tmp, { recursive: true, force: true });
 });
 
+// A new folder for each attempt: the gate runs with --retry=2, and a retry must not start with the rows or folders of the try before.
+const attemptDir = () => mkdtempSync(join(tmp, 'try-'));
+
 const row = (key: string, ageDays: number, now: number): Row => ({
   at: new Date(now - ageDays * DAY).toISOString(), key, file: key.split(' > ')[0], line: 3, retryCount: 1, head: 'h', branch: 'b', source: 'local',
 });
@@ -87,7 +90,7 @@ describe('flake-ledger lib', () => {
   });
 
   it('F10: a failed write returns an error and the printed lines carry a WARN line', () => {
-    const dirAsFile = join(tmp, 'is-a-dir');
+    const dirAsFile = join(attemptDir(), 'is-a-dir');
     mkdirSync(dirAsFile);
     const now = Date.now();
     const res = lib.appendRow(dirAsFile, row('A', 0, now));
@@ -126,8 +129,9 @@ function runFixture(ledger: string, env: Record<string, string> = {}) {
 
 describe('flake-ledger reporter, real vitest on the fixture (F2-F5, F8, F9, C1, C3)', () => {
   it('records a retry pass, fails the second in 7 days, ignores clean passes, and keeps names off the printed lines', () => {
-    const ledger = join(tmp, 'e2e.jsonl');
-    const summary = join(tmp, 'summary.md');
+    const dir = attemptDir();
+    const ledger = join(dir, 'e2e.jsonl');
+    const summary = join(dir, 'summary.md');
 
     // F2, F8: run 1 records exactly one row, in the temp ledger the child names.
     const r1 = runFixture(ledger);
@@ -139,7 +143,7 @@ describe('flake-ledger reporter, real vitest on the fixture (F2-F5, F8, F9, C1, 
 
     // F4, F5, F9, C3: run 2 fails on the second row; the summary file gets the printed lines only.
     const r2 = runFixture(ledger, { GITHUB_STEP_SUMMARY: summary });
-    expect(r2.status, r2.out).not.toBe(0);
+    expect(r2.status, r2.out).toBe(1);
     expect(r2.flakeLines.some((l) => /^FLAKE LEDGER FAIL retry-once\.fixture\.mjs:\d+ \(2 in 7 days\)$/.test(l))).toBe(true);
     expect(r2.flakeLines.join('\n')).not.toContain(MARKER);
     const sum = readFileSync(summary, 'utf8');
@@ -153,24 +157,24 @@ describe('flake-ledger reporter, real vitest on the fixture (F2-F5, F8, F9, C1, 
     expect(r3.rows).toHaveLength(2);
 
     // F3: a full fail, a plain pass and a skip add no row (fresh ledger; exit 1 from the full fail).
-    const fresh = join(tmp, 'fresh.jsonl');
+    const fresh = join(dir, 'fresh.jsonl');
     const r4 = runFixture(fresh, { FIXTURE_FAIL: '1' });
-    expect(r4.status, r4.out).not.toBe(0);
+    expect(r4.status, r4.out).toBe(1);
     expect(r4.rows.map((r) => r.key)).toEqual([`retry-once.fixture.mjs > ${MARKER} passes on try 2`]);
   }, 300_000);
 
   it('F10 end to end: an unwritable ledger warns and leaves the result at pass', () => {
-    const dirAsLedger = join(tmp, 'ledger-dir');
+    const dirAsLedger = join(attemptDir(), 'ledger-dir');
     mkdirSync(dirAsLedger);
     const r = runFixture(dirAsLedger);
     expect(r.status, r.out).toBe(0);
     expect(r.flakeLines.some((l) => l.startsWith('FLAKE LEDGER WARN'))).toBe(true);
   }, 120_000);
 
-  it('F11, C5: the fixture is outside the hooks test include and the gate-coverage test pattern', () => {
+  // C5 (gate-coverage reports no new ungated file) is proven by the gate-coverage run itself, not by a copy of its pattern here.
+  it('F11: the fixture is outside the hooks test include, so the real gate never runs it', () => {
     const name = 'test-support/fixtures/retry-once/retry-once.fixture.mjs';
     expect(existsSync(join(HOOKS, name))).toBe(true);
     expect(/^src\/__tests__\/.*\.test\.ts$/.test(name)).toBe(false);
-    expect(/\.test\.(mjs|js|cjs|ts|tsx|sh|ps1)$|\.spec\.(ts|js)$/.test(name)).toBe(false);
   });
 });

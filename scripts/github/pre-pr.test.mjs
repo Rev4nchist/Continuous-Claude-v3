@@ -2118,7 +2118,22 @@ test('FL1: the hooks-vitest gate and the CI hooks step both run the flake ledger
   assert.ok(step, 'CI step "Hooks tests (vitest)" not found');
   assert.match(step, /working-directory: \.claude\/hooks/);
   const run = /run: (.+)/.exec(step)?.[1] ?? '';
-  for (const a of FLAKE_ARGS) assert.ok(run.split(/\s+/).includes(a), `CI hooks step lacks ${a}: ${run}`);
+  // Named reporters replace vitest's defaults, and on CI the defaults include github-actions (the PR annotations): name it again there.
+  for (const a of [...FLAKE_ARGS, '--reporter=github-actions']) assert.ok(run.split(/\s+/).includes(a), `CI hooks step lacks ${a}: ${run}`);
+});
+
+test('FL4: a change to the flake ledger code or its fixture runs gate hooks-vitest (the test-support folder is in the hooks surface)', () => {
+  for (const p of ['.claude/hooks/test-support/flake-ledger.mjs', '.claude/hooks/test-support/flake-ledger-reporter.mjs', '.claude/hooks/test-support/fixtures/retry-once/retry-once.fixture.mjs']) {
+    assert.ok(ids(gatesFor([p], REPO_ROOT)).includes('hooks-vitest'), `${p}: no hooks-vitest gate`);
+  }
+});
+
+test('FL5: a run that fails only by the flake ledger names the FAIL line in its detail, not just "Tests N passed"', () => {
+  const g = gateById('hooks-vitest');
+  const out = '      Tests  9 passed (9)\nFLAKE LEDGER FAIL src/__tests__/x.test.ts:12 (2 in 7 days)\nFLAKE LEDGER: 1 retry pass(es) this run, 1 at the limit, ledger /x\n';
+  const r = runGate(g, { root: REPO_ROOT, exec: execOut(1, out), git: fakeGit({}) });
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /FLAKE LEDGER FAIL src\/__tests__\/x\.test\.ts:12 \(2 in 7 days\)/);
 });
 
 test('FL2: a PASS of hooks-vitest carries the FLAKE LEDGER line and a WARN line in its detail (seat C4)', () => {
