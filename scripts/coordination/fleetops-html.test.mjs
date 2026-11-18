@@ -92,21 +92,22 @@ describe('listed ids', () => {
     assert.ok(!log.err.join('\n').includes('4242'));
   }));
 
-  it('2a. a string id (underscore) in a title makes the render refuse; maskListed cannot mask it (break: the count of non-digit ids removed)', () => {
-    const f = withTitle('see PRRC_kwzzzz here');
-    assert.throws(() => produce(f, ['PRRC_kwzzzz']), /listed id/);
-    assert.doesNotThrow(() => produce(withTitle('see PRRC here'), ['PRRC_kwzzzz']));
+  it('2a. a string id (underscore) in a title is masked since PR 647; no output holds it (break: string-id masking removed)', () => {
+    const r = produce(withTitle('see PRRC_kwzzzz here'), ['PRRC_kwzzzz']);
+    assert.ok(r.masked >= 1);
+    for (const t of [r.html, r.page]) assert.ok(!t.includes('PRRC_kwzzzz'));
+    assert.equal(produce(withTitle('see PRRC here'), ['PRRC_kwzzzz']).masked, 0);
   });
 
-  it('2b. the CLI refuses the same way, exits 1, writes nothing and prints no id (break: refuse removed)', () => withTmp((d) => {
+  it('2b. the CLI masks the same id, exits 0 and prints no id (break: string-id masking removed)', () => withTmp((d) => {
     cpSync(FIXTURE, join(d, 'in'), { recursive: true });
     const lanes = JSON.parse(readFileSync(join(d, 'in', 'lanes.json'), 'utf8'));
     lanes.rows[1].title = 'see PRRC_kwzzzz here';
     writeFileSync(join(d, 'in', 'lanes.json'), JSON.stringify(lanes));
     const r = cli([join(d, 'in'), '--out', join(d, 'out'), '--ids-root', fakeRoot(join(d, 'root'), 'PRRC_kwzzzz')]);
-    assert.equal(r.status, 1);
-    assert.ok(!existsSync(join(d, 'out')));
-    assert.ok(!r.stderr.includes('PRRC_kwzzzz') && /listed id/.test(r.stderr));
+    assert.equal(r.status, 0);
+    assert.ok(!readFileSync(join(d, 'out', 'fleetops.html'), 'utf8').includes('PRRC_kwzzzz'));
+    assert.ok(!r.stdout.includes('PRRC_kwzzzz') && !r.stderr.includes('PRRC_kwzzzz'));
   }));
 
   it('3a. an id written as an entity, a JSON escape, a backslash escape or a code span is caught (break: a decode step removed)', () => {

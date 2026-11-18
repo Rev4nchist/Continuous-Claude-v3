@@ -6013,6 +6013,7 @@ var STALE_AFTER_HOURS = 36;
 var SHOW_EVERY_MS = 60 * 60 * 1e3;
 var REFRESH_FILE = "refresh.json";
 var MARKER_FILE = ".refresh-shown.json";
+var PUBLISH_FILE = "publish.json";
 var MAX_BYTES = 65536;
 var CHICAGO = "America/Chicago";
 var isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -6032,6 +6033,18 @@ function parseRefresh(text) {
   const at = typeof d.exported_at === "string" && !Number.isNaN(Date.parse(d.exported_at)) ? d.exported_at : null;
   const key = typeof d.key === "string" ? d.key : "";
   return { pending: d.pending === true, key, exportedAt: at };
+}
+var STEP_RE = /^\d{1,2}(\.\d{1,2})?$/;
+function parsePublishFailed(text) {
+  let d;
+  try {
+    d = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isObj(d) || d.state !== "failed" || typeof d.key !== "string" || typeof d.at !== "string" || Number.isNaN(Date.parse(d.at))) return null;
+  const raw = typeof d.step === "string" || typeof d.step === "number" ? String(d.step) : "";
+  return { key: d.key, at: d.at, step: STEP_RE.test(raw) ? raw : null };
 }
 function staleKind(r, now) {
   if (r.pending) return "pending";
@@ -6056,7 +6069,12 @@ function staleLine(r, now) {
   if (!kind) return "";
   const why = kind === "pending" ? "not uploaded" : `older than ${STALE_AFTER_HOURS} hours`;
   const when = r.exportedAt ? `exported ${formatChicago(r.exportedAt)}, ${why}` : why;
-  return `FleetOps data is stale (${when}). Tell Dave in one line. Run the fleetops-refresh skill only if he asks.`;
+  const act = kind === "pending" ? "Run the fleetops-refresh skill now (Dave's standing yes, data only). Skip it in a headless run." : "Tell Dave in one line. Run the fleetops-refresh skill only if he asks.";
+  return `FleetOps data is stale (${when}). ${act}`;
+}
+function failedLine(f) {
+  const step = f.step === null ? "" : ` (step ${f.step})`;
+  return `FleetOps refresh failed at ${formatChicago(f.at)}${step}. Tell Dave in one line. Do not retry until a new export.`;
 }
 function shouldShow(marker, key, now) {
   if (!marker || marker.key !== key) return true;
@@ -6097,18 +6115,29 @@ function writeMarker(file, marker) {
     throw e;
   }
 }
+function readPublishFailed(dir) {
+  try {
+    const text = readSmall(path2.join(dir, PUBLISH_FILE));
+    return text === null ? null : parsePublishFailed(text);
+  } catch {
+    return null;
+  }
+}
 function fleetopsLine(env = process.env, now = Date.now()) {
   try {
     const dir = laneDashDir(env);
     const text = readSmall(path2.join(dir, REFRESH_FILE));
     const r = text === null ? null : parseRefresh(text);
     if (!r) return "";
-    const line = staleLine(r, now);
+    const published = readPublishFailed(dir);
+    const failed2 = published !== null && r.key !== "" && published.key === r.key ? published : null;
+    const line = failed2 ? failedLine(failed2) : staleLine(r, now);
     if (!line) return "";
     const markerFile = path2.join(dir, MARKER_FILE);
-    if (!shouldShow(readMarker(markerFile), r.key, now)) return "";
+    const markerKey = failed2 ? `${r.key}:failed` : r.key;
+    if (!shouldShow(readMarker(markerFile), markerKey, now)) return "";
     try {
-      writeMarker(markerFile, { key: r.key, shown_at: new Date(now).toISOString() });
+      writeMarker(markerFile, { key: markerKey, shown_at: new Date(now).toISOString() });
     } catch {
       return "";
     }

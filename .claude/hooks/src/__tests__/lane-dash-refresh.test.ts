@@ -247,6 +247,22 @@ describe('fleetopsLine with publish.json (the failed line, card coord-fleetops-l
     expect(dash.fleetopsLine(setup({ pending: true, key: '', exported_at: KEY_A }, failed({ key: '' })).env, NOW)).toContain(RUN_NOW);
   });
 
+  it('the real lock writes the publish.json that the hook reads: release failed gives the failed line, release ok gives the pending line again', async () => {
+    const lockUrl = pathToFileURL(path.resolve(__dirname, '../../../../scripts/coordination/fleetops-html.mjs')).href;
+    const lock: {
+      lockAcquire: (o: { dir: string; key: string; session: string; now: number }) => { code: number };
+      lockRelease: (o: { dir: string; session: string; outcome: string; step?: string; now: number }) => { code: number };
+    } = await import(/* @vite-ignore */ lockUrl);
+    const { dir, env } = setup(pendingA);
+    const o = { dir, session: 'aaaaaaaa', now: NOW };
+    expect(lock.lockAcquire({ ...o, key: KEY_A }).code).toBe(0);
+    expect(lock.lockRelease({ ...o, outcome: 'failed', step: '7.3' }).code).toBe(0);
+    expect(dash.fleetopsLine(env, NOW)).toBe(`FleetOps refresh failed at Nov 8, 4:00 PM CST (step 7.3). Tell Dave in one line. Do not retry until a new export.`);
+    expect(lock.lockAcquire({ ...o, key: KEY_A }).code).toBe(0);
+    expect(lock.lockRelease({ ...o, outcome: 'ok' }).code).toBe(0);
+    expect(dash.fleetopsLine(env, NOW + 2 * HOUR)).toContain(RUN_NOW);
+  });
+
   it('the hourly marker: a pending line shown a minute ago does not hide a new failed line, and the failed line shows once an hour', () => {
     const { env } = setup(pendingA);
     expect(dash.fleetopsLine(env, NOW)).toContain(RUN_NOW);
