@@ -257,6 +257,24 @@ describe('daily and cap', () => {
     f.targets.rows[0].value = '</script><img src=x>';
     assert.equal(viewOf(f).p0.cap, null);
   });
+
+  it('10b. the P0 cap is an integer 1..100 or null: null, blank, text, negative, zero, over 100, 1e9, hex, exponent text, true and a fraction give null (break: Number.isFinite back)', () => {
+    const f = files();
+    for (const bad of [null, '', '   ', 'abc', -1, 0, 101, 1e9, '0x10', '1e1', '5.0', 5.5, true, [], {}, '-3', '101']) {
+      f.targets.rows[0].value = bad;
+      assert.equal(viewOf(f).p0.cap, null, `value ${JSON.stringify(bad)}`);
+    }
+    for (const [good, want] of [[5, 5], ['5', 5], [1, 1], [100, 100], ['100', 100], [' 7 ', 7]]) {
+      f.targets.rows[0].value = good;
+      assert.equal(viewOf(f).p0.cap, want, `value ${JSON.stringify(good)}`);
+    }
+  });
+
+  it('10c. no p0_cap row gives a null cap', () => {
+    const f = files();
+    f.targets.rows = f.targets.rows.filter((t) => t.key !== 'p0_cap');
+    assert.equal(viewOf(f).p0.cap, null);
+  });
 });
 
 describe('retired sources', () => {

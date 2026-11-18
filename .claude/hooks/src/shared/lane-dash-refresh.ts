@@ -8,9 +8,13 @@
  * State dir: ~/.claude/state/lane-dash (LANE_DASH_STATE_DIR overrides it, for tests). Nothing sweeps this dir.
  *   refresh.json         {pending, key, exported_at, ...}  written by the export, cleared by --clear-refresh
  *   .refresh-shown.json  {key, shown_at}                   written here: the hourly throttle, one per machine
+ *   publish.json         {state, session, key, at, step?}  written by the fleetops-refresh lock (fleetops-html.mjs --lock-*)
  *
  * Stale = refresh.json says pending === true, OR exported_at is over STALE_AFTER_HOURS old.
  * A missing, empty or corrupt refresh.json says nothing.
+ * Failed = publish.json says state 'failed' for the same non-empty key as refresh.json. It wins over pending and age, and it shows
+ * when refresh.json is not stale (a forced refresh of unchanged data failed). A missing, corrupt, oversized or other-key publish.json adds nothing.
+ * The failed line has its own marker key, so a pending line shown a minute ago does not hide it.
  * Show the line when the throttle marker is missing, holds another key, or is over one hour old.
  * The marker is written when the line is added. A failed write drops the line (fail open, silent).
  * The write is atomic (temp file, then rename). A marker that is a symlink is never written through.
@@ -26,6 +30,7 @@ export const STALE_AFTER_HOURS = 36;
 export const SHOW_EVERY_MS = 60 * 60 * 1000;
 export const REFRESH_FILE = 'refresh.json';
 export const MARKER_FILE = '.refresh-shown.json';
+export const PUBLISH_FILE = 'publish.json';
 /** Both files are small JSON. A bigger file is not read. */
 export const MAX_BYTES = 65536;
 const CHICAGO = 'America/Chicago';
@@ -37,6 +42,14 @@ export interface Refresh {
   key: string;
   /** ISO text of the export time, or null when absent or not a date. */
   exportedAt: string | null;
+}
+
+export interface PublishFailed {
+  key: string;
+  /** ISO text of the failure time. */
+  at: string;
+  /** A short step number such as '7' or '7.3', or null when absent or not in that form. */
+  step: string | null;
 }
 
 export interface Marker {
@@ -64,6 +77,21 @@ export function parseRefresh(text: string): Refresh | null {
   return { pending: d.pending === true, key, exportedAt: at };
 }
 
+const STEP_RE = /^\d{1,2}(\.\d{1,2})?$/;
+
+/** Parse publish.json text. Null unless it says state 'failed' with a string key and a parseable time. The step is kept only as a short step number. */
+export function parsePublishFailed(text: string): PublishFailed | null {
+  let d: unknown;
+  try {
+    d = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isObj(d) || d.state !== 'failed' || typeof d.key !== 'string' || typeof d.at !== 'string' || Number.isNaN(Date.parse(d.at))) return null;
+  const raw = typeof d.step === 'string' || typeof d.step === 'number' ? String(d.step) : '';
+  return { key: d.key, at: d.at, step: STEP_RE.test(raw) ? raw : null };
+}
+
 /** Why the data is stale: 'pending' wins over 'age'. Null when it is not stale. */
 export function staleKind(r: Refresh, now: number): 'pending' | 'age' | null {
   if (r.pending) return 'pending';
@@ -86,7 +114,16 @@ export function staleLine(r: Refresh, now: number): string {
   if (!kind) return '';
   const why = kind === 'pending' ? 'not uploaded' : `older than ${STALE_AFTER_HOURS} hours`;
   const when = r.exportedAt ? `exported ${formatChicago(r.exportedAt)}, ${why}` : why;
-  return `FleetOps data is stale (${when}). Tell Dave in one line. Run the fleetops-refresh skill only if he asks.`;
+  const act = kind === 'pending'
+    ? "Run the fleetops-refresh skill now (Dave's standing yes, data only). Skip it in a headless run."
+    : 'Tell Dave in one line. Run the fleetops-refresh skill only if he asks.';
+  return `FleetOps data is stale (${when}). ${act}`;
+}
+
+/** The failed notice. Only the time and a short step number reach the text. */
+export function failedLine(f: PublishFailed): string {
+  const step = f.step === null ? '' : ` (step ${f.step})`;
+  return `FleetOps refresh failed at ${formatChicago(f.at)}${step}. Tell Dave in one line. Do not retry until a new export.`;
 }
 
 /** True when the marker is missing, holds another key, or is over one hour old (or in the future). */
@@ -136,6 +173,16 @@ function writeMarker(file: string, marker: Marker): void {
   }
 }
 
+/** The failed state of publish.json, or null: a missing, oversized or corrupt file, or any read error, says nothing. */
+function readPublishFailed(dir: string): PublishFailed | null {
+  try {
+    const text = readSmall(path.join(dir, PUBLISH_FILE));
+    return text === null ? null : parsePublishFailed(text);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The line to append to a block reason, or ''. Writes the throttle marker before it returns a line.
  * Never throws: any failure (read, parse, write) gives ''. A failed marker write is silent.
@@ -146,12 +193,15 @@ export function fleetopsLine(env: Env = process.env, now: number = Date.now()): 
     const text = readSmall(path.join(dir, REFRESH_FILE));
     const r = text === null ? null : parseRefresh(text);
     if (!r) return '';
-    const line = staleLine(r, now);
+    const published = readPublishFailed(dir);
+    const failed = published !== null && r.key !== '' && published.key === r.key ? published : null;
+    const line = failed ? failedLine(failed) : staleLine(r, now);
     if (!line) return '';
     const markerFile = path.join(dir, MARKER_FILE);
-    if (!shouldShow(readMarker(markerFile), r.key, now)) return '';
+    const markerKey = failed ? `${r.key}:failed` : r.key;
+    if (!shouldShow(readMarker(markerFile), markerKey, now)) return '';
     try {
-      writeMarker(markerFile, { key: r.key, shown_at: new Date(now).toISOString() });
+      writeMarker(markerFile, { key: markerKey, shown_at: new Date(now).toISOString() });
     } catch {
       // Fail open and silent: the block still happens without the line.
       return '';

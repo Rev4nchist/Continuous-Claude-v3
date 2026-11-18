@@ -4,6 +4,7 @@ import type { EngineInterface, On } from 'claude-code'
 import type { AgentRun } from '../../types'
 import type { Span } from '../agentic-os/pane-model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
+import { requestSnapshot } from '../shared/snapshot-port'
 import { parseAgentSpec } from '../shared/tiers'
 import { TONE } from '../shared/tones'
 import { capRuns, ledgerRows, newRun, withSpec } from './model'
@@ -72,6 +73,8 @@ export const agentLedger = (on: On) => {
     await update($, agentRuns, runs => capRuns([...runs.filter(one => one.id !== id), run]))
     const spec = await specOf($, e.subagentType)
     await update($, agentRuns, runs => runs.map(one => (one.id === id ? withSpec(one, spec) : one)))
+    // Not awaited: the first spawn of a window must not wait for a file write (requestSnapshot never throws).
+    void requestSnapshot($)
     return result
   }).catch(($, e, next) => next(e))
 
