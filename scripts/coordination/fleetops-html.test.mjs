@@ -1116,14 +1116,15 @@ describe('critic findings: rekey and touch', () => {
     assert.deepEqual(readdirSync(d), ['publish.json']);
   }));
 
-  it('K5c. with no waitMs the holder waits about 1 second for a live mutex before it answers 6 (break: no wait, or a longer wait)', () => withTmp((d) => {
+  it('K5c. with no waitMs the holder waits 1 second for a live mutex, in 50 ms steps, before it answers 6 (injected clock; break: no wait, or a longer wait)', () => withTmp((d) => {
     assert.equal(acq(d, SID_A, T0).code, 0);
     writeFileSync(mutexFile(d), mutexAt(SID_B, 1_000, T0 + MIN));
-    const t = Date.now();
-    const r = H.lockTouch({ dir: d, session: SID_A, now: T0 + MIN });
-    const waited = Date.now() - t;
+    let t = 0;
+    const steps = [];
+    const r = H.lockTouch({ dir: d, session: SID_A, now: T0 + MIN }, { clock: () => t, sleep: (ms) => { steps.push(ms); t += ms; } });
     assert.equal(r.code, 6);
-    assert.ok(waited >= 900 && waited < 3000, `waited ${waited} ms`);
+    assert.equal(steps.length, 20, `slept ${steps.length} times`);
+    assert.ok(steps.every((ms) => ms === 50));
   }));
 
   it('K5d. release, touch and rekey read the lock again under the mutex: a lock that another session took in between is not touched (break: the holder check outside the mutex only)', () => withTmp((d) => {
@@ -1155,8 +1156,9 @@ describe('critic findings: rekey and touch', () => {
 
   it('K5f. through the CLI a fresh mutex gives exit 6 and one stderr line for touch, rekey and release (break: the exit code)', () => withTmp((d) => {
     assert.equal(lockCli(acquireArgs(d, SID_A)).status, 0);
-    writeFileSync(mutexFile(d), JSON.stringify({ session: SID_B, at: new Date().toISOString() }));
     for (const args of [['--lock-touch', '--session', SID_A, '--dir', d], ['--lock-rekey', KEY2, '--session', SID_A, '--dir', d], releaseArgs(d, SID_A, 'failed', ['--step', '7'])]) {
+      // A fresh mutex for each call: three CLI runs under load can pass the 10 second limit of one shared seed.
+      writeFileSync(mutexFile(d), JSON.stringify({ session: SID_B, at: new Date().toISOString() }));
       const r = lockCli(args);
       assert.equal(r.status, 6, r.stderr);
       assert.equal(r.stderr.trim().split('\n').length, 1);
@@ -1229,5 +1231,95 @@ describe('delta critic: mutex owner and the future lastOkAt', () => {
     assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_B, now: T0 }).code, 4);
     writeFileSync(pubPath(d), JSON.stringify({ state: 'ok', session: SID_A, key: KEY, at: iso(T0 + 60 * MIN), lastOkAt: iso(T0 + 60 * MIN) }));
     assert.equal(H.lockAcquire({ dir: d, key: KEY2, session: SID_B, now: T0 }).code, 0);
+  }));
+});
+
+describe('follow-ups (coord-hooks-followups items 4-8): removes take only our own file', () => {
+  const mutexFile = (d) => join(d, 'publish.takeover');
+  const iso = (ms) => new Date(ms).toISOString();
+  const theirsMutex = JSON.stringify({ session: SID_B, at: iso(T0 + MIN) });
+  const theirsLock = JSON.stringify({ session: SID_B, key: KEY2, at: iso(T0 + MIN) });
+  const onFile = (target, fn) => { let done = false; return (f) => { if (!done && f === target) { done = true; fn(); } }; };
+
+  it('N4a. the mutex remove after a step keeps a mutex that another session wrote between the check and the remove (break: rmSync by path)', () => withTmp((d) => {
+    assert.equal(H.lockAcquire({ dir: d, key: KEY, session: SID_A, now: T0 }).code, 0);
+    const r = H.lockTouch({ dir: d, session: SID_A, now: T0 + MIN }, { beforeRemove: onFile(mutexFile(d), () => writeFileSync(mutexFile(d), theirsMutex)) });
+    assert.equal(r.code, 0, r.msg);
+    assert.equal(readFileSync(mutexFile(d), 'utf8'), theirsMutex);
+  }));
+
+  it('N4b. a dead mutex that another session replaced with a fresh one before the remove stays, and the call answers busy (break: rmSync by path)', () => withTmp((d) => {
+    assert.equal(H.lockAcquire({ dir: d, key: KEY, session: SID_A, now: T0 }).code, 0);
+    writeFileSync(mutexFile(d), JSON.stringify({ session: SID_C, at: iso(T0 + MIN - 11_000) }));
+    const r = H.lockTouch({ dir: d, session: SID_A, now: T0 + MIN, waitMs: 0 }, { beforeRemove: onFile(mutexFile(d), () => writeFileSync(mutexFile(d), theirsMutex)) });
+    assert.equal(r.code, 6, r.msg);
+    assert.equal(readFileSync(mutexFile(d), 'utf8'), theirsMutex);
+  }));
+
+  it('N5. a release after a stall keeps the lock of a successor that took the path before the remove (break: rmSync of publish.lock by path)', () => withTmp((d) => {
+    assert.equal(H.lockAcquire({ dir: d, key: KEY, session: SID_A, now: T0 }).code, 0);
+    const r = H.lockRelease({ dir: d, session: SID_A, outcome: 'ok', now: T0 + MIN }, { beforeRemove: onFile(lockPath(d), () => writeFileSync(lockPath(d), theirsLock)) });
+    assert.equal(r.code, 0, r.msg);
+    assert.equal(readFileSync(lockPath(d), 'utf8'), theirsLock);
+    assert.deepEqual(readdirSync(d).sort(), ['publish.json', 'publish.lock']);
+  }));
+
+  it('N6. the check after the create reads a fresh clock: an ok refresh that ended 10 s after the call began blocks (break: the start time reused)', () => withTmp((d) => {
+    const ok = JSON.stringify({ state: 'ok', session: SID_C, key: KEY, at: iso(T0 + 10_000), lastOkAt: iso(T0 + 10_000) });
+    const r = H.lockAcquire({ dir: d, key: KEY2, session: SID_A, now: T0, clock: () => T0 + 12_000 }, { afterNewLock: () => writeFileSync(pubPath(d), ok) });
+    assert.equal(r.code, 4, r.msg);
+    assert.equal(existsSync(lockPath(d)), false);
+  }));
+
+  it('N7. a forced run keeps the failed export: when it dies, a later run of that export still exits 5 (break: the writing record drops the failed key)', () => withTmp((d) => {
+    writeFileSync(pubPath(d), JSON.stringify({ state: 'failed', session: SID_C, key: KEY, at: iso(T0 - 2 * MIN), step: '7.3' }));
+    assert.equal(H.lockAcquire({ dir: d, key: KEY, session: SID_A, now: T0, force: true }).code, 0);
+    assert.equal(json(d, 'publish.json').failedKey, KEY);
+    writeFileSync(lockPath(d), staleLockText(SID_A, 30 * MIN, T0 + 31 * MIN));
+    const r = H.lockAcquire({ dir: d, key: KEY, session: SID_B, now: T0 + 31 * MIN });
+    assert.equal(r.code, 5, r.msg);
+    assert.match(r.msg, /step 7\.3/);
+  }));
+
+  it('N8. a lock write that fails after the create leaves no partial publish.lock (break: no remove after the create)', () => withTmp((d) => {
+    const boom = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    assert.throws(() => H.lockAcquire({ dir: d, key: KEY, session: SID_A, now: T0 }, { lockWrite: (fd) => { writeFileSync(fd, '{"sess'); throw boom; } }), /disk full/);
+    assert.equal(existsSync(lockPath(d)), false);
+    assert.equal(H.lockAcquire({ dir: d, key: KEY, session: SID_B, now: T0 }).code, 0, 'the next session gets the lock at once');
+  }));
+
+  it('N8b. removeIfOurs puts back a file that is not ours and never overwrites a new file at the path (break: remove by path, or a put-back that overwrites)', () => withTmp((d) => {
+    const f = join(d, 'x');
+    writeFileSync(f, 'theirs');
+    assert.equal(H.removeIfOurs(f, (t) => t === 'mine', 'a'), 'kept');
+    assert.equal(readFileSync(f, 'utf8'), 'theirs');
+    assert.equal(H.removeIfOurs(f, (t) => t === 'theirs', 'a'), 'removed');
+    assert.equal(H.removeIfOurs(f, () => true, 'a'), 'gone');
+    writeFileSync(f, 'old');
+    const res = H.removeIfOurs(f, (t) => t === 'mine', 'a', { beforeRemove: () => {} });
+    assert.equal(res, 'kept');
+    assert.deepEqual(readdirSync(d), ['x']);
+  }));
+});
+
+describe('follow-ups (coord-hooks-followups PR B): the put-back never overwrites', () => {
+  it('N9. when the put-back link fails with another error and a new file took the path, the new file stays and the copy is kept aside (break: a rename fallback that replaces it; PR 654 CLI finding)', () => withTmp((d) => {
+    const f = join(d, 'x');
+    writeFileSync(f, 'old');
+    const link = () => { writeFileSync(f, 'new-of-another-session'); throw Object.assign(new Error('not permitted'), { code: 'EPERM' }); };
+    const r = H.removeIfOurs(f, (t) => t === 'mine', 'a', { link });
+    assert.equal(r, 'conflict');
+    assert.equal(readFileSync(f, 'utf8'), 'new-of-another-session');
+    const aside = readdirSync(d).filter((n) => n.startsWith('x.rm.a.'));
+    assert.equal(aside.length, 1, 'the moved copy stays on disk');
+    assert.equal(readFileSync(join(d, aside[0]), 'utf8'), 'old');
+  }));
+
+  it('N9b. when the put-back link fails with another error and the path is still free, the copy stays aside and the result is conflict (break: a silent rename back)', () => withTmp((d) => {
+    const f = join(d, 'x');
+    writeFileSync(f, 'old');
+    const r = H.removeIfOurs(f, (t) => t === 'mine', 'a', { link: () => { throw Object.assign(new Error('not permitted'), { code: 'EPERM' }); } });
+    assert.equal(r, 'conflict');
+    assert.equal(existsSync(f), false);
   }));
 });

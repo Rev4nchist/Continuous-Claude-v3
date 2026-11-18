@@ -12,7 +12,7 @@
  *
  * Stale = refresh.json says pending === true, OR exported_at is over STALE_AFTER_HOURS old.
  * A missing, empty or corrupt refresh.json says nothing.
- * Failed = publish.json says state 'failed' for the same non-empty key as refresh.json. It wins over pending and age, and it shows
+ * Failed = publish.json says state 'failed' (or state 'writing' with the failedKey of a forced run) for the same non-empty key as refresh.json. It wins over pending and age, and it shows
  * when refresh.json is not stale (a forced refresh of unchanged data failed). A missing, corrupt, oversized or other-key publish.json adds nothing.
  * The failed line has its own marker key, so a pending line shown a minute ago does not hide it.
  * Show the line when the throttle marker is missing, holds another key, or is over one hour old.
@@ -79,7 +79,11 @@ export function parseRefresh(text: string): Refresh | null {
 
 const STEP_RE = /^\d{1,2}(\.\d{1,2})?$/;
 
-/** Parse publish.json text. Null unless it says state 'failed' with a string key and a parseable time. The step is kept only as a short step number. */
+/**
+ * Parse publish.json text. A failure is state 'failed' with a string key and a parseable time, or a writing record that kept the
+ * failure of a forced run (failedKey, failedAt, failedStep; fleetops-html.mjs writingRecord): a forced run that dies keeps exit 5,
+ * so the line keeps saying failed. Null otherwise. The step is kept only as a short step number.
+ */
 export function parsePublishFailed(text: string): PublishFailed | null {
   let d: unknown;
   try {
@@ -87,9 +91,15 @@ export function parsePublishFailed(text: string): PublishFailed | null {
   } catch {
     return null;
   }
-  if (!isObj(d) || d.state !== 'failed' || typeof d.key !== 'string' || typeof d.at !== 'string' || Number.isNaN(Date.parse(d.at))) return null;
-  const raw = typeof d.step === 'string' || typeof d.step === 'number' ? String(d.step) : '';
-  return { key: d.key, at: d.at, step: STEP_RE.test(raw) ? raw : null };
+  if (!isObj(d)) return null;
+  const kept = d.state === 'writing';
+  if (d.state !== 'failed' && !kept) return null;
+  const key = kept ? d.failedKey : d.key;
+  const at = kept ? d.failedAt : d.at;
+  const step = kept ? d.failedStep : d.step;
+  if (typeof key !== 'string' || typeof at !== 'string' || Number.isNaN(Date.parse(at))) return null;
+  const raw = typeof step === 'string' || typeof step === 'number' ? String(step) : '';
+  return { key, at, step: STEP_RE.test(raw) ? raw : null };
 }
 
 /** Why the data is stale: 'pending' wins over 'age'. Null when it is not stale. */

@@ -472,7 +472,7 @@ async function main() {
     const hookDistDir = path.join(projectDir, '.claude', 'hooks', 'dist');
     if (fs.existsSync(hookSrcDir) && fs.existsSync(hookDistDir)) {
       try {
-        hookDistLine = formatStaleDistWarning(hookSrcDir, assessTreeFreshness(hookSrcDir, hookDistDir));
+        hookDistLine = formatStaleDistWarning(hookSrcDir, assessTreeFreshness(hookSrcDir, hookDistDir, projectDir));
       } catch { /* fail silently */ }
     }
   }

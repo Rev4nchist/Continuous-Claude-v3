@@ -30,7 +30,11 @@
  *   Flag checkpoint.ledger (review-router.config.json, default false): see lib/checkpoint-ledger.mjs. With it true, `--json --pr N` adds a `ledger` block (the
  *   two-call protocol: state ask, record, kept-draft, stop or none; `ledger.ask` is the AskUserQuestion spec) and writes the offer to the decision
  *   store; --no-ledger turns that off for one run; --ask-anyway keeps the question open for an auto-eligible PR (the mod passes it after a failed auto-confirm). And a confirm by dave with --pr N records only when Dave's tap for the pathway is in the store (a tap on a paid
- *   row carries its price and is the paid yes); --by default records nothing. The tap is used up after the record.
+ *   row carries its price and is the paid yes); --by default records nothing. The tap is used up BEFORE the record, and a failed use refuses (--by dave).
+ *   --repick-since <ISO> (with --json --pr N or --confirm): a tap made before that time (the PR went back to draft) is used up and asked again; a bad value makes every tap stale.
+ *   --facts and --config with the ledger on write the decision store only in test mode (PR_CHECKPOINT_TEST=1 and a CCV3_DECISIONS_FILE that is not the real store); else refused.
+ * node scripts/github/pr-checkpoint.mjs --drop-taps --pr <n>
+ *   Removes the taps, offers and misses of the review and paid-round questions of PR n at every head (one store update). Reads no facts. Exit 1 when the store is locked.
  * node scripts/github/pr-checkpoint.mjs --apply <pr> [--state-dir <dir>]
  *   Reads pathway.json, checks the live PR (a draft, at the recorded head), adds the review label, then marks it ready. The label
  *   comes first, and a failed label never reaches ready. gh is the real gh, or `node $PR_CHECKPOINT_GH` (tests).
@@ -48,7 +52,8 @@ import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayM
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
-import { ledgerConfirmProblem, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
+import { askSpecOf, ledgerConfirmCheck, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
+import { DECISIONS_ENV, decisionKey, decisionsPath, dropKey } from './lib/decisions.mjs';
 
 export { capacityFact, parseRateLimitReply };
 
@@ -857,8 +862,8 @@ function ghRunner(env = process.env, timeout = undefined) {
 
 // ---------- CLI ----------
 
-const VALUE_FLAGS = ['--facts', '--config', '--confirm', '--by', '--body', '--state-dir', '--apply', '--pr'];
-const BOOL_FLAGS = ['--json', '--dependabot', '--probe', '--no-ledger', '--ask-anyway'];
+const VALUE_FLAGS = ['--facts', '--config', '--confirm', '--by', '--body', '--state-dir', '--apply', '--pr', '--repick-since'];
+const BOOL_FLAGS = ['--json', '--dependabot', '--probe', '--no-ledger', '--ask-anyway', '--drop-taps'];
 const PATHWAYS = ['none', 'coderabbit', 'both', 'wait'];
 
 /** { opts } or { error }. A value flag with no value (or whose next argument is a flag) is an error. */
@@ -882,20 +887,29 @@ function confirmUsage(o) {
 
 function applyUsage(o) {
   if (!/^[1-9]\d*$/.test(o['--apply'])) return '--apply needs a PR number';
-  const stray = ['--facts', '--config', '--body', '--by', '--json', '--dependabot', '--probe', '--pr', '--ask-anyway'].find((k) => o[k] !== undefined);
+  const stray = ['--facts', '--config', '--body', '--by', '--json', '--dependabot', '--probe', '--pr', '--ask-anyway', '--repick-since', '--drop-taps'].find((k) => o[k] !== undefined);
   return stray ? `${stray} is not an --apply flag: it takes --state-dir only` : null;
+}
+
+/** --drop-taps takes --pr and nothing else: it reads no facts and no config, only the decision store. */
+function dropUsage(o) {
+  if (o['--pr'] === undefined) return '--drop-taps needs --pr <number>';
+  const other = Object.keys(o).find((k) => k !== '--drop-taps' && k !== '--pr');
+  return other ? `${other} is not a --drop-taps flag: it takes --pr only` : null;
 }
 
 /** A message for bad usage, or null. Checked before anything is read or written. */
 function usageProblem(o) {
   const confirm = o['--confirm'] !== undefined;
   const apply = o['--apply'] !== undefined;
+  if (o['--drop-taps'] === true) return o['--pr'] !== undefined && !/^[1-9]\d*$/.test(o['--pr']) ? '--pr needs a PR number' : dropUsage(o);
   if (o['--pr'] !== undefined && !apply && !/^[1-9]\d*$/.test(o['--pr'])) return '--pr needs a PR number';
   if (confirm && apply) return '--confirm and --apply cannot be combined';
   if (confirm) return confirmUsage(o);
   if (apply) return applyUsage(o);
   const stray = ['--by', '--body', '--state-dir'].find((k) => o[k] !== undefined);
-  return stray ? `${stray} needs --confirm or --apply` : null;
+  if (stray) return `${stray} needs --confirm or --apply`;
+  return o['--repick-since'] !== undefined && !o['--json'] ? '--repick-since needs --confirm or --json' : null;
 }
 
 /**
@@ -941,20 +955,80 @@ const clockMs = (facts) => (Number.isFinite(Date.parse(facts.now)) ? Date.parse(
 
 const refuse = (message) => { console.error(`pr-checkpoint: refused: ${message}`); process.exitCode = 1; };
 
+/** A path in one spelling for a comparison: absolute, real (a folder link resolved, also when the file is not there yet), lower case on win32. */
+function sameForm(file) {
+  let full = path.resolve(file);
+  try { full = realpathSync.native(full); } catch {
+    try { full = path.join(realpathSync.native(path.dirname(full)), path.basename(full)); } catch { /* keep the resolved path */ }
+  }
+  return process.platform === 'win32' ? full.toLowerCase() : full;
+}
+
+/**
+ * True only when PR_CHECKPOINT_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one (the same rule as seamsOn in ship-ask.mjs,
+ * with the paths compared in one form: the real store in another case or spelling is still the real store).
+ * --facts and --config are test seams: outside test mode a run that carries one writes nothing to the decision store, because a fixture could then
+ * open a real offer with any price or slot, or record a pick with no tap.
+ */
+function seamsOn(env = process.env) {
+  if (env.PR_CHECKPOINT_TEST !== '1' || !env[DECISIONS_ENV]) return false;
+  return sameForm(env[DECISIONS_ENV]) !== sameForm(decisionsPath({}));
+}
+const FIXTURE_REFUSED = '--facts and --config are for tests. A live question reads GitHub.';
+const fixtureRun = (o) => o['--facts'] !== undefined || o['--config'] !== undefined;
+/**
+ * A fixture run outside test mode is refused, whatever its config says: the ledger flag comes from the --config file the fixture controls, so a flag of
+ * false must not open the door (a fixture config with the ledger off would let a confirm by dave record with no tap).
+ */
+const fixtureBlocked = (o) => fixtureRun(o) && !seamsOn();
+
+/**
+ * The clock of the USE of a tap, in ms. facts.now of a live run was read before the capacity probe, so the slot is judged again at the use (the lock wait is up to 5 s).
+ * A fixture run (--facts) has no other clock than facts.now; in test mode PR_CHECKPOINT_CONSUME_NOW (an ISO time) moves it. Test seam only.
+ */
+function consumeClock(o, facts) {
+  const seam = Date.parse(process.env.PR_CHECKPOINT_CONSUME_NOW ?? '');
+  if (seamsOn() && Number.isFinite(seam)) return seam;
+  return o['--facts'] === undefined ? Date.now() : clockMs(facts);
+}
+
 function runConfirm(o) {
   const stateDir = o['--state-dir'] ?? defaultStateDir();
   const { facts, policy } = inputsOf(o, stateDir);
+  if (fixtureBlocked(o)) return refuse(FIXTURE_REFUSED);
   let bodyText;
   try { bodyText = readFileSync(o['--body'], 'utf8'); } catch { return refuse(`cannot read the body file ${o['--body']}`); }
   const args = { result: recommend(facts, policy), facts, pathway: o['--confirm'], by: o['--by'], bodySha: bodyHash(bodyText) };
   const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
-  const problem = confirmProblem(args) ?? (ledgerOn(policy) ? ledgerConfirmProblem({ pr, head: facts.head, pathway: args.pathway, by: args.by, result: args.result, now: clockMs(facts) }) : null);
+  const ledger = ledgerOn(policy);
+  const check = ledger && confirmProblem(args) === null ? ledgerConfirmCheck({ pr, head: facts.head, pathway: args.pathway, by: args.by, result: args.result, now: clockMs(facts), repickSince: o['--repick-since'] ?? null }) : { problem: null, label: null };
+  const problem = confirmProblem(args) ?? check.problem;
   if (problem) return refuse(problem);
   const record = confirmRecord(args);
   mkdirSync(stateDir, { recursive: true });
+  // Dave's tap is used up BEFORE the record is written, and a failed use refuses: a tap that stays after a record would let a second --confirm write again.
+  // A record write that fails after the use leaves no tap and no record, so the next call asks again. --by auto has no tap and keeps its order.
+  if (ledger && args.by === 'dave') {
+    // The tap must be the one that was read (label AND time), and its row must still be a row of the question at THIS clock (a free slot can go while the lock waits).
+    const rowNow = (row) => askSpecOf(pr, args.result, '', consumeClock(o, facts)).values[row.label] === args.pathway;
+    const used = ledgerUse({ pr, head: facts.head, label: check.label, at: check.at, check: rowNow });
+    if (!used.ok) return refuse(`Dave's tap for ${args.pathway} on PR #${pr} could not be used up (${used.reason}). Nothing was recorded. Call pr_checkpoint {pr} again.`);
+  }
   writeFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), `${JSON.stringify(record, null, 2)}\n`);
-  if (ledgerOn(policy)) ledgerUse({ pr, head: facts.head });
+  if (ledger && args.by !== 'dave') ledgerUse({ pr, head: facts.head });
   console.log(JSON.stringify(record));
+}
+
+/**
+ * --drop-taps --pr N: removes the taps, offers and misses of the review and paid-round questions of PR N, at every head, in one store update.
+ * The mod runs it when a PR goes back to draft. It reads no facts. It only deletes, so the worst a caller can cause is one more question to Dave:
+ * it never records a pick and never spends.
+ */
+function runDrop(o) {
+  const pr = Number(o['--pr']);
+  const r = dropKey({ steps: ['review', 'paid-round'], key: decisionKey({ pr }) });
+  if (!r.ok) return refuse(`the taps of PR #${pr} could not be cleared (${r.reason}). Nothing was dropped.`);
+  console.log(JSON.stringify({ ok: true, dropped: r.dropped }));
 }
 
 function runApply(o) {
@@ -967,11 +1041,15 @@ function runApply(o) {
 }
 
 function runRecommend(o) {
+  const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
+  // The ledger step (an offer, a miss, a use of a tap) is refused for a fixture run outside test mode, even with the ledger flag off in the fixture config.
+  // It comes BEFORE the facts are read: the probe inside inputsOf can post a comment, and a refused run must post nothing.
+  if (o['--json'] && pr !== null && !o['--no-ledger'] && fixtureBlocked(o)) return refuse(FIXTURE_REFUSED);
   // The probe may post only in the JSON run the mod makes. The text plan and --confirm never post.
   const { facts, policy } = inputsOf(o, defaultStateDir(), o['--probe'] === true && o['--json'] === true);
   const result = recommend(facts, policy);
-  const pr = o['--pr'] === undefined ? null : Number(o['--pr']);
-  const ledger = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy) ? ledgerStep({ pr, result, slotLine: slotText(result.capacity, clockMs(facts)), askAnyway: o['--ask-anyway'] === true, now: clockMs(facts) }) : null;
+  const asks = o['--json'] && pr !== null && !o['--no-ledger'] && ledgerOn(policy);
+  const ledger = asks ? ledgerStep({ pr, result, slotLine: slotText(result.capacity, clockMs(facts)), askAnyway: o['--ask-anyway'] === true, now: clockMs(facts), repickSince: o['--repick-since'] ?? null }) : null;
   console.log(o['--json'] ? JSON.stringify(ledger ? { ...result, ledger } : result) : renderText(result));
 }
 
@@ -979,12 +1057,13 @@ function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const bad = parsed.error ?? usageProblem(parsed.opts);
   if (bad) {
-    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--probe] [--no-ledger] [--ask-anyway] [--pr n] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default|auto> --body <file> [--pr n] [--state-dir d] | --apply <pr> [--state-dir d].`);
+    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--probe] [--no-ledger] [--ask-anyway] [--pr n] [--repick-since iso] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default|auto> --body <file> [--pr n] [--repick-since iso] [--state-dir d] | --apply <pr> [--state-dir d] | --drop-taps --pr n.`);
     process.exit(2);
   }
   const o = parsed.opts;
   try {
-    if (o['--apply'] !== undefined) runApply(o);
+    if (o['--drop-taps'] === true) runDrop(o);
+    else if (o['--apply'] !== undefined) runApply(o);
     else if (o['--confirm'] !== undefined) runConfirm(o);
     else runRecommend(o);
   } catch (err) {

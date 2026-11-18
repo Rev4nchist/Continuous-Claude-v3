@@ -24,7 +24,7 @@
  *     backslashes and code spans removed).
  * maskListed cannot mask a string id such as "PRRC_x": the render REFUSES when one is left.
  */
-import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -293,6 +293,8 @@ export function checkText(text, stamp, ids) {
  * link that never overwrites; when the lock path is taken again the copy stays on disk and the exit is 3 with a conflict line.
  * One refresh an hour: a release ok leaves publish.json with state ok. An acquire exits 4 while the last ok is under 60 minutes old.
  * A failed export is not retried: an acquire on the key of a failed publish.json exits 5. `--force` skips exits 4 and 5 only (never a live lock).
+ * A forced run keeps that failed export in its writing record (failedKey, failedAt, failedStep), so a forced run that dies does not clear it.
+ * Every remove of the lock or the mutex goes through removeIfOurs: it removes only the text this call wrote or read, never a successor's file.
  * A rekey (a restart on a newer export) and a touch (a keep-alive) are for the holder only.
  * Exit codes: 0 ok, 1 usage or an I/O error, 3 refused (another session holds the lock, or this session does not), 4 last refresh under an hour ago,
  * 5 this export key already failed, 6 busy (a live takeover mutex: release, rekey and touch wait up to 1 second, then answer 6; nothing changed).
@@ -337,6 +339,28 @@ export function renameRetry(from, to, { rename = renameSync, sleep = sleepSync }
       sleep(50);
     }
   }
+}
+
+/**
+ * Removes `file` only while its text passes `isOurs`. A plain remove by path can delete a file that another session wrote a moment ago.
+ * So the file is first renamed to a name only this process uses, read there, and then removed or put back. A put-back never overwrites:
+ * when a new file took the path in between, the copy stays on disk. A put-back link that fails for another reason (a directory, a
+ * file system with no hard links) also leaves the copy on disk: a rename back could replace a file that took the path in that moment.
+ * Returns 'removed', 'kept', 'gone' (no file) or 'conflict' (the copy stays as <file>.rm.<tag>.<pid>).
+ * `hooks.beforeRemove` (a test) runs before the rename; `hooks.link` (a test) replaces the put-back link.
+ */
+export function removeIfOurs(file, isOurs, tag, hooks = {}) {
+  if (hooks.beforeRemove) hooks.beforeRemove(file);
+  const aside = `${file}.rm.${tag}.${process.pid}`;
+  try { renameRetry(file, aside); } catch (e) { if (e.code === 'ENOENT') return 'gone'; throw e; }
+  let text = null;
+  try { text = readText(aside); } catch { text = null; }
+  if (text !== null && isOurs(text)) { rmSync(aside, { force: true }); return 'removed'; }
+  try { (hooks.link ?? linkSync)(aside, file); } catch {
+    return 'conflict';
+  }
+  rmSync(aside, { force: true });
+  return 'kept';
 }
 
 /** Stale = older than `limit` by `at`; a file with no usable `at` (empty, half written, corrupt) is judged by its mtime. A future time is live. */
@@ -386,10 +410,11 @@ function acquireRefusal(dir, key, now) {
   const rec = readPublish(dir);
   const ok = lastOkMs(rec);
   if (ok !== null && now - ok >= -FUTURE_SLACK_MS && now - ok < REFRESH_EVERY_MS) return { code: 4, msg: `fleetops-html: last refresh at ${clockChicago(ok)}, under 1 hour ago` };
-  if (rec?.state === 'failed' && rec.key === key) {
-    const at = Date.parse(rec.at);
+  const failed = failedOf(rec);
+  if (failed !== null && failed.key === key) {
+    const at = Date.parse(failed.at);
     const when = Number.isNaN(at) ? '' : ` at ${clockChicago(at)}`;
-    const step = typeof rec.step === 'string' && STEP_RE.test(rec.step) ? ` (step ${rec.step})` : '';
+    const step = typeof failed.step === 'string' && STEP_RE.test(failed.step) ? ` (step ${failed.step})` : '';
     return { code: 5, msg: `fleetops-html: this export already failed${when}${step}. Do not retry until a new export. Skip the run.` };
   }
   return null;
@@ -417,20 +442,26 @@ export function lockSnapshot(dir, now = Date.now(), hooks = {}) {
 /**
  * Creates publish.takeover (wx). A mutex over 10 seconds old is dead: it is removed once two reads agree, then the create is tried again.
  * `waitMs` > 0 polls every 50 ms for a live mutex. A mutex that cannot be read (a directory, say) is live. Returns the text this call wrote, or null when
- * another session holds the mutex.
+ * another session holds the mutex. A dead mutex is removed only while its text is the dead text (removeIfOurs): a fresh mutex that replaced it stays.
+ * `hooks.clock` and `hooks.sleep` (a test) replace the wall clock and the 50 ms sleep of the wait.
  */
-function takeMutex(dir, who, waitMs) {
+function takeMutex(dir, who, waitMs, hooks = {}) {
   const file = join(dir, MUTEX_FILE);
   const text = JSON.stringify({ session: who.session, at: isoAt(who.now) });
-  const deadline = Date.now() + waitMs;
+  const clock = hooks.clock ?? Date.now;
+  const sleep = hooks.sleep ?? sleepSync;
+  const deadline = clock() + waitMs;
   for (let tries = 0; tries < 200; tries += 1) {
     try { writeFileSync(file, text, { flag: 'wx' }); return text; } catch (e) { if (e.code !== 'EEXIST') throw e; }
     let raw = null;
     let mtime = 0;
     try { raw = readFileSync(file, 'utf8'); mtime = statSync(file).mtimeMs; } catch (e) { if (e.code === 'ENOENT') continue; }
-    if (raw !== null && lockIsStale(raw, mtime, who.now, MUTEX_STALE_MS) && readText(file) === raw) { rmSync(file, { force: true }); continue; }
-    if (Date.now() >= deadline) return null;
-    sleepSync(50);
+    if (raw !== null && lockIsStale(raw, mtime, who.now, MUTEX_STALE_MS) && readText(file) === raw) {
+      if (removeIfOurs(file, (t) => t === raw, `mutex.${who.session}`, hooks) !== 'conflict') continue;
+      return null;
+    }
+    if (clock() >= deadline) return null;
+    sleep(50);
   }
   return null;
 }
@@ -440,36 +471,71 @@ function takeMutex(dir, who, waitMs) {
  * The mutex is removed in a finally, only while its text is still ours, and an error from that remove is swallowed: the result of `fn` stands.
  */
 function withMutex(dir, who, waitMs, fn, busy, hooks = {}) {
-  const text = takeMutex(dir, who, waitMs);
+  const text = takeMutex(dir, who, waitMs, hooks);
   if (text === null) return busy;
   const file = join(dir, MUTEX_FILE);
   try {
     if (hooks.afterMutex) hooks.afterMutex();
     return fn();
   } finally {
-    try { if (readText(file) === text) rmSync(file, { force: true }); } catch { /* a leftover mutex dies after 10 seconds */ }
+    try { if (readText(file) === text) removeIfOurs(file, (t) => t === text, `mutex.${who.session}`, hooks); } catch { /* a leftover mutex dies after 10 seconds */ }
   }
 }
 
 /* ---- create, take over, release ---- */
 
-const newLock = (dir, { key, session, now }) => writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ session, key, at: isoAt(now) }), { flag: 'wx' });
-const writing = (dir, { key, session, now }) => writePublish(dir, session, withLastOk({ state: 'writing', session, key, at: isoAt(now) }, lastOkMs(readPublish(dir))));
+/**
+ * Creates the lock (exclusive create) and returns its text. When the write fails after the create, the partial file is removed (only while its text
+ * is a part of ours, removeIfOurs) and the error goes up. `hooks.lockWrite` (a test) replaces the write.
+ */
+function newLock(dir, { key, session, now }, hooks = {}) {
+  const file = join(dir, LOCK_FILE);
+  const text = JSON.stringify({ session, key, at: isoAt(now) });
+  const fd = openSync(file, 'wx');
+  try {
+    try { (hooks.lockWrite ?? writeFileSync)(fd, text); } finally { closeSync(fd); }
+  } catch (e) {
+    try { removeIfOurs(file, (t) => text.startsWith(t), `new.${session}`, hooks); } catch { /* the error below is the report */ }
+    throw e;
+  }
+  return text;
+}
+
+/**
+ * The failed export carried in a publish.json record: the record itself when its state is failed, else its failedKey fields
+ * (a forced run keeps them in its writing record). { key, at, step } or null.
+ */
+function failedOf(rec) {
+  if (rec?.state === 'failed' && typeof rec.key === 'string') return { key: rec.key, at: rec.at, step: rec.step };
+  if (typeof rec?.failedKey === 'string') return { key: rec.failedKey, at: rec.failedAt, step: rec.failedStep };
+  return null;
+}
+/** A writing record keeps lastOkAt and the failed export of the record before it, so a forced run that dies erases neither. */
+function writingRecord(dir, { key, session, now }) {
+  const prev = readPublish(dir);
+  const f = failedOf(prev);
+  const carry = f === null ? {} : { failedKey: f.key, ...(typeof f.at === 'string' ? { failedAt: f.at } : {}), ...(typeof f.step === 'string' ? { failedStep: f.step } : {}) };
+  return withLastOk({ state: 'writing', session, key, at: isoAt(now), ...carry }, lastOkMs(prev));
+}
+const writing = (dir, who) => writePublish(dir, who.session, writingRecord(dir, who));
 
 /**
  * Makes the lock and the writing record. Returns null when the lock exists (EEXIST), else { code, msg }.
- * Right after the create the refusal check runs again (code 4 or 5 removes the new lock). A write failure removes the lock and gives code 1.
+ * Right after the create the refusal check runs again with a fresh clock (who.clock), so a refresh that ended while this call waited is caught
+ * (code 4 or 5 removes the new lock). A write failure removes the lock and gives code 1. Each remove takes only the lock this call wrote.
  */
 function createLock(dir, who, hooks, okMsg) {
-  try { newLock(dir, who); } catch (e) { if (e.code === 'EEXIST') return null; throw e; }
+  let text;
+  try { text = newLock(dir, who, hooks); } catch (e) { if (e.code === 'EEXIST') return null; throw e; }
+  const drop = () => removeIfOurs(join(dir, LOCK_FILE), (t) => t === text, `own.${who.session}`, hooks);
   try {
     if (hooks.afterNewLock) hooks.afterNewLock();
-    const again = who.force ? null : acquireRefusal(dir, who.key, who.now);
-    if (again) { rmSync(join(dir, LOCK_FILE), { force: true }); return again; }
+    const again = who.force ? null : acquireRefusal(dir, who.key, who.clock ? who.clock() : who.now);
+    if (again) { drop(); return again; }
     if (hooks.beforeWriting) hooks.beforeWriting();
     writing(dir, who);
   } catch (e) {
-    rmSync(join(dir, LOCK_FILE), { force: true });
+    try { drop(); } catch { /* the lock dies after 20 minutes */ }
     return { code: 1, msg: `fleetops-html: could not write publish.json (${typeof e.code === 'string' ? e.code : 'error'}); the lock was removed. Stop and report.` };
   }
   return { code: 0, msg: okMsg };
@@ -516,11 +582,12 @@ export function lockTake(dir, snap, who, hooks = {}) {
 /**
  * Acquire: exclusive create; on EEXIST a live lock refuses, a stale one is taken over. Returns { code, msg }.
  * Code 4: the last ok refresh is under an hour old (Dave's limit: one refresh an hour on this machine). Code 5: this export key already failed.
- * `force` skips codes 4 and 5 only.
+ * `force` skips codes 4 and 5 only. `clock` gives the time of the check after the create: by default `now` plus the real time spent since the call began.
  */
-export function lockAcquire({ dir, key, session, now = Date.now(), force = false }, hooks = {}) {
+export function lockAcquire({ dir, key, session, now = Date.now(), force = false, clock = null }, hooks = {}) {
   mkdirSync(dir, { recursive: true });
-  const who = { key, session, now, force };
+  const began = Date.now();
+  const who = { key, session, now, force, clock: clock ?? (() => now + (Date.now() - began)) };
   const first = force ? null : acquireRefusal(dir, key, now);
   if (first) return first;
   for (let i = 0; i < 3; i += 1) {
@@ -534,31 +601,34 @@ export function lockAcquire({ dir, key, session, now = Date.now(), force = false
 }
 
 const busy6 = { code: 6, msg: 'fleetops-html: the lock is busy (a takeover or another lock command runs). Nothing changed. Wait 2 seconds and try once more.' };
-/** The parsed lock when `session` holds it, else null. A missing file is null. */
-const heldBy = (file, session) => {
+/** The parsed lock when `session` holds it, else null. A missing file is null. `withRaw` also returns the text: { lock, raw }. */
+const heldBy = (file, session, withRaw = false) => {
   const raw = readText(file);
   const lock = raw === null ? null : parseLock(raw);
-  return lock !== null && lock.session === session ? lock : null;
+  if (lock === null || lock.session !== session) return null;
+  return withRaw ? { lock, raw } : lock;
 };
 
 /**
  * Release: only the holder, under the takeover mutex (waits up to `waitMs`, 1000 by default; a live mutex gives code 6, busy). The lock is read again inside
  * the mutex. `ok` writes publish.json state ok with lastOkAt = now (the hour limit reads it; the hook ignores any state but failed);
- * `failed` writes publish.json state failed (the key and the step; lastOkAt carried). The lock is removed in a finally, also when the write fails.
+ * `failed` writes publish.json state failed (the key and the step; lastOkAt carried). The lock is removed in a finally, also when the write fails,
+ * but only while its text is the text read under the mutex (removeIfOurs): after a stall, a successor's new lock stays.
  */
 export function lockRelease({ dir, session, outcome, step = null, now = Date.now(), waitMs = 1000 }, hooks = {}) {
   const file = join(dir, LOCK_FILE);
   if (heldBy(file, session) === null) return notHolder(session);
   return withMutex(dir, { session, now }, waitMs, () => {
-    const lock = heldBy(file, session);
-    if (lock === null) return notHolder(session);
+    const held = heldBy(file, session, true);
+    if (held === null) return notHolder(session);
+    const { lock, raw } = held;
     try {
       const rec = outcome === 'failed'
         ? withLastOk({ state: 'failed', session, key: lock.key, at: isoAt(now), ...(step ? { step } : {}) }, lastOkMs(readPublish(dir)))
         : { state: 'ok', session, key: lock.key, at: isoAt(now), lastOkAt: isoAt(now) };
       writePublish(dir, session, rec);
     } finally {
-      rmSync(file, { force: true });
+      removeIfOurs(file, (t) => t === raw, `release.${session}`, hooks);
     }
     return { code: 0, msg: `fleetops-html: lock released (${outcome})` };
   }, busy6, hooks);
@@ -579,7 +649,7 @@ function rewriteHolder({ dir, session, key, now, waitMs }, done, hooks) {
       rmSync(tmp, { force: true });
       throw e;
     }
-    if (key !== null) writePublish(dir, session, withLastOk({ state: 'writing', session, key, at: isoAt(now) }, lastOkMs(readPublish(dir))));
+    if (key !== null) writePublish(dir, session, writingRecord(dir, { key, session, now }));
     return { code: 0, msg: done };
   }, busy6, hooks);
 }

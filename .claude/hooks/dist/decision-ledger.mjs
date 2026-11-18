@@ -535,8 +535,10 @@ function missBump({ step, key, head }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return MAX_REASKS + 1;
   const r = update((store) => {
     const id = idOf({ step, key, head });
-    const count = liveMisses(store.misses[id]) + 1;
-    store.misses[id] = { count, at: (/* @__PURE__ */ new Date()).toISOString() };
+    const prior = store.misses[id];
+    const count = liveMisses(prior) + 1;
+    const at = count - 1 > MAX_REASKS ? prior.at : (/* @__PURE__ */ new Date()).toISOString();
+    store.misses[id] = { count, at };
     return { ok: true, count };
   });
   return r.ok === true ? r.count : MAX_REASKS + 1;

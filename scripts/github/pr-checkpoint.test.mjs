@@ -872,7 +872,7 @@ function runB(mode, { files = R5_FILES, facts: factOver = {}, pol = {}, body = B
     ...(noStateDir ? [] : ['--state-dir', state]),
     ...(isConfirm ? ['--facts', factsFile, '--config', cfgFile] : []),
   ];
-  const r = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: cwd ?? dir, env: { ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, ...env } });
+  const r = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: cwd ?? dir, env: { ...process.env, PR_CHECKPOINT_TEST: '1', CCV3_DECISIONS_FILE: path.join(dir, 'decisions.json'), GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, ...env } });
   return { ...r, dir, state, pathwayFile: path.join(state, 'pathway.json') };
 }
 const confirm = (pathway, by, opts) => runB(['--confirm', pathway, '--by', by], opts);
