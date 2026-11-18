@@ -218,7 +218,7 @@ describe('keptDraftText', () => {
 // V5  an ask that can spend lists the spending row first                                                         (item 5)
 // V6  a text for the model or Dave tells him to type or paste a command                                          (M10)
 
-describe('v2: a tap is always Dave\'s and a paid pick asks again', () => {
+describe('v2: a tap is always Dave\'s and a paid row shows its price', () => {
   const NONE_FIRST = ask(FREE, { recommended: 'none', auto: { eligible: false, band: 'MID', reason: '' } })
 
   test('V1 every row of the question is by dave: the recommended row, none and Keep as draft', () => {

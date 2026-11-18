@@ -448,7 +448,7 @@ export const ledgerOf = (value: unknown): LedgerBlock | null => {
 /** The tool text of call 1: the question for the model to ask, word for word. A re-ask says so. The model never records. */
 export const ledgerAskText = (ledger: LedgerBlock & { ask: LedgerAsk }): string =>
   [
-    'Ask Dave now with AskUserQuestion. Pass this question word for word and change nothing.',
+    'Ask Dave now with AskUserQuestion. Pass this question word for word and change nothing. Keep the options in the order given: the first option never spends money.',
     JSON.stringify(ledger.ask),
     ...(ledger.reasked > 0 ? [`Dave's last answer matched no option. This is re-ask ${ledger.reasked} of ${MAX_REASKS}.`] : []),
     'Then call pr_checkpoint again with the same pr and body. Never record, label or mark the PR ready yourself.',

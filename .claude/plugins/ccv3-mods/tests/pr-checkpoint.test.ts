@@ -506,7 +506,7 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     expect(a.seen.registered).toContain(COMMAND)
   })
 
-  test('K1 the first label is the recommendation, not the engine order; the question holds the overview; no pane opens', async ($, on) => {
+  test('K1 the recommendation row is marked (a paid one is row 1, never row 0), not the engine order; the question holds the overview; no pane opens', async ($, on) => {
     const { seen } = world(on)
     const { dialog, pane } = await openPane($)
     // The prepare call posts the rate-limit probe for this PR. The text plan and the record calls never do.
@@ -2656,7 +2656,7 @@ describe('pr-checkpoint: the checkpoint asks Dave in the session', () => {
   // The slot fact the engine prints beside the old capacity fields: the label and line 3 follow it.
   const slotJson = (slot: Rec) => ({ stdout: JSON.stringify(engineJson({ capacity: { count: 38, band: 'ok', warning: null, source: 'manual', date: '2026-10-25', ...slot } })) })
 
-  test('S1 a free slot: the CodeRabbit label says free slot $0, line 3 says free now, and the pick records by dave after the paid confirm', async ($, on) => {
+  test('S1 a free slot: the CodeRabbit label says free slot $0, line 3 says free now, and the pick records by dave with one tap', async ($, on) => {
     const w = world(on, { json: slotJson({ state: 'free', checkedAt: new Date(NOW).toISOString() }), answers: PICK_YES })
     await start($)
     await call($)
@@ -3210,7 +3210,7 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
   const queueRuns = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('slot-queue.mjs'))).map(r => r.argv.slice(2))
 
   for (const band of ['HIGH', 'CRITICAL'] as const) {
-    test(`N-M1 ${band}: the last label is the no-review one; the recommendation stays first; none is never first or Recommended`, async ($, on) => {
+    test(`N-M1 ${band}: the last label is the no-review one; the recommendation is marked and is not row 0; none is never first or Recommended`, async ($, on) => {
       world(on, { json: highJson(band) })
       const { dialog, pane } = await openPane($)
       expect(dialog!.labels.at(-1)).toBe(NO_REVIEW)
@@ -3321,7 +3321,7 @@ describe('pr-checkpoint: No review, land on CI at HIGH and CRITICAL', () => {
     expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
   })
 
-  test('N-M8 a held recommendation at HIGH: coderabbit, Keep as draft, then no review; nothing is Recommended; the none pick is --by dave', async ($, on) => {
+  test('N-M8 a held recommendation at HIGH: Keep as draft, coderabbit, then no review; nothing is Recommended; the none pick is --by dave', async ($, on) => {
     const held = highJson('HIGH', {
       recommended: 'both',
       options: [option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' }), option('none')],
@@ -3754,6 +3754,7 @@ describe('pr-checkpoint v2: checkpoint.ledger on, the model asks the question (M
     expect(counts(w.seen).confirm + counts(w.seen).apply).toBe(0)
     expect(told.text).toContain('CodeRabbit review (up to $1.75) (Recommended)')
     expect(told.text).toContain('Keep as draft ($0)')
+    expect(told.text).toMatch(/Keep the options in the order given/)
     expect(told.text).toMatch(/AskUserQuestion/)
     expect(told.text).toMatch(/pr_checkpoint/)
     expect(told.text).toMatch(/same pr and body/)
@@ -4139,6 +4140,44 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     expect(autoConfirms(w.seen)).toEqual([])
     expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
     expect(second.text).toContain('Keep as draft ($0)')
+  })
+
+  test('X4 ledger mode: the first ledger call fails (no pending is stored), the next call still asks and never records --by auto', async ($, on) => {
+    const w = world(on, { files: LEDGER, json: autoJson(), store: { 'checkpoint:pr:7': RECORD }, viewSeq: [ready], answer: BACK, ledgerSeq: [{ exitCode: 1, stderr: 'pr-checkpoint: boom' }, ASK] })
+    await start($)
+    await call($)
+    const second = await call($)
+    expect(autoConfirms(w.seen)).toEqual([])
+    expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
+    expect(second.text).toContain('Keep as draft ($0)')
+  })
+
+  test('X4 another checkpoint between the two calls does not open the door: a PR returned to draft is still asked', async ($, on) => {
+    const other = { pr: 8, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+    const w = world(on, { files: LEDGER, json: autoJson(), store: { 'checkpoint:pr:7': RECORD }, viewSeq: [ready], answer: BACK, ledgerSeq: [{ exitCode: 1, stderr: 'pr-checkpoint: boom' }, ASK] })
+    await start($)
+    await call($)
+    w.store.set(PENDING, other)
+    await call($)
+    expect(autoConfirms(w.seen)).toEqual([])
+  })
+
+  test('g a refused --apply then a second call after the slot changed: the free-slot and the paid CodeRabbit row differ in label and position, row 0 is never paid', async ($, on) => {
+    const slot = (over: Rec) => ({ stdout: JSON.stringify(engineJson({ capacity: { count: 38, band: 'ok', warning: null, source: 'manual', date: '2026-10-25', checkedAt: new Date(NOW).toISOString(), ...over } })) })
+    const w = world(on, {
+      jsonSeq: [slot({ state: 'free' }), slot({ state: 'wait', nextSlotAt: new Date(NOW + 38 * MIN).toISOString(), minutesToSlot: 38 })],
+      answers: [/^CodeRabbit now \(free slot/, /^Leave as draft/, 'dismiss'],
+      apply: { exitCode: 1, stderr: 'pr-checkpoint: refused: nope.\n' },
+    })
+    await start($)
+    await call($)
+    await call($)
+    const [free, retry, paid] = w.seen.dialogs
+    expect(retry!.question).toMatch(/Retry/)
+    const at = (labels: string[]) => ({ index: labels.findIndex(label => /^CodeRabbit now/.test(label)), label: labels.find(label => /^CodeRabbit now/.test(label))!.replace(/ \(Recommended\)$/, '') })
+    expect([free!.labels[0], paid!.labels[0]]).toEqual(['CodeRabbit now (free slot, $0) (Recommended)', 'Keep as draft ($0)'])
+    expect(at(free!.labels).label).not.toBe(at(paid!.labels).label)
+    expect(at(free!.labels).index).not.toBe(at(paid!.labels).index)
   })
 
   test('X5 a typed paid word asks the one question (price in the label) and records nothing without a tap', async ($, on) => {

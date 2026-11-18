@@ -9,7 +9,7 @@
 //   call 1 writes no offer, or binds it to another key or head                                                              -> LD2
 //   a paid record is written with no tap, or with a tap for another pathway                                                   -> LD3
 //   a recorded paid pick leaves its tap, so a second record spends again                                                      -> LD4 and LD6
-//   a tap on a paid row does not reach the record state (the one question; see also LD17 to LD21)                             -> LD5
+//   a tap on a paid row does not reach the record state (the one question; see also LD17 to LD21)                             -> LD19
 //   none or "Keep as draft" asks a paid confirm, or Keep as draft leaves the decision in the store                          -> LD7
 //   a call with no answer is not counted, the re-asks do not stop after 2, or a stop does not say the PR stays a draft     -> LD8
 //   --confirm --by dave records with no tap, with a tap for another pathway or head, or with no --pr                         -> LD9
@@ -92,7 +92,7 @@ test('LD1: with the flag false, missing, or --no-ledger the output has no ledger
   assert.equal('ledger' in t.call(), false, 'only the literal true turns the protocol on');
 });
 
-test('LD2: call 1 asks the review question: recommended first, AskUserQuestion limits, an offer under (review, PR key, head), no label map in the print', () => {
+test('LD2: call 1 asks the review question: the recommendation marked (a paid one is row 1, not row 0), AskUserQuestion limits, an offer under (review, PR key, head), no label map in the print', () => {
   const t = setup();
   const { ledger } = t.call();
   assert.equal(ledger.state, 'ask');
@@ -285,9 +285,14 @@ test('LD17: HIGH fixture: one question; every paid row carries its price; row 0 
 
 test('LD18: a dialog that returns row 0 with no tap records no spend: kept-draft, --confirm refused, no paid-round offer', () => {
   const t = setup();
-  tap(review(), t.call().ledger.ask.options[0].label);
-  const out = t.call().ledger;
-  assert.equal(out.state, 'kept-draft');
+  let out;
+  for (const round of [1, 2]) {
+    const asked = t.call().ledger;
+    assert.match(asked.text, /options in the order given/, 'the model is told to keep the option order');
+    tap(review(), asked.ask.options[0].label);
+    out = t.call().ledger;
+    assert.equal(out.state, 'kept-draft', `row 0, round ${round}`);
+  }
   assert.equal(D.offerRead(pick('coderabbit')), null, 'no paid confirm was opened');
   for (const p of PAID_PATHWAYS) assert.equal(t.confirm(p).status, 1, p);
   assert.ok(!existsSync(t.pathwayFile));

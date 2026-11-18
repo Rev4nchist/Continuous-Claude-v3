@@ -96,7 +96,7 @@ function askAgain(pr, triple, spec, d) {
   const w = d.offerWrite({ ...triple, spec, tree: null, cwd: process.cwd() });
   if (!w.ok) return { state: 'stop', text: `Stop. The question could not be saved (${w.reason}). PR #${pr} stays a draft. Nothing was recorded. Tell Dave.` };
   const again = missed > 0 ? ` No answer matched an option. This is re-ask ${missed} of ${d.MAX_REASKS}.` : '';
-  return { state: 'ask', ask: printable(spec), reasked: missed, text: `Call AskUserQuestion with ask, word for word.${again} Then call pr_checkpoint {pr} again.` };
+  return { state: 'ask', ask: printable(spec), reasked: missed, text: `Call AskUserQuestion with ask, word for word, with the options in the order given.${again} Then call pr_checkpoint {pr} again.` };
 }
 
 const kept = (pr, d, triples) => { triples.forEach((t) => d.decisionUse(t)); return { state: 'kept-draft', text: `Nothing was recorded. PR #${pr} stays a draft. Call pr_checkpoint {pr} when Dave wants to pick again.` }; };

@@ -114,7 +114,7 @@ const sessionId = async ($: EngineInterface): Promise<string> => $.session.id()
 // ---- store -----------------------------------------------------------------------------------------------------------------
 
 /** riskHigh: whether the PR carried risk:high when the checkpoint read it (null: unread; absent: a pending stored by an older mod). A flip makes the recommendation stale. */
-type Pending = { pr: number; body: string; root: string; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string; at: number; riskHigh?: boolean | null; dependabot?: boolean; repick?: boolean }
+type Pending = { pr: number; body: string; root: string; result: CheckpointResult; covers: string[]; stamp: string | null; prHead: string; at: number; riskHigh?: boolean | null; dependabot?: boolean }
 
 const isPending = (value: unknown): value is Pending => {
   const p = value as Partial<Pending> | null | undefined
@@ -485,24 +485,24 @@ async function releaseReturned($: EngineInterface, pr: number): Promise<void> {
   }
 }
 
-/**
- * `prepare`, and for a ready PR with a record the change question first. A string is the final answer; a Prepared goes on.
- * A PR Dave returned to draft carries `repick`: auto-confirm must not record it, Dave is asked (R3). The mark stays in the pending checkpoint, so the
- * next call for the same PR and head (after his tap, or a re-ask) still asks.
- */
+/** `prepare`, and for a ready PR with a record the change question first. A string is the final answer; a Prepared goes on. */
 const prepareChanging = async ($: EngineInterface, root: string, pr: number, body: string): Promise<Prepared | string> => {
   let prepared = await prepare($, root, pr, body)
-  let repick = false
   if (!prepared.ok && prepared.notDraft !== undefined) {
     const text = await changePick($, root, pr, prepared.notDraft)
     if (text !== null) return text
     prepared = await prepare($, root, pr, body)
-    repick = true
   }
-  if (!prepared.ok) return prepared.text
-  const old = await loadPending($)
-  const carried = old?.repick === true && old.pr === pr && old.prHead === prepared.pending.prHead
-  return repick || carried ? { ok: true, pending: { ...prepared.pending, repick: true } } : prepared
+  return prepared.ok ? prepared : prepared.text
+}
+
+/**
+ * A draft PR whose applied record is of this head was returned to draft (the change pick, R3): Dave changed his pick, so auto-confirm must not record
+ * it for him. The record outlives the undo, so the test holds on every later call, whichever session makes it and whatever failed in between.
+ */
+const returnedToDraft = async ($: EngineInterface, pending: Pending): Promise<boolean> => {
+  const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pending.pr}`))
+  return record !== null && record.state === 'applied' && record.head === pending.prHead
 }
 
 // ---- the question, asked by the model (M1, checkpoint.ledger) --------------------------------------------------------------------------
@@ -547,7 +547,7 @@ const interactiveText = async ($: EngineInterface, root: string, pr: number, bod
   // The flag is read where the engine runs (the PR checkout), not in the session root: the two configs may differ.
   const ledgerFlag = await ledgerOn($, prepared.pending.root)
   // A PR returned to draft is never auto-confirmed: Dave changed his pick, so he is asked (the question opens with --ask-anyway).
-  const repick = prepared.pending.repick === true
+  const repick = await returnedToDraft($, prepared.pending)
   const auto = repick ? null : await autoConfirm($, prepared.pending)
   if (auto?.kind === 'done') {
     await finishAuto($, auto.record, prepared.pending.result.auto.band)
