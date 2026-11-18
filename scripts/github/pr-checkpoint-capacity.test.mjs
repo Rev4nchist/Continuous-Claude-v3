@@ -441,6 +441,8 @@ function wiredRun(repo, { author = 'Rev4nchist', noProbe = false, args = ['--pro
   ].join('\n'));
   const env = {
     ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(repo, 'no-slot.json'),
+    // --config is a test seam: with the ledger on the engine writes the decision store only in test mode, to a temp store (never the real one).
+    PR_CHECKPOINT_TEST: '1', CCV3_DECISIONS_FILE: path.join(repo, 'decisions.json'),
     PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_AUTHOR: author, FAKE_GH_STATE: state, FAKE_GH_DRAFT: draft ? '1' : '0', FAKE_GH_REPLY: reply, ...(noProbe ? { PR_CHECKPOINT_NO_PROBE: '1' } : {}),
   };
   const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), ...(json ? ['--json'] : []), ...args, '--config', path.join(repo, 'cfg.json')], { cwd: repo, encoding: 'utf8', env });
@@ -510,7 +512,7 @@ test('CP12c (wired): no post without --probe, without --pr, for a non-draft or c
   const read = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   const before = read().length;
   const confirm = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--confirm', 'none', '--by', 'dave', '--body', path.join(repo, 'a.txt'), '--probe', '--pr', '7', '--config', path.join(repo, 'cfg.json')], {
-    cwd: repo, encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(repo, 'no-slot.json'), PR_CHECKPOINT_GH: path.join(repo, 'fake-gh.mjs'), FAKE_GH_LOG: path.join(repo, 'gh-calls.jsonl') },
+    cwd: repo, encoding: 'utf8', env: { ...process.env, PR_CHECKPOINT_TEST: '1', CCV3_DECISIONS_FILE: path.join(repo, 'decisions.json'), GH_TOKEN: 'invalid-token', PR_CHECKPOINT_LEDGER: path.join(repo, 'no-ledger.jsonl'), PR_CHECKPOINT_CR: 'off', PR_CHECKPOINT_SLOT_STATE: path.join(repo, 'no-slot.json'), PR_CHECKPOINT_GH: path.join(repo, 'fake-gh.mjs'), FAKE_GH_LOG: path.join(repo, 'gh-calls.jsonl') },
   });
   assert.ok(read().length > before, `--confirm read through the fake gh (${confirm.stderr})`);
   assert.equal(read().filter((c) => c.includes('POST')).length, 0, '--confirm never posts');

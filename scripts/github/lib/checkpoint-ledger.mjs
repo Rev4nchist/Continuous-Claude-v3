@@ -3,7 +3,7 @@
 //
 // Call 1 of `pr_checkpoint {pr}` gets a question spec. The model asks it with AskUserQuestion. The AskUserQuestion hook records Dave's tap
 // (decisions.mjs). Call 2 reads the tap. There is ONE question: the label of a paid row carries its price, and Dave's tap on it records the
-// pick (card prflow-review-pick). A paid run asks Dave again later (ship-ask paid-round). A paid row is never row 0: a dialog that returns
+// pick (card prflow-review-pick). One question; a paid row shows its price. A paid row is never row 0: a dialog that returns
 // row 0 with no tap records nothing.
 // Only when the tap exists does the engine let `--confirm <pathway> --by dave` record (ledgerConfirmProblem).
 //
@@ -112,7 +112,14 @@ export function askSpecOf(pr, result, slotLine, now = Date.now()) {
 
 const printable = ({ header, question, options }) => ({ header, question, options });
 const keyOf = (pr) => store.decisionKey({ pr });
-const valueOf = (triple, d) => d.offerRead(triple)?.spec?.values?.[d.decisionRead(triple)?.label] ?? null;
+/** The pathway of a tap: the offer's value map read at the tap's label, or null. */
+const valueOf = (triple, d, tap = d.decisionRead(triple)) => d.offerRead(triple)?.spec?.values?.[tap?.label] ?? null;
+
+/**
+ * True when the tap was made before the PR went back to draft (`repickSince`, an ISO time: the mod's re-pick marker). No value means no marker, so
+ * the drop of the taps (decisions.mjs dropKey) already ran. A value that does not parse, or a tap with no readable time, is stale: it fails closed.
+ */
+const isStale = (tap, repickSince) => repickSince !== null && repickSince !== undefined && !(Date.parse(tap?.at) >= Date.parse(repickSince));
 
 /**
  * Opens (or re-opens) the question. An open offer with no tap is a miss: count it, and stop after MAX_REASKS re-asks.
@@ -130,52 +137,86 @@ function askAgain(pr, triple, spec, d, note = null) {
 }
 
 const SLOT_CHANGED_NOTE = 'The CodeRabbit slot changed. Your tap was not recorded.';
+const QUESTION_CHANGED_NOTE = 'The question changed. Your tap was not recorded.';
+const REPICK_NOTE = 'The PR went back to draft. Your earlier tap was not recorded.';
 
+// Why the results of decisionUse are ignored in `kept` and in the askAgain branches of ledgerStep (unlike ledgerUse, which a record needs):
+// `kept` records nothing, so a tap that stays leaves the next call at Keep as draft again. In an askAgain branch the offerWrite of askAgain
+// deletes the old decision of the triple, and when that write fails too (the lock) askAgain returns `stop`. Nothing records on any path.
 const kept = (pr, d, triples) => { triples.forEach((t) => d.decisionUse(t)); return { state: 'kept-draft', text: `Nothing was recorded. PR #${pr} stays a draft. Call pr_checkpoint {pr} when Dave wants to pick again.` }; };
 
 /**
- * ledgerStep({ pr, result, slotLine, askAnyway, now, d }) -> { state, ask?, pathway?, by?, reasked?, text }. d is the decisions module (a test seam).
+ * Why a tapped label is no row of the question now: the slot (it is the CodeRabbit label of the other slot state) or the question itself (the price, the
+ * rows). Both notes say the tap was not recorded.
+ */
+function changedNote(result, label, pathway) {
+  const bare = String(label).endsWith(RECOMMENDED) ? String(label).slice(0, -RECOMMENDED.length) : String(label);
+  const slotLabels = ['free', 'wait'].map((state) => labelOf('coderabbit', result, state));
+  return pathway === 'coderabbit' && slotLabels.includes(bare) ? SLOT_CHANGED_NOTE : QUESTION_CHANGED_NOTE;
+}
+
+/**
+ * ledgerStep({ pr, result, slotLine, askAnyway, now, repickSince, d }) -> { state, ask?, pathway?, by?, reasked?, text }. d is the decisions module (a test seam).
+ * repickSince is an ISO time (--repick-since, the mod's re-pick marker): a tap made before it is used up and the question is asked again with a note
+ * (REPICK_NOTE); a value that does not parse makes every tap stale. Null: no marker.
  * now is the clock in ms: the slot is read at that time (default Date.now(); a test injects it).
  * Call 2 builds the question again from the current result. A tap records only when its label is still a row of that question with the same
  * pathway (a free-slot tap is no yes once the slot is gone). Otherwise the tap is used up and the question is asked again with a `note` that
- * says the slot changed and the tap was not recorded; that is no miss.
+ * says why (the slot changed, or the question changed) and that the tap was not recorded; that is no miss.
  * Keep as draft records nothing, so it stays kept whatever the slot does.
  * askAnyway skips the auto-eligible short-circuit: the mod passes it (--ask-anyway) when auto-confirm failed, so Dave still gets the question.
  * state: none (no question: a stop or an auto-confirm), ask, record (run --confirm <pathway> --by dave; the tap records the pick),
  * kept-draft (nothing recorded), stop (the re-asks are used up).
  */
-export function ledgerStep({ pr, result, slotLine, askAnyway = false, now = Date.now(), d = store }) {
+export function ledgerStep({ pr, result, slotLine, askAnyway = false, now = Date.now(), repickSince = null, d = store }) {
   if (result.recommended === null || (result.auto?.eligible === true && askAnyway !== true) || result.options.length === 0) return { state: 'none', text: 'No question is needed.' };
   const triple = { step: 'review', key: keyOf(pr), head: result.head };
   const spec = askSpecOf(pr, result, slotLine, now);
-  const pathway = valueOf(triple, d);
+  const tapped = d.decisionRead(triple);
+  const pathway = valueOf(triple, d, tapped);
   if (pathway === null) return askAgain(pr, triple, spec, d);
-  if (pathway === 'wait') return kept(pr, d, [triple]);
-  if (spec.values[d.decisionRead(triple)?.label] !== pathway) {
+  if (isStale(tapped, repickSince)) {
     d.decisionUse(triple);
-    return askAgain(pr, triple, spec, d, SLOT_CHANGED_NOTE);
+    return askAgain(pr, triple, spec, d, REPICK_NOTE);
+  }
+  if (pathway === 'wait') return kept(pr, d, [triple]);
+  if (spec.values[tapped.label] !== pathway) {
+    d.decisionUse(triple);
+    return askAgain(pr, triple, spec, d, changedNote(result, tapped.label, pathway));
   }
   return { state: 'record', pathway, by: 'dave', text: `Dave picked ${pathway}. Record it.` };
 }
 
 /**
- * Why `--confirm <pathway> --by <by>` must refuse while the ledger flag is on, or null. Dave's pick needs his tap on the review question
- * (the label of a paid row carries its price; the tap records the pick, and a paid run asks Dave again later). --by default never records. --by auto is not a tap and keeps its own rules.
+ * Why `--confirm <pathway> --by <by>` must refuse while the ledger flag is on, and the label of the tap it read. { problem, label }: problem is null when the
+ * confirm may go on; label is the tap's label (null for --by auto, which has no tap), the one ledgerUse must use up.
+ * Dave's pick needs his tap on the review question (the label of a paid row carries its price; the tap records the pick). One question; a paid row shows its price.
+ * --by default never records. --by auto is not a tap and keeps its own rules. A tap made before `repickSince` (see ledgerStep) is refused with REPICK_NOTE.
  * With `result` (and `now`, in ms) the tapped label must also be a row of the question as it stands now, with the same pathway: a tap on a
  * free-slot row is refused once the slot is gone. Without `result` only the tap is checked. A refusal does not use the tap up (ledgerStep does).
  */
-export function ledgerConfirmProblem({ pr, head, pathway, by, result = null, now = Date.now(), d = store }) {
-  if (by === 'auto') return null;
-  if (by === 'default') return 'checkpoint.ledger is on: --by default records nothing. Only Dave\'s tap (--by dave) or an eligible auto-confirm records.';
-  if (pr === null) return 'checkpoint.ledger is on: --confirm needs --pr <number>, the PR whose question Dave answered.';
+export function ledgerConfirmCheck({ pr, head, pathway, by, result = null, now = Date.now(), repickSince = null, d = store }) {
+  const no = (problem) => ({ problem, label: null });
+  if (by === 'auto') return no(null);
+  if (by === 'default') return no("checkpoint.ledger is on: --by default records nothing. Only Dave's tap (--by dave) or an eligible auto-confirm records.");
+  if (pr === null) return no('checkpoint.ledger is on: --confirm needs --pr <number>, the PR whose question Dave answered.');
   const triple = { step: 'review', key: keyOf(pr), head };
-  if (valueOf(triple, d) !== pathway) return `No tap of Dave's for ${pathway} on PR #${pr} at ${String(head).slice(0, 7)}. Call pr_checkpoint {pr}: it asks Dave.`;
-  if (result === null) return null;
-  const row = askSpecOf(pr, result, '', now).values[d.decisionRead(triple)?.label];
-  return row === pathway ? null : `Dave's tap for ${pathway} on PR #${pr} is no longer a row of the question (the CodeRabbit slot changed). Nothing was recorded. Call pr_checkpoint {pr}: it asks Dave again.`;
+  const tapped = d.decisionRead(triple);
+  if (valueOf(triple, d, tapped) !== pathway) return no(`No tap of Dave's for ${pathway} on PR #${pr} at ${String(head).slice(0, 7)}. Call pr_checkpoint {pr}: it asks Dave.`);
+  if (isStale(tapped, repickSince)) return no(`${REPICK_NOTE} Call pr_checkpoint {pr}: it asks Dave again.`);
+  if (result === null) return { problem: null, label: tapped.label };
+  const row = askSpecOf(pr, result, '', now).values[tapped.label];
+  return row === pathway ? { problem: null, label: tapped.label } : no(`Dave's tap for ${pathway} on PR #${pr} is no longer a row of the question (the CodeRabbit slot changed). Nothing was recorded. Call pr_checkpoint {pr}: it asks Dave again.`);
 }
 
-/** Uses up the tap of a recorded pathway. Call it after --confirm wrote the record. */
-export function ledgerUse({ pr, head, d = store }) {
-  d.decisionUse({ step: 'review', key: keyOf(pr), head });
+/** The refusal text of ledgerConfirmCheck, or null. */
+export const ledgerConfirmProblem = (args) => ledgerConfirmCheck(args).problem;
+
+/**
+ * Uses up the tap of a pathway and returns the result of decisionUse: { ok: true }, or { ok: false, reason } (no-decision, label-changed, lock).
+ * --confirm --by dave calls it BEFORE it writes the record and refuses on a failure, so one tap never gives two records. `label` is the label that
+ * ledgerConfirmCheck read: a tap Dave made in between is label-changed and stays. No label: the tap is used whatever its label (--by auto).
+ */
+export function ledgerUse({ pr, head, label, d = store }) {
+  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label });
 }
