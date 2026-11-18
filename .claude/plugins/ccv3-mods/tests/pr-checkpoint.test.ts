@@ -4187,6 +4187,62 @@ describe('pr-checkpoint PR C: a paid pick asks one question', () => {
     expect(autoConfirms(w.seen)).toEqual([])
   })
 
+  // One re-pick marker per PR (`checkpoint:repick:<pr>`): set when a PR with an applied record is returned to draft, cleared only when Dave's pick is applied.
+  // While it is set the PR is never auto-confirmed, on any head. Without it a failed --apply left the record `confirmed`, the returned-to-draft test read false
+  // and the next call auto-confirmed none and marked the PR ready over Dave's pick.
+  const MARKER = 'checkpoint:repick:7'
+  const asked = (w: { seen: { dialogs: unknown[] } }) => w.seen.dialogs.length
+
+  test('X6 return to draft, Dave taps CodeRabbit, --apply fails: the next call asks again and never records --by auto', async ($, on) => {
+    const w = world(on, { json: autoJson(), store: { 'checkpoint:pr:7': RECORD }, viewSeq: [ready], answers: [BACK, /^CodeRabbit review/, /^Leave as draft/, 'dismiss', 'dismiss', 'dismiss'], apply: { exitCode: 1, stderr: 'pr-checkpoint: refused: nope.\n' } })
+    await start($)
+    await call($)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('confirmed')
+    expect(w.store.get(MARKER)).toBeDefined()
+    const before = asked(w)
+    await call($)
+    expect(autoConfirms(w.seen)).toEqual([])
+    expect(asked(w)).toBeGreaterThan(before)
+    expect(w.store.get(MARKER)).toBeDefined()
+  })
+
+  test('X6 a new push (another head) after a return to draft still asks: the marker holds on any head', async ($, on) => {
+    const old = { ...RECORD, head: 'b'.repeat(40) }
+    const w = world(on, { json: autoJson(), store: { 'checkpoint:pr:7': old, [MARKER]: { head: 'b'.repeat(40), at: NOW } }, answers: ['dismiss', 'dismiss', 'dismiss'] })
+    await start($)
+    await call($)
+    expect(autoConfirms(w.seen)).toEqual([])
+    expect(asked(w)).toBeGreaterThan(0)
+  })
+
+  test('X6 ledger mode: the marker also makes the engine call carry --ask-anyway', async ($, on) => {
+    const w = world(on, { files: LEDGER, json: autoJson(), store: { [MARKER]: { head: HEAD, at: NOW } }, ledgerSeq: [ASK] })
+    await start($)
+    await call($)
+    expect(autoConfirms(w.seen)).toEqual([])
+    expect(jsonCalls(w.seen).at(-1)).toBe('--json --pr 7 --ask-anyway')
+  })
+
+  test('X6 the first LOW auto-confirm of a fresh PR (no marker) still works and sets no marker', async ($, on) => {
+    const w = world(on, { json: autoJson() })
+    await start($)
+    const told = await call($)
+    expect(autoConfirms(w.seen).length).toBe(1)
+    expect(told.text).toMatch(/auto-confirmed/)
+    expect(w.store.get(MARKER)).toBeUndefined()
+  })
+
+  test('X6 the marker clears after Dave\'s pick is applied, so a later fresh cycle can auto-confirm again', async ($, on) => {
+    const w = world(on, { json: autoJson(), store: { 'checkpoint:pr:7': RECORD }, viewSeq: [ready], answers: [BACK, /^CodeRabbit review/] })
+    await start($)
+    await call($)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect(w.store.get(MARKER)).toBeUndefined()
+    w.store.delete('checkpoint:pr:7')
+    await call($)
+    expect(autoConfirms(w.seen).length).toBe(1)
+  })
+
   // Order (a): the free-slot and the paid CodeRabbit row now sit at the same place (after Keep as draft), so the label alone tells them apart.
   test('g a refused --apply then a second call after the slot changed: the free-slot and the paid CodeRabbit row differ in label, row 0 is Keep as draft', async ($, on) => {
     const slot = (over: Rec) => ({ stdout: JSON.stringify(engineJson({ capacity: { count: 38, band: 'ok', warning: null, source: 'manual', date: '2026-10-25', checkedAt: new Date(NOW).toISOString(), ...over } })) })

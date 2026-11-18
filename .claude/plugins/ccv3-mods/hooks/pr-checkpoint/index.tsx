@@ -258,6 +258,9 @@ const prepare = async ($: EngineInterface, sessionRoot: string, pr: number, rawB
   }
 }
 
+/** One re-pick marker per PR: set when a PR with an applied record is returned to draft, cleared only when Dave's new pick is applied. While set, no auto-confirm. */
+const REPICK_PREFIX = 'checkpoint:repick:'
+
 type Outcome =
   | { stage: 'confirm' | 'apply'; text: string }
   | { stage: 'done'; record: CheckpointRecord }
@@ -269,6 +272,7 @@ const applyRecord = async ($: EngineInterface, root: string, record: CheckpointR
   if (ran.code !== 0) return { stage: 'apply', text: lastLine(ran.err || ran.out) || `--apply exited ${ran.code}` }
   const applied: CheckpointRecord = { ...record, state: 'applied', appliedAt: await $.clock.now() }
   await $.store.set(`${RECORD_PREFIX}${record.pr}`, applied)
+  if (applied.decided_by === 'dave') await $.store.delete(`${REPICK_PREFIX}${record.pr}`) // Dave's pick is applied: the re-pick is done
   await enqueueApplied($, applied)
   return { stage: 'done', record: applied }
 }
@@ -477,6 +481,7 @@ async function changePick($: EngineInterface, root: string, pr: number, head: st
  */
 async function releaseReturned($: EngineInterface, pr: number): Promise<void> {
   try {
+    await $.store.set(`${REPICK_PREFIX}${pr}`, { at: await $.clock.now() })
     await $.store.delete(`${GRANT_PREFIX}${pr}`)
     const found = await slotScript($)
     if (found) await run($, slotDropArgv(found.script, pr), found.root, VIEW_TIMEOUT_MS)
@@ -501,8 +506,12 @@ const prepareChanging = async ($: EngineInterface, root: string, pr: number, bod
  * it for him. The record outlives the undo, so the test holds on every later call, whichever session makes it and whatever failed in between.
  */
 const returnedToDraft = async ($: EngineInterface, pending: Pending): Promise<boolean> => {
+  // The re-pick marker outlives the record state and the head: a failed --apply leaves the record `confirmed`, and a new push changes the head.
+  if ((await $.store.get(`${REPICK_PREFIX}${pending.pr}`)) != null) return true
   const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pending.pr}`))
-  return record !== null && record.state === 'applied' && record.head === pending.prHead
+  const returned = record !== null && record.state === 'applied' && record.head === pending.prHead
+  if (returned) await $.store.set(`${REPICK_PREFIX}${pending.pr}`, { head: pending.prHead, at: await $.clock.now() })
+  return returned
 }
 
 // ---- the question, asked by the model (M1, checkpoint.ledger) --------------------------------------------------------------------------
