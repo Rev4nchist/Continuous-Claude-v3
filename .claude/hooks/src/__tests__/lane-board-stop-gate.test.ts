@@ -274,6 +274,39 @@ describe('stopGate (reads and writes the pending dir)', () => {
     expect(read('sess-1@zz-board.json').stopBlocked).toBeUndefined();
   });
 
+  // Card coord-board-id-followup: no fixed fallback id. A bad default entry blocks once with the fix line.
+  const artifactsFile = (): string => path.join(home, 'continuous-claude', '.claude', 'artifacts.json');
+  const FIX_TAIL = 'Tell the seat (or Dave): the agentic-os-lane-board entry of';
+
+  it('U1: the default board with no entry blocks once with the fix line, no publish steps, then approves', () => {
+    fs.writeFileSync(artifactsFile(), JSON.stringify({ artifacts: [] }));
+    put('sess-1.json', { since: 'x', verbs: ['claim'], board: 'continuous-claude' });
+    const out = JSON.stringify(gate.stopGate(payload(), baseEnv()).output);
+    expect(out).toContain('The lane board page of continuous-claude is not recorded:');
+    expect(out).toContain('has no agentic-os-lane-board entry');
+    expect(out).toContain('Do not publish.');
+    expect(out).toContain(FIX_TAIL);
+    expect(out).not.toContain('Artifact tool');
+    expect(out).not.toContain('RtrTNVfAq9uowmb2tfbzid');
+    expect(read('sess-1.json').stopBlocked).toBe(true);
+    expect(gate.stopGate(payload(), baseEnv()).output).toBeNull();
+  });
+
+  it('U2: a missing or unparsable artifacts.json gives the fix line with its reason', () => {
+    for (const [body, why] of [[null, 'is missing or unreadable'], ['{bad', 'is not valid JSON']] as const) {
+      if (body === null) fs.rmSync(artifactsFile(), { force: true }); else fs.writeFileSync(artifactsFile(), body);
+      const reason = gate.blockReason('continuous-claude', baseEnv());
+      expect(reason).toContain(why);
+      expect(reason).toContain(FIX_TAIL);
+      expect(reason).not.toContain('Artifact tool');
+    }
+  });
+
+  it('U3: a good default entry keeps the publish steps; another board with no page keeps an empty reason', () => {
+    expect(gate.blockReason('continuous-claude', baseEnv())).toContain('Read the live page with the Artifact tool');
+    expect(gate.blockReason('zz-board', baseEnv())).toBe('');
+  });
+
   it('S4: a headless run approves and does not mark the batch', () => {
     put('sess-1.json', { since: 'x', verbs: ['claim'] });
     expect(gate.stopGate(payload(), baseEnv(ENV_HEADLESS)).output).toBeNull();

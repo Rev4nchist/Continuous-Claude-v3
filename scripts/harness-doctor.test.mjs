@@ -1803,14 +1803,32 @@ test('lanes:hook-client-version: a missing bundle with a second active board sta
 // Each test breaks one rule and reads this one line; each fails if the check stops judging that rule.
 const PAGE_A = 'https://claude.ai/artifact/PageA_1-x';
 const PAGE_B = 'https://claude.ai/artifact/PageB_2-y';
-const DEFAULT_PAGE = 'https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid';
+const DEFAULT_PAGE = 'https://claude.ai/artifact/DefaultPage_9z';
 const withPage = (key, laneArtifact, extra = {}) => ({ ...entry(key, fwd(join(tmpdir(), `hdoc-no-${key}`))), laneArtifact, ...extra });
-const artifactCheck = (projects) => {
+/** artifacts: the body of <repo>/.claude/artifacts.json (default: a good default-board entry), or null for no file. */
+const artifactCheck = (projects, { artifacts = { artifacts: [{ id: 'agentic-os-lane-board', url: DEFAULT_PAGE }] } } = {}) => {
   const fx = fixture();
   writeRegistry(fx, projects);
+  if (artifacts !== null) put(join(fx.repo, '.claude', 'artifacts.json'), typeof artifacts === 'string' ? artifacts : JSON.stringify(artifacts));
   const r = run(fx);
   return { c: r.checks['registry:artifact-url'], r };
 };
+
+// Card coord-board-id-followup: no fixed fallback id. A missing or bad default entry is a WARN (seat: a fresh clone still runs).
+test('registry:artifact-url is a WARN naming the reason when the default board entry is missing, not JSON, absent or loose', () => {
+  for (const [artifacts, why] of [
+    [null, /missing or unreadable/],
+    ['{bad', /not valid JSON/],
+    [{ artifacts: [] }, /no agentic-os-lane-board entry/],
+    [{ artifacts: [{ id: 'agentic-os-lane-board', url: 'https://evil.example/artifact/x1' }] }, /not https:\/\/claude\.ai\/artifact\/<id>/],
+  ]) {
+    const { c, r } = artifactCheck([entry('a', fwd(tmpdir()))], { artifacts });
+    assert.equal(c.status, 'WARN', c.detail);
+    assert.match(c.detail, /phone page is not recorded/);
+    assert.match(c.detail, why);
+    assert.notEqual(r.code, 1, 'a WARN alone must not fail the doctor');
+  }
+});
 
 test('registry:artifact-url with no laneArtifact anywhere is a PASS that reports 0 boards, so it is not vacuous', () => {
   const { c } = artifactCheck([entry('a', fwd(tmpdir())), entry('b', fwd(tmpdir()))]);

@@ -488,11 +488,6 @@ function renderBoardCmd(board, env = process.env) {
   return `node ${primaryRepo(env)}/scripts/coordination/render-board.mjs --project ${board}`;
 }
 var ARTIFACT_ID = "agentic-os-lane-board";
-var FALLBACK_ARTIFACT = {
-  id: "RtrTNVfAq9uowmb2tfbzid",
-  url: "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid",
-  publishFrom: "lane-board.html"
-};
 var LANE_ARTIFACT_RE = /^https:\/\/claude\.ai\/artifact\/([A-Za-z0-9_-]+)$/;
 var BOARD_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
 function artifactIdOf(raw) {
@@ -510,26 +505,35 @@ function registryBoardArtifact(board, opts, env) {
   if (boardArtifact(DEFAULT_BOARD, { ...opts, env })?.id === id) return null;
   return { id, url: `https://claude.ai/artifact/${id}`, publishFrom: `lane-board-${board}.html` };
 }
+function readDefaultArtifact(opts, env) {
+  const file = opts.artifactsPath || `${primaryRepo(env)}/.claude/artifacts.json`;
+  let text;
+  try {
+    text = fs2.readFileSync(file, "utf8").replace(/^﻿/, "");
+  } catch {
+    return { page: null, problem: `${file} is missing or unreadable` };
+  }
+  let list;
+  try {
+    list = JSON.parse(text).artifacts;
+  } catch {
+    return { page: null, problem: `${file} is not valid JSON` };
+  }
+  const entry = Array.isArray(list) ? list.find((a) => a && typeof a === "object" && a.id === ARTIFACT_ID) : void 0;
+  if (!entry) return { page: null, problem: `${file} has no ${ARTIFACT_ID} entry` };
+  const id = artifactIdOf(typeof entry.url === "string" ? entry.url : null);
+  if (!id) return { page: null, problem: `the ${ARTIFACT_ID} url in ${file} is not https://claude.ai/artifact/<id>` };
+  const publishFrom = typeof entry.publish_from === "string" && entry.publish_from ? entry.publish_from : "lane-board.html";
+  return { page: { id, url: `https://claude.ai/artifact/${id}`, publishFrom }, problem: null };
+}
 function boardArtifact(board, opts = {}) {
   const env = opts.env ?? process.env;
   if (board !== DEFAULT_BOARD) return registryBoardArtifact(board, opts, env);
-  const file = opts.artifactsPath || `${primaryRepo(env)}/.claude/artifacts.json`;
-  try {
-    const text = fs2.readFileSync(file, "utf8").replace(/^﻿/, "");
-    const list = JSON.parse(text).artifacts;
-    if (Array.isArray(list)) {
-      for (const a of list) {
-        if (!a || typeof a !== "object") continue;
-        const e = a;
-        if (e.id !== ARTIFACT_ID || typeof e.url !== "string") continue;
-        const id = /\/artifact\/([A-Za-z0-9_-]+)/.exec(e.url)?.[1];
-        if (!id) continue;
-        return { id, url: e.url, publishFrom: typeof e.publish_from === "string" && e.publish_from ? e.publish_from : "lane-board.html" };
-      }
-    }
-  } catch {
-  }
-  return { ...FALLBACK_ARTIFACT };
+  return readDefaultArtifact(opts, env).page;
+}
+function boardArtifactProblem(board, opts = {}) {
+  if (board !== DEFAULT_BOARD) return null;
+  return readDefaultArtifact(opts, opts.env ?? process.env).problem;
 }
 function pendingKey(sid, board) {
   return wmKey(sid, board).replace(/[^A-Za-z0-9@_-]/g, "_");
@@ -711,6 +715,7 @@ function sweepStalePending(env = process.env, now = Date.now()) {
 }
 
 // src/lane-board-stop-gate.ts
+var UNRECORDED_PAGE_ID = "unrecorded-default-board-page";
 var isObj3 = (v) => v !== null && typeof v === "object";
 var isPlain = (v) => isObj3(v) && !Array.isArray(v);
 var ASK_VERBS = /* @__PURE__ */ new Set(["claim", "release", "done", "park"]);
@@ -880,7 +885,11 @@ function sweepBudget(env = process.env, now = Date.now()) {
 }
 function blockReason(board, env = process.env, foreign = false) {
   const a = boardArtifact(board, { env });
-  if (!a) return "";
+  if (!a) {
+    const problem = boardArtifactProblem(board, { env });
+    if (!problem) return "";
+    return `The lane board page of ${board} is not recorded: ${problem}. Do not publish. Tell the seat (or Dave): the agentic-os-lane-board entry of ${primaryRepo(env)}/.claude/artifacts.json needs a fix.`;
+  }
   const why = foreign ? `Another session changed the lane DB and did not publish. The lane board page for board ${board} is out of date. ` : `The lane board page for board ${board} is out of date: this session changed the lane DB and has not republished it. `;
   return why + `Other sessions update this page all day, so your held copy is old. In this order: 1. Read the live page with the Artifact tool, action read, url ${a.url}, without path (a read with path does not count). Do not open or paste the saved file. 2. Run ${renderBoardCmd(board, env)}. 3. At once publish ${primaryRepo(env)}/${a.publishFrom} with the Artifact tool to url ${a.url} (omit capabilities). If the publish is refused for any reason other than the daily publish limit, publish the same file again: the refusal counts as the read. If the refusal names the daily publish limit, do not publish again today. Then finish your turn.`;
 }
@@ -914,7 +923,11 @@ function foreignAsks(e, lastAsk, now) {
 function findCandidates(own, foreign, env, view, now) {
   const pages = /* @__PURE__ */ new Map();
   const pageOf = (board) => {
-    if (!pages.has(board)) pages.set(board, boardArtifact(board, { env }));
+    if (!pages.has(board)) {
+      const page = boardArtifact(board, { env });
+      const unrecorded = !page && boardArtifactProblem(board, { env }) !== null;
+      pages.set(board, unrecorded ? { id: UNRECORDED_PAGE_ID, url: "", publishFrom: "" } : page);
+    }
     return pages.get(board) ?? null;
   };
   const pick2 = (list, isForeign) => {
@@ -1064,6 +1077,7 @@ export {
   DAY_CAP,
   DEFAULT_BOARD,
   PENDING_SHAPE,
+  UNRECORDED_PAGE_ID,
   VERB_CAP,
   blockReason,
   budgetDir,

@@ -59,7 +59,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { primaryRoot, resolveDep } from './lib/resolve-deps.mjs';
 import { checkStore } from './worktree/shared-deps.mjs';
-import { artifactIdOf, boardArtifact, loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
+import { artifactIdOf, boardArtifact, boardArtifactProblem, loadRegistry, normalizeRoot } from './coordination/lane-board.mjs';
 import { checkLanePaths } from './coordination/lane-path-guard.mjs';
 import { registryDrift } from './coordination/registry-drift.mjs';
 import { DOC_CAP_BYTES, EXPORT_ERROR, SIZE_WARN_PCT } from './coordination/export-dash-data.mjs';
@@ -757,7 +757,8 @@ export function registryMirrorDrift(o) {
  * that page, so a bad url nags for nothing and one url on two boards lets one publish clear both boards' pending files. FAIL on a
  * url that is not https://claude.ai/artifact/<id>, on a repeated id and on the default board's id. WARN on a laneArtifact the
  * resolvers ignore (a nested entry, or the default board's entry). The PASS line counts the pages, so 0 is visible, not vacuous.
- * Reads the home mirror (the copy the hooks read); the default board's id comes from <repo>/.claude/artifacts.json, else the fallback.
+ * Reads the home mirror (the copy the hooks read); the default board's id comes from <repo>/.claude/artifacts.json. There is no fixed
+ * fallback id (card coord-board-id-followup): a missing or bad default entry is a WARN, so a fresh clone still runs the doctor.
  */
 export function registryArtifactUrl(o) {
   const reg = liveRegistry(o, 'artifact-url');
@@ -765,7 +766,9 @@ export function registryArtifactUrl(o) {
   const withUrl = reg.entries.filter((e) => e.artifact !== null);
   const ignored = withUrl.filter((e) => e.board !== e.key || e.key === DEFAULT_BOARD);
   const owners = withUrl.filter((e) => !ignored.includes(e));
-  const defaultId = boardArtifact(DEFAULT_BOARD, { artifactsPath: join(o.repo, '.claude', 'artifacts.json'), env: {} })?.id ?? null;
+  const artifactOpts = { artifactsPath: join(o.repo, '.claude', 'artifacts.json'), env: {} };
+  const defaultId = boardArtifact(DEFAULT_BOARD, artifactOpts)?.id ?? null;
+  const defaultProblem = boardArtifactProblem(DEFAULT_BOARD, artifactOpts);
   const fails = [];
   const seen = new Map();
   for (const e of owners) {
@@ -775,10 +778,13 @@ export function registryArtifactUrl(o) {
     if (seen.has(id)) fails.push(`${e.key}: duplicate id ${id}, also the page of ${seen.get(id)}`); else seen.set(id, e.key);
   }
   if (fails.length) return result('FAIL', 'registry', 'artifact-url', `${fails.join('; ')} in ${reg.file}; fix the laneArtifact line (a board has its own page)`);
+  const warns = [];
+  if (defaultProblem) warns.push(`the ${DEFAULT_BOARD} phone page is not recorded: ${defaultProblem}; the Stop gate asks no publish until the agentic-os-lane-board entry is fixed`);
   if (ignored.length) {
     const names = ignored.map((e) => `${e.key} (${e.board !== e.key ? `nested on board ${e.board}` : 'default board'})`).join(', ');
-    return result('WARN', 'registry', 'artifact-url', `laneArtifact on ${names} in ${reg.file}: a nested entry or the default board's entry is ignored; put it on the entry where board equals key`);
+    warns.push(`laneArtifact on ${names} in ${reg.file}: a nested entry or the default board's entry is ignored; put it on the entry where board equals key`);
   }
+  if (warns.length) return result('WARN', 'registry', 'artifact-url', warns.join('; '));
   return result('PASS', 'registry', 'artifact-url', `${owners.length} boards with a phone page in ${reg.file}; urls are strict, unique, and none is the default board's`);
 }
 
