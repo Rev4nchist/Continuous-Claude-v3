@@ -115,7 +115,7 @@ test('S1: every node script and cwd named in the surface table exists', async ()
       assert.ok(existsSync(path.join(cwd, a)), `${g.id}: ${a} is missing`);
     }
     if (g.args.some((x) => x.includes('*'))) {
-      // The folder is the part before the first wildcard segment, so `scripts/trex/**/*.test.mjs` is checked in scripts/trex.
+      // The folder is the part before the first wildcard segment, so `scripts/github/local-review/**/*.test.mjs` is checked in scripts/github/local-review.
       const glob = g.args.find((x) => x.includes('*'));
       const dir = path.join(cwd, glob.split('/').slice(0, glob.split('/').findIndex((seg) => seg.includes('*'))).join('/'));
       assert.ok(readdirSync(dir, { recursive: glob.includes('**') }).some((n) => /\.test\.mjs$/.test(n)), `${g.id}: the glob matches no test file`);
@@ -385,6 +385,12 @@ test('GW4b: no gate runs the dead trex glob; a trex change gets the manual NOTE,
     assert.ok(notesFor([p], CONFIG).some((n) => n.step === 'manual:trex'), `${p}: no manual:trex NOTE`);
   }
   assert.ok(ids(gatesFor(['scripts/checks/test-map.mjs'], REPO_ROOT)).includes('test-map-tests'));
+  assert.match(trex.manual, /scripts\/checks\/test-map\.mjs/, 'the manual NOTE names test-map.mjs, which the trex surface also holds');
+});
+
+test('WS4: gate test-scripts gets at least 10 minutes, as checks-tests (72 s alone, slower under load)', () => {
+  const g = SURFACES.flatMap((s) => s.gates ?? []).find((x) => x.id === 'test-scripts');
+  assert.ok(g && g.timeoutMs >= 10 * 60_000, `timeout ${g?.timeoutMs} ms`);
 });
 
 // ---------- step 3 of card coord-test-gate-coverage: the Windows gate of the test:scripts-only files (Dave, 2026-11-17) ----------
@@ -392,10 +398,14 @@ test('GW4b: no gate runs the dead trex glob; a trex change gets the manual NOTE,
 const TEST_SCRIPTS = () => JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).scripts['test:scripts'].split(/\s+/).filter((w) => /\.test\.mjs$/.test(w));
 
 test('WS1: a change in a test:scripts-only folder runs gate test-scripts with the named files; other changes do not', async () => {
-  const runs = ['scripts/review-engine/map-parse.mjs', 'scripts/scheduled/scheduled-health-check.mjs', 'scripts/settings/apply-registrations.mjs',
-    'scripts/measurement/cost-reconcile.mjs', 'scripts/msys/reap-retire.mjs', 'scripts/pricing/refresh-prices.mjs', '.claude/scripts/security/sink-spy.mjs',
-    'scripts/harness-doctor.mjs', 'scripts/coordination/reminder-core.mjs', 'scripts/coordination/lane-dash-flow.test.mjs'];
+  // Real paths only (PR 648 critic): the scheduled wrappers under .claude/scripts/scheduled, and the coordination modules the tested code imports.
+  const runs = ['scripts/review-engine/args.test.mjs', 'scripts/scheduled/tasks.json', '.claude/scripts/scheduled/scheduled-health-check.bat',
+    'scripts/settings/apply-registrations.mjs', 'scripts/measurement/cost-reconcile.mjs', 'scripts/msys/reap.ps1', 'scripts/pricing/refresh-prices.mjs',
+    '.claude/scripts/security/sink-spy.mjs', 'scripts/harness-doctor.mjs', 'scripts/coordination/reminder-core.mjs', 'scripts/coordination/lane-dash-flow.test.mjs',
+    'scripts/coordination/lane-dep.mjs', 'scripts/coordination/lane-seed-file.mjs', 'scripts/coordination/canon-home.mjs', 'scripts/coordination/session-label.mjs',
+    'scripts/coordination/lane-board.mjs'];
   for (const p of runs) {
+    assert.ok(existsSync(path.join(REPO_ROOT, p)), `${p}: WS1 must read real paths`);
     const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'test-scripts');
     assert.ok(g, `${p}: no test-scripts gate`);
     assert.deepEqual([g.cmd, g.args], ['node', ['--test', ...PRE.SCRIPTS_WINDOWS_TESTS]]);
@@ -417,11 +427,12 @@ test('WS2: every name in SCRIPTS_WINDOWS_TESTS is a tracked file named in packag
   }
 });
 
-test('WS3: every test:scripts name is in SCRIPTS_WINDOWS_TESTS or in a CI step, so a new name fails here', async () => {
+test('WS3: every test:scripts name is in SCRIPTS_WINDOWS_TESTS, another pre-pr gate or a CI step, so a new name fails here', async () => {
   const { readSources } = await import('./gate-coverage.mjs');
-  const { ci } = await readSources(REPO_ROOT);
+  const { ci, prepr } = await readSources(REPO_ROOT);
+  assert.ok(prepr instanceof Set && prepr.size > 0, 'readSources gives no pre-pr set: the check would be vacuous');
   const names = new Set(PRE.SCRIPTS_WINDOWS_TESTS ?? []);
-  const loose = TEST_SCRIPTS().filter((n) => !names.has(n) && !ci.has(n));
+  const loose = TEST_SCRIPTS().filter((n) => !names.has(n) && !ci.has(n) && !prepr.has(n));
   assert.deepEqual(loose, [], 'test:scripts names that no gate runs: add them to SCRIPTS_WINDOWS_TESTS in pre-pr.mjs');
 });
 
@@ -2090,6 +2101,43 @@ test('RR7: the behind FAIL says to merge the base in, and that a rebase starts a
 test('RR6: the hooks-vitest gate gives each test at least 20 s (dist-integration tests spawn node under load)', () => {
   const t = gateById('hooks-vitest').args.map((a) => /^--testTimeout=(\d+)$/.exec(a)).find(Boolean);
   assert.ok(t && Number(t[1]) >= 20_000, gateById('hooks-vitest').args.join(' '));
+});
+
+// ---------- card coord-flake-ledger: a test that passes only on a retry leaves a record (design rev 2, seat GO 2026-11-18) ----------
+
+const FLAKE_REPORTER = './test-support/flake-ledger-reporter.mjs';
+const FLAKE_ARGS = ['--includeTaskLocation', '--reporter=default', `--reporter=${FLAKE_REPORTER}`];
+
+test('FL1: the hooks-vitest gate and the CI hooks step both run the flake ledger reporter, from .claude/hooks where its path resolves (F1)', () => {
+  const g = gateById('hooks-vitest');
+  assert.equal(g.cwd, '.claude/hooks');
+  for (const a of FLAKE_ARGS) assert.ok(g.args.includes(a), `pre-pr hooks-vitest lacks ${a}: ${g.args.join(' ')}`);
+  assert.ok(existsSync(path.join(REPO_ROOT, g.cwd, FLAKE_REPORTER)), 'the reporter file is missing');
+  const yml = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  const step = yml.split(/\r?\n- name: |\n\s+- name: /).find((s) => s.startsWith('Hooks tests (vitest)'));
+  assert.ok(step, 'CI step "Hooks tests (vitest)" not found');
+  assert.match(step, /working-directory: \.claude\/hooks/);
+  const run = /run: (.+)/.exec(step)?.[1] ?? '';
+  for (const a of FLAKE_ARGS) assert.ok(run.split(/\s+/).includes(a), `CI hooks step lacks ${a}: ${run}`);
+});
+
+test('FL2: a PASS of hooks-vitest carries the FLAKE LEDGER line and a WARN line in its detail (seat C4)', () => {
+  const g = gateById('hooks-vitest');
+  const out = ' Test Files  3 passed (3)\n      Tests  9 passed (9)\nFLAKE LEDGER WARN write failed (EBUSY); the run result is unchanged\nFLAKE LEDGER: 1 retry pass(es) this run, 0 at the limit, ledger /x\n';
+  const r = runGate(g, { root: REPO_ROOT, exec: execOut(0, out), git: fakeGit({}) });
+  assert.equal(r.status, 'PASS');
+  assert.match(r.detail, /Tests {2}9 passed/);
+  assert.match(r.detail, /FLAKE LEDGER WARN write failed/);
+  assert.match(r.detail, /FLAKE LEDGER: 1 retry pass\(es\) this run/);
+});
+
+test('FL3: a gate without alsoLine keeps today\'s PASS detail, the summary line alone (F14)', () => {
+  const g = { ...gateById('hooks-vitest') };
+  delete g.alsoLine;
+  const out = '      Tests  9 passed (9)\nFLAKE LEDGER: 0 retry pass(es) this run, 0 at the limit, ledger /x\n';
+  const r = runGate(g, { root: REPO_ROOT, exec: execOut(0, out), git: fakeGit({}) });
+  assert.equal(r.detail, summaryLine(out));
+  assert.equal(SURFACES.flatMap((s) => s.gates ?? []).filter((x) => x.alsoLine).map((x) => x.id).join(','), 'hooks-vitest', 'only hooks-vitest sets alsoLine');
 });
 
 test('RR3: mods-validate PASSes with a NOTE when only the typecheck could not run', () => {

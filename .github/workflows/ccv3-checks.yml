@@ -178,11 +178,13 @@ jobs:
           git diff --exit-code --ignore-cr-at-eol -- dist
           test -z "$(git ls-files --others --exclude-standard -- dist)"
       # The package-install-guard tests spawn dist/*.mjs, so this step runs after the build.
+      # The flake ledger reporter (card coord-flake-ledger) prints a FLAKE LEDGER line per retry pass and copies only those lines
+      # (file:line and counts, never a test name) to the job summary. The runner keeps no history, so the 7-day fail rule acts in pre-pr only.
       - name: Hooks tests (vitest)
         if: ${{ !cancelled() }}
         working-directory: .claude/hooks
         timeout-minutes: 20
-        run: npx --no-install vitest run --retry=2 --testTimeout=30000
+        run: npx --no-install vitest run --retry=2 --testTimeout=30000 --includeTaskLocation --reporter=default --reporter=./test-support/flake-ledger-reporter.mjs
 
   # apps/agentic-os has lint, typecheck and build scripts. Before this job CI ran only its pure Playwright specs (ratchets job),
   # so a lint error, a type error or a broken build reached main. The `scope` step turns every later step off unless this change

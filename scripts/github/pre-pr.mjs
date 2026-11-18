@@ -161,7 +161,12 @@ export const SCRIPTS_WINDOWS_TESTS = [
   'scripts/review-engine/diff.test.mjs',
 ];
 // Its scripts/coordination files are named one by one (test and source): a change elsewhere in that folder does not add the 72 s gate.
-const SCRIPTS_WINDOWS_COORD = SCRIPTS_WINDOWS_TESTS.filter((f) => f.startsWith('scripts/coordination/')).flatMap((f) => [f, f.replace(/\.test\.mjs$/, '.mjs')]);
+// The last five are modules that the tested code imports (PR 648 critic finding 2): a change to lane-dep.mjs must run contract-seam.test.mjs.
+const SCRIPTS_WINDOWS_COORD = [
+  ...SCRIPTS_WINDOWS_TESTS.filter((f) => f.startsWith('scripts/coordination/')).flatMap((f) => [f, f.replace(/\.test\.mjs$/, '.mjs')]),
+  'scripts/coordination/lane-dep.mjs', 'scripts/coordination/lane-seed-file.mjs', 'scripts/coordination/canon-home.mjs',
+  'scripts/coordination/session-label.mjs', 'scripts/coordination/lane-board.mjs',
+];
 
 // validate-mods exits 1 when its typecheck cannot run. On Claude Code 2.1.296 and later no command writes the
 // .claude-plugin/types folder tsc needs, so this machine has none. Accept that one case, and only that case: validate
@@ -217,8 +222,13 @@ export const SURFACES = [
       },
       // Several dist-integration tests spawn node and use real timers. Alone they take about 3 s; in the full parallel
       // suite on a busy machine they pass vitest's 5 s default (msys-crash-capture, 2026-10-28). --testTimeout gives
-      // them room, and --retry covers a rare timer race.
-      { id: 'hooks-vitest', cmd: 'npx', args: ['vitest', 'run', '--retry=2', '--testTimeout=30000'], cwd: '.claude/hooks', timeoutMs: 20 * MIN },
+      // them room, and --retry covers a rare timer race. The flake ledger reporter (card coord-flake-ledger) records each test that passed
+      // only on a retry and fails the run the second time in 7 days; --includeTaskLocation gives its file:line. alsoLine puts its
+      // FLAKE LEDGER lines (the run line and any WARN) in the PASS detail. The same args run in CI (ccv3-checks.yml, Hooks tests (vitest)).
+      {
+        id: 'hooks-vitest', cmd: 'npx', cwd: '.claude/hooks', timeoutMs: 20 * MIN, alsoLine: /^FLAKE LEDGER(?::| WARN )/,
+        args: ['vitest', 'run', '--retry=2', '--testTimeout=30000', '--includeTaskLocation', '--reporter=default', '--reporter=./test-support/flake-ledger-reporter.mjs'],
+      },
     ],
   },
   {
@@ -330,13 +340,14 @@ export const SURFACES = [
     id: 'trex',
     globs: ['.trex/**', 'scripts/trex/**', 'docker/trex/**', 'apps/agentic-os/.trex/**', 'apps/agentic-os/e2e/trex-*.spec.ts', 'apps/agentic-os/playwright.trex.config.ts', 'scripts/checks/test-map.mjs'],
     gates: [],
-    manual: 'no gate runs the TREX flows: run the trex flow you changed by hand and keep its output',
+    manual: 'no gate runs the TREX flows: run the trex flow you changed by hand and keep its output; for scripts/checks/test-map.mjs, run the flows it selects',
   },
   // Step 3 of card coord-test-gate-coverage: Windows pre-pr only (Dave, 2026-11-17). CI never runs pre-pr; a test that needs Windows skips itself.
   {
     id: 'scripts-windows',
-    globs: ['scripts/review-engine/**', 'scripts/scheduled/**', 'scripts/settings/**', 'scripts/measurement/**', 'scripts/msys/**', 'scripts/pricing/**', '.claude/scripts/security/**', 'scripts/harness-doctor*.mjs', ...SCRIPTS_WINDOWS_COORD],
-    gates: [{ id: 'test-scripts', cmd: 'node', args: ['--test', ...SCRIPTS_WINDOWS_TESTS], cwd: '.', timeoutMs: 5 * MIN }],
+    // .claude/scripts/scheduled/** holds the wrappers the 7 scheduled tests run (PR 648 critic finding 1).
+    globs: ['scripts/review-engine/**', 'scripts/scheduled/**', '.claude/scripts/scheduled/**', 'scripts/settings/**', 'scripts/measurement/**', 'scripts/msys/**', 'scripts/pricing/**', '.claude/scripts/security/**', 'scripts/harness-doctor*.mjs', ...SCRIPTS_WINDOWS_COORD],
+    gates: [{ id: 'test-scripts', cmd: 'node', args: ['--test', ...SCRIPTS_WINDOWS_TESTS], cwd: '.', timeoutMs: 10 * MIN }],
   },
   {
     id: 'mod',
@@ -840,7 +851,9 @@ export function runGate(gate, { root, exec, git }) {
     const files = posts.flatMap((p) => p.stdout.split(/\r?\n/).filter(Boolean));
     if (posts.some((p) => p.status !== 0) || files.length > 0) return { ...result(step, 'FAIL', `${gate.postCheck.failText} (${files.length})`, files.slice(0, 10)), ...base };
   }
-  return { ...result(step, 'PASS', summaryLine(out)), ...base };
+  // `alsoLine` (hooks-vitest only): every output line that matches it joins the PASS detail, so a flake ledger WARN is not silent.
+  const also = gate.alsoLine ? clean.split(/\r?\n/).map((l) => l.trim()).filter((l) => gate.alsoLine.test(l)) : [];
+  return { ...result(step, 'PASS', [summaryLine(out), ...also].join('; ')), ...base };
 }
 
 // ---------- CodeRabbit CLI review ----------
