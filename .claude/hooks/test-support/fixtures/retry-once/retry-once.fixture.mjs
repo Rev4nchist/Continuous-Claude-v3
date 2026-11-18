@@ -9,6 +9,14 @@ test('ZEBRAQUOKKA passes on try 2', () => {
   if (!process.env.FIXTURE_NO_FLAKE) expect(tries).toBeGreaterThan(1);
 });
 
+// A test that declares its own retry and fails its first try on purpose (as CHR and RTR of decision-gate-app-repos-*.test.ts do):
+// its retry is the author's choice, not the gate's --retry, so the ledger must not record it.
+let ownTries = 0;
+test('declares its own retry', { retry: 1 }, () => {
+  ownTries += 1;
+  expect(ownTries).toBeGreaterThan(1);
+});
+
 test('passes at once', () => {
   expect(1).toBe(1);
 });

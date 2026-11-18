@@ -8,7 +8,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
-import { appendRow, ledgerPath, parseLedger, printedLines, recordKey, relFile, verdict } from './flake-ledger.mjs';
+import { appendRow, isRunRetry, ledgerPath, parseLedger, printedLines, recordKey, relFile, verdict } from './flake-ledger.mjs';
 
 function gitValue(cwd, args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 10_000 });
@@ -26,6 +26,7 @@ export default class FlakeLedgerReporter {
 
   onInit(vitest) {
     this.root = vitest?.config?.root ?? this.root;
+    this.runRetry = vitest?.config?.retry;
   }
 
   gitFacts() {
@@ -36,6 +37,8 @@ export default class FlakeLedgerReporter {
   onTestCaseResult(testCase) {
     const diag = testCase.diagnostic?.();
     if (!diag?.flaky || testCase.result?.().state !== 'passed') return;
+    // A test with its own retry option chose that retry; only a retry of the run (--retry) can hide an error unseen.
+    if (!isRunRetry(testCase.options?.retry, this.runRetry)) return;
     const file = testCase.module.moduleId;
     const row = {
       at: new Date().toISOString(),

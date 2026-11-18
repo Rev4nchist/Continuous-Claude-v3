@@ -19,6 +19,19 @@ export function ledgerPath(env = process.env) {
   return env.FLAKE_LEDGER_PATH || join(homedir(), '.claude', 'state', 'flake-ledger.jsonl');
 }
 
+const retryCountOf = (r) => (r && typeof r === 'object' ? Number(r.count ?? 0) : Number(r ?? 0));
+
+/**
+ * True when a test's retry came from the run (--retry), false when the test declares its own retry. vitest fills each test's
+ * `options.retry` from the run unless the test sets one, so a value other than the run's is the author's choice: a test that fails
+ * its first try on purpose to prove a retry works (CHR, RTR in decision-gate-app-repos-*.test.ts). The ledger records only run retries.
+ */
+export function isRunRetry(ownRetry, runRetry) {
+  // No own value: count it (seat 09:00). If a later vitest stops filling options.retry, the ledger records more, never nothing.
+  if (ownRetry === undefined || ownRetry === null) return true;
+  return retryCountOf(ownRetry) === retryCountOf(runRetry);
+}
+
 /** The test file relative to the vitest root, with forward slashes: one value on Windows, Linux, a worktree and the primary. */
 export function relFile(root, file) {
   const toSlash = (p) => String(p).replace(/\\/g, '/');

@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 type Row = { at: string; key: string; file: string; line: number | null; retryCount: number; head: string; branch: string; source: string };
 type Lib = {
   WINDOW_MS: number;
+  isRunRetry: (ownRetry: unknown, runRetry: unknown) => boolean;
   recordKey: (root: string, file: string, fullName: string) => string;
   relFile: (root: string, file: string) => string;
   parseLedger: (text: string) => { rows: Row[]; bad: number };
@@ -106,6 +107,18 @@ describe('flake-ledger lib', () => {
     expect(lines.join('\n')).not.toContain(MARKER);
     expect(lines).toContain('FLAKE LEDGER FAIL src/a.test.ts:12 (2 in 7 days)');
     expect(lines[lines.length - 1]).toMatch(/^FLAKE LEDGER: 1 retry pass\(es\) this run, 1 at the limit/);
+  });
+
+  it('F15: only a retry of the run counts; a test that declares its own retry does not (CHR, RTR in decision-gate-app-repos-*)', () => {
+    expect(lib.isRunRetry(2, 2)).toBe(true);
+    expect(lib.isRunRetry({ count: 2 }, 2)).toBe(true);
+    expect(lib.isRunRetry(1, 2)).toBe(false);
+    expect(lib.isRunRetry({ count: 1 }, { count: 2 })).toBe(false);
+  });
+
+  it('F16: a missing own retry value counts as a run retry, so a vitest that stops filling options.retry records more, never nothing (seat 09:00)', () => {
+    expect(lib.isRunRetry(undefined, 2)).toBe(true);
+    expect(lib.isRunRetry(null, 2)).toBe(true);
   });
 
   it('F8: the ledger path follows FLAKE_LEDGER_PATH, else the shared state file', () => {
