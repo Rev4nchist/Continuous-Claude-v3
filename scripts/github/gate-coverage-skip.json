@@ -234,190 +234,6 @@
       "reason": "opc pytest: the pre-pr gate opc-pytest runs only the opc test files a change touches (appendTouched, pre-pr.mjs), never the whole folder; CI has no pytest step"
     },
     {
-      "path": ".claude/scripts/security/cf-validate.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": ".claude/scripts/security/sink-spy.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/export-dash-data.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/export-factory-data.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/factory-rows.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/fleetops-auto-core.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/fleetops-auto-tick.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/lane-dash-config.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/lane-dash-flow.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/lane-dash-metrics.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/lane-dash-project.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/reminder-core.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/coordination/reminder-tick.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/harness-doctor-cleanup.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/measurement/cost-reconcile-parity.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/measurement/cost-reconcile.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/msys/reap-retire.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/pricing/refresh-prices.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/args.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/board-check.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/claims.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/contract-seam.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/db-board.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/diff.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/facts-holds.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/lane-cli.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/map-check.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/map-parse.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/orphans.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/pack-rank.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/program-cli.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/ready.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/rule-trigger.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/seed-file.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/source.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/status.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/review-engine/sync.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/scheduled/register-ccv3-tasks.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/scheduled/scheduled-blocklist-update.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/scheduled/scheduled-cost-reconcile.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/scheduled/scheduled-health-check.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/scheduled/scheduled-lane-snapshot.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/scheduled/scheduled-open-prs.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/scheduled/scheduled-reminder-tick.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/settings/apply-registrations.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
-      "path": "scripts/settings/remove-registrations.test.mjs",
-      "reason": "named by `npm run test:scripts` (root package.json), which no workflow and no pre-pr gate runs: it runs by hand only. Pending join: step 2 of card coord-test-gate-coverage."
-    },
-    {
       "path": "scripts/start-embedding-daemon-pipe.test.mjs",
       "reason": "starts a stub daemon through powershell.exe and kills it; Windows only (it skips elsewhere). Seat rule: a daemon stays skipped"
     },
@@ -488,218 +304,397 @@
       "reason": "plugin tests: pre-pr runs them through scripts/mods/validate-mods.mjs (claude plugin test); CI has no claude binary and no step. Open item: plugin tests in CI."
     },
     {
+      "path": ".claude/scripts/security/cf-validate.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": ".claude/scripts/security/sink-spy.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
       "path": "scripts/agents/check-agent-body.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/agents/scout-tldr-count.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/checks/catchers.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/checks/changed-lines.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/checks/cli-smoke.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/checks/parser-fixtures.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/checks/typecheck-changed.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
+      "path": "scripts/coordination/export-dash-data.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/export-factory-data.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/factory-rows.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/fleetops-auto-core.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/fleetops-auto-tick.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/lane-dash-config.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/lane-dash-flow.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/lane-dash-metrics.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/lane-dash-project.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/reminder-core.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/coordination/reminder-tick.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
     {
       "path": "scripts/github/app-ask.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/cursor-review-hardening.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/cursor-review-model.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/cursor-review.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/decisions.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/land-decision.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lane-context-db-gate.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/ledger-report.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/answer-key.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/answer-paths.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/findings-repair.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/grok-slots.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/holdout-ids.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/osv-advisory.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/pr-summary.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/proc.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/pssa-advisory.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/lib/zizmor-advisory.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/local-review-sweep-own-lists.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/local-review-sweep.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/migration-gate.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/pr-checkpoint-auto.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/pr-checkpoint-capacity.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/pr-checkpoint-interim-cr.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/pr-checkpoint-ledger.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/pr-loop-sync.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/pre-pr-failing-tests.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/pre-pr-gate-limits.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/pre-pr-gate-stats.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/reply-thread.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/repo-identity.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/ship-ask-cli-skip.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/ship-ask.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/github/waiver-phrase.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
+      "path": "scripts/harness-doctor-cleanup.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/measurement/cost-reconcile-parity.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/measurement/cost-reconcile.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
     {
       "path": "scripts/mods/claude-hud-config.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/mods/validate-mods.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
+      "path": "scripts/msys/reap-retire.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/pricing/refresh-prices.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
     {
       "path": "scripts/ratchets/semgrep-ccv3-opengrep.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/args.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/board-check.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/claims.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/contract-seam.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/db-board.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/diff.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/facts-holds.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/lane-cli.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/map-check.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/map-parse.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/orphans.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/pack-rank.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/program-cli.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/ready.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/rule-trigger.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/seed-file.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/source.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/status.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/review-engine/sync.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
     {
       "path": "scripts/rules/test/coderabbit-cli-content.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/rules/test/context-budget-guard.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/rules/test/ondemand-index-check.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/rules/test/pr-review-loop-core.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/rules/test/rule-router-audit.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/register-ccv3-tasks.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/scheduled-blocklist-update.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/scheduled-cost-reconcile.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/scheduled-health-check.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/scheduled-lane-snapshot.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/scheduled-open-prs.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/scheduled-reminder-tick.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/settings/apply-registrations.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/settings/remove-registrations.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
     {
       "path": "scripts/skills/audit-skills.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/skills/trigger-probe.test.mjs",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     },
     {
       "path": "scripts/sync-to-active-cursor.test.sh",
-      "reason": "pre-pr runs it (a surface gate); CI has no step for it. Join a CI step in step 2 of card coord-test-gate-coverage."
+      "reason": "pre-pr gate only; CI has no step"
     }
   ],
-  "deadGates": [
-    {
-      "path": "scripts/trex/**/*.test.mjs",
-      "reason": "the pre-pr surface trex runs gate trex-tests on this glob, and no tracked file matches it: that gate runs nothing. Open item for the seat: remove or repair the trex surface."
-    }
-  ]
+  "deadGates": []
 }

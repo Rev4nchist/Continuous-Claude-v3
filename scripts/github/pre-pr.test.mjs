@@ -13,6 +13,10 @@
 //   - scripts/eval/review-eval has no gate, or a path there is unowned          -> TG3
 //   - CI job ratchets drifts from a gate glob, or runs it unquoted (bash drops files) -> TG4
 //   - lane-context.ts or its db test changes and the scratch-database gate does not run, or CI drops it -> TG5, TG6
+//   - a test:scripts-only folder changes and the Windows gate test-scripts does not run, or it runs for other folders  -> WS1
+//   - the test-scripts constant names a file that is gone or not in test:scripts, or names one twice              -> WS2
+//   - a new test:scripts name is in no gate (neither the constant nor a CI step)                                     -> WS3
+//   - the dead trex-tests gate comes back, or the trex surface loses its manual note                                 -> GW4b
 // summaryLine
 //   - the first line is taken, not the runner's summary                        -> M1, M2
 // Git preconditions
@@ -114,8 +118,6 @@ test('S1: every node script and cwd named in the surface table exists', async ()
       // The folder is the part before the first wildcard segment, so `scripts/trex/**/*.test.mjs` is checked in scripts/trex.
       const glob = g.args.find((x) => x.includes('*'));
       const dir = path.join(cwd, glob.split('/').slice(0, glob.split('/').findIndex((seg) => seg.includes('*'))).join('/'));
-      // TREX lands from its own branch: until scripts/trex exists here, its glob has nothing to match (Node 22 exits 0 on that).
-      if (g.id === 'trex-tests' && !existsSync(dir)) continue;
       assert.ok(readdirSync(dir, { recursive: glob.includes('**') }).some((n) => /\.test\.mjs$/.test(n)), `${g.id}: the glob matches no test file`);
     }
   }
@@ -373,13 +375,54 @@ test('CW3: withBase replaces only the base token and leaves other gates alone (b
   assert.equal(withBase(other, 'release'), other);
 });
 
-test('GW4b: a change under scripts/trex, or to the shared selector test-map.mjs, runs the TREX node tests', async () => {
-  for (const p of ['scripts/trex/run.mjs', '.trex/flows/x.yaml', 'docker/trex/Dockerfile', 'scripts/checks/test-map.mjs']) {
-    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'trex-tests');
-    assert.ok(g, p);
-    assert.deepEqual([g.cmd, g.args], ['node', ['--test', 'scripts/trex/**/*.test.mjs']]);
+test('GW4b: no gate runs the dead trex glob; a trex change gets the manual NOTE, and test-map.mjs still runs its own test (Dave, 2026-11-17)', async () => {
+  const all = [...ALWAYS_GATES, ...SURFACES.flatMap((s) => s.gates ?? [])];
+  assert.equal(all.some((g) => g.id === 'trex-tests' || (g.args ?? []).some((a) => String(a).startsWith('scripts/trex/'))), false, 'scripts/trex does not exist: a gate on it runs nothing');
+  const trex = SURFACES.find((s) => s.id === 'trex');
+  assert.ok(trex, 'the trex surface keeps its globs');
+  assert.deepEqual(trex.gates, []);
+  for (const p of ['.trex/flows/x.yaml', 'docker/trex/Dockerfile', 'apps/agentic-os/e2e/trex-login.spec.ts']) {
+    assert.ok(notesFor([p], CONFIG).some((n) => n.step === 'manual:trex'), `${p}: no manual:trex NOTE`);
   }
-  assert.equal(gatesFor(['scripts/github/lib/proc.mjs'], REPO_ROOT).some((x) => x.id === 'trex-tests'), false);
+  assert.ok(ids(gatesFor(['scripts/checks/test-map.mjs'], REPO_ROOT)).includes('test-map-tests'));
+});
+
+// ---------- step 3 of card coord-test-gate-coverage: the Windows gate of the test:scripts-only files (Dave, 2026-11-17) ----------
+
+const TEST_SCRIPTS = () => JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).scripts['test:scripts'].split(/\s+/).filter((w) => /\.test\.mjs$/.test(w));
+
+test('WS1: a change in a test:scripts-only folder runs gate test-scripts with the named files; other changes do not', async () => {
+  const runs = ['scripts/review-engine/map-parse.mjs', 'scripts/scheduled/scheduled-health-check.mjs', 'scripts/settings/apply-registrations.mjs',
+    'scripts/measurement/cost-reconcile.mjs', 'scripts/msys/reap-retire.mjs', 'scripts/pricing/refresh-prices.mjs', '.claude/scripts/security/sink-spy.mjs',
+    'scripts/harness-doctor.mjs', 'scripts/coordination/reminder-core.mjs', 'scripts/coordination/lane-dash-flow.test.mjs'];
+  for (const p of runs) {
+    const g = gatesFor([p], REPO_ROOT).find((x) => x.id === 'test-scripts');
+    assert.ok(g, `${p}: no test-scripts gate`);
+    assert.deepEqual([g.cmd, g.args], ['node', ['--test', ...PRE.SCRIPTS_WINDOWS_TESTS]]);
+  }
+  for (const p of ['docs/x.md', 'scripts/coordination/lane-band.mjs', 'scripts/github/lib/proc.mjs', '.claude/hooks/src/x.ts']) {
+    assert.equal(ids(gatesFor([p], REPO_ROOT)).includes('test-scripts'), false, `${p}: test-scripts must not run`);
+  }
+});
+
+test('WS2: every name in SCRIPTS_WINDOWS_TESTS is a tracked file named in package.json test:scripts, once', async () => {
+  const names = PRE.SCRIPTS_WINDOWS_TESTS;
+  assert.ok(Array.isArray(names) && names.length >= 40, `only ${names?.length} names: the check would be vacuous`);
+  assert.equal(new Set(names).size, names.length, 'a name is listed twice');
+  const tracked = new Set(execFileSync('git', ['-C', REPO_ROOT, 'ls-files', '-z'], { encoding: 'utf8' }).split('\0'));
+  const inScript = new Set(TEST_SCRIPTS());
+  for (const n of names) {
+    assert.ok(tracked.has(n), `${n} is not tracked`);
+    assert.ok(inScript.has(n), `${n} is not in package.json test:scripts`);
+  }
+});
+
+test('WS3: every test:scripts name is in SCRIPTS_WINDOWS_TESTS or in a CI step, so a new name fails here', async () => {
+  const { readSources } = await import('./gate-coverage.mjs');
+  const { ci } = await readSources(REPO_ROOT);
+  const names = new Set(PRE.SCRIPTS_WINDOWS_TESTS ?? []);
+  const loose = TEST_SCRIPTS().filter((n) => !names.has(n) && !ci.has(n));
+  assert.deepEqual(loose, [], 'test:scripts names that no gate runs: add them to SCRIPTS_WINDOWS_TESTS in pre-pr.mjs');
 });
 
 test('GW4c: a change to test-map.mjs runs test-map.test.mjs, and one under scripts/github/local-review runs the tests in that folder (breaks if either test file is left out of every gate)', async () => {
