@@ -89,7 +89,7 @@
     "session-start-context-loaders.ts": "9e842084cd65b03828963453890b660f3bb60453c39431dd56cfa1077c6c7401",
     "session-start-continuity.ts": "65f70caf406571b94d2c79bc7f47180e9ddf39338d23b2e2d2472b2713db408a",
     "session-start-docker.ts": "8c60b41403290a646a493f7f49c247256a6a35e237f77ef244dc7356711acf18",
-    "session-start-init-check.ts": "df48ddf47afa646dcc42bf293aff3ec12525558b768eb5b645fdf3699cdc5748",
+    "session-start-init-check.ts": "481fc4bf8369e34bfa19a20f95c5c189efb98f00e759d938729444ed75544828",
     "session-start-intel-prune.ts": "b0042fc097c8ec191b7c1dacfac1daf4b60e31a3111798e44d0ce4ec01c690f5",
     "session-start-memory-loaders.ts": "280a85df117818a8e63f3e81d8290cf3c9c835ace614d4e4d4e4c3e6fa1485c5",
     "shared/answer-paths-door.ts": "1d33c55e339ba8bc457f66b7f1d0135b9e3121e8e2c87bdb4919f15d67a6c57b",
@@ -109,7 +109,7 @@
     "shared/db-utils.ts": "84cc10b397f44fd3ab2782463de896ea2f2ce0b232995be7b0c6a2a0ebb10a48",
     "shared/decisions-store.ts": "ab0500690f98bf09a7b60ef5b9ca3ed7444b5d2a754decf038b80ef535ff13eb",
     "shared/destructive-classifier.ts": "3ec2aa0ab71421451c5042f5dde7382321ea0e39daa700508a4aee39b2f7db48",
-    "shared/dist-freshness.ts": "fc853fa75abc3bf5ae29c64b18abc6ca379c13106cc1aa1c7814adf79c8a8457",
+    "shared/dist-freshness.ts": "81266efb6d6878c4297fe7c8c5c3c3e71cf9f62fbd183ef5772f60a30dd9dc73",
     "shared/doc-heredoc.ts": "8b21641c587f76b60828bca241f7fdeefbdb988fb5513f15c1114a5ece48c655",
     "shared/done-proof.ts": "cd8fbdb11a5b63ff68c44765fbf0272e2f2a7b85234827908a71c96f3b0b081c",
     "shared/embedding-client.ts": "20cd09a12e5745f9e1453a7b2566180e0acaa4813e89e2386dca8923cec2ddf2",
@@ -133,7 +133,7 @@
     "shared/intent-extractor.ts": "1d7ed84bfac02a69eb4dd236f34f190fa8912852df8a1999f71dd21929a21ce9",
     "shared/lane-board-pending.ts": "88f6efb38c05bf573df859cea3eddaad2d553c2f10a0ef04ae6d9f0f03a58512",
     "shared/lane-board.ts": "7919559252459ec8865ca1818776a01826efa79890837e164a687fcf1ecc9064",
-    "shared/lane-dash-refresh.ts": "0d89768f49a43fabfd7e5ef25044ea0bd4656118c077a19eaf35a48a25df56ec",
+    "shared/lane-dash-refresh.ts": "617b19c9c96d79733d82a9ab2348d8938e33175744e34f58396f9388ab242472",
     "shared/lane-dep.ts": "94f67f5e17a9a74b3bffaa341b783f8eb60f539f1f099a41f4ab5035dac4f2c7",
     "shared/lane-sort.ts": "976f96b5e7322454827e340b052fc20b9f1efb62094b342d24c2ea3e4fd96361",
     "shared/leases.ts": "464c05b95aa261ec8dc8c90b08fedd57f69111e268fc95fdd120946739d36639",
@@ -200,5 +200,28 @@
     "user-confirmation-detector.ts": "d0dc39cb3229c3b9f7173beb963149a1452ef4459e8ada1e36b850c623651bd3",
     "vercel-deploy-context.ts": "6a63ae3ef8189c4be8da9354a64cbc828b965c13c059e6705a4a4214795387f0",
     "web-lookup-advisor.ts": "0ad144b1e18cfd5c3579ba666f868cd5ec231dd7a18833fa9bdd4819e12ee1e1"
+  },
+  "external": {
+    "scripts/github/lib/answer-key.mjs": {
+      "sha256": "49a0451170db358544ca66ddc35260463de2c1b19663a0ee85504d0bca1e972c"
+    },
+    "scripts/github/lib/answer-paths.mjs": {
+      "sha256": "e75f807c902a4fc1a192412f184d346e6b55c05c7b3ac96f46f9a00d722bda15"
+    },
+    "scripts/github/lib/decisions.mjs": {
+      "sha256": "db48a3ad5ffc8e6759fc630671d637192db97382c96cd309e1a387e7ada9d3f7"
+    },
+    "scripts/github/lib/file-lock.mjs": {
+      "sha256": "d7eb5d1a2106f9ade33806ad084d45b6aa727e267cca5ffcfbef3cfe0b275c41"
+    },
+    "scripts/github/lib/holdout-ids.mjs": {
+      "sha256": "a8f80cb8f5c71450a533ccdaee9789d9789385f259d38705ef2a36c1df8f7fef"
+    },
+    "scripts/github/lib/repo-identity.mjs": {
+      "sha256": "e0d573f05d6fe3dc403fe179f398fbef97c4c8273d2c58644c64e2a15357feb3"
+    },
+    "scripts/ratchets/lib/review-md.mjs": {
+      "sha256": "7aa0e85a921cd543a0dd42f2eef50b6a5c5d265d41ca01e7750fb47fad511cdc"
+    }
   }
 }

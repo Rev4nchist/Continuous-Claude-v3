@@ -1301,3 +1301,25 @@ describe('follow-ups (coord-hooks-followups items 4-8): removes take only our ow
     assert.deepEqual(readdirSync(d), ['x']);
   }));
 });
+
+describe('follow-ups (coord-hooks-followups PR B): the put-back never overwrites', () => {
+  it('N9. when the put-back link fails with another error and a new file took the path, the new file stays and the copy is kept aside (break: a rename fallback that replaces it; PR 654 CLI finding)', () => withTmp((d) => {
+    const f = join(d, 'x');
+    writeFileSync(f, 'old');
+    const link = () => { writeFileSync(f, 'new-of-another-session'); throw Object.assign(new Error('not permitted'), { code: 'EPERM' }); };
+    const r = H.removeIfOurs(f, (t) => t === 'mine', 'a', { link });
+    assert.equal(r, 'conflict');
+    assert.equal(readFileSync(f, 'utf8'), 'new-of-another-session');
+    const aside = readdirSync(d).filter((n) => n.startsWith('x.rm.a.'));
+    assert.equal(aside.length, 1, 'the moved copy stays on disk');
+    assert.equal(readFileSync(join(d, aside[0]), 'utf8'), 'old');
+  }));
+
+  it('N9b. when the put-back link fails with another error and the path is still free, the copy stays aside and the result is conflict (break: a silent rename back)', () => withTmp((d) => {
+    const f = join(d, 'x');
+    writeFileSync(f, 'old');
+    const r = H.removeIfOurs(f, (t) => t === 'mine', 'a', { link: () => { throw Object.assign(new Error('not permitted'), { code: 'EPERM' }); } });
+    assert.equal(r, 'conflict');
+    assert.equal(existsSync(f), false);
+  }));
+});

@@ -344,8 +344,10 @@ export function renameRetry(from, to, { rename = renameSync, sleep = sleepSync }
 /**
  * Removes `file` only while its text passes `isOurs`. A plain remove by path can delete a file that another session wrote a moment ago.
  * So the file is first renamed to a name only this process uses, read there, and then removed or put back. A put-back never overwrites:
- * when a new file took the path in between, the copy stays on disk. Returns 'removed', 'kept', 'gone' (no file) or 'conflict' (the copy stays).
- * `hooks.beforeRemove` (a test) runs before the rename.
+ * when a new file took the path in between, the copy stays on disk. A put-back link that fails for another reason (a directory, a
+ * file system with no hard links) also leaves the copy on disk: a rename back could replace a file that took the path in that moment.
+ * Returns 'removed', 'kept', 'gone' (no file) or 'conflict' (the copy stays as <file>.rm.<tag>.<pid>).
+ * `hooks.beforeRemove` (a test) runs before the rename; `hooks.link` (a test) replaces the put-back link.
  */
 export function removeIfOurs(file, isOurs, tag, hooks = {}) {
   if (hooks.beforeRemove) hooks.beforeRemove(file);
@@ -354,10 +356,8 @@ export function removeIfOurs(file, isOurs, tag, hooks = {}) {
   let text = null;
   try { text = readText(aside); } catch { text = null; }
   if (text !== null && isOurs(text)) { rmSync(aside, { force: true }); return 'removed'; }
-  try { linkSync(aside, file); } catch (e) {
-    if (e.code === 'EEXIST') return 'conflict';
-    renameRetry(aside, file);
-    return 'kept';
+  try { (hooks.link ?? linkSync)(aside, file); } catch {
+    return 'conflict';
   }
   rmSync(aside, { force: true });
   return 'kept';
