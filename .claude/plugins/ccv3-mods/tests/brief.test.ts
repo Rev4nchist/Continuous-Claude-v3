@@ -267,9 +267,9 @@ describe('applyBrief', () => {
     expect(brief.proofs[0]?.kind).toBe('task')
     // PRD 5.1: the task list is the plan source while it holds a task, so the unproven plan step no longer keeps the chip off done.
     // (Before the 5.1 fix this expected 'idle', because the chip weighed the plan step too.)
-    expect(deriveChip({ brief, tasks, toolRunning: false, turnActive: false, blocked: false, now: NOW })).toBe('done')
+    expect(deriveChip({ brief, tasks, toolRunning: false, turnActive: false, blocked: false, openAsks: 0, now: NOW })).toBe('done')
     // With no task the same plan step is the source, and its proof is missing.
-    expect(deriveChip({ brief, tasks: [], toolRunning: false, turnActive: false, blocked: false, now: NOW })).toBe('idle')
+    expect(deriveChip({ brief, tasks: [], toolRunning: false, turnActive: false, blocked: false, openAsks: 0, now: NOW })).toBe('idle')
   })
 
   test('A16 a secret in a task subject is not stored in the proof, and the proof still joins on it', () => {
