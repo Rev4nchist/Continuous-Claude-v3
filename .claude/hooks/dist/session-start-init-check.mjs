@@ -408,7 +408,9 @@ function loadBuildInputs(distDir) {
     if (parsed.version !== 1 || parsed.algorithm !== "sha256" || !parsed.inputs || typeof parsed.inputs !== "object") {
       return null;
     }
-    return { version: 1, algorithm: "sha256", inputs: parsed.inputs };
+    const ext = parsed.external;
+    const external = ext && typeof ext === "object" && !Array.isArray(ext) ? ext : {};
+    return { version: 1, algorithm: "sha256", inputs: parsed.inputs, external };
   } catch {
     return null;
   }
@@ -425,25 +427,41 @@ function assessFileFreshness(srcPath, srcRoot, manifest) {
   if (!recorded || recorded !== current) return { state: "stale" };
   return { state: "fresh" };
 }
-function assessTreeFreshness(srcRoot, distDir) {
+function staleExternalKeys(manifest, repoRoot) {
+  const stale = [];
+  for (const [key, recorded] of Object.entries(manifest.external)) {
+    let current = null;
+    try {
+      current = sha256(fs2.readFileSync(path.join(repoRoot, ...key.split("/"))));
+    } catch {
+      current = null;
+    }
+    if (current === null || typeof recorded?.sha256 !== "string" || current !== recorded.sha256) stale.push(key);
+  }
+  return stale.sort();
+}
+function assessTreeFreshness(srcRoot, distDir, repoRoot = path.resolve(srcRoot, "..", "..", "..")) {
   const srcFiles = listSrcFiles(srcRoot);
   const manifest = loadBuildInputs(distDir);
   if (!manifest) {
     return { state: "unknown", staleFiles: [], srcCount: srcFiles.length, info: MANIFEST_MISSING_INFO };
   }
   const staleFiles = srcFiles.filter((file) => assessFileFreshness(file, srcRoot, manifest).state === "stale");
+  const staleExternal = staleExternalKeys(manifest, repoRoot);
   return {
-    state: staleFiles.length > 0 ? "stale" : "fresh",
+    state: staleFiles.length + staleExternal.length > 0 ? "stale" : "fresh",
     staleFiles,
-    srcCount: srcFiles.length
+    srcCount: srcFiles.length + Object.keys(manifest.external).length,
+    staleExternal
   };
 }
 function formatStaleDistWarning(srcRoot, result) {
   if (result.state === "unknown") return result.info ?? MANIFEST_MISSING_INFO;
   if (result.state !== "stale") return null;
-  const names = result.staleFiles.slice(0, 3).map((file) => srcKey(srcRoot, file)).join(", ");
-  const more = result.staleFiles.length > 3 ? `, +${result.staleFiles.length - 3} more` : "";
-  return `[!] Hook dist/ is stale -- ${result.staleFiles.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/continuous-claude/.claude/hooks && npm run build`;
+  const all = [...result.staleFiles.map((file) => srcKey(srcRoot, file)), ...result.staleExternal ?? []];
+  const names = all.slice(0, 3).join(", ");
+  const more = all.length > 3 ? `, +${all.length - 3} more` : "";
+  return `[!] Hook dist/ is stale -- ${all.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/continuous-claude/.claude/hooks && npm run build`;
 }
 
 // src/shared/engine-host.ts
@@ -792,7 +810,7 @@ async function main() {
     const hookDistDir = path2.join(projectDir, ".claude", "hooks", "dist");
     if (fs3.existsSync(hookSrcDir) && fs3.existsSync(hookDistDir)) {
       try {
-        hookDistLine = formatStaleDistWarning(hookSrcDir, assessTreeFreshness(hookSrcDir, hookDistDir));
+        hookDistLine = formatStaleDistWarning(hookSrcDir, assessTreeFreshness(hookSrcDir, hookDistDir, projectDir));
       } catch {
       }
     }
@@ -869,11 +887,11 @@ Install relevant skills to enhance your work on this project.`
   console.log(JSON.stringify(output));
 }
 async function readStdin() {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => data += chunk);
-    process.stdin.on("end", () => resolve2(data));
+    process.stdin.on("end", () => resolve3(data));
   });
 }
 if ((process.argv[1] || "").includes("session-start-init-check")) {

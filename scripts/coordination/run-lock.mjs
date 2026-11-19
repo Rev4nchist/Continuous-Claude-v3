@@ -12,9 +12,20 @@
  *   gate.lock                   short exclusive file around every read-decide-write. It holds JSON {pid, pidStart, nonce}
  *                               of its holder. Only file work runs inside it: every process read runs BEFORE it.
  *   MODE                        "warn" or "grant". Missing or any other text: warn. Only the seat changes it.
+ *   LIMITS                      {"test": n, "heavy": n}: the pre-pr limits, which the seat can only LOWER (see readLimits). Missing: the code limits.
  *   warn-log.jsonl              one line per start that grant mode would have refused (counts for the warn days)
  *   break-log.jsonl             one line per break or CLI release: who, why (a break), and each removed file with its kind and holder. This log is
  *                               the whole control on break: a file store cannot check who runs it.
+ *
+ *   runs.jsonl                  one line per START and END of a pre-pr (logRun), with the wall time: the seat reads one file
+ *
+ * pre-pr phases (card prflow-prepr-speed): a pre-pr lock holds phase "test" (the gates, the only heavy part), "cr" (the CodeRabbit step, no
+ * local load) or "wait" (queued, no place) and a heavy flag (the change set runs the hooks-vitest gate). A pre-pr is granted when: at most 2
+ * pre-pr runs are in phase test, at most 1 of them heavy, free memory is 5 GB or more and load is under 70 on two reads 30 seconds apart
+ * (the second read is skipped with the test hook), no older waiter exists, and the 2 minute spacing has passed. A lock with no phase field
+ * (old code) and an UNLOCKED RUN count as a heavy run in phase test. A refused pre-pr in grant mode that asks to wait (waitForGrant) leaves
+ * a wait record under the file name of its future lock; grants go to the oldest wait record first. setPhase changes the phase of one lock
+ * (temp file and rename). The V7.3 tiers (maxSlots) stay for the other heavy kinds. MODE is never written by this file: the seat sets it.
  *
  * Test hook: RUN_LOCK_TEST_SAMPLES='{"free":[8,8,8],"load":[10,10,10]}' replaces the three real samples (no 6 second wait).
  * It works only when RUN_LOCK_DIR is set to a test store: not unset, and not the default store. An output line says when it
@@ -62,7 +73,7 @@ export const CAVEAT = 'NOTE GRANTED is not safe from a move of main: pre-pr.mjs 
 
 /** Run kinds. heavy: takes a slot (V7.3). A light kind needs no slot, only the load bar. loadMax: refused at a median load at or above it. */
 export const KINDS = {
-  'pre-pr': { heavy: true, loadMax: 70, minutes: 45 },
+  'pre-pr': { heavy: true, loadMax: 70, minutes: 60 }, // gates 15 + CodeRabbit step 30 + margin
   suite: { heavy: true, loadMax: 70, minutes: 30 },
   'label-run': { heavy: true, loadMax: 70, minutes: 90 },
   loop: { heavy: true, loadMax: 70, minutes: 720 }, // 12 hours: a loop runs long, and register renews the lock
@@ -75,6 +86,28 @@ export function maxSlots(freeGB) {
   if (freeGB >= 7) return 3;
   return 2;
 }
+
+/** pre-pr phases: test (the gates, the only heavy part), cr (the CodeRabbit step, no local load), wait (queued, no place). */
+export const PHASES = ['test', 'cr', 'wait'];
+const PRE_PR_TEST_LIMIT = 2; // version 17: at most 2 pre-pr runs in the test phase
+const PRE_PR_HEAVY_LIMIT = 1; // ... and at most 1 of them heavy (it runs the hooks-vitest gate)
+const PRE_PR_MIN_FREE_GB = 5;
+const SECOND_READ_MS = 30_000; // a pre-pr is granted only when two reads this far apart both pass
+const WAIT_RECORD_MIN = 10; // a wait record is renewed at every retry: a waiter that is alive keeps it
+const WAIT_LIMIT_MS = 60 * MIN;
+const WAIT_MIN_SLEEP_MS = 30_000;
+/** A waiter never sleeps this long or longer: its wait record lives WAIT_RECORD_MIN, and an expired record loses the queue place. */
+export const WAIT_MAX_SLEEP_MS = 5 * MIN;
+
+/** How long a waiter sleeps before it asks again: until the retry time, at least 30 s, at most WAIT_MAX_SLEEP_MS and never past the time left. */
+export const waitSleepMs = (retryAt, now, left) => Math.min(left, WAIT_MAX_SLEEP_MS, Math.max(WAIT_MIN_SLEEP_MS, retryAt - now));
+/** A pre-pr lock with no phase field is old code: it counts as a heavy run in phase test (it fails toward waiting). */
+const phaseOf = (r) => (r.kind === 'pre-pr' ? r.phase ?? 'test' : null);
+const heavyOf = (r) => (r.phase === undefined ? true : r.heavy === true);
+const isPrePrTest = (r) => r.kind === 'pre-pr' && phaseOf(r) === 'test';
+const isWaiter = (r) => r.kind === 'pre-pr' && r.phase === 'wait';
+/** A run that takes a V7.3 slot of another kind: heavy, and not a pre-pr outside its test phase. */
+const takesSlot = (r) => KINDS[r.kind]?.heavy && (r.kind !== 'pre-pr' || phaseOf(r) === 'test');
 
 const median = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
 const num = (n) => Number(Number(n).toFixed(1));
@@ -201,6 +234,23 @@ function defaults(deps = {}) {
 const readMode = (dir) => {
   try { return readFileSync(join(dir, 'MODE'), 'utf8').trim().toLowerCase() === 'grant' ? 'grant' : 'warn'; } catch { return 'warn'; }
 };
+/** The MODE of a store: 'grant' or 'warn'. Any other text, or a missing file, is warn. */
+export const lockMode = (dir = defaultDir()) => readMode(dir);
+
+/**
+ * The pre-pr limits in force: { test, heavy, source }. Only the seat writes the LIMITS file ({"test": n, "heavy": n}), and it can only LOWER
+ * the code limits: each value a whole number from 1 to its code limit, heavy not above test. Any other content (a raise, under 1, a
+ * non-integer, heavy above test, bad JSON) gives 1 and 1: a bad file fails toward fewer runs. No file gives the code limits. Read at each acquire.
+ */
+export function readLimits(dir = defaultDir()) {
+  let text;
+  try { text = readFileSync(join(dir, 'LIMITS'), 'utf8'); } catch { return { test: PRE_PR_TEST_LIMIT, heavy: PRE_PR_HEAVY_LIMIT, source: 'code' }; }
+  let v = null;
+  try { v = JSON.parse(text); } catch { /* bad JSON: the fallback below */ }
+  const ok = (n, max) => Number.isInteger(n) && n >= 1 && n <= max;
+  if (v && typeof v === 'object' && ok(v.test, PRE_PR_TEST_LIMIT) && ok(v.heavy, PRE_PR_HEAVY_LIMIT) && v.heavy <= v.test) return { test: v.test, heavy: v.heavy, source: 'LIMITS file' };
+  return { test: 1, heavy: 1, source: 'LIMITS file not valid, so 1 and 1' };
+}
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 const appendLine = (dir, name, obj) => appendFileSync(join(dir, name), `${JSON.stringify(obj)}\n`);
 
@@ -364,6 +414,7 @@ function writeLock(d, kind, opts, start, now) {
   const rec = {
     kind, pid: opts.pid, pidStart: start, holder: opts.holder || 'unknown', head: opts.head || null, session: sessionLabel(opts, d),
     startedAt: now, expiresAt: now + (opts.minutes || KINDS[kind].minutes) * MIN,
+    ...(kind === 'pre-pr' ? { heavy: opts.heavy === true, phase: opts.phase || 'test' } : {}),
   };
   const file = `${kind}-${opts.pid}-${start}.lock`;
   writeFileSync(join(d.dir, file), JSON.stringify(rec, null, 1));
@@ -391,7 +442,58 @@ function checkMinutes(minutes) {
   if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0) throw new Error(`--minutes must be a finite number above 0 (got ${minutes})`);
 }
 
-/** Ask for a slot. Returns { granted, warned, lines, retryAt, reasons, file }. Throws on an unknown kind or a dead pid. */
+/** Median free memory (GB) and load (percent) of one read. */
+const readOf = (s) => ({ freeGB: median(s.free), loadPct: median(s.load) });
+const readPasses = (r, kind) => r.loadPct < kind.loadMax && r.freeGB >= PRE_PR_MIN_FREE_GB;
+
+/**
+ * The machine read of an acquire. A pre-pr is granted only when two reads 30 seconds apart both pass (a load spike must not slip
+ * through between two samples). The second read is skipped when the first already refuses, and when the samples come from the test
+ * hook. The worst of the reads is used.
+ */
+async function machineRead(d, opts, kind) {
+  const first = readOf(await d.samples());
+  if (opts.kind !== 'pre-pr' || d.samplesHooked || !readPasses(first, kind)) return first;
+  await d.sleep(SECOND_READ_MS);
+  const second = readOf(await d.samples());
+  return { freeGB: Math.min(first.freeGB, second.freeGB), loadPct: Math.max(first.loadPct, second.loadPct) };
+}
+
+/** The refusals of version 17 for a pre-pr: places in the test phase, heavy places, free memory, older waiters. */
+function prePrRefusals({ opts, live, unlocked, own, now, freeGB, refuse, limits }) {
+  const tests = live.filter(isPrePrTest);
+  const inTest = tests.length + unlocked.length;
+  const heavyTest = tests.filter(heavyOf).length + unlocked.length;
+  if (freeGB < PRE_PR_MIN_FREE_GB && !live.some((r) => r.kind === 'loop')) refuse('memory', `free memory ${num(freeGB)} GB under ${PRE_PR_MIN_FREE_GB} GB`);
+  if (inTest >= limits.test) refuse('slots', `${inTest} pre-pr runs in the test phase, the limit in force is ${limits.test} (${limits.source})`);
+  if (opts.heavy === true && heavyTest >= limits.heavy) refuse('heavy', `${heavyTest} heavy pre-pr run in the test phase (it runs the hooks-vitest gate), the heavy limit in force is ${limits.heavy} (${limits.source})`);
+  const since = own?.waitSince ?? now;
+  const orderOf = (r) => r.waitSince ?? r.startedAt;
+  const older = live.filter((r) => isWaiter(r) && r.pid !== opts.pid && (orderOf(r) < since || (orderOf(r) === since && r.pid < opts.pid)));
+  if (older.length) refuse('queue', `${older.length} older waiter(s) come first (pid ${older.map((r) => r.pid).join(', ')})`);
+}
+
+/**
+ * The V7.3 loop floor and tiers, for every heavy kind. A pre-pr counts as a slot only in its test phase. A pre-pr has its own
+ * limits above, and this ceiling stays on top of them.
+ */
+function tierRefusals({ opts, kind, live, unlocked, freeGB, refuse }) {
+  if (!kind.heavy) return;
+  const heavyLive = live.filter(takesSlot).length + unlocked.length;
+  const max = maxSlots(freeGB);
+  if (freeGB < 5 && live.some((r) => r.kind === 'loop')) refuse('floor', `free memory ${num(freeGB)} GB under 5 GB while a loop is live`);
+  else if (heavyLive >= max) refuse('slots', `${heavyLive} live heavy runs, V7.3 allows ${max} at ${num(freeGB)} GB`);
+}
+
+/** The wait record of a refused pre-pr in grant mode: it takes no place, it holds the queue order. Same file name as the lock it becomes. */
+function writeWaitRecord(d, opts, pid, start, own, now) {
+  const file = `pre-pr-${pid}-${start}.lock`;
+  const rec = { kind: 'pre-pr', pid, pidStart: start, holder: opts.holder || 'unknown', head: opts.head || null, session: sessionLabel(opts, d), startedAt: now, expiresAt: now + WAIT_RECORD_MIN * MIN, heavy: opts.heavy === true, phase: 'wait', waitSince: own?.waitSince ?? now };
+  writeFileSync(join(d.dir, file), JSON.stringify(rec, null, 1));
+  return file;
+}
+
+/** Ask for a slot. Returns { granted, warned, lines, retryAt, reasons, file, freeGB, loadPct }. Throws on an unknown kind or a dead pid. opts.wait (grant mode, pre-pr): a refusal leaves a wait record. */
 export async function acquire(opts, deps) {
   const d = defaults(deps);
   const kind = knownKind(opts.kind);
@@ -399,9 +501,7 @@ export async function acquire(opts, deps) {
   const pid = opts.pid ?? d.selfPid;
   const start = d.pidStart(pid);
   if (start === null) throw new Error(`pid ${pid} is not running`);
-  const s = await d.samples();
-  const freeGB = median(s.free);
-  const loadPct = median(s.load);
+  const { freeGB, loadPct } = await machineRead(d, opts, kind);
   const selfStart = pid === d.selfPid ? start : d.pidStart(d.selfPid);
   const starts = startsSnapshot(d);
   const procs = d.prePrProcs();
@@ -410,17 +510,15 @@ export async function acquire(opts, deps) {
     const mode = readMode(d.dir);
     const live = sweep(d, starts);
     const unlocked = unlockedRuns(d, live, procs);
-    const heavyLive = live.filter((r) => KINDS[r.kind]?.heavy).length + unlocked.length;
-    const max = maxSlots(freeGB);
+    const own = live.find((r) => isWaiter(r) && r.pid === pid);
     const keys = [];
     const reasons = [];
     const refuse = (key, text) => { keys.push(key); reasons.push(text); };
     if (loadPct >= kind.loadMax) refuse('load', `load ${loadPct} percent (limit ${kind.loadMax} percent for ${opts.kind})`);
-    if (kind.heavy) {
-      // V7.3: under 5 GB a heavy start waits only while a loop is live (a registered loop counts); otherwise the slot tiers apply.
-      if (freeGB < 5 && live.some((r) => r.kind === 'loop')) refuse('floor', `free memory ${num(freeGB)} GB under 5 GB while a loop is live`);
-      else if (heavyLive >= max) refuse('slots', `${heavyLive} live heavy runs, V7.3 allows ${max} at ${num(freeGB)} GB`);
-    }
+    if (opts.kind === 'pre-pr') prePrRefusals({ opts: { ...opts, pid }, live, unlocked, own, now, freeGB, refuse, limits: readLimits(d.dir) });
+    tierRefusals({ opts, kind, live, unlocked, freeGB, refuse });
+    const heavyLive = live.filter(takesSlot).length + unlocked.length;
+    const max = maxSlots(freeGB);
     const lastRec = readJson(join(d.dir, 'last-grant.json'));
     const lastAt = lastRec && Number.isFinite(lastRec.at) && lastRec.at <= now + FUTURE_SKEW_MS ? lastRec.at : null; // a time far in the future is a bad file
     // The spacing is for a heavy start only. A light kind (hook-build) is governed by the load bar alone.
@@ -429,8 +527,10 @@ export async function acquire(opts, deps) {
     const lines = unlocked.length ? [unlockedLine(unlocked)] : [];
     if (d.samplesHooked) lines.unshift('NOTE samples come from RUN_LOCK_TEST_SAMPLES (a test hook), not from the machine');
     const wait = `${reasons.join('; ')}; try again after ${clockText(retryAt, d.timeZone)}`;
+    const read = { freeGB: num(freeGB), loadPct };
     if (reasons.length && mode === 'grant') {
-      return { granted: false, warned: false, lines: [...lines, `WAIT ${wait}`, CAVEAT], retryAt, reasons, keys };
+      const waitFile = opts.wait && opts.kind === 'pre-pr' ? writeWaitRecord(d, opts, pid, start, own, now) : undefined;
+      return { granted: false, warned: false, lines: [...lines, `WAIT ${wait}`, CAVEAT], retryAt, reasons, keys, waitFile, ...read };
     }
     // The warn log comes first: a failed append then leaves no lock and no last-grant behind.
     if (reasons.length) {
@@ -442,8 +542,55 @@ export async function acquire(opts, deps) {
     if (kind.heavy) writeFileSync(join(d.dir, 'last-grant.json'), JSON.stringify({ at: now, kind: opts.kind, pid }));
     const slot = kind.heavy ? `slot ${heavyLive + 1} of ${max}` : 'no slot needed';
     lines.push(`GRANTED ${opts.kind} ${slot} (free ${num(freeGB)} GB, load ${loadPct} percent, mode ${mode})`, CAVEAT);
-    return { granted: true, warned: reasons.length > 0, lines, file, mode, reasons, keys };
+    return { granted: true, warned: reasons.length > 0, lines, file, mode, reasons, keys, ...read };
   });
+}
+
+/**
+ * Acquire and, in grant mode, wait for a place: ask again at the retry time until a grant or maxMs (60 minutes) pass. A timeout is
+ * { granted: false, exit: 75 } and the wait record is removed. The caller frees the lock as before. Warn mode never waits (it grants).
+ * opts may be a function: it is called at every attempt, so facts that change while we wait (the head, the heavy flag) are read again.
+ */
+export async function waitForGrant(opts, deps, { maxMs = WAIT_LIMIT_MS } = {}) {
+  const d = defaults(deps);
+  const began = d.now();
+  for (;;) {
+    const now = typeof opts === 'function' ? opts() : opts;
+    const r = await acquire({ ...now, wait: true }, deps);
+    if (r.granted) return r;
+    const left = maxMs - (d.now() - began);
+    if (left <= 0) {
+      releaseSync({ pid: now.pid ?? d.selfPid, kind: now.kind }, deps);
+      return { ...r, timedOut: true, exit: EXIT_WAIT };
+    }
+    await d.sleep(waitSleepMs(r.retryAt, d.now(), left));
+  }
+}
+
+/**
+ * Change the phase of a pre-pr lock, synchronously: file work only, written to a temp file and renamed over the lock. The lock is found
+ * by its file name (kind, pid and start time), so a reused pid with another start time is not the holder; the record must also name the
+ * pid. { changed: false } when the file is not there or is not ours.
+ */
+export function setPhase(opts, deps) {
+  const d = defaults(deps);
+  if (!PHASES.includes(opts.phase)) throw new Error(`unknown phase "${opts.phase}" (known: ${PHASES.join(', ')})`);
+  const name = opts.file ?? `pre-pr-${opts.pid}-${d.pidStart(opts.pid)}.lock`;
+  const file = join(d.dir, basename(name));
+  const rec = readJson(file);
+  if (!rec || rec.pid !== opts.pid || rec.kind !== 'pre-pr') return { changed: false };
+  const temp = `${file}.tmp-${randomUUID()}`;
+  try { writeFileSync(temp, JSON.stringify({ ...rec, phase: opts.phase }, null, 1)); renameSync(temp, file); } catch (err) {
+    try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ }
+    throw err;
+  }
+  return { changed: true };
+}
+
+/** One row in runs.jsonl (START and END of a pre-pr, with the wall time), so the seat reads one file. A failed write never stops the run. */
+export function logRun(row, deps) {
+  const d = defaults(deps);
+  try { mkdirSync(d.dir, { recursive: true }); appendLine(d.dir, 'runs.jsonl', { ts: d.now(), ...row }); } catch { /* a log problem never stops the run */ }
 }
 
 /** Record a run that already runs (a loop, a label run). Nothing is refused: it is running. It counts as a slot. */
@@ -525,7 +672,7 @@ export async function list(deps) {
   const live = await sweepGated(d, starts);
   const unlocked = unlockedRuns(d, live, procs);
   const lines = [`mode: ${readMode(d.dir)}`, `store: ${d.dir}`];
-  for (const r of live) lines.push(`${r.kind} pid ${r.pid} holder ${r.holder}${r.session ? ` session ${r.session}` : ''} since ${clockText(r.startedAt, d.timeZone, false)} until ${clockText(r.expiresAt, d.timeZone)}`);
+  for (const r of live) lines.push(`${r.kind} pid ${r.pid} holder ${r.holder}${r.session ? ` session ${r.session}` : ''}${r.phase ? ` phase ${r.phase}` : ''} since ${clockText(r.startedAt, d.timeZone, false)} until ${clockText(r.expiresAt, d.timeZone)}`);
   if (!live.length) lines.push('no live lock');
   if (unlocked.length) lines.push(unlockedLine(unlocked));
   lines.push(CAVEAT);

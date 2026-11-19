@@ -178,6 +178,8 @@ opc/docker-compose.memory.yml
 .claude/hooks/src/tldr-read-enforcer.backup.ts
 .claude/hooks/dist/tldr-read-enforcer.backup.mjs
 .claude/hooks/.tldrignore
+# esbuild metafile of the hooks build: read by scripts/write-build-inputs.mjs (dist/.build-inputs.json "external"), never committed.
+.claude/hooks/.build-meta.json
 .claude/hooks/src/.tldrignore
 opc/scripts/.tldrignore
 .tldrignore

@@ -32,6 +32,8 @@ describe('dist/.build-inputs.json line endings', () => {
       const tempHooks = join(repo, '.claude', 'hooks');
       mkdirSync(join(tempHooks, 'src'), { recursive: true });
       writeFileSync(join(tempHooks, 'src', 'a.ts'), 'export const a = 1;\n');
+      // The writer needs the esbuild metafile (item 14: no metafile = exit 1). Committed here so git status stays clean.
+      writeFileSync(join(tempHooks, '.build-meta.json'), JSON.stringify({ inputs: { 'src/a.ts': {} }, outputs: {} }));
       execFileSync('node', [writer, tempHooks]);
       git(repo, 'add', '-A');
       git(repo, 'commit', '-q', '-m', 'init');

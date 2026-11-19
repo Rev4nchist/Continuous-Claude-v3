@@ -27,12 +27,16 @@ export interface BuildInputsManifest {
   version: 1;
   algorithm: 'sha256';
   inputs: Record<string, string>;
+  /** Files the bundler read from outside src (item 14): repo-relative posix path to { sha256 }. Empty for an older manifest. */
+  external: Record<string, { sha256: string }>;
 }
 
 export interface TreeFreshness {
   state: 'fresh' | 'stale' | 'unknown';
   staleFiles: string[];
   srcCount: number;
+  /** Repo-relative keys of the external inputs that changed or are missing, sorted. */
+  staleExternal?: string[];
   info?: string;
 }
 
@@ -79,7 +83,9 @@ export function loadBuildInputs(distDir: string): BuildInputsManifest | null {
     if (parsed.version !== 1 || parsed.algorithm !== 'sha256' || !parsed.inputs || typeof parsed.inputs !== 'object') {
       return null;
     }
-    return { version: 1, algorithm: 'sha256', inputs: parsed.inputs };
+    const ext = parsed.external;
+    const external = ext && typeof ext === 'object' && !Array.isArray(ext) ? ext : {};
+    return { version: 1, algorithm: 'sha256', inputs: parsed.inputs, external };
   } catch {
     return null;
   }
@@ -102,24 +108,46 @@ export function assessFileFreshness(
   return { state: 'fresh' };
 }
 
-export function assessTreeFreshness(srcRoot: string, distDir: string): TreeFreshness {
+/**
+ * The external inputs of the manifest whose file under `repoRoot` changed or is missing, sorted.
+ * The caller names the repo root: it is the tree the bundle was built from, never ~/.claude.
+ */
+export function staleExternalKeys(manifest: BuildInputsManifest, repoRoot: string): string[] {
+  const stale: string[] = [];
+  for (const [key, recorded] of Object.entries(manifest.external)) {
+    let current: string | null = null;
+    try {
+      current = sha256(fs.readFileSync(path.join(repoRoot, ...key.split('/'))));
+    } catch {
+      current = null;
+    }
+    if (current === null || typeof recorded?.sha256 !== 'string' || current !== recorded.sha256) stale.push(key);
+  }
+  return stale.sort();
+}
+
+/** `repoRoot` is the repo the hooks were built in; by default the folder three levels above `srcRoot` (<repo>/.claude/hooks/src). */
+export function assessTreeFreshness(srcRoot: string, distDir: string, repoRoot: string = path.resolve(srcRoot, '..', '..', '..')): TreeFreshness {
   const srcFiles = listSrcFiles(srcRoot);
   const manifest = loadBuildInputs(distDir);
   if (!manifest) {
     return { state: 'unknown', staleFiles: [], srcCount: srcFiles.length, info: MANIFEST_MISSING_INFO };
   }
   const staleFiles = srcFiles.filter(file => assessFileFreshness(file, srcRoot, manifest).state === 'stale');
+  const staleExternal = staleExternalKeys(manifest, repoRoot);
   return {
-    state: staleFiles.length > 0 ? 'stale' : 'fresh',
+    state: staleFiles.length + staleExternal.length > 0 ? 'stale' : 'fresh',
     staleFiles,
-    srcCount: srcFiles.length,
+    srcCount: srcFiles.length + Object.keys(manifest.external).length,
+    staleExternal,
   };
 }
 
 export function formatStaleDistWarning(srcRoot: string, result: TreeFreshness): string | null {
   if (result.state === 'unknown') return result.info ?? MANIFEST_MISSING_INFO;
   if (result.state !== 'stale') return null;
-  const names = result.staleFiles.slice(0, 3).map(file => srcKey(srcRoot, file)).join(', ');
-  const more = result.staleFiles.length > 3 ? `, +${result.staleFiles.length - 3} more` : '';
-  return `[!] Hook dist/ is stale -- ${result.staleFiles.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/continuous-claude/.claude/hooks && npm run build`;
+  const all = [...result.staleFiles.map(file => srcKey(srcRoot, file)), ...(result.staleExternal ?? [])];
+  const names = all.slice(0, 3).join(', ');
+  const more = all.length > 3 ? `, +${all.length - 3} more` : '';
+  return `[!] Hook dist/ is stale -- ${all.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/continuous-claude/.claude/hooks && npm run build`;
 }
