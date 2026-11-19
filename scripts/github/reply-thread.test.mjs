@@ -8,7 +8,7 @@
 // file, so no shell variable reaches the body.
 //
 // How the helper can fail, and the test that catches it (written before the code):
-//   the body goes on the command line (-f body=<text>) instead of -F body=@<file>      -> RT1
+//   the body goes on the command line (-f body=<text>) instead of -F body=@- (stdin)    -> RT1
 //   the call goes to the wrong endpoint or method                                      -> RT1
 //   a garbled "System.Collections.Hashtable..." body is posted                         -> RT2
 //   an empty body or an unreadable file is posted                                      -> RT3
@@ -29,16 +29,19 @@ const ARGV = ['225', '4425309812', '--body-file', 'C:\\tmp\\reply.md'];
 /** Fake deps: records every gh call; `files` maps path -> text. */
 function fakes({ files = { 'C:\\tmp\\reply.md': 'Fixed in eb370b2e: it now checks both.\n' }, gh } = {}) {
   const calls = [];
+  const inputs = [];
   const out = [];
   const err = [];
   return {
     calls,
+    inputs,
     out,
     err,
     deps: {
-      runGh: (args) => {
+      runGh: (args, input) => {
         calls.push(args);
-        if (gh) return gh(args);
+        inputs.push(input);
+        if (gh) return gh(args, input);
         return JSON.stringify({ id: 777, html_url: 'https://github.com/o/r/pull/225#discussion_r777' });
       },
       readFile: (p) => {
@@ -51,7 +54,7 @@ function fakes({ files = { 'C:\\tmp\\reply.md': 'Fixed in eb370b2e: it now check
   };
 }
 
-test('RT1: the body travels as -F body=@<file>, to the replies endpoint, by POST', () => {
+test('RT1: the body travels as -F body=@- (stdin), to the replies endpoint, by POST', () => {
   const f = fakes();
   assert.equal(RT.main(ARGV, f.deps), 0);
   assert.equal(f.calls.length, 1);
@@ -59,7 +62,8 @@ test('RT1: the body travels as -F body=@<file>, to the replies endpoint, by POST
   assert.equal(a[0], 'api');
   assert.ok(a.includes('repos/Rev4nchist/Continuous-Claude-v3/pulls/225/comments/4425309812/replies'));
   assert.equal(a[a.indexOf('-X') + 1], 'POST');
-  assert.equal(a[a.indexOf('-F') + 1], 'body=@C:\\tmp\\reply.md');
+  assert.equal(a[a.indexOf('-F') + 1], 'body=@-');
+  assert.equal(f.inputs[0], 'Fixed in eb370b2e: it now checks both.\n', 'the file text goes to gh on stdin');
   assert.ok(!a.includes('-f'), 'no -f: the text never goes on the command line');
   assert.ok(!a.some((x) => x.includes('Fixed in')), 'the reply text is not an argument');
 });
@@ -166,7 +170,7 @@ test('RT6: success prints one line with the new comment id and URL', () => {
 //   a failed or id-less gh reply prints a success line                                  -> RT12
 const TOP = ['225', '--top', '--body-file', 'C:\\tmp\\reply.md'];
 
-test('RT8: --top posts the file to the issue comments endpoint by POST, as -F body=@<file>', () => {
+test('RT8: --top posts the file text to the issue comments endpoint by POST, as -F body=@- (stdin)', () => {
   const f = fakes();
   assert.equal(RT.main(TOP, f.deps), 0);
   assert.equal(f.calls.length, 1);
@@ -175,7 +179,8 @@ test('RT8: --top posts the file to the issue comments endpoint by POST, as -F bo
   assert.ok(a.includes('repos/Rev4nchist/Continuous-Claude-v3/issues/225/comments'));
   assert.ok(!a.some((x) => x.includes('/pulls/') || x.includes('/replies')), 'not the review-thread endpoint');
   assert.equal(a[a.indexOf('-X') + 1], 'POST');
-  assert.equal(a[a.indexOf('-F') + 1], 'body=@C:\\tmp\\reply.md');
+  assert.equal(a[a.indexOf('-F') + 1], 'body=@-');
+  assert.equal(f.inputs[0], 'Fixed in eb370b2e: it now checks both.\n');
   assert.ok(!a.includes('-f'), 'no -f: the text never goes on the command line');
   assert.equal(f.out.join(''), 'commented 777 https://github.com/o/r/pull/225#discussion_r777\n');
 });
@@ -258,6 +263,28 @@ test('RT13: the usage line shows both modes', () => {
   RT.main([], f.deps);
   assert.match(f.err.join(''), /<pr> <comment-id> --body-file <file>/);
   assert.match(f.err.join(''), /<pr> --top --body-file <file>/);
+});
+
+// ---- F11: the text that was checked is the text that is sent. Written before the code. ----
+// How it can fail, and the test that catches it:
+//   gh reads the file again (-F body=@<file>), so a writer can swap the text after the check   -> RT14
+//   the file is read twice (once to check, once to send)                                       -> RT14
+test('RT14: the body gh receives is the exact text that was checked, even if the file is rewritten after the check', () => {
+  const CHECKED = 'Fixed in eb370b2e: it now checks both.\n';
+  const SWAPPED = '@coderabbitai review --use-credits\n';
+  for (const argv of [ARGV, TOP]) {
+    let reads = 0;
+    const f = fakes();
+    // A background writer: the first read gets the checked text, every later read gets the paid text.
+    f.deps.readFile = () => (reads++ === 0 ? CHECKED : SWAPPED);
+    assert.equal(RT.main(argv, f.deps), 0, argv.join(' '));
+    assert.equal(f.calls.length, 1);
+    const a = f.calls[0];
+    assert.equal(a[a.indexOf('-F') + 1], 'body=@-', 'gh reads the body from stdin, not from the file path');
+    assert.ok(!a.some((x) => x.includes('reply.md')), 'the file path is not an argument');
+    assert.equal(f.inputs[0], CHECKED, 'stdin is the checked text');
+    assert.equal(reads, 1, 'the file is read once');
+  }
 });
 
 test('RT7: a real process with no arguments exits 2 with a usage line', () => {

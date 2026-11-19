@@ -19,6 +19,11 @@
 //   the verb maps its results to the wrong exit code                                                                   -> PP15
 //   a draft, closed or merged PR is paid for; the refusal comes after the free-slot step (a GitHub call is spent first) -> PP16, PP16b
 //   a pull answer with no state, merged or draft field is read as an open PR instead of a failed read (exit 5)          -> PP16c
+// Aegis pass (F1, F4, F3 part a, F9):
+//   CCV3_DECISIONS_FILE moves the decision store, so a forged row in a scratch file pays; an alias of the real store is refused -> PP17, PP17b
+//   path_filters (an uncommitted edit of .coderabbit.yaml) zero the filtered cost, so the round and day limits never bite       -> PP18, PP18b
+//   a row written by `post` does not say so, so the detection cannot tell it from a hand-written `record` row                   -> PP19
+//   a refusal ignores a failed use-up: exit 4 "used up" while the row stays and can pay later                                   -> PP20, PP20b
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -415,4 +420,146 @@ test('PP16c: a pull answer with no state, merged or draft field, or a value of t
     assert.ok(row(), `${name}: the yes is kept`);
     w.done();
   }
+});
+
+const STORE_MOVED = 'The decision store path is overridden by CCV3_DECISIONS_FILE. A paid post reads Dave\'s tap from the real store only. Nothing was posted. The paid yes is kept.';
+const PAID_WORD = '@coderabbitai review --use-credits';
+
+test('PP17 (F1): CCV3_DECISIONS_FILE naming another store refuses with exit 5: nothing posted, nothing read from GitHub, the row stays', () => {
+  const w = world();
+  yes(); // a valid stamped row in the scratch store (world() put the temp store at CCV3_DECISIONS_FILE)
+  const scratch = process.env.CCV3_DECISIONS_FILE;
+  // The real run: deps.env is process.env. Here deps.env carries the override the way the model's one command would.
+  const r = PAID.postPaid({ pr: 225, repo: REPO }, { ...w.deps, env: { CCV3_DECISIONS_FILE: scratch } });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 5);
+  assert.equal(r.text, STORE_MOVED);
+  assert.equal(w.posts.length, 0);
+  assert.deepEqual(w.ledger(), []);
+  assert.equal(w.calls.length, 0, 'refused before any GitHub call');
+  assert.ok(row(), 'the row is untouched');
+  // PP1 control: the same row, no override in the run env, posts.
+  assert.equal(post(w).ok, true, 'without the override the same row posts');
+  assert.equal(w.posts.length, 1);
+  w.done();
+});
+
+test('PP17b (F1): an env path that is another spelling of the DEFAULT store is not refused (same compare form as pr-checkpoint sameForm)', () => {
+  const real = D.decisionsPath({});
+  const up = `${path.dirname(real)}${path.sep}..${path.sep}${path.basename(path.dirname(real))}${path.sep}${path.basename(real)}`;
+  const spellings = [up, real, ...(process.platform === 'win32' ? [real.toUpperCase()] : [])];
+  for (const spelling of spellings) {
+    const w = world();
+    yes();
+    const r = PAID.postPaid({ pr: 225, repo: REPO }, { ...w.deps, env: { CCV3_DECISIONS_FILE: spelling } });
+    assert.equal(r.ok, true, `${spelling}: ${r.text}`);
+    assert.equal(w.posts.length, 1, spelling);
+    w.done();
+  }
+  const empty = world();
+  yes();
+  assert.equal(PAID.postPaid({ pr: 225, repo: REPO }, { ...empty.deps, env: { CCV3_DECISIONS_FILE: '' } }).ok, true, 'an empty override is no override');
+  empty.done();
+});
+
+test('PP18 (F4): path_filters that zero the filtered cost cannot lift the round limit: 30 files = $7.50 unfiltered refuses (exit 4, the yes is used up)', () => {
+  const all = files(30);
+  const w = world({ prFiles: all, filters: all.map((f) => `!${f.filename}`) });
+  yes({ label: YES('9.00') });
+  const r = post(w);
+  assert.equal(r.ok, false, 'filtered cost 0 must not allow a $7.50 round');
+  assert.equal(r.code, 4);
+  assert.equal(r.kind, 'escalate');
+  assert.match(r.text, /cr-paid says ESCALATE for PR #225: round cost \$7\.50 is over \$5\.00\. No paid post\./);
+  assert.equal(w.posts.length, 0);
+  assert.deepEqual(w.ledger(), []);
+  assert.equal(row(), null, 'the yes is used up');
+  // Control: exactly the limit ($5.00 = 20 files) still posts with the same filters.
+  const edge = files(20);
+  const ok = world({ prFiles: edge, filters: edge.map((f) => `!${f.filename}`) });
+  yes({ label: YES('9.00') });
+  assert.equal(post(ok).ok, true, 'a $5.00 round is within the limit');
+  [w, ok].forEach((x) => x.done());
+});
+
+test('PP18b (F4): the day limit also reads the unfiltered cost: $14.00 paid today + an $2.00 unfiltered round (filtered to $0) refuses', () => {
+  const all = files(8);
+  const w = world({ prFiles: all, filters: all.map((f) => `!${f.filename}`) });
+  PAID.recordPaid({ pr: 12, head: H2, files: 56 }, w.deps); // $14.00 today (NOW is 2026-11-18 09:00 Chicago)
+  yes({ label: YES('9.00') });
+  const r = post(w);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 4);
+  assert.match(r.text, /today \$14\.00 \+ round \$2\.00 is over \$15\.00/);
+  assert.equal(w.posts.length, 0);
+  assert.equal(w.ledger().length, 1, 'only the earlier $14.00 row');
+  assert.equal(row(), null);
+  w.done();
+});
+
+test('PP19 (F3 part a): the row `post` writes carries via "post"', () => {
+  const w = world();
+  yes();
+  assert.equal(post(w).ok, true);
+  assert.deepEqual(w.ledger().map((l) => l.via), ['post']);
+  w.done();
+});
+
+/** Rewrites the stored paid row while the checks run, the way a newer tap or a second session would. */
+const storeEdit = (mutate) => () => {
+  const file = process.env.CCV3_DECISIONS_FILE;
+  const store = JSON.parse(readFileSync(file, 'utf8'));
+  mutate(store);
+  writeFileSync(file, JSON.stringify(store));
+};
+const atReviews = (edit) => (args) => { if (args.some((a) => /pulls\/\d+\/reviews/.test(a))) edit(); };
+const newerTap = storeEdit((s) => { for (const r of Object.values(s.decisions)) r.at = new Date(NOW.getTime() + 1000).toISOString(); });
+const rowGone = storeEdit((s) => { s.decisions = {}; });
+
+test('PP20 (F9): a refusal whose use-up fails is exit 5 "could not be used up", not exit 4 "used up"; the refusal text is kept in `refusal`', () => {
+  for (const [name, edit, reason] of [['newer tap of the same label', newerTap, 'tap-changed'], ['row gone', rowGone, 'no-decision']]) {
+    const w = world({ comments: [human(1, PAID_WORD, ago(10))], onCall: atReviews(edit) });
+    yes();
+    const r = post(w);
+    assert.equal(r.ok, false, name);
+    assert.equal(r.code, 5, name);
+    assert.equal(r.text, `The paid yes could not be used up (${reason}). Nothing was posted. Run it again.`, name);
+    assert.match(r.refusal, /unanswered paid request/, `${name}: the refusal text is kept`);
+    assert.equal(w.posts.length, 0, name);
+    assert.deepEqual(w.ledger(), [], name);
+    w.done();
+  }
+  const kept = world({ comments: [human(1, PAID_WORD, ago(10))], onCall: atReviews(newerTap) });
+  yes();
+  post(kept);
+  assert.ok(row(), 'a store that could not be written keeps the row (the code says so: exit 5, run it again)');
+  kept.done();
+});
+
+test('PP20b (F9): the use-up before the post (step 7) that fails is also exit 5, posts nothing and records nothing', () => {
+  const w = world({ onCall: atReviews(newerTap) });
+  yes();
+  const r = post(w);
+  assert.equal(r.code, 5);
+  assert.equal(r.text, 'The paid yes could not be used up (tap-changed). Nothing was posted. Run it again.');
+  assert.equal(w.posts.length, 0);
+  assert.deepEqual(w.ledger(), []);
+  w.done();
+});
+
+test('PP20c (F9): a decision store that is locked (busy, PP12 style) fails the use-up: exit 5 (reason lock), the row stays, the refusal text is kept (waits about 5 s: the store lock has no injectable wait)', () => {
+  const w = world({ pull: { draft: true } });
+  yes();
+  writeFileSync(`${process.env.CCV3_DECISIONS_FILE}.lock`, `${process.pid} held-by-another-writer`);
+  const r = post(w);
+  rmSync(`${process.env.CCV3_DECISIONS_FILE}.lock`, { force: true });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 5);
+  assert.equal(r.text, 'The paid yes could not be used up (lock). Nothing was posted. Run it again.');
+  assert.match(r.refusal, /PR #225 is a draft/);
+  assert.equal(w.posts.length, 0);
+  assert.ok(row(), 'the row is kept');
+  assert.equal(post(w).code, 4, 'run again with the store free: the draft refusal uses the row up (exit 4)');
+  assert.equal(row(), null);
+  w.done();
 });

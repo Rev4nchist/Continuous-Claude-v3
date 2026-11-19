@@ -24,6 +24,7 @@ import {
   markSent,
   paidFlagText,
   paidKey,
+  paidToastKey,
   parseLandArgs,
   parseUnledgered,
   unmarkSent,
@@ -306,12 +307,14 @@ const flagPaid = async ($: EngineInterface, status: PrStatus): Promise<void> => 
   const found = parseUnledgered(run)
   if (!found) return
   const doc = await loadDoc($)
-  const keys = found.ids.map(id => paidKey(status.pr, found.head, id)).filter(key => !wasSent(doc, key))
+  // A key is marked sent only when its line went out. Quiet mode submits no notice, so it marks the toast key and leaves the notice key free.
+  const quiet = await isQuiet($)
+  const keys = found.ids.map(id => paidKey(status.pr, found.head, id)).map(key => (quiet ? paidToastKey(key) : key)).filter(key => !wasSent(doc, key))
   if (keys.length === 0) return
   await saveDoc($, keys.reduce(markSent, doc))
   const text = paidFlagText(status.pr, found.head)
   try {
-    if (!(await isQuiet($))) await $.prompt.submit({ text })
+    if (!quiet) await $.prompt.submit({ text })
   } catch (err) {
     await saveDoc($, keys.reduce(unmarkSent, await loadDoc($)))
     throw err

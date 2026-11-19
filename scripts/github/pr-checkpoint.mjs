@@ -965,7 +965,7 @@ const refuse = (message) => { console.error(`pr-checkpoint: refused: ${message}`
  * folder that is not there yet is still a link), then the missing parts are appended as written: an alias of the real store compares equal to it
  * even before its folder exists, and two temp stores stay two.
  */
-function sameForm(file) {
+export function sameForm(file) {
   const full = path.resolve(file);
   const missing = [];
   let probe = full;

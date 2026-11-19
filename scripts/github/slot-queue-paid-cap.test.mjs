@@ -200,15 +200,25 @@ test('SC8: a paid CodeRabbit comment on the head with no ledger row raises ONE t
   assert.deepEqual(stateOf(e).items[0].flaggedPaid, [41]);
   const again = run(e, ['tick', '--json'], { now: at(30) });
   assert.equal(flagToasts(again.json).length, 0, 'once per comment');
-  // A ledger row for this PR and head: no flag.
+  // A via:'post' ledger row for this PR: no flag (the flag counts per PR, F3 of the paid guard aegis pass).
   const ledgered = setup('flag-ledger');
   setWorld(ledgered, { 5: prOf(5, { comments: [human(42, '@coderabbitai review --use-credits', at(-10))] }) });
   setState(ledgered, [itemOf(5)], BUSY());
-  writeFileSync(ledgered.ledgerPath, `${JSON.stringify({ ts: iso(at(-9)), date: '2026-11-02', pr: 5, head: headOf(5), files: 4, cost: 1, session: 's' })}\n`);
+  writeFileSync(ledgered.ledgerPath, `${JSON.stringify({ ts: iso(at(-9)), date: '2026-11-02', pr: 5, head: headOf(5), files: 4, cost: 1, session: 's', via: 'post' })}\n`);
   assert.equal(flagToasts(run(ledgered, ['tick', '--json']).json).length, 0);
-  // A plain request, and a paid one older than the head commit.
+  // A row with no via (written by the record verb or an older script) is manual: it never counts, so the comment is flagged.
+  const manual = setup('flag-manual');
+  setWorld(manual, { 5: prOf(5, { comments: [human(45, '@coderabbitai review --use-credits', at(-10))] }) });
+  setState(manual, [itemOf(5)], BUSY());
+  writeFileSync(manual.ledgerPath, `${JSON.stringify({ ts: iso(at(-9)), date: '2026-11-02', pr: 5, head: headOf(5), files: 0, cost: 0, session: 's' })}\n`);
+  assert.equal(flagToasts(run(manual, ['tick', '--json']).json).length, 1);
+  // A plain request raises none. A paid one from before the head commit is counted too: no date filter any more.
   const quiet = setup('flag-quiet');
-  setWorld(quiet, { 5: prOf(5, { comments: [human(43, '@coderabbitai review', at(-10)), human(44, '@coderabbitai review --use-credits', at(-400))] }) });
+  setWorld(quiet, { 5: prOf(5, { comments: [human(43, '@coderabbitai review', at(-10))] }) });
   setState(quiet, [itemOf(5)], BUSY());
   assert.equal(flagToasts(run(quiet, ['tick', '--json']).json).length, 0);
+  const early = setup('flag-early');
+  setWorld(early, { 5: prOf(5, { comments: [human(44, '@coderabbitai review --use-credits', at(-400))] }) });
+  setState(early, [itemOf(5)], BUSY());
+  assert.equal(flagToasts(run(early, ['tick', '--json']).json).length, 1);
 });

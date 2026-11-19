@@ -678,6 +678,8 @@ const SLOT_MAX_NAMING_LENGTH = 20_000
 /**
  * Text that could be the queue module under a quote, caret, backtick or backslash split, or a glob: `slot-q...`, `slot-*`, `queue.m...`, `*queue`, `sl*-queue`.
  * Quotes and escapes are stripped first. Any split of `slot-queue.mjs` by a separator or a `$()` leaves a piece that still matches (`slot-q` on the left or `queue.m` on the right).
+ * Glob cover is partial, accepted: a glob that keeps none of `slot-q`, `slot-*`, `queue.m` or `*queue` (for example `sl*e.mjs`) is not seen. A rule that denied every
+ * node run with a glob in the script path would also block `node --test` with a test glob, which this repo uses daily (paid guard design rev 5, Known limits).
  */
 const SLOT_NAME_LIKE = /slot[-_]{0,2}[q*?[]|queue(?:-model)?\.m|[*?[][\w.*?[\]-]{0,30}queue/gi
 /** The module as a clean token whose next argument is exactly tick, list or probe (quotes may wrap the verb). Raw text, no stripping. */

@@ -4,9 +4,9 @@
  *
  * Usage:
  *   node scripts/github/cr-paid.mjs check --pr <N> [--json]     estimate the round, print ALLOW or ESCALATE
- *   node scripts/github/cr-paid.mjs record --pr <N> --head <sha> --files <K>   log a paid round you just posted (a manual record; `post` records its own round)
+ *   node scripts/github/cr-paid.mjs record --pr <N> --head <sha> --files <K>   log a paid round you just posted (a manual record, via "manual"; `post` records its own round, via "post")
  *   node scripts/github/cr-paid.mjs post --pr <N>                post the paid review on Dave's priced yes. Exit 0 posted; 4 refused (the yes is used up); 5 nothing happened, the yes is kept
- *   node scripts/github/cr-paid.mjs unledgered --pr <N> [--json] read-only: { head, ids } of the paid comments on the head that the ledger has no round for. Exit 0 always (a failed read gives ids: [])
+ *   node scripts/github/cr-paid.mjs unledgered --pr <N> [--json] read-only: { head, ids } of the paid comments of the PR that the ledger has no post round for (counted per PR). Exit 0 always (a failed read gives ids: [])
  *   node scripts/github/cr-paid.mjs today [--json]               today's paid total and rows
  *   node scripts/github/cr-paid.mjs month [--json]               this Chicago month's paid files (the interim monthly cap reads it)
  *
@@ -23,7 +23,8 @@
  * slot is over 15 minutes away; every finding of the last round is fixed). The rule text (pr-review-loop.md "Paid PR reviews")
  * and pr_watch cover them. Run the check before EVERY review request: in Automatic mode an over-limit review bills with no prompt.
  *
- * Ledger: ~/.claude/state/coderabbit-paid.jsonl, one JSON line per paid round: {ts, date, pr, head, files, cost, session}.
+ * Ledger: ~/.claude/state/coderabbit-paid.jsonl, one JSON line per paid round: {ts, date, pr, head, files, cost, session, via}.
+ * via is "post" for a round that `post` or a paid decision recorded, "manual" for the record verb. An old row has no via and counts as manual.
  * A paid CLI run (pre-pr.mjs and cr-fix.mjs log it from the run's usageCost) adds {ts, date, kind: "cli", branch, head, files, cost, session}.
  * A row with no kind is a PR row. The PR limits above count PR rows only. The CLI daily cap (review-router.config.json,
  * coderabbit.cli_daily_cap_usd) counts cli rows only, for the same America/Chicago day.
@@ -36,10 +37,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanSummaryCommit, codeRabbitHeadReview, codeRabbitNotice, coderabbitRequestComments, deltaLinesOf, isCodeRabbitUser, newestCodeRabbitRound, readIssueComments, readPrCommits, summaryCoversHead, trustedCodeRabbitSummary } from './review-status.mjs';
-import { capacityFact, pathFiltersFrom, reviewableFiles } from './pr-checkpoint.mjs';
+import { capacityFact, pathFiltersFrom, reviewableFiles, sameForm } from './pr-checkpoint.mjs';
 import { ghApi } from './cr-fix.mjs';
 import { withLock } from './lib/file-lock.mjs';
-import { capCentsOfLabel, decisionKey, decisionRowRead, decisionUse } from './lib/decisions.mjs';
+import { DECISIONS_ENV, capCentsOfLabel, decisionKey, decisionRowRead, decisionUse, decisionsPath } from './lib/decisions.mjs';
 import { slotStateOf } from './lib/checkpoint-ledger.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -131,13 +132,13 @@ export function cliCapCheck(capUsd, deps) {
 /** The line that names the CLI total, the cap and the day. */
 export const cliCapLine = ({ total, cap, date }) => `today's paid CodeRabbit CLI spend is ${usd(Math.round(total * 100))} (${date}, America/Chicago), at or over the daily cap of ${usd(Math.round(cap * 100))} (review-router.config.json coderabbit.cli_daily_cap_usd)`;
 
-/** Appends one paid round to the ledger and returns the row. Throws on a bad head or file count. */
-export function recordPaid({ pr, head, files }, deps) {
+/** Appends one paid round to the ledger and returns the row. `via` is "manual" (the record verb has no flag for another) or "post" (postPaid only). Throws on a bad head or file count. */
+export function recordPaid({ pr, head, files, via = 'manual' }, deps) {
   const d = withDefaults(deps);
   if (!/^[0-9a-f]{7,40}$/i.test(String(head))) throw new Error('--head must be a commit sha');
   if (!Number.isInteger(files) || files < 0) throw new Error('--files must be a whole number, 0 or more');
   const now = d.now();
-  const row = { ts: now.toISOString(), date: chicagoDay(now), pr, head: String(head).toLowerCase(), files, cost: (files * CENTS_PER_FILE) / 100, session: d.env.CLAUDE_CODE_SESSION_ID || d.env.CLAUDE_SESSION_ID || 'unknown' };
+  const row = { ts: now.toISOString(), date: chicagoDay(now), pr, head: String(head).toLowerCase(), files, cost: (files * CENTS_PER_FILE) / 100, session: d.env.CLAUDE_CODE_SESSION_ID || d.env.CLAUDE_SESSION_ID || 'unknown', via };
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
   appendFileSync(d.ledgerPath, `${JSON.stringify(row)}\n`);
   return row;
@@ -333,29 +334,38 @@ function checksOf(d, { pr, repo, head, capCents }, gh) {
   if (v.head !== head) return { text: `The head of PR #${pr} moved from ${h7} to ${String(v.head).slice(0, 7)} during the check. Ask Dave again.` };
   const files = Number.isInteger(v.total) ? v.total : v.files; // the UNFILTERED count: path_filters billing is unproven
   const costCents = files * CENTS_PER_FILE;
+  // The verdict above priced the round on the FILTERED count (path_filters of the working tree: an edit there zeroes it). Judge the limits again on the same
+  // UNFILTERED count that the cap below uses, so the price Dave tapped and the round and day limits read one number. LIMITS are unchanged.
+  const today = Number.isFinite(v.today) ? Math.round(v.today * 100) : 0;
+  const limits = verdictReasons({ costCents, todayCents: today, paidRounds: Number.isInteger(v.paidRounds) ? v.paidRounds : 0, fix: v.fix ?? null });
+  if (limits.length > 0) return { text: `cr-paid says ESCALATE for PR #${pr}: ${limits.join('; ')}. No paid post.`, kind: 'escalate', verdict: 'ESCALATE', reasons: limits };
   if (costCents > capCents) return { text: `The cost is ${usd(costCents)}, over the ${usd(capCents)} Dave tapped. Ask again.` };
   return { v, files, costCents };
 }
 
-/** True when the paid ledger holds a round for the PR at the head (a round that `post` or a paid decision recorded). Throws on a bad ledger. */
-export function paidRoundOn(pr, head, deps) {
+/**
+ * The number of rounds of the PR (all heads) that `post` or a paid decision recorded: the rows with via "post". A row of the record verb (via "manual") and an old
+ * row with no via never count: a hand-written row must not silence the detection. Throws on a bad ledger.
+ */
+export function postRoundsOf(pr, deps) {
   const d = withDefaults(deps);
-  return readLedger(d.ledgerPath).some((r) => !isCli(r) && r.pr === pr && String(r.head).toLowerCase() === String(head).toLowerCase());
+  return readLedger(d.ledgerPath).filter((r) => !isCli(r) && r.pr === pr && r.via === 'post').length;
 }
 
 /** The comments by a person that start "@coderabbitai review" and hold the paid word (the same match as openPaidRequests). Pure. */
 export const paidRequestsOf = (comments = []) => coderabbitRequestComments(comments).filter((c) => PAID_WORD.test(String(c.body ?? '')));
 
 /**
- * The ids of the paid comments (a person's "@coderabbitai review" with the paid word) made on this head that the paid ledger has no round for: a paid post that
- * did not go through `post` or a paid decision. A comment older than the head commit is for an older head. An unreadable ledger says nothing (no flag), so a bad
- * file cannot make every tick toast. Detection only: it blocks nothing. `deps` is what paidRoundOn reads (ledgerPath, now, env).
+ * The ids of the paid comments (a person's "@coderabbitai review" with the paid word) of the PR that the paid ledger has no round for: a paid post that did not
+ * go through `post` or a paid decision. The count is per PR: the comments (deduped by id, sorted by id) beyond the number of via "post" rows of the PR, all heads.
+ * The first N comments match the N rows; the rest are unledgered. No date and no head is read, so nothing the model can move (a committer date, a manual row)
+ * hides a comment. `head`, `_headCommittedAt` stay in the signature for the queue's call and are not used. An unreadable ledger says nothing (no flag), so a bad
+ * file cannot make every tick toast. Detection only: it blocks nothing. `deps` is what postRoundsOf reads (ledgerPath, now, env).
  */
-export function unledgeredPaidOf(pr, head, comments, headCommittedAt, deps) {
-  const since = Date.parse(headCommittedAt ?? '');
-  const asks = paidRequestsOf(comments).filter((c) => !(Date.parse(c.created_at) < since));
-  if (asks.length === 0) return [];
-  try { return paidRoundOn(pr, head, deps) ? [] : asks.map((c) => c.id); } catch { return []; }
+export function unledgeredPaidOf(pr, _head, comments, _headCommittedAt, deps) {
+  const ids = [...new Set(paidRequestsOf(comments).map((c) => c.id))].sort((a, b) => a - b);
+  if (ids.length === 0) return [];
+  try { return ids.slice(postRoundsOf(pr, deps)); } catch { return []; }
 }
 
 /** { head, ids } for the unledgered verb: the PR head and the unledgered paid comment ids on it. Never throws: any failed read is { head: '', ids: [] }. */
@@ -366,8 +376,7 @@ export function unledgeredOf({ pr, repo = DEFAULT_REPO }, deps) {
     const head = String(d.gh([`repos/${repo}/pulls/${pr}`])?.head?.sha ?? '').toLowerCase();
     if (!SHA40.test(head)) return { head: '', ids: [] };
     const { comments } = readIssueComments(d.gh, owner, name, pr);
-    const committedAt = d.gh([`repos/${repo}/commits/${head}`])?.commit?.committer?.date;
-    return { head, ids: unledgeredPaidOf(pr, head, comments, committedAt, d) };
+    return { head, ids: unledgeredPaidOf(pr, head, comments, null, d) };
   } catch { return { head: '', ids: [] }; }
 }
 
@@ -391,7 +400,9 @@ function guardedPost(d, { pr, cap, source, repo }, began) {
   const triple = { step: 'paid-round', key: decisionKey({ repo, pr }), head };
   const row = source === 'cap' ? null : decisionRowRead(triple);
   const useUp = () => (row ? decisionUse({ ...triple, label: row.label, at: row.at }) : { ok: true });
-  const refuse = (text, extra = {}) => { useUp(); return fail(4, text, extra); };
+  // A use-up that fails (a busy or unreadable store, a newer tap) leaves the row in place: that is exit 5 and "run it again", never exit 4 "used up".
+  const notUsedUp = (used, refusal) => fail(5, `The paid yes could not be used up (${used.reason}). Nothing was posted. Run it again.`, refusal ? { refusal } : {});
+  const refuse = (text, extra = {}) => { const used = useUp(); return used.ok ? fail(4, text, extra) : notUsedUp(used, text); };
   const capCents = source === 'cap' ? (Number.isInteger(cap) && cap > 0 ? cap : null) : (row ? capCentsOfLabel(row.label) : null);
   if (source === 'cap' ? capCents === null : row === null) return fail(4, `No paid yes of Dave's for PR #${pr} at ${head.slice(0, 7)}.`);
   const problem = row ? rowProblem(row, pr, nowMs()) : null;
@@ -406,9 +417,9 @@ function guardedPost(d, { pr, cap, source, repo }, began) {
   if (left() <= 0) return refuse(DEADLINE_TEXT);
   // step 7: use the row up, record the round FIRST, then post. A failure after the record leaves a counted round that did not happen: the safe direction.
   const used = useUp();
-  if (!used.ok) return fail(4, `The paid yes for PR #${pr} could not be used up (${used.reason}). Nothing was posted.`);
+  if (!used.ok) return notUsedUp(used);
   const { v, files, costCents } = checked;
-  try { recordPaid({ pr, head, files }, { now: d.now, ledgerPath: d.ledgerPath, env: d.env }); } catch (err) { return fail(4, `The round could not be recorded (${firstLine(err)}). Nothing was posted.`); }
+  try { recordPaid({ pr, head, files, via: 'post' }, { now: d.now, ledgerPath: d.ledgerPath, env: d.env }); } catch (err) { return fail(4, `The round could not be recorded (${firstLine(err)}). Nothing was posted.`); }
   try { d.afterRecord?.({ pr, head, v, files }); } catch (err) { return fail(4, `The queue could not be marked (${firstLine(err)}). The round is counted. Nothing was posted. Ask Dave again.`); }
   try { gh(['-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '-f', `body=${PAID_COMMENT}`]); } catch (err) {
     try { d.onPostError?.(err); } catch { /* the first failure is the one reported */ }
@@ -417,10 +428,23 @@ function guardedPost(d, { pr, cap, source, repo }, began) {
   return { ok: true, code: 0, kind: 'posted', pr, head, files, cost: costCents / 100, comment: PAID_COMMENT, text: `Posted the paid CodeRabbit review for PR #${pr} at ${head.slice(0, 7)}: ${files} file(s), ${usd(costCents)}, recorded in the ledger. Do not run cr-paid record: the round is already recorded.` };
 }
 
+const STORE_MOVED_TEXT = 'The decision store path is overridden by CCV3_DECISIONS_FILE. A paid post reads Dave\'s tap from the real store only. Nothing was posted. The paid yes is kept.';
+
+/**
+ * True when the run env moves the decision store to a DIFFERENT file than the default: a model could write a stamped row to a scratch file and post on it.
+ * The compare is pr-checkpoint's sameForm (the nearest existing folder is resolved, the case is folded on win32): another spelling of the real store is the
+ * real store and is not refused. Tests do not set the override in the run env (deps.env); the real run's env is process.env. An empty value is no override.
+ */
+function storeMoved(env) {
+  const file = env?.[DECISIONS_ENV];
+  return typeof file === 'string' && file !== '' && sameForm(file) !== sameForm(decisionsPath({}));
+}
+
 /**
  * postPaid({ pr, cap, source, repo }, deps) -> { ok, code, text, ... }. source `row` (default): the cap is the price of Dave's stored yes. source `cap`: `cap` is
  * whole cents from the queue's pay decision (--cap). Holds the paid lock across every step, with a 120 s deadline and a 20 s limit per GitHub call.
- * Codes: 0 posted; 4 a refusal from step 2 on (the row is used up); 5 nothing happened and the yes is kept (a failed GitHub read in step 1, or another paid post holds the lock).
+ * Codes: 0 posted; 4 a refusal from step 2 on (the row is used up); 5 nothing happened and the yes is kept (a failed GitHub read in step 1, another paid post holds the lock,
+ * CCV3_DECISIONS_FILE moves the decision store in a `row` run, or the use-up of the row failed).
  * deps (tests, the queue): gh(args, { timeoutMs }), now() -> Date, ledgerPath, pathFilters, env, capacity(pr, ms) -> fact, queue { holdsPay(pr, head) },
  * checkPr({ pr, repo }) -> verdict, afterRecord({ pr, head, v, files }) and onPostError(err) (the queue marks its item), lockWaitMs.
  */
@@ -428,6 +452,7 @@ export function postPaid({ pr, cap = null, source = 'row', repo = DEFAULT_REPO }
   const given = Object.fromEntries(Object.entries(deps).filter(([, v]) => v !== undefined));
   const capacity = (n, ms) => capacityFact({ now: new Date(ms).toISOString(), pr: n, dependabot: false, policy: {}, probe: false, root: ROOT }, { crUsage: () => null });
   const d = { ...withDefaults({ gh: ghApiTimed, capacity, ...given }), lockWaitMs: given.lockWaitMs ?? 5000 };
+  if (source !== 'cap' && storeMoved(d.env)) return fail(5, STORE_MOVED_TEXT);
   const began = d.now().getTime();
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
   const ran = withLock(d.ledgerPath, { lockWaitMs: d.lockWaitMs, lockStaleMs: POST_LIMITS.lockStaleMs }, () => guardedPost(d, { pr, cap, source, repo }, began));

@@ -5,7 +5,8 @@
  * Why: 14 thread replies on PRs #225, #227 and #238 read "System.Collections.Hashtable[<id>]" or
  * "System.Collections.Hashtable.body". The agent typed `gh api ... -f body=$replies[$id]` in PowerShell.
  * An unquoted native argument expands `$replies` to the hashtable's ToString() and keeps `[<id>]` as text.
- * Here the reply text comes from a file and goes to gh as `-F body=@<file>`: no shell variable reaches it.
+ * Here the reply text comes from a file. The script reads it once, checks that text, and sends exactly that text to gh on
+ * stdin (`-F body=@-`): no shell variable reaches it, and a rewrite of the file after the check changes nothing.
  *
  * Usage: node scripts/github/reply-thread.mjs <pr> <comment-id> --body-file <file> [--repo owner/name]
  *        node scripts/github/reply-thread.mjs <pr> --top --body-file <file> [--repo owner/name]
@@ -59,10 +60,10 @@ export function parseArgs(argv) {
   return { pr: nums[0], commentId: top ? null : nums[1], repo, bodyFile, top };
 }
 
-/** The gh arguments. The body is a file field (-F body=@file), never text on the command line. */
-export function replyArgs({ repo, pr, commentId, bodyFile, top }) {
+/** The gh arguments. The body is a file field read from stdin (-F body=@-), never text on the command line and never the file path: the text that was checked is the text that is sent. */
+export function replyArgs({ repo, pr, commentId, top }) {
   const endpoint = top ? `repos/${repo}/issues/${pr}/comments` : `repos/${repo}/pulls/${pr}/comments/${commentId}/replies`;
-  return ['api', endpoint, '-X', 'POST', '-F', `body=@${bodyFile}`];
+  return ['api', endpoint, '-X', 'POST', '-F', 'body=@-'];
 }
 
 /** Throws when the file is unreadable, empty, garbled or a paid CodeRabbit request. */
@@ -76,8 +77,9 @@ export function checkBody(text) {
   }
 }
 
-function defaultRunGh(args) {
-  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+/** `input` is the checked body text: gh reads it from stdin. No shell. */
+function defaultRunGh(args, input) {
+  return execFileSync('gh', args, { encoding: 'utf8', input, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
 }
 
 /** Run with injectable deps { runGh, readFile, stdout, stderr }. Returns the exit code. */
@@ -93,15 +95,18 @@ export function main(argv, deps = {}) {
     stderr(`reply-thread: ${err.message}\n`);
     return 2;
   }
+  // Read the file once: the checks and the post use this one text, so a writer cannot swap it in between.
+  let text;
   try {
-    checkBody(readFile(opts.bodyFile));
+    text = readFile(opts.bodyFile);
+    checkBody(text);
   } catch (err) {
     stderr(`reply-thread: ${err.message}\n`);
     return 1;
   }
   let reply;
   try {
-    reply = JSON.parse(runGh(replyArgs(opts)));
+    reply = JSON.parse(runGh(replyArgs(opts), text));
   } catch (err) {
     stderr(`reply-thread: ${String(err.message).split('\n')[0]}\n`);
     return 1;

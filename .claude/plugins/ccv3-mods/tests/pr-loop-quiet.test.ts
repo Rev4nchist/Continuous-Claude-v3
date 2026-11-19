@@ -15,6 +15,9 @@ import type { Engine } from 'claude-code/testing'
 // PF5 no CodeRabbit request on the PR, or a closed PR: the verb is not run
 // PF6 a new comment, or a new head, flags again             PF7 quiet mode: the toast stays, no notice
 // PF8 a rejected notice is retried at the next check, with no toast before it
+// PF9 quiet mode: one toast, the notice key is NOT marked sent; the same check in normal mode sends the notice once
+// PF10 more than 200 distinct paid keys leave exactly 200 (own cap, seat ruling); the other keys in doc.sent (40 at most) are not pruned by them
+// PF11 a stored ledger with 200 paid keys and 40 other keys survives a load (readDoc caps each class, not the whole list)
 
 const SESSION = 'test-session'
 const KEY = `pr-watch:${SESSION}`
@@ -81,7 +84,9 @@ type Paid = { head: string; ids: number[] }
 
 const world = (on: On, opts: Opts = {}) => {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { USERPROFILE: 'C:/home', ...(opts.env ?? {}) })
+  // What mock.env does (a variable not listed is unset), on an object a test may change between checks (PF9 turns quiet mode off).
+  const env: Record<string, string> = { USERPROFILE: 'C:/home', ...(opts.env ?? {}) }
+  on('env.get', (_$, e) => ({ value: env[e.name] }))
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
   on('store.get', (_$, e) => ({ value: store.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -151,7 +156,7 @@ const world = (on: On, opts: Opts = {}) => {
     seen.land.push({ ...e })
     return { result: { stdout: 'LANDED #1', stderr: '', interrupted: false } }
   })
-  return { clock, seen, store }
+  return { clock, seen, store, env }
 }
 
 const start = ($: Engine) => $.session.start({ cwd: 'C:/r', surface: 'terminal', isInteractive: true })
@@ -348,5 +353,49 @@ describe('pr-loop paid flag: a paid CodeRabbit comment with no paid-ledger row i
     const w = await flagged({ submitFails: 1, script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })($, on, 2)
     expect(w.seen.submits).toEqual([TEXT()])
     expect(w.seen.toasts).toEqual([TEXT()])
+  })
+
+  const sentOf = (store: Map<string, unknown>): string[] => (store.get(KEY) as { sent?: string[] }).sent ?? []
+  const PAID_KEY_41 = `paid:7:${HEAD_A}:41`
+
+  test('PF9 quiet mode: one toast, the notice key is not marked sent, and the same check in normal mode sends the notice once', async ($, on) => {
+    const w = world(on, { env: { [QUIET]: '1' }, store: seed([{ pr: 7 }]), script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })
+    await checks(w, $, 2)
+    expect(w.seen.toasts).toEqual([TEXT()])
+    expect(w.seen.submits).toEqual([])
+    expect(sentOf(w.store)).not.toContain(PAID_KEY_41)
+    delete w.env[QUIET]
+    await w.clock.advance(TICK)
+    await w.clock.advance(1)
+    expect(w.seen.submits).toEqual([TEXT()])
+    expect(sentOf(w.store)).toContain(PAID_KEY_41)
+    await w.clock.advance(TICK)
+    await w.clock.advance(1)
+    expect(w.seen.submits).toEqual([TEXT()])
+  })
+
+  test('PF10 more than 200 distinct paid keys leave exactly 200 in doc.sent, and the 40 other keys stay', async ($, on) => {
+    const others = Array.from({ length: 40 }, (_, i) => `other ${i}`)
+    const store = seed([{ pr: 7 }])
+    ;(store[KEY] as { sent?: string[] }).sent = others
+    const ids = Array.from({ length: 250 }, (_, i) => i + 1)
+    const w = await flagged({ store, script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids }] } })($, on)
+    const sent = sentOf(w.store)
+    const paid = sent.filter(key => key.startsWith('paid:'))
+    expect(paid.length).toBe(200)
+    expect(paid[0]).toBe(`paid:7:${HEAD_A}:51`)
+    expect(paid[199]).toBe(`paid:7:${HEAD_A}:250`)
+    expect(sent.filter(key => !key.startsWith('paid:'))).toEqual(others)
+  })
+
+  test('PF11 a stored ledger with 200 paid keys and 40 other keys is kept whole when the list is loaded', async ($, on) => {
+    const others = Array.from({ length: 40 }, (_, i) => `other ${i}`)
+    const paids = Array.from({ length: 200 }, (_, i) => `paid:9:${HEAD_A}:${i + 1}`)
+    const store = seed([{ pr: 7 }])
+    ;(store[KEY] as { sent?: string[] }).sent = [...paids.slice(0, 100), ...others, ...paids.slice(100)]
+    const w = await flagged({ store, script: { 7: [status(7)] } })($, on)
+    const sent = sentOf(w.store)
+    expect(sent.filter(key => key.startsWith('paid:'))).toEqual(paids)
+    expect(sent.filter(key => !key.startsWith('paid:'))).toEqual(others)
   })
 })

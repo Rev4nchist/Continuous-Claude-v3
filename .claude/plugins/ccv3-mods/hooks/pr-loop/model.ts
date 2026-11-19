@@ -93,6 +93,16 @@ export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number; 
 
 /** The ledger keeps this many keys; older ones fall off. */
 export const SENT_MAX = 40
+/** Paid-flag keys (`paid:` prefix) have their own cap: each one is a comment, and an evicted key would flag the same comment again. */
+export const PAID_SENT_MAX = 200
+
+/** The newest SENT_MAX other keys and the newest PAID_SENT_MAX paid keys, in their order. One class never pushes out the other. */
+export const capSent = (keys: string[]): string[] => {
+  const paid = (key: string): boolean => key.startsWith('paid:')
+  const keepPaid = new Set(keys.filter(paid).slice(-PAID_SENT_MAX))
+  const keepRest = new Set(keys.filter(key => !paid(key)).slice(-SENT_MAX))
+  return keys.filter(key => keepPaid.has(key) || keepRest.has(key))
+}
 
 export const TICK_MS = 300_000
 export const BACKOFF_MS = 900_000
@@ -121,7 +131,7 @@ export const readDoc = (value: unknown, now: number): WatchDoc => {
     ...(typeof one.alerted === 'string' ? { alerted: one.alerted } : {}),
     ...(typeof one.fails === 'number' && one.fails > 0 ? { fails: one.fails } : {}),
   }))
-  const sent = Array.isArray(doc.sent) ? doc.sent.filter((key): key is string => typeof key === 'string').slice(-SENT_MAX) : []
+  const sent = Array.isArray(doc.sent) ? capSent(doc.sent.filter((key): key is string => typeof key === 'string')) : []
   return { prs, backoffUntil: typeof doc.backoffUntil === 'number' ? doc.backoffUntil : 0, touched: now, ...(sent.length ? { sent } : {}) }
 }
 
@@ -344,7 +354,7 @@ export const alertKey = (alert: Alert): string => {
 
 export const wasSent = (doc: WatchDoc, key: string): boolean => (doc.sent ?? []).includes(key)
 
-export const markSent = (doc: WatchDoc, key: string): WatchDoc => ({ ...doc, sent: [...(doc.sent ?? []), key].slice(-SENT_MAX) })
+export const markSent = (doc: WatchDoc, key: string): WatchDoc => ({ ...doc, sent: capSent([...(doc.sent ?? []), key]) })
 
 /** Takes a key back out of the ledger: the line it stood for was never delivered. */
 export const unmarkSent = (doc: WatchDoc, key: string): WatchDoc => ({ ...doc, sent: (doc.sent ?? []).filter(one => one !== key) })
@@ -355,6 +365,9 @@ export const paidFlagText = (pr: number, head: string): string =>
 
 /** The ledger key of one flagged paid comment: once per PR, head and comment. */
 export const paidKey = (pr: number, head: string, id: number): string => `paid:${pr}:${head}:${id}`
+
+/** Quiet mode sends no model notice, so it cannot mark paidKey sent. It marks this key instead: the toast goes once. */
+export const paidToastKey = (key: string): string => `paid:toast:${key.slice('paid:'.length)}`
 
 /** `cr-paid.mjs unledgered --pr N --json` prints { head, ids }. Anything else, or a failed run, is null: detection never blocks. */
 export const parseUnledgered = (run: { exitCode: number; stdout: string }): { head: string; ids: number[] } | null => {
