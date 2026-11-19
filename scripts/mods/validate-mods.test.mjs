@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { gatingProblems, leftMs, makeShard, parseArgs, refusedCommandProblems, shardsOf, shardsVerdict, TEST_LIMIT_MS, testFilesOf } from './validate-mods.mjs';
+import { gatingProblems, leftMs, makeShard, parseArgs, refusedCommandProblems, removeShard, shardsOf, shardsVerdict, TEST_LIMIT_MS, testFilesOf } from './validate-mods.mjs';
 
 const DEFAULT = '/repo/default-plugin';
 
@@ -129,6 +129,26 @@ test('S4 the verdict sums the shards, keeps the failing lines of every shard, an
   assert.equal(shardsVerdict([{ status: 0, pass: 5, fail: 0, lines: [] }, { status: 1, pass: NaN, fail: NaN, lines: [] }], false, TEST_LIMIT_MS).ok, false);
   assert.equal(shardsVerdict([], false, TEST_LIMIT_MS).ok, false);
   assert.equal(shardsVerdict([{ status: 0, pass: 5, fail: 0, lines: [] }], false, TEST_LIMIT_MS).ok, true);
+});
+
+// S6 a temp folder that cannot be removed (on Windows a child the timeout stopped can still hold a file) kills the gate in its finally block and the verdict is lost
+test('S6 a shard folder that cannot be removed prints one line with its path, retries first, and never throws', () => {
+  const seen = [];
+  const lines = [];
+  const log = console.log;
+  console.log = line => lines.push(line);
+  try {
+    removeShard('C:/tmp/mods-shard-x', (dir, options) => {
+      seen.push(options);
+      throw new Error('EBUSY');
+    });
+  } finally {
+    console.log = log;
+  }
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /mods-shard-x/);
+  assert.deepEqual([seen[0].maxRetries, seen[0].recursive, seen[0].force], [3, true, true]);
+  assert.ok(seen[0].retryDelay > 0);
 });
 
 test('S5 the 9 minute clock runs over all shards; a step past it says "stopped at 540 s", not NaN counts; the limit sits under the 10 minutes of pre-pr', () => {

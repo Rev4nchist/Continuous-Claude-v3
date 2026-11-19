@@ -170,6 +170,14 @@ export const makeShard = (dir, files) => {
   return root;
 };
 export const leftMs = (startedAt, now, limitMs) => limitMs - (now - startedAt);
+/** Removes the temp folder this run made. On Windows a child the timeout stopped can still hold a file: retry, and if it stays, print the path and go on (the verdict is not lost). */
+export const removeShard = (dir, remove = rmSync) => {
+  try {
+    remove(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  } catch {
+    console.log(`mods gate: could not remove the temp folder ${dir}`);
+  }
+};
 const countsOf = (out, status) => {
   const count = word => Number((out.match(new RegExp(`^\\s*(\\d+) ${word}\\b`, 'm')) ?? [])[1] ?? NaN);
   return { status, pass: count('pass'), fail: count('fail'), lines: out.split(/\r?\n/).filter(l => /^\(fail\)/.test(l) || /Error|Expected|Received/.test(l)) };
@@ -197,7 +205,7 @@ const checkTest = () => {
       stopped = ran.error?.code === 'ETIMEDOUT';
       rows.push(countsOf(`${ran.stdout ?? ''}${ran.stderr ?? ''}`, ran.status));
     } finally {
-      rmSync(shard, { recursive: true, force: true });
+      removeShard(shard);
     }
     if (stopped) break;
   }
