@@ -1450,10 +1450,11 @@ test('F11: setPhase by a pid that does not hold the lock changes nothing, and a 
   assert.equal(RL.setPhase({ file: a.file, pid: 999, phase: 'cr' }, ctx.d).changed, false, 'another pid');
   // A record of this pid from ANOTHER start time (a run that reused the pid) must be a real file: with no such file the test cannot tell
   // the ownership check from a missing file. Same pid, other start: the name is not ours and the record start is not the live start.
-  const stale = join(ctx.dir, 'pre-pr-100-9999.lock');
+  const staleName = `${lockPrefix('pre-pr', 100)}9999.lock`;
+  const stale = join(ctx.dir, staleName);
   const staleText = JSON.stringify({ kind: 'pre-pr', pid: 100, pidStart: 9999, holder: 'old run', startedAt: T0, expiresAt: T0 + 60 * MIN, heavy: false, phase: 'test' });
   writeFileSync(stale, staleText);
-  assert.equal(RL.setPhase({ file: 'pre-pr-100-9999.lock', pid: 100, phase: 'cr' }, ctx.d).changed, false, 'same pid, other start time: the record is not ours');
+  assert.equal(RL.setPhase({ file: staleName, pid: 100, phase: 'cr' }, ctx.d).changed, false, 'same pid, other start time: the record is not ours');
   assert.equal(readFileSync(stale, 'utf8'), staleText, 'the record of the other start is untouched');
   assert.equal(readFileSync(join(ctx.dir, a.file), 'utf8'), before);
   assert.throws(() => RL.setPhase({ file: a.file, pid: 100, phase: 'bogus' }, ctx.d), /phase/);

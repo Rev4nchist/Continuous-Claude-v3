@@ -578,7 +578,7 @@ export async function waitForGrant(opts, deps, { maxMs = WAIT_LIMIT_MS } = {}) {
     const now = typeof opts === 'function' ? opts() : opts;
     if (late()) return stop(r, now); // the sleep can end after the deadline: no acquire then
     r = await acquire({ ...now, wait: true }, deps);
-    if (r.granted) return late() ? stop(r, now) : r; // the acquire itself (the 30 s second read) can pass the deadline
+    if (r.granted) return late() ? stop(r, now) : r; // the acquire itself (the 30 s second read) can pass the deadline // the acquire itself (the 30 s second read) can pass the deadline
     const left = maxMs - (d.now() - began);
     if (left <= 0) return stop(r, now);
     await d.sleep(waitSleepMs(r.retryAt, d.now(), left));
