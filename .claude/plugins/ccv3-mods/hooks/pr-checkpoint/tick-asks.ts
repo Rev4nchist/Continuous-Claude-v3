@@ -153,7 +153,6 @@ export async function enqueueRound($: EngineInterface, record: CheckpointRecord 
   return slotAdd($, { pr: record.pr, band: record.band, head, round }).catch(() => false)
 }
 
-type Staleness = { kind: 'open'; head: string } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
 /** `open`: the PR is open and not a draft, at `head` (the head the read printed). */
 type OpenRead = { kind: 'open'; head: string } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
 
@@ -184,7 +183,7 @@ async function readOpenPr($: EngineInterface, root: string, pr: number, expectHe
  * writes a grant and may queue a review: like the typed `/pathway grant`, it accepts a moved head (a round is asked after fix pushes) and carries the head
  * that this read printed. A state that cannot be read fails closed (the question stays queued), as the post failure below does.
  */
-async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): Promise<Staleness> {
+async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): Promise<OpenRead> {
   return readOpenPr($, root, ask.pr, ask.kind === 'round' ? null : ask.head)
 }
 
@@ -233,11 +232,12 @@ async function applyAnswer($: EngineInterface, ask: CheckpointAsk, answer: 'yes'
   const key = `${RECORD_PREFIX}${ask.pr}`
   const stored = readRecord(await $.store.get(key))
   let next: CheckpointRecord | null = stored
-  let seen: Staleness | null = null
+  let seen: OpenRead | null = null
   if (answer === 'yes') {
     const root = await rootOf($)
-    // A question can wait for days (restore keeps it): a late Yes acts only on a PR that is still open, not a draft, at the asked head. A round Yes
-    // writes a grant and may queue a review, so it reads the PR too; with no checkout to read it in, it fails closed.
+    // A question can wait for days (restore keeps it): a late Yes acts only on a PR that is still open and not a draft; an opening or Greptile Yes (it
+    // posts a comment) also needs the asked head. A round Yes writes a grant and may queue a review, so it reads the PR too (any head, see `staleness`);
+    // with no checkout to read it in, it fails closed.
     seen = root ? await staleness($, root, ask) : ask.kind === 'round' ? { kind: 'unreadable' as const, why: 'no checkout' } : null
     if (seen && seen.kind === 'unreadable') {
       const text = `PR #${ask.pr}: could not read the PR state (${seen.why}); nothing ${ask.kind === 'round' ? 'granted' : 'posted'}, the question stays queued`

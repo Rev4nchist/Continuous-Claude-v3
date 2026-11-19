@@ -349,6 +349,24 @@ export const markSent = (doc: WatchDoc, key: string): WatchDoc => ({ ...doc, sen
 /** Takes a key back out of the ledger: the line it stood for was never delivered. */
 export const unmarkSent = (doc: WatchDoc, key: string): WatchDoc => ({ ...doc, sent: (doc.sent ?? []).filter(one => one !== key) })
 
+/** The one notice for a paid CodeRabbit request that the paid ledger has no round for. The words are the free-slot queue's own flag. */
+export const paidFlagText = (pr: number, head: string): string =>
+  `PR #${pr}: a paid CodeRabbit request is on head ${head.slice(0, 7)}, and the paid ledger has no round for it. It did not go through cr-paid.mjs post. Tell Dave.`
+
+/** The ledger key of one flagged paid comment: once per PR, head and comment. */
+export const paidKey = (pr: number, head: string, id: number): string => `paid:${pr}:${head}:${id}`
+
+/** `cr-paid.mjs unledgered --pr N --json` prints { head, ids }. Anything else, or a failed run, is null: detection never blocks. */
+export const parseUnledgered = (run: { exitCode: number; stdout: string }): { head: string; ids: number[] } | null => {
+  try {
+    const out = JSON.parse(run.stdout) as { head?: unknown; ids?: unknown }
+    if (run.exitCode !== 0 || typeof out.head !== 'string' || out.head === '' || !Array.isArray(out.ids)) return null
+    return { head: out.head, ids: out.ids.filter((id): id is number => Number.isInteger(id)) }
+  } catch {
+    return null
+  }
+}
+
 export const settle = (watch: PrWatch, status: PrStatus, now: number, cp: AlertCheckpoint | null = null): { watch: PrWatch | null; alert: Alert | null } => {
   const found = stateOf(status)
   const onHead = forHead(watch, status.head, now)
@@ -478,7 +496,7 @@ const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpoint
  * cr-paid.mjs check does not read the carry, the budget or the fixed findings, so the line states the round 2 condition.
  */
 const paidReview = (pr: number): string =>
-  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post nothing yet. Run node scripts/github/ship-ask.mjs paid-round --pr ${pr} --json and pass its question to AskUserQuestion word for word: its first option is the free one. Post the paid comment (@coderabbitai review --use-credits) only after Dave taps a Yes option, then run cr-paid.mjs record. On ESCALATE, or when cr-paid.mjs gives no verdict (exit 2), no paid round is offered: post nothing. Run the same ship-ask.mjs command and pass its question word for word. It has no Yes option and says why. If he taps No or Stop here, or the answer matches no option, post nothing and tell him the PR waits for the free slot. If ship-ask.mjs exits with anything but 0, do not ask and do not post.`
+  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post nothing yet. Run node scripts/github/ship-ask.mjs paid-round --pr ${pr} --json and pass its question to AskUserQuestion word for word: its first option is the free one. A paid round needs Dave's priced tap, and only after Dave taps a Yes option (its label names the price) you run node scripts/github/cr-paid.mjs post --pr ${pr}. That is the only way to post the paid comment (@coderabbitai review --use-credits): it records the round, then posts it. Never post the paid comment yourself and never run cr-paid.mjs record. On ESCALATE, or when cr-paid.mjs gives no verdict (exit 2), no paid round is offered: post nothing. Run the same ship-ask.mjs command and pass its question word for word. It has no Yes option and says why. If he taps No or Stop here, or the answer matches no option, post nothing and tell him the PR waits for the free slot. If ship-ask.mjs exits with anything but 0, do not ask and do not post.`
 
 /**
  * A paid review replaces the capacity post while it runs. The retry depends on the paid review finishing or still running, not on the

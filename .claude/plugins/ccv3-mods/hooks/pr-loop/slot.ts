@@ -4,7 +4,7 @@ import type { EngineInterface } from 'claude-code'
 import type { SlotAction, SlotRow, SlotTick } from '../../types'
 import type { Alert } from './model'
 import { askDave, freeDialog, takeDialog } from '../pr-checkpoint/ask'
-import { alertSlot, parseList, parseSlotArgs, parseTick, rowsText, slotAskOf, slotAskSpec, slotOf, toastText } from './slot-model'
+import { alertSlot, parseList, parseSlotArgs, parseTick, payPrice, rowsText, slotAskOf, slotAskSpec, slotOf, toastText } from './slot-model'
 import type { SlotVerb } from './slot-model'
 
 // The mod side of the free-slot queue. The queue is scripts/github/slot-queue.mjs; this file runs it and shows what it says.
@@ -48,9 +48,9 @@ export async function slotScript($: EngineInterface): Promise<Found | null> {
 
 type Ran = { ok: true; code: number; out: string; err: string } | { ok: false; text: string }
 
-async function runCli($: EngineInterface, found: Found, argv: string[], timeoutMs: number): Promise<Ran> {
+async function runCli($: EngineInterface, found: Found, argv: string[], timeoutMs: number, script: string = found.script): Promise<Ran> {
   try {
-    const ran = await $.process.run(['node', found.script, ...argv], { cwd: found.root, timeoutMs })
+    const ran = await $.process.run(['node', script, ...argv], { cwd: found.root, timeoutMs })
     return { ok: true, code: ran.exitCode, out: ran.stdout, err: ran.stderr }
   } catch (err) {
     return { ok: false, text: message(err) }
@@ -144,12 +144,14 @@ async function slotQuestions($: EngineInterface, found: Found, actions: SlotActi
   const asks = actions.flatMap(action => slotAskOf(action) ?? [])
   if (asks.length === 0 || !takeDialog()) return
   try {
-    for (const ask of asks) {
+    for (const raw of asks) {
+      // The price comes from a fresh cr-paid check, never from the toast text of the tick: Dave's tap on "Pay up to $X" is the cap the CLI enforces.
+      const ask = raw.canPay ? { ...raw, cost: await freshPrice($, found, raw.pr) } : raw
       const spec = slotAskSpec(ask)
       const got = await askDave($, spec.question, spec.choices.map(one => one.label), spec.header)
       const choice = got.kind === 'text' ? spec.choices.find(one => one.label === got.text) : undefined
       if (!choice) continue
-      const ran = await runCli($, found, verbArgv(choice.verb, ask.pr), VERB_TIMEOUT_MS)
+      const ran = await runCli($, found, verbArgv(choice.verb, ask.pr, ask.cost), VERB_TIMEOUT_MS)
       $.ui.toast(resultText(choice.verb, ask.pr, ran), { timeoutMs: TOAST_MS })
     }
   } finally {
@@ -258,8 +260,38 @@ export async function slotAdd($: EngineInterface, e: Enqueue): Promise<boolean> 
 
 const USAGE = 'Usage: /slot   or   /slot pay|wait|first|drop <pr>'
 
-const verbArgv = (verb: SlotVerb, pr: number): string[] =>
-  verb === 'drop' ? ['drop', '--pr', String(pr), '--reason', 'dave', '--json'] : ['decide', '--pr', String(pr), '--kind', verb, '--json']
+/** `cost` is "$X": a pay decision carries it as `--cap X`, the price of Dave's tap. */
+const verbArgv = (verb: SlotVerb, pr: number, cost: string | null = null): string[] => {
+  if (verb === 'drop') return ['drop', '--pr', String(pr), '--reason', 'dave', '--json']
+  return ['decide', '--pr', String(pr), '--kind', verb, ...(verb === 'pay' && cost ? ['--cap', cost.replace('$', '')] : []), '--json']
+}
+
+const PAID_SCRIPT = 'scripts/github/cr-paid.mjs'
+
+/** A fresh `cr-paid.mjs check` of the PR and the price of its round ("$2.75"), or null (not ALLOW, a failed read, an old script that prints no file count). */
+async function freshPrice($: EngineInterface, found: Found, pr: number): Promise<string | null> {
+  const ran = await runCli($, found, ['check', '--pr', String(pr), '--json'], VERB_TIMEOUT_MS, `${found.root}/${PAID_SCRIPT}`)
+  return ran.ok ? payPrice(ran.out) : null
+}
+
+/**
+ * `/slot pay N`: Dave's typed command opens the same priced dialog as the paid ask (the cap is the price of his tap, so a typed number is no yes).
+ * A choice other than Pay runs its own verb.
+ */
+async function payByDialog($: EngineInterface, found: Found, pr: number): Promise<string> {
+  const cost = await freshPrice($, found, pr)
+  if (cost === null) return `PR #${pr}: no paid round is offered now: cr-paid gave no price (it is not ALLOW, or it could not be read). Nothing was posted.`
+  if (!takeDialog()) return `PR #${pr}: another question is open. Answer it first. Nothing was posted.`
+  try {
+    const spec = slotAskSpec({ pr, kind: 'paid', canPay: true, cost })
+    const got = await askDave($, spec.question, spec.choices.map(one => one.label), spec.header)
+    const choice = got.kind === 'text' ? spec.choices.find(one => one.label === got.text) : undefined
+    if (!choice) return `PR #${pr}: no answer. Nothing was posted.`
+    return resultText(choice.verb, pr, await runCli($, found, verbArgv(choice.verb, pr, cost), VERB_TIMEOUT_MS))
+  } finally {
+    freeDialog()
+  }
+}
 
 async function listText($: EngineInterface, found: Found): Promise<string> {
   const ran = await runCli($, found, ['list', '--json'], VERB_TIMEOUT_MS)
@@ -301,6 +333,7 @@ export async function slotCommand($: EngineInterface, e: { args: string; origin:
   const found = await slotScript($)
   if (!found) return { text: `${SCRIPT} was not found in ~/continuous-claude or the session root.` }
   if (parsed.kind === 'list') return { text: await listText($, found) }
+  if (parsed.kind === 'pay') return { text: await payByDialog($, found, parsed.pr) }
   return { text: resultText(parsed.kind, parsed.pr, await runCli($, found, verbArgv(parsed.kind, parsed.pr), VERB_TIMEOUT_MS)) }
 }
 

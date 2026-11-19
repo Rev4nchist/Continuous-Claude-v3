@@ -180,19 +180,21 @@ export function landSpec(d) {
 /** paid-round. data: { pr, round, files, today, paidRounds, verdict ('ALLOW'|'ESCALATE'|null), reasons, reason, caps: { round, day, rounds } }. */
 export function paidRoundSpec(d) {
   const caps = d.caps ?? { round: 5, day: 15, rounds: 2 };
-  const cost = typeof d.files === 'number' ? d.files * PAID_PER_FILE : null;
+  // The price counts the UNFILTERED files (`total`): path_filters billing is unproven, and `cr-paid.mjs post` compares its cost with the label on that count.
+  const billed = Number.isInteger(d.total) ? d.total : d.files;
+  const cost = typeof billed === 'number' ? billed * PAID_PER_FILE : null;
   const allow = d.verdict === 'ALLOW';
   const verdict = allow ? 'cr-paid says ALLOW.'
     : d.verdict === 'ESCALATE' ? `cr-paid says ESCALATE: ${clip((d.reasons ?? []).join('; '), 100)}. No paid round is offered: it is over the cap.`
       : `cr-paid gave no verdict: ${clip(d.reason ?? 'unknown', 80)}. No paid round is offered without an ALLOW.`;
   const lines = [
-    cost === null ? `PR #${d.pr}: a paid CodeRabbit round costs ${usd(PAID_PER_FILE)} a file, size unknown.` : `PR #${d.pr}: paid CodeRabbit round ${d.round ?? '?'}, ${plural(d.files, 'file')} x ${usd(PAID_PER_FILE)} = up to ${usd(cost)}.`,
+    cost === null ? `PR #${d.pr}: a paid CodeRabbit round costs ${usd(PAID_PER_FILE)} a file, size unknown.` : `PR #${d.pr}: paid CodeRabbit round ${d.round ?? '?'}, ${plural(billed, 'file')} x ${usd(PAID_PER_FILE)} = up to ${usd(cost)}.`,
     `Today ${usd(d.today ?? 0)} of ${usd(caps.day)}. Paid rounds on this PR ${d.paidRounds ?? 0} of ${caps.rounds}. Round cap ${usd(caps.round)}.`,
     verdict,
   ];
   const free = opt('No, keep it free', 'Posts nothing. The PR keeps its free-slot path.', true);
   // Dave 2026-11-06: a paid round is offered only on cr-paid ALLOW. ESCALATE and a missing verdict get no pay row.
-  const rows = allow ? [free, opt(`Yes, pay up to ${usd(cost ?? 0)}`, 'Posts @coderabbitai review --use-credits, then logs the round with cr-paid.mjs record.')]
+  const rows = allow ? [free, opt(`Yes, pay up to ${usd(cost ?? 0)}`, `Then run node scripts/github/cr-paid.mjs post --pr ${d.pr}: it records the round, then posts @coderabbitai review --use-credits. The price is a cap: a higher cost at the post is refused.`)]
     : [free, opt('Stop here', 'Posts nothing. The reason is in the question above.')];
   return { header: 'Paid round', question: lines.join('\n'), options: rows };
 }

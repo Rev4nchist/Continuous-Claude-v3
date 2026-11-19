@@ -600,7 +600,7 @@ test('F14: decide pay with an ESCALATE verdict exits 3, posts nothing and writes
   setWorld(e, { 5: prOf(5) });
   setState(e, [itemOf(5)]);
   const before = digest(e.statePath);
-  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--json'], { checkPr: ESCALATE });
+  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '5', '--json'], { checkPr: ESCALATE });
   assert.equal(r.code, 3);
   assert.deepEqual([r.json.verdict, r.json.posted], ['ESCALATE', false]);
   assert.match(r.json.reasons[0], /over \$15\.00/);
@@ -614,7 +614,7 @@ test('F14: decide pay with an ALLOW posts the paid comment once, records the rou
   const e = setup('f14b');
   setWorld(e, { 5: prOf(5) });
   setState(e, [itemOf(5)]);
-  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--json'], { checkPr: () => ALLOW(5) });
+  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '5', '--json'], { checkPr: () => ALLOW(5) });
   assert.equal(r.code, 0);
   assert.deepEqual([r.json.verdict, r.json.posted], ['ALLOW', true]);
   assert.deepEqual(posts(e), [{ pr: 5, body: '@coderabbitai review --use-credits' }]);
@@ -625,7 +625,8 @@ test('F14: decide pay with an ALLOW posts the paid comment once, records the rou
   assert.equal(posts(e).length, 1);
 });
 
-const payArgv = (pr) => ['decide', '--pr', String(pr), '--kind', 'pay', '--json'];
+// A pay decision carries Dave's price: --cap (the mod passes it from the label of its own dialog).
+const payArgv = (pr) => ['decide', '--pr', String(pr), '--kind', 'pay', '--cap', '5', '--json'];
 const ledgerRows = (e) => (existsSync(e.ledgerPath) && !statSync(e.ledgerPath).isDirectory() ? readFileSync(e.ledgerPath, 'utf8').trim().split('\n').filter(Boolean) : []);
 
 // M5. Breaks if payLocked sets no holder and no lastPostAt: the paid post then spends no spacing, and no path ever requeues it.
@@ -741,7 +742,7 @@ test('decide pay with no verdict gives exit 2 and posts nothing', () => {
   const e = setup('f14c');
   setWorld(e, { 5: prOf(5) });
   setState(e, [itemOf(5)]);
-  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--json'], { checkPr: () => ({ exitCode: 2, verdict: null, reason: 'gh failed' }) });
+  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '5', '--json'], { checkPr: () => ({ exitCode: 2, verdict: null, reason: 'gh failed' }) });
   assert.equal(r.code, 2);
   assert.deepEqual(posts(e), []);
   assert.equal(existsSync(e.ledgerPath), false);

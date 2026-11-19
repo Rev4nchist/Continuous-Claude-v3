@@ -183,6 +183,12 @@ const autoOf = (value: unknown): CheckpointResult['auto'] => {
   return { eligible: true, band: typeof value.band === 'string' ? value.band : null, reason: typeof value.reason === 'string' ? value.reason : '' }
 }
 
+/** The file count a paid label prices: the UNFILTERED `total` (cr-paid.mjs `total`), or `files` when the result has none. The engine has the same rule (paidCountOf in checkpoint-ledger.mjs). */
+export const paidCountOf = (size: { files: number; total?: number }): number => {
+  const total = size.total
+  return typeof total === 'number' && Number.isInteger(total) && total >= 0 ? total : size.files
+}
+
 /** The result plus the engine's drift text (`config_drift_why`: null or absent without drift, or from an old engine). */
 export type CheckpointResultWithDrift = CheckpointResult & { config_drift_why?: string | null; ledger?: LedgerBlock | null }
 
@@ -196,7 +202,12 @@ export const parseResult = (stdout: string): CheckpointResultWithDrift | null =>
       head: parsed.head,
       class: typeof parsed.class === 'string' ? parsed.class : 'unknown',
       matched: typeof parsed.matched === 'number' ? parsed.matched : 0,
-      size: { files: typeof size.files === 'number' ? size.files : 0, lines: typeof size.lines === 'number' ? size.lines : 0 },
+      size: {
+        files: typeof size.files === 'number' ? size.files : 0,
+        lines: typeof size.lines === 'number' ? size.lines : 0,
+        // The unfiltered count prices the paid rows. A value that is no whole, non-negative number is dropped (the price then follows files).
+        ...(typeof size.total === 'number' && Number.isInteger(size.total) && size.total >= 0 ? { total: size.total } : {}),
+      },
       checks: Array.isArray(parsed.checks) ? (parsed.checks as CheckpointResult['checks']) : [],
       cli: isObject(parsed.cli) && isObject(parsed.cli.bySeverity) ? (parsed.cli as CheckpointResult['cli']) : null,
       credits: isObject(parsed.credits) ? (parsed.credits as CheckpointResult['credits']) : { used: null, monthly: null },
@@ -419,7 +430,7 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, n
   if (result.recommended === null || open.length === 0) return null
   const slot = slotOf(result.capacity, now)
   const choices: PathwayChoice[] = rowsOf(buttons, slot, recommendedFirst).map(one => ({
-    label: `${labelFor(one, result.size.files, slot)}${marked(one.pathway, result, recommendedFirst) ? RECOMMENDED : ''}`,
+    label: `${labelFor(one, paidCountOf(result.size), slot)}${marked(one.pathway, result, recommendedFirst) ? RECOMMENDED : ''}`,
     pathway: one.pathway,
     by: 'dave',
   }))

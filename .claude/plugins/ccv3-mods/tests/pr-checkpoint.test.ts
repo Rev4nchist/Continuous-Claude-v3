@@ -631,6 +631,15 @@ describe('pr-checkpoint: registration and the checkpoint question', () => {
     expect(seen.toasts.some(text => /#7/.test(text))).toBe(true)
   })
 
+  // Paid guard PR 2 (d2): the record's file count prices the "up to $X" of a LATER question, so it is the UNFILTERED count (`size.total`), like the pick label.
+  test('K2b the record files value is the unfiltered size.total when the result has one (the later question prices the same count as the pick)', async ($, on) => {
+    const { store } = world(on, { json: { stdout: JSON.stringify(engineJson({ size: { files: 7, total: 10, lines: 212 } })) } })
+    await start($)
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect((store.get('checkpoint:pr:7') as Rec).files).toBe(10)
+  })
+
   test('K3 another label runs --by dave', async ($, on) => {
     const { seen, store } = world(on)
     const { pane } = await openPane($)

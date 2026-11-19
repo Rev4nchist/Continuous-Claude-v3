@@ -52,8 +52,8 @@ import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayM
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
-import { askSpecOf, ledgerConfirmCheck, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
-import { DECISIONS_ENV, decisionKey, decisionsPath, dropKey } from './lib/decisions.mjs';
+import { askSpecOf, ledgerConfirmCheck, ledgerStep, ledgerUse, paidYesOf, slotStateOf } from './lib/checkpoint-ledger.mjs';
+import { DECISIONS_ENV, decisionKey, decisionsPath, dropKey, paidRoundWrite } from './lib/decisions.mjs';
 
 export { capacityFact, parseRateLimitReply };
 
@@ -155,11 +155,15 @@ export function reviewableFiles(files, filters = []) {
   return files.filter((f) => !skip.some((g) => matchGlob(g, f.filename)) && (keep.length === 0 || keep.some((g) => matchGlob(g, f.filename))));
 }
 
-/** files: reviewable files. lines: additions plus deletions. added: additions alone (the small rule RS reads it). */
-const sizeOf = (reviewable) => ({
+/**
+ * files: reviewable files. lines: additions plus deletions. added: additions alone (the small rule RS reads it).
+ * total: ALL changed files, before the path filters (cr-paid.mjs reports the same count as `total`). A paid label prices it: path_filters billing is unproven.
+ */
+const sizeOf = (reviewable, all = reviewable) => ({
   files: reviewable.length,
   lines: reviewable.reduce((n, f) => n + (f.additions ?? 0) + (f.deletions ?? 0), 0),
   added: reviewable.reduce((n, f) => n + (f.additions ?? 0), 0),
+  total: all.length,
 });
 
 const budgetPair = (b) => (Array.isArray(b) ? [b[0] ?? 0, b[1] ?? 0] : [Number(b) || 0, 0]);
@@ -560,7 +564,7 @@ function contextOf(facts, policy) {
     band: bandOf(facts.files, policy, { labels: facts.labels ?? [] }), botBudget: policy.matrix?.bot_budget ?? {},
     critical: tagged(paths, policy.checkpoint?.critical), parser: tagged(paths, policy.checkpoint?.parser),
     monthFiles: facts.ledger_month_files, monthCap: monthCapOf(policy),
-    size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: resultCapacity(policy, facts),
+    size: sizeOf(reviewable, facts.files), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: resultCapacity(policy, facts),
   };
 }
 
@@ -706,6 +710,7 @@ export function questionShown(result) {
 }
 
 const PROBE_VIEW_TIMEOUT_MS = 20000;
+const PAID_VIEW_TIMEOUT_MS = 20000;
 
 /** `gh pr view <n>` says the PR is OPEN, a draft, and has that number. Any gh error or odd answer is false. */
 function openDraft(pr) {
@@ -1021,15 +1026,38 @@ function runConfirm(o) {
   mkdirSync(stateDir, { recursive: true });
   // Dave's tap is used up BEFORE the record is written, and a failed use refuses: a tap that stays after a record would let a second --confirm write again.
   // A record write that fails after the use leaves no tap and no record, so the next call asks again. --by auto has no tap and keeps its order.
+  let used = null;
   if (ledger && args.by === 'dave') {
     // The tap must be the one that was read (label AND time), and its row must still be a row of the question at THIS clock (a free slot can go while the lock waits).
     const rowNow = (row) => askSpecOf(pr, args.result, '', consumeClock(o, facts)).values[row.label] === args.pathway;
-    const used = ledgerUse({ pr, head: facts.head, label: check.label, at: check.at, check: rowNow });
+    used = ledgerUse({ pr, head: facts.head, label: check.label, at: check.at, check: rowNow, returnRow: true });
     if (!used.ok) return refuse(`Dave's tap for ${args.pathway} on PR #${pr} could not be used up (${used.reason}). Nothing was recorded. Call pr_checkpoint {pr} again.`);
   }
   writeFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), `${JSON.stringify(record, null, 2)}\n`);
   if (ledger && args.by !== 'dave') ledgerUse({ pr, head: facts.head });
+  // The paid yes comes LAST, after the record: a failure here leaves the record as it is and gives no yes (the model asks again for a paid post).
+  const noYes = used ? writePaidYes({ pr, head: facts.head, pathway: args.pathway, row: used.row }) : null;
+  if (noYes) console.error(`pr-checkpoint: no paid yes was stored for PR #${pr}: ${noYes}`);
   console.log(JSON.stringify(record));
+}
+
+/**
+ * The paid-round row of a paid pick, written after the record. A paid pick is a coderabbit or both pick whose tapped label names a price (the
+ * price is the cap). Nothing is written for the free-slot row, the wait row or none (no price), for a head that is not the PR head (read from
+ * GitHub now), for a tap that has no tapAt or entry stamp, or when GitHub cannot be read. The row copies the stamp of the tap it used up.
+ * Returns null when the row is written or none is due, else the reason in one sentence.
+ */
+export function writePaidYes({ pr, head, pathway, row, gh = ghRunner(process.env, PAID_VIEW_TIMEOUT_MS) }) {
+  if (pathway !== 'coderabbit' && pathway !== 'both') return null;
+  const yes = paidYesOf(row);
+  if (yes === null) return null;
+  const view = gh(['pr', 'view', String(pr), '--json', 'headRefOid,number', ...REPO_ARGS]);
+  let live = '';
+  try { live = String(JSON.parse(view.stdout).headRefOid ?? '').toLowerCase(); } catch { /* unread */ }
+  if (view.status !== 0 || !/^[0-9a-f]{40}$/.test(live)) return `the PR head could not be read from GitHub (${firstLine(view.stderr) || 'no answer'})`;
+  if (live !== String(head).toLowerCase()) return `the pick is for ${String(head).slice(0, 7)} but the PR head is ${live.slice(0, 7)}`;
+  const w = paidRoundWrite({ key: decisionKey({ pr }), head, label: yes.label, tapAt: yes.tapAt, entry: yes.entry });
+  return w.ok ? null : w.reason;
 }
 
 /**

@@ -209,7 +209,7 @@ test('T2 (R1): a dist-only diff is 0 reviewable lines and gets none, though its 
 
 test('T2b: size counts additions and deletions of unfiltered paths only (PD: moved to R5_FILES; size gains `added`)', async () => {
   const r = await run([...R5_FILES, file('.claude/hooks/dist/x.mjs', 500), file('package-lock.json', 900)]);
-  assert.deepEqual(r.size, { files: 4, lines: 42, added: 40 });
+  assert.deepEqual(r.size, { files: 4, lines: 42, added: 40, total: 6 }, 'total is the unfiltered count (the paid label prices it, cr-paid.mjs total)');
   assert.equal(r.recommended, 'coderabbit');
   assert.deepEqual(r.budget, [1, 1], 'class normal: budget 1+1');
 });
@@ -413,7 +413,7 @@ test('PD3 (RS): deletions do not count toward the limit: +30 -200 is small', asy
 
 test('PD4 (RS): filtered files (dist, lock files) count toward neither the file limit nor the added limit', async () => {
   const r = await run([...filesIn('scripts', 'mjs', 3), file('.claude/hooks/dist/x.mjs', 500), file('package-lock.json', 900)], { cli: CLEAN });
-  assert.deepEqual(r.size, { files: 3, lines: 30, added: 30 });
+  assert.deepEqual(r.size, { files: 3, lines: 30, added: 30, total: 5 });
   assert.equal(r.recommended, 'none');
 });
 
@@ -675,7 +675,7 @@ test('PD11 (CLI): the way the harness runs it, a small PR with a clean CLI print
   const out = JSON.parse(r.stdout);
   assert.equal(out.recommended, 'none');
   assert.deepEqual(out.budget, [0, 0]);
-  assert.deepEqual(out.size, { files: 3, lines: 30, added: 30 });
+  assert.deepEqual(out.size, { files: 3, lines: 30, added: 30, total: 3 });
 });
 
 // PR B replaces the PR A test T22 ("--confirm and --apply exit 2, not available yet"). Both modes exist now; T22 keeps the

@@ -156,6 +156,110 @@ test('RT6: success prints one line with the new comment id and URL', () => {
   assert.equal(f.out.join(''), 'replied 777 https://github.com/o/r/pull/225#discussion_r777\n');
 });
 
+// ---- --top: a top-level PR comment from a file (paid-guard PR 2). Written before the code. ----
+// How it can fail, and the test that catches it:
+//   the body goes on the command line, or the call hits the review-thread endpoint     -> RT8
+//   the same refusals as the reply mode are skipped (empty, garbled, unreadable)       -> RT9
+//   a body with @coderabbitai and the paid word is posted (either mode)                -> RT10
+//   a body with the mention and no paid word is refused (plain review requests stay)   -> RT10b
+//   --top takes a comment id, or no --top takes one number, or --top lacks a file      -> RT11
+//   a failed or id-less gh reply prints a success line                                  -> RT12
+const TOP = ['225', '--top', '--body-file', 'C:\\tmp\\reply.md'];
+
+test('RT8: --top posts the file to the issue comments endpoint by POST, as -F body=@<file>', () => {
+  const f = fakes();
+  assert.equal(RT.main(TOP, f.deps), 0);
+  assert.equal(f.calls.length, 1);
+  const a = f.calls[0];
+  assert.equal(a[0], 'api');
+  assert.ok(a.includes('repos/Rev4nchist/Continuous-Claude-v3/issues/225/comments'));
+  assert.ok(!a.some((x) => x.includes('/pulls/') || x.includes('/replies')), 'not the review-thread endpoint');
+  assert.equal(a[a.indexOf('-X') + 1], 'POST');
+  assert.equal(a[a.indexOf('-F') + 1], 'body=@C:\\tmp\\reply.md');
+  assert.ok(!a.includes('-f'), 'no -f: the text never goes on the command line');
+  assert.equal(f.out.join(''), 'commented 777 https://github.com/o/r/pull/225#discussion_r777\n');
+});
+
+test('RT8b: --top honours --repo, and the flag may stand before the number', () => {
+  const f = fakes();
+  assert.equal(RT.main(['--top', '225', '--body-file', 'C:\\tmp\\reply.md', '--repo', 'a/b'], f.deps), 0);
+  assert.ok(f.calls[0].includes('repos/a/b/issues/225/comments'));
+});
+
+test('RT9: --top keeps the reply mode refusals: empty, whitespace, garbled and unreadable bodies post nothing', () => {
+  for (const files of [
+    { 'C:\\tmp\\reply.md': '' },
+    { 'C:\\tmp\\reply.md': ' \r\n\t\n' },
+    { 'C:\\tmp\\reply.md': 'Done: System.Collections.Hashtable.body' },
+    {},
+  ]) {
+    const f = fakes({ files });
+    assert.equal(RT.main(TOP, f.deps), 1);
+    assert.equal(f.calls.length, 0, 'gh must not run');
+    assert.ok(f.err.join('').length > 0);
+  }
+});
+
+test('RT10: a body with @coderabbitai and the paid word is refused in --top and in reply mode; nothing is posted', () => {
+  for (const bad of [
+    '@coderabbitai review --use-credits',
+    '@CodeRabbitAI review --use_credits',
+    'please\n@coderabbitai review\n--use credits\n',
+    'x @coderabbitai y --USE-CREDITS',
+    '@coderabbitai review --usecredits',
+  ]) {
+    for (const argv of [TOP, ARGV]) {
+      const f = fakes({ files: { 'C:\\tmp\\reply.md': bad } });
+      assert.equal(RT.main(argv, f.deps), 1, `${argv.join(' ')} :: ${bad}`);
+      assert.equal(f.calls.length, 0, 'gh must not run');
+      assert.match(f.err.join(''), /paid|credits/i);
+    }
+  }
+});
+
+test('RT10b: a plain review request, or the paid word without the mention, is still posted', () => {
+  for (const ok of ['@coderabbitai review', 'We pass --use-credits only through cr-paid.mjs.', '@greptileai please look again']) {
+    for (const argv of [TOP, ARGV]) {
+      const f = fakes({ files: { 'C:\\tmp\\reply.md': ok } });
+      assert.equal(RT.main(argv, f.deps), 0, `${argv.join(' ')} :: ${ok}`);
+    }
+  }
+});
+
+test('RT11: --top argument shapes: exactly one number and a body file, else exit 2 and nothing posted', () => {
+  const bad = [
+    ['--top'],
+    ['--top', '--body-file', 'f'],
+    ['225', '9', '--top', '--body-file', 'f'],
+    ['225', '--top'],
+    ['0', '--top', '--body-file', 'f'],
+    ['225', '--top', '--body-file', 'f', '--nope'],
+    ['225', '--top', '--body', 'inline text'],
+    ['225', '--top', '--body-file', 'f', '--repo', 'bad repo'],
+  ];
+  for (const argv of bad) {
+    const f = fakes({ files: { f: 'ok' } });
+    assert.equal(RT.main(argv, f.deps), 2, JSON.stringify(argv));
+    assert.equal(f.calls.length, 0);
+    assert.match(f.err.join(''), /usage|unknown|invalid/i);
+  }
+});
+
+test('RT12: --top with a failing gh, or a reply with no id, exits 1 and prints no success line', () => {
+  for (const gh of [() => { throw new Error('gh: Not Found (HTTP 404)'); }, () => '', () => '{}']) {
+    const f = fakes({ gh });
+    assert.equal(RT.main(TOP, f.deps), 1);
+    assert.equal(f.out.join(''), '');
+  }
+});
+
+test('RT13: the usage line shows both modes', () => {
+  const f = fakes();
+  RT.main([], f.deps);
+  assert.match(f.err.join(''), /<pr> <comment-id> --body-file <file>/);
+  assert.match(f.err.join(''), /<pr> --top --body-file <file>/);
+});
+
 test('RT7: a real process with no arguments exits 2 with a usage line', () => {
   const r = spawnSync(process.execPath, [path.join(HERE, 'reply-thread.mjs')], { encoding: 'utf8', windowsHide: true });
   assert.equal(r.status, 2);

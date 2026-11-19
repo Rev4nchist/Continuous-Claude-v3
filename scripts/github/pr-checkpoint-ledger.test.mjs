@@ -1033,3 +1033,15 @@ test('PG5: an alias path above a missing folder is the real store, so a fixture 
     dropFolderLink(alias);
   }
 });
+
+test('LD26: the paid label prices the UNFILTERED file count (size.total, the cr-paid.mjs total), and the stored tap label parses to the same cap in cents', () => {
+  // Five reviewable files plus two the path filters drop (dist output, a lock file): files 5, total 7.
+  const t = setup({ paths: [...FIVE, '.claude/hooks/dist/x.mjs', 'package-lock.json'] });
+  const out = t.call();
+  assert.equal(out.size.files, 5);
+  assert.equal(out.size.total, 7, 'the result carries the unfiltered count next to files');
+  const row = out.ledger.ask.options.find((o) => /^CodeRabbit review/.test(o.label));
+  assert.equal(row.label, 'CodeRabbit review (may cost up to $1.75) (Recommended)', '7 files x $0.25, not 5 x $0.25 = $1.25');
+  assert.equal(D.capCentsOfLabel(row.label), 175, 'the tap label is the cap cr-paid.mjs post compares with');
+  assert.match(out.ledger.ask.question, /^PR #349, band CRITICAL, 5 files\./, 'the question line still counts the reviewable files');
+});

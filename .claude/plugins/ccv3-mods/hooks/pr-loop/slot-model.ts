@@ -144,14 +144,34 @@ export const slotAskOf = (action: SlotAction): SlotAsk | null => {
 export type SlotChoice = { label: string; verb: 'pay' | 'wait' | 'drop' }
 export type SlotAskSpec = { header: string; question: string; choices: SlotChoice[] }
 
-/** The dialog: Keep waiting first (it costs nothing) and marked Recommended, then Pay with its figure, then Drop. No Pay when the CLI did not offer one. */
+/**
+ * The price of a paid round from a FRESH `cr-paid.mjs check --pr N --json` (stdout), as dollars with 2 decimals ("$2.75"), or null. Only an ALLOW with a
+ * whole file count of 1 or more gives a price: the UNFILTERED count (`total`, path_filters billing is unproven) at $0.25 a file. The toast text of the
+ * tick is not a source: it holds the filtered figure of an older read. No price means no Pay row (no price, no yes). Never throws.
+ */
+export const payPrice = (stdout: string): string | null => {
+  try {
+    const parsed: unknown = JSON.parse(stdout)
+    if (!isObject(parsed) || parsed.verdict !== 'ALLOW') return null
+    const files = parsed.total
+    return typeof files === 'number' && Number.isInteger(files) && files > 0 ? `$${(files * 0.25).toFixed(2)}` : null
+  } catch {
+    return null
+  }
+}
+
+/** The label of the Pay row. The price is the cap `post` enforces: the label says "up to" and the CLI refuses a cost over it. */
+export const payLabel = (cost: string): string => `Pay up to ${cost}`
+
+/** The dialog: Keep waiting first (it costs nothing) and marked Recommended, then Pay up to its price, then Drop. No Pay row without a price: no price, no yes. */
 export const slotAskSpec = (ask: SlotAsk): SlotAskSpec => {
-  const pay = ask.cost ? `Pay about ${ask.cost}` : 'Pay (cost unknown, cr-paid checks it)'
+  const offered = ask.canPay && ask.cost !== null
   const choices: SlotChoice[] = [
     { label: 'Keep waiting ($0) (Recommended)', verb: 'wait' },
-    ...(ask.canPay ? [{ label: pay, verb: 'pay' as const }] : []),
+    ...(offered && ask.cost ? [{ label: payLabel(ask.cost), verb: 'pay' as const }] : []),
     { label: 'Drop from queue ($0)', verb: 'drop' },
   ]
   const when = ask.kind === 'paid' ? 'no free CodeRabbit slot for 30 minutes' : 'no free CodeRabbit slot for 60 minutes; READY still needs a CodeRabbit review'
-  return { header: `PR #${ask.pr}`, question: `PR #${ask.pr}: ${when}. ${ask.canPay ? 'Pay for the round, keep waiting, or drop it?' : 'A paid round is not allowed now. Keep waiting or drop it?'}`, choices }
+  const ending = offered ? 'Pay for the round, keep waiting, or drop it?' : ask.canPay ? 'No price is known for a paid round now. Keep waiting or drop it?' : 'A paid round is not allowed now. Keep waiting or drop it?'
+  return { header: `PR #${ask.pr}`, question: `PR #${ask.pr}: ${when}. ${ending}`, choices }
 }

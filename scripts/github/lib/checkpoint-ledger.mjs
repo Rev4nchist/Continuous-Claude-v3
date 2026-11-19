@@ -46,9 +46,14 @@ export function slotStateOf(capacity, nowMs) {
 /** A paid row spends money: Greptile credits always, CodeRabbit unless the slot is free. `slot` is slotStateOf of the result's capacity. */
 const isPaid = (pathway, slot) => pathway === 'both' || (pathway === 'coderabbit' && slot !== 'free');
 
+/** The file count a paid label prices: the UNFILTERED size.total (cr-paid.mjs total), or size.files when the result has none. The same rule as paidCountOf in the mod (model.ts). */
+export function paidCountOf(size) {
+  return Number.isInteger(size.total) && size.total >= 0 ? size.total : size.files;
+}
+
 /** The label of a pathway row, with its cost. The words are the mod's (model.ts labelFor): both copies must give one text. */
 function labelOf(pathway, result, slot) {
-  const up = usd(result.size.files * PER_FILE);
+  const up = usd(paidCountOf(result.size) * PER_FILE);
   if (pathway === 'none') return 'No review, land on CI ($0)';
   if (pathway === 'wait') return 'Keep as draft ($0)';
   if (pathway === 'both') return `CodeRabbit + Greptile (may cost up to ${up} + ${GREPTILE_CREDITS} credits)`;
@@ -228,7 +233,17 @@ export const ledgerConfirmProblem = (args) => ledgerConfirmCheck(args).problem;
  * ledgerConfirmCheck read: a tap Dave made in between is label-changed and stays. No label: the tap is used whatever its label (--by auto).
  * `at` (the tap time ledgerConfirmCheck read) makes a newer tap of the SAME label tap-changed. `check(row)` is judged inside the store lock: false is
  * slot-changed (see decisionUse). Both optional.
+ * `returnRow: true` adds the used row's { label, at, tapAt, entry } to an ok result, read inside the lock before the delete (the paid-round row copies it).
  */
-export function ledgerUse({ pr, head, label, at, check, d = store }) {
-  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label, at, check });
+export function ledgerUse({ pr, head, label, at, check, returnRow = false, d = store }) {
+  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label, at, check, returnRow });
+}
+
+/**
+ * The paid yes of a confirmed pick, or null when the pick is not a paid one (no price in its label). `row` is the used tap { label, tapAt, entry }.
+ * A priced label is the paid yes whatever the slot is; the price is the cap (decisions.mjs capCentsOfLabel). Pure.
+ */
+export function paidYesOf(row, d = store) {
+  const cents = d.capCentsOfLabel(row?.label);
+  return cents === null ? null : { label: row.label, tapAt: row.tapAt ?? null, entry: row.entry ?? null, capCents: cents };
 }

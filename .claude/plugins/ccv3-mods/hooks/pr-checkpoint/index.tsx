@@ -96,6 +96,7 @@ import {
   worktreeFor,
 } from './model'
 import type { LedgerBlock, LockPattern, LockShapes, PathwayChoice } from './model'
+import { paidCountOf } from './model'
 import { GRANT_PREFIX, RECORD_PREFIX, allowedRound, askNotice, coverDecline, dropAsksOfPr, enqueueRound, grantReadable, keptNotice, loadAsks, raiseQueued, rootOf, saveAsks } from './tick-asks'
 
 /** The same atom the other modules declare (same plugin and key, same default): an atom is read only where it is declared. */
@@ -334,8 +335,8 @@ const recordPathway = async (
     via,
     // The router band, so the apply (and the retry of a refused apply) can queue the PR for the free CodeRabbit slot.
     band: a.result.auto?.band ?? null,
-    // The changed-file count prices the "up to $X" of a later question.
-    files: a.result.size.files,
+    // The file count prices the "up to $X" of a later question: the UNFILTERED count, the same as the pick label (`paidCountOf`).
+    files: paidCountOf(a.result.size),
     pr: a.pr,
     state: 'confirmed',
     session: await sessionId($),
