@@ -19,6 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -91,6 +92,7 @@ console.log('stub updater call ' + n + ', race step ' + step);
 
 // Stand-in for the esbuild bundle: the dist file is a pure function of the guard source and the JSON.
 const BUILD_MJS = `
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -99,6 +101,9 @@ const src = readFileSync(join(here, 'src', 'package-install-guard.ts'), 'utf8').
 const json = JSON.parse(readFileSync(join(here, 'src', 'shared', 'malicious-packages.json'), 'utf8'));
 mkdirSync(join(here, 'dist'), { recursive: true });
 writeFileSync(join(here, 'dist', 'package-install-guard.mjs'), '// ' + src + '\\nexport default ' + JSON.stringify(json) + '\\n');
+// Stand-in for write-build-inputs.mjs: the real manifest hashes the json too (PR 656 follow-up), so a blocklist change changes it.
+const jsonText = readFileSync(join(here, 'src', 'shared', 'malicious-packages.json'), 'utf8');
+writeFileSync(join(here, 'dist', '.build-inputs.json'), JSON.stringify({ json: createHash('sha256').update(jsonText.replace(/\\r/g, '').trimEnd()).digest('hex') }) + '\\n');
 `;
 
 function put(file, text) {
@@ -282,6 +287,14 @@ test('F7 a push rejected while the remote did not move: exit 1 at once, one atte
   assert.match(fx.log, /did not move/);
   assert.equal(fx.tip, fx.seedSha, 'the remote is unchanged');
   assert.deepEqual(readdirSync(fx.tmp).filter((n) => n.startsWith('blocklist-update-')), [], 'cleanup runs after a failure');
+});
+
+test('F11 the job commit carries the build manifest, which hashes the changed json (else the next session-start check and the CI dist diff go stale)', win, () => {
+  const fx = build('none');
+  assert.equal(fx.status, 0, msg(fx));
+  const manifest = JSON.parse(tipFile(fx, '.claude/hooks/dist/.build-inputs.json'));
+  const jsonText = tipFile(fx, '.claude/hooks/src/shared/malicious-packages.json');
+  assert.equal(manifest.json, createHash('sha256').update(jsonText.replace(/\r/g, '').trimEnd()).digest('hex'), 'the pushed manifest must hash the pushed json');
 });
 
 test('F10 no race: exit 0, one updater call, exactly one new commit', win, () => {

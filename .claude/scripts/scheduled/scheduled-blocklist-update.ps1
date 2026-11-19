@@ -96,7 +96,8 @@ function Invoke-Attempt {
   if ($buildRc -ne 0) { Log '[ERROR] Hook build failed'; return 1 }
 
   # A failed add (an index.lock, say) would leave nothing staged and read as "no changes": check it.
-  $addOut = & git add -- .claude/hooks/src/shared/malicious-packages.json .claude/hooks/dist/package-install-guard.mjs 2>&1
+  # The build manifest hashes the json (write-build-inputs.mjs), so a blocklist change changes it: stage it too.
+  $addOut = & git add -- .claude/hooks/src/shared/malicious-packages.json .claude/hooks/dist/package-install-guard.mjs .claude/hooks/dist/.build-inputs.json 2>&1
   if ($LASTEXITCODE -ne 0) { Log "[ERROR] git add failed: $addOut"; return 1 }
   & git diff --cached --quiet
   if ($LASTEXITCODE -eq 0) { Log 'No blocklist changes detected; nothing to commit or push'; return 0 }

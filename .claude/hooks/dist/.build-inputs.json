@@ -202,6 +202,9 @@
     "web-lookup-advisor.ts": "0ad144b1e18cfd5c3579ba666f868cd5ec231dd7a18833fa9bdd4819e12ee1e1"
   },
   "external": {
+    ".claude/hooks/src/shared/malicious-packages.json": {
+      "sha256": "bf8855419223d9c52d7b101127f39b5aa6b43e16a4b18ef39bc3e202529b8d3b"
+    },
     "scripts/github/lib/answer-key.mjs": {
       "sha256": "49a0451170db358544ca66ddc35260463de2c1b19663a0ee85504d0bca1e972c"
     },
