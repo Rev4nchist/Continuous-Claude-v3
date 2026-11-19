@@ -153,7 +153,7 @@ export async function enqueueRound($: EngineInterface, record: CheckpointRecord 
   return slotAdd($, { pr: record.pr, band: record.band, head, round }).catch(() => false)
 }
 
-type Staleness = { kind: 'open' } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
+type Staleness = { kind: 'open'; head: string } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
 /** `open`: the PR is open and not a draft, at `head` (the head the read printed). */
 type OpenRead = { kind: 'open'; head: string } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
 
@@ -180,12 +180,12 @@ async function readOpenPr($: EngineInterface, root: string, pr: number, expectHe
 }
 
 /**
- * Whether a Yes may act: the PR must be open, not a draft, at the asked head. A post spends a review and a round grant allows one, so a state that
- * cannot be read fails closed (the question stays queued), as the post failure below does.
+ * Whether a Yes may act: the PR must be open and not a draft. An opening or Greptile Yes posts a comment, so it also needs the asked head. A round Yes
+ * writes a grant and may queue a review: like the typed `/pathway grant`, it accepts a moved head (a round is asked after fix pushes) and carries the head
+ * that this read printed. A state that cannot be read fails closed (the question stays queued), as the post failure below does.
  */
 async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): Promise<Staleness> {
-  const read = await readOpenPr($, root, ask.pr, ask.head)
-  return read.kind === 'open' ? { kind: 'open' } : read
+  return readOpenPr($, root, ask.pr, ask.kind === 'round' ? null : ask.head)
 }
 
 /**
@@ -233,11 +233,12 @@ async function applyAnswer($: EngineInterface, ask: CheckpointAsk, answer: 'yes'
   const key = `${RECORD_PREFIX}${ask.pr}`
   const stored = readRecord(await $.store.get(key))
   let next: CheckpointRecord | null = stored
+  let seen: Staleness | null = null
   if (answer === 'yes') {
     const root = await rootOf($)
     // A question can wait for days (restore keeps it): a late Yes acts only on a PR that is still open, not a draft, at the asked head. A round Yes
     // writes a grant and may queue a review, so it reads the PR too; with no checkout to read it in, it fails closed.
-    const seen = root ? await staleness($, root, ask) : ask.kind === 'round' ? { kind: 'unreadable' as const, why: 'no checkout' } : null
+    seen = root ? await staleness($, root, ask) : ask.kind === 'round' ? { kind: 'unreadable' as const, why: 'no checkout' } : null
     if (seen && seen.kind === 'unreadable') {
       const text = `PR #${ask.pr}: could not read the PR state (${seen.why}); nothing ${ask.kind === 'round' ? 'granted' : 'posted'}, the question stays queued`
       $.ui.toast(text, { timeoutMs: 10_000 })
@@ -264,14 +265,16 @@ async function applyAnswer($: EngineInterface, ask: CheckpointAsk, answer: 'yes'
   if (ask.kind === 'round' && answer === 'yes') {
     // The same rule as the typed grant (D-a, Dave 11-01): only a round decline this Yes covers goes.
     const allowed = await allowedRound($, ask.pr, ask.round ?? 1)
-    await $.store.set(`${GRANT_PREFIX}${ask.pr}`, { round: allowed, head: ask.head, at: now })
+    // The head the PR read printed (a fix push may have moved it since the ask); the ask's own head when no read ran (no checkout is refused above).
+    const head = seen && seen.kind === 'open' ? seen.head : ask.head
+    await $.store.set(`${GRANT_PREFIX}${ask.pr}`, { round: allowed, head, at: now })
     const cover = coverDecline(next, allowed)
     retained = cover.retained
     if (next && cover.covered) {
       const { declined: _declined, ...rest } = next
       next = rest as CheckpointRecord
     }
-    queued = retained === null && (await enqueueRound($, stored, allowed, ask.head))
+    queued = retained === null && (await enqueueRound($, stored, allowed, head))
   } else if (next) {
     if (ask.kind === 'opening') next = answer === 'yes' ? { ...next, opened: { head: ask.head, at: now } } : { ...next, declined: { kind: 'opening', round: 1, head: ask.head } }
     else if (ask.kind === 'round') next = { ...next, declined: { kind: 'round', round: ask.round ?? 1, head: ask.head } }

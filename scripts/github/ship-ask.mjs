@@ -326,8 +326,8 @@ const CHICAGO_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicag
 const chicagoDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? CHICAGO_DAY.format(t) : ''; };
 
 /**
- * How many counter rows use a slot of the run cap, as pre-pr.mjs counts them (countedRuns on the prepr-speed branch; this copy is read until that
- * lands, and then it can import it). A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) uses none either,
+ * How many counter rows use a slot of the run cap, as pre-pr.mjs counts them (the same countedRuns logic as pre-pr.mjs; a copy, not an import:
+ * one source for both is a follow-up of Coord standard). A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) uses none either,
  * but only the first such row of each Chicago day: the next one counts. A time that cannot be read counts (fail closed).
  */
 export function countedRuns(rows) {

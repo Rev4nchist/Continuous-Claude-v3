@@ -4838,13 +4838,35 @@ describe('pr-checkpoint PR 2 group A: the ten items', () => {
       dropped(w)
     })
 
-    test('AD2 a round Yes after the head moved writes no grant, queues nothing and drops the ask', async ($, on) => {
+    // Seat ruling: a round Yes accepts a moved head, as the typed /pathway grant does. Both carry the head that the PR read printed.
+    test('AD2 round Yes after the head moved stores the grant and queues the round at the head the read printed', async ($, on) => {
       const w = world(on, round(stateView({ headRefOid: OTHER_HEAD })))
       await start($)
       await w.clock.advance(TICK)
       expect(w.seen.dialogs.length).toBe(1)
-      expect(w.store.get(GRANT)).toBeUndefined()
-      expect(slotAdds(w.seen)).toEqual([])
+      expect(w.store.get(GRANT)).toEqual({ round: 4, head: OTHER_HEAD, at: expect.any(Number) })
+      const adds = slotAdds(w.seen)
+      expect(adds.length).toBe(1)
+      const argv = adds[0]?.argv ?? []
+      expect(argv[argv.indexOf('--head') + 1]).toBe(OTHER_HEAD)
+      expect(asksOf(w.store)).toEqual([])
+    })
+
+    test('AD2b an opening Yes after the head moved posts nothing and drops the ask (the head check stays for opening)', async ($, on) => {
+      const w = world(on, opening(stateView({ headRefOid: OTHER_HEAD })))
+      await start($)
+      await w.clock.advance(TICK)
+      expect(w.seen.dialogs.length).toBe(1)
+      expect(counts(w.seen).comments).toEqual([])
+      dropped(w)
+    })
+
+    test('AD2c a Greptile Yes after the head moved posts nothing and drops the ask (the head check stays for Greptile)', async ($, on) => {
+      const w = world(on, greptile(stateView({ headRefOid: OTHER_HEAD })))
+      await start($)
+      await w.clock.advance(TICK)
+      expect(w.seen.dialogs.length).toBe(1)
+      expect(counts(w.seen).comments).toEqual([])
       dropped(w)
     })
 

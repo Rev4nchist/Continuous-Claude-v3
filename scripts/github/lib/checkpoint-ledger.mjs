@@ -138,7 +138,7 @@ function askAgain(pr, triple, spec, d, note = null) {
 
 /** How many times one call judges a tap that Dave replaced meanwhile, before it stops. */
 const MAX_JUDGED = 3;
-const SLOT_CHANGED_NOTE ='The CodeRabbit slot changed. Your tap was not recorded.';
+const SLOT_CHANGED_NOTE = 'The CodeRabbit slot changed. Your tap was not recorded.';
 const QUESTION_CHANGED_NOTE = 'The question changed. Your tap was not recorded.';
 const REPICK_NOTE = 'The PR went back to draft. Your earlier tap was not recorded.';
 
