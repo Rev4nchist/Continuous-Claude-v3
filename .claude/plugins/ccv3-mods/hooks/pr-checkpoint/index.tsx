@@ -96,7 +96,7 @@ import {
   worktreeFor,
 } from './model'
 import type { LedgerBlock, LockPattern, LockShapes, PathwayChoice } from './model'
-import { GRANT_PREFIX, RECORD_PREFIX, allowedRound, askNotice, coverDecline, currentHead, dropAsksOfPr, enqueueRound, keptNotice, loadAsks, raiseQueued, rootOf, saveAsks } from './tick-asks'
+import { GRANT_PREFIX, RECORD_PREFIX, allowedRound, askNotice, coverDecline, dropAsksOfPr, enqueueRound, grantReadable, keptNotice, loadAsks, raiseQueued, rootOf, saveAsks } from './tick-asks'
 
 /** The same atom the other modules declare (same plugin and key, same default): an atom is read only where it is declared. */
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
@@ -543,7 +543,10 @@ const cleanSteps = async ($: EngineInterface, root: string, pr: number, marker: 
   }
   try {
     const found = await slotScript($)
-    if (found) {
+    // No queue script in any root: nothing proves the entry is gone, so the cleanup stays open (no `dropped: true`).
+    if (!found) {
+      open.push('the queue entry')
+    } else {
       const ran = await run($, slotDropArgv(found.script, pr), found.root, VIEW_TIMEOUT_MS)
       if (!ran.ok || ran.code !== 0) open.push('the queue entry')
     }
@@ -598,30 +601,37 @@ const returnedToDraft = async ($: EngineInterface, pending: Pick<Pending, 'pr' |
   // Every cleanup first reads the PR again and runs only on a draft at the expected head (another session may have applied the same head since `prepare`
   // read it, and its queue entry must stay). `drafted`: the caller read the PR as a draft; a stored pending checkpoint (a bare /pathway, the phone) did not,
   // so a PR that is no draft there, or moved, is no cleanup and no stop: only a read that fails is a stop (the return would go unseen).
-  const cleaning = async (repick: boolean, clean: () => Promise<string | null>) => {
+  // `clean` takes the head for the marker: the expected head, or (a stored pending checkpoint, a draft at ANOTHER head: a return by hand, then a push) the fresh one.
+  const cleaning = async (repick: boolean, clean: (head: string) => Promise<string | null>) => {
     const fresh = await draftAtHead($, root, pr, prHead)
-    if (fresh === null) return { repick: true, stop: await clean() }
+    if (fresh === null) return { repick: true, stop: await clean(prHead) }
+    // A candidate exists (the callers are reached only with an applied record, or a marker with no flag) and the fresh read shows a draft at another head:
+    // the PR was returned and pushed. Its grant, queue entry and taps are the old ready period's, so they go. Only a PR that is no draft keeps them.
+    if (!drafted && fresh.draftHead !== undefined) return { repick: true, stop: await clean(fresh.draftHead) }
     if (!drafted && !fresh.unreadable) return { repick, stop: null }
     return { repick, stop: cleanupUncheckedText(pr, fresh.why) }
   }
   if (stored == null) {
     if (applied === null) return { repick: false, stop: null }
     // An undo by another session, by hand, by the land tap or on the GitHub page: no mod code ran, so no cleanup ran. The marker time makes the engine read an older tap as stale.
-    return cleaning(false, () => cleanupReturn($, root, pr, prHead))
+    return cleaning(false, head => cleanupReturn($, root, pr, head))
   }
   const marker = typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {}
   // A marker with no readable time keeps the engine rejecting every tap, even one on the new offer, so it is repaired first (flag or no flag).
-  if (repickSinceOf(marker) === REPICK_UNREADABLE) return cleaning(true, () => cleanupReturn($, root, pr, prHead, true))
+  if (repickSinceOf(marker) === REPICK_UNREADABLE) return cleaning(true, head => cleanupReturn($, root, pr, head, true))
   // `dropped: true` is the proof of ONE return. A record applied after the marker is a later ready period: its taps are not cleaned yet.
   const appliedAt = applied?.appliedAt
-  if (typeof appliedAt === 'number' && Number.isFinite(appliedAt) && appliedAt > (marker.at as number)) return cleaning(true, () => cleanupReturn($, root, pr, prHead))
+  if (typeof appliedAt === 'number' && Number.isFinite(appliedAt) && appliedAt > (marker.at as number)) return cleaning(true, head => cleanupReturn($, root, pr, head))
   // Without the flag (a step failed, or the marker is older than the flag) every step of the cleanup runs again, on the marker as it is.
   if (marker.dropped === true) return { repick: true, stop: null }
   return cleaning(true, () => cleanSteps($, root, pr, marker))
 }
 
-/** One fresh read of the PR: null when it is a draft at `head`, else why it is not (and whether the read itself failed). Never throws. */
-const draftAtHead = async ($: EngineInterface, root: string, pr: number, head: string): Promise<{ why: string; unreadable: boolean } | null> => {
+/**
+ * One fresh read of the PR: null when it is a draft at `head`, else why it is not (and whether the read itself failed). `draftHead`: set only when the PR
+ * IS a draft but at another head (the head now), so a caller can tell a draft at another head from a PR that is no draft. Never throws.
+ */
+const draftAtHead = async ($: EngineInterface, root: string, pr: number, head: string): Promise<{ why: string; unreadable: boolean; draftHead?: string } | null> => {
   const ran = await run($, viewArgv(pr), root, VIEW_TIMEOUT_MS)
   if (!ran.ok) return { why: ran.text, unreadable: true }
   if (ran.code !== 0) return { why: firstLine(ran.err || ran.out) || `gh exited ${ran.code}`, unreadable: true }
@@ -632,7 +642,10 @@ const draftAtHead = async ($: EngineInterface, root: string, pr: number, head: s
     return { why: 'gh printed no JSON', unreadable: true }
   }
   if (info.isDraft !== true) return { why: 'the PR is no longer a draft', unreadable: false }
-  if (info.headRefOid !== head) return { why: `the head moved to ${typeof info.headRefOid === 'string' ? info.headRefOid.slice(0, 7) : 'an unknown commit'}`, unreadable: false }
+  if (info.headRefOid !== head) {
+    const now = typeof info.headRefOid === 'string' && info.headRefOid !== '' ? info.headRefOid : null
+    return { why: `the head moved to ${now === null ? 'an unknown commit' : now.slice(0, 7)}`, unreadable: false, ...(now === null ? {} : { draftHead: now }) }
+  }
   return null
 }
 
@@ -741,6 +754,10 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
   const key = `${RECORD_PREFIX}${grant.pr}`
   const stored = readRecord(await $.store.get(key))
   if (!stored) return { text: `PR #${grant.pr} has no checkpoint record. The session asks the review question first (pr_checkpoint). Nothing was recorded.` }
+  // The PR must be open and not a draft, and its state must be readable: a grant on a PR that went back to draft would outlive its cleanup, and its
+  // queue entry would post a review request for a draft. The head may have moved (a grant comes after fix pushes): the add carries the head read here.
+  const readable = await grantReadable($, grant.pr)
+  if (typeof readable === 'string') return { text: readable }
   // A lower grant never lowers a round Dave already allowed, whichever head that grant carries (a dialog stores the PR head at ask time).
   // A grant never outlives its checkpoint record: recordPathway deletes it, so a stored grant belongs to this record.
   const allowed = await allowedRound($, grant.pr, grant.round)
@@ -767,10 +784,10 @@ const grantCommand = async ($: EngineInterface, origin: string, grant: { pr: num
     await tellModel($, keptNotice(grant.pr, grant.round, retained))
     return { text: `PR #${grant.pr}: round ${grant.round} allowed. His decline of ${retained} stays.` }
   }
-  // The grant comes after fix pushes, so the record head is stale. The add carries the PR's head now; an unreadable head queues nothing.
-  const head = await currentHead($, grant.pr)
-  const queued = head !== null && (await enqueueRound($, stored, allowed, head))
-  await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head: head ?? stored.head, text: '', round: grant.round }, 'yes', queued))
+  // The grant comes after fix pushes, so the record head is stale. The add carries the PR's head as the read above printed it.
+  const { head } = readable
+  const queued = await enqueueRound($, stored, allowed, head)
+  await tellModel($, askNotice({ kind: 'round', pr: grant.pr, head, text: '', round: grant.round }, 'yes', queued))
   const next = queued ? 'the free-slot queue posts @coderabbitai review' : 'post one @coderabbitai review'
   return { text: `PR #${grant.pr}: round ${grant.round} allowed. After the fix push, ${next}.` }
 }

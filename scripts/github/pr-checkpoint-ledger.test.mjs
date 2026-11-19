@@ -974,6 +974,38 @@ test('PG4 (control): a stale tap with no newer tap is used up and the question i
   assert.equal(D.decisionRead(review()), null, 'the stale tap is gone');
 });
 
+// PG6: Keep as draft is judged, then Dave taps again before the use. The use names the tap it judged (label and time); a newer tap, of the same label or of
+// another one, stays and is judged by the next call. Without the label and the time the use deleted it.
+for (const [name, newer] of [['the same label (Keep as draft again)', /^Keep as draft/], ['another label (No review)', /^No review/]]) {
+  test(`PG6: a newer tap of ${name} written while Keep as draft is judged is not used up`, () => {
+    setup();
+    const result = raceResult();
+    const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+    const keep = spec.options.find((o) => /^Keep as draft/.test(o.label)).label;
+    const second = spec.options.find((o) => newer.test(o.label)).label;
+    assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+    tap(review(), keep);
+    const first = D.decisionRead(review());
+    const out = L.ledgerStep({ pr: PR, result, slotLine: 'x', now: NOW_MS, d: withNewerTap(spec, second, {}) });
+    assert.equal(out.state, 'kept-draft', JSON.stringify(out));
+    const left = D.decisionRead(review());
+    assert.ok(left, 'the newer tap is still in the store');
+    assert.equal(left.label, second);
+    assert.notEqual(left.at, first.at);
+  });
+}
+
+test('PG6b (control): Keep as draft with no newer tap is used up', () => {
+  setup();
+  const result = raceResult();
+  const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+  const keep = spec.options.find((o) => /^Keep as draft/.test(o.label)).label;
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), keep);
+  assert.equal(L.ledgerStep({ pr: PR, result, slotLine: 'x', now: NOW_MS }).state, 'kept-draft');
+  assert.equal(D.decisionRead(review()), null, 'the judged tap is gone');
+});
+
 /** A folder link: a junction on win32 (no privilege needed), a directory symlink elsewhere. False when the platform cannot make one. */
 function makeFolderLink(target, link) {
   try { symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir'); return true; } catch { return false; }

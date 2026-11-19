@@ -154,13 +154,15 @@ export async function enqueueRound($: EngineInterface, record: CheckpointRecord 
 }
 
 type Staleness = { kind: 'open' } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
+/** `open`: the PR is open and not a draft, at `head` (the head the read printed). */
+type OpenRead = { kind: 'open'; head: string } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
 
 /**
- * Whether a Yes may act: the PR must be open, not a draft, at the asked head. A post spends a review and a round grant allows one, so a state that
- * cannot be read fails closed (the question stays queued), as the post failure below does. A draft PR is gone for a Yes: it was returned to draft.
+ * The one reader of the PR state for a Yes and for a round grant: the PR must be open, not a draft, and (with `expectHead`) at that head. A state that
+ * cannot be read fails closed. A draft PR is gone: it was returned to draft. The checks run in this order: state, head, draft field, draft.
  */
-async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): Promise<Staleness> {
-  const ran = await run($, stateArgv(ask.pr), root, VIEW_TIMEOUT_MS)
+async function readOpenPr($: EngineInterface, root: string, pr: number, expectHead: string | null): Promise<OpenRead> {
+  const ran = await run($, stateArgv(pr), root, VIEW_TIMEOUT_MS)
   if (!ran.ok) return { kind: 'unreadable', why: ran.text }
   if (ran.code !== 0) return { kind: 'unreadable', why: firstLine(ran.err || ran.out) || `gh exited ${ran.code}` }
   let info: { state?: unknown; headRefOid?: unknown; isDraft?: unknown }
@@ -171,24 +173,31 @@ async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): 
   }
   if (typeof info.state !== 'string' || typeof info.headRefOid !== 'string') return { kind: 'unreadable', why: 'gh printed no state or head' }
   if (info.state.toUpperCase() !== 'OPEN') return { kind: 'gone', why: `the PR is ${info.state.toLowerCase()}` }
-  if (info.headRefOid !== ask.head) return { kind: 'gone', why: `the head moved to ${info.headRefOid.slice(0, 7)}` }
+  if (expectHead !== null && info.headRefOid !== expectHead) return { kind: 'gone', why: `the head moved to ${info.headRefOid.slice(0, 7)}` }
   if (typeof info.isDraft !== 'boolean') return { kind: 'unreadable', why: 'gh printed no draft state' }
   if (info.isDraft) return { kind: 'gone', why: 'the PR is a draft' }
-  return { kind: 'open' }
+  return { kind: 'open', head: info.headRefOid }
 }
 
-/** The PR's head now, or null when it cannot be read (no checkout, gh failed, no JSON). */
-export async function currentHead($: EngineInterface, pr: number): Promise<string | null> {
+/**
+ * Whether a Yes may act: the PR must be open, not a draft, at the asked head. A post spends a review and a round grant allows one, so a state that
+ * cannot be read fails closed (the question stays queued), as the post failure below does.
+ */
+async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): Promise<Staleness> {
+  const read = await readOpenPr($, root, ask.pr, ask.head)
+  return read.kind === 'open' ? { kind: 'open' } : read
+}
+
+/**
+ * The state read of `/pathway grant`: the PR must be open and not a draft, at any head (a grant comes after fix pushes). `head`: the PR's head now, for the queue add.
+ * A string is the refusal, one sentence for Dave: the grant stores nothing and queues nothing. No checkout to read the PR in is a refusal too.
+ */
+export async function grantReadable($: EngineInterface, pr: number): Promise<{ head: string } | string> {
   const root = await rootOf($)
-  if (!root) return null
-  const ran = await run($, stateArgv(pr), root, VIEW_TIMEOUT_MS)
-  if (!ran.ok || ran.code !== 0) return null
-  try {
-    const head = (JSON.parse(ran.out) as { headRefOid?: unknown }).headRefOid
-    return typeof head === 'string' && head !== '' ? head : null
-  } catch {
-    return null
-  }
+  const read = root ? await readOpenPr($, root, pr, null) : { kind: 'unreadable' as const, why: 'no CCv3 checkout to read it in' }
+  if (read.kind === 'open') return { head: read.head }
+  const why = read.kind === 'gone' ? read.why : `the PR state could not be read (${read.why})`
+  return `PR #${pr} gets no round grant: ${why}. Nothing was recorded.`
 }
 
 /** Takes the answered ask out of the queue, and frees the lease when no ask of that PR is left. */

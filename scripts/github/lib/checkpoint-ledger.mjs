@@ -145,6 +145,7 @@ const REPICK_NOTE = 'The PR went back to draft. Your earlier tap was not recorde
 // Why the results of decisionUse are ignored in `kept` and in the askAgain branches of ledgerStep (unlike ledgerUse, which a record needs):
 // `kept` records nothing, so a tap that stays leaves the next call at Keep as draft again. In an askAgain branch the offerWrite of askAgain
 // deletes the old decision of the triple, and when that write fails too (the lock) askAgain returns `stop`. Nothing records on any path.
+// Each triple of `kept` carries the label and the time of the tap that was judged, so a newer tap made meanwhile is not used up (the next call judges it).
 const kept = (pr, d, triples) => { triples.forEach((t) => d.decisionUse(t)); return { state: 'kept-draft', text: `Nothing was recorded. PR #${pr} stays a draft. Call pr_checkpoint {pr} when Dave wants to pick again.` }; };
 
 /**
@@ -191,7 +192,7 @@ export function ledgerStep(args) {
     return askAgain(pr, triple, spec, d, note);
   };
   if (isStale(tapped, repickSince)) return refuse(REPICK_NOTE);
-  if (pathway === 'wait') return kept(pr, d, [triple]);
+  if (pathway === 'wait') return kept(pr, d, [{ ...triple, label: tapped.label, at: tapped.at }]);
   if (spec.values[tapped.label] !== pathway) return refuse(changedNote(result, tapped.label, pathway));
   return { state: 'record', pathway, by: 'dave', text: `Dave picked ${pathway}. Record it.` };
 }

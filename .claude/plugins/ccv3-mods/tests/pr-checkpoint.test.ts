@@ -2039,14 +2039,55 @@ describe('pr-checkpoint: asks from the watcher', () => {
       expect(ran.text ?? '').toContain('the free-slot queue posts')
     })
 
-    test('T3 /pathway grant 7 4 with an unreadable PR head runs no add and keeps the old notice', async ($, on) => {
-      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) }, view: { exitCode: 1, stderr: 'gh: network down' } })
+    // GD1-GD4: a grant reads the PR first. A PR that is a draft, closed or unreadable gets no grant and no queue entry (a grant on a returned PR would outlive its cleanup).
+    const gdState = (over: Rec = {}): Reply => ({ stdout: JSON.stringify({ state: 'OPEN', headRefOid: HEAD, isDraft: false, ...over }) })
+    const nothingGranted = (w: ReturnType<typeof world>, declined: Rec) => {
+      expect(w.store.get('checkpoint:grant:7')).toBeUndefined()
+      expect(slotRuns(w.seen)).toEqual([])
+      expect((w.store.get('checkpoint:pr:7') as Rec).declined).toEqual(declined)
+      expect(told(w)).not.toContain('Dave allowed round')
+    }
+    const DECLINE = { kind: 'round', round: 4, head: HEAD }
+
+    test('GD1 /pathway grant 7 4 on a PR that is a draft stores no grant, queues nothing and says so', async ($, on) => {
+      const w = world(on, { store: banded({ declined: DECLINE }), statuses: { 7: REVIEWED(3) }, view: gdState({ isDraft: true }) })
       await start($)
       const ran = await slash($, 'grant 7 4')
-      expect(slotRuns(w.seen)).toEqual([])
+      expect(ran.text ?? '').toMatch(/PR #7.*a draft.*Nothing was recorded\./)
+      nothingGranted(w, DECLINE)
+    })
+
+    for (const [name, view, why] of [
+      ['the PR is closed', gdState({ state: 'CLOSED' }), /closed/],
+      ['gh exits 1', { exitCode: 1, stderr: 'gh: network down' }, /network down/],
+      ['gh prints a state with no draft field', { stdout: JSON.stringify({ state: 'OPEN', headRefOid: HEAD }) }, /draft state/],
+    ] as [string, Reply, RegExp][]) {
+      test(`GD2 /pathway grant 7 4 stores no grant and queues nothing when ${name}`, async ($, on) => {
+        const w = world(on, { store: banded({ declined: DECLINE }), statuses: { 7: REVIEWED(3) }, view })
+        await start($)
+        const ran = await slash($, 'grant 7 4')
+        expect(ran.text ?? '').toMatch(why)
+        expect(ran.text ?? '').toMatch(/PR #7.*Nothing was recorded\./)
+        nothingGranted(w, DECLINE)
+      })
+    }
+
+    test('GD3 /pathway grant 7 4 with no checkout to read the PR in stores no grant and queues nothing', async ($, on) => {
+      const w = world(on, { store: banded({ declined: DECLINE }), statuses: { 7: REVIEWED(3) }, missing: ['scripts/github/pr-checkpoint.mjs'] })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(ran.text ?? '').toMatch(/Nothing was recorded\./)
+      nothingGranted(w, DECLINE)
+    })
+
+    test('GD4 (control) /pathway grant 7 4 on an open PR that is not a draft reads the state fields once, stores the grant and queues the round', async ($, on) => {
+      const w = world(on, { store: banded(), statuses: { 7: REVIEWED(3) } })
+      await start($)
+      const ran = await slash($, 'grant 7 4')
+      expect(argvOf(w.seen, 'view').filter(argv => argv.includes('state,headRefOid,isDraft')).length).toBe(1)
       expect((w.store.get('checkpoint:grant:7') as Rec).round).toBe(4)
-      expect(ran.text ?? '').toContain('post one @coderabbitai review')
-      expect(told(w)).toContain(OLD_NOTICE)
+      expect(slotRuns(w.seen)).toEqual([ADD_R4])
+      expect(ran.text ?? '').toContain('the free-slot queue posts')
     })
 
     test('T3 a grant raised by a plugin runs no add', async ($, on) => {
@@ -4896,6 +4937,18 @@ describe('pr-checkpoint PR 2 group A: the ten items', () => {
       expect(w.store.get(GRANT)).toEqual(GRANT_ROW)
     })
 
+    test('BQ4 a PR returned to draft by hand and pushed again (a draft at ANOTHER head): the bare /pathway runs the cleanup on the fresh head, the grant, the queue entry and the asks are gone', async ($, on) => {
+      const w = world(on, queued({ viewHead: OTHER_HEAD }))
+      await start($)
+      await slash($, '')
+      expect(w.seen.dialogs.length).toBe(0)
+      expect(asksOf(w.store)).toEqual([])
+      expect(w.store.get(GRANT)).toBeUndefined()
+      expect(slotDrops(w.seen).length).toBe(1)
+      expect(drops(w.seen).length).toBe(1)
+      expect(w.store.get(MARKER)).toEqual({ head: OTHER_HEAD, at: NOW, dropped: true })
+    })
+
     test('BQ3 a failed cleanup of the returned PR: the bare /pathway says so and opens no question', async ($, on) => {
       const w = world(on, queued({ drop: { exitCode: 1, stderr: 'boom\n' } }))
       await start($)
@@ -5038,6 +5091,16 @@ describe('pr-checkpoint PR 2 group A: the ten items', () => {
       })
     }
 
+    test('QF3 no queue script to run (not found in any root): the stop text names the queue entry and the marker has no dropped flag', async ($, on) => {
+      const w = world(on, byHand({ missing: ['slot-queue.mjs'] }))
+      await start($)
+      const told = await call($)
+      expect(told.text).toMatch(OPEN(/queue entry/))
+      expect(slotDrops(w.seen)).toEqual([])
+      expect(w.store.get(MARKER)).not.toHaveProperty('dropped')
+      expect(ledgerCalls(w.seen)).toEqual([])
+    })
+
     test('QF2 (control) an entry that is already absent from the queue is a complete cleanup: flag set, question asked', async ($, on) => {
       const w = world(on, byHand({ slot: { stdout: '{"ok":true,"dropped":false}\n' } }))
       await start($)
@@ -5060,6 +5123,18 @@ describe('pr-checkpoint PR 2 group A: the ten items', () => {
       expect(w.store.get(GRANT)).toBeUndefined()
       expect(w.store.get(MARKER)).toEqual({ head: HEAD, at: NOW, dropped: true })
       expect(w.seen.dialogs.length).toBeGreaterThanOrEqual(1)
+    })
+
+    test('PS4 no marker, an applied record at head A and the PR is a draft at head B: the cleanup runs with the fresh head; the grant and the queued asks are gone', async ($, on) => {
+      const QUEUED = { kind: 'round', pr: 7, head: HEAD, round: 4, text: 'Round 4 of 1+2 for #7' }
+      const w = world(on, saved({ viewHead: OTHER_HEAD, store: { [PENDING]: PENDING_FIX, 'checkpoint:pr:7': RECORD, [GRANT]: GRANT_ROW, [ASKS]: [QUEUED] } }))
+      await start($)
+      await slash($, '')
+      expect(drops(w.seen).length).toBe(1)
+      expect(slotDrops(w.seen).length).toBe(1)
+      expect(w.store.get(GRANT)).toBeUndefined()
+      expect(asksOf(w.store)).toEqual([])
+      expect(w.store.get(MARKER)).toEqual({ head: OTHER_HEAD, at: NOW, dropped: true })
     })
 
     test('PS2 the live read fails: no cleanup is guessed, and no question opens', async ($, on) => {
