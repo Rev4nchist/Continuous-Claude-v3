@@ -188,7 +188,7 @@ test('CP13: record appends one parseable line with ts, Chicago date, pr, head, f
   PAID.recordPaid({ pr: 225, head: HEAD, files: 2 }, { ...h.deps, env: {} });
   const lines = readFileSync(h.ledgerPath, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(lines.length, 2);
-  assert.deepEqual(lines[0], { ts: '2026-10-31T04:30:00.000Z', date: '2026-10-30', pr: 225, head: HEAD, files: 6, cost: 1.5, session: 'sess-1' });
+  assert.deepEqual(lines[0], { ts: '2026-10-31T04:30:00.000Z', date: '2026-10-30', pr: 225, head: HEAD, files: 6, cost: 1.5, session: 'sess-1', via: 'manual' });
   assert.equal(lines[1].session, 'unknown');
   assert.throws(() => PAID.recordPaid({ pr: 225, head: 'nothex', files: 1 }, h.deps), /head/);
   assert.throws(() => PAID.recordPaid({ pr: 225, head: HEAD, files: -1 }, h.deps), /files/);

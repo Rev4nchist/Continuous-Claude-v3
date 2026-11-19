@@ -452,7 +452,7 @@ test('F28: probe prints the facts and writes, locks and posts nothing', () => {
   const before = digest(e.statePath);
   const r = run(e, ['probe', '--pr', '5', '--json']);
   assert.equal(r.code, 0);
-  assert.deepEqual(Object.keys(r.json.facts).sort(), ['carryHolds', 'head', 'limited', 'merged', 'open', 'pending', 'pr', 'requestAts', 'retryMinutes', 'reviewAts', 'reviewedHead']);
+  assert.deepEqual(Object.keys(r.json.facts).sort(), ['carryHolds', 'head', 'limited', 'merged', 'open', 'pending', 'pr', 'requestAts', 'retryMinutes', 'reviewAts', 'reviewedHead', 'unledgeredPaid']);
   assert.equal(r.json.facts.limited, true);
   assert.equal(r.json.facts.retryMinutes, 12);
   assert.equal(digest(e.statePath), before);

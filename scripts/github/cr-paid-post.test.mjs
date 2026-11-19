@@ -121,7 +121,7 @@ test('PP2b: a tapAt that is missing, does not parse, or is in the future is refu
   for (const [name, tapAt, want] of [
     ['unparsable', 'yesterday', /no readable tap time/],
     ['empty', '', /no readable tap time/],
-    ['future', new Date(NOW.getTime() + 5 * MIN).toISOString(), /tap time is in the future/],
+    ['future', new Date(NOW.getTime() + 5 * MIN).toISOString(), /tap time in the future/],
   ]) {
     const w = world();
     // paidRoundWrite refuses a non-text tapAt, so these rows are written the way a bad writer would: straight into the store file.
