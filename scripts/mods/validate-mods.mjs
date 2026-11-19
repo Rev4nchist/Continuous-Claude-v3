@@ -41,7 +41,11 @@ export const parseArgs = (args, defaultDir) => {
 };
 
 const { pluginDir, minGating } = parseArgs(process.argv.slice(2), join(repoRoot, '.claude/plugins/ccv3-mods'));
-const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 280_000 });
+/** The test step runs the whole suite, which takes about 5 minutes: it has its own limit, under the 10 minutes pre-pr gives this gate (pre-pr.mjs, id 'mod'). */
+export const TEST_LIMIT_MS = 9 * 60_000;
+const sh = (cmd, args, timeout = 280_000) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout });
+/** The short line of the test step: a step the limit stopped says so, in place of "NaN pass NaN fail". */
+export const testShort = (ran, limitMs, pass, fail) => (ran.error?.code === 'ETIMEDOUT' ? `test stopped at ${Math.round(limitMs / 1000)} s` : `test ${pass} pass ${fail} fail`);
 const firstLines = (text, n = 12) => text.trim().split(/\r?\n/).slice(0, n).join('\n');
 
 /** Every gating hook the validate report lists, wherever it sits in the report. */
@@ -152,14 +156,14 @@ const checkTsc = () => {
 };
 
 const checkTest = () => {
-  const ran = sh('claude', ['plugin', 'test', pluginDir]);
+  const ran = sh('claude', ['plugin', 'test', pluginDir], TEST_LIMIT_MS);
   const out = `${ran.stdout}${ran.stderr ?? ''}`;
   const count = word => Number((out.match(new RegExp(`^\\s*(\\d+) ${word}\\b`, 'm')) ?? [])[1] ?? NaN);
   const pass = count('pass');
   const fail = count('fail');
   const ok = ran.status === 0 && fail === 0 && pass > 0;
-  const why = Number.isNaN(pass) || Number.isNaN(fail) ? 'no pass/fail count in the output' : pass === 0 ? 'zero tests ran (vacuous gate)' : `${fail} failing`;
-  return { ok, note: ok ? '' : `test: exit ${ran.status}, ${why}\n${firstLines(out.split(/\r?\n/).filter(l => /^\(fail\)/.test(l) || /Error|Expected|Received/.test(l)).join('\n') || out, 20)}`, short: `test ${pass} pass ${fail} fail` };
+  const why = ran.error?.code === 'ETIMEDOUT' ? `stopped at ${Math.round(TEST_LIMIT_MS / 1000)} s` : Number.isNaN(pass) || Number.isNaN(fail) ? 'no pass/fail count in the output' : pass === 0 ? 'zero tests ran (vacuous gate)' : `${fail} failing`;
+  return { ok, note: ok ? '' : `test: exit ${ran.status}, ${why}\n${firstLines(out.split(/\r?\n/).filter(l => /^\(fail\)/.test(l) || /Error|Expected|Received/.test(l)).join('\n') || out, 20)}`, short: testShort(ran, TEST_LIMIT_MS, pass, fail) };
 };
 
 const main = () => {

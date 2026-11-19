@@ -2,7 +2,7 @@
 // One test per way the gate can pass for the wrong reason.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gatingProblems, parseArgs, refusedCommandProblems } from './validate-mods.mjs';
+import { gatingProblems, parseArgs, refusedCommandProblems, TEST_LIMIT_MS, testShort } from './validate-mods.mjs';
 
 const DEFAULT = '/repo/default-plugin';
 
@@ -72,4 +72,10 @@ test('a refused name in the manifest warnings fails too; unrelated warnings and 
   assert.equal(refusedCommandProblems({ manifest: { warnings: [shipped('plan')] }, contents: [] }).length, 1);
   assert.deepEqual(refusedCommandProblems({ manifest: { warnings: [] }, contents: [{ warnings: [{ message: 'some other warning' }] }, {}] }), []);
   assert.deepEqual(refusedCommandProblems({}), []);
+});
+
+test('a test step the limit stopped says "stopped at N s", not NaN counts; the limit sits under the 10 minutes of pre-pr', () => {
+  assert.equal(testShort({ status: null, error: { code: 'ETIMEDOUT' } }, TEST_LIMIT_MS, NaN, NaN), 'test stopped at 540 s');
+  assert.equal(testShort({ status: 0 }, TEST_LIMIT_MS, 2299, 0), 'test 2299 pass 0 fail');
+  assert.ok(TEST_LIMIT_MS < 10 * 60_000 && TEST_LIMIT_MS > 280_000);
 });
