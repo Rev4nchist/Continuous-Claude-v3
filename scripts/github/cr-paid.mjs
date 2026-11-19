@@ -297,6 +297,19 @@ function rowProblem(row, pr, nowMs) {
   return nowMs - tapMs > POST_LIMITS.tapMaxMs ? `Dave's tap for PR #${pr} is ${age} minutes old; a paid yes lasts 60 minutes. Ask again.` : null;
 }
 
+/**
+ * Why a PR cannot take a paid review, as the words of the refusal ('merged', 'closed', 'a draft'), or null for an open PR that is not a draft.
+ * `pull` is the REST answer of repos/<repo>/pulls/<N>. Throws when state, merged or draft is missing or of the wrong type: an unreadable answer is a failed read, never "open".
+ */
+export function pullBlockOf(pull) {
+  const { state, merged, draft } = pull ?? {};
+  if (state !== 'open' && state !== 'closed') throw new Error('the PR state is missing or not understood');
+  if (typeof merged !== 'boolean' || typeof draft !== 'boolean') throw new Error('the PR merged or draft flag is missing');
+  if (merged) return 'merged';
+  if (state === 'closed') return 'closed';
+  return draft ? 'a draft' : null;
+}
+
 class DeadlineError extends Error {}
 const fail = (code, text, extra = {}) => ({ ok: false, code, text, ...extra });
 const DEADLINE_TEXT = `The paid post ran past its ${POST_LIMITS.deadlineMs / 1000} s limit. Nothing was posted.`;
@@ -367,9 +380,12 @@ function guardedPost(d, { pr, cap, source, repo }, began) {
     return d.gh(args, { timeoutMs: Math.min(POST_LIMITS.callMs, left()) });
   };
   let head;
-  try { // step 1: before any row is found, so a failed read keeps the yes
-    head = String(gh([`repos/${repo}/pulls/${pr}`])?.head?.sha ?? '').toLowerCase();
+  let block;
+  try { // step 1: before any row is found, so a failed read keeps the yes. The same answer gives the head and the PR state (a missing state is a failed read, not "open").
+    const pull = gh([`repos/${repo}/pulls/${pr}`]);
+    head = String(pull?.head?.sha ?? '').toLowerCase();
     if (!SHA40.test(head)) throw new Error('the PR head is not a commit sha');
+    block = pullBlockOf(pull);
   } catch (err) { return fail(5, `Could not read PR #${pr} from GitHub (${firstLine(err)}). Nothing was posted. The paid yes is kept; run it again.`); }
   // step 2: the yes. From here on every refusal uses the row up and exits 4.
   const triple = { step: 'paid-round', key: decisionKey({ repo, pr }), head };
@@ -380,6 +396,8 @@ function guardedPost(d, { pr, cap, source, repo }, began) {
   if (source === 'cap' ? capCents === null : row === null) return fail(4, `No paid yes of Dave's for PR #${pr} at ${head.slice(0, 7)}.`);
   const problem = row ? rowProblem(row, pr, nowMs()) : null;
   if (problem) return refuse(problem);
+  // A closed, merged or draft PR cannot take a paid review. This stands before the free-slot step: no further GitHub call is spent on it.
+  if (block) return refuse(`PR #${pr} is ${block}. A paid review goes only to an open PR that is not a draft. Nothing was posted.`);
   let checked;
   try { checked = checksOf(d, { pr, repo, head, capCents }, gh); } catch (err) {
     return refuse(err instanceof DeadlineError ? DEADLINE_TEXT : `The paid post stopped (${firstLine(err)}). Nothing was posted.`);

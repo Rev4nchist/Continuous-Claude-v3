@@ -17,6 +17,8 @@
 //   `post` accepts --cap or --repo, or runs with no --pr                                                               -> PP13
 //   the mod path (cap from --cap, no store row) posts without a cap or over it                                         -> PP14
 //   the verb maps its results to the wrong exit code                                                                   -> PP15
+//   a draft, closed or merged PR is paid for; the refusal comes after the free-slot step (a GitHub call is spent first) -> PP16, PP16b
+//   a pull answer with no state, merged or draft field is read as an open PR instead of a failed read (exit 5)          -> PP16c
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -39,7 +41,7 @@ const WAIT = { state: 'wait', nextSlotAt: new Date(NOW.getTime() + 20 * MIN).toI
 const FREE = { state: 'free', checkedAt: NOW.toISOString(), source: 'probe' };
 
 /** One run's world: a fake gh, a temp ledger, a temp decision store and an injected clock. */
-function world({ prFiles = files(4), comments = [], reviews = [], filters = [], head = HEAD, ghDown = false, onCall = null, capacity = WAIT, queue = null } = {}) {
+function world({ prFiles = files(4), comments = [], reviews = [], filters = [], head = HEAD, ghDown = false, onCall = null, capacity = WAIT, queue = null, pull = {} } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cr-paid-post-'));
   const ledgerPath = path.join(dir, 'state', 'coderabbit-paid.jsonl');
   mkdirSync(path.dirname(ledgerPath), { recursive: true });
@@ -57,7 +59,8 @@ function world({ prFiles = files(4), comments = [], reviews = [], filters = [], 
     if (args.some((a) => /pulls\/\d+\/files/.test(a))) return [prFiles];
     if (args.some((a) => /pulls\/\d+\/commits/.test(a))) return [[{ sha: head }]];
     if (args.some((a) => /pulls\/\d+\/reviews/.test(a))) return [reviews];
-    return { head: { sha: head }, state: 'open' };
+    // The pull answer. `pull` overrides a field; a value of undefined is a field the answer does not carry.
+    return { head: { sha: head }, state: 'open', merged: false, draft: false, ...pull };
   };
   const deps = { gh, now: () => new Date(clock.ms), ledgerPath, pathFilters: () => filters, env: {}, capacity: () => capacity, queue, lockWaitMs: 100 };
   return { dir, deps, ledgerPath, posts, calls, clock, ledger: () => (existsSync(ledgerPath) ? readFileSync(ledgerPath, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []), done: () => rmSync(dir, { recursive: true, force: true }) };
@@ -359,4 +362,57 @@ test('PP15: the verb maps results to exit codes: 0 posted, 4 a refusal, 5 a fail
   assert.deepEqual(run({ ok: false, code: 4, text: 'No.' }), { code: 4, out: [], err: ['cr-paid: refused: No.'] });
   assert.deepEqual(run({ ok: false, code: 5, text: 'Down.' }), { code: 5, out: [], err: ['cr-paid: Down.'] });
   assert.equal(PAID.runPostVerb(['post', '--pr', '12', '--cap', '5'], { post: () => { throw new Error('must not run'); } }).code, 2);
+});
+
+test('PP16: a draft, closed or merged PR refuses (exit 4), posts nothing, records nothing and uses the yes up; the refusal comes before the free-slot step', () => {
+  for (const [word, pull] of [
+    ['a draft', { draft: true }],
+    ['closed', { state: 'closed' }],
+    ['merged', { state: 'closed', merged: true }],
+    ['merged', { merged: true }],
+    ['closed', { state: 'closed', draft: true }],
+  ]) {
+    // capacity FREE: were the check after the free-slot step, the text would name the free slot instead.
+    const w = world({ pull, capacity: FREE });
+    yes();
+    const r = post(w);
+    const name = JSON.stringify(pull);
+    assert.equal(r.ok, false, name);
+    assert.equal(r.code, 4, name);
+    assert.equal(r.text, `PR #225 is ${word}. A paid review goes only to an open PR that is not a draft. Nothing was posted.`, name);
+    assert.equal(w.posts.length, 0, name);
+    assert.deepEqual(w.ledger(), [], name);
+    assert.equal(row(), null, `${name}: the yes is used up`);
+    assert.equal(w.calls.length, 1, `${name}: only the step 1 read was spent`);
+    w.done();
+  }
+});
+
+test('PP16b: an open PR that is not a draft still posts, and the same PR as a draft does not (the yes is not kept for a retry)', () => {
+  const ok = world({ pull: { state: 'open', merged: false, draft: false } });
+  yes();
+  assert.equal(post(ok).ok, true);
+  assert.equal(ok.posts.length, 1);
+  const draft = world({ pull: { draft: true } });
+  yes();
+  assert.equal(post(draft).code, 4);
+  assert.equal(post(draft).code, 4, 'a second try has no yes');
+  assert.equal(draft.posts.length, 0);
+  [ok, draft].forEach((x) => x.done());
+});
+
+test('PP16c: a pull answer with no state, merged or draft field, or a value of the wrong type, is a failed read (exit 5, the yes kept), never an open PR', () => {
+  for (const pull of [{ state: undefined }, { merged: undefined }, { draft: undefined }, { state: 'OPEN' }, { draft: 'false' }, { merged: null }]) {
+    const w = world({ pull });
+    yes();
+    const r = post(w);
+    const name = JSON.stringify(pull);
+    assert.equal(r.ok, false, name);
+    assert.equal(r.code, 5, name);
+    assert.match(r.text, /^Could not read PR #225 from GitHub \(.+\)\. Nothing was posted\. The paid yes is kept; run it again\.$/, name);
+    assert.equal(w.posts.length, 0, name);
+    assert.deepEqual(w.ledger(), [], name);
+    assert.ok(row(), `${name}: the yes is kept`);
+    w.done();
+  }
 });

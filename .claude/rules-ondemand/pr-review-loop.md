@@ -438,7 +438,7 @@ Billing facts (CodeRabbit docs, measured on PR #221):
 
 - A reviewed file costs $0.25.
 - Round 1 bills every reviewable PR file. A later round bills only the files changed since the last reviewed commit.
-- Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` applies the filters and shows both file counts.
+- Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` shows both file counts. The price and the cap use the unfiltered count.
 - The mode is On demand. Past the included limit, a plain `@coderabbitai review` never bills.
 - A paid round needs Dave's priced tap. `cr-paid.mjs post --pr N` then posts `--use-credits` (current commit only).
 - In Automatic mode, an over-limit review bills with no prompt. So run the cap check before EVERY review request.
@@ -476,7 +476,7 @@ Packaging rules:
 - Larger PRs need fewer rounds: 0 to 10 file PRs average 2.2 rounds, 26 to 60 file PRs average 1.75.
 - Round 1 bills every reviewable file, so a round 1 over 20 files goes past the $5 cap and needs Dave.
 - `docs/**`, `thoughts/**` and vendored skills are not reviewed.
-  Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` leaves them out of its estimate.
+  Billing exclusion by `path_filters` is unproven. The price and the cap still count them (the unfiltered count).
 - Run the Claude review and the `pre-pr.mjs` CLI review before round 1.
 - Push once per fix round.
 

@@ -1419,6 +1419,9 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', `node scripts/github/slot-queue.mjs add --pr 1 --band CRITICAL --head ${HEAD40}`],
     ['Bash', `node "C:/Users/x/continuous-claude/scripts/github/slot-queue.mjs" add --pr 1 --band CRITICAL --head ${HEAD40}`],
     ['PowerShell', 'node scripts\\github\\slot-queue.mjs  DECIDE --pr 1 --kind pay'],
+    // Paid guard: the pay verb now takes the cap from a flag, so the flag is the paid yes. Lock B denies it in every spelling (the queue verb trusts its caller).
+    ['Bash', 'node scripts/github/slot-queue.mjs decide --pr 1 --kind pay --cap 5'],
+    ['PowerShell', 'node scripts\\github\\slot-queue.mjs decide --pr 1 --kind pay --cap=5'],
     ['PowerShell', "node 'scripts/github/slot-queue.mjs' 'drop' --pr 1 --reason x"],
     ['Bash', 'echo {} > ~/.claude/state/coderabbit-slot.json'],
     ['PowerShell', "Set-Content -Path $HOME\\.claude\\state\\CodeRabbit-Slot.json -Value '{}'"],

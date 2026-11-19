@@ -10,6 +10,7 @@
 //   the queue holding a pay decision for the head does not stop `post`                                                              -> SC6
 //   the queue file lock does not stop `post` first (lock order: queue, then paid)                                                   -> SC7
 //   a paid CodeRabbit comment on the head with no ledger row raises no toast, raises it twice, or a ledgered, plain or older one raises it -> SC8
+//   a pay decision (source cap) or `post` (source row) pays for a draft PR                                                           -> SC9
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -167,7 +168,25 @@ test('SC7: a held queue file lock stops `post` first: exit 5, nothing posted, th
   rmSync(`${e.statePath}.lock`);
 });
 
-const flagToasts = (json) => json.actions.filter((a) => a.kind === 'toast' && /paid CodeRabbit request/.test(a.text));
+test('SC9: a draft PR is refused on the queue pay path (decide --kind pay, source cap) and on `post` (source row): nothing posted, no ledger row, queue file unchanged', () => {
+  const e = setup('draft');
+  setWorld(e, { 5: prOf(5, { draft: true }) });
+  setState(e, [itemOf(5)]);
+  const before = readFileSync(e.statePath, 'utf8');
+  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '5', '--json'], { checkPr: () => ALLOW(5) });
+  assert.equal(r.code, 2);
+  assert.match(r.json.reason, /PR #5 is a draft\. A paid review goes only to an open PR that is not a draft\. Nothing was posted\./);
+  assert.deepEqual([posts(e).length, ledgerRows(e).length], [0, 0]);
+  assert.equal(readFileSync(e.statePath, 'utf8'), before);
+  yes();
+  const row = rowRun(e);
+  assert.equal(row.code, 4);
+  assert.match(row.text, /PR #5 is a draft\./);
+  assert.deepEqual([posts(e).length, ledgerRows(e).length], [0, 0]);
+  assert.equal(rowOf(), null, 'the yes is used up');
+});
+
+const flagToasts =(json) => json.actions.filter((a) => a.kind === 'toast' && /paid CodeRabbit request/.test(a.text));
 
 test('SC8: a paid CodeRabbit comment on the head with no ledger row raises ONE toast; a ledgered, plain or pre-head one raises none', () => {
   const e = setup('flag');

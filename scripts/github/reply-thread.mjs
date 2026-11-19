@@ -11,7 +11,8 @@
  *        node scripts/github/reply-thread.mjs <pr> --top --body-file <file> [--repo owner/name]
  *   <comment-id> is the id of the first (top-level) comment of the thread: `gh api repos/<O>/<R>/pulls/<N>/comments`.
  *   --top posts a top-level PR comment instead of a thread reply. A long or multi-line gh comment goes through this script,
- *   not through gh text (decision-gate allows only one plain quoted body on a gh comment, review or graphql call).
+ *   not through gh text.
+ *   A paid CodeRabbit request runs only through `node scripts/github/cr-paid.mjs post --pr N`, on Dave's priced tap; this script refuses a body that holds the paid text.
  *   Write the file with the Write tool. Prints ONE line on success: `replied <new-comment-id> <url>`
  *   (`commented <new-comment-id> <url>` with --top).
  *
