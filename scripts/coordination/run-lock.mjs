@@ -36,7 +36,8 @@
  * ago: a younger one may still be in its own acquire.
  *
  * Expiry: a past expiresAt removes a lock only when its holder is not proven alive (pid gone, other start, or a failed read).
- * A run that is alive keeps its lock. --minutes must be a finite number above 0.
+ * A run that is alive keeps its lock. A wait record past its expiry holds no queue place and is removed only when its holder is proven dead.
+ * setHeavy turns a granted light lock heavy (the run's own change read found the hooks-vitest gate); it checks no limit. --minutes must be a finite number above 0.
  * Gate age: a gate file older than 120 seconds is broken whoever holds it (a wedge). Gated work is file work and takes milliseconds.
  *
  * Exit 1 of the CLI is a usage error or an error of the lock. A caller treats it as "run" (fail open), as pre-pr does: the lock
@@ -244,7 +245,10 @@ export const lockMode = (dir = defaultDir()) => readMode(dir);
  */
 export function readLimits(dir = defaultDir()) {
   let text;
-  try { text = readFileSync(join(dir, 'LIMITS'), 'utf8'); } catch { return { test: PRE_PR_TEST_LIMIT, heavy: PRE_PR_HEAVY_LIMIT, source: 'code' }; }
+  try { text = readFileSync(join(dir, 'LIMITS'), 'utf8'); } catch (err) {
+    if (err.code === 'ENOENT') return { test: PRE_PR_TEST_LIMIT, heavy: PRE_PR_HEAVY_LIMIT, source: 'code' }; // only a missing file gives the code limits
+    return { test: 1, heavy: 1, source: 'LIMITS file cannot be read, so 1 and 1' }; // EPERM, EISDIR, EBUSY: fewer runs
+  }
   let v = null;
   try { v = JSON.parse(text); } catch { /* bad JSON: the fallback below */ }
   const ok = (n, max) => Number.isInteger(n) && n >= 1 && n <= max;
@@ -303,7 +307,10 @@ function sweep(d, starts, remove = true) {
   const live = [];
   for (const { file, rec } of lockRecords(d.dir)) {
     const expired = !Number.isFinite(rec.expiresAt) || rec.expiresAt <= now; // no finite expiry (old code) counts as expired; a proven-alive holder still keeps the lock
-    if (isDead(file, rec, starts) || (expired && !provenAlive(file, rec, starts))) {
+    // A lapsed wait record holds no queue place (prePrRefusals), but its process may still run. Only proof of death removes it: a removed record
+    // would leave a live pre-pr with no lock file, and unlockedRuns would count it as a test run.
+    const lapsedWaiter = expired && isWaiter(rec);
+    if (isDead(file, rec, starts) || (expired && !lapsedWaiter && !provenAlive(file, rec, starts))) {
       if (remove) {
         d.beforeSweepRemove?.(file);
         try { rmSync(join(d.dir, file)); } catch { /* another session removed it */ }
@@ -469,7 +476,7 @@ function prePrRefusals({ opts, live, unlocked, own, now, freeGB, refuse, limits 
   if (opts.heavy === true && heavyTest >= limits.heavy) refuse('heavy', `${heavyTest} heavy pre-pr run in the test phase (it runs the hooks-vitest gate), the heavy limit in force is ${limits.heavy} (${limits.source})`);
   const since = own?.waitSince ?? now;
   const orderOf = (r) => r.waitSince ?? r.startedAt;
-  const older = live.filter((r) => isWaiter(r) && r.pid !== opts.pid && (orderOf(r) < since || (orderOf(r) === since && r.pid < opts.pid)));
+  const older = live.filter((r) => isWaiter(r) && r.expiresAt > now && r.pid !== opts.pid && (orderOf(r) < since || (orderOf(r) === since && r.pid < opts.pid)));
   if (older.length) refuse('queue', `${older.length} older waiter(s) come first (pid ${older.map((r) => r.pid).join(', ')})`);
 }
 
@@ -490,6 +497,12 @@ function writeWaitRecord(d, opts, pid, start, own, now) {
   const file = `pre-pr-${pid}-${start}.lock`;
   const rec = { kind: 'pre-pr', pid, pidStart: start, holder: opts.holder || 'unknown', head: opts.head || null, session: sessionLabel(opts, d), startedAt: now, expiresAt: now + WAIT_RECORD_MIN * MIN, heavy: opts.heavy === true, phase: 'wait', waitSince: own?.waitSince ?? now };
   writeFileSync(join(d.dir, file), JSON.stringify(rec, null, 1));
+  // After a failed start read the first record has the name "unknown": remove the other WAIT records of this pid. Never a test or cr record.
+  for (const other of lockRecords(d.dir)) {
+    if (other.file !== file && other.rec.pid === pid && isWaiter(other.rec)) {
+      try { rmSync(join(d.dir, other.file)); } catch { /* another session removed it */ }
+    }
+  }
   return file;
 }
 
@@ -554,37 +567,57 @@ export async function acquire(opts, deps) {
 export async function waitForGrant(opts, deps, { maxMs = WAIT_LIMIT_MS } = {}) {
   const d = defaults(deps);
   const began = d.now();
+  const late = () => d.now() - began >= maxMs;
+  // The timeout frees the wait record or a late grant. A grant after the deadline is no grant: granted false, so the caller exits 75.
+  const stop = (r, o) => {
+    releaseSync({ pid: o.pid ?? d.selfPid, kind: o.kind }, deps);
+    return { ...r, granted: false, timedOut: true, exit: EXIT_WAIT };
+  };
+  let r = { granted: false, lines: [] };
   for (;;) {
     const now = typeof opts === 'function' ? opts() : opts;
-    const r = await acquire({ ...now, wait: true }, deps);
-    if (r.granted) return r;
+    if (late()) return stop(r, now); // the sleep can end after the deadline: no acquire then
+    r = await acquire({ ...now, wait: true }, deps);
+    if (r.granted) return late() ? stop(r, now) : r; // the acquire itself (the 30 s second read) can pass the deadline
     const left = maxMs - (d.now() - began);
-    if (left <= 0) {
-      releaseSync({ pid: now.pid ?? d.selfPid, kind: now.kind }, deps);
-      return { ...r, timedOut: true, exit: EXIT_WAIT };
-    }
+    if (left <= 0) return stop(r, now);
     await d.sleep(waitSleepMs(r.retryAt, d.now(), left));
   }
 }
 
 /**
- * Change the phase of a pre-pr lock, synchronously: file work only, written to a temp file and renamed over the lock. The lock is found
+ * Change fields of a pre-pr lock, synchronously: file work only, written to a temp file and renamed over the lock. The lock is found
  * by its file name (kind, pid and start time), so a reused pid with another start time is not the holder; the record must also name the
- * pid. { changed: false } when the file is not there or is not ours.
+ * pid. A file name that is given and is not the derived name needs a record start equal to the live start of the pid. { changed: false }
+ * when the file is not there or is not ours.
  */
-export function setPhase(opts, deps) {
+function patchLock(opts, deps, patch) {
   const d = defaults(deps);
-  if (!PHASES.includes(opts.phase)) throw new Error(`unknown phase "${opts.phase}" (known: ${PHASES.join(', ')})`);
-  const name = opts.file ?? `pre-pr-${opts.pid}-${d.pidStart(opts.pid)}.lock`;
-  const file = join(d.dir, basename(name));
+  const live = d.pidStart(opts.pid);
+  const derived = `pre-pr-${opts.pid}-${live}.lock`;
+  const name = basename(opts.file ?? derived);
+  const file = join(d.dir, name);
   const rec = readJson(file);
   if (!rec || rec.pid !== opts.pid || rec.kind !== 'pre-pr') return { changed: false };
+  const sameStart = typeof live === 'number' && typeof rec.pidStart === 'number' && Math.abs(live - rec.pidStart) < SAME_PROCESS_MS;
+  if (name !== derived && !sameStart) return { changed: false };
   const temp = `${file}.tmp-${randomUUID()}`;
-  try { writeFileSync(temp, JSON.stringify({ ...rec, phase: opts.phase }, null, 1)); renameSync(temp, file); } catch (err) {
+  try { writeFileSync(temp, JSON.stringify({ ...rec, ...patch }, null, 1)); renameSync(temp, file); } catch (err) {
     try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ }
     throw err;
   }
   return { changed: true };
+}
+
+/** Change the phase of a pre-pr lock (see patchLock). */
+export function setPhase(opts, deps) {
+  if (!PHASES.includes(opts.phase)) throw new Error(`unknown phase "${opts.phase}" (known: ${PHASES.join(', ')})`);
+  return patchLock(opts, deps, { phase: opts.phase });
+}
+
+/** Turn a pre-pr lock heavy (see patchLock): the run's own change read found the hooks-vitest gate after a light grant. It checks no limit. */
+export function setHeavy(opts, deps) {
+  return patchLock(opts, deps, { heavy: true });
 }
 
 /** One row in runs.jsonl (START and END of a pre-pr, with the wall time), so the seat reads one file. A failed write never stops the run. */
