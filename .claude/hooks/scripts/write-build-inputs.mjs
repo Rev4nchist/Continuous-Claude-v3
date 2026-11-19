@@ -10,7 +10,8 @@
  * read, from the esbuild metafile `<root>/.build-meta.json` (the build script
  * passes --metafile=.build-meta.json). The bundles import files outside
  * .claude/hooks, such as scripts/github/lib/decisions.mjs. Keys are posix paths
- * relative to the repo root (<root>/../..), sorted; each value is { sha256 }. Files under any
+ * relative to the repo root (<root>/../..), sorted; each value is { sha256 }. A non-.ts file under src
+ * (a json import) is recorded here too; a .ts file under src is in `inputs`. Files under any
  * node_modules folder are left out (the lockfile covers them), and so are
  * files outside the repo. No metafile: exit 1, and the old manifest stays.
  */
@@ -51,7 +52,9 @@ function externalFiles() {
     const abs = resolve(root, posix(input));
     if (posix(abs).split('/').includes('node_modules')) continue;
     const inSrc = relative(srcRoot, abs);
-    if (!inSrc.startsWith('..') && !isAbsolute(inSrc)) continue;
+    // A .ts file under src is in `inputs`. Any other src file the bundler read (a json import such as
+    // src/shared/malicious-packages.json, which the daily blocklist job edits) has no other hash: keep it here.
+    if (!inSrc.startsWith('..') && !isAbsolute(inSrc) && abs.endsWith('.ts')) continue;
     const key = posix(relative(repoRoot, abs));
     if (key.startsWith('..') || isAbsolute(key)) continue;
     keys.add(key);
