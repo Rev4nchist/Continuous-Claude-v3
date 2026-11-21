@@ -30,7 +30,7 @@ function parseArgs(argv) {
 function loadRegistry(file) {
   let reg;
   try {
-    reg = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    reg = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   } catch (e) {
     return die(`verify: cannot read registry ${file}: ${e.message}`, 2);
   }
@@ -114,7 +114,7 @@ function runCommand(plan) {
 
 function requireE2e(entry) {
   const e2e = entry.e2e;
-  if (!e2e) die(`verify: ${entry.name} has no e2e field. Run the check in its AGENTS.md "Testing" section, or add {command, artifact} or {none: "<reason>"} to the registry entry.`, 2);
+  if (!e2e) die(`verify: ${entry.name} has no e2e field. Run the check in its testing rules (AGENTS.md "Testing", or docs/testing-standard.md), or add {command, artifact} or {none: "<reason>"} to the registry entry.`, 2);
   if (typeof e2e.none === 'string') die(`verify: ${entry.name} has no e2e surface: ${e2e.none}`, 3);
   if (typeof e2e.command !== 'string' || !e2e.command) die(`verify: ${entry.name} e2e has no command. Add {command, artifact} or {none: "<reason>"}.`, 2);
   if (e2e.artifact != null && typeof e2e.artifact !== 'string') die(`verify: ${entry.name} e2e.artifact must be a string path.`, 2);

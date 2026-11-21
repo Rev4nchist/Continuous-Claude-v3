@@ -6,7 +6,7 @@
 
 | Principle | What it means here |
 |---|---|
-| Done means proven | A change is done only when an end-to-end check passes and its output is saved. A unit test alone is not proof (`AGENTS.md`). |
+| Done means proven | A change is done only when an end-to-end check passes and its output is saved. A unit test alone is not proof (`docs/testing-standard.md`). |
 | No vacuous gates | A gate asserts a non-zero count of things it checked. A scan that finds nothing fails. See the header of `scripts/hooks/hook-contract-guard.mjs`. |
 | Ratchets | A gate records a baseline and fails if the number gets worse. Examples: `scripts/rules/context-budget.json`, `scripts/hooks/suite-count-ratchet.mjs`. |
 | Fail closed on risk | Destructive and unattended actions get `ask` or `deny`. A guard's own internal error fails open, so one guard bug cannot stop all work. |

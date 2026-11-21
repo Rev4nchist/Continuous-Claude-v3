@@ -24,6 +24,6 @@
 | `e2e/` | A Playwright placeholder. It does not test this repo. |
 | `ai-report-card/`, `proofs/`, `tasks/` | A weekly report generator, Lean proofs for the optional math tools, and the task lists |
 
-Start with these root files: `CLAUDE.md` (repo rules), `AGENTS.md` (testing), `CONTEXT.md` (the
+Start with these files: `CLAUDE.md` (repo rules), `docs/testing-standard.md` (testing), `AGENTS.md` (the T3 Code advisory charter), `CONTEXT.md` (the
 glossary) and `BOOTSTRAP.md` (full setup). `.coderabbit.yaml` configures the label-gated
 CodeRabbit review.

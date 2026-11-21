@@ -10,7 +10,7 @@
  *   row: a key is missing, exitCode is not 0/1, the pid is used as a session id
  *   writer: no day file name, no cap, no prune, a throw on a bad dir, a counter line per drop
  *   error: command text, a path or a url leaves the process inside the error field (a class is stored, never message text)
- *   source: a run of the REPO dist (the AGENTS.md hook e2e step) is called live and feeds the doctor
+ *   source: a run of the REPO dist (the hook e2e step of docs/testing-standard.md) is called live and feeds the doctor
  * The spawn tests (trace-boot-spawn.test.ts) cover the injected behaviour.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
