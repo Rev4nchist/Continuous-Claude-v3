@@ -85,7 +85,7 @@ For a lane that owns `scripts/github/land-pr.ps1`, each subagent prompt also hol
 - CodeRabbit on a `re-` PR: the CLI and the engine, no PR bot. The checkpoint answer is `none` (Dave, 2026-11-10).
   At HIGH and CRITICAL only Dave's tap records `none`.
 - Evidence: a program lane saves its evidence in `.claudedocs/e2e-<lane-id>/` in the primary checkout.
-  A worktree cache is lost with the worktree. `AGENTS.md` "Testing" has the line for this rule.
+  A worktree cache is lost with the worktree. `docs/testing-standard.md` has the line for this rule.
 - Make no engine-file change inside a counted CRITICAL window.
   The CLI window (path F, DP1.5) counts the pinned engine copy, so engine PRs on main do not reset it.
   See [evidence-bar.md](evidence-bar.md), "Counted weeks".
