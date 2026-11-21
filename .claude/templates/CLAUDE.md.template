@@ -146,7 +146,7 @@ the result was absent, stale or broken.
    math). List every way the unit can fail first; one test per listed failure; then the code.
 3. **No test that restates the code.** Exception: a bug fix starts with a test that reproduces it.
 4. **A test must fail when its behavior breaks.** If you cannot name the change that breaks it, skip it.
-A project's E2E command lives in its AGENTS.md "Testing" section; its CLAUDE.md imports `@AGENTS.md`.
+A project's E2E rules live in AGENTS.md or docs/testing-standard.md, @-imported by its CLAUDE.md.
 
 ## Agents and delegation
 

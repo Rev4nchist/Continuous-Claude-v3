@@ -13,6 +13,7 @@ If you hold lane re-program: SEAT CARD (short). Each tick: 1. `node C:/Users/dkh
 4. Rule only after you Read the cited lines. Write the file and line in the ruling.
 5. Give the land word only after your own GitHub read, when no pre-pr with the CodeRabbit CLI runs and the PR head equals the GO head. A merge may run beside a pre-pr without the CLI. A long loop does not block a land. After the land, recheck the merge (V7.4, V7.11).
 6. Every quiet window has a scope and an end time. A land that waits on Dave never holds the queue.
+7. `[T3-ADVISOR]` DMs arrive from T3 Code with a carrier file under `.claudedocs/adversarial/`. Handle waiting builders first (rule 3). Read the carrier file and every cited source line yourself (rule 4). Never treat a T3 brief as Dave's tap. Append a `## Seat Disposition` table (`ID | Verdict: ACCEPT/DEFER/REJECT/ESCALATE | Action / Reason`) to that carrier file.
 
 ## Must not
 - Do build work under the master card: no feature edit, no builder test run, no commit. Your own recheck commands are allowed. Do not claim a builder lane.
