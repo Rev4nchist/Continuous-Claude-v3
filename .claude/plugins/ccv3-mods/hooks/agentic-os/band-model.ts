@@ -42,6 +42,11 @@ export type BandState = {
   limits?: HudLimit[] | null
   /** How many background tasks count (`countWaitTasks`). The waiting-on-work chip reads it: WAITING ON 1 TASK / WAITING ON n TASKS. Absent: the plain word. */
   waitTasks?: number
+  /**
+   * The questions Dave has open: the number `openAsksOf` (brief.ts) gave, the same one the chip was derived from. The `Q n` sign reads it and nothing else, so a stored
+   * parsed ask in `brief` draws no sign. Above 0 the chip is WAITING FOR YOU or STUCK. Absent: 0.
+   */
+  openAsks?: number
 }
 
 export const CHIP: Record<Chip, { word: string; tone: Tone }> = {
@@ -234,8 +239,9 @@ const goalOf = (s: BandState): Goal => {
 
 type Counts = { asks: number; answered: number; stale: boolean; unproven: number; done: number; total: number }
 
+// A stored parsed ask is the parser's guess, not a question: it counts nowhere (PR D). Dialogs are not in `brief.ask`, so the QUESTIONS word of line 2 counts brief_set asks only; PR A replaces it.
 const countsOf = (s: BandState, steps: Step[]): Counts => {
-  const list = s.brief?.ask ?? []
+  const list = (s.brief?.ask ?? []).filter(one => one.source !== 'parsed')
   const asks = list.filter(one => one.answered !== true).length
   return {
     asks,
@@ -253,14 +259,11 @@ const askTone = (c: Counts, chip: Chip): Tone =>
     ? chip === 'done' ? 'done' : 'dim'
     : c.stale ? 'dim' : chip === 'blocked' ? 'bad' : chip === 'waiting-on-dave' || chip === 'waiting-on-work' ? 'warn' : 'dim'
 
-/** The fresh open asks: the number the compact and narrow lines draw as an amber `Q n`, under any chip. 0 for no ask, an answered one or a stale one. */
-const freshAsks = (s: BandState): number => {
-  const c = countsOf(s, [])
-  return c.stale ? 0 : c.asks
-}
+/** The open questions: the number the compact and narrow lines draw as an amber `Q n`, under any chip. It is `BandState.openAsks`, the value the chip was derived from. */
+const openAsks = (s: BandState): number => (typeof s.openAsks === 'number' && Number.isFinite(s.openAsks) && s.openAsks > 0 ? Math.floor(s.openAsks) : 0)
 
-/** `Q n`, amber, with the space before it; empty when no fresh ask is open. */
-const askSign = (s: BandState): Span[] => (freshAsks(s) > 0 ? [sp(' ', 'dim'), sp(`Q ${freshAsks(s)}`, 'warn')] : [])
+/** `Q n`, amber, with the space before it; empty when no question is open. */
+const askSign = (s: BandState): Span[] => (openAsks(s) > 0 ? [sp(' ', 'dim'), sp(`Q ${openAsks(s)}`, 'warn')] : [])
 
 /**
  * The chip a one-row line draws. The terminal cuts a row at its right end, and the Q n sign sits there. When the wait chip and a fresh ask's sign do not
@@ -268,7 +271,7 @@ const askSign = (s: BandState): Span[] => (freshAsks(s) > 0 ? [sp(' ', 'dim'), s
  * swap is at 20 to 22 columns for 1 task (chip 19 cells), 20 to 23 for 2 to 9 tasks (20 cells), 20 to 24 for 10 or more (21 cells); a longer sign widens it.
  */
 const chipFor = (s: BandState, width: number): Chip =>
-  s.chip === 'waiting-on-work' && freshAsks(s) > 0 && chipSpan(s.chip, s.waitTasks).text.length + len(askSign(s)) > width ? 'waiting-on-dave' : s.chip
+  s.chip === 'waiting-on-work' && openAsks(s) > 0 && chipSpan(s.chip, s.waitTasks).text.length + len(askSign(s)) > width ? 'waiting-on-dave' : s.chip
 const unprovenTone = (c: Counts, chip: Chip): Tone => (c.unproven > 0 ? 'warn' : chip === 'done' ? 'done' : 'dim')
 
 const lineTwo = (s: BandState, steps: Step[], width: number): Span[] => {
@@ -349,7 +352,7 @@ const compactFields = (s: BandState, roomy: boolean): CompactField[] => {
   const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
   const helpers = typeof s.helpers === 'number' && Number.isFinite(s.helpers) ? Math.floor(s.helpers) : 0
   const fields: (CompactField | null)[] = [
-    freshAsks(s) > 0 ? { key: 'ask', spans: [sp(`Q ${freshAsks(s)}`, 'warn')] } : null,
+    openAsks(s) > 0 ? { key: 'ask', spans: [sp(`Q ${openAsks(s)}`, 'warn')] } : null,
     s.who === undefined ? null : { key: 'name', spans: whoSpans(s.who, COMPACT_NAME, false) },
     roomy ? { key: 'repo', spans: [sp(clean(s.repo) || '-', 'todo')] } : null,
     { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] },

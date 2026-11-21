@@ -6,6 +6,10 @@ import { EMPTY_CACHE, MISS_CAP, addRequest, afterCompaction, cacheLabel, cacheRe
 import type { CacheRequest } from '../hooks/hud/cache'
 import type { CacheState } from '../types'
 
+/** One limit for every test that advances the mock clock by about an hour: each hour is 720 pulses, and a loaded machine runs them slower than the 5 s default allows. */
+const LONG_ADVANCE_LIMIT_MS = 60_000
+const longTest: typeof test = ((name: string, body: never) => test(name, { timeoutMs: LONG_ADVANCE_LIMIT_MS } as never, body)) as never
+
 // Ways the context figure and the cache element can fail, one test each.
 // X1 ctx holds the last turn's value while a turn makes more requests (the engine measures per turn)
 // X2 ctx holds the pre-compaction value after /compact, or shows the size the engine reports (far below the next
@@ -340,7 +344,7 @@ describe('cache element', () => {
     expect((await band($)).hud).not.toContain('MISS')
   })
 
-  test('K3 the countdown moves while idle, on a mounted band, and ends in COLD with the next cost', async ($, on) => {
+  longTest('K3 the countdown moves while idle, on a mounted band, and ends in COLD with the next cost', async ($, on) => {
     const clock = world(on)
     await start($)
     await step($, { input: 0, read: 0, write: 360_000 })
@@ -355,7 +359,7 @@ describe('cache element', () => {
     await mounted.unmount()
   })
 
-  test('K9 after a compaction the cause is named, and a cold send has no price: the new prompt size is not known', async ($, on) => {
+  longTest('K9 after a compaction the cause is named, and a cold send has no price: the new prompt size is not known', async ($, on) => {
     const clock = world(on)
     await start($)
     await step($, { input: 0, read: 0, write: 360_000 })
@@ -370,7 +374,7 @@ describe('cache element', () => {
     expect(hud).not.toContain('next ≈')
   })
 
-  test("K9 an advisor loop's cold send is priced at the window, not at the summed counts", async ($, on) => {
+  longTest("K9 an advisor loop's cold send is priced at the window, not at the summed counts", async ($, on) => {
     const clock = world(on)
     await start($)
     await step($, { input: 0, read: 0, write: 100_000 })
@@ -381,7 +385,7 @@ describe('cache element', () => {
     expect((await band($)).hud).toContain('cache COLD · next ≈$0.82')
   })
 
-  test('K5 /cache answers with the totals and each miss, its idle gap and cause', async ($, on) => {
+  longTest('K5 /cache answers with the totals and each miss, its idle gap and cause', async ($, on) => {
     const clock = world(on)
     await start($)
     await step($, { input: 0, read: 0, write: 100_000 })
@@ -420,7 +424,7 @@ describe('cache element', () => {
     expect(isSubscription([])).toBe(false)
   })
 
-  test('K6 CCV3_CACHE_TTL_MIN overrides the lifetime and keeps the 1-hour write rate', async ($, on) => {
+  longTest('K6 CCV3_CACHE_TTL_MIN overrides the lifetime and keeps the 1-hour write rate', async ($, on) => {
     const clock = world(on, { CCV3_CACHE_TTL_MIN: '30' })
     await start($)
     await step($, { input: 0, read: 0, write: 100_000 })
@@ -432,7 +436,7 @@ describe('cache element', () => {
     expect(ttlMinutes(undefined, false)).toBe(5)
   })
 
-  test('K6 a failed usage read keeps the last lifetime and write rate', async ($, on) => {
+  longTest('K6 a failed usage read keeps the last lifetime and write rate', async ($, on) => {
     const clock = world(on)
     await start($)
     await step($, { input: 0, read: 0, write: 100_000 })
@@ -442,6 +446,46 @@ describe('cache element', () => {
     await clock.advance(61 * 60_000)
     // Still a subscription: 101_000 × $4 × 2 ÷ 1M, not the 5-minute rate ($0.51).
     expect((await band($)).hud).toContain('cache COLD · next ≈$0.81')
+  })
+})
+
+// L1 a long clock.advance runs one pulse per PULSE_MS; on a loaded machine each pulse is slow and the test passes the 5 s default (the K3 timeout of the seat)
+// L2 the pulse count per hour of simulated time moves without notice (PULSE_MS or a second timer changes it)
+describe('long advances', () => {
+  type Count = { calls: number; spinMs: number }
+  /** `on` with a counting clock.now: every call counts, and spins `spinMs` of real time first (a loaded machine). Time still comes from mock.clock. */
+  const counting = (on: On, count: Count): On =>
+    ((event: string, ...rest: unknown[]) => {
+      const handler = rest[rest.length - 1] as (...args: unknown[]) => unknown
+      if (event === 'clock.now') {
+        rest[rest.length - 1] = (...args: unknown[]) => {
+          count.calls += 1
+          for (const until = performance.now() + count.spinMs; performance.now() < until; ) continue
+          return handler(...args)
+        }
+      }
+      return (on as never as (...args: unknown[]) => unknown)(event, ...rest)
+    }) as never as On
+
+  longTest('L1 a slow pulse (8 ms each) does not time out a 61-minute advance', async ($, on) => {
+    const count: Count = { calls: 0, spinMs: 8 }
+    const clock = world(counting(on, count))
+    await start($)
+    await step($, { input: 0, read: 0, write: 360_000 })
+    await clock.advance(61 * 60_000)
+    expect((await band($)).hud).toContain('cache COLD')
+    // About 732 pulses at 8 ms: over the 5 s default, under the named limit.
+    expect(count.calls).toBeGreaterThan(700)
+  })
+
+  test('L2 an idle hour of simulated time runs 720 pulses (PULSE_MS 5000), each an idle one', async ($, on) => {
+    const count: Count = { calls: 0, spinMs: 0 }
+    const clock = world(counting(on, count))
+    await start($)
+    await step($, { input: 0, read: 0, write: 360_000 })
+    const before = count.calls
+    await clock.advance(60 * 60_000)
+    expect(count.calls - before).toBe(720)
   })
 })
 

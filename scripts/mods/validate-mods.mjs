@@ -22,8 +22,9 @@
  * Exit code: 1 when any check fails. ASCII only, node builtins only.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -41,7 +42,10 @@ export const parseArgs = (args, defaultDir) => {
 };
 
 const { pluginDir, minGating } = parseArgs(process.argv.slice(2), join(repoRoot, '.claude/plugins/ccv3-mods'));
-const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 280_000 });
+/** The test step runs the suite in shards (see checkTest) on one clock, under the 10 minutes pre-pr gives this gate (pre-pr.mjs, id 'mod'). */
+export const TEST_LIMIT_MS = 9 * 60_000;
+export const SHARD_FILES = 11;
+const sh = (cmd, args, timeout = 280_000) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout });
 const firstLines = (text, n = 12) => text.trim().split(/\r?\n/).slice(0, n).join('\n');
 
 /** Every gating hook the validate report lists, wherever it sits in the report. */
@@ -151,15 +155,62 @@ const checkTsc = () => {
   return { ok, note: ok ? '' : `tsc: exit ${ran.status}\n${firstLines(ran.stdout + (ran.stderr ?? ''), 20)}`, short: `tsc ${ok ? 'OK' : 'FAIL'} (${from})` };
 };
 
-const checkTest = () => {
-  const ran = sh('claude', ['plugin', 'test', pluginDir]);
-  const out = `${ran.stdout}${ran.stderr ?? ''}`;
+const isTest = name => /\.test\.tsx?$/.test(name);
+/** Every test file under the plugin folder, as a path relative to it, sorted: a fixed order, so a run can be repeated. node_modules is left out. */
+export const testFilesOf = dir => {
+  const walk = sub => readdirSync(join(dir, sub), { withFileTypes: true }).flatMap(e => (e.name === 'node_modules' ? [] : e.isDirectory() ? walk(`${sub}${e.name}/`) : [`${sub}${e.name}`]));
+  return existsSync(dir) ? walk('').filter(isTest).sort() : [];
+};
+export const shardsOf = (files, size = SHARD_FILES) => Array.from({ length: Math.ceil(files.length / size) }, (_, i) => files.slice(i * size, (i + 1) * size));
+/** The engine runs every test file of the folder it is given, and starts one child for each at once (a full run then misses its 5 s test limit in a different set of tests each time). So a part of the suite gets its own folder: a temp copy of the plugin without node_modules and without the test files of the other shards. */
+export const makeShard = (dir, files) => {
+  const keep = new Set(files);
+  const root = mkdtempSync(join(tmpdir(), 'mods-shard-'));
+  cpSync(dir, root, { recursive: true, filter: src => !/[\\/]node_modules$/.test(src) && (!isTest(src) || keep.has(relative(dir, src).split('\\').join('/'))) });
+  return root;
+};
+export const leftMs = (startedAt, now, limitMs) => limitMs - (now - startedAt);
+/** Removes the temp folder this run made. On Windows a child the timeout stopped can still hold a file: retry, and if it stays, print the path and go on (the verdict is not lost). */
+export const removeShard = (dir, remove = rmSync) => {
+  try {
+    remove(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  } catch {
+    console.log(`mods gate: could not remove the temp folder ${dir}`);
+  }
+};
+const countsOf = (out, status) => {
   const count = word => Number((out.match(new RegExp(`^\\s*(\\d+) ${word}\\b`, 'm')) ?? [])[1] ?? NaN);
-  const pass = count('pass');
-  const fail = count('fail');
-  const ok = ran.status === 0 && fail === 0 && pass > 0;
-  const why = Number.isNaN(pass) || Number.isNaN(fail) ? 'no pass/fail count in the output' : pass === 0 ? 'zero tests ran (vacuous gate)' : `${fail} failing`;
-  return { ok, note: ok ? '' : `test: exit ${ran.status}, ${why}\n${firstLines(out.split(/\r?\n/).filter(l => /^\(fail\)/.test(l) || /Error|Expected|Received/.test(l)).join('\n') || out, 20)}`, short: `test ${pass} pass ${fail} fail` };
+  return { status, pass: count('pass'), fail: count('fail'), lines: out.split(/\r?\n/).filter(l => /^\(fail\)/.test(l) || /Error|Expected|Received/.test(l)) };
+};
+/** The verdict of all shards: counts summed, the failing lines of every shard kept, and a step the limit stopped says "stopped at N s" in place of "NaN pass NaN fail". */
+export const shardsVerdict = (rows, stopped, limitMs) => {
+  const sum = key => rows.reduce((n, r) => n + (Number.isNaN(r[key]) ? 0 : r[key]), 0);
+  const [pass, fail, secs] = [sum('pass'), sum('fail'), Math.round(limitMs / 1000)];
+  const blind = rows.some(r => Number.isNaN(r.pass) || Number.isNaN(r.fail));
+  const ok = !stopped && !blind && rows.length > 0 && rows.every(r => r.status === 0) && fail === 0 && pass > 0;
+  const why = stopped ? `stopped at ${secs} s` : blind ? 'a shard printed no pass/fail count' : pass === 0 ? 'zero tests ran (vacuous gate)' : `${fail} failing`;
+  return { ok, why, lines: rows.flatMap(r => r.lines), short: stopped ? `test stopped at ${secs} s` : `test ${pass} pass ${fail} fail` };
+};
+
+const checkTest = () => {
+  const started = Date.now();
+  const rows = [];
+  let stopped = false;
+  for (const files of shardsOf(testFilesOf(pluginDir))) {
+    const left = leftMs(started, Date.now(), TEST_LIMIT_MS);
+    if (left <= 0) { stopped = true; break; }
+    const shard = makeShard(pluginDir, files);
+    try {
+      const ran = sh('claude', ['plugin', 'test', shard], left);
+      stopped = ran.error?.code === 'ETIMEDOUT';
+      rows.push(countsOf(`${ran.stdout ?? ''}${ran.stderr ?? ''}`, ran.status));
+    } finally {
+      removeShard(shard);
+    }
+    if (stopped) break;
+  }
+  const verdict = shardsVerdict(rows, stopped, TEST_LIMIT_MS);
+  return { ok: verdict.ok, note: verdict.ok ? '' : `test: ${verdict.why}\n${firstLines(verdict.lines.join('\n'), 20)}`, short: verdict.short };
 };
 
 const main = () => {

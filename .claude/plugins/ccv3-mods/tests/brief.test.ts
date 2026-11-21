@@ -17,6 +17,7 @@ import {
   isProven,
   markAsksAnswered,
   mergeParsed,
+  openAsksOf,
   parseTurnEnd,
   redact,
   tapDecisions,
@@ -266,9 +267,9 @@ describe('applyBrief', () => {
     expect(brief.proofs[0]?.kind).toBe('task')
     // PRD 5.1: the task list is the plan source while it holds a task, so the unproven plan step no longer keeps the chip off done.
     // (Before the 5.1 fix this expected 'idle', because the chip weighed the plan step too.)
-    expect(deriveChip({ brief, tasks, toolRunning: false, turnActive: false, blocked: false, now: NOW })).toBe('done')
+    expect(deriveChip({ brief, tasks, toolRunning: false, turnActive: false, blocked: false, openAsks: 0, now: NOW })).toBe('done')
     // With no task the same plan step is the source, and its proof is missing.
-    expect(deriveChip({ brief, tasks: [], toolRunning: false, turnActive: false, blocked: false, now: NOW })).toBe('idle')
+    expect(deriveChip({ brief, tasks: [], toolRunning: false, turnActive: false, blocked: false, openAsks: 0, now: NOW })).toBe('idle')
   })
 
   test('A16 a secret in a task subject is not stored in the proof, and the proof still joins on it', () => {
@@ -324,15 +325,13 @@ describe('applyBrief', () => {
 })
 
 describe('deriveChip', () => {
-  const state = (over: Partial<Parameters<typeof deriveChip>[0]> = {}) => ({
-    brief: null as Brief | null,
-    tasks: [] as OsTask[],
-    toolRunning: false,
-    turnActive: false,
-    blocked: false,
-    now: NOW,
-    ...over,
-  })
+  // PR D: deriveChip reads the number `openAsksOf` counted and never recounts from the brief. This helper counts it the way the mod does, from the brief the test gives
+  // (`activeAt` as the staleness clock), unless the test names `openAsks` itself (a dialog).
+  const state = (over: Partial<Parameters<typeof deriveChip>[0]> & { activeAt?: number } = {}) => {
+    const { activeAt, ...given } = over
+    const base = { brief: null as Brief | null, tasks: [] as OsTask[], toolRunning: false, turnActive: false, blocked: false, now: NOW, ...given }
+    return { ...base, openAsks: given.openAsks ?? openAsksOf({ steps: [], brief: base.brief, now: base.now, activeAt: activeAt ?? null }) }
+  }
 
   test('C1 nothing at all is idle, never done', () => {
     expect(deriveChip(state())).toBe('idle')
@@ -384,14 +383,14 @@ describe('deriveChip', () => {
   })
 
   test('C4b an AskUserQuestion step in flight is waiting, with no brief at all (a dialog is open for Dave)', () => {
-    expect(deriveChip({ ...state({ toolRunning: true }), dialogOpen: true })).toBe('waiting-on-dave')
-    expect(deriveChip({ ...state({ toolRunning: true, turnActive: true }), dialogOpen: true })).toBe('waiting-on-dave')
-    // Without the dialog flag a running tool is only working: the flag is the whole difference.
+    expect(deriveChip(state({ toolRunning: true, openAsks: 1 }))).toBe('waiting-on-dave')
+    expect(deriveChip(state({ toolRunning: true, turnActive: true, openAsks: 2 }))).toBe('waiting-on-dave')
+    // Without the dialog count a running tool is only working: the count is the whole difference.
     expect(deriveChip(state({ toolRunning: true }))).toBe('working')
   })
 
   test('C4c blocked still beats a dialog, and a stale ask still lets running work show', () => {
-    expect(deriveChip({ ...state({ blocked: true }), dialogOpen: true })).toBe('blocked')
+    expect(deriveChip(state({ blocked: true, openAsks: 1 }))).toBe('blocked')
     const brief = apply(null, { ask: [{ kind: 'question', text: 'q' }] })
     expect(deriveChip(state({ brief, turnActive: true, now: NOW + 24 * 3600_000 }))).toBe('working')
   })
@@ -1215,8 +1214,9 @@ describe('brief_set in the mod', () => {
     const brief = lastSnapshot(seen).brief
     expect(brief.goal).toBe('from the tool')
     expect(brief.stopAt).toBe('before commit')
-    expect(brief.ask[0]).toMatchObject({ text: 'Paste the response', source: 'parsed' })
-    expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
+    // PR D: the Next steps line is a guess, not a question: a turn end stores no ask and the chip does not wait (failure 19, tests/question-source.test.ts).
+    expect(brief.ask).toEqual([])
+    expect(lastSnapshot(seen).chip).not.toBe('waiting-on-dave')
   })
 
   test('E6b a parsed turn end does not refill an ask list that brief_set cleared with []', async ($, on) => {
@@ -1597,47 +1597,49 @@ describe('turn.step answers in the mod', () => {
     expect(brief?.stopAt ?? '').toContain('open PR')
   })
 
-  test('E14 a "None — waiting on X" turn clears the ask of the turn before and the chip leaves waiting-on-dave', async ($, on) => {
+  // PR D: a turn end no longer stores or clears an ask (the parsed ask is a guess). The cases below pin that a "None" or a "Waiting on CI" Next steps block leaves a real
+  // (brief_set) ask open: only `brief_set` with `ask: []` or Dave's own prompt clears it. They replace the three old cases that cleared a parsed ask.
+  const realAsk = ($: Engine, text = 'Approve the merge of PR 12?') => $.tool.call({ tool: BRIEF_TOOL, ask: [{ kind: 'approval', text }] })
+
+  test('E14 a "None — waiting on X" turn leaves a brief_set ask open and the chip on waiting-on-dave', async ($, on) => {
     const seen = world(on)
     await startMod($, true)
-    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    await realAsk($)
     expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
     await turnEnd($, 'Waiting.\n\n## Next steps\n1. None — waiting on the CI run.')
     const after = lastSnapshot(seen)
-    expect(after.brief.ask).toEqual([])
-    expect(after.chip).not.toBe('waiting-on-dave')
-  })
-
-  test('E14c a "None for now. I\'m waiting on X" turn clears the ask of the turn before and the chip leaves waiting-on-dave', async ($, on) => {
-    const seen = world(on)
-    await startMod($, true)
-    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
-    expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
-    await turnEnd($, "Waiting.\n\n## Next steps\n1. None for now. I'm waiting on the workflow.")
-    const after = lastSnapshot(seen)
-    expect(after.brief.ask).toEqual([])
-    expect(after.chip).not.toBe('waiting-on-dave')
-  })
-
-  test('E14d a "Waiting on CI, then approve PR 12" turn keeps the ask on Dave and the chip on waiting-on-dave', async ($, on) => {
-    const seen = world(on)
-    await startMod($, true)
-    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
-    expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
-    await turnEnd($, 'Waiting.\n\n## Next steps\n1. Waiting on CI, then approve PR 12')
-    const after = lastSnapshot(seen)
     expect(after.brief.ask).toHaveLength(1)
-    expect(after.brief.ask?.[0]?.text).toContain('approve PR 12')
     expect(after.chip).toBe('waiting-on-dave')
   })
 
-  test('CL14 a prompt stamps answeredAt with the clock; the next Next steps block moves the ask to cleared as prompted, and the snapshot holds it', async ($, on) => {
+  test('E14c a "None for now. I\'m waiting on X" turn leaves a brief_set ask open and the chip on waiting-on-dave', async ($, on) => {
     const seen = world(on)
     await startMod($, true)
-    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    await realAsk($)
+    await turnEnd($, "Waiting.\n\n## Next steps\n1. None for now. I'm waiting on the workflow.")
+    const after = lastSnapshot(seen)
+    expect(after.brief.ask).toHaveLength(1)
+    expect(after.chip).toBe('waiting-on-dave')
+  })
+
+  test('E14d a "Waiting on CI, then approve PR 12" turn adds no second ask: the brief_set ask stays the only one', async ($, on) => {
+    const seen = world(on)
+    await startMod($, true)
+    await realAsk($)
+    await turnEnd($, 'Waiting.\n\n## Next steps\n1. Waiting on CI, then approve PR 12')
+    const after = lastSnapshot(seen)
+    expect(after.brief.ask).toHaveLength(1)
+    expect(after.brief.ask?.[0]).toMatchObject({ text: 'Approve the merge of PR 12?', source: 'brief_set' })
+    expect(after.chip).toBe('waiting-on-dave')
+  })
+
+  test('CL14 a prompt stamps answeredAt with the clock; the next brief_set ask moves the answered ask to cleared as prompted, and the snapshot holds it', async ($, on) => {
+    const seen = world(on)
+    await startMod($, true)
+    await realAsk($)
     await seen.clock.advance(1000)
     await $.prompt.submit({ text: 'go ahead', wait: false, origin: { kind: 'composer' } })
-    await turnEnd($, '## Next steps\n1. Pick the release name?')
+    await realAsk($, 'Pick the release name?')
     const brief = lastSnapshot(seen).brief
     expect(brief.ask.map((one: { text: string }) => one.text)).toEqual(['Pick the release name?'])
     expect(brief.cleared).toHaveLength(1)
@@ -1648,17 +1650,17 @@ describe('turn.step answers in the mod', () => {
     const seen = world(on)
     await startMod($, true)
     for (const kind of ['scheduled-trigger', 'task-notification', 'peer', 'peer-send-message', 'brand-new-kind'] as const) {
-      await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+      await realAsk($)
       await $.prompt.submit({ text: 'tick', wait: false, origin: { kind } } as never)
       expect(lastSnapshot(seen).brief.ask[0], kind).toMatchObject({ text: 'Approve the merge of PR 12?' })
       expect(lastSnapshot(seen).brief.ask[0].answered, kind).toBeFalsy()
     }
     for (const kind of ['composer', 'bridge', 'auto-continuation'] as const) {
-      await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+      await realAsk($)
       await $.prompt.submit({ text: 'go ahead', wait: false, origin: { kind } } as never)
       expect(lastSnapshot(seen).brief.ask.find((one: { answered?: boolean }) => !one.answered), kind).toBeUndefined()
     }
-    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    await realAsk($)
     await $.prompt.submit({ text: 'go ahead', wait: false } as never)
     expect(lastSnapshot(seen).brief.ask.find((one: { answered?: boolean }) => !one.answered)).toBeUndefined()
   })
@@ -1672,7 +1674,7 @@ describe('turn.step answers in the mod', () => {
   test('CL15b a mod submission (the PR watcher line) never answers, even from the composer', async ($, on) => {
     const seen = world(on)
     await startMod($, true)
-    await turnEnd($, '## Next steps\n1. Pick the release name?')
+    await realAsk($, 'Pick the release name?')
     await $.prompt.submit({ text: 'PR watcher: #12 head abc1234 is READY', wait: false, origin: { kind: 'composer' } } as never)
     expect(lastSnapshot(seen).brief.ask.find((one: { text: string }) => one.text === 'Pick the release name?').answered).toBeFalsy()
   })
@@ -1682,7 +1684,7 @@ describe('turn.step answers in the mod', () => {
     const gap: { run?: () => Promise<void> } = {}
     const seen = world(on, {}, gap)
     await startMod($, true)
-    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    await realAsk($)
     let reads = 0
     gap.run = async () => {
       reads += 1
@@ -1861,9 +1863,10 @@ describe('a question the mod told the model to ask', () => {
     // The header must be the whole word: a longer header is the model's.
     expect(tapDecisions(plain('PR #12 plan', `Merge${REC}`))).toEqual([`PR #12 plan: Merge${REC}`])
     expect(tapDecisions(plain('Pushing', `Go${REC}`))).toEqual([`Pushing: Go${REC}`])
-    // (Recommended) on a later option is not the script marker.
-    const later = auth({ header: 'Land', options: [{ label: 'Keep open', description: 'd' }, { label: `Land now${REC}`, description: 'd' }] })
-    expect(tapDecisions(answered(later, 'Keep open'))).toEqual(['Land: Keep open'])
+    // PR D (failure 17): (Recommended) on a later option IS the script marker, with the header: a $0 row may come first. It is covered in question-source.test.ts (Q17).
+    // A mod header with no mark on any option is still the model's:
+    const unmarked = auth({ header: 'Land', options: [{ label: 'Keep open', description: 'd' }, { label: 'Land now', description: 'd' }] })
+    expect(tapDecisions(answered(unmarked, 'Keep open'))).toEqual(['Land: Keep open'])
   })
 
   test('TAP-U6 the skip is per question: a mod question beside a model question drops only itself, and the index names stay put', () => {
@@ -2051,7 +2054,7 @@ describe('a tap in the mod', () => {
   test('TAP21 a tap does not mark an open ask answered', async ($, on) => {
     const { seen } = tapWorld(on, [{ answers: { 'Which auth?': 'OAuth' } }])
     await startMod($, true)
-    await turnEnd($, '## Next steps\n1. Paste log A')
+    await $.tool.call({ tool: BRIEF_TOOL, ask: [{ kind: 'question', text: 'Paste log A' }] })
     await askModel($, [auth()])
     expect(tapRows(seen)).toHaveLength(1)
     expect(lastSnapshot(seen).brief.ask[0].answered).toBeUndefined()
