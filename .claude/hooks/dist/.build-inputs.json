@@ -203,7 +203,7 @@
   },
   "external": {
     ".claude/hooks/src/shared/malicious-packages.json": {
-      "sha256": "2e1f65f4b7e5386770320943a1d832611b22bd69d181f660906c5bfd34baaf6c"
+      "sha256": "d5afffd07256c0e0378422a8c1c22f0ff39f6739df07527aa9f44dc0efdcd1c5"
     },
     "scripts/github/lib/answer-key.mjs": {
       "sha256": "49a0451170db358544ca66ddc35260463de2c1b19663a0ee85504d0bca1e972c"
