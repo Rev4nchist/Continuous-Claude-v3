@@ -100,7 +100,7 @@ Optional fields (nullable): `port`, `url`, `devCommand`, `e2e`.
 `{ "command": "<shell command, run in the project path>", "artifact": "<path the run writes, relative to the repo root; <stamp> allowed>" }`
 or `{ "none": "<reason there is no surface>" }`. `artifact` is optional. It defaults to `.claude/cache/e2e/<stamp>-verify-<project slug>.log` in the project repo. `node ~/.claude/scripts/verify.mjs` runs it and writes `<artifact>.json`.
 The command runs under `cmd.exe` on Windows (`shell: true`): use `&&`, no POSIX quoting, no `$VAR`, no `;`. Keep it under 600 s.
-The project's AGENTS.md "Testing" section states the same values.
+The project's testing rules (AGENTS.md "Testing", or docs/testing-standard.md) state the same values.
 
 ### Update Project Info
 

@@ -100,7 +100,7 @@ function underLiveDist(script: string | undefined, home: string): boolean {
 
 /**
  * guardSource() (VITEST -> test, CCV3_GUARD_DECISIONS_LOG -> probe) plus CCV3_HOOK_TRACE_DIR as a second probe signal.
- * A row is live only when the script runs from the live dist: the AGENTS.md hook e2e step runs the REPO dist with the real HOME,
+ * A row is live only when the script runs from the live dist: the hook e2e step of docs/testing-standard.md runs the REPO dist with the real HOME,
  * and that run must not make the doctor's hooks:trace-fresh pass before the change reaches the live copy.
  */
 export function traceSource(env: NodeJS.ProcessEnv, script: string | undefined = process.argv[1], home: string = homedir()): TraceSource {

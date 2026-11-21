@@ -19,7 +19,7 @@
     },
     {
       "path": "e2e/example.spec.ts",
-      "reason": "placeholder spec named in AGENTS.md; it tests nothing of this repo"
+      "reason": "placeholder spec named in docs/testing-standard.md; it tests nothing of this repo"
     },
     {
       "path": "apps/agentic-os/e2e/board-review.spec.ts",

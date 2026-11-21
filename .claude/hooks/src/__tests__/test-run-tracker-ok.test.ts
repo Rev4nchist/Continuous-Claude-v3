@@ -106,7 +106,7 @@ describe('main() keeps the proof (review fixes)', () => {
     return p;
   };
 
-  // Breaks when a ratchet run overwrites the single-slot state: AGENTS.md says to run vitest and
+  // Breaks when a ratchet run overwrites the single-slot state: docs/testing-standard.md says to run vitest and
   // then context-budget-guard, and the second run must not erase the first.
   it('a ratchet run does not overwrite a vitest run', async () => {
     await track(withCommand(exit0(), 'npx vitest run'));
