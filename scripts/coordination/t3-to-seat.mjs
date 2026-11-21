@@ -8,14 +8,16 @@
  * sessions row and never touches a lane row (owner, lease, state).
  *
  *   node t3-to-seat.mjs --kind <premortem|redteam|plan> --file <path> --summary "<one line>"
- *                       [--sha <hex>] [--lane <id>] [--seat <session id or name>] [--project <key>] [--dry-run]
+ *                       [--sha <hex>] [--lane <id>] [--seat <id or name of the seat session>] [--project <key>] [--dry-run]
+ *
+ * --seat is a check, not a route: it must name the holder of re-program (whole id, id prefix or session name).
  *
  * Order of the checks (each stops the run; nothing is written before the last one passes):
  *   1. arguments                       exit 1
  *   2. carrier file inside the folder  exit 1
  *   3. listed-id scan (M4.13)          exit 3   the list is read from the primary checkout; any read problem refuses
  *   4. DM byte budget (M4.15)          exit 1
- *   5. the seat                        exit 2   no holder of re-program, or --seat names no session
+ *   5. the seat                        exit 2   no holder of re-program, or --seat names another session than the holder
  *   6. --lane on the board             exit 1
  * Exit 0: one lane_event row (or none with --dry-run). A failed insert prints "not confirmed" and exits 1.
  *
@@ -30,7 +32,7 @@ import { countListed, readIdList } from './board-mask.mjs';
 import { repoPath } from './canon-home.mjs';
 import { DEFAULT_BOARD, resolveBoard } from './lane-board.mjs';
 import { assertScratchUrl } from './scratch-db.mjs';
-import { label, listIdentities, resolveName } from './session-label.mjs';
+import { label, listIdentities } from './session-label.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -48,7 +50,7 @@ const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const MSG_LISTED = 'REFUSED: listed holdout/gold id detected; nothing sent';
 const MSG_NO_LIST = 'REFUSED: the listed id list could not be read; nothing sent';
 const USAGE = 'usage: t3-to-seat.mjs --kind <premortem|redteam|plan> --file <path> --summary "<one line>" '
-  + '[--sha <hex>] [--lane <id>] [--seat <session id or name>] [--project <key>] [--dry-run]';
+  + '[--sha <hex>] [--lane <id>] [--seat <id or name of the seat session>] [--project <key>] [--dry-run]';
 
 /** A stop with an exit code. The text holds no value from the summary, the sha or the carrier file. */
 class Stop extends Error {
@@ -143,33 +145,31 @@ function assertRealPrimary(url) {
   }
 }
 
-/** The session that --seat names: an exact id, then a session name, then an id prefix of 8 or more. Exit 2 when none. */
-async function seatFromFlag(c, want, ids) {
-  const exact = await c.query('SELECT id FROM sessions WHERE id = $1', [want]);
-  if (exact.rows.length === 1) return exact.rows[0].id;
-  const named = [...ids].filter(([, i]) => typeof i.name === 'string').map(([u]) => u);
-  const known = named.length
-    ? (await c.query('SELECT id FROM sessions WHERE id = ANY($1)', [named])).rows.map((r) => r.id) : [];
-  const byName = resolveName(want, ids, known);
-  if (byName.length === 1) return byName[0];
-  if (byName.length > 1) stop(2, `--seat names ${byName.length} sessions; give the session id`);
-  const prefix = want.replace(/^#/, '');
-  if (/^[0-9a-f-]{8,}$/i.test(prefix)) {
-    const m = await c.query("SELECT id FROM sessions WHERE id LIKE $1 || '%' ORDER BY id LIMIT 2", [prefix]);
-    if (m.rows.length === 1) return m.rows[0].id;
-    if (m.rows.length > 1) stop(2, '--seat is ambiguous; give more characters');
-  }
-  return stop(2, '--seat names no session');
+/** True when `want` names the session `owner`: its whole id, the start of its id (8 or more hex characters, a leading # allowed) or its session name. */
+export function namesSession(want, owner, ids) {
+  const w = String(want).trim().toLowerCase();
+  const id = String(owner).toLowerCase();
+  if (w === id) return true;
+  const prefix = w.replace(/^#/, '');
+  if (/^[0-9a-f-]{8,}$/.test(prefix) && id.startsWith(prefix)) return true;
+  const name = ids.get(owner)?.name;
+  return typeof name === 'string' && name.trim() !== '' && name.trim().toLowerCase() === w;
 }
 
-/** The holder of re-program on the board, or the --seat override. Exit 2 when there is none. */
+/**
+ * The holder of re-program on the board. Exit 2 when there is none. The receiver is ALWAYS that holder: the charter lets
+ * T3 Code reach the Program Seat only, so --seat is a check, not a route. It must name the holder, else exit 2. A
+ * --seat that could name any session would be a direct path to a builder (CodeRabbit CLI, 2026-11-21; Dave: restrict).
+ */
 async function resolveSeat(c, board, seatFlag, ids) {
-  if (typeof seatFlag === 'string' && seatFlag.trim() !== '') return seatFromFlag(c, seatFlag.trim(), ids);
   const { rows } = await c.query(
     'SELECT owner_session_id FROM agentic_os.lane WHERE id = $1 AND project_key = $2', [MASTER_CARD_ID, board],
   );
   const owner = rows[0]?.owner_session_id ?? null;
   if (!owner) stop(2, `no live Seat holds ${MASTER_CARD_ID} on board ${board}; nothing sent`);
+  if (typeof seatFlag === 'string' && !namesSession(seatFlag, owner, ids)) {
+    stop(2, `--seat does not name the session that holds ${MASTER_CARD_ID} on board ${board}; nothing sent`);
+  }
   return owner;
 }
 

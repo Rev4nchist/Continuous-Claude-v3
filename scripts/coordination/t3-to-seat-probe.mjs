@@ -19,14 +19,15 @@
  *   6. --dry-run writes a row                                                                        -> must exit 0, 0 rows
  *   7. a send writes a wrong row, reads liveness from the heartbeat alone (an old heartbeat with
  *      fresh activity must read DELIVERED), prints the wrong status, or the seat cannot read the DM  -> 1 row each, DELIVERED / QUEUED
- *   8. it sends with no holder of re-program, or to a --seat that names nobody                       -> must exit 2
+ *   8. it sends with no holder of re-program, or --seat routes a brief to a session that is not the
+ *      holder (a builder); the holder named by id, id prefix or session name must still pass          -> must exit 2 / pass
  *   9. it writes a sessions row or changes the re-program lane row                                   -> both unchanged
  *  10. a stand-in home (CCV3_USER_HOME) is honoured on a database that is not a scratch database     -> must exit 1 before any connection
  *
  * Exit 0 when every check passes, 1 on a failed check, 2 when the scratch database cannot be made.
  */
 import { execFile } from 'node:child_process';
-import { randomBytes, randomInt } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -47,7 +48,10 @@ const LANE = path.join(HERE, 'lane.mjs');
 /** The live database name on a port where nothing listens (the T1 form of probe-scratch-guard.test.mjs). Check 10 never connects. */
 const DEAD_LIVE = 'postgresql://x:y@127.0.0.1:1/continuous_claude';
 
-const SEAT = 'zz-t3probe-seat';
+// The seat has a real session id shape (made at run time) and a session name, so --seat can name it by id, prefix and name.
+const SEAT = randomUUID();
+const SEAT_NAME = 'probe-seat';
+const SEAT_LABEL = `${SEAT_NAME} #${SEAT.slice(0, 8)}`;
 const OTHER = 'zz-t3probe-other';
 /** A zero-width space, made from its code: the source file holds no invisible character. */
 const ZWSP = String.fromCharCode(0x200b);
@@ -105,6 +109,7 @@ function makeFixture() {
   }));
   const identityDir = path.join(tmp, 'ids');
   fs.mkdirSync(identityDir);
+  fs.writeFileSync(path.join(identityDir, `${SEAT}.json`), JSON.stringify({ uuid: SEAT, name: SEAT_NAME, updatedAt: new Date().toISOString() }));
   return { tmp, home, primary, files, ids, bare, barePrimary, registry, identityDir, cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }) };
 }
 
@@ -213,7 +218,7 @@ async function main() {
 
     // 7. a real send, on the scratch database only
     r = await t3(['--kind', 'redteam', '--summary', 'probe summary', '--file', fx.files.ok, '--sha', 'c0ffee1']);
-    const delivered = /^DELIVERED to Seat #zz-t3pro \(active (\d+)s ago — injects between tool calls\)$/m.exec(r.out);
+    const delivered = new RegExp(`^DELIVERED to Seat ${SEAT_LABEL} \\(active (\\d+)s ago — injects between tool calls\\)$`, 'm').exec(r.out);
     check('7a an old heartbeat with fresh activity reads DELIVERED (liveness is the later of the two times)',
       r.code === 0 && delivered !== null && Number(delivered[1]) <= 120, `exit ${r.code}: ${r.out}${r.err}`);
     check('7b the send sets and reports lane.client_version', /lane\.client_version=2$/m.test(r.out), r.out);
@@ -230,7 +235,7 @@ async function main() {
     await seatTimes('10 minutes', '7 minutes');
     r = await t3([...base, '--file', fx.files.ok, '--lane', 're-program']);
     check('7e an idle seat reads QUEUED with the idle minutes of the later time',
-      r.code === 0 && /^QUEUED for Seat #zz-t3pro \(idle 7m — nudge Seat terminal or wait for CronList tick\)$/m.test(r.out), `exit ${r.code}: ${r.out}${r.err}`);
+      r.code === 0 && r.out.split('\n').includes(`QUEUED for Seat ${SEAT_LABEL} (idle 7m — nudge Seat terminal or wait for CronList tick)`), `exit ${r.code}: ${r.out}${r.err}`);
     row = await lastRow();
     check('7f --lane puts the lane id on the row; a plan with no sha stores sha null',
       (await rows()) === 2 && row.lane_id === 're-program' && row.detail.sha === null && row.body.includes('\nSHA: none\n'), JSON.stringify(row));
@@ -241,12 +246,27 @@ async function main() {
     check('7h the seat reads both DMs with the real lane.mjs inbox --peek',
       inbox.code === 0 && (inbox.out.match(/\[T3-ADVISOR\]/g) ?? []).length === 2, `exit ${inbox.code}: ${inbox.out}${inbox.err}`);
 
-    // 8. the seat
+    // 8. the seat: --seat is a check, never a route. The receiver is always the holder of re-program.
+    const notHolder = (x) => x.code === 2 && x.out === '' && /--seat does not name the session that holds re-program/.test(x.err);
     r = await t3([...base, '--file', fx.files.ok, '--seat', OTHER]);
     row = await lastRow();
-    check('8a --seat with a session id sends to that session', r.code === 0 && (await rows()) === 3 && row.to_session_id === OTHER, `exit ${r.code}: ${r.err}`);
+    check('8a --seat with the id of a session that is not the holder (a builder) is refused, exit 2, no row',
+      notHolder(r) && (await rows()) === 2 && row.to_session_id === SEAT, `exit ${r.code}: ${r.out}${r.err}`);
     r = await t3([...base, '--file', fx.files.ok, '--seat', 'nobody-here']);
-    check('8b --seat that names no session is refused, exit 2, no row', r.code === 2 && (await rows()) === 3, `exit ${r.code}: ${r.err}`);
+    check('8b --seat that names no session is refused, exit 2, no row', notHolder(r) && (await rows()) === 2, `exit ${r.code}: ${r.out}${r.err}`);
+    const wrongPrefix = `${SEAT.slice(0, 7)}${SEAT[7] === '0' ? '1' : '0'}`;
+    for (const [what, value] of [['an id prefix of another id', wrongPrefix], ['a prefix of the holder under 8 characters', SEAT.slice(0, 4)]]) {
+      r = await t3([...base, '--file', fx.files.ok, '--seat', value]);
+      check(`8d --seat with ${what} is refused, exit 2, no row`, notHolder(r) && (await rows()) === 2, `exit ${r.code}: ${r.out}${r.err}`);
+    }
+    for (const [how, value] of [['its session name', SEAT_NAME.toUpperCase()], ['an id prefix with #', `#${SEAT.slice(0, 8)}`]]) {
+      r = await t3([...base, '--file', fx.files.ok, '--seat', value, '--dry-run']);
+      check(`8e --seat that names the holder by ${how} passes (dry run, no row)`,
+        r.code === 0 && r.out.includes(`to ${SEAT_LABEL} on board`) && (await rows()) === 2, `exit ${r.code}: ${r.out}${r.err}`);
+    }
+    r = await t3([...base, '--file', fx.files.ok, '--seat', SEAT]);
+    row = await lastRow();
+    check('8f --seat with the whole id of the holder sends to the holder', r.code === 0 && (await rows()) === 3 && row.to_session_id === SEAT, `exit ${r.code}: ${r.err}`);
 
     // 9. what a send must never change (read before check 8c frees the lane)
     const sessionsAfter = (await db.query('SELECT count(*)::int AS n FROM public.sessions')).rows[0].n;
@@ -257,6 +277,8 @@ async function main() {
     await db.query(`UPDATE agentic_os.lane SET owner_session_id = NULL, lease_expires_at = NULL WHERE id = 're-program'`);
     r = await t3([...base, '--file', fx.files.ok]);
     check('8c no holder of re-program is refused, exit 2, no row', r.code === 2 && /no live Seat holds re-program/.test(r.err) && (await rows()) === 3, `exit ${r.code}: ${r.err}`);
+    r = await t3([...base, '--file', fx.files.ok, '--seat', OTHER]);
+    check('8g with no holder, --seat cannot name a receiver: exit 2, no row', r.code === 2 && /no live Seat holds re-program/.test(r.err) && (await rows()) === 3, `exit ${r.code}: ${r.err}`);
 
     // 10. the stand-in home is a scratch-only seam
     r = await t3([...base, '--file', fx.files.ok], { dbUrl: DEAD_LIVE });
