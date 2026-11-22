@@ -14,7 +14,7 @@
 //   a fixture run with no --remote touches the network, or a live run skips the check                                  -> BC10, BC11
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -159,25 +159,41 @@ test('BC12: the fetch of the check runs no git hook of the checkout (aegis F1: a
   } finally { rmSync(env.tmp, { recursive: true, force: true }); }
 });
 
-test('BC13: the hooks-off setting of the check points at no folder: not at a temp folder that another account can write (aegis, round 2 of PR 673)', () => {
-  assert.deepEqual(lnc.HOOKS_OFF_ARGS, ['-c', 'core.hooksPath=/dev/null']);
-  const value = lnc.HOOKS_OFF_ARGS[1].slice('core.hooksPath='.length);
-  const rel = path.relative(os.tmpdir(), path.resolve(value));
-  assert.ok(rel.startsWith('..') || path.isAbsolute(rel), `the hooks path ${value} is under ${os.tmpdir()}`);
+test('BC13: the hooks path of the check is an existing regular file: no folder, so no account can plant a hook under it (aegis rounds 2 and 3 of PR 673)', () => {
+  // native git from Node gets the literal value: /dev/null is C:\dev\null on Windows (a folder anyone can create), a temp folder is writable by other accounts.
+  // A regular file cannot hold a child, so <value>/reference-transaction can never exist.
+  const env = setup(FILES);
+  try {
+    const r = spawnSync('git', ['-C', env.checkout, ...lnc.HOOKS_OFF_ARGS, 'rev-parse', '--git-path', 'hooks/reference-transaction'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(r.status, 0, r.stderr);
+    const hookFile = r.stdout.trim();
+    const parent = path.dirname(hookFile);
+    assert.equal(path.basename(hookFile), 'reference-transaction');
+    assert.ok(path.isAbsolute(parent) && /^(?:[A-Za-z]:)?[\\/]/.test(parent), `the hooks path ${parent} is not absolute`);
+    assert.ok(existsSync(parent) && statSync(parent).isFile(), `the hooks path ${parent} is not an existing regular file`);
+  } finally { rmSync(env.tmp, { recursive: true, force: true }); }
 });
 
-test('BC14: a reference-transaction hook in the temp folder does not run during baseCodeProblem (the temp folder is no hooks folder)', () => {
+test('BC14: a reference-transaction hook in the folder that the check sees as its temp folder does not run (guards a hooks path equal to the temp folder)', () => {
   const env = setup(FILES);
   try {
     const tmpHooks = path.join(env.tmp, 'fake-temp');
     const marker = path.join(env.tmp, 'tmp-hook-ran.txt');
     mkdirSync(tmpHooks);
     writeFileSync(path.join(tmpHooks, 'reference-transaction'), `#!/bin/sh\necho ran >> "${marker.replaceAll('\\', '/')}"\n`, { mode: 0o755 });
-    const other = env.other();
-    write(other, 'scripts/b.mjs', 'export const b = 31;\n');
-    git(other, 'add', '-A');
-    git(other, 'commit', '-q', '-m', 'main moves');
-    git(other, 'push', '-q', 'origin', 'main');
+    const moveBase = (text) => {
+      const other = env.other();
+      write(other, 'scripts/b.mjs', text);
+      git(other, 'add', '-A');
+      git(other, 'commit', '-q', '-m', 'main moves');
+      git(other, 'push', '-q', 'origin', 'main');
+    };
+    // control: a plain fetch with that folder as the hooks path runs the planted hook, so the test can see it
+    moveBase('export const b = 30;\n');
+    git(env.checkout, '-c', `core.hooksPath=${tmpHooks.replaceAll('\\', '/')}`, 'fetch', '-q', 'fork');
+    assert.ok(existsSync(marker), 'control: the planted hook runs when its folder is the hooks path');
+    rmSync(marker);
+    moveBase('export const b = 31;\n');
     const runner = path.join(env.tmp, 'run-check.mjs');
     const checkUrl = new URL('./land-none-check.mjs', import.meta.url).href;
     writeFileSync(runner, [
