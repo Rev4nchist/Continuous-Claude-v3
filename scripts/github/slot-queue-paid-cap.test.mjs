@@ -11,6 +11,8 @@
 //   the queue file lock does not stop `post` first (lock order: queue, then paid)                                                   -> SC7
 //   a paid CodeRabbit comment on the head with no ledger row raises no toast, raises it twice, or a ledgered, plain or older one raises it -> SC8
 //   a pay decision (source cap) or `post` (source row) pays for a draft PR                                                           -> SC9
+//   F6: decide --kind pay runs with no --head, a bad one, or --head on another kind                                                  -> SH1
+//   F6: the PR head moved after Dave saw the price and the pay decision still posts (queue file, ledger or posts change)            -> SH2
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -66,11 +68,11 @@ const yes = (over = {}) => assert.deepEqual(D.paidRoundWrite({ key: D.decisionKe
 const rowOf = () => D.decisionRowRead({ step: 'paid-round', key: D.decisionKey({ pr: 5 }), head: headOf(5) });
 
 test('SC1: decide --kind pay needs --cap, a price of at most 2 decimals above 0; no other verb takes --cap', () => {
-  const ok = parseArgs(['decide', '--pr', '5', '--kind', 'pay', '--cap', '2.50']);
+  const ok = parseArgs(['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '2.50']);
   assert.equal(ok.cap, 250);
-  assert.equal(parseArgs(['decide', '--pr', '5', '--kind', 'pay', '--cap', '5']).cap, 500);
+  assert.equal(parseArgs(['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '5']).cap, 500);
   for (const bad of [[], ['--cap', '0'], ['--cap', '0.00'], ['--cap', '5.123'], ['--cap', 'abc'], ['--cap', '-1'], ['--cap', '1e2'], ['--cap', '']]) {
-    assert.throws(() => parseArgs(['decide', '--pr', '5', '--kind', 'pay', ...bad]), /--cap|needs --cap/, bad.join(' '));
+    assert.throws(() => parseArgs(['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), ...bad]), /--cap|needs --cap/, bad.join(' '));
   }
   assert.throws(() => parseArgs(['decide', '--pr', '5', '--kind', 'wait', '--cap', '5']), /--cap is a decide --kind pay flag/);
   assert.throws(() => parseArgs(['tick', '--cap', '5']), /--cap is a decide --kind pay flag/);
@@ -81,12 +83,12 @@ test('SC2: a cost over the cap refuses (exit 2), posts nothing, writes no ledger
   setWorld(e, { 5: prOf(5) });
   setState(e, [itemOf(5)]);
   const before = readFileSync(e.statePath, 'utf8');
-  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '2.50', '--json'], { checkPr: () => ALLOW(5) });
+  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '2.50', '--json'], { checkPr: () => ALLOW(5) });
   assert.equal(r.code, 2);
   assert.match(r.json.reason, /The cost is \$2\.75, over the \$2\.50 Dave tapped\. Ask again\./);
   assert.deepEqual([posts(e).length, ledgerRows(e).length], [0, 0]);
   assert.equal(readFileSync(e.statePath, 'utf8'), before);
-  const ok = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '2.75', '--json'], { checkPr: () => ALLOW(5) });
+  const ok = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '2.75', '--json'], { checkPr: () => ALLOW(5) });
   assert.equal(ok.code, 0);
   assert.deepEqual(posts(e), [{ pr: 5, body: '@coderabbitai review --use-credits' }]);
 });
@@ -95,10 +97,10 @@ test('SC3: the cost is the UNFILTERED file count: 4 billable of 11 files, a cap 
   const e = setup('total');
   setWorld(e, { 5: prOf(5) });
   setState(e, [itemOf(5)]);
-  const over = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '1.00', '--json'], { checkPr: () => ALLOW(5, { files: 4, total: 11, cost: 1 }) });
+  const over = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '1.00', '--json'], { checkPr: () => ALLOW(5, { files: 4, total: 11, cost: 1 }) });
   assert.equal(over.code, 2);
   assert.match(over.json.reason, /The cost is \$2\.75, over the \$1\.00/);
-  const ok = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '2.75', '--json'], { checkPr: () => ALLOW(5, { files: 4, total: 11, cost: 1 }) });
+  const ok = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '2.75', '--json'], { checkPr: () => ALLOW(5, { files: 4, total: 11, cost: 1 }) });
   assert.equal(ok.code, 0);
   assert.equal(JSON.parse(ledgerRows(e)[0]).files, 11);
 });
@@ -108,7 +110,7 @@ test('SC4: a pay decision cannot post while another paid post holds the paid loc
   setWorld(e, { 5: prOf(5) });
   setState(e, [itemOf(5)]);
   writeFileSync(`${e.ledgerPath}.lock`, `${process.pid} the-first-session`);
-  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '5', '--json'], { checkPr: () => ALLOW(5) });
+  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '5', '--json'], { checkPr: () => ALLOW(5) });
   assert.equal(r.code, 2);
   assert.match(r.json.reason, /Another paid post is running/);
   assert.deepEqual([posts(e).length, ledgerRows(e).length], [0, 0]);
@@ -173,7 +175,7 @@ test('SC9: a draft PR is refused on the queue pay path (decide --kind pay, sourc
   setWorld(e, { 5: prOf(5, { draft: true }) });
   setState(e, [itemOf(5)]);
   const before = readFileSync(e.statePath, 'utf8');
-  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--cap', '5', '--json'], { checkPr: () => ALLOW(5) });
+  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '5', '--json'], { checkPr: () => ALLOW(5) });
   assert.equal(r.code, 2);
   assert.match(r.json.reason, /PR #5 is a draft\. A paid review goes only to an open PR that is not a draft\. Nothing was posted\./);
   assert.deepEqual([posts(e).length, ledgerRows(e).length], [0, 0]);
@@ -184,6 +186,28 @@ test('SC9: a draft PR is refused on the queue pay path (decide --kind pay, sourc
   assert.match(row.text, /PR #5 is a draft\./);
   assert.deepEqual([posts(e).length, ledgerRows(e).length], [0, 0]);
   assert.equal(rowOf(), null, 'the yes is used up');
+});
+
+test('SH1: decide --kind pay needs --head, a 40-character lowercase sha; no other decide kind takes it', () => {
+  const ok = parseArgs(['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '2.50']);
+  assert.equal(ok.head, headOf(5));
+  for (const bad of [[], ['--head', ''], ['--head', 'abc1234'], ['--head', headOf(5).toUpperCase().replace(/0/g, 'A')], ['--head', 'not-a-sha']]) {
+    assert.throws(() => parseArgs(['decide', '--pr', '5', '--kind', 'pay', ...bad, '--cap', '2.50']), /--head/, bad.join(' '));
+  }
+  assert.throws(() => parseArgs(['decide', '--pr', '5', '--kind', 'wait', '--head', headOf(5)]), /--head is a decide --kind pay flag/);
+  assert.throws(() => parseArgs(['decide', '--pr', '5', '--kind', 'drop', '--head', headOf(5)]), /--head is a decide --kind pay flag/);
+});
+
+test('SH2: the PR head moved after Dave saw the price: the pay decision refuses, posts nothing, writes no ledger row and leaves the state bytes alone', () => {
+  const e = setup('moved');
+  setWorld(e, { 5: prOf(5, { head: headOf(55) }) });
+  setState(e, [itemOf(5)]);
+  const before = readFileSync(e.statePath, 'utf8');
+  const r = run(e, ['decide', '--pr', '5', '--kind', 'pay', '--head', headOf(5), '--cap', '5', '--json'], { checkPr: () => ALLOW(5, { head: headOf(55) }) });
+  assert.equal(r.code, 2);
+  assert.match(r.json.reason, /head of PR #5 moved .*Ask Dave again/s);
+  assert.deepEqual([posts(e).length, ledgerRows(e).length], [0, 0]);
+  assert.equal(readFileSync(e.statePath, 'utf8'), before);
 });
 
 const flagToasts =(json) => json.actions.filter((a) => a.kind === 'toast' && /paid CodeRabbit request/.test(a.text));
