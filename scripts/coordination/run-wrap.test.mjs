@@ -8,6 +8,7 @@
 //   W2             the lock file holds the CHILD pid, not the wrapper pid, with kind, head and holder
 //   W3             the exit code of the command is the exit code of the wrapper, and no lock file stays
 //   W4             a signal to the wrapper stops the child and frees the lock (exit 143)
+//   W8             a child that outlives the stop keeps its lock row (no release) and one WARN line says so
 //   W5             a lock store that cannot be read: the command still runs, exactly one WARN line, no refusal
 //   W6             control: without --once-per two starts for one head both run
 //   W7             a loop lock is renewed while the child lives (expiresAt moves)
@@ -115,6 +116,26 @@ test('W4: a signal to the wrapper stops the child and frees the lock', { timeout
   await until(() => !alive(childPid), 30_000);
   assert.equal(alive(childPid), false, 'the child lives after the signal');
   assert.deepEqual(locks(store), [], 'the lock stays after the signal');
+});
+
+test('W8: a child that outlives the stop keeps its lock row and one WARN line says so', { timeout: TIMEOUT }, async () => {
+  const files = scratch('files');
+  const mark = join(files, 's.pid');
+  const { runWrap } = await import(pathToFileURL(WRAP).href);
+  const lines = []; const released = [];
+  const env = { ...process.env, RUN_WRAP_SELF_SIGNAL_MS: '300', RUN_WRAP_STOP_WAIT_MS: '500' };
+  const [cmd, ...args] = longChild(mark);
+  const code = await runWrap(
+    { kind: 'loop', holder: 'tS', head: 'H8', command: [cmd, ...args] },
+    { env, out: (l) => lines.push(l), register: async () => {}, list: async () => ({ live: [] }), stopTree: () => false, releaseSync: (r) => { released.push(r); } },
+  );
+  const childPid = Number(readFileSync(mark, 'utf8'));
+  try {
+    assert.equal(code, 143, lines.join('\n'));
+    assert.equal(alive(childPid), true, 'the test child must still live (the stop did nothing)');
+    assert.deepEqual(released, [], 'the lock row was released while the child still ran');
+    assert.ok(lines.some((l) => /^WARN run-wrap: child pid \d+ outlived the stop; its lock row stays until it expires/.test(l)), lines.join('\n'));
+  } finally { try { process.kill(childPid); } catch { /* gone */ } }
 });
 
 test('W5: an unreadable lock store fails open with one WARN line and no refusal', { timeout: TIMEOUT }, async () => {
