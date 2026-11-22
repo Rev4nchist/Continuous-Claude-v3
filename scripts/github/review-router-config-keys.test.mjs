@@ -13,6 +13,20 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG = JSON.parse(readFileSync(path.resolve(HERE, '..', '..', 'review-router.config.json'), 'utf8'));
 const DOC = CONFIG._doc.join('\n');
+const BANDS = ['LOW', 'MID', 'ELEVATED', 'HIGH', 'CRITICAL'];
+
+// Two kinds of test. The shape test below holds for every config, flipped or not: a flip PR leaves it alone.
+// The five off-value tests after it pin each key at off. A gate lane (re-retire-prepr-cli, re-retire-critical) edits its own pin in its flip PR,
+// together with the flip of the key. That edit is the lane's explicit step: a flip PR that does not edit the pin fails CI here.
+test('the shape of every new key holds in any state (breaks if a key changes type or leaves its range, flipped or not)', () => {
+  assert.equal(typeof CONFIG.engine_gate?.report_only, 'boolean');
+  assert.equal(typeof CONFIG.coderabbit?.demoted?.critical, 'boolean');
+  assert.equal(typeof CONFIG.routing?.calibrated_cutoff, 'boolean');
+  const list = CONFIG.coderabbit?.demoted?.prepr_cli;
+  assert.ok(Array.isArray(list) && list.every((b) => BANDS.includes(b)), 'prepr_cli is a list of risk bands from LOW to CRITICAL');
+  const rate = CONFIG.coderabbit?.blind_sample_rate;
+  assert.ok(typeof rate === 'number' && Number.isFinite(rate) && rate >= 0 && rate <= 1, 'blind_sample_rate is a number in [0, 1]');
+});
 
 test('engine_gate.report_only is the boolean true (breaks if the key is missing, a string or false: the gate would not start in report-only mode)', () => {
   assert.equal(CONFIG.engine_gate?.report_only, true);
@@ -44,7 +58,7 @@ test('coderabbit.demoted has no high key in any case (breaks if the dropped HIGH
   assert.deepEqual(keys.filter((k) => k.toLowerCase() === 'high'), []);
 });
 
-test('each new key has a description in the _doc notes of the config (breaks if a key is added with no note)', () => {
+test('each of the five keys has a description in the _doc notes of the config (breaks if one of them loses its note)', () => {
   for (const key of ['engine_gate.report_only', 'coderabbit.demoted.prepr_cli', 'coderabbit.demoted.critical', 'coderabbit.blind_sample_rate', 'routing.calibrated_cutoff']) {
     assert.ok(DOC.includes(key), `_doc has no line for ${key}`);
   }
