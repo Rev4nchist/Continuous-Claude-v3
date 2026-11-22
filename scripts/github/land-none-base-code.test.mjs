@@ -159,6 +159,40 @@ test('BC12: the fetch of the check runs no git hook of the checkout (aegis F1: a
   } finally { rmSync(env.tmp, { recursive: true, force: true }); }
 });
 
+test('BC13: the hooks-off setting of the check points at no folder: not at a temp folder that another account can write (aegis, round 2 of PR 673)', () => {
+  assert.deepEqual(lnc.HOOKS_OFF_ARGS, ['-c', 'core.hooksPath=/dev/null']);
+  const value = lnc.HOOKS_OFF_ARGS[1].slice('core.hooksPath='.length);
+  const rel = path.relative(os.tmpdir(), path.resolve(value));
+  assert.ok(rel.startsWith('..') || path.isAbsolute(rel), `the hooks path ${value} is under ${os.tmpdir()}`);
+});
+
+test('BC14: a reference-transaction hook in the temp folder does not run during baseCodeProblem (the temp folder is no hooks folder)', () => {
+  const env = setup(FILES);
+  try {
+    const tmpHooks = path.join(env.tmp, 'fake-temp');
+    const marker = path.join(env.tmp, 'tmp-hook-ran.txt');
+    mkdirSync(tmpHooks);
+    writeFileSync(path.join(tmpHooks, 'reference-transaction'), `#!/bin/sh\necho ran >> "${marker.replaceAll('\\', '/')}"\n`, { mode: 0o755 });
+    const other = env.other();
+    write(other, 'scripts/b.mjs', 'export const b = 31;\n');
+    git(other, 'add', '-A');
+    git(other, 'commit', '-q', '-m', 'main moves');
+    git(other, 'push', '-q', 'origin', 'main');
+    const runner = path.join(env.tmp, 'run-check.mjs');
+    const checkUrl = new URL('./land-none-check.mjs', import.meta.url).href;
+    writeFileSync(runner, [
+      `import { baseCodeProblem } from ${JSON.stringify(checkUrl)};`,
+      "const p = baseCodeProblem({ root: process.env.CHECK_ROOT, baseRef: 'main', remote: 'fork', files: ['scripts/a.mjs', 'scripts/b.mjs'] });",
+      'console.log(typeof p);', '',
+    ].join('\n'));
+    // the child sees the folder with the hook as its temp folder (os.tmpdir() reads TEMP, TMP and TMPDIR)
+    const r = spawnSync(process.execPath, [runner], { encoding: 'utf8', env: { ...process.env, TEMP: tmpHooks, TMP: tmpHooks, TMPDIR: tmpHooks, CHECK_ROOT: env.checkout } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), 'string', 'the moved base is seen (the fetch ran)');
+    assert.ok(!existsSync(marker), 'a hook in the temp folder ran during baseCodeProblem');
+  } finally { rmSync(env.tmp, { recursive: true, force: true }); }
+});
+
 /** Repo paths of the static relative imports of a module, transitively (the entry first). */
 function importClosure(entry) {
   const seen = new Set();
