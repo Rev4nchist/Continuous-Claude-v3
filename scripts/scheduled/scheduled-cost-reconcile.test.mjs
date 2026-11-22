@@ -259,3 +259,23 @@ test('CS8 with only a log override the marker goes next to the log, not to the r
   assert.equal(r.status, 0, r.log);
   assert.ok(existsSync(join(fx.logDir, 'slot-state', 'cost-reconcile.done.json')), 'marker next to the log');
 });
+
+// CLI finding of pre-pr run 1 (scheduled-cost-reconcile.ps1:71): a skipped catch-up exits 0, so after a failing night (the price check
+// exits 1) the 07:40 skip makes the task's last result 0 and the 07:50 doctor shows PASS. The marker keeps the exit code of the
+// completed run and the skip returns it.
+//   CS9  skip exit   a skip after a failing night exits 0 instead of the stored code; the stored code is not written; a marker with
+//                    no stored code (an older file) must still skip with exit 0
+test('CS9 a skip returns the exit code stored by the completed run, so a failing night stays visible', win, () => {
+  const fx = slotFxCost();
+  const first = run(fx, slotEnvCost(fx, '2026-11-22T23:50:01', { FAKE_EXIT_PRICE: '1' }));
+  assert.equal(first.status, 1, first.log);
+  assert.equal(JSON.parse(readFileSync(fx.marker, 'utf8')).exit, 1, 'the marker holds the exit code');
+  const skipped = run(fx, slotEnvCost(fx, '2026-11-23T07:40:00'));
+  assert.equal(skipped.status, 1, skipped.log);
+  assert.match(skipped.log, /skip: slot 23:50 .*already done.*exit 1/);
+  assert.equal(ranCost(fx), true, 'the first run called the check; the skip must not call it again');
+  const fy = slotFxCost();
+  putMarkerCost(fy, '2026-11-22T23:51:30');
+  const old = run(fy, slotEnvCost(fy, '2026-11-23T07:40:00'));
+  assert.equal(old.status, 0, 'a marker with no stored code skips with exit 0');
+});

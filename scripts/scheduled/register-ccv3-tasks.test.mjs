@@ -260,3 +260,17 @@ test('RC3 the REAL tasks.json: Lane-Snapshot has catchUp daily 07:35, Cost-Recon
   const others = tasks.filter((t) => 'catchUp' in t).map((t) => t.name).sort();
   assert.deepEqual(others, ['CCv3-Cost-Reconcile', 'CCv3-Lane-Snapshot']);
 });
+
+// CLI finding of pre-pr run 1 (register-ccv3-tasks.ps1:95): a trigger or catchUp with an impossible clock value (daily 25:61) is
+// refused only when its own task is reached, after earlier tasks were registered. Every task is checked first.
+//   RC4  clock   "daily 24:00", "daily 07:61" or "daily 25:00" in trigger or catchUp is accepted, or is refused after another task
+//                was printed or registered (the refusal must come before any task line)
+test('RC4 dry run: a trigger or catchUp with a clock value out of range is refused before any task line is printed', win, () => {
+  for (const [field, value] of [['catchUp', 'daily 07:61'], ['catchUp', 'daily 24:00'], ['trigger', 'daily 25:00'], ['trigger', 'daily 07:60']]) {
+    const bad = { ...TASKS[0], [field]: value };
+    const r = dryRun([], [TASKS[3], bad]);
+    assert.notEqual(r.code, 0, `${field} ${value}: ${r.out}${r.err}`);
+    assert.match(r.out + r.err, /Nothing registered/, `${field} ${value}`);
+    assert.equal(r.lines.some((l) => l.startsWith('CCv3-T-WakeOnly:')), false, `${field} ${value}: no task line before the refusal`);
+  }
+});
