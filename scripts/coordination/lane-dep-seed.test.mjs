@@ -6,7 +6,7 @@
  * itself (one through migration 6, one through migration 5 for the floor). The cwd of each run is a temp git repo with
  * a `main` branch, so `done --merged` (which meets a dependency) runs for real.
  *
- * The file name has no `.db.` part: the CO1 test of pre-pr.test.mjs matches CI test files with
+ * The file name has no `.db.` part: the CO1 test of pre-pr.cases.mjs matches CI test files with
  * `scripts/coordination/[\w-]+\.test\.mjs`.
  *
  *   node --test scripts/coordination/lane-dep-seed.test.mjs

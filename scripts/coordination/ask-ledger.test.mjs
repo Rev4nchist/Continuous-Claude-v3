@@ -3,7 +3,7 @@
  *
  * No database and no live transcript: every test builds transcript files in a temp folder and runs scripts/coordination/ask-ledger.mjs on them.
  * The file name has no `.db.` part. It sits in the COORDINATION_TESTS list of pre-pr.mjs and in the CI step that lists the same files
- * (test CO1 in pre-pr.test.mjs ties the two lists together). ASK_LEDGER_CLI points the tests at another copy of the script (a mutation run).
+ * (test CO1 in pre-pr.cases.mjs ties the two lists together). ASK_LEDGER_CLI points the tests at another copy of the script (a mutation run).
  *
  * One test per failure of the design note (section 4). Most tests run with --root <a folder with no listed-id list>: the script then
  * takes its absent-list path and the final listed-id pass has no list to count. Test 10 uses a real fixture list.

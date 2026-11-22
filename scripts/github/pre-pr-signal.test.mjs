@@ -41,7 +41,7 @@ async function waitDead(pid, tries = 80) {
 const SLEEPER = (pidFile) => `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000);`;
 // The same, plus a grandchild that sleeps too. On Windows libuv puts a normal child in a job object that dies with its parent,
 // which would hide a missing kill: the grandchild breaks away (detached) so that only a real tree kill reaches it (as T5 in
-// pre-pr.test.mjs does). On POSIX the review child leads a process group and the grandchild stays in it.
+// pre-pr.cases.mjs does). On POSIX the review child leads a process group and the grandchild stays in it.
 const TREE_SLEEPER = (pidFile) => `import { spawn } from 'node:child_process'; import { writeFileSync } from 'node:fs';
 spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000)', ${JSON.stringify(`${pidFile}.gc`)}], { stdio: 'ignore', detached: process.platform === 'win32' }).unref();
 writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000);`;

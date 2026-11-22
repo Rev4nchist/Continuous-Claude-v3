@@ -39,7 +39,9 @@ test('SH2: the cases file is no *.test.mjs, and no test file besides the four wr
     if (e.isDirectory()) return e.name === 'node_modules' || e.name.startsWith('.') ? [] : walk(p);
     return e.name.endsWith('.test.mjs') ? [p] : [];
   });
-  const importers = walk(path.join(ROOT, 'scripts')).filter((f) => /pre-pr\.cases\.mjs/.test(readFileSync(f, 'utf8')) && !/pre-pr-shards\.test\.mjs$/.test(f));
+  // An import of the file: import('...'), from '...' or import '...'. A comment that names the file is no import.
+  const IMPORT = /(?:import\s*\(\s*|from\s+|import\s+)['"][^'"]*pre-pr\.cases\.mjs['"]/;
+  const importers = walk(path.join(ROOT, 'scripts')).filter((f) => IMPORT.test(readFileSync(f, 'utf8')) && !/pre-pr-shards\.test\.mjs$/.test(f));
   assert.deepEqual(importers.map((f) => path.basename(f)).sort(), [...SHARDS].sort());
 });
 

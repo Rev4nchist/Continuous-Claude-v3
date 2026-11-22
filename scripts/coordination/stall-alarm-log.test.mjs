@@ -3,7 +3,7 @@
  *
  * No database, no GitHub: state files, logs and the outcome facts (lane events, PR facts) are built in a temp folder and passed in.
  * ALARM_LOG_CLI points the tests at another copy of the script (a mutation run). Test names A1..A11 are the failure list of the note.
- * The file name has no `.db.` part: test CO1 in pre-pr.test.mjs ties the pre-pr list and the CI list together.
+ * The file name has no `.db.` part: test CO1 in pre-pr.cases.mjs ties the pre-pr list and the CI list together.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';

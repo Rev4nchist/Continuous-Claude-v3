@@ -1,4 +1,8 @@
-// Tests for pre-pr.mjs. Run: node --test scripts/github/pre-pr.test.mjs
+// Tests for pre-pr.mjs. Run: node --test scripts/github/pre-pr-shard-1.test.mjs scripts/github/pre-pr-shard-2.test.mjs scripts/github/pre-pr-shard-3.test.mjs scripts/github/pre-pr-shard-4.test.mjs
+// Card prepr-speed-bundle (O2): the cases live in this file (its name matches no *.test.mjs) and run in 4 processes. Each pre-pr-shard-<n>.test.mjs sets
+// globalThis.PRE_PR_SHARD = { index, count: 4 } and imports this file; case n runs in shard n % count, so node --test runs the four at once. One process
+// ran all 300 cases in 300 s. The cases set process.env at the top of this file, so one process cannot run them in parallel. Imported with no shard set,
+// this file runs every case. pre-pr-shards.test.mjs checks that the glob scripts/github/*.test.mjs runs each case once.
 //
 // How each part can fail, and the test that catches it (written before the code):
 //
@@ -51,7 +55,7 @@
 //   - the stamp or counter dirties the tree                                    -> R1
 //   - no log file                                                              -> R1
 //   - the CLI without --body does not exit non-zero                            -> R3
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
@@ -73,6 +77,15 @@ import {
   parseAgentStream, parseUsage, usageCostOf, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
   killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn, acquireLock,
 } from './pre-pr.mjs';
+
+const SHARD = globalThis.PRE_PR_SHARD ?? { index: 0, count: 1 };
+let caseNo = 0;
+/** node:test's test, registered only in this process's shard: case n runs in shard n % count. */
+function test(...args) {
+  const mine = caseNo % SHARD.count === SHARD.index;
+  caseNo += 1;
+  return mine ? nodeTest(...args) : undefined;
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -4443,7 +4456,7 @@ test('RL-ISO: every test file that starts pre-pr.mjs as a process sends its run 
   const testFiles = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) return e.name === 'node_modules' || e.name.startsWith('.') ? [] : testFiles(p);
-    return e.name.endsWith('.test.mjs') ? [p] : [];
+    return e.name.endsWith('.test.mjs') || e.name.endsWith('.cases.mjs') ? [p] : []; // O2: the cases file is no *.test.mjs, so the scan reads it too
   });
   // A spawn of the script: a spawn or exec call whose arguments name pre-pr.mjs, or a module text that imports it to run its handlers.
   const SPAWNS = /(spawnSync|spawn|execFileSync|execFile)\([^;]*pre-pr\.mjs|installRunLockHandlers.*pre-pr\.mjs|PRE_PR\s*=\s*resolve\([^)]*pre-pr\.mjs/s;

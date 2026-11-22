@@ -12,7 +12,7 @@
  *              names SendMessage and Dave as the fallback. Bare name (lane.mjs resolveRecipient, step 2) and name@board (step 1).
  *   add        `--scope` with no `OWNS:` or no `NEVER:` part: one WARNING line on stderr, exit 0, row and event written.
  *              A valid scope, no scope, an empty scope, a refused add and `--json` stay as they are.
- * The file name has no `.db.` part: test CO1 in pre-pr.test.mjs matches the CI list with scripts/coordination/[\w-]+\.test\.mjs.
+ * The file name has no `.db.` part: test CO1 in pre-pr.cases.mjs matches the CI list with scripts/coordination/[\w-]+\.test\.mjs.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
