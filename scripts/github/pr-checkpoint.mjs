@@ -53,7 +53,7 @@ import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
 import { askSpecOf, ledgerConfirmCheck, ledgerStep, ledgerUse, paidYesOf, slotStateOf } from './lib/checkpoint-ledger.mjs';
-import { DECISIONS_ENV, decisionKey, decisionsPath, dropKey, paidRoundWrite } from './lib/decisions.mjs';
+import { DECISIONS_ENV, decisionKey, decisionUse, decisionsPath, dropKey, paidRoundWrite } from './lib/decisions.mjs';
 
 export { capacityFact, parseRateLimitReply };
 
@@ -1051,13 +1051,29 @@ export function writePaidYes({ pr, head, pathway, row, gh = ghRunner(process.env
   if (pathway !== 'coderabbit' && pathway !== 'both') return null;
   const yes = paidYesOf(row);
   if (yes === null) return null;
-  const view = gh(['pr', 'view', String(pr), '--json', 'headRefOid,number', ...REPO_ARGS]);
-  let live = '';
-  try { live = String(JSON.parse(view.stdout).headRefOid ?? '').toLowerCase(); } catch { /* unread */ }
-  if (view.status !== 0 || !/^[0-9a-f]{40}$/.test(live)) return `the PR head could not be read from GitHub (${firstLine(view.stderr) || 'no answer'})`;
-  if (live !== String(head).toLowerCase()) return `the pick is for ${String(head).slice(0, 7)} but the PR head is ${live.slice(0, 7)}`;
+  const before = readPaidView(gh, pr);
+  if (before.why) return before.why;
+  if (before.head !== String(head).toLowerCase()) return `the pick is for ${String(head).slice(0, 7)} but the PR head is ${before.head.slice(0, 7)}`;
+  if (before.draft) return `PR #${pr} is a draft: a draft PR gets no paid yes`;
   const w = paidRoundWrite({ key: decisionKey({ pr }), head, label: yes.label, tapAt: yes.tapAt, entry: yes.entry });
-  return w.ok ? null : w.reason;
+  if (!w.ok) return w.reason;
+  // A return to draft (and its --drop-taps) can land between the read above and the write: the drop finds no row, and the row written after it would survive the draft.
+  // Read the PR again after the write. A draft, a moved head or a failed read removes the row again: no paid yes without a PR that is ready at the picked head.
+  const after = readPaidView(gh, pr);
+  const why = after.why ?? (after.head !== String(head).toLowerCase() ? `the PR head moved to ${after.head.slice(0, 7)} while the paid yes was stored` : after.draft ? `PR #${pr} went back to draft while the paid yes was stored` : null);
+  if (why === null) return null;
+  decisionUse({ step: 'paid-round', key: decisionKey({ pr }), head });
+  return `${why}; the paid yes was removed again`;
+}
+
+/** The head and the draft flag of the PR from one `gh pr view`, or { why } (a failed call, no 40-hex head, or no boolean isDraft: fail closed). */
+function readPaidView(gh, pr) {
+  const view = gh(['pr', 'view', String(pr), '--json', 'headRefOid,isDraft,number', ...REPO_ARGS]);
+  let info = null;
+  try { info = JSON.parse(view.stdout); } catch { /* unread */ }
+  const head = String(info?.headRefOid ?? '').toLowerCase();
+  if (view.status !== 0 || !/^[0-9a-f]{40}$/.test(head) || typeof info?.isDraft !== 'boolean') return { why: `the PR head and draft state could not be read from GitHub (${firstLine(view.stderr) || 'no answer'})` };
+  return { head, draft: info.isDraft };
 }
 
 /**

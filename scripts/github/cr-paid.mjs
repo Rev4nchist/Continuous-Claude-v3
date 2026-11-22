@@ -422,8 +422,12 @@ function guardedPost(d, { pr, cap, source, repo, expectHead }, began) {
   if (left() <= 0) return refuse(DEADLINE_TEXT);
   // A push after the check read the head would be posted against the head that was priced (CLI finding c): read the PR head once more, right before the round is used up and recorded.
   try {
-    const live = String(gh([`repos/${repo}/pulls/${pr}`])?.head?.sha ?? '').toLowerCase();
+    const again = gh([`repos/${repo}/pulls/${pr}`]);
+    const live = String(again?.head?.sha ?? '').toLowerCase();
     if (live !== head) return refuse(`The head of PR #${pr} moved from ${head.slice(0, 7)} to ${live.slice(0, 7)} after the check, just before the post. Nothing was posted. Ask Dave again.`);
+    // The same answer gives the PR state: a PR that turned draft or closed in these seconds refuses too (an answer with no state or flag throws: a failed read, below).
+    const blockNow = pullBlockOf(again);
+    if (blockNow) return refuse(`PR #${pr} is ${blockNow}. A paid review goes only to an open PR that is not a draft. Nothing was posted.`);
   } catch (err) {
     if (err instanceof DeadlineError) return refuse(DEADLINE_TEXT);
     return fail(5, `Could not read PR #${pr} again just before the post (${firstLine(err)}). Nothing was posted. The paid yes is kept; run it again.`);

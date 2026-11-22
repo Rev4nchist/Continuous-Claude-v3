@@ -164,13 +164,14 @@ async function readOpenPr($: EngineInterface, root: string, pr: number, expectHe
   const ran = await run($, stateArgv(pr), root, VIEW_TIMEOUT_MS)
   if (!ran.ok) return { kind: 'unreadable', why: ran.text }
   if (ran.code !== 0) return { kind: 'unreadable', why: firstLine(ran.err || ran.out) || `gh exited ${ran.code}` }
-  let info: { state?: unknown; headRefOid?: unknown; isDraft?: unknown }
+  let info: { state?: unknown; headRefOid?: unknown; isDraft?: unknown } | null
   try {
     info = JSON.parse(ran.out)
   } catch {
     return { kind: 'unreadable', why: 'gh printed no JSON' }
   }
-  if (typeof info.state !== 'string' || typeof info.headRefOid !== 'string') return { kind: 'unreadable', why: 'gh printed no state or head' }
+  // JSON `null` (or a bare value) parses fine and has no fields: it is an unreadable state, not a crash.
+  if (info === null || typeof info !== 'object' || typeof info.state !== 'string' || typeof info.headRefOid !== 'string') return { kind: 'unreadable', why: 'gh printed no state or head' }
   if (info.state.toUpperCase() !== 'OPEN') return { kind: 'gone', why: `the PR is ${info.state.toLowerCase()}` }
   if (expectHead !== null && info.headRefOid !== expectHead) return { kind: 'gone', why: `the head moved to ${info.headRefOid.slice(0, 7)}` }
   if (typeof info.isDraft !== 'boolean') return { kind: 'unreadable', why: 'gh printed no draft state' }
@@ -233,12 +234,14 @@ async function applyAnswer($: EngineInterface, ask: CheckpointAsk, answer: 'yes'
   const stored = readRecord(await $.store.get(key))
   let next: CheckpointRecord | null = stored
   let seen: OpenRead | null = null
+  let root: string | null = null
   if (answer === 'yes') {
-    const root = await rootOf($)
+    // The checkout is read ONCE and reused for the post below (CLI run 2, seat ruling): a second read could find none after the first found one.
+    root = await rootOf($)
     // A question can wait for days (restore keeps it): a late Yes acts only on a PR that is still open and not a draft; an opening or Greptile Yes (it
     // posts a comment) also needs the asked head. A round Yes writes a grant and may queue a review, so it reads the PR too (any head, see `staleness`);
-    // with no checkout to read it in, it fails closed.
-    seen = root ? await staleness($, root, ask) : ask.kind === 'round' ? { kind: 'unreadable' as const, why: 'no checkout' } : null
+    // with no checkout to read it in, EVERY kind fails closed: the PR state is unreadable and the question stays queued.
+    seen = root ? await staleness($, root, ask) : { kind: 'unreadable' as const, why: 'no checkout' }
     if (seen && seen.kind === 'unreadable') {
       const text = `PR #${ask.pr}: could not read the PR state (${seen.why}); nothing ${ask.kind === 'round' ? 'granted' : 'posted'}, the question stays queued`
       $.ui.toast(text, { timeoutMs: 10_000 })
@@ -252,7 +255,6 @@ async function applyAnswer($: EngineInterface, ask: CheckpointAsk, answer: 'yes'
     }
   }
   if (ask.kind !== 'round' && answer === 'yes') {
-    const root = await rootOf($)
     const ran = root ? await run($, commentArgv(ask.pr, ask.kind === 'opening' ? '@coderabbitai review' : '@greptileai'), root, VIEW_TIMEOUT_MS) : null
     if (!ran || !ran.ok || ran.code !== 0) {
       const text = `PR #${ask.pr}: could not post the request (${ran ? (ran.ok ? firstLine(ran.err) : ran.text) : 'no checkout'}); it stays queued`
