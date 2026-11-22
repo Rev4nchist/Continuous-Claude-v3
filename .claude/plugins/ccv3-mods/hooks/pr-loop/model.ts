@@ -88,8 +88,11 @@ export type AlertCheckpoint = {
   band: string | null
 }
 
-/** `sent` is the ledger of model lines delivered (alertKey): each head and reason pair goes out once. */
-export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number; sent?: string[] }
+/** A paid scan (`cr-paid.mjs unledgered`) that failed and is owed another try: the PR may already have left the watch list (it reached READY), `fails` counts the failed tries. */
+export type PaidScan = { pr: number; fails: number }
+
+/** `sent` is the ledger of model lines delivered (alertKey): each head and reason pair goes out once. `scan` is the paid scans still owed (card prflow-paid-guard-leftovers, L4a). */
+export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number; sent?: string[]; scan?: PaidScan[] }
 
 /** The ledger keeps this many keys; older ones fall off. */
 export const SENT_MAX = 40
@@ -132,7 +135,9 @@ export const readDoc = (value: unknown, now: number): WatchDoc => {
     ...(typeof one.fails === 'number' && one.fails > 0 ? { fails: one.fails } : {}),
   }))
   const sent = Array.isArray(doc.sent) ? capSent(doc.sent.filter((key): key is string => typeof key === 'string')) : []
-  return { prs, backoffUntil: typeof doc.backoffUntil === 'number' ? doc.backoffUntil : 0, touched: now, ...(sent.length ? { sent } : {}) }
+  // An owed paid scan survives only with a whole PR number and a fail count below the limit; one entry per PR.
+  const scan = (Array.isArray(doc.scan) ? doc.scan : []).filter((one, i, all) => Number.isInteger(one?.pr) && one.pr > 0 && Number.isInteger(one.fails) && one.fails >= 0 && one.fails < MAX_FAILS && all.findIndex(other => other?.pr === one.pr) === i).map(one => ({ pr: one.pr, fails: one.fails }))
+  return { prs, backoffUntil: typeof doc.backoffUntil === 'number' ? doc.backoffUntil : 0, touched: now, ...(sent.length ? { sent } : {}), ...(scan.length ? { scan } : {}) }
 }
 
 export const isStale = (value: unknown, now: number): boolean => {
