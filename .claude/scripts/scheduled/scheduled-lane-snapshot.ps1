@@ -62,6 +62,22 @@ if (-not $R) {
 $branch = 'unknown'
 try { $b = (& git -C $R rev-parse --abbrev-ref HEAD 2>$null); if ($LASTEXITCODE -eq 0 -and $b) { $branch = "$b".Trim() } } catch { }
 
+# Slot guard (card sched-tasks-failing-1109): a second trigger at 07:35 reruns a night the standby ended. Skip when the last
+# 23:55 slot has a completed run. A missing slot-guard.ps1 (sync lag) turns the guard off and the run goes as before.
+$slotHhmm = '23:55'
+$slotMarker = $null
+$slotNow = Get-Date
+$slotFile = Join-Path $PSScriptRoot 'slot-guard.ps1'
+if (Test-Path -LiteralPath $slotFile) {
+  . $slotFile
+  $slotNow = Get-SlotNow
+  $slotMarker = Join-Path (Get-SlotStateDir $logDir ([bool]$env:CCV3_LANE_SNAPSHOT_LOG)) 'lane-snapshot.done.json'
+  if (Test-SlotDone $slotMarker (Get-LastSlot $slotNow $slotHhmm)) {
+    Write-Log "skip: slot $slotHhmm of $((Get-LastSlot $slotNow $slotHhmm).ToString('s')) already done at $((Read-SlotDoneAt $slotMarker).ToString('s'))"
+    exit 0
+  }
+}
+
 $export = Join-Path $R $exportRel
 Write-Log "export starting, repo $R, branch $branch"
 if (-not (Test-Path -LiteralPath $export)) {
@@ -134,6 +150,9 @@ if (Test-Path -LiteralPath $prSpend) {
 } else {
   Write-Log "pr-spend.mjs not found at $prSpend"
 }
+
+# A completed run (final exit 0) closes the slot. A failed or killed run leaves the marker as it was, so the next trigger retries.
+if ($slotMarker -and $exitCode -eq 0) { Set-SlotDone $slotMarker $slotHhmm $slotNow }
 
 # Keep 14 days of dated logs. Only files named yyyy-MM-dd.log are touched.
 Get-ChildItem -LiteralPath $logDir -Filter '*.log' -ErrorAction SilentlyContinue |
