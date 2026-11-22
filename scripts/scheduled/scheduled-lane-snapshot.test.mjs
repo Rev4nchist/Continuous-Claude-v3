@@ -367,3 +367,105 @@ test('46 the key strip reaches the third step too', win, () => {
   assert.equal(r.status, 0, r.log);
   assert.ok(!prSpendCalled(fx).envKeys.some((k) => /^ANTHROPIC_(API_KEY|AUTH_TOKEN)$/i.test(k)));
 });
+
+// ---------------------------------------------------------------- slot guard (card sched-tasks-failing-1109)
+// A missed 23:55 run is started as a catch-up inside a short Modern Standby wake, and the standby ends it (result 267014).
+// The task gets a second trigger when the machine is awake. The wrapper then runs only when the last 23:55 slot has no
+// completed run: marker <state>/lane-snapshot.done.json {"doneAt": "<local time>"}. A completed run is one that exits 0.
+// How it can fail, one test each below:
+//   SL1 skip       a marker newer than the last slot does not stop the run (the second trigger repeats a finished night)
+//   SL2 first run  no marker: the run is skipped, or it finishes with no marker written (the next trigger repeats it)
+//   SL3 stale      a marker older than the last slot is treated as done
+//   SL4 failure    a failed export writes a marker (the night is then never retried), or it clears an older one
+//   SL5 force      CCV3_SLOT_FORCE=1 does not run a hand test over a fresh marker
+//   SL6 on slot    the normal 23:55 run is skipped because last night's marker looks fresh
+//   SL7 killed     an export killed at its limit (124) writes a marker
+//   SL8 bad marker an unreadable marker file stops the run instead of being ignored
+//   SL9 test safe  with only a log override (every older test) the marker goes next to the log, never to ~/.claude/state
+function slotFx(extra = {}) {
+  const fx = fixture(extra);
+  fx.state = join(fx.root, 'slot-state');
+  fx.marker = join(fx.state, 'lane-snapshot.done.json');
+  return fx;
+}
+const slotEnv = (fx, now = '2026-11-22T07:35:00', more = {}) => ({ CCV3_SLOT_STATE_DIR: fx.state, CCV3_SLOT_NOW: now, ...more });
+const putMarker = (fx, doneAt) => { mkdirSync(fx.state, { recursive: true }); writeFileSync(fx.marker, JSON.stringify({ doneAt })); };
+
+test('SL1 a marker newer than the last 23:55 slot skips the run: no export, exit 0, a skip line in the log', win, () => {
+  const fx = slotFx();
+  putMarker(fx, '2026-11-21T23:56:10');
+  const r = run(fx, slotEnv(fx));
+  assert.equal(r.status, 0, r.log);
+  assert.equal(existsSync(fx.call), false, 'the export must not run');
+  assert.match(r.log, /skip: slot 23:55 .*already done/);
+});
+
+test('SL2 no marker: the run goes and writes the marker with the time of the run and the slot', win, () => {
+  const fx = slotFx();
+  const r = run(fx, slotEnv(fx));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(existsSync(fx.call), 'the export must run');
+  const m = JSON.parse(readFileSync(fx.marker, 'utf8'));
+  assert.equal(m.doneAt, '2026-11-22T07:35:00');
+  assert.equal(m.slot, '23:55');
+});
+
+test('SL3 a marker older than the last slot does not skip the run', win, () => {
+  const fx = slotFx();
+  putMarker(fx, '2026-11-21T23:54:59');
+  const r = run(fx, slotEnv(fx));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(existsSync(fx.call), 'the export must run');
+  assert.equal(JSON.parse(readFileSync(fx.marker, 'utf8')).doneAt, '2026-11-22T07:35:00');
+});
+
+test('SL4 a failed export (exit 1) writes no marker and leaves an older marker as it was', win, () => {
+  const fx = slotFx();
+  const r = run(fx, slotEnv(fx, '2026-11-22T07:35:00', { FAKE_EXIT: '1' }));
+  assert.equal(r.status, 1, r.log);
+  assert.equal(existsSync(fx.marker), false, 'no marker after a failure');
+  const fy = slotFx();
+  putMarker(fy, '2026-11-20T23:56:00');
+  run(fy, slotEnv(fy, '2026-11-22T07:35:00', { FAKE_EXIT: '1' }));
+  assert.equal(JSON.parse(readFileSync(fy.marker, 'utf8')).doneAt, '2026-11-20T23:56:00');
+});
+
+test('SL5 CCV3_SLOT_FORCE=1 runs over a fresh marker', win, () => {
+  const fx = slotFx();
+  putMarker(fx, '2026-11-21T23:56:10');
+  const r = run(fx, slotEnv(fx, '2026-11-22T07:35:00', { CCV3_SLOT_FORCE: '1' }));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(existsSync(fx.call), 'the export must run');
+});
+
+test('SL6 the normal 23:55 run is not skipped by last night\'s marker', win, () => {
+  const fx = slotFx();
+  putMarker(fx, '2026-11-21T23:56:10');
+  const r = run(fx, slotEnv(fx, '2026-11-22T23:55:01'));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(existsSync(fx.call), 'the export must run');
+  assert.equal(JSON.parse(readFileSync(fx.marker, 'utf8')).doneAt, '2026-11-22T23:55:01');
+});
+
+test('SL7 an export killed at its limit (124) writes no marker', win, () => {
+  const fx = slotFx();
+  const r = run(fx, slotEnv(fx, '2026-11-22T07:35:00', { FAKE_HANG: '1', CCV3_LANE_SNAPSHOT_TIMEOUT_SEC: '2' }));
+  assert.equal(r.status, 124, r.log);
+  assert.equal(existsSync(fx.marker), false, 'no marker after a kill');
+});
+
+test('SL8 an unreadable marker file is ignored: the run goes', win, () => {
+  const fx = slotFx();
+  mkdirSync(fx.state, { recursive: true });
+  writeFileSync(fx.marker, 'not json {');
+  const r = run(fx, slotEnv(fx));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(existsSync(fx.call), 'the export must run');
+});
+
+test('SL9 with only a log override the marker goes next to the log, not to the real state folder', win, () => {
+  const fx = fixture();
+  const r = run(fx);
+  assert.equal(r.status, 0, r.log);
+  assert.ok(existsSync(join(fx.logDir, 'slot-state', 'lane-snapshot.done.json')), 'marker next to the log');
+});

@@ -1,8 +1,8 @@
 {
   "source": "https://platform.claude.com/docs/en/about-claude/pricing.md",
-  "fetchedAt": "2026-11-08T20:13:35.638Z",
+  "fetchedAt": "2026-11-22T21:36:17.039Z",
   "unit": "USD per million tokens",
-  "sectionHash": "7077b6a8283117022da6761f8fbe9e795199068209b957b15cc51adec42a64d4",
+  "sectionHash": "bfb66ab9a9b14d080fe9977ce95203f7d58b4e3573652884eb47ef5170ef830d",
   "modifiers": {
     "webSearchPerRequest": 0.01,
     "usGeoMultiplier": 1.1,
@@ -10,6 +10,30 @@
     "haikuPromptTierTokens": 100000
   },
   "models": {
+    "claude-fable-5-2": {
+      "name": "Fable 5.2",
+      "input": 8,
+      "write5m": 10,
+      "write1h": 16,
+      "cacheHit": 0.2,
+      "output": 40,
+      "retired": false,
+      "fastInput": 16,
+      "fastOutput": 80,
+      "geo": true
+    },
+    "claude-mythos-5-2": {
+      "name": "Mythos 5.2",
+      "input": 8,
+      "write5m": 10,
+      "write1h": 16,
+      "cacheHit": 0.2,
+      "output": 40,
+      "retired": false,
+      "fastInput": 16,
+      "fastOutput": 80,
+      "geo": true
+    },
     "claude-fable-5-1": {
       "name": "Fable 5.1",
       "input": 10,

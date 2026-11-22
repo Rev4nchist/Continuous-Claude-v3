@@ -45,6 +45,7 @@ test('P2 retired rows stay in the table with retired true; live rows are false',
 test('P3 every id of the page table is present once', () => {
   const ids = Object.keys(parsePricing(md).models);
   assert.deepEqual(ids, [
+    'claude-fable-5-2', 'claude-mythos-5-2',
     'claude-fable-5-1', 'claude-mythos-5-1', 'claude-fable-5', 'claude-mythos-5',
     'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5',
     'claude-opus-4-1', 'claude-opus-4',
@@ -60,8 +61,10 @@ test('P4 Haiku 5.5 keeps the low rates and gains an over100k tier', () => {
   assert.equal(parsePricing(md).models['claude-haiku-4-5'].over100k, undefined);
 });
 
-test('P5 cache hit comes from the cell: Fable 5.1 0.25, Fable 5 1.00, Opus 5.5 0.20, Sonnet 5.5 0.10', () => {
+test('P5 cache hit comes from the cell: Fable 5.2 0.20, Fable 5.1 0.25, Fable 5 1.00, Opus 5.5 0.20, Sonnet 5.5 0.10', () => {
   const { models } = parsePricing(md);
+  assert.equal(models['claude-fable-5-2'].cacheHit, 0.2);
+  assert.equal(models['claude-mythos-5-2'].cacheHit, 0.2);
   assert.equal(models['claude-fable-5-1'].cacheHit, 0.25);
   assert.equal(models['claude-mythos-5-1'].cacheHit, 0.25);
   assert.equal(models['claude-fable-5'].cacheHit, 1);
@@ -71,13 +74,15 @@ test('P5 cache hit comes from the cell: Fable 5.1 0.25, Fable 5 1.00, Opus 5.5 0
   assert.equal(models['claude-sonnet-5-5'].cacheHit, 0.1);
 });
 
-test('P6 fast mode: Opus 5.5 8/40, Opus 5 and Opus 4.8 10/50, nobody else', () => {
+test('P6 fast mode: Fable 5.2 and Mythos 5.2 16/80, Opus 5.5 8/40, Opus 5 and Opus 4.8 10/50, nobody else', () => {
   const { models } = parsePricing(md);
+  assert.deepEqual([models['claude-fable-5-2'].fastInput, models['claude-fable-5-2'].fastOutput], [16, 80]);
+  assert.deepEqual([models['claude-mythos-5-2'].fastInput, models['claude-mythos-5-2'].fastOutput], [16, 80]);
   assert.deepEqual([models['claude-opus-5-5'].fastInput, models['claude-opus-5-5'].fastOutput], [8, 40]);
   assert.deepEqual([models['claude-opus-5'].fastInput, models['claude-opus-5'].fastOutput], [10, 50]);
   assert.deepEqual([models['claude-opus-4-8'].fastInput, models['claude-opus-4-8'].fastOutput], [10, 50]);
   const withFast = Object.entries(models).filter(([, row]) => row.fastInput !== undefined).map(([id]) => id);
-  assert.deepEqual(withFast, ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']);
+  assert.deepEqual(withFast, ['claude-fable-5-2', 'claude-mythos-5-2', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']);
 });
 
 test('P7 web search 0.01 per request, US geo 1.1 from 4.6 up, Haiku threshold 100000', () => {
