@@ -21,7 +21,7 @@
 //   a pull answer with no state, merged or draft field is read as an open PR instead of a failed read (exit 5)          -> PP16c
 // Aegis pass (F1, F4, F3 part a, F9):
 //   CCV3_DECISIONS_FILE moves the decision store, so a forged row in a scratch file pays; ANY non-empty override refuses (seat rule 11-22) -> PP17, PP17b
-//   USERPROFILE or HOME moves the home, so the default store and the default ledger move with it (the limits read 0, a forged row reads) -> PP17c, PP17d
+//   USERPROFILE or HOME moves the home, so the default store and the default ledger move with it (the limits read 0, a forged row reads) -> PP17c, PP17d, PP17e (cap run)
 //   the cap path posts with no head, a bad head or a moved head (F6); a total below 1 or not a whole number prices a round at the filtered count (F4) -> PP14b, PP18c
 //   path_filters (an uncommitted edit of .coderabbit.yaml) zero the filtered cost, so the round and day limits never bite       -> PP18, PP18b
 //   a row written by `post` does not say so, so the detection cannot tell it from a hand-written `record` row                   -> PP19
@@ -512,6 +512,19 @@ test('PP17c (F1/F3, seat rule): a home moved by USERPROFILE or HOME refuses a ro
   assert.deepEqual(w.ledger(), []);
   assert.ok(row(), 'the yes is kept');
   assert.equal(post(w).ok, true, 'control: with the home in place the same row posts');
+  w.done();
+});
+
+test('PP17e (F3, seat read 11-22): a home moved by HOME or USERPROFILE also refuses a CAP run (the queue path) with exit 5: nothing read, nothing posted, no ledger row; the same run with the home in place posts', () => {
+  const w = world();
+  const r = withMovedHome(() => post(w, { cap: 100, source: 'cap', head: HEAD }));
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 5);
+  assert.match(r.text, /home folder .* OS account record/);
+  assert.equal(w.posts.length, 0);
+  assert.equal(w.calls.length, 0, 'refused before any GitHub call');
+  assert.deepEqual(w.ledger(), []);
+  assert.equal(post(w, { cap: 100, source: 'cap', head: HEAD }).ok, true, 'control: with the home in place the cap run posts');
   w.done();
 });
 
