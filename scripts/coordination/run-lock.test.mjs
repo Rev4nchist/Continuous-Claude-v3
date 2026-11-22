@@ -1962,3 +1962,27 @@ test('RD7: a row with a reading lists as the old line byte for byte, plus one su
   assert.ok(old && withReading, 'both lines exist');
   assert.equal(withReading, `${old} read free 7.3 GB load 12 pct`);
 });
+
+// ---- card coord-run-lock-reading, part 2 (seat ruling 2026-11-22 16:2x): a run-wrap process is not a pre-pr run ----
+// A wrapped pre-pr has two node processes whose command line holds scripts/github/pre-pr.mjs: the wrapper and its child. The wrapper was counted as an
+// UNLOCKED RUN after 2 minutes and took the slot its own child waited for (deadlock). realPrePrProcs must drop a wrapper and keep the child.
+//   RD8  win32: a command line that runs run-wrap.mjs is not counted; a plain pre-pr.mjs line is; a body path that holds "run-wrap" is still a run
+//   RD9  pgrep: the same two forms (pgrep -af gives "pid command"); a bare pid (no command text) is still counted
+const WRAPPED = 'node scripts/coordination/run-wrap.mjs --kind pre-pr --once-per head -- node scripts/github/pre-pr.mjs --body C:/x/pr-body.md --wait-lock';
+const PLAIN = 'node scripts/github/pre-pr.mjs --body C:/x/pr-body.md --wait-lock';
+const TRICKY = 'node scripts/github/pre-pr.mjs --body C:/x/notes-about-run-wrap.mjs.md --wait-lock';
+
+test('RD8: on Windows a run-wrap command line is not a pre-pr run, its child and a plain run are', () => {
+  const out = [`100|2026-11-22T22:00:00.000Z|${WRAPPED}`, `101|2026-11-22T22:00:01.000Z|${PLAIN}`, `102|2026-11-22T22:00:02.000Z|${TRICKY}`, `103|2026-11-22T22:00:03.000Z|C:\\Program Files\\nodejs\\node.exe C:\\r\\scripts\\coordination\\run-wrap.mjs --kind pre-pr -- node scripts/github/pre-pr.mjs`].join('\r\n');
+  const procs = RL.realPrePrProcs({ spawn: () => ({ status: 0, stdout: out }), platform: 'win32' });
+  assert.deepEqual(procs.map((p) => p.pid), [101, 102]);
+  assert.equal(procs[0].start, Date.parse('2026-11-22T22:00:01.000Z'));
+});
+
+test('RD9: with pgrep a run-wrap command line is not a pre-pr run, its child and a plain run are', () => {
+  const calls = [];
+  const spawn = (cmd, args) => { calls.push([cmd, ...args]); return cmd === 'pgrep' ? { status: 0, stdout: `100 ${WRAPPED}\n101 ${PLAIN}\n102 ${TRICKY}\n300\n` } : { status: 0, stdout: 'Sat Nov 15 09:00:00 2026\n' }; };
+  const procs = RL.realPrePrProcs({ spawn, platform: 'linux' });
+  assert.deepEqual(procs.map((p) => p.pid), [101, 102, 300]);
+  assert.ok(calls.some((c) => c[0] === 'pgrep' && c.includes('-a')), 'pgrep must print the command line (-a) to tell a wrapper from a run');
+});
