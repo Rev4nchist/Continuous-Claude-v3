@@ -23604,6 +23604,48 @@
       "reason": "Malware in @corepassinc/remy-core-bin-win32-x64 (GHSA-xgr8-c5gp-x7xf)",
       "date": "2026-11-20",
       "advisory": "https://github.com/advisories/GHSA-xgr8-c5gp-x7xf"
+    },
+    "@leadstack/crm-connect": {
+      "blocked_all": true,
+      "reason": "Malware in @leadstack/crm-connect (GHSA-6crj-9fxx-v653)",
+      "date": "2026-11-22",
+      "advisory": "https://github.com/advisories/GHSA-6crj-9fxx-v653"
+    },
+    "@c1-ease/core": {
+      "blocked_all": true,
+      "reason": "Malicious code in @c1-ease/core (npm) (GHSA-p7r2-5ppv-hr6g)",
+      "date": "2026-11-22",
+      "advisory": "https://github.com/advisories/GHSA-p7r2-5ppv-hr6g"
+    },
+    "@c1-ease/commerce": {
+      "blocked_all": true,
+      "reason": "Malicious code in @c1-ease/commerce (npm) (GHSA-4w4w-phqm-jfpm)",
+      "date": "2026-11-22",
+      "advisory": "https://github.com/advisories/GHSA-4w4w-phqm-jfpm"
+    },
+    "@c1-ease/bank": {
+      "blocked_all": true,
+      "reason": "Malicious code in @c1-ease/bank (npm) (GHSA-q599-9j7q-8xf5)",
+      "date": "2026-11-22",
+      "advisory": "https://github.com/advisories/GHSA-q599-9j7q-8xf5"
+    },
+    "autoloan": {
+      "blocked_all": true,
+      "reason": "Malicious code in autoloan (npm) (GHSA-69rf-36f8-r3fm)",
+      "date": "2026-11-22",
+      "advisory": "https://github.com/advisories/GHSA-69rf-36f8-r3fm"
+    },
+    "@c1-ease/autoloan": {
+      "blocked_all": true,
+      "reason": "Malicious code in @c1-ease/autoloan (npm) (GHSA-v352-9p9c-2wv7)",
+      "date": "2026-11-22",
+      "advisory": "https://github.com/advisories/GHSA-v352-9p9c-2wv7"
+    },
+    "@c1-ease/card": {
+      "blocked_all": true,
+      "reason": "Malicious code in @c1-ease/card (npm) (GHSA-j5h6-446w-9q9c)",
+      "date": "2026-11-22",
+      "advisory": "https://github.com/advisories/GHSA-j5h6-446w-9q9c"
     }
   }
 }
