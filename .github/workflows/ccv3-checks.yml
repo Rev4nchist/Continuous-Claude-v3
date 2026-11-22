@@ -93,6 +93,9 @@ jobs:
       - name: stricter config tests (the stricter of main and the branch wins)
         timeout-minutes: 5
         run: node --test scripts/github/config-stricter.test.mjs
+      - name: cap override tests (the one-run CLI cap override and its tap)
+        timeout-minutes: 5
+        run: node --test scripts/github/cap-override.test.mjs
       - name: slot-queue unit tests
         timeout-minutes: 5
         run: node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs scripts/github/slot-queue-mod-sync.test.mjs scripts/github/slot-queue-paid-cap.test.mjs

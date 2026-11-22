@@ -71,6 +71,9 @@ export function parseArgs(argv) {
   return { pr, repo, timeoutMs: (ok ? minutes : CR_TIMEOUT_MIN_DEFAULT) * MIN };
 }
 
+// RED stub (coord-cap-override PART B): the real flag reader replaces this in the code commit.
+export const takeFixFlags = (argv) => ({ usd: null, rest: [...argv] });
+
 const incomplete = (reason) => ({ verdict: 'incomplete', reason });
 const KNOWN_SEVERITIES = new Set(['critical', 'major', 'minor', 'trivial', 'info', 'none']);
 

@@ -123,6 +123,9 @@ export function cliSkipSpec(d) {
   return { header: 'CLI skip', question: lines.join('\n'), options: spent >= 2 ? [skip, keep] : [keep, skip] };
 }
 
+// RED stub (coord-cap-override PART B): the real question replaces this in the code commit.
+export const capOverrideSpec = () => ({ header: '', question: '', options: [] });
+
 const LAND_LABELS = ['Land now', 'Land when READY', 'Keep open', 'Return to draft'];
 const NO_SUMMARY = 'What it does: no checked summary for this head. Read the PR body before you answer.';
 const SUMMARY_MAX = 200;
