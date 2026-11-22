@@ -64,11 +64,22 @@ export function dbNameOf(url) {
   }
 }
 
+/**
+ * Query keys that name a database. A socket: URL takes its database from `db` (pg-connection-string index.js:47-49), and psql (libpq)
+ * reads `dbname`. The path test passes both, so the URL could reach the live database. `database` is the pg config key.
+ */
+const DB_QUERY_KEYS = new Set(['db', 'dbname', 'database']);
+
 /** Throw unless the URL points at a scratch database. Call before any write. */
 export function assertScratchUrl(url) {
   const name = dbNameOf(url);
   if (!name.startsWith(PREFIX) || !NAME_RE.test(name)) {
     throw new Error(`refusing: database name '${name}' does not start with '${PREFIX}'`);
+  }
+  // searchParams decodes percent-encoding and plus signs; keys are compared in lower case. The message names the key, never the value.
+  for (const key of new URL(url).searchParams.keys()) {
+    const k = key.toLowerCase();
+    if (DB_QUERY_KEYS.has(k)) throw new Error(`refusing: query parameter '${k}' names a database; the name comes from the path only`);
   }
   return name;
 }
