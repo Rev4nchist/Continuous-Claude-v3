@@ -130,6 +130,35 @@ test('BC6: a failed fetch is a refusal that says so (never a pass)', () => {
   } finally { rmSync(env.tmp, { recursive: true, force: true }); }
 });
 
+test('BC12: the fetch of the check runs no git hook of the checkout (aegis F1: a PR hook must not run inside the none-pick check)', () => {
+  const env = setup(FILES);
+  try {
+    const hooks = path.join(env.tmp, 'hooks');
+    const marker = path.join(env.tmp, 'hook-ran.txt');
+    const script = path.join(hooks, 'reference-transaction');
+    mkdirSync(hooks);
+    writeFileSync(script, `#!/bin/sh\necho ran >> "${marker.replaceAll('\\', '/')}"\n`, { mode: 0o755 });
+    git(env.checkout, 'config', 'core.hooksPath', hooks);
+    const moveBase = (text) => {
+      const other = env.other();
+      write(other, 'scripts/b.mjs', text);
+      git(other, 'add', '-A');
+      git(other, 'commit', '-q', '-m', 'main moves');
+      git(other, 'push', '-q', 'origin', 'main');
+    };
+    // control: a plain fetch of a moved base runs the hook, so the test can see it
+    moveBase('export const b = 21;\n');
+    git(env.checkout, 'fetch', '-q', 'fork');
+    assert.ok(existsSync(marker), 'control: the reference-transaction hook runs on a plain fetch');
+    rmSync(marker);
+    // the check fetches a base that moved again: the hook must not run
+    moveBase('export const b = 22;\n');
+    const p = check(env);
+    assert.equal(typeof p, 'string', 'the moved base is still seen');
+    assert.ok(!existsSync(marker), 'no hook of the checkout ran during baseCodeProblem');
+  } finally { rmSync(env.tmp, { recursive: true, force: true }); }
+});
+
 /** Repo paths of the static relative imports of a module, transitively (the entry first). */
 function importClosure(entry) {
   const seen = new Set();
