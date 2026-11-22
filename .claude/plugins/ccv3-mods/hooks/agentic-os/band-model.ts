@@ -2,6 +2,7 @@ import type { HudLimit, OsBrief, OsTask } from '../../types'
 import { redact } from '../shared/redact'
 import { isAskStale, isProven } from './brief'
 import type { Chip } from './brief'
+import { cellWidth, cutCells } from './cells'
 import { gaugeTone } from './pane-model'
 import type { Span, Tone } from './pane-model'
 
@@ -24,8 +25,10 @@ export type BandState = {
   who?: { name: string | null; short: string | null }
   /** The first lane this session holds. */
   lane: string | null
-  /** The title of that lane (the title only, never its note or scope). The band goal reads it when brief_set set no goal. */
+  /** The title of that lane (the title only, never its scope). The band goal reads it when no lane note goal and no brief_set goal exist. */
   laneTitle?: string | null
+  /** The goal sentence of the note of `lanes[0]` (`goalOfNote`, goal-extractor.ts); null when that note has none. The Goal row reads it first. */
+  laneGoal?: string | null
   /** How many lanes this session holds; more than 1 draws `+N` after the lane (N = count - 1). */
   laneCount?: number
   /** Context used, 0-100. */
@@ -235,6 +238,55 @@ const goalOf = (s: BandState): Goal => {
     clippableTone: 'todo',
     tail: said === '' && title === '' && guess !== '' ? [sp(' [guessed]', 'dim')] : [],
   }
+}
+
+/**
+ * Where the Goal row text comes from (design 2026-11-18, section 2): the lane note sentence of lanes[0], then the brief_set goal, then the lane title,
+ * then the parsed goal (a guess), else null. Each value is redacted and on one line.
+ */
+export const goalSource = (s: BandState): { text: string; guessed: boolean } | null => {
+  const parsed = s.brief?.sources.goal === 'parsed'
+  const note = nameOf(s.laneGoal)
+  const said = parsed ? '' : nameOf(s.brief?.goal)
+  const title = nameOf(s.laneTitle)
+  const guess = parsed ? nameOf(s.brief?.goal) : ''
+  if (note !== '') return { text: note, guessed: false }
+  if (said !== '') return { text: said, guessed: false }
+  if (title !== '') return { text: title, guessed: false }
+  return guess !== '' ? { text: guess, guessed: true } : null
+}
+
+const GUESSED = ' [guessed]'
+const NOT_SET = 'goal not set'
+/** A redaction marker: the clip never cuts inside one. */
+const MARKER = /\[REDACTED:[^\]\s]*\]/g
+
+/** The text, cut at a word to at most `room` cells, ending in `…`. A text that fits is returned as it is. `room` must be 1 or more. */
+const clipGoal = (text: string, room: number): string => {
+  if (cellWidth(text) <= room) return text
+  let keep = cutCells(text, room - 1)
+  if (text[keep.length] !== ' ') {
+    const space = keep.lastIndexOf(' ')
+    if (space > 0) keep = keep.slice(0, space)
+  }
+  // Never cut inside a redaction marker: a marker the cut touches goes whole.
+  for (const marker of text.matchAll(MARKER)) {
+    const from = marker.index ?? 0
+    if (from < keep.length && keep.length < from + marker[0].length) keep = keep.slice(0, from)
+  }
+  return `${keep.trimEnd()}…`
+}
+
+/** The Goal row: one line of at most `width` cells. No label, no stop-at. A guessed goal ends in a dim ` [guessed]`, reserved before the clip. */
+export const goalSpans = (s: BandState, width: number): Span[] => {
+  const room = Math.floor(width)
+  if (!(room >= 1)) return []
+  const source = goalSource(s)
+  if (source === null) return [sp(cutCells(NOT_SET, room), 'dim')]
+  // The tag is kept while at least 2 cells stay for the goal; on a narrower row the goal alone is drawn.
+  const tag = source.guessed && room - GUESSED.length >= 2
+  const goal = clipGoal(source.text, tag ? room - GUESSED.length : room)
+  return [sp(goal, 'todo'), ...(tag ? [sp(GUESSED, 'dim')] : [])]
 }
 
 type Counts = { asks: number; answered: number; stale: boolean; unproven: number; done: number; total: number }

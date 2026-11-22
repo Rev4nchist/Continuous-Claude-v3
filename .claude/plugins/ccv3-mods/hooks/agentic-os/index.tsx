@@ -19,6 +19,7 @@ import { gitInfo } from './gitinfo'
 import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
+import { goalOfNote } from './goal-extractor'
 import { parseBoard } from './lanes-model'
 import { swarmGroups } from './workflow-model'
 import { JOURNAL_MAX_BYTES, journalPath, projectSlug, runFilePath, workflowFeed } from './journal-model'
@@ -1123,6 +1124,7 @@ export const agenticOs = (on: On) => {
       who: { name: await read($, sessionName), short: (await $.session.id().catch(() => null))?.slice(0, 8) ?? null },
       lane: now.lanes?.[0]?.id ?? null,
       laneTitle: now.lanes?.[0]?.title ?? null,
+      laneGoal: goalOfNote(now.lanes?.[0]?.note),
       laneCount: now.lanes?.length ?? 0,
       ctx: now.ctx,
       costUsd: hudNow?.costUsd ?? null,
