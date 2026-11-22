@@ -168,6 +168,33 @@ test('PC8 (seat option A): the paid row is written in the same step that uses th
   assert.equal(row.entry, 'cli');
 });
 
+test('PC9 (seat proof): the paid row a confirm writes is the row `cr-paid` post reads (same key, same head): the post goes out and uses the row up', async () => {
+  const PAID = await import(pathToFileURL(path.join(HERE, 'cr-paid.mjs')).href);
+  const t = setup(); // setup() puts a temp decision store at CCV3_DECISIONS_FILE: both sides read it
+  tap(labelOf(t.ask(), /^CodeRabbit review/), 'cli');
+  const confirmed = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD });
+  assert.equal(confirmed.status, 0, `${confirmed.stdout} ${confirmed.stderr}`);
+  assert.ok(D.decisionRowRead(paid()), 'the confirm wrote the paid row');
+  // `post` on a PR with 4 files ($1.00, under the $1.25 the pick tapped). A key or head mismatch between writer and reader would make it refuse with "No paid yes".
+  const prFiles = Array.from({ length: 4 }, (_, i) => ({ filename: `src/f${i}.ts`, additions: 5, deletions: 0, status: 'modified' }));
+  const posts = [];
+  const gh = (args) => {
+    if (args.includes('POST')) { posts.push(args); return { id: 1 }; }
+    if (args.includes('graphql')) return { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false }, nodes: [] } } } } };
+    if (args.some((a) => /issues\/\d+\/comments/.test(a))) return [];
+    if (args.some((a) => /pulls\/\d+\/files/.test(a))) return [prFiles];
+    if (args.some((a) => /pulls\/\d+\/commits/.test(a))) return [[{ sha: HEAD }]];
+    if (args.some((a) => /pulls\/\d+\/reviews/.test(a))) return [[]];
+    return { head: { sha: HEAD }, state: 'open', merged: false, draft: false };
+  };
+  const wait = { state: 'wait', nextSlotAt: new Date(Date.now() + 20 * 60_000).toISOString(), checkedAt: new Date().toISOString(), minutesToSlot: 20, source: 'notice' };
+  const ledgerPath = path.join(makeTempDir('paid-confirm-ledger-'), 'coderabbit-paid.jsonl');
+  const out = PAID.postPaid({ pr: PR, repo: DEFAULT_REPO }, { gh, ledgerPath, pathFilters: () => [], env: {}, capacity: () => wait, lockWaitMs: 100 });
+  assert.equal(out.ok, true, out.text);
+  assert.equal(posts.length, 1, 'one paid comment was posted');
+  assert.equal(D.decisionRowRead(paid()), null, 'the row is used up');
+});
+
 test('PC5: a confirm that is refused (no tap) writes no paid row', () => {
   const t = setup();
   t.ask();
