@@ -238,7 +238,8 @@ describe('hud', () => {
         expect(after.text).not.toContain(old)
         expect(after.core).not.toContain(old)
       }
-      expect(after.core).toContain('$-')
+      // Row 1 has no cost field (the HUD row owns it, and draws a cost only when one is known): nothing shows until the first measure.
+      expect(after.text).not.toMatch(/est \$/)
       await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 0.5 }, changed: ['cost'] } as never)
       expect((await hudOn($, 'terminal')).text).toContain('$0.50')
     }
@@ -261,7 +262,8 @@ describe('hud', () => {
         expect(after.text).not.toContain(old)
         expect(after.core).not.toContain(old)
       }
-      expect(after.core).toContain('$-')
+      // Row 1 has no cost field (the HUD row owns it, and draws a cost only when one is known): nothing shows until the first measure.
+      expect(after.text).not.toMatch(/est \$/)
       await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 0.5 }, changed: ['cost'] } as never)
       expect((await hudOn($, 'terminal')).text).toContain('$0.50')
     }
@@ -300,7 +302,8 @@ describe('hud', () => {
       await start($)
       const after = await hudOn($, 'terminal')
       for (const old of ['$3.84', '$4.10', '$0.00']) expect(after.text).not.toContain(old)
-      expect(after.core).toContain('$-')
+      // Row 1 has no cost field (the HUD row owns it, and draws a cost only when one is known): nothing shows until the first measure.
+      expect(after.text).not.toMatch(/est \$/)
     }
   })
 
@@ -327,7 +330,8 @@ describe('hud', () => {
       await start($)
       const after = await hudOn($, 'terminal')
       for (const old of ['$3.84', '$4.10', '$0.00']) expect(after.text).not.toContain(old)
-      expect(after.core).toContain('$-')
+      // Row 1 has no cost field (the HUD row owns it, and draws a cost only when one is known): nothing shows until the first measure.
+      expect(after.text).not.toMatch(/est \$/)
     }
   })
 
@@ -349,7 +353,7 @@ describe('hud', () => {
     flag.value = false // the engine's reset
     const gap = await hudOn($, 'terminal')
     expect(gap.text).not.toContain('$3.84')
-    expect(gap.core).toContain('$-')
+    expect(gap.text).not.toMatch(/est \$/)
   })
 
   // H4i a CLI --resume at launch has no earlier conversation in the process: its cost shows at once.
@@ -451,34 +455,43 @@ describe('hud', () => {
     expect((await hudOn($, 'desktop')).text).toBeUndefined()
   })
 
-  test('H8 with the HUD up, ctx is in the ring only', async ($, on) => {
+  test('H8 with the HUD up, ctx is in the ring only: not on row 1, not on the widget row', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => ({ result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }))
     await start($)
     await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
     const seen = await hudOn($, 'terminal')
     expect(seen.text).toContain('ctx 42%')
-    expect(seen.taskRow).toContain('0/1 done')
+    expect(seen.taskRow).toContain('▶ a')
+    expect(seen.taskRow).not.toContain('ctx')
+    expect(seen.core).not.toContain('ctx')
+  })
+
+  test('H8 with the HUD off, row 1 keeps ctx and the widget row never draws it', async ($, on) => {
+    world(on, { env: { CCV3_MOD_HUD_OFF: '1' } })
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => ({ result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }))
+    await start($)
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
+    const seen = await hudOn($, 'terminal')
+    expect(seen.core).toContain('ctx 42%')
     expect(seen.taskRow).not.toContain('ctx')
   })
 
-  test('H8 with the HUD off, the task row keeps ctx', async ($, on) => {
-    world(on, { env: { CCV3_MOD_HUD_OFF: '1' } })
-    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
-    await start($)
-    await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
-    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
-    expect((await hudOn($, 'terminal')).taskRow).toContain('ctx 42%')
-  })
-
   // H11 the HUD row draws above the two core lines (PRD 5.3: the core lines never move), or the rows do not give way in order.
-  // Band reliability: with two rows the compact line (one core row, key row-core-1) and the HUD row draw; two core lines need three rows with the HUD up.
+  // The row plan (band-model.ts rowPlan): with two rows the compact line (one core row, key row-core-1) and the HUD row draw; row 1 and the Goal row need three rows with the HUD up.
   test('H11 with the HUD up the rows run core 1, core 2, HUD, widget; short room drops the widget, then core 2 (the compact line), never the HUD', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => ({ result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }))
     await start($)
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
     const keysAt = async (maxRows: number) => {
       const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows } })
       const keys = (await band.findAll({ type: 'Box' })).map(found => found.key).filter(key => key?.startsWith('row-'))
@@ -492,12 +505,14 @@ describe('hud', () => {
     expect(await keysAt(1)).toEqual(['row-core-1'])
   })
 
-  // H12 below 40 columns the band is ONE core line; the row it does not use goes to the HUD and the widget (CodeRabbit, PR 194)
-  test('H12 a narrow band draws one core line, and the row it saves goes to the HUD, then the widget', async ($, on) => {
+  // H12 (design 2026-11-18, section 3): the Goal row draws at every width from 20, so a narrow band has the same rows as a wide one (it was ONE core line under 40 columns, CodeRabbit PR 194).
+  test('H12 a narrow band (30 columns) draws the same rows as a wide one: the Goal row stays, then the HUD, then the widget', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => ({ result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }))
     await start($)
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
     const keysAt = async (maxRows: number) => {
       const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows, bodyColumns: 30 } })
       const keys = (await band.findAll({ type: 'Box' })).map(found => found.key).filter(key => key?.startsWith('row-'))
@@ -505,7 +520,8 @@ describe('hud', () => {
       return keys
     }
     expect(await keysAt(2)).toEqual(['row-core-1', 'row-hud'])
-    expect(await keysAt(3)).toEqual(['row-core-1', 'row-hud', 'row-band'])
+    expect(await keysAt(3)).toEqual(['row-core-1', 'row-core-2', 'row-hud'])
+    expect(await keysAt(4)).toEqual(['row-core-1', 'row-core-2', 'row-hud', 'row-band'])
   })
 
   // 8b (failure 8, HUD half): at 20 columns the HUD row keeps ctx and 5h whole and drops the rest. Breaks if the terminal row stops fitting to bodyColumns.
@@ -521,8 +537,9 @@ describe('hud', () => {
     }
     expect(await rowAt(20)).toBe('ctx 42%  5h 38%')
     expect(await rowAt(26)).toBe('ctx 42%  5h 38%  7d 61%')
-    // maxRows 2 (compact line + HUD row) gets the same drops (design note line 81).
-    expect(await rowAt(20, 2)).toBe('ctx 42%  5h 38%')
+    // maxRows 2 (compact line + HUD row) gets the same drops (design note line 81). The compact line owns ctx at 20 columns (chip 9 + ctx 8),
+    // so the HUD row draws the rest: 5h and 7d whole (14 cells), and ctx is not drawn twice.
+    expect(await rowAt(20, 2)).toBe('5h 38%  7d 61%')
     const wide = await rowAt(160)
     expect(wide).toContain('Opus 5.5')
     expect(wide).toContain('▰')
@@ -549,11 +566,13 @@ describe('hud', () => {
   test('H14 with a seeded HUD, ctx is in the HUD row only, not on the widget line', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => ({ result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }))
     await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
     const seen = await hudOn($, 'terminal')
     expect(seen.text).toContain('ctx 42%')
-    expect(seen.taskRow).toContain('0/1 done')
+    expect(seen.taskRow).toContain('▶ a')
     expect(seen.taskRow).not.toContain('ctx')
   })
 })

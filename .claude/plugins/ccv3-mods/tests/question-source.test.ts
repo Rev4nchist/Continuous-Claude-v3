@@ -34,10 +34,13 @@ const { openAsksOf, deriveChip, briefSummary, mergeParsed, tapDecisions, emptyBr
   tapDecisions: (result: unknown) => string[]
   emptyBrief: (now: number) => OsBrief
 }
-const { bandLines, compactLine } = bandModel as unknown as {
-  bandLines: (s: BandState, width: number) => Span[][]
-  compactLine: (s: BandState, width: number) => Span[]
+const { bandRows } = bandModel as unknown as {
+  bandRows: (s: BandState, maxRows: number, width: number, quiet: boolean) => { rows: Partial<Record<'line' | 'compact' | 'row1' | 'goal', Span[]>> }
 }
+// The rows that carry the sign: the compact line (HUD on, two rows), row 1 (HUD off) and the one-row line. The sign reads `2 questions`, `? 2` or `?2`.
+const compactOf = (s: BandState, width: number): Span[] => bandRows({ ...s, hud: true }, 2, width, false).rows.compact ?? []
+const rowOneOf = (s: BandState, width: number): Span[] => bandRows({ ...s, hud: false }, 2, width, false).rows.row1 ?? []
+const SIGN = /(\d+ questions?)|(\? ?[\d+])/
 
 const NOW = 1_700_000_000_000
 const DAY = 24 * 3600_000
@@ -108,7 +111,7 @@ const lastSnapshot = (seen: Seen): Record<string, any> => JSON.parse(snapshots(s
 const turnEnd = ($: Engine, answer: string) => $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
 
 const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 30, scroll: { offset: 0, bodyRows: 10 }, view: {} }
-/** The first band row as a person sees it. At 30 columns it is the narrow line: chip, then ` Q n`. */
+/** The first band row as a person sees it. At 30 columns it is row 1: chip, then the sign (`1 question`, `? 1` or `?1`). */
 const lineOneOf = async ($: Engine, columns = 30): Promise<string> => {
   const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, bodyColumns: columns } })
   const row = (await band.find({ key: 'row-core-1' }))?.text ?? ''
@@ -141,7 +144,7 @@ describe('question source: a turn end asks nothing', () => {
     expect(lastSnapshot(seen).chip).not.toBe('waiting-on-dave')
     const line = await lineOneOf($)
     expect(line).not.toContain('WAITING FOR YOU')
-    expect(line).not.toMatch(/\bQ \d/)
+    expect(line).not.toMatch(SIGN)
   })
 
   test('Q19 learnFromAnswer: a turn end neither adds an ask nor removes a counted brief_set one', async ($, on) => {
@@ -153,7 +156,7 @@ describe('question source: a turn end asks nothing', () => {
     expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
     await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
     expect(lastSnapshot(seen).brief.ask.map((one: OsAskItem) => one.text)).toEqual(['Which db?'])
-    expect(await lineOneOf($)).toMatch(/WAITING FOR YOU\s+Q 1/)
+    expect(await lineOneOf($)).toMatch(/WAITING FOR YOU\s+(1 question|\? 1)/)
   })
 
   test('Q21 a real question in plain text only does NOT show: no chip change and no sign (the accepted cost, pinned)', async ($, on) => {
@@ -164,7 +167,7 @@ describe('question source: a turn end asks nothing', () => {
     expect(lastSnapshot(seen).chip).not.toBe('waiting-on-dave')
     const line = await lineOneOf($)
     expect(line).not.toContain('WAITING FOR YOU')
-    expect(line).not.toMatch(/\bQ \d/)
+    expect(line).not.toMatch(SIGN)
   })
 })
 
@@ -210,17 +213,16 @@ describe('question source: a stored parsed ask counts nowhere', () => {
   const bandState = (over: Partial<BandState> & { openAsks?: number }): BandState =>
     ({ chip: 'idle', brief: null, tasks: [], repo: 'r', who: { name: 'trex', short: '0d40499c' }, lane: null, ctx: 41, costUsd: null, now: NOW, activeAt: NOW, ...over }) as BandState
 
-  test('Q19 band-model: a parsed ask in the brief draws no Q sign and QUESTIONS 0; the sign is BandState.openAsks and nothing else', () => {
+  test('Q19 band-model: a parsed ask in the brief draws no sign; the sign is BandState.openAsks and nothing else', () => {
     const parsed = bandState({ brief: briefOf(ask('parsed')), openAsks: 0 })
     for (const width of [20, 30, 39, 40, 80, 120]) {
-      expect(text(compactLine(parsed, width)), `compact ${width}`).not.toMatch(/\bQ \d/)
-      expect(text(bandLines(parsed, width)[0]), `line ${width}`).not.toMatch(/\bQ \d/)
+      expect(text(compactOf(parsed, width)), `compact ${width}`).not.toMatch(SIGN)
+      expect(text(rowOneOf(parsed, width)), `row 1 ${width}`).not.toMatch(SIGN)
     }
-    expect(text(bandLines(parsed, 120)[1])).toContain('QUESTIONS 0')
     // A dialog alone (no brief) draws the sign: the number is the one the chip read.
     const dialogOnly = bandState({ chip: 'waiting-on-dave', openAsks: 3 })
-    expect(text(compactLine(dialogOnly, 80))).toContain('Q 3')
-    expect(text(bandLines(dialogOnly, 30)[0])).toContain('Q 3')
+    expect(text(compactOf(dialogOnly, 80))).toContain('3 questions')
+    expect(text(rowOneOf(dialogOnly, 30))).toMatch(/3 questions|\? 3/)
   })
 })
 
@@ -244,8 +246,8 @@ describe('question source: staleness zeroes only the brief_set part', () => {
     const stale = { ...briefOf(ask('brief_set')), updatedAt: NOW - 2 * DAY }
     const view = (openAsks: number) => ({ chip: 'idle', brief: stale, tasks: [], repo: 'r', who: { name: 'trex', short: '0d40499c' }, lane: null, ctx: 41, costUsd: null, now: NOW, activeAt: NOW - 2 * DAY, openAsks }) as unknown as BandState
     expect(open({ brief: stale, activeAt: NOW - 2 * DAY })).toBe(0)
-    expect(text(compactLine(view(0), 80))).not.toMatch(/\bQ \d/)
-    expect(text(compactLine(view(1), 80))).toContain('Q 1')
+    expect(text(compactOf(view(0), 80))).not.toMatch(SIGN)
+    expect(text(compactOf(view(1), 80))).toContain('1 question')
   })
 
   test('Q20 an answered brief_set ask and an excepted step count 0', () => {
@@ -278,10 +280,10 @@ describe('question source: the dialog step', () => {
     const labels = ['No review, land on CI ($0) (Recommended)', 'CodeRabbit review (may cost up to $1.75)']
     const modDialog = { question: 'PR #9: review?', header: 'PR #9', options: labels.map(label => ({ label, description: label })), multiSelect: false }
     await $.tool.call({ tool: 'AskUserQuestion', questions: [modDialog] } as never)
-    expect(line).toMatch(/WAITING FOR YOU\s+Q 1\b/)
-    expect(line).not.toMatch(/Q [2-9]/)
+    expect(line).toMatch(/WAITING FOR YOU\s+(1 question|\? 1)/)
+    expect(line).not.toMatch(/[2-9] questions|\? ?[2-9]/)
     // The dialog closed: no step is left, so no sign.
-    expect(await lineOneOf($)).not.toMatch(/\bQ \d/)
+    expect(await lineOneOf($)).not.toMatch(SIGN)
   })
 
   const ASK_NUMBERS: [string, unknown, number][] = [
@@ -302,7 +304,7 @@ describe('question source: the dialog step', () => {
       })
       await startMod($)
       await $.tool.call({ tool: 'AskUserQuestion', ...(input === undefined ? {} : { questions: input }) } as never)
-      expect(line).toMatch(new RegExp(`WAITING FOR YOU\\s+Q ${count}\\b`))
+      expect(line).toMatch(new RegExp(`WAITING FOR YOU\\s+(${count} questions?|\\? ${count})\\b`))
     })
   }
 

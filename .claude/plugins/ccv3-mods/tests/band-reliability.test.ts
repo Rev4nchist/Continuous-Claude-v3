@@ -6,15 +6,15 @@ import type { Engine } from 'claude-code/testing'
 // drew two core lines and the widget line with `ctx 47%` but no HUD row, so the hud atom was empty although /cache worked.
 // Every check reads the band the person sees (row keys and row text), or the debug log file the mod writes.
 //
-// Row budget (item 2). The core lines never move (PRD 5.3) when there is room.
-//   maxRows 1: the compact line only (key row-core-1; chip, repo, ctx, cost, helpers; no lane, no GOAL)
-//   maxRows 2: the compact line plus the HUD row (HUD up); with the HUD off the two core lines fit, so they draw
-//   maxRows 3: two core lines plus the HUD row (under 40 columns the one compact core line (it drops GOAL by design), the HUD row and the widget line)
-//   maxRows 4: plus the widget line (row-band)
-// B1 a row budget picks the wrong rows at some width from the matrix 20, 40, 120 (compact line missing, core line 2 kept, HUD or widget out of order)
-// B2 the compact line is not the compact line: it keeps lane or GOAL, or loses the chip, ctx, cost or the helper count
-// B3 the core lines move when there is room: with maxRows 3 or more their text differs from the roomy band
-// B4 the HUD is off and a two-row budget still gets the compact line (the core lines fit and must draw)
+// Row budget (item 2; the row plan of band-model.ts, design 2026-11-18, section 3). The core rows never move when there is room, at every width.
+//   maxRows 1: the one-row line (key row-core-1; chip, sign, ctx, 5h, 7d, then the goal at 12 cells; no name, repo, helpers or cost)
+//   maxRows 2: the compact line plus the HUD row (HUD up); with the HUD off row 1 and the Goal row draw
+//   maxRows 3: row 1, the Goal row (row-core-2) and the HUD row; with the HUD off row 1, the Goal row and the widget row
+//   maxRows 4: plus the widget row (row-band): the active task, the step, PRs, agents. A row with nothing to say is not drawn.
+// B1 a row budget picks the wrong rows at some width from the matrix 20, 40, 120 (compact line missing, goal row dropped or kept, HUD or widget out of order)
+// B2 the one-row line or the compact line is not what the plan says: the compact line loses the chip, ctx, cost or the helper count, or either keeps lane
+// B3 the core rows move when there is room: with maxRows 3 or more their text differs from the roomy band
+// B4 the HUD is off and a two-row budget still gets the compact line (row 1 and the Goal row fit and must draw)
 //
 // HUD self-seeding (item 3). The hud atom is null when no session.start ran the HUD's start. A band render, session.measure and
 // turn.step seed it once from session.model, settings (advisor) and session.usage (cost, limits).
@@ -26,6 +26,7 @@ import type { Engine } from 'claude-code/testing'
 // HS6 a headless run seeds (the HUD row is for interactive sessions only)
 // HS7 a seed that throws breaks the measure or the render, draws a half HUD, or never tries again at the next render
 // HS8 the first render that seeds the atom draws ctx twice: in the HUD row and on the widget line
+// HS9 with the HUD up and ctx unknown, the HUD row does not read `ctx -` right after the model chip, or a second row draws ctx too
 //
 // Debug log (item 4). CCV3_MOD_BAND_DEBUG=1: each band render appends ONE JSON line to ~/.claude/state/agentic-os/band-debug.log.
 // G1 the log is written by default, or with a value other than 1
@@ -36,17 +37,16 @@ import type { Engine } from 'claude-code/testing'
 // G6 the log reaches the session (a session.append) or CCV3_MODS_OFF=1 still writes
 // G7 the line records the HUD wrong (hudNow must be false with the HUD off) or the row count wrong
 //
-// Band must-haves (Dave, 2026-10-29; build plan "Band must-haves"). The band above the prompt always shows the context window (ctx %),
-// the 5-hour limit (5h %) and the 7-day usage (7d %) when known, plus cost. Compact line: chip, repo, ctx, 5h, 7d, cost, helpers.
-// The band state carries the limits as the HUD atom's `limits` (compactLine reads BandState.limits; see band-model.test.ts CL9 to CL14).
-// Unknown (the HUD atom is null) reads "5h -" and "7d -". An account with no such window draws nothing for that figure.
+// Band must-haves (Dave, 2026-10-29; build plan "Band must-haves"), under the plan of design 2026-11-18: the band shows ctx, 5h and 7d once each, where its owner draws them.
+// The band state carries the limits as the HUD atom's `limits` (the one-row line and the compact line read BandState.limits; see band-model.test.ts CL9 to CL14).
+// With no HUD state (the atom is null) no limit field and no cost draw; ctx stays. An account with no such window draws nothing for that figure.
 // M1 some row budget (maxRows 1 to 4) at width 20, 40 or 120 draws no ctx
-// M2 maxRows 1 at 120 columns is not the one compact line with ctx, 5h, 7d and cost (the limits vanish because the HUD row is hidden)
+// M2 maxRows 1 at 120 columns is not the one-row line with ctx, 5h and 7d, no cost, and the goal (the limits vanish because the HUD row is hidden)
 // M3 maxRows 1 at 40 columns loses the chip, ctx, 5h or 7d; at 20 columns it loses the chip or ctx, or passes 20 cells
 // M4 with room for the HUD row (maxRows 2 to 4, width 40 or 120) the 5h and 7d figures are drawn nowhere
-// M5 at 20 columns a budget of 2 to 4 rows loses the chip or ctx on core line 1, or overruns 20 cells
+// M5 at 20 columns a budget of 2 to 4 rows loses the chip on core row 1, or draws ctx nowhere, or overruns 20 cells
 // M6 an account with no 5h or 7d window gets a dash or a made-up figure for it; one with only a 5h window gets a 7d figure
-// M7 the limits are unknown (the HUD seed failed): 5h and 7d read "-"; the next render that seeds fills them
+// M7 the limits are unknown (the HUD seed failed): the one-row line draws ctx and no limit field; the next render that seeds fills them
 // M8 a resumed session (HUD atom null, no session.start) shows no 5h or 7d after the HUD self-seed filled them from usage
 
 const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} }
@@ -110,6 +110,7 @@ const world = (on: On, w: World = {}): Seen => {
   })
   on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: `a${++seen.spawned}` }))
   on('tool.call', { tool: 'TaskCreate' }, (_$, e) => ({ result: { task: { id: '1', subject: e.subject } } }))
+  on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => ({ result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
@@ -119,7 +120,11 @@ const world = (on: On, w: World = {}): Seen => {
 
 const start = ($: Engine, isInteractive = true) => $.session.start({ cwd: '/repo', surface: isInteractive ? 'terminal' : null, isInteractive } as never)
 
-const addTask = ($: Engine, subject = 'build it') => $.tool.call({ tool: 'TaskCreate', subject, description: 'd' })
+// The task is in progress: the widget row draws the active task, and a row with nothing to say is not drawn.
+const addTask = async ($: Engine, subject = 'build it') => {
+  await $.tool.call({ tool: 'TaskCreate', subject, description: 'd' })
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
+}
 const spawn = ($: Engine) =>
   $.agent.spawn({ tool_use_id: 't', prompt: 'p', description: 'map the hooks', subagentType: 'scout', parentModel: 'claude-opus-5-5', background: false, fork: false } as never)
 const measure = ($: Engine, over: Record<string, unknown> = {}) =>
@@ -147,15 +152,15 @@ const logOf = (seen: Seen): string[] => {
 }
 
 describe('band row budget', () => {
-  const expected = (width: number, maxRows: number): string[] => {
-    const narrow = width < 40
+  // The rows do not depend on the width (the Goal row draws at every width from 20).
+  const expected = (_width: number, maxRows: number): string[] => {
     if (maxRows === 1) return ['row-core-1']
     if (maxRows === 2) return ['row-core-1', 'row-hud']
-    if (maxRows === 3) return narrow ? ['row-core-1', 'row-hud', 'row-band'] : ['row-core-1', 'row-core-2', 'row-hud']
-    return narrow ? ['row-core-1', 'row-hud', 'row-band'] : ['row-core-1', 'row-core-2', 'row-hud', 'row-band']
+    if (maxRows === 3) return ['row-core-1', 'row-core-2', 'row-hud']
+    return ['row-core-1', 'row-core-2', 'row-hud', 'row-band']
   }
 
-  test('B1 maxRows 1, 2, 3 and 4 at widths 20, 40 and 120 choose the compact line, then the HUD row, then the core lines, then the widget line', async ($, on) => {
+  test('B1 maxRows 1, 2, 3 and 4 at widths 20, 40 and 120 choose the one-row line, the compact line and HUD row, then row 1, the Goal row and the HUD row, then the widget row', async ($, on) => {
     world(on)
     await start($)
     await addTask($)
@@ -166,25 +171,24 @@ describe('band row budget', () => {
     }
   })
 
-  test('B2 the compact line holds chip, ctx, cost and the helper count, and no lane or GOAL', async ($, on) => {
+  test('B2 the compact line (maxRows 2) holds chip, ctx, cost and the helper count, and no lane; the one-row line holds no cost and no helpers', async ($, on) => {
     world(on)
     await start($)
     await addTask($)
     await spawn($)
     await spawn($)
     await measure($)
-    for (const maxRows of [1, 2]) {
-      const line = (await draw($, maxRows, 120)).text('row-core-1') ?? ''
-      expect(line).toContain('WORKING')
-      expect(line).toContain('ctx 42%')
-      expect(line).toContain('$3.84')
-      expect(line).toContain('2 helpers running')
-      expect(line).not.toContain('lane ')
-      expect(line).not.toContain('GOAL')
-    }
+    const compact = (await draw($, 2, 120)).text('row-core-1') ?? ''
+    for (const part of ['WORKING', 'ctx 42%', '$3.84', '2 helpers running']) expect(compact).toContain(part)
+    expect(compact).not.toContain('lane ')
+    const one = (await draw($, 1, 120)).text('row-core-1') ?? ''
+    expect(one).toContain('WORKING')
+    expect(one).toContain('ctx 42%')
+    expect(one).toContain('goal not set')
+    for (const word of ['$', 'helper', 'lane ', 'GOAL']) expect(one).not.toContain(word)
   })
 
-  test('B2 at 20 columns the compact line is the chip and ctx, within 20 cells', async ($, on) => {
+  test('B2 at 20 columns the one-row line is the chip and ctx, within 20 cells', async ($, on) => {
     world(on)
     await start($)
     await addTask($)
@@ -202,7 +206,7 @@ describe('band row budget', () => {
     await start($)
     await addTask($)
     const roomy = await draw($, 10, 120)
-    expect(roomy.text('row-core-2')).toContain('GOAL not set')
+    expect(roomy.text('row-core-2')).toBe('goal not set')
     for (const maxRows of [3, 4]) {
       const got = await draw($, maxRows, 120)
       expect(got.text('row-core-1')).toBe(roomy.text('row-core-1'))
@@ -211,19 +215,20 @@ describe('band row budget', () => {
     expect(roomy.text('row-core-1')).toContain('lane ')
   })
 
-  test('B4 with the HUD off two rows hold both core lines, and one row holds the compact line', async ($, on) => {
+  test('B4 with the HUD off two rows hold row 1 and the Goal row, and one row holds the one-row line', async ($, on) => {
     world(on, { env: { CCV3_MOD_HUD_OFF: '1' } })
     await start($)
     await addTask($)
     await spawn($)
     const two = await draw($, 2, 120)
     expect(two.keys).toEqual(['row-core-1', 'row-core-2'])
-    expect(two.text('row-core-2')).toContain('GOAL not set')
+    expect(two.text('row-core-2')).toBe('goal not set')
     expect(two.text('row-core-1')).toContain('lane ')
+    expect(two.text('row-core-1')).toContain('ctx ')
     const one = await draw($, 1, 120)
     expect(one.keys).toEqual(['row-core-1'])
     expect(one.text('row-core-1')).not.toContain('lane ')
-    expect(one.text('row-core-1')).toContain('1 helper running')
+    expect(one.text('row-core-1')).not.toContain('helper')
     expect((await draw($, 3, 120)).keys).toEqual(['row-core-1', 'row-core-2', 'row-band'])
   })
 })
@@ -302,7 +307,9 @@ describe('hud self-seeding', () => {
     await measure($)
     const first = await draw($, 10)
     expect(first.keys).toEqual(['row-core-1', 'row-core-2', 'row-band'])
-    expect(first.text('row-band')).toContain('ctx 42%')
+    // No HUD state: row 1 owns ctx, and the widget row never draws it.
+    expect(first.text('row-core-1')).toContain('ctx 42%')
+    expect(first.text('row-band')).not.toContain('ctx')
     expect(first.text('row-hud')).toBeUndefined()
     const second = await draw($, 10)
     expect(second.keys).toEqual(['row-core-1', 'row-core-2', 'row-hud', 'row-band'])
@@ -318,6 +325,25 @@ describe('hud self-seeding', () => {
     expect(got.text('row-hud')).toContain('ctx 42%')
     expect(got.text('row-band')).toBeDefined()
     expect(got.text('row-band')).not.toContain('ctx')
+  })
+})
+
+describe('hud ctx owner', () => {
+  // Breaks if the HUD row stops drawing `ctx -` for an unknown ctx it owns (maxRows 3 and more), or a row that does not own ctx draws it.
+  test('HS9 with the HUD up and ctx unknown, the HUD row reads ctx - right after the model chip, and no other row draws ctx', async ($, on) => {
+    world(on)
+    const got = await draw($, 10)
+    const hud = got.text('row-hud') ?? ''
+    expect(hud).toMatch(/Opus 5\.5 +ctx -/)
+    for (const key of ['row-core-1', 'row-core-2', 'row-band']) expect(got.text(key) ?? '').not.toContain('ctx')
+  })
+
+  // Breaks if the HUD row draws ctx again at maxRows 2, where the compact line owns it.
+  test('HS9 at maxRows 2 the compact line owns an unknown ctx as ctx -, and the HUD row does not repeat it', async ($, on) => {
+    world(on)
+    const got = await draw($, 2, 120)
+    expect(got.text('row-core-1')).toContain('ctx -')
+    expect(got.text('row-hud') ?? '').not.toContain('ctx')
   })
 })
 
@@ -442,14 +468,13 @@ describe('band must-haves: ctx, 5h and 7d in every row budget', () => {
     }
   })
 
-  test('M2 maxRows 1 at 120 columns is the one compact line with ctx, 5h, 7d and cost, and no HUD row', async ($, on) => {
+  test('M2 maxRows 1 at 120 columns is the one-row line with ctx, 5h, 7d and the goal, no cost, and no HUD row', async ($, on) => {
     await ready($, on)
     const got = await draw($, 1, 120)
     expect(got.keys).toEqual(['row-core-1'])
     const line = got.text('row-core-1') ?? ''
-    for (const part of ['WORKING', 'ctx 42%', '5h 38%', '7d 61%', '$3.84']) expect(line).toContain(part)
-    expect(line).not.toContain('lane ')
-    expect(line).not.toContain('GOAL')
+    for (const part of ['WORKING', 'ctx 42%', '5h 38%', '7d 61%', 'goal not set']) expect(line).toContain(part)
+    for (const word of ['$', 'lane ', 'GOAL', 'helper']) expect(line).not.toContain(word)
   })
 
   test('M3 maxRows 1 at 40 columns shows the chip, ctx, 5h and 7d; at 20 columns the chip and ctx, in 20 cells', async ($, on) => {
@@ -468,16 +493,20 @@ describe('band must-haves: ctx, 5h and 7d in every row budget', () => {
     for (const width of [40, 120]) {
       for (const maxRows of [2, 3, 4]) {
         const got = everything(await draw($, maxRows, width))
-        expect({ width, maxRows, five: FIVE.test(got), seven: SEVEN.test(got) }).toEqual({ width, maxRows, five: true, seven: true })
+        // Each figure draws once: the compact line or the HUD row owns it, never both.
+        const times = (pattern: RegExp) => (got.match(new RegExp(pattern.source, 'g')) ?? []).length
+        expect({ width, maxRows, five: times(FIVE), seven: times(SEVEN) }).toEqual({ width, maxRows, five: 1, seven: 1 })
       }
     }
   })
 
-  test('M5 at 20 columns a budget of 2 to 4 rows keeps the chip and ctx on core line 1, in 20 cells', async ($, on) => {
+  test('M5 at 20 columns a budget of 2 to 4 rows keeps the chip on core row 1 and draws ctx once, in 20 cells', async ($, on) => {
     await ready($, on)
     for (const maxRows of [2, 3, 4]) {
-      const line = (await draw($, maxRows, 20)).text('row-core-1') ?? ''
-      expect({ maxRows, chip: line.includes('WORKING'), ctx: line.includes('ctx 42%'), fits: line.length <= 20 }).toEqual({ maxRows, chip: true, ctx: true, fits: true })
+      const got = await draw($, maxRows, 20)
+      const line = got.text('row-core-1') ?? ''
+      const all = got.keys.map(key => got.text(key ?? '') ?? '').join('\n')
+      expect({ maxRows, chip: line.includes('WORKING'), ctx: all.split('ctx 42%').length - 1, fits: got.keys.every(key => (got.text(key ?? '') ?? '').length <= 20) }).toEqual({ maxRows, chip: true, ctx: 1, fits: true })
     }
   })
 
@@ -495,15 +524,13 @@ describe('band must-haves: ctx, 5h and 7d in every row budget', () => {
     expect(line).not.toContain('7d')
   })
 
-  test('M7 limits not known yet read as a dash; the next render that seeds the HUD fills them', async ($, on) => {
+  test('M7 limits not known yet draw no limit field and no value; the next render that seeds the HUD fills them', async ($, on) => {
     world(on, { modelFails: 2, usageLimits: BOTH })
     await addTask($)
     await measure($, { rateLimits: BOTH, changed: ['context', 'rateLimits'] })
     const first = (await draw($, 1, 120)).text('row-core-1') ?? ''
     expect(first).toContain('ctx 42%')
-    expect(first).toContain('5h -')
-    expect(first).toContain('7d -')
-    expect(first).not.toMatch(/5h 38|7d 61/)
+    expect(first).not.toMatch(/5h|7d|\$/)
     const second = (await draw($, 1, 120)).text('row-core-1') ?? ''
     expect(second).toContain('5h 38%')
     expect(second).toContain('7d 61%')
@@ -514,7 +541,7 @@ describe('band must-haves: ctx, 5h and 7d in every row budget', () => {
     const one = (await draw($, 1, 120)).text('row-core-1') ?? ''
     expect(one).toContain('5h 38%')
     expect(one).toContain('7d 61%')
-    expect(one).toContain('$3.84')
+    expect(one).not.toContain('$')
     const roomy = everything(await draw($, 4, 120))
     expect(FIVE.test(roomy)).toBe(true)
     expect(SEVEN.test(roomy)).toBe(true)

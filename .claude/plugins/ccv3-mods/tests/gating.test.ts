@@ -76,11 +76,12 @@ const holdOneCall = ($: Engine, release: () => void) => {
   }
 }
 
+// Every band row, joined. undefined when the band draws none (the mod is off): a pending task alone draws no widget row, so `row-band` cannot prove the mod is on.
 const bandText = async ($: Engine): Promise<string | undefined> => {
   const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
-  const text = (await band.find({ key: 'row-band' }))?.text
+  const rows = (await band.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-'))
   await band.unmount()
-  return text
+  return rows.length === 0 ? undefined : rows.map(found => found.text).join('\n')
 }
 
 // The engine hands the write over with the platform's separators.
@@ -180,6 +181,7 @@ describe('agentic-os opt-out', () => {
     await $.tool.call({ tool: 'TaskCreate', subject: 'still on', description: 'd' })
     expect(calls.commands).toContain('os')
     expect(snapshotWrites(calls).length).toBe(1)
-    expect(await bandText($)).toContain('0/1 done')
+    // The plan bar (N/M done) left the band: the mod being on shows as the Goal row.
+    expect(await bandText($)).toContain('goal not set')
   })
 })

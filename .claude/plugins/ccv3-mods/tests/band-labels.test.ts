@@ -2,20 +2,18 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { applyBrief } from '../hooks/agentic-os/brief'
 import type { Brief } from '../hooks/agentic-os/brief'
-import { bandLines } from '../hooks/agentic-os/band-model'
+import { bandRows } from '../hooks/agentic-os/band-model'
 import type { BandState } from '../hooks/agentic-os/band-model'
 import { cellWidth } from '../hooks/agentic-os/cells'
 import { fitHudParts, hudParts, hudSpans } from '../hooks/hud/model'
 import type { HudState } from '../types'
 import type { Span } from '../hooks/agentic-os/pane-model'
 
-// Card coord-status-band-2, PR A: labels only (design note .claudedocs/coordination/2026-11-16-coord-status-band-2-design.md,
-// section 4, and the seat ruling that took the todo kind out of this PR). No ask path changes here.
+// Card coord-status-band-2: labels (design note .claudedocs/coordination/2026-11-18-coord-status-band-2-redesign-design.md, sections 2 and 3).
 //
 // Ways it can fail, one test each:
-// B1 the band keeps the word ASK on line 2
-// B2 PLAN and UNPROVEN draw with no steps, or disappear with steps
-// B4 line 1 draws ctx or cost again when the HUD row draws (fix 6 stays green after the label work)
+// B1 a removed word (QUESTIONS, ASK, PLAN, UNPROVEN, answered?, GOAL) draws on a row again
+// B4 row 1 draws ctx or cost when the HUD row draws, or loses ctx when the HUD is off
 // H1 the HUD row keeps the old labels (cost, cache, advisor) or the effort chip text drifts (the red fill is the only signal)
 
 const text = (line: Span[] | undefined): string => (line ?? []).map(span => span.text).join('')
@@ -39,32 +37,33 @@ const state = (over: Partial<BandState> = {}): BandState => ({
   ...over,
 })
 
-describe('band line 2 labels', () => {
-  const lineTwo = (over: Partial<BandState>, width = 160): string => text(bandLines(state(over), width)[1])
+describe('band row labels', () => {
+  const rowsOf = (over: Partial<BandState>, maxRows = 4, width = 160) => bandRows(state(over), maxRows, width, false)
+  const allText = (over: Partial<BandState>, maxRows = 4, width = 160): string => {
+    const { rows } = rowsOf(over, maxRows, width)
+    return [rows.line, rows.compact, rows.row1, rows.goal].map(text).join(String.fromCharCode(10))
+  }
 
-  test('B1 line 2 says QUESTIONS and never ASK', () => {
-    const line = lineTwo({ brief: briefWith({ ask: [{ kind: 'question', text: 'Open the PR?' }] }) })
-    expect(line).toContain('QUESTIONS 1')
-    expect(line).not.toContain('ASK')
-    expect(lineTwo({})).toContain('QUESTIONS 0')
+  // B1 and B2 (QUESTIONS on line 2, PLAN and UNPROVEN with and without steps) pinned words that leave the band (design 2026-11-18, section 2).
+  // Breaks if QUESTIONS, ASK, PLAN, UNPROVEN, `answered?` or the GOAL label comes back on any row, with an ask, steps or both.
+  test('B1 the old words never draw: no QUESTIONS, ASK, PLAN, UNPROVEN, answered? or GOAL label, with asks and a done plan step', () => {
+    const brief = briefWith({ goal: 'g', ask: [{ kind: 'question', text: 'Open the PR?' }], plan: [{ id: 'a', text: 'one', status: 'done' }] })
+    for (const maxRows of [1, 2, 3, 4]) {
+      for (const hud of [true, false]) {
+        const got = allText({ brief, hud, openAsks: 1, chip: 'waiting-on-dave' }, maxRows)
+        for (const word of ['QUESTIONS', 'ASK', 'PLAN', 'UNPROVEN', 'answered?', 'GOAL']) expect({ maxRows, hud, word, has: got.includes(word) }).toEqual({ maxRows, hud, word, has: false })
+      }
+    }
   })
 
-  test('B2 PLAN and UNPROVEN hide with no steps and draw with steps', () => {
-    const empty = lineTwo({ brief: briefWith({ goal: 'g' }) })
-    expect(empty).not.toContain('PLAN')
-    expect(empty).not.toContain('UNPROVEN')
-    const steps = lineTwo({ brief: briefWith({ goal: 'g', plan: [{ id: 'a', text: 'one', status: 'done' }] }) })
-    expect(steps).toContain('PLAN')
-    expect(steps).toContain('UNPROVEN 1')
-  })
-
-  test('B4 line 1 leaves out ctx and cost when the HUD row draws, and keeps them when it does not', () => {
-    const withHud = text(bandLines(state({ hud: true }), 160)[0])
+  // B4 now reads the plan: with the HUD row drawn (maxRows 3 and more) row 1 holds no ctx and no cost; with the HUD off row 1 keeps ctx and draws no cost.
+  test('B4 row 1 leaves out ctx and cost when the HUD row draws; with the HUD off it keeps ctx and draws no cost', () => {
+    const withHud = text(rowsOf({ hud: true }, 3).rows.row1)
     expect(withHud).not.toContain('ctx 41%')
     expect(withHud).not.toContain('$1.84')
-    const noHud = text(bandLines(state({ hud: false }), 160)[0])
+    const noHud = text(rowsOf({ hud: false }, 3).rows.row1)
     expect(noHud).toContain('ctx 41%')
-    expect(noHud).toContain('$1.84')
+    expect(noHud).not.toContain('$1.84')
   })
 })
 

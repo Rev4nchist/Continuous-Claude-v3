@@ -25,10 +25,9 @@ import type { OsAskItem, OsBrief } from '../types'
 // P7  blocked does not outrank the wait
 // P8  an old engine (no tasks) changes the chip
 // B1  the chip word, its count, its singular or its grey tone is wrong
-// B2  QUESTIONS under the wait chip is not amber, or a stale ask is amber
-// B3  the compact line draws no amber Q n for a fresh ask at some width and chip, or draws one for none / a stale / an answered ask
-// B4  the narrow line (under 40 columns) does the same
-// S1  Stop with a shell and a parsed ask: the band does not read WAITING ON 1 TASK, or QUESTIONS 1 / Q 1 is gone at full, compact and narrow width
+// B2  the sign under the wait chip is not amber, or a stale ask draws one
+// B3  row 1, the compact line or the one-row line draws no whole amber sign for a fresh ask where chip and sign fit, draws one for none / a stale / an answered ask, or swaps the wait chip
+// S1  Stop with a shell and a parsed ask: the band does not read WAITING ON 1 TASK, or a sign shows for the guess
 // S2  Stop with a shell and a brief_set ask, or an open dialog: the chip leaves WAITING FOR YOU
 // S3  Stop with no task, a cron only, or a missing or non-array list: the band changes
 // S4  turn.start (main), UserPromptSubmit and both SessionStart handlers do not clear the wait; a subagent turn.start clears it
@@ -48,9 +47,8 @@ const BG_WAIT_MAX_MS = (briefModel as unknown as { BG_WAIT_MAX_MS: number }).BG_
 const { waitLapsed } = briefModel as unknown as {
   waitLapsed: (tasks: { id: string; type: string }[], seen: Record<string, number>, from: number, to: number) => boolean
 }
-const { bandLines, compactLine, CHIP } = bandModel as unknown as {
-  bandLines: (s: BandState, width: number) => Span[][]
-  compactLine: (s: BandState, width: number) => Span[]
+const { bandRows, CHIP } = bandModel as unknown as {
+  bandRows: (s: BandState, maxRows: number, width: number, quiet: boolean) => { rows: Partial<Record<'line' | 'compact' | 'row1' | 'goal', Span[]>> }
   CHIP: Record<string, { word: string; tone: string }>
 }
 const text = (line: Span[] | undefined): string => (line ?? []).map(span => span.text).join('')
@@ -185,24 +183,32 @@ describe('system wait: deriveChip', () => {
   })
 })
 
-// ---------- pure: band-model ----------
+/// ---------- pure: band-model ----------
 
-// PR D: the Q sign reads BandState.openAsks, not the brief. The helper counts it as the mod does (openAsksOf) unless the test names it.
+// PR D: the sign reads BandState.openAsks, not the brief. The helper counts it as the mod does (openAsksOf) unless the test names it.
 const bandState = (over: Partial<BandState> & { waitTasks?: number } = {}): BandState => {
   const state = { chip: 'idle', brief: null, tasks: [], repo: 'repo-x', who: { name: 'trex', short: '0d40499c' }, lane: 'coord', ctx: 41, costUsd: 1.5, now: T0, activeAt: T0, ...over }
   return { ...state, openAsks: over.openAsks ?? openAsksOf({ steps: [], brief: state.brief as OsBrief | null, now: state.now, activeAt: state.activeAt }) } as BandState
 }
 const CHIPS = ['working', 'waiting-on-dave', 'waiting-on-work', 'blocked', 'done', 'idle'] as const
 
+// The three rows that carry the chip and the sign: row 1 (HUD off, two rows), the compact line (HUD on, two rows) and the one-row line.
+type FirstRow = { name: string; draw: (s: BandState, width: number) => Span[] }
+const FIRST_ROWS: FirstRow[] = [
+  { name: 'row 1', draw: (s, width) => bandRows({ ...s, hud: false }, 2, width, false).rows.row1 ?? [] },
+  { name: 'compact line', draw: (s, width) => bandRows({ ...s, hud: true }, 2, width, false).rows.compact ?? [] },
+  { name: 'one-row line', draw: (s, width) => bandRows({ ...s, hud: false }, 1, width, false).rows.line ?? [] },
+]
+const cellsOf = (line: Span[]): number => text(line).length
+
 describe('system wait: band words and tones', () => {
-  test('B1 the chip reads WAITING ON 1 TASK / WAITING ON n TASKS, in the dim chip tone', () => {
+  test('B1 the chip reads WAITING ON 1 TASK / WAITING ON n TASKS, in the dim chip tone, on every row that carries the chip', () => {
     for (const [n, word] of [[1, 'WAITING ON 1 TASK'], [2, 'WAITING ON 2 TASKS'], [10, 'WAITING ON 10 TASKS']] as const) {
-      const first = bandLines(bandState({ chip: 'waiting-on-work', waitTasks: n }), 120)[0]?.[0]
-      expect(first?.text.trim()).toBe(word)
-      expect(first?.tone).toBe('chipDim')
-      const compact = compactLine(bandState({ chip: 'waiting-on-work', waitTasks: n }), 120)[0]
-      expect(compact?.text.trim()).toBe(word)
-      expect(compact?.tone).toBe('chipDim')
+      for (const row of FIRST_ROWS) {
+        const first = row.draw(bandState({ chip: 'waiting-on-work', waitTasks: n }), 120)[0]
+        expect(first?.text.trim(), row.name).toBe(word)
+        expect(first?.tone, row.name).toBe('chipDim')
+      }
     }
   })
 
@@ -212,123 +218,97 @@ describe('system wait: band words and tones', () => {
     expect(CHIP['waiting-on-work']?.tone).not.toBe(CHIP.working?.tone)
   })
 
-  test('B2 QUESTIONS stays amber under the wait chip for a fresh ask, and dim for none or a stale one', () => {
-    const tone = (over: Partial<BandState>) => bandLines(bandState({ chip: 'waiting-on-work', waitTasks: 1, ...over }), 120)[1]?.find(span => span.text.startsWith('QUESTIONS'))?.tone
-    expect(tone({ brief: briefOf(ask()) })).toBe('warn')
-    expect(tone({})).toBe('dim')
+  // Old B2: QUESTIONS under the wait chip was amber for a fresh ask and dim otherwise. The word is gone; the sign is amber for a fresh open ask and absent for none, a stale or an answered one.
+  test('B2 the sign under the wait chip is amber for a fresh ask, and absent for none, a stale or an answered one', () => {
+    const sign = (over: Partial<BandState>) => bandRows(bandState({ chip: 'waiting-on-work', waitTasks: 1, hud: false, ...over }), 2, 120, false).rows.row1?.find(span => /question/.test(span.text))
+    expect(sign({ brief: briefOf(ask()) })).toEqual({ text: '1 question', tone: 'warn' })
+    expect(sign({})).toBeUndefined()
     const stale = { ...briefOf(ask()), updatedAt: T0 - 25 * 3600_000 }
-    expect(tone({ brief: stale, activeAt: T0 - 25 * 3600_000 })).toBe('dim')
-    expect(tone({ brief: briefOf(ask({ answered: true })) })).toBe('dim')
+    expect(sign({ brief: stale, activeAt: T0 - 25 * 3600_000 })).toBeUndefined()
+    expect(sign({ brief: briefOf(ask({ answered: true })) })).toBeUndefined()
   })
 
-  test('B2 the full line still says QUESTIONS 1 beside the wait chip', () => {
-    const lines = bandLines(bandState({ chip: 'waiting-on-work', waitTasks: 1, brief: briefOf(ask()) }), 120)
-    expect(text(lines[0])).toContain('WAITING ON 1 TASK')
-    expect(text(lines[1])).toContain('QUESTIONS 1')
+  test('B2 the full row still says 1 question beside the wait chip', () => {
+    const row1 = text(bandRows(bandState({ chip: 'waiting-on-work', waitTasks: 1, hud: false, brief: briefOf(ask()) }), 2, 120, false).rows.row1)
+    expect(row1).toContain('WAITING ON 1 TASK')
+    expect(row1).toContain('1 question')
   })
 })
 
-const qSpan = (line: Span[]): Span | undefined => line.find(span => /^Q \d+$/.test(span.text))
-/** What a terminal shows: it cuts a row at its right end. The ask must be in it as Q n or as the WAITING FOR YOU chip. */
-const shows = (line: Span[], width: number): boolean => {
-  const shown = text(line).slice(0, Math.max(width, 20))
-  return shown.includes('Q 1') || shown.includes('WAITING FOR YOU')
-}
+const qSpan = (line: Span[]): Span | undefined => line.find(span => span.tone === 'warn')
 
-describe('system wait: a fresh ask leaves a sign at every width', () => {
+describe('system wait: a fresh ask leaves a whole sign wherever the chip and the sign fit', () => {
   for (const chip of CHIPS) {
-    // The sign needs the chip, a space and `Q 1`. Narrower than that the terminal would cut it: the line must then read WAITING FOR YOU.
-    const needed = text([compactLine(bandState({ chip, waitTasks: 1 }), 200)[0] as Span]).length + ' Q 1'.length
-
-    test(`B3 compact line, chip ${chip}: an amber Q 1 where it fits, and what a terminal shows holds Q 1 or WAITING FOR YOU at every width from 20 to 200`, () => {
-      for (let width = 20; width <= 200; width++) {
-        const line = compactLine(bandState({ chip, waitTasks: 1, brief: briefOf(ask()), helpers: 2, limits: null }), width)
-        expect(shows(line, width), `width ${width}: ${text(line)}`).toBe(true)
-        if (width < needed) continue
-        expect(qSpan(line)?.text, `width ${width}`).toBe('Q 1')
-        expect(qSpan(line)?.tone, `width ${width}`).toBe('warn')
-      }
-    })
-
-    test(`B4 narrow line, chip ${chip}: an amber Q 1 where it fits, and what a terminal shows holds Q 1 or WAITING FOR YOU at every width from 20 to 39`, () => {
-      for (let width = 20; width <= 39; width++) {
-        const lines = bandLines(bandState({ chip, waitTasks: 1, brief: briefOf(ask()) }), width)
-        expect(lines).toHaveLength(1)
-        expect(shows(lines[0] ?? [], width), `width ${width}: ${text(lines[0])}`).toBe(true)
-        if (width < needed) continue
-        expect(qSpan(lines[0] ?? [])?.text, `width ${width}`).toBe('Q 1')
-        expect(qSpan(lines[0] ?? [])?.tone, `width ${width}`).toBe('warn')
-      }
-    })
+    for (const row of FIRST_ROWS) {
+      // The sign needs the chip, a space and `?1` (3 cells): narrower than that the row is the chip alone, whole.
+      const needed = text([row.draw(bandState({ chip, waitTasks: 1 }), 200)[0] as Span]).length + ' ?1'.length
+      test(`B3 ${row.name}, chip ${chip}: an amber whole sign from ${needed} columns, the chip alone below, and no row wider than the width or the chip`, () => {
+        for (let width = 20; width <= 200; width++) {
+          const line = row.draw(bandState({ chip, waitTasks: 1, brief: briefOf(ask()), helpers: 2, limits: null }), width)
+          const sign = qSpan(line)
+          expect(cellsOf(line), `width ${width}: ${text(line)}`).toBeLessThanOrEqual(Math.max(width, needed - 3))
+          if (width < needed) {
+            expect(sign, `width ${width}`).toBeUndefined()
+            continue
+          }
+          expect(['1 question', '? 1', '?1'], `width ${width}: ${text(line)}`).toContain(sign?.text)
+          expect(sign?.tone, `width ${width}`).toBe('warn')
+        }
+      })
+    }
   }
 
-  test('B3 the count is the number of fresh open asks', () => {
+  test('B3 the count is the number of fresh open asks, in a form that fits', () => {
     const two = briefOf(ask(), ask({ text: 'Second?' }), ask({ text: 'Done one?', answered: true }))
-    expect(text(compactLine(bandState({ chip: 'waiting-on-work', waitTasks: 1, brief: two }), 120))).toContain('Q 2')
-    expect(text(bandLines(bandState({ chip: 'waiting-on-work', waitTasks: 1, brief: two }), 30)[0])).toContain('Q 2')
+    const wait = bandState({ chip: 'waiting-on-work', waitTasks: 1, brief: two })
+    for (const row of FIRST_ROWS) expect(text(row.draw(wait, 120)), row.name).toContain('2 questions')
+    // WAITING ON 1 TASK 19 + ` ? 2` 4 = 23: the short form at 23 and 24 columns, the tight form at 22.
+    expect(text(FIRST_ROWS[0]?.draw(wait, 24) ?? [])).toContain('? 2')
+    expect(text(FIRST_ROWS[0]?.draw(wait, 22) ?? [])).toContain('?2')
   })
 
-  test('B3 B4 no ask, an answered ask or a stale ask draws no Q', () => {
+  test('B3 no ask, an answered ask or a stale ask draws no sign', () => {
     const stale = { ...briefOf(ask()), updatedAt: T0 - 25 * 3600_000 }
     const none = [{}, { brief: briefOf(ask({ answered: true })) }, { brief: stale, activeAt: T0 - 25 * 3600_000 }]
     for (const over of none) {
       for (const width of [20, 30, 39, 40, 80, 200]) {
-        expect(qSpan(compactLine(bandState({ chip: 'waiting-on-work', waitTasks: 1, ...over }), width))).toBeUndefined()
-        expect(text(bandLines(bandState({ chip: 'waiting-on-work', waitTasks: 1, ...over }), width)[0])).not.toMatch(/\bQ \d/)
+        for (const row of FIRST_ROWS) expect(text(row.draw(bandState({ chip: 'waiting-on-work', waitTasks: 1, ...over }), width)), `${row.name} ${width}`).not.toMatch(/question|\?/)
       }
     }
   })
 
-  test('B3 B4 no line is wider than the width, except WAITING FOR YOU with its Q n (21 cells) at 20 columns', () => {
-    for (const chip of CHIPS) {
-      const given = bandState({ chip, waitTasks: 12, brief: briefOf(ask()), repo: 'r'.repeat(80), helpers: 12, costUsd: 1234.5 })
-      for (let width = 20; width <= 200; width++) {
-        const line = text(compactLine(given, width))
-        expect(line.length, `${chip} compact ${width}`).toBeLessThanOrEqual(Math.max(width, 21))
+  // Old: where the wait chip and Q n did not both fit, the line read WAITING FOR YOU (chipFor). Removed: the wait chip never turns into WAITING FOR YOU, and a sign with no room is not drawn.
+  test('B3 where the wait chip and the sign do not both fit, the chip stays WAITING ON n TASKS and the sign is dropped whole', () => {
+    const wait = (over: Partial<BandState> = {}) => bandState({ chip: 'waiting-on-work', waitTasks: 1, brief: briefOf(ask()), ...over })
+    for (const row of FIRST_ROWS) {
+      for (const width of [20, 21, 22, 23, 24, 39, 120]) {
+        const line = row.draw(wait(), width)
+        expect(line[0]?.text.trim(), `${row.name} ${width}`).toBe('WAITING ON 1 TASK')
+        expect(line[0]?.tone, `${row.name} ${width}`).toBe('chipDim')
+        // WAITING ON 1 TASK is 19 cells: ` ?1` needs 22.
+        expect(qSpan(line) !== undefined, `${row.name} ${width}`).toBe(width >= 22)
       }
-      for (let width = 20; width <= 39; width++) {
-        const line = text(bandLines(given, width)[0])
-        expect(line.length, `${chip} narrow ${width}`).toBeLessThanOrEqual(Math.max(width, 21))
-      }
+      // Ten tasks widen the word to 21 cells: the tight sign needs 24.
+      const ten = (width: number) => row.draw(wait({ waitTasks: 10 }), width)
+      expect(ten(20)[0]?.text.trim(), row.name).toBe('WAITING ON 10 TASKS')
+      expect(qSpan(ten(23)), row.name).toBeUndefined()
+      expect(qSpan(ten(24))?.text, row.name).toBe('?1')
     }
   })
 
-  test('B3 B4 where the wait chip and Q n do not both fit, the line reads WAITING FOR YOU; with no fresh ask it keeps the wait chip', () => {
-    const wait = (over: Partial<BandState> = {}) => bandState({ chip: 'waiting-on-work', waitTasks: 1, ...over })
-    for (const width of [20, 21, 22]) {
-      const compact = compactLine(wait({ brief: briefOf(ask()) }), width)
-      const narrow = bandLines(wait({ brief: briefOf(ask()) }), width)[0] ?? []
-      for (const line of [compact, narrow]) {
-        expect(line[0]?.text.trim(), `width ${width}`).toBe('WAITING FOR YOU')
-        expect(line[0]?.tone, `width ${width}`).toBe('chipWarn')
-      }
-      expect(compactLine(wait(), width)[0]?.text.trim(), `no ask, width ${width}`).toBe('WAITING ON 1 TASK')
-      expect((bandLines(wait(), width)[0] ?? [])[0]?.text.trim(), `no ask, width ${width}`).toBe('WAITING ON 1 TASK')
+  test('B3 the sign comes straight after the chip, before every other field', () => {
+    for (const row of FIRST_ROWS) {
+      const line = row.draw(bandState({ chip: 'waiting-on-work', waitTasks: 1, brief: briefOf(ask()), helpers: 2 }), 200)
+      expect(line.findIndex(span => span.tone === 'warn'), row.name).toBe(2)
+      expect(line[1]?.text.trim(), row.name).toBe('')
     }
-    for (const width of [23, 24, 39, 120]) {
-      expect(compactLine(wait({ brief: briefOf(ask()) }), width)[0]?.text.trim(), `width ${width}`).toBe('WAITING ON 1 TASK')
-    }
-    // With no fresh ask the wait chip never turns into WAITING FOR YOU (that would say a person is needed), even when it is wider than the width.
-    expect(compactLine(wait({ waitTasks: 10 }), 20)[0]?.text.trim()).toBe('WAITING ON 10 TASKS')
-    expect((bandLines(wait({ waitTasks: 10 }), 20)[0] ?? [])[0]?.text.trim()).toBe('WAITING ON 10 TASKS')
-    // Ten tasks widen the word to 21 cells: the sign needs 25.
-    const ten = (width: number) => compactLine(wait({ waitTasks: 10, brief: briefOf(ask()) }), width)[0]?.text.trim()
-    expect(ten(24)).toBe('WAITING FOR YOU')
-    expect(ten(25)).toBe('WAITING ON 10 TASKS')
   })
 
-  test('B3 the Q n comes straight after the chip, before every other field', () => {
-    const line = compactLine(bandState({ chip: 'waiting-on-work', waitTasks: 1, brief: briefOf(ask()), helpers: 2 }), 200)
-    const at = line.findIndex(span => /^Q \d+$/.test(span.text))
-    expect(at).toBeGreaterThan(0)
-    expect(line.slice(1, at).every(span => span.text.trim() === '')).toBe(true)
-  })
-
-  test('B3 the other chip words are whole at every width, with a Q beside them', () => {
+  test('B3 the other chip words are whole at every width, with a sign beside them', () => {
     const words = { working: 'WORKING', 'waiting-on-dave': 'WAITING FOR YOU', blocked: 'STUCK', done: 'DONE', idle: 'RESTING' } as const
     for (const chip of Object.keys(words) as (keyof typeof words)[]) {
       for (let width = 20; width <= 120; width += 7) {
-        expect(compactLine(bandState({ chip, brief: briefOf(ask()) }), width)[0]?.text.trim()).toBe(words[chip])
+        for (const row of FIRST_ROWS) expect(row.draw(bandState({ chip, brief: briefOf(ask()) }), width)[0]?.text.trim(), row.name).toBe(words[chip])
       }
     }
   })
@@ -423,8 +403,8 @@ const writeState = async ($: Engine, seen: Seen) => {
 }
 
 describe('system wait: the whole mod', () => {
-  // Old: the turn-end ask made the chip WAITING FOR YOU and line 2 QUESTIONS 1. Broken on purpose by `learnFromAnswer` dropping the parsed ask (a turn end stores none) and `openAsksOf` skipping parsed asks.
-  test('S1 a shell and a turn-end ask guess: the chip reads WAITING ON 1 TASK and line 2 says QUESTIONS 0', async ($, on) => {
+  // Old: the turn-end ask made the chip WAITING FOR YOU and line 2 QUESTIONS 1 (the word is gone from the band). Broken on purpose by `learnFromAnswer` dropping the parsed ask (a turn end stores none) and `openAsksOf` skipping parsed asks.
+  test('S1 a shell and a turn-end ask guess: the chip reads WAITING ON 1 TASK and no sign draws', async ($, on) => {
     world(on)
     await start($)
     await parsedAsk($)
@@ -433,7 +413,8 @@ describe('system wait: the whole mod', () => {
     const got = await view($)
     expect(got.line1).toContain('WAITING ON 1 TASK')
     expect(got.line1).not.toContain('WAITING FOR YOU')
-    expect(got.line2).toContain('QUESTIONS 0')
+    expect(got.line1).not.toMatch(/question|\?/)
+    expect(got.line2).not.toContain('QUESTIONS')
   })
 
   test('S1 two tasks read WAITING ON 2 TASKS (a workflow counts)', async ($, on) => {
@@ -452,10 +433,10 @@ describe('system wait: the whole mod', () => {
     await stop($, { background_tasks: [shell('b1')] })
     const short = await view($, 120, 1)
     expect(short.line1).toContain('WAITING ON 1 TASK')
-    expect(short.line1).not.toMatch(/\bQ \d/)
+    expect(short.line1).not.toMatch(/question|\?/)
     const narrow = await view($, 30)
     expect(narrow.line1).toContain('WAITING ON 1 TASK')
-    expect(narrow.line1).not.toMatch(/\bQ \d/)
+    expect(narrow.line1).not.toMatch(/question|\?/)
   })
 
   test('S2 a brief_set ask beats the wait', async ($, on) => {
@@ -483,18 +464,18 @@ describe('system wait: the whole mod', () => {
   })
 
   // Old: no task and a turn-end ask read WAITING FOR YOU and QUESTIONS 1. Broken on purpose by `learnFromAnswer` dropping the parsed ask.
-  test('S3 no task and a turn-end ask guess: RESTING and QUESTIONS 0; a brief_set ask reads WAITING FOR YOU and QUESTIONS 1', async ($, on) => {
+  test('S3 no task and a turn-end ask guess: RESTING and no sign; a brief_set ask reads WAITING FOR YOU and 1 question', async ($, on) => {
     world(on)
     await start($)
     await parsedAsk($)
     await stop($, { background_tasks: [] })
     const got = await view($)
     expect(got.line1).toContain('RESTING')
-    expect(got.line2).toContain('QUESTIONS 0')
+    expect(got.line1).not.toMatch(/question|\?/)
     await $.tool.call({ tool: BRIEF_TOOL, ask: [{ kind: 'question', text: 'Which branch?' }] } as never)
     const real = await view($)
     expect(real.line1).toContain('WAITING FOR YOU')
-    expect(real.line2).toContain('QUESTIONS 1')
+    expect(real.line1).toContain('1 question')
   })
 
   test('S3 a cron alone changes nothing: no wait chip, with or without an ask', async ($, on) => {
