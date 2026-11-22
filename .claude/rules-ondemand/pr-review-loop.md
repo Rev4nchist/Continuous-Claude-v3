@@ -691,7 +691,7 @@ Probe: `node scripts/github/land-none-probe.mjs` (fixtures only, no GitHub write
 - `pr_watch` still toasts READY for a forged HIGH `none` PR. `review-status.mjs` does not read the store. `land-pr.ps1` is the gate.
 - The store lives on one machine. Landing from another machine, or after the store was reset, refuses until Dave picks again.
 - A forgery now touches three places (label, marker comment, store record), and each one is visible.
-- `land-none-check.mjs` is a control-plane gate file, a security-tier file and a `checkpoint.critical` file (`review-router.config.json`). The band thresholds did not change.
+- `land-none-check.mjs` (the entry) and `land-none-core.mjs` (the band and the pick) are control-plane gate files, security-tier files and `checkpoint.critical` files (`review-router.config.json`). The entry imports only built-ins and loads the core after the base-code check. The band thresholds did not change.
 
 ## Repos still on CodeRabbit
 

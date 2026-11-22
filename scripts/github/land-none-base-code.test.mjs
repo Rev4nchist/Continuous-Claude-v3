@@ -14,7 +14,7 @@
 //   a fixture run with no --remote touches the network, or a live run skips the check                                  -> BC10, BC11
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -154,7 +154,7 @@ test('BC12: the fetch of the check runs no git hook of the checkout (aegis F1: a
     // the check fetches a base that moved again: the hook must not run
     moveBase('export const b = 22;\n');
     const p = check(env);
-    assert.equal(typeof p, 'string', 'the moved base is still seen');
+    assert.match(String(p), /differs from fork\/main/, 'the moved base is seen as a difference (a "could not fetch" result would also be a string)');
     assert.ok(!existsSync(marker), 'no hook of the checkout ran during baseCodeProblem');
   } finally { rmSync(env.tmp, { recursive: true, force: true }); }
 });
@@ -171,6 +171,8 @@ test('BC13: the hooks path of the check is an existing regular file: no folder, 
     assert.equal(path.basename(hookFile), 'reference-transaction');
     assert.ok(path.isAbsolute(parent) && /^(?:[A-Za-z]:)?[\\/]/.test(parent), `the hooks path ${parent} is not absolute`);
     assert.ok(existsSync(parent) && statSync(parent).isFile(), `the hooks path ${parent} is not an existing regular file`);
+    // card coord-force-high-followups: not any regular file, the entry file of the check (critic round 4 on PR 673)
+    assert.equal(realpathSync(parent), realpathSync(fileURLToPath(new URL('./land-none-check.mjs', import.meta.url))), 'the hooks path is the entry file of the check');
   } finally { rmSync(env.tmp, { recursive: true, force: true }); }
 });
 
@@ -199,12 +201,12 @@ test('BC14: a reference-transaction hook in the folder that the check sees as it
     writeFileSync(runner, [
       `import { baseCodeProblem } from ${JSON.stringify(checkUrl)};`,
       "const p = baseCodeProblem({ root: process.env.CHECK_ROOT, baseRef: 'main', remote: 'fork', files: ['scripts/a.mjs', 'scripts/b.mjs'] });",
-      'console.log(typeof p);', '',
+      'console.log(String(p));', '',
     ].join('\n'));
     // the child sees the folder with the hook as its temp folder (os.tmpdir() reads TEMP, TMP and TMPDIR)
     const r = spawnSync(process.execPath, [runner], { encoding: 'utf8', env: { ...process.env, TEMP: tmpHooks, TMP: tmpHooks, TMPDIR: tmpHooks, CHECK_ROOT: env.checkout } });
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout.trim(), 'string', 'the moved base is seen (the fetch ran)');
+    assert.match(r.stdout, /differs from fork\/main/, 'the moved base is seen as a difference (the fetch ran; "could not fetch" would also print a string)');
     assert.ok(!existsSync(marker), 'a hook in the temp folder ran during baseCodeProblem');
   } finally { rmSync(env.tmp, { recursive: true, force: true }); }
 });
@@ -216,8 +218,9 @@ function importClosure(entry) {
     if (seen.has(rel)) return;
     seen.add(rel);
     const text = readFileSync(path.join(ROOT, rel), 'utf8');
-    for (const m of text.matchAll(/(?:^|\n)\s*(?:import|export)\s[^'"\n]*?from\s+['"]([^'"]+)['"]|(?:^|\n)\s*import\s+['"]([^'"]+)['"]/g)) {
-      const spec = m[1] ?? m[2];
+    // static imports and exports, and a literal import('...') (card coord-force-high-followups: the entry loads the core by import() after the base-code check)
+    for (const m of text.matchAll(/(?:^|\n)\s*(?:import|export)\s[^'"\n]*?from\s+['"]([^'"]+)['"]|(?:^|\n)\s*import\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+      const spec = m[1] ?? m[2] ?? m[3];
       if (spec.startsWith('.')) walk(path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec)));
     }
   };
@@ -225,7 +228,7 @@ function importClosure(entry) {
   return [...seen].sort();
 }
 
-test('BC7: BAND_CODE_FILES is exactly the static import closure of land-none-check.mjs, and each file exists', () => {
+test('BC7: BAND_CODE_FILES is exactly the import closure (static and literal import()) of land-none-check.mjs, and each file exists', () => {
   assert.ok(Array.isArray(lnc.BAND_CODE_FILES) && Object.isFrozen(lnc.BAND_CODE_FILES), 'exported and frozen');
   const closure = importClosure('scripts/github/land-none-check.mjs');
   assert.deepEqual([...lnc.BAND_CODE_FILES].sort(), closure, 'a missing import is a hole in the check; a stale entry makes every land refuse');

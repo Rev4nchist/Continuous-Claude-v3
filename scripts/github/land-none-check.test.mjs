@@ -33,7 +33,7 @@ const STORE = '/home/x/.claude/plugins/store/ccv3-mods_test.json';
 const GLOB = '/home/x/.claude/plugins/store/ccv3-mods_*.json';
 const GATE = ['.claude/hooks/src/pre-pr-gate.ts', 'scripts/github/review-status.mjs', 'scripts/github/review-router.mjs', 'scripts/github/cr-paid.mjs', 'scripts/github/land-pr.ps1'];
 
-const load = () => import('./land-none-check.mjs');
+const load = () => import('./land-none-core.mjs');
 
 const record = (over = {}) => ({
   pr: 7, state: 'applied', head: HEAD, pathway: 'none', label: 'review:none', decided_by: 'dave', via: 'dialog', band: 'HIGH', at: '2026-11-04T03:42:00.000Z', ...over,
