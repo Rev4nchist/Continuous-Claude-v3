@@ -4543,6 +4543,21 @@ test('O5c: a bad summary stops pre-pr.mjs before the run lock: exit 1, the FAIL 
   assert.equal(existsSync(path.join(repo.dir, PRE.STAMP_REL)), false);
 });
 
+test('O5d: with --json a pre-lock summary FAIL prints ONE JSON document (ok false, the summary row), like every other run, and exits 1', () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'review-router.config.json'), JSON.stringify({ ...CONFIG, pre_pr: { ...CONFIG.pre_pr, summary_mode: 'fail' } }));
+  const body = path.join(repo.dir, '..', `body-o5d-${Date.now()}.md`);
+  writeFileSync(body, 'Proof type: docs\n');
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--json'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV, timeout: 60_000 });
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  const doc = JSON.parse(r.stdout); // one document: a text line before it, or a second document, throws here
+  assert.equal(doc.ok, false);
+  assert.equal(doc.head, repo.head);
+  assert.equal(doc.branch, 'feat/x');
+  assert.equal(doc.stampPath, null);
+  assert.deepEqual(doc.results.map((x) => [x.step, x.status]), [['summary', 'FAIL']]);
+});
+
 // Seat ruling 14:44 (a)-(d): the exit handler writes END only when START was logged and END was not; it never throws; a normal end and a
 // signal stop give one END row each. Breaks: write END with no START; write a second END after reportRunEnd; let a log error throw.
 test('RL-END: endRowAtExit writes one ERROR row only after START and before any END, and never throws', () => {

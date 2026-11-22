@@ -86,6 +86,13 @@ test('W7: no ready PR by the --max time ends the wait with TIMEOUT and exit 3', 
   assert.ok(r.polls >= 3 && r.polls <= 5, `polls ${r.polls}`);
 });
 
+test('W7b: the last sleep is cut to the time left, so the wait never runs past --max (100 s max, 30 s interval: 30, 30, 30, 10)', async () => {
+  const r = await go([{ status: 1, stdout: json({ reasons: ['check "route" is in_progress/null'] }) }], { maxMs: 100_000 });
+  assert.equal(r.code, 3);
+  assert.deepEqual(r.sleeps, [30_000, 30_000, 30_000, 10_000]);
+  assert.equal(r.sleeps.reduce((a, b) => a + b, 0), 100_000, 'the total wait is the --max time, not one interval more');
+});
+
 test('W8: the command line needs a PR number: none, text, or zero gives a usage error and exit 2', () => {
   for (const args of [[], ['abc'], ['0'], ['671', '--interval', 'x']]) {
     const r = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
