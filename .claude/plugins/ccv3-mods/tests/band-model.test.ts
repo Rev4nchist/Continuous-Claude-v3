@@ -351,7 +351,8 @@ describe('band width', () => {
 
   test('L9 below 40 columns only the chip, the Q n sign of a fresh ask and the goal are drawn, on one line', () => {
     for (const width of [20, 30, 39]) {
-      const lines = bandLines(full(), width)
+      // PR D: the sign is BandState.openAsks (what openAsksOf counted for the fresh ask in full()), not a recount of the brief.
+      const lines = bandLines({ ...full(), openAsks: 1 }, width)
       expect(lines.length).toBe(1)
       const got = text(lines[0])
       expect(got).toContain('WORKING')

@@ -354,35 +354,66 @@ export type ChipState = {
   /** A tool call was answered with `deny`. A red gate, a peer holding the lane and an `isError` result are not wired (see the file header). */
   blocked: boolean
   now: number
-  /** When the session last did anything (a prompt, a turn start or end, a main-loop tool call). Keeps an ask fresh. */
-  activeAt?: number | null
   /** The agents the pane lists (subagents and workflow agents). One with status running keeps the chip working with no turn and no tool. */
   agentRuns?: { status: string }[]
-  /** An AskUserQuestion step is in flight: a dialog waits for Dave, so the chip reads waiting whatever else runs. */
-  dialogOpen?: boolean
+  /**
+   * What `openAsksOf` counted: Dave has this many real questions open (an open AskUserQuestion dialog, by its questions, plus fresh brief_set asks).
+   * Above 0 the chip reads waiting-on-dave (or blocked). The band draws the same number as its sign, so chip and count cannot disagree.
+   * This file never recounts from the brief: a stored `source: parsed` ask is not a question.
+   */
+  openAsks: number
   /** The background tasks the last main-agent Stop listed (id and type), and when each id was first seen. Absent: no wait (an old engine). */
   bgTasks?: readonly WaitTask[]
   bgSeen?: Readonly<Record<string, number>>
 }
 
+/** A stored ask the parser guessed from a closing line. It is not a question to Dave (PR D). An ask with no source (an old state file) is not parsed, so it is never hidden. */
+const isParsed = (one: AskItem): boolean => one.source === 'parsed'
+
+/** How many questions an AskUserQuestion step holds: its recorded `questions`, 1 to 4. A step with no field, or a value that is no number, reads as 1. */
+const stepQuestions = (step: { questions?: unknown }): number =>
+  typeof step.questions === 'number' && Number.isFinite(step.questions) ? Math.min(4, Math.max(1, Math.trunc(step.questions))) : 1
+
 /**
- * PRD 5.2, glossary "Session chip" (2026-11-16). Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (an AskUserQuestion open, or a fresh open ask
- * that is not a parsed guess: it wins over running work), then waiting-on-work (fix 5: the main agent stopped while a counted background task still runs, and no turn and no tool
- * call run, and no agent run running), then waiting-on-dave for a fresh open PARSED ask, then working (a tool, the main turn or a running agent run), then done (every task and plan step done AND proven,
- * and at least one exists), else idle. A parsed ask is the parser's reading of a closing line ("Waiting on CI, then you get the Land question"): it can name a wait that is not on Dave.
- * An ask with no source (an old state file) is never treated as parsed, so it is never hidden.
+ * The one number of questions Dave has open (PR D, design 2026-11-18 section 6). The chip (`deriveChip`) and the band's sign read this value, so they cannot disagree.
+ * Two parts:
+ *   1. the open AskUserQuestion steps, each counted by its questions. The mod's own `$.ui.ask` dialogs (pr_checkpoint, the Land question, the paid round) arrive as
+ *      AskUserQuestion tool calls (tests/pr-checkpoint.test.ts:383-389), so they count here with no extra code. An open dialog always counts.
+ *   2. the open `brief_set` asks, fresh only: `isAskStale` zeroes this part and no other.
+ * A stored `source: parsed` ask is in neither part. `except` is the call that is writing (brief_set is itself a running step while its handler answers).
+ */
+export const openAsksOf = (input: {
+  steps: readonly { id: string; tool: string; questions?: number }[]
+  brief: Brief | null
+  now: number
+  activeAt?: number | null
+  except?: string
+}): number => {
+  const dialogs = input.steps.filter(one => one.id !== input.except && one.tool === 'AskUserQuestion').reduce((sum, one) => sum + stepQuestions(one), 0)
+  const { brief } = input
+  const fresh = brief !== null && !isAskStale(brief, input.now, input.activeAt) ? brief.ask.filter(one => isOpen(one) && !isParsed(one)).length : 0
+  return dialogs + fresh
+}
+
+/**
+ * PRD 5.2, glossary "Session chip" (2026-11-16). Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (`openAsks` above 0: it wins over running work),
+ * then waiting-on-work (fix 5: the main agent stopped while a counted background task still runs, and no turn and no tool call run, and no agent run running), then working (a tool,
+ * the main turn or a running agent run), then done (every task and plan step done AND proven, and at least one exists), else idle.
+ *
+ * Only real asks make the chip wait: an open AskUserQuestion dialog and a fresh brief_set ask (`openAsksOf`). A free-text `## Next steps` line is never one.
+ * This reverses the old rule "a hidden question is worse than a false one" (seat ruling 2026-11-18, status band PR D): in the 72 hours before 2026-11-18 the parser
+ * guessed an ask wrong 10 times of 17 (59 percent), and Dave saw a chip WAITING FOR YOU on a session that waited for nobody. The accepted cost: a real question that
+ * the model writes as plain text only is not shown. The cure is the model's: `brief_set` with `ask`, or an AskUserQuestion dialog (the `brief_set` tool text says so).
  */
 export const deriveChip = (state: ChipState): Chip => {
   const { brief } = state
   const plan = brief?.plan ?? []
   // A blocked plan step counts only when the plan is the source (no task).
   if (state.blocked || (state.tasks.length === 0 && plan.some(one => one.status === 'blocked'))) return 'blocked'
-  const fresh = brief !== null && !isAskStale(brief, state.now, state.activeAt) ? brief.ask.filter(isOpen) : []
-  if (state.dialogOpen === true || fresh.some(one => one.source !== 'parsed')) return 'waiting-on-dave'
+  if (state.openAsks > 0) return 'waiting-on-dave'
   // A running helper keeps the chip at working (the same list as before fix 5): a shell and a subagent with no ask must not read as waiting.
   const helperRuns = state.agentRuns?.some(one => one.status === 'running') === true
   if (!state.turnActive && !state.toolRunning && !helperRuns && countWaitTasks(state.bgTasks ?? [], state.bgSeen ?? {}, state.now) > 0) return 'waiting-on-work'
-  if (fresh.length > 0) return 'waiting-on-dave'
   if (state.toolRunning || state.turnActive || state.agentRuns?.some(one => one.status === 'running')) return 'working'
   const items = weighedOf(state.tasks, plan)
   return items.length > 0 && items.every(one => one.done && isProven(brief, one)) ? 'done' : 'idle'
@@ -391,7 +422,7 @@ export const deriveChip = (state: ChipState): Chip => {
 /** One line for the model after a good call: what the brief holds now. */
 export const briefSummary = (brief: Brief, tasks: OsTask[]): string => {
   const items = weighedOf(tasks, brief.plan)
-  const open = brief.ask.filter(isOpen).length
+  const open = brief.ask.filter(one => isOpen(one) && !isParsed(one)).length
   const parts = [
     brief.goal ? `goal: ${brief.goal}` : 'goal not set',
     brief.stopAt ? `stop-at: ${brief.stopAt}` : null,
@@ -607,7 +638,8 @@ export const mergeParsed = (brief: Brief | null, parsed: ParsedTurnEnd, now: num
       changed = true
     }
   }
-  if (parsed.ask && base.sources.ask !== 'brief_set') {
+  // A parsed ask list never replaces a brief_set ask, even when `sources.ask` is missing (an old state file): the counted asks stay.
+  if (parsed.ask && base.sources.ask !== 'brief_set' && base.ask.every(isParsed)) {
     // An ask with the same kind and text as an answered one keeps answered and answeredAt: a repeated block does not re-open it.
     const before = new Map(base.ask.map(one => [askKey(one), one]))
     const carried = parsed.ask.map(one => {
@@ -654,18 +686,18 @@ const pickOf = (q: TapQuestion, answer: string): string => {
  * `Dave (tap)` row. Two scripts write these offers, and the model passes the spec on word for word:
  *   - scripts/github/ship-ask.mjs: header Push, Commit, Open PR, Land or Paid round (the pr-loop paid round, ship steps, Land).
  *   - scripts/github/lib/checkpoint-ledger.mjs (pr_checkpoint ledger mode): header `PR #<n>`.
- * Both markers must hold: the header, and a first option that ends ` (Recommended)` (every spec of both scripts puts the
- * recommended option first). A model question with only one marker is Dave's tap and is stored. The match is on the result's
+ * Both markers must hold: the header, and an option that ends ` (Recommended)` (on any option: the pr_checkpoint ledger question has a $0 row
+ * first and marks a later one). A model question with only one marker is Dave's tap and is stored. The match is on the result's
  * echo of the question, so the model-written call input is never read. A new offer header must be added here.
  */
 const MOD_ASK_HEADERS = new Set(['Push', 'Commit', 'Open PR', 'Land', 'Paid round'])
 const MOD_ASK_PR_HEADER = /^PR #\d+$/
-const MOD_ASK_FIRST_LABEL = / \(Recommended\)$/
+const MOD_ASK_MARK = / \(Recommended\)$/
 
 const isModAsk = (q: TapQuestion): boolean => {
   const header = typeof q.header === 'string' ? q.header : ''
-  const first = labelsOf(q.options)[0] ?? ''
-  return (MOD_ASK_HEADERS.has(header) || MOD_ASK_PR_HEADER.test(header)) && MOD_ASK_FIRST_LABEL.test(first)
+  // Any option may carry the mark: the pr_checkpoint ledger question puts a $0 row first and marks a later row (CodeRabbit CLI m3 of PR 649).
+  return (MOD_ASK_HEADERS.has(header) || MOD_ASK_PR_HEADER.test(header)) && labelsOf(q.options).some(label => MOD_ASK_MARK.test(label))
 }
 
 /**

@@ -56,7 +56,7 @@
   "artifacts": [
     {
       "id": "agentic-os-lane-board",
-      "url": "https://claude.ai/artifact/5GSyWPUKLBqS83WdUkqQG1",
+      "url": "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid",
       "source": "scripts/coordination/render-board.mjs",
       "render": "node scripts/coordination/render-board.mjs",
       "publish_from": "lane-board.html",
@@ -68,7 +68,14 @@
       "session": "*",
       "refresh": "at-handoff",
       "content_model": "generated",
-      "last_published": "2026-11-17",
+      "last_published": "2026-11-21",
+      "FIRST_ACCOUNT_2026-11-21": {
+        "found": "2026-11-21 09:20 CST by puffin #68dc933b: the sessions are on Dave's first claude.ai account again. An Artifact read of the second account's page gave 'artifact not found'. A read of the first account's page worked: owned by you, stored capabilities {db, sample}, meta stamp board=continuous-claude.",
+        "decided_by": "Dave: on 2026-11-17 a manual switch back by a 1-file PR, no card; on 2026-11-21 his AskUserQuestion tap 'Switch it back now'.",
+        "what_was_done": "The url is the first account's page again. Nothing was published to the second account's page and nothing was deleted.",
+        "second_account_url_note": "https://claude.ai/artifact/5GSyWPUKLBqS83WdUkqQG1 belongs to the second account. It is not readable from the first account. Do not publish to it, delete it or pass force. Its kanban db was empty on 2026-11-21 07:31 CST (ArtifactData: no kanban/board document, no cards), so no card and no order is lost.",
+        "kanban_note": "The first account's page keeps its saved column order of 2026-11-08 (99 lanes, synced, not pending). A lane that is not in that order gets the default column."
+      },
       "NEW_ACCOUNT_2026-11-17": {
         "found": "2026-11-17 09:34 CST by the RE program seat #7e7549ed: Dave changed claude.ai account on the night of 2026-11-16 and stays on it for days. An Artifact read of the old page gave 'artifact not found'; the Artifact list of this account did not hold it. Every Stop gate publish request failed.",
         "decided_by": "Dave, AskUserQuestion taps in the seat session 2026-11-17 09:3x CST: make a new page on this account; no kanban change on the old page is missing from the lane database.",

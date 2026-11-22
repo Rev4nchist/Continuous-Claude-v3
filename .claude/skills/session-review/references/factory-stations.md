@@ -30,7 +30,7 @@ Read `hook_ms_by_name` for overhead; if keys are event names, it shows event tim
 | Failure class | Edit target |
 |---|---|
 | Repeated steers on one topic | that area's skill or on-demand rule. Not CLAUDE.md (about 346 characters of headroom at build time). |
-| Environment flailing | the `project-registry` entry, or the project's AGENTS.md "Testing" section |
+| Environment flailing | the `project-registry` entry, or the project's testing rules (AGENTS.md "Testing", or docs/testing-standard.md) |
 | Done not proven | the `code-review` skill, or a Stop hook candidate |
 | Block followed by a workaround | the hook's deny message in `.claude/hooks/src/<hook>.ts` |
 | Hook false fire | the `rule-router` manifest and `~/.claude/logs/rule-router-false-fires.jsonl` |

@@ -24,7 +24,7 @@ The Pocock tdd workflow (vendored, v1.3.1) owns this name. This page adds the CC
    Record RED (command, failing output, commit) and GREEN (command, passing output, head) for the Evidence block in
    [pr-and-commit-style.md](../../rules-ondemand/pr-and-commit-style.md). A refactor records BEFORE in place of RED.
    A subagent never commits, so the main session supplies the RED commit. For a pure addition, RED can be the base commit.
-   Proof follows AGENTS.md "Testing": an end-to-end check first, with its output saved.
+   Proof follows the project's testing rules (AGENTS.md "Testing", or docs/testing-standard.md): an end-to-end check first, with its output saved.
 9. Last step before done: read [prove-it-works](../_vendor/pstack/skills/principle-prove-it-works/SKILL.md) and apply it.
    Keep the artifact in `.claude/cache/e2e/`. Never commit it.
 

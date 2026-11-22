@@ -57,7 +57,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, unlinkSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -4007,15 +4007,21 @@ test('Q1d: a gateFailed row is never a finished run and never earns a partial ca
   assert.deepEqual(PRE.partialEarnedFor(repo.dir, [partial], repo.head), { earned: 0, unreviewed: 0 });
 });
 
-test('Q1e: markGateFailed marks only the row of this run, by its time and head', () => {
+test('Q1e: markGateFailed marks only the row of this run: it needs BOTH the head and the time', () => {
   const f = crFixture();
-  const rows = [okRow('1', MORNING), okRow('2', '2026-10-27T16:00:00.000Z')];
-  seedCounter(f, rows);
+  const LATER = '2026-10-27T16:00:00.000Z';
+  // Rows that share a head (rows 0 and 1) and rows that share a time (rows 0 and 2): matching on one field marks the wrong row.
+  const rows = [okRow('1', MORNING), okRow('1', LATER), okRow('2', MORNING)];
   const paths = crPaths(f.root, 'feat/x');
-  PRE.markGateFailed(paths.counter, { head: hexOf('2'), at: '2026-10-27T16:00:00.000Z' });
-  const after = JSON.parse(readFileSync(paths.counter, 'utf8')).runs;
-  assert.deepEqual(after.map((r) => r.gateFailed === true), [false, true]);
+  const marked = (head, at) => {
+    seedCounter(f, rows);
+    PRE.markGateFailed(paths.counter, { head: hexOf(head), at });
+    return JSON.parse(readFileSync(paths.counter, 'utf8')).runs.map((r) => r.gateFailed === true);
+  };
+  assert.deepEqual(marked('1', LATER), [false, true, false], 'same head, other time: only the row with this time');
+  assert.deepEqual(marked('2', MORNING), [false, false, true], 'same time, other head: only the row with this head');
   assert.equal(PRE.markGateFailed(paths.counter, { head: hexOf('9'), at: MORNING }), false, 'a row that is not there');
+  assert.equal(PRE.markGateFailed(paths.counter, { head: hexOf('2'), at: LATER }), false, 'a head and a time that no single row has');
 });
 
 // ---------- card prflow-prepr-speed: the review runs beside the test gates ----------
@@ -4089,9 +4095,12 @@ test('file stdio: a missing binary is still ENOENT and leaves no open handle tha
 test('F24: the review call asks for file stdio and a running file named with the pid of this run; the usage call keeps pipes', async () => {
   const f = crFixture();
   const seen = [];
-  const runner = (o) => { seen.push(o); return f.runner(o); };
+  const made = [];
+  // The real runner opens both files before the child starts: make them here, so "removed" is a fact and not the default of a runner that made none.
+  const runner = (o) => { seen.push(o); if (o.args[0] === 'review') { writeFileSync(o.streamTo, ''); writeFileSync(`${o.streamTo}.err`, ''); made.push(o.streamTo, `${o.streamTo}.err`); } return f.runner(o); };
   const r = await runCodeRabbit(crOpts(f, { runner }));
   assert.equal(r.status, 'PASS', r.detail);
+  assert.equal(made.length, 2, 'the runner made the running file and its .err file');
   const usage = seen.find((o) => o.args[0] === 'usage');
   const review = seen.find((o) => o.args[0] === 'review');
   assert.equal(usage.fileStdio, undefined);
@@ -4153,13 +4162,18 @@ test('F2: the review child is running before the first test gate starts (real ru
 test('F3: git:stable is the last step and comes after a slow review; the review sits after the gates in the results', async () => {
   const repo = makeRepo();
   const events = [];
-  const run = await prePr(repo, { crRunner: slowReview(events, 250) });
+  // The git spy records WHEN git:stable runs (its `diff --cached` read), not only where its result sits in the list.
+  const real = makeGit(repo.dir);
+  // git:clean (the start) reads `diff --cached` too, so only a read after its `ls-files` counts.
+  let cleanDone = false;
+  const git = (args) => { if (args[0] === 'ls-files') cleanDone = true; if (cleanDone && args.join(' ') === 'diff --cached --name-only') events.push('stable-check'); return real(args); };
+  const run = await prePr(repo, { git, crRunner: slowReview(events, 250) });
   assert.equal(run.result.ok, true, run.result.lines.join('\n'));
   const steps = run.result.results.map((r) => r.step);
   assert.equal(steps.at(-1), 'git:stable');
   assert.ok(steps.indexOf('coderabbit') > steps.indexOf('gate:context-budget'), steps.join(' '));
   assert.ok(steps.indexOf('coderabbit') < steps.indexOf('git:stable'));
-  assert.deepEqual(events, ['review-start', 'review-end']);
+  assert.deepEqual(events, ['review-start', 'review-end', 'stable-check'], 'git:stable is read after the review ended, once');
 });
 
 test('F4 and Q1f: a gate FAILs while the review runs: the line is printed at once, the review ends on its own and its output is saved, no stamp, only this run\'s row is marked gateFailed', async () => {
@@ -4231,13 +4245,14 @@ test('PH: the phase becomes cr after the last gate while the review runs; no rev
 //   M6   a lock error in grant mode lets the run go on with no limit             (catch and go on in every mode)
 //   WL   --wait-lock waits when it is not asked for, or does not wait when it is  (always acquire once)
 const fakeLock = (over = {}) => {
-  const calls = { acquire: [], wait: [], phase: [], log: [] };
+  const calls = { acquire: [], wait: [], phase: [], log: [], heavy: [] };
   const lock = {
     calls,
     mode: () => 'grant',
     acquire: async (o) => { calls.acquire.push(o); return { granted: true, mode: 'grant', file: 'pre-pr-1-2.lock', freeGB: 8.2, loadPct: 14, lines: ['GRANTED pre-pr'] }; },
     waitForGrant: async (o) => { calls.wait.push(o); return { granted: true, mode: 'grant', file: 'pre-pr-1-2.lock', freeGB: 8.2, loadPct: 14, lines: ['GRANTED pre-pr'] }; },
     setPhase: (o) => { calls.phase.push(o); return { changed: true }; },
+    setHeavy: (o) => { calls.heavy.push(o); return { changed: true }; },
     logRun: (row) => calls.log.push(row),
     ...over,
   };
@@ -4400,11 +4415,12 @@ test('RL-ISO2: a spawned exit-3 run writes its START row to the temp store of th
   const runs = path.join(process.env.RUN_LOCK_DIR, 'runs.jsonl');
   assert.ok(existsSync(runs), 'the child wrote runs.jsonl in the temp store');
   const rows = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  assert.ok(rows.some((row) => row.event === 'start'), 'a START row is in the temp store');
   // Seat ruling 14:44 (e): the exit-3 run also has exactly one END row, result ERROR with the exit code. Break: drop the END write of the exit
-  // handler (endRowAtExit), and the run leaves a START row with no END row.
-  const childPid = rows.filter((row) => row.event === 'start').at(-1).pid; // the store is shared by this file: X1 may have written rows before
-  const mine = rows.filter((row) => row.pid === childPid);
+  // handler (endRowAtExit), and the run leaves a START row with no END row. Break: drop the START write, and an older run's START row in this
+  // shared store must not stand in for it: only the rows with the pid of THIS child count (spawnSync returns it).
+  const mine = rows.filter((row) => row.pid === r.pid);
+  assert.ok(Number.isInteger(r.pid) && r.pid > 0, 'the spawn result has the child pid');
+  assert.ok(mine.some((row) => row.event === 'start'), 'a START row of this child is in the temp store');
   assert.equal(mine.filter((row) => row.event === 'start').length, 1, 'one START row');
   const ends = mine.filter((row) => row.event === 'end');
   assert.equal(ends.length, 1, 'one END row for the exit-3 run');
@@ -4465,4 +4481,154 @@ test('BI-F7b: no manifest, no external field, a bad external or bad JSON add not
   }
   const back = PRE.buildInputExternals(writeManifest(JSON.stringify({ version: 1, external: { 'a\\b.mjs': 'x' } })));
   assert.deepEqual(back, ['a/b.mjs'], 'a backslash key is read as a posix path');
+});
+
+// ---------- card prflow-prepr-speed follow-up (CodeRabbit CLI run 1) ----------
+// How it can fail, one test each, with the source change that makes it fail:
+//   M3  a change read that failed counts the run as light                                          (heavy only when the read has no paths)
+//   D   a light grant stays light when the run's own change read finds the hooks-vitest gate       (no setHeavy call after the START read)
+//   E   serial mode keeps phase test during the review, or sets cr when no review starts           (no phase call; a phase call on every end of the step)
+//   I   a failed second open leaks the first descriptor                                            (both opens inside one push call)
+//   J   a review that never started leaves its running file and its .err file                      (no remove on the not-started or throw path)
+//   K   the END row of a normal run measures from before the wait, the error END row from START    (startedAt of main in reportRunEnd)
+//   C   a late gateFailed mark is erased by a second run that wrote its old copy of the counter    (writes of a copy read at the start of the step)
+
+test('M3: a change read that fails counts the run as heavy, not light', () => {
+  const repo = makeRepo();
+  const real = makeGit(repo.dir);
+  assert.equal(PRE.runFacts(repo.dir, 'main', real).heavy, false, 'control: a docs-only change is light');
+  const failing = (args) => (args[0] === 'diff' ? { status: 128, stdout: '', stderr: 'fatal: boom' } : real(args));
+  assert.equal(PRE.runFacts(repo.dir, 'main', failing).heavy, true);
+});
+
+test('D: a light grant whose own change read says heavy turns the lock heavy and prints a NOTE; no second limit check', async () => {
+  const lock = fakeLock();
+  let n = 0;
+  const r = lockRun(lock, { factsOf: () => ({ head: 'abcd1234', heavy: n++ > 0 }) }); // the grant reads light, the START read finds the hooks-vitest gate
+  await r.done;
+  assert.deepEqual(lock.calls.heavy, [{ file: 'pre-pr-1-2.lock', pid: 4242 }]);
+  assert.ok(r.said.some((l) => /^NOTE/.test(l) && /heavy/.test(l)), r.said.join('\n'));
+  assert.equal(lock.calls.acquire.length, 1, 'the lock is not asked again: it turns heavy and does not refuse');
+  assert.deepEqual(r.exits, []);
+  const same = fakeLock();
+  await lockRun(same, { factsOf: () => ({ head: 'abcd1234', heavy: true }) }).done;
+  await lockRun(same, { factsOf: () => ({ head: 'abcd1234', heavy: false }) }).done;
+  assert.deepEqual(same.calls.heavy, [], 'granted heavy, or light and still light: no change');
+  const broken = fakeLock({ setHeavy: () => { throw new Error('EBUSY: resource busy'); } });
+  let m = 0;
+  const b = lockRun(broken, { factsOf: () => ({ head: 'abcd1234', heavy: m++ > 0 }) });
+  assert.equal((await b.done).file, 'pre-pr-1-2.lock', 'a lock write that fails does not stop the run');
+  assert.ok(b.said.some((l) => /could not set the run lock to heavy \(EBUSY/.test(l)), b.said.join('\n'));
+  assert.deepEqual(b.exits, []);
+});
+
+test('E: PRE_PR_SERIAL_CR=1 sets phase cr when the review really starts, and not on a skip, a reuse or a failed gate', async () => {
+  const env = { PRE_PR_SERIAL_CR: '1' };
+  const events = [];
+  const repo = makeRepo();
+  const exec = () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
+  await prePr(repo, { env, onPhase: (p) => events.push(`phase ${p}`), exec, crRunner: slowReview(events, 150) });
+  assert.deepEqual(events, ['gate', 'review-start', 'phase cr', 'review-end'], 'the phase turns cr as the review starts');
+  const reuse = [];
+  await prePr(repo, { env, onPhase: (p) => reuse.push(p) });
+  assert.deepEqual(reuse, [], 'a reused saved output starts no review');
+  const none = [];
+  await prePr(makeRepo(), { env, skipCr: true, onPhase: (p) => none.push(p) });
+  await prePr(makeRepo(), { env, onPhase: (p) => none.push(p), exec: gateFail() });
+  assert.deepEqual(none, [], 'a skip and an earlier failed step start no review');
+  const lines = [];
+  await prePr(makeRepo(), { env, onPhase: () => { throw new Error('EBUSY: resource busy'); }, log: (l) => lines.push(l), crRunner: slowReview([], 50) });
+  assert.ok(lines.some((l) => /could not set the run lock phase \(EBUSY/.test(l)), 'a phase write that fails does not stop the review');
+});
+
+test('I: a second open that fails closes the first descriptor', () => {
+  const streamTo = tmpFile('leak.txt');
+  mkdirSync(`${streamTo}.err`); // a folder cannot be opened for writing: the second open fails
+  const probeFile = tmpFile('probe.txt');
+  const probe = () => { const fd = openSync(probeFile, 'w'); closeSync(fd); return fd; }; // the lowest free descriptor number
+  const before = probe();
+  const pending = defaultCrRunner({ cwd: os.tmpdir(), args: REVIEW, timeoutMs: 20_000, streamTo, fileStdio: true }, { command: process.execPath, prefixArgs: ['-e', ''] });
+  const after = probe(); // the opens run inside the call: a leaked descriptor shifts the lowest free number
+  assert.equal(after, before, 'no descriptor of the failed open stays open');
+  return pending.then((r) => assert.ok(r.error, 'the runner reports the failed open'));
+});
+
+test('J: a review that did not start (a not-started result, a throw, a rejected promise) leaves no running file and no .err file', async () => {
+  const attempt = async (act) => {
+    const f = crFixture();
+    const runner = (o) => {
+      if (o.args[0] === 'usage') return f.runner(o);
+      writeFileSync(o.streamTo, ''); // the real runner opens both files before the child starts
+      writeFileSync(`${o.streamTo}.err`, '');
+      return act();
+    };
+    const settled = await runCodeRabbit(crOpts(f, { runner })).then((r) => ({ r }), (err) => ({ err }));
+    const left = readdirSync(path.join(f.root, '.claude', 'cache', 'e2e')).filter((n) => /running/.test(n) || /\.err$/.test(n));
+    return { ...settled, left };
+  };
+  const missing = await attempt(() => ({ status: null, error: 'spawn cr ENOENT', errorCode: 'ENOENT', stdout: '', stderr: '' }));
+  assert.equal(missing.r.skipReason, 'cli-missing');
+  assert.deepEqual(missing.left, [], 'not started: no leftover files');
+  const thrown = await attempt(() => { throw new Error('boom'); });
+  assert.match(String(thrown.err?.message), /boom/);
+  assert.deepEqual(thrown.left, [], 'a throw: no leftover files');
+  const rejected = await attempt(() => Promise.reject(new Error('boom2')));
+  assert.match(String(rejected.err?.message), /boom2/);
+  assert.deepEqual(rejected.left, [], 'a rejected promise: no leftover files');
+});
+
+test('K: the END row of a normal run and of an error exit both measure from the START time of the run', () => {
+  const rows = [];
+  const lock = { logRun: (row) => rows.push(row) };
+  const started = { pid: 51, head: 'abcd1234', at: 10_000 };
+  // main() read its own clock 8 minutes before START (the wait for the lock came between): that time must not be used when START is known.
+  const beforeWait = started.at - 8 * 60_000;
+  const now = started.at + 3 * 60_000;
+  PRE.reportRunEnd({ pid: 51, head: 'abcd1234', run: { ok: true, results: [] }, startedAt: beforeWait, now, lock, say: () => {}, state: { started, ended: false } });
+  PRE.endRowAtExit(3, { state: { started, ended: false }, lock, now });
+  assert.deepEqual(rows.map((r) => [r.event, r.minutes]), [['end', 3], ['end', 3]]);
+});
+
+test('C: a review that ends before a failing gate gets its row marked gateFailed, and a second run that read the counter earlier does not erase the mark', async () => {
+  const repo = makeRepo({ files: { 'scripts/a.mjs': 'export const a = 1;\n' } });
+  const paths = crPaths(repo.dir, 'feat/x');
+  const rowsNow = () => (existsSync(paths.counter) ? JSON.parse(readFileSync(paths.counter, 'utf8')).runs : []);
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const secondRunner = async (o) => { if (o.args[0] === 'usage') { await held; return { status: 0, stdout: USAGE_OK, stderr: '' }; } return { status: 0, stdout: NDJSON_OK, stderr: '' }; };
+  let second;
+  const exec = () => {
+    const over = rowsNow().at(-1)?.outcome === 'finished' && !existsSync(paths.lock); // the review of this run ended and its lock is gone
+    if (!over) return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' };
+    // A second run starts on the same branch: it takes the counter lock and reads the counter, which has no mark yet. It waits in its usage check.
+    second ??= runCodeRabbit({ root: repo.dir, branch: 'feat/x', head: hexOf('b'), base: 'main', now: new Date(Date.now() + 5000), runner: secondRunner, ledgerPath: tempLedger(), crStore: null, config: CONFIG, changedPaths: ['scripts/b.mjs'] });
+    return { status: 1, stdout: 'bad\n# fail 1\n', stderr: '' };
+  };
+  const run = await prePr(repo, { exec, bodyText: featureBody(repo.head) });
+  assert.ok(second, 'the second run started after the review of this run ended');
+  assert.equal(run.result.ok, false);
+  assert.equal(crStep(run).status, 'PASS', 'the review ended before the gate failed');
+  assert.ok(existsSync(paths.lock), 'this run did not remove the counter lock of the second run');
+  assert.deepEqual(rowsNow().map((r) => r.gateFailed === true), [true], 'the row of this run is marked');
+  release();
+  await second;
+  assert.deepEqual(rowsNow().map((r) => r.gateFailed === true), [true, false], 'the second run wrote its row and kept the mark');
+  assert.equal(existsSync(paths.lock), false, 'the second run freed its lock');
+});
+
+test('C-lock: the late gateFailed mark takes the counter lock: a lock file with no live holder is replaced, and no lock file is left after the mark', async () => {
+  const repo = makeRepo({ files: { 'scripts/a.mjs': 'export const a = 1;\n' } });
+  const paths = crPaths(repo.dir, 'feat/x');
+  const rowsNow = () => (existsSync(paths.counter) ? JSON.parse(readFileSync(paths.counter, 'utf8')).runs : []);
+  let planted = false;
+  const exec = () => {
+    if (!(rowsNow().at(-1)?.outcome === 'finished' && !existsSync(paths.lock))) return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' };
+    if (!planted) { planted = true; writeFileSync(paths.lock, JSON.stringify({ pid: 'none', head: 'x', at: new Date().toISOString() })); } // a lock nobody holds: no pid
+    return { status: 1, stdout: 'bad\n# fail 1\n', stderr: '' };
+  };
+  const run = await prePr(repo, { exec, bodyText: featureBody(repo.head) });
+  assert.ok(planted, 'a gate failed after the review ended');
+  assert.equal(run.result.ok, false);
+  assert.deepEqual(rowsNow().map((r) => r.gateFailed === true), [true]);
+  assert.equal(existsSync(paths.lock), false, 'the mark replaced the unheld lock file and freed its own');
 });

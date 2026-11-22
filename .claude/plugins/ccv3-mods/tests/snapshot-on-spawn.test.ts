@@ -17,7 +17,8 @@ import type { Engine } from 'claude-code/testing'
 // F4  RED   the trailing write is lost: the `$.clock.after` arm in the state.set hook is removed or its delay is wrong
 // F5  (snapshot-port.test.ts, 'U5 / F5') no listener for snapshotWanted: the real agent-ledger hook runs alone on a stub `$`; the answer is unchanged, nothing throws, no file is written
 // F6a GUARD (weak) a refused state write reaches the spawn. The engine skips a hook that throws and ignored a `deny` here, so the bump itself cannot be made to fail: only the spawn result, the count and the ledger are checked
-// F6b GUARD a timer that cannot be armed reaches the spawn: the try/catch in the state.set hook and the one in requestSnapshot are both removed
+// F6b GUARD a timer that cannot be armed reaches the spawn: the try/catch in the state.set hook and the one in requestSnapshot are both removed.
+//         It keeps the answer of the second spawn (the one that requests the refused timer) and counts the refusals: the `$.clock.after` arm in the state.set hook is removed
 // F7  GUARD a spawn after the session end rewrites the final file: writeSnapshot's endedIds check is removed
 // F8  GUARD a headless run with no brief writes a file at a spawn: the state.set hook skips worthSnapshot
 // F8b RED   the same headless run WITH a brief writes none: the state.set hook does not write (the control of F8)
@@ -28,6 +29,10 @@ import type { Engine } from 'claude-code/testing'
 // F13 GUARD the bump runs before the spec update: the snapshot of a spawn then misses the agent file's model and effort (agent-ledger order)
 // F14 RED   the spawn waits for the snapshot file: `void` is dropped in agent-ledger (the first spawn of a window then waits for the write)
 // F15 RED   a second session in the same module starts with the first one's throttle: session.start does not reset `wishes`
+// F17 RED   a resumed subagent turn waits for the snapshot file: `void` is dropped at the requestSnapshot call in the subagent turn.start branch
+// F18 RED   a wish the writer refuses uses the throttle window: the state.set hook calls `decide` before `worthSnapshot`
+// F19 RED   a trailing write lands in the next session's file: the trailing write does not compare the session that armed it with the current one
+// F20 RED   a /clear without a new session.start keeps the old write time: session.end resets only `wishes.dueAt`, not the whole throttle
 // F16 GUARD the off switch writes at a spawn: the ledger's own isOff is removed. The isOff in the state.set hook is not reachable from a test: both callers check it first, and a bump from the test's `$` is refused (an atom of the plugin)
 
 const T0 = 1_000
@@ -46,6 +51,8 @@ type Seen = {
   failState: boolean
   /** The engine refuses a timer. */
   failAfter: boolean
+  /** How many timer requests the refusing hook saw. */
+  refusedTimers: number
   /** A state file write waits for this promise. */
   hold: Promise<void> | null
   /** The text of the agent file scout.md, or null for no file. */
@@ -53,7 +60,17 @@ type Seen = {
 }
 
 const world = (on: On, env: Record<string, string> = {}): Seen => {
-  const seen: Seen = { clock: mock.clock(on, { now: T0 }), writes: [], spawned: 0, sid: SESSION, failState: false, failAfter: false, hold: null, agentMd: null }
+  const seen: Seen = { clock: undefined as unknown as Seen['clock'], writes: [], spawned: 0, sid: SESSION, failState: false, failAfter: false, refusedTimers: 0, hold: null, agentMd: null }
+  // The refusing hook is registered before mock.clock: the clock holds the one unmatched clock.after and does not call next, so a hook after it is never reached.
+  // The trailing timer of a burst at one instant is exactly 2000 ms (the pulse uses every).
+  on('clock.after', { ms: 2000 } as never, ((_$: unknown, e: unknown, next: (e: unknown) => unknown) => {
+    if (seen.failAfter) {
+      seen.refusedTimers++
+      return { deny: 'timer refused' }
+    }
+    return next(e)
+  }) as never)
+  seen.clock = mock.clock(on, { now: T0 })
   mock.env(on, { USERPROFILE: 'C:/home', ...env })
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -79,11 +96,6 @@ const world = (on: On, env: Record<string, string> = {}): Seen => {
   on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: `a${++seen.spawned}` }))
   on('state.set', { plugin: 'ccv3-mods', key: 'snapshotWanted' } as never, ((_$: unknown, e: unknown, next: (e: unknown) => unknown) => {
     if (seen.failState) return { deny: 'state refused' }
-    return next(e)
-  }) as never)
-  // mock.clock holds the one unmatched clock.after; the trailing timer of a burst at one instant is exactly 2000 ms (the pulse uses every).
-  on('clock.after', { ms: 2000 } as never, ((_$: unknown, e: unknown, next: (e: unknown) => unknown) => {
-    if (seen.failAfter) return { deny: 'timer refused' }
     return next(e)
   }) as never)
   return seen
@@ -206,10 +218,12 @@ describe('snapshot at a helper start', () => {
     seen.failAfter = true
     await start($)
     const answer = await spawn($, seen)
-    // The first spawn writes; the second is inside the window and would arm the trailing timer.
-    await spawn($, seen)
+    // The first spawn writes; the second is inside the window and requests the trailing timer that the hook refuses.
+    const second = await spawn($, seen)
     await later(seen, 2_500)
     expect(JSON.stringify(answer)).toBe(ANSWER)
+    expect(JSON.stringify(second)).toBe(JSON.stringify({ model: 'claude-sonnet-5-5', agentId: 'a2' }))
+    expect(seen.refusedTimers).toBe(1)
     expect(seen.spawned).toBe(2)
     expect(files(seen).length).toBeGreaterThan(0)
     expect(await ledgerText($)).toContain('RUNNING · 2')
@@ -235,6 +249,23 @@ describe('snapshot at a helper start', () => {
     await seen.clock.settle()
     expect(outcome).toBe('answered')
     expect(runsOf(seen).map(run => run.id)).toEqual(['a1'])
+  })
+
+  test('F17 a resumed subagent turn is let through while the snapshot file write is still pending', async ($, on) => {
+    const seen = world(on)
+    await start($)
+    await spawn($, seen)
+    await finish($, 'a1')
+    await later(seen, 3_000)
+    let release = () => {}
+    seen.hold = new Promise<void>(resolve => {
+      release = resolve
+    })
+    // No real-time race: the hold stays shut until the turn is let through. A turn that waits for the file write never comes back and the test times out.
+    await resume($, 'a1')
+    release()
+    await seen.clock.settle()
+    expect(runsOf(seen)[0]?.status).toBe('running')
   })
 })
 
@@ -312,6 +343,44 @@ describe('snapshot at a helper start: when the writer must stay quiet', () => {
     await spawn($, seen)
     expect(files(seen).length).toBeGreaterThan(before)
     expect(runsOf(seen).map(run => run.id)).toContain('a2')
+  })
+
+  test('F18 a wish the writer refuses does not use the window: the first eligible wish writes at once', async ($, on) => {
+    const seen = world(on)
+    await start($, false)
+    const before = anyState(seen).length
+    await spawn($, seen)
+    expect(anyState(seen)).toHaveLength(before)
+    await $.tool.call({ tool: 'mcp__ccv3-mods__brief_set', goal: 'g' } as never)
+    const withBrief = files(seen).length
+    // Same instant: the refused wish above must not have left a write time behind.
+    await spawn($, seen)
+    expect(files(seen).length).toBeGreaterThan(withBrief)
+    expect(runsOf(seen).map(run => run.id)).toEqual(['a1', 'a2'])
+  })
+
+  test('F19 a trailing write does not land in the file of a session that is not the one that armed it', async ($, on) => {
+    const seen = world(on)
+    await start($)
+    await spawn($, seen)
+    await spawn($, seen)
+    // The id changes with no session.end seen by the throttle (the gap of /clear between the timer and the write): the armed trailing write is for s1.
+    seen.sid = 's2'
+    await later(seen, 2_500)
+    expect(filesOf(seen, 's2')).toHaveLength(0)
+  })
+
+  test('F20 after a /clear with no session.start, the first wish writes at once (the throttle is open)', async ($, on) => {
+    const seen = world(on)
+    await start($)
+    await spawn($, seen)
+    await later(seen, 800)
+    await end($, 'clear')
+    seen.sid = 's2'
+    expect(filesOf(seen, 's2')).toHaveLength(0)
+    // 800 ms after the last write of s1: the old window must not hold this one back.
+    await spawn($, seen)
+    expect(filesOf(seen, 's2').length).toBeGreaterThan(0)
   })
 
   test('F16 the off switch: a spawn writes nothing and its answer is unchanged', async ($, on) => {

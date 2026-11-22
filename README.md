@@ -92,7 +92,7 @@ CCv3 carries a full software lifecycle, and the harness enforces each stage. A s
 |---|---|---|
 | **1. Plan** | `/discovery-interview` turns an idea into a spec. `/plan-agent` writes the plan. `/premortem` attacks it. | `plan-mode-approval-gate` asks for your approval before the session leaves plan mode. |
 | **2. Build** | `/build` and `/tdd` chain the work. `kraken` implements across files. `spark` makes one small edit. | `file-claims` denies an edit that another live session holds. `package-install-guard` checks each install. `destructive-command-guard` asks before a wipe. |
-| **3. Verify** | An end-to-end check for each surface you changed, with its output saved. | "Done" needs that saved output ([AGENTS.md](AGENTS.md)). Static gates: context budget, hook contract, model policy and skills audit ([Testing and gates](docs/harness/gates.md)). |
+| **3. Verify** | An end-to-end check for each surface you changed, with its output saved. | "Done" needs that saved output ([docs/testing-standard.md](docs/testing-standard.md)). Static gates: context budget, hook contract, model policy and skills audit ([Testing and gates](docs/harness/gates.md)). |
 | **4. Review** | `/review` is an opt-in self-check and does not count toward READY. Pull-request bots review on request. | `review-status.mjs` prints READY only when CI is green, no review thread is open and the required bot reviews are in ([review and CI](docs/harness/review-and-ci.md)). |
 | **5. Land** | `land-pr.ps1` merges the reviewed head and syncs `~/.claude`. | Secret scans and CI ratchets run first. No tool merges without your yes. |
 | **6. Learn** | `/create_handoff` saves state for the next session. The self-improvement loop turns findings into proposals. | Each handoff records an outcome: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS` or `FAILED`. |
@@ -114,7 +114,7 @@ CCv3 carries a full software lifecycle, and the harness enforces each stage. A s
 |---|---|---|
 | **Safer sessions** | Guards run outside the model. In bypass mode, in a subagent or in CI, the destructive-command guard denies instead of asking | [destructive-command-guard.ts](.claude/hooks/src/destructive-command-guard.ts), [hook-contract-guard.mjs](scripts/hooks/hook-contract-guard.mjs) |
 | **Lean context** | A small core loads every time. Tool rules load on demand. | [context-budget-guard.mjs](scripts/rules/context-budget-guard.mjs), chart below |
-| **"Done" means proven** | Each change needs an end-to-end check with saved output | [AGENTS.md](AGENTS.md) |
+| **"Done" means proven** | Each change needs an end-to-end check with saved output | [docs/testing-standard.md](docs/testing-standard.md) |
 | **Reviewed changes** | Every pull request passes CI: semgrep, trivy, gitleaks and the ratchets. Greptile reviews only on request. CodeRabbit joins when a label asks for it. The current READY rule is in [Pull request review and CI](docs/harness/review-and-ci.md). | [review-status.mjs](scripts/github/review-status.mjs), [.greptile/config.json](.greptile/config.json), [.coderabbit.yaml](.coderabbit.yaml) |
 
 <p align="center">
@@ -232,7 +232,8 @@ the harness is tested on Windows only.
 | [Related work](docs/harness/related-work.md) | FourthBot, a separate repository that applies the same harness shape. |
 | [BOOTSTRAP.md](BOOTSTRAP.md) | Full machine setup, including the machine profile |
 | [CONTEXT.md](CONTEXT.md) | The glossary: every term the harness uses |
-| [AGENTS.md](AGENTS.md) | What "done" means per surface in this repo |
+| [docs/testing-standard.md](docs/testing-standard.md) | What "done" means per surface in this repo |
+| [AGENTS.md](AGENTS.md) | The charter of the T3 Code advisory seat (read-only). Claude Code does not load it |
 
 
 ## Credits and license

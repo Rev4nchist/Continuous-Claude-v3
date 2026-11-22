@@ -74,6 +74,8 @@ const GUARDED = [
     why: 'the dashboard active-claims view' },
   { file: 'opc/scripts/core/cleanup_sessions.py', minCorrect: 2,
     why: 'the session REAPER -- this one DELETEs, so a false "dead" is destructive' },
+  { file: 'scripts/coordination/t3-to-seat.mjs', minCorrect: 1,
+    why: 'Seat active/idle status check must use GREATEST(last_heartbeat, last_activity_at)' },
 ];
 
 /**

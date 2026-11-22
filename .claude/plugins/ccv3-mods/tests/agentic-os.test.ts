@@ -191,9 +191,10 @@ describe('agentic-os core band', () => {
       reason: 'end_turn',
     } as never)
     const got = await core($)
-    expect(got.line1).toContain('WAITING FOR YOU')
+    // PR D: the Next steps question is a guess, not an ask: the chip does not wait and no question counts. The goal line (a parsed guess) still draws.
+    expect(got.line1).not.toContain('WAITING FOR YOU')
     expect(got.line2).toMatch(/GOAL ship\S* .*\[guessed\]/)
-    expect(got.line2).toContain('QUESTIONS 1')
+    expect(got.line2).toContain('QUESTIONS 0')
     expect(got.all).not.toContain(SECRET)
     expect(got.texts.join('\n')).not.toContain('a'.repeat(40))
   })
@@ -1085,6 +1086,23 @@ describe('agentic-os session identity', () => {
     const got = await line1($)
     expect(got).toContain('renamed #test-ses')
     expect(got).not.toContain('trex')
+  })
+
+  // I8 a /rename with no session_title: the heartbeat hook rewrites the identity file inside next(e). The name must be read after next(e),
+  // or the band keeps the old name until the next prompt.
+  test('I8 a /rename that reaches only the identity file (written inside next(e)) shows on the same prompt', async ($, on) => {
+    const seen = gitWorld(on, { [FILE]: JSON.stringify({ uuid: 'test-session', name: 'before' }) })
+    on('classic.SessionStart', () => ({}))
+    on('classic.UserPromptSubmit', () => {
+      seen.files[FILE] = JSON.stringify({ uuid: 'test-session', name: 'after' })
+      return {}
+    })
+    await start($)
+    expect(await line1($)).toContain('before #test-ses')
+    await $.classic.UserPromptSubmit({ prompt: '/rename after' } as never)
+    const got = await line1($)
+    expect(got).toContain('after #test-ses')
+    expect(got).not.toContain('before')
   })
 
   test('I3 with no session_title the identity file names the session; a session_title beats the file', async ($, on) => {

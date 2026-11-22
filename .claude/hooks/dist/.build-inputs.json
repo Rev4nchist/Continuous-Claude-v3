@@ -37,7 +37,7 @@
     "lib/run-command.ts": "e224fc5c77934ea845fbce88c7c42379901f155670ddf33a8c0038b81ce746be",
     "lib/skill-validation-prompt.ts": "418211d39d35d9955b4e6eaea3bacc1b209f7b28038427623c76ee8d1494f386",
     "lib/spawn-hidden.ts": "d948c649f15a486a6da5e5807ed5e9cee18aac9bf4c04098080a371d19aa5610",
-    "lib/trace-boot.ts": "a21efbfbbda6e5dac3cf6440dc943753d73f35ffb87e76a6ae352a59226307c2",
+    "lib/trace-boot.ts": "b5a3c1d77c447fdc620eb3c25f2eff8d1dc9cd6b575fad70b93f34c97974a875",
     "lib/transcript-parser.ts": "561e3b405f7b9e245a68c7d7a0a33dc397a6b58d1297c00b34901d3a2c81a785",
     "linear-branch-context.ts": "2606d2b4673e20578e60bda30bd1f973fa0f53f0572ca9c1bca71fa103eb9346",
     "mcp-activity-tracker.ts": "0ca80468de7242925b84036eee99e62fc531a78f860d7050fee1ba896eb246ed",
@@ -193,8 +193,8 @@
     "smarter-everyday.ts": "74ff5c873c7736d6726e7f0f1a626a09ba0e518e512b0313d7f96dea86f8c262",
     "task-router.ts": "1c9cf6849ac178df8364e74030c010a2e1b7a2d274f9007b4bf951df4cb69de4",
     "telemetry-tracker.ts": "74ab1981af57bd95b2bd901174d18cba3b2db99e562cd9854197d0f53ddb5c3d",
-    "test-before-done.ts": "6e5c99d769dcb39b45beb4d93fa049f45ab9824f411dd016b16d8bb59661e103",
-    "test-run-tracker.ts": "eb3d0fbd0b705ec0194200edd770a18ba6235ebc8590cd2fe82db66b09526cab",
+    "test-before-done.ts": "4e1c6b02c553d7e5d364c48012c80ca28da030190847434892bd6ba2199a3e3a",
+    "test-run-tracker.ts": "eec9ad691f4daca34755744f976a295507600323e44f1b4152a31e37eca62b0c",
     "tldr-read-enforcer.ts": "c6476b2cf32aa4111869deb50c8487b4dfed439a9899800073e208897a337e40",
     "tree-invalidate.ts": "efdcff70d106c48fe10e0b0febbdcce79bcf8d7e8688005f185dbc2cf209e019",
     "user-confirmation-detector.ts": "d0dc39cb3229c3b9f7173beb963149a1452ef4459e8ada1e36b850c623651bd3",
@@ -203,7 +203,7 @@
   },
   "external": {
     ".claude/hooks/src/shared/malicious-packages.json": {
-      "sha256": "bf8855419223d9c52d7b101127f39b5aa6b43e16a4b18ef39bc3e202529b8d3b"
+      "sha256": "407319dab0c0a9fe1b65bf2a5142e727e71b587fe1740cf05664ce357b381206"
     },
     "scripts/github/lib/answer-key.mjs": {
       "sha256": "49a0451170db358544ca66ddc35260463de2c1b19663a0ee85504d0bca1e972c"

@@ -81,7 +81,11 @@ export type OsPlan = { title: string; file?: string }
 
 export type OsTurn = { id: string; startedAt: number }
 
-export type OsStep = { id: string; tool: string; label: string; startedAt: number }
+/**
+ * A tool call in flight. `questions` is written for AskUserQuestion only: how many questions its dialog holds, 1 to 4 (the dialog limit). A step with no field reads as 1.
+ * `openAsksOf` (agentic-os/brief.ts) sums it, so a multi-question dialog counts every question.
+ */
+export type OsStep = { id: string; tool: string; label: string; startedAt: number; questions?: number }
 
 export type OsAgent = { id: string; description: string; type: string; status: string }
 

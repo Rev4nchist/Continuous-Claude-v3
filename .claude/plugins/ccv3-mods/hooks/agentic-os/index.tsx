@@ -10,8 +10,8 @@ import { ledgerBandSpans, settle } from '../agent-ledger/model'
 import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
-import { answersAsks, applyBrief, briefSummary, countWaitTasks, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd, redact, tapDecisions, waitLapsed, withTaps } from './brief'
-import type { WaitTask } from './brief'
+import { answersAsks, applyBrief, briefSummary, countWaitTasks, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, openAsksOf, parseTurnEnd, redact, tapDecisions, waitLapsed, withTaps } from './brief'
+import type { Chip, WaitTask } from './brief'
 import { hudOrSeed, seedHud } from '../hud/seed'
 import { bandLines, compactLine } from './band-model'
 import type { BandState } from './band-model'
@@ -252,21 +252,26 @@ const view = async ($: EngineInterface): Promise<OsView> => ({
  * The chip, one way for the snapshot and the band, so the two cannot disagree. One difference, on purpose: `forFile` (the state file) leaves the system wait out.
  * `working`: Dave's prompt just arrived, so a turn is about to start and the chip leaves waiting-on-dave at once.
  * `except`: the call that is writing (brief_set is itself a running step while its handler answers).
+ * Returns the chip AND the number of open questions it was derived from (`openAsksOf`, counted once here), so the band's sign reads the same value as the chip.
  */
-const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { working?: boolean; except?: string; forFile?: boolean } = {}) =>
-  deriveChip({
-    brief: await read($, brief),
+const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { working?: boolean; except?: string; forFile?: boolean } = {}): Promise<{ chip: Chip; openAsks: number }> => {
+  const current = await read($, steps)
+  const stored = await read($, brief)
+  const openAsks = openAsksOf({ steps: current, brief: stored, now: at, activeAt: await read($, activeAt), ...(opts.except === undefined ? {} : { except: opts.except }) })
+  const chip = deriveChip({
+    brief: stored,
     tasks: now.tasks,
-    toolRunning: (await read($, steps)).some(one => one.id !== opts.except),
-    dialogOpen: (await read($, steps)).some(one => one.id !== opts.except && one.tool === 'AskUserQuestion'),
+    toolRunning: current.some(one => one.id !== opts.except),
+    openAsks,
     turnActive: now.turn !== null || opts.working === true,
     blocked: await read($, refused),
     now: at,
-    activeAt: await read($, activeAt),
     agentRuns: now.agents.filter(agent => agent.status === 'running'),
     // The state file never holds waiting-on-work (the app reads five chips): `forFile` leaves the wait out.
     ...(opts.forFile === true ? {} : { bgTasks: await read($, bgTasks), bgSeen: await read($, bgSeen) }),
   })
+  return { chip, openAsks }
+}
 
 /** Fix 5: empties the task list (and, at a SessionStart, the first-seen map). The bump comes first, so a Stop that is waiting for next(e) sees it. Never throws. */
 const clearWait = async ($: EngineInterface, forget: boolean): Promise<void> => {
@@ -356,15 +361,17 @@ export const hudForState = (
  * lane read. It guarantees: a write that reaches its check after the end began does not land. It does not guarantee: a file write
  * already handed to the filesystem when the end begins is not recalled; that one can still land first and the final write follows.
  */
-const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; except?: string; end?: { sessionId: string; at: number } } = {}): Promise<void> => {
+const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; except?: string; only?: string; end?: { sessionId: string; at: number } } = {}): Promise<void> => {
   try {
     const home = await homeDir($)
     if (!home) return
     const sessionId = opts.end?.sessionId ?? (await $.session.id())
+    // `only`: the write is for that session (a trailing write: a /clear in the gap must not send it to the next session's file).
+    if (opts.only !== undefined && sessionId !== opts.only) return
     const at = opts.end?.at ?? (await $.clock.now())
     const now = await view($)
     const current = await read($, brief)
-    const chip = await chipNow($, now, at, { ...opts, forFile: true })
+    const { chip } = await chipNow($, now, at, { ...opts, forFile: true })
     const where = await read($, git)
     const snapshot = {
       sessionId,
@@ -398,10 +405,10 @@ const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
   (await read($, plan)) !== null ||
   (await read($, brief)) !== null
 
-/** The trailing write of a burst of snapshot wishes. The writer's own guards (worthSnapshot, the session-end check) still apply. Never throws. */
-const writeTrailing = async ($: EngineInterface, due: number): Promise<void> => {
+/** The trailing write of a burst of snapshot wishes, for the session that armed it. The writer's own guards (worthSnapshot, the session-end check) still apply. Never throws. */
+const writeTrailing = async ($: EngineInterface, due: number, sessionId: string): Promise<void> => {
   try {
-    if (trailingDue(wishes, due, await $.clock.now()) && (await worthSnapshot($))) await writeSnapshot($)
+    if (trailingDue(wishes, due, await $.clock.now()) && (await worthSnapshot($))) await writeSnapshot($, { only: sessionId })
   } catch {
     // Observer only.
   }
@@ -600,7 +607,7 @@ const briefSchema = {
   additionalProperties: false,
   properties: {
     title: { type: 'string', description: 'Short session title, shown in the Fleet. Max 80 characters.' },
-    goal: { type: 'string', description: 'One line: what this session is for. Max 240 characters.' },
+    goal: { type: 'string', description: 'One plain sentence of what Dave gets, under 80 characters, no first person ("I", "we"). Hard limit 240 characters.' },
     stopAt: { type: 'string', description: "Dave's literal stop point, in his words. Max 240 characters." },
     plan: {
       type: 'array',
@@ -620,7 +627,7 @@ const briefSchema = {
     ask: {
       type: 'array',
       maxItems: 8,
-      description: 'Replaces the whole list of open questions for Dave. [] clears it. Max 8 items.',
+      description: 'Replaces the whole list of open questions for Dave. Use this or an AskUserQuestion dialog for ANY question to Dave: a question that is only in your reply text is not shown to him. [] clears it. Max 8 items.',
       items: {
         type: 'object',
         additionalProperties: false,
@@ -652,6 +659,7 @@ const briefSchema = {
 const BRIEF_DESCRIPTION =
   "Records what this session is for, so Dave sees it in the Agentic OS band and the Fleet. Call it when the goal, the stop-at (Dave's literal stop point), the title, the plan or an open question changes, and when a task is proven. " +
   'Every field is optional; send at least one. plan and ask replace their whole list, so ask [] clears the open questions once Dave answered. decision appends to the log. proof marks a task or plan step proven (taskId is a task id, a plan step id or the exact task subject). ' +
+  'Dave sees an open question only when it is a brief_set ask or an AskUserQuestion dialog: use one of them for any question to Dave. ' +
   'Secrets in any string are removed before storage. The answer is the saved summary, or "brief_set failed:" with the reason (a proof that matches nothing lists the valid ids).'
 
 /** A mod-served tool answers with a list of content blocks (the engine refuses the MCP object); see hooks/pr-loop. */
@@ -687,8 +695,10 @@ const briefCall = async ($: EngineInterface, e: unknown) => {
 /** A turn ended: the model's own restate line and Next steps block fill what brief_set did not set. */
 const learnFromAnswer = async ($: EngineInterface, answer: unknown): Promise<void> => {
   try {
-    const parsed = parseTurnEnd(typeof answer === 'string' ? answer : '')
-    if (!parsed.goal && !parsed.stopAt && !parsed.ask) return
+    // PR D: the parsed `ask` is a guess (the closing line of an answer), not a question to Dave. It is read and dropped here: a turn end sets goal and stop-at only,
+    // adds no ask and removes no counted one. A real question is a brief_set ask or an AskUserQuestion dialog (`openAsksOf`, brief.ts).
+    const { ask: _guessed, ...parsed } = parseTurnEnd(typeof answer === 'string' ? answer : '')
+    if (!parsed.goal && !parsed.stopAt) return
     const current = await read($, brief)
     // A headless run with no brief writes no file: nothing prunes the folder.
     if (current === null && (await read($, mode)) !== 'interactive') return
@@ -842,10 +852,15 @@ export const agenticOs = (on: On) => {
     const result = await next(e)
     try {
       if (await isOff($)) return result
+      // Eligibility first: a wish the writer would refuse must not use the throttle window (it would hold back the first eligible wish).
+      // The trailing write keeps its own check: eligibility can change while its timer waits.
+      if (!(await worthSnapshot($))) return result
+      const armedFor = await $.session.id()
       const step = decide(wishes, await $.clock.now())
-      if (step.kind === 'write' && (await worthSnapshot($))) await writeSnapshot($)
+      if (step.kind === 'write') await writeSnapshot($)
       // The trailing write: the last wish of a burst is in it. It runs here, with this hook's `$`, as the pulse does.
-      if (step.kind === 'arm') $.clock.after(step.ms, () => void writeTrailing($, step.due))
+      // Known limit: $.clock.after gives back {cancel} only, no refusal signal; a timer the engine drops is not seen. The next wish or pulse writes again (seat ruling, finding 4).
+      if (step.kind === 'arm') $.clock.after(step.ms, () => void writeTrailing($, step.due, armedFor))
     } catch {
       // Observer only.
     }
@@ -881,7 +896,8 @@ export const agenticOs = (on: On) => {
   // The engine keeps the process, so these atoms would outlive the conversation (the HUD resets ctx and the cache the same way).
   on('session.end', async ($, e, next) => {
     // A trailing snapshot armed in this session must not fire into the next one (a /clear or a resume keeps the process).
-    wishes.dueAt = null
+    // The write time goes too: a /clear runs no session.start, and the next conversation starts with an open throttle.
+    Object.assign(wishes, openThrottle())
     if (!(await isOff($))) {
       await writeFinalSnapshot($, e.sessionId, next.budget.remainingMs)
       if (e.reason === 'clear' || e.reason === 'resume') {
@@ -925,8 +941,8 @@ export const agenticOs = (on: On) => {
   on('classic.UserPromptSubmit', async ($, e, next) => {
     // The session runs again: the system wait is over (the next Stop writes it new). The first-seen times stay.
     await clearWait($, false)
-    if (!(await isOff($))) await noteName($, e.session_title)
-    return next(e)
+    // The heartbeat hook rewrites the identity file inside next(e) (a /rename with no session_title): read the name after it.
+    return readNameAfter($, e, next)
   }).catch(($, e, next) => next(e))
 
   // Fix 5: a MAIN-agent Stop lists the background work still in flight. Observer only: the settings hooks run first (next(e)), the result goes on
@@ -970,7 +986,8 @@ export const agenticOs = (on: On) => {
       await update($, agentRuns, runs => runs.map(run => (run.id === resumed && run.status !== 'running' ? { ...run, status: 'running', endedAt: null } : run)))
       // The list can still hold it as waiting, and the list wins for an id it holds: the turn is the newer fact.
       await update($, agents, list => list.map(agent => (agent.id === resumed && agent.status !== 'running' ? { ...agent, status: 'running' } : agent)))
-      await requestSnapshot($)
+      // Not awaited: the turn must not wait for a file write (requestSnapshot never throws), as at the spawn.
+      void requestSnapshot($)
       return next(e)
     }
     if (!(await read($, turnBeaconed).catch(() => false))) {
@@ -1036,7 +1053,9 @@ export const agenticOs = (on: On) => {
     const id = e.tool_use_id
     const startedAt = await $.clock.now()
     await update($, activeAt, () => startedAt)
-    await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt }])
+    // AskUserQuestion only: how many questions the dialog holds (the input is model-written; 4 is the dialog limit). Any other tool holds no field.
+    const dialog = tool === 'AskUserQuestion' ? { questions: Array.isArray(input.questions) ? Math.min(4, Math.max(1, input.questions.length)) : 1 } : {}
+    await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt, ...dialog }])
     const headBefore = await headOf($, tool, input).catch(() => null)
     let ran: Awaited<ReturnType<typeof next>>
     try {
@@ -1093,8 +1112,11 @@ export const agenticOs = (on: On) => {
       </Box>
     )
     const at = await $.clock.now()
+    // One count for the chip and the sign (design 2026-11-18, failure 26).
+    const { chip, openAsks } = await chipNow($, now, at)
     const bandState: BandState = {
-      chip: await chipNow($, now, at),
+      chip,
+      openAsks,
       brief: await read($, brief),
       tasks: now.tasks,
       repo: (await read($, git))?.repo ?? null,
@@ -1180,7 +1202,7 @@ export const agenticOs = (on: On) => {
     const hudState = await hudOrSeed($)
     const state: TabState = {
       view: now,
-      chip: await chipNow($, now, at),
+      chip: (await chipNow($, now, at)).chip,
       brief: await read($, brief),
       repo: where?.repo ?? null,
       branch: where?.branch ?? null,

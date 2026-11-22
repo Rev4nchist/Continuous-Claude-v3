@@ -127,7 +127,7 @@ import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 import { ANSWER_KEY_GLOBS, answerKeyGlobs, answerKeyCheck, slashLower } from './lib/answer-paths.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
-import { acquire as acquireRunLock, lockMode, logRun, releaseSync as releaseRunLockSync, setPhase, waitForGrant } from '../coordination/run-lock.mjs';
+import { acquire as acquireRunLock, lockMode, logRun, releaseSync as releaseRunLockSync, setHeavy, setPhase, waitForGrant } from '../coordination/run-lock.mjs';
 
 // killTree and processChildren moved to lib/proc.mjs so cursor-review.mjs need not import this file. Kept here for existing importers.
 export { killTree, processChildren };
@@ -1030,7 +1030,7 @@ export function defaultCrRunner({ cwd, args, timeoutMs, streamTo = null, onTick 
       resolve({ status, stdout, stderr, timedOut, error, errorCode, streamError });
     }
     try {
-      if (useFiles) fds.push(openSync(streamTo, 'w'), openSync(`${streamTo}.err`, 'w'));
+      if (useFiles) { fds.push(openSync(streamTo, 'w')); fds.push(openSync(`${streamTo}.err`, 'w')); } // one push per open: a failed second open leaves the first for closeFds
       const stdio = useFiles ? ['ignore', fds[0], fds[1]] : ['ignore', 'pipe', 'pipe'];
       child = spawnFn(command, [...prefixArgs, ...args], { cwd, windowsHide: true, detached: process.platform !== 'win32', stdio });
     } catch (err) {
@@ -1350,6 +1350,14 @@ export function markGateFailed(counterFile, { head, at }) {
   row.gateFailed = true;
   writeFileSync(counterFile, JSON.stringify(doc, null, 2));
   return true;
+}
+
+/** Change the counter from its CURRENT text: read, let `change` edit the document, write. The caller names the one row it changes. */
+function updateCounter(file, branch, change) {
+  const doc = readCounter(file, branch);
+  change(doc);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(doc, null, 2));
 }
 
 /** An empty or half-written lock younger than this may still be in its writer's hands (wx creates, then writes). */
@@ -1735,22 +1743,29 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   }
   const storeBefore = snapshotStore(crStore);
   const run = { head, at: now.toISOString(), outcome: 'started', newCode };
-  const giveBack = () => {
-    counter.runs.splice(counter.runs.indexOf(run), 1);
-    writeFileSync(counterFile, JSON.stringify(counter, null, 2));
-  };
-  counter.runs.push(run);
-  mkdirSync(path.dirname(counterFile), { recursive: true });
-  writeFileSync(counterFile, JSON.stringify(counter, null, 2));
+  // Every write re-reads the counter and changes only this run's row: the copy read at the start of the step is old, and writing it back
+  // would erase a gateFailed mark that another run of this branch wrote in the meantime (see markRunGateFailed).
+  // The first write always appends (a fixed clock gives an older row of the same head the same time); later writes find the LAST row of this head and time.
+  const putRun = (keep) => updateCounter(counterFile, branch, (doc) => {
+    const at = doc.runs.findLastIndex((r) => r.head === run.head && r.at === run.at);
+    if (at < 0 && keep) doc.runs.push(run);
+    else if (at >= 0) doc.runs.splice(at, 1, ...(keep ? [run] : []));
+  });
+  const giveBack = () => putRun(false);
+  updateCounter(counterFile, branch, (doc) => { doc.runs.push(run); });
   mkdirSync(e2e, { recursive: true });
   const running = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}-${process.pid}.running.txt`);
   const onTick = (t) => log(`pre-pr: cr review still running (${t.elapsedSec}s${t.lastEvent ? `, last event: ${t.lastEvent}` : ''}); limit ${Math.round(timeoutMs / MIN)} min`);
   const moved = headMoved(headGit, { head });
   if (moved) { giveBack(); return moved; }
-  const pending = runner({ cwd: root, args: CR_ARGS(baseCommit), timeoutMs, streamTo: running, onTick, fileStdio: true });
-  onSpawned?.(); // the runner started the child when it was called (defaultCrRunner spawns in its executor): the caller may go on
-  const r = await pending;
+  let r;
+  try {
+    const pending = runner({ cwd: root, args: CR_ARGS(baseCommit), timeoutMs, streamTo: running, onTick, fileStdio: true });
+    onSpawned?.(true); // the runner started the child when it was called (defaultCrRunner spawns in its executor): the caller may go on. true: a review really starts
+    r = await pending;
+  } catch (err) { removeRunningFiles(running); throw err; } // the runner threw before a child ran: its two files are of no use
   if (r.error && !r.timedOut && NOT_STARTED.test(String(r.errorCode ?? r.error))) {
+    removeRunningFiles(running);
     giveBack();
     const missing = MISSING.test(String(r.errorCode ?? r.error));
     return skipped(missing ? 'cli-missing' : 'cli-error', `the CLI did not start (${r.error}); no run was spent. ${missing ? 'Install cr or ask Dave' : 'Check the cr install; a retry costs nothing'}`);
@@ -1770,7 +1785,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
     run.outcome = verdict.status === 'PASS' ? 'finished' : 'failed';
     run.complete = verdict.status === 'PASS';
     Object.assign(run, partialRowOf({ verdict, parsed, exitProblem, changedPaths: changedPaths ?? [] }) ?? {});
-    writeFileSync(counterFile, JSON.stringify(counter, null, 2));
+    putRun(true);
   }
   return { ...withOutput(verdict, rel(root, out)), ...(run.outcome === 'started' ? {} : { runAt: run.at }) };
 }
@@ -1856,9 +1871,18 @@ async function awaitEarlyCr(cr, durations) {
   return r;
 }
 
-/** markGateFailed for the run's own row. A counter that cannot be written never stops the run: the row then counts as a normal slot (fail closed). */
-function markRunGateFailed(root, branch, base, head, at) {
-  try { markGateFailed(crPaths(root, branch, base).counter, { head, at }); } catch { /* the row stays a normal slot */ }
+/**
+ * markGateFailed for the run's own row, under the counter lock when it is free. A second run of this branch can hold the lock (it holds it for its whole
+ * review): it re-reads the counter before each write, so the mark is written anyway and is not erased. The lock is removed only when it is ours.
+ * A counter that cannot be written never stops the run: the row then counts as a normal slot (fail closed).
+ */
+function markRunGateFailed(root, branch, base, head, at, staleMs) {
+  try {
+    const paths = crPaths(root, branch, base);
+    const t = new Date(); // the lock holds the present time: the start time of this run could be older than the stale limit, and another run would replace the lock
+    const lock = acquireLock(paths.lock, { pid: process.pid, head, at: t.toISOString() }, { nowMs: t.getTime(), staleMs });
+    try { markGateFailed(paths.counter, { head, at }); } finally { if (lock.ok) rmSync(paths.lock, { force: true }); }
+  } catch { /* the row stays a normal slot */ }
 }
 
 async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined, env = process.env, onPhase = () => {} }, ctl) {
@@ -1914,10 +1938,9 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
     if (ctl.cr && !ctl.cr.done && gateResult.status === 'FAIL' && !warnedGate) { warnedGate = true; log(gateFailedWhileReviewLine(gate.id)); }
     if (ctl.cr) await tick(); // one loop turn between gates: the review's timers and events run (M1)
   }
-  if (ctl.cr && !ctl.cr.done) {
-    // The last test gate ended and the review still runs: the run lock stops counting this run as heavy. A lock write that fails (EBUSY, EPERM) must not stop the run.
-    try { onPhase('cr'); } catch (err) { log(`pre-pr: could not set the run lock phase (${String(err?.message ?? err).split('\n')[0]}); the run goes on`); }
-  }
+  // The run lock stops counting this run as heavy once the review runs and no test gate does. A lock write that fails (EBUSY, EPERM) must not stop the run.
+  const toCrPhase = () => { try { onPhase('cr'); } catch (err) { log(`pre-pr: could not set the run lock phase (${String(err?.message ?? err).split('\n')[0]}); the run goes on`); } };
+  if (ctl.cr && !ctl.cr.done) toCrPhase(); // the last test gate ended and the review still runs
   // A stale GREEN sha after a merge of the base: fix the body file once the gates passed on this head.
   const green = head ? updateGreen({ git, base, bodyPath, bodyText, head, paths: changes.paths, config: cfg, results, evidence: results[evidenceAt] }) : null;
   if (green) {
@@ -1941,10 +1964,10 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   const failedBefore = results.some((r) => r.status === 'FAIL');
   results.push(ctl.cr ? await awaitEarlyCr(ctl.cr, durations) : await measureAsync(async () => (failedBefore && !skipCr
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
-    : await runCodeRabbit(crArgs()))));
+    : await runCodeRabbit({ ...crArgs(), onSpawned: (started) => { if (started) toCrPhase(); } })))); // serial mode: phase cr only when a review really starts
   const crStep = results[results.length - 1];
   // Q1: a review that ran while a test gate failed is marked on its counter row, so it uses no slot (the first of a Chicago day) and is no finished run.
-  if (ctl.cr && crStep.runAt && results.some((r) => r.step.startsWith('gate:') && r.status === 'FAIL')) markRunGateFailed(root, branch, base, head, crStep.runAt);
+  if (ctl.cr && crStep.runAt && results.some((r) => r.step.startsWith('gate:') && r.status === 'FAIL')) markRunGateFailed(root, branch, base, head, crStep.runAt, crTimeout + 10 * MIN);
   const crFinished = finishedRuns(root, branch, base);
   const partialSkip = crStep.skipReason === 'cap' ? { earned: crStep.partialEarned ?? 0, unreviewed: crStep.unreviewedFiles ?? 0 } : { earned: 0, unreviewed: 0 };
   // Rule A: a cap skip that only a partial run earns needs the PR body line. A finished run earns it with no line.
@@ -1996,19 +2019,19 @@ const LOCK_ERROR_GAP_MS = 10_000;
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The run lock functions pre-pr uses. A test passes a fake: no test opens the live store. */
-const LIVE_LOCK = { mode: () => lockMode(), acquire: acquireRunLock, waitForGrant, setPhase, logRun };
+const LIVE_LOCK = { mode: () => lockMode(), acquire: acquireRunLock, waitForGrant, setPhase, setHeavy, logRun };
 
 /**
  * The facts the run lock records: the short head (null: no repo or no commit) and heavy (the change set runs the hooks-vitest gate). Read again at
  * every attempt of a wait (L1). A change set that cannot be read counts as heavy: a run that is not known to be light waits rather than overloads.
  */
-export function runFacts(root, base) {
-  const git = makeGit(root);
+export function runFacts(root, base, git = makeGit(root)) {
   const headRead = git(['rev-parse', '--short=8', 'HEAD']);
   const head = headRead.status === 0 && /^[0-9a-f]{8,40}$/.test(headRead.stdout.trim()) ? headRead.stdout.trim() : null;
   const baseCommit = head ? resolveBaseCommit(git, base) : '';
   const changed = baseCommit ? changedFiles(git, base, baseCommit) : null;
-  return { head, heavy: changed ? isHeavyRun(changed.paths, buildInputExternals(root)) : true };
+  // changedFiles returns { paths, result } and never null: a failed read has paths [] and a FAIL result, so only a PASS result says the paths are real.
+  return { head, heavy: changed?.result.status === 'PASS' ? isHeavyRun(changed.paths, buildInputExternals(root)) : true };
 }
 
 /**
@@ -2022,7 +2045,8 @@ export function runFacts(root, base) {
 export async function takeRunLock({ bodyPath, wait = false, factsOf, lock = LIVE_LOCK, say = console.error, exit = process.exit, sleep = sleepMs, install = installRunLockHandlers, pid = process.pid }) {
   install(); // before a wait: a wait record is freed at exit and on a signal
   const holder = `pre-pr ${path.basename(bodyPath)}`;
-  const optsNow = () => ({ kind: 'pre-pr', pid, holder, ...factsOf() });
+  let askedHeavy = false; // the heavy flag of the last ask: the lock was granted with it
+  const optsNow = () => { const o = { kind: 'pre-pr', pid, holder, ...factsOf() }; askedHeavy = o.heavy === true; return o; };
   let r;
   for (let attempt = 0; r === undefined; attempt += 1) {
     try {
@@ -2045,6 +2069,10 @@ export async function takeRunLock({ bodyPath, wait = false, factsOf, lock = LIVE
   say(`PRE-PR START pid ${pid} head ${facts.head ?? 'none'} ${facts.heavy ? 'heavy' : 'light'} free ${r.freeGB} load ${r.loadPct} mode ${r.mode}`);
   lock.logRun({ event: 'start', pid, head: facts.head, heavy: facts.heavy, free: r.freeGB, load: r.loadPct, mode: r.mode });
   if (lock === LIVE_LOCK) runLog.started = { pid, head: facts.head ?? null, at: Date.now() }; // a test's fake lock leaves the process state alone
+  if (facts.heavy && !askedHeavy) {
+    // A commit in the read window: the grant read light, this run's own change read finds the hooks-vitest gate. The lock turns heavy for the next ask; no limit is checked again.
+    try { if (lock.setHeavy({ file: r.file, pid }).changed) say('NOTE pre-pr: the change set runs the hooks-vitest gate, so the run lock is now marked heavy (the grant read it as light)'); } catch (err) { say(`pre-pr: could not set the run lock to heavy (${String(err?.message ?? err).split('\n')[0]}); the run goes on`); }
+  }
   return { file: r.file, onPhase: (phase) => lock.setPhase({ file: r.file, pid, phase }) };
 }
 
@@ -2056,7 +2084,8 @@ const runLog = newRunLogState();
 export function reportRunEnd({ pid, head, run, startedAt, now = Date.now(), lock = LIVE_LOCK, say = console.error, state = runLog }) {
   const failing = run.results.find((x) => x.status === 'FAIL')?.step ?? null;
   const result = run.ok ? 'PASS' : 'FAIL';
-  const minutes = Number(((now - startedAt) / MIN).toFixed(1));
+  // The same start time as the error END row (endRowAtExit): the grant, not the call of main, which came before a wait of up to 60 minutes.
+  const minutes = Number(((now - (state.started?.at ?? startedAt)) / MIN).toFixed(1));
   state.ended = true;
   say(`PRE-PR END pid ${pid} head ${head ?? 'none'} ${result} ${failing ?? '-'} ${minutes.toFixed(1)}`);
   try { lock.logRun({ event: 'end', pid, head: head ?? null, result, failing, minutes }); } catch { /* a log problem never stops the run */ }

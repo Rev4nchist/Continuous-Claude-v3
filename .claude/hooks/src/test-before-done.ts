@@ -79,7 +79,7 @@ export function buildWarningOutput(message?: string): WarningOutput {
       additionalContext:
         message ??
         'WARNING: no test run detected in the last 5 minutes before this task was marked complete. ' +
-        'Run the project check (node ~/.claude/scripts/verify.mjs, or the AGENTS.md Testing row) and cite its output.',
+        'Run the project check (node ~/.claude/scripts/verify.mjs, or the row of the project testing rules: AGENTS.md "Testing" or docs/testing-standard.md) and cite its output.',
     },
   };
 }

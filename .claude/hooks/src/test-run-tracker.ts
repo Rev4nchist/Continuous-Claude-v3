@@ -112,7 +112,7 @@ export function okOf(data: PostToolUseInput): boolean | null {
 
 /**
  * The state file holds ONE run. A ratchet (context-budget-guard, audit-skills) is never proof, so
- * it must not overwrite a test run: AGENTS.md says to run vitest and then the ratchet, and the
+ * it must not overwrite a test run: docs/testing-standard.md says to run vitest and then the ratchet, and the
  * second must not erase the first.
  */
 function keepsEarlierRun(stateFile: string, command: string): boolean {

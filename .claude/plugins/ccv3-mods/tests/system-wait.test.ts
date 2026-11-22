@@ -3,7 +3,7 @@ import type { On, RenderElement } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import * as briefModel from '../hooks/agentic-os/brief'
-import { deriveChip, emptyBrief } from '../hooks/agentic-os/brief'
+import { deriveChip, emptyBrief, openAsksOf } from '../hooks/agentic-os/brief'
 import type { ChipState } from '../hooks/agentic-os/brief'
 import * as bandModel from '../hooks/agentic-os/band-model'
 import type { BandState } from '../hooks/agentic-os/band-model'
@@ -62,16 +62,23 @@ const SECRET_D = ['xoxb', '1234567890', 'ABCDEFGHIJKLMNOP'].join('-')
 
 // ---------- pure: deriveChip ----------
 
-const ask = (over: Partial<OsAskItem> = {}): OsAskItem => ({ kind: 'approval', text: 'Approve PR 12?', source: 'parsed', ...over })
+// PR D: `ask()` is a real ask (brief_set). `guess()` is a stored parsed ask: the parser's reading of a closing line. It counts nowhere.
+const ask = (over: Partial<OsAskItem> = {}): OsAskItem => ({ kind: 'approval', text: 'Approve PR 12?', source: 'brief_set', ...over })
+const guess = (over: Partial<OsAskItem> = {}): OsAskItem => ask({ source: 'parsed', ...over })
 const briefOf = (...items: OsAskItem[]): OsBrief => ({ ...emptyBrief(T0), ask: items })
 const shellTask = (id = 'b1', type = 'shell') => ({ id, type })
-const chipOf = (over: Partial<ChipState> & { bgTasks?: { id: string; type: string }[]; bgSeen?: Record<string, number> } = {}) =>
-  deriveChip({ brief: null, tasks: [], toolRunning: false, turnActive: false, blocked: false, now: T0, activeAt: T0, ...over } as ChipState)
+// deriveChip reads the number `openAsksOf` counted (it never recounts the brief): the helper counts it as the mod does. `dialogOpen` is a helper-only switch for one open dialog.
+const chipOf = (over: Partial<ChipState> & { bgTasks?: { id: string; type: string }[]; bgSeen?: Record<string, number>; dialogOpen?: boolean; activeAt?: number } = {}) => {
+  const { dialogOpen, activeAt, ...given } = over
+  const base = { brief: null, tasks: [], toolRunning: false, turnActive: false, blocked: false, now: T0, ...given }
+  const steps = dialogOpen === true ? [{ id: 'dialog', tool: 'AskUserQuestion' }] : []
+  return deriveChip({ ...base, openAsks: given.openAsks ?? openAsksOf({ steps, brief: base.brief as OsBrief | null, now: T0, activeAt: activeAt ?? T0 }) } as ChipState)
+}
 const seenNow = (...ids: string[]): Record<string, number> => Object.fromEntries(ids.map(id => [id, T0]))
 
 describe('system wait: deriveChip', () => {
-  test('P1 a shell task and a parsed open ask read waiting-on-work', () => {
-    expect(chipOf({ brief: briefOf(ask()), bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-work')
+  test('P1 a shell task and a parsed open ask read waiting-on-work (the guess is inert)', () => {
+    expect(chipOf({ brief: briefOf(guess()), bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-work')
   })
 
   test('P1 a shell task with no ask at all reads waiting-on-work, and a workflow counts too', () => {
@@ -79,19 +86,22 @@ describe('system wait: deriveChip', () => {
     expect(chipOf({ bgTasks: [shellTask('w1', 'workflow')], bgSeen: seenNow('w1') })).toBe('waiting-on-work')
   })
 
-  test('P1 with no task a parsed ask is waiting-on-dave, as before', () => {
+  // Old: a parsed ask with no task read waiting-on-dave. Broken on purpose by `deriveChip` reading `openAsks` (openAsksOf skips `source: parsed`): a guess is not a question.
+  test('P1 with no task a parsed ask is idle, and a brief_set ask is waiting-on-dave', () => {
+    expect(chipOf({ brief: briefOf(guess()) })).toBe('idle')
+    expect(chipOf({ brief: briefOf(guess()), bgTasks: [], bgSeen: {} })).toBe('idle')
     expect(chipOf({ brief: briefOf(ask()) })).toBe('waiting-on-dave')
     expect(chipOf({ brief: briefOf(ask()), bgTasks: [], bgSeen: {} })).toBe('waiting-on-dave')
   })
 
   test('P2 a brief_set ask beats the wait, and so does an ask with no source (an old state file)', () => {
-    expect(chipOf({ brief: briefOf(ask({ source: 'brief_set' })), bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-dave')
+    expect(chipOf({ brief: briefOf(ask()), bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-dave')
     const noSource = { kind: 'question', text: 'Which branch?' } as unknown as OsAskItem
     expect(chipOf({ brief: briefOf(noSource), bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-dave')
   })
 
   test('P2 one brief_set ask among parsed ones still beats the wait', () => {
-    const brief = briefOf(ask(), ask({ source: 'brief_set', text: 'Which branch?' }))
+    const brief = briefOf(guess(), ask({ text: 'Which branch?' }))
     expect(chipOf({ brief, bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-dave')
   })
 
@@ -99,56 +109,64 @@ describe('system wait: deriveChip', () => {
     expect(chipOf({ dialogOpen: true, bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-dave')
   })
 
-  test('P3 an answered brief_set ask does not beat the wait; a stale parsed ask is no fresh ask', () => {
-    const answered = briefOf(ask({ source: 'brief_set', answered: true }), ask())
+  test('P3 an answered brief_set ask does not beat the wait, nor does a parsed one beside it; a stale brief_set ask is no fresh ask', () => {
+    const answered = briefOf(ask({ answered: true }), guess())
     expect(chipOf({ brief: answered, bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-work')
-    const old = { ...briefOf(ask({ source: 'brief_set' })), updatedAt: T0 - 25 * 3600_000 }
+    const old = { ...briefOf(ask()), updatedAt: T0 - 25 * 3600_000 }
     expect(chipOf({ brief: old, activeAt: T0 - 25 * 3600_000, bgTasks: [shellTask()], bgSeen: seenNow('b1') })).toBe('waiting-on-work')
   })
 
   for (const type of ['monitor', 'subagent', 'mystery', '', 'Shell']) {
-    test(`P4 a task of type "${type}" never counts: a parsed ask stays waiting-on-dave`, () => {
-      expect(chipOf({ brief: briefOf(ask()), bgTasks: [shellTask('t1', type)], bgSeen: seenNow('t1') })).toBe('waiting-on-dave')
+    // Old: the uncounted type left a parsed ask on waiting-on-dave. Broken on purpose by `openAsksOf` skipping parsed asks: the chip is idle; the type test is now "not waiting-on-work".
+    test(`P4 a task of type "${type}" never counts: the chip stays idle (a parsed ask beside it is inert)`, () => {
+      expect(chipOf({ brief: briefOf(guess()), bgTasks: [shellTask('t1', type)], bgSeen: seenNow('t1') })).toBe('idle')
     })
   }
 
   test('P4 one counted task among uncounted ones is enough; a non-string type does not count', () => {
     const tasks = [shellTask('m1', 'monitor'), shellTask('b1', 'shell')]
-    expect(chipOf({ brief: briefOf(ask()), bgTasks: tasks, bgSeen: seenNow('m1', 'b1') })).toBe('waiting-on-work')
+    expect(chipOf({ brief: briefOf(guess()), bgTasks: tasks, bgSeen: seenNow('m1', 'b1') })).toBe('waiting-on-work')
     const odd = [{ id: 'x', type: 7 }] as unknown as { id: string; type: string }[]
-    expect(chipOf({ brief: briefOf(ask()), bgTasks: odd, bgSeen: seenNow('x') })).toBe('waiting-on-dave')
+    expect(chipOf({ brief: briefOf(guess()), bgTasks: odd, bgSeen: seenNow('x') })).toBe('idle')
   })
 
   test('P5 a task first seen exactly BG_WAIT_MAX_MS ago still counts; one millisecond older does not', () => {
     expect(BG_WAIT_MAX_MS).toBe(30 * 60 * 1000)
-    const brief = briefOf(ask())
+    // Old: a task past the limit let a parsed ask read waiting-on-dave. Broken on purpose by `openAsksOf` skipping parsed asks: it reads idle.
+    const brief = briefOf(guess())
     expect(chipOf({ brief, bgTasks: [shellTask()], bgSeen: { b1: T0 - BG_WAIT_MAX_MS } })).toBe('waiting-on-work')
-    expect(chipOf({ brief, bgTasks: [shellTask()], bgSeen: { b1: T0 - BG_WAIT_MAX_MS - 1 } })).toBe('waiting-on-dave')
+    expect(chipOf({ brief, bgTasks: [shellTask()], bgSeen: { b1: T0 - BG_WAIT_MAX_MS - 1 } })).toBe('idle')
   })
 
-  test('P5 the age is per task: an old shell does not hide the ask, a new one beside it does', () => {
-    const brief = briefOf(ask())
+  test('P5 the age is per task: an old shell does not count, a new one beside it does', () => {
+    const brief = briefOf(guess())
     const tasks = [shellTask('old'), shellTask('new')]
     expect(chipOf({ brief, bgTasks: tasks, bgSeen: { old: T0 - 2 * BG_WAIT_MAX_MS, new: T0 } })).toBe('waiting-on-work')
-    expect(chipOf({ brief, bgTasks: tasks, bgSeen: { old: T0 - 2 * BG_WAIT_MAX_MS, new: T0 - 3 * BG_WAIT_MAX_MS } })).toBe('waiting-on-dave')
+    expect(chipOf({ brief, bgTasks: tasks, bgSeen: { old: T0 - 2 * BG_WAIT_MAX_MS, new: T0 - 3 * BG_WAIT_MAX_MS } })).toBe('idle')
   })
 
-  test('P5 a task with no first-seen time never counts (fail to the ask)', () => {
+  test('P5 a task with no first-seen time never counts', () => {
+    expect(chipOf({ brief: briefOf(guess()), bgTasks: [shellTask()], bgSeen: {} })).toBe('idle')
+    // A real ask is never hidden by a task, counted or not.
     expect(chipOf({ brief: briefOf(ask()), bgTasks: [shellTask()], bgSeen: {} })).toBe('waiting-on-dave')
   })
 
-  test('P6 a running turn or a running tool keeps rule 3 off: a parsed ask reads waiting-on-dave, no ask reads working', () => {
+  // Old: a running turn or tool kept a parsed ask on waiting-on-dave. Broken on purpose by `openAsksOf` skipping parsed asks: the running work shows.
+  test('P6 a running turn or a running tool keeps rule 3 off: a parsed ask reads working (inert), a brief_set ask waiting-on-dave', () => {
     const wait = { bgTasks: [shellTask()], bgSeen: seenNow('b1') }
+    expect(chipOf({ brief: briefOf(guess()), turnActive: true, ...wait })).toBe('working')
+    expect(chipOf({ brief: briefOf(guess()), toolRunning: true, ...wait })).toBe('working')
     expect(chipOf({ brief: briefOf(ask()), turnActive: true, ...wait })).toBe('waiting-on-dave')
     expect(chipOf({ brief: briefOf(ask()), toolRunning: true, ...wait })).toBe('waiting-on-dave')
     expect(chipOf({ turnActive: true, ...wait })).toBe('working')
     expect(chipOf({ toolRunning: true, ...wait })).toBe('working')
   })
 
-  test('P6 a running agent run keeps the chip at working: a shell and a running helper, no ask, read working; with a parsed ask waiting-on-dave', () => {
+  test('P6 a running agent run keeps the chip at working: a shell and a running helper, no ask, read working; with a parsed ask working, with a brief_set ask waiting-on-dave', () => {
     const wait = { bgTasks: [shellTask()], bgSeen: seenNow('b1') }
     const running = { agentRuns: [{ status: 'running' }] }
     expect(chipOf({ ...running, ...wait })).toBe('working')
+    expect(chipOf({ ...running, brief: briefOf(guess()), ...wait })).toBe('working')
     expect(chipOf({ ...running, brief: briefOf(ask()), ...wait })).toBe('waiting-on-dave')
     // A helper that is not running (done, failed) changes nothing: the wait shows.
     expect(chipOf({ agentRuns: [{ status: 'completed' }], ...wait })).toBe('waiting-on-work')
@@ -162,14 +180,18 @@ describe('system wait: deriveChip', () => {
   test('P8 the old inputs (no wait fields at all) give the old chips', () => {
     expect(chipOf({})).toBe('idle')
     expect(chipOf({ brief: briefOf(ask()) })).toBe('waiting-on-dave')
+    expect(chipOf({ brief: briefOf(guess()) })).toBe('idle')
     expect(chipOf({ turnActive: true })).toBe('working')
   })
 })
 
 // ---------- pure: band-model ----------
 
-const bandState = (over: Partial<BandState> & { waitTasks?: number } = {}): BandState =>
-  ({ chip: 'idle', brief: null, tasks: [], repo: 'repo-x', who: { name: 'trex', short: '0d40499c' }, lane: 'coord', ctx: 41, costUsd: 1.5, now: T0, activeAt: T0, ...over }) as BandState
+// PR D: the Q sign reads BandState.openAsks, not the brief. The helper counts it as the mod does (openAsksOf) unless the test names it.
+const bandState = (over: Partial<BandState> & { waitTasks?: number } = {}): BandState => {
+  const state = { chip: 'idle', brief: null, tasks: [], repo: 'repo-x', who: { name: 'trex', short: '0d40499c' }, lane: 'coord', ctx: 41, costUsd: 1.5, now: T0, activeAt: T0, ...over }
+  return { ...state, openAsks: over.openAsks ?? openAsksOf({ steps: [], brief: state.brief as OsBrief | null, now: state.now, activeAt: state.activeAt }) } as BandState
+}
 const CHIPS = ['working', 'waiting-on-dave', 'waiting-on-work', 'blocked', 'done', 'idle'] as const
 
 describe('system wait: band words and tones', () => {
@@ -401,16 +423,17 @@ const writeState = async ($: Engine, seen: Seen) => {
 }
 
 describe('system wait: the whole mod', () => {
-  test('S1 a shell and a parsed ask: the chip reads WAITING ON 1 TASK and line 2 still says QUESTIONS 1', async ($, on) => {
+  // Old: the turn-end ask made the chip WAITING FOR YOU and line 2 QUESTIONS 1. Broken on purpose by `learnFromAnswer` dropping the parsed ask (a turn end stores none) and `openAsksOf` skipping parsed asks.
+  test('S1 a shell and a turn-end ask guess: the chip reads WAITING ON 1 TASK and line 2 says QUESTIONS 0', async ($, on) => {
     world(on)
     await start($)
     await parsedAsk($)
-    expect((await view($)).line1).toContain('WAITING FOR YOU')
+    expect((await view($)).line1).toContain('RESTING')
     await stop($, { background_tasks: [shell('b1')] })
     const got = await view($)
     expect(got.line1).toContain('WAITING ON 1 TASK')
     expect(got.line1).not.toContain('WAITING FOR YOU')
-    expect(got.line2).toContain('QUESTIONS 1')
+    expect(got.line2).toContain('QUESTIONS 0')
   })
 
   test('S1 two tasks read WAITING ON 2 TASKS (a workflow counts)', async ($, on) => {
@@ -420,17 +443,19 @@ describe('system wait: the whole mod', () => {
     expect((await view($)).line1).toContain('WAITING ON 2 TASKS')
   })
 
-  test('S1 the compact line and the narrow width carry Q 1 beside the wait chip (the main guard)', async ($, on) => {
+  // Old: Q 1 beside the wait chip for a turn-end guess (fix 5 main guard). Broken on purpose by `learnFromAnswer` dropping the parsed ask: no sign for a guess; a real ask never sits
+  // beside the wait chip (openAsks above 0 gives waiting-on-dave, S2), so the model-level sign-beside-wait cases stay in the pure B3 and B4 tests.
+  test('S1 the compact line and the narrow width draw no Q beside the wait chip for a turn-end guess', async ($, on) => {
     world(on)
     await start($)
     await parsedAsk($)
     await stop($, { background_tasks: [shell('b1')] })
     const short = await view($, 120, 1)
     expect(short.line1).toContain('WAITING ON 1 TASK')
-    expect(short.line1).toContain('Q 1')
+    expect(short.line1).not.toMatch(/\bQ \d/)
     const narrow = await view($, 30)
     expect(narrow.line1).toContain('WAITING ON 1 TASK')
-    expect(narrow.line1).toContain('Q 1')
+    expect(narrow.line1).not.toMatch(/\bQ \d/)
   })
 
   test('S2 a brief_set ask beats the wait', async ($, on) => {
@@ -457,14 +482,19 @@ describe('system wait: the whole mod', () => {
     await pending
   })
 
-  test('S3 no task and a parsed ask: WAITING FOR YOU, as before', async ($, on) => {
+  // Old: no task and a turn-end ask read WAITING FOR YOU and QUESTIONS 1. Broken on purpose by `learnFromAnswer` dropping the parsed ask.
+  test('S3 no task and a turn-end ask guess: RESTING and QUESTIONS 0; a brief_set ask reads WAITING FOR YOU and QUESTIONS 1', async ($, on) => {
     world(on)
     await start($)
     await parsedAsk($)
     await stop($, { background_tasks: [] })
     const got = await view($)
-    expect(got.line1).toContain('WAITING FOR YOU')
-    expect(got.line2).toContain('QUESTIONS 1')
+    expect(got.line1).toContain('RESTING')
+    expect(got.line2).toContain('QUESTIONS 0')
+    await $.tool.call({ tool: BRIEF_TOOL, ask: [{ kind: 'question', text: 'Which branch?' }] } as never)
+    const real = await view($)
+    expect(real.line1).toContain('WAITING FOR YOU')
+    expect(real.line2).toContain('QUESTIONS 1')
   })
 
   test('S3 a cron alone changes nothing: no wait chip, with or without an ask', async ($, on) => {
@@ -473,7 +503,11 @@ describe('system wait: the whole mod', () => {
     const crons = [{ id: 'c1', schedule: '0 9 * * *', recurring: true, prompt: 'tick' }, { id: 'c2', schedule: '5 4 3 2 *', recurring: false, prompt: 'once' }]
     await stop($, { background_tasks: [], session_crons: crons })
     expect((await view($)).line1).toContain('RESTING')
+    // Old: WAITING FOR YOU after the turn-end ask. Broken on purpose by `learnFromAnswer` dropping the parsed ask: a real ask is the one that waits.
     await parsedAsk($)
+    await stop($, { background_tasks: [], session_crons: crons })
+    expect((await view($)).line1).toContain('RESTING')
+    await $.tool.call({ tool: BRIEF_TOOL, ask: [{ kind: 'question', text: 'Which branch?' }] } as never)
     await stop($, { background_tasks: [], session_crons: crons })
     expect((await view($)).line1).toContain('WAITING FOR YOU')
   })
@@ -516,14 +550,20 @@ describe('system wait: the whole mod', () => {
   })
 
   for (const type of ['monitor', 'subagent', 'mystery']) {
-    test(`S4 a ${type} task plus a parsed ask: WAITING FOR YOU (a standing task of that type must not hide an ask)`, async ($, on) => {
+    // Old: WAITING FOR YOU for the turn-end ask. Broken on purpose by `learnFromAnswer` dropping the parsed ask. The type test stays: a standing task of that type never reads WAITING ON,
+    // and a real ask beside it reads WAITING FOR YOU.
+    test(`S4 a ${type} task never reads WAITING ON: RESTING with a turn-end guess, WAITING FOR YOU with a brief_set ask`, async ($, on) => {
       world(on)
       await start($)
       await parsedAsk($)
       await stop($, { background_tasks: [shell('x1', { type })] })
       const got = await view($)
-      expect(got.line1).toContain('WAITING FOR YOU')
+      expect(got.line1).toContain('RESTING')
       expect(got.line1).not.toContain('WAITING ON')
+      await $.tool.call({ tool: BRIEF_TOOL, ask: [{ kind: 'question', text: 'Which branch?' }] } as never)
+      const real = await view($)
+      expect(real.line1).toContain('WAITING FOR YOU')
+      expect(real.line1).not.toContain('WAITING ON')
     })
   }
 
@@ -736,12 +776,15 @@ describe('system wait: nothing leaks', () => {
 })
 
 describe('system wait: the state file', () => {
-  test('S8 the state file never holds waiting-on-work: with a fresh ask it reads waiting-on-dave', async ($, on) => {
+  // Old: a turn-end ask under a shell read WAITING ON 1 TASK on the band and waiting-on-dave in the file. Broken on purpose by `learnFromAnswer` dropping the parsed ask: with a real ask
+  // the chip is waiting-on-dave on the band too (openAsks above 0 beats the wait), and the file agrees.
+  test('S8 the state file never holds waiting-on-work: with a fresh brief_set ask it reads waiting-on-dave, the band too', async ($, on) => {
     const seen = world(on)
     await start($)
-    await parsedAsk($)
+    await $.tool.call({ tool: BRIEF_TOOL, ask: [{ kind: 'question', text: 'Which branch?' }] } as never)
     await stop($, { background_tasks: [shell('b1')] })
-    expect((await view($)).line1).toContain('WAITING ON 1 TASK')
+    expect((await view($)).line1).toContain('WAITING FOR YOU')
+    expect((await view($)).line1).not.toContain('WAITING ON')
     expect((await writeState($, seen)).chip).toBe('waiting-on-dave')
   })
 
@@ -801,6 +844,8 @@ const heldAtoms = (on: On) => {
   }
 }
 
+// Old: after the age limit the chip read WAITING FOR YOU (the turn-end ask came back). Broken on purpose by `learnFromAnswer` dropping the parsed ask (and `openAsksOf` skipping parsed asks):
+// the parsed answer is still fed at every turn end below (it pins that it stays inert), and the chip reads RESTING once the shell stops counting.
 describe('system wait: the age limit', () => {
   const standing = async ($: Engine, seen: Seen) => {
     // The real order: a turn starts (it clears the list), the turn ends, the Stop reports the same shell again.
@@ -824,10 +869,10 @@ describe('system wait: the age limit', () => {
     expect((await view($)).line1).toContain('WAITING ON 1 TASK')
     await again($, seen, 20 * MIN)
     const got = await view($)
-    expect(got.line1).toContain('WAITING FOR YOU')
+    expect(got.line1).toContain('RESTING')
     expect(got.line1).not.toContain('WAITING ON')
     await again($, seen, 20 * MIN)
-    expect((await view($)).line1).toContain('WAITING FOR YOU')
+    expect((await view($)).line1).toContain('RESTING')
   })
 
   test('P5 a Stop every 10 minutes does not renew the age either', async ($, on) => {
@@ -836,14 +881,14 @@ describe('system wait: the age limit', () => {
     for (let i = 0; i < 3; i++) await again($, seen, 10 * MIN)
     expect((await view($)).line1).toContain('WAITING ON 1 TASK')
     await again($, seen, 10 * MIN)
-    expect((await view($)).line1).toContain('WAITING FOR YOU')
+    expect((await view($)).line1).toContain('RESTING')
   })
 
   test('P5 a new shell id after the old one aged out counts again from its own first sight', async ($, on) => {
     const seen = world(on)
     await standing($, seen)
     await again($, seen, 40 * MIN)
-    expect((await view($)).line1).toContain('WAITING FOR YOU')
+    expect((await view($)).line1).toContain('RESTING')
     await stop($, { background_tasks: [shell('s1'), shell('s2')] })
     expect((await view($)).line1).toContain('WAITING ON 1 TASK')
   })
@@ -869,10 +914,10 @@ describe('system wait: the age limit', () => {
       await standing($, seen)
       await seen.clock.advance(40 * MIN)
       await $.classic.SessionStart({ source } as never)
-      expect((await view($)).line1).toContain('WAITING FOR YOU')
+      expect((await view($)).line1).toContain('RESTING')
       await stop($, { background_tasks: [shell('s1')] })
       const got = await view($)
-      expect(got.line1).toContain('WAITING FOR YOU')
+      expect(got.line1).toContain('RESTING')
       expect(got.line1).not.toContain('WAITING ON')
     })
   }
@@ -914,7 +959,7 @@ describe('system wait: the age limit', () => {
     expect((await view($)).line1).toContain('WAITING ON 1 TASK')
     await seen.clock.advance(21 * MIN)
     await stop($, { background_tasks: [shell('s1')] })
-    expect((await view($)).line1).toContain('WAITING FOR YOU')
+    expect((await view($)).line1).toContain('RESTING')
   })
 
   test('P14 one Stop and no more: the shell stops counting at the limit when the band redraws', async ($, on) => {
@@ -923,7 +968,7 @@ describe('system wait: the age limit', () => {
     await seen.clock.advance(BG_WAIT_MAX_MS - 1_000)
     expect((await view($)).line1).toContain('WAITING ON 1 TASK')
     await seen.clock.advance(2_000)
-    expect((await view($)).line1).toContain('WAITING FOR YOU')
+    expect((await view($)).line1).toContain('RESTING')
   })
 
   test('S11 an idle band redraws when a counted task passes the age limit, with no other event', async ($, on) => {

@@ -13,7 +13,8 @@ import { SNAPSHOT_THROTTLE_MS, decide, openThrottle, requestSnapshot, trailingDu
 // U4  the trailing write is lost, early, or twice: `trailingDue` ignores `dueAt`, or the delay `due - now` is wrong
 // U4b a write after the arm leaves the old timer alive: `decide` does not clear `dueAt` on a write
 // U5 / F5 no listener for snapshotWanted: a spawn through the real agent-ledger hook changes its answer, throws, or writes a file: `requestSnapshot` rethrows, or writes the file itself
-// U6 / F6 the bump throws into the caller (a state write that throws, or no state): the try/catch in `requestSnapshot` is removed
+// U6 / F6 the bump throws into the caller when the state write itself throws (a held value and version, a `set` that rejects): the try/catch in `requestSnapshot` is removed
+// U6b the same for a `$` with no state, or a state read that throws: the try/catch in `requestSnapshot` is removed
 // U11 a clock that went back (a new engine) keeps the throttle shut: the `now < t.lastAt` test is removed
 // U12 a timer the engine dropped blocks every later request: the `t.dueAt !== null` wait is moved above the window test in `decide`
 // U13 a new throttle is not open: `openThrottle` starts with a time in it
@@ -126,7 +127,15 @@ describe('snapshot port: no listener', () => {
 })
 
 describe('snapshot port: it never throws', () => {
-  test('U6 / F6 a bump whose state write throws, or a $ with no state, does not break the caller (this is the throw case, not item 5)', async () => {
+  test('U6 / F6 a bump whose state write (set) throws does not break the caller', async () => {
+    const calls = { set: 0 }
+    // `get` answers a value and a version, so `update` reaches `set`; `set` is the call that rejects.
+    const $ = { state: { get: async () => ({ value: 0, version: 1 }), set: async () => { calls.set++; throw new Error('state refused') } } } as unknown as EngineInterface
+    await expect(requestSnapshot($)).resolves.toBeUndefined()
+    expect(calls.set).toBeGreaterThan(0)
+  })
+
+  test('U6b a state read that throws, or a $ with no state, does not break the caller', async () => {
     const broken = { state: { get: async () => { throw new Error('no state') }, set: async () => { throw new Error('no state') } } } as unknown as EngineInterface
     await expect(requestSnapshot(broken)).resolves.toBeUndefined()
     await expect(requestSnapshot({} as EngineInterface)).resolves.toBeUndefined()

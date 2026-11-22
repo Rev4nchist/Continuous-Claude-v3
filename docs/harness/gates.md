@@ -5,7 +5,7 @@
 *Moved from the README on 2026-10-26. The text moved word for word. Edits made while PR 168 was reviewed fix facts that were stale or wrong, and lines that start with "Status on 2026-10-26" are dated notes.*
 
 A change is done when its end-to-end check passes and the output is saved. The check depends on
-what you changed (`AGENTS.md`).
+what you changed (`docs/testing-standard.md`).
 
 | You changed | Run this |
 |---|---|
