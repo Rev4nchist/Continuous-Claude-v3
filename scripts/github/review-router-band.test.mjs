@@ -26,6 +26,15 @@
 //   the none option says READY needs CI and proof only next to the RF line        -> B31, B32
 //   an engine trust-boundary file is not CRITICAL, or a prompt-tuning file is  -> B40
 //   checkpoint.critical alone (not a trust-boundary file) becomes CRITICAL      -> B40
+// Card force-high-security-tier (Dave 2026-11-22, "Wide: 102 of 651"): a security_tier file or one of FORCE_HIGH_FILES is HIGH at least.
+//   a security_tier file below HIGH stays below HIGH                           -> B1, B31, B50
+//   each FORCE_HIGH_FILES file (router, config, READY, land step) stays ELEVATED -> B32, B40, B51
+//   a rename into or out of the force list or tier does not force HIGH        -> B52
+//   a test file named like a force or tier path forces HIGH                    -> B53
+//   CRITICAL (risk:high, r3, engine file) drops to HIGH, or forcedHigh is true on a score-HIGH PR -> B54
+//   the force list is not one named constant of tap files, or a forced file also forces CRITICAL -> B55
+//   the rule changes the band of a PR with no tier and no force file            -> B56, B12
+//   a review:none pick at a forced band is not held for Dave (the land gate reads the base config) -> B57
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, realpathSync, existsSync } from 'node:fs';
@@ -33,6 +42,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as router from './review-router.mjs';
 import { bandOf, decide, ledgerLine, matchGlob, CRITICAL_TRUST_BOUNDARY, TRUST_BOUNDARY } from './review-router.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -43,13 +53,19 @@ const BACKTEST = JSON.parse(readFileSync(path.join(HERE, 'fixtures', 'band-backt
 const NO_MATRIX = { ...LIVE, matrix: undefined };
 const HEAD = 'a'.repeat(40);
 
-const GATE = ['scripts/github/review-status.mjs', 'scripts/github/review-router.mjs', 'scripts/github/cr-paid.mjs', 'scripts/github/land-recheck.mjs', 'scripts/github/pre-pr.mjs'];
+// Five control-plane files outside FORCE_HIGH_FILES and the security tier: their band comes from the score alone. (Until 2026-11-22 this list held
+// review-status.mjs and review-router.mjs, which are forced HIGH now; B32, B40 and B51 test those two by name.)
+const GATE = ['scripts/github/cr-paid.mjs', 'scripts/github/land-recheck.mjs', 'scripts/github/pre-pr.mjs', 'scripts/github/cr-fix.mjs', 'scripts/github/pr-checkpoint.mjs'];
+const LAND_STEP = 'scripts/github/' + ['land', 'pr'].join('-') + '.ps1';
+const FORCED = ['scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', LAND_STEP];
 
 test('B1: a control-plane file counts for G whatever its extension (a .json guard data file)', () => {
   const b = bandOf(['.claude/hooks/src/shared/malicious-packages.json'], LIVE);
   assert.equal(b.G, 1);
   assert.equal(b.K, 0);
-  assert.equal(b.band, 'ELEVATED');
+  assert.equal(b.score, 3, 'the score is still ELEVATED by score');
+  assert.equal(b.band, 'HIGH', 'a security_tier file forces HIGH (card force-high-security-tier)');
+  assert.equal(b.forcedHigh, true);
 });
 
 test('B2: a test file under a control-plane glob does not count for G', () => {
@@ -132,11 +148,18 @@ test('B11b: code moved out of a gate file into a lib keeps at least the gate ban
 
 test('B12: the section 4 backtest rows get the documented band and G count (fixture band-backtest.json)', () => {
   assert.ok(BACKTEST.prs.length >= 8);
+  const BELOW = ['LOW', 'MID', 'ELEVATED'];
+  let forcedRows = 0;
   for (const row of BACKTEST.prs) {
     const b = bandOf(row.files, LIVE);
-    assert.equal(b.band, row.band, `#${row.pr} band`);
+    // The documented band is the score band. A security_tier or FORCE_HIGH_FILES file lifts a band below HIGH to HIGH (card force-high-security-tier).
+    const forced = (b.securityTier.length > 0 || b.forceHighFiles.length > 0) && BELOW.includes(row.band);
+    if (forced) forcedRows++;
+    assert.equal(b.band, forced ? 'HIGH' : row.band, `#${row.pr} band`);
+    assert.equal(b.forcedHigh, forced, `#${row.pr} forcedHigh`);
     assert.equal(b.G, row.G, `#${row.pr} G`);
   }
+  assert.ok(forcedRows >= 1, 'the fixture holds at least one row that the new rule lifts');
 });
 
 const prOf = (paths) => ({ number: 7, head: HEAD, draft: false, state: 'open', paths });
@@ -244,7 +267,8 @@ test('B20: a policy without a matrix block keeps the old rules (R5 recommends Co
 
 // ---------- CodeRabbit CLI findings on f5429ecb ----------
 
-const renamed = (n) => Array.from({ length: n }, (_, i) => ({ filename: `.claude/hooks/src/new${i}-guard.ts`, previous_filename: `.claude/hooks/src/old${i}-guard.ts`, additions: 5, deletions: 5 }));
+// pr-loop files: on the control plane, not on the security tier (a *-guard.ts rename is forced HIGH since card force-high-security-tier)
+const renamed = (n) => Array.from({ length: n }, (_, i) => ({ filename: `.claude/plugins/ccv3-mods/hooks/pr-loop/new${i}.ts`, previous_filename: `.claude/plugins/ccv3-mods/hooks/pr-loop/old${i}.ts`, additions: 5, deletions: 5 }));
 
 test('B21: three renamed gate files are G = 3 (ELEVATED), not 6: a rename is one changed file', () => {
   const b = bandOf(renamed(3), LIVE);
@@ -383,9 +407,10 @@ test('B30: when the pinned lookup finds no PR (a fork PR), the labels come from 
 
 const SECURITY = '.claude/hooks/src/pre-pr-gate.ts';
 
-test('B31: an ELEVATED PR with a security-tier file keeps none, names the file and requires aegis + critic', async () => {
+test('B31: a security-tier PR (forced HIGH since card force-high-security-tier) keeps none, names the file and requires aegis + critic', async () => {
   const r = await recommendFor([SECURITY]);
-  assert.equal(r.band.band, 'ELEVATED');
+  assert.equal(r.band.band, 'HIGH');
+  assert.equal(r.band.forcedHigh, true);
   assert.deepEqual(r.band.securityTier, [SECURITY]);
   assert.equal(r.recommended, 'none', 'the floor is internal: no CodeRabbit PR bot (option A)');
   assert.deepEqual(r.budget, [0, 0]);
@@ -396,7 +421,7 @@ test('B31: an ELEVATED PR with a security-tier file keeps none, names the file a
   assert.match(why, /critic/);
   assert.equal(r.options[0].pathway, 'none', 'none stays the first option');
   assert.ok(r.options.some((o) => o.pathway === 'coderabbit'), 'Dave can still press CodeRabbit (escalation)');
-  assert.match(r.why[0], /^Band ELEVATED \(/, 'why[0] is the RB line');
+  assert.match(r.why[0], /^Band HIGH \(/, 'why[0] is the RB line');
   assert.ok(r.why[0].includes(`security-tier file(s) ${SECURITY}`), 'the RB line itself names the security-tier file');
   assert.ok(r.why.some((w) => w.startsWith(`Security-tier floor (${SECURITY})`)), 'the RF line names its cause');
   assert.match(r.options[0].reason, /aegis \+ critic/, 'the none option names the internal pass the RF line asks for');
@@ -406,12 +431,12 @@ test('B31: an ELEVATED PR with a security-tier file keeps none, names the file a
 test('B32: a critical file below HIGH gets the floor; a plain logic PR does not', async () => {
   const crit = await recommendFor([GATE[0]]);
   assert.equal(crit.band.band, 'ELEVATED');
-  assert.deepEqual(crit.band.securityTier, [], 'review-status.mjs is critical, not security tier');
+  assert.deepEqual(crit.band.securityTier, [], 'cr-paid.mjs is critical, not security tier');
   assert.equal(crit.recommended, 'none');
   assert.match(crit.why.join(' '), /aegis/);
   assert.equal(crit.options[0].pathway, 'none');
   assert.ok(crit.why.some((w) => w.startsWith(`Critical-file floor (${GATE[0]})`)), 'a critical-only file is a critical-file floor');
-  assert.ok(!crit.why.some((w) => /security.tier/i.test(w)), 'no line calls review-status.mjs security tier');
+  assert.ok(!crit.why.some((w) => /security.tier/i.test(w)), 'no line calls cr-paid.mjs security tier');
   assert.match(crit.options[0].reason, /aegis \+ critic/);
   const plain = await recommendFor(['apps/x/src/a.ts', 'apps/x/src/b.ts']);
   assert.equal(plain.band.band, 'MID');
@@ -446,7 +471,6 @@ test('B40: an engine trust-boundary file forces CRITICAL; prompt.mjs, context.mj
 
 // ---------- prflow-trust-list (C0): one trust list for every D1 class (seat ruling D1; Dave 2026-11-17: only the named guards) ----------
 
-const LAND_STEP = ['scripts', 'github', ['land', 'pr'].join('-') + '.ps1'].join('/');
 // Engine part: forces CRITICAL. Tap part: keeps Dave's tap (tapFiles) and forces no band (seat ruling 2026-11-17, option A).
 const ENGINE_CLASSES = {
   'engine backends': ['scripts/github/local-review/backends/cursor.mjs', 'scripts/github/local-review/backends/claude.mjs'],
@@ -545,6 +569,122 @@ test('B45: a tap file in a CRITICAL PR earns no paid CodeRabbit trigger (crTrigg
 });
 
 test('B40: checkpoint.critical alone does not force CRITICAL (it gives the floor, not the band)', () => {
-  assert.equal(bandOf(['scripts/github/review-status.mjs'], LIVE).band, 'ELEVATED');
+  assert.equal(bandOf(['scripts/github/cr-paid.mjs'], LIVE).band, 'ELEVATED');
+  const status = bandOf(['scripts/github/review-status.mjs'], LIVE);
+  assert.equal(status.band, 'HIGH', 'review-status.mjs is forced HIGH (FORCE_HIGH_FILES), not CRITICAL');
+  assert.equal(status.L, false);
   assert.ok(CRITICAL_TRUST_BOUNDARY.every((g) => !LIVE.checkpoint.critical.includes(g)), 'no second critical list in the config');
+});
+
+// ---------- card force-high-security-tier (Dave 2026-11-22, "Wide: 102 of 651"): a security_tier or FORCE_HIGH_FILES file is HIGH at least ----------
+
+const TIER_PATHS = LIVE.matrix.security_tier.map((g) => g.replaceAll('*', 'x'));
+
+test('B50: every matrix.security_tier path alone is HIGH and forcedHigh; the score stays below HIGH', () => {
+  assert.ok(TIER_PATHS.length >= 9);
+  for (const p of TIER_PATHS) {
+    const b = bandOf([p], LIVE);
+    assert.deepEqual(b.securityTier, [p], p);
+    assert.equal(b.band, 'HIGH', p);
+    assert.equal(b.forcedHigh, true, p);
+    assert.ok(b.score < LIVE.matrix.bands.high, `${p} score ${b.score} is below the HIGH step: the floor, not the score, makes HIGH`);
+  }
+  // a tier file inside a PR that is HIGH by score alone is not "forced"
+  const five = bandOf([...GATE.slice(0, 4), TIER_PATHS[0]], LIVE);
+  assert.deepEqual([five.band, five.forcedHigh], ['HIGH', false]);
+});
+
+test('B51: each FORCE_HIGH_FILES file alone is HIGH, forcedHigh, not CRITICAL, and named in forceHighFiles', () => {
+  for (const p of FORCED) {
+    const b = bandOf([p], LIVE);
+    assert.equal(b.band, 'HIGH', p);
+    assert.equal(b.forcedHigh, true, p);
+    assert.equal(b.L, false, `${p} forces no CRITICAL`);
+    assert.deepEqual(b.trustFiles, [], p);
+    assert.deepEqual(b.forceHighFiles, [p], p);
+  }
+  // the router config is a config file (C = 1) and still HIGH, not CRITICAL
+  const cfg = bandOf(['review-router.config.json'], LIVE);
+  assert.deepEqual([cfg.C, cfg.G, cfg.band], [1, 0, 'HIGH']);
+  // one forced file next to plain logic and docs is still HIGH
+  assert.equal(bandOf(['docs/a.md', 'apps/x/src/a.ts', FORCED[0]], LIVE).band, 'HIGH');
+});
+
+test('B52: a rename into or out of a forced or tier path is HIGH; a rename between two plain paths is not', () => {
+  assert.equal(bandOf([{ filename: FORCED[0], previous_filename: 'scripts/old.mjs' }], LIVE).band, 'HIGH');
+  assert.equal(bandOf([{ filename: 'scripts/new.mjs', previous_filename: FORCED[0] }], LIVE).band, 'HIGH');
+  assert.equal(bandOf([{ filename: 'scripts/new.mjs', previous_filename: LAND_STEP }], LIVE).band, 'HIGH');
+  assert.equal(bandOf([{ filename: TIER_PATHS[0], previous_filename: 'scripts/old.mjs' }], LIVE).band, 'HIGH');
+  assert.equal(bandOf([{ filename: 'scripts/new.mjs', previous_filename: TIER_PATHS[0] }], LIVE).band, 'HIGH');
+  const plain = bandOf([{ filename: 'scripts/new.mjs', previous_filename: 'scripts/old.mjs' }], LIVE);
+  assert.deepEqual([plain.band, plain.forcedHigh], ['MID', false]);
+});
+
+test('B53: a test file named like a forced or tier path does not force HIGH; neither does a near-miss name', () => {
+  for (const p of [
+    'scripts/github/review-router.test.mjs', 'scripts/github/__tests__/review-status.mjs', '.claude/hooks/src/__tests__/pre-pr-gate.test.ts',
+    'scripts/github/land-pr.test.ps1', 'scripts/github/fixtures/review-router.config.json',
+  ]) {
+    const b = bandOf([p], LIVE);
+    assert.equal(b.forcedHigh, false, p);
+    assert.notEqual(b.band, 'HIGH', p);
+  }
+  for (const p of ['scripts/github/review-routers.mjs', 'docs/review-router.config.json.md', 'scripts/github/review-status.mjs.bak', 'scripts/github/old/review-router.mjs']) {
+    assert.equal(bandOf([p], LIVE).forcedHigh, false, p);
+  }
+});
+
+test('B54: CRITICAL stays CRITICAL beside a forced file, and a PR that is HIGH by score is not "forced"', () => {
+  for (const [files, labels] of [
+    [[FORCED[0], 'docs/a.md'], ['risk:high']],
+    [[FORCED[1], 'apps/x/migrations/001_init.sql'], []],
+    [[FORCED[2], 'scripts/github/local-review.mjs'], []],
+    [[TIER_PATHS[0], 'scripts/github/lib/proc.mjs'], []],
+  ]) {
+    const b = bandOf(files, LIVE, { labels });
+    assert.equal(b.band, 'CRITICAL', files.join(','));
+    assert.equal(b.forcedHigh, false, 'CRITICAL is not lowered or reported as forced HIGH');
+  }
+  const high = bandOf([...GATE, FORCED[0]], LIVE);
+  assert.deepEqual([high.band, high.forcedHigh], ['HIGH', false]);
+});
+
+test('B55: FORCE_HIGH_FILES is one frozen constant: a subset of the tap list, no engine file, and every entry names a tracked file', () => {
+  assert.ok(Array.isArray(router.FORCE_HIGH_FILES) && Object.isFrozen(router.FORCE_HIGH_FILES), 'exported and frozen');
+  assert.deepEqual([...router.FORCE_HIGH_FILES].sort(), [...FORCED].sort());
+  for (const p of router.FORCE_HIGH_FILES) {
+    assert.ok(TRUST_BOUNDARY.tap.includes(p), `${p} is in TRUST_BOUNDARY.tap`);
+    assert.ok(!CRITICAL_TRUST_BOUNDARY.includes(p), `${p} is not an engine file`);
+    assert.ok(existsSync(path.join(ROOT, p)), `${p} exists (a dead entry hides a rename)`);
+  }
+  assert.ok(!Object.hasOwn(LIVE.matrix, 'force_high'), 'no config key: the list is a constant in code (re-cr-keys keeps the config)');
+});
+
+test('B56: a PR with no tier file and no forced file keeps its score band (the rule changes nothing else)', () => {
+  const cases = [
+    [['docs/guide.md'], 'LOW'], [['apps/x/src/a.ts'], 'MID'], [['.coderabbit.yaml'], 'ELEVATED'], [[GATE[0]], 'ELEVATED'],
+    [['scripts/github/pre-pr.mjs'], 'ELEVATED'], [['scripts/github/land-recheck.mjs'], 'ELEVATED'], [['scripts/github/pr-checkpoint.mjs'], 'ELEVATED'],
+    [[...GATE.slice(0, 4), '.coderabbit.yaml'], 'ELEVATED'], [GATE, 'HIGH'],
+  ];
+  for (const [files, band] of cases) {
+    const b = bandOf(files, LIVE);
+    assert.equal(b.band, band, files.join(','));
+    assert.equal(b.forcedHigh, false, files.join(','));
+    assert.deepEqual(b.forceHighFiles, [], files.join(','));
+  }
+  assert.equal(bandOf(['docs/guide.md'], LIVE, { labels: ['risk:high'] }).band, 'CRITICAL');
+  assert.equal(bandOf(FORCED, NO_MATRIX), null, 'no matrix block, no band, forced file or not');
+});
+
+test('B57: the land gate holds a review:none pick on a forced-HIGH PR (it needs Dave\'s record), and still skips a plain MID PR', async () => {
+  const { nonePick } = await import('./land-none-check.mjs');
+  const noRecord = () => ({ glob: '/s/store.json', files: [], records: [], bad: [] });
+  for (const p of [FORCED[0], FORCED[3], TIER_PATHS[0]]) {
+    const band = bandOf([p], LIVE).band;
+    const r = nonePick({ pr: 7, head: HEAD, labels: ['review:none'], band, read: noRecord });
+    assert.equal(r.needed, true, `${p}: band ${band} needs a record`);
+    assert.equal(r.ok, false, `${p}: no record, so the land refuses`);
+  }
+  const mid = nonePick({ pr: 7, head: HEAD, labels: ['review:none'], band: bandOf(['apps/x/src/a.ts'], LIVE).band, read: noRecord });
+  assert.equal(mid.ok, true);
 });
