@@ -125,6 +125,7 @@ import { checkSummary } from './lib/pr-summary.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
+import { loadStricterConfig } from './config-stricter.mjs';
 import { ANSWER_KEY_GLOBS, answerKeyGlobs, answerKeyCheck, slashLower } from './lib/answer-paths.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
 import { acquire as acquireRunLock, lockMode, logRun, releaseSync as releaseRunLockSync, setHeavy, setPhase, waitForGrant } from '../coordination/run-lock.mjs';
@@ -1895,9 +1896,14 @@ function markRunGateFailed(root, branch, base, head, at, staleMs) {
   } catch { /* the row stays a normal slot */ }
 }
 
+/** The config a run uses. A config the caller gives is used as it is; else the file of the checkout. Throws when the file is missing or not JSON. */
+export function resolveConfig({ root, git, readFile = readFileSync, config }) {
+  return config ?? loadStricterConfig({ root, git, readFile });
+}
+
 async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined, env = process.env, onPhase = () => {} }, ctl) {
   const serialCr = env.PRE_PR_SERIAL_CR === '1';
-  const cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8'));
+  const cfg = resolveConfig({ root, git, config });
   const stampPath = path.join(root, STAMP_REL);
   const runId = randomUUID();
   // Wall time per step, kept beside the results (a WeakMap): a result object, the stamp and --json stay as they were.
@@ -2168,9 +2174,9 @@ export function installRunLockHandlers() {
  * check stays inside the run. The run checks the summary again (runPrePrSteps). A FAIL removes an old stamp and leaves one `summary` row in the
  * gate log, because a run with no grant writes no START row (the lock store is not changed). Returns the FAIL result, or null.
  */
-export function summaryBeforeLock({ root, base = 'main', config, git = makeGit(root), summaryCheck = checkSummary, now = new Date(), gateLogFile = null }) {
+export function summaryBeforeLock({ root, base = 'main', config, readFile = readFileSync, git = makeGit(root), summaryCheck = checkSummary, now = new Date(), gateLogFile = null }) {
   let cfg;
-  try { cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8')); } catch { return null; } // the run reports a bad config itself
+  try { cfg = resolveConfig({ root, git, readFile, config }); } catch { return null; } // the run reports a bad config itself
   const headRun = git(['rev-parse', 'HEAD']);
   const head = headRun.status === 0 ? headRun.stdout.trim() : '';
   const branch = git(['branch', '--show-current']).stdout.trim();
