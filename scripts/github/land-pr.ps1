@@ -559,7 +559,8 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     if ($LASTEXITCODE) { Fail "pre-merge re-check refused #$Pr (exit $LASTEXITCODE). Nothing was merged. Read what changed, then re-run." }
     # None-pick check: a review:none PR at HIGH or CRITICAL needs Dave's own pick on record for this head. Fails closed.
     Step "none-pick check for #$Pr"
-    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head
+    # --remote: the check fetches <remote>/<base> and refuses when the band code of this checkout differs from it (card force-high-land-path).
+    $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head --remote $Remote
     $noneCode = $LASTEXITCODE
     Show-NoneOutput $noneOut
     if ($noneCode -eq 1) { Fail "none-pick check refused #$Pr (exit 1). Nothing was merged. Call pr_checkpoint for PR #$Pr so Dave can pick again for this head, then re-run." }
@@ -583,7 +584,7 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     Step "none-pick check for #$Pr (warning only)"
     # A launch failure (node missing) must not stop the merge under -IgnoreReview: catch it and warn below.
     try {
-      $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head --warn
+      $noneOut = node (Join-Path $PSScriptRoot 'land-none-check.mjs') $Pr --repo $Repo --head $head --remote $Remote --warn
       $noneCode = $LASTEXITCODE
     } catch {
       $noneOut = @()

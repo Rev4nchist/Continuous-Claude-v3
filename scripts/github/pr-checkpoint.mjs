@@ -237,8 +237,9 @@ const hit = (rule, pathway, budget, why) => ({ rule, pathway, budget, why });
 const list = (paths) => paths.join(', ');
 
 /**
- * The spec 3.1 floor: the PR touches a matrix.security_tier or a checkpoint.critical file. Below HIGH it sets an internal review
- * floor, not a bot floor: aegis + critic run before READY (rule RF), so auto-confirm never records the PR. Same body in PR A and B.
+ * The spec 3.1 floor: the PR touches a matrix.security_tier or a checkpoint.critical file. It sets an internal review
+ * floor, not a bot floor: aegis + critic run before READY (rule RF), so auto-confirm never records the PR. A security_tier file is HIGH at least
+ * (card force-high-security-tier), so below HIGH only a critical file that is not a forced file reaches the floor. Same body in PR A and B.
  */
 export function floorApplies(c) {
   return Boolean(c.band?.securityTier?.length || c.critical.length);
@@ -354,7 +355,9 @@ function triggerOf(c) {
 function bandRule(c) {
   const b = c.band;
   const tier = b.securityTier?.length ? `, security-tier file(s) ${list(b.securityTier)}` : '';
-  const facts = `score ${b.score}: ${b.G} gate file(s)${b.C ? ', a review config file' : ''}${b.K ? ', logic code' : ''}${tier}`;
+  // A band lifted by a security_tier or FORCE_HIGH_FILES file shows a score below the HIGH step: say which file did it (card force-high-land-path).
+  const forced = b.forcedHigh ? `, forced HIGH by ${list([...new Set([...(b.securityTier ?? []), ...(b.forceHighFiles ?? [])])])}` : '';
+  const facts = `score ${b.score}: ${b.G} gate file(s)${b.C ? ', a review config file' : ''}${b.K ? ', logic code' : ''}${tier}${forced}`;
   const head = `Band ${b.band} (${facts})`;
   if (!['HIGH', 'CRITICAL'].includes(b.band)) {
     return hit('RB', 'none', [0, 0], [`${head}: no CodeRabbit PR bot below HIGH (trigger: ${triggerOf(c)}). The internal review stack covers it.`]);
@@ -392,8 +395,9 @@ function hitsFor(c) {
 }
 
 /**
- * RF (spec 3.1, option A): the security-tier floor below HIGH. A security-tier or critical file sets an internal review floor, not a
+ * RF (spec 3.1, option A): the internal review floor. A security-tier or critical file sets an internal review floor, not a
  * bot floor: the pathway stays none, and the why line says aegis + critic must pass before READY. HIGH and CRITICAL keep R2 to R4.
+ * A security-tier file is HIGH at least, so it reaches this rule at HIGH; a critical file below HIGH is the other case.
  */
 function floorRule(c) {
   if (!floorApplies(c)) return null;
@@ -507,8 +511,8 @@ const autoBandsOf = (value) => (value === true ? AUTO_BANDS : value === 'low' ? 
 
 /**
  * May the mod record `none` without Dave's press? Fails closed: every doubt is "no, Dave presses". Only a literal `true` or the word "low" in
- * checkpoint.autoConfirm turns it on (the kill switch; false turns it off). The band must be known and below HIGH, with no security-tier
- * or critical file (floorApplies, spec 3.1: that floor needs aegis + critic before READY, so Dave presses), the config must match main, the PR
+ * checkpoint.autoConfirm turns it on (the kill switch; false turns it off). The band must be known and below HIGH (a security-tier or forced file
+ * is HIGH, so it never gets here), with no critical file (floorApplies, spec 3.1: that floor needs aegis + critic before READY, so Dave presses), the config must match main, the PR
  * labels must have been read (an absent list is as bad as a failed read), and the recommendation must be `none`.
  * HIGH with a free CodeRabbit slot is not covered: the slot is not readable without the pr-loop poller's queue (spec 3.7), and the
  * 7-day count is a hand-set number, so a HIGH PR keeps Dave's press.
