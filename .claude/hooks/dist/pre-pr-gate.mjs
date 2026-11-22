@@ -470,7 +470,7 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
 import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync4, statSync as statSync2 } from "fs";
-import { dirname as dirname3, isAbsolute, join as join5, posix, resolve as resolve2, win32 } from "path";
+import { dirname as dirname4, isAbsolute, join as join6, posix, resolve as resolve3, win32 } from "path";
 
 // src/shared/gh-open-prefix.ts
 var GH_OPT_PREFIX = String.raw`(?:[^\S\r\n]+[\w.\/:=@-]+){1,6}?`;
@@ -767,6 +767,61 @@ function namedRepo(command, env = {}) {
   const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
   const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
   return ccv3 ? CCV3_REPO : null;
+}
+
+// src/shared/config-stricter.ts
+import { dirname as dirname3, join as join5, resolve as resolve2 } from "path";
+var CONFIG_FILE = "review-router.config.json";
+var isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+var validCap = (x) => typeof x === "number" && Number.isFinite(x) && x >= 0;
+var sub = (o, key) => o && isObj(o[key]) ? o[key] : void 0;
+function viewOf(cfg) {
+  const c = isObj(cfg) ? cfg : null;
+  const cap = sub(c, "coderabbit")?.cli_daily_cap_usd;
+  return {
+    enforce: sub(c, "checkpoint")?.enforce === true,
+    cap: validCap(cap) ? cap : null,
+    summaryFail: sub(c, "pre_pr")?.summary_mode === "fail"
+  };
+}
+function stricterConfig(main3, branch) {
+  const out = isObj(branch) ? structuredClone(branch) : {};
+  const m = isObj(main3) ? main3 : null;
+  const block = (name) => sub(out, name) ?? {};
+  const checkpoint = sub(out, "checkpoint");
+  const branchSets = checkpoint !== void 0 && Object.hasOwn(checkpoint, "enforce");
+  const enforce = m === null || sub(m, "checkpoint")?.enforce === true || branchSets && checkpoint?.enforce !== false;
+  out.checkpoint = { ...block("checkpoint"), enforce };
+  const caps = [sub(m, "coderabbit")?.cli_daily_cap_usd, sub(out, "coderabbit")?.cli_daily_cap_usd].filter(validCap);
+  if (caps.length > 0) out.coderabbit = { ...block("coderabbit"), cli_daily_cap_usd: Math.min(...caps) };
+  if (sub(m, "pre_pr")?.summary_mode === "fail" || sub(out, "pre_pr")?.summary_mode === "fail") out.pre_pr = { ...block("pre_pr"), summary_mode: "fail" };
+  return out;
+}
+function objectOf(text) {
+  if (typeof text !== "string") return null;
+  try {
+    const v = JSON.parse(text);
+    return isObj(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+function mainConfigOf(top, git, readFile) {
+  try {
+    const shown = git(top, ["show", `fork/main:${CONFIG_FILE}`]);
+    const config = shown.status === 0 ? objectOf(shown.stdout) : null;
+    if (config) return config;
+  } catch {
+  }
+  try {
+    const common = git(top, ["rev-parse", "--git-common-dir"]);
+    if (common.status === 0 && common.stdout.trim() !== "") {
+      const config = objectOf(readFile(join5(dirname3(resolve2(top, common.stdout.trim())), CONFIG_FILE)));
+      if (config) return config;
+    }
+  } catch {
+  }
+  return null;
 }
 
 // src/shared/mask-quotes.ts
@@ -1177,7 +1232,7 @@ var unquote2 = (target, shell) => {
 };
 var resolveIn = (cwd, target, shell) => {
   const t = unquote2(target, shell);
-  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve2(cwd, t);
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve3(cwd, t);
 };
 function hasUnexpandedPart(target) {
   const t = target.replace(/^["']|["']$/g, "");
@@ -1436,13 +1491,15 @@ function makeCtx(input, command, deps, shapes, plan, bodyView) {
   };
 }
 function enforceIn(deps, top) {
-  const text = top === null ? null : deps.readFile(join5(top, CONFIG_REL2));
-  if (text === null) return null;
+  const text = top === null ? null : deps.readFile(join6(top, CONFIG_REL2));
+  if (top === null || text === null) return null;
+  let branch;
   try {
-    return JSON.parse(text)?.checkpoint?.enforce === true;
+    branch = JSON.parse(text);
   } catch {
     return null;
   }
+  return viewOf(stricterConfig(mainConfigOf(top, deps.git, deps.readFile), branch)).enforce;
 }
 function decide(input, deps) {
   if (!isDesktopCommander(input)) return decideAs(input, deps);
@@ -1525,7 +1582,7 @@ function stampDenyIn(command, deps, ctx, dir) {
   const headRun = deps.git(top, ["rev-parse", branch ? `${branch}^{commit}` : "HEAD"]);
   if (headRun.status !== 0) return rule("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${top}`);
   const head = headRun.stdout.trim();
-  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve2(dir, shell === "bash" ? fromGitBashPath(bodyPath) : bodyPath))) };
+  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve3(dir, shell === "bash" ? fromGitBashPath(bodyPath) : bodyPath))) };
   const checks = stampRoots(deps, dir, top, branch).map((r) => {
     let relied = null;
     const decided = () => {
@@ -1537,7 +1594,7 @@ function stampDenyIn(command, deps, ctx, dir) {
       }
       return false;
     };
-    return { problem: stampProblem(deps.readFile(join5(r, STAMP_REL)), head, deps.now(), body, decided), relied };
+    return { problem: stampProblem(deps.readFile(join6(r, STAMP_REL)), head, deps.now(), body, decided), relied };
   });
   const passed = checks.find((c) => c.problem === null);
   if (!passed) return rule("stamp", checks[0]?.problem ?? "no stamp");
@@ -1568,7 +1625,7 @@ function labelAllowed(label, deps, ctx) {
 }
 function pathwayLabel(deps, ctx, dir) {
   const top = ctx.top(dir);
-  const text = top === null ? null : deps.readFile(join5(top, PATHWAY_REL));
+  const text = top === null ? null : deps.readFile(join6(top, PATHWAY_REL));
   const head = top === null ? null : deps.git(top, ["rev-parse", "HEAD"]);
   if (text === null || head === null || head.status !== 0) return null;
   let p;
@@ -1720,8 +1777,8 @@ function makeGit(spawn = spawnSync, env = process.env, gitPath) {
 function makeErrorLogger(env = process.env) {
   return (message, ctx = {}) => {
     if (!shouldWrite(env)) return;
-    const file = join5(dirname3(guardLogPath(env)), "pre-pr-gate-errors.jsonl");
-    mkdirSync4(dirname3(file), { recursive: true, mode: 448 });
+    const file = join6(dirname4(guardLogPath(env)), "pre-pr-gate-errors.jsonl");
+    mkdirSync4(dirname4(file), { recursive: true, mode: 448 });
     const cwd = ctx.cwd ?? null;
     let cwdExists = false;
     try {

@@ -40,6 +40,8 @@ function deps(): Deps {
   return {
     git: (cwd, args) => {
       const key = args.join(' ');
+      // fork/main serves the same config text as the checkout, so these tests keep judging the checkout config (coord-cap-override PR A: the hook reads the stricter of the two).
+      if (key === 'show fork/main:review-router.config.json') { const t = files[join(ROOT, 'review-router.config.json')]; return t === undefined ? { status: 1, stdout: '' } : { status: 0, stdout: t }; }
       if (key === 'rev-parse --show-toplevel') return { status: 0, stdout: `${cwd}\n` };
       if (key === 'remote -v') return { status: 0, stdout: CCV3_REMOTES };
       if (key === 'worktree list --porcelain') return { status: 0, stdout: '' };

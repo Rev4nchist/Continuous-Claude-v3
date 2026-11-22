@@ -92,6 +92,12 @@ function deps(over: { stamp?: string | null; remotes?: string; gitFail?: boolean
     if (over.gitFail) return { status: 128, stdout: '' };
     const key = args.join(' ');
     if (key === 'rev-parse --show-toplevel') return { status: 0, stdout: `${cwd}\n` };
+    // fork/main serves the same config text as the checkout, so these tests keep judging the checkout config (coord-cap-override PR A: the hook reads the stricter of the two).
+    if (key === 'show fork/main:review-router.config.json') {
+      const p = join(cwd, 'review-router.config.json');
+      const t = over.stamps ? (over.stamps[p] ?? null) : (over.stamp === undefined ? null : over.stamp);
+      return t === null ? { status: 1, stdout: '' } : { status: 0, stdout: t };
+    }
     if (key === 'remote -v') return { status: 0, stdout: over.remotes ?? CCV3_REMOTES };
     if (key === 'worktree list --porcelain') return { status: 0, stdout: over.worktrees ?? '' };
     if (key === 'rev-parse HEAD') return { status: 0, stdout: `${over.head ?? HEAD}\n` };
@@ -1543,8 +1549,8 @@ describe('B: the checkpoint gate (PR B)', () => {
     for (const c of [NEW_DENIES[0].command, NEW_DENIES[2].command, NEW_DENIES[3].command]) expect(denied(c, { config: ENFORCE })?.reason, c).toMatch(/call pr_checkpoint \{pr\}/i);
   });
 
-  it('B4: warn mode (a readable config: enforce false, no key, a string): every new deny is ALLOWED and logs one warn row of the pinned shape', () => {
-    const configs: Array<[string, string | undefined]> = [['enforce false', WARN_OFF], ['no key', JSON.stringify({ checkpoint: {} })], ['enforce a string', JSON.stringify({ checkpoint: { enforce: 'true' } })]];
+  it('B4: warn mode (a readable config: enforce false, no key): every new deny is ALLOWED and logs one warn row of the pinned shape', () => {
+    const configs: Array<[string, string | undefined]> = [['enforce false', WARN_OFF], ['no key', JSON.stringify({ checkpoint: {} })]];
     for (const [label, config] of configs) {
       for (const n of NEW_DENIES) {
         for (const tool of ['Bash', 'PowerShell']) {
@@ -1576,10 +1582,10 @@ describe('B: the checkpoint gate (PR B)', () => {
     }
   });
 
-  it('B6: only a boolean true enforces: the strings "true" and the number 1 are warn mode', () => {
+  it('B6: a value that is not the boolean false enforces (coord-cap-override A11, fail closed): the strings "true" and "yes" and the number 1 deny', () => {
     for (const enforce of ['true', 1, 'yes']) {
       const d = act(NEW_DENIES[2].command, { config: JSON.stringify({ checkpoint: { enforce } }) });
-      expect(d.action, String(enforce)).toBe('allow');
+      expect(d.action, String(enforce)).toBe('deny');
     }
   });
 
@@ -1622,8 +1628,8 @@ describe('B: the checkpoint gate (PR B)', () => {
     }
   });
 
-  it('D4: a config with enforce false, no key or the string "true" keeps warn mode for a CCv3-named command: allowed, one warn row', () => {
-    for (const config of [JSON.stringify({ checkpoint: { enforce: false } }), JSON.stringify({ checkpoint: {} }), JSON.stringify({ checkpoint: { enforce: 'true' } })]) {
+  it('D4: a config with enforce false or no key keeps warn mode for a CCv3-named command: allowed, one warn row', () => {
+    for (const config of [JSON.stringify({ checkpoint: { enforce: false } }), JSON.stringify({ checkpoint: {} })]) {
       let out = '';
       const rows = logged(() => { out = handle(payload(NAMED_NO_CONFIG[0]), gdeps({ config })); });
       expect(out, config).toBe('{}');

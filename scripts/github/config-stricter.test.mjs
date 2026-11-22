@@ -51,7 +51,7 @@ test('A13: the inputs are not changed', () => {
 
 test('A5a: no fork/main ref and a primary checkout file: the primary value is the main side', () => {
   const primary = JSON.stringify({ checkpoint: { enforce: true } });
-  const read = (p) => (p === path.join('/primary', 'review-router.config.json') ? primary : null);
+  const read = (p) => (path.resolve(p) === path.resolve('/primary', 'review-router.config.json') ? primary : null);
   const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: null }), readFile: read });
   assert.equal(got.source, 'primary');
   assert.deepEqual(got.config, { checkpoint: { enforce: true } });
