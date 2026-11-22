@@ -20,7 +20,6 @@ End-to-end check per surface:
 | `apply-registrations.mjs` | dry run; `--apply --only <hook>` after Dave's yes | the output |
 | Any surface, when the registry entry has `e2e` | `node ~/.claude/scripts/verify.mjs` | the `.log` and its `.json` sidecar |
 
-Maps: `docs/verify/`.
 
 Put artifacts in `.claude/cache/e2e/<YYYY-MM-DD>-<name>.<ext>` (gitignored) and name the file in the
 PR's Evidence section.
