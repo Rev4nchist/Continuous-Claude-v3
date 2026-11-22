@@ -29,6 +29,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmdirSync, symlinkSy
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
+import { sameForm } from './pr-checkpoint.mjs';
 import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
 
 registerTempCleanup();
@@ -1014,21 +1015,19 @@ function dropFolderLink(link) {
   try { unlinkSync(link); } catch { try { rmdirSync(link); } catch { /* the temp cleanup removes what is left */ } }
 }
 
-test('PG5: an alias path above a missing folder is the real store, so a fixture --confirm is refused outside test mode; a separate temp store stays test mode', (ctx) => {
-  const home = realpathSync(makeTempDir('ledger-home-')); // the real store is <home>/.claude/state/ccv3-mods/decisions.json: its folder is not there
+// The default store now comes from the OS account home, not from HOME or USERPROFILE (paid guard PR 2, seat rule 2026-11-22), so a temp home can no longer stand in
+// for the real store in a child run. The part of PG5 that can still fail is the compare form: sameForm, which seamsOn uses on both sides.
+test('PG5: an alias path above a missing folder compares equal to the real store (sameForm), so a fixture --confirm is refused outside test mode; a separate temp store stays a second store', (ctx) => {
+  const home = realpathSync(makeTempDir('ledger-home-')); // a stand-in home: the store folder under it is not there
   const alias = path.join(makeTempDir('ledger-alias-'), 'home-link');
   if (!makeFolderLink(home, alias)) return ctx.skip('this platform cannot make a folder link (junction or directory symlink) in the temp folder');
   try {
     const t = setup();
-    const homeEnv = { USERPROFILE: home, HOME: home };
     const real = path.join(home, '.claude', 'state', 'ccv3-mods', 'decisions.json');
     assert.ok(!existsSync(path.dirname(real)), 'the folder above the real store is missing');
     const viaAlias = path.join(alias, '.claude', 'state', 'ccv3-mods', 'decisions.json');
-    const refused = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { ...homeEnv, CCV3_DECISIONS_FILE: viaAlias });
-    assert.equal(refused.status, 1, `${refused.stdout} ${refused.stderr}`);
-    assert.match(refused.stderr, /refused: --facts and --config are for tests\. A live question reads GitHub\./);
-    const temp = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { ...homeEnv, CCV3_DECISIONS_FILE: t.storeFile });
-    assert.match(temp.stderr, /No tap of Dave's/, 'a separate temp store is test mode: the run goes on and finds no tap');
+    assert.equal(sameForm(viaAlias), sameForm(real), 'a folder link above a missing folder is still the same file');
+    assert.notEqual(sameForm(t.storeFile), sameForm(real), 'a separate temp store is a second store');
   } finally {
     dropFolderLink(alias);
   }
