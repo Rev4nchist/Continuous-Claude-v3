@@ -532,16 +532,28 @@ const cleanupReturn = async ($: EngineInterface, root: string, pr: number, head:
  */
 const cleanSteps = async ($: EngineInterface, root: string, pr: number, marker: Record<string, unknown>): Promise<string | null> => {
   const open: string[] = []
+  // Another session can finish an apply of the SAME PR after this cleanup read the draft: that ready period owns the grant, the queue entry and the taps now (L7).
+  // The applied record is read again before each destructive step; one applied after the marker stops the cleanup. This narrows the window to a few milliseconds
+  // (a queue drop that names the head would close it: outside this card).
+  const superseded = async (): Promise<boolean> => {
+    const record = readRecord(await $.store.get(`${RECORD_PREFIX}${pr}`))
+    const at = record !== null && record.state === 'applied' ? record.appliedAt : undefined
+    return typeof at === 'number' && typeof marker.at === 'number' && at > marker.at
+  }
+  const supersededStop = `PR #${pr} was applied again while its cleanup ran: the newer ready period keeps its grant, queue entry and taps. Nothing more was dropped. Call pr_checkpoint again if the PR is still a draft.`
+  if (await superseded()) return supersededStop
   try {
     await dropAsksOfPr($, pr)
   } catch {
     open.push('the queued asks')
   }
+  if (await superseded()) return supersededStop
   try {
     await $.store.delete(`${GRANT_PREFIX}${pr}`)
   } catch {
     open.push('the round grant')
   }
+  if (await superseded()) return supersededStop
   try {
     const found = await slotScript($)
     // No queue script in any root: nothing proves the entry is gone, so the cleanup stays open (no `dropped: true`).
@@ -554,6 +566,7 @@ const cleanSteps = async ($: EngineInterface, root: string, pr: number, marker: 
   } catch {
     open.push('the queue entry')
   }
+  if (await superseded()) return supersededStop
   return dropOnce($, root, pr, marker, open)
 }
 
@@ -591,7 +604,7 @@ const prepareChanging = async ($: EngineInterface, root: string, pr: number, bod
  * auto-confirm must not record it for him. The record outlives the undo and a later push, so the test holds on every later call, whichever session makes
  * it and whatever failed in between. Every cleanup is guarded by a fresh read of the PR (`cleaning`).
  */
-const returnedToDraft = async ($: EngineInterface, pending: Pick<Pending, 'pr' | 'prHead' | 'root'>, drafted = true): Promise<{ repick: boolean; stop: string | null }> => {
+const returnedToDraft = async ($: EngineInterface, pending: Pick<Pending, 'pr' | 'prHead' | 'root'>, drafted = true): Promise<{ repick: boolean; stop: string | null; movedTo?: string }> => {
   const { pr, prHead, root } = pending
   // The applied record of ANY head: a return by hand at head A followed by a push of head B leaves a record of A, and the PR is still the one that was ready.
   // The record is read first, the PR after it (`cleaning`): the record is the candidate, the fresh read decides.
@@ -608,7 +621,11 @@ const returnedToDraft = async ($: EngineInterface, pending: Pick<Pending, 'pr' |
     if (fresh === null) return { repick: true, stop: await clean(prHead) }
     // A candidate exists (the callers are reached only with an applied record, or a marker with no flag) and the fresh read shows a draft at another head:
     // the PR was returned and pushed. Its grant, queue entry and taps are the old ready period's, so they go. Only a PR that is no draft keeps them.
-    if (!drafted && fresh.draftHead !== undefined) return { repick: true, stop: await clean(fresh.draftHead) }
+    if (!drafted && fresh.draftHead !== undefined) {
+      const stop = await clean(fresh.draftHead)
+      // `movedTo`: the cleanup worked and the PR now sits at another head, so a checkpoint stored for the OLD head must not be asked (L6).
+      return { repick: true, stop, ...(stop === null ? { movedTo: fresh.draftHead } : {}) }
+    }
     if (!drafted && !fresh.unreadable) return { repick, stop: null }
     return { repick, stop: cleanupUncheckedText(pr, fresh.why) }
   }
@@ -636,12 +653,14 @@ const draftAtHead = async ($: EngineInterface, root: string, pr: number, head: s
   const ran = await run($, viewArgv(pr), root, VIEW_TIMEOUT_MS)
   if (!ran.ok) return { why: ran.text, unreadable: true }
   if (ran.code !== 0) return { why: firstLine(ran.err || ran.out) || `gh exited ${ran.code}`, unreadable: true }
-  let info: { isDraft?: unknown; headRefOid?: unknown }
+  let info: { isDraft?: unknown; headRefOid?: unknown } | null
   try {
     info = JSON.parse(ran.out)
   } catch {
     return { why: 'gh printed no JSON', unreadable: true }
   }
+  // A state the cleanup can trust has an object, a boolean draft flag and a head (card prflow-paid-guard-leftovers, L5): JSON null, a missing or text flag, or no head is unreadable.
+  if (info === null || typeof info !== 'object' || typeof info.isDraft !== 'boolean' || typeof info.headRefOid !== 'string' || info.headRefOid === '') return { why: 'gh printed no usable state', unreadable: true }
   if (info.isDraft !== true) return { why: 'the PR is no longer a draft', unreadable: false }
   if (info.headRefOid !== head) {
     const now = typeof info.headRefOid === 'string' && info.headRefOid !== '' ? info.headRefOid : null
@@ -853,6 +872,11 @@ const askPending = async ($: EngineInterface, pending: Pending, trace: Trace, dr
     // The same guard as the tool: an outstanding cleanup of a PR that went back to draft (a drop that failed, a flag not saved) opens no question.
     const returned = await returnedToDraft($, pending, drafted)
     if (returned.stop !== null) return say('refused', returned.stop)
+    if (returned.movedTo !== undefined) {
+      // The stored checkpoint is for the old head: its options, its covers and its stamp are the old ready period's. Clear it and ask for a new one (L6).
+      await $.store.delete(`${PENDING_PREFIX}${await sessionId($)}`).catch(() => undefined)
+      return say('refused', `PR #${pending.pr} was returned to draft and pushed (head ${returned.movedTo.slice(0, 7)}). Its old checkpoint is cleared and nothing was recorded. Call pr_checkpoint {pr} for the new head.`)
+    }
     const asked = await askCheckpoint($, pending)
     return asked.recorded ? say('recorded', asked.text, [asked.text]) : say('asked', asked.text)
   } finally {
@@ -880,10 +904,18 @@ const bareCommand = async ($: EngineInterface, e: CommandEvent, live: boolean, p
   try {
     // The same guard as askPending, on the PR of the first queued ask: a PR returned to draft gets its cleanup (which empties its queued asks) before any
     // question, and a cleanup that cannot finish opens none.
-    const ask = (await loadAsks($))[0]
+    // Each queued ask gets the draft check before a dialog can open for it (L8): a cleanup that empties the first ask leaves the NEXT one first in line, and
+    // raiseQueued opens that one. One pass per queued ask at most (the length read now), so the loop always ends.
     const root = await rootOf($)
-    const returned = ask && root ? await returnedToDraft($, { pr: ask.pr, prHead: ask.head, root }, false) : null
-    if (returned && returned.stop !== null) return say('refused', returned.stop)
+    const bound = (await loadAsks($)).length
+    for (let pass = 0; root && pass < bound; pass += 1) {
+      const ask = (await loadAsks($))[0]
+      if (!ask) break
+      const returned = await returnedToDraft($, { pr: ask.pr, prHead: ask.head, root }, false)
+      if (returned.stop !== null) return say('refused', returned.stop)
+      const first = (await loadAsks($))[0]
+      if (first && first.pr === ask.pr && first.kind === ask.kind && first.head === ask.head) break
+    }
     const text = await raiseQueued($)
     return text === null ? say('need-pr', NEED_PR) : say('asked', text)
   } finally {
