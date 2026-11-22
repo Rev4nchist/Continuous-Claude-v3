@@ -8,6 +8,7 @@
 //   a head that is not the PR head, or a failed GitHub read, still writes a row                                          -> PC3
 //   a tap with no entry stamp (an old row) writes a row                                                                  -> PC4
 //   the row is written when the record was refused (no tap), or before the record                                        -> PC5
+//   a draft PR gets a paid row; a return to draft between the read and the write leaves the row (the drop ran first)     -> PC6, PC7, PC8 (control)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -52,14 +53,25 @@ function setup({ capacity = null, labels = ['risk:high'] } = {}) {
   writeFileSync(bodyFile, BODY_TEXT);
   writeFileSync(cfgFile, JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: null, reviews_7d_manual_date: null }, checkpoint: { ...LIVE.checkpoint, autoConfirm: false, ledger: true } }));
   // `pr view` answers FAKE_GH_HEAD as the PR head; with no FAKE_GH_HEAD it fails like an unreachable GitHub.
-  writeFileSync(fakeGh, "if (!process.env.FAKE_GH_HEAD) { console.error('network down'); process.exit(1); }\nconsole.log(JSON.stringify({ headRefOid: process.env.FAKE_GH_HEAD, number: 349 }));\n");
+  // FAKE_GH_DRAFT=1: the PR is a draft on every read. FAKE_GH_DRAFT_FROM=N (with FAKE_GH_COUNT, a counter file): the PR is a draft from the Nth `pr view` on,
+  // the way a return to draft lands between the read before the paid row and the read after it.
+  writeFileSync(fakeGh, [
+    "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+    "if (!process.env.FAKE_GH_HEAD) { console.error('network down'); process.exit(1); }",
+    "let n = 0;",
+    "if (process.env.FAKE_GH_COUNT && process.argv.includes('view')) { n = (existsSync(process.env.FAKE_GH_COUNT) ? Number(readFileSync(process.env.FAKE_GH_COUNT, 'utf8')) : 0) + 1; writeFileSync(process.env.FAKE_GH_COUNT, String(n)); }",
+    "const draft = process.env.FAKE_GH_DRAFT === '1' || (Boolean(process.env.FAKE_GH_DRAFT_FROM) && n >= Number(process.env.FAKE_GH_DRAFT_FROM));",
+    "console.log(JSON.stringify({ headRefOid: process.env.FAKE_GH_HEAD, isDraft: draft, number: 349 }));",
+    '',
+  ].join('\n'));
+  const countFile = path.join(dir, 'gh-view-count');
   const storeFile = path.join(dir, 'decisions.json');
   process.env.CCV3_DECISIONS_FILE = storeFile;
   const env = (over = {}) => ({ ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, CCV3_DECISIONS_FILE: storeFile, PR_CHECKPOINT_NO_PROBE: '1', PR_CHECKPOINT_TEST: '1', PR_CHECKPOINT_GH: fakeGh, ...over });
   const run = (args, over = {}) => spawnSync(process.execPath, [ENGINE, ...args, ...(args.includes('--confirm') ? ['--state-dir', state] : []), '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir, env: env(over) });
   const ask = () => { const r = run(['--json', '--pr', String(PR)]); assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`); return JSON.parse(r.stdout).ledger.ask; };
   const confirm = (pathway, over = {}) => run(['--confirm', pathway, '--by', 'dave', '--body', bodyFile, '--pr', String(PR)], over);
-  return { ask, confirm, pathwayFile: path.join(state, 'pathway.json') };
+  return { ask, confirm, countFile, pathwayFile: path.join(state, 'pathway.json') };
 }
 
 const labelOf = (spec, re) => spec.options.find((o) => re.test(o.label)).label;
@@ -118,6 +130,36 @@ test('PC4: a tap with no entry stamp writes no row (no stamp, no paid yes)', () 
   assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
   assert.match(r.stderr, /no-stamp/);
   assert.equal(D.decisionRowRead(paid()), null);
+});
+
+test('PC6 (CLI finding, seat ruling): a PR that is a draft when the pick is confirmed writes no paid row', () => {
+  const t = setup();
+  tap(labelOf(t.ask(), /^CodeRabbit review/), 'cli');
+  const r = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD, FAKE_GH_DRAFT: '1' });
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.match(r.stderr, /no paid yes was stored.*draft/);
+  assert.equal(D.decisionRowRead(paid()), null, 'a draft PR gets no paid yes');
+  assert.ok(existsSync(t.pathwayFile), 'the record stays');
+});
+
+test('PC7 (CLI finding, seat ruling): a return to draft that lands between the read before the paid row and the write leaves no paid row (the PR is read again after the write)', () => {
+  const t = setup();
+  tap(labelOf(t.ask(), /^CodeRabbit review/), 'cli');
+  // View 1 (before the write): not a draft. View 2 (after the write): a draft, as if the return to draft and its drop of the taps ran in between.
+  const r = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD, FAKE_GH_COUNT: t.countFile, FAKE_GH_DRAFT_FROM: '2' });
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.match(r.stderr, /no paid yes was stored.*draft/);
+  assert.equal(D.decisionRowRead(paid()), null, 'the row written in the gap is removed');
+  assert.equal(readFileSync(t.countFile, 'utf8'), '2', 'the PR was read twice: before and after the write');
+});
+
+test('PC8 (control): a PR that stays ready keeps the paid row after the second read', () => {
+  const t = setup();
+  tap(labelOf(t.ask(), /^CodeRabbit review/), 'cli');
+  const r = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD, FAKE_GH_COUNT: t.countFile });
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.ok(D.decisionRowRead(paid()), 'the paid row stays');
+  assert.equal(readFileSync(t.countFile, 'utf8'), '2');
 });
 
 test('PC5: a confirm that is refused (no tap) writes no paid row', () => {

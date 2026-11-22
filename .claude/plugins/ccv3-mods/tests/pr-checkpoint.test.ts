@@ -4925,7 +4925,7 @@ describe('pr-checkpoint PR 2 group A: the ten items', () => {
       expect(asksOf(w.store)).toEqual([])
     })
 
-    for (const [name, view] of [['gh exits 1', { exitCode: 1, stderr: 'HTTP 502' }], ['gh prints a state with no draft field', { stdout: JSON.stringify({ state: 'OPEN', headRefOid: HEAD }) }]] as [string, Reply][]) {
+    for (const [name, view] of [['gh exits 1', { exitCode: 1, stderr: 'HTTP 502' }], ['gh prints a state with no draft field', { stdout: JSON.stringify({ state: 'OPEN', headRefOid: HEAD }) }], ['gh prints JSON null', { stdout: 'null' }]] as [string, Reply][]) {
       test(`AD6 a round Yes writes no grant when the PR state cannot be read (${name}): the ask stays queued and Dave gets a toast`, async ($, on) => {
         const w = world(on, round(view))
         await start($)
@@ -4945,6 +4945,19 @@ describe('pr-checkpoint PR 2 group A: the ten items', () => {
       expect(w.store.get(GRANT)).toBeUndefined()
       expect(asksOf(w.store).length).toBe(1)
     })
+
+    // CLI finding (run 2, tick-asks.ts:241), seat ruling: a missing checkout is unreadable for EVERY ask kind, read once and reused for the post.
+    for (const [name, make, body] of [['an opening Yes', opening, '@coderabbitai review'], ['a Greptile Yes', greptile, '@greptileai']] as const) {
+      test(`AD7b ${name} with no checkout to read the PR in posts nothing, keeps the ask queued and says the PR state could not be read`, async ($, on) => {
+        const w = world(on, make(stateView(), { missing: ['scripts/github/pr-checkpoint.mjs'] }))
+        await start($)
+        await w.clock.advance(TICK)
+        expect(w.seen.dialogs.length).toBe(1)
+        expect(counts(w.seen).comments.filter(c => c.includes(body))).toEqual([])
+        expect(asksOf(w.store).length).toBe(1)
+        expect(w.seen.toasts.some(text => /#7/.test(text) && /could not read the PR state \(no checkout\)/.test(text))).toBe(true)
+      })
+    }
   })
 
   // ---- item 1a: a bare /pathway raises no queued ask of a PR that was returned to draft ------------------------------------------------------

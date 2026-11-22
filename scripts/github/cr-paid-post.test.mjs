@@ -606,6 +606,22 @@ test('PP21 (CLI finding c): a push after the check read the head and before the 
   [w, still].forEach((x) => x.done());
 });
 
+test('PP21b (CLI run 2, cr-paid.mjs:425, seat ruling): a PR that turned draft or closed in the seconds between the check and the post refuses at the live read (exit 4), posts nothing, records nothing', () => {
+  for (const [name, now, why] of [['a draft', { draft: true }, /is a draft/], ['closed', { state: 'closed' }, /is closed/]]) {
+    let moved = false;
+    const w = world({ pull: { get draft() { return moved ? (now.draft ?? false) : false; }, get state() { return moved ? (now.state ?? 'open') : 'open'; } } });
+    const checkPr = () => { moved = true; return { verdict: 'ALLOW', pr: 225, head: HEAD, round: 1, files: 4, total: 4, today: 0, paidRounds: 0, reasons: [] }; };
+    const r = PAID.postPaid({ pr: 225, repo: REPO, cap: 9900, source: 'cap', head: HEAD }, { ...w.deps, checkPr });
+    assert.equal(r.ok, false, name);
+    assert.equal(r.code, 4, name);
+    assert.match(r.text, why, name);
+    assert.match(r.text, /A paid review goes only to an open PR that is not a draft/, name);
+    assert.equal(w.posts.length, 0, name);
+    assert.deepEqual(w.ledger(), [], name);
+    w.done();
+  }
+});
+
 test('PP19 (F3 part a): the row `post` writes carries via "post"', () => {
   const w = world();
   yes();
