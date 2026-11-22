@@ -24,6 +24,7 @@
  *   - A signal (SIGINT, SIGTERM, SIGHUP, and SIGBREAK on Windows) stops the child's own tree first, then frees the lock; exit 128 + signal.
  *     Windows: scripts/lib/Stop-ProcessTree.ps1 (one process-table snapshot, a child counts only when it is not older than its parent, each id
  *     read again before its kill, never this shell or its ancestors). Never the taskkill tree switch. Linux: the child leads its own process group.
+ *   - The lock row is released only when the child has really ended. A child that outlives the stop keeps its row (one WARN line) until it expires.
  *   - A kill -9 of the wrapper leaves the child and its lock. The lock holds the child pid, so it stays true while the child lives.
  *   - No hook enforces that a run goes through this wrapper. A run that does not is as invisible as before.
  *   - Test seams (env): RUN_WRAP_SELF_SIGNAL_MS (send SIGTERM to itself that long after the register), RUN_WRAP_RENEW_MS (renew interval).
@@ -119,8 +120,9 @@ export async function runWrap(o, deps = {}) {
   let finished = false;
   let finish;
   const closed = new Promise((res) => { finish = (code) => { if (!finished) { finished = true; res(code); } }; });
-  child.once('error', (e) => { d.out(`run-wrap: cannot start ${cmd}: ${firstLine(e)}`); finish(127); });
-  child.once('close', (code, sig) => finish(code ?? (sig ? 128 + (os.constants.signals[sig] || 0) : 1)));
+  let childGone = false; // true only when the child has really ended: a stop that failed must not free its slot
+  child.once('error', (e) => { childGone = true; d.out(`run-wrap: cannot start ${cmd}: ${firstLine(e)}`); finish(127); });
+  child.once('close', (code, sig) => { childGone = true; finish(code ?? (sig ? 128 + (os.constants.signals[sig] || 0) : 1)); });
 
   const regOpts = () => ({ kind: o.kind, pid: child.pid, head: me.head, holder: me.holder, session: me.session, minutes: o.minutes });
   let registered = false;
@@ -133,7 +135,7 @@ export async function runWrap(o, deps = {}) {
     if (signalExit !== null) return;
     signalExit = 128 + (os.constants.signals[sig] || 15);
     if (child.pid) { try { d.stopTree(child.pid); } catch { /* the child may be gone */ } }
-    setTimeout(() => finish(signalExit), STOP_WAIT_MS).unref(); // a child that outlives the stop must not hold the wrapper
+    setTimeout(() => finish(signalExit), Number(d.env.RUN_WRAP_STOP_WAIT_MS) || STOP_WAIT_MS).unref(); // a child that outlives the stop must not hold the wrapper
   };
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP', ...(d.platform === 'win32' ? ['SIGBREAK'] : [])];
   for (const s of signals) process.on(s, onSignal);
@@ -152,7 +154,10 @@ export async function runWrap(o, deps = {}) {
   if (renew) clearInterval(renew);
   for (const s of signals) process.off(s, onSignal);
   await regDone;
-  if (o.kind !== 'pre-pr' && child.pid) { try { d.releaseSync({ pid: child.pid, kind: o.kind }); } catch { /* the store is gone */ } }
+  if (o.kind !== 'pre-pr' && child.pid) {
+    if (childGone) { try { d.releaseSync({ pid: child.pid, kind: o.kind }); } catch { /* the store is gone */ } }
+    else if (registered) d.out(`WARN run-wrap: child pid ${child.pid} outlived the stop; its lock row stays until it expires`);
+  }
   return signalExit ?? code;
 }
 
