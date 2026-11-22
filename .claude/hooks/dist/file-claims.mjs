@@ -6982,7 +6982,9 @@ var MAX_LINE = 2e3;
 var MAX_FLAG_BYTES = 64;
 var MAX_LOG_BYTES = 13e4;
 var PERMISSION_MODES = ["default", "acceptEdits", "plan", "bypassPermissions", "auto"];
-var AGENT_TYPES = [...READ_ONLY_AGENT_TYPES, "general-purpose", "claude", "Explore", "Plan", "kraken", "spark"];
+var WRITE_AGENT_TYPES = ["aegis", "arbiter", "atlas", "debug-agent", "herald", "kraken", "onboard", "plan-agent", "research-codebase", "review-agent", "scribe", "sentinel", "spark", "validate-agent", "wizard"];
+var KNOWN_AGENT_TYPES = [...READ_ONLY_AGENT_TYPES, ...WRITE_AGENT_TYPES, "general-purpose", "claude", "Explore", "Plan"];
+var AGENT_TYPES = KNOWN_AGENT_TYPES;
 var userHome = () => process.env.CCV3_USER_HOME || homedir5();
 var fixedText = () => ["ts", "n", "tool", "keys", "agent_id", "agent_type", "permission_mode", "session", "transcript", "present", "absent", "other", "same", "diff", ...AGENT_TYPES, ...PERMISSION_MODES, (/* @__PURE__ */ new Date()).toISOString()].join(" ");
 var present = (v) => typeof v === "string" && v !== "" ? "present" : "absent";
@@ -7015,7 +7017,7 @@ function logUnknownAgentType(rawInput) {
     } catch {
       size = 0;
     }
-    if (size > AGENT_TYPE_LOG_MAX_BYTES) return;
+    if (size >= AGENT_TYPE_LOG_MAX_BYTES) return;
     const rows = size > 0 ? readFileSync4(path, "utf8").split("\n").filter(Boolean) : [];
     if (rows.length >= AGENT_TYPE_LOG_CAP) return;
     for (const row of rows) {

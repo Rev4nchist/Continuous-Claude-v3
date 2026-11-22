@@ -17,15 +17,18 @@
  *  T11 CCV3_AGENT_TYPE_LOG=0 does not stop the log (reverse state: unset logs again).
  *  T12 The real file-claims hook changes its output because of the log, or the line lands in the real home.
  *  T13 A main-session call, a known type or the env switch touches the file system at all (change A).
+ *  T14 An agent file is added or removed and the known list does not follow (write agents would fill the cap).
+ *  Round 2 (seat ruling 2026-11-22): T4 holds write agents, T9 has the 8192-byte case, T10 spies the console, T12 uses a
+ *  second HOME folder, the real-home mtime check is dropped (a live session can write that file).
  *
  * Every test sets CCV3_USER_HOME to a temp folder (change D).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
-import { homedir, tmpdir } from 'os';
-import { join } from 'path';
-import { AGENT_TYPE_LOG_CAP, AGENT_TYPE_LOG_MAX_BYTES, logUnknownAgentType } from '../shared/payload-log.js';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join, resolve } from 'path';
+import { AGENT_TYPE_LOG_CAP, AGENT_TYPE_LOG_MAX_BYTES, KNOWN_AGENT_TYPES, logUnknownAgentType } from '../shared/payload-log.js';
 
 const seen = vi.hoisted(() => ({ payload: '', fsCalls: [] as string[] }));
 
@@ -55,10 +58,6 @@ vi.mock('fs', async (importOriginal) => {
     }) as typeof real.readFileSync,
   };
 });
-
-// The real home, read before any test changes USERPROFILE (Windows) or HOME.
-const REAL_LOG = join(homedir(), '.claude', 'state', 'agent-types-seen.jsonl');
-const realLogBefore = existsSync(REAL_LOG) ? statSync(REAL_LOG).mtimeMs : null;
 
 let root: string;
 let home: string;
@@ -128,7 +127,8 @@ describe('agent_type log: which calls it records', () => {
   });
 
   it('T4: a known type writes nothing (breaks if the known list is not applied)', () => {
-    for (const t of ['critic', 'kraken', 'general-purpose', 'Explore', 'scout', 'spark', 'claude', 'Plan']) logUnknownAgentType(sub(t));
+    // Read-only types, builders, the types of write agents (aegis, sentinel, wizard) and the built-in names.
+    for (const t of ['critic', 'kraken', 'general-purpose', 'Explore', 'scout', 'spark', 'claude', 'Plan', 'aegis', 'sentinel', 'wizard']) logUnknownAgentType(sub(t));
     expect(lines()).toEqual([]);
   });
 
@@ -176,9 +176,17 @@ describe('agent_type log: which calls it records', () => {
     expect(readFileSync(log, 'utf8').length).toBe(AGENT_TYPE_LOG_MAX_BYTES + 1);
     expect(calls.filter((c) => c.startsWith('readFileSync') && c.includes('agent-types-seen'))).toEqual([]);
     expect(calls.filter((c) => c.startsWith('appendFileSync'))).toEqual([]);
+    // Exactly 8192 bytes already stops (>=), so the file never passes 8 KB by one more line.
+    writeFileSync(log, 'x'.repeat(AGENT_TYPE_LOG_MAX_BYTES));
+    logUnknownAgentType(sub('fresh-three'));
+    expect(readFileSync(log, 'utf8').length).toBe(AGENT_TYPE_LOG_MAX_BYTES);
   });
 
   it('T10: an unreadable log (a folder in its place) and a missing state folder do not throw (breaks if the outer guard is dropped)', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const errOutSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     mkdirSync(log);
     expect(() => logUnknownAgentType(sub('workflow-agent'))).not.toThrow();
     rmSync(log, { recursive: true });
@@ -186,6 +194,11 @@ describe('agent_type log: which calls it records', () => {
     expect(() => logUnknownAgentType(sub('workflow-agent'))).not.toThrow();
     expect(rows().length).toBe(1); // the state folder is made when it is missing
     for (const bad of [null, 42, 'text', undefined, []]) expect(() => logUnknownAgentType(bad)).not.toThrow();
+    // Nothing prints: the log is silent on the good path and on every error path.
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errSpy).not.toHaveBeenCalled();
+    expect(outSpy).not.toHaveBeenCalled();
+    expect(errOutSpy).not.toHaveBeenCalled();
   });
 
   it('T11: CCV3_AGENT_TYPE_LOG=0 stops the log, unset logs again (reverse state)', () => {
@@ -195,6 +208,16 @@ describe('agent_type log: which calls it records', () => {
     delete process.env.CCV3_AGENT_TYPE_LOG;
     logUnknownAgentType(sub('workflow-agent'));
     expect(lines().length).toBe(1);
+  });
+});
+
+describe('agent_type log: the known list follows the agent files', () => {
+  it('T14: every .claude/agents/*.md name is known and nothing else is, except the built-in names (breaks when an agent file or the list changes alone)', () => {
+    const dir = resolve(__dirname, '../../../agents');
+    const files = readdirSync(dir).filter((n) => n.endsWith('.md')).map((n) => n.replace(/\.md$/, ''));
+    const builtIn = ['general-purpose', 'claude', 'Explore', 'Plan'];
+    expect([...KNOWN_AGENT_TYPES].filter((t) => !builtIn.includes(t)).sort()).toEqual(files.sort());
+    for (const t of builtIn) expect(KNOWN_AGENT_TYPES).toContain(t);
   });
 });
 
@@ -241,7 +264,12 @@ describe('agent_type log: cost and the real hook', () => {
 
     it('T12: the log changes no output and the line lands in the temp home, not the real one (breaks if the log changes a verdict or ignores CCV3_USER_HOME)', async () => {
       const repo = join(root, 'repo');
-      const stateFile = join(home, '.claude', 'state', 'x.json');
+      // HOME and USERPROFILE name a SECOND folder, so a hook that ignored CCV3_USER_HOME would write the line there.
+      const otherHome = join(root, 'other-home');
+      mkdirSync(join(otherHome, '.claude', 'state'), { recursive: true });
+      process.env.HOME = otherHome;
+      process.env.USERPROFILE = otherHome;
+      const stateFile = join(otherHome, '.claude', 'state', 'x.json');
       const unknownTypeWrite = { tool_name: 'Write', session_id: 'sess-a-2', cwd: repo, agent_id: 'a1', agent_type: 'workflow-agent', tool_input: { file_path: stateFile } };
       const untyped = { ...unknownTypeWrite, agent_type: undefined };
       process.env.CCV3_AGENT_TYPE_LOG = '0';
@@ -255,8 +283,8 @@ describe('agent_type log: cost and the real hook', () => {
       expect(withLogUntyped).toBe(withoutUntyped);
       expect((JSON.parse(withLogUntyped) as Out).hookSpecificOutput?.permissionDecision).toBe('deny'); // the untyped deny stays
       expect(rows().map((r) => r.value)).toEqual(['workflow-agent']);
-      // Change D: the real home got no file and no change.
-      expect(existsSync(REAL_LOG) ? statSync(REAL_LOG).mtimeMs : null).toBe(realLogBefore);
+      // Change D: the line is in the CCV3_USER_HOME folder only, not in the folder that HOME names.
+      expect(existsSync(join(otherHome, '.claude', 'state', 'agent-types-seen.jsonl'))).toBe(false);
     });
   });
 });

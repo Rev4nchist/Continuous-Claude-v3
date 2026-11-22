@@ -30,8 +30,10 @@ const MAX_LINE = 2000; // 30 keys of 40 characters fit
 const MAX_FLAG_BYTES = 64;
 const MAX_LOG_BYTES = 130_000;
 const PERMISSION_MODES: readonly string[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'auto'];
-/** The read-only types the guard knows (imported, so the list cannot drift), plus the types a builder or a default agent has. */
-const AGENT_TYPES: readonly string[] = [...READ_ONLY_AGENT_TYPES, 'general-purpose', 'claude', 'Explore', 'Plan', 'kraken', 'spark'];
+/** Every name in `.claude/agents/*.md` (drift test T14), the built-in names, and the read-only types the guard knows (imported, so that list cannot drift). */
+const WRITE_AGENT_TYPES: readonly string[] = ['aegis', 'arbiter', 'atlas', 'debug-agent', 'herald', 'kraken', 'onboard', 'plan-agent', 'research-codebase', 'review-agent', 'scribe', 'sentinel', 'spark', 'validate-agent', 'wizard'];
+export const KNOWN_AGENT_TYPES: readonly string[] = [...READ_ONLY_AGENT_TYPES, ...WRITE_AGENT_TYPES, 'general-purpose', 'claude', 'Explore', 'Plan'];
+const AGENT_TYPES = KNOWN_AGENT_TYPES;
 
 type Payload = Record<string, unknown>;
 
@@ -89,7 +91,7 @@ export function logUnknownAgentType(rawInput: unknown): void {
     } catch {
       size = 0; // no file yet
     }
-    if (size > AGENT_TYPE_LOG_MAX_BYTES) return;
+    if (size >= AGENT_TYPE_LOG_MAX_BYTES) return;
     const rows = size > 0 ? readFileSync(path, 'utf8').split('\n').filter(Boolean) : [];
     if (rows.length >= AGENT_TYPE_LOG_CAP) return;
     for (const row of rows) {
