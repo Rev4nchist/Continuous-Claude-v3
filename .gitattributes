@@ -51,6 +51,12 @@
 # the twin to that text, so a CRLF checkout (core.autocrlf=true) would show false drift.
 /.claude/plugins/ccv3-mods/hooks/shared/prices.* text eol=lf
 
+# The whole ccv3-mods plugin and the FleetOps page template stay LF. Every tracked file is LF in the index; with
+# core.autocrlf=true a Windows checkout wrote CRLF in 114 of 117 files, so a byte or size check on the work tree
+# (the FleetOps upload size check stopped two refreshes) saw different bytes than CI. scripts/checks/line-ends-lf.test.mjs.
+/.claude/plugins/ccv3-mods/** text eol=lf
+/scripts/coordination/fleetops/** text eol=lf
+
 # Always-loaded instruction files stay LF: the context budget counts every \r, so CRLF costs
 # ~377 chars (scripts/rules/context-budget-guard.mjs; 2026-10-03 trim pass).
 /.claude/templates/CLAUDE.md.template text eol=lf
