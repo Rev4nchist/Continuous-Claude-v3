@@ -208,6 +208,7 @@ test('cap: guidelines are cut first and logged; other sections stay (breaks if t
   const files = { '.coderabbit.yaml': YAML, 'REVIEW.md': REVIEW_MD, 'CLAUDE.md': BIG, 'AGENTS.md': BIG, 'src/AGENTS.md': BIG };
   const roomy = ctx({ capKb: 48 }, files);
   assert.ok(roomy.included.includes('guidelines:CLAUDE.md') && roomy.included.includes('guidelines:src/AGENTS.md'));
+  assert.ok(!roomy.included.includes('guidelines:AGENTS.md'), 'the root AGENTS.md is skipped even when it is big');
   const tight = ctx({ capKb: 6, gates: 'gate ok' }, files);
   assert.ok(tight.bytes <= 6 * 1024, `bytes ${tight.bytes}`);
   assert.ok(!tight.included.some((n) => n.startsWith('guidelines:')), tight.included.join(','));
@@ -291,6 +292,11 @@ test('the testing standard reaches the reviewer through the filePatterns row of 
   assert.match(out.text, /### docs\/testing-standard\.md \(at the merge base\)/);
   assert.match(out.text, /TESTING-STANDARD-TEXT/);
   assert.doesNotMatch(out.text, /ROOT-CHARTER/);
+});
+
+test('the real .coderabbit.yaml carries the testing standard row for every changed file (breaks if the row is removed or narrowed)', () => {
+  const rows = parseFilePatterns(readFileSync(path.join(REPO_ROOT, '.coderabbit.yaml'), 'utf8'));
+  assert.deepEqual(rows.filter((r) => r.files === 'docs/testing-standard.md'), [{ files: 'docs/testing-standard.md', applyTo: '**' }]);
 });
 
 test('a guideline that holds backticks cannot break out of its fence (breaks if guidelines are not fenced)', () => {

@@ -166,7 +166,7 @@ test('classify: highest class of any path wins, in the order r3 > infra > steeri
 });
 
 test('classify: root steering files are steering, not docs', () => {
-  for (const p of ['CLAUDE.md', 'AGENTS.md', 'CONTEXT.md', '.claude/skills/foo/SKILL.md']) {
+  for (const p of ['CLAUDE.md', 'AGENTS.md', 'docs/testing-standard.md', 'CONTEXT.md', '.claude/skills/foo/SKILL.md']) {
     assert.equal(cls([p]).class, 'steering', p);
   }
 });
