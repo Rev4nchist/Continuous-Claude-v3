@@ -1984,5 +1984,5 @@ test('RD9: with pgrep a run-wrap command line is not a pre-pr run, its child and
   const spawn = (cmd, args) => { calls.push([cmd, ...args]); return cmd === 'pgrep' ? { status: 0, stdout: `100 ${WRAPPED}\n101 ${PLAIN}\n102 ${TRICKY}\n300\n` } : { status: 0, stdout: 'Sat Nov 15 09:00:00 2026\n' }; };
   const procs = RL.realPrePrProcs({ spawn, platform: 'linux' });
   assert.deepEqual(procs.map((p) => p.pid), [101, 102, 300]);
-  assert.ok(calls.some((c) => c[0] === 'pgrep' && c.includes('-a')), 'pgrep must print the command line (-a) to tell a wrapper from a run');
+  assert.ok(calls.some((c) => c[0] === 'pgrep' && c.some((a) => /^-[a-z]*a[a-z]*$/.test(a))), 'pgrep must print the command line (-a) to tell a wrapper from a run');
 });
