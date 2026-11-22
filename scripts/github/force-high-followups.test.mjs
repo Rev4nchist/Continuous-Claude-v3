@@ -11,7 +11,7 @@
 //   an upper-case path (DRIZZLE/0009_x.SQL) is a lower class or not a migration (aegis F3)                                      -> FH10, FH11
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -237,6 +237,38 @@ test('FH9: baseCodeProblem hashes raw bytes: a CRLF copy passes with no autocrlf
     write(ident.checkout, 'scripts/a.mjs', 'export const a = "$Id: the PR changed this line$";\n');
     assert.ok(String(check(ident)).includes('scripts/a.mjs'), 'an ident attribute of the PR does not hide a change');
   } finally { rmSync(ident.tmp, { recursive: true, force: true }); }
+});
+
+// ---------- CodeRabbit CLI finding 1 of pre-pr 1 (seat ruling 11-22): a link must not stand in for a listed file ----------
+
+test('FH13: a listed file that is a link, or sits in a linked folder, is refused even when its bytes equal the base (Node loads the real path)', (t) => {
+  const env = setup({ 'lib/a.mjs': 'export const a = 1;\n', 'b.mjs': 'export const b = 2;\n' });
+  const links = [];
+  try {
+    const elsewhere = path.join(env.tmp, 'elsewhere');
+    mkdirSync(elsewhere);
+    copyFileSync(path.join(env.checkout, 'lib/a.mjs'), path.join(elsewhere, 'a.mjs'));
+    copyFileSync(path.join(env.checkout, 'b.mjs'), path.join(elsewhere, 'b.mjs'));
+    assert.equal(check(env, ['lib/a.mjs', 'b.mjs']), null, 'control: the real files equal the base');
+    // a linked parent folder (a junction needs no privilege on Windows)
+    rmSync(path.join(env.checkout, 'lib'), { recursive: true });
+    symlinkSync(elsewhere, path.join(env.checkout, 'lib'), 'junction');
+    links.push(path.join(env.checkout, 'lib'));
+    assert.ok(String(check(env, ['lib/a.mjs'])).includes('lib/a.mjs'), 'a file in a linked folder is named');
+    // a linked file (needs the symlink privilege on Windows: skipped there without it)
+    try {
+      rmSync(path.join(env.checkout, 'b.mjs'));
+      symlinkSync(path.join(elsewhere, 'b.mjs'), path.join(env.checkout, 'b.mjs'), 'file');
+      links.push(path.join(env.checkout, 'b.mjs'));
+      assert.ok(String(check(env, ['b.mjs'])).includes('b.mjs'), 'a linked file is named');
+    } catch (err) {
+      if (!['EPERM', 'EACCES', 'ENOSYS'].includes(err.code)) throw err;
+      t.diagnostic(`the file-link half is skipped: ${err.code}`);
+    }
+  } finally {
+    for (const link of links) { try { unlinkSync(link); } catch { /* removed with the folder below */ } }
+    rmSync(env.tmp, { recursive: true, force: true });
+  }
 });
 
 // ---------- item 3: aegis F3, case ----------

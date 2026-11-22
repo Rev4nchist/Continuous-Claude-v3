@@ -26,7 +26,7 @@
  */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -114,11 +114,15 @@ export function baseCodeProblem({ root = REPO_ROOT, baseRef, remote = 'fork', fi
   if (fetched.status !== 0) return `could not fetch ${remote}/${ref} (${firstLine(fetched.stderr)}): the base code cannot be read, so the band code of this checkout cannot be checked`;
   const tip = String(git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${ref}^{commit}`]).stdout ?? '').trim();
   if (!/^[0-9a-f]{40}$/.test(tip)) return `could not fetch ${remote}/${ref}: the fetched branch tip is not readable`;
+  // A listed file must be a plain file at root/rel, with no link in its path: Node loads the real path of an import, so a link to an identical copy elsewhere would pass the byte check
+  // and load unchecked neighbours (CodeRabbit CLI on pre-pr 1, seat ruling 2026-11-22). Windows paths compare without case.
+  const realRoot = (() => { try { return realpathSync(root); } catch { return path.resolve(root); } })();
+  const samePath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
   const differs = files.filter((rel) => {
     const abs = path.join(root, rel);
     const base = String(git(['rev-parse', '--verify', '--quiet', `${tip}:${rel}`]).stdout ?? '').trim();
     if (!/^[0-9a-f]{40}$/.test(base)) return true;
-    try { return !statSync(abs).isFile() || !matchesBase(readFileSync(abs), base); } catch { return true; }
+    try { return !lstatSync(abs).isFile() || !samePath(realpathSync(abs), path.resolve(realRoot, rel)) || !matchesBase(readFileSync(abs), base); } catch { return true; }
   });
   if (differs.length === 0) return null;
   return `the band code of this checkout differs from ${remote}/${ref} at ${tip.slice(0, 7)}: ${differs.join(', ')}. The none-pick check would run that code, so a PR could lower its own band. Run the land from a checkout of ${ref} that holds ${remote}/${ref} (git fetch ${remote}, git switch ${ref}, git pull --ff-only).`;
