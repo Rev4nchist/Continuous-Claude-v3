@@ -99,12 +99,23 @@ export const SENT_MAX = 40
 /** Paid-flag keys (`paid:` prefix) have their own cap: each one is a comment, and an evicted key would flag the same comment again. */
 export const PAID_SENT_MAX = 200
 
-/** The newest SENT_MAX other keys and the newest PAID_SENT_MAX paid keys, in their order. One class never pushes out the other. */
+/**
+ * The newest SENT_MAX other keys and the newest PAID_SENT_MAX paid keys, in their order. One class never pushes out the other.
+ * A key that repeats counts once, at its newest place (card prflow-paid-guard-leftovers, L3): 41 copies of one key must not stay 41.
+ */
 export const capSent = (keys: string[]): string[] => {
-  const paid = (key: string): boolean => key.startsWith('paid:')
-  const keepPaid = new Set(keys.filter(paid).slice(-PAID_SENT_MAX))
-  const keepRest = new Set(keys.filter(key => !paid(key)).slice(-SENT_MAX))
-  return keys.filter(key => keepPaid.has(key) || keepRest.has(key))
+  const left = { paid: PAID_SENT_MAX, rest: SENT_MAX }
+  const seen = new Set<string>()
+  const kept: string[] = []
+  for (let i = keys.length - 1; i >= 0; i -= 1) {
+    const key = keys[i] as string
+    const quota = key.startsWith('paid:') ? 'paid' : 'rest'
+    if (seen.has(key) || left[quota] === 0) continue
+    seen.add(key)
+    left[quota] -= 1
+    kept.push(key)
+  }
+  return kept.reverse()
 }
 
 export const TICK_MS = 300_000
