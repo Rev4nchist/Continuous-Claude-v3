@@ -14,14 +14,25 @@ import { resolveConfig, runPrePr, summaryBeforeLock } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CASES = JSON.parse(readFileSync(path.join(HERE, 'fixtures', 'stricter-config-cases.json'), 'utf8')).rows;
-const SHOW = 'show fork/main:review-router.config.json';
-const SHOW_LOCAL = 'show main:review-router.config.json';
+// Full ref names (fail-closed fix, CLI finding 1): an abbreviated fork/main can be shadowed by a local branch or a tag.
+const FORK_REF = 'refs/remotes/fork/main';
+const LOCAL_REF = 'refs/heads/main';
+const SHOW = `show ${FORK_REF}:review-router.config.json`;
+const SHOW_LOCAL = `show ${LOCAL_REF}:review-router.config.json`;
+const EXISTS_FORK = `rev-parse --verify --quiet ${FORK_REF}`;
+const EXISTS_LOCAL = `rev-parse --verify --quiet ${LOCAL_REF}`;
+const STRICT_ALL = { enforce: true, cap: 0, summaryFail: true };
 
-/** A git stub: `main` is the text of fork/main's config, `localMain` the text of the local branch main (null: no such ref). */
-function gitStub({ main = null, localMain = null, calls = [] } = {}) {
+/**
+ * A git stub. `main` is the text of fork/main's config, `localMain` the text of the local branch main.
+ * A ref exists when its text is not null, or when `forkRef` / `localRef` says so (a ref that exists and whose show fails).
+ */
+function gitStub({ main = null, localMain = null, forkRef = main !== null, localRef = localMain !== null, calls = [] } = {}) {
   return (args) => {
     const key = args.join(' ');
     calls.push(key);
+    if (key === EXISTS_FORK) return { status: forkRef ? 0 : 1, stdout: '' };
+    if (key === EXISTS_LOCAL) return { status: localRef ? 0 : 1, stdout: '' };
     if (key === SHOW) return main === null ? { status: 128, stdout: '' } : { status: 0, stdout: main };
     if (key === SHOW_LOCAL) return localMain === null ? { status: 128, stdout: '' } : { status: 0, stdout: localMain };
     // Served on purpose: the old code read the primary checkout's working tree through this answer. The new code never asks.
@@ -66,9 +77,53 @@ test('A5a2: fork/main is read first; it wins over the local main', () => {
   assert.equal(got.config.checkpoint.enforce, true);
 });
 
-test('A5a3: a fork/main text that is not JSON counts as missing: the local main is used', () => {
-  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: '{not json', localMain: JSON.stringify({ checkpoint: { enforce: true } }) }) });
-  assert.equal(got.source, 'local-main');
+const BRANCH_LOOSE = { checkpoint: { enforce: false }, coderabbit: { cli_daily_cap_usd: 7 }, pre_pr: { summary_mode: 'note' } };
+const LOOSE_MAIN = JSON.stringify({ checkpoint: { enforce: false }, coderabbit: { cli_daily_cap_usd: 50 }, pre_pr: { summary_mode: 'note' } });
+
+test('A5a3 (finding 3): fork/main exists but its text is not JSON: the main side is strict, and the local main is NOT used', () => {
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: '{not json', localMain: LOOSE_MAIN }) });
+  assert.equal(got.source, 'fork-main-unreadable');
+  assert.deepEqual(viewOf(stricterConfig(got.config, BRANCH_LOOSE)), STRICT_ALL);
+});
+
+test('A5a4 (finding 3): fork/main exists but git show fails: strict, no fallback to the local main', () => {
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: null, forkRef: true, localMain: LOOSE_MAIN }) });
+  assert.equal(got.source, 'fork-main-unreadable');
+  assert.deepEqual(viewOf(stricterConfig(got.config, BRANCH_LOOSE)), STRICT_ALL);
+});
+
+test('A5a5 (finding 3): fork/main is a JSON value that is not an object (an array): strict', () => {
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: '[]', localMain: LOOSE_MAIN }) });
+  assert.equal(got.source, 'fork-main-unreadable');
+});
+
+test('A5a6: fork/main is absent and the local main exists but is not JSON: strict (the fallback only reads a good local main)', () => {
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: null, localMain: '{not json' }) });
+  assert.equal(got.source, 'local-main-unreadable');
+  assert.deepEqual(viewOf(stricterConfig(got.config, BRANCH_LOOSE)), STRICT_ALL);
+});
+
+test('A5g: the existence check fails with an error other than "no such ref" (status 128): strict', () => {
+  const git = (args) => (args.join(' ') === EXISTS_FORK ? { status: 128, stdout: '' } : { status: 1, stdout: '' });
+  const got = readMainConfig({ root: '/work/wt', git });
+  assert.equal(got.source, 'git-error');
+  assert.deepEqual(viewOf(stricterConfig(got.config, BRANCH_LOOSE)), STRICT_ALL);
+});
+
+test('A15 (finding 1): the main read uses the full ref names and never the abbreviated ones', () => {
+  const calls = [];
+  readMainConfig({ root: '/work/wt', git: gitStub({ main: null, localMain: JSON.stringify({}), calls }) });
+  assert.ok(calls.includes(SHOW_LOCAL), calls.join(' | '));
+  assert.ok(calls.includes(EXISTS_FORK), calls.join(' | '));
+  assert.equal(calls.filter((c) => /^show (fork\/main|main):/.test(c) || /^rev-parse --verify --quiet (fork\/main|main)$/.test(c)).length, 0, calls.join(' | '));
+  const calls2 = [];
+  readMainConfig({ root: '/work/wt', git: gitStub({ main: JSON.stringify({}), calls: calls2 }) });
+  assert.ok(calls2.includes(SHOW), calls2.join(' | '));
+});
+
+test('A15b (finding 1): a good fork/main wins even when a local main is present (no fallback while the ref exists)', () => {
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: JSON.stringify({ checkpoint: { enforce: true } }), localMain: LOOSE_MAIN }) });
+  assert.equal(got.source, 'fork-main');
 });
 
 test('A5b: neither ref is readable: config null, source none, and the stricter config enforces with the branch cap', () => {
@@ -86,9 +141,10 @@ test('A5e: the working-tree file says enforce false, fork/main is missing, the c
   assert.equal(reads.length, 1, `only the branch file is read from disk: ${reads.join(' | ')}`);
 });
 
-test('A5c: a git that throws counts as no main side, never as an error', () => {
+test('A5c: a git that throws is never an error and never a loose main side: strict', () => {
   const got = readMainConfig({ root: '/work/wt', git: () => { throw new Error('spawn git ENOENT'); } });
-  assert.equal(got.source, 'none');
+  assert.equal(got.source, 'git-error');
+  assert.deepEqual(viewOf(stricterConfig(got.config, BRANCH_LOOSE)), STRICT_ALL);
 });
 
 test('A10a: the main read runs no git fetch and no pull', () => {
@@ -122,6 +178,7 @@ test('A9d: summaryBeforeLock runs the summary check in fail mode when main says 
   const branch = JSON.stringify({ pre_pr: { summary_mode: 'note' } });
   const git = (args) => {
     const key = args.join(' ');
+    if (key === EXISTS_FORK) return { status: 0, stdout: '' };
     if (key === SHOW) return { status: 0, stdout: JSON.stringify({ pre_pr: { summary_mode: 'fail' } }) };
     if (key === 'rev-parse HEAD') return { status: 0, stdout: `${'a'.repeat(40)}\n` };
     if (key === 'branch --show-current') return { status: 0, stdout: 'feat/x\n' };
@@ -144,6 +201,7 @@ test('A14: pre-pr resolves the config after the fetch, so a fork/main that the f
   let fetched = false;
   const git = (args) => {
     const key = args.join(' ');
+    if (key === EXISTS_FORK) return { status: 0, stdout: '' };
     if (key === SHOW) return { status: 0, stdout: JSON.stringify({ pre_pr: { summary_mode: fetched ? 'fail' : 'note' } }) };
     if (key === 'rev-parse HEAD') return { status: 0, stdout: 'a'.repeat(40), stderr: '' };
     if (key === 'branch --show-current') return { status: 0, stdout: 'feat/x', stderr: '' };

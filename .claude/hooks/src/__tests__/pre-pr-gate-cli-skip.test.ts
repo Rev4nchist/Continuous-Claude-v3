@@ -57,7 +57,8 @@ function deps(stamp: string, s = store()): Deps {
     git: (cwd, args) => {
       const key = args.join(' ');
       // fork/main serves the same config text as the checkout, so these tests keep judging the checkout config (coord-cap-override PR A: the hook reads the stricter of the two).
-      if (key === 'show fork/main:review-router.config.json') return { status: 0, stdout: stamp }; // readFile serves the stamp for every path, the config path too
+      if (key === 'rev-parse --verify --quiet refs/remotes/fork/main') return { status: 0, stdout: '' };
+      if (key === 'show refs/remotes/fork/main:review-router.config.json') return { status: 0, stdout: stamp }; // readFile serves the stamp for every path, the config path too
       if (key === 'rev-parse --show-toplevel') return { status: 0, stdout: `${cwd}\n` };
       if (key === 'remote -v') return { status: 0, stdout: REMOTES };
       if (key === 'worktree list --porcelain') return { status: 0, stdout: '' };

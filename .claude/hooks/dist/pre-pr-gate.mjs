@@ -783,17 +783,31 @@ function viewOf(cfg) {
     summaryFail: sub(c, "pre_pr")?.summary_mode === "fail"
   };
 }
+var UNREADABLE_MAIN = {
+  checkpoint: { enforce: "unreadable" },
+  coderabbit: { cli_daily_cap_usd: "unreadable" },
+  pre_pr: { summary_mode: "unreadable" }
+};
+function mainKey(m, block, key) {
+  if (!Object.hasOwn(m, block)) return { set: false, value: void 0 };
+  const b = m[block];
+  if (!isObj(b)) return { set: true, value: void 0 };
+  return Object.hasOwn(b, key) ? { set: true, value: b[key] } : { set: false, value: void 0 };
+}
 function stricterConfig(main3, branch) {
   const out = isObj(branch) ? structuredClone(branch) : {};
   const m = isObj(main3) ? main3 : null;
   const block = (name) => sub(out, name) ?? {};
+  const mainEnforce = m === null ? { set: false, value: void 0 } : mainKey(m, "checkpoint", "enforce");
   const checkpoint = sub(out, "checkpoint");
   const branchSets = checkpoint !== void 0 && Object.hasOwn(checkpoint, "enforce");
-  const enforce = m === null || sub(m, "checkpoint")?.enforce === true || branchSets && checkpoint?.enforce !== false;
+  const enforce = m === null || mainEnforce.set && mainEnforce.value !== false || branchSets && checkpoint?.enforce !== false;
   out.checkpoint = { ...block("checkpoint"), enforce };
-  const caps = [sub(m, "coderabbit")?.cli_daily_cap_usd, sub(out, "coderabbit")?.cli_daily_cap_usd].filter(validCap);
+  const mainCap = m === null ? { set: false, value: void 0 } : mainKey(m, "coderabbit", "cli_daily_cap_usd");
+  const caps = [mainCap.set ? validCap(mainCap.value) ? mainCap.value : 0 : void 0, sub(out, "coderabbit")?.cli_daily_cap_usd].filter(validCap);
   if (caps.length > 0) out.coderabbit = { ...block("coderabbit"), cli_daily_cap_usd: Math.min(...caps) };
-  if (sub(m, "pre_pr")?.summary_mode === "fail" || sub(out, "pre_pr")?.summary_mode === "fail") out.pre_pr = { ...block("pre_pr"), summary_mode: "fail" };
+  const mainMode = m === null ? { set: false, value: void 0 } : mainKey(m, "pre_pr", "summary_mode");
+  if (mainMode.set && mainMode.value !== "note" || sub(out, "pre_pr")?.summary_mode === "fail") out.pre_pr = { ...block("pre_pr"), summary_mode: "fail" };
   return out;
 }
 function objectOf(text) {
@@ -805,6 +819,16 @@ function objectOf(text) {
     return null;
   }
 }
+var FORK_REF = "refs/remotes/fork/main";
+var LOCAL_REF = "refs/heads/main";
+function refState(top, git, ref) {
+  try {
+    const run = git(top, ["rev-parse", "--verify", "--quiet", ref]);
+    return run.status === 0 ? "yes" : run.status === 1 ? "no" : "error";
+  } catch {
+    return "error";
+  }
+}
 function committedConfig(top, git, ref) {
   try {
     const shown = git(top, ["show", `${ref}:${CONFIG_FILE}`]);
@@ -814,7 +838,13 @@ function committedConfig(top, git, ref) {
   }
 }
 function mainConfigOf(top, git) {
-  return committedConfig(top, git, "fork/main") ?? committedConfig(top, git, "main");
+  const fork = refState(top, git, FORK_REF);
+  if (fork === "error") return UNREADABLE_MAIN;
+  if (fork === "yes") return committedConfig(top, git, FORK_REF) ?? UNREADABLE_MAIN;
+  const local = refState(top, git, LOCAL_REF);
+  if (local === "error") return UNREADABLE_MAIN;
+  if (local === "yes") return committedConfig(top, git, LOCAL_REF) ?? UNREADABLE_MAIN;
+  return null;
 }
 
 // src/shared/mask-quotes.ts

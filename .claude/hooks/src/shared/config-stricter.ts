@@ -22,21 +22,46 @@ export function viewOf(cfg: unknown): ConfigView {
   };
 }
 
-/** A copy of `branch` with the three keys at their stricter value. `main` null means no main side could be read. Pure. */
+/**
+ * The main side of a read that failed: every key is present and none holds its weak value, so the one rule in stricterConfig makes all three strict.
+ * (A read that failed is not "no main side": that is null, which enforces but keeps the branch cap and mode.)
+ */
+export const UNREADABLE_MAIN: Obj = {
+  checkpoint: { enforce: 'unreadable' },
+  coderabbit: { cli_daily_cap_usd: 'unreadable' },
+  pre_pr: { summary_mode: 'unreadable' },
+};
+
+/** The main value of a key: set is true when the key is present on main. A block that is present but not an object counts as set with no weak value. */
+function mainKey(m: Obj, block: string, key: string): { set: boolean; value: unknown } {
+  if (!Object.hasOwn(m, block)) return { set: false, value: undefined };
+  const b = m[block];
+  if (!isObj(b)) return { set: true, value: undefined };
+  return Object.hasOwn(b, key) ? { set: true, value: b[key] } : { set: false, value: undefined };
+}
+
+/**
+ * A copy of `branch` with the three keys at their stricter value. `main` null means no main side could be read.
+ * One rule for the main side: a value that is present but is not the exact weak value counts as the strict value.
+ * The weak values are: enforce the boolean false, a cap that is a valid number (a present invalid cap counts as 0), the mode 'note'. Pure.
+ */
 export function stricterConfig(main: unknown, branch: unknown): Obj {
   const out: Obj = isObj(branch) ? structuredClone(branch) : {};
   const m = isObj(main) ? main : null;
   const block = (name: string): Obj => sub(out, name) ?? {};
 
+  const mainEnforce = m === null ? { set: false, value: undefined } : mainKey(m, 'checkpoint', 'enforce');
   const checkpoint = sub(out, 'checkpoint');
   const branchSets = checkpoint !== undefined && Object.hasOwn(checkpoint, 'enforce');
-  const enforce = m === null || sub(m, 'checkpoint')?.enforce === true || (branchSets && checkpoint?.enforce !== false);
+  const enforce = m === null || (mainEnforce.set && mainEnforce.value !== false) || (branchSets && checkpoint?.enforce !== false);
   out.checkpoint = { ...block('checkpoint'), enforce };
 
-  const caps = [sub(m, 'coderabbit')?.cli_daily_cap_usd, sub(out, 'coderabbit')?.cli_daily_cap_usd].filter(validCap);
+  const mainCap = m === null ? { set: false, value: undefined } : mainKey(m, 'coderabbit', 'cli_daily_cap_usd');
+  const caps = [mainCap.set ? (validCap(mainCap.value) ? mainCap.value : 0) : undefined, sub(out, 'coderabbit')?.cli_daily_cap_usd].filter(validCap);
   if (caps.length > 0) out.coderabbit = { ...block('coderabbit'), cli_daily_cap_usd: Math.min(...caps) };
 
-  if (sub(m, 'pre_pr')?.summary_mode === 'fail' || sub(out, 'pre_pr')?.summary_mode === 'fail') out.pre_pr = { ...block('pre_pr'), summary_mode: 'fail' };
+  const mainMode = m === null ? { set: false, value: undefined } : mainKey(m, 'pre_pr', 'summary_mode');
+  if ((mainMode.set && mainMode.value !== 'note') || sub(out, 'pre_pr')?.summary_mode === 'fail') out.pre_pr = { ...block('pre_pr'), summary_mode: 'fail' };
   return out;
 }
 
@@ -47,7 +72,19 @@ function objectOf(text: string | null | undefined): Obj | null {
 
 type Git = (cwd: string, args: string[]) => { status: number; stdout: string };
 
-/** The committed config at `ref`, or null: no such ref, a git error, or a text that is not a JSON object. Never a fetch. */
+// FULL ref names: an abbreviated fork/main can be shadowed by a local branch of that name or by a tag (git picks heads and tags before remotes).
+const FORK_REF = 'refs/remotes/fork/main';
+const LOCAL_REF = 'refs/heads/main';
+
+/** Does `ref` exist? 'yes' (exit 0), 'no' (exit 1, the quiet answer for a missing ref) or 'error' (any other exit, or git threw). */
+function refState(top: string, git: Git, ref: string): 'yes' | 'no' | 'error' {
+  try {
+    const run = git(top, ['rev-parse', '--verify', '--quiet', ref]);
+    return run.status === 0 ? 'yes' : run.status === 1 ? 'no' : 'error';
+  } catch { return 'error'; }
+}
+
+/** The committed config at `ref` (a ref that exists), or null when git show fails or the text is not a JSON object. Never a fetch. */
 function committedConfig(top: string, git: Git, ref: string): Obj | null {
   try {
     const shown = git(top, ['show', `${ref}:${CONFIG_FILE}`]);
@@ -56,9 +93,17 @@ function committedConfig(top: string, git: Git, ref: string): Obj | null {
 }
 
 /**
- * The main side of the config for the checkout at `top`: the local ref fork/main (git show, never a fetch), else the local branch main.
- * Both are committed text. A working-tree file is never read: it holds whatever the checked-out branch edited. Neither readable: null.
+ * The main side of the config for the checkout at `top`: refs/remotes/fork/main (git show, never a fetch), else refs/heads/main, and that
+ * fallback ONLY when the fork ref does not exist. Both are committed text. A working-tree file is never read: it holds whatever the checked-out
+ * branch edited. A ref that exists but cannot be read, or a git error, gives UNREADABLE_MAIN (strict for all three keys, no fallback).
+ * Neither ref exists: null.
  */
 export function mainConfigOf(top: string, git: Git): Obj | null {
-  return committedConfig(top, git, 'fork/main') ?? committedConfig(top, git, 'main');
+  const fork = refState(top, git, FORK_REF);
+  if (fork === 'error') return UNREADABLE_MAIN;
+  if (fork === 'yes') return committedConfig(top, git, FORK_REF) ?? UNREADABLE_MAIN;
+  const local = refState(top, git, LOCAL_REF);
+  if (local === 'error') return UNREADABLE_MAIN;
+  if (local === 'yes') return committedConfig(top, git, LOCAL_REF) ?? UNREADABLE_MAIN;
+  return null;
 }

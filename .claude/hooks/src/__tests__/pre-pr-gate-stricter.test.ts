@@ -30,8 +30,12 @@ const READY = 'gh pr ready 201';
 const cfg = (enforce: unknown) => JSON.stringify({ checkpoint: { enforce } });
 
 /** main: the text of fork/main's config, localMain: the committed local branch main, primary: the primary checkout's WORKING TREE file (served on purpose: the hook must never read it). */
-interface Setup { branch: string; main?: string | null; localMain?: string | null; primary?: string | null; calls?: string[] }
-function deps({ branch, main = null, localMain = null, primary = null, calls = [] }: Setup): Deps {
+// Full ref names (fail-closed fix): an abbreviated fork/main can be shadowed by a local branch or a tag.
+const FORK_REF = 'refs/remotes/fork/main';
+const LOCAL_REF = 'refs/heads/main';
+/** forkRef / localRef: the ref exists even when its text is null (a ref that exists and whose show fails). Default: the ref exists when its text is given. */
+interface Setup { branch: string; main?: string | null; localMain?: string | null; primary?: string | null; calls?: string[]; forkRef?: boolean; localRef?: boolean }
+function deps({ branch, main = null, localMain = null, primary = null, calls = [], forkRef = main !== null, localRef = localMain !== null }: Setup): Deps {
   const stamp = JSON.stringify({ head: HEAD, branch: 'feat/x', at: new Date(NOW - 3_600_000).toISOString(), body_sha256: sha256(BODY), results: [] });
   return {
     git: (cwd, args) => {
@@ -42,8 +46,10 @@ function deps({ branch, main = null, localMain = null, primary = null, calls = [
       if (key === 'worktree list --porcelain') return { status: 0, stdout: '' };
       if (key === 'rev-parse HEAD') return { status: 0, stdout: `${HEAD}\n` };
       if (key === 'branch --show-current') return { status: 0, stdout: 'feat/x\n' };
-      if (key === 'show fork/main:review-router.config.json') return main === null ? { status: 128, stdout: '' } : { status: 0, stdout: main };
-      if (key === 'show main:review-router.config.json') return localMain === null ? { status: 128, stdout: '' } : { status: 0, stdout: localMain };
+      if (key === `rev-parse --verify --quiet ${FORK_REF}`) return { status: forkRef ? 0 : 1, stdout: '' };
+      if (key === `rev-parse --verify --quiet ${LOCAL_REF}`) return { status: localRef ? 0 : 1, stdout: '' };
+      if (key === `show ${FORK_REF}:review-router.config.json`) return main === null ? { status: 128, stdout: '' } : { status: 0, stdout: main };
+      if (key === `show ${LOCAL_REF}:review-router.config.json`) return localMain === null ? { status: 128, stdout: '' } : { status: 0, stdout: localMain };
       if (key === 'rev-parse --git-common-dir') return { status: 0, stdout: '/primary/.git\n' };
       if (args[0] === 'rev-parse' && args[1]?.endsWith('^{commit}')) return { status: 0, stdout: `${HEAD}\n` };
       return { status: 1, stdout: '' };
@@ -96,8 +102,33 @@ describe('the hook reads the stricter checkpoint.enforce', () => {
   it('A10: the main read runs no git fetch, pull or remote update', () => {
     const calls: string[] = [];
     act({ branch: cfg(false), main: cfg(true), calls });
-    expect(calls.some((c) => c.startsWith('show fork/main:'))).toBe(true);
+    expect(calls.some((c) => c.startsWith(`show ${FORK_REF}:`))).toBe(true);
     expect(calls.filter((c) => /^(fetch|pull|remote update)\b/.test(c))).toEqual([]);
+  });
+  it('B1 (finding 2): a main-side enforce that is present and not false ("true", null, 0, an object) counts as true: the deny stays', () => {
+    for (const v of ['true', null, 0, {}]) expect(act({ branch: cfg(false), main: cfg(v) }).action, String(v)).toBe('deny');
+  });
+  it('B1e: control: a main checkpoint with no enforce key and a branch false is warn mode, allowed', () => {
+    expect(act({ branch: cfg(false), main: JSON.stringify({ checkpoint: {} }) }).action).toBe('allow');
+  });
+  it('A15 (finding 1): the main read uses the full ref names, never fork/main or main alone', () => {
+    const calls: string[] = [];
+    act({ branch: cfg(false), main: null, localMain: cfg(true), calls });
+    expect(calls).toContain(`rev-parse --verify --quiet ${FORK_REF}`);
+    expect(calls).toContain(`show ${LOCAL_REF}:review-router.config.json`);
+    expect(calls.filter((c) => /^show (fork\/main|main):/.test(c) || /^rev-parse --verify --quiet (fork\/main|main)$/.test(c))).toEqual([]);
+  });
+  it('A5a3 (finding 3): fork/main exists and its text is not JSON, the local main says false: the deny stays (strict, no fallback)', () => {
+    expect(act({ branch: cfg(false), main: '{not json', localMain: cfg(false) }).action).toBe('deny');
+  });
+  it('A5a4 (finding 3): fork/main exists, git show fails, the local main says false: the deny stays', () => {
+    expect(act({ branch: cfg(false), main: null, forkRef: true, localMain: cfg(false) }).action).toBe('deny');
+  });
+  it('A5a6: fork/main is absent, the local main exists and is not JSON: the deny stays', () => {
+    expect(act({ branch: cfg(false), main: null, localMain: '{not json' }).action).toBe('deny');
+  });
+  it('A5a7: control: fork/main is absent and the local main is a good false: warn mode, allowed', () => {
+    expect(act({ branch: cfg(false), main: null, localMain: cfg(false) }).action).toBe('allow');
   });
 });
 
@@ -145,7 +176,47 @@ describe('A8b: the built hook, a real repo, branch enforce false, fork/main enfo
   /** A deny must carry a reason: an empty object is not a deny. */
   const allowed = (dir: string): boolean => Object.keys(run(dir)).length === 0;
 
+  /** A repo with a local main, an optional fork/main remote-tracking ref holding its own text, and an optional LOCAL BRANCH named fork/main (the shadow). */
+  function repoRefs(o: { mainText: string; forkText?: string; shadowText?: string; branchText: string }): string {
+    const dir = mkdtempSync(join(tmpdir(), 'stricter-refs-'));
+    const put = (text: string, msg: string) => { writeFileSync(join(dir, 'review-router.config.json'), text); git(dir, 'add', '.'); git(dir, 'commit', '-q', '--allow-empty', '-m', msg); };
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'config', 'user.email', 't@example.invalid');
+    git(dir, 'config', 'user.name', 't');
+    put(o.mainText, 'main');
+    const mainSha = git(dir, 'rev-parse', 'HEAD');
+    git(dir, 'remote', 'add', 'fork', 'https://github.com/Rev4nchist/Continuous-Claude-v3.git');
+    if (o.forkText !== undefined) {
+      git(dir, 'checkout', '-q', '-b', 'forktmp'); put(o.forkText, 'fork');
+      git(dir, 'update-ref', 'refs/remotes/fork/main', 'HEAD');
+      git(dir, 'checkout', '-q', 'main'); git(dir, 'branch', '-q', '-D', 'forktmp');
+    }
+    if (o.shadowText !== undefined) {
+      git(dir, 'checkout', '-q', '-b', 'shadowtmp'); put(o.shadowText, 'shadow');
+      git(dir, 'branch', 'fork/main', 'HEAD');
+      git(dir, 'checkout', '-q', 'main'); git(dir, 'branch', '-q', '-D', 'shadowtmp');
+    }
+    git(dir, 'checkout', '-q', '-b', 'feat/x', mainSha);
+    put(o.branchText, 'branch');
+    const head = git(dir, 'rev-parse', 'HEAD');
+    mkdirSync(join(dir, dirname(STAMP_REL)), { recursive: true });
+    writeFileSync(join(dir, STAMP_REL), JSON.stringify({ head, branch: 'feat/x', at: new Date().toISOString(), body_sha256: sha256(BODY), results: [] }));
+    return dir;
+  }
+
   it('the dist file exists', () => { expect(existsSync(DIST)).toBe(true); });
+  it('A15 built (finding 1): a LOCAL BRANCH named fork/main with enforce false does not shadow the remote ref: deny stays', () => {
+    expect(denied(repoRefs({ mainText: cfg(true), forkText: cfg(true), shadowText: cfg(false), branchText: cfg(false) }))).toBe(true);
+  });
+  it('A5a3 built (finding 3): fork/main holds text that is not JSON, the local main says false: deny stays', () => {
+    expect(denied(repoRefs({ mainText: cfg(false), forkText: '{not json', branchText: cfg(false) }))).toBe(true);
+  });
+  it('B1 built (finding 2): fork/main enforce is the string "true", the branch says false: deny stays', () => {
+    expect(denied(repoRefs({ mainText: cfg(false), forkText: cfg('true'), branchText: cfg(false) }))).toBe(true);
+  });
+  it('control built: fork/main absent, the local main is a good false, the branch false: allowed', () => {
+    expect(allowed(repoRefs({ mainText: cfg(false), branchText: cfg(false) }))).toBe(true);
+  });
   it('deny stays', () => { expect(denied(repoWith(true, false))).toBe(true); });
   it('A5e built: no fork/main ref, the committed local main enforces, the branch says false: deny stays', () => { expect(denied(repoWith(true, false, false))).toBe(true); });
   it('control: main false, branch true still denies', () => { expect(denied(repoWith(false, true))).toBe(true); });
