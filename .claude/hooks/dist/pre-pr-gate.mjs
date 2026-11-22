@@ -769,6 +769,84 @@ function namedRepo(command, env = {}) {
   return ccv3 ? CCV3_REPO : null;
 }
 
+// src/shared/config-stricter.ts
+var CONFIG_FILE = "review-router.config.json";
+var isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+var validCap = (x) => typeof x === "number" && Number.isFinite(x) && x >= 0;
+var sub = (o, key) => o && isObj(o[key]) ? o[key] : void 0;
+function viewOf(cfg) {
+  const c = isObj(cfg) ? cfg : null;
+  const cap = sub(c, "coderabbit")?.cli_daily_cap_usd;
+  return {
+    enforce: sub(c, "checkpoint")?.enforce === true,
+    cap: validCap(cap) ? cap : null,
+    summaryFail: sub(c, "pre_pr")?.summary_mode === "fail"
+  };
+}
+var UNREADABLE_MAIN = {
+  checkpoint: { enforce: "unreadable" },
+  coderabbit: { cli_daily_cap_usd: "unreadable" },
+  pre_pr: { summary_mode: "unreadable" }
+};
+function mainKey(m, block, key) {
+  if (!Object.hasOwn(m, block)) return { set: false, value: void 0 };
+  const b = m[block];
+  if (!isObj(b)) return { set: true, value: void 0 };
+  return Object.hasOwn(b, key) ? { set: true, value: b[key] } : { set: false, value: void 0 };
+}
+function stricterConfig(main3, branch) {
+  const out = isObj(branch) ? structuredClone(branch) : {};
+  const m = isObj(main3) ? main3 : null;
+  const block = (name) => sub(out, name) ?? {};
+  const mainEnforce = m === null ? { set: false, value: void 0 } : mainKey(m, "checkpoint", "enforce");
+  const checkpoint = sub(out, "checkpoint");
+  const branchSets = checkpoint !== void 0 && Object.hasOwn(checkpoint, "enforce");
+  const enforce = m === null || mainEnforce.set && mainEnforce.value !== false || branchSets && checkpoint?.enforce !== false;
+  out.checkpoint = { ...block("checkpoint"), enforce };
+  const mainCap = m === null ? { set: false, value: void 0 } : mainKey(m, "coderabbit", "cli_daily_cap_usd");
+  const caps = [mainCap.set ? validCap(mainCap.value) ? mainCap.value : 0 : void 0, sub(out, "coderabbit")?.cli_daily_cap_usd].filter(validCap);
+  if (caps.length > 0) out.coderabbit = { ...block("coderabbit"), cli_daily_cap_usd: Math.min(...caps) };
+  const mainMode = m === null ? { set: false, value: void 0 } : mainKey(m, "pre_pr", "summary_mode");
+  if (mainMode.set && mainMode.value !== "note" || sub(out, "pre_pr")?.summary_mode === "fail") out.pre_pr = { ...block("pre_pr"), summary_mode: "fail" };
+  return out;
+}
+function objectOf(text) {
+  if (typeof text !== "string") return null;
+  try {
+    const v = JSON.parse(text);
+    return isObj(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+var FORK_REF = "refs/remotes/fork/main";
+var LOCAL_REF = "refs/heads/main";
+function refState(top, git, ref) {
+  try {
+    const run = git(top, ["rev-parse", "--verify", "--quiet", ref]);
+    return run.status === 0 ? "yes" : run.status === 1 ? "no" : "error";
+  } catch {
+    return "error";
+  }
+}
+function committedConfig(top, git, ref) {
+  try {
+    const shown = git(top, ["show", `${ref}:${CONFIG_FILE}`]);
+    return shown.status === 0 ? objectOf(shown.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+function mainConfigOf(top, git) {
+  const fork = refState(top, git, FORK_REF);
+  if (fork === "error") return UNREADABLE_MAIN;
+  if (fork === "yes") return committedConfig(top, git, FORK_REF) ?? UNREADABLE_MAIN;
+  const local = refState(top, git, LOCAL_REF);
+  if (local === "error") return UNREADABLE_MAIN;
+  if (local === "yes") return committedConfig(top, git, LOCAL_REF) ?? UNREADABLE_MAIN;
+  return null;
+}
+
 // src/shared/mask-quotes.ts
 var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;
 var PWSH_STRING = /"(?:[^"`]|`[\s\S])*"|'(?:[^']|'')*'/g;
@@ -1437,12 +1515,14 @@ function makeCtx(input, command, deps, shapes, plan, bodyView) {
 }
 function enforceIn(deps, top) {
   const text = top === null ? null : deps.readFile(join5(top, CONFIG_REL2));
-  if (text === null) return null;
+  if (top === null || text === null) return null;
+  let branch;
   try {
-    return JSON.parse(text)?.checkpoint?.enforce === true;
+    branch = JSON.parse(text);
   } catch {
     return null;
   }
+  return viewOf(stricterConfig(mainConfigOf(top, deps.git), branch)).enforce;
 }
 function decide(input, deps) {
   if (!isDesktopCommander(input)) return decideAs(input, deps);

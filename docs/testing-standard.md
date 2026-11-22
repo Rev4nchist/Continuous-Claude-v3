@@ -20,8 +20,7 @@ End-to-end check per surface:
 | `apply-registrations.mjs` | dry run; `--apply --only <hook>` after Dave's yes | the output |
 | Any surface, when the registry entry has `e2e` | `node ~/.claude/scripts/verify.mjs` | the `.log` and its `.json` sidecar |
 
-Feature maps, one per live surface (change, command, artifact, who runs it): `docs/verify/hooks.md`, `docs/verify/lane-cli.md`, `docs/verify/agentic-os.md`.
-For a hook, `node scripts/github/hook-payload.mjs --paths .claude/hooks/src/<name>.ts` feeds each saved fixture of `.claude/hooks/fixtures/<name>/` to the built hook.
+Maps: `docs/verify/`.
 
 Put artifacts in `.claude/cache/e2e/<YYYY-MM-DD>-<name>.<ext>` (gitignored) and name the file in the
 PR's Evidence section.
