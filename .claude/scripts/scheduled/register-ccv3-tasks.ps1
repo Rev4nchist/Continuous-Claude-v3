@@ -90,11 +90,20 @@ $tasks = @((Get-Content -LiteralPath $TasksFile -Raw | ConvertFrom-Json).tasks)
 if ($Only) { $tasks = @($tasks | Where-Object { $_.name -eq $Only }) }
 if ($tasks.Count -eq 0) { Write-Host '[REFUSED] no task matches'; exit 1 }
 
-# catchUp must be a daily HH:MM, checked for every task before anything is printed or registered.
+# catchUp must be a daily HH:MM, and every clock value of trigger and catchUp must be a real time (00:00 to 23:59). Checked for
+# every task before anything is printed or registered, so a bad value in a later task cannot leave earlier tasks registered.
+$clockOk = '(?:[01]\d|2[0-3]):[0-5]\d'
 foreach ($t in $tasks) {
   if ($t.catchUp -and ([string]$t.catchUp) -notmatch '^daily \d{2}:\d{2}$') {
     Write-Host "[REFUSED] $($t.name): catchUp must be 'daily HH:MM', got '$($t.catchUp)'. Nothing registered."
     exit 1
+  }
+  foreach ($field in 'trigger', 'catchUp') {
+    $text = [string]$t.$field
+    if ($text -match '^(?:daily|weekly \w+) (\d{2}:\d{2})$' -and $Matches[1] -notmatch "^$clockOk$") {
+      Write-Host "[REFUSED] $($t.name): $field '$text' is not a real clock time (00:00 to 23:59). Nothing registered."
+      exit 1
+    }
   }
 }
 

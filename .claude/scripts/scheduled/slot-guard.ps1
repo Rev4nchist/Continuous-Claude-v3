@@ -51,10 +51,23 @@ function Test-SlotDone([string]$marker, [datetime]$slot) {
   return ($null -ne $done -and $done -ge $slot)
 }
 
-function Set-SlotDone([string]$marker, [string]$hhmm, [datetime]$now) {
+# The exit code stored by the completed run, 0 when the marker has none (an older file) or cannot be read. A skipped trigger returns it, so a
+# failing night stays visible in the task's last result.
+function Read-SlotExit([string]$marker) {
+  try {
+    $j = Get-Content -LiteralPath $marker -Raw -ErrorAction Stop | ConvertFrom-Json
+    if ($null -ne $j.exit) { return [int]$j.exit }
+  } catch { }
+  return 0
+}
+
+# $exitCode -1 (the default) stores no exit code.
+function Set-SlotDone([string]$marker, [string]$hhmm, [datetime]$now, [int]$exitCode = -1) {
   try {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marker) | Out-Null
-    $body = '{"doneAt":"' + $now.ToString('s', $script:SlotCulture) + '","slot":"' + $hhmm + '"}'
+    $exitPart = ''
+    if ($exitCode -ge 0) { $exitPart = ',"exit":' + $exitCode }
+    $body = '{"doneAt":"' + $now.ToString('s', $script:SlotCulture) + '","slot":"' + $hhmm + '"' + $exitPart + '}'
     Set-Content -LiteralPath $marker -Value $body -Encoding ASCII
   } catch { }
 }
