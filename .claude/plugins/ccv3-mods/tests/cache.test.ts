@@ -132,8 +132,9 @@ const band = async ($: Engine) => {
   const mounted = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
   const hud = (await mounted.find({ key: 'row-hud' }))?.text ?? ''
   const tasks = (await mounted.find({ key: 'row-band' }))?.text ?? ''
+  const core = (await mounted.find({ key: 'row-core-1' }))?.text ?? ''
   await mounted.unmount()
-  return { hud, tasks }
+  return { hud, tasks, core }
 }
 
 const cacheCommand = async ($: Engine) =>
@@ -174,7 +175,9 @@ describe('context figure', () => {
     expect((await band($)).hud).toContain('ctx 9%')
     beneath.tokensAfter = 17_863
     await compact($, 'manual')
-    expect((await band($)).hud).not.toContain('ctx')
+    // The figure is gone and the HUD row, which owns ctx, reads `ctx -`.
+    expect((await band($)).hud).not.toMatch(/ctx \d/)
+    expect((await band($)).hud).toContain('ctx -')
     await step($, { input: 2, read: 17_951, write: 72_548 }, { turnId: 't2' })
     expect((await band($)).hud).toContain('ctx 9%')
     // The rewrite is the compaction's: the size the engine reported must not hide it.
@@ -186,7 +189,8 @@ describe('context figure', () => {
     await start($)
     await step($, { input: 2, read: 300_000, write: 60_000 })
     await compact($, 'auto')
-    expect((await band($)).hud).not.toContain('ctx')
+    expect((await band($)).hud).not.toMatch(/ctx \d/)
+    expect((await band($)).hud).toContain('ctx -')
   })
 
   test("X2 a subagent's, a precomputed and a vetoed compaction leave ctx and the cache alone", async ($, on) => {
@@ -212,7 +216,8 @@ describe('context figure', () => {
       expect(await cacheCommand($)).toContain('requests      1')
       await end($, reason)
       const seen = await band($)
-      expect(seen.hud).not.toContain('ctx')
+      expect(seen.hud).not.toMatch(/ctx \d/)
+      expect(seen.hud).toContain('ctx -')
       expect(seen.hud).not.toContain('cache')
       expect(await cacheCommand($)).toContain('no main-loop request yet')
     }
@@ -249,13 +254,15 @@ describe('context figure', () => {
     expect((await band($)).hud).toContain('ctx 36%')
   })
 
-  test('X4 with the HUD off, a resume still seeds ctx on the task row', async ($, on) => {
+  test('X4 with the HUD off, a resume still seeds ctx, on row 1 (the widget row never draws it)', async ($, on) => {
     world(on, { CCV3_MOD_HUD_OFF: '1' })
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
     await start($)
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
     await $.classic.SessionStart({ source: 'resume', context_tokens: 410_000 })
-    expect((await band($)).tasks).toContain('ctx 41%')
+    const seen = await band($)
+    expect(seen.core).toContain('ctx 41%')
+    expect(seen.tasks).not.toContain('ctx')
   })
 
   // Guard, not RED: a compaction's size is far below its next prompt (X2), and a fresh start has no history.
@@ -266,9 +273,9 @@ describe('context figure', () => {
     expect((await band($)).hud).toContain('ctx 36%')
     await compact($, 'manual')
     await $.classic.SessionStart({ source: 'compact', context_tokens: 410_000 })
-    expect((await band($)).hud).not.toContain('ctx')
+    expect((await band($)).hud).not.toMatch(/ctx \d/)
     await $.classic.SessionStart({ source: 'startup', context_tokens: 410_000 })
-    expect((await band($)).hud).not.toContain('ctx')
+    expect((await band($)).hud).not.toMatch(/ctx \d/)
   })
 
   test('K4 with the HUD off, ctx still moves per request and no cache is captured', async ($, on) => {
@@ -278,7 +285,8 @@ describe('context figure', () => {
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
     await step($, { input: 2, read: 300_000, write: 60_000 })
     const seen = await band($)
-    expect(seen.tasks).toContain('ctx 36%')
+    expect(seen.core).toContain('ctx 36%')
+    expect(seen.tasks).not.toContain('ctx')
     expect(seen.hud).toBe('')
     expect(await cacheCommand($)).toContain('no main-loop request yet')
   })

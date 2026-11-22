@@ -44,16 +44,20 @@ describe('agentic-os capture', () => {
       result: { success: true, taskId: e.taskId, updatedFields: ['status'] },
     }))
 
+    // The plan bar (N/M done) left the widget row (design 2026-11-18): the tasks show through the active one, and a pending task alone draws no widget row.
     await $.tool.call({ tool: 'TaskCreate', subject: 'scaffold', description: 'd', activeForm: 'Scaffolding' })
     await $.tool.call({ tool: 'TaskCreate', subject: 'probe', description: 'd' })
-    expect(await bandOn($)).toContain('0/2 done')
+    expect(await bandOn($)).toBeUndefined()
 
     await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
     expect(await bandOn($)).toContain('▶ Scaffolding')
 
+    // Task 1 done: the next active task is task 2, which counted from its create.
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'in_progress' })
     await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' })
+    expect(await bandOn($)).toContain('▶ probe')
     await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'deleted' })
-    expect(await bandOn($)).toContain('1/1 done')
+    expect(await bandOn($)).toBeUndefined()
   })
 
   test('F3 a failed TaskUpdate leaves the band as it was', async ($, on) => {
@@ -64,8 +68,9 @@ describe('agentic-os capture', () => {
     }))
 
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
-    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' })
-    expect(await bandOn($)).toContain('0/1 done')
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
+    // Applied, the update would draw `▶ a`; the update failed, so the band stays as it was.
+    expect(await bandOn($)).toBeUndefined()
   })
 
   test('F4 TodoWrite replaces the list with its new todos', async ($, on) => {
@@ -83,8 +88,8 @@ describe('agentic-os capture', () => {
       ],
     })
     const text = await bandOn($)
-    expect(text).toContain('1/3 done')
     expect(text).toContain('▶ Doing two')
+    expect(text).not.toContain('old')
   })
 
   test('F6 the observer hands the tool answer on unchanged', async ($, on) => {
@@ -100,21 +105,23 @@ describe('agentic-os band', () => {
   test('F5 quiet while idle, drawn on terminal and desktop once tasks exist', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => ({ result: { success: true, taskId: e.taskId, updatedFields: ['status'] } }))
     for (const surface of ['terminal', 'desktop'] as const) {
       expect(await bandOn($, surface)).toBeUndefined()
     }
 
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
 
     for (const surface of ['terminal', 'desktop'] as const) {
-      expect(await bandOn($, surface)).toContain('0/1 done')
+      expect(await bandOn($, surface)).toContain('▶ a')
     }
   })
 })
 
 // The two core lines of the band (PRD 5.3), through the whole mod. Every check reads what the person sees.
-// C1 a session with no brief draws no GOAL not set, or draws nothing at all while idle
-// C2 a brief_set goal does not replace GOAL not set, or the ASK and UNPROVEN counts stay at zero
+// C1 a session with no brief draws no `goal not set`, or draws nothing at all while idle
+// C2 a brief_set goal does not replace `goal not set`, the open ask draws no sign, or an old word (QUESTIONS, PLAN, UNPROVEN) comes back
 // C3 a seeded secret in a goal or an ask (brief_set or the turn-end parser) reaches a drawn Text
 // C4 repo, branch and worktree are not read at the session start, or not re-read at a turn start, or not in the snapshot
 // C5 a git read that fails reaches the session, or leaves something other than null in the snapshot
@@ -137,33 +144,30 @@ const core = async ($: Engine, columns = 120, maxRows = BAND_PROPS.maxRows) => {
 }
 
 describe('agentic-os core band', () => {
-  test('C1 a session with no brief draws both core lines with GOAL not set, idle, and no widget line', async ($, on) => {
+  test('C1 a session with no brief draws row 1 and the Goal row with `goal not set`, idle, and no widget line', async ($, on) => {
     world(on)
     const got = await core($)
     expect(got.line1).toContain('RESTING')
-    expect(got.line2).toContain('GOAL not set')
-    expect(got.line2).not.toContain('PLAN')
-    expect(got.line2).toContain('QUESTIONS 0')
+    expect(got.line2).toBe('goal not set')
+    expect(got.all).not.toMatch(/QUESTIONS|PLAN|UNPROVEN/)
     expect(got.widget).toBeUndefined()
     expect(got.keys.indexOf('row-core-1')).toBeLessThan(got.keys.indexOf('row-core-2'))
   })
 
-  test('C2 a brief_set goal shows, and open asks and a done task with no proof are counted', async ($, on) => {
+  test('C2 a brief_set goal shows with no label, the open ask draws the sign on row 1, and no old word comes back', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'build' } } }))
     on('tool.call', { tool: 'TaskUpdate' }, () => ({ result: { success: true } }))
     await $.tool.call({ tool: 'TaskCreate', subject: 'build', description: 'd' })
-    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' })
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'prove P1a', ask: [{ kind: 'question', text: 'Which branch?' }] })
     const got = await core($)
-    expect(got.line2).toContain('GOAL prove P1a')
-    expect(got.line2).not.toContain('not set')
-    expect(got.line2).toContain('QUESTIONS 1')
-    expect(got.line2).toContain('UNPROVEN 1')
-    expect(got.line2).toMatch(/PLAN ▰ 1\/1/)
+    expect(got.line2).toBe('prove P1a')
     expect(got.line1).toContain('WAITING FOR YOU')
-    // The widget line still carries the task progress (the existing band), below the core lines.
-    expect(got.widget).toContain('1/1 done')
+    expect(got.line1).toContain('1 question')
+    expect(got.all).not.toMatch(/QUESTIONS|PLAN|UNPROVEN|GOAL|done/)
+    // The widget row carries the active task, below the core rows.
+    expect(got.widget).toContain('▶ build')
     expect(got.keys).toEqual(['row-core-1', 'row-core-2', 'row-band'])
   })
 
@@ -172,8 +176,8 @@ describe('agentic-os core band', () => {
     on('turn.complete', (_$, e) => ({ text: e.answer }))
     await $.tool.call({ tool: BRIEF_TOOL, goal: `ship ${SECRET}`, ask: [{ kind: 'question', text: `use ${SECRET}?`, recommend: SECRET }] })
     let got = await core($)
-    expect(got.line2).toContain('GOAL ship')
-    expect(got.line2).toContain('QUESTIONS 1')
+    expect(got.line2).toContain('ship')
+    expect(got.line1).toContain('1 question')
     expect(got.all).not.toContain(SECRET)
     expect(got.texts.join('\n')).not.toContain(SECRET)
     expect(got.texts.join('\n')).not.toContain('a'.repeat(40))
@@ -193,13 +197,13 @@ describe('agentic-os core band', () => {
     const got = await core($)
     // PR D: the Next steps question is a guess, not an ask: the chip does not wait and no question counts. The goal line (a parsed guess) still draws.
     expect(got.line1).not.toContain('WAITING FOR YOU')
-    expect(got.line2).toMatch(/GOAL ship\S* .*\[guessed\]/)
-    expect(got.line2).toContain('QUESTIONS 0')
+    expect(got.line2).toMatch(/^ship\S* .*\[guessed\]/)
+    expect(got.line1).not.toMatch(/question|\?/)
     expect(got.all).not.toContain(SECRET)
     expect(got.texts.join('\n')).not.toContain('a'.repeat(40))
   })
 
-  test('C6 with one row of room only the first core line draws, and survey time draws nothing', async ($, on) => {
+  test('C6 with one row of room only the one-row line draws, and survey time draws nothing', async ($, on) => {
     world(on)
     const one = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows: 1 } })
     expect((await one.findAll({ type: 'Box' })).map(found => found.key).filter(key => key?.startsWith('row-'))).toEqual(['row-core-1'])
@@ -245,6 +249,15 @@ const gitWorld = (on: On, files: Record<string, string>, opts: { env?: Record<st
   return seen
 }
 
+/**
+ * The hud atom as a store with a HUD state in it, so the band has a HUD row and, at two rows, the compact line (chip, name, repo, ctx...).
+ * Row 1 and the one-row line carry no repo (design 2026-11-18, section 3); only the compact line does.
+ */
+const withHud = (on: On) => {
+  const value = { model: 'claude-opus-5-5', effort: null, advisor: { state: 'off', calls: 0 }, costUsd: null, limits: [] }
+  on('state.get', { plugin: 'ccv3-mods', key: 'hud' } as never, (() => ({ value: { value, version: 1 } })) as never)
+}
+
 const LINKED = {
   'C:/wt/w1/.git': 'gitdir: C:/main/repo-x/.git/worktrees/w1\r\n',
   'C:/main/repo-x/.git/worktrees/w1/HEAD': 'ref: refs/heads/feat/one\r\n',
@@ -257,6 +270,7 @@ const lastSnapshot = (seen: Git): Record<string, any> =>
 describe('agentic-os git info', () => {
   test('C4 the start reads the .git files, a turn start reads them again, and the snapshot and the band carry the result', async ($, on) => {
     const seen = gitWorld(on, { ...LINKED })
+    withHud(on)
     await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
     expect(lastSnapshot(seen)).toMatchObject({ repo: 'repo-x', branch: 'feat/one', worktree: 'w1' })
@@ -264,8 +278,8 @@ describe('agentic-os git info', () => {
     seen.files['C:/main/repo-x/.git/worktrees/w1/HEAD'] = 'ref: refs/heads/feat/two\n'
     await $.turn.start({ turnId: 't1' } as never)
     expect(lastSnapshot(seen).branch).toBe('feat/two')
-    // Line 1 of the two-line band no longer carries repo or branch (the statusline does); the one-line compact band keeps the repo.
-    expect((await core($, 120, 1)).line1).toContain('repo-x')
+    // Row 1 no longer carries repo or branch (the statusline does); the compact line (two rows, HUD up) keeps the repo.
+    expect((await core($, 120, 2)).line1).toContain('repo-x')
     expect((await core($)).line1).not.toContain('repo-x')
   })
 
@@ -284,7 +298,8 @@ describe('agentic-os git info', () => {
     expect(snapshot.brief.goal).toBe('g')
     expect(snapshot).toMatchObject({ repo: null, branch: null, worktree: null })
     expect(snapshot).toHaveProperty('hud', null)
-    expect((await core($, 120, 1)).line1).toContain('unnamed - ctx')
+    // The band (no HUD state in a headless run): row 1 draws an unknown ctx as a dash and no repo.
+    expect((await core($, 120, 2)).line1).toContain('ctx -')
   })
 
   test('C5 a cwd that cannot be read leaves the fields null and the session alone', async ($, on) => {
@@ -327,18 +342,19 @@ describe('agentic-os git info', () => {
       on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
       on('classic.SessionStart', () => ({}))
       const held = heldGit(on)
+      withHud(on)
       await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
-      const before = (await core($, 120, 1)).line1
+      const before = (await core($, 120, 2)).line1
       expect(before).toContain('repo-x')
 
       await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
       held.value = null // the engine's reset
-      const gap = (await core($, 120, 1)).line1
+      const gap = (await core($, 120, 2)).line1
       expect(gap).toContain('unnamed - ctx')
       expect(gap).not.toContain('repo-x')
 
       await $.classic.SessionStart({ source: reason } as never)
-      const after = (await core($, 120, 1)).line1
+      const after = (await core($, 120, 2)).line1
       expect(after).toContain('repo-x')
       expect(seen.reads.length).toBeGreaterThan(0)
     })

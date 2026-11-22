@@ -101,6 +101,10 @@ jobs:
       - name: shared store link unit tests
         timeout-minutes: 5
         run: node --test scripts/worktree/shared-deps.test.mjs
+      # Status band goal: the plugin copy of the lane-note goal extractor must give the same result as the repo extractor.
+      - name: band goal extractor drift test
+        timeout-minutes: 5
+        run: node --test scripts/mods/goal-extractor-drift.test.mjs
       - name: no new pg lookup outside the resolver (ratchet)
         run: node scripts/ratchets/no-pg-lookup.mjs
       - name: no-pg-lookup unit tests
