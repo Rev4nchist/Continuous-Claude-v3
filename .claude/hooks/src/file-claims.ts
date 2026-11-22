@@ -33,7 +33,7 @@ import { isEngineHost } from './shared/engine-host.js';
 import { firstWarning, wasWarned } from './shared/claim-warned.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
 import { logGuardDecision } from './shared/guard-log.js';
-import { logPayloadIfMarked } from './shared/payload-log.js';
+import { logPayloadIfMarked, logUnknownAgentType } from './shared/payload-log.js';
 
 // Stale session threshold (5 minutes). This is only ONE HALF of the reclamation
 // rule -- the lease must ALSO have expired. See resolveFileClaim.
@@ -90,6 +90,8 @@ export async function main(): Promise<void> {
 
   // Card coord-hooks-followups item 4: log the fields of a marked call (flag file, off by default). Log only.
   logPayloadIfMarked(input);
+  // Card coord-hooks-followups step 2b: the first sighting of each raw agent_type outside the known list. Log only.
+  logUnknownAgentType(input);
 
   // Card coord-subagent-write-guard: a subagent's write is judged first. A deny ends the call; a warn rides on
   // whatever the claim check prints next.
