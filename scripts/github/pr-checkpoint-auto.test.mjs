@@ -205,14 +205,14 @@ test('AC9: --by takes dave, default or auto only', () => {
 
 // ---------- the security-tier floor (spec 3.1: aegis + critic, so Dave presses) ----------
 
-test('AC10: a PR below HIGH that touches a security-tier file is never auto-eligible', async () => {
+test('AC10: a PR that touches a security-tier file is never auto-eligible: its band is forced to HIGH (card force-high-security-tier), which auto-confirm does not cover', async () => {
   const r = await recommendFor([GATE[0]]);
-  assert.equal(r.band.band, 'ELEVATED');
+  assert.equal(r.band.band, 'HIGH');
+  assert.equal(r.band.forcedHigh, true);
   assert.deepEqual(r.band.securityTier, [GATE[0]]);
   assert.equal(r.recommended, 'none');
   assert.equal(r.auto.eligible, false);
-  assert.match(r.auto.reason, /security.tier/i);
-  assert.ok(r.auto.reason.includes(GATE[0]), 'the reason names the file');
+  assert.match(r.auto.reason, /^Band HIGH: Dave presses/);
 });
 
 // ---------- the live drift check (git show main:review-router.config.json) ----------
@@ -269,11 +269,22 @@ test('AC12: main with no config, or a config that is not JSON, counts as drift (
 });
 
 test('AC13: a PR below HIGH that touches a critical file but no security-tier file is never auto-eligible (the RF floor)', async () => {
-  const r = await recommendFor([GATE[1]]);
+  // cr-paid.mjs is critical, not on the security tier and not on FORCE_HIGH_FILES, so the band stays ELEVATED and the floor text shows.
+  const r = await recommendFor([GATE[3]]);
   assert.equal(r.band.band, 'ELEVATED');
-  assert.deepEqual(r.band.securityTier, [], 'review-status.mjs is critical, not security tier');
+  assert.deepEqual(r.band.securityTier, [], 'cr-paid.mjs is critical, not security tier');
   assert.equal(r.recommended, 'none');
   assert.equal(r.auto.eligible, false);
   assert.match(r.auto.reason, /aegis \+ critic/);
-  assert.ok(r.auto.reason.includes(GATE[1]), 'the reason names the file');
+  assert.ok(r.auto.reason.includes(GATE[3]), 'the reason names the file');
+});
+
+test('AC13b: review-status.mjs, the router and the land step are forced HIGH (FORCE_HIGH_FILES): never auto-eligible, whatever the floor says', async () => {
+  for (const p of [GATE[1], GATE[2], GATE[4]]) {
+    const r = await recommendFor([p]);
+    assert.equal(r.band.band, 'HIGH', p);
+    assert.equal(r.band.forcedHigh, true, p);
+    assert.equal(r.auto.eligible, false, p);
+    assert.match(r.auto.reason, /^Band HIGH: Dave presses/, p);
+  }
 });
