@@ -3,7 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { AgentRun, BoardLane, CacheState, FileTouch, HudLimit, HudState, KeeperRecord, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch, WorkflowFeed } from '../../types'
 import { EMPTY_CACHE, cacheView, hitRate } from '../hud/cache'
-import { hudParts, hudSpans } from '../hud/model'
+import { fitHudParts, hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { decide, openThrottle, requestSnapshot, trailingDue } from '../shared/snapshot-port'
 import { ledgerBandSpans, settle } from '../agent-ledger/model'
@@ -1147,8 +1147,8 @@ export const agenticOs = (on: On) => {
     let hudRow = null
     if (hudNow !== null && spare >= 1) {
       const parts = hudParts(hudNow, now.ctx, cacheView(await read($, cache), await $.clock.now()))
-      // The terminal draws no Svg: its HUD is text gauges. Every other surface gets the rings and bars.
-      if (e.surface === 'terminal' || !('Svg' in elements)) hudRow = spansRow('row-hud', hudSpans(parts))
+      // The terminal draws no Svg: its HUD is text gauges, fitted to the body width (whole parts drop, never a cut number). Every other surface gets all rings and bars.
+      if (e.surface === 'terminal' || !('Svg' in elements)) hudRow = spansRow('row-hud', hudSpans(fitHudParts(parts, e.props.bodyColumns)))
       else {
         const { Svg } = elements
         const part = (one: HudPart) => {
