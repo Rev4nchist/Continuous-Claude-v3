@@ -420,6 +420,14 @@ function guardedPost(d, { pr, cap, source, repo, expectHead }, began) {
   }
   if (checked.text) return refuse(checked.text, { kind: checked.kind, verdict: checked.verdict, reasons: checked.reasons });
   if (left() <= 0) return refuse(DEADLINE_TEXT);
+  // A push after the check read the head would be posted against the head that was priced (CLI finding c): read the PR head once more, right before the round is used up and recorded.
+  try {
+    const live = String(gh([`repos/${repo}/pulls/${pr}`])?.head?.sha ?? '').toLowerCase();
+    if (live !== head) return refuse(`The head of PR #${pr} moved from ${head.slice(0, 7)} to ${live.slice(0, 7)} after the check, just before the post. Nothing was posted. Ask Dave again.`);
+  } catch (err) {
+    if (err instanceof DeadlineError) return refuse(DEADLINE_TEXT);
+    return fail(5, `Could not read PR #${pr} again just before the post (${firstLine(err)}). Nothing was posted. The paid yes is kept; run it again.`);
+  }
   // step 7: use the row up, record the round FIRST, then post. A failure after the record leaves a counted round that did not happen: the safe direction.
   const used = useUp();
   if (!used.ok) return notUsedUp(used);
