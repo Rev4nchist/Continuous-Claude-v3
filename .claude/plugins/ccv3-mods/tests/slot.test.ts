@@ -295,6 +295,8 @@ const NOW = 1_000_000
 const HOME = 'C:/home'
 const SCRIPT = `${HOME}/continuous-claude/scripts/github/slot-queue.mjs`
 const STATE_FILE = `${HOME}/.claude/state/coderabbit-slot.json`
+/** The head a fresh `cr-paid.mjs check` reports: the head Dave's price was read at. The Pay verb must carry it (--head). */
+const PAYHEAD = '5'.repeat(40)
 const ACTIVE = JSON.stringify({ version: 1, items: [{ pr: 900, state: 'queued' }] })
 const DONE = JSON.stringify({ version: 1, items: [{ pr: 900, state: 'done' }, { pr: 901, state: 'dropped' }] })
 
@@ -378,7 +380,7 @@ const loopWorld = (on: On, opts: LoopOpts = {}) => {
     }
     if (argv.some(part => part.includes('cr-paid.mjs'))) {
       seen.paid.push(argv.slice(2))
-      return result(opts.check ?? { out: '{"exitCode":0,"verdict":"ALLOW","pr":901,"files":11,"total":11,"cost":2.75}' })
+      return result(opts.check ?? { out: `{"exitCode":0,"verdict":"ALLOW","pr":901,"head":"${PAYHEAD}","files":11,"total":11,"cost":2.75}` })
     }
     if (argv.some(part => part.includes('review-status.mjs'))) {
       const pr = Number(argv.find(part => /^\d+$/.test(part)))
@@ -521,8 +523,23 @@ describe('slot: /slot (M3, M4)', () => {
     const ran = await command($, 'slot', 'pay 5')
     expect(w.seen.paid).toEqual([['check', '--pr', '5', '--json']])
     expect(w.seen.dialogs[0]!.labels).toContain('Pay up to $2.75')
-    expect(w.seen.slot.map(run => run.argv)).toEqual([['decide', '--pr', '5', '--kind', 'pay', '--cap', '2.75', '--json']])
+    expect(w.seen.slot.map(run => run.argv)).toEqual([['decide', '--pr', '5', '--kind', 'pay', '--head', PAYHEAD, '--cap', '2.75', '--json']])
     expect(ran.text ?? '').toMatch(/#5.*posted/i)
+  })
+
+  // F6: the price and the head come from ONE fresh check. A check that names no head (or a bad one) offers no price, so no dialog and no decide.
+  test('M4c a fresh check that names no head, or a bad one, offers no paid round: no dialog, no decide', async ($, on) => {
+    for (const out of [
+      '{"exitCode":0,"verdict":"ALLOW","pr":5,"files":11,"total":11,"cost":2.75}',
+      `{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"${'A'.repeat(40)}","files":11,"total":11,"cost":2.75}`,
+      '{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"abc1234","files":11,"total":11,"cost":2.75}',
+    ]) {
+      const w = loopWorld(on, { answer: /^Pay up to/, check: { out } })
+      await startLoop($)
+      expect((await command($, 'slot', 'pay 5')).text ?? '').toMatch(/no paid round is offered/i)
+      expect(w.seen.dialogs).toEqual([])
+      expect(w.seen.slot).toEqual([])
+    }
   })
 
   test('M4b a typed /slot pay with no answer to the dialog, or with no price, runs no decide', async ($, on) => {
@@ -713,19 +730,19 @@ describe('slot: the paid ask and the time-out are dialogs (T17)', () => {
     })
     await startLoop($)
     await w.clock.advance(TICK)
-    expect(w.seen.slot.filter(run => run.argv[0] === 'decide').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'pay', '--cap', '2.75', '--json']])
+    expect(w.seen.slot.filter(run => run.argv[0] === 'decide').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'pay', '--head', PAYHEAD, '--cap', '2.75', '--json']])
     expect(w.seen.toasts.some(text => /ESCALATE/.test(text) && /Nothing posted/.test(text))).toBe(true)
     expect(w.seen.comments).toEqual([])
   })
 
   // Paid guard (card prflow-paid-run-guard): the Pay label carries a FRESH price and that price is the cap.
   test('S7 the Pay label and the --cap come from a fresh cr-paid check (the unfiltered file count), not from the toast text', async ($, on) => {
-    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: /^Pay/, check: { out: '{"exitCode":0,"verdict":"ALLOW","pr":901,"files":4,"total":14,"cost":1}' } })
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: /^Pay/, check: { out: `{"exitCode":0,"verdict":"ALLOW","pr":901,"head":"${PAYHEAD}","files":4,"total":14,"cost":1}` } })
     await startLoop($)
     await w.clock.advance(TICK)
     expect(w.seen.paid).toEqual([['check', '--pr', '901', '--json']])
     expect(w.seen.dialogs[0]!.labels.find(label => /^Pay/.test(label))).toBe('Pay up to $3.50')
-    expect(w.seen.slot.filter(run => run.argv[0] === 'decide').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'pay', '--cap', '3.50', '--json']])
+    expect(w.seen.slot.filter(run => run.argv[0] === 'decide').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'pay', '--head', PAYHEAD, '--cap', '3.50', '--json']])
   })
 
   for (const [name, check] of [

@@ -7,8 +7,9 @@
  *   tick [--session ID] [--json]                                    read GitHub, apply the queue rules, post when the slot is free
  *   add --pr N --band CRITICAL|HIGH|SAMPLE --head SHA40 [--round R] [--escalated] [--session ID] [--json]
  *   list [--json]                                                   rows from the file; reads nothing else
- *   decide --pr N --kind pay|wait|first [--cap USD] [--json]        Dave's answers (the mod runs this from his composer). pay needs --cap: the price of his yes,
- *                                                                   from the label of the mod's own dialog ("Pay up to $X"); the paid post refuses a cost over it
+ *   decide --pr N --kind pay|wait|first [--head SHA40 --cap USD] [--json]   Dave's answers (the mod runs this from his composer). pay needs --cap: the price of his yes,
+ *                                                                   from the label of the mod's own dialog ("Pay up to $X"); the paid post refuses a cost over it.
+ *                                                                   pay also needs --head: the PR head of the check that gave the price; a PR that moved off it refuses (F6)
  *   drop --pr N --reason R [--json]                                 R = sample-ttl only drops a SAMPLE
  *   probe --pr N [--json]                                           the facts a tick reads for one PR; writes and posts nothing
  *
@@ -76,9 +77,11 @@ export function parseArgs(argv) {
   const o = { verb, ...flagsOf(rest) };
   const paying = verb === 'decide' && o.kind === 'pay';
   if (o.cap !== undefined && !paying) throw bad('--cap is a decide --kind pay flag');
+  if (o.head !== undefined && !paying && verb !== 'add') throw bad('--head is a decide --kind pay flag (or an add flag)');
   if (paying) {
     if (o.cap === undefined) throw bad('decide --kind pay needs --cap <dollars>: the price of Dave\'s tap');
     o.cap = capCentsOf(o.cap);
+    if (!SHA40.test(String(o.head))) throw bad('decide --kind pay needs --head <sha>: the 40-character lowercase PR head Dave saw with the price');
   }
   if (verb !== 'tick' && verb !== 'list') o.pr = wholeNumber(o.pr, '--pr');
   if (verb === 'add') {
@@ -446,7 +449,7 @@ function payLocked(a, d, state, it) {
   if (refused) return refuse(refused, { posted: false });
   let paid = null;
   let failure = null;
-  const r = postPaid({ pr: a.pr, cap: a.cap, source: 'cap', repo: d.repo }, {
+  const r = postPaid({ pr: a.pr, cap: a.cap, source: 'cap', repo: d.repo, head: a.head }, {
     ...crPostDeps(d), capacity: () => null,
     afterRecord: ({ head, v }) => { paid = paidState(expireHolder(state, d.now(), d.cfg), it, a, d, { ...v, head }); writeState(d.statePath, paid); },
     onPostError: (err) => { failure = paidFailure(d, err, paid); },

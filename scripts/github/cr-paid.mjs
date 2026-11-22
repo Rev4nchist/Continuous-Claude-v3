@@ -381,7 +381,7 @@ export function unledgeredOf({ pr, repo = DEFAULT_REPO }, deps) {
 }
 
 /** The guarded section (steps 1 to 7). The paid lock is held by the caller. Never throws for a GitHub or ledger failure: it returns { ok, code, text }. */
-function guardedPost(d, { pr, cap, source, repo }, began) {
+function guardedPost(d, { pr, cap, source, repo, expectHead }, began) {
   const nowMs = () => d.now().getTime();
   const left = () => began + POST_LIMITS.deadlineMs - nowMs();
   const gh = (args) => {
@@ -396,6 +396,8 @@ function guardedPost(d, { pr, cap, source, repo }, began) {
     if (!SHA40.test(head)) throw new Error('the PR head is not a commit sha');
     block = pullBlockOf(pull);
   } catch (err) { return fail(5, `Could not read PR #${pr} from GitHub (${firstLine(err)}). Nothing was posted. The paid yes is kept; run it again.`); }
+  // F6: the head Dave saw with the price (source cap: the queue's --head). A PR that moved off it is a different round than the one he priced.
+  if (expectHead !== null && expectHead !== head) return fail(4, `The head of PR #${pr} moved from ${String(expectHead).slice(0, 7)} to ${head.slice(0, 7)} after Dave saw the price. Nothing was posted. Ask Dave again.`);
   // step 2: the yes. From here on every refusal uses the row up and exits 4.
   const triple = { step: 'paid-round', key: decisionKey({ repo, pr }), head };
   const row = source === 'cap' ? null : decisionRowRead(triple);
@@ -441,21 +443,21 @@ function storeMoved(env) {
 }
 
 /**
- * postPaid({ pr, cap, source, repo }, deps) -> { ok, code, text, ... }. source `row` (default): the cap is the price of Dave's stored yes. source `cap`: `cap` is
- * whole cents from the queue's pay decision (--cap). Holds the paid lock across every step, with a 120 s deadline and a 20 s limit per GitHub call.
+ * postPaid({ pr, cap, source, repo, head }, deps) -> { ok, code, text, ... }. source `row` (default): the cap is the price of Dave's stored yes. source `cap`: `cap` is
+ * whole cents from the queue's pay decision (--cap) and `head` is the PR head Dave saw with that price (--head); a PR that moved off it refuses (exit 4). Holds the paid lock across every step, with a 120 s deadline and a 20 s limit per GitHub call.
  * Codes: 0 posted; 4 a refusal from step 2 on (the row is used up); 5 nothing happened and the yes is kept (a failed GitHub read in step 1, another paid post holds the lock,
  * CCV3_DECISIONS_FILE moves the decision store in a `row` run, or the use-up of the row failed).
  * deps (tests, the queue): gh(args, { timeoutMs }), now() -> Date, ledgerPath, pathFilters, env, capacity(pr, ms) -> fact, queue { holdsPay(pr, head) },
  * checkPr({ pr, repo }) -> verdict, afterRecord({ pr, head, v, files }) and onPostError(err) (the queue marks its item), lockWaitMs.
  */
-export function postPaid({ pr, cap = null, source = 'row', repo = DEFAULT_REPO }, deps = {}) {
+export function postPaid({ pr, cap = null, source = 'row', repo = DEFAULT_REPO, head: expectHead = null }, deps = {}) {
   const given = Object.fromEntries(Object.entries(deps).filter(([, v]) => v !== undefined));
   const capacity = (n, ms) => capacityFact({ now: new Date(ms).toISOString(), pr: n, dependabot: false, policy: {}, probe: false, root: ROOT }, { crUsage: () => null });
   const d = { ...withDefaults({ gh: ghApiTimed, capacity, ...given }), lockWaitMs: given.lockWaitMs ?? 5000 };
   if (source !== 'cap' && storeMoved(d.env)) return fail(5, STORE_MOVED_TEXT);
   const began = d.now().getTime();
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
-  const ran = withLock(d.ledgerPath, { lockWaitMs: d.lockWaitMs, lockStaleMs: POST_LIMITS.lockStaleMs }, () => guardedPost(d, { pr, cap, source, repo }, began));
+  const ran = withLock(d.ledgerPath, { lockWaitMs: d.lockWaitMs, lockStaleMs: POST_LIMITS.lockStaleMs }, () => guardedPost(d, { pr, cap, source, repo, expectHead }, began));
   if (ran?.ok === false && ran.reason === 'lock') return fail(5, `Another paid post is running for the paid ledger (${firstLine(ran.detail)}). Nothing was posted. The paid yes is kept; run it again in a moment.`);
   return ran;
 }

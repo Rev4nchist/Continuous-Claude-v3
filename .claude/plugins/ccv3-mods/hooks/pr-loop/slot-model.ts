@@ -148,13 +148,24 @@ export type SlotAskSpec = { header: string; question: string; choices: SlotChoic
  * The price of a paid round from a FRESH `cr-paid.mjs check --pr N --json` (stdout), as dollars with 2 decimals ("$2.75"), or null. Only an ALLOW with a
  * whole file count of 1 or more gives a price: the UNFILTERED count (`total`, path_filters billing is unproven) at $0.25 a file. The toast text of the
  * tick is not a source: it holds the filtered figure of an older read. No price means no Pay row (no price, no yes). Never throws.
+ * A price with no head is no price: the head the price was read at travels with Dave's tap (`--head`, F6), so a check that names none offers nothing.
  */
 export const payPrice = (stdout: string): string | null => {
   try {
     const parsed: unknown = JSON.parse(stdout)
-    if (!isObject(parsed) || parsed.verdict !== 'ALLOW') return null
+    if (!isObject(parsed) || parsed.verdict !== 'ALLOW' || payHead(stdout) === null) return null
     const files = parsed.total
     return typeof files === 'number' && Number.isInteger(files) && files > 0 ? `$${(files * 0.25).toFixed(2)}` : null
+  } catch {
+    return null
+  }
+}
+
+/** The PR head of a fresh `cr-paid.mjs check --json` (stdout): 40 lowercase hex characters, or null. The pay decision refuses a PR whose head moved off it. Never throws. */
+export const payHead = (stdout: string): string | null => {
+  try {
+    const parsed: unknown = JSON.parse(stdout)
+    return isObject(parsed) && typeof parsed.head === 'string' && /^[0-9a-f]{40}$/.test(parsed.head) ? parsed.head : null
   } catch {
     return null
   }
