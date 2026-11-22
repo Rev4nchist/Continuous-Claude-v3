@@ -332,6 +332,14 @@ const STORE_WHY = 'only decision-ledger writes the decision store, from Dave\'s 
 const PAID_MENTION_RE = /@coderabbitai/i;
 const PAID_FLAG_RE = /use[-_\s]*credits/i;
 const PAID_WHY = 'a paid CodeRabbit request runs only through node scripts/github/cr-paid.mjs post --pr N, which reads Dave\'s priced yes.';
+// CLI cap override rule (card coord-cap-override, PART B), on the RAW shell text. No hand parser (V7.6): a command that names either flag of the
+// one-run CLI cap override is denied unless Dave's tap covers EXACTLY the flags it holds. The tap is a ship-ask cap-override question, stored as
+// step cli-skip with the key `<repo>@<branch>!cap:<flag set>` (flag set: `usd=N`, `extra` or `usd=N,extra`) and the head. This rule only READS it;
+// pre-pr.mjs and cr-fix.mjs claim it once. The label and the key come from scripts/github/lib/cap-override.mjs (a test imports that file: they cannot drift).
+const CAP_FLAG_RE = /--cli-(?:cap-usd|extra-run)/i;
+const CAP_LIFT_RE = /^Lift the cap for this one run(?: \(Recommended\))?$/;
+const CAP_KEY_MARK = '!cap:';
+const CAP_WHY = 'the CLI cap override flags (the USD flag and the extra-run flag of pre-pr.mjs and cr-fix.mjs) run only with Dave\'s tap for this branch, this head and exactly these flags. Ask him first: run node scripts/github/ship-ask.mjs cap-override --branch <branch> [--usd N] [--extra-run] --json, pass its JSON to AskUserQuestion word for word, then run the command once with exactly the flags he tapped. The tap is single use. Text that only names a flag (a message, an echo, a search) is denied too: say "the USD flag" or "the extra-run flag" instead.';
 const SUBAGENT_WHY = 'a subagent cannot open a PR, land, merge or push: Dave\'s tap belongs to the main session. Ask the main session to do it.';
 const NO_PR_WHY = 'the PR number cannot be read from this command, so its land decision cannot be found. Name the PR number in the command (land-pr.ps1 -Pr <n>, gh pr merge <n>).';
 const goThereWhy = (repo: string): string => `this command names ${repo}, which is not the CCv3 repo, so it cannot be judged with a CCv3 decision: go to that repo folder and run it there.`;
@@ -3341,6 +3349,8 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   // Paid-run guard tripwire: the RAW shell text (readCommand blanks heredoc and here-string bodies), pushed before shapesOf so a git throw keeps it.
   // Scope other, not hard: like the land-script text rule, it follows decisions.enforce.
   if (paidTripwire(input)) denies.push(deny('paid-coderabbit', PAID_WHY));
+  // CLI cap override rule (PART B): the raw text names a cap flag and no tap covers it. Scope other, like the tripwire above: it follows decisions.enforce.
+  if (capOverrideDeny(input, deps)) denies.push(deny('cap-override', CAP_WHY));
   const shapes = shapesOf(cmd.text, cmd.tool);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);
@@ -3394,6 +3404,56 @@ function subagentDeny(shapes: Shape[], deps: Deps, cwd: string, shell: 'bash' | 
 function paidTripwire(input: HookInput): boolean {
   const cmd = readShellCommand(input);
   return cmd.kind === 'command' && PAID_MENTION_RE.test(cmd.text) && PAID_FLAG_RE.test(cmd.text);
+}
+
+/** The approved spelling of one part of a tap's flag set (`usd=6` -> `--cli-cap-usd 6`, `extra` -> `--cli-extra-run`), or null for a part this rule does not know. */
+function capSpelling(part: string): string | null {
+  if (part === 'extra') return '--cli-extra-run';
+  const usd = /^usd=([0-9]+(?:\.[0-9]{1,2})?)$/.exec(part)?.[1];
+  return usd === undefined ? null : `--cli-cap-usd ${usd}`;
+}
+
+/**
+ * The raw text with every approved spelling cut out, for one tap's flag set: null when a part is unknown or not in the text. An approved spelling
+ * counts only when a space, a quote, ; ( ) | & or the start comes before it and a space, a quote, ; ) | & or the end comes after it, so
+ * `--cli-cap-usd 6` is not found inside `--cli-cap-usd 60`, `x--cli-cap-usd 6` or `--cli-cap-usd 6.5`.
+ */
+function withoutApproved(text: string, flagSet: string): string | null {
+  let rest = text;
+  for (const part of flagSet.split(',')) {
+    const spelling = capSpelling(part);
+    if (spelling === null) return null;
+    const re = new RegExp(`(?<=^|[\\s"';()|&])${spelling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[\\s"';)|&])`, 'g');
+    if (!re.test(rest)) return null;
+    rest = rest.replace(re, ' ');
+  }
+  return rest;
+}
+
+/**
+ * The raw shell text of the call names the USD flag or the extra-run flag of the CLI cap override and no tap of Dave's covers exactly these flags
+ * for the branch and head of the checkout. A subagent has no tap. Fail closed: a branch or head git cannot name, or a git error, is a deny. Never throws.
+ */
+function capOverrideDeny(input: HookInput, deps: Deps): boolean {
+  try {
+    const cmd = readShellCommand(input);
+    if (cmd.kind !== 'command' || !CAP_FLAG_RE.test(cmd.text)) return false;
+    if (input.agent_id) return true;
+    const cwd = input.cwd || process.cwd();
+    const branch = deps.git(cwd, ['branch', '--show-current']);
+    const head = deps.git(cwd, ['rev-parse', 'HEAD']);
+    const name = branch.status === 0 ? branch.stdout.trim() : '';
+    const sha = head.status === 0 ? head.stdout.trim().toLowerCase() : '';
+    if (name === '' || !/^[0-9a-f]{40}$/.test(sha)) return true;
+    const prefix = `${decisionKey({ branch: name })}${CAP_KEY_MARK}`;
+    return !decisionRows(deps.env).some((r) => {
+      if (r.step !== 'cli-skip' || r.head.toLowerCase() !== sha || !r.key.startsWith(prefix) || !CAP_LIFT_RE.test(r.label)) return false;
+      const rest = withoutApproved(cmd.text, r.key.slice(prefix.length));
+      return rest !== null && !CAP_FLAG_RE.test(rest);
+    });
+  } catch {
+    return true;
+  }
 }
 
 /** The shell text of the call (before any blank) writes the decision store. Never throws: the catch reads it too. */

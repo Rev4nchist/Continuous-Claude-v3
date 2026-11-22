@@ -155,7 +155,7 @@ test('T5: a tap for another USD value is refused: 6 does not open 60 or 600', ()
 
 test('T6: the keep label is a decision that opens nothing', () => {
   tempStore();
-  tap({ usd: 6, label: CAP_KEEP_LABEL });
+  tap({ usd: 6, label: `${CAP_KEEP_LABEL} (Recommended)` });
   assert.equal(claimCapOverride({ branch: 'feat/x', head: HEAD, usd: 6, extraRun: false }).ok, false);
   assert.equal(isLiftLabel(CAP_KEEP_LABEL), false);
   assert.equal(isLiftLabel(CAP_LIFT_LABEL), true);
@@ -308,27 +308,7 @@ test('X1: cr-fix takes the USD flag and refuses the extra-run flag (it has no ru
   assert.match(String(r.error), /extra-run/);
 });
 
-test('X2: with the USD flag and a tap, cr-fix lifts its USD cap for the run; without a tap it refuses', async () => {
-  const ledgerPath = ledgerOf();
-  mkdirSync(path.dirname(ledgerPath), { recursive: true });
-  const now = new Date('2026-11-22T20:00:00Z');
-  writeFileSync(ledgerPath, `${JSON.stringify({ ts: now.toISOString(), date: '2026-11-22', kind: 'cli', branch: 'feat/y', head: HEAD, files: 4, cost: 3, session: 's' })}\n`);
-  const cwd = mkdtempSync(path.join(os.tmpdir(), 'capov-fix-'));
-  const FROM = 'd'.repeat(40);
-  const deps = {
-    gh: (a) => (a.some((x) => String(x).includes('/reviews')) ? [{ id: 1, user: { login: 'coderabbitai[bot]', type: 'Bot' }, commit_id: FROM, submitted_at: '2026-11-22T10:00:00Z', body: 'Actionable comments posted: 1' }] : { head: { sha: HEAD } }),
-    headSha: () => HEAD, isAncestor: () => true, mergesIn: () => [], answerKey: () => null, now, ledgerPath, cliCap: () => 3, branch: () => 'feat/x',
-    runCr: async () => ({ status: 0, stdout: ev(CONTEXT, BILLED), stderr: '' }), writeOut: () => {},
-  };
-  const refused = await FIX.crFix({ pr: 5, cwd, capOverride: { usd: 6 } }, { ...deps, claimOverride: () => ({ ok: false, reason: 'no-decision' }) });
-  assert.equal(refused.exitCode, 1);
-  assert.match(String(refused.reason), /tap|decision/i);
-  const capped = await FIX.crFix({ pr: 5, cwd }, deps);
-  assert.match(String(capped.reason), /cli-cap/);
-  const ok = await FIX.crFix({ pr: 5, cwd, capOverride: { usd: 6 } }, { ...deps, claimOverride: () => ({ ok: true, tapAt: '2026-11-22T19:00:00.000Z' }) });
-  assert.equal(ok.exitCode, 0, JSON.stringify(ok));
-  assert.deepEqual(rowsOf(ledgerPath).at(-1).capOverride, { usd: 6, extraRun: false, tapAt: '2026-11-22T19:00:00.000Z' });
-});
+// X2 to X4 (the cr-fix run with the USD flag, the tap, the refusal) live in cr-fix.test.mjs as CF31 to CF34: that file holds the gh harness.
 
 // ---------- J: the line-ends join (the pending join that PART B carries) ----------
 

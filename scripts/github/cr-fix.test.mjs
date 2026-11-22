@@ -527,6 +527,45 @@ test('CF27: at the cap the run stops with exit 2 before any CLI run, and the rea
   assert.deepEqual(FIX.reportOf(r).out, []);
 });
 
+// ---- the one-run cap override (card coord-cap-override, PART B): the USD flag only, after Dave's tap ----
+test('CF31: with the USD flag and a tap the run goes ahead at a spend that is at the cap, and its billed row carries capOverride', async () => {
+  const h = harness({ cap: 3, ledgerRows: [cliRow(3, TODAY)], run: { status: 0, stdout: ev(CONTEXT, finding('minor'), BILLED), stderr: '' } });
+  const claims = [];
+  h.deps.claimOverride = (a) => { claims.push(a); return { ok: true, tapAt: '2026-10-30T08:00:00.000Z' }; };
+  const r = await h.go({ capOverride: { usd: 6 } });
+  assert.equal(r.exitCode, 0, JSON.stringify(r));
+  assert.equal(h.calls.runs.length, 1);
+  assert.deepEqual(claims, [{ branch: 'fix/x', head: HEAD, usd: 6, extraRun: false }]);
+  assert.deepEqual(ledgerRows(h.ledgerPath).at(-1).capOverride, { usd: 6, extraRun: false, tapAt: '2026-10-30T08:00:00.000Z' });
+});
+
+test('CF32: a USD value that does not lift the cap (the same, or below) still stops at the cap with no run', async () => {
+  const h = harness({ cap: 3, ledgerRows: [cliRow(3, TODAY)] });
+  h.deps.claimOverride = () => ({ ok: true, tapAt: 'x' });
+  const r = await h.go({ capOverride: { usd: 3 } });
+  assert.equal(r.exitCode, 2);
+  assert.match(r.reason, /cli-cap/);
+  assert.equal(h.calls.runs.length, 0);
+});
+
+test('CF33: a refused tap starts no run, exits 1 and says why', async () => {
+  const h = harness({ cap: 3, ledgerRows: [cliRow(3, TODAY)] });
+  h.deps.claimOverride = () => ({ ok: false, reason: 'no-decision' });
+  const r = await h.go({ capOverride: { usd: 6 } });
+  assert.equal(r.exitCode, 1);
+  assert.match(r.reason, /tap|decision/i);
+  assert.equal(h.calls.runs.length, 0);
+});
+
+test('CF34: with no flag the claim is never made and the row has no capOverride', async () => {
+  const h = harness({ cap: 3, run: { status: 0, stdout: ev(CONTEXT, finding('minor'), BILLED), stderr: '' } });
+  let claimed = 0;
+  h.deps.claimOverride = () => { claimed += 1; return { ok: true }; };
+  assert.equal((await h.go()).exitCode, 0);
+  assert.equal(claimed, 0);
+  assert.equal(Object.hasOwn(ledgerRows(h.ledgerPath).at(-1), 'capOverride'), false);
+});
+
 test('CF28: under the cap the run goes ahead; with no cap a full or unreadable ledger does not stop it', async () => {
   const under = harness({ cap: 3, ledgerRows: [cliRow(2.75, TODAY)] });
   assert.equal((await under.go()).exitCode, 0);
