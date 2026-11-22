@@ -163,8 +163,8 @@ describe('HUD row fit', () => {
     STEPS.forEach((step, i) => {
       const width = stepWidth(step)
       expect(keysAt(width)).toEqual(stepParts(step).map(part => part.key))
-      if (i > 0) expect(stepWidth(STEPS[i - 1])).toBeGreaterThan(width)
-      if (i < STEPS.length - 1) expect(keysAt(width - 1)).toEqual(stepParts(STEPS[i + 1]).map(part => part.key))
+      if (i > 0) expect(stepWidth(STEPS[i - 1]!)).toBeGreaterThan(width)
+      if (i < STEPS.length - 1) expect(keysAt(width - 1)).toEqual(stepParts(STEPS[i + 1]!).map(part => part.key))
     })
   })
 
