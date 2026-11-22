@@ -3,8 +3,8 @@
 //   checkpoint.enforce           true wins (a branch value that is not the boolean false counts as true)
 //   coderabbit.cli_daily_cap_usd the lower valid number wins (a value that is not a finite number of 0 or more is ignored)
 //   pre_pr.summary_mode          'fail' wins
-// Every other key keeps the branch value. The main side is the local ref fork/main (no fetch), else the primary checkout file.
-// No main side at all fails closed: enforce true, and the branch cap and mode stay.
+// Every other key keeps the branch value. The main side is a COMMITTED ref, never a working-tree file (a working tree holds the branch's own edits):
+// the local ref fork/main first (no fetch), else the local branch main. Neither readable fails closed: enforce true, and the branch cap and mode stay.
 // Known limit: a stale local fork/main is still stricter than trusting the branch alone.
 // The TypeScript twin is .claude/hooks/src/shared/config-stricter.ts. One fixture test (fixtures/stricter-config-cases.json) keeps them equal.
 import path from 'node:path';
@@ -46,25 +46,24 @@ function objectOf(text) {
   try { const v = JSON.parse(text); return isObj(v) ? v : null; } catch { return null; }
 }
 
+/** The committed config at `ref` ('fork/main' or 'main'), or null: no such ref, a git error, or a text that is not a JSON object. No fetch. */
+function committedConfig(git, ref) {
+  try {
+    const shown = git(['show', `${ref}:${CONFIG_FILE}`]);
+    return shown.status === 0 ? objectOf(shown.stdout) : null;
+  } catch { return null; }
+}
+
 /**
- * The main side: { config, source }. The local ref fork/main first (git show, no fetch). Else the config file of the primary checkout.
- * A text that is not a JSON object counts as missing. A git or read error counts as missing. Both missing: { config: null, source: 'none' }.
- * `git(args)` returns { status, stdout }. `readFile(path, 'utf8')` returns the text, or throws or gives null when there is no file.
+ * The main side: { config, source }. The local ref fork/main first (git show, no fetch), else the local branch main. Both are committed text:
+ * a working-tree file is never read, because it holds whatever the checked-out branch edited. Neither readable: { config: null, source: 'none' }.
+ * `git(args)` returns { status, stdout }.
  */
-export function readMainConfig({ root, git, readFile }) {
-  try {
-    const shown = git(['show', `fork/main:${CONFIG_FILE}`]);
-    const config = shown.status === 0 ? objectOf(shown.stdout) : null;
-    if (config) return { config, source: 'fork-main' };
-  } catch { /* no ref, or no git: try the primary file */ }
-  try {
-    const common = git(['rev-parse', '--git-common-dir']);
-    if (common.status === 0 && common.stdout.trim() !== '') {
-      const primary = path.dirname(path.resolve(root, common.stdout.trim()));
-      const config = objectOf(readFile(path.join(primary, CONFIG_FILE), 'utf8'));
-      if (config) return { config, source: 'primary' };
-    }
-  } catch { /* no primary file */ }
+export function readMainConfig({ git }) {
+  const fork = committedConfig(git, 'fork/main');
+  if (fork) return { config: fork, source: 'fork-main' };
+  const local = committedConfig(git, 'main');
+  if (local) return { config: local, source: 'local-main' };
   return { config: null, source: 'none' };
 }
 
@@ -73,5 +72,5 @@ export function loadStricterConfig({ root, git, readFile }) {
   const file = path.join(root, CONFIG_FILE);
   const branch = objectOf(readFile(file, 'utf8'));
   if (branch === null) throw new Error(`${file} is missing or is not a JSON object`);
-  return stricterConfig(readMainConfig({ root, git, readFile }).config, branch);
+  return stricterConfig(readMainConfig({ git }).config, branch);
 }

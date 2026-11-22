@@ -1903,7 +1903,6 @@ export function resolveConfig({ root, git, readFile = readFileSync, config }) {
 
 async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined, env = process.env, onPhase = () => {} }, ctl) {
   const serialCr = env.PRE_PR_SERIAL_CR === '1';
-  const cfg = resolveConfig({ root, git, config });
   const stampPath = path.join(root, STAMP_REL);
   const runId = randomUUID();
   // Wall time per step, kept beside the results (a WeakMap): a result object, the stamp and --json stay as they were.
@@ -1913,16 +1912,20 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   const headRun = git(['rev-parse', 'HEAD']);
   const head = headRun.status === 0 ? headRun.stdout.trim() : null;
   const branch = git(['branch', '--show-current']).stdout.trim();
+  // The fetch comes first: the config is read after it, so the stricter rule sees the fork/main that the fetch brought (coord-cap-override PR A).
+  const fetchT0 = performance.now();
+  const fetched = fetch(root, base);
+  if (fetched?.state === 'failed') log(`pre-pr: fetch of ${FORK}/${base} failed (${fetched.detail}); the behind check uses the last-fetched ref`);
+  const fetchMs = performance.now() - fetchT0;
+  const cfg = resolveConfig({ root, git, config });
   // Step 0: the plain summary the session wrote. A note this week unless the config says fail (pre_pr.summary_mode).
   const summaryT0 = performance.now();
   const summary = summaryCheck({ root, head: head ?? '', branch, base, git, mode: cfg.pre_pr?.summary_mode === 'fail' ? 'fail' : 'note' });
   durations.set(summary.result, Math.round(performance.now() - summaryT0));
-  const gitT0 = performance.now();
-  const fetched = fetch(root, base);
-  if (fetched?.state === 'failed') log(`pre-pr: fetch of ${FORK}/${base} failed (${fetched.detail}); the behind check uses the last-fetched ref`);
+  const checkT0 = performance.now();
   const results = [summary.result, ...checkGit(git, base, fetched)];
   // The fetch is the slow part of git:behind, so its time is the fetch plus the three git checks. git:branch and git:clean stay null.
-  durations.set(results.find((r) => r.step === 'git:behind') ?? results[0], Math.round(performance.now() - gitT0));
+  durations.set(results.find((r) => r.step === 'git:behind') ?? results[0], Math.round(fetchMs + performance.now() - checkT0));
   // R1: the base is pinned once, after the fetch. The changes step, the guard and the CLI all read this commit.
   const baseCommit = head ? resolveBaseCommit(git, base) : '';
   const noBase = head && !baseCommit ? { paths: [], result: result('changes', 'FAIL', `cannot resolve the base commit (git merge-base HEAD ${FORK}/${base} failed): no change set and no CLI review without it`) } : null;

@@ -631,16 +631,16 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes, 
 }
 
 /**
- * checkpoint.enforce for the checkout at `top`: the stricter of the local ref fork/main (never fetched) and <toplevel>/review-router.config.json
- * (shared/config-stricter.ts). A branch cannot turn the deny into a warning by editing its own copy. With no main side (no ref, no primary file) it
- * enforces. null when the checkout file is missing, unreadable or not valid JSON (the caller fails closed for a CCv3 command).
+ * checkpoint.enforce for the checkout at `top`: the stricter of the local ref fork/main (else the local main ref; never fetched) and <toplevel>/review-router.config.json
+ * (shared/config-stricter.ts). A branch cannot turn the deny into a warning by editing its own copy. With no main side (no fork/main ref and no local main ref) it
+ * enforces. A working-tree file is never the main side. null when the checkout file is missing, unreadable or not valid JSON (the caller fails closed for a CCv3 command).
  */
 function enforceIn(deps: Deps, top: string | null): boolean | null {
   const text = top === null ? null : deps.readFile(join(top, CONFIG_REL));
   if (top === null || text === null) return null;
   let branch: unknown;
   try { branch = JSON.parse(text); } catch { return null; }
-  return viewOf(stricterConfig(mainConfigOf(top, deps.git, deps.readFile), branch)).enforce;
+  return viewOf(stricterConfig(mainConfigOf(top, deps.git), branch)).enforce;
 }
 
 /**

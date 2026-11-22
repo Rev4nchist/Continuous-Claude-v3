@@ -29,8 +29,9 @@ const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
 const READY = 'gh pr ready 201';
 const cfg = (enforce: unknown) => JSON.stringify({ checkpoint: { enforce } });
 
-interface Setup { branch: string; main?: string | null; primary?: string | null; calls?: string[] }
-function deps({ branch, main = null, primary = null, calls = [] }: Setup): Deps {
+/** main: the text of fork/main's config, localMain: the committed local branch main, primary: the primary checkout's WORKING TREE file (served on purpose: the hook must never read it). */
+interface Setup { branch: string; main?: string | null; localMain?: string | null; primary?: string | null; calls?: string[] }
+function deps({ branch, main = null, localMain = null, primary = null, calls = [] }: Setup): Deps {
   const stamp = JSON.stringify({ head: HEAD, branch: 'feat/x', at: new Date(NOW - 3_600_000).toISOString(), body_sha256: sha256(BODY), results: [] });
   return {
     git: (cwd, args) => {
@@ -42,6 +43,7 @@ function deps({ branch, main = null, primary = null, calls = [] }: Setup): Deps 
       if (key === 'rev-parse HEAD') return { status: 0, stdout: `${HEAD}\n` };
       if (key === 'branch --show-current') return { status: 0, stdout: 'feat/x\n' };
       if (key === 'show fork/main:review-router.config.json') return main === null ? { status: 128, stdout: '' } : { status: 0, stdout: main };
+      if (key === 'show main:review-router.config.json') return localMain === null ? { status: 128, stdout: '' } : { status: 0, stdout: localMain };
       if (key === 'rev-parse --git-common-dir') return { status: 0, stdout: '/primary/.git\n' };
       if (args[0] === 'rev-parse' && args[1]?.endsWith('^{commit}')) return { status: 0, stdout: `${HEAD}\n` };
       return { status: 1, stdout: '' };
@@ -74,11 +76,19 @@ describe('the hook reads the stricter checkpoint.enforce', () => {
   it('A12: the branch deletes the key: main true stays', () => {
     expect(act({ branch: JSON.stringify({ checkpoint: {} }), main: cfg(true) }).action).toBe('deny');
   });
-  it('A5a: no fork/main ref, the primary checkout file enforces: the primary value is the main side', () => {
-    expect(act({ branch: cfg(false), main: null, primary: cfg(true) }).action).toBe('deny');
+  it('A5a: no fork/main ref, the committed local main enforces: the local main is the main side', () => {
+    expect(act({ branch: cfg(false), main: null, localMain: cfg(true) }).action).toBe('deny');
   });
-  it('A5b: no fork/main ref and no primary file: enforce', () => {
-    expect(act({ branch: cfg(false), main: null, primary: null }).action).toBe('deny');
+  it('A5e: the primary working-tree file says false and the local main says true: enforce (the working tree is never read)', () => {
+    expect(act({ branch: cfg(false), main: null, localMain: cfg(true), primary: cfg(false) }).action).toBe('deny');
+  });
+  it('A5f: the primary working-tree file says true and both refs are missing: still enforce, from the missing main side, not from that file', () => {
+    const calls: string[] = [];
+    act({ branch: cfg(false), main: null, localMain: null, primary: cfg(true), calls });
+    expect(calls.filter((c) => c === 'rev-parse --git-common-dir')).toEqual([]);
+  });
+  it('A5b: neither ref is readable: enforce', () => {
+    expect(act({ branch: cfg(false), main: null, localMain: null }).action).toBe('deny');
   });
   it('A5d: a missing branch config still fails closed as before (the caller decides)', () => {
     expect(act({ branch: null as unknown as string, main: cfg(false) }).action).toBe('deny');
@@ -101,7 +111,7 @@ describe('A8b: the built hook, a real repo, branch enforce false, fork/main enfo
     if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
     return r.stdout.trim();
   };
-  function repoWith(mainEnforce: boolean, branchEnforce: boolean): string {
+  function repoWith(mainEnforce: boolean, branchEnforce: boolean, forkRef = true): string {
     const dir = mkdtempSync(join(tmpdir(), 'stricter-hook-'));
     git(dir, 'init', '-q', '-b', 'main');
     git(dir, 'config', 'user.email', 't@example.invalid');
@@ -110,7 +120,7 @@ describe('A8b: the built hook, a real repo, branch enforce false, fork/main enfo
     git(dir, 'add', '.');
     git(dir, 'commit', '-q', '-m', 'main');
     git(dir, 'remote', 'add', 'fork', 'https://github.com/Rev4nchist/Continuous-Claude-v3.git');
-    git(dir, 'update-ref', 'refs/remotes/fork/main', 'HEAD');
+    if (forkRef) git(dir, 'update-ref', 'refs/remotes/fork/main', 'HEAD');
     git(dir, 'checkout', '-q', '-b', 'feat/x');
     writeFileSync(join(dir, 'review-router.config.json'), cfg(branchEnforce));
     git(dir, 'commit', '-q', '--allow-empty', '-am', 'branch');
@@ -119,18 +129,25 @@ describe('A8b: the built hook, a real repo, branch enforce false, fork/main enfo
     writeFileSync(join(dir, STAMP_REL), JSON.stringify({ head, branch: 'feat/x', at: new Date().toISOString(), body_sha256: sha256(BODY), results: [] }));
     return dir;
   }
-  const run = (dir: string): string => {
+  /** The hook's JSON answer. A failed hook (a non-zero exit, a spawn error or output that is not JSON) is a test failure, never an allow. */
+  const run = (dir: string): { permissionDecision?: string } => {
     const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: READY }, cwd: dir, session_id: 's-stricter' });
     // The built hook does not run under VITEST (its auto-run test), and a probe sets its own log file (guard-log.ts).
     const env: NodeJS.ProcessEnv = { ...process.env, CCV3_GUARD_DECISIONS_LOG: join(dir, 'guard.jsonl') };
     delete env.VITEST;
     const r = spawnSync('node', [DIST], { input: payload, encoding: 'utf8', windowsHide: true, env });
-    return r.stdout;
+    expect(r.error, 'the hook did not start').toBeUndefined();
+    expect(r.status, `exit code; stderr: ${r.stderr}`).toBe(0);
+    const parsed = JSON.parse(r.stdout) as { hookSpecificOutput?: { permissionDecision?: string } };
+    return parsed.hookSpecificOutput ?? {};
   };
-  const verdict = (out: string): string => (JSON.parse(out || '{}').hookSpecificOutput?.permissionDecision as string | undefined) ?? 'allow';
+  const denied = (dir: string): boolean => run(dir).permissionDecision === 'deny';
+  /** A deny must carry a reason: an empty object is not a deny. */
+  const allowed = (dir: string): boolean => Object.keys(run(dir)).length === 0;
 
   it('the dist file exists', () => { expect(existsSync(DIST)).toBe(true); });
-  it('deny stays', () => { expect(verdict(run(repoWith(true, false)))).toBe('deny'); });
-  it('control: main false, branch true still denies', () => { expect(verdict(run(repoWith(false, true)))).toBe('deny'); });
-  it('control: main false, branch false is warn mode, allowed', () => { expect(verdict(run(repoWith(false, false)))).toBe('allow'); });
+  it('deny stays', () => { expect(denied(repoWith(true, false))).toBe(true); });
+  it('A5e built: no fork/main ref, the committed local main enforces, the branch says false: deny stays', () => { expect(denied(repoWith(true, false, false))).toBe(true); });
+  it('control: main false, branch true still denies', () => { expect(denied(repoWith(false, true))).toBe(true); });
+  it('control: main false, branch false is warn mode, allowed ({})', () => { expect(allowed(repoWith(false, false))).toBe(true); });
 });

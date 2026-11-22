@@ -4,24 +4,28 @@
 // .claude/hooks/src/__tests__/pre-pr-gate-stricter.test.ts, so the two copies cannot differ.
 // No network, no real git: git is a stub that serves the text a test gives it.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadStricterConfig, readMainConfig, stricterConfig, viewOf } from './config-stricter.mjs';
-import { resolveConfig, summaryBeforeLock } from './pre-pr.mjs';
+import { resolveConfig, runPrePr, summaryBeforeLock } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CASES = JSON.parse(readFileSync(path.join(HERE, 'fixtures', 'stricter-config-cases.json'), 'utf8')).rows;
 const SHOW = 'show fork/main:review-router.config.json';
+const SHOW_LOCAL = 'show main:review-router.config.json';
 
-/** A git stub: `main` is the text of fork/main's config (null: no such ref), `common` the git common dir. */
-function gitStub({ main = null, common = '/primary/.git', calls = [] } = {}) {
+/** A git stub: `main` is the text of fork/main's config, `localMain` the text of the local branch main (null: no such ref). */
+function gitStub({ main = null, localMain = null, calls = [] } = {}) {
   return (args) => {
-    calls.push(args.join(' '));
     const key = args.join(' ');
+    calls.push(key);
     if (key === SHOW) return main === null ? { status: 128, stdout: '' } : { status: 0, stdout: main };
-    if (key === 'rev-parse --git-common-dir') return { status: 0, stdout: `${common}\n` };
+    if (key === SHOW_LOCAL) return localMain === null ? { status: 128, stdout: '' } : { status: 0, stdout: localMain };
+    // Served on purpose: the old code read the primary checkout's working tree through this answer. The new code never asks.
+    if (key === 'rev-parse --git-common-dir') return { status: 0, stdout: '/work/wt/.git\n' };
     return { status: 1, stdout: '' };
   };
 }
@@ -49,42 +53,47 @@ test('A13: the inputs are not changed', () => {
   assert.equal(JSON.stringify([main, branch]), before);
 });
 
-test('A5a: no fork/main ref and a primary checkout file: the primary value is the main side', () => {
-  const primary = JSON.stringify({ checkpoint: { enforce: true } });
-  const read = (p) => (path.resolve(p) === path.resolve('/primary', 'review-router.config.json') ? primary : null);
-  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: null }), readFile: read });
-  assert.equal(got.source, 'primary');
+test('A5a: no fork/main ref and a local main ref: the committed local main is the main side', () => {
+  const localMain = JSON.stringify({ checkpoint: { enforce: true } });
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: null, localMain }) });
+  assert.equal(got.source, 'local-main');
   assert.deepEqual(got.config, { checkpoint: { enforce: true } });
 });
 
-test('A5a2: fork/main is read first; it wins over the primary file', () => {
-  const read = () => JSON.stringify({ checkpoint: { enforce: false } });
-  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: JSON.stringify({ checkpoint: { enforce: true } }) }), readFile: read });
+test('A5a2: fork/main is read first; it wins over the local main', () => {
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: JSON.stringify({ checkpoint: { enforce: true } }), localMain: JSON.stringify({ checkpoint: { enforce: false } }) }) });
   assert.equal(got.source, 'fork-main');
   assert.equal(got.config.checkpoint.enforce, true);
 });
 
-test('A5a3: a fork/main text that is not JSON counts as missing: the primary file is used', () => {
-  const read = () => JSON.stringify({ checkpoint: { enforce: true } });
-  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: '{not json' }), readFile: read });
-  assert.equal(got.source, 'primary');
+test('A5a3: a fork/main text that is not JSON counts as missing: the local main is used', () => {
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: '{not json', localMain: JSON.stringify({ checkpoint: { enforce: true } }) }) });
+  assert.equal(got.source, 'local-main');
 });
 
-test('A5b: no fork/main ref and no primary file: config null, source none, and the stricter config enforces with the branch cap', () => {
-  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: null }), readFile: () => null });
+test('A5b: neither ref is readable: config null, source none, and the stricter config enforces with the branch cap', () => {
+  const got = readMainConfig({ root: '/work/wt', git: gitStub({ main: null, localMain: null }) });
   assert.deepEqual(got, { config: null, source: 'none' });
   const cfg = stricterConfig(got.config, { checkpoint: { enforce: false }, coderabbit: { cli_daily_cap_usd: 7 } });
   assert.deepEqual(viewOf(cfg), { enforce: true, cap: 7, summaryFail: false });
 });
 
+test('A5e: the working-tree file says enforce false, fork/main is missing, the committed local main says true: enforce (the card goal)', () => {
+  const reads = [];
+  const readFile = (p) => { reads.push(p); return JSON.stringify({ checkpoint: { enforce: false } }); };
+  const cfg = loadStricterConfig({ root: '/work/wt', git: gitStub({ main: null, localMain: JSON.stringify({ checkpoint: { enforce: true } }) }), readFile });
+  assert.equal(viewOf(cfg).enforce, true);
+  assert.equal(reads.length, 1, `only the branch file is read from disk: ${reads.join(' | ')}`);
+});
+
 test('A5c: a git that throws counts as no main side, never as an error', () => {
-  const got = readMainConfig({ root: '/work/wt', git: () => { throw new Error('spawn git ENOENT'); }, readFile: () => null });
+  const got = readMainConfig({ root: '/work/wt', git: () => { throw new Error('spawn git ENOENT'); } });
   assert.equal(got.source, 'none');
 });
 
 test('A10a: the main read runs no git fetch and no pull', () => {
   const calls = [];
-  readMainConfig({ root: '/work/wt', git: gitStub({ main: null, calls }), readFile: () => null });
+  readMainConfig({ root: '/work/wt', git: gitStub({ main: null, calls }) });
   assert.ok(calls.length > 0);
   assert.equal(calls.filter((c) => /\b(fetch|pull|remote)\b/.test(c)).length, 0, calls.join(' | '));
 });
@@ -127,4 +136,21 @@ test('A9e: loadStricterConfig on a real read of this checkout gives a config wit
   const text = readFileSync(path.resolve(HERE, '..', '..', 'review-router.config.json'), 'utf8');
   const cfg = loadStricterConfig({ root: path.resolve(HERE, '..', '..'), git: gitStub({ main: text }), readFile: (p) => readFileSync(p, 'utf8') });
   assert.equal(viewOf(cfg).enforce, JSON.parse(text).checkpoint.enforce === true);
+});
+
+test('A14: pre-pr resolves the config after the fetch, so a fork/main that the fetch moves decides the summary mode', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'stricter-order-'));
+  writeFileSync(path.join(root, 'review-router.config.json'), JSON.stringify({ pre_pr: { summary_mode: 'note' } }));
+  let fetched = false;
+  const git = (args) => {
+    const key = args.join(' ');
+    if (key === SHOW) return { status: 0, stdout: JSON.stringify({ pre_pr: { summary_mode: fetched ? 'fail' : 'note' } }) };
+    if (key === 'rev-parse HEAD') return { status: 0, stdout: 'a'.repeat(40), stderr: '' };
+    if (key === 'branch --show-current') return { status: 0, stdout: 'feat/x', stderr: '' };
+    return { status: 1, stdout: '', stderr: '' };
+  };
+  let mode = null;
+  const summaryCheck = (o) => { mode = o.mode; return { result: { step: 'summary', status: 'FAIL', detail: 'stub', notes: [] }, sha: null }; };
+  await runPrePr({ root, base: 'main', bodyText: 'x', git, fetch: () => { fetched = true; return null; }, summaryCheck, ledgerPath: path.join(root, 'ledger.jsonl'), gateLogPath: path.join(root, 'gate.jsonl'), crStore: null, guardLog: () => {}, osvLockfiles: [], findOsv: () => null, findPssa: () => null }).catch(() => {});
+  assert.equal(mode, 'fail');
 });
