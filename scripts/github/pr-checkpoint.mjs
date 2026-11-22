@@ -1062,8 +1062,10 @@ export function writePaidYes({ pr, head, pathway, row, gh = ghRunner(process.env
   const after = readPaidView(gh, pr);
   const why = after.why ?? (after.head !== String(head).toLowerCase() ? `the PR head moved to ${after.head.slice(0, 7)} while the paid yes was stored` : after.draft ? `PR #${pr} went back to draft while the paid yes was stored` : null);
   if (why === null) return null;
-  decisionUse({ step: 'paid-round', key: decisionKey({ pr }), head });
-  return `${why}; the paid yes was removed again`;
+  const gone = decisionUse({ step: 'paid-round', key: decisionKey({ pr }), head });
+  // ok, or no-decision (a --drop-taps removed the row first): the row is gone. Any other result (a busy or unreadable store) leaves it: say so, never claim "removed".
+  if (gone.ok || gone.reason === 'no-decision') return `${why}; the paid yes was removed again`;
+  return `${why}; the paid yes could NOT be removed (${gone.reason}); no paid post may run, run --drop-taps for PR #${pr}`;
 }
 
 /** The head and the draft flag of the PR from one `gh pr view`, or { why } (a failed call, no 40-hex head, or no boolean isDraft: fail closed). */
