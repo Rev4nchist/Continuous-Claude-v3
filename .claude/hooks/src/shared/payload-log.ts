@@ -30,8 +30,10 @@ const MAX_LINE = 2000; // 30 keys of 40 characters fit
 const MAX_FLAG_BYTES = 64;
 const MAX_LOG_BYTES = 130_000;
 const PERMISSION_MODES: readonly string[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'auto'];
-/** The read-only types the guard knows (imported, so the list cannot drift), plus the types a builder or a default agent has. */
-const AGENT_TYPES: readonly string[] = [...READ_ONLY_AGENT_TYPES, 'general-purpose', 'claude', 'Explore', 'Plan', 'kraken', 'spark'];
+/** Every name in `.claude/agents/*.md` (drift test T14), the built-in names, and the read-only types the guard knows (imported, so that list cannot drift). */
+const WRITE_AGENT_TYPES: readonly string[] = ['aegis', 'arbiter', 'atlas', 'debug-agent', 'herald', 'kraken', 'onboard', 'plan-agent', 'research-codebase', 'review-agent', 'scribe', 'sentinel', 'spark', 'validate-agent', 'wizard'];
+export const KNOWN_AGENT_TYPES: readonly string[] = [...READ_ONLY_AGENT_TYPES, ...WRITE_AGENT_TYPES, 'general-purpose', 'claude', 'Explore', 'Plan'];
+const AGENT_TYPES = KNOWN_AGENT_TYPES;
 
 type Payload = Record<string, unknown>;
 
@@ -53,6 +55,59 @@ function sessionClass(payloadId: unknown): string {
   const own = process.env.CLAUDE_CODE_SESSION_ID;
   if (typeof payloadId !== 'string' || payloadId === '' || !own) return 'absent';
   return payloadId === own ? 'same' : 'diff';
+}
+
+/**
+ * Card coord-hooks-followups, step 2b (design note .claudedocs/coordination/2026-11-22-coord-agent-type-log-design.md,
+ * seat GO 2026-11-22 with changes A to D). LOG ONLY: no verdict changes, nothing prints.
+ *
+ * WHY: a subagent of a type outside the known list (a Workflow agent with no agentType) logs only as `other` above. The
+ * real value is unknown and the docs name no default. No deny may key on `other`.
+ * WHAT: one line per FIRST sighting of a raw `agent_type`, only when `agent_id` is present and the type is outside the
+ * known list. File `<home>/.claude/state/agent-types-seen.jsonl`. A value that is not `^[A-Za-z0-9_:.-]{1,60}$` is stored
+ * as the word `invalid`. Never a path, a prompt, a session id, an agent id or a transcript path.
+ * COST (change A): the candidate test and the env switch run before any file system call, so a main-session call or a
+ * known type touches no file. Change B: the size is read with statSync first; above AGENT_TYPE_LOG_MAX_BYTES the file is
+ * neither read nor written. Cap AGENT_TYPE_LOG_CAP lines. No lock. Off: env CCV3_AGENT_TYPE_LOG=0.
+ */
+export const AGENT_TYPE_LOG_CAP = 50;
+export const AGENT_TYPE_LOG_MAX_BYTES = 8192;
+const AGENT_TYPE_VALUE_RE = /^[A-Za-z0-9_:.-]{1,60}$/;
+
+export function logUnknownAgentType(rawInput: unknown): void {
+  try {
+    if (rawInput === null || typeof rawInput !== 'object') return;
+    const input = rawInput as Payload;
+    if (typeof input.agent_id !== 'string' || input.agent_id === '') return;
+    const type = input.agent_type;
+    if (typeof type !== 'string' || type === '' || AGENT_TYPES.includes(type)) return;
+    if (process.env.CCV3_AGENT_TYPE_LOG === '0') return;
+    const value = AGENT_TYPE_VALUE_RE.test(type) ? type : 'invalid';
+    const dir = join(userHome(), '.claude', 'state');
+    const path = join(dir, 'agent-types-seen.jsonl');
+    let size = 0;
+    try {
+      size = statSync(path).size;
+    } catch {
+      size = 0; // no file yet
+    }
+    if (size >= AGENT_TYPE_LOG_MAX_BYTES) return;
+    const rows = size > 0 ? readFileSync(path, 'utf8').split('\n').filter(Boolean) : [];
+    if (rows.length >= AGENT_TYPE_LOG_CAP) return;
+    for (const row of rows) {
+      try {
+        if ((JSON.parse(row) as { value?: unknown }).value === value) return;
+      } catch {
+        // a damaged line is skipped
+      }
+    }
+    const tool = typeof input.tool_name === 'string' && TOOL_RE.test(input.tool_name) ? input.tool_name : 'other';
+    const line = JSON.stringify({ ts: new Date().toISOString(), value, tool, agent_id: 'present', session: sessionClass(input.session_id) });
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(path, line + '\n');
+  } catch {
+    // a log never blocks a tool call
+  }
 }
 
 /** Log one line for a marked call. Never throws, never prints. */
