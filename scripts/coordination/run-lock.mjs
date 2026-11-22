@@ -417,10 +417,12 @@ function sessionLabel(opts, d) {
   return /^[0-9a-f-]{8,}$/i.test(id) ? `#${id.slice(0, 8)}` : null;
 }
 
-function writeLock(d, kind, opts, start, now) {
+function writeLock(d, kind, opts, start, now, reading = null) {
   const rec = {
     kind, pid: opts.pid, pidStart: start, holder: opts.holder || 'unknown', head: opts.head || null, session: sessionLabel(opts, d),
     startedAt: now, expiresAt: now + (opts.minutes || KINDS[kind].minutes) * MIN,
+    // The machine read that decided the grant (card coord-run-lock-reading). Only a granted acquire passes one: register and a wait record leave it out.
+    ...(reading ? { grantFreeGB: reading.freeGB, grantLoadPct: reading.loadPct } : {}),
     ...(kind === 'pre-pr' ? { heavy: opts.heavy === true, phase: opts.phase || 'test' } : {}),
   };
   const file = `${kind}-${opts.pid}-${start}.lock`;
@@ -550,7 +552,7 @@ export async function acquire(opts, deps) {
       appendLine(d.dir, 'warn-log.jsonl', { ts: now, kind: opts.kind, holder: opts.holder || 'unknown', head: opts.head || null, pid, keys, reasons, freeGB: num(freeGB), loadPct, heavyLive });
       lines.push(`WOULD WAIT ${wait}`);
     }
-    const file = writeLock(d, opts.kind, { ...opts, pid }, start, now);
+    const file = writeLock(d, opts.kind, { ...opts, pid }, start, now, { freeGB: num(freeGB), loadPct: Math.round(loadPct) });
     // A hook build takes no slot, so it must not start the 2 minute spacing for the next heavy run.
     if (kind.heavy) writeFileSync(join(d.dir, 'last-grant.json'), JSON.stringify({ at: now, kind: opts.kind, pid }));
     const slot = kind.heavy ? `slot ${heavyLive + 1} of ${max}` : 'no slot needed';
@@ -698,6 +700,9 @@ async function sweepGated(d, starts) {
   try { return await withGate(d, selfStart, () => sweep(d, starts), LIST_GATE_MS); } catch { return sweep(d, starts, false); }
 }
 
+/** The reading at the grant as list text, at the END of the row line; empty for a row with no reading or a bad value (never 0). */
+const readingText = (r) => (Number.isFinite(r.grantFreeGB) && Number.isFinite(r.grantLoadPct) ? ` read free ${r.grantFreeGB} GB load ${r.grantLoadPct} pct` : '');
+
 export async function list(deps) {
   const d = defaults(deps);
   const starts = startsSnapshot(d);
@@ -705,7 +710,7 @@ export async function list(deps) {
   const live = await sweepGated(d, starts);
   const unlocked = unlockedRuns(d, live, procs);
   const lines = [`mode: ${readMode(d.dir)}`, `store: ${d.dir}`];
-  for (const r of live) lines.push(`${r.kind} pid ${r.pid} holder ${r.holder}${r.session ? ` session ${r.session}` : ''}${r.phase ? ` phase ${r.phase}` : ''} since ${clockText(r.startedAt, d.timeZone, false)} until ${clockText(r.expiresAt, d.timeZone)}`);
+  for (const r of live) lines.push(`${r.kind} pid ${r.pid} holder ${r.holder}${r.session ? ` session ${r.session}` : ''}${r.phase ? ` phase ${r.phase}` : ''} since ${clockText(r.startedAt, d.timeZone, false)} until ${clockText(r.expiresAt, d.timeZone)}${readingText(r)}`);
   if (!live.length) lines.push('no live lock');
   if (unlocked.length) lines.push(unlockedLine(unlocked));
   lines.push(CAVEAT);
