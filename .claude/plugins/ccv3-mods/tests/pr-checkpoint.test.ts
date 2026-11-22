@@ -5005,6 +5005,91 @@ describe('pr-checkpoint PR 2 group A: the ten items', () => {
     })
   })
 
+  // ---- group C of the card prflow-paid-guard-leftovers (CLI runs 2 and 3 of PR 667) ---------------------------------------------------------
+  // How the unit can fail, and the test that catches it:
+  //   a malformed PR state (null, no draft flag, no head, a text flag) is read as a PR with no cleanup due, and the question opens   -> LC1 to LC4
+  //   a stored checkpoint of head A is asked after the cleanup of a draft at head B                                                   -> LC5
+  //   the cleanup drops the grant, the queue entry and the taps of a ready period that another session applied meanwhile             -> LC6
+  //   the draft check covers only the first queued ask, and the dialog opens for the second PR that is a draft                        -> LC7, LC8
+  describe('group C: the PR state reader, the stored checkpoint, the late apply and the queued asks', () => {
+    const QUEUED = { kind: 'round', pr: 7, head: HEAD, round: 4, text: 'Round 4 of 1+2 for #7' }
+    const queued = (over: Opts = {}): Opts => ({ store: { 'checkpoint:pr:7': { ...RECORD, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2] }, [GRANT]: GRANT_ROW, [ASKS]: [QUEUED] }, answer: 'dismiss', ...over })
+
+    for (const [name, view] of [
+      ['JSON null', { stdout: 'null' }],
+      ['an object with no draft flag', { stdout: JSON.stringify({ headRefOid: HEAD }) }],
+      ['a draft with no head', { stdout: JSON.stringify({ isDraft: true }) }],
+      ['a text draft flag', { stdout: JSON.stringify({ isDraft: 'yes', headRefOid: HEAD }) }],
+    ] as [string, Reply][]) {
+      test(`LC1-4 a PR state that is ${name} is unreadable: the bare /pathway says it could not check, cleans nothing and opens no question`, async ($, on) => {
+        const w = world(on, queued({ view }))
+        await start($)
+        const ran = await slash($, '')
+        expect(ran.text ?? '').toContain('could not be checked before the cleanup')
+        expect(w.seen.dialogs.length).toBe(0)
+        expect(asksOf(w.store)).toEqual([QUEUED])
+        expect(drops(w.seen)).toEqual([])
+        expect(slotDrops(w.seen)).toEqual([])
+        expect(w.store.get(GRANT)).toEqual(GRANT_ROW)
+      })
+    }
+
+    test('LC5 a stored checkpoint of head A and a live draft at head B: the cleanup runs on B, the old checkpoint is cleared and NO question opens from A', async ($, on) => {
+      const pending = { pr: 7, body: 'pr-body.md', root: ROOT, result: engineJson(), covers: [], stamp: null, prHead: HEAD, at: NOW }
+      const w = world(on, { store: { 'checkpoint:pr:7': RECORD, [PENDING]: pending, [GRANT]: GRANT_ROW }, viewHead: OTHER_HEAD, answer: 'dismiss' })
+      await start($)
+      const ran = await slash($, '')
+      expect(w.seen.dialogs.length).toBe(0)
+      expect(ran.text ?? '').toMatch(/#7/)
+      expect(ran.text ?? '').toMatch(/new head/)
+      expect(ran.text ?? '').toContain('pr_checkpoint')
+      expect(w.store.get(PENDING)).toBeUndefined()
+      expect(w.store.get(MARKER)).toEqual({ head: OTHER_HEAD, at: NOW, dropped: true })
+    })
+
+    test('LC6 an apply that completed after the return to draft (a newer ready period) keeps its grant, its queue entry and its taps: the cleanup stops', async ($, on) => {
+      const newer = { ...RECORD, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2], appliedAt: NOW + 5000 }
+      const w = world(on, queued({ store: { 'checkpoint:pr:7': newer, [GRANT]: GRANT_ROW, [ASKS]: [QUEUED] } }))
+      await start($)
+      const ran = await slash($, '')
+      expect(w.seen.dialogs.length).toBe(0)
+      expect(ran.text ?? '').toMatch(/applied again|newer ready period/)
+      expect(w.store.get(GRANT)).toEqual(GRANT_ROW)
+      expect(slotDrops(w.seen)).toEqual([])
+      expect(drops(w.seen)).toEqual([])
+    })
+
+    const TWO = { kind: 'round', pr: 8, head: HEAD, round: 4, text: 'Round 4 of 1+2 for #8' }
+    const twoQueued = (): Opts => ({
+      store: {
+        'checkpoint:pr:7': { ...RECORD, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2] },
+        'checkpoint:pr:8': { ...RECORD, pr: 8, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2] },
+        [ASKS]: [QUEUED, TWO],
+      },
+      answer: 'dismiss',
+    })
+
+    test('LC7 two queued asks of PRs that were returned to draft: the bare /pathway cleans BOTH and opens no question', async ($, on) => {
+      const w = world(on, twoQueued())
+      await start($)
+      await slash($, '')
+      expect(w.seen.dialogs.length).toBe(0)
+      expect(asksOf(w.store)).toEqual([])
+      expect(w.store.get('checkpoint:repick:7')).toEqual({ head: HEAD, at: NOW, dropped: true })
+      expect(w.store.get('checkpoint:repick:8')).toEqual({ head: HEAD, at: NOW, dropped: true })
+      expect(slotDrops(w.seen).length).toBe(2)
+    })
+
+    test('LC8 (control) the first ask is a ready PR: it passes the draft check, the question opens for it, and the second ask is left alone', async ($, on) => {
+      const w = world(on, { ...twoQueued(), isDraft: false })
+      await start($)
+      await slash($, '')
+      expect(w.seen.dialogs.length).toBe(1)
+      expect(asksOf(w.store).length).toBe(2)
+      expect(drops(w.seen)).toEqual([])
+    })
+  })
+
   // ---- item 1b: the shared cleanup clears the queued asks of the PR ------------------------------------------------------------------------
   describe('item 1b: the cleanup of a PR that went back to draft clears its queued asks', () => {
     const ONE = { kind: 'round', pr: 7, head: HEAD, round: 4, text: 'Round 4 of 1+2 for #7' }
