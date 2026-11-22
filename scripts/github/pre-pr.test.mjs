@@ -4137,6 +4137,13 @@ const slowReview = (events, ms = 300) => async (o) => {
 };
 const e2eFiles = (repo) => readdirSync(path.join(repo.dir, '.claude', 'cache', 'e2e'));
 const counterRows = (repo) => JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs;
+// Card prepr-speed-bundle (O3, O4): the gates run in this order: the cheap ones, then the review starts, then the other gates. A docs change runs
+// only context-budget (cheap), so the order tests inject fake gates of both kinds through the env step. A fake gate is a node call that the fake exec answers by id.
+const fakeGate = (id, cheap = false) => ({ id, cmd: 'node', args: [], cwd: '.', timeoutMs: 60_000, ...(cheap ? { cheap: true } : {}) });
+const withGates = (...gates) => ({ envCheck: () => ({ fail: null, others: [], note: null, blocked: new Set(), gates }) });
+const GATE_OK = { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' };
+const idExec = (events, failIds = []) => (spec) => { events.push(spec.id); return failIds.includes(spec.id) ? { status: 1, stdout: 'bad\n# fail 1\n', stderr: '' } : GATE_OK; };
+const idCr = (events) => (o) => { events.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
 
 test('F1: a fast step that FAILs (evidence) starts no review at all: the runner is never called, not even for usage', async () => {
   const repo = makeRepo({ files: { 'src/a.ts': 'export const a = 1;\n' } });
@@ -4158,7 +4165,7 @@ test('F2: the review child is running before the first test gate starts (real ru
   };
   const seen = [];
   const exec = () => { blockFor(1500); seen.push(existsSync(pidFile)); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
-  const run = await prePr(repo, { crRunner, exec });
+  const run = await prePr(repo, { crRunner, exec, ...withGates(fakeGate('s1')) }); // a non-cheap gate: the cheap ones run before the review (O4)
   assert.deepEqual(seen, [true], 'the stub child had started and written its pid file while the first gate blocked');
   assert.equal(run.result.ok, true, run.result.lines.join('\n'));
   assert.equal(crStep(run).status, 'PASS');
@@ -4187,9 +4194,9 @@ test('F4 and Q1f: a gate FAILs while the review runs: the line is printed at onc
   const earlier = { head: hexOf('7'), at: '2026-10-25T15:00:00.000Z', outcome: 'finished', complete: true, newCode: true };
   mkdirSync(path.dirname(crPaths(repo.dir, 'feat/x').counter), { recursive: true });
   writeFileSync(crPaths(repo.dir, 'feat/x').counter, JSON.stringify({ branch: 'feat/x', runs: [earlier] }));
-  const run = await prePr(repo, { exec: gateFail(events), crRunner: slowReview(events, 400), log: (l) => events.push(`log: ${l}`) });
+  const run = await prePr(repo, { exec: gateFail(events), crRunner: slowReview(events, 400), log: (l) => events.push(`log: ${l}`), ...withGates(fakeGate('s1')) });
   assert.equal(run.result.ok, false);
-  const failedAt = events.findIndex((e) => /^log: pre-pr: gate context-budget FAILED; waiting for the CLI review to end so its output is saved$/.test(e));
+  const failedAt = events.findIndex((e) => /^log: pre-pr: gate s1 FAILED; waiting for the CLI review to end so its output is saved$/.test(e));
   assert.ok(failedAt >= 0, events.join('\n'));
   assert.ok(failedAt < events.indexOf('review-end'), 'the FAILED line comes before the review ends');
   assert.ok(events.indexOf('review-start') < events.indexOf('gate'), 'the review started before the gate');
@@ -4211,29 +4218,58 @@ test('F5: a rerun on the same head reuses the saved output: no review call, no n
   assert.equal(stampOf(repo).cr_finished_runs, 0, 'a gateFailed row is not a finished run');
 });
 
-test('F22: a stale GREEN (settled by the gates) keeps the old order: no usage and no review call before the last gate', async () => {
+test('F22 (O3): a stale GREEN (settled by the gates) starts the review early, before the first non-cheap gate', async () => {
   const repo = mergedRepo();
   const events = [];
-  const crRunner = (o) => { events.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
-  const exec = () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
-  const { result } = await runWithBodyFile(repo, greenBody({ green: repo.old }), { skipCr: false, crRunner, exec });
+  const { result } = await runWithBodyFile(repo, greenBody({ green: repo.old }), { skipCr: false, crRunner: idCr(events), exec: idExec(events), ...withGates(fakeGate('s1')) });
   assert.equal(result.ok, true, result.lines.join('\n'));
-  assert.deepEqual(events, ['gate', 'usage', 'review']);
+  assert.deepEqual(events, ['usage', 'review', 's1']);
+});
+
+test('O4a: a cheap gate that FAILs ends the run before any review call: no usage call, no review call, no slot spent', async () => {
+  const events = [];
+  const run = await prePr(makeRepo(), { ...withGates(fakeGate('c1', true), fakeGate('s1')), exec: idExec(events, ['c1']), crRunner: idCr(events) });
+  assert.equal(run.result.ok, false);
+  assert.deepEqual(events, ['c1'], 'one cheap gate ran; no review call, and the other gate did not run');
+  assert.equal(crStep(run).skipReason, 'earlier-step-failed');
+});
+
+test('O4b: the cheap gates run first, the review starts before the first other gate, and every gate runs once', async () => {
+  const events = [];
+  const run = await prePr(makeRepo(), { ...withGates(fakeGate('s1'), fakeGate('c1', true), fakeGate('s2')), exec: idExec(events), crRunner: idCr(events) });
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.deepEqual(events, ['c1', 'usage', 'review', 's1', 's2']);
+  const steps = run.result.results.map((r) => r.step).filter((s) => s.startsWith('gate:'));
+  assert.deepEqual(steps, ['gate:s1', 'gate:c1', 'gate:s2'], 'the results keep the order of the gate list');
+});
+
+test('O3c: an early review on a stale GREEN, then a FAIL that is no gate (the body file changed during the gates): the counter row is marked gateFailed and no slot is used', async () => {
+  const repo = mergedRepo();
+  const events = [];
+  const body = greenBody({ green: repo.old });
+  const bodyPath = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-body-')), 'body.md');
+  writeFileSync(bodyPath, body);
+  const exec = (spec) => { events.push(spec.id); writeFileSync(bodyPath, `${body}edited while the gates ran\n`); return GATE_OK; };
+  const run = await prePr(repo, { bodyText: body, bodyPath, skipCr: false, crRunner: idCr(events), exec, ...withGates(fakeGate('s1')) });
+  assert.equal(run.result.ok, false, 'the stale GREEN stays: the file was not rewritten');
+  assert.deepEqual(events, ['usage', 'review', 's1']);
+  assert.equal(counterRows(repo).at(-1).gateFailed, true, 'the review row is marked, so the 2-run cap does not count it');
+  assert.equal(existsSync(stampFile(repo)), false);
 });
 
 test('SER: PRE_PR_SERIAL_CR=1 keeps today\'s order (gates, then the review); without it the review comes first', async () => {
   const early = [];
-  await prePr(makeRepo(), { exec: gateFail(early), crRunner: slowReview(early, 50) });
+  await prePr(makeRepo(), { exec: gateFail(early), crRunner: slowReview(early, 50), ...withGates(fakeGate('s1')) });
   assert.deepEqual(early.filter((e) => e !== 'review-end'), ['review-start', 'gate'], 'default: the review starts first');
   const serial = [];
-  const run = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: gateFail(serial), crRunner: slowReview(serial, 50) });
+  const run = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: gateFail(serial), crRunner: slowReview(serial, 50), ...withGates(fakeGate('s1')) });
   assert.deepEqual(serial, ['gate'], 'serial: a failed gate means no review');
   assert.equal(crStep(run).skipReason, 'earlier-step-failed');
 });
 
 test('PH: the phase becomes cr after the last gate while the review runs; no review, no phase change', async () => {
   const events = [];
-  await prePr(makeRepo(), { onPhase: (p) => events.push(`phase ${p}`), exec: () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; }, crRunner: slowReview(events, 300) });
+  await prePr(makeRepo(), { onPhase: (p) => events.push(`phase ${p}`), exec: () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; }, crRunner: slowReview(events, 300), ...withGates(fakeGate('s1')) });
   assert.deepEqual(events, ['review-start', 'gate', 'phase cr', 'review-end']);
   const none = [];
   await prePr(makeRepo(), { skipCr: true, onPhase: (p) => none.push(p) });
