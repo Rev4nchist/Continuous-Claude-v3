@@ -56,6 +56,9 @@ export const PAID_ROWS: readonly PaidRow[] = [
 ];
 
 /** The hook input of one row under one tool name: what the harness sends to a PreToolUse hook. */
-export function payloadOf(row: PaidRow, tool: (typeof TOOL_NAMES)[number], cwd: string): { tool_name: string; tool_input: { command: string }; cwd: string } {
-  return { tool_name: tool, tool_input: { command: row.command }, cwd };
+export function payloadOf(row: PaidRow, tool: (typeof TOOL_NAMES)[number], cwd: string): { tool_name: string; tool_input: { command: string }; cwd: string; session_id: string } {
+  return { tool_name: tool, tool_input: { command: row.command }, cwd, session_id: TEST_SESSION_ID };
 }
+
+/** A stable session id for every test input and built-hook probe: without one, child processes get PID-based ids that break state file matching. */
+export const TEST_SESSION_ID = 'paid-tripwire-test';

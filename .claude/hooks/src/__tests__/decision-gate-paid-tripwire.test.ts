@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { COMMAND_TOOLS, decide, handle, type Deps } from '../decision-gate.js';
-import { PAID_ROWS, PAID_TRIPWIRE_SENTENCE, TOOL_NAMES, payloadOf } from './decision-gate-paid-tripwire-rows.js';
+import { PAID_ROWS, PAID_TRIPWIRE_SENTENCE, TEST_SESSION_ID, TOOL_NAMES, payloadOf } from './decision-gate-paid-tripwire-rows.js';
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
@@ -93,15 +93,15 @@ describe('F4: every command tool is covered', () => {
     expect([...COMMAND_TOOLS].sort()).toEqual(['Bash', 'PowerShell', `${DC}interact_with_process`, `${DC}start_process`].sort());
   });
   it('Desktop Commander start_process', () => {
-    const d = decide({ tool_name: `${DC}start_process`, tool_input: { command: paid, shell: 'cmd' }, cwd: '/repo' }, deps());
+    const d = decide({ tool_name: `${DC}start_process`, tool_input: { command: paid, shell: 'cmd' }, cwd: '/repo', session_id: TEST_SESSION_ID }, deps());
     expect(tripped(d)).toBe(true);
   });
   it('Desktop Commander interact_with_process', () => {
-    const d = decide({ tool_name: `${DC}interact_with_process`, tool_input: { pid: 1, input: paid }, cwd: '/repo' }, deps());
+    const d = decide({ tool_name: `${DC}interact_with_process`, tool_input: { pid: 1, input: paid }, cwd: '/repo', session_id: TEST_SESSION_ID }, deps());
     expect(tripped(d)).toBe(true);
   });
   it('a non-command tool is not read', () => {
-    expect(tripped(decide({ tool_name: 'Read', tool_input: { file_path: paid }, cwd: '/repo' }, deps()))).toBe(false);
+    expect(tripped(decide({ tool_name: 'Read', tool_input: { file_path: paid }, cwd: '/repo', session_id: TEST_SESSION_ID }, deps()))).toBe(false);
   });
 });
 

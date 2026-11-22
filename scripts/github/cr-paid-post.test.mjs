@@ -23,6 +23,7 @@
 //   CCV3_DECISIONS_FILE moves the decision store, so a forged row in a scratch file pays; ANY non-empty override refuses (seat rule 11-22) -> PP17, PP17b
 //   USERPROFILE or HOME moves the home, so the default store and the default ledger move with it (the limits read 0, a forged row reads) -> PP17c, PP17d, PP17e (cap run)
 //   the cap path posts with no head, a bad head or a moved head (F6); a total below 1 or not a whole number prices a round at the filtered count (F4) -> PP14b, PP18c
+//   a push between the check and the post: the post goes out against the head that was priced (CLI finding c)                                        -> PP21
 //   path_filters (an uncommitted edit of .coderabbit.yaml) zero the filtered cost, so the round and day limits never bite       -> PP18, PP18b
 //   a row written by `post` does not say so, so the detection cannot tell it from a hand-written `record` row                   -> PP19
 //   a refusal ignores a failed use-up: exit 4 "used up" while the row stays and can pay later                                   -> PP20, PP20b
@@ -585,6 +586,24 @@ test('PP18c (F4): a check whose unfiltered total is below 1, not a whole number 
     assert.deepEqual(w.ledger(), [], String(total));
     w.done();
   }
+});
+
+test('PP21 (CLI finding c): a push after the check read the head and before the post: the head is read again right before the ledger row, a changed head refuses (exit 4), posts nothing, records nothing', () => {
+  let moved = false;
+  const w = world({ pull: { get head() { return { sha: moved ? H2 : HEAD }; } } }); // the getter runs on every pull read: HEAD until the check has ended, H2 after it
+  const checkPr = () => { moved = true; return { verdict: 'ALLOW', pr: 225, head: HEAD, round: 1, files: 4, total: 4, today: 0, paidRounds: 0, reasons: [] }; };
+  const r = PAID.postPaid({ pr: 225, repo: REPO, cap: 9900, source: 'cap', head: HEAD }, { ...w.deps, checkPr });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 4);
+  assert.match(r.text, /head of PR #225 moved from aaaaaaa to ccccccc after the check/);
+  assert.equal(w.posts.length, 0);
+  assert.deepEqual(w.ledger(), []);
+  // control: the same run with the head still in place posts
+  const still = world();
+  const ok = PAID.postPaid({ pr: 225, repo: REPO, cap: 9900, source: 'cap', head: HEAD }, { ...still.deps, checkPr: () => ({ verdict: 'ALLOW', pr: 225, head: HEAD, round: 1, files: 4, total: 4, today: 0, paidRounds: 0, reasons: [] }) });
+  assert.equal(ok.ok, true, ok.text);
+  assert.equal(still.posts.length, 1);
+  [w, still].forEach((x) => x.done());
 });
 
 test('PP19 (F3 part a): the row `post` writes carries via "post"', () => {
