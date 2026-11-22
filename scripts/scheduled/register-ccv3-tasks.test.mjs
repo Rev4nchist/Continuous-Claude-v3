@@ -223,3 +223,54 @@ test('dry run on the REAL tasks.json: CCv3-Blocklist-Update is daily 06:30, wake
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- catchUp trigger (card sched-tasks-failing-1109)
+// A task may carry "catchUp": "daily HH:MM", a second daily trigger at a time the machine is awake. The main trigger stays first
+// (the harness doctor reads the first calendar trigger). How it can fail, one test each:
+//   RC1 dry run     a task with catchUp prints no catch-up line, or the line shows the wrong time; a task without it prints one
+//   RC2 refused     a catchUp that is not "daily HH:MM" (an every Nm, a word) is accepted
+//   RC3 real file   the real tasks.json lacks the catch-up on Lane-Snapshot (07:35) or Cost-Reconcile (07:40), or another task has one
+test('RC1 dry run: a catchUp task prints a catch-up line with its time; a task without catchUp prints none', win, () => {
+  const tasks = [{ ...TASKS[0], catchUp: 'daily 07:35' }, TASKS[3]];
+  const r = dryRun([], tasks);
+  assert.equal(r.code, 0, r.out + r.err);
+  const catchLines = r.lines.filter((l) => /^\s+catch-up:/.test(l));
+  assert.equal(catchLines.length, 1, r.out);
+  assert.match(catchLines[0], /catch-up: daily 07:35$/);
+  const at = r.lines.findIndex((l) => l.startsWith('CCv3-T-Plain:'));
+  assert.match(r.lines[at + 1], /catch-up: daily 07:35$/, 'the line follows its own task line');
+});
+
+test('RC2 dry run: a catchUp that is not daily HH:MM is refused before anything is registered', win, () => {
+  for (const catchUp of ['every 5m', 'weekly Monday 09:20', 'daily 7:35', 'soon']) {
+    const r = dryRun([], [{ ...TASKS[0], catchUp }]);
+    assert.notEqual(r.code, 0, catchUp + ': ' + r.out);
+    assert.match(r.out + r.err, /catchUp/, catchUp);
+  }
+});
+
+test('RC3 the REAL tasks.json: Lane-Snapshot has catchUp daily 07:35, Cost-Reconcile daily 07:40, no other task has one, main triggers unchanged', win, () => {
+  const realTasks = join(dirname(SCRIPT), '..', '..', '..', 'scripts', 'scheduled', 'tasks.json');
+  const tasks = JSON.parse(readFileSync(realTasks, 'utf8')).tasks;
+  const byName = Object.fromEntries(tasks.map((t) => [t.name, t]));
+  assert.equal(byName['CCv3-Lane-Snapshot'].catchUp, 'daily 07:35');
+  assert.equal(byName['CCv3-Lane-Snapshot'].trigger, 'daily 23:55');
+  assert.equal(byName['CCv3-Cost-Reconcile'].catchUp, 'daily 07:40');
+  assert.equal(byName['CCv3-Cost-Reconcile'].trigger, 'daily 23:50');
+  const others = tasks.filter((t) => 'catchUp' in t).map((t) => t.name).sort();
+  assert.deepEqual(others, ['CCv3-Cost-Reconcile', 'CCv3-Lane-Snapshot']);
+});
+
+// CLI finding of pre-pr run 1 (register-ccv3-tasks.ps1:95): a trigger or catchUp with an impossible clock value (daily 25:61) is
+// refused only when its own task is reached, after earlier tasks were registered. Every task is checked first.
+//   RC4  clock   "daily 24:00", "daily 07:61" or "daily 25:00" in trigger or catchUp is accepted, or is refused after another task
+//                was printed or registered (the refusal must come before any task line)
+test('RC4 dry run: a trigger or catchUp with a clock value out of range is refused before any task line is printed', win, () => {
+  for (const [field, value] of [['catchUp', 'daily 07:61'], ['catchUp', 'daily 24:00'], ['trigger', 'daily 25:00'], ['trigger', 'daily 07:60']]) {
+    const bad = { ...TASKS[0], [field]: value };
+    const r = dryRun([], [TASKS[3], bad]);
+    assert.notEqual(r.code, 0, `${field} ${value}: ${r.out}${r.err}`);
+    assert.match(r.out + r.err, /Nothing registered/, `${field} ${value}`);
+    assert.equal(r.lines.some((l) => l.startsWith('CCv3-T-WakeOnly:')), false, `${field} ${value}: no task line before the refusal`);
+  }
+});

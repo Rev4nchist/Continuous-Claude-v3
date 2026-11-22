@@ -227,7 +227,7 @@ describe('shared price, exact model id', () => {
 
   test('S21 every id of prices.json prices, retired rows too', () => {
     const ids = Object.keys(PRICES.models)
-    expect(ids.length).toBe(19)
+    expect(ids.length).toBe(21)
     const inputOf = PRICES.models as Record<string, { input: number }>
     // 100,000 input tokens is the top of Haiku 5.5's low tier, so every id pays its table input rate.
     for (const id of ids) expect(near(estimate(tokens({ input_tokens: 100_000 }), id), (inputOf[id]?.input ?? -1) / 10)).toBe(true)
