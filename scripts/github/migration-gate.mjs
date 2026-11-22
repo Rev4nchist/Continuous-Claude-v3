@@ -59,6 +59,12 @@ export async function countAppliedMigrations(url) {
   } finally { await c.end().catch(() => {}); }
 }
 
+/**
+ * The numbered .sql files among `names` (repo paths): case-blind, like the Windows checkout (aegis F3 on PR 673: `apps/agentic-os/DRIZZLE/0009_x.SQL` is a migration too).
+ * Only a file directly in the drizzle folder counts, not one in a sub folder.
+ */
+export const addedMigrationFiles = (names) => names.filter((f) => new RegExp(`^${DRIZZLE_REL}/\\d{4}_[^/]+\\.sql$`, 'i').test(f));
+
 const git = (repoPath, args) => execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 
 /** { newMigrations, journalCount } for the PR head, from git only. Throws a short message when the head is unknown. */
@@ -70,8 +76,8 @@ export function readPrFacts({ head, repoPath, base = 'main', remote }) {
   }
   const mergeBase = git(repoPath, ['merge-base', base, head]).trim();
   // --no-renames: a deleted migration plus a similar new one is a rename to git, and --diff-filter=A would drop the new file.
-  const added = git(repoPath, ['diff', '--no-renames', '--name-only', '--diff-filter=A', mergeBase, head, '--', DRIZZLE_REL])
-    .split(/\r?\n/).filter((f) => new RegExp(`^${DRIZZLE_REL}/\\d{4}_[^/]+\\.sql$`).test(f));
+  // :(icase): git matches the folder case-blind too, so an upper-case folder name is read
+  const added = addedMigrationFiles(git(repoPath, ['diff', '--no-renames', '--name-only', '--diff-filter=A', mergeBase, head, '--', `:(icase)${DRIZZLE_REL}`]).split(/\r?\n/));
   let tags = [];
   try {
     tags = JSON.parse(git(repoPath, ['show', `${head}:${JOURNAL_REL}`])).entries.map((e) => e.tag);
@@ -80,7 +86,8 @@ export function readPrFacts({ head, repoPath, base = 'main', remote }) {
     if (added.length) throw new Error(`the PR adds ${added.map((f) => f.split('/').pop()).join(', ')} but the journal at the head (${JOURNAL_REL}) cannot be read`);
   }
   // Only files the journal lists are migrations: 0004_down.sql is documentation.
-  const newMigrations = added.map((f) => f.slice(DRIZZLE_REL.length + 1, -4)).filter((tag) => tags.includes(tag));
+  // The tag in the journal is the name; the file name may differ in case.
+  const newMigrations = added.map((f) => f.slice(DRIZZLE_REL.length + 1, -4)).map((name) => tags.find((tag) => tag.toLowerCase() === name.toLowerCase())).filter(Boolean);
   return { newMigrations, journalCount: tags.length };
 }
 

@@ -63,7 +63,11 @@ const FORCED = [
   'scripts/github/land-decision.mjs', 'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1', '.claude/hooks/src/decision-gate.ts', 'scripts/github/ship-ask.mjs',
   'scripts/github/land-recheck.mjs', 'scripts/ratchets/lib/review-md.mjs',
   '.claude/hooks/src/decision-ledger.ts', 'scripts/lib/resolve-deps.mjs', '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs',
+  // card coord-force-high-followups: the core of the none check (the entry imports it after the base-code check)
+  'scripts/github/land-none-core.mjs',
 ];
+// Folder globs of FORCE_HIGH_FILES (card coord-force-high-followups: a git hook of the checkout runs inside the land path). Tested by FH1 in force-high-followups.test.mjs.
+const FORCED_GLOBS = ['.githooks/**'];
 
 test('B1: a control-plane file counts for G whatever its extension (a .json guard data file)', () => {
   const b = bandOf(['.claude/hooks/src/shared/malicious-packages.json'], LIVE);
@@ -162,7 +166,7 @@ test('B12: the section 4 backtest rows get the documented band and G count (fixt
     // The expected value comes from the row's own paths and this file's lists (FORCED, the matrix globs), not from bandOf's outputs.
     const isTestPath = (p) => LIVE.matrix.test_markers.some((t) => `/${p}`.includes(t));
     const onTier = (p) => LIVE.matrix.control_plane.some((g) => matchGlob(g, p)) && LIVE.matrix.security_tier.some((g) => matchGlob(g, p));
-    const forced = row.files.some((p) => !isTestPath(p) && (FORCED.includes(p) || onTier(p))) && BELOW.includes(row.band);
+    const forced = row.files.some((p) => !isTestPath(p) && (FORCED.includes(p) || p.toLowerCase().startsWith('.githooks/') || onTier(p))) && BELOW.includes(row.band);
     if (forced) forcedRows++;
     assert.equal(b.band, forced ? 'HIGH' : row.band, `#${row.pr} band`);
     assert.equal(b.forcedHigh, forced, `#${row.pr} forcedHigh`);
@@ -660,11 +664,11 @@ test('B54: CRITICAL stays CRITICAL beside a forced file, and a PR that is HIGH b
 
 test('B55: FORCE_HIGH_FILES is one frozen constant: a subset of the tap list, no engine file, and every entry names a tracked file', () => {
   assert.ok(Array.isArray(router.FORCE_HIGH_FILES) && Object.isFrozen(router.FORCE_HIGH_FILES), 'exported and frozen');
-  assert.deepEqual([...router.FORCE_HIGH_FILES].sort(), [...FORCED].sort());
+  assert.deepEqual([...router.FORCE_HIGH_FILES].sort(), [...FORCED, ...FORCED_GLOBS].sort());
   for (const p of router.FORCE_HIGH_FILES) {
     assert.ok(TRUST_BOUNDARY.tap.includes(p), `${p} is in TRUST_BOUNDARY.tap`);
     assert.ok(!CRITICAL_TRUST_BOUNDARY.includes(p), `${p} is not an engine file`);
-    assert.ok(existsSync(path.join(ROOT, p)), `${p} exists (a dead entry hides a rename)`);
+    assert.ok(existsSync(path.join(ROOT, p.replace(/\/\*\*$/, ''))), `${p} exists (a dead entry hides a rename)`);
   }
   assert.ok(!Object.hasOwn(LIVE.matrix, 'force_high'), 'no config key: the list is a constant in code (re-cr-keys keeps the config)');
 });
@@ -686,7 +690,7 @@ test('B56: a PR with no tier file and no forced file keeps its score band (the r
 });
 
 test('B57: the none-pick check needs Dave\'s record for a forced-HIGH band (band from the local config here; the base code and config reads are in land-none-base-code.test.mjs and land-none-check.test.mjs), and still skips a plain MID PR', async () => {
-  const { nonePick } = await import('./land-none-check.mjs');
+  const { nonePick } = await import('./land-none-core.mjs');
   const noRecord = () => ({ glob: '/s/store.json', files: [], records: [], bad: [] });
   for (const p of [FORCED[0], FORCED[3], TIER_PATHS[0]]) {
     const band = bandOf([p], LIVE).band;
@@ -700,9 +704,9 @@ test('B57: the none-pick check needs Dave\'s record for a forced-HIGH band (band
 
 // ---------- card force-high-land-path (Dave 2026-11-22: "17 of 654: all 11 files"): the whole land path is forced HIGH, matched without case ----------
 
-test('B58: every file of the land path alone is HIGH and forcedHigh, with no CRITICAL; FORCED holds 15 entries', () => {
-  assert.equal(FORCED.length, 15);
-  assert.equal(new Set(FORCED).size, 15);
+test('B58: every file of the land path alone is HIGH and forcedHigh, with no CRITICAL; FORCED holds 16 files and FORCED_GLOBS 1 (17 in all)', () => {
+  assert.equal(FORCED.length, 16);
+  assert.equal(new Set(FORCED).size, 16);
   for (const p of FORCED.slice(4)) {
     const b = bandOf([p], LIVE);
     assert.equal(b.band, 'HIGH', p);

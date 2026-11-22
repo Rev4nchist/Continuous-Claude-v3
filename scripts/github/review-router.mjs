@@ -42,7 +42,7 @@
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { pullLabelNames, latestCodeRabbitSummary, codeRabbitNotice, commitsNamed, shaIsHead } from './review-status.mjs';
 import { globToRegExp, matchGlob } from './lib/answer-paths.mjs';
@@ -64,10 +64,11 @@ const rank = (c) => RANK[c] ?? -1;
 
 const normalizePath = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
 
+/** Case-blind, like anyGlob: the Windows checkout is, so `apps/agentic-os/DRIZZLE/0009_x.SQL` is the file of the lower-case glob (aegis F3 on PR 673). */
 function compileClass(globs = []) {
-  const pos = globs.filter((g) => !g.startsWith('!')).map(globToRegExp);
-  const neg = globs.filter((g) => g.startsWith('!')).map((g) => globToRegExp(g.slice(1)));
-  return (p) => pos.some((re) => re.test(p)) && !neg.some((re) => re.test(p));
+  const pos = globs.filter((g) => !g.startsWith('!')).map((g) => globToRegExp(g.toLowerCase()));
+  const neg = globs.filter((g) => g.startsWith('!')).map((g) => globToRegExp(g.slice(1).toLowerCase()));
+  return (p) => { const q = String(p).toLowerCase(); return pos.some((re) => re.test(q)) && !neg.some((re) => re.test(q)); };
 }
 
 /** The PR class is the highest class of any path. A path that matches no class is normal. */
@@ -116,6 +117,8 @@ export const TRUST_BOUNDARY = Object.freeze({
     'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1',
     // code that runs inside the land check or the land hook (card force-high-land-path, aegis on PR 669)
     'scripts/ratchets/lib/review-md.mjs', 'scripts/lib/resolve-deps.mjs',
+    // card coord-force-high-followups (seat word 2026-11-22): the core of the none check, which the entry loads after the base-code check, and the git hooks of the checkout
+    'scripts/github/land-none-core.mjs', '.githooks/**',
     // hook registration: a removed entry turns a guard off without a change to the guard (Dave 2026-11-17)
     '.claude/settings.json.template', 'scripts/settings/apply-registrations.mjs',
     // review router, its config, READY, the review-pick record, the pick question screen, paid review spend (Dave 2026-11-17)
@@ -148,6 +151,8 @@ export const FORCE_HIGH_FILES = Object.freeze([
   'scripts/github/land-decision.mjs', 'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1', '.claude/hooks/src/decision-gate.ts', 'scripts/github/ship-ask.mjs',
   'scripts/github/land-recheck.mjs', 'scripts/ratchets/lib/review-md.mjs',
   '.claude/hooks/src/decision-ledger.ts', 'scripts/lib/resolve-deps.mjs', '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs',
+  // card coord-force-high-followups: the core of the none check and the git hooks of the checkout (a hook runs when the land path runs git)
+  'scripts/github/land-none-core.mjs', '.githooks/**',
 ]);
 
 /** Case-blind: the Windows checkout is, so a path that differs from a listed glob only in case is the same file (aegis on PR 669; lib/answer-key.mjs does the same). */
@@ -590,12 +595,32 @@ function emitLedger(line) {
 
 // ---------- main ----------
 
+/**
+ * The absolute path of the executable `name`, from the absolute entries of PATH only, or null. A bare name in a spawn is searched in the current folder first on Windows
+ * unless NoDefaultCurrentDirectoryInExePath is set (aegis LOW on PR 673), so the land path resolves the name itself: a relative or empty PATH entry never counts.
+ * A plain name only (letters, digits, _ and -). On Windows only .exe and .com run without a shell. The same function is in land-none-check.mjs (the entry has no import of band code).
+ */
+export function resolveExe(name, { env = process.env, platform = process.platform } = {}) {
+  if (!/^[A-Za-z0-9_-]+$/.test(String(name))) return null;
+  const names = platform === 'win32' ? [`${name}.exe`, `${name}.com`] : [String(name)];
+  for (const dir of String(env.PATH ?? env.Path ?? '').split(path.delimiter)) {
+    if (!dir || !path.isAbsolute(dir)) continue;
+    for (const file of names) {
+      const full = path.join(dir, file);
+      try { if (statSync(full).isFile()) return full; } catch { /* not here */ }
+    }
+  }
+  return null;
+}
+
 export function makeGh() {
   const ghPersonal = path.join(os.homedir(), '.config', 'gh-personal');
   const dir = process.env.GH_CONFIG_DIR || (existsSync(ghPersonal) ? ghPersonal : undefined);
   const env = { ...process.env, ...(dir ? { GH_CONFIG_DIR: dir } : {}) };
   return (args) => {
-    const out = execFileSync('gh', args, { encoding: 'utf8', env, maxBuffer: 32 * 1024 * 1024 });
+    const exe = resolveExe('gh');
+    if (!exe) throw new Error('gh was not found on an absolute PATH entry');
+    const out = execFileSync(exe, args, { encoding: 'utf8', env, maxBuffer: 32 * 1024 * 1024 });
     return out.trim() ? JSON.parse(out) : {};
   };
 }
