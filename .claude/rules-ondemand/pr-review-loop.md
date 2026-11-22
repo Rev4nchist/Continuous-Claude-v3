@@ -495,14 +495,14 @@ Edit the body with a Node or Bash read-modify-write that keeps LF line endings. 
 | `feature` | new behaviour | The end-to-end check, written first, fails. | The same check passes. Add unit tests only where the end-to-end check cannot reach. |
 | `refactor` | behaviour that must not change | BEFORE: the full suite passes on the commit before the change. | The same suite passes. |
 | `ui` | an interactive or UI change | The Playwright run at desktop and phone width fails. | The same run passes at both widths. |
-| `harness` | a hook, rule, skill or agent | The AGENTS.md "Testing" row shows the old behaviour. | The same row shows the new behaviour (see "Harness proof"). |
+| `harness` | a hook, rule, skill or agent | The docs/testing-standard.md "Testing" row shows the old behaviour. | The same row shows the new behaviour (see "Harness proof"). |
 | `docs` | text only | None. | None. Valid only when the review router classed this head `docs`. |
 
 Name one type. A PR that mixes types names the type of its riskiest change.
 
 ### Harness proof
 
-Use the AGENTS.md "Testing" row for the surface you changed.
+Use the docs/testing-standard.md "Testing" row for the surface you changed.
 
 - A hook: build it, then pipe a real payload into the built hook. This is the full row, and it runs
   before the merge.
