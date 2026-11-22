@@ -21,7 +21,7 @@
  * edit to either needs Dave's recorded pick.
  * Not covered, accepted: an agent that writes a forged record from a script that builds the path in code. Docs: pr-review-loop.md, land section.
  */
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,7 +38,19 @@ export const BAND_CODE_FILES = Object.freeze([
   'scripts/github/lib/answer-key.mjs', 'scripts/github/lib/answer-paths.mjs', 'scripts/ratchets/lib/review-md.mjs',
 ]);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const defaultGit = (root) => (args) => spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true });
+/**
+ * git for the base-code check runs no hook of the checkout (aegis F1 on PR 673): core.hooksPath points at a private empty folder, because the fetch updates a ref
+ * and git then runs the checkout's reference-transaction hook, which a PR can add (.githooks is not a forced file). One folder per process, made on first use.
+ */
+let emptyHooks = null;
+const emptyHooksDir = () => {
+  if (emptyHooks === null) {
+    emptyHooks = mkdtempSync(path.join(os.tmpdir(), 'land-none-no-hooks-'));
+    process.once('exit', () => { try { rmSync(emptyHooks, { recursive: true, force: true }); } catch { /* the temp folder stays: harmless */ } });
+  }
+  return emptyHooks;
+};
+const defaultGit = (root) => (args) => spawnSync('git', ['-C', root, '-c', `core.hooksPath=${emptyHooksDir()}`, ...args], { encoding: 'utf8', windowsHide: true });
 const firstLine = (text) => String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? 'no message';
 const SAFE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
 
