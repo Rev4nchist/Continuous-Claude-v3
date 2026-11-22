@@ -87,6 +87,9 @@ jobs:
       - name: review-router band tests (engine trust-boundary files are CRITICAL)
         timeout-minutes: 5
         run: node --test scripts/github/review-router-band.test.mjs
+      - name: review-router config keys and flip rule tests
+        timeout-minutes: 5
+        run: node --test scripts/github/review-router-config-keys.test.mjs scripts/github/review-router-flip.test.mjs
       - name: slot-queue unit tests
         timeout-minutes: 5
         run: node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs scripts/github/slot-queue-mod-sync.test.mjs scripts/github/slot-queue-paid-cap.test.mjs
