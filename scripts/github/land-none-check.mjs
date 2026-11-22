@@ -21,7 +21,7 @@
  * edit to either needs Dave's recorded pick.
  * Not covered, accepted: an agent that writes a forged record from a script that builds the path in code. Docs: pr-review-loop.md, land section.
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,18 +39,12 @@ export const BAND_CODE_FILES = Object.freeze([
 ]);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 /**
- * git for the base-code check runs no hook of the checkout (aegis F1 on PR 673): core.hooksPath points at a private empty folder, because the fetch updates a ref
- * and git then runs the checkout's reference-transaction hook, which a PR can add (.githooks is not a forced file). One folder per process, made on first use.
+ * git for the base-code check runs no hook (aegis F1 on PR 673): the fetch updates a ref, and git then runs the reference-transaction hook of core.hooksPath, which a PR
+ * can add (.githooks is not a forced file). core.hooksPath=/dev/null names no folder: git resolves it to the null device (nul on Windows), where no hook file can exist.
+ * A temp folder is no answer: on this machine %TEMP% grants Modify to the Codex sandbox accounts, so a hook could be planted there (aegis, round 2).
  */
-let emptyHooks = null;
-const emptyHooksDir = () => {
-  if (emptyHooks === null) {
-    emptyHooks = mkdtempSync(path.join(os.tmpdir(), 'land-none-no-hooks-'));
-    process.once('exit', () => { try { rmSync(emptyHooks, { recursive: true, force: true }); } catch { /* the temp folder stays: harmless */ } });
-  }
-  return emptyHooks;
-};
-const defaultGit = (root) => (args) => spawnSync('git', ['-C', root, '-c', `core.hooksPath=${emptyHooksDir()}`, ...args], { encoding: 'utf8', windowsHide: true });
+export const HOOKS_OFF_ARGS = Object.freeze(['-c', 'core.hooksPath=/dev/null']);
+const defaultGit = (root) => (args) => spawnSync('git', ['-C', root, ...HOOKS_OFF_ARGS, ...args], { encoding: 'utf8', windowsHide: true });
 const firstLine = (text) => String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? 'no message';
 const SAFE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
 
