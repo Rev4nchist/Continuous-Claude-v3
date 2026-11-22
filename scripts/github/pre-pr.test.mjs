@@ -84,7 +84,10 @@ process.env.PRE_PR_GATE_LOG = path.join(mkdtempSync(path.join(os.tmpdir(), 'prep
 // Same net for the run lock: a spawned pre-pr.mjs (X1, R3) takes the lock and logs START to runs.jsonl. It must reach a temp store, never
 // the live ~/.claude/state/run-locks (seat finding 14:30 CST 11-18: X1 children left START rows there). Children inherit process.env.
 process.env.RUN_LOCK_DIR = mkdtempSync(path.join(os.tmpdir(), 'prepr-runlock-env-'));
-const tempLedger = () => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
+// O1: a child run takes the lock with its three samples at once (hook at run-lock.mjs, works only with a temp RUN_LOCK_DIR): no real 6 s + 30 s + 6 s
+// machine read per spawn. The children here check exit codes and START and END rows, never the samples.
+const LOCK_SAMPLES_ENV = { ...process.env, RUN_LOCK_TEST_SAMPLES: JSON.stringify({ free: [8, 8, 8], load: [10, 10, 10] }) };
+const tempLedger = () =>path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
 
 const HEAD = 'a'.repeat(40);
 
@@ -1508,7 +1511,7 @@ test('F1: finishedRuns counts only runs that finished with a PASS; a failed, inc
 });
 
 test('X1: bad usage exits 2 and an internal error exits 3', () => {
-  const run = (cwd, ...args) => spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), ...args], { cwd, encoding: 'utf8', windowsHide: true });
+  const run = (cwd, ...args) => spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), ...args], { cwd, encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV });
   assert.equal(run(os.tmpdir()).status, 2);
   // A git checkout with no review-router.config.json: the config read throws inside the run.
   const repo = makeRepo();
@@ -4412,7 +4415,7 @@ test('RL-ISO2: a spawned exit-3 run writes its START row to the temp store of th
   const repo = makeRepo();
   const body = path.join(repo.dir, '..', `body-iso-${Date.now()}.md`);
   writeFileSync(body, 'Proof type: docs\n');
-  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--skip-cr'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--skip-cr'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV });
   assert.equal(r.status, 3, r.stderr);
   // O1: same fake samples here (this test checks START and END rows, never the machine read).
   assert.match(r.stderr, /samples come from RUN_LOCK_TEST_SAMPLES/);
