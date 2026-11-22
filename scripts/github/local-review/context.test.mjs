@@ -270,11 +270,27 @@ test('folder-scoped guidelines are quoted from the base for every folder above a
     '.coderabbit.yaml': YAML, 'CONTEXT.md': 'GLOSSARY', 'rules/hooks.md': 'HOOK-RULES', 'AGENTS.md': 'ROOT-AGENTS', 'pkg/CLAUDE.md': 'PKG-CLAUDE', 'pkg/sub/AGENTS.md': 'SUB-AGENTS', 'other/AGENTS.md': 'OTHER',
   };
   const out = ctx({ files: ['pkg/sub/a.mjs'] }, files);
-  for (const want of ['GLOSSARY', 'ROOT-AGENTS', 'PKG-CLAUDE', 'SUB-AGENTS']) assert.match(out.text, new RegExp(want), want);
+  for (const want of ['GLOSSARY', 'PKG-CLAUDE', 'SUB-AGENTS']) assert.match(out.text, new RegExp(want), want);
+  assert.doesNotMatch(out.text, /ROOT-AGENTS/, 'the root AGENTS.md is the T3 Code charter, not a review guideline');
   assert.doesNotMatch(out.text, /HOOK-RULES/, 'applyTo .claude/hooks/** does not match');
   assert.doesNotMatch(out.text, /OTHER/);
   const hooks = ctx({ files: ['.claude/hooks/src/a.ts'] }, files);
   assert.match(hooks.text, /HOOK-RULES/);
+});
+
+test('the root AGENTS.md is skipped, every other folder keeps AGENTS.md, CLAUDE.md and .cursorrules (breaks if the skip covers nested folders or other names)', () => {
+  const files = { 'AGENTS.md': 'ROOT-CHARTER', 'CLAUDE.md': 'ROOT-CLAUDE', '.cursorrules': 'ROOT-CURSOR', 'pkg/AGENTS.md': 'PKG-AGENTS', 'pkg/.cursorrules': 'PKG-CURSOR' };
+  const out = ctx({ files: ['pkg/a.mjs'] }, files);
+  assert.doesNotMatch(out.text, /ROOT-CHARTER/);
+  for (const want of ['ROOT-CLAUDE', 'ROOT-CURSOR', 'PKG-AGENTS', 'PKG-CURSOR']) assert.match(out.text, new RegExp(want), want);
+});
+
+test('the testing standard reaches the reviewer through the filePatterns row of .coderabbit.yaml, for any changed file (breaks if the row is not read or applyTo ** is ignored)', () => {
+  const yaml = YAML.concat('      - files: "docs/testing-standard.md"\n        applyTo: "**"\n');
+  const out = ctx({ files: ['scripts/a.mjs'] }, { '.coderabbit.yaml': yaml, 'docs/testing-standard.md': 'TESTING-STANDARD-TEXT', 'AGENTS.md': 'ROOT-CHARTER' });
+  assert.match(out.text, /### docs\/testing-standard\.md \(at the merge base\)/);
+  assert.match(out.text, /TESTING-STANDARD-TEXT/);
+  assert.doesNotMatch(out.text, /ROOT-CHARTER/);
 });
 
 test('a guideline that holds backticks cannot break out of its fence (breaks if guidelines are not fenced)', () => {
