@@ -92,7 +92,8 @@ const world = (on: On, store: Rec) => {
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('process.run', (_$, e) => {
     const line = [...e.argv].join(' ')
-    const out = line.includes('review-status.mjs') ? JSON.stringify(status(7)) : ''
+    // A round Yes reads the PR first (PR 2 item 1c): the PR is open, ready and at the asked head.
+    const out = line.includes('review-status.mjs') ? JSON.stringify(status(7)) : line.includes('gh pr view') ? JSON.stringify({ state: 'OPEN', headRefOid: HEAD, isDraft: false }) : ''
     return { value: { exitCode: line.includes('review-status.mjs') ? 1 : 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   return { kv, session }

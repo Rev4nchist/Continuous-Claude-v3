@@ -784,7 +784,14 @@ var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round", "c
 var REPO = "Rev4nchist/Continuous-Claude-v3";
 var MAX_AGE_MS = 7 * 24 * 3600 * 1e3;
 var MISS_TTL_MS = 60 * 60 * 1e3;
-var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(os.homedir(), ".claude", "state", "ccv3-mods", "decisions.json");
+var accountHome = () => {
+  try {
+    return os.userInfo().homedir || os.homedir();
+  } catch {
+    return os.homedir();
+  }
+};
+var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(accountHome(), ".claude", "state", "ccv3-mods", "decisions.json");
 var decisionKey = ({ repo = REPO, pr, branch }) => pr !== void 0 && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`;
 var empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
 var idOf = ({ step, key, head }) => `${step}
@@ -1412,6 +1419,9 @@ var PUSH_REPO_OPT_WHY = "a --repo option names the push target, so the remote th
 var PUSH_ORIGIN_WHY = "a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.";
 var pushUnresolvedWhy = (what) => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
 var STORE_WHY = "only decision-ledger writes the decision store, from Dave's tap in AskUserQuestion. Do not write it by hand. To record a decision, ask the question with AskUserQuestion.";
+var PAID_MENTION_RE = /@coderabbitai/i;
+var PAID_FLAG_RE = /use[-_\s]*credits/i;
+var PAID_WHY = "a paid CodeRabbit request runs only through node scripts/github/cr-paid.mjs post --pr N, which reads Dave's priced yes.";
 var SUBAGENT_WHY = "a subagent cannot open a PR, land, merge or push: Dave's tap belongs to the main session. Ask the main session to do it.";
 var NO_PR_WHY = "the PR number cannot be read from this command, so its land decision cannot be found. Name the PR number in the command (land-pr.ps1 -Pr <n>, gh pr merge <n>).";
 var goThereWhy = (repo) => `this command names ${repo}, which is not the CCv3 repo, so it cannot be judged with a CCv3 decision: go to that repo folder and run it there.`;
@@ -3421,6 +3431,7 @@ function judgeCommand(input, deps, notes, denies = []) {
   if (cmd.kind !== "command" || cmd.text === "") return denies;
   const cwd = input.cwd || process.cwd();
   if (storeWriteCall(input, deps)) denies.push(deny("store-write", STORE_WHY));
+  if (paidTripwire(input)) denies.push(deny("paid-coderabbit", PAID_WHY));
   const shapes = shapesOf(cmd.text, cmd.tool);
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));
@@ -3458,6 +3469,10 @@ function subagentDeny(shapes, deps, cwd, shell) {
   const base = deny("subagent", SUBAGENT_WHY);
   const covered = shapes.some((s) => s.kind !== "push" && coveredAmong(deps, (s.at ? dirsAfter(cwd, s.at.cds, shell, s.at.loose) : [cwd]).filter((d) => !isUnexpanded(d))) !== null);
   return covered ? { ...base, homeFlags: true } : base;
+}
+function paidTripwire(input) {
+  const cmd = readShellCommand(input);
+  return cmd.kind === "command" && PAID_MENTION_RE.test(cmd.text) && PAID_FLAG_RE.test(cmd.text);
 }
 function storeWriteCall(input, deps) {
   try {

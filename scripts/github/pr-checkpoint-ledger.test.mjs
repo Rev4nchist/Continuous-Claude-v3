@@ -25,10 +25,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
+import { sameForm } from './pr-checkpoint.mjs';
 import { makeTempDir, registerTempCleanup } from '../lib/temp-tracker.mjs';
 
 registerTempCleanup();
@@ -878,4 +879,168 @@ test('TC3 F6: a free-slot tap whose slot expired between the check and the use (
   const soon = t.confirm('coderabbit', 'dave', ['--pr', String(PR)], { PR_CHECKPOINT_CONSUME_NOW: iso(NOW_MS + 120_000) });
   assert.equal(soon.status, 0, `${soon.stdout} ${soon.stderr}`);
   assert.equal(JSON.parse(readFileSync(t.pathwayFile, 'utf8')).decided_by, 'dave');
+});
+
+// ---- PR 2 group A (card prflow-paid-run-guard): items 3, 4 and 9 -------------------------------------------------------------------------
+// How it can fail, and the test that catches it (C = control: it passes before the change and pins what must stay):
+//   --drop-taps replaces a store that exists but cannot be read with an empty one, so the taps of other PRs are lost        -> PG1 (PG1b C: a missing store is a good empty drop)
+//   the re-ask of a stale tap deletes the newer tap that Dave made while the call judged the old one                         -> PG2
+//   the re-ask of a tap that is no row any more (the slot changed) deletes the newer tap the same way                        -> PG3
+//   a stale tap with no newer tap stops being used up and re-asked                                                           -> PG4 (C)
+//   an alias path above a missing folder reads as a second store, so a fixture run writes the real store                     -> PG5 (the same test: a separate temp store stays test mode)
+test('PG1: --drop-taps on a store file that exists but cannot be read exits 1 and leaves the file as it was (the taps of other PRs stay)', () => {
+  const t = setup();
+  paidTap(t);
+  for (const [name, text] of [['malformed JSON', '{"version":1,"decisions":'], ['an empty file', ''], ['a section that is not an object', JSON.stringify({ version: 1, offers: [], decisions: {}, misses: {} })]]) {
+    writeFileSync(t.storeFile, text);
+    const failed = t.drop();
+    assert.equal(failed.status, 1, `${name}: ${failed.stdout} ${failed.stderr}`);
+    assert.ok(failed.stderr.includes(`refused: the taps of PR #${PR} could not be cleared (unreadable-store`), `${name}: ${failed.stderr}`);
+    assert.equal(readFileSync(t.storeFile, 'utf8'), text, `${name}: nothing was written`);
+  }
+});
+
+test('PG1b (control): a store file that is not there is a good empty drop', () => {
+  const t = setup();
+  assert.ok(!existsSync(t.storeFile));
+  const r = t.drop();
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.equal(JSON.parse(r.stdout).dropped, 0);
+});
+
+const pause = (ms) => { const end = Date.now() + ms; while (Date.now() < end) { /* the tap time has a resolution of one millisecond */ } };
+function raceResult({ recommended = 'none', capacity = { state: 'unknown' } } = {}) {
+  const option = (pathway) => ({ pathway, available: true, reason: `${pathway} reason` });
+  return { head: HEAD, recommended, why: ['x.'], size: { files: 5, lines: 50 }, auto: { band: 'HIGH', eligible: false }, capacity, options: [option('none'), option('coderabbit'), option('wait')], config_drift: false };
+}
+/** The decisions module with one change: the first read of a tap is followed, at once, by a newer tap on the same question (Dave answers while the call judges the old one). */
+function withNewerTap(spec, label, box) {
+  return { ...D, decisionRead: (triple) => {
+    const seen = D.decisionRead(triple);
+    if (!box.fired) {
+      box.fired = true;
+      pause(15);
+      assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+      tap(review(), label);
+    }
+    return seen;
+  } };
+}
+
+test('PG2: a stale tap is replaced by a newer valid tap while the call judges it: the newer tap is judged and records, it is not deleted', () => {
+  setup();
+  const result = raceResult();
+  const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+  const none = spec.options.find((o) => /^No review/.test(o.label)).label;
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), none);
+  const first = D.decisionRead(review());
+  const since = iso(Date.parse(first.at) + 5); // the first tap is before the marker, the newer one is after it
+  const out = L.ledgerStep({ pr: PR, result, slotLine: 'x', now: NOW_MS, repickSince: since, d: withNewerTap(spec, none, {}) });
+  assert.equal(out.state, 'record', JSON.stringify(out));
+  assert.equal(out.pathway, 'none');
+  const kept = D.decisionRead(review());
+  assert.ok(kept, 'the newer tap is still in the store');
+  assert.notEqual(kept.at, first.at);
+});
+
+test('PG3: a tap that is no row of the question now (the slot changed) is replaced by a newer valid tap during the call: the newer tap records, it is not deleted', () => {
+  setup();
+  const free = raceResult({ recommended: 'coderabbit', capacity: { state: 'free', checkedAt: iso(NOW_MS - 60_000) } });
+  const spec = L.askSpecOf(PR, free, 'x', NOW_MS);
+  const slotRow = spec.options.find((o) => /free slot/.test(o.label)).label;
+  const none = spec.options.find((o) => /^No review/.test(o.label)).label;
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), slotRow);
+  const first = D.decisionRead(review());
+  const out = L.ledgerStep({ pr: PR, result: free, slotLine: 'x', now: NOW_MS + 600_000, d: withNewerTap(spec, none, {}) }); // 10 minutes later the free fact is stale: the row is gone
+  assert.equal(out.state, 'record', JSON.stringify(out));
+  assert.equal(out.pathway, 'none');
+  const kept = D.decisionRead(review());
+  assert.ok(kept, 'the newer tap is still in the store');
+  assert.notEqual(kept.at, first.at);
+});
+
+test('PG4 (control): a stale tap with no newer tap is used up and the question is asked again with the re-pick note', () => {
+  setup();
+  const result = raceResult();
+  const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+  const none = spec.options.find((o) => /^No review/.test(o.label)).label;
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), none);
+  const since = iso(Date.parse(D.decisionRead(review()).at) + 5);
+  const out = L.ledgerStep({ pr: PR, result, slotLine: 'x', now: NOW_MS, repickSince: since });
+  assert.equal(out.state, 'ask');
+  assert.match(out.note, /went back to draft/);
+  assert.equal(D.decisionRead(review()), null, 'the stale tap is gone');
+});
+
+// PG6: Keep as draft is judged, then Dave taps again before the use. The use names the tap it judged (label and time); a newer tap, of the same label or of
+// another one, stays and is judged by the next call. Without the label and the time the use deleted it.
+for (const [name, newer] of [['the same label (Keep as draft again)', /^Keep as draft/], ['another label (No review)', /^No review/]]) {
+  test(`PG6: a newer tap of ${name} written while Keep as draft is judged is not used up`, () => {
+    setup();
+    const result = raceResult();
+    const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+    const keep = spec.options.find((o) => /^Keep as draft/.test(o.label)).label;
+    const second = spec.options.find((o) => newer.test(o.label)).label;
+    assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+    tap(review(), keep);
+    const first = D.decisionRead(review());
+    const out = L.ledgerStep({ pr: PR, result, slotLine: 'x', now: NOW_MS, d: withNewerTap(spec, second, {}) });
+    assert.equal(out.state, 'kept-draft', JSON.stringify(out));
+    const left = D.decisionRead(review());
+    assert.ok(left, 'the newer tap is still in the store');
+    assert.equal(left.label, second);
+    assert.notEqual(left.at, first.at);
+  });
+}
+
+test('PG6b (control): Keep as draft with no newer tap is used up', () => {
+  setup();
+  const result = raceResult();
+  const spec = L.askSpecOf(PR, result, 'x', NOW_MS);
+  const keep = spec.options.find((o) => /^Keep as draft/.test(o.label)).label;
+  assert.equal(D.offerWrite({ ...review(), spec, tree: null, cwd: '/x' }).ok, true);
+  tap(review(), keep);
+  assert.equal(L.ledgerStep({ pr: PR, result, slotLine: 'x', now: NOW_MS }).state, 'kept-draft');
+  assert.equal(D.decisionRead(review()), null, 'the judged tap is gone');
+});
+
+/** A folder link: a junction on win32 (no privilege needed), a directory symlink elsewhere. False when the platform cannot make one. */
+function makeFolderLink(target, link) {
+  try { symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir'); return true; } catch { return false; }
+}
+function dropFolderLink(link) {
+  try { unlinkSync(link); } catch { try { rmdirSync(link); } catch { /* the temp cleanup removes what is left */ } }
+}
+
+// The default store now comes from the OS account home, not from HOME or USERPROFILE (paid guard PR 2, seat rule 2026-11-22), so a temp home can no longer stand in
+// for the real store in a child run. The part of PG5 that can still fail is the compare form: sameForm, which seamsOn uses on both sides.
+test('PG5: an alias path above a missing folder compares equal to the real store (sameForm), so a fixture --confirm is refused outside test mode; a separate temp store stays a second store', (ctx) => {
+  const home = realpathSync(makeTempDir('ledger-home-')); // a stand-in home: the store folder under it is not there
+  const alias = path.join(makeTempDir('ledger-alias-'), 'home-link');
+  if (!makeFolderLink(home, alias)) return ctx.skip('this platform cannot make a folder link (junction or directory symlink) in the temp folder');
+  try {
+    const t = setup();
+    const real = path.join(home, '.claude', 'state', 'ccv3-mods', 'decisions.json');
+    assert.ok(!existsSync(path.dirname(real)), 'the folder above the real store is missing');
+    const viaAlias = path.join(alias, '.claude', 'state', 'ccv3-mods', 'decisions.json');
+    assert.equal(sameForm(viaAlias), sameForm(real), 'a folder link above a missing folder is still the same file');
+    assert.notEqual(sameForm(t.storeFile), sameForm(real), 'a separate temp store is a second store');
+  } finally {
+    dropFolderLink(alias);
+  }
+});
+
+test('LD26: the paid label prices the UNFILTERED file count (size.total, the cr-paid.mjs total), and the stored tap label parses to the same cap in cents', () => {
+  // Five reviewable files plus two the path filters drop (dist output, a lock file): files 5, total 7.
+  const t = setup({ paths: [...FIVE, '.claude/hooks/dist/x.mjs', 'package-lock.json'] });
+  const out = t.call();
+  assert.equal(out.size.files, 5);
+  assert.equal(out.size.total, 7, 'the result carries the unfiltered count next to files');
+  const row = out.ledger.ask.options.find((o) => /^CodeRabbit review/.test(o.label));
+  assert.equal(row.label, 'CodeRabbit review (may cost up to $1.75) (Recommended)', '7 files x $0.25, not 5 x $0.25 = $1.25');
+  assert.equal(D.capCentsOfLabel(row.label), 175, 'the tap label is the cap cr-paid.mjs post compares with');
+  assert.match(out.ledger.ask.question, /^PR #349, band CRITICAL, 5 files\./, 'the question line still counts the reviewable files');
 });

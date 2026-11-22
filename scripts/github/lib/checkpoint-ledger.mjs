@@ -46,9 +46,14 @@ export function slotStateOf(capacity, nowMs) {
 /** A paid row spends money: Greptile credits always, CodeRabbit unless the slot is free. `slot` is slotStateOf of the result's capacity. */
 const isPaid = (pathway, slot) => pathway === 'both' || (pathway === 'coderabbit' && slot !== 'free');
 
+/** The file count a paid label prices: the UNFILTERED size.total (cr-paid.mjs total), or size.files when the result has none. The same rule as paidCountOf in the mod (model.ts). */
+export function paidCountOf(size) {
+  return Number.isInteger(size.total) && size.total >= 0 ? size.total : size.files;
+}
+
 /** The label of a pathway row, with its cost. The words are the mod's (model.ts labelFor): both copies must give one text. */
 function labelOf(pathway, result, slot) {
-  const up = usd(result.size.files * PER_FILE);
+  const up = usd(paidCountOf(result.size) * PER_FILE);
   if (pathway === 'none') return 'No review, land on CI ($0)';
   if (pathway === 'wait') return 'Keep as draft ($0)';
   if (pathway === 'both') return `CodeRabbit + Greptile (may cost up to ${up} + ${GREPTILE_CREDITS} credits)`;
@@ -136,6 +141,8 @@ function askAgain(pr, triple, spec, d, note = null) {
   return { state: 'ask', ask: printable(spec), reasked: missed, ...(note ? { note } : {}), text: `${lead}Call AskUserQuestion with ask, word for word, with the options in the order given.${again} Then call pr_checkpoint {pr} again.` };
 }
 
+/** How many times one call judges a tap that Dave replaced meanwhile, before it stops. */
+const MAX_JUDGED = 3;
 const SLOT_CHANGED_NOTE = 'The CodeRabbit slot changed. Your tap was not recorded.';
 const QUESTION_CHANGED_NOTE = 'The question changed. Your tap was not recorded.';
 const REPICK_NOTE = 'The PR went back to draft. Your earlier tap was not recorded.';
@@ -143,6 +150,7 @@ const REPICK_NOTE = 'The PR went back to draft. Your earlier tap was not recorde
 // Why the results of decisionUse are ignored in `kept` and in the askAgain branches of ledgerStep (unlike ledgerUse, which a record needs):
 // `kept` records nothing, so a tap that stays leaves the next call at Keep as draft again. In an askAgain branch the offerWrite of askAgain
 // deletes the old decision of the triple, and when that write fails too (the lock) askAgain returns `stop`. Nothing records on any path.
+// Each triple of `kept` carries the label and the time of the tap that was judged, so a newer tap made meanwhile is not used up (the next call judges it).
 const kept = (pr, d, triples) => { triples.forEach((t) => d.decisionUse(t)); return { state: 'kept-draft', text: `Nothing was recorded. PR #${pr} stays a draft. Call pr_checkpoint {pr} when Dave wants to pick again.` }; };
 
 /**
@@ -157,6 +165,8 @@ function changedNote(result, label, pathway) {
 
 /**
  * ledgerStep({ pr, result, slotLine, askAnyway, now, repickSince, d }) -> { state, ask?, pathway?, by?, reasked?, text }. d is the decisions module (a test seam).
+ * A refused tap is used up only if it is still the tap that was judged (same label and time, under the store lock). A newer tap made meanwhile stays
+ * and is judged by a second pass (at most MAX_JUDGED); the old call used the tap up whatever it was and the re-ask then deleted the newer one.
  * repickSince is an ISO time (--repick-since, the mod's re-pick marker): a tap made before it is used up and the question is asked again with a note
  * (REPICK_NOTE); a value that does not parse makes every tap stale. Null: no marker.
  * now is the clock in ms: the slot is read at that time (default Date.now(); a test injects it).
@@ -168,22 +178,27 @@ function changedNote(result, label, pathway) {
  * state: none (no question: a stop or an auto-confirm), ask, record (run --confirm <pathway> --by dave; the tap records the pick),
  * kept-draft (nothing recorded), stop (the re-asks are used up).
  */
-export function ledgerStep({ pr, result, slotLine, askAnyway = false, now = Date.now(), repickSince = null, d = store }) {
+export function ledgerStep(args) {
+  const { pr, result, slotLine, askAnyway = false, now = Date.now(), repickSince = null, d = store, judged = 0 } = args;
   if (result.recommended === null || (result.auto?.eligible === true && askAnyway !== true) || result.options.length === 0) return { state: 'none', text: 'No question is needed.' };
   const triple = { step: 'review', key: keyOf(pr), head: result.head };
   const spec = askSpecOf(pr, result, slotLine, now);
   const tapped = d.decisionRead(triple);
   const pathway = valueOf(triple, d, tapped);
   if (pathway === null) return askAgain(pr, triple, spec, d);
-  if (isStale(tapped, repickSince)) {
-    d.decisionUse(triple);
-    return askAgain(pr, triple, spec, d, REPICK_NOTE);
-  }
-  if (pathway === 'wait') return kept(pr, d, [triple]);
-  if (spec.values[tapped.label] !== pathway) {
-    d.decisionUse(triple);
-    return askAgain(pr, triple, spec, d, changedNote(result, tapped.label, pathway));
-  }
+  // A tap that is refused is used up and the question is asked again. The use names the tap it judged (label and time): when Dave tapped again meanwhile,
+  // the newer tap stays and is judged on its own (a re-ask would reopen the offer and delete it).
+  const refuse = (note) => {
+    const used = d.decisionUse({ ...triple, label: tapped.label, at: tapped.at });
+    if (used.ok === false && (used.reason === 'tap-changed' || used.reason === 'label-changed')) {
+      if (judged >= MAX_JUDGED) return { state: 'stop', text: `Stop. Dave's tap on PR #${pr} changed ${MAX_JUDGED} times while it was judged. PR #${pr} stays a draft. Nothing was recorded. Call pr_checkpoint {pr} again.` };
+      return ledgerStep({ ...args, judged: judged + 1 });
+    }
+    return askAgain(pr, triple, spec, d, note);
+  };
+  if (isStale(tapped, repickSince)) return refuse(REPICK_NOTE);
+  if (pathway === 'wait') return kept(pr, d, [{ ...triple, label: tapped.label, at: tapped.at }]);
+  if (spec.values[tapped.label] !== pathway) return refuse(changedNote(result, tapped.label, pathway));
   return { state: 'record', pathway, by: 'dave', text: `Dave picked ${pathway}. Record it.` };
 }
 
@@ -218,7 +233,18 @@ export const ledgerConfirmProblem = (args) => ledgerConfirmCheck(args).problem;
  * ledgerConfirmCheck read: a tap Dave made in between is label-changed and stays. No label: the tap is used whatever its label (--by auto).
  * `at` (the tap time ledgerConfirmCheck read) makes a newer tap of the SAME label tap-changed. `check(row)` is judged inside the store lock: false is
  * slot-changed (see decisionUse). Both optional.
+ * `returnRow: true` adds the used row's { label, at, tapAt, entry } to an ok result, read inside the lock before the delete.
+ * `paidRound: true` writes the paid-round row of the used tap in the same lock (the result then has `paid`, see decisionUse): the tap and its paid row are one step.
  */
-export function ledgerUse({ pr, head, label, at, check, d = store }) {
-  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label, at, check });
+export function ledgerUse({ pr, head, label, at, check, returnRow = false, paidRound = false, d = store }) {
+  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label, at, check, returnRow, paidRound });
+}
+
+/**
+ * The paid yes of a confirmed pick, or null when the pick is not a paid one (no price in its label). `row` is the used tap { label, tapAt, entry }.
+ * A priced label is the paid yes whatever the slot is; the price is the cap (decisions.mjs capCentsOfLabel). Pure.
+ */
+export function paidYesOf(row, d = store) {
+  const cents = d.capCentsOfLabel(row?.label);
+  return cents === null ? null : { label: row.label, tapAt: row.tapAt ?? null, entry: row.entry ?? null, capCents: cents };
 }

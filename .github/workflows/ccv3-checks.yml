@@ -65,7 +65,7 @@ jobs:
         run: node --test scripts/github/land-recheck.test.mjs
       - name: cr-paid unit tests
         timeout-minutes: 5
-        run: node --test scripts/github/cr-paid.test.mjs
+        run: node --test scripts/github/cr-paid.test.mjs scripts/github/cr-paid-post.test.mjs scripts/github/cr-paid-unledgered.test.mjs scripts/github/paid-guard-confirm.test.mjs scripts/github/paid-guard-decisions.test.mjs scripts/github/ship-ask-paid-price.test.mjs
       - name: cr-fix unit tests
         timeout-minutes: 5
         run: node --test scripts/github/cr-fix.test.mjs
@@ -89,7 +89,7 @@ jobs:
         run: node --test scripts/github/review-router-band.test.mjs
       - name: slot-queue unit tests
         timeout-minutes: 5
-        run: node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs scripts/github/slot-queue-mod-sync.test.mjs
+        run: node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs scripts/github/slot-queue-mod-sync.test.mjs scripts/github/slot-queue-paid-cap.test.mjs
       - name: harness-doctor unit tests
         timeout-minutes: 5
         run: node --test scripts/harness-doctor.test.mjs

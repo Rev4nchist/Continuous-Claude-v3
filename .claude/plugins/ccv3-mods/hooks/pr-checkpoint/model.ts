@@ -120,6 +120,13 @@ export const markerFailedText = (pr: number): string =>
 export const flagFailedText = (pr: number): string =>
   `The taps of PR #${pr} were cleared, but the proof of it could not be saved. Nothing was asked. Nothing was recorded. The PR stays a draft. Call pr_checkpoint again.`
 
+/** A step of the cleanup of a PR that went back to draft failed (the round grant, the queued asks, the queue entry): the cleanup stays open and a new call runs every step again. */
+export const cleanupOpenText = (pr: number, what: string[]): string =>
+  `The cleanup of PR #${pr} is not finished: ${what.join(' and ')} could not be cleared. Nothing was asked. Nothing was recorded. The PR stays a draft. Call pr_checkpoint again.`
+/** The fresh read before a cleanup did not show a draft at the head: nothing is cleaned, asked or recorded. */
+export const cleanupUncheckedText = (pr: number, why: string): string =>
+  `PR #${pr} could not be checked before the cleanup (${why}). Nothing was cleaned, asked or recorded. Call pr_checkpoint again.`
+
 export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,labels,number', '-R', REPO]
 
 /** Whether the `labels` of a gh pr view carry risk:high (the one label the band reads), or null when the list is absent or malformed. */
@@ -148,8 +155,8 @@ export const worktreeFor = (porcelain: string, branch: string): string | null =>
   return null
 }
 
-/** The PR's state and head, read before a late Yes posts a review request. */
-export const stateArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'state,headRefOid', '-R', REPO]
+/** The PR's state, head and draft flag, read before a late Yes posts a review request or stores a grant: only an open PR that is not a draft, at the asked head, may act. */
+export const stateArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'state,headRefOid,isDraft', '-R', REPO]
 
 export const commentArgv = (pr: number, body: string): string[] => ['gh', 'pr', 'comment', String(pr), '-R', REPO, '--body', body]
 
@@ -176,6 +183,12 @@ const autoOf = (value: unknown): CheckpointResult['auto'] => {
   return { eligible: true, band: typeof value.band === 'string' ? value.band : null, reason: typeof value.reason === 'string' ? value.reason : '' }
 }
 
+/** The file count a paid label prices: the UNFILTERED `total` (cr-paid.mjs `total`), or `files` when the result has none. The engine has the same rule (paidCountOf in checkpoint-ledger.mjs). */
+export const paidCountOf = (size: { files: number; total?: number }): number => {
+  const total = size.total
+  return typeof total === 'number' && Number.isInteger(total) && total >= 0 ? total : size.files
+}
+
 /** The result plus the engine's drift text (`config_drift_why`: null or absent without drift, or from an old engine). */
 export type CheckpointResultWithDrift = CheckpointResult & { config_drift_why?: string | null; ledger?: LedgerBlock | null }
 
@@ -189,7 +202,12 @@ export const parseResult = (stdout: string): CheckpointResultWithDrift | null =>
       head: parsed.head,
       class: typeof parsed.class === 'string' ? parsed.class : 'unknown',
       matched: typeof parsed.matched === 'number' ? parsed.matched : 0,
-      size: { files: typeof size.files === 'number' ? size.files : 0, lines: typeof size.lines === 'number' ? size.lines : 0 },
+      size: {
+        files: typeof size.files === 'number' ? size.files : 0,
+        lines: typeof size.lines === 'number' ? size.lines : 0,
+        // The unfiltered count prices the paid rows. A value that is no whole, non-negative number is dropped (the price then follows files).
+        ...(typeof size.total === 'number' && Number.isInteger(size.total) && size.total >= 0 ? { total: size.total } : {}),
+      },
       checks: Array.isArray(parsed.checks) ? (parsed.checks as CheckpointResult['checks']) : [],
       cli: isObject(parsed.cli) && isObject(parsed.cli.bySeverity) ? (parsed.cli as CheckpointResult['cli']) : null,
       credits: isObject(parsed.credits) ? (parsed.credits as CheckpointResult['credits']) : { used: null, monthly: null },
@@ -412,7 +430,7 @@ export const buildPathwayAsk = (pr: number, result: CheckpointResultWithDrift, n
   if (result.recommended === null || open.length === 0) return null
   const slot = slotOf(result.capacity, now)
   const choices: PathwayChoice[] = rowsOf(buttons, slot, recommendedFirst).map(one => ({
-    label: `${labelFor(one, result.size.files, slot)}${marked(one.pathway, result, recommendedFirst) ? RECOMMENDED : ''}`,
+    label: `${labelFor(one, paidCountOf(result.size), slot)}${marked(one.pathway, result, recommendedFirst) ? RECOMMENDED : ''}`,
     pathway: one.pathway,
     by: 'dave',
   }))
@@ -660,6 +678,8 @@ const SLOT_MAX_NAMING_LENGTH = 20_000
 /**
  * Text that could be the queue module under a quote, caret, backtick or backslash split, or a glob: `slot-q...`, `slot-*`, `queue.m...`, `*queue`, `sl*-queue`.
  * Quotes and escapes are stripped first. Any split of `slot-queue.mjs` by a separator or a `$()` leaves a piece that still matches (`slot-q` on the left or `queue.m` on the right).
+ * Glob cover is partial, accepted: a glob that keeps none of `slot-q`, `slot-*`, `queue.m` or `*queue` (for example `sl*e.mjs`) is not seen. A rule that denied every
+ * node run with a glob in the script path would also block `node --test` with a test glob, which this repo uses daily (paid guard design rev 5, Known limits).
  */
 const SLOT_NAME_LIKE = /slot[-_]{0,2}[q*?[]|queue(?:-model)?\.m|[*?[][\w.*?[\]-]{0,30}queue/gi
 /** The module as a clean token whose next argument is exactly tick, list or probe (quotes may wrap the verb). Raw text, no stripping. */

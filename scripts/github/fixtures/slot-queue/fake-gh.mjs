@@ -1,7 +1,7 @@
 // A fake GitHub for the slot-queue tests. Test helper only: nothing in production imports it.
 // makeGh(worldPath, logPath, opts) returns a `gh(argv)` function with the shape of cr-fix.mjs ghApi (argv after "gh api", parsed JSON back).
 // The world is a JSON file read on every call, so a test (or a child process) can change it between calls:
-//   { "repo": "o/r", "prs": { "900": { state, merged, head, committedAt, statuses[], statusPages[][] (optional: statuses by page), reviews[], comments[], files[] } } }
+//   { "repo": "o/r", "prs": { "900": { state, merged, draft (optional, default false), head, committedAt, statuses[], statusPages[][] (optional: statuses by page), reviews[], comments[], files[] } } }
 // A POST to issues/N/comments appends one JSON line {pr, body} to logPath. Any argv this file does not know throws.
 // opts: peekState (a state file path: at post time its holder and lock go to <logPath>.peek), postDelayMs (sleep inside a post), failPost, failAll (every call throws), callsPath (every argv is logged there).
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
@@ -22,7 +22,7 @@ function graphqlComments(pr) {
 }
 
 function pullOf(pr) {
-  return { state: pr.state, merged: pr.merged === true, head: { sha: pr.head }, base: { ref: 'main' } };
+  return { state: pr.state, merged: pr.merged === true, draft: pr.draft === true, head: { sha: pr.head }, base: { ref: 'main' } };
 }
 
 /** The list endpoints and the single-object endpoints, keyed by the path after "repos/<o>/<r>/". */

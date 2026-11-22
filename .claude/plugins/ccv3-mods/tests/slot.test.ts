@@ -295,6 +295,8 @@ const NOW = 1_000_000
 const HOME = 'C:/home'
 const SCRIPT = `${HOME}/continuous-claude/scripts/github/slot-queue.mjs`
 const STATE_FILE = `${HOME}/.claude/state/coderabbit-slot.json`
+/** The head a fresh `cr-paid.mjs check` reports: the head Dave's price was read at. The Pay verb must carry it (--head). */
+const PAYHEAD = '5'.repeat(40)
 const ACTIVE = JSON.stringify({ version: 1, items: [{ pr: 900, state: 'queued' }] })
 const DONE = JSON.stringify({ version: 1, items: [{ pr: 900, state: 'done' }, { pr: 901, state: 'dropped' }] })
 
@@ -305,6 +307,8 @@ type LoopOpts = {
   /** What `tick` prints, in order; the last one repeats. */
   ticks?: Reply[]
   cli?: Partial<Record<'list' | 'decide' | 'drop', Reply>>
+  /** What a fresh `cr-paid.mjs check --pr N --json` prints. Unset: an ALLOW of 11 files (total 11, $2.75). */
+  check?: Reply
   statuses?: Record<number, Record<string, unknown>>
   store?: Record<string, unknown>
   /** How Dave answers the dialog the mod raises ($.ui.ask). Unset: no one answers, and the engine has no AskUserQuestion bottom (the dialog fails closed). */
@@ -325,7 +329,7 @@ const loopWorld = (on: On, opts: LoopOpts = {}) => {
     return { value: undefined }
   })
   on('store.keys', () => ({ value: [...store.keys()] }))
-  const seen = { slot: [] as { argv: string[]; script: string; cwd?: string }[], status: [] as number[], toasts: [] as string[], submits: [] as string[], dialogs: [] as { question: string; labels: string[] }[], comments: [] as string[][] }
+  const seen = { paid: [] as string[][], slot: [] as { argv: string[]; script: string; cwd?: string }[], status: [] as number[], toasts: [] as string[], submits: [] as string[], dialogs: [] as { question: string; labels: string[] }[], comments: [] as string[][] }
   if (opts.answer !== undefined) {
     const answer = opts.answer
     on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
@@ -373,6 +377,10 @@ const loopWorld = (on: On, opts: LoopOpts = {}) => {
       const verb = argv[2] ?? ''
       if (verb === 'tick') return result((ticks.length > 1 ? ticks.shift() : ticks[0]) ?? { out: '' })
       return result(opts.cli?.[verb as 'list' | 'decide' | 'drop'] ?? { out: '{"ok":true}' })
+    }
+    if (argv.some(part => part.includes('cr-paid.mjs'))) {
+      seen.paid.push(argv.slice(2))
+      return result(opts.check ?? { out: `{"exitCode":0,"verdict":"ALLOW","pr":901,"head":"${PAYHEAD}","files":11,"total":11,"cost":2.75}` })
     }
     if (argv.some(part => part.includes('review-status.mjs'))) {
       const pr = Number(argv.find(part => /^\d+$/.test(part)))
@@ -508,16 +516,41 @@ describe('slot: /slot (M3, M4)', () => {
     expect((await command($, 'slot', 'list')).text ?? '').toMatch(/could not/i)
   })
 
-  test('M4 pay runs decide --kind pay and shows that it posted', async ($, on) => {
-    const w = loopWorld(on, { cli: { decide: { out: '{"ok":true,"verdict":"ALLOW","cost":2.75,"files":3,"posted":true}' } } })
+  // Paid guard: a typed /slot pay opens the priced dialog; Dave's tap on "Pay up to $X" is the cap (--cap X) that the CLI enforces.
+  test('M4 pay runs decide --kind pay --cap X after the priced dialog and shows that it posted', async ($, on) => {
+    const w = loopWorld(on, { answer: /^Pay up to/, cli: { decide: { out: '{"ok":true,"verdict":"ALLOW","cost":2.75,"files":3,"posted":true}' } } })
     await startLoop($)
     const ran = await command($, 'slot', 'pay 5')
-    expect(w.seen.slot.map(run => run.argv)).toEqual([['decide', '--pr', '5', '--kind', 'pay', '--json']])
+    expect(w.seen.paid).toEqual([['check', '--pr', '5', '--json']])
+    expect(w.seen.dialogs[0]!.labels).toContain('Pay up to $2.75')
+    expect(w.seen.slot.map(run => run.argv)).toEqual([['decide', '--pr', '5', '--kind', 'pay', '--head', PAYHEAD, '--cap', '2.75', '--json']])
     expect(ran.text ?? '').toMatch(/#5.*posted/i)
   })
 
+  // F6: the price and the head come from ONE fresh check. A check that names no head (or a bad one) offers no price, so no dialog and no decide.
+  for (const [name, out] of [
+    ['no head', '{"exitCode":0,"verdict":"ALLOW","pr":5,"files":11,"total":11,"cost":2.75}'],
+    ['an upper-case head', `{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"${'A'.repeat(40)}","files":11,"total":11,"cost":2.75}`],
+    ['a short head', '{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"abc1234","files":11,"total":11,"cost":2.75}'],
+  ] as const) {
+    test(`M4c a fresh check with ${name} offers no paid round: no dialog, no decide`, async ($, on) => {
+      const w = loopWorld(on, { answer: /^Pay up to/, check: { out } })
+      await startLoop($)
+      expect((await command($, 'slot', 'pay 5')).text ?? '').toMatch(/no paid round is offered/i)
+      expect(w.seen.dialogs).toEqual([])
+      expect(w.seen.slot).toEqual([])
+    })
+  }
+
+  test('M4b a typed /slot pay with no answer to the dialog, or with no price, runs no decide', async ($, on) => {
+    const quiet = loopWorld(on, { answer: 'dismiss' })
+    await startLoop($)
+    expect((await command($, 'slot', 'pay 5')).text ?? '').toMatch(/nothing was posted/i)
+    expect(quiet.seen.slot).toEqual([])
+  })
+
   test('M4 pay answered ESCALATE shows the reasons and says nothing was posted', async ($, on) => {
-    loopWorld(on, { cli: { decide: { code: 3, out: '{"ok":false,"verdict":"ESCALATE","reasons":["over the day cap"],"posted":false}' } } })
+    loopWorld(on, { answer: /^Pay up to/, cli: { decide: { code: 3, out: '{"ok":false,"verdict":"ESCALATE","reasons":["over the day cap"],"posted":false}' } } })
     await startLoop($)
     const text = (await command($, 'slot', 'pay 5')).text ?? ''
     expect(text).toContain('ESCALATE')
@@ -649,7 +682,8 @@ describe('slot: /slot pay failures tell the truth (M3)', () => {
 
   // Breaks if the failure text always ends "Nothing was changed.": a failed paid POST leaves a ledger row and a posted item.
   test('M3 a pay that fails after the round was counted does not say nothing was changed', async ($, on) => {
-    loopWorld(on, { cli: { decide: { code: 2, out: PAID_FAIL } } })
+    // /slot pay opens the priced dialog first (paid guard): Dave taps "Pay up to $X", then the decide verb fails.
+    loopWorld(on, { answer: /^Pay up to/, cli: { decide: { code: 2, out: PAID_FAIL } } })
     await startLoop($)
     const text = (await command($, 'slot', 'pay 5')).text ?? ''
     expect(text).toContain('the round is counted')
@@ -697,9 +731,43 @@ describe('slot: the paid ask and the time-out are dialogs (T17)', () => {
     })
     await startLoop($)
     await w.clock.advance(TICK)
-    expect(w.seen.slot.filter(run => run.argv[0] === 'decide').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'pay', '--json']])
+    expect(w.seen.slot.filter(run => run.argv[0] === 'decide').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'pay', '--head', PAYHEAD, '--cap', '2.75', '--json']])
     expect(w.seen.toasts.some(text => /ESCALATE/.test(text) && /Nothing posted/.test(text))).toBe(true)
     expect(w.seen.comments).toEqual([])
+  })
+
+  // Paid guard (card prflow-paid-run-guard): the Pay label carries a FRESH price and that price is the cap.
+  test('S7 the Pay label and the --cap come from a fresh cr-paid check (the unfiltered file count), not from the toast text', async ($, on) => {
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: /^Pay/, check: { out: `{"exitCode":0,"verdict":"ALLOW","pr":901,"head":"${PAYHEAD}","files":4,"total":14,"cost":1}` } })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.paid).toEqual([['check', '--pr', '901', '--json']])
+    expect(w.seen.dialogs[0]!.labels.find(label => /^Pay/.test(label))).toBe('Pay up to $3.50')
+    expect(w.seen.slot.filter(run => run.argv[0] === 'decide').map(run => run.argv)).toEqual([['decide', '--pr', '901', '--kind', 'pay', '--head', PAYHEAD, '--cap', '3.50', '--json']])
+  })
+
+  for (const [name, check] of [
+    ['an ESCALATE', { out: '{"exitCode":3,"verdict":"ESCALATE","pr":901,"files":30,"total":30,"reasons":["x"]}', code: 3 }],
+    ['an unreadable answer', { out: 'not json', code: 2 }],
+    ['an old script with no file total', { out: '{"exitCode":0,"verdict":"ALLOW","pr":901,"files":4,"cost":1}' }],
+    ['0 files', { out: '{"exitCode":0,"verdict":"ALLOW","pr":901,"files":0,"total":0,"cost":0}' }],
+  ] as const) {
+    test(`S8 no price, no Pay row: ${name} offers Keep waiting and Drop only, and says no price is known`, async ($, on) => {
+      const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: TICKS.ask }], answer: 'dismiss', check })
+      await startLoop($)
+      await w.clock.advance(TICK)
+      expect(w.seen.dialogs[0]!.labels.some(label => /^Pay/.test(label))).toBe(false)
+      expect(w.seen.dialogs[0]!.question).toMatch(/No price is known|not allowed/)
+    })
+  }
+
+  test('S9 the Pay row asks for no price when the CLI offered no paid round (ESCALATE toast): no cr-paid check runs', async ($, on) => {
+    const escalate = JSON.stringify({ ...JSON.parse(TICKS.ask), actions: [{ kind: 'toast', pr: 901, text: 'PR #901: no free slot for 30 minutes. A paid round is not allowed (over the day cap). The item keeps waiting.' }] })
+    const w = loopWorld(on, { file: ACTIVE, ticks: [{ out: escalate }], answer: 'dismiss' })
+    await startLoop($)
+    await w.clock.advance(TICK)
+    expect(w.seen.paid).toEqual([])
+    expect(w.seen.dialogs[0]!.labels.some(label => /^Pay/.test(label))).toBe(false)
   })
 
   test('S2b Pay on an ALLOW says the paid review is posted', async ($, on) => {

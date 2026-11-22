@@ -19,6 +19,7 @@ import {
   movedText,
   isPaidPathway,
   parseCheckpointArgs,
+  parseResult,
   pathwayOfAnswer,
   notDraftText,
   stopText,
@@ -214,6 +215,21 @@ describe('buildPathwayAsk: three lines and the slot state', () => {
   test('P5 the Greptile row names its price and its credits, the same words as the engine', () => {
     const rows = ask(WAIT, { options: [opt('none'), opt('coderabbit'), opt('both'), opt('wait')] }).choices
     expect(rows.find(one => one.pathway === 'both')!.label).toBe('CodeRabbit + Greptile (may cost up to $1.75 + 3 credits)')
+  })
+
+  test('P5 the paid rows price size.total (the unfiltered count) when it is there, and size.files when it is not', () => {
+    const label = (size: CheckpointResult['size'], pathway: string) => ask(WAIT, { size, options: [opt('none'), opt('coderabbit'), opt('both'), opt('wait')] }).choices.find(one => one.pathway === pathway)!.label
+    expect(label({ files: 4, lines: 40, total: 10 }, 'coderabbit')).toBe('CodeRabbit review (may cost up to $2.50) (Recommended)')
+    expect(label({ files: 4, lines: 40, total: 10 }, 'both')).toBe('CodeRabbit + Greptile (may cost up to $2.50 + 3 credits)')
+    expect(label({ files: 4, lines: 40 }, 'coderabbit')).toBe('CodeRabbit review (may cost up to $1.00) (Recommended)')
+    expect(ask(WAIT, { size: { files: 4, lines: 40, total: 10 } }).question.split('\n')[0]).toBe('PR #328, band MID, 4 files.')
+  })
+
+  test('P5 parseResult keeps a whole size.total next to files and drops a junk one', () => {
+    const parsed = (size: unknown) => parseResult(JSON.stringify({ head: 'a'.repeat(40), options: [], size }))!.size
+    expect(parsed({ files: 4, lines: 40, total: 10 })).toEqual({ files: 4, lines: 40, total: 10 })
+    expect(Object.keys(parsed({ files: 4, lines: 40 }))).toEqual(['files', 'lines'])
+    for (const junk of ['10', -1, 2.5, null]) expect(Object.keys(parsed({ files: 4, lines: 40, total: junk })), String(junk)).toEqual(['files', 'lines'])
   })
 
   test('P5 no wait-for-slot row is added at any state: Keep as draft is the only waiting label', () => {

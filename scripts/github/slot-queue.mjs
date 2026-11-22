@@ -7,7 +7,9 @@
  *   tick [--session ID] [--json]                                    read GitHub, apply the queue rules, post when the slot is free
  *   add --pr N --band CRITICAL|HIGH|SAMPLE --head SHA40 [--round R] [--escalated] [--session ID] [--json]
  *   list [--json]                                                   rows from the file; reads nothing else
- *   decide --pr N --kind pay|wait|first [--json]                    Dave's answers (the mod runs this from his composer)
+ *   decide --pr N --kind pay|wait|first [--head SHA40 --cap USD] [--json]   Dave's answers (the mod runs this from his composer). pay needs --cap: the price of his yes,
+ *                                                                   from the label of the mod's own dialog ("Pay up to $X"); the paid post refuses a cost over it.
+ *                                                                   pay also needs --head: the PR head of the check that gave the price; a PR that moved off it refuses (F6)
  *   drop --pr N --reason R [--json]                                 R = sample-ttl only drops a SAMPLE
  *   probe --pr N [--json]                                           the facts a tick reads for one PR; writes and posts nothing
  *
@@ -19,7 +21,7 @@ import { mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFil
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkPr, recordPaid } from './cr-paid.mjs';
+import { checkPr, postPaid, unledgeredPaidOf } from './cr-paid.mjs';
 import { ghApi } from './cr-fix.mjs';
 import { codeRabbitHeadReview, coderabbitRequestComments, isCodeRabbitUser, readIssueComments } from './review-status.mjs';
 import { withLock } from './lib/file-lock.mjs';
@@ -36,7 +38,7 @@ const MIN = 60_000;
 const REVIEW_COMMENT = '@coderabbitai review';
 const VERBS = ['tick', 'add', 'list', 'decide', 'drop', 'probe'];
 const KINDS = ['pay', 'wait', 'first'];
-const VALUE_FLAGS = { '--pr': 'pr', '--band': 'band', '--head': 'head', '--round': 'round', '--session': 'session', '--reason': 'reason', '--kind': 'kind' };
+const VALUE_FLAGS = { '--pr': 'pr', '--band': 'band', '--head': 'head', '--round': 'round', '--session': 'session', '--reason': 'reason', '--kind': 'kind', '--cap': 'cap' };
 const BOOL_FLAGS = { '--json': 'json', '--escalated': 'escalated' };
 const isDone = (it) => it.state === 'done' || it.state === 'dropped';
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0];
@@ -62,11 +64,25 @@ const wholeNumber = (v, flag) => {
   return Number(v);
 };
 
-/** { verb, pr, band, head, round, escalated, json, session, reason, kind } from argv. Throws on a bad verb, flag or value. */
+/** The cap of a pay decision in whole cents: dollars with up to 2 decimals, above 0 ("5", "2.50"). Throws otherwise. */
+const capCentsOf = (v) => {
+  if (!/^\d+(\.\d{1,2})?$/.test(String(v ?? '')) || Math.round(Number(v) * 100) === 0) throw bad('--cap needs a price in dollars with up to 2 decimals, above 0 (the price of Dave\'s tap)');
+  return Math.round(Number(v) * 100);
+};
+
+/** { verb, pr, band, head, round, escalated, json, session, reason, kind, cap } from argv (`cap` in whole cents, pay only). Throws on a bad verb, flag or value. */
 export function parseArgs(argv) {
   const [verb, ...rest] = argv;
   if (!VERBS.includes(verb)) throw bad(`usage: ${VERBS.join(' | ')} (the verb comes first)`);
   const o = { verb, ...flagsOf(rest) };
+  const paying = verb === 'decide' && o.kind === 'pay';
+  if (o.cap !== undefined && !paying) throw bad('--cap is a decide --kind pay flag');
+  if (o.head !== undefined && !paying && verb !== 'add') throw bad('--head is a decide --kind pay flag (or an add flag)');
+  if (paying) {
+    if (o.cap === undefined) throw bad('decide --kind pay needs --cap <dollars>: the price of Dave\'s tap');
+    o.cap = capCentsOf(o.cap);
+    if (!SHA40.test(String(o.head))) throw bad('decide --kind pay needs --head <sha>: the 40-character lowercase PR head Dave saw with the price');
+  }
   if (verb !== 'tick' && verb !== 'list') o.pr = wholeNumber(o.pr, '--pr');
   if (verb === 'add') {
     if (!BANDS.includes(o.band)) throw bad(`--band must be one of ${BANDS.join(', ')}`);
@@ -92,7 +108,7 @@ function withDefaults(deps = {}) {
     gh: ghApi, now: () => Date.now(), statePath: DEFAULT_STATE, configPath: DEFAULT_CONFIG, repo: DEFAULT_REPO, env: process.env, lockWaitMs: 5000,
     out: (l) => console.log(l), err: (l) => console.error(l), ...given,
   };
-  return { ...d, cfg: { ...loadConfig(d.configPath), ...(given.cfg ?? {}) }, checkPr: given.checkPr ?? ((pr) => checkPr({ pr, repo: d.repo }, crDeps(d))) };
+  return { ...d, cfg: { ...loadConfig(d.configPath), ...(given.cfg ?? {}) }, givenCheckPr: given.checkPr, checkPr: given.checkPr ?? ((pr) => checkPr({ pr, repo: d.repo }, crDeps(d))) };
 }
 
 /** The deps cr-paid.mjs reads. Its clock gives a Date. A path left undefined keeps its own default. */
@@ -150,7 +166,7 @@ const stampsOf = (list, field) => list.map((x) => Date.parse(x?.[field] ?? '')).
 function lightFacts(pr, pull) {
   return {
     pr, open: pull.state === 'open', merged: pull.merged === true, head: String(pull.head?.sha ?? '').toLowerCase(), reviewedHead: false,
-    pending: false, limited: false, retryMinutes: null, reviewAts: [], requestAts: [], carryHolds: false,
+    pending: false, limited: false, retryMinutes: null, reviewAts: [], requestAts: [], carryHolds: false, unledgeredPaid: [],
   };
 }
 
@@ -165,7 +181,7 @@ function fullFacts(base, d) {
   const cr = codeRabbitHeadReview({ head, reviews, comments, statuses, commentEdits, headCommittedAt, nowMs: d.now() });
   const botReviews = reviews.filter((r) => isCodeRabbitUser(r?.user) && String(r.body ?? '').trim() !== '');
   return {
-    ...base, reviewedHead: cr.reviewedHead, pending: cr.status === 'pending', limited: cr.rateLimited, retryMinutes: cr.retryMinutes,
+    ...base, unledgeredPaid: unledgeredPaidOf(pr, head, comments, headCommittedAt, crDeps(d)), reviewedHead: cr.reviewedHead, pending: cr.status === 'pending', limited: cr.rateLimited, retryMinutes: cr.retryMinutes,
     reviewAts: stampsOf(botReviews, 'submitted_at'), requestAts: stampsOf(coderabbitRequestComments(comments), 'created_at'),
     carryHolds: d.carryHolds ? d.carryHolds(pr) === true : false,
   };
@@ -289,18 +305,36 @@ function askTimers(state, now, d, verdicts) {
   return { state: { ...state, items: steps.map((s) => s.item) }, actions: steps.flatMap((s) => s.actions) };
 }
 
+const paidFlagText = (pr, head) => `PR #${pr}: a paid CodeRabbit request is on head ${head.slice(0, 7)}, and the paid ledger has no round for it. It did not go through cr-paid.mjs post. Tell Dave.`;
+
+/**
+ * One toast per paid comment that has no ledger row (facts.unledgeredPaid), once: the comment ids go to item.flaggedPaid, so a later tick stays quiet.
+ * It reads the items of the settled state (an item that this tick finished is still flagged). A fact the read did not give (no facts, a light read) flags nothing.
+ */
+function flagPaid(state, facts) {
+  const actions = [];
+  const items = state.items.map((it) => {
+    const ids = (facts[it.pr]?.unledgeredPaid ?? []).filter((id) => !(it.flaggedPaid ?? []).includes(id));
+    if (ids.length === 0) return it;
+    actions.push(toast(it.pr, paidFlagText(it.pr, it.head)));
+    return { ...it, flaggedPaid: [...(it.flaggedPaid ?? []), ...ids] };
+  });
+  return { state: { ...state, items }, actions };
+}
+
 function tickLocked(a, d, facts, verdicts) {
   const before = readState(d.statePath);
   if (recent(before, d)) return { code: 0, body: { ok: true, effective: false, locked: false, actions: [], ...viewOf(before, d) } };
   const now = d.now();
-  const settled = settle(before, facts, now, d.cfg);
+  const flagged = flagPaid(settle(before, facts, now, d.cfg), facts);
+  const settled = flagged.state;
   const claimed = claim(settled, facts, now, d, sessionOf(a, d));
   if (claimed.item) writeState(d.statePath, { ...claimed.state, lastTickAt: now });
   const posted = claimed.item ? afterPost(claimed.state, claimed.item, tryPost(claimed.item, d), now) : { state: claimed.state, actions: [] };
   const asked = askTimers(posted.state, now, d, verdicts);
   const final = { ...asked.state, lastTickAt: now };
   writeState(d.statePath, final);
-  const actions = [...changeActions(before, final, d), ...posted.actions, ...asked.actions];
+  const actions = [...changeActions(before, final, d), ...flagged.actions, ...posted.actions, ...asked.actions];
   return { code: 0, body: { ok: true, effective: true, locked: false, actions, ...viewOf(final, d) } };
 }
 
@@ -394,20 +428,61 @@ function paidFailure(d, err, paid) {
 }
 
 /**
- * Order: the ledger row and the posted state first, the POST last. Every failure then errs toward counting a round that was not bought,
- * never toward a paid post that is not counted. A ledger error posts nothing and leaves the file as it was.
+ * The deps postPaid reads. The real gh gets postPaid's own, which has a time limit per call (ghApi has none). A check passed in (a test) replaces
+ * postPaid's own cr-paid check; with none, postPaid checks through its guarded gh.
+ */
+function crPostDeps(d) {
+  const out = crDeps(d);
+  if (d.gh === ghApi) delete out.gh;
+  return { ...out, lockWaitMs: d.lockWaitMs, capacity: d.capacity, checkPr: d.givenCheckPr ? ({ pr }) => d.givenCheckPr(pr) : undefined };
+}
+
+/**
+ * The paid post of Dave's pay decision (the mod's own dialog: composer origin). The cap is the price of his tap (--cap). One post function, postPaid
+ * (cr-paid.mjs), holds the paid lock across the steps; this function holds the queue lock (lock order: queue, then paid).
+ * Order inside postPaid: the ledger row first, then afterRecord (the posted state), the POST last. Every failure then errs toward counting a round
+ * that was not bought, never toward a paid post that is not counted. A ledger error posts nothing and leaves the file as it was.
+ * The queue's own slot knowledge stands in for the capacity fact: the item waited for the slot, so postPaid is not asked to read a free-slot fact here.
  */
 function payLocked(a, d, state, it) {
   const refused = payRefusal(a, state, it, d);
   if (refused) return refuse(refused, { posted: false });
-  const v = d.checkPr(a.pr);
-  if (!v?.verdict) return refuse(`no cr-paid verdict (${v?.reason ?? 'unknown'})`, { posted: false });
-  if (v.verdict !== 'ALLOW') return { code: 3, body: { ok: false, verdict: v.verdict, reasons: v.reasons ?? [], posted: false } };
-  recordPaid({ pr: a.pr, head: v.head, files: v.files }, crDeps(d));
-  const paid = paidState(expireHolder(state, d.now(), d.cfg), it, a, d, v);
-  writeState(d.statePath, paid);
-  try { d.gh(['-X', 'POST', `repos/${d.repo}/issues/${a.pr}/comments`, '-f', `body=${v.comment}`]); } catch (err) { return paidFailure(d, err, paid); }
-  return { code: 0, body: { ok: true, verdict: 'ALLOW', cost: v.cost, files: v.files, posted: true } };
+  let paid = null;
+  let failure = null;
+  const r = postPaid({ pr: a.pr, cap: a.cap, source: 'cap', repo: d.repo, head: a.head }, {
+    ...crPostDeps(d), capacity: () => null,
+    afterRecord: ({ head, v }) => { paid = paidState(expireHolder(state, d.now(), d.cfg), it, a, d, { ...v, head }); writeState(d.statePath, paid); },
+    onPostError: (err) => { failure = paidFailure(d, err, paid); },
+  });
+  if (r.ok) return { code: 0, body: { ok: true, verdict: 'ALLOW', cost: r.cost, files: r.files, posted: true } };
+  if (r.kind === 'post-failed' && failure) return failure;
+  if (r.kind === 'escalate') return { code: 3, body: { ok: false, verdict: r.verdict, reasons: r.reasons ?? [], posted: false } };
+  return refuse(r.text, { posted: false });
+}
+
+/**
+ * `cr-paid.mjs post --pr N` (the model's path, on Dave's stored yes): the queue lock first, then postPaid takes the paid lock. A queue item of the PR is marked
+ * posted with a pay decision, like a paid decision; a PR with no live item writes nothing to the queue. The queue holding a pay decision for the head refuses.
+ * Returns the postPaid result; { ok: false, code: 5 } when the queue file is locked or cannot be read (nothing happened, the yes is kept).
+ */
+export function postPaidForRow(a, deps) {
+  const d = withDefaults(deps);
+  const r = locked(d, () => postRowLocked(a, d));
+  if (r !== LOCK_BUSY) return r;
+  return { ok: false, code: 5, text: 'The free-slot queue file is locked by another session. Nothing was posted. The paid yes is kept; run it again in a moment.' };
+}
+
+function postRowLocked(a, d) {
+  let state;
+  try { state = readState(d.statePath); } catch (err) { return { ok: false, code: 5, text: `The free-slot queue file cannot be read (${firstLine(err)}). Nothing was posted. The paid yes is kept.` }; }
+  const it = state.items.find((x) => x.pr === a.pr && !isDone(x)) ?? null;
+  let paid = null;
+  return postPaid({ pr: a.pr, source: 'row', repo: a.repo ?? d.repo }, {
+    ...crPostDeps(d),
+    queue: { holdsPay: (pr, head) => it?.decision?.kind === 'pay' && it.decision.head === head },
+    afterRecord: ({ head, v }) => { if (it) { paid = paidState(expireHolder(state, d.now(), d.cfg), it, a, d, { ...v, head }); writeState(d.statePath, paid); } },
+    onPostError: () => { if (paid) { try { writeState(d.statePath, { ...paid, holder: { ...paid.holder, failed: true } }); } catch { /* the first write stands */ } } },
+  });
 }
 
 function decideLocked(a, d) {

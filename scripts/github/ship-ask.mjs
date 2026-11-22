@@ -180,19 +180,21 @@ export function landSpec(d) {
 /** paid-round. data: { pr, round, files, today, paidRounds, verdict ('ALLOW'|'ESCALATE'|null), reasons, reason, caps: { round, day, rounds } }. */
 export function paidRoundSpec(d) {
   const caps = d.caps ?? { round: 5, day: 15, rounds: 2 };
-  const cost = typeof d.files === 'number' ? d.files * PAID_PER_FILE : null;
+  // The price counts the UNFILTERED files (`total`): path_filters billing is unproven, and `cr-paid.mjs post` compares its cost with the label on that count.
+  const billed = Number.isInteger(d.total) ? d.total : d.files;
+  const cost = typeof billed === 'number' ? billed * PAID_PER_FILE : null;
   const allow = d.verdict === 'ALLOW';
   const verdict = allow ? 'cr-paid says ALLOW.'
     : d.verdict === 'ESCALATE' ? `cr-paid says ESCALATE: ${clip((d.reasons ?? []).join('; '), 100)}. No paid round is offered: it is over the cap.`
       : `cr-paid gave no verdict: ${clip(d.reason ?? 'unknown', 80)}. No paid round is offered without an ALLOW.`;
   const lines = [
-    cost === null ? `PR #${d.pr}: a paid CodeRabbit round costs ${usd(PAID_PER_FILE)} a file, size unknown.` : `PR #${d.pr}: paid CodeRabbit round ${d.round ?? '?'}, ${plural(d.files, 'file')} x ${usd(PAID_PER_FILE)} = up to ${usd(cost)}.`,
+    cost === null ? `PR #${d.pr}: a paid CodeRabbit round costs ${usd(PAID_PER_FILE)} a file, size unknown.` : `PR #${d.pr}: paid CodeRabbit round ${d.round ?? '?'}, ${plural(billed, 'file')} x ${usd(PAID_PER_FILE)} = up to ${usd(cost)}.`,
     `Today ${usd(d.today ?? 0)} of ${usd(caps.day)}. Paid rounds on this PR ${d.paidRounds ?? 0} of ${caps.rounds}. Round cap ${usd(caps.round)}.`,
     verdict,
   ];
   const free = opt('No, keep it free', 'Posts nothing. The PR keeps its free-slot path.', true);
   // Dave 2026-11-06: a paid round is offered only on cr-paid ALLOW. ESCALATE and a missing verdict get no pay row.
-  const rows = allow ? [free, opt(`Yes, pay up to ${usd(cost ?? 0)}`, 'Posts @coderabbitai review --use-credits, then logs the round with cr-paid.mjs record.')]
+  const rows = allow ? [free, opt(`Yes, pay up to ${usd(cost ?? 0)}`, `Then run node scripts/github/cr-paid.mjs post --pr ${d.pr}: it records the round, then posts @coderabbitai review --use-credits. The price is a cap: a higher cost at the post is refused.`)]
     : [free, opt('Stop here', 'Posts nothing. The reason is in the question above.')];
   return { header: 'Paid round', question: lines.join('\n'), options: rows };
 }
@@ -321,6 +323,26 @@ export async function gatherOpenPr({ branch }) {
   };
 }
 
+const CHICAGO_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
+/** The Chicago calendar day of an ISO time ("2026-10-27"), or '' when the time cannot be read. An explicit zone: the machine zone is not the rule. */
+const chicagoDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? CHICAGO_DAY.format(t) : ''; };
+
+/**
+ * How many counter rows use a slot of the run cap, as pre-pr.mjs counts them (the same countedRuns logic as pre-pr.mjs; a copy, not an import:
+ * one source for both is a follow-up of Coord standard). A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) uses none either,
+ * but only the first such row of each Chicago day: the next one counts. A time that cannot be read counts (fail closed).
+ */
+export function countedRuns(rows) {
+  const freeDays = new Set();
+  let counted = 0;
+  for (const r of rows.filter((x) => x?.newCode !== false)) {
+    const day = r?.gateFailed === true ? chicagoDay(r.at) : '';
+    if (day !== '' && !freeDays.has(day)) { freeDays.add(day); continue; }
+    counted += 1;
+  }
+  return counted;
+}
+
 /** { branch, head, stampHead, stampSkip, runsSpent, unreviewed } for cli-skip: the stamp of this checkout and the run counter of the branch. */
 export async function gatherCliSkip({ branch }) {
   const t = branchTarget(branch, process.cwd());
@@ -336,7 +358,7 @@ export async function gatherCliSkip({ branch }) {
   const unreviewed = counts.length > 0 ? Math.max(...counts) : null;
   return {
     branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null,
-    stampSkip: stamp?.cr_skipped === true ? stamp.cr_skip_reason ?? null : null, runsSpent: runs.filter((r) => r?.newCode !== false).length, unreviewed,
+    stampSkip: stamp?.cr_skipped === true ? stamp.cr_skip_reason ?? null : null, runsSpent: countedRuns(runs), unreviewed,
   };
 }
 

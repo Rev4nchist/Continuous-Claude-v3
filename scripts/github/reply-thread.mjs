@@ -5,14 +5,21 @@
  * Why: 14 thread replies on PRs #225, #227 and #238 read "System.Collections.Hashtable[<id>]" or
  * "System.Collections.Hashtable.body". The agent typed `gh api ... -f body=$replies[$id]` in PowerShell.
  * An unquoted native argument expands `$replies` to the hashtable's ToString() and keeps `[<id>]` as text.
- * Here the reply text comes from a file and goes to gh as `-F body=@<file>`: no shell variable reaches it.
+ * Here the reply text comes from a file. The script reads it once, checks that text, and sends exactly that text to gh on
+ * stdin (`-F body=@-`): no shell variable reaches it, and a rewrite of the file after the check changes nothing.
  *
  * Usage: node scripts/github/reply-thread.mjs <pr> <comment-id> --body-file <file> [--repo owner/name]
+ *        node scripts/github/reply-thread.mjs <pr> --top --body-file <file> [--repo owner/name]
  *   <comment-id> is the id of the first (top-level) comment of the thread: `gh api repos/<O>/<R>/pulls/<N>/comments`.
- *   Write the file with the Write tool. Prints ONE line on success: `replied <new-comment-id> <url>`.
+ *   --top posts a top-level PR comment instead of a thread reply. A long or multi-line gh comment goes through this script,
+ *   not through gh text.
+ *   A paid CodeRabbit request runs only through `node scripts/github/cr-paid.mjs post --pr N`, on Dave's priced tap; this script refuses a body that holds the paid text.
+ *   Write the file with the Write tool. Prints ONE line on success: `replied <new-comment-id> <url>`
+ *   (`commented <new-comment-id> <url>` with --top).
  *
  * It refuses an empty body and a body that holds a PowerShell type name anywhere (System.Collections...),
- * the signature of the bug above. It posts nothing then.
+ * the signature of the bug above. It posts nothing then. It also refuses a body that holds @coderabbitai together
+ * with the paid word (use-credits): a paid CodeRabbit request runs only through cr-paid.mjs post.
  *
  * Exit 0 = posted. 1 = refused or gh failed (nothing posted, or the reply is unconfirmed). 2 = bad usage.
  */
@@ -22,19 +29,24 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
-const USAGE = 'usage: reply-thread.mjs <pr> <comment-id> --body-file <file> [--repo owner/name]';
+const USAGE = 'usage: reply-thread.mjs <pr> <comment-id> --body-file <file> [--repo owner/name]\n   or: reply-thread.mjs <pr> --top --body-file <file> [--repo owner/name]';
+// A paid CodeRabbit request is the mention plus the paid word. Both words, so a plain `@coderabbitai review` and a text about the flag post.
+const PAID_MENTION = /@coderabbitai/i;
+const PAID_WORD = /use[-_\s]*credits/i;
 // "$map[$id]" and "$map.body" in a PowerShell string or native argument print the type name. In an interpolated string
 // ("Fixed in abc: $h.body") it sits after other text, so the match is anywhere in the body, not only at the start.
 const GARBLED = /System\.(?:Collections|Management\.Automation)\./;
 
-/** { pr, commentId, repo, bodyFile } from argv. Throws on anything unknown, missing or non-numeric. */
+/** { pr, commentId, repo, bodyFile, top } from argv. commentId is null with --top. Throws on anything unknown, missing or non-numeric. */
 export function parseArgs(argv) {
   const nums = [];
   let repo = DEFAULT_REPO;
   let bodyFile = null;
+  let top = false;
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--body-file' || a === '--repo') {
+    if (a === '--top') top = true;
+    else if (a === '--body-file' || a === '--repo') {
       const v = argv[(i += 1)];
       if (v === undefined || v.startsWith('--')) throw new Error(`invalid: ${a} needs a value. ${USAGE}`);
       if (a === '--repo') repo = v;
@@ -43,26 +55,31 @@ export function parseArgs(argv) {
     else if (a.startsWith('--')) throw new Error(`unknown argument: ${a}. ${USAGE}`);
     else throw new Error(`invalid argument: ${a}. ${USAGE}`);
   }
-  if (nums.length !== 2 || nums.some((n) => !Number.isSafeInteger(n) || n <= 0) || !bodyFile) throw new Error(USAGE);
+  if (nums.length !== (top ? 1 : 2) || nums.some((n) => !Number.isSafeInteger(n) || n <= 0) || !bodyFile) throw new Error(USAGE);
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error(`invalid --repo: ${repo}. ${USAGE}`);
-  return { pr: nums[0], commentId: nums[1], repo, bodyFile };
+  return { pr: nums[0], commentId: top ? null : nums[1], repo, bodyFile, top };
 }
 
-/** The gh arguments. The body is a file field (-F body=@file), never text on the command line. */
-export function replyArgs({ repo, pr, commentId, bodyFile }) {
-  return ['api', `repos/${repo}/pulls/${pr}/comments/${commentId}/replies`, '-X', 'POST', '-F', `body=@${bodyFile}`];
+/** The gh arguments. The body is a file field read from stdin (-F body=@-), never text on the command line and never the file path: the text that was checked is the text that is sent. */
+export function replyArgs({ repo, pr, commentId, top }) {
+  const endpoint = top ? `repos/${repo}/issues/${pr}/comments` : `repos/${repo}/pulls/${pr}/comments/${commentId}/replies`;
+  return ['api', endpoint, '-X', 'POST', '-F', 'body=@-'];
 }
 
-/** Throws when the file is unreadable, empty or garbled. */
+/** Throws when the file is unreadable, empty, garbled or a paid CodeRabbit request. */
 export function checkBody(text) {
   if (!text.trim()) throw new Error('refused: the body file is empty');
   if (GARBLED.test(text)) {
     throw new Error('refused: the body holds a PowerShell type name such as System.Collections.Hashtable (a hashtable printed as text). Write the real reply text to the file.');
   }
+  if (PAID_MENTION.test(text) && PAID_WORD.test(text)) {
+    throw new Error('refused: the body holds @coderabbitai with the paid word (use-credits). A paid CodeRabbit request runs only through node scripts/github/cr-paid.mjs post --pr N.');
+  }
 }
 
-function defaultRunGh(args) {
-  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+/** `input` is the checked body text: gh reads it from stdin. No shell. */
+function defaultRunGh(args, input) {
+  return execFileSync('gh', args, { encoding: 'utf8', input, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
 }
 
 /** Run with injectable deps { runGh, readFile, stdout, stderr }. Returns the exit code. */
@@ -78,15 +95,18 @@ export function main(argv, deps = {}) {
     stderr(`reply-thread: ${err.message}\n`);
     return 2;
   }
+  // Read the file once: the checks and the post use this one text, so a writer cannot swap it in between.
+  let text;
   try {
-    checkBody(readFile(opts.bodyFile));
+    text = readFile(opts.bodyFile);
+    checkBody(text);
   } catch (err) {
     stderr(`reply-thread: ${err.message}\n`);
     return 1;
   }
   let reply;
   try {
-    reply = JSON.parse(runGh(replyArgs(opts)));
+    reply = JSON.parse(runGh(replyArgs(opts), text));
   } catch (err) {
     stderr(`reply-thread: ${String(err.message).split('\n')[0]}\n`);
     return 1;
@@ -95,7 +115,7 @@ export function main(argv, deps = {}) {
     stderr(`reply-thread: gh returned no comment id: ${JSON.stringify(reply)?.slice(0, 200)}\n`);
     return 1;
   }
-  stdout(`replied ${reply.id} ${reply.html_url ?? ''}`.trimEnd() + '\n');
+  stdout(`${opts.top ? 'commented' : 'replied'} ${reply.id} ${reply.html_url ?? ''}`.trimEnd() + '\n');
   return 0;
 }
 
