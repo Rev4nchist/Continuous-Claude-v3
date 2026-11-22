@@ -56,21 +56,15 @@ export const head = (key: string, label: string, right?: Span[]): PaneRow => ({
 
 export const gap = (key: string): PaneRow => ({ key, left: [sp(' ', 'dim')] })
 
-/** The band's spans: plan, progress, the active task, the running step, context. */
+/** The band's widget row spans: the active task, the running step (or the turn clock), PRs, agents. No plan title, no plan bar, no ctx (design 2026-11-18). */
 export const bandSpans = (view: OsView, nowMs: number, columns: number, agentsPart: Span[] | null = null): Span[] => {
   const parts: Span[][] = []
-  if (view.plan) parts.push([sp('◆ ', 'title'), sp(view.plan.title, 'todo')])
-  if (view.tasks.length) {
-    const done = view.tasks.filter(task => task.status === 'completed').length
-    parts.push([...bar(done / view.tasks.length, 8, 'ok', ['▰', '▱']), sp(` ${done}/${view.tasks.length} done`, 'dim')])
-    const active = view.tasks.find(task => task.status === 'in_progress')
-    if (active) parts.push([sp('▶ ', 'active'), sp(active.activeForm ?? active.subject, 'active')])
-  }
+  const active = view.tasks.find(task => task.status === 'in_progress')
+  if (active) parts.push([sp('▶ ', 'active'), sp(active.activeForm ?? active.subject, 'active')])
   if (view.step) parts.push([sp(`${view.step.tool} ${view.step.label}`.trim(), 'dim'), sp(` ${elapsed(nowMs - view.step.startedAt)}`, 'dim')])
   else if (view.turn) parts.push([sp(`◌ ${elapsed(nowMs - view.turn.startedAt)}`, 'dim')])
   if (view.prs.length) parts.push([sp(`PR ${view.prs.map(one => `#${one.pr}${attention(one.state) ? '!' : ''}`).join(' ')}`, view.prs.some(one => attention(one.state)) ? 'warn' : 'dim')])
   if (agentsPart) parts.push(agentsPart)
-  if (view.ctx !== null) parts.push([sp(`ctx ${view.ctx}%`, gaugeTone(view.ctx))])
   const joined = parts.flatMap((part, i) => (i ? [sp(' · ', 'track'), ...part] : part))
   return fit({ key: 'band', left: joined }, Math.max(10, columns)).left
 }

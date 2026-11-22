@@ -13,8 +13,8 @@ import { barSvg, ringSvg } from '../shared/glyphs'
 import { answersAsks, applyBrief, briefSummary, countWaitTasks, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, openAsksOf, parseTurnEnd, redact, tapDecisions, waitLapsed, withTaps } from './brief'
 import type { Chip, WaitTask } from './brief'
 import { hudOrSeed, seedHud } from '../hud/seed'
-import { bandLines, compactLine } from './band-model'
-import type { BandState } from './band-model'
+import { bandRows, hudSkipKeys } from './band-model'
+import type { BandState, RowKind } from './band-model'
 import { gitInfo } from './gitinfo'
 import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
@@ -1096,8 +1096,7 @@ export const agenticOs = (on: On) => {
     const runs = await read($, agentRuns)
     // Finished runs alone don't keep the band up; a running one does.
     const quiet = isQuiet(now) && !runs.some(run => run.status === 'running')
-    // The core lines draw even when the session is quiet: GOAL not set is visible on purpose (PRD 5.5), from 40 columns up.
-    // Under 40 columns the compact line (chip, ctx, 5h, 7d) takes the place of the narrow chip-and-goal line, so ctx never leaves the band; GOAL does.
+    // Row 1 and the Goal row draw even when the session is quiet: `goal not set` is visible on purpose (PRD 5.5). `rowPlan` (band-model.ts) picks the rows by maxRows.
     if (e.props.hasSurvey || e.props.maxRows < 1) return next(e)
     const elements = $.ui.resolve(e)
     const { Box, Text } = elements
@@ -1133,25 +1132,22 @@ export const agenticOs = (on: On) => {
       helpers: runs.filter(run => run.status === 'running').length,
       limits: hudNow?.limits ?? null,
       waitTasks: countWaitTasks(await read($, bgTasks), await read($, bgSeen), at),
-      // The HUD row draws ctx and cost below the core lines: line 1 leaves them out then (one source, drawn once).
+      // The HUD row draws below row 1 and owns ctx, 5h, 7d and cost then (the plan, `rowPlan`).
       hud: hudNow !== null,
     }
-    const cores = bandLines(bandState, e.props.bodyColumns)
-    // The core lines (PRD 5.3) draw when they fit with the HUD row: two lines + HUD = 3 rows (HUD off: 2). Under 40 columns there is one
-    // narrow core line with no ctx, so the compact line (it carries ctx, 5h and 7d) takes its place at every budget, HUD up or off.
-    // Less room: ONE compact line, then the HUD row after it.
-    const fullRows = cores.length === 2 ? (hudNow === null ? 2 : 3) : Infinity
-    const lines = e.props.maxRows >= fullRows ? cores : [compactLine(bandState, e.props.bodyColumns)]
-    // Rows, in this priority: the core lines, then the HUD row, then the widget line, both below them.
-    // Rows come from the lines actually drawn: under 40 columns there is one core line, and its spare row goes to the HUD.
-    const coreRows = lines.length
-    const spare = e.props.maxRows - coreRows
+    // One plan for the rows (design 2026-11-18, section 3): which rows draw, and who owns ctx, 5h, 7d and cost, so no number draws twice.
+    const { plan: rowsPlan, rows: drawn } = bandRows(bandState, e.props.maxRows, e.props.bodyColumns, quiet)
     let hudRow = null
-    if (hudNow !== null && spare >= 1) {
-      const parts = hudParts(hudNow, now.ctx, cacheView(await read($, cache), await $.clock.now()))
+    if (rowsPlan.rows.includes('hud') && hudNow !== null) {
+      const parts = hudParts(hudNow, now.ctx, cacheView(await read($, cache), await $.clock.now()), hudSkipKeys(rowsPlan))
+      // The HUD row owns a ctx that is not known yet: it reads `ctx -` (dim) right after the model chip, never nothing.
+      if (rowsPlan.owners.ctx === 'hud' && now.ctx === null) parts.splice(parts[0]?.key === 'hud-model' ? 1 : 0, 0, { kind: 'text', key: 'hud-ctx', text: 'ctx -', tone: 'dim' })
       // The terminal draws no Svg: its HUD is text gauges, fitted to the body width (whole parts drop, never a cut number). Every other surface gets all rings and bars.
-      if (e.surface === 'terminal' || !('Svg' in elements)) hudRow = spansRow('row-hud', hudSpans(fitHudParts(parts, e.props.bodyColumns)))
-      else {
+      // A row with nothing to say is not drawn: the plan skips what another row owns, and at 20 columns that can leave no part.
+      if (e.surface === 'terminal' || !('Svg' in elements)) {
+        const fitted = hudSpans(fitHudParts(parts, e.props.bodyColumns))
+        if (fitted.length > 0) hudRow = spansRow('row-hud', fitted)
+      } else if (parts.length > 0) {
         const { Svg } = elements
         const part = (one: HudPart) => {
           if (one.kind === 'chip') return <Text key={one.key} {...TONE[one.tone]}>{` ${one.text} `}</Text>
@@ -1171,18 +1167,18 @@ export const agenticOs = (on: On) => {
         )
       }
     }
-    // The widget line below keeps the pre-core band (plan title, task progress, the step, PRs, agents) under its old key.
-    // With the HUD up, ctx lives in its ring, so the widget line leaves it out (line 1 shows it too). Its row comes after the HUD and the core lines.
-    const widgetRoom = spare - (hudRow === null ? 0 : 1)
-    const bandRow = quiet || widgetRoom < 1 ? null : spansRow('row-band', bandSpans(hudNow === null ? now : { ...now, ctx: null }, at, e.props.bodyColumns, ledgerBandSpans(runs)))
-    await logBand($, { maxRows: e.props.maxRows, bodyColumns: e.props.bodyColumns, hudNow: hudNow !== null, quiet, lines: coreRows + (hudRow === null ? 0 : 1) + (bandRow === null ? 0 : 1) })
-    return (
-      <Box flexDirection="column">
-        {lines.map((line, i) => spansRow(`row-core-${i + 1}`, line))}
-        {hudRow}
-        {bandRow}
-      </Box>
-    )
+    // The widget row: the active task, the step, PRs, agents. A quiet session has none (the plan); a row with nothing to say is not drawn.
+    const widgetSpans = rowsPlan.rows.includes('widget') ? bandSpans(now, at, e.props.bodyColumns, ledgerBandSpans(runs)) : []
+    const widgetRow = widgetSpans.length === 0 ? null : spansRow('row-band', widgetSpans)
+    const rowOf = (kind: RowKind) => {
+      if (kind === 'hud') return hudRow
+      if (kind === 'widget') return widgetRow
+      const spans = drawn[kind]
+      return spans === undefined ? null : spansRow(kind === 'goal' ? 'row-core-2' : 'row-core-1', spans)
+    }
+    const rows = rowsPlan.rows.map(rowOf)
+    await logBand($, { maxRows: e.props.maxRows, bodyColumns: e.props.bodyColumns, hudNow: hudNow !== null, quiet, lines: rows.filter(row => row !== null).length })
+    return <Box flexDirection="column">{rows}</Box>
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

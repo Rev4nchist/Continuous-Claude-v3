@@ -1,17 +1,16 @@
 import type { HudLimit, OsBrief, OsTask } from '../../types'
 import { redact } from '../shared/redact'
-import { isAskStale, isProven } from './brief'
 import type { Chip } from './brief'
 import { cellWidth, cutCells } from './cells'
-import { gaugeTone } from './pane-model'
 import type { Span, Tone } from './pane-model'
 
-// The two core lines of the band (PRD 5.3), as plain data. Pure: no engine, no clock. The caller passes `now`.
-//   line 1  chip, session (`name #sid8`), lane (`lane <first> +N`), ctx, cost
-//   line 2  goal, plan bar, ASK count, UNPROVEN count
-// Observer only. Every string is redacted again here (idempotent), so a caller that forgets cannot leak one.
-// Below 40 columns the band is one line: the chip and the goal.
-// compactLine (below) is the one-row form: chip, name, repo, ctx, 5h, 7d, cost, helpers.
+// The band above the prompt (PRD 5.3; design 2026-11-18, `.claudedocs/coordination/2026-11-18-coord-status-band-2-redesign-design.md`), as plain data.
+// Pure: no engine, no clock. The caller passes `now`. Observer only: every string is redacted again here (idempotent).
+//   rowPlan    runs first: which rows draw (by maxRows, HUD, quiet), who owns each of ctx, 5h, 7d and cost, which sign form and fields each row keeps
+//   bandRows   the plan plus the spans of the rows this module draws: `line` (maxRows 1), `compact` (maxRows 2 with the HUD), `row1`, `goal`
+//   The HUD row and the widget row are drawn by the caller (index.tsx); `hudSkipKeys` names the HUD parts another row already draws.
+// Row 1 is the chip, the question sign (amber), `name #sid8`, lane and, when it owns it, ctx. Row 2 is the Goal: one sentence, no label.
+// Every width is a terminal cell count (cells.ts), never a UTF-16 length.
 
 export type BandState = {
   chip: Chip
@@ -19,13 +18,13 @@ export type BandState = {
   tasks: OsTask[]
   repo: string | null
   /**
-   * Who this session is. `name` is the Claude Code session name (null: unnamed, drawn amber); `short` is the first 8 characters of
-   * the session id, drawn dim as `#sid8` (null: not drawn). Absent: line 1 has no session item.
+   * Who this session is. `name` is the Claude Code session name (null: unnamed, drawn dim); `short` is the first 8 characters of
+   * the session id, drawn dim as `#sid8` (null: not drawn). Absent: row 1 has no session item.
    */
   who?: { name: string | null; short: string | null }
   /** The first lane this session holds. */
   lane: string | null
-  /** The title of that lane (the title only, never its scope). The band goal reads it when no lane note goal and no brief_set goal exist. */
+  /** The title of that lane (the title only, never its scope). The Goal row reads it when no lane note goal and no brief_set goal exist. */
   laneTitle?: string | null
   /** The goal sentence of the note of `lanes[0]` (`goalOfNote`, goal-extractor.ts); null when that note has none. The Goal row reads it first. */
   laneGoal?: string | null
@@ -37,16 +36,16 @@ export type BandState = {
   now: number
   /** When the session last did anything: an ask stays fresh 24 hours from it. */
   activeAt: number | null
-  /** Helpers running now. Absent or 0 draws no helper text on the compact line. Line 1 shows it only beside a waiting chip. */
+  /** Helpers running now. Absent or 0 draws no helper text on the compact line. Row 1 does not draw it. */
   helpers?: number
-  /** The HUD row draws below the core lines, with ctx and cost when known: line 1 leaves out a known ctx and a known cost. An unknown one still reads as a dash there. Absent or false: line 1 draws both. */
+  /** The HUD row draws (a HUD state exists). It owns ctx, 5h, 7d and cost whenever it is a row of the plan; with no HUD, no limit field and no cost draw. */
   hud?: boolean
-  /** The HUD's limits. null or absent: not known yet (the compact line reads a dash). A list without a window draws nothing for it. */
+  /** The HUD's limits. null or absent: not known yet (a line that draws the windows reads a dash). A list without a window draws nothing for it. */
   limits?: HudLimit[] | null
   /** How many background tasks count (`countWaitTasks`). The waiting-on-work chip reads it: WAITING ON 1 TASK / WAITING ON n TASKS. Absent: the plain word. */
   waitTasks?: number
   /**
-   * The questions Dave has open: the number `openAsksOf` (brief.ts) gave, the same one the chip was derived from. The `Q n` sign reads it and nothing else, so a stored
+   * The questions Dave has open: the number `openAsksOf` (brief.ts) gave, the same one the chip was derived from. The question sign reads it and nothing else, so a stored
    * parsed ask in `brief` draws no sign. Above 0 the chip is WAITING FOR YOU or STUCK. Absent: 0.
    */
   openAsks?: number
@@ -55,123 +54,84 @@ export type BandState = {
 export const CHIP: Record<Chip, { word: string; tone: Tone }> = {
   working: { word: 'WORKING', tone: 'chipDoing' },
   'waiting-on-dave': { word: 'WAITING FOR YOU', tone: 'chipWarn' },
-  // Grey: the session waits on its own background work, not on a person. The count joins the word in chipSpan.
+  // Grey fill: the session waits on its own background work, not on a person. The count joins the word in chipSpan.
   'waiting-on-work': { word: 'WAITING ON TASKS', tone: 'chipDim' },
   blocked: { word: 'STUCK', tone: 'chipBad' },
   done: { word: 'DONE', tone: 'chipOk' },
-  idle: { word: 'RESTING', tone: 'chipDim' },
+  // Dim text, no fill: resting is not a state Dave must read.
+  idle: { word: 'RESTING', tone: 'dim' },
 }
 
-/** Below this many columns the band is the chip and the goal. */
-const NARROW = 40
+export type RowKind = 'line' | 'compact' | 'row1' | 'goal' | 'hud' | 'widget'
+/** Who draws one of the four numbers (ctx, 5h, 7d, cost). null: no row draws it. */
+export type Owner = 'line' | 'compact' | 'row1' | 'hud' | null
+/** How the question sign reads: `2 questions`, `? 2`, `?2` (`?+` from 10), or no sign. `tiny` is reserved: the design gives it no text, so no row picks it. */
+export type SignForm = 'none' | 'words' | 'short' | 'tight' | 'tiny'
+export type CompactKey = 'ask' | 'name' | 'repo' | 'ctx' | 'five' | 'seven' | 'cost' | 'helpers'
+export type RowPlan = {
+  rows: RowKind[]
+  owners: { ctx: Owner; five: Owner; seven: Owner; cost: Owner }
+  signForm: SignForm
+  /** The fields the first row keeps (row 1, or the maxRows 1 line), in order: chip, sign, name, sid, lane, ctx; the line adds five, seven, goal. */
+  row1Shape: string[]
+  /** What the compact line really drew, in order. Empty when the plan has no compact line. */
+  compactKeys: CompactKey[]
+}
+export type DrawnRows = Partial<Record<'line' | 'compact' | 'row1' | 'goal', Span[]>>
+
+/** Under this many columns the compact line has no repo, cost or helpers. */
+const ROOMY = 40
 /** Less than this and the chip cannot sit whole with anything else; the line is drawn as wide as the chip needs. */
 const MIN_WIDTH = 20
-/** The session name is cut to this on line 1, and to MIN_NAME when the line is too wide; compactLine cuts it to COMPACT_NAME. */
+/** The session name is cut to this on row 1, and to MIN_NAME when the row is too wide; the compact line cuts it to COMPACT_NAME. */
 const NAME_MAX = 16
 const MIN_NAME = 8
+/** The name is drawn beside ctx only with this many cells. */
+const MIN_ROOM = 3
 const COMPACT_NAME = 8
+/** The maxRows 1 line draws the goal only when this many cells are left. */
 const MIN_GOAL = 12
-const BAR_CELLS = 10
+const MIN_REPO = 4
 const SEP = '  '
 const DOT = ' · '
 
 const sp = (text: string, tone: Tone): Span => ({ text, tone })
-const len = (spans: Span[]): number => spans.reduce((n, one) => n + one.text.length, 0)
+const cells = (spans: Span[]): number => spans.reduce((n, one) => n + cellWidth(one.text), 0)
 const clean = (value: string | null | undefined): string => redact((value ?? '').trim()).text
-/** A name for display: redacted, whitespace collapsed to single spaces, trimmed. The caller clips it to 16 (NAME_MAX) or less. */
+/** A name for display: redacted, whitespace collapsed to single spaces, trimmed. The caller clips it by cells. */
 const nameOf = (value: string | null | undefined): string => clean(value).replace(/\s+/g, ' ').trim()
-const clip = (value: string, max: number): string => (value.length <= max ? value : max <= 1 ? '…'.slice(0, Math.max(0, max)) : `${value.slice(0, max - 1)}…`)
-
-/** Cuts a run of spans to `max` characters, with an ellipsis on the span it cuts. */
-const clipSpans = (spans: Span[], max: number): Span[] => {
-  const out: Span[] = []
-  let room = Math.max(0, max)
-  for (const one of spans) {
-    if (room <= 0) break
-    out.push({ ...one, text: clip(one.text, room) })
-    room -= Math.min(room, one.text.length)
-  }
-  return out
-}
+/** At most `max` cells, ending in an ellipsis when it cuts. */
+const clip = (value: string, max: number): string => (cellWidth(value) <= max ? value : max < 1 ? '' : max === 1 ? '…' : `${cutCells(value, max - 1)}…`)
 
 const join = (parts: Span[][], between: Span): Span[] => parts.flatMap((part, i) => (i === 0 ? part : [between, ...part]))
 
-// --- Counts ---
+/** The gauge tone of row 1, the maxRows 1 line and the compact line: dim until 75, red from 75. The HUD row keeps `gaugeTone` (pane-model.ts), where amber means heat. */
+export const rowGaugeTone = (percent: number): Tone => (percent < 75 ? 'dim' : 'bad')
 
-type Step = { done: boolean; unproven: boolean; state: 'done' | 'doing' | 'blocked' | 'todo' }
-
-/** PRD 5.1: the task list when it holds a task, else the brief plan. The same items `deriveChip` weighs. */
-const stepsOf = (tasks: OsTask[], brief: OsBrief | null): Step[] =>
-  tasks.length > 0 ? taskSteps(tasks, brief) : planSteps(brief)
-
-const taskSteps = (tasks: OsTask[], brief: OsBrief | null): Step[] =>
-  tasks.map((one): Step => {
-    const done = one.status === 'completed'
-    return { done, unproven: done && !isProven(brief, { id: one.id, subject: one.subject, kind: 'task' }), state: done ? 'done' : one.status === 'in_progress' ? 'doing' : 'todo' }
-  })
-
-const planSteps = (brief: OsBrief | null): Step[] =>
-  (brief?.plan ?? []).map((one): Step => {
-    const done = one.status === 'done'
-    return { done, unproven: done && !isProven(brief, { id: one.id, subject: one.text, kind: 'plan' }), state: done ? 'done' : one.status === 'doing' ? 'doing' : one.status === 'blocked' ? 'blocked' : 'todo' }
-  })
-
-/** `total` cells at most BAR_CELLS; each kind of step takes cells in proportion, in the order proven, unproven, doing, blocked, to do. */
-const barSpans = (steps: Step[], cells: number): Span[] => {
-  if (cells <= 0) return []
-  const total = steps.length
-  const kinds: [Tone, string, number][] = [
-    ['done', '▰', steps.filter(one => one.done && !one.unproven).length],
-    ['warn', '▰', steps.filter(one => one.unproven).length],
-    ['doing', '▰', steps.filter(one => one.state === 'doing').length],
-    ['bad', '▰', steps.filter(one => one.state === 'blocked').length],
-    ['track', '▱', steps.filter(one => !one.done && one.state === 'todo').length],
-  ]
-  if (total === 0) return [sp('▱'.repeat(cells), 'track')]
-  const out: Span[] = []
-  let seen = 0
-  let drawn = 0
-  for (const [tone, glyph, count] of kinds) {
-    seen += count
-    const upTo = Math.round((seen / total) * cells)
-    if (upTo > drawn) out.push(sp(glyph.repeat(upTo - drawn), tone))
-    drawn = Math.max(drawn, upTo)
-  }
-  return out
+const ctxOf = (s: BandState): number | null => (typeof s.ctx === 'number' && Number.isFinite(s.ctx) ? s.ctx : null)
+const ctxSpans = (s: BandState): Span[] => {
+  const ctx = ctxOf(s)
+  return [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : rowGaugeTone(ctx))]
 }
 
-// --- Line 1 ---
+// --- The question sign ---
 
-type Item = { key: 'who' | 'lane' | 'ctx' | 'cost' | 'helpers'; spans: Span[] }
+/** The open questions: `BandState.openAsks`, the value the chip was derived from. */
+const openAsks = (s: BandState): number => (typeof s.openAsks === 'number' && Number.isFinite(s.openAsks) && s.openAsks > 0 ? Math.floor(s.openAsks) : 0)
 
-/** What line 1 still draws. Cut order under width pressure: `#sid8`, the lane, the name to MIN_NAME, cost, the name to the room beside ctx (gone below 3), then ctx last of all. */
-type Shape = { sid: boolean; lane: boolean; nameMax: number; cost: boolean; ctx: boolean; helpers: boolean }
+/** The sign text of one form. No form shows a wrong number: `?+` stands for 10 or more. */
+const signText = (count: number, form: SignForm): string =>
+  form === 'words' ? `${count} ${count === 1 ? 'question' : 'questions'}` : form === 'short' ? `? ${count}` : form === 'tight' ? (count <= 9 ? `?${count}` : '?+') : ''
 
-/** `name #sid8`: the name in the accent tone, `#sid8` dim; no name reads `unnamed` in amber. */
-const whoSpans = (who: NonNullable<BandState['who']>, nameMax: number, sid: boolean): Span[] => {
-  const name = nameOf(who.name)
-  const short = clean(who.short)
-  return [name === '' ? sp('unnamed', 'warn') : sp(clip(name, nameMax), 'title'), ...(sid && short !== '' ? [sp(` #${short}`, 'dim')] : [])]
+/** The sign, amber under every chip, with the space before it; empty for no question or no form. */
+const signSpans = (s: BandState, form: SignForm): Span[] => {
+  const text = openAsks(s) > 0 ? signText(openAsks(s), form) : ''
+  return text === '' ? [] : [sp(' ', 'dim'), sp(text, 'warn')]
 }
 
-const laneText = (s: BandState): string => {
-  const more = typeof s.laneCount === 'number' && Number.isFinite(s.laneCount) && s.laneCount > 1 ? ` +${Math.floor(s.laneCount) - 1}` : ''
-  return `lane ${clean(s.lane) || '-'}${more}`
-}
+const startSign = (s: BandState): SignForm => (openAsks(s) > 0 ? 'words' : 'none')
 
-const items = (s: BandState, shape: Shape): Item[] => {
-  const ctx = typeof s.ctx === 'number' && Number.isFinite(s.ctx) ? s.ctx : null
-  const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
-  const helpers = typeof s.helpers === 'number' && Number.isFinite(s.helpers) ? Math.floor(s.helpers) : 0
-  const all: (Item | null)[] = [
-    shape.helpers && s.chip === 'waiting-on-dave' && helpers > 0 ? { key: 'helpers', spans: [sp(`${helpers} ${helpers === 1 ? 'helper' : 'helpers'} running`, 'doing')] } : null,
-    s.who === undefined ? null : { key: 'who', spans: whoSpans(s.who, shape.nameMax, shape.sid) },
-    shape.lane ? { key: 'lane', spans: [sp(laneText(s), 'dim')] } : null,
-    shape.ctx && !(s.hud === true && ctx !== null) ? { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] } : null,
-    shape.cost && !(s.hud === true && cost !== null) ? { key: 'cost', spans: [sp(cost === null ? '$-' : `$${cost.toFixed(2)}`, 'dim')] } : null,
-  ]
-  return all.filter((one): one is Item => one !== null)
-}
+// --- The chip and row 1 ---
 
 /** The chip word. waiting-on-work carries the task count when it is known: `WAITING ON 1 TASK`, `WAITING ON 2 TASKS`. */
 const chipWordOf = (chip: Chip, waitTasks?: number): string =>
@@ -181,64 +141,72 @@ const chipWordOf = (chip: Chip, waitTasks?: number): string =>
 
 const chipSpan = (chip: Chip, waitTasks?: number): Span => sp(` ${chipWordOf(chip, waitTasks)} `, (CHIP[chip] ?? CHIP.idle).tone)
 
-/** Line 1 for a drawing `width` wide (the core band calls it from 40 columns; exported for the narrow-width test). */
-export const lineOne = (s: BandState, width: number): Span[] => {
-  const chip = chipSpan(s.chip, s.waitTasks)
-  const shape: Shape = { sid: true, lane: true, nameMax: NAME_MAX, cost: true, ctx: true, helpers: true }
-  const rest = () => items(s, shape)
-  const widthOf = (list: Item[]) => chip.text.length + (list.length > 0 ? SEP.length + len(join(list.map(one => one.spans), sp(DOT, 'track'))) : 0)
-  const total = () => widthOf(rest())
-  const withoutName = () => rest().filter(one => one.key !== 'who')
-  const cuts: (() => void)[] = [
-    () => { shape.helpers = false },
-    () => { shape.sid = false },
-    () => { shape.lane = false },
-    () => { shape.nameMax = MIN_NAME },
-    () => { shape.cost = false },
-  ]
-  for (const cut of cuts) {
-    if (total() <= width) break
-    cut()
-  }
-  // Only the chip, the name and ctx are left. ctx goes last of all: the name is cut to the room beside it, and goes (under 3 cells) before ctx does.
-  // Even chip and ctx too wide: ctx and the name go together, and the chip stands alone.
-  if (total() > width) {
-    if (widthOf(withoutName()) > width) {
-      shape.ctx = false
-      shape.nameMax = 0
-    } else {
-      const base = widthOf(withoutName())
-      shape.nameMax = width - base - (base > chip.text.length ? DOT.length : SEP.length)
-    }
-  }
-  const list = (shape.nameMax >= 3 || s.who === undefined) && total() <= width ? rest() : withoutName()
-  return list.length === 0 ? [chip] : [chip, sp(SEP, 'dim'), ...join(list.map(one => one.spans), sp(DOT, 'track'))]
+/** `name #sid8`: the name in the accent tone, `#sid8` dim; no name reads `unnamed`, dim. */
+const whoSpans = (who: NonNullable<BandState['who']>, nameMax: number, sid: boolean): Span[] => {
+  const name = nameOf(who.name)
+  const short = clean(who.short)
+  return [name === '' ? sp('unnamed', 'dim') : sp(clip(name, nameMax), 'title'), ...(sid && short !== '' ? [sp(` #${short}`, 'dim')] : [])]
 }
 
-// --- Line 2 ---
+const laneText = (s: BandState, more: boolean): string => {
+  const extra = more && typeof s.laneCount === 'number' && Number.isFinite(s.laneCount) && s.laneCount > 1 ? ` +${Math.floor(s.laneCount) - 1}` : ''
+  return `lane ${clean(s.lane) || '-'}${extra}`
+}
 
-type Goal = { label: Span; fixed: Span[]; clippable: string; clippableTone: Tone; tail: Span[] }
+type Fit<K extends string> = { spans: Span[]; keys: K[]; sign: SignForm }
+type Row1Shape = { sign: SignForm; sid: boolean; more: boolean; lane: boolean; nameMax: number; ctx: boolean }
 
-/** What the goal part is made of: `clippable` is the text that gives way first. */
-const goalOf = (s: BandState): Goal => {
-  const label = sp('GOAL ', 'dim')
-  // Order (the app has the same): the brief_set goal, then the lane title, then the parsed goal, which is only a guess.
-  const parsed = s.brief?.sources.goal === 'parsed'
-  const said = parsed ? '' : clean(s.brief?.goal)
-  const title = clean(s.laneTitle)
-  const guess = parsed ? clean(s.brief?.goal) : ''
-  const goal = said !== '' ? said : title !== '' ? title : guess
-  if (goal === '') return { label, fixed: [sp('not set', 'warn')], clippable: '', clippableTone: 'dim', tail: [] }
-  // The stop-at gives way first with the goal text (it is part of the clippable text), and never stands alone.
-  const stop = clean(s.brief?.stopAt)
+const row1Spans = (s: BandState, shape: Row1Shape): { spans: Span[]; keys: string[] } => {
+  const sign = signSpans(s, shape.sign)
+  const items: { keys: string[]; spans: Span[] }[] = []
+  if (s.who !== undefined && shape.nameMax > 0) {
+    const showSid = shape.sid && clean(s.who.short) !== ''
+    items.push({ keys: showSid ? ['name', 'sid'] : ['name'], spans: whoSpans(s.who, shape.nameMax, shape.sid) })
+  }
+  if (shape.lane) items.push({ keys: ['lane'], spans: [sp(laneText(s, shape.more), 'dim')] })
+  if (shape.ctx) items.push({ keys: ['ctx'], spans: ctxSpans(s) })
   return {
-    label,
-    fixed: [],
-    clippable: stop === '' ? goal : `${goal} · stop at: ${stop}`,
-    clippableTone: 'todo',
-    tail: said === '' && title === '' && guess !== '' ? [sp(' [guessed]', 'dim')] : [],
+    spans: [chipSpan(s.chip, s.waitTasks), ...sign, ...(items.length > 0 ? [sp(SEP, 'dim'), ...join(items.map(one => one.spans), sp(DOT, 'track'))] : [])],
+    keys: ['chip', ...(sign.length > 0 ? ['sign'] : []), ...items.flatMap(one => one.keys)],
   }
 }
+
+/**
+ * Row 1 for a drawing `width` wide. Cut order: `#sid8`, `+N more`, the sign word to `? n`, the lane, the name to MIN_NAME and then to the room beside ctx (it goes under MIN_ROOM),
+ * ctx (when this row owns it), `? n` to `?n`. Then, when even the chip and the sign are too wide (WAITING ON n TASKS at 20 columns), the name and the sign go. The chip is never cut.
+ */
+const row1Fit = (s: BandState, width: number, ownsCtx: boolean): Fit<string> => {
+  const shape: Row1Shape = { sign: startSign(s), sid: true, more: true, lane: true, nameMax: NAME_MAX, ctx: ownsCtx }
+  const cuts: (() => void)[] = [
+    () => { shape.sid = false },
+    () => { shape.more = false },
+    () => { if (shape.sign === 'words') shape.sign = 'short' },
+    () => { shape.lane = false },
+    () => { shape.nameMax = Math.min(shape.nameMax, MIN_NAME) },
+    // The name gives way to ctx: it is cut to the room beside the other items, and goes when under MIN_ROOM cells are left.
+    () => {
+      const others = shape.lane || shape.ctx
+      const base = cells(row1Spans(s, { ...shape, nameMax: 0 }).spans)
+      const room = width - base - (others ? DOT.length : SEP.length)
+      shape.nameMax = room >= MIN_ROOM ? Math.min(shape.nameMax, room) : 0
+      // `unnamed` is never clipped: when the row is still too wide the name goes, so ctx outlasts it.
+      if (cells(row1Spans(s, shape).spans) > width) shape.nameMax = 0
+    },
+    () => { shape.ctx = false },
+    () => { if (shape.sign === 'short') shape.sign = 'tight' },
+    () => { shape.nameMax = 0 },
+    () => { shape.sign = 'none' },
+  ]
+  let built = row1Spans(s, shape)
+  for (const cut of cuts) {
+    if (cells(built.spans) <= width) break
+    cut()
+    built = row1Spans(s, shape)
+  }
+  return { ...built, sign: shape.sign }
+}
+
+// --- The Goal row ---
 
 /**
  * Where the Goal row text comes from (design 2026-11-18, section 2): the lane note sentence of lanes[0], then the brief_set goal, then the lane title,
@@ -289,100 +257,10 @@ export const goalSpans = (s: BandState, width: number): Span[] => {
   return [sp(goal, 'todo'), ...(tag ? [sp(GUESSED, 'dim')] : [])]
 }
 
-type Counts = { asks: number; answered: number; stale: boolean; unproven: number; done: number; total: number }
+// --- The compact line and the maxRows 1 line ---
 
-// A stored parsed ask is the parser's guess, not a question: it counts nowhere (PR D). Dialogs are not in `brief.ask`, so the QUESTIONS word of line 2 counts brief_set asks only; PR A replaces it.
-const countsOf = (s: BandState, steps: Step[]): Counts => {
-  const list = (s.brief?.ask ?? []).filter(one => one.source !== 'parsed')
-  const asks = list.filter(one => one.answered !== true).length
-  return {
-    asks,
-    answered: list.length - asks,
-    stale: s.brief !== null && isAskStale(s.brief, s.now, s.activeAt),
-    unproven: steps.filter(one => one.unproven).length,
-    done: steps.filter(one => one.done).length,
-    total: steps.length,
-  }
-}
-
-/** Amber when a person may be needed (the waiting-on-dave chip, or waiting-on-work: a parsed ask can hide behind it, so it stays amber); red on a blocked chip; dim in every other state. */
-const askTone = (c: Counts, chip: Chip): Tone =>
-  c.asks === 0
-    ? chip === 'done' ? 'done' : 'dim'
-    : c.stale ? 'dim' : chip === 'blocked' ? 'bad' : chip === 'waiting-on-dave' || chip === 'waiting-on-work' ? 'warn' : 'dim'
-
-/** The open questions: the number the compact and narrow lines draw as an amber `Q n`, under any chip. It is `BandState.openAsks`, the value the chip was derived from. */
-const openAsks = (s: BandState): number => (typeof s.openAsks === 'number' && Number.isFinite(s.openAsks) && s.openAsks > 0 ? Math.floor(s.openAsks) : 0)
-
-/** `Q n`, amber, with the space before it; empty when no question is open. */
-const askSign = (s: BandState): Span[] => (openAsks(s) > 0 ? [sp(' ', 'dim'), sp(`Q ${openAsks(s)}`, 'warn')] : [])
-
-/**
- * The chip a one-row line draws. The terminal cuts a row at its right end, and the Q n sign sits there. When the wait chip and a fresh ask's sign do not
- * both fit in `width`, the line reads WAITING FOR YOU instead: the true fail-safe, never a hidden question. With one ask (sign ` Q 1`, 4 cells) the
- * swap is at 20 to 22 columns for 1 task (chip 19 cells), 20 to 23 for 2 to 9 tasks (20 cells), 20 to 24 for 10 or more (21 cells); a longer sign widens it.
- */
-const chipFor = (s: BandState, width: number): Chip =>
-  s.chip === 'waiting-on-work' && openAsks(s) > 0 && chipSpan(s.chip, s.waitTasks).text.length + len(askSign(s)) > width ? 'waiting-on-dave' : s.chip
-const unprovenTone = (c: Counts, chip: Chip): Tone => (c.unproven > 0 ? 'warn' : chip === 'done' ? 'done' : 'dim')
-
-const lineTwo = (s: BandState, steps: Step[], width: number): Span[] => {
-  const goal = goalOf(s)
-  const c = countsOf(s, steps)
-  const cells = steps.length === 0 ? 5 : Math.min(steps.length, BAR_CELLS)
-  const plan = (cellCount: number, label: boolean): Span[] => [
-    ...(label ? [sp('PLAN ', 'dim')] : []),
-    ...barSpans(steps, cellCount),
-    sp(`${cellCount > 0 ? ' ' : ''}${c.done}/${c.total}`, 'todo'),
-  ]
-  // No steps: no PLAN bar and no UNPROVEN count (they read 0/0 and 0, noise). Fix 8 of the status band review.
-  const showPlan = steps.length > 0
-  const counts: Span[][] = [
-    [sp(`QUESTIONS ${c.asks}${c.stale && c.asks > 0 ? ' stale' : ''}`, askTone(c, s.chip))],
-    ...(c.answered > 0 ? [[sp(`${c.answered} answered?`, 'dim')]] : []),
-    ...(showPlan ? [[sp(`UNPROVEN ${c.unproven}`, unprovenTone(c, s.chip))]] : []),
-  ]
-  const build = (variant: { cells: number; label: boolean }, room: number | null): Span[] => {
-    const text = room === null ? goal.clippable : clip(goal.clippable, Math.max(0, room))
-    const head: Span[] = [goal.label, ...goal.fixed, ...(text === '' ? [] : [sp(text, goal.clippableTone)]), ...goal.tail]
-    return join([head, ...(showPlan ? [plan(variant.cells, variant.label)] : []), ...counts], sp(SEP, 'dim'))
-  }
-  const variants = [
-    { cells, label: true },
-    { cells: Math.min(cells, 4), label: true },
-    { cells: 0, label: true },
-    { cells: 0, label: false },
-  ]
-  for (const variant of variants) {
-    const fixed = len(build(variant, 0))
-    const room = width - fixed
-    if (room >= Math.min(goal.clippable.length, MIN_GOAL)) return build(variant, room)
-  }
-  const last = variants[variants.length - 1] ?? { cells: 0, label: false }
-  return clipSpans(build(last, Math.max(0, width - len(build(last, 0)))), width)
-}
-
-// The `Q n` sign comes right after the chip and is never cut: a parsed ask must leave a sign at every width (fix 5). When the wait chip and the sign
-// do not both fit, chipFor swaps the chip for WAITING FOR YOU. Only that chip plus the sign (21 cells) can pass a width of 20.
-const narrow = (s: BandState, width: number): Span[] => {
-  const chip = chipSpan(chipFor(s, width), s.waitTasks)
-  const sign = askSign(s)
-  const goal = goalOf(s)
-  const room = width - chip.text.length - len(sign) - SEP.length - goal.label.text.length
-  if (room < 3) return [chip, ...sign]
-  const body = [...goal.fixed, ...(goal.clippable === '' ? [] : [sp(goal.clippable, goal.clippableTone)]), ...goal.tail]
-  return [chip, ...sign, sp(SEP, 'dim'), goal.label, ...clipSpans(body, room)]
-}
-
-// --- Compact line ---
-// The one line the band draws when the row budget leaves no room for two core lines plus the HUD row (and under 40 columns
-// with the HUD up). Chip, name (cut to 8), repo, ctx, 5h, 7d, cost, helpers. Cut order when the width is short: helpers, cost, repo,
-// 7d, 5h, name. The chip and ctx stay; a chip too wide for ctx at 20 columns keeps the line inside the width and drops ctx last of all.
-
-type CompactKey = 'ask' | 'name' | 'repo' | 'ctx' | 'five' | 'seven' | 'cost' | 'helpers'
 type CompactField = { key: CompactKey; spans: Span[] }
 
-const MIN_REPO = 4
 const WINDOW: Record<'five' | 'seven', { kind: string; label: string }> = {
   five: { kind: 'five_hour', label: '5h' },
   seven: { kind: 'seven_day', label: '7d' },
@@ -396,52 +274,183 @@ const windowField = (key: 'five' | 'seven', limits: HudLimit[] | null | undefine
   if (found === undefined) return null
   if (typeof found.percentUsed !== 'number' || !Number.isFinite(found.percentUsed)) return { key, spans: [sp(`${label} -`, 'dim')] }
   const percent = Math.round(found.percentUsed)
-  return { key, spans: [sp(`${label} ${percent}%`, gaugeTone(percent))] }
+  return { key, spans: [sp(`${label} ${percent}%`, rowGaugeTone(percent))] }
 }
 
-const compactFields = (s: BandState, roomy: boolean): CompactField[] => {
-  const ctx = typeof s.ctx === 'number' && Number.isFinite(s.ctx) ? s.ctx : null
+type CompactShape = { sign: SignForm; dropped: Set<CompactKey>; repoMax: number | null }
+
+const compactFields = (s: BandState, roomy: boolean, shape: CompactShape): CompactField[] => {
   const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
   const helpers = typeof s.helpers === 'number' && Number.isFinite(s.helpers) ? Math.floor(s.helpers) : 0
+  const sign = signText(openAsks(s), shape.sign)
+  const repo = clean(s.repo) || '-'
   const fields: (CompactField | null)[] = [
-    openAsks(s) > 0 ? { key: 'ask', spans: [sp(`Q ${openAsks(s)}`, 'warn')] } : null,
+    sign !== '' ? { key: 'ask', spans: [sp(sign, 'warn')] } : null,
     s.who === undefined ? null : { key: 'name', spans: whoSpans(s.who, COMPACT_NAME, false) },
-    roomy ? { key: 'repo', spans: [sp(clean(s.repo) || '-', 'todo')] } : null,
-    { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] },
+    roomy ? { key: 'repo', spans: [sp(shape.repoMax === null ? repo : clip(repo, shape.repoMax), 'todo')] } : null,
+    { key: 'ctx', spans: ctxSpans(s) },
     windowField('five', s.limits),
     windowField('seven', s.limits),
     roomy ? { key: 'cost', spans: [sp(cost === null ? '$-' : `$${cost.toFixed(2)}`, 'dim')] } : null,
     roomy && helpers > 0 ? { key: 'helpers', spans: [sp(`${helpers} ${helpers === 1 ? 'helper' : 'helpers'} running`, 'doing')] } : null,
   ]
-  return fields.filter((one): one is CompactField => one !== null)
+  return fields.filter((one): one is CompactField => one !== null && !shape.dropped.has(one.key))
+}
+
+const compactWide = (width: number): number => Math.max(MIN_WIDTH, Number.isFinite(width) ? Math.floor(width) : MIN_WIDTH)
+
+/**
+ * The compact line: chip, sign, name (cut to 8), repo, ctx, 5h, 7d, cost, helpers. Every field costs its text and one space. Cut order: helpers, cost, repo
+ * (clipped to the room, 4 cells at least, else dropped), the sign word to `? n`, 7d, 5h, name, ctx, `? n` to `?n`, then the sign. The chip is never cut.
+ */
+const compactFit = (s: BandState, width: number): Fit<CompactKey> => {
+  const wide = compactWide(width)
+  const chip = chipSpan(s.chip, s.waitTasks)
+  const shape: CompactShape = { sign: startSign(s), dropped: new Set(), repoMax: null }
+  const build = () => compactFields(s, wide >= ROOMY, shape)
+  const total = () => cells([chip]) + build().reduce((n, one) => n + 1 + cells(one.spans), 0)
+  const drop = (key: CompactKey) => () => { shape.dropped.add(key) }
+  const cuts: (() => void)[] = [
+    drop('helpers'),
+    drop('cost'),
+    () => {
+      const repo = build().find(one => one.key === 'repo')
+      if (repo === undefined) return
+      const room = wide - (total() - cells(repo.spans))
+      if (room >= MIN_REPO) shape.repoMax = room
+      else shape.dropped.add('repo')
+    },
+    () => { if (shape.sign === 'words') shape.sign = 'short' },
+    drop('seven'),
+    drop('five'),
+    drop('name'),
+    drop('ctx'),
+    () => { if (shape.sign === 'short') shape.sign = 'tight' },
+    () => { shape.sign = 'none' },
+  ]
+  for (const cut of cuts) {
+    if (total() <= wide) break
+    cut()
+  }
+  const fields = build()
+  return { spans: [chip, ...fields.flatMap(one => [sp(' ', 'dim'), ...one.spans])], keys: fields.map(one => one.key), sign: fields.some(one => one.key === 'ask') ? shape.sign : 'none' }
 }
 
 /** The compact band line for a drawing `width` wide. Never wider than `max(width, 20)`; the chip is never cut. */
-export const compactLine = (state: BandState, width: number): Span[] => {
-  const wide = Math.max(MIN_WIDTH, Number.isFinite(width) ? Math.floor(width) : MIN_WIDTH)
-  const chip = chipSpan(chipFor(state, wide), state.waitTasks)
-  let fields = compactFields(state, wide >= NARROW)
-  // Every field costs its text and one space in front of it.
-  const total = () => chip.text.length + fields.reduce((n, one) => n + 1 + len(one.spans), 0)
-  const drop = (key: CompactKey) => {
-    fields = fields.filter(one => one.key !== key)
-  }
-  for (const key of ['helpers', 'cost'] as const) if (total() > wide) drop(key)
-  if (total() > wide && fields.some(one => one.key === 'repo')) {
-    const room = wide - (total() - len(fields.find(one => one.key === 'repo')?.spans ?? []))
-    if (room >= MIN_REPO) fields = fields.map(one => (one.key === 'repo' ? { ...one, spans: clipSpans(one.spans, room) } : one))
-    else drop('repo')
-  }
-  for (const key of ['seven', 'five', 'name', 'ctx'] as const) if (total() > wide) drop(key)
-  return [chip, ...fields.flatMap(one => [sp(' ', 'dim'), ...one.spans])]
-}
+export const compactLine = (state: BandState, width: number): Span[] => compactFit(state, width).spans
+
+type LineShape = { sign: SignForm; ctx: boolean; five: boolean; seven: boolean }
 
 /**
- * The band's core lines for a drawing `width` wide: two lines, or one (chip and goal) under 40 columns.
- * No line is wider than `max(width, 20)`. The chip is never cut; the goal is the first text to give way.
+ * The one-row line (maxRows 1): chip, sign, ctx, then 5h and 7d (only with a HUD state: with none, no limit field draws), then the goal when MIN_GOAL cells
+ * are left. No name, repo, helpers or cost. Cut order: 7d, 5h, the sign word to `? n`, ctx, `? n` to `?n`, the sign.
  */
-export const bandLines = (state: BandState, width: number): Span[][] => {
-  const wide = Math.max(MIN_WIDTH, Number.isFinite(width) ? Math.floor(width) : MIN_WIDTH)
-  if (wide < NARROW) return [narrow(state, wide)]
-  return [lineOne(state, wide), lineTwo(state, stepsOf(state.tasks, state.brief), wide)]
+const lineFit = (s: BandState, width: number): Fit<string> & { ctx: boolean; five: boolean; seven: boolean } => {
+  const wide = compactWide(width)
+  const chip = chipSpan(s.chip, s.waitTasks)
+  const windows = s.hud === true ? { five: windowField('five', s.limits), seven: windowField('seven', s.limits) } : { five: null, seven: null }
+  const shape: LineShape = { sign: startSign(s), ctx: true, five: windows.five !== null, seven: windows.seven !== null }
+  const body = (): { spans: Span[]; keys: string[] } => {
+    const parts: { key: string; spans: Span[] }[] = [
+      ...(shape.ctx ? [{ key: 'ctx', spans: ctxSpans(s) }] : []),
+      ...(shape.five && windows.five !== null ? [{ key: 'five', spans: windows.five.spans }] : []),
+      ...(shape.seven && windows.seven !== null ? [{ key: 'seven', spans: windows.seven.spans }] : []),
+    ]
+    const sign = signSpans(s, shape.sign)
+    return {
+      spans: [chip, ...sign, ...parts.flatMap(one => [sp(' ', 'dim'), ...one.spans])],
+      keys: ['chip', ...(sign.length > 0 ? ['sign'] : []), ...parts.map(one => one.key)],
+    }
+  }
+  const cuts: (() => void)[] = [
+    () => { shape.seven = false },
+    () => { shape.five = false },
+    () => { if (shape.sign === 'words') shape.sign = 'short' },
+    () => { shape.ctx = false },
+    () => { if (shape.sign === 'short') shape.sign = 'tight' },
+    () => { shape.sign = 'none' },
+  ]
+  let built = body()
+  for (const cut of cuts) {
+    if (cells(built.spans) <= wide) break
+    cut()
+    built = body()
+  }
+  const room = wide - cells(built.spans) - 1
+  const goal = room >= MIN_GOAL ? goalSpans(s, room) : []
+  return {
+    spans: goal.length > 0 ? [...built.spans, sp(' ', 'dim'), ...goal] : built.spans,
+    keys: goal.length > 0 ? [...built.keys, 'goal'] : built.keys,
+    sign: built.keys.includes('sign') ? shape.sign : 'none',
+    ctx: shape.ctx,
+    five: shape.five,
+    seven: shape.seven,
+  }
+}
+
+// --- The plan ---
+
+/** Rows by maxRows (design section 3). The HUD row (HUD on) comes before the widget row. A quiet session has no widget row. */
+const rowKinds = (hud: boolean, maxRows: number, quiet: boolean): RowKind[] => {
+  if (!(maxRows >= 1)) return []
+  const rows = Math.floor(maxRows)
+  if (rows === 1) return ['line']
+  const widget: RowKind[] = quiet || rows < (hud ? 4 : 3) ? [] : ['widget']
+  if (hud) return rows === 2 ? ['compact', 'hud'] : ['row1', 'goal', 'hud', ...widget]
+  return ['row1', 'goal', ...widget]
+}
+
+const COMPACT_OWNED: Partial<Record<CompactKey, 'ctx' | 'five' | 'seven' | 'cost'>> = { ctx: 'ctx', five: 'five', seven: 'seven', cost: 'cost' }
+
+const planOf = (s: BandState, maxRows: number, width: number, quiet: boolean): { plan: RowPlan; rows: DrawnRows } => {
+  const wide = compactWide(width)
+  const kinds = rowKinds(s.hud === true, maxRows, quiet)
+  const plan: RowPlan = { rows: kinds, owners: { ctx: null, five: null, seven: null, cost: null }, signForm: 'none', row1Shape: [], compactKeys: [] }
+  const rows: DrawnRows = {}
+  const first = kinds[0]
+  if (first === 'line') {
+    const fit = lineFit(s, wide)
+    rows.line = fit.spans
+    plan.signForm = fit.sign
+    plan.row1Shape = fit.keys
+    plan.owners = { ctx: fit.ctx ? 'line' : null, five: fit.five ? 'line' : null, seven: fit.seven ? 'line' : null, cost: null }
+  } else if (first === 'compact') {
+    const fit = compactFit(s, wide)
+    rows.compact = fit.spans
+    plan.signForm = fit.sign
+    plan.compactKeys = fit.keys
+    // The HUD row draws what the compact line did not.
+    plan.owners = { ctx: 'hud', five: 'hud', seven: 'hud', cost: 'hud' }
+    for (const key of fit.keys) {
+      const owned = COMPACT_OWNED[key]
+      if (owned !== undefined) plan.owners[owned] = 'compact'
+    }
+  } else if (first === 'row1') {
+    const hudRow = kinds.includes('hud')
+    const fit = row1Fit(s, wide, !hudRow)
+    rows.row1 = fit.spans
+    plan.signForm = fit.sign
+    plan.row1Shape = fit.keys
+    // With a HUD row it owns all four. Without one, row 1 owns ctx when it kept it; limits and cost are not drawn.
+    plan.owners = hudRow ? { ctx: 'hud', five: 'hud', seven: 'hud', cost: 'hud' } : { ctx: fit.keys.includes('ctx') ? 'row1' : null, five: null, seven: null, cost: null }
+  }
+  if (kinds.includes('goal')) rows.goal = goalSpans(s, wide)
+  return { plan, rows }
+}
+
+/** The plan alone: which rows draw, who owns each number, the sign form and the kept fields. */
+export const rowPlan = (s: BandState, maxRows: number, width: number, quiet: boolean): RowPlan => planOf(s, maxRows, width, quiet).plan
+
+/** The plan and the spans of its `line`, `compact`, `row1` and `goal` rows, from one fit, so the plan and the drawing cannot disagree. */
+export const bandRows = (s: BandState, maxRows: number, width: number, quiet: boolean): { plan: RowPlan; rows: DrawnRows } => planOf(s, maxRows, width, quiet)
+
+/** The HUD part keys (`hudParts` skip list) of every number another row of the plan draws. */
+export const hudSkipKeys = (plan: RowPlan): string[] => {
+  const keys: [keyof RowPlan['owners'], string][] = [
+    ['ctx', 'hud-ctx'],
+    ['cost', 'hud-cost'],
+    ['five', 'hud-limit-five_hour'],
+    ['seven', 'hud-limit-seven_day'],
+  ]
+  return keys.filter(([number]) => plan.owners[number] !== 'hud').map(([, key]) => key)
 }
