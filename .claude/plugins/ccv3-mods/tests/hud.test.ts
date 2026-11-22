@@ -508,6 +508,26 @@ describe('hud', () => {
     expect(await keysAt(3)).toEqual(['row-core-1', 'row-hud', 'row-band'])
   })
 
+  // 8b (failure 8, HUD half): at 20 columns the HUD row keeps ctx and 5h whole and drops the rest. Breaks if the terminal row stops fitting to bodyColumns.
+  test('H15 at 20 columns the terminal HUD row shows ctx and 5h only, and a wide band shows everything', async ($, on) => {
+    world(on, { limits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 61 }] })
+    await start($)
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 61 }], changed: ['context', 'rateLimits'] } as never)
+    const rowAt = async (bodyColumns: number, maxRows = 10) => {
+      const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows, bodyColumns } })
+      const text = (await band.find({ key: 'row-hud' }))?.text
+      await band.unmount()
+      return text
+    }
+    expect(await rowAt(20)).toBe('ctx 42%  5h 38%')
+    expect(await rowAt(26)).toBe('ctx 42%  5h 38%  7d 61%')
+    // maxRows 2 (compact line + HUD row) gets the same drops (design note line 81).
+    expect(await rowAt(20, 2)).toBe('ctx 42%  5h 38%')
+    const wide = await rowAt(160)
+    expect(wide).toContain('Opus 5.5')
+    expect(wide).toContain('▰')
+  })
+
   // H13 a render with a null atom seeds it. No session.start here: the HUD's start never ran, as in Dave's screenshot 8.
   test('H13 a render with a null hud atom still draws the HUD row: model, advisor, cost and limits', async ($, on) => {
     world(on)

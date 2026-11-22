@@ -42,7 +42,7 @@ export const parseArgs = (args, defaultDir) => {
 };
 
 const { pluginDir, minGating } = parseArgs(process.argv.slice(2), join(repoRoot, '.claude/plugins/ccv3-mods'));
-/** The test step runs the suite in shards (see checkTest) on one clock, under the 10 minutes pre-pr gives this gate (pre-pr.mjs, id 'mod'). */
+/** The test step runs the suite in shards (see checkTest) on one clock that main starts before validate and tsc, under the 10 minutes pre-pr gives this gate (pre-pr.mjs, id 'mod'). */
 export const TEST_LIMIT_MS = 9 * 60_000;
 export const SHARD_FILES = 11;
 const sh = (cmd, args, timeout = 280_000) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout });
@@ -192,8 +192,7 @@ export const shardsVerdict = (rows, stopped, limitMs) => {
   return { ok, why, lines: rows.flatMap(r => r.lines), short: stopped ? `test stopped at ${secs} s` : `test ${pass} pass ${fail} fail` };
 };
 
-const checkTest = () => {
-  const started = Date.now();
+const checkTest = started => {
   const rows = [];
   let stopped = false;
   for (const files of shardsOf(testFilesOf(pluginDir))) {
@@ -214,7 +213,8 @@ const checkTest = () => {
 };
 
 const main = () => {
-  const results = [checkValidate(), checkTsc(), checkTest()];
+  const started = Date.now();
+  const results = [checkValidate(), checkTsc(), checkTest(started)];
   for (const result of results.filter(r => !r.ok)) console.log(result.note);
   const failed = results.some(r => !r.ok);
   const shorts = results.map(r => r.short ?? 'FAIL');

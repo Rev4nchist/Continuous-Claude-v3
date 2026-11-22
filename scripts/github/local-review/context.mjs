@@ -18,6 +18,7 @@ const TITLE_MAX = 300;
 const GATES_MAX = 6 * KB;
 const TREX_MAX = 2 * KB;
 const MAX_GUIDE_DIRS = 60;
+// The root AGENTS.md is the T3 Code charter since PR 661, not a review guideline: the folder scan skips it (guidelinePaths). The testing standard comes from the .coderabbit.yaml filePatterns row.
 const GUIDE_NAMES = ['AGENTS.md', 'CLAUDE.md', '.cursorrules'];
 const FACTS_MAX = 6 * KB;
 // catchers sits just above gates: the cap cuts higher numbers first, so the catcher facts outlive the gates text.
@@ -256,7 +257,7 @@ function guidelinePaths(c, yaml, changed) {
   try { patterns = yaml === null ? [] : parseFilePatterns(yaml).filter((p) => changed.some((f) => globMatch(p.applyTo, f))).map((p) => p.files); } catch (err) {
     c.missing.push(`filePatterns: left out (${err.message})`);
   }
-  const folder = ancestorDirs(changed).flatMap((d) => GUIDE_NAMES.map((n) => (d ? `${d}/${n}` : n)));
+  const folder = ancestorDirs(changed).flatMap((d) => GUIDE_NAMES.filter((n) => d !== '' || n !== 'AGENTS.md').map((n) => (d ? `${d}/${n}` : n)));
   return [...new Set([...patterns, ...folder])];
 }
 

@@ -139,8 +139,8 @@ reviews:
 knowledge_base:
   mcp:
     usage: disabled
-  # CLAUDE.md and AGENTS.md load by default. These add the CCv3 terms and the rules each surface
-  # follows. Keep the list short: the guideline budget can drop a source.
+  # CLAUDE.md and AGENTS.md load by default (the root AGENTS.md is the T3 Code charter). These rows add the CCv3 terms, the
+  # rules each surface follows and the testing standard. Keep the list short: the guideline budget can drop a source.
   code_guidelines:
     enabled: true
     filePatterns:
@@ -152,6 +152,8 @@ knowledge_base:
         applyTo: ".claude/**"
       - files: ".claude/rules-src/agent-model-selection.md"
         applyTo: ".claude/agents/**"
+      - files: "docs/testing-standard.md"
+        applyTo: "**"
   # A learning from a chat reply waits 3 days before it becomes a review rule.
   learnings:
     scope: local

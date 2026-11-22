@@ -478,7 +478,7 @@ describe('long advances', () => {
     expect(count.calls).toBeGreaterThan(700)
   })
 
-  test('L2 an idle hour of simulated time runs 720 pulses (PULSE_MS 5000), each an idle one', async ($, on) => {
+  longTest('L2 an idle hour of simulated time runs 720 pulses (PULSE_MS 5000), each an idle one', async ($, on) => {
     const count: Count = { calls: 0, spinMs: 0 }
     const clock = world(counting(on, count))
     await start($)

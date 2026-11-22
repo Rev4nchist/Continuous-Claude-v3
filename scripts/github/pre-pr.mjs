@@ -95,7 +95,7 @@
  * Exit 2 = bad usage (no --body, or the body file cannot be read). Exit 3 = an internal error (an exception inside the run,
  * for example a missing review-router.config.json); the message goes to stderr.
  * Files (all under the gitignored .claude/cache/):
- *   pre-pr/summary.md                      the plain summary the session writes first (step 0, lib/pr-summary.mjs); summary_sha256 in the stamp is its hash
+ *   pre-pr/summary.md                      the plain summary the session writes first (step 0, lib/pr-summary.mjs): one "Label: text" line for each of Branch, Head, Base, Problem, Change, You will see, Risk (starts Low, Medium or High), Not included; summary_sha256 in the stamp is its hash
  *   pre-pr/stamp.json                      read by the pre-pr-gate hook: { head, branch, at, body_sha256,
  *                                          cr_skipped, cr_skip_reason, cr_docs_only, docs_verified, cr_retry_minutes, cr_finished_runs, results }
  *   pre-pr/cr-runs-<branch>.json           the CLI runs used on this branch (cap 2 runs with new code; each row has newCode). Keyed on the branch
@@ -202,14 +202,14 @@ export const ALWAYS_GATES = [
 ];
 
 /**
- * One row per surface (AGENTS.md "Testing", every-surface-checklist.md). `globs` use the review router's
+ * One row per surface (docs/testing-standard.md "Testing", every-surface-checklist.md). `globs` use the review router's
  * glob rules. A gate is { id, cmd, args, cwd, timeoutMs }. `postCheck`: git commands that must all print nothing
  * once the gate ran. `appendTouched`: add the touched files that match `globs`, relative to `relativeTo`; the
  * gate is dropped when none match, and `noneNote` becomes a NOTE line. A surface with `manual` adds a NOTE line
  * (with or without gates). A changed path that no surface owns, and is not in the docs class, adds its own NOTE.
  */
 const GITHUB_TESTS = nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN);
-const BEHAVIOUR = 'after the forward sync, run the AGENTS.md behaviour check: claude -p "<a prompt this change targets>" --output-format json, and keep the JSON';
+const BEHAVIOUR = 'after the forward sync, run the docs/testing-standard.md behaviour check: claude -p "<a prompt this change targets>" --output-format json, and keep the JSON';
 export const SURFACES = [
   {
     id: 'hooks',
@@ -398,7 +398,7 @@ export const SURFACES = [
       // docker compose up -d in docker/. pg comes from .claude/hooks/node_modules (npm ci there).
       { id: 'coordination-db-tests', cmd: 'node', args: ['--test', ...COORDINATION_DB_TESTS.map(coordTest)], cwd: '.', timeoutMs: 10 * MIN },
     ],
-    manual: 'for a lane, claim or lease change also run the matching scripts/coordination/*-probe.mjs and keep its output (AGENTS.md Testing)',
+    manual: 'for a lane, claim or lease change also run the matching scripts/coordination/*-probe.mjs and keep its output (docs/testing-standard.md Testing)',
   },
 ];
 
