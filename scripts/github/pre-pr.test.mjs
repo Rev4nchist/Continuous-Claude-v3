@@ -1517,6 +1517,8 @@ test('X1: bad usage exits 2 and an internal error exits 3', () => {
   const r = run(repo.dir, '--body', body, '--skip-cr');
   assert.equal(r.status, 3, r.stderr);
   assert.match(r.stderr, /stopped by an error/);
+  // O1: the child takes the lock with fake samples (no real 6 s + 30 s + 6 s machine read). Break: drop RUN_LOCK_TEST_SAMPLES from the spawn env.
+  assert.match(r.stderr, /samples come from RUN_LOCK_TEST_SAMPLES/);
 });
 
 // The built hook, fed a stamp that pre-pr.mjs really wrote.
@@ -4412,6 +4414,8 @@ test('RL-ISO2: a spawned exit-3 run writes its START row to the temp store of th
   writeFileSync(body, 'Proof type: docs\n');
   const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--skip-cr'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
   assert.equal(r.status, 3, r.stderr);
+  // O1: same fake samples here (this test checks START and END rows, never the machine read).
+  assert.match(r.stderr, /samples come from RUN_LOCK_TEST_SAMPLES/);
   const runs = path.join(process.env.RUN_LOCK_DIR, 'runs.jsonl');
   assert.ok(existsSync(runs), 'the child wrote runs.jsonl in the temp store');
   const rows = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
