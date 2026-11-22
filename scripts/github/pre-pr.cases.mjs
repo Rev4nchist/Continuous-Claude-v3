@@ -1165,7 +1165,7 @@ setInterval(() => console.log('{"type":"heartbeat"}'), 100);`);
     try { process.kill(gc, 0); await sleep(100); } catch { alive = false; }
   }
   assert.equal(alive, false, `grandchild ${gc} is still running`);
-  assert.doesNotMatch(readFileSync(path.join(HERE, 'pre-pr.mjs'), 'utf8'), /taskkill/i, 'taskkill /T is forbidden on this machine');
+  assert.doesNotMatch(readFileSync(path.join(HERE, 'pre-pr.mjs'), 'utf8'), /taskkill/i, 'the tree-kill switch of the Windows kill tool is forbidden on this machine');
 });
 
 test('T6: killTree stops the children first, then the parent, ignores a process that is gone, and kills the group on POSIX', () => {
