@@ -4481,6 +4481,55 @@ test('RL-ISO2: a spawned exit-3 run writes its START row to the temp store of th
   assert.equal(ends[0].exitCode, 3);
 });
 
+// ---------- card prepr-speed-bundle, O5: the summary check runs once before the run lock ----------
+// How it can fail, one test each, with the source change that makes it fail:
+//   O5a  a summary FAIL before the lock leaves the old stamp, or writes no gate-log row   (drop the stamp removal or the row)
+//   O5b  a PASS (or a note-mode result) before the lock stops the run                      (exit on any result)
+//   O5c  a bad summary still takes the lock first: START row, reads, spacing charge        (no check before takeRunLock in main)
+const FAIL_SUMMARY = () => ({ result: { step: 'summary', status: 'FAIL', detail: 'no summary file: stub', notes: [] }, sha: null, ok: false });
+
+test('O5a: a summary FAIL before the lock returns the FAIL, removes the old stamp and leaves one summary row in the gate log', () => {
+  const repo = makeRepo();
+  const stamp = path.join(repo.dir, PRE.STAMP_REL);
+  mkdirSync(path.dirname(stamp), { recursive: true });
+  writeFileSync(stamp, '{"old":true}');
+  const gateLogFile = tempGateLog();
+  const failed = PRE.summaryBeforeLock({ root: repo.dir, base: 'main', config: CONFIG, summaryCheck: FAIL_SUMMARY, gateLogFile, now: new Date() });
+  assert.equal(failed.status, 'FAIL');
+  assert.equal(existsSync(stamp), false, 'an old stamp must not outlive a FAIL');
+  const rows = readFileSync(gateLogFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((r) => [r.step, r.status, r.head, r.branch]), [['summary', 'FAIL', repo.head, 'feat/x']]);
+});
+
+test('O5b: a summary that passes (or only notes) before the lock returns null: the run goes on, no stamp is touched, no row is written', () => {
+  const repo = makeRepo();
+  const stamp = path.join(repo.dir, PRE.STAMP_REL);
+  mkdirSync(path.dirname(stamp), { recursive: true });
+  writeFileSync(stamp, '{"old":true}');
+  const gateLogFile = tempGateLog();
+  assert.equal(PRE.summaryBeforeLock({ root: repo.dir, base: 'main', config: CONFIG, summaryCheck: SUMMARY_OK, gateLogFile, now: new Date() }), null);
+  assert.equal(PRE.summaryBeforeLock({ root: repo.dir, base: 'main', config: CONFIG, summaryCheck: () => ({ result: { step: 'summary', status: 'NOTE', detail: 'note mode', notes: [] }, sha: null, ok: false }), gateLogFile, now: new Date() }), null);
+  assert.equal(existsSync(stamp), true);
+  assert.equal(existsSync(gateLogFile), false, 'no row for a pass');
+});
+
+test('O5c: a bad summary stops pre-pr.mjs before the run lock: exit 1, the FAIL line, no START row, no wait, no stamp', () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'review-router.config.json'), JSON.stringify({ ...CONFIG, pre_pr: { ...CONFIG.pre_pr, summary_mode: 'fail' } }));
+  const body = path.join(repo.dir, '..', `body-o5-${Date.now()}.md`);
+  writeFileSync(body, 'Proof type: docs\n');
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--wait-lock'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV, timeout: 60_000 });
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /FAIL summary/);
+  assert.match(r.stdout, /RESULT FAIL: no stamp/);
+  assert.ok(Date.now() - t0 < 20_000, 'no lock wait');
+  const runs = path.join(process.env.RUN_LOCK_DIR, 'runs.jsonl');
+  const mine = existsSync(runs) ? readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((row) => row.pid === r.pid) : [];
+  assert.deepEqual(mine, [], 'this child took no lock and logged no START');
+  assert.equal(existsSync(path.join(repo.dir, PRE.STAMP_REL)), false);
+});
+
 // Seat ruling 14:44 (a)-(d): the exit handler writes END only when START was logged and END was not; it never throws; a normal end and a
 // signal stop give one END row each. Breaks: write END with no START; write a second END after reportRunEnd; let a log error throw.
 test('RL-END: endRowAtExit writes one ERROR row only after START and before any END, and never throws', () => {
