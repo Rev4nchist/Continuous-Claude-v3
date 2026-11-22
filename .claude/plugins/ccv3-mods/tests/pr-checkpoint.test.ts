@@ -4925,7 +4925,7 @@ describe('pr-checkpoint PR 2 group A: the ten items', () => {
       expect(asksOf(w.store)).toEqual([])
     })
 
-    for (const [name, view] of [['gh exits 1', { exitCode: 1, stderr: 'HTTP 502' }], ['gh prints a state with no draft field', { stdout: JSON.stringify({ state: 'OPEN', headRefOid: HEAD }) }], ['gh prints JSON null', { stdout: 'null' }]] as [string, Reply][]) {
+    for (const [name, view] of [['gh exits 1', { exitCode: 1, stderr: 'HTTP 502' }], ['gh prints a state with no draft field', { stdout: JSON.stringify({ state: 'OPEN', headRefOid: HEAD }) }], ['gh prints JSON null', { stdout: 'null' }], ['gh prints an empty head', { stdout: JSON.stringify({ state: 'OPEN', headRefOid: '', isDraft: false }) }]] as [string, Reply][]) {
       test(`AD6 a round Yes writes no grant when the PR state cannot be read (${name}): the ask stays queued and Dave gets a toast`, async ($, on) => {
         const w = world(on, round(view))
         await start($)

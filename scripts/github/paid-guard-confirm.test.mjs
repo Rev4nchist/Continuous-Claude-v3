@@ -8,12 +8,12 @@
 //   a head that is not the PR head, or a failed GitHub read, still writes a row                                          -> PC3
 //   a tap with no entry stamp (an old row) writes a row                                                                  -> PC4
 //   the row is written when the record was refused (no tap), or before the record                                        -> PC5
-//   a draft PR gets a paid row; a return to draft between the read and the write leaves the row (the drop ran first)     -> PC6, PC7, PC8 (control)
+//   a draft PR loses its paid row (a pick is confirmed while the PR is a draft); a drop of the taps while the confirm reads the PR leaves a row   -> PC6, PC7, PC8
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
@@ -53,25 +53,23 @@ function setup({ capacity = null, labels = ['risk:high'] } = {}) {
   writeFileSync(bodyFile, BODY_TEXT);
   writeFileSync(cfgFile, JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: null, reviews_7d_manual_date: null }, checkpoint: { ...LIVE.checkpoint, autoConfirm: false, ledger: true } }));
   // `pr view` answers FAKE_GH_HEAD as the PR head; with no FAKE_GH_HEAD it fails like an unreachable GitHub.
-  // FAKE_GH_DRAFT=1: the PR is a draft on every read. FAKE_GH_DRAFT_FROM=N (with FAKE_GH_COUNT, a counter file): the PR is a draft from the Nth `pr view` on,
-  // the way a return to draft lands between the read before the paid row and the read after it.
+  // FAKE_GH_DRAFT=1: the PR is a draft on every read (a pick is confirmed while the PR is a draft: applyPathway needs that).
+  // FAKE_GH_DROP=1: the first `pr view` first runs the drop of the taps of the PR, the way a return to draft and its --drop-taps land at that moment.
+  const decisionsUrl = pathToFileURL(path.join(HERE, 'lib', 'decisions.mjs')).href;
   writeFileSync(fakeGh, [
-    "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+    `import { decisionKey, dropKey } from ${JSON.stringify(decisionsUrl)};`,
     "if (!process.env.FAKE_GH_HEAD) { console.error('network down'); process.exit(1); }",
-    "let n = 0;",
-    "if (process.env.FAKE_GH_COUNT && process.argv.includes('view')) { n = (existsSync(process.env.FAKE_GH_COUNT) ? Number(readFileSync(process.env.FAKE_GH_COUNT, 'utf8')) : 0) + 1; writeFileSync(process.env.FAKE_GH_COUNT, String(n)); }",
-    "const draft = process.env.FAKE_GH_DRAFT === '1' || (Boolean(process.env.FAKE_GH_DRAFT_FROM) && n >= Number(process.env.FAKE_GH_DRAFT_FROM));",
-    "console.log(JSON.stringify({ headRefOid: process.env.FAKE_GH_HEAD, isDraft: draft, number: 349 }));",
+    "if (process.env.FAKE_GH_DROP === '1' && process.argv.includes('view')) dropKey({ steps: ['review', 'paid-round'], key: decisionKey({ pr: 349 }) });",
+    "console.log(JSON.stringify({ headRefOid: process.env.FAKE_GH_HEAD, isDraft: process.env.FAKE_GH_DRAFT === '1', number: 349 }));",
     '',
   ].join('\n'));
-  const countFile = path.join(dir, 'gh-view-count');
   const storeFile = path.join(dir, 'decisions.json');
   process.env.CCV3_DECISIONS_FILE = storeFile;
   const env = (over = {}) => ({ ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, CCV3_DECISIONS_FILE: storeFile, PR_CHECKPOINT_NO_PROBE: '1', PR_CHECKPOINT_TEST: '1', PR_CHECKPOINT_GH: fakeGh, ...over });
   const run = (args, over = {}) => spawnSync(process.execPath, [ENGINE, ...args, ...(args.includes('--confirm') ? ['--state-dir', state] : []), '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir, env: env(over) });
   const ask = () => { const r = run(['--json', '--pr', String(PR)]); assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`); return JSON.parse(r.stdout).ledger.ask; };
   const confirm = (pathway, over = {}) => run(['--confirm', pathway, '--by', 'dave', '--body', bodyFile, '--pr', String(PR)], over);
-  return { ask, confirm, countFile, pathwayFile: path.join(state, 'pathway.json') };
+  return { ask, confirm, pathwayFile: path.join(state, 'pathway.json') };
 }
 
 const labelOf = (spec, re) => spec.options.find((o) => re.test(o.label)).label;
@@ -132,58 +130,42 @@ test('PC4: a tap with no entry stamp writes no row (no stamp, no paid yes)', () 
   assert.equal(D.decisionRowRead(paid()), null);
 });
 
-test('PC6 (CLI finding, seat ruling): a PR that is a draft when the pick is confirmed writes no paid row', () => {
+test('PC6 (control, seat ruling): a pick is confirmed while the PR is a DRAFT, and a draft PR keeps its paid row (applyPathway marks it ready later)', () => {
   const t = setup();
   tap(labelOf(t.ask(), /^CodeRabbit review/), 'cli');
   const r = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD, FAKE_GH_DRAFT: '1' });
   assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
-  assert.match(r.stderr, /no paid yes was stored.*draft/);
-  assert.equal(D.decisionRowRead(paid()), null, 'a draft PR gets no paid yes');
-  assert.ok(existsSync(t.pathwayFile), 'the record stays');
+  assert.doesNotMatch(r.stderr, /no paid yes was stored/);
+  assert.ok(D.decisionRowRead(paid()), 'the paid row is stored for a draft PR');
+  assert.ok(existsSync(t.pathwayFile), 'the record is written');
 });
 
-test('PC7 (CLI finding, seat ruling): a return to draft that lands between the read before the paid row and the write leaves no paid row (the PR is read again after the write)', () => {
+test('PC7 (CLI run 3, seat option A): a drop of the taps that lands while the confirm reads the PR leaves NO paid row: the tap and the paid row are one step', () => {
   const t = setup();
   tap(labelOf(t.ask(), /^CodeRabbit review/), 'cli');
-  // View 1 (before the write): not a draft. View 2 (after the write): a draft, as if the return to draft and its drop of the taps ran in between.
-  const r = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD, FAKE_GH_COUNT: t.countFile, FAKE_GH_DRAFT_FROM: '2' });
-  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
-  assert.match(r.stderr, /no paid yes was stored.*draft/);
-  assert.equal(D.decisionRowRead(paid()), null, 'the row written in the gap is removed');
-  assert.equal(readFileSync(t.countFile, 'utf8'), '2', 'the PR was read twice: before and after the write');
+  // The fake gh runs the drop at its first `pr view`. With the PR read BEFORE the use of the tap, the drop removes the tap, the confirm is refused and nothing is
+  // stored. With the read AFTER the use (the old order), the drop finds nothing to remove and the write after it recreates the row.
+  const r = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD, FAKE_GH_DROP: '1' });
+  assert.equal(r.status, 1, `${r.stdout} ${r.stderr}`);
+  assert.match(r.stderr, /could not be used up/);
+  assert.equal(D.decisionRowRead(paid()), null, 'no paid row survives the drop');
+  assert.equal(D.decisionRowRead(review()), null, 'the tap is gone');
+  assert.ok(!existsSync(t.pathwayFile), 'no record is written');
 });
 
-test('PC9 (seat ruling): when the store refuses the removal after the write, the text says the paid yes could NOT be removed and names the drop command; it never claims "removed"', async () => {
-  const { writePaidYes } = await import(pathToFileURL(ENGINE).href);
-  const t = setup(); // setup() puts a temp store at CCV3_DECISIONS_FILE
-  void t;
-  const store = process.env.CCV3_DECISIONS_FILE;
-  const lock = `${store}.lock`;
-  let views = 0;
-  // View 1: ready. View 2 (after the write): a draft, and another writer holds the store lock, so the removal cannot run.
-  const gh = () => {
-    views += 1;
-    if (views === 2) writeFileSync(lock, `${process.pid} held-by-another-writer`);
-    return { status: 0, stdout: JSON.stringify({ headRefOid: HEAD, isDraft: views === 2, number: PR }), stderr: '' };
-  };
-  const row = { label: 'CodeRabbit review (may cost up to $1.25) (Recommended)', tapAt: NOW, entry: 'cli' };
-  let why;
-  try { why = writePaidYes({ pr: PR, head: HEAD, pathway: 'coderabbit', row, gh }); } finally { rmSync(lock, { force: true }); }
-  assert.equal(views, 2, 'the PR was read before and after the write');
-  assert.match(why, /could NOT be removed \(lock\)/);
-  assert.match(why, /--drop-taps/);
-  assert.match(why, /PR #349/);
-  assert.doesNotMatch(why, /was removed again/);
-  assert.ok(D.decisionRowRead(paid()), 'the row is still there: the text must not say otherwise');
-});
-
-test('PC8 (control): a PR that stays ready keeps the paid row after the second read', () => {
+test('PC8 (seat option A): the paid row is written in the same step that uses the tap up: a used tap always has its paid row, an unused one has none', () => {
   const t = setup();
   tap(labelOf(t.ask(), /^CodeRabbit review/), 'cli');
-  const r = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD, FAKE_GH_COUNT: t.countFile });
+  const before = D.decisionRowRead(review());
+  assert.ok(before, 'the tap is there');
+  assert.equal(D.decisionRowRead(paid()), null, 'no paid row before the confirm');
+  const r = t.confirm('coderabbit', { FAKE_GH_HEAD: HEAD });
   assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
-  assert.ok(D.decisionRowRead(paid()), 'the paid row stays');
-  assert.equal(readFileSync(t.countFile, 'utf8'), '2');
+  assert.equal(D.decisionRowRead(review()), null, 'the tap is used up');
+  const row = D.decisionRowRead(paid());
+  assert.ok(row, 'and its paid row exists');
+  assert.equal(row.tapAt, before.tapAt, 'the row copies the stamp of the tap it used up');
+  assert.equal(row.entry, 'cli');
 });
 
 test('PC5: a confirm that is refused (no tap) writes no paid row', () => {
