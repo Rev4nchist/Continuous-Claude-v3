@@ -27,6 +27,50 @@ test('refuses an unparseable URL', () => {
   assert.throws(() => assertScratchUrl('not a url'), /refusing/);
 });
 
+// Item 1 of coord-standard-followups: a database name can arrive in the query string. pg-connection-string reads `db` of a socket: URL as the
+// database (index.js:47-49); psql (libpq) reads `dbname`. The path test alone passes both. One test per form; each names the change that breaks it:
+// dropping the query-key refusal in assertScratchUrl. Design note: .claudedocs/coordination/2026-11-22-standard-followups-design.md.
+const OK = 'lanes_pr1_0123abcd';
+const LIVE = 'continuous_claude';
+const refusedKey = (url, key) => assert.throws(() => assertScratchUrl(url), (e) => /refusing/.test(e.message) && e.message.includes(key) && !e.message.includes(LIVE), url);
+
+test('Q1 refuses a socket URL whose db query key names the live database (the path is a scratch name)', () => {
+  refusedKey(`socket:${OK}?db=${LIVE}`, 'db');
+});
+
+test('Q2 refuses the dbname query key on a postgresql URL (libpq reads it)', () => {
+  refusedKey(`${U(OK)}?dbname=${LIVE}`, 'dbname');
+});
+
+test('Q3 refuses the db query key on a postgresql URL', () => {
+  refusedKey(`${U(OK)}?db=${LIVE}`, 'db');
+});
+
+test('Q4 refuses the key in upper case', () => {
+  refusedKey(`${U(OK)}?DBNAME=${LIVE}`, 'dbname');
+});
+
+test('Q5 refuses a percent-encoded key', () => {
+  refusedKey(`${U(OK)}?%64bname=${LIVE}`, 'dbname');
+});
+
+test('Q6 refuses the key when it is not the first parameter', () => {
+  refusedKey(`${U(OK)}?sslmode=require&dbname=${LIVE}`, 'dbname');
+});
+
+test('Q7 refuses the database query key', () => {
+  refusedKey(`${U(OK)}?database=${LIVE}`, 'database');
+});
+
+test('Q8 refuses the key even when its value is a scratch name (one rule, no value check)', () => {
+  assert.throws(() => assertScratchUrl(`${U(OK)}?db=${OK}`), /refusing/);
+});
+
+test('Q9 still accepts a scratch URL with no query or with harmless parameters, and returns the name', () => {
+  assert.equal(assertScratchUrl(U(OK)), OK);
+  assert.equal(assertScratchUrl(`${U(OK)}?sslmode=require&application_name=x`), OK);
+});
+
 import { createDatabase, dropDatabase, loadPg, maskUrl } from './scratch-db.mjs';
 import { candidateRoots } from '../lib/resolve-deps.mjs';
 
