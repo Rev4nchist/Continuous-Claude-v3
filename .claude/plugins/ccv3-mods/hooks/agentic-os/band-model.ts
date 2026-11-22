@@ -65,8 +65,8 @@ export const CHIP: Record<Chip, { word: string; tone: Tone }> = {
 export type RowKind = 'line' | 'compact' | 'row1' | 'goal' | 'hud' | 'widget'
 /** Who draws one of the four numbers (ctx, 5h, 7d, cost). null: no row draws it. */
 export type Owner = 'line' | 'compact' | 'row1' | 'hud' | null
-/** How the question sign reads: `2 questions`, `? 2`, `?2` (`?+` from 10), or no sign. `tiny` is reserved: the design gives it no text, so no row picks it. */
-export type SignForm = 'none' | 'words' | 'short' | 'tight' | 'tiny'
+/** How the question sign reads: `2 questions`, `? 2`, `?2` (`?+` from 10), or no sign. */
+export type SignForm = 'none' | 'words' | 'short' | 'tight'
 export type CompactKey = 'ask' | 'name' | 'repo' | 'ctx' | 'five' | 'seven' | 'cost' | 'helpers'
 export type RowPlan = {
   rows: RowKind[]
@@ -100,8 +100,28 @@ const cells = (spans: Span[]): number => spans.reduce((n, one) => n + cellWidth(
 const clean = (value: string | null | undefined): string => redact((value ?? '').trim()).text
 /** A name for display: redacted, whitespace collapsed to single spaces, trimmed. The caller clips it by cells. */
 const nameOf = (value: string | null | undefined): string => clean(value).replace(/\s+/g, ' ').trim()
-/** At most `max` cells, ending in an ellipsis when it cuts. */
-const clip = (value: string, max: number): string => (cellWidth(value) <= max ? value : max < 1 ? '' : max === 1 ? '…' : `${cutCells(value, max - 1)}…`)
+/** A redaction marker: a clip never cuts inside one. */
+const MARKER = /\[REDACTED:[^\]\s]*\]/g
+
+/** `keep` (a prefix of `text`) with any redaction marker the cut touches dropped whole. */
+const dropCutMarker = (text: string, keep: string): string => {
+  let kept = keep
+  for (const marker of text.matchAll(MARKER)) {
+    const from = marker.index ?? 0
+    if (from < kept.length && kept.length < from + marker[0].length) kept = kept.slice(0, from)
+  }
+  return kept
+}
+
+/** At most `max` cells, ending in an ellipsis when it cuts. A redaction marker the cut touches goes whole. */
+const clip = (value: string, max: number): string => {
+  if (cellWidth(value) <= max) return value
+  if (max < 1) return ''
+  if (max === 1) return '…'
+  const cut = cutCells(value, max - 1)
+  const keep = dropCutMarker(value, cut)
+  return `${keep === cut ? cut : keep.trimEnd()}…`
+}
 
 const join = (parts: Span[][], between: Span): Span[] => parts.flatMap((part, i) => (i === 0 ? part : [between, ...part]))
 
@@ -173,7 +193,7 @@ const row1Spans = (s: BandState, shape: Row1Shape): { spans: Span[]; keys: strin
 
 /**
  * Row 1 for a drawing `width` wide. Cut order: `#sid8`, `+N more`, the sign word to `? n`, the lane, the name to MIN_NAME and then to the room beside ctx (it goes under MIN_ROOM),
- * ctx (when this row owns it), `? n` to `?n`. Then, when even the chip and the sign are too wide (WAITING ON n TASKS at 20 columns), the name and the sign go. The chip is never cut.
+ * ctx (when this row owns it), `? n` to `?n`. `#sid8` comes back when the row with it still fits. Then, when even the chip and the sign are too wide (WAITING ON n TASKS at 20 columns), the name and the sign go. The chip is never cut.
  */
 const row1Fit = (s: BandState, width: number, ownsCtx: boolean): Fit<string> => {
   const shape: Row1Shape = { sign: startSign(s), sid: true, more: true, lane: true, nameMax: NAME_MAX, ctx: ownsCtx }
@@ -203,6 +223,14 @@ const row1Fit = (s: BandState, width: number, ownsCtx: boolean): Fit<string> => 
     cut()
     built = row1Spans(s, shape)
   }
+  // `#sid8` returns when room is left after the later cuts, while a name is drawn beside it.
+  if (!shape.sid && shape.nameMax > 0 && s.who !== undefined && clean(s.who.short) !== '') {
+    const back = row1Spans(s, { ...shape, sid: true })
+    if (cells(back.spans) <= width) {
+      shape.sid = true
+      built = back
+    }
+  }
   return { ...built, sign: shape.sign }
 }
 
@@ -226,9 +254,6 @@ export const goalSource = (s: BandState): { text: string; guessed: boolean } | n
 
 const GUESSED = ' [guessed]'
 const NOT_SET = 'goal not set'
-/** A redaction marker: the clip never cuts inside one. */
-const MARKER = /\[REDACTED:[^\]\s]*\]/g
-
 /** The text, cut at a word to at most `room` cells, ending in `…`. A text that fits is returned as it is. `room` must be 1 or more. */
 const clipGoal = (text: string, room: number): string => {
   if (cellWidth(text) <= room) return text
@@ -238,11 +263,7 @@ const clipGoal = (text: string, room: number): string => {
     if (space > 0) keep = keep.slice(0, space)
   }
   // Never cut inside a redaction marker: a marker the cut touches goes whole.
-  for (const marker of text.matchAll(MARKER)) {
-    const from = marker.index ?? 0
-    if (from < keep.length && keep.length < from + marker[0].length) keep = keep.slice(0, from)
-  }
-  return `${keep.trimEnd()}…`
+  return `${dropCutMarker(text, keep).trimEnd()}…`
 }
 
 /** The Goal row: one line of at most `width` cells. No label, no stop-at. A guessed goal ends in a dim ` [guessed]`, reserved before the clip. */
@@ -343,7 +364,7 @@ type LineShape = { sign: SignForm; ctx: boolean; five: boolean; seven: boolean }
 
 /**
  * The one-row line (maxRows 1): chip, sign, ctx, then 5h and 7d (only with a HUD state: with none, no limit field draws), then the goal when MIN_GOAL cells
- * are left. No name, repo, helpers or cost. Cut order: 7d, 5h, the sign word to `? n`, ctx, `? n` to `?n`, the sign.
+ * are left. No name, repo, helpers or cost. Cut order (as compactFit): the sign word to `? n`, 7d, 5h, ctx, `? n` to `?n`, the sign.
  */
 const lineFit = (s: BandState, width: number): Fit<string> & { ctx: boolean; five: boolean; seven: boolean } => {
   const wide = compactWide(width)
@@ -363,9 +384,9 @@ const lineFit = (s: BandState, width: number): Fit<string> & { ctx: boolean; fiv
     }
   }
   const cuts: (() => void)[] = [
+    () => { if (shape.sign === 'words') shape.sign = 'short' },
     () => { shape.seven = false },
     () => { shape.five = false },
-    () => { if (shape.sign === 'words') shape.sign = 'short' },
     () => { shape.ctx = false },
     () => { if (shape.sign === 'short') shape.sign = 'tight' },
     () => { shape.sign = 'none' },
