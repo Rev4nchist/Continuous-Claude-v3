@@ -25,7 +25,8 @@ import { matchGlob as matchGlobFn } from './review-router.mjs';
 
 const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
-// The commit a RED line names. Any 7 to 40 hex characters pass; membership in the PR is not checked.
+// The commit a RED line names. The default fixture has no commit list ([] = not known), so any 7 to 40 hex
+// characters that are not the head pass. With a complete list the RED commit must be one of the PR's commits.
 const RED_SHA = 'c'.repeat(7);
 
 // The Evidence block from pr-and-commit-style.md. Every body `input()` builds carries one, so the READY
