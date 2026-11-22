@@ -167,17 +167,26 @@ export function realPidStart(pid, io = {}) {
   return r.status === 0 && Number.isFinite(t) ? t : UNKNOWN;
 }
 
-/** Running pre-pr.mjs processes: [{pid, start}]. Used only to see a run on old code that holds no lock file. A failed read gives []. io.spawn and io.platform let a test feed each case. */
+/**
+ * A command line that runs run-wrap.mjs (the wrapper of card coord-run-lock-wrapper-loops). A wrapped pre-pr has two processes whose command line
+ * holds pre-pr.mjs: the wrapper and its child. The wrapper is not a run (its child is), so it must never count as an unlocked run. The file name
+ * must stand alone as a path part: a body file with "run-wrap.mjs" inside a longer name does not hide a real run.
+ */
+const WRAPPER_CMD = /(?:^|[\s"'\\/])run-wrap\.mjs(?:[\s"']|$)/;
+
+/** Running pre-pr.mjs processes: [{pid, start}]. Used only to see a run on old code that holds no lock file. A run-wrap process is not one. A failed read gives []. io.spawn and io.platform let a test feed each case. */
 export function realPrePrProcs(io = {}) {
   const spawn = io.spawn || spawnSync;
   if ((io.platform || process.platform) === 'win32') {
-    const out = ps("Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'scripts[\\\\/]github[\\\\/]pre-pr\\.mjs' } | ForEach-Object { \"$($_.ProcessId)|$($_.CreationDate.ToUniversalTime().ToString('o'))\" }", spawn);
-    return (out || '').split(/\r?\n/).filter(Boolean).map((l) => { const [pid, at] = l.split('|'); return { pid: Number(pid), start: Date.parse(at) }; }).filter((p) => p.pid > 0);
+    const out = ps("Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'scripts[\\\\/]github[\\\\/]pre-pr\\.mjs' } | ForEach-Object { \"$($_.ProcessId)|$($_.CreationDate.ToUniversalTime().ToString('o'))|$($_.CommandLine -replace '[\\r\\n]+',' ')\" }", spawn);
+    return (out || '').split(/\r?\n/).filter(Boolean).map((l) => { const [pid, at, ...cmd] = l.split('|'); return { pid: Number(pid), start: Date.parse(at), cmd: cmd.join('|') }; })
+      .filter((p) => p.pid > 0 && !WRAPPER_CMD.test(p.cmd)).map(({ pid, start }) => ({ pid, start }));
   }
-  const r = spawn('pgrep', ['-f', 'scripts/github/pre-pr\\.mjs'], { encoding: 'utf8' });
-  // A failed pgrep has no stdout: it gives no process, never one fake run with pid NaN.
-  return String(r.stdout ?? '').split(/\s+/).filter(Boolean).map(Number).filter((pid) => Number.isInteger(pid) && pid > 0)
-    .map((pid) => ({ pid, start: realPidStart(pid, io) }));
+  const r = spawn('pgrep', ['-af', 'scripts/github/pre-pr\\.mjs'], { encoding: 'utf8' });
+  // A failed pgrep has no stdout: it gives no process, never one fake run with pid NaN. A line is "pid" or "pid command".
+  return String(r.stdout ?? '').split(/\r?\n/).map((l) => /^\s*(\d+)(?:\s+(.*))?$/.exec(l)).filter(Boolean)
+    .map((m) => ({ pid: Number(m[1]), cmd: m[2] || '' })).filter((p) => Number.isInteger(p.pid) && p.pid > 0 && !WRAPPER_CMD.test(p.cmd))
+    .map(({ pid }) => ({ pid, start: realPidStart(pid, io) }));
 }
 
 const cpuTimes = () => os.cpus().reduce((a, c) => { const t = c.times; a.idle += t.idle; a.total += t.user + t.nice + t.sys + t.idle + t.irq; return a; }, { idle: 0, total: 0 });
@@ -417,10 +426,12 @@ function sessionLabel(opts, d) {
   return /^[0-9a-f-]{8,}$/i.test(id) ? `#${id.slice(0, 8)}` : null;
 }
 
-function writeLock(d, kind, opts, start, now) {
+function writeLock(d, kind, opts, start, now, reading = null) {
   const rec = {
     kind, pid: opts.pid, pidStart: start, holder: opts.holder || 'unknown', head: opts.head || null, session: sessionLabel(opts, d),
     startedAt: now, expiresAt: now + (opts.minutes || KINDS[kind].minutes) * MIN,
+    // The machine read that decided the grant (card coord-run-lock-reading). Only a granted acquire passes one: register and a wait record leave it out.
+    ...(reading ? { grantFreeGB: reading.freeGB, grantLoadPct: reading.loadPct } : {}),
     ...(kind === 'pre-pr' ? { heavy: opts.heavy === true, phase: opts.phase || 'test' } : {}),
   };
   const file = `${kind}-${opts.pid}-${start}.lock`;
@@ -550,7 +561,7 @@ export async function acquire(opts, deps) {
       appendLine(d.dir, 'warn-log.jsonl', { ts: now, kind: opts.kind, holder: opts.holder || 'unknown', head: opts.head || null, pid, keys, reasons, freeGB: num(freeGB), loadPct, heavyLive });
       lines.push(`WOULD WAIT ${wait}`);
     }
-    const file = writeLock(d, opts.kind, { ...opts, pid }, start, now);
+    const file = writeLock(d, opts.kind, { ...opts, pid }, start, now, { freeGB: num(freeGB), loadPct: Math.round(loadPct) });
     // A hook build takes no slot, so it must not start the 2 minute spacing for the next heavy run.
     if (kind.heavy) writeFileSync(join(d.dir, 'last-grant.json'), JSON.stringify({ at: now, kind: opts.kind, pid }));
     const slot = kind.heavy ? `slot ${heavyLive + 1} of ${max}` : 'no slot needed';
@@ -698,6 +709,9 @@ async function sweepGated(d, starts) {
   try { return await withGate(d, selfStart, () => sweep(d, starts), LIST_GATE_MS); } catch { return sweep(d, starts, false); }
 }
 
+/** The reading at the grant as list text, at the END of the row line; empty for a row with no reading or a bad value (never 0). */
+const readingText = (r) => (Number.isFinite(r.grantFreeGB) && Number.isFinite(r.grantLoadPct) ? ` read free ${r.grantFreeGB} GB load ${r.grantLoadPct} pct` : '');
+
 export async function list(deps) {
   const d = defaults(deps);
   const starts = startsSnapshot(d);
@@ -705,7 +719,7 @@ export async function list(deps) {
   const live = await sweepGated(d, starts);
   const unlocked = unlockedRuns(d, live, procs);
   const lines = [`mode: ${readMode(d.dir)}`, `store: ${d.dir}`];
-  for (const r of live) lines.push(`${r.kind} pid ${r.pid} holder ${r.holder}${r.session ? ` session ${r.session}` : ''}${r.phase ? ` phase ${r.phase}` : ''} since ${clockText(r.startedAt, d.timeZone, false)} until ${clockText(r.expiresAt, d.timeZone)}`);
+  for (const r of live) lines.push(`${r.kind} pid ${r.pid} holder ${r.holder}${r.session ? ` session ${r.session}` : ''}${r.phase ? ` phase ${r.phase}` : ''} since ${clockText(r.startedAt, d.timeZone, false)} until ${clockText(r.expiresAt, d.timeZone)}${readingText(r)}`);
   if (!live.length) lines.push('no live lock');
   if (unlocked.length) lines.push(unlockedLine(unlocked));
   lines.push(CAVEAT);
