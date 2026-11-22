@@ -1,6 +1,6 @@
 /**
  * Rule A of card prflow-cli-partial-run-rule: a partial CLI run that is dealt with earns the cap skip.
- * Own file: pre-pr.test.mjs is held by another lane. Real git repos, a fake CLI runner, the counter in its real shared folder.
+ * Own file: pre-pr.cases.mjs is held by another lane. Real git repos, a fake CLI runner, the counter in its real shared folder.
  *
  * How the rule can fail, and the test that catches it (written before the code):
  *   - the row of a partial run has no partial fields, or holds finding text   -> PA1, PA12
@@ -33,7 +33,7 @@ const REVIEW_MD = readFileSync(path.join(REPO_ROOT, 'REVIEW.md'), 'utf8');
 process.env.PRE_PR_GATE_LOG = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-pa-gatelog-env-')), 'pre-pr-gates.jsonl');
 const tmp = (prefix, file) => path.join(mkdtempSync(path.join(os.tmpdir(), prefix)), file);
 
-// ---------- fixtures (the shapes of pre-pr.test.mjs, kept local: that file runs its tests on import) ----------
+// ---------- fixtures (the shapes of pre-pr.cases.mjs, kept local: that file runs its tests on import) ----------
 
 const ev = (...objs) => `${objs.map((o) => JSON.stringify(o)).join('\n')}\n`;
 const CONTEXT = { type: 'review_context', workingDirectory: '/x', currentBranch: 'feat/x', baseBranch: 'main', expectedDuration: 120 };

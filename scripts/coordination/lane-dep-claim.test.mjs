@@ -8,7 +8,7 @@
  *
  *   node --test scripts/coordination/lane-dep-claim.test.mjs
  *
- * The file name has no `.db.` part: test CO1 in pre-pr.test.mjs matches the CI list with scripts/coordination/[\w-]+\.test\.mjs.
+ * The file name has no `.db.` part: test CO1 in pre-pr.cases.mjs matches the CI list with scripts/coordination/[\w-]+\.test\.mjs.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';

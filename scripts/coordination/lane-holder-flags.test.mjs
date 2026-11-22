@@ -15,7 +15,7 @@
  *   seed      a held lane is rewritten; a file with one held lane writes its other lanes; the holder, the seat, an unowned lane
  *             or a reclaimable lane is refused.
  *   unchanged claim --dep-override, and --as with the caller's own id.
- * The file name has no `.db.` part: test CO1 in pre-pr.test.mjs matches the CI list with scripts/coordination/[\w-]+\.test\.mjs.
+ * The file name has no `.db.` part: test CO1 in pre-pr.cases.mjs matches the CI list with scripts/coordination/[\w-]+\.test\.mjs.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';

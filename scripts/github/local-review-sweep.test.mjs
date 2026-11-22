@@ -194,7 +194,7 @@ const reportOf = (w) => JSON.parse(w.out.at(-1));
 const listFile = (w) => path.join(w.stateRoot, 'cli-pairs', 'sweep-runs.jsonl');
 const seedList = (w, rows) => { mkdirSync(path.dirname(listFile(w)), { recursive: true }); for (const r of rows) appendFileSync(listFile(w), `${JSON.stringify(r)}\n`); };
 
-/** A synthetic CodeRabbit CLI agent stream in the event shape of pre-pr.test.mjs (review_context, finding, complete). */
+/** A synthetic CodeRabbit CLI agent stream in the event shape of pre-pr.cases.mjs (review_context, finding, complete). */
 const cliStream = (severities) => `${[
   JSON.stringify({ type: 'review_context', workingDirectory: '/x', currentBranch: 'feat/x', baseBranch: 'main' }),
   ...severities.map((s, i) => JSON.stringify({ type: 'finding', severity: s, fileName: `src/f${i}.mjs`, startLine: i + 1, endLine: i + 1, title: `made-up ${s} finding ${i}` })),

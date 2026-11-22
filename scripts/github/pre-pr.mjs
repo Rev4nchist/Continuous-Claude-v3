@@ -139,7 +139,7 @@ const MIN = 60_000;
 // ---------- surface table (data: add a row to cover a new surface) ----------
 
 const nodeTest = (id, pattern, timeoutMs = 5 * MIN) => ({ id, cmd: 'node', args: ['--test', pattern], cwd: '.', timeoutMs });
-const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock', 'tick-marker', 'board-band-view', 'ask-ledger', 'stall-alarm-log', 'learning-counts', 'board-mask', 'board-done-view', 'board-scheduled-view', 'portfolio', 'fleetops-view', 'fleetops-html'];
+const COORDINATION_TESTS = ['kanban-apply', 'kanban-card', 'kanban-client', 'kanban-place', 'lane-band', 'lane-path-guard', 'lane-seed-file', 'lane-shim', 'lane-sort', 'probe-boards', 'registry-drift', 'session-label', 'process-match', 'probe-scratch-guard', 'reminder-sync', 'run-lock', 'tick-marker', 'board-band-view', 'ask-ledger', 'stall-alarm-log', 'learning-counts', 'board-mask', 'board-done-view', 'board-scheduled-view', 'portfolio', 'fleetops-view', 'fleetops-html', 'wait-ready'];
 const COORDINATION_DB_TESTS = ['render-board', 'lane-project', 'lane-dep-claim', 'lane-dep-done', 'lane-dep-seed', 'scratch-db', 'lane-inbox-id', 'lane-holder-flags', 'lane-parked-scope', 'learning-counts-db', 'lane-done-frees-claims'];
 // Step 2b of card coord-test-gate-coverage: the drill tests need no database. The names are explicit: a missing file fails the gate.
 const COORD_DRILL_TESTS = ['abort', 'judge', 'lib', 'metrics', 'scenarios'].map((n) => `scripts/coordination/coord-drill-2/${n}.test.mjs`);
@@ -710,6 +710,21 @@ export function greenRewriteCandidate({ git, base = 'main', bodyText, head, evid
 }
 
 /**
+ * The pure part of updateGreen (card prepr-speed-bundle, O3): the new body text for a stale GREEN sha and the evidence check of that text.
+ * Returns { oldSha, newSha, text, evidence } only when the GREEN commit is an ancestor of HEAD, nothing but a clean merge of the base
+ * came after it, and the rewritten text passes the evidence check. It reads and writes no file. Any other case returns null.
+ */
+export function greenRewrite({ git, base = 'main', bodyText, head, paths, config, evidence }) {
+  const oldSha = greenRewriteCandidate({ git, base, bodyText, head, evidence });
+  if (!oldSha) return null;
+  const newSha = head.slice(0, 7);
+  const text = rewriteGreenSha(bodyText, oldSha, newSha);
+  if (text === null) return null;
+  const again = checkEvidence({ body: text, head, paths, config });
+  return again.status === 'PASS' ? { oldSha, newSha, text, evidence: again } : null;
+}
+
+/**
  * After a merge of the base the GREEN line names the pre-merge head. This updates it when that is safe: the evidence has
  * no other problem, the GREEN commit is an ancestor of HEAD, nothing but a clean merge of the base came after it
  * (onlyBaseMergedSince), and no other step failed (the gates ran on HEAD). It writes the body file and returns
@@ -718,18 +733,13 @@ export function greenRewriteCandidate({ git, base = 'main', bodyText, head, evid
 export function updateGreen({ git, base = 'main', bodyPath, bodyText, head, paths, config, results, evidence }) {
   if (!bodyPath) return null;
   if (results.some((r) => r !== evidence && r.status === 'FAIL')) return null;
-  const oldSha = greenRewriteCandidate({ git, base, bodyText, head, evidence });
-  if (!oldSha) return null;
-  const newSha = head.slice(0, 7);
-  const text = rewriteGreenSha(bodyText, oldSha, newSha);
-  if (text === null) return null;
-  const again = checkEvidence({ body: text, head, paths, config });
-  if (again.status !== 'PASS') return null;
+  const rewrite = greenRewrite({ git, base, bodyText, head, paths, config, evidence });
+  if (!rewrite) return null;
   try {
     if (readFileSync(bodyPath, 'utf8') !== bodyText) return null; // the file changed during the run: never overwrite it
-    writeFileSync(bodyPath, text);
+    writeFileSync(bodyPath, rewrite.text);
   } catch { return null; }
-  return { evidence: again, bodyText: text, note: result('evidence:green', 'NOTE', `GREEN updated ${oldSha.slice(0, 7)} -> ${newSha} in the local body file only: PATCH the PR body if the PR is open`) };
+  return { evidence: rewrite.evidence, bodyText: rewrite.text, note: result('evidence:green', 'NOTE', `GREEN updated ${rewrite.oldSha.slice(0, 7)} -> ${rewrite.newSha} in the local body file only: PATCH the PR body if the PR is open`) };
 }
 
 // ---------- heads with new code (the CodeRabbit run cap) ----------
@@ -1926,10 +1936,8 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   if (envRes.fail) results.push(result('env', 'FAIL', envRes.fail, envRes.others));
   if (envRes.note) results.push(result('env', 'NOTE', envRes.note));
   const crArgs = () => ({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseCommit}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseCommit, crStore });
-  // The review starts before the first test gate when no fast step failed. A stale GREEN (settledByGates) is an evidence FAIL: it keeps the old order.
-  if (!serialCr && !skipCr && head !== null && !results.some((r) => r.status === 'FAIL')) ctl.cr = await startCrStep(crArgs());
   let warnedGate = false;
-  for (const gate of envRes.gates) {
+  const runOneGate = async (gate) => {
     const cause = stopCause();
     const gateResult = envRes.blocked.has(gate.id) ? result(`gate:${gate.id}`, 'SKIP', 'not run: env failed, a package this gate needs is missing (see the env line)')
       : cause ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL (pass --keep-going to run every gate)`)
@@ -1937,7 +1945,15 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
     results.push(gateResult);
     if (ctl.cr && !ctl.cr.done && gateResult.status === 'FAIL' && !warnedGate) { warnedGate = true; log(gateFailedWhileReviewLine(gate.id)); }
     if (ctl.cr) await tick(); // one loop turn between gates: the review's timers and events run (M1)
-  }
+  };
+  // O4: the cheap gates (static checks, well under a second each) run first, so a cheap FAIL ends the run at once and starts no review.
+  for (const gate of envRes.gates.filter((g) => g.cheap)) await runOneGate(gate);
+  // The review starts before the first other gate when nothing has failed. O3: a stale GREEN (settledByGates) is an evidence FAIL that only
+  // the gates settle; it does not hold the review back when its rewrite already passes the evidence check. Any other FAIL does.
+  const holdsReview = results.some((r) => r.status === 'FAIL' && r !== settledByGates);
+  const rewritePasses = !settledByGates || greenRewrite({ git, base, bodyText, head, paths: changes.paths, config: cfg, evidence: settledByGates }) !== null;
+  if (!serialCr && !skipCr && head !== null && !holdsReview && rewritePasses) ctl.cr = await startCrStep(crArgs());
+  for (const gate of envRes.gates.filter((g) => !g.cheap)) await runOneGate(gate);
   // The run lock stops counting this run as heavy once the review runs and no test gate does. A lock write that fails (EBUSY, EPERM) must not stop the run.
   const toCrPhase = () => { try { onPhase('cr'); } catch (err) { log(`pre-pr: could not set the run lock phase (${String(err?.message ?? err).split('\n')[0]}); the run goes on`); } };
   if (ctl.cr && !ctl.cr.done) toCrPhase(); // the last test gate ended and the review still runs
@@ -1966,8 +1982,9 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
     : await runCodeRabbit({ ...crArgs(), onSpawned: (started) => { if (started) toCrPhase(); } })))); // serial mode: phase cr only when a review really starts
   const crStep = results[results.length - 1];
-  // Q1: a review that ran while a test gate failed is marked on its counter row, so it uses no slot (the first of a Chicago day) and is no finished run.
-  if (ctl.cr && crStep.runAt && results.some((r) => r.step.startsWith('gate:') && r.status === 'FAIL')) markRunGateFailed(root, branch, base, head, crStep.runAt, crTimeout + 10 * MIN);
+  // Q1: a review that ran early while any step failed (a gate, or a stale GREEN that the run could not settle, O3) is marked on its counter row,
+  // so it uses no slot (the first of a Chicago day) and is no finished run.
+  if (ctl.cr && crStep.runAt && results.some((r) => r !== crStep && r.status === 'FAIL')) markRunGateFailed(root, branch, base, head, crStep.runAt, crTimeout + 10 * MIN);
   const crFinished = finishedRuns(root, branch, base);
   const partialSkip = crStep.skipReason === 'cap' ? { earned: crStep.partialEarned ?? 0, unreviewed: crStep.unreviewedFiles ?? 0 } : { earned: 0, unreviewed: 0 };
   // Rule A: a cap skip that only a partial run earns needs the PR body line. A finished run earns it with no line.
@@ -2145,6 +2162,26 @@ export function installRunLockHandlers() {
   }
 }
 
+/**
+ * O5 (card prepr-speed-bundle): the summary check, once, before the run lock. A summary FAIL then ends the run with no grant, no machine reads
+ * and no spacing charge for other builders. Only the summary runs here: a stale GREEN is an evidence FAIL that the gates settle, so the evidence
+ * check stays inside the run. The run checks the summary again (runPrePrSteps). A FAIL removes an old stamp and leaves one `summary` row in the
+ * gate log, because a run with no grant writes no START row (the lock store is not changed). Returns the FAIL result, or null.
+ */
+export function summaryBeforeLock({ root, base = 'main', config, git = makeGit(root), summaryCheck = checkSummary, now = new Date(), gateLogFile = null }) {
+  let cfg;
+  try { cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8')); } catch { return null; } // the run reports a bad config itself
+  const headRun = git(['rev-parse', 'HEAD']);
+  const head = headRun.status === 0 ? headRun.stdout.trim() : '';
+  const branch = git(['branch', '--show-current']).stdout.trim();
+  const summary = summaryCheck({ root, head, branch, base, git, mode: cfg.pre_pr?.summary_mode === 'fail' ? 'fail' : 'note' });
+  if (summary.result.status !== 'FAIL') return null;
+  const stampPath = path.join(root, STAMP_REL);
+  try { if (existsSync(stampPath)) unlinkSync(stampPath); } catch { /* the run never trusts a stamp of another head */ }
+  try { appendGateRows(gateLogFile ?? gateLogPath(), gateRows({ results: [summary.result], durations: new WeakMap(), runId: randomUUID(), now, branch, head, base })); } catch { /* a log problem never changes the verdict */ }
+  return summary.result;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); process.exit(0); }
@@ -2161,6 +2198,18 @@ async function main() {
   const base = option(args, '--base') ?? 'main';
   const wait = args.includes('--wait-lock') || process.env.PRE_PR_WAIT_LOCK === '1';
   const startedAt = Date.now();
+  const earlyFail = summaryBeforeLock({ root, base });
+  if (earlyFail) {
+    if (args.includes('--json')) { // one document, the shape of every other run
+      const g = makeGit(root);
+      const headRun = g(['rev-parse', 'HEAD']);
+      console.log(JSON.stringify({ ok: false, head: headRun.status === 0 ? headRun.stdout.trim() : null, branch: g(['branch', '--show-current']).stdout.trim(), logPath: null, stampPath: null, results: [{ step: earlyFail.step, status: earlyFail.status, detail: earlyFail.detail, notes: earlyFail.notes }] }));
+    } else {
+      console.log(formatLines([earlyFail]).join('\n'));
+      console.log('RESULT FAIL: no stamp (stopped before the run lock: the summary check failed)');
+    }
+    process.exit(1);
+  }
   const held = await takeRunLock({ bodyPath, wait, factsOf: () => runFacts(root, base) });
   // The wait can take up to 60 minutes: read the body again after the grant (L1).
   try { bodyText = readFileSync(path.resolve(bodyPath), 'utf8'); } catch (err) { console.error(`pre-pr: cannot read the body file ${bodyPath} after the wait (${String(err.message).split('\n')[0]})`); process.exit(2); }

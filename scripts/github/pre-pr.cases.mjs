@@ -1,4 +1,8 @@
-// Tests for pre-pr.mjs. Run: node --test scripts/github/pre-pr.test.mjs
+// Tests for pre-pr.mjs. Run: node --test scripts/github/pre-pr-shard-1.test.mjs scripts/github/pre-pr-shard-2.test.mjs scripts/github/pre-pr-shard-3.test.mjs scripts/github/pre-pr-shard-4.test.mjs
+// Card prepr-speed-bundle (O2): the cases live in this file (its name matches no *.test.mjs) and run in 4 processes. Each pre-pr-shard-<n>.test.mjs sets
+// globalThis.PRE_PR_SHARD = { index, count: 4 } and imports this file; case n runs in shard n % count, so node --test runs the four at once. One process
+// ran all 300 cases in 300 s. The cases set process.env at the top of this file, so one process cannot run them in parallel. Imported with no shard set,
+// this file runs every case. pre-pr-shards.test.mjs checks that the glob scripts/github/*.test.mjs runs each case once.
 //
 // How each part can fail, and the test that catches it (written before the code):
 //
@@ -51,7 +55,7 @@
 //   - the stamp or counter dirties the tree                                    -> R1
 //   - no log file                                                              -> R1
 //   - the CLI without --body does not exit non-zero                            -> R3
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
@@ -74,6 +78,15 @@ import {
   killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn, acquireLock,
 } from './pre-pr.mjs';
 
+const SHARD = globalThis.PRE_PR_SHARD ?? { index: 0, count: 1 };
+let caseNo = 0;
+/** node:test's test, registered only in this process's shard: case n runs in shard n % count. */
+function test(...args) {
+  const mine = caseNo % SHARD.count === SHARD.index;
+  caseNo += 1;
+  return mine ? nodeTest(...args) : undefined;
+}
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const CONFIG = JSON.parse(readFileSync(path.join(REPO_ROOT, 'review-router.config.json'), 'utf8'));
@@ -84,7 +97,10 @@ process.env.PRE_PR_GATE_LOG = path.join(mkdtempSync(path.join(os.tmpdir(), 'prep
 // Same net for the run lock: a spawned pre-pr.mjs (X1, R3) takes the lock and logs START to runs.jsonl. It must reach a temp store, never
 // the live ~/.claude/state/run-locks (seat finding 14:30 CST 11-18: X1 children left START rows there). Children inherit process.env.
 process.env.RUN_LOCK_DIR = mkdtempSync(path.join(os.tmpdir(), 'prepr-runlock-env-'));
-const tempLedger = () => path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
+// O1: a child run takes the lock with its three samples at once (hook at run-lock.mjs, works only with a temp RUN_LOCK_DIR): no real 6 s + 30 s + 6 s
+// machine read per spawn. The children here check exit codes and START and END rows, never the samples.
+const LOCK_SAMPLES_ENV = { ...process.env, RUN_LOCK_TEST_SAMPLES: JSON.stringify({ free: [8, 8, 8], load: [10, 10, 10] }) };
+const tempLedger = () =>path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-ledger-')), 'coderabbit-paid.jsonl');
 
 const HEAD = 'a'.repeat(40);
 
@@ -1149,7 +1165,7 @@ setInterval(() => console.log('{"type":"heartbeat"}'), 100);`);
     try { process.kill(gc, 0); await sleep(100); } catch { alive = false; }
   }
   assert.equal(alive, false, `grandchild ${gc} is still running`);
-  assert.doesNotMatch(readFileSync(path.join(HERE, 'pre-pr.mjs'), 'utf8'), /taskkill/i, 'taskkill /T is forbidden on this machine');
+  assert.doesNotMatch(readFileSync(path.join(HERE, 'pre-pr.mjs'), 'utf8'), /taskkill/i, 'the tree-kill switch of the Windows kill tool is forbidden on this machine');
 });
 
 test('T6: killTree stops the children first, then the parent, ignores a process that is gone, and kills the group on POSIX', () => {
@@ -1508,7 +1524,7 @@ test('F1: finishedRuns counts only runs that finished with a PASS; a failed, inc
 });
 
 test('X1: bad usage exits 2 and an internal error exits 3', () => {
-  const run = (cwd, ...args) => spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), ...args], { cwd, encoding: 'utf8', windowsHide: true });
+  const run = (cwd, ...args) => spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), ...args], { cwd, encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV });
   assert.equal(run(os.tmpdir()).status, 2);
   // A git checkout with no review-router.config.json: the config read throws inside the run.
   const repo = makeRepo();
@@ -1517,6 +1533,8 @@ test('X1: bad usage exits 2 and an internal error exits 3', () => {
   const r = run(repo.dir, '--body', body, '--skip-cr');
   assert.equal(r.status, 3, r.stderr);
   assert.match(r.stderr, /stopped by an error/);
+  // O1: the child takes the lock with fake samples (no real 6 s + 30 s + 6 s machine read). Break: drop RUN_LOCK_TEST_SAMPLES from the spawn env.
+  assert.match(r.stderr, /samples come from RUN_LOCK_TEST_SAMPLES/);
 });
 
 // The built hook, fed a stamp that pre-pr.mjs really wrote.
@@ -1858,12 +1876,17 @@ test('CW4: runPrePr gives the catchers gate the real base, and a failing catcher
 
 test('R2b: a failing gate fails the run, and the gate summary is in its line', async () => {
   const repo = makeRepo();
-  const { result, crCalls } = (await prePr(repo, { exec: () => ({ status: 1, stdout: 'bad\n# fail 2\n', stderr: '' }) }));
+  const bad = () => ({ status: 1, stdout: 'bad\n# fail 2\n', stderr: '' });
+  const { result, crCalls } = (await prePr(repo, { exec: bad }));
   assert.equal(result.ok, false);
   assert.ok(result.lines.some((l) => /^FAIL gate:context-budget.*# fail 2/.test(l)), result.lines.join('\n'));
-  // Card prflow-prepr-speed: the review starts beside the gates, so a failing gate no longer stops it (it was crCalls 0). PRE_PR_SERIAL_CR=1 keeps the old rule.
-  assert.equal(crCalls.length, 1);
-  const serial = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: () => ({ status: 1, stdout: 'bad\n# fail 2\n', stderr: '' }) });
+  // Card prepr-speed-bundle (O4): context-budget is a cheap gate and runs before the review, so its FAIL starts no review at all.
+  assert.equal(crCalls.length, 0);
+  // Card prflow-prepr-speed: the review starts beside the other gates, so a failing non-cheap gate does not stop it. PRE_PR_SERIAL_CR=1 keeps the old rule.
+  const beside = await prePr(makeRepo(), { exec: bad, ...withGates(fakeGate('s1')) });
+  assert.equal(beside.result.ok, false);
+  assert.equal(beside.crCalls.length, 1);
+  const serial = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: bad, ...withGates(fakeGate('s1')) });
   assert.equal(serial.crCalls.length, 0);
 });
 
@@ -3179,17 +3202,22 @@ test('GL3: an unwritable log path changes no exit status, verdict or stamp', asy
 
 test('GL4: a FAIL gate row has status FAIL and a wall time in ms', async () => {
   const file = tempGateLog();
-  const { result } = await prePr(makeRepo(), { gateLogPath: file, exec: slowFail() });
+  const { result } = await prePr(makeRepo(), { gateLogPath: file, exec: slowFail(), ...withGates(fakeGate('s1')) });
   assert.equal(result.ok, false);
-  const row = rowsOf(file).find((r) => r.step === 'gate:context-budget');
+  const row = rowsOf(file).find((r) => r.step === 'gate:s1');
   assert.equal(row.status, 'FAIL');
   assert.equal(typeof row.ms, 'number');
   assert.ok(row.ms >= 10, `ms was ${row.ms}`);
   // The review started beside the gate and ended on its own (it was SKIP earlier-step-failed; PRE_PR_SERIAL_CR=1 still gives that).
   assert.equal(rowsOf(file).find((r) => r.step === 'coderabbit').status, 'PASS');
   const serialFile = tempGateLog();
-  await prePr(makeRepo(), { gateLogPath: serialFile, env: { PRE_PR_SERIAL_CR: '1' }, exec: slowFail() });
+  await prePr(makeRepo(), { gateLogPath: serialFile, env: { PRE_PR_SERIAL_CR: '1' }, exec: slowFail(), ...withGates(fakeGate('s1')) });
   assert.equal(rowsOf(serialFile).find((r) => r.step === 'coderabbit').status, 'SKIP');
+  // Card prepr-speed-bundle (O4): a FAIL of the cheap gate (context-budget) is logged with its time and the review is SKIP: it never started.
+  const cheapFile = tempGateLog();
+  await prePr(makeRepo(), { gateLogPath: cheapFile, exec: slowFail() });
+  assert.equal(rowsOf(cheapFile).find((r) => r.step === 'gate:context-budget').status, 'FAIL');
+  assert.equal(rowsOf(cheapFile).find((r) => r.step === 'coderabbit').status, 'SKIP');
 });
 
 test('GL5: a token and the PR body never reach a row, and a detail stops at 200 chars', async () => {
@@ -4132,6 +4160,13 @@ const slowReview = (events, ms = 300) => async (o) => {
 };
 const e2eFiles = (repo) => readdirSync(path.join(repo.dir, '.claude', 'cache', 'e2e'));
 const counterRows = (repo) => JSON.parse(readFileSync(crPaths(repo.dir, 'feat/x').counter, 'utf8')).runs;
+// Card prepr-speed-bundle (O3, O4): the gates run in this order: the cheap ones, then the review starts, then the other gates. A docs change runs
+// only context-budget (cheap), so the order tests inject fake gates of both kinds through the env step. A fake gate is a node call that the fake exec answers by id.
+const fakeGate = (id, cheap = false) => ({ id, cmd: 'node', args: [], cwd: '.', timeoutMs: 60_000, ...(cheap ? { cheap: true } : {}) });
+const withGates = (...gates) => ({ envCheck: () => ({ fail: null, others: [], note: null, blocked: new Set(), gates }) });
+const GATE_OK = { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' };
+const idExec = (events, failIds = []) => (spec) => { events.push(spec.id); return failIds.includes(spec.id) ? { status: 1, stdout: 'bad\n# fail 1\n', stderr: '' } : GATE_OK; };
+const idCr = (events) => (o) => { events.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
 
 test('F1: a fast step that FAILs (evidence) starts no review at all: the runner is never called, not even for usage', async () => {
   const repo = makeRepo({ files: { 'src/a.ts': 'export const a = 1;\n' } });
@@ -4153,7 +4188,7 @@ test('F2: the review child is running before the first test gate starts (real ru
   };
   const seen = [];
   const exec = () => { blockFor(1500); seen.push(existsSync(pidFile)); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
-  const run = await prePr(repo, { crRunner, exec });
+  const run = await prePr(repo, { crRunner, exec, ...withGates(fakeGate('s1')) }); // a non-cheap gate: the cheap ones run before the review (O4)
   assert.deepEqual(seen, [true], 'the stub child had started and written its pid file while the first gate blocked');
   assert.equal(run.result.ok, true, run.result.lines.join('\n'));
   assert.equal(crStep(run).status, 'PASS');
@@ -4182,9 +4217,9 @@ test('F4 and Q1f: a gate FAILs while the review runs: the line is printed at onc
   const earlier = { head: hexOf('7'), at: '2026-10-25T15:00:00.000Z', outcome: 'finished', complete: true, newCode: true };
   mkdirSync(path.dirname(crPaths(repo.dir, 'feat/x').counter), { recursive: true });
   writeFileSync(crPaths(repo.dir, 'feat/x').counter, JSON.stringify({ branch: 'feat/x', runs: [earlier] }));
-  const run = await prePr(repo, { exec: gateFail(events), crRunner: slowReview(events, 400), log: (l) => events.push(`log: ${l}`) });
+  const run = await prePr(repo, { exec: gateFail(events), crRunner: slowReview(events, 400), log: (l) => events.push(`log: ${l}`), ...withGates(fakeGate('s1')) });
   assert.equal(run.result.ok, false);
-  const failedAt = events.findIndex((e) => /^log: pre-pr: gate context-budget FAILED; waiting for the CLI review to end so its output is saved$/.test(e));
+  const failedAt = events.findIndex((e) => /^log: pre-pr: gate s1 FAILED; waiting for the CLI review to end so its output is saved$/.test(e));
   assert.ok(failedAt >= 0, events.join('\n'));
   assert.ok(failedAt < events.indexOf('review-end'), 'the FAILED line comes before the review ends');
   assert.ok(events.indexOf('review-start') < events.indexOf('gate'), 'the review started before the gate');
@@ -4196,7 +4231,7 @@ test('F4 and Q1f: a gate FAILs while the review runs: the line is printed at onc
 
 test('F5: a rerun on the same head reuses the saved output: no review call, no new counter row, and it passes when the gate passes', async () => {
   const repo = makeRepo();
-  await prePr(repo, { exec: gateFail(), crRunner: slowReview([], 100) });
+  await prePr(repo, { exec: gateFail(), crRunner: slowReview([], 100), ...withGates(fakeGate('s1')) }); // a non-cheap gate: a cheap FAIL starts no review (O4)
   assert.equal(counterRows(repo).length, 1);
   const second = await prePr(repo);
   assert.equal(second.crCalls.length, 0);
@@ -4206,29 +4241,58 @@ test('F5: a rerun on the same head reuses the saved output: no review call, no n
   assert.equal(stampOf(repo).cr_finished_runs, 0, 'a gateFailed row is not a finished run');
 });
 
-test('F22: a stale GREEN (settled by the gates) keeps the old order: no usage and no review call before the last gate', async () => {
+test('F22 (O3): a stale GREEN (settled by the gates) starts the review early, before the first non-cheap gate', async () => {
   const repo = mergedRepo();
   const events = [];
-  const crRunner = (o) => { events.push(o.args[0]); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
-  const exec = () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
-  const { result } = await runWithBodyFile(repo, greenBody({ green: repo.old }), { skipCr: false, crRunner, exec });
+  const { result } = await runWithBodyFile(repo, greenBody({ green: repo.old }), { skipCr: false, crRunner: idCr(events), exec: idExec(events), ...withGates(fakeGate('s1')) });
   assert.equal(result.ok, true, result.lines.join('\n'));
-  assert.deepEqual(events, ['gate', 'usage', 'review']);
+  assert.deepEqual(events, ['usage', 'review', 's1']);
+});
+
+test('O4a: a cheap gate that FAILs ends the run before any review call: no usage call, no review call, no slot spent', async () => {
+  const events = [];
+  const run = await prePr(makeRepo(), { ...withGates(fakeGate('c1', true), fakeGate('s1')), exec: idExec(events, ['c1']), crRunner: idCr(events) });
+  assert.equal(run.result.ok, false);
+  assert.deepEqual(events, ['c1'], 'one cheap gate ran; no review call, and the other gate did not run');
+  assert.equal(crStep(run).skipReason, 'earlier-step-failed');
+});
+
+test('O4b: the cheap gates run first, the review starts before the first other gate, and every gate runs once', async () => {
+  const events = [];
+  const run = await prePr(makeRepo(), { ...withGates(fakeGate('s1'), fakeGate('c1', true), fakeGate('s2')), exec: idExec(events), crRunner: idCr(events) });
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.deepEqual(events, ['c1', 'usage', 'review', 's1', 's2']);
+  const steps = run.result.results.map((r) => r.step).filter((s) => s.startsWith('gate:'));
+  assert.deepEqual(steps, ['gate:c1', 'gate:s1', 'gate:s2'], 'the results are in the order the gates ran');
+});
+
+test('O3c: an early review on a stale GREEN, then a FAIL that is no gate (the body file changed during the gates): the counter row is marked gateFailed and no slot is used', async () => {
+  const repo = mergedRepo();
+  const events = [];
+  const body = greenBody({ green: repo.old });
+  const bodyPath = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-body-')), 'body.md');
+  writeFileSync(bodyPath, body);
+  const exec = (spec) => { events.push(spec.id); writeFileSync(bodyPath, `${body}edited while the gates ran\n`); return GATE_OK; };
+  const run = await prePr(repo, { bodyText: body, bodyPath, skipCr: false, crRunner: idCr(events), exec, ...withGates(fakeGate('s1')) });
+  assert.equal(run.result.ok, false, 'the stale GREEN stays: the file was not rewritten');
+  assert.deepEqual(events, ['usage', 'review', 's1']);
+  assert.equal(counterRows(repo).at(-1).gateFailed, true, 'the review row is marked, so the 2-run cap does not count it');
+  assert.equal(existsSync(stampFile(repo)), false);
 });
 
 test('SER: PRE_PR_SERIAL_CR=1 keeps today\'s order (gates, then the review); without it the review comes first', async () => {
   const early = [];
-  await prePr(makeRepo(), { exec: gateFail(early), crRunner: slowReview(early, 50) });
+  await prePr(makeRepo(), { exec: gateFail(early), crRunner: slowReview(early, 50), ...withGates(fakeGate('s1')) });
   assert.deepEqual(early.filter((e) => e !== 'review-end'), ['review-start', 'gate'], 'default: the review starts first');
   const serial = [];
-  const run = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: gateFail(serial), crRunner: slowReview(serial, 50) });
+  const run = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: gateFail(serial), crRunner: slowReview(serial, 50), ...withGates(fakeGate('s1')) });
   assert.deepEqual(serial, ['gate'], 'serial: a failed gate means no review');
   assert.equal(crStep(run).skipReason, 'earlier-step-failed');
 });
 
 test('PH: the phase becomes cr after the last gate while the review runs; no review, no phase change', async () => {
   const events = [];
-  await prePr(makeRepo(), { onPhase: (p) => events.push(`phase ${p}`), exec: () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; }, crRunner: slowReview(events, 300) });
+  await prePr(makeRepo(), { onPhase: (p) => events.push(`phase ${p}`), exec: () => { events.push('gate'); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; }, crRunner: slowReview(events, 300), ...withGates(fakeGate('s1')) });
   assert.deepEqual(events, ['review-start', 'gate', 'phase cr', 'review-end']);
   const none = [];
   await prePr(makeRepo(), { skipCr: true, onPhase: (p) => none.push(p) });
@@ -4392,7 +4456,7 @@ test('RL-ISO: every test file that starts pre-pr.mjs as a process sends its run 
   const testFiles = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) return e.name === 'node_modules' || e.name.startsWith('.') ? [] : testFiles(p);
-    return e.name.endsWith('.test.mjs') ? [p] : [];
+    return e.name.endsWith('.test.mjs') || e.name.endsWith('.cases.mjs') ? [p] : []; // O2: the cases file is no *.test.mjs, so the scan reads it too
   });
   // A spawn of the script: a spawn or exec call whose arguments name pre-pr.mjs, or a module text that imports it to run its handlers.
   const SPAWNS = /(spawnSync|spawn|execFileSync|execFile)\([^;]*pre-pr\.mjs|installRunLockHandlers.*pre-pr\.mjs|PRE_PR\s*=\s*resolve\([^)]*pre-pr\.mjs/s;
@@ -4410,8 +4474,10 @@ test('RL-ISO2: a spawned exit-3 run writes its START row to the temp store of th
   const repo = makeRepo();
   const body = path.join(repo.dir, '..', `body-iso-${Date.now()}.md`);
   writeFileSync(body, 'Proof type: docs\n');
-  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--skip-cr'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true });
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--skip-cr'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV });
   assert.equal(r.status, 3, r.stderr);
+  // O1: same fake samples here (this test checks START and END rows, never the machine read).
+  assert.match(r.stderr, /samples come from RUN_LOCK_TEST_SAMPLES/);
   const runs = path.join(process.env.RUN_LOCK_DIR, 'runs.jsonl');
   assert.ok(existsSync(runs), 'the child wrote runs.jsonl in the temp store');
   const rows = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
@@ -4426,6 +4492,70 @@ test('RL-ISO2: a spawned exit-3 run writes its START row to the temp store of th
   assert.equal(ends.length, 1, 'one END row for the exit-3 run');
   assert.equal(ends[0].result, 'ERROR');
   assert.equal(ends[0].exitCode, 3);
+});
+
+// ---------- card prepr-speed-bundle, O5: the summary check runs once before the run lock ----------
+// How it can fail, one test each, with the source change that makes it fail:
+//   O5a  a summary FAIL before the lock leaves the old stamp, or writes no gate-log row   (drop the stamp removal or the row)
+//   O5b  a PASS (or a note-mode result) before the lock stops the run                      (exit on any result)
+//   O5c  a bad summary still takes the lock first: START row, reads, spacing charge        (no check before takeRunLock in main)
+const FAIL_SUMMARY = () => ({ result: { step: 'summary', status: 'FAIL', detail: 'no summary file: stub', notes: [] }, sha: null, ok: false });
+
+test('O5a: a summary FAIL before the lock returns the FAIL, removes the old stamp and leaves one summary row in the gate log', () => {
+  const repo = makeRepo();
+  const stamp = path.join(repo.dir, PRE.STAMP_REL);
+  mkdirSync(path.dirname(stamp), { recursive: true });
+  writeFileSync(stamp, '{"old":true}');
+  const gateLogFile = tempGateLog();
+  const failed = PRE.summaryBeforeLock({ root: repo.dir, base: 'main', config: CONFIG, summaryCheck: FAIL_SUMMARY, gateLogFile, now: new Date() });
+  assert.equal(failed.status, 'FAIL');
+  assert.equal(existsSync(stamp), false, 'an old stamp must not outlive a FAIL');
+  const rows = readFileSync(gateLogFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((r) => [r.step, r.status, r.head, r.branch]), [['summary', 'FAIL', repo.head, 'feat/x']]);
+});
+
+test('O5b: a summary that passes (or only notes) before the lock returns null: the run goes on, no stamp is touched, no row is written', () => {
+  const repo = makeRepo();
+  const stamp = path.join(repo.dir, PRE.STAMP_REL);
+  mkdirSync(path.dirname(stamp), { recursive: true });
+  writeFileSync(stamp, '{"old":true}');
+  const gateLogFile = tempGateLog();
+  assert.equal(PRE.summaryBeforeLock({ root: repo.dir, base: 'main', config: CONFIG, summaryCheck: SUMMARY_OK, gateLogFile, now: new Date() }), null);
+  assert.equal(PRE.summaryBeforeLock({ root: repo.dir, base: 'main', config: CONFIG, summaryCheck: () => ({ result: { step: 'summary', status: 'NOTE', detail: 'note mode', notes: [] }, sha: null, ok: false }), gateLogFile, now: new Date() }), null);
+  assert.equal(existsSync(stamp), true);
+  assert.equal(existsSync(gateLogFile), false, 'no row for a pass');
+});
+
+test('O5c: a bad summary stops pre-pr.mjs before the run lock: exit 1, the FAIL line, no START row, no wait, no stamp', () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'review-router.config.json'), JSON.stringify({ ...CONFIG, pre_pr: { ...CONFIG.pre_pr, summary_mode: 'fail' } }));
+  const body = path.join(repo.dir, '..', `body-o5-${Date.now()}.md`);
+  writeFileSync(body, 'Proof type: docs\n');
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--wait-lock'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV, timeout: 60_000 });
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /FAIL summary/);
+  assert.match(r.stdout, /RESULT FAIL: no stamp/);
+  assert.ok(Date.now() - t0 < 20_000, 'no lock wait');
+  const runs = path.join(process.env.RUN_LOCK_DIR, 'runs.jsonl');
+  const mine = existsSync(runs) ? readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((row) => row.pid === r.pid) : [];
+  assert.deepEqual(mine, [], 'this child took no lock and logged no START');
+  assert.equal(existsSync(path.join(repo.dir, PRE.STAMP_REL)), false);
+});
+
+test('O5d: with --json a pre-lock summary FAIL prints ONE JSON document (ok false, the summary row), like every other run, and exits 1', () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'review-router.config.json'), JSON.stringify({ ...CONFIG, pre_pr: { ...CONFIG.pre_pr, summary_mode: 'fail' } }));
+  const body = path.join(repo.dir, '..', `body-o5d-${Date.now()}.md`);
+  writeFileSync(body, 'Proof type: docs\n');
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pre-pr.mjs'), '--body', body, '--json'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV, timeout: 60_000 });
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  const doc = JSON.parse(r.stdout); // one document: a text line before it, or a second document, throws here
+  assert.equal(doc.ok, false);
+  assert.equal(doc.head, repo.head);
+  assert.equal(doc.branch, 'feat/x');
+  assert.equal(doc.stampPath, null);
+  assert.deepEqual(doc.results.map((x) => [x.step, x.status]), [['summary', 'FAIL']]);
 });
 
 // Seat ruling 14:44 (a)-(d): the exit handler writes END only when START was logged and END was not; it never throws; a normal end and a
