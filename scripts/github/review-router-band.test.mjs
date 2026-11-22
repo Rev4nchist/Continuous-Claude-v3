@@ -55,9 +55,15 @@ const HEAD = 'a'.repeat(40);
 
 // Five control-plane files outside FORCE_HIGH_FILES and the security tier: their band comes from the score alone. (Until 2026-11-22 this list held
 // review-status.mjs and review-router.mjs, which are forced HIGH now; B32, B40 and B51 test those two by name.)
-const GATE = ['scripts/github/cr-paid.mjs', 'scripts/github/land-recheck.mjs', 'scripts/github/pre-pr.mjs', 'scripts/github/cr-fix.mjs', 'scripts/github/pr-checkpoint.mjs'];
+const GATE = ['scripts/github/cr-paid.mjs', '.claude/plugins/ccv3-mods/hooks/pr-loop/model.ts', 'scripts/github/pre-pr.mjs', 'scripts/github/cr-fix.mjs', 'scripts/github/pr-checkpoint.mjs'];
 const LAND_STEP = 'scripts/github/' + ['land', 'pr'].join('-') + '.ps1';
-const FORCED = ['scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', LAND_STEP];
+// The four of card force-high-security-tier, then the land path of card force-high-land-path (Dave 2026-11-22: "17 of 654: all 11 files").
+const FORCED = [
+  'scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', LAND_STEP,
+  'scripts/github/land-decision.mjs', 'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1', '.claude/hooks/src/decision-gate.ts', 'scripts/github/ship-ask.mjs',
+  'scripts/github/land-recheck.mjs', 'scripts/ratchets/lib/review-md.mjs',
+  '.claude/hooks/src/decision-ledger.ts', 'scripts/lib/resolve-deps.mjs', '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs',
+];
 
 test('B1: a control-plane file counts for G whatever its extension (a .json guard data file)', () => {
   const b = bandOf(['.claude/hooks/src/shared/malicious-packages.json'], LIVE);
@@ -153,7 +159,10 @@ test('B12: the section 4 backtest rows get the documented band and G count (fixt
   for (const row of BACKTEST.prs) {
     const b = bandOf(row.files, LIVE);
     // The documented band is the score band. A security_tier or FORCE_HIGH_FILES file lifts a band below HIGH to HIGH (card force-high-security-tier).
-    const forced = (b.securityTier.length > 0 || b.forceHighFiles.length > 0) && BELOW.includes(row.band);
+    // The expected value comes from the row's own paths and this file's lists (FORCED, the matrix globs), not from bandOf's outputs.
+    const isTestPath = (p) => LIVE.matrix.test_markers.some((t) => `/${p}`.includes(t));
+    const onTier = (p) => LIVE.matrix.control_plane.some((g) => matchGlob(g, p)) && LIVE.matrix.security_tier.some((g) => matchGlob(g, p));
+    const forced = row.files.some((p) => !isTestPath(p) && (FORCED.includes(p) || onTier(p))) && BELOW.includes(row.band);
     if (forced) forcedRows++;
     assert.equal(b.band, forced ? 'HIGH' : row.band, `#${row.pr} band`);
     assert.equal(b.forcedHigh, forced, `#${row.pr} forcedHigh`);
@@ -663,7 +672,7 @@ test('B55: FORCE_HIGH_FILES is one frozen constant: a subset of the tap list, no
 test('B56: a PR with no tier file and no forced file keeps its score band (the rule changes nothing else)', () => {
   const cases = [
     [['docs/guide.md'], 'LOW'], [['apps/x/src/a.ts'], 'MID'], [['.coderabbit.yaml'], 'ELEVATED'], [[GATE[0]], 'ELEVATED'],
-    [['scripts/github/pre-pr.mjs'], 'ELEVATED'], [['scripts/github/land-recheck.mjs'], 'ELEVATED'], [['scripts/github/pr-checkpoint.mjs'], 'ELEVATED'],
+    [['scripts/github/pre-pr.mjs'], 'ELEVATED'], [['scripts/github/cr-fix.mjs'], 'ELEVATED'], [['scripts/github/pr-checkpoint.mjs'], 'ELEVATED'],
     [[...GATE.slice(0, 4), '.coderabbit.yaml'], 'ELEVATED'], [GATE, 'HIGH'],
   ];
   for (const [files, band] of cases) {
@@ -676,7 +685,7 @@ test('B56: a PR with no tier file and no forced file keeps its score band (the r
   assert.equal(bandOf(FORCED, NO_MATRIX), null, 'no matrix block, no band, forced file or not');
 });
 
-test('B57: the land gate holds a review:none pick on a forced-HIGH PR (it needs Dave\'s record), and still skips a plain MID PR', async () => {
+test('B57: the none-pick check needs Dave\'s record for a forced-HIGH band (band from the local config here; the base code and config reads are in land-none-base-code.test.mjs and land-none-check.test.mjs), and still skips a plain MID PR', async () => {
   const { nonePick } = await import('./land-none-check.mjs');
   const noRecord = () => ({ glob: '/s/store.json', files: [], records: [], bad: [] });
   for (const p of [FORCED[0], FORCED[3], TIER_PATHS[0]]) {
@@ -687,4 +696,51 @@ test('B57: the land gate holds a review:none pick on a forced-HIGH PR (it needs 
   }
   const mid = nonePick({ pr: 7, head: HEAD, labels: ['review:none'], band: bandOf(['apps/x/src/a.ts'], LIVE).band, read: noRecord });
   assert.equal(mid.ok, true);
+});
+
+// ---------- card force-high-land-path (Dave 2026-11-22: "17 of 654: all 11 files"): the whole land path is forced HIGH, matched without case ----------
+
+test('B58: every file of the land path alone is HIGH and forcedHigh, with no CRITICAL; FORCED holds 15 entries', () => {
+  assert.equal(FORCED.length, 15);
+  assert.equal(new Set(FORCED).size, 15);
+  for (const p of FORCED.slice(4)) {
+    const b = bandOf([p], LIVE);
+    assert.equal(b.band, 'HIGH', p);
+    assert.equal(b.forcedHigh, true, p);
+    assert.equal(b.L, false, `${p} forces no CRITICAL`);
+    assert.deepEqual(b.forceHighFiles, [p], p);
+  }
+  // a rename out of a land-path file counts by its old name
+  assert.equal(bandOf([{ filename: 'scripts/new.mjs', previous_filename: 'scripts/github/land-decision.mjs' }], LIVE).band, 'HIGH');
+});
+
+test('B59: a path that differs only in case still forces HIGH, counts for the gate plane and the engine list, and a docs file stays LOW', () => {
+  for (const p of [
+    LAND_STEP.toUpperCase(), 'Scripts/GitHub/Review-Router.mjs', 'REVIEW-ROUTER.CONFIG.JSON', '.Claude/Hooks/Src/Decision-Gate.ts',
+    'scripts/github/SHIP-ASK.MJS', '.claude/hooks/dist/Decision-Ledger.mjs',
+  ]) {
+    const b = bandOf([p], LIVE);
+    assert.equal(b.band, 'HIGH', p);
+    assert.equal(b.forcedHigh, true, p);
+  }
+  // a security_tier path, upper-cased, is on the tier and on the gate plane
+  const tier = bandOf([TIER_PATHS[0].toUpperCase()], LIVE);
+  assert.deepEqual(tier.securityTier, [TIER_PATHS[0].toUpperCase()]);
+  assert.equal(tier.G, 1);
+  assert.equal(tier.band, 'HIGH');
+  // an engine file, in other case, is CRITICAL
+  assert.equal(bandOf(['Scripts/GitHub/Local-Review.mjs'], LIVE).band, 'CRITICAL');
+  // a case-variant of an upper-case extension is a logic file (K = 1)
+  assert.equal(bandOf(['apps/x/src/A.TS'], LIVE).K, 1);
+  assert.equal(bandOf(['DOCS/Guide.MD'], LIVE).band, 'LOW');
+});
+
+test('B60: a test file in another case does not force HIGH, and a near-miss name in another case does not either', () => {
+  for (const p of ['Scripts/GitHub/Review-Router.test.mjs', '.claude/hooks/src/__tests__/DECISION-GATE.test.ts', 'scripts/github/Fixtures/Land-Decision.mjs.bak', 'scripts/github/old/SHIP-ASK.mjs']) {
+    assert.equal(bandOf([p], LIVE).forcedHigh, false, p);
+  }
+});
+
+test('B61: TRUST_BOUNDARY.tap holds every FORCE_HIGH_FILES entry (one list, named in one place)', () => {
+  for (const p of router.FORCE_HIGH_FILES) assert.ok(TRUST_BOUNDARY.tap.includes(p), `${p} is in TRUST_BOUNDARY.tap`);
 });
