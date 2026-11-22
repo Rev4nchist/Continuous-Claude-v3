@@ -119,20 +119,28 @@ test('FH4: top-level code that a PR adds to any file of the check does not run w
 
 const EXE = (name) => (process.platform === 'win32' ? `${name}.exe` : name);
 
-test('FH5: resolveExe finds an executable on an absolute PATH entry only: never the current folder, a relative entry or an empty entry', () => {
-  assert.equal(typeof lnc.resolveExe, 'function');
-  const tmp = mkdtempSync(path.join(os.tmpdir(), 'fh-exe-'));
-  try {
-    const good = path.join(tmp, 'good');
-    const planted = path.join(tmp, 'planted');
-    write(good, EXE('git'), 'x');
-    write(planted, EXE('git'), 'x');
-    const env = (...dirs) => ({ PATH: dirs.join(path.delimiter), Path: dirs.join(path.delimiter) });
-    assert.equal(lnc.resolveExe('git', { env: env('.', '', 'planted-relative', good) }), path.join(good, EXE('git')));
-    assert.equal(lnc.resolveExe('git', { env: env('.', '', path.relative(process.cwd(), planted)) }), null, 'only relative entries: no match');
-    assert.equal(lnc.resolveExe('git', { env: env(path.join(tmp, 'none')) }), null, 'no match');
-    for (const bad of ['', '../git', 'a/b', 'git;calc', 'git ']) assert.equal(lnc.resolveExe(bad, { env: env(good) }), null, `${JSON.stringify(bad)} is not a plain name`);
-  } finally { rmSync(tmp, { recursive: true, force: true }); }
+// The entry (git) and the router (makeGh) each hold their own copy of resolveExe: the entry cannot import band code before the base-code check. Each copy is tested.
+for (const [owner, mod] of [['land-none-check.mjs', lnc], ['review-router.mjs', router]]) {
+  test(`FH5: ${owner} resolveExe finds an executable on an absolute PATH entry only: never the current folder, a relative entry or an empty entry`, () => {
+    assert.equal(typeof mod.resolveExe, 'function');
+    const tmp = mkdtempSync(path.join(os.tmpdir(), 'fh-exe-'));
+    try {
+      const good = path.join(tmp, 'good');
+      const planted = path.join(tmp, 'planted');
+      write(good, EXE('git'), 'x');
+      write(planted, EXE('git'), 'x');
+      const env = (...dirs) => ({ PATH: dirs.join(path.delimiter), Path: dirs.join(path.delimiter) });
+      assert.equal(mod.resolveExe('git', { env: env('.', '', 'planted-relative', good) }), path.join(good, EXE('git')));
+      assert.equal(mod.resolveExe('git', { env: env('.', '', path.relative(process.cwd(), planted)) }), null, 'only relative entries: no match');
+      assert.equal(mod.resolveExe('git', { env: env(path.join(tmp, 'none')) }), null, 'no match');
+      for (const bad of ['', '../git', 'a/b', 'git;calc', 'git ']) assert.equal(mod.resolveExe(bad, { env: env(good) }), null, `${JSON.stringify(bad)} is not a plain name`);
+    } finally { rmSync(tmp, { recursive: true, force: true }); }
+  });
+}
+
+test('FH12: the entry has its own default repo (it cannot import the router), and it equals the router constant', () => {
+  const text = readFileSync(path.join(ROOT, ENTRY), 'utf8');
+  assert.ok(text.includes(`const DEFAULT_REPO = '${router.DEFAULT_REPO}';`), 'the entry names the same default repo as review-router.mjs');
 });
 
 /** A folder with a copy of node.exe named `<name>.exe` and a preload that writes a marker when it runs under that name. */
