@@ -78,6 +78,19 @@ test('R4: an old row with no from field is dated by its capture time and flagged
   assert.match(text, /dated by capture/);
 });
 
+test('R4b: an old review row with no from field judged the 7 days before its capture, so it is not dated by the capture time', () => {
+  const s = scratch([fire('2026-11-17T10:00:00Z')], [cap('2026-11-16T15:20:00Z', { source: 'review', count: 5 })]);
+  // Captured after the window starts, but its fires lie up to 7 days earlier: partly in the window, not counted.
+  const a = rate(s, '2026-11-16T06:00:00Z');
+  assert.ok(a.json, a.out);
+  assert.equal(a.json.falseFires, 0);
+  assert.equal(a.json.partialRows, 1);
+  // A window that holds the whole 7 days counts all 5 fires and flags the row.
+  const b = rate(s, '2026-11-09T00:00:00Z', '2026-11-17T00:00:00Z');
+  assert.equal(b.json.falseFires, 5);
+  assert.equal(b.json.datedByCapture, 1);
+});
+
 test('R5: a re-arm row with a non-empty rules array is no fire and no pair to judge', () => {
   const s = scratch([rearm('2026-11-17T10:00:00Z', ['git-merge']), fire('2026-11-17T10:01:00Z')], []);
   const r = rate(s, '2026-11-16T00:00:00Z');
