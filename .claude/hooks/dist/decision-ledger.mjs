@@ -463,7 +463,14 @@ var MAX_REASKS = 2;
 var MAX_AGE_MS = 7 * 24 * 3600 * 1e3;
 var MISS_TTL_MS = 60 * 60 * 1e3;
 var liveMisses = (m) => m && Date.now() - Date.parse(m.at) <= MISS_TTL_MS ? m.count : 0;
-var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(os.homedir(), ".claude", "state", "ccv3-mods", "decisions.json");
+var accountHome = () => {
+  try {
+    return os.userInfo().homedir || os.homedir();
+  } catch {
+    return os.homedir();
+  }
+};
+var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(accountHome(), ".claude", "state", "ccv3-mods", "decisions.json");
 var empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
 var idOf = ({ step, key, head }) => `${step}
 ${key}
@@ -502,11 +509,32 @@ function prune(store, now) {
     }
   }
 }
-function update(fn) {
+function readStoreStrict(file) {
+  let text;
+  try {
+    text = readFileSync2(file, "utf8");
+  } catch (err) {
+    return err?.code === "ENOENT" ? { store: empty() } : { unreadable: true };
+  }
+  try {
+    const s = JSON.parse(text);
+    if (!isPlain(s)) return { unreadable: true };
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? { store } : { unreadable: true };
+  } catch {
+    return { unreadable: true };
+  }
+}
+function update(fn, { strict = false } = {}) {
   const file = decisionsPath();
   mkdirSync(path.dirname(file), { recursive: true });
   const locked = withLock(file, {}, () => {
-    const store = readStore(file);
+    let store;
+    if (strict) {
+      const read = readStoreStrict(file);
+      if (read.unreadable) return { ok: false, reason: "unreadable-store", detail: `the decision store ${file} exists but cannot be read or parsed: repair or delete it` };
+      store = read.store;
+    } else store = readStore(file);
     prune(store, Date.now());
     const out = fn(store);
     writeStore(file, store);
@@ -514,14 +542,15 @@ function update(fn) {
   });
   return locked;
 }
-function decisionRecord({ step, key, head, label }) {
+function decisionRecord({ step, key, head, label, entry }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: "no-open-offer" };
   return update((store) => {
     const id = idOf({ step, key, head });
     const offer = store.offers[id];
     if (!offer || offer.open !== true) return { ok: false, reason: "no-open-offer" };
     if (typeof label !== "string" || !offer.labels.includes(label)) return { ok: false, reason: "no-match" };
-    store.decisions[id] = { label, at: (/* @__PURE__ */ new Date()).toISOString(), tree: offer.tree, nonce: offer.nonce };
+    const at = (/* @__PURE__ */ new Date()).toISOString();
+    store.decisions[id] = { label, at, tapAt: at, entry: isText(entry) ? entry : null, tree: offer.tree, nonce: offer.nonce };
     offer.open = false;
     delete store.misses[id];
     return { ok: true };
@@ -610,7 +639,7 @@ function noteFor(q, answers, offers) {
   const o = hits[0];
   const answer = answers[q.question];
   if (!isText2(answer) || !o.labels.includes(answer)) return missText(o);
-  const r = decisionRecord2({ step: o.step, key: o.key, head: o.head, label: answer });
+  const r = decisionRecord2({ step: o.step, key: o.key, head: o.head, label: answer, entry: process.env.CLAUDE_CODE_ENTRYPOINT ?? null });
   if (r.ok) return `Recorded "${answer}" for the ${o.step} question (${o.key}).`;
   return r.reason === "lock" ? `Not recorded: the decision store was busy. Ask the same question again.` : null;
 }

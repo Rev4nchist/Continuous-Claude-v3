@@ -8,6 +8,16 @@ import type { Engine } from 'claude-code/testing'
 // Q3  option D (CCV3_MOD_PRLOOP_QUIET=1): no alert submits; the toast and the PRS row stay
 // Q4  any other value of the variable is option C
 // Q5  Dave's own /land press with no shell tool still hands the model its instruction, quiet or not
+// Paid flag (paid guard PR 2): a watched PR whose head holds a paid CodeRabbit comment with no paid-ledger row gets ONE toast and ONE model notice.
+// PF1 flagged: one toast, one notice, the exact text         PF2 the same check again: nothing (dedupe by PR, head and comment)
+// PF3 the verb names no comment (ledger row, plain request, older head: the verb's own tests): nothing
+// PF4 a failed verb (bad exit, a throw, not JSON): no flag, no throw, the PR stays watched
+// PF5 no CodeRabbit request on the PR, or a closed PR: the verb is not run
+// PF6 a new comment, or a new head, flags again             PF7 quiet mode: the toast stays, no notice
+// PF8 a rejected notice is retried at the next check, with no toast before it
+// PF9 quiet mode: one toast, the notice key is NOT marked sent; the same check in normal mode sends the notice once
+// PF10 more than 200 distinct paid keys leave exactly 200 (own cap, seat ruling); the other keys in doc.sent (40 at most) are not pruned by them
+// PF11 a stored ledger with 200 paid keys and 40 other keys survives a load (readDoc caps each class, not the whole list)
 
 const SESSION = 'test-session'
 const KEY = `pr-watch:${SESSION}`
@@ -30,6 +40,7 @@ type Status = {
   rateLimited: boolean
   prState: string
   merged: boolean
+  coderabbitRequests?: number
 }
 
 const PROOF_REASON = 'PR body proof: no "Proof type:" line. Add the Evidence block from pr-and-commit-style.md (types: bugfix, feature, refactor, ui, harness, docs)'
@@ -63,11 +74,19 @@ type Opts = {
   store?: Record<string, unknown>
   answer?: 'Land' | 'No' | 'dismiss'
   tools?: string[]
+  /** What `cr-paid.mjs unledgered` prints, per call in order (the last repeats): a { head, ids } object, 'exit2', 'throw' or 'junk'. */
+  paid?: Record<number, (Paid | 'exit2' | 'throw' | 'junk')[]>
+  /** The first N model notices are rejected. */
+  submitFails?: number
 }
+
+type Paid = { head: string; ids: number[] }
 
 const world = (on: On, opts: Opts = {}) => {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { USERPROFILE: 'C:/home', ...(opts.env ?? {}) })
+  // What mock.env does (a variable not listed is unset), on an object a test may change between checks (PF9 turns quiet mode off).
+  const env: Record<string, string> = { USERPROFILE: 'C:/home', ...(opts.env ?? {}) }
+  on('env.get', (_$, e) => ({ value: env[e.name] }))
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
   on('store.get', (_$, e) => ({ value: store.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -80,7 +99,7 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('store.keys', () => ({ value: [...store.keys()] }))
   const script = opts.script ?? {}
-  const seen = { status: [] as number[], toasts: [] as string[], submits: [] as string[], asks: [] as string[], land: [] as Record<string, unknown>[] }
+  const seen = { status: [] as number[], toasts: [] as string[], submits: [] as string[], asks: [] as string[], land: [] as Record<string, unknown>[], paid: [] as string[][] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.id', () => ({ value: SESSION }))
@@ -95,12 +114,25 @@ const world = (on: On, opts: Opts = {}) => {
     seen.toasts.push(e.text)
     return { value: undefined }
   })
+  let submitCalls = 0
   on('prompt.submit', (_$, e) => {
+    submitCalls += 1
+    if (submitCalls <= (opts.submitFails ?? 0)) throw new Error('prompt.submit rejected')
     seen.submits.push(e.text)
     return { text: e.text }
   })
+  const out = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', (_$, e) => {
     const argv = [...e.argv]
+    if (argv.some(part => part.includes('cr-paid.mjs'))) {
+      seen.paid.push(argv.slice(2))
+      const queue = opts.paid?.[Number(argv.find(part => /^\d+$/.test(part)))] ?? []
+      const reply = queue.length > 1 ? queue.shift() : queue[0]
+      if (reply === 'throw') throw new Error('spawn failed')
+      if (reply === 'exit2') return out(2, '')
+      if (reply === 'junk' || reply === undefined) return out(0, 'not json')
+      return out(0, JSON.stringify(reply))
+    }
     if (!argv.some(part => part.includes('review-status.mjs'))) {
       return { value: { exitCode: 0, stdout: '[]', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -124,7 +156,7 @@ const world = (on: On, opts: Opts = {}) => {
     seen.land.push({ ...e })
     return { result: { stdout: 'LANDED #1', stderr: '', interrupted: false } }
   })
-  return { clock, seen, store }
+  return { clock, seen, store, env }
 }
 
 const start = ($: Engine) => $.session.start({ cwd: 'C:/r', surface: 'terminal', isInteractive: true })
@@ -240,5 +272,130 @@ describe('pr-loop option D: CCV3_MOD_PRLOOP_QUIET=1 submits no alert', () => {
     expect(w.seen.land).toEqual([])
     expect(w.seen.submits.length).toBe(1)
     expect(w.seen.submits[0]).toContain('-Pr 12')
+  })
+})
+
+describe('pr-loop paid flag: a paid CodeRabbit comment with no paid-ledger row is flagged once, on every watched PR', () => {
+  const HEAD_B = 'b'.repeat(40)
+  const TEXT = (head = 'aaaaaaa') => `PR #7: a paid CodeRabbit request is on head ${head}, and the paid ledger has no round for it. It did not go through cr-paid.mjs post. Tell Dave.`
+  const asked = (over: Partial<Status> = {}) => status(7, { coderabbitRequests: 1, ...over })
+  const checks = async (w: ReturnType<typeof world>, $: Engine, count: number) => {
+    await start($)
+    for (let i = 0; i < count; i += 1) await w.clock.advance(TICK)
+    await w.clock.advance(1)
+  }
+  const flagged = (opts: Opts) => async ($: Engine, on: On, count = 1) => {
+    const w = world(on, { store: seed([{ pr: 7 }]), ...opts })
+    await checks(w, $, count)
+    return w
+  }
+
+  test('PF1 one toast and one model notice, with the exact text, for a paid comment on the head with no ledger row', async ($, on) => {
+    const w = await flagged({ script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })($, on)
+    expect(w.seen.paid).toEqual([['unledgered', '--pr', '7', '--json']])
+    expect(w.seen.toasts).toEqual([TEXT()])
+    expect(w.seen.submits).toEqual([TEXT()])
+    expect(stored(w.store)?.prs.map(p => p.pr)).toEqual([7])
+  })
+
+  test('PF2 the same comment at the next two checks flags nothing more', async ($, on) => {
+    const w = await flagged({ script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })($, on, 3)
+    expect(w.seen.paid.length).toBe(3)
+    expect(w.seen.toasts).toEqual([TEXT()])
+    expect(w.seen.submits).toEqual([TEXT()])
+  })
+
+  test('PF3 a verb that names no comment (a ledger row, a plain request, an older head) flags nothing', async ($, on) => {
+    const w = await flagged({ script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids: [] }] } })($, on)
+    expect(w.seen.paid.length).toBe(1)
+    expect(w.seen.toasts).toEqual([])
+    expect(w.seen.submits).toEqual([])
+  })
+
+  for (const bad of ['exit2', 'throw', 'junk'] as const) {
+    test(`PF4 a failed verb (${bad}) flags nothing, throws nothing and keeps the PR watched`, async ($, on) => {
+      const w = await flagged({ script: { 7: [asked()] }, paid: { 7: [bad] } })($, on)
+      expect(w.seen.paid.length).toBe(1)
+      expect(w.seen.toasts).toEqual([])
+      expect(w.seen.submits).toEqual([])
+      expect(stored(w.store)?.prs.map(p => p.pr)).toEqual([7])
+    })
+  }
+
+  test('PF5 a PR with no CodeRabbit request, and a closed PR, never run the verb', async ($, on) => {
+    const quiet = await flagged({ script: { 7: [status(7)] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })($, on)
+    expect(quiet.seen.paid).toEqual([])
+    expect(quiet.seen.toasts).toEqual([])
+  })
+
+  test('PF5b a closed PR with CodeRabbit requests never runs the verb', async ($, on) => {
+    const w = await flagged({ script: { 7: [asked({ prState: 'closed', merged: true, reasons: ['already merged'] })] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })($, on)
+    expect(w.seen.paid).toEqual([])
+    expect(w.seen.submits).toEqual([])
+  })
+
+  test('PF6 a new comment on the same head, and a comment on a new head, are each flagged again', async ($, on) => {
+    const w = await flagged({
+      script: { 7: [asked()] },
+      paid: { 7: [{ head: HEAD_A, ids: [41] }, { head: HEAD_A, ids: [41, 42] }, { head: HEAD_B, ids: [41] }] },
+    })($, on, 3)
+    expect(w.seen.submits).toEqual([TEXT(), TEXT(), TEXT('bbbbbbb')])
+    expect(w.seen.toasts).toEqual(w.seen.submits)
+  })
+
+  test('PF7 CCV3_MOD_PRLOOP_QUIET=1 keeps the toast and sends no model notice', async ($, on) => {
+    const w = await flagged({ env: { [QUIET]: '1' }, script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })($, on, 2)
+    expect(w.seen.toasts).toEqual([TEXT()])
+    expect(w.seen.submits).toEqual([])
+  })
+
+  test('PF8 a rejected model notice gives no toast, and the next check sends both once', async ($, on) => {
+    const w = await flagged({ submitFails: 1, script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })($, on, 2)
+    expect(w.seen.submits).toEqual([TEXT()])
+    expect(w.seen.toasts).toEqual([TEXT()])
+  })
+
+  const sentOf = (store: Map<string, unknown>): string[] => (store.get(KEY) as { sent?: string[] }).sent ?? []
+  const PAID_KEY_41 = `paid:7:${HEAD_A}:41`
+
+  test('PF9 quiet mode: one toast, the notice key is not marked sent, and the same check in normal mode sends the notice once', async ($, on) => {
+    const w = world(on, { env: { [QUIET]: '1' }, store: seed([{ pr: 7 }]), script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })
+    await checks(w, $, 2)
+    expect(w.seen.toasts).toEqual([TEXT()])
+    expect(w.seen.submits).toEqual([])
+    expect(sentOf(w.store)).not.toContain(PAID_KEY_41)
+    delete w.env[QUIET]
+    await w.clock.advance(TICK)
+    await w.clock.advance(1)
+    expect(w.seen.submits).toEqual([TEXT()])
+    expect(sentOf(w.store)).toContain(PAID_KEY_41)
+    await w.clock.advance(TICK)
+    await w.clock.advance(1)
+    expect(w.seen.submits).toEqual([TEXT()])
+  })
+
+  test('PF10 more than 200 distinct paid keys leave exactly 200 in doc.sent, and the 40 other keys stay', async ($, on) => {
+    const others = Array.from({ length: 40 }, (_, i) => `other ${i}`)
+    const store = seed([{ pr: 7 }])
+    ;(store[KEY] as { sent?: string[] }).sent = others
+    const ids = Array.from({ length: 250 }, (_, i) => i + 1)
+    const w = await flagged({ store, script: { 7: [asked()] }, paid: { 7: [{ head: HEAD_A, ids }] } })($, on)
+    const sent = sentOf(w.store)
+    const paid = sent.filter(key => key.startsWith('paid:'))
+    expect(paid.length).toBe(200)
+    expect(paid[0]).toBe(`paid:7:${HEAD_A}:51`)
+    expect(paid[199]).toBe(`paid:7:${HEAD_A}:250`)
+    expect(sent.filter(key => !key.startsWith('paid:'))).toEqual(others)
+  })
+
+  test('PF11 a stored ledger with 200 paid keys and 40 other keys is kept whole when the list is loaded', async ($, on) => {
+    const others = Array.from({ length: 40 }, (_, i) => `other ${i}`)
+    const paids = Array.from({ length: 200 }, (_, i) => `paid:9:${HEAD_A}:${i + 1}`)
+    const store = seed([{ pr: 7 }])
+    ;(store[KEY] as { sent?: string[] }).sent = [...paids.slice(0, 100), ...others, ...paids.slice(100)]
+    const w = await flagged({ store, script: { 7: [status(7)] } })($, on)
+    const sent = sentOf(w.store)
+    expect(sent.filter(key => key.startsWith('paid:'))).toEqual(paids)
+    expect(sent.filter(key => !key.startsWith('paid:'))).toEqual(others)
   })
 })

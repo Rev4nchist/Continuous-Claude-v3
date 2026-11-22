@@ -153,40 +153,51 @@ export async function enqueueRound($: EngineInterface, record: CheckpointRecord 
   return slotAdd($, { pr: record.pr, band: record.band, head, round }).catch(() => false)
 }
 
-type Staleness = { kind: 'open' } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
+/** `open`: the PR is open and not a draft, at `head` (the head the read printed). */
+type OpenRead = { kind: 'open'; head: string } | { kind: 'gone'; why: string } | { kind: 'unreadable'; why: string }
 
 /**
- * Whether a Yes may post: the PR must be open at the asked head. A post spends a review, so a state that cannot be read fails closed
- * (the question stays queued), as the post failure below does.
+ * The one reader of the PR state for a Yes and for a round grant: the PR must be open, not a draft, and (with `expectHead`) at that head. A state that
+ * cannot be read fails closed. A draft PR is gone: it was returned to draft. The checks run in this order: state, head, draft field, draft.
  */
-async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): Promise<Staleness> {
-  const ran = await run($, stateArgv(ask.pr), root, VIEW_TIMEOUT_MS)
+async function readOpenPr($: EngineInterface, root: string, pr: number, expectHead: string | null): Promise<OpenRead> {
+  const ran = await run($, stateArgv(pr), root, VIEW_TIMEOUT_MS)
   if (!ran.ok) return { kind: 'unreadable', why: ran.text }
   if (ran.code !== 0) return { kind: 'unreadable', why: firstLine(ran.err || ran.out) || `gh exited ${ran.code}` }
-  let info: { state?: unknown; headRefOid?: unknown }
+  let info: { state?: unknown; headRefOid?: unknown; isDraft?: unknown } | null
   try {
     info = JSON.parse(ran.out)
   } catch {
     return { kind: 'unreadable', why: 'gh printed no JSON' }
   }
-  if (typeof info.state !== 'string' || typeof info.headRefOid !== 'string') return { kind: 'unreadable', why: 'gh printed no state or head' }
+  // JSON `null` (or a bare value) parses fine and has no fields: it is an unreadable state, not a crash.
+  if (info === null || typeof info !== 'object' || typeof info.state !== 'string' || typeof info.headRefOid !== 'string' || info.headRefOid === '') return { kind: 'unreadable', why: 'gh printed no state or head' }
   if (info.state.toUpperCase() !== 'OPEN') return { kind: 'gone', why: `the PR is ${info.state.toLowerCase()}` }
-  if (info.headRefOid !== ask.head) return { kind: 'gone', why: `the head moved to ${info.headRefOid.slice(0, 7)}` }
-  return { kind: 'open' }
+  if (expectHead !== null && info.headRefOid !== expectHead) return { kind: 'gone', why: `the head moved to ${info.headRefOid.slice(0, 7)}` }
+  if (typeof info.isDraft !== 'boolean') return { kind: 'unreadable', why: 'gh printed no draft state' }
+  if (info.isDraft) return { kind: 'gone', why: 'the PR is a draft' }
+  return { kind: 'open', head: info.headRefOid }
 }
 
-/** The PR's head now, or null when it cannot be read (no checkout, gh failed, no JSON). */
-export async function currentHead($: EngineInterface, pr: number): Promise<string | null> {
+/**
+ * Whether a Yes may act: the PR must be open and not a draft. An opening or Greptile Yes posts a comment, so it also needs the asked head. A round Yes
+ * writes a grant and may queue a review: like the typed `/pathway grant`, it accepts a moved head (a round is asked after fix pushes) and carries the head
+ * that this read printed. A state that cannot be read fails closed (the question stays queued), as the post failure below does.
+ */
+async function staleness($: EngineInterface, root: string, ask: CheckpointAsk): Promise<OpenRead> {
+  return readOpenPr($, root, ask.pr, ask.kind === 'round' ? null : ask.head)
+}
+
+/**
+ * The state read of `/pathway grant`: the PR must be open and not a draft, at any head (a grant comes after fix pushes). `head`: the PR's head now, for the queue add.
+ * A string is the refusal, one sentence for Dave: the grant stores nothing and queues nothing. No checkout to read the PR in is a refusal too.
+ */
+export async function grantReadable($: EngineInterface, pr: number): Promise<{ head: string } | string> {
   const root = await rootOf($)
-  if (!root) return null
-  const ran = await run($, stateArgv(pr), root, VIEW_TIMEOUT_MS)
-  if (!ran.ok || ran.code !== 0) return null
-  try {
-    const head = (JSON.parse(ran.out) as { headRefOid?: unknown }).headRefOid
-    return typeof head === 'string' && head !== '' ? head : null
-  } catch {
-    return null
-  }
+  const read = root ? await readOpenPr($, root, pr, null) : { kind: 'unreadable' as const, why: 'no CCv3 checkout to read it in' }
+  if (read.kind === 'open') return { head: read.head }
+  const why = read.kind === 'gone' ? read.why : `the PR state could not be read (${read.why})`
+  return `PR #${pr} gets no round grant: ${why}. Nothing was recorded.`
 }
 
 /** Takes the answered ask out of the queue, and frees the lease when no ask of that PR is left. */
@@ -194,6 +205,17 @@ async function dropAsk($: EngineInterface, queue: CheckpointAsk[], ask: Checkpoi
   const rest = queue.filter(one => !sameAsk(one, ask))
   await saveAsks($, rest)
   if (!rest.some(one => one.pr === ask.pr)) await releaseLease($, ask.pr)
+}
+
+/**
+ * The queued asks of a PR that went back to draft leave the queue, and so does this session's lease on it: nothing queued for the old ready period may act.
+ * Only this session's queue is read (each session has its own key); an ask of another session meets the PR read of its own Yes (applyAnswer).
+ */
+export async function dropAsksOfPr($: EngineInterface, pr: number): Promise<void> {
+  const queue = await loadAsks($)
+  const rest = queue.filter(one => one.pr !== pr)
+  if (rest.length !== queue.length) await saveAsks($, rest)
+  await releaseLease($, pr)
 }
 
 /**
@@ -211,21 +233,28 @@ async function applyAnswer($: EngineInterface, ask: CheckpointAsk, answer: 'yes'
   const key = `${RECORD_PREFIX}${ask.pr}`
   const stored = readRecord(await $.store.get(key))
   let next: CheckpointRecord | null = stored
-  if (ask.kind !== 'round' && answer === 'yes') {
-    const root = await rootOf($)
-    // A question can wait for days (restore keeps it): a late Yes spends a review only on a PR that is still open at the asked head.
-    const seen = root ? await staleness($, root, ask) : null
+  let seen: OpenRead | null = null
+  let root: string | null = null
+  if (answer === 'yes') {
+    // The checkout is read ONCE and reused for the post below (CLI run 2, seat ruling): a second read could find none after the first found one.
+    root = await rootOf($)
+    // A question can wait for days (restore keeps it): a late Yes acts only on a PR that is still open and not a draft; an opening or Greptile Yes (it
+    // posts a comment) also needs the asked head. A round Yes writes a grant and may queue a review, so it reads the PR too (any head, see `staleness`);
+    // with no checkout to read it in, EVERY kind fails closed: the PR state is unreadable and the question stays queued.
+    seen = root ? await staleness($, root, ask) : { kind: 'unreadable' as const, why: 'no checkout' }
     if (seen && seen.kind === 'unreadable') {
-      const text = `PR #${ask.pr}: could not read the PR state (${seen.why}); nothing posted, the question stays queued`
+      const text = `PR #${ask.pr}: could not read the PR state (${seen.why}); nothing ${ask.kind === 'round' ? 'granted' : 'posted'}, the question stays queued`
       $.ui.toast(text, { timeoutMs: 10_000 })
       return text
     }
     if (seen && seen.kind === 'gone') {
       await dropAsk($, queue, ask)
-      const text = `PR #${ask.pr}: question dropped, nothing posted (${seen.why})`
+      const text = `PR #${ask.pr}: question dropped, nothing ${ask.kind === 'round' ? 'granted' : 'posted'} (${seen.why})`
       $.ui.toast(text, { timeoutMs: 10_000 })
       return text
     }
+  }
+  if (ask.kind !== 'round' && answer === 'yes') {
     const ran = root ? await run($, commentArgv(ask.pr, ask.kind === 'opening' ? '@coderabbitai review' : '@greptileai'), root, VIEW_TIMEOUT_MS) : null
     if (!ran || !ran.ok || ran.code !== 0) {
       const text = `PR #${ask.pr}: could not post the request (${ran ? (ran.ok ? firstLine(ran.err) : ran.text) : 'no checkout'}); it stays queued`
@@ -238,14 +267,16 @@ async function applyAnswer($: EngineInterface, ask: CheckpointAsk, answer: 'yes'
   if (ask.kind === 'round' && answer === 'yes') {
     // The same rule as the typed grant (D-a, Dave 11-01): only a round decline this Yes covers goes.
     const allowed = await allowedRound($, ask.pr, ask.round ?? 1)
-    await $.store.set(`${GRANT_PREFIX}${ask.pr}`, { round: allowed, head: ask.head, at: now })
+    // The head the PR read printed (a fix push may have moved it since the ask); the ask's own head when no read ran (no checkout is refused above).
+    const head = seen && seen.kind === 'open' ? seen.head : ask.head
+    await $.store.set(`${GRANT_PREFIX}${ask.pr}`, { round: allowed, head, at: now })
     const cover = coverDecline(next, allowed)
     retained = cover.retained
     if (next && cover.covered) {
       const { declined: _declined, ...rest } = next
       next = rest as CheckpointRecord
     }
-    queued = retained === null && (await enqueueRound($, stored, allowed, ask.head))
+    queued = retained === null && (await enqueueRound($, stored, allowed, head))
   } else if (next) {
     if (ask.kind === 'opening') next = answer === 'yes' ? { ...next, opened: { head: ask.head, at: now } } : { ...next, declined: { kind: 'opening', round: 1, head: ask.head } }
     else if (ask.kind === 'round') next = { ...next, declined: { kind: 'round', round: ask.round ?? 1, head: ask.head } }

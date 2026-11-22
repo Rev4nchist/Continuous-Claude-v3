@@ -41,7 +41,7 @@ PR ready based on CLI output alone. READY comes only from `review-status.mjs` (P
 ## Forbidden (coderabbit-guard blocks these once registered)
 
 - `--api-key` on any CodeRabbit command.
-- `--use-credits` on a PR comment (`@coderabbitai review --use-credits`), except under "Paid PR reviews (Dave, 2026-10-30)" in `pr-review-loop.md`. Run `cr-paid.mjs check` first.
+- `--use-credits` on a PR comment (`@coderabbitai review --use-credits`) posted by hand. Only `node scripts/github/cr-paid.mjs post --pr N` posts it, on Dave's priced tap.
 - `--use-credits` on the CLI, except in the one case under "Allowed".
 - `cr code new`, `cr code push`, `coderabbit code new`, `coderabbit code push`.
 - Skill **`coderabbit:autofix`** (writes/autofix mode).

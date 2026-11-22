@@ -271,7 +271,8 @@ export type CheckpointResult = {
   head: string
   class: string
   matched: number
-  size: { files: number; lines: number }
+  /** files: the reviewable files. total (newer engines): the UNFILTERED changed-file count, the one a paid round bills (cr-paid.mjs total). Absent from older results. */
+  size: { files: number; lines: number; total?: number }
   checks: { step: string; status: string; detail?: string }[]
   cli: { bySeverity: Record<string, number> } | null
   credits: { used: number | null; monthly: number | null }

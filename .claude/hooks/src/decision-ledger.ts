@@ -92,7 +92,8 @@ function noteFor(q: Question, answers: Record<string, string>, offers: Offer[]):
   const o = hits[0];
   const answer = answers[q.question];
   if (!isText(answer) || !o.labels.includes(answer)) return missText(o);
-  const r = decisionRecord({ step: o.step, key: o.key, head: o.head, label: answer });
+  // The entry point is the hook's own environment: the model cannot change it. The store stamps it with the tap time (a paid post reads both).
+  const r = decisionRecord({ step: o.step, key: o.key, head: o.head, label: answer, entry: process.env.CLAUDE_CODE_ENTRYPOINT ?? null });
   if (r.ok) return `Recorded "${answer}" for the ${o.step} question (${o.key}).`;
   return r.reason === 'lock' ? `Not recorded: the decision store was busy. Ask the same question again.` : null;
 }

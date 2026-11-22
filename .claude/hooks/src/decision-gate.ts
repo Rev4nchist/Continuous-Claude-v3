@@ -327,6 +327,11 @@ const PUSH_REPO_OPT_WHY = 'a --repo option names the push target, so the remote 
 const PUSH_ORIGIN_WHY = 'a push to origin is never allowed: origin is upstream (parcadei), not the fork. Push to the fork remote.';
 const pushUnresolvedWhy = (what: string): string => `${what}, so its ship decision cannot be found. Name the remote and branch (git push fork <branch>) and run it from the repo.`;
 const STORE_WHY = 'only decision-ledger writes the decision store, from Dave\'s tap in AskUserQuestion. Do not write it by hand. To record a decision, ask the question with AskUserQuestion.';
+// Paid-run guard (PR 655), tripwire only: raw text that holds BOTH words. One word alone is no hit: 30+ tracked files, search commands and commit
+// messages name the flag. It closes no route (a script the model writes can build the string); the control is postPaid in cr-paid.mjs.
+const PAID_MENTION_RE = /@coderabbitai/i;
+const PAID_FLAG_RE = /use[-_\s]*credits/i;
+const PAID_WHY = 'a paid CodeRabbit request runs only through node scripts/github/cr-paid.mjs post --pr N, which reads Dave\'s priced yes.';
 const SUBAGENT_WHY = 'a subagent cannot open a PR, land, merge or push: Dave\'s tap belongs to the main session. Ask the main session to do it.';
 const NO_PR_WHY = 'the PR number cannot be read from this command, so its land decision cannot be found. Name the PR number in the command (land-pr.ps1 -Pr <n>, gh pr merge <n>).';
 const goThereWhy = (repo: string): string => `this command names ${repo}, which is not the CCv3 repo, so it cannot be judged with a CCv3 decision: go to that repo folder and run it there.`;
@@ -3333,6 +3338,9 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   // Reviewer-2 item 4: the store write denies first, and the shapes are judged on (a force push beside it is not lost). The raw text:
   // a heredoc body is how a store write is spelled.
   if (storeWriteCall(input, deps)) denies.push(deny('store-write', STORE_WHY));
+  // Paid-run guard tripwire: the RAW shell text (readCommand blanks heredoc and here-string bodies), pushed before shapesOf so a git throw keeps it.
+  // Scope other, not hard: like the land-script text rule, it follows decisions.enforce.
+  if (paidTripwire(input)) denies.push(deny('paid-coderabbit', PAID_WHY));
   const shapes = shapesOf(cmd.text, cmd.tool);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);
@@ -3380,6 +3388,12 @@ function subagentDeny(shapes: Shape[], deps: Deps, cwd: string, shell: 'bash' | 
   const base = deny('subagent', SUBAGENT_WHY);
   const covered = shapes.some((s) => s.kind !== 'push' && coveredAmong(deps, (s.at ? dirsAfter(cwd, s.at.cds, shell, s.at.loose) : [cwd]).filter((d) => !isUnexpanded(d))) !== null);
   return covered ? { ...base, homeFlags: true } : base;
+}
+
+/** The raw shell text of the call holds both `@coderabbitai` and `use[-_\s]*credits`. Never throws. */
+function paidTripwire(input: HookInput): boolean {
+  const cmd = readShellCommand(input);
+  return cmd.kind === 'command' && PAID_MENTION_RE.test(cmd.text) && PAID_FLAG_RE.test(cmd.text);
 }
 
 /** The shell text of the call (before any blank) writes the decision store. Never throws: the catch reads it too. */

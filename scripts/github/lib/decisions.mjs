@@ -27,8 +27,16 @@ const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 const MISS_TTL_MS = 60 * 60 * 1000;
 const liveMisses = (m) => (m && Date.now() - Date.parse(m.at) <= MISS_TTL_MS ? m.count : 0);
 
-/** The store file: $CCV3_DECISIONS_FILE, else ~/.claude/state/ccv3-mods/decisions.json. */
-export const decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(os.homedir(), '.claude', 'state', 'ccv3-mods', 'decisions.json');
+/**
+ * The home folder from the OS account record, never from HOME or USERPROFILE (a command can set those for its own run). It falls back to os.homedir() only when the
+ * account record cannot be read. A paying run (cr-paid.mjs postPaid) refuses when the two differ, so a moved home is loud there; in a normal session they are equal.
+ */
+export const accountHome = () => {
+  try { return os.userInfo().homedir || os.homedir(); } catch { return os.homedir(); }
+};
+
+/** The store file: $CCV3_DECISIONS_FILE, else <account home>/.claude/state/ccv3-mods/decisions.json. */
+export const decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(accountHome(), '.claude', 'state', 'ccv3-mods', 'decisions.json');
 
 /** The key of a PR (`repo#12`) or of a branch (`repo@feat/x`). A PR number wins when both are given. */
 export const decisionKey = ({ repo = REPO, pr, branch }) => (pr !== undefined && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`);
@@ -67,12 +75,37 @@ function prune(store, now) {
   }
 }
 
-/** Runs fn(store) under the lock and saves the store. Returns fn's value, or { ok: false, reason: 'lock' }. */
-function update(fn) {
+/**
+ * The store for a writer that must not replace what it cannot read. { store } when the file is not there (a missing store is an empty one) or reads
+ * well. { unreadable: true } for any other read error (a lock held by a scanner, a folder in its place), text that does not parse, or a store of the
+ * wrong shape: such a file may hold taps of other PRs.
+ */
+function readStoreStrict(file) {
+  let text;
+  try { text = readFileSync(file, 'utf8'); } catch (err) { return err?.code === 'ENOENT' ? { store: empty() } : { unreadable: true }; }
+  try {
+    const s = JSON.parse(text);
+    if (!isPlain(s)) return { unreadable: true };
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? { store } : { unreadable: true };
+  } catch { return { unreadable: true }; }
+}
+
+/**
+ * Runs fn(store) under the lock and saves the store. Returns fn's value, or { ok: false, reason: 'lock' }.
+ * `strict` (opt-in; every old call is unchanged): a store that exists but cannot be read is refused, nothing is written: { ok: false, reason: 'unreadable-store' }.
+ * The other writers keep the design of the header: an unreadable store reads as empty and their write repairs it.
+ */
+function update(fn, { strict = false } = {}) {
   const file = decisionsPath();
   mkdirSync(path.dirname(file), { recursive: true });
   const locked = withLock(file, {}, () => {
-    const store = readStore(file);
+    let store;
+    if (strict) {
+      const read = readStoreStrict(file);
+      if (read.unreadable) return { ok: false, reason: 'unreadable-store', detail: `the decision store ${file} exists but cannot be read or parsed: repair or delete it` };
+      store = read.store;
+    } else store = readStore(file);
     prune(store, Date.now());
     const out = fn(store);
     writeStore(file, store);
@@ -118,14 +151,17 @@ export function offerWrite({ step, key, head, spec, tree, cwd }) {
  * Records only an EXACT label of the open offer for the triple, then closes the offer. Reasons: no-open-offer, no-match, lock.
  * A label that ends the question (such as "Keep open") is still a decision: the reader decides what a label means.
  */
-export function decisionRecord({ step, key, head, label }) {
+export function decisionRecord({ step, key, head, label, entry }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-open-offer' };
   return update((store) => {
     const id = idOf({ step, key, head });
     const offer = store.offers[id];
     if (!offer || offer.open !== true) return { ok: false, reason: 'no-open-offer' };
     if (typeof label !== 'string' || !offer.labels.includes(label)) return { ok: false, reason: 'no-match' };
-    store.decisions[id] = { label, at: new Date().toISOString(), tree: offer.tree, nonce: offer.nonce };
+    // tapAt is the time of Dave's tap and `entry` the entry point of the process that recorded it (CLAUDE_CODE_ENTRYPOINT of the hook). Both are stamped
+    // here, once, on EVERY decision: a paid post later ages on tapAt and reads the stamp (card prflow-paid-run-guard). A call with no entry stamps null.
+    const at = new Date().toISOString();
+    store.decisions[id] = { label, at, tapAt: at, entry: isText(entry) ? entry : null, tree: offer.tree, nonce: offer.nonce };
     offer.open = false;
     delete store.misses[id];
     return { ok: true };
@@ -139,6 +175,39 @@ export function decisionRead({ step, key, head }) {
   return d && typeof d.label === 'string' ? { label: d.label, at: d.at } : null;
 }
 
+/** The label, the row time, the tap time and the entry stamp of a stored row. A missing or non-text tapAt or entry is null (never defaulted). */
+const stampedRow = (d) => ({ label: d.label, at: d.at, tapAt: isText(d.tapAt) ? d.tapAt : null, entry: isText(d.entry) ? d.entry : null });
+
+/** decisionRowRead({ step, key, head }) -> { label, at, tapAt, entry } | null. Like decisionRead, with the stamp. No lock; any read error is null. */
+export function decisionRowRead({ step, key, head }) {
+  if (!STEPS.includes(step) || !isText(key) || !isText(head)) return null;
+  const d = readStore(decisionsPath()).decisions[idOf({ step, key, head })];
+  return d && typeof d.label === 'string' ? stampedRow(d) : null;
+}
+
+/** The cap in whole cents that a label names with "up to $X" (up to 2 decimals), or null: a label with no price is no paid yes. Only a positive price counts. */
+export function capCentsOfLabel(label) {
+  const m = /up to \$(\d+(?:\.\d{1,2})?)/.exec(String(label ?? ''));
+  const cents = m ? Math.round(Number(m[1]) * 100) : 0;
+  return cents > 0 ? cents : null;
+}
+
+/**
+ * paidRoundWrite({ key, head, label, tapAt, entry }) -> { ok: true } | { ok: false, reason }. Writes the one paid yes of a paid pick: step `paid-round`,
+ * the PR key, the head, the tapped label, the tap's own time (tapAt) and the tap's entry stamp, both copied from the tap the confirm used up.
+ * The row keeps its own `at` (now) for the prune. It writes nothing for a label with no price, or a tapAt or entry that is not text:
+ * no price, no yes; no stamp, no yes. It replaces an older row of the same triple.
+ */
+export function paidRoundWrite({ key, head, label, tapAt, entry }) {
+  if (!isText(key) || !isText(head)) return { ok: false, reason: 'bad-row: key and head are needed' };
+  if (capCentsOfLabel(label) === null) return { ok: false, reason: 'no-price: the tapped label names no price' };
+  if (!isText(tapAt) || !isText(entry)) return { ok: false, reason: 'no-stamp: the tap has no tap time or entry point' };
+  return update((store) => {
+    store.decisions[idOf({ step: 'paid-round', key, head })] = { label, at: new Date().toISOString(), tapAt, entry, tree: null, nonce: null };
+    return { ok: true };
+  });
+}
+
 /**
  * decisionUse({ step, key, head, label? }) -> { ok: true } | { ok: false, reason }. Uses the decision up (call it AFTER the action succeeds). Resets the miss count.
  * With a label, the row is used only when its label is that one, else { ok: false, reason: 'label-changed' } and the row stays: a tap that Dave recorded
@@ -146,20 +215,35 @@ export function decisionRead({ step, key, head }) {
  * Two more guards, both optional (an old call behaves as before), both judged inside the lock on the stored row, after the label check:
  * `at` (the tap time that was read): a row with another time is a newer tap of the same label, { ok: false, reason: 'tap-changed' } and it stays.
  * `check(row) -> boolean`: false is { ok: false, reason: 'slot-changed' } and the row stays (the caller judges the row against a clock read at the use).
+ * `paidRound` (card prflow-paid-run-guard, seat option A): in the SAME lock that uses the tap up, the paid-round row of the same key and head is written from the used
+ * row (its label, tapAt and entry stamp). The tap and its paid row are one step: a drop of the taps before the use leaves no tap and so no row; a drop after it removes the
+ * row. The result then carries `paid`: { ok: true } or { ok: false, reason } (no price, no stamp: the tap is still used up and no row is written).
  */
-export function decisionUse({ step, key, head, label, at, check }) {
+export function decisionUse({ step, key, head, label, at, check, returnRow = false, paidRound = false }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-decision' };
   return update((store) => {
     const id = idOf({ step, key, head });
     if (typeof label === 'string' && store.decisions[id] && store.decisions[id].label !== label) return { ok: false, reason: 'label-changed' };
     if (typeof at === 'string' && store.decisions[id] && store.decisions[id].at !== at) return { ok: false, reason: 'tap-changed' };
     if (typeof check === 'function' && store.decisions[id] && check(store.decisions[id]) !== true) return { ok: false, reason: 'slot-changed' };
-    const had = Boolean(store.decisions[id]);
+    const row = store.decisions[id];
     delete store.decisions[id];
     delete store.offers[id];
     delete store.misses[id];
-    return had ? { ok: true } : { ok: false, reason: 'no-decision' };
+    if (!row) return { ok: false, reason: 'no-decision' };
+    const paid = paidRound === true ? paidRowFrom(store, { key, head, row }) : null;
+    // `returnRow`: the used row's stamp, taken inside the lock before the delete (a paid confirm copies it; no other caller asks for it).
+    return { ok: true, ...(returnRow === true ? { row: stampedRow(row) } : {}), ...(paid ? { paid } : {}) };
   });
+}
+
+/** Writes the paid-round row of a used tap into the store under the lock the caller holds. { ok: true } or { ok: false, reason }: the same refusals as paidRoundWrite (no price, no stamp). */
+function paidRowFrom(store, { key, head, row }) {
+  const stamp = stampedRow(row);
+  if (capCentsOfLabel(stamp.label) === null) return { ok: false, reason: 'no-price: the tapped label names no price' };
+  if (!isText(stamp.tapAt) || !isText(stamp.entry)) return { ok: false, reason: 'no-stamp: the tap has no tap time or entry point' };
+  store.decisions[idOf({ step: 'paid-round', key, head })] = { label: stamp.label, at: new Date().toISOString(), tapAt: stamp.tapAt, entry: stamp.entry, tree: null, nonce: null };
+  return { ok: true };
 }
 
 /** missCount({ step, key, head }) -> the misses in the last hour (0 when none). */
@@ -190,6 +274,8 @@ export function missBump({ step, key, head }) {
  * dropKey({ steps, key }) -> { ok: true, dropped } | { ok: false, reason }. Removes every decision, offer and miss of the listed steps for the key,
  * at ALL heads, in ONE locked update (a crash cannot leave half a drop). `dropped` is the number of rows removed. A bad call (no steps, an unknown
  * step, no key) removes nothing and returns reason 'bad-drop: ...'. The key matches whole: PR 7 never takes the rows of PR 70.
+ * A store file that exists but cannot be read or parsed is refused (reason 'unreadable-store') and left as it was: replacing it with an empty store
+ * would lose the taps of every other PR. A store that is not there is a good empty drop.
  * Used when a PR goes back to draft: a tap Dave made for the old question must not record for the new one (card prflow-paid-run-guard).
  */
 export function dropKey({ steps, key } = {}) {
@@ -203,7 +289,7 @@ export function dropKey({ steps, key } = {}) {
       }
     }
     return { ok: true, dropped };
-  });
+  }, { strict: true });
 }
 
 /** The open offers: [{ nonce, step, key, head, tree, cwd, spec, labels, at }]. The AskUserQuestion hook matches an answer against them. */

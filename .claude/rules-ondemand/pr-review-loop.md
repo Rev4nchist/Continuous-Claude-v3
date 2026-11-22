@@ -161,7 +161,7 @@ command. A script builds each question, so you do not choose the options or thei
 - "Show the diff first", "Show the commits first" and "Show the PR body first": print it, then ask the same question again. "Stop here",
   "Keep open" and "Return to draft": nothing runs. Only the first option, or "Land when READY", lets the action run.
 - Every paid action needs a tap. A paid review pick (`coderabbit`, `both`) gets a second question whose first
-  option is "No, keep the PR a draft". Never post `--use-credits` or `@coderabbitai review` without a tap.
+  option is "No, keep the PR a draft". A paid round needs his priced tap; post only with `node scripts/github/cr-paid.mjs post --pr N`.
   A dialog that returns the first row twice records nothing paid.
 - With `decisions.enforce` true, `decision-gate` denies a PR create without the Open PR tap, and a land or merge
   without the Land tap. It denies a write to the decision store from any tool. No override exists. With the flag false the gate only warns.
@@ -438,12 +438,12 @@ Billing facts (CodeRabbit docs, measured on PR #221):
 
 - A reviewed file costs $0.25.
 - Round 1 bills every reviewable PR file. A later round bills only the files changed since the last reviewed commit.
-- Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` applies the filters and shows both file counts.
+- Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` shows both file counts. The price and the cap use the unfiltered count.
 - The mode is On demand. Past the included limit, a plain `@coderabbitai review` never bills.
-- A seat holder pays with `@coderabbitai review --use-credits`. It covers the current commit only.
+- A paid round needs Dave's priced tap. `cr-paid.mjs post --pr N` then posts `--use-credits` (current commit only).
 - In Automatic mode, an over-limit review bills with no prompt. So run the cap check before EVERY review request.
 
-Post a paid round without asking only when ALL six conditions hold:
+Offer a paid round when ALL six conditions hold:
 
 1. READY needs a CodeRabbit review of this head, and no carry is possible.
 2. The round is inside the PR round budget (`pr-checkpoint`: 1+1, risk list 1+2).
@@ -465,9 +465,9 @@ Stop and ask Dave when any of these is true:
 Commands:
 
 1. Run `node scripts/github/cr-paid.mjs check --pr <N>`. It checks conditions 4 and 5, the paid round count and the fix size. It does not check conditions 1, 2, 3 and 6.
-2. On ALLOW (exit 0), post exactly the comment it prints: `@coderabbitai review --use-credits`.
+2. On ALLOW (exit 0), ask Dave the priced question; after his tap run `cr-paid.mjs post --pr <N>`.
 3. On ESCALATE (exit 3), or on exit 2 (no verdict), offer no paid round. Post nothing. Run `ship-ask.mjs paid-round --pr <N> --json`: its question has no pay option and states the reason. Pass it to Dave, then stop.
-4. After you post, run `node scripts/github/cr-paid.mjs record --pr <N> --head <sha> --files <K>`. It writes the shared ledger `~/.claude/state/coderabbit-paid.jsonl`.
+4. `post` records the round itself in `~/.claude/state/coderabbit-paid.jsonl`. Do not run `record` after it: the round would count twice.
 5. Run `node scripts/github/cr-paid.mjs today` to read today's total.
 
 Packaging rules:
@@ -476,7 +476,7 @@ Packaging rules:
 - Larger PRs need fewer rounds: 0 to 10 file PRs average 2.2 rounds, 26 to 60 file PRs average 1.75.
 - Round 1 bills every reviewable file, so a round 1 over 20 files goes past the $5 cap and needs Dave.
 - `docs/**`, `thoughts/**` and vendored skills are not reviewed.
-  Billing exclusion by `path_filters` is unproven. `cr-paid.mjs` leaves them out of its estimate.
+  Billing exclusion by `path_filters` is unproven. The price and the cap still count them (the unfiltered count).
 - Run the Claude review and the `pre-pr.mjs` CLI review before round 1.
 - Push once per fix round.
 
@@ -495,14 +495,14 @@ Edit the body with a Node or Bash read-modify-write that keeps LF line endings. 
 | `feature` | new behaviour | The end-to-end check, written first, fails. | The same check passes. Add unit tests only where the end-to-end check cannot reach. |
 | `refactor` | behaviour that must not change | BEFORE: the full suite passes on the commit before the change. | The same suite passes. |
 | `ui` | an interactive or UI change | The Playwright run at desktop and phone width fails. | The same run passes at both widths. |
-| `harness` | a hook, rule, skill or agent | The AGENTS.md "Testing" row shows the old behaviour. | The same row shows the new behaviour (see "Harness proof"). |
+| `harness` | a hook, rule, skill or agent | The docs/testing-standard.md "Testing" row shows the old behaviour. | The same row shows the new behaviour (see "Harness proof"). |
 | `docs` | text only | None. | None. Valid only when the review router classed this head `docs`. |
 
 Name one type. A PR that mixes types names the type of its riskiest change.
 
 ### Harness proof
 
-Use the AGENTS.md "Testing" row for the surface you changed.
+Use the docs/testing-standard.md "Testing" row for the surface you changed.
 
 - A hook: build it, then pipe a real payload into the built hook. This is the full row, and it runs
   before the merge.

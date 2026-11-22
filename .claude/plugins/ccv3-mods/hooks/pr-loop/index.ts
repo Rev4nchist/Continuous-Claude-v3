@@ -22,7 +22,11 @@ import {
   landCommand,
   MAX_LAND_BATCH,
   markSent,
+  paidFlagText,
+  paidKey,
+  paidToastKey,
   parseLandArgs,
+  parseUnledgered,
   unmarkSent,
   noteFailure,
   parseArgs,
@@ -53,6 +57,7 @@ const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' a
 const prs = atom({ plugin: 'ccv3-mods', key: 'prs' } as const, [] as PrWatch[])
 
 const STATUS_SCRIPT = 'scripts/github/review-status.mjs'
+const PAID_SCRIPT = 'scripts/github/cr-paid.mjs'
 const REPO = 'Rev4nchist/Continuous-Claude-v3'
 const KEY_PREFIX = 'pr-watch:'
 const WATCH_TOOL = 'mcp__ccv3-mods__pr_watch'
@@ -291,6 +296,33 @@ const deliver = async ($: EngineInterface, alert: Alert, prior: PrWatch): Promis
 }
 
 /**
+ * Detection only, for every watched PR: a paid CodeRabbit comment on the head that the paid ledger has no round for did not go through
+ * `cr-paid.mjs post`. One notice per PR, head and comment (the key is in doc.sent). Any failure says nothing; it never blocks.
+ */
+const flagPaid = async ($: EngineInterface, status: PrStatus): Promise<void> => {
+  if (isClosed(status) || !((status.coderabbitRequests ?? 0) > 0)) return
+  const root = await findRoot($)
+  if (!root) return
+  const run = await $.process.run(['node', `${root}/${PAID_SCRIPT}`, 'unledgered', '--pr', String(status.pr), '--json'], { cwd: root, timeoutMs: STATUS_TIMEOUT_MS })
+  const found = parseUnledgered(run)
+  if (!found) return
+  const doc = await loadDoc($)
+  // A key is marked sent only when its line went out. Quiet mode submits no notice, so it marks the toast key and leaves the notice key free.
+  const quiet = await isQuiet($)
+  const keys = found.ids.map(id => paidKey(status.pr, found.head, id)).map(key => (quiet ? paidToastKey(key) : key)).filter(key => !wasSent(doc, key))
+  if (keys.length === 0) return
+  await saveDoc($, keys.reduce(markSent, doc))
+  const text = paidFlagText(status.pr, found.head)
+  try {
+    if (!quiet) await $.prompt.submit({ text })
+  } catch (err) {
+    await saveDoc($, keys.reduce(unmarkSent, await loadDoc($)))
+    throw err
+  }
+  $.ui.toast(text, { timeoutMs: 10_000 })
+}
+
+/**
  * The checkpoint part of one PR's check: a closed PR drops its record, grant and asks; an ask whose head moved, or whose answer the record
  * already holds (another session asked him), leaves the queue; a record that has run out of its budget, or waited 30 minutes for CodeRabbit,
  * queues one question for Dave. The tick then raises it as a dialog (drainAsks). The watcher never posts a review request: the mod posts only
@@ -341,6 +373,7 @@ const check = async ($: EngineInterface): Promise<void> => {
   const results: Results = new Map()
   const alerts: { alert: Alert; prior: PrWatch }[] = []
   const notices: string[] = []
+  const read: PrStatus[] = []
   let failure: string | null = null
   for (const watch of before.prs) {
     const result = await probe($, watch.pr)
@@ -359,6 +392,7 @@ const check = async ($: EngineInterface): Promise<void> => {
     results.set(watch.pr, settled.watch)
     if (settled.alert) alerts.push({ alert: await withSlot($, settled.alert), prior: watch })
     await asking($, result.status, now).catch(() => undefined)
+    read.push(result.status)
   }
   const fresh = await loadDoc($)
   await saveDoc($, { ...fresh, prs: merge(fresh.prs, results), backoffUntil: failure === null ? 0 : now + BACKOFF_MS })
@@ -376,6 +410,7 @@ const check = async ($: EngineInterface): Promise<void> => {
       await keepPending($, prior).catch(() => undefined)
     }
   }
+  for (const status of read) await flagPaid($, status).catch(() => undefined)
   // The questions this check queued: one dialog, after the alerts, so a Land dialog and a checkpoint dialog never meet in one tick.
   if (!((await $.env.get('CCV3_PR_CHECKPOINT_OFF')) === '1')) await drainAsks($).catch(() => undefined)
 }
