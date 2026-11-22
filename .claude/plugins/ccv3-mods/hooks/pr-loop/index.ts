@@ -43,7 +43,7 @@ import {
   wasSent,
   watchLine,
 } from './model'
-import type { Alert, AlertCheckpoint, Probe, PrStatus, WatchDoc } from './model'
+import type { Alert, AlertCheckpoint, PaidScan, Probe, PrStatus, WatchDoc } from './model'
 import { queueHolds, registerSlot, slotCommand, slotFor, slotTick, withSlot } from './slot'
 import type { Streak } from './slot'
 
@@ -142,10 +142,10 @@ const storeKey = async ($: EngineInterface): Promise<string> => `${KEY_PREFIX}${
 const loadDoc = async ($: EngineInterface): Promise<WatchDoc> =>
   readDoc(await $.store.get(await storeKey($)), await $.clock.now())
 
-/** An empty list deletes the key, so a finished session leaves nothing behind. */
+/** An empty list deletes the key, so a finished session leaves nothing behind. A paid scan that is still owed keeps it (L4a). */
 const saveDoc = async ($: EngineInterface, doc: WatchDoc): Promise<void> => {
   const key = await storeKey($)
-  if (doc.prs.length === 0) await $.store.delete(key)
+  if (doc.prs.length === 0 && !(doc.scan?.length)) await $.store.delete(key)
   else await $.store.set(key, { ...doc, touched: await $.clock.now() })
   await update($, prs, () => doc.prs)
 }
@@ -295,24 +295,27 @@ const deliver = async ($: EngineInterface, alert: Alert, prior: PrWatch): Promis
   if (!(await isQuiet($))) await submitLine($, live)
 }
 
+/** Whether a PR read in this check owes a paid scan: it is open and the status script counted a CodeRabbit request on it. */
+const paidScanDue = (status: PrStatus): boolean => !isClosed(status) && (status.coderabbitRequests ?? 0) > 0
+
 /**
- * Detection only, for every watched PR: a paid CodeRabbit comment on the head that the paid ledger has no round for did not go through
- * `cr-paid.mjs post`. One notice per PR, head and comment (the key is in doc.sent). Any failure says nothing; it never blocks.
+ * Detection only: a paid CodeRabbit comment on the head that the paid ledger has no round for did not go through `cr-paid.mjs post`.
+ * One notice per PR, head and comment (the key is in doc.sent). True when the read worked and every notice went out (or none was due);
+ * false when the read failed. A failed notice throws. The caller keeps a failed scan owed (`scanPaid`). It never blocks.
  */
-const flagPaid = async ($: EngineInterface, status: PrStatus): Promise<void> => {
-  if (isClosed(status) || !((status.coderabbitRequests ?? 0) > 0)) return
+const flagPaid = async ($: EngineInterface, pr: number): Promise<boolean> => {
   const root = await findRoot($)
-  if (!root) return
-  const run = await $.process.run(['node', `${root}/${PAID_SCRIPT}`, 'unledgered', '--pr', String(status.pr), '--json'], { cwd: root, timeoutMs: STATUS_TIMEOUT_MS })
+  if (!root) return false
+  const run = await $.process.run(['node', `${root}/${PAID_SCRIPT}`, 'unledgered', '--pr', String(pr), '--json'], { cwd: root, timeoutMs: STATUS_TIMEOUT_MS })
   const found = parseUnledgered(run)
-  if (!found) return
+  if (!found) return false
   const doc = await loadDoc($)
   // A key is marked sent only when its line went out. Quiet mode submits no notice, so it marks the toast key and leaves the notice key free.
   const quiet = await isQuiet($)
-  const keys = found.ids.map(id => paidKey(status.pr, found.head, id)).map(key => (quiet ? paidToastKey(key) : key)).filter(key => !wasSent(doc, key))
-  if (keys.length === 0) return
+  const keys = found.ids.map(id => paidKey(pr, found.head, id)).map(key => (quiet ? paidToastKey(key) : key)).filter(key => !wasSent(doc, key))
+  if (keys.length === 0) return true
   await saveDoc($, keys.reduce(markSent, doc))
-  const text = paidFlagText(status.pr, found.head)
+  const text = paidFlagText(pr, found.head)
   try {
     if (!quiet) await $.prompt.submit({ text })
   } catch (err) {
@@ -320,6 +323,27 @@ const flagPaid = async ($: EngineInterface, status: PrStatus): Promise<void> => 
     throw err
   }
   $.ui.toast(text, { timeoutMs: 10_000 })
+  return true
+}
+
+/**
+ * The paid scans of one check (card prflow-paid-guard-leftovers, L4a). A PR that reached READY in this check is already off the watch list, so a scan that
+ * fails for it would never run again. The failed scan stays in `doc.scan` with its fail count and runs at the next check, up to MAX_FAILS tries in all.
+ * A PR read in this check that is closed, or has no CodeRabbit request, owes nothing. A retry reads no PR status, raises no alert and no dialog.
+ */
+const scanPaid = async ($: EngineInterface, read: PrStatus[], owed: PaidScan[]): Promise<void> => {
+  const fails = new Map<number, number>(owed.map(one => [one.pr, one.fails]))
+  for (const status of read) {
+    if (!paidScanDue(status)) fails.delete(status.pr)
+    else if (!fails.has(status.pr)) fails.set(status.pr, 0)
+  }
+  const next: PaidScan[] = []
+  for (const [pr, count] of fails) {
+    const done = await flagPaid($, pr).catch(() => false)
+    if (!done && count + 1 < MAX_FAILS) next.push({ pr, fails: count + 1 })
+  }
+  const { scan: _old, ...rest } = await loadDoc($)
+  await saveDoc($, next.length > 0 ? { ...rest, scan: next } : rest)
 }
 
 /**
@@ -369,7 +393,8 @@ const check = async ($: EngineInterface): Promise<void> => {
   if ((await isOff($)) || !(await interactive($))) return
   const before = await loadDoc($)
   const now = await $.clock.now()
-  if (before.prs.length === 0 || now + BACKOFF_SLACK_MS < before.backoffUntil) return
+  const owed = before.scan ?? []
+  if ((before.prs.length === 0 && owed.length === 0) || now + BACKOFF_SLACK_MS < before.backoffUntil) return
   const results: Results = new Map()
   const alerts: { alert: Alert; prior: PrWatch }[] = []
   const notices: string[] = []
@@ -410,7 +435,7 @@ const check = async ($: EngineInterface): Promise<void> => {
       await keepPending($, prior).catch(() => undefined)
     }
   }
-  for (const status of read) await flagPaid($, status).catch(() => undefined)
+  await scanPaid($, read, owed).catch(() => undefined)
   // The questions this check queued: one dialog, after the alerts, so a Land dialog and a checkpoint dialog never meet in one tick.
   if (!((await $.env.get('CCV3_PR_CHECKPOINT_OFF')) === '1')) await drainAsks($).catch(() => undefined)
 }

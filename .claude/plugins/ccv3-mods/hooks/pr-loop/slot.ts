@@ -275,7 +275,8 @@ const PAID_SCRIPT = 'scripts/github/cr-paid.mjs'
 /** A fresh `cr-paid.mjs check` of the PR: the price of its round ("$2.75") and the head it was read at, or null (not ALLOW, a failed read, an old script that prints no file count or no head). */
 async function freshOffer($: EngineInterface, found: Found, pr: number): Promise<Offer | null> {
   const ran = await runCli($, found, ['check', '--pr', String(pr), '--json'], VERB_TIMEOUT_MS, `${found.root}/${PAID_SCRIPT}`)
-  if (!ran.ok) return null
+  // runCli says ok when the process FINISHED: a check that exits non-zero is a failed check, whatever its stdout holds (card prflow-paid-guard-leftovers, L1).
+  if (!ran.ok || ran.code !== 0) return null
   const cost = payPrice(ran.out)
   const head = payHead(ran.out)
   return cost !== null && head !== null ? { cost, head } : null
@@ -290,7 +291,7 @@ async function payByDialog($: EngineInterface, found: Found, pr: number): Promis
   if (offer === null) return `PR #${pr}: no paid round is offered now: cr-paid gave no price and head (it is not ALLOW, or it could not be read). Nothing was posted.`
   if (!takeDialog()) return `PR #${pr}: another question is open. Answer it first. Nothing was posted.`
   try {
-    const spec = slotAskSpec({ pr, kind: 'paid', canPay: true, cost: offer.cost })
+    const spec = slotAskSpec({ pr, kind: 'manual', canPay: true, cost: offer.cost })
     const got = await askDave($, spec.question, spec.choices.map(one => one.label), spec.header)
     const choice = got.kind === 'text' ? spec.choices.find(one => one.label === got.text) : undefined
     if (!choice) return `PR #${pr}: no answer. Nothing was posted.`

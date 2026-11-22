@@ -123,7 +123,8 @@ export const toastText = (text: string): string => {
   return plain === text ? text : `${plain} Dave answers the question the session asks.`
 }
 
-export type SlotAsk = { pr: number; kind: 'paid' | 'timeout'; canPay: boolean; cost: string | null }
+/** `manual` is Dave's typed `/slot pay N`: the price and the head were checked, the queue age was not, so its dialog names no wait (card prflow-paid-guard-leftovers, L2). */
+export type SlotAsk = { pr: number; kind: 'paid' | 'timeout' | 'manual'; canPay: boolean; cost: string | null }
 
 /**
  * The Pay row is offered when the CLI's own words say a paid round may follow: cr-paid ALLOW (30 minutes), a paid-round check that could not be
@@ -182,7 +183,7 @@ export const slotAskSpec = (ask: SlotAsk): SlotAskSpec => {
     ...(offered && ask.cost ? [{ label: payLabel(ask.cost), verb: 'pay' as const }] : []),
     { label: 'Drop from queue ($0)', verb: 'drop' },
   ]
-  const when = ask.kind === 'paid' ? 'no free CodeRabbit slot for 30 minutes' : 'no free CodeRabbit slot for 60 minutes; READY still needs a CodeRabbit review'
+  const when = ask.kind === 'manual' ? 'a paid CodeRabbit round is offered for the head now' : ask.kind === 'paid' ? 'no free CodeRabbit slot for 30 minutes' : 'no free CodeRabbit slot for 60 minutes; READY still needs a CodeRabbit review'
   const ending = offered ? 'Pay for the round, keep waiting, or drop it?' : ask.canPay ? 'No price is known for a paid round now. Keep waiting or drop it?' : 'A paid round is not allowed now. Keep waiting or drop it?'
   return { header: `PR #${ask.pr}`, question: `PR #${ask.pr}: ${when}. ${ending}`, choices }
 }

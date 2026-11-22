@@ -37,6 +37,12 @@ const CASES = [
   ['200 cap, no space', `GOAL: ${'x'.repeat(250)}`],
   ['exactly 200', `GOAL: ${'y'.repeat(200)}`],
   ['redacted 400-unit line', line400],
+  ['200 cap, marker straddles the cut', `GOAL: ${'x'.repeat(190)}[REDACTED:api_key]`],
+  ['200 cap, two markers: first inside the cut, second straddles it', `GOAL: ${'a'.repeat(100)}[REDACTED:api_key]${'b'.repeat(72)}[REDACTED:token]`],
+  ['200 cap at a word, marker early in the kept text', `GOAL: Fix [REDACTED:api_key] now ${long(60)}`],
+  ['200 cap, marker ends exactly at the cut', `GOAL: ${'x'.repeat(181)}[REDACTED:api_key]${'y'.repeat(50)}`],
+  ['200 cap, text that starts like a marker but holds a space', `GOAL: Strip [REDACTED: prefix from ${long(60)} [done]`],
+  ['200 cap, index 199 inside a word', `GOAL: Go ${long(60)}`],
   ['ids masked', 'GOAL: Fix #0d40499c, 0d40499c-aaaa-bbbb-cccc-123456789abc and abc1234def'],
   ['empty note', ''],
   ['spaces only', '   '],
@@ -72,6 +78,28 @@ test('the plugin goalOfNote gives the repo goalOf result on every shared input',
   assert.equal(plugin.length, CASES.length);
   CASES.forEach(([name, note], i) => {
     assert.equal(plugin[i], repoGoalOf(note), `drift on "${name}"`);
+  });
+});
+
+// Pinned values, so two copies that are both wrong cannot pass the equality test above: the cap drops a marker it would split.
+test('the cap never returns part of a [REDACTED:kind] marker: both copies drop a straddling marker whole', () => {
+  const notes = [
+    `GOAL: ${'x'.repeat(190)}[REDACTED:api_key]`,
+    `GOAL: ${'a'.repeat(100)}[REDACTED:api_key]${'b'.repeat(72)}[REDACTED:token]`,
+    `GOAL: ${'x'.repeat(181)}[REDACTED:api_key]${'y'.repeat(50)}`,
+    `GOAL: Go ${long(60)}`,
+  ];
+  const expected = [
+    `${'x'.repeat(190)}…`,
+    `${'a'.repeat(100)}[REDACTED:api_key]${'b'.repeat(72)}…`,
+    `${'x'.repeat(181)}[REDACTED:api_key]…`,
+    // Index 199 is inside a word: the word cut ends at word28 (195 characters), not at 199.
+    `Go ${long(60).slice(0, 192)}…`,
+  ];
+  const plugin = pluginResults(notes);
+  notes.forEach((note, i) => {
+    assert.equal(repoGoalOf(note), expected[i], `repo copy, input ${i}`);
+    assert.equal(plugin[i], expected[i], `plugin copy, input ${i}`);
   });
 });
 
