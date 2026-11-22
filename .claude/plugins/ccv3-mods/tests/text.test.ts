@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { PaneRow, Span } from '../hooks/agentic-os/pane-model'
 import { cellWidth, cutCells, splitCells } from '../hooks/agentic-os/cells'
+import { goalOfNote } from '../hooks/agentic-os/goal-extractor'
 import { oneLine, wrap, wrapRows } from '../hooks/agentic-os/text'
 
 // /os redesign, round 1: hooks/agentic-os/text.ts, the pure text step every pane row passes through.
@@ -72,6 +73,81 @@ describe('oneLine', () => {
     expect(short.endsWith('…')).toBe(true)
     expect(oneLine('y'.repeat(400))).toBe('y'.repeat(400))
     expect(oneLine('short')).toBe('short')
+  })
+})
+
+// coord-oneline-marker-split: the cut never leaves part of a [REDACTED:kind] marker. The drop works on the length the cut keeps.
+//   M1  a marker that the cut lands inside is dropped whole, at the default cap
+//   M2  a marker that ends exactly at the cut stays
+//   M3  a marker wholly before the cut stays
+//   M4  two markers: the one before the cut stays, the one across it drops
+//   M5  text that starts like a marker but holds a space is not a marker: the plain cut stays, byte for byte
+//   M6  a surrogate pair just before a marker that crosses the cut stays whole, the marker drops
+//   M7  the surrogate guard still shortens the cut by one, and a marker after the cut is not touched
+//   M8  a small cap (30, as wrap, digest and journal use) drops the marker that crosses it
+//   M9  marker-free text keeps the plain cut byte for byte, and goalOfNote reads it unchanged
+//   M10 a long PARKED line whose cut splits a marker gives a goal with no marker fragment (the PR 670 Known limit)
+describe('oneLine marker cut', () => {
+  const MARK = '[REDACTED:api_key]'
+  const X = (count: number): string => 'x'.repeat(count)
+
+  test('M1 a marker that the cut lands inside is dropped whole', () => {
+    const out = oneLine(X(390) + MARK)
+    expect(out).toBe(`${X(390)}…`)
+    expect(out).not.toContain('[REDACTED')
+  })
+
+  test('M2 a marker that ends exactly at the cut stays', () => {
+    expect(oneLine(X(381) + MARK + 'yyyyy')).toBe(`${X(381)}${MARK}…`)
+  })
+
+  test('M3 a marker wholly before the cut stays', () => {
+    const out = oneLine(X(100) + MARK + 'z'.repeat(400))
+    expect(out).toBe(`${(X(100) + MARK + 'z'.repeat(400)).slice(0, 399)}…`)
+    expect(out).toContain(MARK)
+  })
+
+  test('M4 two markers: the one before the cut stays and the one across it drops', () => {
+    expect(oneLine(X(300) + MARK + 'y'.repeat(70) + MARK)).toBe(`${X(300)}${MARK}${'y'.repeat(70)}…`)
+  })
+
+  test('M5 text that starts like a marker but holds a space keeps the plain cut', () => {
+    const text = X(390) + '[REDACTED: x]'
+    expect(oneLine(text)).toBe(`${text.slice(0, 399)}…`)
+  })
+
+  test('M6 a surrogate pair just before a marker that crosses the cut stays whole', () => {
+    expect(oneLine(X(396) + '😀' + MARK)).toBe(`${X(396)}😀…`)
+  })
+
+  test('M7 the surrogate guard still cuts one earlier, and a marker after the cut is left alone', () => {
+    expect(oneLine(X(398) + '😀' + MARK)).toBe(`${X(398)}…`)
+  })
+
+  test('M8 a small cap drops the marker that crosses it: the text before it, then the ellipsis', () => {
+    expect(oneLine(X(20) + MARK, 30)).toBe(`${X(20)}…`)
+    expect(oneLine(X(5) + MARK + MARK, 30)).toBe(`${X(5)}${MARK}…`)
+  })
+
+  test('M9 marker-free text keeps the plain cut byte for byte, and goalOfNote reads it unchanged', () => {
+    const note = `GOAL: ${'alpha beta '.repeat(60)}NEXT: go`
+    const plain = `${note.slice(0, 399)}…`
+    expect(oneLine(note)).toBe(plain)
+    expect(goalOfNote(oneLine(note))).toBe(goalOfNote(plain))
+    const goal = goalOfNote(oneLine(note))
+    expect(goal).not.toBeNull()
+    expect((goal as string).length).toBeLessThanOrEqual(200)
+    expect((goal as string).endsWith('…')).toBe(true)
+  })
+
+  test('M10 a long PARKED line whose cut splits a marker gives a goal with no marker fragment', () => {
+    const head = `PARKED until Mon 11-23 09:00 -- ${'r'.repeat(300)} || GOAL: ship the fix `
+    const pad = 395 - head.length
+    const goal = goalOfNote(oneLine(head + 'g'.repeat(pad) + MARK))
+    expect(pad).toBeGreaterThan(0)
+    expect(goal).not.toBeNull()
+    expect(goal).not.toContain('[REDACTED')
+    expect(goal).toBe(`ship the fix ${'g'.repeat(pad)}…`)
   })
 })
 
