@@ -56,6 +56,23 @@ $branch = 'unknown'
 try { $b = (& git -C $R rev-parse --abbrev-ref HEAD 2>$null); if ($LASTEXITCODE -eq 0 -and $b) { $branch = "$b".Trim() } } catch { }
 Write-Log "starting, repo $R, branch $branch"
 
+# Slot guard (card sched-tasks-failing-1109): a second trigger at 07:40 reruns a night the standby ended. Skip when the last
+# 23:50 slot has a completed run. A missing slot-guard.ps1 (sync lag) turns the guard off and the run goes as before.
+$slotHhmm = '23:50'
+$slotMarker = $null
+$slotNow = Get-Date
+$slotFile = Join-Path $PSScriptRoot 'slot-guard.ps1'
+if (Test-Path -LiteralPath $slotFile) {
+  . $slotFile
+  $slotNow = Get-SlotNow
+  $slotMarker = Join-Path (Get-SlotStateDir $logDir ([bool]$env:CCV3_COST_RECONCILE_LOG)) 'cost-reconcile.done.json'
+  if (Test-SlotDone $slotMarker (Get-LastSlot $slotNow $slotHhmm)) {
+    $storedRc = Read-SlotExit $slotMarker
+    Write-Log "skip: slot $slotHhmm of $((Get-LastSlot $slotNow $slotHhmm).ToString('s')) already done at $((Read-SlotDoneAt $slotMarker).ToString('s')), stored exit $storedRc"
+    exit $storedRc
+  }
+}
+
 # Subscription auth: neither check starts a model, but an API key in the environment must not reach any child.
 Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 Remove-Item Env:ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
@@ -104,6 +121,10 @@ if ($rcReconcile -ne 0 -and $rcReconcile -ne 10) { $rc = $rcReconcile }
 elseif ($rcPrice -ne 0) { $rc = $rcPrice }
 elseif ($rcReconcile -eq 10) { $rc = 10 }
 Write-Log "overall exit $rc"
+
+# A finished answer closes the slot, a failing check (1, 2, 10) included: the next trigger need not repeat it. A killed check (124) or a
+# missing script (3) leaves the marker as it was, so the next trigger retries.
+if ($slotMarker -and ($rcReconcile -notin 124, 3) -and ($rcPrice -notin 124, 3)) { Set-SlotDone $slotMarker $slotHhmm $slotNow $rc }
 
 # Keep 14 days of dated logs and of nightly e2e files. Only files named yyyy-MM-dd.log and yyyy-MM-dd-cost-reconcile-nightly.jsonl are touched.
 $cut = (Get-Date).AddDays(-14)

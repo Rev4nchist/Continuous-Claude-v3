@@ -20,6 +20,10 @@
              (-WindowStyle Hidden still flashed one; the 2026-11-07 live test of the conhost form showed no flash).
              Only the tasks that set it change.
     wake  true -> the task wakes the laptop (WakeToRun). Use it with llm=true, or the wake does nothing on battery.
+    catchUp  "daily HH:MM" -> a second daily trigger at a time the machine is awake (card sched-tasks-failing-1109). A daily task that the
+             machine misses (Modern Standby) starts as a catch-up inside a short wake and the standby ends it (result 267014). The wrapper
+             skips a trigger when the last slot of the main trigger has a completed run (slot-guard.ps1). The main trigger stays first:
+             the harness doctor reads the first calendar trigger. Any other form is refused with exit 1.
   The dry run prints llm, battery and wake for each task, read from the settings object it would register.
   Wake on battery also needs the power plan setting "Allow wake timers" to be on for battery. This script does not change it.
 
@@ -86,6 +90,23 @@ $tasks = @((Get-Content -LiteralPath $TasksFile -Raw | ConvertFrom-Json).tasks)
 if ($Only) { $tasks = @($tasks | Where-Object { $_.name -eq $Only }) }
 if ($tasks.Count -eq 0) { Write-Host '[REFUSED] no task matches'; exit 1 }
 
+# catchUp must be a daily HH:MM, and every clock value of trigger and catchUp must be a real time (00:00 to 23:59). Checked for
+# every task before anything is printed or registered, so a bad value in a later task cannot leave earlier tasks registered.
+$clockOk = '(?:[01]\d|2[0-3]):[0-5]\d'
+foreach ($t in $tasks) {
+  if ($t.catchUp -and ([string]$t.catchUp) -notmatch '^daily \d{2}:\d{2}$') {
+    Write-Host "[REFUSED] $($t.name): catchUp must be 'daily HH:MM', got '$($t.catchUp)'. Nothing registered."
+    exit 1
+  }
+  foreach ($field in 'trigger', 'catchUp') {
+    $text = [string]$t.$field
+    if ($text -match '^(?:daily|weekly \w+) (\d{2}:\d{2})$' -and $Matches[1] -notmatch "^$clockOk$") {
+      Write-Host "[REFUSED] $($t.name): $field '$text' is not a real clock time (00:00 to 23:59). Nothing registered."
+      exit 1
+    }
+  }
+}
+
 function Get-Installed($t) {
   $rel = ([string]$t.script) -replace '^\.claude[\\/]', ''
   Join-Path $ClaudeHome ($rel -replace '/', '\')
@@ -119,11 +140,16 @@ foreach ($t in $tasks) {
   $wake = if ($settings.WakeToRun) { 'yes' } else { 'no' }
   Write-Host ("{0}: {1} {2}  [{3}, limit {4} min, llm={5} battery={6} wake={7}]" -f $t.name, $parts[0], $parts[1], $t.trigger, $t.execLimitMin, $llm, $battery, $wake)
   if ($trig.Repetition -and $trig.Repetition.Interval) { Write-Host ("  repeat: every {0}, duration '{1}'" -f $trig.Repetition.Interval, $trig.Repetition.Duration) }
+  $catchTrig = $null
+  if ($t.catchUp) { $catchTrig = Get-Trigger ([string]$t.catchUp); Write-Host ("  catch-up: {0}" -f $t.catchUp) }
   if ($t.wake -eq $true -and $t.llm -ne $true -and $t.battery -ne $true) { Write-Host "[WARN] $($t.name): wake=true needs llm=true or battery=true. A task that is blocked on battery is stopped at once, so the wake does nothing there." }
   if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { Write-Host "  [MISSING] $installed"; continue }
   if (-not $Apply) { continue }
   $action = New-ScheduledTaskAction -Execute $parts[0] -Argument $parts[1] -WorkingDirectory $ClaudeHome
-  Register-ScheduledTask -TaskName $t.name -Action $action -Trigger (Get-Trigger $t.trigger) -Settings $settings -Force | Out-Null
+  # The main trigger first, the catch-up second: the harness doctor reads the first calendar trigger.
+  $triggers = @(Get-Trigger $t.trigger)
+  if ($catchTrig) { $triggers = @($triggers[0], $catchTrig) }
+  Register-ScheduledTask -TaskName $t.name -Action $action -Trigger $triggers -Settings $settings -Force | Out-Null
   Write-Host '  registered'
 }
 
