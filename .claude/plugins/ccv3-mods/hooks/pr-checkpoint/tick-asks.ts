@@ -171,7 +171,7 @@ async function readOpenPr($: EngineInterface, root: string, pr: number, expectHe
     return { kind: 'unreadable', why: 'gh printed no JSON' }
   }
   // JSON `null` (or a bare value) parses fine and has no fields: it is an unreadable state, not a crash.
-  if (info === null || typeof info !== 'object' || typeof info.state !== 'string' || typeof info.headRefOid !== 'string') return { kind: 'unreadable', why: 'gh printed no state or head' }
+  if (info === null || typeof info !== 'object' || typeof info.state !== 'string' || typeof info.headRefOid !== 'string' || info.headRefOid === '') return { kind: 'unreadable', why: 'gh printed no state or head' }
   if (info.state.toUpperCase() !== 'OPEN') return { kind: 'gone', why: `the PR is ${info.state.toLowerCase()}` }
   if (expectHead !== null && info.headRefOid !== expectHead) return { kind: 'gone', why: `the head moved to ${info.headRefOid.slice(0, 7)}` }
   if (typeof info.isDraft !== 'boolean') return { kind: 'unreadable', why: 'gh printed no draft state' }

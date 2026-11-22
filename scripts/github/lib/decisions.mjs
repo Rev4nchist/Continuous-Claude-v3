@@ -215,8 +215,11 @@ export function paidRoundWrite({ key, head, label, tapAt, entry }) {
  * Two more guards, both optional (an old call behaves as before), both judged inside the lock on the stored row, after the label check:
  * `at` (the tap time that was read): a row with another time is a newer tap of the same label, { ok: false, reason: 'tap-changed' } and it stays.
  * `check(row) -> boolean`: false is { ok: false, reason: 'slot-changed' } and the row stays (the caller judges the row against a clock read at the use).
+ * `paidRound` (card prflow-paid-run-guard, seat option A): in the SAME lock that uses the tap up, the paid-round row of the same key and head is written from the used
+ * row (its label, tapAt and entry stamp). The tap and its paid row are one step: a drop of the taps before the use leaves no tap and so no row; a drop after it removes the
+ * row. The result then carries `paid`: { ok: true } or { ok: false, reason } (no price, no stamp: the tap is still used up and no row is written).
  */
-export function decisionUse({ step, key, head, label, at, check, returnRow = false }) {
+export function decisionUse({ step, key, head, label, at, check, returnRow = false, paidRound = false }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-decision' };
   return update((store) => {
     const id = idOf({ step, key, head });
@@ -228,9 +231,19 @@ export function decisionUse({ step, key, head, label, at, check, returnRow = fal
     delete store.offers[id];
     delete store.misses[id];
     if (!row) return { ok: false, reason: 'no-decision' };
+    const paid = paidRound === true ? paidRowFrom(store, { key, head, row }) : null;
     // `returnRow`: the used row's stamp, taken inside the lock before the delete (a paid confirm copies it; no other caller asks for it).
-    return returnRow === true ? { ok: true, row: stampedRow(row) } : { ok: true };
+    return { ok: true, ...(returnRow === true ? { row: stampedRow(row) } : {}), ...(paid ? { paid } : {}) };
   });
+}
+
+/** Writes the paid-round row of a used tap into the store under the lock the caller holds. { ok: true } or { ok: false, reason }: the same refusals as paidRoundWrite (no price, no stamp). */
+function paidRowFrom(store, { key, head, row }) {
+  const stamp = stampedRow(row);
+  if (capCentsOfLabel(stamp.label) === null) return { ok: false, reason: 'no-price: the tapped label names no price' };
+  if (!isText(stamp.tapAt) || !isText(stamp.entry)) return { ok: false, reason: 'no-stamp: the tap has no tap time or entry point' };
+  store.decisions[idOf({ step: 'paid-round', key, head })] = { label: stamp.label, at: new Date().toISOString(), tapAt: stamp.tapAt, entry: stamp.entry, tree: null, nonce: null };
+  return { ok: true };
 }
 
 /** missCount({ step, key, head }) -> the misses in the last hour (0 when none). */

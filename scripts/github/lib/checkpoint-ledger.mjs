@@ -233,10 +233,11 @@ export const ledgerConfirmProblem = (args) => ledgerConfirmCheck(args).problem;
  * ledgerConfirmCheck read: a tap Dave made in between is label-changed and stays. No label: the tap is used whatever its label (--by auto).
  * `at` (the tap time ledgerConfirmCheck read) makes a newer tap of the SAME label tap-changed. `check(row)` is judged inside the store lock: false is
  * slot-changed (see decisionUse). Both optional.
- * `returnRow: true` adds the used row's { label, at, tapAt, entry } to an ok result, read inside the lock before the delete (the paid-round row copies it).
+ * `returnRow: true` adds the used row's { label, at, tapAt, entry } to an ok result, read inside the lock before the delete.
+ * `paidRound: true` writes the paid-round row of the used tap in the same lock (the result then has `paid`, see decisionUse): the tap and its paid row are one step.
  */
-export function ledgerUse({ pr, head, label, at, check, returnRow = false, d = store }) {
-  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label, at, check, returnRow });
+export function ledgerUse({ pr, head, label, at, check, returnRow = false, paidRound = false, d = store }) {
+  return d.decisionUse({ step: 'review', key: keyOf(pr), head, label, at, check, returnRow, paidRound });
 }
 
 /**

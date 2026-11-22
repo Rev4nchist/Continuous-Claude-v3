@@ -52,8 +52,8 @@ import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayM
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
-import { askSpecOf, ledgerConfirmCheck, ledgerStep, ledgerUse, paidYesOf, slotStateOf } from './lib/checkpoint-ledger.mjs';
-import { DECISIONS_ENV, decisionKey, decisionUse, decisionsPath, dropKey, paidRoundWrite } from './lib/decisions.mjs';
+import { askSpecOf, ledgerConfirmCheck, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
+import { DECISIONS_ENV, capCentsOfLabel, decisionKey, decisionsPath, dropKey } from './lib/decisions.mjs';
 
 export { capacityFact, parseRateLimitReply };
 
@@ -1026,56 +1026,40 @@ function runConfirm(o) {
   mkdirSync(stateDir, { recursive: true });
   // Dave's tap is used up BEFORE the record is written, and a failed use refuses: a tap that stays after a record would let a second --confirm write again.
   // A record write that fails after the use leaves no tap and no record, so the next call asks again. --by auto has no tap and keeps its order.
+  // The PR is read BEFORE the tap is used (seat option A, CLI run 3). The paid row is then written in the very step that uses the tap up (decisionUse paidRound):
+  // a drop of the taps that lands in between leaves no tap, so the confirm is refused and no row exists; a drop after the use removes the row. A pick is confirmed
+  // while the PR is a draft (applyPathway needs that), so the draft state says nothing here. A failed read or a moved head: no paid row, the tap is still used.
+  const paidCheck = ledger && args.by === 'dave' ? paidYesCheck({ pr, head: facts.head, pathway: args.pathway, label: check.label }) : null;
   let used = null;
   if (ledger && args.by === 'dave') {
     // The tap must be the one that was read (label AND time), and its row must still be a row of the question at THIS clock (a free slot can go while the lock waits).
     const rowNow = (row) => askSpecOf(pr, args.result, '', consumeClock(o, facts)).values[row.label] === args.pathway;
-    used = ledgerUse({ pr, head: facts.head, label: check.label, at: check.at, check: rowNow, returnRow: true });
+    used = ledgerUse({ pr, head: facts.head, label: check.label, at: check.at, check: rowNow, returnRow: true, paidRound: paidCheck?.ok === true });
     if (!used.ok) return refuse(`Dave's tap for ${args.pathway} on PR #${pr} could not be used up (${used.reason}). Nothing was recorded. Call pr_checkpoint {pr} again.`);
   }
   writeFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), `${JSON.stringify(record, null, 2)}\n`);
   if (ledger && args.by !== 'dave') ledgerUse({ pr, head: facts.head });
-  // The paid yes comes LAST, after the record: a failure here leaves the record as it is and gives no yes (the model asks again for a paid post).
-  const noYes = used ? writePaidYes({ pr, head: facts.head, pathway: args.pathway, row: used.row }) : null;
+  // A failure to store the paid yes leaves the record as it is and gives no yes (the model asks again for a paid post).
+  const noYes = paidCheck === null ? null : paidCheck.ok ? (used.paid?.ok === true ? null : (used.paid?.reason ?? 'the paid row was not written')) : paidCheck.why;
   if (noYes) console.error(`pr-checkpoint: no paid yes was stored for PR #${pr}: ${noYes}`);
   console.log(JSON.stringify(record));
 }
 
 /**
- * The paid-round row of a paid pick, written after the record. A paid pick is a coderabbit or both pick whose tapped label names a price (the
- * price is the cap). Nothing is written for the free-slot row, the wait row or none (no price), for a head that is not the PR head (read from
- * GitHub now), for a tap that has no tapAt or entry stamp, or when GitHub cannot be read. The row copies the stamp of the tap it used up.
- * Returns null when the row is written or none is due, else the reason in one sentence.
+ * Whether a paid yes is due for a pick, and whether the PR still sits at the picked head. A paid pick is a coderabbit or both pick whose tapped label names a price
+ * (the price is the cap). Returns null when none is due (the free-slot row, the wait row, none: no price), { ok: true } when the PR head read from GitHub now is the
+ * picked head, or { ok: false, why } (GitHub cannot be read, or the head moved). The row itself is written by decisionUse in the step that uses the tap up, with the stamp
+ * of that tap (no tapAt or entry stamp: no row).
  */
-export function writePaidYes({ pr, head, pathway, row, gh = ghRunner(process.env, PAID_VIEW_TIMEOUT_MS) }) {
+export function paidYesCheck({ pr, head, pathway, label, gh = ghRunner(process.env, PAID_VIEW_TIMEOUT_MS) }) {
   if (pathway !== 'coderabbit' && pathway !== 'both') return null;
-  const yes = paidYesOf(row);
-  if (yes === null) return null;
-  const before = readPaidView(gh, pr);
-  if (before.why) return before.why;
-  if (before.head !== String(head).toLowerCase()) return `the pick is for ${String(head).slice(0, 7)} but the PR head is ${before.head.slice(0, 7)}`;
-  if (before.draft) return `PR #${pr} is a draft: a draft PR gets no paid yes`;
-  const w = paidRoundWrite({ key: decisionKey({ pr }), head, label: yes.label, tapAt: yes.tapAt, entry: yes.entry });
-  if (!w.ok) return w.reason;
-  // A return to draft (and its --drop-taps) can land between the read above and the write: the drop finds no row, and the row written after it would survive the draft.
-  // Read the PR again after the write. A draft, a moved head or a failed read removes the row again: no paid yes without a PR that is ready at the picked head.
-  const after = readPaidView(gh, pr);
-  const why = after.why ?? (after.head !== String(head).toLowerCase() ? `the PR head moved to ${after.head.slice(0, 7)} while the paid yes was stored` : after.draft ? `PR #${pr} went back to draft while the paid yes was stored` : null);
-  if (why === null) return null;
-  const gone = decisionUse({ step: 'paid-round', key: decisionKey({ pr }), head });
-  // ok, or no-decision (a --drop-taps removed the row first): the row is gone. Any other result (a busy or unreadable store) leaves it: say so, never claim "removed".
-  if (gone.ok || gone.reason === 'no-decision') return `${why}; the paid yes was removed again`;
-  return `${why}; the paid yes could NOT be removed (${gone.reason}); no paid post may run, run --drop-taps for PR #${pr}`;
-}
-
-/** The head and the draft flag of the PR from one `gh pr view`, or { why } (a failed call, no 40-hex head, or no boolean isDraft: fail closed). */
-function readPaidView(gh, pr) {
-  const view = gh(['pr', 'view', String(pr), '--json', 'headRefOid,isDraft,number', ...REPO_ARGS]);
-  let info = null;
-  try { info = JSON.parse(view.stdout); } catch { /* unread */ }
-  const head = String(info?.headRefOid ?? '').toLowerCase();
-  if (view.status !== 0 || !/^[0-9a-f]{40}$/.test(head) || typeof info?.isDraft !== 'boolean') return { why: `the PR head and draft state could not be read from GitHub (${firstLine(view.stderr) || 'no answer'})` };
-  return { head, draft: info.isDraft };
+  if (capCentsOfLabel(label) === null) return null;
+  const view = gh(['pr', 'view', String(pr), '--json', 'headRefOid,number', ...REPO_ARGS]);
+  let live = '';
+  try { live = String(JSON.parse(view.stdout).headRefOid ?? '').toLowerCase(); } catch { /* unread */ }
+  if (view.status !== 0 || !/^[0-9a-f]{40}$/.test(live)) return { ok: false, why: `the PR head could not be read from GitHub (${firstLine(view.stderr) || 'no answer'})` };
+  if (live !== String(head).toLowerCase()) return { ok: false, why: `the pick is for ${String(head).slice(0, 7)} but the PR head is ${live.slice(0, 7)}` };
+  return { ok: true };
 }
 
 /**

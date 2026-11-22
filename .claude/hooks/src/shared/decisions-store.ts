@@ -35,8 +35,9 @@ export const paidRoundWrite: (a: { key: string; head: string; label: string; tap
 /**
  * Uses the decision up (single use). Call it only after the action it allows is decided. With a label, the row is used only when it still holds that label (reason `label-changed` otherwise).
  * `at`, `check` and `returnRow` are the options of decisions.mjs: a tap time guard, a row check run under the lock, and the used row's stamp in the result.
+ * `paidRound` writes the paid-round row of the used tap in the same lock (the result then has `paid`).
  */
-export const decisionUse: (t: Triple & { label?: string; at?: string; check?: (row: unknown) => boolean; returnRow?: boolean }) => { ok: true; row?: DecisionStamp } | { ok: false; reason: string } = store.decisionUse;
+export const decisionUse: (t: Triple & { label?: string; at?: string; check?: (row: unknown) => boolean; returnRow?: boolean; paidRound?: boolean }) => { ok: true; row?: DecisionStamp; paid?: { ok: true } | { ok: false; reason: string } } | { ok: false; reason: string } = store.decisionUse;
 export const missCount: (t: Triple) => number = store.missCount;
 export const missBump: (t: Triple) => number = store.missBump;
 export const decisionKey: (a: { repo?: string; pr?: number | string; branch?: string }) => string = store.decisionKey;

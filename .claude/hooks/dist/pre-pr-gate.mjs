@@ -1067,7 +1067,12 @@ function decisionRead({ step, key, head }) {
   return d && typeof d.label === "string" ? { label: d.label, at: d.at } : null;
 }
 var stampedRow = (d) => ({ label: d.label, at: d.at, tapAt: isText(d.tapAt) ? d.tapAt : null, entry: isText(d.entry) ? d.entry : null });
-function decisionUse({ step, key, head, label, at, check, returnRow = false }) {
+function capCentsOfLabel(label) {
+  const m = /up to \$(\d+(?:\.\d{1,2})?)/.exec(String(label ?? ""));
+  const cents = m ? Math.round(Number(m[1]) * 100) : 0;
+  return cents > 0 ? cents : null;
+}
+function decisionUse({ step, key, head, label, at, check, returnRow = false, paidRound = false }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: "no-decision" };
   return update((store) => {
     const id = idOf({ step, key, head });
@@ -1079,8 +1084,16 @@ function decisionUse({ step, key, head, label, at, check, returnRow = false }) {
     delete store.offers[id];
     delete store.misses[id];
     if (!row) return { ok: false, reason: "no-decision" };
-    return returnRow === true ? { ok: true, row: stampedRow(row) } : { ok: true };
+    const paid = paidRound === true ? paidRowFrom(store, { key, head, row }) : null;
+    return { ok: true, ...returnRow === true ? { row: stampedRow(row) } : {}, ...paid ? { paid } : {} };
   });
+}
+function paidRowFrom(store, { key, head, row }) {
+  const stamp = stampedRow(row);
+  if (capCentsOfLabel(stamp.label) === null) return { ok: false, reason: "no-price: the tapped label names no price" };
+  if (!isText(stamp.tapAt) || !isText(stamp.entry)) return { ok: false, reason: "no-stamp: the tap has no tap time or entry point" };
+  store.decisions[idOf({ step: "paid-round", key, head })] = { label: stamp.label, at: (/* @__PURE__ */ new Date()).toISOString(), tapAt: stamp.tapAt, entry: stamp.entry, tree: null, nonce: null };
+  return { ok: true };
 }
 
 // src/shared/decisions-store.ts
