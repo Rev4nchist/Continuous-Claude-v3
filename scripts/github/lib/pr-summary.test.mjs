@@ -263,6 +263,7 @@ test('PS18: ok is true when the summary has no FAIL-class problem (PASS, an olde
   const missing = check(fresh, null, { mode: 'note' });
   assert.equal(missing.sha, null, 'a fresh repo has no summary file');
   assert.equal(missing.ok, false, 'no file');
+  assert.match(missing.result.detail, /one "Label: text" line for each, not a heading/, 'the FAIL names the file form (a session wrote "## Branch" headings and the parser read no label, 2026-11-22)');
 });
 
 test('PS14: a valid summary passes in fail mode, returns the hash of the file, and the line shows the facts', () => {
