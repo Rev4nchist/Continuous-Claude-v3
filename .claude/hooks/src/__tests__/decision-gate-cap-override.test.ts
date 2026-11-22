@@ -18,7 +18,7 @@
  *   G9  the built hook, a real payload, gives the same answers
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -245,10 +245,32 @@ describe('G9: the built hook, a real payload', () => {
   const HERE = dirname(fileURLToPath(import.meta.url));
   const REPO_DIR = resolve(HERE, '..', '..', '..', '..');
   const DIST = join(REPO_DIR, '.claude', 'hooks', 'dist', 'decision-gate.mjs');
-  const git = (...args: string[]) => spawnSync('git', args, { cwd: REPO_DIR, encoding: 'utf8', windowsHide: true }).stdout.trim();
+  /**
+   * A throwaway git repo in a temp folder: one commit and a NAMED branch (CLI finding 1: the Hooks job checks out a PR detached, and the gate fails closed
+   * on an empty branch, which is right). It is a CCv3 checkout for the gate (the fork remote and the config). No worktree and no branch is added to the
+   * real repo. The folder is made here and deleted by its exact path in afterEach.
+   */
+  let probeDir = '';
+  const gitIn = (...args: string[]) => {
+    const r = spawnSync('git', args, { cwd: probeDir, encoding: 'utf8', windowsHide: true });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  function makeProbeRepo(): void {
+    probeDir = mkdtempSync(join(tmpdir(), 'cap-probe-repo-'));
+    gitIn('init', '-q', '-b', 'probe/cap-override');
+    gitIn('config', 'user.email', 't@example.invalid');
+    gitIn('config', 'user.name', 't');
+    gitIn('remote', 'add', 'fork', `https://github.com/${REPO}.git`);
+    writeFileSync(join(probeDir, 'review-router.config.json'), JSON.stringify({ decisions: { enforce: true, enforcePush: true } }));
+    gitIn('add', '.');
+    gitIn('commit', '-q', '-m', 'probe');
+  }
+  afterEach(() => { if (probeDir !== '') { rmSync(probeDir, { recursive: true, force: true }); probeDir = ''; } });
   /** The hook's answer: the permission decision, or '' for an allow ({}). A hook that did not run is a test failure, never an allow. */
   function ask(command: string): string {
-    const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: REPO_DIR, session_id: 's-cap-built' });
+    if (probeDir === '') makeProbeRepo();
+    const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: probeDir, session_id: 's-cap-built' });
     const env: NodeJS.ProcessEnv = { ...process.env, CCV3_DECISIONS_FILE: storeFile, CCV3_GUARD_DECISIONS_LOG: join(dir, 'guard.jsonl') };
     delete env.VITEST;
     const r = spawnSync('node', [DIST], { input: payload, encoding: 'utf8', windowsHide: true, env });
@@ -261,8 +283,10 @@ describe('G9: the built hook, a real payload', () => {
     expect(ask(`${PRE} --cli-extra-run`)).toContain('ship-ask.mjs cap-override');
   });
   it('a tap for this branch and head: allow; the control without flags stays allowed', () => {
-    const branch = git('branch', '--show-current');
-    const head = git('rev-parse', 'HEAD');
+    makeProbeRepo();
+    const branch = gitIn('branch', '--show-current');
+    const head = gitIn('rev-parse', 'HEAD');
+    expect(branch).toBe('probe/cap-override');
     const key = cap.capOverrideKey({ branch, usd: null, extraRun: true }) as string;
     expect(offerWrite({ step: 'cli-skip', key, head, spec: { header: 'CLI cap', question: 'Q?', options: [{ label: cap.CAP_KEEP_LABEL }, { label: cap.CAP_LIFT_LABEL }] } }).ok).toBe(true);
     expect(decisionRecord({ step: 'cli-skip', key, head, label: cap.CAP_LIFT_LABEL })).toEqual({ ok: true });

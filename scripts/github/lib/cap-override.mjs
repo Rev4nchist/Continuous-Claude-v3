@@ -67,14 +67,17 @@ export const isLiftLabel = (label) => typeof label === 'string' && new RegExp(`^
 /**
  * Claim Dave's tap for this branch, head and flag set: read the decision, check the label, use it up. { ok: true, tapAt } or { ok: false, reason }.
  * A second claim is refused (the decision is gone). Any store problem is a refusal (fail closed).
+ * The use is bound to the decision that was read: `at` is its time, so a tap that another process re-recorded between the read and the use is
+ * refused and stays in the store (CLI finding 2). `deps.afterRead` is a test seam that runs between the two calls.
  */
-export function claimCapOverride({ branch, head, usd = null, extraRun = false }) {
+export function claimCapOverride({ branch, head, usd = null, extraRun = false }, deps = {}) {
   try {
     if (!branch || !head || capFlagText({ usd, extraRun }) === '') return { ok: false, reason: 'no-flag-set' };
     const t = { step: CAP_STEP, key: capOverrideKey({ branch, usd, extraRun }), head: String(head).toLowerCase() };
     const d = decisionRead(t);
     if (!d || !isLiftLabel(d.label)) return { ok: false, reason: 'no-decision' };
-    const used = decisionUse({ ...t, label: d.label });
+    deps.afterRead?.();
+    const used = decisionUse({ ...t, label: d.label, at: d.at });
     return used.ok === true ? { ok: true, tapAt: d.at } : { ok: false, reason: used.reason ?? 'not-used' };
   } catch (err) {
     return { ok: false, reason: `store-error: ${String(err?.message ?? err).split('\n')[0]}` };

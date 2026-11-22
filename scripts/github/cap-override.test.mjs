@@ -33,7 +33,7 @@ import {
 } from './lib/cap-override.mjs';
 import { crPaths, countedRuns, runCodeRabbit } from './pre-pr.mjs';
 import * as FIX from './cr-fix.mjs';
-import { capOverrideSpec, countedRuns as shipCountedRuns, planOf } from './ship-ask.mjs';
+import { capFactsOf, capOverrideSpec, countedRuns as shipCountedRuns, planOf } from './ship-ask.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -168,6 +168,21 @@ test('T7: the tap uses the cli-skip store step with its own key: it never opens 
   const key = tap({ usd: 6 });
   assert.notEqual(key, decisionKey({ branch: 'feat/x' }));
   assert.equal(decisionRead({ step: 'cli-skip', key: decisionKey({ branch: 'feat/x' }), head: HEAD }), null);
+});
+
+test('T8 (CLI finding 2): a tap re-recorded between the read and the use is refused, is not consumed, and no stale time is returned', () => {
+  tempStore();
+  const key = tap({ usd: 6 });
+  const r = claimCapOverride({ branch: 'feat/x', head: HEAD, usd: 6, extraRun: false }, {
+    afterRead: () => {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); // a new tap gets a new time
+      tap({ usd: 6 });
+    },
+  });
+  assert.equal(r.ok, false, 'the replaced tap was consumed');
+  assert.equal(r.tapAt, undefined);
+  assert.notEqual(decisionRead({ step: 'cli-skip', key, head: HEAD }), null, 'the new tap is still in the store');
+  assert.equal(claimCapOverride({ branch: 'feat/x', head: HEAD, usd: 6, extraRun: false }).ok, true, 'the new tap still opens one run');
 });
 
 // ---------- L: the ledger ----------
@@ -362,6 +377,33 @@ test('Q3: a USD-only and an extra-run-only question name only their own flag', (
   assert.ok(usdOnly.includes('--cli-cap-usd 6') && !usdOnly.includes('--cli-extra-run'));
   const extraOnly = capOverrideSpec({ ...DATA, usd: null }).question;
   assert.ok(extraOnly.includes('--cli-extra-run') && !extraOnly.includes('--cli-cap-usd'));
+});
+
+test('Q6 (CLI finding 3): an unknown spend, file count or estimate is printed as unknown, never as zero', () => {
+  const q = capOverrideSpec({ ...DATA, total: null, files: null, estimateUsd: null }).question;
+  assert.match(q, /unknown/);
+  assert.equal(q.includes('$0.00'), false, q);
+  assert.equal(q.includes('0 files'), false, q);
+  const spendOnly = capOverrideSpec({ ...DATA, total: null }).question;
+  assert.match(spendOnly, /spend is unknown/);
+  assert.ok(spendOnly.includes('16 files'));
+  const filesOnly = capOverrideSpec({ ...DATA, files: null, estimateUsd: null }).question;
+  assert.match(filesOnly, /unknown files/);
+  assert.ok(filesOnly.includes('$3.00'));
+});
+
+test('Q7 (CLI finding 3): a real zero stays zero: no spend today, an empty diff', () => {
+  const q = capOverrideSpec({ ...DATA, total: 0, files: 0, estimateUsd: 0 }).question;
+  assert.ok(q.includes('$0.00'), q);
+  assert.ok(q.includes('0 files'), q);
+  assert.equal(q.includes('unknown'), false, q);
+});
+
+test('Q8 (CLI finding 3): capFactsOf carries null for a failed spend read and a failed diff, and zero for an empty diff', () => {
+  assert.deepEqual(capFactsOf({ readTotal: () => { throw new Error('ledger'); }, readNames: () => null }), { total: null, files: null, estimateUsd: null });
+  assert.deepEqual(capFactsOf({ readTotal: () => 3, readNames: () => '' }), { total: 3, files: 0, estimateUsd: 0 });
+  assert.deepEqual(capFactsOf({ readTotal: () => 0, readNames: () => 'a.mjs\nb.mjs\n' }), { total: 0, files: 2, estimateUsd: 0.5 });
+  assert.deepEqual(capFactsOf({ readTotal: () => 'x', readNames: () => { throw new Error('read'); } }), { total: null, files: null, estimateUsd: null }, 'a spend that is not a number is unknown');
 });
 
 test('Q4: the run-count copy in ship-ask counts an extra run as no slot, as pre-pr does', () => {

@@ -135,8 +135,13 @@ export function cliSkipSpec(d) {
 export function capOverrideSpec(d) {
   const flags = [d.usd != null ? `${FLAG_USD} ${d.usd}` : '', d.extraRun ? FLAG_EXTRA : ''].filter(Boolean).join(' and ');
   const capText = typeof d.cap === 'number' ? `the ${usd(d.cap)} daily cap` : 'no daily cap';
+  // An unknown value (null) is printed as unknown: never as $0.00 or 0 files. A real zero stays zero.
+  const known = (v) => typeof v === 'number' && Number.isFinite(v);
+  const spend = known(d.total) ? usd(d.total) : 'unknown';
+  const filesText = Number.isInteger(d.files) ? plural(d.files, 'file') : 'unknown files';
+  const estimate = known(d.estimateUsd) ? usd(d.estimateUsd) : 'unknown';
   const lines = [
-    `The CLI review of ${clip(d.branch, 60)} at ${String(d.head).slice(0, 7)} is stopped by a cap. Today's paid CLI spend is ${usd(d.total)} against ${capText}; ${plural(Number(d.files) || 0, 'file')}, up to ${usd(d.estimateUsd)}.`,
+    `The CLI review of ${clip(d.branch, 60)} at ${String(d.head).slice(0, 7)} is stopped by a cap. Today's paid CLI spend is ${spend} against ${capText}; ${filesText}, up to ${estimate}.`,
     `Flags for one run: ${flags} (${[d.usd != null ? 'the USD cap' : '', d.extraRun ? 'the run count' : ''].filter(Boolean).join(' and ')}).`,
     'Lift the cap for this one run?',
   ];
@@ -385,18 +390,28 @@ export async function gatherCliSkip({ branch }) {
   };
 }
 
-/** { branch, head, missing, usd, extraRun, total, cap, files, estimateUsd } for cap-override: today's CLI spend, the config cap and the changed files against the base. */
+/**
+ * The cost facts of the cap-override question: { total, files, estimateUsd }. A read that fails or gives nothing usable is null (unknown), never zero:
+ * Dave must not tap on a made-up $0.00 or 0 files (CLI finding 3). A real zero (no spend today, an empty diff) stays zero.
+ * `readTotal()` is today's paid CLI spend in dollars; `readNames()` is the text of `git diff --name-only`, or null when the diff could not be read.
+ */
+export function capFactsOf({ readTotal, readNames }) {
+  let total = null;
+  try { const t = readTotal(); total = typeof t === 'number' && Number.isFinite(t) && t >= 0 ? t : null; } catch { total = null; }
+  let files = null;
+  try { const names = readNames(); files = typeof names === 'string' ? names.split(/\r?\n/).filter(Boolean).length : null; } catch { files = null; }
+  return { total, files, estimateUsd: files === null ? null : files * PAID_PER_FILE };
+}
+
+/** { branch, head, missing, usd, extraRun, total, cap, files, estimateUsd } for cap-override: today's CLI spend, the config cap and the changed files against the base. An unread value is null. */
 export async function gatherCapOverride({ branch, usd, extraRun }) {
   const t = branchTarget(branch, process.cwd());
   const { cliCapOf, cliTodayOf } = await import('./cr-paid.mjs');
   let cap = null;
   try { cap = cliCapOf(JSON.parse(readFileSync(path.join(topOf(), 'review-router.config.json'), 'utf8'))); } catch { cap = null; }
-  let total = 0;
-  try { total = cliTodayOf().total; } catch { total = 0; }
   const base = ['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], topOf()));
-  const names = base && t.head ? gitText(['diff', '--name-only', `${base}...${t.head}`], topOf()) : null;
-  const files = names ? names.split(/\r?\n/).filter(Boolean).length : 0;
-  return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, total, cap, files, estimateUsd: files * PAID_PER_FILE };
+  const facts = capFactsOf({ readTotal: () => cliTodayOf().total, readNames: () => (base && t.head ? gitText(['diff', '--name-only', `${base}...${t.head}`], topOf()) : null) });
+  return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, cap, ...facts };
 }
 
 /** True only when SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one. The test seams (--facts, SHIP_ASK_STATUS_SCRIPT) need both. */
