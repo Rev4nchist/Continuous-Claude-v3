@@ -1,0 +1,6 @@
+{
+  "case": "deny-npm-install",
+  "event": "PreToolUse",
+  "input": { "session_id": "fixture", "tool_name": "Bash", "tool_input": { "command": "pip install requests" } },
+  "expect": { "exit": [0], "shape": "gate", "decision": "deny" }
+}

@@ -1,0 +1,6 @@
+{
+  "case": "allow-status",
+  "event": "PreToolUse",
+  "input": { "session_id": "fixture", "tool_name": "Bash", "tool_input": { "command": "git status --short" } },
+  "expect": { "exit": [0], "shape": "empty" }
+}

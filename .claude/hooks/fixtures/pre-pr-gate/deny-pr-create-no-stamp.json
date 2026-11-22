@@ -1,0 +1,6 @@
+{
+  "case": "deny-pr-create-no-stamp",
+  "event": "PreToolUse",
+  "input": { "session_id": "fixture", "tool_name": "Bash", "tool_input": { "command": "gh pr create --title t --body b" } },
+  "expect": { "exit": [0], "shape": "gate", "decision": "deny" }
+}

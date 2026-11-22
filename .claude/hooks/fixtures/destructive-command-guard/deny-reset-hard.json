@@ -1,0 +1,6 @@
+{
+  "case": "deny-reset-hard",
+  "event": "PreToolUse",
+  "input": { "session_id": "fixture", "tool_name": "Bash", "tool_input": { "command": "git reset --hard HEAD~1" } },
+  "expect": { "exit": [0], "shape": "gate", "decision": "ask" }
+}

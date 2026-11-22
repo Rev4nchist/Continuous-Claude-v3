@@ -220,6 +220,25 @@ test('HP13 classifyOutput names the four shapes', () => {
   assert.equal(classifyOutput('hello'), 'other');
 });
 
+test('HP15 the hook runs in a throwaway git repo with a fork remote, never in the checkout', async () => {
+  // decision-gate printed "git remote -v failed (exit 128)" in a plain temp folder, so its deny rule was never judged.
+  const probe = `import {execFileSync} from 'node:child_process'; import {readFileSync} from 'node:fs'; let r=''; try { r=execFileSync('git',['remote','-v'],{encoding:'utf8'}); } catch (e) { r='ERR'; }
+    let cfg=null; try { cfg=JSON.parse(readFileSync('review-router.config.json','utf8')); } catch {}
+    console.log(JSON.stringify({result:'continue',remotes:r,cwd:process.cwd(),cfg}));`;
+  const root = makeRoot({ g: { dist: probe, fixtures: { c1: fx({ expect: { exit: [0], shape: 'continue' } }) } } });
+  try {
+    const { fixtures } = loadFixtures(root, ['g']);
+    const r = await runFixture({ root, ...fixtures[0], runId: 'git1' });
+    const out = JSON.parse(r.stdout);
+    assert.match(out.remotes, /^fork\s+https:\/\/github\.com\/.+\(fetch\)/m);
+    assert.notEqual(path.resolve(out.cwd), path.resolve(root));
+    assert.ok(!path.resolve(out.cwd).startsWith(path.resolve(REPO)));
+    // Guards read decisions.enforce from review-router.config.json: without it decision-gate only warns and a deny is never judged.
+    assert.equal(out.cfg?.decisions?.enforce, true);
+    assert.equal(out.cfg?.decisions?.enforcePush, true);
+  } finally { cleanup(root); }
+});
+
 test('HP14 every saved fixture in this repo is valid and names a source file', () => {
   const dir = path.join(REPO, '.claude', 'hooks', 'fixtures');
   const names = existsSync(dir) ? readdirSync(dir) : [];
