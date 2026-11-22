@@ -1856,3 +1856,109 @@ test('D: setHeavy turns a light lock heavy through a temp file and a rename, and
   assert.equal(heavy.granted, false);
   assert.match(heavy.lines.join('\n'), /1 heavy pre-pr/);
 });
+
+// ---- card coord-run-lock-reading: the lock row holds the free memory and load read at the grant ----
+// How it can fail, one test each:
+//   RD1 a granted acquire (heavy and light kind) writes grantFreeGB (one decimal) and grantLoadPct (whole percent)
+//   RD2 a warn-mode grant that "would wait" is a grant: it writes them too
+//   RD3 a refused grant (wait record) writes no reading
+//   RD4 register writes no reading
+//   RD5 setPhase keeps the reading
+//   RD6 a row with no fields, or a bad value, lists with no reading text and no crash (never 0)
+//   RD7 the list line of a row with a reading is the old line, byte for byte, plus one suffix at the end
+const GRANT_FIELDS = ['grantFreeGB', 'grantLoadPct'];
+const listLines = async (ctx) => (await list(ctx.d)).lines;
+
+test('RD1: a granted acquire writes the free memory and load of its read into the row', async () => {
+  const ctx = setup({ free: 7.34, load: 12 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  const heavy = await prePr(ctx, 100);
+  assert.equal(heavy.granted, true);
+  assert.equal(recOf(ctx, heavy.file).grantFreeGB, 7.3);
+  assert.equal(recOf(ctx, heavy.file).grantLoadPct, 12);
+  ctx.st.now += 3 * MIN;
+  live(ctx, 101);
+  const light = await acquire({ kind: 'hook-build', pid: 101, holder: 't' }, ctx.d);
+  assert.equal(light.granted, true);
+  assert.equal(recOf(ctx, light.file).grantFreeGB, 7.3);
+  assert.equal(recOf(ctx, light.file).grantLoadPct, 12);
+});
+
+test('RD1b: a pre-pr stores the worse of its two reads, the value that decided the grant', async () => {
+  const ctx = setup({ free: 9, load: 10 });
+  ctx.mode('grant');
+  const seq = [{ free: [9, 9, 9], load: [10, 10, 10] }, { free: [6.2, 6.2, 6.2], load: [40, 40, 40] }];
+  ctx.d.samples = async () => seq.shift();
+  ctx.d.samplesHooked = false;
+  live(ctx, 100);
+  const r = await prePr(ctx, 100);
+  assert.equal(r.granted, true);
+  assert.equal(recOf(ctx, r.file).grantFreeGB, 6.2);
+  assert.equal(recOf(ctx, r.file).grantLoadPct, 40);
+});
+
+test('RD2: a warn-mode grant that would wait is a grant and writes the reading', async () => {
+  const ctx = setup({ free: 8, load: 90 });
+  live(ctx, 100);
+  const r = await prePr(ctx, 100);
+  assert.equal(r.granted, true);
+  assert.equal(r.warned, true);
+  assert.equal(recOf(ctx, r.file).grantLoadPct, 90);
+  assert.equal(recOf(ctx, r.file).grantFreeGB, 8);
+});
+
+test('RD3: a refused grant leaves a wait record with no reading', async () => {
+  const ctx = setup({ free: 8, load: 95 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  const r = await prePr(ctx, 100, { wait: true });
+  assert.equal(r.granted, false);
+  assert.ok(r.waitFile, 'a wait record is written');
+  for (const k of GRANT_FIELDS) assert.equal(k in recOf(ctx, r.waitFile), false, `${k} on a wait record`);
+});
+
+test('RD4: register writes no reading: nothing was decided or read', async () => {
+  const ctx = setup({ free: 7, load: 12 });
+  ctx.mode('grant');
+  live(ctx, 300);
+  const r = await register({ kind: 'loop', pid: 300, holder: 'x' }, ctx.d);
+  for (const k of GRANT_FIELDS) assert.equal(k in recOf(ctx, r.file), false, `${k} on a registered row`);
+});
+
+test('RD5: setPhase keeps the reading', async () => {
+  const ctx = setup({ free: 7.34, load: 12 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  const r = await prePr(ctx, 100);
+  assert.equal(RL.setPhase({ pid: 100, phase: 'cr' }, ctx.d).changed, true);
+  assert.equal(recOf(ctx, r.file).phase, 'cr');
+  assert.equal(recOf(ctx, r.file).grantFreeGB, 7.3);
+  assert.equal(recOf(ctx, r.file).grantLoadPct, 12);
+});
+
+test('RD6: an old row and a row with a bad value list with no reading text, never 0', async () => {
+  const ctx = setup();
+  ctx.mode('grant');
+  const base = (pid) => ({ kind: 'loop', pid, pidStart: 1000 + pid, holder: 'old', head: null, session: null, startedAt: T0, expiresAt: T0 + 60 * MIN });
+  const rows = [base(200), { ...base(201), grantFreeGB: 'x', grantLoadPct: 5 }, { ...base(202), grantFreeGB: NaN, grantLoadPct: 5 }, { ...base(203), grantFreeGB: 4, grantLoadPct: null }];
+  rows.forEach((row, i) => { live(ctx, 200 + i); writeFileSync(join(ctx.dir, `loop-${row.pid}-${row.pidStart}.lock`), JSON.stringify(row)); });
+  const lines = (await listLines(ctx)).filter((l) => /^loop pid/.test(l));
+  assert.equal(lines.length, 4, lines.join('\n'));
+  for (const l of lines) assert.doesNotMatch(l, /read free|GB|pct|\b0 pct/, l);
+});
+
+test('RD7: a row with a reading lists as the old line byte for byte, plus one suffix at the end', async () => {
+  const ctx = setup({ free: 7.34, load: 12 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  const r = await prePr(ctx, 100);
+  const withReading = (await listLines(ctx)).find((l) => /^pre-pr pid 100/.test(l));
+  const file = join(ctx.dir, r.file);
+  const rec = JSON.parse(readFileSync(file, 'utf8'));
+  for (const k of GRANT_FIELDS) delete rec[k];
+  writeFileSync(file, JSON.stringify(rec));
+  const old = (await listLines(ctx)).find((l) => /^pre-pr pid 100/.test(l));
+  assert.ok(old && withReading, 'both lines exist');
+  assert.equal(withReading, `${old} read free 7.3 GB load 12 pct`);
+});
