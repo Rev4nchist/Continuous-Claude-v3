@@ -16,7 +16,7 @@ import type { Span } from '../hooks/agentic-os/pane-model'
 // B1 the band keeps the word ASK on line 2
 // B2 PLAN and UNPROVEN draw with no steps, or disappear with steps
 // B4 line 1 draws ctx or cost again when the HUD row draws (fix 6 stays green after the label work)
-// H1 the HUD row keeps the old labels (cost, cache, advisor) or draws a red effort chip with no reason
+// H1 the HUD row keeps the old labels (cost, cache, advisor) or the effort chip text drifts (the red fill is the only signal)
 
 const text = (line: Span[] | undefined): string => (line ?? []).map(span => span.text).join('')
 
@@ -81,7 +81,7 @@ describe('HUD row labels', () => {
   const parts = (over: Partial<HudState> = {}, cache: unknown = null) => hudParts(hud(over), 26, cache as never)
   const byKey = (list: ReturnType<typeof parts>, key: string) => list.find(part => part.key === key)
 
-  test('H1 cost reads est, advisor reads calls, cache reads cold in, a red effort chip gives its reason', () => {
+  test('H1 cost reads est, advisor reads calls, cache reads cold in, the effort chip has its text and tone',() => {
     const warm = parts({}, { status: 'warm', hitPct: 99, minutesLeft: 58, isLow: false })
     expect((byKey(warm, 'hud-cost') as { text: string }).text).toBe('est $667.80')
     expect((byKey(warm, 'hud-advisor') as { text: string }).text).toBe('Fable advisor calls 15')
@@ -190,6 +190,16 @@ describe('HUD row fit', () => {
     expect(rowAt(56)).toContain('5h ▰')
     expect(rowAt(56)).toContain('7d ▰')
     expect(rowAt(45)).not.toContain('Sonnet')
+  })
+
+  // The short form has no gauge, so the percent carries the heat tone (design note line 18: HUD gauges keep amber for heat).
+  test('P13 a short limit keeps its heat tone on the percent', () => {
+    const hot = hudParts({ ...fullHud(), limits: [{ kind: 'five_hour', percentUsed: 90 }] } as HudState, 41, null)
+    const heat = hot.find(part => part.key === 'hud-limit-five_hour')!.tone
+    expect(heat).not.toBe('dim')
+    const spans = hudSpans(fitHudParts(hot, 30))
+    expect(text(spans)).toBe('ctx 41%  5h 90%')
+    expect(spans.find(span => span.text === '90%')?.tone).toBe(heat)
   })
 
   test('P13 hudParts still returns every part: only the terminal fit drops', () => {

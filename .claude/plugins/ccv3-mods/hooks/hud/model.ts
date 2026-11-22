@@ -85,7 +85,7 @@ export const hudSpans = (parts: HudPart[]): Span[] =>
     if (part.kind === 'chip') return [...lead, { text: ` ${part.text} `, tone: part.tone }]
     if (part.kind === 'text') return [...lead, { text: part.text, tone: part.tone }]
     if (part.kind === 'ring') return [...lead, { text: part.label, tone: part.tone }]
-    if (part.short === true) return [...lead, { text: `${part.name} `, tone: 'dim' }, { text: `${part.percent}%`, tone: 'dim' }]
+    if (part.short === true) return [...lead, { text: `${part.name} `, tone: 'dim' }, { text: `${part.percent}%`, tone: part.tone }]
     return [...lead, { text: `${part.name} `, tone: 'dim' }, ...bar(part.percent / 100, 4, part.tone, ['▰', '▱']), { text: ` ${part.percent}%`, tone: 'dim' }]
   })
 

@@ -513,14 +513,16 @@ describe('hud', () => {
     world(on, { limits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 61 }] })
     await start($)
     await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 61 }], changed: ['context', 'rateLimits'] } as never)
-    const rowAt = async (bodyColumns: number) => {
-      const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, bodyColumns } })
+    const rowAt = async (bodyColumns: number, maxRows = 10) => {
+      const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows, bodyColumns } })
       const text = (await band.find({ key: 'row-hud' }))?.text
       await band.unmount()
       return text
     }
     expect(await rowAt(20)).toBe('ctx 42%  5h 38%')
     expect(await rowAt(26)).toBe('ctx 42%  5h 38%  7d 61%')
+    // maxRows 2 (compact line + HUD row) gets the same drops (design note line 81).
+    expect(await rowAt(20, 2)).toBe('ctx 42%  5h 38%')
     const wide = await rowAt(160)
     expect(wide).toContain('Opus 5.5')
     expect(wide).toContain('▰')
