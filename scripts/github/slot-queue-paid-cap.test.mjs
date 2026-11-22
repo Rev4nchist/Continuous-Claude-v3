@@ -48,7 +48,7 @@ const stateOf = (e) => JSON.parse(readFileSync(e.statePath, 'utf8'));
 const BUSY = () => ({ slot: { nextAt: at(600), source: 'notice', lastPostAt: 0, lastPostPr: null } });
 const posts = (e) => (existsSync(e.logPath) ? readFileSync(e.logPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 const ledgerRows = (e) => (existsSync(e.ledgerPath) ? readFileSync(e.ledgerPath, 'utf8').trim().split('\n').filter(Boolean) : []);
-const ALLOW = (pr, over = {}) => ({ exitCode: 0, verdict: 'ALLOW', pr, head: headOf(pr), round: 1, files: 11, cost: 2.75, reasons: [], comment: '@coderabbitai review --use-credits', ...over });
+const ALLOW = (pr, over = {}) => ({ exitCode: 0, verdict: 'ALLOW', pr, head: headOf(pr), round: 1, files: 11, total: 11, cost: 2.75, reasons: [], comment: '@coderabbitai review --use-credits', ...over });
 const human = (id, body, ms) => ({ id, user: { login: 'dave', type: 'User' }, body, created_at: iso(ms), updated_at: iso(ms) });
 
 function run(e, argv, o = {}) {

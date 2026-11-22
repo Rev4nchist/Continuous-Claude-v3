@@ -106,7 +106,7 @@ function child(e, argv, o = {}) {
   });
 }
 
-const ALLOW = (pr, over = {}) => ({ exitCode: 0, verdict: 'ALLOW', pr, head: headOf(pr), round: 1, files: 11, cost: 2.75, reasons: [], comment: '@coderabbitai review --use-credits', ...over });
+const ALLOW = (pr, over = {}) => ({ exitCode: 0, verdict: 'ALLOW', pr, head: headOf(pr), round: 1, files: 11, total: 11, cost: 2.75, reasons: [], comment: '@coderabbitai review --use-credits', ...over });
 const ESCALATE = (pr) => ({ exitCode: 3, verdict: 'ESCALATE', pr, head: headOf(pr), reasons: ['today $14.00 + round $2.00 is over $15.00'], comment: null });
 const toasts = (json) => json.actions.filter((a) => a.kind === 'toast');
 

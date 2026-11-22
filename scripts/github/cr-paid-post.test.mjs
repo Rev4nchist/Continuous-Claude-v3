@@ -20,7 +20,9 @@
 //   a draft, closed or merged PR is paid for; the refusal comes after the free-slot step (a GitHub call is spent first) -> PP16, PP16b
 //   a pull answer with no state, merged or draft field is read as an open PR instead of a failed read (exit 5)          -> PP16c
 // Aegis pass (F1, F4, F3 part a, F9):
-//   CCV3_DECISIONS_FILE moves the decision store, so a forged row in a scratch file pays; an alias of the real store is refused -> PP17, PP17b
+//   CCV3_DECISIONS_FILE moves the decision store, so a forged row in a scratch file pays; ANY non-empty override refuses (seat rule 11-22) -> PP17, PP17b
+//   USERPROFILE or HOME moves the home, so the default store and the default ledger move with it (the limits read 0, a forged row reads) -> PP17c, PP17d
+//   the cap path posts with no head, a bad head or a moved head (F6); a total below 1 or not a whole number prices a round at the filtered count (F4) -> PP14b, PP18c
 //   path_filters (an uncommitted edit of .coderabbit.yaml) zero the filtered cost, so the round and day limits never bite       -> PP18, PP18b
 //   a row written by `post` does not say so, so the detection cannot tell it from a hand-written `record` row                   -> PP19
 //   a refusal ignores a failed use-up: exit 4 "used up" while the row stays and can pay later                                   -> PP20, PP20b
@@ -347,18 +349,38 @@ test('PP13: `post` takes --pr and nothing else: a cap comes from Dave\'s tap, ne
 
 test('PP14: the mod path: a cap from --cap (cents) posts with no store row; no cap, or a cap under the cost, refuses', () => {
   const w = world();
-  const r = post(w, { cap: 100, source: 'cap' });
+  const r = post(w, { cap: 100, source: 'cap', head: HEAD });
   assert.equal(r.ok, true, r.text);
   assert.equal(w.posts.length, 1);
   const none = world();
-  const a = post(none, { cap: null, source: 'cap' });
+  const a = post(none, { cap: null, source: 'cap', head: HEAD });
   assert.equal(a.code, 4);
   assert.equal(a.text, `No paid yes of Dave's for PR #225 at ${HEAD.slice(0, 7)}.`);
   const low = world();
-  const b = post(low, { cap: 99, source: 'cap' });
+  const b = post(low, { cap: 99, source: 'cap', head: HEAD });
   assert.equal(b.code, 4);
   assert.equal(b.text, 'The cost is $1.00, over the $0.99 Dave tapped. Ask again.');
   [w, none, low].forEach((x) => x.done());
+});
+
+test('PP14b (F6): the cap path needs the PR head Dave saw: none, a short, an upper-case or a moved head refuses (exit 4), posts nothing, reads nothing for the missing forms', () => {
+  for (const head of [undefined, null, '', 'abc1234', 'A'.repeat(40)]) {
+    const w = world();
+    const r = post(w, { cap: 100, source: 'cap', head });
+    assert.equal(r.ok, false, String(head));
+    assert.equal(r.code, 4, String(head));
+    assert.match(r.text, /needs the PR head Dave saw with the price/, String(head));
+    assert.equal(w.posts.length, 0, String(head));
+    assert.equal(w.calls.length, 0, `${String(head)}: refused before any GitHub call`);
+    assert.deepEqual(w.ledger(), []);
+    w.done();
+  }
+  const moved = world({ head: H2 });
+  const m = post(moved, { cap: 100, source: 'cap', head: HEAD });
+  assert.equal(m.code, 4);
+  assert.match(m.text, /head of PR #225 moved from aaaaaaa to ccccccc after Dave saw the price/);
+  assert.equal(moved.posts.length, 0);
+  moved.done();
 });
 
 test('PP15: the verb maps results to exit codes: 0 posted, 4 a refusal, 5 a failed read or a busy lock; text on stderr for a refusal', () => {
@@ -444,22 +466,63 @@ test('PP17 (F1): CCV3_DECISIONS_FILE naming another store refuses with exit 5: n
   w.done();
 });
 
-test('PP17b (F1): an env path that is another spelling of the DEFAULT store is not refused (same compare form as pr-checkpoint sameForm)', () => {
+test('PP17b (F1, seat rule 2026-11-22): ANY non-empty CCV3_DECISIONS_FILE in the run env refuses with exit 5, whatever its spelling, even a spelling of the real store; an empty value is no override', () => {
   const real = D.decisionsPath({});
   const up = `${path.dirname(real)}${path.sep}..${path.sep}${path.basename(path.dirname(real))}${path.sep}${path.basename(real)}`;
-  const spellings = [up, real, ...(process.platform === 'win32' ? [real.toUpperCase()] : [])];
+  const spellings = [up, real, `${real}:x`, 'relative-decisions.json', ...(process.platform === 'win32' ? [real.toUpperCase()] : [])];
   for (const spelling of spellings) {
     const w = world();
     yes();
     const r = PAID.postPaid({ pr: 225, repo: REPO }, { ...w.deps, env: { CCV3_DECISIONS_FILE: spelling } });
-    assert.equal(r.ok, true, `${spelling}: ${r.text}`);
-    assert.equal(w.posts.length, 1, spelling);
+    assert.equal(r.ok, false, spelling);
+    assert.equal(r.code, 5, spelling);
+    assert.equal(r.text, STORE_MOVED, spelling);
+    assert.equal(w.posts.length, 0, spelling);
+    assert.equal(w.calls.length, 0, `${spelling}: refused before any GitHub call`);
+    assert.ok(row(), `${spelling}: the yes is kept`);
     w.done();
   }
   const empty = world();
   yes();
   assert.equal(PAID.postPaid({ pr: 225, repo: REPO }, { ...empty.deps, env: { CCV3_DECISIONS_FILE: '' } }).ok, true, 'an empty override is no override');
   empty.done();
+});
+
+/** Runs fn with the home variables of this process pointed at a scratch folder, then restores them. */
+function withMovedHome(fn) {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), 'cr-paid-home-'));
+  const keep = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
+  process.env.USERPROFILE = scratch;
+  process.env.HOME = scratch;
+  try { return fn(scratch); } finally {
+    for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+test('PP17c (F1/F3, seat rule): a home moved by USERPROFILE or HOME refuses a row run with exit 5, loud, before any GitHub call; the yes is kept', () => {
+  const w = world();
+  yes();
+  const r = withMovedHome(() => post(w));
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 5);
+  assert.match(r.text, /home folder .* OS account record/);
+  assert.equal(w.posts.length, 0);
+  assert.equal(w.calls.length, 0, 'refused before any GitHub call');
+  assert.deepEqual(w.ledger(), []);
+  assert.ok(row(), 'the yes is kept');
+  assert.equal(post(w).ok, true, 'control: with the home in place the same row posts');
+  w.done();
+});
+
+test('PP17d (F1/F3, seat rule): the default decision store and the default paid ledger come from the OS account home, never from an environment variable', () => {
+  const account = os.userInfo().homedir;
+  const storeAt = path.join(account, '.claude', 'state', 'ccv3-mods', 'decisions.json');
+  const ledgerAt = path.join(account, '.claude', 'state', 'coderabbit-paid.jsonl');
+  const inPlace = { store: D.decisionsPath({}), ledger: PAID.defaultLedgerPath() };
+  assert.deepEqual(inPlace, { store: storeAt, ledger: ledgerAt }, 'with the home in place');
+  const moved = withMovedHome(() => ({ store: D.decisionsPath({}), ledger: PAID.defaultLedgerPath() }));
+  assert.deepEqual(moved, { store: storeAt, ledger: ledgerAt }, 'a moved home changes neither path');
 });
 
 test('PP18 (F4): path_filters that zero the filtered cost cannot lift the round limit: 30 files = $7.50 unfiltered refuses (exit 4, the yes is used up)', () => {
@@ -495,6 +558,20 @@ test('PP18b (F4): the day limit also reads the unfiltered cost: $14.00 paid toda
   assert.equal(w.ledger().length, 1, 'only the earlier $14.00 row');
   assert.equal(row(), null);
   w.done();
+});
+
+test('PP18c (F4): a check whose unfiltered total is below 1, not a whole number or missing refuses (exit 4): no fall back to the filtered count, no free round', () => {
+  for (const total of [0, -1, 2.5, '4', null, undefined]) {
+    const w = world();
+    const checkPr = () => ({ verdict: 'ALLOW', pr: 225, head: HEAD, round: 1, files: 4, total, today: 0, paidRounds: 0, reasons: [] });
+    const r = PAID.postPaid({ pr: 225, repo: REPO, cap: 9900, source: 'cap', head: HEAD }, { ...w.deps, checkPr });
+    assert.equal(r.ok, false, String(total));
+    assert.equal(r.code, 4, String(total));
+    assert.match(r.text, /no usable file count for PR #225/, String(total));
+    assert.equal(w.posts.length, 0, String(total));
+    assert.deepEqual(w.ledger(), [], String(total));
+    w.done();
+  }
 });
 
 test('PP19 (F3 part a): the row `post` writes carries via "post"', () => {
