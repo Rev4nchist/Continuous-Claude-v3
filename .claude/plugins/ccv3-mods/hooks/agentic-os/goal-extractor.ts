@@ -1,7 +1,7 @@
 // The goal sentence of a lane note, for the Goal row of the status band. NO imports: plain functions and erasable TypeScript only,
 // so Node can load this file with type stripping (scripts/mods/goal-extractor-drift.test.mjs does).
 //
-// A COPY of goalOf in scripts/coordination/lane-dash-metrics.mjs (constants at lines 60-69, cutWords at 76-83, goalOf at 90-108).
+// A COPY of goalOf in scripts/coordination/lane-dash-metrics.mjs (constants at lines 60-69, MARKER_RUN at 76-77, cutWords at 79-92, goalOf at 99-117).
 // Why a copy: `claude plugin test` cannot import outside the plugin folder (README.md). The drift test feeds both copies the same
 // notes and fails when the results differ. Change a rule in both files or in neither.
 //
@@ -18,12 +18,22 @@ const UUID_RUN = /#?(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 // A SHA: 7 to 40 hex characters with at least one digit and one letter, so "faded" and "2026111" stay.
 const SHA_RUN = /(?<![0-9a-z])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![0-9a-z])/gi
 
-/** Cuts text at a word boundary and ends it with "…". Text that fits is returned as it is. */
+// A redaction marker, as the redactor writes it (hooks/shared/redact.ts: [REDACTED:<kind>], no space inside).
+const MARKER_RUN = /\[REDACTED:[^\]]*\]/g
+
+/** Cuts text at a word boundary and ends it with "…". Text that fits is returned as it is. A marker that the cut would split is dropped whole. */
 function cutWords(s: string, max: number): string {
   if (s.length <= max) return s
   const room = s.slice(0, max - 1)
   const space = room.lastIndexOf(' ')
-  const keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room)
+  let keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room)
+  for (const found of s.matchAll(MARKER_RUN)) {
+    const start = found.index ?? 0
+    if (start < keep.length && start + found[0].length > keep.length) {
+      keep = keep.slice(0, start)
+      break
+    }
+  }
   return `${keep.trimEnd()}…`
 }
 

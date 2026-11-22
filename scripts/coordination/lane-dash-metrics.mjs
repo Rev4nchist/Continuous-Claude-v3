@@ -73,12 +73,21 @@ export function isParkedNote(note) {
   return typeof note === 'string' && note.startsWith(PARK_PREFIX);
 }
 
-/** Cuts text at a word boundary and ends it with "…". Text that fits is returned as it is. */
+// A redaction marker, as the redactor writes it (hooks/shared/redact.ts: [REDACTED:<kind>], no space inside).
+const MARKER_RUN = /\[REDACTED:[^\]]*\]/g;
+
+/** Cuts text at a word boundary and ends it with "…". Text that fits is returned as it is. A marker that the cut would split is dropped whole. */
 function cutWords(s, max) {
   if (s.length <= max) return s;
   const room = s.slice(0, max - 1);
   const space = room.lastIndexOf(' ');
-  const keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room);
+  let keep = s[max - 1] === ' ' ? room : (space > 0 ? room.slice(0, space) : room);
+  for (const found of s.matchAll(MARKER_RUN)) {
+    if (found.index < keep.length && found.index + found[0].length > keep.length) {
+      keep = keep.slice(0, found.index);
+      break;
+    }
+  }
   return `${keep.trimEnd()}…`;
 }
 
