@@ -27,8 +27,16 @@ const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 const MISS_TTL_MS = 60 * 60 * 1000;
 const liveMisses = (m) => (m && Date.now() - Date.parse(m.at) <= MISS_TTL_MS ? m.count : 0);
 
-/** The store file: $CCV3_DECISIONS_FILE, else ~/.claude/state/ccv3-mods/decisions.json. */
-export const decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(os.homedir(), '.claude', 'state', 'ccv3-mods', 'decisions.json');
+/**
+ * The home folder from the OS account record, never from HOME or USERPROFILE (a command can set those for its own run). It falls back to os.homedir() only when the
+ * account record cannot be read. A paying run (cr-paid.mjs postPaid) refuses when the two differ, so a moved home is loud there; in a normal session they are equal.
+ */
+export const accountHome = () => {
+  try { return os.userInfo().homedir || os.homedir(); } catch { return os.homedir(); }
+};
+
+/** The store file: $CCV3_DECISIONS_FILE, else <account home>/.claude/state/ccv3-mods/decisions.json. */
+export const decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(accountHome(), '.claude', 'state', 'ccv3-mods', 'decisions.json');
 
 /** The key of a PR (`repo#12`) or of a branch (`repo@feat/x`). A PR number wins when both are given. */
 export const decisionKey = ({ repo = REPO, pr, branch }) => (pr !== undefined && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`);

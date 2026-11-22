@@ -40,12 +40,13 @@ import { cleanSummaryCommit, codeRabbitHeadReview, codeRabbitNotice, coderabbitR
 import { capacityFact, pathFiltersFrom, reviewableFiles, sameForm } from './pr-checkpoint.mjs';
 import { ghApi } from './cr-fix.mjs';
 import { withLock } from './lib/file-lock.mjs';
-import { DECISIONS_ENV, capCentsOfLabel, decisionKey, decisionRowRead, decisionUse, decisionsPath } from './lib/decisions.mjs';
+import { DECISIONS_ENV, accountHome, capCentsOfLabel, decisionKey, decisionRowRead, decisionUse } from './lib/decisions.mjs';
 import { slotStateOf } from './lib/checkpoint-ledger.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
-const DEFAULT_LEDGER = path.join(os.homedir(), '.claude', 'state', 'coderabbit-paid.jsonl');
+/** The paid ledger of this account: under the home of the OS account record, never a HOME or USERPROFILE a command set. No flag and no env variable sets it in a real run (deps only). */
+export const defaultLedgerPath = () => path.join(accountHome(), '.claude', 'state', 'coderabbit-paid.jsonl');
 const SHA40 = /^[0-9a-f]{40}$/;
 const CENTS_PER_FILE = 25;
 export const LIMITS = Object.freeze({ roundCents: 500, dayCents: 1500, paidRounds: 2, fixLines: 30 });
@@ -237,7 +238,7 @@ function decide(pr, est, ledger, now, filters) {
   };
 }
 
-const withDefaults = (deps = {}) => ({ gh: ghApi, now: () => new Date(), ledgerPath: DEFAULT_LEDGER, pathFilters: liveFilters, env: process.env, ...deps });
+const withDefaults = (deps = {}) => ({ gh: ghApi, now: () => new Date(), ledgerPath: defaultLedgerPath(), pathFilters: liveFilters, env: process.env, ...deps });
 
 /** Estimates the next round of a PR and gives the verdict. Never throws: a read error is { exitCode: 2, verdict: null, reason }. */
 export function checkPr({ pr, repo = DEFAULT_REPO }, deps) {
@@ -332,7 +333,9 @@ function checksOf(d, { pr, repo, head, capCents }, gh) {
   if (!v.verdict) return { text: `cr-paid gave no verdict for PR #${pr} (${v.reason}). No paid post.` };
   if (v.verdict !== 'ALLOW') return { text: `cr-paid says ${v.verdict} for PR #${pr}: ${v.reasons.join('; ')}. No paid post.`, kind: 'escalate', verdict: v.verdict, reasons: v.reasons };
   if (v.head !== head) return { text: `The head of PR #${pr} moved from ${h7} to ${String(v.head).slice(0, 7)} during the check. Ask Dave again.` };
-  const files = Number.isInteger(v.total) ? v.total : v.files; // the UNFILTERED count: path_filters billing is unproven
+  // The UNFILTERED count prices the round (path_filters billing is unproven). No whole count of 1 or more, no price: never fall back to the filtered count (F4).
+  if (!Number.isInteger(v.total) || v.total < 1) return { text: `cr-paid gave no usable file count for PR #${pr}. No paid post.` };
+  const files = v.total;
   const costCents = files * CENTS_PER_FILE;
   // The verdict above priced the round on the FILTERED count (path_filters of the working tree: an edit there zeroes it). Judge the limits again on the same
   // UNFILTERED count that the cap below uses, so the price Dave tapped and the round and day limits read one number. LIMITS are unchanged.
@@ -432,21 +435,27 @@ function guardedPost(d, { pr, cap, source, repo, expectHead }, began) {
 
 const STORE_MOVED_TEXT = 'The decision store path is overridden by CCV3_DECISIONS_FILE. A paid post reads Dave\'s tap from the real store only. Nothing was posted. The paid yes is kept.';
 
+const HOME_MOVED_TEXT = 'The home folder differs from the one in the OS account record (an environment variable moved it). A paid post reads Dave\'s tap and the paid ledger from the account home only. Nothing was posted. The paid yes is kept.';
+const CAP_HEAD_TEXT = 'A paid post from a pay decision needs the PR head Dave saw with the price (40 lowercase hex characters). Nothing was posted.';
+
 /**
- * True when the run env moves the decision store to a DIFFERENT file than the default: a model could write a stamped row to a scratch file and post on it.
- * The compare is pr-checkpoint's sameForm (the nearest existing folder is resolved, the case is folded on win32): another spelling of the real store is the
- * real store and is not refused. Tests do not set the override in the run env (deps.env); the real run's env is process.env. An empty value is no override.
+ * True when the run env names a decision store at all (seat rule 2026-11-22): a model could write a stamped row to a scratch file and post on it. Any non-empty
+ * value refuses, whatever its spelling: no path compare, no parser. Tests do not set the override in the run env (deps.env); the real run's env is process.env.
  */
-function storeMoved(env) {
-  const file = env?.[DECISIONS_ENV];
-  return typeof file === 'string' && file !== '' && sameForm(file) !== sameForm(decisionsPath({}));
+const storeOverridden = (env) => typeof env?.[DECISIONS_ENV] === 'string' && env[DECISIONS_ENV] !== '';
+
+/** True when HOME or USERPROFILE moved the home away from the OS account record (or the record cannot be read: fail closed). Then the store and the ledger default would move too. */
+function homeMoved() {
+  try { return sameForm(os.homedir()) !== sameForm(os.userInfo().homedir); } catch { return true; }
 }
 
 /**
  * postPaid({ pr, cap, source, repo, head }, deps) -> { ok, code, text, ... }. source `row` (default): the cap is the price of Dave's stored yes. source `cap`: `cap` is
  * whole cents from the queue's pay decision (--cap) and `head` is the PR head Dave saw with that price (--head); a PR that moved off it refuses (exit 4). Holds the paid lock across every step, with a 120 s deadline and a 20 s limit per GitHub call.
  * Codes: 0 posted; 4 a refusal from step 2 on (the row is used up); 5 nothing happened and the yes is kept (a failed GitHub read in step 1, another paid post holds the lock,
- * CCV3_DECISIONS_FILE moves the decision store in a `row` run, or the use-up of the row failed).
+ * a non-empty CCV3_DECISIONS_FILE in a `row` run, a HOME or USERPROFILE that differs from the OS account record in a `row` run, or the use-up of the row failed).
+ * 4 also covers a `cap` run with no valid `head` and a PR that moved off it (both before step 2: no row is involved). A real run has no flag and no env variable
+ * that sets ledgerPath; only deps do. The store and the ledger default to the OS account home; the writer of the stamped row resolves the same file in a normal session.
  * deps (tests, the queue): gh(args, { timeoutMs }), now() -> Date, ledgerPath, pathFilters, env, capacity(pr, ms) -> fact, queue { holdsPay(pr, head) },
  * checkPr({ pr, repo }) -> verdict, afterRecord({ pr, head, v, files }) and onPostError(err) (the queue marks its item), lockWaitMs.
  */
@@ -454,7 +463,9 @@ export function postPaid({ pr, cap = null, source = 'row', repo = DEFAULT_REPO, 
   const given = Object.fromEntries(Object.entries(deps).filter(([, v]) => v !== undefined));
   const capacity = (n, ms) => capacityFact({ now: new Date(ms).toISOString(), pr: n, dependabot: false, policy: {}, probe: false, root: ROOT }, { crUsage: () => null });
   const d = { ...withDefaults({ gh: ghApiTimed, capacity, ...given }), lockWaitMs: given.lockWaitMs ?? 5000 };
-  if (source !== 'cap' && storeMoved(d.env)) return fail(5, STORE_MOVED_TEXT);
+  if (source !== 'cap' && storeOverridden(d.env)) return fail(5, STORE_MOVED_TEXT);
+  if (source !== 'cap' && homeMoved()) return fail(5, HOME_MOVED_TEXT);
+  if (source === 'cap' && !SHA40.test(String(expectHead))) return fail(4, CAP_HEAD_TEXT); // F6: no head Dave saw, no paid post
   const began = d.now().getTime();
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
   const ran = withLock(d.ledgerPath, { lockWaitMs: d.lockWaitMs, lockStaleMs: POST_LIMITS.lockStaleMs }, () => guardedPost(d, { pr, cap, source, repo, expectHead }, began));
