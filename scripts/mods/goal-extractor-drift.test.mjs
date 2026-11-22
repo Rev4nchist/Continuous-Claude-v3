@@ -40,6 +40,9 @@ const CASES = [
   ['200 cap, marker straddles the cut', `GOAL: ${'x'.repeat(190)}[REDACTED:api_key]`],
   ['200 cap, two markers: first inside the cut, second straddles it', `GOAL: ${'a'.repeat(100)}[REDACTED:api_key]${'b'.repeat(72)}[REDACTED:token]`],
   ['200 cap at a word, marker early in the kept text', `GOAL: Fix [REDACTED:api_key] now ${long(60)}`],
+  ['200 cap, marker ends exactly at the cut', `GOAL: ${'x'.repeat(181)}[REDACTED:api_key]${'y'.repeat(50)}`],
+  ['200 cap, text that starts like a marker but holds a space', `GOAL: Strip [REDACTED: prefix from ${long(60)} [done]`],
+  ['200 cap, index 199 inside a word', `GOAL: Go ${long(60)}`],
   ['ids masked', 'GOAL: Fix #0d40499c, 0d40499c-aaaa-bbbb-cccc-123456789abc and abc1234def'],
   ['empty note', ''],
   ['spaces only', '   '],
@@ -83,10 +86,15 @@ test('the cap never returns part of a [REDACTED:kind] marker: both copies drop a
   const notes = [
     `GOAL: ${'x'.repeat(190)}[REDACTED:api_key]`,
     `GOAL: ${'a'.repeat(100)}[REDACTED:api_key]${'b'.repeat(72)}[REDACTED:token]`,
+    `GOAL: ${'x'.repeat(181)}[REDACTED:api_key]${'y'.repeat(50)}`,
+    `GOAL: Go ${long(60)}`,
   ];
   const expected = [
     `${'x'.repeat(190)}…`,
     `${'a'.repeat(100)}[REDACTED:api_key]${'b'.repeat(72)}…`,
+    `${'x'.repeat(181)}[REDACTED:api_key]…`,
+    // Index 199 is inside a word: the word cut ends at word28 (195 characters), not at 199.
+    `Go ${long(60).slice(0, 192)}…`,
   ];
   const plugin = pluginResults(notes);
   notes.forEach((note, i) => {

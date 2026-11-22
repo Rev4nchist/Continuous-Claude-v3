@@ -184,6 +184,17 @@ describe('goalOfNote', () => {
     expect(goalOfNote(`GOAL: ${two}`)).toBe(`${'a'.repeat(100)}${first}${'b'.repeat(72)}…`)
     // A marker wholly after the cut is cut away with the rest, as any text after the cut is.
     expect(goalOfNote(`GOAL: ${'y'.repeat(250)}[REDACTED:api_key]`)).toBe(`${'y'.repeat(199)}…`)
+    // A marker that ends exactly at the cut (index 199) is whole, so it stays: the test is "ends after the cut", not "at or after".
+    expect(goalOfNote(`GOAL: ${'x'.repeat(181)}[REDACTED:api_key]${'y'.repeat(50)}`)).toBe(`${'x'.repeat(181)}[REDACTED:api_key]…`)
+  })
+
+  // A marker has no space inside (redact.ts: snake_case kinds). Text that only starts like one is not a marker and must not move the cut.
+  test('X6b text that starts like a marker but holds a space is not a marker: the word cut stays', () => {
+    const words = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ')
+    const out = goalOfNote(`GOAL: Strip [REDACTED: prefix from ${words} [done]`) ?? ''
+    expect(out.startsWith('Strip [REDACTED: prefix from word0 word1')).toBe(true)
+    expect(out.length).toBeGreaterThan(150)
+    expect(out.endsWith('…')).toBe(true)
   })
 
   // Ordinary goals keep the word-boundary cut. Passes before and after the fix.
@@ -198,6 +209,8 @@ describe('goalOfNote', () => {
     expect(words[body.length]).toBe(' ')
     const next = words.indexOf(' ', body.length + 1)
     expect(next === -1 || next > 199).toBe(true)
+    // Index 199 of this goal is inside a word, so a plain hard cut would keep 199 characters; the word cut ends at word28 (195 characters).
+    expect(goalOfNote(`GOAL: Go ${words}`)).toBe(`Go ${words.slice(0, 192)}…`)
     const early = `Fix [REDACTED:api_key] now ${words}`
     const out = goalOfNote(`GOAL: ${early}`)
     expect(out?.startsWith('Fix [REDACTED:api_key] now word0')).toBe(true)

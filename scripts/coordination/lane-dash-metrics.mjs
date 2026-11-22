@@ -74,7 +74,7 @@ export function isParkedNote(note) {
 }
 
 // A redaction marker, as the redactor writes it (hooks/shared/redact.ts: [REDACTED:<kind>], no space inside).
-const MARKER_RUN = /\[REDACTED:[^\]]*\]/g;
+const MARKER_RUN = /\[REDACTED:[^\]\s]*\]/g;
 
 /** Cuts text at a word boundary and ends it with "…". Text that fits is returned as it is. A marker that the cut would split is dropped whole. */
 function cutWords(s, max) {

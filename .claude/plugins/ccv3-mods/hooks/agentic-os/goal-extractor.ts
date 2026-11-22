@@ -1,7 +1,7 @@
 // The goal sentence of a lane note, for the Goal row of the status band. NO imports: plain functions and erasable TypeScript only,
 // so Node can load this file with type stripping (scripts/mods/goal-extractor-drift.test.mjs does).
 //
-// A COPY of goalOf in scripts/coordination/lane-dash-metrics.mjs (constants at lines 60-69, MARKER_RUN at 76-77, cutWords at 79-92, goalOf at 99-117).
+// A COPY of goalOf in scripts/coordination/lane-dash-metrics.mjs (GOAL_MAX to SHA_RUN, MARKER_RUN, cutWords, goalOf). Lines are not named here: the drift test is the tie, not a line number.
 // Why a copy: `claude plugin test` cannot import outside the plugin folder (README.md). The drift test feeds both copies the same
 // notes and fails when the results differ. Change a rule in both files or in neither.
 //
@@ -19,7 +19,7 @@ const UUID_RUN = /#?(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 const SHA_RUN = /(?<![0-9a-z])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![0-9a-z])/gi
 
 // A redaction marker, as the redactor writes it (hooks/shared/redact.ts: [REDACTED:<kind>], no space inside).
-const MARKER_RUN = /\[REDACTED:[^\]]*\]/g
+const MARKER_RUN = /\[REDACTED:[^\]\s]*\]/g
 
 /** Cuts text at a word boundary and ends it with "…". Text that fits is returned as it is. A marker that the cut would split is dropped whole. */
 function cutWords(s: string, max: number): string {
