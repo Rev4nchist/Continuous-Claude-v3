@@ -981,7 +981,14 @@ var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round", "c
 var REPO = "Rev4nchist/Continuous-Claude-v3";
 var MAX_AGE_MS = 7 * 24 * 3600 * 1e3;
 var MISS_TTL_MS = 60 * 60 * 1e3;
-var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(os.homedir(), ".claude", "state", "ccv3-mods", "decisions.json");
+var accountHome = () => {
+  try {
+    return os.userInfo().homedir || os.homedir();
+  } catch {
+    return os.homedir();
+  }
+};
+var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(accountHome(), ".claude", "state", "ccv3-mods", "decisions.json");
 var decisionKey = ({ repo = REPO, pr, branch }) => pr !== void 0 && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`;
 var empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
 var idOf = ({ step, key, head }) => `${step}
@@ -1021,11 +1028,32 @@ function prune(store, now) {
     }
   }
 }
-function update(fn) {
+function readStoreStrict(file) {
+  let text;
+  try {
+    text = readFileSync3(file, "utf8");
+  } catch (err) {
+    return err?.code === "ENOENT" ? { store: empty() } : { unreadable: true };
+  }
+  try {
+    const s = JSON.parse(text);
+    if (!isPlain(s)) return { unreadable: true };
+    const store = { ...empty(), ...s };
+    return [store.offers, store.decisions, store.misses].every(isPlain) ? { store } : { unreadable: true };
+  } catch {
+    return { unreadable: true };
+  }
+}
+function update(fn, { strict = false } = {}) {
   const file = decisionsPath();
   mkdirSync3(path.dirname(file), { recursive: true });
   const locked = withLock(file, {}, () => {
-    const store = readStore(file);
+    let store;
+    if (strict) {
+      const read = readStoreStrict(file);
+      if (read.unreadable) return { ok: false, reason: "unreadable-store", detail: `the decision store ${file} exists but cannot be read or parsed: repair or delete it` };
+      store = read.store;
+    } else store = readStore(file);
     prune(store, Date.now());
     const out = fn(store);
     writeStore(file, store);
@@ -1038,18 +1066,20 @@ function decisionRead({ step, key, head }) {
   const d = readStore(decisionsPath()).decisions[idOf({ step, key, head })];
   return d && typeof d.label === "string" ? { label: d.label, at: d.at } : null;
 }
-function decisionUse({ step, key, head, label, at, check }) {
+var stampedRow = (d) => ({ label: d.label, at: d.at, tapAt: isText(d.tapAt) ? d.tapAt : null, entry: isText(d.entry) ? d.entry : null });
+function decisionUse({ step, key, head, label, at, check, returnRow = false }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: "no-decision" };
   return update((store) => {
     const id = idOf({ step, key, head });
     if (typeof label === "string" && store.decisions[id] && store.decisions[id].label !== label) return { ok: false, reason: "label-changed" };
     if (typeof at === "string" && store.decisions[id] && store.decisions[id].at !== at) return { ok: false, reason: "tap-changed" };
     if (typeof check === "function" && store.decisions[id] && check(store.decisions[id]) !== true) return { ok: false, reason: "slot-changed" };
-    const had = Boolean(store.decisions[id]);
+    const row = store.decisions[id];
     delete store.decisions[id];
     delete store.offers[id];
     delete store.misses[id];
-    return had ? { ok: true } : { ok: false, reason: "no-decision" };
+    if (!row) return { ok: false, reason: "no-decision" };
+    return returnRow === true ? { ok: true, row: stampedRow(row) } : { ok: true };
   });
 }
 

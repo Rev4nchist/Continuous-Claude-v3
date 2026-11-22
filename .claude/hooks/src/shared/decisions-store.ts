@@ -22,9 +22,21 @@ export const MAX_REASKS: number = store.MAX_REASKS;
 export const offerList: () => Offer[] = store.offerList;
 export const offerWrite: (a: Triple & { spec: object; tree?: string | null; cwd?: string }) => { ok: true; nonce: string } | { ok: false; reason: string } = store.offerWrite;
 export const decisionRead:(t: Triple) => { label: string; at: string } | null = store.decisionRead;
-export const decisionRecord: (t: Triple & { label: string }) => { ok: true } | { ok: false; reason: string } = store.decisionRecord;
-/** Uses the decision up (single use). Call it only after the action it allows is decided. With a label, the row is used only when it still holds that label (reason `label-changed` otherwise). */
-export const decisionUse: (t: Triple & { label?: string }) => { ok: true } | { ok: false; reason: string } = store.decisionUse;
+/** `entry` is the entry point of the recording process (CLAUDE_CODE_ENTRYPOINT of the hook); the store stamps it and `tapAt` on the decision. */
+export const decisionRecord: (t: Triple & { label: string; entry?: string | null }) => { ok: true } | { ok: false; reason: string } = store.decisionRecord;
+/** The stamp of a stored decision: the tap time and the entry point it was recorded under (null when the row has none). */
+export interface DecisionStamp { label: string; at: string; tapAt: string | null; entry: string | null }
+/** The label, the row time and the stamp of a decision, or null. */
+export const decisionRowRead: (t: Triple) => DecisionStamp | null = store.decisionRowRead;
+/** The cap in whole cents that a label names with "up to $X", or null (no price, no paid yes). */
+export const capCentsOfLabel: (label: unknown) => number | null = store.capCentsOfLabel;
+/** Writes the paid-round row of a paid pick (the confirm script writes it, with the stamp of the tap it used up). */
+export const paidRoundWrite: (a: { key: string; head: string; label: string; tapAt: string | null; entry: string | null }) => { ok: true } | { ok: false; reason: string } = store.paidRoundWrite;
+/**
+ * Uses the decision up (single use). Call it only after the action it allows is decided. With a label, the row is used only when it still holds that label (reason `label-changed` otherwise).
+ * `at`, `check` and `returnRow` are the options of decisions.mjs: a tap time guard, a row check run under the lock, and the used row's stamp in the result.
+ */
+export const decisionUse: (t: Triple & { label?: string; at?: string; check?: (row: unknown) => boolean; returnRow?: boolean }) => { ok: true; row?: DecisionStamp } | { ok: false; reason: string } = store.decisionUse;
 export const missCount: (t: Triple) => number = store.missCount;
 export const missBump: (t: Triple) => number = store.missBump;
 export const decisionKey: (a: { repo?: string; pr?: number | string; branch?: string }) => string = store.decisionKey;
