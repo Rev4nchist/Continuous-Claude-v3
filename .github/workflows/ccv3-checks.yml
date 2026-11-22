@@ -133,7 +133,7 @@ jobs:
         run: node --test scripts/github/review-router-checkpoint-table.test.mjs
       - name: self-approve gate (router none gate, land-none-check)
         timeout-minutes: 5
-        run: node --test scripts/github/pr-checkpoint-no-review.test.mjs scripts/github/land-none-check.test.mjs scripts/github/land-none-base-code.test.mjs
+        run: node --test scripts/github/pr-checkpoint-no-review.test.mjs scripts/github/land-none-check.test.mjs scripts/github/land-none-base-code.test.mjs scripts/github/force-high-followups.test.mjs
       - name: agentic-os CI job is defined (lint, typecheck, build)
         timeout-minutes: 5
         run: node --test scripts/ratchets/ccv3-checks-agentic-os.test.mjs
