@@ -168,3 +168,94 @@ test('prune: nightly files and logs older than 14 days go; younger and other fil
   assert.equal(existsSync(oldLog), false);
   for (const p of [youngNight, other, youngLog, otherLog]) assert.equal(existsSync(p), true, p);
 });
+
+// ---------------------------------------------------------------- slot guard (card sched-tasks-failing-1109)
+// Same cause as the lane snapshot: a missed 23:50 run starts as a catch-up in a short Modern Standby wake and the standby ends it.
+// The task gets a second trigger when the machine is awake. The wrapper runs only when the last 23:50 slot has no completed run:
+// marker <state>/cost-reconcile.done.json {"doneAt": "<local time>", "slot": "23:50"}. A completed run is one whose overall exit is
+// not 124 (a kill) and not 3 (a script missing): a failing check (1, 2, 10) is a finished answer, and the run need not repeat it.
+// How it can fail, one test each below:
+//   CS1 skip       a marker newer than the last slot does not stop the run
+//   CS2 first run  no marker: the run is skipped, or it finishes with no marker written
+//   CS3 stale      a marker older than the last slot is treated as done
+//   CS4 complete   a failing check (exit 1 or 10) writes no marker, so a finished answer is repeated at every trigger
+//   CS5 killed     a killed check (124) writes a marker, so a killed night is never retried
+//   CS6 force      CCV3_SLOT_FORCE=1 does not run over a fresh marker
+//   CS7 on slot    the normal 23:50 run is skipped because last night's marker looks fresh
+//   CS8 test safe  with only a log override the marker goes next to the log, never to ~/.claude/state
+function slotFxCost() {
+  const fx = fixture();
+  fx.state = join(fx.root, 'slot-state');
+  fx.marker = join(fx.state, 'cost-reconcile.done.json');
+  return fx;
+}
+const slotEnvCost = (fx, now = '2026-11-22T07:40:00', more = {}) => ({ CCV3_SLOT_STATE_DIR: fx.state, CCV3_SLOT_NOW: now, ...more });
+const putMarkerCost = (fx, doneAt) => { mkdirSync(fx.state, { recursive: true }); writeFileSync(fx.marker, JSON.stringify({ doneAt })); };
+const ranCost = (fx) => existsSync(join(fx.calls, 'reconcile.json'));
+
+test('CS1 a marker newer than the last 23:50 slot skips the run: no check, exit 0, a skip line in the log', win, () => {
+  const fx = slotFxCost();
+  putMarkerCost(fx, '2026-11-21T23:51:30');
+  const r = run(fx, slotEnvCost(fx));
+  assert.equal(r.status, 0, r.log);
+  assert.equal(ranCost(fx), false, 'the reconcile must not run');
+  assert.match(r.log, /skip: slot 23:50 .*already done/);
+});
+
+test('CS2 no marker: the run goes and writes the marker with the time of the run and the slot', win, () => {
+  const fx = slotFxCost();
+  const r = run(fx, slotEnvCost(fx));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(ranCost(fx), 'the reconcile must run');
+  const m = JSON.parse(readFileSync(fx.marker, 'utf8'));
+  assert.equal(m.doneAt, '2026-11-22T07:40:00');
+  assert.equal(m.slot, '23:50');
+});
+
+test('CS3 a marker older than the last slot does not skip the run', win, () => {
+  const fx = slotFxCost();
+  putMarkerCost(fx, '2026-11-21T23:49:59');
+  const r = run(fx, slotEnvCost(fx));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(ranCost(fx), 'the reconcile must run');
+});
+
+test('CS4 a failing check (exit 1 or a warn 10) is a finished answer: the marker is written and the exit code stays', win, () => {
+  for (const code of ['1', '10']) {
+    const fx = slotFxCost();
+    const r = run(fx, slotEnvCost(fx, '2026-11-22T07:40:00', { FAKE_EXIT_RECONCILE: code }));
+    assert.equal(r.status, Number(code), r.log);
+    assert.equal(JSON.parse(readFileSync(fx.marker, 'utf8')).doneAt, '2026-11-22T07:40:00', `exit ${code}`);
+  }
+});
+
+test('CS5 a killed check (124) writes no marker', win, () => {
+  const fx = slotFxCost();
+  const r = run(fx, slotEnvCost(fx, '2026-11-22T07:40:00', { FAKE_HANG: 'reconcile', CCV3_COST_RECONCILE_TIMEOUT_SEC: '2' }));
+  assert.equal(r.status, 124, r.log);
+  assert.equal(existsSync(fx.marker), false, 'no marker after a kill');
+});
+
+test('CS6 CCV3_SLOT_FORCE=1 runs over a fresh marker', win, () => {
+  const fx = slotFxCost();
+  putMarkerCost(fx, '2026-11-21T23:51:30');
+  const r = run(fx, slotEnvCost(fx, '2026-11-22T07:40:00', { CCV3_SLOT_FORCE: '1' }));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(ranCost(fx), 'the reconcile must run');
+});
+
+test('CS7 the normal 23:50 run is not skipped by last night\'s marker', win, () => {
+  const fx = slotFxCost();
+  putMarkerCost(fx, '2026-11-21T23:51:30');
+  const r = run(fx, slotEnvCost(fx, '2026-11-22T23:50:01'));
+  assert.equal(r.status, 0, r.log);
+  assert.ok(ranCost(fx), 'the reconcile must run');
+  assert.equal(JSON.parse(readFileSync(fx.marker, 'utf8')).doneAt, '2026-11-22T23:50:01');
+});
+
+test('CS8 with only a log override the marker goes next to the log, not to the real state folder', win, () => {
+  const fx = fixture();
+  const r = run(fx);
+  assert.equal(r.status, 0, r.log);
+  assert.ok(existsSync(join(fx.logDir, 'slot-state', 'cost-reconcile.done.json')), 'marker next to the log');
+});
