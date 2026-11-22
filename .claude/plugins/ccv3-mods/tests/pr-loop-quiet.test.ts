@@ -388,6 +388,39 @@ describe('pr-loop paid flag: a paid CodeRabbit comment with no paid-ledger row i
     expect(sent.filter(key => !key.startsWith('paid:'))).toEqual(others)
   })
 
+  // L4a (card prflow-paid-guard-leftovers, CLI run 2 pr-loop/index.ts 413): a READY PR leaves the watch list in the same check that scans it. A scan that FAILS
+  // there must come back at the next check (the scan is the detection for a paid comment that did not go through `post`). A scan that works runs once.
+  const readyAsked = (over: Partial<Status> = {}) => status(7, { ready: true, reasons: [], reviewedHead: true, mergeable_state: 'clean', coderabbitRequests: 1, ...over })
+  const readyToasts = (w: ReturnType<typeof world>) => w.seen.toasts.filter(text => /READY/.test(text))
+
+  test('PF12 a paid scan that throws when the PR reaches READY runs again at the next check and flags the comment once', async ($, on) => {
+    const w = await flagged({ script: { 7: [readyAsked()] }, paid: { 7: ['throw', { head: HEAD_A, ids: [41] }] } })($, on, 2)
+    expect(w.seen.paid.length).toBe(2)
+    expect(w.seen.toasts.filter(text => text === TEXT())).toEqual([TEXT()])
+    expect(w.seen.submits).toEqual([TEXT()])
+    expect(readyToasts(w).length).toBe(1)
+  })
+
+  test('PF13 (control) a paid scan that works when the PR reaches READY runs once, not again', async ($, on) => {
+    const w = await flagged({ script: { 7: [readyAsked()] }, paid: { 7: [{ head: HEAD_A, ids: [41] }] } })($, on, 3)
+    expect(w.seen.paid.length).toBe(1)
+    expect(w.seen.submits).toEqual([TEXT()])
+  })
+
+  test('PF14 a scan that keeps failing is tried 3 times in all (MAX_FAILS), then the PR leaves the scan list', async ($, on) => {
+    const w = await flagged({ script: { 7: [readyAsked()] }, paid: { 7: ['throw'] } })($, on, 6)
+    expect(w.seen.paid.length).toBe(3)
+    expect(w.seen.submits).toEqual([])
+  })
+
+  test('PF15 the retry of a scan never repeats the READY alert or the Land dialog', async ($, on) => {
+    const w = world(on, { store: seed([{ pr: 7, whenReady: true }]), answer: 'No', script: { 7: [readyAsked()] }, paid: { 7: ['throw', { head: HEAD_A, ids: [41] }] } })
+    await checks(w, $, 3)
+    expect(w.seen.asks.length).toBe(1)
+    expect(readyToasts(w).length).toBe(1)
+    expect(w.seen.status).toEqual([7])
+  })
+
   test('PF11 a stored ledger with 200 paid keys and 40 other keys is kept whole when the list is loaded', async ($, on) => {
     const others = Array.from({ length: 40 }, (_, i) => `other ${i}`)
     const paids = Array.from({ length: 200 }, (_, i) => `paid:9:${HEAD_A}:${i + 1}`)

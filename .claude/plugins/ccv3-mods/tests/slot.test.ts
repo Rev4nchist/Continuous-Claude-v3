@@ -542,6 +542,27 @@ describe('slot: /slot (M3, M4)', () => {
     })
   }
 
+  // L1 (card prflow-paid-guard-leftovers, CLI run 2 slot.ts 278): runCli says ok when the process FINISHED, whatever its exit code. A check that exits 1 is a failed
+  // check even when its stdout still holds a valid ALLOW body: no offer. A good ALLOW exits 0 (M4).
+  test('M4d a check that prints a valid ALLOW body but exits 1 offers no paid round: no dialog, no decide', async ($, on) => {
+    const w = loopWorld(on, { answer: /^Pay up to/, check: { code: 1, out: `{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"${PAYHEAD}","files":11,"total":11,"cost":2.75}` } })
+    await startLoop($)
+    expect((await command($, 'slot', 'pay 5')).text ?? '').toMatch(/no paid round is offered/i)
+    expect(w.seen.dialogs).toEqual([])
+    expect(w.seen.slot).toEqual([])
+  })
+
+  // L2 (CLI run 2 slot.ts 293): a typed /slot pay checks the price and the head, not the queue age. Its dialog must not claim a wait that nobody measured.
+  test('M4e a typed /slot pay dialog does not say "30 minutes"; the Pay row and its price are unchanged', async ($, on) => {
+    const w = loopWorld(on, { answer: /^Pay up to/, cli: { decide: { out: '{"ok":true,"verdict":"ALLOW","cost":2.75,"files":11,"posted":true}' } } })
+    await startLoop($)
+    await command($, 'slot', 'pay 5')
+    expect(w.seen.dialogs.length).toBe(1)
+    expect(w.seen.dialogs[0]!.question).not.toMatch(/30 minutes/)
+    expect(w.seen.dialogs[0]!.question).toMatch(/#5/)
+    expect(w.seen.dialogs[0]!.labels).toContain('Pay up to $2.75')
+  })
+
   test('M4b a typed /slot pay with no answer to the dialog, or with no price, runs no decide', async ($, on) => {
     const quiet = loopWorld(on, { answer: 'dismiss' })
     await startLoop($)
