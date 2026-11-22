@@ -6995,6 +6995,42 @@ function sessionClass(payloadId) {
   if (typeof payloadId !== "string" || payloadId === "" || !own) return "absent";
   return payloadId === own ? "same" : "diff";
 }
+var AGENT_TYPE_LOG_CAP = 50;
+var AGENT_TYPE_LOG_MAX_BYTES = 8192;
+var AGENT_TYPE_VALUE_RE = /^[A-Za-z0-9_:.-]{1,60}$/;
+function logUnknownAgentType(rawInput) {
+  try {
+    if (rawInput === null || typeof rawInput !== "object") return;
+    const input = rawInput;
+    if (typeof input.agent_id !== "string" || input.agent_id === "") return;
+    const type = input.agent_type;
+    if (typeof type !== "string" || type === "" || AGENT_TYPES.includes(type)) return;
+    if (process.env.CCV3_AGENT_TYPE_LOG === "0") return;
+    const value = AGENT_TYPE_VALUE_RE.test(type) ? type : "invalid";
+    const dir = join6(userHome(), ".claude", "state");
+    const path = join6(dir, "agent-types-seen.jsonl");
+    let size = 0;
+    try {
+      size = statSync2(path).size;
+    } catch {
+      size = 0;
+    }
+    if (size > AGENT_TYPE_LOG_MAX_BYTES) return;
+    const rows = size > 0 ? readFileSync4(path, "utf8").split("\n").filter(Boolean) : [];
+    if (rows.length >= AGENT_TYPE_LOG_CAP) return;
+    for (const row of rows) {
+      try {
+        if (JSON.parse(row).value === value) return;
+      } catch {
+      }
+    }
+    const tool = typeof input.tool_name === "string" && TOOL_RE.test(input.tool_name) ? input.tool_name : "other";
+    const line = JSON.stringify({ ts: (/* @__PURE__ */ new Date()).toISOString(), value, tool, agent_id: "present", session: sessionClass(input.session_id) });
+    mkdirSync4(dir, { recursive: true });
+    appendFileSync3(path, line + "\n");
+  } catch {
+  }
+}
 function logPayloadIfMarked(rawInput) {
   try {
     const dir = join6(userHome(), ".claude", "state");
@@ -7049,6 +7085,7 @@ async function main() {
     return;
   }
   logPayloadIfMarked(input);
+  logUnknownAgentType(input);
   if (subagentJudged(input)) return;
   const direct = directWritePaths(input);
   if (direct !== null) {

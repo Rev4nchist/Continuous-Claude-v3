@@ -172,9 +172,10 @@ describe('agent_type log: which calls it records', () => {
     writeFileSync(log, 'x'.repeat(AGENT_TYPE_LOG_MAX_BYTES + 1));
     seen.fsCalls.length = 0;
     logUnknownAgentType(sub('fresh-two'));
+    const calls = [...seen.fsCalls]; // copy before the test's own read below is recorded
     expect(readFileSync(log, 'utf8').length).toBe(AGENT_TYPE_LOG_MAX_BYTES + 1);
-    expect(seen.fsCalls.filter((c) => c.startsWith('readFileSync') && c.includes('agent-types-seen'))).toEqual([]);
-    expect(seen.fsCalls.filter((c) => c.startsWith('appendFileSync'))).toEqual([]);
+    expect(calls.filter((c) => c.startsWith('readFileSync') && c.includes('agent-types-seen'))).toEqual([]);
+    expect(calls.filter((c) => c.startsWith('appendFileSync'))).toEqual([]);
   });
 
   it('T10: an unreadable log (a folder in its place) and a missing state folder do not throw (breaks if the outer guard is dropped)', () => {
