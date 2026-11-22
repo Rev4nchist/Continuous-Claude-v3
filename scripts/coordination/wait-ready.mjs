@@ -51,8 +51,9 @@ export async function waitReady({ pr, repo, run = defaultRun(pr, repo), sleep = 
     if (r.status === 0 && state.ready === true) { out(`READY ${pr} ${state.headShort ?? String(state.head ?? '').slice(0, 8)}`); return 0; }
     const failed = Array.isArray(state.reasons) ? state.reasons.find((x) => FAILED_CHECK.test(String(x))) : undefined;
     if (failed) { out(`FAILED ${pr} ${failed}`); return 1; }
-    if (now() - start >= maxMs) { out(`TIMEOUT ${pr} not ready after ${Math.round(maxMs / 60_000)} min`); return 3; }
-    await sleep(intervalMs);
+    const left = maxMs - (now() - start);
+    if (left <= 0) { out(`TIMEOUT ${pr} not ready after ${Math.round(maxMs / 60_000)} min`); return 3; }
+    await sleep(Math.min(intervalMs, left)); // the last sleep ends at --max: the wait never runs one interval past it
   }
 }
 

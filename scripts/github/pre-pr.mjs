@@ -2200,8 +2200,14 @@ async function main() {
   const startedAt = Date.now();
   const earlyFail = summaryBeforeLock({ root, base });
   if (earlyFail) {
-    console.log(formatLines([earlyFail]).join('\n'));
-    console.log('RESULT FAIL: no stamp (stopped before the run lock: the summary check failed)');
+    if (args.includes('--json')) { // one document, the shape of every other run
+      const g = makeGit(root);
+      const headRun = g(['rev-parse', 'HEAD']);
+      console.log(JSON.stringify({ ok: false, head: headRun.status === 0 ? headRun.stdout.trim() : null, branch: g(['branch', '--show-current']).stdout.trim(), logPath: null, stampPath: null, results: [{ step: earlyFail.step, status: earlyFail.status, detail: earlyFail.detail, notes: earlyFail.notes }] }));
+    } else {
+      console.log(formatLines([earlyFail]).join('\n'));
+      console.log('RESULT FAIL: no stamp (stopped before the run lock: the summary check failed)');
+    }
     process.exit(1);
   }
   const held = await takeRunLock({ bodyPath, wait, factsOf: () => runFacts(root, base) });
