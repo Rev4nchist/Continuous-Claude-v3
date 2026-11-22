@@ -25,7 +25,8 @@ import { matchGlob as matchGlobFn } from './review-router.mjs';
 
 const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
-// The commit a RED line names. Any 7 to 40 hex characters pass; membership in the PR is not checked.
+// The commit a RED line names. The default fixture has no commit list ([] = not known), so any 7 to 40 hex
+// characters that are not the head pass. With a complete list the RED commit must be one of the PR's commits.
 const RED_SHA = 'c'.repeat(7);
 
 // The Evidence block from pr-and-commit-style.md. Every body `input()` builds carries one, so the READY
@@ -4223,4 +4224,124 @@ test('NC-CTL3: a required job still running keeps the check reason it has today'
   const r = evaluate(input({ ci: [...ciExcept('hooks'), ciJob('hooks', 1, { status: 'in_progress', conclusion: null })] }));
   assert.equal(r.ready, false);
   assert.ok(r.reasons.includes('check "hooks" is in_progress/null'), why(r));
+});
+
+// ---------------------------------------------------------------------------------------------
+// coord-red-commit-check: the RED line of a bugfix, feature, ui or harness proof must name a commit of
+// the PR that comes before the head. RED means a test that failed before the fix, so it cannot be the
+// head. `commits` (oldest first, from the reader) is the PR's own commit list; [] means "not known".
+// R1-R5, R6b, R15 fail on the code before the change; the others are controls that pass before and after.
+// ---------------------------------------------------------------------------------------------
+const PR_SHA = (c) => c.repeat(40);
+const C_RED = PR_SHA('d');
+const C_MID = PR_SHA('e');
+const C_MAIN = PR_SHA('3');
+const prCommits = (...shas) => shas.map((sha) => ({ sha }));
+const redBody = (type, sha) => `${preamble(type)}${proofField(type === 'refactor' ? 'BEFORE' : 'RED', sha, 'not ok 1 - x')}\n${GREEN_F}`;
+const redCheck = (type, sha, commits, over = {}) => evaluate({ ...input({ proofBody: redBody(type, sha) }), commits, ...over });
+const redProblems = (r) => proofReasons(r).filter((x) => /\bRED\b/.test(x));
+
+test('R1: RED equal to the full head gives one RED problem, the proof is invalid and READY is off', () => {
+  const r = redCheck('bugfix', HEAD, prCommits(C_RED, HEAD));
+  assert.equal(redProblems(r).length, 1, readyOrWhy(r));
+  assert.match(redProblems(r)[0], /RED names the head commit/);
+  assert.equal(r.proof.status, 'invalid');
+  assert.equal(r.ready, false);
+});
+
+test('R2: RED that is a 7-character prefix of the head is the head, with a commit list and without one', () => {
+  for (const commits of [prCommits(C_RED, HEAD), []]) {
+    const r = redCheck('bugfix', HEAD.slice(0, 7), commits);
+    assert.equal(redProblems(r).length, 1, readyOrWhy(r));
+    assert.match(redProblems(r)[0], /RED names the head commit/);
+  }
+});
+
+test('R3: the same rule holds for the proof types feature, ui and harness', () => {
+  for (const type of ['feature', 'ui', 'harness']) {
+    const r = redCheck(type, HEAD, prCommits(C_RED, HEAD));
+    assert.equal(redProblems(r).length, 1, `${type}: ${readyOrWhy(r)}`);
+    assert.equal(r.ready, false, type);
+  }
+});
+
+test('R4: a complete commit list that does not hold the RED commit gives a membership problem that names the sha', () => {
+  const r = redCheck('bugfix', C_MAIN, prCommits(C_RED, C_MID, HEAD));
+  assert.equal(redProblems(r).length, 1, readyOrWhy(r));
+  assert.match(redProblems(r)[0], new RegExp(`${C_MAIN}.*not a commit of this PR`));
+  assert.equal(r.ready, false);
+});
+
+test('R5: the 7-character prefix of a PR commit is accepted, and so is a RED in upper case in the body', () => {
+  for (const sha of [C_RED.slice(0, 7), C_RED, C_RED.toUpperCase()]) {
+    const r = redCheck('bugfix', sha, prCommits(C_RED, C_MID, HEAD));
+    assert.deepEqual(redProblems(r), [], `${sha}: ${readyOrWhy(r)}`);
+    assert.equal(r.ready, true, `${sha}: ${readyOrWhy(r)}`);
+  }
+});
+
+test('R6: a RED commit of the PR before a merge of main still passes', () => {
+  const r = redCheck('bugfix', C_RED, prCommits(C_RED, C_MID, PR_SHA('4'), HEAD));
+  assert.deepEqual(redProblems(r), [], readyOrWhy(r));
+});
+
+test('R6b: a RED commit that a merge of fork/main brought in is not accepted, by design', () => {
+  // The PR commit list holds the PR commits only. A main commit is in the base, so it is not in the list.
+  const r = redCheck('bugfix', C_MAIN, prCommits(C_RED, PR_SHA('4'), HEAD));
+  assert.equal(redProblems(r).length, 1, readyOrWhy(r));
+});
+
+test('R7: an empty commit list means "not known": only the head test runs and a RED that is not the head passes', () => {
+  const r = redCheck('bugfix', C_MAIN, []);
+  assert.deepEqual(redProblems(r), [], readyOrWhy(r));
+  assert.equal(r.ready, true, readyOrWhy(r));
+});
+
+test('R8: a list that does not hold the head gives no membership problem (a push or a read in between)', () => {
+  const r = redCheck('bugfix', C_MAIN, prCommits(C_RED, C_MID));
+  assert.deepEqual(redProblems(r), [], readyOrWhy(r));
+});
+
+test('R9: refactor keeps BEFORE and GREEN: a BEFORE equal to the head or not in the list gets no new problem', () => {
+  for (const sha of [HEAD, C_MAIN]) {
+    const r = redCheck('refactor', sha, prCommits(C_RED, HEAD));
+    assert.deepEqual(proofReasons(r), [], `${sha}: ${readyOrWhy(r)}`);
+  }
+});
+
+test('R10: docs, a repo outside the gate and a signed dependabot PR get no RED reason', () => {
+  const docs = evaluate({ ...input({ proofBody: `${preamble('docs')}` }), commits: prCommits(C_RED, HEAD) });
+  assert.deepEqual(redProblems(docs), [], readyOrWhy(docs));
+  const off = redCheck('bugfix', HEAD, prCommits(C_RED, HEAD), { proofGate: false });
+  assert.deepEqual(proofReasons(off), [], readyOrWhy(off));
+  const dep = evaluate({ ...DEP(), pull: { ...DEP().pull, body: redBody('bugfix', HEAD) } });
+  assert.equal(dep.proof.status, 'exempt', readyOrWhy(dep));
+});
+
+test('R11: no RED line, two RED lines, a RED with no sha and an undefined head give today\'s messages only and never throw', () => {
+  const none = redCheck('bugfix', C_RED, prCommits(C_RED, HEAD), { pull: { ...input().pull, body: `${preamble('bugfix')}${GREEN_F}` } });
+  assert.ok(proofReasons(none).some((x) => /needs a RED line/.test(x)), readyOrWhy(none));
+  assert.deepEqual(redProblems(none).filter((x) => /commit of this PR|names the head/.test(x)), []);
+  const two = redCheck('bugfix', C_RED, prCommits(C_RED, HEAD), { pull: { ...input().pull, body: `${preamble('bugfix')}${RED_F}\n${RED_F}\n${GREEN_F}` } });
+  assert.ok(proofReasons(two).some((x) => /2 RED lines/.test(x)), readyOrWhy(two));
+  assert.deepEqual(proofReasons(two).filter((x) => /commit of this PR|names the head/.test(x)), []);
+  const nosha = redCheck('bugfix', C_RED, prCommits(C_RED, HEAD), { pull: { ...input().pull, body: `${preamble('bugfix')}RED: \`node --test x\`\n${fenced('not ok 1')}\n${GREEN_F}` } });
+  assert.equal(proofReasons(nosha).filter((x) => /names no commit/.test(x)).length, 1, readyOrWhy(nosha));
+  assert.deepEqual(proofReasons(nosha).filter((x) => /commit of this PR|names the head/.test(x)), []);
+  assert.doesNotThrow(() => RS.proofProblems(RS.parseProof(redBody('bugfix', C_RED)), { head: undefined, commits: prCommits(C_RED) }));
+});
+
+test('R12: a placeholder RED command still gives only its own message, once', () => {
+  const body = `${preamble('bugfix')}RED: \`<command>\` @ ${HEAD}\n${fenced('not ok 1')}\n${GREEN_F}`;
+  const r = redCheck('bugfix', HEAD, prCommits(C_RED, HEAD), { pull: { ...input().pull, body } });
+  assert.equal(proofReasons(r).filter((x) => /placeholder command/.test(x)).length, 1, readyOrWhy(r));
+});
+
+test('R15: the reader returns [] when the PR has more commits than it read, so 100 of 150 give no membership problem', () => {
+  const node = (i) => ({ commit: { oid: PR_SHA((i % 9 + 1).toString()), author: { user: { login: 'a' } }, signature: null } });
+  const hundred = Array.from({ length: 100 }, (_, i) => node(i));
+  assert.deepEqual(RS.prCommitList({ totalCount: 150, nodes: hundred }), []);
+  assert.equal(RS.prCommitList({ totalCount: 100, nodes: hundred }).length, 100);
+  const unknown = redCheck('bugfix', PR_SHA('f'), RS.prCommitList({ totalCount: 150, nodes: hundred }));
+  assert.deepEqual(redProblems(unknown), [], readyOrWhy(unknown));
 });

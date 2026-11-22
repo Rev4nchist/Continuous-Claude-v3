@@ -7,20 +7,70 @@
  * (`via`) in its plugin store. This check reads that record before land-pr.ps1 merges. It passes only for Dave's own pick (dialog or composer) on this exact head, at a band that did
  * not rise since. It prints one provenance line, so Dave sees who chose what before he says land.
  *
- * Usage: node scripts/github/land-none-check.mjs <pr> --repo <o/r> --head <sha> [--store <file>] [--fixture <file>] [--warn] [--json]
+ * Usage: node scripts/github/land-none-check.mjs <pr> --repo <o/r> --head <sha> [--store <file>] [--fixture <file>] [--remote <name>] [--warn] [--json]
+ *   --remote   the git remote of the base branch (default fork). The check fetches <remote>/<base> and refuses when the band code of this checkout differs from it.
+ *              A --fixture run does the base-code check only when --remote is given (tests).
  *   --store    one store file instead of ~/.claude/plugins/store/ccv3-mods_*.json (tests).
  *   --fixture  { pull, files, config }: no gh call (tests and the probe).
  *   --warn     print the same text but always exit 0 (land-pr.ps1 -IgnoreReview: Dave's own yes, made informed).
  * Exit: 0 = ok or not needed, 1 = refused, 2 = could not determine.
  * The files and labels come from the live PR; the band config comes from the base ref through the contents API, never the local checkout.
+ * The band CODE (bandOf and the files it imports) is the code of the checkout that runs this script. baseCodeProblem() refuses when that code differs
+ * from the base branch tip after a fresh fetch (card force-high-land-path, aegis on PR 669): a PR must not lower its own bar by editing bandOf and then
+ * being landed from its own worktree. Known limit: this script and land-pr.ps1 are themselves the checkout's copy; both are on FORCE_HIGH_FILES, so an
+ * edit to either needs Dave's recorded pick.
  * Not covered, accepted: an agent that writes a forged record from a script that builds the path in code. Docs: pr-review-loop.md, land section.
  */
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bandOf, changedPaths, DEFAULT_REPO, loadLive, makeGh } from './review-router.mjs';
 import { pullLabelNames, requiredBots } from './review-status.mjs';
+
+/**
+ * The files this check runs: its own static import closure, as repo paths. land-none-base-code.test.mjs walks the imports and fails when this list and
+ * the closure differ, so a new import cannot slip past the base-code check.
+ */
+export const BAND_CODE_FILES = Object.freeze([
+  'scripts/github/land-none-check.mjs', 'scripts/github/review-router.mjs', 'scripts/github/review-status.mjs',
+  'scripts/github/lib/answer-key.mjs', 'scripts/github/lib/answer-paths.mjs', 'scripts/ratchets/lib/review-md.mjs',
+]);
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+/**
+ * git for the base-code check runs no hook (aegis F1 on PR 673): the fetch updates a ref, and git then runs the reference-transaction hook of core.hooksPath, which a PR
+ * can add (.githooks is not a forced file). core.hooksPath is this script's own file: git looks for <value>/<hook>, and a regular file has no children, so no hook
+ * can exist there and no account can create a folder at that path. Not /dev/null: only Git Bash maps it to nul; native git started from Node gets the literal value
+ * and on Windows resolves it from the drive root to C:\dev\null, a folder any authenticated account can create (aegis, round 3). Not a temp folder: %TEMP% grants
+ * Modify to the Codex sandbox accounts on this machine (round 2). Forward slashes: git reads the value as given. One value on every OS.
+ */
+export const HOOKS_OFF_ARGS = Object.freeze(['-c', `core.hooksPath=${fileURLToPath(import.meta.url).replaceAll('\\', '/')}`]);
+const defaultGit = (root) => (args) => spawnSync('git', ['-C', root, ...HOOKS_OFF_ARGS, ...args], { encoding: 'utf8', windowsHide: true });
+const firstLine = (text) => String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? 'no message';
+const SAFE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
+
+/**
+ * Why the band code of the checkout may not decide the band, or null. Fetches <remote>/<baseRef> fresh (a failed fetch is a problem: the base code cannot be read),
+ * then compares each file of `files` as the process runs it (git hash-object --path=<repo path> <file>, so CRLF and other filters give the blob hash) with the
+ * same path at the fetched tip. A file that differs, or that the checkout or the tip lacks, is named. `git` is injectable for tests.
+ */
+export function baseCodeProblem({ root = REPO_ROOT, baseRef, remote = 'fork', files = BAND_CODE_FILES, git = defaultGit(root) } = {}) {
+  const ref = String(baseRef ?? '');
+  if (!SAFE_NAME.test(ref) || !SAFE_NAME.test(String(remote))) return `could not fetch ${remote}/${ref || '(no base branch)'}: the name is not a plain git name`;
+  const fetched = git(['fetch', '--quiet', remote, `+refs/heads/${ref}:refs/remotes/${remote}/${ref}`]);
+  if (fetched.status !== 0) return `could not fetch ${remote}/${ref} (${firstLine(fetched.stderr)}): the base code cannot be read, so the band code of this checkout cannot be checked`;
+  const tip = String(git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${ref}^{commit}`]).stdout ?? '').trim();
+  if (!/^[0-9a-f]{40}$/.test(tip)) return `could not fetch ${remote}/${ref}: the fetched branch tip is not readable`;
+  const differs = files.filter((rel) => {
+    const abs = path.join(root, rel);
+    const base = String(git(['rev-parse', '--verify', '--quiet', `${tip}:${rel}`]).stdout ?? '').trim();
+    if (!existsSync(abs) || !/^[0-9a-f]{40}$/.test(base)) return true;
+    return String(git(['hash-object', `--path=${rel}`, abs]).stdout ?? '').trim() !== base;
+  });
+  if (differs.length === 0) return null;
+  return `the band code of this checkout differs from ${remote}/${ref} at ${tip.slice(0, 7)}: ${differs.join(', ')}. The none-pick check would run that code, so a PR could lower its own band. Run the land from a checkout of ${ref} that holds ${remote}/${ref} (git fetch ${remote}, git switch ${ref}, git pull --ff-only).`;
+}
 
 const RANK = { LOW: 0, MID: 1, ELEVATED: 2, HIGH: 3, CRITICAL: 4 };
 const NEEDS_RECORD = new Set(['HIGH', 'CRITICAL']);
@@ -55,7 +105,7 @@ function recordProblem(v, { pr, head, band }) {
 }
 
 const skip = (reason) => ({ needed: false, ok: true, line: null, problem: null, reason });
-const refuse = (problem, undetermined = false) => ({ needed: true, ok: false, undetermined, line: null, problem });
+const refuse = (problem, undetermined = false, lead = 'review:none pick is not on record') => ({ needed: true, ok: false, undetermined, line: null, problem, lead });
 
 /** Problems from the store files that could not be read: named, so Dave knows which file broke. */
 const storeProblems = (found) => [
@@ -127,6 +177,8 @@ export function makeReader(pr, storeArg, dir = defaultStoreDir()) {
 
 const flag = (args, k) => args.includes(k);
 const opt = (args, k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
+/** A live run always checks the band code against the base; a fixture run (tests) checks only when --remote is given. */
+export const baseCheckWanted = (args) => !opt(args, '--fixture') || Boolean(opt(args, '--remote'));
 
 /** The router config of the base branch, through the contents API: a PR must not lower its own bar, and the local checkout may be on another branch. */
 function baseConfig(gh, repo, pull) {
@@ -148,7 +200,7 @@ function report(res, { pr, warn, json }) {
   if (json) console.log(JSON.stringify({ pr, warn, ...res }));
   else if (res.ok && res.needed) console.log(res.line);
   else if (res.ok) console.log(`land-none-check: PR #${pr} needs no record (${res.reason})`);
-  else console.log(`${warn ? 'WARNING' : 'REFUSED'}: PR #${pr} review:none pick is not on record: ${res.problem}`);
+  else console.log(`${warn ? 'WARNING' : 'REFUSED'}: PR #${pr} ${res.lead ?? 'review:none pick is not on record'}: ${res.problem}`);
   if (res.ok || warn) return 0;
   return res.undetermined ? 2 : 1;
 }
@@ -163,6 +215,12 @@ function main() {
     const { pull, files, config } = load(args, opt(args, '--repo') ?? DEFAULT_REPO, pr);
     if (!sameSha(pull.head.sha, head)) throw new Error(`--head ${sha7(head)} is not the PR head ${sha7(pull.head.sha)}`);
     changedPaths(files, pull);
+    // The band code must be the base branch's code. Live runs always check; a fixture run (tests) checks only when --remote is given.
+    const remote = opt(args, '--remote');
+    if (baseCheckWanted(args)) {
+      const problem = baseCodeProblem({ baseRef: pull.base?.ref, remote: remote ?? 'fork' });
+      if (problem) process.exit(report(refuse(problem, problem.startsWith('could not fetch'), 'band code differs from the base branch'), { pr, warn, json: flag(args, '--json') }));
+    }
     const labels = pullLabelNames(pull);
     head = pull.head.sha;
     const band = bandOf(files, config, { labels })?.band ?? null;

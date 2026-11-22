@@ -114,6 +114,8 @@ export const TRUST_BOUNDARY = Object.freeze({
     // land step and the scripts it runs: the land-tap check, the migration gate, the push wrapper
     LAND_STEP, 'scripts/github/land-recheck.mjs', 'scripts/github/land-none-check.mjs', 'scripts/github/land-decision.mjs',
     'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1',
+    // code that runs inside the land check or the land hook (card force-high-land-path, aegis on PR 669)
+    'scripts/ratchets/lib/review-md.mjs', 'scripts/lib/resolve-deps.mjs',
     // hook registration: a removed entry turns a guard off without a change to the guard (Dave 2026-11-17)
     '.claude/settings.json.template', 'scripts/settings/apply-registrations.mjs',
     // review router, its config, READY, the review-pick record, the pick question screen, paid review spend (Dave 2026-11-17)
@@ -136,14 +138,20 @@ export const TRUST_BOUNDARY = Object.freeze({
 /** The engine part: the files that force CRITICAL. The name stays for its importers. */
 export const CRITICAL_TRUST_BOUNDARY = TRUST_BOUNDARY.engine;
 
-/** The files that force risk band HIGH at least, besides every matrix.security_tier file (card force-high-security-tier, Dave 2026-11-22: "Wide: 102 of 651").
- *  They are the router, its config, READY and the land step: a PR that edits one of them can weaken the land gate, so a review:none pick must meet Dave's tap.
+/** The files that force risk band HIGH at least, besides every matrix.security_tier file (card force-high-security-tier, Dave 2026-11-22: "Wide: 102 of 651";
+ *  card force-high-land-path, Dave 2026-11-22: "17 of 654: all 11 files").
+ *  They are the router, its config, READY and the whole land path: a PR that edits one of them can weaken the land gate, so a review:none pick must meet Dave's tap.
  *  A subset of TRUST_BOUNDARY.tap, named here in one place. They force no CRITICAL. A constant, not a config key, so the config stays with re-cr-keys. */
 export const FORCE_HIGH_FILES = Object.freeze([
   'scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', LAND_STEP,
+  // the land path: the tap check, the migration gate, the push wrapper, the decision gate and ledger (source and built hook), the question script, the recheck
+  'scripts/github/land-decision.mjs', 'scripts/github/migration-gate.mjs', 'scripts/git-safe.ps1', '.claude/hooks/src/decision-gate.ts', 'scripts/github/ship-ask.mjs',
+  'scripts/github/land-recheck.mjs', 'scripts/ratchets/lib/review-md.mjs',
+  '.claude/hooks/src/decision-ledger.ts', 'scripts/lib/resolve-deps.mjs', '.claude/hooks/dist/decision-gate.mjs', '.claude/hooks/dist/decision-ledger.mjs',
 ]);
 
-const anyGlob = (globs = []) => { const res = globs.map(globToRegExp); return (p) => res.some((re) => re.test(p)); };
+/** Case-blind: the Windows checkout is, so a path that differs from a listed glob only in case is the same file (aegis on PR 669; lib/answer-key.mjs does the same). */
+const anyGlob = (globs = []) => { const res = globs.map((g) => globToRegExp(g.toLowerCase())); return (p) => { const q = p.toLowerCase(); return res.some((re) => re.test(q)); }; };
 
 /**
  * bandOf(files, config, { labels, r }) -> { band, score, G, C, K, L, labelHigh, trustFiles, tapFiles, gateFiles, securityTier, forceHighFiles, forcedHigh } | null
@@ -168,7 +176,7 @@ export function bandOf(files, config, { labels = [], r = 0 } = {}) {
   }
   const entries = [...seen.values()];
   const isTest = (p) => m.test_markers.some((t) => `/${p}`.includes(t));
-  const isLogic = (p) => !`/${p}`.includes('/dist/') && m.logic_ext.includes(path.posix.extname(p).slice(1));
+  const isLogic = (p) => !`/${p}`.includes('/dist/') && m.logic_ext.includes(path.posix.extname(p).slice(1).toLowerCase());
   // The name that makes an entry count: the first non-test name that passes `match`.
   const hit = (names, match) => names.find((p) => !isTest(p) && match(p));
   const inPlane = anyGlob(m.control_plane);

@@ -798,7 +798,18 @@ function readProofType(raw) {
   return { type };
 }
 
-function fieldProblems(key, list, type, head, say) {
+/**
+ * The RED commit is the one where the check fails, so it comes before the head. Two reasons, and never a guess:
+ * it is the head; or the PR's whole commit list is known, holds the head, and does not hold it. `commits` is
+ * [] when the reader could not read them all (prCommitList), and then only the head test runs.
+ */
+function redCommitProblem(sha, head, commits, say) {
+  if (shaIsHead(sha, head)) { say(`RED names the head commit ${sha}. A RED commit comes before the head: commit the failing test first and name that commit`); return; }
+  const shas = (commits || []).flatMap((c) => (typeof c?.sha === 'string' ? [c.sha.toLowerCase()] : []));
+  if (shas.includes(String(head).toLowerCase()) && !shas.some((s) => s.startsWith(sha))) say(`RED names commit ${sha}, which is not a commit of this PR. Name the PR commit where the check fails`);
+}
+
+function fieldProblems(key, list, type, head, say, commits) {
   if (list.length !== 1) {
     say(list.length === 0 ? `a ${type} proof needs a ${key} line: ${key}: \`<command>\` @ <sha>, then a fenced output block` : `${list.length} ${key} lines. Keep one`);
     return;
@@ -807,6 +818,7 @@ function fieldProblems(key, list, type, head, say) {
   if (!ev.command) say(`the ${key} line has no command in backticks`);
   else if (/^<.*>$/.test(ev.command)) say(`the ${key} line has a placeholder command`);
   if (!ev.sha) say(`the ${key} line names no commit (7 to 40 hex characters after @)`);
+  else if (key === 'RED') redCommitProblem(ev.sha, head, commits, say);
   else if (key === 'GREEN' && !shaIsHead(ev.sha, head)) say(`GREEN names commit ${ev.sha}, not the head ${String(head).slice(0, Math.max(7, ev.sha.length))}. Run the check on the head and update the GREEN line`);
   if (ev.output === null) say(`the ${key} line has no fenced output block under it`);
   else if (ev.output.trim() === '') say(`the ${key} output block is empty`);
@@ -817,7 +829,7 @@ function fieldProblems(key, list, type, head, say) {
  * The reasons this head has no valid proof; [] when the proof is valid. Pure.
  * `docsVerified`: the review router classed this head docs (see docsHeadVerified).
  */
-export function proofProblems(parsed, { head, docsVerified = false }) {
+export function proofProblems(parsed, { head, docsVerified = false, commits = [] }) {
   const out = [];
   const say = (text) => out.push(`${PROOF_REASON_PREFIX} ${text}`);
   const { types, fields } = parsed;
@@ -829,7 +841,7 @@ export function proofProblems(parsed, { head, docsVerified = false }) {
     if (!docsVerified) say('proof type docs needs the review router to class this head as docs, with risk:docs as the only risk label');
     return out;
   }
-  for (const key of PROOF_TYPES[type]) fieldProblems(key, fields[key], type, head, say);
+  for (const key of PROOF_TYPES[type]) fieldProblems(key, fields[key], type, head, say, commits);
   return out;
 }
 
@@ -844,11 +856,11 @@ export function docsHeadVerified(labels, comments, head) {
 }
 
 /** The `proof` field of the result. `gate` false = a repo without the gate; `dependabot` = the signed-bot exemption. */
-function proofResult({ gate, dependabot, body, head, labels, comments }) {
+function proofResult({ gate, dependabot, body, head, labels, comments, commits }) {
   if (!gate) return { required: false, type: null, status: 'off', problems: [] };
   if (dependabot) return { required: false, type: null, status: 'exempt', exemption: 'dependabot', problems: [] };
   const parsed = parseProof(body);
-  const problems = proofProblems(parsed, { head, docsVerified: docsHeadVerified(labels, comments, head) });
+  const problems = proofProblems(parsed, { head, docsVerified: docsHeadVerified(labels, comments, head), commits });
   const type = parsed.types.length === 1 ? readProofType(parsed.types[0]).type ?? null : null;
   const status = problems.length === 0 ? 'ok' : parsed.types.length === 0 ? 'missing' : 'invalid';
   return { required: true, type, status, problems };
@@ -1519,7 +1531,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   const labels = pullLabelNames(pull);
   const dependabot = isDependabotPr(pull, commits);
   const need = dependabot ? DEPENDABOT_NEED : verifiedBots(labels, comments, head, greptileAuto);
-  const proof = proofResult({ gate: proofGate, dependabot, body: pull.body, head, labels, comments });
+  const proof = proofResult({ gate: proofGate, dependabot, body: pull.body, head, labels, comments, commits });
   const run = latestGreptileRun(checkRuns);
   const greptile = greptileState(run);
   const greptileSummary = run?.output?.summary ?? null;
@@ -1737,6 +1749,23 @@ export async function evaluateWithCarry(inputs, readCarryFn) {
 /** --fixture <file>: the evaluate inputs as JSON (plus carry, with no matchGlob). No gh call. The result says fixture: true. */
 const fixturePath = opt('--fixture', null);
 
+/**
+ * The PR's commits from the GraphQL `allCommits(first:100){totalCount nodes}` read, oldest first, or [] when the read
+ * holds fewer commits than the PR has (more than 100). [] means "not known": the Dependabot rule then gives no
+ * exemption, and the RED commit test (redCommitProblem) runs only its head check. A list of exactly 100 with
+ * totalCount 100 is whole.
+ */
+export function prCommitList(allCommits) {
+  const nodes = allCommits?.nodes;
+  if (!Array.isArray(nodes) || allCommits.totalCount > nodes.length) return [];
+  // `sha` (oldest first) orders the CodeRabbit rounds by the reviewed commit (newestCodeRabbitRound) and the RED commit test; the Dependabot rule ignores it.
+  return nodes.map((n) => ({
+    sha: n.commit.oid,
+    author: n.commit.author?.user?.login ?? null,
+    githubSigned: n.commit.signature?.isValid === true && n.commit.signature?.wasSignedByGitHub === true,
+  }));
+}
+
 /** Every gh read evaluate needs, for the live PR. A truncated page or a moved head throws: "cannot determine". */
 function readLiveInputs() {
   const pull = gh([`repos/${owner}/${name}/pulls/${pr}`]);
@@ -1769,11 +1798,7 @@ function readLiveInputs() {
   // Every commit's author account and GitHub signature, for the Dependabot rule. More than 100 commits = unknown.
   const ac = prq.allCommits;
   // `sha` (oldest first) orders the CodeRabbit rounds by the reviewed commit (newestCodeRabbitRound); the Dependabot rule ignores it.
-  const commits = ac.totalCount > ac.nodes.length ? [] : ac.nodes.map((n) => ({
-    sha: n.commit.oid,
-    author: n.commit.author?.user?.login ?? null,
-    githubSigned: n.commit.signature?.isValid === true && n.commit.signature?.wasSignedByGitHub === true,
-  }));
+  const commits = prCommitList(ac);
   return {
     pull, combined, checkRuns, threads: rt.nodes, bodyEdits: readBodyEdits(prq.userContentEdits, bodyEditsPageReader(gh, owner, name, pr)), reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
     proofGate: PROOF_REPOS.has(repo.toLowerCase()),
