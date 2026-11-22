@@ -453,7 +453,7 @@ function homeMoved() {
  * postPaid({ pr, cap, source, repo, head }, deps) -> { ok, code, text, ... }. source `row` (default): the cap is the price of Dave's stored yes. source `cap`: `cap` is
  * whole cents from the queue's pay decision (--cap) and `head` is the PR head Dave saw with that price (--head); a PR that moved off it refuses (exit 4). Holds the paid lock across every step, with a 120 s deadline and a 20 s limit per GitHub call.
  * Codes: 0 posted; 4 a refusal from step 2 on (the row is used up); 5 nothing happened and the yes is kept (a failed GitHub read in step 1, another paid post holds the lock,
- * a non-empty CCV3_DECISIONS_FILE in a `row` run, a HOME or USERPROFILE that differs from the OS account record in a `row` run, or the use-up of the row failed).
+ * a non-empty CCV3_DECISIONS_FILE in a `row` run, a HOME or USERPROFILE that differs from the OS account record (or an account record that cannot be read) in any run, or the use-up of the row failed).
  * 4 also covers a `cap` run with no valid `head` and a PR that moved off it (both before step 2: no row is involved). A real run has no flag and no env variable
  * that sets ledgerPath; only deps do. The store and the ledger default to the OS account home; the writer of the stamped row resolves the same file in a normal session.
  * deps (tests, the queue): gh(args, { timeoutMs }), now() -> Date, ledgerPath, pathFilters, env, capacity(pr, ms) -> fact, queue { holdsPay(pr, head) },
@@ -464,7 +464,7 @@ export function postPaid({ pr, cap = null, source = 'row', repo = DEFAULT_REPO, 
   const capacity = (n, ms) => capacityFact({ now: new Date(ms).toISOString(), pr: n, dependabot: false, policy: {}, probe: false, root: ROOT }, { crUsage: () => null });
   const d = { ...withDefaults({ gh: ghApiTimed, capacity, ...given }), lockWaitMs: given.lockWaitMs ?? 5000 };
   if (source !== 'cap' && storeOverridden(d.env)) return fail(5, STORE_MOVED_TEXT);
-  if (source !== 'cap' && homeMoved()) return fail(5, HOME_MOVED_TEXT);
+  if (homeMoved()) return fail(5, HOME_MOVED_TEXT); // both sources: the ledger (the limits) moves with the home in a cap run too
   if (source === 'cap' && !SHA40.test(String(expectHead))) return fail(4, CAP_HEAD_TEXT); // F6: no head Dave saw, no paid post
   const began = d.now().getTime();
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
