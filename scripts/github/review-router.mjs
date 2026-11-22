@@ -92,7 +92,7 @@ const LAND_STEP = 'scripts/github/' + ['land', 'pr'].join('-') + '.ps1';
  *  - engine (engine spec 13.4): a non-test file here forces CRITICAL. cursor-review.mjs is the review-tree boundary (AGENT_FILES
  *    strip, buildAgentEnv secret strip, prepareReview); backends/** joined 2026-11-17 (card engine-backend-trust-band). prompt.mjs and
  *    context.mjs stay on matrix.control_plane only, so a prompt-tuning PR is not CRITICAL. lib/** also holds the decision store.
- *  - tap: forces no band. These files are meant to keep Dave's tap at every risk band (D1): the named guard hooks (Dave 2026-11-17:
+ *  - tap: forces no CRITICAL. Four of them (FORCE_HIGH_FILES, below) force HIGH at least; the rest force no band. These files are meant to keep Dave's tap at every risk band (D1): the named guard hooks (Dave 2026-11-17:
  *    only the named guards, not every hook) with the built dist that runs, the decision gate and ledger, the land step and the scripts
  *    it runs, hook registration and its removal, the review router, its config, READY, the review-pick record and its question screen,
  *    paid review spend, the settings render with its machine overlay and overlay chooser, the paid run path with its queue rules and
@@ -136,10 +136,19 @@ export const TRUST_BOUNDARY = Object.freeze({
 /** The engine part: the files that force CRITICAL. The name stays for its importers. */
 export const CRITICAL_TRUST_BOUNDARY = TRUST_BOUNDARY.engine;
 
+/** The files that force risk band HIGH at least, besides every matrix.security_tier file (card force-high-security-tier, Dave 2026-11-22: "Wide: 102 of 651").
+ *  They are the router, its config, READY and the land step: a PR that edits one of them can weaken the land gate, so a review:none pick must meet Dave's tap.
+ *  A subset of TRUST_BOUNDARY.tap, named here in one place. They force no CRITICAL. A constant, not a config key, so the config stays with re-cr-keys. */
+export const FORCE_HIGH_FILES = Object.freeze([
+  'scripts/github/review-router.mjs', 'review-router.config.json', 'scripts/github/review-status.mjs', LAND_STEP,
+]);
+
 const anyGlob = (globs = []) => { const res = globs.map(globToRegExp); return (p) => res.some((re) => re.test(p)); };
 
 /**
- * bandOf(files, config, { labels, r }) -> { band, score, G, C, K, L, labelHigh, trustFiles, tapFiles, gateFiles, securityTier } | null
+ * bandOf(files, config, { labels, r }) -> { band, score, G, C, K, L, labelHigh, trustFiles, tapFiles, gateFiles, securityTier, forceHighFiles, forcedHigh } | null
+ *   forceHighFiles: the non-test files on FORCE_HIGH_FILES, same rename rule. forcedHigh: true when a security_tier file or a forceHighFiles file
+ *   raised the band to HIGH (it was below HIGH by score). CRITICAL stays CRITICAL.
  *   tapFiles: the non-test files on either part of TRUST_BOUNDARY (engine or tap), same rename rule. It changes no band.
  *   files: path strings or { filename, previous_filename? } objects. A rename is ONE changed file with two names: it counts once,
  *   and a gate / config / logic test looks at both names (a rename into or out of the control plane counts).
@@ -178,8 +187,13 @@ export function bandOf(files, config, { labels = [], r = 0 } = {}) {
   const L = labelHigh || classify(entries.flat(), config).class === 'r3' || trustFiles.length > 0;
   const gate = m.gate_score.reduce((best, [min, score]) => (G >= min && score > best ? score : best), 0);
   const score = gate + m.weights.config * C + m.weights.code * K + (Number.isFinite(r) && r > 0 ? r : 0);
-  const band = L ? 'CRITICAL' : score >= m.bands.high ? 'HIGH' : score >= m.bands.elevated ? 'ELEVATED' : score >= m.bands.mid ? 'MID' : 'LOW';
-  return { band, score, G, C, K, L, labelHigh, trustFiles, tapFiles, gateFiles, securityTier };
+  const byScore = L ? 'CRITICAL' : score >= m.bands.high ? 'HIGH' : score >= m.bands.elevated ? 'ELEVATED' : score >= m.bands.mid ? 'MID' : 'LOW';
+  // A PR cannot weaken the land gate by its own score: a security_tier file or a gate-edit file is HIGH at least.
+  const inForce = anyGlob(FORCE_HIGH_FILES);
+  const forceHighFiles = entries.map((names) => hit(names, inForce)).filter(Boolean);
+  const forcedHigh = (securityTier.length > 0 || forceHighFiles.length > 0) && ['LOW', 'MID', 'ELEVATED'].includes(byScore);
+  const band = forcedHigh ? 'HIGH' : byScore;
+  return { band, score, G, C, K, L, labelHigh, trustFiles, tapFiles, gateFiles, securityTier, forceHighFiles, forcedHigh };
 }
 
 // ---------- credits ----------
