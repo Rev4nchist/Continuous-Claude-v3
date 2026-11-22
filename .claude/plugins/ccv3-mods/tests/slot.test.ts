@@ -528,19 +528,19 @@ describe('slot: /slot (M3, M4)', () => {
   })
 
   // F6: the price and the head come from ONE fresh check. A check that names no head (or a bad one) offers no price, so no dialog and no decide.
-  test('M4c a fresh check that names no head, or a bad one, offers no paid round: no dialog, no decide', async ($, on) => {
-    for (const out of [
-      '{"exitCode":0,"verdict":"ALLOW","pr":5,"files":11,"total":11,"cost":2.75}',
-      `{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"${'A'.repeat(40)}","files":11,"total":11,"cost":2.75}`,
-      '{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"abc1234","files":11,"total":11,"cost":2.75}',
-    ]) {
+  for (const [name, out] of [
+    ['no head', '{"exitCode":0,"verdict":"ALLOW","pr":5,"files":11,"total":11,"cost":2.75}'],
+    ['an upper-case head', `{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"${'A'.repeat(40)}","files":11,"total":11,"cost":2.75}`],
+    ['a short head', '{"exitCode":0,"verdict":"ALLOW","pr":5,"head":"abc1234","files":11,"total":11,"cost":2.75}'],
+  ] as const) {
+    test(`M4c a fresh check with ${name} offers no paid round: no dialog, no decide`, async ($, on) => {
       const w = loopWorld(on, { answer: /^Pay up to/, check: { out } })
       await startLoop($)
       expect((await command($, 'slot', 'pay 5')).text ?? '').toMatch(/no paid round is offered/i)
       expect(w.seen.dialogs).toEqual([])
       expect(w.seen.slot).toEqual([])
-    }
-  })
+    })
+  }
 
   test('M4b a typed /slot pay with no answer to the dialog, or with no price, runs no decide', async ($, on) => {
     const quiet = loopWorld(on, { answer: 'dismiss' })
@@ -682,7 +682,8 @@ describe('slot: /slot pay failures tell the truth (M3)', () => {
 
   // Breaks if the failure text always ends "Nothing was changed.": a failed paid POST leaves a ledger row and a posted item.
   test('M3 a pay that fails after the round was counted does not say nothing was changed', async ($, on) => {
-    loopWorld(on, { cli: { decide: { code: 2, out: PAID_FAIL } } })
+    // /slot pay opens the priced dialog first (paid guard): Dave taps "Pay up to $X", then the decide verb fails.
+    loopWorld(on, { answer: /^Pay up to/, cli: { decide: { code: 2, out: PAID_FAIL } } })
     await startLoop($)
     const text = (await command($, 'slot', 'pay 5')).text ?? ''
     expect(text).toContain('the round is counted')
