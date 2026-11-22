@@ -2162,6 +2162,26 @@ export function installRunLockHandlers() {
   }
 }
 
+/**
+ * O5 (card prepr-speed-bundle): the summary check, once, before the run lock. A summary FAIL then ends the run with no grant, no machine reads
+ * and no spacing charge for other builders. Only the summary runs here: a stale GREEN is an evidence FAIL that the gates settle, so the evidence
+ * check stays inside the run. The run checks the summary again (runPrePrSteps). A FAIL removes an old stamp and leaves one `summary` row in the
+ * gate log, because a run with no grant writes no START row (the lock store is not changed). Returns the FAIL result, or null.
+ */
+export function summaryBeforeLock({ root, base = 'main', config, git = makeGit(root), summaryCheck = checkSummary, now = new Date(), gateLogFile = null }) {
+  let cfg;
+  try { cfg = config ?? JSON.parse(readFileSync(path.join(root, 'review-router.config.json'), 'utf8')); } catch { return null; } // the run reports a bad config itself
+  const headRun = git(['rev-parse', 'HEAD']);
+  const head = headRun.status === 0 ? headRun.stdout.trim() : '';
+  const branch = git(['branch', '--show-current']).stdout.trim();
+  const summary = summaryCheck({ root, head, branch, base, git, mode: cfg.pre_pr?.summary_mode === 'fail' ? 'fail' : 'note' });
+  if (summary.result.status !== 'FAIL') return null;
+  const stampPath = path.join(root, STAMP_REL);
+  try { if (existsSync(stampPath)) unlinkSync(stampPath); } catch { /* the run never trusts a stamp of another head */ }
+  try { appendGateRows(gateLogFile ?? gateLogPath(), gateRows({ results: [summary.result], durations: new WeakMap(), runId: randomUUID(), now, branch, head, base })); } catch { /* a log problem never changes the verdict */ }
+  return summary.result;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); process.exit(0); }
@@ -2178,6 +2198,12 @@ async function main() {
   const base = option(args, '--base') ?? 'main';
   const wait = args.includes('--wait-lock') || process.env.PRE_PR_WAIT_LOCK === '1';
   const startedAt = Date.now();
+  const earlyFail = summaryBeforeLock({ root, base });
+  if (earlyFail) {
+    console.log(formatLines([earlyFail]).join('\n'));
+    console.log('RESULT FAIL: no stamp (stopped before the run lock: the summary check failed)');
+    process.exit(1);
+  }
   const held = await takeRunLock({ bodyPath, wait, factsOf: () => runFacts(root, base) });
   // The wait can take up to 60 minutes: read the body again after the grant (L1).
   try { bodyText = readFileSync(path.resolve(bodyPath), 'utf8'); } catch (err) { console.error(`pre-pr: cannot read the body file ${bodyPath} after the wait (${String(err.message).split('\n')[0]})`); process.exit(2); }
