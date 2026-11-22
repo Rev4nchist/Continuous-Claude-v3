@@ -17,7 +17,13 @@ const WRAP_MAX = 2000
 const HINT_ROOM = 12
 const ELLIPSIS = '…'
 
-/** One line, redacted, at most `max` characters. The redaction runs on the whole text before any cut. A value that is not a string gives ''. */
+/** A redaction marker as the redactor writes it: `[REDACTED:<kind>]`, no space inside. Mirrors marker() in hooks/shared/redact.ts (line 14). */
+const MARKER_RUN = /\[REDACTED:[^\]\s]*\]/g
+
+/**
+ * One line, redacted, at most `max` characters. The redaction runs on the whole text before any cut. A value that is not a string gives ''.
+ * A cut never leaves part of a `[REDACTED:kind]` marker: a marker that the cut would split is dropped whole.
+ */
 export const oneLine = (value: unknown, max: number = TEXT_MAX): string => {
   if (typeof value !== 'string') return ''
   const one = redact(value).text.replace(CONTROL, ' ').replace(/ {2,}/g, ' ').trim()
@@ -25,7 +31,13 @@ export const oneLine = (value: unknown, max: number = TEXT_MAX): string => {
   // The cut is in UTF-16 units; it never leaves half of a surrogate pair.
   const cut = Math.max(0, max - 1)
   const half = cut > 0 && (one.charCodeAt(cut - 1) & 0xfc00) === 0xd800
-  return `${one.slice(0, half ? cut - 1 : cut)}${ELLIPSIS}`
+  const keep = half ? cut - 1 : cut
+  // The marker test uses the length the cut keeps (`keep`), after the surrogate guard.
+  for (const found of one.matchAll(MARKER_RUN)) {
+    const start = found.index ?? 0
+    if (start < keep && start + found[0].length > keep) return `${one.slice(0, start).trimEnd()}${ELLIPSIS}`
+  }
+  return `${one.slice(0, keep)}${ELLIPSIS}`
 }
 
 /** Greedy layout. `width(i)` is the room of line i; a width of 0 or less leaves that line empty. A word longer than its line is hard-broken. */
