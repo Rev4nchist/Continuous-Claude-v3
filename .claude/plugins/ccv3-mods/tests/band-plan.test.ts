@@ -163,7 +163,7 @@ describe('row plan: no number twice (failure 7)', () => {
         expect(plan.owners.five).toBeNull()
         expect(plan.owners.seven).toBeNull()
         expect(plan.owners.cost).toBeNull()
-        if (width >= 35) expect(plan.owners.ctx).toBe(maxRows === 1 ? 'line' : 'row1')
+        expect({ width, maxRows, ctx: plan.owners.ctx }).toEqual({ width, maxRows, ctx: maxRows === 1 ? 'line' : 'row1' })
       }
     }
   })
@@ -252,6 +252,29 @@ describe('row plan: the maxRows 1 line (failure 9)', () => {
     }
     // Chip 9 + ctx 8 + 5h 7 + 7d 7 = 31 cells; the goal needs a space and MIN_GOAL (12) more cells: it appears at 44 and not at 43.
     expect(seenAt).toEqual({ ctx: 20, five: 24, seven: 31, goal: 44 })
+  })
+
+  // Breaks if the one-row line drops 7d or 5h before it shortens the sign word, as compactFit does not: '2 questions' goes to '? 2' first.
+  test('P9 with an open ask the sign word shortens to ? 2 before 7d and 5h are dropped', () => {
+    const ask = (width: number) => band.bandRows(state({ chip: 'waiting-on-dave', openAsks: 2 }), 1, width, false)
+    // Chip 17 + ' ? 2' 4 + ctx 8 + 5h 7 + 7d 7 = 43 cells.
+    expect(text(ask(43).rows.line)).toBe(' WAITING FOR YOU  ? 2 ctx 41% 5h 38% 7d 61%')
+    expect(ask(43).plan.signForm).toBe('short')
+    expect(ask(43).plan.row1Shape).toEqual(['chip', 'sign', 'ctx', 'five', 'seven'])
+    // 36 cells: 7d goes, 5h stays.
+    expect(text(ask(36).rows.line)).toBe(' WAITING FOR YOU  ? 2 ctx 41% 5h 38%')
+    expect(ask(36).plan.row1Shape).toEqual(['chip', 'sign', 'ctx', 'five'])
+    // Chip 17 + ' 2 questions' 12 + 8 + 7 + 7 = 51 cells: the word stays only when all of it fits.
+    expect(text(ask(51).rows.line)).toBe(' WAITING FOR YOU  2 questions ctx 41% 5h 38% 7d 61%')
+  })
+
+  // Breaks if the word form is kept while a window is dropped, at any width from 20 to 120.
+  test('P9 with an open ask the sign word is drawn only when ctx, 5h and 7d are all drawn', () => {
+    for (let width = 20; width <= 120; width++) {
+      const { plan, rows } = band.bandRows(state({ chip: 'waiting-on-dave', openAsks: 2 }), 1, width, false)
+      expect(cells(rows.line)).toBeLessThanOrEqual(width)
+      if (plan.signForm === 'words') expect({ width, shape: plan.row1Shape.slice(0, 5) }).toEqual({ width, shape: ['chip', 'sign', 'ctx', 'five', 'seven'] })
+    }
   })
 
   // Breaks if the goal is drawn with fewer than 12 cells, or hidden with 12: at 44 columns the goal text is clipped to 12 cells.
@@ -344,7 +367,20 @@ describe('row plan: #sid8 (failure 12)', () => {
     for (let width = full; width <= 200; width++) expect(band.bandRows(given, 2, width, false).plan.row1Shape).toContain('sid')
   })
 
-  // Breaks if the cut order changes: #sid8, +N more, sign word to ? n, lane, name (to 8, then to the room beside ctx, then gone), ctx, ? n to ?n.
+  // Breaks if `#sid8` stays cut after a later cut made room: HUD on at 3 rows the row is chip + name; ' #0d40499c' (10 cells) must come back from 25 cells.
+  test('P12 #sid8 returns when room is left after the cuts: HUD on, maxRows 3, width 25 to 33', () => {
+    for (let width = 25; width <= 33; width++) {
+      const { plan, rows } = band.bandRows(state(), 3, width, false)
+      expect({ width, row: text(rows.row1) }).toEqual({ width, row: ' WORKING   trex #0d40499c' })
+      expect(plan.row1Shape).toEqual(['chip', 'name', 'sid'])
+    }
+    // One cell short of the 25 it needs: no sid.
+    const short = band.bandRows(state(), 3, 24, false)
+    expect(text(short.rows.row1)).toBe(' WORKING   trex')
+    expect(short.plan.row1Shape).toEqual(['chip', 'name'])
+  })
+
+  // Breaks if the cut order changes: #sid8, +N more, sign word to ? n, lane, name (to 8, then to the room beside ctx, then gone), ctx, ? n to ?n; #sid8 returns where it fits.
   test('P12 the row 1 cut order, widths and shapes from the widest row down', () => {
     const given = NO_HUD({ chip: 'waiting-on-dave', openAsks: 2, laneCount: 2, who: { name: 'long-name-here', short: '0d40499c' } })
     const shapes: string[] = []
@@ -365,13 +401,15 @@ describe('row plan: #sid8 (failure 12)', () => {
       'words|chip,sign,name,lane,ctx|more|long',
       'words|chip,sign,name,lane,ctx|nomore|long',
       'short|chip,sign,name,lane,ctx|nomore|long',
+      // The lane goes at 65; the row without it is 47 cells, so ' #0d40499c' (10) comes back from 65 down to 57.
+      'short|chip,sign,name,sid,ctx|nomore|long',
       'short|chip,sign,name,ctx|nomore|long',
       'short|chip,sign,name,ctx|nomore|cut',
       'short|chip,sign,ctx|nomore|none',
       'short|chip,sign|nomore|none',
       'tight|chip,sign|nomore|none',
     ])
-    expect(widths).toEqual([120, 86, 76, 73, 65, 46, 35, 29, 20])
+    expect(widths).toEqual([120, 86, 76, 73, 65, 56, 46, 35, 29, 20])
   })
 })
 
@@ -386,6 +424,38 @@ describe('row plan: widths in cells (failure 4)', () => {
     const wide = text(band.bandRows(given, 2, 60, false).rows.row1)
     expect(wide).toContain('界')
     expect(cellWidth(wide)).toBeLessThanOrEqual(60)
+  })
+})
+
+describe('row plan: a redaction marker in a name or a repo (failure 4)', () => {
+  const MARK = '[REDACTED:api_key]'
+  // Whole markers removed, no '[' or 'REDACTED' may stay: a cut marker leaves a partial one.
+  const noPartial = (drawn: string): boolean => !/\[|REDACTED/.test(drawn.split(MARK).join(''))
+
+  // Breaks if `clip` cuts inside the marker: 18 cells at the 16-cell name limit of row 1 and the 8-cell name limit of the compact line.
+  test('P4 a name that is a redaction marker draws no partial marker at the 16 and 8 cell limits', () => {
+    const given = (over: Partial<BandState> = {}) => NO_HUD({ who: { name: MARK, short: '0d40499c' }, ...over })
+    const row1 = band.bandRows(given(), 2, 120, false).rows.row1
+    const name = (row1 ?? []).find(span => span.tone === 'title')?.text ?? ''
+    expect(noPartial(name)).toBe(true)
+    expect(cellWidth(name)).toBeLessThanOrEqual(16)
+    const compact = band.bandRows(given({ hud: true, limits: null }), 2, 120, false).rows.compact
+    const short = (compact ?? []).find(span => span.tone === 'title')?.text ?? ''
+    expect(noPartial(short)).toBe(true)
+    expect(cellWidth(short)).toBeLessThanOrEqual(8)
+    expect(short).not.toBe('')
+    // Text before the marker stays: only the marker goes.
+    const mixed = band.bandRows(NO_HUD({ who: { name: `my ${MARK} tool`, short: null } }), 2, 120, false).rows.row1
+    expect((mixed ?? []).find(span => span.tone === 'title')?.text).toBe('my…')
+  })
+
+  // Breaks if the repo clip cuts inside the marker at any width where the compact line clips the repo.
+  test('P4 a repo that is a redaction marker never draws a partial marker, at every width', () => {
+    for (let width = 20; width <= 120; width++) {
+      const { rows } = band.bandRows(state({ repo: MARK }), 2, width, false)
+      expect({ width, ok: noPartial(text(rows.compact)) }).toEqual({ width, ok: true })
+      expect(cells(rows.compact)).toBeLessThanOrEqual(Math.max(width, 20))
+    }
   })
 })
 

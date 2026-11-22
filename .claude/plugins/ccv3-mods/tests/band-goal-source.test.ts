@@ -152,7 +152,7 @@ describe('goalOfNote', () => {
     expect(goalOfNote('PARKED until 2026-12-01 -- waiting')).toBeNull()
   })
 
-  test('X3 the sentence is capped at 200 cells of text with an ellipsis, cut at a word', () => {
+  test('X3 the sentence is capped at 200 characters of text with an ellipsis, cut at a word', () => {
     const words = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ')
     const out = goalOfNote(`GOAL: ${words}`)
     expect(out?.length).toBeLessThanOrEqual(200)

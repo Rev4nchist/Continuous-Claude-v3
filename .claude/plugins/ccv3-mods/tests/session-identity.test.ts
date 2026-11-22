@@ -64,7 +64,7 @@ describe('band row 1: the session label', () => {
     expect(spans.find(span => span.text === ' #0d40499c')?.tone).toBe('dim')
   })
 
-  test('S3 #sid8 goes first, then +N, then the lane; the name and ctx outlast them at every width from 40', () => {
+  test('S3 #sid8 goes first, then +N, then the lane, and returns when room is left; the name and ctx outlast them at every width from 40', () => {
     // The full row is 63 cells: WORKING 9 + 2 + trex #0d40499c 14 + lane grok-stall-guards +2 25 + ctx 7 + 2 separators of 3.
     expect(text(one({}, 63))).toContain('#0d40499c')
     const tight = text(one({}, 62))
@@ -79,7 +79,8 @@ describe('band row 1: the session label', () => {
       expect(line.length).toBeLessThanOrEqual(width)
       expect(line).toContain('trex')
       expect(line).toContain('ctx 54%')
-      if (line.includes('#0d40499c')) expect(line).toContain('lane ')
+      // `#sid8` returns when room is left after the lane is cut (design section 3): it is missing only when ' #0d40499c' (10 cells) would not fit.
+      if (!line.includes('#0d40499c')) expect({ width, room: width - line.length < 10 }).toEqual({ width, room: true })
     }
   })
 
