@@ -40,10 +40,12 @@ export const BAND_CODE_FILES = Object.freeze([
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 /**
  * git for the base-code check runs no hook (aegis F1 on PR 673): the fetch updates a ref, and git then runs the reference-transaction hook of core.hooksPath, which a PR
- * can add (.githooks is not a forced file). core.hooksPath=/dev/null names no folder: git resolves it to the null device (nul on Windows), where no hook file can exist.
- * A temp folder is no answer: on this machine %TEMP% grants Modify to the Codex sandbox accounts, so a hook could be planted there (aegis, round 2).
+ * can add (.githooks is not a forced file). core.hooksPath is this script's own file: git looks for <value>/<hook>, and a regular file has no children, so no hook
+ * can exist there and no account can create a folder at that path. Not /dev/null: only Git Bash maps it to nul; native git started from Node gets the literal value
+ * and on Windows resolves it from the drive root to C:\dev\null, a folder any authenticated account can create (aegis, round 3). Not a temp folder: %TEMP% grants
+ * Modify to the Codex sandbox accounts on this machine (round 2). Forward slashes: git reads the value as given. One value on every OS.
  */
-export const HOOKS_OFF_ARGS = Object.freeze(['-c', 'core.hooksPath=/dev/null']);
+export const HOOKS_OFF_ARGS = Object.freeze(['-c', `core.hooksPath=${fileURLToPath(import.meta.url).replaceAll('\\', '/')}`]);
 const defaultGit = (root) => (args) => spawnSync('git', ['-C', root, ...HOOKS_OFF_ARGS, ...args], { encoding: 'utf8', windowsHide: true });
 const firstLine = (text) => String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? 'no message';
 const SAFE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
