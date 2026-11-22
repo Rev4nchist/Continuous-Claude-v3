@@ -1863,12 +1863,17 @@ test('CW4: runPrePr gives the catchers gate the real base, and a failing catcher
 
 test('R2b: a failing gate fails the run, and the gate summary is in its line', async () => {
   const repo = makeRepo();
-  const { result, crCalls } = (await prePr(repo, { exec: () => ({ status: 1, stdout: 'bad\n# fail 2\n', stderr: '' }) }));
+  const bad = () => ({ status: 1, stdout: 'bad\n# fail 2\n', stderr: '' });
+  const { result, crCalls } = (await prePr(repo, { exec: bad }));
   assert.equal(result.ok, false);
   assert.ok(result.lines.some((l) => /^FAIL gate:context-budget.*# fail 2/.test(l)), result.lines.join('\n'));
-  // Card prflow-prepr-speed: the review starts beside the gates, so a failing gate no longer stops it (it was crCalls 0). PRE_PR_SERIAL_CR=1 keeps the old rule.
-  assert.equal(crCalls.length, 1);
-  const serial = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: () => ({ status: 1, stdout: 'bad\n# fail 2\n', stderr: '' }) });
+  // Card prepr-speed-bundle (O4): context-budget is a cheap gate and runs before the review, so its FAIL starts no review at all.
+  assert.equal(crCalls.length, 0);
+  // Card prflow-prepr-speed: the review starts beside the other gates, so a failing non-cheap gate does not stop it. PRE_PR_SERIAL_CR=1 keeps the old rule.
+  const beside = await prePr(makeRepo(), { exec: bad, ...withGates(fakeGate('s1')) });
+  assert.equal(beside.result.ok, false);
+  assert.equal(beside.crCalls.length, 1);
+  const serial = await prePr(makeRepo(), { env: { PRE_PR_SERIAL_CR: '1' }, exec: bad, ...withGates(fakeGate('s1')) });
   assert.equal(serial.crCalls.length, 0);
 });
 
@@ -3184,17 +3189,22 @@ test('GL3: an unwritable log path changes no exit status, verdict or stamp', asy
 
 test('GL4: a FAIL gate row has status FAIL and a wall time in ms', async () => {
   const file = tempGateLog();
-  const { result } = await prePr(makeRepo(), { gateLogPath: file, exec: slowFail() });
+  const { result } = await prePr(makeRepo(), { gateLogPath: file, exec: slowFail(), ...withGates(fakeGate('s1')) });
   assert.equal(result.ok, false);
-  const row = rowsOf(file).find((r) => r.step === 'gate:context-budget');
+  const row = rowsOf(file).find((r) => r.step === 'gate:s1');
   assert.equal(row.status, 'FAIL');
   assert.equal(typeof row.ms, 'number');
   assert.ok(row.ms >= 10, `ms was ${row.ms}`);
   // The review started beside the gate and ended on its own (it was SKIP earlier-step-failed; PRE_PR_SERIAL_CR=1 still gives that).
   assert.equal(rowsOf(file).find((r) => r.step === 'coderabbit').status, 'PASS');
   const serialFile = tempGateLog();
-  await prePr(makeRepo(), { gateLogPath: serialFile, env: { PRE_PR_SERIAL_CR: '1' }, exec: slowFail() });
+  await prePr(makeRepo(), { gateLogPath: serialFile, env: { PRE_PR_SERIAL_CR: '1' }, exec: slowFail(), ...withGates(fakeGate('s1')) });
   assert.equal(rowsOf(serialFile).find((r) => r.step === 'coderabbit').status, 'SKIP');
+  // Card prepr-speed-bundle (O4): a FAIL of the cheap gate (context-budget) is logged with its time and the review is SKIP: it never started.
+  const cheapFile = tempGateLog();
+  await prePr(makeRepo(), { gateLogPath: cheapFile, exec: slowFail() });
+  assert.equal(rowsOf(cheapFile).find((r) => r.step === 'gate:context-budget').status, 'FAIL');
+  assert.equal(rowsOf(cheapFile).find((r) => r.step === 'coderabbit').status, 'SKIP');
 });
 
 test('GL5: a token and the PR body never reach a row, and a detail stops at 200 chars', async () => {
@@ -4208,7 +4218,7 @@ test('F4 and Q1f: a gate FAILs while the review runs: the line is printed at onc
 
 test('F5: a rerun on the same head reuses the saved output: no review call, no new counter row, and it passes when the gate passes', async () => {
   const repo = makeRepo();
-  await prePr(repo, { exec: gateFail(), crRunner: slowReview([], 100) });
+  await prePr(repo, { exec: gateFail(), crRunner: slowReview([], 100), ...withGates(fakeGate('s1')) }); // a non-cheap gate: a cheap FAIL starts no review (O4)
   assert.equal(counterRows(repo).length, 1);
   const second = await prePr(repo);
   assert.equal(second.crCalls.length, 0);
@@ -4240,7 +4250,7 @@ test('O4b: the cheap gates run first, the review starts before the first other g
   assert.equal(run.result.ok, true, run.result.lines.join('\n'));
   assert.deepEqual(events, ['c1', 'usage', 'review', 's1', 's2']);
   const steps = run.result.results.map((r) => r.step).filter((s) => s.startsWith('gate:'));
-  assert.deepEqual(steps, ['gate:s1', 'gate:c1', 'gate:s2'], 'the results keep the order of the gate list');
+  assert.deepEqual(steps, ['gate:c1', 'gate:s1', 'gate:s2'], 'the results are in the order the gates ran');
 });
 
 test('O3c: an early review on a stale GREEN, then a FAIL that is no gate (the body file changed during the gates): the counter row is marked gateFailed and no slot is used', async () => {

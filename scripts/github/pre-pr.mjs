@@ -710,6 +710,21 @@ export function greenRewriteCandidate({ git, base = 'main', bodyText, head, evid
 }
 
 /**
+ * The pure part of updateGreen (card prepr-speed-bundle, O3): the new body text for a stale GREEN sha and the evidence check of that text.
+ * Returns { oldSha, newSha, text, evidence } only when the GREEN commit is an ancestor of HEAD, nothing but a clean merge of the base
+ * came after it, and the rewritten text passes the evidence check. It reads and writes no file. Any other case returns null.
+ */
+export function greenRewrite({ git, base = 'main', bodyText, head, paths, config, evidence }) {
+  const oldSha = greenRewriteCandidate({ git, base, bodyText, head, evidence });
+  if (!oldSha) return null;
+  const newSha = head.slice(0, 7);
+  const text = rewriteGreenSha(bodyText, oldSha, newSha);
+  if (text === null) return null;
+  const again = checkEvidence({ body: text, head, paths, config });
+  return again.status === 'PASS' ? { oldSha, newSha, text, evidence: again } : null;
+}
+
+/**
  * After a merge of the base the GREEN line names the pre-merge head. This updates it when that is safe: the evidence has
  * no other problem, the GREEN commit is an ancestor of HEAD, nothing but a clean merge of the base came after it
  * (onlyBaseMergedSince), and no other step failed (the gates ran on HEAD). It writes the body file and returns
@@ -718,18 +733,13 @@ export function greenRewriteCandidate({ git, base = 'main', bodyText, head, evid
 export function updateGreen({ git, base = 'main', bodyPath, bodyText, head, paths, config, results, evidence }) {
   if (!bodyPath) return null;
   if (results.some((r) => r !== evidence && r.status === 'FAIL')) return null;
-  const oldSha = greenRewriteCandidate({ git, base, bodyText, head, evidence });
-  if (!oldSha) return null;
-  const newSha = head.slice(0, 7);
-  const text = rewriteGreenSha(bodyText, oldSha, newSha);
-  if (text === null) return null;
-  const again = checkEvidence({ body: text, head, paths, config });
-  if (again.status !== 'PASS') return null;
+  const rewrite = greenRewrite({ git, base, bodyText, head, paths, config, evidence });
+  if (!rewrite) return null;
   try {
     if (readFileSync(bodyPath, 'utf8') !== bodyText) return null; // the file changed during the run: never overwrite it
-    writeFileSync(bodyPath, text);
+    writeFileSync(bodyPath, rewrite.text);
   } catch { return null; }
-  return { evidence: again, bodyText: text, note: result('evidence:green', 'NOTE', `GREEN updated ${oldSha.slice(0, 7)} -> ${newSha} in the local body file only: PATCH the PR body if the PR is open`) };
+  return { evidence: rewrite.evidence, bodyText: rewrite.text, note: result('evidence:green', 'NOTE', `GREEN updated ${rewrite.oldSha.slice(0, 7)} -> ${rewrite.newSha} in the local body file only: PATCH the PR body if the PR is open`) };
 }
 
 // ---------- heads with new code (the CodeRabbit run cap) ----------
@@ -1926,10 +1936,8 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   if (envRes.fail) results.push(result('env', 'FAIL', envRes.fail, envRes.others));
   if (envRes.note) results.push(result('env', 'NOTE', envRes.note));
   const crArgs = () => ({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseCommit}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseCommit, crStore });
-  // The review starts before the first test gate when no fast step failed. A stale GREEN (settledByGates) is an evidence FAIL: it keeps the old order.
-  if (!serialCr && !skipCr && head !== null && !results.some((r) => r.status === 'FAIL')) ctl.cr = await startCrStep(crArgs());
   let warnedGate = false;
-  for (const gate of envRes.gates) {
+  const runOneGate = async (gate) => {
     const cause = stopCause();
     const gateResult = envRes.blocked.has(gate.id) ? result(`gate:${gate.id}`, 'SKIP', 'not run: env failed, a package this gate needs is missing (see the env line)')
       : cause ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL (pass --keep-going to run every gate)`)
@@ -1937,7 +1945,15 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
     results.push(gateResult);
     if (ctl.cr && !ctl.cr.done && gateResult.status === 'FAIL' && !warnedGate) { warnedGate = true; log(gateFailedWhileReviewLine(gate.id)); }
     if (ctl.cr) await tick(); // one loop turn between gates: the review's timers and events run (M1)
-  }
+  };
+  // O4: the cheap gates (static checks, well under a second each) run first, so a cheap FAIL ends the run at once and starts no review.
+  for (const gate of envRes.gates.filter((g) => g.cheap)) await runOneGate(gate);
+  // The review starts before the first other gate when nothing has failed. O3: a stale GREEN (settledByGates) is an evidence FAIL that only
+  // the gates settle; it does not hold the review back when its rewrite already passes the evidence check. Any other FAIL does.
+  const holdsReview = results.some((r) => r.status === 'FAIL' && r !== settledByGates);
+  const rewritePasses = !settledByGates || greenRewrite({ git, base, bodyText, head, paths: changes.paths, config: cfg, evidence: settledByGates }) !== null;
+  if (!serialCr && !skipCr && head !== null && !holdsReview && rewritePasses) ctl.cr = await startCrStep(crArgs());
+  for (const gate of envRes.gates.filter((g) => !g.cheap)) await runOneGate(gate);
   // The run lock stops counting this run as heavy once the review runs and no test gate does. A lock write that fails (EBUSY, EPERM) must not stop the run.
   const toCrPhase = () => { try { onPhase('cr'); } catch (err) { log(`pre-pr: could not set the run lock phase (${String(err?.message ?? err).split('\n')[0]}); the run goes on`); } };
   if (ctl.cr && !ctl.cr.done) toCrPhase(); // the last test gate ended and the review still runs
@@ -1966,8 +1982,9 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
     ? skipped('earlier-step-failed', 'not run: an earlier step failed, so no CLI review run is spent on a head that cannot pass')
     : await runCodeRabbit({ ...crArgs(), onSpawned: (started) => { if (started) toCrPhase(); } })))); // serial mode: phase cr only when a review really starts
   const crStep = results[results.length - 1];
-  // Q1: a review that ran while a test gate failed is marked on its counter row, so it uses no slot (the first of a Chicago day) and is no finished run.
-  if (ctl.cr && crStep.runAt && results.some((r) => r.step.startsWith('gate:') && r.status === 'FAIL')) markRunGateFailed(root, branch, base, head, crStep.runAt, crTimeout + 10 * MIN);
+  // Q1: a review that ran early while any step failed (a gate, or a stale GREEN that the run could not settle, O3) is marked on its counter row,
+  // so it uses no slot (the first of a Chicago day) and is no finished run.
+  if (ctl.cr && crStep.runAt && results.some((r) => r !== crStep && r.status === 'FAIL')) markRunGateFailed(root, branch, base, head, crStep.runAt, crTimeout + 10 * MIN);
   const crFinished = finishedRuns(root, branch, base);
   const partialSkip = crStep.skipReason === 'cap' ? { earned: crStep.partialEarned ?? 0, unreviewed: crStep.unreviewedFiles ?? 0 } : { earned: 0, unreviewed: 0 };
   // Rule A: a cap skip that only a partial run earns needs the PR body line. A finished run earns it with no line.
