@@ -11,7 +11,7 @@
 //   a failed fetch lets the check go on (it must refuse)                                                                -> BC6
 //   the list of files is a hand list that misses an import of land-none-check.mjs, or names a file that is gone         -> BC7
 //   --warn blocks, or the refusal prints no reason                                                                      -> BC9
-//   a fixture run with no --remote touches the network (the existing tests of land-none-check.mjs run so)               -> BC10
+//   a fixture run with no --remote touches the network, or a live run skips the check                                  -> BC10, BC11
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -124,6 +124,9 @@ test('BC6: a failed fetch is a refusal that says so (never a pass)', () => {
     assert.match(p, /could not fetch/);
     const q = check(env, { baseRef: 'no-such-branch' });
     assert.match(String(q), /could not fetch/);
+    // the remote exists as a tracking ref but cannot be reached now: the stale tip must not be used
+    git(env.checkout, 'remote', 'set-url', 'fork', path.join(env.tmp, 'gone.git'));
+    assert.match(String(check(env)), /could not fetch/, 'an unreachable remote with a stale tracking ref refuses');
   } finally { rmSync(env.tmp, { recursive: true, force: true }); }
 });
 
@@ -214,4 +217,11 @@ test('BC10: a fixture run with no --remote does not run the base-code check (the
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /needs no record/);
   } finally { rmSync(env.tmp, { recursive: true, force: true }); }
+});
+
+test('BC11: a live run always checks the base code; a fixture run checks only with --remote', () => {
+  assert.equal(lnc.baseCheckWanted(['900', '--repo', 'o/r']), true);
+  assert.equal(lnc.baseCheckWanted(['900', '--remote', 'fork']), true);
+  assert.equal(lnc.baseCheckWanted(['900', '--fixture', 'f.json']), false);
+  assert.equal(lnc.baseCheckWanted(['900', '--fixture', 'f.json', '--remote', 'fork']), true);
 });

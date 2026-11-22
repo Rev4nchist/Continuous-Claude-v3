@@ -744,3 +744,15 @@ test('B60: a test file in another case does not force HIGH, and a near-miss name
 test('B61: TRUST_BOUNDARY.tap holds every FORCE_HIGH_FILES entry (one list, named in one place)', () => {
   for (const p of router.FORCE_HIGH_FILES) assert.ok(TRUST_BOUNDARY.tap.includes(p), `${p} is in TRUST_BOUNDARY.tap`);
 });
+
+test('B62: the why line says the band was forced and names the file; a PR that is HIGH by score says nothing of the kind', async () => {
+  const cfg = await recommendFor(['review-router.config.json']);
+  assert.equal(cfg.band.band, 'HIGH');
+  assert.match(cfg.why[0], /^Band HIGH \(score 3: .*forced HIGH by review-router\.config\.json\)/, cfg.why[0]);
+  const tier = await recommendFor([SECURITY]);
+  assert.ok(tier.why[0].includes(`forced HIGH by ${SECURITY}`), tier.why[0]);
+  assert.ok(tier.why[0].includes(`security-tier file(s) ${SECURITY}, forced HIGH by ${SECURITY}`), 'the forced part follows the security-tier part');
+  const byScore = await recommendFor(GATE);
+  assert.equal(byScore.band.band, 'HIGH');
+  assert.doesNotMatch(byScore.why[0], /forced HIGH/);
+});
