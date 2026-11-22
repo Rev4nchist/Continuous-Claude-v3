@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_REPO } from './review-router.mjs';
@@ -151,6 +151,30 @@ test('PC7 (CLI finding, seat ruling): a return to draft that lands between the r
   assert.match(r.stderr, /no paid yes was stored.*draft/);
   assert.equal(D.decisionRowRead(paid()), null, 'the row written in the gap is removed');
   assert.equal(readFileSync(t.countFile, 'utf8'), '2', 'the PR was read twice: before and after the write');
+});
+
+test('PC9 (seat ruling): when the store refuses the removal after the write, the text says the paid yes could NOT be removed and names the drop command; it never claims "removed"', async () => {
+  const { writePaidYes } = await import(pathToFileURL(ENGINE).href);
+  const t = setup(); // setup() puts a temp store at CCV3_DECISIONS_FILE
+  void t;
+  const store = process.env.CCV3_DECISIONS_FILE;
+  const lock = `${store}.lock`;
+  let views = 0;
+  // View 1: ready. View 2 (after the write): a draft, and another writer holds the store lock, so the removal cannot run.
+  const gh = () => {
+    views += 1;
+    if (views === 2) writeFileSync(lock, `${process.pid} held-by-another-writer`);
+    return { status: 0, stdout: JSON.stringify({ headRefOid: HEAD, isDraft: views === 2, number: PR }), stderr: '' };
+  };
+  const row = { label: 'CodeRabbit review (may cost up to $1.25) (Recommended)', tapAt: NOW, entry: 'cli' };
+  let why;
+  try { why = writePaidYes({ pr: PR, head: HEAD, pathway: 'coderabbit', row, gh }); } finally { rmSync(lock, { force: true }); }
+  assert.equal(views, 2, 'the PR was read before and after the write');
+  assert.match(why, /could NOT be removed \(lock\)/);
+  assert.match(why, /--drop-taps/);
+  assert.match(why, /PR #349/);
+  assert.doesNotMatch(why, /was removed again/);
+  assert.ok(D.decisionRowRead(paid()), 'the row is still there: the text must not say otherwise');
 });
 
 test('PC8 (control): a PR that stays ready keeps the paid row after the second read', () => {
