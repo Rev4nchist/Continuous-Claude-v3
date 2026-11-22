@@ -172,4 +172,49 @@ describe('goalOfNote', () => {
   test('X5 ids in the sentence are masked', () => {
     expect(goalOfNote('GOAL: Fix #0d40499c and abc1234def')).toBe('Fix #[handle] and [sha]')
   })
+
+  // The cap cuts at 199 characters. A [REDACTED:kind] marker that the cut would split is dropped whole, never returned in part.
+  // Breaks if cutWords in goal-extractor.ts goes back to a plain hard cut: 190 x then '[REDACTED' then the ellipsis.
+  test('X6 the cap drops a straddling [REDACTED:kind] marker whole, and keeps a marker the cut does not touch', () => {
+    expect(goalOfNote(`GOAL: ${'x'.repeat(190)}[REDACTED:api_key]`)).toBe(`${'x'.repeat(190)}…`)
+    const first = '[REDACTED:api_key]'
+    // First marker wholly before the cut (kept), second marker straddles it (dropped): the loop reads every match, not only the first.
+    const two = `${'a'.repeat(100)}${first}${'b'.repeat(72)}[REDACTED:token]`
+    expect(two.indexOf('[REDACTED:token]')).toBe(190)
+    expect(goalOfNote(`GOAL: ${two}`)).toBe(`${'a'.repeat(100)}${first}${'b'.repeat(72)}…`)
+    // A marker wholly after the cut is cut away with the rest, as any text after the cut is.
+    expect(goalOfNote(`GOAL: ${'y'.repeat(250)}[REDACTED:api_key]`)).toBe(`${'y'.repeat(199)}…`)
+    // A marker that ends exactly at the cut (index 199) is whole, so it stays: the test is "ends after the cut", not "at or after".
+    expect(goalOfNote(`GOAL: ${'x'.repeat(181)}[REDACTED:api_key]${'y'.repeat(50)}`)).toBe(`${'x'.repeat(181)}[REDACTED:api_key]…`)
+  })
+
+  // A marker has no space inside (redact.ts: snake_case kinds). Text that only starts like one is not a marker and must not move the cut.
+  test('X6b text that starts like a marker but holds a space is not a marker: the word cut stays', () => {
+    const words = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ')
+    const out = goalOfNote(`GOAL: Strip [REDACTED: prefix from ${words} [done]`) ?? ''
+    expect(out.startsWith('Strip [REDACTED: prefix from word0 word1')).toBe(true)
+    expect(out.length).toBeGreaterThan(150)
+    expect(out.endsWith('…')).toBe(true)
+  })
+
+  // Ordinary goals keep the word-boundary cut. Passes before and after the fix.
+  test('X7 a goal over 200 characters with no straddling marker keeps its word-boundary cut', () => {
+    const words = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ')
+    const cut = goalOfNote(`GOAL: ${words}`) ?? ''
+    const body = cut.slice(0, -1)
+    // The cut is the longest whole-word prefix of at most 199 characters: it ends at a word end, and the next word would not fit.
+    expect(cut.endsWith('…')).toBe(true)
+    expect(words.startsWith(body)).toBe(true)
+    expect(body.length).toBeLessThanOrEqual(199)
+    expect(words[body.length]).toBe(' ')
+    const next = words.indexOf(' ', body.length + 1)
+    expect(next === -1 || next > 199).toBe(true)
+    // Index 199 of this goal is inside a word, so a plain hard cut would keep 199 characters; the word cut ends at word28 (195 characters).
+    expect(goalOfNote(`GOAL: Go ${words}`)).toBe(`Go ${words.slice(0, 192)}…`)
+    const early = `Fix [REDACTED:api_key] now ${words}`
+    const out = goalOfNote(`GOAL: ${early}`)
+    expect(out?.startsWith('Fix [REDACTED:api_key] now word0')).toBe(true)
+    expect(out?.endsWith('…')).toBe(true)
+    expect(out?.length).toBeLessThanOrEqual(200)
+  })
 })
