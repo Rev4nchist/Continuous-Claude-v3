@@ -1835,14 +1835,14 @@ test('SM2: a passing summary puts its hash in the stamp; the check gets root, he
   assert.equal(seen[1].mode, 'fail');
 });
 
-test('SM3: the summary is step 0: first in the results, and it runs before the base is fetched', async () => {
+test('SM3: the summary is step 0: first in the results; it runs after the base is fetched, because the config that sets its mode is read after the fetch (coord-cap-override PR A)', async () => {
   const repo = makeRepo();
   const order = [];
   const { result } = await prePr(repo, {
     summaryCheck: () => { order.push('summary'); return SUMMARY_OK(); },
     fetch: () => { order.push('fetch'); return null; },
   });
-  assert.deepEqual(order, ['summary', 'fetch']);
+  assert.deepEqual(order, ['fetch', 'summary']);
   assert.equal(result.results[0].step, 'summary');
   assert.match(result.lines[0], /^PASS summary/);
 });

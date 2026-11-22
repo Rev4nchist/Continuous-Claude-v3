@@ -84,6 +84,7 @@ import { dirname, isAbsolute, join, posix, resolve, win32 } from 'path';
 import { GH_OPT_PREFIX } from './shared/gh-open-prefix.js';
 import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
+import { mainConfigOf, stricterConfig, viewOf } from './shared/config-stricter.js';
 import { guardLogPath, logGuardDecision, logGuardError, maskSecrets, shouldWrite } from './shared/guard-log.js';
 import { blankInertQuotes, blankInertQuotesAround } from './shared/inert-quotes.js';
 import { maskQuoted } from './shared/mask-quotes.js';
@@ -629,11 +630,17 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes, 
   };
 }
 
-/** checkpoint.enforce of <toplevel>/review-router.config.json: true only for a boolean true. null when the file is missing, unreadable or not valid JSON. */
+/**
+ * checkpoint.enforce for the checkout at `top`: the stricter of the local ref fork/main (else the local main ref; never fetched) and <toplevel>/review-router.config.json
+ * (shared/config-stricter.ts). A branch cannot turn the deny into a warning by editing its own copy. With no main side (no fork/main ref and no local main ref) it
+ * enforces. A working-tree file is never the main side. null when the checkout file is missing, unreadable or not valid JSON (the caller fails closed for a CCv3 command).
+ */
 function enforceIn(deps: Deps, top: string | null): boolean | null {
   const text = top === null ? null : deps.readFile(join(top, CONFIG_REL));
-  if (text === null) return null;
-  try { return (JSON.parse(text) as { checkpoint?: { enforce?: unknown } } | null)?.checkpoint?.enforce === true; } catch { return null; }
+  if (top === null || text === null) return null;
+  let branch: unknown;
+  try { branch = JSON.parse(text); } catch { return null; }
+  return viewOf(stricterConfig(mainConfigOf(top, deps.git), branch)).enforce;
 }
 
 /**
