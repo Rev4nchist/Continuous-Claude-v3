@@ -1586,45 +1586,16 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['PowerShell', SEAT_REFUSED_2],
     ['PowerShell', SEAT_REFUSED_3],
     ['PowerShell', SEAT_REFUSED_5],
-    // coord-guard-text-false-refusal (seat ruling 12:48 and 12:49): the DOC APPEND and lane-text exemptions are narrow. Each of these stays denied.
-    // The real queue writes:
-    ['Bash', 'node scripts/github/slot-queue.mjs add --pr 12'],
-    ['Bash', 'node scripts/github/slot-queue.mjs decide --pr 12 --verdict x'],
-    ['PowerShell', 'node scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
-    // A doc append that can run, or whose target or value the rule cannot read:
-    ['PowerShell', "Add-Content -LiteralPath run.ps1 -Value 'node scripts/github/slot-queue.mjs add --pr 12'"],
-    ['PowerShell', "Add-Content -LiteralPath run.mjs -Value 'slot-queue.mjs'"],
-    ['PowerShell', "Add-Content -LiteralPath run.cmd -Value 'slot-queue.mjs'"],
-    ['PowerShell', "$p = 'x.md'; Add-Content -LiteralPath $p -Value 'slot-queue.mjs'"],
-    ['PowerShell', 'Add-Content -LiteralPath x.md -Value (node scripts/github/slot-queue.mjs drop --pr 1)'],
-    ['PowerShell', 'Add-Content -LiteralPath x.md -Value $(node scripts/github/slot-queue.mjs drop --pr 1)'],
-    ['PowerShell', "Add-Content -LiteralPath x.md -Value 'a slot-queue.mjs'; node scripts/github/slot-queue.mjs drop --pr 1 --reason x"],
-    ['PowerShell', "node scripts/github/slot-queue.mjs drop --pr 1 --reason x; Add-Content -LiteralPath x.md -Value 'a note'"],
-    ['PowerShell', 'Add-Content -LiteralPath x.md -Value "slot-queue.mjs"'],
-    ['PowerShell', "Add-Content -LiteralPath x.md -Value @'\nslot-queue.mjs\n'@"],
-    ['PowerShell', "Add-Content -LiteralPath x.md -Value @('', 'slot-queue.mjs')"],
-    ['PowerShell', "Add-Content -LiteralPath x.md,run.ps1 -Value 'slot-queue.mjs'"],
-    ['PowerShell', "Add-Content -LiteralPath ..\\x.md -Value 'slot-queue.mjs'"],
-    ['PowerShell', "Add-Content -LiteralPath x.md -Value 'slot-queue.mjs' -Stream y"],
-    ['PowerShell', "Add-Content -LiteralPath x.md -Value 'slot-queue.mjs' > run.ps1"],
-    // Known limit: a separator inside the string cuts the segment, and the piece that names the module is not a doc append.
-    ['PowerShell', "Add-Content -LiteralPath x.md -Value 'a; slot-queue.mjs b'"],
-    // A lane text: only the shim path in full, verb say, note or add, every guarded word inside ONE quoted string:
-    ['Bash', "node lane.mjs say 'slot-queue.mjs add refused'"],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs state coord-x 'slot-queue.mjs'"],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs add 'coord-slot-queue-x' --scope 'slot-queue.mjs'"],
-    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs say coord-slot-queue --to seat'],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs' --to $(node scripts/github/slot-queue.mjs drop --pr 1)"],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs'; node scripts/github/slot-queue.mjs drop --pr 1 --reason x"],
-    // CodeRabbit CLI major at 9667fa9a (run 2): a semicolon inside a string cuts the raw segment, and the piece after it reads as a document append while Bash reads the redirect.
+    // Known limit (coord-guard-text-false-refusal, seat ruling 2026-11-23 14:49 CST, Dave's option A): a document append or a lane text that names the queue module stays refused.
+    // Two review rounds each found a hole of the same kind (a regex misreads the quote state of the whole command), so the queue guard takes no exemption (V7.6).
+    // Workaround: write the text with the Write or Edit tool, or from a scratch file. The decision-gate half (the land script) is a separate, whole-command-plain rule.
+    ['PowerShell', "Add-Content -LiteralPath .claudedocs/x.md -Value 'seat: slot-queue.mjs add was refused'"],
+    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs add refused for the seat' --to seat"],
+    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs add coord-x --title "T" --scope "OWNS: scripts/github/slot-queue.mjs"'],
+    // The two CodeRabbit CLI findings that ended the exemptions (pre-pr runs 1 and 2 of 2). Each hides a redirect onto the module when a string is misread.
+    ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs say "a\" " > scripts/github/slot-queue.mjs \"`],
     ['Bash', "echo 'x; Add-Content -LiteralPath x.md -Value ' > scripts/github/slot-queue.mjs # '"],
     ['Bash', "echo 'x; Add-Content -LiteralPath x.md -Value ' >> scripts/github/slot-queue-model.mjs # '"],
-    // CodeRabbit CLI major at f8df760d: a backslash-escaped double quote ends the string for the regex, but not for Bash, so the `>` below is an unquoted redirect onto the module.
-    ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs say "a\" " > scripts/github/slot-queue.mjs \"`],
-    ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs say "a\" " >> scripts/github/slot-queue-model.mjs \"`],
-    ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs note coord-x "OWNS: slot-queue.mjs \" x"`],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs' --to 'slot-queue-model.mjs'"],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say \"a\" --to seat > slot-queue.mjs"],
   ]
 
   test('F13 shell text that names the queue file, or a queue write verb right after the script path, is denied in every form, with no spawn', async ($, on) => {
@@ -1695,22 +1666,6 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node scripts/github/slot-queue.mjs tick --json; node scripts/github/slot-queue.mjs list --json'],
     ['Bash', 'cd C:/r && git add scripts/github/slot-queue.mjs && git status'],
     ['Bash', 'node --check scripts/github/slot-queue.mjs && node --test scripts/github/slot-queue.test.mjs'],
-    // coord-guard-text-false-refusal (seat ruling 12:48 and 12:49): a DOC APPEND (Add-Content or Set-Content, one literal .md, .txt or .log target,
-    // single-quoted strings only) writes text and runs nothing, so the module name in its value is not a queue write.
-    ['PowerShell', "Add-Content -LiteralPath .claudedocs/x.md -Value 'seat: slot-queue.mjs add was refused'"],
-    ['PowerShell', String.raw`Add-Content -LiteralPath 'C:\Users\dkhay\continuous-claude\.claudedocs\coordination\milestones\re-program.md' -Value 'card coord-slot-queue-full-form and slot-queue-model.mjs'`],
-    ['PowerShell', "Add-Content -Path notes.txt 'slot-queue.mjs'"],
-    ['PowerShell', "Set-Content -LiteralPath a.log -Value 'slot-queue.mjs decide'"],
-    ['PowerShell', "Set-Location -LiteralPath 'C:/Users/dkhay/continuous-claude' -ErrorAction Stop; Add-Content -LiteralPath x.md -Value 'slot-queue.mjs'"],
-    ['PowerShell', "$t = Get-Date -Format 'HH:mm'; Add-Content -LiteralPath .claudedocs/x.md -Value 'PRE-PR END slot-queue.mjs 359-360'"],
-    // A lane text through the shim path in full: verb say, note or add, every guarded word inside one quoted string.
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs add refused for the seat' --to seat"],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs note coord-x 'WAITS ON slot-queue.mjs'"],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs add coord-x --title 'T' --scope 'OWNS: slot-queue.mjs and slot-queue-model.mjs'"],
-    ['PowerShell', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs add refused' --to seat"],
-    // Ruling 4 reads "inside one quoted string": a double-quoted string counts, and so does a string with several guarded words (the seat's own lane add text).
-    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs say "slot-queue.mjs add refused" --to seat'],
-    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs add coord-x --title "T" --scope "OWNS: scripts/github/slot-queue.mjs and scripts/github/slot-queue-model.mjs. NEVER: the queue state file"'],
   ]
 
   test('F13 the read verbs, git add of the files and the test run are not denied, and spawn no CLI', async ($, on) => {

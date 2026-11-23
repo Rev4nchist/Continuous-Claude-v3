@@ -136,8 +136,9 @@ export function isTextOnlyCommand(command: string): boolean {
 // ---------- DOC APPEND (lane coord-guard-text-false-refusal, seat ruling 2026-11-23 12:48 and 12:49 CST) ----------
 // A segment that appends text to ONE literal document file runs nothing, so a guarded word in its text (the land script, the queue module) is a mention.
 // The rule reads what the segment does and where it writes, never the guarded word, so a name that the shell builds apart cannot beat it.
-// There is a second copy of isDocAppend in .claude/plugins/ccv3-mods/hooks/pr-checkpoint/model.ts (the free-slot queue guard; a separate package).
-// Both copies read one row table, .claude/plugins/ccv3-mods/tests/fixtures/doc-append-rows.ts.
+// Only decision-gate uses it, and only through docAppendReadable: the whole command must read plain under both quote readings. The free-slot queue guard
+// (.claude/plugins/ccv3-mods/hooks/pr-checkpoint/model.ts) takes no such exemption: it splits raw text at every separator, so a quote state that spans
+// segments is invisible to it (two CodeRabbit CLI findings, V7.6). Do not copy this rule into a guard that splits raw text.
 // The grammar is one anchored regex, no tokenizer. Only the full names Add-Content and Set-Content (no alias); -LiteralPath or -Path; one target of plain
 // path characters; an optional -Value; ONE single-quoted string (literal in PowerShell). The array form @( ), a double-quoted or here-string value, a
 // variable, a paren, a second target or parameter, a redirect and every other extension keep the old rule (Known limits).
