@@ -601,7 +601,7 @@ function tile2(add, c) {
     add('pile.line.waited', 'text', {
       text: p.done === 0 ? `No lanes done in the last ${w} days` : `${p.waited} of ${p.done} waited ${p.edgeDays} ${pluralize(p.edgeDays, 'day')} or more`,
     });
-    if (p.prior) add('pile.line.prior', 'text', { text: `Earlier ${w} days: ${p.prior.created} opened, ${p.prior.done} done, net ${sign(p.prior.net)}` });
+    if (p.prior) add('pile.line.prior', 'text', { text: `Earlier ${w} days: ${p.prior.created} opened, ${p.prior.done} done` });
     add('pile.line.caveat', 'text', {
       text: p.startFrom ? `Start count is the daily snapshot of ${formatDay(p.startFrom)}.` : 'Start count is rebuilt from lane dates. A reopened lane can move it.',
     });

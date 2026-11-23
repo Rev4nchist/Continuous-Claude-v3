@@ -1079,7 +1079,7 @@ test('pileTile: with no snapshot for that day the start is rebuilt from lane dat
 
 // Breaks if one of these rows still shows another number than the figure, which is the +41 against +45 the card is about.
 test('tiles rows: pile.net, the first line, the summary, the open line and the detail all print the one figure', () => {
-  const rows = build({ lanes: OLD_OPEN, meta: PILE_META, snapshots: SNAP_START });
+  const rows = build({ lanes: OLD_OPEN, meta: { ...PILE_META, history_start: '2026-10-20' }, snapshots: SNAP_START }); // history from 10-20: an earlier week exists
   assert.equal(byId(rows).get('pile.net').value, 4);
   assert.equal(byId(rows).get('pile.net').text, '+4');
   assert.equal(byId(rows).get('pile.open_start').value, 6);
@@ -1088,6 +1088,8 @@ test('tiles rows: pile.net, the first line, the summary, the open line and the d
   assert.equal(text(rows, 'pile.line.open'), 'From 6 to 10 open');
   assert.match(text(rows, 'pile.detail'), /^Open went from 6 to 10\./);
   assert.ok(!/net/.test(text(rows, 'pile.line.flow')), 'the flow line gives opened and done, never a second net');
+  assert.ok(byId(rows).has('pile.line.prior'), 'the earlier-week line exists in this fixture');
+  assert.ok(!/net/.test(text(rows, 'pile.line.prior')), 'the earlier-week line gives opened and done, never a second net');
   assert.equal(text(rows, 'pile.line.gap'), '4 lanes are not in the opened or done counts');
 });
 
