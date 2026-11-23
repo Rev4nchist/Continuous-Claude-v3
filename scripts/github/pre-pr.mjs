@@ -821,6 +821,60 @@ export function defaultExec(spec) {
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', timedOut, error: r.error && !timedOut ? String(r.error.message) : undefined };
 }
 
+const GATE_MAX_BUFFER = 64 * 1024 * 1024; // the cap of defaultExec (spawnSync maxBuffer), per stream
+/** The live gate children of a real run (card coord-prepr-close-in-gate). The signal handler of the run lock stops them: see installRunLockHandlers. */
+const activeGates = new Set();
+
+/**
+ * defaultExec without spawnSync (card coord-prepr-close-in-gate): the same spec, the same result { status, stdout, stderr, timedOut, error },
+ * returned as a promise. spawnSync blocks the event loop for the whole gate, so a closed terminal (SIGHUP) or any signal could not run its handler
+ * until the gate ended, and Windows ends node about 5 s after CTRL_CLOSE. Here the loop stays free and the handler runs at once.
+ * Same as spawnSync: the time limit stops the child (timedOut true, status null, no error); output over the cap (64 MB per stream, spec.maxBuffer is
+ * a test seam) stops the child and gives an ENOBUFS error with a null status and the output kept up to the cap; a start failure is an error.
+ * stdout and stderr are collected as Buffers and decoded once, so a character cut at a chunk edge stays whole. The child leads its own
+ * process group on POSIX (detached), so a stop reaches its grandchildren; on Windows killTree walks the tree.
+ */
+export function defaultExecAsync(spec) {
+  return new Promise((resolve) => {
+    const fail = (message) => resolve({ status: null, stdout: '', stderr: '', timedOut: false, error: message });
+    let s;
+    try { s = resolveSpawn(spec); } catch (err) { fail(String(err.message)); return; }
+    const env = spec.root ? childEnv(spec.root) : null;
+    const cap = spec.maxBuffer ?? GATE_MAX_BUFFER;
+    let child;
+    try {
+      child = spawn(s.cmd, s.args, { cwd: spec.cwd, windowsHide: true, shell: false, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) });
+    } catch (err) { fail(String(err.message)); return; }
+    activeGates.add(child);
+    const bufs = { out: [], err: [] };
+    const sizes = { out: 0, err: 0 };
+    let timedOut = false;
+    let overflow = false;
+    let settled = false;
+    let timer = null;
+    const done = (status, error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      activeGates.delete(child);
+      resolve({ status, stdout: Buffer.concat(bufs.out).toString('utf8'), stderr: Buffer.concat(bufs.err).toString('utf8'), timedOut, error });
+    };
+    const stop = () => { try { killTree(child.pid); } catch { /* the child may be gone */ } };
+    const collect = (key) => (chunk) => {
+      if (overflow) return;
+      const room = Math.max(cap - sizes[key], 0);
+      bufs[key].push(chunk.length <= room ? chunk : chunk.subarray(0, room));
+      sizes[key] += Math.min(chunk.length, room);
+      if (chunk.length > room) { overflow = true; stop(); }
+    };
+    child.stdout.on('data', collect('out'));
+    child.stderr.on('data', collect('err'));
+    child.once('error', (err) => done(null, String(err.message)));
+    child.once('close', (code, signal) => done(overflow || timedOut || signal ? null : code, overflow ? `${s.cmd} ENOBUFS: output over ${cap} bytes` : undefined));
+    if (Number.isFinite(spec.timeoutMs) && spec.timeoutMs > 0) timer = setTimeout(() => { timedOut = true; stop(); }, spec.timeoutMs);
+  });
+}
+
 const outputOf = (r) => `${r.stdout ?? ''}${r.stderr ? `\n${r.stderr}` : ''}`;
 
 // ---------- failing-test names on a FAIL line (card coord-prepr-failing-test-name) ----------
@@ -876,30 +930,36 @@ export function failNotes(clean, root) {
   return [...head, ...clean.split(/\r?\n/).filter(Boolean).slice(-12)];
 }
 
-/** Run one gate. PASS on exit 0 (and an empty post-check). The summary line is the runner's own. */
+/**
+ * Run one gate. PASS on exit 0 (and an empty post-check). The summary line is the runner's own.
+ * A sync exec gives the result at once. An exec that returns a promise (defaultExecAsync, card coord-prepr-close-in-gate) gives a promise of the same result.
+ */
 export function runGate(gate, { root, exec, git }) {
   const step = `gate:${gate.id}`;
   const shown = `${gate.cmd} ${gate.args.join(' ')} (in ${gate.cwd})`;
+  const finish = (r) => {
+    const out = outputOf(r);
+    const base = { output: out, command: shown };
+    const clean = out.replace(ANSI, '');
+    if (r.timedOut) return { ...result(step, 'FAIL', `timed out after ${Math.round(gate.timeoutMs / MIN)} min: ${shown}`, failNotes(clean, root)), ...base };
+    if (r.error) return { ...result(step, 'FAIL', `could not start: ${r.error}`, failNotes(clean, root)), ...base };
+    if (r.status !== 0) {
+      // `acceptExit` names the one known non-zero exit a gate may pass with (see MODS_TSC_NOT_RUN); it returns the note.
+      const accepted = gate.acceptExit?.(clean);
+      if (accepted) return { ...result(step, 'PASS', accepted), ...base };
+      // A missing package is the environment, not the change: say so first, so nobody hunts a bug in code that is fine.
+      const env = envPrefix(clean, { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
+      return { ...result(step, 'FAIL', env ?? withAlso(`exit ${r.status}: ${summaryLine(out)}`, gate, clean), failNotes(clean, root)), ...base };
+    }
+    if (gate.postCheck) {
+      const posts = gate.postCheck.argv.map((a) => git(a));
+      const files = posts.flatMap((p) => p.stdout.split(/\r?\n/).filter(Boolean));
+      if (posts.some((p) => p.status !== 0) || files.length > 0) return { ...result(step, 'FAIL', `${gate.postCheck.failText} (${files.length})`, files.slice(0, 10)), ...base };
+    }
+    return { ...result(step, 'PASS', withAlso(summaryLine(out), gate, clean)), ...base };
+  };
   const r = exec({ id: gate.id, cmd: gate.cmd, args: gate.args, cwd: path.join(root, gate.cwd), timeoutMs: gate.timeoutMs, root });
-  const out = outputOf(r);
-  const base = { output: out, command: shown };
-  const clean = out.replace(ANSI, '');
-  if (r.timedOut) return { ...result(step, 'FAIL', `timed out after ${Math.round(gate.timeoutMs / MIN)} min: ${shown}`, failNotes(clean, root)), ...base };
-  if (r.error) return { ...result(step, 'FAIL', `could not start: ${r.error}`, failNotes(clean, root)), ...base };
-  if (r.status !== 0) {
-    // `acceptExit` names the one known non-zero exit a gate may pass with (see MODS_TSC_NOT_RUN); it returns the note.
-    const accepted = gate.acceptExit?.(clean);
-    if (accepted) return { ...result(step, 'PASS', accepted), ...base };
-    // A missing package is the environment, not the change: say so first, so nobody hunts a bug in code that is fine.
-    const env = envPrefix(clean, { primary: primaryRoot(root), status: r.status, summary: summaryLine(out) });
-    return { ...result(step, 'FAIL', env ?? withAlso(`exit ${r.status}: ${summaryLine(out)}`, gate, clean), failNotes(clean, root)), ...base };
-  }
-  if (gate.postCheck) {
-    const posts = gate.postCheck.argv.map((a) => git(a));
-    const files = posts.flatMap((p) => p.stdout.split(/\r?\n/).filter(Boolean));
-    if (posts.some((p) => p.status !== 0) || files.length > 0) return { ...result(step, 'FAIL', `${gate.postCheck.failText} (${files.length})`, files.slice(0, 10)), ...base };
-  }
-  return { ...result(step, 'PASS', withAlso(summaryLine(out), gate, clean)), ...base };
+  return typeof r?.then === 'function' ? r.then(finish) : finish(r);
 }
 
 /**
@@ -1927,7 +1987,7 @@ export function resolveConfig({ root, git, readFile = readFileSync, config }) {
   return config ?? loadStricterConfig({ root, git, readFile });
 }
 
-async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined, env = process.env, onPhase = () => {}, capOverride = null, claimOverride = claimCapOverride }, ctl) {
+async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExecAsync, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined, env = process.env, onPhase = () => {}, capOverride = null, claimOverride = claimCapOverride }, ctl) {
   const serialCr = env.PRE_PR_SERIAL_CR === '1';
   const stampPath = path.join(root, STAMP_REL);
   const runId = randomUUID();
@@ -1976,7 +2036,7 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
     const cause = stopCause();
     const gateResult = envRes.blocked.has(gate.id) ? result(`gate:${gate.id}`, 'SKIP', 'not run: env failed, a package this gate needs is missing (see the env line)')
       : cause ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL (pass --keep-going to run every gate)`)
-        : measure(() => runGate(withBase(gate, base), { root, exec, git }));
+        : await measureAsync(() => runGate(withBase(gate, base), { root, exec, git }));
     results.push(gateResult);
     if (ctl.cr && !ctl.cr.done && gateResult.status === 'FAIL' && !warnedGate) { warnedGate = true; log(gateFailedWhileReviewLine(gate.id)); }
     if (ctl.cr) await tick(); // one loop turn between gates: the review's timers and events run (M1)
@@ -2180,23 +2240,53 @@ export function killActiveCr(killer = (c) => killTree(c.pid)) {
  * Free the run lock at exit and on SIGINT, SIGTERM, SIGHUP or SIGBREAK. An 'exit' handler waits for no promise, so the release is synchronous.
  * A signal ends the process without an 'exit' event unless a handler asks for one. A kill -9 or a crash leaves the file: the
  * next acquire drops it (dead pid).
- * A signal handler runs at once while the async CodeRabbit step runs. It waits only for a blocking gate child (spawnSync):
- * the event loop is busy until that child returns. The handler stops the CodeRabbit child FIRST, then exits. The 'exit'
- * handler then frees the lock, so a second pre-pr cannot start beside a live review. Before this function runs no handler
+ * A signal handler runs at once: the CodeRabbit step and the gates (defaultExecAsync) are async, so the event loop is free
+ * (a gate used to run with spawnSync and blocked the loop, so a closed terminal freed nothing: card coord-prepr-close-in-gate).
+ * The handler stops the live children by pid, writes the END row, frees the lock, then walks the process trees and exits.
+ * The 'exit' handler stops the same children again and frees the lock if the handler did not. Before this function runs no handler
  * exists, so a signal ends the process at once and a lock written by then stays. The next acquire drops it (dead pid).
  */
 export function installRunLockHandlers() {
   // An error exit, or any exit with a review alive, must stop the review first: a review left alone costs a slot and its output is lost.
   process.on('exit', (code) => {
     try { killActiveCr(); } catch { /* the child may be gone already */ }
+    try { killActiveGates(); } catch { /* the child may be gone already */ }
     endRowAtExit(code); // START with no END (exit 3, a signal): one ERROR row, so the seat's END check never reads an open run
     try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ }
   });
   // SIGHUP: a closed terminal (CTRL_CLOSE on Windows). SIGBREAK: Ctrl+Break, Windows only (128 + 21).
   const signals = [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129], ...(process.platform === 'win32' ? [['SIGBREAK', 149]] : [])];
   for (const [signal, code] of signals) {
-    process.on(signal, () => { killActiveCr(); process.exit(code); });
+    process.on(signal, () => {
+      // Order (seat ruling 11:56, card coord-prepr-close-in-gate): Windows ends node about 5 s after CTRL_CLOSE and the tree walk reads the process
+      // table for about 5 s. So: 1. the live children by pid (instant), 2. the END row and the lock (file work, milliseconds), 3. the tree walk.
+      stopLiveChildren();
+      endRowAtExit(code);
+      try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ }
+      killActiveCr();
+      killActiveGates();
+      process.exit(code);
+    });
   }
+}
+
+/** Stop the live CodeRabbit child and the live gate children by their own pid at once: a POSIX child leads a process group, so its group goes with it. Never throws. */
+function stopLiveChildren() {
+  for (const child of [activeCr, ...activeGates]) {
+    if (!child?.pid) continue;
+    try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL'); } catch { try { process.kill(child.pid, 'SIGKILL'); } catch { /* gone */ } }
+  }
+}
+
+/** Walk the tree of each live gate child and stop what is left (a grandchild), then forget them. Never throws: the caller is a signal handler. */
+export function killActiveGates(killer = (c) => killTree(c.pid)) {
+  const live = [...activeGates];
+  activeGates.clear();
+  for (const child of live) {
+    try { killer(child); } catch { /* the child may be gone already */ }
+    try { child.kill(); } catch { /* already gone */ }
+  }
+  return live.length > 0;
 }
 
 /**
