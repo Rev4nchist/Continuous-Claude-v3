@@ -434,3 +434,40 @@ test('Q5: planOf writes the offer for the exact key, branch head and flag set, a
   assert.ok(plan.spec.question.includes('--cli-cap-usd 6'));
   assert.match(String(planOf('cap-override', { ...DATA, usd: null, extraRun: false }, {}).refuse), /flag/i);
 });
+
+// ---- coord-cap-override-followups, item 3: the ship-ask question shows the cap pre-pr ENFORCES (the stricter of the checkout file and fork/main) ----
+// End to end: a temp git repo and the real ship-ask.mjs as a child process in it. A checkout cap of 6 over a fork/main cap of 3 once showed "$6.00".
+const gitIn = (cwd, ...args) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }); assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`); };
+const capConfig = (cap) => `${JSON.stringify({ coderabbit: { cli_daily_cap_usd: cap }, decisions: { enforce: true } }, null, 2)}\n`;
+function capRepo({ mainCap, checkoutCap }) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'capfu-ship-'));
+  gitIn(root, 'init', '-q', '-b', 'main');
+  gitIn(root, 'config', 'user.email', 't@example.com');
+  gitIn(root, 'config', 'user.name', 't');
+  writeFileSync(path.join(root, 'review-router.config.json'), capConfig(mainCap));
+  gitIn(root, 'add', '.');
+  gitIn(root, 'commit', '-q', '-m', 'main');
+  gitIn(root, 'update-ref', 'refs/remotes/fork/main', 'HEAD');
+  gitIn(root, 'checkout', '-q', '-b', 'feat/x');
+  writeFileSync(path.join(root, 'review-router.config.json'), capConfig(checkoutCap));
+  mkdirSync(path.join(root, 'src'), { recursive: true });
+  writeFileSync(path.join(root, 'src', 'a.mjs'), 'export const a = 1;\n');
+  gitIn(root, 'add', '.');
+  gitIn(root, 'commit', '-q', '-m', 'feat');
+  return root;
+}
+function capQuestionText(root) {
+  const r = spawnSync(process.execPath, [path.join(HERE, 'ship-ask.mjs'), 'cap-override', '--branch', 'feat/x', '--usd', '7', '--json'], { cwd: root, encoding: 'utf8', windowsHide: true, env: { ...process.env, CCV3_PAID_LEDGER: path.join(root, 'no-ledger.jsonl') } });
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  return JSON.stringify(JSON.parse(r.stdout));
+}
+
+test('I3a (item 3): a checkout cap above fork/main shows the cap pre-pr enforces ($3.00), not the checkout file ($6.00)', () => {
+  const text = capQuestionText(capRepo({ mainCap: 3, checkoutCap: 6 }));
+  assert.match(text, /\$3\.00 daily cap/, text);
+  assert.doesNotMatch(text, /\$6\.00 daily cap/, text);
+});
+
+test('I3b (item 3): when the checkout cap is the stricter one, the question shows it', () => {
+  assert.match(capQuestionText(capRepo({ mainCap: 6, checkoutCap: 3 })), /\$3\.00 daily cap/);
+});
