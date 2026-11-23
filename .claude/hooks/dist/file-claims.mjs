@@ -7206,20 +7206,21 @@ async function mainDirect(input, paths) {
 var isStoredAbsolute = (filePath) => isAbsolute2(filePath) || /^[a-z]:[\\/]/i.test(filePath);
 var printable2 = (s) => s.replace(/[\u0000-\u001F\u007F\u0085\u2028\u2029]/g, "?");
 var shown = (filePath) => printable2(isStoredAbsolute(filePath) ? basename3(filePath) : filePath);
-async function shellDeny(input, filePath, holder, cue) {
-  const lines = holder === "another session" ? "" : await holderLines(holder, filePath, isStoredAbsolute(filePath));
+async function shellDeny(input, filePath, holder, cue, project) {
+  const lines = holder === "another session" ? "" : await holderLines(holder, filePath, isStoredAbsolute(filePath), project);
   const reason = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
 This command may write "${shown(filePath)}", which is held by session ${holder}. It holds the write cue "${cue}".
 The claim is live: their lease runs, or that session is still alive.
-This check reads the command text and does not run it, so it can be wrong. If you only read the file, split the command.${lines}
+This check reads the command text and does not run it, so it can be wrong. If you only read the file, split the command.
+If "${shown(filePath)}" is only text in your note, the check kept the whole command because of a sign it cannot read: a $( ), a ( ), a { }, a #, a line before the write that is no plain note command (such as $t = ...), or an unquoted path. Write the note text to a scratch file with the Write tool, then pass that file to the command (Get-Content or cat). A real write to the held file stays blocked.${lines}
 
 Coordinate with that session, or work on something else.
 To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
   logGuardDecision("file-claims", input, "deny", `file-conflict-shell: cue=${cue} held by ${holder}`);
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
 }
-async function holderLines(holder, filePath, listForm) {
+async function holderLines(holder, filePath, listForm, project) {
   const handle = `#${String(holder).slice(0, 8)}`;
   let noOpenLane = false;
   try {
@@ -7230,10 +7231,12 @@ async function holderLines(holder, filePath, listForm) {
   const quotable = /^[A-Za-z0-9._\/ -]+$/.test(filePath);
   const target = listForm || !quotable ? "--list" : `'${filePath}'`;
   const release = `Holder: ${handle}. Only the holder frees a claim: it runs
-  node ~/.claude/hooks/dist/release-claim.mjs ${target}`;
+  node "$HOME/.claude/hooks/dist/release-claim.mjs" ${target}`;
+  const repo = target !== "--list" && project ? `
+Repo: ${printable2(project)} (the path above is relative to it)` : "";
   const lane = noOpenLane ? "\nThe holder holds no open lane." : "";
   return `
-${release}${lane}`;
+${release}${repo}${lane}`;
 }
 var FOLDS_CASE2 = process.platform === "win32" || process.platform === "darwin";
 function canonicalRealPath(rawPath, cwd) {
@@ -7301,7 +7304,7 @@ async function mainShell(input, cmd) {
   }));
   const verdict = classifyShellText(cmd.text, held, FOLDS_CASE2, cmd.tool === "PowerShell");
   if (verdict.kind === "deny" && !BREAK_GLASS) {
-    console.log(JSON.stringify(await shellDeny(input, verdict.filePath, verdict.holder ?? "another session", verdict.cue)));
+    console.log(JSON.stringify(await shellDeny(input, verdict.filePath, verdict.holder ?? "another session", verdict.cue, verdict.project)));
     return;
   }
   if (verdict.kind === "deny") {
@@ -7355,7 +7358,7 @@ touch the file.`;
       }
       const blockMessage = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
-"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, keyIsAbsolute) : ""}
+"${fileName}" is held by session ${decision.holder}${decision.holder ? await holderLines(decision.holder, fileName, keyIsAbsolute, project) : ""}
 
 ${leaseLine}
 Reclaiming needs BOTH an expired lease AND a holder that has stopped
