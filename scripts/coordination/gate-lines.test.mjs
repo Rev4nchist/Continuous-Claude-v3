@@ -78,15 +78,16 @@ test('G1 a valid line parses into kind, receiver, head, instants and ask', async
 
 test('G2 every bad field is listed with its line number and counted nowhere', async () => {
   const bad = [
-    ['unknown kind', `GATE ${at('18:00')} kind=PING to=A head=aaaaaaa ask=-`],
-    ['time with no offset', `GATE ${D}T18:00 kind=GO to=A head=aaaaaaa ask=-`],
-    ['ask after time', `GATE ${at('18:00')} kind=GO to=A head=aaaaaaa ask=${at('18:30')}`],
-    ['head too short', `GATE ${at('18:00')} kind=GO to=A head=abc ask=-`],
-    ['head not hex', `GATE ${at('18:00')} kind=GO to=A head=zzzzzzz ask=-`],
-    ['extra token', `GATE ${at('18:00')} kind=GO to=A head=aaaaaaa ask=- why=x`],
-    ['fields in another order', `GATE ${at('18:00')} to=A kind=GO head=aaaaaaa ask=-`],
-    ['missing ask', `GATE ${at('18:00')} kind=GO to=A head=aaaaaaa`],
-    ['empty receiver', `GATE ${at('18:00')} kind=GO to= head=aaaaaaa ask=-`],
+    ['unknown kind', `GATE ${at('18:00')} kind=PING to=A head=aaaaaaa ask=-`, /kind/],
+    ['time with no offset', `GATE ${D}T18:00 kind=GO to=A head=aaaaaaa ask=-`, /time/],
+    ['ask after time', `GATE ${at('18:00')} kind=GO to=A head=aaaaaaa ask=${at('18:30')}`, /ask is after/],
+    ['head too short', `GATE ${at('18:00')} kind=GO to=A head=abc ask=-`, /head/],
+    ['head not hex', `GATE ${at('18:00')} kind=GO to=A head=zzzzzzz ask=-`, /head/],
+    ['extra token', `GATE ${at('18:00')} kind=GO to=A head=aaaaaaa ask=- why=x`, /fields/],
+    ['fields in another order', `GATE ${at('18:00')} to=A kind=GO head=aaaaaaa ask=-`, /field 2/],
+    ['missing ask', `GATE ${at('18:00')} kind=GO to=A head=aaaaaaa`, /fields/],
+    ['empty receiver', `GATE ${at('18:00')} kind=GO to= head=aaaaaaa ask=-`, /receiver/],
+    ['an all-digit receiver (a PR number)', `GATE ${at('18:00')} kind=GO to=684 head=aaaaaaa ask=-`, /receiver/],
   ];
   const text = [L1, ...bad.map((b) => b[1]), L2].join('\n') + '\n';
   const c = await counted(text);
@@ -94,8 +95,79 @@ test('G2 every bad field is listed with its line number and counted nowhere', as
   assert.equal(c.bad.length, bad.length);
   bad.forEach((b, i) => {
     assert.equal(c.bad[i].n, i + 2, `${b[0]}: line number`);
-    assert.ok(c.bad[i].reason && c.bad[i].reason.length > 3, `${b[0]}: has a reason`);
+    assert.match(c.bad[i].reason, b[2], `${b[0]}: the reason names the field`);
   });
+});
+
+test('G12 a double space, a tab, a no-break space or a BOM is a bad line, never a silent drop', async () => {
+  const text = [
+    '﻿' + L1, // a BOM before line 1: the line still counts
+    L2.replace('GATE ', 'GATE  '),
+    L3.replace('GATE ', 'GATE\t'),
+    L4.replace('GATE ', 'GATE '),
+    L5.replace(' kind=', '  kind='),
+  ].join('\n') + '\n';
+  const c = await counted(text);
+  assert.equal(c.inWindow, 1, 'the BOM line counts, the four others do not');
+  assert.equal(c.bad.length, 4, 'each of the four is listed');
+  assert.deepEqual(c.bad.map((b) => b.n), [2, 3, 4, 5]);
+});
+
+test('G13 a GATE line inside a code fence is an example, not a word', async () => {
+  const text = ['The form:', '```', L1, L2, '```', L3, '~~~', L4, '~~~', L5].join('\n') + '\n';
+  const c = await counted(text);
+  assert.equal(c.inWindow, 2, 'L3 and L5 only');
+  assert.equal(c.read, 2);
+});
+
+test('G14 a bad-line reason never echoes the log text (a PR number in a field)', async () => {
+  const c = await counted(`GATE ${at('18:00')} kind=PR-684 to=A head=aaaaaaa ask=-\nGATE ${at('18:00')} kind=GO to=PR4242x head=zz684zz ask=-\n`);
+  assert.equal(c.bad.length, 2);
+  assert.doesNotMatch(JSON.stringify(c.bad), /684|4242/);
+  const dir = scratch();
+  const file = join(dir, 'log.md');
+  writeFileSync(file, `GATE ${at('18:00')} kind=PR-684 to=A head=aaaaaaa ask=-\n${L1}\n`);
+  const r = run(['count', '--file', file, '--from', FROM, '--to', TO]);
+  assert.doesNotMatch(r.stdout + r.stderr, /684/);
+});
+
+test('G15 exit codes: 1 for --strict with a bad line, 2 for usage errors, 3 lists why when the lines are bad', () => {
+  const dir = scratch();
+  const file = join(dir, 'log.md');
+  writeFileSync(file, `${L1}\nGATE ${at('18:01')} kind=PING to=A head=- ask=-\n`);
+  const base = ['count', '--file', file, '--from', FROM, '--to', TO];
+  assert.equal(run(base).status, 0, 'a bad line alone does not fail without --strict');
+  const strict = run([...base, '--strict']);
+  assert.equal(strict.status, 1, strict.stdout + strict.stderr);
+  assert.match(strict.stdout, /bad line 2/);
+  for (const [name, args] of [
+    ['an unknown flag with a value', [...base, '--frm', '18:00']],
+    ['an unknown switch', [...base, '--verbose']],
+    ['a flag with no value', ['count', '--file']],
+    ['--since with --from', ['count', '--file', file, '--since', '3h', '--from', FROM, '--to', TO]],
+    ['a missing log', ['count', '--file', join(dir, 'none.md'), '--from', FROM, '--to', TO]],
+    ['an extra word', [...base, 'now']],
+    ['no command', []],
+    ['an empty window', ['count', '--file', file, '--from', TO, '--to', FROM]],
+    ['an unknown flag for line', ['line', '--kind', 'GO', '--to', 'x', '--why', 'y']],
+  ]) {
+    const r = run(args);
+    assert.equal(r.status, 2, `${name}: ${r.stdout}${r.stderr}`);
+  }
+  // Every line in the window is bad: exit 3, and it says how many are bad and why.
+  writeFileSync(file, `GATE ${at('18:01')} kind=PING to=A head=- ask=-\n`);
+  const none = run(base);
+  assert.equal(none.status, 3);
+  assert.match(none.stderr, /1 read, 1 bad/);
+  assert.match(none.stderr, /bad line 1: unknown kind/);
+});
+
+test('G16 one instant written with Z and with an offset is one word', async () => {
+  const z = 'GATE 2026-11-23T00:00Z kind=GO to=A head=aaaaaaa ask=-';
+  const off = `GATE ${at('18:00')} kind=GO to=A head=aaaaaaa ask=-`;
+  const c = await counted([z, off].join('\n') + '\n');
+  assert.equal(c.inWindow, 1);
+  assert.equal(c.duplicates, 1);
 });
 
 test('G3 prose that says GATE, a bullet, and a "GATE prep:" line are no words and no bad lines', async () => {
@@ -144,6 +216,19 @@ test('G6 waits: sum, union and union per 112 minutes; an ask before the window i
   // The window starts at 18:00: L1 [17:50,18:00] shrinks to 0 minutes, the others keep their length.
   assert.equal(cut.waits.sumMin, 45);
   assert.equal(cut.waits.unionMin, 35, 'union 18:00 to 18:35');
+  // The window starts at 18:05 inside L2's wait (18:00 to 18:10): only 18:05 to 18:10 counts. L1 ends before the window: no wait.
+  const midCut = (await lib()).countText(LOG, { fromMs: Date.parse(at('18:05')), toMs: Date.parse(TO) });
+  assert.equal(midCut.inWindow, 5, 'L2 to L6');
+  assert.equal(midCut.waits.count, 3, 'L2, L5, L6');
+  assert.equal(midCut.waits.sumMin, 40, 'L2 5 + L5 5 + L6 30');
+  assert.equal(midCut.waits.unionMin, 30, 'union 18:05 to 18:35');
+  // The window ends at 18:20: a word after it still counts the minutes of its wait inside the window (L6 18:05 to 18:20),
+  // and a wait that starts at or after the end (L5, ask 18:25) counts none.
+  const endCut = (await lib()).countText(LOG, { fromMs: Date.parse(FROM), toMs: Date.parse(at('18:20')) });
+  assert.equal(endCut.inWindow, 4, 'L1 to L4 are the words of the window');
+  assert.equal(endCut.waits.count, 3);
+  assert.equal(endCut.waits.sumMin, 35);
+  assert.equal(endCut.waits.unionMin, 30, 'union 17:50 to 18:20');
 });
 
 test('G7 a line with ask=- adds no wait', async () => {
@@ -169,7 +254,7 @@ test('G8 zero GATE lines is exit 3, never "0 words"; --allow-empty turns it off'
   writeFileSync(file, L1 + '\n');
   const out = run(['count', '--file', file, '--from', at('19:00'), '--to', at('20:00')]);
   assert.equal(out.status, 3);
-  assert.match(out.stdout + out.stderr, /0 GATE lines in the window \(1 read\)/);
+  assert.match(out.stdout + out.stderr, /0 GATE lines in the window \(1 read, 0 bad\)/);
 });
 
 test('G9 an exact duplicate line counts once', async () => {
@@ -229,12 +314,41 @@ test('H2 without --at the time is the clock, with the local offset', async () =>
 
 test('H3 an ask later than the time is refused, nothing is printed', () => {
   const r = run(['line', '--kind', 'GO', '--to', 'x', '--at', at('18:00'), '--ask', at('18:30')]);
-  assert.notEqual(r.status, 0);
+  assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.equal(r.stdout.trim(), '');
   assert.match(r.stderr, /ask/i);
   const bad = run(['line', '--kind', 'PING', '--to', 'x']);
-  assert.notEqual(bad.status, 0);
+  assert.equal(bad.status, 2);
   assert.equal(bad.stdout.trim(), '');
+  const pr = run(['line', '--kind', 'GO', '--to', '684']);
+  assert.equal(pr.status, 2, 'an all-digit receiver (a PR number) is refused');
+  assert.equal(pr.stdout.trim(), '');
+});
+
+test('H6 a clock time on a DST day takes the offset of its own instant', async () => {
+  const m = await lib();
+  const change = Date.parse('2026-11-01T07:00Z'); // US fall back: 02:00 CDT is 07:00Z
+  const offsetAt = (ms) => (ms < change ? -300 : -360);
+  const now = Date.parse('2026-11-01T14:00Z'); // 08:00 CST
+  const r = m.resolveTime('00:30', now, -360, offsetAt);
+  assert.equal(r.ms, Date.parse('2026-11-01T05:30Z'), '00:30 that day was CDT');
+  assert.equal(r.text, '2026-11-01T00:30-05:00');
+  assert.equal(m.resolveClock('07:30', now, -360, offsetAt), Date.parse('2026-11-01T13:30Z'), 'after the change: the offset of now');
+  const spring = Date.parse('2026-03-08T08:00Z'); // US spring forward: 02:00 CST is 08:00Z
+  const offSpring = (ms) => (ms < spring ? -360 : -300);
+  const s = m.resolveTime('01:30', Date.parse('2026-03-08T20:00Z'), -300, offSpring);
+  assert.equal(s.ms, Date.parse('2026-03-08T07:30Z'), '01:30 that day was CST');
+  assert.equal(s.text, '2026-03-08T01:30-06:00');
+});
+
+test('H7 an offset with minutes (+05:30, -03:30) is written and read right', async () => {
+  const m = await lib();
+  const noon = Date.parse('2026-11-22T12:00Z');
+  assert.equal(m.formatTime(noon, 330), '2026-11-22T17:30+05:30');
+  assert.equal(m.formatTime(noon, -210), '2026-11-22T08:30-03:30');
+  assert.equal(m.resolveClock('17:00', noon, 330), Date.parse('2026-11-22T11:30Z'));
+  assert.equal(m.resolveClock('08:00', noon, -210), Date.parse('2026-11-22T11:30Z'));
+  assert.equal(m.parseGateLine('GATE 2026-11-22T17:30+05:30 kind=GO to=A head=- ask=-').line.timeMs, noon);
 });
 
 test('H5 a receiver with spaces prints with underscores', async () => {

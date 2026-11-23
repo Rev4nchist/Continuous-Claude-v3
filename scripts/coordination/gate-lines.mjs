@@ -23,22 +23,28 @@
  *   node scripts/coordination/gate-lines.mjs line --kind K --to R [--head H] [--ask T] [--at T]
  *
  * `count` reads the log and never writes it. The default log is the seat log in the primary checkout. The default window is
- * the last 24 hours. Exit: 0 counted; 1 a bad line with --strict; 2 usage or an unreadable file; 3 no GATE line in the window
- * (a zero is an error, never "0 words": read the count before the verdict).
+ * the last 24 hours. A wait counts for the minutes it has inside the window (cut at both ends). Bad lines are listed for the
+ * WHOLE file (a bad line has no time to place it in a window), and --strict looks at the whole file too. A GATE line inside a
+ * ``` code fence is an example and is skipped. An unknown flag is a usage error.
+ * Exit: 0 counted; 1 a bad line with --strict; 2 usage or an unreadable file; 3 no GATE line in the window (a zero is an
+ * error, never "0 words": read the count before the verdict; exit 3 lists the bad lines, if any).
  * `line` PRINTS one line and writes no file. --at and --ask take a full time or HH:mm; HH:mm is the latest such clock time
  * that is not after now, in the local offset. Without --at the time is the clock now.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const KINDS = ['GO', 'RULING', 'LAND-WORD', 'LAND-HOLD', 'LAND-DONE', 'RECHECK', 'NEXT-CARD'];
 const TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$/;
 const CLOCK_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 const HEAD_RE = /^[0-9a-f]{7,40}$/i;
-const TO_RE = /^[A-Za-z0-9_.#-]+$/;
-const ATTEMPT_RE = /^GATE \d{4}-/;
+// A receiver is a name: an all-digit receiver (a PR number) is refused.
+const TO_RE = /^(?!\d+$)[A-Za-z0-9_.#-]+$/;
+// A line that starts "GATE", any white space, a four-digit year is a line to check. A double space, a tab or a no-break space
+// then makes a BAD line (listed), never a silent drop.
+const ATTEMPT_RE = /^GATE\s+\d{4}-/u;
 const MIN = 60_000;
 const DAY = 86_400_000;
 const round1 = (n) => Math.round(n * 10) / 10;
@@ -50,11 +56,12 @@ export function parseGateLine(text) {
   if (tokens.length !== 6) return { ok: false, reason: `expected 6 fields, found ${tokens.length}` };
   const [, time, kindF, toF, headF, askF] = tokens;
   const timeMs = TIME_RE.test(time) ? Date.parse(time) : NaN;
-  if (Number.isNaN(timeMs)) return { ok: false, reason: `bad time "${time.slice(0, 30)}": use ISO 8601 with an offset` };
+  // A reason never echoes text of the log (a PR number could stand in a field): it names the field only.
+  if (Number.isNaN(timeMs)) return { ok: false, reason: 'bad time: use ISO 8601 with an offset' };
   const field = (f, key) => (f.startsWith(`${key}=`) ? f.slice(key.length + 1) : null);
   const kind = field(kindF, 'kind');
   if (kind === null) return { ok: false, reason: 'field 2 must be kind=' };
-  if (!KINDS.includes(kind)) return { ok: false, reason: `unknown kind "${kind.slice(0, 20)}"` };
+  if (!KINDS.includes(kind)) return { ok: false, reason: `unknown kind: use ${KINDS.join(', ')}` };
   const to = field(toF, 'to');
   if (to === null) return { ok: false, reason: 'field 3 must be to=' };
   if (!TO_RE.test(to)) return { ok: false, reason: 'bad receiver: letters, digits and _ . # - only' };
@@ -66,7 +73,7 @@ export function parseGateLine(text) {
   let askMs = null;
   if (ask !== '-') {
     askMs = TIME_RE.test(ask) ? Date.parse(ask) : NaN;
-    if (Number.isNaN(askMs)) return { ok: false, reason: `bad ask "${ask.slice(0, 30)}": use ISO 8601 with an offset or -` };
+    if (Number.isNaN(askMs)) return { ok: false, reason: 'bad ask: use ISO 8601 with an offset, or -' };
     if (askMs > timeMs) return { ok: false, reason: 'ask is after the time' };
   }
   return { ok: true, line: { timeMs, kind, to, head: head === '-' ? '-' : head.toLowerCase(), askMs } };
@@ -79,14 +86,20 @@ export function readGateLines(text) {
   const seen = new Set();
   let duplicates = 0;
   let read = 0;
-  String(text).split(/\r?\n/).forEach((raw, i) => {
-    if (!ATTEMPT_RE.test(raw)) return;
+  let fenced = false;
+  String(text).replace(/^﻿/, '').split(/\r?\n/).forEach((raw, i) => {
+    // A line inside a ``` code fence is an example, not a word (a pasted copy of the form must not count).
+    if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; return; }
+    if (fenced || !ATTEMPT_RE.test(raw)) return;
     read++;
     const key = raw.replace(/\s+$/, '');
-    if (seen.has(key)) { duplicates++; return; }
-    seen.add(key);
     const r = parseGateLine(key);
-    if (r.ok) lines.push(r.line); else bad.push({ n: i + 1, reason: r.reason });
+    if (!r.ok) { bad.push({ n: i + 1, reason: r.reason }); return; }
+    // The duplicate key is the parsed line, so one instant written with Z and with -06:00 is one word.
+    const dup = `${r.line.timeMs}|${r.line.kind}|${r.line.to}|${r.line.head}|${r.line.askMs}`;
+    if (seen.has(dup)) { duplicates++; return; }
+    seen.add(dup);
+    lines.push(r.line);
   });
   return { lines, bad, duplicates, read };
 }
@@ -117,9 +130,10 @@ export function countText(text, { fromMs, toMs }) {
   const byKind = {};
   for (const l of inWin) byKind[l.kind] = (byKind[l.kind] ?? 0) + 1;
   const withoutNextCard = inWin.filter((l) => l.kind !== 'NEXT-CARD').length;
-  const asked = inWin.filter((l) => l.askMs !== null);
-  // An ask before the window starts is cut at the window start: only the minutes inside the window count.
-  const spans = asked.map((l) => [Math.max(l.askMs, fromMs), l.timeMs]);
+  // A wait counts for the minutes it has inside the window: it is cut at BOTH ends. A word after the window end still
+  // counts the minutes of its wait that fall inside the window.
+  const asked = lines.filter((l) => l.askMs !== null && l.askMs < toMs && l.timeMs > fromMs);
+  const spans = asked.map((l) => [Math.max(l.askMs, fromMs), Math.min(l.timeMs, toMs)]);
   const sumMin = spans.reduce((a, [s, e]) => a + Math.max(0, e - s) / MIN, 0);
   const unionMin = unionMinutes(spans);
   return {
@@ -142,7 +156,7 @@ export function countText(text, { fromMs, toMs }) {
 }
 
 /** { ms, text } of a full time (kept as written) or an HH:mm clock time (the latest one not after now, in the offset). */
-export function resolveTime(input, nowMs, offsetMin) {
+export function resolveTime(input, nowMs, offsetMin, offsetAt = () => offsetMin) {
   const s = String(input).trim();
   if (TIME_RE.test(s)) {
     const ms = Date.parse(s);
@@ -150,17 +164,25 @@ export function resolveTime(input, nowMs, offsetMin) {
   } else {
     const m = CLOCK_RE.exec(s);
     if (m) {
-      const localNow = nowMs + offsetMin * MIN;
-      const dayStart = Math.floor(localNow / DAY) * DAY;
-      let ms = dayStart + (Number(m[1]) * 60 + Number(m[2])) * MIN - offsetMin * MIN;
-      if (ms > nowMs) ms -= DAY;
-      return { ms, text: formatTime(ms, offsetMin) };
+      const clockMin = (Number(m[1]) * 60 + Number(m[2])) * MIN;
+      // The clock time is read in the offset of ITS OWN instant, not today's: on a day the offset changes (a DST day), a time
+      // before the change has the other offset. offsetAt(ms) is the offset in minutes at that instant (default: the one given).
+      const at = (off) => Math.floor((nowMs + off * MIN) / DAY) * DAY + clockMin - off * MIN;
+      let ms = at(offsetMin);
+      const offAtGuess = offsetAt(ms);
+      if (offAtGuess !== offsetMin) ms = at(offAtGuess);
+      if (ms > nowMs) {
+        ms -= DAY;
+        const offBefore = offsetAt(ms);
+        if (offBefore !== offAtGuess) ms = at(offBefore) - DAY;
+      }
+      return { ms, text: formatTime(ms, offsetAt(ms)) };
     }
   }
-  throw new Error(`bad time "${s.slice(0, 30)}": use HH:mm or an ISO time with an offset`);
+  throw new Error('bad time: use HH:mm or an ISO time with an offset');
 }
 
-export const resolveClock = (input, nowMs, offsetMin) => resolveTime(input, nowMs, offsetMin).ms;
+export const resolveClock = (input, nowMs, offsetMin, offsetAt) => resolveTime(input, nowMs, offsetMin, offsetAt).ms;
 
 /** A time as ISO 8601 minutes with the offset, e.g. 2026-11-22T18:22-06:00. */
 export function formatTime(ms, offsetMin) {
@@ -171,7 +193,7 @@ export function formatTime(ms, offsetMin) {
 }
 
 /** One GATE line. Throws on a bad field. Prints no file and reads none. */
-export function formatLine(spec, { nowMs, offsetMin }) {
+export function formatLine(spec, { nowMs, offsetMin, offsetAt = () => offsetMin }) {
   const kind = String(spec.kind ?? '');
   if (!KINDS.includes(kind)) throw new Error(`unknown kind "${kind.slice(0, 20)}": ${KINDS.join(', ')}`);
   const to = String(spec.to ?? '').trim().replace(/\s+/g, '_');
@@ -179,24 +201,30 @@ export function formatLine(spec, { nowMs, offsetMin }) {
   const head = spec.head === undefined || spec.head === '' ? '-' : String(spec.head).toLowerCase();
   if (head !== '-' && !HEAD_RE.test(head)) throw new Error('bad head: 7 to 40 hex characters');
   const minuteNow = Math.floor(nowMs / MIN) * MIN;
-  const at = spec.at ? resolveTime(spec.at, nowMs, offsetMin) : { ms: minuteNow, text: formatTime(minuteNow, offsetMin) };
+  const at = spec.at ? resolveTime(spec.at, nowMs, offsetMin, offsetAt) : { ms: minuteNow, text: formatTime(minuteNow, offsetAt(minuteNow)) };
   let ask = '-';
   if (spec.ask && spec.ask !== '-') {
-    const a = resolveTime(spec.ask, nowMs, offsetMin);
+    const a = resolveTime(spec.ask, nowMs, offsetMin, offsetAt);
     if (a.ms > at.ms) throw new Error('the ask is after the time');
     ask = a.text;
   }
   return `GATE ${at.text} kind=${kind} to=${to} head=${head} ask=${ask}`;
 }
 
+// The flags of each command. A flag that is not on the list is a usage error (a typo must not run the default window).
+const SWITCHES = { count: new Set(['json', 'strict', 'allow-empty']), line: new Set() };
+const VALUE_FLAGS = { count: new Set(['file', 'since', 'from', 'to']), line: new Set(['kind', 'to', 'head', 'at', 'ask']) };
+
 function parseArgs(argv) {
-  const out = { _: [] };
-  const flags = new Set(['json', 'strict', 'allow-empty']);
-  for (let i = 0; i < argv.length; i++) {
+  const cmd = argv[0];
+  if (!SWITCHES[cmd]) throw new Error('usage: gate-lines.mjs count|line (see the header of this file)');
+  const out = { _: [cmd] };
+  for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
-    if (!a.startsWith('--')) { out._.push(a); continue; }
+    if (!a.startsWith('--')) throw new Error(`unexpected argument "${a.slice(0, 20)}"`);
     const k = a.slice(2);
-    if (flags.has(k)) { out[k] = true; continue; }
+    if (SWITCHES[cmd].has(k)) { out[k] = true; continue; }
+    if (!VALUE_FLAGS[cmd].has(k)) throw new Error(`unknown flag --${k.slice(0, 20)} for ${cmd}`);
     const v = argv[i + 1];
     if (v === undefined || v.startsWith('--')) throw new Error(`--${k} needs a value`);
     out[k] = v;
@@ -219,12 +247,12 @@ function sinceMs(text) {
   return Number(m[1]) * { m: MIN, h: 60 * MIN, d: DAY }[m[2]];
 }
 
-function windowOf(args, nowMs, offsetMin) {
+function windowOf(args, nowMs, offsetMin, offsetAt) {
   if (args.since && (args.from || args.to)) throw new Error('give --since, or --from and --to, not both');
   if (args.from || args.to) {
-    const toMs = args.to ? resolveTime(args.to, nowMs, offsetMin).ms : nowMs;
+    const toMs = args.to ? resolveTime(args.to, nowMs, offsetMin, offsetAt).ms : nowMs;
     if (!args.from) throw new Error('--to needs --from');
-    return { fromMs: resolveTime(args.from, nowMs, offsetMin).ms, toMs };
+    return { fromMs: resolveTime(args.from, nowMs, offsetMin, offsetAt).ms, toMs };
   }
   return { fromMs: nowMs - sinceMs(args.since ?? '24h'), toMs: nowMs };
 }
@@ -249,33 +277,44 @@ function main(argv) {
   try { args = parseArgs(argv); } catch (e) { return err(e.message); }
   const cmd = args._[0];
   const nowMs = Date.now();
-  const offsetMin = -new Date(nowMs).getTimezoneOffset();
+  // The offset at an instant (a DST day has two): the zone of this machine.
+  const offsetAt = (ms) => -new Date(ms).getTimezoneOffset();
+  const offsetMin = offsetAt(nowMs);
   if (cmd === 'line') {
     try {
-      console.log(formatLine({ kind: args.kind, to: args.to, head: args.head, at: args.at, ask: args.ask }, { nowMs, offsetMin }));
+      console.log(formatLine({ kind: args.kind, to: args.to, head: args.head, at: args.at, ask: args.ask }, { nowMs, offsetMin, offsetAt }));
       return 0;
     } catch (e) { return err(e.message); }
   }
-  if (cmd !== 'count') return err('usage: gate-lines.mjs count|line (see the header of this file)');
   let win;
   let text;
   const file = args.file ?? defaultLog();
   try {
-    win = windowOf(args, nowMs, offsetMin);
-    if (!(win.toMs > win.fromMs)) throw new Error('the window is empty: --to must be after --from');
+    win = windowOf(args, nowMs, offsetMin, offsetAt);
+    if (!(win.toMs > win.fromMs)) {
+      throw new Error('the window is empty: --to must be after --from (an HH:mm time is the latest such time that is not after now, so a --to later today reads as yesterday)');
+    }
     text = readFileSync(file, 'utf8');
   } catch (e) { return err(e.code === 'ENOENT' ? `cannot read the log ${basename(file)}` : e.message); }
   const c = countText(text, win);
-  // A zero prints no counts: "0 words" must never be read as a result. Only the error line, and exit 3.
+  // A zero prints no counts: "0 words" must never be read as a result. Only the error line, and exit 3. The bad lines say why.
   if (c.inWindow === 0 && !args['allow-empty']) {
-    console.error(c.read === 0 ? '0 GATE lines read: no count' : `0 GATE lines in the window (${c.read} read): no count`);
+    console.error(c.read === 0 ? '0 GATE lines read: no count' : `0 GATE lines in the window (${c.read} read, ${c.bad.length} bad): no count`);
+    for (const b of c.bad) console.error(`bad line ${b.n}: ${b.reason}`);
     return 3;
   }
   console.log(args.json ? JSON.stringify({ log: basename(file), ...c }) : render(c, win, basename(file), offsetMin));
   return args.strict && c.bad.length > 0 ? 1 : 0;
 }
 
-// Run only as the entry file: an import (the test) must not start it.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = main(process.argv.slice(2));
+// Run only as the entry file: an import (the test) must not start it. The real paths are compared, so a start through a
+// junction or a symlink still runs.
+function isEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
 }
+if (isEntry()) process.exitCode = main(process.argv.slice(2));
