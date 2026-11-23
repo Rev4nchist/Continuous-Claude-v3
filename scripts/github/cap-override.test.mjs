@@ -268,7 +268,19 @@ test('R3: a refused tap starts no CLI, writes no counter row and says why', asyn
   assert.equal(r.status, 'FAIL');
   assert.match(r.detail, /tap|decision/i);
   assert.equal(f.calls.length, 0);
-  assert.equal(readFileSync(f.counter, 'utf8'), before);
+  // The claim is the last step now (item 1): the row of this run is written and given back, so the file may be re-formatted; its rows are the same.
+  assert.deepEqual(JSON.parse(readFileSync(f.counter, 'utf8')), JSON.parse(before));
+});
+
+test('R9 (item 1, pre-pr half): a head that moves during the preflight stops the run before the tap is claimed', async () => {
+  const f = fixture({ runs: 2 });
+  let claimed = 0;
+  const headGit = () => ({ status: 0, stdout: `${'d'.repeat(40)}\n` });
+  const r = await runCodeRabbit(opts(f, { capOverride: { usd: null, extraRun: true }, headGit, claimOverride: () => { claimed += 1; return { ok: true, tapAt: 'x' }; } }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /HEAD moved/);
+  assert.equal(claimed, 0, 'the tap stays unused');
+  assert.equal(f.calls.length, 0);
 });
 
 test('R4: the extra-run flag alone does not lift the USD cap', async () => {
