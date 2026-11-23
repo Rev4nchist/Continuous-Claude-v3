@@ -234,7 +234,7 @@ import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared
 import { countIdsIn, loadHoldoutIds } from './shared/holdout-ids.js';
 import { CALL_START, GLOBAL_OPT, PATH_PREFIX, VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
-import { blankInertQuotes, isTextOnlyCommand } from './shared/inert-quotes.js';
+import { blankInertQuotes, docAppendReadable, isDocAppend, isTextOnlyCommand } from './shared/inert-quotes.js';
 import { maskQuoted, quotedSpans } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
@@ -1769,6 +1769,11 @@ function shapesOf(raw: string, tool?: string): Shape[] {
   const textOnly = (tool === 'Bash' || tool === 'PowerShell')
     && !PR_NUMBER_IN_TEXT_RE.test(raw)
     && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every(isTextOnlyCommand);
+  // Lane coord-guard-text-false-refusal: a segment that only APPENDS text to one literal .md, .txt or .log file (isDocAppend) runs nothing, so the script name in its
+  // value is a mention too. The whole command must read plain under every reading, and a PR number anywhere in the raw text keeps the land shape (as above).
+  // Any other segment of the same command is judged alone, as before. Seat ruling 2026-11-23 12:48 CST: single-quoted values only, no new tokenizer.
+  const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw)
+    && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every((c) => docAppendReadable(c, tool));
   const out: Shape[] = [];
   // Seat item 3: the tool decides one fact of the merge and create readers (a backslash is literal in PowerShell).
   const pwshTool = tool === 'PowerShell';
@@ -1785,7 +1790,7 @@ function shapesOf(raw: string, tool?: string): Shape[] {
       // another program may run: its tail is empty, so every head read from it is unread.
       const tail = quoteOpenAt(view, from, pwshTool) ? '' : rawTail(view.slice(from));
       for (const s of new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly, seg, tail, pwshTool)) {
+        for (const shape of landShapesOf(s, textOnly || (docReadable && isDocAppend(seg)), seg, tail, pwshTool)) {
           for (const own of owns) for (const at of wheres) add({ ...shape, at, ...own, prior }, landId(shape, at, own, prior));
         }
       }

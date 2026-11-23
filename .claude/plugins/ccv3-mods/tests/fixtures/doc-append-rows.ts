@@ -1,4 +1,7 @@
-[
+// The row table of isDocAppend (lane coord-guard-text-false-refusal, seat ruling 2026-11-23 12:48 CST, condition 5).
+// ONE source for both copies of the test: the plugin test imports it (tests/doc-append.test.ts); the hook test reads this file as text and parses the
+// JSON array after the first "= [" (src/__tests__/doc-append-drift.test.ts in .claude/hooks). Keep the array valid JSON: double quotes, no comments inside, no trailing comma.
+export const DOC_APPEND_ROWS: ReadonlyArray<{ want: boolean; segment: string }> = [
  {
   "want": true,
   "segment": "Add-Content -LiteralPath .claudedocs/x.md -Value 'seat: a note'"

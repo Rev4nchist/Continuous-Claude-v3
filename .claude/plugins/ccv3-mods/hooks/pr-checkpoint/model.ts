@@ -737,6 +737,49 @@ const readsStateFile = (segment: string): boolean => {
   return isInertSegment(segment) && !REDIRECT.test(segment) && !GIT_WRITES_FILES.test(text)
 }
 
+// ---- DOC APPEND and lane text (lane coord-guard-text-false-refusal, seat ruling 2026-11-23 12:48 and 12:49 CST) ----
+// A segment that appends text to ONE literal document file, or stores a lane text through the lane shim, runs no queue verb. The rule reads what the segment does,
+// never the module name, so a name the shell builds apart cannot beat it. The seat's 08:52 ruling (an exemption by the name is beaten by string building) is met.
+// isDocAppend has a second copy in .claude/hooks/src/shared/inert-quotes.ts (decision-gate; a separate package). Both read one row table,
+// tests/fixtures/doc-append-rows.json. One anchored regex, no tokenizer: Add-Content or Set-Content (full names), -LiteralPath or -Path, ONE target of plain path
+// characters ending .md, .txt or .log, an optional -Value, ONE single-quoted string. Every other form keeps the old rule (Known limits).
+const DOC_APPEND = /^\s*(?:Add-Content|Set-Content)\s+-(?:LiteralPath|Path)\s+(?:'([A-Za-z0-9_.\-/\\: ]+)'|([A-Za-z0-9_.\-/\\:]+))(?:\s+-Value)?\s+'([^']*)'\s*$/i
+const DOC_EXT = /\.(?:md|txt|log)$/i
+/** A backtick, a smart quote (PowerShell reads U+2018..U+201F as a quote mark), a NUL or a break the segment split does not see, a substitution, a here-string. */
+const DOC_RISK = /[`\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]|\$\(|@['"]/u
+/** PowerShell reads U+2013 to U+2015 as a dash, so `\u2013Pr` is a parameter that no ASCII test sees. */
+const DASH_LOOKALIKE = /[\u{2013}-\u{2015}]/u
+
+/** True when ONE command segment (no ; & | or newline in it) only appends text to one literal .md, .txt or .log file. */
+export const isDocAppend = (segment: string): boolean => {
+  if (DASH_LOOKALIKE.test(segment) || DOC_RISK.test(segment)) return false
+  const m = DOC_APPEND.exec(segment)
+  if (m === null) return false
+  const target = m[1] ?? m[2]
+  if (target !== target.trim() || !DOC_EXT.test(target)) return false
+  // A colon only as a drive letter (`x.md:stream` writes an NTFS stream), and no .. segment.
+  if (target.replace(/^[A-Za-z]:(?=[\\/])/, '').includes(':')) return false
+  return !target.split(/[\\/]/).includes('..')
+}
+
+/** The lane shim in full, then the verb say, note or add: each stores the text it is given and runs nothing from it. */
+const LANE_TEXT_HEAD = /^\s*node(?:\.exe)?\s+C:\/Users\/dkhay\/\.claude\/scripts\/lane\.mjs\s+(?:say|note|add)\s/i
+const QUOTED_STRING = /'[^']*'|"[^"]*"/g
+
+/**
+ * True when ONE segment is a lane text: the shim path in full, verb say, note or add, no code-running character outside the quoted strings, and every guarded
+ * word inside ONE quoted string. A guarded word outside the strings, or in two strings, keeps the old rule (a Known limit).
+ */
+export const isLaneText = (segment: string): boolean => {
+  if (!LANE_TEXT_HEAD.test(segment) || DOC_RISK.test(segment)) return false
+  const strings = [...segment.matchAll(QUOTED_STRING)].map(m => m[0])
+  const outside = segment.replace(QUOTED_STRING, ' ')
+  if (/[`<>(){}$\\@'"]/.test(outside)) return false
+  const names = (text: string): boolean => count(SLOT_NAME_LIKE, text.replace(/['"`^\\]/g, '')) > 0 || SLOT_STATE_LIKE.test(text.replace(/['"`^\\]/g, ''))
+  if (names(outside)) return false
+  return strings.filter(names).length <= 1
+}
+
 /**
  * Shell text that names the queue file, or names the queue module in a way that is not a plain read. An allow list on raw text, no lexer.
  * The text splits on `; & | newline`, a backtick and `$(`; every piece that names the module or the state file (quotes and escapes stripped,
@@ -763,7 +806,7 @@ export const namesSlotWrite = (command: string): boolean => {
       if (!readsStateFile(segment)) return true
       continue
     }
-    if (isInertSegment(segment)) continue
+    if (isInertSegment(segment) || isDocAppend(segment) || isLaneText(segment)) continue
     if (!readsOnly(segment, loose)) return true
     opaque = true
   }

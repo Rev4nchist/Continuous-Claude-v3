@@ -13,7 +13,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { isDocAppend } from '../shared/inert-quotes.js';
 
-const ROWS = JSON.parse(readFileSync(new URL('../../../plugins/ccv3-mods/tests/fixtures/doc-append-rows.json', import.meta.url), 'utf8')) as Array<{ want: boolean; segment: string }>;
+// The table is a TypeScript module (the plugin test sandbox allows only relative imports). Read it as text and parse the JSON array after the first "= [".
+const TABLE = readFileSync(new URL('../../../plugins/ccv3-mods/tests/fixtures/doc-append-rows.ts', import.meta.url), 'utf8');
+const ROWS = JSON.parse(TABLE.slice(TABLE.indexOf('= [', TABLE.indexOf('export const')) + 2, TABLE.lastIndexOf(']') + 1)) as Array<{ want: boolean; segment: string }>;
 
 describe('DOC APPEND: the hook copy gives the verdict of the shared row table', () => {
   it('the row table is not empty and holds both verdicts', () => {

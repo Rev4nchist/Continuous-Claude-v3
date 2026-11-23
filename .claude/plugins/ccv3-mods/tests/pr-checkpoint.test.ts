@@ -1616,7 +1616,8 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs say coord-slot-queue --to seat'],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs' --to $(node scripts/github/slot-queue.mjs drop --pr 1)"],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs'; node scripts/github/slot-queue.mjs drop --pr 1 --reason x"],
-    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say \"slot-queue.mjs\" --to seat"],
+    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs' --to 'slot-queue-model.mjs'"],
+    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say \"a\" --to seat > slot-queue.mjs"],
   ]
 
   test('F13 shell text that names the queue file, or a queue write verb right after the script path, is denied in every form, with no spawn', async ($, on) => {
@@ -1700,6 +1701,9 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs note coord-x 'WAITS ON slot-queue.mjs'"],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs add coord-x --title 'T' --scope 'OWNS: slot-queue.mjs and slot-queue-model.mjs'"],
     ['PowerShell', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs add refused' --to seat"],
+    // Ruling 4 reads "inside one quoted string": a double-quoted string counts, and so does a string with several guarded words (the seat's own lane add text).
+    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs say "slot-queue.mjs add refused" --to seat'],
+    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs add coord-x --title "T" --scope "OWNS: scripts/github/slot-queue.mjs and scripts/github/slot-queue-model.mjs. NEVER: the queue state file"'],
   ]
 
   test('F13 the read verbs, git add of the files and the test run are not denied, and spawn no CLI', async ($, on) => {
