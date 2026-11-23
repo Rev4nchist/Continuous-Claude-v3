@@ -755,7 +755,7 @@ export const isDocAppend = (segment: string): boolean => {
   if (DASH_LOOKALIKE.test(segment) || DOC_RISK.test(segment)) return false
   const m = DOC_APPEND.exec(segment)
   if (m === null) return false
-  const target = m[1] ?? m[2]
+  const target = m[1] ?? m[2] ?? ''
   if (target !== target.trim() || !DOC_EXT.test(target)) return false
   // A colon only as a drive letter (`x.md:stream` writes an NTFS stream), and no .. segment.
   if (target.replace(/^[A-Za-z]:(?=[\\/])/, '').includes(':')) return false
@@ -772,6 +772,8 @@ const QUOTED_STRING = /'[^']*'|"[^"]*"/g
  */
 export const isLaneText = (segment: string): boolean => {
   if (!LANE_TEXT_HEAD.test(segment) || DOC_RISK.test(segment)) return false
+  // A backslash anywhere: Bash ends no double-quoted string at \" but the regex below does, so a `>` could hide in a false string (CodeRabbit CLI major, f8df760d). Fail closed.
+  if (segment.includes('\\')) return false
   const strings = [...segment.matchAll(QUOTED_STRING)].map(m => m[0])
   const outside = segment.replace(QUOTED_STRING, ' ')
   if (/[`<>(){}$\\@'"]/.test(outside)) return false
