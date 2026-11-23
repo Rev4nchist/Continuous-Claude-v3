@@ -2177,7 +2177,7 @@ export function killActiveCr(killer = (c) => killTree(c.pid)) {
 }
 
 /**
- * Free the run lock at exit and on SIGINT or SIGTERM. An 'exit' handler waits for no promise, so the release is synchronous.
+ * Free the run lock at exit and on SIGINT, SIGTERM, SIGHUP or SIGBREAK. An 'exit' handler waits for no promise, so the release is synchronous.
  * A signal ends the process without an 'exit' event unless a handler asks for one. A kill -9 or a crash leaves the file: the
  * next acquire drops it (dead pid).
  * A signal handler runs at once while the async CodeRabbit step runs. It waits only for a blocking gate child (spawnSync):
@@ -2192,7 +2192,9 @@ export function installRunLockHandlers() {
     endRowAtExit(code); // START with no END (exit 3, a signal): one ERROR row, so the seat's END check never reads an open run
     try { releaseRunLockSync({ pid: process.pid, kind: 'pre-pr' }); } catch { /* the store is gone */ }
   });
-  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  // SIGHUP: a closed terminal (CTRL_CLOSE on Windows). SIGBREAK: Ctrl+Break, Windows only (128 + 21).
+  const signals = [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129], ...(process.platform === 'win32' ? [['SIGBREAK', 149]] : [])];
+  for (const [signal, code] of signals) {
     process.on(signal, () => { killActiveCr(); process.exit(code); });
   }
 }
