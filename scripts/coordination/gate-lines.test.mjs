@@ -21,6 +21,12 @@
 //   H3  an ask after the time is printed instead of refused
 //   H4  a clock time after midnight reads the evening before as today
 //   H5  the receiver keeps a space (a session name has spaces)
+//   H8  a past HH:mm, or the clock minute itself, is refused by the new check
+//   H9  an HH:mm 2 minutes after the clock (--ask or --at) is read as yesterday with no word
+//   H10 an HH:mm hours after the clock is read as yesterday with no word
+//   H11 a full ISO time later than the clock is refused (an explicit time must pass)
+//   H12 on a DST day the check reads the wrong clock (the offset of its own instant is lost)
+//   H13 the fix leaks into resolveTime and changes the count window rule
 // Pure functions for the rules, the real script for the exit codes. No database, no network. A scratch folder for files.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -355,4 +361,46 @@ test('H5 a receiver with spaces prints with underscores', async () => {
   const m = await lib();
   const text = m.formatLine({ kind: 'GO', to: 'RE program seat', head: 'abcdef1' }, { nowMs: Date.parse(at('18:00')), offsetMin: -360 });
   assert.match(text, / to=RE_program_seat /);
+});
+
+// Card coord-gate-line-future-ask: the line helper refuses an HH:mm later than the clock (it read as yesterday with no word).
+const NOW12 = Date.parse(at('12:52'));
+const LINE = (spec, nowMs = NOW12, extra = {}) => lib().then((m) => m.formatLine({ kind: 'GO', to: 'x', ...spec }, { nowMs, offsetMin: -360, ...extra }));
+const WORD = (hm, ahead, clock) => new RegExp(`^${hm} is ${ahead} after the clock ${clock}; use a clock time, or a full ISO time for another day$`);
+
+test('H8 a past HH:mm and the clock minute itself are kept as today', async () => {
+  assert.equal(await LINE({ ask: '12:40' }), `GATE ${at('12:52')} kind=GO to=x head=- ask=${at('12:40')}`);
+  assert.equal(await LINE({ ask: '12:52' }), `GATE ${at('12:52')} kind=GO to=x head=- ask=${at('12:52')}`, 'the same minute is now');
+  assert.equal(await LINE({ ask: '12:52' }, NOW12 + 30_000), `GATE ${at('12:52')} kind=GO to=x head=- ask=${at('12:52')}`, 'seconds past the minute still count as the minute');
+});
+
+test('H9 an HH:mm 2 minutes after the clock is refused for --ask and for --at, with one text', async () => {
+  await assert.rejects(LINE({ ask: '12:54' }), WORD('12:54', '2 min', '12:52'));
+  await assert.rejects(LINE({ at: '12:54' }), WORD('12:54', '2 min', '12:52'));
+  await assert.rejects(LINE({ at: '12:54', ask: '12:40' }), WORD('12:54', '2 min', '12:52'), 'a future --at is not turned into the "ask is after the time" text');
+});
+
+test('H10 an HH:mm 10 hours after the clock is refused, not read as yesterday', async () => {
+  await assert.rejects(LINE({ ask: '22:52' }), WORD('22:52', '10 h', '12:52'));
+  await assert.rejects(LINE({ ask: '12:53' }), WORD('12:53', '1 min', '12:52'));
+  await assert.rejects(LINE({ ask: '23:59' }), WORD('23:59', '11 h 7 min', '12:52'));
+});
+
+test('H11 a full ISO time is kept as written, also later than the clock', async () => {
+  assert.equal(await LINE({ at: at('13:30'), ask: at('13:00') }), `GATE ${at('13:30')} kind=GO to=x head=- ask=${at('13:00')}`);
+  assert.equal(await LINE({ ask: at('10:00') }), `GATE ${at('12:52')} kind=GO to=x head=- ask=${at('10:00')}`);
+});
+
+test('H12 on a DST day the check uses the clock of that day', async () => {
+  const change = Date.parse('2026-11-01T07:00Z'); // US fall back: 02:00 CDT is 07:00Z
+  const offsetAt = (ms) => (ms < change ? -300 : -360);
+  const now = Date.parse('2026-11-01T14:00Z'); // 08:00 CST
+  await assert.rejects(LINE({ ask: '08:02' }, now, { offsetAt }), WORD('08:02', '2 min', '08:00'));
+  assert.equal(await LINE({ ask: '00:30' }, now, { offsetAt }), 'GATE 2026-11-01T08:00-06:00 kind=GO to=x head=- ask=2026-11-01T00:30-05:00', 'a time before the change keeps its own offset');
+});
+
+test('H13 count still reads a later HH:mm as the day before (the window rule is unchanged)', async () => {
+  const m = await lib();
+  const r = m.resolveTime('12:54', NOW12, -360);
+  assert.equal(r.ms, Date.parse('2026-11-21T12:54-06:00'));
 });
