@@ -260,4 +260,8 @@ test('T5b session-lifecycle with --db-url (the pg module path) is not refused fo
   // The env URL names the live database: a probe that ignored --db-url would refuse it ("not a scratch database"), so any refusal fails the test.
   assert.equal(r.error, undefined, `the child did not start: ${r.error}`);
   assert.doesNotMatch(r.stderr, /refusing to run/, r.stderr);
+  // Exit 2 alone proves nothing (the probe uses it for its refusals and its usage errors too). The pg path reached the remote host
+  // when it reports that host: a .invalid name never resolves (RFC 6761), so the ENOTFOUND text holds on the Linux CI runner as well.
+  assert.equal(r.status, 2, `exit ${r.status}\n${r.stderr}`);
+  assert.match(r.stderr, /Cannot reach Postgres: .*remote\.example\.invalid/, r.stderr);
 });
