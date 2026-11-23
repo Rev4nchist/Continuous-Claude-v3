@@ -322,3 +322,37 @@ test('PS16: a label line written as a markdown bullet or in bold still reads as 
     assert.equal(changeOf(text), 'Pre-pr now reads a short plain summary and prints it first.', name);
   }
 });
+
+// ---------- PS-H: an older Head prints the file, the line, the found sha and the wanted sha (card coord-prepr-stale-head-message) ----------
+// The first-line detail and the status stay as they were; only a note is added. The line counts CRLF and LF lines alike.
+test('PSH1: an older Head in a CRLF file with a title line: the note names the real path, line 3, the found sha and the wanted sha', () => {
+  const dir = makeRepo();
+  const old = headOf(dir);
+  const head = commitFiles(dir, { 'docs/b.md': 'b\n' });
+  const r = check(dir, `# Summary\r\n${textOf(FIELDS(old), '\r\n')}`);
+  assert.equal(r.result.status, 'NOTE', 'status is unchanged');
+  assert.equal(r.result.detail, `Head ${old.slice(0, 7)} is older than HEAD (1 file changed since Head ${old.slice(0, 7)})`, 'the first line stays word for word');
+  const hint = (r.result.notes ?? []).find((n) => /^fix:/.test(n));
+  assert.ok(hint, all(r));
+  assert.ok(hint.includes(path.join(dir, SUMMARY_REL)), hint);
+  assert.match(hint, /line 3\b/);
+  assert.ok(hint.includes(old.slice(0, 7)) && hint.includes(head.slice(0, 7)), hint);
+});
+
+test('PSH2: a stale Head (6 files since, FAIL) also gets the note, and the FAIL text is unchanged', () => {
+  const dir = makeRepo();
+  const old = headOf(dir);
+  const head = commitFiles(dir, Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [`docs/n${n}.md`, `${n}\n`])));
+  const r = check(dir, textOf(FIELDS(old)));
+  assert.equal(r.result.status, 'FAIL');
+  assert.equal(r.result.detail, `6 files changed since Head ${old.slice(0, 7)}: the summary is stale`);
+  const hint = (r.result.notes ?? []).find((n) => /^fix:/.test(n));
+  assert.ok(hint && /line 2\b/.test(hint) && hint.includes(head.slice(0, 7)), all(r));
+});
+
+test('PSH3: a current Head, and a Head that is not a commit, get no fix note', () => {
+  const dir = makeRepo();
+  assert.deepEqual(check(dir, textOf(FIELDS(headOf(dir)))).result.notes ?? [], []);
+  const bad = check(dir, textOf(FIELDS('zzzzzzz')));
+  assert.ok(!(bad.result.notes ?? []).some((n) => /^fix:/.test(n)), all(bad));
+});

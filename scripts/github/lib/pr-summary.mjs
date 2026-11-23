@@ -73,7 +73,7 @@ function unknownPaths(text, paths) {
 }
 
 /** Problems with the Head label. Returns [{ fail, text }]. */
-function headProblems(value, head, git) {
+function headProblems(value, head, git, where) {
   if (!/^[0-9a-f]{7,40}$/i.test(value)) return [{ fail: true, text: `Head "${value.slice(0, 40)}" is not a commit hash (7 to 40 hex digits)` }];
   const notAncestor = (why) => [{ fail: true, text: `Head ${short(value)} is not an ancestor of HEAD (${why})` }];
   const full = git(['rev-parse', '--verify', '--quiet', `${value}^{commit}`]);
@@ -84,10 +84,12 @@ function headProblems(value, head, git) {
   // Branch work only (first parent, no merge commits): files that a merge of the base brought in do not count.
   const since = git(['log', '--first-parent', '--no-merges', '--format=', '--name-only', `${sha}..${head}`]);
   const n = since.status === 0 ? new Set(String(since.stdout).split('\n').map((l) => l.trim()).filter(Boolean)).size : null;
-  if (n === null) return [{ fail: false, text: `Head ${short(value)} is older than HEAD; git could not count the files since` }];
+  // The fix note rides on the problem but is printed after the other notes, so the first-line detail and the "(N more below)" count stay as they were.
+  const fix = `fix: in ${where.file} line ${where.line}: change "Head:" from ${short(value)} to ${short(head)}`;
+  if (n === null) return [{ fail: false, text: `Head ${short(value)} is older than HEAD; git could not count the files since`, fix }];
   if (n === 0) return [];
   const text = `${n} ${n === 1 ? 'file' : 'files'} changed since Head ${short(value)}`;
-  return n > MAX_FILES_SINCE ? [{ fail: true, text: `${text}: the summary is stale` }] : [{ fail: false, text: `Head ${short(value)} is older than HEAD (${text})` }];
+  return n > MAX_FILES_SINCE ? [{ fail: true, text: `${text}: the summary is stale`, fix }] : [{ fail: false, text: `Head ${short(value)} is older than HEAD (${text})`, fix }];
 }
 
 function labelProblems(fields) {
@@ -111,12 +113,15 @@ function lengthProblems(fields, text) {
   return out;
 }
 
-function problemsOf(text, { branch, head, base, git }) {
+/** The 1-based line of the Head label, counted the way parseFields splits the text (CRLF and LF alike); 0 when there is none. */
+const headLineOf = (text) => lf(text).split('\n').findIndex((line) => LABEL_LINE.exec(line)?.[1] === 'Head') + 1;
+
+function problemsOf(text, { branch, head, base, git, file }) {
   const fields = parseFields(text);
   const one = (label) => fields.get(label)?.[0] ?? '';
   const out = labelProblems(fields);
   if (one('Branch') && one('Branch') !== branch) out.push({ fail: true, text: `Branch is "${one('Branch')}" but this run is on "${branch}"` });
-  if (one('Head') && fields.get('Head').length === 1) out.push(...headProblems(one('Head'), head, git));
+  if (one('Head') && fields.get('Head').length === 1) out.push(...headProblems(one('Head'), head, git, { file, line: headLineOf(text) }));
   if (one('Risk') && !/^(Low|Medium|High)(?![\w])/.test(one('Risk'))) out.push({ fail: true, text: 'Risk must start with Low, Medium or High' });
   out.push(...lengthProblems(fields, text));
   const paths = diffPaths(git, base);
@@ -130,9 +135,10 @@ const done = (status, detail, notes, sha, facts, ok = false) => ({ result: { ste
 function check({ root, head, branch, base = 'main', git, readFile = (f) => readFileSync(f, 'utf8'), mode = 'note' }) {
   const facts = factsOf(git, base);
   let text;
-  try { text = readFile(path.join(root, SUMMARY_REL)); } catch { text = null; }
+  const file = path.join(root, SUMMARY_REL);
+  try { text = readFile(file); } catch { text = null; }
   const problems = typeof text === 'string'
-    ? problemsOf(text, { branch, head, base, git })
+    ? problemsOf(text, { branch, head, base, git, file })
     : [{ fail: true, text: `no summary file at ${SUMMARY_REL}: write it now (Branch, Head, Base, Problem, Change, You will see, Risk, Not included; one "Label: text" line for each, not a heading), paste it to Dave in chat, then run pre-pr again` }];
   const sha = typeof text === 'string' ? hashOf(text) : null;
   const sorted = [...problems.filter((p) => p.fail), ...problems.filter((p) => !p.fail)];
@@ -140,7 +146,8 @@ function check({ root, head, branch, base = 'main', git, readFile = (f) => readF
   if (sorted.length === 0) return done('PASS', `summary matches ${branch} at ${short(head)}${facts ? ` (${facts})` : ''}`, [], sha, facts, true);
   const status = failing && mode === 'fail' ? 'FAIL' : 'NOTE';
   const rest = sorted.slice(1).map((p) => p.text);
-  const notes = [...(facts ? [`facts: ${facts}`] : []), ...rest, ...(failing && status === 'NOTE' ? ['this check only notes for now; it becomes a FAIL when Dave turns it on'] : [])];
+  const fixes = sorted.flatMap((p) => (p.fix ? [p.fix] : []));
+  const notes = [...(facts ? [`facts: ${facts}`] : []), ...rest, ...fixes, ...(failing && status === 'NOTE' ? ['this check only notes for now; it becomes a FAIL when Dave turns it on'] : [])];
   return done(status, `${sorted[0].text}${rest.length ? ` (${rest.length} more below)` : ''}`, notes, sha, facts, !failing);
 }
 
