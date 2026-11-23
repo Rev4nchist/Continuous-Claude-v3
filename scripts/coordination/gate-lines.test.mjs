@@ -68,6 +68,8 @@ test('G1 a valid line parses into kind, receiver, head, instants and ask', async
   assert.equal(r.line.head, 'bbbbbbb');
   assert.equal(r.line.timeMs, Date.parse(at('18:10')));
   assert.equal(r.line.askMs, Date.parse(at('18:00')));
+  const upper = m.parseGateLine(`GATE ${at('18:10')} kind=GO to=A head=BBBBBBB ask=-`);
+  assert.equal(upper.line.head, 'bbbbbbb', 'a head is compared in lower case');
   const none = m.parseGateLine(L3);
   assert.equal(none.ok, true);
   assert.equal(none.line.head, '-');
@@ -160,6 +162,7 @@ test('G8 zero GATE lines is exit 3, never "0 words"; --allow-empty turns it off'
   const r = run(args);
   assert.equal(r.status, 3, r.stdout + r.stderr);
   assert.match(r.stdout + r.stderr, /0 GATE lines/);
+  assert.equal(r.stdout.trim(), '', 'a zero prints no counts on stdout: "0 words" is no result');
   const ok = run([...args, '--allow-empty']);
   assert.equal(ok.status, 0, ok.stdout + ok.stderr);
   // Lines in the file but none in the window: also exit 3, with the number read.

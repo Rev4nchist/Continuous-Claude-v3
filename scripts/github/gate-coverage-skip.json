@@ -304,6 +304,10 @@
     {
       "path": "scripts/checks/line-ends-lf.test.mjs",
       "reason": "pending join: add the file to CHECKS_TESTS in pre-pr.mjs (card coord-cap-override holds pre-pr.mjs now) and to the checks step of ccv3-checks.yml (a FORCE_HIGH file); the seat puts the join on the next land-path card (card coord-line-ends-lf, seat ruling 2026-11-22)"
+    },
+    {
+      "path": "scripts/coordination/gate-lines.test.mjs",
+      "reason": "pending join: add the file to COORDINATION_TESTS in pre-pr.mjs and to the coordination job of ccv3-checks.yml, with run-wrap and line-ends-lf (pre-pr.mjs is held by cap-override part B; card coord-seat-gate-line, seat ruling 2026-11-22 18:37 CST)"
     }
   ],
   "ciGaps": [
