@@ -1746,6 +1746,10 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   const counted = countedRuns(counter.runs);
   // The extra-run flag (card coord-cap-override, PART B) lifts this count for one run, after Dave's tap (claimed below, before the CLI starts).
   const extraRun = capOverride?.extraRun === true && counted >= CR_RUN_LIMIT;
+  // The flag with the run count below the limit lifts nothing: refused before any check, so the tap is not claimed and no run starts.
+  if (capOverride?.extraRun === true && !extraRun) {
+    return result('coderabbit', 'FAIL', `the extra-run flag is not needed: the run count is below the limit (${counted} of ${CR_RUN_LIMIT} counted runs on ${branch}), so there is no run limit to lift. No tap was claimed and no CLI review was started; run pre-pr again without the extra-run flag`);
+  }
   if (counted >= CR_RUN_LIMIT && !extraRun) {
     // Rule A: a partial run whose findings the branch changed earns the cap skip. Earning is read only here, at the cap.
     const earn = partialEarnedFor(root, counter.runs, head);
@@ -1762,13 +1766,6 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   if (probe.remaining === null) {
     const overCap = cliCapBlock(cliCapUsd, now, ledgerPath, estimate);
     if (overCap) return overCap;
-  }
-  // Dave's tap for the cap override: claimed once, here, after every skip and before the first counter row, so a refusal starts no CLI and spends no slot.
-  let capRecord = null;
-  if (capOverride && (capOverride.usd != null || capOverride.extraRun === true)) {
-    const claim = claimOverride({ branch, head, usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true });
-    if (!claim.ok) return result('coderabbit', 'FAIL', `the cap override was refused (${claim.reason ?? 'no tap'}): ${noTapText(capFlagText({ usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true }))}. No CLI review was started`);
-    capRecord = { usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true, tapAt: claim.tapAt ?? null };
   }
   const storeBefore = snapshotStore(crStore);
   const run = { head, at: now.toISOString(), outcome: 'started', newCode, ...(extraRun ? { extraRun: true } : {}) };
@@ -1787,6 +1784,17 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   const onTick = (t) => log(`pre-pr: cr review still running (${t.elapsedSec}s${t.lastEvent ? `, last event: ${t.lastEvent}` : ''}); limit ${Math.round(timeoutMs / MIN)} min`);
   const moved = headMoved(headGit, { head });
   if (moved) { giveBack(); return moved; }
+  // Dave's tap for the cap override: claimed once, as the very last step before the CLI starts (after every skip and the head check), so a stop
+  // before this point leaves the tap unused. A refusal gives the slot back and starts no CLI.
+  let capRecord = null;
+  if (capOverride && (capOverride.usd != null || capOverride.extraRun === true)) {
+    const claim = claimOverride({ branch, head, usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true });
+    if (!claim.ok) {
+      giveBack();
+      return result('coderabbit', 'FAIL', `the cap override was refused (${claim.reason ?? 'no tap'}): ${noTapText(capFlagText({ usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true }))}. No CLI review was started`);
+    }
+    capRecord = { usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true, tapAt: claim.tapAt ?? null };
+  }
   let r;
   try {
     const pending = runner({ cwd: root, args: CR_ARGS(baseCommit), timeoutMs, streamTo: running, onTick, fileStdio: true });

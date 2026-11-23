@@ -295,3 +295,23 @@ describe('G9: the built hook, a real payload', () => {
     expect(ask(PRE)).toBe('');
   });
 });
+
+describe('G10 (item 4, seat ruling): the gate reads git at the session folder, so a cd to another checkout stays a deny and the text says why', () => {
+  const reasonOf = (command: string, w?: World): string => {
+    const d = decide(bash(command) as Parameters<typeof decide>[0], deps(w));
+    return d.action === 'deny' ? d.reason : '';
+  };
+  it('a tap for the branch of the cd target does not cover the command: still a deny', () => {
+    tap({ branch: 'feat/b', extraRun: true });
+    expect(capDeny(bash(`cd /other && ${PRE} --cli-extra-run`), { branch: 'feat/a' })).toBe(true);
+  });
+  it('the deny text names the session folder (input.cwd) and says to run the flag from the tapped checkout with no cd', () => {
+    tap({ branch: 'feat/b', extraRun: true });
+    const reason = reasonOf(`cd /other && ${PRE} --cli-extra-run`, { branch: 'feat/a' });
+    expect(reason).toMatch(/session folder/i);
+    expect(reason).toMatch(/no cd/i);
+  });
+  it('the plain no-tap deny carries the same text', () => {
+    expect(reasonOf(`${PRE} --cli-cap-usd 6`)).toMatch(/session folder/i);
+  });
+});

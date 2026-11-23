@@ -539,12 +539,12 @@ test('CF31: with the USD flag and a tap the run goes ahead at a spend that is at
   assert.deepEqual(ledgerRows(h.ledgerPath).at(-1).capOverride, { usd: 6, extraRun: false, tapAt: '2026-10-30T08:00:00.000Z' });
 });
 
-test('CF32: a USD value that does not lift the cap (the same, or below) still stops at the cap with no run', async () => {
+test('CF32: a USD value that does not lift the cap (the same, or below) is refused with no run (item 2 refuses it before the spend is read)', async () => {
   const h = harness({ cap: 3, ledgerRows: [cliRow(3, TODAY)] });
   h.deps.claimOverride = () => ({ ok: true, tapAt: 'x' });
   const r = await h.go({ capOverride: { usd: 3 } });
-  assert.equal(r.exitCode, 2);
-  assert.match(r.reason, /cli-cap/);
+  assert.equal(r.exitCode, 1);
+  assert.match(r.reason, /cli_daily_cap_usd/);
   assert.equal(h.calls.runs.length, 0);
 });
 
@@ -591,4 +591,51 @@ test('CF30: a ledger that cannot be written leaves the line and exit code alone 
   assert.equal(r.exitCode, 0);
   const { err } = FIX.reportOf(r);
   assert.ok(err.some((l) => /could not log/i.test(l) && /\$0\.50/.test(l)), err.join('|'));
+});
+
+// ---- coord-cap-override-followups: the known limits of PR 685 that sit in cr-fix.mjs (items 1, 2, 5) ----
+test('CF35 (item 2): a USD value that is not strictly above the config cap is refused before any call, with no claim and no run, whatever the spend', async () => {
+  for (const usd of [3, 2.5, 1]) {
+    const h = harness({ cap: 3 });
+    let claimed = 0;
+    h.deps.claimOverride = () => { claimed += 1; return { ok: true, tapAt: 'x' }; };
+    const r = await h.go({ capOverride: { usd } });
+    assert.equal(r.exitCode, 1, `usd ${usd}: ${JSON.stringify(r)}`);
+    assert.match(r.reason, /cli_daily_cap_usd/, 'the text names the config cap');
+    assert.match(r.reason, /above|exceed/i, 'the text says the value must be above the cap');
+    assert.equal(claimed, 0, `usd ${usd}: the tap stays unused`);
+    assert.equal(h.calls.runs.length, 0);
+    assert.equal(h.calls.gh.length, 0, 'refused before the first GitHub call');
+  }
+});
+
+test('CF36 (item 5): the head is read again right before the CLI run; a head that moved stops the run and leaves the tap unused', async () => {
+  const h = harness({ cap: 3, ledgerRows: [cliRow(3, TODAY)] });
+  let reads = 0;
+  h.deps.headSha = () => { reads += 1; return reads === 1 ? HEAD : 'c'.repeat(40); };
+  let claimed = 0;
+  h.deps.claimOverride = () => { claimed += 1; return { ok: true, tapAt: 'x' }; };
+  const r = await h.go({ capOverride: { usd: 6 } });
+  assert.equal(r.exitCode, 1, JSON.stringify(r));
+  assert.match(r.reason, /head/i);
+  assert.match(r.reason, /moved|changed|mismatch/i);
+  assert.equal(h.calls.runs.length, 0);
+  assert.equal(claimed, 0);
+});
+
+test('CF37 (item 1): the tap is claimed last, after the merge read and the second head read, and right before the CLI run', async () => {
+  const h = harness({ cap: 3, ledgerRows: [cliRow(3, TODAY)] });
+  const order = [];
+  const headSha = h.deps.headSha;
+  h.deps.headSha = (cwd) => { order.push('head'); return headSha(cwd); };
+  const mergesIn = h.deps.mergesIn;
+  h.deps.mergesIn = (cwd, from) => { order.push('merges'); return mergesIn(cwd, from); };
+  h.deps.claimOverride = () => { order.push('claim'); return { ok: true, tapAt: 'x' }; };
+  const runCr = h.deps.runCr;
+  h.deps.runCr = async (spec) => { order.push('run'); return runCr(spec); };
+  const r = await h.go({ capOverride: { usd: 6 } });
+  assert.equal(r.exitCode, 0, JSON.stringify(r));
+  assert.deepEqual(order.slice(-4), ['merges', 'head', 'claim', 'run'], order.join(','));
+  assert.equal(order.filter((x) => x === 'head').length, 2, 'two head reads');
+  assert.equal(order.lastIndexOf('head') < order.indexOf('claim'), true, 'the claim comes after the last head read');
 });

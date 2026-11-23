@@ -268,7 +268,19 @@ test('R3: a refused tap starts no CLI, writes no counter row and says why', asyn
   assert.equal(r.status, 'FAIL');
   assert.match(r.detail, /tap|decision/i);
   assert.equal(f.calls.length, 0);
-  assert.equal(readFileSync(f.counter, 'utf8'), before);
+  // The claim is the last step now (item 1): the row of this run is written and given back, so the file may be re-formatted; its rows are the same.
+  assert.deepEqual(JSON.parse(readFileSync(f.counter, 'utf8')), JSON.parse(before));
+});
+
+test('R9 (item 1, pre-pr half): a head that moves during the preflight stops the run before the tap is claimed', async () => {
+  const f = fixture({ runs: 2 });
+  let claimed = 0;
+  const headGit = () => ({ status: 0, stdout: `${'d'.repeat(40)}\n` });
+  const r = await runCodeRabbit(opts(f, { capOverride: { usd: null, extraRun: true }, headGit, claimOverride: () => { claimed += 1; return { ok: true, tapAt: 'x' }; } }));
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.detail, /HEAD moved/);
+  assert.equal(claimed, 0, 'the tap stays unused');
+  assert.equal(f.calls.length, 0);
 });
 
 test('R4: the extra-run flag alone does not lift the USD cap', async () => {
@@ -277,6 +289,21 @@ test('R4: the extra-run flag alone does not lift the USD cap', async () => {
   assert.equal(r.status, 'SKIP');
   assert.equal(r.skipReason, 'cli-cap');
   assert.equal(f.calls.length, 0);
+});
+
+test('R8 (item 6, coord-cap-override-followups): the extra-run flag with the run count below the limit is refused before the tap is claimed, with no CLI and no counter row', async () => {
+  for (const capOverride of [{ usd: null, extraRun: true }, { usd: 6, extraRun: true }]) {
+    const f = fixture({ runs: 1 });
+    const before = readFileSync(f.counter, 'utf8');
+    let claimed = 0;
+    const r = await runCodeRabbit(opts(f, { capOverride, claimOverride: () => { claimed += 1; return { ok: true, tapAt: 'x' }; } }));
+    assert.equal(r.status, 'FAIL', JSON.stringify(capOverride));
+    assert.match(r.detail, /run (count|limit)/i);
+    assert.match(r.detail, /below|not reached|no need/i);
+    assert.equal(claimed, 0, 'the tap stays unused');
+    assert.equal(f.calls.length, 0);
+    assert.equal(readFileSync(f.counter, 'utf8'), before);
+  }
 });
 
 test('R5: the USD flag lifts the daily cap for one run, and the billed row carries capOverride', async () => {
@@ -418,4 +445,41 @@ test('Q5: planOf writes the offer for the exact key, branch head and flag set, a
   assert.equal(plan.head, HEAD);
   assert.ok(plan.spec.question.includes('--cli-cap-usd 6'));
   assert.match(String(planOf('cap-override', { ...DATA, usd: null, extraRun: false }, {}).refuse), /flag/i);
+});
+
+// ---- coord-cap-override-followups, item 3: the ship-ask question shows the cap pre-pr ENFORCES (the stricter of the checkout file and fork/main) ----
+// End to end: a temp git repo and the real ship-ask.mjs as a child process in it. A checkout cap of 6 over a fork/main cap of 3 once showed "$6.00".
+const gitIn = (cwd, ...args) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }); assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`); };
+const capConfig = (cap) => `${JSON.stringify({ coderabbit: { cli_daily_cap_usd: cap }, decisions: { enforce: true } }, null, 2)}\n`;
+function capRepo({ mainCap, checkoutCap }) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'capfu-ship-'));
+  gitIn(root, 'init', '-q', '-b', 'main');
+  gitIn(root, 'config', 'user.email', 't@example.com');
+  gitIn(root, 'config', 'user.name', 't');
+  writeFileSync(path.join(root, 'review-router.config.json'), capConfig(mainCap));
+  gitIn(root, 'add', '.');
+  gitIn(root, 'commit', '-q', '-m', 'main');
+  gitIn(root, 'update-ref', 'refs/remotes/fork/main', 'HEAD');
+  gitIn(root, 'checkout', '-q', '-b', 'feat/x');
+  writeFileSync(path.join(root, 'review-router.config.json'), capConfig(checkoutCap));
+  mkdirSync(path.join(root, 'src'), { recursive: true });
+  writeFileSync(path.join(root, 'src', 'a.mjs'), 'export const a = 1;\n');
+  gitIn(root, 'add', '.');
+  gitIn(root, 'commit', '-q', '-m', 'feat');
+  return root;
+}
+function capQuestionText(root) {
+  const r = spawnSync(process.execPath, [path.join(HERE, 'ship-ask.mjs'), 'cap-override', '--branch', 'feat/x', '--usd', '7', '--json'], { cwd: root, encoding: 'utf8', windowsHide: true, env: { ...process.env, CCV3_PAID_LEDGER: path.join(root, 'no-ledger.jsonl') } });
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  return JSON.stringify(JSON.parse(r.stdout));
+}
+
+test('I3a (item 3): a checkout cap above fork/main shows the cap pre-pr enforces ($3.00), not the checkout file ($6.00)', () => {
+  const text = capQuestionText(capRepo({ mainCap: 3, checkoutCap: 6 }));
+  assert.match(text, /\$3\.00 daily cap/, text);
+  assert.doesNotMatch(text, /\$6\.00 daily cap/, text);
+});
+
+test('I3b (item 3): when the checkout cap is the stricter one, the question shows it', () => {
+  assert.match(capQuestionText(capRepo({ mainCap: 6, checkoutCap: 3 })), /\$3\.00 daily cap/);
 });

@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadStricterConfig } from './config-stricter.mjs';
 import { CAP_KEEP_LABEL, CAP_LIFT_LABEL, CAP_STEP, FLAG_EXTRA, FLAG_USD, capOverrideKey, takeCapFlags } from './lib/cap-override.mjs';
 import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
 import { SUMMARY_REL, changeOf, hashOf, summaryFieldsOf } from './lib/pr-summary.mjs';
@@ -412,8 +413,14 @@ export function capFactsOf({ readTotal, readNames }) {
 export async function gatherCapOverride({ branch, usd, extraRun }) {
   const t = branchTarget(branch, process.cwd());
   const { cliCapOf, cliTodayOf } = await import('./cr-paid.mjs');
+  // The cap pre-pr ENFORCES: the checkout file made stricter by fork/main (loadStricterConfig, as pre-pr reads it), not the checkout file alone.
+  // A checkout cap of 6 over a fork/main cap of 3 is a cap of 3. An unreadable config is an unknown cap (null), as before.
   let cap = null;
-  try { cap = cliCapOf(JSON.parse(readFileSync(path.join(topOf(), 'review-router.config.json'), 'utf8'))); } catch { cap = null; }
+  try {
+    const root = topOf();
+    const gitIn = (args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }; };
+    cap = cliCapOf(loadStricterConfig({ root, git: gitIn, readFile: readFileSync }));
+  } catch { cap = null; }
   const base = ['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], topOf()));
   const facts = capFactsOf({ readTotal: () => cliTodayOf().total, readNames: () => (base && t.head ? gitText(['diff', '--name-only', `${base}...${t.head}`], topOf()) : null) });
   return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, cap, ...facts };
