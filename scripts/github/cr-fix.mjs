@@ -214,7 +214,7 @@ function checkCap(cwd, d, override) {
     const check = cliCapCheck(cap, ledgerDeps(d));
     return check.capped ? stop(`cli-cap: ${cliCapLine(check)}. No CLI run was started. Raise the cap or run it tomorrow; ask Dave`) : null;
   } catch (err) {
-    return stop(`the paid ledger is unreadable (${String(err.message).split('\n')[0]}), so the CLI spend today is unknown and no CLI run was started: fix or delete the ledger`);
+    return stop(`the paid ledger is unreadable (${String(err.message).split('\n')[0]}), so the CLI spend today is unknown and no CLI run was started: repair the ledger file. A reset of today's spend is for the seat or Dave to decide`);
   }
 }
 

@@ -583,6 +583,17 @@ test('CF29: an unreadable ledger with a cap stops the run with exit 2 and starts
   assert.equal(h.calls.runs.length, 0);
 });
 
+// ---- card coord-no-delete-advice: no text tells the user to delete the paid ledger (it resets today's spend) ----
+test('CF29b: the unreadable-ledger stop never tells the user to delete the ledger; it names a repair and who decides a reset, with the same exit code', async () => {
+  const h = harness({ cap: 3, ledgerRows: ['not json'] });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2);
+  assert.doesNotMatch(r.reason, /delet/i);
+  assert.match(r.reason, /repair/i);
+  assert.match(r.reason, /seat or Dave/);
+  assert.equal(h.calls.runs.length, 0);
+});
+
 test('CF30: a ledger that cannot be written leaves the line and exit code alone and adds a stderr note', async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'crfix-ledgerdir-'));
   const h = harness({ ledgerOverride: dir, run: { status: 0, stdout: ev(CONTEXT, BILLED), stderr: '' } });
