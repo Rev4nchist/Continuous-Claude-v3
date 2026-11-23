@@ -922,6 +922,21 @@ test('C8: a corrupt counter file fails the step and does not run the CLI (a lost
   assert.equal(f.calls.length, 1);
 });
 
+// ---- card coord-no-delete-advice: no text tells the user to delete the run counter (it resets the 2-run cap) ----
+test('C8b: the unreadable-counter FAIL never tells the user to delete the counter (a delete resets the 2-run cap); it names a repair and who decides a reset', async () => {
+  const f = crFixture();
+  (await runCodeRabbit(crOpts(f, { head: '1'.repeat(40) })));
+  const dir = path.join(f.root, '.claude', 'cache', 'pre-pr');
+  const file = path.join(dir, readdirSync(dir).find((n) => /^cr-runs-/.test(n)));
+  writeFileSync(file, '{not json');
+  const r = (await runCodeRabbit(crOpts(f, { head: '2'.repeat(40) })));
+  assert.equal(r.status, 'FAIL');
+  assert.doesNotMatch(r.detail, /delet/i);
+  assert.match(r.detail, /repair/i);
+  assert.match(r.detail, /seat or Dave/);
+  assert.equal(f.calls.length, 1, 'still no CLI run');
+});
+
 test('N1: findings are read by their real field names, grouped by severity, none not counted', async () => {
   const f = crFixture();
   const none = { type: 'finding', severity: 'none', fileName: 'src/c.ts', comment: 'fine' };
@@ -2548,6 +2563,17 @@ test('P7: an unreadable ledger with a cap FAILs the step and starts no run', asy
   assert.equal(r.status, 'FAIL');
   assert.match(r.detail, /ledger/i);
   assert.equal(f.usageCalls.length + f.calls.length, 0);
+});
+
+// ---- card coord-no-delete-advice: no text tells the user to delete the paid ledger (it resets today's spend) ----
+test('P7b: the unreadable-ledger FAIL never tells the user to delete the ledger (a delete resets today spend); it names a repair and who decides a reset', async () => {
+  const f = crFixture();
+  seedLedger(f.ledgerPath, 'not json');
+  const r = await runCodeRabbit(crOpts(f, { cliCapUsd: 3 }));
+  assert.equal(r.status, 'FAIL');
+  assert.doesNotMatch(r.detail, /delet/i);
+  assert.match(r.detail, /repair/i);
+  assert.match(r.detail, /seat or Dave/);
 });
 
 test('P8: runPrePr reads the cap from the config, stamps cli-cap, and the built hook accepts that stamp', async () => {

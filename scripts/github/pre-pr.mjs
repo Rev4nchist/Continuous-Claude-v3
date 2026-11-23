@@ -1758,7 +1758,7 @@ function cliCapBlock(cliCapUsd, now, ledgerPath, estimate = null) {
     if (!estimate || Math.round(check.total * 100) + estimate.cents <= Math.round(cliCapUsd * 100)) return null;
     return skipped('cli-cap', `estimated cost ${estimate.files} file(s) x $0.25 = ${usdOf(estimate.cents)} plus today's paid CLI spend ${usdOf(Math.round(check.total * 100))} would pass the daily cap of ${usdOf(Math.round(cliCapUsd * 100))} (included reviews left: unknown), so no CLI review this time and no run was spent. Raise the cap or run it tomorrow; ask Dave`);
   } catch (err) {
-    return result('coderabbit', 'FAIL', `the paid ledger is unreadable (${String(err.message).split('\n')[0]}), so the CLI spend today is unknown and no CLI review was started: fix or delete the ledger, then re-run`);
+    return result('coderabbit', 'FAIL', `the paid ledger is unreadable (${String(err.message).split('\n')[0]}), so the CLI spend today is unknown and no CLI review was started: repair the ledger file, then re-run. A reset of today's spend is for the seat or Dave to decide`);
   }
 }
 
@@ -1794,7 +1794,7 @@ function removeRunningFiles(running) {
 async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseCommit, crStore, onSpawned, capOverride = null, claimOverride = claimCapOverride }) {
   const counterFile = paths.counter;
   let counter;
-  try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
+  try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: repair the file, then re-run. A reset of the 2-run cap is for the seat or Dave to decide`); }
   // The head the CLI last reviewed to the end. A head with no new code since then needs no review: its saved output is reused, with no
   // run and no slot (Dave, 2026-11-04). With no saved output the run goes on and uses no slot (the row says newCode false).
   const lastReviewed = [...counter.runs].reverse().find((r) => r.complete === true)?.head ?? null;
