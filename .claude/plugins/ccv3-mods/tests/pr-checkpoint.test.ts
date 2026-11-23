@@ -1413,6 +1413,24 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     expect(seen.ran.length).toBe(1)
   })
 
+  // The seat's own refused shell calls (SLOT_DENY in its tool results, 2026-11-22 and 2026-11-23), whole. Source: .claudedocs/e2e-coord-slot-guard-false-refusal/seat-refused-lines.txt.
+  // 1 and 4 name the queue only as a word (a test file name, a card id): open. 3 holds the module names in its scope text, 2 holds a glob, 5 holds the module name: Known limits.
+  const SEAT_REFUSED_1 = String.raw`$p='C:\Users\dkhay\continuous-claude\.claudedocs\coordination\milestones\re-program.md'; $t=Get-Date -Format 'HH:mm'; $e=@"
+
+## 1031. 2026-11-22 $t CST: RULING, paid guard pre-pr END pid 55892 FAIL gate-coverage (to Coord lane CLI #82ced24f)
+
+- runs.jsonl end row: pid 55892, head c886fe5f, FAIL, failing gate:gate-coverage, 9.1 min. No live lock after it.
+- Seat read: gate-coverage.mjs --list in worktree paid-guard-pr2 at c886fe5f: 6 new scripts/github test files run only at pre-pr, no ciGaps entry (cr-paid-post, cr-paid-unledgered, paid-guard-confirm, paid-guard-decisions, ship-ask-paid-price, slot-queue-paid-cap). Main f3779fa2: OK.
+- Ruling: add the 6 files to CI steps in .github/workflows/ccv3-checks.yml (cr-paid step line 68, slot-queue step line 92), not ciGaps: guard tests run on Linux CI. Fix push word given (V7.5). Builder reruns gate-coverage and the 6 files, then a new pre-pr by V7.2 and V7.3.
+- Asked: EBUSY count of pid 55892, and whether its CLI step ran before the gate failed.
+"@; Add-Content -LiteralPath $p -Value $e; node C:/Users/dkhay/.claude/scripts/lane.mjs say "SEAT RULING pid 55892 (c886fe5f): FAIL gate:gate-coverage, 6 new paid test files only pre-pr runs. Fix: add them to CI steps in .github/workflows/ccv3-checks.yml (lines 68, 92), not ciGaps. Fix push word given. MS: .claudedocs/coordination/milestones/re-program.md entry 1031" --to "Coord lane CLI" --lane re-program`
+  const SEAT_REFUSED_2 = String.raw`Get-Date -Format 'HH:mm:ss'; gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/688 --jq '[.state,.draft,.head.sha[0:8],.mergeable_state,.base.sha[0:8],([.labels[].name]|join(","))] | @tsv'; git -C C:/Users/dkhay/continuous-claude fetch fork 2>&1 | Select-Object -Last 1; git -C C:/Users/dkhay/continuous-claude rev-parse --short=8 fork/main; node C:/Users/dkhay/continuous-claude/scripts/coordination/run-lock.mjs list | Select-Object -First 3; Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*pre-pr*' -or $_.CommandLine -like '*coderabbit*' } | Select-Object ProcessId,@{n='cmd';e={$_.CommandLine.Substring(0,[Math]::Min(120,$_.CommandLine.Length))}}`
+  const SEAT_REFUSED_3 = String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs add coord-slot-queue-full-form --title "Free-slot queue posts the full-review form on a merge-only head" --scope "OWNS: scripts/github/slot-queue.mjs and scripts/github/slot-queue-model.mjs (only the request text the queue posts for a PR whose head only merges main over a reviewed commit, by mergeOnlyOf and requestCommentOf of cr-paid.mjs), scripts/github/fixtures/slot-queue/, their *.test.mjs files. NEVER: the queue state file and its write verbs beyond the post text (Dave's /slot command keeps them), cr-paid.mjs paid limits, .claude/hooks/src/decision-gate.ts (needs the seat), ship-ask.mjs (Coord standard item 3), pre-pr.mjs (PR 690 and Coord standard). GOAL: when a free slot opens for a merge-only head, the queue posts the full-review request (free, $0), so CodeRabbit reviews the head instead of answering Already reviewed. Proof: one replay of the PR 685 case through the queue post path gives the full form, a normal head still gives the plain form, and no paid word is posted. DESIGN NOTE FIRST to the seat. DECISION: Dave, AskUserQuestion 2026-11-23 07:42 CST 'Free-slot queue full form, P2 (Recommended)'. RELATES TO: re-program, coord-cap-override-followups"; node C:/Users/dkhay/.claude/scripts/lane.mjs band coord-slot-queue-full-form P2`
+  // Entry 3 as the seat can send it: the card id and no module name in the text.
+  const SEAT_REFUSED_3_ID_ONLY = String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs add coord-slot-queue-full-form --title "Free-slot queue posts the full-review form on a merge-only head" --scope "OWNS: the queue post text. GOAL: when a free slot opens for a merge-only head, the queue posts the full-review request (free, $0). RELATES TO: re-program, coord-cap-override-followups"; node C:/Users/dkhay/.claude/scripts/lane.mjs band coord-slot-queue-full-form P2`
+  const SEAT_REFUSED_4 = String.raw`Set-Location -LiteralPath 'C:/Users/dkhay/continuous-claude' -ErrorAction Stop; $t=Get-Date -Format 'HH:mm'; $t; $a=node scripts/coordination/gate-lines.mjs line --kind NEXT-CARD --to "Status band" --ask 07:42; $a; Add-Content -LiteralPath .claudedocs/coordination/milestones/re-program.md -Value @("", "$t CST seat: Dave picked the next card for Status band: coord-slot-queue-full-form, band P2 (AskUserQuestion 07:42). Card added. Coord standard 07:42: items 1 (cr-fix half), 2, 3, 4, 5 GREEN at d3ea5703, fork/main c48217ef merged clean; item 6 (R8) waits on PR 690. No reply sent (status only).", $a)`
+  const SEAT_REFUSED_5 = String.raw`Set-Location -LiteralPath 'C:/Users/dkhay/continuous-claude' -ErrorAction Stop; $t=Get-Date -Format 'HH:mm'; $a=node scripts/coordination/gate-lines.mjs line --kind RULING --to "Status band" --head 475b7455 --ask 08:03; $a; Add-Content -LiteralPath .claudedocs/coordination/milestones/re-program.md -Value @("", "$t CST seat: PRE-PR END Status band 475b7455 PASS (CLI run 1 of 2: 1 minor, read in the worktree CLI file, slot-queue.mjs 359-360: a claimed item with no pre-lock verdict gets the plain request, which a merge-only head answers Already reviewed). RULING: Known limit, no fix push. Only a race between two ticks reaches it, and its result equals today's behaviour (one free slot spent, no loss of money). Seat list: read the verdict for the claimed item under a short second read, or defer the post. Next: Open PR on Dave's tap.", $a)`
+
   const DENIED: [('Bash' | 'PowerShell'), string][] = [
     ['Bash', 'node scripts/github/slot-queue.mjs decide --pr 1 --kind first'],
     ['Bash', 'node scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
@@ -1530,6 +1548,26 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', "git commit -F - <<'EOF'\nslot-queue.mjs decide --pr 1 --kind pay\nEOF"],
     ['Bash', 'grep -n x scripts/github/slot-queue.mjs && node scripts/github/slot-queue.mjs drop --pr 1'],
     ['Bash', `node --test scripts/github/slot-queue.test.mjs -e "import('./scripts/github/slot-queue.mjs')"`],
+    // Coord slot guard false refusal, item 4: a paren or a brace holds code in PowerShell, so a segment that names the module and holds one is never inert.
+    ['PowerShell', 'git commit -m (node scripts/github/slot-queue.mjs drop --pr 1 --reason x)'],
+    ['PowerShell', 'Get-Content (node scripts/github/slot-queue.mjs drop --pr 1 --reason x)'],
+    ['PowerShell', 'Select-String -Path x -Pattern { node scripts/github/slot-queue.mjs drop --pr 1 }'],
+    ['PowerShell', 'git commit -m "fix(slot-queue): slot-queue.mjs decide --pr 1 now needs the lock"'],
+    // Change A must not open a split of the module name: the word has to end at a space, a paren or a comma in the same segment.
+    ['Bash', 'node scripts/github/slot-queue-m$()odel.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue-m* drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue-mod${X}el.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue-full-form.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue/x.mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/slot-queue-mod$v drop --pr 1 --reason x'],
+    ['Bash', 'echo slot-queue-full-form >> ~/.claude/state/coderabbit-slot.json'],
+    ['Bash', 'echo slot-queue'],
+    ['Bash', 'echo x\nnode scripts/github/slot-queue.mjs drop --pr 1 --reason x'],
+    ['Bash', `node scripts/github/slot-queue-${'x'.repeat(90)} drop --pr 1`],
+    // The seat's refused lines that stay refused (Known limits): the module name in a log value, a glob that may name the state file, a scope text that names the module.
+    ['PowerShell', SEAT_REFUSED_2],
+    ['PowerShell', SEAT_REFUSED_3],
+    ['PowerShell', SEAT_REFUSED_5],
   ]
 
   test('F13 shell text that names the queue file, or a queue write verb right after the script path, is denied in every form, with no spawn', async ($, on) => {
@@ -1563,8 +1601,8 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node -e "console.log(1)"'],
     ['Bash', 'node scripts/github/slot-queue.mjs tick --json && git add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
     ['Bash', 'node --test --test-name-pattern="add" scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs'],
-    // Round 2: a commit message that names the module is a git command (Minor 6); -F is the workaround when it holds a separator.
-    ['Bash', 'git commit -m "fix(slot-queue): slot-queue.mjs decide --pr 1 now needs the lock"'],
+    // Round 2: a commit message that names the module is a git command (Minor 6); -F is the workaround when it holds a separator or a paren (a paren holds code in PowerShell).
+    ['Bash', 'git commit -m "fix: slot-queue.mjs decide --pr 1 now needs the lock"'],
     ['Bash', 'git commit -F C:/tmp/msg.txt'],
     ['Bash', 'git -C C:/r/.claude/worktrees/free-slot add scripts/github/slot-queue.mjs scripts/github/slot-queue-model.mjs'],
     ['Bash', 'git diff -- scripts/github/slot-queue.mjs'],
@@ -1600,6 +1638,14 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node scripts/github/slot-queue.mjs tick --json; node scripts/github/slot-queue.mjs list --json'],
     ['Bash', 'cd C:/r && git add scripts/github/slot-queue.mjs && git status'],
     ['Bash', 'node --check scripts/github/slot-queue.mjs && node --test scripts/github/slot-queue.test.mjs'],
+    // Coord slot guard false refusal, change A: the queue name as a word (a card id, the bare word, a test file name) is text, not the module.
+    ['PowerShell', SEAT_REFUSED_1],
+    ['PowerShell', SEAT_REFUSED_3_ID_ONLY],
+    ['PowerShell', SEAT_REFUSED_4],
+    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs note coord-slot-queue-full-form "the slot-queue posts the form, see slot-queue-paid-cap) and slot-queue, ok"'],
+    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs done coord-slot-queue-full-form --merged 4ebeef85'],
+    ['Bash', 'echo slot-queue step'],
+    ['Bash', 'git commit -m "fix: coord-slot-queue-full-form posts the form"'],
   ]
 
   test('F13 the read verbs, git add of the files and the test run are not denied, and spawn no CLI', async ($, on) => {
