@@ -142,12 +142,12 @@ test('pileTile: lane done in window but created before it is open at the start',
     lane({ id: 'new', state: 'ready', created_day: '2026-11-04' }),
     lane({ id: 'gone', state: 'done', created_day: '2026-10-28', done_day: '2026-10-31' }),
   ];
-  const p = pileTile(lanes, { ...META_BASE, open_check: 2 }, TARGETS);
+  const p = pileTile(lanes, { ...META_BASE, open_check: 1 }, TARGETS); // one open lane in the list ('new'): open_check says so
   assert.equal(p.openStart, 1);
   assert.equal(p.created, 1);
   assert.equal(p.done, 1);
   assert.equal(p.net, 0);
-  assert.equal(p.openNow, 2);
+  assert.equal(p.openNow, 1);
 });
 
 // ---------------------------------------------------------------- tile 3, 4 (ported)
