@@ -257,5 +257,7 @@ test('T5b session-lifecycle with --db-url (the pg module path) is not refused fo
   const e = { ...env(), CONTINUOUS_CLAUDE_DB_URL: 'postgresql://x:y@127.0.0.1:1/continuous_claude' };
   const r = spawnSync(process.execPath, [join(HERE, 'session-lifecycle-probe.mjs'), '--db-url', 'postgresql://x:y@remote.example.invalid:5432/lanes_pr1_abcd1234'],
     { env: e, encoding: 'utf8', timeout: 60_000 });
-  assert.doesNotMatch(r.stderr, /local container/, r.stderr);
+  // The env URL names the live database: a probe that ignored --db-url would refuse it ("not a scratch database"), so any refusal fails the test.
+  assert.equal(r.error, undefined, `the child did not start: ${r.error}`);
+  assert.doesNotMatch(r.stderr, /refusing to run/, r.stderr);
 });
