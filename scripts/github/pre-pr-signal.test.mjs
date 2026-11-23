@@ -46,7 +46,8 @@ const TREE_SLEEPER = (pidFile) => `import { spawn } from 'node:child_process'; i
 spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000)', ${JSON.stringify(`${pidFile}.gc`)}], { stdio: 'ignore', detached: process.platform === 'win32' }).unref();
 writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 60000); setInterval(() => {}, 1000);`;
 
-test('SIGTERM: the handler stops the live CodeRabbit child, and the lock is freed at exit', { timeout: 120_000 }, async () => {
+// One run of the child script: the signal comes by process.emit (the handler list runs) or, with real, by a real process.kill to itself (POSIX only).
+async function signalCase(signal, expectedCode, { real = false } = {}) {
   const dir = mk('prepr-signal-');
   const store = join(dir, 'store');
   const pidFile = join(dir, 'cr.pid');
@@ -56,17 +57,17 @@ test('SIGTERM: the handler stops the live CodeRabbit child, and the lock is free
   writeFileSync(script, `import { existsSync, readFileSync } from 'node:fs';
 import { installRunLockHandlers, defaultCrRunner } from ${JSON.stringify(PRE_PR_URL)};
 import { register } from ${JSON.stringify(RUN_LOCK_URL)};
-const [pidFile, sleeper, cwd] = process.argv.slice(2);
+const [pidFile, sleeper, cwd, signal, how] = process.argv.slice(2);
 await register({ kind: 'pre-pr', pid: process.pid, holder: 'signal-test' });
 installRunLockHandlers();
 defaultCrRunner({ cwd, args: ${JSON.stringify(REVIEW)}, timeoutMs: 60000 }, { command: process.execPath, prefixArgs: [sleeper] });
 const written = (f) => existsSync(f) && Number(readFileSync(f, 'utf8')) > 0;
 while (!written(pidFile) || !written(pidFile + '.gc')) await new Promise((r) => setTimeout(r, 50));
 console.log('READY');
-process.emit('SIGTERM');
+if (how === 'real') process.kill(process.pid, signal); else process.emit(signal);
 await new Promise((r) => setTimeout(r, 30000)); // the handler exits first; a missing handler would fall through to here and the test fails on the exit code
 `);
-  const r = spawnSync(process.execPath, [script, pidFile, sleeper, dir], {
+  const r = spawnSync(process.execPath, [script, pidFile, sleeper, dir, signal, real ? 'real' : 'emit'], {
     encoding: 'utf8', timeout: 100_000, env: { ...process.env, RUN_LOCK_DIR: store },
   });
   const out = `${r.stdout}\n${r.stderr}`;
@@ -75,7 +76,7 @@ await new Promise((r) => setTimeout(r, 30000)); // the handler exits first; a mi
   const gcPid = pidOf(`${pidFile}.gc`);
   try {
     assert.match(r.stdout, /READY/, out);
-    assert.equal(r.status, 143, out);
+    assert.equal(r.status, expectedCode, out);
     assert.ok(crPid > 0 && gcPid > 0, 'the fake cr and its grandchild started');
     assert.equal(await waitDead(crPid), true, `the fake cr (pid ${crPid}) is still running after the handler`);
     assert.equal(await waitDead(gcPid), true, `the grandchild of the fake cr (pid ${gcPid}) is still running after the handler`);
@@ -85,7 +86,17 @@ await new Promise((r) => setTimeout(r, 30000)); // the handler exits first; a mi
     // Each pid was read from a file our own fake cr wrote a moment ago: stop only those exact pids.
     for (const p of [crPid, gcPid]) if (p > 0 && isAlive(p)) { try { process.kill(p, 'SIGKILL'); } catch { /* gone */ } }
   }
-});
+}
+
+test('SIGTERM: the handler stops the live CodeRabbit child, and the lock is freed at exit', { timeout: 120_000 }, () => signalCase('SIGTERM', 143));
+
+// Card coord-prepr-sighup: a closed terminal sends CTRL_CLOSE on Windows, which node gives as SIGHUP. Ctrl+Break is SIGBREAK (Windows only).
+// Source change that makes each fail: drop SIGHUP (or SIGBREAK) from the handler list, and the child falls through to the 30 s wait.
+test('SIGHUP: a closed terminal stops the live CodeRabbit child, frees the lock, and exits 129', { timeout: 120_000 }, () => signalCase('SIGHUP', 129));
+
+test('SIGBREAK: Ctrl+Break stops the live CodeRabbit child, frees the lock, and exits 149 (Windows only)', { timeout: 120_000, skip: process.platform !== 'win32' }, () => signalCase('SIGBREAK', 149));
+
+test('SIGHUP, real signal: the kernel delivers it to the handler (POSIX only)', { timeout: 120_000, skip: process.platform === 'win32' }, () => signalCase('SIGHUP', 129, { real: true }));
 
 test('the registry holds the child only while it runs: after the child ends there is nothing to stop', async () => {
   const dir = mk('prepr-signal-');
