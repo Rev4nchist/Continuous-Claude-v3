@@ -2405,6 +2405,47 @@ test('GU9: a body file edited during the run is not overwritten by the GREEN rew
   assert.equal(existsSync(stampFile(repo)), false);
 });
 
+// ---------- GH: a stale GREEN that the run cannot settle prints the body file, the line, the found sha and the wanted sha (card coord-prepr-stale-head-message) ----------
+// A separate NOTE row "evidence:hint". The evidence FAIL text, the status and the exit stay as they were. A GREEN that the run settles gets no hint.
+const hintLine = (result) => result.lines.find((l) => /evidence:hint/.test(l));
+
+test('GH1: an own commit after the GREEN commit: a hint row names the body path, the GREEN line (CRLF, fenced decoy skipped), the old and the new sha', async () => {
+  for (const nl of ['\n', '\r\n']) {
+    const repo = makeRepo({ files: { 'misc/x.dat': 'x\n' } });
+    const old = repo.head;
+    writeFileSync(path.join(repo.dir, 'misc/x.dat'), 'changed after the GREEN run\n');
+    git(repo.dir, 'add', '.');
+    git(repo.dir, 'commit', '-q', '-m', 'own change after GREEN');
+    const head = git(repo.dir, 'rev-parse', 'HEAD');
+    const decoy = `GREEN: \`x\` @ ${'d'.repeat(40)}`;
+    const { result, bodyPath } = await runWithBodyFile({ dir: repo.dir }, greenBody({ green: old, redExtra: decoy, nl }));
+    assert.equal(result.ok, false);
+    assert.ok(result.lines.some((l) => /GREEN names commit/.test(l)), 'the FAIL text stays');
+    const hint = hintLine(result);
+    assert.ok(hint, result.lines.join('\n'));
+    assert.ok(hint.includes(bodyPath), hint);
+    assert.match(hint, /Run the check on the head first; then in /, 'the hint leads with the run, never a bare sha edit');
+    assert.match(hint, /line 11\b/, `${JSON.stringify(nl)}: the decoy line 7 inside the fence does not count; GREEN is line 11`);
+    assert.ok(hint.includes(old.slice(0, 7)) && hint.includes(head.slice(0, 7)), hint);
+    assert.equal(existsSync(stampFile(repo)), false);
+  }
+});
+
+test('GH2: a GREEN that the run settles (clean merge of main, gates pass) gets no hint row', async () => {
+  const repo = mergedRepo();
+  const { result } = await runWithBodyFile(repo, greenBody({ green: repo.old }));
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.equal(hintLine(result), undefined);
+});
+
+test('GH3: greenLineHint is null for no GREEN line, two GREEN lines, or a GREEN that names the head', () => {
+  const head = 'a'.repeat(40);
+  assert.equal(PRE.greenLineHint({ bodyText: 'Proof type: docs\n', bodyPath: 'b.md', head }), null);
+  const two = `${greenBody({ green: 'c'.repeat(40) })}\n${greenBody({ green: 'c'.repeat(40), withRed: false })}`;
+  assert.equal(PRE.greenLineHint({ bodyText: two, bodyPath: 'b.md', head }), null);
+  assert.equal(PRE.greenLineHint({ bodyText: greenBody({ green: head.slice(0, 7) }), bodyPath: 'b.md', head }), null);
+});
+
 // ---------- GU7, GU8: a GREEN taken before an own change is not carried to the new head (review of PR flow quickfixes) ----------
 // The rewrite is only for "the base was merged in". GU7: an own commit after the GREEN commit (linear, or after a merge of
 // main) changed code that the GREEN run never saw. GU8: a merge of main whose conflict was resolved by hand holds code that
