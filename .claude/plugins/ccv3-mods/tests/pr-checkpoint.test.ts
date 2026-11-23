@@ -1616,6 +1616,9 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs say coord-slot-queue --to seat'],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs' --to $(node scripts/github/slot-queue.mjs drop --pr 1)"],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs'; node scripts/github/slot-queue.mjs drop --pr 1 --reason x"],
+    // CodeRabbit CLI major at 9667fa9a (run 2): a semicolon inside a string cuts the raw segment, and the piece after it reads as a document append while Bash reads the redirect.
+    ['Bash', "echo 'x; Add-Content -LiteralPath x.md -Value ' > scripts/github/slot-queue.mjs # '"],
+    ['Bash', "echo 'x; Add-Content -LiteralPath x.md -Value ' >> scripts/github/slot-queue-model.mjs # '"],
     // CodeRabbit CLI major at f8df760d: a backslash-escaped double quote ends the string for the regex, but not for Bash, so the `>` below is an unquoted redirect onto the module.
     ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs say "a\" " > scripts/github/slot-queue.mjs \"`],
     ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs say "a\" " >> scripts/github/slot-queue-model.mjs \"`],
