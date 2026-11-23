@@ -17,6 +17,7 @@
 //   classifyOutput maps a shape to the wrong name                                                   -> HP13
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import {
   REQUIRES_FIXTURE, classifyOutput, planFixtures, validateFixture, loadFixtures, runFixture, runPayloadGate, liveLogHasRun, ISOLATION_KEYS,
 } from './hook-payload.mjs';
+import * as hp from './hook-payload.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -237,6 +239,62 @@ test('HP15 the hook runs in a throwaway git repo with a fork remote, never in th
     assert.equal(out.cfg?.decisions?.enforce, true);
     assert.equal(out.cfg?.decisions?.enforcePush, true);
   } finally { cleanup(root); }
+});
+
+// CLI review of 7eb137dc (seat ruling 07:3x): items 2, 3 and 4.
+test('HP16 a guard whose fixture folder holds no fixture file fails by name; a folder alone is not coverage', async () => {
+  const root = makeRoot({ 'decision-gate': { dist: GATE_ALLOW } });
+  try {
+    const dir = path.join(root, '.claude', 'hooks', 'fixtures', 'decision-gate');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'README.md'), 'notes only\n');
+    const r = await runPayloadGate({ root, changed: ['.claude/hooks/src/decision-gate.ts'], runId: 'r16', liveLogPath: path.join(root, 'live.jsonl') });
+    assert.equal(r.failed, true);
+    assert.match(r.lines.join('\n'), /decision-gate.*no fixture file/);
+    // A hook outside the list with an empty folder is not an error: only the five guards must have fixtures.
+    const other = makeRoot({ other: { dist: GATE_ALLOW } });
+    try {
+      mkdirSync(path.join(other, '.claude', 'hooks', 'fixtures', 'other'), { recursive: true });
+      const ok = await runPayloadGate({ root: other, changed: ['.claude/hooks/src/other.ts'], runId: 'r16b', liveLogPath: path.join(other, 'live.jsonl') });
+      assert.equal(ok.failed, false);
+    } finally { cleanup(other); }
+  } finally { cleanup(root); }
+});
+
+test('HP17 a staged-only change is a changed file', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'hp-git-'));
+  const git = (...args) => execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd: root, encoding: 'utf8' });
+  try {
+    git('init', '-q');
+    writeFileSync(path.join(root, 'base.txt'), 'base\n');
+    git('add', 'base.txt');
+    git('commit', '-q', '-m', 'base');
+    mkdirSync(path.join(root, '.claude', 'hooks', 'src'), { recursive: true });
+    writeFileSync(path.join(root, '.claude', 'hooks', 'src', 'new-guard.ts'), '// new\n');
+    git('add', '.claude/hooks/src/new-guard.ts'); // staged: not in the committed diff, the unstaged diff or the untracked list
+    assert.ok(hp.changedFromGit(root, 'HEAD').includes('.claude/hooks/src/new-guard.ts'));
+  } finally { cleanup(root); }
+});
+
+test('HP18 an output with no hookEventName is not a gate or an inject result', async () => {
+  assert.equal(classifyOutput('{"hookSpecificOutput":{"permissionDecision":"deny"}}'), 'other');
+  assert.equal(classifyOutput('{"hookSpecificOutput":{"hookEventName":"","permissionDecision":"deny"}}'), 'other');
+  assert.equal(classifyOutput('{"hookSpecificOutput":{"additionalContext":"x"}}'), 'other');
+  const root = makeRoot({ ignored: { dist: `console.log(JSON.stringify({hookSpecificOutput:{permissionDecision:'deny'}}));`, fixtures: { c1: fx() } } });
+  try {
+    const r = await runPayloadGate({ root, changed: ['.claude/hooks/src/ignored.ts'], runId: 'r18', liveLogPath: path.join(root, 'live.jsonl') });
+    assert.equal(r.failed, true, 'Claude Code ignores this output, so a fixture that expects deny must not pass');
+  } finally { cleanup(root); }
+});
+
+test('HP19 the package-install fixtures run the package manager their name says', () => {
+  const dir = path.join(REPO, '.claude', 'hooks', 'fixtures', 'package-install-guard');
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.json'))) {
+    const named = file.match(/^deny-(npm|pip)-/);
+    if (!named) continue;
+    const command = JSON.parse(readFileSync(path.join(dir, file), 'utf8')).input.tool_input.command;
+    assert.ok(command.startsWith(`${named[1]} `), `${file} runs "${command}"`);
+  }
 });
 
 test('HP14 every saved fixture in this repo is valid and names a source file', () => {

@@ -44,7 +44,8 @@ export function classifyOutput(stdout) {
   if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return 'other';
   if (Object.keys(obj).length === 0) return 'empty';
   const hso = obj.hookSpecificOutput;
-  if (hso && typeof hso === 'object') {
+  // shared/output.ts: hookEventName is required in hookSpecificOutput. Claude Code ignores the object without it, so it is not a result.
+  if (hasEventName(hso)) {
     if (typeof hso.permissionDecision === 'string') return 'gate';
     if (typeof hso.additionalContext === 'string') return 'inject';
   }
@@ -52,8 +53,13 @@ export function classifyOutput(stdout) {
   return 'other';
 }
 
+const hasEventName = (hso) => !!hso && typeof hso === 'object' && typeof hso.hookEventName === 'string' && hso.hookEventName !== '';
+
 function decisionOf(stdout) {
-  try { return JSON.parse(stdout)?.hookSpecificOutput?.permissionDecision ?? null; } catch { return null; }
+  try {
+    const hso = JSON.parse(stdout)?.hookSpecificOutput;
+    return hasEventName(hso) ? hso.permissionDecision ?? null : null;
+  } catch { return null; }
 }
 
 /**
@@ -150,6 +156,7 @@ export function loadFixtures(root, names) {
     const dir = fixtureDir(root, hook);
     if (!existsSync(dir)) continue;
     if (!existsSync(path.join(root, '.claude', 'hooks', 'src', `${hook}.ts`))) problems.push(`${hook}: fixture folder has no source file .claude/hooks/src/${hook}.ts`);
+    const before = fixtures.length;
     for (const file of readdirSync(dir).filter((f) => f.endsWith('.json')).sort()) {
       const caseName = file.slice(0, -'.json'.length);
       const label = `${hook}/${caseName}`;
@@ -159,6 +166,8 @@ export function loadFixtures(root, names) {
       if (p.length) problems.push(...p);
       else fixtures.push({ hook, label, caseName, fixture });
     }
+    // A folder alone is not coverage: a guard that must have fixtures and loads none would pass with nothing checked.
+    if (REQUIRES_FIXTURE.includes(hook) && fixtures.length === before) problems.push(`${hook}: requires a fixture (REQUIRES_FIXTURE) and its folder has no fixture file that passed the checks`);
   }
   return { fixtures, problems };
 }
@@ -280,9 +289,10 @@ export async function runPayloadGate({ root, changed, runId = randomUUID().slice
   return { failed, lines, summary, count: fixtures.length, hooks: plan.hooks };
 }
 
-function changedFromGit(root, base) {
+/** Committed (base...HEAD), staged, unstaged and untracked paths. A staged-only file is in none of the other three. */
+export function changedFromGit(root, base) {
   const run = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).split('\n').map((s) => s.trim()).filter(Boolean);
-  return [...new Set([...run(['diff', '--name-only', `${base}...HEAD`]), ...run(['diff', '--name-only']), ...run(['ls-files', '--others', '--exclude-standard'])])];
+  return [...new Set([...run(['diff', '--name-only', `${base}...HEAD`]), ...run(['diff', '--name-only', '--cached']), ...run(['diff', '--name-only']), ...run(['ls-files', '--others', '--exclude-standard'])])];
 }
 
 async function main(argv) {
