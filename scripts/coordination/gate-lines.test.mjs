@@ -27,6 +27,8 @@
 //   H11 a full ISO time later than the clock is refused (an explicit time must pass)
 //   H12 on a DST day the check reads the wrong clock (the offset of its own instant is lost)
 //   H13 the fix leaks into resolveTime and changes the count window rule
+//   H14 spring forward: a typed time in the skipped hour passes because the offset guess moves it to a past instant
+//   H15 fall back: a typed time later than the second 01:xx clock passes
 // Pure functions for the rules, the real script for the exit codes. No database, no network. A scratch folder for files.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -397,6 +399,21 @@ test('H12 on a DST day the check uses the clock of that day', async () => {
   const now = Date.parse('2026-11-01T14:00Z'); // 08:00 CST
   await assert.rejects(LINE({ ask: '08:02' }, now, { offsetAt }), WORD('08:02', '2 min', '08:00'));
   assert.equal(await LINE({ ask: '00:30' }, now, { offsetAt }), 'GATE 2026-11-01T08:00-06:00 kind=GO to=x head=- ask=2026-11-01T00:30-05:00', 'a time before the change keeps its own offset');
+});
+
+test('H14 spring forward: at clock 01:45 CST an --ask of 02:15 (an hour that does not exist) is refused', async () => {
+  const change = Date.parse('2026-03-08T08:00Z'); // US spring forward: 02:00 CST is 08:00Z
+  const offsetAt = (ms) => (ms < change ? -360 : -300);
+  const now = Date.parse('2026-03-08T07:45Z'); // 01:45 CST
+  await assert.rejects(LINE({ ask: '02:15' }, now, { offsetAt }), WORD('02:15', '30 min', '01:45'));
+  assert.equal(await LINE({ ask: '01:15' }, now, { offsetAt }), 'GATE 2026-03-08T01:45-06:00 kind=GO to=x head=- ask=2026-03-08T01:15-06:00', 'a past time that day is kept');
+});
+
+test('H15 fall back: at clock 01:30 in the second 01:00 hour an --ask of 01:45 is refused (the ISO form covers the rest)', async () => {
+  const change = Date.parse('2026-11-01T07:00Z'); // US fall back: 02:00 CDT is 07:00Z
+  const offsetAt = (ms) => (ms < change ? -300 : -360);
+  const now = Date.parse('2026-11-01T07:30Z'); // the second 01:30, in CST
+  await assert.rejects(LINE({ ask: '01:45' }, now, { offsetAt }), WORD('01:45', '15 min', '01:30'));
 });
 
 test('H13 count still reads a later HH:mm as the day before (the window rule is unchanged)', async () => {
