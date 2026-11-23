@@ -708,8 +708,13 @@ export const isSlotStateFile = (path: string): boolean => /\/\.claude\/state\/co
 
 const count = (re: RegExp, text: string): number => text.match(re)?.length ?? 0
 
-/** A segment that is only a git, search, read or `node --test|--check` command. It runs no queue verb, whatever text it holds. */
+/**
+ * A segment that is only a git, search, read or `node --test|--check` command. It runs no queue verb, whatever text it holds.
+ * A paren or a brace is never inert: in PowerShell `git commit -m (node <module> drop)` and `Get-Content (...)` run the code inside. Only a segment that names
+ * the module or the state file reaches this test, so a commit title with a paren now needs `git commit -F <file>` (the deny text says so).
+ */
 const isInertSegment = (segment: string): boolean => {
+  if (/[({]/.test(segment)) return false
   const text = segment.trim().replace(ENV_PREFIX, '')
   if (GIT_READ_OR_COMMIT.test(text)) return !GIT_RUNS_CODE.test(text)
   if (SEARCH_OR_READ.test(text)) return !SEARCH_RUNS_CODE.test(text)

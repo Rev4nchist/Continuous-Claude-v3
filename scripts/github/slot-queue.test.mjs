@@ -262,6 +262,57 @@ test('SQ7: no post this tick means no extra verdict read', () => {
   assert.deepEqual(bodiesOf(e), []);
 });
 
+// --- card coord-queue-prelock-verdict: the item claimed inside the lock must be the item whose verdict was read before it -------------------
+// How it can fail: a peer changes the queue between the pre-lock read and the claim, the claimed item has no verdict, and the plain request goes out
+// on a merge-only head ("already reviewed", slot lost); a defer writes the holder or skips the timers; a defer also blocks the normal tick.
+// The race is made by the verdict read itself: checkPr(5) is the pre-lock read, and it edits the state file before the tick takes the lock.
+const raceTick = (e, items, peer, over = {}) => {
+  const reads = [];
+  const checkPr = (pr) => { reads.push(pr); if (reads.length === 1) peer(); return MERGE_ONLY(pr); };
+  const r = run(e, ['tick', '--json'], { checkPr, ...over });
+  return { r, reads };
+};
+
+// Breaks if tickLocked posts for a claimed item that has no pre-lock verdict (the plain form on a merge-only head), takes the holder for it, or reads a verdict inside the lock.
+test('SQ10: a peer drops the pre-lock pick, so the claimed item has no verdict: no post, no holder, lastTickAt written, no second read', () => {
+  const e = setup('sq10');
+  setWorld(e, { 5: prOf(5), 6: prOf(6) });
+  setState(e, [itemOf(5), itemOf(6, { queuedAt: at(-4) })]);
+  const { r, reads } = raceTick(e, null, () => setState(e, [itemOf(5, { state: 'dropped', dropReason: 'closed' }), itemOf(6, { queuedAt: at(-4) })]));
+  assert.equal(r.code, 0);
+  assert.deepEqual(reads, [5], 'one read, before the lock; none inside it');
+  assert.deepEqual(posts(e), [], 'no post for PR 6: its verdict was never read');
+  const s = stateOf(e);
+  assert.equal(s.holder, null);
+  assert.equal(s.lastTickAt, T0);
+  assert.equal(itemIn(e, 6).state, 'queued');
+  assert.equal(itemIn(e, 6).posts, 0);
+});
+
+// Breaks if a peer add (a later item) makes the tick defer: the pick is the same item, so its read verdict applies and the full form goes out.
+test('SQ11: a peer adds a later item between the read and the claim: the same item is picked and posts the full form', () => {
+  const e = setup('sq11');
+  setWorld(e, { 5: prOf(5), 7: prOf(7) });
+  setState(e, [itemOf(5)]);
+  const { r } = raceTick(e, null, () => setState(e, [itemOf(5), itemOf(7, { queuedAt: at(-1), addedAt: at(-1) })]));
+  assert.equal(r.code, 0);
+  assert.deepEqual(posts(e), [{ pr: 5, body: FULL_FREE }]);
+  assert.equal(stateOf(e).holder.pr, 5);
+});
+
+// Breaks if a deferred tick skips askTimers or flagPaid: the 60-minute time-out toast of the claimed item must still fire, once.
+test('SQ12: a deferred tick still raises the 60-minute time-out toast', () => {
+  const e = setup('sq12');
+  setWorld(e, { 5: prOf(5), 7: prOf(7) });
+  setState(e, [itemOf(5, { state: 'timed-out', queuedAt: at(-70) }), itemOf(7, { state: 'timed-out', queuedAt: at(-65) })]);
+  const { r } = raceTick(e, null, () => setState(e, [itemOf(5, { state: 'dropped', dropReason: 'closed' }), itemOf(7, { state: 'timed-out', queuedAt: at(-65) })]));
+  assert.equal(r.code, 0);
+  assert.deepEqual(posts(e), []);
+  assert.equal(stateOf(e).holder, null);
+  assert.equal(toasts(r.json).filter((t) => /PR #7: no free slot for 60 minutes/.test(t.text)).length, 1);
+  assert.equal(itemIn(e, 7).asked.timeout60, true);
+});
+
 // F5 at the CLI. Breaks if the post step runs before the reviewed-head check.
 test('F5: a head CodeRabbit already reviewed is done and gets no post', () => {
   const e = setup('f5');
