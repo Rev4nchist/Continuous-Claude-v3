@@ -736,3 +736,113 @@ test('SC2: stricterCapOf keeps today rule with a fork/main ref (main 3 over bran
     assert.equal(m.stricterCapOf(bad), null, 'an unreadable config is an unknown cap, as before');
   } finally { rmSync(over, { recursive: true, force: true }); rmSync(bad, { recursive: true, force: true }); }
 });
+
+// ---- card coord-shipask-cap-unknown: an unreadable CLI cap says so, and the next step is named as pre-pr really runs it ----
+// How the unit can fail, and the test that catches it:
+//   capStateOf blurs a missing config, a missing cap key and a known cap                                                -> SK1
+//   "CLI cost unknown" sits next to a description that says the review is free (the old text)                           -> SK2, SK3
+//   Stop here is not first where pre-pr cannot run a CLI review (config, ledger), or is first where it can (no key)      -> SK2, SK3, SK4
+//   the per-file price is a typed literal, not CR_CENTS_PER_FILE of pre-pr.mjs                                          -> SK4
+//   a known cap changes text                                                                                             -> SK5
+//   a new sentence is over 20 words, a label holds a path, a question is over 3 lines                                    -> SK6
+//   the cap-override question offers a USD lift that lifts nothing without saying so                                     -> SK7
+//   the real gather path (an unreadable config file in a repo) still prints the old text                                 -> SK8
+const NO_CAP = { ...OPEN, stampHead: null, capLeftUsd: null };
+const sentencesOf = (text) => String(text).split(/(?<=[.?!])\s+|\n/).map((s) => s.trim()).filter(Boolean);
+
+test('SK1: capStateOf names the three states: unreadable config, no cap key, a known cap (no main ref is cap 0)', async () => {
+  const bad = capFixture({ mainText: capJson(3), branchText: '{bad' });
+  const noKey = capFixture({ mainText: '{}', branchText: '{}' });
+  const known = capFixture({ mainText: capJson(3), branchText: capJson(6) });
+  const noRef = capFixture({ mainText: null, branchText: capJson(6) });
+  try {
+    const m = await load();
+    assert.deepEqual(m.capStateOf(bad), { kind: 'config', cap: null });
+    assert.deepEqual(m.capStateOf(noKey), { kind: 'no-key', cap: null });
+    assert.deepEqual(m.capStateOf(known), { kind: 'known', cap: 3 });
+    assert.deepEqual(m.capStateOf(noRef), { kind: 'known', cap: 0 });
+    assert.equal(m.stricterCapOf(bad), null);
+  } finally { for (const d of [bad, noKey, known, noRef]) rmSync(d, { recursive: true, force: true }); }
+});
+
+test('SK2: an unreadable config puts Stop here first, says the config cannot be read, and never calls the review free', async () => {
+  const m = await load();
+  const s = m.rerunPrePrSpec({ ...NO_CAP, capWhy: 'config' });
+  assert.equal(s.options[0].label, 'Stop here (Recommended)');
+  assert.match(s.question, /review config cannot be read/);
+  assert.match(s.options[1].label, /^Re-run pre-pr anyway$/);
+  assert.match(s.options[1].description, /stops at the config read/);
+  assert.match(s.options[1].description, /no CLI review/i);
+  assert.doesNotMatch(JSON.stringify(s), /CLI cost unknown|free inside/);
+});
+
+test('SK3: an unreadable ledger puts Stop here first, says the ledger cannot be read, and says the CLI step fails', async () => {
+  const m = await load();
+  const s = m.rerunPrePrSpec({ ...NO_CAP, capWhy: 'ledger' });
+  assert.equal(s.options[0].label, 'Stop here (Recommended)');
+  assert.match(s.question, /paid CLI ledger cannot be read/);
+  assert.match(s.options[1].description, /CLI step fails/);
+  assert.doesNotMatch(JSON.stringify(s), /CLI cost unknown|free inside/);
+});
+
+test('SK4: no cap key keeps Re-run first, says no daily cap is set, and prices a file from CR_CENTS_PER_FILE of pre-pr.mjs', async () => {
+  const m = await load();
+  const { CR_CENTS_PER_FILE } = await import(pathToFileURL(path.join(HERE, 'pre-pr.mjs')).href);
+  const s = m.rerunPrePrSpec({ ...NO_CAP, capWhy: 'no-key' });
+  assert.equal(s.options[0].label, 'Re-run pre-pr (no daily CLI cap set) (Recommended)');
+  assert.match(s.options[0].description, /No daily cap applies/);
+  assert.ok(s.options[0].description.includes(`$${(CR_CENTS_PER_FILE / 100).toFixed(2)} a file`), s.options[0].description);
+  assert.doesNotMatch(JSON.stringify(s), /CLI cost unknown|free inside/);
+});
+
+test('SK5: a known cap keeps the old text', async () => {
+  const m = await load();
+  const s = m.rerunPrePrSpec({ ...OPEN, stampHead: null, capLeftUsd: 3 });
+  assert.equal(s.options[0].label, 'Re-run pre-pr (up to $3.00 CLI) (Recommended)');
+  assert.match(s.options[0].description, /free inside the hourly allowance/);
+});
+
+test('SK6: each new text fits the question rules: 3 lines, 20 words a sentence, no path in a label', async () => {
+  const m = await load();
+  for (const why of ['config', 'ledger', 'no-key']) {
+    const s = m.rerunPrePrSpec({ ...NO_CAP, capWhy: why });
+    assert.ok(s.question.split('\n').length <= 3, `${why}: lines`);
+    for (const t of [s.question, ...s.options.map((o) => o.description)]) {
+      for (const sentence of sentencesOf(t)) assert.ok(sentence.split(/\s+/).length < 20, `${why}: long sentence: ${sentence}`);
+    }
+    for (const o of s.options) assert.doesNotMatch(o.label, /[\\/]|\.mjs|\.json/, `${why}: path in label`);
+    assert.equal(s.options.filter((o) => o.label.includes('(Recommended)')).length, 1);
+  }
+});
+
+test('SK7: the cap-override question says the USD flag lifts nothing while the cap is unknown or unset, and names an unreadable config', async () => {
+  const m = await load();
+  const base = { branch: 'feat/x', head: HEAD, usd: 6, extraRun: false, total: 1, cap: null, files: 2, estimateUsd: 0.5 };
+  const noKey = m.capOverrideSpec({ ...base, capWhy: 'no-key' });
+  const config = m.capOverrideSpec({ ...base, capWhy: 'config' });
+  assert.match(noKey.question, /The USD flag lifts nothing without a cap\./);
+  assert.match(noKey.options[1].description, /USD flag changes nothing/);
+  assert.match(config.question, /cannot be read/);
+  assert.ok(config.question.split('\n').length <= 3 && noKey.question.split('\n').length <= 3);
+  const run = m.capOverrideSpec({ ...base, usd: null, extraRun: true, capWhy: 'no-key' });
+  assert.doesNotMatch(run.question, /lifts nothing/);
+  const known = m.capOverrideSpec({ ...base, cap: 3 });
+  assert.doesNotMatch(known.question, /lifts nothing/);
+});
+
+test('SK8: the real gather path in a repo with an unreadable config prints the Stop-here question', () => {
+  const repo = temp('shipask-cfg-');
+  try {
+    const gitIn = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo, encoding: 'utf8' });
+    gitIn('init', '-q', '-b', 'feat/cap');
+    writeFileSync(path.join(repo, 'a.txt'), '1\n');
+    gitIn('add', 'a.txt');
+    gitIn('commit', '-q', '-m', 'one');
+    writeFileSync(path.join(repo, 'review-router.config.json'), '{bad');
+    const r = run(['open-pr', '--branch', 'feat/cap', '--json'], { cwd: repo });
+    assert.equal(r.status, 0, r.stderr);
+    const q = JSON.parse(r.stdout);
+    assert.equal(q.options[0].label, 'Stop here (Recommended)');
+    assert.match(q.question, /review config cannot be read/);
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
