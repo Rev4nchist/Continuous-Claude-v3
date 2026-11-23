@@ -416,6 +416,10 @@
       "reason": "pre-pr gate only; CI has no step"
     },
     {
+      "path": "scripts/github/hook-payload.test.mjs",
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
       "path": "scripts/github/land-decision.test.mjs",
       "reason": "pre-pr gate only; CI has no step"
     },
@@ -509,6 +513,10 @@
     },
     {
       "path": "scripts/github/pre-pr-gate-stats.test.mjs",
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
+      "path": "scripts/github/pre-pr-hook-payload.test.mjs",
       "reason": "pre-pr gate only; CI has no step"
     },
     {
