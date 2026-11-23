@@ -1,0 +1,6 @@
+{
+  "case": "deny-cli-credits",
+  "event": "PreToolUse",
+  "input": { "session_id": "fixture", "tool_name": "Bash", "tool_input": { "command": "cr review --use-credits" } },
+  "expect": { "exit": [0], "shape": "gate", "decision": "deny" }
+}
