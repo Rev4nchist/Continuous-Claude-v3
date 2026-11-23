@@ -25,7 +25,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadStricterConfig, viewOf } from './config-stricter.mjs';
+import { loadStricterConfig, readMainConfig, stricterFromRead, viewOf } from './config-stricter.mjs';
+import { cliCapOf } from './cr-paid.mjs';
 import { CAP_KEEP_LABEL, CAP_LIFT_LABEL, CAP_STEP, FLAG_EXTRA, FLAG_USD, capOverrideKey, takeCapFlags } from './lib/cap-override.mjs';
 import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
 import { CR_CENTS_PER_FILE } from './pre-pr.mjs';
@@ -157,6 +158,17 @@ export function cliSkipSpec(d) {
   return { header: 'CLI skip', question: lines.join('\n'), options: spent >= 2 ? [skip, keep] : [keep, skip] };
 }
 
+/** Two sentences for a bad checkout config: what cr-fix does (the main side decides) and that pre-pr stops. '' when the main side could not be read. */
+function crFixSentence(crFixCap, mainSource) {
+  const unreadable = /unreadable|git-error/.test(String(mainSource));
+  const fix = typeof crFixCap === 'number'
+    ? (crFixCap === 0 && mainSource === 'none' ? `cr-fix has no main config to compare, so its cap is ${usd(0)}.`
+      : crFixCap === 0 && unreadable ? `cr-fix cannot read the main config, so its cap is ${usd(0)}.`
+        : `cr-fix runs under the main cap ${usd(crFixCap)}.`)
+    : crFixCap === null ? 'cr-fix runs with no cap, as main sets none.' : '';
+  return fix ? `${fix} pre-pr stops at its config read, so the tap lifts nothing for pre-pr.` : '';
+}
+
 /**
  * cap-override (card coord-cap-override, PART B): Dave decides to lift the CLI cap for ONE run. data: { branch, head, usd (a number or null),
  * extraRun (boolean), total (today's paid CLI spend), cap (the config daily cap, or null), files, estimateUsd }. The question names the exact flag
@@ -166,9 +178,11 @@ export function cliSkipSpec(d) {
 export function capOverrideSpec(d) {
   const flags = [d.usd != null ? `${FLAG_USD} ${d.usd}` : '', d.extraRun ? FLAG_EXTRA : ''].filter(Boolean).join(' and ');
   const capKnown = typeof d.cap === 'number';
-  const capText = capKnown ? `the ${usd(d.cap)} daily cap` : d.capWhy === 'config' ? 'a daily cap that cannot be read (the review config is unreadable)' : 'no daily cap';
+  const capText = capKnown ? `the ${usd(d.cap)} daily cap` : d.capWhy === 'config' ? 'a daily cap that cannot be read' : 'no daily cap';
   // Without a cap, cliCapOf keeps the cap null: the USD flag changes nothing. Only the run count flag acts (card coord-shipask-cap-unknown).
-  const usdIdle = !capKnown && d.usd != null;
+  // A bad checkout config (card coord-cap-unreadable-agree): cr-fix runs under the main side's cap, pre-pr stops. The USD flag then acts for cr-fix.
+  const crFixNote = !capKnown && d.capWhy === 'config' ? crFixSentence(d.crFixCap, d.mainSource) : '';
+  const usdIdle = !capKnown && d.usd != null && typeof d.crFixCap !== 'number';
   // An unknown value (null) is printed as unknown: never as $0.00 or 0 files. A real zero stays zero.
   const known = (v) => typeof v === 'number' && Number.isFinite(v);
   const spend = known(d.total) ? usd(d.total) : 'unknown';
@@ -176,7 +190,7 @@ export function capOverrideSpec(d) {
   const estimate = known(d.estimateUsd) ? usd(d.estimateUsd) : 'unknown';
   const lines = [
     `The CLI review of ${clip(d.branch, 60)} at ${String(d.head).slice(0, 7)} is stopped by a cap. Today's paid CLI spend is ${spend} against ${capText}; ${filesText}, up to ${estimate}.`,
-    `Flags for one run: ${flags} (${[d.usd != null ? 'the USD cap' : '', d.extraRun ? 'the run count' : ''].filter(Boolean).join(' and ')}).${usdIdle ? ' The USD flag lifts nothing without a cap.' : ''}`,
+    `${crFixNote ? `${crFixNote} ` : ''}Flags for one run: ${flags} (${[d.usd != null ? 'the USD cap' : '', d.extraRun ? 'the run count' : ''].filter(Boolean).join(' and ')}).${usdIdle ? ' The USD flag lifts nothing without a cap.' : ''}`,
     'Lift the cap for this one run?',
   ];
   return { header: 'CLI cap', question: lines.join('\n'), options: [
@@ -323,11 +337,23 @@ export function stricterCapOf(root) {
  *   'config'  the checkout config is missing or not a JSON object: loadStricterConfig throws and pre-pr stops at its config read.
  */
 export function capStateOf(root) {
+  const gitIn = (args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }; };
   try {
-    const gitIn = (args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }; };
     const cap = viewOf(loadStricterConfig({ root, git: gitIn, readFile: readFileSync })).cap;
     return cap === null ? { kind: 'no-key', cap: null } : { kind: 'known', cap };
-  } catch { return { kind: 'config', cap: null }; }
+  } catch { return { kind: 'config', cap: null, ...crFixCapOf(gitIn) }; }
+}
+
+/**
+ * The cap cr-fix applies when the checkout config is unreadable (card coord-cap-unreadable-agree): readCliCap in cr-fix.mjs reads a bad checkout as an
+ * empty branch config, so the main side decides: the main cap, 0 for an unreadable or missing main, none (null) for a main with no cap key. pre-pr
+ * does not do this: loadStricterConfig throws and pre-pr stops. { crFixCap, mainSource }; both undefined when the main side cannot be read at all.
+ */
+function crFixCapOf(gitIn) {
+  try {
+    const read = readMainConfig({ git: gitIn });
+    return { crFixCap: cliCapOf(stricterFromRead(read, {})), mainSource: read.source };
+  } catch { return {}; }
 }
 
 /** { usd, why }: the CLI daily cap left today in dollars (why null), or usd null and why 'config', 'no-key' or 'ledger' (the paid ledger cannot be read). */
@@ -469,10 +495,10 @@ export function capFactsOf({ readTotal, readNames }) {
 export async function gatherCapOverride({ branch, usd, extraRun }) {
   const t = branchTarget(branch, process.cwd());
   const { cliTodayOf } = await import('./cr-paid.mjs');
-  const { cap, kind: capWhy } = capStateOf(topOf());
+  const { cap, kind: capWhy, crFixCap, mainSource } = capStateOf(topOf());
   const base = ['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], topOf()));
   const facts = capFactsOf({ readTotal: () => cliTodayOf().total, readNames: () => (base && t.head ? gitText(['diff', '--name-only', `${base}...${t.head}`], topOf()) : null) });
-  return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, cap, capWhy, ...facts };
+  return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, cap, capWhy, crFixCap, mainSource, ...facts };
 }
 
 /** True only when SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one. The test seams (--facts, SHIP_ASK_STATUS_SCRIPT) need both. */
