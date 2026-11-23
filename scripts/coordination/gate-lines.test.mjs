@@ -366,7 +366,7 @@ test('H5 a receiver with spaces prints with underscores', async () => {
 // Card coord-gate-line-future-ask: the line helper refuses an HH:mm later than the clock (it read as yesterday with no word).
 const NOW12 = Date.parse(at('12:52'));
 const LINE = (spec, nowMs = NOW12, extra = {}) => lib().then((m) => m.formatLine({ kind: 'GO', to: 'x', ...spec }, { nowMs, offsetMin: -360, ...extra }));
-const WORD = (hm, ahead, clock) => new RegExp(`^${hm} is ${ahead} after the clock ${clock}; use a clock time, or a full ISO time for another day$`);
+const WORD = (hm, ahead, clock) => ({ message: new RegExp(`^${hm} is ${ahead} after the clock ${clock}; use a clock time, or a full ISO time for another day$`) });
 
 test('H8 a past HH:mm and the clock minute itself are kept as today', async () => {
   assert.equal(await LINE({ ask: '12:40' }), `GATE ${at('12:52')} kind=GO to=x head=- ask=${at('12:40')}`);
