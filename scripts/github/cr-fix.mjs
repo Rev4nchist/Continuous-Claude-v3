@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments, readPrCommits } from './review-status.mjs';
 import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, answerKeyRange, billedText, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
 import { readMainConfig, stricterConfig } from './config-stricter.mjs';
-import { cliCapCheck,cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
+import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 import { FLAG_EXTRA, FLAG_USD, claimCapOverride, hasCapOverride, noTapText, takeCapFlags } from './lib/cap-override.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
