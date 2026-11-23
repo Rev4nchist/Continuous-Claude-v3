@@ -777,3 +777,58 @@ test('CF46: no main ref and a checkout config with no cap key: cap 0 (not "no ca
     assert.equal(h.calls.runs.length, 0);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
+
+// ---- card coord-crfix-cap-first: the cap check runs before any GitHub read (it needs no value that the read gives) ----
+test('CF47: spend at the cap stops the run with 0 gh calls, 0 ancestor reads and 0 CLI runs, with the same exit code and text', async () => {
+  const h = harness({ cap: 3, ledgerRows: [cliRow(3, TODAY)] });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2, JSON.stringify(r));
+  assert.match(r.reason, /^cli-cap: .*\$3\.00.* No CLI run was started\. Raise the cap or run it tomorrow; ask Dave$/);
+  assert.equal(h.calls.gh.length, 0, `no GitHub read: ${JSON.stringify(h.calls.gh)}`);
+  assert.equal(h.calls.ancestor.length, 0);
+  assert.equal(h.calls.runs.length, 0);
+});
+
+test('CF48: cap 0 (no fork/main ref, no local main ref) stops the run with 0 gh calls and 0 CLI runs', async () => {
+  const cwd = capRepo({ mainText: null, branchText: capCfg(6) });
+  try {
+    const h = realCapHarness(0);
+    const r = await h.go({ cwd });
+    assert.equal(r.exitCode, 2, JSON.stringify(r));
+    assert.match(r.reason, /cli-cap/);
+    assert.match(r.reason, /\$0\.00/);
+    assert.equal(h.calls.gh.length, 0, `no GitHub read: ${JSON.stringify(h.calls.gh)}`);
+    assert.equal(h.calls.runs.length, 0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('CF49: a capped run reports the cap stop even when the PR read would have failed (the cap comes first, no GitHub read)', async () => {
+  const h = harness({ cap: 3, ledgerRows: [cliRow(3, TODAY)], ghError: 'HTTP 502' });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2);
+  assert.match(r.reason, /^cli-cap:/, r.reason);
+  assert.equal(h.calls.gh.length, 0);
+});
+
+test('CF50: a cap set and an unreadable ledger stops before any GitHub read, with today\'s ledger text', async () => {
+  const h = harness({ cap: 3, ledgerOverride: mkdtempSync(path.join(os.tmpdir(), 'crfix-ledger-dir-')) });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2, JSON.stringify(r));
+  assert.match(r.reason, /the paid ledger is unreadable/);
+  assert.equal(h.calls.gh.length, 0);
+  assert.equal(h.calls.runs.length, 0);
+});
+
+test('CF51 (control): under the cap the order and output stay: reviews are read first, the run goes, no cap stop', async () => {
+  const h = harness({ cap: 5, ledgerRows: [cliRow(1, TODAY)] });
+  const r = await h.go();
+  assert.equal(r.exitCode, 0, JSON.stringify(r));
+  assert.ok(h.calls.gh.length > 0, 'the GitHub reads still happen');
+  assert.ok(h.calls.gh[0].some((a) => /pulls\/219\/reviews/.test(a)), `first read is the reviews: ${h.calls.gh[0].join(' ')}`);
+  assert.equal(h.calls.runs.length, 1);
+  const none = harness({ cap: 5, ledgerRows: [cliRow(1, TODAY)], reviews: [] });
+  const rn = await none.go();
+  assert.equal(rn.exitCode, 2);
+  assert.match(rn.reason, /no CodeRabbit review/, 'an under-cap range stop keeps its text');
+  assert.equal(none.calls.runs.length, 0);
+});
