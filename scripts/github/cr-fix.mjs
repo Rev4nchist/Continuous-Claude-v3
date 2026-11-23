@@ -40,7 +40,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments, readPrCommits } from './review-status.mjs';
 import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, answerKeyRange, billedText, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
-import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
+import { readMainConfig, stricterConfig } from './config-stricter.mjs';
+import { cliCapCheck,cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 import { FLAG_EXTRA, FLAG_USD, claimCapOverride, hasCapOverride, noTapText, takeCapFlags } from './lib/cap-override.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -175,9 +176,26 @@ function safeMerges(deps, cwd, from) {
   try { return deps.mergesIn(cwd, from); } catch { return null; }
 }
 
-/** The daily CLI cap in dollars from review-router.config.json in the checkout, or null (no cap) when the file or the key is missing or bad. */
+/**
+ * The daily CLI cap in dollars: review-router.config.json of the checkout made stricter by fork/main (config-stricter.mjs, as pre-pr and
+ * ship-ask read it), so a branch cannot raise or remove its own cap. Both the cap cr-fix enforces and the override check read it here.
+ * A missing or bad checkout file counts as an empty branch config: main's cap still applies. With no main ref to compare either, that
+ * file has no cap you can trust: 0, so checkCap stops before any paid call. A main with no cap key keeps no cap (main's own policy).
+ * An unreadable fork/main is 0 (UNREADABLE_MAIN). Null (no cap) only when main and the branch both read fine and neither sets one.
+ */
 function readCliCap(cwd) {
-  try { return cliCapOf(JSON.parse(readFileSync(path.join(cwd, 'review-router.config.json'), 'utf8'))); } catch { return null; }
+  const git = (args) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  let branch = null;
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(cwd, 'review-router.config.json'), 'utf8'));
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) branch = parsed;
+  } catch { /* an unreadable checkout file is an empty branch config, below */ }
+  const main = readMainConfig({ git }).config;
+  if (branch === null && main === null) return 0;
+  return cliCapOf(stricterConfig(main, branch ?? {}));
 }
 
 function gitBranch(cwd) {
