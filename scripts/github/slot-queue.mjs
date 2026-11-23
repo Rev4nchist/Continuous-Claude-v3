@@ -335,13 +335,24 @@ function flagPaid(state, facts) {
   return { state: { ...state, items }, actions };
 }
 
+/**
+ * The claim of this tick, or none when the item it would claim has no verdict read before the lock (a peer changed the queue between that read and
+ * this claim). The post text needs the verdict: the plain request on a merge-only head is answered "already reviewed" and the free slot is lost.
+ * Nothing is claimed or posted then, and no second read runs inside the lock; the next tick reads the verdict for its own pick first.
+ * recent() holds that next tick for one dedupe window, because the deferred tick still writes lastTickAt.
+ */
+function claimWithVerdict(state, facts, now, d, session, postVerdicts) {
+  const c = claim(state, facts, now, d, session);
+  return c.item && postVerdicts?.[c.item.pr] === undefined ? { state, item: null } : c;
+}
+
 function tickLocked(a, d, facts, verdicts, postVerdicts) {
   const before = readState(d.statePath);
   if (recent(before, d)) return { code: 0, body: { ok: true, effective: false, locked: false, actions: [], ...viewOf(before, d) } };
   const now = d.now();
   const flagged = flagPaid(settle(before, facts, now, d.cfg), facts);
   const settled = flagged.state;
-  const claimed = claim(settled, facts, now, d, sessionOf(a, d));
+  const claimed = claimWithVerdict(settled, facts, now, d, sessionOf(a, d), postVerdicts);
   if (claimed.item) writeState(d.statePath, { ...claimed.state, lastTickAt: now });
   const posted = claimed.item ? afterPost(claimed.state, claimed.item, tryPost(claimed.item, d, postVerdicts), now) : { state: claimed.state, actions: [] };
   const asked = askTimers(posted.state, now, d, verdicts);
