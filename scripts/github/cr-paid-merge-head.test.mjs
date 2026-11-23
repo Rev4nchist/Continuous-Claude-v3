@@ -51,7 +51,7 @@ const WAIT = { state: 'wait', nextSlotAt: new Date(NOW.getTime() + 20 * MIN).toI
 const FREE = { state: 'free', checkedAt: NOW.toISOString(), source: 'probe' };
 
 /** One run's world: a fake gh with a compare answer, a temp ledger, a temp decision store and an injected clock. */
-function world({ prFiles = files(6), comments = [], reviews = [review(1, OLD, '2026-11-23T08:00:00Z')], compare = compareOf([mergeCommit()]), rows = [], capacity = WAIT, checkPr } = {}) {
+function world({ prFiles = files(6), comments = [], reviews = [review(1, OLD, '2026-11-23T08:00:00Z')], compare = compareOf([mergeCommit()]), prCommits = null, rows = [], capacity = WAIT, checkPr } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cr-paid-merge-head-'));
   const ledgerPath = path.join(dir, 'state', 'coderabbit-paid.jsonl');
   mkdirSync(path.dirname(ledgerPath), { recursive: true });
@@ -63,7 +63,7 @@ function world({ prFiles = files(6), comments = [], reviews = [review(1, OLD, '2
     if (args.some((a) => /issues\/\d+\/comments/.test(a))) return comments;
     if (args.some((a) => /compare\//.test(a))) return compare;
     if (args.some((a) => /pulls\/\d+\/files/.test(a))) return [prFiles];
-    if (args.some((a) => /pulls\/\d+\/commits/.test(a))) return [[{ sha: OLD }, { sha: HEAD }]];
+    if (args.some((a) => /pulls\/\d+\/commits/.test(a))) return [prCommits ?? [{ sha: OLD }, ...ownOf(compare?.commits ?? [])]]; // default: every compare commit is the author's
     if (args.some((a) => /pulls\/\d+\/reviews/.test(a))) return [reviews];
     return { head: { sha: HEAD }, state: 'open', merged: false, draft: false };
   };
@@ -84,29 +84,45 @@ function writeRows(file, rows) {
 const ledgerRow = (cost) => ({ ts: '2026-11-23T10:00:00.000Z', date: '2026-11-23', pr: 685, head: OLD, files: cost * 4, cost, session: 's', via: 'post' });
 const yes = (usd) => assert.deepEqual(D.paidRoundWrite({ key: D.decisionKey({ pr: 685 }), head: HEAD, label: `Yes, pay up to $${usd}`, tapAt: new Date(NOW.getTime() - 5 * MIN).toISOString(), entry: 'cli' }), { ok: true });
 
-test('MH1: mergeOnlyOf is true only for an ahead compare whose every commit has 2 or more parents', () => {
-  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()])), true);
-  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit(), mergeCommit(MAIN)])), true, 'two merges');
-  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit(), plainCommit()])), false, 'a real fix commit among the merges');
-  assert.equal(PAID.mergeOnlyOf(compareOf([plainCommit()])), false, 'a one-parent commit');
-  assert.equal(PAID.mergeOnlyOf(compareOf([{ sha: MERGE }])), false, 'no parents field: fail closed');
-  assert.equal(PAID.mergeOnlyOf(compareOf([{ sha: MERGE, parents: 2 }])), false, 'parents is not a list: fail closed');
-  assert.equal(PAID.mergeOnlyOf(compareOf([])), false, 'no commit');
-  assert.equal(PAID.mergeOnlyOf({ status: 'ahead', files: [] }), false, 'no commits key');
-  assert.equal(PAID.mergeOnlyOf(null), false);
-  assert.equal(PAID.mergeOnlyOf(undefined), false);
+/** The PR's own commit list (pulls/N/commits) for a list of compare commits: every one of them is the author's, as on a PR that has no main commits in the compare. */
+const ownOf = (commits) => commits.map((c) => ({ sha: c.sha }));
+
+test('MH1: mergeOnlyOf is true only for an ahead compare whose own commits since the review all have 2 or more parents', () => {
+  const m = (commits, over) => PAID.mergeOnlyOf(compareOf(commits, over), ownOf(commits));
+  assert.equal(m([mergeCommit()]), true);
+  assert.equal(m([mergeCommit(), mergeCommit(MAIN)]), true, 'two merges');
+  assert.equal(m([mergeCommit(), plainCommit()]), false, 'a real fix commit among the merges');
+  assert.equal(m([plainCommit()]), false, 'a one-parent commit');
+  assert.equal(m([{ sha: MERGE }]), false, 'no parents field: fail closed');
+  assert.equal(m([{ sha: MERGE, parents: 2 }]), false, 'parents is not a list: fail closed');
+  assert.equal(m([]), false, 'no commit');
+  assert.equal(PAID.mergeOnlyOf({ status: 'ahead', files: [] }, ownOf([mergeCommit()])), false, 'no commits key');
+  assert.equal(PAID.mergeOnlyOf(null, ownOf([mergeCommit()])), false);
+  assert.equal(PAID.mergeOnlyOf(undefined, undefined), false);
+});
+
+test('MH1a: the real PR 685 shape: main commits brought in by the merge are not the author\'s; only the commits in the PR list count', () => {
+  const mainCommits = ['1', '2', '3'].map((n) => ({ sha: n.repeat(40), parents: [{ sha: MAIN }] })); // single-parent commits that main already holds
+  const compare = compareOf([...mainCommits, mergeCommit()]);
+  assert.equal(PAID.mergeOnlyOf(compare, [{ sha: OLD }, { sha: MERGE }]), true, 'the only own commit since the review is the merge');
+  assert.equal(PAID.mergeOnlyOf(compare, [{ sha: OLD }, { sha: MERGE }, { sha: mainCommits[0].sha }]), false, 'a single-parent commit that IS in the PR list is a real fix');
+  assert.equal(PAID.mergeOnlyOf(compare, [{ sha: OLD }]), false, 'no own commit since the review: nothing merges');
+  assert.equal(PAID.mergeOnlyOf(compare, []), false, 'an unreadable or too long PR list: fail closed');
+  assert.equal(PAID.mergeOnlyOf(compare, undefined), false);
+  assert.equal(PAID.mergeOnlyOf(compare, null), false);
 });
 
 test('MH1b: a compare that is not "ahead" is never merge-only (a reviewed commit that is not an ancestor of the head)', () => {
   for (const status of ['diverged', 'behind', 'identical', undefined, 'AHEAD', '']) {
-    assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()], { status })), false, `status ${String(status)}`);
+    assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()], { status }), ownOf([mergeCommit()])), false, `status ${String(status)}`);
   }
 });
 
 test('MH1c: a commit list cut by GitHub (total_commits above the list) is not merge-only: the unseen commits may be real fixes', () => {
-  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()], { total_commits: 251 })), false);
-  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()], { total_commits: 1 })), true);
-  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()], { total_commits: undefined })), true, 'no total: the list is all we have, and it is all merges');
+  const own = ownOf([mergeCommit()]);
+  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()], { total_commits: 251 }), own), false);
+  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()], { total_commits: 1 }), own), true);
+  assert.equal(PAID.mergeOnlyOf(compareOf([mergeCommit()], { total_commits: undefined }), own), true, 'no total: the list is all we have, and it is all merges');
 });
 
 test('MH2: a merge-only head is priced on every PR file, shows no author fix, and asks for the full form, whatever main changed', () => {
@@ -123,6 +139,21 @@ test('MH2: a merge-only head is priced on every PR file, shows no author fix, an
   assert.equal(r.comment, '@coderabbitai full review --use-credits');
   assert.equal(r.comment, PAID.FULL_PAID_COMMENT);
   w.done();
+});
+
+test('MH2a: the real PR 685 shape end to end: 9 main commits plus one merge in the compare, only the merge in the PR list -> a full review', () => {
+  const mainCommits = Array.from({ length: 9 }, (_, i) => ({ sha: String(i + 1).repeat(40), parents: [{ sha: MAIN }] }));
+  const w = world({ compare: compareOf([...mainCommits, mergeCommit()]), prCommits: [{ sha: OLD }, { sha: MERGE }] });
+  const r = w.check();
+  assert.equal(r.verdict, 'ALLOW', JSON.stringify(r));
+  assert.equal(r.mergeOnly, true);
+  assert.equal(r.comment, PAID.FULL_PAID_COMMENT);
+  assert.equal(r.files, 6);
+  const fix = world({ compare: compareOf([...mainCommits, mergeCommit(), plainCommit()], { files: [prFile(0, { additions: 40, deletions: 0 })] }), prCommits: [{ sha: OLD }, { sha: MERGE }, { sha: FIX }] });
+  const f = fix.check();
+  assert.equal(f.mergeOnly, false, 'the author pushed a real fix after the merge');
+  assert.equal(f.exitCode, 3);
+  w.done(); fix.done();
 });
 
 test('MH2b: a merge-only head whose compare lists 300 files (too long to size) is still a verdict, not exit 2', () => {
