@@ -10,6 +10,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadStricterConfig, readMainConfig, stricterConfig, viewOf } from './config-stricter.mjs';
+import * as stricterMod from './config-stricter.mjs';
 import { resolveConfig, runPrePr, summaryBeforeLock } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -211,4 +212,45 @@ test('A14: pre-pr resolves the config after the fetch, so a fork/main that the f
   const summaryCheck = (o) => { mode = o.mode; return { result: { step: 'summary', status: 'FAIL', detail: 'stub', notes: [] }, sha: null }; };
   await runPrePr({ root, base: 'main', bodyText: 'x', git, fetch: () => { fetched = true; return null; }, summaryCheck, ledgerPath: path.join(root, 'ledger.jsonl'), gateLogPath: path.join(root, 'gate.jsonl'), crStore: null, guardLog: () => {}, osvLockfiles: [], findOsv: () => null, findPssa: () => null }).catch(() => {});
   assert.equal(mode, 'fail');
+});
+
+// ---- card coord-config-nomain-cap0: no main ref at all is a CLI cap of 0 (the loader's rule; stricterConfig(null) keeps the branch cap, A5b) ----
+const NO_REF = { config: null, source: 'none' };
+const BRANCH_6 = { checkpoint: { enforce: false }, coderabbit: { cli_daily_cap_usd: 6 }, pre_pr: { summary_mode: 'note' } };
+
+test('N1: no main ref and a branch cap of 6 gives cap 0, enforce true, and the branch summary mode stays', () => {
+  const view = viewOf(stricterMod.stricterFromRead(NO_REF, BRANCH_6));
+  assert.deepEqual(view, { enforce: true, cap: 0, summaryFail: false });
+});
+
+test('N2: no main ref and no branch cap key gives cap 0 (not "no cap")', () => {
+  assert.equal(viewOf(stricterMod.stricterFromRead(NO_REF, {})).cap, 0);
+  assert.equal(viewOf(stricterMod.stricterFromRead(NO_REF, { coderabbit: {} })).cap, 0);
+});
+
+test('N3: a main ref keeps today rule: main 3 and branch 6 give 3; local main with no cap key and branch 6 gives 6', () => {
+  const fork = readMainConfig({ git: gitStub({ main: JSON.stringify({ coderabbit: { cli_daily_cap_usd: 3 } }) }) });
+  assert.equal(viewOf(stricterMod.stricterFromRead(fork, BRANCH_6)).cap, 3);
+  const local = readMainConfig({ git: gitStub({ main: null, localMain: JSON.stringify({}) }) });
+  assert.equal(local.source, 'local-main');
+  assert.equal(viewOf(stricterMod.stricterFromRead(local, BRANCH_6)).cap, 6);
+});
+
+test('N4: an unreadable main side is still cap 0 (the existing fail-closed rule), and a no-ref read does not change the inputs', () => {
+  const bad = readMainConfig({ git: gitStub({ main: '{not json' }) });
+  assert.equal(viewOf(stricterMod.stricterFromRead(bad, BRANCH_6)).cap, 0);
+  const before = JSON.stringify(BRANCH_6);
+  stricterMod.stricterFromRead(NO_REF, BRANCH_6);
+  assert.equal(JSON.stringify(BRANCH_6), before);
+});
+
+test('N5: loadStricterConfig and resolveConfig (the pre-pr read) give cap 0 when neither ref exists', () => {
+  const readFile = () => JSON.stringify(BRANCH_6);
+  const noRefs = gitStub({ main: null, localMain: null });
+  assert.equal(viewOf(loadStricterConfig({ root: '/work/wt', git: noRefs, readFile })).cap, 0);
+  assert.equal(viewOf(resolveConfig({ root: '/work/wt', git: noRefs, readFile })).cap, 0);
+});
+
+test('N6: stricterConfig(null, branch) itself still keeps the branch cap: the no-ref cap 0 lives in the loader (A5b, the TypeScript twin stays equal)', () => {
+  assert.equal(viewOf(stricterConfig(null, BRANCH_6)).cap, 6);
 });

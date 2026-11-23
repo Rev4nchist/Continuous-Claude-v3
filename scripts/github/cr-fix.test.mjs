@@ -741,15 +741,39 @@ test('CF44: a missing or bad checkout file with no main ref to compare is cap 0 
   } finally { rmSync(gone, { recursive: true, force: true }); rmSync(bad, { recursive: true, force: true }); }
 });
 
-test('CF42 (control):with no main ref the checkout cap still applies, and a lower branch cap than main wins', async () => {
-  const none = capRepo({ mainText: null, branchText: capCfg(3) });
+test('CF42 (control): with a fork/main ref the checkout cap still applies, and a lower branch cap than main wins', async () => {
+  const none = capRepo({ mainText: '{}', branchText: capCfg(3) });
   const lower = capRepo({ mainText: capCfg(6), branchText: capCfg(2) });
   try {
     const a = realCapHarness(3);
-    assert.equal((await a.go({ cwd: none })).exitCode, 2, 'no fork ref: the branch cap of 3 stops spend of 3');
+    assert.equal((await a.go({ cwd: none })).exitCode, 2, 'a fork ref with no cap key: the branch cap of 3 stops spend of 3');
     const b = realCapHarness(2);
     const r = await b.go({ cwd: lower });
     assert.equal(r.exitCode, 2, 'a branch cap lower than main stays lower');
     assert.equal(b.calls.runs.length, 0);
   } finally { rmSync(none, { recursive: true, force: true }); rmSync(lower, { recursive: true, force: true }); }
+});
+
+// ---- card coord-config-nomain-cap0: no main ref at all is cap 0 ----
+test('CF45: no fork/main ref and no local main ref, a checkout cap of 6: cap 0, the run stops at $0.00 before any CLI call', async () => {
+  const cwd = capRepo({ mainText: null, branchText: capCfg(6) });
+  try {
+    const h = realCapHarness(0);
+    const r = await h.go({ cwd });
+    assert.equal(r.exitCode, 2, JSON.stringify(r));
+    assert.match(r.reason, /cli-cap/);
+    assert.match(r.reason, /\$0\.00/, 'the stop names the cap of 0');
+    assert.equal(h.calls.runs.length, 0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('CF46: no main ref and a checkout config with no cap key: cap 0 (not "no cap"), the run stops before any CLI call', async () => {
+  const cwd = capRepo({ mainText: null, branchText: '{}' });
+  try {
+    const h = realCapHarness(0);
+    const r = await h.go({ cwd });
+    assert.equal(r.exitCode, 2, JSON.stringify(r));
+    assert.match(r.reason, /cli-cap/);
+    assert.equal(h.calls.runs.length, 0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

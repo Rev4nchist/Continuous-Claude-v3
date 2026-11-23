@@ -700,3 +700,39 @@ test('SA10: the store key of a PR is the same repo string the engine uses', asyn
   assert.equal(d.decisionKey({ pr: 1 }), `${DEFAULT_REPO}#1`);
   assert.equal(d.decisionKey({ branch: 'b' }), `${DEFAULT_REPO}@b`);
 });
+
+// ---- card coord-config-nomain-cap0: the cap ship-ask shows (cap-override question, open-pr "up to $X CLI") is the cap pre-pr enforces ----
+const gitQuiet = (dir, ...args) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir, encoding: 'utf8', windowsHide: true });
+function capFixture({ mainText, branchText }) {
+  const dir = temp('shipask-cap-');
+  gitQuiet(dir, 'init', '-q');
+  if (mainText !== null) {
+    writeFileSync(path.join(dir, 'review-router.config.json'), mainText);
+    gitQuiet(dir, 'add', 'review-router.config.json');
+    gitQuiet(dir, 'commit', '-q', '-m', 'main config');
+    gitQuiet(dir, 'update-ref', 'refs/remotes/fork/main', 'HEAD');
+  }
+  if (branchText !== null) writeFileSync(path.join(dir, 'review-router.config.json'), branchText);
+  return dir;
+}
+const capJson = (cap) => JSON.stringify({ coderabbit: { cli_daily_cap_usd: cap } });
+
+test('SC1: stricterCapOf is cap 0 with no fork/main ref and no local main ref, whatever the checkout cap says', async () => {
+  const withCap = capFixture({ mainText: null, branchText: capJson(6) });
+  const noKey = capFixture({ mainText: null, branchText: '{}' });
+  try {
+    const m = await load();
+    assert.equal(m.stricterCapOf(withCap), 0);
+    assert.equal(m.stricterCapOf(noKey), 0);
+  } finally { rmSync(withCap, { recursive: true, force: true }); rmSync(noKey, { recursive: true, force: true }); }
+});
+
+test('SC2: stricterCapOf keeps today rule with a fork/main ref (main 3 over branch 6 gives 3) and is null for an unreadable checkout file', async () => {
+  const over = capFixture({ mainText: capJson(3), branchText: capJson(6) });
+  const bad = capFixture({ mainText: capJson(3), branchText: '{bad' });
+  try {
+    const m = await load();
+    assert.equal(m.stricterCapOf(over), 3);
+    assert.equal(m.stricterCapOf(bad), null, 'an unreadable config is an unknown cap, as before');
+  } finally { rmSync(over, { recursive: true, force: true }); rmSync(bad, { recursive: true, force: true }); }
+});
