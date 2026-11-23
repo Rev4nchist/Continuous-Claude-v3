@@ -210,6 +210,47 @@ test('SQ6: the verdict for the post is read once, before the lock, for the PR th
   assert.deepEqual(bodiesOf(e), [FULL_FREE]);
 });
 
+// The PR 685 case through the REAL cr-paid check (no injected verdict): the head merges main over the reviewed commit. The compare lists 3 commits that main
+// already held (one parent each) and the merge; the PR's own list holds the reviewed commit and the merge only. Breaks if the queue post path does not
+// reach mergeOnlyOf, or reads the compare commits instead of the PR's own list.
+function replayWorld(e, { ownList }) {
+  const OLD = 'b'.repeat(40);
+  const MAINC = ['1', '2', '3'].map((n) => ({ sha: n.repeat(40), parents: [{ sha: 'd'.repeat(40) }] }));
+  const MERGEC = { sha: headOf(5), parents: [{ sha: OLD }, { sha: 'd'.repeat(40) }] };
+  const compare = { status: 'ahead', total_commits: 4, commits: [...MAINC, MERGEC], files: [{ filename: 'main-only.ts', additions: 400, deletions: 90, status: 'modified' }] };
+  const prFiles = ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => ({ filename: `src/${n}.ts`, additions: 5, deletions: 0, status: 'modified' }));
+  setWorld(e, { 5: prOf(5, { reviews: [{ user: crUser, commit_id: OLD, body: 'Actionable comments posted: 1', submitted_at: iso(at(-200)) }], files: prFiles }) });
+  setState(e, [itemOf(5)]);
+  const base = makeGh(e.worldPath, e.logPath);
+  return (argv) => {
+    const p = argv.find((x) => typeof x === 'string' && x.startsWith('repos/')) ?? '';
+    if (/\/compare\//.test(p)) return compare;
+    if (/\/pulls\/5\/commits/.test(p)) return [[{ sha: OLD }, ...ownList]];
+    return base(argv);
+  };
+}
+function replayTick(e, gh) {
+  const out = [];
+  const code = main(['tick', '--json'], { gh, now: () => T0, statePath: e.statePath, ledgerPath: e.ledgerPath, repo: REPO, cfg: {}, env: {}, lockWaitMs: 300, out: (l) => out.push(l), err: () => {} });
+  return { code, json: JSON.parse(out.join('\n')) };
+}
+test('SQ8: the PR 685 replay through the real cr-paid check posts the free full-review request; no paid request is posted', () => {
+  const e = setup('sq8');
+  const gh = replayWorld(e, { ownList: [{ sha: headOf(5) }] });
+  const r = replayTick(e, gh);
+  assert.equal(r.code, 0);
+  assert.deepEqual(bodiesOf(e), [FULL_FREE]);
+  assert.doesNotMatch(bodiesOf(e).join(' '), /use-credits/);
+  assert.equal(existsSync(e.ledgerPath), false, 'the free post writes no paid ledger row');
+});
+test('SQ9: the same compare with one real (single-parent) commit in the PR list posts the plain request', () => {
+  const e = setup('sq9');
+  const gh = replayWorld(e, { ownList: [{ sha: headOf(5) }, { sha: '2'.repeat(40) }] });
+  const r = replayTick(e, gh);
+  assert.equal(r.code, 0);
+  assert.deepEqual(bodiesOf(e), ['@coderabbitai review']);
+});
+
 // Breaks if a busy slot (no post) still reads a verdict, or the verdict of an item due its paid ask is read twice.
 test('SQ7: no post this tick means no extra verdict read', () => {
   const e = setup('sq7');
