@@ -276,7 +276,7 @@ function waitedIn(lanes, w, edgeDays) {
 /**
  * The pile tile. One figure: `net` is the open count now minus the open count at the start of the window (card coord-fleetops-pile-figure).
  * The start is the snapshot of the day before the window when `snapshots` has it (the number the trend line draws), else it is rebuilt
- * from lane dates. `flowNet` is opened minus done from lane dates; `gap` is how many lanes the two differ by (0 when they agree).
+ * from lane dates. `flowNet` is opened minus done from lane dates; `gap` is by how much the two differ (0 when they agree).
  */
 export function pileTile(lanes, meta, targets, snapshots = []) {
   const days = num(targets, 'window_days', 7);
@@ -597,7 +597,7 @@ function tile2(add, c) {
     add('pile.waited', 'figure', { value: p.waited, text: String(p.waited) });
     add('pile.line.flow', 'text', { text: `${p.created} opened, ${p.done} done, ${w} days to ${formatDay(c.meta.today)}, today so far` });
     add('pile.line.open', 'text', { text: `From ${p.openStart} to ${p.openNow} open` });
-    if (p.gap > 0) add('pile.line.gap', 'text', { value: p.gap, text: `${p.gap} ${pluralize(p.gap, 'lane')} ${p.gap === 1 ? 'is' : 'are'} not in the opened or done counts` });
+    if (p.gap > 0) add('pile.line.gap', 'text', { value: p.gap, text: `The open count change differs from opened minus done by ${p.gap}.` });
     add('pile.line.waited', 'text', {
       text: p.done === 0 ? `No lanes done in the last ${w} days` : `${p.waited} of ${p.done} waited ${p.edgeDays} ${pluralize(p.edgeDays, 'day')} or more`,
     });

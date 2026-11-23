@@ -1090,14 +1090,14 @@ test('tiles rows: pile.net, the first line, the summary, the open line and the d
   assert.ok(!/net/.test(text(rows, 'pile.line.flow')), 'the flow line gives opened and done, never a second net');
   assert.ok(byId(rows).has('pile.line.prior'), 'the earlier-week line exists in this fixture');
   assert.ok(!/net/.test(text(rows, 'pile.line.prior')), 'the earlier-week line gives opened and done, never a second net');
-  assert.equal(text(rows, 'pile.line.gap'), '4 lanes are not in the opened or done counts');
+  assert.equal(text(rows, 'pile.line.gap'), 'The open count change differs from opened minus done by 4.');
 });
 
 // Breaks if the gap row shows when the counts agree, or says "1 lanes".
 test('tiles rows: pile.line.gap shows only when opened minus done differs from the figure', () => {
   assert.ok(!byId(build()).has('pile.line.gap'), 'the base fixture agrees');
   const one = build({ lanes: OLD_OPEN, meta: PILE_META, snapshots: [{ day: '2026-10-31', snapshot_at: 'x', open: 9 }] });
-  assert.equal(text(one, 'pile.line.gap'), '1 lane is not in the opened or done counts');
+  assert.equal(text(one, 'pile.line.gap'), 'The open count change differs from opened minus done by 1.');
 });
 
 // Breaks if the detail says the trend starts after 7 snapshots while the chart already shows 7 or more.

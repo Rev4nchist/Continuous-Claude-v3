@@ -243,7 +243,7 @@ test('F11: flow.today.* equals flow.bar.14.*, flow.week.done and created equal p
   assert.equal(val(rows, 'flow.week.done'), tget('pile.done'));
   assert.equal(val(rows, 'flow.week.created'), tget('pile.created'));
   // pile.net is the open count change since card coord-fleetops-pile-figure; the flow week net stays opened minus done.
-  // The born-done lane above is in opened and in neither the open count nor done, so the two differ by it (pile.line.gap says so).
+  // The born-done lane above is in opened and in neither the open count nor done, so the two figures differ (pile.line.gap gives by how much).
   assert.equal(val(rows, 'flow.week.net'), tget('pile.created') - tget('pile.done'));
   assert.equal(tiles.find((r) => r.id === 'pile.line.gap').value, Math.abs(tget('pile.net') - val(rows, 'flow.week.net')));
 });
