@@ -93,6 +93,8 @@ describe('the lane head forms', () => {
     // "pre-pr.mjs" argument of another script no longer fires the rule by itself. The property pinned here stays: a script
     // that only ends in lane.mjs-like text is NOT a lane segment (so the lane skip never swallows it).
     expect(isLaneSegment(`node scripts/not-lane.mjs.bak "pre-pr.mjs"`)).toBe(false);
-    expect(ids(`node scripts/not-lane.mjs.bak "x"; node scripts/github/pre-pr.mjs --body b.md`)).toContain('pr-review-loop');
+    // End to end through segmentHit: an opted-in rule with a loose segment test still fires on that script (it is not skipped).
+    const probe = { rules: [{ id: 'probe-x', files: ['x.md'], mode: 'inject', laneSegment: 'skip', segment: ['^node(\\.exe)?\\s.*probe-x\\.mjs'] }] } as Manifest;
+    expect(ids(`node scripts/not-lane.mjs.bak "probe-x.mjs"`, probe)).toEqual(['probe-x']);
   });
 });

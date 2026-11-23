@@ -116,6 +116,33 @@ describe('R: every real use still fires', () => {
   it('R19 a psql command with a version flag LATER in the arguments still fires (only the first argument is a version check)', () => {
     expect(ids('psql -c "select version()" --version-check-off')).toContain('cross-terminal-db');
   });
+  // Critic round: forms a real run can take that the first T3 and T2 patterns lost.
+  it('R21 a path whose quote closes mid-token still fires pr-review-loop', () => {
+    expect(ids('node "$REPO"/scripts/github/pre-pr.mjs --body b.md')).toContain('pr-review-loop');
+    expect(ids('node "$(git rev-parse --show-toplevel)"/scripts/github/ship-ask.mjs open-pr')).toContain('pr-review-loop');
+  });
+  it('R22 a quoted bare script name still fires pr-review-loop', () => {
+    expect(ids('node "pre-pr.mjs" --body b.md')).toContain('pr-review-loop');
+  });
+  it('R23 node flags that take a separate value or a slash value still fire pr-review-loop', () => {
+    expect(ids('node -r dotenv/config scripts/github/pre-pr.mjs --body b.md')).toContain('pr-review-loop');
+    expect(ids('node --env-file .env scripts/github/pre-pr.mjs --body b.md')).toContain('pr-review-loop');
+    expect(ids('node --env-file=./.env scripts/github/ship-ask.mjs land --pr 1')).toContain('pr-review-loop');
+    expect(ids('node --import=./x.mjs scripts/github/pre-pr.mjs')).toContain('pr-review-loop');
+  });
+  it('R24 the cr and coderabbit shim forms and a versioned npx call still fire coderabbit-cli', () => {
+    for (const cmd of ['cr.cmd review --plain', 'coderabbit.cmd review', 'coderabbit.ps1 review', 'cr.bat review', 'npx coderabbit@latest review']) {
+      expect(ids(cmd), cmd).toContain('coderabbit-cli');
+    }
+  });
+  it('R25 node cr-fix.mjs fires pr-review-loop too, and psql -h host is a use of psql (not a help flag)', () => {
+    expect(ids('node scripts/github/cr-fix.mjs --pr 1')).toContain('pr-review-loop');
+    expect(ids('psql -h localhost -U u db')).toContain('cross-terminal-db');
+  });
+  it('R26 help flags of pg_dump and playwright are no use of the tool', () => {
+    expect(ids('pg_dump --help')).not.toContain('cross-terminal-db');
+    expect(ids('playwright -h')).not.toContain('browser');
+  });
   it('R20 a real run chained after a version check still fires', () => {
     expect(ids('psql --version; psql -c "select 1"')).toContain('cross-terminal-db');
     expect(ids('playwright --version && npx playwright test')).toContain('browser');
