@@ -234,6 +234,9 @@ export const SURFACES = [
           failText: 'dist is stale: the build changed these files. Commit them with the source',
         },
       },
+      // Feeds each changed guard a saved real payload and checks its output shape (card coord-hook-payload-gate, docs/verify/README.md).
+      // After the build, so it runs the fresh dist; before vitest, so a wrong shape fails in seconds.
+      nodeGate('hook-payload', 'scripts/github/hook-payload.mjs', [], { timeoutMs: 5 * MIN }),
       // Several dist-integration tests spawn node and use real timers. Alone they take about 3 s; in the full parallel
       // suite on a busy machine they pass vitest's 5 s default (msys-crash-capture, 2026-10-28). --testTimeout gives
       // them room, and --retry covers a rare timer race. The flake ledger reporter (card coord-flake-ledger) records each test that passed
