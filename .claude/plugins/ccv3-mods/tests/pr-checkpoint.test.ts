@@ -1616,6 +1616,10 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs say coord-slot-queue --to seat'],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs' --to $(node scripts/github/slot-queue.mjs drop --pr 1)"],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs'; node scripts/github/slot-queue.mjs drop --pr 1 --reason x"],
+    // CodeRabbit CLI major at f8df760d: a backslash-escaped double quote ends the string for the regex, but not for Bash, so the `>` below is an unquoted redirect onto the module.
+    ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs say "a\" " > scripts/github/slot-queue.mjs \"`],
+    ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs say "a\" " >> scripts/github/slot-queue-model.mjs \"`],
+    ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs note coord-x "OWNS: slot-queue.mjs \" x"`],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs' --to 'slot-queue-model.mjs'"],
     ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say \"a\" --to seat > slot-queue.mjs"],
   ]
