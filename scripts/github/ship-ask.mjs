@@ -421,7 +421,7 @@ export async function gatherCapOverride({ branch, usd, extraRun }) {
     const gitIn = (args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }; };
     cap = cliCapOf(loadStricterConfig({ root, git: gitIn, readFile: readFileSync }));
   } catch { cap = null; }
-  const base =['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], topOf()));
+  const base = ['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], topOf()));
   const facts = capFactsOf({ readTotal: () => cliTodayOf().total, readNames: () => (base && t.head ? gitText(['diff', '--name-only', `${base}...${t.head}`], topOf()) : null) });
   return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, cap, ...facts };
 }
