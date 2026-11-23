@@ -783,6 +783,7 @@ test('SK3: an unreadable ledger puts Stop here first, says the ledger cannot be 
   assert.match(s.question, /paid CLI ledger cannot be read/);
   assert.match(s.options[1].description, /CLI step fails/);
   assert.doesNotMatch(JSON.stringify(s), /CLI cost unknown|free inside/);
+  assert.doesNotMatch(JSON.stringify(s), /delete/i, 'deleting the ledger resets the spend and bypasses the cap');
 });
 
 test('SK4: no cap key keeps Re-run first, says no daily cap is set, and prices a file from CR_CENTS_PER_FILE of pre-pr.mjs', async () => {

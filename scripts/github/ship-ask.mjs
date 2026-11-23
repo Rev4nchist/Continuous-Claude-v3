@@ -124,7 +124,7 @@ export function rerunPrePrSpec({ branch, head, stampHead, fails, capLeftUsd, cap
   }
   if (capWhy === 'ledger') {
     return { header: 'Open PR', question: `${why}\n${need} The paid CLI ledger cannot be read.\nRe-run pre-pr anyway?`, options: [
-      stop(true, 'No PR opens. Fix or delete the paid ledger first.'),
+      stop(true, 'No PR opens. Fix the paid ledger first.'),
       opt('Re-run pre-pr anyway', `${RERUN_CMD} The CLI step fails, so no CLI review starts.`),
     ] };
   }
