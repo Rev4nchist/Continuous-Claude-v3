@@ -639,3 +639,117 @@ test('CF37 (item 1): the tap is claimed last, after the merge read and the secon
   assert.equal(order.filter((x) => x === 'head').length, 2, 'two head reads');
   assert.equal(order.lastIndexOf('head') < order.indexOf('claim'), true, 'the claim comes after the last head read');
 });
+
+// ---- card coord-cr-fix-stricter-cap: cr-fix reads its cap like pre-pr does, the checkout file made stricter by fork/main ----
+// These tests use the REAL cap reader (no cliCap stub) on a temp git repo that has a fork/main ref and a checkout config.
+const CONFIG = 'review-router.config.json';
+const gitIn = (dir, ...args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir, encoding: 'utf8', windowsHide: true });
+const capCfg = (cap) => JSON.stringify({ coderabbit: { cli_daily_cap_usd: cap } });
+
+/** A temp repo. fork/main holds `mainText` (null: no fork ref). The checkout file holds `branchText` (null: the file is absent). Returns the folder. */
+function capRepo({ mainText, branchText }) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'crfix-cap-repo-'));
+  gitIn(dir, 'init', '-q');
+  if (mainText !== null) {
+    writeFileSync(path.join(dir, CONFIG), mainText);
+    gitIn(dir, 'add', CONFIG);
+    gitIn(dir, 'commit', '-q', '-m', 'main config');
+    gitIn(dir, 'update-ref', 'refs/remotes/fork/main', 'HEAD');
+  }
+  if (branchText === null) rmSync(path.join(dir, CONFIG), { force: true });
+  else writeFileSync(path.join(dir, CONFIG), branchText);
+  return dir;
+}
+
+/** A harness on the real cap reader: today's paid CLI spend is `spent` dollars. */
+function realCapHarness(spent) {
+  const h = harness({ ledgerRows: [cliRow(spent, TODAY)] });
+  delete h.deps.cliCap;
+  return h;
+}
+
+test('CF38: a branch cap of 6 over a fork/main cap of 3 is enforced as 3: spend at 3 stops the run before any CLI call', async () => {
+  const cwd = capRepo({ mainText: capCfg(3), branchText: capCfg(6) });
+  try {
+    const h = realCapHarness(3);
+    const r = await h.go({ cwd });
+    assert.equal(r.exitCode, 2, JSON.stringify(r));
+    assert.match(r.reason, /cli-cap/);
+    assert.match(r.reason, /\$3\.00/, 'the stop names the main cap');
+    assert.equal(h.calls.runs.length, 0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('CF39: a branch that removes the cap key keeps the fork/main cap', async () => {
+  const cwd = capRepo({ mainText: capCfg(3), branchText: JSON.stringify({ coderabbit: {} }) });
+  try {
+    const h = realCapHarness(3);
+    const r = await h.go({ cwd });
+    assert.equal(r.exitCode, 2, JSON.stringify(r));
+    assert.match(r.reason, /cli-cap/);
+    assert.equal(h.calls.runs.length, 0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('CF40: the USD override is checked against the fork/main cap: 5 is above 3 and passes where a branch cap of 6 would refuse it', async () => {
+  const cwd = capRepo({ mainText: capCfg(3), branchText: capCfg(6) });
+  try {
+    const h = realCapHarness(3);
+    let claimed = 0;
+    h.deps.claimOverride = () => { claimed += 1; return { ok: true, tapAt: '2026-10-30T08:00:00.000Z' }; };
+    const r = await h.go({ cwd, capOverride: { usd: 5 } });
+    assert.equal(r.exitCode, 0, JSON.stringify(r));
+    assert.equal(claimed, 1, 'the tap is claimed once');
+    assert.equal(h.calls.runs.length, 1);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('CF41: a fork/main config that cannot be read is cap 0 (fail closed): the run stops before any CLI call', async () => {
+  const cwd = capRepo({ mainText: 'not json', branchText: capCfg(6) });
+  try {
+    const h = realCapHarness(0);
+    const r = await h.go({ cwd });
+    assert.equal(r.exitCode, 2, JSON.stringify(r));
+    assert.match(r.reason, /cli-cap/);
+    assert.equal(h.calls.runs.length, 0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('CF43: a branch that deletes the checkout config file keeps the fork/main cap (an empty branch config)', async () => {
+  const cwd = capRepo({ mainText: capCfg(3), branchText: null });
+  try {
+    const h = realCapHarness(3);
+    const r = await h.go({ cwd });
+    assert.equal(r.exitCode, 2, JSON.stringify(r));
+    assert.match(r.reason, /cli-cap/);
+    assert.match(r.reason, /\$3\.00/);
+    assert.equal(h.calls.runs.length, 0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('CF44: a missing or bad checkout file with no main ref to compare is cap 0 (fail closed): the run stops before any CLI call', async () => {
+  const gone = capRepo({ mainText: null, branchText: null });
+  const bad = capRepo({ mainText: null, branchText: 'not json' });
+  try {
+    for (const cwd of [gone, bad]) {
+      const h = realCapHarness(0);
+      const r = await h.go({ cwd });
+      assert.equal(r.exitCode, 2, JSON.stringify(r));
+      assert.match(r.reason, /cli-cap/);
+      assert.equal(h.calls.runs.length, 0);
+    }
+  } finally { rmSync(gone, { recursive: true, force: true }); rmSync(bad, { recursive: true, force: true }); }
+});
+
+test('CF42 (control):with no main ref the checkout cap still applies, and a lower branch cap than main wins', async () => {
+  const none = capRepo({ mainText: null, branchText: capCfg(3) });
+  const lower = capRepo({ mainText: capCfg(6), branchText: capCfg(2) });
+  try {
+    const a = realCapHarness(3);
+    assert.equal((await a.go({ cwd: none })).exitCode, 2, 'no fork ref: the branch cap of 3 stops spend of 3');
+    const b = realCapHarness(2);
+    const r = await b.go({ cwd: lower });
+    assert.equal(r.exitCode, 2, 'a branch cap lower than main stays lower');
+    assert.equal(b.calls.runs.length, 0);
+  } finally { rmSync(none, { recursive: true, force: true }); rmSync(lower, { recursive: true, force: true }); }
+});

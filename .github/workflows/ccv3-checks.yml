@@ -96,6 +96,9 @@ jobs:
       - name: cap override tests (the one-run CLI cap override and its tap)
         timeout-minutes: 5
         run: node --test scripts/github/cap-override.test.mjs
+      - name: hook payload gate tests (fixture planner, run, pre-pr surface rows)
+        timeout-minutes: 5
+        run: node --test scripts/github/hook-payload.test.mjs scripts/github/pre-pr-hook-payload.test.mjs
       - name: slot-queue unit tests
         timeout-minutes: 5
         run: node --test scripts/github/slot-queue.test.mjs scripts/github/slot-queue-model.test.mjs scripts/github/slot-queue-mod-sync.test.mjs scripts/github/slot-queue-paid-cap.test.mjs
@@ -335,6 +338,8 @@ jobs:
           scripts/coordination/fleetops-view.test.mjs
           scripts/coordination/fleetops-html.test.mjs
           scripts/coordination/wait-ready.test.mjs
+          scripts/coordination/gate-lines.test.mjs
+          scripts/coordination/run-wrap.test.mjs
           scripts/coordination/coord-drill-2/abort.test.mjs
           scripts/coordination/coord-drill-2/judge.test.mjs
           scripts/coordination/coord-drill-2/lib.test.mjs
