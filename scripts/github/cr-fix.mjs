@@ -41,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments, readPrCommits } from './review-status.mjs';
 import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, answerKeyRange, billedText, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
+import { FLAG_EXTRA, FLAG_USD, claimCapOverride, hasCapOverride, noTapText, takeCapFlags } from './lib/cap-override.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
 const FORBIDDEN = /^--(?:use-credits|api-key)\b/;
@@ -69,6 +70,16 @@ export function parseArgs(argv) {
   // A review needs at least 15 minutes (coderabbit-cli.md); a smaller or unreadable value falls back to the default.
   const ok = Number.isFinite(minutes) && minutes >= CR_TIMEOUT_MIN_FLOOR;
   return { pr, repo, timeoutMs: (ok ? minutes : CR_TIMEOUT_MIN_DEFAULT) * MIN };
+}
+
+/**
+ * The cap flag of cr-fix (card coord-cap-override, PART B): the USD flag only. cr-fix has no run counter, so the extra-run flag is an error here.
+ * Returns { usd, rest } (rest: argv without the flag) or { error }.
+ */
+export function takeFixFlags(argv) {
+  if (argv.some((a) => a === FLAG_EXTRA || a.startsWith(`${FLAG_EXTRA}=`))) return { error: `${FLAG_EXTRA} is not offered by cr-fix: it has no run counter to lift (only ${FLAG_USD} N lifts its USD cap)` };
+  const t = takeCapFlags(argv);
+  return t.error ? { error: t.error } : { usd: t.usd, rest: t.rest };
 }
 
 const incomplete = (reason) => ({ verdict: 'incomplete', reason });
@@ -178,9 +189,11 @@ function gitBranch(cwd) {
 const ledgerDeps = (d) => ({ now: () => d.now, ...(d.ledgerPath ? { ledgerPath: d.ledgerPath } : {}) });
 
 /** A stop result when today's paid CLI spend is at the cap, or the ledger cannot be read with a cap set. No CLI run has been spent yet. */
-function checkCap(cwd, d) {
-  const cap = d.cliCap(cwd);
-  if (cap === null || cap === undefined) return null;
+function checkCap(cwd, d, override) {
+  const base = d.cliCap(cwd);
+  if (base === null || base === undefined) return null;
+  // The USD flag (after Dave's tap) is the cap of this run when it is above the config cap; the config is never written.
+  const cap = cliCapOf({ coderabbit: { cli_daily_cap_usd: base } }, { override });
   try {
     const check = cliCapCheck(cap, ledgerDeps(d));
     return check.capped ? stop(`cli-cap: ${cliCapLine(check)}. No CLI run was started. Raise the cap or run it tomorrow; ask Dave`) : null;
@@ -190,11 +203,11 @@ function checkCap(cwd, d) {
 }
 
 /** The stderr note for a run that billed: its cost, and a failed ledger write. Null for a free run. The run is already paid for. */
-function spendNote(usageCost, cwd, head, d) {
+function spendNote(usageCost, cwd, head, d, capRecord) {
   if (!usageCost) return null;
   const cost = billedText(usageCost).replace(/^, /, '');
   try {
-    recordCliSpend({ branch: d.branch(cwd), head, usageCost }, ledgerDeps(d));
+    recordCliSpend({ branch: d.branch(cwd), head, usageCost, ...(capRecord ? { capOverride: capRecord } : {}) }, ledgerDeps(d));
     return `this run ${cost}; logged in the paid ledger`;
   } catch (err) {
     return `this run ${cost}; could not log it in the paid ledger (${String(err.message).split('\n')[0]}): add the row by hand`;
@@ -210,17 +223,24 @@ function save(file, text, deps) {
  * Reviews the commits after the newest CodeRabbit review. deps (for tests): gh(args) -> JSON, headSha(cwd), runCr(spec),
  * writeOut(file, text), now. Returns { line, exitCode, reason, outFile, from, head, verdict }.
  */
-export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN }, deps = {}) {
-  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, mergesIn: gitMergesIn, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), cliCap: readCliCap, branch: gitBranch, ledgerPath: null, answerKey: answerKeyRange, ...deps };
+export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, capOverride = null }, deps = {}) {
+  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, mergesIn: gitMergesIn, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), cliCap: readCliCap, branch: gitBranch, ledgerPath: null, answerKey: answerKeyRange, claimOverride: claimCapOverride, ...deps };
   const range = readRange(pr, repo, cwd, d);
   if (range.stop) return range.stop;
   const { from, head } = range;
   const bad = checkCheckout({ pr, repo, cwd, from, head }, d);
   if (bad) return bad;
-  const capped = checkCap(cwd, d);
+  const capped = checkCap(cwd, d, capOverride?.usd);
   if (capped) return capped;
   const key = d.answerKey(cwd, from);
   if (key) return stop(key);
+  // Dave's tap for the USD flag: claimed once, after every stop and before the CLI starts. A refusal starts no run.
+  let capRecord = null;
+  if (capOverride?.usd != null) {
+    const claim = d.claimOverride({ branch: d.branch(cwd), head, usd: capOverride.usd, extraRun: false });
+    if (!claim.ok) return { ...stop(`the cap override was refused (${claim.reason ?? 'no tap'}): ${noTapText(`usd=${capOverride.usd}`)}. No CLI run was started`), exitCode: 1 };
+    capRecord = { usd: capOverride.usd, extraRun: false, tapAt: claim.tapAt ?? null };
+  }
   const merges = safeMerges(d, cwd, from);
   const run = await d.runCr({ cwd, args: CR_FIX_ARGS(from), timeoutMs });
   const stdout = String(run.stdout ?? '');
@@ -231,7 +251,7 @@ export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEO
   const line = `CLI fix review: ${from.slice(0, 7)}..${head.slice(0, 7)} ${verdict}`;
   const note = saveError ? `the output could not be saved (${saveError})` : null;
   // A run that billed is logged whatever its verdict: a failed or incomplete run can still cost.
-  const spend = spendNote(parsed.usageCost, cwd, head, d);
+  const spend = spendNote(parsed.usageCost, cwd, head, d, capRecord);
   return { line, exitCode: verdict === 'incomplete' ? 1 : 0, reason: [reason, note].filter(Boolean).join('; ') || null, outFile, from, head, verdict, merges, spend };
 }
 
@@ -283,10 +303,21 @@ export function reportOf(r) {
 
 async function main() {
   let opts;
-  try { opts = parseArgs(process.argv.slice(2)); } catch (err) { console.error(`cr-fix: ${err.message}`); process.exit(2); }
+  const flags = takeFixFlags(process.argv.slice(2));
+  if (flags.error) { console.error(`cr-fix: ${flags.error}`); process.exit(1); }
+  try { opts = parseArgs(flags.rest); } catch (err) { console.error(`cr-fix: ${err.message}`); process.exit(2); }
   const cwd = process.cwd();
+  // The USD flag needs Dave's tap for this branch and head. Only READ here (the run claims it): a missing tap stops before the first gh call.
+  let capOverride = null;
+  if (flags.usd !== null) {
+    const branch = gitBranch(cwd);
+    let head = '';
+    try { head = gitHead(cwd); } catch { head = ''; }
+    if (!hasCapOverride({ branch, head, usd: flags.usd, extraRun: false })) { console.error(`cr-fix: ${noTapText(`usd=${flags.usd}`)}`); process.exit(1); }
+    capOverride = { usd: flags.usd };
+  }
   console.error(`cr-fix: reviewing the fix commits of PR #${opts.pr} with the CodeRabbit CLI (takes several minutes)`);
-  const r = await crFix({ ...opts, cwd });
+  const r = await crFix({ ...opts, cwd, capOverride });
   const { out, err } = reportOf(r);
   for (const l of out) console.log(l);
   for (const l of err) console.error(l);

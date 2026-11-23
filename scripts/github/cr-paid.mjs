@@ -118,10 +118,16 @@ export function monthOf(deps) {
   return { month, files: monthToDateFiles(rows, month), rounds: rows.length, cost: centsOf(rows) / 100 };
 }
 
-/** The daily CLI cap in dollars from the router config (coderabbit.cli_daily_cap_usd), or null when the key is missing or not a number of 0 or more. */
-export function cliCapOf(config) {
+/**
+ * The daily CLI cap in dollars from the router config (coderabbit.cli_daily_cap_usd), or null when the key is missing or not a number of 0 or more.
+ * `override` (card coord-cap-override, PART B: the USD flag of one run, after Dave's tap) is the cap for that run only when it is a finite number
+ * above the config cap. A config with no cap has no cap to lift: it stays null. The config is never written.
+ */
+export function cliCapOf(config, { override } = {}) {
   const cap = config?.coderabbit?.cli_daily_cap_usd;
-  return typeof cap === 'number' && Number.isFinite(cap) && cap >= 0 ? cap : null;
+  const base = typeof cap === 'number' && Number.isFinite(cap) && cap >= 0 ? cap : null;
+  if (base === null) return null;
+  return typeof override === 'number' && Number.isFinite(override) && override > base ? override : base;
 }
 
 /** { capped, total, cap, date }: today's CLI spend against the cap. capped is true when the total reaches the cap. Throws on a bad ledger. */
@@ -148,14 +154,16 @@ export function recordPaid({ pr, head, files, via = 'manual' }, deps) {
 /**
  * Appends one paid CLI run to the ledger and returns the row. `usageCost` is { files, costCents } (usageCostOf in pre-pr.mjs).
  * Returns null and writes nothing when the cost is not above 0 (a free run). Throws on a bad head or a write error.
+ * `capOverride` ({ usd, extraRun, tapAt }, PART B) is written into the row of a run that used a cap flag; a row of a run with no flag has no such key.
  */
-export function recordCliSpend({ branch, head, usageCost }, deps) {
+export function recordCliSpend({ branch, head, usageCost, capOverride }, deps) {
   if (!usageCost || !Number.isFinite(usageCost.costCents) || usageCost.costCents <= 0) return null;
   const d = withDefaults(deps);
   if (!/^[0-9a-f]{7,40}$/i.test(String(head))) throw new Error('the head must be a commit sha');
   const now = d.now();
   const files = Number.isInteger(usageCost.files) && usageCost.files >= 0 ? usageCost.files : 0;
   const row = { ts: now.toISOString(), date: chicagoDay(now), kind: 'cli', branch: String(branch || 'unknown'), head: String(head).toLowerCase(), files, cost: usageCost.costCents / 100, session: d.env.CLAUDE_CODE_SESSION_ID || d.env.CLAUDE_SESSION_ID || 'unknown' };
+  if (capOverride) row.capOverride = { usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true, tapAt: capOverride.tapAt ?? null };
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
   appendFileSync(d.ledgerPath, `${JSON.stringify(row)}
 `);
