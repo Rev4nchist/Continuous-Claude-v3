@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // V7.10 check: does a head that is the GO head plus one merge of fork/main keep the seat's GO? (card coord-v710-merge-check)
-//   node scripts/coordination/v710-check.mjs --go <GO head> --new <new head> [--files a,b]
+//   node scripts/coordination/v710-check.mjs --go <GO head> --new <new head> --files a,b
 // Exit 0 = the GO stays. 1 = the seat must read the head. 2 = a usage or git error.
 //
 // The new head must be a merge of exactly two parents. Its first parent is the GO head. Its second parent is an ancestor of
@@ -11,7 +11,10 @@
 //   in another place changes neither list. The old command, `git diff <GO> <new> -- <files>`, fails there by its letter.
 // Check 2 (names): `git diff --name-only fork/main...<new>` lists only card files and their dist files. A hook source card file
 //   .claude/hooks/src/<name>.ts has the dist files .claude/hooks/dist/<name>.mjs and .claude/hooks/dist/.build-inputs.json.
-// --files defaults to the name-only list itself, so check 2 then passes by construction: pass the card files to make it bite.
+// --files is required (exit 2 without it): the card files are the scope of check 1, so a card file the merge undid still shows. A default taken from
+// the post-merge name list would drop it. Check 1 compares card paths only; check 2 alone adds their dist files.
+// Check 1 also compares the file-mode changes (git diff --raw): a lost executable bit is in the diff header, not in a hunk.
+// Known limit: it compares lines, not positions. The same +/- pair moved between two places in a file looks equal. The seat read is the backstop.
 // Read-only: it changes nothing.
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -30,6 +33,15 @@ const linesOf = (text) => text.split(/\r?\n/).filter(Boolean);
 export function distOf(file) {
   const m = /^\.claude\/hooks\/src\/(?:.*\/)?([^/]+)\.ts$/.exec(file);
   return m ? [`.claude/hooks/dist/${m[1]}.mjs`, '.claude/hooks/dist/.build-inputs.json'] : [];
+}
+
+/** The file-mode changes of a `git diff --raw` text, one entry per file whose old and new mode differ. */
+export function modeChanges(raw) {
+  return linesOf(raw).filter((l) => l.startsWith(':')).map((l) => {
+    const [meta, file] = l.split('\t');
+    const [oldMode, newMode] = meta.slice(1).split(' ');
+    return oldMode === newMode ? null : `${file}\tmode ${oldMode}>${newMode}`;
+  }).filter(Boolean);
 }
 
 /** The own +/- lines of a `git diff -U0` text, each tagged with its file. Lines before the first @@ of a file (headers) are skipped. */
@@ -71,17 +83,19 @@ function shapeProblems(git, go, head) {
 /** Check 2: the names the merge brings against fork/main are card files or their dist files. */
 function namesCheck(git, head, files) {
   const names = linesOf(git(['diff', '--name-only', `${FORK_MAIN}...${head}`]).stdout);
-  const card = files ?? names;
-  const allowed = new Set([...card, ...card.flatMap(distOf)]);
+  const allowed = new Set([...files, ...files.flatMap(distOf)]);
   const extra = names.filter((n) => !allowed.has(n));
   const line = extra.length ? `FAIL check 2 (names): not card files: ${extra.join(', ')}` : `PASS check 2 (names): ${names.length} file(s), all card files or their dist files`;
-  return { ok: extra.length === 0, line, allowed: [...allowed] };
+  return { ok: extra.length === 0, line };
 }
 
-/** Check 1: the branch's own lines on the card files, before and after the merge. */
+/** Check 1: the branch's own lines and file-mode changes on the card files (the card paths only, no dist files), before and after the merge. */
 function ownLinesCheck(git, go, head, second, paths) {
   const base = git(['merge-base', go, second]).stdout.trim();
-  const diff = (a, b) => ownLines(git(['diff', '-U0', '--no-color', '--no-ext-diff', a, b, '--', ...paths]).stdout);
+  const diff = (a, b) => [
+    ...ownLines(git(['diff', '-U0', '--no-color', '--no-ext-diff', a, b, '--', ...paths]).stdout),
+    ...modeChanges(git(['diff', '--raw', '--no-abbrev', '--no-renames', a, b, '--', ...paths]).stdout),
+  ];
   const before = diff(base, go);
   const after = diff(second, head);
   if (before.length === after.length && before.every((l, i) => l === after[i])) return { ok: true, lines: [`PASS check 1 (own lines): ${before.length} line(s) equal before and after the merge`] };
@@ -91,6 +105,7 @@ function ownLinesCheck(git, go, head, second, paths) {
 
 /** { exitCode, lines }: 0 keeps the GO, 1 needs a seat read, 2 is a usage or git error. */
 export function v710Check({ cwd, go, head, files }) {
+  if (!Array.isArray(files) || files.length === 0) return { exitCode: 2, lines: ['v710-check: --files is required: pass the card files (a,b)'] };
   const git = makeGit(cwd);
   try {
     const goSha = commitOf(git, go);
@@ -99,7 +114,7 @@ export function v710Check({ cwd, go, head, files }) {
     const shape = shapeProblems(git, goSha, headSha);
     if (shape.problems.length) return { exitCode: 1, lines: [...shape.problems, 'V7.10: the seat must read this head'] };
     const names = namesCheck(git, headSha, files);
-    const own = ownLinesCheck(git, goSha, headSha, shape.second, names.allowed);
+    const own = ownLinesCheck(git, goSha, headSha, shape.second, files);
     const ok = names.ok && own.ok;
     return { exitCode: ok ? 0 : 1, lines: [own.lines, names.line, ok ? 'V7.10: the GO stays' : 'V7.10: the seat must read this head'].flat() };
   } catch (err) {
@@ -115,7 +130,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--files') opts.files = unique(String(argv[(i += 1)] ?? '').split(',').map((s) => s.trim()).filter(Boolean));
     else throw new Error(`unknown argument: ${argv[i]}`);
   }
-  if (!opts.go || !opts.head) throw new Error('usage: v710-check.mjs --go <GO head> --new <new head> [--files a,b]');
+  if (!opts.go || !opts.head || !opts.files?.length) throw new Error('usage: v710-check.mjs --go <GO head> --new <new head> --files a,b (the card files; --files is required)');
   return opts;
 }
 

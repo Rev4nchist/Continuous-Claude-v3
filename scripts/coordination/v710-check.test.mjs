@@ -39,7 +39,7 @@ function makeRepo() {
   put('a.mjs', TWENTY);
   put('b.mjs', TWENTY);
   put(SRC, ['export const h = 1;']);
-  put(DIST, ['export const h = 1;']);
+  put(DIST, ['export const h = 1;', 'export const other = 0;']);
   put(BUILD, ['{}']);
   git('add', '-A');
   git('commit', '-q', '-m', 'M0');
@@ -61,7 +61,7 @@ test('V1: main changed a card file in another place: the old command prints, the
     r.git('merge', '-q', '--no-edit', 'fork/main');
     const head = r.git('rev-parse', 'HEAD');
     assert.notEqual(r.git('diff', go, head, '--', 'a.mjs'), '', 'the old check 1 fails by its letter here');
-    const res = v710Check({ cwd: r.dir, go, head });
+    const res = v710Check({ cwd: r.dir, go, head, files: ['a.mjs'] });
     assert.equal(res.exitCode, 0, res.lines.join('\n'));
   } finally { r.done(); }
 });
@@ -77,7 +77,7 @@ test('V2: the merge changed one line the branch owns: the check fails and prints
     r.git('add', '-A');
     r.git('commit', '-q', '-m', 'merge with a hand edit');
     const head = r.git('rev-parse', 'HEAD');
-    const res = v710Check({ cwd: r.dir, go, head });
+    const res = v710Check({ cwd: r.dir, go, head, files: ['a.mjs'] });
     assert.equal(res.exitCode, 1);
     const text = res.lines.join('\n');
     assert.match(text, /own change at line 2\b/);
@@ -92,7 +92,7 @@ test('V3: a head that is not a merge of two parents does not keep the GO', () =>
     const go = r.commit('card change');
     r.edit('a.mjs', 3, 'a later commit');
     const head = r.commit('not a merge');
-    const res = v710Check({ cwd: r.dir, go, head });
+    const res = v710Check({ cwd: r.dir, go, head, files: ['a.mjs'] });
     assert.equal(res.exitCode, 1);
     assert.match(res.lines.join('\n'), /two parents|not a merge/i);
   } finally { r.done(); }
@@ -108,7 +108,7 @@ test('V4: a style commit between the GO head and the merge needs a seat read', (
     r.moveMain(() => { r.edit('b.mjs', 5, 'main change in b'); });
     r.git('merge', '-q', '--no-edit', 'fork/main');
     const head = r.git('rev-parse', 'HEAD');
-    const res = v710Check({ cwd: r.dir, go, head });
+    const res = v710Check({ cwd: r.dir, go, head, files: ['a.mjs'] });
     assert.equal(res.exitCode, 1);
     assert.match(res.lines.join('\n'), /first parent|GO head/i);
   } finally { r.done(); }
@@ -125,7 +125,7 @@ test('V5: a second parent that is not an ancestor of fork/main does not keep the
     r.git('checkout', '-q', 'card');
     r.git('merge', '-q', '--no-edit', 'side');
     const head = r.git('rev-parse', 'HEAD');
-    const res = v710Check({ cwd: r.dir, go, head });
+    const res = v710Check({ cwd: r.dir, go, head, files: ['a.mjs'] });
     assert.equal(res.exitCode, 1);
     assert.match(res.lines.join('\n'), /fork\/main/);
   } finally { r.done(); }
@@ -163,12 +163,71 @@ test('V7: the dist files of a hook source card file pass check 2', () => {
   } finally { r.done(); }
 });
 
+// ---- the CLI findings of 26d38ccb (seat ruling 2026-11-23 09:42 CST): each test below fails on that head ----
+test('V9 (finding :74): --files is required: without it the check exits 2, and a card file the merge undid fails check 1', () => {
+  const r = makeRepo();
+  try {
+    r.edit('a.mjs', 2, 'own change in a');
+    r.edit('b.mjs', 2, 'own change in b');
+    const go = r.commit('card changes in a and b');
+    r.moveMain(() => { r.edit('b.mjs', 9, 'main change in b'); });
+    r.git('merge', '-q', '--no-commit', '--no-edit', 'fork/main');
+    r.put('a.mjs', TWENTY);
+    r.git('add', '-A');
+    r.git('commit', '-q', '-m', 'merge that undoes the change in a');
+    const head = r.git('rev-parse', 'HEAD');
+    const without = v710Check({ cwd: r.dir, go, head });
+    assert.equal(without.exitCode, 2, without.lines.join('\n'));
+    assert.match(without.lines.join('\n'), /--files/);
+    const withFiles = v710Check({ cwd: r.dir, go, head, files: ['a.mjs', 'b.mjs'] });
+    assert.equal(withFiles.exitCode, 1, 'the undone change in a.mjs is in scope and shows');
+    const cli = spawnSync(process.execPath, [SCRIPT, '--go', go, '--new', head], { cwd: r.dir, encoding: 'utf8', windowsHide: true });
+    assert.equal(cli.status, 2, cli.stdout + cli.stderr);
+  } finally { r.done(); }
+});
+
+test('V10 (finding :44): a file-mode change made in the merge fails check 1', () => {
+  const r = makeRepo();
+  try {
+    r.edit('a.mjs', 2, 'own change at line 2');
+    r.git('add', '-A');
+    r.git('update-index', '--chmod=+x', 'a.mjs');
+    r.git('commit', '-q', '-m', 'card change with the executable bit');
+    const go = r.git('rev-parse', 'HEAD');
+    r.moveMain(() => { r.edit('b.mjs', 5, 'main change in b'); });
+    r.git('merge', '-q', '--no-commit', '--no-edit', 'fork/main');
+    r.git('update-index', '--chmod=-x', 'a.mjs');
+    r.git('commit', '-q', '-m', 'merge that drops the executable bit');
+    const head = r.git('rev-parse', 'HEAD');
+    const res = v710Check({ cwd: r.dir, go, head, files: ['a.mjs'] });
+    assert.equal(res.exitCode, 1, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /mode/);
+  } finally { r.done(); }
+});
+
+test('V11 (finding :102): a permitted dist rebuild that takes in main\'s other hook keeps the GO: check 1 reads the card paths only', () => {
+  const r = makeRepo();
+  try {
+    r.put(SRC, ['export const h = 2;']);
+    r.put(DIST, ['export const h = 2;', 'export const other = 0;']);
+    const go = r.commit('hook change and build');
+    r.moveMain(() => { r.edit('b.mjs', 5, 'main change in b'); });
+    r.git('merge', '-q', '--no-commit', '--no-edit', 'fork/main');
+    r.put(DIST, ['export const h = 2;', 'export const other = 1;']);
+    r.git('add', '-A');
+    r.git('commit', '-q', '-m', 'merge plus a rebuild that includes main\'s other hook');
+    const head = r.git('rev-parse', 'HEAD');
+    const res = v710Check({ cwd: r.dir, go, head, files: [SRC] });
+    assert.equal(res.exitCode, 0, res.lines.join('\n'));
+  } finally { r.done(); }
+});
+
 test('V8: a missing argument and an unknown commit exit 2', () => {
   const none = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', windowsHide: true });
   assert.equal(none.status, 2, none.stderr);
   const r = makeRepo();
   try {
-    const bad = spawnSync(process.execPath, [SCRIPT, '--go', 'f'.repeat(40), '--new', 'e'.repeat(40)], { cwd: r.dir, encoding: 'utf8', windowsHide: true });
+    const bad = spawnSync(process.execPath, [SCRIPT, '--go', 'f'.repeat(40), '--new', 'e'.repeat(40), '--files', 'a.mjs'], { cwd: r.dir, encoding: 'utf8', windowsHide: true });
     assert.equal(bad.status, 2, bad.stdout + bad.stderr);
   } finally { r.done(); }
 });
