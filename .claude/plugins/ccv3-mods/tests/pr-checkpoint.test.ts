@@ -1414,7 +1414,9 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
   })
 
   // The seat's own refused shell calls (SLOT_DENY in its tool results, 2026-11-22 and 2026-11-23), whole. Source: .claudedocs/e2e-coord-slot-guard-false-refusal/seat-refused-lines.txt.
-  // 1 and 4 name the queue only as a word (a test file name, a card id): open. 3 holds the module names in its scope text, 2 holds a glob, 5 holds the module name: Known limits.
+  // All five stay denied (Known limits, seat ruling 2026-11-23 08:53): a raw-text exemption of the queue word can be beaten by a name the shell builds.
+  // 1 and 4 name the queue only as a word (a test file name, a card id), 3 holds the module names in its scope text, 2 holds a glob, 5 holds the module name.
+  // Workaround: write the text with the Write or Edit tool, or from a scratch file, or build the name in a .mjs.
   const SEAT_REFUSED_1 = String.raw`$p='C:\Users\dkhay\continuous-claude\.claudedocs\coordination\milestones\re-program.md'; $t=Get-Date -Format 'HH:mm'; $e=@"
 
 ## 1031. 2026-11-22 $t CST: RULING, paid guard pre-pr END pid 55892 FAIL gate-coverage (to Coord lane CLI #82ced24f)
@@ -1553,7 +1555,23 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['PowerShell', 'Get-Content (node scripts/github/slot-queue.mjs drop --pr 1 --reason x)'],
     ['PowerShell', 'Select-String -Path x -Pattern { node scripts/github/slot-queue.mjs drop --pr 1 }'],
     ['PowerShell', 'git commit -m "fix(slot-queue): slot-queue.mjs decide --pr 1 now needs the lock"'],
-    // Change A must not open a split of the module name: the word has to end at a space, a paren or a comma in the same segment.
+    // Every exemption of the queue word in raw text can be beaten by a name that the shell builds (seat ruling 08:53, CLI finding at model.ts:687): the word stays counted.
+    ['Bash', 'node scripts/github/$(echo slot-queue).mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/$(echo slot-queue ).mjs drop --pr 1 --reason x'],
+    ['Bash', 'node scripts/github/$(echo slot-queue-model).mjs drop --pr 1 --reason x'],
+    ['Bash', "node scripts/github/$(echo slot-queue).mjs drop --pr 1 --reason '('"],
+    ['Bash', 'node scripts/github/`echo slot-queue`.mjs drop --pr 1 --reason x'],
+    ['PowerShell', 'node scripts/github/$(Write-Output slot-queue).mjs drop --pr 1 --reason x'],
+    ['PowerShell', "$p = 'scripts/github/slot-queue' + '.mjs'; node $p drop --pr 1 --reason x"],
+    ['PowerShell', "$p = 'scripts/github/slot-queue-m' + 'odel.mjs'; node $p drop --pr 1 --reason x"],
+    ['PowerShell', "$p = ('scripts/github/slot-queue-modelx.mjs').Replace('x', ''); node $p drop --pr 1 --reason x"],
+    ['Bash', 'p=scripts/github/slot-queue; node ${p}.mjs drop --pr 1 --reason x'],
+    // The queue name as a word stays refused, with the Known-limit workaround (write the text with the Write or Edit tool, or from a scratch file): the seat's lines 1, 3 and 4 and plain prose.
+    ['PowerShell', SEAT_REFUSED_1],
+    ['PowerShell', SEAT_REFUSED_3_ID_ONLY],
+    ['PowerShell', SEAT_REFUSED_4],
+    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs done coord-slot-queue-full-form --merged 4ebeef85'],
+    ['Bash', 'echo slot-queue step'],
     ['Bash', 'node scripts/github/slot-queue-m$()odel.mjs drop --pr 1 --reason x'],
     ['Bash', 'node scripts/github/slot-queue-m* drop --pr 1 --reason x'],
     ['Bash', 'node scripts/github/slot-queue-mod${X}el.mjs drop --pr 1 --reason x'],
@@ -1638,14 +1656,6 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['Bash', 'node scripts/github/slot-queue.mjs tick --json; node scripts/github/slot-queue.mjs list --json'],
     ['Bash', 'cd C:/r && git add scripts/github/slot-queue.mjs && git status'],
     ['Bash', 'node --check scripts/github/slot-queue.mjs && node --test scripts/github/slot-queue.test.mjs'],
-    // Coord slot guard false refusal, change A: the queue name as a word (a card id, the bare word, a test file name) is text, not the module.
-    ['PowerShell', SEAT_REFUSED_1],
-    ['PowerShell', SEAT_REFUSED_3_ID_ONLY],
-    ['PowerShell', SEAT_REFUSED_4],
-    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs note coord-slot-queue-full-form "the slot-queue posts the form, see slot-queue-paid-cap) and slot-queue, ok"'],
-    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs done coord-slot-queue-full-form --merged 4ebeef85'],
-    ['Bash', 'echo slot-queue step'],
-    ['Bash', 'git commit -m "fix: coord-slot-queue-full-form posts the form"'],
   ]
 
   test('F13 the read verbs, git add of the files and the test run are not denied, and spawn no CLI', async ($, on) => {
