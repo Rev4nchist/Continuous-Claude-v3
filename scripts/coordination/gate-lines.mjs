@@ -172,16 +172,12 @@ export function resolveTime(input, nowMs, offsetMin, offsetAt = () => offsetMin)
       let ms = at(offsetMin);
       const offAtGuess = offsetAt(ms);
       if (offAtGuess !== offsetMin) ms = at(offAtGuess);
-      // wrapped: the clock time is later than now today, so it was read as the day before (count windows keep that rule;
-      // the line helper refuses it, see formatLine).
-      let wrapped = false;
       if (ms > nowMs) {
-        wrapped = true;
         ms -= DAY;
         const offBefore = offsetAt(ms);
         if (offBefore !== offAtGuess) ms = at(offBefore) - DAY;
       }
-      return { ms, text: formatTime(ms, offsetAt(ms)), wrapped };
+      return { ms, text: formatTime(ms, offsetAt(ms)) };
     }
   }
   throw new Error('bad time: use HH:mm or an ISO time with an offset');
@@ -199,17 +195,17 @@ export function formatTime(ms, offsetMin) {
 
 /** A time for a GATE line: like resolveTime, but an HH:mm later than the clock is refused, never read as the day before. */
 function resolveLineTime(input, nowMs, offsetMin, offsetAt) {
-  const r = resolveTime(input, nowMs, offsetMin, offsetAt);
-  if (!r.wrapped) return r;
   const s = String(input).trim();
-  const [h, m] = s.split(':').map(Number);
-  // The gap is read on the clock of today (both are clock times of one day), so a DST day needs no extra rule.
+  const m = CLOCK_RE.exec(s);
+  if (!m) return resolveTime(input, nowMs, offsetMin, offsetAt);
+  // Compare the typed minutes with the clock minutes of now, both read in the offset of now. This is a plain clock compare, so
+  // a DST day needs no extra rule: the skipped spring hour and the repeated fall hour are refused like any later time.
   const minuteNow = Math.floor(nowMs / MIN) * MIN;
   const localNow = new Date(minuteNow + offsetAt(minuteNow) * MIN);
-  const gap = h * 60 + m - (localNow.getUTCHours() * 60 + localNow.getUTCMinutes());
+  const gap = Number(m[1]) * 60 + Number(m[2]) - (localNow.getUTCHours() * 60 + localNow.getUTCMinutes());
+  if (gap <= 0) return resolveTime(input, nowMs, offsetMin, offsetAt);
   const gapText = gap < 120 ? `${gap} min` : `${Math.floor(gap / 60)} h${gap % 60 ? ` ${gap % 60} min` : ''}`;
-  const clock = formatTime(minuteNow, offsetAt(minuteNow)).slice(11, 16);
-  throw new Error(`${s} is ${gapText} after the clock ${clock}; use a clock time, or a full ISO time for another day`);
+  throw new Error(`${s} is ${gapText} after the clock ${formatTime(minuteNow, offsetAt(minuteNow)).slice(11, 16)}; use a clock time, or a full ISO time for another day`);
 }
 
 /** One GATE line. Throws on a bad field, and on an HH:mm later than the clock. Prints no file and reads none. */
