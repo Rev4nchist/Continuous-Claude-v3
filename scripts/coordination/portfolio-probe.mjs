@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
-import { assertScratchUrl, dbNameOf, maskUrl } from './scratch-db.mjs';
+import { assertScratchUrl, safeDbName, maskUrl } from './scratch-db.mjs';
 import { laneEnv, makeBoards } from './probe-boards.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -26,7 +26,7 @@ const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL || '';
 
 // Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any connection or child process.
 try { assertScratchUrl(DB_URL); } catch {
-  process.stderr.write(`portfolio-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. `
+  process.stderr.write(`portfolio-probe: refusing to run: database '${safeDbName(DB_URL) || '(no name)'}' is not a scratch database. `
     + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
   process.exit(2);
 }

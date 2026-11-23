@@ -36,7 +36,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { laneEnv, makeBoards } from './probe-boards.mjs';
-import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+import { assertScratchUrl, safeDbName } from './scratch-db.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -48,7 +48,7 @@ const CONN = process.env.CONTINUOUS_CLAUDE_DB_URL
   || ''; // no live default: an unset URL refuses (rule O3.9)
 // Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any connection.
 try { assertScratchUrl(CONN); } catch {
-  process.stderr.write(`session-identity-probe: refusing to run: database '${dbNameOf(CONN) || '(no name)'}' is not a scratch database. `
+  process.stderr.write(`session-identity-probe: refusing to run: database '${safeDbName(CONN) || '(no name)'}' is not a scratch database. `
     + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
   process.exit(2);
 }

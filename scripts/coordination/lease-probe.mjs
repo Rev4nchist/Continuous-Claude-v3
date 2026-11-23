@@ -27,16 +27,21 @@
  *   node scripts/coordination/lease-probe.mjs
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { join, relative } from 'node:path';
-import { canonProject, repoPath } from './canon-home.mjs';
-import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+import { join } from 'node:path';
+import { assertClaimKey as claimKey, canonProject, repoPath, sqlLit } from './canon-home.mjs';
+import { assertLocalHost, assertScratchUrl, safeDbName } from './scratch-db.mjs';
 
 // Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any psql call or child process.
 const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || '';
 let DB_NAME;
 try { DB_NAME = assertScratchUrl(DB_URL); } catch {
-  process.stderr.write(`lease-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. `
+  process.stderr.write(`lease-probe: refusing to run: database '${safeDbName(DB_URL) || '(no name)'}' is not a scratch database. `
     + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
+  process.exit(2);
+}
+try { assertLocalHost(DB_URL); } catch {
+  process.stderr.write(`lease-probe: refusing to run: the docker path reaches only the local container, and the URL names another host. `
+    + 'Use a scratch database on this machine.\n');
   process.exit(2);
 }
 // psql below takes DB_NAME, the value assertScratchUrl returned. The hooks this probe starts read the same scratch database.
@@ -55,13 +60,7 @@ console.log(`canonical project: ${CANON}`);
 const HARNESS_FILE = join(REPO, '.claude', 'hooks', 'src', '__step5probe__.ts');
 const PLAIN_FILE = join(REPO, 'docs', '__step5probe__.md');
 
-// The claim key the file-claims hook stores since PR 536 (.claude/hooks/src/shared/claim-target.ts resolveClaimKey):
-// the path relative to the repo top folder, forward slashes, lower-cased where the file system ignores case.
-// SQL seeds and reads use it; the hook payload keeps the absolute path, as Claude Code sends it.
-const claimKey = (abs) => {
-  const rel = relative(REPO, abs).replace(/\\/g, '/');
-  return process.platform === 'win32' || process.platform === 'darwin' ? rel.toLowerCase() : rel;
-};
+// claimKey: the shared copy in canon-home.mjs, equal to the hook's resolveClaimKey; it throws for a path outside the repo.
 
 const HOLDER = 'step5-holder-0000-0000-000000000000';
 const INTRUDER = 'step5-intruder-0000-0000-00000000000';
@@ -120,8 +119,6 @@ const checkNear = (name, got, want, tol) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}: ${got}${ok ? '' : `  (wanted ${want} +/- ${tol})`}`);
 };
 
-const sqlLit = (s) => s.replace(/'/g, "''");
-
 function purge() {
   psql(`
     DELETE FROM file_claims WHERE file_path IN ('${sqlLit(claimKey(HARNESS_FILE))}', '${sqlLit(claimKey(PLAIN_FILE))}');
@@ -140,10 +137,10 @@ function given({ file, leaseOffset, heartbeatOffset }) {
   psql(`
     DELETE FROM file_claims WHERE file_path = '${sqlLit(claimKey(file))}';
     INSERT INTO sessions (id, project, last_heartbeat)
-      VALUES ('${HOLDER}', '${CANON}', NOW() + INTERVAL '${heartbeatOffset}')
+      VALUES ('${HOLDER}', '${sqlLit(CANON)}', NOW() + INTERVAL '${heartbeatOffset}')
       ON CONFLICT (id) DO UPDATE SET last_heartbeat = NOW() + INTERVAL '${heartbeatOffset}';
     INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at, fence, lease_class)
-      VALUES ('${sqlLit(claimKey(file))}', '${CANON}', '${HOLDER}', NOW(),
+      VALUES ('${sqlLit(claimKey(file))}', '${sqlLit(CANON)}', '${HOLDER}', NOW(),
               NOW() + INTERVAL '${leaseOffset}', nextval('coordination_fence_seq'), 'file');
   `);
 }
@@ -266,9 +263,9 @@ async function main() {
   purge();
   psql(`
     INSERT INTO sessions (id, project, last_heartbeat)
-      VALUES ('${HOLDER}', '${CANON}', NOW() - INTERVAL '30 minutes');
+      VALUES ('${HOLDER}', '${sqlLit(CANON)}', NOW() - INTERVAL '30 minutes');
     INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
-      VALUES ('${sqlLit(claimKey(PLAIN_FILE))}', '${CANON}', '${HOLDER}', NOW(), NULL);
+      VALUES ('${sqlLit(claimKey(PLAIN_FILE))}', '${sqlLit(CANON)}', '${HOLDER}', NOW(), NULL);
   `);
   check('a NULL lease degrades to the heartbeat rule instead of wedging',
     verdict(await runClaim(INTRUDER, PLAIN_FILE)), 'continue');

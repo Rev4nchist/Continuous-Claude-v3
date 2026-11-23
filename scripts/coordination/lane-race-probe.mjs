@@ -53,7 +53,7 @@ import { execFile } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
-import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+import { assertScratchUrl, safeDbName } from './scratch-db.mjs';
 import { DEFAULT_BOARD } from './lane-board.mjs';
 import { syncBoardStateArgv } from '../review-engine/lib/db-verbs.mjs';
 
@@ -76,7 +76,7 @@ const RACERS = Number(args[args.indexOf('--racers') + 1]) || 24;
 const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL
   || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
 try { assertScratchUrl(DB_URL); } catch {
-  process.stderr.write(`lane-race-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. ` +
+  process.stderr.write(`lane-race-probe: refusing to run: database '${safeDbName(DB_URL) || '(no name)'}' is not a scratch database. ` +
     "The probe writes lanes and edges. Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
   process.exit(2);
 }

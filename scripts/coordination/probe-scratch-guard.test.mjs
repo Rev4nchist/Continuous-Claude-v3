@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
@@ -209,7 +209,7 @@ test('L2 assertLocalHost refuses another host, a remote host= or hostaddr=, no h
     u('localhost', '?HOST=remote.example'), u('localhost', '?ho%73t=remote.example'),
     'postgresql:///lanes_pr1_abcd1234', 'postgresql://x:y@localhost:notaport/lanes_pr1_abcd1234', 'not a url', '',
     'postgresql://localhost,remote.example/lanes_pr1_abcd1234',
-  ]) assert.throws(() => assertLocalHost(url), /local/i, url);
+  ]) assert.throws(() => assertLocalHost(url), /^Error: refusing: the docker path reaches only the local container, and /, url);
 });
 
 test('S1 safeDbName keeps a normal name, shows the live name unchanged, masks other characters and cuts a long name', async () => {

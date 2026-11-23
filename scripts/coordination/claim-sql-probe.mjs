@@ -23,7 +23,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { requireDep } from '../lib/resolve-deps.mjs';
-import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+import { assertScratchUrl, safeDbName } from './scratch-db.mjs';
 
 // `pg` is a dependency of the hooks package, not of the repo root, and ESM
 // resolves from the importing FILE rather than the cwd — so this script cannot
@@ -35,7 +35,7 @@ const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL
   || ''; // no live default: an unset URL refuses (rule O3.9)
 // Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any connection.
 try { assertScratchUrl(DB_URL); } catch {
-  process.stderr.write(`claim-sql-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. `
+  process.stderr.write(`claim-sql-probe: refusing to run: database '${safeDbName(DB_URL) || '(no name)'}' is not a scratch database. `
     + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
   process.exit(2);
 }
