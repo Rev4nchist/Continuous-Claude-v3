@@ -1093,7 +1093,7 @@ test('tiles rows: pile.net, the first line, the summary, the open line and the d
   assert.equal(text(rows, 'pile.line.gap'), 'The open count change differs from opened minus done by 4.');
 });
 
-// Breaks if the gap row shows when the counts agree, or says "1 lanes".
+// Breaks if the gap row shows when the counts agree, or gives another number than the difference.
 test('tiles rows: pile.line.gap shows only when opened minus done differs from the figure', () => {
   assert.ok(!byId(build()).has('pile.line.gap'), 'the base fixture agrees');
   const one = build({ lanes: OLD_OPEN, meta: PILE_META, snapshots: [{ day: '2026-10-31', snapshot_at: 'x', open: 9 }] });
