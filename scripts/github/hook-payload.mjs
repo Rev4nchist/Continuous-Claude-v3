@@ -128,6 +128,8 @@ export function validateFixture(fx, label) {
     if (!SHAPES.includes(ex.shape)) bad(`expect.shape must be one of ${SHAPES.join(', ')}`);
     if (ex.exit !== undefined && !(Array.isArray(ex.exit) && ex.exit.length > 0 && ex.exit.every(Number.isInteger))) bad('expect.exit must be a list of integers');
     if (ex.decision !== undefined && !DECISIONS.includes(ex.decision)) bad(`expect.decision must be one of ${DECISIONS.join(', ')}`);
+    // A gate result with no stated decision passes on shape alone, so a guard that turned a deny into an allow would still pass.
+    if (ex.shape === 'gate' && ex.decision === undefined) bad('expect.decision is required when expect.shape is gate');
   }
   if (fx.env !== undefined) {
     if (!fx.env || typeof fx.env !== 'object' || Array.isArray(fx.env)) bad('env must be an object');
