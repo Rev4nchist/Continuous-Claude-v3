@@ -28,8 +28,9 @@
  * ``` code fence is an example and is skipped. An unknown flag is a usage error.
  * Exit: 0 counted; 1 a bad line with --strict; 2 usage or an unreadable file; 3 no GATE line in the window (a zero is an
  * error, never "0 words": read the count before the verdict; exit 3 lists the bad lines, if any).
- * `line` PRINTS one line and writes no file. --at and --ask take a full time or HH:mm; HH:mm is the latest such clock time
- * that is not after now, in the local offset. Without --at the time is the clock now.
+ * `line` PRINTS one line and writes no file. --at and --ask take a full time or HH:mm; HH:mm is today's clock time in the local
+ * offset. An HH:mm later than the clock now is refused (exit 2): it is never read as yesterday. Use a full time for another day.
+ * Without --at the time is the clock now. In `count`, --from and --to keep the old rule: an HH:mm later than now is the day before.
  */
 import { readFileSync, realpathSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -192,7 +193,22 @@ export function formatTime(ms, offsetMin) {
   return `${local}${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
 }
 
-/** One GATE line. Throws on a bad field. Prints no file and reads none. */
+/** A time for a GATE line: like resolveTime, but an HH:mm later than the clock is refused, never read as the day before. */
+function resolveLineTime(input, nowMs, offsetMin, offsetAt) {
+  const s = String(input).trim();
+  const m = CLOCK_RE.exec(s);
+  if (!m) return resolveTime(input, nowMs, offsetMin, offsetAt);
+  // Compare the typed minutes with the clock minutes of now, both read in the offset of now. This is a plain clock compare, so
+  // a DST day needs no extra rule: the skipped spring hour and the repeated fall hour are refused like any later time.
+  const minuteNow = Math.floor(nowMs / MIN) * MIN;
+  const localNow = new Date(minuteNow + offsetAt(minuteNow) * MIN);
+  const gap = Number(m[1]) * 60 + Number(m[2]) - (localNow.getUTCHours() * 60 + localNow.getUTCMinutes());
+  if (gap <= 0) return resolveTime(input, nowMs, offsetMin, offsetAt);
+  const gapText = gap < 120 ? `${gap} min` : `${Math.floor(gap / 60)} h${gap % 60 ? ` ${gap % 60} min` : ''}`;
+  throw new Error(`${s} is ${gapText} after the clock ${formatTime(minuteNow, offsetAt(minuteNow)).slice(11, 16)}; use a clock time, or a full ISO time for another day`);
+}
+
+/** One GATE line. Throws on a bad field, and on an HH:mm later than the clock. Prints no file and reads none. */
 export function formatLine(spec, { nowMs, offsetMin, offsetAt = () => offsetMin }) {
   const kind = String(spec.kind ?? '');
   if (!KINDS.includes(kind)) throw new Error(`unknown kind "${kind.slice(0, 20)}": ${KINDS.join(', ')}`);
@@ -201,10 +217,10 @@ export function formatLine(spec, { nowMs, offsetMin, offsetAt = () => offsetMin 
   const head = spec.head === undefined || spec.head === '' ? '-' : String(spec.head).toLowerCase();
   if (head !== '-' && !HEAD_RE.test(head)) throw new Error('bad head: 7 to 40 hex characters');
   const minuteNow = Math.floor(nowMs / MIN) * MIN;
-  const at = spec.at ? resolveTime(spec.at, nowMs, offsetMin, offsetAt) : { ms: minuteNow, text: formatTime(minuteNow, offsetAt(minuteNow)) };
+  const at = spec.at ? resolveLineTime(spec.at, nowMs, offsetMin, offsetAt) : { ms: minuteNow, text: formatTime(minuteNow, offsetAt(minuteNow)) };
   let ask = '-';
   if (spec.ask && spec.ask !== '-') {
-    const a = resolveTime(spec.ask, nowMs, offsetMin, offsetAt);
+    const a = resolveLineTime(spec.ask, nowMs, offsetMin, offsetAt);
     if (a.ms > at.ms) throw new Error('the ask is after the time');
     ask = a.text;
   }
