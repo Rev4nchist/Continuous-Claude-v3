@@ -644,12 +644,13 @@ const FENCE_START = /^\s*(`{3,}|~{3,})/;
 const FENCE_END = /^\s*(`{3,}|~{3,})\s*$/;
 
 /**
- * Text with the sha after "@" on the one GREEN field line replaced by `newSha`, or null. Null when the text has not
- * exactly one GREEN line outside a code fence, or that line does not hold `oldSha`. Only that sha changes: the
- * line endings (CRLF or LF, kept per line), RED, BEFORE and every output block stay byte for byte.
+ * The one GREEN field line outside a code fence: { parts, index, line, at, sha }, or null when the text has not exactly one such line
+ * or that line holds no sha after "@". `parts` is the text split into lines (even indexes) and their endings (odd indexes, CRLF or LF),
+ * `index` the position of the line in `parts` (line number = index / 2 + 1), `at` the offset of the sha in the line.
+ * rewriteGreenSha and greenLineHint both read the GREEN line through this one finder.
  */
-export function rewriteGreenSha(text, oldSha, newSha) {
-  const parts = String(text).split(/(\r\n|\n)/); // even indexes are lines, odd indexes are their endings
+function findGreenLine(text) {
+  const parts = String(text).split(/(\r\n|\n)/);
   let fence = null;
   const hits = [];
   for (let i = 0; i < parts.length; i += 2) {
@@ -665,10 +666,31 @@ export function rewriteGreenSha(text, oldSha, newSha) {
   const command = /^\s*(?:\*\*|__)?\s*`[^`]+`/.exec(line.slice(afterKey));
   const from = afterKey + (command ? command[0].length : 0);
   const m = GREEN_SHA.exec(line.slice(from));
-  if (!m || m[2].toLowerCase() !== oldSha) return null;
-  const at = from + m.index + m[1].length;
-  parts[hits[0]] = `${line.slice(0, at)}${newSha}${line.slice(at + m[2].length)}`;
-  return parts.join('');
+  if (!m) return null;
+  return { parts, index: hits[0], line, at: from + m.index + m[1].length, sha: m[2] };
+}
+
+/**
+ * Text with the sha after "@" on the one GREEN field line replaced by `newSha`, or null. Null when the text has not
+ * exactly one GREEN line outside a code fence, or that line does not hold `oldSha`. Only that sha changes: the
+ * line endings (CRLF or LF, kept per line), RED, BEFORE and every output block stay byte for byte.
+ */
+export function rewriteGreenSha(text, oldSha, newSha) {
+  const g = findGreenLine(text);
+  if (!g || g.sha.toLowerCase() !== oldSha) return null;
+  g.parts[g.index] = `${g.line.slice(0, g.at)}${newSha}${g.line.slice(g.at + g.sha.length)}`;
+  return g.parts.join('');
+}
+
+/**
+ * The line to fix when the GREEN sha is not the head: "In <body path> line <n>: change the sha after "@" from <old> to <new>. Line now: <line>",
+ * or null (no GREEN line, two of them, no sha on it, or the sha already names the head). Pure: it reads no file.
+ */
+export function greenLineHint({ bodyText, bodyPath, head }) {
+  const g = findGreenLine(bodyText);
+  const headSha = String(head ?? '').toLowerCase();
+  if (!g || !headSha || headSha.startsWith(g.sha.toLowerCase()) || g.sha.toLowerCase().startsWith(headSha)) return null;
+  return `In ${bodyPath ?? 'the PR body'} line ${g.index / 2 + 1}: change the sha after "@" from ${g.sha.slice(0, 7)} to ${headSha.slice(0, 7)}. Line now: ${clip(g.line.trim(), 100)}`;
 }
 
 /**
@@ -2059,6 +2081,12 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
     durations.set(green.evidence, durations.get(results[evidenceAt]));
     results.splice(evidenceAt, 1, green.evidence, green.note);
     log(`pre-pr: ${green.note.detail}`);
+  }
+  // A stale GREEN that this run did not settle: one NOTE row says which line to change. The evidence FAIL text and status stay as they were.
+  const evidenceNow = results[evidenceAt];
+  if (!green && head && evidenceNow.status === 'FAIL' && evidenceNow.notes.some((n) => /GREEN names commit/.test(n))) {
+    const hint = greenLineHint({ bodyText, bodyPath, head });
+    if (hint) results.splice(evidenceAt + 1, 0, result('evidence:hint', 'NOTE', hint));
   }
   results.push(...notesFor(changes.paths, cfg));
   // The advisories run scanners (osv needs the network). A run that stopped at a FAIL does not start them.

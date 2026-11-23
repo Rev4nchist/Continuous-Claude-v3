@@ -347,7 +347,7 @@ test('PSH2: a stale Head (6 files since, FAIL) also gets the note, and the FAIL 
   assert.equal(r.result.status, 'FAIL');
   assert.equal(r.result.detail, `6 files changed since Head ${old.slice(0, 7)}: the summary is stale`);
   const hint = (r.result.notes ?? []).find((n) => /^fix:/.test(n));
-  assert.ok(hint && /line 1\b/.test(hint) && hint.includes(head.slice(0, 7)), all(r));
+  assert.ok(hint && /line 2\b/.test(hint) && hint.includes(head.slice(0, 7)), all(r));
 });
 
 test('PSH3: a current Head, and a Head that is not a commit, get no fix note', () => {
