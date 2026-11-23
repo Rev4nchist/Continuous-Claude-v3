@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { matchRules, type Manifest } from '../rule-router.js';
+import { isLaneSegment, matchRules, type Manifest } from '../rule-router.js';
 
 const CLAUDE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const manifest = JSON.parse(readFileSync(join(CLAUDE, 'rules-ondemand', 'manifest.json'), 'utf8')) as Manifest;
@@ -89,6 +89,10 @@ describe('the lane head forms', () => {
     }
   });
   it('a script that only ends in lane.mjs-like text is not a lane segment', () => {
-    expect(ids(`node scripts/not-lane.mjs.bak "pre-pr.mjs"`)).toContain('pr-review-loop');
+    // Card coord-tighten-segment-triggers: the pr-review-loop segment tests name the script that node runs, so a quoted
+    // "pre-pr.mjs" argument of another script no longer fires the rule by itself. The property pinned here stays: a script
+    // that only ends in lane.mjs-like text is NOT a lane segment (so the lane skip never swallows it).
+    expect(isLaneSegment(`node scripts/not-lane.mjs.bak "pre-pr.mjs"`)).toBe(false);
+    expect(ids(`node scripts/not-lane.mjs.bak "x"; node scripts/github/pre-pr.mjs --body b.md`)).toContain('pr-review-loop');
   });
 });
