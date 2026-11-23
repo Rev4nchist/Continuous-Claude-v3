@@ -14,6 +14,7 @@
 // --files is required (exit 2 without it): the card files are the scope of check 1, so a card file the merge undid still shows. A default taken from
 // the post-merge name list would drop it. Check 1 compares card paths only; check 2 alone adds their dist files.
 // Check 1 also compares the file-mode changes (git diff --raw): a lost executable bit is in the diff header, not in a hunk.
+// A binary card file gives no text lines: any binary notice in the card paths fails check 1, so the seat reads it.
 // Known limit: it compares lines, not positions. The same +/- pair moved between two places in a file looks equal. The seat read is the backstop.
 // Read-only: it changes nothing.
 import { spawnSync } from 'node:child_process';
@@ -82,7 +83,7 @@ function shapeProblems(git, go, head) {
 
 /** Check 2: the names the merge brings against fork/main are card files or their dist files. */
 function namesCheck(git, head, files) {
-  const names = linesOf(git(['diff', '--name-only', `${FORK_MAIN}...${head}`]).stdout);
+  const names = git(['diff', '--name-only', '-z', `${FORK_MAIN}...${head}`]).stdout.split('\0').filter(Boolean);
   const allowed = new Set([...files, ...files.flatMap(distOf)]);
   const extra = names.filter((n) => !allowed.has(n));
   const line = extra.length ? `FAIL check 2 (names): not card files: ${extra.join(', ')}` : `PASS check 2 (names): ${names.length} file(s), all card files or their dist files`;
@@ -92,12 +93,13 @@ function namesCheck(git, head, files) {
 /** Check 1: the branch's own lines and file-mode changes on the card files (the card paths only, no dist files), before and after the merge. */
 function ownLinesCheck(git, go, head, second, paths) {
   const base = git(['merge-base', go, second]).stdout.trim();
-  const diff = (a, b) => [
-    ...ownLines(git(['diff', '-U0', '--no-color', '--no-ext-diff', a, b, '--', ...paths]).stdout),
-    ...modeChanges(git(['diff', '--raw', '--no-abbrev', '--no-renames', a, b, '--', ...paths]).stdout),
-  ];
-  const before = diff(base, go);
-  const after = diff(second, head);
+  const text = (a, b) => git(['diff', '-U0', '--no-color', '--no-ext-diff', a, b, '--', ...paths]).stdout;
+  const [textBefore, textAfter] = [text(base, go), text(second, head)];
+  const binary = [textBefore, textAfter].flatMap((t) => linesOf(t).filter((l) => /^Binary files .* differ$|^GIT binary patch/.test(l)));
+  if (binary.length) return { ok: false, lines: ['FAIL check 1 (own lines): a card file is binary, so its lines cannot be compared: the seat must read it', ...unique(binary).slice(0, 5).map((l) => `    ${l}`)] };
+  const raw = (a, b) => modeChanges(git(['diff', '--raw', '--no-abbrev', '--no-renames', a, b, '--', ...paths]).stdout);
+  const before = [...ownLines(textBefore), ...raw(base, go)];
+  const after = [...ownLines(textAfter), ...raw(second, head)];
   if (before.length === after.length && before.every((l, i) => l === after[i])) return { ok: true, lines: [`PASS check 1 (own lines): ${before.length} line(s) equal before and after the merge`] };
   const show = (tag, xs) => [`  ${tag} (${xs.length}):`, ...xs.slice(0, SHOW_MAX).map((l) => `    ${l}`), ...(xs.length > SHOW_MAX ? [`    ... ${xs.length - SHOW_MAX} more`] : [])];
   return { ok: false, lines: [`FAIL check 1 (own lines): the merge changed the branch's own lines`, ...show('before the merge', before), ...show('after the merge', after)] };

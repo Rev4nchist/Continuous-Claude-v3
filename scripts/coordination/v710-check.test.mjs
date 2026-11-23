@@ -32,7 +32,7 @@ const BUILD = '.claude/hooks/dist/.build-inputs.json';
 /** A temp repo with main at M0 holding a.mjs (20 lines), b.mjs, the hook source and its two dist files. */
 function makeRepo() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'v710-repo-'));
-  const git = (...args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'core.autocrlf=false', ...args], { cwd: dir, encoding: 'utf8', windowsHide: true }).trim();
+  const git = (...args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'core.autocrlf=false', '-c', 'core.fileMode=false', ...args], { cwd: dir, encoding: 'utf8', windowsHide: true }).trim();
   const put = (rel, lines) => { mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); writeFileSync(path.join(dir, rel), `${lines.join('\n')}\n`); };
   const edit = (rel, n, text) => { const l = [...TWENTY]; l[n - 1] = text; put(rel, l); };
   git('init', '-q', '-b', 'main');
@@ -218,6 +218,39 @@ test('V11 (finding :102): a permitted dist rebuild that takes in main\'s other h
     r.git('commit', '-q', '-m', 'merge plus a rebuild that includes main\'s other hook');
     const head = r.git('rev-parse', 'HEAD');
     const res = v710Check({ cwd: r.dir, go, head, files: [SRC] });
+    assert.equal(res.exitCode, 0, res.lines.join('\n'));
+  } finally { r.done(); }
+});
+
+// ---- the CLI findings of ecc5029e (seat ruling 2026-11-23 09:56 CST); V12 and V13 fail on that head. V10 above needed core.fileMode=false in the git helper:
+// on Linux (core.filemode=true) an index-only chmod leaves the working file mode different and the checkout in moveMain refuses.
+test('V12 (finding :96): a binary card file in the scope needs a seat read', () => {
+  const r = makeRepo();
+  try {
+    writeFileSync(path.join(r.dir, 'bin.dat'), Buffer.from([0, 1, 2, 3, 0, 255]));
+    r.git('add', '-A');
+    r.git('commit', '-q', '-m', 'base binary on card');
+    r.git('update-ref', 'refs/remotes/fork/main', r.git('rev-parse', 'HEAD'));
+    writeFileSync(path.join(r.dir, 'bin.dat'), Buffer.from([0, 9, 9, 9, 0, 254]));
+    const go = r.commit('card changes the binary');
+    r.moveMain(() => { r.edit('b.mjs', 5, 'main change in b'); });
+    r.git('merge', '-q', '--no-edit', 'fork/main');
+    const head = r.git('rev-parse', 'HEAD');
+    const res = v710Check({ cwd: r.dir, go, head, files: ['bin.dat'] });
+    assert.equal(res.exitCode, 1, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /binary/i);
+  } finally { r.done(); }
+});
+
+test('V13 (finding :85): a card file with a non-ASCII name passes check 2 (git quotes it unless -z is used)', () => {
+  const r = makeRepo();
+  try {
+    r.put('é.mjs', ['a card file with an accent']);
+    const go = r.commit('card adds the accented file');
+    r.moveMain(() => { r.edit('b.mjs', 5, 'main change in b'); });
+    r.git('merge', '-q', '--no-edit', 'fork/main');
+    const head = r.git('rev-parse', 'HEAD');
+    const res = v710Check({ cwd: r.dir, go, head, files: ['é.mjs'] });
     assert.equal(res.exitCode, 0, res.lines.join('\n'));
   } finally { r.done(); }
 });
