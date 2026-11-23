@@ -212,6 +212,9 @@ export const ALWAYS_GATES = [
  */
 const GITHUB_TESTS = nodeTest('github-tests', 'scripts/github/*.test.mjs', 25 * MIN);
 const BEHAVIOUR = 'after the forward sync, run the docs/testing-standard.md behaviour check: claude -p "<a prompt this change targets>" --output-format json, and keep the JSON';
+// Feeds each changed guard a saved real payload and checks its output shape (card coord-hook-payload-gate, docs/verify/README.md).
+// One object in two rows: a run adds a gate once by id.
+const HOOK_PAYLOAD_GATE = nodeGate('hook-payload', 'scripts/github/hook-payload.mjs', [], { timeoutMs: 5 * MIN });
 export const SURFACES = [
   {
     id: 'hooks',
@@ -234,9 +237,8 @@ export const SURFACES = [
           failText: 'dist is stale: the build changed these files. Commit them with the source',
         },
       },
-      // Feeds each changed guard a saved real payload and checks its output shape (card coord-hook-payload-gate, docs/verify/README.md).
       // After the build, so it runs the fresh dist; before vitest, so a wrong shape fails in seconds.
-      nodeGate('hook-payload', 'scripts/github/hook-payload.mjs', [], { timeoutMs: 5 * MIN }),
+      HOOK_PAYLOAD_GATE,
       // Several dist-integration tests spawn node and use real timers. Alone they take about 3 s; in the full parallel
       // suite on a busy machine they pass vitest's 5 s default (msys-crash-capture, 2026-10-28). --testTimeout gives
       // them room, and --retry covers a rare timer race. The flake ledger reporter (card coord-flake-ledger) records each test that passed
@@ -249,6 +251,8 @@ export const SURFACES = [
       },
     ],
   },
+  // A fixture alone changes no hook source, so the hooks row stays idle. The payload gate must still run: it is the one check that reads fixtures.
+  { id: 'hook-fixtures', globs: ['.claude/hooks/fixtures/**'], gates: [HOOK_PAYLOAD_GATE] },
   {
     id: 'rules',
     globs: ['.claude/rules-ondemand/**', '.claude/rules-src/**'],

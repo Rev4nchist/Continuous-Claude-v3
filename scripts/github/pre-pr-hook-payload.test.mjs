@@ -31,4 +31,10 @@ describe('hook-payload gate row', () => {
     assert.ok(gatesFor(['.claude/hooks/src/decision-gate.ts']).some((g) => g.id === 'hook-payload'));
     assert.ok(!gatesFor(['docs/verify/README.md']).some((g) => g.id === 'hook-payload'));
   });
+
+  it('a change to a fixture alone selects it, and only it of the hooks gates', () => {
+    const ids = gatesFor(['.claude/hooks/fixtures/decision-gate/allow-echo.json']).map((g) => g.id);
+    assert.ok(ids.includes('hook-payload'), `gates for a fixtures-only diff: ${ids.join(', ')}`);
+    for (const heavy of ['hooks-tsc', 'hooks-build', 'hooks-vitest']) assert.ok(!ids.includes(heavy), `${heavy} must not run for a fixtures-only diff`);
+  });
 });
