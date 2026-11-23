@@ -741,7 +741,7 @@ const readsStateFile = (segment: string): boolean => {
 // A segment that appends text to ONE literal document file, or stores a lane text through the lane shim, runs no queue verb. The rule reads what the segment does,
 // never the module name, so a name the shell builds apart cannot beat it. The seat's 08:52 ruling (an exemption by the name is beaten by string building) is met.
 // isDocAppend has a second copy in .claude/hooks/src/shared/inert-quotes.ts (decision-gate; a separate package). Both read one row table,
-// tests/fixtures/doc-append-rows.json. One anchored regex, no tokenizer: Add-Content or Set-Content (full names), -LiteralPath or -Path, ONE target of plain path
+// tests/fixtures/doc-append-rows.ts. One anchored regex, no tokenizer: Add-Content or Set-Content (full names), -LiteralPath or -Path, ONE target of plain path
 // characters ending .md, .txt or .log, an optional -Value, ONE single-quoted string. Every other form keeps the old rule (Known limits).
 const DOC_APPEND = /^\s*(?:Add-Content|Set-Content)\s+-(?:LiteralPath|Path)\s+(?:'([A-Za-z0-9_.\-/\\: ]+)'|([A-Za-z0-9_.\-/\\:]+))(?:\s+-Value)?\s+'([^']*)'\s*$/i
 const DOC_EXT = /\.(?:md|txt|log)$/i
