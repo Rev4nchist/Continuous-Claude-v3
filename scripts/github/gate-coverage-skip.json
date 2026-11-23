@@ -660,6 +660,10 @@
       "reason": "pre-pr gate only; CI has no step"
     },
     {
+      "path": "scripts/rules/test/rule-router-false-fires.test.mjs",
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
       "path": "scripts/scheduled/register-ccv3-tasks.test.mjs",
       "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
