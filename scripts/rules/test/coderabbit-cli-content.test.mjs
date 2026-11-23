@@ -81,6 +81,7 @@ test('Paid-review policy (Dave, 2026-10-30): the PR-comment ban points to the po
   assert.match(rule, /cr-paid\.mjs/);
   assert.match(loop, /## Paid PR reviews \(Dave, 2026-10-30\)/);
   assert.match(loop, /cr-paid\.mjs check --pr/);
-  assert.match(loop, /@coderabbitai review --use-credits/);
+  // Since 10c42692 (2026-11-18) the loop rule names the post command, not the comment text: `cr-paid.mjs post --pr N` posts --use-credits on Dave's priced tap.
+  assert.match(loop, /A paid round needs Dave's priced tap\. `cr-paid\.mjs post --pr N` then posts `--use-credits`/);
   assert.doesNotMatch(loop, /Never request the paid on-demand review/);
 });

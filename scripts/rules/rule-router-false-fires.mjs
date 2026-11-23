@@ -3,18 +3,20 @@
  * rule-router-false-fires.mjs -- the capture log of rules that fired on the wrong command.
  *
  * Capture log: ~/.claude/logs/rule-router-false-fires.jsonl (append-only, one row per capture):
- *   { ts, rule, what, tool, count, reason, source: "review" | "manual", week }
+ *   { ts, rule, what, tool, count, fires, from, to, reason, source: "review" | "agent" | "manual", week, window }
+ *   `from` and `to` date the fires the row stands for, `fires` how many. Old rows have none (see `rate`).
  *
  * Commands:
- *   add --rule <id> --what "<trigger words>" [--note "<why it is wrong>"]   record one by hand
+ *   add --rule <id> --what "<trigger words>" [--note "<why it is wrong>"] [--fired-at <ISO time>]   record one by hand
  *   list [--json]                                                          every false fire so far
+ *   rate --since <ISO time> [--until <ISO time>] [--json]                  false fires over rule fires, one window
  *   review [--days 7] [--report <file.md>]                                 judge this week's fires
  *
  * `review` reads the fire log, takes each distinct (rule, trigger words) pair, and asks a headless
  * `claude -p` session (Sonnet, no tools) whether the rule is about that command. Pairs judged
  * "false_fire" are appended to the capture log, and a verdict table is appended to the week's audit
  * report. Exit 1 when the judge call fails, so the scheduled task shows it.
- * Options for tests: --log <fires.jsonl> --capture <false-fires.jsonl> --manifest <manifest.json>
+ * Options for tests: --log <fires.jsonl> --capture <false-fires.jsonl> --manifest <manifest.json> --judge-reply <verdicts.json>
  *   review --print-prompt   print the judge prompt (rule triggers come from the manifest) and stop
  */
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -89,11 +91,14 @@ function review(days, reportPath) {
   const since = Date.now() - days * 86400000;
   const pairs = new Map();
   for (const f of readJsonl(firesPath).filter((f) => Date.parse(f.ts) >= since)) {
+    if (!isFire(f)) continue; // a re-arm row (or any kind that is no fire) is not judged, whatever its rules array holds
     if (!f.what || /^\$\w+=/.test(f.what)) continue; // old log format: nothing to judge
     for (const rule of f.rules || []) {
       const k = `${rule}|${f.what}`;
-      const e = pairs.get(k) || { rule, what: f.what, tool: f.tool, count: 0 };
-      e.count++; pairs.set(k, e);
+      const at = new Date(f.ts).toISOString();
+      const e = pairs.get(k) || { rule, what: f.what, tool: f.tool, count: 0, from: at, to: at };
+      e.count++; if (at < e.from) e.from = at; if (at > e.to) e.to = at;
+      pairs.set(k, e);
     }
   }
   const items = [...pairs.values()];
@@ -126,9 +131,14 @@ function review(days, reportPath) {
   // claude is a real .exe here, so no shell: the prompt goes on stdin, untouched by shell quoting.
   // No tools at all: `--tools ""` removes the built-ins, `--strict-mcp-config` (with no config) loads
   // no MCP servers. The judge only reads the prompt and answers.
-  const run = spawnSync('claude', ['-p', '--model', 'sonnet', '--output-format', 'json', '--tools', '', '--strict-mcp-config'], {
-    input: prompt, encoding: 'utf8', env, timeout: 300000, maxBuffer: 16 * 1024 * 1024,
-  });
+  // --judge-reply <file>: a test option. The file holds the verdict array; no judge call runs.
+  const replyFile = opt('--judge-reply');
+  if (replyFile && !rest.includes('--capture')) { console.log('--judge-reply needs --capture <file>: a test run never writes the live capture log'); process.exit(2); }
+  const run = replyFile
+    ? (() => { try { return { status: 0, stdout: JSON.stringify({ result: readFileSync(replyFile, 'utf8') }), stderr: '' }; } catch { return { status: 1, stdout: '', stderr: 'reply file not readable' }; } })()
+    : spawnSync('claude', ['-p', '--model', 'sonnet', '--output-format', 'json', '--tools', '', '--strict-mcp-config'], {
+      input: prompt, encoding: 'utf8', env, timeout: 300000, maxBuffer: 16 * 1024 * 1024,
+    });
   let verdicts;
   try {
     const result = JSON.parse(run.stdout).result;
@@ -153,7 +163,7 @@ function review(days, reportPath) {
       falseFires++;
       found.push({ rule: p.rule, what: p.what, count: p.count, reason: v.reason, source: 'review' });
       if (!already.has(`${p.rule}|${p.what}`)) {
-        capture({ rule: p.rule, what: p.what, tool: p.tool, count: p.count, reason: v.reason, source: 'review', window });
+        capture({ rule: p.rule, what: p.what, tool: p.tool, count: p.count, fires: p.count, from: p.from, to: p.to, reason: v.reason, source: 'review', window });
         newlyCaptured++;
       }
     }
@@ -163,6 +173,67 @@ function review(days, reportPath) {
   writeReport(reportPath, section);
   console.log(`false-fire review: ${items.length} pairs judged, ${falseFires} false fires found, ${newlyCaptured} newly captured`);
   return { code: 0, judged: items.length, found };
+}
+
+/**
+ * The false-fire rate of one window, with ONE reading: false fires over rule fires, both inside the window.
+ * Denominator: one fire per rule named in a `deny` or `inject` row. A re-arm row is no fire. A row with no
+ * `kind` (old format) is a fire. Numerator: the `fires` (else `count`, else 1) of every capture row whose
+ * fires lie wholly in the window. The fires of a row are dated by `from` and `to`; an old row has neither
+ * and is dated by its capture time (`datedByCapture`). A row that only partly lies in the window is
+ * reported (`partialRows`) and not counted: its fires cannot be split.
+ */
+const REVIEW_DAYS = 7; // `review --days 7` is what the scheduled task runs (scheduled-rule-router-review.ps1:57)
+
+/** A fire row: kind deny or inject, or no kind (old format). A re-arm row, and any other kind, is no fire. */
+function isFire(f) { return f.kind === undefined || f.kind === 'deny' || f.kind === 'inject'; }
+
+/** How many fires a capture row stands for: `fires`, else `count`, else 1. A value that is no number >= 0 counts 1. */
+function firesOf(c) {
+  const n = Number(c.fires ?? c.count ?? 1);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
+export function rate(sinceMs, untilMs) {
+  const inWin = (ms) => ms >= sinceMs && ms <= untilMs;
+  let fireRows = 0; let rearmRows = 0; let ruleFires = 0; let badRows = 0;
+  for (const f of readJsonl(firesPath)) {
+    const at = Date.parse(f.ts);
+    if (Number.isNaN(at)) { badRows++; continue; }
+    if (!inWin(at)) continue;
+    if (f.kind === 'rearm') { rearmRows++; continue; }
+    if (!isFire(f)) continue;
+    fireRows++; ruleFires += (f.rules || []).length;
+  }
+  // Date each capture row. An old review row has no fire dates: the scheduled review judges `--days 7`, so its fires
+  // lie in the 7 days before its capture. Any other old row is dated by its capture time.
+  const rows = [];
+  for (const c of readJsonl(capturePath)) {
+    const to = Date.parse(c.to || c.from || c.ts);
+    const from = c.from ? Date.parse(c.from) : (c.source === 'review' ? Date.parse(c.ts) - REVIEW_DAYS * 86400000 : Date.parse(c.ts));
+    if (Number.isNaN(from) || Number.isNaN(to)) { badRows++; continue; }
+    rows.push({ c, from, to, old: !c.from, whole: inWin(from) && inWin(to), key: `${c.rule}|${c.what}` });
+  }
+  // One fire, one count: a row of a session or of a hand that lies inside a counted review row of the same pair is the same fire.
+  const reviews = rows.filter((r) => r.whole && r.c.source === 'review');
+  let falsePairs = 0; let falseFires = 0; let datedByCapture = 0; let partialRows = 0; let dedupedRows = 0;
+  for (const r of rows) {
+    if (r.whole) {
+      if (r.c.source !== 'review' && reviews.some((v) => v.key === r.key && r.from >= v.from && r.to <= v.to)) { dedupedRows++; continue; }
+      falsePairs++; falseFires += firesOf(r.c);
+      if (r.old) datedByCapture++;
+    } else if (inWin(r.from) || inWin(r.to) || (r.from < sinceMs && r.to > untilMs)) partialRows++;
+  }
+  const ratePercent = ruleFires ? Math.round((falseFires / ruleFires) * 10000) / 100 : null;
+  return { since: new Date(sinceMs).toISOString(), until: new Date(untilMs).toISOString(), fireRows, rearmRows, ruleFires, falsePairs, falseFires, datedByCapture, partialRows, dedupedRows, badRows, ratePercent };
+}
+
+function printRate(r, since) {
+  console.log(`False-fire rate since ${since}: ${r.falseFires} false fires of ${r.ruleFires} rule fires = ${r.ratePercent ?? 'n/a'} percent`);
+  console.log(`  pairs (capture rows in the window): ${r.falsePairs}; fire rows: ${r.fireRows}; re-arm rows (not fires): ${r.rearmRows}`);
+  console.log(`  dated by capture (old rows with no fire dates): ${r.datedByCapture}; partly in the window (not counted): ${r.partialRows}`);
+  console.log(`  same fire recorded twice (not counted again): ${r.dedupedRows}; rows with a bad timestamp (left out): ${r.badRows}`);
+  console.log('  Lower bound until the weekly review has judged the window.');
 }
 
 /** ISO-8601 week id, e.g. 2026-W39: the review window a capture belongs to. */
@@ -223,8 +294,18 @@ function publishNotion(parent, days, result, reportPath) {
 if (cmd === 'add') {
   const rule = opt('--rule'); const what = opt('--what');
   if (!rule || !what) { console.log('usage: add --rule <id> --what "<trigger words>" [--note "<why>"]'); process.exit(2); }
-  capture({ rule, what, tool: opt('--tool', null), count: 1, reason: opt('--note', ''), source: opt('--source', 'manual') });
+  if (opt('--fired-at') && Number.isNaN(Date.parse(opt('--fired-at')))) { console.log('invalid --fired-at: give an ISO time, e.g. 2026-11-17T10:00:00Z'); process.exit(2); }
+  const firedAt = opt('--fired-at') ? new Date(opt('--fired-at')).toISOString() : new Date().toISOString();
+  capture({ rule, what, tool: opt('--tool', null), count: 1, fires: 1, from: firedAt, to: firedAt, reason: opt('--note', ''), source: opt('--source', 'manual') });
   console.log(`captured: ${rule} <- ${what}`);
+} else if (cmd === 'rate') {
+  const since = opt('--since');
+  if (!since || Number.isNaN(Date.parse(since))) { console.log('usage: rate --since <ISO time> [--until <ISO time>] [--json]'); process.exit(2); }
+  const untilMs = opt('--until') ? Date.parse(opt('--until')) : Date.now();
+  if (Number.isNaN(untilMs) || untilMs < Date.parse(since)) { console.log('invalid --until: give an ISO time that is not before --since'); process.exit(2); }
+  const r = rate(Date.parse(since), untilMs);
+  if (rest.includes('--json')) console.log(JSON.stringify(r));
+  else printRate(r, since);
 } else if (cmd === 'list') {
   list(rest.includes('--json'));
 } else if (cmd === 'review') {
@@ -235,6 +316,6 @@ if (cmd === 'add') {
   const notionCode = parent ? publishNotion(parent, days, result, report) : 0;
   process.exit(result.code || notionCode);
 } else {
-  console.log('usage: rule-router-false-fires.mjs add | list | review   (see the header for options)');
+  console.log('usage: rule-router-false-fires.mjs add | list | rate | review   (see the header for options)');
   process.exit(2);
 }

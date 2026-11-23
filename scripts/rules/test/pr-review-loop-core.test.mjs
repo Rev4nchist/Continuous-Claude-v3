@@ -43,9 +43,10 @@ test('the core file tells the session to ask the question that pr_checkpoint ret
   assert.match(core, /It returns his question: ask it with AskUserQuestion word for word, then call `pr_checkpoint` again/);
 });
 
-test('the core file allows a plain review request only when a round is left, and a paid one only after ALLOW and a tap', () => {
+// Since 10c42692 (2026-11-18) a paid round is posted only by `cr-paid.mjs post --pr N` on Dave's priced tap, never by hand.
+test('the core file allows a plain review request only when a round is left, and a paid one only through cr-paid post on his priced tap', () => {
   assert.match(core, /plain `@coderabbitai review` only when the `pr_watch` line says a round is left/);
-  assert.match(core, /`--use-credits`\) needs `cr-paid\.mjs check` to print ALLOW and his tap/);
+  assert.match(core, /A paid round needs Dave's priced tap on the Paid round question\. Post it only with `node scripts\/github\/cr-paid\.mjs post --pr N`, never by hand\./);
 });
 
 // The gate (ondemand-index-check.mjs) holds the rest: the section index, the path link and the joined text of rules that
