@@ -1050,3 +1050,59 @@ test('tile 9: each category row carries its project key; "No category yet" has k
   assert.equal(text(rows, `cat.row.${keys.length}.key`), 'unassigned');
   assert.ok(keys.length >= 2);
 });
+
+// ---------------------------------------------------------------- one pile figure (card coord-fleetops-pile-figure)
+// Window 2026-11-01 to 2026-11-07. Ten lanes created before it and still open: the lane dates give a start of 10 and a net of 0.
+// The snapshot of the day before the window (2026-10-31) says 6 were open: the open count moved by +4. The page shows one figure.
+const OLD_OPEN = Array.from({ length: 10 }, (_, i) => lane({ id: `o${i}`, state: 'ready', created_day: '2026-10-20', created_at: '2026-10-20T12:00:00.000Z' }));
+const PILE_META = { ...META_BASE, open_check: 10 };
+const SNAP_START = [{ day: '2026-10-31', snapshot_at: 'x', open: 6 }];
+
+// Breaks if the figure is still created minus done: it would print +0 here while the snapshots say +4.
+test('pileTile: the start is the snapshot of the day before the window, and net is the open count change', () => {
+  const p = pileTile(OLD_OPEN, PILE_META, TARGETS, SNAP_START);
+  assert.equal(p.openStart, 6);
+  assert.equal(p.openNow, 10);
+  assert.equal(p.net, 4);
+  assert.equal(p.openNow - p.openStart, p.net);
+  assert.equal(p.gap, 4, 'created minus done is 0, so 4 lanes sit outside both counts');
+});
+
+// Breaks if a missing snapshot day leaves the start undefined, or the rebuilt start is lost as the fallback.
+test('pileTile: with no snapshot for that day the start is rebuilt from lane dates', () => {
+  const p = pileTile(OLD_OPEN, PILE_META, TARGETS, [{ day: '2026-11-07', snapshot_at: 'x', open: 99 }]);
+  assert.equal(p.openStart, 10);
+  assert.equal(p.net, 0);
+  assert.equal(p.gap, 0);
+  assert.equal(pileTile(OLD_OPEN, PILE_META, TARGETS).openStart, 10, 'the snapshots argument is optional');
+});
+
+// Breaks if one of these rows still shows another number than the figure, which is the +41 against +45 the card is about.
+test('tiles rows: pile.net, the first line, the summary, the open line and the detail all print the one figure', () => {
+  const rows = build({ lanes: OLD_OPEN, meta: PILE_META, snapshots: SNAP_START });
+  assert.equal(byId(rows).get('pile.net').value, 4);
+  assert.equal(byId(rows).get('pile.net').text, '+4');
+  assert.equal(byId(rows).get('pile.open_start').value, 6);
+  assert.match(text(rows, 'page.takeaway'), /The pile changed by \+4 in the last 7 days\.$/);
+  assert.match(text(rows, 'pile.summary'), /a net change of \+4\.$/);
+  assert.equal(text(rows, 'pile.line.open'), 'From 6 to 10 open');
+  assert.match(text(rows, 'pile.detail'), /^Open went from 6 to 10\./);
+  assert.ok(!/net/.test(text(rows, 'pile.line.flow')), 'the flow line gives opened and done, never a second net');
+  assert.equal(text(rows, 'pile.line.gap'), '4 lanes are not in the opened or done counts');
+});
+
+// Breaks if the gap row shows when the counts agree, or says "1 lanes".
+test('tiles rows: pile.line.gap shows only when opened minus done differs from the figure', () => {
+  assert.ok(!byId(build()).has('pile.line.gap'), 'the base fixture agrees');
+  const one = build({ lanes: OLD_OPEN, meta: PILE_META, snapshots: [{ day: '2026-10-31', snapshot_at: 'x', open: 9 }] });
+  assert.equal(text(one, 'pile.line.gap'), '1 lane is not in the opened or done counts');
+});
+
+// Breaks if the detail says the trend starts after 7 snapshots while the chart already shows 7 or more.
+test('tiles rows: pile.detail says the chart shows the snapshots once it shows them, and the old rule only before', () => {
+  const snaps = Array.from({ length: 7 }, (_, i) => ({ day: addDays('2026-11-01', i), snapshot_at: 'x', open: 40 + i * 5 }));
+  const many = text(build({ snapshots: snaps }), 'pile.detail');
+  assert.ok(!/starts after/.test(many), many);
+  assert.match(many, /The trend line shows the last 7 daily snapshots\.$/);
+  assert.match(text(build(), 'pile.detail'), /The trend line starts after 7 daily snapshots; there is 1 so far\.$/);
+});
