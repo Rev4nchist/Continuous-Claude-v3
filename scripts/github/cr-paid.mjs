@@ -19,6 +19,10 @@
  * "@coderabbitai review --use-credits". ESCALATE (exit 3): one reason line per failed limit; stop and ask Dave. Exit 2: a read error
  * or a bad ledger line; no verdict (fail closed). The head already holds a CodeRabbit review: exit 2, since a round would buy nothing.
  *
+ * A head that only merges main over the reviewed commit (mergeOnly: the compare is ahead and every commit of the PR's own list since the review is a merge) gets "already reviewed" for the
+ * plain request. Its paid round is a FULL review: it bills every PR file, the author fix is { lines: 0, added: 0 }, and the comment is
+ * "@coderabbitai full review --use-credits". The round, day and paid-round limits stay. A merge head with one real fix commit is a normal round.
+ *
  * It does NOT check conditions 1, 2, 3 and 6 of the policy (READY needs a review and no carry; the PR round budget; the next included
  * slot is over 15 minutes away; every finding of the last round is fixed). The rule text (pr-review-loop.md "Paid PR reviews")
  * and pr_watch cover them. Run the check before EVERY review request: in Automatic mode an over-limit review bills with no prompt.
@@ -51,6 +55,10 @@ const SHA40 = /^[0-9a-f]{40}$/;
 const CENTS_PER_FILE = 25;
 export const LIMITS = Object.freeze({ roundCents: 500, dayCents: 1500, paidRounds: 2, fixLines: 30 });
 export const PAID_COMMENT = '@coderabbitai review --use-credits';
+/** The paid request for a head that only merges main over a reviewed commit: CodeRabbit answers the plain form there with "Already reviewed the last commit. Use @coderabbitai full review". */
+export const FULL_PAID_COMMENT = '@coderabbitai full review --use-credits';
+/** The paid comment of a round: the full form for a merge-only head, the plain form for every other head. Pure. */
+export const requestCommentOf = (mergeOnly) => (mergeOnly === true ? FULL_PAID_COMMENT : PAID_COMMENT);
 
 const usd = (cents) => `$${(cents / 100).toFixed(2)}`;
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0];
@@ -140,12 +148,13 @@ export function cliCapCheck(capUsd, deps) {
 export const cliCapLine = ({ total, cap, date }) => `today's paid CodeRabbit CLI spend is ${usd(Math.round(total * 100))} (${date}, America/Chicago), at or over the daily cap of ${usd(Math.round(cap * 100))} (review-router.config.json coderabbit.cli_daily_cap_usd)`;
 
 /** Appends one paid round to the ledger and returns the row. `via` is "manual" (the record verb has no flag for another) or "post" (postPaid only). Throws on a bad head or file count. */
-export function recordPaid({ pr, head, files, via = 'manual' }, deps) {
+export function recordPaid({ pr, head, files, via = 'manual', full = false }, deps) {
   const d = withDefaults(deps);
   if (!/^[0-9a-f]{7,40}$/i.test(String(head))) throw new Error('--head must be a commit sha');
   if (!Number.isInteger(files) || files < 0) throw new Error('--files must be a whole number, 0 or more');
   const now = d.now();
   const row = { ts: now.toISOString(), date: chicagoDay(now), pr, head: String(head).toLowerCase(), files, cost: (files * CENTS_PER_FILE) / 100, session: d.env.CLAUDE_CODE_SESSION_ID || d.env.CLAUDE_SESSION_ID || 'unknown', via };
+  if (full === true) row.full = true; // a full-review round (merge-only head); an ordinary row has no such key
   mkdirSync(path.dirname(d.ledgerPath), { recursive: true });
   appendFileSync(d.ledgerPath, `${JSON.stringify(row)}\n`);
   return row;
@@ -203,15 +212,40 @@ function reviewedRounds(facts) {
   return commits.size;
 }
 
-/** { round, from, head, list, fix }: the files this round bills and, for round 2 or later, the fix size. */
+/**
+ * True when the head only merges main over the reviewed commit: the compare is "ahead" (the reviewed commit is an ancestor of the head) and every commit of
+ * the PR's OWN list (pulls/N/commits: `prCommits`, [{ sha }]) that the compare holds has 2 or more parents. The compare also lists the commits that the merge
+ * brought in from main (one parent each, live PR 685: 9 of 12); the PR list leaves those out, so only the author's commits decide. Accepted limit: a merge commit
+ * that hides a real change inside it (an evil merge) passes; the fix limits cannot see it, as for deltaLinesOf.
+ * Fail closed: no own commit since the review, an unreadable or empty PR list (readPrCommits gives [] past its cap), a missing or non-list parents field, an empty
+ * or cut compare list (GitHub lists 250 at most; total_commits above the list) and another status all give false. Pure.
+ */
+export function mergeOnlyOf(compare, prCommits) {
+  if (compare?.status !== 'ahead') return false;
+  const listed = compare.commits;
+  if (!Array.isArray(listed) || listed.length === 0) return false;
+  if (!Array.isArray(prCommits) || prCommits.length === 0) return false;
+  if (Number.isInteger(compare.total_commits) && compare.total_commits > listed.length) return false;
+  const own = new Set(prCommits.map((c) => String(c?.sha ?? '').toLowerCase()));
+  const mine = listed.filter((c) => own.has(String(c?.sha ?? '').toLowerCase()));
+  return mine.length > 0 && mine.every((c) => Array.isArray(c.parents) && c.parents.length >= 2);
+}
+
+/**
+ * { round, from, head, mergeOnly, list, fix }: the files this round bills and, for round 2 or later, the fix size.
+ * A merge-only head asks for a FULL review, which re-reviews the whole PR: it bills every PR file, and the author made no fix since the review ({ lines: 0, added: 0 }),
+ * so the compare (main's lines) is neither listed nor sized. The round, day and paid-round limits stay.
+ */
 function estimate(facts, repo, gh) {
   if (codeRabbitHeadReview(facts).reviewedHead) throw new Error('CodeRabbit already reviewed the head; a round would buy nothing');
   const newest = newestCodeRabbitRound(facts);
-  if (!newest) return { round: 1, from: null, head: facts.head, list: facts.prFiles, fix: null };
+  if (!newest) return { round: 1, from: null, head: facts.head, mergeOnly: false, list: facts.prFiles, fix: null };
   const from = String(newest.commit_id ?? '').toLowerCase();
   if (!SHA40.test(from)) throw new Error('the newest CodeRabbit round names no commit');
   const compare = gh([`repos/${repo}/compare/${from}...${facts.head}`]);
-  return { round: reviewedRounds(facts) + 1, from, head: facts.head, list: compare.files ?? [], fix: fixOf(compare, facts.prFiles) };
+  const round = reviewedRounds(facts) + 1;
+  if (mergeOnlyOf(compare, facts.commits)) return { round, from, head: facts.head, mergeOnly: true, list: facts.prFiles, fix: { lines: 0, added: 0 } };
+  return { round, from, head: facts.head, mergeOnly: false, list: compare.files ?? [], fix: fixOf(compare, facts.prFiles) };
 }
 
 // ---- the verdict ----
@@ -240,9 +274,9 @@ function decide(pr, est, ledger, now, filters) {
   const reasons = verdictReasons({ costCents, todayCents, paidRounds, fix: est.fix });
   const allow = reasons.length === 0;
   return {
-    exitCode: allow ? 0 : 3, verdict: allow ? 'ALLOW' : 'ESCALATE', pr, head: est.head, round: est.round, from: est.from,
+    exitCode: allow ? 0 : 3, verdict: allow ? 'ALLOW' : 'ESCALATE', pr, head: est.head, round: est.round, from: est.from, mergeOnly: est.mergeOnly === true,
     files, total: est.list.length, cost: costCents / 100, today: todayCents / 100, paidRounds, fix: est.fix, reasons,
-    comment: allow ? PAID_COMMENT : null,
+    comment: allow ? requestCommentOf(est.mergeOnly) : null,
   };
 }
 
@@ -330,14 +364,22 @@ function checksOf(d, { pr, repo, head, capCents }, gh) {
   const h7 = head.slice(0, 7);
   let fact = null;
   try { fact = d.capacity(pr, nowMs); } catch { /* an unreadable slot fact is unknown: the review stays paid */ }
-  if (slotStateOf(fact, nowMs) === 'free') return { text: `The CodeRabbit slot is free for PR #${pr}. A free review costs nothing: use the free slot.` };
+  // deps.checkPr({ pr, repo }) stands in for the cr-paid check (the queue's tests); with none, the check reads GitHub through the guarded gh.
+  const runCheck = () => (d.checkPr ?? ((a) => checkPr(a, { gh, now: d.now, ledgerPath: d.ledgerPath, pathFilters: d.pathFilters, env: d.env })))({ pr, repo }) ?? { verdict: null, reason: 'no answer' };
+  if (slotStateOf(fact, nowMs) === 'free') {
+    const freeText = `The CodeRabbit slot is free for PR #${pr}. A free review costs nothing: use the free slot.`;
+    // A head that only merges main over a reviewed commit gets "already reviewed" for the plain request: name the free full form. Never the paid word.
+    let merged = null;
+    try { merged = runCheck(); } catch { /* the plain refusal stays */ }
+    if (merged?.mergeOnly !== true) return { text: freeText };
+    return { text: `${freeText} The head only merges main over the reviewed commit ${String(merged.from ?? '').slice(0, 7)}, so ask for the free full review ("@coderabbitai full review"): the plain request gets "already reviewed".` };
+  }
   const [owner, name] = repo.split('/');
   const reviews = readList(gh, `repos/${repo}/pulls/${pr}/reviews?per_page=100`);
   const { comments, commentEdits } = readIssueComments(gh, owner, name, pr);
   if (openPaidRequests({ comments, commentEdits, reviews, head }).length > 0) return { text: `An unanswered paid request already exists for PR #${pr} at ${h7}. Wait for CodeRabbit.` };
   if (d.queue?.holdsPay?.(pr, head) === true) return { text: `The free-slot queue already holds a paid decision for PR #${pr} at ${h7}.` };
-  // deps.checkPr({ pr, repo }) stands in for the cr-paid check (the queue's tests); with none, the check reads GitHub through the guarded gh.
-  const v = (d.checkPr ?? ((a) => checkPr(a, { gh, now: d.now, ledgerPath: d.ledgerPath, pathFilters: d.pathFilters, env: d.env })))({ pr, repo }) ?? { verdict: null, reason: 'no answer' };
+  const v = runCheck();
   if (!v.verdict) return { text: `cr-paid gave no verdict for PR #${pr} (${v.reason}). No paid post.` };
   if (v.verdict !== 'ALLOW') return { text: `cr-paid says ${v.verdict} for PR #${pr}: ${v.reasons.join('; ')}. No paid post.`, kind: 'escalate', verdict: v.verdict, reasons: v.reasons };
   if (v.head !== head) return { text: `The head of PR #${pr} moved from ${h7} to ${String(v.head).slice(0, 7)} during the check. Ask Dave again.` };
@@ -444,13 +486,14 @@ function guardedPost(d, { pr, cap, source, repo, expectHead }, began) {
   const used = useUp();
   if (!used.ok) return notUsedUp(used);
   const { v, files, costCents } = checked;
-  try { recordPaid({ pr, head, files, via: 'post' }, { now: d.now, ledgerPath: d.ledgerPath, env: d.env }); } catch (err) { return fail(4, `The round could not be recorded (${firstLine(err)}). Nothing was posted.`); }
+  const comment = typeof v.comment === 'string' && v.comment !== '' ? v.comment : PAID_COMMENT; // a stub verdict (the queue's tests) may carry none
+  try { recordPaid({ pr, head, files, via: 'post', full: v.mergeOnly === true }, { now: d.now, ledgerPath: d.ledgerPath, env: d.env }); } catch (err) { return fail(4, `The round could not be recorded (${firstLine(err)}). Nothing was posted.`); }
   try { d.afterRecord?.({ pr, head, v, files }); } catch (err) { return fail(4, `The queue could not be marked (${firstLine(err)}). The round is counted. Nothing was posted. Ask Dave again.`); }
-  try { gh(['-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '-f', `body=${PAID_COMMENT}`]); } catch (err) {
+  try { gh(['-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '-f', `body=${comment}`]); } catch (err) {
     try { d.onPostError?.(err); } catch { /* the first failure is the one reported */ }
     return fail(4, `The paid post failed (${firstLine(err)}). The round is counted. Ask Dave again.`, { kind: 'post-failed', error: err });
   }
-  return { ok: true, code: 0, kind: 'posted', pr, head, files, cost: costCents / 100, comment: PAID_COMMENT, text: `Posted the paid CodeRabbit review for PR #${pr} at ${head.slice(0, 7)}: ${files} file(s), ${usd(costCents)}, recorded in the ledger. Do not run cr-paid record: the round is already recorded.` };
+  return { ok: true, code: 0, kind: 'posted', pr, head, files, cost: costCents / 100, comment, text: `Posted the paid CodeRabbit review for PR #${pr} at ${head.slice(0, 7)}: ${files} file(s), ${usd(costCents)}, recorded in the ledger. Do not run cr-paid record: the round is already recorded.` };
 }
 
 const STORE_MOVED_TEXT = 'The decision store path is overridden by CCV3_DECISIONS_FILE. A paid post reads Dave\'s tap from the real store only. Nothing was posted. The paid yes is kept.';

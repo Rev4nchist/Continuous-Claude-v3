@@ -205,7 +205,7 @@ export function landSpec(d) {
   return { header: 'Land', question: lines.join('\n'), options: [go, opt('Keep open', 'Nothing runs. The PR stays open.'), opt('Return to draft', 'Runs gh pr ready --undo. The review pick starts again.')] };
 }
 
-/** paid-round. data: { pr, round, files, today, paidRounds, verdict ('ALLOW'|'ESCALATE'|null), reasons, reason, caps: { round, day, rounds } }. */
+/** paid-round. data: { pr, round, files, today, paidRounds, verdict ('ALLOW'|'ESCALATE'|null), reasons, reason, caps: { round, day, rounds }, mergeOnly, from, head }. mergeOnly (from cr-paid) makes it a full review. */
 export function paidRoundSpec(d) {
   const caps = d.caps ?? { round: 5, day: 15, rounds: 2 };
   // The price counts the UNFILTERED files (`total`): path_filters billing is unproven, and `cr-paid.mjs post` compares its cost with the label on that count.
@@ -215,14 +215,19 @@ export function paidRoundSpec(d) {
   const verdict = allow ? 'cr-paid says ALLOW.'
     : d.verdict === 'ESCALATE' ? `cr-paid says ESCALATE: ${clip((d.reasons ?? []).join('; '), 100)}. No paid round is offered: it is over the cap.`
       : `cr-paid gave no verdict: ${clip(d.reason ?? 'unknown', 80)}. No paid round is offered without an ALLOW.`;
+  // A head that only merges main over a reviewed commit: the paid round is a FULL review of every PR file (cr-paid.mjs mergeOnly). The text equals FULL_PAID_COMMENT there; a test pins the two.
+  const full = d.mergeOnly === true;
+  const kind = full ? 'a full review of ' : '';
   const lines = [
-    cost === null ? `PR #${d.pr}: a paid CodeRabbit round costs ${usd(PAID_PER_FILE)} a file, size unknown.` : `PR #${d.pr}: paid CodeRabbit round ${d.round ?? '?'}, ${plural(billed, 'file')} x ${usd(PAID_PER_FILE)} = up to ${usd(cost)}.`,
+    cost === null ? `PR #${d.pr}: a paid CodeRabbit round costs ${usd(PAID_PER_FILE)} a file, size unknown.` : `PR #${d.pr}: paid CodeRabbit round ${d.round ?? '?'}, ${kind}${plural(billed, 'file')} x ${usd(PAID_PER_FILE)} = up to ${usd(cost)}.`,
+    ...(full ? [`Head ${String(d.head ?? '').slice(0, 7)} only merges main over the reviewed ${String(d.from ?? '').slice(0, 7)}. The plain request gets "already reviewed", so this round asks for the full form.`] : []),
     `Today ${usd(d.today ?? 0)} of ${usd(caps.day)}. Paid rounds on this PR ${d.paidRounds ?? 0} of ${caps.rounds}. Round cap ${usd(caps.round)}.`,
     verdict,
   ];
   const free = opt('No, keep it free', 'Posts nothing. The PR keeps its free-slot path.', true);
+  const paidText = full ? '@coderabbitai full review --use-credits' : '@coderabbitai review --use-credits';
   // Dave 2026-11-06: a paid round is offered only on cr-paid ALLOW. ESCALATE and a missing verdict get no pay row.
-  const rows = allow ? [free, opt(`Yes, pay up to ${usd(cost ?? 0)}`, `Then run node scripts/github/cr-paid.mjs post --pr ${d.pr}: it records the round, then posts @coderabbitai review --use-credits. The price is a cap: a higher cost at the post is refused.`)]
+  const rows = allow ? [free, opt(`Yes, pay up to ${usd(cost ?? 0)}`, `Then run node scripts/github/cr-paid.mjs post --pr ${d.pr}: it records the round, then posts ${paidText}. The price is a cap: a higher cost at the post is refused.`)]
     : [free, opt('Stop here', 'Posts nothing. The reason is in the question above.')];
   return { header: 'Paid round', question: lines.join('\n'), options: rows };
 }
