@@ -193,7 +193,7 @@ describe('file-claims hook: the pair handed to resolveFileClaim', () => {
     expect(reason).toContain('"summary.md"');
     expect(reason).not.toContain(slashed(wt));
     expect(reason).not.toContain(slashed(wt).toLowerCase());
-    expect(reason).toContain('release-claim.mjs --list');
+    expect(reason).toContain('release-claim.mjs" --list');
   });
 });
 

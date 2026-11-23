@@ -3,7 +3,9 @@
  * ship-ask.mjs: builds the AskUserQuestion spec of one ship step and writes the offer to the decision store (pathway-flow-v2, design N1).
  * Tests: scripts/github/ship-ask.test.mjs. Store: scripts/github/lib/decisions.mjs.
  *
- * Usage: node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip> [--pr N | --branch B] [--msg file] [--json] [--facts f.json]
+ * Usage: node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip|cap-override> [--pr N | --branch B] [--msg file] [--usd N] [--extra-run] [--json] [--facts f.json]
+ *   cap-override: Dave decides to lift the CLI cap for ONE run. --usd N is the USD cap of that run (above the config cap), --extra-run lifts the per-branch
+ *   run count; give one or both. The tap binds branch + head + the flag set + N and is used once by pre-pr.mjs or cr-fix.mjs (lib/cap-override.mjs).
  *   commit-and-push, open-pr, cli-skip: --branch B (default: the current branch). --msg is the commit message file (commit-and-push only).
  *   cli-skip: Dave decides to skip the CLI review for the head of a flag stamp (pre-pr.mjs --skip-cr); pre-pr-gate then accepts it once.
  *   land, paid-round: --pr N.
@@ -23,6 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CAP_KEEP_LABEL, CAP_LIFT_LABEL, CAP_STEP, FLAG_EXTRA, FLAG_USD, capOverrideKey, takeCapFlags } from './lib/cap-override.mjs';
 import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
 import { SUMMARY_REL, changeOf, hashOf, summaryFieldsOf } from './lib/pr-summary.mjs';
 
@@ -34,7 +37,7 @@ const PAID_PER_FILE = 0.25;
 const PATHWAY_OF_LABEL = { 'review:none': 'none', 'review:coderabbit': 'coderabbit', 'review:deep': 'both' };
 
 /** The ship-ask step word -> the store step. */
-export const STORE_STEP = Object.freeze({ 'commit-and-push': 'ship', 'open-pr': 'open-pr', land: 'land', 'paid-round': 'paid-round', 'cli-skip': 'cli-skip' });
+export const STORE_STEP = Object.freeze({ 'commit-and-push': 'ship', 'open-pr': 'open-pr', land: 'land', 'paid-round': 'paid-round', 'cli-skip': 'cli-skip', 'cap-override': CAP_STEP });
 
 const one = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 const clip = (text, n) => (one(text).length > n ? `${one(text).slice(0, n - 1)}…` : one(text));
@@ -121,6 +124,31 @@ export function cliSkipSpec(d) {
   const skip = opt(CLI_SKIP_LABEL, 'pre-pr-gate lets the flag stamp open the PR once for this branch and head. A push voids this answer.', spent >= 2);
   const keep = opt(CLI_KEEP_LABEL, 'The PR stays blocked. Fix the findings, run pre-pr again.', spent < 2);
   return { header: 'CLI skip', question: lines.join('\n'), options: spent >= 2 ? [skip, keep] : [keep, skip] };
+}
+
+/**
+ * cap-override (card coord-cap-override, PART B): Dave decides to lift the CLI cap for ONE run. data: { branch, head, usd (a number or null),
+ * extraRun (boolean), total (today's paid CLI spend), cap (the config daily cap, or null), files, estimateUsd }. The question names the exact flag
+ * set and the USD value; the tap binds branch + head + that flag set + value and is used once (lib/cap-override.mjs, decision-gate capOverrideDeny).
+ * Keeping the cap is first and spends nothing.
+ */
+export function capOverrideSpec(d) {
+  const flags = [d.usd != null ? `${FLAG_USD} ${d.usd}` : '', d.extraRun ? FLAG_EXTRA : ''].filter(Boolean).join(' and ');
+  const capText = typeof d.cap === 'number' ? `the ${usd(d.cap)} daily cap` : 'no daily cap';
+  // An unknown value (null) is printed as unknown: never as $0.00 or 0 files. A real zero stays zero.
+  const known = (v) => typeof v === 'number' && Number.isFinite(v);
+  const spend = known(d.total) ? usd(d.total) : 'unknown';
+  const filesText = Number.isInteger(d.files) ? plural(d.files, 'file') : 'unknown files';
+  const estimate = known(d.estimateUsd) ? usd(d.estimateUsd) : 'unknown';
+  const lines = [
+    `The CLI review of ${clip(d.branch, 60)} at ${String(d.head).slice(0, 7)} is stopped by a cap. Today's paid CLI spend is ${spend} against ${capText}; ${filesText}, up to ${estimate}.`,
+    `Flags for one run: ${flags} (${[d.usd != null ? 'the USD cap' : '', d.extraRun ? 'the run count' : ''].filter(Boolean).join(' and ')}).`,
+    'Lift the cap for this one run?',
+  ];
+  return { header: 'CLI cap', question: lines.join('\n'), options: [
+    opt(CAP_KEEP_LABEL, 'The cap stays. No flag runs.', true),
+    opt(CAP_LIFT_LABEL, 'The command with exactly these flags may run once for this branch and head. A push voids this answer.'),
+  ] };
 }
 
 const LAND_LABELS = ['Land now', 'Land when READY', 'Keep open', 'Return to draft'];
@@ -335,7 +363,7 @@ const chicagoDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(
 export function countedRuns(rows) {
   const freeDays = new Set();
   let counted = 0;
-  for (const r of rows.filter((x) => x?.newCode !== false)) {
+  for (const r of rows.filter((x) => x?.newCode !== false && x?.extraRun !== true)) {
     const day = r?.gateFailed === true ? chicagoDay(r.at) : '';
     if (day !== '' && !freeDays.has(day)) { freeDays.add(day); continue; }
     counted += 1;
@@ -360,6 +388,30 @@ export async function gatherCliSkip({ branch }) {
     branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null,
     stampSkip: stamp?.cr_skipped === true ? stamp.cr_skip_reason ?? null : null, runsSpent: countedRuns(runs), unreviewed,
   };
+}
+
+/**
+ * The cost facts of the cap-override question: { total, files, estimateUsd }. A read that fails or gives nothing usable is null (unknown), never zero:
+ * Dave must not tap on a made-up $0.00 or 0 files (CLI finding 3). A real zero (no spend today, an empty diff) stays zero.
+ * `readTotal()` is today's paid CLI spend in dollars; `readNames()` is the text of `git diff --name-only`, or null when the diff could not be read.
+ */
+export function capFactsOf({ readTotal, readNames }) {
+  let total = null;
+  try { const t = readTotal(); total = typeof t === 'number' && Number.isFinite(t) && t >= 0 ? t : null; } catch { total = null; }
+  let files = null;
+  try { const names = readNames(); files = typeof names === 'string' ? names.split(/\r?\n/).filter(Boolean).length : null; } catch { files = null; }
+  return { total, files, estimateUsd: files === null ? null : files * PAID_PER_FILE };
+}
+
+/** { branch, head, missing, usd, extraRun, total, cap, files, estimateUsd } for cap-override: today's CLI spend, the config cap and the changed files against the base. An unread value is null. */
+export async function gatherCapOverride({ branch, usd, extraRun }) {
+  const t = branchTarget(branch, process.cwd());
+  const { cliCapOf, cliTodayOf } = await import('./cr-paid.mjs');
+  let cap = null;
+  try { cap = cliCapOf(JSON.parse(readFileSync(path.join(topOf(), 'review-router.config.json'), 'utf8'))); } catch { cap = null; }
+  const base = ['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], topOf()));
+  const facts = capFactsOf({ readTotal: () => cliTodayOf().total, readNames: () => (base && t.head ? gitText(['diff', '--name-only', `${base}...${t.head}`], topOf()) : null) });
+  return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, cap, ...facts };
 }
 
 /** True only when SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one. The test seams (--facts, SHIP_ASK_STATUS_SCRIPT) need both. */
@@ -421,6 +473,10 @@ export function planOf(step, data, args) {
     if (data.stampSkip !== 'flag' || !same) return { refuse: `there is no flag stamp for ${data.branch} at ${String(data.head).slice(0, 7)}. Run node scripts/github/pre-pr.mjs --skip-cr --body <file> first: the question follows its stamp.` };
     return { spec: cliSkipSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: null };
   }
+  if (step === 'cap-override') {
+    if (data.usd == null && data.extraRun !== true) return { refuse: 'no flag was named. Pass --usd N, --extra-run or both: the question names the exact flag set and the tap binds to it.' };
+    return { spec: capOverrideSpec(data), key: capOverrideKey({ branch: data.branch, usd: data.usd ?? null, extraRun: data.extraRun === true }), head: data.head, tree: null };
+  }
   const key = decisionKey({ pr: args.pr });
   if (step === 'paid-round') return { spec: paidRoundSpec(data), key, head: data.head, tree: null };
   if (data.isDraft) return { refuse: `PR #${args.pr} is a draft. Call pr_checkpoint {pr} first: land needs a ready PR.` };
@@ -430,7 +486,7 @@ export function planOf(step, data, args) {
 
 // ---------- CLI ----------
 
-const VALUE_FLAGS = ['--pr', '--branch', '--msg', '--facts'];
+const VALUE_FLAGS = ['--pr', '--branch', '--msg', '--facts', '--usd'];
 
 function parseArgs(argv) {
   const [step, ...rest] = argv;
@@ -438,6 +494,7 @@ function parseArgs(argv) {
   const o = { step, json: false };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--json') { o.json = true; continue; }
+    if (rest[i] === '--extra-run') { o.extraRun = true; continue; }
     if (!VALUE_FLAGS.includes(rest[i]) || rest[i + 1] === undefined || rest[i + 1].startsWith('--')) return { error: `bad argument ${rest[i]}` };
     o[rest[i].slice(2)] = rest[++i];
   }
@@ -445,6 +502,14 @@ function parseArgs(argv) {
   if (byPr && !/^[1-9]\d*$/.test(o.pr ?? '')) return { error: `${step} needs --pr N` };
   if (!byPr && o.pr !== undefined) return { error: `${step} takes --branch, not --pr` };
   if (step !== 'commit-and-push' && o.msg !== undefined) return { error: '--msg is a commit-and-push flag' };
+  if (step !== 'cap-override' && (o.usd !== undefined || o.extraRun)) return { error: '--usd and --extra-run are cap-override flags' };
+  if (step === 'cap-override') {
+    // The same canonical value and the same rules as the USD flag of pre-pr and cr-fix: one text per number.
+    const t = takeCapFlags(o.usd === undefined ? [] : [FLAG_USD, o.usd]);
+    if (t.error) return { error: t.error.replace(FLAG_USD, '--usd') };
+    if (t.usd === null && !o.extraRun) return { error: 'cap-override needs --usd N, --extra-run or both' };
+    return { o: { ...o, pr: undefined, usd: t.usd, extraRun: o.extraRun === true } };
+  }
   return { o: { ...o, pr: byPr ? Number(o.pr) : undefined } };
 }
 
@@ -456,6 +521,7 @@ async function dataOf(o) {
   if (o.step === 'commit-and-push') return gatherShip({ branch: o.branch, msg: o.msg });
   if (o.step === 'open-pr') return gatherOpenPr({ branch: o.branch });
   if (o.step === 'cli-skip') return gatherCliSkip({ branch: o.branch });
+  if (o.step === 'cap-override') return gatherCapOverride({ branch: o.branch, usd: o.usd, extraRun: o.extraRun });
   return o.step === 'land' ? gatherLand({ pr: o.pr }) : gatherPaid({ pr: o.pr });
 }
 
@@ -464,7 +530,7 @@ const textOf = (spec) => [`${spec.header}: ${spec.question}`, ...spec.options.ma
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.error) {
-    console.error(`ship-ask: usage: ${parsed.error}. node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip> [--pr N | --branch B] [--msg file] [--json] [--facts f.json]`);
+    console.error(`ship-ask: usage: ${parsed.error}. node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip|cap-override> [--pr N | --branch B] [--msg file] [--usd N] [--extra-run] [--json] [--facts f.json]`);
     process.exit(2);
   }
   const { o } = parsed;

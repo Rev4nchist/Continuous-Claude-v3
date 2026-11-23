@@ -125,6 +125,7 @@ import { checkSummary } from './lib/pr-summary.mjs';
 import { classify, matchGlob } from './review-router.mjs';
 import { parseProof, proofProblems } from './review-status.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
+import { FLAG_USD, capFlagText, claimCapOverride, hasCapOverride, noTapText, takeCapFlags } from './lib/cap-override.mjs';
 import { loadStricterConfig } from './config-stricter.mjs';
 import { ANSWER_KEY_GLOBS, answerKeyGlobs, answerKeyCheck, slashLower } from './lib/answer-paths.mjs';
 import { BAND_SET_FILES, REVIEWER_SET_DIR, REVIEWER_SET_FILES } from '../eval/review-eval/engine-version.mjs';
@@ -190,7 +191,7 @@ const nodeGate = (id, script, extra = [], more = {}) => ({ id, cmd: 'node', args
 const cheapGate = (id, script, extra = []) => nodeGate(id, script, extra, { cheap: true });
 
 // Tests in scripts/checks that the checks-tests gate runs. test-map.test.mjs has its own gate.
-const CHECKS_TESTS = ['prove-check', 'state-table', 'changed-lines', 'typecheck-changed', 'cli-smoke', 'parser-fixtures', 'catchers', 'fixture-gap'].map((n) => `scripts/checks/${n}.test.mjs`);
+const CHECKS_TESTS = ['prove-check', 'state-table', 'changed-lines', 'typecheck-changed', 'cli-smoke', 'parser-fixtures', 'catchers', 'fixture-gap', 'line-ends-lf'].map((n) => `scripts/checks/${n}.test.mjs`);
 // Parser files outside scripts/**/*.mjs that scripts/checks/parser-fixtures/registry.mjs names. A test keeps this list equal to the registry.
 export const CATCHER_PARSER_FILES = ['apps/agentic-os/src/server/sources/safe-message.ts', '.claude/plugins/ccv3-mods/hooks/agentic-os/brief.ts'];
 export const BASE_TOKEN = '{base}';
@@ -1341,11 +1342,12 @@ const chicagoDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(
 /**
  * How many rows use a slot of the cap. A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) uses none
  * either, but only the first such row of each Chicago day: the next one counts as a normal slot. A time that cannot be read counts (fail closed).
+ * A row of an extra run (the extra-run flag after Dave's tap, extraRun true) uses no slot: the override is for that one run, so the next run is capped again.
  */
 export function countedRuns(rows) {
   const freeDays = new Set();
   let counted = 0;
-  for (const r of rows.filter((x) => x.newCode !== false)) {
+  for (const r of rows.filter((x) => x.newCode !== false && x.extraRun !== true)) {
     const day = r.gateFailed === true ? chicagoDay(r.at) : '';
     if (day !== '' && !freeDays.has(day)) { freeDays.add(day); continue; }
     counted += 1;
@@ -1644,15 +1646,15 @@ function storeNote(store, before, { verdict, parsed, root }) {
  * preflight, a cap and a review_skipped result use none. Findings never fail the step. `log` gets a progress line each minute.
  * `runner` may be sync or async.
  */
-export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, guardBase = undefined, headGit = null, baseCommit = undefined, crStore = liveCrStore(), onSpawned = undefined }) {
+export async function runCodeRabbit({ root, branch, head, base, now, runner, skip = false, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, cliCapUsd = null, ledgerPath = null, config = null, changedPaths = null, docsOnly = false, guardPaths = undefined, guardBase = undefined, headGit = null, baseCommit = undefined, crStore = liveCrStore(), onSpawned = undefined, capOverride = null, claimOverride = claimCapOverride }) {
   try {
-    return await codeRabbitStep({ root, branch, head, base, now, runner, skip, timeoutMs, log, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, guardPaths, guardBase, headGit, baseCommit, crStore, onSpawned });
+    return await codeRabbitStep({ root, branch, head, base, now, runner, skip, timeoutMs, log, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, guardPaths, guardBase, headGit, baseCommit, crStore, onSpawned, capOverride, claimOverride });
   } finally {
     onSpawned?.(); // the step ended without a review (a skip, a reuse, a cap, a failed preflight): the caller must not wait for a spawn
   }
 }
 
-async function codeRabbitStep({ root, branch, head, base, now, runner, skip, timeoutMs, log, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, guardPaths, guardBase, headGit, baseCommit, crStore, onSpawned }) {
+async function codeRabbitStep({ root, branch, head, base, now, runner, skip, timeoutMs, log, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, guardPaths, guardBase, headGit, baseCommit, crStore, onSpawned, capOverride, claimOverride }) {
   if (skip) return skipped('flag', '--skip-cr: no CLI review was run (the pre-pr-gate hook denies a stamp that skipped it by flag)');
   const keyCheck = answerKeyCheck({ root, paths: guardPaths === undefined ? changedPaths : guardPaths });
   if (keyCheck) return answerKeyStep(keyCheck, guardBase, base);
@@ -1668,7 +1670,7 @@ async function codeRabbitStep({ root, branch, head, base, now, runner, skip, tim
   const lock = acquireLock(paths.lock, { pid: process.pid, head, at: now.toISOString() }, { nowMs: now.getTime(), staleMs: timeoutMs + 10 * MIN });
   if (!lock.ok) return result('coderabbit', 'FAIL', `a CodeRabbit run is in progress (pid ${lock.pid ?? 'unknown'}${lock.head ? `, head ${String(lock.head).slice(0, 7)}` : ''}) on ${branch}: wait for it, then run pre-pr.mjs again. If no run is going, delete the lock file ${paths.lock}`);
   try {
-    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseCommit: pin, crStore, onSpawned });
+    return await reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseCommit: pin, crStore, onSpawned, capOverride, claimOverride });
   } finally {
     rmSync(paths.lock, { force: true });
   }
@@ -1694,9 +1696,9 @@ function cliCapBlock(cliCapUsd, now, ledgerPath, estimate = null) {
 }
 
 /** Logs the cost of a billed run in the paid ledger. Returns a note when the row could not be written (the run is already paid for), else null. */
-function logCliSpend({ branch, head, parsed, now, ledgerPath }) {
+function logCliSpend({ branch, head, parsed, now, ledgerPath, capOverride }) {
   if (!parsed.usageCost) return null;
-  try { recordCliSpend({ branch, head, usageCost: parsed.usageCost }, ledgerDeps(now, ledgerPath)); return null; } catch (err) {
+  try { recordCliSpend({ branch, head, usageCost: parsed.usageCost, ...(capOverride ? { capOverride } : {}) }, ledgerDeps(now, ledgerPath)); return null; } catch (err) {
     return `could not log this run's cost (${billedText(parsed.usageCost).replace(/^, /, '')}) in the paid ledger: ${String(err.message).split('\n')[0]}. Add the row by hand`;
   }
 }
@@ -1722,7 +1724,7 @@ function removeRunningFiles(running) {
   for (const file of [running, `${running}.err`]) { try { rmSync(file, { force: true }); } catch { /* held by a process: harmless */ } }
 }
 
-async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseCommit, crStore, onSpawned }) {
+async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutMs, log, paths, e2e, short, cliCapUsd, ledgerPath, config, changedPaths, docsOnly, headGit, baseCommit, crStore, onSpawned, capOverride = null, claimOverride = claimCapOverride }) {
   const counterFile = paths.counter;
   let counter;
   try { counter = readCounter(counterFile, branch); } catch { return result('coderabbit', 'FAIL', `the run counter ${rel(root, counterFile)} is unreadable: fix or delete it, then re-run`); }
@@ -1735,7 +1737,9 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
     return reusedReview({ root, e2e, saved: savedLast, base, why: `reused the saved CLI output for ${lastReviewed.slice(0, 7)}, the last reviewed head: no new code since (only docs, evidence, PR body, test snapshots or a clean merge of ${base} came after it); no run, no slot used` });
   }
   const counted = countedRuns(counter.runs);
-  if (counted >= CR_RUN_LIMIT) {
+  // The extra-run flag (card coord-cap-override, PART B) lifts this count for one run, after Dave's tap (claimed below, before the CLI starts).
+  const extraRun = capOverride?.extraRun === true && counted >= CR_RUN_LIMIT;
+  if (counted >= CR_RUN_LIMIT && !extraRun) {
     // Rule A: a partial run whose findings the branch changed earns the cap skip. Earning is read only here, at the cap.
     const earn = partialEarnedFor(root, counter.runs, head);
     return { ...skipped('cap', `limit reached: ${counted} cr review runs with new code already used on ${branch} (a pre-pr.mjs limit of ${CR_RUN_LIMIT} per branch on heads with new code, not a coderabbit-cli.md rule; a run on a head that changed only docs, evidence, the PR body or test snapshots is not counted), so no CLI review this time; the stamp records cr_skip_reason cap`), partialEarned: earn.earned, unreviewedFiles: earn.unreviewed };
@@ -1752,8 +1756,15 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
     const overCap = cliCapBlock(cliCapUsd, now, ledgerPath, estimate);
     if (overCap) return overCap;
   }
+  // Dave's tap for the cap override: claimed once, here, after every skip and before the first counter row, so a refusal starts no CLI and spends no slot.
+  let capRecord = null;
+  if (capOverride && (capOverride.usd != null || capOverride.extraRun === true)) {
+    const claim = claimOverride({ branch, head, usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true });
+    if (!claim.ok) return result('coderabbit', 'FAIL', `the cap override was refused (${claim.reason ?? 'no tap'}): ${noTapText(capFlagText({ usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true }))}. No CLI review was started`);
+    capRecord = { usd: capOverride.usd ?? null, extraRun: capOverride.extraRun === true, tapAt: claim.tapAt ?? null };
+  }
   const storeBefore = snapshotStore(crStore);
-  const run = { head, at: now.toISOString(), outcome: 'started', newCode };
+  const run = { head, at: now.toISOString(), outcome: 'started', newCode, ...(extraRun ? { extraRun: true } : {}) };
   // Every write re-reads the counter and changes only this run's row: the copy read at the start of the step is old, and writing it back
   // would erase a gateFailed mark that another run of this branch wrote in the meantime (see markRunGateFailed).
   // The first write always appends (a fixed clock gives an older row of the same head the same time); later writes find the LAST row of this head and time.
@@ -1788,7 +1799,7 @@ async function reviewUnderLock({ root, branch, head, base, now, runner, timeoutM
   const out = path.join(e2e, `${dayOf(now)}-pre-pr-cr-${short}${verdict.status === 'PASS' ? '' : '.failed'}.txt`);
   writeFileSync(out, r.stderr && verdict.status !== 'PASS' ? `${stdout}\n[stderr]\n${r.stderr}` : stdout);
   removeRunningFiles(running);
-  const logNote = logCliSpend({ branch, head, parsed, now, ledgerPath });
+  const logNote = logCliSpend({ branch, head, parsed, now, ledgerPath, capOverride: capRecord });
   const storeLine = storeNote(crStore, storeBefore, { verdict, parsed, root });
   verdict.notes = [...(verdict.notes ?? []), estimateText.replace(/^pre-pr: /, ''), ...(logNote ? [logNote] : []), ...(storeLine ? [storeLine] : [])];
   if (verdict.skipReason === 'no-changes' || verdict.skipReason === 'docs-only') giveBack();
@@ -1901,7 +1912,7 @@ export function resolveConfig({ root, git, readFile = readFileSync, config }) {
   return config ?? loadStricterConfig({ root, git, readFile });
 }
 
-async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined, env = process.env, onPhase = () => {} }, ctl) {
+async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, skipCr = false, keepGoing = false, now = new Date(), git = makeGit(root), exec = defaultExec, crRunner = defaultCrRunner, envCheck = envStep, config, crTimeout = CR_TIMEOUT_MIN_DEFAULT * MIN, log = () => {}, guardLog = logCliMissing, fetch = (r, b) => fetchBase(r, b), ledgerPath = null, gateLogPath: gateLogFile = null, findZizmor = defaultFindZizmor, zizmorRun = undefined, findOsv = defaultFindOsv, osvRun = undefined, osvLockfiles = undefined, findPssa = defaultFindPssa, pssaRun = undefined, summaryCheck = checkSummary, crStore = undefined, env = process.env, onPhase = () => {}, capOverride = null, claimOverride = claimCapOverride }, ctl) {
   const serialCr = env.PRE_PR_SERIAL_CR === '1';
   const stampPath = path.join(root, STAMP_REL);
   const runId = randomUUID();
@@ -1944,7 +1955,7 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   const envRes = envCheck({ root, gates: gatesFor(changes.paths, buildInputExternals(root)), changed: changes.paths });
   if (envRes.fail) results.push(result('env', 'FAIL', envRes.fail, envRes.others));
   if (envRes.note) results.push(result('env', 'NOTE', envRes.note));
-  const crArgs = () => ({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg), ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseCommit}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseCommit, crStore });
+  const crArgs = () => ({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg, { override: capOverride?.usd }), capOverride, claimOverride, ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseCommit}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseCommit, crStore });
   let warnedGate = false;
   const runOneGate = async (gate) => {
     const cause = stopCause();
@@ -2026,7 +2037,7 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
 
 // ---------- CLI ----------
 
-const USAGE = 'usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--wait-lock] [--json]';
+const USAGE = 'usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--wait-lock] [--json] [--cli-cap-usd N] [--cli-extra-run]';
 
 function option(args, name) {
   const i = args.indexOf(name);
@@ -2191,6 +2202,29 @@ export function summaryBeforeLock({ root, base = 'main', config, readFile = read
   return summary.result;
 }
 
+/**
+ * The cap override of this run, read from the command line only (card coord-cap-override, PART B): null with no flag, else { usd, extraRun }.
+ * Exits 1 before anything starts (no lock, no run spent) on a bad flag value, on a USD value that is not above the config cap, and on a flag
+ * with no live tap of Dave's for this branch, head and flag set. The tap is only READ here; runCodeRabbit claims it once, just before the CLI starts.
+ */
+function capOverrideOfArgs(args, root) {
+  const flags = takeCapFlags(args);
+  const stop = (text) => { console.error(`pre-pr: ${text}`); process.exit(1); };
+  if (flags.error) stop(flags.error);
+  if (flags.usd === null && !flags.extraRun) return null;
+  const git = makeGit(root);
+  if (flags.usd !== null) {
+    let cap = null;
+    try { cap = cliCapOf(resolveConfig({ root, git })); } catch { cap = null; }
+    if (cap !== null && !(flags.usd > cap)) stop(`${FLAG_USD} ${flags.usd} is not above the config cap of $${cap}: the override only raises the cap for one run`);
+  }
+  const head = git(['rev-parse', 'HEAD']);
+  const branch = git(['branch', '--show-current']);
+  const tap = { branch: branch.status === 0 ? branch.stdout.trim() : '', head: head.status === 0 ? head.stdout.trim() : '', usd: flags.usd, extraRun: flags.extraRun };
+  if (!hasCapOverride(tap)) stop(noTapText(capFlagText(tap)));
+  return { usd: flags.usd, extraRun: flags.extraRun };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); process.exit(0); }
@@ -2205,6 +2239,7 @@ async function main() {
   if (timeoutProblem) console.error(`pre-pr: ${timeoutProblem}`);
   const root = repoRoot();
   const base = option(args, '--base') ?? 'main';
+  const capOverride = capOverrideOfArgs(args, root);
   const wait = args.includes('--wait-lock') || process.env.PRE_PR_WAIT_LOCK === '1';
   const startedAt = Date.now();
   const earlyFail = summaryBeforeLock({ root, base });
@@ -2224,7 +2259,7 @@ async function main() {
   try { bodyText = readFileSync(path.resolve(bodyPath), 'utf8'); } catch (err) { console.error(`pre-pr: cannot read the body file ${bodyPath} after the wait (${String(err.message).split('\n')[0]})`); process.exit(2); }
   const run = await runPrePr({
     root, base, bodyText, bodyPath: path.resolve(bodyPath), skipCr: args.includes('--skip-cr'),
-    keepGoing: args.includes('--keep-going'), crTimeout: crTimeoutMs(args), log: (line) => console.error(line), ...(held ? { onPhase: held.onPhase } : {}),
+    keepGoing: args.includes('--keep-going'), crTimeout: crTimeoutMs(args), log: (line) => console.error(line), capOverride, ...(held ? { onPhase: held.onPhase } : {}),
   });
   if (held) reportRunEnd({ pid: process.pid, head: run.head ? run.head.slice(0, 8) : null, run, startedAt });
   if (args.includes('--json')) {

@@ -384,7 +384,7 @@ describe('named file in a note with a backtick line break', () => {
 describe('deny text names the holder and the release command', () => {
   const reason = (o: Out) => o.hookSpecificOutput?.permissionDecisionReason ?? '';
   const SHELL = { command: 'Set-Content src/held.ts "x"' };
-  const CMD = "node ~/.claude/hooks/dist/release-claim.mjs 'src/held.ts'";
+  const CMD = `node "$HOME/.claude/hooks/dist/release-claim.mjs" 'src/held.ts'`;
 
   it('shell deny: handle, quoted release command; "holds no open lane" when the holder holds none', async () => {
     seen.openLane = false;
@@ -432,7 +432,7 @@ describe('deny text names the holder and the release command', () => {
     seen.held = [{ filePath: inP, sessionId: 'other-session', project }];
     seen.openLane = false;
     const r = reason(await run('Bash', { command: `echo x > '${inP}'` }));
-    expect(r).toContain('node ~/.claude/hooks/dist/release-claim.mjs --list');
+    expect(r).toContain('node "$HOME/.claude/hooks/dist/release-claim.mjs" --list');
     expect(r).not.toContain("release-claim.mjs 'summary.md'");
     expect(r).not.toContain(root.split('\\').join('/'));
   });
@@ -449,21 +449,21 @@ describe('deny text names the holder and the release command', () => {
     seen.held = [{ filePath, sessionId: 'other-session', project }];
     const r = reason(await run('PowerShell', { command }));
     expect(r).toContain('FILE CONFLICT BLOCKED');
-    expect(r).toContain('node ~/.claude/hooks/dist/release-claim.mjs --list');
-    expect(r).not.toContain(`release-claim.mjs '`);
+    expect(r).toContain('node "$HOME/.claude/hooks/dist/release-claim.mjs" --list');
+    expect(r).not.toContain(`release-claim.mjs" '`);
   });
 
   it('a path with a line break gets the --list form and adds no line to the deny text (Edit deny)', async () => {
     seen.blocked = new Set(['src/a\nb.ts']);
     const r = reason(await run('Edit', { file_path: abs('src/a\nb.ts') }));
     expect(r).toContain('FILE CONFLICT BLOCKED');
-    expect(r).toContain('release-claim.mjs --list');
+    expect(r).toContain('release-claim.mjs" --list');
     expect(r).not.toContain('a\nb.ts');
   });
 
   it('a path of letters, digits, dot, underscore, hyphen, slash and space keeps the quoted form', async () => {
     seen.held = [{ filePath: 'src/my file_2-a.ts', sessionId: 'other-session', project }];
     const r = reason(await run('PowerShell', { command: 'Set-Content "src/my file_2-a.ts" "x"' }));
-    expect(r).toContain("release-claim.mjs 'src/my file_2-a.ts'");
+    expect(r).toContain(`release-claim.mjs" 'src/my file_2-a.ts'`);
   });
 });

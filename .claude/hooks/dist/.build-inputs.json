@@ -15,12 +15,12 @@
     "coordination-notification.ts": "76379963710d3b82353c37de43e7e7ba484df05b0c1996ae8ef98c4aba2ff75c",
     "coordination-release.ts": "67367601f55b6df348588447f3a55fc6f76c94bb70e990318a55c0175c89e609",
     "dc-config-guard.ts": "0626f183b185020008505da78a626735bc21d57f9f5c8ffb4499a3f40ca9a434",
-    "decision-gate.ts": "7dee6471a3558c5518f08666c7526e65174d7310a14e38600294738540da1687",
+    "decision-gate.ts": "d9a2b99ea679efeb72c8e7411f98ce24a35ff39204de985b374f6044f230f421",
     "decision-ledger.ts": "98bf4d100653b038581c5180e90898685c6eab5e0094c585d7d17a9e02b5d106",
     "destructive-command-guard.ts": "25157bec4aaab0ac02cf2918bdb1589d3dbab9181269ffeec00b91cf7590166d",
     "epistemic-reminder.ts": "8f17424db2cfebe548bcca4400512f2565947f2b090fab337495de0ffb4aa311",
     "explore-to-scout.ts": "d76b8366046a2061755672bbf6bef26d8bf53d8f24e66d464563972ddc06f87a",
-    "file-claims.ts": "ec4d01105a579ac0b40d865bb7284dc9f7323c5a0b79d8b1796e8a06c6214da9",
+    "file-claims.ts": "d8783a9ed3a30f9f052e77da55485ed7294668ca64b0ab2eb3ba66581d39b09f",
     "git-auto-commit.ts": "8b2b2bd9db1d4febe0ec58074c161001dbf67bbaf84afdcab6c8a613c190202c",
     "git-commit-roadmap.ts": "66e2466a9784743c9001237082e8606236c10c60e1f62cbe8e4477e5833e280d",
     "heartbeat.ts": "dc5f2c41d775e92e00cb8dcb5faa0a4569655ba5ef6cb62d12804c25dec9fae5",
@@ -204,7 +204,7 @@
   },
   "external": {
     ".claude/hooks/src/shared/malicious-packages.json": {
-      "sha256": "407319dab0c0a9fe1b65bf2a5142e727e71b587fe1740cf05664ce357b381206"
+      "sha256": "484d11fdda50bce2c787258c08537f58f409130e3efc1b176454d0d251167d1a"
     },
     "scripts/github/lib/answer-key.mjs": {
       "sha256": "49a0451170db358544ca66ddc35260463de2c1b19663a0ee85504d0bca1e972c"

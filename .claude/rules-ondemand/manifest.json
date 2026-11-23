@@ -178,12 +178,12 @@
         "^gh\\s+api\\b(?=.*\\s-X\\s+POST\\b)(?=.*/pulls(\\s|$))"
       ],
       "segment": [
-        "^node(\\.exe)?\\s.*review-status\\.mjs",
-        "^node(\\.exe)?\\s.*pre-pr\\.mjs",
-        "^node(\\.exe)?\\s.*cr-fix\\.mjs",
-        "^node(\\.exe)?\\s.*cr-paid\\.mjs",
-        "^node(\\.exe)?\\s.*ship-ask\\.mjs",
-        "^node(\\.exe)?\\s.*land-decision\\.mjs",
+        "^node(\\.exe)?\\s+(?:(?:-r|--require|--import|--loader|--experimental-loader|--env-file)\\s+[^\\s\"']+\\s+|-(?!-?(?:e|p|c|eval|print|check)(?:\\s|=|$))[^\\s\"']+\\s+)*(?:[\"'](?:[^\"']*[\\\\/])?|(?:\"[^\"]*\"|'[^']*'|[^\\s\"'])*[\\\\/])?review-status\\.mjs",
+        "^node(\\.exe)?\\s+(?:(?:-r|--require|--import|--loader|--experimental-loader|--env-file)\\s+[^\\s\"']+\\s+|-(?!-?(?:e|p|c|eval|print|check)(?:\\s|=|$))[^\\s\"']+\\s+)*(?:[\"'](?:[^\"']*[\\\\/])?|(?:\"[^\"]*\"|'[^']*'|[^\\s\"'])*[\\\\/])?pre-pr\\.mjs",
+        "^node(\\.exe)?\\s+(?:(?:-r|--require|--import|--loader|--experimental-loader|--env-file)\\s+[^\\s\"']+\\s+|-(?!-?(?:e|p|c|eval|print|check)(?:\\s|=|$))[^\\s\"']+\\s+)*(?:[\"'](?:[^\"']*[\\\\/])?|(?:\"[^\"]*\"|'[^']*'|[^\\s\"'])*[\\\\/])?cr-fix\\.mjs",
+        "^node(\\.exe)?\\s+(?:(?:-r|--require|--import|--loader|--experimental-loader|--env-file)\\s+[^\\s\"']+\\s+|-(?!-?(?:e|p|c|eval|print|check)(?:\\s|=|$))[^\\s\"']+\\s+)*(?:[\"'](?:[^\"']*[\\\\/])?|(?:\"[^\"]*\"|'[^']*'|[^\\s\"'])*[\\\\/])?cr-paid\\.mjs",
+        "^node(\\.exe)?\\s+(?:(?:-r|--require|--import|--loader|--experimental-loader|--env-file)\\s+[^\\s\"']+\\s+|-(?!-?(?:e|p|c|eval|print|check)(?:\\s|=|$))[^\\s\"']+\\s+)*(?:[\"'](?:[^\"']*[\\\\/])?|(?:\"[^\"]*\"|'[^']*'|[^\\s\"'])*[\\\\/])?ship-ask\\.mjs",
+        "^node(\\.exe)?\\s+(?:(?:-r|--require|--import|--loader|--experimental-loader|--env-file)\\s+[^\\s\"']+\\s+|-(?!-?(?:e|p|c|eval|print|check)(?:\\s|=|$))[^\\s\"']+\\s+)*(?:[\"'](?:[^\"']*[\\\\/])?|(?:\"[^\"]*\"|'[^']*'|[^\\s\"'])*[\\\\/])?land-decision\\.mjs",
         "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
       ],
       "tools": [
@@ -198,12 +198,12 @@
       "mode": "inject",
       "laneSegment": "skip",
       "command": [
-        "^(cr|coderabbit)\\b"
+        "^(cr|coderabbit)(@[\\w.-]+)?(\\.(?:exe|cmd|bat|ps1))?(\\s|$)"
       ],
       "segment": [
-        "^(cr|coderabbit)\\b",
-        "^node(\\.exe)?\\s.*cr-fix\\.mjs",
-        "^node(\\.exe)?\\s.*cr-paid\\.mjs",
+        "^(cr|coderabbit)(@[\\w.-]+)?(\\.(?:exe|cmd|bat|ps1))?(\\s|$)",
+        "^node(\\.exe)?\\s+(?:(?:-r|--require|--import|--loader|--experimental-loader|--env-file)\\s+[^\\s\"']+\\s+|-(?!-?(?:e|p|c|eval|print|check)(?:\\s|=|$))[^\\s\"']+\\s+)*(?:[\"'](?:[^\"']*[\\\\/])?|(?:\"[^\"]*\"|'[^']*'|[^\\s\"'])*[\\\\/])?cr-fix\\.mjs",
+        "^node(\\.exe)?\\s+(?:(?:-r|--require|--import|--loader|--experimental-loader|--env-file)\\s+[^\\s\"']+\\s+|-(?!-?(?:e|p|c|eval|print|check)(?:\\s|=|$))[^\\s\"']+\\s+)*(?:[\"'](?:[^\"']*[\\\\/])?|(?:\"[^\"]*\"|'[^']*'|[^\\s\"'])*[\\\\/])?cr-paid\\.mjs",
         "^skills(@\\S+)?\\s+add\\b.*coderabbit",
         "^coderabbit\\s+skills\\b"
       ]
@@ -215,7 +215,7 @@
       ],
       "mode": "inject",
       "command": [
-        "^(psql|pg_dump|pg_restore)(\\.exe)?(\\s|$)"
+        "^(psql|pg_dump|pg_restore)(\\.exe)?(?!\\s+(?:-V|--version|--help|-\\?)(?:\\s|$))(\\s|$)"
       ],
       "segment": [
         "^([\"'][^\"']*|[^\\s\"']*)docker(\\.exe)?[\"']?\\s+exec\\b.*postgres"
@@ -307,7 +307,7 @@
         "^mcp__playwright__"
       ],
       "command": [
-        "^(npx\\s+)?playwright(\\s|$)"
+        "^(npx\\s+)?playwright(?!\\s+(?:-V|--version|-h|--help)(?:\\s|$))(\\s|$)"
       ],
       "segment": [
         "^node(\\.exe)?\\s+([\"'][^\"']*|[^\\s\"']*)cdp\\.mjs"
