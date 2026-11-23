@@ -297,6 +297,21 @@ test('HP19 the package-install fixtures run the package manager their name says'
   }
 });
 
+test('HP20 a gate-shape fixture must state its expected decision; other shapes need none', async () => {
+  const noDecision = (shape) => fx({ expect: { exit: [0], shape } });
+  const gate = validateFixture(noDecision('gate'), 'h/c1');
+  assert.ok(gate.some((p) => /expect\.decision.*required.*gate/.test(p)), `a gate fixture with no decision was accepted: ${JSON.stringify(gate)}`);
+  for (const shape of ['inject', 'continue', 'empty']) assert.deepEqual(validateFixture(noDecision(shape), 'h/c1'), [], `${shape} needs no decision`);
+  assert.deepEqual(validateFixture(fx(), 'h/c1'), [], 'a gate fixture with a decision stays valid');
+  // The vacuous pass the rule closes: a hook that turns deny into allow must fail a fixture that states deny.
+  const root = makeRoot({ flip: { dist: GATE_ALLOW, fixtures: { c1: fx() } } });
+  try {
+    const r = await runPayloadGate({ root, changed: ['.claude/hooks/src/flip.ts'], runId: 'r20', liveLogPath: path.join(root, 'live.jsonl') });
+    assert.equal(r.failed, true);
+    assert.match(r.lines.join('\n'), /decision allow, expected deny/);
+  } finally { cleanup(root); }
+});
+
 test('HP14 every saved fixture in this repo is valid and names a source file', () => {
   const dir = path.join(REPO, '.claude', 'hooks', 'fixtures');
   const names = existsSync(dir) ? readdirSync(dir) : [];
