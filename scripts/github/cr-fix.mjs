@@ -204,7 +204,7 @@ function gitBranch(cwd) {
 /** The deps of the paid ledger helpers in cr-paid.mjs: this run's clock, and a ledger path when the caller gives one. */
 const ledgerDeps = (d) => ({ now: () => d.now, ...(d.ledgerPath ? { ledgerPath: d.ledgerPath } : {}) });
 
-/** A stop result when today's paid CLI spend is at the cap, or the ledger cannot be read with a cap set. No CLI run has been spent yet. */
+/** A stop result when today's paid CLI spend is at the cap, or the ledger cannot be read with a cap set. No gh call and no CLI run has been made yet: crFix runs it first. */
 function checkCap(cwd, d, override) {
   const base = d.cliCap(cwd);
   if (base === null || base === undefined) return null;
@@ -247,13 +247,15 @@ export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEO
   if (typeof base === 'number' && capOverride.usd <= base) {
     return { ...stop(`the USD override ${capOverride.usd} must be above the config cap ${base} (review-router.config.json coderabbit.cli_daily_cap_usd): a value at or below it lifts nothing. No tap was claimed and no CLI run was started`), exitCode: 1 };
   }
+  // The cap comes before any GitHub read: it needs only the checkout config, the git refs and the paid ledger. A run at or over the cap
+  // (cap 0 included) makes no gh call and no CLI call.
+  const capped = checkCap(cwd, d, capOverride?.usd);
+  if (capped) return capped;
   const range = readRange(pr, repo, cwd, d);
   if (range.stop) return range.stop;
   const { from, head } = range;
   const bad = checkCheckout({ pr, repo, cwd, from, head }, d);
   if (bad) return bad;
-  const capped = checkCap(cwd, d, capOverride?.usd);
-  if (capped) return capped;
   const key = d.answerKey(cwd, from);
   if (key) return stop(key);
   const merges = safeMerges(d, cwd, from);
