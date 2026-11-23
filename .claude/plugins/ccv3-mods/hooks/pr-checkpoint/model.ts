@@ -680,8 +680,11 @@ const SLOT_MAX_NAMING_LENGTH = 20_000
  * Quotes and escapes are stripped first. Any split of `slot-queue.mjs` by a separator or a `$()` leaves a piece that still matches (`slot-q` on the left or `queue.m` on the right).
  * Glob cover is partial, accepted: a glob that keeps none of `slot-q`, `slot-*`, `queue.m` or `*queue` (for example `sl*e.mjs`) is not seen. A rule that denied every
  * node run with a glob in the script path would also block `node --test` with a test glob, which this repo uses daily (paid guard design rev 5, Known limits).
+ * The queue name as a word is text, not the module: `slot-queue` or `slot-queue-<word>` (a card id, a test file name) followed by a space, a `)` or a `,` in the same
+ * segment. A word that ends at a dot, a `$`, a glob character, a slash, a quote split or the end of the segment still counts, as does a word over 80 characters. The real
+ * module names keep matching: `slot-queue.mjs` has a dot next, and `queue(?:-model)?\.m` is the second branch.
  */
-const SLOT_NAME_LIKE = /slot[-_]{0,2}[q*?[]|queue(?:-model)?\.m|[*?[][\w.*?[\]-]{0,30}queue/gi
+const SLOT_NAME_LIKE = /slot[-_]{0,2}(?:q(?!ueue(?:-[a-z][a-z0-9-]{0,80})?[\s),])|[*?[])|queue(?:-model)?\.m|[*?[][\w.*?[\]-]{0,30}queue/gi
 /** The module as a clean token whose next argument is exactly tick, list or probe (quotes may wrap the verb). Raw text, no stripping. */
 const SLOT_MODULE_THEN_READ_VERB = /slot-queue(?:-model)?\.mjs(?=["']?\s{1,20}["']?(?:tick|list|probe)["']?(?:\s|$|[;&|]))/gi
 /** Code that loads a module: node -e or -p (also -pe), --eval, --print, --input-type, a stdin script, import(), require(), import ... from, main(. Bounded. */
@@ -708,8 +711,13 @@ export const isSlotStateFile = (path: string): boolean => /\/\.claude\/state\/co
 
 const count = (re: RegExp, text: string): number => text.match(re)?.length ?? 0
 
-/** A segment that is only a git, search, read or `node --test|--check` command. It runs no queue verb, whatever text it holds. */
+/**
+ * A segment that is only a git, search, read or `node --test|--check` command. It runs no queue verb, whatever text it holds.
+ * A paren or a brace is never inert: in PowerShell `git commit -m (node <module> drop)` and `Get-Content (...)` run the code inside. Only a segment that names
+ * the module or the state file reaches this test, so a commit title with a paren now needs `git commit -F <file>` (the deny text says so).
+ */
 const isInertSegment = (segment: string): boolean => {
+  if (/[({]/.test(segment)) return false
   const text = segment.trim().replace(ENV_PREFIX, '')
   if (GIT_READ_OR_COMMIT.test(text)) return !GIT_RUNS_CODE.test(text)
   if (SEARCH_OR_READ.test(text)) return !SEARCH_RUNS_CODE.test(text)
