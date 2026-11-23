@@ -279,6 +279,21 @@ test('R4: the extra-run flag alone does not lift the USD cap', async () => {
   assert.equal(f.calls.length, 0);
 });
 
+test('R8 (item 6, coord-cap-override-followups): the extra-run flag with the run count below the limit is refused before the tap is claimed, with no CLI and no counter row', async () => {
+  for (const capOverride of [{ usd: null, extraRun: true }, { usd: 6, extraRun: true }]) {
+    const f = fixture({ runs: 1 });
+    const before = readFileSync(f.counter, 'utf8');
+    let claimed = 0;
+    const r = await runCodeRabbit(opts(f, { capOverride, claimOverride: () => { claimed += 1; return { ok: true, tapAt: 'x' }; } }));
+    assert.equal(r.status, 'FAIL', JSON.stringify(capOverride));
+    assert.match(r.detail, /run (count|limit)/i);
+    assert.match(r.detail, /below|not reached|no need/i);
+    assert.equal(claimed, 0, 'the tap stays unused');
+    assert.equal(f.calls.length, 0);
+    assert.equal(readFileSync(f.counter, 'utf8'), before);
+  }
+});
+
 test('R5: the USD flag lifts the daily cap for one run, and the billed row carries capOverride', async () => {
   const f = fixture({ runs: 0, ledgerCost: 3 });
   const capped = await runCodeRabbit(opts(f));
