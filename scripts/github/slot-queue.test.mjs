@@ -167,13 +167,11 @@ test('SQ3: an ESCALATE verdict that says mergeOnly still gives the full free req
   assert.deepEqual(bodiesOf(e), [FULL_FREE]);
 });
 
-// Breaks if a normal head, a missing flag, a null verdict, a read error or a thrown error changes the request or blocks the post.
+// Breaks if a normal head, a missing flag or a mergeOnly that is not the boolean true changes the request or blocks the post.
 for (const [label, checkPr] of [
   ['a normal head (mergeOnly false)', (pr) => ALLOW(pr, { mergeOnly: false })],
   ['a verdict with no mergeOnly key', (pr) => ALLOW(pr)],
   ['mergeOnly as a string', (pr) => ALLOW(pr, { mergeOnly: 'true' })],
-  ['a null verdict that says mergeOnly', (pr) => ({ exitCode: 2, verdict: null, mergeOnly: true, reason: 'gh failed' })],
-  ['a verdict read that throws', () => { throw new Error('gh down'); }],
 ]) {
   test(`SQ4: ${label} posts the plain request`, () => {
     const e = setup('sq4');
@@ -186,9 +184,48 @@ for (const [label, checkPr] of [
   });
 }
 
+// --- card coord-queue-null-verdict: a verdict read that failed (null) posts the free full form, never the plain one -------------------
+// How it can fail: the plain request goes out for a head whose merge-only state is unknown ("already reviewed", free slot lost, PR 697 Known limit);
+// a failed read defers or blocks the post (a standing failure would stop the queue); the unknown-verdict post holds the credit flag.
+// Two rules work together: undefined at the claim (the pick changed, SQ10) defers; null after a failed read (here) posts full.
+// Breaks if a null verdict, a read error, a thrown error or an empty answer posts the plain request, or does not post at all.
+for (const [label, checkPr] of [
+  ['a null verdict that says mergeOnly', () => ({ exitCode: 2, verdict: null, mergeOnly: true, reason: 'gh failed' })],
+  ['a null verdict with no mergeOnly key', () => ({ exitCode: 2, verdict: null, reason: 'gh failed' })],
+  ['a verdict read that throws', () => { throw new Error('gh down'); }],
+  ['a verdict read with no answer', () => null],
+]) {
+  test(`SQ13: ${label} posts the free full-review request, once, with no credit flag`, () => {
+    const e = setup('sq13');
+    setWorld(e, { 5: prOf(5) });
+    setState(e, [itemOf(5)]);
+    const r = run(e, ['tick', '--json'], { checkPr });
+    assert.equal(r.code, 0);
+    assert.deepEqual(posts(e), [{ pr: 5, body: FULL_FREE }]);
+    assert.equal(itemIn(e, 5).state, 'posted');
+    assert.equal(stateOf(e).holder.pr, 5);
+    assert.match(toasts(r.json)[0].text, /PR #5: free slot taken, @coderabbitai full review posted\./);
+    assert.doesNotMatch(bodiesOf(e)[0], /use-credits|--/);
+  });
+}
+
+// Breaks if a standing read failure stops the queue: every item must still get its post, one per free slot, with no defer and no extra read.
+test('SQ14: a standing verdict read failure never defers: each tick that has a free slot posts the full form for its pick', () => {
+  const e = setup('sq14');
+  setWorld(e, { 5: prOf(5), 6: prOf(6) });
+  setState(e, [itemOf(5), itemOf(6, { queuedAt: at(-4) })]);
+  const reads = [];
+  const checkPr = (pr) => { reads.push(pr); throw new Error('gh down'); };
+  run(e, ['tick', '--json'], { checkPr });
+  assert.deepEqual(reads, [5], 'one read, before the lock, for the pick only');
+  assert.deepEqual(posts(e), [{ pr: 5, body: FULL_FREE }]);
+  assert.equal(itemIn(e, 6).state, 'queued', 'the second item waits for its own slot');
+  assert.equal(itemIn(e, 6).posts, 0);
+});
+
 // Breaks if any queue post carries the paid word, whatever the verdict says (the queue never buys a review on its own).
-test('SQ5: no free post holds the credit flag, for a merge-only head, a normal head or an ESCALATE verdict', () => {
-  for (const [i, checkPr] of [(pr) => MERGE_ONLY(pr), (pr) => ALLOW(pr), (pr) => ({ ...ESCALATE(pr), mergeOnly: true }), (pr) => ({ ...MERGE_ONLY(pr), comment: '@coderabbitai full review --use-credits' })].entries()) {
+test('SQ5: no free post holds the credit flag, for a merge-only head, a normal head, an ESCALATE verdict or a failed read', () => {
+  for (const [i, checkPr] of [(pr) => MERGE_ONLY(pr), (pr) => ALLOW(pr), (pr) => ({ ...ESCALATE(pr), mergeOnly: true }), (pr) => ({ ...MERGE_ONLY(pr), comment: '@coderabbitai full review --use-credits' }), () => ({ exitCode: 2, verdict: null, reason: 'gh failed', comment: '@coderabbitai full review --use-credits' })].entries()) {
     const e = setup(`sq5-${i}`);
     setWorld(e, { 5: prOf(5) });
     setState(e, [itemOf(5)]);

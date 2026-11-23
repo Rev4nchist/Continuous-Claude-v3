@@ -272,8 +272,13 @@ function readPostVerdict(state, facts, d) {
   return pick ? { [pick.pr]: safeVerdict(d, pick.pr) } : {};
 }
 
-/** The free request text: the full form on a verdict that says mergeOnly (ALLOW or ESCALATE: a free slot bills nothing), else the plain form. Any other verdict is plain. */
-const requestOf = (v) => freeRequestCommentOf(v?.verdict != null && v.mergeOnly === true);
+/**
+ * The free request text: the full form on a verdict that says mergeOnly (ALLOW or ESCALATE: a free slot bills nothing) and on an UNKNOWN verdict
+ * (a failed read: verdict null, or none). The plain form on a merge-only head is answered "already reviewed" and the free slot is lost, so a head
+ * whose state is unknown gets the full form. A real verdict that does not say mergeOnly gets the plain form.
+ * With claimWithVerdict: undefined at the claim (the pick changed) defers the post; null after a failed read posts the full form.
+ */
+const requestOf = (v) => freeRequestCommentOf(v?.verdict == null || v.mergeOnly === true);
 
 function tryPost(item, d, postVerdicts) {
   const body = requestOf(postVerdicts?.[item.pr]);
