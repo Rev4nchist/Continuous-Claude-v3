@@ -40,7 +40,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments, readPrCommits } from './review-status.mjs';
 import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, answerKeyRange, billedText, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
-import { readMainConfig, stricterConfig } from './config-stricter.mjs';
+import { readMainConfig, stricterFromRead } from './config-stricter.mjs';
 import { cliCapCheck, cliCapLine, cliCapOf, recordCliSpend } from './cr-paid.mjs';
 import { FLAG_EXTRA, FLAG_USD, claimCapOverride, hasCapOverride, noTapText, takeCapFlags } from './lib/cap-override.mjs';
 
@@ -193,9 +193,7 @@ function readCliCap(cwd) {
     const parsed = JSON.parse(readFileSync(path.join(cwd, 'review-router.config.json'), 'utf8'));
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) branch = parsed;
   } catch { /* an unreadable checkout file is an empty branch config, below */ }
-  const main = readMainConfig({ git }).config;
-  if (branch === null && main === null) return 0;
-  return cliCapOf(stricterConfig(main, branch ?? {}));
+  return cliCapOf(stricterFromRead(readMainConfig({ git }), branch ?? {}));
 }
 
 function gitBranch(cwd) {

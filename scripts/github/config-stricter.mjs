@@ -7,7 +7,9 @@
 // cap not a valid number: 0; mode not 'note': fail). Every other key keeps the branch value. The main side is a COMMITTED ref, never a
 // working-tree file (a working tree holds the branch's own edits): refs/remotes/fork/main first (no fetch), else refs/heads/main, and that
 // fallback only when the fork ref does not exist. A ref that exists but cannot be read is strict for all three keys (UNREADABLE_MAIN).
-// No ref at all: enforce true, and the branch cap and mode stay.
+// No ref at all: stricterConfig keeps enforce true and the branch cap and mode (the pure rule, and the rule of the TypeScript twin).
+// The LOADERS (stricterFromRead, loadStricterConfig) add one rule on top: no ref at all is a CLI cap of 0, so pre-pr, ship-ask and cr-fix stop
+// before a paid CLI run (card coord-config-nomain-cap0). The rule lives in the loader, not in stricterConfig, so the twin and fixture row A5b stay equal.
 // Known limit: a stale local fork/main is still stricter than trusting the branch alone.
 // The TypeScript twin is .claude/hooks/src/shared/config-stricter.ts. One fixture test (fixtures/stricter-config-cases.json) keeps them equal.
 import path from 'node:path';
@@ -116,10 +118,20 @@ export function readMainConfig({ git }) {
   return { config: null, source: 'none' };
 }
 
+/**
+ * The config a reader uses: `branch` made stricter by a readMainConfig result. With no main side at all (source 'none': neither ref exists)
+ * the CLI daily cap is 0, whatever the branch says or leaves out. Every other read keeps the stricterConfig rule. Pure.
+ */
+export function stricterFromRead(mainRead, branch) {
+  const out = stricterConfig(mainRead.config, branch);
+  if (mainRead.source === 'none') out.coderabbit = { ...(isObj(out.coderabbit) ? out.coderabbit : {}), cli_daily_cap_usd: 0 };
+  return out;
+}
+
 /** The config a run uses: the branch file of `root` made stricter by the main side. Throws when the branch file is missing or not a JSON object. */
 export function loadStricterConfig({ root, git, readFile }) {
   const file = path.join(root, CONFIG_FILE);
   const branch = objectOf(readFile(file, 'utf8'));
   if (branch === null) throw new Error(`${file} is missing or is not a JSON object`);
-  return stricterConfig(readMainConfig({ git }).config, branch);
+  return stricterFromRead(readMainConfig({ git }), branch);
 }
