@@ -2424,6 +2424,7 @@ test('GH1: an own commit after the GREEN commit: a hint row names the body path,
     const hint = hintLine(result);
     assert.ok(hint, result.lines.join('\n'));
     assert.ok(hint.includes(bodyPath), hint);
+    assert.match(hint, /Run the check on the head first; then in /, 'the hint leads with the run, never a bare sha edit');
     assert.match(hint, /line 11\b/, `${JSON.stringify(nl)}: the decoy line 7 inside the fence does not count; GREEN is line 11`);
     assert.ok(hint.includes(old.slice(0, 7)) && hint.includes(head.slice(0, 7)), hint);
     assert.equal(existsSync(stampFile(repo)), false);

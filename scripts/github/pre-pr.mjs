@@ -683,14 +683,14 @@ export function rewriteGreenSha(text, oldSha, newSha) {
 }
 
 /**
- * The line to fix when the GREEN sha is not the head: "In <body path> line <n>: change the sha after "@" from <old> to <new>. Line now: <line>",
+ * The line to fix when the GREEN sha is not the head: "Run the check on the head first; then in <body path> line <n> change the sha after "@" from <old> to <new>. Line now: <line>",
  * or null (no GREEN line, two of them, no sha on it, or the sha already names the head). Pure: it reads no file.
  */
 export function greenLineHint({ bodyText, bodyPath, head }) {
   const g = findGreenLine(bodyText);
   const headSha = String(head ?? '').toLowerCase();
   if (!g || !headSha || headSha.startsWith(g.sha.toLowerCase()) || g.sha.toLowerCase().startsWith(headSha)) return null;
-  return `In ${bodyPath ?? 'the PR body'} line ${g.index / 2 + 1}: change the sha after "@" from ${g.sha.slice(0, 7)} to ${headSha.slice(0, 7)}. Line now: ${clip(g.line.trim(), 100)}`;
+  return `Run the check on the head first; then in ${bodyPath ?? 'the PR body'} line ${g.index / 2 + 1} change the sha after "@" from ${g.sha.slice(0, 7)} to ${headSha.slice(0, 7)}. Line now: ${clip(g.line.trim(), 100)}`;
 }
 
 /**
