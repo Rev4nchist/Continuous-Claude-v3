@@ -138,6 +138,84 @@ test('R8: the rate is false fires over rule fires, to two decimals, never over r
   assert.equal(r.json.ratePercent, 6);
 });
 
+test('R8b: the denominator counts rules, not rows: 3 false fires of 7 rule fires in 6 rows is 42.86 percent', () => {
+  const fires = [];
+  for (let i = 0; i < 5; i++) fires.push(fire(`2026-11-17T10:0${i}:00Z`));
+  fires.push(fire('2026-11-17T10:09:00Z', ['git-merge', 'lane-board']));
+  const s = scratch(fires, [cap('2026-11-17T12:00:00Z', { from: '2026-11-17T11:00:00Z', to: '2026-11-17T11:00:00Z', fires: 3 })]);
+  const r = rate(s, '2026-11-16T00:00:00Z');
+  assert.ok(r.json, r.out);
+  assert.equal(r.json.fireRows, 6);
+  assert.equal(r.json.ruleFires, 7);
+  assert.equal(r.json.ratePercent, 42.86);
+});
+
+test('R10: one fire recorded by a session and again by the review counts once', () => {
+  const s = scratch([fire('2026-11-17T11:00:00Z', ['git-merge'], 'inject', 'git commit')], [
+    cap('2026-11-17T11:05:00Z', { from: '2026-11-17T11:00:00Z', to: '2026-11-17T11:00:00Z', fires: 1 }),
+    cap('2026-11-20T09:00:00Z', { source: 'review', count: 3, fires: 3, from: '2026-11-17T10:00:00Z', to: '2026-11-17T12:00:00Z' }),
+  ]);
+  const r = rate(s, '2026-11-16T00:00:00Z');
+  assert.ok(r.json, r.out);
+  assert.equal(r.json.falseFires, 3);
+  assert.equal(r.json.falsePairs, 1);
+  assert.equal(r.json.dedupedRows, 1);
+});
+
+test('R11: a bad or reversed window and a bad --fired-at exit 2 with a usage line', () => {
+  const s = scratch([fire('2026-11-17T10:00:00Z')], []);
+  for (const args of [['rate', '--since', '2026-11-16T00:00:00Z', '--until', 'soon'], ['rate', '--since', '2026-11-18T00:00:00Z', '--until', '2026-11-16T00:00:00Z'],
+    ['add', '--rule', 'git-merge', '--what', 'x', '--fired-at', 'yesterday-ish']]) {
+    const r = run(s, args);
+    assert.equal(r.code, 2, `${args.join(' ')}: ${r.out}`);
+    assert.match(r.out, /usage|invalid/i);
+  }
+});
+
+test('R12: an unknown kind is no fire; fires beats count; a row that spans the whole window is partial', () => {
+  const s = scratch([fire('2026-11-17T10:00:00Z'), fire('2026-11-17T10:01:00Z', ['git-merge'], 'none')], [
+    cap('2026-11-17T12:00:00Z', { count: 9, fires: 2, from: '2026-11-17T11:00:00Z', to: '2026-11-17T11:00:00Z' }),
+    cap('2026-11-17T12:01:00Z', { source: 'review', count: 6, fires: 6, from: '2026-11-01T00:00:00Z', to: '2026-12-01T00:00:00Z', rule: 'other' }),
+  ]);
+  const r = rate(s, '2026-11-16T00:00:00Z', '2026-11-18T00:00:00Z');
+  assert.ok(r.json, r.out);
+  assert.equal(r.json.ruleFires, 1);
+  assert.equal(r.json.falseFires, 2);
+  assert.equal(r.json.partialRows, 1);
+});
+
+test('R13: fires given as a string is a number; a negative or non-number fires falls back to 1', () => {
+  const s = scratch([fire('2026-11-17T10:00:00Z')], [
+    cap('2026-11-17T12:00:00Z', { fires: '4', from: '2026-11-17T11:00:00Z', to: '2026-11-17T11:00:00Z', what: 'a' }),
+    cap('2026-11-17T12:01:00Z', { fires: -3, from: '2026-11-17T11:01:00Z', to: '2026-11-17T11:01:00Z', what: 'b' }),
+    cap('2026-11-17T12:02:00Z', { fires: 'many', from: '2026-11-17T11:02:00Z', to: '2026-11-17T11:02:00Z', what: 'c' }),
+  ]);
+  const r = rate(s, '2026-11-16T00:00:00Z');
+  assert.ok(r.json, r.out);
+  assert.equal(r.json.falseFires, 6);
+});
+
+test('R14: a row with a bad timestamp is counted as a bad row, not dropped silently', () => {
+  const s = scratch([fire('2026-11-17T10:00:00Z'), { ...fire('2026-11-17T10:00:00Z'), ts: 'not a time' }], [{ ...cap('2026-11-17T12:00:00Z'), ts: 'broken' }]);
+  const r = rate(s, '2026-11-16T00:00:00Z');
+  assert.ok(r.json, r.out);
+  assert.equal(r.json.badRows, 2);
+  assert.equal(r.json.ruleFires, 1);
+});
+
+test('R15: --judge-reply needs --capture, and a missing reply file is "judge call failed" (exit 1), never a crash or a live write', () => {
+  const s = scratch([fire('2026-11-17T10:00:00Z', ['git-merge'], 'inject', 'git commit')], []);
+  const home = mkdtempSync(join(tmpdir(), 'rr-home-'));
+  const nopath = mkdtempSync(join(tmpdir(), 'rr-nopath-'));
+  const env = { ...process.env, USERPROFILE: home, HOME: home, PATH: nopath, Path: nopath }; // no claude program can run
+  const bare = spawnSync(process.execPath, [script, 'review', '--days', '3650', '--log', s.log, '--manifest', s.manifest, '--report', join(s.dir, 'r.md'), '--judge-reply', join(s.dir, 'reply.json')], { encoding: 'utf8', env });
+  assert.equal(bare.status, 2, bare.stdout + bare.stderr);
+  assert.equal(existsSync(join(home, '.claude', 'logs', 'rule-router-false-fires.jsonl')), false);
+  const missing = run(s, ['review', '--days', '3650', '--report', join(s.dir, 'r2.md'), '--judge-reply', join(s.dir, 'nope.json')]);
+  assert.equal(missing.code, 1, missing.out);
+  assert.match(missing.out, /judge call failed/);
+});
+
 test('R9: add records from and to with the fire time given, and keeps the old fields', () => {
   const s = scratch([fire('2026-11-17T10:00:00Z')], []);
   const r = run(s, ['add', '--rule', 'git-merge', '--what', 'git commit', '--note', 'x', '--source', 'agent', '--fired-at', '2026-11-17T10:00:00Z']);
