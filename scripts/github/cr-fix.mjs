@@ -225,6 +225,12 @@ function save(file, text, deps) {
  */
 export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN, capOverride = null }, deps = {}) {
   const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, mergesIn: gitMergesIn, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), cliCap: readCliCap, branch: gitBranch, ledgerPath: null, answerKey: answerKeyRange, claimOverride: claimCapOverride, ...deps };
+  // The USD override must be strictly above Dave's config cap, whatever today's spend: at or below it lifts nothing and would burn the tap.
+  // Refused before the first GitHub call. The cap itself is never changed.
+  const base = capOverride?.usd != null ? d.cliCap(cwd) : null;
+  if (typeof base === 'number' && capOverride.usd <= base) {
+    return { ...stop(`the USD override ${capOverride.usd} must be above the config cap ${base} (review-router.config.json coderabbit.cli_daily_cap_usd): a value at or below it lifts nothing. No tap was claimed and no CLI run was started`), exitCode: 1 };
+  }
   const range = readRange(pr, repo, cwd, d);
   if (range.stop) return range.stop;
   const { from, head } = range;
@@ -234,14 +240,19 @@ export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEO
   if (capped) return capped;
   const key = d.answerKey(cwd, from);
   if (key) return stop(key);
-  // Dave's tap for the USD flag: claimed once, after every stop and before the CLI starts. A refusal starts no run.
+  const merges = safeMerges(d, cwd, from);
+  // The head is read again right before the run: the range and the claim belong to the head read at the start. A head that moved stops the run
+  // before the tap is used.
+  let headNow = '';
+  try { headNow = String(d.headSha(cwd) ?? '').trim().toLowerCase(); } catch { headNow = ''; }
+  if (headNow !== head) return { ...stop(`the checkout head moved while the review was prepared (read ${head.slice(0, 7)}, now ${headNow ? headNow.slice(0, 7) : 'unreadable'}): head mismatch. No tap was claimed and no CLI run was started; run cr-fix again`), exitCode: 1 };
+  // Dave's tap for the USD flag: claimed once, as the very last step before the CLI starts (after every stop and check). A refusal starts no run.
   let capRecord = null;
   if (capOverride?.usd != null) {
     const claim = d.claimOverride({ branch: d.branch(cwd), head, usd: capOverride.usd, extraRun: false });
     if (!claim.ok) return { ...stop(`the cap override was refused (${claim.reason ?? 'no tap'}): ${noTapText(`usd=${capOverride.usd}`)}. No CLI run was started`), exitCode: 1 };
     capRecord = { usd: capOverride.usd, extraRun: false, tapAt: claim.tapAt ?? null };
   }
-  const merges = safeMerges(d, cwd, from);
   const run = await d.runCr({ cwd, args: CR_FIX_ARGS(from), timeoutMs });
   const stdout = String(run.stdout ?? '');
   const outFile = path.join(cwd, '.claude', 'cache', 'e2e', `${dayOf(d.now)}-cr-fix-${head.slice(0, 7)}.txt`);

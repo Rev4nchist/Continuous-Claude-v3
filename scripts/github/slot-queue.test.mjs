@@ -13,6 +13,7 @@ import path from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { main } from './slot-queue.mjs';
+import * as CRPAID from './cr-paid.mjs';
 import { emptyState } from './slot-queue-model.mjs';
 import { makeGh } from './fixtures/slot-queue/fake-gh.mjs';
 
@@ -126,6 +127,139 @@ test('tick posts one @coderabbitai review for the first queued item, marks it po
   assert.equal(s.slot.lastPostAt, T0);
   assert.equal(s.lastTickAt, T0);
   assert.match(toasts(r.json)[0].text, /PR #5: free slot taken, @coderabbitai review posted\./);
+});
+
+// --- card coord-slot-queue-full-form: a head that only merges main gets the FREE full-review request -------------------
+// How it can fail: a merge-only head gets the plain request ("already reviewed"); the post holds a paid word; a failed or null verdict blocks the post
+// or posts the full form; the verdict is read inside the lock (m6); the free texts drift from cr-paid.mjs.
+const MERGE_ONLY = (pr, over = {}) => ALLOW(pr, { mergeOnly: true, ...over });
+const FULL_FREE = '@coderabbitai full review';
+const bodiesOf = (e) => posts(e).map((p) => p.body);
+
+// Breaks if cr-paid.mjs does not own the free request text, or the free text gains the credit flag, or the paid text changes.
+test('SQ1: cr-paid.mjs gives the free request text: plain, or full for a merge-only head, never the credit flag', () => {
+  assert.equal(CRPAID.freeRequestCommentOf(false), '@coderabbitai review');
+  assert.equal(CRPAID.freeRequestCommentOf(undefined), '@coderabbitai review');
+  assert.equal(CRPAID.freeRequestCommentOf('true'), '@coderabbitai review', 'only the boolean true counts');
+  assert.equal(CRPAID.freeRequestCommentOf(true), FULL_FREE);
+  assert.doesNotMatch(`${CRPAID.freeRequestCommentOf(true)}${CRPAID.freeRequestCommentOf(false)}`, /use-credits/);
+  assert.equal(CRPAID.requestCommentOf(true), '@coderabbitai full review --use-credits', 'the paid text is unchanged');
+});
+
+// Breaks if a merge-only verdict (ALLOW) still posts the plain request.
+test('SQ2: a free slot for a merge-only head posts the full-review request, and the toast names it', () => {
+  const e = setup('sq2');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5)]);
+  const r = run(e, ['tick', '--json'], { checkPr: (pr) => MERGE_ONLY(pr) });
+  assert.equal(r.code, 0);
+  assert.deepEqual(posts(e), [{ pr: 5, body: FULL_FREE }]);
+  assert.equal(itemIn(e, 5).state, 'posted');
+  assert.match(toasts(r.json)[0].text, /PR #5: free slot taken, @coderabbitai full review posted\./);
+});
+
+// Breaks if the full form is tied to a paid ALLOW: the verdict is ESCALATE when the paid limits are spent, but a free slot bills nothing.
+test('SQ3: an ESCALATE verdict that says mergeOnly still gives the full free request', () => {
+  const e = setup('sq3');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5)]);
+  run(e, ['tick', '--json'], { checkPr: (pr) => ({ ...ESCALATE(pr), mergeOnly: true }) });
+  assert.deepEqual(bodiesOf(e), [FULL_FREE]);
+});
+
+// Breaks if a normal head, a missing flag, a null verdict, a read error or a thrown error changes the request or blocks the post.
+for (const [label, checkPr] of [
+  ['a normal head (mergeOnly false)', (pr) => ALLOW(pr, { mergeOnly: false })],
+  ['a verdict with no mergeOnly key', (pr) => ALLOW(pr)],
+  ['mergeOnly as a string', (pr) => ALLOW(pr, { mergeOnly: 'true' })],
+  ['a null verdict that says mergeOnly', (pr) => ({ exitCode: 2, verdict: null, mergeOnly: true, reason: 'gh failed' })],
+  ['a verdict read that throws', () => { throw new Error('gh down'); }],
+]) {
+  test(`SQ4: ${label} posts the plain request`, () => {
+    const e = setup('sq4');
+    setWorld(e, { 5: prOf(5) });
+    setState(e, [itemOf(5)]);
+    const r = run(e, ['tick', '--json'], { checkPr });
+    assert.equal(r.code, 0);
+    assert.deepEqual(posts(e), [{ pr: 5, body: '@coderabbitai review' }]);
+    assert.match(toasts(r.json)[0].text, /PR #5: free slot taken, @coderabbitai review posted\./);
+  });
+}
+
+// Breaks if any queue post carries the paid word, whatever the verdict says (the queue never buys a review on its own).
+test('SQ5: no free post holds the credit flag, for a merge-only head, a normal head or an ESCALATE verdict', () => {
+  for (const [i, checkPr] of [(pr) => MERGE_ONLY(pr), (pr) => ALLOW(pr), (pr) => ({ ...ESCALATE(pr), mergeOnly: true }), (pr) => ({ ...MERGE_ONLY(pr), comment: '@coderabbitai full review --use-credits' })].entries()) {
+    const e = setup(`sq5-${i}`);
+    setWorld(e, { 5: prOf(5) });
+    setState(e, [itemOf(5)]);
+    run(e, ['tick', '--json'], { checkPr });
+    assert.equal(bodiesOf(e).length, 1);
+    assert.doesNotMatch(bodiesOf(e)[0], /use-credits|--/, `case ${i}`);
+  }
+});
+
+// Breaks if the verdict (about 6 gh reads) is read while the queue lock file exists (m6), or for a PR the tick does not post for, or twice.
+test('SQ6: the verdict for the post is read once, before the lock, for the PR that is posted', () => {
+  const e = setup('sq6');
+  setWorld(e, { 5: prOf(5), 6: prOf(6) });
+  setState(e, [itemOf(5), itemOf(6, { queuedAt: at(-4) })]);
+  const seen = [];
+  const checkPr = (pr) => { seen.push([pr, existsSync(`${e.statePath}.lock`)]); return MERGE_ONLY(pr); };
+  run(e, ['tick', '--json'], { checkPr });
+  assert.deepEqual(seen, [[5, false]]);
+  assert.deepEqual(bodiesOf(e), [FULL_FREE]);
+});
+
+// The PR 685 case through the REAL cr-paid check (no injected verdict): the head merges main over the reviewed commit. The compare lists 3 commits that main
+// already held (one parent each) and the merge; the PR's own list holds the reviewed commit and the merge only. Breaks if the queue post path does not
+// reach mergeOnlyOf, or reads the compare commits instead of the PR's own list.
+function replayWorld(e, { ownList }) {
+  const OLD = 'b'.repeat(40);
+  const MAINC = ['1', '2', '3'].map((n) => ({ sha: n.repeat(40), parents: [{ sha: 'd'.repeat(40) }] }));
+  const MERGEC = { sha: headOf(5), parents: [{ sha: OLD }, { sha: 'd'.repeat(40) }] };
+  const compare = { status: 'ahead', total_commits: 4, commits: [...MAINC, MERGEC], files: [{ filename: 'main-only.ts', additions: 400, deletions: 90, status: 'modified' }] };
+  const prFiles = ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => ({ filename: `src/${n}.ts`, additions: 5, deletions: 0, status: 'modified' }));
+  setWorld(e, { 5: prOf(5, { reviews: [{ user: crUser, commit_id: OLD, body: 'Actionable comments posted: 1', submitted_at: iso(at(-200)) }], files: prFiles }) });
+  setState(e, [itemOf(5)]);
+  const base = makeGh(e.worldPath, e.logPath);
+  return (argv) => {
+    const p = argv.find((x) => typeof x === 'string' && x.startsWith('repos/')) ?? '';
+    if (/\/compare\//.test(p)) return compare;
+    if (/\/pulls\/5\/commits/.test(p)) return [[{ sha: OLD }, ...ownList]];
+    return base(argv);
+  };
+}
+function replayTick(e, gh) {
+  const out = [];
+  const code = main(['tick', '--json'], { gh, now: () => T0, statePath: e.statePath, ledgerPath: e.ledgerPath, repo: REPO, cfg: {}, env: {}, lockWaitMs: 300, out: (l) => out.push(l), err: () => {} });
+  return { code, json: JSON.parse(out.join('\n')) };
+}
+test('SQ8: the PR 685 replay through the real cr-paid check posts the free full-review request; no paid request is posted', () => {
+  const e = setup('sq8');
+  const gh = replayWorld(e, { ownList: [{ sha: headOf(5) }] });
+  const r = replayTick(e, gh);
+  assert.equal(r.code, 0);
+  assert.deepEqual(bodiesOf(e), [FULL_FREE]);
+  assert.doesNotMatch(bodiesOf(e).join(' '), /use-credits/);
+  assert.equal(existsSync(e.ledgerPath), false, 'the free post writes no paid ledger row');
+});
+test('SQ9: the same compare with one real (single-parent) commit in the PR list posts the plain request', () => {
+  const e = setup('sq9');
+  const gh = replayWorld(e, { ownList: [{ sha: headOf(5) }, { sha: '2'.repeat(40) }] });
+  const r = replayTick(e, gh);
+  assert.equal(r.code, 0);
+  assert.deepEqual(bodiesOf(e), ['@coderabbitai review']);
+});
+
+// Breaks if a busy slot (no post) still reads a verdict, or the verdict of an item due its paid ask is read twice.
+test('SQ7: no post this tick means no extra verdict read', () => {
+  const e = setup('sq7');
+  setWorld(e, { 5: prOf(5) });
+  setState(e, [itemOf(5)], BUSY());
+  let reads = 0;
+  run(e, ['tick', '--json'], { checkPr: (pr) => { reads += 1; return MERGE_ONLY(pr); } });
+  assert.equal(reads, 0);
+  assert.deepEqual(bodiesOf(e), []);
 });
 
 // F5 at the CLI. Breaks if the post step runs before the reviewed-head check.

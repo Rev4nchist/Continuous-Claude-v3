@@ -21,7 +21,7 @@ import { mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFil
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkPr, postPaid, unledgeredPaidOf } from './cr-paid.mjs';
+import { checkPr, freeRequestCommentOf, postPaid, unledgeredPaidOf } from './cr-paid.mjs';
 import { ghApi } from './cr-fix.mjs';
 import { codeRabbitHeadReview, coderabbitRequestComments, isCodeRabbitUser, readIssueComments } from './review-status.mjs';
 import { withLock } from './lib/file-lock.mjs';
@@ -35,7 +35,6 @@ const DEFAULT_CONFIG = path.join(HERE, '..', '..', 'review-router.config.json');
 const DEFAULT_STATE = path.join(os.homedir(), '.claude', 'state', 'coderabbit-slot.json');
 const SHA40 = /^[0-9a-f]{40}$/;
 const MIN = 60_000;
-const REVIEW_COMMENT = '@coderabbitai review';
 const VERBS = ['tick', 'add', 'list', 'decide', 'drop', 'probe'];
 const KINDS = ['pay', 'wait', 'first'];
 const VALUE_FLAGS = { '--pr': 'pr', '--band': 'band', '--head': 'head', '--round': 'round', '--session': 'session', '--reason': 'reason', '--kind': 'kind', '--cap': 'cap' };
@@ -263,10 +262,24 @@ function claim(state, facts, now, d, session) {
   return { state: { ...state, holder: { pr: item.pr, head: item.head, at: now, session } }, item };
 }
 
-function tryPost(item, d) {
+/**
+ * The cr-paid verdict of the item the tick will post for, read before the lock (m6): { [pr]: verdict }, or {} when no item is picked.
+ * It decides only the TEXT of the free post: a head that only merges main gets the full-review request (the plain one is answered "already reviewed").
+ */
+function readPostVerdict(state, facts, d) {
+  const now = d.now();
+  const pick = claim(settle(state, facts, now, d.cfg), facts, now, d, 'pre').item;
+  return pick ? { [pick.pr]: safeVerdict(d, pick.pr) } : {};
+}
+
+/** The free request text: the full form on a verdict that says mergeOnly (ALLOW or ESCALATE: a free slot bills nothing), else the plain form. Any other verdict is plain. */
+const requestOf = (v) => freeRequestCommentOf(v?.verdict != null && v.mergeOnly === true);
+
+function tryPost(item, d, postVerdicts) {
+  const body = requestOf(postVerdicts?.[item.pr]);
   try {
-    d.gh(['-X', 'POST', `repos/${d.repo}/issues/${item.pr}/comments`, '-f', `body=${REVIEW_COMMENT}`]);
-    return { ok: true };
+    d.gh(['-X', 'POST', `repos/${d.repo}/issues/${item.pr}/comments`, '-f', `body=${body}`]);
+    return { ok: true, body };
   } catch (err) { return { ok: false, reason: firstLine(err) }; }
 }
 
@@ -278,7 +291,7 @@ function afterPost(state, item, res, now) {
   }
   const items = state.items.map((it) => (it.pr === item.pr ? { ...it, state: 'posted' } : it));
   const slot = { ...state.slot, lastPostAt: now, lastPostPr: item.pr, source: 'post' };
-  return { state: { ...state, items, slot }, actions: [toast(item.pr, `PR #${item.pr}: free slot taken, ${REVIEW_COMMENT} posted.`)] };
+  return { state: { ...state, items, slot }, actions: [toast(item.pr, `PR #${item.pr}: free slot taken, ${res.body} posted.`)] };
 }
 
 const readFailText = (pr, v) => `PR #${pr}: no free slot for 30 minutes. The paid-round check could not be read (${v.reason ?? 'no reason'}). ${ANSWER}: try it again or keep waiting.`;
@@ -322,7 +335,7 @@ function flagPaid(state, facts) {
   return { state: { ...state, items }, actions };
 }
 
-function tickLocked(a, d, facts, verdicts) {
+function tickLocked(a, d, facts, verdicts, postVerdicts) {
   const before = readState(d.statePath);
   if (recent(before, d)) return { code: 0, body: { ok: true, effective: false, locked: false, actions: [], ...viewOf(before, d) } };
   const now = d.now();
@@ -330,7 +343,7 @@ function tickLocked(a, d, facts, verdicts) {
   const settled = flagged.state;
   const claimed = claim(settled, facts, now, d, sessionOf(a, d));
   if (claimed.item) writeState(d.statePath, { ...claimed.state, lastTickAt: now });
-  const posted = claimed.item ? afterPost(claimed.state, claimed.item, tryPost(claimed.item, d), now) : { state: claimed.state, actions: [] };
+  const posted = claimed.item ? afterPost(claimed.state, claimed.item, tryPost(claimed.item, d, postVerdicts), now) : { state: claimed.state, actions: [] };
   const asked = askTimers(posted.state, now, d, verdicts);
   const final = { ...asked.state, lastTickAt: now };
   writeState(d.statePath, final);
@@ -343,7 +356,8 @@ function tickVerb(a, d) {
   if (recent(first, d) || !first.items.some((it) => !isDone(it))) return { code: 0, body: { ok: true, effective: false, locked: false, actions: [], ...viewOf(first, d) } };
   const facts = readAllFacts(first, d);
   const verdicts = readVerdicts(first, d);
-  const r = locked(d, () => tickLocked(a, d, facts, verdicts));
+  const postVerdicts = readPostVerdict(first, facts, d);
+  const r = locked(d, () => tickLocked(a, d, facts, verdicts, postVerdicts));
   return r === LOCK_BUSY ? { code: 0, body: { ok: true, effective: false, locked: true, actions: [], ...viewOf(first, d) } } : r;
 }
 

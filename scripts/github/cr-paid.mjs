@@ -59,6 +59,8 @@ export const PAID_COMMENT = '@coderabbitai review --use-credits';
 export const FULL_PAID_COMMENT = '@coderabbitai full review --use-credits';
 /** The paid comment of a round: the full form for a merge-only head, the plain form for every other head. Pure. */
 export const requestCommentOf = (mergeOnly) => (mergeOnly === true ? FULL_PAID_COMMENT : PAID_COMMENT);
+/** The FREE request of a head (the free-slot queue posts it): the full form for a merge-only head, the plain form for every other head. Never holds the credit flag. Pure. */
+export const freeRequestCommentOf = (mergeOnly) => (mergeOnly === true ? '@coderabbitai full review' : '@coderabbitai review');
 
 const usd = (cents) => `$${(cents / 100).toFixed(2)}`;
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0];
