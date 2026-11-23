@@ -757,7 +757,8 @@ test('SK1: capStateOf names the three states: unreadable config, no cap key, a k
   const noRef = capFixture({ mainText: null, branchText: capJson(6) });
   try {
     const m = await load();
-    assert.deepEqual(m.capStateOf(bad), { kind: 'config', cap: null });
+    assert.equal(m.capStateOf(bad).kind, 'config');
+    assert.equal(m.capStateOf(bad).cap, null);
     assert.deepEqual(m.capStateOf(noKey), { kind: 'no-key', cap: null });
     assert.deepEqual(m.capStateOf(known), { kind: 'known', cap: 3 });
     assert.deepEqual(m.capStateOf(noRef), { kind: 'known', cap: 0 });
@@ -846,4 +847,100 @@ test('SK8: the real gather path in a repo with an unreadable config prints the S
     assert.equal(q.options[0].label, 'Stop here (Recommended)');
     assert.match(q.question, /review config cannot be read/);
   } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+// ---- card coord-cap-unreadable-agree: a bad checkout config and a readable fork/main. pre-pr stops; cr-fix runs under main's cap; ship-ask says both ----
+// How the unit can fail, and the test that catches it:
+//   crFixCap differs from the cap real cr-fix applies (main cap, 0 for an unreadable or missing main, none for a main with no key)  -> SG1, SG2
+//   stricterCapOf (the cap pre-pr enforces) stops being null on a bad checkout                                                       -> SC2, SG1
+//   the cap-override text names one script, or says the tap lifts something for pre-pr, or runs over 20 words a sentence              -> SG3
+//   a known cap gets the cr-fix sentence                                                                                              -> SG3
+//   the real gather path (bad checkout file, fork/main cap 3) does not print the main cap                                           -> SG4
+const MAIN_KINDS = ['cap3', 'nokey', 'unreadable', 'noref'];
+const CRFIX_CAP_OF = { cap3: 3, nokey: null, unreadable: 0, noref: 0 };
+function badCheckout(mainKind) {
+  const dir = temp('shipask-badcfg-');
+  const gitIn = (...a) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], { cwd: dir, encoding: 'utf8' });
+  gitIn('init', '-q', '-b', 'feat/cap');
+  writeFileSync(path.join(dir, 'a.txt'), '1\n');
+  gitIn('add', 'a.txt');
+  if (mainKind === 'cap3' || mainKind === 'nokey') {
+    writeFileSync(path.join(dir, 'review-router.config.json'), mainKind === 'cap3' ? capJson(3) : '{}');
+    gitIn('add', 'review-router.config.json');
+  }
+  gitIn('commit', '-q', '-m', 'one');
+  if (mainKind !== 'noref') gitIn('update-ref', 'refs/remotes/fork/main', 'HEAD');
+  writeFileSync(path.join(dir, 'review-router.config.json'), '{bad');
+  return dir;
+}
+
+test('SG1: a bad checkout keeps stricterCapOf null (pre-pr stops) and adds the cr-fix cap: main 3, no key none, an unreadable or missing main 0', async () => {
+  const m = await load();
+  for (const kind of MAIN_KINDS) {
+    const dir = badCheckout(kind);
+    try {
+      const s = m.capStateOf(dir);
+      assert.equal(s.kind, 'config', kind);
+      assert.equal(s.cap, null, kind);
+      assert.equal(s.crFixCap, CRFIX_CAP_OF[kind], kind);
+      assert.equal(m.stricterCapOf(dir), null, `${kind}: the cap pre-pr enforces stays unknown`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test('SG2: crFixCap is the cap real crFix applies: its refusal names the same number, and with no cap it reaches GitHub', async () => {
+  const m = await load();
+  const { crFix } = await import(pathToFileURL(path.join(HERE, 'cr-fix.mjs')).href);
+  for (const kind of MAIN_KINDS) {
+    const dir = badCheckout(kind);
+    try {
+      let ghCalls = 0;
+      const gh = () => { ghCalls += 1; throw new Error('stub gh'); };
+      const r = await crFix({ pr: 1, cwd: dir, capOverride: { usd: 0 } }, { gh, ledgerPath: path.join(dir, 'ledger.jsonl') });
+      const want = CRFIX_CAP_OF[kind];
+      assert.equal(m.capStateOf(dir).crFixCap, want, `${kind}: ship-ask names the cap cr-fix applies`);
+      if (want === null) {
+        assert.ok(ghCalls >= 1, `${kind}: with no cap the run goes on to GitHub`);
+        assert.doesNotMatch(String(r.reason), /must be above|cli-cap/, kind);
+      } else {
+        assert.equal(ghCalls, 0, `${kind}: the refusal comes before any GitHub call`);
+        assert.match(String(r.reason), new RegExp(`must be above the config cap ${want} `), `${kind}: ${r.reason}`);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test('SG3: the cap-override question on a bad checkout names both scripts, with one sentence for each main case, and a known cap has none', async () => {
+  const m = await load();
+  const base = { branch: 'feat/x', head: HEAD, usd: 6, extraRun: false, total: 1, cap: null, files: 2, estimateUsd: 0.5, capWhy: 'config' };
+  const want = {
+    cap3: /cr-fix runs under the main cap \$3\.00/,
+    nokey: /cr-fix runs with no cap, as main sets none/,
+    unreadable: /cr-fix cannot read the main config, so its cap is \$0\.00/,
+    noref: /cr-fix has no main config to compare, so its cap is \$0\.00/,
+  };
+  const src = { cap3: 'fork-main', nokey: 'fork-main', unreadable: 'fork-main-unreadable', noref: 'none' };
+  for (const kind of MAIN_KINDS) {
+    const s = m.capOverrideSpec({ ...base, crFixCap: CRFIX_CAP_OF[kind], mainSource: src[kind] });
+    assert.match(s.question, want[kind], kind);
+    assert.match(s.question, /pre-pr stops at its config read, so the tap lifts nothing for pre-pr\./, kind);
+    assert.ok(s.question.split('\n').length <= 3, `${kind}: lines`);
+    for (const sentence of sentencesOf(s.question)) assert.ok(sentence.split(/\s+/).length < 20, `${kind}: long sentence: ${sentence}`);
+  }
+  const known = m.capOverrideSpec({ ...base, capWhy: 'known', cap: 3 });
+  assert.doesNotMatch(known.question, /cr-fix/);
+  const plain = m.capOverrideSpec({ ...base, capWhy: 'no-key' });
+  assert.doesNotMatch(plain.question, /cr-fix/);
+});
+
+test('SG4: the real gather path with a bad checkout file and a fork/main cap of 3 prints the main cap and both scripts', () => {
+  const dir = badCheckout('cap3');
+  try {
+    const r = run(['cap-override', '--branch', 'feat/cap', '--usd', '6', '--json'], { cwd: dir });
+    assert.equal(r.status, 0, r.stderr);
+    const q = JSON.parse(r.stdout).question;
+    assert.match(q, /cr-fix runs under the main cap \$3\.00/);
+    assert.match(q, /pre-pr stops at its config read/);
+    assert.doesNotMatch(q, /The USD flag lifts nothing without a cap/, 'cr-fix has a cap, so the USD flag acts for it');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
