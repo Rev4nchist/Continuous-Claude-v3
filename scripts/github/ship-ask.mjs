@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { loadStricterConfig, viewOf } from './config-stricter.mjs';
 import { CAP_KEEP_LABEL, CAP_LIFT_LABEL, CAP_STEP, FLAG_EXTRA, FLAG_USD, capOverrideKey, takeCapFlags } from './lib/cap-override.mjs';
 import { DECISIONS_ENV, decisionKey, decisionsPath, offerWrite } from './lib/decisions.mjs';
+import { CR_CENTS_PER_FILE } from './pre-pr.mjs';
 import { SUMMARY_REL, changeOf, hashOf, summaryFieldsOf } from './lib/pr-summary.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -92,15 +93,44 @@ export function openPrSpec(d) {
   ] };
 }
 
-/** open-pr when no PR can open: no stamp, a failed row, or a head that moved. data: { branch, head, stampHead, fails, capLeftUsd }. */
-export function rerunPrePrSpec({ branch, head, stampHead, fails, capLeftUsd }) {
+const RERUN_CMD = 'Runs node scripts/github/pre-pr.mjs --body <file>.';
+const PER_FILE = usd(CR_CENTS_PER_FILE / 100);
+
+/**
+ * open-pr when no PR can open: no stamp, a failed row, or a head that moved. data: { branch, head, stampHead, fails, capLeftUsd, capWhy }.
+ * capLeftUsd is a number when the cap and the ledger read. Else capWhy says why (card coord-shipask-cap-unknown), and the text says what pre-pr then does:
+ *   'config'  the review config cannot be read: pre-pr stops at its config read, no gate, no CLI review, no cost.  Stop here first.
+ *   'ledger'  the paid ledger cannot be read: the CLI step of pre-pr fails, no CLI review starts.                    Stop here first.
+ *   'no-key'  no daily cap is set: pre-pr runs the CLI with no daily cap; free only while the included reviews last.  Re-run first.
+ * An unknown capWhy is treated as 'config' (the safe side: no CLI run is promised).
+ */
+export function rerunPrePrSpec({ branch, head, stampHead, fails, capLeftUsd, capWhy }) {
   const why = !stampHead ? `No pre-pr stamp for ${clip(branch, 60)}.`
     : fails > 0 ? `The pre-pr stamp has ${plural(fails, 'failed row')}.`
       : `The head moved: the stamp is for ${String(stampHead).slice(0, 7)}, the branch is at ${String(head).slice(0, 7)}.`;
-  const cost = typeof capLeftUsd === 'number' ? `up to ${usd(capLeftUsd)} CLI` : 'CLI cost unknown';
-  return { header: 'Open PR', question: `${why}\nA draft PR needs a pre-pr stamp for the pushed head.\nRe-run pre-pr first?`, options: [
-    opt(`Re-run pre-pr (${cost})`, 'Runs node scripts/github/pre-pr.mjs --body <file>. The CLI review is free inside the hourly allowance.', true),
-    opt('Stop here', 'No PR opens.'),
+  const need = 'A draft PR needs a pre-pr stamp for the pushed head.';
+  const stop = (first, text) => opt('Stop here', text, first);
+  if (typeof capLeftUsd === 'number') {
+    return { header: 'Open PR', question: `${why}\n${need}\nRe-run pre-pr first?`, options: [
+      opt(`Re-run pre-pr (up to ${usd(capLeftUsd)} CLI)`, `${RERUN_CMD} The CLI review is free inside the hourly allowance.`, true),
+      stop(false, 'No PR opens.'),
+    ] };
+  }
+  if (capWhy === 'no-key') {
+    return { header: 'Open PR', question: `${why}\n${need}\nRe-run pre-pr first?`, options: [
+      opt('Re-run pre-pr (no daily CLI cap set)', `${RERUN_CMD} No daily cap applies. The CLI review is free only while included reviews last, then ${PER_FILE} a file.`, true),
+      stop(false, 'No PR opens.'),
+    ] };
+  }
+  if (capWhy === 'ledger') {
+    return { header: 'Open PR', question: `${why}\n${need} The paid CLI ledger cannot be read.\nRe-run pre-pr anyway?`, options: [
+      stop(true, 'No PR opens. Fix the paid ledger first.'),
+      opt('Re-run pre-pr anyway', `${RERUN_CMD} The CLI step fails, so no CLI review starts.`),
+    ] };
+  }
+  return { header: 'Open PR', question: `${why}\n${need} The review config cannot be read.\nRe-run pre-pr anyway?`, options: [
+    stop(true, 'No PR opens. Fix the review config first.'),
+    opt('Re-run pre-pr anyway', `${RERUN_CMD} It stops at the config read: no gate runs, no CLI review, no cost.`),
   ] };
 }
 
@@ -135,7 +165,10 @@ export function cliSkipSpec(d) {
  */
 export function capOverrideSpec(d) {
   const flags = [d.usd != null ? `${FLAG_USD} ${d.usd}` : '', d.extraRun ? FLAG_EXTRA : ''].filter(Boolean).join(' and ');
-  const capText = typeof d.cap === 'number' ? `the ${usd(d.cap)} daily cap` : 'no daily cap';
+  const capKnown = typeof d.cap === 'number';
+  const capText = capKnown ? `the ${usd(d.cap)} daily cap` : d.capWhy === 'config' ? 'a daily cap that cannot be read (the review config is unreadable)' : 'no daily cap';
+  // Without a cap, cliCapOf keeps the cap null: the USD flag changes nothing. Only the run count flag acts (card coord-shipask-cap-unknown).
+  const usdIdle = !capKnown && d.usd != null;
   // An unknown value (null) is printed as unknown: never as $0.00 or 0 files. A real zero stays zero.
   const known = (v) => typeof v === 'number' && Number.isFinite(v);
   const spend = known(d.total) ? usd(d.total) : 'unknown';
@@ -143,12 +176,12 @@ export function capOverrideSpec(d) {
   const estimate = known(d.estimateUsd) ? usd(d.estimateUsd) : 'unknown';
   const lines = [
     `The CLI review of ${clip(d.branch, 60)} at ${String(d.head).slice(0, 7)} is stopped by a cap. Today's paid CLI spend is ${spend} against ${capText}; ${filesText}, up to ${estimate}.`,
-    `Flags for one run: ${flags} (${[d.usd != null ? 'the USD cap' : '', d.extraRun ? 'the run count' : ''].filter(Boolean).join(' and ')}).`,
+    `Flags for one run: ${flags} (${[d.usd != null ? 'the USD cap' : '', d.extraRun ? 'the run count' : ''].filter(Boolean).join(' and ')}).${usdIdle ? ' The USD flag lifts nothing without a cap.' : ''}`,
     'Lift the cap for this one run?',
   ];
   return { header: 'CLI cap', question: lines.join('\n'), options: [
     opt(CAP_KEEP_LABEL, 'The cap stays. No flag runs.', true),
-    opt(CAP_LIFT_LABEL, 'The command with exactly these flags may run once for this branch and head. A push voids this answer.'),
+    opt(CAP_LIFT_LABEL, `The command with exactly these flags may run once for this branch and head. A push voids this answer.${usdIdle ? ' The USD flag changes nothing here.' : ''}`),
   ] };
 }
 
@@ -280,19 +313,31 @@ const costOfDetail = (detail) => Number(/billed \$([0-9.]+)/.exec(detail ?? '')?
  * checkout file alone. A checkout cap of 6 over a fork/main cap of 3 is 3; with no main ref at all it is 0. Null when the config cannot be read or has no cap.
  */
 export function stricterCapOf(root) {
-  try {
-    const gitIn = (args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }; };
-    return viewOf(loadStricterConfig({ root, git: gitIn, readFile: readFileSync })).cap;
-  } catch { return null; }
+  return capStateOf(root).cap;
 }
 
-/** The CLI daily cap left today in dollars, or null when it cannot be read. */
+/**
+ * Why the cap is or is not known (card coord-shipask-cap-unknown): { kind, cap }.
+ *   'known'   cap is a number (no main ref at all is cap 0).
+ *   'no-key'  the config reads and no valid coderabbit.cli_daily_cap_usd is set: pre-pr runs the CLI with no daily cap.
+ *   'config'  the checkout config is missing or not a JSON object: loadStricterConfig throws and pre-pr stops at its config read.
+ */
+export function capStateOf(root) {
+  try {
+    const gitIn = (args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }); return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }; };
+    const cap = viewOf(loadStricterConfig({ root, git: gitIn, readFile: readFileSync })).cap;
+    return cap === null ? { kind: 'no-key', cap: null } : { kind: 'known', cap };
+  } catch { return { kind: 'config', cap: null }; }
+}
+
+/** { usd, why }: the CLI daily cap left today in dollars (why null), or usd null and why 'config', 'no-key' or 'ledger' (the paid ledger cannot be read). */
 async function capLeft() {
+  const state = capStateOf(topOf());
+  if (state.kind !== 'known') return { usd: null, why: state.kind };
   try {
     const { cliTodayOf } = await import('./cr-paid.mjs');
-    const cap = stricterCapOf(topOf());
-    return cap === null ? null : Math.max(0, cap - cliTodayOf().total);
-  } catch { return null; }
+    return { usd: Math.max(0, state.cap - cliTodayOf().total), why: null };
+  } catch { return { usd: null, why: 'ledger' }; }
 }
 
 /** The text of the summary file under root, only when the stamp's summary row is PASS and the file is the one the stamp hashed (stamp.summary_sha256). Else null. */
@@ -360,10 +405,11 @@ export async function gatherOpenPr({ branch }) {
   const stamp = readStamp();
   const results = Array.isArray(stamp?.results) ? stamp.results : [];
   const cli = results.find((r) => r.step === 'coderabbit');
+  const left = await capLeft();
   return {
     branch: t.name, head: t.head, missing: t.missing === true, stampHead: stamp?.head ?? null, stampAt: stamp?.at ?? null,
     rows: results.length, fails: results.filter((r) => r.status === 'FAIL').length, change: readChange(stamp), cliDetail: cli?.detail ?? null, costUsd: costOfDetail(cli?.detail),
-    capLeftUsd: await capLeft(), now: new Date().toISOString(),
+    capLeftUsd: left.usd, capWhy: left.why, now: new Date().toISOString(),
   };
 }
 
@@ -423,10 +469,10 @@ export function capFactsOf({ readTotal, readNames }) {
 export async function gatherCapOverride({ branch, usd, extraRun }) {
   const t = branchTarget(branch, process.cwd());
   const { cliTodayOf } = await import('./cr-paid.mjs');
-  const cap = stricterCapOf(topOf());
+  const { cap, kind: capWhy } = capStateOf(topOf());
   const base = ['refs/remotes/fork/main', 'refs/heads/main'].find((ref) => gitOk(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], topOf()));
   const facts = capFactsOf({ readTotal: () => cliTodayOf().total, readNames: () => (base && t.head ? gitText(['diff', '--name-only', `${base}...${t.head}`], topOf()) : null) });
-  return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, cap, ...facts };
+  return { branch: t.name, head: t.head, missing: t.missing === true, usd: usd ?? null, extraRun: extraRun === true, cap, capWhy, ...facts };
 }
 
 /** True only when SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE names a store other than the default real one. The test seams (--facts, SHIP_ASK_STATUS_SCRIPT) need both. */
