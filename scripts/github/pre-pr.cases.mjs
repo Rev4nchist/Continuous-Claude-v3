@@ -144,9 +144,9 @@ test('S1: every node script and cwd named in the surface table exists', async ()
   }
 });
 
-test('S2: hooks source runs tsc, the build with a dist check, vitest, the Semgrep pack and the always gate', async () => {
+test('S2: hooks source runs tsc, the build with a dist check, the payload gate, vitest, the Semgrep pack and the always gate', async () => {
   const got = gatesFor(['.claude/hooks/src/pre-pr-gate.ts'], REPO_ROOT);
-  assert.deepEqual(ids(got).sort(), ['context-budget', 'hooks-build', 'hooks-tsc', 'hooks-vitest', 'semgrep-ccv3']);
+  assert.deepEqual(ids(got).sort(), ['context-budget', 'hook-payload', 'hooks-build', 'hooks-tsc', 'hooks-vitest', 'semgrep-ccv3']);
   const build = got.find((g) => g.id === 'hooks-build');
   assert.ok(build.postCheck.argv.every((a) => a.includes('.claude/hooks/dist')));
   assert.deepEqual(build.postCheck.argv.map((a) => a[0]), ['diff', 'ls-files'], 'content changes and new files; never git status');

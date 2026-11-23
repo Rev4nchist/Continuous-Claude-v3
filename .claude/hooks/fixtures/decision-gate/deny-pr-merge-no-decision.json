@@ -1,0 +1,6 @@
+{
+  "case": "deny-pr-merge-no-decision",
+  "event": "PreToolUse",
+  "input": { "session_id": "fixture", "tool_name": "Bash", "tool_input": { "command": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/1/merge" } },
+  "expect": { "exit": [0], "shape": "gate", "decision": "deny" }
+}
