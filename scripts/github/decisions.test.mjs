@@ -346,7 +346,8 @@ test('DK4d: the unreadable-store detail names the file, advises no delete, and s
   const r = d.dropKey({ steps: ['review'], key: KEY });
   assert.equal(r.reason, 'unreadable-store');
   assert.ok(r.detail.includes(file), 'the detail names the file');
-  assert.doesNotMatch(r.detail, /delet|remov|rm\b|unlink/i, 'the detail advises no delete');
+  const advice = r.detail.split(file).join(''); // the path is a temp name: a word in it must not decide the check
+  assert.doesNotMatch(advice, /delet|remov|rm\b|unlink/i, 'the detail advises no delete');
   assert.match(r.detail, /repair/i, 'the detail says to repair the file');
   assert.match(r.detail, /move it aside/i, 'the detail says to move the file aside');
   assert.match(r.detail, /seat or Dave/, 'the detail says who decides');
