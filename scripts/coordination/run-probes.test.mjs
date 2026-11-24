@@ -20,6 +20,7 @@
 //   T19 the cleanup goes on to remove the home while the link is still there
 //   T20 a probe has no LANE_PROJECT (a runner folder has no board: lane.mjs refuses) or gets the board of the caller
 //   T21 the error text of a racer loses its exit code, is not cut to 600 characters, or shows a url password
+//   T23 a probe has no LANE_REGISTRY_PATH (a runner has no registry in its home: "unknown board") or gets the registry of the caller
 //   T22 lane-race-probe.mjs stops printing the first errored racer (the cause of "24 errored" is hidden again)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -250,6 +251,19 @@ test('T20 each probe runs with LANE_PROJECT=continuous-claude, whatever the call
   const runs = probeCalls(spawn).filter((x) => x.env.CONTINUOUS_CLAUDE_DB_URL !== DEAD_LIVE);
   assert.equal(runs.length, PROBES.length);
   for (const c of runs) assert.equal(c.env.LANE_PROJECT, 'continuous-claude');
+});
+
+test('T23 each probe reads the lane registry of this checkout, whatever the caller sets', () => {
+  // Breaks when LANE_REGISTRY_PATH is dropped: a runner has no ~/.claude/project-registry.json, so LANE_PROJECT=continuous-claude
+  // gives "unknown board 'continuous-claude'; registered: (none)" (lane-board.mjs:61-64) and every racer of lane-race errors.
+  // The caller's value would point a probe at another registry.
+  const { spawn, r } = go({ run: { env: { LANE_REGISTRY_PATH: '/caller/registry.json' } } });
+  assert.equal(r.code, 0, r.lines.join('\n'));
+  const runs = probeCalls(spawn).filter((x) => x.env.CONTINUOUS_CLAUDE_DB_URL !== DEAD_LIVE);
+  assert.equal(runs.length, PROBES.length);
+  const registry = path.join(path.resolve(HERE, '..', '..'), '.claude', 'project-registry.json');
+  for (const c of runs) assert.equal(path.resolve(c.env.LANE_REGISTRY_PATH), registry);
+  assert.ok(fs.existsSync(registry), 'the registry file of this checkout exists');
 });
 
 test('T21 racerError gives the exit code and the stderr of a failed racer, cut to 600 characters, with every url masked', async () => {
