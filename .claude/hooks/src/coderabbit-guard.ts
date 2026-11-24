@@ -956,7 +956,7 @@ function isPlainCommand(source: string, joined: string, lexed: Lexed, ps: boolea
 const MAX_NESTING = 4;
 
 /** Classify every command in `text`: a block wins, runs add up, wrapper strings are classified again. */
-export function classifyCommand(source: string, ps = false, depth = 0): SegmentClass {
+export async function classifyCommand(source: string, ps = false, depth = 0): Promise<SegmentClass> {
   // Billing first, on the raw text as written and as the shell reads it (continuations joined). It
   // needs no lexing of comments or wrappers. Nested wrapper strings sit inside the outer text.
   const joined = joinContinuations(source, ps);
@@ -985,7 +985,7 @@ export function classifyCommand(source: string, ps = false, depth = 0): SegmentC
     if (!inv) continue;
     let c: SegmentClass;
     if (inv.nested === undefined) c = classifyInvocation(inv, plainCall && leadsWithCr(seg));
-    else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
+    else if (depth < MAX_NESTING) c = await classifyCommand(inv.nested, ps, depth + 1);
     else if (/\b(?:cr|coderabbit)\b/i.test(inv.nested)) c = { verdict: 'block', reason: 'CodeRabbit guard: wrapper nesting is too deep to check' };
     else c = { verdict: 'ignore' };
     if (c.verdict === 'block') return c;
@@ -1023,7 +1023,7 @@ export function classifyCommand(source: string, ps = false, depth = 0): SegmentC
 }
 
 /** Classify one command line (kept for callers that think in segments). */
-export function classifyShellSegment(segment: string, ps = false): SegmentClass {
+export async function classifyShellSegment(segment: string, ps = false): Promise<SegmentClass> {
   return classifyCommand(segment, ps);
 }
 
@@ -1656,7 +1656,7 @@ export function classifySkill(input: PreToolUseInput): { verdict: SegmentVerdict
   return { verdict: 'ignore' };
 }
 
-export function classifyDelegate(input: PreToolUseInput): { verdict: SegmentVerdict; reason?: string } {
+export async function classifyDelegate(input: PreToolUseInput): Promise<{ verdict: SegmentVerdict; reason?: string }> {
   const skill = classifySkill(input);
   if (skill.verdict === 'block') return skill;
   if (isReadOnlyAutofixDelegate(input)) return { verdict: 'allow' };
@@ -1675,7 +1675,7 @@ export interface DecideResult {
 
 /** Test seam: the two steps that can throw before the answer-key check. */
 export interface DecideSeam {
-  classify?: (source: string, ps?: boolean) => SegmentClass;
+  classify?: (source: string, ps?: boolean) => SegmentClass | Promise<SegmentClass>;
   cwdOf?: (command: string, cwd: string, ps?: boolean) => string;
 }
 
@@ -1713,7 +1713,7 @@ function answerKeyResult(input: PreToolUseInput, command: string, ps: boolean, v
   return reason ? { allow: false, reason, answerKey: true } : null;
 }
 
-function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, seam: DecideSeam): DecideResult {
+async function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, seam: DecideSeam): Promise<DecideResult> {
   const tool = input.tool_name || '';
   const command = input.tool_input?.command || '';
   const ps = tool === 'PowerShell';
@@ -1722,7 +1722,7 @@ function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, seam: Dec
 
   // The override lifts the run cap and the billing and block denies, as on main. It never lifts the answer-key check: a review that may read an answer-key path is denied even with it.
   if (OVERRIDE.test(command)) {
-    const denied = runsCommand ? answerKeyResult(input, command, ps, classify(command, ps), seam, env) : null;
+    const denied = runsCommand ? answerKeyResult(input, command, ps, await classify(command, ps), seam, env) : null;
     if (denied) return denied;
     // A command that names a review gets a row with no cwd and no command text: the check read the folder and the options.
     if (rawReview(command)) logGuardDecision('coderabbit-guard', { ...input, cwd: undefined }, 'override', 'SKIP_CODERABBIT_GUARD=1', { env });
@@ -1737,17 +1737,17 @@ function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, seam: Dec
   }
 
   if (DELEGATE_TOOLS.has(tool)) {
-    const d = classifyDelegate(input);
+    const d = await classifyDelegate(input);
     if (d.verdict === 'block') return { allow: false, reason: d.reason };
     // A Task or Agent payload carries `prompt`, not `command`, and a prompt is never checked for a review call. Only a payload that has a tool_input.command
     // gets the same answer-key check as a Bash call (it counts no run). The command is classified here, not through `d`: a read-only
     // autofix prompt returns allow from classifyDelegate before it reads the command.
-    return (command ? answerKeyResult(input, command, false, classify(command, false), seam, env) : null) ?? { allow: true };
+    return (command ? answerKeyResult(input, command, false, await classify(command, false), seam, env) : null) ?? { allow: true };
   }
 
   if (!BASH_TOOLS.has(tool)) return { allow: true };
 
-  const verdict = classify(command, ps);
+  const verdict = await classify(command, ps);
   if (verdict.verdict === 'block') return { allow: false, reason: verdict.reason };
   const runs = verdict.runs ?? 0;
   if (runs === 0) return { allow: true };
@@ -1784,9 +1784,10 @@ function failClosed(input: PreToolUseInput): DecideResult {
   return { allow: true };
 }
 
-export function decide(input: PreToolUseInput, env: NodeJS.ProcessEnv = process.env, seam: DecideSeam = {}): DecideResult {
+export async function decide(input: PreToolUseInput, env: NodeJS.ProcessEnv = process.env, seam: DecideSeam = {}): Promise<DecideResult> {
   try {
-    return decideChecked(input, env, seam);
+    // await inside the try: a rejection must reach the catch, which fails closed
+    return await decideChecked(input, env, seam);
   } catch {
     return failClosed(input);
   }
@@ -1802,7 +1803,7 @@ export function logDeny(input: PreToolUseInput, result: DecideResult, env: NodeJ
   else logGuardDecision('coderabbit-guard', input, 'deny', result.reason || 'blocked', { command: input.tool_input?.command, env });
 }
 
-function main(): void {
+async function main(): Promise<void> {
   let input: PreToolUseInput;
   try {
     input = JSON.parse(readStdin());
@@ -1811,7 +1812,7 @@ function main(): void {
     return;
   }
 
-  const result = decide(input);
+  const result = await decide(input);
   if (!result.allow) {
     logDeny(input, result);
     outputDeny(result.reason || 'CodeRabbit guard: blocked');
@@ -1821,9 +1822,5 @@ function main(): void {
 }
 
 if (!process.env.VITEST) {
-  try {
-    main();
-  } catch {
-    outputContinue();
-  }
+  main().catch(() => outputContinue());
 }

@@ -1096,7 +1096,7 @@ function isPlainCommand(source, joined, lexed, ps) {
   return !/[(){}`]/.test(lexed.masked);
 }
 var MAX_NESTING = 4;
-function classifyCommand(source, ps = false, depth = 0) {
+async function classifyCommand(source, ps = false, depth = 0) {
   const joined = joinContinuations(source, ps);
   if (rawBilling(joined, ps) || joined !== source && rawBilling(source, ps)) {
     return { verdict: "block", reason: BILLING_REASON };
@@ -1117,7 +1117,7 @@ function classifyCommand(source, ps = false, depth = 0) {
     if (!inv) continue;
     let c;
     if (inv.nested === void 0) c = classifyInvocation(inv, plainCall && leadsWithCr(seg));
-    else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
+    else if (depth < MAX_NESTING) c = await classifyCommand(inv.nested, ps, depth + 1);
     else if (/\b(?:cr|coderabbit)\b/i.test(inv.nested)) c = { verdict: "block", reason: "CodeRabbit guard: wrapper nesting is too deep to check" };
     else c = { verdict: "ignore" };
     if (c.verdict === "block") return c;
@@ -1143,7 +1143,7 @@ function classifyCommand(source, ps = false, depth = 0) {
   if (runs > 0) return { verdict: "allow", countsRun: true, runs, invocations: counted, unaccounted, unplaced };
   return { verdict: allowed ? "allow" : "ignore", reviewHelp: hidden.some((h) => h.covered) };
 }
-function classifyShellSegment(segment, ps = false) {
+async function classifyShellSegment(segment, ps = false) {
   return classifyCommand(segment, ps);
 }
 function git(args, cwd) {
@@ -1583,7 +1583,7 @@ function classifySkill(input) {
   }
   return { verdict: "ignore" };
 }
-function classifyDelegate(input) {
+async function classifyDelegate(input) {
   const skill = classifySkill(input);
   if (skill.verdict === "block") return skill;
   if (isReadOnlyAutofixDelegate(input)) return { verdict: "allow" };
@@ -1615,14 +1615,14 @@ function answerKeyResult(input, command, ps, verdict, seam, env) {
   const reason = answerKeyDeny({ command, ps, startCwd, cwd, home, invocations: verdict.invocations ?? [], unaccounted, unplaced: verdict.unplaced === true });
   return reason ? { allow: false, reason, answerKey: true } : null;
 }
-function decideChecked(input, env, seam) {
+async function decideChecked(input, env, seam) {
   const tool = input.tool_name || "";
   const command = input.tool_input?.command || "";
   const ps = tool === "PowerShell";
   const classify = seam.classify ?? classifyCommand;
   const runsCommand = BASH_TOOLS.has(tool) || DELEGATE_TOOLS.has(tool) && tool !== "Skill" && command !== "";
   if (OVERRIDE.test(command)) {
-    const denied2 = runsCommand ? answerKeyResult(input, command, ps, classify(command, ps), seam, env) : null;
+    const denied2 = runsCommand ? answerKeyResult(input, command, ps, await classify(command, ps), seam, env) : null;
     if (denied2) return denied2;
     if (rawReview(command)) logGuardDecision("coderabbit-guard", { ...input, cwd: void 0 }, "override", "SKIP_CODERABBIT_GUARD=1", { env });
     else logGuardDecision("coderabbit-guard", input, "override", "SKIP_CODERABBIT_GUARD=1", { command, env });
@@ -1634,12 +1634,12 @@ function decideChecked(input, env, seam) {
     return { allow: true };
   }
   if (DELEGATE_TOOLS.has(tool)) {
-    const d = classifyDelegate(input);
+    const d = await classifyDelegate(input);
     if (d.verdict === "block") return { allow: false, reason: d.reason };
-    return (command ? answerKeyResult(input, command, false, classify(command, false), seam, env) : null) ?? { allow: true };
+    return (command ? answerKeyResult(input, command, false, await classify(command, false), seam, env) : null) ?? { allow: true };
   }
   if (!BASH_TOOLS.has(tool)) return { allow: true };
-  const verdict = classify(command, ps);
+  const verdict = await classify(command, ps);
   if (verdict.verdict === "block") return { allow: false, reason: verdict.reason };
   const runs = verdict.runs ?? 0;
   if (runs === 0) return { allow: true };
@@ -1668,9 +1668,9 @@ function failClosed(input) {
   }
   return { allow: true };
 }
-function decide(input, env = process.env, seam = {}) {
+async function decide(input, env = process.env, seam = {}) {
   try {
-    return decideChecked(input, env, seam);
+    return await decideChecked(input, env, seam);
   } catch {
     return failClosed(input);
   }
@@ -1682,7 +1682,7 @@ function logDeny(input, result, env = process.env) {
   if (result.answerKey) logGuardDecision("coderabbit-guard", { ...input, cwd: void 0 }, "deny", result.reason || "blocked", { env });
   else logGuardDecision("coderabbit-guard", input, "deny", result.reason || "blocked", { command: input.tool_input?.command, env });
 }
-function main() {
+async function main() {
   let input;
   try {
     input = JSON.parse(readStdin());
@@ -1690,7 +1690,7 @@ function main() {
     outputContinue();
     return;
   }
-  const result = decide(input);
+  const result = await decide(input);
   if (!result.allow) {
     logDeny(input, result);
     outputDeny(result.reason || "CodeRabbit guard: blocked");
@@ -1699,11 +1699,7 @@ function main() {
   outputContinue();
 }
 if (!process.env.VITEST) {
-  try {
-    main();
-  } catch {
-    outputContinue();
-  }
+  main().catch(() => outputContinue());
 }
 export {
   BILLING_REASON,

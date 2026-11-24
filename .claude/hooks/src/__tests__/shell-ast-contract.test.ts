@@ -5,10 +5,11 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { parseBashRaw, SH_SYNTAX_DIR } from '../shared/shell-ast.js';
+import { pathToFileURL } from 'node:url';
+import { parseBashRaw, SH_SYNTAX_DIR, BinCmdOperator, RedirOperator, ParExpOperator } from '../shared/shell-ast.js';
 
-const ops: any = await import(`file:///${SH_SYNTAX_DIR}/lib/operators.js`);
+// pathToFileURL gives a valid file URL for a C:/ path and a /home path alike (file:/// plus an absolute path breaks on Linux).
+const ops: any = await import(pathToFileURL(`${SH_SYNTAX_DIR}/lib/operators.js`).href);
 const P = 'pu' + 'sh';
 const first = async (t: string): Promise<any> => ((await parseBashRaw(t)) as any).stmts[0];
 const sha = (f: string): string => crypto.createHash('sha256').update(fs.readFileSync(`${SH_SYNTAX_DIR}/${f}`)).digest('hex');
@@ -29,6 +30,14 @@ test('operator codes the walker uses', () => {
   assert.equal(ops.RedirOperator.Hdoc, 71);
   assert.equal(ops.RedirOperator.DashHdoc, 72);
   assert.equal(ops.RedirOperator.WordHdoc, 73);
+  assert.equal(ops.ParExpOperator.AssignUnset, 87);
+  assert.equal(ops.ParExpOperator.AssignUnsetOrNull, 88);
+});
+
+test('the codes the module hard-codes equal the pinned package codes', () => {
+  assert.deepEqual(BinCmdOperator, { AndStmt: ops.BinCmdOperator.AndStmt, OrStmt: ops.BinCmdOperator.OrStmt, Pipe: ops.BinCmdOperator.Pipe, PipeAll: ops.BinCmdOperator.PipeAll });
+  assert.deepEqual(RedirOperator, { Hdoc: ops.RedirOperator.Hdoc, DashHdoc: ops.RedirOperator.DashHdoc, WordHdoc: ops.RedirOperator.WordHdoc });
+  assert.deepEqual(ParExpOperator, { AssignUnset: ops.ParExpOperator.AssignUnset, AssignUnsetOrNull: ops.ParExpOperator.AssignUnsetOrNull });
 });
 
 test('push: File > Stmt > CallExpr > Word > Lit with start and end', async () => {
