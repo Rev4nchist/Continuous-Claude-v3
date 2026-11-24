@@ -337,6 +337,22 @@ test('DK4: dropKey on a store file that exists but cannot be read, parsed or use
   assert.equal(d.offerRead({ step: 'review', key: PR70, head: HEAD })?.open, true, 'the offer of PR 70 stays');
 });
 
+// Card coord-decisions-delete-advice: the reason of an unreadable store must not tell the reader to delete it (PR 704 removed the other such texts).
+//   the detail advises deleting the store, or does not say who decides              -> DK4d
+test('DK4d: the unreadable-store detail names the file, advises no delete, and says the seat or Dave decides', async () => {
+  const file = fresh();
+  const d = await load();
+  writeFileSync(file, '{"version":1,"decisions":');
+  const r = d.dropKey({ steps: ['review'], key: KEY });
+  assert.equal(r.reason, 'unreadable-store');
+  assert.ok(r.detail.includes(file), 'the detail names the file');
+  const advice = r.detail.split(file).join(''); // the path is a temp name: a word in it must not decide the check
+  assert.doesNotMatch(advice, /delet|remov|rm\b|unlink/i, 'the detail advises no delete');
+  assert.match(r.detail, /repair/i, 'the detail says to repair the file');
+  assert.match(r.detail, /move it aside/i, 'the detail says to move the file aside');
+  assert.match(r.detail, /seat or Dave/, 'the detail says who decides');
+});
+
 test('DK4b (control): a store file that is not there is a good empty drop', async () => {
   const file = fresh();
   const d = await load();
