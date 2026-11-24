@@ -286,4 +286,44 @@ test('AL13: the CLI shows a PR with its merge sha, counts skipped lines, and a m
   assert.equal(JSON.parse(json.stdout).rows[0].mergeSha, 'b'.repeat(40));
 });
 
+test('AL14: a log file that cannot be read is listed as unreadable, not reported as a missing log', async () => {
+  const { log } = fresh();
+  mkdirSync(log); // a folder where the log goes: it exists, and it cannot be read as a file
+  const d = await load();
+  const got = d.decisionLogRead({ file: log });
+  assert.equal(got.exists, true, 'something is there');
+  assert.deepEqual(got.unreadable, [log]);
+  assert.deepEqual(got.rows, []);
+  const none = d.decisionLogRead({ file: path.join(path.dirname(log), 'nothing.jsonl') });
+  assert.deepEqual([none.exists, none.unreadable], [false, []], 'a missing file is not unreadable');
+});
+
+test('AL15: a tap row with no text step or label is skipped and counted, like any bad line', async () => {
+  const { log } = fresh();
+  const d = await load();
+  const good = { v: 1, kind: 'tap', id: 'g', at: '2026-11-24T21:00:00.000Z', step: 'land', key: KEY, repo: REPO, pr: 714, branch: null, head: HEAD, label: 'Land now (Recommended)' };
+  writeFileSync(log, [{ v: 1, kind: 'tap', pr: 714, repo: REPO }, { ...good, label: 7 }, { ...good, step: null }, good].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const got = d.decisionLogRead({ file: log });
+  assert.equal(got.rows.length, 1);
+  assert.equal(got.skipped, 3);
+});
+
+test('AL16: the CLI survives a bad tap row and an unreadable log, and says which', async () => {
+  const { dir, log } = fresh();
+  const good = { v: 1, kind: 'tap', id: 'g', at: '2026-11-24T21:00:00.000Z', step: 'land', key: KEY, repo: REPO, pr: 714, branch: null, head: HEAD, label: 'Land now (Recommended)', entry: 'cli', session: null, lane: null };
+  writeFileSync(log, `${JSON.stringify({ v: 1, kind: 'tap', pr: 714, repo: REPO })}\n${JSON.stringify(good)}\n`);
+  const run = (...args) => spawnSync(process.execPath, [CLI, 'show', ...args], { encoding: 'utf8', env: { ...process.env, CCV3_DECISIONS_FILE: path.join(dir, 'decisions.json') } });
+  const bad = run('--pr', '714', '--file', log);
+  assert.equal(bad.status, 0, bad.stderr);
+  assert.match(bad.stdout, /Land now \(Recommended\)/);
+  assert.match(bad.stdout, /skipped 1/i);
+  const folder = path.join(dir, 'a-folder.jsonl');
+  mkdirSync(folder);
+  const unreadable = run('--pr', '714', '--file', folder);
+  assert.equal(unreadable.status, 0);
+  assert.match(unreadable.stdout, /unreadable/i);
+  assert.doesNotMatch(unreadable.stdout, /no decision log/i);
+  assert.equal(JSON.parse(run('--pr', '714', '--file', folder, '--json').stdout).unreadable.length, 1);
+});
+
 function appendTorn(file) { writeFileSync(file, `${readFileSync(file, 'utf8')}{"v":1,"kind":"tap","id":"cut`); }

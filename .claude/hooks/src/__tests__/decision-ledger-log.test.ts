@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decisionRead, offerWrite } from '../shared/decisions-store.js';
-import { auditFacts, handle } from '../decision-ledger.js';
+import { auditFacts, handle, laneEnv, pickSessionId } from '../decision-ledger.js';
 
 const HEAD = 'a'.repeat(40);
 const KEY = 'Rev4nchist/Continuous-Claude-v3#714';
@@ -76,6 +76,31 @@ describe('decision-ledger decision log', () => {
     expect(audit).not.toHaveBeenCalled();
     expect(logLines()).toHaveLength(0);
     expect(decisionRead(triple)).toBeNull();
+  });
+
+  it('H5 the audit gets the session id of the hook payload, not only the environment', () => {
+    expect(offerWrite({ ...triple, spec }).ok).toBe(true);
+    const seen: string[] = [];
+    const raw = JSON.parse(payload('Land now (Recommended)')) as Record<string, unknown>;
+    raw.session_id = '0b47ee28-cb51-4654-995b-f0d325980b61';
+    handle(JSON.stringify(raw), (id: string) => { seen.push(id); return { session: 's', lane: [] }; });
+    expect(seen).toEqual(['0b47ee28-cb51-4654-995b-f0d325980b61']);
+  });
+
+  it('H6 pickSessionId prefers the payload, falls back to the environment, and refuses text that is not an id', () => {
+    const A = '0b47ee28-cb51-4654-995b-f0d325980b61';
+    const B = '9538c0b9-2366-4abc-a81a-a68ef75f4dc4';
+    expect(pickSessionId(A, { CLAUDE_CODE_SESSION_ID: B })).toBe(A);
+    expect(pickSessionId(undefined, { CLAUDE_CODE_SESSION_ID: B })).toBe(B);
+    expect(pickSessionId('s1', { CLAUDE_CODE_SESSION_ID: B })).toBe(B);
+    expect(pickSessionId('../x', {})).toBe('');
+    expect(pickSessionId(undefined, {})).toBe('');
+  });
+
+  it('H7 the lane CLI runs with the payload session id in its environment, whatever the hook environment holds', () => {
+    const A = '0b47ee28-cb51-4654-995b-f0d325980b61';
+    expect(laneEnv(A, {}).CLAUDE_CODE_SESSION_ID).toBe(A);
+    expect(laneEnv(A, { CLAUDE_CODE_SESSION_ID: '9538c0b9-2366-4abc-a81a-a68ef75f4dc4', PATH: 'p' })).toMatchObject({ CLAUDE_CODE_SESSION_ID: A, PATH: 'p' });
   });
 
   it('H4 auditFacts spawns nothing under vitest or with the off switch, and gives null parts', () => {
