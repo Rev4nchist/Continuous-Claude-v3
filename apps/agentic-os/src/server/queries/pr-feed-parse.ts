@@ -4,7 +4,7 @@
  *
  * Inputs (both written on this machine, both local only):
  *   open-prs.json  scripts/github/open-prs.mjs, every 15 minutes: {schema:1, exportedAt, repo, rows:[{pr, headRef, head,
- *                  draft, labels[], band, ready, ci[], lastTap, status}]}
+ *                  draft, labels[], band, ready, ci[], lastTap, status}], landed:{source, rows:[{pr, mergedAt, sha}]}}
  *   pr-spend.json  scripts/github/pr-spend.mjs, nightly: {schema:1, exportedAt, rows:[{repo, pr, coderabbit, engine, landed}]}
  *
  * Privacy (contract note Q4): the view is built from an allowlist. It never holds the head ref, the head sha, a label,
@@ -13,7 +13,8 @@
  */
 
 export const PR_ROW_CAP = 20;
-export const STALE_MINUTES = 30;
+/** One limit for the open-PRs feed (C17): the schedule health check allows 1 hour for CCv3-Open-PRs (scripts/scheduled/tasks.json). */
+export const STALE_MINUTES = 60;
 export const LANDED_SHOWN = 3;
 const TAP_LABEL_MAX = 40;
 const CI_MAX = 8;
@@ -54,16 +55,21 @@ type FeedRow = {
   status: string;
 };
 
+/** Where a landed list came from. github: one closed-PR call. ledger: the local land ledger. nightly: pr-spend.json. none: nothing. */
+export type LandedSource = 'github' | 'ledger' | 'nightly' | 'none';
+export type LandedRow = { pr: number; sha7: string | null; mergedAt: string | null };
+
 export type OpenPrFeed = {
   status: 'ok' | 'absent' | 'other-repo';
   exportedAt: string | null;
   rows: FeedRow[];
   skipped: number;
   capped: boolean;
+  landed: { source: 'github' | 'ledger' | 'none'; rows: LandedRow[] };
 };
 
-type SpendRow = { usd: number | null; engineRuns: number | null; landSha: string | null };
-export type PrSpendFeed = { status: 'ok' | 'absent'; byPr: Map<number, SpendRow>; landed: { pr: number; sha7: string }[] };
+type SpendRow = { usd: number | null; engineRuns: number | null; landSha: string | null; mergedAt: string | null };
+export type PrSpendFeed = { status: 'ok' | 'absent'; exportedAt: string | null; byPr: Map<number, SpendRow>; landed: LandedRow[] };
 
 export type PrRowView = {
   pr: number;
@@ -87,7 +93,10 @@ export type PrFeedView = {
   capped: boolean;
   skipped: number;
   rows: PrRowView[];
-  landed: { pr: number; sha7: string }[];
+  landed: LandedRow[];
+  landedSource: LandedSource;
+  /** Minutes since the file that holds the landed list was written (null when there is no list or no usable time). */
+  landedAgeMinutes: number | null;
 };
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -97,7 +106,8 @@ const isIso = (v: unknown): v is string => typeof v === 'string' && v.length <= 
 const oneOf = <T extends string>(list: readonly T[], v: unknown): T | null => list.find((x) => x === v) ?? null;
 const isCcv3 = (repo: unknown): boolean => typeof repo === 'string' && CCV3_NAMES.has(repo.trim().toLowerCase());
 
-const ABSENT: OpenPrFeed = { status: 'absent', exportedAt: null, rows: [], skipped: 0, capped: false };
+const NO_LANDED: OpenPrFeed['landed'] = { source: 'none', rows: [] };
+const ABSENT: OpenPrFeed = { status: 'absent', exportedAt: null, rows: [], skipped: 0, capped: false, landed: NO_LANDED };
 
 /** A CI code from the fixed list, else "other". Sorted, unique, at most CI_MAX. */
 function cleanCi(raw: unknown): string[] {
@@ -146,6 +156,31 @@ function parseRow(raw: unknown, clean: (text: string) => string | null): FeedRow
   };
 }
 
+const sha7Of = (v: unknown): string | null => (typeof v === 'string' && SHA.test(v) ? v.slice(0, 7).toLowerCase() : null);
+
+/** Newest merge time first. A row with no time goes last, highest PR first. */
+const byMergeTime = (a: LandedRow, b: LandedRow): number => {
+  if (a.mergedAt !== null && b.mergedAt !== null && a.mergedAt !== b.mergedAt) return a.mergedAt < b.mergedAt ? 1 : -1;
+  if ((a.mergedAt === null) !== (b.mergedAt === null)) return a.mergedAt === null ? 1 : -1;
+  return b.pr - a.pr;
+};
+
+/**
+ * The landed list of open-prs.json. Row by row: a PR number and a merge time are required, a bad sha becomes null, free text is never
+ * read. A PR that appears twice keeps its newest time. At most LANDED_SHOWN rows, newest merge first.
+ */
+function parseLanded(raw: unknown): OpenPrFeed['landed'] {
+  if (!isObj(raw) || (raw.source !== 'github' && raw.source !== 'ledger') || !Array.isArray(raw.rows)) return NO_LANDED;
+  const byPr = new Map<number, LandedRow>();
+  for (const row of raw.rows) {
+    if (!isObj(row) || !isPr(row.pr) || !isIso(row.mergedAt)) continue;
+    const mergedAt = new Date(row.mergedAt).toISOString();
+    const have = byPr.get(row.pr);
+    if (have === undefined || (have.mergedAt ?? '') < mergedAt) byPr.set(row.pr, { pr: row.pr, sha7: sha7Of(row.sha), mergedAt });
+  }
+  return { source: raw.source, rows: [...byPr.values()].sort(byMergeTime).slice(0, LANDED_SHOWN) };
+}
+
 /** open-prs.json, parsed. Not an object, a schema other than 1 or no rows array: absent. Another repo: no rows. */
 export function parseOpenPrs(raw: unknown, clean: (text: string) => string | null): OpenPrFeed {
   if (!isObj(raw) || raw.schema !== 1 || !Array.isArray(raw.rows)) return ABSENT;
@@ -159,6 +194,7 @@ export function parseOpenPrs(raw: unknown, clean: (text: string) => string | nul
     rows: rows.slice(0, PR_ROW_CAP),
     skipped: parsed.length - rows.length,
     capped: rows.length > PR_ROW_CAP || raw.capped === true,
+    landed: parseLanded(raw.landed),
   };
 }
 
@@ -166,31 +202,38 @@ function spendOf(row: Record<string, unknown>): SpendRow {
   const cr = isObj(row.coderabbit) ? num(row.coderabbit.usd) : null;
   const eng = isObj(row.engine) ? num(row.engine.runs) : null;
   const sha = isObj(row.landed) && typeof row.landed.mergeSha === 'string' && SHA.test(row.landed.mergeSha) ? row.landed.mergeSha : null;
-  return { usd: cr, engineRuns: eng, landSha: sha === null ? null : sha.slice(0, 7).toLowerCase() };
+  const at = isObj(row.landed) && isIso(row.landed.mergedAt) ? new Date(row.landed.mergedAt).toISOString() : null;
+  return { usd: cr, engineRuns: eng, landSha: sha === null ? null : sha.slice(0, 7).toLowerCase(), mergedAt: at };
 }
 
-/** pr-spend.json, parsed. Rows of another repo are skipped. The last LANDED_SHOWN landed PRs, highest PR first. */
+/** pr-spend.json, parsed. Rows of another repo are skipped. Landed PRs, newest merge first (a row with no time last, highest PR first). */
 export function parsePrSpend(raw: unknown): PrSpendFeed {
   const byPr = new Map<number, SpendRow>();
-  if (!isObj(raw) || raw.schema !== 1 || !Array.isArray(raw.rows)) return { status: 'absent', byPr, landed: [] };
+  if (!isObj(raw) || raw.schema !== 1 || !Array.isArray(raw.rows)) return { status: 'absent', exportedAt: null, byPr, landed: [] };
   for (const row of raw.rows) {
     if (isObj(row) && isPr(row.pr) && isCcv3(row.repo) && !byPr.has(row.pr)) byPr.set(row.pr, spendOf(row));
   }
   const landed = [...byPr]
     .filter(([, s]) => s.landSha !== null)
-    .sort(([a], [b]) => b - a)
-    .slice(0, LANDED_SHOWN)
-    .map(([pr, s]) => ({ pr, sha7: s.landSha as string }));
-  return { status: 'ok', byPr, landed };
+    .map(([pr, s]): LandedRow => ({ pr, sha7: s.landSha, mergedAt: s.mergedAt }))
+    .sort(byMergeTime);
+  return { status: 'ok', exportedAt: isIso(raw.exportedAt) ? raw.exportedAt : null, byPr, landed };
 }
 
-/** Lane link: lane.branch equals the head ref; else the last segment of the head ref equals a lane id. */
+/**
+ * Lane link: lane.branch equals the head ref; else the last segment of the head ref equals a lane id; else the head ref with each
+ * slash turned into a dash equals a lane id (a ref coord/x finds lane coord-x).
+ */
 export function matchLane(headRef: string | null, lanes: readonly LaneRef[]): PrLane {
   if (headRef === null || headRef === '') return { kind: 'none' };
   let hits = lanes.filter((l) => l.branch !== null && l.branch === headRef);
   if (hits.length === 0) {
     const leaf = headRef.split('/').pop() ?? '';
     hits = lanes.filter((l) => l.id === leaf);
+  }
+  if (hits.length === 0 && headRef.includes('/')) {
+    const dashed = headRef.replaceAll('/', '-');
+    hits = lanes.filter((l) => l.id === dashed);
   }
   const ids = [...new Set(hits.map((l) => l.id))].filter((id) => LANE_ID.test(id));
   if (ids.length === 0) return { kind: 'none' };
@@ -200,7 +243,7 @@ export function matchLane(headRef: string | null, lanes: readonly LaneRef[]): Pr
 /** The ids and branches to ask the lane table for. Two per row at most. */
 export function laneLookupKeys(feed: OpenPrFeed): { refs: string[]; leaves: string[] } {
   const refs = feed.rows.map((r) => r.headRef).filter((r): r is string => r !== null && r !== '');
-  const leaves = refs.map((r) => r.split('/').pop() ?? '').filter((leaf) => LANE_ID.test(leaf));
+  const leaves = refs.flatMap((r) => [r.split('/').pop() ?? '', r.replaceAll('/', '-')]).filter((leaf) => LANE_ID.test(leaf));
   return { refs: [...new Set(refs)], leaves: [...new Set(leaves)] };
 }
 
@@ -216,6 +259,19 @@ function age(exportedAt: string | null, nowMs: number): { ageMinutes: number | n
   if (minutes < -5) return { ageMinutes: null, stale: true }; // a future time is not trusted
   const ageMinutes = Math.max(0, minutes);
   return { ageMinutes, stale: ageMinutes > STALE_MINUTES };
+}
+
+/**
+ * The Last landed list. The open-prs.json list (15 minutes, from GitHub or the local ledger) wins; the nightly pr-spend.json is the
+ * fallback, with the age of its own file. Never sorted by PR number.
+ */
+function landedView(open: OpenPrFeed, spend: PrSpendFeed, nowMs: number): Pick<PrFeedView, 'landed' | 'landedSource' | 'landedAgeMinutes'> {
+  if (open.landed.rows.length > 0) {
+    return { landed: open.landed.rows, landedSource: open.landed.source, landedAgeMinutes: age(open.exportedAt, nowMs).ageMinutes };
+  }
+  const rows = spend.landed.slice(0, LANDED_SHOWN);
+  if (rows.length === 0) return { landed: [], landedSource: 'none', landedAgeMinutes: null };
+  return { landed: rows, landedSource: 'nightly', landedAgeMinutes: age(spend.exportedAt, nowMs).ageMinutes };
 }
 
 /** The view for the browser. It adds no new text: every string comes from the parse above. */
@@ -235,6 +291,7 @@ export function buildPrFeedView(open: OpenPrFeed, spend: PrSpendFeed, lanes: rea
       landSha: spend.byPr.get(r.pr)?.landSha ?? null,
     }),
   );
+  const landed = landedView(open, spend, nowMs);
   return {
     status: open.status,
     exportedAt: open.exportedAt,
@@ -242,6 +299,6 @@ export function buildPrFeedView(open: OpenPrFeed, spend: PrSpendFeed, lanes: rea
     capped: open.capped,
     skipped: open.skipped,
     rows,
-    landed: spend.landed,
+    ...landed,
   };
 }

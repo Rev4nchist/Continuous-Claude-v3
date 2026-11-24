@@ -1,10 +1,16 @@
+import { useEffect, useState } from 'react';
+
 import type { FlowBarView, FlowCardView, FlowFileView, FlowRowView, FlowSeriesView, FlowTone, FlowView as FlowData } from '@/server/queries/lane-dash-parse';
-import { formatCtClock } from '@/server/queries/spend-fold';
 
 import { cn } from '@/lib/utils';
 
+import { flowAge } from './flow-age';
+
+/** How often the ages on this tab count up. The ages show whole minutes, so 30 seconds is fine. */
+const CLOCK_TICK_MS = 30_000;
+
 /**
- * The Flow tab. Pure props: it fetches nothing and holds no state. The data is `snapshot.flow`, filled only for
+ * The Flow tab. Pure props: it fetches nothing. Its only state is the clock for the ages. The data is `snapshot.flow`, filled only for
  * `view=flow` (src/server/queries/mission-control.ts). Read only: it shows the rows that the lane-dashboard lane
  * exports to flow.json and factory.json, as given. The meaning of a row is the exporter's; this tab computes nothing.
  *
@@ -115,15 +121,25 @@ function Card({ card }: { card: FlowCardView }) {
   );
 }
 
-function FileSection({ file }: { file: FlowFileView }) {
-  const exportedMs = file.exportedAt === null ? null : Date.parse(file.exportedAt);
+function FileSection({ file, nowMs }: { file: FlowFileView; nowMs: number }) {
+  const age = file.exportedAt === null ? null : flowAge(file.name, file.exportedAt, nowMs);
   return (
     <section data-testid="flow-file" data-file={file.name} data-status={file.status} className="min-w-0 space-y-2">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h3 className="font-mono text-xs text-foreground">{file.name}.json</h3>
-        {exportedMs !== null && (
-          <span data-testid="flow-exported" className="text-xs text-muted-foreground">
-            {file.name} exported {formatCtClock(exportedMs)}
+        {age !== null && (
+          <span
+            data-testid="flow-exported"
+            data-stale={age.stale ? 'true' : 'false'}
+            suppressHydrationWarning
+            className={age.stale ? 'text-xs text-warn' : 'text-xs text-muted-foreground'}
+          >
+            {age.text}
+          </span>
+        )}
+        {age?.note != null && (
+          <span data-testid="flow-file-note" className="basis-full text-xs text-muted-foreground">
+            {age.note}
           </span>
         )}
       </header>
@@ -149,7 +165,16 @@ function FileSection({ file }: { file: FlowFileView }) {
   );
 }
 
-export function FlowView({ flow }: { flow: FlowData }) {
+export function FlowView({ flow, nowMs }: { flow: FlowData; nowMs?: number }) {
+  // The clock is read once at mount and then on a timer, never during render (react-hooks/purity).
+  // A caller that passes `nowMs` owns the clock and the timer stays off.
+  const [tickMs, setTickMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (nowMs !== undefined) return;
+    const timer = setInterval(() => setTickMs(Date.now()), CLOCK_TICK_MS);
+    return () => clearInterval(timer);
+  }, [nowMs]);
+  const now = nowMs ?? tickMs;
   return (
     <div data-testid="flow-view" className="min-w-0 space-y-3.5">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -158,7 +183,7 @@ export function FlowView({ flow }: { flow: FlowData }) {
         </h2>
       </header>
       {flow.files.map((file) => (
-        <FileSection key={file.name} file={file} />
+        <FileSection key={file.name} file={file} nowMs={now} />
       ))}
     </div>
   );
