@@ -17,7 +17,9 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { checkNoDocker, checkRefusal, countSkips, DEAD_LIVE, redact, refusalEnv, run } from './run-probes.mjs';
 
-const SCRATCH_URL = 'postgresql://claude:s3cretPw@localhost:5432/lanes_pr1_abc123';
+/** The n-th scratch url the fake `scratch-db.mjs create` hands out: one name for each create, so a shared database shows. */
+const scratchUrl = (n) => `postgresql://claude:s3cretPw@localhost:5432/lanes_pr1_abc${String(n).padStart(3, '0')}`;
+const SCRATCH_URL = scratchUrl(1);
 const REFUSAL = { status: 2, stdout: '', stderr: "x-probe: refusing to run: database 'continuous_claude' is not a scratch database.\n" };
 const PASSED = { status: 0, stdout: 'PASS everything\n', stderr: '' };
 const PROBES = [{ name: 'a', file: 'a-probe.mjs' }, { name: 'b', file: 'b-probe.mjs' }];
@@ -29,18 +31,28 @@ const noEnoent = { error: Object.assign(new Error('spawn docker ENOENT'), { code
  */
 function fakeSpawn({ refusal = {}, runs = {}, dockerStarts = null, createFails = false, dropFails = false } = {}) {
   const calls = [];
+  const created = [];
+  const dropped = [];
   const fn = (cmd, args = [], opts = {}) => {
     calls.push({ cmd, args, env: opts.env });
     if (cmd === 'docker' || cmd === 'psql') return dockerStarts && dockerStarts.includes(cmd) ? { status: 0, stdout: 'v1' } : noEnoent;
     const script = path.basename(String(args[0] ?? ''));
     if (script === 'scratch-db.mjs') {
-      if (args[1] === 'create') return createFails ? { status: 1, stdout: '', stderr: 'ECONNREFUSED 127.0.0.1:5432' } : { status: 0, stdout: `${JSON.stringify({ url: SCRATCH_URL, name: 'lanes_pr1_abc123' })}\n`, stderr: '' };
+      if (args[1] === 'create') {
+        if (createFails) return { status: 1, stdout: '', stderr: 'ECONNREFUSED 127.0.0.1:5432' };
+        const url = scratchUrl(created.length + 1);
+        created.push(url);
+        return { status: 0, stdout: `${JSON.stringify({ url, name: new URL(url).pathname.slice(1) })}\n`, stderr: '' };
+      }
+      dropped.push(args[2]);
       return dropFails ? { status: 1, stdout: '', stderr: 'database is being used' } : { status: 0, stdout: '', stderr: '' };
     }
     const live = opts.env?.CONTINUOUS_CLAUDE_DB_URL === DEAD_LIVE;
     return live ? (refusal[script] ?? REFUSAL) : (runs[script] ?? PASSED);
   };
   fn.calls = calls;
+  fn.created = created;
+  fn.dropped = dropped;
   return fn;
 }
 const probeCalls = (spawn) => spawn.calls.filter((c) => /-probe\.mjs$/.test(String(c.args[0] ?? '')));
@@ -119,25 +131,29 @@ test('T7 refusal-only checks every probe and fails when one does not refuse', ()
   assert.match(bad.r.lines.join('\n'), /FAIL refusal b: did not refuse/);
 });
 
-test('T8 a full run gives each probe its own scratch database and drops each one', () => {
-  // Breaks when two probes share a database, or a database is not dropped.
+test('T8 a full run gives each probe its own scratch database, in order, and drops each one', () => {
+  // Breaks when two probes share a database (the first url is reused), a probe gets a url that was not made for it,
+  // an env variable of the chain keeps another url, or a database is not dropped.
   const { spawn, r } = go();
   assert.equal(r.code, 0, r.lines.join('\n'));
-  assert.equal(scratchCalls(spawn, 'create').length, PROBES.length);
-  assert.equal(scratchCalls(spawn, 'drop').length, PROBES.length);
-  assert.equal(r.lines.filter((l) => /dropped lanes_pr1_abc123/.test(l)).length, PROBES.length);
-  for (const c of probeCalls(spawn).filter((x) => x.env.CONTINUOUS_CLAUDE_DB_URL !== DEAD_LIVE)) {
-    assert.equal(c.env.CONTINUOUS_CLAUDE_DB_URL, SCRATCH_URL);
-    assert.equal(c.env.DATABASE_URL, SCRATCH_URL);
-    assert.equal(c.env.OPC_POSTGRES_URL, SCRATCH_URL);
-  }
+  assert.equal(spawn.created.length, PROBES.length);
+  assert.equal(new Set(spawn.created).size, PROBES.length, 'one distinct database for each probe');
+  const runs = probeCalls(spawn).filter((x) => x.env.CONTINUOUS_CLAUDE_DB_URL !== DEAD_LIVE);
+  assert.equal(runs.length, PROBES.length);
+  runs.forEach((c, i) => {
+    assert.equal(c.env.CONTINUOUS_CLAUDE_DB_URL, spawn.created[i], `probe ${i} runs on the database made for it`);
+    assert.equal(c.env.DATABASE_URL, spawn.created[i]);
+    assert.equal(c.env.OPC_POSTGRES_URL, spawn.created[i]);
+  });
+  assert.deepEqual([...spawn.dropped].sort(), [...spawn.created].sort(), 'every database made is dropped, none else');
+  assert.equal(r.lines.filter((l) => /dropped lanes_pr1_abc\d+/.test(l)).length, PROBES.length);
 });
 
 test('T9 a probe that prints a SKIP line fails the run although it exits 0', () => {
   // Breaks when the skip count is not part of the verdict (dm-delivery exits 0 with a SKIP when a migration is missing).
   const { r } = go({ runs: { 'a-probe.mjs': { status: 0, stdout: 'PASS one\nSKIP  check 6 - no table\n', stderr: '' } } });
   assert.equal(r.code, 1);
-  assert.match(r.lines.join('\n'), /FAIL a on lanes_pr1_abc123: exit 0, 1 skip/);
+  assert.match(r.lines.join('\n'), /FAIL a on lanes_pr1_abc001: exit 0, 1 skip/);
 });
 
 test('T10 a failing probe still drops its database, and the run goes on to the next probe', () => {
