@@ -13,17 +13,25 @@ import { decisionLogJoin, decisionLogPath, decisionLogRead, landLedgerPath } fro
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 
+/**
+ * The operand of an option: { present: false } when the option is not there, { present: true, value } when it has an operand, and { present: true, value: null } when it is
+ * there with no operand (the end of the arguments, or another option follows). A value that starts with `--` is another option, never an operand.
+ */
 function flag(argv, name) {
   const i = argv.indexOf(name);
-  return i >= 0 ? argv[i + 1] : undefined;
+  if (i < 0) return { present: false, value: undefined };
+  const v = argv[i + 1];
+  return { present: true, value: typeof v === 'string' && v !== '' && !v.startsWith('--') ? v : null };
 }
 
-/** { pr, repo, file, ledger, json } from the arguments, or null when the usage is wrong. */
+/** { pr, repo, file, ledger, json } from the arguments, or null when the usage is wrong. An option that is there with no operand is a usage error: it never falls back to a default. */
 function parse(argv) {
   if (argv[0] !== 'show') return null;
-  const pr = flag(argv, '--pr');
+  const opts = Object.fromEntries(['--pr', '--repo', '--file', '--ledger'].map((n) => [n, flag(argv, n)]));
+  if (Object.values(opts).some((o) => o.present && o.value === null)) return null;
+  const pr = opts['--pr'].value;
   if (!/^\d+$/.test(pr ?? '')) return null;
-  return { pr: Number(pr), repo: flag(argv, '--repo') ?? REPO, file: flag(argv, '--file') ?? decisionLogPath(), ledger: flag(argv, '--ledger') ?? landLedgerPath(), json: argv.includes('--json') };
+  return { pr: Number(pr), repo: opts['--repo'].value ?? REPO, file: opts['--file'].value ?? decisionLogPath(), ledger: opts['--ledger'].value ?? landLedgerPath(), json: argv.includes('--json') };
 }
 
 const lineOf = (r) => [
