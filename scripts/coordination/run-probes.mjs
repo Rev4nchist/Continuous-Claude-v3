@@ -181,7 +181,8 @@ export function runProbe(probe, { spawn, env, dir, now = Date.now, fsx = fs, new
     standIn = makeStandInHome({ fsx, tmp });
     const penv = {
       ...env, CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url,
-      CCV3_USER_HOME: standIn.home, CLAUDE_CODE_SESSION_ID: newId(), ...(probe.env ?? {}),
+      // LANE_PROJECT: lane-race runs lane.mjs with cwd = this checkout, which has no registry entry on a runner (lane.mjs refuses).
+      CCV3_USER_HOME: standIn.home, CLAUDE_CODE_SESSION_ID: newId(), LANE_PROJECT: 'continuous-claude', ...(probe.env ?? {}),
     };
     const started = now();
     const r = spawn(process.execPath, [path.join(dir, probe.file)], spawnOpts(REPO, penv, 5 * MIN));
