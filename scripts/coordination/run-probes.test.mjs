@@ -19,6 +19,8 @@
 //   T18 the cleanup removes a path that is not a link (a real folder named continuous-claude)
 //   T19 the cleanup goes on to remove the home while the link is still there
 //   T20 a probe has no LANE_PROJECT (a runner folder has no board: lane.mjs refuses) or gets the board of the caller
+//   T21 the error text of a racer loses its exit code, is not cut to 600 characters, or shows a url password
+//   T22 lane-race-probe.mjs stops printing the first errored racer (the cause of "24 errored" is hidden again)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -248,6 +250,27 @@ test('T20 each probe runs with LANE_PROJECT=continuous-claude, whatever the call
   const runs = probeCalls(spawn).filter((x) => x.env.CONTINUOUS_CLAUDE_DB_URL !== DEAD_LIVE);
   assert.equal(runs.length, PROBES.length);
   for (const c of runs) assert.equal(c.env.LANE_PROJECT, 'continuous-claude');
+});
+
+test('T21 racerError gives the exit code and the stderr of a failed racer, cut to 600 characters, with every url masked', async () => {
+  // Breaks when the exit code or the text is dropped, the text is not cut, whitespace is kept, or a url keeps its password.
+  const { racerError } = await import('./racer-error.mjs'); // dynamic: a missing module fails this test only
+  const say = racerError({ code: 1, err: 'no lane board for /home/runner/work\n  set LANE_PROJECT=continuous-claude' });
+  assert.match(say, /^code 1: no lane board for \/home\/runner\/work set LANE_PROJECT=continuous-claude$/);
+  const cut = racerError({ code: 2, err: 'a'.repeat(2000) });
+  assert.equal(cut.length, 'code 2: '.length + 600);
+  const leak = racerError({ code: 1, err: 'connect postgresql://claude:s3cretPw@db.example:5432/lanes_pr1_x failed' });
+  assert.equal(leak.includes('s3cretPw'), false, leak);
+  assert.equal(racerError({ code: 7, err: '' }), 'code 7: (no stderr)');
+  assert.equal(racerError({ code: 7 }), 'code 7: (no stderr)');
+});
+
+test('T22 lane-race-probe.mjs prints the first errored racer through racerError', () => {
+  // Breaks when the import or the call is removed: a probe that hides the error text of a racer is a defect
+  // (the first Linux CI run showed "0 denied, 24 errored" and nothing else).
+  const src = fs.readFileSync(path.join(HERE, 'lane-race-probe.mjs'), 'utf8');
+  assert.match(src, /import \{ racerError \} from '\.\/racer-error\.mjs';/);
+  assert.match(src, /every loser is denied cleanly[^\n]*\n[^\n]*racerError\(broken\[0\]\)/);
 });
 
 test('T15 the stand-in home links continuous-claude to the checkout that holds run-probes.mjs', () => {
