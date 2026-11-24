@@ -62,7 +62,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
-import { assertScratchUrl, dbNameOf, maskUrl } from './scratch-db.mjs';
+import { assertLocalHost, assertScratchUrl, safeDbName, maskUrl } from './scratch-db.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..');
@@ -79,9 +79,17 @@ const DB_URL = arg('db-url', null);
 const TARGET_URL = DB_URL || process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || '';
 let DB_NAME;
 try { DB_NAME = assertScratchUrl(TARGET_URL); } catch {
-  process.stderr.write(`session-lifecycle-probe: refusing to run: database '${dbNameOf(TARGET_URL) || '(no name)'}' is not a scratch database. `
+  process.stderr.write(`session-lifecycle-probe: refusing to run: database '${safeDbName(TARGET_URL) || '(no name)'}' is not a scratch database. `
     + "Pass --db-url or set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
   process.exit(2);
+}
+// The docker exec path (no --db-url) reaches only the local container; the pg-module path reaches the URL host itself.
+if (!DB_URL) {
+  try { assertLocalHost(TARGET_URL); } catch {
+    process.stderr.write('session-lifecycle-probe: refusing to run: the docker path reaches only the local container, and the URL names another host. '
+      + 'Pass --db-url, or use a scratch database on this machine.\n');
+    process.exit(2);
+  }
 }
 const HOOK = resolve(arg('hook', join(REPO, '.claude', 'hooks', 'dist', 'coordination-release.mjs')));
 const PROBE_ID = `probe-lifecycle-${process.pid}-1`;

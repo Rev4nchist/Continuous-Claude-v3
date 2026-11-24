@@ -13,11 +13,11 @@
  */
 import { readFileSync } from 'node:fs';
 import { requireDep } from '../lib/resolve-deps.mjs';
-import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+import { assertScratchUrl, safeDbName } from './scratch-db.mjs';
 
 const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || '';
 try { assertScratchUrl(DB_URL); } catch {
-  process.stderr.write(`list-claims-sql-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. `
+  process.stderr.write(`list-claims-sql-probe: refusing to run: database '${safeDbName(DB_URL) || '(no name)'}' is not a scratch database. `
     + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create' (name starts with lanes_pr1_).\n");
   process.exit(2);
 }
