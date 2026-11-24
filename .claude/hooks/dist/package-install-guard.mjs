@@ -25036,6 +25036,600 @@ var malicious_packages_default = {
       reason: "Malware in cti-defense (GHSA-c4c4-vhh9-j3h4)",
       date: "2026-11-22",
       advisory: "https://github.com/advisories/GHSA-c4c4-vhh9-j3h4"
+    },
+    ugent_uws: {
+      blocked_all: true,
+      reason: "Malicious code in ugent_uws (npm) (GHSA-9pfw-3f3p-3cqv)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-9pfw-3f3p-3cqv"
+    },
+    "dinocode-baileys": {
+      blocked_all: true,
+      reason: "Malicious code in dinocode-baileys (npm) (GHSA-h858-x9m7-xq5c)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-h858-x9m7-xq5c"
+    },
+    clampony: {
+      blocked_all: true,
+      reason: "Malicious code in clampony (npm) (GHSA-6cfx-w669-6hhh)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-6cfx-w669-6hhh"
+    },
+    "rolimons-api": {
+      blocked_all: true,
+      reason: "Malicious code in rolimons-api (npm) (GHSA-2cmr-8rcw-fqqm)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-2cmr-8rcw-fqqm"
+    },
+    getsolara: {
+      blocked_all: true,
+      reason: "Malicious code in getsolara (npm) (GHSA-w696-ghjf-jrrp)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-w696-ghjf-jrrp"
+    },
+    ep_nxs75232: {
+      blocked_all: true,
+      reason: "Malicious code in ep_nxs75232 (npm) (GHSA-hpxc-8vpw-2j9c)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-hpxc-8vpw-2j9c"
+    },
+    ep_nxs75183: {
+      blocked_all: true,
+      reason: "Malicious code in ep_nxs75183 (npm) (GHSA-8g4w-v9mj-ccpr)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-8g4w-v9mj-ccpr"
+    },
+    ep_nxs77178: {
+      blocked_all: true,
+      reason: "Malicious code in ep_nxs77178 (npm) (GHSA-6xqg-g9qg-8m6h)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-6xqg-g9qg-8m6h"
+    },
+    ep_nxs50049: {
+      blocked_all: true,
+      reason: "Malicious code in ep_nxs50049 (npm) (GHSA-2cgj-cvf2-hxf9)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-2cgj-cvf2-hxf9"
+    },
+    ep_nxs34308: {
+      blocked_all: true,
+      reason: "Malicious code in ep_nxs34308 (npm) (GHSA-rghp-qrrq-8683)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-rghp-qrrq-8683"
+    },
+    ep_nxs31521: {
+      blocked_all: true,
+      reason: "Malicious code in ep_nxs31521 (npm) (GHSA-vjx8-pc3m-9rhc)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-vjx8-pc3m-9rhc"
+    },
+    ep_nxs14622: {
+      blocked_all: true,
+      reason: "Malicious code in ep_nxs14622 (npm) (GHSA-g677-h6vr-fg5h)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-g677-h6vr-fg5h"
+    },
+    "zod-msg-tools": {
+      blocked_all: true,
+      reason: "Malicious code in zod-msg-tools (npm) (GHSA-4xcm-r7xm-qrwh)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-4xcm-r7xm-qrwh"
+    },
+    youseethemoney: {
+      blocked_all: true,
+      reason: "Malicious code in youseethemoney (npm) (GHSA-r6j6-xjc5-xfx9)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-r6j6-xjc5-xfx9"
+    },
+    "evt-dispatcher": {
+      blocked_all: true,
+      reason: "Malicious code in evt-dispatcher (npm) (GHSA-8qrj-f5gg-hvfq)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-8qrj-f5gg-hvfq"
+    },
+    "env-helper-friend": {
+      blocked_all: true,
+      reason: "Malicious code in env-helper-friend (npm) (GHSA-39c3-9vx8-4336)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-39c3-9vx8-4336"
+    },
+    "zzf7rce-probe": {
+      blocked_all: true,
+      reason: "Malicious code in zzf7rce-probe (npm) (GHSA-hrh5-3wg6-737f)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-hrh5-3wg6-737f"
+    },
+    "x3r0day-bunnyhijack-poc": {
+      blocked_all: true,
+      reason: "Malicious code in x3r0day-bunnyhijack-poc (npm) (GHSA-qj6w-5gxp-6mx2)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-qj6w-5gxp-6mx2"
+    },
+    wiwusen: {
+      blocked_all: true,
+      reason: "Malicious code in wiwusen (npm) (GHSA-gj8m-xhgr-f3gj)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-gj8m-xhgr-f3gj"
+    },
+    sbbank: {
+      blocked_all: true,
+      reason: "Malicious code in sbbank (npm) (GHSA-vh8c-r2g5-48xm)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-vh8c-r2g5-48xm"
+    },
+    "com.unity.external-dependency-manager": {
+      blocked_all: true,
+      reason: "Malicious code in com.unity.external-dependency-manager (npm) (GHSA-fc74-563v-86rw)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-fc74-563v-86rw"
+    },
+    "@ruaxbonz/tooltreovip": {
+      blocked_all: true,
+      reason: "Malicious code in @ruaxbonz/tooltreovip (npm) (GHSA-9gx6-6372-9mwg)",
+      date: "2026-11-24",
+      advisory: "https://github.com/advisories/GHSA-9gx6-6372-9mwg"
+    },
+    "bigops-products-savings-accounts": {
+      blocked_all: true,
+      reason: "Malware in bigops-products-savings-accounts (GHSA-whqc-vg4q-p6vv)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-whqc-vg4q-p6vv"
+    },
+    "ded-ps-ded-ps-core": {
+      blocked_all: true,
+      reason: "Malware in ded-ps-ded-ps-core (GHSA-cpvm-32qj-x2gq)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-cpvm-32qj-x2gq"
+    },
+    "statist-browser-typed-client-integration.tecm.events": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-integration.tecm.events (GHSA-5rc5-rx2q-j7rp)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-5rc5-rx2q-j7rp"
+    },
+    "bigops-rx-post-message": {
+      blocked_all: true,
+      reason: "Malware in bigops-rx-post-message (GHSA-5j4g-824r-x7p3)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-5j4g-824r-x7p3"
+    },
+    "statist-browser-typed-client-integration.tecm.trackingui": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-integration.tecm.trackingui (GHSA-pmhv-9f69-7qph)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-pmhv-9f69-7qph"
+    },
+    "bigops-shared-ui": {
+      blocked_all: true,
+      reason: "Malware in bigops-shared-ui (GHSA-569p-p5vw-hq6p)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-569p-p5vw-hq6p"
+    },
+    "delivery-ci-notify": {
+      blocked_all: true,
+      reason: "Malware in delivery-ci-notify (GHSA-8hjp-982h-pc8w)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-8hjp-982h-pc8w"
+    },
+    "bigops-offers": {
+      blocked_all: true,
+      reason: "Malware in bigops-offers (GHSA-rhqh-mhw2-rj6c)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-rhqh-mhw2-rj6c"
+    },
+    "bigops-legacy-utils": {
+      blocked_all: true,
+      reason: "Malware in bigops-legacy-utils (GHSA-v2pc-cvqw-j258)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-v2pc-cvqw-j258"
+    },
+    "bnpl-molecule-mobile-bnpl-onboarding": {
+      blocked_all: true,
+      reason: "Malware in bnpl-molecule-mobile-bnpl-onboarding (GHSA-3v4g-mh28-pwcx)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-3v4g-mh28-pwcx"
+    },
+    "bnpl-blocks-mobile-bnpl-faq": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-mobile-bnpl-faq (GHSA-5m27-r5g3-4frv)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-5m27-r5g3-4frv"
+    },
+    "bnpl-blocks-mobile-bnpl-header": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-mobile-bnpl-header (GHSA-grwr-7jrj-mq8g)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-grwr-7jrj-mq8g"
+    },
+    "bnpl-blocks-mobile-bnpl-card-gallery": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-mobile-bnpl-card-gallery (GHSA-mcm3-vgpp-c5g6)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-mcm3-vgpp-c5g6"
+    },
+    "statist-browser-typed-client-eventea.projects.transfertorequest": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.transfertorequest (GHSA-p674-c5mg-25pw)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-p674-c5mg-25pw"
+    },
+    "statist-browser-typed-client-eventea.projects.reformer": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.reformer (GHSA-6v3x-vq92-v8c9)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-6v3x-vq92-v8c9"
+    },
+    "statist-browser-typed-client-eventea.projects.trealty": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.trealty (GHSA-6g59-hr65-xgwm)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-6g59-hr65-xgwm"
+    },
+    "statist-browser-typed-client-eventea.projects.pwasme": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.pwasme (GHSA-fwv9-96f3-r47q)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-fwv9-96f3-r47q"
+    },
+    "bnpl-blocks-independent-bnpl-main-banner": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-independent-bnpl-main-banner (GHSA-92hp-57cc-xwr3)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-92hp-57cc-xwr3"
+    },
+    "statist-browser-typed-client-eventea.projects.tshop": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.tshop (GHSA-cmhm-j8rv-f98h)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-cmhm-j8rv-f98h"
+    },
+    "statist-browser-typed-client-eventea.projects.upgrade": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.upgrade (GHSA-xj3j-9jqf-j6c7)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-xj3j-9jqf-j6c7"
+    },
+    "bnpl-blocks-independent-bnpl-origination": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-independent-bnpl-origination (GHSA-2933-92vr-6cg4)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-2933-92vr-6cg4"
+    },
+    "statist-browser-typed-client-eventea.projects.shippy": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.shippy (GHSA-3j94-79wh-954f)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-3j94-79wh-954f"
+    },
+    "statist-browser-typed-client-eventea.projects.review": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.review (GHSA-3mfm-7qgv-p94v)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-3mfm-7qgv-p94v"
+    },
+    "statist-browser-typed-client-eventea.projects.pwamvno": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.pwamvno (GHSA-67p8-7x95-vj48)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-67p8-7x95-vj48"
+    },
+    "statist-browser-typed-client-eventea.projects.tj": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.tj (GHSA-6rc4-34fw-ccp8)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-6rc4-34fw-ccp8"
+    },
+    "statist-browser-typed-client-eventea.projects.tjournal": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.tjournal (GHSA-76pm-fgjf-gxq9)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-76pm-fgjf-gxq9"
+    },
+    "bnpl-blocks-desktop-bnpl-separator": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-desktop-bnpl-separator (GHSA-22p2-w92c-xc7w)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-22p2-w92c-xc7w"
+    },
+    "statist-browser-typed-client-eventea.projects.pwamutual": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.pwamutual (GHSA-2x86-5863-gq79)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-2x86-5863-gq79"
+    },
+    "statist-browser-typed-client-eventea.projects.tpension": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.tpension (GHSA-fpg6-h87r-f9fw)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-fpg6-h87r-f9fw"
+    },
+    "statist-browser-typed-client-eventea.projects.pwapremium": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.pwapremium (GHSA-7rfh-p9fx-hwfh)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-7rfh-p9fx-hwfh"
+    },
+    "statist-browser-typed-client-eventea.projects.tjuchebnik": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.tjuchebnik (GHSA-2r25-5xjg-fq24)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-2r25-5xjg-fq24"
+    },
+    "bnpl-blocks-desktop-bnpl-title": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-desktop-bnpl-title (GHSA-xp3v-pq4g-xrcp)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-xp3v-pq4g-xrcp"
+    },
+    "statist-browser-typed-client-eventea.projects.pwaosago": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.pwaosago (GHSA-mjcr-vpm5-h26g)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-mjcr-vpm5-h26g"
+    },
+    "bnpl-blocks-atom-bnpl-notification": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-atom-bnpl-notification (GHSA-pw3m-wqfh-5w5q)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-pw3m-wqfh-5w5q"
+    },
+    "uploader-frontend": {
+      blocked_all: true,
+      reason: "Malware in uploader-frontend (GHSA-pq6q-33p7-49q7)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-pq6q-33p7-49q7"
+    },
+    "uploader-frontend-legacy": {
+      blocked_all: true,
+      reason: "Malware in uploader-frontend-legacy (GHSA-vprp-h5w8-x3gr)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-vprp-h5w8-x3gr"
+    },
+    "meshim-frontend-config": {
+      blocked_all: true,
+      reason: "Malware in meshim-frontend-config (GHSA-w8c4-63mh-6h6j)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-w8c4-63mh-6h6j"
+    },
+    "statist-browser-typed-client-eventea.projects.tdevicesale": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.tdevicesale (GHSA-6q4p-rjvw-6xr9)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-6q4p-rjvw-6xr9"
+    },
+    "statist-browser-typed-client-eventea.projects.pwamask": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.pwamask (GHSA-hg63-574w-xx6p)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-hg63-574w-xx6p"
+    },
+    "statist-browser-typed-client-eventea.projects.tdevice2": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.tdevice2 (GHSA-7864-47jg-qgqm)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-7864-47jg-qgqm"
+    },
+    "statist-browser-typed-client-eventea.projects.pwameetups": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.pwameetups (GHSA-47qg-jcx5-xqxx)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-47qg-jcx5-xqxx"
+    },
+    "statist-browser-typed-client-eventea.projects.pwainsmortgage": {
+      blocked_all: true,
+      reason: "Malware in statist-browser-typed-client-eventea.projects.pwainsmortgage (GHSA-2rh2-98fc-9r37)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-2rh2-98fc-9r37"
+    },
+    "bnpl-blocks-desktop-bnpl-info-slider": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-desktop-bnpl-info-slider (GHSA-jqfg-h2xp-7f54)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-jqfg-h2xp-7f54"
+    },
+    "ftapi-core": {
+      blocked_all: true,
+      reason: "Malware in ftapi-core (GHSA-ffq5-7mch-9wc8)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-ffq5-7mch-9wc8"
+    },
+    "bnpl-blocks-atom-container": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-atom-container (GHSA-75c2-xxw8-hccv)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-75c2-xxw8-hccv"
+    },
+    "bnpl-blocks-atom-desktop-bnpl-highlighted-text": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-atom-desktop-bnpl-highlighted-text (GHSA-wr69-9h2p-5h2j)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-wr69-9h2p-5h2j"
+    },
+    "bnpl-blocks-atom-bnpl-product-card": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-atom-bnpl-product-card (GHSA-gghh-qjh5-63j5)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-gghh-qjh5-63j5"
+    },
+    compliancepolicyserv: {
+      blocked_all: true,
+      reason: "Malware in compliancepolicyserv (GHSA-769p-m84g-2xj4)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-769p-m84g-2xj4"
+    },
+    "bnpl-blocks-component-story-name": {
+      blocked_all: true,
+      reason: "Malware in bnpl-blocks-component-story-name (GHSA-mj33-898m-4xjm)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-mj33-898m-4xjm"
+    },
+    connectedmerchantsserv: {
+      blocked_all: true,
+      reason: "Malware in connectedmerchantsserv (GHSA-7r9j-9hvm-h9xw)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-7r9j-9hvm-h9xw"
+    },
+    "cclr-component-resources": {
+      blocked_all: true,
+      reason: "Malware in cclr-component-resources (GHSA-q452-4h59-8689)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-q452-4h59-8689"
+    },
+    "@wame/ngx-frf-utilities": {
+      blocked_all: true,
+      reason: "Malware in @wame/ngx-frf-utilities (GHSA-pxfh-mxxv-8j9r)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-pxfh-mxxv-8j9r"
+    },
+    "@wame/ngx-adfs": {
+      blocked_all: true,
+      reason: "Malware in @wame/ngx-adfs (GHSA-9qc6-vjfv-jv9v)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-9qc6-vjfv-jv9v"
+    },
+    "finup-mongo-library": {
+      blocked_all: true,
+      reason: "Malware in finup-mongo-library (GHSA-3765-55wp-8fqh)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-3765-55wp-8fqh"
+    },
+    "@structureit/ir-dealapi-js": {
+      blocked_all: true,
+      reason: "Malware in @structureit/ir-dealapi-js (GHSA-gq28-39q4-2fq3)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-gq28-39q4-2fq3"
+    },
+    "@phonos/types": {
+      blocked_all: true,
+      reason: "Malware in @phonos/types (GHSA-8q6x-368m-gxwp)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-8q6x-368m-gxwp"
+    },
+    "oc-pico-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-pico-module-client (GHSA-mv2g-6ghp-pxr6)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-mv2g-6ghp-pxr6"
+    },
+    "oc-recommendedupgrade-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-recommendedupgrade-module-client (GHSA-69g9-6f58-wv7r)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-69g9-6f58-wv7r"
+    },
+    "oc-navbar-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-navbar-module-client (GHSA-qjxp-f6wf-7v4r)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-qjxp-f6wf-7v4r"
+    },
+    "oc-pdc-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-pdc-module-client (GHSA-4cfq-p5wx-w53h)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-4cfq-p5wx-w53h"
+    },
+    "oc-conversation-history-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-conversation-history-module-client (GHSA-qm3p-fxq2-wc4x)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-qm3p-fxq2-wc4x"
+    },
+    "oc-ccp-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-ccp-module-client (GHSA-99q4-56p8-hfm7)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-99q4-56p8-hfm7"
+    },
+    "oc-ecm-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-ecm-module-client (GHSA-96xf-phf9-qg4f)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-96xf-phf9-qg4f"
+    },
+    "oc-cip-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-cip-module-client (GHSA-5vw7-23fj-m754)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-5vw7-23fj-m754"
+    },
+    "oc-agent-toolbar-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-agent-toolbar-module-client (GHSA-vr7v-27fq-75f8)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-vr7v-27fq-75f8"
+    },
+    "oc-aa-module-client": {
+      blocked_all: true,
+      reason: "Malware in oc-aa-module-client (GHSA-486g-5pjr-2wmg)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-486g-5pjr-2wmg"
+    },
+    "toga-ai": {
+      blocked_all: true,
+      reason: "Malware in toga-ai (GHSA-pv72-g3cf-rgh3)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-pv72-g3cf-rgh3"
+    },
+    amiudmodz: {
+      blocked_all: true,
+      reason: "Malware in amiudmodz (GHSA-7v5g-cc5w-j86g)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-7v5g-cc5w-j86g"
+    },
+    noname089: {
+      blocked_all: true,
+      reason: "Malware in noname089 (GHSA-4mrh-w22w-wq4r)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-4mrh-w22w-wq4r"
+    },
+    baileeys: {
+      blocked_all: true,
+      reason: "Malware in baileeys (GHSA-rwxp-x66q-qqh5)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-rwxp-x66q-qqh5"
+    },
+    "dm3-offchain-resolver": {
+      blocked_all: true,
+      reason: "Malware in dm3-offchain-resolver (GHSA-785g-6g8q-9m8p)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-785g-6g8q-9m8p"
+    },
+    "dm3-backend": {
+      blocked_all: true,
+      reason: "Malware in dm3-backend (GHSA-3qm4-f5p6-75v6)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-3qm4-f5p6-75v6"
+    },
+    "dm3-messenger-widget": {
+      blocked_all: true,
+      reason: "Malware in dm3-messenger-widget (GHSA-v5wm-cjg6-g785)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-v5wm-cjg6-g785"
+    },
+    "app-use": {
+      blocked_all: true,
+      reason: "Malware in app-use (GHSA-cpp9-25vr-crc4)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-cpp9-25vr-crc4"
+    },
+    "@zervonex/baileys": {
+      blocked_all: true,
+      reason: "Malware in @zervonex/baileys (GHSA-j2m6-4cjj-vv5m)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-j2m6-4cjj-vv5m"
+    },
+    "proto-bin": {
+      blocked_all: true,
+      reason: "Malware in proto-bin (GHSA-34hm-qv6p-h859)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-34hm-qv6p-h859"
+    },
+    cantarelllaa: {
+      blocked_all: true,
+      reason: "Malware in cantarelllaa (GHSA-m624-r4m7-qv6v)",
+      date: "2026-11-23",
+      advisory: "https://github.com/advisories/GHSA-m624-r4m7-qv6v"
     }
   }
 };
