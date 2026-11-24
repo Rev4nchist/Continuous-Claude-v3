@@ -10,7 +10,13 @@
 // replace the file by a rename. Reads take no lock and never throw: a missing or corrupt file reads as empty (fail closed: no decision).
 // Corrupt includes a section that is not a plain object (an array, a string, null): the whole store reads as empty and the next write repairs it.
 // Entries older than a week are dropped at the next write.
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+//
+// THE DECISION LOG (card decision-append-log, design note .claudedocs/e2e-decision-append-log/01-design-note.md): the store above forgets a tap when it is
+// used, replaced, dropped or aged out. decisionRecord therefore appends ONE line to decision-log.jsonl (beside the store file) for every tap that matches an
+// open offer, inside the lock and BEFORE the decision row is written. No line is ever edited or deleted. A failed append never blocks the tap (fail open):
+// the result then carries `log: { ok: false, reason }` and the hook says so. The merge sha is not in the log: decisionLogJoin reads it from land-outcomes.jsonl.
+// A log line is evidence only. No gate reads it, and it never grants a tap.
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,6 +46,135 @@ export const decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.j
 
 /** The key of a PR (`repo#12`) or of a branch (`repo@feat/x`). A PR number wins when both are given. */
 export const decisionKey = ({ repo = REPO, pr, branch }) => (pr !== undefined && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`);
+
+// ---- The decision log -----------------------------------------------------------------------------------------------------------------------------
+
+/** The env var that moves the log (tests, probes). Unset: the log sits beside the store file, so a temp store means a temp log. */
+export const DECISION_LOG_ENV = 'CCV3_DECISION_LOG_FILE';
+/** The env var that sets the rotation size in bytes (tests). */
+export const DECISION_LOG_MAX_ENV = 'CCV3_DECISION_LOG_MAX_BYTES';
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
+const LOG_VERSION = 1;
+
+/** The log file: $CCV3_DECISION_LOG_FILE, else decision-log.jsonl in the folder of the store file (default <account home>/.claude/state/ccv3-mods/). */
+export const decisionLogPath = (env = process.env) => env[DECISION_LOG_ENV] || path.join(path.dirname(decisionsPath(env)), 'decision-log.jsonl');
+
+const logMaxBytes = (env = process.env) => {
+  const n = Number(env[DECISION_LOG_MAX_ENV]);
+  return Number.isInteger(n) && n > 0 ? n : LOG_MAX_BYTES;
+};
+
+/** { repo, pr, branch } of a store key: `repo#12`, `repo#12!pick:x` (a pick key) or `repo@feat/x`. A part that is not there is null. */
+function parseKey(key) {
+  const m = /^([^#@]*)(?:#(\d+)|@([\s\S]+))?/.exec(key);
+  return { repo: m[1] || null, pr: m[2] ? Number(m[2]) : null, branch: m[3] ?? null };
+}
+
+const cutText = (s, max) => (typeof s === 'string' && s.trim() !== '' ? s.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max) : null);
+
+/** The audit facts a caller passes: a session label (text, at most 80 characters) and the lane ids it holds (a list of at most 5 texts; [] means "holds none"). Anything else is null. */
+function cleanAudit(audit) {
+  const lane = Array.isArray(audit?.lane) ? audit.lane.filter(isText).slice(0, 5).map((l) => cutText(l, 100)).filter(isText) : null;
+  return { session: cutText(audit?.session, 80), lane };
+}
+
+const archiveStamp = (now = new Date()) => now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+
+/** Where a full log goes: <base>.<stamp>.jsonl beside it, with -N added when that name is taken. Never overwrites. */
+function archivePath(file) {
+  const base = path.join(path.dirname(file), path.basename(file, '.jsonl'));
+  const stamp = archiveStamp();
+  let candidate = `${base}.${stamp}.jsonl`;
+  for (let n = 1; existsSync(candidate); n += 1) candidate = `${base}.${stamp}-${n}.jsonl`;
+  return candidate;
+}
+
+const endsWithLf = (file, size) => {
+  const fd = openSync(file, 'r');
+  try {
+    const b = Buffer.alloc(1);
+    readSync(fd, b, 0, 1, size - 1);
+    return b[0] === 10;
+  } finally { closeSync(fd); }
+};
+
+/**
+ * Appends one line to the log under its own lock. A log at or over the size limit is first renamed to a dated archive (never cut, deleted or compressed).
+ * A last line with no LF (a write that was cut short) gets its LF first, so the new line stands alone. Returns { ok: true } or { ok: false, reason }. Never throws.
+ */
+function appendLogLine(file, line, env = process.env) {
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    const done = withLock(file, {}, () => {
+      let size = 0;
+      try { size = statSync(file).size; } catch (err) { if (err?.code !== 'ENOENT') throw err; }
+      if (size >= logMaxBytes(env)) { renameSync(file, archivePath(file)); size = 0; }
+      const text = `${JSON.stringify(line)}\n`;
+      appendFileSync(file, size > 0 && !endsWithLf(file, size) ? `\n${text}` : text);
+      return { ok: true };
+    });
+    return done?.ok === true ? { ok: true } : { ok: false, reason: `log-${done?.reason ?? 'unknown'}` };
+  } catch (err) {
+    return { ok: false, reason: `log-write: ${String(err?.code ?? err?.message ?? err).slice(0, 80)}` };
+  }
+}
+
+/** The log files in reading order: the archives oldest first, then the current file. */
+function logFiles(file) {
+  const dir = path.dirname(file);
+  const base = path.basename(file, '.jsonl');
+  const archive = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(\\d{8}T\\d{6}Z)(?:-(\\d+))?\\.jsonl$`);
+  let names = [];
+  try { names = readdirSync(dir); } catch { /* no folder: no archives */ }
+  const archives = names.map((n) => ({ n, m: archive.exec(n) })).filter((x) => x.m)
+    .sort((a, b) => (a.m[1] === b.m[1] ? Number(a.m[2] ?? 0) - Number(b.m[2] ?? 0) : a.m[1] < b.m[1] ? -1 : 1));
+  return [...archives.map((x) => path.join(dir, x.n)), file];
+}
+
+/**
+ * decisionLogRead({ file }) -> { exists, rows, skipped, firstSkip, files }. Reads the archives and the current file, line by line. A line that does not parse, is not
+ * a plain object, has no text `kind` or has a version other than 1 is skipped and counted (firstSkip names `<file>:<line>`); a blank line is not a line.
+ * Never throws, never writes. exists is false only when no log file is there at all.
+ */
+export function decisionLogRead({ file = decisionLogPath() } = {}) {
+  const out = { exists: false, rows: [], skipped: 0, firstSkip: null, files: [] };
+  for (const f of logFiles(file)) {
+    let text;
+    try { text = readFileSync(f, 'utf8'); } catch { continue; }
+    out.exists = true;
+    out.files.push(f);
+    text.split('\n').forEach((raw, i) => {
+      if (raw.trim() === '') return;
+      let row = null;
+      try { row = JSON.parse(raw); } catch { /* counted below */ }
+      if (isPlain(row) && row.v === LOG_VERSION && isText(row.kind)) out.rows.push(row);
+      else { out.skipped += 1; out.firstSkip ??= `${path.basename(f)}:${i + 1}`; }
+    });
+  }
+  return out;
+}
+
+/** The land ledger that land-pr.ps1 writes: $CCV3_LAND_LEDGER, else <account home>/.claude/state/land-outcomes.jsonl. */
+export const landLedgerPath = (env = process.env) => env.CCV3_LAND_LEDGER || path.join(accountHome(), '.claude', 'state', 'land-outcomes.jsonl');
+
+/**
+ * decisionLogJoin(rows, { ledger }) -> rows with `mergeSha`. A `land` tap gets the merge sha of the land-ledger line with the same repo, PR and head, when that line says
+ * the land step made the merge (mergeCall ok or failed-but-merged). Every other row, and a land with no such line, gets null. A missing or torn ledger is no sha, never an error.
+ * It reads the ledger only: it never writes the log or the ledger.
+ */
+export function decisionLogJoin(rows, { ledger = landLedgerPath() } = {}) {
+  const merges = new Map();
+  let text = '';
+  try { text = readFileSync(ledger, 'utf8'); } catch { /* no ledger */ }
+  for (const raw of text.split('\n')) {
+    let l = null;
+    try { l = JSON.parse(raw); } catch { continue; }
+    if (isPlain(l) && (l.mergeCall === 'ok' || l.mergeCall === 'failed-but-merged') && isText(l.repo) && Number.isInteger(l.pr) && isText(l.headSha) && isText(l.mergeSha)) {
+      merges.set(`${l.repo}#${l.pr}\n${l.headSha.toLowerCase()}`, l.mergeSha);
+    }
+  }
+  return rows.map((r) => ({ ...r, mergeSha: r.step === 'land' && isText(r.repo) && Number.isInteger(r.pr) ? merges.get(`${r.repo}#${r.pr}\n${String(r.head).toLowerCase()}`) ?? null : null }));
+}
 
 const empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
 const idOf = ({ step, key, head }) => `${step}\n${key}\n${String(head).toLowerCase()}`;
@@ -151,9 +286,10 @@ export function offerWrite({ step, key, head, spec, tree, cwd }) {
  * Records only an EXACT label of the open offer for the triple, then closes the offer. Reasons: no-open-offer, no-match, lock.
  * A label that ends the question (such as "Keep open") is still a decision: the reader decides what a label means.
  */
-export function decisionRecord({ step, key, head, label, entry }) {
+export function decisionRecord({ step, key, head, label, entry, audit }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: 'no-open-offer' };
-  return update((store) => {
+  let logged = { ok: true };
+  const result = update((store) => {
     const id = idOf({ step, key, head });
     const offer = store.offers[id];
     if (!offer || offer.open !== true) return { ok: false, reason: 'no-open-offer' };
@@ -161,11 +297,20 @@ export function decisionRecord({ step, key, head, label, entry }) {
     // tapAt is the time of Dave's tap and `entry` the entry point of the process that recorded it (CLAUDE_CODE_ENTRYPOINT of the hook). Both are stamped
     // here, once, on EVERY decision: a paid post later ages on tapAt and reads the stamp (card prflow-paid-run-guard). A call with no entry stamps null.
     const at = new Date().toISOString();
+    // The decision log (card decision-append-log): the line goes to disk BEFORE the row, with the same `at`, so a use, an age-out or a drop can never remove the only record.
+    // A failed append does not stop the tap (fail open); the caller reads `log` in the result and says so. `audit` is { session, lane } from the hook; both are cleaned here.
+    const headLower = String(head).toLowerCase();
+    logged = appendLogLine(decisionLogPath(), {
+      v: LOG_VERSION, kind: 'tap', id: randomUUID(), at, step, key, ...parseKey(key), head: headLower, label,
+      entry: isText(entry) ? entry : null, ...cleanAudit(audit), tree: isText(offer.tree) ? offer.tree : null,
+    });
     store.decisions[id] = { label, at, tapAt: at, entry: isText(entry) ? entry : null, tree: offer.tree, nonce: offer.nonce };
     offer.open = false;
     delete store.misses[id];
     return { ok: true };
   });
+  // A good append keeps the old result shape ({ ok: true }); only a failed one adds `log`.
+  return result?.ok === true && logged.ok === false ? { ok: true, log: logged } : result;
 }
 
 /** decisionRead({ step, key, head }) -> { label, at } | null. No lock; any read error is null. */
