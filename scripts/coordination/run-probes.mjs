@@ -81,11 +81,23 @@ export function refusalEnv(base, nodePath = process.execPath) {
   return e;
 }
 
-/** Refusal check of one probe. Returns { ok, line }. A probe that does not exit 2 with its refusal line, or prints PASS or FAIL, fails. */
+/**
+ * The refusal environment must not reach docker or psql: a probe with no guard could then write to the live container.
+ * `node` may share its folder with them (some Linux layouts), so the PATH trick is proven here, not assumed (same proof as T1c of
+ * probe-scratch-guard.test.mjs). Returns { ok, line }. Fails closed: a command that starts is a failure.
+ */
+export function checkNoDocker({ spawn, env }) {
+  const started = ['docker', 'psql'].filter((cmd) => spawn(cmd, ['--version'], spawnOpts(REPO, refusalEnv(env), 20_000)).error?.code !== 'ENOENT');
+  return started.length
+    ? { ok: false, line: `FAIL refusal environment: ${started.join(' and ')} can start with PATH set to the node folder; the refusal check is not safe here, so no probe ran` }
+    : { ok: true, line: 'PASS refusal environment: docker and psql cannot start' };
+}
+
+/** Refusal check of one probe. Returns { ok, line }. A probe that does not exit 2 with its refusal line, or prints PASS or FAIL on stdout or stderr, fails. */
 export function checkRefusal(probe, { spawn, env, dir }) {
   const r = spawn(process.execPath, [path.join(dir, probe.file)], spawnOpts(REPO, refusalEnv(env), MIN));
   const text = `${r.stdout ?? ''}${r.stderr ?? ''}`;
-  const refused = r.status === 2 && /refusing to run/.test(r.stderr ?? '') && !/PASS|FAIL/.test(r.stdout ?? '');
+  const refused = r.status === 2 && /refusing to run/.test(r.stderr ?? '') && !/\b(PASS|FAIL)\b/.test(text);
   const why = refused ? '' : ` (exit ${r.status}${r.error ? `, ${r.error.message}` : ''}): ${redact(lastLine(text) || 'no output')}`;
   return { ok: refused, line: `${refused ? 'PASS' : 'FAIL'} refusal ${probe.name}${refused ? ': exit 2 on a live url' : `: did not refuse a live url${why}`}` };
 }
@@ -146,10 +158,14 @@ export function runProbe(probe, { spawn, env, dir, now = Date.now }) {
  * test needs no database. `only` is a list of probe names, `refusalOnly` stops after step 1.
  */
 export function run({ spawn = spawnSync, env = process.env, probes = PROBES, dir = HERE, only = null, refusalOnly = false } = {}) {
+  const unknown = (only ?? []).filter((n) => !probes.some((p) => p.name === n));
+  if (unknown.length || (only && !only.length)) return { code: 1, lines: [`FAIL: unknown probe name(s) ${unknown.join(',') || '(none given)'}; known: ${probes.map((p) => p.name).join(', ')}`] };
   const list = only ? probes.filter((p) => only.includes(p.name)) : probes;
-  if (!list.length) return { code: 1, lines: [`FAIL: no probe matches ${only ? only.join(',') : '(none)'}; known: ${probes.map((p) => p.name).join(', ')}`] };
   const lines = [];
   let failed = 0;
+  const safe = checkNoDocker({ spawn, env });
+  lines.push(safe.line);
+  if (!safe.ok) return { code: 1, lines };
   for (const p of list) {
     const r = checkRefusal(p, { spawn, env, dir });
     lines.push(r.line);
@@ -175,7 +191,8 @@ function main() {
     return 0;
   }
   const i = argv.indexOf('--only');
-  const only = i !== -1 && argv[i + 1] ? argv[i + 1].split(',').map((s) => s.trim()).filter(Boolean) : null;
+  // `--only` with no value is an error, not "all probes": run() refuses an empty list.
+  const only = i === -1 ? null : String(argv[i + 1] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const r = run({ only, refusalOnly: argv.includes('--refusal-only') });
   for (const line of r.lines) process.stdout.write(`${line}\n`);
   return r.code;
