@@ -253,7 +253,7 @@ test.describe('pr-feed-parse', () => {
       { pr: 711, sha7: 'aaaaaaa', mergedAt: '2026-11-13T16:04:16.000Z' },
     ]);
     expect(v.landedSource).toBe('github');
-    expect(v.landedAgeMinutes).toBe(10); // the age of open-prs.json (FRESH), not of the nightly file
+    expect(v.landedAgeMinutes).toBe(9); // the age of open-prs.json (FRESH is 9 min 51 s old), not of the nightly file
   });
 
   test('P13b C3 with no landed list the nightly file is used: sorted by its merge time, source nightly, its own age', () => {
@@ -303,8 +303,8 @@ test.describe('pr-feed-parse', () => {
     expect(factory.stale).toBe(false);
     expect(factory.note).toContain('once a day');
     expect(factory.note).toContain('23:55');
-    expect(flowAge('factory', '2026-11-22T20:55:00.000Z', now).stale).toBe(true); // 42 h
-    expect(flowAge('factory', '2026-11-22T20:55:00.000Z', now).text).toBe('factory exported 11-22 14:55 CST, 42 h ago, stale');
+    expect(flowAge('factory', '2026-11-22T20:55:00.000Z', now).stale).toBe(true); // 48 h
+    expect(flowAge('factory', '2026-11-22T20:55:00.000Z', now).text).toBe('factory exported 11-22 14:55 CST, 48 h ago, stale');
     const flow = flowAge('flow', '2026-11-24T20:30:00.000Z', now);
     expect(flow.text).toBe('flow exported 11-24 14:30 CST, 25 min ago');
     expect(flow.stale).toBe(false);

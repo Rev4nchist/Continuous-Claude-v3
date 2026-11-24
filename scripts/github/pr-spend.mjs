@@ -210,6 +210,7 @@ export function collectLand(objs) {
     if (repoVerdict(o.repo) !== 'ccv3') { otherRepo++; continue; }
     byPr.set(o.pr, {
       mergeSha: typeof o.mergeSha === 'string' && /^[0-9a-f]{7,40}$/i.test(o.mergeSha) ? o.mergeSha : null,
+      mergedAt: typeof o.ts === 'string' && o.ts.length <= 40 && !Number.isNaN(Date.parse(o.ts)) ? new Date(o.ts).toISOString() : null,
       mergeCall: typeof o.mergeCall === 'string' ? o.mergeCall.slice(0, 40) : null,
       reviewers: Array.isArray(o.reviewers) ? o.reviewers.filter((x) => typeof x === 'string').map((x) => x.slice(0, 24)).slice(0, 6) : [],
       crRounds: Number.isInteger(o.crRounds) && o.crRounds >= 0 ? o.crRounds : 0,
@@ -248,6 +249,27 @@ export function splitByRepo(items, proof) {
 }
 
 const unknownHeads = (items) => items.filter((it) => repoVerdict(it.repo) === 'unknown').map((it) => it.head);
+
+// ---------------------------------------------------------------- PR numbers that are not PRs of this repo (C15)
+
+/** A PR number this far above the newest PR the repo is known to have is not a PR of this repo. GitHub numbers run on one by one. */
+export const PR_BOUND_SLACK = 20;
+
+/** The highest PR number that can be real, from the landed PRs and the open PRs; null when neither is known. */
+export function prBound(landPrs, openPrs) {
+  const known = [...landPrs, ...openPrs].filter((n) => Number.isInteger(n) && n > 0);
+  return known.length === 0 ? null : Math.max(...known) + PR_BOUND_SLACK;
+}
+
+/** Items above the bound are dropped. Returns the kept items and the set of dropped PR numbers (counted, never written). */
+export function dropAboveBound(items, bound, dropped) {
+  if (bound === null) return items;
+  return items.filter((it) => {
+    if (it.pr <= bound) return true;
+    dropped.add(it.pr);
+    return false;
+  });
+}
 
 // ---------------------------------------------------------------- the rows
 
@@ -300,6 +322,10 @@ export function buildDocument(ledgers, deps) {
   const proof = proveHeads([...unknownHeads(cr.prRows), ...unknownHeads(eng.runs)], deps.primaryRoot, deps.runGit);
   const crSplit = splitByRepo(cr.prRows, proof);
   const engSplit = splitByRepo(eng.runs, proof);
+  const bound = prBound(land.byPr.keys(), deps.openPrs ?? []);
+  const nonRepo = new Set();
+  crSplit.counted = dropAboveBound(crSplit.counted, bound, nonRepo);
+  engSplit.counted = dropAboveBound(engSplit.counted, bound, nonRepo);
   const present = { coderabbit: ledgers.coderabbit.state === 'ok', cursor: ledgers.cursor.state === 'ok' };
   const src = (name, extraBad) => ({ state: ledgers[name].state, rows: ledgers[name].objs.length, skipped: ledgers[name].skipped + extraBad });
   const absent = (name, v) => (ledgers[name].state === 'ok' ? v : null);
@@ -317,7 +343,7 @@ export function buildDocument(ledgers, deps) {
       coderabbit: absent('coderabbit', { rows: crSplit.notProven.length, usd: sumUsd(crSplit.notProven), files: sumFiles(crSplit.notProven) }),
       engine: absent('cursor', { rows: engSplit.notProven.length }),
     },
-    excluded: { engineNotReview: eng.notReview, engineOtherRepo: engSplit.otherRepo, coderabbitOtherRepo: crSplit.otherRepo, landOtherRepo: land.otherRepo },
+    excluded: { engineNotReview: eng.notReview, engineOtherRepo: engSplit.otherRepo, coderabbitOtherRepo: crSplit.otherRepo, landOtherRepo: land.otherRepo, nonRepoPr: nonRepo.size },
     reconcile: {
       coderabbit: { prRows: cr.prRows.length, counted: crSplit.counted.length, notProven: crSplit.notProven.length, otherRepo: crSplit.otherRepo },
       engine: { prEndRows: eng.prEndRows, counted: engSplit.counted.length, notProven: engSplit.notProven.length, notReview: eng.notReview, otherRepo: engSplit.otherRepo, bad: eng.bad },
@@ -410,6 +436,16 @@ export function summaryLine(doc) {
     + `headless ${hl ? `${hl.runs} runs (nominal, not in totals)` : 'absent'}`;
 }
 
+/** The PR numbers in open-prs.json beside the output (the 15 minute feed). A missing or bad file gives []. */
+export function readOpenPrs(openFile) {
+  try {
+    const doc = JSON.parse(readFileSync(openFile, 'utf8'));
+    return Array.isArray(doc?.rows) ? doc.rows.map((r) => r?.pr).filter((n) => Number.isInteger(n) && n > 0 && n < 1e7) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Run. Returns the exit code. `deps` = {now, home, primaryRoot (a folder), runGit, log, err} (tests inject them). */
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const log = deps.log ?? console.log;
@@ -427,6 +463,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const ledgers = Object.fromEntries(['coderabbit', 'cursor', 'land', 'headless'].map((k) => [k, readLedger(file(k))]));
   const root = opts.primaryRoot ?? deps.primaryRoot;
   const doc = buildDocument(ledgers, {
+    openPrs: readOpenPrs(path.join(file('out'), 'open-prs.json')),
     now: deps.now ?? (() => new Date()),
     primaryRoot: () => root ?? CHECKOUT_ROOT,
     runGit: deps.runGit ?? gitBatchCheck,

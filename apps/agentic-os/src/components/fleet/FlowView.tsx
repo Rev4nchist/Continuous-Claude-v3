@@ -1,7 +1,8 @@
 import type { FlowBarView, FlowCardView, FlowFileView, FlowRowView, FlowSeriesView, FlowTone, FlowView as FlowData } from '@/server/queries/lane-dash-parse';
-import { formatCtClock } from '@/server/queries/spend-fold';
 
 import { cn } from '@/lib/utils';
+
+import { flowAge } from './flow-age';
 
 /**
  * The Flow tab. Pure props: it fetches nothing and holds no state. The data is `snapshot.flow`, filled only for
@@ -115,15 +116,25 @@ function Card({ card }: { card: FlowCardView }) {
   );
 }
 
-function FileSection({ file }: { file: FlowFileView }) {
-  const exportedMs = file.exportedAt === null ? null : Date.parse(file.exportedAt);
+function FileSection({ file, nowMs }: { file: FlowFileView; nowMs: number }) {
+  const age = file.exportedAt === null ? null : flowAge(file.name, file.exportedAt, nowMs);
   return (
     <section data-testid="flow-file" data-file={file.name} data-status={file.status} className="min-w-0 space-y-2">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h3 className="font-mono text-xs text-foreground">{file.name}.json</h3>
-        {exportedMs !== null && (
-          <span data-testid="flow-exported" className="text-xs text-muted-foreground">
-            {file.name} exported {formatCtClock(exportedMs)}
+        {age !== null && (
+          <span
+            data-testid="flow-exported"
+            data-stale={age.stale ? 'true' : 'false'}
+            suppressHydrationWarning
+            className={age.stale ? 'text-xs text-warn' : 'text-xs text-muted-foreground'}
+          >
+            {age.text}
+          </span>
+        )}
+        {age?.note != null && (
+          <span data-testid="flow-file-note" className="basis-full text-xs text-muted-foreground">
+            {age.note}
           </span>
         )}
       </header>
@@ -149,7 +160,9 @@ function FileSection({ file }: { file: FlowFileView }) {
   );
 }
 
-export function FlowView({ flow }: { flow: FlowData }) {
+export function FlowView({ flow, nowMs }: { flow: FlowData; nowMs?: number }) {
+  // The age ticker of the page re-renders this tree every second, so Date.now() here stays current.
+  const now = nowMs ?? Date.now();
   return (
     <div data-testid="flow-view" className="min-w-0 space-y-3.5">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -158,7 +171,7 @@ export function FlowView({ flow }: { flow: FlowData }) {
         </h2>
       </header>
       {flow.files.map((file) => (
-        <FileSection key={file.name} file={file} />
+        <FileSection key={file.name} file={file} nowMs={now} />
       ))}
     </div>
   );

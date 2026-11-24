@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 
 import type { PrFeedSnapshot } from '@/server/sources/pr-feed';
-import type { PrLane, PrRowView, PrSpend } from '@/server/queries/pr-feed-parse';
+import type { LandedSource, PrLane, PrRowView, PrSpend } from '@/server/queries/pr-feed-parse';
 
 import { cn } from '@/lib/utils';
 
+import { formatCtStamp } from './flow-age';
 import { formatUsd } from './format';
 
 /** Risk bands that need a person look warm. */
@@ -13,6 +14,22 @@ const WARM_BANDS = new Set(['ELEVATED', 'HIGH', 'CRITICAL']);
 function ageText(minutes: number | null): string {
   if (minutes === null) return 'time unknown';
   return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`;
+}
+
+const LANDED_SOURCE_WORDS: Record<LandedSource, string> = {
+  github: 'from GitHub',
+  ledger: 'from the land ledger',
+  nightly: 'from the nightly spend file',
+  none: '',
+};
+
+/** "Last landed, from GitHub, updated 10 min ago". The nightly file says how old it is, so a 19 h list is not read as current. */
+function landedHead(feed: PrFeedSnapshot): string {
+  const source = LANDED_SOURCE_WORDS[feed.landedSource];
+  if (feed.landedAgeMinutes === null) return `Last landed, ${source}, time unknown`;
+  return feed.landedSource === 'nightly'
+    ? `Last landed, ${source}, ${ageText(feed.landedAgeMinutes)} old`
+    : `Last landed, ${source}, updated ${ageText(feed.landedAgeMinutes)} ago`;
 }
 
 function laneText(lane: PrLane): string {
@@ -129,10 +146,14 @@ export function OpenPrTable({ feed }: { feed: PrFeedSnapshot }) {
 
       {feed.landed.length > 0 && (
         <div className="space-y-1 text-xs">
-          <p className="text-muted-foreground">Last landed</p>
+          <p data-testid="open-pr-landed-head" className="text-muted-foreground">
+            {landedHead(feed)}
+          </p>
           <ul className="flex flex-wrap gap-x-3 gap-y-1 font-mono">
             {feed.landed.map((l) => (
-              <li key={l.pr} data-testid="open-pr-landed-row">{`#${l.pr} ${l.sha7}`}</li>
+              <li key={l.pr} data-testid="open-pr-landed-row">
+                {[`#${l.pr}`, l.sha7, l.mergedAt === null ? null : formatCtStamp(Date.parse(l.mergedAt))].filter((x) => x !== null).join(' ')}
+              </li>
             ))}
           </ul>
         </div>
