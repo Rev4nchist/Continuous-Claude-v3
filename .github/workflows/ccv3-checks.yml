@@ -342,6 +342,7 @@ jobs:
           scripts/coordination/gate-lines.test.mjs
           scripts/coordination/run-wrap.test.mjs
           scripts/coordination/v710-check.test.mjs
+          scripts/coordination/run-probes.test.mjs
           scripts/coordination/coord-drill-2/abort.test.mjs
           scripts/coordination/coord-drill-2/judge.test.mjs
           scripts/coordination/coord-drill-2/lib.test.mjs
