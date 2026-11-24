@@ -12,7 +12,7 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['safe-message*.spec.ts', 'lane-coord-drift.spec.ts', 'pr-feed-parse.spec.ts'],
+  testMatch: ['safe-message*.spec.ts', 'lane-coord-drift.spec.ts', 'pr-feed-parse.spec.ts', 'tiles-truth-fold.spec.ts'],
   timeout: 30_000,
   retries: 0,
   workers: 1,

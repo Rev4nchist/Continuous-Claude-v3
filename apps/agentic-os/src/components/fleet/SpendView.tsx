@@ -197,6 +197,16 @@ function Rollup({ result }: { result: SpendData['rollup'] }) {
   );
 }
 
+/**
+ * The day total in two parts. An ended session's cost is final (engine); a live session's cost still grows (est).
+ * Each number is that session's whole running cost, taken from files written today, not only what it spent today.
+ */
+function splitText(split: SpendData['split']): string {
+  const part = (sum: EngineSum, word: 'engine' | 'est', who: string): string =>
+    sum.usd === null ? `${who} none` : `${who} ${word} ${formatUsd(sum.usd)} (${sum.sessions})`;
+  return `${part(split.ended, 'engine', 'ended sessions')} · ${part(split.live, 'est', 'live sessions')} · whole running cost of each session, not only today's`;
+}
+
 export function SpendView({ spend }: { spend: SpendData }) {
   const { engine, est, quota, quality } = spend;
   const estTotal = est.usd;
@@ -205,7 +215,7 @@ export function SpendView({ spend }: { spend: SpendData }) {
     <div data-testid="spend-view" className="min-w-0 space-y-3.5">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h2 className="text-sm font-bold">
-          Spend <span className="font-normal text-muted-foreground">· sessions seen today, {spend.day}</span>
+          Spend <span className="font-normal text-muted-foreground">· sessions active today, {spend.day}</span>
         </h2>
         <span data-testid="spend-as-of" className="text-xs text-muted-foreground">
           as of {formatCtClock(Date.parse(spend.asOf))}
@@ -225,6 +235,15 @@ export function SpendView({ spend }: { spend: SpendData }) {
             className={cn(WRAP, 'text-lg font-semibold')}
           >
             {engineText(engine)}
+          </p>
+          {/* C16: one `est` for the whole day hid that ended sessions are final. C6: it is each session's whole running cost. */}
+          <p
+            data-testid="spend-split"
+            data-live-usd={spend.split.live.usd ?? undefined}
+            data-ended-usd={spend.split.ended.usd ?? undefined}
+            className={cn(WRAP, 'text-xs text-muted-foreground')}
+          >
+            {splitText(spend.split)}
           </p>
           <p
             data-testid="spend-est"

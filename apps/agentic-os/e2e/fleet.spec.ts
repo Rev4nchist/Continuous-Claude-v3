@@ -88,7 +88,7 @@ type Snapshot = {
   fleet: { projects: { key: string; displayName: string }[] };
   ready: ReadyItem[];
   cards: Card[];
-  tiles: Record<'liveSessions' | 'needsDave' | 'blocked' | 'activeLanes' | 'openPrs', number>;
+  tiles: Record<'liveSessions' | 'needsDave' | 'blocked' | 'activeLanes', number> & { openPrs: number | null };
   sources: Source[];
 };
 
@@ -301,9 +301,11 @@ test.describe('fixture brief for a live session', () => {
 
     expect(snapshot.tiles.needsDave).toBeGreaterThanOrEqual(1);
     expect(snapshot.tiles.liveSessions).toBeGreaterThanOrEqual(1);
-    for (const key of ['blocked', 'activeLanes', 'openPrs'] as const) {
+    for (const key of ['blocked', 'activeLanes'] as const) {
       expect(typeof snapshot.tiles[key], `tiles.${key} must be a number`).toBe('number');
     }
+    // openPrs is the open-PR feed count, or null when the feed is absent (card agentic-os-tiles-truth, C1).
+    expect(['number', 'object'], 'tiles.openPrs must be a number or null').toContain(typeof snapshot.tiles.openPrs);
   });
 
   test('page: the ask, the 1 of 3 plan and UNPROVEN 1 show within 10 s of the file landing', async ({

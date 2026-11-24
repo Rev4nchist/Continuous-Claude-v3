@@ -34,7 +34,7 @@ type PrRow = {
 type Snapshot = {
   active: { sessions: LiveSession[] };
   cards: { id: string; repo: string | null }[];
-  tiles: { openPrs: number };
+  tiles: { openPrs: number | null };
   prs: PrRow[];
 };
 
@@ -105,7 +105,6 @@ test.describe('PrRow.repo is the last path segment, scrubbed', () => {
     const snapshot = await loadSnapshot(request);
     expect(snapshot.prs.map((r) => r.key)).toEqual(['continuous-claude#200']);
     expect(snapshot.prs[0].sessions.map((s) => s.id).sort()).toEqual([a.id, b.id].sort());
-    expect(snapshot.tiles.openPrs).toBe(1);
   });
 });
 
@@ -122,7 +121,6 @@ test.describe('the newest state wins before READY and CLOSED are filtered', () =
       watch(b.id, [pr(88, 'PENDING')], 'e2e-repo', secondsAgo(60));
       const snapshot = await loadSnapshot(request);
       expect(snapshot.prs, `newest says ${hidden}, older says PENDING`).toEqual([]);
-      expect(snapshot.tiles.openPrs).toBe(0);
       clearStateDir();
     }
   });
@@ -137,6 +135,5 @@ test.describe('the newest state wins before READY and CLOSED are filtered', () =
     const snapshot = await loadSnapshot(request);
     expect(snapshot.prs.map((r) => [r.key, r.state])).toEqual([['e2e-repo#88', 'PENDING']]);
     expect(snapshot.prs[0].sessions.map((s) => s.id)).toContain(b.id);
-    expect(snapshot.tiles.openPrs).toBe(1);
   });
 });

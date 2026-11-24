@@ -30,7 +30,8 @@ const ENGINE_PREFIX = { 'at least': 'at least est ', est: 'est ', engine: '' } a
 function engineLine(spend: StatTilesData['spend']['engine']): string {
   const kind = engineKind(spend);
   if (kind === 'no data' || spend.usd === null) return 'no data';
-  const parts = [`${ENGINE_PREFIX[kind]}${formatUsd(spend.usd)} all sessions`];
+  // The sum covers LIVE sessions only: an ended session leaves it at once. "all sessions" said more than the number knew (C6).
+  const parts = [`${ENGINE_PREFIX[kind]}${formatUsd(spend.usd)} live sessions`];
   if (spend.noData > 0) parts.push(`${spend.noData} no data`);
   const text = parts.join(', ');
   return spend.resumed > 0 ? `${text} · ${spend.resumed} since resume` : text;
@@ -44,6 +45,22 @@ function subagentLine(tiles: StatTilesData): string {
   const text =
     base === 'unpriced' ? base : est.floor ? base.replace(/^at least /, 'at least est ') : `est ${base}`;
   return `of which subagents ${text}`;
+}
+
+/**
+ * The open PRs of the repo, from the same feed as the table (fault C1). No usable feed reads "-" and "no feed", never 0.
+ * A feed with more PRs than the table shows reads "20+". A stale feed keeps its number and says it is stale.
+ */
+function openPrsTile(tiles: StatTilesData): Tile {
+  const count = tiles.openPrs;
+  return {
+    label: 'Open PRs',
+    value: count === null ? '-' : `${formatCount(count)}${tiles.openPrsCapped ? '+' : ''}`,
+    tone: 'plain',
+    caption: count === null ? 'no feed' : undefined,
+    lines: tiles.openPrsStale ? [{ text: 'feed is stale' }] : [],
+    desktopOnly: true,
+  };
 }
 
 function buildTiles(tiles: StatTilesData, databaseOk: boolean): Tile[] {
@@ -91,7 +108,7 @@ function buildTiles(tiles: StatTilesData, databaseOk: boolean): Tile[] {
             ],
     },
     { label: 'Active lanes', value: formatCount(tiles.activeLanes), tone: 'plain', lines: [], desktopOnly: true },
-    { label: 'Open PRs', value: formatCount(tiles.openPrs), tone: 'plain', lines: [], desktopOnly: true },
+    openPrsTile(tiles),
   ];
 }
 
