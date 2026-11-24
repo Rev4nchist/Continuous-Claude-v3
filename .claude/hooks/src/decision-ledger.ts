@@ -30,7 +30,7 @@ import { MAX_REASKS, decisionRecord, missBump, missCount, offerList, type Offer,
 const TOOL = 'AskUserQuestion';
 
 interface Question { question?: unknown; header?: unknown; options?: unknown }
-interface HookInput { tool_name?: string; tool?: string; tool_input?: { questions?: unknown }; tool_response?: unknown; agent_id?: string; cwd?: string }
+interface HookInput { tool_name?: string; tool?: string; tool_input?: { questions?: unknown }; tool_response?: unknown; agent_id?: string; cwd?: string; session_id?: string }
 
 const isText = (v: unknown): v is string => typeof v === 'string';
 const labelsOf = (q: Question): string[] => (Array.isArray(q.options) ? q.options.map((o) => (o as { label?: unknown })?.label).filter(isText) : []);
@@ -84,16 +84,25 @@ function missText(o: Offer): string {
   return `No match. Nothing was recorded for the "${o.step}" question: the answer was not one of its options (re-ask ${n} of ${MAX_REASKS}). ${how}.`;
 }
 
+/** The session id of this hook run: the hook payload first (Claude Code sends it on every event), the environment second. '' when neither is an id. */
+export function pickSessionId(payloadId: unknown, env: NodeJS.ProcessEnv = process.env): string {
+  for (const c of [payloadId, env.CLAUDE_CODE_SESSION_ID]) if (isText(c) && /^[0-9a-f-]{8,64}$/i.test(c)) return c;
+  return '';
+}
+
+/** The environment of the lane CLI run: the hook environment with the session id set to this run's id (the lane CLI reads CLAUDE_CODE_SESSION_ID to know who asks). */
+export const laneEnv = (id: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({ ...env, CLAUDE_CODE_SESSION_ID: id });
+
 /**
  * The audit facts for the decision log (card decision-append-log): the session label from its identity file and the lane ids from `lane.mjs mine --json` (2 s cap).
  * Any failure gives null for that part, and the tap still records. Skipped (both null) under vitest and with CCV3_DECISION_AUDIT=off, so a unit test never spawns the lane CLI.
  * It runs once per matched tap, before the store lock, and never for a question that is not ours.
  */
-export function auditFacts(env: NodeJS.ProcessEnv = process.env, cwd?: string): TapAudit {
+export function auditFacts(env: NodeJS.ProcessEnv = process.env, cwd?: string, sessionId?: string): TapAudit {
   if (env.VITEST || env.CCV3_DECISION_AUDIT === 'off') return { session: null, lane: null };
-  const id = env.CLAUDE_CODE_SESSION_ID ?? '';
+  const id = sessionId ?? pickSessionId(undefined, env);
   let session: string | null = null;
-  if (/^[0-9a-f-]{8,64}$/i.test(id)) {
+  if (id !== '') {
     session = id.slice(0, 8);
     try {
       const j = JSON.parse(readFileSync(join(homedir(), '.claude', 'state', 'identity', `${id}.json`), 'utf8')) as { short?: unknown; name?: unknown };
@@ -103,7 +112,8 @@ export function auditFacts(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
   }
   let lane: string[] | null = null;
   try {
-    const r = spawnSync(process.execPath, [join(homedir(), '.claude', 'scripts', 'lane.mjs'), 'mine', '--json'], { encoding: 'utf8', timeout: 2000, windowsHide: true, cwd, env });
+    if (id === '') return { session, lane };
+    const r = spawnSync(process.execPath, [join(homedir(), '.claude', 'scripts', 'lane.mjs'), 'mine', '--json'], { encoding: 'utf8', timeout: 2000, windowsHide: true, cwd, env: laneEnv(id, env) });
     const start = (r.stdout ?? '').indexOf('[');
     if (r.status === 0 && start >= 0) {
       const rows = JSON.parse((r.stdout ?? '').slice(start)) as unknown;
@@ -132,9 +142,11 @@ function noteFor(q: Question, answers: Record<string, string>, offers: Offer[], 
 }
 
 /** The whole hook: stdin text in, stdout text out. Never throws. */
-export function handle(raw: string, getAudit: () => TapAudit = () => auditFacts(process.env, undefined)): string {
+export function handle(raw: string, getAuditFor: (sessionId: string) => TapAudit = (id) => auditFacts(process.env, undefined, id)): string {
   try {
     const input = JSON.parse(raw.trim() || '{}') as HookInput;
+    const sessionId = pickSessionId(input.session_id, process.env);
+    const getAudit = (): TapAudit => getAuditFor(sessionId);
     if ((input.tool_name || input.tool) !== TOOL || input.agent_id || process.env.CLAUDE_AGENT_ID) return '{}';
     const asked = input.tool_input?.questions;
     const questions = (Array.isArray(asked) ? asked : []) as Question[];

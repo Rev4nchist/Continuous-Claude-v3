@@ -710,11 +710,16 @@ function missText(o) {
   const how = engine ? `Call pr_checkpoint with pr: ${prOf(o)} (it returns the question again)` : "Ask the same question again with AskUserQuestion, word for word";
   return `No match. Nothing was recorded for the "${o.step}" question: the answer was not one of its options (re-ask ${n} of ${MAX_REASKS2}). ${how}.`;
 }
-function auditFacts(env = process.env, cwd) {
+function pickSessionId(payloadId, env = process.env) {
+  for (const c of [payloadId, env.CLAUDE_CODE_SESSION_ID]) if (isText2(c) && /^[0-9a-f-]{8,64}$/i.test(c)) return c;
+  return "";
+}
+var laneEnv = (id, env = process.env) => ({ ...env, CLAUDE_CODE_SESSION_ID: id });
+function auditFacts(env = process.env, cwd, sessionId) {
   if (env.VITEST || env.CCV3_DECISION_AUDIT === "off") return { session: null, lane: null };
-  const id = env.CLAUDE_CODE_SESSION_ID ?? "";
+  const id = sessionId ?? pickSessionId(void 0, env);
   let session = null;
-  if (/^[0-9a-f-]{8,64}$/i.test(id)) {
+  if (id !== "") {
     session = id.slice(0, 8);
     try {
       const j = JSON.parse(readFileSync3(join2(homedir2(), ".claude", "state", "identity", `${id}.json`), "utf8"));
@@ -725,7 +730,8 @@ function auditFacts(env = process.env, cwd) {
   }
   let lane = null;
   try {
-    const r = spawnSync(process.execPath, [join2(homedir2(), ".claude", "scripts", "lane.mjs"), "mine", "--json"], { encoding: "utf8", timeout: 2e3, windowsHide: true, cwd, env });
+    if (id === "") return { session, lane };
+    const r = spawnSync(process.execPath, [join2(homedir2(), ".claude", "scripts", "lane.mjs"), "mine", "--json"], { encoding: "utf8", timeout: 2e3, windowsHide: true, cwd, env: laneEnv(id, env) });
     const start = (r.stdout ?? "").indexOf("[");
     if (r.status === 0 && start >= 0) {
       const rows = JSON.parse((r.stdout ?? "").slice(start));
@@ -749,9 +755,11 @@ function noteFor(q, answers, offers, getAudit) {
   if (r.ok) return `Recorded "${answer}" for the ${o.step} question (${o.key}).${r.log?.ok === false ? ` The decision log was NOT written (${r.log.reason}): the tap is recorded, the audit line is missing. Tell Dave.` : ""}`;
   return r.reason === "lock" ? `Not recorded: the decision store was busy. Ask the same question again.` : null;
 }
-function handle(raw, getAudit = () => auditFacts(process.env, void 0)) {
+function handle(raw, getAuditFor = (id) => auditFacts(process.env, void 0, id)) {
   try {
     const input = JSON.parse(raw.trim() || "{}");
+    const sessionId = pickSessionId(input.session_id, process.env);
+    const getAudit = () => getAuditFor(sessionId);
     if ((input.tool_name || input.tool) !== TOOL || input.agent_id || process.env.CLAUDE_AGENT_ID) return "{}";
     const asked = input.tool_input?.questions;
     const questions = Array.isArray(asked) ? asked : [];
@@ -774,5 +782,7 @@ if (!process.env.VITEST) {
 export {
   auditFacts,
   handle,
-  parseAnswers
+  laneEnv,
+  parseAnswers,
+  pickSessionId
 };

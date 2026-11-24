@@ -131,23 +131,30 @@ function logFiles(file) {
   return [...archives.map((x) => path.join(dir, x.n)), file];
 }
 
+/** A line the reader can use: a plain object of version 1 with a text `kind`; a `tap` also needs a text step, label and head (a hand-edited line may miss them). */
+const usableRow = (row) => isPlain(row) && row.v === LOG_VERSION && isText(row.kind) && (row.kind !== 'tap' || (isText(row.step) && isText(row.label) && isText(row.head)));
+
 /**
- * decisionLogRead({ file }) -> { exists, rows, skipped, firstSkip, files }. Reads the archives and the current file, line by line. A line that does not parse, is not
- * a plain object, has no text `kind` or has a version other than 1 is skipped and counted (firstSkip names `<file>:<line>`); a blank line is not a line.
- * Never throws, never writes. exists is false only when no log file is there at all.
+ * decisionLogRead({ file }) -> { exists, rows, skipped, firstSkip, files, unreadable }. Reads the archives and the current file, line by line. A line that does not
+ * parse, is not a plain object, has no text `kind`, has a version other than 1, or is a tap with no text step, label or head is skipped and counted (firstSkip names
+ * `<file>:<line>`); a blank line is not a line. A file that is there but cannot be read (a locked file, a folder in its place) is listed in `unreadable`, never taken for a
+ * missing file. Never throws, never writes. exists is false only when no log file is there at all.
  */
 export function decisionLogRead({ file = decisionLogPath() } = {}) {
-  const out = { exists: false, rows: [], skipped: 0, firstSkip: null, files: [] };
+  const out = { exists: false, rows: [], skipped: 0, firstSkip: null, files: [], unreadable: [] };
   for (const f of logFiles(file)) {
     let text;
-    try { text = readFileSync(f, 'utf8'); } catch { continue; }
+    try { text = readFileSync(f, 'utf8'); } catch (err) {
+      if (err?.code !== 'ENOENT') { out.exists = true; out.unreadable.push(f); }
+      continue;
+    }
     out.exists = true;
     out.files.push(f);
     text.split('\n').forEach((raw, i) => {
       if (raw.trim() === '') return;
       let row = null;
       try { row = JSON.parse(raw); } catch { /* counted below */ }
-      if (isPlain(row) && row.v === LOG_VERSION && isText(row.kind)) out.rows.push(row);
+      if (usableRow(row)) out.rows.push(row);
       else { out.skipped += 1; out.firstSkip ??= `${path.basename(f)}:${i + 1}`; }
     });
   }

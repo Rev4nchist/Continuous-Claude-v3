@@ -16,7 +16,7 @@
     "coordination-release.ts": "67367601f55b6df348588447f3a55fc6f76c94bb70e990318a55c0175c89e609",
     "dc-config-guard.ts": "0626f183b185020008505da78a626735bc21d57f9f5c8ffb4499a3f40ca9a434",
     "decision-gate.ts": "8ba602cbd163831299c143a5ef555123b4eaaa64b3cd62213def3c82463394a5",
-    "decision-ledger.ts": "1487b876f2459b32e18a7448776f51cd74cb5739906b665e48b222146740a6e7",
+    "decision-ledger.ts": "5d105c51e29d3a206f218f0a12f27d6b2830bab2574adc6fc22095f9e1f164f8",
     "destructive-command-guard.ts": "25157bec4aaab0ac02cf2918bdb1589d3dbab9181269ffeec00b91cf7590166d",
     "epistemic-reminder.ts": "8f17424db2cfebe548bcca4400512f2565947f2b090fab337495de0ffb4aa311",
     "explore-to-scout.ts": "d76b8366046a2061755672bbf6bef26d8bf53d8f24e66d464563972ddc06f87a",
@@ -213,7 +213,7 @@
       "sha256": "e75f807c902a4fc1a192412f184d346e6b55c05c7b3ac96f46f9a00d722bda15"
     },
     "scripts/github/lib/decisions.mjs": {
-      "sha256": "7fbf81d74f82b82c1a07fbcec804688df5e9fbdb737961cbe3225d79cbd125d7"
+      "sha256": "fde7fd26e44c7d98b68581e04e4ba3f3a76709020b44740661fed3643f372f29"
     },
     "scripts/github/lib/file-lock.mjs": {
       "sha256": "d7eb5d1a2106f9ade33806ad084d45b6aa727e267cca5ffcfbef3cfe0b275c41"

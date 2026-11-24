@@ -36,10 +36,11 @@ export function show({ pr, repo, file, ledger }) {
   const read = decisionLogRead({ file });
   const mine = read.rows.filter((r) => r.kind === 'tap' && r.pr === pr && r.repo === repo);
   const rows = decisionLogJoin(mine, { ledger });
-  const data = { file, exists: read.exists, pr, repo, rows, skipped: read.skipped, firstSkip: read.firstSkip };
+  const data = { file, exists: read.exists, pr, repo, rows, skipped: read.skipped, firstSkip: read.firstSkip, unreadable: read.unreadable };
   const parts = [];
   if (!read.exists) parts.push(`no decision log at ${file}`);
   else parts.push(`PR #${pr} (${repo}): ${rows.length} tap(s) in ${read.files.length} log file(s)`, ...rows.map(lineOf));
+  if (read.unreadable.length > 0) parts.push(`unreadable: ${read.unreadable.join(', ')} (the file is there but cannot be read; the taps in it are not shown)`);
   if (read.skipped > 0) parts.push(`skipped ${read.skipped} line(s) that could not be read (first: ${read.firstSkip})`);
   return { text: parts.join('\n'), data };
 }
