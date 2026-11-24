@@ -112,7 +112,7 @@ test.describe('overview stat tiles', () => {
     const id = await liveSessionId(request);
     writeState(id, { hud: { costUsd: 0, limits: [] }, cache: cacheState() });
     await openOverview(page);
-    await expect(tileAt(page, T3)).toContainText('est $0.00 all sessions');
+    await expect(tileAt(page, T3)).toContainText('est $0.00 live sessions');
     await expect(tileAt(page, T3)).not.toContainText('no data');
   });
 
@@ -121,14 +121,14 @@ test.describe('overview stat tiles', () => {
     writeState(id, { hud: { costUsd: 5, limits: [] }, cache: cacheState({ resumed: true }) });
     await openOverview(page);
     await expect(tileAt(page, T3)).toContainText('1 since resume');
-    await expect(tileAt(page, T3)).toContainText('at least est $5.00 all sessions');
+    await expect(tileAt(page, T3)).toContainText('at least est $5.00 live sessions');
   });
 
   test('T3 does not say "since resume" for a session that was not resumed', async ({ page, request }) => {
     const id = await liveSessionId(request);
     writeState(id, { hud: { costUsd: 5, limits: [] }, cache: cacheState({ resumed: false }) });
     await openOverview(page);
-    await expect(tileAt(page, T3)).toContainText('est $5.00 all sessions');
+    await expect(tileAt(page, T3)).toContainText('est $5.00 live sessions');
     await expect(tileAt(page, T3)).not.toContainText('since resume');
     await expect(tileAt(page, T3)).not.toContainText('at least');
   });

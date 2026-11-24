@@ -8,15 +8,19 @@ import { readSessionNames } from '@/server/sources/identity-names';
 import { safeMessage } from '@/server/sources/safe-message';
 
 import {
-  cleanText,
-  laneCoordFields,
+  buildColumns,
+  countsByState,
+  DONE_SHOWN,
+  isTruncated,
+  type BoardColumn,
+  type LaneRow,
+} from './lane-board-fold';
+import {
   readyCoordSql,
   RECLAIMABLE_TAG_SQL,
   toReadyCoord,
   waitsOnCol,
   type CoordRaw,
-  type LaneCoordFields,
-  type LaneCoordRaw,
   type ReadyCoord,
 } from './lane-coord';
 import { laneOrderSql } from './lane-sort';
@@ -24,7 +28,8 @@ import { laneOrderSql } from './lane-sort';
 /**
  * The read-only lane Board (P1b part B2).
  *
- * One bounded SELECT on agentic_os.lane (LIMIT 500), joined to public.sessions for the owner.
+ * Two bounded SELECTs on agentic_os.lane (open lanes LIMIT 500, done lanes the newest 10), joined to public.sessions
+ * for the owner, and one GROUP BY state count. The counts, not the rows, give every column count and the total.
  * The app role is SELECT-only: nothing here writes. Owner liveness follows sessions.ts and
  * fleet-sessions.ts: live = quiet 15 minutes or less on GREATEST(last_heartbeat,
  * COALESCE(last_activity_at, last_heartbeat)); quiet = up to 24 hours; ended = the relative
@@ -37,27 +42,7 @@ import { laneOrderSql } from './lane-sort';
  * Every string is redacted, then scrubbed of absolute paths, then clipped.
  */
 
-export const BOARD_STATES = ['backlog', 'ready', 'active', 'blocked', 'review', 'done'] as const;
-export type BoardState = (typeof BOARD_STATES)[number];
-
-export type OwnerState = 'live' | 'quiet' | 'ended' | 'unknown';
-
-export type BoardLane = {
-  id: string;
-  title: string;
-  branch: string | null;
-  ownerShortId: string | null;
-  owner: OwnerState | null;
-  leaseLapsed: boolean;
-  track: string | null;
-} & LaneCoordFields;
-
-export type BoardColumn = {
-  state: BoardState;
-  count: number;
-  shown: number;
-  lanes: BoardLane[];
-};
+export { BOARD_STATES, type BoardColumn, type BoardLane, type BoardState, type OwnerState } from './lane-board-fold';
 
 export type LaneBoard = {
   /** The board key this read covers (agentic_os.lane.project_key). */
@@ -65,72 +50,18 @@ export type LaneBoard = {
   status: 'ok' | 'error';
   error: string | null;
   columns: BoardColumn[];
+  /** Every lane of the board, from the SQL counts. Never the number of rows the bounded read returned. */
   total: number;
+  /** True when an open column holds fewer lanes than its count: the bounded read cut some. The page says so. */
+  truncated: boolean;
 };
 
 /** The board the page and the endpoint show when no `project` is asked for. */
 export const DEFAULT_BOARD = 'continuous-claude';
 
-const LANE_LIMIT = 500;
-const DONE_SHOWN = 10;
+/** Open lanes only. The done column has its own read (newest DONE_SHOWN), so a long done list never cuts an open lane. */
+const OPEN_LANE_LIMIT = 500;
 const LIVE_MAX_SECONDS = 15 * 60;
-
-const CLIP = { id: 60, title: 120, branch: 80, track: 40, ownerShortId: 12 };
-
-type LaneRow = {
-  id: string;
-  title: string | null;
-  branch: string | null;
-  track: string | null;
-  state: string | null;
-  owner_session_id: string | null;
-  lease_lapsed: boolean | null;
-  owner_state: string | null;
-  updated_epoch: number | string | null;
-} & LaneCoordRaw;
-
-const OWNER_STATES: readonly string[] = ['live', 'quiet', 'ended', 'unknown'];
-
-function toLane(row: LaneRow): BoardLane {
-  const hasOwner = typeof row.owner_session_id === 'string' && row.owner_session_id !== '';
-  const ownerState = OWNER_STATES.includes(row.owner_state ?? '')
-    ? (row.owner_state as OwnerState)
-    : 'unknown';
-  return {
-    id: cleanText(row.id, CLIP.id) ?? '?',
-    title: cleanText(row.title, CLIP.title) ?? '',
-    branch: cleanText(row.branch, CLIP.branch),
-    ownerShortId: hasOwner ? cleanText(row.owner_session_id?.slice(0, 8), CLIP.ownerShortId) : null,
-    owner: hasOwner ? ownerState : null,
-    leaseLapsed: hasOwner && row.lease_lapsed === true,
-    track: cleanText(row.track, CLIP.track),
-    ...laneCoordFields(row),
-  };
-}
-
-function stateOf(value: string | null): BoardState {
-  return (BOARD_STATES as readonly string[]).includes(value ?? '') ? (value as BoardState) : 'backlog';
-}
-
-/** Pure: rows already in the shared lane sort order (band, due_at, priority, id). Unknown states go to backlog. */
-function bucketLanes(rows: LaneRow[]): BoardColumn[] {
-  const buckets = new Map<BoardState, { lane: BoardLane; updated: number }[]>(
-    BOARD_STATES.map((state) => [state, []]),
-  );
-  for (const row of rows) {
-    const updated = Number(row.updated_epoch ?? 0);
-    buckets.get(stateOf(row.state))?.push({ lane: toLane(row), updated: Number.isFinite(updated) ? updated : 0 });
-  }
-  return BOARD_STATES.map((state) => {
-    const items = buckets.get(state) ?? [];
-    if (state === 'done') {
-      items.sort((a, b) => b.updated - a.updated || a.lane.id.localeCompare(b.lane.id));
-    }
-    const lanes = (state === 'done' ? items.slice(0, DONE_SHOWN) : items).map((item) => item.lane);
-    return { state, count: items.length, shown: lanes.length, lanes };
-  });
-}
-
 let laneDepSeen = false;
 let laneDepCheckedAt = 0;
 let laneDepPending: Promise<boolean> | null = null;
@@ -170,7 +101,9 @@ async function hasLaneDep(): Promise<boolean> {
 export async function getLaneBoard(projectKey: string = DEFAULT_BOARD): Promise<LaneBoard> {
   try {
     const withDeps = await hasLaneDep();
-    const { rows } = await db.execute<LaneRow>(sql`
+    // Two bounded reads and one count. Open lanes are cut at OPEN_LANE_LIMIT in the shared sort order; done lanes are
+    // the newest DONE_SHOWN by update time, so a long done list can never push an open lane out (fault C4).
+    const readRows = (part: 'open' | 'done') => db.execute<LaneRow>(sql`
       SELECT l.id, l.title, l.branch, l.track, l.state, l.remind_state, l.owner_session_id,
         EXTRACT(EPOCH FROM l.updated_at)::float8 AS updated_epoch,
         l.band,
@@ -205,13 +138,29 @@ export async function getLaneBoard(projectKey: string = DEFAULT_BOARD): Promise<
         FROM public.sessions s
       ) o ON o.id = l.owner_session_id
       WHERE l.project_key = ${projectKey}
-      ORDER BY ${sql.raw(laneOrderSql('l'))}
-      LIMIT ${LANE_LIMIT}
+        AND ${sql.raw(part === 'done' ? "l.state = 'done'" : "l.state IS DISTINCT FROM 'done'")}
+      ORDER BY ${sql.raw(part === 'done' ? 'l.updated_at DESC, l.id' : laneOrderSql('l'))}
+      LIMIT ${part === 'done' ? DONE_SHOWN : OPEN_LANE_LIMIT}
     `);
-    const columns = bucketLanes(rows);
-    return { board: projectKey, status: 'ok', error: null, columns, total: columns.reduce((sum, c) => sum + c.count, 0) };
+    const [open, done, counted] = await Promise.all([
+      readRows('open'),
+      readRows('done'),
+      db.execute<{ state: string | null; n: number }>(sql`
+        SELECT l.state, count(*)::int AS n FROM agentic_os.lane l WHERE l.project_key = ${projectKey} GROUP BY l.state
+      `),
+    ]);
+    const counts = countsByState(counted.rows);
+    const columns: BoardColumn[] = buildColumns([...open.rows, ...done.rows], counts);
+    return {
+      board: projectKey,
+      status: 'ok',
+      error: null,
+      columns,
+      total: columns.reduce((sum, c) => sum + c.count, 0),
+      truncated: isTruncated(columns),
+    };
   } catch (error) {
-    return { board: projectKey, status: 'error', error: safeMessage(error), columns: [], total: 0 };
+    return { board: projectKey, status: 'error', error: safeMessage(error), columns: [], total: 0, truncated: false };
   }
 }
 

@@ -102,7 +102,7 @@ async function writeCostFixture(request: APIRequestContext): Promise<boolean> {
 /** The three T3 lines are all on screen: the fixture is the worst case, so a missing line proves nothing. */
 async function expectLongestTiles(page: Page, withNoData: boolean): Promise<void> {
   const t3 = page.getByTestId('stat-tile').nth(2);
-  await expect(t3).toContainText('at least est $1234.57 all sessions');
+  await expect(t3).toContainText('at least est $1234.57 live sessions');
   await expect(t3).toContainText('since resume');
   await expect(t3).toContainText('of which subagents at least est $987.65 + 1 unpriced');
   if (withNoData) await expect(t3).toContainText('1 no data');
