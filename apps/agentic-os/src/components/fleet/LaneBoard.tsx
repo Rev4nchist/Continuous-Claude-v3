@@ -48,6 +48,11 @@ export function LaneBoard({ board }: { board: LaneBoardData }) {
       <p data-testid="board-scope-note" className="text-xs text-muted-foreground">
         {`This board lists the lanes of ${board.board} only. The active-lanes tile counts all boards.`}
       </p>
+      {board.status === 'ok' && board.truncated && (
+        <p data-testid="board-cut" role="status" className="text-xs text-warn">
+          Some open lanes are not shown: the read stops at 500 open lanes. The counts above are the true counts.
+        </p>
+      )}
 
       {board.status === 'error' ? (
         <p

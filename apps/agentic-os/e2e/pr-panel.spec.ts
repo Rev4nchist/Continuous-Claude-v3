@@ -42,7 +42,7 @@ import {
  *   pr-row-session    one <button> per watching session, text = session name, data-session-id
  *   pr-panel-empty    "No PR is watched by a live session." (only when there is no row)
  *   pr-panel-note     "Only PRs a live session watches. Merged or ready PRs leave the watch."
- *   stat-tile (6th)   "Open PRs" tile, value = number of pr-row (exists already). Hidden on a phone
+ *   stat-tile (6th)   "Open PRs" tile (now the open-PR feed count, card agentic-os-tiles-truth). Hidden on a phone
  *                     (`hidden sm:block`), so a test reads its text, never its visibility.
  */
 
@@ -66,7 +66,7 @@ type PrRow = {
 type Snapshot = {
   active: { sessions: LiveSession[] };
   cards: { id: string; name: string }[];
-  tiles: { openPrs: number };
+  tiles: { openPrs: number | null };
   prs: PrRow[];
   detail: { id: string } | null;
 };
@@ -139,12 +139,6 @@ const rows = (page: Page): Locator => page.getByTestId('pr-row');
 const rowByKey = (page: Page, key: string): Locator =>
   page.locator(`[data-testid="pr-row"][data-pr-key="${key}"]`);
 const detailPanel = (page: Page): Locator => page.getByTestId('session-detail');
-// The order is Live, Needs Dave, Quota and spend, Rule breaks, Active lanes, Open PRs: Open PRs is the
-// 6th tile (index 5). Found by its label, so the next reorder cannot silently point at another tile.
-// It keeps label and value only: the /^Open PRs\s*N$/ checks break on any extra line.
-const openPrsTile = (page: Page): Locator =>
-  page.getByTestId('stat-tile').filter({ hasText: 'Open PRs' });
-
 const urlParam = (page: Page, key: string): string | null =>
   new URL(page.url()).searchParams.get(key);
 
@@ -354,7 +348,6 @@ test.describe('grouping', () => {
     await expectPageMatchesApi(page, request);
     await expect(rowByKey(page, 'e2e-repo-a#77').getByTestId('pr-row-session')).toHaveText(nameA);
     await expect(rowByKey(page, 'e2e-repo-b#77').getByTestId('pr-row-session')).toHaveText(nameB);
-    await expect(openPrsTile(page)).toHaveText(/^Open PRs\s*2$/);
 
     // Same repo, same number: one row that lists both sessions.
     watch(a.id, [pr(77, 'PENDING')], 'e2e-repo-a');
@@ -371,7 +364,6 @@ test.describe('grouping', () => {
     const shownIds = await buttons.evaluateAll((els) => els.map((el) => el.getAttribute('data-session-id')));
     expect([...shownIds].sort()).toEqual([a.id, b.id].sort());
     await expectPageMatchesApi(page, request);
-    await expect(openPrsTile(page)).toHaveText(/^Open PRs\s*1$/);
 
     // Each button selects its own session.
     await buttons.nth(shownIds.indexOf(b.id)).click();
@@ -466,7 +458,6 @@ test.describe('order and caps', () => {
 
     const snapshot = await loadSnapshot(request);
     expect(snapshot.prs.map((r) => r.pr)).toEqual([63]);
-    expect(snapshot.tiles.openPrs).toBe(1);
 
     await page.goto('/');
     await waitForHydration(page);
@@ -474,7 +465,6 @@ test.describe('order and caps', () => {
     await expect(rowByKey(page, 'e2e-repo#63')).toBeVisible();
     await expect(rowByKey(page, 'e2e-repo#61')).toHaveCount(0);
     await expect(rowByKey(page, 'e2e-repo#62')).toHaveCount(0);
-    await expect(openPrsTile(page)).toHaveText(/^Open PRs\s*1$/);
   });
 
   test('at most 20 rows, the first 20 in sort order', async ({ page, request }) => {
@@ -485,41 +475,10 @@ test.describe('order and caps', () => {
     const snapshot = await loadSnapshot(request);
     expect(snapshot.prs).toHaveLength(20);
     expect(snapshot.prs.map((r) => r.pr)).toEqual(Array.from({ length: 20 }, (_, index) => 125 - index));
-    expect(snapshot.tiles.openPrs, 'the tile counts the rows').toBe(20);
 
     await page.goto('/');
     await waitForHydration(page);
     await expect(rows(page)).toHaveCount(20);
-    await expect(openPrsTile(page)).toHaveText(/^Open PRs\s*20$/);
-  });
-});
-
-// --- Spec 12: the tile -------------------------------------------------------------------------
-
-test.describe('Open PRs tile', () => {
-  test('tiles.openPrs equals the number of rows, in the API and on the page', async ({ page, request }) => {
-    const live = await liveSessions(request);
-    watch(live[0].id, [pr(300, 'PENDING'), pr(200, 'REVIEWED'), pr(100, null)], 'e2e-repo-a');
-    if (live.length >= 2) {
-      // The same number in a second repo counts again: this is the cross-repo count fix.
-      watch(live[1].id, [pr(300, 'PENDING')], 'e2e-repo-b');
-    } else {
-      test.info().annotations.push({
-        type: 'note',
-        description: 'Only 1 live session: the cross-repo count (same PR number, two repos) was NOT run.',
-      });
-    }
-    const expected = live.length >= 2 ? 4 : 3;
-
-    const snapshot = await loadSnapshot(request);
-    expect(snapshot.prs).toHaveLength(expected);
-    expect(snapshot.tiles.openPrs).toBe(snapshot.prs.length);
-    expect(snapshot.tiles.openPrs).toBe(expected);
-
-    await page.goto('/');
-    await waitForHydration(page);
-    await expect(rows(page)).toHaveCount(expected);
-    await expect(openPrsTile(page)).toHaveText(new RegExp(`^Open PRs\\s*${expected}$`));
   });
 });
 
@@ -538,14 +497,12 @@ test.describe('empty state', () => {
     const snapshot = await loadSnapshot(request);
     expect(snapshot, 'the snapshot must carry a "prs" key').toHaveProperty('prs');
     expect(snapshot.prs).toEqual([]);
-    expect(snapshot.tiles.openPrs).toBe(0);
 
     await page.goto('/');
     await waitForHydration(page);
     await expect(panel(page)).toBeVisible();
     await expect(page.getByTestId('pr-panel-empty')).toHaveText(EMPTY);
     await expect(rows(page)).toHaveCount(0);
-    await expect(openPrsTile(page)).toHaveText(/^Open PRs\s*0$/);
     expect(errors).toEqual([]);
   });
 });
@@ -570,7 +527,6 @@ test.describe('only live sessions', () => {
       // Control: the live PR is there, so an empty panel is not what hides the other one.
       expect(snapshot.prs.map((r) => r.key)).toEqual(['e2e-repo-live#1234']);
       expect(snapshot.prs[0].sessions.map((s) => s.id)).toEqual([live.id]);
-      expect(snapshot.tiles.openPrs).toBe(1);
 
       await page.goto('/');
       await waitForHydration(page);
@@ -580,7 +536,6 @@ test.describe('only live sessions', () => {
       await expect(rowByKey(page, 'e2e-repo-other#1234')).toHaveCount(0);
       await expect(panel(page)).not.toContainText('e2e-repo-other');
       await expect(panel(page)).not.toContainText('LIMITED');
-      await expect(openPrsTile(page)).toHaveText(/^Open PRs\s*1$/);
     });
   }
 });

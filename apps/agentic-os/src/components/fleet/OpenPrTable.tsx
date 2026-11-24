@@ -71,7 +71,8 @@ function PrCard({ row, staleAge }: { row: PrRowView; staleAge: string | null }) 
           {row.tap === null ? 'none' : `${row.tap.step}: ${row.tap.label}${row.tap.headMatches ? '' : ' (older head)'}`}
         </Field>
         <Field label="review path" testId="open-pr-review">{row.reviewPath ?? '-'}</Field>
-        <Field label="spend" testId="open-pr-spend">{spendText(row.spend)}</Field>
+        {/* Only CodeRabbit dollars and engine runs are per PR; headless runs and session tokens are not (C14). */}
+        <Field label="CodeRabbit + engine" testId="open-pr-spend">{spendText(row.spend)}</Field>
         <Field label="CI" testId="open-pr-ci">{row.ci.length === 0 ? '-' : row.ci.join(', ')}</Field>
         <Field label="land commit" testId="open-pr-land">{row.landSha ?? '-'}</Field>
         {row.status !== 'ok' && <Field label="check" testId="open-pr-status">{row.status}</Field>}
