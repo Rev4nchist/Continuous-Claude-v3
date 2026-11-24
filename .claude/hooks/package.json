@@ -21,7 +21,8 @@
     },
     "dependencies": {
         "better-sqlite3": "^12.11.1",
-        "pg": "^8.23.1"
+        "pg": "^8.23.1",
+        "sh-syntax": "0.8.1"
     },
     "overrides": {
         "vite": "7.3.6"
