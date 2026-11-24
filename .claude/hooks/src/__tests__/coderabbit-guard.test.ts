@@ -12,7 +12,6 @@ import {
   writeState,
   checkRunCap,
   repoBranchKey,
-  lexShell,
   joinContinuations,
 } from '../coderabbit-guard.js';
 
@@ -103,7 +102,6 @@ describe('coderabbit-guard classifyShellSegment: leading executable', () => {
     'coderabbit review --agent',
     'coderabbit.exe review --agent',
     './cr review --agent',
-    'C:\\Tools\\cr.exe review --agent',
     '"C:\\Program Files\\CodeRabbit\\cr.exe" review --agent',
     'FOO=bar BAZ="a b" cr review --agent',
     'npx cr review --agent',
@@ -113,6 +111,14 @@ describe('coderabbit-guard classifyShellSegment: leading executable', () => {
     'bash -c "cr review --agent"',
   ])('counts as one run: %s', async (seg) => {
     const c = (await classifyShellSegment(seg));
+    expect(c.verdict).toBe('allow');
+    expect(c.countsRun).toBe(true);
+  });
+
+  // Seat ruling 17:10 (G1b verdict change 1): a Windows path with backslashes is a PowerShell path. Bash reads \T and \c as escapes, so the
+  // program word is unreadable there (the Bash form is a named U1 deny row in the reader tests, added with rule U1 in G7).
+  it('counts as one run in PowerShell: C:\\Tools\\cr.exe review --agent', async () => {
+    const c = await classifyShellSegment('C:\\Tools\\cr.exe review --agent', true);
     expect(c.verdict).toBe('allow');
     expect(c.countsRun).toBe(true);
   });
@@ -531,7 +537,8 @@ describe('coderabbit-guard: wrappers and shell constructs that run a command', (
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const wrap = (flags: string): Array<[string, string]> => [
+  // A third field names the shell that really runs the text. The braces of a script block are PowerShell syntax: in bash they are plain arguments.
+  const wrap = (flags: string): Array<[string, string, ('bash' | 'pwsh')?]> => [
     ['if/then', `if true; then cr review ${flags}; fi`],
     ['if condition', `if cr review ${flags}; then echo done; fi`],
     ['brace group', `{ cr review ${flags}; }`],
@@ -546,9 +553,9 @@ describe('coderabbit-guard: wrappers and shell constructs that run a command', (
     ['Invoke-Expression', `Invoke-Expression 'cr review ${flags}'`],
     ['Start-Process ArgumentList', `Start-Process cr -ArgumentList "review ${flags}"`],
     ['Start-Process FilePath and list', `Start-Process -FilePath cr -ArgumentList review,${flags.split(' ').join(',')}`],
-    ['Start-Job', `Start-Job { cr review ${flags} }`],
-    ['ForEach-Object', `1..5 | ForEach-Object { cr review ${flags} }`],
-    ['percent alias', `1..5 | % { cr review ${flags} }`],
+    ['Start-Job', `Start-Job { cr review ${flags} }`, 'pwsh'],
+    ['ForEach-Object', `1..5 | ForEach-Object { cr review ${flags} }`, 'pwsh'],
+    ['percent alias', `1..5 | % { cr review ${flags} }`, 'pwsh'],
     ['bash -c', `bash -c 'cr review ${flags}'`],
     ['nested wrappers', `sudo bash -c "eval 'cr review ${flags}'"`],
   ];
@@ -559,9 +566,14 @@ describe('coderabbit-guard: wrappers and shell constructs that run a command', (
     expect(existsSync(stateFile)).toBe(false);
   });
 
-  it.each(wrap('--agent'))('counts exactly one run behind %s (a loop is counted once: the iteration count is not visible)', async (_name, cmd) => {
-    expect((await decide(bash(cmd), env)).allow).toBe(true);
+  it.each(wrap('--agent'))('counts exactly one run behind %s (a loop is counted once: the iteration count is not visible)', async (_name, cmd, shell) => {
+    expect((await decide((shell === 'pwsh' ? pwsh : bash)(cmd), env)).allow).toBe(true);
     expect(readState(stateFile).counts['wrap#main']).toBe(1);
+  });
+
+  // Seat ruling 17:10 (G1b verdict change 2). Probe: .claudedocs/e2e-coord-guard-shell-parser/50-g1b-verdict-probe.txt.
+  it.each(wrap('--agent').filter((w) => w[2] === 'pwsh'))('denies %s as a Bash text: in bash the braces are plain arguments, so the review has no call to place in a folder', async (_name, cmd) => {
+    expect((await decide(bash(cmd), env)).allow).toBe(false);
   });
 
   it.each([
@@ -1410,12 +1422,15 @@ describe('coderabbit-guard: help and version are free only for a plain one-line 
 
   const G1 = 'cr review --agent \\\n# --version';
   const G2 = 'cat <<EOF\n$(cr review --agent # --version\n)\nEOF';
+  // G3 is the original text of the row: the # comment swallows the closing paren, so PowerShell cannot parse it (seat ruling 17:32, G7a). G3b keeps
+  // the row's intent: the comment is closed on its own line, the text parses, and the comment still cannot make the review free.
   const G3 = '@"\n$(cr review --agent # --version)\n"@';
+  const G3b = '@"\n$(cr review --agent # --version\n)\n"@';
 
   const SMUGGLED: Array<[string, string, (c: string) => Record<string, unknown>]> = [
     ['Bash line continuation then comment (thread 4379197493)', G1, bash],
     ['Bash substitution with a comment in a heredoc (thread 4379197510)', G2, bash],
-    ['PowerShell expandable here-string with a comment', G3, pwsh],
+    ['PowerShell expandable here-string with a comment', G3b, pwsh],
     ['PowerShell single-quote here-string earlier in the command', "@'\nnote\n'@; cr review --agent # --version", pwsh],
     ['Bash continuation then --version', 'cr review --agent \\\n--version', bash],
     ['PowerShell backtick continuation then --version', 'cr review --agent `\n--version', pwsh],
@@ -1441,6 +1456,14 @@ describe('coderabbit-guard: help and version are free only for a plain one-line 
     expect(r.allow).toBe(false);
     expect(r.reason).toMatch(/run cap reached/);
     expect(used()).toBe(2);
+  });
+
+  it('unparseable in PowerShell: the comment swallows the paren, so the text is denied with the way-out and uses no run slot', async () => {
+    const r = await decide(pwsh(G3), env);
+    expect(r.allow).toBe(false);
+    expect(r.reason).toContain('run the review as its own plain command with --base <ref>');
+    expect(r.reason).toContain('the command did not parse');
+    expect(used()).toBe(0);
   });
 
   it.each([
@@ -1603,9 +1626,7 @@ describe('coderabbit-guard: a continued word cannot hide a review (Greptile r9, 
     expect(used()).toBe(1);
   });
 
-  it('an escaped # is not a comment', () => {
-    expect(lexShell('echo \\# --version').text).toContain('--version');
-  });
+  // The old lexShell row of this place ("an escaped # is not a comment") moved to shell-ast.test.ts as the row "lexShell row: an escaped # is not a comment ..." (plan 44 section 4.2).
 });
 
 describe('coderabbit-guard: the billing check reads the raw command (Dave r9)', () => {

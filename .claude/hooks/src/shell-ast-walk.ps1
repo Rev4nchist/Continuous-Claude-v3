@@ -99,11 +99,32 @@ foreach ($p in $ast.FindAll({ param($n) $n.GetType().Name -eq 'ParameterAst' }, 
   [void]$assigns.Add(@{ name = $p.Name.VariablePath.UserPath; lit = $null; end = $p.Extent.StartOffset; top = $false; s = $p.Extent.StartOffset })
 }
 
+# Ranges for the coderabbit guard (coord-guard-shell-parser commit 2): content of each quoted string and here-string, here-string bodies, and each $( ) span
+# with a flag for "inside a double-quoted string". Read from AST extents only; the quote characters themselves are outside the content range.
+$quoted = New-Object System.Collections.ArrayList
+$bodies = New-Object System.Collections.ArrayList
+foreach ($q in $ast.FindAll({ param($n) $t = $n.GetType().Name; $t -eq 'StringConstantExpressionAst' -or $t -eq 'ExpandableStringExpressionAst' }, $true)) {
+  $st = [string]$q.StringConstantType
+  $qs = $q.Extent.StartOffset; $qe = $q.Extent.EndOffset
+  if ($st -eq 'SingleQuotedHereString' -or $st -eq 'DoubleQuotedHereString') {
+    # The closing @' or @" starts a line: the body ends at the line break before it (e - 3), the opener line break (s + 2) is part of the body.
+    [void]$quoted.Add(@{ s = $qs + 2; e = $qe - 3 }); [void]$bodies.Add(@{ s = $qs + 2; e = $qe - 3 })
+  } elseif ($st -eq 'SingleQuoted' -or $st -eq 'DoubleQuoted') {
+    [void]$quoted.Add(@{ s = $qs + 1; e = $qe - 1 })
+  }
+}
+$substs = New-Object System.Collections.ArrayList
+foreach ($x in $ast.FindAll({ param($n) $n.GetType().Name -eq 'SubExpressionAst' }, $true)) {
+  $dq = $false; $pp = $x.Parent
+  while ($pp) { if ($pp.GetType().Name -eq 'ExpandableStringExpressionAst') { $dq = $true; break }; $pp = $pp.Parent }
+  [void]$substs.Add(@{ s = $x.Extent.StartOffset; e = $x.Extent.EndOffset; dq = $dq })
+}
+
 $comments = @(foreach ($t in $tokens) { if ($t.Kind.ToString() -eq 'Comment') { @{ s = $t.Extent.StartOffset; e = $t.Extent.EndOffset } } })
 $errors = @(foreach ($x in $errs) { @{ offset = $x.Extent.StartOffset; msg = [string]$x.Message } })
 $kinds = @($ast.FindAll({ $true }, $true) | ForEach-Object { $_.GetType().Name } | Sort-Object -Unique)
 
-return @{ errors = $errors; cmds = @($cmds); assigns = @($assigns); comments = $comments; kinds = $kinds }
+return @{ errors = $errors; cmds = @($cmds); assigns = @($assigns); comments = $comments; kinds = $kinds; quoted = @($quoted); bodies = @($bodies); substs = @($substs) }
 }
 
 function ToJson($o) { $o | ConvertTo-Json -Compress -Depth 20 -EscapeHandling EscapeNonAscii }

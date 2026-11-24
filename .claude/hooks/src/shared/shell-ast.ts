@@ -82,8 +82,19 @@ export interface Call {
   argsUnknown?: boolean;
 }
 export interface Assign { name: string; lit: string | null; raw: string; top: boolean }
-export interface ParseError { msg: string; offset: number; line: number; column?: number }
-export interface ParseResult {
+/** `reader` is true when the READER failed (wasm did not load, the parser threw with no position, the pwsh child failed), false or absent for a syntax error of the text. */
+export interface ParseError { msg: string; offset: number; line: number; column?: number; reader?: boolean }
+/** A `$( )`, backtick or PowerShell `$( )` substitution: its span WITH its delimiters, and whether it sits inside a double-quoted string. */
+export interface Subst { from: number; to: number; dq: boolean }
+/** Ranges read straight from parser node positions (sh-syntax nodes, PowerShell AST extents), never from a text scan. Offsets are string indexes of the parsed text. */
+export interface Spans {
+  /** Content of each single or double quoted string and here-string, without its quote characters. */
+  quoted: [number, number][];
+  substs: Subst[];
+  /** Heredoc bodies and here-string bodies. */
+  bodies: [number, number][];
+}
+export interface ParseResult extends Spans {
   ok: boolean;
   calls: Call[];
   errors: ParseError[];
@@ -93,7 +104,10 @@ export interface ParseResult {
   assigns: Assign[];
   dialect: string;
 }
-export interface ParseOpts { pwshProvider?: (text: string) => { json?: N; error?: string }; timeoutMs?: number }
+const NO_SPANS: Spans = { quoted: [], substs: [], bodies: [] };
+/** `bashProvider` replaces the sh-syntax call (a test seam: one row per reader failure, each on its own path). */
+/** `noNested` skips F3: a payload (`bash -c`, `eval`, `iex`, `xargs`) is not parsed and not added to the list. A caller that reads the payload text itself (the coderabbit guard) sets it, so each text is parsed once. */
+export interface ParseOpts { pwshProvider?: (text: string) => { json?: N; error?: string }; bashProvider?: (text: string) => Promise<unknown>; timeoutMs?: number; noNested?: boolean }
 
 // F5 lists. BASH_KINDS_NOTE is note 02 section 3 as written; the EXTRA kinds occur in real scripts and the note omits them.
 export const BASH_KINDS_NOTE = ['File', 'Stmt', 'CallExpr', 'BinaryCmd', 'Word', 'Lit', 'SglQuoted', 'DblQuoted', 'ParamExp', 'CmdSubst', 'ProcSubst', 'Assign', 'Redirect', 'Subshell', 'Block', 'IfClause', 'WhileClause', 'ForClause', 'WordIter', 'CaseClause', 'CaseItem', 'FuncDecl', 'DeclClause', 'TimeClause', 'ArithmExp', 'BinaryArithm', 'ParenArithm', 'ArrayExpr', 'ArrayElem', 'Comment', 'CoprocClause', 'CStyleLoop', 'UnaryArithm', 'TestClause'];
@@ -198,12 +212,23 @@ function makeBashWord(w: N, conv: Conv): Word {
 // ---- bash walk: events in evaluation order (inner calls before the call that holds them)
 interface Ctx { place: Place; depth: number; func: string | null; top: boolean }
 type Ev = N;
-interface Walked { events: Ev[]; kinds: Set<string>; free: [number, number][]; heredocs: ParseResult['heredocs'] }
+interface Walked { events: Ev[]; kinds: Set<string>; free: [number, number][]; heredocs: ParseResult['heredocs']; spans: Spans }
 
 function walkBash(file: N, text: string): Walked {
   const conv = makeConv(text);
   const ev: Ev[] = []; const kinds = new Set<string>(); const free: [number, number][] = [];
-  walkAll(file, (n) => { kinds.add(n.type); if (n.type === 'Comment') free.push([conv.c(n.start), conv.c(n.end)]); });
+  const quoted: [number, number][] = []; const dqRanges: [number, number][] = []; const substRaw: [number, number][] = [];
+  walkAll(file, (n) => {
+    kinds.add(n.type);
+    if (n.type === 'Comment') free.push([conv.c(n.start), conv.c(n.end)]);
+    // A quoted string node spans its quote characters: the content is what lies between them ($'..' has one more character in front).
+    else if (n.type === 'SglQuoted') quoted.push([conv.c(n.start) + (n.dollar ? 2 : 1), conv.c(n.end) - 1]);
+    else if (n.type === 'DblQuoted') { const r: [number, number] = [conv.c(n.start) + (n.dollar ? 2 : 1), conv.c(n.end) - 1]; quoted.push(r); dqRanges.push(r); }
+    // ArithmExp (`$(( ))`) is listed with the substitutions: the lexer this replaces read its `$(` as code, and so does the scan that uses the list.
+    else if (n.type === 'CmdSubst' || n.type === 'ProcSubst' || n.type === 'ArithmExp') substRaw.push([conv.c(n.start), conv.c(n.end)]);
+  });
+  const delims: [number, number][] = [];
+  const substs: Subst[] = substRaw.map(([from, to]) => ({ from, to, dq: dqRanges.some(([a, b]) => a <= from && to <= b + 1) }));
   const base: Place = { pipe: false, chain: null, background: false };
   const root: Ctx = { place: base, depth: 0, func: null, top: true };
   // Only the outermost substitutions are entered here; stmts() reaches the nested ones itself.
@@ -229,6 +254,8 @@ function walkBash(file: N, text: string): Walked {
   const heredocs: Walked['heredocs'] = [];
   const redirect = (r: N, ctx: Ctx, prog: string | null, s: N): void => {
     for (const w of [r.word, r.hdoc]) if (w) subst(w, ctx);
+    // The delimiter word of a heredoc (`<<'EOF'`) is no quoted string: its range is taken out of `quoted` below.
+    if (r.word && (r.op === RedirOperator.Hdoc || r.op === RedirOperator.DashHdoc)) delims.push([conv.c(r.word.start), conv.c(r.word.end)]);
     if (r.hdoc) heredocs.push({ start: conv.c(r.hdoc.start), end: conv.c(r.hdoc.end), pipe: ctx.place.pipe, callStart: s.cmd?.type === 'CallExpr' && s.cmd.args.length ? conv.c(s.cmd.start) : null });
     if (r.hdoc && !ctx.place.pipe && !SHELLS.has(prog ?? '') && !PWSHS.has(prog ?? '')) free.push([conv.c(r.hdoc.start), conv.c(r.hdoc.end)]);
   };
@@ -296,7 +323,7 @@ function walkBash(file: N, text: string): Walked {
   };
   stmts(file.stmts, root);
   if (kinds.has('LetClause') || kinds.has('ArithmCmd') || kinds.has('ArithmExp') || kinds.has('CStyleLoop')) ev.push({ t: 'unsafe' });
-  return { events: ev, kinds, free, heredocs };
+  return { events: ev, kinds, free, heredocs, spans: { quoted: quoted.filter(([a, b]) => !delims.some(([x, y]) => x <= a && b <= y)), substs, bodies: heredocs.map((h) => [h.start, h.end] as [number, number]) } };
 }
 
 // stdin of a call: heredoc or here-string body, when the Stmt has one
@@ -368,7 +395,10 @@ function walkPwsh(j: N, text: string): Walked {
   }
   for (const a of j.assigns) evs.push({ key: a.end - 0.5, ev: { t: 'assign', name: a.name, lit: a.lit, raw: text.slice(a.s, a.end), top: a.top } });
   evs.sort((x, y) => x.key - y.key);
-  return { events: evs.map((x) => x.ev), kinds: new Set<string>(j.kinds), free: j.comments.map((c: N): [number, number] => [c.s, c.e]), heredocs: [] };
+  // The walker script reads these ranges from PowerShell AST extents (older output has none: empty lists).
+  const rng = (l: N): [number, number][] => (Array.isArray(l) ? l : []).map((x: N): [number, number] => [x.s, x.e]);
+  const substs: Subst[] = (Array.isArray(j.substs) ? j.substs : []).map((x: N) => ({ from: x.s, to: x.e, dq: x.dq === true }));
+  return { events: evs.map((x) => x.ev), kinds: new Set<string>(j.kinds), free: j.comments.map((c: N): [number, number] => [c.s, c.e]), heredocs: [], spans: { quoted: rng(j.quoted), substs, bodies: rng(j.bodies) } };
 }
 const OUTVAR = /^-(ov|outvariable|ev|errorvariable|iv|informationvariable|wv|warningvariable|pv|pipelinevariable)$/i;
 function outVarWrites(words: Word[]): string[] {
@@ -470,6 +500,7 @@ function xargsInner(call: Call): Call | null {
 }
 
 async function expandNested(calls: Call[], opts: ParseOpts, level: number): Promise<Call[]> {
+  if (opts.noNested) return calls;
   const out: Call[] = [];
   for (const c of calls) {
     out.push(c);
@@ -492,34 +523,36 @@ async function expandNested(calls: Call[], opts: ParseOpts, level: number): Prom
 export function lineStartOf(text: string, offset: number): number { return text.lastIndexOf('\n', offset - 1) + 1; }
 function lineOf(text: string, offset: number): number { return text.slice(0, offset).split('\n').length; }
 
-interface Level { ok: boolean; calls: Call[]; errors: ParseError[]; kinds: Set<string>; freeRanges: [number, number][]; heredocs: ParseResult['heredocs']; assigns: Assign[]; dialect: string }
-interface Raw { ok: boolean; errors: ParseError[]; kinds: Set<string>; events?: Ev[]; free?: [number, number][]; heredocs?: ParseResult['heredocs'] }
+interface Level extends Spans { ok: boolean; calls: Call[]; errors: ParseError[]; kinds: Set<string>; freeRanges: [number, number][]; heredocs: ParseResult['heredocs']; assigns: Assign[]; dialect: string }
+interface Raw { ok: boolean; errors: ParseError[]; kinds: Set<string>; events?: Ev[]; free?: [number, number][]; heredocs?: ParseResult['heredocs']; spans?: Spans }
 
 async function parseLevel(text: string, dialect: string, opts: ParseOpts, level: number): Promise<Level> {
-  const r = dialect === 'pwsh' ? await levelPwsh(text, opts) : await levelBash(text);
-  if (!r.ok) return { ok: false, calls: [], errors: r.errors, kinds: r.kinds, freeRanges: [], heredocs: [], assigns: [], dialect };
+  const r = dialect === 'pwsh' ? await levelPwsh(text, opts) : await levelBash(text, opts);
+  if (!r.ok) return { ok: false, calls: [], errors: r.errors, kinds: r.kinds, freeRanges: [], heredocs: [], assigns: [], dialect, ...NO_SPANS };
   const { calls, assigns } = resolve(r.events as Ev[], dialect);
   const expanded = await expandNested(calls, opts, level);
   const kinds = new Set(r.kinds);
   for (const c of expanded) c.nestedKinds?.forEach((k) => kinds.add(k));
-  return { ok: true, calls: expanded, errors: [], kinds, freeRanges: r.free as [number, number][], heredocs: r.heredocs as ParseResult['heredocs'], assigns, dialect };
+  return { ok: true, calls: expanded, errors: [], kinds, freeRanges: r.free as [number, number][], heredocs: r.heredocs as ParseResult['heredocs'], assigns, dialect, ...(r.spans ?? NO_SPANS) };
 }
-async function levelBash(text: string): Promise<Raw> {
+async function levelBash(text: string, opts: ParseOpts = {}): Promise<Raw> {
   let file: N;
-  try { file = await parseBashRaw(text); } catch (e: N) {
+  try { file = await (opts.bashProvider ?? parseBashRaw)(text); } catch (e: N) {
     const conv = makeConv(text);
     const pos = e?.pos ?? { offset: 0, line: 1, column: 1 };
-    return { ok: false, errors: [{ msg: String(e?.message ?? e), offset: conv.c(pos.offset), line: pos.line, column: pos.column }], kinds: new Set() };
+    // A syntax error of sh-syntax carries `pos`. A throw without it (wasm file missing, bad bytes, a Go panic) is the reader failing.
+    return { ok: false, errors: [{ msg: String(e?.message ?? e), offset: conv.c(pos.offset), line: pos.line, column: pos.column, reader: e?.pos === undefined }], kinds: new Set() };
   }
+  if (file === null || typeof file !== 'object') return { ok: false, errors: [{ msg: 'sh-syntax returned no tree', offset: 0, line: 1, reader: true }], kinds: new Set() };
   const w = walkBash(file, text);
-  return { ok: true, errors: [], kinds: w.kinds, events: w.events, free: w.free, heredocs: w.heredocs };
+  return { ok: true, errors: [], kinds: w.kinds, events: w.events, free: w.free, heredocs: w.heredocs, spans: w.spans };
 }
 async function levelPwsh(text: string, opts: ParseOpts): Promise<Raw> {
   const { json, error } = opts.pwshProvider ? opts.pwshProvider(text) : await runWalker(text, opts.timeoutMs ?? 3000);
-  if (error || !json) return { ok: false, errors: [{ msg: error ?? 'pwsh no result', offset: 0, line: 1 }], kinds: new Set() };
+  if (error || !json) return { ok: false, errors: [{ msg: error ?? 'pwsh no result', offset: 0, line: 1, reader: true }], kinds: new Set() };
   if (json.errors.length) return { ok: false, errors: json.errors.map((e: N) => ({ msg: e.msg, offset: e.offset, line: lineOf(text, e.offset) })), kinds: new Set<string>(json.kinds) };
   const w = walkPwsh(json, text);
-  return { ok: true, errors: [], kinds: w.kinds, events: w.events, free: w.free, heredocs: w.heredocs };
+  return { ok: true, errors: [], kinds: w.kinds, events: w.events, free: w.free, heredocs: w.heredocs, spans: w.spans };
 }
 
 export async function parseCalls(text: string, dialect: string, opts: ParseOpts = {}): Promise<ParseResult> {

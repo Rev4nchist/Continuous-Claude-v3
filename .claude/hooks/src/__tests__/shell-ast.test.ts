@@ -1,9 +1,12 @@
 // Behaviour rows of shared/shell-ast.ts parseCalls: the normalized call list from both dialects (coord-guard-shell-parser PR A).
 // Port of the RE builder B scratch rows. The module under test is imported, never copied. The PowerShell rows need pwsh:
 // a missing pwsh fails them loudly (a skip would hide a broken walker); CI ubuntu-latest lists PowerShell 7.6 (note 02 section 2).
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { parseCalls, PWSH_KINDS, type Call, type ParseResult } from '../shared/shell-ast.js';
+
+// A PowerShell row starts a pwsh child (0.4 to 1 s cold, more under load). The vitest default of 5 s failed one row at 5,009 ms while other sessions ran pre-pr.
+vi.setConfig({ testTimeout: 60000 });
 
 const P = 'pu' + 'sh';
 const lits = (c: Call): (string | null)[] => c.words.map((w) => w.lit);
@@ -33,6 +36,14 @@ test('bash: cd chain fills cwdBefore, literal and not', async () => {
   assert.deepEqual(find(r, 'git').cwdBefore, ['/a', null]);
   const last = r.calls.filter((c) => c.words[0].lit === 'git').at(-1)!;
   assert.deepEqual(last.cwdBefore, ['/a', null, '/b']);
+});
+
+// KNOWN LIMIT (seat 17:13, coord-guard-shell-parser G5): CD_NAMES in shell-ast.ts is one list for both dialects and lowercases the program name.
+// Real Bash has no `CD` and no `chdir`, so for Bash `cwdBefore` over-reports a move. No guard reads cwdBefore: coderabbit-guard keeps its own
+// per-shell cd lists (CD_NAME_BASH, CD_NAME_PS). This row pins TODAY's behaviour; a guard that trusts cwdBefore must fix CD_NAMES first.
+test('bash: known limit, cwdBefore counts CD and chdir as cd (real Bash has neither)', async () => {
+  const r = await SH('CD /a; chdir /b; git status');
+  assert.deepEqual(find(r, 'git').cwdBefore, ['/a', '/b']);
 });
 
 test('bash: place for pipe, chain, background', async () => {
@@ -281,3 +292,164 @@ for (const [kind, text] of KIND_ROWS) {
     assert.ok(PWSH_KINDS.includes(kind));
   });
 }
+
+// ---- reader failure versus syntax error (coord-guard-shell-parser commit 2, seat change E1 to E7) ----
+test('E7: a syntax error of the text is ok:false with reader unset', async () => {
+  const r = await parseCalls("cr 'review", 'bash');
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.length > 0);
+  assert.notEqual(r.errors[0].reader, true);
+});
+
+test('E1: a wasm load failure (a throw with no position) is ok:false with reader true', async () => {
+  const r = await parseCalls('cr review', 'bash', { bashProvider: async () => { throw new Error('ENOENT sh-syntax.wasm'); } });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors[0].reader, true);
+});
+
+test('E5: the parser throwing a non-syntax error is ok:false with reader true', async () => {
+  const r = await parseCalls('cr review', 'bash', { bashProvider: async () => { throw new TypeError('wasm trap'); } });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors[0].reader, true);
+});
+
+test('E6: the parser returning no tree is ok:false with reader true', async () => {
+  const r = await parseCalls('cr review', 'bash', { bashProvider: async () => null });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors[0].reader, true);
+  assert.match(r.errors[0].msg, /no tree/);
+});
+
+test('E2/E4: a pwsh provider error or empty result is ok:false with reader true', async () => {
+  const a = await parseCalls('cr review', 'pwsh', { pwshProvider: () => ({ error: 'pwsh exit 1' }) });
+  const b = await parseCalls('cr review', 'pwsh', { pwshProvider: () => ({ error: 'pwsh bad json' }) });
+  for (const r of [a, b]) {
+    assert.equal(r.ok, false);
+    assert.equal(r.errors[0].reader, true);
+  }
+});
+
+// ---- line continuations: the parser-level rows that replace the joinContinuations rows (plan 44, section 4.1) ----
+const words = async (t: string, d: 'bash' | 'pwsh' = 'bash'): Promise<(string | null)[][]> => (await parseCalls(t, d)).calls.map((c) => c.words.map((w) => w.lit));
+
+test('continuation: Bash removes a backslash-newline outside quotes and inside double quotes', async () => {
+  assert.deepEqual(await words('echo foo\\\nbar'), [['echo', 'foobar']]);
+  assert.deepEqual(await words('echo "a\\\nb"'), [['echo', 'ab']]);
+});
+test('continuation: Bash removes a backslash CRLF pair', async () => {
+  assert.deepEqual(await words('echo foo\\\r\nbar'), [['echo', 'foobar']]);
+});
+test('continuation: Bash keeps a backslash-newline inside single quotes', async () => {
+  assert.deepEqual(await words("echo 'a\\\nb'"), [['echo', 'a\\\nb']]);
+});
+test('continuation: an escaped backslash before a newline is not a continuation (two calls)', async () => {
+  const w = await words('echo \\\\\nnext');
+  assert.equal(w.length, 2);
+  assert.deepEqual(w[1], ['next']);
+});
+test('continuation: a # that follows a removed continuation joins its word and is not a comment', async () => {
+  assert.deepEqual(await words('echo foo\\\n# note'), [['echo', 'foo#', 'note']]);
+});
+test('continuation: PowerShell removes a backtick-newline between tokens, keeps it inside single quotes', async () => {
+  assert.deepEqual(await words('echo foo`\nbar', 'pwsh'), [['echo', 'foo\nbar']]);
+  assert.deepEqual(await words("echo 'a`\nb'", 'pwsh'), [['echo', 'a`\nb']]);
+});
+test('continuation: PowerShell treats a backslash-newline as no continuation', async () => {
+  assert.equal((await words('echo foo\\\nbar', 'pwsh')).length, 2);
+});
+test('lexShell row: an escaped # is not a comment; the escaped word reads as null and --version stays its own word', async () => {
+  assert.deepEqual(await words('echo \\# --version'), [['echo', null, '--version']]);
+});
+
+test('noNested: a bash -c payload is neither parsed nor added to the list, so the caller reads it once', async () => {
+  const on = await parseCalls("bash -c 'cr review --agent'", 'bash', { noNested: true });
+  assert.equal(on.calls.length, 1);
+  assert.equal(on.calls[0].nested, undefined);
+  const off = await parseCalls("bash -c 'cr review --agent'", 'bash');
+  assert.equal(off.calls.length, 2);
+  assert.equal(off.calls[1].viaPayload, 'bash-c');
+});
+
+// ---- range lists read from parser node positions: quoted, substs, bodies (coord-guard-shell-parser commit 2, seat ruling 16:02) ----
+const cut = (t: string, ranges: [number, number][]): string[] => ranges.map(([a, b]) => t.slice(a, b));
+
+test('ranges bash: quoted lists the content of each single, double and $-quoted string', async () => {
+  const t = 'echo "a b" \'c d\' $\'e f\'';
+  const r = await parseCalls(t, 'bash', { noNested: true });
+  assert.deepEqual(cut(t, r.quoted), ['a b', 'c d', 'e f']);
+});
+
+test('ranges bash: quotes outside words (an assignment value, a redirect target) are listed too', async () => {
+  const t = 'X="a;b" cr review 2>"out;file"';
+  const r = await parseCalls(t, 'bash', { noNested: true });
+  assert.deepEqual(cut(t, r.quoted), ['a;b', 'out;file']);
+});
+
+test('ranges bash: a substitution inside a double-quoted string is one span with its delimiters and dq true', async () => {
+  const t = 'echo "$f $(tr -cd x < $f | wc -c)" `date`';
+  const r = await parseCalls(t, 'bash', { noNested: true });
+  assert.deepEqual(r.substs.map((s) => [t.slice(s.from, s.to), s.dq]), [['$(tr -cd x < $f | wc -c)', true], ['`date`', false]]);
+});
+
+test('ranges bash: a heredoc body holds its delimiter line; the delimiter word of a quoted heredoc is no quoted string', async () => {
+  const t = "cat <<'EOF'\nbody\nEOF";
+  const r = await parseCalls(t, 'bash', { noNested: true });
+  assert.deepEqual(cut(t, r.bodies), ['body\nEOF']);
+  assert.deepEqual(cut(t, r.quoted), []);
+});
+
+test('ranges bash: an empty heredoc has no body and its quoted delimiter is no quoted string', async () => {
+  const t = "cat <<'EOF'\nEOF\necho ok";
+  const r = await parseCalls(t, 'bash', { noNested: true });
+  assert.deepEqual(r.bodies, []);
+  assert.deepEqual(cut(t, r.quoted), []);
+});
+
+test('ranges bash: an arithmetic expansion is listed with the substitutions', async () => {
+  const t = 'echo "n=$((1+2))"';
+  const r = await parseCalls(t, 'bash', { noNested: true });
+  assert.deepEqual(r.substs.map((s) => [t.slice(s.from, s.to), s.dq]), [['$((1+2))', true]]);
+});
+
+test('ranges pwsh: quoted lists the content of single and double quoted strings', async () => {
+  const t = 'echo "a b" \'c d\'';
+  const r = await parseCalls(t, 'pwsh', { noNested: true });
+  assert.deepEqual(cut(t, r.quoted), ['a b', 'c d']);
+});
+
+test('ranges pwsh: $( ) spans with the dq flag, inside and outside a double-quoted string', async () => {
+  const t = 'echo "x $(Get-Date) y" $(cr review)';
+  const r = await parseCalls(t, 'pwsh', { noNested: true });
+  assert.deepEqual(r.substs.map((s) => [t.slice(s.from, s.to), s.dq]), [['$(Get-Date)', true], ['$(cr review)', false]]);
+});
+
+test('ranges pwsh: a here-string body is in quoted and bodies, from its first line break to the one before the closing @', async () => {
+  const t = "echo @'\nbody\n'@";
+  const r = await parseCalls(t, 'pwsh', { noNested: true });
+  assert.deepEqual(cut(t, r.bodies), ['\nbody']);
+  assert.deepEqual(cut(t, r.quoted), ['\nbody']);
+});
+
+test('ranges pwsh: a double-quoted here-string keeps its $( ) span, flagged dq', async () => {
+  const t = 'echo @"\nbody $(cr review)\n"@';
+  const r = await parseCalls(t, 'pwsh', { noNested: true });
+  assert.deepEqual(r.substs.map((s) => [t.slice(s.from, s.to), s.dq]), [['$(cr review)', true]]);
+  assert.deepEqual(cut(t, r.bodies), ['\nbody $(cr review)']);
+});
+
+test('ranges pwsh: a doubled quote inside a quoted string stays inside one range (the PowerShell AST rule)', async () => {
+  const t = "echo 'Dave''s tap' cr";
+  const r = await parseCalls(t, 'pwsh', { noNested: true });
+  assert.deepEqual(cut(t, r.quoted), ["Dave''s tap"]);
+});
+
+// ---- known divergences, kept visible so nobody removes the raw call rule as dead code ----
+test('parser divergence D1: sh-syntax 0.8.1 joins a backslash-newline after a comment, bash does not (probe 45)', async () => {
+  // Real bash (WSL) runs `echo two` as a second command. The package reads one call. The guard covers it with the raw cr-then-review rule.
+  assert.deepEqual(await words('echo hi # note \\\necho two'), [['echo', 'hi', 'echo', 'two']]);
+});
+test('old lexer divergence D2: PowerShell mid-word backtick CRLF is two statements, as real PowerShell reads it', async () => {
+  const w = await words('echo foo`\r\nbar', 'pwsh');
+  assert.equal(w.length, 2);
+  assert.deepEqual(w[1], ['bar']);
+});

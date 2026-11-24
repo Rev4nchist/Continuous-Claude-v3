@@ -20,7 +20,7 @@
  * command that receives it, so `bash <<EOF` is read as a script. A wrapper that takes a command
  * string (bash -c, eval, iex) is unwrapped and its inner string is split and classified again.
  *
- * Shell comments are removed before any scan, by the same lexer pass that finds quotes (lexShell): a
+ * Shell comments are removed before any scan, by the same parser reading that finds quotes (lexedFromReading): a
  * `#` that starts a word outside quotes runs to the end of the line, and PowerShell `<# ... #>` too. Comment text counts for
  * nothing for parsing and run counting, so `cr review --agent # --version` is a review and `cr doctor # before
  * review` is not. The raw billing check below is the one exception: it reads comments.
@@ -46,7 +46,7 @@
  * answer-key check. A cr or coderabbit word (after baseName, so `coderabbit@latest` counts) followed by the word review is a call when:
  * - it is NOT in quotes: anywhere in the command, behind any program, also inside `$( )` and backticks (`echo cr review` is a call); or
  * - it IS in quotes and the segment hands that string to a program that runs it (Start-Process, wsl, watch, ssh, parallel, Start-Job,
- *   ForEach-Object, Invoke-Command); the shells and evals that parseInvocation opens (`bash -c`, `bash -ec`, `eval`, `iex`, `cmd /c`,
+ *   ForEach-Object, Invoke-Command); the shells and evals that invocationOf opens (`bash -c`, `bash -ec`, `eval`, `iex`, `cmd /c`,
  *   `pwsh -Command`) are not scanned here, their inner string is read again by this same rule. A wrapper the parser does not peel
  *   (`nice`, `env -i`, `timeout -k 5 60`, `winpty`, `stdbuf`, `find -exec`) is searched for an unquoted shell, eval, starter or string-runner
  *   word: from there a `-c` string that holds a call makes the quoted cr word a call (runsQuotedString). A shell with no -c gets a script
@@ -137,6 +137,7 @@ import { homedir, tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
 import { logGuardDecision } from './shared/guard-log.js';
+import { parseCalls, BASH_KINDS_NOTE, BASH_KINDS_EXTRA, PWSH_KINDS, type Call, type ParseOpts, type ParseResult, type Word } from './shared/shell-ast.js';
 // A side-effect-free lib (esbuild bundles it; it holds no isDirectRun). Typed by src/shared/answer-paths.d.ts.
 import { ANSWER_KEY_GLOBS, answerKeyCheck, matchGlob, slashLower } from '../../../scripts/github/lib/answer-paths.mjs';
 
@@ -205,14 +206,6 @@ export function writeState(path: string, state: RunState): void {
 /** Stands in for quoted text. It is never a separator. The original text is still read from the segment. */
 const FILL = '\u0000';
 
-interface Heredoc {
-  delim: string;
-  /** `<<-` strips leading tabs from the delimiter line. */
-  strip: boolean;
-  /** An unquoted delimiter lets the shell run $( ) and backticks in the body. */
-  expand: boolean;
-}
-
 /** True when `quote` closes somewhere after `from`, skipping escaped characters in double quotes. */
 function hasClosing(s: string, from: number, quote: string, esc: string): boolean {
   for (let k = from; k < s.length; k++) {
@@ -220,16 +213,6 @@ function hasClosing(s: string, from: number, quote: string, esc: string): boolea
     else if (s[k] === quote) return true;
   }
   return false;
-}
-
-/** Index of the `)` that closes a `$(` whose body starts at `from`, or -1. */
-function closingParen(s: string, from: number): number {
-  let depth = 0;
-  for (let k = from; k < s.length; k++) {
-    if (s[k] === '(') depth++;
-    else if (s[k] === ')' && depth-- === 0) return k;
-  }
-  return -1;
 }
 
 /** The result of one lexer pass over a command. All three texts have the length of the source. */
@@ -244,6 +227,8 @@ export interface Lexed {
   bodies: Set<number>;
   /** Spans [start, end) the shell RUNS: `$( )` and backtick substitutions in every state, also in an expanded heredoc. */
   execs: Array<[number, number]>;
+  /** The parser's calls of this text (none from a payload). Absent on the plain facts of a text nobody read: a scan then counts, it never skips. */
+  calls?: Call[];
 }
 
 /** True when a `#` at `i` starts a word: the start of the text, or after whitespace, `;`, `|`, `&` or `(`. */
@@ -304,189 +289,6 @@ export function joinContinuations(command: string, ps = false): string {
 }
 
 /**
- * ONE left-to-right pass that tracks every state together: normal, single-quoted, double-quoted
- * (with escapes), `$( )` and backtick substitutions, heredoc bodies, PowerShell here-strings and
- * comments. Two separate passes cannot agree: an apostrophe in a comment would pair with a later
- * quote, and a quoted `#` would then look like a comment start.
- *
- * Comments: a `#` starts one only in normal state at the start of a word. It runs to the end of the
- * line and the newline stays. Quotes and `<<` inside it mean nothing. In PowerShell `<# ... #>` is a
- * block comment, again only in normal state. A `#` inside a word (`a#b`, `$#`, `url#anchor`) stays.
- * Comment text is data: a `--version` or the word `review` there must change nothing.
- *
- * Quoted text, heredoc bodies and here-strings become FILL in `masked`. Command substitutions inside
- * double quotes (and in an unquoted heredoc body) stay readable, because the shell runs them.
- */
-export function lexShell(command: string, ps = false): Lexed {
-  const n = command.length;
-  const text = command.split('');
-  const out = command.split('');
-  const dqSubs = new Set<number>();
-  const bodies = new Set<number>();
-  const execs: Array<[number, number]> = [];
-  /** Start of each open mode in `modes`, or -1 for a double-quoted string (it runs nothing itself). */
-  const starts: number[] = [];
-  const closeMode = (end: number): void => {
-    const from = starts.pop() ?? -1;
-    if (from >= 0) execs.push([from, end]);
-  };
-  const esc = ps ? '`' : '\\';
-  const modes: Array<'dq' | 'sub' | 'bt' | 'dbt'> = [];
-  const depths: number[] = [];
-  const heredocs: Heredoc[] = [];
-  let escEnd = -1;
-  const fill = (from: number, to: number): void => {
-    for (let k = Math.max(from, 0); k < Math.min(to, n); k++) out[k] = FILL;
-  };
-  /** Turn a comment into spaces in both outputs. */
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to; k++) text[k] = out[k] = ' ';
-  };
-  /** Mask a body but keep its command substitutions when the shell would run them. */
-  const maskBody = (from: number, to: number, expand: boolean): void => {
-    let k = from;
-    while (k < to) {
-      const sub = command.startsWith('$(', k) ? closingParen(command, k + 2) : -1;
-      const bt = !ps && command[k] === '`' ? command.indexOf('`', k + 1) : -1;
-      const end = sub >= 0 ? sub : bt;
-      if (expand && end >= 0 && end < to) {
-        execs.push([k, end + 1]);
-        k = end + 1;
-      } else {
-        fill(k, k + 1);
-        bodies.add(k);
-        k++;
-      }
-    }
-  };
-  /** Mask every pending heredoc body, starting after the newline at `from - 1`. Returns the index of the last delimiter line's end. */
-  const consumeHeredocs = (from: number): number => {
-    let start = from;
-    const pending = heredocs.splice(0);
-    for (const [at, h] of pending.entries()) {
-      let end = start;
-      let eol = start;
-      while (end < n) {
-        eol = command.indexOf('\n', end);
-        if (eol < 0) eol = n;
-        const line = command.slice(end, eol).replace(/\r$/, '');
-        if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim) break;
-        end = eol + 1;
-      }
-      const stop = Math.min(eol, n);
-      maskBody(start, stop, h.expand);
-      if (at < pending.length - 1) fill(stop, stop + 1);
-      start = stop + 1;
-    }
-    return Math.min(start - 1, n);
-  };
-
-  let i = 0;
-  while (i < n) {
-    const c = command[i];
-    const top = modes[modes.length - 1];
-    if (top === 'dq') {
-      if (c === esc) {
-        fill(i, i + 2);
-        i += 2;
-      } else if (c === '"') {
-        modes.pop();
-        closeMode(i + 1);
-        i++;
-      } else if (c === '$' && command[i + 1] === '(') {
-        dqSubs.add(i);
-        modes.push('sub');
-        starts.push(i);
-        depths.push(0);
-        i += 2;
-      } else if (c === '`' && !ps) {
-        dqSubs.add(i);
-        modes.push('dbt');
-        starts.push(i);
-        i++;
-      } else {
-        fill(i, i + 1);
-        i++;
-      }
-      continue;
-    }
-    if (c === '#' && escEnd !== i && startsWord(command, i)) {
-      let eol = command.indexOf('\n', i);
-      if (eol < 0) eol = n;
-      else if (command[eol - 1] === '\r') eol--;
-      blank(i, eol);
-      i = eol;
-    } else if (ps && c === '<' && command[i + 1] === '#') {
-      const close = command.indexOf('#>', i + 2);
-      const stop = close < 0 ? n : close + 2;
-      blank(i, stop);
-      i = stop;
-    } else if (c === esc) {
-      fill(i + 1, i + 2);
-      escEnd = i + 2;
-      i += 2;
-    } else if (c === "'") {
-      const j = command.indexOf("'", i + 1);
-      if (j > 0) {
-        fill(i + 1, j);
-        i = j + 1;
-      } else i++;
-    } else if (c === '"') {
-      if (hasClosing(command, i + 1, '"', esc)) {
-        modes.push('dq');
-        starts.push(-1);
-      }
-      i++;
-    } else if (c === '@' && (command[i + 1] === "'" || command[i + 1] === '"') && /^[ \t]*\r?\n/.test(command.slice(i + 2))) {
-      const q = command[i + 1];
-      const close = command.indexOf(`\n${q}@`, i + 2);
-      if (close < 0) i++;
-      else {
-        maskBody(i + 2, close, q === '"');
-        i = close + 3;
-      }
-    } else if (!ps && c === '<' && command[i + 1] === '<' && command[i + 2] !== '<' && command[i - 1] !== '<') {
-      const m = /^<<(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|\\?([A-Za-z_][\w.-]*))/.exec(command.slice(i, i + 200));
-      if (m) {
-        heredocs.push({ delim: m[2] ?? m[3] ?? m[4], strip: m[1] === '-', expand: m[2] === undefined && m[3] === undefined && !m[0].includes('\\') });
-        i += m[0].length;
-      } else i++;
-    } else if (c === '\n' && heredocs.length) {
-      fill(i, i + 1);
-      i = consumeHeredocs(i + 1);
-    } else if (c === '$' && command[i + 1] === '(') {
-      modes.push('sub');
-      starts.push(i);
-      depths.push(0);
-      i += 2;
-    } else if (c === '`' && !ps) {
-      if (top === 'dbt') {
-        dqSubs.add(i);
-        modes.pop();
-        closeMode(i + 1);
-      } else if (top === 'bt') {
-        modes.pop();
-        closeMode(i + 1);
-      } else {
-        modes.push('bt');
-        starts.push(i);
-      }
-      i++;
-    } else if (top === 'sub' && (c === '(' || c === ')')) {
-      if (c === '(') depths[depths.length - 1]++;
-      else if (depths[depths.length - 1] === 0) {
-        modes.pop();
-        depths.pop();
-        closeMode(i + 1);
-      } else depths[depths.length - 1]--;
-      i++;
-    } else i++;
-  }
-  while (starts.length) closeMode(n);
-  return { text: text.join(''), masked: out.join(''), dqSubs, bodies, execs };
-}
-
-/**
  * Start and end index of each command segment in `lexed.text`, untrimmed. With `wholeQuotes` a
  * `$( )` or backtick inside double quotes does not split.
  */
@@ -503,40 +305,6 @@ function segmentRanges(lexed: Lexed, ps: boolean, wholeQuotes = false): Array<[n
   return ranges;
 }
 
-/** The non-empty segments with their offsets [start, end) in the comment-free text and trimmed text. */
-function segmentSpans(lexed: Lexed, ps: boolean): Array<{ start: number; end: number; text: string }> {
-  return segmentRanges(lexed, ps)
-    .map(([start, end]) => ({ start, end, text: lexed.text.slice(start, end).trim() }))
-    .filter((s) => s.text);
-}
-
-/** Split on shell separators and braces. Quoted text and heredoc bodies stay inside their segment. Comments are dropped. */
-export function segmentize(command: string, ps = false): string[] {
-  return segmentSpans(lexShell(joinContinuations(command, ps), ps), ps).map((s) => s.text);
-}
-
-/**
- * The segments the parser reads. A shell that takes its command as a quoted string (`bash -c "echo $(date); cr review"`) is ONE unit: the
- * `$( )` inside its string must not cut the string, or its inner text would never be classified as a whole. Every other segment is split at a
- * `$( )` inside double quotes, because the shell runs that code (`echo "$(cr review)"`).
- */
-function parseUnits(lexed: Lexed, ps: boolean): Array<{ start: number; end: number; text: string }> {
-  const fine = segmentSpans(lexed, ps);
-  const units: Array<{ start: number; end: number; text: string }> = [];
-  for (const [a, b] of segmentRanges(lexed, ps, true)) {
-    const whole = lexed.text.slice(a, b).trim();
-    if (!whole) continue;
-    if (parseInvocation(whole)?.nested !== undefined) units.push({ start: a, end: b, text: whole });
-    else units.push(...fine.filter((f) => f.start >= a && f.end <= b));
-  }
-  return units;
-}
-
-/** The text of each parse unit of a command (see parseUnits). */
-function segmentUnits(command: string, ps: boolean): string[] {
-  return parseUnits(lexShell(joinContinuations(command, ps), ps), ps).map((u) => u.text);
-}
-
 // ---------------------------------------------------------------------------------------------
 // Finding the program a segment runs
 // ---------------------------------------------------------------------------------------------
@@ -550,6 +318,8 @@ export interface Invocation {
   nested?: string;
   /** True when a wrapper option moves the program to another folder (`Start-Process -WorkingDirectory`, `sudo -D`). The check cannot place it. */
   moves?: boolean;
+  /** True when the program word has no literal value (`$X review`, `$(echo cr) review`). `exe` is empty. Rule U1 reads it. Only invocationOf sets it. */
+  unreadable?: boolean;
 }
 
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
@@ -593,106 +363,315 @@ function cleanToken(t: string): string {
   return t.replace(/^["'`]+|["'`)]+$/g, '');
 }
 
-/** Split on whitespace outside quotes: `"# --version"` is one argument, not a flag. */
-function tokenize(s: string): string[] {
-  return (s.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g) ?? []).map(cleanToken).filter(Boolean);
+// ---------------------------------------------------------------------------------------------
+// Parser-based reader (coord-guard-shell-parser PR A, commit 2). Built BESIDE the hand readers above and below; each group of commit 2 moves a
+// stage onto it and the hand reader of that stage is deleted. Plan: .claudedocs/e2e-coord-guard-shell-parser/44-commit2-plan.md.
+// ---------------------------------------------------------------------------------------------
+
+/** One reading of a command text: the parser's call list, or the reason it could not be read. */
+export interface Reading {
+  ok: boolean;
+  /** True when the READER failed (wasm, the parser threw, no tree, the pwsh child) and not the text (a syntax error). */
+  reader: boolean;
+  msg?: string;
+  /** Milliseconds the read took. The E3 deny line logs it. */
+  ms: number;
+  result?: ParseResult;
 }
 
-function stripLeadingQuote(s: string): string {
-  return s.replace(/^\s*["']/, '');
+/** The node kinds of the parser and the walker that the guard reads (the judge's list, rule F5). */
+const KNOWN_KINDS = new Set<string>([...BASH_KINDS_NOTE, ...BASH_KINDS_EXTRA, ...PWSH_KINDS]);
+
+let readMemo = new Map<string, Promise<Reading>>();
+
+/** Start of a decide: each text is parsed once per decide, however many stages read it (a PowerShell parse is a child process). */
+export function resetReadings(): void {
+  readMemo = new Map();
 }
 
-/** The command string a wrapper receives: the first quoted string, or the rest of the line. */
-function unquoteOuter(s: string): string {
-  const t = s.trim();
-  const m = t.match(/^"((?:\\.|[^"\\])*)"|^'([^']*)'/);
-  // The shell removes the backslash of \" and \\ inside double quotes: `sh -c "bash -c \"cr ...\""` hands bash the string `bash -c "cr ..."`.
-  return m ? (m[1] !== undefined ? m[1].replace(/\\(["\\])/g, '$1') : (m[2] ?? '')) : stripLeadingQuote(t);
-}
-
-/** `Start-Process cr -ArgumentList review,--agent` and `Start-Process -FilePath cr ...`. */
-function parseStarter(rest: string): Invocation {
-  // -WorkingDirectory (and its abbreviations: -Wo, -Work ...) starts the program in a folder the check does not see.
-  const moves = /(?:^|\s)-wo\w*/i.test(rest);
-  // A quoted -FilePath value may hold spaces (`"C:\Program Files\CodeRabbit\cr.exe"`): read it whole, before the split below.
-  const quoted = /(?:^|\s)-filepath\s+(?:"([^"]*)"|'([^']*)')/i.exec(rest);
-  if (quoted) {
-    const others = (rest.slice(0, quoted.index) + ' ' + rest.slice(quoted.index + quoted[0].length)).split(/[\s,]+/).map(cleanToken).filter(Boolean);
-    return { exe: baseName(quoted[1] ?? quoted[2] ?? ''), args: others, moves };
+async function readUncached(text: string, ps: boolean, opts: ParseOpts): Promise<Reading> {
+  // performance.now, not Date.now: the time-budget rows of the answer-key tests count Date.now calls.
+  const t0 = performance.now();
+  try {
+    // noNested: this guard peels its own wrappers (sudo, npx, env, timeout) and reads a payload string itself, so each text is parsed once.
+    const result = await parseCalls(text, ps ? 'pwsh' : 'bash', { noNested: true, ...opts });
+    const ms = Math.round(performance.now() - t0);
+    if (result.ok) {
+      // Rule F5 of the judge: a node kind the walker does not list may hide a call, so the text is not read (E8).
+      const unknown = result.kinds.filter((k) => !KNOWN_KINDS.has(k));
+      if (unknown.length > 0) return { ok: false, reader: false, msg: `node kinds not on the list: ${unknown.join(', ')}`, ms };
+      return { ok: true, reader: false, ms, result };
+    }
+    const first = result.errors[0];
+    return { ok: false, reader: first?.reader === true, msg: first?.msg, ms };
+  } catch (e) {
+    return { ok: false, reader: true, msg: String(e), ms: Math.round(performance.now() - t0) };
   }
-  const toks = rest.split(/[\s,]+/).map(cleanToken).filter(Boolean);
-  const fp = toks.findIndex((t) => /^-filepath$/i.test(t));
-  const at = fp >= 0 ? fp + 1 : toks.findIndex((t) => !/^(?:-\S+|\/[a-z]+)$/i.test(t));
+}
+
+let readerSeam: ParseOpts = {};
+
+/** Test seam: reader options (a failing provider, a short timeout) that every read of the guard uses until `setReaderSeam({})`. Rows E1 to E9 use it. */
+export function setReaderSeam(opts: ParseOpts): void {
+  readerSeam = opts;
+  resetReadings();
+  resetLexCache();
+}
+
+/** Read `text` with the shell parser. A read with test seams (`opts`, or the reader seam) is not memoised. Never throws. */
+export function readCommand(text: string, ps: boolean, opts: ParseOpts = {}): Promise<Reading> {
+  const eff = { ...readerSeam, ...opts };
+  if (Object.keys(eff).length > 0) return readUncached(text, ps, eff);
+  const key = `${ps ? 'p' : 'b'}:${text}`;
+  let p = readMemo.get(key);
+  if (!p) {
+    p = readUncached(text, ps, opts);
+    readMemo.set(key, p);
+  }
+  return p;
+}
+
+const wordText = (w: Word): string => w.lit ?? w.raw;
+/** A word the shell read as a quoted string (`"..."`, `'...'`, `$"..."`, here-string). The walker does not set Word.quoted for a plain quoted word. */
+export const isQuotedWord = (w: Word): boolean => /^(?:\$?["']|@["'])/.test(w.raw);
+const POSIX_C_CLUSTER = /^-[a-z]*c[a-z]*$/i;
+const PS_C_FLAG = /^-(?:c|command|lc)$/i;
+
+/** The command string a wrapper receives, from the words after its -c flag: a quoted first word, else every word joined (the rest of the line). */
+function payloadWords(after: Word[]): string {
+  if (after.length === 0) return '';
+  const first = after[0];
+  if (!isQuotedWord(first)) return after.map(wordText).join(' ');
+  if (first.lit !== null) return first.lit;
+  // The parser gives no literal for a double-quoted word that holds an escaped quote (`"bash -c \"cr review\""`). Unquote it as the shell does:
+  // drop the outer quotes and the backslash of \" and \\ (the rule the old hand reader used).
+  const m = /^\$?"((?:\\.|[^"\\])*)"$|^\$?'([^']*)'$/.exec(first.raw);
+  return m ? (m[1] !== undefined ? m[1].replace(/\\(["\\])/g, '$1') : (m[2] ?? '')) : first.raw;
+}
+
+function skipRunnerWords(exe: string, rest: Word[], moves: { on: boolean }): Word[] {
+  const values = RUNNER_VALUE_FLAGS[exe];
+  let ws = rest;
+  for (;;) {
+    const tok = ws[0]?.lit;
+    if (tok === undefined || tok === null || !tok.startsWith('-') || tok === '-') return ws;
+    if (tok === '--') return ws.slice(1);
+    if (exe === 'sudo' && /^(?:-[DR]|--chdir|--chroot)/.test(tok)) moves.on = true;
+    ws = values?.has(tok) ? ws.slice(2) : ws.slice(1);
+  }
+}
+
+/** `Start-Process cr -ArgumentList review,--agent` and `Start-Process -FilePath cr ...`, over words. */
+function starterFromWords(rest: Word[]): Invocation {
+  const moves = rest.some((w) => /^-wo\w*$/i.test(w.lit ?? ''));
+  const fp = rest.findIndex((w) => /^-filepath$/i.test(w.lit ?? ''));
+  const split = (ws: Word[]): string[] => ws.flatMap((w) => wordText(w).split(/[\s,]+/)).map(cleanToken).filter(Boolean);
+  // A -FilePath value may hold spaces (`"C:\Program Files\CodeRabbit\cr.exe"`): its word is read whole.
+  if (fp >= 0 && rest[fp + 1]) return { exe: baseName(wordText(rest[fp + 1])), args: split(rest.filter((_, k) => k !== fp && k !== fp + 1)), moves };
+  const toks = split(rest);
+  const at = toks.findIndex((t) => !/^(?:-\S+|\/[a-z]+)$/i.test(t));
   if (at < 0 || !toks[at]) return { exe: 'start-process', args: toks, moves };
   return { exe: baseName(toks[at]), args: toks.filter((_, k) => k !== at), moves };
 }
 
 /**
- * The text after a runner's own options. Short options listed in RUNNER_VALUE_FLAGS take the next token as their value. Sets `moves.on` for
- * an option that changes the folder (`sudo -D dir`, `--chdir`, `--chroot`).
+ * The Invocation a parsed call stands for: the same peeling as the old hand reader (env words, runners, `timeout`, shell keywords, `cmd /c`,
+ * `bash -c`, `eval`, `iex`, Start-Process), over the parser's words instead of a text split. A program word with no literal value (`$X`,
+ * `$(echo cr)`) gives `unreadable: true` and an empty exe: rule U1 decides it. Null for a call with no words.
  */
-function skipRunnerOptions(exe: string, rest: string, moves: { on: boolean }): string {
-  const values = RUNNER_VALUE_FLAGS[exe];
-  let s = rest;
-  for (;;) {
-    const { tok, rest: after } = splitFirst(s);
-    if (!tok.startsWith('-') || tok === '-') return s;
-    if (tok === '--') return after;
-    if (exe === 'sudo' && /^(?:-[DR]|--chdir|--chroot)/.test(tok)) moves.on = true;
-    s = values?.has(tok) ? splitFirst(after).rest : after;
-  }
-}
-
-/**
- * Find the program a segment runs. Skips env assignments, `&`, path prefixes and the wrappers
- * npx, sudo, xargs, env, command, time, timeout and shell keywords. A wrapper that takes a command
- * string (cmd /c, pwsh|bash -c, eval, iex) returns that string as `nested`. Returns null for an
- * empty segment.
- */
-export function parseInvocation(segment: string): Invocation | null {
+export function invocationOf(call: Call): Invocation | null {
   const moves = { on: false };
-  const found = parseInvocationInner(segment, moves);
-  return found && moves.on ? { ...found, moves: true } : found;
-}
-
-function parseInvocationInner(segment: string, moves: { on: boolean }): Invocation | null {
-  let s = segment.trim();
+  let ws = call.words;
+  const done = (inv: Invocation): Invocation => (moves.on ? { ...inv, moves: true } : inv);
   for (let depth = 0; depth < 8; depth++) {
-    let prev: string;
-    do {
-      prev = s;
-      s = s.replace(ENV_ASSIGN, '');
-    } while (s !== prev);
-    s = s.replace(/^&\s*/, '');
-    const { tok, rest } = splitFirst(s);
-    if (!tok) return null;
-    const exe = baseName(tok);
+    if (ws.length === 0) return null;
+    if (ws[0].lit === null) return done({ exe: '', args: ws.slice(1).map(wordText), unreadable: true });
+    const exe = baseName(ws[0].lit);
+    const rest = ws.slice(1);
     if (RUNNERS.has(exe)) {
-      s = skipRunnerOptions(exe, rest, moves);
+      ws = skipRunnerWords(exe, rest, moves);
     } else if (exe === 'cmd') {
-      return { exe, args: [], nested: unquoteOuter(rest.replace(/^(?:\/[a-z]\s+)+/i, '')) };
+      let at = 0;
+      while (at < rest.length && /^\/[a-z]$/i.test(rest[at].lit ?? '')) at++;
+      return done({ exe, args: [], nested: payloadWords(rest.slice(at)) });
     } else if (SHELLS.has(exe)) {
-      // Any option cluster that holds a c opens the string (`-c`, `-ec`, `-euxvc`, `-cxu`): no cap on the letters around it.
-      const flags = POSIX_SHELLS.has(exe) ? '[a-z]*c[a-z]*|command' : 'c|command|lc';
-      const m = new RegExp(`(?:^|\\s)-(?:${flags})\\s+([\\s\\S]*)$`, 'i').exec(rest);
-      if (m) return { exe, args: [], nested: unquoteOuter(m[1]) };
-      const doc = rest.match(/<<-?[ \t]*(?:'[^'\n]*'|"[^"\n]*"|\\?[\w.-]+)[ \t]*\r?\n([\s\S]*)$/);
-      const here = rest.match(/<<<\s*([\s\S]*)$/);
-      if (doc || here) return { exe, args: [], nested: doc ? doc[1] : unquoteOuter(here![1]) };
-      return { exe, args: tokenize(rest) };
+      const at = rest.findIndex((w) => (POSIX_SHELLS.has(exe) ? POSIX_C_CLUSTER.test(w.lit ?? '') || /^-command$/i.test(w.lit ?? '') : PS_C_FLAG.test(w.lit ?? '')));
+      if (at >= 0) return done({ exe, args: [], nested: payloadWords(rest.slice(at + 1)) });
+      if (call.stdin) return done({ exe, args: [], nested: call.stdin.lit ?? '' });
+      return done({ exe, args: rest.map(wordText) });
     } else if (EVALS.has(exe)) {
-      return { exe, args: [], nested: unquoteOuter(rest.replace(/^-command\s+/i, '')) };
+      const after = /^-command$/i.test(rest[0]?.lit ?? '') ? rest.slice(1) : rest;
+      return done({ exe, args: [], nested: payloadWords(after) });
     } else if (STARTERS.has(exe)) {
-      return parseStarter(rest);
+      return done(starterFromWords(rest));
     } else if (PREFIXES.has(exe)) {
-      s = rest;
+      ws = rest;
     } else if (exe === 'timeout') {
-      s = rest.replace(/^(?:-\S+\s+)*\S+\s+/, '');
+      let at = 0;
+      while (at < rest.length && (rest[at].lit ?? '').startsWith('-')) at++;
+      ws = rest.slice(at + 1);
     } else {
-      return { exe, args: tokenize(rest) };
+      return done({ exe, args: rest.map(wordText) });
     }
   }
   return null;
+}
+
+/**
+ * Quote and escape spans INSIDE ONE parser word, as [from, to, kind) offsets in the word's raw text. The parser already decided where the word
+ * starts and ends, so this scan reads no shell structure: it only finds the quotes and the escape characters of one word. It errs only toward
+ * deny (seat ruling 15:58): any doubt (an unclosed quote, a dangling escape) returns null and the caller treats the whole word as unquoted, so
+ * a cr word in it counts as a call. `fill` spans hold quoted or escaped text (data); `dq` is a double-quoted span (a `$( )` inside it is code).
+ */
+export function quoteSpans(raw: string, ps: boolean): Array<{ from: number; to: number; kind: 'fill' | 'dq' | 'esc' }> | null {
+  const esc = ps ? '`' : '\\';
+  const out: Array<{ from: number; to: number; kind: 'fill' | 'dq' | 'esc' }> = [];
+  const n = raw.length;
+  if (/^@['"]/.test(raw)) {
+    // A PowerShell here-string: the body is data.
+    const q = raw[1];
+    const close = raw.lastIndexOf(`${q}@`);
+    if (close <= 2) return null;
+    out.push({ from: 2, to: close, kind: q === '"' ? 'dq' : 'fill' });
+    return out;
+  }
+  let i = 0;
+  while (i < n) {
+    const c = raw[i];
+    if (c === esc) {
+      if (i + 1 >= n) return null;
+      out.push({ from: i + 1, to: i + 2, kind: 'esc' });
+      i += 2;
+    } else if (c === "'") {
+      let j = i + 1;
+      for (;;) {
+        j = raw.indexOf("'", j);
+        if (j < 0) return null;
+        // PowerShell doubles a quote inside single quotes.
+        if (ps && raw[j + 1] === "'") j += 2;
+        else break;
+      }
+      out.push({ from: i + 1, to: j, kind: 'fill' });
+      i = j + 1;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < n && raw[j] !== '"') j += raw[j] === esc ? 2 : 1;
+      if (j >= n) return null;
+      out.push({ from: i + 1, to: j, kind: 'dq' });
+      i = j + 1;
+    } else i++;
+  }
+  return out;
+}
+
+/**
+ * The facts the scans read (the hand lexer is gone), produced from the parser: the text with comments blanked, the text with data filled (quoted
+ * text, escaped characters, heredoc and here-string bodies), the body offsets, the spans a substitution runs, and the substitutions that sit
+ * inside double quotes. rawScan, rawBilling and the segment splitters read this shape unchanged. Every range comes from a parser node position
+ * (ParseResult.quoted, substs, bodies, freeRanges); only an escaped character is found by the word-level scan (quoteSpans), which errs toward
+ * deny. The offsets are those of `text` as given: no line continuation was joined (the parser reads them itself).
+ */
+export function lexedFromReading(text: string, res: ParseResult, ps: boolean): Lexed {
+  const n = text.length;
+  const t = text.split('');
+  const m = text.split('');
+  const bodies = new Set<number>();
+  const dqSubs = new Set<number>();
+  const execs: Array<[number, number]> = res.substs.map((s) => [s.from, s.to]);
+  const heredocs = res.heredocs ?? [];
+  const inExec = (k: number): boolean => execs.some(([a, b]) => a <= k && k < b);
+  /** The substitutions that sit INSIDE the range [a, b): their code stays readable. A quoted range that sits inside a substitution is filled whole. */
+  const innerExecs = (a: number, b: number): Array<[number, number]> => execs.filter(([x, y]) => a <= x && y <= b);
+  const fill = (a: number, b: number): void => {
+    const inner = innerExecs(a, b);
+    for (let k = Math.max(0, a); k < Math.min(b, n); k++) if (!inner.some(([x, y]) => x <= k && k < y)) m[k] = FILL;
+  };
+  // Comments: a free range that is not a heredoc body.
+  for (const [a, b] of res.freeRanges) {
+    if (heredocs.some((h) => h.start === a && h.end === b)) continue;
+    for (let k = Math.max(0, a); k < Math.min(b, n); k++) t[k] = m[k] = ' ';
+  }
+  // A quoted string inside a substitution that sits in a heredoc body (`cat <<EOF` then `$(date "+%H")`): the lexer this replaces left the whole
+  // substitution readable, quotes included, and the scans were written against that. It is kept, so no verdict moves (it errs toward counting a call).
+  const inBodySubst = (k: number): boolean => execs.some(([x, y]) => x <= k && k < y && res.bodies.some(([p, q]) => p <= x && y <= q));
+  for (const [a, b] of res.quoted) {
+    if (!inBodySubst(a)) fill(a, b);
+  }
+  for (const [a, b] of res.bodies) {
+    // A Bash heredoc body starts on the line after its operator. That line break is not a command separator: the body stays in the segment of the
+    // command that receives it (`bash <<EOF`). It is masked but, as before, it is no body character.
+    if (!ps && a > 0 && text[a - 1] === '\n') m[a - 1] = FILL;
+    const inner = innerExecs(a, b);
+    for (let k = Math.max(0, a); k < Math.min(b, n); k++) {
+      if (inner.some(([x, y]) => x <= k && k < y)) continue;
+      m[k] = FILL;
+      bodies.add(k);
+    }
+  }
+  for (const s of res.substs) {
+    if (!s.dq) continue;
+    dqSubs.add(s.from);
+    if (text[s.to - 1] === '`') dqSubs.add(s.to - 1);
+  }
+  // Escaped characters (`c\r`, `\;`): the word-level scan. A word it cannot read stays as it is, so the text stays visible to the scans.
+  for (const c of res.calls) {
+    for (const w of c.words) {
+      for (const s of quoteSpans(w.raw, ps) ?? []) if (s.kind === 'esc') fill(w.start + s.from, w.start + s.to);
+    }
+    // A line continuation inside a call (`cr review \<nl>--agent`): the parser joined it, so the break is no separator. It is masked so the raw
+    // segments stay whole and each call sits inside one segment. A break after a backslash inside a comment stays a separator: bash ends a comment at
+    // its newline (D1, where the parser disagrees).
+    const cont = ps ? '`' : '\\';
+    for (let k = c.start; k < Math.min(c.end, n); k++) {
+      const crlf = text[k] === '\r' && text[k + 1] === '\n';
+      if (!crlf && !(text[k] === '\n' && text[k - 1] !== '\r')) continue;
+      if (k === 0 || text[k - 1] !== cont) continue;
+      if (res.freeRanges.some(([a, b]) => a <= k - 1 && k - 1 < b)) continue;
+      m[k] = FILL;
+      if (crlf) m[k + 1] = FILL;
+    }
+  }
+  return { text: t.join(''), masked: m.join(''), dqSubs, bodies, execs, calls: res.calls.filter((c) => !c.viaPayload) };
+}
+
+// ---- the lexed facts every scan reads: from the parser, prepared once per decide ----
+
+/**
+ * A text can only lead to a non-ignore verdict when it holds a cr or coderabbit word or the word review (after quotes, backticks and backslashes are
+ * removed, so `c\r` and `"cr"` count): Dave's "only trigger commands" rule (D2). Any other text is not parsed. Over-matches on purpose.
+ */
+// `coderabbit` matches inside a longer word on purpose: the skill-install rule reads `coderabbitai/skills`.
+const TRIGGER_TEXT = /(?:^|[^A-Za-z0-9_])cr(?![A-Za-z0-9_])|coderabbit|review/i;
+export const holdsTrigger = (text: string): boolean => TRIGGER_TEXT.test(text.replace(/["'`\\]/g, ''));
+
+const lexCache = new Map<string, Lexed>();
+
+/** Called at the start of a decide (with resetReadings): drops every prepared reading. */
+export function resetLexCache(): void {
+  lexCache.clear();
+}
+
+/**
+ * Parse `joined` once and keep the facts the scans read (lexedFromReading). A text that holds no trigger word gets the plain facts (nothing masked):
+ * no scan can find a call in it. A text the parser cannot read gets the same plain facts, nothing masked and no comment dropped: every word
+ * then counts as unquoted code, which errs toward counting a call. classifyCommand denies such a text before it uses the facts (rows E1 to E8).
+ */
+export async function prepareLex(joined: string, ps: boolean): Promise<void> {
+  const key = `${ps ? 'p' : 'b'}:${joined}`;
+  if (lexCache.has(key)) return;
+  if (!holdsTrigger(joined)) {
+    lexCache.set(key, plainLexed(joined));
+    return;
+  }
+  const r = await readCommand(joined, ps);
+  lexCache.set(key, r.ok ? lexedFromReading(joined, r.result!, ps) : plainLexed(joined));
+}
+
+const plainLexed = (text: string): Lexed => ({ text, masked: text, dqSubs: new Set(), bodies: new Set(), execs: [] });
+
+/** The prepared facts of `joined`. A text nobody prepared (a direct call of a scanner) gets the plain facts: no hand lexer reads it. */
+function lexOf(joined: string, ps: boolean): Lexed {
+  return lexCache.get(`${ps ? 'p' : 'b'}:${joined}`) ?? plainLexed(joined);
 }
 
 export function isCrExecutable(exe: string): boolean {
@@ -757,6 +736,8 @@ export interface SegmentClass {
   invocations?: Invocation[];
   /** True when the raw text of a review holds an option (--base, --dir, -c ...) that no parsed call gives. The check then denies. */
   unaccounted?: boolean;
+  /** Set on an `ignore` verdict when the reader failed on a text that holds no review call: the hook allows it and logs one `reader-error-allowed` line. */
+  readerError?: string;
   /**
    * True when a review call is in the text but no parsed cr call stands for it (a wrapper the parser does not read: `watch`, `env -C`, `npm exec`,
    * `$(command -v cr)`), or the parsed call moves to another folder (`Start-Process -WorkingDirectory`). The check cannot place it in a folder.
@@ -798,7 +779,7 @@ const CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))
 const BILLING_WORD = /(?:^|[\s"'`(=,])--(?:use-credits|api-key)(?=$|[\s"'`)=,])/i;
 const REVIEW_WORD = /\breview\b/i;
 /**
- * Programs that receive a QUOTED string and run it, and that parseInvocation does not open (it finds no `nested` string for them). A quoted
+ * Programs that receive a QUOTED string and run it, and that invocationOf does not open (it finds no `nested` string for them). A quoted
  * cr word is a call only for one of these or for a starter (Start-Process). Every other program gets a quoted cr word as data:
  * `find -exec grep -l "cr review"`, `npx vitest -t "cr review"`, `xargs grep 'cr review'`.
  */
@@ -828,7 +809,7 @@ const TEXT_COMMANDS = new Set(['git', 'gh']);
  */
 export function rawBilling(text: string, ps = false): boolean {
   if (!BILLING_WORD.test(text)) return false;
-  const lexed = lexShell(text, ps);
+  const lexed = lexOf(text, ps);
   const ranges = segmentRanges(lexed, ps, true);
   const fine = segmentRanges(lexed, ps);
   for (const m of text.matchAll(CR_WORD)) {
@@ -872,24 +853,34 @@ export interface RawScan {
 
 /**
  * True when a QUOTED cr word in this segment is a call: a starter (Start-Process) runs its argument string, and so do the STRING_RUNNERS. The
- * parser reads the program at the head of the segment. A wrapper it does not peel (`nice`, `env -i`, `timeout -k 5 60`, `winpty`, `stdbuf`,
- * `find -exec`) hides a shell, eval, starter or string runner further in: every such UNQUOTED word (`masked` is the segment with quoted text
- * filled) is read from there. A shell with a `-c` string is a call when that string holds one (this same rule, again); a shell with no -c gets
- * a script path, so a quoted word is data (`bash run.sh "cr review"`), except PowerShell, whose first argument is a command.
+ * parser reads the program at the head of the segment (the first parser call whose span lies in [from, to), read by invocationOf). A wrapper it
+ * does not peel (`nice`, `env -i`, `timeout -k 5 60`, `winpty`, `stdbuf`, `find -exec`) hides a shell, eval, starter or string runner further in:
+ * every such UNQUOTED word of a call in the segment is read from there (invocationOf over the words from that word on). A shell with a `-c`
+ * string is a call when that string holds one (this same rule, again); a shell with no -c gets a script path, so a quoted word is data
+ * (`bash run.sh "cr review"`), except PowerShell, whose first argument is a command. A text nobody read has no calls: the quoted word counts.
  */
-function runsQuotedString(segment: string, masked: string, ps: boolean): boolean {
-  if (STARTERS.has(leadingProgram(segment))) return true;
-  const inv = parseInvocation(segment);
-  if (inv?.nested !== undefined) return false; // the parser opened it: the inner string is classified again
-  if (inv !== null && STRING_RUNNERS.has(inv.exe)) return true;
-  for (const m of masked.matchAll(/[^\s;|&(){}`]+/g)) {
-    if (m[0].includes(FILL)) continue;
-    const prog = baseName(m[0]);
-    if (!(SHELLS.has(prog) || EVALS.has(prog) || STARTERS.has(prog) || prog === 'cmd' || STRING_RUNNERS.has(prog))) continue;
-    const sub = parseInvocation(segment.slice(m.index ?? 0));
-    if (sub?.nested !== undefined) {
-      if (holdsReviewCall(sub.nested, ps)) return true;
-    } else if (!POSIX_SHELLS.has(prog)) return true;
+async function runsQuotedString(lexed: Lexed, from: number, to: number, ps: boolean): Promise<boolean> {
+  if (!lexed.calls) return true;
+  const inside = lexed.calls.filter((c) => c.words.length > 0 && c.start >= from && c.end <= to).sort((x, y) => x.start - y.start || y.end - x.end);
+  const lead = inside[0];
+  if (lead) {
+    const head = lead.words[0].lit;
+    if (head !== null && STARTERS.has(baseName(head))) return true;
+    const inv = invocationOf(lead);
+    if (inv?.nested !== undefined) return false; // the parser opened it: the inner string is classified again
+    if (inv !== null && STRING_RUNNERS.has(inv.exe)) return true;
+  }
+  for (const call of inside) {
+    for (let k = 0; k < call.words.length; k++) {
+      const w = call.words[k];
+      if (w.lit === null || isQuotedWord(w)) continue;
+      const prog = baseName(w.lit);
+      if (!(SHELLS.has(prog) || EVALS.has(prog) || STARTERS.has(prog) || prog === 'cmd' || STRING_RUNNERS.has(prog))) continue;
+      const sub = invocationOf({ ...call, words: call.words.slice(k) });
+      if (sub?.nested !== undefined) {
+        if (await holdsReviewCall(sub.nested, ps)) return true;
+      } else if (!POSIX_SHELLS.has(prog)) return true;
+    }
   }
   return false;
 }
@@ -904,12 +895,18 @@ function commandEnd(lexed: Lexed, from: number): number {
  * THE call rule, shared by the answer-key check and the run count. A cr or coderabbit word is a call when it is followed by the word review
  * and:
  * - it is NOT in quotes (anywhere in the command, also inside `$( )` and backticks, after any wrapper or text program); or
- * - it IS in quotes and the segment hands that string to a program that runs it (runsQuotedString). The shells that parseInvocation opens
+ * - it IS in quotes and the segment hands that string to a program that runs it (runsQuotedString). The shells that invocationOf opens
  *   (`bash -c "..."`, `eval`, `cmd /c`, ...) are not scanned here: their inner string is read again with this same rule.
  * Otherwise a quoted cr word is data for its program (`grep -n "cr review"`) and is no call. A heredoc body is data unless a shell, eval or
  * wrapper receives it. The text after the cr word runs to the end of the command, so `$(command -v cr) review` is seen.
+ *
+ * WHY THIS RULE STAYS RAW (the backstop for two cases where the parser's call list hides a review; probe 45-g1-continuation-probe.txt):
+ * - D1, a parser divergence: sh-syntax 0.8.1 joins a backslash-newline BEFORE it reads a comment, so `echo hi # note \<nl>cr review --agent` is one
+ *   call `echo hi ...` in its list. Real bash ends the comment at its newline and runs `cr review` as a second command. Only this rule counts it.
+ * - D2, an old-lexer divergence: PowerShell reads a backtick plus CRLF inside a word as two statements (the walker agrees); the old joinContinuations
+ *   read it as one word. Rows "parser divergence D1" and "old lexer divergence" in coderabbit-guard-reader.test.ts pin both.
  */
-export function rawScan(lexed: Lexed, ps = false): RawScan {
+export async function rawScan(lexed: Lexed, ps = false): Promise<RawScan> {
   const found: RawScan = { reviewSegments: [] };
   const text = lexed.text;
   const blanked = lexed.bodies.size === 0 ? text : text.split('').map((ch, k) => (lexed.bodies.has(k) ? ' ' : ch)).join('');
@@ -923,7 +920,7 @@ export function rawScan(lexed: Lexed, ps = false): RawScan {
     for (const m of seg.matchAll(CR_WORD)) {
       const at = a + (m.index ?? 0) + m[0].length - m[1].length;
       const quoted = lexed.masked[at] === FILL && !(reads && lexed.bodies.has(at));
-      if (quoted) quotedRuns ??= runsQuotedString(seg, lexed.masked.slice(a, b), ps);
+      if (quoted) quotedRuns ??= await runsQuotedString(lexed, a, b, ps);
       if (quoted && !quotedRuns) continue;
       const end = Math.max(b, commandEnd(lexed, at + m[1].length));
       if (!REVIEW_WORD.test(scan.slice(at + m[1].length, end))) continue;
@@ -955,19 +952,80 @@ function isPlainCommand(source: string, joined: string, lexed: Lexed, ps: boolea
 
 const MAX_NESTING = 4;
 
+/** A cr or coderabbit word followed later by the word review, read after quotes, backticks and backslashes are removed (`c\r`, `"cr" "review`). */
+export const reviewLike = (text: string): boolean => rawReview(text.replace(/["'`\\]/g, ''));
+
+/** The cause of a failed reading, for the deny reason (rows E1 to E8). The text holds no path and no command text. */
+function readerWhy(r: Reading, ps: boolean): string {
+  const msg = r.msg ?? '';
+  if (!r.reader) return /^node kinds not on the list/.test(msg) ? 'the command holds a construct the reader does not know' : 'the command did not parse';
+  if (ps) {
+    if (/timeout/i.test(msg)) return `the PowerShell reader timed out after ${r.ms} ms`;
+    if (/bad json/i.test(msg)) return 'the PowerShell reader gave bad output';
+    return 'the PowerShell reader failed';
+  }
+  if (/no tree/i.test(msg)) return 'the shell parser gave no tree';
+  if (/ENOENT|wasm|WebAssembly|instantiate|Cannot find module|ERR_MODULE/i.test(msg)) return 'the shell parser did not load';
+  return 'the shell parser failed';
+}
+
+/** One parse unit of a command: its span in the comment-free text, its trimmed text, and the Invocation it stands for. */
+interface Unit { start: number; end: number; text: string; inv: Invocation | null; /** The parser call; absent only on the temporary hand-segment fallback. */ call?: Call }
+
+/**
+ * The parse units of a text, one per call the parser found (coord-guard-shell-parser PR A, group G1b). A call that sits inside the span of a
+ * wrapper that takes a command string (`bash -c "...$(date)..."`) is left out: the wrapper's own string is classified again by classifyCommand,
+ * so counting the inner call here too would count one review twice. A text the parser cannot read throws: no hand reader takes over, and the
+ * callers fail closed (classifyCommand denies before it gets here; the hook's own catch denies a review).
+ */
+async function unitsOf(joined: string, lexed: Lexed, ps: boolean): Promise<Unit[]> {
+  const reading = await readCommand(joined, ps);
+  if (!reading.ok || !reading.result) throw new Error(`the command cannot be read: ${reading.msg ?? 'no reading'}`);
+  const rows: Unit[] = [];
+  for (const call of reading.result.calls) {
+    if (call.viaPayload) continue;
+    const inv = invocationOf(call);
+    if (inv) rows.push({ start: call.start, end: call.end, text: lexed.text.slice(call.start, call.end).trim(), inv, call });
+  }
+  const wrappers = rows.filter((r) => r.inv?.nested !== undefined);
+  return rows.filter((r) => !wrappers.some((w) => w !== r && w.start <= r.start && r.end <= w.end));
+}
+
+/** The units of a command text as written (the parser joins continuations itself; one parse per text). */
+async function unitsOfText(command: string, ps: boolean): Promise<Unit[]> {
+  const joined = command;
+  await prepareLex(joined, ps);
+  return unitsOf(joined, lexOf(joined, ps), ps);
+}
+
 /** Classify every command in `text`: a block wins, runs add up, wrapper strings are classified again. */
-export async function classifyCommand(source: string, ps = false, depth = 0): Promise<SegmentClass> {
-  // Billing first, on the raw text as written and as the shell reads it (continuations joined). It
+export async function classifyCommand(source: string, ps = false, depth = 0): Promise<SegmentClass> {  // Billing first, on the raw text as written and as the shell reads it (continuations joined). It
   // needs no lexing of comments or wrappers. Nested wrapper strings sit inside the outer text.
-  const joined = joinContinuations(source, ps);
-  if (rawBilling(joined, ps) || (joined !== source && rawBilling(source, ps))) {
+  // The parser reads the RAW text and joins continuations itself. The hand joiner is used for this billing check only, where an over-join can
+  // only add a deny: as a pre-pass for the scans it hid a review (D2: backtick plus CRLF inside a word made `foo` and `cr` one word `foocr`).
+  const joined = source;
+  // Parse once; every scan below reads the facts of the parser (lexedFromReading), not a hand lexer.
+  await prepareLex(joined, ps);
+  if (rawBilling(source, ps) || rawBilling(joinContinuations(source, ps), ps)) {
     return { verdict: 'block', reason: BILLING_REASON };
   }
-  // One lexer pass gives the comment-free text and the quote mask, so both always agree.
-  const lexed = lexShell(joined, ps);
+  // The reader must read the text (rows E1 to E8). A text that holds a cr word and review and cannot be read is denied; any other text is
+  // allowed and logged once, so no unrelated command is locked out by a reader error.
+  const gate = holdsTrigger(joined);
+  if (gate) {
+    const reading = await readCommand(joined, ps);
+    if (!reading.ok) {
+      const why = readerWhy(reading, ps);
+      if (!reviewLike(joined)) return { verdict: 'ignore', readerError: why };
+      // A text that does not parse is the user's to fix: the deny names the way-out (a plain command). A reader failure is not: it says cannot check.
+      return { verdict: 'block', reason: !reading.reader && why === 'the command did not parse' ? wayOut(why) : cannotCheck(why) };
+    }
+  }
+  // One reading gives the comment-free text and the quote mask, so both always agree.
+  const lexed = lexOf(joined, ps);
   const text = lexed.text;
   // A wrapper string is scanned again, so a mix inside `bash -c "..."` counts per segment too.
-  const raw = rawScan(lexed, ps);
+  const raw = await rawScan(lexed, ps);
   let runs = 0;
   let allowed = false;
   // The raw scan and the parser split the text differently: a quoted `$( )` stays whole in the raw
@@ -979,10 +1037,15 @@ export async function classifyCommand(source: string, ps = false, depth = 0): Pr
   const counted: Invocation[] = [];
   let unaccounted = false;
   let unplaced = false;
-  for (const { start, end, text: seg } of parseUnits(lexed, ps)) {
+  for (const { start, end, text: seg, inv } of gate ? await unitsOf(joined, lexed, ps) : []) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
-    const inv = parseInvocation(seg);
     if (!inv) continue;
+    // Rule U1 (seat 15:30, a-prime at 15:50): a program word with no literal value (`$X review`, `$(echo cr) review`, `c\r review`) denies when the
+    // unit holds a cr or coderabbit word outside quotes, or when its first argument is the literal word review. `$L say "...CodeRabbit..."` is allowed.
+    if (inv.unreadable && (inv.args[0] === 'review' || [...lexed.masked.slice(start, end).matchAll(CR_WORD)].length > 0)) {
+      // The way-out text, as every other deny of an unplaced review (the user fixes it by writing the program word out).
+      return { verdict: 'block', reason: wayOut('the program word is not readable') };
+    }
     let c: SegmentClass;
     if (inv.nested === undefined) c = classifyInvocation(inv, plainCall && leadsWithCr(seg));
     else if (depth < MAX_NESTING) c = await classifyCommand(inv.nested, ps, depth + 1);
@@ -1119,11 +1182,10 @@ function cdTarget(dir: string, target: string, home: string, ps: boolean): strin
 }
 
 /** The directory the command runs in: the payload cwd, moved by the last `cd <dir>` in the command. A leading `~` is expanded through `home`. */
-export function effectiveCwd(command: string, cwd: string, ps = false, home = ''): string {
+export async function effectiveCwd(command: string, cwd: string, ps = false, home = ''): Promise<string> {
   let dir = cwd;
-  for (const seg of segmentize(command, ps)) {
-    const m = cdSegment(seg, ps);
-    const target = m?.[1] ?? m?.[2] ?? m?.[3];
+  for (const unit of await unitsOfText(command, ps)) {
+    const { target } = cdTargetOf(unit, ps);
     if (target && target !== '-') dir = cdTarget(dir, target, home, ps);
   }
   return dir;
@@ -1393,12 +1455,43 @@ function checkedRoots(dirs: string[]): { roots: string[]; error?: string } {
 const CD_WORD_PS = /^(?:cd|chdir|pushd|popd|push-location|pop-location|set-location|sl)(?=\s|$)/i;
 const CD_WORD_BASH = /^(?:cd|pushd|popd)(?=\s|$)/;
 
-function nestedHasCd(text: string, ps: boolean, depth: number): boolean {
+const CD_NAME_PS = /^(?:cd|chdir|pushd|popd|push-location|pop-location|set-location|sl)$/i;
+const CD_NAME_BASH = /^(?:cd|pushd|popd)$/;
+const CD_POP_NAME = /^(?:popd|pop-location)$/i;
+
+/** True when the unit runs a cd command of the shell it runs in (`wide`: the PowerShell list, for a string inside a wrapper that may run in either shell). */
+function cdWordOf(unit: Unit, ps: boolean, wide = false): boolean {
+  if (!unit.call) return (wide || ps ? CD_WORD_PS : CD_WORD_BASH).test(unit.text);
+  const name = unit.call.words[0]?.lit;
+  return name != null && (wide || ps ? CD_NAME_PS : CD_NAME_BASH).test(name);
+}
+
+/**
+ * The cd target of a unit: its text (undefined: no cd, a popd, or a cd with no target), and whether it is a bare Bash word that holds a backslash
+ * (`cd C:\x` goes to `C:x`). The words come from the parser, so a quoted target is unquoted by the parser. A leading option (`-L`, `-Path`, `/d`)
+ * is skipped only when a word follows it, as the old reader did.
+ */
+function cdTargetOf(unit: Unit, ps: boolean): { target?: string; bareBackslash: boolean } {
+  if (!unit.call) {
+    const m = cdSegment(unit.text, ps);
+    return { target: m?.[1] ?? m?.[2] ?? m?.[3], bareBackslash: !ps && m?.[3] !== undefined && m[3].includes('\\') };
+  }
+  const ws = unit.call.words;
+  const name = ws[0]?.lit;
+  if (name == null || !(ps ? CD_NAME_PS : CD_NAME_BASH).test(name) || CD_POP_NAME.test(name)) return { bareBackslash: false };
+  let i = 1;
+  while (i < ws.length - 1 && /^(?:-\w+|\/d)$/.test(ws[i].lit ?? '')) i++;
+  const w = ws[i];
+  if (!w) return { bareBackslash: false };
+  return { target: w.lit ?? w.raw, bareBackslash: !ps && !isQuotedWord(w) && w.raw.includes('\\') };
+}
+
+async function nestedHasCd(text: string, ps: boolean, depth: number): Promise<boolean> {
   if (depth > MAX_NESTING) return true;
-  for (const seg of segmentUnits(text, ps)) {
-    if (CD_WORD_PS.test(seg.trim())) return true;
-    const inv = parseInvocation(seg);
-    if (inv?.nested !== undefined && nestedHasCd(inv.nested, ps, depth + 1)) return true;
+  for (const unit of await unitsOfText(text, ps)) {
+    if (cdWordOf(unit, ps, true)) return true;
+    const inv = unit.inv;
+    if (inv?.nested !== undefined && (await nestedHasCd(inv.nested, ps, depth + 1))) return true;
   }
   return false;
 }
@@ -1409,23 +1502,22 @@ function nestedHasCd(text: string, ps: boolean, depth: number): boolean {
  * inside a wrapper string (the way-out), or a folder that does not exist. effectiveCwd cannot follow these, so the check could read the
  * wrong repo. The budget is read before the statSync.
  */
-function folderDeny(command: string, ps: boolean, cwd: string): string | null {
+async function folderDeny(command: string, ps: boolean, cwd: string): Promise<string | null> {
   let seenCr = false;
-  for (const seg of segmentUnits(command, ps)) {
-    const text = seg.trim();
-    if ((ps ? CD_WORD_PS : CD_WORD_BASH).test(text)) {
-      const m = cdSegment(text, ps);
-      const target = m?.[1] ?? m?.[2] ?? m?.[3];
+  for (const unit of await unitsOfText(command, ps)) {
+    const text = unit.text;
+    if (cdWordOf(unit, ps)) {
+      const { target, bareBackslash } = cdTargetOf(unit, ps);
       if (!target || target === '-' || /[$%`]/.test(target) || (target.includes('~') && !/^~(?:[\\/][^~]*)?$/.test(target))) {
         return WAY_OUT;
       }
       // A bare backslash is an escape in Bash: `cd C:\x` goes to `C:x`. In quotes it is a plain character.
-      if (!ps && m?.[3] !== undefined && m[3].includes('\\')) return wayOut('a backslash in a cd target is an escape in Bash: write the path with /');
+      if (bareBackslash) return wayOut('a backslash in a cd target is an escape in Bash: write the path with /');
       if (seenCr) return WAY_OUT;
     }
     if ([...text.matchAll(CR_WORD)].length > 0) seenCr = true;
-    const inv = parseInvocation(seg);
-    if (inv?.nested !== undefined && nestedHasCd(inv.nested, ps, 0)) return WAY_OUT;
+    const inv = unit.inv;
+    if (inv?.nested !== undefined && (await nestedHasCd(inv.nested, ps, 0))) return WAY_OUT;
   }
   if (budgetOut()) return cannotCheck('the time budget ended');
   try {
@@ -1501,7 +1593,21 @@ const literalValue = (t: { v: string } | undefined): t is { v: string } => t !==
  * `-Path` or `-LiteralPath`, and a backslash in the cd target (a path character there; in Bash it is an escape). The target must be fixed:
  * absolute, `.`, `..`, or start with `./`, `../` or `~`.
  */
-export function parseShape(command: string, ps = false): Shape | null {
+export async function parseShape(command: string, ps = false, opts: ParseOpts = {}): Promise<Shape | null> {
+  const raw = rawShape(command, ps);
+  if (!raw) return null;
+  // The raw allowlist is the only way to an allow. The parser must also read the same calls: one review, or one cd and one review, with the very
+  // words the allowlist saw. A text the parser cannot read, or reads differently, is no shape (the way-out deny).
+  const override = OVERRIDE.exec(command);
+  const reading = await readCommand((override ? command.slice(override[0].length) : command).trim(), ps, opts);
+  const calls = reading.result?.calls ?? [];
+  if (!reading.ok || calls.length !== raw.groups.length) return null;
+  const agrees = calls.every((call, k) => call.words.length === raw.groups[k].length && call.words.every((w, j) => w.lit !== null && w.lit === raw.groups[k][j]));
+  return agrees ? raw.shape : null;
+}
+
+/** The allowlist half of parseShape: the shape and the literal words of each call (the cd call first, when there is one). */
+function rawShape(command: string, ps: boolean): { shape: Shape; groups: string[][] } | null {
   const override = OVERRIDE.exec(command);
   const toks = shapeTokens((override ? command.slice(override[0].length) : command).trim(), ps);
   if (!toks || toks.length === 0) return null;
@@ -1556,7 +1662,7 @@ export function parseShape(command: string, ps = false): Shape | null {
       slot[name].push(value.v);
     }
   }
-  return shape.remotes.every((r) => REMOTE_LITERAL.test(r)) ? shape : null;
+  return shape.remotes.every((r) => REMOTE_LITERAL.test(r)) ? { shape, groups: groups.map((g) => g.map((t) => t.v)) } : null;
 }
 
 export interface AnswerKeyRun {
@@ -1594,14 +1700,14 @@ function shapeCause(command: string, ps: boolean): string | undefined {
  * folder when a `;` or a cd made them differ, and every --dir); none: allow. Else only the allowed shape with a literal base passes, and its
  * diff is read.
  */
-export function answerKeyDeny(run: AnswerKeyRun): string | null {
+export async function answerKeyDeny(run: AnswerKeyRun): Promise<string | null> {
   try {
     gitDeadline = Date.now() + ANSWER_BUDGET_MS;
-    const shape = parseShape(run.command, run.ps);
+    const shape = await parseShape(run.command, run.ps);
     // A review that no parsed cr call stands for (env -C, watch, npm exec, $(command -v cr)) may run in a folder the check does not see: deny in every folder.
     if (!shape && run.unplaced) return wayOut(shapeCause(run.command, run.ps));
     const cwd = shape ? (shape.cd === undefined ? run.startCwd : cdTarget(run.startCwd, shape.cd, run.home, run.ps)) : run.cwd;
-    const folder = folderDeny(run.command, run.ps, cwd);
+    const folder = await folderDeny(run.command, run.ps, cwd);
     if (folder) return folder;
     const opts = shape ?? readReviewOptions(run.invocations);
     // With `;` the review runs even when the cd fails, so the start folder is checked too. With && it does not. A non-shape command checks both.
@@ -1676,7 +1782,7 @@ export interface DecideResult {
 /** Test seam: the two steps that can throw before the answer-key check. */
 export interface DecideSeam {
   classify?: (source: string, ps?: boolean) => SegmentClass | Promise<SegmentClass>;
-  cwdOf?: (command: string, cwd: string, ps?: boolean) => string;
+  cwdOf?: (command: string, cwd: string, ps?: boolean) => string | Promise<string>;
 }
 
 /** A cr or coderabbit word followed later by the word review: the raw rule of rawScan, with no lexer. */
@@ -1686,13 +1792,15 @@ function rawReview(command: string): boolean {
 }
 
 /** True when the command holds a review call by the call rule (rawScan), or a parsed cr call that names review, also inside a wrapper string. */
-function holdsReviewCall(source: string, ps: boolean, depth = 0): boolean {
-  const lexed = lexShell(joinContinuations(source, ps), ps);
-  if (rawScan(lexed, ps).reviewSegments.length > 0 || depth > MAX_NESTING) return true;
-  for (const { text } of parseUnits(lexed, ps)) {
-    const inv = parseInvocation(text);
+async function holdsReviewCall(source: string, ps: boolean, depth = 0): Promise<boolean> {
+  const joined = source;
+  // A nested string is read by the parser here, before any scan reads its facts (an unread text would count a quoted cr word as code).
+  await prepareLex(joined, ps);
+  const lexed = lexOf(joined, ps);
+  if ((await rawScan(lexed, ps)).reviewSegments.length > 0 || depth > MAX_NESTING) return true;
+  for (const { inv } of holdsTrigger(joined) ? await unitsOf(joined, lexed, ps) : []) {
     if (!inv) continue;
-    if (inv.nested !== undefined ? holdsReviewCall(inv.nested, ps, depth + 1) : isCrExecutable(inv.exe) && inv.args.some((a) => a.toLowerCase() === 'review')) return true;
+    if (inv.nested !== undefined ? await holdsReviewCall(inv.nested, ps, depth + 1) : isCrExecutable(inv.exe) && inv.args.some((a) => a.toLowerCase() === 'review')) return true;
   }
   return false;
 }
@@ -1701,15 +1809,15 @@ function holdsReviewCall(source: string, ps: boolean, depth = 0): boolean {
  * The answer-key result for a command, or null. The ONE call rule decides: `verdict.runs` is what rawScan and the parser found, so a command that
  * only names the words (`grep -n "cr review"`) has no runs and is never checked. A deny uses no run slot.
  */
-function answerKeyResult(input: PreToolUseInput, command: string, ps: boolean, verdict: SegmentClass, seam: DecideSeam, env: NodeJS.ProcessEnv): DecideResult | null {
+async function answerKeyResult(input: PreToolUseInput, command: string, ps: boolean, verdict: SegmentClass, seam: DecideSeam, env: NodeJS.ProcessEnv): Promise<DecideResult | null> {
   // A blocked review (the override lifted the block) has no parsed calls: any option in its raw text counts as unread.
-  const blockedReview = (verdict.runs ?? 0) === 0 && verdict.verdict === 'block' && holdsReviewCall(command, ps);
+  const blockedReview = (verdict.runs ?? 0) === 0 && verdict.verdict === 'block' && (await holdsReviewCall(command, ps));
   if ((verdict.runs ?? 0) === 0 && !blockedReview) return null;
   const startCwd = input.cwd || process.cwd();
   const home = homeOf(env);
-  const cwd = (seam.cwdOf ?? ((c: string, d: string, p?: boolean) => effectiveCwd(c, d, p, home)))(command, startCwd, ps);
+  const cwd = await (seam.cwdOf ?? ((c: string, d: string, p?: boolean) => effectiveCwd(c, d, p, home)))(command, startCwd, ps);
   const unaccounted = verdict.unaccounted === true || (blockedReview && rawOptionCount(command) > 0);
-  const reason = answerKeyDeny({ command, ps, startCwd, cwd, home, invocations: verdict.invocations ?? [], unaccounted, unplaced: verdict.unplaced === true });
+  const reason = await answerKeyDeny({ command, ps, startCwd, cwd, home, invocations: verdict.invocations ?? [], unaccounted, unplaced: verdict.unplaced === true });
   return reason ? { allow: false, reason, answerKey: true } : null;
 }
 
@@ -1722,7 +1830,7 @@ async function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, sea
 
   // The override lifts the run cap and the billing and block denies, as on main. It never lifts the answer-key check: a review that may read an answer-key path is denied even with it.
   if (OVERRIDE.test(command)) {
-    const denied = runsCommand ? answerKeyResult(input, command, ps, await classify(command, ps), seam, env) : null;
+    const denied = runsCommand ? await answerKeyResult(input, command, ps, await classify(command, ps), seam, env) : null;
     if (denied) return denied;
     // A command that names a review gets a row with no cwd and no command text: the check read the folder and the options.
     if (rawReview(command)) logGuardDecision('coderabbit-guard', { ...input, cwd: undefined }, 'override', 'SKIP_CODERABBIT_GUARD=1', { env });
@@ -1742,21 +1850,23 @@ async function decideChecked(input: PreToolUseInput, env: NodeJS.ProcessEnv, sea
     // A Task or Agent payload carries `prompt`, not `command`, and a prompt is never checked for a review call. Only a payload that has a tool_input.command
     // gets the same answer-key check as a Bash call (it counts no run). The command is classified here, not through `d`: a read-only
     // autofix prompt returns allow from classifyDelegate before it reads the command.
-    return (command ? answerKeyResult(input, command, false, await classify(command, false), seam, env) : null) ?? { allow: true };
+    return (command ? await answerKeyResult(input, command, false, await classify(command, false), seam, env) : null) ?? { allow: true };
   }
 
   if (!BASH_TOOLS.has(tool)) return { allow: true };
 
   const verdict = await classify(command, ps);
   if (verdict.verdict === 'block') return { allow: false, reason: verdict.reason };
+  // The reader failed on a text with no review call: allowed, and counted in the guard log for the seat's weekly read (row E9).
+  if (verdict.readerError) logGuardDecision('coderabbit-guard', input, 'warn', `reader-error-allowed: ${verdict.readerError}`, { command, env });
   const runs = verdict.runs ?? 0;
   if (runs === 0) return { allow: true };
 
   // The check decides from git, not from the cap key, and runs before the cap, so a deny uses no slot.
-  const denied = answerKeyResult(input, command, ps, verdict, seam, env);
+  const denied = await answerKeyResult(input, command, ps, verdict, seam, env);
   if (denied) return denied;
   const home = homeOf(env);
-  const cwd = (seam.cwdOf ?? ((c: string, d: string, p?: boolean) => effectiveCwd(c, d, p, home)))(command, input.cwd || process.cwd(), ps);
+  const cwd = await (seam.cwdOf ?? ((c: string, d: string, p?: boolean) => effectiveCwd(c, d, p, home)))(command, input.cwd || process.cwd(), ps);
   const key = repoBranchKey(cwd, env);
   const path = statePath(env);
   const state = readState(path);
@@ -1786,6 +1896,9 @@ function failClosed(input: PreToolUseInput): DecideResult {
 
 export async function decide(input: PreToolUseInput, env: NodeJS.ProcessEnv = process.env, seam: DecideSeam = {}): Promise<DecideResult> {
   try {
+    // One decide, one set of parser readings: the memo of readCommand and the prepared facts start empty.
+    resetReadings();
+    resetLexCache();
     // await inside the try: a rejection must reach the catch, which fails closed
     return await decideChecked(input, env, seam);
   } catch {
