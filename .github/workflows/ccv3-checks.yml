@@ -264,10 +264,11 @@ jobs:
   # The lane board tests build a throwaway database (scripts/coordination/scratch-db.mjs) and run the real render-board.mjs
   # and lane.mjs against it. Before this job no workflow ran them: two render-board tests sat red on main (PR #312, 2026-11-05)
   # while every check was green. Separate job: the ratchets job has a 10 minute budget and already hit it once on a slow checkout.
-  # 15 minutes: the last step (the lane-context gate) may use 8 minutes after the test steps, and must reach its database drop.
+  # 25 minutes: the lane-context gate may use 8 minutes after the test steps and must reach its database drop; the probe steps add
+  # up to 3 (start Postgres) and 8 (run) minutes after it. The probes themselves take about 20 seconds.
   coordination-db:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         # pgvector 0.8.7 on Postgres 16, built 2026-10-01: the same bits as the dev database in docker/docker-compose.yml.
@@ -412,6 +413,32 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 8
         run: node scripts/github/lane-context-db-gate.mjs
+      # The six coordination probes (scripts/coordination/run-probes.mjs, lane coord-test-suite). Steps of this job, not a job of their
+      # own: review-status.mjs lists the required check runs by job name (test NC8), and a new job would be a new required check.
+      # lease, degradation and session-lifecycle run `docker exec continuous-claude-postgres psql`, and a service container has a
+      # generated name, so a second Postgres starts here by that name, on host port 5433 (the service holds 5432). The runner makes one
+      # lanes_pr1_ database for each probe, checks first that each probe refuses a live url, and drops each database in finally.
+      - name: start Postgres as continuous-claude-postgres on port 5433 (the probes run docker exec into that name)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: |
+          docker run -d --name continuous-claude-postgres \
+            -e POSTGRES_USER=claude -e POSTGRES_PASSWORD=claude_dev -e POSTGRES_DB=continuous_claude \
+            -p 5433:5432 \
+            pgvector/pgvector@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+          # -h 127.0.0.1: while the image starts, a temporary server answers on the socket only; the real one listens on tcp.
+          for i in $(seq 1 60); do
+            if docker exec continuous-claude-postgres pg_isready -h 127.0.0.1 -U claude -d continuous_claude; then exit 0; fi
+            sleep 2
+          done
+          docker logs continuous-claude-postgres
+          exit 1
+      - name: coordination probes (refusal check, then lane-race, lease, claim-sql, degradation, session-lifecycle and dm-delivery on scratch databases)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 8
+        env:
+          CONTINUOUS_CLAUDE_DB_URL: postgresql://claude:claude_dev@localhost:5433/continuous_claude
+        run: node scripts/coordination/run-probes.mjs
 
   trivy:
     runs-on: ubuntu-latest
