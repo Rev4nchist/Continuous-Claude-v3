@@ -369,7 +369,7 @@ test.describe('GET /api/mission-control?view=board', () => {
     const board = await loadBoard(request);
     expect(snapshot).toHaveProperty('board');
 
-    expect(Object.keys(board).sort()).toEqual(['board', 'columns', 'error', 'status', 'total']);
+    expect(Object.keys(board).sort()).toEqual(['board', 'columns', 'error', 'status', 'total', 'truncated']);
     expect(board.board, 'no ?project: the default board').toBe('continuous-claude');
     expect(board.error).toBeNull();
     expect(board.columns.map((c) => c.state)).toEqual([...STATES]);

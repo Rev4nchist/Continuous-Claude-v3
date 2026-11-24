@@ -185,6 +185,12 @@ export type SpendFoldView = {
   /** The Chicago date the view covers. */
   day: string;
   engine: EngineSum;
+  /**
+   * The same files in two sums (fault C16): a LIVE session's cost is an estimate that still grows, an ENDED
+   * session's cost is final. `engine` above is the whole day and reads `est` when any session is live; `split`
+   * says how much of it is which.
+   */
+  split: { live: EngineSum; ended: EngineSum };
   est: Usd;
   /** Cent-rounded engine minus cent-rounded est. Negative values stay. Null when the engine has no data. */
   residualUsd: number | null;
@@ -261,6 +267,10 @@ export function foldSpendView(
   const engine = centEngine(sumEngine(today, today.some((snap) => liveIds.has(snap.sessionId))));
   const est = centEst(sumEst(today));
   const quota = foldQuota(today);
+  const split = {
+    live: centEngine(sumEngine(today.filter((snap) => liveIds.has(snap.sessionId)), true)),
+    ended: centEngine(sumEngine(today.filter((snap) => !liveIds.has(snap.sessionId)), false)),
+  };
 
   const bySession = today
     .map((snap): SessionRow => ({
@@ -280,6 +290,7 @@ export function foldSpendView(
     asOf: new Date(nowMs).toISOString(),
     day,
     engine,
+    split,
     est,
     residualUsd: engine.usd === null ? null : cent(engine.usd - est.usd),
     quota: { ...quota, amber: quota.sevenDayPct !== null && quota.sevenDayPct >= QUOTA_AMBER_PCT },

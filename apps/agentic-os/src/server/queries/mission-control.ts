@@ -69,7 +69,15 @@ export type StatTiles = {
   /** Sessions quiet over 15 minutes and up to 24 hours (the join's `quiet`). */
   quiet: number;
   activeLanes: number;
-  openPrs: number;
+  /**
+   * The open PRs of this repo, from the open-PR feed (the same file as the table). Null: no usable feed, so the
+   * tile says "no feed" and never 0. It is NOT the PRs that live sessions watch (fault C1): that count is `prs.length`.
+   */
+  openPrs: number | null;
+  /** The feed lists more PRs than the table shows (20): the tile reads "20+". */
+  openPrsCapped: boolean;
+  /** The feed is older than its stale limit: the tile says so. */
+  openPrsStale: boolean;
   /** 7-day quota, from the live file with the newest `cache.lastUsedAt`. Null: not reported. */
   quota: QuotaTile;
   /** Engine and est sums over LIVE sessions only. */
@@ -163,6 +171,38 @@ const NO_FLEET: FleetSessions = {
   prs: [],
 };
 
+/**
+ * What a failed `getFleetOverview` reads as: nothing, and `reconciles: false`, so the page cannot pass it off as a
+ * fleet of zero sessions that adds up. The `fleet-overview` source row says why.
+ */
+const NO_FLEET_OVERVIEW: FleetOverview = {
+  projects: [],
+  unmatched: {
+    sessionCount: 0,
+    rawCount: 0,
+    rejected: { sessionCount: 0, rawCount: 0 },
+    notOnboarded: { sessionCount: 0, rawCount: 0 },
+    unseen: { sessionCount: 0, rawCount: 0 },
+  },
+  byHarness: { claude: 0, uuidv7: 0, legacy: 0, other: 0 },
+  duplicates: 0,
+  nullProject: 0,
+  totalSessionRows: 0,
+  reconciles: false,
+};
+
+/** What a failed `getActiveSessions` reads as: no live session. The `active-sessions` source row says why. */
+const NO_ACTIVE_SESSIONS: ActiveSessions = { windowMinutes: 0, sessions: [], recentlyEnded: [], truncated: false };
+
+/** A source row for a core read: ok, or the redacted reason it failed. */
+function coreSource(
+  id: string,
+  label: string,
+  read: { ok: true; value: unknown } | { ok: false; error: string },
+): DataSource {
+  return read.ok ? { id, label, status: 'ok', detail: 'read' } : { id, label, status: 'error', detail: read.error };
+}
+
 /** Run a source read. One failing source must not fail the snapshot. */
 async function settle<T>(read: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
   try {
@@ -219,10 +259,13 @@ export async function getMissionControlSnapshot(
   withFlow = false,
 ): Promise<MissionControlSnapshot> {
   const withPrFeed = !withBoard && !withSpend && !withFlow;
-  const [databaseRaw, fleet, active, files, lanes, heldLanes, board, flow, coordRead, prFeed] = await Promise.all([
+  // The two core reads are settled like every other source (fault C11): one failed query used to throw out of
+  // Promise.all and turn the whole poll into a 503 with no reason on screen. Now the snapshot still arrives, the
+  // failed part reads empty, and `sources` names the failure.
+  const [databaseRaw, fleetRead, activeRead, files, lanes, heldLanes, board, flow, coordRead, prFeedRead] = await Promise.all([
     checkDatabaseReady(),
-    getFleetOverview(),
-    getActiveSessions(),
+    settle(getFleetOverview),
+    settle(getActiveSessions),
     settle(readStateFiles),
     settle(getActiveLaneCount),
     settle(getHeldLanes),
@@ -231,13 +274,16 @@ export async function getMissionControlSnapshot(
     // The Ready strip shows on every view, so this read runs on every poll.
     settle(getReadyCoord),
     // readPrFeed never throws: a missing file is "absent", a failed lane lookup shows dashes.
-    withPrFeed ? readPrFeed() : Promise.resolve(null),
+    // Read on every view: the Open PRs tile shows on every view and counts this feed. The table gets it on two views only.
+    readPrFeed(),
   ]);
 
   const database: MissionControlSnapshot['database'] = databaseRaw.ok
     ? databaseRaw
     : { ok: false, error: safeMessage(databaseRaw.error) };
 
+  const fleet = fleetRead.ok ? fleetRead.value : NO_FLEET_OVERVIEW;
+  const active = activeRead.ok ? activeRead.value : NO_ACTIVE_SESSIONS;
   const coord: ReadyCoord = coordRead.ok ? coordRead.value : coordError(coordRead.error);
   const heldByOwner = heldLanes.ok ? heldLanes.value : new Map<string, HeldLane[]>();
   // The session detail takes lane ids only.
@@ -264,7 +310,9 @@ export async function getMissionControlSnapshot(
     blocked: sessions.cards.filter((c) => c.chip === 'blocked').length,
     quiet: sessions.join.quiet,
     activeLanes: lanes.ok ? lanes.value : 0,
-    openPrs: sessions.prs.length,
+    openPrs: prFeedRead.status === 'ok' ? prFeedRead.rows.length : null,
+    openPrsCapped: prFeedRead.status === 'ok' && prFeedRead.capped,
+    openPrsStale: prFeedRead.status === 'ok' && prFeedRead.stale,
     quota: cost.quota,
     spend: cost.spend,
     breaks: cost.breaks,
@@ -281,6 +329,8 @@ export async function getMissionControlSnapshot(
       ? stateFilesSource(files, sessions)
       : { id: 'state-files', label: 'Session state files', status: 'error', detail: joined.error },
     laneSource(lanes, board),
+    coreSource('fleet-overview', 'Project overview (sessions table)', fleetRead),
+    coreSource('active-sessions', 'Live session roster (sessions table)', activeRead),
   ];
 
   return {
@@ -303,7 +353,7 @@ export async function getMissionControlSnapshot(
     board,
     spend,
     flow,
-    prFeed,
+    prFeed: withPrFeed ? prFeedRead : null,
     generatedAt: new Date().toISOString(),
   };
 }
