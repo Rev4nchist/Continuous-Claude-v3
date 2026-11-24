@@ -356,10 +356,13 @@ function bootTrace(env = process.env, _bootCall) {
 if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
 
 // src/decision-ledger.ts
+import { spawnSync } from "child_process";
 import { readFileSync as readFileSync3 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join2 } from "path";
 
 // ../../scripts/github/lib/decisions.mjs
-import { mkdirSync, readFileSync as readFileSync2, renameSync, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync as closeSync2, existsSync, mkdirSync, openSync as openSync2, readFileSync as readFileSync2, readSync, readdirSync, renameSync, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
 import { randomUUID as randomUUID2 } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -471,6 +474,67 @@ var accountHome = () => {
   }
 };
 var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(accountHome(), ".claude", "state", "ccv3-mods", "decisions.json");
+var DECISION_LOG_ENV = "CCV3_DECISION_LOG_FILE";
+var DECISION_LOG_MAX_ENV = "CCV3_DECISION_LOG_MAX_BYTES";
+var LOG_MAX_BYTES = 5 * 1024 * 1024;
+var LOG_VERSION = 1;
+var decisionLogPath = (env = process.env) => env[DECISION_LOG_ENV] || path.join(path.dirname(decisionsPath(env)), "decision-log.jsonl");
+var logMaxBytes = (env = process.env) => {
+  const n = Number(env[DECISION_LOG_MAX_ENV]);
+  return Number.isInteger(n) && n > 0 ? n : LOG_MAX_BYTES;
+};
+function parseKey(key) {
+  const m = /^([^#@]*)(?:#(\d+)|@([\s\S]+))?/.exec(key);
+  return { repo: m[1] || null, pr: m[2] ? Number(m[2]) : null, branch: m[3] ?? null };
+}
+var cutText = (s, max) => typeof s === "string" && s.trim() !== "" ? s.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max) : null;
+function cleanAudit(audit) {
+  const lane = Array.isArray(audit?.lane) ? audit.lane.filter(isText).slice(0, 5).map((l) => cutText(l, 100)).filter(isText) : null;
+  return { session: cutText(audit?.session, 80), lane };
+}
+var archiveStamp = (now = /* @__PURE__ */ new Date()) => now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+function archivePath(file) {
+  const base = path.join(path.dirname(file), path.basename(file, ".jsonl"));
+  const stamp = archiveStamp();
+  let candidate = `${base}.${stamp}.jsonl`;
+  for (let n = 1; existsSync(candidate); n += 1) candidate = `${base}.${stamp}-${n}.jsonl`;
+  return candidate;
+}
+var endsWithLf = (file, size) => {
+  const fd = openSync2(file, "r");
+  try {
+    const b = Buffer.alloc(1);
+    readSync(fd, b, 0, 1, size - 1);
+    return b[0] === 10;
+  } finally {
+    closeSync2(fd);
+  }
+};
+function appendLogLine(file, line, env = process.env) {
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    const done = withLock(file, {}, () => {
+      let size = 0;
+      try {
+        size = statSync2(file).size;
+      } catch (err) {
+        if (err?.code !== "ENOENT") throw err;
+      }
+      if (size >= logMaxBytes(env)) {
+        renameSync(file, archivePath(file));
+        size = 0;
+      }
+      const text = `${JSON.stringify(line)}
+`;
+      appendFileSync(file, size > 0 && !endsWithLf(file, size) ? `
+${text}` : text);
+      return { ok: true };
+    });
+    return done?.ok === true ? { ok: true } : { ok: false, reason: `log-${done?.reason ?? "unknown"}` };
+  } catch (err) {
+    return { ok: false, reason: `log-write: ${String(err?.code ?? err?.message ?? err).slice(0, 80)}` };
+  }
+}
 var empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
 var idOf = ({ step, key, head }) => `${step}
 ${key}
@@ -542,19 +606,36 @@ function update(fn, { strict = false } = {}) {
   });
   return locked;
 }
-function decisionRecord({ step, key, head, label, entry }) {
+function decisionRecord({ step, key, head, label, entry, audit }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return { ok: false, reason: "no-open-offer" };
-  return update((store) => {
+  let logged = { ok: true };
+  const result = update((store) => {
     const id = idOf({ step, key, head });
     const offer = store.offers[id];
     if (!offer || offer.open !== true) return { ok: false, reason: "no-open-offer" };
     if (typeof label !== "string" || !offer.labels.includes(label)) return { ok: false, reason: "no-match" };
     const at = (/* @__PURE__ */ new Date()).toISOString();
+    const headLower = String(head).toLowerCase();
+    logged = appendLogLine(decisionLogPath(), {
+      v: LOG_VERSION,
+      kind: "tap",
+      id: randomUUID2(),
+      at,
+      step,
+      key,
+      ...parseKey(key),
+      head: headLower,
+      label,
+      entry: isText(entry) ? entry : null,
+      ...cleanAudit(audit),
+      tree: isText(offer.tree) ? offer.tree : null
+    });
     store.decisions[id] = { label, at, tapAt: at, entry: isText(entry) ? entry : null, tree: offer.tree, nonce: offer.nonce };
     offer.open = false;
     delete store.misses[id];
     return { ok: true };
   });
+  return result?.ok === true && logged.ok === false ? { ok: true, log: logged } : result;
 }
 function missCount({ step, key, head }) {
   if (!STEPS.includes(step) || !isText(key) || !isText(head)) return 0;
@@ -629,7 +710,32 @@ function missText(o) {
   const how = engine ? `Call pr_checkpoint with pr: ${prOf(o)} (it returns the question again)` : "Ask the same question again with AskUserQuestion, word for word";
   return `No match. Nothing was recorded for the "${o.step}" question: the answer was not one of its options (re-ask ${n} of ${MAX_REASKS2}). ${how}.`;
 }
-function noteFor(q, answers, offers) {
+function auditFacts(env = process.env, cwd) {
+  if (env.VITEST || env.CCV3_DECISION_AUDIT === "off") return { session: null, lane: null };
+  const id = env.CLAUDE_CODE_SESSION_ID ?? "";
+  let session = null;
+  if (/^[0-9a-f-]{8,64}$/i.test(id)) {
+    session = id.slice(0, 8);
+    try {
+      const j = JSON.parse(readFileSync3(join2(homedir2(), ".claude", "state", "identity", `${id}.json`), "utf8"));
+      const short = isText2(j.short) && j.short ? j.short : session;
+      session = isText2(j.name) && j.name ? `${short} ${j.name}` : short;
+    } catch {
+    }
+  }
+  let lane = null;
+  try {
+    const r = spawnSync(process.execPath, [join2(homedir2(), ".claude", "scripts", "lane.mjs"), "mine", "--json"], { encoding: "utf8", timeout: 2e3, windowsHide: true, cwd, env });
+    const start = (r.stdout ?? "").indexOf("[");
+    if (r.status === 0 && start >= 0) {
+      const rows = JSON.parse((r.stdout ?? "").slice(start));
+      if (Array.isArray(rows)) lane = rows.map((x) => x?.id).filter(isText2);
+    }
+  } catch {
+  }
+  return { session, lane };
+}
+function noteFor(q, answers, offers, getAudit) {
   if (!isText2(q.question) || !isText2(q.header)) return null;
   const sameHeader = offers.filter((o2) => o2.spec?.header === q.header);
   if (sameHeader.length === 0) return null;
@@ -639,11 +745,11 @@ function noteFor(q, answers, offers) {
   const o = hits[0];
   const answer = answers[q.question];
   if (!isText2(answer) || !o.labels.includes(answer)) return missText(o);
-  const r = decisionRecord2({ step: o.step, key: o.key, head: o.head, label: answer, entry: process.env.CLAUDE_CODE_ENTRYPOINT ?? null });
-  if (r.ok) return `Recorded "${answer}" for the ${o.step} question (${o.key}).`;
+  const r = decisionRecord2({ step: o.step, key: o.key, head: o.head, label: answer, entry: process.env.CLAUDE_CODE_ENTRYPOINT ?? null, audit: getAudit() });
+  if (r.ok) return `Recorded "${answer}" for the ${o.step} question (${o.key}).${r.log?.ok === false ? ` The decision log was NOT written (${r.log.reason}): the tap is recorded, the audit line is missing. Tell Dave.` : ""}`;
   return r.reason === "lock" ? `Not recorded: the decision store was busy. Ask the same question again.` : null;
 }
-function handle(raw) {
+function handle(raw, getAudit = () => auditFacts(process.env, void 0)) {
   try {
     const input = JSON.parse(raw.trim() || "{}");
     if ((input.tool_name || input.tool) !== TOOL || input.agent_id || process.env.CLAUDE_AGENT_ID) return "{}";
@@ -651,7 +757,7 @@ function handle(raw) {
     const questions = Array.isArray(asked) ? asked : [];
     const answers = parseAnswers(input.tool_response, questions);
     const offers = offerList2();
-    const notes = questions.map((q) => noteFor(q, answers, offers)).filter(isText2);
+    const notes = questions.map((q) => noteFor(q, answers, offers, getAudit)).filter(isText2);
     if (notes.length === 0) return "{}";
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: notes.join("\n") } });
   } catch {
@@ -666,6 +772,7 @@ if (!process.env.VITEST) {
   }
 }
 export {
+  auditFacts,
   handle,
   parseAnswers
 };

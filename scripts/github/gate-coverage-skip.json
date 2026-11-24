@@ -408,6 +408,10 @@
       "reason": "pre-pr gate only; CI has no step"
     },
     {
+      "path": "scripts/github/decision-log.test.mjs",
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
       "path": "scripts/github/decisions.test.mjs",
       "reason": "pre-pr gate only; CI has no step"
     },

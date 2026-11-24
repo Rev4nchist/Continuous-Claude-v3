@@ -21,8 +21,11 @@
  * Main session only: a subagent's AskUserQuestion never records. Fails open: any error is {} and nothing records.
  * Two gates: the matcher in settings.json.template (AskUserQuestion) and the tool_name check below.
  */
+import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
-import { MAX_REASKS, decisionRecord, missBump, missCount, offerList, type Offer } from './shared/decisions-store.js';
+import { homedir } from 'os';
+import { join } from 'path';
+import { MAX_REASKS, decisionRecord, missBump, missCount, offerList, type Offer, type TapAudit } from './shared/decisions-store.js';
 
 const TOOL = 'AskUserQuestion';
 
@@ -81,8 +84,37 @@ function missText(o: Offer): string {
   return `No match. Nothing was recorded for the "${o.step}" question: the answer was not one of its options (re-ask ${n} of ${MAX_REASKS}). ${how}.`;
 }
 
+/**
+ * The audit facts for the decision log (card decision-append-log): the session label from its identity file and the lane ids from `lane.mjs mine --json` (2 s cap).
+ * Any failure gives null for that part, and the tap still records. Skipped (both null) under vitest and with CCV3_DECISION_AUDIT=off, so a unit test never spawns the lane CLI.
+ * It runs once per matched tap, before the store lock, and never for a question that is not ours.
+ */
+export function auditFacts(env: NodeJS.ProcessEnv = process.env, cwd?: string): TapAudit {
+  if (env.VITEST || env.CCV3_DECISION_AUDIT === 'off') return { session: null, lane: null };
+  const id = env.CLAUDE_CODE_SESSION_ID ?? '';
+  let session: string | null = null;
+  if (/^[0-9a-f-]{8,64}$/i.test(id)) {
+    session = id.slice(0, 8);
+    try {
+      const j = JSON.parse(readFileSync(join(homedir(), '.claude', 'state', 'identity', `${id}.json`), 'utf8')) as { short?: unknown; name?: unknown };
+      const short = isText(j.short) && j.short ? j.short : session;
+      session = isText(j.name) && j.name ? `${short} ${j.name}` : short;
+    } catch { /* the 8-hex handle stays */ }
+  }
+  let lane: string[] | null = null;
+  try {
+    const r = spawnSync(process.execPath, [join(homedir(), '.claude', 'scripts', 'lane.mjs'), 'mine', '--json'], { encoding: 'utf8', timeout: 2000, windowsHide: true, cwd, env });
+    const start = (r.stdout ?? '').indexOf('[');
+    if (r.status === 0 && start >= 0) {
+      const rows = JSON.parse((r.stdout ?? '').slice(start)) as unknown;
+      if (Array.isArray(rows)) lane = rows.map((x) => (x as { id?: unknown })?.id).filter(isText);
+    }
+  } catch { /* lane stays null */ }
+  return { session, lane };
+}
+
 /** The note for one asked question, or null when it is not an offer question. */
-function noteFor(q: Question, answers: Record<string, string>, offers: Offer[]): string | null {
+function noteFor(q: Question, answers: Record<string, string>, offers: Offer[], getAudit: () => TapAudit): string | null {
   if (!isText(q.question) || !isText(q.header)) return null;
   const sameHeader = offers.filter((o) => o.spec?.header === q.header);
   if (sameHeader.length === 0) return null;
@@ -93,13 +125,14 @@ function noteFor(q: Question, answers: Record<string, string>, offers: Offer[]):
   const answer = answers[q.question];
   if (!isText(answer) || !o.labels.includes(answer)) return missText(o);
   // The entry point is the hook's own environment: the model cannot change it. The store stamps it with the tap time (a paid post reads both).
-  const r = decisionRecord({ step: o.step, key: o.key, head: o.head, label: answer, entry: process.env.CLAUDE_CODE_ENTRYPOINT ?? null });
-  if (r.ok) return `Recorded "${answer}" for the ${o.step} question (${o.key}).`;
+  const r = decisionRecord({ step: o.step, key: o.key, head: o.head, label: answer, entry: process.env.CLAUDE_CODE_ENTRYPOINT ?? null, audit: getAudit() });
+  // The tap is recorded even when the decision log could not be written (fail open): say so, so Dave and the seat know the audit line is missing.
+  if (r.ok) return `Recorded "${answer}" for the ${o.step} question (${o.key}).${r.log?.ok === false ? ` The decision log was NOT written (${r.log.reason}): the tap is recorded, the audit line is missing. Tell Dave.` : ''}`;
   return r.reason === 'lock' ? `Not recorded: the decision store was busy. Ask the same question again.` : null;
 }
 
 /** The whole hook: stdin text in, stdout text out. Never throws. */
-export function handle(raw: string): string {
+export function handle(raw: string, getAudit: () => TapAudit = () => auditFacts(process.env, undefined)): string {
   try {
     const input = JSON.parse(raw.trim() || '{}') as HookInput;
     if ((input.tool_name || input.tool) !== TOOL || input.agent_id || process.env.CLAUDE_AGENT_ID) return '{}';
@@ -107,7 +140,7 @@ export function handle(raw: string): string {
     const questions = (Array.isArray(asked) ? asked : []) as Question[];
     const answers = parseAnswers(input.tool_response, questions);
     const offers = offerList();
-    const notes = questions.map((q) => noteFor(q, answers, offers)).filter(isText);
+    const notes = questions.map((q) => noteFor(q, answers, offers, getAudit)).filter(isText);
     if (notes.length === 0) return '{}';
     return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: notes.join('\n') } });
   } catch {
