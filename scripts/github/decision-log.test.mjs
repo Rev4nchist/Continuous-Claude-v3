@@ -326,4 +326,31 @@ test('AL16: the CLI survives a bad tap row and an unreadable log, and says which
   assert.equal(JSON.parse(run('--pr', '714', '--file', folder, '--json').stdout).unreadable.length, 1);
 });
 
+test('AL17: an option with no operand is a usage error (exit 2), never a fall back to the default log; a valid explicit path still works', async () => {
+  const { dir, log } = fresh();
+  const d = await load();
+  offer(d);
+  tap(d);
+  const ledger = path.join(dir, 'land-outcomes.jsonl');
+  const run = (...args) => spawnSync(process.execPath, [CLI, 'show', ...args], { encoding: 'utf8', env: { ...process.env, CCV3_DECISIONS_FILE: path.join(dir, 'decisions.json') } });
+  const bad = [
+    ['--pr', '714', '--file'],
+    ['--pr', '714', '--file', '--json'],
+    ['--pr'],
+    ['--pr', '--file', log],
+    ['--pr', '714', '--repo'],
+    ['--pr', '714', '--repo', '--json'],
+    ['--pr', '714', '--ledger'],
+    ['--pr', '714', '--file', log, '--ledger', '--json'],
+  ];
+  for (const args of bad) {
+    const r = run(...args);
+    assert.equal(r.status, 2, `${args.join(' ')} -> exit ${r.status}: ${r.stdout}`);
+    assert.match(r.stderr, /usage/i, args.join(' '));
+  }
+  const good = run('--pr', '714', '--file', log, '--ledger', ledger);
+  assert.equal(good.status, 0, good.stderr);
+  assert.match(good.stdout, /Land now \(Recommended\)/, 'a valid explicit path is still read');
+});
+
 function appendTorn(file) { writeFileSync(file, `${readFileSync(file, 'utf8')}{"v":1,"kind":"tap","id":"cut`); }
