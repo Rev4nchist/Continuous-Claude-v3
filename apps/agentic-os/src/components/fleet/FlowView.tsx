@@ -1,11 +1,16 @@
+import { useEffect, useState } from 'react';
+
 import type { FlowBarView, FlowCardView, FlowFileView, FlowRowView, FlowSeriesView, FlowTone, FlowView as FlowData } from '@/server/queries/lane-dash-parse';
 
 import { cn } from '@/lib/utils';
 
 import { flowAge } from './flow-age';
 
+/** How often the ages on this tab count up. The ages show whole minutes, so 30 seconds is fine. */
+const CLOCK_TICK_MS = 30_000;
+
 /**
- * The Flow tab. Pure props: it fetches nothing and holds no state. The data is `snapshot.flow`, filled only for
+ * The Flow tab. Pure props: it fetches nothing. Its only state is the clock for the ages. The data is `snapshot.flow`, filled only for
  * `view=flow` (src/server/queries/mission-control.ts). Read only: it shows the rows that the lane-dashboard lane
  * exports to flow.json and factory.json, as given. The meaning of a row is the exporter's; this tab computes nothing.
  *
@@ -161,8 +166,15 @@ function FileSection({ file, nowMs }: { file: FlowFileView; nowMs: number }) {
 }
 
 export function FlowView({ flow, nowMs }: { flow: FlowData; nowMs?: number }) {
-  // The age ticker of the page re-renders this tree every second, so Date.now() here stays current.
-  const now = nowMs ?? Date.now();
+  // The clock is read once at mount and then on a timer, never during render (react-hooks/purity).
+  // A caller that passes `nowMs` owns the clock and the timer stays off.
+  const [tickMs, setTickMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (nowMs !== undefined) return;
+    const timer = setInterval(() => setTickMs(Date.now()), CLOCK_TICK_MS);
+    return () => clearInterval(timer);
+  }, [nowMs]);
+  const now = nowMs ?? tickMs;
   return (
     <div data-testid="flow-view" className="min-w-0 space-y-3.5">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
