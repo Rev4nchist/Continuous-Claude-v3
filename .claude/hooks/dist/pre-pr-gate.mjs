@@ -1129,7 +1129,7 @@ function update(fn, { strict = false } = {}) {
     let store;
     if (strict) {
       const read = readStoreStrict(file);
-      if (read.unreadable) return { ok: false, reason: "unreadable-store", detail: `the decision store ${file} exists but cannot be read or parsed: repair or delete it` };
+      if (read.unreadable) return { ok: false, reason: "unreadable-store", detail: `the decision store ${file} exists but cannot be read or parsed: repair the file or move it aside; the seat or Dave decides` };
       store = read.store;
     } else store = readStore(file);
     prune(store, Date.now());
