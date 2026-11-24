@@ -114,6 +114,10 @@
       "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
     },
     {
+      "path": "apps/agentic-os/e2e/tiles-truth.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
+    },
+    {
       "path": ".claude/skills/skill-forge/tests/test_eval_intake.py",
       "reason": "pytest outside opc: needs a Python environment; no gate runs it"
     },
