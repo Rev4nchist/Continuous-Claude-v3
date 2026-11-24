@@ -226,7 +226,7 @@ test('F10: the grid has 2 x window_days zero-filled day rows, rank 14 = today; t
   assert.equal(dayOfRank(1), '2026-10-26');
 });
 
-test('F11: flow.today.* equals flow.bar.14.*, and flow.week.done, created and net equal pile.* in tiles.json', () => {
+test('F11: flow.today.* equals flow.bar.14.*, flow.week.done and created equal pile.* in tiles.json, flow.week.net is opened minus done', () => {
   // Breaks if the day bars and the today figures, or the flow week and the pile tile, come from different computations.
   const lanes = [
     lane({ id: 'c1', created_day: '2026-11-08' }), lane({ id: 'c2', created_day: '2026-11-05' }), lane({ id: 'c3', created_day: '2026-10-28' }),
@@ -242,8 +242,10 @@ test('F11: flow.today.* equals flow.bar.14.*, and flow.week.done, created and ne
   const tget = (id) => tiles.find((r) => r.id === id).value;
   assert.equal(val(rows, 'flow.week.done'), tget('pile.done'));
   assert.equal(val(rows, 'flow.week.created'), tget('pile.created'));
-  assert.equal(val(rows, 'flow.week.net'), tget('pile.net'));
-  assert.equal(get(rows, 'flow.week.net').text, tiles.find((r) => r.id === 'pile.net').text);
+  // pile.net is the open count change since card coord-fleetops-pile-figure; the flow week net stays opened minus done.
+  // The born-done lane above is in opened and in neither the open count nor done, so the two figures differ (pile.line.gap gives by how much).
+  assert.equal(val(rows, 'flow.week.net'), tget('pile.created') - tget('pile.done'));
+  assert.equal(tiles.find((r) => r.id === 'pile.line.gap').value, Math.abs(tget('pile.net') - val(rows, 'flow.week.net')));
 });
 
 test('F12: with no done lane there is no pct row and no median row, and a note says why', () => {

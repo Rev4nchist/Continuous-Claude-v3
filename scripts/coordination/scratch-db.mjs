@@ -84,6 +84,35 @@ export function assertScratchUrl(url) {
   return name;
 }
 
+/**
+ * The database name of a URL as safe text for a refusal line (card coord-probe-scratch-guard-followups, item 3): only
+ * letters, digits and _ . - stay, every other character becomes ?, and a name over 48 characters is cut with "...". An empty
+ * or unparseable name gives ''. The live name continuous_claude prints unchanged.
+ */
+export function safeDbName(url) {
+  const name = dbNameOf(url).replace(/[^A-Za-z0-9_.-]/g, '?');
+  return name.length > 48 ? `${name.slice(0, 48)}...` : name;
+}
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/**
+ * Throw unless the URL names only this machine (item 2). A docker-exec probe sends SQL to the local container whatever the URL
+ * host says, while the hooks it starts use the URL host: another host gives a false failure. Fails closed: only localhost,
+ * 127.0.0.1, ::1 and [::1] pass (no host, a host list or a parse failure refuse), and every host= or hostaddr= value must be local too.
+ */
+export function assertLocalHost(url) {
+  const refuse = (why) => { throw new Error(`refusing: the docker path reaches only the local container, and ${why}`); };
+  let u;
+  try { u = new URL(String(url)); } catch { return refuse('the URL cannot be parsed'); }
+  if (!LOCAL_HOSTS.has(u.hostname.toLowerCase())) refuse('the URL host is not local');
+  for (const [key, value] of u.searchParams) {
+    const k = key.toLowerCase();
+    if ((k === 'host' || k === 'hostaddr') && !LOCAL_HOSTS.has(value.toLowerCase())) refuse(`the '${k}' parameter is not local`);
+  }
+  return u.hostname.toLowerCase();
+}
+
 /** Query parameters of a libpq URL that hold a secret or the path of one. pg-connection-string reads them like userinfo. */
 const SENSITIVE_QUERY_KEYS = new Set(['password', 'passfile', 'sslpassword', 'sslkey', 'sslcert']);
 const queryKey = (raw) => {

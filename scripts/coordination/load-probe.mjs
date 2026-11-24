@@ -57,16 +57,21 @@
 
 import { execFileSync, spawn } from 'child_process';
 import { writeFileSync } from 'fs';
-import { join, relative } from 'node:path';
-import { canonProject, repoPath } from './canon-home.mjs';
-import { assertScratchUrl, dbNameOf } from './scratch-db.mjs';
+import { join } from 'node:path';
+import { assertClaimKey as claimKey, canonProject, repoPath, sqlLit } from './canon-home.mjs';
+import { assertLocalHost, assertScratchUrl, safeDbName } from './scratch-db.mjs';
 
 // Rule O3.9: this probe writes, so it runs on a scratch database only. Refuse before any psql call or child process.
 const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || '';
 let DB_NAME;
 try { DB_NAME = assertScratchUrl(DB_URL); } catch {
-  process.stderr.write(`load-probe: refusing to run: database '${dbNameOf(DB_URL) || '(no name)'}' is not a scratch database. `
+  process.stderr.write(`load-probe: refusing to run: database '${safeDbName(DB_URL) || '(no name)'}' is not a scratch database. `
     + "Set CONTINUOUS_CLAUDE_DB_URL to one made by 'node scripts/coordination/scratch-db.mjs create --through 6' (name starts with lanes_pr1_).\n");
+  process.exit(2);
+}
+try { assertLocalHost(DB_URL); } catch {
+  process.stderr.write(`load-probe: refusing to run: the docker path reaches only the local container, and the URL names another host. `
+    + 'Use a scratch database on this machine.\n');
   process.exit(2);
 }
 // psql below takes DB_NAME, the value assertScratchUrl returned. The hooks this probe starts read the same scratch database.
@@ -102,13 +107,7 @@ const PROJECT_CWD = repoPath();
 const CANONICAL_PROJECT = canonProject();
 console.log(`canonical project: ${CANONICAL_PROJECT}`);
 const TARGET_FILE = join(PROJECT_CWD, '.claude', 'hooks', 'src', '__loadprobe__.ts');
-// The claim key the file-claims hook stores since PR 536 (.claude/hooks/src/shared/claim-target.ts resolveClaimKey):
-// the path relative to the repo top folder, forward slashes, lower-cased where the file system ignores case.
-// SQL seeds and reads use it; the hook payload keeps the absolute path, as Claude Code sends it.
-const claimKey = (abs) => {
-  const rel = relative(PROJECT_CWD, abs).replace(/\\/g, '/');
-  return process.platform === 'win32' || process.platform === 'darwin' ? rel.toLowerCase() : rel;
-};
+// claimKey: the shared copy in canon-home.mjs, equal to the hook's resolveClaimKey; it throws for a path outside the repo.
 
 const OWNER = 'loadprobe-owner-0000-0000-000000000000';
 
@@ -139,19 +138,19 @@ const PURGE_EVENTS =
 
 function setup() {
   psql(`
-    DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET_FILE)}';
+    DELETE FROM file_claims WHERE file_path = '${sqlLit(claimKey(TARGET_FILE))}';
     DELETE FROM sessions WHERE id LIKE 'loadprobe-%';
     ${PURGE_EVENTS}
     INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat)
-    VALUES ('${OWNER}', '${CANONICAL_PROJECT}', 'load probe owner', NOW(), NOW());
+    VALUES ('${OWNER}', '${sqlLit(CANONICAL_PROJECT)}', 'load probe owner', NOW(), NOW());
     INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
-    VALUES ('${claimKey(TARGET_FILE)}', '${CANONICAL_PROJECT}', '${OWNER}', NOW(), NOW() + INTERVAL '30 minutes');
+    VALUES ('${sqlLit(claimKey(TARGET_FILE))}', '${sqlLit(CANONICAL_PROJECT)}', '${OWNER}', NOW(), NOW() + INTERVAL '30 minutes');
   `);
 }
 
 function teardown() {
   psql(`
-    DELETE FROM file_claims WHERE file_path = '${claimKey(TARGET_FILE)}';
+    DELETE FROM file_claims WHERE file_path = '${sqlLit(claimKey(TARGET_FILE))}';
     DELETE FROM sessions WHERE id LIKE 'loadprobe-%';
     ${PURGE_EVENTS}
   `);

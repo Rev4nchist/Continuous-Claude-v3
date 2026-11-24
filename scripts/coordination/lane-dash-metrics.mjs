@@ -27,7 +27,7 @@
  *   tone   "neutral", "ok", "warn", "bad", or null. "bad" (red) is used only by p0.chip when open P0 is above a set cap.
  * Each tile has "<prefix>.summary" (the one visible sentence) and "<prefix>.detail" (the longer text for screen
  * readers; tile 7 has none). A row that does not apply is left out, not written with nulls: no ask, no
- * "wait.oldest"; no earlier week, no "pile.line.prior". Tile 5 has no meter rows. Tile 6 has no goal text.
+ * "wait.oldest"; no earlier week, no "pile.line.prior"; no "pile.line.gap" when opened minus done equals the figure. Tile 5 has no meter rows. Tile 6 has no goal text.
  * The page rows page.rows.wait, page.rows.proj and page.rows.log hold the list limits (show_rows, project_rows,
  * log_rows), so the page can size its loading boxes without reading targets.json. Tile 3 and tile 2 and tile 7
  * write axis ticks (<prefix>.tick.<rank>) for their charts. The tile column mixes numbers and the string "page":
@@ -273,17 +273,26 @@ function waitedIn(lanes, w, edgeDays) {
     && Date.parse(l.first_claim_at) - Date.parse(l.created_at) >= edgeDays * DAY_MS).length;
 }
 
-export function pileTile(lanes, meta, targets) {
+/**
+ * The pile tile. One figure: `net` is the open count now minus the open count at the start of the window (card coord-fleetops-pile-figure).
+ * The start is the snapshot of the day before the window when `snapshots` has it (the number the trend line draws), else it is rebuilt
+ * from lane dates. `flowNet` is opened minus done from lane dates; `gap` is by how much the two differ (0 when they agree).
+ */
+export function pileTile(lanes, meta, targets, snapshots = []) {
   const days = num(targets, 'window_days', 7);
   const w = windowOf(meta.today, days);
   const edgeDays = num(targets, 'age_edge_1', 1);
-  const { created, done, net } = flow(lanes, w);
+  const { created, done, net: flowNet } = flow(lanes, w);
   const before = addDays(w.start, -1);
-  const openStart = lanes.filter((l) => l.created_day <= before && !(l.done_day != null && l.done_day <= before)).length;
+  const rebuilt = lanes.filter((l) => l.created_day <= before && !(l.done_day != null && l.done_day <= before)).length;
+  const snap = snapshots.find((s) => s.day === before);
+  const openStart = snap ? snap.open : rebuilt;
+  const openNow = meta.open_check;
+  const net = openNow - openStart;
   const waited = waitedIn(lanes, w, edgeDays);
   const prior = hasPriorWindow(meta.history_start, meta.today, days) ? flow(lanes, priorWindowOf(meta.today, days)) : null;
   return {
-    created, done, net, openStart, openNow: meta.open_check, waited, edgeDays, windowDays: days, prior, totalLanes: lanes.length,
+    created, done, net, flowNet, gap: Math.abs(net - flowNet), openStart, startFrom: snap ? before : null, openNow, waited, edgeDays, windowDays: days, prior, totalLanes: lanes.length,
   };
 }
 
@@ -569,7 +578,7 @@ function trendRows(add, c, trend) {
 }
 
 function tile2(add, c) {
-  const p = pileTile(c.lanes, c.meta, c.targets);
+  const p = pileTile(c.lanes, c.meta, c.targets, c.snapshots);
   const trend = trendState(c.snapshots, c.targets);
   const g = growthState(p.net, p.prior !== null);
   const empty = c.lanes.length === 0;
@@ -586,13 +595,16 @@ function tile2(add, c) {
     add('pile.open_start', 'figure', { value: p.openStart, text: String(p.openStart) });
     add('pile.open_now', 'figure', { value: p.openNow, text: String(p.openNow) });
     add('pile.waited', 'figure', { value: p.waited, text: String(p.waited) });
-    add('pile.line.flow', 'text', { text: `${p.created} opened, ${p.done} done, net ${sign(p.net)}, ${w} days to ${formatDay(c.meta.today)}, today so far` });
+    add('pile.line.flow', 'text', { text: `${p.created} opened, ${p.done} done, ${w} days to ${formatDay(c.meta.today)}, today so far` });
     add('pile.line.open', 'text', { text: `From ${p.openStart} to ${p.openNow} open` });
+    if (p.gap > 0) add('pile.line.gap', 'text', { value: p.gap, text: `The open count change differs from opened minus done by ${p.gap}.` });
     add('pile.line.waited', 'text', {
       text: p.done === 0 ? `No lanes done in the last ${w} days` : `${p.waited} of ${p.done} waited ${p.edgeDays} ${pluralize(p.edgeDays, 'day')} or more`,
     });
-    if (p.prior) add('pile.line.prior', 'text', { text: `Earlier ${w} days: ${p.prior.created} opened, ${p.prior.done} done, net ${sign(p.prior.net)}` });
-    add('pile.line.caveat', 'text', { text: 'Start count is rebuilt from lane dates. A reopened lane can move it.' });
+    if (p.prior) add('pile.line.prior', 'text', { text: `Earlier ${w} days: ${p.prior.created} opened, ${p.prior.done} done` });
+    add('pile.line.caveat', 'text', {
+      text: p.startFrom ? `Start count is the daily snapshot of ${formatDay(p.startFrom)}.` : 'Start count is rebuilt from lane dates. A reopened lane can move it.',
+    });
     trendRows(add, c, trend);
   }
   add('pile.summary', 'text', {
@@ -603,8 +615,12 @@ function tile2(add, c) {
     const waitedText = p.done === 0 ? 'No lanes finished in the window'
       : `${p.waited} of ${p.done} finished ${pluralize(p.done, 'lane')} waited ${p.edgeDays} ${pluralize(p.edgeDays, 'day')} or more`;
     const noPrior = p.prior === null && hist ? `, with history from ${hist} and no earlier week to compare` : '';
+    // The trend rule is stated only while the chart is off; once it shows, the sentence says what it draws.
+    const trendText = trend.show
+      ? `The trend line shows the last ${trend.have} daily snapshots.`
+      : `The trend line starts after ${trend.min} daily snapshots; there ${trend.have === 1 ? 'is' : 'are'} ${trend.have} so far.`;
     add('pile.detail', 'text', {
-      text: `Open went from ${p.openStart} to ${p.openNow}. ${waitedText}. The pile is ${g.word}${noPrior}. The trend line starts after ${trend.min} daily snapshots; there ${trend.have === 1 ? 'is' : 'are'} ${trend.have} so far.`,
+      text: `Open went from ${p.openStart} to ${p.openNow}. ${waitedText}. The pile is ${g.word}${noPrior}. ${trendText}`,
     });
   }
   return p;

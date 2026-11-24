@@ -1061,6 +1061,22 @@ function isTextOnlyCommand(command) {
   }
   return true;
 }
+var DOC_APPEND = /^\s*(?:Add-Content|Set-Content)\s+-(?:LiteralPath|Path)\s+(?:'([A-Za-z0-9_.\-/\\: ]+)'|([A-Za-z0-9_.\-/\\:]+))(?:\s+-Value)?\s+'([^']*)'\s*$/i;
+var DOC_EXT = /\.(?:md|txt|log)$/i;
+var DOC_RISK = /[`\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]|\$\(|@['"]/u;
+function isDocAppend(segment) {
+  if (DASH_LOOKALIKE.test(segment) || DOC_RISK.test(segment)) return false;
+  const m = DOC_APPEND.exec(segment);
+  if (m === null) return false;
+  const target = m[1] ?? m[2];
+  if (target !== target.trim() || !DOC_EXT.test(target)) return false;
+  if (target.replace(/^[A-Za-z]:(?=[\\/])/, "").includes(":")) return false;
+  return !target.split(/[\\/]/).includes("..");
+}
+function docAppendReadable(command, tool) {
+  if (tool !== "PowerShell" || DASH_LOOKALIKE.test(command)) return false;
+  return plainSegments(command, "Bash") !== null && plainSegments(command, "PowerShell") !== null;
+}
 function blankInertQuotes(command, tool) {
   if (tool !== void 0 && tool !== "Bash" && tool !== "PowerShell") return command;
   if (tool === "Bash") {
@@ -2382,6 +2398,7 @@ function shapesOf(raw, tool) {
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every(isTextOnlyCommand);
+  const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every((c) => docAppendReadable(c, tool));
   const out3 = [];
   const pwshTool = tool === "PowerShell";
   const seen = /* @__PURE__ */ new Set();
@@ -2403,7 +2420,7 @@ function shapesOf(raw, tool) {
       const prior = priorOf(view, reads.map((r) => r.masked), from);
       const tail = quoteOpenAt(view, from, pwshTool) ? "" : rawTail(view.slice(from));
       for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly, seg, tail, pwshTool)) {
+        for (const shape of landShapesOf(s, textOnly || docReadable && isDocAppend(seg), seg, tail, pwshTool)) {
           for (const own of owns) for (const at2 of wheres) add({ ...shape, at: at2, ...own, prior }, landId(shape, at2, own, prior));
         }
       }
