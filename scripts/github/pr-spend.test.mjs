@@ -78,6 +78,7 @@ async function run(spec = {}, { deps = {}, args = [] } = {}) {
   const f = { coderabbit: join(dir, 'cr.jsonl'), cursor: join(dir, 'cursor.jsonl'), land: join(dir, 'land.jsonl'), headless: join(dir, 'headless.jsonl') };
   for (const k of Object.keys(f)) if (spec[k]) writeLines(f[k], spec[k]);
   const out = join(dir, 'out');
+  if (spec.open) writeLines(join(out, 'open-prs.json'), [{ schema: 1, rows: spec.open.map((pr) => ({ pr })) }]);
   const argv = ['--out', out, '--coderabbit', f.coderabbit, '--cursor', f.cursor, '--land', f.land, '--headless', f.headless, ...args];
   const lines = [];
   const errs = [];
@@ -363,8 +364,8 @@ test('land row: mergeSha, mergeCall, reviewers, crRounds; merged-elsewhere has a
     { schema: 1, pr: 141, repo: CCV3, headSha: SHA, mergeSha: null, mergeCall: 'merged-elsewhere', reviewers: ['none'], crRounds: 0 },
   ];
   const r = await run({ land, cursor: pair({ id: 'l1', pr: 140 }) });
-  assert.deepEqual(rowOf(r, 140).landed, { mergeSha: MERGE, mergeCall: 'ok', reviewers: ['coderabbit', 'engine'], crRounds: 2 });
-  assert.deepEqual(rowOf(r, 141).landed, { mergeSha: null, mergeCall: 'merged-elsewhere', reviewers: ['none'], crRounds: 0 });
+  assert.deepEqual(rowOf(r, 140).landed, { mergeSha: MERGE, mergedAt: null, mergeCall: 'ok', reviewers: ['coderabbit', 'engine'], crRounds: 2 });
+  assert.deepEqual(rowOf(r, 141).landed, { mergeSha: null, mergedAt: null, mergeCall: 'merged-elsewhere', reviewers: ['none'], crRounds: 0 });
   assert.equal(rowOf(r, 141).engine.runs, 0);
 });
 
@@ -422,4 +423,40 @@ test('an unknown argument exits 2 and writes nothing', async () => {
   const errs = [];
   assert.equal(await main(['--nope'], { home: mk(), err: (m) => errs.push(m), log: () => {} }), 2);
   assert.equal(errs.length, 1);
+});
+
+// ---------------------------------------------------------------- merge time and non-repo PR numbers (card agentic-os-feeds-truth, C3 and C15)
+
+test('M1 C3 the land row carries mergedAt, the ts of the ledger row, as an ISO time; a missing or bad ts gives null', async () => {
+  // Breaks when mergedAt is dropped, copied as text without a check, or taken from the run time.
+  const land = [
+    { schema: 1, ts: '2026-11-24T01:06:58Z', pr: 710, repo: CCV3, headSha: SHA, mergeSha: MERGE, mergeCall: 'ok', reviewers: [], crRounds: 0 },
+    { schema: 1, pr: 711, repo: CCV3, headSha: SHA, mergeSha: MERGE, mergeCall: 'ok', reviewers: [], crRounds: 0 },
+    { schema: 1, ts: 'last night', pr: 712, repo: CCV3, headSha: SHA, mergeSha: MERGE, mergeCall: 'ok', reviewers: [], crRounds: 0 },
+  ];
+  const r = await run({ land });
+  assert.equal(rowOf(r, 710).landed.mergedAt, '2026-11-24T01:06:58.000Z');
+  assert.equal(rowOf(r, 711).landed.mergedAt, null);
+  assert.equal(rowOf(r, 712).landed.mergedAt, null);
+});
+
+test('M2 C15 a row whose PR number is far above every landed PR is not a PR of this repo: dropped, counted, never named', async () => {
+  // Breaks when the bound is removed: the rows of the fixture numbers would sit in the file and in its totals.
+  const land = [{ schema: 1, ts: TS, pr: 700, repo: CCV3, headSha: SHA, mergeSha: MERGE, mergeCall: 'ok', reviewers: [], crRounds: 0 }];
+  const cr = [crRow({ pr: 705 }), crRow({ pr: 715 }), crRow({ pr: 1001 }), crRow({ pr: 1007 })];
+  const r = await run({ land, coderabbit: cr, cursor: pair({ id: 'f1', pr: 1003 }) });
+  assert.deepEqual(keys(r).sort((a, b) => a - b), [700, 705, 715]);
+  assert.equal(r.doc.excluded.nonRepoPr, 3, 'two CodeRabbit PRs and one engine PR, counted by PR');
+  assert.ok(!r.text.includes('1001') && !r.text.includes('1007') && !r.text.includes('1003'), 'the numbers are not written');
+  assert.ok(![...r.lines, ...r.errs].join('\n').match(/100[137]/), 'nor logged');
+});
+
+test('M3 C15 the open-prs.json beside the output raises the bound; with no landed PR and no open file nothing is dropped', async () => {
+  // Breaks when the bound ignores the open feed (a new PR above the last landed one would be dropped) or invents a bound from nothing.
+  const land = [{ schema: 1, ts: TS, pr: 700, repo: CCV3, headSha: SHA, mergeSha: MERGE, mergeCall: 'ok', reviewers: [], crRounds: 0 }];
+  const withOpen = await run({ land, open: [730], coderabbit: [crRow({ pr: 745 }), crRow({ pr: 1001 })] });
+  assert.deepEqual(keys(withOpen).sort((a, b) => a - b), [700, 745]);
+  const none = await run({ coderabbit: [crRow({ pr: 1001 })] });
+  assert.deepEqual(keys(none), [1001]);
+  assert.equal(none.doc.excluded.nonRepoPr, 0);
 });

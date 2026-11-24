@@ -84,6 +84,10 @@ async function run(spec = {}) {
   const out = join(dir, 'out');
   const home = join(dir, 'home');
   mkdirSync(home, { recursive: true });
+  if (spec.ledger !== undefined) {
+    mkdirSync(join(home, '.claude', 'state'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'state', 'land-outcomes.jsonl'), spec.ledger.map((l) => (typeof l === 'string' ? l : JSON.stringify(l))).join('\n') + '\n');
+  }
   const outFile = join(out, 'open-prs.json');
   if (spec.old !== undefined || spec.lock !== undefined) mkdirSync(out, { recursive: true });
   if (spec.old !== undefined) writeFileSync(outFile, spec.old);
@@ -107,6 +111,10 @@ async function run(spec = {}) {
       if (spec.listFail) return spec.listFail;
       const page = Number(m[1]);
       return { status: 0, stdout: JSON.stringify(prs.slice((page - 1) * 100, page * 100)), stderr: '' };
+    }
+    if (/pulls\?state=closed&sort=updated&direction=desc&per_page=15/.test(line)) {
+      if (spec.closedFail) return spec.closedFail;
+      return { status: 0, stdout: JSON.stringify(spec.closed ?? []), stderr: '' };
     }
     m = /pulls\/(\d+)\/files/.exec(line);
     if (m) {
@@ -367,7 +375,7 @@ test('envelope and row shape: fixed key sets, rows sorted by pr, bands from band
   const prs = [item(3), item(1, { draft: true, labels: [{ name: 'review:coderabbit' }] }), item(2)];
   const r = await run({ prs, files: { 1: ['docs/note-1.md'], 2: ['scripts/github/lib/proc.mjs'], 3: ['docs/note-3.md'] } });
   assert.equal(r.code, 0);
-  assert.deepEqual(Object.keys(r.doc).sort(), ['capped', 'deadlineHit', 'exportedAt', 'kept', 'listed', 'repo', 'rows', 'schema']);
+  assert.deepEqual(Object.keys(r.doc).sort(), ['capped', 'deadlineHit', 'exportedAt', 'kept', 'landed', 'listed', 'repo', 'rows', 'schema']);
   assert.equal(r.doc.schema, 1);
   assert.equal(r.doc.repo, REPO);
   assert.equal(r.doc.exportedAt, new Date(T0).toISOString());
@@ -820,4 +828,73 @@ test('wiring: package.json test:scripts and the ccv3-checks workflow name the ne
   assert.match(pkg.scripts['test:scripts'], /scripts\/scheduled\/scheduled-open-prs\.test\.mjs/);
   const yml = readFileSync(join(ROOT, '.github', 'workflows', 'ccv3-checks.yml'), 'utf8');
   assert.match(yml, /- name: open-prs unit tests\r?\n\s+timeout-minutes: 5\r?\n\s+run: node --test scripts\/github\/open-prs\.test\.mjs/);
+});
+
+// ---------------------------------------------------------------- the landed list (card agentic-os-feeds-truth, C3)
+
+const closedItem = (n, mergedAt, over = {}) => ({ number: n, state: 'closed', merged_at: mergedAt, merge_commit_sha: sha(n), title: 'TITLE-SENTINEL', user: { login: 'LOGIN-SENTINEL' }, ...over });
+const LANDED_KEYS = ['mergedAt', 'pr', 'sha'];
+
+test('L1 the landed list comes from one closed-PR call: merged only, newest 3 by merge time, not by PR number', async () => {
+  // Breaks when the list is sorted by PR number (711 would lead), a closed-unmerged PR is kept, or more than 3 rows are written.
+  const closed = [
+    closedItem(711, '2026-11-24T01:04:16Z'), closedItem(710, '2026-11-24T01:06:58Z'), closedItem(709, '2026-11-24T01:05:00Z'),
+    closedItem(708, null), closedItem(707, '2026-11-23T20:00:00Z'),
+  ];
+  const r = await run({ closed });
+  assert.equal(r.code, 0);
+  assert.deepEqual(Object.keys(r.doc.landed).sort(), ['rows', 'source']);
+  assert.equal(r.doc.landed.source, 'github');
+  assert.deepEqual(r.doc.landed.rows.map((x) => x.pr), [710, 709, 711]);
+  assert.deepEqual(r.doc.landed.rows[0], { pr: 710, mergedAt: '2026-11-24T01:06:58.000Z', sha: sha(710) });
+  for (const row of r.doc.landed.rows) assert.deepEqual(Object.keys(row).sort(), LANDED_KEYS);
+  const call = r.calls.gh.find((c) => /state=closed/.test(c.args.join(' ')));
+  assert.ok(call.args.includes(`repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=15`), call.args.join(' '));
+  assert.ok(call.opts.timeoutMs > 0 && call.opts.timeoutMs <= 30_000);
+});
+
+test('L1b the landed rows hold no title, login or url, and the call is made once per run, after the open list', async () => {
+  // Breaks when a row is spread from the response, or the closed call runs a second time.
+  const r = await run({ closed: [closedItem(710, '2026-11-24T01:06:58Z')] });
+  assert.ok(!r.text.includes('TITLE-SENTINEL') && !r.text.includes('LOGIN-SENTINEL'));
+  const closedCalls = r.calls.gh.filter((c) => /state=closed/.test(c.args.join(' ')));
+  assert.equal(closedCalls.length, 1);
+  const order = r.calls.gh.map((c) => c.args.join(' '));
+  assert.ok(order.findIndex((l) => /state=open/.test(l)) < order.findIndex((l) => /state=closed/.test(l)));
+});
+
+test('L2 a closed call that fails does not abort the run: the landed list falls back to the land ledger and says so', async () => {
+  // Breaks when the failure aborts (exit 10), the fallback is not marked, or a row of another repo or a bad time is used.
+  const ledger = [
+    { schema: 1, ts: '2026-11-24T01:04:16.000Z', pr: 711, repo: REPO, mergeSha: sha(711), mergeCall: 'ok' },
+    { schema: 1, ts: '2026-11-24T01:06:58.000Z', pr: 710, repo: REPO, mergeSha: sha(710), mergeCall: 'ok' },
+    { schema: 1, ts: '2026-11-24T01:05:00.000Z', pr: 709, repo: REPO, mergeSha: null, mergeCall: 'merged-elsewhere' },
+    { schema: 1, ts: '2026-11-24T02:00:00.000Z', pr: 5, repo: 'someone/else', mergeSha: sha(5), mergeCall: 'ok' },
+    { schema: 1, ts: 'soon', pr: 6, repo: REPO, mergeSha: sha(6), mergeCall: 'ok' },
+    'not json',
+  ];
+  const r = await run({ closedFail: { status: 1, stdout: '', stderr: 'HTTP 502' }, ledger });
+  assert.equal(r.code, 0);
+  assert.equal(r.doc.landed.source, 'ledger');
+  assert.deepEqual(r.doc.landed.rows, [
+    { pr: 710, mergedAt: '2026-11-24T01:06:58.000Z', sha: sha(710) },
+    { pr: 709, mergedAt: '2026-11-24T01:05:00.000Z', sha: null },
+    { pr: 711, mergedAt: '2026-11-24T01:04:16.000Z', sha: sha(711) },
+  ]);
+});
+
+test('L3 a rate-limit answer on the closed call is not an abort; with no ledger the list is empty and the source is none', async () => {
+  // Breaks when the closed call goes through the abort rule (exit 10, old file kept) or a missing ledger throws.
+  const r = await run({ closedFail: { status: 1, stdout: '', stderr: 'API rate limit exceeded for user' } });
+  assert.equal(r.code, 0);
+  assert.deepEqual(r.doc.landed, { source: 'none', rows: [] });
+  assert.equal(r.doc.rows.length, 3, 'the open rows are still written');
+});
+
+test('L4 an answer that is not an array falls back the same way', async () => {
+  // Breaks when a non-array answer is read as rows.
+  const r = await run({ closed: { message: 'Not Found' }, ledger: [{ schema: 1, ts: '2026-11-24T01:06:58.000Z', pr: 710, repo: REPO, mergeSha: sha(710), mergeCall: 'ok' }] });
+  assert.equal(r.code, 0);
+  assert.equal(r.doc.landed.source, 'ledger');
+  assert.deepEqual(r.doc.landed.rows.map((x) => x.pr), [710]);
 });

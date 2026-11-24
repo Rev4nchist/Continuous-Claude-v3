@@ -13,6 +13,10 @@
 // Run: gh lists the open PRs (newest updated first, at most CAP = 20 are checked). Per PR, one gh files call feeds bandOf and
 // a child process runs review-status.mjs <pr> --json. This file only runs review-status as a child; it takes nothing else
 // from it and only bandOf from the router. The decisions store is read, never written.
+// landed (card agentic-os-feeds-truth): {source, rows:[{pr, mergedAt, sha}]}, the 3 newest merged PRs by merge time. One more gh call per run,
+// after the open list: pulls?state=closed&sort=updated&direction=desc&per_page=15, merged_at not null. If that call fails (any reason, a
+// rate limit too) it is NOT an abort: the list comes from the local land ledger (~/.claude/state/land-outcomes.jsonl, field ts), source
+// "ledger"; with no ledger rows it is {source:"none", rows:[]}.
 // Abort (exit 10, old file kept): the list call or a files call fails, or the stderr of a review-status child that did not answer
 // (an exit other than 0 or 1, or a time-out) says rate limit / HTTP 403 / HTTP 429. A child that answered (exit 0 or 1) is not read for it.
 // A review-status exit 2 or a time-out gives a per-PR status. The run budget is 420 s: PRs not started by then get status deadline.
@@ -238,6 +242,66 @@ async function collect(ctx, cap) {
   return { rows, listed: listed.length, kept: kept.length, deadlineHit };
 }
 
+// ---------------------------------------------------------------- the landed list
+
+const LANDED_SHOWN = 3;
+const CLOSED_PATH = `repos/${REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=15`;
+const CCV3_NAMES = new Set(['rev4nchist/continuous-claude-v3', 'continuous-claude']);
+const HEX_SHA = /^[0-9a-f]{7,40}$/i;
+const isoOf = (v) => (typeof v === 'string' && v.length <= 40 && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+const shaOf = (v) => (typeof v === 'string' && HEX_SHA.test(v) ? v.toLowerCase() : null);
+
+/** Newest merge first, the PR number breaks a tie; at most LANDED_SHOWN rows. Rows are built from an allowlist. */
+export function newestLanded(rows) {
+  return rows.sort((a, b) => (a.mergedAt < b.mergedAt ? 1 : a.mergedAt > b.mergedAt ? -1 : b.pr - a.pr)).slice(0, LANDED_SHOWN);
+}
+
+/** From the closed-PR answer: merged PRs only. null when the answer is not an array. */
+export function landedFromGithub(answer) {
+  if (!Array.isArray(answer)) return null;
+  const rows = [];
+  for (const raw of answer.filter(isPlain)) {
+    const mergedAt = isoOf(raw.merged_at);
+    if (!Number.isInteger(raw.number) || raw.number <= 0 || mergedAt === null) continue;
+    rows.push({ pr: raw.number, mergedAt, sha: shaOf(raw.merge_commit_sha) });
+  }
+  return newestLanded(rows);
+}
+
+/** From the land ledger: the last row of a PR wins, another repo and a bad time are skipped, a bad line is skipped. */
+export function landedFromLedger(text) {
+  const byPr = new Map();
+  for (const line of asText(text).split(/\r?\n/)) {
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    const mergedAt = isPlain(o) ? isoOf(o.ts) : null;
+    if (mergedAt === null || !Number.isInteger(o.pr) || o.pr <= 0) continue;
+    if (typeof o.repo !== 'string' || !CCV3_NAMES.has(o.repo.trim().toLowerCase())) continue;
+    const have = byPr.get(o.pr);
+    if (!have || have.mergedAt <= mergedAt) byPr.set(o.pr, { pr: o.pr, mergedAt, sha: shaOf(o.mergeSha) });
+  }
+  return newestLanded([...byPr.values()]);
+}
+
+function ledgerLanded(d) {
+  let text;
+  try { text = readFileSync(path.join(d.home, '.claude', 'state', 'land-outcomes.jsonl'), 'utf8'); } catch { return { source: 'none', rows: [] }; }
+  const rows = landedFromLedger(text);
+  return rows.length > 0 ? { source: 'ledger', rows } : { source: 'none', rows: [] };
+}
+
+/** One closed-PR call. Any failure of it (a rate limit too) falls back to the ledger: the open rows are still worth writing. */
+async function collectLanded(ctx) {
+  try {
+    const rows = landedFromGithub(await ghJson(ctx, ['api', CLOSED_PATH]));
+    if (rows === null) throw new GhAbort('landed answer is not an array');
+    return { source: 'github', rows };
+  } catch (e) {
+    if (!(e instanceof GhAbort)) throw e;
+    return ledgerLanded(ctx.d);
+  }
+}
+
 const summaryLine = (rows) => {
   const n = (s) => rows.filter((r) => r.status === s).length;
   return `open-prs: ${rows.length} rows, ok ${n('ok')}, capped ${n('capped')}, deadline ${n('deadline')}, failed ${rows.length - n('ok') - n('capped') - n('deadline')}`;
@@ -312,12 +376,13 @@ async function run(d, opts, out) {
   let res;
   try {
     res = await collect(ctx, opts.cap);
+    res.landed = await collectLanded(ctx);
   } catch (e) {
     if (!(e instanceof GhAbort)) throw e;
     d.err(`open-prs: gh failed (${e.tail}), old file kept`);
     return 10;
   }
-  const doc = { schema: 1, exportedAt: d.now().toISOString(), repo: REPO, listed: res.listed, kept: res.kept, capped: res.listed > res.kept, deadlineHit: res.deadlineHit, rows: res.rows };
+  const doc = { schema: 1, exportedAt: d.now().toISOString(), repo: REPO, listed: res.listed, kept: res.kept, capped: res.listed > res.kept, deadlineHit: res.deadlineHit, rows: res.rows, landed: res.landed };
   try {
     writeDoc(d, out, doc);
   } catch (e) {

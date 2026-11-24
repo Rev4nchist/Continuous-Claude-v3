@@ -163,8 +163,10 @@ test.describe('flow tab', () => {
   test('E4.3 the header shows each file time in the Chicago zone', async ({ page }) => {
     writeBoth();
     await openFlow(page);
-    await expect(file(page, 'flow').getByTestId('flow-exported')).toHaveText('flow exported 12:30 CST');
-    await expect(file(page, 'factory').getByTestId('flow-exported')).toHaveText('factory exported 23:55 CST');
+    // C7: the header also carries the date, the age and a stale flag. The fixture times are old, so both files read stale.
+    await expect(file(page, 'flow').getByTestId('flow-exported')).toHaveText(/^flow exported 11-09 12:30 CST, \d+ h ago, stale$/);
+    await expect(file(page, 'factory').getByTestId('flow-exported')).toHaveText(/^factory exported 11-08 23:55 CST, \d+ h ago, stale$/);
+    await expect(file(page, 'factory').getByTestId('flow-file-note')).toContainText('once a day');
   });
 
   test('E4.4 tone maps to the warn and bad colours; a figure with no tone has none', async ({ page }) => {
