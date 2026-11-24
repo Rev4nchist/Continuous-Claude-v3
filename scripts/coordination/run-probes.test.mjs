@@ -18,6 +18,7 @@
 //   T17 (real folders) the cleanup empties the target of the link: a marker file in the target must survive
 //   T18 the cleanup removes a path that is not a link (a real folder named continuous-claude)
 //   T19 the cleanup goes on to remove the home while the link is still there
+//   T20 a probe has no LANE_PROJECT (a runner folder has no board: lane.mjs refuses) or gets the board of the caller
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -237,6 +238,16 @@ test('T14 each probe gets its own stand-in home and its own fresh session id, ne
   assert.equal(new Set(runs.map((c) => c.env.CLAUDE_CODE_SESSION_ID)).size, PROBES.length, 'one session id for each probe');
   assert.equal(runs.some((c) => c.env.CLAUDE_CODE_SESSION_ID === 'caller-sid' || c.env.CCV3_USER_HOME === '/caller/home'), false);
   assert.ok(r.lines.some((l) => l.includes(homes[0])), 'the run prints the name of the stand-in home');
+});
+
+test('T20 each probe runs with LANE_PROJECT=continuous-claude, whatever the caller sets', () => {
+  // Breaks when the variable is dropped: a runner folder has no registry entry, so every lane.mjs call of lane-race
+  // ends with "no lane board for <dir>", and the caller's value would send a probe to another board.
+  const { spawn, r } = go({ run: { env: { LANE_PROJECT: 'some-other-board' } } });
+  assert.equal(r.code, 0, r.lines.join('\n'));
+  const runs = probeCalls(spawn).filter((x) => x.env.CONTINUOUS_CLAUDE_DB_URL !== DEAD_LIVE);
+  assert.equal(runs.length, PROBES.length);
+  for (const c of runs) assert.equal(c.env.LANE_PROJECT, 'continuous-claude');
 });
 
 test('T15 the stand-in home links continuous-claude to the checkout that holds run-probes.mjs', () => {
