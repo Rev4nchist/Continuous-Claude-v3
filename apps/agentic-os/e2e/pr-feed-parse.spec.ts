@@ -5,7 +5,9 @@ import {
   matchLane,
   parseOpenPrs,
   parsePrSpend,
+  laneLookupKeys,
   PR_ROW_CAP,
+  STALE_MINUTES,
   type LaneRef,
 } from '../src/server/queries/pr-feed-parse';
 
@@ -82,7 +84,7 @@ test.describe('pr-feed-parse', () => {
     expect(v.skipped).toBe(4);
   });
 
-  test('P3 a feed older than 30 minutes is stale and carries its age; a future or bad time is stale', () => {
+  test('P3 a feed older than 60 minutes is stale and carries its age; a future or bad time is stale (C17)', () => {
     // Breaks when the stale rule uses another limit or trusts a future exportedAt.
     expect(view(openDoc([openRow(1)])).stale).toBe(false);
     const old = view(openDoc([openRow(1)], { exportedAt: '2026-11-11T16:40:00.000Z' }));
@@ -92,7 +94,10 @@ test.describe('pr-feed-parse', () => {
     const bad = view(openDoc([openRow(1)], { exportedAt: 'yesterday' }));
     expect(bad.stale).toBe(true);
     expect(bad.ageMinutes).toBeNull();
-    expect(view(openDoc([openRow(1)], { exportedAt: '2026-11-13T16:09:00.000Z' })).stale).toBe(true); // 31 minutes
+    // C17: one limit, 60 minutes: the schedule health check allows 1 hour for CCv3-Open-PRs (tasks.json maxAgeHours 1).
+    expect(STALE_MINUTES).toBe(60);
+    expect(view(openDoc([openRow(1)], { exportedAt: '2026-11-13T16:09:00.000Z' })).stale).toBe(false); // 31 minutes
+    expect(view(openDoc([openRow(1)], { exportedAt: '2026-11-13T15:39:00.000Z' })).stale).toBe(true); // 61 minutes
   });
 
   test('P4 the repo leaf "continuous-claude" in pr-spend joins the full repo name', () => {
@@ -210,10 +215,101 @@ test.describe('pr-feed-parse', () => {
     const v = view(openDoc([openRow(20)]), spend);
     expect(v.rows[0].landSha).toBe('abcdef1');
     expect(v.landed).toEqual([
-      { pr: 20, sha7: 'abcdef1' },
-      { pr: 19, sha7: '1111111' },
-      { pr: 17, sha7: '9999999' },
+      { pr: 20, sha7: 'abcdef1', mergedAt: null },
+      { pr: 19, sha7: '1111111', mergedAt: null },
+      { pr: 17, sha7: '9999999', mergedAt: null },
     ]);
     expect(JSON.stringify(v)).not.toContain('abcdef1234567890');
+  });
+
+  test('P9b C5 lane link: a head ref with the slash turned into a dash is a lane id; a ref with no lane still shows none', () => {
+    // Breaks when matchLane or laneLookupKeys drops the dashed-ref rule: coord/x never finds lane coord-x.
+    const lanes: LaneRef[] = [
+      { id: 'coord-decisions-delete-advice', branch: null },
+      { id: 'decisions-delete-advice-other', branch: null },
+    ];
+    expect(matchLane('coord/decisions-delete-advice', lanes)).toEqual({ kind: 'one', id: 'coord-decisions-delete-advice' });
+    expect(matchLane('coord/nothing-matches-here', lanes)).toEqual({ kind: 'none' });
+    expect(matchLane('feat/decisions-delete-advice', lanes)).toEqual({ kind: 'none' });
+    const keys = laneLookupKeys(parseOpenPrs(openDoc([openRow(712, { headRef: 'coord/decisions-delete-advice' })]), keep));
+    expect(keys.leaves).toContain('coord-decisions-delete-advice');
+  });
+
+  test('P13 C3 Last landed: the list in open-prs.json is sorted by merge time, not by PR number, and carries its age and source', () => {
+    // Breaks when the view sorts by PR number (711 would come first) or drops landedSource / landedAgeMinutes.
+    const landed = {
+      source: 'github',
+      rows: [
+        { pr: 711, mergedAt: '2026-11-13T16:04:16.000Z', sha: 'a'.repeat(40) },
+        { pr: 710, mergedAt: '2026-11-13T16:06:58.000Z', sha: 'b'.repeat(40) },
+        { pr: 709, mergedAt: '2026-11-13T16:05:00.000Z', sha: 'c'.repeat(40) },
+        { pr: 708, mergedAt: '2026-11-13T15:00:00.000Z', sha: 'd'.repeat(40) },
+      ],
+    };
+    const v = view(openDoc([openRow(5)], { landed }), spendDoc([spendRow(686, { landed: { mergeSha: 'e'.repeat(40), mergeCall: 'ok' } })]));
+    expect(v.landed).toEqual([
+      { pr: 710, sha7: 'bbbbbbb', mergedAt: '2026-11-13T16:06:58.000Z' },
+      { pr: 709, sha7: 'ccccccc', mergedAt: '2026-11-13T16:05:00.000Z' },
+      { pr: 711, sha7: 'aaaaaaa', mergedAt: '2026-11-13T16:04:16.000Z' },
+    ]);
+    expect(v.landedSource).toBe('github');
+    expect(v.landedAgeMinutes).toBe(10); // the age of open-prs.json (FRESH), not of the nightly file
+  });
+
+  test('P13b C3 with no landed list the nightly file is used: sorted by its merge time, source nightly, its own age', () => {
+    // Breaks when the nightly fallback ignores landed.mergedAt or takes the age of open-prs.json.
+    const spend = {
+      schema: 1,
+      exportedAt: '2026-11-13T04:40:00.000Z', // 12 h before NOW
+      rows: [
+        spendRow(686, { landed: { mergeSha: 'a'.repeat(40), mergeCall: 'ok', mergedAt: '2026-11-12T10:00:00.000Z' } }),
+        spendRow(684, { landed: { mergeSha: 'b'.repeat(40), mergeCall: 'ok', mergedAt: '2026-11-12T12:00:00.000Z' } }),
+        spendRow(683, { landed: { mergeSha: 'c'.repeat(40), mergeCall: 'ok', mergedAt: null } }),
+      ],
+    };
+    const v = view(openDoc([openRow(5)]), spend);
+    expect(v.landed.map((l) => l.pr)).toEqual([684, 686, 683]); // dated rows first, newest first; an undated row last
+    expect(v.landedSource).toBe('nightly');
+    expect(v.landedAgeMinutes).toBe(12 * 60);
+  });
+
+  test('P13c C3 a bad landed list (not an array, bad sha, bad time, a PR twice) is dropped row by row and shows no free text', () => {
+    // Breaks when a landed row is copied as given.
+    const landed = {
+      source: 'github',
+      rows: [
+        { pr: 710, mergedAt: '2026-11-13T16:06:58.000Z', sha: 'b'.repeat(40), title: 'TITLE-CANARY' },
+        { pr: 710, mergedAt: '2026-11-13T16:00:00.000Z', sha: 'f'.repeat(40) },
+        { pr: 709, mergedAt: 'soon', sha: 'c'.repeat(40) },
+        { pr: 708, mergedAt: '2026-11-13T16:01:00.000Z', sha: 'not-a-sha' },
+        'x',
+      ],
+    };
+    const v = view(openDoc([openRow(5)], { landed }));
+    expect(v.landed).toEqual([
+      { pr: 710, sha7: 'bbbbbbb', mergedAt: '2026-11-13T16:06:58.000Z' },
+      { pr: 708, sha7: null, mergedAt: '2026-11-13T16:01:00.000Z' },
+    ]);
+    expect(JSON.stringify(v)).not.toContain('TITLE-CANARY');
+    expect(view(openDoc([openRow(5)], { landed: 'nope' })).landedSource).toBe('none');
+  });
+
+  test('P14 C7 Flow file age: date, clock, age and a stale flag; the factory file says it is written once a day', async () => {
+    // Breaks when the label drops the date or the age, or the stale limits change (factory 36 h, flow 2 h).
+    const { flowAge } = await import('../src/components/fleet/flow-age');
+    const now = Date.parse('2026-11-24T20:55:00.000Z'); // 14:55 CST on 11-24
+    const factory = flowAge('factory', '2026-11-24T05:55:00.000Z', now); // 23:55 CST on 11-23
+    expect(factory.text).toBe('factory exported 11-23 23:55 CST, 15 h ago');
+    expect(factory.stale).toBe(false);
+    expect(factory.note).toContain('once a day');
+    expect(factory.note).toContain('23:55');
+    expect(flowAge('factory', '2026-11-22T20:55:00.000Z', now).stale).toBe(true); // 42 h
+    expect(flowAge('factory', '2026-11-22T20:55:00.000Z', now).text).toBe('factory exported 11-22 14:55 CST, 42 h ago, stale');
+    const flow = flowAge('flow', '2026-11-24T20:30:00.000Z', now);
+    expect(flow.text).toBe('flow exported 11-24 14:30 CST, 25 min ago');
+    expect(flow.stale).toBe(false);
+    expect(flow.note).toBeNull();
+    expect(flowAge('flow', '2026-11-24T17:55:00.000Z', now).stale).toBe(true); // 3 h
+    expect(flowAge('flow', '2026-11-24T21:55:00.000Z', now).stale).toBe(true); // a future time is not trusted
   });
 });
