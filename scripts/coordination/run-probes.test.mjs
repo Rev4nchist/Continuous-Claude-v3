@@ -12,10 +12,20 @@
 //   T8  a failed probe leaves its scratch database (the drop is not in finally)
 //   T9  no Postgres (create fails) gives exit 1 instead of 2, or goes on to the next probe
 //   T10 a failing probe prints the password of the scratch url
+//   T14 a probe gets the caller's home or the caller's session id, or two probes share one home or one session id
+//   T15 the stand-in home does not link to the checkout that holds run-probes.mjs (a probe then tests another copy of the code)
+//   T16 the cleanup deletes recursively, or removes the home before the link, or skips the cleanup of a failed probe
+//   T17 (real folders) the cleanup empties the target of the link: a marker file in the target must survive
+//   T18 the cleanup removes a path that is not a link (a real folder named continuous-claude)
+//   T19 the cleanup goes on to remove the home while the link is still there
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { checkNoDocker, checkRefusal, countSkips, DEAD_LIVE, redact, refusalEnv, run } from './run-probes.mjs';
+import * as probes from './run-probes.mjs'; // namespace import: a missing export fails its own test, not the whole file
 
 /** The n-th scratch url the fake `scratch-db.mjs create` hands out: one name for each create, so a shared database shows. */
 const scratchUrl = (n) => `postgresql://claude:s3cretPw@localhost:5432/lanes_pr1_abc${String(n).padStart(3, '0')}`;
@@ -57,7 +67,29 @@ function fakeSpawn({ refusal = {}, runs = {}, dockerStarts = null, createFails =
 }
 const probeCalls = (spawn) => spawn.calls.filter((c) => /-probe\.mjs$/.test(String(c.args[0] ?? '')));
 const scratchCalls = (spawn, verb) => spawn.calls.filter((c) => /scratch-db\.mjs$/.test(String(c.args[0] ?? '')) && c.args[1] === verb);
-const go = (opts) => { const spawn = fakeSpawn(opts); return { spawn, r: run({ spawn, env: {}, probes: PROBES, dir: '/probes', ...(opts?.run ?? {}) }) }; };
+/**
+ * A fake file system for the stand-in home. `log` records every call. rmSync must never be called: the cleanup has no recursive delete.
+ * `linkSurvivesUnlink` fakes an unlink that does nothing; `linkIsDir` fakes a real folder where the link should be.
+ */
+function fakeFs({ linkSurvivesUnlink = false, linkIsDir = false } = {}) {
+  const log = [];
+  const live = new Set();
+  let n = 0;
+  const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  return {
+    log,
+    mkdtempSync: (prefix) => { const d = `${prefix}${String(++n).padStart(6, '0')}`; log.push(['mkdtemp', d]); live.add(d); return d; },
+    symlinkSync: (target, link, type) => { log.push(['symlink', target, link, type]); live.add(link); },
+    lstatSync: (p) => { log.push(['lstat', p]); if (!live.has(p)) throw enoent(); return { isSymbolicLink: () => !linkIsDir }; },
+    unlinkSync: (p) => { log.push(['unlink', p]); if (!linkSurvivesUnlink) live.delete(p); },
+    rmdirSync: (p, o) => { log.push(['rmdir', p, o]); live.delete(p); },
+    rmSync: (p, o) => { log.push(['rm', p, o]); },
+  };
+}
+const ops = (fsx, name) => fsx.log.filter((e) => e[0] === name);
+const go = (opts) => { const spawn = fakeSpawn(opts); const fsx = opts?.fsx ?? fakeFs(); return { spawn, fsx, r: run({ spawn, env: {}, probes: PROBES, dir: '/probes', fsx, ...(opts?.run ?? {}) }) }; };
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 test('T1 countSkips counts the lines that start with SKIP and no other line', () => {
   // Breaks when the pattern loses its ^ anchor (a line that only mentions SKIP counts) or its \s* (an indented SKIP line is missed).
@@ -187,4 +219,95 @@ test('T13 the output of a failing probe never shows the password of the scratch 
   const text = r.lines.join('\n');
   assert.equal(text.includes('s3cretPw'), false, text);
   assert.equal(redact(`see postgresql://u:hunter22@h/db`).includes('hunter22'), false);
+});
+
+test('T14 each probe gets its own stand-in home and its own fresh session id, never the ones of the caller', () => {
+  // Breaks when the caller's CCV3_USER_HOME or CLAUDE_CODE_SESSION_ID reaches a probe, a value is reused, or the id is not a uuid.
+  const { spawn, fsx, r } = go({ run: { env: { CLAUDE_CODE_SESSION_ID: 'caller-sid', CCV3_USER_HOME: '/caller/home' } } });
+  assert.equal(r.code, 0, r.lines.join('\n'));
+  const runs = probeCalls(spawn).filter((x) => x.env.CONTINUOUS_CLAUDE_DB_URL !== DEAD_LIVE);
+  const homes = ops(fsx, 'mkdtemp').map((e) => e[1]);
+  assert.equal(runs.length, PROBES.length);
+  assert.equal(homes.length, PROBES.length);
+  runs.forEach((c, i) => {
+    assert.equal(c.env.CCV3_USER_HOME, homes[i], `probe ${i} runs with the home made for it`);
+    assert.match(c.env.CLAUDE_CODE_SESSION_ID, UUID);
+  });
+  assert.equal(new Set(runs.map((c) => c.env.CCV3_USER_HOME)).size, PROBES.length, 'one home for each probe');
+  assert.equal(new Set(runs.map((c) => c.env.CLAUDE_CODE_SESSION_ID)).size, PROBES.length, 'one session id for each probe');
+  assert.equal(runs.some((c) => c.env.CLAUDE_CODE_SESSION_ID === 'caller-sid' || c.env.CCV3_USER_HOME === '/caller/home'), false);
+  assert.ok(r.lines.some((l) => l.includes(homes[0])), 'the run prints the name of the stand-in home');
+});
+
+test('T15 the stand-in home links continuous-claude to the checkout that holds run-probes.mjs', () => {
+  // Breaks when the link points anywhere else (the primary checkout, the home of the caller): the probes would test other code.
+  const { fsx } = go();
+  const links = ops(fsx, 'symlink');
+  assert.equal(links.length, PROBES.length);
+  const repo = path.resolve(HERE, '..', '..');
+  for (const [, target, link, type] of links) {
+    assert.equal(path.resolve(target), repo);
+    assert.equal(path.basename(link), 'continuous-claude');
+    assert.equal(type, 'junction', 'a junction needs no privilege on Windows');
+  }
+});
+
+test('T16 the cleanup removes the link first, then the home, with no recursive delete, also for a failed probe', () => {
+  // Breaks when the cleanup calls rmSync or a recursive rmdir (a Windows junction is followed and its target emptied), removes the
+  // home before the link, does not check the link is gone, or skips the cleanup after a failed probe.
+  const { fsx, r } = go({ runs: { 'a-probe.mjs': { status: 1, stdout: 'FAIL check 3\n', stderr: '' } } });
+  assert.equal(r.code, 1);
+  assert.equal(ops(fsx, 'rm').length, 0, 'no rmSync call');
+  const homes = ops(fsx, 'mkdtemp').map((e) => e[1]);
+  const links = ops(fsx, 'symlink').map((e) => e[2]);
+  assert.equal(ops(fsx, 'unlink').length, PROBES.length, 'one unlink for each link, the failed probe too');
+  assert.equal(ops(fsx, 'rmdir').length, PROBES.length);
+  for (const [, , o] of ops(fsx, 'rmdir')) assert.ok(!o || !o.recursive, 'no recursive rmdir');
+  homes.forEach((home, i) => {
+    const at = (op, p) => fsx.log.findIndex((e) => e[0] === op && e[1] === p);
+    const unlinked = at('unlink', links[i]);
+    const checked = fsx.log.findIndex((e, k) => k > unlinked && e[0] === 'lstat' && e[1] === links[i]);
+    const removed = at('rmdir', home);
+    assert.ok(unlinked >= 0 && checked > unlinked && removed > checked, `home ${i}: unlink, then a check that the link is gone, then rmdir`);
+  });
+});
+
+test('T17 with real folders the cleanup leaves the target of the link whole (a marker file survives)', () => {
+  // Breaks when a recursive delete follows the link into the checkout. Real fs, real link, real marker.
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-target-'));
+  const marker = path.join(target, 'marker.txt');
+  fs.writeFileSync(marker, 'keep');
+  let made = null;
+  try {
+    made = probes.makeStandInHome({ target });
+    assert.equal(fs.readFileSync(path.join(made.link, 'marker.txt'), 'utf8'), 'keep', 'the link reaches the target');
+    const gone = probes.removeStandInHome(made);
+    assert.equal(gone.ok, true, gone.line);
+    assert.equal(fs.existsSync(made.home), false, 'the stand-in home is gone');
+    assert.equal(fs.readFileSync(marker, 'utf8'), 'keep', 'the marker file in the target survives');
+    made = null;
+  } finally {
+    if (made) { try { fs.unlinkSync(made.link); } catch { /* already gone */ } try { fs.rmdirSync(made.home); } catch { /* already gone */ } }
+    fs.rmSync(target, { recursive: true, force: true }); // the target holds no link: a recursive delete is safe here
+  }
+});
+
+test('T18 the cleanup refuses to remove a path that is not a link', () => {
+  // Breaks when the cleanup unlinks or removes without the isSymbolicLink check: a real folder would be deleted.
+  const fsx = fakeFs({ linkIsDir: true });
+  const made = probes.makeStandInHome({ fsx, target: '/repo' });
+  const gone = probes.removeStandInHome({ fsx, ...made });
+  assert.equal(gone.ok, false);
+  assert.match(gone.line, /not a link/);
+  assert.equal(ops(fsx, 'unlink').length + ops(fsx, 'rmdir').length + ops(fsx, 'rm').length, 0, 'nothing is removed');
+});
+
+test('T19 the cleanup stops when the link is still there after the unlink', () => {
+  // Breaks when the check after the unlink is dropped: the home would be removed with the link inside.
+  const fsx = fakeFs({ linkSurvivesUnlink: true });
+  const made = probes.makeStandInHome({ fsx, target: '/repo' });
+  const gone = probes.removeStandInHome({ fsx, ...made });
+  assert.equal(gone.ok, false);
+  assert.match(gone.line, /still there/);
+  assert.equal(ops(fsx, 'rmdir').length + ops(fsx, 'rm').length, 0);
 });
