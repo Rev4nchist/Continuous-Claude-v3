@@ -133,6 +133,42 @@ export function isTextOnlyCommand(command: string): boolean {
   return true;
 }
 
+// ---------- DOC APPEND (lane coord-guard-text-false-refusal, seat ruling 2026-11-23 12:48 and 12:49 CST) ----------
+// A segment that appends text to ONE literal document file runs nothing, so a guarded word in its text (the land script, the queue module) is a mention.
+// The rule reads what the segment does and where it writes, never the guarded word, so a name that the shell builds apart cannot beat it.
+// Only decision-gate uses it, and only through docAppendReadable: the whole command must read plain under both quote readings. The free-slot queue guard
+// (.claude/plugins/ccv3-mods/hooks/pr-checkpoint/model.ts) takes no such exemption: it splits raw text at every separator, so a quote state that spans
+// segments is invisible to it (two CodeRabbit CLI findings, V7.6). Do not copy this rule into a guard that splits raw text.
+// The grammar is one anchored regex, no tokenizer. Only the full names Add-Content and Set-Content (no alias); -LiteralPath or -Path; one target of plain
+// path characters; an optional -Value; ONE single-quoted string (literal in PowerShell). The array form @( ), a double-quoted or here-string value, a
+// variable, a paren, a second target or parameter, a redirect and every other extension keep the old rule (Known limits).
+const DOC_APPEND = /^\s*(?:Add-Content|Set-Content)\s+-(?:LiteralPath|Path)\s+(?:'([A-Za-z0-9_.\-/\\: ]+)'|([A-Za-z0-9_.\-/\\:]+))(?:\s+-Value)?\s+'([^']*)'\s*$/i;
+const DOC_EXT = /\.(?:md|txt|log)$/i;
+// A backtick, a smart quote (PowerShell reads U+2018..U+201F as a quote mark), a NUL or a break the segment split does not see, a substitution, a here-string.
+const DOC_RISK = /[`\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]|\$\(|@['"]/u;
+
+/** True when ONE command segment (no ; & | or newline in it) only appends text to one literal .md, .txt or .log file. */
+export function isDocAppend(segment: string): boolean {
+  if (DASH_LOOKALIKE.test(segment) || DOC_RISK.test(segment)) return false;
+  const m = DOC_APPEND.exec(segment);
+  if (m === null) return false;
+  const target = m[1] ?? m[2];
+  if (target !== target.trim() || !DOC_EXT.test(target)) return false;
+  // A colon only as a drive letter (`x.md:stream` writes an NTFS stream), and no .. segment.
+  if (target.replace(/^[A-Za-z]:(?=[\\/])/, '').includes(':')) return false;
+  return !target.split(/[\\/]/).includes('..');
+}
+
+/**
+ * True when the whole command can hold a DOC APPEND segment: the tool is PowerShell, both quote readings find the command plain (plainSegments: no
+ * substitution, here-doc, here-string, backtick, smart quote, comment, brace, paren outside a string, unpaired quote or file-writing `>`), and no lookalike dash.
+ * The caller then asks isDocAppend of each segment. Any doubt keeps the old rule.
+ */
+export function docAppendReadable(command: string, tool: string | undefined): boolean {
+  if (tool !== 'PowerShell' || DASH_LOOKALIKE.test(command)) return false;
+  return plainSegments(command, 'Bash') !== null && plainSegments(command, 'PowerShell') !== null;
+}
+
 /**
  * The command with the inside of each inert quoted string replaced by spaces. Same length, so an offset in the result is an offset in the command.
  * The quote marks stay, so the quote pairing of the rest of the text does not change.

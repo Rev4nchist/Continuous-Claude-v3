@@ -1586,6 +1586,16 @@ describe('pr-checkpoint: the free-slot queue lock (Lock A path, Lock B text)', (
     ['PowerShell', SEAT_REFUSED_2],
     ['PowerShell', SEAT_REFUSED_3],
     ['PowerShell', SEAT_REFUSED_5],
+    // Known limit (coord-guard-text-false-refusal, seat ruling 2026-11-23 14:49 CST, Dave's option A): a document append or a lane text that names the queue module stays refused.
+    // Two review rounds each found a hole of the same kind (a regex misreads the quote state of the whole command), so the queue guard takes no exemption (V7.6).
+    // Workaround: write the text with the Write or Edit tool, or from a scratch file. The decision-gate half (the land script) is a separate, whole-command-plain rule.
+    ['PowerShell', "Add-Content -LiteralPath .claudedocs/x.md -Value 'seat: slot-queue.mjs add was refused'"],
+    ['Bash', "node C:/Users/dkhay/.claude/scripts/lane.mjs say 'slot-queue.mjs add refused for the seat' --to seat"],
+    ['Bash', 'node C:/Users/dkhay/.claude/scripts/lane.mjs add coord-x --title "T" --scope "OWNS: scripts/github/slot-queue.mjs"'],
+    // The two CodeRabbit CLI findings that ended the exemptions (pre-pr runs 1 and 2 of 2). Each hides a redirect onto the module when a string is misread.
+    ['Bash', String.raw`node C:/Users/dkhay/.claude/scripts/lane.mjs say "a\" " > scripts/github/slot-queue.mjs \"`],
+    ['Bash', "echo 'x; Add-Content -LiteralPath x.md -Value ' > scripts/github/slot-queue.mjs # '"],
+    ['Bash', "echo 'x; Add-Content -LiteralPath x.md -Value ' >> scripts/github/slot-queue-model.mjs # '"],
   ]
 
   test('F13 shell text that names the queue file, or a queue write verb right after the script path, is denied in every form, with no spawn', async ($, on) => {
