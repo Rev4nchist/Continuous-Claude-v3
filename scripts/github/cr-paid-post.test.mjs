@@ -38,7 +38,8 @@ import * as D from './lib/decisions.mjs';
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);
 const H2 = 'c'.repeat(40);
-const NOW = new Date('2026-11-18T15:00:00Z');
+// Today at 15:00Z, from the real clock. A fixed date aged out of the decision store prune (7 days, real clock) on 2026-11-25 and turned PP20 and PP20b red.
+const NOW = (() => { const d = new Date(); d.setUTCHours(15, 0, 0, 0); return d; })();
 const CR_BOT = { login: 'coderabbitai[bot]', type: 'Bot' };
 const MIN = 60_000;
 const prFile = (n) => ({ filename: `src/f${n}.ts`, additions: 5, deletions: 0, status: 'modified' });
@@ -97,6 +98,11 @@ test('PP1 (G4): one paid yes is enough: post posts the paid comment, records the
   assert.equal(post(w).ok, false, 'a second post needs a second yes');
   assert.equal(w.posts.length, 1);
   w.done();
+});
+
+test('PP0 (card fix-cr-paid-post-clock-rows): the test clock is within 3 days of the real clock, so the store prune (7 days, real clock) cannot age out the rows', () => {
+  // Breaks when NOW is a fixed date: from 7 days later the prune deletes the rows the tests write and PP20 and PP20b read "no-decision".
+  assert.ok(Math.abs(Date.now() - NOW.getTime()) < 3 * 24 * 60 * MIN, `NOW ${NOW.toISOString()} is too far from the real clock`);
 });
 
 test('PP2 (G2): a row for another head, and a tap over 60 minutes old (confirmed just now), post nothing', () => {
