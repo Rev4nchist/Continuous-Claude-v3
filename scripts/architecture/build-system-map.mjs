@@ -20,7 +20,7 @@
  *   (no mode) dry run   --check exit 1 when the committed files differ   --apply write the files
  * Exit: 0 ok, 1 a problem (stale file, listed id, bad file), 2 not checked (a source or the listed id list is missing or empty).
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -71,7 +71,8 @@ function readHooks(root) {
 
 function readMarkdownDir(dir, what) {
   if (!existsSync(dir)) return notChecked(`${what} folder is missing`);
-  const list = readdirSync(dir).filter((n) => n.endsWith('.md')).sort(cmp);
+  // A directory named x.md is not a rule or an agent: only files count.
+  const list = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isFile() && d.name.endsWith('.md')).map((d) => d.name).sort(cmp);
   return list.length ? ok(list) : notChecked(`${what} folder holds no .md file`);
 }
 
@@ -126,11 +127,16 @@ function readMcp(root) {
   return { status: 'not checked', reason: 'the MCP servers of a machine are in a machine config that holds secrets and is not read', repoMcpJsonServers: declared };
 }
 
-export function collectSources(root) {
-  return { hooks: readHooks(root), skills: readSkills(root), agents: readAgents(root), rules: readRules(root), waves: readWaves(root), mcp: readMcp(root) };
+/** The authored map is a source too: without it there is nothing to merge, which reads "not checked" in every mode. A malformed file is a bad file (the build throws). */
+function readAuthored(root) {
+  return existsSync(join(root, ...VIZ, 'architecture.src.json')) ? ok(true) : notChecked('architecture.src.json is missing');
 }
 
-const REQUIRED = ['hooks', 'skills', 'agents', 'rules', 'waves'];
+export function collectSources(root) {
+  return { authored: readAuthored(root), hooks: readHooks(root), skills: readSkills(root), agents: readAgents(root), rules: readRules(root), waves: readWaves(root), mcp: readMcp(root) };
+}
+
+const REQUIRED = ['authored', 'hooks', 'skills', 'agents', 'rules', 'waves'];
 export const missingSources = (s) => REQUIRED.filter((k) => s[k].status !== 'ok').map((k) => `${k}: ${s[k].reason}`);
 
 function setStats(g, id, stats) { const n = g.nodes.find((x) => x.id === id); if (n) n.stats = stats; }
@@ -158,8 +164,8 @@ export function buildGraph(root, s) {
   return g;
 }
 
-const escapeForHtml = (json) => json.replace(/<\//g, '<\\/');
-const unescapeFromHtml = (t) => t.replace(/<\\\//g, '</');
+/** Every < in the embedded JSON becomes <: the block then holds no tag, no comment opener and no script end, and JSON.parse decodes it back. */
+const escapeForHtml = (json) => json.replace(/</g, '\\u003c');
 
 export function renderOutputs(root, g) {
   const json = JSON.stringify(g, null, 2) + '\n';
@@ -197,6 +203,24 @@ async function countListed(text, ids) {
   const m = await import(pathToFileURL(join(HERE, '..', 'coordination', 'board-mask.mjs')).href);
   return m.countListed(text, ids);
 }
+/** The text with every listed id replaced by the board token: a diagnostic shows counts and names, never an id. */
+async function hideListed(text, ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return text;
+  const m = await import(pathToFileURL(join(HERE, '..', 'coordination', 'board-mask.mjs')).href);
+  return m.maskListed(text, ids).text;
+}
+
+/** Writes every file to a temp file first, then renames them: a failed write leaves the template and the graph as they were. */
+function writeAll(changed) {
+  const staged = [];
+  try {
+    for (const [f, t] of changed) { const tmp = `${f}.tmp`; writeFileSync(tmp, t); staged.push([tmp, f]); }
+  } catch (e) {
+    for (const [tmp] of staged) { try { unlinkSync(tmp); } catch { /* already gone */ } }
+    throw e;
+  }
+  for (const [tmp, f] of staged) renameSync(tmp, f);
+}
 
 /** Compares the committed files with a fresh build. exitCode: 0 fresh, 1 a problem, 2 not checked. Prints counts of listed ids, never an id. */
 export async function checkOutputs(root, opts = {}) {
@@ -211,13 +235,15 @@ export async function checkOutputs(root, opts = {}) {
   if (committedJson !== json) {
     let committed = null;
     try { committed = JSON.parse(committedJson ?? 'null'); } catch { /* unreadable */ }
-    const diff = committed ? registryDiff(g.registry, committed.registry) : ['architecture.json is missing or unreadable'];
+    let diff;
+    try { diff = committed ? registryDiff(g.registry, committed.registry) : ['architecture.json is missing or unreadable']; } catch { diff = []; } // a registry of the wrong shape: the generic text below
     problems.push(`architecture.json is stale${diff.length ? `: ${diff.join('; ')}` : ' (text differs from a fresh build)'}`);
   }
   if (html === null) problems.push('index.html has no embedded-data block');
   else if (!existsSync(htmlFile) || read(htmlFile) !== html) problems.push('index.html embedded block is not the generated graph');
+  let ids = null;
   if (!opts.skipListed) {
-    const ids = await loadIds(root, opts);
+    ids = await loadIds(root, opts);
     if (!Array.isArray(ids) || ids.length === 0) unchecked.push('listed ids: no id list to count against');
     else {
       const texts = { 'architecture.src.json': read(join(root, ...VIZ, 'architecture.src.json')), 'architecture.json': json, 'index.html': html ?? '' };
@@ -228,33 +254,40 @@ export async function checkOutputs(root, opts = {}) {
   const stale = problems.some((p) => /stale|not the generated graph/.test(p));
   const lines = [...problems.map((p) => `problem: ${p}`), ...unchecked.map((u) => `not checked: ${u}`), ...(exitCode === 0 ? [`ok: ${summary(g)}`] : [`compared with: ${summary(g)}`]),
     ...(stale ? [`fix: run "${REBUILD}", then stage ${VIZ.join('/')}/architecture.json and ${VIZ.join('/')}/index.html`] : [])];
-  return { exitCode, problems, notChecked: unchecked, lines };
+  const hide = (list) => Promise.all(list.map((t) => hideListed(t, ids)));
+  return { exitCode, problems: await hide(problems), notChecked: unchecked, lines: await hide(lines) };
 }
 
-export async function main(argv, out = (t) => process.stdout.write(`${t}\n`)) {
+/** `opts.listedIds` (tests) replaces the id list read from the board files. */
+export async function main(argv, out = (t) => process.stdout.write(`${t}\n`), opts = {}) {
   const opt = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
   const root = resolve(opt('--root') ?? join(HERE, '..', '..'));
   const skipListed = argv.includes('--skip-listed');
-  if (argv.includes('--check')) { const r = await checkOutputs(root, { skipListed }); r.lines.forEach(out); return r.exitCode; }
+  if (argv.includes('--check')) { const r = await checkOutputs(root, { ...opts, skipListed }); r.lines.forEach(out); return r.exitCode; }
   const sources = collectSources(root);
   const missing = missingSources(sources);
   if (missing.length) { missing.forEach((m) => out(`not checked: ${m}`)); out('nothing written'); return 2; }
-  if (!existsSync(join(root, ...VIZ, 'architecture.src.json'))) { out('not checked: architecture.src.json is missing'); return 2; }
   const g = buildGraph(root, sources);
   const { json, html } = renderOutputs(root, g);
   if (html === null) { out('problem: index.html has no embedded-data block'); return 1; }
   if (!skipListed) {
-    const ids = await loadIds(root, {});
+    const ids = await loadIds(root, opts);
     if (Array.isArray(ids) && ids.length) {
-      const n = (await countListed(json, ids)) + (await countListed(html, ids));
-      if (n > 0) { out(`problem: listed ids: ${n} in the output; nothing written`); return 1; }
-    } else out('listed ids: not checked (no id list here)');
+      // The same files as --check scans: the authored map and both outputs.
+      const authored = read(join(root, ...VIZ, 'architecture.src.json'));
+      const n = (await countListed(json, ids)) + (await countListed(html, ids)) + (await countListed(authored, ids));
+      if (n > 0) { out(`problem: listed ids: ${n} in the authored map or the output; nothing written`); return 1; }
+    } else {
+      // Accepted limit (seat 11-25): with no id list (a worktree has none) apply writes, says so, and exits 0. The failure text of a stale check
+      // tells a builder to run --apply, so exit 2 here would stop the fix. --check still exits 2 without a list.
+      out('listed ids: not checked (no id list here)');
+    }
   }
   const jsonFile = join(root, ...VIZ, 'architecture.json'), htmlFile = join(root, ...VIZ, 'index.html');
   const changed = [];
   if (!existsSync(jsonFile) || read(jsonFile) !== json) changed.push([jsonFile, json]);
   if (read(htmlFile) !== html) changed.push([htmlFile, html]);
-  if (argv.includes('--apply')) for (const [f, t] of changed) writeFileSync(f, t);
+  if (argv.includes('--apply')) writeAll(changed);
   out(changed.length ? `${argv.includes('--apply') ? 'wrote' : 'would write'}: ${changed.map(([f]) => f.split(/[\\/]/).pop()).join(', ')}` : 'no changes');
   out(summary(g));
   return 0;

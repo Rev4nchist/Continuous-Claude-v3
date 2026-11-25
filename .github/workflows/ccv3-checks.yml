@@ -130,6 +130,7 @@ jobs:
         timeout-minutes: 5
         run: node --test scripts/github/gate-coverage.test.mjs
       # The system map: the committed graph must hold every registered hook, skill and agent; an empty source is "not checked", never a pass.
+      # It covers the parsed hook entries and the count of unparsed ones. A changed shell command of an unparsed entry is not seen.
       - name: system map generator and tripwire
         timeout-minutes: 5
         run: node --test scripts/architecture/build-system-map.test.mjs

@@ -11,7 +11,9 @@
  * Usage:
  *   node scripts/sync-architecture-stats.mjs            # dry run (no writes)
  *   node scripts/sync-architecture-stats.mjs --apply    # write architecture.json and the embedded block of index.html
- *   node scripts/sync-architecture-stats.mjs --root <dir> --verbose
+ *   node scripts/sync-architecture-stats.mjs --root <dir>
+ *
+ * --verbose and -v are accepted and ignored: the generator prints its counts on every run.
  *
  * Exit codes: 0 = ok (or nothing to change), 1 = a problem (bad file, listed id), 2 = a source reads "not checked" (nothing written).
  */

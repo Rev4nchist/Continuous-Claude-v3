@@ -364,7 +364,7 @@
     },
     {
       "term": "Skill",
-      "definition": "A named workflow recipe under .claude/skills/<name>/SKILL.md, triggered by a slash command or auto-activated by keyword/intent match."
+      "definition": "A named workflow recipe under .claude/skills/\u003cname>/SKILL.md, triggered by a slash command or auto-activated by keyword/intent match."
     },
     {
       "term": "Agent / Subagent",
@@ -640,13 +640,13 @@
       "category": "skills",
       "plain": "Named recipes for common tasks — like /commit, /fix, /recall — so Claude doesn't have to improvise.",
       "mechanics": [
-        "145+ workflows under .claude/skills/<name>/SKILL.md.",
+        "145+ workflows under .claude/skills/\u003cname>/SKILL.md.",
         "Some are slash commands you type (/commit, /ralph, /maestro).",
         "Others auto-activate when keywords or intent match.",
         "26 are 'arscontexta' knowledge-vault skills with prerequisite chains."
       ],
       "summary": "145+ pre-written workflow playbooks.",
-      "description": "Skills are named recipes under .claude/skills/<name>/SKILL.md. Some are slash commands (/commit, /recall, /rlm-analyze, /ralph, /maestro). Others auto-activate on context match. The catalog includes meta-workflows (/build, /fix, /refactor, /review, /release) and 26 arscontexta skills with prerequisite graph fields.",
+      "description": "Skills are named recipes under .claude/skills/\u003cname>/SKILL.md. Some are slash commands (/commit, /recall, /rlm-analyze, /ralph, /maestro). Others auto-activate on context match. The catalog includes meta-workflows (/build, /fix, /refactor, /review, /release) and 26 arscontexta skills with prerequisite graph fields.",
       "position": {
         "x": 580,
         "y": 110
@@ -727,7 +727,7 @@
         "Hard caps: max_depth=1, 20 iterations, 480s timeout, $2 budget."
       ],
       "summary": "Docker-sandboxed agent for ≥300K-char corpora.",
-      "description": "Implements Recursive Language Models (arXiv:2512.24601). Caller invokes rlm_complete(question, context, policy). 6-layer safety stack: (L1) frozen RLMPolicy, (L2) _assert_safe refuses sandbox='local' raising ValueError, (L3) threshold gate — <300K chars routes to vanilla cached Claude, (L4) rlms caps (max_depth=1, max_iterations=20, timeout=480s, budget=$2, max_tokens=500K), (L5) ephemeral Docker container (non-root, no host mount), (L6) fallback — any exception triggers vanilla Claude with truncated context. The root model never sees the full corpus — the REPL holds it and the model writes Python code to query it.",
+      "description": "Implements Recursive Language Models (arXiv:2512.24601). Caller invokes rlm_complete(question, context, policy). 6-layer safety stack: (L1) frozen RLMPolicy, (L2) _assert_safe refuses sandbox='local' raising ValueError, (L3) threshold gate — \u003c300K chars routes to vanilla cached Claude, (L4) rlms caps (max_depth=1, max_iterations=20, timeout=480s, budget=$2, max_tokens=500K), (L5) ephemeral Docker container (non-root, no host mount), (L6) fallback — any exception triggers vanilla Claude with truncated context. The root model never sees the full corpus — the REPL holds it and the model writes Python code to query it.",
       "position": {
         "x": 580,
         "y": 620
@@ -756,10 +756,10 @@
         "Every entry gets a 1024-dim semantic embedding for similarity search.",
         "Recall combines text matching (BM25) and vector search (cosine), fused with Hybrid RRF.",
         "Auto-extracts learnings at 4 layers (L0–L3); de-dupes at 0.85 similarity.",
-        "Quality gate auto-blocks low-signal 'NOISE' entries (score <3)."
+        "Quality gate auto-blocks low-signal 'NOISE' entries (score \u003c3)."
       ],
       "summary": "PostgreSQL + pgvector + BGE-1024d embeddings.",
-      "description": "Four tables: sessions (cross-terminal awareness), archival_memory (learnings with 1024-dim BGE embeddings + scope tag), file_claims (per-file lock with composite PK (file_path, project)), handoffs (task completions with embeddings). Search via Hybrid RRF: score = 1/(60+text_rank) + 1/(60+vector_rank). Text rank via pg_trgm/BM25. Vector rank via pgvector cosine similarity. Dedup at 0.85 similarity. Storage layers L0-L3: L0 PostToolUse auto-extract (with NOISE quality gate <3), L1 PreCompact extraction, L2 SessionEnd lazy_memory, L3 manual /remember. Learning types: WORKING_SOLUTION, ERROR_FIX, CODEBASE_PATTERN, FAILED_APPROACH, ARCHITECTURAL_DECISION, USER_PREFERENCE.",
+      "description": "Four tables: sessions (cross-terminal awareness), archival_memory (learnings with 1024-dim BGE embeddings + scope tag), file_claims (per-file lock with composite PK (file_path, project)), handoffs (task completions with embeddings). Search via Hybrid RRF: score = 1/(60+text_rank) + 1/(60+vector_rank). Text rank via pg_trgm/BM25. Vector rank via pgvector cosine similarity. Dedup at 0.85 similarity. Storage layers L0-L3: L0 PostToolUse auto-extract (with NOISE quality gate \u003c3), L1 PreCompact extraction, L2 SessionEnd lazy_memory, L3 manual /remember. Learning types: WORKING_SOLUTION, ERROR_FIX, CODEBASE_PATTERN, FAILED_APPROACH, ARCHITECTURAL_DECISION, USER_PREFERENCE.",
       "position": {
         "x": 870,
         "y": 110
@@ -1088,7 +1088,7 @@
       "mechanics": [
         "The program map lists every lane in waves: docs/review-engine/map.md.",
         "One seat session holds the master card and rules each step with Dave.",
-        "Lanes are named re-<topic>; each lands by its own PR.",
+        "Lanes are named re-\u003ctopic>; each lands by its own PR.",
         "The page counts the lanes from the Waves table, not by hand."
       ],
       "summary": "The program map and its lanes.",
@@ -1345,7 +1345,7 @@
           "n": 2,
           "node": "hooks",
           "action": "pre-compact-continuity + pre-compact-extract fire",
-          "detail": "Two hooks run: one writes the handoff, the other extracts learnings from <thinking> blocks."
+          "detail": "Two hooks run: one writes the handoff, the other extracts learnings from \u003cthinking> blocks."
         },
         {
           "n": 3,
@@ -1389,7 +1389,7 @@
         {
           "n": 3,
           "node": "memory",
-          "action": "L0 quality gate blocks NOISE (score < 3)",
+          "action": "L0 quality gate blocks NOISE (score \u003c 3)",
           "detail": "Prevents low-signal entries from polluting recall results."
         },
         {
@@ -1669,7 +1669,7 @@
           "n": 3,
           "node": "rlm",
           "action": "Safety Layer 3 — threshold gate",
-          "detail": "If context < 300K chars → route to vanilla cached Claude (path='vanilla-threshold')."
+          "detail": "If context \u003c 300K chars → route to vanilla cached Claude (path='vanilla-threshold')."
         },
         {
           "n": 4,
@@ -1759,7 +1759,7 @@
           "n": 1,
           "node": "cli",
           "action": "Claude calls ExitPlanMode",
-          "detail": "Plan written to .claude/plans/<name>.md; user approves."
+          "detail": "Plan written to .claude/plans/\u003cname>.md; user approves."
         },
         {
           "n": 2,
@@ -1849,7 +1849,7 @@
           "n": 1,
           "node": "cli",
           "action": "A session claims a lane",
-          "detail": "lane.mjs claim <id> gives one session the lane; the others see the holder."
+          "detail": "lane.mjs claim \u003cid> gives one session the lane; the others see the holder."
         },
         {
           "n": 2,
