@@ -42,6 +42,25 @@ export function stateFilesPartial(stats: { unreadable: number; oversize: number;
   return parts.length > 0 ? parts.join(', ') : null;
 }
 
+/** Rows cut to `limit`. The caller asks for limit + 1 rows, so one extra row proves a cut that the limit alone would hide. */
+export function capRows<T>(rows: T[], limit: number): { rows: T[]; truncated: boolean } {
+  return rows.length > limit ? { rows: rows.slice(0, limit), truncated: true } : { rows, truncated: false };
+}
+
+/** A short reason when the PR feed lost rows (a cap or skipped rows); null for a feed that is whole. Counts only. */
+export function prFeedPartial(feed: { capped: boolean; skipped: number }): string | null {
+  const parts = [feed.capped ? 'capped' : '', feed.skipped > 0 ? `${feed.skipped} rows skipped` : ''].filter(Boolean);
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
+/** Is the PR feed usable for a stall: status ok, and its export no older than the limit (no data time: the read time stands in). */
+export function prFeedFresh(feed: { status: string; exportedAt: string | null }, nowMs: number, maxAgeMs: number): boolean {
+  if (feed.status !== 'ok') return false;
+  if (feed.exportedAt === null) return true;
+  const at = Date.parse(feed.exportedAt);
+  return Number.isFinite(at) && nowMs - at <= maxAgeMs;
+}
+
 const LABELS: Record<ReaderId, string> = {
   stalls: 'Stalls (lane table, PR feed)',
   'open-question': 'Open questions (session state files)',

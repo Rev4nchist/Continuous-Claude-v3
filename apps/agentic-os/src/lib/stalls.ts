@@ -104,8 +104,12 @@ export function createGreenTracker(): {
   observe: (rows: Pick<StallPr, 'pr' | 'head' | 'ready' | 'draft'>[], nowMs: number) => Map<string, number>;
 } {
   const since = new Map<string, number>();
+  let last = Number.NEGATIVE_INFINITY;
   return {
     observe(rows, nowMs) {
+      // Two polls can overlap: an older one that finishes late must not undo what a newer one saw (card agentic-os-readers-edge-limits).
+      if (nowMs < last) return new Map(since);
+      last = nowMs;
       const live = new Set<string>();
       for (const row of rows) {
         if (row.ready !== true || row.draft || !row.head) continue; // no head: no clock, or two missing heads would share the key "<pr>@"

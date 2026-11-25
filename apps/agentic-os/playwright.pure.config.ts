@@ -29,6 +29,8 @@ export default defineConfig({
     'listed-id-mask.spec.ts',
     'listed-id-drift.spec.ts',
     'snapshot-mask.spec.ts',
+    // card agentic-os-readers-edge-limits: the five known limits of the readers
+    'readers-edge-limits.spec.ts',
   ],
   timeout: 30_000,
   retries: 0,
