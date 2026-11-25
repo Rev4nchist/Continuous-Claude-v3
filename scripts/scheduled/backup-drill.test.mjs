@@ -351,3 +351,91 @@ test('D18 a sweep with no pending file, or a failed drop, changes nothing else a
     assert.equal(existsSync(join(folder, 'drill-pending.json')), true, 'kept for the next run');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// ---- card ops-backup-drill-deadline-cleanup, CLI findings 1-4 (CodeRabbit CLI run 1 on eb84247b) ----
+
+/** A runner that never answers a call whose text matches `re`, and ignores the abort signal (a hung docker or node child). */
+function hungOn(re) {
+  const f = fakeSh();
+  const inner = f.sh;
+  f.sh = (cmd, args, opts) => {
+    const line = [cmd, ...args].join(' ');
+    if (re.test(line)) { f.calls.push({ cmd, args, line }); return new Promise(() => {}); }
+    return inner(cmd, args, opts);
+  };
+  return f;
+}
+
+test('D19 a sweep call that hangs ends after its own limit, is named in "skipped", and the file stays for the next run', { timeout: 5000 }, async () => {
+  // Breaks when a sweep call has no limit: one hung docker or node child holds up the whole night (finding 1).
+  for (const re of [/scratch-db\.mjs drop/, /rm -f/]) {
+    const root = pendingDir();
+    try {
+      const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef' });
+      const f = hungOn(re);
+      const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor, callMs: 60 });
+      assert.deepEqual(out.cleaned, []);
+      assert.match(out.skipped.join(' '), /lanes_pr1_deadbeef/);
+      assert.equal(existsSync(join(folder, 'drill-pending.json')), true, 'kept for the next run');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test('D20 a final cleanup call that hangs ends after its own limit: the drill returns, the rest of the cleanup runs, the pending file stays', { timeout: 5000 }, async () => {
+  // Breaks when the cleanup calls have no limit: the drill never returns after a pass or a deadline (finding 2).
+  for (const [re, note] of [[/rm -f/, /copy in container not removed/], [/scratch-db\.mjs drop/, /not dropped/]]) {
+    const dir = pendingDir();
+    try {
+      const pendingFile = join(dir, 'drill-pending.json');
+      const f = hungOn(re);
+      const out = await drill(f, { pendingFile, cleanupMs: 60 });
+      assert.match(out.detail, note);
+      assert.ok(f.calls.some((c) => c.line.includes('scratch-db.mjs drop')), 'the drop was still tried');
+      assert.equal(existsSync(pendingFile), true, 'an incomplete cleanup stays on record');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test('D21 a docker cp that ends after the deadline gets its copy removed after it ends', { timeout: 5000 }, async () => {
+  // Breaks when only the cleanup at the deadline removes the copy: a cp that ends later leaves /tmp/<name>.dump in the container (finding 3).
+  const f = fakeSh();
+  const inner = f.sh;
+  f.sh = async (cmd, args, opts) => {
+    if (args[0] === 'cp') {
+      f.calls.push({ cmd, args, line: [cmd, ...args].join(' ') });
+      await new Promise((r) => setTimeout(r, 150)); // ignores the signal, ends after the 60 ms deadline
+      f.calls.push({ line: 'CP-END' });
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return inner(cmd, args, opts);
+  };
+  const out = await drill(f, { deadlineMs: 60 });
+  assert.equal(out.drill, 'fail');
+  await new Promise((r) => setTimeout(r, 300));
+  const lines = f.calls.map((c) => c.line);
+  assert.ok(lines.lastIndexOf(lines.filter((l) => l.includes('rm -f /tmp/lanes_pr1_abcd1234.dump')).at(-1)) > lines.indexOf('CP-END'), 'a rm of the copy runs after the cp ended');
+});
+
+test('D22 a late-created scratch database whose drop fails is written to the pending file for the next sweep', { timeout: 5000 }, async () => {
+  // Breaks when a failed late drop is swallowed: the database then has no owner and nobody ever drops it (finding 4).
+  const dir = pendingDir();
+  try {
+    const pendingFile = join(dir, 'drill-pending.json');
+    const f = fakeSh();
+    const inner = f.sh;
+    f.sh = async (cmd, args, opts) => {
+      const line = [cmd, ...args].join(' ');
+      if (line.includes('scratch-db.mjs create')) {
+        f.calls.push({ cmd, args, line });
+        await new Promise((r) => setTimeout(r, 150));
+        return { code: 0, stdout: JSON.stringify({ url: SCRATCH, name: 'lanes_pr1_abcd1234' }), stderr: '' };
+      }
+      if (line.includes('scratch-db.mjs drop')) { f.calls.push({ cmd, args, line }); return { code: 1, stdout: '', stderr: 'no' }; }
+      return inner(cmd, args, opts);
+    };
+    await drill(f, { deadlineMs: 60, pendingFile });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(existsSync(pendingFile), true, 'the failed drop is on record');
+    assert.deepEqual(JSON.parse(readFileSync(pendingFile, 'utf8')), { name: 'lanes_pr1_abcd1234' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
