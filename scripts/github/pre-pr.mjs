@@ -85,7 +85,7 @@
  * evidence, env) and no stale GREEN waits for the gates. The review child writes to files (.running.txt, .running.txt.err), so it runs on while a
  * gate blocks the event loop; the gates run beside it and the run waits for the review before git:stable. A gate FAIL prints "gate <id> FAILED;
  * waiting for the CLI review to end so its output is saved" and the review is NOT stopped. The counter row of that review gets gateFailed: it
- * uses no slot (one such row per branch per Chicago day) and is never a finished run. PRE_PR_SERIAL_CR=1 restores the old order (gates, then review).
+ * is never a finished run. It uses a slot when its review finished (complete true: a finished review spends a review); it uses no slot only when the review did not finish (one such row per branch per Chicago day). PRE_PR_SERIAL_CR=1 restores the old order (gates, then review).
  * The base is PINNED: baseCommit = git merge-base HEAD fork/<base> (local base with no fork ref), read once after the fetch. The changes step, the
  * answer-key guard and "cr review --base-commit" use it, so a move of the base ref during the run changes nothing the run reads. The stamp holds
  * base_commit. Only HEAD is checked at the last moment. --wait-lock (or PRE_PR_WAIT_LOCK=1) waits up to 60 minutes for a run-lock place in turn.
@@ -1431,15 +1431,16 @@ const CHICAGO_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicag
 const chicagoDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? CHICAGO_DAY.format(t) : ''; };
 
 /**
- * How many rows use a slot of the cap. A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) uses none
- * either, but only the first such row of each Chicago day: the next one counts as a normal slot. A time that cannot be read counts (fail closed).
+ * How many rows use a slot of the cap. A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) and did NOT finish its
+ * review (complete is not true: killed, cut off, nothing reviewed) uses none, but only the first such row of each Chicago day: the next one counts as a normal slot.
+ * A review that finished always counts, whatever a later gate said (card prepr-cli-cap-count, Dave 2026-11-25). A time that cannot be read counts (fail closed).
  * A row of an extra run (the extra-run flag after Dave's tap, extraRun true) uses no slot: the override is for that one run, so the next run is capped again.
  */
 export function countedRuns(rows) {
   const freeDays = new Set();
   let counted = 0;
   for (const r of rows.filter((x) => x.newCode !== false && x.extraRun !== true)) {
-    const day = r.gateFailed === true ? chicagoDay(r.at) : '';
+    const day = r.gateFailed === true && r.complete !== true ? chicagoDay(r.at) : '';
     if (day !== '' && !freeDays.has(day)) { freeDays.add(day); continue; }
     counted += 1;
   }

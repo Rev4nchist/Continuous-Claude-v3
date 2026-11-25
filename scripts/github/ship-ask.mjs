@@ -445,14 +445,14 @@ const chicagoDay = (iso) => { const t = Date.parse(iso); return Number.isFinite(
 
 /**
  * How many counter rows use a slot of the run cap, as pre-pr.mjs counts them (the same countedRuns logic as pre-pr.mjs; a copy, not an import:
- * one source for both is a follow-up of Coord standard). A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) uses none either,
- * but only the first such row of each Chicago day: the next one counts. A time that cannot be read counts (fail closed).
+ * one source for both is a follow-up of Coord standard). A row on a head with no new code uses none. A row whose run failed a test gate (gateFailed) and did not finish its
+ * review (complete is not true) uses none, but only the first such row of each Chicago day: the next one counts. A finished review always counts. A time that cannot be read counts (fail closed).
  */
 export function countedRuns(rows) {
   const freeDays = new Set();
   let counted = 0;
   for (const r of rows.filter((x) => x?.newCode !== false && x?.extraRun !== true)) {
-    const day = r?.gateFailed === true ? chicagoDay(r.at) : '';
+    const day = r?.gateFailed === true && r?.complete !== true ? chicagoDay(r.at) : '';
     if (day !== '' && !freeDays.has(day)) { freeDays.add(day); continue; }
     counted += 1;
   }
