@@ -9,7 +9,7 @@
  *   3. the readers (done-proof) still classify the stored command as before.
  */
 import * as fs from 'fs';
-import { PassThrough } from 'stream';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { isTestCommand, main } from '../test-run-tracker.js';

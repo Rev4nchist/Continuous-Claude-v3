@@ -15,6 +15,12 @@
  *   2. For each probe, one scratch database: scratch-db.mjs create --through 6 makes lanes_pr1_<hex>; the url must pass
  *      assertScratchUrl; the probe runs with that url in CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL; the
  *      database is dropped in finally. One database for each probe, so no probe sees the rows of another.
+ *      Each probe also gets its own stand-in home and its own session id (rule of the seat, 2026-11-24). The probes build paths
+ *      from $HOME/continuous-claude (canon-home.mjs) and read CLAUDE_CODE_SESSION_ID (lane.mjs); a CI runner has neither. So the
+ *      run makes a folder under the temp folder, names it in CCV3_USER_HOME, puts a `continuous-claude` link in it to the checkout
+ *      that holds this file, and sets one new uuid in CLAUDE_CODE_SESSION_ID. The probes then test the code under review, not the
+ *      copy in the home of the caller. The cleanup never deletes recursively: a recursive delete follows a Windows junction and
+ *      empties its target. It checks the path is a link, unlinks the link, checks it is gone, then removes the empty home.
  *   3. Exit 0 only when every refusal check and every probe passed and no probe printed a SKIP line. A skipped check passes in
  *      the probe itself (dm-delivery without migration 0004); here it fails.
  *
@@ -24,7 +30,9 @@
  * password in anything this program prints. Probes that use `docker exec` need the container continuous-claude-postgres.
  */
 import { spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import fs, { realpathSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertScratchUrl, maskUrl } from './scratch-db.mjs';
@@ -125,17 +133,61 @@ function dropScratch({ spawn, env, url }) {
   }
 }
 
+/**
+ * Make the stand-in home of one probe: a new folder under the temp folder that holds one link, `continuous-claude`, to `target`
+ * (a junction: it needs no privilege on Windows, and Linux ignores the type). Returns { home, link }. Throws when it cannot.
+ */
+export function makeStandInHome({ fsx = fs, tmp = os.tmpdir(), target = REPO } = {}) {
+  const home = fsx.mkdtempSync(path.join(tmp, 'ccv3-probe-home-'));
+  const link = path.join(home, 'continuous-claude');
+  try {
+    fsx.symlinkSync(target, link, 'junction');
+  } catch (e) {
+    try { fsx.rmdirSync(home); } catch { /* an empty folder stays in the temp folder */ }
+    throw e;
+  }
+  return { home, link };
+}
+
+/**
+ * Remove a stand-in home. NEVER a recursive delete: a recursive delete follows a Windows junction and empties the checkout it
+ * points to (memory worktree-junction-remove). Steps: the path must be a link; unlink the link only; check it is gone; remove the
+ * home with a plain rmdir, which fails on a folder that is not empty. Returns { ok, line }. Never throws.
+ */
+export function removeStandInHome({ fsx = fs, home, link }) {
+  try {
+    if (!fsx.lstatSync(link).isSymbolicLink()) return { ok: false, line: `FAIL: ${link} is not a link; nothing removed` };
+    fsx.unlinkSync(link);
+    let still = true;
+    try { fsx.lstatSync(link); } catch (e) { still = e?.code !== 'ENOENT'; }
+    if (still) return { ok: false, line: `FAIL: ${link} is still there after the unlink; the home folder is not removed` };
+    fsx.rmdirSync(home);
+    return { ok: true, line: `  removed stand-in home ${home}` };
+  } catch (e) {
+    return { ok: false, line: `FAIL: could not remove the stand-in home ${home}: ${e.message}` };
+  }
+}
+
 /** Run one probe on one scratch database. Returns { ok, lines, env }. env is true when no scratch database could be made. */
-export function runProbe(probe, { spawn, env, dir, now = Date.now }) {
+export function runProbe(probe, { spawn, env, dir, now = Date.now, fsx = fs, newId = randomUUID, tmp = os.tmpdir() }) {
   const made = createScratch({ spawn, env });
   if (!made.url) return { ok: false, env: Boolean(made.env), lines: [made.line] };
   const { url } = made;
   const dbName = assertScratchUrl(url); // the name only: it holds no secret, and it lets a log show which database was dropped
-  const penv = { ...env, CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url, ...(probe.env ?? {}) };
-  const started = now();
   let lines = [];
   let ok = false;
+  let standIn = null;
   try {
+    standIn = makeStandInHome({ fsx, tmp });
+    const penv = {
+      ...env, CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url,
+      // LANE_PROJECT: lane-race runs lane.mjs with cwd = this checkout, which has no registry entry on a runner (lane.mjs refuses).
+      // LANE_REGISTRY_PATH: lane-board.mjs:61-64 reads $HOME/.claude/project-registry.json, which a runner does not have; without a
+      // registry the board name is "unknown board 'continuous-claude'; registered: (none)". The registry of this checkout is the repo copy.
+      CCV3_USER_HOME: standIn.home, CLAUDE_CODE_SESSION_ID: newId(), LANE_PROJECT: 'continuous-claude',
+      LANE_REGISTRY_PATH: path.join(REPO, '.claude', 'project-registry.json'), ...(probe.env ?? {}),
+    };
+    const started = now();
     const r = spawn(process.execPath, [path.join(dir, probe.file)], spawnOpts(REPO, penv, 5 * MIN));
     const text = `${r.stdout ?? ''}${r.stderr ? `\n${r.stderr}` : ''}`;
     const skips = countSkips(text);
@@ -147,6 +199,12 @@ export function runProbe(probe, { spawn, env, dir, now = Date.now }) {
   } catch (e) {
     lines = [`FAIL ${probe.name}: ${redact(e.message, url)}`];
   } finally {
+    // The link goes first, the database after: a failure of one step never skips the other.
+    if (standIn) {
+      const gone = removeStandInHome({ fsx, ...standIn });
+      if (!gone.ok) ok = false;
+      lines = [...lines, gone.ok ? `  stand-in home ${standIn.home} (link to ${REPO}), removed` : gone.line];
+    }
     const dropped = dropScratch({ spawn, env, url });
     if (dropped.length) { ok = false; lines = [...lines, ...dropped]; } else lines = [...lines, `  dropped ${dbName}`];
   }
@@ -157,7 +215,7 @@ export function runProbe(probe, { spawn, env, dir, now = Date.now }) {
  * The whole run. Never throws. Returns { code, lines }. `spawn` (spawnSync shape), `env`, `probes` and `dir` are injected so a
  * test needs no database. `only` is a list of probe names, `refusalOnly` stops after step 1.
  */
-export function run({ spawn = spawnSync, env = process.env, probes = PROBES, dir = HERE, only = null, refusalOnly = false } = {}) {
+export function run({ spawn = spawnSync, env = process.env, probes = PROBES, dir = HERE, only = null, refusalOnly = false, fsx = fs, newId = randomUUID, tmp = os.tmpdir() } = {}) {
   const unknown = (only ?? []).filter((n) => !probes.some((p) => p.name === n));
   if (unknown.length || (only && !only.length)) return { code: 1, lines: [`FAIL: unknown probe name(s) ${unknown.join(',') || '(none given)'}; known: ${probes.map((p) => p.name).join(', ')}`] };
   const list = only ? probes.filter((p) => only.includes(p.name)) : probes;
@@ -174,7 +232,7 @@ export function run({ spawn = spawnSync, env = process.env, probes = PROBES, dir
   if (refusalOnly) return { code: failed ? 1 : 0, lines: [...lines, `run-probes: ${list.length - failed} of ${list.length} refusal checks passed`] };
   let envFail = false;
   for (const p of list) {
-    const r = runProbe(p, { spawn, env, dir });
+    const r = runProbe(p, { spawn, env, dir, fsx, newId, tmp });
     lines.push(...r.lines);
     if (!r.ok) failed += 1;
     if (r.env) { envFail = true; break; }
