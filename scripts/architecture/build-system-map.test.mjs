@@ -370,3 +370,49 @@ test('G24 no page of the system-visualization folder outside archive/ holds Brai
   const dead = links.filter((l) => !existsSync(resolve(dir, l)));
   assert.deepEqual(dead, [], `hub links that do not resolve: ${dead.join(', ')}`);
 });
+
+test('G25 an unknown Node option before the hook file makes the entry unparsed; known flag-only options and --x=y forms still parse', () => {
+  const root = makeRoot({ hooks: [['PreToolUse', 'Bash', 'alpha.mjs']] });
+  const f = join(root, '.claude', 'settings.json.template');
+  const t = JSON.parse(readFileSync(f, 'utf8'));
+  const dist = (n) => `{{CLAUDE_HOME}}/hooks/dist/${n}`;
+  const add = (matcher, args) => t.hooks.PreToolUse.push({ matcher, hooks: [{ type: 'command', command: 'node', args }] });
+  add('A', ['--title', 'worker', dist('titled.mjs')]); // Node takes "worker" as the title: unknown option, cannot be read
+  add('B', ['--enable-source-maps', dist('maps.mjs')]);
+  add('C', ['--max-old-space-size=256', dist('heap.mjs')]);
+  add('D', ['--no-warnings', '--enable-source-maps', dist('both.mjs')]);
+  writeFileSync(f, JSON.stringify(t, null, 2));
+  apply(root);
+  const hooks = graphOf(root).registry.hooks;
+  const names = hooks.items.map((h) => h.file);
+  assert.ok(!names.includes('worker') && !names.includes('titled.mjs'), `an unknown option is never guessed: ${names}`);
+  assert.equal(hooks.unparsed, 1, 'the unknown option entry is counted as unparsed');
+  for (const n of ['maps.mjs', 'heap.mjs', 'both.mjs']) assert.ok(names.includes(n), `${n} still parses: ${names}`);
+});
+
+test('G26 writeAll refuses to start when a backup file of an older crash exists, names it, and leaves everything as it was', () => {
+  const writeAll = need('writeAll');
+  const dir = mkdtempSync(join(tmpdir(), 'sysmap-bak-'));
+  roots.push(dir);
+  const a = join(dir, 'a.json'), b = join(dir, 'b.html');
+  writeFileSync(a, 'old a'); writeFileSync(b, 'old b'); writeFileSync(`${a}.bak`, 'precious older copy');
+  assert.throws(() => writeAll([[a, 'new a'], [b, 'new b']]), (e) => e.message.includes('a.json.bak'), 'the error names the backup');
+  assert.equal(readFileSync(`${a}.bak`, 'utf8'), 'precious older copy', 'the older backup is not touched');
+  assert.equal(readFileSync(a, 'utf8'), 'old a');
+  assert.equal(readFileSync(b, 'utf8'), 'old b');
+  assert.deepEqual(readdirSync(dir).sort(), ['a.json', 'a.json.bak', 'b.html'], 'no temp file is left');
+});
+
+test('G27 when the restore of the first file also fails, its backup is kept and named in the error', () => {
+  const writeAll = need('writeAll');
+  const dir = mkdtempSync(join(tmpdir(), 'sysmap-keep-'));
+  roots.push(dir);
+  const a = join(dir, 'a.json'), b = join(dir, 'b.html');
+  writeFileSync(a, 'old a'); writeFileSync(b, 'old b');
+  let calls = 0;
+  const failSecondAndRestore = (from, to) => { calls += 1; if (calls >= 2) throw new Error(`forced failure ${calls}`); return fsRename(from, to); };
+  assert.throws(() => writeAll([[a, 'new a'], [b, 'new b']], { renameSync: failSecondAndRestore }), (e) => e.message.includes('a.json.bak'), 'the error names the kept backup');
+  assert.equal(readFileSync(`${a}.bak`, 'utf8'), 'old a', 'the only good copy of the first file is kept');
+  assert.ok(!existsSync(`${b}.bak`), 'a backup whose file never changed is removed');
+  assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith('.tmp')), [], 'no temp file is left');
+});
