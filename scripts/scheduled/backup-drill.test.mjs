@@ -17,7 +17,7 @@ function fakeSh(over = {}) {
     calls.push({ cmd, args, line });
     if (over.throwOn && over.throwOn(line)) throw new Error('boom');
     if (line.includes('scratch-db.mjs create')) return { code: 0, stdout: over.scratchOut ?? JSON.stringify({ url: SCRATCH, name: 'lanes_pr1_abcd1234' }), stderr: '' };
-    if (line.includes('pg_restore')) return { code: over.restore ?? 0, stdout: '', stderr: over.restore ? 'restore broke' : '' };
+    if (line.includes('pg_restore')) return { code: over.restore ?? 0, stdout: '', stderr: over.restore ? (over.restoreErr ?? 'restore broke') : '' };
     if (line.includes('union all')) return { code: 0, stdout: countsText(over.counts ?? LIVE_COUNTS), stderr: '' };
     if (line.includes('select id from')) return { code: 0, stdout: (over.ids ?? IDS).join('\n'), stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
@@ -29,6 +29,7 @@ const drill = (f, extra = {}) => runDrill({ sh: f.sh, dumpPath: 'C:/x/ccv3-laned
 
 test('D1 count rule: lane tables within 1 percent or 5 rows, busy tables within 5 percent or 50 rows', () => {
   assert.equal(compareCounts(LIVE_COUNTS, { ...LIVE_COUNTS, lane: 145 }).ok, true);
+  assert.deepEqual(compareCounts(LIVE_COUNTS, { ...LIVE_COUNTS, lane: 160 }).bad, ['lane'], 'a restore with MORE rows than live is also wrong');
   const bad = compareCounts(LIVE_COUNTS, { ...LIVE_COUNTS, lane: 144 });
   assert.equal(bad.ok, false);
   assert.deepEqual(bad.bad, ['lane']);
@@ -106,7 +107,8 @@ test('D8 a step that throws is a fail, not a crash, and the cleanup still runs',
 });
 
 test('D9 the password of the scratch url never reaches the detail text', async () => {
-  const f = fakeSh({ restore: 1 });
+  const f = fakeSh({ restore: 1, restoreErr: 'could not connect to postgresql://claude:pw@localhost:5432/x' });
   const out = await drill(f);
-  assert.ok(!out.detail.includes(':pw@'));
+  assert.match(out.detail, /could not connect/);
+  assert.ok(!out.detail.includes(':pw@'), out.detail);
 });
