@@ -19,3 +19,23 @@ export function isUnattended(
   if (env.CI === 'true' || env.CI === '1') return true;
   return false;
 }
+
+/**
+ * A typed SKIP_ override (SKIP_DESTRUCTIVE_GUARD, SKIP_PACKAGE_GUARD, SKIP_PRE_PR_GATE) works only where a person can
+ * answer for it. It is ignored when the run is unattended (isUnattended) or when Claude Code says no one is attending
+ * the session: a headless `claude -p` sets CLAUDE_CODE_SESSION_ATTENDED=0 in the env that its hooks inherit (read from a real
+ * run, card guard-skip-prefix-unattended, capture 02). A missing variable counts as attended. isUnattended stays as it is:
+ * commit-preflight and the ask-to-deny choices of every guard use it, and this card changes only the override.
+ * The hook reads its own env here. A typed `CLAUDE_CODE_SESSION_ATTENDED=1 cmd` reaches only the command's subshell.
+ */
+export function overrideLocked(
+  input: { permission_mode?: string; agent_id?: unknown },
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  // A subagent's tool call carries agent_id in the payload (decision-gate reads it there), even when its hook env has no CLAUDE_AGENT_ID.
+  if (typeof input.agent_id === 'string' && input.agent_id !== '') return true;
+  return isUnattended(input, env) || env.CLAUDE_CODE_SESSION_ATTENDED === '0';
+}
+
+/** The sentence a guard adds to its deny or ask text when a typed override was ignored (or none works in this run). */
+export const OVERRIDE_IGNORED_NOTE = 'A typed SKIP_ override is ignored in an unattended or bypass run. Ask Dave to run it, or leave bypass mode.';
