@@ -12,7 +12,20 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['safe-message*.spec.ts', 'lane-coord-drift.spec.ts', 'pr-feed-parse.spec.ts', 'tiles-truth-fold.spec.ts'],
+  testMatch: [
+    'safe-message*.spec.ts',
+    'lane-coord-drift.spec.ts',
+    'pr-feed-parse.spec.ts',
+    'tiles-truth-fold.spec.ts',
+    // card agentic-os-readers: the pure reader specs (the DB twins stalls-db and clock-db run in the main config)
+    'note-flags.spec.ts',
+    'stalls.spec.ts',
+    'open-question.spec.ts',
+    'decisions-parse.spec.ts',
+    'clock.spec.ts',
+    'tasks-parse.spec.ts',
+    'readers-sources.spec.ts',
+  ],
   timeout: 30_000,
   retries: 0,
   workers: 1,
