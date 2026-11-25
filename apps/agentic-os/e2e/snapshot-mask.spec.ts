@@ -75,6 +75,14 @@ test.describe('maskSnapshot', () => {
     expect(Object.values(value).sort()).toEqual([1, 2]);
   });
 
+  test('N4b a key named __proto__ stays an own field (CLI run 1, finding 2)', () => {
+    // Breaks when the walk assigns out[name] on a plain object: the __proto__ setter changes the prototype and the field is lost from the JSON.
+    const input = JSON.parse('{"__proto__":{"title":"plain"},"other":1}') as Record<string, unknown>;
+    const { value } = maskSnapshot(input, LIST);
+    expect(Object.keys(value).sort()).toEqual(['__proto__', 'other']);
+    expect(JSON.stringify(value)).toBe(JSON.stringify(input));
+  });
+
   test('N5 a PR number after seven spaces is masked too (the reader view, as on the board page)', () => {
     const { value } = maskSnapshot({ title: `see PR${' '.repeat(7)}${PR} now` }, LIST);
     expect(countListed(value.title, IDS)).toBe(0);

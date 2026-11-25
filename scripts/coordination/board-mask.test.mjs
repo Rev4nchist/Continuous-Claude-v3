@@ -421,6 +421,14 @@ describe('coord-board-mask-ids: maskLaneRows masks every displayed lane text at 
     maskLaneRows({ lanes, sessions: [], events: [] }, IDS);
     for (const l of lanes) for (const k of ['note', 'branch', 'done_when', 'rationale']) if (l[k]) assert.ok(!l[k].includes('4242'), `${l.id}.${k} keeps the id`);
   });
+  it('CLI run 1: two forms in one text (a comment id split by a zero-width mark, a fullwidth PR) are both masked; equal counts do not keep the raw text', () => {
+    const fullwidth = '４２４２'; // the made-up PR in fullwidth digits
+    const lanes = [{ id: 'l1', note: `comment 9000000123​4; PR ${fullwidth}` }];
+    const n = maskLaneRows({ lanes, sessions: [], events: [] }, IDS);
+    assert.equal(n, 2);
+    assert.ok(!lanes[0].note.includes(fullwidth), 'the fullwidth PR is left');
+    assert.ok(!lanes[0].note.includes('4242') && !lanes[0].note.includes('9000000123'), 'an id is left');
+  });
   it('rows with no listed id are not changed, and null fields stay null', () => {
     const lanes = [{ id: 'l', title: 'plain', scope: null, note: undefined, track: 'coord' }];
     const before = JSON.stringify(lanes);

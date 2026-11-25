@@ -49,6 +49,17 @@ test.describe('maskListed and maskString: each form of a listed id', () => {
     expect(maskListed('', IDS)).toEqual({ text: '', masked: 0 });
     expect(maskListed(`PR ${PR}`, [])).toEqual({ text: `PR ${PR}`, masked: 0 });
   });
+
+  test('M4 two forms in one text: the raw pass and the reader-view pass each find one id, and both are masked (CLI run 1, finding 1)', () => {
+    // Breaks when maskString picks the pass with more hits: on equal counts it kept the raw text and left the fullwidth PR visible.
+    const fullwidth = [...PR].map((d) => String.fromCharCode(d.charCodeAt(0) + 0xfee0)).join('');
+    const text = `comment ${COMMENT}​4; PR ${fullwidth}`; // the zero-width mark makes the comment id unlisted in the reader view
+    const field = maskString(text, IDS);
+    expect(field.masked).toBe(2);
+    expect(field.text).not.toContain(fullwidth);
+    expect(field.text).not.toContain(PR);
+    expect(field.text).not.toContain(COMMENT);
+  });
 });
 
 test.describe('loadListedIds: an unreadable or empty list is never "all clear"', () => {
