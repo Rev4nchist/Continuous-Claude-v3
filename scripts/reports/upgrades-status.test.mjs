@@ -122,6 +122,15 @@ describe('upgrades-status', () => {
     assert.match(r.html, /<td class="n">100\+<\/td>/);
   });
 
+  it('U10 the open decision count of 100 or more shows as 100+ (CLI run 2 of PR 730)', () => {
+    const open = Array.from({ length: 120 }, (_, i) => `DP9.${i}`);
+    const r = build({ program: { ...program, nextDecisionPoint: { id: 'DP9', open } } });
+    assert.equal(r.model.program.decisionOpen, 120);
+    assert.doesNotMatch(r.pageMd, /120/);
+    assert.ok(r.pageMd.includes('Open decision items for Dave: 100+ (DP9).'), r.pageMd);
+    assert.doesNotMatch(r.html, /120/);
+  });
+
   it('U9 the dark-mode rule for a warning comes after the base rule, so it wins (CLI finding 2)', () => {
     const css = build().html.match(/<style>(.*?)<\/style>/s)[1];
     const base = css.indexOf('.nc{color:#8a5a00');
