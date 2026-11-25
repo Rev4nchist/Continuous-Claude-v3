@@ -141,8 +141,7 @@ describe('I11b: a script runner call whose first word after its options is an ex
     expect(await patIn(bash('node scripts/lane.mjs say "git push fork x" --to seat'), FS)).toBe('allow');
     expect(await patIn(bash('node /abs/x/tool.mjs note "git push fork x"'), FS)).toBe('allow');
   });
-  it('I11b-2: options before the file are skipped, with no list of names: allowed (RED: denied)', async () => {
-    expect(await patIn(bash('node --max-old-space-size=4096 real.mjs "git push fork x"'), FS)).toBe('allow');
+  it('I11b-2: a call of a file with no option before it; a quoted merge text is not the script-runner rule', async () => {
     // A quoted merge text is still read by the old hand reader (merge-no-head): that is not the script-runner rule. C2 deletes the hand reader. Pin the rule, not the reader.
     expect(await patIn(bash('python real.py "gh pr merge 5"'), FS)).not.toBe('script-runner');
   });
@@ -153,6 +152,17 @@ describe('I11b: a script runner call whose first word after its options is an ex
     for (const c of [`node -e "git push fork x"`, `node --eval "git push fork x"`, `node -p "git push fork x"`, `python -c "gh pr merge 5"`, `node -r x -e "git push fork x"`, `ruby -e "git push fork x"`]) {
       expect(await patIn(bash(c), FS), c).toBe('script-runner');
     }
+  });
+  it('I11b-4b (seat finding 15:3x, RED): an option before the file means no skip, whatever the option takes (a value that is a file must not stand for the script)', async () => {
+    for (const c of [
+      `node -r real.mjs -e "git push fork x"`,
+      `node --require real.mjs -e "git push fork x"`,
+      `node --import real.mjs -e "git push fork x"`,
+      `node --loader real.mjs -e "git push fork x"`,
+      `python -X real.py -c "git push fork x"`,
+      `python -W real.py -c "git push fork x"`,
+      `node --max-old-space-size=4096 real.mjs "git push fork x"`,
+    ]) expect(await patIn(bash(c), FS), c).toBe('script-runner');
   });
   it('I11b-5 (control): a file that does not exist is denied', async () => {
     for (const c of [`node missing.mjs "git push fork x"`, `python nope.py "gh pr merge 5"`, `node real.mjs/ "git push fork x"`]) expect(await patIn(bash(c), FS), c).toBe('script-runner');
@@ -179,3 +189,4 @@ describe('I11b: a script runner call whose first word after its options is an ex
     expect(await patIn(bash('{ node scripts/lane.mjs say "git push fork x"'), FS)).not.toBe('allow');
   });
 });
+
