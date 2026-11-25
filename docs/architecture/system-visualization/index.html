@@ -286,7 +286,7 @@
 
 <main>
   <section class="diagram" id="diagram">
-    <svg id="svg" viewBox="0 0 1300 780" preserveAspectRatio="xMidYMid meet" role="img" aria-label="System architecture diagram">
+    <svg id="svg" viewBox="0 0 1300 900" preserveAspectRatio="xMidYMid meet" role="img" aria-label="System architecture diagram">
       <defs>
         <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto">
           <path d="M 0 0 L 12 6 L 0 12 z" class="edge-marker" />
@@ -319,16 +319,15 @@
 </main>
 
 <footer>
-  Source: <a href="https://github.com/Rev4nchist/Continuous-Claude-v3/tree/main/docs/architecture/diagrams" target="_blank" rel="noopener">docs/architecture/diagrams</a> + <a href="https://github.com/Rev4nchist/Continuous-Claude-v3/blob/main/docs/architecture/rlm/rlm-architecture.md" target="_blank" rel="noopener">rlm-architecture</a> + <a href="https://github.com/Rev4nchist/Continuous-Claude-v3/blob/main/docs/memory-architecture.md" target="_blank" rel="noopener">memory-architecture</a> + <a href="https://github.com/Rev4nchist/Continuous-Claude-v3/blob/main/docs/continuous-claude-explained.md" target="_blank" rel="noopener">continuous-claude-explained</a>. &nbsp;|&nbsp; Diagrams: <a href="./hub.html">hub</a> · <a href="./hooks-visualization.html">hooks</a> · <a href="./agents-visualization.html">agents</a> · <a href="./braintrust-scoring-visualization.html">braintrust</a> (four diagrams). Last verified <span id="footer-date"></span>.
+  Source: <a href="https://github.com/Rev4nchist/Continuous-Claude-v3/tree/main/docs/architecture/diagrams" target="_blank" rel="noopener">docs/architecture/diagrams</a> + <a href="https://github.com/Rev4nchist/Continuous-Claude-v3/blob/main/docs/architecture/rlm/rlm-architecture.md" target="_blank" rel="noopener">rlm-architecture</a> + <a href="https://github.com/Rev4nchist/Continuous-Claude-v3/blob/main/docs/memory-architecture.md" target="_blank" rel="noopener">memory-architecture</a> + <a href="https://github.com/Rev4nchist/Continuous-Claude-v3/blob/main/docs/continuous-claude-explained.md" target="_blank" rel="noopener">continuous-claude-explained</a>. &nbsp;|&nbsp; Diagrams: <a href="./hub.html">hub</a> · <a href="./hooks-visualization.html">hooks</a> · <a href="./agents-visualization.html">agents</a> (three diagrams). <span id="footer-date"></span>
 </footer>
 
-<!-- Embedded JSON fallback for file:// loads where fetch fails -->
+<!-- The one data source of this page: the generated graph. Written by scripts/architecture/build-system-map.mjs from architecture.src.json and the repo sources; a test proves it equals architecture.json. Never edit by hand. -->
 <script type="application/json" id="embedded-data">{
   "meta": {
     "name": "Continuous Claude v3",
     "tagline": "Memory + agents + hooks + skills scaffolding over Claude Code.",
-    "description": "Continuous Claude v3 (CCv3) is a scaffolding layer on top of Anthropic's Claude Code CLI. It adds persistent semantic memory, 31 specialized agents, ~90 lifecycle hooks, 145+ skills, a project knowledge tree, session continuity (handoffs + ledgers), a 5-layer AST analysis pipeline (TLDR), and a Docker-sandboxed Recursive Language Models (RLM) subsystem for analyzing very large corpora. The result is an AI coding workshop that remembers across sessions, dispatches specialist sub-agents, enforces house rules automatically, and resumes work cleanly across hours, days, and weeks.",
-    "lastVerified": "2026-05-12",
+    "description": "Continuous Claude v3 (CCv3) is a scaffolding layer on top of Anthropic's Claude Code CLI. It adds persistent semantic memory, specialized agents, lifecycle hooks, skills, written rules, a project knowledge tree, session continuity (handoffs + ledgers), a shared lane board for concurrent sessions, a guarded pull request pipeline, a review engine program, the Agentic OS cockpit, a 5-layer AST analysis pipeline (TLDR), and a Docker-sandboxed Recursive Language Models (RLM) subsystem for analyzing very large corpora. Every count on this page is computed from the repository by scripts/architecture/build-system-map.mjs.",
     "platform": "Windows + WSL + Docker",
     "sources": [
       "docs/continuous-claude-explained.md",
@@ -340,7 +339,19 @@
       "docs/architecture/diagrams/06-tldr-analysis-stack.md",
       "docs/architecture/rlm/rlm-architecture.md",
       "docs/memory-architecture.md"
-    ]
+    ],
+    "stats": {
+      "hookRegistrations": 85,
+      "hookFiles": 69,
+      "hookEvents": 9,
+      "hookUnparsed": 0,
+      "skills": 86,
+      "agents": 35,
+      "rulesSrc": 10,
+      "rulesOnDemand": 24,
+      "reviewLanes": 62
+    },
+    "generatedBy": "scripts/architecture/build-system-map.mjs"
   },
   "glossary": [
     {
@@ -353,7 +364,7 @@
     },
     {
       "term": "Skill",
-      "definition": "A named workflow recipe under .claude/skills/<name>/SKILL.md, triggered by a slash command or auto-activated by keyword/intent match."
+      "definition": "A named workflow recipe under .claude/skills/\u003cname>/SKILL.md, triggered by a slash command or auto-activated by keyword/intent match."
     },
     {
       "term": "Agent / Subagent",
@@ -377,7 +388,7 @@
     },
     {
       "term": "ROADMAP",
-      "definition": "Per-project ROADMAP.md auto-synced by 4 hooks; tracks goals and progress."
+      "definition": "Per-project ROADMAP.md auto-synced by hooks; tracks goals and progress."
     },
     {
       "term": "Ralph",
@@ -385,15 +396,15 @@
     },
     {
       "term": "Maestro",
-      "definition": "Multi-step orchestrator with explicit phase gates (recon \u2192 interview \u2192 approval \u2192 execute)."
+      "definition": "Multi-step orchestrator with explicit phase gates (recon → interview → approval → execute)."
     },
     {
       "term": "TLDR",
-      "definition": "5-layer AST analysis pipeline (L1 AST \u2192 L2 Call Graph \u2192 L3 CFG \u2192 L4 DFG \u2192 L5 PDG) that returns ~1,200 tokens for what would otherwise be ~23,000 raw tokens \u2014 95% savings."
+      "definition": "5-layer AST analysis pipeline (L1 AST → L2 Call Graph → L3 CFG → L4 DFG → L5 PDG) that returns ~1,200 tokens for what would otherwise be ~23,000 raw tokens — 95% savings."
     },
     {
       "term": "RLM",
-      "definition": "Recursive Language Models \u2014 a Docker-sandboxed agent that loads huge contexts (\u2265300K chars) into a Python REPL so the root model can write code to query it instead of stuffing it into the prompt."
+      "definition": "Recursive Language Models — a Docker-sandboxed agent that loads huge contexts (≥300K chars) into a Python REPL so the root model can write code to query it instead of stuffing it into the prompt."
     },
     {
       "term": "BGE",
@@ -405,7 +416,7 @@
     },
     {
       "term": "MCP",
-      "definition": "Model Context Protocol \u2014 Anthropic's standard for letting Claude talk to external services (GitHub, Notion, browsers, databases)."
+      "definition": "Model Context Protocol — Anthropic's standard for letting Claude talk to external services (GitHub, Notion, browsers, databases)."
     }
   ],
   "categories": [
@@ -413,13 +424,13 @@
       "id": "actor",
       "label": "Actor",
       "color": "#f97316",
-      "description": "Humans and the Claude Code CLI itself \u2014 the entry points to the system."
+      "description": "Humans and the Claude Code CLI itself — the entry points to the system."
     },
     {
       "id": "hook",
       "label": "Hook Layer",
       "color": "#facc15",
-      "description": "Lifecycle interceptors that inject context and enforce rules. 90+ hooks across 7 events."
+      "description": "Lifecycle interceptors that inject context and enforce rules."
     },
     {
       "id": "skill-routing",
@@ -443,7 +454,7 @@
       "id": "memory",
       "label": "Memory",
       "color": "#22c55e",
-      "description": "Persistent semantic memory \u2014 PostgreSQL + pgvector + BGE embeddings."
+      "description": "Persistent semantic memory — PostgreSQL + pgvector + BGE embeddings."
     },
     {
       "id": "knowledge-tree",
@@ -473,7 +484,7 @@
       "id": "rlm",
       "label": "RLM",
       "color": "#6366f1",
-      "description": "Recursive Language Models \u2014 Docker-sandboxed agent for very large corpora."
+      "description": "Recursive Language Models — Docker-sandboxed agent for very large corpora."
     },
     {
       "id": "orchestration",
@@ -485,13 +496,37 @@
       "id": "external",
       "label": "External",
       "color": "#6b7280",
-      "description": "Services outside CCv3 \u2014 Anthropic API, Docker daemon, BGE model running locally."
+      "description": "Services outside CCv3 — Anthropic API, Docker daemon, BGE model running locally."
     },
     {
-      "id": "telemetry",
-      "label": "Telemetry & Scoring",
-      "color": "#10b981",
-      "description": "Braintrust score emission + audit invariant guards. Tracks system quality across sessions."
+      "id": "rules",
+      "label": "Rules",
+      "color": "#84cc16",
+      "description": "Written house rules: always loaded, or loaded when an action matches."
+    },
+    {
+      "id": "coordination",
+      "label": "Coordination",
+      "color": "#0ea5e9",
+      "description": "The lane board and the decision gate for concurrent sessions."
+    },
+    {
+      "id": "review",
+      "label": "Review & Landing",
+      "color": "#f43f5e",
+      "description": "The pull request pipeline and the review engine program."
+    },
+    {
+      "id": "sync",
+      "label": "Sync",
+      "color": "#a3a3a3",
+      "description": "How the repo copy reaches the live copy."
+    },
+    {
+      "id": "app",
+      "label": "App",
+      "color": "#8b5cf6",
+      "description": "The Agentic OS cockpit."
     }
   ],
   "nodes": [
@@ -500,7 +535,7 @@
       "label": "User",
       "shortLabel": "User",
       "category": "actor",
-      "plain": "The human at the keyboard \u2014 the only thing in this diagram that isn't automated.",
+      "plain": "The human at the keyboard — the only thing in this diagram that isn't automated.",
       "mechanics": [
         "Types prompts in natural language.",
         "Approves plans before code is written.",
@@ -521,14 +556,14 @@
       "label": "Claude Code CLI",
       "shortLabel": "Claude CLI",
       "category": "actor",
-      "plain": "Anthropic's AI coding assistant \u2014 the engine that CCv3 wraps and extends.",
+      "plain": "Anthropic's AI coding assistant — the engine that CCv3 wraps and extends.",
       "mechanics": [
         "Runs in your terminal in any project folder.",
         "Reads CLAUDE.md and RULES.md on startup to learn the house rules.",
         "Dispatches every tool call, hook event, and agent spawn.",
         "Everything else in this diagram is layered on top of CLI events."
       ],
-      "summary": "Anthropic's coding agent \u2014 the runtime that CCv3 extends.",
+      "summary": "Anthropic's coding agent — the runtime that CCv3 extends.",
       "description": "Runs in any project directory. Loads CLAUDE.md, RULES.md, and the .claude/ tree. Dispatches all tool calls, hook events, and agent spawns. Every CCv3 capability is layered on top of CLI events.",
       "position": {
         "x": 80,
@@ -548,135 +583,29 @@
       "label": "Hook Layer",
       "shortLabel": "Hooks",
       "category": "hook",
-      "plain": "Small automated rules that fire at key moments \u2014 like lane-assist on a car. Inject context or block dangerous moves.",
+      "plain": "Small automated rules that fire at key moments — like lane-assist on a car. Inject context or block dangerous moves.",
       "mechanics": [
-        "90+ tiny TypeScript programs in .claude/hooks/.",
-        "Trigger on 7 lifecycle events: session start, prompt, before/after tool use, pre-compact, agent stop, session end.",
+        "Small TypeScript programs in .claude/hooks/. The registry lists every registration.",
+        "They fire on lifecycle events: session start, prompt, before and after a tool call, pre-compact, stop, notification and session end.",
         "Most just inject helpful context (memory matches, ROADMAP, skill hints).",
-        "5 can outright block a tool call \u2014 e.g. blocking 'pip install' on a malicious package."
+        "Some block a tool call outright, for example the decision gate, or the package guard that stops a malicious 'pip install'."
       ],
-      "summary": "90+ TypeScript hooks intercepting 7 lifecycle events.",
-      "description": "Hooks fire on SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, SubagentStop, and SessionEnd. PreToolUse hooks can BLOCK a tool call by returning permissionDecision='deny'. All other events inject context via hookSpecificOutput.additionalContext. Hooks are TypeScript in src/, esbuilt to dist/*.mjs, and registered in settings.json.",
+      "summary": "TypeScript hooks that intercept the lifecycle events of a session.",
+      "description": "Hooks fire on SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PreCompact, Stop, Notification and SessionEnd. PreToolUse hooks can BLOCK a tool call by returning permissionDecision='deny'. All other events inject context via hookSpecificOutput.additionalContext. Hooks are TypeScript in src/, esbuilt to dist/*.mjs, and registered in settings.json (the repo keeps the template).",
       "position": {
         "x": 320,
         "y": 150
       },
       "stats": {
-        "totalHooks": 112,
-        "events": 7,
-        "blockingHooks": 5
+        "registrations": 85,
+        "files": 69,
+        "events": 9,
+        "unparsed": 0
       },
       "files": [
         ".claude/hooks/src/*.ts",
         ".claude/hooks/dist/*.mjs",
-        "~/.claude/settings.json"
-      ],
-      "subcomponents": [
-        {
-          "name": "session-register",
-          "event": "SessionStart"
-        },
-        {
-          "name": "session-start-init-check",
-          "event": "SessionStart"
-        },
-        {
-          "name": "session-start-continuity",
-          "event": "SessionStart"
-        },
-        {
-          "name": "session-start-recovery",
-          "event": "SessionStart"
-        },
-        {
-          "name": "smarter-everyday",
-          "event": "SessionStart"
-        },
-        {
-          "name": "skill-activation-prompt",
-          "event": "UserPromptSubmit"
-        },
-        {
-          "name": "memory-awareness",
-          "event": "UserPromptSubmit"
-        },
-        {
-          "name": "roadmap-reconcile",
-          "event": "UserPromptSubmit"
-        },
-        {
-          "name": "ralph-progress-inject",
-          "event": "UserPromptSubmit"
-        },
-        {
-          "name": "file-claims",
-          "event": "PreToolUse:Edit"
-        },
-        {
-          "name": "tldr-read-enforcer",
-          "event": "PreToolUse:Read",
-          "blocking": true
-        },
-        {
-          "name": "smart-search-router",
-          "event": "PreToolUse:Grep",
-          "blocking": true
-        },
-        {
-          "name": "ralph-delegation-enforcer",
-          "event": "PreToolUse:Edit|Write",
-          "blocking": true
-        },
-        {
-          "name": "ralph-watchdog",
-          "event": "PreToolUse",
-          "blocking": true
-        },
-        {
-          "name": "plan-to-ralph-enforcer",
-          "event": "PreToolUse:Edit|Write",
-          "blocking": true
-        },
-        {
-          "name": "plan-exit-tracker",
-          "event": "PostToolUse:ExitPlanMode"
-        },
-        {
-          "name": "post-edit-diagnostics",
-          "event": "PostToolUse:Edit|Write"
-        },
-        {
-          "name": "tree-invalidate",
-          "event": "PostToolUse:Edit"
-        },
-        {
-          "name": "roadmap-auto-update",
-          "event": "PostToolUse"
-        },
-        {
-          "name": "pre-compact-continuity",
-          "event": "PreCompact"
-        },
-        {
-          "name": "pre-compact-extract",
-          "event": "PreCompact"
-        },
-        {
-          "name": "session-end-cleanup",
-          "event": "SessionEnd"
-        },
-        {
-          "name": "session-outcome",
-          "event": "SessionEnd"
-        },
-        {
-          "name": "lazy_memory",
-          "event": "SessionEnd"
-        },
-        {
-          "name": "periodic-extract",
-          "event": "SessionEnd"
-        }
+        ".claude/settings.json.template"
       ]
     },
     {
@@ -687,21 +616,17 @@
       "plain": "Matches what you ask for to the right pre-written playbook before Claude responds.",
       "mechanics": [
         "Scans every prompt for keywords and intent patterns.",
-        "Looks up 91 skills and 18 agents in skill-rules.json.",
+        "Looks up every skill and agent in skill-rules.json.",
         "Walks a dependency graph to load prerequisite skills first.",
         "Hands Claude a list of relevant skills to consider."
       ],
-      "summary": "Graph engine matching prompts \u2192 skills via keywords + intent + prerequisites.",
-      "description": "Three-layer pipeline: (1) 7 hardcoded high-confidence regex workflow triggers (e.g. /fix, /build, /commit) auto-invoke at 90%+ confidence, (2) every prompt matched against skill-rules.json (91 skills + 18 agents) for keywords and regex intent patterns, (3) skill-router.ts resolves prerequisite chains (require/suggest) and coActivate peers, then injects suggestions into Claude's context.",
+      "summary": "Graph engine matching prompts → skills via keywords + intent + prerequisites.",
+      "description": "Three-layer pipeline: (1) hardcoded high-confidence regex workflow triggers (e.g. /fix, /build, /commit) auto-invoke at 90%+ confidence, (2) every prompt matched against skill-rules.json for keywords and regex intent patterns, (3) skill-router.ts resolves prerequisite chains (require/suggest) and coActivate peers, then injects suggestions into Claude's context.",
       "position": {
         "x": 320,
         "y": 320
       },
-      "stats": {
-        "skills": 91,
-        "agents": 18,
-        "workflowTriggers": 7
-      },
+      "stats": {},
       "files": [
         ".claude/hooks/src/skill-router.ts",
         ".claude/hooks/src/skill-activation-prompt.ts",
@@ -713,23 +638,21 @@
       "label": "Skills Surface",
       "shortLabel": "Skills",
       "category": "skills",
-      "plain": "Named recipes for common tasks \u2014 like /commit, /fix, /recall \u2014 so Claude doesn't have to improvise.",
+      "plain": "Named recipes for common tasks — like /commit, /fix, /recall — so Claude doesn't have to improvise.",
       "mechanics": [
-        "145+ workflows under .claude/skills/<name>/SKILL.md.",
+        "145+ workflows under .claude/skills/\u003cname>/SKILL.md.",
         "Some are slash commands you type (/commit, /ralph, /maestro).",
         "Others auto-activate when keywords or intent match.",
         "26 are 'arscontexta' knowledge-vault skills with prerequisite chains."
       ],
       "summary": "145+ pre-written workflow playbooks.",
-      "description": "Skills are named recipes under .claude/skills/<name>/SKILL.md. Some are slash commands (/commit, /recall, /rlm-analyze, /ralph, /maestro). Others auto-activate on context match. The catalog includes meta-workflows (/build, /fix, /refactor, /review, /release) and 26 arscontexta skills with prerequisite graph fields.",
+      "description": "Skills are named recipes under .claude/skills/\u003cname>/SKILL.md. Some are slash commands (/commit, /recall, /rlm-analyze, /ralph, /maestro). Others auto-activate on context match. The catalog includes meta-workflows (/build, /fix, /refactor, /review, /release) and 26 arscontexta skills with prerequisite graph fields.",
       "position": {
         "x": 580,
         "y": 110
       },
       "stats": {
-        "totalSkills": "145+",
-        "arscontexta": 26,
-        "withGraphFields": 9
+        "total": 86
       },
       "files": [
         ".claude/skills/*/SKILL.md",
@@ -741,22 +664,21 @@
       "label": "Agent Roster",
       "shortLabel": "Agents",
       "category": "agents",
-      "plain": "Specialist AI helpers Claude can delegate work to \u2014 like a coordinator dispatching the right expert.",
+      "plain": "Specialist AI helpers Claude can delegate work to — like a coordinator dispatching the right expert.",
       "mechanics": [
         "31 specialists in 8 categories: research, implementation, testing, review, debug, orchestration, docs, security.",
         "Each runs in its own clean conversation (isolated context).",
         "Returns only a summary so the main chat stays focused.",
-        "Always inherit Opus \u2014 never the cheaper Haiku."
+        "Always inherit Opus — never the cheaper Haiku."
       ],
       "summary": "31 specialized sub-agents in 8 categories.",
-      "description": "Each agent has a focused prompt and runs in its own isolated context, returning only a summary to the main Claude. Categories: Research (scout, oracle, pathfinder, session-analyst, braintrust-analyst), Implementation (kraken, spark, architect, phoenix), Testing (arbiter, atlas, validate-agent), Review (critic, judge, liaison, review-agent, plan-reviewer, react-perf, ui-compliance, surveyor), Debug (debug-agent, sleuth, profiler), Orchestration (maestro, plan-agent, onboard), Documentation (scribe, herald, memory-extractor), Specialized (aegis, agentica-agent). Rule: never use model:haiku \u2014 always omit model parameter so agents inherit Opus.",
+      "description": "Each agent has a focused prompt and runs in its own isolated context, returning only a summary to the main Claude. Categories: Research (scout, oracle, pathfinder, session-analyst), Implementation (kraken, spark, architect, phoenix), Testing (arbiter, atlas, validate-agent), Review (critic, judge, liaison, review-agent, plan-reviewer, react-perf, ui-compliance, surveyor), Debug (debug-agent, sleuth, profiler), Orchestration (maestro, plan-agent, onboard), Documentation (scribe, herald, memory-extractor), Specialized (aegis, agentica-agent). Rule: never use model:haiku — always omit model parameter so agents inherit Opus.",
       "position": {
         "x": 580,
         "y": 280
       },
       "stats": {
-        "totalAgents": 43,
-        "categories": 8
+        "total": 35
       },
       "files": [
         ".claude/agents/*.md",
@@ -770,12 +692,12 @@
       "category": "tldr",
       "plain": "Compresses source code into a structured summary so Claude can read many more files per session.",
       "mechanics": [
-        "5 analysis layers, stacked: AST \u2192 call graph \u2192 control flow \u2192 data flow \u2192 program slice.",
-        "Returns ~1,200 tokens of summary vs ~23,000 raw code \u2014 about 95% smaller.",
+        "5 analysis layers, stacked: AST → call graph → control flow → data flow → program slice.",
+        "Returns ~1,200 tokens of summary vs ~23,000 raw code — about 95% smaller.",
         "Works for Python, TypeScript, Go, and Rust via tree-sitter.",
         "Fires automatically when Claude tries to read a code file (PreToolUse:Read)."
       ],
-      "summary": "5-layer AST pipeline \u2014 95% token savings vs raw code.",
+      "summary": "5-layer AST pipeline — 95% token savings vs raw code.",
       "description": "Layers (token budget per layer): L1 AST functions/classes/signatures (~500), L2 Call Graph cross-file (+440), L3 CFG control flow + cyclomatic complexity (+110), L4 DFG variable defs/uses (+130), L5 PDG program slicing (+150). Total ~1,200 tokens vs ~23,000 raw. Languages: Python, TypeScript, Go, Rust via tree-sitter. Activated by tldr-read-enforcer (PreToolUse:Read) and smart-search-router (PreToolUse:Grep) hooks. Additional commands: tldr structure, tldr impact, tldr dead, tldr arch, tldr diagnostics, tldr change-impact.",
       "position": {
         "x": 580,
@@ -796,16 +718,16 @@
       "label": "RLM Subsystem",
       "shortLabel": "RLM",
       "category": "rlm",
-      "plain": "Lets Claude analyze documents too big to fit in its memory \u2014 by loading them into a sandboxed Python instead.",
+      "plain": "Lets Claude analyze documents too big to fit in its memory — by loading them into a sandboxed Python instead.",
       "mechanics": [
         "Loads the huge text into a Python REPL inside a fresh Docker container.",
-        "The AI writes code to filter and query it \u2014 it never reads the whole thing.",
+        "The AI writes code to filter and query it — it never reads the whole thing.",
         "Six safety layers: frozen policy, refuse 'local' sandbox, 300K threshold, hard caps, container isolation, vanilla fallback.",
-        "Activates at \u2265300K characters; below that, falls back to cached vanilla Claude.",
+        "Activates at ≥300K characters; below that, falls back to cached vanilla Claude.",
         "Hard caps: max_depth=1, 20 iterations, 480s timeout, $2 budget."
       ],
-      "summary": "Docker-sandboxed agent for \u2265300K-char corpora.",
-      "description": "Implements Recursive Language Models (arXiv:2512.24601). Caller invokes rlm_complete(question, context, policy). 6-layer safety stack: (L1) frozen RLMPolicy, (L2) _assert_safe refuses sandbox='local' raising ValueError, (L3) threshold gate \u2014 <300K chars routes to vanilla cached Claude, (L4) rlms caps (max_depth=1, max_iterations=20, timeout=480s, budget=$2, max_tokens=500K), (L5) ephemeral Docker container (non-root, no host mount), (L6) fallback \u2014 any exception triggers vanilla Claude with truncated context. The root model never sees the full corpus \u2014 the REPL holds it and the model writes Python code to query it.",
+      "summary": "Docker-sandboxed agent for ≥300K-char corpora.",
+      "description": "Implements Recursive Language Models (arXiv:2512.24601). Caller invokes rlm_complete(question, context, policy). 6-layer safety stack: (L1) frozen RLMPolicy, (L2) _assert_safe refuses sandbox='local' raising ValueError, (L3) threshold gate — \u003c300K chars routes to vanilla cached Claude, (L4) rlms caps (max_depth=1, max_iterations=20, timeout=480s, budget=$2, max_tokens=500K), (L5) ephemeral Docker container (non-root, no host mount), (L6) fallback — any exception triggers vanilla Claude with truncated context. The root model never sees the full corpus — the REPL holds it and the model writes Python code to query it.",
       "position": {
         "x": 580,
         "y": 620
@@ -820,8 +742,7 @@
       "files": [
         "opc/scripts/core/rlm_client.py",
         "opc/scripts/pageindex/tree_search.py",
-        ".claude/docker/rlm-sandbox/Dockerfile",
-        "opc/scripts/core/rlm_braintrust.py"
+        ".claude/docker/rlm-sandbox/Dockerfile"
       ]
     },
     {
@@ -834,11 +755,11 @@
         "PostgreSQL with 4 tables: sessions, archival_memory, file_claims, handoffs.",
         "Every entry gets a 1024-dim semantic embedding for similarity search.",
         "Recall combines text matching (BM25) and vector search (cosine), fused with Hybrid RRF.",
-        "Auto-extracts learnings at 4 layers (L0\u2013L3); de-dupes at 0.85 similarity.",
-        "Quality gate auto-blocks low-signal 'NOISE' entries (score <3)."
+        "Auto-extracts learnings at 4 layers (L0–L3); de-dupes at 0.85 similarity.",
+        "Quality gate auto-blocks low-signal 'NOISE' entries (score \u003c3)."
       ],
       "summary": "PostgreSQL + pgvector + BGE-1024d embeddings.",
-      "description": "Four tables: sessions (cross-terminal awareness), archival_memory (learnings with 1024-dim BGE embeddings + scope tag), file_claims (per-file lock with composite PK (file_path, project)), handoffs (task completions with embeddings). Search via Hybrid RRF: score = 1/(60+text_rank) + 1/(60+vector_rank). Text rank via pg_trgm/BM25. Vector rank via pgvector cosine similarity. Dedup at 0.85 similarity. Storage layers L0-L3: L0 PostToolUse auto-extract (with NOISE quality gate <3), L1 PreCompact extraction, L2 SessionEnd lazy_memory, L3 manual /remember. Learning types: WORKING_SOLUTION, ERROR_FIX, CODEBASE_PATTERN, FAILED_APPROACH, ARCHITECTURAL_DECISION, USER_PREFERENCE.",
+      "description": "Four tables: sessions (cross-terminal awareness), archival_memory (learnings with 1024-dim BGE embeddings + scope tag), file_claims (per-file lock with composite PK (file_path, project)), handoffs (task completions with embeddings). Search via Hybrid RRF: score = 1/(60+text_rank) + 1/(60+vector_rank). Text rank via pg_trgm/BM25. Vector rank via pgvector cosine similarity. Dedup at 0.85 similarity. Storage layers L0-L3: L0 PostToolUse auto-extract (with NOISE quality gate \u003c3), L1 PreCompact extraction, L2 SessionEnd lazy_memory, L3 manual /remember. Learning types: WORKING_SOLUTION, ERROR_FIX, CODEBASE_PATTERN, FAILED_APPROACH, ARCHITECTURAL_DECISION, USER_PREFERENCE.",
       "position": {
         "x": 870,
         "y": 110
@@ -861,7 +782,7 @@
       "label": "Knowledge Tree",
       "shortLabel": "Knowledge Tree",
       "category": "knowledge-tree",
-      "plain": "An auto-generated map of your project \u2014 where things live and where new things should go.",
+      "plain": "An auto-generated map of your project — where things live and where new things should go.",
       "mechanics": [
         "One .claude/knowledge-tree.json per project.",
         "Marked stale automatically when files change.",
@@ -869,7 +790,7 @@
         "Answers navigation questions like 'where do tests go?' or 'how do I add an API endpoint?'"
       ],
       "summary": "Auto-generated project structure map.",
-      "description": "Per-project .claude/knowledge-tree.json describes folders, components, entry points, and navigation hints. Generated by knowledge_tree.py. Marked stale by tree-invalidate hook on file edits. Regenerated lazily by session-start-init-check when missing/stale. Queryable via query_tree.py for 'where to add tests', 'add_api_endpoint', etc. No persistent daemon \u2014 fully on-demand.",
+      "description": "Per-project .claude/knowledge-tree.json describes folders, components, entry points, and navigation hints. Generated by knowledge_tree.py. Marked stale by tree-invalidate hook on file edits. Regenerated lazily by session-start-init-check when missing/stale. Queryable via query_tree.py for 'where to add tests', 'add_api_endpoint', etc. No persistent daemon — fully on-demand.",
       "position": {
         "x": 870,
         "y": 250
@@ -892,13 +813,13 @@
       "category": "continuity",
       "plain": "Files that preserve work between sessions so you never start from zero the next morning.",
       "mechanics": [
-        "Continuity ledgers \u2014 markdown narratives of the conversation.",
-        "Handoff documents \u2014 YAML with explicit outcome (success / partial / failed).",
-        "Ralph state \u2014 autonomous-mode checkpoint so long runs survive restarts.",
+        "Continuity ledgers — markdown narratives of the conversation.",
+        "Handoff documents — YAML with explicit outcome (success / partial / failed).",
+        "Ralph state — autonomous-mode checkpoint so long runs survive restarts.",
         "Survives /compact via hook-managed YAML."
       ],
       "summary": "Filesystem-based session state transfer.",
-      "description": "Three artifact types: (1) Continuity Ledger \u2014 markdown narrative under thoughts/ledgers/ created by pre-compact-continuity, loaded by session-start-continuity. (2) Handoff Document \u2014 YAML under thoughts/shared/handoffs/{branch}/current.yaml created by /create_handoff skill, requires explicit outcome marker (SUCCEEDED, PARTIAL_PLUS, PARTIAL_MINUS, FAILED). (3) Ralph state \u2014 .ralph/state.json with task array, retry escalation, checkpoints. Survives /compact via hook-managed YAML handoffs.",
+      "description": "Three artifact types: (1) Continuity Ledger — markdown narrative under thoughts/ledgers/ created by pre-compact-continuity, loaded by session-start-continuity. (2) Handoff Document — YAML under thoughts/shared/handoffs/{branch}/current.yaml created by /create_handoff skill, requires explicit outcome marker (SUCCEEDED, PARTIAL_PLUS, PARTIAL_MINUS, FAILED). (3) Ralph state — .ralph/state.json with task array, retry escalation, checkpoints. Survives /compact via hook-managed YAML handoffs.",
       "position": {
         "x": 870,
         "y": 400
@@ -919,22 +840,20 @@
       "label": "ROADMAP",
       "shortLabel": "ROADMAP",
       "category": "roadmap",
-      "plain": "Your living goals doc \u2014 auto-updated as work happens, always visible to Claude.",
+      "plain": "Your living goals doc — auto-updated as work happens, always visible to Claude.",
       "mechanics": [
         "One ROADMAP.md per project.",
-        "4 hooks keep it in sync: one for prompts, three for tool actions (plan, commit, edit).",
+        "Hooks keep it in sync on prompts and on tool actions (plan, commit, edit).",
         "Goals visible in context on every prompt.",
         "Cross-project guard prevents pollution between simultaneous terminals."
       ],
       "summary": "Per-project goals with 4 auto-sync hooks.",
-      "description": "ROADMAP.md is the living goals/status document for each project. Four hooks keep it in sync: roadmap-reconcile (UserPromptSubmit \u2014 inject current ROADMAP context), roadmap-auto-update (PostToolUse \u2014 update after plan/commit actions), roadmap-plan-sync (PostToolUse \u2014 sync plan decisions), roadmap-commit-sync (PostToolUse \u2014 sync commit outcomes). Includes cross-project contamination guard that checks plan content against project-registry.json before writing.",
+      "description": "ROADMAP.md is the living goals/status document for each project. Four hooks keep it in sync: roadmap-reconcile (UserPromptSubmit — inject current ROADMAP context), roadmap-auto-update (PostToolUse — update after plan/commit actions), roadmap-plan-sync (PostToolUse — sync plan decisions), roadmap-commit-sync (PostToolUse — sync commit outcomes). Includes cross-project contamination guard that checks plan content against project-registry.json before writing.",
       "position": {
         "x": 870,
         "y": 540
       },
-      "stats": {
-        "syncHooks": 4
-      },
+      "stats": {},
       "files": [
         "ROADMAP.md",
         ".claude/project-registry.json"
@@ -945,15 +864,15 @@
       "label": "Orchestrators",
       "shortLabel": "Maestro / Ralph",
       "category": "orchestration",
-      "plain": "Two modes that drive multi-step work for you \u2014 one with checkpoints, one fully autonomous.",
+      "plain": "Two modes that drive multi-step work for you — one with checkpoints, one fully autonomous.",
       "mechanics": [
-        "Maestro: phased work with explicit gates (recon \u2192 interview \u2192 approval \u2192 execute). You approve at each phase.",
+        "Maestro: phased work with explicit gates (recon → interview → approval → execute). You approve at each phase.",
         "Ralph: fully autonomous loop bounded by iteration limits (10 / 30 / 50 by task size).",
         "Both delegate the actual work to the agent roster.",
-        "Ralph blocks direct edits \u2014 only agents can touch code."
+        "Ralph blocks direct edits — only agents can touch code."
       ],
       "summary": "Maestro (phase-gated) + Ralph (autonomous loops).",
-      "description": "Maestro mode (/maestro): recon \u2192 interview \u2192 approval \u2192 execute, enforced by maestro-enforcer hook \u2014 skipping interview is blocked. State in .claude/maestro-state.json. Ralph mode (/ralph): autonomous PRD-driven dev where agents do the implementation. Iteration limits: 10 (small), 30 (medium), 50 (large) \u2014 enforced by ralph-watchdog. Edits blocked by ralph-delegation-enforcer; only agents can touch code. Retry escalation: Same agent \u2192 Same+context \u2192 spark \u2192 debug-agent \u2192 BLOCKED. Survives /compact via ralph-checkpoint.py.",
+      "description": "Maestro mode (/maestro): recon → interview → approval → execute, enforced by maestro-enforcer hook — skipping interview is blocked. State in .claude/maestro-state.json. Ralph mode (/ralph): autonomous PRD-driven dev where agents do the implementation. Iteration limits: 10 (small), 30 (medium), 50 (large) — enforced by ralph-watchdog. Edits blocked by ralph-delegation-enforcer; only agents can touch code. Retry escalation: Same agent → Same+context → spark → debug-agent → BLOCKED. Survives /compact via ralph-checkpoint.py.",
       "position": {
         "x": 320,
         "y": 490
@@ -976,7 +895,7 @@
       "label": "Anthropic API",
       "shortLabel": "Anthropic API",
       "category": "external",
-      "plain": "The cloud LLM that powers all the thinking \u2014 every prompt eventually reaches it.",
+      "plain": "The cloud LLM that powers all the thinking — every prompt eventually reaches it.",
       "mechanics": [
         "Default model: Claude Opus 4.7.",
         "Used by the main CLI, every spawned agent, and the RLM iteration loop.",
@@ -1005,10 +924,10 @@
         "PostgreSQL container holds memory + sessions + file claims + handoffs.",
         "RLM sandbox container is spun up fresh per analysis call.",
         "Sandbox is non-root, has no access to your filesystem, and is destroyed after use.",
-        "Required for CCv3 to start \u2014 if Docker is off, memory and RLM won't work."
+        "Required for CCv3 to start — if Docker is off, memory and RLM won't work."
       ],
       "summary": "Sandbox + PostgreSQL container runtime.",
-      "description": "Hosts two containers: (1) continuous-claude-postgres \u2014 PostgreSQL with pgvector extension serving the memory/sessions/file_claims/handoffs tables, (2) continuous-claude/rlm-sandbox:3.11 \u2014 ephemeral python:3.11-slim with dill+regex, non-root user, no host mount, spun up per RLM call. Path: 'C:/Program Files/Docker/Docker/resources/bin/docker.exe'.",
+      "description": "Hosts two containers: (1) continuous-claude-postgres — PostgreSQL with pgvector extension serving the memory/sessions/file_claims/handoffs tables, (2) continuous-claude/rlm-sandbox:3.11 — ephemeral python:3.11-slim with dill+regex, non-root user, no host mount, spun up per RLM call. Path: 'C:/Program Files/Docker/Docker/resources/bin/docker.exe'.",
       "position": {
         "x": 1100,
         "y": 500
@@ -1022,41 +941,6 @@
       ]
     },
     {
-      "id": "braintrust-scoring",
-      "label": "Braintrust Scoring",
-      "shortLabel": "Braintrust",
-      "category": "telemetry",
-      "plain": "Quality telemetry layer. Tracks 4 score dimensions across hooks and protects against silent regression via an invariant guard.",
-      "mechanics": [
-        "4 score dimensions: memory_recall_relevance, hook_health_ratio, agent_task_success, skill_trigger_accuracy.",
-        "shared/braintrust-score.ts helper with fail-open behavior and 2s timeout on every emit.",
-        "Await-only emit pattern enforced by scripts/audit-braintrust-emits.sh with INVARIANT_4 guard (baseline count = 4).",
-        "History of 6 regression events where the memory-awareness emit was silently dropped by agent rewrites.",
-        "Today's R1+R2+R3+R5+R6+R9 spark hardening landed Braintrust-aware audit, post-spark verification, and a documented recovery procedure."
-      ],
-      "summary": "4-dimension Braintrust telemetry with INVARIANT_4 audit guard.",
-      "description": "Quality scoring layer that emits Braintrust spans from key hooks (memory recall, hook health, ralph task completion, skill activation). The shared helper (shared/braintrust-score.ts) wraps emission in fail-open try/catch with a 2-second timeout so a downed Braintrust endpoint never blocks the hook chain. Because the emit calls are top-level void/await statements that look 'stray' to agents regenerating a TS file from context, they have been silently dropped 6 times. The audit script (scripts/audit-braintrust-emits.sh) greps all hook source files for emit call sites and asserts the count equals INVARIANT_4=4. Today's spark hardening added that audit invariant + post-spark verification + a documented recovery procedure to docs/spark-agent-issues-2026-05-23.md.",
-      "position": {
-        "x": 900,
-        "y": 660
-      },
-      "stats": {
-        "dimensions": 4,
-        "emit_sites": 4,
-        "invariant": 4,
-        "regressions_caught": 6
-      },
-      "files": [
-        ".claude/hooks/src/shared/braintrust-score.ts",
-        ".claude/hooks/src/memory-awareness.ts",
-        ".claude/hooks/src/hook-health-monitor.ts",
-        ".claude/hooks/src/ralph-task-monitor.ts",
-        ".claude/hooks/src/telemetry-tracker.ts",
-        "scripts/audit-braintrust-emits.sh",
-        "docs/spark-agent-issues-2026-05-23.md"
-      ]
-    },
-    {
       "id": "embedding-daemon",
       "label": "Embedding Daemon",
       "shortLabel": "Embedding Daemon",
@@ -1065,7 +949,7 @@
       "mechanics": [
         "BAAI/bge-large-en-v1.5 model, 1024-dim embeddings, runs locally with no API call.",
         "PID and port written to $TEMP/ccv3-embedding.json on start so any client can discover it.",
-        "TS hooks connect via shared/embedding-client.ts (TCP loopback) \u2014 no shell exec or subprocess spawn per call.",
+        "TS hooks connect via shared/embedding-client.ts (TCP loopback) — no shell exec or subprocess spawn per call.",
         "Windows Task Scheduler lifecycle via install-embedding-daemon-task.ps1, start-embedding-daemon.ps1, uninstall-embedding-daemon-task.ps1.",
         "Commands: embed, ping, embed_batch, shutdown."
       ],
@@ -1086,6 +970,192 @@
         "scripts/install-embedding-daemon-task.ps1",
         "scripts/start-embedding-daemon.ps1",
         "scripts/uninstall-embedding-daemon-task.ps1"
+      ]
+    },
+    {
+      "id": "rules",
+      "label": "Rules",
+      "shortLabel": "Rules",
+      "category": "rules",
+      "plain": "Written house rules. Some load at every session start; others load only when an action matches.",
+      "mechanics": [
+        "Always-loaded rules live in .claude/rules-src/ and sync to ~/.claude/rules/.",
+        "On-demand rules live in .claude/rules-ondemand/ and load at the first matching tool call.",
+        "The rule-router hook reads manifest.json to decide which rule a call needs.",
+        "A rule edit goes to the repo copy only; forward sync installs it."
+      ],
+      "summary": "Always-loaded and on-demand rules.",
+      "description": "Rules are markdown files. The always-loaded set is paid for in every session, so it stays small. An on-demand rule has a trigger in manifest.json; the rule-router hook injects it, or blocks the first call and gives the rule as the reason. The repo copy is canonical.",
+      "position": {
+        "x": 80,
+        "y": 400
+      },
+      "stats": {
+        "alwaysLoaded": 10,
+        "onDemand": 24
+      },
+      "files": [
+        ".claude/rules-src/",
+        ".claude/rules-ondemand/",
+        ".claude/rules-ondemand/manifest.json"
+      ]
+    },
+    {
+      "id": "lane-board",
+      "label": "Lane Board",
+      "shortLabel": "Lane Board",
+      "category": "coordination",
+      "plain": "A shared board of work cards. A session claims a card before it edits, and the others see who holds what.",
+      "mechanics": [
+        "A lane is one unit of work. A session claims it by id with lane.mjs; one session wins.",
+        "Lanes, notes and events live in Postgres (the agentic_os schema).",
+        "A claim holds a lease that renews at each prompt; a quiet holder loses it.",
+        "The phone page is rendered from the same rows by render-board.mjs, with listed ids masked."
+      ],
+      "summary": "Claimed lanes in Postgres, shown on a phone page.",
+      "description": "The lane board lets many Claude sessions work in one repo without edit clashes. Each lane has an owner, a state, a band (P0, P1, P2), a note and a lease. Sessions send each other plain text messages. Dave sets priority on the kanban page; the kanban-sync skill carries it into the database.",
+      "position": {
+        "x": 80,
+        "y": 800
+      },
+      "stats": {},
+      "files": [
+        "scripts/coordination/lane.mjs",
+        "scripts/coordination/render-board.mjs",
+        "scripts/coordination/board-mask.mjs",
+        ".claude/rules-ondemand/lane-board.md",
+        "COORDINATION.md"
+      ]
+    },
+    {
+      "id": "decision-gate",
+      "label": "Decision Gate",
+      "shortLabel": "Decision Gate",
+      "category": "coordination",
+      "plain": "A guard that refuses a PR create, a land or a merge until Dave has tapped yes.",
+      "mechanics": [
+        "A hook on tool calls reads each command before it runs.",
+        "An offer is a question asked with AskUserQuestion; a decision is Dave's tap, single use.",
+        "Without a recorded decision, a PR create, a land or a merge is denied.",
+        "A block is a finding: the session must not route around it."
+      ],
+      "summary": "Dave's tap is the key for outward actions.",
+      "description": "The decision-gate hook denies a PR create, a land, a merge and a store write unless the decision ledger holds a matching tap. The tap is bound to one head and is used once. ship-ask.mjs and pr_checkpoint print the question word for word, so the tap can be matched.",
+      "position": {
+        "x": 320,
+        "y": 800
+      },
+      "stats": {},
+      "files": [
+        ".claude/hooks/src/decision-gate.ts",
+        ".claude/hooks/src/decision-ledger.ts",
+        "scripts/github/ship-ask.mjs"
+      ]
+    },
+    {
+      "id": "pr-pipeline",
+      "label": "PR and Review Pipeline",
+      "shortLabel": "PR Pipeline",
+      "category": "review",
+      "plain": "The road from a branch to main: checks, a draft PR, CI, one review pick, then a land with Dave's tap.",
+      "mechanics": [
+        "pre-pr.mjs runs the gates and writes a stamp for the head.",
+        "A PR opens as a draft through the GitHub API; the stamp must match the head.",
+        "review-router.mjs sets a risk band; below HIGH no paid bot reviews the PR.",
+        "land-pr.ps1 merges after CI is green and Dave's tap."
+      ],
+      "summary": "Gates, draft PR, CI, land.",
+      "description": "Every change to this repo goes by one pull request. pre-pr runs the gates (tests, ratchets, scans, the CodeRabbit CLI when the band asks for it). The review pick and the land are Dave's taps. After the merge the sync model copies main to the live copy.",
+      "position": {
+        "x": 580,
+        "y": 800
+      },
+      "stats": {},
+      "files": [
+        "scripts/github/pre-pr.mjs",
+        "scripts/github/review-router.mjs",
+        "scripts/github/land-pr.ps1",
+        "scripts/github/ship-ask.mjs",
+        ".github/workflows/ccv3-checks.yml"
+      ]
+    },
+    {
+      "id": "review-engine",
+      "label": "Review Engine",
+      "shortLabel": "Review Engine",
+      "category": "review",
+      "plain": "A program that replaces the paid review bot with our own engine, built lane by lane.",
+      "mechanics": [
+        "The program map lists every lane in waves: docs/review-engine/map.md.",
+        "One seat session holds the master card and rules each step with Dave.",
+        "Lanes are named re-\u003ctopic>; each lands by its own PR.",
+        "The page counts the lanes from the Waves table, not by hand."
+      ],
+      "summary": "The program map and its lanes.",
+      "description": "The review engine program has a map, a seat that coordinates, and a set of lanes in waves. The map is a markdown file; this page reads its Waves table.",
+      "position": {
+        "x": 870,
+        "y": 800
+      },
+      "stats": {
+        "lanes": 62,
+        "phases": 10,
+        "waves": 12
+      },
+      "files": [
+        "docs/review-engine/map.md",
+        "docs/review-engine/README.md",
+        "scripts/review-engine/"
+      ]
+    },
+    {
+      "id": "sync-model",
+      "label": "Sync Model",
+      "shortLabel": "Sync",
+      "category": "sync",
+      "plain": "Two copies of the harness: the repo (source) and the live ~/.claude. Sync copies the repo to the live copy.",
+      "mechanics": [
+        "The repo (~/continuous-claude) is canonical; ~/.claude is what Claude Code reads.",
+        "Forward sync copies repo to live when a commit lands on main in the primary checkout.",
+        "Reverse sync is manual only.",
+        "Drift means the two differ; a direct edit of the live copy is quarantined, then overwritten."
+      ],
+      "summary": "Repo to live copy, one way.",
+      "description": "scripts/sync-to-active.sh does the forward sync and keeps a cursor of the last main commit synced. Hook sources and settings.json are never synced: hooks are built to dist, and the template is rendered.",
+      "position": {
+        "x": 900,
+        "y": 660
+      },
+      "stats": {},
+      "files": [
+        "scripts/sync-to-active.sh",
+        "scripts/sync-claude.sh",
+        "CONTEXT.md"
+      ]
+    },
+    {
+      "id": "agentic-os",
+      "label": "Agentic OS",
+      "shortLabel": "Agentic OS",
+      "category": "app",
+      "plain": "A web app that shows the lane board, sessions and spend in one cockpit.",
+      "mechanics": [
+        "A Next.js app in apps/agentic-os with its own Postgres schema, agentic_os.",
+        "Read-only readers show stalls, open questions, decisions, the clock and scheduled tasks.",
+        "Each reader reports ok, degraded or error: a cut or stale read is never shown as complete.",
+        "A mask hides every listed id before text leaves the server."
+      ],
+      "summary": "The cockpit for many sessions.",
+      "description": "Agentic OS reads the lane table, the open PR feed, session state files, decisions.json and tasks.json. The pure rules sit in src/lib and the reads in src/server. Database tests run only on a scratch database.",
+      "position": {
+        "x": 1100,
+        "y": 800
+      },
+      "stats": {},
+      "files": [
+        "apps/agentic-os/src/server/queries/readers.ts",
+        "apps/agentic-os/src/lib/reader-sources.ts",
+        "apps/agentic-os/src/lib/listed-id-mask.ts"
       ]
     }
   ],
@@ -1143,7 +1213,7 @@
     },
     {
       "id": "user-prompt-skill",
-      "label": "User Prompt \u2192 Skill Activation",
+      "label": "User Prompt → Skill Activation",
       "category": "routing",
       "description": "Every prompt is routed through the skill graph engine before Claude responds.",
       "outcome": "Skills resolved with prerequisites and co-activation peers; suggestions injected into Claude's context.",
@@ -1158,13 +1228,13 @@
           "n": 2,
           "node": "hooks",
           "action": "skill-activation-prompt fires (UserPromptSubmit)",
-          "detail": "Runs 3-layer pipeline: workflow triggers (regex) \u2192 keyword/intent match \u2192 graph resolution."
+          "detail": "Runs 3-layer pipeline: workflow triggers (regex) → keyword/intent match → graph resolution."
         },
         {
           "n": 3,
           "node": "skill-routing",
           "action": "Match against skill-rules.json",
-          "detail": "91 skills + 18 agents indexed by keywords and intent regex."
+          "detail": "Every skill and agent is indexed by keywords and intent regex."
         },
         {
           "n": 4,
@@ -1248,7 +1318,7 @@
           "n": 3,
           "node": "memory",
           "action": "SELECT claim from file_claims",
-          "detail": "If row exists for another session within the heartbeat window \u2014 emit warning. If not \u2014 INSERT new claim."
+          "detail": "If row exists for another session within the heartbeat window — emit warning. If not — INSERT new claim."
         },
         {
           "n": 4,
@@ -1275,7 +1345,7 @@
           "n": 2,
           "node": "hooks",
           "action": "pre-compact-continuity + pre-compact-extract fire",
-          "detail": "Two hooks run: one writes the handoff, the other extracts learnings from <thinking> blocks."
+          "detail": "Two hooks run: one writes the handoff, the other extracts learnings from \u003cthinking> blocks."
         },
         {
           "n": 3,
@@ -1319,7 +1389,7 @@
         {
           "n": 3,
           "node": "memory",
-          "action": "L0 quality gate blocks NOISE (score < 3)",
+          "action": "L0 quality gate blocks NOISE (score \u003c 3)",
           "detail": "Prevents low-signal entries from polluting recall results."
         },
         {
@@ -1352,7 +1422,7 @@
       "id": "knowledge-tree-regen",
       "label": "Knowledge Tree Regeneration",
       "category": "navigation",
-      "description": "Trees are marked stale on edits and rebuilt lazily on next session start \u2014 no persistent daemon.",
+      "description": "Trees are marked stale on edits and rebuilt lazily on next session start — no persistent daemon.",
       "outcome": "Fresh .claude/knowledge-tree.json with current structure and navigation hints.",
       "steps": [
         {
@@ -1385,7 +1455,7 @@
       "id": "roadmap-sync",
       "label": "ROADMAP Auto-Sync",
       "category": "continuity",
-      "description": "Four hooks keep ROADMAP.md aligned with plans, commits, and active goals \u2014 across multiple terminals.",
+      "description": "Four hooks keep ROADMAP.md aligned with plans, commits, and active goals — across multiple terminals.",
       "outcome": "ROADMAP.md updated on every significant action; current goals always visible in context.",
       "steps": [
         {
@@ -1398,13 +1468,13 @@
           "n": 2,
           "node": "hooks",
           "action": "roadmap-reconcile injects ROADMAP context",
-          "detail": "UserPromptSubmit \u2014 Claude sees current goals on every prompt."
+          "detail": "UserPromptSubmit — Claude sees current goals on every prompt."
         },
         {
           "n": 3,
           "node": "hooks",
           "action": "roadmap-auto-update writes after plan/commit",
-          "detail": "PostToolUse \u2014 incorporates new decisions."
+          "detail": "PostToolUse — incorporates new decisions."
         },
         {
           "n": 4,
@@ -1449,7 +1519,7 @@
           "n": 4,
           "node": "cli",
           "action": "Summary returns to main Claude",
-          "detail": "Main context stays clean \u2014 only the synthesized answer comes back."
+          "detail": "Main context stays clean — only the synthesized answer comes back."
         }
       ]
     },
@@ -1457,7 +1527,7 @@
       "id": "maestro-orchestration",
       "label": "Maestro Multi-Step Orchestration",
       "category": "orchestration",
-      "description": "Phase-gated workflow for complex tasks: recon \u2192 interview \u2192 approval \u2192 execute. Each gate is hook-enforced.",
+      "description": "Phase-gated workflow for complex tasks: recon → interview → approval → execute. Each gate is hook-enforced.",
       "outcome": "Multi-step task executed with explicit user approvals at each phase.",
       "steps": [
         {
@@ -1469,25 +1539,25 @@
         {
           "n": 2,
           "node": "orchestrators",
-          "action": "Phase 1 \u2014 Recon",
+          "action": "Phase 1 — Recon",
           "detail": "Read context, current state, relevant code."
         },
         {
           "n": 3,
           "node": "orchestrators",
-          "action": "Phase 2 \u2014 Interview (GATE)",
+          "action": "Phase 2 — Interview (GATE)",
           "detail": "Ask clarifying questions. maestro-enforcer hook blocks agents until interview completes."
         },
         {
           "n": 4,
           "node": "orchestrators",
-          "action": "Phase 3 \u2014 Approval (GATE)",
+          "action": "Phase 3 — Approval (GATE)",
           "detail": "Present plan. Wait for user approval before execution."
         },
         {
           "n": 5,
           "node": "agents",
-          "action": "Phase 4 \u2014 Execute via specialists",
+          "action": "Phase 4 — Execute via specialists",
           "detail": "Maestro dispatches work to scout/kraken/spark/arbiter/critic etc."
         },
         {
@@ -1502,7 +1572,7 @@
       "id": "ralph-autonomous",
       "label": "Ralph Autonomous Loop",
       "category": "orchestration",
-      "description": "Fully autonomous PRD-driven development. Edits blocked at the main thread \u2014 only agents touch code. Bounded iterations with retry escalation.",
+      "description": "Fully autonomous PRD-driven development. Edits blocked at the main thread — only agents touch code. Bounded iterations with retry escalation.",
       "outcome": "Feature implemented end-to-end with iteration tracking and structured handoff.",
       "steps": [
         {
@@ -1515,7 +1585,7 @@
           "n": 2,
           "node": "hooks",
           "action": "ralph-delegation-enforcer activates",
-          "detail": "PreToolUse:Edit|Write now blocks direct edits \u2014 main Claude must delegate."
+          "detail": "PreToolUse:Edit|Write now blocks direct edits — main Claude must delegate."
         },
         {
           "n": 3,
@@ -1533,7 +1603,7 @@
           "n": 5,
           "node": "orchestrators",
           "action": "Retry escalation on failure",
-          "detail": "Same agent \u2192 Same+error context \u2192 spark \u2192 debug-agent \u2192 BLOCKED (user intervention)."
+          "detail": "Same agent → Same+error context → spark → debug-agent → BLOCKED (user intervention)."
         },
         {
           "n": 6,
@@ -1547,7 +1617,7 @@
       "id": "tldr-read-enforcement",
       "label": "TLDR Read Enforcement",
       "category": "analysis",
-      "description": "Reads of analyzable source files are intercepted and replaced with 5-layer AST summaries \u2014 95% token savings.",
+      "description": "Reads of analyzable source files are intercepted and replaced with 5-layer AST summaries — 95% token savings.",
       "outcome": "Claude gets ~1,200 tokens of structured analysis instead of ~23,000 raw tokens.",
       "steps": [
         {
@@ -1572,7 +1642,7 @@
           "n": 4,
           "node": "cli",
           "action": "Structured summary returned",
-          "detail": "Claude sees functions, calls, complexity, data flow, slicing \u2014 can drill down via tldr extract or full Read if needed."
+          "detail": "Claude sees functions, calls, complexity, data flow, slicing — can drill down via tldr extract or full Read if needed."
         }
       ]
     },
@@ -1580,7 +1650,7 @@
       "id": "rlm-analysis",
       "label": "RLM Analysis (Huge Corpus)",
       "category": "analysis",
-      "description": "Question over a \u2265300K-char corpus is routed into a Docker-sandboxed agent that holds the data in a REPL \u2014 the root model never sees the full text.",
+      "description": "Question over a ≥300K-char corpus is routed into a Docker-sandboxed agent that holds the data in a REPL — the root model never sees the full text.",
       "outcome": "RLMResult with answer + trajectory; falls back to vanilla cached Claude on any failure.",
       "steps": [
         {
@@ -1592,25 +1662,25 @@
         {
           "n": 2,
           "node": "rlm",
-          "action": "Safety Layer 1-2 \u2014 frozen policy + _assert_safe",
-          "detail": "Refuses sandbox='local' (raises ValueError \u2014 'RCE-by-LLM')."
+          "action": "Safety Layer 1-2 — frozen policy + _assert_safe",
+          "detail": "Refuses sandbox='local' (raises ValueError — 'RCE-by-LLM')."
         },
         {
           "n": 3,
           "node": "rlm",
-          "action": "Safety Layer 3 \u2014 threshold gate",
-          "detail": "If context < 300K chars \u2192 route to vanilla cached Claude (path='vanilla-threshold')."
+          "action": "Safety Layer 3 — threshold gate",
+          "detail": "If context \u003c 300K chars → route to vanilla cached Claude (path='vanilla-threshold')."
         },
         {
           "n": 4,
           "node": "docker",
-          "action": "Safety Layer 4-5 \u2014 spawn Docker sandbox",
+          "action": "Safety Layer 4-5 — spawn Docker sandbox",
           "detail": "continuous-claude/rlm-sandbox:3.11, non-root, no host mount, ephemeral. rlms agent caps: max_depth=1, max_iters=20, timeout=480s, budget=$2."
         },
         {
           "n": 5,
           "node": "rlm",
-          "action": "RLM iteration loop \u2194 REPL",
+          "action": "RLM iteration loop ↔ REPL",
           "detail": "Root model sees only metadata ('context is a str with N chars'); it writes Python code, the REPL runs it, results stream back. Up to 20 iterations."
         },
         {
@@ -1623,7 +1693,7 @@
           "n": 7,
           "node": "rlm",
           "action": "FINAL answer OR Layer 6 fallback",
-          "detail": "On FINAL \u2192 RLMResult{path='rlm'}. On timeout/budget/exception \u2192 truncate to 900K chars + vanilla cached Claude (path='vanilla-fallback')."
+          "detail": "On FINAL → RLMResult{path='rlm'}. On timeout/budget/exception → truncate to 900K chars + vanilla cached Claude (path='vanilla-fallback')."
         }
       ]
     },
@@ -1680,7 +1750,7 @@
     },
     {
       "id": "plan-to-ralph-enforcement",
-      "label": "Plan \u2192 Ralph Enforcement",
+      "label": "Plan → Ralph Enforcement",
       "category": "safety",
       "description": "Once a plan is approved via ExitPlanMode, direct code edits on .ts/.py/.go are blocked unless Ralph is active. Forces delegation.",
       "outcome": "Code edits routed through Ralph agents; config/doc edits pass through unchanged.",
@@ -1689,7 +1759,7 @@
           "n": 1,
           "node": "cli",
           "action": "Claude calls ExitPlanMode",
-          "detail": "Plan written to .claude/plans/<name>.md; user approves."
+          "detail": "Plan written to .claude/plans/\u003cname>.md; user approves."
         },
         {
           "n": 2,
@@ -1713,58 +1783,13 @@
           "n": 5,
           "node": "hooks",
           "action": "Decision: ALLOW or DENY",
-          "detail": "Code file (.ts/.py/.go) + Ralph not active \u2192 DENY with permissionDecision='deny'. Config/doc (.md/.json/.yaml) \u2192 ALLOW. Ralph active \u2192 ALLOW."
+          "detail": "Code file (.ts/.py/.go) + Ralph not active → DENY with permissionDecision='deny'. Config/doc (.md/.json/.yaml) → ALLOW. Ralph active → ALLOW."
         },
         {
           "n": 6,
           "node": "orchestrators",
-          "action": "Recovery \u2014 invoke /ralph",
+          "action": "Recovery — invoke /ralph",
           "detail": "User runs /ralph to enter autonomous mode, or deletes the state file to bypass."
-        }
-      ]
-    },
-    {
-      "id": "braintrust-emit-and-audit",
-      "label": "Braintrust Emit + Audit Invariant",
-      "category": "telemetry",
-      "description": "On every relevant hook event, a Braintrust score is emitted via the shared helper; an audit script later asserts the emit count invariant hasn't been silently broken.",
-      "outcome": "Score dimension recorded in Braintrust; invariant=4 holds, no silent regression.",
-      "steps": [
-        {
-          "n": 1,
-          "node": "user",
-          "action": "Submit a prompt",
-          "detail": "Any UserPromptSubmit will trigger the memory-awareness hook which is one of the emit sites."
-        },
-        {
-          "n": 2,
-          "node": "hooks",
-          "action": "memory-awareness fires (UserPromptSubmit)",
-          "detail": "Hook runs recall + relevance scoring; on completion it prepares to emit a Braintrust score."
-        },
-        {
-          "n": 3,
-          "node": "braintrust-scoring",
-          "action": "resolveBraintrustSpan returns a span context",
-          "detail": "shared/braintrust-score.ts wires the current session_id + parent run into a span used for the emit."
-        },
-        {
-          "n": 4,
-          "node": "braintrust-scoring",
-          "action": "Emit score via shared helper (await, fail-open, 2s timeout)",
-          "detail": "void emitBraintrustScore({dimension, value, span}) \u2014 wrapped in try/catch so a downed endpoint never blocks the hook chain."
-        },
-        {
-          "n": 5,
-          "node": "braintrust-scoring",
-          "action": "scripts/audit-braintrust-emits.sh verifies invariant",
-          "detail": "Greps all hook source files for emit call sites; asserts count equals INVARIANT_4=4. Fails build if an emit was silently dropped (6 prior regressions caught this way)."
-        },
-        {
-          "n": 6,
-          "node": "external",
-          "action": "Score row visible in Braintrust dashboard",
-          "detail": "If TRACE_TO_BRAINTRUST=1 and BRAINTRUST_API_KEY are set, the dimension shows up in the project's score time-series."
         }
       ]
     },
@@ -1791,7 +1816,7 @@
           "n": 3,
           "node": "embedding-daemon",
           "action": "shared/embedding-client.ts connects via TCP loopback",
-          "detail": "Reads daemon PID + port from $TEMP/ccv3-embedding.json; opens a connection \u2014 no subprocess spawn, no model load."
+          "detail": "Reads daemon PID + port from $TEMP/ccv3-embedding.json; opens a connection — no subprocess spawn, no model load."
         },
         {
           "n": 4,
@@ -1812,8 +1837,1378 @@
           "detail": "Top-K relevant prior learnings appear in Claude's context within ~100ms instead of after a half-minute cold start."
         }
       ]
+    },
+    {
+      "id": "lane-claim-to-land",
+      "label": "Lane claim to a landed PR",
+      "category": "coordination",
+      "description": "A session claims a lane, works on a branch, and lands one PR with Dave's taps.",
+      "outcome": "The change is on main and the live copy follows.",
+      "steps": [
+        {
+          "n": 1,
+          "node": "cli",
+          "action": "A session claims a lane",
+          "detail": "lane.mjs claim \u003cid> gives one session the lane; the others see the holder."
+        },
+        {
+          "n": 2,
+          "node": "lane-board",
+          "action": "The board records the claim and the notes",
+          "detail": "A lease renews at each prompt. The phone page shows the same rows."
+        },
+        {
+          "n": 3,
+          "node": "decision-gate",
+          "action": "A PR create, land or merge needs Dave's tap",
+          "detail": "The hook denies the call until the decision ledger holds a matching tap."
+        },
+        {
+          "n": 4,
+          "node": "pr-pipeline",
+          "action": "pre-pr, draft PR, CI, land",
+          "detail": "pre-pr writes a stamp for the head; the PR opens as a draft; land-pr.ps1 merges after CI and the tap."
+        },
+        {
+          "n": 5,
+          "node": "sync-model",
+          "action": "main reaches the live copy",
+          "detail": "After the merge, forward sync copies the repo to ~/.claude."
+        }
+      ]
+    },
+    {
+      "id": "review-engine-program",
+      "label": "Review engine program",
+      "category": "review",
+      "description": "The program map holds lanes in waves; each lane lands by one PR.",
+      "outcome": "Each wave lands in order, and the page counts the lanes from the map.",
+      "steps": [
+        {
+          "n": 1,
+          "node": "review-engine",
+          "action": "The map lists the lanes",
+          "detail": "The Waves table of docs/review-engine/map.md names each lane, its phase and its wave."
+        },
+        {
+          "n": 2,
+          "node": "lane-board",
+          "action": "Each lane is a card",
+          "detail": "The seat holds the master card; a builder claims one lane at a time."
+        },
+        {
+          "n": 3,
+          "node": "pr-pipeline",
+          "action": "Each lane lands by its own PR",
+          "detail": "The risk band decides whether a bot reviews the PR."
+        }
+      ]
+    },
+    {
+      "id": "agentic-os-readers",
+      "label": "Agentic OS readers",
+      "category": "app",
+      "description": "The cockpit reads the board and other sources and says when a read is cut or old.",
+      "outcome": "A cut or stale read shows as degraded, never as complete.",
+      "steps": [
+        {
+          "n": 1,
+          "node": "lane-board",
+          "action": "The lane table is read",
+          "detail": "One query reads held and reviewed lanes; one row more than the limit proves a cut."
+        },
+        {
+          "n": 2,
+          "node": "agentic-os",
+          "action": "Five readers fold the sources",
+          "detail": "Stalls, open questions, decisions, the clock and scheduled tasks. Each has a source row: ok, degraded or error."
+        },
+        {
+          "n": 3,
+          "node": "agentic-os",
+          "action": "The mask runs on every string",
+          "detail": "A listed id never leaves the server."
+        }
+      ]
     }
-  ]
+  ],
+  "registry": {
+    "hooks": {
+      "items": [
+        {
+          "event": "Notification",
+          "matcher": "",
+          "file": "coordination-notification.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "",
+          "file": "mcp-activity-tracker.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "",
+          "file": "periodic-extract.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "AskUserQuestion",
+          "file": "decision-ledger.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Bash",
+          "file": "architecture-stats-sync.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Bash|PowerShell",
+          "file": "git-commit-roadmap.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Bash|PowerShell",
+          "file": "msys-crash-capture.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Bash|PowerShell",
+          "file": "pr-opened-review-loop.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Bash|PowerShell",
+          "file": "test-run-tracker.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Bash|PowerShell|Artifact",
+          "file": "lane-board-republish-reminder.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Edit|Write",
+          "file": "import-validator.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Edit|Write",
+          "file": "post-edit-diagnostics.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Edit|Write|Bash|PowerShell|Task|Agent",
+          "file": "lane-context.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Edit|Write|Bash|TaskUpdate",
+          "file": "smarter-everyday.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "ExitPlanMode",
+          "file": "plan-exit-premortem-prompt.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "ExitPlanMode",
+          "file": "post-plan-roadmap.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Grep",
+          "file": "epistemic-reminder.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Read|Grep",
+          "file": "bus-tool-populator.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Skill|Task",
+          "file": "telemetry-tracker.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Task",
+          "file": "agent-error-capture.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Task",
+          "file": "agent-verification.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "TaskUpdate|Bash|PowerShell",
+          "file": "roadmap-completion.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "WebFetch|WebSearch",
+          "file": "web-lookup-advisor.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Write|Edit",
+          "file": "pageindex-watch.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Write|Edit",
+          "file": "prd-roadmap-sync.mjs"
+        },
+        {
+          "event": "PostToolUse",
+          "matcher": "Write|Edit",
+          "file": "tree-invalidate.mjs"
+        },
+        {
+          "event": "PostToolUseFailure",
+          "matcher": "Bash|PowerShell",
+          "file": "test-run-tracker.mjs"
+        },
+        {
+          "event": "PreCompact",
+          "matcher": "",
+          "file": "pre-compact-breakpoint.mjs"
+        },
+        {
+          "event": "PreCompact",
+          "matcher": "",
+          "file": "pre-compact-continuity.mjs"
+        },
+        {
+          "event": "PreCompact",
+          "matcher": "",
+          "file": "pre-compact-extract.mjs"
+        },
+        {
+          "event": "PreCompact",
+          "matcher": "*",
+          "file": "pre-compact-lane-note.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "file": "commit-preflight.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "file": "decision-gate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "file": "destructive-command-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "file": "package-install-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "file": "pre-pr-gate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "file": "scan-scope-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash|PowerShell",
+          "file": "lane-agent-tag.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash|PowerShell|SendMessage|Artifact|Write|Edit|NotebookEdit",
+          "file": "holdout-scan.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*|mcp__playwright__.*|mcp__claude-in-chrome__.*|mcp__ccv3-mods__pr_checkpoint|WebFetch|WebSearch",
+          "file": "rule-router.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Edit|Write",
+          "file": "decision-gate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell|mcp__plugin_desktop-commander_desktop-commander__write_file|mcp__plugin_desktop-commander_desktop-commander__edit_block|mcp__plugin_desktop-commander_desktop-commander__move_file|mcp__plugin_desktop-commander_desktop-commander__start_process|mcp__plugin_desktop-commander_desktop-commander__interact_with_process",
+          "file": "file-claims.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "EnterPlanMode",
+          "file": "pre-plan-memory.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "ExitPlanMode",
+          "file": "plan-mode-approval-gate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Grep",
+          "file": "smart-search-router.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "NotebookEdit|mcp__plugin_desktop-commander_desktop-commander__write_file|mcp__plugin_desktop-commander_desktop-commander__edit_block|mcp__plugin_desktop-commander_desktop-commander__move_file|mcp__plugin_desktop-commander_desktop-commander__write_pdf",
+          "file": "decision-gate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "PowerShell",
+          "file": "commit-preflight.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "PowerShell",
+          "file": "decision-gate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "PowerShell",
+          "file": "destructive-command-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "PowerShell",
+          "file": "package-install-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "PowerShell",
+          "file": "pre-pr-gate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "PowerShell",
+          "file": "scan-scope-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Read",
+          "file": "tldr-read-enforcer.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Task",
+          "file": "agent-model-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Task",
+          "file": "agent-recall-injector.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Task",
+          "file": "explore-to-scout.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Task",
+          "file": "navigator-validate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Task",
+          "file": "no-haiku-enforcer.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Task",
+          "file": "pre-tool-knowledge.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "Task",
+          "file": "task-router.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "TaskUpdate",
+          "file": "test-before-done.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "mcp__plugin_desktop-commander_desktop-commander__set_config_value",
+          "file": "dc-config-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "mcp__plugin_desktop-commander_desktop-commander__start_process|mcp__plugin_desktop-commander_desktop-commander__interact_with_process",
+          "file": "decision-gate.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "mcp__plugin_desktop-commander_desktop-commander__start_process|mcp__plugin_desktop-commander_desktop-commander__interact_with_process",
+          "file": "destructive-command-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "mcp__plugin_desktop-commander_desktop-commander__start_process|mcp__plugin_desktop-commander_desktop-commander__interact_with_process",
+          "file": "package-install-guard.mjs"
+        },
+        {
+          "event": "PreToolUse",
+          "matcher": "mcp__plugin_desktop-commander_desktop-commander__start_process|mcp__plugin_desktop-commander_desktop-commander__interact_with_process",
+          "file": "pre-pr-gate.mjs"
+        },
+        {
+          "event": "SessionEnd",
+          "matcher": "",
+          "file": "coordination-release.mjs"
+        },
+        {
+          "event": "SessionEnd",
+          "matcher": "",
+          "file": "session-end-extract.mjs"
+        },
+        {
+          "event": "SessionEnd",
+          "matcher": "",
+          "file": "session-end-handoff-indexer.mjs"
+        },
+        {
+          "event": "SessionEnd",
+          "matcher": "",
+          "file": "session-outcome.mjs"
+        },
+        {
+          "event": "SessionEnd",
+          "matcher": "",
+          "file": "session-register.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "hook-health-monitor.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "identity-probe.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "lane-context.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "roadmap-reconcile.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "session-register.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "session-start-context-loaders.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "session-start-continuity.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "session-start-docker.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "session-start-init-check.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "session-start-intel-prune.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "",
+          "file": "session-start-memory-loaders.mjs"
+        },
+        {
+          "event": "SessionStart",
+          "matcher": "compact|clear",
+          "file": "rule-router.mjs"
+        },
+        {
+          "event": "Stop",
+          "matcher": "",
+          "file": "lane-board-stop-gate.mjs"
+        },
+        {
+          "event": "UserPromptSubmit",
+          "matcher": "",
+          "file": "prompt-submit.mjs"
+        }
+      ],
+      "unparsed": 0
+    },
+    "skills": [
+      {
+        "name": "browser-dev-cycle",
+        "description": "Five-tier browser automation: Playwright MCP/CLI, CDP, Playwright-core, Playwright test runner. Use when the user says \"screenshot this\", \"debug network\", \"run e2e tests\", \"visual QA\", or \"codegen\"."
+      },
+      {
+        "name": "build",
+        "description": "Chain skills into a feature-dev workflow: discovery, plan, implement, PR. Use when the user says \"/build greenfield\", \"/build brownfield\", \"/build tdd\", or asks to build a new feature."
+      },
+      {
+        "name": "cli-integration",
+        "description": "How to give Claude access to a new platform via CLI, OpenCLI, or MCP. Use when the user asks \"how do I integrate X\", \"cli vs mcp\", or to add or evaluate a tool integration."
+      },
+      {
+        "name": "cma",
+        "description": "Operator reference for scripting Claude Managed Agents (CMA) via ant CLI, SDK, or curl. Use when the user mentions \"cma\", \"managed agents\", \"ant cli\", or wants to run/inspect a CMA session, vault, or deployment. Not for building a new agent — use launch-your-agent."
+      },
+      {
+        "name": "code-review",
+        "description": "Verification gates required before any completion claim. Use before saying \"done\"/\"fixed\", when the user says \"review this\", \"/review\", \"is this ready to merge\"."
+      },
+      {
+        "name": "commit",
+        "description": "Create git commits with user approval. Use when user says \"commit\", \"commit these changes\", \"create a commit\", \"/commit\"."
+      },
+      {
+        "name": "continuity-ledger",
+        "description": "Creates a YAML continuity ledger for state preservation across /clear. Use when user says \"continuity ledger\", \"save context before clearing\", \"create a handoff\"."
+      },
+      {
+        "name": "create-handoff",
+        "description": "Write a session handoff as a row in the Claude Bridge Handoffs database (canonical) plus a local YAML copy, to resume work in a new session. Use when user says \"/create_handoff\", \"create a handoff\", \"give me a handoff\", \"put the handoff in notion\", \"hand this off\", \"wrap up the session\"."
+      },
+      {
+        "name": "databases",
+        "description": "Query optimization, indexing, and migration best practices for Postgres/Neon/Kusto. Use when the user says \"optimize this query\", \"add an index\", \"migration\", \"N+1\", or asks about slow queries."
+      },
+      {
+        "name": "debug",
+        "description": "Investigate logs, DB state, and git history to debug an issue, no edits. Use when user says \"debug this\", \"why is this failing\", \"investigate the bug\"."
+      },
+      {
+        "name": "discovery-interview",
+        "description": "Interview the user to turn a vague idea into a detailed spec. Use when the user says \\\"help me flesh this out\\\", \\\"interview me\\\", or has an idea but no plan yet."
+      },
+      {
+        "name": "excalidraw-mcp",
+        "description": "Create, edit, and export live Excalidraw diagrams using mcp-excalidraw-server (MCP tools + canvas REST API). Use when an agent needs to draw/lay out diagrams, convert Mermaid to Excalidraw, query/update/delete elements, or export/import elements from a running canvas server (EXPRESS_SERVER_URL, default http://localhost:3100)."
+      },
+      {
+        "name": "explore",
+        "description": "Read-only codebase exploration at quick/deep/architecture depth. Use when the user says \"/explore\", \"explore the codebase\", \"understand this repo\", or asks how something works."
+      },
+      {
+        "name": "fabric",
+        "description": "Routes Microsoft Fabric work (Spark notebooks, Livy, Materialized Lake Views, lakehouses, shortcuts, OneLake security roles, SQL endpoints, Direct Lake models, DAX, ontology, graphs, GQL, data agents, pipelines, copy jobs, Dataflow Gen2, capacity throttling, item search) to Microsoft and CCv3 guides. Use when work touches Fabric, OneLake, a lakehouse or a Fabric notebook. Not for KQL (kusto-cli)."
+      },
+      {
+        "name": "failure-audit",
+        "description": "Audit Dave's own session history for agent failure modes and turn the recurring ones into rule edits. Use when the user says \"/failure-audit\", \"audit my history\", \"what do you keep getting wrong\", \"corrections per model\", or \"where do agents fail\"."
+      },
+      {
+        "name": "fix",
+        "description": "Runs the /fix bug workflow: reproduce, investigate, fix, re-run the repro, commit after Dave confirms. Use when the user types /fix."
+      },
+      {
+        "name": "fleetops-refresh",
+        "description": "Rewrites Dave's FleetOps Notion page (a designed HTML embed plus a short summary) from the lane export. Use when Dave says \"refresh FleetOps\" or asks for a FleetOps refresh."
+      },
+      {
+        "name": "fourth-brand-guidelines",
+        "description": "Fourth brand voice, tone, color, and typography guidance for non-PPTX content. Use when the user says \"brand review\", \"is this on-brand\", \"Fourth brand guidelines\", or asks to write or review Fourth marketing, blog, or web content. Not for PowerPoint -- use fourth-presentation-builder."
+      },
+      {
+        "name": "fourth-presentation-suite",
+        "description": "Build Fourth-branded EBR/QBR and sales presentations, HTML design first then PPTX export. Use when the user asks for a Fourth presentation, deck, EBR, QBR, or sales slides."
+      },
+      {
+        "name": "fourthos-weekly",
+        "description": "Generates the weekly FourthOS sponsor update (Carly/Christian) from Notion data and publishes it to a local OneDrive folder. Use when asked to generate, build, preview, or promote the FourthOS weekly sponsor update, or when the scheduled task runs."
+      },
+      {
+        "name": "frontend-slides",
+        "description": "Create stunning, animation-rich HTML presentations from scratch or by converting PowerPoint files. Use when the user wants to build a presentation, convert a PPT/PPTX to web, or create slides for a talk/pitch. Helps non-designers discover their aesthetic through visual exploration rather than abstract choices."
+      },
+      {
+        "name": "game-plan",
+        "description": "Run a feature through the Game Plan pipeline (Claude hub, Grok builder, Claude review). Use when the user types \"/game-plan\", says \"run the game plan on X\", \"full crew on this\", or \"roster this feature\". Not for one-shot tasks or trivial edits."
+      },
+      {
+        "name": "grill-with-docs",
+        "description": "Interviews the user about a plan in rounds and records terms and decisions. Use when the user types /grill-with-docs."
+      },
+      {
+        "name": "grok",
+        "description": "Delegates a task to xAI's Grok Build CLI (grok-4.5) to execute or answer it, not just review. Use when the user says \"/grok\", \"hand this to Grok\", \"have Grok implement X\", or \"delegate to Grok\". Not for adversarial review — use /review or /premortem."
+      },
+      {
+        "name": "harness-update",
+        "description": "Upgrade the Grok harness and re-verify its live-probed model allowlist. Use when the user says \"/harness-update\", \"update grok\", \"enable model X\", or hits a \"requires a newer version\" error."
+      },
+      {
+        "name": "hook-audit",
+        "description": "Audits hook registrations for unregistered, broken, and stale hooks. Use when user says \"/skill:hook-audit\", \"hook audit\", \"check hooks\", \"missing hook registration\"."
+      },
+      {
+        "name": "hook-scaffold",
+        "description": "Scaffolds a new Claude Code hook end-to-end -- source, registration, build, verify. Use when the user says \"new hook\", \"scaffold hook\", \"create hook\", \"/hook-scaffold\"."
+      },
+      {
+        "name": "hooks",
+        "description": "Use when writing or changing a hook under .claude/hooks: the TypeScript source, the build to dist, registration and tests."
+      },
+      {
+        "name": "impeccable",
+        "description": "Crafts and polishes frontend UI with live browser iteration. Use when the user says \"make this UI better\", \"audit this design\", \"/impeccable\", or asks to polish, animate, or harden an interface. Not for backend-only tasks."
+      },
+      {
+        "name": "init-project",
+        "description": "Initialize Continuous Claude v3 in a new project, CLAUDE.md, ROADMAP.md, knowledge tree, and registry entry. Use when the user says \"/init-project\", \"init project\", \"setup project\", or \"new project\"."
+      },
+      {
+        "name": "kanban-sync",
+        "description": "Carries Dave's lane-board kanban changes (order, status, band, notes, questions) into the lane database. Use when the user says \"sync the kanban\", \"read my priorities\" or \"what did Dave change on the board\", and at the start of lane work, before claiming a lane."
+      },
+      {
+        "name": "knowledge-base",
+        "description": "Reads Greptile's synthesized Knowledge Base (architecture, subsystem docs, flows, risk areas) for a repository through the Greptile MCP. Use when the task needs context about the user's codebase: understanding how X works, where Y lives, or orientation before a plan or scout fan-out. Verify every claim in the code."
+      },
+      {
+        "name": "knowledge-tree",
+        "description": "Query/update the project knowledge tree for navigation. Use when the user says \"/knowledge-tree\", \"where should I add this\", \"project structure\", \"project goals\" or asks to refresh the tree."
+      },
+      {
+        "name": "kusto-cli",
+        "description": "Kusto.Cli reference for KQL queries against Azure Data Explorer or Fabric Eventhouse. Use when the user says \"run this KQL\", \"query Kusto\", \"Eventhouse\", \"kusto-cli\", or asks to export results to CSV."
+      },
+      {
+        "name": "landing-page-builder",
+        "description": "Build a conversion-optimized landing page from a brief or product description. Use when the user says \"build me a page\", \"create an LP\", \"I need a landing page for\", or asks to design a sales/lead-capture page."
+      },
+      {
+        "name": "landing-page-score",
+        "description": "Score a landing page against a 0-100 conversion rubric. Use when the user says \"review\", \"score\", \"audit\", \"critique\" a landing page, or asks why a page isn't converting."
+      },
+      {
+        "name": "launch-your-agent",
+        "description": "Interview a founder, scope v0, and launch/iterate their agent on Claude Managed Agents. Use when the user says \"launch my agent\", \"/launch-your-agent\", or wants to build something on CMA."
+      },
+      {
+        "name": "linear",
+        "description": "Linear issue tracking: create, search, and manage issues, projects, cycles. Use when the user asks to create a Linear issue, check tickets, or search Linear."
+      },
+      {
+        "name": "log-work",
+        "description": "Log a row to the AI Enablement Weekly Work Tracker (Notion) when work doesn't go through a formal Bridge writeback. Complements notion-bridge auto-mirror. Use when the user says \"log work\", \"log this ship\", \"add to tracker\", \"tracker entry\", \"/log-work\", or describes a design decision, meeting, research spike, or small fix worth recording for the weekly report."
+      },
+      {
+        "name": "mcp-guidance",
+        "description": "Decide when to use MCP tools (Context7 etc) vs native tools. Use when calling an MCP tool, unsure MCP vs native, or the user asks \"docs for X\", \"how to use Y library\"."
+      },
+      {
+        "name": "memory",
+        "description": "Recall or store persistent learnings across sessions. Use when the user says \"remember this\", \"store a learning\", \"what did we do before with X\", or \"/recall\", or before implementing something similar to past work."
+      },
+      {
+        "name": "memory-stats",
+        "description": "Report hit rate, score distribution, and quality of the proactive memory-recall surface. Use when you want to audit how well memory-awareness is performing — what intents match, what doesn't, what scores typically look like. Reads .claude/logs/memory-recall.jsonl."
+      },
+      {
+        "name": "mot",
+        "description": "System health check for skills, agents, hooks, and memory. Use when the user says \\\"run mot\\\", \\\"health check\\\", \\\"/mot\\\" or asks to audit the system."
+      },
+      {
+        "name": "neonctl",
+        "description": "Neon Postgres CLI: branches, connection strings, SQL, migrations. Use when the user asks to manage Neon branches, run neonctl, or connect to Postgres."
+      },
+      {
+        "name": "next-best-practices",
+        "description": "Next.js best practices -- file conventions, RSC boundaries, async APIs, routing, image/font optimization. Use when writing or reviewing Next.js or React Server Component code."
+      },
+      {
+        "name": "notion-bridge",
+        "description": "Use when reading or writing Claude Bridge between Eve, Donna, Grok and Claude Code — handing work off, reading or closing a handoff, writing back results, session handoffs, \"bridge sync\", or logging decisions and implementation notes. Handoffs are rows in the 📬 Handoffs database on Bridge HQ."
+      },
+      {
+        "name": "notion-cli",
+        "description": "Script Notion reads/writes from the CLI (ntn) — API calls, page I/O, DB queries, file uploads. Use when the user says \"ntn\", \"notion cli\", \"notion api from terminal\", or wants to script Notion from Bash/PowerShell. Not for semantic search, view/DB creation, or Bridge ops — use Notion MCP."
+      },
+      {
+        "name": "notion-dashboard",
+        "description": "Build and refresh machine-maintained Notion dashboard pages with HTML embeds and DB views. Use when the user says \"notion dashboard\", \"mobile cockpit\", \"refresh mobile cockpit\", or wants a new auto-refreshed Notion page."
+      },
+      {
+        "name": "opencli",
+        "description": "Universal CLI hub for web data via opencli browser bridge. Use when the user wants to search Twitter, check HackerNews, browse Reddit, fetch YouTube data, pull social media content, create new site adapters, or mentions opencli, open-cli, web CLI, or browser CLI."
+      },
+      {
+        "name": "plan-agent",
+        "description": "Creates an implementation plan and handoff from conversation context. Use when the user asks to \"make a plan\", \"write an implementation plan\", or needs a handoff before building."
+      },
+      {
+        "name": "premortem",
+        "description": "Stress-test a plan or diff for failure modes before building. Use when the user says \\\"premortem\\\", \\\"/premortem\\\", \\\"what could go wrong\\\", or before a risky implementation."
+      },
+      {
+        "name": "project-card",
+        "description": "Refresh and publish a living HTML status card for a FourthOS project. Zero-LLM deterministic assembler (scripts/project-cards/) emits a publish manifest; this skill does the one Notion MCP embed-bind step. Use when the user says \"/project-card\", \"refresh card\", \"living status card\", \"project card\", or after reportable FourthOS work on a project."
+      },
+      {
+        "name": "project-registry",
+        "description": "Query or update the project registry for ports, URLs, stack, and dev commands. Use when the user asks \\\"what port does X use\\\", \\\"project registry\\\", or \\\"which project\\\"."
+      },
+      {
+        "name": "publish-board",
+        "description": "Publishes the first interactive phone page for one lane board and records its url. Use only when Dave types /publish-board with a board key."
+      },
+      {
+        "name": "qa-test",
+        "description": "E2E testing workflow for recording, running, debugging, and maintaining test suites. Covers test recording with codegen, test execution, visual regression, trace debugging, and CI integration. Use when asked to \"test user flow\", \"E2E test\", \"QA\", \"regression test\", \"visual test\", \"smoke test\", \"run playwright tests\", \"record test\", \"debug test failure\"."
+      },
+      {
+        "name": "railway-cli",
+        "description": "Deploy, view logs, and manage env vars on Railway via CLI. Use when the user says \\\"deploy to railway\\\", \\\"railway logs\\\", or \\\"check railway status\\\"."
+      },
+      {
+        "name": "react-perf",
+        "description": "Audit React/Next.js code against 45 performance rules. Use when the user says \"/react-perf\", \"React performance\", \"optimize Next.js\", \"bundle size\", \"waterfall issue\"."
+      },
+      {
+        "name": "recall",
+        "description": "Query semantic memory for relevant learnings from past sessions. Use when user says \"/recall\", \"recall\", \"did we solve this before\", \"check memory for X\"."
+      },
+      {
+        "name": "refactor",
+        "description": "Orchestrate a refactor: analyze, plan, implement, review, verify. Use when the user says \"/refactor\", \"refactor X\", \"clean up this code\", \"extract this into a module\"."
+      },
+      {
+        "name": "release",
+        "description": "Release prep: security audit, E2E tests, review, changelog, docs. Use when the user says \\\"/release\\\", \\\"prepare a release\\\", \\\"ship version X\\\", \\\"cut a release\\\"."
+      },
+      {
+        "name": "reporting",
+        "description": "Reporting discipline and /reporting ops (status, run, heal) for the Weekly Work Tracker spine. Use when finishing reportable work, at session end, or the user asks \"/reporting status\", \"is reporting healthy\", \"log this for the report\"."
+      },
+      {
+        "name": "research",
+        "description": "Use when asked to document how part of the codebase works today, using the thoughts/ directory for history. Describes the code as-is; does not propose changes."
+      },
+      {
+        "name": "resume-handoff",
+        "description": "Resumes work from a handoff (Claude Bridge Handoffs database row or local YAML) with context analysis. Use when user says \"resume the handoff in Notion\", \"resume this handoff\", \"picking up from a previous session\", \"read HANDOFF.md\", \"continue from ENG-XXXX\", \"pick up where we left off\"."
+      },
+      {
+        "name": "review",
+        "description": "Runs a multi-perspective code and plan review with a Grok cross-model pass when the user asks for one. Use when the user says \"review this code\", \"review my PR\", \"/review\", or asks to check before merging."
+      },
+      {
+        "name": "roadmap",
+        "description": "Manages ROADMAP.md sections manually. Use when user says \"/roadmap show\", \"/roadmap add\", \"update the roadmap\", \"set current focus\"."
+      },
+      {
+        "name": "scroll-craft",
+        "description": "Build premium scroll-driven landing pages: layered cinematic heroes, scrollytelling, video-scrub acts, verified on desktop, mobile and reduced motion. Use when the user says \"scroll craft\", \"scrollytelling\", \"cinematic hero\", \"layered hero\", \"Apple-style landing page\", \"a site where scrolling plays a video\", or wants a site that feels like an experience. Not for conversion LPs."
+      },
+      {
+        "name": "security",
+        "description": "Security audit workflow -- vulnerability scan then verification. Use when the user says \"security audit\", \"check for vulnerabilities\", \"is this secure\", \"/security\" or asks to review auth or payment code."
+      },
+      {
+        "name": "security-scan",
+        "description": "Runs defensive, scope-gated dynamic security scans against an owned target. Use when the user says \"/security-scan\", \"scan the app\", \"dynamic scan\", \"DAST\", \"dependency CVE scan\", or \"scan the running app for vulnerabilities\". Not for static code review -- that is the security skill."
+      },
+      {
+        "name": "sentry-cli",
+        "description": "Manage Sentry releases, source maps, and error queries via CLI. Use when the user says \\\"check sentry\\\", \\\"sentry errors\\\", \\\"upload source maps\\\", or \\\"create a release\\\"."
+      },
+      {
+        "name": "session-review",
+        "description": "Reviews recent Claude Code sessions from their transcripts and logs, scores each one, and ranks harness and Software Factory improvements with cited session labels. Use when the user says \"/session-review\", \"review my sessions\", or \"what went wrong this week\"."
+      },
+      {
+        "name": "shadcn-create",
+        "description": "Sets up shadcn/ui with theme presets, components, blocks, registries and the shadcn MCP. Use when the user says \"set up shadcn\", \"shadcn theme\", \"add a shadcn block\", \"shadcn registry\", \"shadcn MCP\", or \"dashboard block\". Not for generic design-system or brand work."
+      },
+      {
+        "name": "sketch-first",
+        "description": "Sketches types, signatures and module shape before code, then writes a plan file for approval. Use when the user types /sketch-first."
+      },
+      {
+        "name": "skill-forge",
+        "description": "Authors, evaluates and tunes Claude Code skills with skill-on vs skill-off evals. Use when the user wants to create, improve, test or benchmark a skill, or fix one that misfires."
+      },
+      {
+        "name": "sync-drift",
+        "description": "Compare repo vs active ~/.claude and list drift. Use when the user says \"sync drift\", \"check sync\", \"what's out of sync\", \"drift check\"."
+      },
+      {
+        "name": "systematic-debugging",
+        "description": "Finds the root cause of a bug before any fix, then fixes it with a failing test first. Use before proposing or making any fix when something is broken, even if the user asks for a quick fix. Covers \"debug\", \"fix this bug\", \"why is X broken\", \"find the root cause\", failing test, CI failure, flaky test, crash, a failure that keeps coming back or reverting. Not for new features."
+      },
+      {
+        "name": "tdd",
+        "description": "Test-driven development workflow: plan, write tests, implement, validate. Use when the user says \\\"implement X using TDD\\\", \\\"test-first\\\", \\\"/tdd\\\" or wants regression tests."
+      },
+      {
+        "name": "test",
+        "description": "Run full test suite: unit and integration in parallel, then E2E. Use when the user says \"/test\", \"run all tests\", \"test the feature\", \"full test suite\"."
+      },
+      {
+        "name": "tldr-code",
+        "description": "Token-efficient AST code analysis: call graphs, dead code, complexity, impact. Use when asked to explore, refactor, understand, or find what calls or imports something."
+      },
+      {
+        "name": "to-spec",
+        "description": "Turns the current conversation into a spec file under thoughts/shared/plans. Use when the user types /to-spec."
+      },
+      {
+        "name": "ui-audit",
+        "description": "Audits UI against 100+ accessibility, performance, and UX rules. Use when user says \"/ui-audit\", \"accessibility check\", \"a11y check\", \"design review\"."
+      },
+      {
+        "name": "ui-ux-pro-max",
+        "description": "UI/UX design reference: 50 styles, 21 palettes, 50 font pairings, 9 stacks. Use when the user asks to design, build, or review UI, or pick a palette, font pairing, or component style."
+      },
+      {
+        "name": "validate-agent",
+        "description": "Research and validate a plan's tech choices against current best practices. Use when asked to validate a plan, check tech choices, or vet a proposed library/pattern."
+      },
+      {
+        "name": "vercel-cli",
+        "description": "Deploy and manage Vercel projects via CLI. Use when user says \"deploy to vercel\", \"vercel link\", \"vercel dev\", \"check vercel deployment\", \"vercel logs\"."
+      },
+      {
+        "name": "vet-skill",
+        "description": "Vet external skills installed from skills.sh through structural validation, trigger accuracy evaluation, optimization, and automatic registration into skill-rules.json. Use when a new skill is installed via npx skills add, when re-vetting an existing skill, or when bulk-vetting all unvetted skills."
+      },
+      {
+        "name": "weekly-report",
+        "description": "Generate AI Enablement Team weekly status report data via GitHub, memory, and dashboard MCP tools. Use when the user says \"/weekly-report\", \"create a weekly report\", \"status update\", or \"generate the team report\"."
+      },
+      {
+        "name": "wrap-up",
+        "description": "Close out or check status of a Claude Managed Agent build, run log, and hygiene sweep. Use when the founder says \"/wrap-up\", \"wrap up\", \"close it out\", or \"where do things stand with my agent\"."
+      }
+    ],
+    "agents": [
+      {
+        "name": "aegis",
+        "description": "Security vulnerability analysis and testing"
+      },
+      {
+        "name": "arbiter",
+        "description": "Use when you must run unit or integration tests, read the real pass and fail counts, and get the root cause of each failure. It may write failing test files for a TDD RED step, but never edits source (use kraken or spark for code), not for end-to-end browser checks (use atlas)."
+      },
+      {
+        "name": "architect",
+        "description": "Feature planning, design documentation, AND integration planning"
+      },
+      {
+        "name": "atlas",
+        "description": "End-to-end and acceptance test execution"
+      },
+      {
+        "name": "cma-operator",
+        "description": "Headless operator for Claude Managed Agents (CMA). Assembles context, shells out to the anthropic Python SDK (fallback ant/curl), runs a single CMA cloud session to completion, and captures clean output. Use for scheduled/headless CMA invocation from claude_spawn.py / Task Scheduler. NOT for interactive exploration (use /launch-your-agent for building or the cma skill for ad-hoc ops)."
+      },
+      {
+        "name": "critic",
+        "description": "Use when you need a read-only review of feature or implementation code for bugs, edge cases, patterns and tests. Do not use for plan review (plan-reviewer), security (aegis), refactors (judge) or writing code (kraken, spark)."
+      },
+      {
+        "name": "debug-agent",
+        "description": "Use when a bug has no known cause yet and you need a read-only root-cause investigation of an error, a failing command or unexpected behavior. Not for multi-file forensics with evidence-grade reproduction (sleuth), not for applying the fix (kraken, spark)."
+      },
+      {
+        "name": "deployer",
+        "description": "Deployment management for Vercel and Railway with Sentry release tracking and Linear issue updates -- deploy, monitor, verify, and debug using CLI tools and Cloud MCP"
+      },
+      {
+        "name": "grok-adversary",
+        "description": "Cross-model adversarial reviewer. Invokes xAI Grok (default grok-4.5, override via GROK_ADVERSARY_MODEL env var) via the Grok Build CLI to challenge Claude's work from a third training family (distinct from Claude's own model family). Use as a parallel agent in /review Phase 1, or as the adversarial step in /premortem. Two modes - code (default, reviews a git diff) and plan (reviews a markdown plan file). Read-only, review-only — never writes."
+      },
+      {
+        "name": "grok-worker",
+        "description": "General-purpose cross-model task worker. Hands an arbitrary task to the xAI Grok Build CLI (default grok-4.5, X Premium+ SUBSCRIPTION auth — no API key) to WORK THROUGH — answer it, or actually implement it with write access — not just review. Three modes - ask (read-only Q&A/research), implement (workspace-write in an isolated git worktree), resume (continue a prior implement session). Sibling to grok-adversary (which stays read-only review-only). Governed by .claude/rules-ondemand/grok-worker-safety.md."
+      },
+      {
+        "name": "herald",
+        "description": "Release prep, version bumps, changelog generation"
+      },
+      {
+        "name": "judge",
+        "description": "Use when you need a read-only review of a refactor or code transformation, to check that behavior stays the same and quality improves. Not for new feature review (critic), plan review (plan-reviewer), migrations (surveyor) or writing code (kraken, spark)."
+      },
+      {
+        "name": "kraken",
+        "description": "Use when a feature or refactor spans several files and needs tests first and an end-to-end proof. Not for a one-file edit with a known old and new string (use spark), read-only exploration (use scout), or review (use critic)."
+      },
+      {
+        "name": "liaison",
+        "description": "Use when you need a read-only review of an API or third-party integration for auth, error handling, resilience, security and data handling. Not for general code review (critic), a full security audit (aegis) or writing code (kraken, spark)."
+      },
+      {
+        "name": "onboard",
+        "description": "Analyze brownfield codebase and create initial continuity ledger"
+      },
+      {
+        "name": "oracle",
+        "description": "Use when a question needs outside sources: vendor docs, web pages, API behavior, or library comparisons. Not for this repo's code (use scout). Not for one library API that Context7 answers in one call (call Context7 directly)."
+      },
+      {
+        "name": "pathfinder",
+        "description": "External repository research and analysis"
+      },
+      {
+        "name": "phoenix",
+        "description": "Refactoring planning AND migration planning"
+      },
+      {
+        "name": "plan-agent",
+        "description": "Create implementation plans using research, best practices, and codebase analysis"
+      },
+      {
+        "name": "plan-reviewer",
+        "description": "Use when you need a read-only review of a feature plan (from architect) or a change plan (from phoenix) before implementation. Not for code review (critic), security review (aegis) or writing plans (architect, phoenix, plan-agent)."
+      },
+      {
+        "name": "principal-reviewer",
+        "description": "Senior/staff-engineer review pass focused on architectural integrity, security posture, and performance characteristics rather than style or syntax. Use for high-stakes changes -- public API shifts, new module boundaries, security-critical paths, performance-critical paths, cross-team interfaces. Distinct from `critic` (feature-level implementation review) and `review-agent` (synthesis across other reviewers)."
+      },
+      {
+        "name": "profiler",
+        "description": "Performance profiling, race conditions, memory issues"
+      },
+      {
+        "name": "react-perf-reviewer",
+        "description": "Use when you need a read-only performance review of React or Next.js code against Vercel's 45 performance rules (waterfalls, bundle size, re-renders). Not for accessibility (ui-compliance-reviewer), general review (critic) or writing code (kraken, spark)."
+      },
+      {
+        "name": "research-codebase",
+        "description": "Document the codebase comprehensively"
+      },
+      {
+        "name": "review-agent",
+        "description": "Review implementation by comparing plan (intent) vs git diff (changes), with the local session transcript as context"
+      },
+      {
+        "name": "scout",
+        "description": "Use when you must explore this codebase, find where something is implemented, or map a pattern across many files. Not for web or library research (use oracle), not for edits (use spark or kraken), not for one known file (Read it)."
+      },
+      {
+        "name": "scribe",
+        "description": "Use when you need to write or update a handoff, a continuity ledger, a session summary or release notes in thoughts/ or docs/. Not for code changes (kraken, spark), code review (critic) or reading-only research (scout, oracle)."
+      },
+      {
+        "name": "security-refuter",
+        "description": "Use when a security candidate from aegis needs an independent check before it is reported, inside the /security workflow. Not for finding vulnerabilities (aegis), general code review (critic) or fixing code (kraken, spark)."
+      },
+      {
+        "name": "sentinel",
+        "description": "Browser-based QA and user acceptance testing agent. Drives a live browser to verify user flows end-to-end with auth-aware multi-role scenarios. Handles login as admin/editor/viewer, RBAC verification, console error capture, screenshot on failure, and accessibility audits. Use after implementing features to verify the UI works correctly."
+      },
+      {
+        "name": "sleuth",
+        "description": "Deep bug forensics with file-level reproduction. Use when the bug is multi-file, intermittent, or needs evidence-grade root cause analysis with traced code paths. Pairs with the systematic-debugging skill. For unclear or single-file bugs, prefer debug-agent."
+      },
+      {
+        "name": "spark",
+        "description": "Use when one small, precise edit is needed in a few named files (a fix, a tweak, one line of config). Also the fan-out unit for the same edit in N files, one spark per file. Not for multi-file features or new logic (use kraken), not for exploring code (use scout)."
+      },
+      {
+        "name": "surveyor",
+        "description": "Use when you need a read-only review of a finished migration or upgrade, to find leftover old patterns, mixed states and missing rollback. Not for refactor review (judge), plan review (plan-reviewer) or doing the migration (kraken, spark)."
+      },
+      {
+        "name": "ui-compliance-reviewer",
+        "description": "Use when you need a read-only review of UI code for accessibility, focus, form and animation problems against 100+ Vercel Web Interface Guidelines. Not for React performance (react-perf-reviewer), general review (critic) or writing code (kraken, spark)."
+      },
+      {
+        "name": "validate-agent",
+        "description": "Validate plan tech choices against current best practices and past precedent"
+      },
+      {
+        "name": "wizard",
+        "description": "CCv3 setup wizard for new machines. Drives the bootstrap process by reading BOOTSTRAP.md, running wizard.py, and verifying the resulting environment. Use when a fresh machine needs CCv3 stood up end-to-end (Docker, PostgreSQL, env vars, git hooks, hook build, file sync)."
+      }
+    ],
+    "rules": {
+      "src": [
+        "agent-model-selection.md",
+        "dev-server-cleanup.md",
+        "every-surface-checklist.md",
+        "git-sync-workflow.md",
+        "hook-dev-lifecycle.md",
+        "knowledge-tree-health.md",
+        "live-copy-before-use.md",
+        "on-demand-rules.md",
+        "prefer-drizzle-orm.md",
+        "sync-known-gaps.md"
+      ],
+      "onDemand": [
+        "browser-automation.md",
+        "cma-safety.md",
+        "coderabbit-cli.md",
+        "cross-terminal-db.md",
+        "design-work.md",
+        "fabric-playbook.md",
+        "git-merge-workflow.md",
+        "grok-worker-safety.md",
+        "harness-update.md",
+        "headless-claude-mcp.md",
+        "kusto-cli-safety.md",
+        "lane-board.md",
+        "linear-safety.md",
+        "neonctl-safety.md",
+        "notion-cli-safety.md",
+        "pr-and-commit-style.md",
+        "pr-review-loop-core.md",
+        "pr-review-loop.md",
+        "proactive-delegation.md",
+        "railway-deploy.md",
+        "review-engine.md",
+        "seat-role.md",
+        "sentry-safety.md",
+        "web-research.md"
+      ]
+    },
+    "waves": [
+      {
+        "wave": "0",
+        "lane": "re-answer-key-audit",
+        "phase": "P1-followup"
+      },
+      {
+        "wave": "0",
+        "lane": "re-claude-backend",
+        "phase": "P4"
+      },
+      {
+        "wave": "0",
+        "lane": "re-critical-model-check",
+        "phase": "P1-followup"
+      },
+      {
+        "wave": "0",
+        "lane": "re-dispositions",
+        "phase": "P3"
+      },
+      {
+        "wave": "0",
+        "lane": "re-engine-seam",
+        "phase": "P4"
+      },
+      {
+        "wave": "0",
+        "lane": "re-finder-v2",
+        "phase": "P4"
+      },
+      {
+        "wave": "0",
+        "lane": "re-gold-schema",
+        "phase": "P3"
+      },
+      {
+        "wave": "0",
+        "lane": "re-land-ledger",
+        "phase": "P3"
+      },
+      {
+        "wave": "0",
+        "lane": "re-test-escapes",
+        "phase": "TEST"
+      },
+      {
+        "wave": "0",
+        "lane": "re-test-globs",
+        "phase": "GATE"
+      },
+      {
+        "wave": "0",
+        "lane": "re-verifier",
+        "phase": "P4"
+      },
+      {
+        "wave": "1",
+        "lane": "re-cr-keys",
+        "phase": "DEMOTE"
+      },
+      {
+        "wave": "1",
+        "lane": "re-engine-cli-schema",
+        "phase": "P4"
+      },
+      {
+        "wave": "1",
+        "lane": "re-eval-contract",
+        "phase": "P3"
+      },
+      {
+        "wave": "1",
+        "lane": "re-gold-c-external",
+        "phase": "P3"
+      },
+      {
+        "wave": "1",
+        "lane": "re-live-advisory",
+        "phase": "GATE"
+      },
+      {
+        "wave": "1",
+        "lane": "re-prepr-bundle",
+        "phase": "GATE"
+      },
+      {
+        "wave": "1",
+        "lane": "re-property-tests",
+        "phase": "TEST"
+      },
+      {
+        "wave": "1",
+        "lane": "re-rubrics",
+        "phase": "P6"
+      },
+      {
+        "wave": "1",
+        "lane": "re-seed-gold-b",
+        "phase": "P3"
+      },
+      {
+        "wave": "1",
+        "lane": "re-szz-miner",
+        "phase": "P3"
+      },
+      {
+        "wave": "2",
+        "lane": "re-cr-rule2",
+        "phase": "P5"
+      },
+      {
+        "wave": "2",
+        "lane": "re-gate-ready-a",
+        "phase": "GATE"
+      },
+      {
+        "wave": "2",
+        "lane": "re-gold-assemble",
+        "phase": "P3"
+      },
+      {
+        "wave": "2",
+        "lane": "re-label-two-family",
+        "phase": "P6"
+      },
+      {
+        "wave": "2",
+        "lane": "re-live-accrual",
+        "phase": "GATE"
+      },
+      {
+        "wave": "2",
+        "lane": "re-owners-hotspots",
+        "phase": "P5"
+      },
+      {
+        "wave": "2",
+        "lane": "re-prepr-cli-consumer",
+        "phase": "DEMOTE"
+      },
+      {
+        "wave": "2",
+        "lane": "re-rubric-runners",
+        "phase": "P6"
+      },
+      {
+        "wave": "2",
+        "lane": "re-score-paired",
+        "phase": "P3"
+      },
+      {
+        "wave": "2",
+        "lane": "re-shadow-retro",
+        "phase": "P3"
+      },
+      {
+        "wave": "2",
+        "lane": "re-verifier-replay",
+        "phase": "P4"
+      },
+      {
+        "wave": "3",
+        "lane": "re-cr-trustlist",
+        "phase": "P5"
+      },
+      {
+        "wave": "3",
+        "lane": "re-gate-ready-b",
+        "phase": "GATE"
+      },
+      {
+        "wave": "3",
+        "lane": "re-gate-shadow-run",
+        "phase": "GATE"
+      },
+      {
+        "wave": "3",
+        "lane": "re-gate-summary-sample",
+        "phase": "GATE"
+      },
+      {
+        "wave": "3",
+        "lane": "re-judge-calibrate",
+        "phase": "P6"
+      },
+      {
+        "wave": "3",
+        "lane": "re-p4-wire",
+        "phase": "P4"
+      },
+      {
+        "wave": "3",
+        "lane": "re-scores-ledger",
+        "phase": "P6"
+      },
+      {
+        "wave": "4",
+        "lane": "re-aggregate",
+        "phase": "P6"
+      },
+      {
+        "wave": "4",
+        "lane": "re-delta-wire",
+        "phase": "GATE"
+      },
+      {
+        "wave": "4",
+        "lane": "re-demote-mechanism",
+        "phase": "DEMOTE"
+      },
+      {
+        "wave": "4",
+        "lane": "re-l1-schedule",
+        "phase": "P3"
+      },
+      {
+        "wave": "4",
+        "lane": "re-p4-harness",
+        "phase": "P4"
+      },
+      {
+        "wave": "4",
+        "lane": "re-retire-prepr-cli",
+        "phase": "DEMOTE"
+      },
+      {
+        "wave": "5",
+        "lane": "re-p4-ab",
+        "phase": "P4"
+      },
+      {
+        "wave": "5",
+        "lane": "re-repromote-auto",
+        "phase": "DEMOTE"
+      },
+      {
+        "wave": "5",
+        "lane": "re-review-doctor",
+        "phase": "P6"
+      },
+      {
+        "wave": "5",
+        "lane": "re-scoreboard",
+        "phase": "program"
+      },
+      {
+        "wave": "6",
+        "lane": "re-holdout-rotate",
+        "phase": "P6"
+      },
+      {
+        "wave": "6",
+        "lane": "re-refs-impact",
+        "phase": "P5"
+      },
+      {
+        "wave": "6",
+        "lane": "re-rule-docs",
+        "phase": "DEMOTE"
+      },
+      {
+        "wave": "7",
+        "lane": "re-p4-winner-evidence",
+        "phase": "P4"
+      },
+      {
+        "wave": "7",
+        "lane": "re-p5-multirun",
+        "phase": "P5"
+      },
+      {
+        "wave": "8",
+        "lane": "re-p5-online",
+        "phase": "P5"
+      },
+      {
+        "wave": "8",
+        "lane": "re-retire-critical",
+        "phase": "DEMOTE"
+      },
+      {
+        "wave": "9",
+        "lane": "re-loop-dryrun",
+        "phase": "P6"
+      },
+      {
+        "wave": "9",
+        "lane": "re-p5-online-hotfile",
+        "phase": "P5"
+      },
+      {
+        "wave": "9",
+        "lane": "re-p7-calibrated-cutoff",
+        "phase": "P7"
+      },
+      {
+        "wave": "10",
+        "lane": "re-p5-online-union",
+        "phase": "P5"
+      },
+      {
+        "wave": "10",
+        "lane": "re-p7-backlog",
+        "phase": "P7"
+      },
+      {
+        "wave": "11",
+        "lane": "re-p7-impact-arms",
+        "phase": "P7"
+      }
+    ],
+    "mcp": {
+      "status": "not checked",
+      "reason": "the MCP servers of a machine are in a machine config that holds secrets and is not read",
+      "repoMcpJsonServers": 0
+    }
+  }
 }</script>
 
 <script>
@@ -1824,16 +3219,12 @@
   const NODE_H = 60;
   const STRIPE_W = 5;
 
-  // ---------- Data load: try fetch, fall back to embedded ----------
+  // ---------- Data load: the generated graph in the embedded block (works from file://, no fetch) ----------
   async function loadData() {
-    try {
-      const res = await fetch('architecture.json', { cache: 'no-store' });
-      if (res.ok) return await res.json();
-    } catch (err) { /* fall through */ }
     const tag = document.getElementById('embedded-data');
     try { return JSON.parse(tag.textContent); }
     catch (err) {
-      console.error('Failed to load architecture.json from fetch and embed:', err);
+      console.error('Failed to read the embedded graph:', err);
       return null;
     }
   }
@@ -2210,9 +3601,11 @@
     if (!data) return;
     const svg = document.getElementById('svg');
 
+    const st = data.meta.stats || {};
     document.getElementById('header-meta').textContent =
-      `${data.nodes.length} subsystems · ${data.flows.length} flows`;
-    document.getElementById('footer-date').textContent = data.meta.lastVerified || '';
+      `${data.nodes.length} subsystems · ${data.flows.length} flows · ${st.hookRegistrations} hook registrations · ${st.skills} skills · ${st.agents} agents · ${st.rulesSrc + st.rulesOnDemand} rules`;
+    document.getElementById('footer-date').textContent =
+      `Counts are computed from the repository by ${data.meta.generatedBy}. MCP servers: not checked (the machine config holds secrets).`;
 
     renderNodes(svg, data);
     renderEdges(svg, data, unionFlowEdges(data));
