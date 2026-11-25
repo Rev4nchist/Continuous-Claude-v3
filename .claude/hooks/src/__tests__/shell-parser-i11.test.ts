@@ -132,6 +132,34 @@ describe('I11: a git global option with no value hides a push from the guarded-c
 });
 
 /**
+ * Item 11e (Dave's choice on CodeRabbit CLI run 2, V7.6, 16:0x CST 11-25): GUARDED_TEXT is the UNION of main's old alternative, the item 11 alternative and
+ * "git, then push later on the same line (any character but a newline)". By construction it denies everything main denied, and more.
+ */
+describe('I11e: the guarded-call test is a union, so it never denies less than main', () => {
+  it('I11e-1 (the major, RED): a separator inside a quoted option value does not hide the push', async () => {
+    for (const c of [`node -e "git -c 'a;b' push fork x"`, `node -e "git -c 'a&b' push fork x"`, `node -e "git -c 'a|b' push fork x"`, `python -c "git --exec-path='a;b' push fork x"`]) {
+      expect(await patIn(bash(c)), c).toBe('script-runner');
+    }
+  });
+  it('I11e-2 (the minor, accepted over-deny): git on one line and push at the start of the next line is still denied (fail closed)', async () => {
+    const c = 'python -c "import subprocess\nsubprocess.run([\'git\', \'status\'])\npush = False"';
+    expect(await patIn(bash(c)), c).toBe('script-runner');
+  });
+  it('I11e-3 (RED for the quoted-separator forms, green for the rest): every text that main denied for its runner text stays denied', async () => {
+    for (const c of [
+      `node -e "git push fork x"`,
+      `node -e "git -c k=v push fork x"`,
+      `node -e "git -C dir -c a=b push fork x"`,
+      `python -c "git -C 'a;b' push fork x"`,
+      `node -e "git -c 'x y' push fork x"`,
+    ]) expect(await patIn(bash(c)), c).toBe('script-runner');
+  });
+  it('I11e-4 (control): a runner text with no push after git on any line is not a script-runner deny', async () => {
+    for (const c of [`node -e "git status; echo done"`, `python -c "print('push')"`, `node -e "console.log(1)"`]) expect(await patIn(bash(c)), c).not.toBe('script-runner');
+  });
+});
+
+/**
  * Items 11b and 11c (a skip of the script-runner deny for an existing script file) were dropped on Dave's choice (V7.6). These rows pin the C1 behaviour:
  * a runner call with a guarded call in its text is denied whatever its first word is, also a call of a file that exists and the seat's and the CLI's two holes.
  */
