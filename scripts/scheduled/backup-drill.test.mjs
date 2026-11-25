@@ -166,6 +166,11 @@ test('D12 the DECOMPRESSED temp file is copied into the container, and it is rem
 
 // ---- card ops-backup-drill-deadline-cleanup, Part A: a drill that hits its deadline, and a run that was killed hard ----
 
+// The deadline of the rows that must reach a later step first (restore, cp). It is long enough that a loaded machine gets there before it passes
+// (the CLI found that a 60 ms deadline mixes setup time with the trigger). A late step waits for the abort itself, so no row depends on a sleep.
+const DEADLINE_MS = 500;
+const afterAbort = (signal, ms = 40) => new Promise((r) => signal.addEventListener('abort', () => setTimeout(r, ms)));
+
 /** pg_restore never ends by itself. honorSignal: it ends when the runner is aborted; else it hangs forever (a child that ignores the abort). */
 function hangingSh(honorSignal) {
   const f = fakeSh();
@@ -190,7 +195,7 @@ const cleanedUp = (f) => {
 test('D13 a drill past its deadline is a fail named "deadline", the child is aborted, and copy, temp dump and scratch database are removed', async () => {
   // Breaks when runDrill has no deadline (the test would hang), or when the abort signal never reaches the runner.
   const f = hangingSh(true);
-  const out = await drill(f, { deadlineMs: 60 });
+  const out = await drill(f, { deadlineMs: DEADLINE_MS });
   assert.equal(out.drill, 'fail');
   assert.match(out.detail, /deadline/);
   assert.equal(f.aborted, true, 'the running child got the abort signal');
@@ -201,7 +206,7 @@ test('D13 a drill past its deadline is a fail named "deadline", the child is abo
 test('D14 a child that ignores the abort still ends the drill at the deadline, with the cleanup done', async () => {
   // Breaks when the deadline only sends the signal and then waits for the child.
   const f = hangingSh(false);
-  const out = await drill(f, { deadlineMs: 60 });
+  const out = await drill(f, { deadlineMs: DEADLINE_MS });
   assert.equal(out.drill, 'fail');
   assert.match(out.detail, /deadline/);
   assert.ok(cleanedUp(f));
@@ -403,13 +408,13 @@ test('D21 a docker cp that ends after the deadline gets its copy removed after i
   f.sh = async (cmd, args, opts) => {
     if (args[0] === 'cp') {
       f.calls.push({ cmd, args, line: [cmd, ...args].join(' ') });
-      await new Promise((r) => setTimeout(r, 150)); // ignores the signal, ends after the 60 ms deadline
+      await afterAbort(opts.signal); // ignores the signal itself and ends after the deadline
       f.calls.push({ line: 'CP-END' });
       return { code: 0, stdout: '', stderr: '' };
     }
     return inner(cmd, args, opts);
   };
-  const out = await drill(f, { deadlineMs: 60 });
+  const out = await drill(f, { deadlineMs: DEADLINE_MS });
   assert.equal(out.drill, 'fail');
   await new Promise((r) => setTimeout(r, 300));
   const lines = f.calls.map((c) => c.line);
@@ -489,11 +494,11 @@ test('D25 a late cp whose copy cannot be removed leaves the name in the pending 
     const inner = f.sh;
     let cpEnded = false;
     f.sh = async (cmd, args, opts) => {
-      if (args[0] === 'cp') { await new Promise((r) => setTimeout(r, 150)); cpEnded = true; return { code: 0, stdout: '', stderr: '' }; }
+      if (args[0] === 'cp') { await afterAbort(opts.signal); cpEnded = true; return { code: 0, stdout: '', stderr: '' }; }
       if (cpEnded && [cmd, ...args].join(' ').includes('rm -f')) return { code: 1, stdout: '', stderr: 'no' };
       return inner(cmd, args, opts);
     };
-    await drill(f, { deadlineMs: 60, pendingFile });
+    await drill(f, { deadlineMs: DEADLINE_MS, pendingFile });
     await new Promise((r) => setTimeout(r, 300));
     assert.deepEqual(JSON.parse(readFileSync(pendingFile, 'utf8')), { name: 'lanes_pr1_abcd1234' });
   } finally { rmSync(dir, { recursive: true, force: true }); }
