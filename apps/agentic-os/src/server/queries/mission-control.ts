@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { checkDatabaseReady } from '@/db';
+import { maskSnapshot } from '@/lib/snapshot-mask';
 
 import {
   getActiveLaneCount,
@@ -36,6 +37,7 @@ import {
 import type { RollupResult } from '@/server/queries/spend-rollup-parse';
 import { readSessionNames } from '@/server/sources/identity-names';
 import { readLaneDash } from '@/server/sources/lane-dash';
+import { readListedIds } from '@/server/sources/listed-ids';
 import { readPrFeed, type PrFeedSnapshot } from '@/server/sources/pr-feed';
 import { safeMessage } from '@/server/sources/safe-message';
 import { readSpendRollup } from '@/server/sources/spend-rollup';
@@ -344,7 +346,7 @@ export async function getMissionControlSnapshot(
     ...readers.sources,
   ];
 
-  return {
+  const snapshot: MissionControlSnapshot = {
     fleet,
     active,
     database,
@@ -372,4 +374,7 @@ export async function getMissionControlSnapshot(
     scheduledTasks: readers.scheduledTasks,
     generatedAt: new Date().toISOString(),
   };
+  // The one boundary: every string of the snapshot (values and keys) is masked for the listed ids (card agentic-os-listed-id-mask), and an
+  // unreadable list throws here: the page shows no data, the route answers 503 with a fixed reason and the client keeps its last good data.
+  return maskSnapshot(snapshot, readListedIds()).value;
 }

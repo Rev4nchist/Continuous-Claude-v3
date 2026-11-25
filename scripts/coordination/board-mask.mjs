@@ -183,15 +183,21 @@ const readerView = (s) => s.normalize('NFKC').replace(/\p{Default_Ignorable_Code
 export function maskLaneRows({ lanes = [], sessions = [], events = [] } = {}, ids) {
   if (!Array.isArray(ids) || ids.length === 0) return 0;
   let n = 0;
-  // A text whose reader view (white space collapsed, invisible marks gone, as the browser shows it) holds more ids than the text itself is
-  // replaced by the masked reader view (critic pass 2, item 1: "PR", 7 spaces, a number escapes the 8-character look-back of the matcher).
+  // Two passes, composed: the raw text, then the reader view (white space collapsed, invisible marks gone, as the browser shows it) of the
+  // masked text (critic pass 2, item 1: "PR", 7 spaces, a number escapes the 8-character look-back of the matcher). Never "the bigger count":
+  // on equal counts that kept the raw text and left an id that only the reader view finds (CodeRabbit CLI run 1, agentic-os-listed-id-mask).
+  // The token ends in a hex letter, so before the second pass it is swapped for one private-use character that the text does not hold, and
+  // swapped back after: a folded fullwidth sha glued to the token must not make one long hex run (CodeRabbit CLI run 2, finding 1).
+  const freeMark = (s) => { for (let c = 0xe000; c < 0xf8ff; c++) if (!s.includes(String.fromCharCode(c))) return String.fromCharCode(c); return ''; };
   const field = (row, key) => {
     if (!row || typeof row[key] !== 'string' || row[key] === '') return;
     const m = maskListed(row[key], ids);
-    const flat = readerView(row[key]);
-    const f = flat === row[key] ? m : maskListed(flat, ids);
-    const best = f.masked > m.masked ? f : m;
-    if (best.masked > 0) { row[key] = best.text; n += best.masked; }
+    const mark = freeMark(m.text);
+    if (mark === '') { row[key] = TOKEN; n += 1; return; } // no free character: fail closed, the field is the token alone
+    const swapped = m.text.split(TOKEN).join(mark);
+    const flat = readerView(swapped);
+    const f = flat === swapped ? { text: m.text, masked: 0 } : maskListed(flat, ids);
+    if (m.masked + f.masked > 0) { row[key] = f.masked > 0 ? f.text.split(mark).join(TOKEN) : m.text; n += m.masked + f.masked; }
   };
   for (const l of lanes) for (const k of LANE_TEXT) field(l, k);
   for (const s of sessions) {

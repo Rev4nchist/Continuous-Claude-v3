@@ -24,7 +24,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { makeZip } from './zip-lite.mjs';
 import { MiB, maskText } from './backup-state-lib.mjs';
 import { listRows, makeNotion, rowProperties, runRetention, uploadFile } from './backup-notion.mjs';
-import { readState, runDrill } from './backup-drill.mjs';
+import { readState, runDrill, sweepPendingDrills } from './backup-drill.mjs';
 
 const TEXT = /\.(md|json|mjs|jsonl|txt)$/i;
 const KEEP_LOCAL_DAYS = 14;
@@ -174,6 +174,14 @@ export async function runBackup(opts, deps) {
   let status = 'ok';
   let detail = '';
   let drill = { drill: 'not-run', detail: '' };
+  // A run killed from outside leaves a drill-pending.json in its folder. A sweep problem is a warning: the night goes on.
+  if (deps.sweep) {
+    try {
+      const swept = await deps.sweep();
+      for (const n of swept?.cleaned ?? []) log(`sweep: cleaned leftover scratch database ${n}`);
+      for (const k of swept?.skipped ?? []) log(`sweep: left alone: ${say(k)}`);
+    } catch (e) { log(`sweep skipped: ${say(e)}`); }
+  }
   const dumpName = `ccv3-lanedb-${date}.dump.gz`;
   const dumpPath = join(outDir, dumpName);
 
@@ -259,10 +267,10 @@ export async function runBackup(opts, deps) {
 
 // ---- command line: the real outside calls (docker, psql, Notion). The tests above never reach this part. ----
 
-/** Run a command and collect its text output. */
-function sh(cmd, args) {
+/** Run a command and collect its text output. opts.signal: an abort stops the child (spawn kills it) and the call ends with code 127. */
+export function sh(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal: opts.signal });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (c) => { stdout += c.toString('utf8'); });
@@ -296,6 +304,20 @@ export function takeCredential(env) {
   return cred;
 }
 
+/** Card ops-backup-drill-deadline-cleanup: the trash rule is on only for the boolean true in the config file the task already reads. */
+export function allowTrashFrom(config) {
+  return config?.allowTrash === true;
+}
+
+/**
+ * Time the restore drill may use: the wrapper budget, minus the time this run used, minus a reserve for the uploads that follow the drill,
+ * minus a margin. Zero or less means no time for the drill. A budget that is not a number gives zero (fails closed).
+ */
+export function drillDeadlineMs({ budgetSec, elapsedMs, reserveMs = 180000, marginMs = 60000 }) {
+  if (!Number.isFinite(budgetSec) || !Number.isFinite(elapsedMs)) return 0;
+  return budgetSec * 1000 - elapsedMs - reserveMs - marginMs;
+}
+
 const today = () => new Date().toLocaleDateString('en-CA');
 
 async function main(argv) {
@@ -315,6 +337,7 @@ async function main(argv) {
 
   let notion = null;
   let secrets = [];
+  let config = null;
   if (!dryRun) {
     const cred = takeCredential(process.env);
     const configFile = process.env.CCV3_BACKUP_CONFIG ?? join(home, '.claude', 'state', 'backup-notion.json');
@@ -326,7 +349,7 @@ async function main(argv) {
     };
     if (cred.status) return stop(cred.status, CREDENTIAL_TEXT[cred.status]);
     if (!existsSync(configFile)) return stop('no-config', 'the Notion database id file is not set up');
-    const config = JSON.parse(readFileSync(configFile, 'utf8'));
+    config = JSON.parse(readFileSync(configFile, 'utf8'));
     secrets = [cred.token];
     notion = makeNotion({ token: cred.token, parent: config.parent, queryPath: config.queryPath });
   }
@@ -336,9 +359,15 @@ async function main(argv) {
     log: (line) => console.log(line),
     readLive: () => readState(sh, dbCtx),
     dump: (outPath) => dumpToFile({ cmd: docker, args: ['exec', CONTAINER, 'pg_dump', '-U', 'claude', '-Fc', '-Z', '9', 'continuous_claude'], outPath }),
-    drill: ({ dumpPath, live }) => runDrill({ sh, dumpPath, live, repo, container: CONTAINER, docker, node }),
+    drill: ({ dumpPath, live }) => runDrill({
+      sh, dumpPath, live, repo, container: CONTAINER, docker, node,
+      deadlineMs: drillDeadlineMs({ budgetSec: Number(process.env.CCV3_STATE_BACKUP_TIMEOUT_SEC ?? 720), elapsedMs: process.uptime() * 1000 }),
+      pendingFile: join(outDir, 'drill-pending.json'),
+    }),
+    // Only a default run folder has run siblings to sweep: a run with --out (a test, a dry run) never reads the real state folder.
+    sweep: pruneRoot ? () => sweepPendingDrills({ root: pruneRoot, sh, repo, container: CONTAINER, docker, node, skip: outDir }) : undefined,
   };
-  const r = await runBackup({ date, home, repo, outDir, dryRun, notion, allowTrash: flag('--allow-trash'), secrets, pruneRoot }, deps);
+  const r = await runBackup({ date, home, repo, outDir, dryRun, notion, allowTrash: flag('--allow-trash') || allowTrashFrom(config), secrets, pruneRoot }, deps);
   console.log(JSON.stringify({ status: r.status, exitCode: r.exitCode, drill: r.drill.drill, files: r.manifest.files.map((f) => ({ name: f.name, bytes: f.bytes })), outDir }));
   return r.exitCode;
 }
@@ -346,3 +375,4 @@ async function main(argv) {
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   main(process.argv.slice(2)).then((code) => process.exit(code), (e) => { console.error(maskText(e.message)); process.exit(1); });
 }
+
