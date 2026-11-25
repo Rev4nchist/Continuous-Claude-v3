@@ -86,6 +86,10 @@
       "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
     },
     {
+      "path": "apps/agentic-os/e2e/readers-db.spec.ts",
+      "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config; run through the scratch harness .claudedocs/e2e-agentic-os-readers/harness/run-scratch.mjs"
+    },
+    {
       "path": "apps/agentic-os/e2e/session-detail-review.spec.ts",
       "reason": "needs a running app (apps/agentic-os/playwright.config.ts: server and database); CI and pre-pr run only the pure config"
     },

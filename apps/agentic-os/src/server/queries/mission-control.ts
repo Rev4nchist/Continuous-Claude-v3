@@ -22,6 +22,7 @@ import {
   type DetailUnavailable,
   type SessionDetail,
 } from '@/server/queries/session-detail';
+import { readReaders, type ReadersSnapshot } from '@/server/queries/readers';
 import { getActiveSessions, type ActiveSessions } from '@/server/queries/sessions';
 import {
   foldSpendView,
@@ -153,6 +154,13 @@ export type MissionControlSnapshot = {
    * no `view` (the Overview and Sessions polls), else null, so the Board, Spend and Flow polls carry none of it.
    */
   prFeed: PrFeedSnapshot | null;
+  /** Stalls, clock entries, open Question flags, the open offer count and the scheduled tasks (card agentic-os-readers). Every poll. */
+  stalls: ReadersSnapshot['stalls'];
+  clock: ReadersSnapshot['clock'];
+  openQuestions: ReadersSnapshot['openQuestions'];
+  /** The open offers in decisions.json. Null when the file could not be read: an error is never 0. */
+  decisionsOpen: ReadersSnapshot['decisionsOpen'];
+  scheduledTasks: ReadersSnapshot['scheduledTasks'];
   /** When the server produced this, ISO-8601 UTC. The UI shows staleness relative
    *  to receipt rather than to this value — a clock difference between server and
    *  browser is not the user's problem to reason about. */
@@ -290,11 +298,13 @@ export async function getMissionControlSnapshot(
   const laneIdsByOwner = new Map([...heldByOwner].map(([owner, held]) => [owner, held.map((lane) => lane.id)]));
   const stateFiles = files.ok ? files.value : NO_FILES;
   const nowMs = Date.now();
-  const [joined, detailResult] = await Promise.all([
+  const [joined, detailResult, readers] = await Promise.all([
     settle(() => getFleetSessions(active, stateFiles, nowMs, heldByOwner)),
     sessionId === null
       ? Promise.resolve(null)
       : settle(() => getSessionDetail(sessionId, stateFiles, laneIdsByOwner, nowMs)),
+    // readReaders never throws: a failing reader is its own source row.
+    readReaders(files.ok ? files.value : null, nowMs),
   ]);
   const sessions = joined.ok ? joined.value : NO_FLEET;
 
@@ -331,6 +341,7 @@ export async function getMissionControlSnapshot(
     laneSource(lanes, board),
     coreSource('fleet-overview', 'Project overview (sessions table)', fleetRead),
     coreSource('active-sessions', 'Live session roster (sessions table)', activeRead),
+    ...readers.sources,
   ];
 
   return {
@@ -354,6 +365,11 @@ export async function getMissionControlSnapshot(
     spend,
     flow,
     prFeed: withPrFeed ? prFeedRead : null,
+    stalls: readers.stalls,
+    clock: readers.clock,
+    openQuestions: readers.openQuestions,
+    decisionsOpen: readers.decisionsOpen,
+    scheduledTasks: readers.scheduledTasks,
     generatedAt: new Date().toISOString(),
   };
 }
