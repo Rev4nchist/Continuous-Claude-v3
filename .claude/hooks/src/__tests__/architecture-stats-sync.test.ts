@@ -104,6 +104,17 @@ describe('architecture-stats-sync — touchesWatchedPaths (multiline git show ou
     expect(touchesWatchedPaths('README.md\ndocs/review-engine/map.md\ndocs/foo.md\n')).toBe(true);
   });
 
+  it('matches the authored map `docs/architecture/system-visualization/architecture.src.json`', () => {
+    expect(touchesWatchedPaths('docs/architecture/system-visualization/architecture.src.json\n')).toBe(true);
+    expect(touchesWatchedPaths('README.md\ndocs/architecture/system-visualization/architecture.src.json\n')).toBe(true);
+  });
+
+  it('does NOT match the other files of the system-visualization folder (the sync writes two of them)', () => {
+    expect(touchesWatchedPaths('docs/architecture/system-visualization/architecture.json\n')).toBe(false);
+    expect(touchesWatchedPaths('docs/architecture/system-visualization/index.html\n')).toBe(false);
+    expect(touchesWatchedPaths('docs/architecture/system-visualization/architecture.src.json.bak\n')).toBe(false);
+  });
+
   it('does NOT match other files of `docs/review-engine/` or a look-alike path', () => {
     expect(touchesWatchedPaths('docs/review-engine/README.md\n')).toBe(false);
     expect(touchesWatchedPaths('docs/review-engine/map.md.bak\n')).toBe(false);
