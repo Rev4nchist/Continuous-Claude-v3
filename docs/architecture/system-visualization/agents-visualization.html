@@ -626,10 +626,10 @@
             <tr><td><b style="color:var(--purple)">Planning</b></td><td class="mono small">architect · plan-agent · plan-reviewer · validate-agent</td><td><span class="pill p">4</span></td></tr>
             <tr><td><b style="color:var(--teal)">Operations</b></td><td class="mono small">deployer · herald · scribe</td><td><span class="pill b">3</span></td></tr>
             <tr><td><b style="color:var(--blue)">Specialty</b></td><td class="mono small">oracle · profiler · pathfinder · quant-analyst · paper-trader · risk-officer</td><td><span class="pill b">6</span></td></tr>
-            <tr><td><b style="color:var(--y)">Meta</b></td><td class="mono small">maestro · wizard · memory-extractor · agent-factory · braintrust-analyst</td><td><span class="pill y">5</span></td></tr>
+            <tr><td><b style="color:var(--y)">Meta</b></td><td class="mono small">maestro · wizard · memory-extractor · agent-factory</td><td><span class="pill y">4</span></td></tr>
           </tbody>
         </table>
-        <p class="small muted" style="margin:10px 0 0;">phoenix appears in both Planning and Implementation framing; validate-agent in both Planning and Meta. Counting each file once = <b style="color:var(--y)">39</b> distinct agents.</p>
+        <p class="small muted" style="margin:10px 0 0;">phoenix appears in both Planning and Implementation framing; validate-agent in both Planning and Meta. Counting each file once = <b style="color:var(--y)">35</b> distinct agents (the files in <code>.claude/agents/</code>).</p>
       </div>
 
       <div class="grid-2">
@@ -953,7 +953,7 @@
         </div>
         <div class="agent-card" data-model="opus">
           <div class="agent-head"><h4 class="agent-name">review-agent</h4><span class="model-tag opus">opus</span></div>
-          <p class="agent-desc">Compares plan (intent) vs Braintrust session (reality) vs git diff (changes). Synthesizes other reviewers' findings; tags cross-model input as [Codex].</p>
+          <p class="agent-desc">Compares plan (intent) vs the session transcript (reality) vs git diff (changes). Synthesizes other reviewers' findings; tags cross-model input as [Codex].</p>
         </div>
         <div class="agent-card" data-model="sonnet">
           <div class="agent-head"><h4 class="agent-name">judge</h4><span class="model-tag sonnet">sonnet</span></div>
@@ -1188,7 +1188,7 @@
       <p class="section-eyebrow">09 · Ship &amp; extend</p>
       <h2 class="section-title">Meta — <span style="color:var(--y)">agents that run the system</span>.</h2>
       <p class="section-lede">
-        Agents pointed at the platform itself. <code>maestro</code> conducts complex multi-step work and is the only agent with the <code>Task</code> tool — it spawns other agents. <code>wizard</code> bootstraps CCv3 on a fresh machine. <code>agent-factory</code> scaffolds new agents. <code>memory-extractor</code> mines session transcripts for learnings, and <code>braintrust-analyst</code> interprets observability logs.
+        Agents pointed at the platform itself. <code>maestro</code> conducts complex multi-step work and is the only agent with the <code>Task</code> tool — it spawns other agents. <code>wizard</code> bootstraps CCv3 on a fresh machine. <code>agent-factory</code> scaffolds new agents. <code>memory-extractor</code> mines session transcripts for learnings.
       </p>
 
       <div class="diagram-wrap">
@@ -1254,11 +1254,6 @@
           <div class="agent-head"><h4 class="agent-name">memory-extractor</h4><span class="model-tag sonnet">sonnet</span></div>
           <p class="agent-desc">Extracts perception changes from session thinking blocks — the aha moments where understanding shifts — and stores them as learnings.</p>
           <div class="tool-chips"><span class="tool-chip">Bash</span><span class="tool-chip">Read</span></div>
-        </div>
-        <div class="agent-card" data-model="opus">
-          <div class="agent-head"><h4 class="agent-name">braintrust-analyst</h4><span class="model-tag opus">opus</span></div>
-          <p class="agent-desc">Analyzes Claude Code sessions using Braintrust logs. Runs analysis scripts, interprets results, writes findings for the main conversation to act on.</p>
-          <div class="tool-chips"><span class="tool-chip">Read</span><span class="tool-chip">Write</span><span class="tool-chip">Bash</span><span class="tool-chip">Grep</span><span class="tool-chip">Glob</span></div>
         </div>
         <div class="agent-card" data-model="sonnet">
           <div class="agent-head"><h4 class="agent-name">validate-agent</h4><span class="model-tag sonnet">sonnet</span></div>

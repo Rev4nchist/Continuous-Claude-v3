@@ -3,7 +3,8 @@
  * architecture-stats-sync.ts — PostToolUse:Bash hook
  *
  * Detects successful `git commit` operations and, if the most recent commit
- * touched files under `.claude/(hooks|agents|skills)/` or `scripts/`, fires
+ * touched files under `.claude/(hooks|agents|skills)/` or `scripts/`, or
+ * `docs/review-engine/map.md` or the authored system-map file, fires
  * `scripts/sync-architecture-stats.mjs --apply` in the background
  * (fire-and-forget; never blocks the user).
  *
@@ -53,8 +54,13 @@ export interface PostToolUseInput {
  *     subtrees with a trailing `/` so `.claude/hooks-other/` does NOT match
  *   - `scripts/` matches the scripts dir with trailing `/` so a doc file like
  *     `docs/about-scripts.md` does NOT match
+ *   - `docs/review-engine/map.md` and the authored
+ *     `docs/architecture/system-visualization/architecture.src.json` (those two
+ *     files only) are sources of the generated system map; the generator reads
+ *     both. The two files the sync writes (`architecture.json`, `index.html`)
+ *     are not watched.
  */
-export const WATCHED_PATTERN = /^(?:\.claude\/(?:hooks|agents|skills)|scripts)\//m;
+export const WATCHED_PATTERN = /^(?:(?:\.claude\/(?:hooks|agents|skills)|scripts)\/|docs\/(?:review-engine\/map\.md|architecture\/system-visualization\/architecture\.src\.json)\r?$)/m;
 
 /**
  * Regex matching a `git commit` invocation (allows arbitrary whitespace and

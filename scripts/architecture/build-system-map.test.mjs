@@ -4,9 +4,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync as fsRename, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -320,4 +320,120 @@ test('G21 a failed write leaves both files as they were (temp file, then rename)
   rmSync(join(root, ...VIZ, 'index.html.tmp'), { recursive: true });
   apply(root);
   assert.equal(readdirSync(join(root, ...VIZ)).filter((n) => n.endsWith('.tmp')).length, 0, 'no temp file is left');
+});
+
+test('G22 a Node option before the hook file is not read as the hook name', () => {
+  const root = makeRoot({ hooks: [['PreToolUse', 'Bash', 'alpha.mjs']] });
+  const f = join(root, '.claude', 'settings.json.template');
+  const t = JSON.parse(readFileSync(f, 'utf8'));
+  const dist = (n) => `{{CLAUDE_HOME}}/hooks/dist/${n}`;
+  t.hooks.PreToolUse.push({ matcher: 'Edit', hooks: [{ type: 'command', command: 'node', args: ['--no-warnings', dist('gamma.mjs')] }] });
+  t.hooks.PreToolUse.push({ matcher: 'Write', hooks: [{ type: 'command', command: 'node', args: ['--require', dist('pre.cjs'), dist('delta.mjs')] }] });
+  writeFileSync(f, JSON.stringify(t, null, 2));
+  apply(root);
+  const hooks = graphOf(root).registry.hooks;
+  const names = hooks.items.map((h) => h.file);
+  assert.ok(names.includes('gamma.mjs'), `a boolean option is skipped: ${names}`);
+  assert.ok(!names.some((n) => n.startsWith('-')), `no hook is named like an option: ${names}`);
+  assert.ok(!names.includes('pre.cjs'), 'the value of an option that takes one is not the hook');
+  assert.equal(hooks.unparsed, 1, 'an option that takes a value cannot be read with certainty: counted as unparsed, never guessed');
+});
+
+test('G23 a rename that fails after the first one puts the first file back (no mixed outputs)', () => {
+  const writeAll = need('writeAll');
+  const dir = mkdtempSync(join(tmpdir(), 'sysmap-wa-'));
+  roots.push(dir);
+  const a = join(dir, 'a.json'), b = join(dir, 'b.html');
+  writeFileSync(a, 'old a'); writeFileSync(b, 'old b');
+  let calls = 0;
+  const failSecond = (from, to) => { calls += 1; if (calls === 2) throw new Error('forced rename failure'); return fsRename(from, to); };
+  assert.throws(() => writeAll([[a, 'new a'], [b, 'new b']], { renameSync: failSecond }), /forced rename failure/);
+  assert.equal(readFileSync(a, 'utf8'), 'old a', 'the first file is back as it was');
+  assert.equal(readFileSync(b, 'utf8'), 'old b', 'the second file never changed');
+  assert.deepEqual(readdirSync(dir).sort(), ['a.json', 'b.html'], 'no temp or backup file is left');
+});
+
+test('G24 no page of the system-visualization folder outside archive/ holds Braintrust text; the retired pages are moved, and every hub link resolves', () => {
+  // SYSMAP_VIZ_REPO lets a drill run this row against an older checkout (the RED proof).
+  const repo = process.env.SYSMAP_VIZ_REPO ?? REPO;
+  const dir = join(repo, ...VIZ);
+  const files = readdirSync(dir, { recursive: true, withFileTypes: true }).filter((d) => d.isFile())
+    .map((d) => join(d.parentPath ?? d.path, d.name)).filter((f) => !/^archive[\\/]/.test(relative(dir, f)));
+  assert.ok(files.length >= 7, `the folder has its pages (${files.length} files)`);
+  const bad = files.filter((f) => /braintrust/i.test(readFileSync(f, 'utf8'))).map((f) => relative(dir, f));
+  assert.deepEqual(bad, [], `Braintrust text left in: ${bad.join(', ')}`);
+  assert.ok(existsSync(join(dir, 'archive', 'braintrust-scoring-visualization.html')), 'the Braintrust page is archived, not deleted');
+  assert.ok(existsSync(join(dir, 'archive', 'state-of-rework', 'state-of-rework.html')), 'the state-of-rework tree is archived, not deleted');
+  const hub = readFileSync(join(dir, 'hub.html'), 'utf8');
+  const links = [...hub.matchAll(/href="(\.{1,2}\/[^"#?]+)"/g)].map((m) => m[1]);
+  assert.ok(links.length >= 5, 'the hub links its views');
+  const dead = links.filter((l) => !existsSync(resolve(dir, l)));
+  assert.deepEqual(dead, [], `hub links that do not resolve: ${dead.join(', ')}`);
+});
+
+test('G25 an unknown Node option before the hook file makes the entry unparsed; known flag-only options and --x=y forms still parse', () => {
+  const root = makeRoot({ hooks: [['PreToolUse', 'Bash', 'alpha.mjs']] });
+  const f = join(root, '.claude', 'settings.json.template');
+  const t = JSON.parse(readFileSync(f, 'utf8'));
+  const dist = (n) => `{{CLAUDE_HOME}}/hooks/dist/${n}`;
+  const add = (matcher, args) => t.hooks.PreToolUse.push({ matcher, hooks: [{ type: 'command', command: 'node', args }] });
+  add('A', ['--title', 'worker', dist('titled.mjs')]); // Node takes "worker" as the title: unknown option, cannot be read
+  add('B', ['--enable-source-maps', dist('maps.mjs')]);
+  add('C', ['--max-old-space-size=256', dist('heap.mjs')]);
+  add('D', ['--no-warnings', '--enable-source-maps', dist('both.mjs')]);
+  writeFileSync(f, JSON.stringify(t, null, 2));
+  apply(root);
+  const hooks = graphOf(root).registry.hooks;
+  const names = hooks.items.map((h) => h.file);
+  assert.ok(!names.includes('worker') && !names.includes('titled.mjs'), `an unknown option is never guessed: ${names}`);
+  assert.equal(hooks.unparsed, 1, 'the unknown option entry is counted as unparsed');
+  for (const n of ['maps.mjs', 'heap.mjs', 'both.mjs']) assert.ok(names.includes(n), `${n} still parses: ${names}`);
+});
+
+test('G26 writeAll refuses to start when a backup file of an older crash exists, names it, and leaves everything as it was', () => {
+  const writeAll = need('writeAll');
+  const dir = mkdtempSync(join(tmpdir(), 'sysmap-bak-'));
+  roots.push(dir);
+  const a = join(dir, 'a.json'), b = join(dir, 'b.html');
+  writeFileSync(a, 'old a'); writeFileSync(b, 'old b'); writeFileSync(`${a}.bak`, 'precious older copy');
+  assert.throws(() => writeAll([[a, 'new a'], [b, 'new b']]), (e) => e.message.includes('a.json.bak'), 'the error names the backup');
+  assert.equal(readFileSync(`${a}.bak`, 'utf8'), 'precious older copy', 'the older backup is not touched');
+  assert.equal(readFileSync(a, 'utf8'), 'old a');
+  assert.equal(readFileSync(b, 'utf8'), 'old b');
+  assert.deepEqual(readdirSync(dir).sort(), ['a.json', 'a.json.bak', 'b.html'], 'no temp file is left');
+});
+
+test('G27 when the restore of the first file also fails, its backup is kept and named in the error', () => {
+  const writeAll = need('writeAll');
+  const dir = mkdtempSync(join(tmpdir(), 'sysmap-keep-'));
+  roots.push(dir);
+  const a = join(dir, 'a.json'), b = join(dir, 'b.html');
+  writeFileSync(a, 'old a'); writeFileSync(b, 'old b');
+  let calls = 0;
+  const failSecondAndRestore = (from, to) => { calls += 1; if (calls >= 2) throw new Error(`forced failure ${calls}`); return fsRename(from, to); };
+  assert.throws(() => writeAll([[a, 'new a'], [b, 'new b']], { renameSync: failSecondAndRestore }), (e) => e.message.includes('a.json.bak'), 'the error names the kept backup');
+  assert.equal(readFileSync(`${a}.bak`, 'utf8'), 'old a', 'the only good copy of the first file is kept');
+  assert.ok(!existsSync(`${b}.bak`), 'a backup whose file never changed is removed');
+  assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith('.tmp')), [], 'no temp file is left');
+});
+
+test('G28 an option form that replaces the file entrypoint (--eval=, -e=, --print=, -p=) makes the entry unparsed; known inline-value options still parse', () => {
+  const root = makeRoot({ hooks: [['PreToolUse', 'Bash', 'alpha.mjs']] });
+  const f = join(root, '.claude', 'settings.json.template');
+  const t = JSON.parse(readFileSync(f, 'utf8'));
+  const dist = (n) => `{{CLAUDE_HOME}}/hooks/dist/${n}`;
+  const add = (matcher, args) => t.hooks.PreToolUse.push({ matcher, hooks: [{ type: 'command', command: 'node', args }] });
+  add('E1', ['--eval=0', dist('evalA.mjs')]); // Node runs the expression, not the file
+  add('E2', ['-e=0', dist('evalB.mjs')]);
+  add('E3', ['--print=1', dist('printA.mjs')]);
+  add('E4', ['-p=1', dist('printB.mjs')]);
+  add('K1', ['--max-old-space-size=256', dist('heap.mjs')]);
+  add('K2', ['--require=./pre.cjs', dist('pre.mjs')]); // a preload keeps the file entrypoint
+  writeFileSync(f, JSON.stringify(t, null, 2));
+  apply(root);
+  const hooks = graphOf(root).registry.hooks;
+  const names = hooks.items.map((h) => h.file);
+  for (const n of ['evalA.mjs', 'evalB.mjs', 'printA.mjs', 'printB.mjs']) assert.ok(!names.includes(n), `${n} is not a hook (Node does not run it): ${names}`);
+  assert.equal(hooks.unparsed, 4, 'the four entrypoint-replacing forms are counted as unparsed');
+  for (const n of ['heap.mjs', 'pre.mjs']) assert.ok(names.includes(n), `${n} still parses: ${names}`);
 });
