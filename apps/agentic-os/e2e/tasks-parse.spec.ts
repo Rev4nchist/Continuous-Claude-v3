@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { expect, test } from '@playwright/test';
 
@@ -81,7 +82,8 @@ test.describe('parseTasksFile', () => {
 
   test('T7 every task of the real file parses and every trigger has a known shape (no pin on the count)', () => {
     // Breaks when a new task adds a trigger shape that the reader does not know: the guard against drift in tasks.json.
-    const text = readFileSync(join(__dirname, '..', '..', '..', 'scripts', 'scheduled', 'tasks.json'), 'utf8');
+    const here = dirname(fileURLToPath(import.meta.url)); // apps/agentic-os/e2e: three levels up is the repo root
+    const text = readFileSync(join(here, '..', '..', '..', 'scripts', 'scheduled', 'tasks.json'), 'utf8');
     const out = parseTasksFile(text, at('2026-11-25T12:49:00Z'));
     expect(out.ok).toBe(true);
     if (!out.ok) return;
