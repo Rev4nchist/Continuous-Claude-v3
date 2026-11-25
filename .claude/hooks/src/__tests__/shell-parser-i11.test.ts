@@ -88,11 +88,15 @@ describe('I11: a git global option with no value hides a push from the guarded-c
     shipTap();
     for (const o of ['--no-pager', '--git-dir=x', '--no-pager -C x']) expect(await patIn(pwsh(`git ${o} push fork feat/x }`)), o).toBe('parse-error');
   });
-  it('I11-4 (bash -c): the inner text does not parse and holds a push with a no-value option: parse-error', async () => {
+  it('I11-4 (bash -c): the inner text does not parse and holds a push with a no-value option: denied (seat word: pin deny, not the kind)', async () => {
     shipTap();
     for (const c of [`bash -c '{ git --no-pager push fork feat/x'`, `sh -c 'git --git-dir=x push fork feat/x )'`, `bash -c '{ git --no-pager -C x push fork feat/x'`]) {
-      expect(await patIn(bash(c)), c).toBe('parse-error');
+      const p = await patIn(bash(c));
+      expect(['allow', 'warn'], c).not.toContain(p);
     }
+  });
+  it('I11-10 (over-deny, named): an option text with the word push after git, in a text that does not parse, is denied', async () => {
+    for (const c of ['{ git log --grep push', 'git log --grep push )']) expect(await patIn(bash(c)), c).toBe('parse-error');
   });
   it('I11-5 (script runner): inline code that names a push with a no-value option is script-runner', async () => {
     shipTap();
@@ -117,9 +121,12 @@ describe('I11: a git global option with no value hides a push from the guarded-c
       expect(a, o).not.toBe('script-runner');
     }
   });
-  it('I11-9 (control): the word push as a quoted argument of another call is not a parse-error', async () => {
-    for (const c of [`{ echo "git --no-pager push"`, `{ git --no-pager commit -m "push notes"`]) {
+  it('I11-9 (control): a text that does not parse and never names push is not a parse-error', async () => {
+    for (const c of [`{ echo "git --no-pager status"`, `{ git --no-pager commit -m "notes"`, `{ git --no-pager -C x log --oneline`]) {
       expect(await patIn(bash(c)), c).not.toBe('parse-error');
     }
+  });
+  it('I11-11 (over-deny, named): the word push inside a quoted argument after git options, in a text that does not parse, is denied (as `git push` in quotes is on main)', async () => {
+    for (const c of [`{ echo "git --no-pager push"`, `{ git --no-pager commit -m "push notes"`]) expect(await patIn(bash(c)), c).toBe('parse-error');
   });
 });
