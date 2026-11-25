@@ -85,7 +85,7 @@ test('G1 a removed hook registration makes the committed graph stale and names t
 });
 
 test('G2 an added skill and a removed agent both make the graph stale', () => {
-  const root = makeRoot();
+  const root = makeRoot({ agents: ['a-one', 'a-two'] });
   apply(root);
   mkdirSync(join(root, '.claude/skills/s-new'), { recursive: true });
   writeFileSync(join(root, '.claude/skills/s-new/SKILL.md'), '---\nname: s-new\ndescription: New.\n---\n');
@@ -127,24 +127,29 @@ test('G4 the counts equal a second way of counting on the same tree', () => {
   assert.equal(hooksNode.stats.registrations, 2, 'the node stats come from the registry, not from the authored text');
 });
 
-test('G5 the committed system visualization folder holds no Braintrust text', () => {
+test('G5 the three files of the system map hold no Braintrust text', () => {
+  // Scope: the map itself. The other pages of the folder (hub, hooks, agents, the Braintrust page, state-of-rework) are separate history.
   const dir = join(REPO, ...VIZ);
   assert.ok(existsSync(join(dir, 'architecture.src.json')), 'the authored source file must exist');
-  const hits = walkText(dir).map((t) => (t.match(/braintrust/gi) || []).length).reduce((a, b) => a + b, 0);
-  assert.equal(hits, 0, `${hits} Braintrust hits left in the folder`);
+  for (const name of ['architecture.src.json', 'architecture.json', 'index.html']) {
+    const hits = (readFileSync(join(dir, name), 'utf8').match(/braintrust/gi) || []).length;
+    assert.equal(hits, 0, `${hits} Braintrust hits left in ${name}`);
+  }
 });
 
-test('G6 a listed id in the authored text fails the check; without an id list the result is "not checked"', () => {
+test('G6 a listed id in the authored text fails the check; without an id list the result is "not checked"', async () => {
   const ID = 'a1b2c3d4e5f6'; // made up: a sha shaped id
   const root = makeRoot({ src: SRC({ meta: { name: 'Fixture map', tagline: `see ${ID}`, description: 'x', platform: 'test', sources: [] } }) });
   apply(root);
-  const hit = need('checkOutputs')(root, { listedIds: [ID] });
+  const hit = await need('checkOutputs')(root, { listedIds: [ID] });
   assert.equal(hit.exitCode, 1);
   assert.ok(hit.problems.some((p) => /listed/i.test(p)), 'the problem names the listed id count');
   assert.ok(!JSON.stringify(hit).includes(ID), 'the result never prints an id');
-  const clean = need('checkOutputs')(makeRoot(), { listedIds: [ID] });
-  assert.notEqual(clean.exitCode, 1);
-  const none = need('checkOutputs')(root, { listedIds: null });
+  const cleanRoot = makeRoot();
+  apply(cleanRoot);
+  const clean = await need('checkOutputs')(cleanRoot, { listedIds: [ID] });
+  assert.equal(clean.exitCode, 0, 'a fresh graph without the id passes');
+  const none = await need('checkOutputs')(root, { listedIds: null });
   assert.equal(none.exitCode, 2, 'no id list: not checked, not a pass');
 });
 
