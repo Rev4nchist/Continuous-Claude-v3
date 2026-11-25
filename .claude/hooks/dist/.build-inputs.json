@@ -206,7 +206,7 @@
   },
   "external": {
     ".claude/hooks/src/shared/malicious-packages.json": {
-      "sha256": "f461eb3d79c7119d15510f44cc9e5988627b27345733e7772d3d70d6aa30e986"
+      "sha256": "8ed88a25fee74b581421f500d537d9ed375edb527bc7132ed61560528b3d8505"
     },
     ".claude/hooks/src/shell-ast-walk.ps1": {
       "sha256": "b02f50af8be44e493d53c32b42b92511ca53629b2b94eb251fefc1f9a4f91428"
