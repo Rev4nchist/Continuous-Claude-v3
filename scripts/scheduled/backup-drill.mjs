@@ -57,6 +57,16 @@ export async function readState(sh, { db, container = 'continuous-claude-postgre
 
 const fail = (detail, tail = '') => ({ drill: 'fail', detail: maskText(`${detail}${tail}`) });
 
+/** One outside call with its own limit. At `ms` the child gets the abort, and a runner that ignores it still returns code 124 (a hung docker or node child cannot hold the run). */
+async function bounded(shell, cmd, args, ms) {
+  const ac = new AbortController();
+  let timer;
+  const limit = new Promise((done) => { timer = setTimeout(() => { ac.abort(); done({ code: 124, stdout: '', stderr: `no answer in ${Math.round(ms / 1000)} s` }); }, ms); });
+  const run = Promise.resolve(shell(cmd, args, { signal: ac.signal }));
+  run.catch(() => {}); // a call that lost the race may fail later: nobody waits for it
+  try { return await Promise.race([run, limit]); } finally { clearTimeout(timer); }
+}
+
 /**
  * live: { counts, idsBefore, idsAfter } read from the live database just before and just after the dump.
  * deadlineMs: time the drill may use (undefined = no limit). At 0 or below nothing starts: fail "no time for drill". When it passes, the running child gets an abort
@@ -65,7 +75,7 @@ const fail = (detail, tail = '') => ({ drill: 'fail', detail: maskText(`${detail
  *   and sweepPendingDrills of the next run cleans from it. It holds the scratch NAME only: no url, no password.
  * Returns { drill: 'pass' | 'fail', detail }. Never throws: any error is a fail with its text.
  */
-export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'continuous-claude-postgres', user = 'claude', node = 'node', docker = 'docker', deadlineMs, pendingFile }) {
+export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'continuous-claude-postgres', user = 'claude', node = 'node', docker = 'docker', deadlineMs, pendingFile, cleanupMs = 20000 }) {
   if (deadlineMs !== undefined && !(deadlineMs > 0)) return fail('no time for drill: the run budget is used up');
   const ac = new AbortController();
   const sh = (cmd, args) => shell(cmd, args, { signal: ac.signal }); // the steps of the body
@@ -75,12 +85,17 @@ export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'c
   let copy = null;
   let plain = null; // the gunzipped dump on this machine
   // A create that ends after the abort made a database the cleanup never saw: drop it here, by its own url (checked first), and do nothing else.
+  // A drop that fails or hangs is put in the pending file (the name only), so the next run's sweep owns it.
   const lateCreate = async (created) => {
+    let late;
+    let lateName;
     try {
-      const late = JSON.parse(created.stdout).url;
-      assertScratchUrl(late);
-      await shell(node, [scratchCli, 'drop', late]);
-    } catch { /* nothing usable to drop; the next run's sweep has no file either, the scratch CLI removes its own failed creates */ }
+      late = JSON.parse(created.stdout).url;
+      lateName = assertScratchUrl(late);
+    } catch { return fail('drill aborted'); } // nothing usable to drop: the scratch CLI removes its own failed creates
+    let dropped = { code: 1 };
+    try { dropped = await bounded(shell, node, [scratchCli, 'drop', late], cleanupMs); } catch { /* recorded below */ }
+    if (dropped.code !== 0 && pendingFile) { try { writeFileSync(pendingFile, JSON.stringify({ name: lateName })); } catch { /* nothing more to do here */ } }
     return fail('drill aborted');
   };
   const body = async () => {
@@ -106,7 +121,10 @@ export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'c
     copy = `/tmp/${name}.dump`;
     if (ac.signal.aborted) return fail('drill aborted');
     const cp = await sh(docker, ['cp', plain, `${container}:${copy}`]);
-    if (ac.signal.aborted) return fail('drill aborted');
+    if (ac.signal.aborted) { // the cp ended after the cleanup ran: the copy it made has no owner but this line
+      await bounded(shell, docker, ['exec', container, 'rm', '-f', copy], cleanupMs).catch(() => {});
+      return fail('drill aborted');
+    }
     if (cp.code !== 0) return fail('docker cp failed: ', cp.stderr);
     const restore = await sh(docker, ['exec', container, 'pg_restore', '-U', user, '--clean', '--if-exists', '--no-owner', '-d', name, copy]);
     if (ac.signal.aborted) return fail('drill aborted');
@@ -135,7 +153,7 @@ export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'c
     result = fail(`drill error: ${e.message}`);
   } finally {
     if (timer) clearTimeout(timer);
-    const sh = shell; // the cleanup runs on the plain runner: an aborted signal must not stop it
+    const sh = (cmd, args) => bounded(shell, cmd, args, cleanupMs); // the cleanup gets a fresh signal and its own limit per call: an aborted signal must not stop it, a hung call must not hold it
     const notes = [];
     if (copy) {
       try {
@@ -165,7 +183,8 @@ export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'c
  * assertScratchUrl and assertLocalHost, the container copy and the temp dump are derived from the name, never from the file text. A file that fails any check stays
  * for a person. A failed drop keeps the file for the next run. Never throws. Returns { cleaned: [names], skipped: [text] }.
  */
-export async function sweepPendingDrills({ root, sh, repo, container = 'continuous-claude-postgres', node = 'node', docker = 'docker', skip = null, urlFor = scratchUrlFor }) {
+export async function sweepPendingDrills({ root, sh: shell, repo, container = 'continuous-claude-postgres', node = 'node', docker = 'docker', skip = null, urlFor = scratchUrlFor, callMs = 20000 }) {
+  const sh = (cmd, args) => bounded(shell, cmd, args, callMs); // each docker and node call has its own limit (a hung call is a code 124: the file stays for the next run)
   const cleaned = [];
   const skipped = [];
   const folders = (dir) => {
