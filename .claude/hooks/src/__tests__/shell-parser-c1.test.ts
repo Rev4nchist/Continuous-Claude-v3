@@ -31,6 +31,7 @@ beforeEach(() => {
   saved = process.env.CCV3_DECISIONS_FILE;
   process.env.CCV3_DECISIONS_FILE = join(dir, 'decisions.json');
   lookups = [];
+  pushReads = [];
 });
 afterEach(() => {
   if (saved === undefined) delete process.env.CCV3_DECISIONS_FILE; else process.env.CCV3_DECISIONS_FILE = saved;
@@ -46,19 +47,35 @@ const REMOTES: Record<string, (inSub: boolean) => [string, string]> = {
   multi: () => [`${NET}m.git`, `${NET}m.git\n.`], // two push URLs, one local
   cachesub: (inSub) => (inSub ? ['.', '.'] : [`${NET}z.git`, `${NET}z.git`]), // local only in the folder sub
   cachecwd: (inSub) => (inSub ? [`${NET}c.git`, `${NET}c.git`] : ['.', '.']), // local only in the payload folder
+  // CLI run 1 finding 3 (seat ruling 14:3x CST): a push URL is NETWORK only when it is clearly network; everything else is local (fail closed).
+  rel1: () => [`${NET}r1.git`, 'cache.git'], // a colon-free relative path: git treats it as a local path
+  rel2: () => [`${NET}r2.git`, 'backups/cache.git'],
+  fileurl: () => [`${NET}f.git`, 'file:///x'],
+  drive: () => [`${NET}d.git`, 'C:/x'],
+  dotrel: () => [`${NET}o.git`, './x'],
+  oddpush: () => [`${NET}q.git`, ''], // an empty answer is odd: local
+  httpsonly: () => [`${NET}h.git`, 'https://github.com/o/r.git'],
+  sshurl: () => ['ssh://git@host/o/r.git', 'ssh://git@host/o/r.git'],
+  scplike: () => ['git@host:org/r.git', 'git@host:org/r.git'], // scp-like: host:path, no slash before the colon, no drive letter
 };
 
 /** `throwIn`: a git read run in a folder that ends with `dir` throws an error with this code (spawnSync: ETIMEDOUT on the timeout, ENOENT for a missing folder). */
-interface World { scanLeft?: () => number; throwIn?: { dir: string; code: string } }
+interface World { scanLeft?: () => number; throwIn?: { dir: string; code: string }; clock?: { left: number }; fixedLeft?: number }
+/** The `timeout` option of each PB-5 push-URL read (the shape judge reads the fetch URL itself, with no option: not counted). */
+let pushReads: { t: number | undefined; leftBefore: number | undefined }[] = [];
 function deps(w: World = {}): Deps {
   const config = JSON.stringify({ decisions: { enforce: true } });
   return {
     env: { ...process.env, CCV3_DECISIONS_FILE: join(dir, 'decisions.json') },
     home: '/home/nobody',
-    ...(w.scanLeft ? { scanLeft: w.scanLeft } : {}),
+    ...(w.scanLeft ? { scanLeft: w.scanLeft } : w.clock ? { scanLeft: () => w.clock!.left } : w.fixedLeft !== undefined ? { scanLeft: () => w.fixedLeft! } : {}),
     readFile: (p: string) => (p.replace(/\\/g, '/').endsWith('/review-router.config.json') ? config : null),
-    git: (cwd: string, args: string[]) => {
+    git: (cwd: string, args: string[], opts?: { timeout?: number }) => {
       const a = args.join(' ');
+      if ((w.clock || w.fixedLeft !== undefined) && /^remote get-url /.test(a)) {
+        if (a.includes('--push --all')) pushReads.push({ t: opts?.timeout, leftBefore: w.clock?.left ?? w.fixedLeft });
+        if (w.clock) w.clock.left -= opts?.timeout ?? 2000; // a read uses up its whole timeout (the worst case); no option means the 2000 ms default
+      }
       if (a === 'remote -v') return { status: 0, stdout: `fork\thttps://github.com/${REPO}.git (push)\n` };
       if (a === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
       if (a === 'branch --show-current') return { status: 0, stdout: 'feat/x\n' };
@@ -301,5 +318,48 @@ describe('A2: the remote lookups stop when the hook time is nearly gone', () => 
     shipTap();
     expect(await patIn(bash(`git push plain feat/x && ${PUSH}`), { scanLeft: () => 7000 })).toBe('allow');
     expect(lookups.length).toBeGreaterThan(0);
+  });
+});
+
+describe('A1-R (CLI run 1 finding 3): a get-url answer is NETWORK only when it is clearly network; every other answer is local', () => {
+  it('A1-R1: a push URL that is a relative path, a file URL, a drive path, ./x or an empty answer is push-state-unknown (main allows each with a tap)', async () => {
+    shipTap();
+    for (const name of ['rel1', 'rel2', 'fileurl', 'drive', 'dotrel', 'oddpush']) {
+      expect(await patIn(bash(`git push ${name} feat/x && ${PUSH}`)), name).toBe('push-state-unknown');
+    }
+  });
+  it('A1-R2 (control): an https push URL, an ssh URL and an scp-like host:path stay network (allowed)', async () => {
+    shipTap();
+    for (const name of ['httpsonly', 'sshurl', 'scplike']) {
+      expect(await patIn(bash(`git push ${name} feat/x && ${PUSH}`)), name).toBe('allow');
+    }
+  });
+});
+
+describe('A2-4 (CLI run 1 finding 2): each push-URL read gets a timeout bounded by the hook time left', () => {
+  it('A2-4: every read passes a timeout that is above 0, at most 2000 ms and at most the time left minus 1000 ms', async () => {
+    shipTap();
+    const clock = { left: 7000 };
+    await patIn(bash(`git push plain feat/x && ${PUSH}`), { clock });
+    expect(pushReads.length, 'the push-URL read must run').toBeGreaterThan(0);
+    for (const r of pushReads) {
+      expect(r.t, 'a timeout must be passed').toBeDefined();
+      expect(r.t!).toBeGreaterThan(0);
+      expect(r.t!).toBeLessThanOrEqual(2000);
+      expect(r.t!).toBeLessThanOrEqual(r.leftBefore! - 1000);
+    }
+  });
+  it('A2-4b: with 1600 ms left the timeout is 600 ms (time left minus 1000), not the 2000 ms default', async () => {
+    shipTap();
+    await patIn(bash(`git push plain feat/x && ${PUSH}`), { fixedLeft: 1600 });
+    expect(pushReads.length, 'the push-URL read must run (1600 ms is above the 1500 ms reserve)').toBeGreaterThan(0);
+    for (const r of pushReads) expect(r.t).toBe(600);
+  });
+});
+
+describe('F1-7 (CLI run 1 finding 1, seat ruling): script-file arguments get nested parsing too (the broad choice, V7.6)', () => {
+  it('F1-7: bash scripts/report.sh with a broken guarded argument is parse-error (fail closed on parse doubt)', async () => {
+    shipTap();
+    expect(await patIn(bash(`bash scripts/report.sh '${PUSH} )'`))).toBe('parse-error');
   });
 });
