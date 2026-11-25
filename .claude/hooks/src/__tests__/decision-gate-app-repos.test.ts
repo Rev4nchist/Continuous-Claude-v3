@@ -84,7 +84,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cpuBest, cpuMs, cpuTimed } from './helpers/cpu-time.js';
 import { decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
 import { readRegistry } from '../shared/tap-scope.js';
-import { GitDeadlineError, MissingCwdError, decide, handle, makeGit, pushShapesOf, realDeps, type Decision, type Deps } from '../decision-gate.js';
+import { GitDeadlineError, MissingCwdError, decide, handle, makeGit, pushShapesOf, realDeps, withParsed, type Decision, type Deps } from '../decision-gate.js';
 // @ts-ignore TS7016: app-ask.mjs has no declaration file. The REAL offer writer: C21 takes every key from it, never by hand.
 import * as appAsk from '../../../../scripts/github/app-ask.mjs';
 
@@ -839,6 +839,14 @@ describe('C14 F1: a repo is read only where gh takes one, in the gh segment itse
   it('a covered command with two merges of PR 7 at one head: the second, for another repo, is judged too', () => {
     mergeX();
     expect(denyOf(bash(`${MERGE} -R acme/app-x; ${MERGE} -R other/lib`))?.pattern).toBe('repo-differs');
+  });
+  // PR C2a: the same row with the real parse, as the hook runs. Main allowed the second merge here (the parser's repo read took the first -R for both shapes: a hole on main).
+  // Change that breaks it: withAstMerges takes the first parsed merge that names another repo for every shape of the PR, so the second merge is judged by the first one's words.
+  it('C2a pin: with the real parse, the second merge of PR 7 for another repo is judged too (closed hole of main)', async () => {
+    mergeX();
+    const input = bash(`${MERGE} -R acme/app-x; ${MERGE} -R other/lib`);
+    const d = decide(input, await withParsed(JSON.stringify(input), deps()));
+    expect(d.action === 'deny' ? d.pattern : 'allow').toBe('repo-differs');
   });
   it('a variable -R of another segment does not make a covered create unreadable; its own -R $R does', () => {
     openX();
