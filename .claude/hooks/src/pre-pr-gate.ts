@@ -90,6 +90,7 @@ import { blankInertQuotes, blankInertQuotesAround } from './shared/inert-quotes.
 import { maskQuoted } from './shared/mask-quotes.js';
 import { decisionKey, decisionRead, decisionUse, type Step } from './shared/decisions-store.js';
 import { readShellCommand } from './shared/shell-tools.js';
+import { overrideLocked, OVERRIDE_IGNORED_NOTE } from './shared/unattended.js';
 
 export { CCV3_REPO, namedRepo };
 export const STAMP_REL = '.claude/cache/pre-pr/stamp.json';
@@ -145,9 +146,9 @@ export interface ErrorContext { code?: string; cwd?: string }
 export type Decision =
   | { action: 'allow'; warn?: string; usedCliSkip?: { key: string; head: string; label: string } }
   | { action: 'override' }
-  | { action: 'deny'; reason: string; pattern: string; soft?: boolean };
+  | { action: 'deny'; reason: string; pattern: string; soft?: boolean; overrideIgnored?: true };
 
-interface HookInput { tool_name?: string; tool?: string; tool_input?: Record<string, unknown>; cwd?: string; session_id?: string; agent_id?: string }
+interface HookInput { tool_name?: string; tool?: string; tool_input?: Record<string, unknown>; cwd?: string; session_id?: string; agent_id?: string; permission_mode?: string }
 
 /** The command text of a shell tool call (Bash and PowerShell: `command`; Desktop Commander: `command` or `input`). Empty for any other tool or an unreadable field: there is no command to judge. */
 const commandOf = (input: HookInput): string => {
@@ -460,11 +461,24 @@ function singleBodyFile(command: string): string | null {
   return bodyFileOf(command);
 }
 
-/** The override: a LEADING assignment only (sh form or the PowerShell `$env:` form), or the process env. */
-export function hasOverride(command: string, env: NodeJS.ProcessEnv): boolean {
+/** The override as typed: a LEADING assignment only (sh form or the PowerShell `$env:` form), or the process env. Whatever the run is. */
+function typedOverride(command: string, env: NodeJS.ProcessEnv): boolean {
   return env.SKIP_PRE_PR_GATE === '1'
     || /^\s*SKIP_PRE_PR_GATE=1\s+/.test(command)
     || /^\s*\$env:SKIP_PRE_PR_GATE\s*=\s*['"]?1['"]?\s*;/i.test(command);
+}
+
+/**
+ * The override works only where a person answers for it: not in an unattended, bypass or headless run (shared/unattended.ts overrideLocked).
+ * `input` is the hook payload; without it only the env can lock the run (the old calls and tests pass no payload).
+ */
+export function hasOverride(command: string, env: NodeJS.ProcessEnv, input: { permission_mode?: string } = {}): boolean {
+  return typedOverride(command, env) && !overrideLocked(input, env);
+}
+
+/** True when a typed override was given and the run is locked, so the gate ignores it. */
+function overrideWasIgnored(command: string, env: NodeJS.ProcessEnv, input: { permission_mode?: string }): boolean {
+  return typedOverride(command, env) && overrideLocked(input, env);
 }
 
 // ---------- decision ----------
@@ -676,8 +690,10 @@ function decideAs(input: HookInput, deps: Deps, text?: string, quoteTool: string
   const d = judge(command, deps, ctx, shapes);
   const used = ctx.cliSkipUsed ? { usedCliSkip: ctx.cliSkipUsed } : {};
   if (d.action !== 'deny') return d.action === 'allow' ? { ...d, ...used } : d;
-  if (hasOverride(command, deps.env)) return { action: 'override' };
-  return d.soft && !ctx.enforcing() ? { action: 'allow', warn: d.pattern, ...used } : d;
+  if (hasOverride(command, deps.env, input)) return { action: 'override' };
+  if (d.soft && !ctx.enforcing()) return { action: 'allow', warn: d.pattern, ...used };
+  // A typed override in a locked run does not lift the deny: the text says so and handle() logs the ignored override.
+  return overrideWasIgnored(command, deps.env, input) ? { ...d, reason: `${d.reason}\n\n${OVERRIDE_IGNORED_NOTE}`, overrideIgnored: true } : d;
 }
 
 function judge(command: string, deps: Deps, ctx: Ctx, shapes: Shapes): Decision {
@@ -859,6 +875,7 @@ export function handle(raw: string, deps: Deps): string {
     gated = create || ['bash', 'pwsh'].some((s) => isGated(shapesOf(joinContinuations(seen, isDesktopCommander(input) ? (s as 'bash' | 'pwsh') : shellOf(input)))));
     const d = decide(input, deps);
     if (d.action === 'override') logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
+    if (d.action === 'deny' && d.overrideIgnored) logGuardDecision(HOOK, input, 'warn', 'override-ignored: SKIP_PRE_PR_GATE', { command });
     if (d.action === 'allow' && d.warn) logGuardDecision(HOOK, input, 'warn', d.warn, { command });
     // Rule B: a skip that Dave decided is used up at the allow. A decision that cannot be used up (a lock, a missing row) is no allow.
     if (d.action === 'allow' && d.usedCliSkip) {
@@ -880,24 +897,27 @@ export function handle(raw: string, deps: Deps): string {
     if (!gated) return '{}';
     // A gated command that could not be checked (git timeout, git error, unreadable stamp): the leading override allows it, else deny.
     // This holds in both modes: warn mode excuses a rule hit, not a gate that could not decide.
-    if (hasOverride(joinContinuations(command, shellOf(input)), deps.env)) {
+    if (hasOverride(joinContinuations(command, shellOf(input)), deps.env, input)) {
       logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
       return '{}';
     }
+    // A typed override in a locked run is ignored here too: the deny text says so and one row records the attempt.
+    const ignoredNote = overrideWasIgnored(joinContinuations(command, shellOf(input)), deps.env, input) ? `\n\n${OVERRIDE_IGNORED_NOTE}` : '';
+    if (ignoredNote) logGuardDecision(HOOK, input, 'warn', 'override-ignored: SKIP_PRE_PR_GATE', { command });
     if (cdUnexpanded) {
       logGuardDecision(HOOK, input, 'deny', 'cd-unexpanded', { command });
-      const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String((err as { target?: unknown }).target ?? '').slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick, ~, a glob (* ? [), a PowerShell expression or a relative target under CDPATH, so it cannot tell which checkout the command runs in.\n\nUse a literal path in the cd (for example C:/Users/x/repo), or run the cd in a separate call, then run the command again.\n\nThe stamp comes from: ${RUN}`;
+      const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String((err as { target?: unknown }).target ?? '').slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick, ~, a glob (* ? [), a PowerShell expression or a relative target under CDPATH, so it cannot tell which checkout the command runs in.\n\nUse a literal path in the cd (for example C:/Users/x/repo), or run the cd in a separate call, then run the command again.\n\nThe stamp comes from: ${RUN}${ignoredNote}`;
       return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } });
     }
     if ((err as { code?: string } | null)?.code === GIT_NOT_FOUND) {
       // Name the cause and the fix. A generic "could not verify" text hides a missing git.
       logGuardDecision(HOOK, input, 'deny', 'git-not-found', { command });
-      const why = `BLOCKED (pre-pr-gate): ${message.slice(0, 400)}\n\nThe gate needs git to check ${create ? 'the pre-PR stamp' : 'the PR checkpoint rules'}.`;
+      const why = `BLOCKED (pre-pr-gate): ${message.slice(0, 400)}\n\nThe gate needs git to check ${create ? 'the pre-PR stamp' : 'the PR checkpoint rules'}.${ignoredNote}`;
       return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } });
     }
     logGuardDecision(HOOK, input, 'deny', 'verify-error', { command });
     const what = create ? 'the pre-PR stamp' : 'the PR checkpoint rules';
-    const reason = `BLOCKED (pre-pr-gate): could not verify ${what} (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.\n\nThe stamp comes from: ${RUN}`;
+    const reason = `BLOCKED (pre-pr-gate): could not verify ${what} (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.\n\nThe stamp comes from: ${RUN}${ignoredNote}`;
     return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
   }
 }

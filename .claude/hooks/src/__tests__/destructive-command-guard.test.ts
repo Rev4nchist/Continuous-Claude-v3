@@ -46,8 +46,13 @@ describe('deny text does not teach the agent to override the guard', () => {
     expect(ask).toContain('Approve only if you intend this irreversible operation');
   });
 
-  it('still honours the override mechanism itself (Dave uses it)', () => {
-    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'bypassPermissions' }, {}).decision).toBe('allow');
+  it('still honours the override mechanism itself (Dave uses it) in an attended run', () => {
+    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'default' }, {}).decision).toBe('allow');
+  });
+  it('ignores the override in a bypass run (card guard-skip-prefix-unattended): a typed prefix is no yes', () => {
+    const d = decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'bypassPermissions' }, {});
+    expect(d.decision).toBe('deny');
+    expect(d.overrideIgnored).toBe(true);
   });
 });
 
@@ -71,8 +76,12 @@ describe('no false-positive on destructive keywords inside string literals', () 
 });
 
 describe('override via command-string prefix (PreToolUse hooks do not inherit inline env)', () => {
-  it('SKIP_DESTRUCTIVE_GUARD=1 prefix in the command → allow even destructive, even unattended', () => {
-    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'bypassPermissions' }, {}).decision).toBe('allow');
+  it('SKIP_DESTRUCTIVE_GUARD=1 prefix in the command → allow even destructive when attended; denied when unattended', () => {
+    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'default' }, {}).decision).toBe('allow');
+    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'bypassPermissions' }, {}).decision).toBe('deny');
+    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', {}, { CLAUDE_AGENT_ID: 'a' }).decision).toBe('deny');
+    // A headless run is locked for the override only. isUnattended does not read ATTENDED, so the plain verdict stays an ask (follow-up card).
+    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', {}, { CLAUDE_CODE_SESSION_ATTENDED: '0' }).decision).toBe('ask');
   });
 });
 
@@ -204,8 +213,8 @@ describe('F3 — split-flag recursive deletion is caught (not just -rf)', () => 
 });
 
 describe('F2 — SKIP override only as a LEADING prefix, never a substring', () => {
-  it('leading prefix → allow', () => {
-    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'bypassPermissions' }, {}).decision).toBe('allow');
+  it('leading prefix → allow (attended run)', () => {
+    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'default' }, {}).decision).toBe('allow');
   });
   it('substring elsewhere does NOT bypass (the exploit)', () => {
     expect(decide('echo SKIP_DESTRUCTIVE_GUARD=1 && rm -rf build', { permission_mode: 'bypassPermissions' }, {}).decision).toBe('deny');
@@ -551,9 +560,11 @@ describe('P42: git global options no longer hide the subcommand', () => {
     }
   });
   it('PowerShell override: a leading $env:SKIP_DESTRUCTIVE_GUARD=\'1\'; statement', () => {
-    const input = { tool_name: 'PowerShell', permission_mode: 'bypassPermissions' };
+    const input = { tool_name: 'PowerShell', permission_mode: 'default' };
     expect(decide("$env:SKIP_DESTRUCTIVE_GUARD='1'; git -C r reset --hard x", input, {}).decision).toBe('allow');
-    expect(decide("git status; $env:SKIP_DESTRUCTIVE_GUARD='1'; git -C r reset --hard x", input, {}).decision).toBe('deny');
+    // A non-leading statement is no override. An ask in an attended run; a leading one is ignored in a bypass run.
+    expect(decide("git status; $env:SKIP_DESTRUCTIVE_GUARD='1'; git -C r reset --hard x", { ...input, permission_mode: 'bypassPermissions' }, {}).decision).toBe('deny');
+    expect(decide("$env:SKIP_DESTRUCTIVE_GUARD='1'; git -C r reset --hard x", { ...input, permission_mode: 'bypassPermissions' }, {}).decision).toBe('deny');
   });
 });
 
@@ -689,7 +700,7 @@ describe('Fabric: capacity suspend/resume/resize and bulk dataAccessRoles PUT', 
     const cmd = 'SKIP_DESTRUCTIVE_GUARD=1 az fabric capacity resume --capacity-name c';
     // The classifier must SEE the command (a VAR=1 prefix does not hide it), so the override is what allows it.
     expect(classifyDestructive(cmd, 0, 'Bash')).not.toBeNull();
-    expect(decide(cmd, { permission_mode: 'bypassPermissions' }, {}).decision).toBe('allow');
+    expect(decide(cmd, { permission_mode: 'default' }, {}).decision).toBe('allow');
   });
 });
 

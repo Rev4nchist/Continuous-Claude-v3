@@ -1200,6 +1200,19 @@ function readShellCommand(input) {
   return { kind: "command", tool, text, dialects: spec.dialects };
 }
 
+// src/shared/unattended.ts
+function isUnattended(input, env = process.env) {
+  if (input.permission_mode === "bypassPermissions") return true;
+  if (env.CLAUDE_AGENT_ID) return true;
+  if (env.CI === "true" || env.CI === "1") return true;
+  return false;
+}
+function overrideLocked(input, env = process.env) {
+  if (typeof input.agent_id === "string" && input.agent_id !== "") return true;
+  return isUnattended(input, env) || env.CLAUDE_CODE_SESSION_ATTENDED === "0";
+}
+var OVERRIDE_IGNORED_NOTE = "A typed SKIP_ override is ignored in an unattended or bypass run. Ask Dave to run it, or leave bypass mode.";
+
 // src/pre-pr-gate.ts
 var STAMP_REL = ".claude/cache/pre-pr/stamp.json";
 var PATHWAY_REL = ".claude/cache/pre-pr/pathway.json";
@@ -1371,8 +1384,14 @@ function singleBodyFile(command) {
   if (files.length !== 1 || INLINE_BODY.test(command) || INPUT_FLAG2.test(command)) return null;
   return bodyFileOf(command);
 }
-function hasOverride(command, env) {
+function typedOverride(command, env) {
   return env.SKIP_PRE_PR_GATE === "1" || /^\s*SKIP_PRE_PR_GATE=1\s+/.test(command) || /^\s*\$env:SKIP_PRE_PR_GATE\s*=\s*['"]?1['"]?\s*;/i.test(command);
+}
+function hasOverride(command, env, input = {}) {
+  return typedOverride(command, env) && !overrideLocked(input, env);
+}
+function overrideWasIgnored(command, env, input) {
+  return typedOverride(command, env) && overrideLocked(input, env);
 }
 function deny(pattern, why) {
   return {
@@ -1548,8 +1567,11 @@ function decideAs(input, deps, text, quoteTool = input.tool_name || input.tool) 
   const d = judge(command, deps, ctx, shapes);
   const used = ctx.cliSkipUsed ? { usedCliSkip: ctx.cliSkipUsed } : {};
   if (d.action !== "deny") return d.action === "allow" ? { ...d, ...used } : d;
-  if (hasOverride(command, deps.env)) return { action: "override" };
-  return d.soft && !ctx.enforcing() ? { action: "allow", warn: d.pattern, ...used } : d;
+  if (hasOverride(command, deps.env, input)) return { action: "override" };
+  if (d.soft && !ctx.enforcing()) return { action: "allow", warn: d.pattern, ...used };
+  return overrideWasIgnored(command, deps.env, input) ? { ...d, reason: `${d.reason}
+
+${OVERRIDE_IGNORED_NOTE}`, overrideIgnored: true } : d;
 }
 function judge(command, deps, ctx, shapes) {
   const moved = repoMovedDeny(command, shapes);
@@ -1695,6 +1717,7 @@ The stamp comes from: ${RUN}`;
     gated = create || ["bash", "pwsh"].some((s) => isGated(shapesOf(joinContinuations(seen, isDesktopCommander(input) ? s : shellOf(input)))));
     const d = decide(input, deps);
     if (d.action === "override") logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
+    if (d.action === "deny" && d.overrideIgnored) logGuardDecision(HOOK, input, "warn", "override-ignored: SKIP_PRE_PR_GATE", { command });
     if (d.action === "allow" && d.warn) logGuardDecision(HOOK, input, "warn", d.warn, { command });
     if (d.action === "allow" && d.usedCliSkip) {
       const used = deps.decisionUse?.({ step: "cli-skip", key: d.usedCliSkip.key, head: d.usedCliSkip.head, label: d.usedCliSkip.label });
@@ -1716,31 +1739,35 @@ The stamp comes from: ${RUN}`;
       }
     }
     if (!gated) return "{}";
-    if (hasOverride(joinContinuations(command, shellOf(input)), deps.env)) {
+    if (hasOverride(joinContinuations(command, shellOf(input)), deps.env, input)) {
       logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
       return "{}";
     }
+    const ignoredNote = overrideWasIgnored(joinContinuations(command, shellOf(input)), deps.env, input) ? `
+
+${OVERRIDE_IGNORED_NOTE}` : "";
+    if (ignoredNote) logGuardDecision(HOOK, input, "warn", "override-ignored: SKIP_PRE_PR_GATE", { command });
     if (cdUnexpanded) {
       logGuardDecision(HOOK, input, "deny", "cd-unexpanded", { command });
       const why = `BLOCKED (pre-pr-gate): the hook cannot expand the cd target in this command (${String(err.target ?? "").slice(0, 120)}). It does not expand $var, %VAR%, $(...), a backtick, ~, a glob (* ? [), a PowerShell expression or a relative target under CDPATH, so it cannot tell which checkout the command runs in.
 
 Use a literal path in the cd (for example C:/Users/x/repo), or run the cd in a separate call, then run the command again.
 
-The stamp comes from: ${RUN}`;
+The stamp comes from: ${RUN}${ignoredNote}`;
       return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } });
     }
     if (err?.code === GIT_NOT_FOUND) {
       logGuardDecision(HOOK, input, "deny", "git-not-found", { command });
       const why = `BLOCKED (pre-pr-gate): ${message.slice(0, 400)}
 
-The gate needs git to check ${create ? "the pre-PR stamp" : "the PR checkpoint rules"}.`;
+The gate needs git to check ${create ? "the pre-PR stamp" : "the PR checkpoint rules"}.${ignoredNote}`;
       return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } });
     }
     logGuardDecision(HOOK, input, "deny", "verify-error", { command });
     const what = create ? "the pre-PR stamp" : "the PR checkpoint rules";
     const reason = `BLOCKED (pre-pr-gate): could not verify ${what} (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.
 
-The stamp comes from: ${RUN}`;
+The stamp comes from: ${RUN}${ignoredNote}`;
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
   }
 }

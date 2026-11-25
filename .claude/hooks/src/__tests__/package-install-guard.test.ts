@@ -1217,10 +1217,11 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       gated(await runHook(cmd, { stub: FRESH }));
     });
     it('regression: a leading SKIP_PACKAGE_GUARD=1 is honoured (hook allows a fresh package)', async () => {
-      expect(await runHook('SKIP_PACKAGE_GUARD=1 npm install zz-fake-pkg-a1', { stub: FRESH })).toBeUndefined();
+      // An attended run: the CI runner sets CI=true, which locks the override (card guard-skip-prefix-unattended).
+      expect(await runHook('SKIP_PACKAGE_GUARD=1 npm install zz-fake-pkg-a1', { stub: FRESH, env: { CI: '', CLAUDE_AGENT_ID: '' } })).toBeUndefined();
     });
     it('regression: SKIP_PACKAGE_GUARD=1 among several leading assignments is honoured', async () => {
-      expect(await runHook('FOO=bar SKIP_PACKAGE_GUARD=1 npm install zz-fake-pkg-a1', { stub: FRESH })).toBeUndefined();
+      expect(await runHook('FOO=bar SKIP_PACKAGE_GUARD=1 npm install zz-fake-pkg-a1', { stub: FRESH, env: { CI: '', CLAUDE_AGENT_ID: '' } })).toBeUndefined();
     });
     it('regression: checkOverride is true for the leading forms', () => {
       expect(checkOverride('SKIP_PACKAGE_GUARD=1 npm install zz-fake-pkg-a1')).toBe(true);
@@ -1422,7 +1423,7 @@ describe('cloudflare eval bypasses (F08-F15)', { timeout: 30_000 }, () => {
       gated(await runHook("$env:SKIP_PACKAGE_GUARD='1'; npm install zz-fake-pkg-a1", { tool: 'PowerShell', stub: FRESH }));
     });
     it('regression: the unquoted $env:SKIP_PACKAGE_GUARD=1; first statement is the override', async () => {
-      expect(await runHook('$env:SKIP_PACKAGE_GUARD=1; npm install zz-fake-pkg-a1', { tool: 'PowerShell', stub: FRESH })).toBeUndefined();
+      expect(await runHook('$env:SKIP_PACKAGE_GUARD=1; npm install zz-fake-pkg-a1', { tool: 'PowerShell', stub: FRESH, env: { CI: '', CLAUDE_AGENT_ID: '' } })).toBeUndefined();
     });
   });
 

@@ -62,7 +62,7 @@ import {
   normalizeGitGlobalOptions,
   classifyQuotesKept,
 } from './shared/destructive-classifier.js';
-import { isUnattended } from './shared/unattended.js';
+import { isUnattended, overrideLocked, OVERRIDE_IGNORED_NOTE } from './shared/unattended.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { scopedCleanupKind, type ScopedCleanupDeps, type ScopedKind } from './shared/scoped-cleanup.js';
 import { readShellCommand, dialectsFor, mayRunUnderCmd } from './shared/shell-tools.js';
@@ -107,6 +107,8 @@ export type Decision = {
   override?: boolean;
   /** Set when the scoped-cleanup rule allowed a flagged delete: which root it lay in. */
   scoped?: ScopedKind;
+  /** Set when a typed SKIP_DESTRUCTIVE_GUARD override was ignored because the run is unattended, bypass or headless. */
+  overrideIgnored?: true;
 };
 
 /** Reason on the decision log row for a scoped-cleanup allow, so Dave can audit these rows. */
@@ -136,8 +138,13 @@ export function decide(
   // `echo SKIP_DESTRUCTIVE_GUARD=1 && rm -rf x` would disable the guard.
   // PowerShell has no `VAR=1 cmd` prefix form, so its override is a leading
   // `$env:SKIP_DESTRUCTIVE_GUARD='1';` statement (still leading-only, per F2).
-  const overridden = env.SKIP_DESTRUCTIVE_GUARD === '1' || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command)
+  const typedOverride = env.SKIP_DESTRUCTIVE_GUARD === '1' || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command)
       || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
+  // Card guard-skip-prefix-unattended: no typed override works where no person answers for it (unattended, bypass or headless).
+  // The env form is ignored too: one rule, no exception (seat ruling 2026-11-24 18:39 CST).
+  const locked = overrideLocked(input, env);
+  const overridden = typedOverride && !locked;
+  const ignored: { overrideIgnored?: true } = typedOverride && locked ? { overrideIgnored: true } : {};
   // A desktop-commander shell is chosen at run time, so its text is checked as Bash and PowerShell.
   let pattern: string | null = null;
   // The body of a quoted heredoc that writes a .md, .txt or .json file is prose, not a command (shared/doc-heredoc.ts).
@@ -159,15 +166,15 @@ export function decide(
     }
   }
   if (overridden) return pattern ? { decision: 'allow', pattern, override: true } : { decision: 'allow' };
-  if (!pattern) return { decision: 'allow' };
+  if (!pattern) return { decision: 'allow', ...ignored };
   // Scoped cleanup (replay item 9.1): one literal recursive delete under the session scratchpad
   // or <repo>/.claude/worktrees/<name>. Allowed in every mode. Any doubt falls through to the gate.
   const scoped = SCOPED_PATTERNS.has(pattern) ? scopedCleanupKind(command, input, scopedDeps) : null;
-  if (scoped) return { decision: 'allow', pattern, scoped };
-  return { decision: isUnattended(input, env) ? 'deny' : 'ask', pattern };
+  if (scoped) return { decision: 'allow', pattern, scoped, ...ignored };
+  return { decision: isUnattended(input, env) ? 'deny' : 'ask', pattern, ...ignored };
 }
 
-export function reasonFor(decision: 'ask' | 'deny', pattern: string, command: string): string {
+export function reasonFor(decision: 'ask' | 'deny', pattern: string, command: string, overrideIgnored = false): string {
   const head = decision === 'deny'
     ? `BLOCKED (fail-closed): destructive command in an unattended/bypass context`
     : `CONFIRM: this is a destructive command`;
@@ -175,7 +182,7 @@ export function reasonFor(decision: 'ask' | 'deny', pattern: string, command: st
     decision === 'deny'
       ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. Ask Dave for a yes, or state the reason this command is needed. Do not work around this block.`
       : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/docs/security/destructive-commands.md.)`
-  }`;
+  }${overrideIgnored ? `\n\n${OVERRIDE_IGNORED_NOTE}` : ''}`;
 }
 
 async function main(): Promise<void> {
@@ -204,22 +211,24 @@ async function main(): Promise<void> {
   const command = shell.text;
   if (!command.trim()) { console.log('{}'); return; }
 
-  const { decision, pattern, override, scoped } = decide(command, input);
+  const { decision, pattern, override, scoped, overrideIgnored } = decide(command, input);
   if (override && pattern) logGuardDecision(HOOK, input, 'override', pattern, { command });
+  // A 'warn' row for an override that was typed and ignored, so the daily override report counts the attempts.
+  if (overrideIgnored) logGuardDecision(HOOK, input, 'warn', 'override-ignored: SKIP_DESTRUCTIVE_GUARD', { command });
   // An 'allow' row, not 'override': a scoped delete is no bypass, and the SKIP audit counts 'override' rows.
   if (scoped) logGuardDecision(HOOK, input, 'allow', `${SCOPED_CLEANUP_REASON}:${scoped}`, { command });
   if (decision === 'allow' || !pattern) { console.log('{}'); return; }
-  emit(input, decision, pattern, command);
+  emit(input, decision, pattern, command, overrideIgnored === true);
 }
 
 /** Log the decision and print the PreToolUse envelope. */
-function emit(input: HookInput, decision: 'ask' | 'deny', pattern: string, command: string): void {
+function emit(input: HookInput, decision: 'ask' | 'deny', pattern: string, command: string, overrideIgnored = false): void {
   logGuardDecision(HOOK, input, decision, pattern, { command });
   const output: HookOutput = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: decision,
-      permissionDecisionReason: reasonFor(decision, pattern, command),
+      permissionDecisionReason: reasonFor(decision, pattern, command, overrideIgnored),
     },
   };
   console.log(JSON.stringify(output));

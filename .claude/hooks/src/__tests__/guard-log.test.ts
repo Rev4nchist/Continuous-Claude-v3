@@ -185,7 +185,8 @@ describe('where it writes', () => {
 });
 
 describe('destructive guard reports an override', () => {
-  const input = { tool_name: 'Bash', permission_mode: 'bypassPermissions' };
+  // An override works only in an attended run (card guard-skip-prefix-unattended): these rows prove the override row, so the run is attended.
+  const input = { tool_name: 'Bash', permission_mode: 'default' };
 
   it('flags override with the matched rule when the SKIP prefix lets a destructive command through', () => {
     const d = decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', input, {});
