@@ -4,9 +4,9 @@
  * Every outside call goes through one runner `sh(cmd, args) -> { code, stdout, stderr }`, so a test can fake docker and psql.
  * A module only: no shebang, no argv read.
  */
-import { createReadStream, createWriteStream, rmSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import { assertScratchUrl, dbNameOf } from '../coordination/scratch-db.mjs';
@@ -59,9 +59,16 @@ const fail = (detail, tail = '') => ({ drill: 'fail', detail: maskText(`${detail
 
 /**
  * live: { counts, idsBefore, idsAfter } read from the live database just before and just after the dump.
+ * deadlineMs: time the drill may use (undefined = no limit). At 0 or below nothing starts: fail "no time for drill". When it passes, the running child gets an abort
+ *   signal (sh(cmd, args, { signal })), the drill ends as a fail and the cleanup below still runs.
+ * pendingFile: written when the scratch database exists, removed after a clean cleanup. A run killed from outside (Stop-Process) leaves it,
+ *   and sweepPendingDrills of the next run cleans from it. It holds the scratch url (a local throwaway database, in the run folder of this user).
  * Returns { drill: 'pass' | 'fail', detail }. Never throws: any error is a fail with its text.
  */
-export async function runDrill({ sh, dumpPath, live, repo, container = 'continuous-claude-postgres', user = 'claude', node = 'node', docker = 'docker' }) {
+export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'continuous-claude-postgres', user = 'claude', node = 'node', docker = 'docker', deadlineMs, pendingFile }) {
+  if (deadlineMs !== undefined && !(deadlineMs > 0)) return fail('no time for drill: the run budget is used up');
+  const ac = new AbortController();
+  const sh = (cmd, args) => shell(cmd, args, { signal: ac.signal }); // the steps of the body
   const scratchCli = join(repo, 'scripts', 'coordination', 'scratch-db.mjs');
   let url = null;
   let name = null;
@@ -79,8 +86,9 @@ export async function runDrill({ sh, dumpPath, live, repo, container = 'continuo
     }
     if (dbNameOf(url) !== name) return fail('scratch name mismatch');
     plain = join(tmpdir(), `${name}.dump`);
+    if (pendingFile) { try { writeFileSync(pendingFile, JSON.stringify({ name, url, plain })); } catch { /* the sweep has nothing to read: the finally below still cleans */ } }
     try {
-      await pipeline(createReadStream(dumpPath), createGunzip(), createWriteStream(plain));
+      await pipeline(createReadStream(dumpPath), createGunzip(), createWriteStream(plain), { signal: ac.signal });
     } catch (e) {
       return fail(`dump gunzip failed: ${e.message}`);
     }
@@ -100,11 +108,20 @@ export async function runDrill({ sh, dumpPath, live, repo, container = 'continuo
     return { drill: 'pass', detail: maskText(`${parts}; ${live.idsBefore.length} lane ids checked`) };
   };
   let result;
+  let timer = null;
   try {
-    result = await body();
+    const racers = [body()];
+    if (deadlineMs !== undefined) {
+      racers.push(new Promise((done) => {
+        timer = setTimeout(() => { ac.abort(); done(fail(`drill deadline of ${Math.round(deadlineMs / 1000)} s passed`)); }, deadlineMs);
+      }));
+    }
+    result = await Promise.race(racers);
   } catch (e) {
     result = fail(`drill error: ${e.message}`);
   } finally {
+    if (timer) clearTimeout(timer);
+    const sh = shell; // the cleanup runs on the plain runner: an aborted signal must not stop it
     const notes = [];
     if (copy) {
       try {
@@ -121,10 +138,48 @@ export async function runDrill({ sh, dumpPath, live, repo, container = 'continuo
         notes.push(dropped.code === 0 ? `scratch ${name} dropped` : `scratch ${name} not dropped`);
       } catch { notes.push(`scratch ${name} not dropped`); }
     }
+    // Only a clean cleanup removes the pending file: a failed drop stays on record for the next run's sweep.
+    if (pendingFile && !notes.some((n) => /not (dropped|removed)/.test(n))) { try { rmSync(pendingFile, { force: true }); } catch { /* the sweep finds nothing left to do */ } }
     if (notes.length) result = { ...result, detail: `${result.detail} | ${notes.join('; ')}` };
   }
   return result;
 }
 
-// RED stubs (card ops-backup-drill-deadline-cleanup): the real code comes in the GREEN commit.
-export async function sweepPendingDrills() { return { cleaned: [], skipped: [] }; }
+/**
+ * Start-of-run sweep. Reads only <root>/<day>/<run>/drill-pending.json (the folder of an earlier run; `skip` is the current one) and cleans what
+ * that file names: the scratch database, the copy in the container and the temp dump. Never by age or prefix. The name is checked again with
+ * assertScratchUrl, the container copy and the temp dump are derived from the name, never from the file text. A file that fails any check stays
+ * for a person. A failed drop keeps the file for the next run. Never throws. Returns { cleaned: [names], skipped: [text] }.
+ */
+export async function sweepPendingDrills({ root, sh, repo, container = 'continuous-claude-postgres', node = 'node', docker = 'docker', skip = null }) {
+  const cleaned = [];
+  const skipped = [];
+  const folders = (dir) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && !lstatSync(join(dir, d.name)).isSymbolicLink()).map((d) => join(dir, d.name));
+    } catch { return []; }
+  };
+  const scratchCli = join(repo, 'scripts', 'coordination', 'scratch-db.mjs');
+  for (const day of folders(root)) {
+    for (const run of folders(day)) {
+      const file = join(run, 'drill-pending.json');
+      if (skip && resolve(run) === resolve(skip)) continue;
+      if (!existsSync(file)) continue;
+      try {
+        const rec = JSON.parse(readFileSync(file, 'utf8'));
+        const name = assertScratchUrl(rec.url);
+        if (rec.name !== name) throw new Error('name does not match the url');
+        let ok = true;
+        const removed = await sh(docker, ['exec', container, 'rm', '-f', `/tmp/${name}.dump`]);
+        if (removed.code !== 0) ok = false;
+        const dropped = await sh(node, [scratchCli, 'drop', rec.url]);
+        if (dropped.code !== 0) ok = false;
+        rmSync(join(tmpdir(), `${name}.dump`), { force: true });
+        if (ok) { rmSync(file, { force: true }); cleaned.push(name); } else skipped.push(`${name}: cleanup not complete, kept for the next run`);
+      } catch (e) {
+        skipped.push(`${file}: ${maskText(e.message)}`);
+      }
+    }
+  }
+  return { cleaned, skipped };
+}
