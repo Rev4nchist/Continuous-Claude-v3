@@ -13,7 +13,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildUpgradesPage } from './upgrades-status.mjs';
+import { buildUpgradesPage, parseRoadmapPlanned } from './upgrades-status.mjs';
 
 const NOW = new Date('2026-11-25T21:10:00Z');
 const program = {
@@ -43,10 +43,11 @@ const roadmap = [
   '- [ ] **Fix the gate with 8170 rows** (high priority). Long text. More text.',
   '- [x] **Ticked item** (low priority)',
   '- [ ] Plain item (medium priority)',
+  '- [ ] **A very long title that keeps going and going well past the ninety character limit of the page, dated 2026-10-23, to be cut** (low priority)',
   '## Notes', '- [ ] **Not planned, a note** (low priority)',
 ].join('\n');
 const brief = ['## 6. Build phases', '', '- **Phase 0. Land wave 1.** Exit: merged.', '- **Phase 1. Readers.** Exit: specs.', '', '## 7. Next'].join('\n');
-const base = { now: NOW, program, board, roadmap, brief, ids: ['0123456789abcdef0123456789abcdef01234567'] };
+const base = { now: NOW, program, board, roadmap, brief, ids: ['a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'] };
 const build = (over = {}) => buildUpgradesPage({ ...base, ...over });
 
 describe('upgrades-status', () => {
@@ -84,14 +85,18 @@ describe('upgrades-status', () => {
 
   it('U5 only open Planned items show, titles are short, and a 3-digit count is gone', () => {
     const items = build().model.roadmap;
-    assert.deepEqual(items.map((i) => i.title), ['Fix the gate with … rows', 'Plain item']);
-    assert.deepEqual(items.map((i) => i.priority), ['high', 'medium']);
+    assert.deepEqual(items.slice(0, 2).map((i) => i.title), ['Fix the gate with … rows', 'Plain item']);
+    assert.deepEqual(items.map((i) => i.priority), ['high', 'medium', 'low']);
+    assert.ok(items[2].title.length <= 90 && items[2].title.endsWith('…'));
+    assert.match(build({ roadmapDate: '2026-10-23' }).pageMd, /committed copy of 2026-10-23/);
+    assert.match(parseRoadmapPlanned('## Planned\n- [ ] **Ranked 2026-07-24 list** (low priority)')[0].title, /2026-07-24/);
   });
 
   it('U6 a listed id in a title is masked; one left after the mask stops the page', () => {
-    const id = '0123456789abcdef0123456789abcdef01234567';
+    const id = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
     const r = build({ roadmap: `## Planned\n- [ ] **Item for ${id.slice(0, 10)} here** (high priority)\n## Notes` });
-    assert.doesNotMatch(r.pageMd + r.html, /0123456789/);
+    assert.doesNotMatch(r.pageMd + r.html, /a1b2c3d4e5/);
+    assert.ok(r.masked > 0);
     assert.throws(() => build({ ids: [id], mask: (t) => ({ text: t, masked: 0 }), roadmap: `## Planned\n- [ ] **Item ${id}** (low priority)\n## Notes` }), /listed id/i);
   });
 
@@ -100,7 +105,7 @@ describe('upgrades-status', () => {
     const r = build({ board: many });
     assert.equal(r.model.tracks.find((t) => t.track === 'big').planned, 140);
     assert.match(r.pageMd, /100\+/);
-    const stripped = r.pageMd.replace(/2026-11-25 \d\d:\d\d CST/g, '');
+    const stripped = r.pageMd.replace(/2026-11-25 \d\d:\d\d CST/g, '').replace(/100\+/g, '').replace(/\d{4}-\d{2}-\d{2}/g, '');
     assert.doesNotMatch(stripped, /\d{3,}/);
     assert.match(r.pageMd, /2026-11-25 15:10 CST/);
     assert.match(r.pageMd, /node scripts\/reports\/upgrades-status\.mjs/);
