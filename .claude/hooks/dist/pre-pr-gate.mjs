@@ -469,7 +469,7 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 // src/pre-pr-gate.ts
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { accessSync, appendFileSync as appendFileSync2, constants, existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync4, statSync as statSync2 } from "fs";
+import { accessSync, appendFileSync as appendFileSync3, constants, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync4, statSync as statSync3 } from "fs";
 import { dirname as dirname3, isAbsolute, join as join5, posix, resolve as resolve2, win32 } from "path";
 
 // src/shared/gh-open-prefix.ts
@@ -956,7 +956,7 @@ function blankInertQuotesAround(command, tool, openHead) {
 }
 
 // ../../scripts/github/lib/decisions.mjs
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync, unlinkSync as unlinkSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { appendFileSync as appendFileSync2, closeSync as closeSync2, existsSync as existsSync2, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync3, readSync, readdirSync, renameSync, statSync as statSync2, unlinkSync as unlinkSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { randomUUID as randomUUID2 } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -1068,6 +1068,7 @@ var accountHome = () => {
 };
 var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(accountHome(), ".claude", "state", "ccv3-mods", "decisions.json");
 var decisionKey = ({ repo = REPO, pr, branch }) => pr !== void 0 && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`;
+var LOG_MAX_BYTES = 5 * 1024 * 1024;
 var empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
 var idOf = ({ step, key, head }) => `${step}
 ${key}
@@ -1750,7 +1751,7 @@ function gitNotFound(detail) {
 }
 function runnableFile(path2, platform = process.platform) {
   try {
-    if (!statSync2(path2).isFile()) return false;
+    if (!statSync3(path2).isFile()) return false;
     if (platform !== "win32") accessSync(path2, constants.X_OK);
     return true;
   } catch {
@@ -1789,8 +1790,8 @@ function makeGit(spawn = spawnSync, env = process.env, gitPath) {
     const r = spawn(resolved, args, { cwd, encoding: "utf8", timeout, windowsHide: true });
     if (r.error) {
       if (r.error.code === "ENOENT") {
-        if (!existsSync2(resolved)) throw gitNotFound(r.error.message);
-        if (!existsSync2(cwd)) throw Object.assign(new Error(`directory not found: ${cwd}`), { code: DIR_NOT_FOUND });
+        if (!existsSync3(resolved)) throw gitNotFound(r.error.message);
+        if (!existsSync3(cwd)) throw Object.assign(new Error(`directory not found: ${cwd}`), { code: DIR_NOT_FOUND });
       }
       throw r.error;
     }
@@ -1805,11 +1806,11 @@ function makeErrorLogger(env = process.env) {
     const cwd = ctx.cwd ?? null;
     let cwdExists = false;
     try {
-      cwdExists = existsSync2(cwd ?? process.cwd());
+      cwdExists = existsSync3(cwd ?? process.cwd());
     } catch {
     }
     const row = { ts: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK, error: maskSecrets(message).slice(0, 300), ...ctx.code ? { code: ctx.code.slice(0, 40) } : {}, cwd: cwd === null ? null : cwd.slice(0, 300), cwd_exists: cwdExists };
-    appendFileSync2(file, `${JSON.stringify(row)}
+    appendFileSync3(file, `${JSON.stringify(row)}
 `, { mode: 384 });
   };
 }
