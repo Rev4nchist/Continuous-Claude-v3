@@ -448,6 +448,13 @@ describe('coord-board-mask-ids: maskLaneRows masks every displayed lane text at 
     assert.equal(lanes[0].note.split('').length, 2);
     assert.equal(countListed(lanes[0].note, IDS), 0);
   });
+  it('CLI run 2: a text that holds the whole private-use range has no free swap character: the field is the token alone', () => {
+    let range = '';
+    for (let c = 0xe000; c < 0xf8ff; c++) range += String.fromCharCode(c);
+    const lanes = [{ id: 'l1', note: `${range} PR 4242` }];
+    assert.equal(maskLaneRows({ lanes, sessions: [], events: [] }, IDS), 1);
+    assert.equal(lanes[0].note, TOKEN);
+  });
   it('rows with no listed id are not changed, and null fields stay null', () => {
     const lanes = [{ id: 'l', title: 'plain', scope: null, note: undefined, track: 'coord' }];
     const before = JSON.stringify(lanes);

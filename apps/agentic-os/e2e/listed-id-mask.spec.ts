@@ -81,6 +81,13 @@ test.describe('maskListed and maskString: each form of a listed id', () => {
     expect(field.text.split('')).toHaveLength(2);
     expect(countListed(field.text, IDS)).toBe(0);
   });
+
+  test('M7 a text that holds the whole private-use range has no free swap character: the field is the token alone (seat 11:21)', () => {
+    // Breaks when no free character is left and the swap goes on: the token would be put between every character, or an own character would change.
+    let range = '';
+    for (let c = 0xe000; c < 0xf8ff; c++) range += String.fromCharCode(c);
+    expect(maskString(`${range} PR ${PR}`, IDS)).toEqual({ text: TOKEN, masked: 1 });
+  });
 });
 
 test.describe('loadListedIds: an unreadable or empty list is never "all clear"', () => {
