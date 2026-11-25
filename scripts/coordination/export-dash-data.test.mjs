@@ -15,6 +15,7 @@ import {
   DATASETS, DOC_CAP_BYTES, buildProjectRows, buildRefreshDoc, buildSnapshotRow, checkInvariants,
   chicagoDay, clearRefreshFile, heldFields, holderName, sizeReport, sizeWarnings, SIZE_WARN_PCT, buildSnapshotRow as snapRow, clearRefreshPending, cutTitle, readSnapshots, TITLE_MAX, upsertSnapshot, writeExport,
 } from './export-dash-data.mjs';
+import * as exportMod from './export-dash-data.mjs';
 import { compileRules } from './lane-dash-project.mjs';
 import { normalizeConfig } from './lane-dash-config.mjs';
 import { buildFlowRows } from './lane-dash-flow.mjs';
@@ -735,5 +736,59 @@ describe('size warning and size failure (fleetops-lanes-file-size part 2)', () =
     assert.ok(!fs.existsSync(path.join(out, 'lanes.json')), 'nothing else is written');
     writeExport(out, collected(T1));
     assert.ok(!fs.existsSync(path.join(out, 'export-error.json')));
+  });
+});
+
+describe('sessionLabel and maskLabelKeys (lane-export-per-session)', () => {
+  // Read through the namespace so a missing export fails these rows only, not the whole file.
+  const sessionLabel = (...a) => exportMod.sessionLabel(...a);
+  const maskLabelKeys = (...a) => exportMod.maskLabelKeys(...a);
+  const U1 = 'aaaa1111-0000-4000-8000-000000000001';
+  const nameOf = (u) => ({ [U1]: 'Builder one' })[u] ?? null;
+
+  it('G1 sessionLabel writes "name #sid8", "#sid8" with no name, and null with no session', () => {
+    // Breaks if the label drops the sid8, shows more than 8 hex of the uuid, or invents a label for a missing session.
+    assert.equal(sessionLabel(U1, nameOf), 'Builder one #aaaa1111');
+    assert.equal(sessionLabel('bbbb2222-0000-4000-8000-000000000002', nameOf), '#bbbb2222');
+    assert.equal(sessionLabel(null, nameOf), null);
+    assert.equal(sessionLabel(undefined, nameOf), null);
+    assert.ok(!sessionLabel(U1, nameOf).includes(U1));
+  });
+
+  it('G2 sessionLabel keeps no hex run of the name: a uuid inside a name is dropped, the clip is the session-label clip', () => {
+    // Breaks if a session named after its own uuid puts the uuid into the export.
+    const l = sessionLabel(U1, () => `x ${U1} ${'y'.repeat(40)}`);
+    assert.ok(!l.includes('aaaa1111-0000'), l);
+    assert.match(l, /^x y{1,15} #aaaa1111$|^x #aaaa1111$/);
+    assert.ok(l.length <= 16 + ' #aaaa1111'.length, l);
+  });
+
+  it('G3 maskLabelKeys masks a label whose sid8 prefix-matches a listed sha, keeps the name part, and counts it', () => {
+    // Breaks if a label bypasses maskLaneRows, or a masked label loses its name (the row must stay readable).
+    const rows = [{ by: 'Gone session #abcdef12' }, { by: 'Builder one #aaaa1111' }, { by: null }, { lane_id: 'x' }];
+    const n = maskLabelKeys(rows, ['by'], ['abcdef1']);
+    assert.equal(n, 1);
+    assert.ok(rows[0].by.startsWith('Gone session '), rows[0].by);
+    assert.ok(rows[0].by.includes('masked-id'), rows[0].by);
+    assert.ok(!rows[0].by.includes('abcdef12'));
+    assert.equal(rows[1].by, 'Builder one #aaaa1111');
+    assert.equal(rows[2].by, null);
+    assert.ok(!('by' in rows[3]));
+  });
+
+  it('G4 maskLabelKeys masks every named key and touches no other key', () => {
+    // Breaks if only the first key is masked, or a lane title or id is changed by the label pass.
+    const rows = [{ closed_by: 'A #abcdef12', holder_label: 'B #abcdef12', title: 'abcdef12 stays', id: 'abcdef12' }];
+    assert.equal(maskLabelKeys(rows, ['closed_by', 'holder_label'], ['abcdef1']), 2);
+    assert.ok(rows[0].closed_by.includes('masked-id') && rows[0].holder_label.includes('masked-id'));
+    assert.equal(rows[0].title, 'abcdef12 stays');
+    assert.equal(rows[0].id, 'abcdef12');
+  });
+
+  it('G5 maskLabelKeys with an empty id list changes nothing and says 0', () => {
+    // Breaks if an empty list is treated as "mask everything". The caller drops the keys when the list is missing.
+    const rows = [{ by: 'A #abcdef12' }];
+    assert.equal(maskLabelKeys(rows, ['by'], []), 0);
+    assert.equal(rows[0].by, 'A #abcdef12');
   });
 });
