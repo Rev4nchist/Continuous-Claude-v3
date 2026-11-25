@@ -38,7 +38,8 @@ import * as D from './lib/decisions.mjs';
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);
 const H2 = 'c'.repeat(40);
-const NOW = new Date('2026-11-18T15:00:00Z');
+// Today at 15:00Z, from the real clock. A fixed date aged out of the decision store prune (7 days, real clock) on 2026-11-25 and turned PP20 and PP20b red.
+const NOW = (() => { const d = new Date(); d.setUTCHours(15, 0, 0, 0); return d; })();
 const CR_BOT = { login: 'coderabbitai[bot]', type: 'Bot' };
 const MIN = 60_000;
 const prFile = (n) => ({ filename: `src/f${n}.ts`, additions: 5, deletions: 0, status: 'modified' });
