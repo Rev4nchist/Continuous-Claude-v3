@@ -207,6 +207,26 @@ test('D14 a child that ignores the abort still ends the drill at the deadline, w
   assert.ok(cleanedUp(f));
 });
 
+test('D14c a scratch create that ends after the deadline is dropped by the drill itself, and no later step runs', async () => {
+  // Breaks when body() goes on after the abort: the database it made after the cleanup would live until the next sweep.
+  const f = fakeSh();
+  const inner = f.sh;
+  f.sh = async (cmd, args, opts) => {
+    if ([cmd, ...args].join(' ').includes('scratch-db.mjs create')) {
+      f.calls.push({ cmd, args, line: [cmd, ...args].join(' ') });
+      await new Promise((r) => setTimeout(r, 150)); // ignores the signal and ends after the 60 ms deadline
+      return { code: 0, stdout: JSON.stringify({ url: SCRATCH, name: 'lanes_pr1_abcd1234' }), stderr: '' };
+    }
+    return inner(cmd, args, opts);
+  };
+  const out = await drill(f, { deadlineMs: 60 });
+  assert.equal(out.drill, 'fail');
+  await new Promise((r) => setTimeout(r, 300));
+  const lines = f.calls.map((c) => c.line);
+  assert.ok(lines.some((l) => l.includes('scratch-db.mjs drop')), 'the late database is dropped');
+  assert.equal(lines.some((l) => l.includes('pg_restore') || l.startsWith('docker cp')), false, 'no step after the abort');
+});
+
 test('D14b a drill that starts with no time left (deadlineMs 0 or below) is a fail "no time for drill" and makes no scratch database', async () => {
   // Breaks when a late start still runs the drill: it would pass the wrapper kill and leave the upload undone.
   for (const deadlineMs of [0, -5000]) {
@@ -218,25 +238,28 @@ test('D14b a drill that starts with no time left (deadlineMs 0 or below) is a fa
   }
 });
 
+const urlFor = (name) => `postgresql://claude:pw@localhost:5432/${name}`;
 const pendingDir = () => mkdtempSync(join(tmpdir(), 'bk-pending-'));
 
-test('D15 the drill writes drill-pending.json (name, url, temp dump) when the scratch database exists, and removes it after the cleanup', async () => {
+test('D15 the drill writes drill-pending.json (the scratch NAME only, no url, no password) when the scratch database exists, and removes it after the cleanup', async () => {
   // Breaks when no file is written (a hard kill leaves no trace to sweep), or when the file stays after a clean drill.
   const dir = pendingDir();
   try {
     const pendingFile = join(dir, 'drill-pending.json');
     let seen = null;
+    let seenText = '';
     const f = fakeSh();
     const inner = f.sh;
     f.sh = async (cmd, args, opts) => {
-      if ([cmd, ...args].join(' ').includes('pg_restore') && existsSync(pendingFile)) seen = JSON.parse(readFileSync(pendingFile, 'utf8'));
+      if ([cmd, ...args].join(' ').includes('pg_restore') && existsSync(pendingFile)) { seenText = readFileSync(pendingFile, 'utf8'); seen = JSON.parse(seenText); }
       return inner(cmd, args, opts);
     };
     const out = await drill(f, { pendingFile });
     assert.equal(out.drill, 'pass');
     assert.equal(seen.name, 'lanes_pr1_abcd1234');
-    assert.equal(seen.url, SCRATCH);
-    assert.equal(seen.plain, join(tmpdir(), 'lanes_pr1_abcd1234.dump'));
+    assert.deepEqual(Object.keys(seen), ['name'], 'only the name is on disk');
+    assert.equal(seenText.includes('://'), false, 'no url');
+    assert.equal(/pw|claude:/.test(seenText), false, 'no password and no user');
     assert.equal(existsSync(pendingFile), false, 'removed after the cleanup');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -255,9 +278,9 @@ test('D16 the sweep cleans only what a killed run wrote in its own folder: drop,
   try {
     const plain = join(tmpdir(), 'lanes_pr1_deadbeef.dump');
     writeFileSync(plain, 'x');
-    const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef', url: 'postgresql://claude:pw@localhost:5432/lanes_pr1_deadbeef', plain });
+    const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef' });
     const f = fakeSh();
-    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo' });
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor });
     const lines = f.calls.map((c) => c.line);
     assert.ok(lines.some((l) => l.includes('scratch-db.mjs drop postgresql://claude:pw@localhost:5432/lanes_pr1_deadbeef')));
     assert.ok(lines.some((l) => l.includes('rm -f /tmp/lanes_pr1_deadbeef.dump')));
@@ -273,10 +296,10 @@ test('D17 the sweep never acts on a name outside the scratch rule, or on a temp 
   const victim = join(root, 'precious.txt');
   writeFileSync(victim, 'keep');
   try {
-    const live = crashedRun(root, { name: 'continuous_claude', url: 'postgresql://claude:pw@localhost:5432/continuous_claude', plain: victim }, 'run-030000-1');
-    const badPath = crashedRun(root, { name: 'lanes_pr1_cafe0001', url: 'postgresql://claude:pw@localhost:5432/lanes_pr1_cafe0001', plain: victim }, 'run-030000-2');
+    const live = crashedRun(root, { name: 'continuous_claude', plain: victim }, 'run-030000-1');
+    const badPath = crashedRun(root, { name: 'lanes_pr1_cafe0001', plain: victim }, 'run-030000-2');
     const f = fakeSh();
-    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo' });
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor });
     assert.equal(f.calls.some((c) => c.line.includes('continuous_claude')), false, 'the live database is never touched');
     assert.equal(existsSync(victim), true, 'a path outside tmpdir/<name>.dump is never deleted');
     assert.equal(existsSync(join(live, 'drill-pending.json')), true, 'a refused file stays for a person to read');
@@ -285,13 +308,27 @@ test('D17 the sweep never acts on a name outside the scratch rule, or on a temp 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('D17c the sweep builds the drop url from its own chain and refuses a host that is not this machine', async () => {
+  // Breaks when assertLocalHost is not run: a changed env chain could point the drop at another server.
+  const root = pendingDir();
+  try {
+    const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef' });
+    const f = fakeSh();
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor: (n) => `postgresql://claude:pw@db.example.com:5432/${n}` });
+    assert.equal(f.calls.some((c) => c.line.includes('scratch-db.mjs drop')), false, 'no drop on a remote host');
+    assert.equal(out.cleaned.length, 0);
+    assert.equal(existsSync(join(folder, 'drill-pending.json')), true);
+    assert.match(out.skipped.join(' '), /host|local/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('D17b the sweep skips the folder of the current run', async () => {
   // Breaks when the sweep reads its own run: it would drop the scratch database of a drill that is about to start.
   const root = pendingDir();
   try {
-    const own = crashedRun(root, { name: 'lanes_pr1_deadbeef', url: 'postgresql://claude:pw@localhost:5432/lanes_pr1_deadbeef', plain: join(tmpdir(), 'lanes_pr1_deadbeef.dump') }, 'run-030000-own');
+    const own = crashedRun(root, { name: 'lanes_pr1_deadbeef' }, 'run-030000-own');
     const f = fakeSh();
-    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', skip: own });
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', skip: own, urlFor });
     assert.equal(f.calls.length, 0);
     assert.deepEqual(out.cleaned, []);
     assert.equal(existsSync(join(own, 'drill-pending.json')), true);
@@ -303,13 +340,13 @@ test('D18 a sweep with no pending file, or a failed drop, changes nothing else a
   const root = pendingDir();
   try {
     const f0 = fakeSh();
-    assert.deepEqual((await sweepPendingDrills({ root, sh: f0.sh, repo: 'C:/repo' })).cleaned, []);
+    assert.deepEqual((await sweepPendingDrills({ root, sh: f0.sh, repo: 'C:/repo', urlFor })).cleaned, []);
     assert.equal(f0.calls.length, 0);
-    const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef', url: 'postgresql://claude:pw@localhost:5432/lanes_pr1_deadbeef', plain: join(tmpdir(), 'lanes_pr1_deadbeef.dump') });
+    const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef' });
     const f = fakeSh();
     const base = f.sh;
     f.sh = async (cmd, args, opts) => (args.includes('drop') ? { code: 1, stdout: '', stderr: 'no' } : base(cmd, args, opts));
-    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo' });
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor });
     assert.deepEqual(out.cleaned, []);
     assert.equal(existsSync(join(folder, 'drill-pending.json')), true, 'kept for the next run');
   } finally { rmSync(root, { recursive: true, force: true }); }

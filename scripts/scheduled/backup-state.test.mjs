@@ -509,7 +509,7 @@ test('C4 a token without the database config is no-config: exit 2, a FAILED file
 });
 
 // ---- card ops-backup-drill-deadline-cleanup: the trash rule from the config file, the drill deadline from the run budget, a sweep that never stops the night ----
-import { allowTrashFrom, drillDeadlineMs } from './backup-state.mjs';
+import { allowTrashFrom, drillDeadlineMs, sh as realSh } from './backup-state.mjs';
 
 test('T1 allowTrashFrom: only the boolean true switches the trash rule on', () => {
   // Breaks when a string, a number or a missing key turns the rule on (a trash move cannot be undone by the task).
@@ -539,4 +539,16 @@ test('T3 a sweep that throws is a logged warning: the night still dumps, zips an
     assert.equal(r.status, 'ok');
     assert.ok(logs.some((l) => /sweep skipped: sweep broke/.test(l)), logs.join('\n'));
   } finally { t.clean(); }
+});
+
+test('T4 the REAL runner passes the abort signal to its child: a sleeping node child ends within a short bound after the abort', async () => {
+  // Breaks when sh drops its third argument (the child then sleeps its full 30 s). A fake sh cannot show this.
+  const ac = new AbortController();
+  const started = Date.now();
+  const pending = realSh(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { signal: ac.signal });
+  setTimeout(() => ac.abort(), 300);
+  const r = await Promise.race([pending, new Promise((res) => setTimeout(() => res('too slow'), 5000))]);
+  assert.notEqual(r, 'too slow', 'the child was not stopped');
+  assert.notEqual(r.code, 0);
+  assert.ok(Date.now() - started < 5000);
 });

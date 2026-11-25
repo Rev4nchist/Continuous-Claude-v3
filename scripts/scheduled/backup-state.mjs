@@ -267,10 +267,10 @@ export async function runBackup(opts, deps) {
 
 // ---- command line: the real outside calls (docker, psql, Notion). The tests above never reach this part. ----
 
-/** Run a command and collect its text output. */
-function sh(cmd, args) {
+/** Run a command and collect its text output. opts.signal: an abort stops the child (spawn kills it) and the call ends with code 127. */
+export function sh(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, signal: opts.signal });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (c) => { stdout += c.toString('utf8'); });

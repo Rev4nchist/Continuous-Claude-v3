@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
-import { assertScratchUrl, dbNameOf } from '../coordination/scratch-db.mjs';
+import { assertLocalHost, assertScratchUrl, dbNameOf, scratchUrlFor } from '../coordination/scratch-db.mjs';
 import { maskText } from './backup-state-lib.mjs';
 
 /** [key, qualified table]. */
@@ -62,7 +62,7 @@ const fail = (detail, tail = '') => ({ drill: 'fail', detail: maskText(`${detail
  * deadlineMs: time the drill may use (undefined = no limit). At 0 or below nothing starts: fail "no time for drill". When it passes, the running child gets an abort
  *   signal (sh(cmd, args, { signal })), the drill ends as a fail and the cleanup below still runs.
  * pendingFile: written when the scratch database exists, removed after a clean cleanup. A run killed from outside (Stop-Process) leaves it,
- *   and sweepPendingDrills of the next run cleans from it. It holds the scratch url (a local throwaway database, in the run folder of this user).
+ *   and sweepPendingDrills of the next run cleans from it. It holds the scratch NAME only: no url, no password.
  * Returns { drill: 'pass' | 'fail', detail }. Never throws: any error is a fail with its text.
  */
 export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'continuous-claude-postgres', user = 'claude', node = 'node', docker = 'docker', deadlineMs, pendingFile }) {
@@ -74,8 +74,19 @@ export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'c
   let name = null;
   let copy = null;
   let plain = null; // the gunzipped dump on this machine
+  // A create that ends after the abort made a database the cleanup never saw: drop it here, by its own url (checked first), and do nothing else.
+  const lateCreate = async (created) => {
+    try {
+      const late = JSON.parse(created.stdout).url;
+      assertScratchUrl(late);
+      await shell(node, [scratchCli, 'drop', late]);
+    } catch { /* nothing usable to drop; the next run's sweep has no file either, the scratch CLI removes its own failed creates */ }
+    return fail('drill aborted');
+  };
   const body = async () => {
+    if (ac.signal.aborted) return fail('drill aborted');
     const created = await sh(node, [scratchCli, 'create', '--through', '0']);
+    if (ac.signal.aborted) return lateCreate(created); // the deadline passed while the create ran: the cleanup below already ran
     if (created.code !== 0) return fail('scratch database not made: ', created.stderr);
     url = JSON.parse(created.stdout).url;
     try {
@@ -86,16 +97,19 @@ export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'c
     }
     if (dbNameOf(url) !== name) return fail('scratch name mismatch');
     plain = join(tmpdir(), `${name}.dump`);
-    if (pendingFile) { try { writeFileSync(pendingFile, JSON.stringify({ name, url, plain })); } catch { /* the sweep has nothing to read: the finally below still cleans */ } }
+    if (pendingFile) { try { writeFileSync(pendingFile, JSON.stringify({ name })); } catch { /* the sweep has nothing to read: the finally below still cleans */ } }
     try {
       await pipeline(createReadStream(dumpPath), createGunzip(), createWriteStream(plain), { signal: ac.signal });
     } catch (e) {
       return fail(`dump gunzip failed: ${e.message}`);
     }
     copy = `/tmp/${name}.dump`;
+    if (ac.signal.aborted) return fail('drill aborted');
     const cp = await sh(docker, ['cp', plain, `${container}:${copy}`]);
+    if (ac.signal.aborted) return fail('drill aborted');
     if (cp.code !== 0) return fail('docker cp failed: ', cp.stderr);
     const restore = await sh(docker, ['exec', container, 'pg_restore', '-U', user, '--clean', '--if-exists', '--no-owner', '-d', name, copy]);
+    if (ac.signal.aborted) return fail('drill aborted');
     if (restore.code !== 0) return fail(`pg_restore exit ${restore.code}: `, restore.stderr.split(/\r?\n/).find(Boolean) ?? '');
     const scratch = await readState(sh, { db: name, container, user, docker });
     const cmp = compareCounts(live.counts, scratch.counts);
@@ -148,10 +162,10 @@ export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'c
 /**
  * Start-of-run sweep. Reads only <root>/<day>/<run>/drill-pending.json (the folder of an earlier run; `skip` is the current one) and cleans what
  * that file names: the scratch database, the copy in the container and the temp dump. Never by age or prefix. The name is checked again with
- * assertScratchUrl, the container copy and the temp dump are derived from the name, never from the file text. A file that fails any check stays
+ * assertScratchUrl and assertLocalHost, the container copy and the temp dump are derived from the name, never from the file text. A file that fails any check stays
  * for a person. A failed drop keeps the file for the next run. Never throws. Returns { cleaned: [names], skipped: [text] }.
  */
-export async function sweepPendingDrills({ root, sh, repo, container = 'continuous-claude-postgres', node = 'node', docker = 'docker', skip = null }) {
+export async function sweepPendingDrills({ root, sh, repo, container = 'continuous-claude-postgres', node = 'node', docker = 'docker', skip = null, urlFor = scratchUrlFor }) {
   const cleaned = [];
   const skipped = [];
   const folders = (dir) => {
@@ -167,12 +181,15 @@ export async function sweepPendingDrills({ root, sh, repo, container = 'continuo
       if (!existsSync(file)) continue;
       try {
         const rec = JSON.parse(readFileSync(file, 'utf8'));
-        const name = assertScratchUrl(rec.url);
+        // The file holds the name only. The url comes from this machine's own connection chain, then both guards run before any drop.
+        const url = urlFor(String(rec.name));
+        const name = assertScratchUrl(url);
         if (rec.name !== name) throw new Error('name does not match the url');
+        assertLocalHost(url);
         let ok = true;
         const removed = await sh(docker, ['exec', container, 'rm', '-f', `/tmp/${name}.dump`]);
         if (removed.code !== 0) ok = false;
-        const dropped = await sh(node, [scratchCli, 'drop', rec.url]);
+        const dropped = await sh(node, [scratchCli, 'drop', url]);
         if (dropped.code !== 0) ok = false;
         rmSync(join(tmpdir(), `${name}.dump`), { force: true });
         if (ok) { rmSync(file, { force: true }); cleaned.push(name); } else skipped.push(`${name}: cleanup not complete, kept for the next run`);
