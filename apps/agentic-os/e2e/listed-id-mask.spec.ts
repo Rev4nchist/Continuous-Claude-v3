@@ -60,6 +60,27 @@ test.describe('maskListed and maskString: each form of a listed id', () => {
     expect(field.text).not.toContain(PR);
     expect(field.text).not.toContain(COMMENT);
   });
+
+  const fw = (s: string) => [...s].map((c) => (/[0-9a-f]/i.test(c) ? String.fromCharCode(c.charCodeAt(0) + 0xfee0) : c)).join('');
+
+  test('M5 a fullwidth sha glued to a masked id is masked too (CLI run 2, finding 1)', () => {
+    // Breaks when the reader-view pass sees the token itself: it ends in the hex letter "d", so a folded sha next to it makes one 33 character run.
+    const ids = [...IDS, GOLD_SHA];
+    const field = maskString(`${SHA}${fw(GOLD_SHA)}; ${fw(SHA)}`, ids);
+    expect(field.masked).toBe(3);
+    expect(countListed(field.text, ids), 'a listed id is left after the mask').toBe(0);
+    expect(field.text).not.toContain(GOLD_SHA);
+  });
+
+  test('M6 a private-use character that already stands in the text comes back unchanged (CLI run 2, finding 1)', () => {
+    // Breaks when the swap character is a fixed one: the text own character would turn into the token on the way back.
+    const text = `note  comment ${COMMENT}​4; PR ${[...PR].map((d) => String.fromCharCode(d.charCodeAt(0) + 0xfee0)).join('')} `;
+    const field = maskString(text, IDS);
+    expect(field.masked).toBe(2);
+    expect(field.text.split('')).toHaveLength(2);
+    expect(field.text.split('')).toHaveLength(2);
+    expect(countListed(field.text, IDS)).toBe(0);
+  });
 });
 
 test.describe('loadListedIds: an unreadable or empty list is never "all clear"', () => {

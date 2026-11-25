@@ -429,6 +429,25 @@ describe('coord-board-mask-ids: maskLaneRows masks every displayed lane text at 
     assert.ok(!lanes[0].note.includes(fullwidth), 'the fullwidth PR is left');
     assert.ok(!lanes[0].note.includes('4242') && !lanes[0].note.includes('9000000123'), 'an id is left');
   });
+  it('CLI run 2: a fullwidth sha glued to a masked id is masked too (the token ends in a hex letter)', () => {
+    const GOLD = '1234abcd5678ef901234abcd5678ef90';
+    const fw = (s) => [...s].map((c) => (/[0-9a-f]/i.test(c) ? String.fromCharCode(c.charCodeAt(0) + 0xfee0) : c)).join('');
+    const ids = [...IDS, GOLD];
+    const lanes = [{ id: 'l1', note: `${SHA}${fw(GOLD)}; ${fw(SHA)}` }];
+    const n = maskLaneRows({ lanes, sessions: [], events: [] }, ids);
+    assert.equal(n, 3);
+    assert.equal(countListed(lanes[0].note, ids), 0, 'a listed id is left');
+    assert.ok(!lanes[0].note.includes(GOLD));
+  });
+  it('CLI run 2: a private-use character that already stands in the text comes back unchanged', () => {
+    const fullwidth = '４２４２';
+    const lanes = [{ id: 'l1', note: `note  comment 9000000123​4; PR ${fullwidth} ` }];
+    const n = maskLaneRows({ lanes, sessions: [], events: [] }, IDS);
+    assert.equal(n, 2);
+    assert.equal(lanes[0].note.split('').length, 2);
+    assert.equal(lanes[0].note.split('').length, 2);
+    assert.equal(countListed(lanes[0].note, IDS), 0);
+  });
   it('rows with no listed id are not changed, and null fields stay null', () => {
     const lanes = [{ id: 'l', title: 'plain', scope: null, note: undefined, track: 'coord' }];
     const before = JSON.stringify(lanes);
