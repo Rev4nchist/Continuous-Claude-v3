@@ -182,7 +182,10 @@ export function runProbe(probe, { spawn, env, dir, now = Date.now, fsx = fs, new
     const penv = {
       ...env, CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url,
       // LANE_PROJECT: lane-race runs lane.mjs with cwd = this checkout, which has no registry entry on a runner (lane.mjs refuses).
-      CCV3_USER_HOME: standIn.home, CLAUDE_CODE_SESSION_ID: newId(), LANE_PROJECT: 'continuous-claude', ...(probe.env ?? {}),
+      // LANE_REGISTRY_PATH: lane-board.mjs:61-64 reads $HOME/.claude/project-registry.json, which a runner does not have; without a
+      // registry the board name is "unknown board 'continuous-claude'; registered: (none)". The registry of this checkout is the repo copy.
+      CCV3_USER_HOME: standIn.home, CLAUDE_CODE_SESSION_ID: newId(), LANE_PROJECT: 'continuous-claude',
+      LANE_REGISTRY_PATH: path.join(REPO, '.claude', 'project-registry.json'), ...(probe.env ?? {}),
     };
     const started = now();
     const r = spawn(process.execPath, [path.join(dir, probe.file)], spawnOpts(REPO, penv, 5 * MIN));
