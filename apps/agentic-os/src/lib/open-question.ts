@@ -30,6 +30,8 @@ export function foldOpenQuestions(snapshots: QuestionSnapshot[], nowMs: number):
   const out: OpenQuestion[] = [];
   for (const s of snapshots) {
     if (s.endedAt !== null) continue;
+    // KNOWN LIMIT (card agentic-os-readers-edge-limits): a session that waits on Dave and stays idle drops out once its last state write is older
+    // than the fresh limit, because the plugin writes no snapshot while a dialog stays open. Kept on purpose: the other side is a crashed session.
     if (nowMs - s.at > OPEN_QUESTION_FRESH_MS) continue; // a crashed session leaves a step behind
     if (s.step?.tool === 'AskUserQuestion') {
       out.push({ session: s.label, certainty: 'sure', startedAtMs: s.step.startedAt, ageSec: Math.max(0, Math.floor((nowMs - s.step.startedAt) / 1000)) });

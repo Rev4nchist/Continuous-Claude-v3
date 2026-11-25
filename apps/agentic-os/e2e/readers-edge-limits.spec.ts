@@ -92,7 +92,7 @@ test.describe('item 5: a wall time inside the spring DST gap does not come out a
 
   test('E5b the same for a weekly trigger on that Sunday, and a normal day is unchanged', () => {
     expect(nextFireMs('weekly Sunday 02:30', at('2027-03-13T20:00:00Z'))).toBe(at('2027-03-14T08:30:00Z'));
-    expect(nextFireMs('daily 02:30', at('2027-03-15T06:00:00Z'))).toBe(at('2027-03-16T07:30:00Z'));
+    expect(nextFireMs('daily 02:30', at('2027-03-15T06:00:00Z'))).toBe(at('2027-03-15T07:30:00Z')); // 01:00 CDT: the next 02:30 CDT is the same day
     expect(nextFireMs('daily 07:50', at('2027-03-13T20:00:00Z'))).toBe(at('2027-03-14T12:50:00Z'));
   });
 });

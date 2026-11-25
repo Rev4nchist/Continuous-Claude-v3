@@ -28,11 +28,16 @@ function offsetAt(ms: number): number {
   return Date.UTC(c.y, c.m - 1, c.d, c.h, c.mi) - Math.floor(ms / MIN) * MIN;
 }
 
-/** The instant of a Chicago wall time. Two passes settle a daylight-saving change day. */
+/**
+ * The instant of a Chicago wall time. Two passes settle a daylight-saving change day. A wall time inside the spring gap does not exist
+ * (02:30 on the change day): the second pass lands an hour early, so the first pass, which is after the gap, stands.
+ */
 function chicagoToEpoch(y: number, m: number, d: number, h: number, mi: number): number {
   const naive = Date.UTC(y, m - 1, d, h, mi);
   const first = naive - offsetAt(naive);
-  return naive - offsetAt(first);
+  const second = naive - offsetAt(first);
+  const c = chicago(second);
+  return c.h === h && c.mi === mi ? second : first;
 }
 
 const CLOCK = /^(\d{2}):(\d{2})$/;
