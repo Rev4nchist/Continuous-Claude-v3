@@ -49,15 +49,16 @@ function frontmatter(text) {
 const ok = (value) => ({ status: 'ok', value });
 const notChecked = (reason) => ({ status: 'not checked', reason });
 
-/** Node options that take the next argument as a value: `node --require x.cjs hook.mjs` cannot be read with certainty. */
-const VALUE_OPTIONS = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '--eval', '-e', '--print', '-p', '--input-type', '--conditions', '-C']);
+/** Node options known to take no separate value. Any other leading option (`--title x`, `--require x.cjs`) may consume the next argument, so the entry fails closed. */
+const FLAG_ONLY_OPTIONS = new Set(['--no-warnings', '--enable-source-maps', '--no-deprecation', '--trace-warnings', '--trace-deprecation', '--no-experimental-fetch', '--experimental-vm-modules', '--preserve-symlinks']);
 
 /** The hook file of a node registration: the first argument that is not an option. Null when it cannot be read with certainty (counted as unparsed). */
 function hookFile(h) {
   if (h.command !== 'node' || !Array.isArray(h.args)) return null;
   for (const a of h.args.map(String)) {
     if (!a.startsWith('-')) return a.split(/[\\/]/).pop() || null;
-    if (VALUE_OPTIONS.has(a)) return null;
+    if (FLAG_ONLY_OPTIONS.has(a) || /^--[a-z0-9-]+=/.test(a)) continue; // a --x=y form carries its own value
+    return null;
   }
   return null;
 }
@@ -223,31 +224,43 @@ async function hideListed(text, ids) {
   return m.maskListed(text, ids).text;
 }
 
-/** Writes every file to a temp file first, then renames them. A failed write or rename puts every file back as it was. `ops.renameSync` is for tests. */
+/**
+ * Writes every file to a temp file first, then renames them. A failed write or rename puts every file back as it was.
+ * It refuses to start when a `.bak` file of an earlier crash exists. A backup whose restore failed is kept and named in the error.
+ * `ops.renameSync` is for tests.
+ */
 export function writeAll(changed, ops = {}) {
   const rename = ops.renameSync ?? renameSync;
+  const gone = (f) => { try { unlinkSync(f); } catch { /* already gone */ } };
+  const older = changed.map(([f]) => `${f}.bak`).filter((x) => existsSync(x));
+  if (older.length) throw new Error(`a backup file of an earlier crash exists: ${older.join(', ')}. Nothing was written. Check it, then remove or rename it.`);
   const staged = [];
   try {
     for (const [f, t] of changed) { const tmp = `${f}.tmp`; writeFileSync(tmp, t); staged.push([tmp, f]); }
   } catch (e) {
-    for (const [tmp] of staged) { try { unlinkSync(tmp); } catch { /* already gone */ } }
+    for (const [tmp] of staged) gone(tmp);
     throw e;
   }
-  const done = [];
+  const done = [], baks = [];
   try {
     for (const [tmp, f] of staged) {
       const bak = `${f}.bak`;
       const had = existsSync(f);
-      if (had) copyFileSync(f, bak);
+      if (had) { copyFileSync(f, bak); baks.push(bak); }
       rename(tmp, f);
       done.push([f, bak, had]);
     }
   } catch (e) {
-    for (const [f, bak, had] of done.reverse()) { try { if (had) renameSync(bak, f); else unlinkSync(f); } catch { /* best effort */ } }
-    for (const [tmp, f] of staged) { for (const x of [tmp, `${f}.bak`]) { try { unlinkSync(x); } catch { /* already gone */ } } }
+    const kept = [];
+    for (const [f, bak, had] of done.reverse()) {
+      try { if (had) rename(bak, f); else unlinkSync(f); } catch { if (had) kept.push(bak); }
+    }
+    for (const [tmp] of staged) gone(tmp);
+    for (const bak of baks) if (!kept.includes(bak)) gone(bak);
+    if (kept.length) throw new Error(`${e.message}; the restore failed, the original is kept at: ${kept.join(', ')}`);
     throw e;
   }
-  for (const [, bak, had] of done) if (had) { try { unlinkSync(bak); } catch { /* already gone */ } }
+  for (const bak of baks) gone(bak);
 }
 
 /** Compares the committed files with a fresh build. exitCode: 0 fresh, 1 a problem, 2 not checked. Prints counts of listed ids, never an id. */
