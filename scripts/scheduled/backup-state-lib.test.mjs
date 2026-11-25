@@ -84,9 +84,12 @@ test('R3 nothing is trashed while no newer row has Status ok and Drill pass', as
   // Breaks when the drill result is not part of the rule: old backups would go while the new ones were never proved.
   const { chooseRetention } = await lib();
   for (const bad of [{ drill: 'fail' }, { drill: 'not-run' }, { status: 'upload-failed:dump' }]) {
-    const rows = nightlies(30).map((x, i) => (i < 14 ? { ...x, ...bad } : x));
+    const rows = nightlies(30).map((x) => ({ ...x, ...bad }));
     assert.deepEqual(chooseRetention(rows, { now: NOW }).trash, [], JSON.stringify(bad));
   }
+  // one proved row, the newest: now every older row outside the window may go
+  const one = nightlies(30).map((x, i) => (i === 0 ? x : { ...x, drill: 'fail' }));
+  assert.equal(chooseRetention(one, { now: NOW }).trash.length, 16);
 });
 
 test('R4 only a NEWER proved row lets an older row go', async () => {
@@ -94,11 +97,11 @@ test('R4 only a NEWER proved row lets an older row go', async () => {
   const { chooseRetention } = await lib();
   const rows = nightlies(30).map((x, i) => (i < 20 ? { ...x, drill: 'fail' } : x)); // the 10 oldest pass, the 20 newest fail
   const r = chooseRetention(rows, { now: NOW });
-  const outside = rows.slice(14).map((x) => x.id);
-  const proven = r.trash.filter((id) => outside.includes(id));
-  // a candidate is trashed only when a newer row passed: rows 20..29 (the passing ones) have no newer passing row
-  assert.ok(proven.length < outside.length, 'not every old row may go');
-  assert.ok(!r.trash.includes(`r-${day(20)}`), 'the newest passing row has no newer proof and stays');
+  // rows 14..19 are outside the window but NEWER than every passing row (20..29): no newer proof, so they stay
+  for (let i = 14; i <= 19; i += 1) assert.ok(r.keep.includes(`r-${day(i)}`) && !r.trash.includes(`r-${day(i)}`), `row ${i} stays`);
+  // row 20 is the newest passing row: no newer proof, stays; rows 21..29 have it as a newer proof and go
+  assert.ok(!r.trash.includes(`r-${day(20)}`), 'the newest passing row stays');
+  for (let i = 21; i <= 29; i += 1) assert.ok(r.trash.includes(`r-${day(i)}`), `row ${i} goes`);
 });
 
 test('R5 a row of another owner is never trashed', async () => {
