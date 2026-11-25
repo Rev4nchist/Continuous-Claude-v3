@@ -320,6 +320,8 @@ export interface Invocation {
   moves?: boolean;
   /** True when the program word has no literal value (`$X review`, `$(echo cr) review`). `exe` is empty. Rule U1 reads it. Only invocationOf sets it. */
   unreadable?: boolean;
+  /** True for a shell that reads its script from a stdin the call list cannot read (`bash < file`, `bash <&3`). Only invocationOf sets it. */
+  stdinUnknown?: boolean;
 }
 
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
@@ -437,16 +439,29 @@ export const isQuotedWord = (w: Word): boolean => /^(?:\$?["']|@["'])/.test(w.ra
 const POSIX_C_CLUSTER = /^-[a-z]*c[a-z]*$/i;
 const PS_C_FLAG = /^-(?:c|command|lc)$/i;
 
+/** The text of one quoted word, unquoted as the shell does. */
+function quotedValue(w: Word): string {
+  if (w.lit !== null) return w.lit;
+  // The parser gives no literal for a double-quoted word that holds an escaped quote (`"bash -c \"cr review\""`). Unquote it as the shell does:
+  // drop the outer quotes and the backslash of \" and \\ (the rule the old hand reader used).
+  const m = /^\$?"((?:\\.|[^"\\])*)"$|^\$?'([^']*)'$/.exec(w.raw);
+  return m ? (m[1] !== undefined ? m[1].replace(/\\(["\\])/g, '$1') : (m[2] ?? '')) : w.raw;
+}
+
 /** The command string a wrapper receives, from the words after its -c flag: a quoted first word, else every word joined (the rest of the line). */
 function payloadWords(after: Word[]): string {
   if (after.length === 0) return '';
   const first = after[0];
   if (!isQuotedWord(first)) return after.map(wordText).join(' ');
-  if (first.lit !== null) return first.lit;
-  // The parser gives no literal for a double-quoted word that holds an escaped quote (`"bash -c \"cr review\""`). Unquote it as the shell does:
-  // drop the outer quotes and the backslash of \" and \\ (the rule the old hand reader used).
-  const m = /^\$?"((?:\\.|[^"\\])*)"$|^\$?'([^']*)'$/.exec(first.raw);
-  return m ? (m[1] !== undefined ? m[1].replace(/\\(["\\])/g, '$1') : (m[2] ?? '')) : first.raw;
+  return quotedValue(first);
+}
+
+/**
+ * The command string of Bash `eval`: every argument, unquoted, joined with one space, as the shell does (`eval 'echo' ';' 'cr review'` runs
+ * `echo ; cr review`). `bash -c` is not like this: its first word is the script and the rest are positional parameters (payloadWords).
+ */
+function evalPayload(after: Word[]): string {
+  return after.map((w) => (isQuotedWord(w) ? quotedValue(w) : wordText(w))).join(' ');
 }
 
 function skipRunnerWords(exe: string, rest: Word[], moves: { on: boolean }): Word[] {
@@ -497,11 +512,13 @@ export function invocationOf(call: Call): Invocation | null {
     } else if (SHELLS.has(exe)) {
       const at = rest.findIndex((w) => (POSIX_SHELLS.has(exe) ? POSIX_C_CLUSTER.test(w.lit ?? '') || /^-command$/i.test(w.lit ?? '') : PS_C_FLAG.test(w.lit ?? '')));
       if (at >= 0) return done({ exe, args: [], nested: payloadWords(rest.slice(at + 1)) });
-      if (call.stdin) return done({ exe, args: [], nested: call.stdin.lit ?? '' });
+      // The shell reads its script from stdin. A stdin the call list cannot read (`< file`, `<&3`, a heredoc with a substitution) is unknown, and
+      // classifyCommand denies it when the text holds a review (never reads it as empty).
+      if (call.stdin) return done({ exe, args: [], nested: call.stdin.lit ?? '', ...(call.stdin.lit === null ? { stdinUnknown: true } : {}) });
       return done({ exe, args: rest.map(wordText) });
     } else if (EVALS.has(exe)) {
       const after = /^-command$/i.test(rest[0]?.lit ?? '') ? rest.slice(1) : rest;
-      return done({ exe, args: [], nested: payloadWords(after) });
+      return done({ exe, args: [], nested: exe === 'eval' ? evalPayload(after) : payloadWords(after) });
     } else if (STARTERS.has(exe)) {
       return done(starterFromWords(rest));
     } else if (PREFIXES.has(exe)) {
@@ -1042,6 +1059,8 @@ export async function classifyCommand(source: string, ps = false, depth = 0): Pr
     if (!inv) continue;
     // Rule U1 (seat 15:30, a-prime at 15:50): a program word with no literal value (`$X review`, `$(echo cr) review`, `c\r review`) denies when the
     // unit holds a cr or coderabbit word outside quotes, or when its first argument is the literal word review. `$L say "...CodeRabbit..."` is allowed.
+    // A shell that reads an unreadable stdin, in a text that holds a cr word then review: the script may hold the review. Denied with the way-out.
+    if (inv.stdinUnknown && reviewLike(joined)) return { verdict: 'block', reason: wayOut('the shell reads a script the check cannot see') };
     if (inv.unreadable && (inv.args[0] === 'review' || [...lexed.masked.slice(start, end).matchAll(CR_WORD)].length > 0)) {
       // The way-out text, as every other deny of an unplaced review (the user fixes it by writing the program word out).
       return { verdict: 'block', reason: wayOut('the program word is not readable') };

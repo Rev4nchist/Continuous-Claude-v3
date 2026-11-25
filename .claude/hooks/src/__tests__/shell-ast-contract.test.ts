@@ -27,6 +27,9 @@ test('operator codes the walker uses', () => {
   assert.equal(ops.BinCmdOperator.OrStmt, 12);
   assert.equal(ops.BinCmdOperator.Pipe, 13);
   assert.equal(ops.BinCmdOperator.PipeAll, 14);
+  assert.equal(ops.RedirOperator.RdrIn, 65);
+  assert.equal(ops.RedirOperator.RdrInOut, 66);
+  assert.equal(ops.RedirOperator.DplIn, 67);
   assert.equal(ops.RedirOperator.Hdoc, 71);
   assert.equal(ops.RedirOperator.DashHdoc, 72);
   assert.equal(ops.RedirOperator.WordHdoc, 73);
@@ -36,7 +39,7 @@ test('operator codes the walker uses', () => {
 
 test('the codes the module hard-codes equal the pinned package codes', () => {
   assert.deepEqual(BinCmdOperator, { AndStmt: ops.BinCmdOperator.AndStmt, OrStmt: ops.BinCmdOperator.OrStmt, Pipe: ops.BinCmdOperator.Pipe, PipeAll: ops.BinCmdOperator.PipeAll });
-  assert.deepEqual(RedirOperator, { Hdoc: ops.RedirOperator.Hdoc, DashHdoc: ops.RedirOperator.DashHdoc, WordHdoc: ops.RedirOperator.WordHdoc });
+  assert.deepEqual(RedirOperator, { RdrIn: ops.RedirOperator.RdrIn, RdrInOut: ops.RedirOperator.RdrInOut, DplIn: ops.RedirOperator.DplIn, Hdoc: ops.RedirOperator.Hdoc, DashHdoc: ops.RedirOperator.DashHdoc, WordHdoc: ops.RedirOperator.WordHdoc });
   assert.deepEqual(ParExpOperator, { AssignUnset: ops.ParExpOperator.AssignUnset, AssignUnsetOrNull: ops.ParExpOperator.AssignUnsetOrNull });
 });
 

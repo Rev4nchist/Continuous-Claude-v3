@@ -38,7 +38,7 @@ const WASM_EXEC_PATH: string = SHIPPED ? SHIPPED_WASM_EXEC : `${SH_SYNTAX_DIR}/v
 // Operator codes the walker reads. The contract test (shell-ast-contract.test.ts) compares each one with
 // the pinned package's lib/operators.js, so a version bump that moves a code fails there, not here.
 export const BinCmdOperator = { AndStmt: 11, OrStmt: 12, Pipe: 13, PipeAll: 14 } as const;
-export const RedirOperator = { Hdoc: 71, DashHdoc: 72, WordHdoc: 73 } as const;
+export const RedirOperator = { RdrIn: 65, RdrInOut: 66, DplIn: 67, Hdoc: 71, DashHdoc: 72, WordHdoc: 73 } as const;
 export const ParExpOperator = { AssignUnset: 87, AssignUnsetOrNull: 88 } as const;
 
 // An AST node of sh-syntax or a row of the pwsh walker. The shapes are pinned by the contract test, so the walk is untyped on purpose.
@@ -326,13 +326,20 @@ function walkBash(file: N, text: string): Walked {
   return { events: ev, kinds, free, heredocs, spans: { quoted: quoted.filter(([a, b]) => !delims.some(([x, y]) => x <= a && b <= y)), substs, bodies: heredocs.map((h) => [h.start, h.end] as [number, number]) } };
 }
 
-// stdin of a call: heredoc or here-string body, when the Stmt has one
+// stdin of a call: the LAST redirect of the Stmt that feeds file descriptor 0 (bash applies redirects left to right, so the last one wins).
+// A heredoc or here-string gives its body (`lit` null when the body is not literal). `< file`, `<> file` and `<&n` give `{ lit: null }`: the
+// shell reads stdin from somewhere the call list cannot see, and a caller that runs the stdin as a script must not read it as empty.
+const STDIN_OPS = [RedirOperator.RdrIn, RedirOperator.RdrInOut, RedirOperator.DplIn, RedirOperator.Hdoc, RedirOperator.DashHdoc, RedirOperator.WordHdoc];
 function stdinOf(s: N): { lit: string | null } | null {
+  let last: N = null;
   for (const r of s?.redirs ?? []) {
-    if (r.op === RedirOperator.Hdoc || r.op === RedirOperator.DashHdoc) return { lit: r.hdoc ? wordLit(r.hdoc) : null };
-    if (r.op === RedirOperator.WordHdoc) return { lit: r.word ? wordLit(r.word) : null };
+    const fd = r.n?.value;
+    if ((fd === undefined || fd === '0') && STDIN_OPS.includes(r.op)) last = r;
   }
-  return null;
+  if (!last) return null;
+  if (last.op === RedirOperator.Hdoc || last.op === RedirOperator.DashHdoc) return { lit: last.hdoc ? wordLit(last.hdoc) : null };
+  if (last.op === RedirOperator.WordHdoc) return { lit: last.word ? wordLit(last.word) : null };
+  return { lit: null };
 }
 
 // ---- PowerShell

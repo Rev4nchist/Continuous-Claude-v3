@@ -694,7 +694,7 @@ var SH_SYNTAX_DIR = packageDir();
 var WASM_PATH = SHIPPED ? SHIPPED_WASM : `${SH_SYNTAX_DIR}/main.wasm`;
 var WASM_EXEC_PATH = SHIPPED ? SHIPPED_WASM_EXEC : `${SH_SYNTAX_DIR}/vendors/wasm_exec.cjs`;
 var BinCmdOperator = { AndStmt: 11, OrStmt: 12, Pipe: 13, PipeAll: 14 };
-var RedirOperator = { Hdoc: 71, DashHdoc: 72, WordHdoc: 73 };
+var RedirOperator = { RdrIn: 65, RdrInOut: 66, DplIn: 67, Hdoc: 71, DashHdoc: 72, WordHdoc: 73 };
 var ParExpOperator = { AssignUnset: 87, AssignUnsetOrNull: 88 };
 var NO_SPANS = { quoted: [], substs: [], bodies: [] };
 var BASH_KINDS_NOTE = ["File", "Stmt", "CallExpr", "BinaryCmd", "Word", "Lit", "SglQuoted", "DblQuoted", "ParamExp", "CmdSubst", "ProcSubst", "Assign", "Redirect", "Subshell", "Block", "IfClause", "WhileClause", "ForClause", "WordIter", "CaseClause", "CaseItem", "FuncDecl", "DeclClause", "TimeClause", "ArithmExp", "BinaryArithm", "ParenArithm", "ArrayExpr", "ArrayElem", "Comment", "CoprocClause", "CStyleLoop", "UnaryArithm", "TestClause"];
@@ -953,12 +953,17 @@ function walkBash(file, text) {
   if (kinds.has("LetClause") || kinds.has("ArithmCmd") || kinds.has("ArithmExp") || kinds.has("CStyleLoop")) ev.push({ t: "unsafe" });
   return { events: ev, kinds, free, heredocs, spans: { quoted: quoted.filter(([a, b]) => !delims.some(([x, y]) => x <= a && b <= y)), substs, bodies: heredocs.map((h) => [h.start, h.end]) } };
 }
+var STDIN_OPS = [RedirOperator.RdrIn, RedirOperator.RdrInOut, RedirOperator.DplIn, RedirOperator.Hdoc, RedirOperator.DashHdoc, RedirOperator.WordHdoc];
 function stdinOf(s) {
+  let last = null;
   for (const r of s?.redirs ?? []) {
-    if (r.op === RedirOperator.Hdoc || r.op === RedirOperator.DashHdoc) return { lit: r.hdoc ? wordLit(r.hdoc) : null };
-    if (r.op === RedirOperator.WordHdoc) return { lit: r.word ? wordLit(r.word) : null };
+    const fd = r.n?.value;
+    if ((fd === void 0 || fd === "0") && STDIN_OPS.includes(r.op)) last = r;
   }
-  return null;
+  if (!last) return null;
+  if (last.op === RedirOperator.Hdoc || last.op === RedirOperator.DashHdoc) return { lit: last.hdoc ? wordLit(last.hdoc) : null };
+  if (last.op === RedirOperator.WordHdoc) return { lit: last.word ? wordLit(last.word) : null };
+  return { lit: null };
 }
 function runWalker(text, timeoutMs) {
   return new Promise((resolve4) => {
@@ -1456,13 +1461,19 @@ var wordText = (w) => w.lit ?? w.raw;
 var isQuotedWord = (w) => /^(?:\$?["']|@["'])/.test(w.raw);
 var POSIX_C_CLUSTER = /^-[a-z]*c[a-z]*$/i;
 var PS_C_FLAG = /^-(?:c|command|lc)$/i;
+function quotedValue(w) {
+  if (w.lit !== null) return w.lit;
+  const m = /^\$?"((?:\\.|[^"\\])*)"$|^\$?'([^']*)'$/.exec(w.raw);
+  return m ? m[1] !== void 0 ? m[1].replace(/\\(["\\])/g, "$1") : m[2] ?? "" : w.raw;
+}
 function payloadWords(after) {
   if (after.length === 0) return "";
   const first = after[0];
   if (!isQuotedWord(first)) return after.map(wordText).join(" ");
-  if (first.lit !== null) return first.lit;
-  const m = /^\$?"((?:\\.|[^"\\])*)"$|^\$?'([^']*)'$/.exec(first.raw);
-  return m ? m[1] !== void 0 ? m[1].replace(/\\(["\\])/g, "$1") : m[2] ?? "" : first.raw;
+  return quotedValue(first);
+}
+function evalPayload(after) {
+  return after.map((w) => isQuotedWord(w) ? quotedValue(w) : wordText(w)).join(" ");
 }
 function skipRunnerWords(exe, rest, moves) {
   const values = RUNNER_VALUE_FLAGS[exe];
@@ -1503,11 +1514,11 @@ function invocationOf(call) {
     } else if (SHELLS2.has(exe)) {
       const at = rest.findIndex((w) => POSIX_SHELLS.has(exe) ? POSIX_C_CLUSTER.test(w.lit ?? "") || /^-command$/i.test(w.lit ?? "") : PS_C_FLAG.test(w.lit ?? ""));
       if (at >= 0) return done({ exe, args: [], nested: payloadWords(rest.slice(at + 1)) });
-      if (call.stdin) return done({ exe, args: [], nested: call.stdin.lit ?? "" });
+      if (call.stdin) return done({ exe, args: [], nested: call.stdin.lit ?? "", ...call.stdin.lit === null ? { stdinUnknown: true } : {} });
       return done({ exe, args: rest.map(wordText) });
     } else if (EVALS.has(exe)) {
       const after = /^-command$/i.test(rest[0]?.lit ?? "") ? rest.slice(1) : rest;
-      return done({ exe, args: [], nested: payloadWords(after) });
+      return done({ exe, args: [], nested: exe === "eval" ? evalPayload(after) : payloadWords(after) });
     } else if (STARTERS.has(exe)) {
       return done(starterFromWords(rest));
     } else if (PREFIXES.has(exe)) {
@@ -1847,6 +1858,7 @@ async function classifyCommand(source, ps = false, depth = 0) {
   for (const { start, end, text: seg, inv } of gate ? await unitsOf(joined, lexed, ps) : []) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     if (!inv) continue;
+    if (inv.stdinUnknown && reviewLike(joined)) return { verdict: "block", reason: wayOut("the shell reads a script the check cannot see") };
     if (inv.unreadable && (inv.args[0] === "review" || [...lexed.masked.slice(start, end).matchAll(CR_WORD)].length > 0)) {
       return { verdict: "block", reason: wayOut("the program word is not readable") };
     }

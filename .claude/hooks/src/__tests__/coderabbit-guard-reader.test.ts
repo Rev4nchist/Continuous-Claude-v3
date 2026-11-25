@@ -248,6 +248,48 @@ describe('the raw call rule still counts a review the call list hides (D1, D2)',
   });
 });
 
+// CodeRabbit CLI run 1 on f9d0e551, findings A and B (seat ruling 18:28). Both were real deny-to-allow holes on main (file 62): a review ran and
+// the run count never saw it.
+describe('CLI findings A and B: a review hidden by eval arguments or by two stdin redirects is counted', () => {
+  it('A eval joins every argument with spaces: `eval echo ; cr review` runs the review and counts 1', async () => {
+    const c = await classifyCommand("eval 'echo' ';' 'cr review --agent'", false);
+    expect(c.verdict).toBe('allow');
+    expect(c.runs).toBe(1);
+  });
+
+  it('A control: bash -c keeps the first word as the script and the rest are positional, so `cr review` is $0 and counts 0', async () => {
+    const c = await classifyCommand("bash -c 'echo' 'cr review'", false);
+    expect(c.runs ?? 0).toBe(0);
+  });
+
+  it('B the last here-string is the real stdin: `bash <<< echo <<< cr review` counts 1', async () => {
+    const c = await classifyCommand("bash <<< 'echo hi' <<< 'cr review --agent'", false);
+    expect(c.verdict).toBe('allow');
+    expect(c.runs).toBe(1);
+  });
+
+  it('B a here-string before a heredoc: the heredoc wins, so the review in the here-string is data and counts 0', async () => {
+    const c = await classifyCommand("bash <<< 'cr review --agent' <<EOF\necho hi\nEOF", false);
+    expect(c.runs ?? 0).toBe(0);
+  });
+
+  it('B a heredoc before a here-string: the here-string wins and counts 1', async () => {
+    const c = await classifyCommand("bash <<EOF <<< 'cr review --agent'\necho hi\nEOF", false);
+    expect(c.runs).toBe(1);
+  });
+
+  it('B an unreadable stdin on a shell, in a text that holds a cr word then review, is denied with the way-out text', async () => {
+    const c = await classifyCommand('bash < run.sh; cr review --agent', false);
+    expect(c.verdict).toBe('block');
+    expect(c.reason).toContain('run the review as its own plain command with --base <ref>');
+    expect(c.reason).toContain('the shell reads a script the check cannot see');
+  });
+
+  it('B control: an unreadable stdin with no review in the text is not denied', async () => {
+    expect((await classifyCommand('bash < run.sh', false)).verdict).toBe('ignore');
+  });
+});
+
 // Rule U1 (seat 15:30, a-prime 15:50): a program word with no literal value denies when the unit holds a cr word outside quotes or its first
 // argument is the literal word review. Corpus: 46-u1-corpus-count.txt (the first form denied 5 real lane commands in 7 days; a-prime denies 0).
 describe('rule U1: an unreadable program word next to a review is denied', () => {

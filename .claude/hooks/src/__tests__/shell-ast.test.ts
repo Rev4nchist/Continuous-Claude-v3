@@ -46,6 +46,24 @@ test('bash: known limit, cwdBefore counts CD and chdir as cd (real Bash has neit
   assert.deepEqual(find(r, 'git').cwdBefore, ['/a', '/b']);
 });
 
+// CodeRabbit CLI run 1, finding B (seat 18:28): bash applies redirects left to right, so the LAST redirect that feeds stdin is the real stdin.
+test('bash: the last here-string is the stdin of the call', async () => {
+  const r = await SH("bash <<< 'echo hi' <<< 'cr review --agent'");
+  assert.deepEqual(find(r, 'bash').stdin, { lit: 'cr review --agent' });
+});
+
+test('bash: a here-string before a heredoc gives the heredoc, a heredoc before a here-string gives the here-string', async () => {
+  const a = await SH("bash <<< 'one' <<EOF\ntwo\nEOF");
+  assert.equal(find(a, 'bash').stdin?.lit?.trim(), 'two');
+  const b = await SH("bash <<EOF <<< 'one'\ntwo\nEOF");
+  assert.deepEqual(find(b, 'bash').stdin, { lit: 'one' });
+});
+
+test('bash: a later file redirect makes stdin unknown (lit null), and a redirect of another descriptor is no stdin', async () => {
+  assert.deepEqual(find(await SH("bash <<< 'cr review' < run.sh"), 'bash').stdin, { lit: null });
+  assert.equal(find(await SH('bash 3< run.sh'), 'bash').stdin, null);
+});
+
 test('bash: place for pipe, chain, background', async () => {
   const r = await SH('a | b; c && d || e; f &');
   const p = (n: string) => find(r, n).place;
