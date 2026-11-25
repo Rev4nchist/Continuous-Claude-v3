@@ -29,9 +29,11 @@ export function isUnattended(
  * The hook reads its own env here. A typed `CLAUDE_CODE_SESSION_ATTENDED=1 cmd` reaches only the command's subshell.
  */
 export function overrideLocked(
-  input: { permission_mode?: string },
+  input: { permission_mode?: string; agent_id?: unknown },
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  // A subagent's tool call carries agent_id in the payload (decision-gate reads it there), even when its hook env has no CLAUDE_AGENT_ID.
+  if (typeof input.agent_id === 'string' && input.agent_id !== '') return true;
   return isUnattended(input, env) || env.CLAUDE_CODE_SESSION_ATTENDED === '0';
 }
 

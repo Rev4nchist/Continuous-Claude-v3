@@ -43,6 +43,7 @@ interface PreToolUseInput {
   tool_name: string;
   cwd?: string;
   permission_mode?: string;
+  agent_id?: string;
   tool_input: {
     command?: string;
     description?: string;

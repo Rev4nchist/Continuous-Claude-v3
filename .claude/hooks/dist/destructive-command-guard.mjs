@@ -1065,6 +1065,7 @@ function isUnattended(input, env = process.env) {
   return false;
 }
 function overrideLocked(input, env = process.env) {
+  if (typeof input.agent_id === "string" && input.agent_id !== "") return true;
   return isUnattended(input, env) || env.CLAUDE_CODE_SESSION_ATTENDED === "0";
 }
 var OVERRIDE_IGNORED_NOTE = "A typed SKIP_ override is ignored in an unattended or bypass run. Ask Dave to run it, or leave bypass mode.";

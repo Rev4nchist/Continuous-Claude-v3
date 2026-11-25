@@ -40,7 +40,7 @@ const LOCKED: Kind[] = ['bypass', 'agent', 'ci', 'headless'];
 
 interface Run { decision: string | undefined; reason: string; log: Array<Record<string, unknown>> }
 
-function runGuard(guard: Guard, tool: string, command: string, kind: Kind, extraEnv: Record<string, string> = {}): Run {
+function runGuard(guard: Guard, tool: string, command: string, kind: Kind, extraEnv: Record<string, string> = {}, agentId?: string): Run {
   const dist = distOf(guard);
   expect(existsSync(dist)).toBe(true);
   const home = mkdtempSync(join(tmpdir(), 'gsp-home-'));
@@ -69,7 +69,7 @@ function runGuard(guard: Guard, tool: string, command: string, kind: Kind, extra
   delete env.CDPATH;
   const args = guard === 'package-install-guard' ? ['-r', NET_STUB, dist] : [dist];
   const res = spawnSync(process.execPath, args, {
-    input: JSON.stringify({ session_id: 'gsp-session', tool_name: tool, tool_input: { command }, cwd, permission_mode: run.mode }),
+    input: JSON.stringify({ session_id: 'gsp-session', tool_name: tool, tool_input: { command }, cwd, permission_mode: run.mode, ...(agentId === undefined ? {} : { agent_id: agentId }) }),
     encoding: 'utf8',
     timeout: 25_000,
     env,
@@ -142,6 +142,27 @@ describe('guard-skip-prefix-unattended: a locked run ignores the override', { ti
     expect(gated(r), `decision ${r.decision}`).toBe(true);
     expect(r.reason).toMatch(IGNORED_TEXT);
     expect(ignoredRow(r)).toBe(true);
+  });
+});
+
+describe('guard-skip-prefix-unattended: a subagent payload (agent_id) locks the override with no env flag', { timeout: 40_000 }, () => {
+  const SUB: Array<[Guard, 'Bash', string]> = [
+    ['destructive-command-guard', 'Bash', 'SKIP_DESTRUCTIVE_GUARD=1 rm -rf zz-skip-target'],
+    ['package-install-guard', 'Bash', 'SKIP_PACKAGE_GUARD=1 npm install zz-fake-pkg-a1'],
+    ['pre-pr-gate', 'Bash', 'SKIP_PRE_PR_GATE=1 gh pr create --fill'],
+  ];
+  // Interactive kind: mode default, no CLAUDE_AGENT_ID, ATTENDED=1. Only the payload says "subagent".
+  it.each(SUB)('%s: agent_id in the payload, no env flag: the typed override is ignored', (guard, tool, command) => {
+    const r = runGuard(guard, tool, command, 'interactive', {}, 'sub-agent-9');
+    expect(gated(r), `decision ${r.decision}`).toBe(true);
+    expect(r.reason).toMatch(IGNORED_TEXT);
+    expect(ignoredRow(r)).toBe(true);
+  });
+  it.each(SUB)('%s control: no agent_id, same text: the override still works', (guard, tool, command) => {
+    expect(allowed(runGuard(guard, tool, command, 'interactive'))).toBe(true);
+  });
+  it('an empty agent_id counts as none', () => {
+    expect(allowed(runGuard('destructive-command-guard', 'Bash', 'SKIP_DESTRUCTIVE_GUARD=1 rm -rf zz-skip-target', 'interactive', {}, ''))).toBe(true);
   });
 });
 
