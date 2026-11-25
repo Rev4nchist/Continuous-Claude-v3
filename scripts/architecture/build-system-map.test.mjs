@@ -217,6 +217,21 @@ test('G12 the stats script is a wrapper: --apply writes the generator output, a 
   assert.match(again.stdout, /no changes/i);
 });
 
+test('G14 a stale graph names the command that rebuilds it and the two files to stage', () => {
+  const root = makeRoot();
+  apply(root);
+  mkdirSync(join(root, '.claude/skills/s-extra'), { recursive: true });
+  writeFileSync(join(root, '.claude/skills/s-extra/SKILL.md'), '---\nname: s-extra\ndescription: Extra.\n---\n');
+  const r = run(root, '--check', '--skip-listed');
+  assert.equal(r.status, 1);
+  const text = r.stdout + r.stderr;
+  assert.match(text, /node scripts\/architecture\/build-system-map\.mjs --apply/, 'the failure text must name the rebuild command');
+  assert.match(text, /docs\/architecture\/system-visualization\/architecture\.json/, 'and the first file to stage');
+  assert.match(text, /docs\/architecture\/system-visualization\/index\.html/, 'and the second file to stage');
+  const empty = run(makeRoot({ skills: [] }), '--check', '--skip-listed');
+  assert.doesNotMatch(empty.stdout, /--apply/, 'a "not checked" result is not fixed by a rebuild, so it names no rebuild');
+});
+
 test('G13 the committed graph and page of this repo are fresh against the real sources', () => {
   const r = spawnSync(process.execPath, [GEN, '--root', REPO, '--check', '--skip-listed'], { encoding: 'utf8' });
   assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
