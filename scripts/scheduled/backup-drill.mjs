@@ -101,10 +101,10 @@ export async function runDrill({ sh, dumpPath, live, repo, container = 'continuo
     if (url) {
       try {
         const dropped = await sh(node, [scratchCli, 'drop', url]);
-        if (dropped.code !== 0) notes.push(`scratch ${name} not dropped`);
+        notes.push(dropped.code === 0 ? `scratch ${name} dropped` : `scratch ${name} not dropped`);
       } catch { notes.push(`scratch ${name} not dropped`); }
     }
-    if (notes.length) result = { ...result, detail: maskText(`${result.detail} | ${notes.join('; ')}`) };
+    if (notes.length) result = { ...result, detail: `${result.detail} | ${notes.join('; ')}` };
   }
   return result;
 }

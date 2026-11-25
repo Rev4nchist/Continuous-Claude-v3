@@ -6,7 +6,8 @@
  *                                                                   no Notion call. The drill runs on a scratch database.
  *   node scripts/scheduled/backup-state.mjs                         the real night: files in ~/.claude/state/backups/<date>, upload, one row.
  *                                                                   Needs the credential and the database id (Dave's yes, not set up yet).
- *   --allow-trash                                                   let the retention step move old rows to the Notion trash (Dave's yes).
+ *   --repo <dir>                                                    the checkout that holds .claudedocs (the primary checkout; default: this one)
+ *   --allow-trash                                                let the retention step move old rows to the Notion trash (Dave's yes).
  *
  * Order of a night: read the live lane ids, dump, read the live counts, zip the three sets, manifest, restore drill, upload,
  * one row (a failed night gets a row too, with a named Status), retention, local prune. Exit 0 only when Status is ok.
@@ -218,7 +219,8 @@ const today = () => new Date().toLocaleDateString('en-CA');
 async function main(argv) {
   const flag = (n) => argv.includes(n);
   const val = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
-  const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  // The notes of .claudedocs are git-excluded: they exist only in the primary checkout. The wrapper passes --repo <primary checkout>.
+  const repo = val('--repo') ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
   const home = homedir();
   const date = val('--date') ?? today();
   const dryRun = flag('--dry-run');

@@ -46,6 +46,7 @@ test('D2 a good drill: scratch, copy, restore with the three flags, counts, then
   const out = await drill(f);
   assert.equal(out.drill, 'pass');
   assert.match(out.detail, /lane 150 of 150/);
+  assert.match(out.detail, /scratch lanes_pr1_abcd1234 dropped/, 'the detail names the scratch database it removed');
   const lines = f.calls.map((c) => c.line);
   const at = (needle) => lines.findIndex((l) => l.includes(needle));
   assert.ok(at('scratch-db.mjs create --through 0') >= 0);
