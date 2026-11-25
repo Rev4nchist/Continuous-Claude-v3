@@ -38,13 +38,13 @@ test('N1 single part: create, then send the exact bytes, and return the id', asy
   });
   try {
     const f = file(1000);
-    const out = await uploadFile(client(srv.url), { filename: 'a.dump', contentType: 'application/octet-stream', ...f });
+    const out = await uploadFile(client(srv.url), { filename: 'a.dump.gz', contentType: 'application/gzip', ...f });
     assert.equal(out.id, 'up1');
     assert.equal(out.mode, 'single');
     assert.deepEqual(srv.seen.map((r) => r.path), ['/v1/file_uploads', '/v1/file_uploads/up1/send']);
     const create = json(srv.seen[0]);
-    assert.equal(create.filename, 'a.dump');
-    assert.equal(create.content_type, 'application/octet-stream');
+    assert.equal(create.filename, 'a.dump.gz');
+    assert.equal(create.content_type, 'application/gzip');
     assert.ok(create.mode === undefined || create.mode === 'single_part');
     const form = await new Response(srv.seen[1].body, { headers: { 'content-type': srv.seen[1].headers['content-type'] } }).formData();
     const sent = Buffer.from(await form.get('file').arrayBuffer());
@@ -60,7 +60,7 @@ test('N2 multi part: parts numbered 1..n of 10 MiB, complete only after the last
   });
   try {
     const f = file(25 * MiB);
-    const out = await uploadFile(client(srv.url), { filename: 'big.dump', contentType: 'application/octet-stream', ...f });
+    const out = await uploadFile(client(srv.url), { filename: 'big.dump.gz', contentType: 'application/gzip', ...f });
     assert.equal(out.mode, 'multi');
     assert.equal(json(srv.seen[0]).mode, 'multi_part');
     assert.equal(json(srv.seen[0]).number_of_parts, 3);
@@ -75,6 +75,24 @@ test('N2 multi part: parts numbered 1..n of 10 MiB, complete only after the last
     assert.deepEqual(sizes, [10 * MiB, 10 * MiB, 5 * MiB]);
     assert.equal(srv.seen.at(-1).path, '/v1/file_uploads/up2/complete');
     assert.equal(srv.seen.at(-1).method, 'POST');
+  } finally { await srv.close(); }
+});
+
+test('N2b a gzip dump of 25 MiB goes the multi-part way with the .dump.gz name and the gzip type', async () => {
+  // Breaks when the part size or the single-part limit changes: the part count in the create call would differ.
+  const srv = await fakeNotion((rec) => {
+    if (rec.path === '/v1/file_uploads') return { json: { id: 'up3', status: 'pending' } };
+    return { json: { id: 'up3', status: 'uploaded' } };
+  });
+  try {
+    const out = await uploadFile(client(srv.url), { filename: 'ccv3-lanedb-2026-11-25.dump.gz', contentType: 'application/gzip', ...file(25 * MiB) });
+    assert.equal(out.mode, 'multi');
+    const create = json(srv.seen[0]);
+    assert.equal(srv.seen[0].path, '/v1/file_uploads');
+    assert.equal(create.mode, 'multi_part');
+    assert.equal(create.number_of_parts, 3, '25 MiB in parts of 10 MiB: 10 + 10 + 5');
+    assert.equal(create.filename, 'ccv3-lanedb-2026-11-25.dump.gz');
+    assert.equal(create.content_type, 'application/gzip');
   } finally { await srv.close(); }
 });
 
@@ -103,7 +121,7 @@ test('N5 every request has the bearer token, the pinned version and the row is b
   const srv = await fakeNotion(() => ({ json: { id: 'row1', url: 'https://notion.example/row1' } }));
   try {
     const manifest = { date: '2026-11-25', kind: 'weekly', files: [
-      { name: 'a.dump', bytes: 10, sha256: 'aa'.repeat(32), uploadId: 'u1' },
+      { name: 'a.dump.gz', bytes: 10, sha256: 'aa'.repeat(32), uploadId: 'u1' },
       { name: 'b.zip', bytes: 20, sha256: 'bb'.repeat(32), uploadId: 'u2' } ] };
     const props = rowProperties(manifest, { status: 'ok', drill: 'pass', drillDetail: 'lane 150 of 150' });
     const c = client(srv.url);
@@ -121,8 +139,8 @@ test('N5 every request has the bearer token, the pinned version and the row is b
     assert.equal(body.properties.Status.select.name, 'ok');
     assert.equal(body.properties.Drill.select.name, 'pass');
     assert.equal(body.properties.Task.rich_text[0].text.content, 'CCV3-State-Backup');
-    assert.deepEqual(body.properties.Files.files.map((f) => [f.name, f.file_upload.id]), [['a.dump', 'u1'], ['b.zip', 'u2']]);
-    assert.match(body.properties['Sizes and sha256'].rich_text[0].text.content, /a\.dump 10 B aaaa/);
+    assert.deepEqual(body.properties.Files.files.map((f) => [f.name, f.file_upload.id]), [['a.dump.gz', 'u1'], ['b.zip', 'u2']]);
+    assert.match(body.properties['Sizes and sha256'].rich_text[0].text.content, /a\.dump\.gz 10 B aaaa/);
   } finally { await srv.close(); }
 });
 

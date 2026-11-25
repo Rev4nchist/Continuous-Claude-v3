@@ -105,14 +105,21 @@ if (Test-Path -LiteralPath $tokenFile) {
 }
 $outFile = [System.IO.Path]::GetTempFileName()
 $errFile = [System.IO.Path]::GetTempFileName()
-$p = Start-Process -FilePath $node -ArgumentList $argText -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
-$null = $p.Handle
-if ($p.WaitForExit($secs * 1000)) {
-  $rc = $p.ExitCode
-} else {
-  Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-  Write-Log 'TIMEOUT: backup killed'
-  $rc = 124
+# $rc starts at 1: a command that never starts must not leave it unset (exit $null is 0).
+$rc = 1
+try {
+  $p = Start-Process -FilePath $node -ArgumentList $argText -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile -ErrorAction Stop
+  $null = $p.Handle
+  if ($p.WaitForExit($secs * 1000)) {
+    $rc = $p.ExitCode
+  } else {
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    Write-Log 'TIMEOUT: backup killed'
+    $rc = 124
+  }
+} catch {
+  Write-Log "LAUNCH FAILED: $($_.Exception.Message)"
+  $rc = 1
 }
 foreach ($f in @($outFile, $errFile)) {
   try { Get-Content -LiteralPath $f -ErrorAction Stop | ForEach-Object { Write-Log "$_" } } catch { }

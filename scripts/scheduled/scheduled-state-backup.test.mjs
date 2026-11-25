@@ -87,6 +87,22 @@ test('timeout: a hung command is killed, the wrapper exits 124 and does not wait
   assert.ok(r.ms < 60000, `took ${r.ms} ms`);
 });
 
+test('launch: a node that cannot start gives a nonzero exit, a LAUNCH FAILED log line, and no slot marker', win, () => {
+  // Breaks when Start-Process errors are not fatal: $rc stays unset and the wrapper exits 0 for a night that never ran.
+  const fx = fixture();
+  const fakeBin = join(fx.root, 'fakebin');
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(join(fakeBin, 'node.exe'), 'this is not a program'); // found on PATH first, but Windows cannot start it
+  const path = `${fakeBin};${process.env.PATH ?? process.env.Path ?? ''}`;
+  const r = run(fx, { PATH: path, Path: undefined });
+  assert.notEqual(r.status, 0, r.log);
+  assert.match(r.log, /LAUNCH FAILED/);
+  assert.equal(existsSync(join(fx.calls, 'call.json')), false, 'the command did not run');
+  const again = run(fx, { FAKE_EXIT: '0' });
+  assert.equal(again.status, 0, 'a failed launch leaves the slot open, so the next trigger retries');
+  assert.equal(existsSync(join(fx.calls, 'call.json')), true);
+});
+
 test('log: stdout and stderr of the command reach the log', win, () => {
   const r = run(fixture());
   assert.match(r.log, /fake backup stdout line/);

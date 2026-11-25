@@ -131,6 +131,16 @@ test('R7 a row with no date or a bad date is kept', async () => {
   assert.ok(!r.trash.includes('no-date') && !r.trash.includes('bad-date'));
 });
 
+test('R8 rows of another owner do not take the 14 newest slots of our rows', async () => {
+  // Breaks when the window counts every row: 14 newer foreign rows would push our own rows out and a newer proved row of ours would trash them.
+  const { chooseRetention } = await lib();
+  const foreign = Array.from({ length: 14 }, (_, i) => row(i, { id: `f${i}`, task: 'someone-else' }));
+  const ours = [row(20), row(21), row(22)]; // 3 rows of ours: all inside our own 14 newest
+  const r = chooseRetention([...foreign, ...ours], { now: NOW });
+  assert.deepEqual(r.trash, [], 'our 3 rows are within our own 14 newest: none is trashed');
+  assert.equal(r.keep.length, 17);
+});
+
 test('M1 maskText hides a url password, a Notion token, a Bearer value and a given secret', async () => {
   // Breaks when one of the four patterns is dropped: a failure row is shown in Notion and a local log.
   const { maskText } = await lib();

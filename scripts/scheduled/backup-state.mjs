@@ -4,19 +4,21 @@
  *
  *   node scripts/scheduled/backup-state.mjs --dry-run --out <dir>   make the four files, the manifest, the row and the drill result in <dir>;
  *                                                                   no Notion call. The drill runs on a scratch database.
- *   node scripts/scheduled/backup-state.mjs                         the real night: files in ~/.claude/state/backups/<date>, upload, one row.
+ *   node scripts/scheduled/backup-state.mjs                         the real night: files in ~/.claude/state/backups/<date>/run-<time>-<pid>, upload, one row.
  *                                                                   Needs the credential and the database id (Dave's yes, not set up yet).
  *   --repo <dir>                                                    the checkout that holds .claudedocs (the primary checkout; default: this one)
  *   --allow-trash                                                let the retention step move old rows to the Notion trash (Dave's yes).
  *
+ * The dump file is gzip (ccv3-lanedb-<date>.dump.gz): gunzip it before pg_restore.
  * Order of a night: read the live lane ids, dump, read the live counts, zip the three sets, manifest, restore drill, upload,
  * one row (a failed night gets a row too, with a named Status), retention, local prune. Exit 0 only when Status is ok.
  * The task runs with llm=false: no model reads the dump. A module too: the exports below are what the tests call.
  */
 import { spawn } from 'node:child_process';
-import { createWriteStream, existsSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname, homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { createGzip } from 'node:zlib';
+import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { makeZip } from './zip-lite.mjs';
@@ -29,11 +31,15 @@ const KEEP_LOCAL_DAYS = 14;
 const DOCKER_EXE = 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe';
 const CONTAINER = 'continuous-claude-postgres';
 
+/** readdir that treats a missing folder (ENOENT) as empty. Any other error (no right, not a folder) is thrown: a partial backup must not look whole. */
+function listDir(dir) {
+  try { return readdirSync(dir, { withFileTypes: true }); } catch (e) { if (e?.code === 'ENOENT') return []; throw e; }
+}
+
 /** Text files below dir, as { name: 'a/b.md', data }. A link (symlink or junction) is never followed: only plain files and folders count. */
 function walk(dir, prefix = '') {
   const out = [];
-  let entries;
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  const entries = listDir(dir);
   for (const e of entries) {
     const rel = prefix ? `${prefix}/${e.name}` : e.name;
     if (e.isDirectory()) out.push(...walk(join(dir, e.name), rel));
@@ -45,8 +51,7 @@ function walk(dir, prefix = '') {
 /** The three zip sets of a night: state (decisions and the decision log), coordination (the seat notes), seat (re-execution). */
 export async function collectSets({ home, repo }) {
   const mods = join(home, '.claude', 'state', 'ccv3-mods');
-  let top = [];
-  try { top = readdirSync(mods, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name); } catch { /* none yet */ }
+  const top = listDir(mods).filter((e) => e.isFile()).map((e) => e.name); // no folder yet: empty
   const state = top
     .filter((n) => n === 'decisions.json' || n === 'ask-dialogs.jsonl' || /^decision-log.*\.jsonl$/.test(n))
     .map((n) => ({ name: n, data: readFileSync(join(mods, n)) }));
@@ -57,38 +62,89 @@ export async function collectSets({ home, repo }) {
   };
 }
 
-/** Run a command and write its stdout, byte for byte, to outPath. Rejects on a non-zero exit and removes the partial file. */
+/**
+ * Run a command and write its stdout, gzipped, to outPath (gunzip gives the stdout back byte for byte). Resolves { bytes }: the raw stdout bytes.
+ * Any failure rejects ONCE with a masked message, kills the child, destroys the streams and removes the partial file after the file stream is closed:
+ *   dump could not start / dump exit N: <stderr> / dump write failed / dump compress failed / dump read failed.
+ * A failed sink never waits for the child to exit: a child that fills a pipe nobody reads would block for ever.
+ */
 export function dumpToFile({ cmd, args, outPath }) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const gzip = createGzip();
     const sink = createWriteStream(outPath);
-    const written = new Promise((done, broke) => { sink.on('finish', done); sink.on('error', broke); });
-    written.catch(() => {});
     let stderr = '';
     let bytes = 0;
+    let settled = false;
+    let exitedOk = false;
+    let sinkDone = false;
+    const fail = (message) => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      child.stdout.destroy();
+      gzip.destroy();
+      sink.destroy();
+      const remove = () => { try { unlinkSync(outPath); } catch { /* none */ } reject(new Error(maskText(message))); };
+      if (sink.closed) remove(); else sink.once('close', remove); // a file that is still open cannot be removed on Windows
+    };
+    const finish = () => { if (!settled && exitedOk && sinkDone) { settled = true; resolve({ bytes }); } };
     child.stdout.on('data', (c) => { bytes += c.length; });
-    child.stdout.pipe(sink);
+    child.stdout.on('error', (e) => fail(`dump read failed: ${e.message}`));
+    child.stdout.pipe(gzip).pipe(sink);
     child.stderr.on('data', (c) => { if (stderr.length < 4000) stderr += c.toString('utf8'); });
-    const fail = (message) => { sink.destroy(); try { unlinkSync(outPath); } catch { /* none */ } reject(new Error(maskText(message))); };
+    gzip.on('error', (e) => fail(`dump compress failed: ${e.message}`));
+    sink.on('error', (e) => fail(`dump write failed: ${e.message}`));
+    sink.on('finish', () => { sinkDone = true; finish(); });
     child.on('error', (e) => fail(`dump could not start: ${e.message}`));
     child.on('close', (code) => {
       if (code !== 0) return fail(`dump exit ${code}: ${stderr}`);
-      return written.then(() => resolve({ bytes }), (e) => fail(`dump write failed: ${e.message}`));
+      exitedOk = true;
+      return finish();
     });
   });
+}
+
+/** The folder of ONE real run: <home>/.claude/state/backups/<date>/run-<HHmmss local>-<pid>. Two runs on one date never share files. */
+export function runOutDir({ home, date, now = new Date(), pid = process.pid }) {
+  const two = (n) => String(n).padStart(2, '0');
+  const time = `${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
+  return join(home, '.claude', 'state', 'backups', date, `run-${time}-${pid}`);
 }
 
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && Number.isFinite(Date.parse(`${s}T00:00:00Z`)) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;
 const days = (s) => Date.parse(`${s}T00:00:00Z`) / 86_400_000;
 
-/** Remove dated folders (YYYY-MM-DD, plain folders only) older than 14 days. Returns the removed names. */
-export function pruneLocal(dir, { now }) {
+const samePath = (a, b) => (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
+const holds = (folder, inner) => { const rel = relative(resolve(folder), resolve(inner)); return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)); };
+
+/** Remove a folder tree. A link (symlink or junction) is removed itself and never followed. */
+function removeTree(dir) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isSymbolicLink()) { try { unlinkSync(full); } catch { rmdirSync(full); } } else if (e.isDirectory()) removeTree(full); else unlinkSync(full);
+  }
+  rmdirSync(dir);
+}
+
+/**
+ * Remove dated folders (YYYY-MM-DD, plain folders only) older than 14 days from `dir`, the backups root. Returns the removed names.
+ * Nothing outside `dir` is touched. Refused with an error (nothing removed): a root that is not a string, not absolute, not an existing folder,
+ * the home folder, a drive root, or opts.repo; a now that is not a real date. A dated folder that holds opts.keep (the current run) stays.
+ */
+export function pruneLocal(dir, { now, keep = null, repo = null } = {}) {
+  if (typeof dir !== 'string' || !dir || !isAbsolute(dir)) throw new Error('prune root must be an absolute folder path');
+  if (!isDate(now)) throw new Error('prune needs a real date as now');
+  if (samePath(dir, parse(resolve(dir)).root)) throw new Error('prune root is a drive root: refused');
+  if (samePath(dir, homedir())) throw new Error('prune root is the home folder: refused');
+  if (repo && samePath(dir, repo)) throw new Error('prune root is the repo root: refused');
+  if (!lstatSync(dir).isDirectory()) throw new Error('prune root is not a plain folder');
   const gone = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (!e.isDirectory() || !isDate(e.name) || days(now) - days(e.name) <= KEEP_LOCAL_DAYS) continue;
     const full = join(dir, e.name);
-    if (lstatSync(full).isSymbolicLink()) continue;
-    rmSync(full, { recursive: true, force: true });
+    if (lstatSync(full).isSymbolicLink() || (keep && holds(full, keep))) continue;
+    removeTree(full);
     gone.push(e.name);
   }
   return gone;
@@ -102,12 +158,13 @@ function sliceReader(path) {
 }
 
 /**
- * opts: { date, home, repo, outDir, dryRun, notion, minDumpBytes, allowTrash, secrets }
+ * opts: { date, home, repo, outDir, dryRun, notion, minDumpBytes, allowTrash, secrets, pruneRoot }
+ * pruneRoot: the backups root to prune after a real night; unset means no prune. A bad value is logged as "local prune skipped", never acted on.
  * deps: { dump(outPath), readLive() -> { counts, ids }, drill({ dumpPath, live }), log(line) }
  * Returns { status, exitCode, manifest, drill, row, trashed }.
  */
 export async function runBackup(opts, deps) {
-  const { date, home, repo, outDir, dryRun = false, notion = null, minDumpBytes = MiB, allowTrash = false, secrets = [] } = opts;
+  const { date, home, repo, outDir, dryRun = false, notion = null, minDumpBytes = MiB, allowTrash = false, secrets = [], pruneRoot } = opts;
   const log = (m) => deps.log(String(m)); // every message passed in is already masked by say()
   const say = (e) => maskText(e?.message ?? String(e), { secrets });
   mkdirSync(outDir, { recursive: true });
@@ -115,7 +172,7 @@ export async function runBackup(opts, deps) {
   let status = 'ok';
   let detail = '';
   let drill = { drill: 'not-run', detail: '' };
-  const dumpName = `ccv3-lanedb-${date}.dump`;
+  const dumpName = `ccv3-lanedb-${date}.dump.gz`;
   const dumpPath = join(outDir, dumpName);
 
   let before = null;
@@ -136,7 +193,7 @@ export async function runBackup(opts, deps) {
     try {
       const sets = await collectSets({ home, repo });
       const zips = [['state', sets.state], ['coordination', sets.coordination], ['seat', sets.seat]];
-      const files = [{ name: dumpName, path: dumpPath, type: 'application/octet-stream' }];
+      const files = [{ name: dumpName, path: dumpPath, type: 'application/gzip' }];
       for (const [label, entries] of zips) {
         const name = `ccv3-${label}-${date}.zip`;
         try { writeFileSync(join(outDir, name), makeZip(entries)); } catch (e) { status = `collect-failed:${name}`; detail = say(e); break; }
@@ -195,7 +252,7 @@ export async function runBackup(opts, deps) {
     result.trashed = kept.trashed;
     log(`retention: ${kept.wouldTrash.length} row(s) outside the window, ${kept.trashed.length} trashed`);
   } catch (e) { log(`retention skipped: ${say(e)}`); }
-  if (basename(outDir) === date) { try { pruneLocal(dirname(outDir), { now: date }); } catch (e) { log(`local prune skipped: ${say(e)}`); } }
+  if (pruneRoot !== undefined) { try { pruneLocal(pruneRoot, { now: date, keep: outDir, repo }); } catch (e) { log(`local prune skipped: ${say(e)}`); } }
   return result;
 }
 
@@ -241,7 +298,9 @@ async function main(argv) {
   const home = homedir();
   const date = val('--date') ?? today();
   const dryRun = flag('--dry-run');
-  const outDir = val('--out') ?? join(home, '.claude', 'state', 'backups', date);
+  // A real run gets its own folder under the date, so two runs on one date never share files. Only a default folder is pruned.
+  const outDir = val('--out') ?? runOutDir({ home, date });
+  const pruneRoot = val('--out') ? undefined : join(home, '.claude', 'state', 'backups');
   if (dryRun && !val('--out')) throw new Error('--dry-run needs --out <dir>');
   const docker = existsSync(DOCKER_EXE) ? DOCKER_EXE : 'docker';
   const node = process.execPath;
@@ -271,7 +330,7 @@ async function main(argv) {
     dump: (outPath) => dumpToFile({ cmd: docker, args: ['exec', CONTAINER, 'pg_dump', '-U', 'claude', '-Fc', '-Z', '9', 'continuous_claude'], outPath }),
     drill: ({ dumpPath, live }) => runDrill({ sh, dumpPath, live, repo, container: CONTAINER, docker, node }),
   };
-  const r = await runBackup({ date, home, repo, outDir, dryRun, notion, allowTrash: flag('--allow-trash'), secrets }, deps);
+  const r = await runBackup({ date, home, repo, outDir, dryRun, notion, allowTrash: flag('--allow-trash'), secrets, pruneRoot }, deps);
   console.log(JSON.stringify({ status: r.status, exitCode: r.exitCode, drill: r.drill.drill, files: r.manifest.files.map((f) => ({ name: f.name, bytes: f.bytes })), outDir }));
   return r.exitCode;
 }

@@ -45,7 +45,7 @@ const isProved = (r) => r.task === TASK && r.status === 'ok' && r.drill === 'pas
 export function chooseRetention(rows, { now }) {
   const today = dayNumber(now);
   if (today === null) throw new Error(`now must be a YYYY-MM-DD date, got ${String(now)}`);
-  const dated = rows.filter((r) => dayNumber(r.date) !== null).sort((a, b) => (dayNumber(b.date) - dayNumber(a.date)) || String(b.id).localeCompare(String(a.id)));
+  const dated = rows.filter((r) => r.task === TASK && dayNumber(r.date) !== null).sort((a, b) => (dayNumber(b.date) - dayNumber(a.date)) || String(b.id).localeCompare(String(a.id)));
   const keep = new Set(rows.filter((r) => dayNumber(r.date) === null || r.task !== TASK).map((r) => r.id));
   for (const r of dated.slice(0, KEEP_NEWEST)) keep.add(r.id);
   for (const r of dated) if (r.kind === 'weekly' && today - dayNumber(r.date) <= WEEKLY_DAYS) keep.add(r.id);

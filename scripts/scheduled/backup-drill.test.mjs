@@ -1,8 +1,21 @@
 // Tests of the restore drill of the nightly state backup (card ops-state-backup-nightly).
 // The drill talks to docker, psql and scratch-db.mjs through one injected runner `sh(cmd, args)`; a fake runner records every call.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { compareCounts, runDrill, TABLES } from './backup-drill.mjs';
+
+// The dump of a night is gzip. Each test gets a real small .gz file from one temp folder that this file made; the folder holds only files.
+const DUMP_BYTES = Buffer.from('PGDMP fake custom-format dump bytes '.repeat(50));
+const DUMP_DIR = mkdtempSync(join(tmpdir(), 'bk-drill-'));
+const GOOD_GZ = join(DUMP_DIR, 'ccv3-lanedb-2026-11-25.dump.gz');
+const BAD_GZ = join(DUMP_DIR, 'corrupt.dump.gz');
+writeFileSync(GOOD_GZ, gzipSync(DUMP_BYTES));
+writeFileSync(BAD_GZ, Buffer.from('this is not a gzip file at all'));
+after(() => rmSync(DUMP_DIR, { recursive: true, force: true }));
 
 const SCRATCH = 'postgresql://claude:pw@localhost:5432/lanes_pr1_abcd1234';
 const LIVE_COUNTS = { lane: 150, lane_event: 1000, lane_dep: 20, sessions: 300, file_claims: 100, archival_memory: 2000 };
@@ -15,7 +28,9 @@ function fakeSh(over = {}) {
   const sh = async (cmd, args) => {
     const line = [cmd, ...args].join(' ');
     calls.push({ cmd, args, line });
+    if (args[0] === 'cp') { try { calls.at(-1).copied = readFileSync(args[1]); } catch { calls.at(-1).copied = null; } } // what the copied file holds at the time of the copy
     if (over.throwOn && over.throwOn(line)) throw new Error('boom');
+    if (line.includes('rm -f')) return { code: over.rmCode ?? 0, stdout: '', stderr: '' };
     if (line.includes('scratch-db.mjs create')) return { code: 0, stdout: over.scratchOut ?? JSON.stringify({ url: SCRATCH, name: 'lanes_pr1_abcd1234' }), stderr: '' };
     if (line.includes('pg_restore')) return { code: over.restore ?? 0, stdout: '', stderr: over.restore ? (over.restoreErr ?? 'restore broke') : '' };
     if (line.includes('union all')) return { code: 0, stdout: countsText(over.counts ?? LIVE_COUNTS), stderr: '' };
@@ -25,7 +40,7 @@ function fakeSh(over = {}) {
   return { sh, calls };
 }
 const live = { counts: LIVE_COUNTS, idsBefore: IDS, idsAfter: IDS };
-const drill = (f, extra = {}) => runDrill({ sh: f.sh, dumpPath: 'C:/x/ccv3-lanedb-2026-11-25.dump', live, repo: 'C:/repo', ...extra });
+const drill = (f, extra = {}) => runDrill({ sh: f.sh, dumpPath: GOOD_GZ, live, repo: 'C:/repo', ...extra });
 
 test('D1 count rule: lane tables within 1 percent or 5 rows, busy tables within 5 percent or 50 rows', () => {
   assert.equal(compareCounts(LIVE_COUNTS, { ...LIVE_COUNTS, lane: 145 }).ok, true);
@@ -87,7 +102,7 @@ test('D5 a lane that was live before the dump and is still live, but is missing 
 
 test('D6 a lane deleted after the dump may be absent; a lane made after the dump may be extra', async () => {
   const f = fakeSh({ ids: ['a', 'b', 'c'] });
-  const out = await runDrill({ sh: f.sh, dumpPath: 'C:/x/d.dump', repo: 'C:/repo', live: { counts: LIVE_COUNTS, idsBefore: ['a', 'b', 'c', 'gone'], idsAfter: ['a', 'b', 'c', 'new'] } });
+  const out = await runDrill({ sh: f.sh, dumpPath: GOOD_GZ, repo: 'C:/repo', live: { counts: LIVE_COUNTS, idsBefore: ['a', 'b', 'c', 'gone'], idsAfter: ['a', 'b', 'c', 'new'] } });
   assert.equal(out.drill, 'pass');
 });
 
@@ -112,4 +127,39 @@ test('D9 the password of the scratch url never reaches the detail text', async (
   const out = await drill(f);
   assert.match(out.detail, /could not connect/);
   assert.ok(!out.detail.includes(':pw@'), out.detail);
+});
+
+test('D10 a copy in the container that the rm step could not remove is named in the detail', async () => {
+  // Breaks when the exit code of rm is ignored: sh() does not throw for a failed command.
+  const f = fakeSh({ rmCode: 1 });
+  const out = await drill(f);
+  assert.equal(out.drill, 'pass');
+  assert.match(out.detail, /copy in container not removed/);
+  assert.doesNotMatch((await drill(fakeSh())).detail, /not removed/, 'a clean rm adds no note');
+});
+
+test('D11 a corrupt or non-gzip dump is a fail named "dump gunzip failed", docker cp is never called, the scratch database is dropped', async () => {
+  // Breaks when the dump is copied as it is, or when the gunzip error escapes as a throw.
+  for (const dumpPath of [BAD_GZ, join(DUMP_DIR, 'missing.dump.gz')]) {
+    const f = fakeSh();
+    const out = await drill(f, { dumpPath });
+    assert.equal(out.drill, 'fail');
+    assert.match(out.detail, /^dump gunzip failed: /);
+    assert.ok(!f.calls.some((c) => c.args[0] === 'cp'), 'no docker cp');
+    assert.ok(!f.calls.some((c) => c.line.includes('pg_restore')), 'no restore');
+    assert.ok(f.calls.some((c) => c.line.includes('scratch-db.mjs drop')), 'the scratch database is dropped');
+  }
+});
+
+test('D12 the DECOMPRESSED temp file is copied into the container, and it is removed afterwards', async () => {
+  // Breaks when the .gz is copied (pg_restore cannot read it) or when the temp file is left on disk.
+  const f = fakeSh();
+  const out = await drill(f);
+  assert.equal(out.drill, 'pass');
+  const cp = f.calls.find((c) => c.args[0] === 'cp');
+  assert.notEqual(cp.args[1], GOOD_GZ);
+  assert.equal(cp.args[1], join(tmpdir(), 'lanes_pr1_abcd1234.dump'));
+  assert.equal(cp.args[2], 'continuous-claude-postgres:/tmp/lanes_pr1_abcd1234.dump');
+  assert.ok(cp.copied && cp.copied.equals(DUMP_BYTES), 'the copied file holds the gunzipped bytes');
+  assert.equal(existsSync(cp.args[1]), false, 'the temp file is removed after the drill');
 });

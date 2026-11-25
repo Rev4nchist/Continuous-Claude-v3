@@ -1,10 +1,14 @@
 /**
  * Restore drill of the nightly state backup (card ops-state-backup-nightly). Design note section 6.
- * Loads the new dump into a SCRATCH database (never the live one), compares counts and lane ids, then drops the scratch database.
+ * Gunzips the dump (.dump.gz) to a temp file, then loads it into a SCRATCH database (never the live one), compares counts and lane ids, then drops the scratch database.
  * Every outside call goes through one runner `sh(cmd, args) -> { code, stdout, stderr }`, so a test can fake docker and psql.
  * A module only: no shebang, no argv read.
  */
+import { createReadStream, createWriteStream, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { createGunzip } from 'node:zlib';
 import { assertScratchUrl, dbNameOf } from '../coordination/scratch-db.mjs';
 import { maskText } from './backup-state-lib.mjs';
 
@@ -62,6 +66,7 @@ export async function runDrill({ sh, dumpPath, live, repo, container = 'continuo
   let url = null;
   let name = null;
   let copy = null;
+  let plain = null; // the gunzipped dump on this machine
   const body = async () => {
     const created = await sh(node, [scratchCli, 'create', '--through', '0']);
     if (created.code !== 0) return fail('scratch database not made: ', created.stderr);
@@ -73,8 +78,14 @@ export async function runDrill({ sh, dumpPath, live, repo, container = 'continuo
       return fail(`scratch url refused: ${e.message}`);
     }
     if (dbNameOf(url) !== name) return fail('scratch name mismatch');
+    plain = join(tmpdir(), `${name}.dump`);
+    try {
+      await pipeline(createReadStream(dumpPath), createGunzip(), createWriteStream(plain));
+    } catch (e) {
+      return fail(`dump gunzip failed: ${e.message}`);
+    }
     copy = `/tmp/${name}.dump`;
-    const cp = await sh(docker, ['cp', dumpPath, `${container}:${copy}`]);
+    const cp = await sh(docker, ['cp', plain, `${container}:${copy}`]);
     if (cp.code !== 0) return fail('docker cp failed: ', cp.stderr);
     const restore = await sh(docker, ['exec', container, 'pg_restore', '-U', user, '--clean', '--if-exists', '--no-owner', '-d', name, copy]);
     if (restore.code !== 0) return fail(`pg_restore exit ${restore.code}: `, restore.stderr.split(/\r?\n/).find(Boolean) ?? '');
@@ -96,7 +107,13 @@ export async function runDrill({ sh, dumpPath, live, repo, container = 'continuo
   } finally {
     const notes = [];
     if (copy) {
-      try { await sh(docker, ['exec', container, 'rm', '-f', copy]); } catch { notes.push('copy in container not removed'); }
+      try {
+        const removed = await sh(docker, ['exec', container, 'rm', '-f', copy]);
+        if (removed.code !== 0) notes.push('copy in container not removed');
+      } catch { notes.push('copy in container not removed'); }
+    }
+    if (plain) {
+      try { rmSync(plain, { force: true }); } catch { notes.push('restore copy not removed'); }
     }
     if (url) {
       try {
