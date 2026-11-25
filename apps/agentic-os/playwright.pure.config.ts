@@ -25,6 +25,10 @@ export default defineConfig({
     'clock.spec.ts',
     'tasks-parse.spec.ts',
     'readers-sources.spec.ts',
+    // card agentic-os-listed-id-mask: the copy of the listed-id mask, its drift check and the snapshot boundary
+    'listed-id-mask.spec.ts',
+    'listed-id-drift.spec.ts',
+    'snapshot-mask.spec.ts',
   ],
   timeout: 30_000,
   retries: 0,
