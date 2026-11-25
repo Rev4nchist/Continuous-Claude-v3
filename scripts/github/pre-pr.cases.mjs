@@ -750,6 +750,37 @@ test('E5: docs with no changed file fails', async () => {
   assert.equal(checkEvidence({ body: 'Proof type: docs\n', head: HEAD, paths: [], config: CONFIG }).status, 'FAIL');
 });
 
+// Card prepr-evidence-gaps. pre-pr read the proof with no PR commit list, so a RED line that names the base commit passed here and
+// failed in review-status.mjs (PR 734). Both now read the list and run the same redCommitProblem.
+const MID40 = 'c'.repeat(40);
+const PR_LIST = [{ sha: MID40 }, { sha: HEAD }];
+
+test('E7: RED naming a commit that is not a commit of this PR (the base commit) FAILS in pre-pr when the list is known', async () => {
+  const r = checkEvidence({ body: featureBody(HEAD, BASE40), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG, commits: PR_LIST });
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.notes.join('\n'), new RegExp(`${BASE40}.*not a commit of this PR`));
+  assert.match(r.notes.join('\n'), /<anchor>~N/, 'the note names the form that avoids a listed-id collision');
+  assert.equal(checkEvidence({ body: featureBody(HEAD, MID40), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG, commits: PR_LIST }).status, 'PASS');
+  // An unknown list (no commits given) keeps the old behaviour: only the head test runs.
+  assert.equal(checkEvidence({ body: featureBody(HEAD, BASE40), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG }).status, 'PASS');
+});
+
+test('E8: RED written <anchor>~N passes inside the list and fails past the first commit', async () => {
+  const ok = checkEvidence({ body: featureBody(HEAD, `${HEAD}~1`), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG, commits: PR_LIST });
+  assert.equal(ok.status, 'PASS', ok.notes.join('\n'));
+  const past = checkEvidence({ body: featureBody(HEAD, `${HEAD}~5`), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG, commits: PR_LIST });
+  assert.equal(past.status, 'FAIL');
+  assert.match(past.notes.join('\n'), /goes back past the first commit of this PR/);
+});
+
+test('E9: prCommitList reads the commits of base..HEAD oldest first, and gives [] (unknown) when git fails or prints nothing', async () => {
+  const { prCommitList } = await import('./pre-pr.mjs');
+  const good = prCommitList(fakeGit({ 'rev-list --reverse main..HEAD': `${MID40}\n${HEAD}\n` }), 'main');
+  assert.deepEqual(good, PR_LIST);
+  assert.deepEqual(prCommitList(fakeGit({}), 'main'), []);
+  assert.deepEqual(prCommitList(fakeGit({ 'rev-list --reverse main..HEAD': '' }), 'main'), []);
+});
+
 test('E6: changedFiles lists the diff against the base and fails on an empty or broken diff', async () => {
   const ok = changedFiles(fakeGit({ 'diff --name-only main...HEAD': 'a.md\nb/c.mjs\n' }), 'main');
   assert.deepEqual(ok.paths, ['a.md', 'b/c.mjs']);

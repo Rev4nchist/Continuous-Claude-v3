@@ -49,6 +49,12 @@ test('S2: no question without a flag stamp for this head', () => {
   assert.ok(planOf('cli-skip', { ...data(), missing: true, branch: 'feat/x' }, { branch: 'feat/x' }).refuse, 'a missing branch');
 });
 
+test('S5: with no flag stamp the refusal tells the builder that no question is needed and when to ask (card prepr-evidence-gaps, gap 1)', () => {
+  // Breaks when: the refusal text drops "No question needed", the default (pre-pr runs the CLI review) or the --skip-cr step to run first.
+  const plan = planOf('cli-skip', data({ stampHead: null, stampSkip: null }), { branch: 'feat/x' });
+  assert.equal(plan.refuse, 'No question needed: pre-pr runs the CLI review by default. Ask only to skip it: run pre-pr --skip-cr --body <file> first.');
+});
+
 test('S3: the question names branch, head, runs and unreviewed files; two options with the exact labels', () => {
   // Breaks when: a fact is missing from the text, the allow label changes, there is no keep option, or the recommended option is not first.
   const plan = planOf('cli-skip', data(), { branch: 'feat/x' });
