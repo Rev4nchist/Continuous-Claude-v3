@@ -2,11 +2,11 @@
 // The drill talks to docker, psql and scratch-db.mjs through one injected runner `sh(cmd, args)`; a fake runner records every call.
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { compareCounts, runDrill, TABLES } from './backup-drill.mjs';
+import { compareCounts, runDrill, sweepPendingDrills, TABLES } from './backup-drill.mjs';
 
 // The dump of a night is gzip. Each test gets a real small .gz file from one temp folder that this file made; the folder holds only files.
 const DUMP_BYTES = Buffer.from('PGDMP fake custom-format dump bytes '.repeat(50));
@@ -162,4 +162,344 @@ test('D12 the DECOMPRESSED temp file is copied into the container, and it is rem
   assert.equal(cp.args[2], 'continuous-claude-postgres:/tmp/lanes_pr1_abcd1234.dump');
   assert.ok(cp.copied && cp.copied.equals(DUMP_BYTES), 'the copied file holds the gunzipped bytes');
   assert.equal(existsSync(cp.args[1]), false, 'the temp file is removed after the drill');
+});
+
+// ---- card ops-backup-drill-deadline-cleanup, Part A: a drill that hits its deadline, and a run that was killed hard ----
+
+// The deadline of the rows that must reach a later step first (restore, cp). It is long enough that a loaded machine gets there before it passes
+// (the CLI found that a 60 ms deadline mixes setup time with the trigger). A late step waits for the abort itself, so no row depends on a sleep.
+const DEADLINE_MS = 500;
+const afterAbort = (signal, ms = 40) => new Promise((r) => signal.addEventListener('abort', () => setTimeout(r, ms)));
+
+/** pg_restore never ends by itself. honorSignal: it ends when the runner is aborted; else it hangs forever (a child that ignores the abort). */
+function hangingSh(honorSignal) {
+  const f = fakeSh();
+  const inner = f.sh;
+  f.aborted = false;
+  f.sh = async (cmd, args, opts = {}) => {
+    if ([cmd, ...args].join(' ').includes('pg_restore')) {
+      f.calls.push({ cmd, args, line: [cmd, ...args].join(' ') });
+      return new Promise((resolve) => {
+        if (honorSignal && opts.signal) opts.signal.addEventListener('abort', () => { f.aborted = true; resolve({ code: 143, stdout: '', stderr: 'killed' }); });
+      });
+    }
+    return inner(cmd, args, opts);
+  };
+  return f;
+}
+const cleanedUp = (f) => {
+  const lines = f.calls.map((c) => c.line);
+  return lines.some((l) => l.includes('rm -f /tmp/lanes_pr1_abcd1234.dump')) && lines.some((l) => l.includes('scratch-db.mjs drop'));
+};
+
+test('D13 a drill past its deadline is a fail named "deadline", the child is aborted, and copy, temp dump and scratch database are removed', async () => {
+  // Breaks when runDrill has no deadline (the test would hang), or when the abort signal never reaches the runner.
+  const f = hangingSh(true);
+  const out = await drill(f, { deadlineMs: DEADLINE_MS });
+  assert.equal(out.drill, 'fail');
+  assert.match(out.detail, /deadline/);
+  assert.equal(f.aborted, true, 'the running child got the abort signal');
+  assert.ok(cleanedUp(f), 'the container copy is removed and the scratch database is dropped');
+  assert.equal(existsSync(join(tmpdir(), 'lanes_pr1_abcd1234.dump')), false, 'the temp dump is removed');
+});
+
+test('D14 a child that ignores the abort still ends the drill at the deadline, with the cleanup done', async () => {
+  // Breaks when the deadline only sends the signal and then waits for the child.
+  const f = hangingSh(false);
+  const out = await drill(f, { deadlineMs: DEADLINE_MS });
+  assert.equal(out.drill, 'fail');
+  assert.match(out.detail, /deadline/);
+  assert.ok(cleanedUp(f));
+});
+
+test('D14c a scratch create that ends after the deadline is dropped by the drill itself, and no later step runs', async () => {
+  // Breaks when body() goes on after the abort: the database it made after the cleanup would live until the next sweep.
+  const f = fakeSh();
+  const inner = f.sh;
+  f.sh = async (cmd, args, opts) => {
+    if ([cmd, ...args].join(' ').includes('scratch-db.mjs create')) {
+      f.calls.push({ cmd, args, line: [cmd, ...args].join(' ') });
+      await new Promise((r) => setTimeout(r, 150)); // ignores the signal and ends after the 60 ms deadline
+      return { code: 0, stdout: JSON.stringify({ url: SCRATCH, name: 'lanes_pr1_abcd1234' }), stderr: '' };
+    }
+    return inner(cmd, args, opts);
+  };
+  const out = await drill(f, { deadlineMs: 60 });
+  assert.equal(out.drill, 'fail');
+  await new Promise((r) => setTimeout(r, 300));
+  const lines = f.calls.map((c) => c.line);
+  assert.ok(lines.some((l) => l.includes('scratch-db.mjs drop')), 'the late database is dropped');
+  assert.equal(lines.some((l) => l.includes('pg_restore') || l.startsWith('docker cp')), false, 'no step after the abort');
+});
+
+test('D14b a drill that starts with no time left (deadlineMs 0 or below) is a fail "no time for drill" and makes no scratch database', async () => {
+  // Breaks when a late start still runs the drill: it would pass the wrapper kill and leave the upload undone.
+  for (const deadlineMs of [0, -5000]) {
+    const f = fakeSh();
+    const out = await drill(f, { deadlineMs });
+    assert.equal(out.drill, 'fail');
+    assert.match(out.detail, /no time for drill/);
+    assert.equal(f.calls.length, 0, 'no call at all: nothing was made, so nothing needs cleanup');
+  }
+});
+
+const urlFor = (name) => `postgresql://claude:pw@localhost:5432/${name}`;
+const pendingDir = () => mkdtempSync(join(tmpdir(), 'bk-pending-'));
+
+test('D15 the drill writes drill-pending.json (the scratch NAME only, no url, no password) when the scratch database exists, and removes it after the cleanup', async () => {
+  // Breaks when no file is written (a hard kill leaves no trace to sweep), or when the file stays after a clean drill.
+  const dir = pendingDir();
+  try {
+    const pendingFile = join(dir, 'drill-pending.json');
+    let seen = null;
+    let seenText = '';
+    const f = fakeSh();
+    const inner = f.sh;
+    f.sh = async (cmd, args, opts) => {
+      if ([cmd, ...args].join(' ').includes('pg_restore') && existsSync(pendingFile)) { seenText = readFileSync(pendingFile, 'utf8'); seen = JSON.parse(seenText); }
+      return inner(cmd, args, opts);
+    };
+    const out = await drill(f, { pendingFile });
+    assert.equal(out.drill, 'pass');
+    assert.equal(seen.name, 'lanes_pr1_abcd1234');
+    assert.deepEqual(Object.keys(seen), ['name'], 'only the name is on disk');
+    assert.equal(seenText.includes('://'), false, 'no url');
+    assert.equal(/pw|claude:/.test(seenText), false, 'no password and no user');
+    assert.equal(existsSync(pendingFile), false, 'removed after the cleanup');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/** A run folder of a killed run: <root>/<date>/run-<time>-<pid>/drill-pending.json. */
+function crashedRun(root, rec, run = 'run-030000-111') {
+  const folder = join(root, '2026-11-24', run);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'drill-pending.json'), JSON.stringify(rec));
+  return folder;
+}
+
+test('D16 the sweep cleans only what a killed run wrote in its own folder: drop, container copy, temp dump, then the file', async () => {
+  // Breaks when the sweep reads nothing, or leaves one of the three leftovers.
+  const root = pendingDir();
+  try {
+    const plain = join(tmpdir(), 'lanes_pr1_deadbeef.dump');
+    writeFileSync(plain, 'x');
+    const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef' });
+    const f = fakeSh();
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor });
+    const lines = f.calls.map((c) => c.line);
+    assert.ok(lines.some((l) => l.includes('scratch-db.mjs drop postgresql://claude:pw@localhost:5432/lanes_pr1_deadbeef')));
+    assert.ok(lines.some((l) => l.includes('rm -f /tmp/lanes_pr1_deadbeef.dump')));
+    assert.equal(existsSync(plain), false);
+    assert.equal(existsSync(join(folder, 'drill-pending.json')), false);
+    assert.deepEqual(out.cleaned, ['lanes_pr1_deadbeef']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('D17 the sweep never acts on a name outside the scratch rule, or on a temp path that is not tmpdir/<name>.dump', async () => {
+  // Breaks when the file text is trusted: a hand-edited file naming the live database or an unrelated path must do nothing.
+  const root = pendingDir();
+  const victim = join(root, 'precious.txt');
+  writeFileSync(victim, 'keep');
+  try {
+    const live = crashedRun(root, { name: 'continuous_claude', plain: victim }, 'run-030000-1');
+    const badPath = crashedRun(root, { name: 'lanes_pr1_cafe0001', plain: victim }, 'run-030000-2');
+    const f = fakeSh();
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor });
+    assert.equal(f.calls.some((c) => c.line.includes('continuous_claude')), false, 'the live database is never touched');
+    assert.equal(existsSync(victim), true, 'a path outside tmpdir/<name>.dump is never deleted');
+    assert.equal(existsSync(join(live, 'drill-pending.json')), true, 'a refused file stays for a person to read');
+    assert.ok(out.skipped.length >= 1);
+    assert.equal(existsSync(join(badPath, 'drill-pending.json')), false, 'the valid name is cleaned; only its bad path is skipped');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('D17c the sweep builds the drop url from its own chain and refuses a host that is not this machine', async () => {
+  // Breaks when assertLocalHost is not run: a changed env chain could point the drop at another server.
+  const root = pendingDir();
+  try {
+    const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef' });
+    const f = fakeSh();
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor: (n) => `postgresql://claude:pw@db.example.com:5432/${n}` });
+    assert.equal(f.calls.some((c) => c.line.includes('scratch-db.mjs drop')), false, 'no drop on a remote host');
+    assert.equal(out.cleaned.length, 0);
+    assert.equal(existsSync(join(folder, 'drill-pending.json')), true);
+    assert.match(out.skipped.join(' '), /host|local/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('D17b the sweep skips the folder of the current run', async () => {
+  // Breaks when the sweep reads its own run: it would drop the scratch database of a drill that is about to start.
+  const root = pendingDir();
+  try {
+    const own = crashedRun(root, { name: 'lanes_pr1_deadbeef' }, 'run-030000-own');
+    const f = fakeSh();
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', skip: own, urlFor });
+    assert.equal(f.calls.length, 0);
+    assert.deepEqual(out.cleaned, []);
+    assert.equal(existsSync(join(own, 'drill-pending.json')), true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('D18 a sweep with no pending file, or a failed drop, changes nothing else and never throws', async () => {
+  // Breaks when a failed drop deletes the file (the next run could not retry) or an empty root throws.
+  const root = pendingDir();
+  try {
+    const f0 = fakeSh();
+    assert.deepEqual((await sweepPendingDrills({ root, sh: f0.sh, repo: 'C:/repo', urlFor })).cleaned, []);
+    assert.equal(f0.calls.length, 0);
+    const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef' });
+    const f = fakeSh();
+    const base = f.sh;
+    f.sh = async (cmd, args, opts) => (args.includes('drop') ? { code: 1, stdout: '', stderr: 'no' } : base(cmd, args, opts));
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor });
+    assert.deepEqual(out.cleaned, []);
+    assert.equal(existsSync(join(folder, 'drill-pending.json')), true, 'kept for the next run');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---- card ops-backup-drill-deadline-cleanup, CLI findings 1-4 (CodeRabbit CLI run 1 on eb84247b) ----
+
+/** A runner that never answers a call whose text matches `re`, and ignores the abort signal (a hung docker or node child). */
+function hungOn(re) {
+  const f = fakeSh();
+  const inner = f.sh;
+  f.sh = (cmd, args, opts) => {
+    const line = [cmd, ...args].join(' ');
+    if (re.test(line)) { f.calls.push({ cmd, args, line }); return new Promise(() => {}); }
+    return inner(cmd, args, opts);
+  };
+  return f;
+}
+
+test('D19 a sweep call that hangs ends after its own limit, is named in "skipped", and the file stays for the next run', { timeout: 5000 }, async () => {
+  // Breaks when a sweep call has no limit: one hung docker or node child holds up the whole night (finding 1).
+  for (const re of [/scratch-db\.mjs drop/, /rm -f/]) {
+    const root = pendingDir();
+    try {
+      const folder = crashedRun(root, { name: 'lanes_pr1_deadbeef' });
+      const f = hungOn(re);
+      const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor, callMs: 60 });
+      assert.deepEqual(out.cleaned, []);
+      assert.match(out.skipped.join(' '), /lanes_pr1_deadbeef/);
+      assert.equal(existsSync(join(folder, 'drill-pending.json')), true, 'kept for the next run');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test('D20 a final cleanup call that hangs ends after its own limit: the drill returns, the rest of the cleanup runs, the pending file stays', { timeout: 5000 }, async () => {
+  // Breaks when the cleanup calls have no limit: the drill never returns after a pass or a deadline (finding 2).
+  for (const [re, note] of [[/rm -f/, /copy in container not removed/], [/scratch-db\.mjs drop/, /not dropped/]]) {
+    const dir = pendingDir();
+    try {
+      const pendingFile = join(dir, 'drill-pending.json');
+      const f = hungOn(re);
+      const out = await drill(f, { pendingFile, cleanupMs: 60 });
+      assert.match(out.detail, note);
+      assert.ok(f.calls.some((c) => c.line.includes('scratch-db.mjs drop')), 'the drop was still tried');
+      assert.equal(existsSync(pendingFile), true, 'an incomplete cleanup stays on record');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test('D21 a docker cp that ends after the deadline gets its copy removed after it ends', { timeout: 5000 }, async () => {
+  // Breaks when only the cleanup at the deadline removes the copy: a cp that ends later leaves /tmp/<name>.dump in the container (finding 3).
+  const f = fakeSh();
+  const inner = f.sh;
+  f.sh = async (cmd, args, opts) => {
+    if (args[0] === 'cp') {
+      f.calls.push({ cmd, args, line: [cmd, ...args].join(' ') });
+      await afterAbort(opts.signal); // ignores the signal itself and ends after the deadline
+      f.calls.push({ line: 'CP-END' });
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return inner(cmd, args, opts);
+  };
+  const out = await drill(f, { deadlineMs: DEADLINE_MS });
+  assert.equal(out.drill, 'fail');
+  await new Promise((r) => setTimeout(r, 300));
+  const lines = f.calls.map((c) => c.line);
+  assert.ok(lines.lastIndexOf(lines.filter((l) => l.includes('rm -f /tmp/lanes_pr1_abcd1234.dump')).at(-1)) > lines.indexOf('CP-END'), 'a rm of the copy runs after the cp ended');
+});
+
+test('D22 a late-created scratch database whose drop fails is written to the pending file for the next sweep', { timeout: 5000 }, async () => {
+  // Breaks when a failed late drop is swallowed: the database then has no owner and nobody ever drops it (finding 4).
+  const dir = pendingDir();
+  try {
+    const pendingFile = join(dir, 'drill-pending.json');
+    const f = fakeSh();
+    const inner = f.sh;
+    f.sh = async (cmd, args, opts) => {
+      const line = [cmd, ...args].join(' ');
+      if (line.includes('scratch-db.mjs create')) {
+        f.calls.push({ cmd, args, line });
+        await new Promise((r) => setTimeout(r, 150));
+        return { code: 0, stdout: JSON.stringify({ url: SCRATCH, name: 'lanes_pr1_abcd1234' }), stderr: '' };
+      }
+      if (line.includes('scratch-db.mjs drop')) { f.calls.push({ cmd, args, line }); return { code: 1, stdout: '', stderr: 'no' }; }
+      return inner(cmd, args, opts);
+    };
+    await drill(f, { deadlineMs: 60, pendingFile });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(existsSync(pendingFile), true, 'the failed drop is on record');
+    assert.deepEqual(JSON.parse(readFileSync(pendingFile, 'utf8')), { name: 'lanes_pr1_abcd1234' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('D23 the sweep stops at the first call that does not answer: only the first file gets calls, both files stay, one line says why', { timeout: 5000 }, async () => {
+  // Breaks when the limit is per call only: with docker hung, every pending file costs its own wait and the sweep can use the run budget before the dump (seat read of 34bcb727).
+  const root = pendingDir();
+  try {
+    const first = crashedRun(root, { name: 'lanes_pr1_aaaa0001' }, 'run-030000-1');
+    const second = crashedRun(root, { name: 'lanes_pr1_bbbb0002' }, 'run-030000-2');
+    const f = hungOn(/rm -f/);
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor, callMs: 60 });
+    assert.ok(f.calls.length >= 1 && f.calls.every((c) => c.line.includes('lanes_pr1_aaaa0001')), 'calls for the first file only');
+    assert.equal(existsSync(join(first, 'drill-pending.json')), true);
+    assert.equal(existsSync(join(second, 'drill-pending.json')), true, 'the file it did not reach stays for the next run');
+    assert.deepEqual(out.cleaned, []);
+    assert.match(out.skipped.join(' '), /sweep stopped: docker or node did not answer/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---- CodeRabbit CLI run 2 on 2775356f: two minor findings ----
+
+test('D24 a call that loses to its limit stops the sweep even when the runner answers 127 inside the abort (Node spawn emits the AbortError synchronously)', { timeout: 5000 }, async () => {
+  // Breaks when bounded() aborts before it settles its own result, or when the sweep stops on code 124 alone: the real runner then answers 127 first and the sweep goes on.
+  const root = pendingDir();
+  try {
+    const first = crashedRun(root, { name: 'lanes_pr1_aaaa0001' }, 'run-030000-1');
+    const second = crashedRun(root, { name: 'lanes_pr1_bbbb0002' }, 'run-030000-2');
+    const f = fakeSh();
+    const inner = f.sh;
+    f.sh = (cmd, args, opts = {}) => {
+      const line = [cmd, ...args].join(' ');
+      if (!/rm -f/.test(line)) return inner(cmd, args, opts);
+      f.calls.push({ cmd, args, line });
+      return new Promise((resolve) => { opts.signal.addEventListener('abort', () => resolve({ code: 127, stdout: '', stderr: 'AbortError' })); });
+    };
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor, callMs: 60 });
+    assert.ok(f.calls.length >= 1 && f.calls.every((c) => c.line.includes('lanes_pr1_aaaa0001')), 'calls for the first file only');
+    assert.equal(existsSync(join(second, 'drill-pending.json')), true);
+    assert.equal(existsSync(join(first, 'drill-pending.json')), true);
+    assert.match(out.skipped.join(' '), /sweep stopped: docker or node did not answer/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('D25 a late cp whose copy cannot be removed leaves the name in the pending file for the next sweep', { timeout: 5000 }, async () => {
+  // Breaks when the late rm result is ignored: the cleanup at the deadline already removed the pending file, so the copy would have no record.
+  const dir = pendingDir();
+  try {
+    const pendingFile = join(dir, 'drill-pending.json');
+    const f = fakeSh();
+    const inner = f.sh;
+    let cpEnded = false;
+    f.sh = async (cmd, args, opts) => {
+      if (args[0] === 'cp') { await afterAbort(opts.signal); cpEnded = true; return { code: 0, stdout: '', stderr: '' }; }
+      if (cpEnded && [cmd, ...args].join(' ').includes('rm -f')) return { code: 1, stdout: '', stderr: 'no' };
+      return inner(cmd, args, opts);
+    };
+    await drill(f, { deadlineMs: DEADLINE_MS, pendingFile });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(JSON.parse(readFileSync(pendingFile, 'utf8')), { name: 'lanes_pr1_abcd1234' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

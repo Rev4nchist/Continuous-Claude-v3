@@ -55,6 +55,11 @@ function baseConnString() {
     || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
 }
 
+/** The URL of the scratch database `name` on the same server `create` uses. Card ops-backup-drill-deadline-cleanup: lets a sweep drop by name without a stored url. */
+export function scratchUrlFor(name) {
+  return urlWithDb(baseConnString(), name);
+}
+
 /** Database name of a connection URL, or '' when it has none. */
 export function dbNameOf(url) {
   try {
