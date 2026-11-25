@@ -48,7 +48,8 @@ const REMOTES: Record<string, (inSub: boolean) => [string, string]> = {
   cachecwd: (inSub) => (inSub ? [`${NET}c.git`, `${NET}c.git`] : ['.', '.']), // local only in the payload folder
 };
 
-interface World { scanLeft?: () => number }
+/** `throwIn`: a git read run in a folder that ends with `dir` throws an error with this code (spawnSync: ETIMEDOUT on the timeout, ENOENT for a missing folder). */
+interface World { scanLeft?: () => number; throwIn?: { dir: string; code: string } }
 function deps(w: World = {}): Deps {
   const config = JSON.stringify({ decisions: { enforce: true } });
   return {
@@ -65,6 +66,8 @@ function deps(w: World = {}): Deps {
       const gu = /^remote get-url (--push --all )?(\S+)$/.exec(a);
       if (gu) {
         lookups.push(a);
+        // Only the push-URL read throws: the shape judge reads the fetch URL of each push remote too (another call site, not under test here).
+        if (w.throwIn && gu[1] && cwd.replace(/\\/g, '/').endsWith(w.throwIn.dir)) throw Object.assign(new Error(`git ${a}`), { code: w.throwIn.code });
         const row = REMOTES[gu[2]];
         if (!row) return { status: 2, stdout: '' };
         const [fetchUrl, pushUrls] = row(cwd.replace(/\\/g, '/').endsWith('/sub'));
@@ -241,6 +244,21 @@ describe('A3-U: a remote name is local when it is local in the payload folder or
     shipTap();
     expect(await patIn(bash(`git -C sub push cachecwd feat/x && ${PUSH}`))).toBe('push-state-unknown');
     expect(await patIn(bash(`git push cachecwd feat/x && ${PUSH}`))).toBe('push-state-unknown');
+  });
+  it('A3-U5: a read that times out in the folder of the earlier push is unknown, so the remote counts as local (push-state-unknown); main never reads that folder', async () => {
+    shipTap();
+    const w: World = { throwIn: { dir: '/sub', code: 'ETIMEDOUT' } };
+    expect(await patIn(bash(`git -C sub push plain feat/x && ${PUSH}`), w)).toBe('push-state-unknown');
+    expect(await patIn(bash(`cd sub && git push plain feat/x && cd .. && ${PUSH}`), w)).toBe('push-state-unknown');
+    expect(await patIn(bash(`git -C sub push plain feat/x && ${PUSH}`), { throwIn: { dir: '/sub', code: 'ENOBUFS' } })).toBe('push-state-unknown');
+  });
+  it('A3-U6 (control): a folder that does not exist (ENOENT) has no remote, so the remote is not local there and the push stays allowed', async () => {
+    shipTap();
+    expect(await patIn(bash(`git -C sub push plain feat/x && ${PUSH}`), { throwIn: { dir: '/sub', code: 'ENOENT' } })).toBe('allow');
+  });
+  it('A3-U7 (control, as main): a throw in the payload folder itself counts as local, whatever the code', async () => {
+    shipTap();
+    expect(await patIn(bash(`git push plain feat/x && ${PUSH}`), { throwIn: { dir: '/repo', code: 'ENOENT' } })).toBe('push-state-unknown');
   });
   it('A3-U4 (control): a name that is network in both folders stays allowed', async () => {
     shipTap();
