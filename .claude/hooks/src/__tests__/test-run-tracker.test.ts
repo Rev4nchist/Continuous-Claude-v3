@@ -23,7 +23,7 @@ import * as os from 'os';
 
 import { TEST_PATTERNS, getStateFile, main } from '../test-run-tracker.js';
 import { hasRecentTestRun, handleTaskUpdate } from '../test-before-done.js';
-import { PassThrough } from 'stream';
+import { PassThrough } from 'node:stream';
 
 // ---------------------------------------------------------------------------
 // Constants

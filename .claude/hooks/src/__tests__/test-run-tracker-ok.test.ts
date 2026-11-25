@@ -7,7 +7,7 @@
  * and no tool_response. So `ok` comes from the event name and the error text.
  */
 import * as fs from 'fs';
-import { PassThrough } from 'stream';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { main, okOf } from '../test-run-tracker.js';

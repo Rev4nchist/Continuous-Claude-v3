@@ -468,7 +468,7 @@ if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_T
 
 // src/decision-gate.ts
 import { spawnSync } from "child_process";
-import { existsSync as existsSync2, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync6 } from "fs";
 import { homedir as homedir5 } from "os";
 import { isAbsolute as isAbsolute2, join as join7, posix as posix2, resolve as resolve2 } from "path";
 
@@ -776,7 +776,7 @@ var answerKeyHitsOf2 = answerKeyHitsOf;
 import { readFileSync as readFileSync3 } from "fs";
 
 // ../../scripts/github/lib/decisions.mjs
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync2, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { appendFileSync as appendFileSync2, closeSync, existsSync as existsSync2, mkdirSync as mkdirSync3, openSync, readFileSync as readFileSync2, readSync, readdirSync, renameSync, statSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 var DECISIONS_ENV = "CCV3_DECISIONS_FILE";
@@ -793,6 +793,7 @@ var accountHome = () => {
 };
 var decisionsPath = (env = process.env) => env[DECISIONS_ENV] || path.join(accountHome(), ".claude", "state", "ccv3-mods", "decisions.json");
 var decisionKey = ({ repo = REPO, pr, branch }) => pr !== void 0 && pr !== null ? `${repo}#${pr}` : `${repo}@${branch}`;
+var LOG_MAX_BYTES = 5 * 1024 * 1024;
 var empty = () => ({ version: 1, offers: {}, decisions: {}, misses: {} });
 var idOf = ({ step, key, head }) => `${step}
 ${key}
@@ -3830,7 +3831,7 @@ var HOOK_BUDGET_MS = 7e3;
 function makeGit(opts = {}) {
   const now = opts.now ?? Date.now;
   const spawn = opts.spawn ?? ((_cmd, args, o) => spawnSync("git", args, o));
-  const exists = opts.exists ?? existsSync2;
+  const exists = opts.exists ?? existsSync3;
   return (cwd, args, read = {}) => {
     const own = read.timeout ?? GIT_TIMEOUT_MS;
     const left = opts.deadline === void 0 ? own : opts.deadline - now();
@@ -3852,7 +3853,7 @@ function realDeps(opts = {}) {
     appGit: makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS }),
     readFile: (p) => {
       try {
-        return existsSync2(p) ? readFileSync6(p, "utf8") : null;
+        return existsSync3(p) ? readFileSync6(p, "utf8") : null;
       } catch {
         return null;
       }

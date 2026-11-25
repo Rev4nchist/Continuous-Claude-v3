@@ -22,8 +22,13 @@ export const MAX_REASKS: number = store.MAX_REASKS;
 export const offerList: () => Offer[] = store.offerList;
 export const offerWrite: (a: Triple & { spec: object; tree?: string | null; cwd?: string }) => { ok: true; nonce: string } | { ok: false; reason: string } = store.offerWrite;
 export const decisionRead:(t: Triple) => { label: string; at: string } | null = store.decisionRead;
-/** `entry` is the entry point of the recording process (CLAUDE_CODE_ENTRYPOINT of the hook); the store stamps it and `tapAt` on the decision. */
-export const decisionRecord: (t: Triple & { label: string; entry?: string | null }) => { ok: true } | { ok: false; reason: string } = store.decisionRecord;
+/** The audit facts for the decision log: the recording session's label and the lane ids it holds (null = unknown, [] = holds none). */
+export interface TapAudit { session?: string | null; lane?: string[] | null }
+/**
+ * `entry` is the entry point of the recording process (CLAUDE_CODE_ENTRYPOINT of the hook); the store stamps it and `tapAt` on the decision.
+ * The store also appends one line to the decision log (card decision-append-log). A good append leaves the result `{ ok: true }`; a failed one is `{ ok: true, log: { ok: false, reason } }`: the tap is recorded all the same (fail open).
+ */
+export const decisionRecord: (t: Triple & { label: string; entry?: string | null; audit?: TapAudit }) => { ok: true; log?: { ok: false; reason: string } } | { ok: false; reason: string } = store.decisionRecord;
 /** The stamp of a stored decision: the tap time and the entry point it was recorded under (null when the row has none). */
 export interface DecisionStamp { label: string; at: string; tapAt: string | null; entry: string | null }
 /** The label, the row time and the stamp of a decision, or null. */

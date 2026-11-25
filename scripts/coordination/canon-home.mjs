@@ -9,8 +9,9 @@
  * CCV3_USER_HOME overrides os.homedir() so a Windows run can point at a
  * stand-in home. On Linux, os.homedir() already follows HOME.
  */
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export function normalizeProjectKey(p) {
   return String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -26,8 +27,48 @@ export function repoPath(home = userHome()) {
   return join(home, 'continuous-claude');
 }
 
+/**
+ * The common git dir of the repo whose top folder is `top`: the same steps as commonDirOf in
+ * .claude/hooks/src/shared/claim-target.ts:86-107. `undefined`: no `.git` here, keep walking up. `null`: a `.git` that cannot be read.
+ */
+function commonDirOf(top) {
+  const dotGit = join(top, '.git');
+  let st;
+  try { st = lstatSync(dotGit); } catch (err) { return err?.code === 'ENOENT' || err?.code === 'ENOTDIR' ? undefined : null; }
+  if (st.isDirectory()) return dotGit;
+  if (!st.isFile()) return null;
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf8'));
+  if (!m) return null;
+  const gitdir = resolve(top, m[1]);
+  if (!existsSync(gitdir)) return null;
+  const commonFile = join(gitdir, 'commondir');
+  if (!existsSync(commonFile)) return gitdir;
+  const common = resolve(gitdir, readFileSync(commonFile, 'utf8').trim());
+  return existsSync(common) ? common : null;
+}
+
+/**
+ * The project key the file-claims hook writes for a probe: resolveRepoContext().project of claim-target.ts:189-209. It is the real
+ * path of the git COMMON dir, so a link to a clone gives the clone, and a link to a linked worktree gives the PRIMARY checkout.
+ * A folder that does not exist, or has no readable repo above it, keeps the plain path (the hook gives null there).
+ * The twin test .claude/hooks/src/__tests__/canon-home-twin.test.ts compares both real functions.
+ */
 export function canonProject(home = userHome()) {
-  return normalizeProjectKey(repoPath(home));
+  const repo = repoPath(home);
+  try {
+    if (existsSync(repo)) {
+      let cur = realpathSync.native(repo);
+      for (;;) {
+        const common = commonDirOf(cur);
+        if (common === null) break;
+        if (common !== undefined) return normalizeProjectKey(realpathSync.native(common).replace(/\\/g, '/').replace(/\/?\.git\/?$/, ''));
+        const up = dirname(cur);
+        if (up === cur) break;
+        cur = up;
+      }
+    }
+  } catch { /* a file system error: keep the plain path */ }
+  return normalizeProjectKey(repo);
 }
 
 /**

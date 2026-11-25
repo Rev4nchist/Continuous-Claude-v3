@@ -54,6 +54,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { assertScratchUrl, safeDbName } from './scratch-db.mjs';
+import { racerError } from './racer-error.mjs';
 import { DEFAULT_BOARD } from './lane-board.mjs';
 import { syncBoardStateArgv } from '../review-engine/lib/db-verbs.mjs';
 
@@ -349,7 +350,7 @@ try {
 
   check('exactly one racer wins', winners.length === 1, `${winners.length} won of ${RACERS}`);
   check('every loser is denied cleanly (exit 3)', denied.length === RACERS - 1 && broken.length === 0,
-    `${denied.length} denied, ${broken.length} errored`);
+    `${denied.length} denied, ${broken.length} errored${broken[0] ? ` | first error: ${racerError(broken[0])}` : ''}`);
 
   const row = (await c.query(`SELECT * FROM agentic_os.lane WHERE id=$1`, [LANE])).rows[0];
   check('DB agrees exactly one owner', racers.includes(row.owner_session_id), `owner=${row.owner_session_id}`);
