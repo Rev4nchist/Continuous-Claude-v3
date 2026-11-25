@@ -664,6 +664,30 @@
       "reason": "pre-pr gate only; CI has no step"
     },
     {
+      "path": "scripts/scheduled/backup-drill.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/backup-notion.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/backup-state-lib.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/backup-state.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/scheduled-state-backup.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
+      "path": "scripts/scheduled/zip-lite.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
       "path": "scripts/scheduled/register-ccv3-tasks.test.mjs",
       "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
