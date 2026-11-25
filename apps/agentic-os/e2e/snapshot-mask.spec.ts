@@ -70,7 +70,8 @@ test.describe('maskSnapshot', () => {
 
   test('N4 two keys that mask to the same text both stay', () => {
     // Breaks when a masked key overwrites another: data would vanish from the snapshot.
-    const { value } = maskSnapshot({ [`PR ${PR}`]: 1, [`pr ${PR}`]: 2 } as Record<string, number>, LIST);
+    const { value } = maskSnapshot({ [`x ${SHA}`]: 1, [`x ${SHA.toUpperCase()}`]: 2 } as Record<string, number>, LIST);
+    expect(Object.keys(value)).toHaveLength(2);
     expect(Object.values(value).sort()).toEqual([1, 2]);
   });
 

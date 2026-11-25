@@ -3,6 +3,8 @@ import { dirname } from 'node:path';
 
 import { expect, test, type APIRequestContext } from '@playwright/test';
 
+import { TOKEN } from '../src/lib/listed-id-mask';
+import { COMMENT, PR } from './listed-id-fixtures';
 import { clearStateDir, step, writeState } from './state-fixture';
 
 /**
@@ -26,7 +28,7 @@ const need = (name: string): string => {
 const SCRATCH_VARS = [
   'AGENTIC_OS_DATABASE_URL', 'AGENTIC_OS_DECISIONS_FILE', 'AGENTIC_OS_TASKS_FILE', 'E2E_RD_DECISIONS_FILE', 'E2E_RD_OWNER_SID',
   'E2E_RD_LEASE_LANE', 'E2E_RD_WAITS_LANE', 'E2E_RD_START_LANE', 'E2E_RD_PARK_LANE', 'E2E_RD_LEASEEND_LANE', 'E2E_RD_UNOWNED_LANE',
-  'E2E_RD_REMIND_FUTURE', 'E2E_RD_REMIND_ACKED', 'E2E_RD_REMIND_PAST',
+  'E2E_RD_REMIND_FUTURE', 'E2E_RD_REMIND_ACKED', 'E2E_RD_REMIND_PAST', 'AGENTIC_OS_LISTED_ID_ROOT',
 ];
 
 // The skip keys on the harness marker, never on the database url: a live url with no E2E_RD_* variable must send no request.
@@ -48,6 +50,7 @@ type Snapshot = {
   decisionsOpen: number | null;
   scheduledTasks: { name: string; trigger: string; lastRun: string }[];
   sources: Source[];
+  coord: { rows: { kind: string; laneId?: string; title?: string; text?: string }[] };
 };
 
 async function snapshot(request: APIRequestContext): Promise<{ body: Snapshot; text: string }> {
@@ -166,6 +169,19 @@ test.describe('decisions.json and tasks.json readers (D, T)', () => {
     const names = body.scheduledTasks.map((t) => t.name);
     expect(names).toContain('CCv3-State-Backup');
     for (const task of body.scheduledTasks) expect(task.lastRun).toBe('not measured');
+  });
+});
+
+test.describe('listed ids (L), card agentic-os-listed-id-mask', () => {
+  test('L1 a made-up listed id in a lane title is masked in the snapshot; the list comes from the harness fixture root', async ({ request }) => {
+    // Breaks when getMissionControlSnapshot sends text without the boundary mask (mission-control.ts maskSnapshot), or reads another list.
+    // The harness seeds the park lane with a title that holds a made-up PR and comment id, and points AGENTIC_OS_LISTED_ID_ROOT at made-up files.
+    const { body, text } = await snapshot(request);
+    const park = body.coord.rows.find((r) => r.kind === 'park' && r.laneId === need('E2E_RD_PARK_LANE'));
+    expect(park, 'the seeded park lane must show in coord.rows').toBeDefined();
+    expect(park?.title).toContain(`PR ${TOKEN}`);
+    expect(text).not.toContain(`PR ${PR}`);
+    expect(text).not.toContain(COMMENT);
   });
 });
 

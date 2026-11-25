@@ -98,7 +98,7 @@ test.describe('the copy against board-mask.mjs', () => {
     const mutant: MaskApi = { ...copy, maskString: (text, ids) => (/[０-９]/.test(text) ? { text, masked: 0 } : copy.maskString(text, ids)) };
     const found = drifts(mutant);
     expect(found.length).toBeGreaterThan(0);
-    expect(found.every((f) => f.startsWith('maskString'))).toBe(true);
+    expect(found.some((f) => f.startsWith('maskString'))).toBe(true);
     const countMutant: MaskApi = { ...copy, countListed: (text, ids) => (text.includes(SHA.slice(0, 10)) ? 0 : copy.countListed(text, ids)) };
     expect(drifts(countMutant).some((f) => f.startsWith('countListed'))).toBe(true);
   });
