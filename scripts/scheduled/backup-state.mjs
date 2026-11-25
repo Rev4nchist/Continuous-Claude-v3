@@ -346,3 +346,7 @@ async function main(argv) {
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   main(process.argv.slice(2)).then((code) => process.exit(code), (e) => { console.error(maskText(e.message)); process.exit(1); });
 }
+
+// RED stubs (card ops-backup-drill-deadline-cleanup): the real code comes in the GREEN commit.
+export const allowTrashFrom = () => false;
+export const drillDeadlineMs = () => 0;

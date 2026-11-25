@@ -125,3 +125,6 @@ export async function runDrill({ sh, dumpPath, live, repo, container = 'continuo
   }
   return result;
 }
+
+// RED stubs (card ops-backup-drill-deadline-cleanup): the real code comes in the GREEN commit.
+export async function sweepPendingDrills() { return { cleaned: [], skipped: [] }; }

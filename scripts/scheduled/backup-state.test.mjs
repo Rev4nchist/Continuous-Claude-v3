@@ -507,3 +507,36 @@ test('C4 a token without the database config is no-config: exit 2, a FAILED file
     assert.ok(!r.text.includes(FRESH), r.text);
   } finally { t.clean(); }
 });
+
+// ---- card ops-backup-drill-deadline-cleanup: the trash rule from the config file, the drill deadline from the run budget, a sweep that never stops the night ----
+import { allowTrashFrom, drillDeadlineMs } from './backup-state.mjs';
+
+test('T1 allowTrashFrom: only the boolean true switches the trash rule on', () => {
+  // Breaks when a string, a number or a missing key turns the rule on (a trash move cannot be undone by the task).
+  assert.equal(allowTrashFrom({ allowTrash: true }), true);
+  for (const bad of [false, 'true', 1, null, undefined, {}]) assert.equal(allowTrashFrom({ allowTrash: bad }), false, String(bad));
+  assert.equal(allowTrashFrom({}), false);
+  assert.equal(allowTrashFrom(null), false);
+  assert.equal(allowTrashFrom(undefined), false);
+});
+
+test('T2 drillDeadlineMs: budget minus time used minus a 3 minute upload reserve minus a 1 minute margin; a late start gives zero or less', () => {
+  // Breaks when the deadline is a flat time from the drill start: a late drill would run past the wrapper kill and the upload never happens.
+  assert.equal(drillDeadlineMs({ budgetSec: 720, elapsedMs: 10000 }), 720000 - 10000 - 180000 - 60000);
+  assert.equal(drillDeadlineMs({ budgetSec: 720, elapsedMs: 400000 }), 80000);
+  assert.ok(drillDeadlineMs({ budgetSec: 720, elapsedMs: 500000 }) <= 0, 'the drill starts late: no time for it');
+  assert.equal(drillDeadlineMs({ budgetSec: 300, elapsedMs: 0 }), 60000, 'a smaller wrapper budget gives a smaller deadline');
+  assert.ok(drillDeadlineMs({ budgetSec: Number.NaN, elapsedMs: 0 }) <= 0, 'a bad budget fails closed');
+});
+
+test('T3 a sweep that throws is a logged warning: the night still dumps, zips and ends ok', async () => {
+  // Breaks when the sweep sits outside a try: one bad leftover file would stop every later backup.
+  const t = tree();
+  try {
+    const logs = [];
+    const d = deps();
+    const r = await runBackup({ ...base(t), dryRun: true }, { ...d, log: (l) => logs.push(l), sweep: async () => { throw new Error('sweep broke'); } });
+    assert.equal(r.status, 'ok');
+    assert.ok(logs.some((l) => /sweep skipped: sweep broke/.test(l)), logs.join('\n'));
+  } finally { t.clean(); }
+});
