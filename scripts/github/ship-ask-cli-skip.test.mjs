@@ -137,6 +137,7 @@ test('S7: the runs spent in the question follow the cap rule of the run counter:
     assert.equal(await spent([row({ gateFailed: true, at: MORNING }), row({ gateFailed: true, at: EVENING }), row()]), 2, 'the second gateFailed row of the same Chicago day counts');
     assert.equal(await spent([row({ gateFailed: true, at: MORNING }), row({ gateFailed: true, at: NEXT_DAY })]), 0, 'a gateFailed row on another Chicago day is free again');
     assert.equal(await spent([row({ gateFailed: true, at: 'soon' }), row()]), 2, 'a time that cannot be read counts (fail closed)');
+    assert.equal(await spent([row({ gateFailed: true, complete: true, outcome: 'finished' }), row()]), 2, 'a FINISHED review counts even when a gate failed after it (card prepr-cli-cap-count)');
     assert.equal(await spent([row(), row({ newCode: false, gateFailed: true })]), 1, 'a row with no new code is not a spent run, whatever else it says');
     assert.equal(await spent([row(), row()]), 2, 'two ordinary rows are two runs');
     // The sentence and the recommended option follow the count.
