@@ -238,6 +238,8 @@ import { blankInertQuotes, docAppendReadable, isDocAppend, isTextOnlyCommand } f
 import { maskQuoted, quotedSpans } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
+import { parseCalls, progName, type Call, type ParseOpts, type ParseResult } from './shared/shell-ast.js';
+import { defaultEntry } from './shared/shell-judge.js';
 import {
   coverageOf, ghKey, ghRemote, keyRepo, needsGithubField, oneLine, openPrKey, pushDefaults, pushKey, readRegistry, underLiveRoot, type GitRun, type Registry,
 } from './shared/tap-scope.js';
@@ -285,6 +287,14 @@ export interface Deps {
    * Absent: the app path uses `git`.
    */
   appGit?: (cwd: string, args: string[]) => { status: number; stdout: string };
+  /**
+   * PR B (card coord-guard-shell-parser, note 63): the parse of the RAW command text, made once in main by withParsed. parseCalls is async and
+   * decide and handle are sync, so the parse comes in here. `byDialect` has one entry for Bash or PowerShell, both for Desktop Commander (the
+   * shell is not known). Absent (tests, a text with no trigger word, a parse that threw): the hand reader decides alone.
+   */
+  parsed?: { text: string; byDialect: { bash?: ParseResult; pwsh?: ParseResult } };
+  /** The parser seams of withParsed (a provider for the bash parse or the pwsh walker). Absent: the real parsers. */
+  parseOpts?: ParseOpts;
 }
 /**
  * Which flag decides a deny: `push` is decisions.enforcePush, `other` is decisions.enforce, `app-push` is a push in a covered folder
@@ -707,6 +717,8 @@ interface Shape {
   tail?: string;
   /** Seat item 3: the payload tool is PowerShell (a backslash is literal there). */
   pwsh?: boolean;
+  /** Port step 3, a create only: the head and base the parser read from the call's words. Absent: the hand reader reads the tail. */
+  read?: CreateRead;
 }
 interface Prior { repos: string[]; nonLiteral: boolean }
 const NO_PRIOR: Prior = { repos: [], nonLiteral: false };
@@ -889,6 +901,10 @@ function cliMergeHead(args: string, pwsh = false): MergeHead {
   if (unmodelled(args, pwsh)) return UNREAD_HEAD;
   const words = pairedWords(args, pwsh);
   if (words === null) return UNREAD_HEAD;
+  return cliHeadOfWords(words);
+}
+/** The head of `gh pr merge` from its already-split words (the hand reader pairs quotes first; the parser gives the words). */
+function cliHeadOfWords(words: string[]): MergeHead {
   const heads: string[] = [];
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
@@ -936,6 +952,10 @@ function apiMergeHead(text: string, pwsh = false): MergeHead {
   if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return UNREAD_HEAD;
   const words = pairedWords(rest, pwsh);
   if (words === null) return UNREAD_HEAD;
+  return apiHeadOfWords(words);
+}
+/** The head of `gh api .../merge` from its already-split words after `api`. */
+function apiHeadOfWords(words: string[]): MergeHead {
   const heads: string[] = [];
   let endpoint = false;
   for (let i = 0; i < words.length; i++) {
@@ -948,6 +968,243 @@ function apiMergeHead(text: string, pwsh = false): MergeHead {
     if (eq > 0 && r.field.slice(0, eq) === 'sha') heads.push(r.field.slice(eq + 1));
   }
   return oneHead(heads);
+}
+
+// ---------- PR B step 2: the merge calls of the parser (card coord-guard-shell-parser, note 63) ----------
+
+/** One merge the parser found: `gh pr merge` or `gh api .../pulls/<n>/merge`, its PR and its head read from the call's own words. */
+export interface AstMerge { pr: string | null; sha: string | null; shaBad?: true; cwdBefore: (string | null)[]; text: string }
+const API_MERGE_PATH = /\/pulls\/(\d+)\/merge\b/i;
+
+/** The calls of a parse that run gh with `pr merge` or `api` as its first two words. A flag before the subcommand is no match: ghFlagFirstDenies still reads it from the raw text. */
+function mergeCallOf(call: Call): AstMerge | null {
+  const w = call.words;
+  if (w.length < 3 || progName(w[0].lit) !== 'gh') return null;
+  const sub = (i: number): string => (w[i]?.lit ?? '').toLowerCase();
+  const at = call.cwdBefore ?? [];
+  const text = w.map((x) => x.raw).join(' ');
+  if (sub(1) === 'pr' && sub(2) === 'merge') {
+    const args = w.slice(3);
+    // A word that is not one literal (a variable, a substitution) could be the head or a flag: fail closed.
+    if (args.some((a) => a.lit === null)) return { pr: prOfWords(args), ...UNREAD_HEAD, cwdBefore: at, text };
+    return { pr: prOfWords(args), ...cliHeadOfWords(args.map((a) => a.lit as string)), cwdBefore: at, text };
+  }
+  if (sub(1) === 'api') {
+    const args = w.slice(2);
+    const endpoint = args.find((a) => API_MERGE_PATH.test(a.lit ?? a.raw));
+    if (!endpoint) return null;
+    const lits = args.map((a) => a.lit);
+    if (lits.some((l, i) => (l === '-X' || l === '--method') && /^GET$/i.test(lits[i + 1] ?? '')) || lits.some((l) => /^(?:-XGET|--method=GET)$/i.test(l ?? ''))) return null;
+    const pr = API_MERGE_PATH.exec(endpoint.lit ?? endpoint.raw)![1];
+    if (endpoint.lit === null || args.some((a) => a.lit === null && a !== endpoint)) return { pr, ...UNREAD_HEAD, cwdBefore: at, text };
+    return { pr, ...apiHeadOfWords(lits.map((l) => l as string)), cwdBefore: at, text };
+  }
+  return null;
+}
+/** The PR of a `gh pr merge`: the first all-digit word that is not the value of a flag, else a /pull/<n> URL. */
+function prOfWords(args: Call['words']): string | null {
+  for (let i = 0; i < args.length; i++) {
+    const l = args[i].lit ?? '';
+    if (/^\d+$/.test(l) && !MERGE_VALUE.has(args[i - 1]?.lit ?? '')) return l;
+  }
+  for (const a of args) { const m = /\/pull\/(\d+)/.exec(a.lit ?? ''); if (m) return m[1]; }
+  return null;
+}
+/** Every merge call of the parse (every dialect it holds), nested payloads included: the parser lists those calls too. */
+export function astMerges(parsed: Deps['parsed']): AstMerge[] {
+  if (!parsed) return [];
+  return Object.values(parsed.byDialect).flatMap((r) => (r ? r.calls : [])).flatMap((c) => { const m = mergeCallOf(c); return m ? [m] : []; });
+}
+
+/**
+ * Port step 2. The merge shapes of the hand reader keep their folder, own command and earlier GH_REPO; the parser decides the PR and the head.
+ *   - a shape whose PR the parser also found takes the parser's head; if the parser found that PR twice with two heads, the head is unread (deny);
+ *   - a merge the parser found and the hand reader did not (a call inside a quoted payload, behind a form the cutter misses) becomes a shape in
+ *     the cwd and in every cd before it (loose), so it is judged where it may run: the parser's cd list over-reports (CD, chdir), which only widens it;
+ *   - a shape the parser did not find is kept as it is (fail closed). A parse with errors changes nothing: rule F1 comes with a later step.
+ */
+function withAstMerges(shapes: Shape[], parsed: Deps['parsed'], pwsh: boolean): Shape[] {
+  if (!parsed || Object.values(parsed.byDialect).some((r) => r === undefined || r.errors.length > 0)) return shapes;
+  const found = astMerges(parsed);
+  if (found.length === 0) return shapes;
+  const heads = (pr: string | null): MergeHead | null => {
+    const hs = found.filter((m) => m.pr === pr);
+    if (hs.length === 0) return null;
+    const first = hs[0];
+    return hs.every((m) => m.sha === first.sha && !m.shaBad === !first.shaBad) ? { sha: first.sha, ...(first.shaBad ? { shaBad: true as const } : {}) } : UNREAD_HEAD;
+  };
+  const out: Shape[] = [];
+  const seen = new Set<string>();
+  const push = (s: Shape): void => {
+    const id = `${s.kind}|${s.pr}|${s.sha}${s.shaBad ? '!' : ''}|${s.at ? whereId(s.at) : ''}|${s.ftext ?? s.text ?? ''}${s.prior ? priorId(s.prior) : ''}`;
+    if (!seen.has(id)) { seen.add(id); out.push(s); }
+  };
+  for (const s of shapes) {
+    if (s.kind !== 'merge') { out.push(s); continue; }
+    const h = heads(s.pr);
+    if (!h) { push(s); continue; }
+    const { shaBad: _drop, ...rest } = s;
+    push({ ...rest, sha: h.sha, ...(h.shaBad ? { shaBad: true as const } : {}) });
+  }
+  for (const m of found) {
+    if (shapes.some((s) => s.kind === 'merge' && s.pr === m.pr)) continue;
+    const cds = m.cwdBefore.filter((c): c is string => c !== null);
+    const masked = maskQuoted(m.text, pwsh ? 'PowerShell' : 'Bash');
+    push({ kind: 'merge', pr: m.pr, sha: m.sha, ...(m.shaBad ? { shaBad: true as const } : {}), at: { cds, unknown: m.cwdBefore.includes(null), loose: cds.length > 0 || m.cwdBefore.includes(null) }, text: m.text, mtext: masked, ftext: m.text, fmtext: masked, prior: NO_PRIOR, pwsh });
+  }
+  return out;
+}
+
+// ---------- PR B step 3: the create calls of the parser ----------
+
+/** One create the parser found: `gh pr create|new` or `gh api .../pulls` (POST), its head and base read from the call's own words. */
+export interface AstCreate { read: CreateRead; cwdBefore: (string | null)[]; text: string }
+/** Flags of `gh pr create` whose value is not a head, a base or a repo: a double-quoted $( ) or variable there is one word that names none of them. */
+const SAFE_CREATE_VALUE = new Set(['--title', '-t', '--body', '-b', '--body-file', '-F', '--label', '-l', '--assignee', '-a', '--reviewer', '-r', '--milestone', '-m', '--project', '-p', '--template', '-T', '--recover']);
+const SAFE_API_KEY = new Set(['title', 'body', 'draft', 'maintainer_can_modify']);
+const API_PULLS_PATH = /\/pulls\/?(?:\?.*)?$/i;
+const NOT_LITERAL_WORD = 'a word that is not a literal (a variable or a substitution outside a title or body value)';
+
+function createCallOf(call: Call): AstCreate | null {
+  const w = call.words;
+  if (w.length < 3 || progName(w[0].lit) !== 'gh') return null;
+  const sub = (i: number): string => (w[i]?.lit ?? '').toLowerCase();
+  const cwdBefore = call.cwdBefore ?? [];
+  const text = w.map((x) => x.raw).join(' ');
+  if (sub(1) === 'pr' && (sub(2) === 'create' || sub(2) === 'new')) {
+    const lits: string[] = [];
+    for (const a of w.slice(3)) {
+      if (a.lit !== null) { lits.push(a.lit); continue; }
+      const eq = /^(--[a-z-]+)="/.exec(a.raw)?.[1];
+      if (eq && SAFE_CREATE_VALUE.has(eq)) { lits.push(`${eq}=x`); continue; }
+      if (a.raw.startsWith('"') && SAFE_CREATE_VALUE.has(lits[lits.length - 1] ?? '')) { lits.push('x'); continue; }
+      return { read: BAD(NOT_LITERAL_WORD), cwdBefore, text };
+    }
+    return { read: cliCreateOfWords(lits), cwdBefore, text };
+  }
+  if (sub(1) !== 'api') return null;
+  const args = w.slice(2);
+  const valueFlag = (l: string | null | undefined): boolean => l != null && (API_FIELD.test(l) || API_VALUE.has(l));
+  const endpoint = args.find((a, i) => a.lit !== null && !a.lit.startsWith('-') && !valueFlag(args[i - 1]?.lit));
+  if (!endpoint || !API_PULLS_PATH.test(endpoint.lit as string)) return null;
+  const flags = args.map((a) => a.lit ?? '');
+  const post = flags.some((l, i) => (/^(?:-X|--method)$/i.test(l) && /^POST$/i.test(flags[i + 1] ?? '')) || /^(?:-XPOST|--method=POST)$/i.test(l));
+  const anyMethod = flags.some((l) => /^(?:-X|--method)/i.test(l));
+  const field = flags.some((l) => /^(?:-[fF]|--(?:raw-field|field|input))/.test(l));
+  if (!post && !(field && !anyMethod)) return null;
+  const lits: string[] = [];
+  for (const a of args) {
+    if (a.lit !== null) { lits.push(a.lit); continue; }
+    const key = /^((?:-[fF]|--(?:raw-field|field)=)?([A-Za-z_]+))="/.exec(a.raw);
+    if (key && SAFE_API_KEY.has(key[2])) { lits.push(`${key[1]}=x`); continue; }
+    return { read: BAD(NOT_LITERAL_WORD), cwdBefore, text };
+  }
+  return { read: apiCreateOfWords(lits), cwdBefore, text };
+}
+/** Every create call of the parse (every dialect it holds), nested payloads included. */
+export function astCreates(parsed: Deps['parsed']): AstCreate[] {
+  if (!parsed) return [];
+  return Object.values(parsed.byDialect).flatMap((r) => (r ? r.calls : [])).flatMap((c) => { const m = createCallOf(c); return m ? [m] : []; });
+}
+const squashed = (t: string): string => t.replace(/[\s"'\\`]/g, '');
+
+/**
+ * Port step 3. The create shapes of the hand reader keep their folder, repo text and tail; the parser decides the head and base (`read`).
+ * Each hand-read create is paired with the parser's create whose words it holds (quotes and blanks deleted on both sides). When every
+ * create pairs one to one, each shape takes its parser read. Any other count or match leaves the hand reads alone and adds every parser
+ * create as one more shape in the cwd and every cd before it (loose): the union of two readers only denies more.
+ */
+function withAstCreates(shapes: Shape[], parsed: Deps['parsed'], pwsh: boolean): Shape[] {
+  if (!parsed || Object.values(parsed.byDialect).some((r) => r === undefined || r.errors.length > 0)) return shapes;
+  const found = astCreates(parsed);
+  if (found.length === 0) return shapes;
+  const tails = [...new Set(shapes.filter((s) => s.kind === 'create').map((s) => squashed(s.tail ?? s.text ?? '')))];
+  const pairs = tails.map((t) => found.filter((f) => t.includes(squashed(f.text))));
+  const paired = tails.length === found.length && pairs.every((p) => p.length === 1) && new Set(pairs.map((p) => p[0])).size === found.length;
+  if (paired) {
+    const byTail = new Map(tails.map((t, i) => [t, pairs[i][0].read]));
+    return shapes.map((s) => (s.kind === 'create' ? { ...s, read: byTail.get(squashed(s.tail ?? s.text ?? '')) } : s));
+  }
+  const extra: Shape[] = found.map((f) => {
+    const cds = f.cwdBefore.filter((c): c is string => c !== null);
+    const masked = maskQuoted(f.text, pwsh ? 'PowerShell' : 'Bash');
+    return { kind: 'create', pr: null, at: { cds, unknown: f.cwdBefore.includes(null), loose: cds.length > 0 || f.cwdBefore.includes(null) }, text: f.text, mtext: masked, ftext: f.text, fmtext: masked, prior: NO_PRIOR, tail: f.text, pwsh, read: f.read };
+  });
+  return [...shapes, ...extra];
+}
+
+// ---------- PR B step 4: a doc append read from the parse (PB-7, note 03 section 1 items 3 and 4) ----------
+
+const DOC_APPEND_CMDS = new Set(['add-content', 'set-content', 'ac', 'sc']);
+const DOC_TARGET_EXT = /\.(?:md|txt|log)$/i;
+/** A dash lookalike, a smart quote, NUL, a vertical tab, a form feed, NEL or a Unicode line break: a reader of another family may split or quote differently. */
+const DOC_ODD_CHAR = /[\u2013-\u2015\u2018-\u201F\0\v\f\x85\u2028\u2029]/u;
+
+/** True when a < or > stands outside every quoted string and heredoc or here-string body of the parse (a redirect, or a here-string opener the parser did not span). */
+function hasBareRedirect(text: string, r: ParseResult): boolean {
+  const inside = (i: number): boolean => [...r.quoted, ...r.bodies].some(([from, to]) => i >= from && i < to);
+  for (let i = 0; i < text.length; i++) if ((text[i] === '>' || text[i] === '<') && !inside(i)) return true;
+  return false;
+}
+/** One literal target: .md, .txt or .log; no glob, no list, no .. segment, a colon only as a drive letter. A target set by one literal assignment counts (the parser resolves it). */
+function docTargetOk(w: Call['words'][number] | undefined): boolean {
+  const t = w?.lit;
+  if (t == null || t !== t.trim() || !DOC_TARGET_EXT.test(t) || /[*?[\],]/.test(t)) return false;
+  if (t.replace(/^[A-Za-z]:(?=[\\/])/, '').includes(':')) return false;
+  return !t.split(/[\\/]/).includes('..');
+}
+/** One Add-Content-like call: a literal target and ONE literal value; nothing else. The value never comes from a variable. */
+function docAppendCall(c: Call): boolean {
+  if (c.depth !== 0 || c.level !== 0 || c.nested || c.func || c.place.pipe || c.place.background) return false;
+  if (!DOC_APPEND_CMDS.has((c.words[0]?.lit ?? '').toLowerCase())) return false;
+  let target: Call['words'][number] | undefined;
+  let value: Call['words'][number] | undefined;
+  const args = c.words.slice(1);
+  for (let i = 0; i < args.length; i++) {
+    const l = args[i].lit;
+    if (l === null) { if (target === undefined) target = args[i]; else if (value === undefined) value = args[i]; else return false; continue; }
+    if (/^-(?:literalpath|path)$/i.test(l)) { if (target !== undefined || i + 1 >= args.length) return false; target = args[++i]; continue; }
+    if (/^-value$/i.test(l)) { if (value !== undefined || i + 1 >= args.length) return false; value = args[++i]; continue; }
+    if (l.startsWith('-')) return false;
+    if (target === undefined) target = args[i]; else if (value === undefined) value = args[i]; else return false;
+  }
+  return docTargetOk(target) && value !== undefined && value.lit !== null && value.viaVar === undefined;
+}
+/**
+ * The whole command is PowerShell and only appends literal text to literal document files: it runs nothing, so a guarded word in the text is
+ * a mention. Read from the parse (every call is an append; no redirect outside a string). The caller still keeps a PR number in the raw text
+ * as a land shape. Replaces the anchored regex (isDocAppend), which stays as a fallback until the hand reader is deleted.
+ */
+export function docAppendByAst(parsed: Deps['parsed'], tool: string | undefined, raw: string): boolean {
+  if (tool !== 'PowerShell' || !parsed || DOC_ODD_CHAR.test(raw)) return false;
+  const dialects = Object.keys(parsed.byDialect);
+  const r = parsed.byDialect.pwsh;
+  if (dialects.length !== 1 || !r || r.errors.length > 0 || r.calls.length === 0) return false;
+  return !hasBareRedirect(parsed.text, r) && r.calls.every(docAppendCall);
+}
+
+// ---------- PR B port step 4: Ask B, a script runner whose code names a guarded call (Dave R1, note 63 section 5) ----------
+
+const SCRIPT_RUNNERS = new Set(['node', 'nodejs', 'python', 'python3', 'py', 'deno', 'bun', 'ruby', 'perl']);
+/** The flags that hand inline code to a runner (`-` reads it from stdin). A runner with a script file and none of these runs a file. */
+const INLINE_CODE_FLAGS = new Set(['-e', '-c', '-E', '-p', '--eval', '--print', '--command', '-']);
+/** A full guarded call, after quotes, commas and brackets are turned into blanks (so spawnSync('gh', ['pr', 'create']) reads as gh pr create). */
+const GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+const SCRIPT_RUNNER_WHY = 'this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.';
+
+/** Every inline-code call of a script runner whose code text holds a guarded call. The deny never depends on what the code does. */
+export function scriptRunnerDenies(parsed: Deps['parsed']): Deny[] {
+  if (!parsed) return [];
+  for (const r of Object.values(parsed.byDialect)) {
+    for (const c of r ? r.calls : []) {
+      if (!SCRIPT_RUNNERS.has(progName(c.words[0]?.lit) ?? '')) continue;
+      const args = c.words.slice(1);
+      if (!args.some((a) => INLINE_CODE_FLAGS.has(a.lit ?? '')) && c.stdin === null) continue;
+      const code = [...args.map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ''].join(' ').replace(/['"`,[\]()]/g, ' ');
+      if (GUARDED_TEXT.test(code)) return [deny('script-runner', SCRIPT_RUNNER_WHY)];
+    }
+  }
+  return [];
 }
 
 // ---------- the push shape ----------
@@ -1758,7 +2015,7 @@ const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => whe
  * and not in the other, so each mask can hide a cd the other shows). The readings (bash, pwsh, quotes deleted) are united and de-duplicated,
  * and the cds are part of the id: the same shape in two folders is two shapes. An extra shape only makes the gate stricter.
  */
-function shapesOf(raw: string, tool?: string): Shape[] {
+function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed']): Shape[] {
   // The words of a create, land or merge inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text. Push is read from raw below.
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [...new Set([joinContinuations(text, 'bash'), joinContinuations(text, 'pwsh')])];
@@ -1774,6 +2031,8 @@ function shapesOf(raw: string, tool?: string): Shape[] {
   // Any other segment of the same command is judged alone, as before. Seat ruling 2026-11-23 12:48 CST: single-quoted values only, no new tokenizer.
   const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw)
     && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every((c) => docAppendReadable(c, tool));
+  // Port step 4 (PB-7): the AST rule. It widens the exemption only (double-quoted and here-string values, an ac or sc alias, a target set by one assignment).
+  const docAst = !PR_NUMBER_IN_TEXT_RE.test(raw) && docAppendByAst(parsed, tool, raw);
   const out: Shape[] = [];
   // Seat item 3: the tool decides one fact of the merge and create readers (a backslash is literal in PowerShell).
   const pwshTool = tool === 'PowerShell';
@@ -1790,7 +2049,7 @@ function shapesOf(raw: string, tool?: string): Shape[] {
       // another program may run: its tail is empty, so every head read from it is unread.
       const tail = quoteOpenAt(view, from, pwshTool) ? '' : rawTail(view.slice(from));
       for (const s of new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly || (docReadable && isDocAppend(seg)), seg, tail, pwshTool)) {
+        for (const shape of landShapesOf(s, textOnly || docAst || (docReadable && isDocAppend(seg)), seg, tail, pwshTool)) {
           for (const own of owns) for (const at of wheres) add({ ...shape, at, ...own, prior }, landId(shape, at, own, prior));
         }
       }
@@ -1807,8 +2066,7 @@ function shapesOf(raw: string, tool?: string): Shape[] {
       add({ kind: 'create', pr: null, at, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool }, `create|${whereId(at)}|${view}`);
     }
   }
-  out.push(...pushShapesOf(raw, tool));
-  return out;
+  return [...withAstCreates(withAstMerges(out, parsed, pwshTool), parsed, pwshTool), ...pushShapesOf(raw, tool)];
 }
 
 // ---------- config ----------
@@ -2217,6 +2475,10 @@ const BAD = (why: string): CreateRead => ({ bad: why, heads: [], bases: [] });
 function cliCreateRead(args: string, pwsh: boolean): CreateRead {
   const words = pairedWords(args, pwsh);
   if (words === null) return BAD('an unpaired quote');
+  return cliCreateOfWords(words);
+}
+/** The head and base of `gh pr create|new` from its already-split words. */
+function cliCreateOfWords(words: string[]): CreateRead {
   const heads: string[] = [];
   const bases: string[] = [];
   for (let i = 0; i < words.length; i++) {
@@ -2255,6 +2517,10 @@ function headAndBase(heads: string[], bases: string[]): CreateRead {
 function apiCreateRead(rest: string, pwsh: boolean): CreateRead {
   const words = pairedWords(rest, pwsh);
   if (words === null) return BAD('an unpaired quote');
+  return apiCreateOfWords(words);
+}
+/** The head and base of `gh api .../pulls` from its already-split words after `api`. */
+function apiCreateOfWords(words: string[]): CreateRead {
   const heads: string[] = [];
   const bases: string[] = [];
   let endpoint = false;
@@ -2395,10 +2661,24 @@ function steadyCommand(raw: string, shell: 'bash' | 'pwsh'): boolean {
  * a read-only git call or a push, joined by ; && or ||. What follows the last push (a pipe, 2>&1, a git log) cannot change what it
  * sends. A pipe or a lone & before it, a group, a redirect, another program or any other step before it: false.
  */
-function stateModelled(raw: string, shell: 'bash' | 'pwsh'): boolean {
-  const r = pushPrefix(raw, shell);
-  return r !== null && !r.localPush && r.pipeOk && (r.plain || commitPrecedesPush(r.prefix, shell));
+function stateModelled(raw: string, shell: 'bash' | 'pwsh', ctx: { parsed?: Deps['parsed']; remoteIsLocal?: (name: string) => boolean } = {}): boolean {
+  const r = pushPrefix(raw, shell, ctx.remoteIsLocal);
+  return r !== null && !r.localPush && r.pipeOk && !consumerSubstitutes(ctx.parsed) && (r.plain || commitPrecedesPush(r.prefix, shell));
 }
+/**
+ * Port step 4 (PB-1, round 3 limit :2418): a call that follows the last push in a pipe holds a `$( )` or backtick substitution, also inside
+ * double quotes, where the quote-masked text of pushPrefix shows a plain word. The spans come from the parser. A parse with errors says nothing.
+ */
+function consumerSubstitutes(parsed: Deps['parsed']): boolean {
+  if (!parsed) return false;
+  return Object.values(parsed.byDialect).some((r) => {
+    if (!r || r.errors.length > 0) return false;
+    const lastPush = Math.max(-1, ...r.calls.filter((c) => progName(c.words[0]?.lit) !== null && c.words.some((w) => (w.lit ?? '').toLowerCase() === 'push')).map((c) => c.start));
+    return lastPush >= 0 && r.calls.some((c) => c.start > lastPush && c.place.pipe && r.substs.some((s) => s.from >= c.start && s.to <= c.end));
+  });
+}
+/** PB-5: how many different remote names of earlier pushes get one `git remote get-url` each; more than this is denied (the way out: name the URL or push alone). */
+const MAX_REMOTE_LOOKUPS = 4;
 /**
  * The text up to the end of the LAST step that names a push (null when no step names one), whether every step before it is a cd, popd,
  * a read-only git call or a push joined by ; && or || (`plain`), and whether a push before it goes to a local path (`localPush`). What
@@ -2406,7 +2686,7 @@ function stateModelled(raw: string, shell: 'bash' | 'pwsh'): boolean {
  * commit-and-push flow with a trailing pipe is the index rule; so is commit && push && commit (the last commit is after the push).
  * Accepted over-deny: a step after the push that names the word push (git push ... | Select-String push) becomes the last named step.
  */
-function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plain: boolean; localPush: boolean; pipeOk: boolean } | null {
+function pushPrefix(raw: string, shell: 'bash' | 'pwsh', remoteIsLocal?: (name: string) => boolean): { prefix: string; plain: boolean; localPush: boolean; pipeOk: boolean } | null {
   const view = fdBlank(joinContinuations(raw, shell));
   const masked = maskQuoted(view, shell === 'pwsh' ? 'PowerShell' : 'Bash');
   const steps: { kind: SegKind | 'popd'; named: boolean; op: string; end: number; raw: string }[] = [];
@@ -2429,7 +2709,10 @@ function pushPrefix(raw: string, shell: 'bash' | 'pwsh'): { prefix: string; plai
     && steps.slice(1, last + 1).every((s) => !s.op.includes('|') && !/(?<!&)&(?!&)/.test(s.op));
   // Seat fix 6: a push step before the last one that pushes to a local path (git push . HEAD:x, git push ../r main) moves a local branch.
   const tool = shell === 'pwsh' ? 'PowerShell' : 'Bash';
-  const localPush = steps.slice(0, last).some((s) => s.kind === 'push' && pushShapesOf(s.raw, tool).some((p) => LOCAL_REMOTE.test(p.push?.remote ?? '')));
+  const earlier = steps.slice(0, last).filter((s) => s.kind === 'push').flatMap((s) => pushShapesOf(s.raw, tool).map((p) => p.push?.remote ?? ''));
+  // PB-5 (limit :2401): a remote NAME can point at a local folder in git config. Each different name of an earlier push is asked once (git remote get-url); more than MAX_REMOTE_LOOKUPS names deny.
+  const names = [...new Set(earlier.filter((rm) => rm !== '' && !LOCAL_REMOTE.test(rm) && !/[:/]/.test(rm)))];
+  const localPush = earlier.some((rm) => LOCAL_REMOTE.test(rm)) || (remoteIsLocal !== undefined && (names.length > MAX_REMOTE_LOOKUPS || names.some(remoteIsLocal)));
   // CLI :2394 (Dave 2026-11-15, "Fix now"): both sides of a pipe run at the same time, so a step the last push pipes into can move HEAD
   // before the push reads it. Each step of that pipe chain must be a listed read-only program (first word of the masked step), with no
   // file redirect (a null target is fine) and no command substitution or block in it.
@@ -2532,10 +2815,10 @@ const ALLOW: Decision = { action: 'allow' };
 function judgeCreate(s: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const route = routeOf(deps, dir, cmd);
   // Round 3 C1 (seat ruling A): both paths read the head from the raw tail, not from the &-cut text.
-  if (route === 'app') return judgeAppCreate(s.tail ?? s.ftext ?? s.text!, s.pwsh === true, deps, dir, cmd);
+  if (route === 'app') return judgeAppCreate(s.tail ?? s.ftext ?? s.text!, s.pwsh === true, deps, dir, cmd, s.read);
   if (route === 'foreign') return deny('repo-foreign', goThereWhy(cmd.repo!));
   // G4: the CCv3 head is read from the base cut (any & ends it), as in base main 7a0e2f34. Round 3 C1: from one known place, once.
-  const cr = createRead(s.tail ?? s.text!, s.pwsh === true);
+  const cr = s.read ?? createRead(s.tail ?? s.text!, s.pwsh === true);
   if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
   if (cr.heads.length > 1) return deny('head-unresolved', createBadWhy(dir, `two head values (${cr.heads.join(', ')}); gh takes the last`));
   const branch = readBranch(cr.heads[0] ?? null, deps, dir);
@@ -2566,8 +2849,8 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decisio
 }
 
 /** Create in a folder outside CCv3: when covered, "Open draft PR" for (key repo, branch, head). Unlike CCv3, a create from main needs a tap too. */
-function judgeAppCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  return homeRead(inApp(deps, () => appCreate(text, pwsh, deps, dir, cmd)));
+function judgeAppCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo, read?: CreateRead): Decision {
+  return homeRead(inApp(deps, () => appCreate(text, pwsh, deps, dir, cmd, read)));
 }
 /** Fix round 6 (item 1): a deny for a covered folder reads decisions.enforce from the home copy only. */
 const homeRead = (d: Decision): Decision => (d.action === 'deny' ? { ...d, homeFlags: true as const } : d);
@@ -2590,14 +2873,14 @@ function coveredCall(deps: Deps, dir: string, body: (place: Place) => Decision):
     throw new AppScopeError(err instanceof AppScopeError ? err.inner : err, false);
   }
 }
-function appCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo): Decision {
-  return coveredCall(deps, dir, (place) => appCreateIn(text, pwsh, deps, dir, cmd, place));
+function appCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo, read?: CreateRead): Decision {
+  return coveredCall(deps, dir, (place) => appCreateIn(text, pwsh, deps, dir, cmd, place, read));
 }
-function appCreateIn(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo, place: Place): Decision {
+function appCreateIn(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo, place: Place, read?: CreateRead): Decision {
   // PR 566 round 2 (a): gh takes the LAST of a repeated --head, the gate reads the first. Two different heads: no tap can name the one
   // that opens, so the create is denied before any head is read.
   // Round 3 C1: the head and base are read from one known place, once (createRead); a create the reader cannot read whole is denied.
-  const cr = createRead(text, pwsh);
+  const cr = read ?? createRead(text, pwsh);
   if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
   const heads = cr.heads;
   if (heads.length > 1) return deny('head-unresolved', appManyHeadsWhy(dir, heads));
@@ -2726,8 +3009,11 @@ const pushOffer = (p: PushShape): Offer => ({ sub: 'push', remote: p.remote });
 interface PushCtx { subagent: boolean; chained: boolean; alone: boolean; flow: boolean; text: string; shell: 'bash' | 'pwsh'; modelled: boolean; commitDirs?: string[]; unregistered?: boolean }
 /** Round 3 C3 (item 10): a deny of a push whose checkout is unknown is hard, unless every push folder is a resolved unregistered one. */
 const hardUnlessUnregistered = (d: Deny, unregistered: boolean | undefined): Deny => (unregistered ? d : hardOf(d));
-function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', ctx: PushCtx): Decision[] {
+function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', ctx: PushCtx, sink?: (d: Deny) => void): Decision[] {
   const { subagent, chained, alone } = ctx;
+  // PR B (limit :2725): each deny goes to the caller's sink as soon as a folder is judged, so a throw in a LATER folder of the same push
+  // keeps the deny found in an earlier one (the caller's sink is the list handle() reads in its catch).
+  const emit = (d: Decision): Decision => { if (d.action === 'deny') sink?.(d); return d; };
   const p = s.push!;
   const dirs = pushDirsOf(p, cwd, shell);
   // Fix round 5 (F4, ruling B): git applies every -C in order. A chain folder the base reading (last -C) misses is judged too, when it is
@@ -2735,7 +3021,8 @@ function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', 
   // base folder then ends in the catch, which also reads the chain (pushUnderLiveRoot).
   const chainOnly = chainDirsOf(p, cwd, shell).filter((d) => !dirs.includes(d) && firstCovered(deps, [d]) !== null);
   const c4: PushCtx = { ...ctx, commitDirs: dirsAfter(cwd, p.cds, shell, p.loose, null) };
-  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow, c4));
+  const fromChain: Decision[] = [];
+  for (const d of chainOnly) fromChain.push(emit(judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow, c4)));
   const lost = dirs.find(isUnexpanded);
   if (lost !== undefined) return [unexpandedDeny(deps, [cwd, ...dirs], lost, 'push', 'app-push', softPush(p, subagent))];
   const fixedByDir = p.dir !== null && resolveDir('/a', p.dir, shell) === resolveDir('/b', p.dir, shell);
@@ -2747,7 +3034,9 @@ function judgePushAt(s: Shape, deps: Deps, cwd: string, shell: 'bash' | 'pwsh', 
     const app = appPositionAt(deps, all, 'app-push', pushOffer(p));
     if (app.some((d) => d.action === 'deny')) return app;
   }
-  return [...fromChain, ...dirs.map((d) => judgePush(s, deps, d, c4))];
+  const result: Decision[] = [...fromChain];
+  for (const d of dirs) result.push(emit(judgePush(s, deps, d, c4)));
+  return result;
 }
 
 /** A remote name or URL: the upstream (origin, parcadei), the fork (fork, the CCv3 repo URL) or neither. */
@@ -2860,8 +3149,8 @@ function chainedAnswerKeyPaths(deps: Deps, dir: string): 'none' | 'hit' | 'unrea
   return deps.answerKeyHits!([...all]).length > 0 ? 'hit' : 'none';
 }
 
-/** Round 3 C3 (item 15): a ref name without refs/heads/. */
-const headName = (ref: string): string => ref.replace(/^refs\/heads\//, '');
+/** Round 3 C3 (item 15): a ref name without refs/heads/. PR B (limit :2799): git reads heads/<b> as refs/heads/<b> too, so both spellings go. */
+const headName = (ref: string): string => ref.replace(/^(?:refs\/)?heads\//, '');
 /**
  * Round 3 C3 (item 15): the push sends a re/ branch when the destination OR the source is re/. A source of HEAD (or @) is the checked-out
  * branch: one more git call, only for that form. A failed read of it throws (the scan's catch: a hard deny).
@@ -3356,7 +3645,10 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   if (paidTripwire(input)) denies.push(deny('paid-coderabbit', PAID_WHY));
   // CLI cap override rule (PART B): the raw text names a cap flag and no tap covers it. Scope other, like the tripwire above: it follows decisions.enforce.
   if (capOverrideDeny(input, deps)) denies.push(deny('cap-override', CAP_WHY));
-  const shapes = shapesOf(cmd.text, cmd.tool);
+  // Port step 4 (Ask B, Dave R1): inline code of a script runner that names a guarded call. First, so its reason (the script-file way out) is the one shown.
+  // It needs the parse; with no parse there is no rule. It is not gated by a shape: it follows decisions.enforce, as the tripwires above.
+  for (const d of scriptRunnerDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== 'push')) denies.push(subagentDeny(shapes, deps, cwd, shell));
@@ -3369,7 +3661,10 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
     const prefix = pushes.length > 0 ? pushPrefix(cmd.text, shell) : null;
     const chained = pushes.length > 0 && (commitPrecedesPush(cmd.text, shell) || (prefix !== null && commitPrecedesPush(prefix.prefix, shell)));
     const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
-    const modelled = pushes.length === 0 || stateModelled(cmd.text, shell);
+    // Port step 4 (PB-5): the url git holds for a remote name of an earlier push. git ran and has no such remote: no local path (that push fails by itself).
+    // git did not run (a throw, a timeout): unknown, so local (deny, note 63 section 3: a failed get-url is F2).
+    const remoteIsLocal = (name: string): boolean => { try { const g = deps.git(cwd, ['remote', 'get-url', name]); return g.status === 0 && LOCAL_REMOTE.test(g.stdout.trim()); } catch { return true; } };
+    const modelled = pushes.length === 0 || stateModelled(cmd.text, shell, { parsed: deps.parsed, remoteIsLocal });
     const moved = movesRepo(cmd.text);
     // Round 3 C3 (item 10): files only, no git; false when a push folder is CCv3, live, unplaceable or holds a variable.
     // Read only for a push that moves the repo: a CCv3 push reads no registry (C5 of the app-repos tests).
@@ -3380,7 +3675,7 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
         denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id), unregistered));
         continue;
       }
-      const found = s.kind === 'push' ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell, modelled, unregistered }) : judgeAt(s, deps, cwd, shell, named);
+      const found = s.kind === 'push' ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell, modelled, unregistered }, add) : judgeAt(s, deps, cwd, shell, named);
       for (const d of found) {
         if (d.action === 'deny') add(d);
         else if (d.notice) notes.add(d.notice);
@@ -3907,11 +4202,35 @@ function primaryRootOf(git: Deps['git'], dir: string): string {
   return resolve(r.stdout.trim(), '..');
 }
 
+/**
+ * PR B step 1: parse the raw command text once, before the sync decide, and return deps with `parsed` set. Only a command tool whose text holds
+ * a trigger word is parsed (the pwsh walker is a child process of 400 ms or more). Bash and PowerShell give one dialect; Desktop Commander,
+ * whose shell is not known, gives both. Unreadable input, a write tool, no trigger word or a parse that throws returns `deps` itself:
+ * the hand reader decides, as today. Nothing reads `parsed` yet: later steps of the port do.
+ */
+export async function withParsed(raw: string, deps: Deps): Promise<Deps> {
+  try {
+    const input: unknown = JSON.parse(raw.trim() || '{}');
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) return deps;
+    const cmd = readShellCommand(input as HookInput);
+    if (cmd.kind !== 'command' || cmd.text === '' || !defaultEntry(cmd.text)) return deps;
+    const tool = cmd.tool;
+    const dialects: ('bash' | 'pwsh')[] = tool === 'Bash' ? ['bash'] : tool === 'PowerShell' ? ['pwsh'] : ['bash', 'pwsh'];
+    const byDialect: { bash?: ParseResult; pwsh?: ParseResult } = {};
+    for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
+    return { ...deps, parsed: { text: cmd.text, byDialect } };
+  } catch (err) {
+    try { logGuardError(HOOK, err); } catch { /* the log never blocks */ }
+    return deps;
+  }
+}
+
 async function main(): Promise<void> {
   const start = Date.now(); // before the stdin read: the deadline counts from the hook start
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
-  console.log(handle(Buffer.concat(chunks).toString('utf-8'), realDeps({ start })));
+  const raw = Buffer.concat(chunks).toString('utf-8');
+  console.log(handle(raw, await withParsed(raw, realDeps({ start }))));
 }
 
 // Auto-run only as a hook; VITEST imports the pure functions above.

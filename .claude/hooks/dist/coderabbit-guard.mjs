@@ -842,7 +842,12 @@ function walkBash(file, text) {
       Object.values(n).forEach((v) => v && typeof v === "object" && find(v));
     };
     find(node);
-    for (const n of outer) stmts(n.stmts, { ...ctx, depth: ctx.depth + 1, top: false });
+    for (const n of outer) scoped(() => stmts(n.stmts, { ...ctx, depth: ctx.depth + 1, top: false }));
+  };
+  const scoped = (run) => {
+    ev.push({ t: "scope", open: true });
+    run();
+    ev.push({ t: "scope", open: false });
   };
   const stmts = (list, ctx) => list.forEach((s, i) => stmt(s, i ? { ...ctx, place: { ...ctx.place, chain: ";" } } : ctx));
   const stmt = (s, ctx) => {
@@ -879,7 +884,7 @@ function walkBash(file, text) {
         subst(c.word, inner);
         return c.items.forEach((i) => stmts(i.stmts ?? [], inner));
       case "Subshell":
-        return stmts(c.stmts, inner);
+        return scoped(() => stmts(c.stmts, inner));
       case "Block":
         return stmts(c.stmts, ctx);
       case "TimeClause":
@@ -1060,7 +1065,16 @@ function resolve2(events, dialect) {
     if (isBarrier(e)) barriers.push(i);
   });
   const cwd = [];
+  const scopes = [];
   events.forEach((e, i) => {
+    if (e.t === "scope") {
+      if (e.open) scopes.push(cwd.length);
+      else {
+        const n = scopes.pop();
+        if (n !== void 0) cwd.length = n;
+      }
+      return;
+    }
     if (e.t !== "call") return;
     for (const w of e.words) resolveWord(w, i, writes, key, unsafe, barriers);
     e.cwdBefore = [...cwd];

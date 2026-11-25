@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decisionKey, decisionRecord, offerWrite } from '../shared/decisions-store.js';
-import { decide, type Deps } from '../decision-gate.js';
+import { decide, withParsed, type Deps } from '../decision-gate.js';
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);
@@ -77,59 +77,61 @@ const shipTapOn = (tree: string) => {
   expect(offerWrite({ step: 'ship', key: decisionKey({ branch: 'feat/x' }), head: HEAD, tree, spec: { header: 'T', question: 'Q?', options: [{ label: 'Commit and push (Recommended)' }, { label: 'Another option' }] } }).ok).toBe(true);
   expect(decisionRecord({ step: 'ship', key: decisionKey({ branch: 'feat/x' }), head: HEAD, label: 'Commit and push (Recommended)' })).toEqual({ ok: true });
 };
+/** The verdict the way main reaches it: the text is parsed first (card coord-guard-shell-parser, port step 1), then decided. */
+const decideParsed = async (input: object, d: Deps): Promise<ReturnType<typeof decide>> => decide(input, await withParsed(JSON.stringify(input), d));
 /** The pattern of a deny, `warn:<first word>` of a soft deny that comes back as a warning, else allow. */
-const patIn = (input: object, w: World = {}): string => {
-  const d = decide(input, deps(w));
+const patIn = async (input: object, w: World = {}): Promise<string> => {
+  const d = await decideParsed(input, deps(w));
   if (d.action === 'deny') return d.pattern;
   return 'warn' in d && typeof d.warn === 'string' ? `warn:${d.warn.split(':')[0]}` : 'allow';
 };
 
 describe('PB-1: a substitution in a pipe consumer after a push is a state change', () => {
-  it('PB-1 (limit :2418): a $( ) inside double quotes in the consumer is push-state-unknown', () => {
+  it('PB-1 (limit :2418): a $( ) inside double quotes in the consumer is push-state-unknown', async () => {
     // Breaks when: the consumer check reads the quote-masked text, so the substitution inside "..." looks like a quoted word.
     shipTapOn(TREE);
     for (const c of ['git push fork feat/x | grep "$(git reset --hard other)"', 'git push fork feat/x | grep "`git reset --hard other`"']) {
-      expect(patIn(bash(c)), c).toBe('push-state-unknown');
+      expect(await patIn(bash(c)), c).toBe('push-state-unknown');
     }
-    expect(patIn(pwsh('git push fork feat/x | Select-String "$(git reset --hard other)"'))).toBe('push-state-unknown');
+    expect(await patIn(pwsh('git push fork feat/x | Select-String "$(git reset --hard other)"'))).toBe('push-state-unknown');
   });
-  it('PB-1c (cost): a quoted word with no substitution, and a single-quoted $( ), stay allowed', () => {
+  it('PB-1c (cost): a quoted word with no substitution, and a single-quoted $( ), stay allowed', async () => {
     shipTapOn(TREE);
-    expect(patIn(bash('git push fork feat/x | grep "rejected"'))).toBe('allow');
-    expect(patIn(bash("git push fork feat/x | grep '$(git status)'"))).toBe('allow');
+    expect(await patIn(bash('git push fork feat/x | grep "rejected"'))).toBe('allow');
+    expect(await patIn(bash("git push fork feat/x | grep '$(git status)'"))).toBe('allow');
   });
 });
 
 describe('PB-3: a push source spelled heads/<b> is read as <b>', () => {
   const ID = 'HOLD-ID-1';
   const w: World = { scan: { ids: [ID], added: `see ${ID}` } };
-  it('PB-3 (limit :2799): heads/re/x:feat/out is scanned for holdout ids like re/x:feat/out', () => {
+  it('PB-3 (limit :2799): heads/re/x:feat/out is scanned for holdout ids like re/x:feat/out', async () => {
     // Breaks when: only refs/heads/ is stripped from a source, so heads/re/x is no re/ source and the scan is skipped.
-    expect(patIn(bash('git push fork re/x:feat/out'), w)).toBe('holdout-id');
-    expect(patIn(bash('git push fork heads/re/x:feat/out'), w)).toBe('holdout-id');
-    expect(patIn(bash('git push fork +heads/re/x:feat/out'), w)).toBe('holdout-id');
+    expect(await patIn(bash('git push fork re/x:feat/out'), w)).toBe('holdout-id');
+    expect(await patIn(bash('git push fork heads/re/x:feat/out'), w)).toBe('holdout-id');
+    expect(await patIn(bash('git push fork +heads/re/x:feat/out'), w)).toBe('holdout-id');
   });
-  it('PB-3c (cost): heads/feat/z as a source is not a re/ scan', () => {
-    expect(patIn(bash('git push fork heads/feat/z:feat/out'), { scan: { ids: [ID], added: `see ${ID}` } })).toBe('warn:ship');
+  it('PB-3c (cost): heads/feat/z as a source is not a re/ scan', async () => {
+    expect(await patIn(bash('git push fork heads/feat/z:feat/out'), { scan: { ids: [ID], added: `see ${ID}` } })).toBe('warn:ship');
   });
 });
 
 describe('PB-5: a remote name that git config points at a local folder is a local push', () => {
-  it('PB-5 (limit :2401): `up` pointing at a path before a later push gives the local-push deny', () => {
+  it('PB-5 (limit :2401): `up` pointing at a path before a later push gives the local-push deny', async () => {
     // Breaks when: LOCAL_REMOTE tests only the word in the text (`up`), never the url git holds for that name.
     const w: World = { remoteUrls: { up: '/home/nobody/clone.git' } };
     shipTapOn(TREE);
-    expect(patIn(bash('git push up feat/x && git push fork feat/x'), w)).toBe('push-state-unknown');
+    expect(await patIn(bash('git push up feat/x && git push fork feat/x'), w)).toBe('push-state-unknown');
   });
-  it('PB-5c (cost): a name that points at a url keeps the old verdict', () => {
+  it('PB-5c (cost): a name that points at a url keeps the old verdict', async () => {
     const w: World = { remoteUrls: { up: `https://github.com/${REPO}.git` } };
     shipTapOn(TREE);
-    expect(patIn(bash('git push up feat/x && git push fork feat/x'), w)).not.toBe('push-state-unknown');
+    expect(await patIn(bash('git push up feat/x && git push fork feat/x'), w)).not.toBe('push-state-unknown');
   });
 });
 
 describe('PB-7: the AST rule for a doc append (note 03 section 1 items 3 and 4); the 57 rows of decision-gate-doc-append.test.ts stay the acceptance rows', () => {
-  const denied = (input: object): boolean => decide(input, deps()).action === 'deny';
+  const denied = async (input: object): Promise<boolean> => (await decideParsed(input, deps())).action === 'deny';
   // Each is a named widening: today the isDocAppend anchored regex refuses it, the AST rule allows it. One red row each.
   const WIDENED: Array<[string, string]> = [
     ['double-quoted value with no substitution', `Add-Content -LiteralPath x.md -Value "land-pr.ps1"`],
@@ -139,9 +141,9 @@ describe('PB-7: the AST rule for a doc append (note 03 section 1 items 3 and 4);
     ['the sc alias (F2b)', `sc -LiteralPath x.md -Value 'land-pr.ps1'`],
   ];
   for (const [why, cmd] of WIDENED) {
-    it(`PB-7 widened: allows ${why}`, () => {
+    it(`PB-7 widened: allows ${why}`, async () => {
       // Breaks when: the guard still reads the append with the anchored regex (isDocAppend), which allows only single-quoted strings and a literal path.
-      expect(denied(pwsh(cmd))).toBe(false);
+      expect(await denied(pwsh(cmd))).toBe(false);
     });
   }
   // Each stays a deny: a substitution, a dynamic or script target, a PR number, a merge, a second step. Green today and after.
@@ -154,8 +156,8 @@ describe('PB-7: the AST rule for a doc append (note 03 section 1 items 3 and 4);
     ['a dynamic target set by a command', `$p = (Get-Item x.md); Add-Content -LiteralPath $p -Value 'land-pr.ps1'`],
   ];
   for (const [why, cmd] of STAY) {
-    it(`PB-7 stays denied: ${why}`, () => {
-      expect(denied(pwsh(cmd))).toBe(true);
+    it(`PB-7 stays denied: ${why}`, async () => {
+      expect(await denied(pwsh(cmd))).toBe(true);
     });
   }
 });
@@ -168,17 +170,17 @@ const openTap = (branch: string) => {
 };
 
 describe('PB-2: a PowerShell doubled single quote in a head value is one quote', () => {
-  it("PB-2 (limit :780): head='it''s' is the branch it's, so a tap for the branch its does not open it", () => {
+  it("PB-2 (limit :780): head='it''s' is the branch it's, so a tap for the branch its does not open it", async () => {
     // Breaks when: the head reader drops the doubled quote ('it''s' read as its) and judges the branch its, which has a tap.
     openTap('its');
-    expect(patIn(pwsh(`${API_CREATE} -f head='it''s' -f base=main -f title=t`))).not.toBe('allow');
-    expect(patIn(pwsh(`${API_CREATE} -f head='its' -f base=main -f title=t`))).toBe('allow');
+    expect(await patIn(pwsh(`${API_CREATE} -f head='it''s' -f base=main -f title=t`))).not.toBe('allow');
+    expect(await patIn(pwsh(`${API_CREATE} -f head='its' -f base=main -f title=t`))).toBe('allow');
   });
 });
 
 /** The reason of a deny, or '' for any other verdict. */
-const reasonIn = (input: object, w: World = {}): string => {
-  const d = decide(input, deps(w));
+const reasonIn = async (input: object, w: World = {}): Promise<string> => {
+  const d = await decideParsed(input, deps(w));
   return d.action === 'deny' ? d.reason : '';
 };
 
@@ -200,33 +202,33 @@ describe('PB-6 (Ask B, Dave: R1): a script-runner text whose code names a full g
     `node <<'JS'\nconst s = 'git push fork feat/x'; console.log(s.length)\nJS`,
     `python - <<'PY'\nprint('git push fork feat/x')\nPY`,
   ];
-  it('PB-6a: code that reaches a child-process API is denied with the script-file way out', () => {
+  it('PB-6a: code that reaches a child-process API is denied with the script-file way out', async () => {
     // Breaks when: the guard reads the text with the hand reader, which treats the quoted code as one inert word.
     shipTapOn(TREE);
     for (const c of CHILD) {
-      expect(patIn(bash(c)), c).not.toBe('allow');
-      expect(reasonIn(bash(c)), c).toMatch(/script file/i);
+      expect(await patIn(bash(c)), c).not.toBe('allow');
+      expect(await reasonIn(bash(c)), c).toMatch(/script file/i);
     }
   });
-  it('PB-6b: code that only holds the guarded text as data is denied too (R1, about 16.6 a day on the 7-day corpus)', () => {
+  it('PB-6b: code that only holds the guarded text as data is denied too (R1, about 16.6 a day on the 7-day corpus)', async () => {
     // Breaks when: a rule reads the code for a child-process API. That reader is a new hand parser (V7.6), so the deny must not depend on the code.
     shipTapOn(TREE);
     for (const c of DATA) {
-      expect(patIn(bash(c)), c).not.toBe('allow');
-      expect(reasonIn(bash(c)), c).toMatch(/script file/i);
+      expect(await patIn(bash(c)), c).not.toBe('allow');
+      expect(await reasonIn(bash(c)), c).toMatch(/script file/i);
     }
   });
-  it('PB-6c: the same texts through PowerShell are denied', () => {
+  it('PB-6c: the same texts through PowerShell are denied', async () => {
     shipTapOn(TREE);
-    expect(reasonIn(pwsh(`node -e "require('child_process').execSync('git push fork re/x')"`))).toMatch(/script file/i);
-    expect(reasonIn(pwsh(`python -c "print('gh pr create --head feat/x')"`))).toMatch(/script file/i);
+    expect(await reasonIn(pwsh(`node -e "require('child_process').execSync('git push fork re/x')"`))).toMatch(/script file/i);
+    expect(await reasonIn(pwsh(`python -c "print('gh pr create --head feat/x')"`))).toMatch(/script file/i);
   });
-  it('PB-6d (cost): a script runner with no guarded call, a script file, and a data-only program keep their verdict', () => {
+  it('PB-6d (cost): a script runner with no guarded call, a script file, and a data-only program keep their verdict', async () => {
     // Breaks when: the rule keys on the runner word alone, so every node call is refused (7,000 Bash calls a week).
     shipTapOn(TREE);
     for (const c of [`node -e "console.log(1+1)"`, 'node scripts/tool.mjs', `python -c "print('hello')"`, `grep "git push fork feat/x" notes.md`,
       `echo "gh pr create --head feat/x"`, `git log --oneline -3`]) {
-      expect(reasonIn(bash(c)), c).not.toMatch(/script file/i);
+      expect(await reasonIn(bash(c)), c).not.toMatch(/script file/i);
     }
   });
 });
