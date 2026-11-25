@@ -24,16 +24,20 @@ function tree() {
 }
 const names = (set) => set.map((e) => e.name).sort();
 
-function fakeClient({ failUpload, failRow } = {}) {
+const PLAIN = 'plain-credential-98765'; // does not look like a Notion token: only an explicit secret hides it
+function oldRows() {
+  return Array.from({ length: 16 }, (_, i) => ({ id: `old${i}`, properties: { Date: { date: { start: `2026-10-${String(i + 1).padStart(2, '0')}` } }, Kind: { select: { name: 'nightly' } }, Status: { select: { name: 'ok' } }, Drill: { select: { name: 'pass' } }, Task: { rich_text: [{ plain_text: 'CCV3-State-Backup' }] } } }));
+}
+function fakeClient({ failUpload, failRow, listed = [] } = {}) {
   const c = { calls: [], rows: [], queryPath: '/q', parent: { database_id: 'd' } };
   let n = 0;
   c.call = async (method, p, opts) => {
     c.calls.push({ method, p, opts });
-    if (p === '/v1/file_uploads') { if (opts.json.filename === failUpload) throw new Error(`upload broke ${TOKEN}`); n += 1; return { id: `up${n}` }; }
-    if (p === '/q') return { results: [], has_more: false };
+    if (p === '/v1/file_uploads') { if (opts.json.filename === failUpload) throw new Error(`upload broke ${TOKEN} ${PLAIN}`); n += 1; return { id: `up${n}` }; }
+    if (p === '/q') return { results: listed, has_more: false };
     return {};
   };
-  c.createRow = async (props) => { if (failRow) throw new Error(`row broke ${TOKEN}`); c.rows.push(props); return { id: 'row1' }; };
+  c.createRow = async (props) => { if (failRow) throw new Error(`row broke ${TOKEN} ${PLAIN}`); c.rows.push(props); return { id: 'row1' }; };
   return c;
 }
 const liveState = { counts: { lane: 1 }, ids: ['a'] };
@@ -151,18 +155,18 @@ test('S8 when the row itself cannot be made, a FAILED file stays on disk, masked
   const t = tree();
   try {
     const client = fakeClient({ failRow: true });
-    const r = await runBackup({ ...base(t), notion: client }, deps());
+    const r = await runBackup({ ...base(t), notion: client, secrets: [TOKEN, PLAIN] }, deps());
     assert.equal(r.exitCode, 1);
     const failed = fs.readFileSync(path.join(t.out, 'FAILED-2026-11-25.json'), 'utf8');
     assert.match(failed, /row broke/);
-    assert.ok(!failed.includes(TOKEN));
+    assert.ok(!failed.includes(TOKEN) && !failed.includes(PLAIN), failed);
   } finally { t.clean(); }
 });
 
 test('S9 a good night: files in order, one ok row, a weekly kind on Sunday, retention named but not run', async () => {
   const t = tree();
   try {
-    const client = fakeClient();
+    const client = fakeClient({ listed: oldRows() });
     const r = await runBackup({ ...base(t, { date: '2026-11-29' }), notion: client }, deps());
     assert.equal(r.status, 'ok');
     assert.equal(r.exitCode, 0);
@@ -171,6 +175,10 @@ test('S9 a good night: files in order, one ok row, a weekly kind on Sunday, rete
     assert.equal(client.rows[0].Kind.select.name, 'weekly');
     assert.equal(client.rows[0].Drill.select.name, 'pass');
     assert.ok(!client.calls.some((c) => c.method === 'PATCH'), 'no trash without allowTrash');
+    const yes = fakeClient({ listed: oldRows() });
+    const trashing = await runBackup({ ...base(t, { date: '2026-11-29' }), notion: yes, allowTrash: true }, deps());
+    assert.equal(trashing.trashed.length, 2);
+    assert.equal(yes.calls.filter((c) => c.method === 'PATCH').length, 2);
     const nightly = await runBackup({ ...base(t), notion: fakeClient() }, deps());
     assert.equal(nightly.manifest.kind, 'nightly');
   } finally { t.clean(); }
@@ -180,9 +188,9 @@ test('S10 the token never reaches a log line or a file written to disk', async (
   const t = tree();
   try {
     const d = deps();
-    await runBackup({ ...base(t), notion: fakeClient({ failUpload: 'ccv3-state-2026-11-25.zip' }), secrets: [TOKEN] }, d);
+    await runBackup({ ...base(t), notion: fakeClient({ failUpload: 'ccv3-state-2026-11-25.zip' }), secrets: [TOKEN, PLAIN] }, d);
     assert.ok(!d.logs.join('\n').includes(TOKEN));
-    for (const f of fs.readdirSync(t.out)) if (!f.endsWith('.dump') && !f.endsWith('.zip')) assert.ok(!fs.readFileSync(path.join(t.out, f), 'utf8').includes(TOKEN), f);
+    for (const f of fs.readdirSync(t.out)) if (!f.endsWith('.dump') && !f.endsWith('.zip')) { const text = fs.readFileSync(path.join(t.out, f), 'utf8'); assert.ok(!text.includes(TOKEN) && !text.includes(PLAIN), f); }
   } finally { t.clean(); }
 });
 
