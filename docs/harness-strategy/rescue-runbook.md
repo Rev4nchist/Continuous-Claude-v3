@@ -110,3 +110,21 @@ You should see a last line `harness: N pass / N warn / N fail` and exit code 0. 
 - A broken status line script. The flag stops it from running. It does not repair it.
 - Anything outside the Claude Code process: scheduled `.bat` wrappers, git hooks, the shell. Hook-written state files that other tools expect may be missing.
 - Not tested: an interactive run. The check was headless only.
+
+## 7. Restore the lane database and the seat files from the nightly backup
+
+Use it when the Docker volume or the disk is lost, or a table was damaged.
+The task `CCv3-State-Backup` makes four files each night (design: `.claudedocs/e2e-ops-state-backup-nightly/00-design-note.md`).
+Proven: the nightly restore drill loads the newest dump into a scratch database and compares six table counts and every lane id (dry run 2026-11-24: `.claudedocs/e2e-ops-state-backup-nightly/13-dry-run/`).
+Not tested: a restore into a new, empty container, and a download of the files from Notion.
+
+1. Get the files. Take the newest row of the Notion database "CCv3 State Backups" with Status `ok` and Drill `pass`. Or take the folder `~/.claude/state/backups/<date>` (same disk, kept 14 days).
+   - `ccv3-lanedb-<date>.dump`: the database `continuous_claude` (pg_dump custom format).
+   - `ccv3-state-<date>.zip`: `decisions.json`, the decision logs and `ask-dialogs.jsonl`.
+   - `ccv3-coordination-<date>.zip`: the text files of `.claudedocs/coordination`.
+   - `ccv3-seat-<date>.zip`: the text files of `.claudedocs/re-execution`.
+2. Check each file. The row text "Sizes and sha256" lists the size and sha256 of each file. `Get-FileHash -Algorithm SHA256 <file>` must print the same value. A different value: do not restore from that file.
+3. Restore the database into a NEW database first. Copy the dump into the container with `docker cp`. Run `createdb -U claude continuous_claude_restore` in the container. Then run `pg_restore -U claude --no-owner -d continuous_claude_restore <dump in the container>`. Compare `select count(*) from agentic_os.lane` with the Drill detail of the row.
+4. Only then replace the live database. This step overwrites live data and needs Dave's yes. With a lost volume there is nothing to overwrite: start the stack, run `createdb -U claude continuous_claude`, and run the same `pg_restore --no-owner` into it. Stop every session first.
+5. Put the files back. Expand the state zip into `~/.claude/state/ccv3-mods`, and the two notes zips into the primary checkout. Expand into an empty folder first and compare. Never expand over newer files without Dave's yes.
+6. Check that a backup is good without restoring anything: `node scripts/scheduled/backup-state.mjs --dry-run --out <new empty folder> --repo <primary checkout>`. It writes the four files and runs the drill on a scratch database. Delete the dump afterwards: it holds raw lane notes.
