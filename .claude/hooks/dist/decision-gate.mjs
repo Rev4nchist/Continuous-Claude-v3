@@ -2838,11 +2838,10 @@ function docAppendByAst(parsed, tool, raw) {
   if (dialects.length !== 1 || !r || r.errors.length > 0 || r.calls.length === 0) return false;
   return !hasBareRedirect(parsed.text, r) && r.calls.every(docAppendCall);
 }
-var SCRIPT_RUNNERS = /* @__PURE__ */ new Set(["node", "nodejs", "python", "python3", "py", "deno", "bun", "ruby", "perl"]);
-var INLINE_CODE_FLAGS = /* @__PURE__ */ new Set(["-e", "-c", "-E", "-p", "--eval", "--print", "--command", "-"]);
+var SCRIPT_RUNNERS = /* @__PURE__ */ new Set(["node", "nodejs", "python", "python3", "py", "deno", "bun", "ruby", "perl", "tsx", "ts-node", "php"]);
 var GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 var SCRIPT_RUNNER_WHY = "this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.";
-var SCRIPT_RUNNER_WORD = /\b(?:node|nodejs|python3?|py|deno|bun|ruby|perl)\b/i;
+var SCRIPT_RUNNER_WORD = new RegExp(`\\b(?:${[...SCRIPT_RUNNERS].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "i");
 var blankQuotes = (t) => t.replace(/['"`,[\]()]/g, " ");
 function scriptRunnerDenies(parsed) {
   if (!parsed) return [];
@@ -2853,13 +2852,40 @@ function scriptRunnerDenies(parsed) {
     }
     for (const c of r ? r.calls : []) {
       if (!SCRIPT_RUNNERS.has(progName(c.words[0]?.lit) ?? "")) continue;
-      const args = c.words.slice(1);
-      if (!args.some((a) => INLINE_CODE_FLAGS.has(a.lit ?? "")) && c.stdin === null) continue;
-      const code = blankQuotes([...args.map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ""].join(" "));
+      const code = blankQuotes([...c.words.slice(1).map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ""].join(" "));
       if (GUARDED_TEXT.test(code)) return [deny("script-runner", SCRIPT_RUNNER_WHY)];
     }
   }
   return [];
+}
+function scriptRunnerLateDenies(text) {
+  if (text === void 0) return [];
+  const t = blankQuotes(text);
+  return SCRIPT_RUNNER_WORD.test(t) && GUARDED_TEXT.test(t) ? [deny("script-runner", SCRIPT_RUNNER_WHY)] : [];
+}
+var PARSE_ERROR_WHY = "this text does not parse as shell (an unclosed quote, brace or parenthesis, or a stray ;; or &&), and it holds a guarded call (a push, a create or a merge), so this gate cannot tell which call runs or where. Fix the syntax and run it again.";
+var SHELL_PROGRAMS = { bash: "bash", sh: "bash", dash: "bash", zsh: "bash", pwsh: "pwsh", powershell: "pwsh" };
+function parseErrorDenies(parsed) {
+  if (!parsed) return [];
+  const results = Object.values(parsed.byDialect).filter((r) => r !== void 0);
+  if (results.length === 0) return [];
+  const failed = results.every((r) => !r.ok || r.errors.length > 0);
+  if (!failed && parsed.innerBad !== true) return [];
+  return GUARDED_TEXT.test(blankQuotes(parsed.text)) ? [deny("parse-error", PARSE_ERROR_WHY)] : [];
+}
+async function innerTextBad(byDialect, opts) {
+  for (const r of Object.values(byDialect)) {
+    for (const c of r ? r.calls : []) {
+      const dialect = SHELL_PROGRAMS[progName(c.words[0]?.lit) ?? ""];
+      if (!dialect) continue;
+      for (const a of c.words.slice(1)) {
+        if (!a.lit || !GUARDED_TEXT.test(blankQuotes(a.lit))) continue;
+        const inner = await parseCalls(a.lit, dialect, opts);
+        if (!inner.ok || inner.errors.length > 0) return true;
+      }
+    }
+  }
+  return false;
 }
 var WRAPPERS = String.raw`(?:env(?:\s+(?:-[uCS]\s+\S+|-\S+|\w+=\S*))*|nice(?:\s+-\S+(?:\s+\d+)?)*|timeout(?:\s+-\S+(?:\s+[A-Z0-9]+)?)*\s+[\d.]+[smhd]?|xargs(?:\s+-\S+(?:\s+(?:\d+|\{\}))?)*|setsid(?:\s+-\S+)*|sudo(?:\s+-\S+(?:\s+\w+)?)*)\s+`;
 var PUSH_GIT = new RegExp(String.raw`(${CALL_START}(?:${WRAPPERS})*)(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+push)(?=\s|$)`, "g");
@@ -3874,6 +3900,47 @@ function consumerSubstitutes(parsed) {
   });
 }
 var MAX_REMOTE_LOOKUPS = 4;
+var MAX_LOOKUP_CALLS = 16;
+var REMOTE_LOOKUP_RESERVE_MS = 1500;
+var REMOTE_LOOKUP_MIN_MS = 200;
+var URL_SCHEME = /^([a-z][a-z0-9+.-]*):\/\//i;
+var SCP_LIKE = /^(?:[^\s/\\:@]+@)?[^\s/\\:]{2,}:/;
+var clearlyNetwork = (url) => {
+  const m = URL_SCHEME.exec(url);
+  return m ? m[1].toLowerCase() !== "file" : SCP_LIKE.test(url);
+};
+function answerIsLocal(stdout) {
+  const lines2 = stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+  return lines2.length === 0 || lines2.some((l) => LOCAL_REMOTE.test(l) || !clearlyNetwork(l));
+}
+function remoteNameIsLocal(deps, cwd, extraDirs, name, budget) {
+  for (const dir of [cwd, ...extraDirs.filter((d) => d !== cwd)]) {
+    const own = dir === cwd;
+    for (const args of [["remote", "get-url", name], ["remote", "get-url", "--push", "--all", name]]) {
+      if (budget.left <= 0) return true;
+      let opts;
+      if (deps.scanLeft) {
+        const left = deps.scanLeft();
+        const timeout = Math.min(GIT_TIMEOUT_MS, left - 1e3);
+        if (left < REMOTE_LOOKUP_RESERVE_MS || timeout < REMOTE_LOOKUP_MIN_MS) return true;
+        opts = { timeout };
+      }
+      budget.left -= 1;
+      try {
+        const g = deps.git(dir, args, opts);
+        if (g.status !== 0) {
+          if (args.length === 3) break;
+          return true;
+        }
+        if (answerIsLocal(g.stdout)) return true;
+      } catch (e) {
+        if (own || !(e instanceof MissingCwdError || errCode(e) === "ENOENT")) return true;
+        break;
+      }
+    }
+  }
+  return false;
+}
 function pushPrefix(raw, shell, remoteIsLocal) {
   const view = fdBlank(joinContinuations(raw, shell));
   const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
@@ -4515,7 +4582,8 @@ function judgeCommand(input, deps, notes, denies = []) {
   if (storeWriteCall(input, deps)) denies.push(deny("store-write", STORE_WHY));
   if (paidTripwire(input)) denies.push(deny("paid-coderabbit", PAID_WHY));
   if (capOverrideDeny(input, deps)) denies.push(deny("cap-override", CAP_WHY));
-  for (const d of scriptRunnerDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));
@@ -4529,14 +4597,9 @@ function judgeCommand(input, deps, notes, denies = []) {
     const prefix = pushes.length > 0 ? pushPrefix(cmd.text, shell) : null;
     const chained = pushes.length > 0 && (commitPrecedesPush(cmd.text, shell) || prefix !== null && commitPrecedesPush(prefix.prefix, shell));
     const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
-    const remoteIsLocal = (name) => {
-      try {
-        const g = deps.git(cwd, ["remote", "get-url", name]);
-        return g.status === 0 && LOCAL_REMOTE.test(g.stdout.trim());
-      } catch {
-        return true;
-      }
-    };
+    let lookupDirs;
+    const lookupBudget = { left: MAX_LOOKUP_CALLS };
+    const remoteIsLocal = (name) => remoteNameIsLocal(deps, cwd, lookupDirs ??= rawDirs(cmd.text, cmd.tool, cwd, shell, deps.home), name, lookupBudget);
     const modelled = pushes.length === 0 || stateModelled(cmd.text, shell, { parsed: deps.parsed, remoteIsLocal });
     const moved = movesRepo(cmd.text);
     const unregistered = (moved || pushes.some((s) => s.push.moved)) && pushFoldersUnregistered(input, deps);
@@ -4942,14 +5005,17 @@ function primaryRootOf(git, dir) {
 }
 var PARSE_BUDGET_MS = 7e3;
 async function withParsed(raw, deps) {
+  let lateText;
   try {
     const input = JSON.parse(raw.trim() || "{}");
     if (input === null || typeof input !== "object" || Array.isArray(input)) return deps;
     const cmd = readShellCommand(input);
     if (cmd.kind !== "command" || cmd.text === "" || !defaultEntry(cmd.text)) return deps;
+    lateText = cmd.text;
     const tool = cmd.tool;
     const dialects = tool === "Bash" ? ["bash"] : tool === "PowerShell" ? ["pwsh"] : ["bash", "pwsh"];
     const byDialect = {};
+    let innerBad = false;
     let timer;
     const late = new Promise((res) => {
       timer = setTimeout(() => res("late"), deps.parseBudgetMs ?? PARSE_BUDGET_MS);
@@ -4957,21 +5023,22 @@ async function withParsed(raw, deps) {
     });
     const parse = (async () => {
       for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
+      innerBad = await innerTextBad(byDialect, deps.parseOpts);
       return "done";
     })();
     parse.catch(() => void 0);
     try {
-      if (await Promise.race([parse, late]) === "late") return deps;
+      if (await Promise.race([parse, late]) === "late") return { ...deps, parseLate: cmd.text };
     } finally {
       clearTimeout(timer);
     }
-    return { ...deps, parsed: { text: cmd.text, byDialect } };
+    return { ...deps, parsed: { text: cmd.text, byDialect, ...innerBad ? { innerBad } : {} } };
   } catch (err) {
     try {
       logGuardError(HOOK, err);
     } catch {
     }
-    return deps;
+    return lateText === void 0 ? deps : { ...deps, parseLate: lateText };
   }
 }
 async function main2() {
@@ -4992,6 +5059,7 @@ export {
   COMMAND_TOOLS2 as COMMAND_TOOLS,
   GitDeadlineError,
   MissingCwdError,
+  SCRIPT_RUNNERS,
   WRITE_TOOLS,
   astCreates,
   astMerges,
@@ -5004,9 +5072,11 @@ export {
   isPushOnlyLabel,
   isShipLabel,
   makeGit,
+  parseErrorDenies,
   pushShapesOf,
   realDeps,
   scriptRunnerDenies,
+  scriptRunnerLateDenies,
   withParsed
 };
 /*! Bundled license information:

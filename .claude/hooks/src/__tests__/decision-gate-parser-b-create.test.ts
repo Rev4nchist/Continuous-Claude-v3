@@ -130,11 +130,11 @@ describe('port step 3: create head and base from the parser words', () => {
     expect(r.oldP).toBe('open-pr');
     expect(r.newP).toBe('open-pr');
   });
-  it('C8: a text the parser cannot read keeps the old verdict', async () => {
+  it('C8: a text the parser cannot read is a deny on both paths; the old path names head-unresolved, the new path parse-error (C1, F1)', async () => {
     openTap('feat/x');
     const r = await both(`${C} --head feat/x --title "open`);
-    expect(r.newP).toBe(r.oldP);
-    expect(r.newP).toBe('head-unresolved');
+    expect(r.oldP).toBe('head-unresolved');
+    expect(r.newP).toBe('parse-error');
   });
   it("C8b (PB-2 shape, with the parse passed in): a PowerShell doubled single quote head='it''s' is the branch it's, not its", async () => {
     openTap('its');

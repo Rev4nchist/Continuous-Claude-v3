@@ -292,7 +292,12 @@ export interface Deps {
    * decide and handle are sync, so the parse comes in here. `byDialect` has one entry for Bash or PowerShell, both for Desktop Commander (the
    * shell is not known). Absent (tests, a text with no trigger word, a parse that threw): the hand reader decides alone.
    */
-  parsed?: { text: string; byDialect: { bash?: ParseResult; pwsh?: ParseResult } };
+  parsed?: { text: string; byDialect: { bash?: ParseResult; pwsh?: ParseResult }; innerBad?: boolean };
+  /**
+   * PR C1 (B2): the raw text when the parse ended late or threw, so no `parsed` exists. The raw-text script-runner deny reads it (scriptRunnerLateDenies);
+   * everything else is decided by the hand reader, as on main.
+   */
+  parseLate?: string;
   /** The parser seams of withParsed (a provider for the bash parse or the pwsh walker). Absent: the real parsers. */
   parseOpts?: ParseOpts;
   /** The time budget of the whole parse in withParsed, in ms (CodeRabbit CLI run 1 finding 2). Absent: 7000. Past it there is no `parsed` and the hand reader decides. */
@@ -1197,18 +1202,20 @@ export function docAppendByAst(parsed: Deps['parsed'], tool: string | undefined,
 
 // ---------- PR B port step 4: Ask B, a script runner whose code names a guarded call (Dave R1, note 63 section 5) ----------
 
-const SCRIPT_RUNNERS = new Set(['node', 'nodejs', 'python', 'python3', 'py', 'deno', 'bun', 'ruby', 'perl']);
-/** The flags that hand inline code to a runner (`-` reads it from stdin). A runner with a script file and none of these runs a file. */
-const INLINE_CODE_FLAGS = new Set(['-e', '-c', '-E', '-p', '--eval', '--print', '--command', '-']);
+/**
+ * The programs that run code from text. One list: scriptRunnerDenies, the raw-text reads and the corpus count read it (PR C1, seat ruling 12:5x CST 11-25).
+ * No list of option spellings: a call of one of these whose argument text (or stdin) names a guarded call is denied, whatever the option is (V7.6).
+ */
+export const SCRIPT_RUNNERS = new Set(['node', 'nodejs', 'python', 'python3', 'py', 'deno', 'bun', 'ruby', 'perl', 'tsx', 'ts-node', 'php']);
 /** A full guarded call, after quotes, commas and brackets are turned into blanks (so spawnSync('gh', ['pr', 'create']) reads as gh pr create). */
 const GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 const SCRIPT_RUNNER_WHY = 'this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.';
 
-const SCRIPT_RUNNER_WORD = /\b(?:node|nodejs|python3?|py|deno|bun|ruby|perl)\b/i;
+const SCRIPT_RUNNER_WORD = new RegExp(`\\b(?:${[...SCRIPT_RUNNERS].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i');
 const blankQuotes = (t: string): string => t.replace(/['"`,[\]()]/g, ' ');
 
 /**
- * Every inline-code call of a script runner whose code text holds a guarded call. The deny never depends on what the code does.
+ * Every call of a script runner whose argument text or stdin holds a guarded call. The deny never depends on what the code does, or on the option that hands it over.
  * A dialect that did not parse has no calls to read (CodeRabbit CLI run 1 finding 1): the raw text then decides, a runner word and a guarded call in it give the same deny.
  */
 export function scriptRunnerDenies(parsed: Deps['parsed']): Deny[] {
@@ -1220,13 +1227,58 @@ export function scriptRunnerDenies(parsed: Deps['parsed']): Deny[] {
     }
     for (const c of r ? r.calls : []) {
       if (!SCRIPT_RUNNERS.has(progName(c.words[0]?.lit) ?? '')) continue;
-      const args = c.words.slice(1);
-      if (!args.some((a) => INLINE_CODE_FLAGS.has(a.lit ?? '')) && c.stdin === null) continue;
-      const code = blankQuotes([...args.map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ''].join(' '));
+      const code = blankQuotes([...c.words.slice(1).map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ''].join(' '));
       if (GUARDED_TEXT.test(code)) return [deny('script-runner', SCRIPT_RUNNER_WHY)];
     }
   }
   return [];
+}
+
+/** PR C1 (B2): the parse ended late or threw, so there are no calls. The raw text decides, as in a dialect that did not parse. */
+export function scriptRunnerLateDenies(text: string | undefined): Deny[] {
+  if (text === undefined) return [];
+  const t = blankQuotes(text);
+  return SCRIPT_RUNNER_WORD.test(t) && GUARDED_TEXT.test(t) ? [deny('script-runner', SCRIPT_RUNNER_WHY)] : [];
+}
+
+// ---------- PR C1 (F1): a text that does not parse and holds a guarded call ----------
+
+const PARSE_ERROR_WHY = 'this text does not parse as shell (an unclosed quote, brace or parenthesis, or a stray ;; or &&), and it holds a guarded call (a push, a create or a merge), so this gate cannot tell which call runs or where. Fix the syntax and run it again.';
+/**
+ * The shell programs whose string argument is a second shell text, and the dialect that text is read in. Every string argument that names a guarded call is
+ * parsed, not only the -c or -Command payload: a script-file argument (bash scripts/x.sh 'git push ... )') that does not parse is parse-error too. This is the
+ * broad choice (seat ruling, V7.6: fail closed on parse doubt; the 7-day corpus has no such text). Row F1-7.
+ */
+const SHELL_PROGRAMS: Record<string, 'bash' | 'pwsh'> = { bash: 'bash', sh: 'bash', dash: 'bash', zsh: 'bash', pwsh: 'pwsh', powershell: 'pwsh' };
+
+/**
+ * F1: the text parses in no dialect it was read in (a Bash or PowerShell tool has one dialect; Desktop Commander has two, so one valid dialect is enough),
+ * or a shell program inside it (bash -c '...', pwsh -Command "...") holds a text that does not parse, and the text names a guarded call.
+ * Only adds a deny: the hand reader still decides everything else.
+ */
+export function parseErrorDenies(parsed: Deps['parsed']): Deny[] {
+  if (!parsed) return [];
+  const results = Object.values(parsed.byDialect).filter((r): r is ParseResult => r !== undefined);
+  if (results.length === 0) return [];
+  const failed = results.every((r) => !r.ok || r.errors.length > 0);
+  if (!failed && parsed.innerBad !== true) return [];
+  return GUARDED_TEXT.test(blankQuotes(parsed.text)) ? [deny('parse-error', PARSE_ERROR_WHY)] : [];
+}
+
+/** True when a shell program of the text has a string argument that names a guarded call and does not parse as that shell. Part of the parse budget. */
+async function innerTextBad(byDialect: NonNullable<Deps['parsed']>['byDialect'], opts: ParseOpts | undefined): Promise<boolean> {
+  for (const r of Object.values(byDialect)) {
+    for (const c of r ? r.calls : []) {
+      const dialect = SHELL_PROGRAMS[progName(c.words[0]?.lit) ?? ''];
+      if (!dialect) continue;
+      for (const a of c.words.slice(1)) {
+        if (!a.lit || !GUARDED_TEXT.test(blankQuotes(a.lit))) continue;
+        const inner = await parseCalls(a.lit, dialect, opts);
+        if (!inner.ok || inner.errors.length > 0) return true;
+      }
+    }
+  }
+  return false;
 }
 
 // ---------- the push shape ----------
@@ -2701,6 +2753,56 @@ function consumerSubstitutes(parsed: Deps['parsed']): boolean {
 }
 /** PB-5: how many different remote names of earlier pushes get one `git remote get-url` each; more than this is denied (the way out: name the URL or push alone). */
 const MAX_REMOTE_LOOKUPS = 4;
+/** C1: the git calls of all the remote lookups of one text (names times folders times two reads); past this the remote counts as local (deny). */
+const MAX_LOOKUP_CALLS = 16;
+/** C1 (A2): below this many ms of hook time left no lookup starts and the remote counts as local (deny): a hook killed at 10 s writes no deny. */
+const REMOTE_LOOKUP_RESERVE_MS = 1500;
+/** A read with less than this timeout is not started (the clock deny stands). */
+const REMOTE_LOOKUP_MIN_MS = 200;
+/**
+ * CLI run 1 finding 3 (seat ruling): an answer of `git remote get-url` is NETWORK only when it is clearly network: a scheme:// other than file, or an scp-like
+ * host:path (a host of two characters or more, so a drive letter is no host, and no slash before the first colon). Every other answer is local: file://, a relative
+ * path, a drive path, an empty or odd answer. LOCAL_REMOTE is not changed (it separates remote names from paths at the push words). Union: the old test still counts.
+ */
+const URL_SCHEME = /^([a-z][a-z0-9+.-]*):\/\//i;
+const SCP_LIKE = /^(?:[^\s/\\:@]+@)?[^\s/\\:]{2,}:/;
+const clearlyNetwork = (url: string): boolean => { const m = URL_SCHEME.exec(url); return m ? m[1].toLowerCase() !== 'file' : SCP_LIKE.test(url); };
+function answerIsLocal(stdout: string): boolean {
+  const lines = stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+  return lines.length === 0 || lines.some((l) => LOCAL_REMOTE.test(l) || !clearlyNetwork(l));
+}
+/**
+ * PR C1 (A1, A3, A2): is a remote NAME of an earlier push a local path? A name is local when ANY of these says so: its fetch URL (git remote get-url),
+ * or one of its push URLs (git remote get-url --push --all), in the payload folder OR in any folder the text moves to (cd, -C: rawDirs, more folders, never fewer).
+ * A git read in the payload folder that throws or times out counts as local (deny, as before). A fetch read that ends with an error means this folder has no
+ * such remote; a push read that ends with an error after a good fetch read counts as local (the two answers disagree). The clock, and a cap on the number of
+ * reads, count as local too. A folder that only the union adds (rawDirs: a cd or -C target, with spelling variants that may not exist) can only add a deny:
+ * a read there that fails because the folder does not exist (MissingCwdError of makeGit, or ENOENT) gives no remote and is skipped; any other throw (ETIMEDOUT, ENOBUFS) is unknown and
+ * counts as local (seat read of f8842ee8, finding 1). The answer of the payload folder, which main gives, is never lost.
+ */
+function remoteNameIsLocal(deps: Deps, cwd: string, extraDirs: string[], name: string, budget: { left: number }): boolean {
+  for (const dir of [cwd, ...extraDirs.filter((d) => d !== cwd)]) {
+    const own = dir === cwd;
+    for (const args of [['remote', 'get-url', name], ['remote', 'get-url', '--push', '--all', name]]) {
+      if (budget.left <= 0) return true;
+      // CLI run 1 finding 2: each read gets a timeout bounded by the hook time left (never 0: spawnSync reads 0 as no timeout); too little time left is the clock deny.
+      let opts: GitReadOpts | undefined;
+      if (deps.scanLeft) {
+        const left = deps.scanLeft();
+        const timeout = Math.min(GIT_TIMEOUT_MS, left - 1000);
+        if (left < REMOTE_LOOKUP_RESERVE_MS || timeout < REMOTE_LOOKUP_MIN_MS) return true;
+        opts = { timeout };
+      }
+      budget.left -= 1;
+      try {
+        const g = deps.git(dir, args, opts);
+        if (g.status !== 0) { if (args.length === 3) break; return true; }
+        if (answerIsLocal(g.stdout)) return true;
+      } catch (e) { if (own || !(e instanceof MissingCwdError || errCode(e) === 'ENOENT')) return true; break; } // only a folder that does not exist has no remote; a timeout or a full buffer is unknown
+    }
+  }
+  return false;
+}
 /**
  * The text up to the end of the LAST step that names a push (null when no step names one), whether every step before it is a cd, popd,
  * a read-only git call or a push joined by ; && or || (`plain`), and whether a push before it goes to a local path (`localPush`). What
@@ -3669,7 +3771,9 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   if (capOverrideDeny(input, deps)) denies.push(deny('cap-override', CAP_WHY));
   // Port step 4 (Ask B, Dave R1): inline code of a script runner that names a guarded call. First, so its reason (the script-file way out) is the one shown.
   // It needs the parse; with no parse there is no rule. It is not gated by a shape: it follows decisions.enforce, as the tripwires above.
-  for (const d of scriptRunnerDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  // PR C1 (F1): a text that does not parse, or a shell string inside it that does not parse, and names a guarded call. Only adds a deny.
+  for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);
@@ -3685,7 +3789,10 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
     const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
     // Port step 4 (PB-5): the url git holds for a remote name of an earlier push. git ran and has no such remote: no local path (that push fails by itself).
     // git did not run (a throw, a timeout): unknown, so local (deny, note 63 section 3: a failed get-url is F2).
-    const remoteIsLocal = (name: string): boolean => { try { const g = deps.git(cwd, ['remote', 'get-url', name]); return g.status === 0 && LOCAL_REMOTE.test(g.stdout.trim()); } catch { return true; } };
+    // PR C1 (A1, A3, A2): a union with the old answer, so it only adds denies. See remoteNameIsLocal.
+    let lookupDirs: string[] | undefined;
+    const lookupBudget = { left: MAX_LOOKUP_CALLS };
+    const remoteIsLocal = (name: string): boolean => remoteNameIsLocal(deps, cwd, (lookupDirs ??= rawDirs(cmd.text, cmd.tool, cwd, shell, deps.home)), name, lookupBudget);
     const modelled = pushes.length === 0 || stateModelled(cmd.text, shell, { parsed: deps.parsed, remoteIsLocal });
     const moved = movesRepo(cmd.text);
     // Round 3 C3 (item 10): files only, no git; false when a push folder is CCv3, live, unplaceable or holds a variable.
@@ -4232,26 +4339,33 @@ function primaryRootOf(git: Deps['git'], dir: string): string {
  */
 const PARSE_BUDGET_MS = 7000;
 export async function withParsed(raw: string, deps: Deps): Promise<Deps> {
+  let lateText: string | undefined; // C1 (B2): the raw text of a call whose parse ended late or threw
   try {
     const input: unknown = JSON.parse(raw.trim() || '{}');
     if (input === null || typeof input !== 'object' || Array.isArray(input)) return deps;
     const cmd = readShellCommand(input as HookInput);
     if (cmd.kind !== 'command' || cmd.text === '' || !defaultEntry(cmd.text)) return deps;
+    lateText = cmd.text;
     const tool = cmd.tool;
     const dialects: ('bash' | 'pwsh')[] = tool === 'Bash' ? ['bash'] : tool === 'PowerShell' ? ['pwsh'] : ['bash', 'pwsh'];
     const byDialect: { bash?: ParseResult; pwsh?: ParseResult } = {};
+    let innerBad = false;
     // One timer for the whole parse. A parse that passes it ends the wait: the hand reader decides, as on main, and the hook still writes a decision.
     let timer: NodeJS.Timeout | undefined;
     const late = new Promise<'late'>((res) => { timer = setTimeout(() => res('late'), deps.parseBudgetMs ?? PARSE_BUDGET_MS); timer.unref?.(); });
-    const parse = (async (): Promise<'done'> => { for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts); return 'done'; })();
+    const parse = (async (): Promise<'done'> => {
+      for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
+      innerBad = await innerTextBad(byDialect, deps.parseOpts);
+      return 'done';
+    })();
     parse.catch(() => undefined);
     try {
-      if ((await Promise.race([parse, late])) === 'late') return deps;
+      if ((await Promise.race([parse, late])) === 'late') return { ...deps, parseLate: cmd.text };
     } finally { clearTimeout(timer); }
-    return { ...deps, parsed: { text: cmd.text, byDialect } };
+    return { ...deps, parsed: { text: cmd.text, byDialect, ...(innerBad ? { innerBad } : {}) } };
   } catch (err) {
     try { logGuardError(HOOK, err); } catch { /* the log never blocks */ }
-    return deps;
+    return lateText === undefined ? deps : { ...deps, parseLate: lateText };
   }
 }
 

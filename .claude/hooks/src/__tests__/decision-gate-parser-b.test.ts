@@ -53,7 +53,7 @@ function deps(w: World = {}): Deps {
       if (w.scan && args[0] === 'for-each-ref') return { status: 0, stdout: '' };
       if (w.scan && a.startsWith('ls-files')) return { status: 0, stdout: '' };
       if (a === 'rev-parse --abbrev-ref @{push}') return { status: 128, stdout: '' };
-      const url = /^remote get-url (\S+)$/.exec(a);
+      const url = /^remote get-url (?:--push --all )?(\S+)$/.exec(a); // C1: the fetch URL and the push URLs read the same table
       if (url) { const u = w.remoteUrls?.[url[1]]; return u ? { status: 0, stdout: `${u}\n` } : { status: 2, stdout: '' }; }
       if (/^rev-parse (.+)\^\{commit\}$/.test(a)) return { status: 0, stdout: `${HEAD}\n` };
       if (/^rev-parse (.+)\^\{tree\}$/.test(a)) return { status: 0, stdout: `${TREE}\n` };
@@ -173,7 +173,7 @@ describe('PB-2: a PowerShell doubled single quote in a head value is one quote',
   it("PB-2 (limit :780): head='it''s' is the branch it's, so a tap for the branch its does not open it", async () => {
     // Breaks when: the head reader drops the doubled quote ('it''s' read as its) and judges the branch its, which has a tap.
     openTap('its');
-    expect(await patIn(pwsh(`${API_CREATE} -f head='it''s' -f base=main -f title=t`))).not.toBe('allow');
+    expect(await patIn(pwsh(`${API_CREATE} -f head='it''s' -f base=main -f title=t`))).toBe('open-pr'); // a deny, not a warn (CLI run 3, minor; C1)
     expect(await patIn(pwsh(`${API_CREATE} -f head='its' -f base=main -f title=t`))).toBe('allow');
   });
 });
