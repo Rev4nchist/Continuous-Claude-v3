@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync as fsRename, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -351,4 +351,22 @@ test('G23 a rename that fails after the first one puts the first file back (no m
   assert.equal(readFileSync(a, 'utf8'), 'old a', 'the first file is back as it was');
   assert.equal(readFileSync(b, 'utf8'), 'old b', 'the second file never changed');
   assert.deepEqual(readdirSync(dir).sort(), ['a.json', 'b.html'], 'no temp or backup file is left');
+});
+
+test('G24 no page of the system-visualization folder outside archive/ holds Braintrust text; the retired pages are moved, and every hub link resolves', () => {
+  // SYSMAP_VIZ_REPO lets a drill run this row against an older checkout (the RED proof).
+  const repo = process.env.SYSMAP_VIZ_REPO ?? REPO;
+  const dir = join(repo, ...VIZ);
+  const files = readdirSync(dir, { recursive: true, withFileTypes: true }).filter((d) => d.isFile())
+    .map((d) => join(d.parentPath ?? d.path, d.name)).filter((f) => !/^archive[\\/]/.test(relative(dir, f)));
+  assert.ok(files.length >= 7, `the folder has its pages (${files.length} files)`);
+  const bad = files.filter((f) => /braintrust/i.test(readFileSync(f, 'utf8'))).map((f) => relative(dir, f));
+  assert.deepEqual(bad, [], `Braintrust text left in: ${bad.join(', ')}`);
+  assert.ok(existsSync(join(dir, 'archive', 'braintrust-scoring-visualization.html')), 'the Braintrust page is archived, not deleted');
+  assert.ok(existsSync(join(dir, 'archive', 'state-of-rework', 'state-of-rework.html')), 'the state-of-rework tree is archived, not deleted');
+  const hub = readFileSync(join(dir, 'hub.html'), 'utf8');
+  const links = [...hub.matchAll(/href="(\.{1,2}\/[^"#?]+)"/g)].map((m) => m[1]);
+  assert.ok(links.length >= 5, 'the hub links its views');
+  const dead = links.filter((l) => !existsSync(resolve(dir, l)));
+  assert.deepEqual(dead, [], `hub links that do not resolve: ${dead.join(', ')}`);
 });
