@@ -490,7 +490,7 @@ var init_trace_boot = __esm({
 // src/decision-gate.ts
 init_trace_boot();
 import { spawnSync } from "child_process";
-import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync6, statSync as statSync2 } from "fs";
 import { homedir as homedir5 } from "os";
 import { isAbsolute as isAbsolute2, join as join7, posix as posix2, resolve as resolve3 } from "path";
 
@@ -2843,7 +2843,7 @@ var GUARDED_TEXT = /\bgit\s+(?:[^;&|\n]*\s)?push\b|\bgh\s+pr\s+(?:create|new|mer
 var SCRIPT_RUNNER_WHY = "this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.";
 var SCRIPT_RUNNER_WORD = new RegExp(`\\b(?:${[...SCRIPT_RUNNERS].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "i");
 var blankQuotes = (t) => t.replace(/['"`,[\]()]/g, " ");
-function scriptRunnerDenies(parsed) {
+function scriptRunnerDenies(parsed, files) {
   if (!parsed) return [];
   for (const r of Object.values(parsed.byDialect)) {
     if (r && (!r.ok || r.errors.length > 0)) {
@@ -2853,10 +2853,24 @@ function scriptRunnerDenies(parsed) {
     for (const c of r ? r.calls : []) {
       if (!SCRIPT_RUNNERS.has(progName(c.words[0]?.lit) ?? "")) continue;
       const code = blankQuotes([...c.words.slice(1).map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ""].join(" "));
-      if (GUARDED_TEXT.test(code)) return [deny("script-runner", SCRIPT_RUNNER_WHY)];
+      if (GUARDED_TEXT.test(code) && !isScriptFileCall(c.words.slice(1), files)) return [deny("script-runner", SCRIPT_RUNNER_WHY)];
     }
   }
   return [];
+}
+var ABS_PATH = /^(?:[A-Za-z]:)?[\\/]/;
+function isScriptFileCall(args, files) {
+  if (!files) return false;
+  const first = args.find((a) => typeof a.lit !== "string" || !a.lit.startsWith("-"));
+  const lit = first?.lit;
+  if (typeof lit !== "string" || lit === "" || /[$`*?%]/.test(lit)) return false;
+  try {
+    const dirs = files.dirs().filter((d) => files.kind(d) === "dir");
+    if (dirs.length === 0) return false;
+    return dirs.every((d) => files.kind(ABS_PATH.test(lit) ? lit : `${d.replace(/[\\/]+$/, "")}/${lit}`) === "file");
+  } catch {
+    return false;
+  }
 }
 function scriptRunnerLateDenies(text) {
   if (text === void 0) return [];
@@ -4582,7 +4596,8 @@ function judgeCommand(input, deps, notes, denies = []) {
   if (storeWriteCall(input, deps)) denies.push(deny("store-write", STORE_WHY));
   if (paidTripwire(input)) denies.push(deny("paid-coderabbit", PAID_WHY));
   if (capOverrideDeny(input, deps)) denies.push(deny("cap-override", CAP_WHY));
-  for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  const scriptFiles = deps.pathKind ? { dirs: () => rawDirs(cmd.text, cmd.tool, cwd, shellOf(input), deps.home), kind: deps.pathKind } : void 0;
+  for (const d of [...scriptRunnerDenies(deps.parsed, scriptFiles), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   const shell = shellOf(input);
@@ -4986,6 +5001,15 @@ function realDeps(opts = {}) {
     readFile: (p) => {
       try {
         return existsSync4(p) ? readFileSync6(p, "utf8") : null;
+      } catch {
+        return null;
+      }
+    },
+    // Item 11b: a Git Bash path (/c/Users/...) is a drive path on Windows. Any stat failure is "nothing": the script-runner deny then stands.
+    pathKind: (p) => {
+      try {
+        const s = statSync2(process.platform === "win32" ? p.replace(/^\/([A-Za-z])(?=\/)/, "$1:") : p);
+        return s.isFile() ? "file" : s.isDirectory() ? "dir" : null;
       } catch {
         return null;
       }

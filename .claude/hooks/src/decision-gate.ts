@@ -224,7 +224,7 @@
  * Guard: hook-matcher-runtime-consistency.test.ts.
  */
 import { spawnSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, join, posix, resolve } from 'path';
 import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
@@ -298,6 +298,8 @@ export interface Deps {
    * everything else is decided by the hand reader, as on main.
    */
   parseLate?: string;
+  /** Item 11b: what a path is (a file, a folder, or nothing). The script-runner deny skips a call of a script file that exists. Absent (old tests): no skip. */
+  pathKind?: (path: string) => 'file' | 'dir' | null;
   /** The parser seams of withParsed (a provider for the bash parse or the pwsh walker). Absent: the real parsers. */
   parseOpts?: ParseOpts;
   /** The time budget of the whole parse in withParsed, in ms (CodeRabbit CLI run 1 finding 2). Absent: 7000. Past it there is no `parsed` and the hand reader decides. */
@@ -1223,7 +1225,7 @@ const blankQuotes = (t: string): string => t.replace(/['"`,[\]()]/g, ' ');
  * Every call of a script runner whose argument text or stdin holds a guarded call. The deny never depends on what the code does, or on the option that hands it over.
  * A dialect that did not parse has no calls to read (CodeRabbit CLI run 1 finding 1): the raw text then decides, a runner word and a guarded call in it give the same deny.
  */
-export function scriptRunnerDenies(parsed: Deps['parsed']): Deny[] {
+export function scriptRunnerDenies(parsed: Deps['parsed'], files?: ScriptFiles): Deny[] {
   if (!parsed) return [];
   for (const r of Object.values(parsed.byDialect)) {
     if (r && (!r.ok || r.errors.length > 0)) {
@@ -1233,10 +1235,33 @@ export function scriptRunnerDenies(parsed: Deps['parsed']): Deny[] {
     for (const c of r ? r.calls : []) {
       if (!SCRIPT_RUNNERS.has(progName(c.words[0]?.lit) ?? '')) continue;
       const code = blankQuotes([...c.words.slice(1).map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ''].join(' '));
-      if (GUARDED_TEXT.test(code)) return [deny('script-runner', SCRIPT_RUNNER_WHY)];
+      if (GUARDED_TEXT.test(code) && !isScriptFileCall(c.words.slice(1), files)) return [deny('script-runner', SCRIPT_RUNNER_WHY)];
     }
   }
   return [];
+}
+
+/**
+ * Item 11b (seat ruling 15:2x CST 11-25): the arguments of a script FILE are data (the gate cannot read what the file does either), so a call whose first word after
+ * the runner and its options is a path to a file that exists is not a script-runner deny. Everything else stays denied (fail closed): inline code in any
+ * spelling (-e, -p, -c, -r, --eval: the first word after the options is then the code, not a file), a missing file, a variable or $(...) in the path, `-` (stdin),
+ * a folder or lookup that fails. No flag list: options are the words that start with a dash. With a cd or -C in the text, the file must exist in every real folder
+ * the text can run in (rawDirs); a folder that does not exist is no folder.
+ */
+export interface ScriptFiles { dirs: () => string[]; kind: (path: string) => 'file' | 'dir' | null }
+const ABS_PATH = /^(?:[A-Za-z]:)?[\\/]/;
+function isScriptFileCall(args: { lit?: string | null }[], files: ScriptFiles | undefined): boolean {
+  if (!files) return false;
+  const first = args.find((a) => typeof a.lit !== 'string' || !a.lit.startsWith('-'));
+  const lit = first?.lit;
+  if (typeof lit !== 'string' || lit === '' || /[$`*?%]/.test(lit)) return false;
+  try {
+    const dirs = files.dirs().filter((d) => files.kind(d) === 'dir');
+    if (dirs.length === 0) return false;
+    return dirs.every((d) => files.kind(ABS_PATH.test(lit) ? lit : `${d.replace(/[\\/]+$/, '')}/${lit}`) === 'file');
+  } catch {
+    return false;
+  }
 }
 
 /** PR C1 (B2): the parse ended late or threw, so there are no calls. The raw text decides, as in a dialect that did not parse. */
@@ -3776,7 +3801,10 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   if (capOverrideDeny(input, deps)) denies.push(deny('cap-override', CAP_WHY));
   // Port step 4 (Ask B, Dave R1): inline code of a script runner that names a guarded call. First, so its reason (the script-file way out) is the one shown.
   // It needs the parse; with no parse there is no rule. It is not gated by a shape: it follows decisions.enforce, as the tripwires above.
-  for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  const scriptFiles: ScriptFiles | undefined = deps.pathKind
+    ? { dirs: () => rawDirs(cmd.text, cmd.tool, cwd, shellOf(input), deps.home), kind: deps.pathKind }
+    : undefined;
+  for (const d of [...scriptRunnerDenies(deps.parsed, scriptFiles), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   // PR C1 (F1): a text that does not parse, or a shell string inside it that does not parse, and names a guarded call. Only adds a deny.
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
@@ -4320,6 +4348,13 @@ export function realDeps(opts: { start?: number } & Pick<GitOptions, 'now' | 'sp
     scanLeft: () => t0 + HOOK_BUDGET_MS - clock(),
     appGit: makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS }),
     readFile: (p) => { try { return existsSync(p) ? readFileSync(p, 'utf8') : null; } catch { return null; } },
+    // Item 11b: a Git Bash path (/c/Users/...) is a drive path on Windows. Any stat failure is "nothing": the script-runner deny then stands.
+    pathKind: (p) => {
+      try {
+        const s = statSync(process.platform === 'win32' ? p.replace(/^\/([A-Za-z])(?=\/)/, '$1:') : p);
+        return s.isFile() ? 'file' : s.isDirectory() ? 'dir' : null;
+      } catch { return null; }
+    },
     env: process.env,
     home: homedir(),
     tapScope: { registry: () => (registry ??= readRegistry({ env: process.env })) },
