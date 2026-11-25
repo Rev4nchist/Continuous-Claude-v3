@@ -253,8 +253,15 @@ describe('A2: the remote lookups stop when the hook time is nearly gone', () => 
   const clockDenies = ['holdout-scan-unavailable', 'push-state-unknown'];
   it('A2-1: with 900 ms left no lookup runs and the push is denied on the clock (main runs the lookups)', async () => {
     shipTap();
-    const p = await patIn(bash(`git push plain feat/x && ${PUSH}`), { scanLeft: () => 900 });
-    expect(lookups, 'no remote lookup may run').toEqual([]);
+    // The shape judge of each push also reads `git remote get-url <name>` once (what URL a remote points at). It is not a PB-5 lookup: the clock rows compare
+    // the counts of one text under a full budget and under 900 ms, so only the PB-5 reads (names times folders times two) make the difference.
+    const text = `git push plain feat/x && ${PUSH}`;
+    await patIn(bash(text), { scanLeft: () => 7000 });
+    const full = lookups.length;
+    lookups = [];
+    const p = await patIn(bash(text), { scanLeft: () => 900 });
+    expect(lookups.length, 'fewer reads under 900 ms than under a full budget').toBeLessThan(full);
+    expect(lookups.filter((l) => l.includes('--push --all')), 'no push-URL read may run').toEqual([]);
     expect(clockDenies).toContain(p);
   });
   it('A2-2: each lookup uses up time; the lookups end when the time left drops under the reserve, and the push is denied', async () => {
@@ -262,7 +269,7 @@ describe('A2: the remote lookups stop when the hook time is nearly gone', () => 
     let left = 4000;
     const w: World = { scanLeft: () => { left -= 1200; return left; } };
     const p = await patIn(bash(`git push plain feat/x && git push cachel2 feat/x && git push plain2 feat/x && ${PUSH}`), w);
-    expect(lookups.length, 'fewer lookups than names').toBeLessThan(3);
+    expect(lookups.filter((l) => l.includes('--push --all')).length, 'fewer push-URL reads than names').toBeLessThan(3);
     expect(clockDenies).toContain(p);
   });
   it('A2-3 (control): with the full budget the same text runs its lookups and is allowed', async () => {
