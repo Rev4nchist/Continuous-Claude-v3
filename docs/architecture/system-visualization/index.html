@@ -272,6 +272,26 @@
   ::-webkit-scrollbar-track { background: var(--bg); }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+  /* Phone width: the page scrolls as one column. The header wraps in two rows, the legend sits under the diagram
+     (the Legend button still hides it), and the footer follows the flow list instead of overlapping it. */
+  @media (max-width: 600px) {
+    html, body { height: auto; min-height: 100%; overflow: auto; }
+    body { display: block; }
+    header.app { flex-wrap: wrap; gap: 6px 12px; padding: 10px 14px; }
+    header.app h1 { font-size: 14px; flex: 1 1 100%; order: 2; }
+    header.app h1 .sub { display: block; font-size: 12px; }
+    header.app .hub-link { order: 1; margin-right: 0 !important; }
+    header.app .legend-toggle { order: 1; margin-left: auto; }
+    header.app .meta { order: 3; flex: 1 1 100%; font-size: 11px; }
+    header.app .spacer { display: none; }
+    main { display: block; }
+    section.diagram { min-height: 0; padding: 8px; overflow: visible; }
+    .legend { position: static; max-width: none; margin-top: 8px; }
+    aside.right { display: block; width: auto; }
+    .flow-list { max-height: none; }
+    footer { padding: 10px 14px; overflow-wrap: anywhere; }
+  }
 </style>
 </head>
 <body>
