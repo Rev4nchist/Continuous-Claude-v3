@@ -52,13 +52,18 @@ const notChecked = (reason) => ({ status: 'not checked', reason });
 /** Node options known to take no separate value. Any other leading option (`--title x`, `--require x.cjs`) may consume the next argument, so the entry fails closed. */
 const FLAG_ONLY_OPTIONS = new Set(['--no-warnings', '--enable-source-maps', '--no-deprecation', '--trace-warnings', '--trace-deprecation', '--no-experimental-fetch', '--experimental-vm-modules', '--preserve-symlinks']);
 
+/** `--name=value` options that keep the file entrypoint. `--eval=` and `--print=` are not here: Node runs the expression, not the file. */
+const INLINE_VALUE_OPTIONS = new Set(['max-old-space-size', 'max-semi-space-size', 'stack-size', 'require', 'import', 'env-file', 'title', 'conditions', 'loader', 'experimental-loader', 'disable-warning', 'unhandled-rejections']);
+
 /** The hook file of a node registration: the first argument that is not an option. Null when it cannot be read with certainty (counted as unparsed). */
 function hookFile(h) {
   if (h.command !== 'node' || !Array.isArray(h.args)) return null;
   for (const a of h.args.map(String)) {
     if (!a.startsWith('-')) return a.split(/[\\/]/).pop() || null;
-    if (FLAG_ONLY_OPTIONS.has(a) || /^--[a-z0-9-]+=/.test(a)) continue; // a --x=y form carries its own value
-    return null;
+    if (FLAG_ONLY_OPTIONS.has(a)) continue;
+    const named = /^--([a-z0-9-]+)=/.exec(a);
+    if (named && INLINE_VALUE_OPTIONS.has(named[1])) continue; // carries its own value and keeps the file entrypoint
+    return null; // anything else (--eval=, --print=, -e=, an unknown option) may replace or consume the entrypoint
   }
   return null;
 }
