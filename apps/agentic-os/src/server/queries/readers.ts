@@ -10,7 +10,7 @@ import { clockOf, type ClockEntry } from '@/lib/clock';
 import { DECISIONS_MAX_BYTES, decisionsOpenCount, parseDecisionsStore, type DecisionsView } from '@/lib/decisions-parse';
 import { noteFlags } from '@/lib/note-flags';
 import { foldOpenQuestions, type OpenQuestion, type QuestionSnapshot } from '@/lib/open-question';
-import { buildReaderSources, settleReader, type ReaderOutcome, type ReaderSource } from '@/lib/reader-sources';
+import { buildReaderSources, settleReader, stateFilesPartial, type ReaderOutcome, type ReaderSource } from '@/lib/reader-sources';
 import { computeStalls, createGreenTracker, type Stall, type StallLane, type StallPr } from '@/lib/stalls';
 import { parseTasksFile, type ScheduledTask, type TasksView } from '@/lib/tasks-parse';
 
@@ -183,7 +183,7 @@ export async function readReaders(stateFiles: StateFiles | null, nowMs: number =
         : !feed || feed.status !== 'ok'
           ? failed('missing', nowMs)
           : { ok: true, readAtMs: nowMs, dataAtMs: exportedAtMs, maxAgeMs: OPEN_PR_MAX_AGE_MS },
-      'open-question': !questionsRead.ok ? failed(questionsRead.error, nowMs) : stateFiles === null ? failed('state files unreadable', nowMs) : { ok: true, readAtMs: nowMs, dataAtMs: newestStateWrite },
+      'open-question': !questionsRead.ok ? failed(questionsRead.error, nowMs) : stateFiles === null ? failed('state files unreadable', nowMs) : { ok: true, readAtMs: nowMs, dataAtMs: newestStateWrite, partial: stateFilesPartial(stateFiles.stats) ?? undefined },
       decisions: decisions.ok ? { ok: true, readAtMs: nowMs } : failed(decisions.reason, nowMs),
       clock: laneRead.ok ? { ok: true, readAtMs: nowMs } : failed(laneRead.error, nowMs),
       tasks: tasks.ok ? { ok: true, readAtMs: nowMs } : failed(tasks.reason, nowMs),

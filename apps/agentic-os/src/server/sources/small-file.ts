@@ -2,6 +2,8 @@ import 'server-only';
 
 import { lstat, readFile } from 'node:fs/promises';
 
+import { bytesRead } from '@/lib/reader-sources';
+
 /**
  * A small JSON file, read once (card agentic-os-readers). Three outcomes, kept apart on purpose:
  *   text === null   the file does not exist (ENOENT): "missing", a normal state for some feeds;
@@ -14,7 +16,8 @@ export async function readSmallFile(path: string, maxBytes: number): Promise<{ t
     const info = await lstat(path);
     if (info.isSymbolicLink() || !info.isFile()) return { text: '', bytes: 0, mtimeMs: null };
     if (info.size > maxBytes) return { text: '', bytes: info.size, mtimeMs: info.mtimeMs };
-    return { text: await readFile(path, 'utf8'), bytes: info.size, mtimeMs: info.mtimeMs };
+    const text = await readFile(path, 'utf8');
+    return { text, bytes: bytesRead(info.size, text), mtimeMs: info.mtimeMs }; // a file that grew after lstat still reads as too large
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { text: null, bytes: 0, mtimeMs: null };
     return { text: '', bytes: 0, mtimeMs: null };

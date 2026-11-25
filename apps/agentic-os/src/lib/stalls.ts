@@ -108,7 +108,7 @@ export function createGreenTracker(): {
     observe(rows, nowMs) {
       const live = new Set<string>();
       for (const row of rows) {
-        if (row.ready !== true || row.draft) continue;
+        if (row.ready !== true || row.draft || !row.head) continue; // no head: no clock, or two missing heads would share the key "<pr>@"
         const key = `${row.pr}@${row.head}`;
         live.add(key);
         if (!since.has(key)) since.set(key, nowMs);

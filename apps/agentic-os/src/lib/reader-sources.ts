@@ -14,8 +14,33 @@ export type ReaderId = (typeof READER_IDS)[number];
 export type ReaderStatus = 'ok' | 'degraded' | 'error';
 export type ReaderSource = { id: ReaderId; label: string; status: ReaderStatus; detail: string; readAtMs: number; ageSec: number };
 export type ReaderOutcome =
-  | { ok: true; readAtMs: number; /** When the data itself was made (a feed export time); default: the read time. */ dataAtMs?: number | null; /** Older than this is degraded. */ maxAgeMs?: number }
+  | {
+      ok: true;
+      readAtMs: number;
+      /** When the data itself was made (a feed export time); default: the read time. */ dataAtMs?: number | null;
+      /** Older than this is degraded. */ maxAgeMs?: number;
+      /** The read lost some input (a skipped file or folder): degraded, with this short reason. */ partial?: string;
+    }
   | { ok: false; reason: string; readAtMs: number };
+
+/** A data time this far ahead of the clock is still fresh; more is not trusted (the allowance of pr-feed-parse.ts:262). */
+const FUTURE_SKEW_MS = 5 * 60_000;
+
+/** The size of a read: the bigger of the size on disk and the bytes read, so a file that grew after lstat is still too large. */
+export function bytesRead(diskBytes: number, text: string): number {
+  return Math.max(diskBytes, new TextEncoder().encode(text).length);
+}
+
+/** A short reason when the state-file read skipped files or the folder (counts only, never the folder path); null when it lost nothing. */
+export function stateFilesPartial(stats: { unreadable: number; oversize: number; tooMany: number; dirUnreadable: boolean }): string | null {
+  const parts = [
+    stats.dirUnreadable ? 'directory unreadable' : '',
+    stats.unreadable > 0 ? `${stats.unreadable} unreadable` : '',
+    stats.oversize > 0 ? `${stats.oversize} oversize` : '',
+    stats.tooMany > 0 ? `${stats.tooMany} over the file limit` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(', ') : null;
+}
 
 const LABELS: Record<ReaderId, string> = {
   stalls: 'Stalls (lane table, PR feed)',
@@ -33,9 +58,13 @@ export function readerSource(id: ReaderId, outcome: ReaderOutcome, nowMs: number
     if (outcome.reason === 'missing') return { ...base, status: 'degraded', detail: 'source file missing', ageSec: 0 };
     return { ...base, status: 'error', detail: `read failed: ${cleanText(outcome.reason, 120) ?? 'unknown'}`, ageSec: 0 };
   }
-  const ageMs = Math.max(0, nowMs - (outcome.dataAtMs ?? outcome.readAtMs));
+  const dataAtMs = outcome.dataAtMs ?? outcome.readAtMs;
+  const ageMs = Math.max(0, nowMs - dataAtMs);
+  const ahead = dataAtMs - nowMs > FUTURE_SKEW_MS;
   const late = outcome.maxAgeMs !== undefined && ageMs > outcome.maxAgeMs;
-  return { ...base, status: late ? 'degraded' : 'ok', detail: `read ${hhmm.format(outcome.readAtMs)}, age ${Math.floor(ageMs / 60_000)} min`, ageSec: Math.floor(ageMs / 1000) };
+  const text = `read ${hhmm.format(outcome.readAtMs)}, age ${Math.floor(ageMs / 60_000)} min`;
+  const detail = ahead ? `data time is ahead of the clock, ${text}` : outcome.partial ? `partial read (${cleanText(outcome.partial, 80) ?? 'unknown'}), ${text}` : text;
+  return { ...base, status: ahead || late || outcome.partial ? 'degraded' : 'ok', detail, ageSec: Math.floor(ageMs / 1000) };
 }
 
 export function buildReaderSources(outcomes: Record<ReaderId, ReaderOutcome>, nowMs: number): ReaderSource[] {
