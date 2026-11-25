@@ -11,8 +11,9 @@ import { clearStateDir, step, writeState } from './state-fixture';
  *
  * Runs ONLY through the scratch harness (.claudedocs/e2e-agentic-os-readers/harness/run-scratch.mjs): it makes a
  * scratch database, seeds the lanes named by the E2E_RD_* variables, sets AGENTIC_OS_DECISIONS_FILE (E2E_RD_DECISIONS_FILE)
- * and AGENTIC_OS_TASKS_FILE, and drops the database after. A missing variable fails the spec: it must never
- * read the live board. Each test names the source change that breaks it.
+ * and AGENTIC_OS_TASKS_FILE, and drops the database after. It must never read the live board: a plain run (no E2E_RD_*
+ * variable) skips the whole file; a harness run with a missing variable, or a database that is not a lanes_pr1_ scratch
+ * database, fails in beforeAll, before any request. Each test names the source change that breaks it.
  */
 
 const need = (name: string): string => {
@@ -20,6 +21,22 @@ const need = (name: string): string => {
   if (!value) throw new Error(`${name} is not set: run this spec through the scratch harness (run-scratch.mjs)`);
   return value;
 };
+
+/** Every variable the harness sets for this spec (the two evidence file names are optional and stay out). */
+const SCRATCH_VARS = [
+  'AGENTIC_OS_DATABASE_URL', 'AGENTIC_OS_DECISIONS_FILE', 'AGENTIC_OS_TASKS_FILE', 'E2E_RD_DECISIONS_FILE', 'E2E_RD_OWNER_SID',
+  'E2E_RD_LEASE_LANE', 'E2E_RD_WAITS_LANE', 'E2E_RD_START_LANE', 'E2E_RD_PARK_LANE', 'E2E_RD_LEASEEND_LANE', 'E2E_RD_UNOWNED_LANE',
+  'E2E_RD_REMIND_FUTURE', 'E2E_RD_REMIND_ACKED', 'E2E_RD_REMIND_PAST',
+];
+
+// The skip keys on the harness marker, never on the database url: a live url with no E2E_RD_* variable must send no request.
+test.skip(!Object.keys(process.env).some((k) => k.startsWith('E2E_RD_')), 'runs only through the scratch harness run-scratch.mjs (no E2E_RD_* variable is set)');
+
+test.beforeAll(() => {
+  for (const name of SCRATCH_VARS) need(name);
+  const database = new URL(need('AGENTIC_OS_DATABASE_URL')).pathname.replace(/^\//, '');
+  if (!database.startsWith('lanes_pr1_')) throw new Error(`AGENTIC_OS_DATABASE_URL names "${database}", not a lanes_pr1_ scratch database: no request is sent`);
+});
 
 type Stall = { kind: string; subject: string; ageMin: number | null; certainty: string; sentence: string };
 type ClockEntry = { kind: string; label: string; atMs: number; inMin: number };
