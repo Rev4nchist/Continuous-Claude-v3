@@ -223,6 +223,7 @@ export function maskStringWith(mask: (text: string) => Masked, text: string): Ma
   // The token ends in a hex letter, so before the second pass it is swapped for one private-use character that the text does not hold, and
   // swapped back after: a folded fullwidth sha glued to the token must not make one long hex run (CodeRabbit CLI run 2, finding 1).
   const mark = freeMark(m.text);
+  if (mark === '') return { text: TOKEN, masked: 1 }; // no free character: fail closed, the field is the token alone
   const swapped = m.text.split(TOKEN).join(mark);
   const flat = readerView(swapped);
   const f = flat === swapped ? { text: m.text, masked: 0 } : mask(flat);
@@ -230,10 +231,10 @@ export function maskStringWith(mask: (text: string) => Masked, text: string): Ma
   return total > 0 ? { text: f.masked > 0 ? f.text.split(mark).join(TOKEN) : m.text, masked: total } : { text, masked: 0 };
 }
 
-/** One private-use character that the text does not hold. */
+/** One private-use character that the text does not hold, or '' when it holds them all. */
 function freeMark(s: string): string {
   for (let c = 0xe000; c < 0xf8ff; c++) if (!s.includes(String.fromCharCode(c))) return String.fromCharCode(c);
-  return '';
+  return '';
 }
 
 export function maskString(text: string, ids: string[]): Masked {

@@ -188,11 +188,12 @@ export function maskLaneRows({ lanes = [], sessions = [], events = [] } = {}, id
   // on equal counts that kept the raw text and left an id that only the reader view finds (CodeRabbit CLI run 1, agentic-os-listed-id-mask).
   // The token ends in a hex letter, so before the second pass it is swapped for one private-use character that the text does not hold, and
   // swapped back after: a folded fullwidth sha glued to the token must not make one long hex run (CodeRabbit CLI run 2, finding 1).
-  const freeMark = (s) => { for (let c = 0xe000; c < 0xf8ff; c++) if (!s.includes(String.fromCharCode(c))) return String.fromCharCode(c); return ''; };
+  const freeMark = (s) => { for (let c = 0xe000; c < 0xf8ff; c++) if (!s.includes(String.fromCharCode(c))) return String.fromCharCode(c); return ''; };
   const field = (row, key) => {
     if (!row || typeof row[key] !== 'string' || row[key] === '') return;
     const m = maskListed(row[key], ids);
     const mark = freeMark(m.text);
+    if (mark === '') { row[key] = TOKEN; n += 1; return; } // no free character: fail closed, the field is the token alone
     const swapped = m.text.split(TOKEN).join(mark);
     const flat = readerView(swapped);
     const f = flat === swapped ? { text: m.text, masked: 0 } : maskListed(flat, ids);
