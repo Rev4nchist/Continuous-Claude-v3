@@ -700,6 +700,33 @@ rm -f "$ACT/hooks/package-lock.json"
 sync >/dev/null
 chk "(b) full mirror: package-lock.json reaches ~/.claude/hooks" "$( [ "$(cat "$ACT/hooks/package-lock.json" 2>/dev/null)" = '{"lock":2}' ] && echo 1 || echo 0)"
 
+echo "=== T20: the three parser files in hooks/dist reach ~/.claude/hooks/dist in both sync modes ==="
+# The built coderabbit-guard reads dist/sh-syntax.wasm, dist/sh-syntax-wasm_exec.cjs and dist/shell-ast-walk.ps1 at run time. ~/.claude/hooks has no
+# node_modules/sh-syntax. Failure modes: (a) --changed maps no path for them (only *.mjs did), so a commit of them never arrives, (b) the full mirror
+# copies only *.mjs, (c) the wasm is binary (NUL bytes) and must arrive byte for byte, (d) an edit of the walker does not update the active copy,
+# (e) a nested file under dist/ is not one of them and must not arrive.
+mkdir -p "$REPO/.claude/hooks/dist/sub"
+printf 'wasm\0bytes\0end\n' > "$REPO/.claude/hooks/dist/sh-syntax.wasm"
+printf 'exec-v1\n' > "$REPO/.claude/hooks/dist/sh-syntax-wasm_exec.cjs"
+printf 'walker-v1\n' > "$REPO/.claude/hooks/dist/shell-ast-walk.ps1"
+printf 'nested\n' > "$REPO/.claude/hooks/dist/sub/shell-ast-walk.ps1"
+commit t20-parser-files
+sync --changed >/dev/null
+chk "(a) --changed: sh-syntax.wasm arrives" "$(has "$ACT/hooks/dist/sh-syntax.wasm")"
+chk "(c) the wasm arrives byte for byte (NUL bytes kept)" "$( cmp -s "$REPO/.claude/hooks/dist/sh-syntax.wasm" "$ACT/hooks/dist/sh-syntax.wasm" && echo 1 || echo 0)"
+chk "(a) --changed: sh-syntax-wasm_exec.cjs arrives" "$( [ "$(cat "$ACT/hooks/dist/sh-syntax-wasm_exec.cjs" 2>/dev/null)" = 'exec-v1' ] && echo 1 || echo 0)"
+chk "(a) --changed: shell-ast-walk.ps1 arrives" "$( [ "$(cat "$ACT/hooks/dist/shell-ast-walk.ps1" 2>/dev/null)" = 'walker-v1' ] && echo 1 || echo 0)"
+chk "(e) a nested dist file does not arrive" "$(not "$ACT/hooks/dist/sub")"
+printf 'walker-v2\n' > "$REPO/.claude/hooks/dist/shell-ast-walk.ps1"; commit t20-walker-v2
+sync --changed >/dev/null
+chk "(d) --changed: an edited walker updates the active copy" "$( [ "$(cat "$ACT/hooks/dist/shell-ast-walk.ps1" 2>/dev/null)" = 'walker-v2' ] && echo 1 || echo 0)"
+rm -f "$ACT/hooks/dist/sh-syntax.wasm" "$ACT/hooks/dist/sh-syntax-wasm_exec.cjs" "$ACT/hooks/dist/shell-ast-walk.ps1"
+sync >/dev/null
+chk "(b) full mirror: sh-syntax.wasm arrives" "$( cmp -s "$REPO/.claude/hooks/dist/sh-syntax.wasm" "$ACT/hooks/dist/sh-syntax.wasm" && echo 1 || echo 0)"
+chk "(b) full mirror: sh-syntax-wasm_exec.cjs arrives" "$(has "$ACT/hooks/dist/sh-syntax-wasm_exec.cjs")"
+chk "(b) full mirror: shell-ast-walk.ps1 arrives with the latest text" "$( [ "$(cat "$ACT/hooks/dist/shell-ast-walk.ps1" 2>/dev/null)" = 'walker-v2' ] && echo 1 || echo 0)"
+chk "(e) full mirror: a nested dist file does not arrive" "$(not "$ACT/hooks/dist/sub")"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

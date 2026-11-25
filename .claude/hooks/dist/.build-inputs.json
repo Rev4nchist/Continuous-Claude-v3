@@ -208,6 +208,9 @@
     ".claude/hooks/src/shared/malicious-packages.json": {
       "sha256": "f461eb3d79c7119d15510f44cc9e5988627b27345733e7772d3d70d6aa30e986"
     },
+    ".claude/hooks/src/shell-ast-walk.ps1": {
+      "sha256": "b02f50af8be44e493d53c32b42b92511ca53629b2b94eb251fefc1f9a4f91428"
+    },
     "scripts/github/lib/answer-key.mjs": {
       "sha256": "49a0451170db358544ca66ddc35260463de2c1b19663a0ee85504d0bca1e972c"
     },
