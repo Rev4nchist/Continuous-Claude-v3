@@ -15,7 +15,7 @@
     "coordination-notification.ts": "76379963710d3b82353c37de43e7e7ba484df05b0c1996ae8ef98c4aba2ff75c",
     "coordination-release.ts": "67367601f55b6df348588447f3a55fc6f76c94bb70e990318a55c0175c89e609",
     "dc-config-guard.ts": "0626f183b185020008505da78a626735bc21d57f9f5c8ffb4499a3f40ca9a434",
-    "decision-gate.ts": "e1f4f6bb1bccb3ddcbd4963d1e542f0c4273df07b19cb5439e1e50d855eba864",
+    "decision-gate.ts": "b4b3c46b259de55106107d0b782c15023340a9bb7c741a1fb17d9b0f8b3c3ff6",
     "decision-ledger.ts": "5d105c51e29d3a206f218f0a12f27d6b2830bab2574adc6fc22095f9e1f164f8",
     "destructive-command-guard.ts": "ca854ecacf19c04cfee62e95d9513e93ba1061dc2efba0b4d0585e0056c266e6",
     "epistemic-reminder.ts": "8f17424db2cfebe548bcca4400512f2565947f2b090fab337495de0ffb4aa311",

@@ -1212,8 +1212,12 @@ export const SCRIPT_RUNNERS = new Set(['node', 'nodejs', 'python', 'python3', 'p
  * Item 11 (seat word 15:1x CST 11-25): any words between `git` and `push` that are not a step end (; & | newline) count as options, with a value or without
  * (git --no-pager push, git --git-dir=x push, git -C x -c k=v push). No list of option names (V7.6). Accepted over-deny: `git log --grep push` in a text that
  * does not parse, or in inline code. It only adds denies, on the parse-error, inner-text and script-runner paths.
+ * Item 11e (Dave's choice on CodeRabbit CLI run 2, V7.6, 16:0x CST 11-25): the git alternative is the UNION of three patterns, so it never denies less than main:
+ * (1) the pattern of main (options that carry a value), (2) the item 11 pattern (any words that are not a step end), (3) `git`, then `push` later on the same
+ * line (any character but a newline). (3) matches a separator inside a quoted option value (git -c 'a;b' push), which (2) cannot. (2) keeps its \s, so `git` on
+ * one line and `push` at the start of the next still match: an accepted over-deny (fail closed).
  */
-const GUARDED_TEXT = /\bgit\s+(?:[^;&|\n]*\s)?push\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+const GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgit\s+(?:[^;&|\n]*\s)?push\b|\bgit\b[^\n]*\bpush\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 const SCRIPT_RUNNER_WHY = 'this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.';
 
 const SCRIPT_RUNNER_WORD = new RegExp(`\\b(?:${[...SCRIPT_RUNNERS].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i');
