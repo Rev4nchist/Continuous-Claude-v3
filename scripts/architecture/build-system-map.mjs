@@ -20,7 +20,7 @@
  *   (no mode) dry run   --check exit 1 when the committed files differ   --apply write the files
  * Exit: 0 ok, 1 a problem (stale file, listed id, bad file), 2 not checked (a source or the listed id list is missing or empty).
  */
-import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -49,6 +49,19 @@ function frontmatter(text) {
 const ok = (value) => ({ status: 'ok', value });
 const notChecked = (reason) => ({ status: 'not checked', reason });
 
+/** Node options that take the next argument as a value: `node --require x.cjs hook.mjs` cannot be read with certainty. */
+const VALUE_OPTIONS = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '--eval', '-e', '--print', '-p', '--input-type', '--conditions', '-C']);
+
+/** The hook file of a node registration: the first argument that is not an option. Null when it cannot be read with certainty (counted as unparsed). */
+function hookFile(h) {
+  if (h.command !== 'node' || !Array.isArray(h.args)) return null;
+  for (const a of h.args.map(String)) {
+    if (!a.startsWith('-')) return a.split(/[\\/]/).pop() || null;
+    if (VALUE_OPTIONS.has(a)) return null;
+  }
+  return null;
+}
+
 function readHooks(root) {
   const f = join(root, '.claude', 'settings.json.template');
   if (!existsSync(f)) return notChecked('.claude/settings.json.template is missing');
@@ -59,7 +72,7 @@ function readHooks(root) {
   for (const event of Object.keys(t.hooks ?? {}).sort()) {
     for (const group of t.hooks[event] ?? []) {
       for (const h of group.hooks ?? []) {
-        const file = h.command === 'node' && Array.isArray(h.args) && h.args.length ? String(h.args[0]).split(/[\\/]/).pop() : null;
+        const file = hookFile(h);
         if (file) items.push({ event, matcher: group.matcher ?? '', file }); else unparsed += 1;
       }
     }
@@ -210,8 +223,9 @@ async function hideListed(text, ids) {
   return m.maskListed(text, ids).text;
 }
 
-/** Writes every file to a temp file first, then renames them: a failed write leaves the template and the graph as they were. */
-function writeAll(changed) {
+/** Writes every file to a temp file first, then renames them. A failed write or rename puts every file back as it was. `ops.renameSync` is for tests. */
+export function writeAll(changed, ops = {}) {
+  const rename = ops.renameSync ?? renameSync;
   const staged = [];
   try {
     for (const [f, t] of changed) { const tmp = `${f}.tmp`; writeFileSync(tmp, t); staged.push([tmp, f]); }
@@ -219,7 +233,21 @@ function writeAll(changed) {
     for (const [tmp] of staged) { try { unlinkSync(tmp); } catch { /* already gone */ } }
     throw e;
   }
-  for (const [tmp, f] of staged) renameSync(tmp, f);
+  const done = [];
+  try {
+    for (const [tmp, f] of staged) {
+      const bak = `${f}.bak`;
+      const had = existsSync(f);
+      if (had) copyFileSync(f, bak);
+      rename(tmp, f);
+      done.push([f, bak, had]);
+    }
+  } catch (e) {
+    for (const [f, bak, had] of done.reverse()) { try { if (had) renameSync(bak, f); else unlinkSync(f); } catch { /* best effort */ } }
+    for (const [tmp, f] of staged) { for (const x of [tmp, `${f}.bak`]) { try { unlinkSync(x); } catch { /* already gone */ } } }
+    throw e;
+  }
+  for (const [, bak, had] of done) if (had) { try { unlinkSync(bak); } catch { /* already gone */ } }
 }
 
 /** Compares the committed files with a fresh build. exitCode: 0 fresh, 1 a problem, 2 not checked. Prints counts of listed ids, never an id. */
