@@ -256,10 +256,11 @@ function nameCall(call: Call, ctx: Any): Any {
 function aliasCall(call: Call, ctx: Any): Any {
   const p = progName(call.words[0].lit) ?? '';
   if (call.dialect === 'bash' && p === 'alias') ctx.state.bashAliases.push(...call.words.slice(1));
-  // A3 (shell-judge.ts:257): -s turns the expansion on, -u turns it off, a query changes nothing. A text with -s anywhere counts as on (fail closed).
+  // A3 (aliasCall): -s turns the expansion on, a query changes nothing. The expansion is sticky: a text with -s anywhere counts as on, and a later -u
+  // never turns it off (fail closed; bash expands an alias used between -s and -u, CodeRabbit CLI run 1 finding 3).
   if (call.dialect === 'bash' && p === 'shopt' && call.words.some((w) => w.lit === 'expand_aliases')) {
     const flags = call.words.slice(1).map((w) => w.lit ?? '').filter((l) => /^-[a-z]+$/.test(l)).join('');
-    if (flags.includes('s')) ctx.state.expand = true; else if (flags.includes('u')) ctx.state.expand = false;
+    if (flags.includes('s')) ctx.state.expand = true;
   }
   if (!['set-alias', 'new-alias', 'sal', 'nal'].includes(p)) return null;
   const v = psAliasValue(call.words.slice(1));

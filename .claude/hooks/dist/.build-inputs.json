@@ -15,7 +15,7 @@
     "coordination-notification.ts": "76379963710d3b82353c37de43e7e7ba484df05b0c1996ae8ef98c4aba2ff75c",
     "coordination-release.ts": "67367601f55b6df348588447f3a55fc6f76c94bb70e990318a55c0175c89e609",
     "dc-config-guard.ts": "0626f183b185020008505da78a626735bc21d57f9f5c8ffb4499a3f40ca9a434",
-    "decision-gate.ts": "9888e9f97373b1fe1fdd43b48ef7cb2cd6cf2dc7fa2d10f4845b0637d5360aba",
+    "decision-gate.ts": "aca3c2afa2176a0f39e2f3312316d13dfef185554be23188f455d6c221a79cfe",
     "decision-ledger.ts": "5d105c51e29d3a206f218f0a12f27d6b2830bab2574adc6fc22095f9e1f164f8",
     "destructive-command-guard.ts": "ca854ecacf19c04cfee62e95d9513e93ba1061dc2efba0b4d0585e0056c266e6",
     "epistemic-reminder.ts": "8f17424db2cfebe548bcca4400512f2565947f2b090fab337495de0ffb4aa311",
@@ -176,7 +176,7 @@
     "shared/session-start-output.ts": "0139d266e60005ce6cb62daacfac1885ba94c7b65d5ccfc30c0c2bede7ec232d",
     "shared/session-touch.ts": "8459cb524f9081205eda9fdd84ba487ff20293bb43b4355e9a97c852ece161f4",
     "shared/shell-ast.ts": "98b42ec73eafbc17b12ef1f1ece1ae708f2089f2c029279e897860115f4ac791",
-    "shared/shell-judge.ts": "75a8a022dfa9738f70ae83deef4fb17f22a18d2e104bf3d000a260702641f010",
+    "shared/shell-judge.ts": "4604e935552da32d5abbe3618b91a9114a9e2d6024ca135780d7180fbd547a00",
     "shared/shell-tools.ts": "880b99cb17a91a4b3fcfeeddc2ebccd32ae71c29fdbe8c8d4583cdbf23de2a2a",
     "shared/skill-router-types.ts": "3c4f9be674b7a75273c983a249a90bb4e90d445fcb448e0b62bf953dfe8ccf9c",
     "shared/skill-usage.ts": "6ae31c8b1e69c2e137c9acb5d9534acb614c6e2230219665d4159c6a9695f205",
@@ -202,9 +202,7 @@
     "tree-invalidate.ts": "efdcff70d106c48fe10e0b0febbdcce79bcf8d7e8688005f185dbc2cf209e019",
     "user-confirmation-detector.ts": "d0dc39cb3229c3b9f7173beb963149a1452ef4459e8ada1e36b850c623651bd3",
     "vercel-deploy-context.ts": "6a63ae3ef8189c4be8da9354a64cbc828b965c13c059e6705a4a4214795387f0",
-    "web-lookup-advisor.ts": "0ad144b1e18cfd5c3579ba666f868cd5ec231dd7a18833fa9bdd4819e12ee1e1",
-    "zzold/shared/shell-ast.ts": "e31b9ae0e98d2d4844c80feb6fd10e601d3db3901af8e9d4cbae1ba1686ef9e0",
-    "zzold/shared/shell-judge.ts": "c1057308574c89c2829a0531f37f2e457b69a51a66e7cf78c9a7f6d56475f61a"
+    "web-lookup-advisor.ts": "0ad144b1e18cfd5c3579ba666f868cd5ec231dd7a18833fa9bdd4819e12ee1e1"
   },
   "external": {
     ".claude/hooks/src/shared/malicious-packages.json": {

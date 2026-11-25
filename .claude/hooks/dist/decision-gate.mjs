@@ -2836,14 +2836,20 @@ var SCRIPT_RUNNERS = /* @__PURE__ */ new Set(["node", "nodejs", "python", "pytho
 var INLINE_CODE_FLAGS = /* @__PURE__ */ new Set(["-e", "-c", "-E", "-p", "--eval", "--print", "--command", "-"]);
 var GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 var SCRIPT_RUNNER_WHY = "this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.";
+var SCRIPT_RUNNER_WORD = /\b(?:node|nodejs|python3?|py|deno|bun|ruby|perl)\b/i;
+var blankQuotes = (t) => t.replace(/['"`,[\]()]/g, " ");
 function scriptRunnerDenies(parsed) {
   if (!parsed) return [];
   for (const r of Object.values(parsed.byDialect)) {
+    if (r && (!r.ok || r.errors.length > 0)) {
+      const t = blankQuotes(parsed.text);
+      if (SCRIPT_RUNNER_WORD.test(t) && GUARDED_TEXT.test(t)) return [deny("script-runner", SCRIPT_RUNNER_WHY)];
+    }
     for (const c of r ? r.calls : []) {
       if (!SCRIPT_RUNNERS.has(progName(c.words[0]?.lit) ?? "")) continue;
       const args = c.words.slice(1);
       if (!args.some((a) => INLINE_CODE_FLAGS.has(a.lit ?? "")) && c.stdin === null) continue;
-      const code = [...args.map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ""].join(" ").replace(/['"`,[\]()]/g, " ");
+      const code = blankQuotes([...args.map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ""].join(" "));
       if (GUARDED_TEXT.test(code)) return [deny("script-runner", SCRIPT_RUNNER_WHY)];
     }
   }
@@ -4928,6 +4934,7 @@ function primaryRootOf(git, dir) {
   if (r.status !== 0 || r.stdout.trim() === "") throw new Error("no common dir");
   return resolve3(r.stdout.trim(), "..");
 }
+var PARSE_BUDGET_MS = 7e3;
 async function withParsed(raw, deps) {
   try {
     const input = JSON.parse(raw.trim() || "{}");
@@ -4937,7 +4944,21 @@ async function withParsed(raw, deps) {
     const tool = cmd.tool;
     const dialects = tool === "Bash" ? ["bash"] : tool === "PowerShell" ? ["pwsh"] : ["bash", "pwsh"];
     const byDialect = {};
-    for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
+    let timer;
+    const late = new Promise((res) => {
+      timer = setTimeout(() => res("late"), deps.parseBudgetMs ?? PARSE_BUDGET_MS);
+      timer.unref?.();
+    });
+    const parse = (async () => {
+      for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
+      return "done";
+    })();
+    parse.catch(() => void 0);
+    try {
+      if (await Promise.race([parse, late]) === "late") return deps;
+    } finally {
+      clearTimeout(timer);
+    }
     return { ...deps, parsed: { text: cmd.text, byDialect } };
   } catch (err) {
     try {

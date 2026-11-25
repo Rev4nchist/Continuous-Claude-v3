@@ -295,6 +295,8 @@ export interface Deps {
   parsed?: { text: string; byDialect: { bash?: ParseResult; pwsh?: ParseResult } };
   /** The parser seams of withParsed (a provider for the bash parse or the pwsh walker). Absent: the real parsers. */
   parseOpts?: ParseOpts;
+  /** The time budget of the whole parse in withParsed, in ms (CodeRabbit CLI run 1 finding 2). Absent: 7000. Past it there is no `parsed` and the hand reader decides. */
+  parseBudgetMs?: number;
 }
 /**
  * Which flag decides a deny: `push` is decisions.enforcePush, `other` is decisions.enforce, `app-push` is a push in a covered folder
@@ -1192,15 +1194,25 @@ const INLINE_CODE_FLAGS = new Set(['-e', '-c', '-E', '-p', '--eval', '--print', 
 const GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 const SCRIPT_RUNNER_WHY = 'this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.';
 
-/** Every inline-code call of a script runner whose code text holds a guarded call. The deny never depends on what the code does. */
+const SCRIPT_RUNNER_WORD = /\b(?:node|nodejs|python3?|py|deno|bun|ruby|perl)\b/i;
+const blankQuotes = (t: string): string => t.replace(/['"`,[\]()]/g, ' ');
+
+/**
+ * Every inline-code call of a script runner whose code text holds a guarded call. The deny never depends on what the code does.
+ * A dialect that did not parse has no calls to read (CodeRabbit CLI run 1 finding 1): the raw text then decides, a runner word and a guarded call in it give the same deny.
+ */
 export function scriptRunnerDenies(parsed: Deps['parsed']): Deny[] {
   if (!parsed) return [];
   for (const r of Object.values(parsed.byDialect)) {
+    if (r && (!r.ok || r.errors.length > 0)) {
+      const t = blankQuotes(parsed.text);
+      if (SCRIPT_RUNNER_WORD.test(t) && GUARDED_TEXT.test(t)) return [deny('script-runner', SCRIPT_RUNNER_WHY)];
+    }
     for (const c of r ? r.calls : []) {
       if (!SCRIPT_RUNNERS.has(progName(c.words[0]?.lit) ?? '')) continue;
       const args = c.words.slice(1);
       if (!args.some((a) => INLINE_CODE_FLAGS.has(a.lit ?? '')) && c.stdin === null) continue;
-      const code = [...args.map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ''].join(' ').replace(/['"`,[\]()]/g, ' ');
+      const code = blankQuotes([...args.map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ''].join(' '));
       if (GUARDED_TEXT.test(code)) return [deny('script-runner', SCRIPT_RUNNER_WHY)];
     }
   }
@@ -4208,6 +4220,7 @@ function primaryRootOf(git: Deps['git'], dir: string): string {
  * whose shell is not known, gives both. Unreadable input, a write tool, no trigger word or a parse that throws returns `deps` itself:
  * the hand reader decides, as today. Nothing reads `parsed` yet: later steps of the port do.
  */
+const PARSE_BUDGET_MS = 7000;
 export async function withParsed(raw: string, deps: Deps): Promise<Deps> {
   try {
     const input: unknown = JSON.parse(raw.trim() || '{}');
@@ -4217,7 +4230,14 @@ export async function withParsed(raw: string, deps: Deps): Promise<Deps> {
     const tool = cmd.tool;
     const dialects: ('bash' | 'pwsh')[] = tool === 'Bash' ? ['bash'] : tool === 'PowerShell' ? ['pwsh'] : ['bash', 'pwsh'];
     const byDialect: { bash?: ParseResult; pwsh?: ParseResult } = {};
-    for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
+    // One timer for the whole parse. A parse that passes it ends the wait: the hand reader decides, as on main, and the hook still writes a decision.
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<'late'>((res) => { timer = setTimeout(() => res('late'), deps.parseBudgetMs ?? PARSE_BUDGET_MS); timer.unref?.(); });
+    const parse = (async (): Promise<'done'> => { for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts); return 'done'; })();
+    parse.catch(() => undefined);
+    try {
+      if ((await Promise.race([parse, late])) === 'late') return deps;
+    } finally { clearTimeout(timer); }
     return { ...deps, parsed: { text: cmd.text, byDialect } };
   } catch (err) {
     try { logGuardError(HOOK, err); } catch { /* the log never blocks */ }
