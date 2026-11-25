@@ -70,6 +70,14 @@ test('R1 keeps the 14 newest rows and trashes the older nightly rows', async () 
   assert.equal(r.keep.length + r.trash.length, rows.length, 'every row is kept or trashed, none is lost');
 });
 
+test('R1b keeps the 14 newest by date when the input is oldest first', async () => {
+  // Breaks when the sort by date is removed: R1 feeds newest-first rows, so it passes with no sort at all.
+  const { chooseRetention } = await lib();
+  const r = chooseRetention(nightlies(30).reverse(), { now: NOW });
+  assert.deepEqual([...r.keep].sort(), Array.from({ length: 14 }, (_, i) => `r-${day(i)}`).sort());
+  assert.deepEqual([...r.trash].sort(), Array.from({ length: 16 }, (_, i) => `r-${day(i + 14)}`).sort());
+});
+
 test('R2 keeps a weekly row for 8 weeks and trashes an older one', async () => {
   // Breaks when the weekly window is 7 or 9 weeks, or weekly rows are treated as nightly rows.
   const { chooseRetention } = await lib();

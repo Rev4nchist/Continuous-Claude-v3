@@ -97,14 +97,45 @@ test('S1c a folder that cannot be listed rejects the collection; a missing folde
   } finally { fs.rmSync(empty, { recursive: true, force: true }); }
 });
 
-test('S1d a folder that cannot be listed is a collect-failed night, not a partial zip with Status ok', async () => {
+test('S1d one zip that cannot be made is a named collect-failed night; the dump and the other zips still go up', async () => {
+  // Breaks when a failed set stops the night before the upload (the dump is lost too), or the Status loses the name of the zip.
   const t = brokenTree('seat');
   try {
-    const r = await runBackup({ ...base(t), dryRun: true }, deps());
-    assert.equal(r.status, 'collect-failed');
+    const client = fakeClient();
+    const r = await runBackup({ ...base(t), notion: client }, deps());
+    assert.equal(r.status, 'collect-failed:ccv3-seat-2026-11-25.zip');
     assert.equal(r.exitCode, 1);
     assert.match(r.row['Drill detail'].rich_text[0].text.content, /ENOTDIR/, 'the row names the listing error, not a side effect such as an empty zip');
-    assert.equal(fs.existsSync(path.join(t.out, 'manifest.json')), false, 'no manifest for a night that did not collect');
+    const up = client.calls.filter((c) => c.p === '/v1/file_uploads').map((c) => c.opts.json.filename);
+    assert.deepEqual(up, ['ccv3-lanedb-2026-11-25.dump.gz', 'ccv3-state-2026-11-25.zip', 'ccv3-coordination-2026-11-25.zip']);
+    assert.equal(client.rows.length, 1, 'a failed night still gets its row');
+  } finally { t.clean(); }
+});
+
+test('S1e an absent optional folder gives a zip with one EMPTY.txt entry and the night stays ok', async () => {
+  // Breaks when an empty set reaches makeZip as an empty list: "zip has no entries" fails the night and nothing goes up.
+  const t = tree();
+  try {
+    fs.rmSync(path.join(t.repo, '.claudedocs', 're-execution'), { recursive: true, force: true }); // made by tree() above
+    const r = await runBackup({ ...base(t), dryRun: true }, deps());
+    assert.equal(r.status, 'ok');
+    assert.ok(fs.readFileSync(path.join(t.out, 'ccv3-seat-2026-11-25.zip')).includes('EMPTY.txt'));
+  } finally { t.clean(); }
+});
+
+test('S1f a collection root that is itself a link is refused and nothing behind it is read', async () => {
+  // Breaks when the root is listed without an lstat: the files of the link target would enter the zip.
+  const t = tree();
+  try {
+    t.put('outside/secret.md', 'private-text');
+    const root = path.join(t.repo, '.claudedocs', 'coordination');
+    fs.rmSync(root, { recursive: true, force: true }); // made by tree() above
+    try { fs.symlinkSync(path.join(t.root, 'outside'), root, 'junction'); } catch { return; } // no link rights: nothing to prove
+    await assert.rejects(collectSets({ home: t.home, repo: t.repo }), /collection root is a link/);
+    const r = await runBackup({ ...base(t), dryRun: true }, deps());
+    assert.equal(r.status, 'collect-failed:ccv3-coordination-2026-11-25.zip');
+    assert.ok(fs.existsSync(path.join(t.root, 'outside', 'secret.md')), 'the target of the link is untouched');
+    for (const f of fs.readdirSync(t.out)) if (f.endsWith('.zip')) assert.ok(!fs.readFileSync(path.join(t.out, f)).includes('private-text'), f);
   } finally { t.clean(); }
 });
 
@@ -410,7 +441,7 @@ test('P6 a bad prune root is an error: pruneLocal throws, runBackup logs "local 
 // ---- credential at rest (seat ruling 19:17): the token comes from the wrapper in one env variable, never from a plain file ----
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { resolveCredential } from './backup-state.mjs';
+import { resolveCredential, takeCredential } from './backup-state.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'backup-state.mjs');
 const FRESH = 'secret_' + 'y'.repeat(20); // fake, low entropy on purpose (gitleaks)
@@ -421,6 +452,16 @@ test('C1 resolveCredential: a token needs the env variable; a named state fails 
   assert.deepEqual(resolveCredential({ CCV3_BACKUP_NOTION_TOKEN: FRESH, CCV3_BACKUP_CREDENTIAL_STATE: 'unreadable' }), { status: 'credential-unreadable' });
   assert.deepEqual(resolveCredential({}), { status: 'no-credential' });
   assert.deepEqual(resolveCredential({ CCV3_BACKUP_NOTION_TOKEN: '   ' }), { status: 'no-credential' });
+});
+
+test('C1b takeCredential hands over the token and removes it from the env that every child process inherits', () => {
+  // Breaks when the token stays in process.env: docker and the scratch CLI would start with it.
+  const env = { CCV3_BACKUP_NOTION_TOKEN: FRESH, KEEP: '1' };
+  assert.deepEqual(takeCredential(env), { token: FRESH });
+  assert.deepEqual(env, { KEEP: '1' });
+  const flagged = { CCV3_BACKUP_NOTION_TOKEN: FRESH, CCV3_BACKUP_CREDENTIAL_STATE: 'unreadable' };
+  assert.deepEqual(takeCredential(flagged), { status: 'credential-unreadable' });
+  assert.equal('CCV3_BACKUP_NOTION_TOKEN' in flagged, false, 'a refused credential leaves no token behind either');
 });
 
 /** A live (not dry-run) start in a child process, with a clean env. Stops at the credential check: no Docker, no Notion. */

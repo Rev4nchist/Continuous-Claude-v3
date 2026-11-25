@@ -39,6 +39,7 @@ function listDir(dir) {
 /** Text files below dir, as { name: 'a/b.md', data }. A link (symlink or junction) is never followed: only plain files and folders count. */
 function walk(dir, prefix = '') {
   const out = [];
+  if (!prefix) { try { if (lstatSync(dir).isSymbolicLink()) throw new Error(`collection root is a link: ${dir}`); } catch (e) { if (e?.code !== 'ENOENT') throw e; } }
   const entries = listDir(dir);
   for (const e of entries) {
     const rel = prefix ? `${prefix}/${e.name}` : e.name;
@@ -49,16 +50,17 @@ function walk(dir, prefix = '') {
 }
 
 /** The three zip sets of a night: state (decisions and the decision log), coordination (the seat notes), seat (re-execution). */
-export async function collectSets({ home, repo }) {
+export async function collectSets({ home, repo, only = null }) {
+  const want = (n) => only === null || only === n; // runBackup asks for one set at a time: one bad folder fails only its own zip
   const mods = join(home, '.claude', 'state', 'ccv3-mods');
-  const top = listDir(mods).filter((e) => e.isFile()).map((e) => e.name); // no folder yet: empty
+  const top = want('state') ? listDir(mods).filter((e) => e.isFile()).map((e) => e.name) : []; // no folder yet: empty
   const state = top
     .filter((n) => n === 'decisions.json' || n === 'ask-dialogs.jsonl' || /^decision-log.*\.jsonl$/.test(n))
     .map((n) => ({ name: n, data: readFileSync(join(mods, n)) }));
   return {
     state,
-    coordination: walk(join(repo, '.claudedocs', 'coordination')),
-    seat: walk(join(repo, '.claudedocs', 're-execution')),
+    coordination: want('coordination') ? walk(join(repo, '.claudedocs', 'coordination')) : [],
+    seat: want('seat') ? walk(join(repo, '.claudedocs', 're-execution')) : [],
   };
 }
 
@@ -189,23 +191,21 @@ export async function runBackup(opts, deps) {
     log(`dump failed: ${detail}`);
   }
 
+  let collectFail = null; // a zip that cannot be made never stops the dump or the other zips: it becomes the Status after the upload
   if (status === 'ok') {
-    try {
-      const sets = await collectSets({ home, repo });
-      const zips = [['state', sets.state], ['coordination', sets.coordination], ['seat', sets.seat]];
-      const files = [{ name: dumpName, path: dumpPath, type: 'application/gzip' }];
-      for (const [label, entries] of zips) {
-        const name = `ccv3-${label}-${date}.zip`;
-        try { writeFileSync(join(outDir, name), makeZip(entries)); } catch (e) { status = `collect-failed:${name}`; detail = say(e); break; }
+    const files = [{ name: dumpName, path: dumpPath, type: 'application/gzip' }];
+    for (const label of ['state', 'coordination', 'seat']) {
+      const name = `ccv3-${label}-${date}.zip`;
+      try {
+        const entries = (await collectSets({ home, repo, only: label }))[label];
+        writeFileSync(join(outDir, name), makeZip(entries.length ? entries : [{ name: 'EMPTY.txt', data: Buffer.from(`no text files in ${label} on ${date}\n`) }]));
         files.push({ name, path: join(outDir, name), type: 'application/zip' });
-      }
-      if (status === 'ok') {
-        for (const f of files) {
-          const bytes = readFileSync(f.path);
-          manifest.files.push({ name: f.name, bytes: bytes.length, sha256: sha256(bytes), type: f.type });
-        }
-      }
-    } catch (e) { status = 'collect-failed'; detail = say(e); }
+      } catch (e) { collectFail ??= { status: `collect-failed:${name}`, detail: say(e) }; }
+    }
+    for (const f of files) {
+      const bytes = readFileSync(f.path);
+      manifest.files.push({ name: f.name, bytes: bytes.length, sha256: sha256(bytes), type: f.type });
+    }
   }
   if (status === 'ok') writeJson(join(outDir, 'manifest.json'), manifest);
 
@@ -234,7 +234,8 @@ export async function runBackup(opts, deps) {
     }
   }
 
-  const row = rowProperties(manifest, { status, drill: drill.drill, drillDetail: [detail, drill.detail].filter(Boolean).join(' | ') });
+  if (collectFail) { if (status === 'ok') status = collectFail.status; detail = [detail, collectFail.detail].filter(Boolean).join(' | '); }
+  const row = rowProperties(manifest,{ status, drill: drill.drill, drillDetail: [detail, drill.detail].filter(Boolean).join(' | ') });
   writeJson(join(outDir, 'row.json'), row);
   const result = { status, exitCode: status === 'ok' ? 0 : 1, manifest, drill, row, trashed: [] };
   if (dryRun) return result;
@@ -288,6 +289,13 @@ export function resolveCredential(env) {
   return token ? { token } : { status: 'no-credential' };
 }
 
+/** resolveCredential, then the token leaves the env: docker, psql and the scratch CLI inherit process.env and none of them needs it. */
+export function takeCredential(env) {
+  const cred = resolveCredential(env);
+  delete env.CCV3_BACKUP_NOTION_TOKEN;
+  return cred;
+}
+
 const today = () => new Date().toLocaleDateString('en-CA');
 
 async function main(argv) {
@@ -308,7 +316,7 @@ async function main(argv) {
   let notion = null;
   let secrets = [];
   if (!dryRun) {
-    const cred = resolveCredential(process.env);
+    const cred = takeCredential(process.env);
     const configFile = process.env.CCV3_BACKUP_CONFIG ?? join(home, '.claude', 'state', 'backup-notion.json');
     const stop = (status, error) => {
       mkdirSync(outDir, { recursive: true });
