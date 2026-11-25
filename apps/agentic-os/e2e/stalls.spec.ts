@@ -134,6 +134,16 @@ test.describe('pr-green (stall-watch.mjs:66-70, guessed)', () => {
     expect(tracker.observe([row], NOW + 4 * MIN).get(`${row.pr}@${row.head}`)).toBe(NOW + 4 * MIN);
   });
 
+  test('S7d a PR with no head starts no clock, so one missing head cannot lend its clock to the next', () => {
+    // Breaks when an empty head gets the key "<pr>@" (readers.ts:128, CodeRabbit CLI run 1): the second missing head would inherit the first clock.
+    const tracker = createGreenTracker();
+    const headless = pr({ head: '', ready: true });
+    expect(tracker.observe([headless], NOW).size).toBe(0);
+    expect(tracker.observe([headless], NOW + 6 * MIN).size).toBe(0);
+    const real = pr({ head: 'a'.repeat(40), ready: true });
+    expect(tracker.observe([real], NOW + 7 * MIN).get(`${real.pr}@${real.head}`)).toBe(NOW + 7 * MIN);
+  });
+
   test('S7c the sentence says it is ready by review-status and since the app saw it', () => {
     const out = computeStalls({ lanes: [], prs: [pr({ ready: true, greenSinceMs: NOW - 9 * MIN })], nowMs: NOW });
     expect(out[0].sentence).toMatch(/review-status/);

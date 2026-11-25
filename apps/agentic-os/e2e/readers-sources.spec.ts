@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-import { decisionsOpenCount, parseDecisionsStore } from '../src/lib/decisions-parse';
-import { buildReaderSources, READER_IDS, readerSource, settleReader, type ReaderOutcome } from '../src/lib/reader-sources';
+import { DECISIONS_MAX_BYTES, decisionsOpenCount, parseDecisionsStore } from '../src/lib/decisions-parse';
+import { buildReaderSources, bytesRead, READER_IDS, readerSource, settleReader, stateFilesPartial, type ReaderOutcome } from '../src/lib/reader-sources';
 
 /**
  * Pure checks of the source rows of the readers (card agentic-os-readers, reader 6).
@@ -63,6 +63,38 @@ test.describe('readerSource', () => {
       expect(r.detail).not.toContain('C:\\');
       expect(r.detail).not.toContain('5e5e5e5e-0000-4000-8000-0123456789ab');
     }
+  });
+});
+
+test.describe('rows that must not say ok when they are not (CodeRabbit CLI run 1)', () => {
+  test('R8 a data time more than 5 minutes ahead of the clock is degraded, not ok with age 0', () => {
+    // Breaks when the age is clamped to 0 with no check on a future time (reader-sources.ts:36). The 5 minute allowance is pr-feed-parse.ts:262.
+    const future = readerSource('stalls', ok({ dataAtMs: NOW + 5 * MIN + 1000, maxAgeMs: 60 * MIN }), NOW);
+    expect(future.status).toBe('degraded');
+    expect(future.detail).toMatch(/ahead/);
+    expect(readerSource('stalls', ok({ dataAtMs: NOW + 5 * MIN, maxAgeMs: 60 * MIN }), NOW).status).toBe('ok');
+  });
+
+  test('R9 a partial read of the state files is degraded, says how much was lost and names no path', () => {
+    // Breaks when the open-question row says ok after files or the directory were skipped (readers.ts:186).
+    const stats = (patch: Partial<Parameters<typeof stateFilesPartial>[0]> = {}) => ({ unreadable: 0, oversize: 0, tooMany: 0, dirUnreadable: false, dir: 'C:\\Users\\someone\\state', ...patch });
+    expect(stateFilesPartial(stats())).toBeNull();
+    expect(stateFilesPartial(stats({ unreadable: 2 }))).toBe('2 unreadable');
+    expect(stateFilesPartial(stats({ oversize: 1, tooMany: 4 }))).toBe('1 oversize, 4 over the file limit');
+    expect(stateFilesPartial(stats({ dirUnreadable: true }))).toBe('directory unreadable');
+    const row = readerSource('open-question', ok({ partial: '2 unreadable' }), NOW);
+    expect(row.status).toBe('degraded');
+    expect(row.detail).toContain('2 unreadable');
+    expect(row.detail).not.toContain('someone');
+  });
+
+  test('R10 the size of a read is the bigger of the disk size and the bytes read, so a file that grew after lstat is too large', () => {
+    // Breaks when the size stays the lstat size (small-file.ts:17): a grown decisions.json would pass the size check.
+    expect(bytesRead(10, 'x'.repeat(2_000_000))).toBe(2_000_000);
+    expect(bytesRead(5, 'é')).toBe(5);
+    expect(bytesRead(0, 'é')).toBe(2);
+    const grown = `{"version":1,"offers":{}}${' '.repeat(DECISIONS_MAX_BYTES)}`;
+    expect(parseDecisionsStore(grown, bytesRead(30, grown))).toMatchObject({ ok: false, reason: 'too-large' });
   });
 });
 
