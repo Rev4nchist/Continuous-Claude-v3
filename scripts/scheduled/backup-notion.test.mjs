@@ -127,9 +127,9 @@ test('N5 every request has the bearer token, the pinned version and the row is b
 });
 
 test('N6 a failed night still has a row: no files, a named status, the error masked and cut', () => {
-  const props = rowProperties({ date: '2026-11-25', kind: 'nightly', files: [] }, { status: 'dump-failed', drill: 'not-run', drillDetail: `x ${TOKEN} ${'y'.repeat(900)}` });
-  assert.equal(props.Status.select.name, 'dump-failed');
-  assert.deepEqual(props.Files.files, []);
+  const props = rowProperties({ date: '2026-11-25', kind: 'nightly', files: [{ name: 'a.zip', bytes: 5, sha256: 'cc'.repeat(32), uploadId: 'u9' }, { name: 'b.zip', bytes: 6, sha256: 'dd'.repeat(32) }] }, { status: 'upload-failed:b.zip', drill: 'not-run', drillDetail: `x ${TOKEN} ${'y'.repeat(900)}` });
+  assert.equal(props.Status.select.name, 'upload-failed:b.zip');
+  assert.deepEqual(props.Files.files.map((f) => f.file_upload.id), ['u9']);
   const detail = props['Drill detail'].rich_text[0].text.content;
   assert.ok(detail.length <= 600);
   assert.ok(!detail.includes(TOKEN));
