@@ -1244,7 +1244,11 @@ export function scriptRunnerLateDenies(text: string | undefined): Deny[] {
 // ---------- PR C1 (F1): a text that does not parse and holds a guarded call ----------
 
 const PARSE_ERROR_WHY = 'this text does not parse as shell (an unclosed quote, brace or parenthesis, or a stray ;; or &&), and it holds a guarded call (a push, a create or a merge), so this gate cannot tell which call runs or where. Fix the syntax and run it again.';
-/** The shell programs whose string argument is a second shell text, and the dialect that text is read in. */
+/**
+ * The shell programs whose string argument is a second shell text, and the dialect that text is read in. Every string argument that names a guarded call is
+ * parsed, not only the -c or -Command payload: a script-file argument (bash scripts/x.sh 'git push ... )') that does not parse is parse-error too. This is the
+ * broad choice (seat ruling, V7.6: fail closed on parse doubt; the 7-day corpus has no such text). Row F1-7.
+ */
 const SHELL_PROGRAMS: Record<string, 'bash' | 'pwsh'> = { bash: 'bash', sh: 'bash', dash: 'bash', zsh: 'bash', pwsh: 'pwsh', powershell: 'pwsh' };
 
 /**
@@ -2753,6 +2757,20 @@ const MAX_REMOTE_LOOKUPS = 4;
 const MAX_LOOKUP_CALLS = 16;
 /** C1 (A2): below this many ms of hook time left no lookup starts and the remote counts as local (deny): a hook killed at 10 s writes no deny. */
 const REMOTE_LOOKUP_RESERVE_MS = 1500;
+/** A read with less than this timeout is not started (the clock deny stands). */
+const REMOTE_LOOKUP_MIN_MS = 200;
+/**
+ * CLI run 1 finding 3 (seat ruling): an answer of `git remote get-url` is NETWORK only when it is clearly network: a scheme:// other than file, or an scp-like
+ * host:path (a host of two characters or more, so a drive letter is no host, and no slash before the first colon). Every other answer is local: file://, a relative
+ * path, a drive path, an empty or odd answer. LOCAL_REMOTE is not changed (it separates remote names from paths at the push words). Union: the old test still counts.
+ */
+const URL_SCHEME = /^([a-z][a-z0-9+.-]*):\/\//i;
+const SCP_LIKE = /^(?:[^\s/\\:@]+@)?[^\s/\\:]{2,}:/;
+const clearlyNetwork = (url: string): boolean => { const m = URL_SCHEME.exec(url); return m ? m[1].toLowerCase() !== 'file' : SCP_LIKE.test(url); };
+function answerIsLocal(stdout: string): boolean {
+  const lines = stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+  return lines.length === 0 || lines.some((l) => LOCAL_REMOTE.test(l) || !clearlyNetwork(l));
+}
 /**
  * PR C1 (A1, A3, A2): is a remote NAME of an earlier push a local path? A name is local when ANY of these says so: its fetch URL (git remote get-url),
  * or one of its push URLs (git remote get-url --push --all), in the payload folder OR in any folder the text moves to (cd, -C: rawDirs, more folders, never fewer).
@@ -2766,12 +2784,20 @@ function remoteNameIsLocal(deps: Deps, cwd: string, extraDirs: string[], name: s
   for (const dir of [cwd, ...extraDirs.filter((d) => d !== cwd)]) {
     const own = dir === cwd;
     for (const args of [['remote', 'get-url', name], ['remote', 'get-url', '--push', '--all', name]]) {
-      if (budget.left <= 0 || (deps.scanLeft && deps.scanLeft() < REMOTE_LOOKUP_RESERVE_MS)) return true;
+      if (budget.left <= 0) return true;
+      // CLI run 1 finding 2: each read gets a timeout bounded by the hook time left (never 0: spawnSync reads 0 as no timeout); too little time left is the clock deny.
+      let opts: GitReadOpts | undefined;
+      if (deps.scanLeft) {
+        const left = deps.scanLeft();
+        const timeout = Math.min(GIT_TIMEOUT_MS, left - 1000);
+        if (left < REMOTE_LOOKUP_RESERVE_MS || timeout < REMOTE_LOOKUP_MIN_MS) return true;
+        opts = { timeout };
+      }
       budget.left -= 1;
       try {
-        const g = deps.git(dir, args);
+        const g = deps.git(dir, args, opts);
         if (g.status !== 0) { if (args.length === 3) break; return true; }
-        if (g.stdout.split(/\r?\n/).some((l) => l.trim() !== '' && LOCAL_REMOTE.test(l.trim()))) return true;
+        if (answerIsLocal(g.stdout)) return true;
       } catch (e) { if (own || !(e instanceof MissingCwdError || errCode(e) === 'ENOENT')) return true; break; } // only a folder that does not exist has no remote; a timeout or a full buffer is unknown
     }
   }

@@ -3902,19 +3902,37 @@ function consumerSubstitutes(parsed) {
 var MAX_REMOTE_LOOKUPS = 4;
 var MAX_LOOKUP_CALLS = 16;
 var REMOTE_LOOKUP_RESERVE_MS = 1500;
+var REMOTE_LOOKUP_MIN_MS = 200;
+var URL_SCHEME = /^([a-z][a-z0-9+.-]*):\/\//i;
+var SCP_LIKE = /^(?:[^\s/\\:@]+@)?[^\s/\\:]{2,}:/;
+var clearlyNetwork = (url) => {
+  const m = URL_SCHEME.exec(url);
+  return m ? m[1].toLowerCase() !== "file" : SCP_LIKE.test(url);
+};
+function answerIsLocal(stdout) {
+  const lines2 = stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+  return lines2.length === 0 || lines2.some((l) => LOCAL_REMOTE.test(l) || !clearlyNetwork(l));
+}
 function remoteNameIsLocal(deps, cwd, extraDirs, name, budget) {
   for (const dir of [cwd, ...extraDirs.filter((d) => d !== cwd)]) {
     const own = dir === cwd;
     for (const args of [["remote", "get-url", name], ["remote", "get-url", "--push", "--all", name]]) {
-      if (budget.left <= 0 || deps.scanLeft && deps.scanLeft() < REMOTE_LOOKUP_RESERVE_MS) return true;
+      if (budget.left <= 0) return true;
+      let opts;
+      if (deps.scanLeft) {
+        const left = deps.scanLeft();
+        const timeout = Math.min(GIT_TIMEOUT_MS, left - 1e3);
+        if (left < REMOTE_LOOKUP_RESERVE_MS || timeout < REMOTE_LOOKUP_MIN_MS) return true;
+        opts = { timeout };
+      }
       budget.left -= 1;
       try {
-        const g = deps.git(dir, args);
+        const g = deps.git(dir, args, opts);
         if (g.status !== 0) {
           if (args.length === 3) break;
           return true;
         }
-        if (g.stdout.split(/\r?\n/).some((l) => l.trim() !== "" && LOCAL_REMOTE.test(l.trim()))) return true;
+        if (answerIsLocal(g.stdout)) return true;
       } catch (e) {
         if (own || !(e instanceof MissingCwdError || errCode(e) === "ENOENT")) return true;
         break;
