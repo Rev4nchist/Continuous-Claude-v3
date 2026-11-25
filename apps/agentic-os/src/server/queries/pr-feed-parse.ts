@@ -43,9 +43,11 @@ export type PrSpend =
   | { state: 'ok'; usd: number | null; engineRuns: number | null };
 
 /** One feed row on the server. `headRef` is only for the lane join and never goes into the view. */
-type FeedRow = {
+export type FeedRow = {
   pr: number;
   headRef: string | null;
+  /** The head sha (7 to 40 hex, lower case). Server only, for the pr-green clock of the stall reader: never in a view. */
+  head: string | null;
   draft: boolean;
   band: string | null;
   ready: boolean | null;
@@ -146,6 +148,7 @@ function parseRow(raw: unknown, clean: (text: string) => string | null): FeedRow
   return {
     pr: raw.pr,
     headRef: typeof raw.headRef === 'string' && raw.headRef.length <= 200 ? raw.headRef : null,
+    head: typeof raw.head === 'string' && SHA.test(raw.head) ? raw.head.toLowerCase() : null,
     draft: raw.draft === true,
     band: oneOf(BANDS, raw.band),
     ready: typeof raw.ready === 'boolean' ? raw.ready : null,

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { CLOCK_KIND_LIMIT, feedRefreshEntries, foldClock, laneClockEntries, type RawClock } from '../src/lib/clock';
+import { CLOCK_KIND_LIMIT, clockOf, feedRefreshEntries, foldClock, laneClockEntries, type RawClock } from '../src/lib/clock';
 
 /**
  * Pure checks of the clock fold (card agentic-os-readers, reader 4). The rules copy the lane CLI predicates that
@@ -93,5 +93,15 @@ test.describe('foldClock', () => {
 
   test('C11 no entries gives an empty list', () => {
     expect(foldClock([], NOW)).toEqual([]);
+  });
+
+  test('C12 clockOf folds the lane rows and the feeds of one read into one sorted list', () => {
+    // Breaks when a source (lane rows or feeds) is left out of the one list.
+    const out = clockOf({
+      rows: [row({ id: 'lane-p', leaseExpiresAtMs: NOW + 300 * MIN }), row({ id: 'lane-r', ownerHeld: false, dueAtMs: NOW + 20 * MIN, remindState: 'scheduled' })],
+      feeds: [{ label: 'Open PRs', exportedAtMs: NOW - 10 * MIN, trigger: 'every 15m' }],
+      nowMs: NOW,
+    });
+    expect(out.map((e) => `${e.kind}:${e.label}:${e.inMin}`)).toEqual(['feed-refresh:Open PRs:5', 'reminder:lane-r:20', 'park-end:lane-p:300']);
   });
 });

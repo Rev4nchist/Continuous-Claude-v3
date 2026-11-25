@@ -52,6 +52,11 @@ export function feedRefreshEntries(feeds: ClockFeed[], nowMs: number): RawClock[
   return out;
 }
 
+/** All clock entries of one read: the lane rows and the feeds, folded. */
+export function clockOf(input: { rows: ClockLaneRow[]; feeds: ClockFeed[]; nowMs: number }): ClockEntry[] {
+  return foldClock([...input.rows.flatMap((row) => laneClockEntries(row, input.nowMs)), ...feedRefreshEntries(input.feeds, input.nowMs)], input.nowMs);
+}
+
 export function foldClock(entries: RawClock[], nowMs: number): ClockEntry[] {
   const future = entries.filter((e) => e.atMs > nowMs).sort((a, b) => a.atMs - b.atMs);
   const taken = new Map<ClockKind, number>();
