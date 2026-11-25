@@ -10,6 +10,8 @@ import { listedIdRoot, loadListedIds, type ListedIds } from '@/lib/listed-id-mas
  * above the app; a root with no list files is a failure ("absent"), never an empty list.
  *
  * A good list is kept 60 seconds. A failure is not kept: the next poll reads again, so a list that comes back is used at once.
+ * Accepted trade-off (CodeRabbit CLI run 1, seat word 11:03): an id added to the list files shows in the mask after at most 60 seconds. The
+ * list files change by hand and rarely; a read on each 5-second poll costs more than this window is worth.
  */
 const KEEP_MS = 60_000;
 let kept: { root: string; at: number; value: ListedIds } | null = null;

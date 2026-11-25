@@ -38,7 +38,8 @@ export function maskSnapshot<T>(value: T, list: ListedIds): { value: T; masked: 
         let name = text(key);
         // Two keys that mask to the same text must both stay.
         for (let n = 2; Object.hasOwn(out, name); n += 1) name = `${text(key)}~${n}`;
-        out[name] = walk(inner);
+        // defineProperty, not out[name] = ...: a key named __proto__ would run the setter and the field would be lost.
+        Object.defineProperty(out, name, { value: walk(inner), enumerable: true, writable: true, configurable: true });
       }
       return out;
     }

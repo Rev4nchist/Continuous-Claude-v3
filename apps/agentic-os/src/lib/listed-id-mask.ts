@@ -213,16 +213,17 @@ export function maskListed(text: string, ids: string[]): Masked {
 }
 
 /**
- * The field rule of the board page: a text whose reader view (white space collapsed, invisible marks gone, fullwidth folded) holds more ids than the
- * text itself is replaced by the masked reader view ("PR", 7 spaces, a number escapes the 8-character look-back of the matcher).
+ * The field rule of the board page: two passes, composed. The raw text is masked, then the reader view of the masked text (white space collapsed,
+ * invisible marks gone, fullwidth folded) is masked ("PR", 7 spaces, a number escapes the 8-character look-back of the matcher). Never "the
+ * bigger count": on equal counts that kept the raw text and left an id that only the reader view finds (CodeRabbit CLI run 1).
  */
 export function maskStringWith(mask: (text: string) => Masked, text: string): Masked {
   if (typeof text !== 'string' || text === '') return { text, masked: 0 };
   const m = mask(text);
-  const flat = readerView(text);
-  const f = flat === text ? m : mask(flat);
-  const best = f.masked > m.masked ? f : m;
-  return best.masked > 0 ? best : { text, masked: 0 };
+  const flat = readerView(m.text);
+  const f = flat === m.text ? { text: m.text, masked: 0 } : mask(flat);
+  const total = m.masked + f.masked;
+  return total > 0 ? { text: f.masked > 0 ? f.text : m.text, masked: total } : { text, masked: 0 };
 }
 
 export function maskString(text: string, ids: string[]): Masked {
