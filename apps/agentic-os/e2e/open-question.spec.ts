@@ -14,11 +14,11 @@ import { foldOpenQuestions, OPEN_QUESTION_FRESH_MS, parseStepFields, type Questi
 const MIN = 60_000;
 const NOW = Date.parse('2026-11-25T13:00:00.000Z');
 const LABEL_CANARY = 'QUESTION_LABEL_CANARY_91c2';
-const SESSION_ID = '0f5ea433-47f0-466d-aaab-5a7406258ff3';
+const SESSION_ID = '5e5e5e5e-0000-4000-8000-0123456789ab';
 
 function snap(patch: Partial<QuestionSnapshot> = {}): QuestionSnapshot {
   return {
-    label: 'trex #0f5ea433',
+    label: 'trex #5e5e5e5e',
     at: NOW - 10_000,
     endedAt: null,
     chip: null,
@@ -32,7 +32,7 @@ test.describe('foldOpenQuestions', () => {
     // Breaks when the tool name test is dropped, or when the age is taken from the snapshot time instead of the step.
     const out = foldOpenQuestions([snap()], NOW);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ session: 'trex #0f5ea433', certainty: 'sure', startedAtMs: NOW - 90_000, ageSec: 90 });
+    expect(out[0]).toMatchObject({ session: 'trex #5e5e5e5e', certainty: 'sure', startedAtMs: NOW - 90_000, ageSec: 90 });
   });
 
   test('Q2 the same session with no step (the tool ended) gives no flag', () => {

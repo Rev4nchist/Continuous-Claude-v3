@@ -180,14 +180,14 @@ test.describe('certainty, sentence and leaks', () => {
   test('S10 a note canary, a url, a uuid and a path in a lane id never leave the function', () => {
     // Breaks when computeStalls serializes the lane, skips cleanText on the subject, or reads a note field.
     const hostile = lane({
-      id: 'lane https://example.invalid/x?t=1 0f5ea433-47f0-466d-aaab-5a7406258ff3 C:\\Users\\someone\\secret.txt',
+      id: 'lane https://example.invalid/x?t=1 5e5e5e5e-0000-4000-8000-0123456789ab C:\\Users\\someone\\secret.txt',
       leaseExpiresAtMs: NOW - 5 * MIN,
       ...({ note: NOTE_CANARY } as object),
     });
     const text = JSON.stringify(computeStalls({ lanes: [hostile], prs: [], nowMs: NOW }));
     expect(text).not.toContain(NOTE_CANARY);
     expect(text).not.toContain('https://');
-    expect(text).not.toContain('0f5ea433-47f0-466d-aaab-5a7406258ff3');
+    expect(text).not.toContain('5e5e5e5e-0000-4000-8000-0123456789ab');
     expect(text).not.toContain('C:\\\\Users');
     expect(text).not.toContain('someone');
   });

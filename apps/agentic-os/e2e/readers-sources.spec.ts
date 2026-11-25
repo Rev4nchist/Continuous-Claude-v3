@@ -56,12 +56,12 @@ test.describe('readerSource', () => {
     // Breaks when a raw reason or an error message goes into the row without safeMessage.
     const rows = [
       readerSource('tasks', { ok: false, reason: 'ENOENT: no such file C:\\Users\\someone\\repo\\tasks.json', readAtMs: NOW }, NOW),
-      readerSource('decisions', { ok: false, reason: 'bad json near 0f5ea433-47f0-466d-aaab-5a7406258ff3', readAtMs: NOW }, NOW),
+      readerSource('decisions', { ok: false, reason: 'bad json near 5e5e5e5e-0000-4000-8000-0123456789ab', readAtMs: NOW }, NOW),
     ];
     for (const r of rows) {
       expect(r.detail).not.toContain('someone');
       expect(r.detail).not.toContain('C:\\');
-      expect(r.detail).not.toContain('0f5ea433-47f0-466d-aaab-5a7406258ff3');
+      expect(r.detail).not.toContain('5e5e5e5e-0000-4000-8000-0123456789ab');
     }
   });
 });

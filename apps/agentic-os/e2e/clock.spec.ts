@@ -86,9 +86,9 @@ test.describe('foldClock', () => {
   });
 
   test('C7 a hostile label (url, uuid, path) goes through cleanText and the entry holds nothing else', () => {
-    const hostile = { kind: 'park-end' as const, label: 'lane https://example.invalid/x?t=1 0f5ea433-47f0-466d-aaab-5a7406258ff3 C:\\Users\\someone\\f.txt', atMs: NOW + 120 * MIN, note: 'NOTE_CANARY_7f3a', owner: 'owner-session-id' };
+    const hostile = { kind: 'park-end' as const, label: 'lane https://example.invalid/x?t=1 5e5e5e5e-0000-4000-8000-0123456789ab C:\\Users\\someone\\f.txt', atMs: NOW + 120 * MIN, note: 'NOTE_CANARY_7f3a', owner: 'owner-session-id' };
     const text = JSON.stringify(foldClock([hostile as RawClock], NOW));
-    for (const bad of ['https://', '0f5ea433-47f0-466d-aaab-5a7406258ff3', 'someone', 'NOTE_CANARY_7f3a', 'owner-session-id']) expect(text, bad).not.toContain(bad);
+    for (const bad of ['https://', '5e5e5e5e-0000-4000-8000-0123456789ab', 'someone', 'NOTE_CANARY_7f3a', 'owner-session-id']) expect(text, bad).not.toContain(bad);
   });
 
   test('C11 no entries gives an empty list', () => {

@@ -42,6 +42,15 @@ async function snapshot(request: APIRequestContext): Promise<{ body: Snapshot; t
 
 const NOTE_CANARY = 'RD_NOTE_CANARY_7f3a';
 
+/** Save evidence to the file the harness names (a path in the evidence folder), when it names one. */
+function save(envName: string, value: unknown): void {
+  const target = process.env[envName];
+  if (!target) return;
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, `${JSON.stringify(value, null, 2)}
+`);
+}
+
 test.describe('stalls from the lane table (S)', () => {
   test('S12 each seeded lane gives its stall; re-program, a parked note, a review lane and a done lane give none', async ({ request }) => {
     // Breaks when a state or note filter of stall-watch.mjs:79-97 is dropped, or the lease query reads the wrong column.
@@ -96,7 +105,7 @@ test.describe('open Question flag from the state files (Q)', () => {
   test.afterEach(() => clearStateDir());
 
   test('Q9 a state file with an AskUserQuestion step gives one flag; with no step it gives none', async ({ request }) => {
-    const sid = '0f5ea433-47f0-466d-aaab-5a7406258ff3';
+    const sid = '5e5e5e5e-0000-4000-8000-0123456789ab';
     writeState(sid, { step: step('AskUserQuestion', 'QUESTION_LABEL_CANARY_91c2', 90) });
     const open = await snapshot(request);
     expect(open.body.openQuestions).toHaveLength(1);
@@ -118,9 +127,11 @@ test.describe('decisions.json and tasks.json readers (D, T)', () => {
     const row = (s: Snapshot) => s.sources.find((x) => x.id === 'decisions');
 
     writeFileSync(decisionsFile(), '{"version":1,"offers":{');
-    const corrupt = (await snapshot(request)).body;
+    const corruptRead = await snapshot(request);
+    const corrupt = corruptRead.body;
     expect(corrupt.decisionsOpen).toBeNull();
     expect(row(corrupt)?.status).toBe('error');
+    save('E2E_RD_CORRUPT_FILE', { decisionsOpen: corrupt.decisionsOpen, decisionsSource: row(corrupt), note: 'decisions.json was corrupt: a source error and a null count, not the zero state' });
 
     writeFileSync(decisionsFile(), JSON.stringify({ version: 1, offers: {}, decisions: {}, misses: {} }));
     const empty = (await snapshot(request)).body;
@@ -142,6 +153,24 @@ test.describe('decisions.json and tasks.json readers (D, T)', () => {
 });
 
 test.describe('source rows (R)', () => {
+  test.beforeEach(() => clearStateDir());
+  test.afterEach(() => { clearStateDir(); rmSync(need('E2E_RD_DECISIONS_FILE'), { force: true }); });
+
+  test('R9 the saved snapshot shows stalls, the open Question flag, clock entries and one source row per reader', async ({ request }) => {
+    // The card's done line: this is the artifact (snapshot.json in the evidence folder). Fixtures only: no live state.
+    writeState('5e5e5e5e-0000-4000-8000-0123456789ab', { step: step('AskUserQuestion', 'x', 90) });
+    mkdirSync(dirname(need('E2E_RD_DECISIONS_FILE')), { recursive: true });
+    writeFileSync(need('E2E_RD_DECISIONS_FILE'), JSON.stringify({ version: 1, offers: { a: { step: 'land' } }, decisions: {}, misses: {} }));
+    const { body } = await snapshot(request);
+    expect(body.stalls.length).toBeGreaterThanOrEqual(3);
+    expect(body.openQuestions).toHaveLength(1);
+    expect(body.clock.length).toBeGreaterThan(0);
+    expect(body.decisionsOpen).toBe(1);
+    const ids = body.sources.map((s) => s.id).filter((id) => ['stalls', 'open-question', 'decisions', 'clock', 'tasks'].includes(id));
+    expect(ids.sort()).toEqual(['clock', 'decisions', 'open-question', 'stalls', 'tasks']);
+    save('E2E_RD_SNAPSHOT_FILE', { stalls: body.stalls, openQuestions: body.openQuestions, clock: body.clock, decisionsOpen: body.decisionsOpen, scheduledTasks: body.scheduledTasks, sources: body.sources });
+  });
+
   test('R8 one row per reader with a read time and an age, and no row holds a path', async ({ request }) => {
     const { body } = await snapshot(request);
     for (const id of ['stalls', 'open-question', 'decisions', 'clock', 'tasks']) {
