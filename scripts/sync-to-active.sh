@@ -767,7 +767,8 @@ if $CHANGED; then
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;
-            .claude/hooks/dist/*.mjs)
+            .claude/hooks/dist/*.mjs|.claude/hooks/dist/sh-syntax.wasm|.claude/hooks/dist/sh-syntax-wasm_exec.cjs|.claude/hooks/dist/shell-ast-walk.ps1)
+                # The last three are the files the shell parser reads at run time, beside the bundles (hooks/scripts/copy-parser-assets.mjs).
                 rest="${p#.claude/hooks/dist/}"
                 [[ "$rest" == */* ]] && return 0   # top-level dist only
                 printf '%s\n' "$ACTIVE_CLAUDE/hooks/dist/$rest"
@@ -998,11 +999,11 @@ for pattern in "hooks/*.sh" "hooks/*.py" "hooks/*.mjs" "hooks/*.ps1" "hooks/pack
     done
 done
 
-# Sync hooks/dist/*.mjs (built hook bundles)
+# Sync hooks/dist/*.mjs (built hook bundles) and the three files the shell parser reads beside them
 DIST_SRC="$REPO_CLAUDE/hooks/dist"
 DIST_DST="$ACTIVE_CLAUDE/hooks/dist"
 if [[ -d "$DIST_SRC" ]] && sync_root_ok "$DIST_DST"; then
-    for src_file in "$DIST_SRC"/*.mjs; do
+    for src_file in "$DIST_SRC"/*.mjs "$DIST_SRC"/sh-syntax.wasm "$DIST_SRC"/sh-syntax-wasm_exec.cjs "$DIST_SRC"/shell-ast-walk.ps1; do
         [[ ! -f "$src_file" ]] && continue
         local_name="${src_file##*/}"
         dst_file="$DIST_DST/$local_name"
@@ -1105,6 +1106,8 @@ if ! $DRY_RUN; then
     done
     verify_dir "commands" "$REPO_CLAUDE/$COMMANDS_SRC_DIR" "$ACTIVE_CLAUDE/$COMMANDS_DST_DIR"
     verify_dir "hooks/dist (*.mjs)" "$REPO_CLAUDE/hooks/dist" "$ACTIVE_CLAUDE/hooks/dist" "*.mjs"
+    verify_dir "hooks/dist (sh-syntax files)" "$REPO_CLAUDE/hooks/dist" "$ACTIVE_CLAUDE/hooks/dist" "sh-syntax*"
+    verify_dir "hooks/dist (shell-ast-walk.ps1)" "$REPO_CLAUDE/hooks/dist" "$ACTIVE_CLAUDE/hooks/dist" "shell-ast-walk.ps1"
     verify_dir "scripts/ralph (*.py)" "$REPO_CLAUDE/scripts/ralph" "$ACTIVE_CLAUDE/scripts/ralph" "*.py"
     verify_dir "templates/ralph" "$REPO_CLAUDE/templates/ralph" "$ACTIVE_CLAUDE/templates/ralph"
 
