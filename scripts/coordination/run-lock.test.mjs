@@ -285,11 +285,29 @@ test('G2 wait row: a pre-pr start that waits leaves ONE row in runs.jsonl (pid, 
   const rows = rowsOf();
   assert.equal(rows.length, 1, JSON.stringify(rows));
   assert.equal(rows[0].event, 'wait');
+  assert.equal(rows[0].queued, true);
   assert.equal(rows[0].pid, 101);
   assert.equal(rows[0].head, 'bbbb2222');
   assert.deepEqual(rows[0].keys, ['spacing']);
   assert.equal(rows[0].ts, T0 + 9_000);
   assert.match(rows[0].reasons.join(' '), /2 minutes/);
+});
+
+test('G4 wait row: a pre-pr start WITHOUT --wait-lock that is refused also leaves a row (queued false); each refused ask is one row', async () => {
+  const ctx = setup({ free: 12, load: 20 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  live(ctx, 101);
+  await acquire({ kind: 'pre-pr', pid: 100, holder: 'a', head: 'aaaa1111' }, ctx.d);
+  const rowsOf = () => (existsSync(join(ctx.dir, 'runs.jsonl')) ? readFileSync(join(ctx.dir, 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  ctx.st.now = T0 + 9_000;
+  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222' }, ctx.d);
+  assert.equal(r.granted, false);
+  ctx.st.now = T0 + 60_000;
+  await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222' }, ctx.d);
+  const rows = rowsOf();
+  assert.equal(rows.length, 2, JSON.stringify(rows));
+  assert.ok(rows.every((x) => x.event === 'wait' && x.pid === 101 && x.queued === false && x.keys.includes('spacing')), JSON.stringify(rows));
 });
 
 test('a dead pid and a reused pid (other start time) lose their slot; a past expiry keeps the lock of a run that is alive (R3)', async () => {
