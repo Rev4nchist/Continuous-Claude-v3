@@ -28,7 +28,7 @@ after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true, m
 const FAKE = `
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-writeFileSync(join(process.env.FAKE_CALL_DIR, 'call.json'), JSON.stringify({ argv: process.argv.slice(2), envKeys: Object.keys(process.env) }));
+writeFileSync(join(process.env.FAKE_CALL_DIR, 'call.json'), JSON.stringify({ argv: process.argv.slice(2), envKeys: Object.keys(process.env), tokenOk: process.env.CCV3_BACKUP_NOTION_TOKEN === process.env.EXPECT_TOKEN, tokenSet: Boolean(process.env.CCV3_BACKUP_NOTION_TOKEN), state: process.env.CCV3_BACKUP_CREDENTIAL_STATE ?? null }));
 console.log('fake backup stdout line');
 console.error('fake backup stderr line');
 if (process.env.FAKE_HANG) setInterval(() => {}, 1000);
@@ -128,4 +128,60 @@ test('row: the real tasks.json row is daily 03:10 with a 07:40 catch-up, no mode
   assert.deepEqual(row.allowedExit, [0]);
   assert.equal(row.maxAgeHours, 30);
   assert.ok(existsSync(resolve(HERE, '..', '..', row.script)), row.script);
+});
+
+// ---- credential at rest (seat ruling 19:17): the wrapper decrypts a DPAPI file and gives the token to the one child through one env variable ----
+const FRESH = 'secret_' + 'y'.repeat(20); // fake, low entropy on purpose (gitleaks)
+const dpapi = (text) => spawnSync('powershell.exe', ['-NoProfile', '-Command', "ConvertTo-SecureString $env:CCV3_T -AsPlainText -Force | ConvertFrom-SecureString"], { env: { ...process.env, CCV3_T: text }, encoding: 'utf8', windowsHide: true }).stdout.trim();
+
+function withCred(fx, content, extra = {}) {
+  const file = join(fx.root, 'token.txt');
+  if (content !== null) writeFileSync(file, content);
+  return run(fx, { CCV3_BACKUP_TOKEN_FILE: file, EXPECT_TOKEN: FRESH, ...extra });
+}
+
+test('cred: a DPAPI file is decrypted for the child only; the token is not on argv and not in the log', win, () => {
+  const fx = fixture();
+  const r = withCred(fx, dpapi(FRESH));
+  assert.equal(r.status, 0, r.log);
+  const call = called(fx);
+  assert.equal(call.tokenOk, true, 'the child must get the decrypted token');
+  assert.equal(call.state, null);
+  assert.ok(!JSON.stringify(call.argv).includes(FRESH));
+  assert.ok(!r.log.includes(FRESH) && !r.err.includes(FRESH), 'no token in the log or stderr');
+  assert.ok(!r.log.includes(dpapi(FRESH).slice(0, 40)), 'no blob text in the log');
+});
+
+test('cred: a plain-text file fails closed: no token for the child, the state not-protected', win, () => {
+  const fx = fixture();
+  const r = withCred(fx, FRESH);
+  assert.equal(r.status, 0, 'the wrapper passes the child exit code through');
+  const call = called(fx);
+  assert.equal(call.tokenOk, false);
+  assert.equal(call.tokenSet, false);
+  assert.equal(call.state, 'not-protected');
+  assert.ok(!r.log.includes(FRESH) && !r.err.includes(FRESH));
+});
+
+test('cred: a DPAPI-shaped file that cannot be decrypted gives the state unreadable and no token', win, () => {
+  const fx = fixture();
+  const r = withCred(fx, '01000000d08c9ddf0115d1118c7a00c04fc297eb01000000deadbeef');
+  const call = called(fx);
+  assert.equal(call.state, 'unreadable');
+  assert.equal(call.tokenSet, false);
+  assert.ok(!r.log.includes(FRESH));
+});
+
+test('cred: no credential file means no token, and a token inherited from the environment is dropped', win, () => {
+  const fx = fixture();
+  withCred(fx, null, { CCV3_BACKUP_NOTION_TOKEN: FRESH });
+  const call = called(fx);
+  assert.equal(call.tokenSet, false, 'the wrapper owns the credential: an inherited token must not reach the child');
+  assert.equal(call.state, null);
+});
+
+test('trash: the wrapper never passes --allow-trash on its own', win, () => {
+  const fx = fixture();
+  run(fx);
+  assert.ok(!called(fx).argv.includes('--allow-trash'));
 });

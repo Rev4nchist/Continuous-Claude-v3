@@ -205,3 +205,63 @@ test('S11 local copies: dated folders older than 14 days go, other names and fil
     assert.deepEqual(gone.sort(), ['2026-10-01', '2026-11-10']);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- credential at rest (seat ruling 19:17): the token comes from the wrapper in one env variable, never from a plain file ----
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { resolveCredential } from './backup-state.mjs';
+
+const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'backup-state.mjs');
+const FRESH = 'secret_' + 'y'.repeat(20); // fake, low entropy on purpose (gitleaks)
+
+test('C1 resolveCredential: a token needs the env variable; a named state fails closed; nothing is no-credential', () => {
+  assert.deepEqual(resolveCredential({ CCV3_BACKUP_NOTION_TOKEN: FRESH }), { token: FRESH });
+  assert.deepEqual(resolveCredential({ CCV3_BACKUP_NOTION_TOKEN: FRESH, CCV3_BACKUP_CREDENTIAL_STATE: 'not-protected' }), { status: 'credential-not-protected' });
+  assert.deepEqual(resolveCredential({ CCV3_BACKUP_NOTION_TOKEN: FRESH, CCV3_BACKUP_CREDENTIAL_STATE: 'unreadable' }), { status: 'credential-unreadable' });
+  assert.deepEqual(resolveCredential({}), { status: 'no-credential' });
+  assert.deepEqual(resolveCredential({ CCV3_BACKUP_NOTION_TOKEN: '   ' }), { status: 'no-credential' });
+});
+
+/** A live (not dry-run) start in a child process, with a clean env. Stops at the credential check: no Docker, no Notion. */
+function liveRun(t, env) {
+  const clean = { ...process.env, USERPROFILE: t.home, HOME: t.home };
+  for (const k of Object.keys(clean)) if (k.startsWith('CCV3_BACKUP_')) delete clean[k];
+  const r = spawnSync(process.execPath, [SCRIPT, '--date', '2026-11-25', '--out', t.out, '--repo', t.repo], { env: { ...clean, ...env }, encoding: 'utf8', timeout: 60000 });
+  const failedPath = path.join(t.out, 'FAILED-2026-11-25.json');
+  const failed = fs.existsSync(failedPath) ? JSON.parse(fs.readFileSync(failedPath, 'utf8')) : null;
+  return { code: r.status, failed, text: `${r.stdout}\n${r.stderr}\n${failed ? JSON.stringify(failed) : ''}` };
+}
+
+test('C2 a plain-text or unreadable credential fails closed with a named status, exit 2, and no token in any output', () => {
+  const t = tree();
+  try {
+    const notProtected = liveRun(t, { CCV3_BACKUP_NOTION_TOKEN: FRESH, CCV3_BACKUP_CREDENTIAL_STATE: 'not-protected' });
+    assert.equal(notProtected.code, 2);
+    assert.equal(notProtected.failed.status, 'credential-not-protected');
+    assert.ok(!notProtected.text.includes(FRESH), notProtected.text);
+    const unreadable = liveRun(t, { CCV3_BACKUP_NOTION_TOKEN: FRESH, CCV3_BACKUP_CREDENTIAL_STATE: 'unreadable' });
+    assert.equal(unreadable.failed.status, 'credential-unreadable');
+    assert.ok(!unreadable.text.includes(FRESH));
+  } finally { t.clean(); }
+});
+
+test('C3 with no credential the run exits 2 as no-credential; an old plain token file is never read', () => {
+  const t = tree();
+  try {
+    t.put('home/.claude/state/backup-notion-token', FRESH);
+    const none = liveRun(t, {});
+    assert.equal(none.code, 2);
+    assert.equal(none.failed.status, 'no-credential');
+    assert.ok(!none.text.includes(FRESH), 'the plain file must not be read or printed');
+  } finally { t.clean(); }
+});
+
+test('C4 a token without the database config is no-config: exit 2, a FAILED file, the token nowhere in the output', () => {
+  const t = tree();
+  try {
+    const r = liveRun(t, { CCV3_BACKUP_NOTION_TOKEN: FRESH, CCV3_BACKUP_CONFIG: path.join(t.root, 'missing.json') });
+    assert.equal(r.code, 2);
+    assert.equal(r.failed.status, 'no-config');
+    assert.ok(!r.text.includes(FRESH), r.text);
+  } finally { t.clean(); }
+});
