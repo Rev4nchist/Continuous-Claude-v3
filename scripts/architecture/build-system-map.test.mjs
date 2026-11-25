@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync as fsRename, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -320,4 +320,35 @@ test('G21 a failed write leaves both files as they were (temp file, then rename)
   rmSync(join(root, ...VIZ, 'index.html.tmp'), { recursive: true });
   apply(root);
   assert.equal(readdirSync(join(root, ...VIZ)).filter((n) => n.endsWith('.tmp')).length, 0, 'no temp file is left');
+});
+
+test('G22 a Node option before the hook file is not read as the hook name', () => {
+  const root = makeRoot({ hooks: [['PreToolUse', 'Bash', 'alpha.mjs']] });
+  const f = join(root, '.claude', 'settings.json.template');
+  const t = JSON.parse(readFileSync(f, 'utf8'));
+  const dist = (n) => `{{CLAUDE_HOME}}/hooks/dist/${n}`;
+  t.hooks.PreToolUse.push({ matcher: 'Edit', hooks: [{ type: 'command', command: 'node', args: ['--no-warnings', dist('gamma.mjs')] }] });
+  t.hooks.PreToolUse.push({ matcher: 'Write', hooks: [{ type: 'command', command: 'node', args: ['--require', dist('pre.cjs'), dist('delta.mjs')] }] });
+  writeFileSync(f, JSON.stringify(t, null, 2));
+  apply(root);
+  const hooks = graphOf(root).registry.hooks;
+  const names = hooks.items.map((h) => h.file);
+  assert.ok(names.includes('gamma.mjs'), `a boolean option is skipped: ${names}`);
+  assert.ok(!names.some((n) => n.startsWith('-')), `no hook is named like an option: ${names}`);
+  assert.ok(!names.includes('pre.cjs'), 'the value of an option that takes one is not the hook');
+  assert.equal(hooks.unparsed, 1, 'an option that takes a value cannot be read with certainty: counted as unparsed, never guessed');
+});
+
+test('G23 a rename that fails after the first one puts the first file back (no mixed outputs)', () => {
+  const writeAll = need('writeAll');
+  const dir = mkdtempSync(join(tmpdir(), 'sysmap-wa-'));
+  roots.push(dir);
+  const a = join(dir, 'a.json'), b = join(dir, 'b.html');
+  writeFileSync(a, 'old a'); writeFileSync(b, 'old b');
+  let calls = 0;
+  const failSecond = (from, to) => { calls += 1; if (calls === 2) throw new Error('forced rename failure'); return fsRename(from, to); };
+  assert.throws(() => writeAll([[a, 'new a'], [b, 'new b']], { renameSync: failSecond }), /forced rename failure/);
+  assert.equal(readFileSync(a, 'utf8'), 'old a', 'the first file is back as it was');
+  assert.equal(readFileSync(b, 'utf8'), 'old b', 'the second file never changed');
+  assert.deepEqual(readdirSync(dir).sort(), ['a.json', 'b.html'], 'no temp or backup file is left');
 });
