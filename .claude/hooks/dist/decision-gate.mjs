@@ -2861,9 +2861,8 @@ function scriptRunnerDenies(parsed, files) {
 var ABS_PATH = /^(?:[A-Za-z]:)?[\\/]/;
 function isScriptFileCall(args, files) {
   if (!files) return false;
-  const first = args.find((a) => typeof a.lit !== "string" || !a.lit.startsWith("-"));
-  const lit = first?.lit;
-  if (typeof lit !== "string" || lit === "" || /[$`*?%]/.test(lit)) return false;
+  const lit = args[0]?.lit;
+  if (typeof lit !== "string" || lit === "" || lit.startsWith("-") || /[$`*?%]/.test(lit)) return false;
   try {
     const dirs = files.dirs().filter((d) => files.kind(d) === "dir");
     if (dirs.length === 0) return false;

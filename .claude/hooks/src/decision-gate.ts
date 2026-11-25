@@ -1242,19 +1242,18 @@ export function scriptRunnerDenies(parsed: Deps['parsed'], files?: ScriptFiles):
 }
 
 /**
- * Item 11b (seat ruling 15:2x CST 11-25): the arguments of a script FILE are data (the gate cannot read what the file does either), so a call whose first word after
- * the runner and its options is a path to a file that exists is not a script-runner deny. Everything else stays denied (fail closed): inline code in any
- * spelling (-e, -p, -c, -r, --eval: the first word after the options is then the code, not a file), a missing file, a variable or $(...) in the path, `-` (stdin),
- * a folder or lookup that fails. No flag list: options are the words that start with a dash. With a cd or -C in the text, the file must exist in every real folder
- * the text can run in (rawDirs); a folder that does not exist is no folder.
+ * Item 11b (seat ruling 15:2x CST 11-25, narrowed 15:3x): the arguments of a script FILE are data (the gate cannot read what the file does either), so a call
+ * whose word RIGHT AFTER the runner is a path to a file that exists is not a script-runner deny. Any option before the file means no skip: an option can take a
+ * file as its value (node -r real.js -e "...", python -X x.py -c "..."), and the gate has no list of which options do. Everything else stays denied (fail closed):
+ * inline code, a missing file, a variable or $(...) in the path, `-` (stdin), a folder, a lookup that fails. With a cd or -C in the text, the file must exist in
+ * every real folder the text can run in (rawDirs); a folder that does not exist is no folder.
  */
 export interface ScriptFiles { dirs: () => string[]; kind: (path: string) => 'file' | 'dir' | null }
 const ABS_PATH = /^(?:[A-Za-z]:)?[\\/]/;
 function isScriptFileCall(args: { lit?: string | null }[], files: ScriptFiles | undefined): boolean {
   if (!files) return false;
-  const first = args.find((a) => typeof a.lit !== 'string' || !a.lit.startsWith('-'));
-  const lit = first?.lit;
-  if (typeof lit !== 'string' || lit === '' || /[$`*?%]/.test(lit)) return false;
+  const lit = args[0]?.lit;
+  if (typeof lit !== 'string' || lit === '' || lit.startsWith('-') || /[$`*?%]/.test(lit)) return false;
   try {
     const dirs = files.dirs().filter((d) => files.kind(d) === 'dir');
     if (dirs.length === 0) return false;
