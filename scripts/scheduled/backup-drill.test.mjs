@@ -439,3 +439,19 @@ test('D22 a late-created scratch database whose drop fails is written to the pen
     assert.deepEqual(JSON.parse(readFileSync(pendingFile, 'utf8')), { name: 'lanes_pr1_abcd1234' });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('D23 the sweep stops at the first call that does not answer: only the first file gets calls, both files stay, one line says why', { timeout: 5000 }, async () => {
+  // Breaks when the limit is per call only: with docker hung, every pending file costs its own wait and the sweep can use the run budget before the dump (seat read of 34bcb727).
+  const root = pendingDir();
+  try {
+    const first = crashedRun(root, { name: 'lanes_pr1_aaaa0001' }, 'run-030000-1');
+    const second = crashedRun(root, { name: 'lanes_pr1_bbbb0002' }, 'run-030000-2');
+    const f = hungOn(/rm -f/);
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor, callMs: 60 });
+    assert.ok(f.calls.length >= 1 && f.calls.every((c) => c.line.includes('lanes_pr1_aaaa0001')), 'calls for the first file only');
+    assert.equal(existsSync(join(first, 'drill-pending.json')), true);
+    assert.equal(existsSync(join(second, 'drill-pending.json')), true, 'the file it did not reach stays for the next run');
+    assert.deepEqual(out.cleaned, []);
+    assert.match(out.skipped.join(' '), /sweep stopped: docker or node did not answer/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

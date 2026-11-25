@@ -193,8 +193,10 @@ export async function sweepPendingDrills({ root, sh: shell, repo, container = 'c
     } catch { return []; }
   };
   const scratchCli = join(repo, 'scripts', 'coordination', 'scratch-db.mjs');
+  let stopped = false; // the first call that gets no answer (code 124) ends the sweep: the files it did not reach stay for the next run
   for (const day of folders(root)) {
     for (const run of folders(day)) {
+      if (stopped) break;
       const file = join(run, 'drill-pending.json');
       if (skip && resolve(run) === resolve(skip)) continue;
       if (!existsSync(file)) continue;
@@ -208,8 +210,10 @@ export async function sweepPendingDrills({ root, sh: shell, repo, container = 'c
         let ok = true;
         const removed = await sh(docker, ['exec', container, 'rm', '-f', `/tmp/${name}.dump`]);
         if (removed.code !== 0) ok = false;
-        const dropped = await sh(node, [scratchCli, 'drop', url]);
+        if (removed.code === 124) stopped = true;
+        const dropped = stopped ? { code: 124 } : await sh(node, [scratchCli, 'drop', url]);
         if (dropped.code !== 0) ok = false;
+        if (dropped.code === 124) stopped = true;
         rmSync(join(tmpdir(), `${name}.dump`), { force: true });
         if (ok) { rmSync(file, { force: true }); cleaned.push(name); } else skipped.push(`${name}: cleanup not complete, kept for the next run`);
       } catch (e) {
@@ -217,5 +221,6 @@ export async function sweepPendingDrills({ root, sh: shell, repo, container = 'c
       }
     }
   }
+  if (stopped) skipped.push('sweep stopped: docker or node did not answer');
   return { cleaned, skipped };
 }
