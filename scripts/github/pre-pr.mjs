@@ -173,6 +173,7 @@ export const SCRIPTS_WINDOWS_TESTS = [
   'scripts/review-engine/status.test.mjs', 'scripts/review-engine/contract-seam.test.mjs', 'scripts/review-engine/args.test.mjs',
   'scripts/review-engine/db-board.test.mjs', 'scripts/review-engine/lane-cli.test.mjs', 'scripts/review-engine/source.test.mjs',
   'scripts/review-engine/diff.test.mjs',
+  'scripts/reports/upgrades-status.test.mjs',
 ];
 // Its scripts/coordination files are named one by one (test and source): a change elsewhere in that folder does not add the 72 s gate.
 // The last five are modules that the tested code imports (PR 648 critic finding 2): a change to lane-dep.mjs must run contract-seam.test.mjs.

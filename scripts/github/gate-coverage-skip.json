@@ -568,6 +568,10 @@
       "reason": "pre-pr gate only; CI has no step"
     },
     {
+      "path": "scripts/reports/upgrades-status.test.mjs",
+      "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
+    },
+    {
       "path": "scripts/review-engine/args.test.mjs",
       "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
