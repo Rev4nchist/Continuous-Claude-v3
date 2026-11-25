@@ -937,6 +937,10 @@ function isUnattended(input, env = process.env) {
   if (env.CI === "true" || env.CI === "1") return true;
   return false;
 }
+function overrideLocked(input, env = process.env) {
+  return isUnattended(input, env) || env.CLAUDE_CODE_SESSION_ATTENDED === "0";
+}
+var OVERRIDE_IGNORED_NOTE = "A typed SKIP_ override is ignored in an unattended or bypass run. Ask Dave to run it, or leave bypass mode.";
 
 // src/shared/typosquat-detect.ts
 var POPULAR_PYPI = [
@@ -26518,6 +26522,10 @@ function classifyToken(token, pattern) {
 var BASH_OVERRIDE = /^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*SKIP_PACKAGE_GUARD=1(?=[ \t]|$)/;
 var PS_OVERRIDE = /^\s*\$(?:env|Env|ENV):SKIP_PACKAGE_GUARD=1\s*(?:;|\r?\n)/;
 function checkOverride(command) {
+  return !overrideLockedRun && rawOverride(command);
+}
+var overrideLockedRun = false;
+function rawOverride(command) {
   return BASH_OVERRIDE.test(command) || PS_OVERRIDE.test(command);
 }
 function checkMaliciousPackage(name, version, ecosystem) {
@@ -26859,7 +26867,8 @@ function outputAllowOk() {
 function readStdin() {
   return readFileSync(0, "utf-8");
 }
-var OVERRIDE = "To override: prefix command with SKIP_PACKAGE_GUARD=1";
+var OVERRIDE_HINT = "To override: prefix command with SKIP_PACKAGE_GUARD=1";
+var OVERRIDE = OVERRIDE_HINT;
 function asksFor(segment, install, cwd, tool) {
   if (!install) {
     if (encodedCommands(segment).bad) {
@@ -27061,6 +27070,8 @@ async function main() {
     outputContinue();
     return;
   }
+  overrideLockedRun = overrideLocked(input);
+  if (overrideLockedRun) OVERRIDE = OVERRIDE_IGNORED_NOTE;
   const payloadCwd = mayRunUnderCmd(shell.tool) ? null : typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const rcMarkers = payloadCwd === null || !mayInstall(command) ? [] : rcFileMarkers(payloadCwd);
   const plans = shell.dialects.flatMap((dialect) => installPlans(command, dialect, localBinCwd(stripFdRedirects(command, dialect), payloadCwd, dialect), 0, rcMarkers.length > 0 ? true : void 0));
@@ -27076,7 +27087,10 @@ async function main() {
     }
   }
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
-  const wholeOverride = PS_OVERRIDE.test(command);
+  const wholeOverride = !overrideLockedRun && PS_OVERRIDE.test(command);
+  if (overrideLockedRun && (PS_OVERRIDE.test(command) || rawOverride(command) || installs.some(({ segment }) => rawOverride(segment)))) {
+    logGuardDecision("package-install-guard", input, "warn", "override-ignored: SKIP_PACKAGE_GUARD", { command });
+  }
   const checked = installs.filter(({ segment }) => !wholeOverride && !checkOverride(segment));
   if (checked.length < installs.length) {
     logGuardDecision("package-install-guard", input, "override", "SKIP_PACKAGE_GUARD", { command });

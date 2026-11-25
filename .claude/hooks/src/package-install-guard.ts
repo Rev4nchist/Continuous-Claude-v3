@@ -28,7 +28,7 @@ import { outputContinue, outputDeny } from './shared/output.js';
 import {
   parseExecutable, executableView, normalizeEscapes, wrapperPayloadsFromSegments, stripQuotedStrings,
 } from './shared/destructive-classifier.js';
-import { isUnattended } from './shared/unattended.js';
+import { isUnattended, overrideLocked, OVERRIDE_IGNORED_NOTE } from './shared/unattended.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
 import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
@@ -1338,6 +1338,15 @@ const PS_OVERRIDE = /^\s*\$(?:env|Env|ENV):SKIP_PACKAGE_GUARD=1\s*(?:;|\r?\n)/;
  * PowerShell `$env:SKIP_PACKAGE_GUARD=1;` first statement. Text in a comment or an echo does not count.
  */
 export function checkOverride(command: string): boolean {
+  return !overrideLockedRun && rawOverride(command);
+}
+
+// Card guard-skip-prefix-unattended: set once by main() for the one run this process serves. While it is true no typed
+// override counts (checkOverride and the PowerShell first-statement form return false), so every install is checked.
+let overrideLockedRun = false;
+
+/** The typed override as the command text spells it, whatever the run is. checkOverride is this test with the lock applied. */
+function rawOverride(command: string): boolean {
   return BASH_OVERRIDE.test(command) || PS_OVERRIDE.test(command);
 }
 
@@ -1865,7 +1874,9 @@ function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
 
-const OVERRIDE = 'To override: prefix command with SKIP_PACKAGE_GUARD=1';
+const OVERRIDE_HINT = 'To override: prefix command with SKIP_PACKAGE_GUARD=1';
+// main() swaps in the ignored-override note for a locked run: the hint would be wrong there.
+let OVERRIDE = OVERRIDE_HINT;
 
 /**
  * Run every check on one install segment. The local checks (typosquat, blocklist, pin) run
@@ -2145,6 +2156,10 @@ async function main() {
     return;
   }
 
+  // A typed SKIP_PACKAGE_GUARD override is ignored where no person answers for it (unattended, bypass, headless).
+  overrideLockedRun = overrideLocked(input);
+  if (overrideLockedRun) OVERRIDE = OVERRIDE_IGNORED_NOTE;
+
   // Fast path: no segment installs a package -> passthrough immediately.
   // A desktop-commander shell is chosen at run time, so its text is read as Bash and PowerShell.
   // A desktop-commander shell keeps its own folder, not the session folder: the local-bin skip and the lockfile read cannot use it.
@@ -2171,7 +2186,10 @@ async function main() {
   const installs = plans.filter((p, i) => plans.findIndex((q) => q.segment === p.segment && q.cwd === p.cwd) === i);
   // F08: the override applies to the segment it prefixes, as a shell env assignment does.
   // A PowerShell `$env:SKIP_PACKAGE_GUARD=1;` first statement sets it for the whole command.
-  const wholeOverride = PS_OVERRIDE.test(command);
+  const wholeOverride = !overrideLockedRun && PS_OVERRIDE.test(command);
+  if (overrideLockedRun && (PS_OVERRIDE.test(command) || rawOverride(command) || installs.some(({ segment }) => rawOverride(segment)))) {
+    logGuardDecision('package-install-guard', input, 'warn', 'override-ignored: SKIP_PACKAGE_GUARD', { command });
+  }
   const checked = installs.filter(({ segment }) => !wholeOverride && !checkOverride(segment));
   if (checked.length < installs.length) {
     logGuardDecision('package-install-guard', input, 'override', 'SKIP_PACKAGE_GUARD', { command });

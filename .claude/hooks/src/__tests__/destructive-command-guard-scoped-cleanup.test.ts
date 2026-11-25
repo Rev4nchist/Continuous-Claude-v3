@@ -494,7 +494,7 @@ describe('scoped cleanup: nothing else changes', () => {
   });
 
   it('the override prefix keeps its own result: allow with override, no scoped marker', () => {
-    const d = decide(`SKIP_DESTRUCTIVE_GUARD=1 rm -rf "${join(SCRATCH, 'sub')}"`, input('Bash', { permission_mode: 'bypassPermissions' }), {}, deps());
+    const d = decide(`SKIP_DESTRUCTIVE_GUARD=1 rm -rf "${join(SCRATCH, 'sub')}"`, input('Bash', { permission_mode: 'default' }), {}, deps());
     expect(d.decision).toBe('allow');
     expect(d.override).toBe(true);
     expect(d.scoped).toBeUndefined();

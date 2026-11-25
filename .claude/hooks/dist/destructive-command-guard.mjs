@@ -1064,6 +1064,10 @@ function isUnattended(input, env = process.env) {
   if (env.CI === "true" || env.CI === "1") return true;
   return false;
 }
+function overrideLocked(input, env = process.env) {
+  return isUnattended(input, env) || env.CLAUDE_CODE_SESSION_ATTENDED === "0";
+}
+var OVERRIDE_IGNORED_NOTE = "A typed SKIP_ override is ignored in an unattended or bypass run. Ask Dave to run it, or leave bypass mode.";
 
 // src/shared/scoped-cleanup.ts
 import { execFileSync } from "child_process";
@@ -1417,7 +1421,10 @@ var UNREADABLE_PATTERN = "unreadable command text";
 var SCOPED_CLEANUP_REASON = "scoped-cleanup";
 var SCOPED_PATTERNS = /* @__PURE__ */ new Set(["recursive rm", "PowerShell recursive delete (Remove-Item -Recurse)"]);
 function decide(command, input, env = process.env, scopedDeps) {
-  const overridden = env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
+  const typedOverride = env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
+  const locked = overrideLocked(input, env);
+  const overridden = typedOverride && !locked;
+  const ignored = typedOverride && locked ? { overrideIgnored: true } : {};
   let pattern = null;
   const toolName = input.tool_name || input.tool;
   const scanned = toolName === "Bash" ? blankDocHeredocBody(command) : command;
@@ -1433,19 +1440,21 @@ function decide(command, input, env = process.env, scopedDeps) {
     }
   }
   if (overridden) return pattern ? { decision: "allow", pattern, override: true } : { decision: "allow" };
-  if (!pattern) return { decision: "allow" };
+  if (!pattern) return { decision: "allow", ...ignored };
   const scoped = SCOPED_PATTERNS.has(pattern) ? scopedCleanupKind(command, input, scopedDeps) : null;
-  if (scoped) return { decision: "allow", pattern, scoped };
-  return { decision: isUnattended(input, env) ? "deny" : "ask", pattern };
+  if (scoped) return { decision: "allow", pattern, scoped, ...ignored };
+  return { decision: isUnattended(input, env) ? "deny" : "ask", pattern, ...ignored };
 }
-function reasonFor(decision, pattern, command) {
+function reasonFor(decision, pattern, command, overrideIgnored = false) {
   const head = decision === "deny" ? `BLOCKED (fail-closed): destructive command in an unattended/bypass context` : `CONFIRM: this is a destructive command`;
   return `${head}
 
 Matched: ${pattern}
 Command: ${command.slice(0, 300)}
 
-${decision === "deny" ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. Ask Dave for a yes, or state the reason this command is needed. Do not work around this block.` : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/docs/security/destructive-commands.md.)`}`;
+${decision === "deny" ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. Ask Dave for a yes, or state the reason this command is needed. Do not work around this block.` : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/docs/security/destructive-commands.md.)`}${overrideIgnored ? `
+
+${OVERRIDE_IGNORED_NOTE}` : ""}`;
 }
 async function main() {
   let input = {};
@@ -1473,22 +1482,23 @@ async function main() {
     console.log("{}");
     return;
   }
-  const { decision, pattern, override, scoped } = decide(command, input);
+  const { decision, pattern, override, scoped, overrideIgnored } = decide(command, input);
   if (override && pattern) logGuardDecision(HOOK, input, "override", pattern, { command });
+  if (overrideIgnored) logGuardDecision(HOOK, input, "warn", "override-ignored: SKIP_DESTRUCTIVE_GUARD", { command });
   if (scoped) logGuardDecision(HOOK, input, "allow", `${SCOPED_CLEANUP_REASON}:${scoped}`, { command });
   if (decision === "allow" || !pattern) {
     console.log("{}");
     return;
   }
-  emit(input, decision, pattern, command);
+  emit(input, decision, pattern, command, overrideIgnored === true);
 }
-function emit(input, decision, pattern, command) {
+function emit(input, decision, pattern, command, overrideIgnored = false) {
   logGuardDecision(HOOK, input, decision, pattern, { command });
   const output = {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: decision,
-      permissionDecisionReason: reasonFor(decision, pattern, command)
+      permissionDecisionReason: reasonFor(decision, pattern, command, overrideIgnored)
     }
   };
   console.log(JSON.stringify(output));
