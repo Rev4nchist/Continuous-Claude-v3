@@ -1018,6 +1018,12 @@ export function astMerges(parsed: Deps['parsed']): AstMerge[] {
   return Object.values(parsed.byDialect).flatMap((r) => (r ? r.calls : [])).flatMap((c) => { const m = mergeCallOf(c); return m ? [m] : []; });
 }
 
+/** A parsed merge call whose own words name a repo other than CCv3 (finding C). */
+function namesOtherRepo(m: AstMerge, pwsh: boolean): boolean {
+  const r = commandRepo(m.text, maskQuoted(m.text, pwsh ? 'PowerShell' : 'Bash'), {}, []);
+  return r !== null && r !== CCV3_REPO;
+}
+
 /**
  * Port step 2. The merge shapes of the hand reader keep their folder, own command and earlier GH_REPO; the parser decides the PR and the head.
  *   - a shape whose PR the parser also found takes the parser's head; if the parser found that PR twice with two heads, the head is unread (deny);
@@ -1041,12 +1047,16 @@ function withAstMerges(shapes: Shape[], parsed: Deps['parsed'], pwsh: boolean): 
     const id = `${s.kind}|${s.pr}|${s.sha}${s.shaBad ? '!' : ''}|${s.at ? whereId(s.at) : ''}|${s.ftext ?? s.text ?? ''}${s.prior ? priorId(s.prior) : ''}`;
     if (!seen.has(id)) { seen.add(id); out.push(s); }
   };
+  // Finding C (CodeRabbit CLI run 2): a parsed call that names another repo (-R foreign/repo) inside a quoted payload is judged by its own words.
+  // The hand shape keeps the outer text, where quote masking hides the flag, so the shape reads its repository from the parsed call instead.
+  const own = (pr: string | null): AstMerge | undefined => found.find((m) => m.pr === pr && namesOtherRepo(m, pwsh));
   for (const s of shapes) {
     if (s.kind !== 'merge') { out.push(s); continue; }
     const h = heads(s.pr);
     if (!h) { push(s); continue; }
     const { shaBad: _drop, ...rest } = s;
-    push({ ...rest, sha: h.sha, ...(h.shaBad ? { shaBad: true as const } : {}) });
+    const o = own(s.pr);
+    push({ ...rest, sha: h.sha, ...(h.shaBad ? { shaBad: true as const } : {}), ...(o ? { ftext: o.text, fmtext: maskQuoted(o.text, pwsh ? 'PowerShell' : 'Bash') } : {}) });
   }
   for (const m of found) {
     if (shapes.some((s) => s.kind === 'merge' && s.pr === m.pr)) continue;

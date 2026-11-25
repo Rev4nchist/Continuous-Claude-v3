@@ -2659,6 +2659,10 @@ function astMerges(parsed) {
     return m ? [m] : [];
   });
 }
+function namesOtherRepo(m, pwsh) {
+  const r = commandRepo(m.text, maskQuoted(m.text, pwsh ? "PowerShell" : "Bash"), {}, []);
+  return r !== null && r !== CCV3_REPO;
+}
 function withAstMerges(shapes, parsed, pwsh) {
   if (!parsed || Object.values(parsed.byDialect).some((r) => r === void 0 || r.errors.length > 0)) return shapes;
   const found = astMerges(parsed);
@@ -2678,6 +2682,7 @@ function withAstMerges(shapes, parsed, pwsh) {
       out3.push(s);
     }
   };
+  const own = (pr) => found.find((m) => m.pr === pr && namesOtherRepo(m, pwsh));
   for (const s of shapes) {
     if (s.kind !== "merge") {
       out3.push(s);
@@ -2689,7 +2694,8 @@ function withAstMerges(shapes, parsed, pwsh) {
       continue;
     }
     const { shaBad: _drop, ...rest } = s;
-    push({ ...rest, sha: h.sha, ...h.shaBad ? { shaBad: true } : {} });
+    const o = own(s.pr);
+    push({ ...rest, sha: h.sha, ...h.shaBad ? { shaBad: true } : {}, ...o ? { ftext: o.text, fmtext: maskQuoted(o.text, pwsh ? "PowerShell" : "Bash") } : {} });
   }
   for (const m of found) {
     if (shapes.some((s) => s.kind === "merge" && s.pr === m.pr)) continue;
