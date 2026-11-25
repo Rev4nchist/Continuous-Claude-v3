@@ -27,6 +27,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VIZ = ['docs', 'architecture', 'system-visualization'];
 const EMBED = /(<script type="application\/json" id="embedded-data">)([\s\S]*?)(<\/script>)/;
+/** The one command that rebuilds both generated files; the failure text of a stale check names it. */
+const REBUILD = 'node scripts/architecture/build-system-map.mjs --apply';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 /** Text with LF line ends: a Windows checkout may turn the committed files into CRLF, and a compare must not see that as a change. */
@@ -223,7 +225,9 @@ export async function checkOutputs(root, opts = {}) {
     }
   }
   const exitCode = problems.length ? 1 : unchecked.length ? 2 : 0;
-  const lines = [...problems.map((p) => `problem: ${p}`), ...unchecked.map((u) => `not checked: ${u}`), ...(exitCode === 0 ? [`ok: ${summary(g)}`] : [`compared with: ${summary(g)}`])];
+  const stale = problems.some((p) => /stale|not the generated graph/.test(p));
+  const lines = [...problems.map((p) => `problem: ${p}`), ...unchecked.map((u) => `not checked: ${u}`), ...(exitCode === 0 ? [`ok: ${summary(g)}`] : [`compared with: ${summary(g)}`]),
+    ...(stale ? [`fix: run "${REBUILD}", then stage ${VIZ.join('/')}/architecture.json and ${VIZ.join('/')}/index.html`] : [])];
   return { exitCode, problems, notChecked: unchecked, lines };
 }
 
