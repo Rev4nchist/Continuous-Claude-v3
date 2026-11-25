@@ -241,8 +241,10 @@ function walkBash(file: N, text: string): Walked {
       Object.values(n).forEach((v) => v && typeof v === 'object' && find(v));
     };
     find(node);
-    for (const n of outer) stmts(n.stmts, { ...ctx, depth: ctx.depth + 1, top: false });
+    for (const n of outer) scoped(() => stmts(n.stmts, { ...ctx, depth: ctx.depth + 1, top: false }));
   };
+  // A4 (shell-ast.ts:440-442): a subshell or a command substitution runs in its own folder state; a cd inside it ends with it.
+  const scoped = (run: () => void): void => { ev.push({ t: 'scope', open: true }); run(); ev.push({ t: 'scope', open: false }); };
   const stmts = (list: N[], ctx: Ctx): void => list.forEach((s, i) => stmt(s, i ? { ...ctx, place: { ...ctx.place, chain: ';' } } : ctx));
   const stmt = (s: N, ctx: Ctx): void => {
     const bg = ctx.place.background || s.background;
@@ -269,7 +271,7 @@ function walkBash(file: N, text: string): Walked {
       case 'WhileClause': stmts(c.cond ?? [], { ...inner, depth: ctx.depth + 1 }); return stmts(c.do ?? [], { ...inner, depth: ctx.depth + 1 });
       case 'IfClause': return ifc(c, inner);
       case 'CaseClause': subst(c.word, inner); return c.items.forEach((i: N) => stmts(i.stmts ?? [], inner));
-      case 'Subshell': return stmts(c.stmts, inner);
+      case 'Subshell': return scoped(() => stmts(c.stmts, inner));
       case 'Block': return stmts(c.stmts, ctx);
       case 'TimeClause': case 'CoprocClause': if (c.stmt) stmt(c.stmt, inner); return;
       case 'DeclClause': return decl(c, inner);
@@ -373,6 +375,8 @@ export function walkBatch(texts: string[], timeoutMs = 900000): Promise<WalkerOu
       buf += d;
       for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) { rows.push(buf.slice(0, i).trim()); buf = buf.slice(i + 1); }
     });
+    // A5 (CodeRabbit CLI run 2 on PR 718, shell-ast.ts:368): a pwsh that cannot start gives one { error } row per text, not an unhandled event and a promise that never settles.
+    cp.on('error', (e) => { clearTimeout(timer); resolve(texts.map(() => ({ error: `pwsh spawn: ${e.message}` }))); });
     cp.on('close', () => {
       clearTimeout(timer);
       resolve(texts.map((_, k) => { try { const j = JSON.parse(rows[k]); return j.fatal ? { error: j.fatal } : { json: j }; } catch { return { error: 'batch row missing' }; } }));
@@ -434,7 +438,9 @@ function resolve(events: Ev[], dialect: string): { calls: Call[]; assigns: Assig
   events.forEach((e, i) => { if (e.t === 'assign') { const k = key(e.name); writes.set(k, [...(writes.get(k) ?? []), { ...e, i }]); } });
   const barriers: number[] = []; events.forEach((e, i) => { if (isBarrier(e)) barriers.push(i); });
   const cwd: (string | null)[] = [];
+  const scopes: number[] = [];
   events.forEach((e, i) => {
+    if (e.t === 'scope') { if (e.open) scopes.push(cwd.length); else { const n = scopes.pop(); if (n !== undefined) cwd.length = n; } return; }
     if (e.t !== 'call') return;
     for (const w of e.words) resolveWord(w, i, writes, key, unsafe, barriers);
     e.cwdBefore = [...cwd];

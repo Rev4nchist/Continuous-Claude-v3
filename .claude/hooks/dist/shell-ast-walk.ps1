@@ -25,7 +25,7 @@ function ElemOf($el) {
 function ExpandableOf($el, $s, $e) {
   $nested = @($el.NestedExpressions)
   foreach ($n in $nested) { if ($n.GetType().Name -eq 'SubExpressionAst') { return @{ k = 'cmdsubst'; s = $s; e = $e } } }
-  if ($nested.Count -eq 1 -and (IsA $nested[0] 'VariableExpressionAst') -and $el.Value.Trim() -eq $nested[0].Extent.Text) {
+  if ($nested.Count -eq 1 -and (IsA $nested[0] 'VariableExpressionAst') -and $el.Value -eq $nested[0].Extent.Text) {
     return @{ k = 'var'; var = $nested[0].VariablePath.UserPath; splat = $false; quoted = $true; s = $s; e = $e }
   }
   $rel = $nested[0].Extent.StartOffset - $s - 1
@@ -108,7 +108,9 @@ foreach ($q in $ast.FindAll({ param($n) $t = $n.GetType().Name; $t -eq 'StringCo
   $qs = $q.Extent.StartOffset; $qe = $q.Extent.EndOffset
   if ($st -eq 'SingleQuotedHereString' -or $st -eq 'DoubleQuotedHereString') {
     # The closing @' or @" starts a line: the body ends at the line break before it (e - 3), the opener line break (s + 2) is part of the body.
-    [void]$quoted.Add(@{ s = $qs + 2; e = $qe - 3 }); [void]$bodies.Add(@{ s = $qs + 2; e = $qe - 3 })
+    # A CRLF before the closing mark is two characters (CR, LF); neither is body.
+    $bodyEnd = $qe - 3; if ($bodyEnd -gt $qs -and $text[$bodyEnd - 1] -eq "`r") { $bodyEnd-- }
+    [void]$quoted.Add(@{ s = $qs + 2; e = $bodyEnd }); [void]$bodies.Add(@{ s = $qs + 2; e = $bodyEnd })
   } elseif ($st -eq 'SingleQuoted' -or $st -eq 'DoubleQuoted') {
     [void]$quoted.Add(@{ s = $qs + 1; e = $qe - 1 })
   }

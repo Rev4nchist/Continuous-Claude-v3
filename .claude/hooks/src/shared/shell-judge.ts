@@ -114,10 +114,11 @@ function unwrap(call: Call): Any {
 
 // ---- per-program analysis; each returns { deny } | { guarded } | null
 function gitGlobals(ws: Word[]): Any {
-  const g: Any = { dir: undefined, dirDyn: false, cVals: [], other: [], i: 1 };
+  const g: Any = { dir: undefined, dirs: [], dirDyn: false, cVals: [], other: [], i: 1 };
   for (; g.i < ws.length; g.i++) {
     const w = ws[g.i]; const l = lit(w);
-    if (l === '-C') { const d = ws[++g.i]; g.dir = lit(d); g.dirDyn ||= !d || dyn(d); }
+    // run 1 shell-judge.ts:120: git applies each -C relative to the one before, so every value keeps its place, in order.
+    if (l === '-C') { const d = ws[++g.i]; g.dir = lit(d); if (g.dir) g.dirs.push(g.dir); g.dirDyn ||= !d || dyn(d); }
     else if (l === '-c') g.cVals.push(ws[++g.i]);
     else if (l === '--git-dir' || l === '--work-tree') g.other.push(ws[++g.i]);
     else if (l !== null && /^--(git-dir|work-tree)=/.test(l)) g.other.push(w);
@@ -151,7 +152,8 @@ async function gitCall(ws: Word[], call: Call, ctx: Any): Promise<Any> {
   if (dyn(sub)) return denyOf('F2', 'git subcommand is not literal');
   let verb = sub.lit as string; let rest = ws.slice(g.i + 1);
   if (!GIT_BUILTIN.has(verb) && ctx.opts.gitAlias) {
-    const v = await ctx.opts.gitAlias(verb, call.cwdBefore);
+    // A2 (shell-judge.ts:154): the alias is read in the folder -C chose, so the -C values follow the folders before the call.
+    const v = await ctx.opts.gitAlias(verb, [...(call.cwdBefore ?? []), ...g.dirs]);
     if (v && v.startsWith('!')) { if (ctx.entry(v)) return denyOf('S4', 'git shell alias holds a trigger word'); } else if (v) { const parts = v.trim().split(/\s+/); verb = parts[0]; rest = [...parts.slice(1).map(synth), ...rest]; }
   }
   if (verb === 'config') return configAlias(rest, ctx.entry);
@@ -159,7 +161,7 @@ async function gitCall(ws: Word[], call: Call, ctx: Any): Promise<Any> {
   if (g.dirDyn || g.cVals.some((v: Word | undefined) => v && dyn(v)) || g.other.some((v: Word | undefined) => v && dyn(v))) return denyOf('F2', 'git -C, -c or --git-dir value is not literal');
   if (rest.some(dyn)) return denyOf('F2', 'git push remote or refspec is not literal');
   const pos = rest.filter((w) => !/^-/.test(w.lit as string)).map((w) => w.lit);
-  return { guarded: { kind: 'git-push', prog: 'git', remote: pos[0] ?? null, refspecs: pos.slice(1), dir: g.dir ?? null, cwd: g.dir ? [g.dir] : [] } };
+  return { guarded: { kind: 'git-push', prog: 'git', remote: pos[0] ?? null, refspecs: pos.slice(1), dir: g.dir ?? null, cwd: g.dirs } };
 }
 function wrapperCall(ws: Word[], prog: string): Any {
   const freeWords: Word[] = []; let free = false;
@@ -254,7 +256,12 @@ function nameCall(call: Call, ctx: Any): Any {
 function aliasCall(call: Call, ctx: Any): Any {
   const p = progName(call.words[0].lit) ?? '';
   if (call.dialect === 'bash' && p === 'alias') ctx.state.bashAliases.push(...call.words.slice(1));
-  if (call.dialect === 'bash' && p === 'shopt' && call.words.some((w) => w.lit === 'expand_aliases')) ctx.state.expand = true;
+  // A3 (aliasCall): -s turns the expansion on, a query changes nothing. The expansion is sticky: a text with -s anywhere counts as on, and a later -u
+  // never turns it off (fail closed; bash expands an alias used between -s and -u, CodeRabbit CLI run 1 finding 3).
+  if (call.dialect === 'bash' && p === 'shopt' && call.words.some((w) => w.lit === 'expand_aliases')) {
+    const flags = call.words.slice(1).map((w) => w.lit ?? '').filter((l) => /^-[a-z]+$/.test(l)).join('');
+    if (flags.includes('s')) ctx.state.expand = true;
+  }
   if (!['set-alias', 'new-alias', 'sal', 'nal'].includes(p)) return null;
   const v = psAliasValue(call.words.slice(1));
   return v !== null && ctx.entry(v) ? denyOf('S4', 'alias value holds a trigger word') : null;
@@ -437,6 +444,10 @@ async function judgeUnknown(text: string, entry: EntryTest, opts: JudgeOpts): Pr
 export async function judge(text: string, dialect: Dialect, entryTest: EntryTest, opts: JudgeOpts = {}): Promise<Verdict> {
   const entry: EntryTest = (t) => entryTest(strip(t));
   if (!entry(text)) return out('allow', 'not-entry', 'no trigger word', { calls: [], guarded: [], residual: [] });
-  if (dialect === 'unknown') return judgeUnknown(text, entry, opts);
-  return judgeText(text, dialect, entry, opts);
+  // A1 (shell-judge.ts:440-441): a check that cannot finish on a text with a trigger word is a deny, never a rejected promise the caller reads as it likes.
+  try {
+    return dialect === 'unknown' ? await judgeUnknown(text, entry, opts) : await judgeText(text, dialect, entry, opts);
+  } catch (e) {
+    return out('deny', 'F1', `the judge could not finish a triggered check (${e instanceof Error ? e.message : String(e)}). Split the command or use a script file.`, { calls: [], parseOk: false });
+  }
 }

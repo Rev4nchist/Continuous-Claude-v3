@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { decide, type Deps } from '../decision-gate.js';
+import { decide, docAppendByAst, withParsed, type Deps } from '../decision-gate.js';
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
@@ -60,7 +60,8 @@ function deps(): Deps {
 const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command }, cwd: '/repo' });
 const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo' });
 const dcStart = (command: string) => ({ tool_name: `${DC}start_process`, tool_input: { command, shell: 'cmd' }, cwd: '/repo' });
-const denied = (input: object): boolean => decide(input, deps()).action === 'deny';
+/** The verdict the way main reaches it: the text is parsed first (PR B port step 1), then decided. */
+const denied = async (input: object): Promise<boolean> => decide(input, await withParsed(JSON.stringify(input), deps())).action === 'deny';
 
 const L = 'scripts/github/land-pr.ps1';
 const LOG = String.raw`C:\Users\dkhay\continuous-claude\.claudedocs\coordination\milestones\re-program.md`;
@@ -77,8 +78,8 @@ describe('D1 a doc append that only names the land script is allowed (PowerShell
     `$t = Get-Date -Format 'HH:mm'; Add-Content -LiteralPath .claudedocs/x.md -Value 'the land script land-pr.ps1 waits'`,
   ];
   for (const cmd of ALLOWED) {
-    it(`PowerShell: allows ${JSON.stringify(cmd)}`, () => {
-      expect(denied(pwsh(cmd))).toBe(false);
+    it(`PowerShell: allows ${JSON.stringify(cmd)}`, async () => {
+      expect(await denied(pwsh(cmd))).toBe(false);
     });
   }
 });
@@ -91,7 +92,7 @@ describe('D2 a real land, or a doc append that can run or names a PR, stays deni
     ['script target with a PR', `Add-Content -LiteralPath run.ps1 -Value 'pwsh -File ${L} -Pr 706'`],
     ['mjs target', `Add-Content -LiteralPath run.mjs -Value 'land-pr.ps1'`],
     ['cmd target', `Add-Content -LiteralPath run.cmd -Value 'land-pr.ps1'`],
-    ['variable target', `$p = 'x.md'; Add-Content -LiteralPath $p -Value 'land-pr.ps1'`],
+    // 'variable target' ($p = 'x.md'; Add-Content -LiteralPath $p ...) moved to the allowed rows for PowerShell (PB-7, note 03 item 3, F2c); a Bash row below keeps its deny.
     ['paren value', `Add-Content -LiteralPath x.md -Value (pwsh -File ${L})`],
     ['substitution value', `Add-Content -LiteralPath x.md -Value $(pwsh -File ${L} -Pr 5)`],
     ['array value with a paren command', `Add-Content -LiteralPath x.md -Value @((pwsh -File ${L}))`],
@@ -105,18 +106,23 @@ describe('D2 a real land, or a doc append that can run or names a PR, stays deni
   ];
   for (const [name, mk] of TOOLS) {
     for (const [why, cmd] of STAY_DENIED) {
-      it(`${name}: denies ${why}`, () => {
-        expect(denied(mk(cmd))).toBe(true);
+      it(`${name}: denies ${why}`, async () => {
+        expect(await denied(mk(cmd))).toBe(true);
       });
     }
   }
 });
 
+describe('D2b the exemption is PowerShell only: the Bash tool keeps the deny for a target set by an assignment', () => {
+  it('Bash: denies a variable target', async () => {
+    expect(await denied(bash(`$p = 'x.md'; Add-Content -LiteralPath $p -Value 'land-pr.ps1'`))).toBe(true);
+  });
+});
+
 describe('D3 the exemption is no wider than the ruling', () => {
   const STAY_DENIED: Array<[string, string]> = [
-    ['double-quoted value', `Add-Content -LiteralPath x.md -Value "land-pr.ps1"`],
+    // PR B (note 03 section 1 items 3 and 4): a double-quoted and a here-string value with no variable moved to the allowed rows (PB-7 in decision-gate-parser-b.test.ts).
     ['double-quoted value with a variable', `Add-Content -LiteralPath x.md -Value "$t land-pr.ps1"`],
-    ['here-string value', `Add-Content -LiteralPath x.md -Value @'\nland-pr.ps1\n'@`],
     ['double-quoted here-string value', `$e = @"\nland-pr.ps1\n"@; Add-Content -LiteralPath x.md -Value $e`],
     // Seat ruling 12:49: the @( ) array form is a Known limit (an anchored wrapper strip is parser growth, V7.6).
     ['array of single-quoted strings', `Add-Content -LiteralPath x.md -Value @('', 'line one land-pr.ps1', 'line two')`],
@@ -132,14 +138,48 @@ describe('D3 the exemption is no wider than the ruling', () => {
     ['tee', `echo 'land-pr.ps1' | tee x.md`],
   ];
   for (const [why, cmd] of STAY_DENIED) {
-    it(`PowerShell: denies ${why}`, () => {
-      expect(denied(pwsh(cmd))).toBe(true);
+    it(`PowerShell: denies ${why}`, async () => {
+      expect(await denied(pwsh(cmd))).toBe(true);
     });
   }
 });
 
+describe('D3b seat ruling C1 (11-25): a double-quoted or here-string value that holds a subexpression RUNS it, so it is no literal and stays denied', () => {
+  const RUN = `$(pwsh -File ${L} -Pr 5)`;
+  const RUN_NO_PR = `$(pwsh -File ${L})`;
+  const ROWS: Array<[string, string]> = [];
+  for (const cmdlet of ['Add-Content', 'Set-Content']) {
+    for (const run of [RUN, RUN_NO_PR]) {
+      ROWS.push([`${cmdlet} double-quoted value with ${run}`, `${cmdlet} -LiteralPath x.md -Value "note ${run}"`]);
+      ROWS.push([`${cmdlet} here-string value with ${run}`, `${cmdlet} -LiteralPath x.md -Value @"\nnote ${run}\n"@`]);
+    }
+  }
+  for (const [why, cmd] of ROWS) {
+    it(`PowerShell: denies ${why}`, async () => {
+      expect(await denied(pwsh(cmd))).toBe(true);
+    });
+  }
+  // The union of two readers also denies these texts, so the rows above stay green when the walker drops the nested walk.
+  // These rows ask the AST reader alone: it must NOT call such an append a data-only doc append.
+  for (const [why, cmd] of ROWS) {
+    it(`AST reader alone: no doc append for ${why}`, async () => {
+      const input = pwsh(cmd);
+      const d = await withParsed(JSON.stringify(input), deps());
+      expect(docAppendByAst(d.parsed, 'PowerShell', cmd)).toBe(false);
+    });
+  }
+  it('AST reader alone: a double-quoted value with no subexpression is a doc append (control)', async () => {
+    const cmd = `Add-Content -LiteralPath x.md -Value "the land script ${L} waits"`;
+    const d = await withParsed(JSON.stringify(pwsh(cmd)), deps());
+    expect(docAppendByAst(d.parsed, 'PowerShell', cmd)).toBe(true);
+  });
+  it('PowerShell: a double-quoted value with no subexpression stays allowed (the Ask A widening, shape only)', async () => {
+    expect(await denied(pwsh(`Add-Content -LiteralPath x.md -Value "the land script ${L} waits"`))).toBe(false);
+  });
+});
+
 describe('D4 the exemption does not reach Desktop Commander', () => {
-  it('denies a doc append that names the land script under a cmd shell', () => {
-    expect(denied(dcStart(`Add-Content -LiteralPath x.md -Value 'land-pr.ps1'`))).toBe(true);
+  it('denies a doc append that names the land script under a cmd shell', async () => {
+    expect(await denied(dcStart(`Add-Content -LiteralPath x.md -Value 'land-pr.ps1'`))).toBe(true);
   });
 });

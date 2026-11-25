@@ -1,59 +1,23 @@
 #!/usr/bin/env node
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
-
-// src/lib/trace-boot.ts
-import fs from "fs";
-import { homedir as homedir2 } from "os";
-import { basename, join as join2, resolve, sep } from "path";
-import { syncBuiltinESMExports } from "module";
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
 
 // src/shared/guard-log.ts
 import { appendFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
-var COMMAND_HEAD_CHARS = 80;
-var REASON_CHARS = 200;
-var PATH_CHARS = 300;
-var TARGET_FIELD = {
-  Read: "file_path",
-  Edit: "file_path",
-  Write: "file_path",
-  Agent: "subagent_type",
-  Task: "subagent_type",
-  Skill: "skill"
-};
 function guardLogPath(env = process.env) {
   const home = env.USERPROFILE || env.HOME || homedir();
   return env.CCV3_GUARD_DECISIONS_LOG || join(home, ".claude", "logs", "guard-decisions.jsonl");
 }
-var SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
-var MASKS = [
-  // A URL inside quotes may hold a password with a space: the closing quote ends it, not the space.
-  [/(["'])([a-z][\w+.-]*:\/\/)[^\s/@:"']+:(?:(?!\1)[^/@])+@/gi, "$1$2***@"],
-  [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, "$1***@"],
-  // `curl -u user:pass`, `curl --user user:pass`. A numeric user (`docker run -u 1000:1000`) is a uid:gid.
-  // Quoting decides where the credential ends: `-u "user:two words"`, `-u user:"two words"`.
-  [/(\s(?:-u[\s=]*|--user[\s=]+)")(?!\d+:)([^":]+):[^"]*"/g, '$1$2:***"'],
-  [/(\s(?:-u[\s=]*|--user[\s=]+)')(?!\d+:)([^':]+):[^']*'/g, "$1$2:***'"],
-  [/(\s(?:-u[\s=]*|--user[\s=]+))(?!\d+:)([^\s:"']+):(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1$2:***"],
-  // `mysql -uroot -pS3cret`: the password is glued to -p. Case matters: -P is the port.
-  [/(\b(?:mysql|mariadb)\w*\b[^|;&\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1***"],
-  // `sshpass -p pw ssh host`
-  [/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, "$1***"],
-  [/\b(Bearer|Basic|Token)\s+[^\s'"]+/gi, "$1 ***"],
-  [new RegExp(`(${SECRET_NAME})(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s'"]+)`, "gi"), "$1$2***"],
-  [new RegExp(`(--?${SECRET_NAME})(\\s+)("[^"]*"|'[^']*'|[^\\s'"-][^\\s'"]*)`, "gi"), "$1$2***"],
-  [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "***"],
-  [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***"],
-  [/\bgithub_pat_\w+/g, "***"],
-  [/\bxox[abprs]-[\w-]+/g, "***"],
-  [/\bnpm_[A-Za-z0-9]{20,}/g, "***"],
-  [/\bAKIA[0-9A-Z]{16}\b/g, "***"],
-  [/\bAIza[\w-]{30,}/g, "***"],
-  [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "***"],
-  // Any other long opaque run that mixes letters and digits (hex, base64url keys).
-  [/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}/g, "***"]
-];
 function maskSecrets(text) {
   return MASKS.reduce((acc, [re, to]) => acc.replace(re, to), text);
 }
@@ -72,14 +36,6 @@ function guardSource(env) {
 function pathText(value, max = PATH_CHARS) {
   return typeof value === "string" && value ? value.slice(0, max) : void 0;
 }
-var UUID_SEGMENT = /(^|[\\/])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=$|[\\/.])/gi;
-var MARK_OPEN = String.fromCharCode(57344);
-var MARK_CLOSE = String.fromCharCode(57345);
-var UUID_MARK = new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, "g");
-var PATH_MASKS = [
-  ...MASKS.slice(0, -1),
-  [/\b(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{32,}/g, "***"]
-];
 function maskedPath(value, max = PATH_CHARS) {
   if (typeof value !== "string" || !value) return void 0;
   const kept = [];
@@ -123,13 +79,12 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
     const target = targetOf(input, tool);
     if (target) entry.target = target;
     if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
-    const path3 = guardLogPath(env);
-    mkdirSync(dirname(path3), { recursive: true, mode: 448 });
-    appendFileSync(path3, JSON.stringify(entry) + "\n", { mode: 384 });
+    const path4 = guardLogPath(env);
+    mkdirSync(dirname(path4), { recursive: true, mode: 448 });
+    appendFileSync(path4, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
 }
-var ERROR_FIELD_CHARS = 200;
 function oneLine(text) {
   return maskSecrets(text).replace(/\s+/g, " ").trim().slice(0, ERROR_FIELD_CHARS);
 }
@@ -154,53 +109,73 @@ function logGuardError(hook, err, opts = {}) {
     const env = opts.env ?? process.env;
     if (!shouldWrite(env)) return;
     const entry = { ts: (/* @__PURE__ */ new Date()).toISOString(), hook, kind: "error", message: errorMessage(err), stack: firstFrame(err), source: guardSource(env) };
-    const path3 = guardLogPath(env);
-    mkdirSync(dirname(path3), { recursive: true, mode: 448 });
-    appendFileSync(path3, JSON.stringify(entry) + "\n", { mode: 384 });
+    const path4 = guardLogPath(env);
+    mkdirSync(dirname(path4), { recursive: true, mode: 448 });
+    appendFileSync(path4, JSON.stringify(entry) + "\n", { mode: 384 });
   } catch {
   }
 }
+var COMMAND_HEAD_CHARS, REASON_CHARS, PATH_CHARS, TARGET_FIELD, SECRET_NAME, MASKS, UUID_SEGMENT, MARK_OPEN, MARK_CLOSE, UUID_MARK, PATH_MASKS, ERROR_FIELD_CHARS;
+var init_guard_log = __esm({
+  "src/shared/guard-log.ts"() {
+    "use strict";
+    init_trace_boot();
+    COMMAND_HEAD_CHARS = 80;
+    REASON_CHARS = 200;
+    PATH_CHARS = 300;
+    TARGET_FIELD = {
+      Read: "file_path",
+      Edit: "file_path",
+      Write: "file_path",
+      Agent: "subagent_type",
+      Task: "subagent_type",
+      Skill: "skill"
+    };
+    SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
+    MASKS = [
+      // A URL inside quotes may hold a password with a space: the closing quote ends it, not the space.
+      [/(["'])([a-z][\w+.-]*:\/\/)[^\s/@:"']+:(?:(?!\1)[^/@])+@/gi, "$1$2***@"],
+      [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, "$1***@"],
+      // `curl -u user:pass`, `curl --user user:pass`. A numeric user (`docker run -u 1000:1000`) is a uid:gid.
+      // Quoting decides where the credential ends: `-u "user:two words"`, `-u user:"two words"`.
+      [/(\s(?:-u[\s=]*|--user[\s=]+)")(?!\d+:)([^":]+):[^"]*"/g, '$1$2:***"'],
+      [/(\s(?:-u[\s=]*|--user[\s=]+)')(?!\d+:)([^':]+):[^']*'/g, "$1$2:***'"],
+      [/(\s(?:-u[\s=]*|--user[\s=]+))(?!\d+:)([^\s:"']+):(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1$2:***"],
+      // `mysql -uroot -pS3cret`: the password is glued to -p. Case matters: -P is the port.
+      [/(\b(?:mysql|mariadb)\w*\b[^|;&\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1***"],
+      // `sshpass -p pw ssh host`
+      [/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, "$1***"],
+      [/\b(Bearer|Basic|Token)\s+[^\s'"]+/gi, "$1 ***"],
+      [new RegExp(`(${SECRET_NAME})(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s'"]+)`, "gi"), "$1$2***"],
+      [new RegExp(`(--?${SECRET_NAME})(\\s+)("[^"]*"|'[^']*'|[^\\s'"-][^\\s'"]*)`, "gi"), "$1$2***"],
+      [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "***"],
+      [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***"],
+      [/\bgithub_pat_\w+/g, "***"],
+      [/\bxox[abprs]-[\w-]+/g, "***"],
+      [/\bnpm_[A-Za-z0-9]{20,}/g, "***"],
+      [/\bAKIA[0-9A-Z]{16}\b/g, "***"],
+      [/\bAIza[\w-]{30,}/g, "***"],
+      [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "***"],
+      // Any other long opaque run that mixes letters and digits (hex, base64url keys).
+      [/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}/g, "***"]
+    ];
+    UUID_SEGMENT = /(^|[\\/])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=$|[\\/.])/gi;
+    MARK_OPEN = String.fromCharCode(57344);
+    MARK_CLOSE = String.fromCharCode(57345);
+    UUID_MARK = new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, "g");
+    PATH_MASKS = [
+      ...MASKS.slice(0, -1),
+      [/\b(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{32,}/g, "***"]
+    ];
+    ERROR_FIELD_CHARS = 200;
+  }
+});
 
 // src/lib/trace-boot.ts
-var TRACE_MARKER = "__CCV3_HOOK_TRACE_V1__";
-var HOT_PROGRAMS = [
-  "architecture-stats-sync",
-  "commit-preflight",
-  "decision-gate",
-  "destructive-command-guard",
-  "git-commit-roadmap",
-  "file-claims",
-  "holdout-scan",
-  "hook-health-monitor",
-  "identity-probe",
-  "lane-agent-tag",
-  "lane-board-republish-reminder",
-  "lane-context",
-  "mcp-activity-tracker",
-  "msys-crash-capture",
-  "package-install-guard",
-  "periodic-extract",
-  "pr-opened-review-loop",
-  "pre-pr-gate",
-  "roadmap-completion",
-  "roadmap-reconcile",
-  "rule-router",
-  "scan-scope-guard",
-  "session-register",
-  "session-start-context-loaders",
-  "session-start-continuity",
-  "session-start-docker",
-  "session-start-init-check",
-  "session-start-intel-prune",
-  "session-start-memory-loaders",
-  "smarter-everyday",
-  "test-run-tracker"
-];
-var DAY_CAP_BYTES = 32 * 1024 * 1024;
-var PRUNE_DAYS = 10;
-var STDIN_KEEP = 64 * 1024;
-var STDOUT_KEEP = 8 * 1024;
-var ERROR_MAX = 120;
+import fs from "fs";
+import { homedir as homedir2 } from "os";
+import { basename, join as join2, resolve, sep } from "path";
+import { syncBuiltinESMExports } from "module";
 function traceModeFrom(env, modeText) {
   if (env.CCV3_HOOK_TRACE === "0") return "off";
   const t = (modeText ?? "").trim().toLowerCase();
@@ -217,14 +192,6 @@ function readTraceMode(env, read = (p) => fs.readFileSync(p, "utf8")) {
 function shouldTrace(name, mode) {
   return mode === "all" || mode === "hot" && HOT_PROGRAMS.includes(name);
 }
-var realPath = (p) => {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return resolve(p);
-  }
-};
-var caseKey = (p) => process.platform === "win32" ? p.toLowerCase() : p;
 function underLiveDist(script, home) {
   if (!script) return false;
   try {
@@ -239,11 +206,6 @@ function traceSource(env, script = process.argv[1], home = homedir2()) {
   if (env.CCV3_HOOK_TRACE_DIR) return "probe";
   return underLiveDist(script, home) ? "live" : "probe";
 }
-var traceDir = (env) => env.CCV3_HOOK_TRACE_DIR || join2(homedir2(), ".claude", "cache");
-var SESSION_ID = /^[A-Za-z0-9._:-]{1,100}$/;
-var EVENT_NAME = /^[A-Za-z]{1,40}$/;
-var TOOL_NAME = /^[\w.:-]{1,100}$/;
-var pick = (v, re) => typeof v === "string" && re.test(v) ? v : null;
 function extractPayloadFields(text) {
   try {
     const o = JSON.parse(text);
@@ -279,8 +241,6 @@ function classifyOut(text) {
   if (/"systemMessage"\s*:/.test(t)) return "message";
   return "none";
 }
-var ERROR_WORD = /^[A-Za-z0-9_.]{1,40}$/;
-var ERROR_CODE = /^[A-Za-z0-9_]{1,40}$/;
 function maskError(err) {
   if (!(err instanceof Error)) return typeof err;
   try {
@@ -292,7 +252,6 @@ function maskError(err) {
     return "Error";
   }
 }
-var round1 = (n) => Math.round(n * 10) / 10;
 function buildRow(i) {
   return {
     ts: i.ts.toISOString(),
@@ -309,7 +268,6 @@ function buildRow(i) {
     source: i.source
   };
 }
-var DAY_FILE = /^hook-trace-(\d{4}-\d{2}-\d{2})\.(?:jsonl|dropped)$/;
 function pruneOld(dir, day, days) {
   const cutoff = new Date(Date.parse(`${day}T00:00:00Z`) - days * 864e5).toISOString().slice(0, 10);
   for (const f of fs.readdirSync(dir)) {
@@ -358,11 +316,6 @@ function appendTraceRow(row, opts = {}) {
     return "error";
   }
 }
-var keep = (cur, chunk, max) => {
-  if (cur.length >= max) return cur;
-  const s = typeof chunk === "string" ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk).toString("utf8") : "";
-  return cur + s.slice(0, max - cur.length);
-};
 function lazyTap(name, onStream) {
   const d = Object.getOwnPropertyDescriptor(process, name);
   if (!d || !d.get || !d.configurable) return;
@@ -464,20 +417,91 @@ function bootTrace(env = process.env, _bootCall) {
   } catch {
   }
 }
-if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
+var TRACE_MARKER, HOT_PROGRAMS, DAY_CAP_BYTES, PRUNE_DAYS, STDIN_KEEP, STDOUT_KEEP, ERROR_MAX, realPath, caseKey, traceDir, SESSION_ID, EVENT_NAME, TOOL_NAME, pick, ERROR_WORD, ERROR_CODE, round1, DAY_FILE, keep;
+var init_trace_boot = __esm({
+  "src/lib/trace-boot.ts"() {
+    "use strict";
+    init_guard_log();
+    TRACE_MARKER = "__CCV3_HOOK_TRACE_V1__";
+    HOT_PROGRAMS = [
+      "architecture-stats-sync",
+      "commit-preflight",
+      "decision-gate",
+      "destructive-command-guard",
+      "git-commit-roadmap",
+      "file-claims",
+      "holdout-scan",
+      "hook-health-monitor",
+      "identity-probe",
+      "lane-agent-tag",
+      "lane-board-republish-reminder",
+      "lane-context",
+      "mcp-activity-tracker",
+      "msys-crash-capture",
+      "package-install-guard",
+      "periodic-extract",
+      "pr-opened-review-loop",
+      "pre-pr-gate",
+      "roadmap-completion",
+      "roadmap-reconcile",
+      "rule-router",
+      "scan-scope-guard",
+      "session-register",
+      "session-start-context-loaders",
+      "session-start-continuity",
+      "session-start-docker",
+      "session-start-init-check",
+      "session-start-intel-prune",
+      "session-start-memory-loaders",
+      "smarter-everyday",
+      "test-run-tracker"
+    ];
+    DAY_CAP_BYTES = 32 * 1024 * 1024;
+    PRUNE_DAYS = 10;
+    STDIN_KEEP = 64 * 1024;
+    STDOUT_KEEP = 8 * 1024;
+    ERROR_MAX = 120;
+    realPath = (p) => {
+      try {
+        return fs.realpathSync(p);
+      } catch {
+        return resolve(p);
+      }
+    };
+    caseKey = (p) => process.platform === "win32" ? p.toLowerCase() : p;
+    traceDir = (env) => env.CCV3_HOOK_TRACE_DIR || join2(homedir2(), ".claude", "cache");
+    SESSION_ID = /^[A-Za-z0-9._:-]{1,100}$/;
+    EVENT_NAME = /^[A-Za-z]{1,40}$/;
+    TOOL_NAME = /^[\w.:-]{1,100}$/;
+    pick = (v, re) => typeof v === "string" && re.test(v) ? v : null;
+    ERROR_WORD = /^[A-Za-z0-9_.]{1,40}$/;
+    ERROR_CODE = /^[A-Za-z0-9_]{1,40}$/;
+    round1 = (n) => Math.round(n * 10) / 10;
+    DAY_FILE = /^hook-trace-(\d{4}-\d{2}-\d{2})\.(?:jsonl|dropped)$/;
+    keep = (cur, chunk, max) => {
+      if (cur.length >= max) return cur;
+      const s = typeof chunk === "string" ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk).toString("utf8") : "";
+      return cur + s.slice(0, max - cur.length);
+    };
+    if (!Object.hasOwn(process.env, "VITEST")) bootTrace(process.env, "__CCV3_HOOK_TRACE_BOOT_V1__");
+  }
+});
 
 // src/decision-gate.ts
+init_trace_boot();
 import { spawnSync } from "child_process";
-import { existsSync as existsSync3, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
 import { homedir as homedir5 } from "os";
-import { isAbsolute as isAbsolute2, join as join7, posix as posix2, resolve as resolve2 } from "path";
+import { isAbsolute as isAbsolute2, join as join7, posix as posix2, resolve as resolve3 } from "path";
 
 // src/pr-opened-review-loop.ts
+init_trace_boot();
 import { existsSync, mkdirSync as mkdirSync2, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join as join4 } from "path";
 import { homedir as homedir3, tmpdir } from "os";
 
 // src/shared/router-config.ts
+init_trace_boot();
 import { dirname as dirname2, join as join3 } from "path";
 var CONFIG_REL = "review-router.config.json";
 function routerConfigText(cwd, readFile, home) {
@@ -503,6 +527,7 @@ function routerFlag(cwd, readFile, home, section, key) {
 }
 
 // src/shared/gh-open-prefix.ts
+init_trace_boot();
 var GH_OPT_PREFIX = String.raw`(?:[^\S\r\n]+[\w.\/:=@-]+){1,6}?`;
 
 // src/pr-opened-review-loop.ts
@@ -668,6 +693,7 @@ if ((process.argv[1] || "").includes("pr-opened-review-loop")) {
 }
 
 // src/shared/checkpoint-shapes.ts
+init_trace_boot();
 var WORD = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'])+`;
 var ADD_LABEL = new RegExp(String.raw`(?:^|\s)--add-label(?:=|\s+)(${WORD})`, "g");
 var CREATE_LABEL = new RegExp(String.raw`(?:^|\s)(?:--label(?:=|\s+)|-l\s*)(${WORD})`, "g");
@@ -746,7 +772,11 @@ function priorGhRepo(text, mtext) {
   return { repos: [...new Set(repos)], nonLiteral };
 }
 
+// src/shared/answer-paths-door.ts
+init_trace_boot();
+
 // ../../scripts/github/lib/answer-key.mjs
+init_trace_boot();
 var ANSWER_KEY_GLOBS = Object.freeze([
   "scripts/eval/review-eval/gold/**",
   "scripts/eval/review-eval/seeds/**",
@@ -773,12 +803,19 @@ function answerKeyHitsOf(paths, globs = ANSWER_KEY_GLOBS) {
 var answerKeyHitsOf2 = answerKeyHitsOf;
 
 // src/shared/decisions-store.ts
+init_trace_boot();
 import { readFileSync as readFileSync3 } from "fs";
 
 // ../../scripts/github/lib/decisions.mjs
+init_trace_boot();
 import { appendFileSync as appendFileSync2, closeSync, existsSync as existsSync2, mkdirSync as mkdirSync3, openSync, readFileSync as readFileSync2, readSync, readdirSync, renameSync, statSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// ../../scripts/github/lib/file-lock.mjs
+init_trace_boot();
+
+// ../../scripts/github/lib/decisions.mjs
 var DECISIONS_ENV = "CCV3_DECISIONS_FILE";
 var STEPS = Object.freeze(["ship", "open-pr", "review", "land", "paid-round", "cli-skip"]);
 var REPO = "Rev4nchist/Continuous-Claude-v3";
@@ -836,10 +873,12 @@ function decisionRows(env = process.env) {
 }
 
 // src/shared/holdout-ids.ts
+init_trace_boot();
 import { readFileSync as readFileSync4 } from "fs";
 import { join as join5 } from "path";
 
 // ../../scripts/github/lib/holdout-ids.mjs
+init_trace_boot();
 function holdoutIdsOf(ds, cfg) {
   const reserved = new Set((cfg?.reserve ?? []).map((r) => r?.pr));
   const excluded = new Set(cfg?.holdoutExclude ?? []);
@@ -944,6 +983,7 @@ function loadHoldoutIds(mainRoot) {
 }
 
 // src/shared/git-call.ts
+init_trace_boot();
 var VAL = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)`;
 var globalOpt = (extra = "") => String.raw`(?:\s+(?:${extra}-C\s+${VAL}|-c\s+(?:[^\s"']|"[^"]*"|'[^']*')+|--(?:git-dir|work-tree|namespace)(?:=|\s+)${VAL}|--no-pager|--no-replace-objects|--bare|-P))*`;
 var GLOBAL_OPT = globalOpt();
@@ -959,7 +999,14 @@ function safeCallRe(verb, wrappers = "git-safe", extraOpts = "", flags = "g") {
 var isGitToken = (raw) => /(?:^|[\\/"'])git(?:\.exe)?["']?$/i.test(raw);
 var isSafeToken = (raw, wrappers = "git-safe") => new RegExp(`(?:${wrappers})\\.ps1`, "i").test(raw);
 
+// src/decision-gate.ts
+init_guard_log();
+
+// src/shared/inert-quotes.ts
+init_trace_boot();
+
 // src/shared/mask-quotes.ts
+init_trace_boot();
 var BASH_STRING = /"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g;
 var PWSH_STRING = /"(?:[^"`]|`[\s\S])*"|'(?:[^']|'')*'/g;
 var blank = (s) => s[0] + " ".repeat(s.length - 2) + s[s.length - 1];
@@ -971,6 +1018,7 @@ function quotedSpans(command, tool = "Bash") {
 }
 
 // src/shared/doc-heredoc.ts
+init_trace_boot();
 var PATH = String.raw`(?<path>[\w./\\:~-]+\.(?:md|txt))`;
 var DELIM = String.raw`(?<dash>-?)(?<q>['"])(?<d>[A-Za-z_]\w*)\k<q>`;
 var HEAD_FILE_FIRST = new RegExp(String.raw`^[ \t]*cat[ \t]+>>?[ \t]*${PATH}[ \t]*<<${DELIM}[ \t]*$`);
@@ -1097,6 +1145,7 @@ function blankSpans(command, bash, pwsh) {
 }
 
 // src/shared/shell-tools.ts
+init_trace_boot();
 var BOTH = ["Bash", "PowerShell"];
 var SHELL_TOOLS = /* @__PURE__ */ new Map([
   ["Bash", { field: "command", dialects: ["Bash"], failClosed: false }],
@@ -1119,12 +1168,749 @@ function mayRunUnderCmd(tool) {
   return !!tool && tool.startsWith("mcp__plugin_desktop-commander_");
 }
 
+// src/shared/shell-ast.ts
+init_trace_boot();
+import fs3 from "node:fs/promises";
+import { existsSync as existsSync3 } from "node:fs";
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// node_modules/sh-syntax/lib/index.js
+init_trace_boot();
+import fs2 from "node:fs/promises";
+import path2 from "node:path";
+import { fileURLToPath } from "node:url";
+
+// node_modules/sh-syntax/lib/shim.js
+init_trace_boot();
+import { randomFillSync } from "node:crypto";
+import _fs from "node:fs";
+import { performance as performance2 } from "node:perf_hooks";
+globalThis.fs ??= _fs;
+globalThis.crypto ??= {
+  // @ts-expect-error -- incompatible types
+  getRandomValues: randomFillSync
+};
+globalThis.performance ??= performance2;
+
+// node_modules/sh-syntax/lib/processor.js
+init_trace_boot();
+
+// node_modules/sh-syntax/lib/types.js
+init_trace_boot();
+var LangVariant = {
+  /**
+   * LangBash corresponds to the GNU Bash language, as described in its manual at
+   * https://www.gnu.org/software/bash/manual/bash.html.
+   *
+   * We currently follow Bash version 5.2.
+   *
+   * Its string representation is "bash".
+   *
+   * Note: as of mvdan/sh v3.13, {@link LangVariant} values are bit flags (`1 << iota`) rather than
+   * a sequential enum, so every value changed from the previous release.
+   */
+  LangBash: 1,
+  /**
+   * LangPOSIX corresponds to the POSIX Shell language, as described at
+   * https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html.
+   *
+   * Its string representation is "posix" or "sh".
+   */
+  LangPOSIX: 1 << 1,
+  /**
+   * LangMirBSDKorn corresponds to the MirBSD Korn Shell, also known as mksh, as described at
+   * https://www.mirbsd.org/htman/i386/man1/mksh.htm. Note that it shares some features with Bash,
+   * due to the shared ancestry that is ksh.
+   *
+   * We currently follow mksh version 59.
+   *
+   * Its string representation is "mksh".
+   */
+  LangMirBSDKorn: 1 << 2,
+  /**
+   * LangBats corresponds to the Bash Automated Testing System language, as described at
+   * https://github.com/bats-core/bats-core. Note that it's just a small extension of the Bash
+   * language.
+   *
+   * Its string representation is "bats".
+   */
+  LangBats: 1 << 3,
+  /**
+   * LangZsh corresponds to the Z shell, as described at https://www.zsh.org/.
+   *
+   * Note that its support in mvdan/sh is experimental and incomplete for now; see
+   * https://github.com/mvdan/sh/issues/120. We currently follow Zsh version 5.9. Added in mvdan/sh
+   * v3.13.0.
+   *
+   * Its string representation is "zsh".
+   */
+  LangZsh: 1 << 4,
+  /**
+   * LangAuto corresponds to automatic language detection, commonly used by end-user applications
+   * like shfmt, which can guess a file's language variant given its filename or shebang.
+   *
+   * At this time, [Variant] does not support LangAuto.
+   */
+  LangAuto: 1 << 5
+};
+
+// node_modules/sh-syntax/lib/processor.js
+var ParseError = class extends Error {
+  constructor({ filename, incomplete, text, pos }) {
+    super(text);
+    this.filename = filename;
+    this.incomplete = incomplete;
+    this.text = text;
+    this.pos = pos;
+  }
+};
+var supportedVariants = /* @__PURE__ */ new Set([
+  LangVariant.LangBash,
+  LangVariant.LangPOSIX,
+  LangVariant.LangMirBSDKorn,
+  LangVariant.LangBats,
+  LangVariant.LangZsh
+]);
+var encoder;
+var decoder;
+var invoke = ({ memory, wasmAlloc, wasmFree, process: process2 }, textOrAst, { filepath = "", print = false, originalText, keepComments = true, variant = LangVariant.LangBash, stopAt = "", recoverErrors = 0, useTabs = false, tabWidth = 2, simplify = false, indent = useTabs ? 0 : tabWidth, binaryNextLine = true, switchCaseIndent = true, spaceRedirects = true, keepPadding = false, minify = false, singleLine = false, functionNextLine = false } = {}) => {
+  encoder ??= new TextEncoder();
+  decoder ??= new TextDecoder();
+  if (!supportedVariants.has(variant)) {
+    throw new TypeError(`Unsupported shell variant: ${variant}`);
+  }
+  let text;
+  let printOutput;
+  if (typeof textOrAst === "string") {
+    text = textOrAst;
+    printOutput = print;
+  } else {
+    if (originalText == null) {
+      throw new TypeError("processor(ast) is not supported; pass { originalText } to format the source text");
+    }
+    text = originalText;
+    printOutput = true;
+  }
+  const filePath = encoder.encode(filepath);
+  const textBytes = encoder.encode(text);
+  const stopAtBytes = encoder.encode(stopAt);
+  const filePathPointer = wasmAlloc(filePath.byteLength);
+  new Uint8Array(memory.buffer).set(filePath, filePathPointer);
+  const textPointer = wasmAlloc(textBytes.byteLength);
+  new Uint8Array(memory.buffer).set(textBytes, textPointer);
+  const stopAtPointer = wasmAlloc(stopAtBytes.byteLength);
+  new Uint8Array(memory.buffer).set(stopAtBytes, stopAtPointer);
+  const resultPointer = process2(filePathPointer, filePath.byteLength, filePath.byteLength, textPointer, textBytes.byteLength, textBytes.byteLength, printOutput, keepComments, variant, stopAtPointer, stopAtBytes.byteLength, stopAtBytes.byteLength, recoverErrors, simplify, indent, binaryNextLine, switchCaseIndent, spaceRedirects, keepPadding, minify, singleLine, functionNextLine);
+  wasmFree(filePathPointer);
+  wasmFree(textPointer);
+  wasmFree(stopAtPointer);
+  const result = new Uint8Array(memory.buffer).subarray(resultPointer);
+  const end = result.indexOf(0);
+  const string = decoder.decode(result.subarray(0, end));
+  if (!string.startsWith('{"') || !string.endsWith("}")) {
+    throw new ParseError({
+      filename: filepath,
+      incomplete: true,
+      text: string
+    });
+  }
+  const { file, text: processedText, parseError, message } = JSON.parse(string);
+  if (parseError) {
+    throw new ParseError(parseError);
+  }
+  if (message) {
+    throw new SyntaxError(message);
+  }
+  return printOutput ? processedText : file;
+};
+var getProcessor = (getWasm) => {
+  let wasmModule;
+  let wasmModulePromise;
+  const loadModule = async () => {
+    const source = await getWasm();
+    if ("arrayBuffer" in source) {
+      if (typeof WebAssembly.compileStreaming === "function" && source instanceof Response && source.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "application/wasm") {
+        return WebAssembly.compileStreaming(source);
+      }
+      return WebAssembly.compile(await source.arrayBuffer());
+    }
+    return WebAssembly.compile(source);
+  };
+  async function processor3(textOrAst, options = {}) {
+    if (!wasmModule && !wasmModulePromise && getWasm.length === 0) {
+      wasmModulePromise = loadModule();
+    }
+    if (wasmModulePromise) {
+      try {
+        wasmModule = await wasmModulePromise;
+      } finally {
+        wasmModulePromise = void 0;
+      }
+    }
+    const go = new Go();
+    const instance = getWasm.length === 0 ? await WebAssembly.instantiate(wasmModule, go.importObject) : await getWasm(go.importObject);
+    void go.run(instance);
+    return invoke(instance.exports, textOrAst, options);
+  }
+  return processor3;
+};
+
+// node_modules/sh-syntax/lib/index.js
+var importMetaUrl = import.meta.url;
+var moduleDir = importMetaUrl ? path2.dirname(fileURLToPath(importMetaUrl)) : __dirname;
+var processor = getProcessor(() => fs2.readFile(path2.resolve(moduleDir, "../main.wasm")));
+
+// src/shared/shell-ast.ts
+var HERE = fileURLToPath2(new URL(".", import.meta.url)).replace(/\\/g, "/");
+var SHIPPED_WASM = `${HERE}sh-syntax.wasm`;
+var SHIPPED_WASM_EXEC = `${HERE}sh-syntax-wasm_exec.cjs`;
+var SHIPPED = existsSync3(SHIPPED_WASM) && existsSync3(SHIPPED_WASM_EXEC);
+var WALKER = existsSync3(`${HERE}shell-ast-walk.ps1`) ? `${HERE}shell-ast-walk.ps1` : `${HERE}../shell-ast-walk.ps1`;
+function packageDir() {
+  if (process.env.SH_SYNTAX_DIR) return process.env.SH_SYNTAX_DIR.replace(/\\/g, "/");
+  try {
+    const pkg = createRequire(import.meta.url).resolve("sh-syntax/package.json");
+    return pkg.replace(/\\/g, "/").replace(/\/package\.json$/, "");
+  } catch {
+    return "";
+  }
+}
+var SH_SYNTAX_DIR = packageDir();
+var WASM_PATH = SHIPPED ? SHIPPED_WASM : `${SH_SYNTAX_DIR}/main.wasm`;
+var WASM_EXEC_PATH = SHIPPED ? SHIPPED_WASM_EXEC : `${SH_SYNTAX_DIR}/vendors/wasm_exec.cjs`;
+var BinCmdOperator = { AndStmt: 11, OrStmt: 12, Pipe: 13, PipeAll: 14 };
+var RedirOperator = { RdrIn: 65, RdrInOut: 66, DplIn: 67, Hdoc: 71, DashHdoc: 72, WordHdoc: 73 };
+var ParExpOperator = { AssignUnset: 87, AssignUnsetOrNull: 88 };
+var NO_SPANS = { quoted: [], substs: [], bodies: [] };
+var BASH_KINDS_NOTE = ["File", "Stmt", "CallExpr", "BinaryCmd", "Word", "Lit", "SglQuoted", "DblQuoted", "ParamExp", "CmdSubst", "ProcSubst", "Assign", "Redirect", "Subshell", "Block", "IfClause", "WhileClause", "ForClause", "WordIter", "CaseClause", "CaseItem", "FuncDecl", "DeclClause", "TimeClause", "ArithmExp", "BinaryArithm", "ParenArithm", "ArrayExpr", "ArrayElem", "Comment", "CoprocClause", "CStyleLoop", "UnaryArithm", "TestClause"];
+var BASH_KINDS_EXTRA = ["BinaryTest", "UnaryTest", "ArithmCmd", "LetClause"];
+var PWSH_KINDS = ["ScriptBlockAst", "NamedBlockAst", "StatementBlockAst", "PipelineAst", "PipelineChainAst", "CommandAst", "CommandExpressionAst", "CommandParameterAst", "StringConstantExpressionAst", "ExpandableStringExpressionAst", "ConstantExpressionAst", "VariableExpressionAst", "MemberExpressionAst", "InvokeMemberExpressionAst", "ArrayExpressionAst", "ArrayLiteralAst", "HashtableAst", "ParenExpressionAst", "SubExpressionAst", "ScriptBlockExpressionAst", "BinaryExpressionAst", "UnaryExpressionAst", "ConvertExpressionAst", "TypeExpressionAst", "TypeConstraintAst", "IndexExpressionAst", "AssignmentStatementAst", "IfStatementAst", "ForStatementAst", "ForEachStatementAst", "WhileStatementAst", "DoWhileStatementAst", "DoUntilStatementAst", "SwitchStatementAst", "TryStatementAst", "CatchClauseAst", "TrapStatementAst", "FunctionDefinitionAst", "ParamBlockAst", "ParameterAst", "AttributeAst", "NamedAttributeArgumentAst", "FileRedirectionAst", "MergingRedirectionAst", "ReturnStatementAst", "BreakStatementAst", "ContinueStatementAst", "ThrowStatementAst", "ExitStatementAst", "UsingExpressionAst", "TernaryExpressionAst", "AttributedExpressionAst", "DataStatementAst"];
+var CD_NAMES = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
+var POP_NAMES = /* @__PURE__ */ new Set(["popd", "pop-location"]);
+var SHELLS = /* @__PURE__ */ new Set(["bash", "sh", "zsh", "dash", "ksh"]);
+var PWSHS = /* @__PURE__ */ new Set(["pwsh", "powershell"]);
+var READ_WRITERS = /* @__PURE__ */ new Set(["read", "mapfile", "readarray", "getopts"]);
+var MAX_NEST = 4;
+var processor2;
+function bashProcessor() {
+  if (!processor2) {
+    createRequire(import.meta.url)(WASM_EXEC_PATH);
+    processor2 = getProcessor(() => fs3.readFile(WASM_PATH));
+  }
+  return processor2;
+}
+async function parseBashRaw(text) {
+  return bashProcessor()(text);
+}
+function progName(lit) {
+  if (lit == null) return null;
+  return lit.replace(/\\/g, "/").split("/").pop().toLowerCase().replace(/\.(exe|cmd|bat|ps1|sh)$/, "");
+}
+var GLOB = /[*?]|\[[^\]]*\]|\{[^{}]*(,|\.\.)[^{}]*\}/;
+var DQ_ESC = /\\[$`"\\\n]/;
+function partLit(p) {
+  if (p.type === "Lit") return /\\/.test(p.value) || GLOB.test(p.value) ? null : p.value;
+  if (p.type === "SglQuoted") return p.dollar && p.value.includes("\\") ? null : p.value;
+  if (p.type === "DblQuoted") {
+    if (p.dollar || !(p.parts ?? []).every((q) => q.type === "Lit")) return null;
+    const v = p.parts.map((q) => q.value).join("");
+    return DQ_ESC.test(v) ? null : v;
+  }
+  return null;
+}
+function wordLit(w) {
+  let s = "";
+  for (const p of w.parts ?? []) {
+    const v = partLit(p);
+    if (v === null) return null;
+    s += v;
+  }
+  return s;
+}
+function partPrefix(p) {
+  if (p.type !== "DblQuoted") {
+    const v = partLit(p);
+    return v === null ? { s: "", end: true } : { s: v, end: false };
+  }
+  let s = "";
+  for (const q of p.parts ?? []) {
+    const r = partPrefix(q);
+    s += r.s;
+    if (r.end) return { s, end: true };
+  }
+  return { s, end: false };
+}
+function wordPrefix(w) {
+  let s = "";
+  for (const p of w.parts ?? []) {
+    const r = partPrefix(p);
+    s += r.s;
+    if (r.end) break;
+  }
+  return s;
+}
+var walkAll = (n, fn) => {
+  if (Array.isArray(n)) {
+    n.forEach((x) => walkAll(x, fn));
+    return;
+  }
+  if (!n || typeof n !== "object") return;
+  if (n.type) fn(n);
+  for (const v of Object.values(n)) if (v && typeof v === "object") walkAll(v, fn);
+};
+var nodesOf = (n, types) => {
+  const out3 = [];
+  walkAll(n, (x) => {
+    if (types.includes(x.type)) out3.push(x);
+  });
+  return out3;
+};
+var plainParam = (p) => !p.exp && !p.index && !p.repl && !p.slice && !p.names && !p.length && !p.excl && !p.width && !p.isSet && !p.flags;
+function singleVar(w) {
+  const parts = w.parts ?? [];
+  const p = parts.length === 1 ? parts[0] : null;
+  const quoted = p?.type === "DblQuoted";
+  const q = quoted && p.parts.length === 1 ? p.parts[0] : p;
+  return q?.type === "ParamExp" && plainParam(q) ? { name: q.param.value, quoted } : null;
+}
+function makeConv(text) {
+  const buf = Buffer.from(text, "utf8");
+  const ascii = buf.length === text.length;
+  return { c: (o) => ascii ? o : buf.subarray(0, o).toString().length, slice: (s, e) => ascii ? text.slice(s, e) : buf.subarray(s, e).toString() };
+}
+function makeBashWord(w, conv) {
+  const lit = wordLit(w);
+  const cs = nodesOf(w, ["CmdSubst", "ProcSubst"]).length > 0;
+  const sv = lit === null ? singleVar(w) : null;
+  const kind = lit !== null ? "lit" : cs ? "cmdsubst" : sv ? "var" : "dyn";
+  const vars = nodesOf(w, ["ParamExp"]).map((p) => p.param?.value).filter(Boolean);
+  const [start, end] = [conv.c(w.start), conv.c(w.end)];
+  const out3 = { lit, kind, raw: conv.slice(w.start, w.end), start, end, vars };
+  if (sv) {
+    out3.var = sv.name;
+    out3.quoted = sv.quoted;
+  }
+  if (lit === null) out3.prefix = wordPrefix(w);
+  return out3;
+}
+function walkBash(file, text) {
+  const conv = makeConv(text);
+  const ev = [];
+  const kinds = /* @__PURE__ */ new Set();
+  const free = [];
+  const quoted = [];
+  const dqRanges = [];
+  const substRaw = [];
+  walkAll(file, (n) => {
+    kinds.add(n.type);
+    if (n.type === "Comment") free.push([conv.c(n.start), conv.c(n.end)]);
+    else if (n.type === "SglQuoted") quoted.push([conv.c(n.start) + (n.dollar ? 2 : 1), conv.c(n.end) - 1]);
+    else if (n.type === "DblQuoted") {
+      const r = [conv.c(n.start) + (n.dollar ? 2 : 1), conv.c(n.end) - 1];
+      quoted.push(r);
+      dqRanges.push(r);
+    } else if (n.type === "CmdSubst" || n.type === "ProcSubst" || n.type === "ArithmExp") substRaw.push([conv.c(n.start), conv.c(n.end)]);
+  });
+  const delims = [];
+  const substs = substRaw.map(([from, to]) => ({ from, to, dq: dqRanges.some(([a, b]) => a <= from && to <= b + 1) }));
+  const base = { pipe: false, chain: null, background: false };
+  const root = { place: base, depth: 0, func: null, top: true };
+  const subst = (node, ctx) => {
+    const outer = [];
+    const find = (n) => {
+      if (Array.isArray(n)) return n.forEach(find);
+      if (!n || typeof n !== "object") return;
+      if (n.type === "CmdSubst" || n.type === "ProcSubst") {
+        outer.push(n);
+        return;
+      }
+      Object.values(n).forEach((v) => v && typeof v === "object" && find(v));
+    };
+    find(node);
+    for (const n of outer) scoped(() => stmts(n.stmts, { ...ctx, depth: ctx.depth + 1, top: false }));
+  };
+  const scoped = (run) => {
+    ev.push({ t: "scope", open: true });
+    run();
+    ev.push({ t: "scope", open: false });
+  };
+  const stmts = (list, ctx) => list.forEach((s, i) => stmt(s, i ? { ...ctx, place: { ...ctx.place, chain: ";" } } : ctx));
+  const stmt = (s, ctx) => {
+    const bg = ctx.place.background || s.background;
+    const c = { ...ctx, place: { ...ctx.place, background: bg }, top: ctx.top && !s.background };
+    const prog = s.cmd?.type === "CallExpr" && s.cmd.args.length ? progName(wordLit(s.cmd.args[0])) : null;
+    for (const r of s.redirs ?? []) redirect(r, c, prog, s);
+    cmd(s.cmd, c, s);
+  };
+  const heredocs = [];
+  const redirect = (r, ctx, prog, s) => {
+    for (const w of [r.word, r.hdoc]) if (w) subst(w, ctx);
+    if (r.word && (r.op === RedirOperator.Hdoc || r.op === RedirOperator.DashHdoc)) delims.push([conv.c(r.word.start), conv.c(r.word.end)]);
+    if (r.hdoc) heredocs.push({ start: conv.c(r.hdoc.start), end: conv.c(r.hdoc.end), pipe: ctx.place.pipe, callStart: s.cmd?.type === "CallExpr" && s.cmd.args.length ? conv.c(s.cmd.start) : null });
+    if (r.hdoc && !ctx.place.pipe && !SHELLS.has(prog ?? "") && !PWSHS.has(prog ?? "")) free.push([conv.c(r.hdoc.start), conv.c(r.hdoc.end)]);
+  };
+  const cmd = (c, ctx, s) => {
+    const inner = { ...ctx, top: false };
+    switch (c?.type) {
+      case "CallExpr":
+        return call(c, ctx, s);
+      case "BinaryCmd":
+        return binary(c, ctx);
+      case "FuncDecl":
+        return stmt(c.body, { ...inner, depth: ctx.depth + 1, func: c.name.value });
+      case "ForClause":
+        return loop(c, { ...inner, depth: ctx.depth + 1 });
+      case "WhileClause":
+        stmts(c.cond ?? [], { ...inner, depth: ctx.depth + 1 });
+        return stmts(c.do ?? [], { ...inner, depth: ctx.depth + 1 });
+      case "IfClause":
+        return ifc(c, inner);
+      case "CaseClause":
+        subst(c.word, inner);
+        return c.items.forEach((i) => stmts(i.stmts ?? [], inner));
+      case "Subshell":
+        return scoped(() => stmts(c.stmts, inner));
+      case "Block":
+        return stmts(c.stmts, ctx);
+      case "TimeClause":
+      case "CoprocClause":
+        if (c.stmt) stmt(c.stmt, inner);
+        return;
+      case "DeclClause":
+        return decl(c, inner);
+      default:
+        return subst(c, inner);
+    }
+  };
+  const ifc = (c, ctx) => {
+    stmts(c.cond ?? [], ctx);
+    stmts(c.then ?? [], ctx);
+    if (c.else) ifc(c.else, ctx);
+  };
+  const loop = (c, ctx) => {
+    if (c.loop?.type === "WordIter") {
+      subst(c.loop.items ?? [], ctx);
+      const raw = (c.loop.items ?? []).map((w) => conv.slice(w.start, w.end)).join(" ");
+      ev.push({ t: "assign", name: c.loop.name.value, lit: null, raw, top: false });
+    } else subst(c.loop, ctx);
+    stmts(c.do ?? [], ctx);
+  };
+  const binary = (c, ctx) => {
+    const pipe = c.op === BinCmdOperator.Pipe || c.op === BinCmdOperator.PipeAll;
+    const chain = c.op === BinCmdOperator.AndStmt ? "&&" : c.op === BinCmdOperator.OrStmt ? "||" : null;
+    if (pipe) {
+      const p = { ...ctx, place: { ...ctx.place, pipe: true }, top: false };
+      stmt(c.x, p);
+      stmt(c.y, p);
+      return;
+    }
+    stmt(c.x, ctx);
+    stmt(c.y, { ...ctx, place: { ...ctx.place, chain }, top: false });
+  };
+  const decl = (c, ctx) => {
+    if (c.variant?.value === "export") ev.push({ t: "barrier" });
+    for (const a of c.args ?? []) {
+      if (a.value) subst(a.value, ctx);
+      if (a.type === "Assign" && a.name) ev.push({ t: "assign", name: a.name.value, lit: null, top: false });
+    }
+  };
+  const call = (c, ctx, s) => {
+    for (const a of c.assigns) if (a.value) subst(a.value, ctx);
+    for (const w of c.args) {
+      subst(w, ctx);
+      paramWrites(w);
+    }
+    if (!c.args.length) {
+      for (const a of c.assigns) ev.push({ t: "assign", name: a.name.value, lit: a.value && !a.array ? wordLit(a.value) : null, raw: a.value ? conv.slice(a.value.start, a.value.end) : "", top: ctx.top });
+      return;
+    }
+    const words = c.args.map((w) => makeBashWord(w, conv));
+    const assigns = c.assigns.map((a) => ({ name: a.name.value, lit: a.value ? wordLit(a.value) : null }));
+    const call2 = { t: "call", dialect: "bash", words, assigns, place: ctx.place, depth: ctx.depth, func: ctx.func, inFunctionBody: ctx.func !== null, op: null, stdin: stdinOf(s), level: 0, start: conv.c(c.start), end: conv.c(c.end) };
+    writersOf(words);
+    ev.push(call2);
+  };
+  const writersOf = (words) => {
+    const p = progName(words[0].lit);
+    if (READ_WRITERS.has(p ?? "")) for (const w of words.slice(1)) ev.push({ t: "assign", name: w.lit ?? w.raw, lit: null, top: false });
+    if (p === "printf") words.forEach((w, i) => w.lit === "-v" && words[i + 1] && ev.push({ t: "assign", name: words[i + 1].lit ?? words[i + 1].raw, lit: null, top: false }));
+    if (["eval", "source", "."].includes(words[0].lit ?? "")) ev.push({ t: "unsafe" });
+  };
+  const paramWrites = (w) => {
+    for (const p of nodesOf(w, ["ParamExp"])) if (p.exp && (p.exp.op === ParExpOperator.AssignUnset || p.exp.op === ParExpOperator.AssignUnsetOrNull) && p.param) ev.push({ t: "assign", name: p.param.value, lit: null, top: false });
+  };
+  stmts(file.stmts, root);
+  if (kinds.has("LetClause") || kinds.has("ArithmCmd") || kinds.has("ArithmExp") || kinds.has("CStyleLoop")) ev.push({ t: "unsafe" });
+  return { events: ev, kinds, free, heredocs, spans: { quoted: quoted.filter(([a, b]) => !delims.some(([x, y]) => x <= a && b <= y)), substs, bodies: heredocs.map((h) => [h.start, h.end]) } };
+}
+var STDIN_OPS = [RedirOperator.RdrIn, RedirOperator.RdrInOut, RedirOperator.DplIn, RedirOperator.Hdoc, RedirOperator.DashHdoc, RedirOperator.WordHdoc];
+function stdinOf(s) {
+  let last = null;
+  for (const r of s?.redirs ?? []) {
+    const fd = r.n?.value;
+    if ((fd === void 0 || fd === "0") && STDIN_OPS.includes(r.op)) last = r;
+  }
+  if (!last) return null;
+  if (last.op === RedirOperator.Hdoc || last.op === RedirOperator.DashHdoc) return { lit: last.hdoc ? wordLit(last.hdoc) : null };
+  if (last.op === RedirOperator.WordHdoc) return { lit: last.word ? wordLit(last.word) : null };
+  return { lit: null };
+}
+function runWalker(text, timeoutMs) {
+  return new Promise((resolve4) => {
+    const cp = spawn("pwsh", ["-NoProfile", "-NonInteractive", "-File", WALKER], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    let out3 = "";
+    let done = false;
+    const fin = (v) => {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        resolve4(v);
+      }
+    };
+    const timer = setTimeout(() => {
+      cp.kill();
+      fin({ error: "pwsh timeout" });
+    }, timeoutMs);
+    cp.stdout.setEncoding("utf8");
+    cp.stdout.on("data", (d) => {
+      out3 += d;
+    });
+    cp.on("error", (e) => fin({ error: `pwsh spawn: ${e.message}` }));
+    cp.on("close", (code) => {
+      if (code !== 0) return fin({ error: `pwsh exit ${code}` });
+      try {
+        fin({ json: JSON.parse(out3) });
+      } catch {
+        fin({ error: "pwsh bad json" });
+      }
+    });
+    cp.stdin.on("error", () => {
+    });
+    cp.stdin.end(text, "utf8");
+  });
+}
+function psWord(el, text) {
+  const w = { lit: null, kind: el.k, raw: text.slice(el.s, el.e), start: el.s, end: el.e, vars: [] };
+  if (el.k === "lit") {
+    w.lit = el.v;
+    w.st = el.st;
+  } else if (el.k === "param") {
+    w.lit = el.v;
+    w.kind = "param";
+  } else if (el.k === "subexpr") w.kind = "cmdsubst";
+  else if (el.k === "var") {
+    w.var = el.var;
+    w.vars = [el.var];
+  } else if (el.k === "expandable") w.prefix = el.prefix;
+  if (el.colon) w.colon = true;
+  return w;
+}
+function walkPwsh(j, text) {
+  const evs = [];
+  for (const c of j.cmds) {
+    const words = c.els.map((e) => psWord(e, text));
+    evs.push({ key: c.s, ev: { t: "call", dialect: "pwsh", words, assigns: [], place: { pipe: c.pipe, chain: c.chain, background: c.bg }, depth: c.depth, func: c.func, inFunctionBody: c.func !== null, op: c.op, stdin: null, level: 0, start: c.s, end: c.e } });
+    for (const w of outVarWrites(words)) evs.push({ key: c.s, ev: { t: "assign", name: w, lit: null, top: false } });
+  }
+  for (const a of j.assigns) evs.push({ key: a.end - 0.5, ev: { t: "assign", name: a.name, lit: a.lit, raw: text.slice(a.s, a.end), top: a.top } });
+  evs.sort((x, y) => x.key - y.key);
+  const rng = (l) => (Array.isArray(l) ? l : []).map((x) => [x.s, x.e]);
+  const substs = (Array.isArray(j.substs) ? j.substs : []).map((x) => ({ from: x.s, to: x.e, dq: x.dq === true }));
+  return { events: evs.map((x) => x.ev), kinds: new Set(j.kinds), free: j.comments.map((c) => [c.s, c.e]), heredocs: [], spans: { quoted: rng(j.quoted), substs, bodies: rng(j.bodies) } };
+}
+var OUTVAR = /^-(ov|outvariable|ev|errorvariable|iv|informationvariable|wv|warningvariable|pv|pipelinevariable)$/i;
+function outVarWrites(words) {
+  const out3 = [];
+  words.forEach((w, i) => {
+    if (w.kind === "param" && OUTVAR.test(w.lit ?? "") && words[i + 1]) out3.push(words[i + 1].lit ?? words[i + 1].raw);
+  });
+  return out3;
+}
+function cdTarget(call) {
+  const p = progName(call.words[0].lit);
+  if (POP_NAMES.has(p ?? "")) return null;
+  if (!CD_NAMES.has(p ?? "")) return void 0;
+  const arg = call.words.slice(1).find((w) => w.kind !== "param" && !(w.lit !== null && /^-./.test(w.lit)));
+  return arg ? arg.lit : "~";
+}
+var BARRIER_PROGS = /* @__PURE__ */ new Set(["read", "mapfile", "readarray", "unset", "set-variable", "sv", "new-variable", "nv", "remove-variable", "rv", "clear-variable", "clv", "read-host"]);
+var isBarrier = (e) => e.t === "barrier" || e.t === "call" && (BARRIER_PROGS.has(progName(e.words[0].lit) ?? "") || progName(e.words[0].lit) === "set" && e.words.some((w) => w.lit === "--"));
+function resolve2(events, dialect) {
+  const key = (n) => dialect === "pwsh" ? n.toLowerCase() : n;
+  const unsafe = events.some((e) => e.t === "unsafe");
+  const writes = /* @__PURE__ */ new Map();
+  events.forEach((e, i) => {
+    if (e.t === "assign") {
+      const k = key(e.name);
+      writes.set(k, [...writes.get(k) ?? [], { ...e, i }]);
+    }
+  });
+  const barriers = [];
+  events.forEach((e, i) => {
+    if (isBarrier(e)) barriers.push(i);
+  });
+  const cwd = [];
+  const scopes = [];
+  events.forEach((e, i) => {
+    if (e.t === "scope") {
+      if (e.open) scopes.push(cwd.length);
+      else {
+        const n = scopes.pop();
+        if (n !== void 0) cwd.length = n;
+      }
+      return;
+    }
+    if (e.t !== "call") return;
+    for (const w of e.words) resolveWord(w, i, writes, key, unsafe, barriers);
+    e.cwdBefore = [...cwd];
+    const t = cdTarget(e);
+    if (t !== void 0) cwd.push(t);
+  });
+  const assigns = events.filter((e) => e.t === "assign").map((e) => ({ name: key(e.name), lit: e.lit, raw: e.raw ?? "", top: e.top }));
+  return { calls: events.filter((e) => e.t === "call"), assigns };
+}
+var SPLITS = /[\s*?[\]{]|^$/;
+function resolveWord(w, i, writes, key, unsafe, barriers) {
+  if (w.kind !== "var" || w.lit !== null || unsafe) return;
+  const ws = writes.get(key(w.var));
+  if (ws?.length !== 1 || ws[0].lit == null || !ws[0].top || !(ws[0].i < i)) return;
+  if (barriers.some((b) => b > ws[0].i && b < i)) return;
+  if (w.quoted === false && SPLITS.test(ws[0].lit)) return;
+  w.lit = ws[0].lit;
+  w.kind = "lit";
+  w.viaVar = w.var;
+}
+var isFlagC = (l) => /^-[A-Za-z]*c[A-Za-z]*$/.test(l);
+var prefixOf = (long, l) => l.length >= 2 && long.startsWith(l.toLowerCase());
+function joinLits(words) {
+  return words.some((w) => w.lit === null) ? null : words.map((w) => w.lit).join(" ");
+}
+function pwshPayloadIndex(ws) {
+  for (let k = 1; k < ws.length; k++) {
+    const l = ws[k].lit;
+    if (l === null || !/^-/.test(l)) continue;
+    if (prefixOf("-file", l)) return -1;
+    if (prefixOf("-command", l) || prefixOf("-encodedcommand", l)) return k;
+  }
+  return -1;
+}
+function payloadOf(call) {
+  const ws = call.words;
+  const p = progName(ws[0].lit) ?? "";
+  const lit = (i) => ws[i]?.lit ?? "";
+  if (SHELLS.has(p)) {
+    const i = ws.findIndex((w, k) => k > 0 && w.lit !== null && isFlagC(w.lit));
+    if (i > 0) return { dialect: "bash", via: "bash-c", text: ws[i + 1] ? ws[i + 1].lit : null };
+    if (call.stdin) return { dialect: "bash", via: "stdin", text: call.stdin.lit };
+  }
+  if (PWSHS.has(p)) {
+    const i = pwshPayloadIndex(ws);
+    if (i > 0 && prefixOf("-encodedcommand", lit(i))) return { dialect: "pwsh", via: "encoded", text: ws[i + 1]?.lit == null ? null : Buffer.from(ws[i + 1].lit, "base64").toString("utf16le") };
+    if (i > 0) return { dialect: "pwsh", via: "pwsh-c", text: joinLits(ws.slice(i + 1)) };
+    if (call.stdin) return { dialect: "pwsh", via: "stdin", text: call.stdin.lit };
+  }
+  if (p === "eval") return { dialect: "bash", via: "eval", text: joinLits(ws.slice(1)) };
+  if (p === "iex" || p === "invoke-expression") return { dialect: "pwsh", via: "iex", text: ws[1] ? ws[1].lit : null };
+  if (p === "cmd") return cmdPayload(ws);
+  return null;
+}
+function cmdPayload(ws) {
+  const i = ws.findIndex((w, k) => k > 0 && w.lit !== null && /^\/[ck]$/i.test(w.lit));
+  if (i < 0) return null;
+  return { dialect: "cmd", via: "cmd-c", payload: ws.slice(i + 1).map((w) => w.lit ?? w.raw).join(" ") };
+}
+var XARGS_VALUE = /* @__PURE__ */ new Set(["-a", "-i", "-n", "-p", "-d", "-e", "-s", "-l", "-I", "-P", "-E", "-L", "--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars", "--max-lines", "--eof", "--replace"]);
+function xargsInner(call) {
+  if (progName(call.words[0].lit) !== "xargs") return null;
+  let i = 1;
+  while (i < call.words.length && call.words[i].lit !== null && /^-/.test(call.words[i].lit)) i += XARGS_VALUE.has(call.words[i].lit) ? 2 : 1;
+  const words = call.words.slice(i);
+  return words.length ? { ...call, words, argsUnknown: true, viaPayload: "xargs", depth: call.depth + 1, level: call.level + 1, nested: void 0 } : null;
+}
+async function expandNested(calls, opts, level) {
+  if (opts.noNested) return calls;
+  const out3 = [];
+  for (const c of calls) {
+    out3.push(c);
+    const x = xargsInner(c);
+    if (x) out3.push(x);
+    const pay = payloadOf(c);
+    if (!pay) continue;
+    if (pay.dialect === "cmd") {
+      c.nested = { status: "unparsed", dialect: "cmd", payload: pay.payload };
+      continue;
+    }
+    if (pay.text === null || pay.text === void 0 || level >= MAX_NEST) {
+      c.nested = { status: "dynamic", via: pay.via };
+      continue;
+    }
+    const r = await parseLevel(pay.text, pay.dialect, opts, level + 1);
+    if (!r.ok) {
+      c.nested = { status: "error", via: pay.via, dialect: pay.dialect, text: pay.text };
+      continue;
+    }
+    c.nested = { status: "parsed", via: pay.via, dialect: pay.dialect };
+    for (const ic of r.calls) out3.push({ ...ic, depth: ic.depth + c.depth + 1, level: level + 1, viaPayload: pay.via, cwdBefore: [...c.cwdBefore ?? [], ...ic.cwdBefore ?? []] });
+    r.kinds.forEach((k) => (c.nestedKinds ??= /* @__PURE__ */ new Set()).add(k));
+  }
+  return out3;
+}
+function lineOf(text, offset) {
+  return text.slice(0, offset).split("\n").length;
+}
+async function parseLevel(text, dialect, opts, level) {
+  const r = dialect === "pwsh" ? await levelPwsh(text, opts) : await levelBash(text, opts);
+  if (!r.ok) return { ok: false, calls: [], errors: r.errors, kinds: r.kinds, freeRanges: [], heredocs: [], assigns: [], dialect, ...NO_SPANS };
+  const { calls, assigns } = resolve2(r.events, dialect);
+  const expanded = await expandNested(calls, opts, level);
+  const kinds = new Set(r.kinds);
+  for (const c of expanded) c.nestedKinds?.forEach((k) => kinds.add(k));
+  return { ok: true, calls: expanded, errors: [], kinds, freeRanges: r.free, heredocs: r.heredocs, assigns, dialect, ...r.spans ?? NO_SPANS };
+}
+async function levelBash(text, opts = {}) {
+  let file;
+  try {
+    file = await (opts.bashProvider ?? parseBashRaw)(text);
+  } catch (e) {
+    const conv = makeConv(text);
+    const pos = e?.pos ?? { offset: 0, line: 1, column: 1 };
+    return { ok: false, errors: [{ msg: String(e?.message ?? e), offset: conv.c(pos.offset), line: pos.line, column: pos.column, reader: e?.pos === void 0 }], kinds: /* @__PURE__ */ new Set() };
+  }
+  if (file === null || typeof file !== "object") return { ok: false, errors: [{ msg: "sh-syntax returned no tree", offset: 0, line: 1, reader: true }], kinds: /* @__PURE__ */ new Set() };
+  const w = walkBash(file, text);
+  return { ok: true, errors: [], kinds: w.kinds, events: w.events, free: w.free, heredocs: w.heredocs, spans: w.spans };
+}
+async function levelPwsh(text, opts) {
+  const { json, error } = opts.pwshProvider ? opts.pwshProvider(text) : await runWalker(text, opts.timeoutMs ?? 3e3);
+  if (error || !json) return { ok: false, errors: [{ msg: error ?? "pwsh no result", offset: 0, line: 1, reader: true }], kinds: /* @__PURE__ */ new Set() };
+  if (json.errors.length) return { ok: false, errors: json.errors.map((e) => ({ msg: e.msg, offset: e.offset, line: lineOf(text, e.offset) })), kinds: new Set(json.kinds) };
+  const w = walkPwsh(json, text);
+  return { ok: true, errors: [], kinds: w.kinds, events: w.events, free: w.free, heredocs: w.heredocs, spans: w.spans };
+}
+async function parseCalls(text, dialect, opts = {}) {
+  const r = await parseLevel(text, dialect, opts, 0);
+  return { ...r, kinds: [...r.kinds] };
+}
+
+// src/shared/shell-judge.ts
+init_trace_boot();
+var DEFAULT_KINDS = [...BASH_KINDS_NOTE, ...BASH_KINDS_EXTRA, ...PWSH_KINDS];
+var PROGRAM_WORDS = /\b(git|gh|cr|coderabbit|git-safe|git-for|land-pr)\b/i;
+var VERB_WORDS = /\b(push|review|pulls)\b|\bpr\s+(create|merge)\b/i;
+var DYNAMIC_SIGNS = /(^|\s)&\s|\b(iex|Invoke-Expression|Invoke-Command|Start-Process|cmd|bash|sh|pwsh|powershell)\b|-EncodedCommand/i;
+var defaultEntry = (t) => PROGRAM_WORDS.test(t) || VERB_WORDS.test(t) || DYNAMIC_SIGNS.test(t);
+var GIT_BUILTIN = new Set("add am apply archive bisect blame branch bundle cat-file checkout cherry-pick clean clone commit config describe diff difftool fetch format-patch gc grep help init log ls-files ls-remote ls-tree merge mergetool mv notes pull push range-diff rebase reflog remote reset restore rev-list rev-parse revert rm shortlog show sparse-checkout stash status submodule switch tag version worktree".split(" "));
+
 // src/shared/tap-scope.ts
-import * as fs2 from "fs";
+init_trace_boot();
+import * as fs4 from "fs";
 import * as os2 from "os";
-import * as path2 from "path";
+import * as path3 from "path";
 
 // ../../scripts/github/lib/repo-identity.mjs
+init_trace_boot();
 var NAME = "([\\w.-]+)";
 var TAIL = `${NAME}\\/([\\w.-]+?)(?:\\.git)?\\/?$`;
 var URL_FORM = new RegExp(`^(?:https?|git|ssh):\\/\\/(?:[^@/\\s]+@)?github\\.com(?::\\d+)?\\/${TAIL}`, "i");
@@ -1272,8 +2058,8 @@ function oneLine2(text, max) {
 
 // src/shared/tap-scope.ts
 var CCV3_ENTRY = "continuous-claude";
-var readUtf8 = (file) => fs2.readFileSync(file, "utf8");
-var realNative = (p) => fs2.realpathSync.native(p);
+var readUtf8 = (file) => fs4.readFileSync(file, "utf8");
+var realNative = (p) => fs4.realpathSync.native(p);
 var isNetwork = (p) => /^\/\//.test(normPath2(p));
 var normPath2 = normPath;
 var isAbsolute = (p) => /^[a-zA-Z]:[\\/]/.test(p) || /^[\\/]/.test(p);
@@ -1291,7 +2077,7 @@ function registryFile(opts) {
   if (opts.path) return opts.path;
   if (env.LANE_REGISTRY_PATH) return env.LANE_REGISTRY_PATH;
   const home = env.USERPROFILE || env.HOME || (opts.deps?.homedir ?? os2.homedir)();
-  return path2.join(home, ".claude", "project-registry.json");
+  return path3.join(home, ".claude", "project-registry.json");
 }
 var slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 function entryOf(item) {
@@ -1375,7 +2161,7 @@ function rootOfGitFile(top, text, readFile) {
 }
 function joinPath(base, rel) {
   if (isAbsolute(rel)) return normPath2(rel);
-  return normPath2(path2.posix.normalize(`${normPath2(base)}/${rel.replace(/\\/g, "/")}`));
+  return normPath2(path3.posix.normalize(`${normPath2(base)}/${rel.replace(/\\/g, "/")}`));
 }
 function worktreeRootOf(dir, readFile) {
   let cur = normPath2(dir);
@@ -1568,7 +2354,7 @@ function dropAliasSuffix(p) {
   return p.slice(0, cut) + leaf;
 }
 function isStorePath(p, deps, cwd) {
-  const full = norm(resolve2(cwd, dropAliasSuffix(p)));
+  const full = norm(resolve3(cwd, dropAliasSuffix(p)));
   const store = norm(decisionsPath2(deps.env));
   return STORE_PATH_RE.test(full) || full === store || full.startsWith(`${store}.`);
 }
@@ -1771,6 +2557,9 @@ function cliMergeHead(args, pwsh = false) {
   if (unmodelled(args, pwsh)) return UNREAD_HEAD;
   const words = pairedWords(args, pwsh);
   if (words === null) return UNREAD_HEAD;
+  return cliHeadOfWords(words);
+}
+function cliHeadOfWords(words) {
   const heads = [];
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
@@ -1809,6 +2598,9 @@ function apiMergeHead(text, pwsh = false) {
   if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"), pwsh)) return UNREAD_HEAD;
   const words = pairedWords(rest, pwsh);
   if (words === null) return UNREAD_HEAD;
+  return apiHeadOfWords(words);
+}
+function apiHeadOfWords(words) {
   const heads = [];
   let endpoint = false;
   for (let i = 0; i < words.length; i++) {
@@ -1824,6 +2616,250 @@ function apiMergeHead(text, pwsh = false) {
     if (eq > 0 && r.field.slice(0, eq) === "sha") heads.push(r.field.slice(eq + 1));
   }
   return oneHead(heads);
+}
+var API_MERGE_PATH = /\/pulls\/(\d+)\/merge\b/i;
+function mergeCallOf(call) {
+  const w = call.words;
+  if (w.length < 3 || progName(w[0].lit) !== "gh") return null;
+  const sub = (i) => (w[i]?.lit ?? "").toLowerCase();
+  const at2 = call.cwdBefore ?? [];
+  const text = w.map((x) => x.raw).join(" ");
+  if (sub(1) === "pr" && sub(2) === "merge") {
+    const args = w.slice(3);
+    if (args.some((a) => a.lit === null)) return { pr: prOfWords(args), ...UNREAD_HEAD, cwdBefore: at2, text };
+    return { pr: prOfWords(args), ...cliHeadOfWords(args.map((a) => a.lit)), cwdBefore: at2, text };
+  }
+  if (sub(1) === "api") {
+    const args = w.slice(2);
+    const endpoint = args.find((a) => API_MERGE_PATH.test(a.lit ?? a.raw));
+    if (!endpoint) return null;
+    const lits = args.map((a) => a.lit);
+    if (lits.some((l, i) => (l === "-X" || l === "--method") && /^GET$/i.test(lits[i + 1] ?? "")) || lits.some((l) => /^(?:-XGET|--method=GET)$/i.test(l ?? ""))) return null;
+    const pr = API_MERGE_PATH.exec(endpoint.lit ?? endpoint.raw)[1];
+    if (endpoint.lit === null || args.some((a) => a.lit === null && a !== endpoint)) return { pr, ...UNREAD_HEAD, cwdBefore: at2, text };
+    return { pr, ...apiHeadOfWords(lits.map((l) => l)), cwdBefore: at2, text };
+  }
+  return null;
+}
+function prOfWords(args) {
+  for (let i = 0; i < args.length; i++) {
+    const l = args[i].lit ?? "";
+    if (/^\d+$/.test(l) && !MERGE_VALUE.has(args[i - 1]?.lit ?? "")) return l;
+  }
+  for (const a of args) {
+    const m = /\/pull\/(\d+)/.exec(a.lit ?? "");
+    if (m) return m[1];
+  }
+  return null;
+}
+function astMerges(parsed) {
+  if (!parsed) return [];
+  return Object.values(parsed.byDialect).flatMap((r) => r ? r.calls : []).flatMap((c) => {
+    const m = mergeCallOf(c);
+    return m ? [m] : [];
+  });
+}
+function namesOtherRepo(m, pwsh) {
+  const r = commandRepo(m.text, maskQuoted(m.text, pwsh ? "PowerShell" : "Bash"), {}, []);
+  return r !== null && r !== CCV3_REPO;
+}
+function withAstMerges(shapes, parsed, pwsh) {
+  if (!parsed || Object.values(parsed.byDialect).some((r) => r === void 0 || r.errors.length > 0)) return shapes;
+  const found = astMerges(parsed);
+  if (found.length === 0) return shapes;
+  const heads = (pr) => {
+    const hs = found.filter((m) => m.pr === pr);
+    if (hs.length === 0) return null;
+    const first = hs[0];
+    return hs.every((m) => m.sha === first.sha && !m.shaBad === !first.shaBad) ? { sha: first.sha, ...first.shaBad ? { shaBad: true } : {} } : UNREAD_HEAD;
+  };
+  const out3 = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (s) => {
+    const id = `${s.kind}|${s.pr}|${s.sha}${s.shaBad ? "!" : ""}|${s.at ? whereId(s.at) : ""}|${s.ftext ?? s.text ?? ""}${s.prior ? priorId(s.prior) : ""}`;
+    if (!seen.has(id)) {
+      seen.add(id);
+      out3.push(s);
+    }
+  };
+  const own = (pr) => found.find((m) => m.pr === pr && namesOtherRepo(m, pwsh));
+  for (const s of shapes) {
+    if (s.kind !== "merge") {
+      out3.push(s);
+      continue;
+    }
+    const h = heads(s.pr);
+    if (!h) {
+      push(s);
+      continue;
+    }
+    const { shaBad: _drop, ...rest } = s;
+    const o = own(s.pr);
+    push({ ...rest, sha: h.sha, ...h.shaBad ? { shaBad: true } : {}, ...o ? { ftext: o.text, fmtext: maskQuoted(o.text, pwsh ? "PowerShell" : "Bash") } : {} });
+  }
+  for (const m of found) {
+    if (shapes.some((s) => s.kind === "merge" && s.pr === m.pr)) continue;
+    const cds = m.cwdBefore.filter((c) => c !== null);
+    const masked = maskQuoted(m.text, pwsh ? "PowerShell" : "Bash");
+    push({ kind: "merge", pr: m.pr, sha: m.sha, ...m.shaBad ? { shaBad: true } : {}, at: { cds, unknown: m.cwdBefore.includes(null), loose: cds.length > 0 || m.cwdBefore.includes(null) }, text: m.text, mtext: masked, ftext: m.text, fmtext: masked, prior: NO_PRIOR, pwsh });
+  }
+  return out3;
+}
+var SAFE_CREATE_VALUE = /* @__PURE__ */ new Set(["--title", "-t", "--body", "-b", "--body-file", "-F", "--label", "-l", "--assignee", "-a", "--reviewer", "-r", "--milestone", "-m", "--project", "-p", "--template", "-T", "--recover"]);
+var SAFE_API_KEY = /* @__PURE__ */ new Set(["title", "body", "draft", "maintainer_can_modify"]);
+var API_PULLS_PATH = /\/pulls\/?(?:\?.*)?$/i;
+var NOT_LITERAL_WORD = "a word that is not a literal (a variable or a substitution outside a title or body value)";
+function createCallOf(call) {
+  const w = call.words;
+  if (w.length < 3 || progName(w[0].lit) !== "gh") return null;
+  const sub = (i) => (w[i]?.lit ?? "").toLowerCase();
+  const cwdBefore = call.cwdBefore ?? [];
+  const text = w.map((x) => x.raw).join(" ");
+  if (sub(1) === "pr" && (sub(2) === "create" || sub(2) === "new")) {
+    const lits2 = [];
+    for (const a of w.slice(3)) {
+      if (a.lit !== null) {
+        lits2.push(a.lit);
+        continue;
+      }
+      const eq = /^(--[a-z-]+)="/.exec(a.raw)?.[1];
+      if (eq && SAFE_CREATE_VALUE.has(eq)) {
+        lits2.push(`${eq}=x`);
+        continue;
+      }
+      if (a.raw.startsWith('"') && SAFE_CREATE_VALUE.has(lits2[lits2.length - 1] ?? "")) {
+        lits2.push("x");
+        continue;
+      }
+      return { read: BAD(NOT_LITERAL_WORD), cwdBefore, text };
+    }
+    return { read: cliCreateOfWords(lits2), cwdBefore, text };
+  }
+  if (sub(1) !== "api") return null;
+  const args = w.slice(2);
+  const valueFlag = (l) => l != null && (API_FIELD.test(l) || API_VALUE.has(l));
+  const endpoint = args.find((a, i) => a.lit !== null && !a.lit.startsWith("-") && !valueFlag(args[i - 1]?.lit));
+  if (!endpoint || !API_PULLS_PATH.test(endpoint.lit)) return null;
+  const flags = args.map((a) => a.lit ?? "");
+  const post = flags.some((l, i) => /^(?:-X|--method)$/i.test(l) && /^POST$/i.test(flags[i + 1] ?? "") || /^(?:-XPOST|--method=POST)$/i.test(l));
+  const anyMethod = flags.some((l) => /^(?:-X|--method)/i.test(l));
+  const field = flags.some((l) => /^(?:-[fF]|--(?:raw-field|field|input))/.test(l));
+  if (!post && !(field && !anyMethod)) return null;
+  const lits = [];
+  for (const a of args) {
+    if (a.lit !== null) {
+      lits.push(a.lit);
+      continue;
+    }
+    const key = /^((?:-[fF]|--(?:raw-field|field)=)?([A-Za-z_]+))="/.exec(a.raw);
+    if (key && SAFE_API_KEY.has(key[2])) {
+      lits.push(`${key[1]}=x`);
+      continue;
+    }
+    return { read: BAD(NOT_LITERAL_WORD), cwdBefore, text };
+  }
+  return { read: apiCreateOfWords(lits), cwdBefore, text };
+}
+function astCreates(parsed) {
+  if (!parsed) return [];
+  return Object.values(parsed.byDialect).flatMap((r) => r ? r.calls : []).flatMap((c) => {
+    const m = createCallOf(c);
+    return m ? [m] : [];
+  });
+}
+var squashed = (t) => t.replace(/[\s"'\\`]/g, "");
+function withAstCreates(shapes, parsed, pwsh) {
+  if (!parsed || Object.values(parsed.byDialect).some((r) => r === void 0 || r.errors.length > 0)) return shapes;
+  const found = astCreates(parsed);
+  if (found.length === 0) return shapes;
+  const tails = [...new Set(shapes.filter((s) => s.kind === "create").map((s) => squashed(s.tail ?? s.text ?? "")))];
+  const pairs = tails.map((t) => found.filter((f) => t.includes(squashed(f.text))));
+  const paired = tails.length === found.length && pairs.every((p) => p.length === 1) && new Set(pairs.map((p) => p[0])).size === found.length;
+  if (paired) {
+    const byTail = new Map(tails.map((t, i) => [t, pairs[i][0].read]));
+    return shapes.map((s) => s.kind === "create" ? { ...s, read: byTail.get(squashed(s.tail ?? s.text ?? "")) } : s);
+  }
+  const extra = found.map((f) => {
+    const cds = f.cwdBefore.filter((c) => c !== null);
+    const masked = maskQuoted(f.text, pwsh ? "PowerShell" : "Bash");
+    return { kind: "create", pr: null, at: { cds, unknown: f.cwdBefore.includes(null), loose: cds.length > 0 || f.cwdBefore.includes(null) }, text: f.text, mtext: masked, ftext: f.text, fmtext: masked, prior: NO_PRIOR, tail: f.text, pwsh, read: f.read };
+  });
+  return [...shapes, ...extra];
+}
+var DOC_APPEND_CMDS = /* @__PURE__ */ new Set(["add-content", "set-content", "ac", "sc"]);
+var DOC_TARGET_EXT = /\.(?:md|txt|log)$/i;
+var DOC_ODD_CHAR = /[\u2013-\u2015\u2018-\u201F\0\v\f\x85\u2028\u2029]/u;
+function hasBareRedirect(text, r) {
+  const inside = (i) => [...r.quoted, ...r.bodies].some(([from, to]) => i >= from && i < to);
+  for (let i = 0; i < text.length; i++) if ((text[i] === ">" || text[i] === "<") && !inside(i)) return true;
+  return false;
+}
+function docTargetOk(w) {
+  const t = w?.lit;
+  if (t == null || t !== t.trim() || !DOC_TARGET_EXT.test(t) || /[*?[\],]/.test(t)) return false;
+  if (t.replace(/^[A-Za-z]:(?=[\\/])/, "").includes(":")) return false;
+  return !t.split(/[\\/]/).includes("..");
+}
+function docAppendCall(c) {
+  if (c.depth !== 0 || c.level !== 0 || c.nested || c.func || c.place.pipe || c.place.background) return false;
+  if (!DOC_APPEND_CMDS.has((c.words[0]?.lit ?? "").toLowerCase())) return false;
+  let target;
+  let value;
+  const args = c.words.slice(1);
+  for (let i = 0; i < args.length; i++) {
+    const l = args[i].lit;
+    if (l === null) {
+      if (target === void 0) target = args[i];
+      else if (value === void 0) value = args[i];
+      else return false;
+      continue;
+    }
+    if (/^-(?:literalpath|path)$/i.test(l)) {
+      if (target !== void 0 || i + 1 >= args.length) return false;
+      target = args[++i];
+      continue;
+    }
+    if (/^-value$/i.test(l)) {
+      if (value !== void 0 || i + 1 >= args.length) return false;
+      value = args[++i];
+      continue;
+    }
+    if (l.startsWith("-")) return false;
+    if (target === void 0) target = args[i];
+    else if (value === void 0) value = args[i];
+    else return false;
+  }
+  return docTargetOk(target) && value !== void 0 && value.lit !== null && value.viaVar === void 0;
+}
+function docAppendByAst(parsed, tool, raw) {
+  if (tool !== "PowerShell" || !parsed || DOC_ODD_CHAR.test(raw)) return false;
+  const dialects = Object.keys(parsed.byDialect);
+  const r = parsed.byDialect.pwsh;
+  if (dialects.length !== 1 || !r || r.errors.length > 0 || r.calls.length === 0) return false;
+  return !hasBareRedirect(parsed.text, r) && r.calls.every(docAppendCall);
+}
+var SCRIPT_RUNNERS = /* @__PURE__ */ new Set(["node", "nodejs", "python", "python3", "py", "deno", "bun", "ruby", "perl"]);
+var INLINE_CODE_FLAGS = /* @__PURE__ */ new Set(["-e", "-c", "-E", "-p", "--eval", "--print", "--command", "-"]);
+var GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+var SCRIPT_RUNNER_WHY = "this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.";
+var SCRIPT_RUNNER_WORD = /\b(?:node|nodejs|python3?|py|deno|bun|ruby|perl)\b/i;
+var blankQuotes = (t) => t.replace(/['"`,[\]()]/g, " ");
+function scriptRunnerDenies(parsed) {
+  if (!parsed) return [];
+  for (const r of Object.values(parsed.byDialect)) {
+    if (r && (!r.ok || r.errors.length > 0)) {
+      const t = blankQuotes(parsed.text);
+      if (SCRIPT_RUNNER_WORD.test(t) && GUARDED_TEXT.test(t)) return [deny("script-runner", SCRIPT_RUNNER_WHY)];
+    }
+    for (const c of r ? r.calls : []) {
+      if (!SCRIPT_RUNNERS.has(progName(c.words[0]?.lit) ?? "")) continue;
+      const args = c.words.slice(1);
+      if (!args.some((a) => INLINE_CODE_FLAGS.has(a.lit ?? "")) && c.stdin === null) continue;
+      const code = blankQuotes([...args.map((a) => a.lit ?? a.raw), c.stdin?.lit ?? ""].join(" "));
+      if (GUARDED_TEXT.test(code)) return [deny("script-runner", SCRIPT_RUNNER_WHY)];
+    }
+  }
+  return [];
 }
 var WRAPPERS = String.raw`(?:env(?:\s+(?:-[uCS]\s+\S+|-\S+|\w+=\S*))*|nice(?:\s+-\S+(?:\s+\d+)?)*|timeout(?:\s+-\S+(?:\s+[A-Z0-9]+)?)*\s+[\d.]+[smhd]?|xargs(?:\s+-\S+(?:\s+(?:\d+|\{\}))?)*|setsid(?:\s+-\S+)*|sudo(?:\s+-\S+(?:\s+\w+)?)*)\s+`;
 var PUSH_GIT = new RegExp(String.raw`(${CALL_START}(?:${WRAPPERS})*)(${PATH_PREFIX}git(?:\.exe)?|"\s*"|'\s*')(${GLOBAL_OPT})(\s+push)(?=\s|$)`, "g");
@@ -1981,9 +3017,9 @@ var quotesToSpaces = (view) => view.replace(/["']/g, " ");
 var PLAIN_QUOTED_CD = /(^|[;&|\r\n(]\s*)((?:cd|chdir)\s+)"(?![A-Za-z]:)([^\s"'%$`^()&|;<>\r\n]+)"(?=\s*(?:$|[;&|\r\n)]))/gi;
 var plainCdUnquoted = (view) => {
   if (view.includes("^")) return view;
-  return view.replace(PLAIN_QUOTED_CD, (match, lead, cd, path3, offset) => {
+  return view.replace(PLAIN_QUOTED_CD, (match, lead, cd, path4, offset) => {
     const quotesBefore = (view.slice(0, offset).match(/"/g) ?? []).length;
-    return quotesBefore % 2 === 0 ? `${lead}${cd} ${path3} ` : match;
+    return quotesBefore % 2 === 0 ? `${lead}${cd} ${path4} ` : match;
   });
 };
 function pushCallsIn(raw, cmdExe = false, kinds = PUSH_KINDS) {
@@ -2007,9 +3043,9 @@ function pushCallsIn(raw, cmdExe = false, kinds = PUSH_KINDS) {
     const seg = bash.slice(from, start);
     const lists = [cdsBefore(maskedBash.slice(0, from), bash.slice(0, from)), cdsBefore(maskedPwshOnBash.slice(0, from), bash.slice(0, from))];
     from = next;
-    const squashed = squashQuotes(seg);
-    if (squashed === seg) continue;
-    for (const before of distinctWheres(lists)) calls.push(...pushCallsOf(squashed, squashed, true, before, squashed, kinds));
+    const squashed2 = squashQuotes(seg);
+    if (squashed2 === seg) continue;
+    for (const before of distinctWheres(lists)) calls.push(...pushCallsOf(squashed2, squashed2, true, before, squashed2, kinds));
   }
   return calls;
 }
@@ -2275,7 +3311,7 @@ function chainStep(base, value, shell) {
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   if (absoluteText(t)) return t;
   if (isUnexpanded(base)) return base;
-  return base.startsWith("/") ? posix2.resolve(base, t) : resolve2(base, t);
+  return base.startsWith("/") ? posix2.resolve(base, t) : resolve3(base, t);
 }
 var chainDir = (base, values, shell) => values.reduce((dir, v) => chainStep(dir, v, shell), base);
 function chainDirsOf(p, cwd, shell) {
@@ -2395,11 +3431,12 @@ var priorId = (p) => p.repos.length === 0 && !p.nonLiteral ? "" : `|GH_REPO=${p.
 var fullId = (own) => own.ftext === own.text ? "" : `|${own.ftext}`;
 var landId = (shape, at2, own, prior) => `${shape.kind}|${shape.pr}|${shape.sha}${shape.shaBad ? "!" : ""}|${whereId(at2)}${shape.kind === "merge" ? `|${own.ftext}${priorId(prior)}` : ""}`;
 var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
-function shapesOf(raw, tool) {
+function shapesOf(raw, tool, parsed) {
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every(isTextOnlyCommand);
   const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every((c) => docAppendReadable(c, tool));
+  const docAst = !PR_NUMBER_IN_TEXT_RE.test(raw) && docAppendByAst(parsed, tool, raw);
   const out3 = [];
   const pwshTool = tool === "PowerShell";
   const seen = /* @__PURE__ */ new Set();
@@ -2421,7 +3458,7 @@ function shapesOf(raw, tool) {
       const prior = priorOf(view, reads.map((r) => r.masked), from);
       const tail = quoteOpenAt(view, from, pwshTool) ? "" : rawTail(view.slice(from));
       for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly || docReadable && isDocAppend(seg), seg, tail, pwshTool)) {
+        for (const shape of landShapesOf(s, textOnly || docAst || docReadable && isDocAppend(seg), seg, tail, pwshTool)) {
           for (const own of owns) for (const at2 of wheres) add({ ...shape, at: at2, ...own, prior }, landId(shape, at2, own, prior));
         }
       }
@@ -2437,8 +3474,7 @@ function shapesOf(raw, tool) {
       add({ kind: "create", pr: null, at: at2, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool }, `create|${whereId(at2)}|${view}`);
     }
   }
-  out3.push(...pushShapesOf(raw, tool));
-  return out3;
+  return [...withAstCreates(withAstMerges(out3, parsed, pwshTool), parsed, pwshTool), ...pushShapesOf(raw, tool)];
 }
 var enforcing = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforce");
 var enforcingPush = (deps, cwd) => routerFlag(cwd, deps.readFile, deps.home, "decisions", "enforcePush");
@@ -2460,8 +3496,8 @@ var OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif)\
 var CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))` + String.raw`(?:(?:[A-Za-z_]\w*\+?=[^\s;&|]*|(?:\d*[<>]{1,2}&?|&>>?)[^\s;&|]+)[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+(?:(?:-p|--)\s+)*)*(?:[\w.]+\\)?\\?`;
 var NOISE = String.raw`(?:\\|''|"")*`;
 var spell = (word) => NOISE + [...word].join(NOISE) + NOISE;
-var CD_NAMES = `${spell("cd")}|Set-Location|sl|${spell("chdir")}|${spell("pushd")}|Push-Location`;
-var CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\`[^\`]*\`|\\[^;&|\r\n]|[^\s;&|)\`"'\\])+)`;
+var CD_NAMES2 = `${spell("cd")}|Set-Location|sl|${spell("chdir")}|${spell("pushd")}|Push-Location`;
+var CD_SOURCE = CMD_POS + String.raw`(?:${CD_NAMES2})[ \t]+(?:(?:-[PLe@]+|--)[ \t]+)*(?:-(?:LiteralPath|Path|PSPath)(?:[ \t]+|:))?(?<t>(?:"[^"]*"|'[^']*'|\`[^\`]*\`|\\[^;&|\r\n]|[^\s;&|)\`"'\\])+)`;
 var JOB_BLOCK = /(?:\bStart-(?:Job|ThreadJob)\b|\bsajb\b|\b(?:pwsh|powershell)(?:\.exe)?\b|-(?:Pa(?:r(?:a(?:l(?:l(?:e(?:l)?)?)?)?)?)?|As(?:J(?:o(?:b)?)?)?)\b|\b(?:Invoke-Command|icm)\b(?!\s+(?:-ScriptBlock\s+)?\{))[^{};&|\r\n]*\{[^}]*$/i;
 function withoutClosed(text, group) {
   let t = text;
@@ -2492,7 +3528,7 @@ function moveTo(base, target, shell) {
   if (hasUnexpandedPart(target)) return UNEXPANDED + raw;
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   if (absoluteText(t)) return t;
-  return isUnexpanded(base) ? base : resolve2(base, t);
+  return isUnexpanded(base) ? base : resolve3(base, t);
 }
 var cdsBefore = (masked, raw) => whereAt(cdPositions(masked, raw), masked.length);
 function looseJoin(between) {
@@ -2509,7 +3545,7 @@ function endsInPipe(before) {
   }
   return t.endsWith("|") || t.endsWith("|&");
 }
-var UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:${spell("popd")}|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
+var UNKNOWN_CD_SOURCE = CMD_POS + String.raw`(?:(?:${spell("popd")}|Pop-Location)(?=\s|[;&|\r\n]|$)|(?:${CD_NAMES2})(?:[ \t]+(?:-[PLe@]+|--|[-+]))*[ \t]*(?=[;&|\r\n]|$))`;
 var NO_FOLDER = /^(?:[-+]|-[PLe@]+|--)$/i;
 var REMOTE_AFTER_BLOCK = /^[^;\r\n]*?\}[^;&|\r\n{]*?\s(?:-[A-Za-z]|@\w)/;
 function cdPositions(masked, raw) {
@@ -2577,7 +3613,7 @@ function readPlace(deps, scope, dir) {
   }
 }
 function rootOfCommon(dir, common) {
-  const commonDir = common === "" || absoluteText(common) ? common : resolve2(dir, common);
+  const commonDir = common === "" || absoluteText(common) ? common : resolve3(dir, common);
   return /[\\/]\.git$/.test(commonDir) ? commonDir.replace(/[\\/]\.git$/, "") : null;
 }
 function repoRoots(deps, dir) {
@@ -2693,6 +3729,9 @@ var BAD = (why) => ({ bad: why, heads: [], bases: [] });
 function cliCreateRead(args, pwsh) {
   const words = pairedWords(args, pwsh);
   if (words === null) return BAD("an unpaired quote");
+  return cliCreateOfWords(words);
+}
+function cliCreateOfWords(words) {
   const heads = [];
   const bases = [];
   for (let i = 0; i < words.length; i++) {
@@ -2726,6 +3765,9 @@ function headAndBase(heads, bases) {
 function apiCreateRead(rest, pwsh) {
   const words = pairedWords(rest, pwsh);
   if (words === null) return BAD("an unpaired quote");
+  return apiCreateOfWords(words);
+}
+function apiCreateOfWords(words) {
   const heads = [];
   const bases = [];
   let endpoint = false;
@@ -2819,11 +3861,20 @@ function steadyCommand(raw, shell) {
   const view = fdBlank(raw);
   return pushesAlone(view, shell) || commitPrecedesPush(view, shell);
 }
-function stateModelled(raw, shell) {
-  const r = pushPrefix(raw, shell);
-  return r !== null && !r.localPush && r.pipeOk && (r.plain || commitPrecedesPush(r.prefix, shell));
+function stateModelled(raw, shell, ctx = {}) {
+  const r = pushPrefix(raw, shell, ctx.remoteIsLocal);
+  return r !== null && !r.localPush && r.pipeOk && !consumerSubstitutes(ctx.parsed) && (r.plain || commitPrecedesPush(r.prefix, shell));
 }
-function pushPrefix(raw, shell) {
+function consumerSubstitutes(parsed) {
+  if (!parsed) return false;
+  return Object.values(parsed.byDialect).some((r) => {
+    if (!r || r.errors.length > 0) return false;
+    const lastPush = Math.max(-1, ...r.calls.filter((c) => progName(c.words[0]?.lit) !== null && c.words.some((w) => (w.lit ?? "").toLowerCase() === "push")).map((c) => c.start));
+    return lastPush >= 0 && r.calls.some((c) => c.start > lastPush && c.place.pipe && r.substs.some((s) => s.from >= c.start && s.to <= c.end));
+  });
+}
+var MAX_REMOTE_LOOKUPS = 4;
+function pushPrefix(raw, shell, remoteIsLocal) {
   const view = fdBlank(joinContinuations(raw, shell));
   const masked = maskQuoted(view, shell === "pwsh" ? "PowerShell" : "Bash");
   const steps = [];
@@ -2843,7 +3894,9 @@ function pushPrefix(raw, shell) {
   if (last < 0) return null;
   const plain = steps.slice(0, last).every((s) => s.kind === "cd" || s.kind === "read" || s.kind === "push" || s.kind === "popd") && steps.slice(1, last + 1).every((s) => !s.op.includes("|") && !/(?<!&)&(?!&)/.test(s.op));
   const tool = shell === "pwsh" ? "PowerShell" : "Bash";
-  const localPush = steps.slice(0, last).some((s) => s.kind === "push" && pushShapesOf(s.raw, tool).some((p) => LOCAL_REMOTE.test(p.push?.remote ?? "")));
+  const earlier = steps.slice(0, last).filter((s) => s.kind === "push").flatMap((s) => pushShapesOf(s.raw, tool).map((p) => p.push?.remote ?? ""));
+  const names = [...new Set(earlier.filter((rm) => rm !== "" && !LOCAL_REMOTE.test(rm) && !/[:/]/.test(rm)))];
+  const localPush = earlier.some((rm) => LOCAL_REMOTE.test(rm)) || remoteIsLocal !== void 0 && (names.length > MAX_REMOTE_LOOKUPS || names.some(remoteIsLocal));
   let pipeOk = true;
   if (backgroundAfter([...steps.slice(last + 1).map((s) => s.op), pending])) pipeOk = false;
   for (let i = last + 1; i < steps.length && /(?<!\|)\|(?!\|)/.test(steps[i].op); i++) {
@@ -2913,9 +3966,9 @@ var shellOf = (input) => (input.tool_name || input.tool) === "PowerShell" ? "pws
 var ALLOW = { action: "allow" };
 function judgeCreate(s, deps, dir, cmd) {
   const route = routeOf(deps, dir, cmd);
-  if (route === "app") return judgeAppCreate(s.tail ?? s.ftext ?? s.text, s.pwsh === true, deps, dir, cmd);
+  if (route === "app") return judgeAppCreate(s.tail ?? s.ftext ?? s.text, s.pwsh === true, deps, dir, cmd, s.read);
   if (route === "foreign") return deny("repo-foreign", goThereWhy(cmd.repo));
-  const cr = createRead(s.tail ?? s.text, s.pwsh === true);
+  const cr = s.read ?? createRead(s.tail ?? s.text, s.pwsh === true);
   if (cr.bad !== null) return deny("head-unresolved", createBadWhy(dir, cr.bad));
   if (cr.heads.length > 1) return deny("head-unresolved", createBadWhy(dir, `two head values (${cr.heads.join(", ")}); gh takes the last`));
   const branch = readBranch(cr.heads[0] ?? null, deps, dir);
@@ -2939,8 +3992,8 @@ function judgeLand(shape, deps, dir, cmd) {
   const ok = decisionRows(deps.env).some((r) => r.step === "land" && r.key === key && isLandLabel(r.label) && (!sha || r.head.toLowerCase() === sha));
   return ok ? ALLOW : deny("land", landWhy(shape.pr));
 }
-function judgeAppCreate(text, pwsh, deps, dir, cmd) {
-  return homeRead(inApp(deps, () => appCreate(text, pwsh, deps, dir, cmd)));
+function judgeAppCreate(text, pwsh, deps, dir, cmd, read) {
+  return homeRead(inApp(deps, () => appCreate(text, pwsh, deps, dir, cmd, read)));
 }
 var homeRead = (d) => d.action === "deny" ? { ...d, homeFlags: true } : d;
 function coveredCall(deps, dir, body) {
@@ -2957,11 +4010,11 @@ function coveredCall(deps, dir, body) {
     throw new AppScopeError(err instanceof AppScopeError ? err.inner : err, false);
   }
 }
-function appCreate(text, pwsh, deps, dir, cmd) {
-  return coveredCall(deps, dir, (place) => appCreateIn(text, pwsh, deps, dir, cmd, place));
+function appCreate(text, pwsh, deps, dir, cmd, read) {
+  return coveredCall(deps, dir, (place) => appCreateIn(text, pwsh, deps, dir, cmd, place, read));
 }
-function appCreateIn(text, pwsh, deps, dir, cmd, place) {
-  const cr = createRead(text, pwsh);
+function appCreateIn(text, pwsh, deps, dir, cmd, place, read) {
+  const cr = read ?? createRead(text, pwsh);
   if (cr.bad !== null) return deny("head-unresolved", createBadWhy(dir, cr.bad));
   const heads = cr.heads;
   if (heads.length > 1) return deny("head-unresolved", appManyHeadsWhy(dir, heads));
@@ -3001,7 +4054,7 @@ function resolveDir(base, value, shell) {
   if (hasUnexpandedPart(value)) return UNEXPANDED + raw;
   const t = shell === "bash" ? gitBashPath(raw) : raw;
   if (absoluteText(t)) return t;
-  return isUnexpanded(base) ? base : resolve2(base, t);
+  return isUnexpanded(base) ? base : resolve3(base, t);
 }
 function dirsAfter(cwd, cds, shell, loose, dir = null) {
   const dirs = cds.length === 0 ? [cwd] : [...loose ? [cwd] : [], ...cds.map((_, i) => pushDir(cwd, cds.slice(0, i + 1), shell))];
@@ -3041,13 +4094,18 @@ function appPositionAt(deps, dirs, scope, offer) {
 }
 var pushOffer = (p) => ({ sub: "push", remote: p.remote });
 var hardUnlessUnregistered = (d, unregistered) => unregistered ? d : hardOf(d);
-function judgePushAt(s, deps, cwd, shell, ctx) {
+function judgePushAt(s, deps, cwd, shell, ctx, sink) {
   const { subagent, chained, alone } = ctx;
+  const emit = (d) => {
+    if (d.action === "deny") sink?.(d);
+    return d;
+  };
   const p = s.push;
   const dirs = pushDirsOf(p, cwd, shell);
   const chainOnly = chainDirsOf(p, cwd, shell).filter((d) => !dirs.includes(d) && firstCovered(deps, [d]) !== null);
   const c4 = { ...ctx, commitDirs: dirsAfter(cwd, p.cds, shell, p.loose, null) };
-  const fromChain = chainOnly.map((d) => judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow, c4));
+  const fromChain = [];
+  for (const d of chainOnly) fromChain.push(emit(judgeAppPushAt(s, deps, d, subagent, chained, alone, ctx.flow, c4)));
   const lost = dirs.find(isUnexpanded);
   if (lost !== void 0) return [unexpandedDeny(deps, [cwd, ...dirs], lost, "push", "app-push", softPush(p, subagent))];
   const fixedByDir = p.dir !== null && resolveDir("/a", p.dir, shell) === resolveDir("/b", p.dir, shell);
@@ -3058,7 +4116,9 @@ function judgePushAt(s, deps, cwd, shell, ctx) {
     const app = appPositionAt(deps, all, "app-push", pushOffer(p));
     if (app.some((d) => d.action === "deny")) return app;
   }
-  return [...fromChain, ...dirs.map((d) => judgePush(s, deps, d, c4))];
+  const result = [...fromChain];
+  for (const d of dirs) result.push(emit(judgePush(s, deps, d, c4)));
+  return result;
 }
 function remoteKind(remote) {
   const r = remote.toLowerCase();
@@ -3124,7 +4184,7 @@ function chainedAnswerKeyPaths(deps, dir) {
   }
   return deps.answerKeyHits([...all]).length > 0 ? "hit" : "none";
 }
-var headName = (ref) => ref.replace(/^refs\/heads\//, "");
+var headName = (ref) => ref.replace(/^(?:refs\/)?heads\//, "");
 function sendsRe(p, deps, dir, branch) {
   if (headName(branch).startsWith("re/")) return true;
   if (p.src === null && p.branch === null) return false;
@@ -3455,7 +4515,8 @@ function judgeCommand(input, deps, notes, denies = []) {
   if (storeWriteCall(input, deps)) denies.push(deny("store-write", STORE_WHY));
   if (paidTripwire(input)) denies.push(deny("paid-coderabbit", PAID_WHY));
   if (capOverrideDeny(input, deps)) denies.push(deny("cap-override", CAP_WHY));
-  const shapes = shapesOf(cmd.text, cmd.tool);
+  for (const d of scriptRunnerDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));
   const pushes = shapes.filter((s) => s.kind === "push");
@@ -3468,7 +4529,15 @@ function judgeCommand(input, deps, notes, denies = []) {
     const prefix = pushes.length > 0 ? pushPrefix(cmd.text, shell) : null;
     const chained = pushes.length > 0 && (commitPrecedesPush(cmd.text, shell) || prefix !== null && commitPrecedesPush(prefix.prefix, shell));
     const alone = pushes.length > 0 && pushesAlone(cmd.text, shell);
-    const modelled = pushes.length === 0 || stateModelled(cmd.text, shell);
+    const remoteIsLocal = (name) => {
+      try {
+        const g = deps.git(cwd, ["remote", "get-url", name]);
+        return g.status === 0 && LOCAL_REMOTE.test(g.stdout.trim());
+      } catch {
+        return true;
+      }
+    };
+    const modelled = pushes.length === 0 || stateModelled(cmd.text, shell, { parsed: deps.parsed, remoteIsLocal });
     const moved = movesRepo(cmd.text);
     const unregistered = (moved || pushes.some((s) => s.push.moved)) && pushFoldersUnregistered(input, deps);
     for (const s of [...rest, ...pushes]) {
@@ -3476,7 +4545,7 @@ function judgeCommand(input, deps, notes, denies = []) {
         denies.push(movedDeny(s, deps, cwd, shell, cmd.text, Boolean(input.agent_id), unregistered));
         continue;
       }
-      const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell, modelled, unregistered }) : judgeAt(s, deps, cwd, shell, named);
+      const found = s.kind === "push" ? judgePushAt(s, deps, cwd, shell, { subagent: Boolean(input.agent_id), chained, alone, flow: pushes.length > 0 && shipFlow(cmd.text, shell), text: cmd.text, shell, modelled, unregistered }, add) : judgeAt(s, deps, cwd, shell, named);
       for (const d of found) {
         if (d.action === "deny") add(d);
         else if (d.notice) notes.add(d.notice);
@@ -3830,14 +4899,14 @@ var GitDeadlineError = class extends Error {
 var HOOK_BUDGET_MS = 7e3;
 function makeGit(opts = {}) {
   const now = opts.now ?? Date.now;
-  const spawn = opts.spawn ?? ((_cmd, args, o) => spawnSync("git", args, o));
-  const exists = opts.exists ?? existsSync3;
+  const spawn2 = opts.spawn ?? ((_cmd, args, o) => spawnSync("git", args, o));
+  const exists = opts.exists ?? existsSync4;
   return (cwd, args, read = {}) => {
     const own = read.timeout ?? GIT_TIMEOUT_MS;
     const left = opts.deadline === void 0 ? own : opts.deadline - now();
     if (left <= 0) throw new GitDeadlineError(args);
     if (!exists(cwd)) throw new MissingCwdError(cwd);
-    const r = spawn("git", args, { cwd, encoding: "utf8", timeout: Math.min(own, left), windowsHide: true, ...read.maxBuffer ? { maxBuffer: read.maxBuffer } : {} });
+    const r = spawn2("git", args, { cwd, encoding: "utf8", timeout: Math.min(own, left), windowsHide: true, ...read.maxBuffer ? { maxBuffer: read.maxBuffer } : {} });
     if (r.error) throw r.error;
     return { status: r.status ?? 1, stdout: r.stdout ?? "" };
   };
@@ -3853,7 +4922,7 @@ function realDeps(opts = {}) {
     appGit: makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS }),
     readFile: (p) => {
       try {
-        return existsSync3(p) ? readFileSync6(p, "utf8") : null;
+        return existsSync4(p) ? readFileSync6(p, "utf8") : null;
       } catch {
         return null;
       }
@@ -3869,13 +4938,48 @@ function realDeps(opts = {}) {
 function primaryRootOf(git, dir) {
   const r = git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   if (r.status !== 0 || r.stdout.trim() === "") throw new Error("no common dir");
-  return resolve2(r.stdout.trim(), "..");
+  return resolve3(r.stdout.trim(), "..");
+}
+var PARSE_BUDGET_MS = 7e3;
+async function withParsed(raw, deps) {
+  try {
+    const input = JSON.parse(raw.trim() || "{}");
+    if (input === null || typeof input !== "object" || Array.isArray(input)) return deps;
+    const cmd = readShellCommand(input);
+    if (cmd.kind !== "command" || cmd.text === "" || !defaultEntry(cmd.text)) return deps;
+    const tool = cmd.tool;
+    const dialects = tool === "Bash" ? ["bash"] : tool === "PowerShell" ? ["pwsh"] : ["bash", "pwsh"];
+    const byDialect = {};
+    let timer;
+    const late = new Promise((res) => {
+      timer = setTimeout(() => res("late"), deps.parseBudgetMs ?? PARSE_BUDGET_MS);
+      timer.unref?.();
+    });
+    const parse = (async () => {
+      for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
+      return "done";
+    })();
+    parse.catch(() => void 0);
+    try {
+      if (await Promise.race([parse, late]) === "late") return deps;
+    } finally {
+      clearTimeout(timer);
+    }
+    return { ...deps, parsed: { text: cmd.text, byDialect } };
+  } catch (err) {
+    try {
+      logGuardError(HOOK, err);
+    } catch {
+    }
+    return deps;
+  }
 }
 async function main2() {
   const start = Date.now();
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
-  console.log(handle(Buffer.concat(chunks).toString("utf-8"), realDeps({ start })));
+  const raw = Buffer.concat(chunks).toString("utf-8");
+  console.log(handle(raw, await withParsed(raw, realDeps({ start }))));
 }
 if (!process.env.VITEST) {
   main2().catch((err) => {
@@ -3889,7 +4993,10 @@ export {
   GitDeadlineError,
   MissingCwdError,
   WRITE_TOOLS,
+  astCreates,
+  astMerges,
   decide,
+  docAppendByAst,
   handle,
   isLandLabel,
   isMergeNowLabel,
@@ -3898,5 +5005,15 @@ export {
   isShipLabel,
   makeGit,
   pushShapesOf,
-  realDeps
+  realDeps,
+  scriptRunnerDenies,
+  withParsed
 };
+/*! Bundled license information:
+
+sh-syntax/lib/processor.js:
+  (* istanbul ignore if -- @preserve *)
+
+sh-syntax/lib/index.js:
+  (* istanbul ignore next -- @preserve *)
+*/
