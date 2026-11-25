@@ -388,7 +388,7 @@ function isEngineHost(input) {
 }
 
 // src/architecture-stats-sync.ts
-var WATCHED_PATTERN = /^(?:\.claude\/(?:hooks|agents|skills)|scripts)\//m;
+var WATCHED_PATTERN = /^(?:(?:\.claude\/(?:hooks|agents|skills)|scripts)\/|docs\/(?:review-engine\/map\.md|architecture\/system-visualization\/architecture\.src\.json)\r?$)/m;
 var GIT_COMMIT_PATTERN = /\bgit\s+commit\b/;
 function isGitCommitCommand(command) {
   if (!command) return false;
