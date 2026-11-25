@@ -48,6 +48,7 @@ function fixture({ script = true } = {}) {
 function run(fx, extraEnv = {}) {
   const env = { ...process.env, CCV3_STATE_BACKUP_REPO_ROOT: fx.repo, CCV3_STATE_BACKUP_LOG: fx.log, FAKE_CALL_DIR: fx.calls, ...extraEnv };
   for (const k of Object.keys(extraEnv)) if (extraEnv[k] === undefined) delete env[k];
+  delete env.PSModulePath; // see cleanEnv below
   const started = Date.now();
   const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', WRAPPER], { env, encoding: 'utf8', windowsHide: true, timeout: 120000 });
   return { status: r.status, ms: Date.now() - started, log: existsSync(fx.log) ? readFileSync(fx.log, 'utf8') : '', err: r.stderr ?? '' };
@@ -132,7 +133,9 @@ test('row: the real tasks.json row is daily 03:10 with a 07:40 catch-up, no mode
 
 // ---- credential at rest (seat ruling 19:17): the wrapper decrypts a DPAPI file and gives the token to the one child through one env variable ----
 const FRESH = 'secret_' + 'y'.repeat(20); // fake, low entropy on purpose (gitleaks)
-const dpapi = (text) => spawnSync('powershell.exe', ['-NoProfile', '-Command', "ConvertTo-SecureString $env:CCV3_T -AsPlainText -Force | ConvertFrom-SecureString"], { env: { ...process.env, CCV3_T: text }, encoding: 'utf8', windowsHide: true }).stdout.trim();
+// Windows PowerShell 5.1 cannot load its Security module when it inherits the PSModulePath of a PowerShell 7 parent: drop it, as Task Scheduler's clean env does.
+const cleanEnv = (extra) => { const e = { ...process.env, ...extra }; delete e.PSModulePath; return e; };
+const dpapi = (text) => spawnSync('powershell.exe', ['-NoProfile', '-Command', 'ConvertTo-SecureString $env:CCV3_T -AsPlainText -Force | ConvertFrom-SecureString'], { env: cleanEnv({ CCV3_T: text }), encoding: 'utf8', windowsHide: true }).stdout.trim();
 
 function withCred(fx, content, extra = {}) {
   const file = join(fx.root, 'token.txt');

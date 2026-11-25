@@ -214,6 +214,23 @@ function sh(cmd, args) {
   });
 }
 
+const CREDENTIAL_TEXT = {
+  'no-credential': 'no Notion credential was handed to the task (the wrapper decrypts it from a DPAPI file)',
+  'credential-not-protected': 'the credential file is plain text, not DPAPI protected; it was not used',
+  'credential-unreadable': 'the credential file could not be decrypted for this user',
+};
+
+/**
+ * The token comes from the wrapper in one env variable, for this process only. Never from a file here: a plain file at rest is what the
+ * seat ruled out (19:17). The wrapper sets CCV3_BACKUP_CREDENTIAL_STATE when the file is plain text or cannot be decrypted; that state wins.
+ */
+export function resolveCredential(env) {
+  if (env.CCV3_BACKUP_CREDENTIAL_STATE === 'not-protected') return { status: 'credential-not-protected' };
+  if (env.CCV3_BACKUP_CREDENTIAL_STATE === 'unreadable') return { status: 'credential-unreadable' };
+  const token = (env.CCV3_BACKUP_NOTION_TOKEN ?? '').trim();
+  return token ? { token } : { status: 'no-credential' };
+}
+
 const today = () => new Date().toLocaleDateString('en-CA');
 
 async function main(argv) {
@@ -232,18 +249,19 @@ async function main(argv) {
   let notion = null;
   let secrets = [];
   if (!dryRun) {
-    const tokenFile = process.env.CCV3_BACKUP_TOKEN_FILE ?? join(home, '.claude', 'state', 'backup-notion-token');
+    const cred = resolveCredential(process.env);
     const configFile = process.env.CCV3_BACKUP_CONFIG ?? join(home, '.claude', 'state', 'backup-notion.json');
-    if (!existsSync(tokenFile) || !existsSync(configFile)) {
+    const stop = (status, error) => {
       mkdirSync(outDir, { recursive: true });
-      writeJson(join(outDir, `FAILED-${date}.json`), { date, status: 'no-credential', error: 'the Notion credential or the database id is not set up' });
-      console.error('backup-state: no credential or no database id; nothing uploaded (Dave\'s yes is needed first)');
+      writeJson(join(outDir, `FAILED-${date}.json`), { date, status, error });
+      console.error(`backup-state: ${status}; nothing uploaded`);
       return 2;
-    }
-    const token = readFileSync(tokenFile, 'utf8').trim();
+    };
+    if (cred.status) return stop(cred.status, CREDENTIAL_TEXT[cred.status]);
+    if (!existsSync(configFile)) return stop('no-config', 'the Notion database id file is not set up');
     const config = JSON.parse(readFileSync(configFile, 'utf8'));
-    secrets = [token];
-    notion = makeNotion({ token, parent: config.parent, queryPath: config.queryPath });
+    secrets = [cred.token];
+    notion = makeNotion({ token: cred.token, parent: config.parent, queryPath: config.queryPath });
   }
 
   const dbCtx = { db: 'continuous_claude', container: CONTAINER, user: 'claude', docker };

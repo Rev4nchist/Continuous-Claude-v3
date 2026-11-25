@@ -78,6 +78,31 @@ $secs = 720
 if ($env:CCV3_STATE_BACKUP_TIMEOUT_SEC) { $secs = [int]$env:CCV3_STATE_BACKUP_TIMEOUT_SEC }
 $argText = '"' + $script + '" --repo "' + $R + '"'
 if ($env:CCV3_STATE_BACKUP_EXTRA_ARGS) { $argText = $argText + ' ' + $env:CCV3_STATE_BACKUP_EXTRA_ARGS }
+# Credential at rest (seat ruling 2026-11-24 19:17). The Notion token sits in ONE file as DPAPI text (ConvertFrom-SecureString: bound to this
+# Windows user on this machine). This wrapper decrypts it and gives it to the one child in one env variable. It is never on argv and never in a
+# log. A file that is plain text fails closed: the child gets no token and the state "not-protected" (a named status, exit 2). The wrapper owns
+# the credential (the variables die with this process; no other child is started): a token already in the environment is dropped first, so nothing else can reach the child. No file: the child has none and
+# reports no-credential. The file is made once by Dave's yes: "<token>" | ConvertTo-SecureString -AsPlainText -Force | ConvertFrom-SecureString
+Remove-Item Env:CCV3_BACKUP_NOTION_TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:CCV3_BACKUP_CREDENTIAL_STATE -ErrorAction SilentlyContinue
+$tokenFile = if ($env:CCV3_BACKUP_TOKEN_FILE) { $env:CCV3_BACKUP_TOKEN_FILE } else { Join-Path $env:USERPROFILE '.claude\state\backup-notion-token' }
+if (Test-Path -LiteralPath $tokenFile) {
+  $blob = ''
+  try { $blob = (Get-Content -LiteralPath $tokenFile -Raw -ErrorAction Stop).Trim() } catch { $blob = '' }
+  if ($blob -notmatch '^01000000d08c9ddf0115d1118c7a00c04fc297eb[0-9a-fA-F]+$') {
+    $env:CCV3_BACKUP_CREDENTIAL_STATE = 'not-protected'
+    Write-Log 'credential file is not DPAPI protected: not used'
+  } else {
+    try {
+      $secure = ConvertTo-SecureString -String $blob -ErrorAction Stop
+      $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+      try { $env:CCV3_BACKUP_NOTION_TOKEN = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    } catch {
+      $env:CCV3_BACKUP_CREDENTIAL_STATE = 'unreadable'
+      Write-Log 'credential file could not be decrypted for this user'
+    }
+  }
+}
 $outFile = [System.IO.Path]::GetTempFileName()
 $errFile = [System.IO.Path]::GetTempFileName()
 $p = Start-Process -FilePath $node -ArgumentList $argText -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
