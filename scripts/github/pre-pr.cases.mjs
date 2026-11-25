@@ -4044,7 +4044,8 @@ test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: 
 
 // ---------- card prflow-prepr-speed, Q1: a review whose run failed a test gate ----------
 // The review starts beside the test gates. When a gate fails, the review has spent its run on a head that cannot pass. Its counter row gets
-// gateFailed: true and uses no slot, but only ONE such free row per branch per Chicago day: the next one counts as a normal slot.
+// gateFailed: true. A run that FINISHED its review (complete: true) always uses a slot (Dave, 2026-11-25, card prepr-cli-cap-count: a finished review spends a review).
+// A run that did not finish (complete: false: killed, cut off, nothing reviewed) uses no slot, but only ONE such free row per branch per Chicago day: the next one counts.
 // A gateFailed row must never count toward cr_finished_runs or cr_partial_earned (the hook accepts a cap skip on cr_finished_runs >= 1).
 //
 // How it can fail, one test each, with the source change that makes it fail:
@@ -4053,7 +4054,9 @@ test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: 
 //   Q1c  the day is the UTC or the machine day, not the Chicago day               (dayOf or slice(0, 10) of the ISO time)
 //   Q1d  a gateFailed row counts as a finished run or a partial run               (no exclusion in finishedRuns and partialEarnedFor)
 const hexOf = (c) => c.repeat(40);
-const gfRow = (c, at, extra = {}) => ({ head: hexOf(c), at, outcome: 'finished', complete: true, newCode: true, gateFailed: true, ...extra });
+// gfRow: a run that did not finish and failed a gate (the free-row case). A finished one: gfRow(c, at, FINISHED).
+const FINISHED = { outcome: 'finished', complete: true };
+const gfRow = (c, at, extra = {}) => ({ head: hexOf(c), at, outcome: 'failed', complete: false, newCode: true, gateFailed: true, ...extra });
 const okRow = (c, at) => ({ head: hexOf(c), at, outcome: 'finished', complete: true, newCode: true });
 function seedCounter(f, rows) {
   const file = crPaths(f.root, 'feat/x').counter;
@@ -4078,6 +4081,38 @@ test('Q1b: a second gateFailed row on the same Chicago day counts as a normal sl
   assert.equal(f.calls.length, 0);
 });
 
+// Card prepr-cli-cap-count. The real rows of coord/backup-deadline (2026-11-25): a finished review inside a failed pre-pr spent a review, yet the
+// third run started because the first finished-and-gateFailed row was free. How it can fail, one test each:
+//   Q1i  the three real rows count 2 or fewer, so a 4th run starts     (the free row also applies to a finished run)
+//   Q1j  a finished gateFailed row is free when it is the first of its day     (same cause; checked on the pure count)
+//   Q1k  an unfinished gateFailed row stops being free                  (the fix over-corrects: every gateFailed row counts)
+const REAL = [
+  gfRow('a', '2026-11-25T15:19:29.704Z', FINISHED), // eb84247b: CLI finished, github-tests failed
+  okRow('b', '2026-11-25T16:56:59.001Z'), //           2775356f: finished, gates passed
+  gfRow('c', '2026-11-25T17:21:28.421Z', FINISHED), // 3ede9419: CLI finished, test-scripts failed
+];
+test('Q1i: the three real rows of coord/backup-deadline count 3, so the next run skips with cap', async () => {
+  assert.equal(PRE.countedRuns(REAL), 3);
+  const f = crFixture();
+  seedCounter(f, REAL);
+  const r = await runCodeRabbit(crOpts(f, { head: hexOf('d') }));
+  assert.equal(r.skipReason, 'cap');
+  assert.equal(f.calls.length, 0, 'no CLI run starts');
+  seedCounter(f, REAL.slice(0, 2));
+  assert.equal((await runCodeRabbit(crOpts(f, { head: hexOf('e') }))).skipReason, 'cap', 'after the 2nd run (one finished gateFailed row and one normal row) the next run already skips');
+});
+
+test('Q1j: a finished review always counts, even when it is the first gateFailed row of its Chicago day', () => {
+  assert.equal(PRE.countedRuns([gfRow('1', MORNING, FINISHED)]), 1);
+  assert.equal(PRE.countedRuns([gfRow('1', MORNING, FINISHED), gfRow('2', MORNING, FINISHED)]), 2);
+});
+
+test('Q1k: a run that did not finish and failed a gate is still free, once per Chicago day', () => {
+  assert.equal(PRE.countedRuns([gfRow('1', MORNING)]), 0);
+  assert.equal(PRE.countedRuns([gfRow('1', MORNING), gfRow('2', '2026-10-27T16:00:00.000Z')]), 1, 'the second one of the day counts');
+  assert.equal(PRE.countedRuns([gfRow('1', MORNING), gfRow('2', '2026-10-28T16:00:00.000Z')]), 0, 'another Chicago day is free again');
+});
+
 test('Q1c: the free row is one per CHICAGO day: 22:30 on 10-27 and 05:00 on 10-27 in Chicago are one day (two UTC days), 10-26 evening is another', async () => {
   const same = crFixture();
   seedCounter(same, [gfRow('1', '2026-10-27T10:00:00.000Z'), gfRow('2', '2026-10-28T03:30:00.000Z')]); // Chicago 10-27 05:00 and 10-27 22:30
@@ -4092,9 +4127,9 @@ test('Q1c: the free row is one per CHICAGO day: 22:30 on 10-27 and 05:00 on 10-2
 
 test('Q1d: a gateFailed row is never a finished run and never earns a partial cap skip', () => {
   const f = crFixture();
-  seedCounter(f, [gfRow('1', MORNING), okRow('2', MORNING)]);
+  seedCounter(f, [gfRow('1', MORNING, FINISHED), okRow('2', MORNING)]);
   assert.equal(finishedRuns(f.root, 'feat/x'), 1, 'only the normal row finished');
-  seedCounter(f, [gfRow('1', MORNING)]);
+  seedCounter(f, [gfRow('1', MORNING, FINISHED)]);
   assert.equal(finishedRuns(f.root, 'feat/x'), 0);
   const repo = makeRepo();
   const partial = { head: repo.head, partial: true, reviewed: 3, unreviewed: 1, findings: [], gateFailed: true };
