@@ -29,9 +29,12 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function deps(): Deps {
+/** Item 11b world: the paths that exist. `dirs` are folders, `files` are files, `throws` makes every lookup throw. Absent: no pathKind seam (the old behaviour). */
+interface Fs { dirs: string[]; files: string[]; throws?: boolean }
+function deps(fs?: Fs): Deps {
   const config = JSON.stringify({ decisions: { enforce: true } });
   return {
+    ...(fs ? { pathKind: (p: string) => { if (fs.throws) throw new Error('stat failed'); const q = p.replace(/\\/g, '/'); return fs.files.includes(q) ? 'file' : fs.dirs.includes(q) ? 'dir' : null; } } : {}),
     env: { ...process.env, CCV3_DECISIONS_FILE: join(dir, 'decisions.json') },
     home: '/home/nobody',
     readFile: (p: string) => (p.replace(/\\/g, '/').endsWith('/review-router.config.json') ? config : null),
@@ -64,8 +67,8 @@ function shipTap(): void {
   expect(offerWrite({ step: 'ship', key, head: HEAD, tree: TREE, spec: { header: 'T', question: 'Q?', options: [{ label: 'Commit and push (Recommended)' }, { label: 'Another option' }] } }).ok).toBe(true);
   expect(decisionRecord({ step: 'ship', key, head: HEAD, label: 'Commit and push (Recommended)' })).toEqual({ ok: true });
 }
-async function patIn(input: object): Promise<string> {
-  const d = decide(input, await withParsed(JSON.stringify(input), deps()));
+async function patIn(input: object, fs?: Fs): Promise<string> {
+  const d = decide(input, await withParsed(JSON.stringify(input), deps(fs)));
   if (d.action === 'deny') return d.pattern;
   return 'warn' in d && typeof d.warn === 'string' ? 'warn' : 'allow';
 }
@@ -128,5 +131,51 @@ describe('I11: a git global option with no value hides a push from the guarded-c
   });
   it('I11-11 (over-deny, named): the word push inside a quoted argument after git options, in a text that does not parse, is denied (as `git push` in quotes is on main)', async () => {
     for (const c of [`{ echo "git --no-pager push"`, `{ git --no-pager commit -m "push notes"`]) expect(await patIn(bash(c)), c).toBe('parse-error');
+  });
+});
+
+/** Item 11b (seat ruling 15:2x CST 11-25): the arguments of a script FILE that exists are data. Every other runner call with a guarded text stays denied. */
+const FS: Fs = { dirs: ['/repo', '/repo/sub', '/other'], files: ['/repo/scripts/lane.mjs', '/repo/real.mjs', '/repo/real.py', '/repo/sub/real.mjs', '/abs/x/tool.mjs'] };
+describe('I11b: a script runner call whose first word after its options is an existing file is not a script-runner deny', () => {
+  it('I11b-1: a lane message with a quoted push text, the file exists: allowed (RED: denied)', async () => {
+    expect(await patIn(bash('node scripts/lane.mjs say "git push fork x" --to seat'), FS)).toBe('allow');
+    expect(await patIn(bash('node /abs/x/tool.mjs note "git push fork x"'), FS)).toBe('allow');
+  });
+  it('I11b-2: options before the file are skipped, with no list of names: allowed (RED: denied)', async () => {
+    expect(await patIn(bash('node --max-old-space-size=4096 real.mjs "git push fork x"'), FS)).toBe('allow');
+    // A quoted merge text is still read by the old hand reader (merge-no-head): that is not the script-runner rule. C2 deletes the hand reader. Pin the rule, not the reader.
+    expect(await patIn(bash('python real.py "gh pr merge 5"'), FS)).not.toBe('script-runner');
+  });
+  it('I11b-3 (PowerShell): the same call is allowed (RED: denied)', async () => {
+    expect(await patIn(pwsh('node scripts/lane.mjs note "git push fork x"'), FS)).toBe('allow');
+  });
+  it('I11b-4 (control): inline code in any spelling is denied', async () => {
+    for (const c of [`node -e "git push fork x"`, `node --eval "git push fork x"`, `node -p "git push fork x"`, `python -c "gh pr merge 5"`, `node -r x -e "git push fork x"`, `ruby -e "git push fork x"`]) {
+      expect(await patIn(bash(c), FS), c).toBe('script-runner');
+    }
+  });
+  it('I11b-5 (control): a file that does not exist is denied', async () => {
+    for (const c of [`node missing.mjs "git push fork x"`, `python nope.py "gh pr merge 5"`, `node real.mjs/ "git push fork x"`]) expect(await patIn(bash(c), FS), c).toBe('script-runner');
+  });
+  it('I11b-6 (control): a variable, a substitution or a glob in the path is denied', async () => {
+    for (const c of [`node $SCRIPT "git push fork x"`, `node "$SCRIPT" "git push fork x"`, `node $(pwd)/real.mjs "git push fork x"`, `node *.mjs "git push fork x"`]) {
+      expect(await patIn(bash(c), FS), c).toBe('script-runner');
+    }
+  });
+  it('I11b-7 (control): stdin as the program, or a folder as the path, is denied', async () => {
+    for (const c of [`node - "git push fork x"`, `node scripts "git push fork x"`]) expect(await patIn(bash(c), FS), c).toBe('script-runner');
+  });
+  it('I11b-8 (control): a lookup that throws is denied', async () => {
+    expect(await patIn(bash('node scripts/lane.mjs say "git push fork x"'), { ...FS, throws: true })).toBe('script-runner');
+  });
+  it('I11b-9 (control): no pathKind seam (old callers) keeps the deny', async () => {
+    expect(await patIn(bash('node scripts/lane.mjs say "git push fork x"'))).toBe('script-runner');
+  });
+  it('I11b-11: cd to a real folder that lacks the file is denied; with the file in both folders it is allowed (RED: denied)', async () => {
+    expect(await patIn(bash('cd /other && node real.mjs "git push fork x"'), FS)).toBe('script-runner');
+    expect(await patIn(bash('cd /repo/sub && node real.mjs "git push fork x"'), { ...FS, files: [...FS.files, '/repo/sub/real.mjs'] })).toBe('allow');
+  });
+  it('I11b-12 (control): a runner file call with a heredoc or a guarded word in code that does not parse stays denied', async () => {
+    expect(await patIn(bash('{ node scripts/lane.mjs say "git push fork x"'), FS)).not.toBe('allow');
   });
 });
