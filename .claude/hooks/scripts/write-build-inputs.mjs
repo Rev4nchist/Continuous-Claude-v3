@@ -59,6 +59,10 @@ function externalFiles() {
     if (key.startsWith('..') || isAbsolute(key)) continue;
     keys.add(key);
   }
+  // The PowerShell walker is read at run time from dist/ (scripts/copy-parser-assets.mjs copies it there), not bundled, so the metafile never
+  // lists it. Record it, so an edit of src/shell-ast-walk.ps1 without a rebuild shows as a stale dist.
+  const walker = join(srcRoot, 'shell-ast-walk.ps1');
+  if (existsSync(walker)) keys.add(posix(relative(repoRoot, walker)));
   return [...keys].sort();
 }
 
