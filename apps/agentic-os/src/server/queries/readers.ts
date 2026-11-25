@@ -10,7 +10,7 @@ import { clockOf, type ClockEntry } from '@/lib/clock';
 import { DECISIONS_MAX_BYTES, decisionsOpenCount, parseDecisionsStore, type DecisionsView } from '@/lib/decisions-parse';
 import { noteFlags } from '@/lib/note-flags';
 import { foldOpenQuestions, type OpenQuestion, type QuestionSnapshot } from '@/lib/open-question';
-import { buildReaderSources, settleReader, stateFilesPartial, type ReaderOutcome, type ReaderSource } from '@/lib/reader-sources';
+import { buildReaderSources, capRows, prFeedFresh, prFeedPartial, settleReader, stateFilesPartial, type ReaderOutcome, type ReaderSource } from '@/lib/reader-sources';
 import { computeStalls, createGreenTracker, type Stall, type StallLane, type StallPr } from '@/lib/stalls';
 import { parseTasksFile, type ScheduledTask, type TasksView } from '@/lib/tasks-parse';
 
@@ -71,7 +71,7 @@ const epoch = (v: string | number | null): number | null => {
  * The lanes the readers need, machine-wide: held or in review (stalls and leases), and future scheduled reminders.
  * The note is read only for active and review lanes (the two note rules) and never for any other row.
  */
-async function readLaneRows(): Promise<LaneRaw[]> {
+async function readLaneRows(): Promise<{ rows: LaneRaw[]; truncated: boolean }> {
   const { rows } = await db.execute<LaneRaw>(sql`
     SELECT l.id, l.state, (l.owner_session_id IS NOT NULL) AS owner_held,
            EXTRACT(EPOCH FROM l.updated_at) * 1000 AS updated_ms,
@@ -83,9 +83,9 @@ async function readLaneRows(): Promise<LaneRaw[]> {
     WHERE l.state IN ('active', 'review')
        OR (l.owner_session_id IS NOT NULL AND l.lease_expires_at > now())
        OR (l.due_at IS NOT NULL AND l.due_at > now() AND l.remind_state = 'scheduled')
-    LIMIT ${LANE_LIMIT}
+    LIMIT ${LANE_LIMIT + 1}
   `);
-  return rows;
+  return capRows(rows, LANE_LIMIT); // one row more than the limit proves a cut (card agentic-os-readers-edge-limits)
 }
 
 function decisionsPath(): string {
@@ -121,8 +121,8 @@ function stallLanes(rows: LaneRaw[]): StallLane[] {
 }
 
 function stallPrs(feed: OpenPrFeed, nowMs: number): StallPr[] {
-  if (feed.status !== 'ok') {
-    greenTracker.observe([], nowMs); // a missing feed drops every clock: nothing is "still green"
+  if (!prFeedFresh(feed, nowMs, OPEN_PR_MAX_AGE_MS)) {
+    greenTracker.observe([], nowMs); // a missing or stale feed drops every clock: nothing is "still green"
     return [];
   }
   const rows = feed.rows.map((r) => ({ pr: r.pr, head: r.head ?? '', draft: r.draft, ready: r.ready, ci: r.ci }));
@@ -159,7 +159,10 @@ export async function readReaders(stateFiles: StateFiles | null, nowMs: number =
     settleReader(() => openQuestions(stateFiles, nowMs)),
   ]);
 
-  const laneRows = laneRead.ok ? laneRead.value : [];
+  const laneRows = laneRead.ok ? laneRead.value.rows : [];
+  const laneCut = laneRead.ok && laneRead.value.truncated ? `lane list cut at ${LANE_LIMIT}` : undefined;
+  const feedCut = feedRead.ok && feedRead.value.status === 'ok' ? (prFeedPartial(feedRead.value) ?? undefined) : undefined;
+  const stallsPartial = [feedCut, laneCut].filter(Boolean).join(', ') || undefined;
   const feed: OpenPrFeed | null = feedRead.ok ? feedRead.value : null;
   const tasks: TasksView = tasksRead.ok ? tasksRead.value : { ok: false, reason: 'unreadable' };
   const decisions: DecisionsView = decisionsRead.ok ? decisionsRead.value : { ok: false, reason: 'unreadable' };
@@ -182,10 +185,10 @@ export async function readReaders(stateFiles: StateFiles | null, nowMs: number =
         ? failed(laneRead.error, nowMs)
         : !feed || feed.status !== 'ok'
           ? failed('missing', nowMs)
-          : { ok: true, readAtMs: nowMs, dataAtMs: exportedAtMs, maxAgeMs: OPEN_PR_MAX_AGE_MS },
+          : { ok: true, readAtMs: nowMs, dataAtMs: exportedAtMs, maxAgeMs: OPEN_PR_MAX_AGE_MS, partial: stallsPartial },
       'open-question': !questionsRead.ok ? failed(questionsRead.error, nowMs) : stateFiles === null ? failed('state files unreadable', nowMs) : { ok: true, readAtMs: nowMs, dataAtMs: newestStateWrite, partial: stateFilesPartial(stateFiles.stats) ?? undefined },
       decisions: decisions.ok ? { ok: true, readAtMs: nowMs } : failed(decisions.reason, nowMs),
-      clock: laneRead.ok ? { ok: true, readAtMs: nowMs } : failed(laneRead.error, nowMs),
+      clock: laneRead.ok ? { ok: true, readAtMs: nowMs, partial: laneCut } : failed(laneRead.error, nowMs),
       tasks: tasks.ok ? { ok: true, readAtMs: nowMs } : failed(tasks.reason, nowMs),
     },
     nowMs,
