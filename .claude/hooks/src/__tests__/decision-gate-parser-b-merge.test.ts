@@ -133,11 +133,11 @@ describe('port step 2: merge PR and head from the parser words', () => {
     const p = await withParsed(JSON.stringify(input(c)), deps());
     expect(astMerges(p.parsed)).toEqual([]);
   });
-  it('M7: a text the parser cannot read keeps the old verdict', async () => {
+  it('M7: a text the parser cannot read is a deny on both paths; the old path names merge-no-head, the new path parse-error (C1, F1)', async () => {
     const c = `${M} 5 --squash --match-head-commit ${HEAD} --body "open`;
     const r = await both(c);
-    expect(r.newP).toBe(r.oldP);
-    expect(r.newP).toBe('merge-no-head');
+    expect(r.oldP).toBe('merge-no-head');
+    expect(r.newP).toBe('parse-error');
   });
   it('M8: PowerShell: the same head read, the same verdicts', async () => {
     landTap(5);
