@@ -111,4 +111,22 @@ describe('upgrades-status', () => {
     assert.match(r.pageMd, /node scripts\/reports\/upgrades-status\.mjs/);
     assert.match(r.pageMd, /needs a word/i);
   });
+
+  it('U8 program counts of 100 or more show as 100+ in both outputs (CLI finding 1)', () => {
+    const big = { ...program, counts: { lanes: 140, byState: { blocked: 0, backlog: 140, ready: 0, active: 0, review: 0, done: 0, 'no card': 0 } }, waves: [{ wave: 0, lanes: 140, done: 0, inWork: 0, blocked: 0 }] };
+    const r = build({ program: big });
+    assert.equal(r.model.program.lanes, 140);
+    assert.doesNotMatch(r.pageMd, /140/);
+    assert.doesNotMatch(r.html, /140/);
+    assert.match(r.pageMd, /100\+ lanes/);
+    assert.match(r.html, /<td class="n">100\+<\/td>/);
+  });
+
+  it('U9 the dark-mode rule for a warning comes after the base rule, so it wins (CLI finding 2)', () => {
+    const css = build().html.match(/<style>(.*?)<\/style>/s)[1];
+    const base = css.indexOf('.nc{color:#8a5a00');
+    const dark = css.indexOf('.nc{color:#f0b429');
+    assert.ok(base >= 0 && dark >= 0);
+    assert.ok(dark > base, 'the dark rule must come after the light rule');
+  });
 });

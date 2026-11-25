@@ -105,7 +105,7 @@ function summaryMd(m, stamp) {
   ];
   if (m.program) {
     const s = m.program.byState;
-    L.push(`${m.program.lanes} lanes: done ${s.done}, in work ${(s.active ?? 0) + (s.review ?? 0)}, blocked ${s.blocked}, planned ${(s.backlog ?? 0) + (s.ready ?? 0)}.`);
+    L.push(`${shown(m.program.lanes)} lanes: done ${shown(s.done)}, in work ${shown((s.active ?? 0) + (s.review ?? 0))}, blocked ${shown(s.blocked)}, planned ${shown((s.backlog ?? 0) + (s.ready ?? 0))}.`);
     if (m.program.decisionOpen != null) L.push(`Open decision items for Dave: ${m.program.decisionOpen} (${m.program.decisionId}).`);
   } else L.push('not checked');
   L.push('', '## Other tracks (open lanes of the lane board)');
@@ -131,7 +131,7 @@ function pageHtml(m, stamp) {
   const nc = (what) => `<p class="nc">not checked: ${esc(what)}</p>`;
   const parts = [];
   parts.push(sec('Review engine program', m.program
-    ? table(['Wave', 'Done', 'In work', 'Blocked', 'Planned'], m.program.waves.map((w) => [`Wave ${w.wave}`, w.done, w.inWork, w.blocked, w.planned]))
+    ? table(['Wave', 'Done', 'In work', 'Blocked', 'Planned'], m.program.waves.map((w) => [`Wave ${w.wave}`, shown(w.done), shown(w.inWork), shown(w.blocked), shown(w.planned)]))
     : nc('review engine program')));
   parts.push(sec('Other tracks (open lanes, review engine lanes left out)', m.tracks
     ? table(['Track', 'Planned', 'In work', 'Blocked'], m.tracks.map((t) => [t.track, shown(t.planned), shown(t.inWork), shown(t.blocked)]))
@@ -143,8 +143,8 @@ function pageHtml(m, stamp) {
     ? `<ol>${m.phases.map((i) => `<li>${esc(i.title)}</li>`).join('')}</ol>`
     : nc('redesign brief')));
   const css = 'body{font:16px/1.5 system-ui,sans-serif;margin:0 auto;max-width:56rem;padding:1rem;background:#fff;color:#1a1a1a}'
-    + '@media(prefers-color-scheme:dark){body{background:#16181c;color:#e8e8e8}th,td{border-color:#3a3d44}.nc{color:#f0b429}}'
-    + 'table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{border-bottom:1px solid #ccc;padding:.35rem .5rem;text-align:left}td.n{text-align:right}.nc{color:#8a5a00;font-weight:600}h2{margin-top:1.5rem}';
+    + 'table{border-collapse:collapse;width:100%;margin:.5rem 0}th,td{border-bottom:1px solid #ccc;padding:.35rem .5rem;text-align:left}td.n{text-align:right}.nc{color:#8a5a00;font-weight:600}h2{margin-top:1.5rem}'
+    + '@media(prefers-color-scheme:dark){body{background:#16181c;color:#e8e8e8}th,td{border-color:#3a3d44}.nc{color:#f0b429}}';
   const head = `<h1>CCv3 Upgrades</h1><p>Built ${esc(stamp)} from main. Refresh: <code>${esc(REFRESH_COMMAND)}</code>. Each refresh needs a word from Dave or the seat.</p>`
     + `<p class="${m.notChecked.length ? 'nc' : ''}">${m.notChecked.length ? `${m.notChecked.length} of ${SOURCES.length} sources not checked: ${esc(m.notChecked.join(', '))}.` : `All ${SOURCES.length} sources checked.`}</p>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CCv3 Upgrades</title><style>${css}</style></head><body>${head}${parts.join('')}</body></html>`;
