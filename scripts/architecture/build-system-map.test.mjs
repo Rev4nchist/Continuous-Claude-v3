@@ -416,3 +416,24 @@ test('G27 when the restore of the first file also fails, its backup is kept and 
   assert.ok(!existsSync(`${b}.bak`), 'a backup whose file never changed is removed');
   assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith('.tmp')), [], 'no temp file is left');
 });
+
+test('G28 an option form that replaces the file entrypoint (--eval=, -e=, --print=, -p=) makes the entry unparsed; known inline-value options still parse', () => {
+  const root = makeRoot({ hooks: [['PreToolUse', 'Bash', 'alpha.mjs']] });
+  const f = join(root, '.claude', 'settings.json.template');
+  const t = JSON.parse(readFileSync(f, 'utf8'));
+  const dist = (n) => `{{CLAUDE_HOME}}/hooks/dist/${n}`;
+  const add = (matcher, args) => t.hooks.PreToolUse.push({ matcher, hooks: [{ type: 'command', command: 'node', args }] });
+  add('E1', ['--eval=0', dist('evalA.mjs')]); // Node runs the expression, not the file
+  add('E2', ['-e=0', dist('evalB.mjs')]);
+  add('E3', ['--print=1', dist('printA.mjs')]);
+  add('E4', ['-p=1', dist('printB.mjs')]);
+  add('K1', ['--max-old-space-size=256', dist('heap.mjs')]);
+  add('K2', ['--require=./pre.cjs', dist('pre.mjs')]); // a preload keeps the file entrypoint
+  writeFileSync(f, JSON.stringify(t, null, 2));
+  apply(root);
+  const hooks = graphOf(root).registry.hooks;
+  const names = hooks.items.map((h) => h.file);
+  for (const n of ['evalA.mjs', 'evalB.mjs', 'printA.mjs', 'printB.mjs']) assert.ok(!names.includes(n), `${n} is not a hook (Node does not run it): ${names}`);
+  assert.equal(hooks.unparsed, 4, 'the four entrypoint-replacing forms are counted as unparsed');
+  for (const n of ['heap.mjs', 'pre.mjs']) assert.ok(names.includes(n), `${n} still parses: ${names}`);
+});
