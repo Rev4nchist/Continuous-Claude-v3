@@ -237,3 +237,87 @@ test('G13 the committed graph and page of this repo are fresh against the real s
   assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
   assert.match(r.stdout, /registered hook/i, 'the check prints the counts it compared');
 });
+
+// Rows G15 to G21: the CodeRabbit CLI findings of pre-pr run 1 that the seat ordered fixed (items 1, 2, 6, 9, 10, 5, 7).
+test('G15 a missing authored map reads "not checked" (exit 2) in check mode, a malformed one stays a bad file (exit 1)', () => {
+  const root = makeRoot();
+  apply(root);
+  const f = join(root, ...VIZ, 'architecture.src.json');
+  const good = readFileSync(f, 'utf8');
+  rmSync(f);
+  const missing = run(root, '--check', '--skip-listed');
+  assert.equal(missing.status, 2, `${missing.stdout}${missing.stderr}`);
+  assert.match(missing.stdout, /not checked/i);
+  writeFileSync(f, '{ not json');
+  assert.equal(run(root, '--check', '--skip-listed').status, 1, 'a malformed authored map is a bad file, not a pass');
+  writeFileSync(f, good);
+});
+
+test('G16 the embedded block holds no < at all: every one is written as \\u003c and decodes back', () => {
+  const tag = 'x <!-- <script> y </script> z';
+  const root = makeRoot({ src: SRC({ meta: { name: 'Fixture map', tagline: tag, description: 'x', platform: 'test', sources: [] } }) });
+  apply(root);
+  const html = readFileSync(join(root, ...VIZ, 'index.html'), 'utf8');
+  const block = /<script type="application\/json" id="embedded-data">([\s\S]*?)<\/script>/.exec(html)[1];
+  assert.ok(!block.includes('<'), 'a < inside the block can start a comment or a tag in the HTML parser');
+  assert.equal(JSON.parse(block).meta.tagline, tag, 'the decoded text is unchanged');
+});
+
+test('G17 a directory named like a rule or an agent file is not counted', () => {
+  const root = makeRoot({ rulesSrc: ['r1.md'], agents: ['a-one'] });
+  mkdirSync(join(root, '.claude/rules-src/dir.md'));
+  mkdirSync(join(root, '.claude/agents/dir.md'));
+  apply(root);
+  const stats = graphOf(root).meta.stats;
+  assert.equal(stats.rulesSrc, 1);
+  assert.equal(stats.agents, 1);
+  const only = makeRoot({ rulesSrc: [] });
+  mkdirSync(join(only, '.claude/rules-src'), { recursive: true });
+  mkdirSync(join(only, '.claude/rules-src/dir.md'));
+  assert.equal(run(only, '--check', '--skip-listed').status, 2, 'a folder with no rule file is "not checked"');
+});
+
+test('G18 a committed registry of the wrong shape still ends with the rebuild line', () => {
+  const root = makeRoot();
+  apply(root);
+  const f = join(root, ...VIZ, 'architecture.json');
+  const g = JSON.parse(readFileSync(f, 'utf8'));
+  g.registry.skills = {};
+  writeFileSync(f, JSON.stringify(g));
+  const r = run(root, '--check', '--skip-listed');
+  assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /build-system-map\.mjs --apply/, 'no crash: the rebuild line is printed');
+});
+
+test('G19 apply scans the authored map too: a listed id in it stops the write', async () => {
+  const ID = 'a1b2c3d4e5f6'; // made up
+  const root = makeRoot({ src: SRC({ meta: { name: 'Fixture map', tagline: 'x', description: 'x', platform: 'test', sources: [], generatedBy: `see ${ID}` } }) });
+  const code = await need('main')(['--root', root, '--apply'], () => {}, { listedIds: [ID] });
+  assert.equal(code, 1);
+  assert.ok(!existsSync(join(root, ...VIZ, 'architecture.json')), 'nothing was written');
+});
+
+test('G20 a stale diagnostic never prints a listed id', async () => {
+  const ID = 'a1b2c3d4e5f6'; // made up: a skill named like an id
+  const root = makeRoot();
+  apply(root);
+  mkdirSync(join(root, `.claude/skills/${ID}`), { recursive: true });
+  writeFileSync(join(root, `.claude/skills/${ID}/SKILL.md`), `---\nname: ${ID}\ndescription: x\n---\n`);
+  const r = await need('checkOutputs')(root, { listedIds: [ID] });
+  assert.equal(r.exitCode, 1);
+  assert.ok(!JSON.stringify(r).includes(ID), 'problems and lines hold counts only');
+  assert.ok(r.lines.some((l) => /build-system-map\.mjs --apply/.test(l)), 'the rebuild line stays');
+});
+
+test('G21 a failed write leaves both files as they were (temp file, then rename)', () => {
+  const root = makeRoot();
+  mkdirSync(join(root, ...VIZ, 'index.html.tmp'));
+  const before = readFileSync(join(root, ...VIZ, 'index.html'), 'utf8');
+  const r = run(root, '--apply', '--skip-listed');
+  assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+  assert.ok(!existsSync(join(root, ...VIZ, 'architecture.json')), 'the json was not written before the html failed');
+  assert.equal(readFileSync(join(root, ...VIZ, 'index.html'), 'utf8'), before, 'the template is intact for a retry');
+  rmSync(join(root, ...VIZ, 'index.html.tmp'), { recursive: true });
+  apply(root);
+  assert.equal(readdirSync(join(root, ...VIZ)).filter((n) => n.endsWith('.tmp')).length, 0, 'no temp file is left');
+});
