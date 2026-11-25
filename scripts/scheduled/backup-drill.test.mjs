@@ -455,3 +455,46 @@ test('D23 the sweep stops at the first call that does not answer: only the first
     assert.match(out.skipped.join(' '), /sweep stopped: docker or node did not answer/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// ---- CodeRabbit CLI run 2 on 2775356f: two minor findings ----
+
+test('D24 a call that loses to its limit stops the sweep even when the runner answers 127 inside the abort (Node spawn emits the AbortError synchronously)', { timeout: 5000 }, async () => {
+  // Breaks when bounded() aborts before it settles its own result, or when the sweep stops on code 124 alone: the real runner then answers 127 first and the sweep goes on.
+  const root = pendingDir();
+  try {
+    const first = crashedRun(root, { name: 'lanes_pr1_aaaa0001' }, 'run-030000-1');
+    const second = crashedRun(root, { name: 'lanes_pr1_bbbb0002' }, 'run-030000-2');
+    const f = fakeSh();
+    const inner = f.sh;
+    f.sh = (cmd, args, opts = {}) => {
+      const line = [cmd, ...args].join(' ');
+      if (!/rm -f/.test(line)) return inner(cmd, args, opts);
+      f.calls.push({ cmd, args, line });
+      return new Promise((resolve) => { opts.signal.addEventListener('abort', () => resolve({ code: 127, stdout: '', stderr: 'AbortError' })); });
+    };
+    const out = await sweepPendingDrills({ root, sh: f.sh, repo: 'C:/repo', urlFor, callMs: 60 });
+    assert.ok(f.calls.length >= 1 && f.calls.every((c) => c.line.includes('lanes_pr1_aaaa0001')), 'calls for the first file only');
+    assert.equal(existsSync(join(second, 'drill-pending.json')), true);
+    assert.equal(existsSync(join(first, 'drill-pending.json')), true);
+    assert.match(out.skipped.join(' '), /sweep stopped: docker or node did not answer/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('D25 a late cp whose copy cannot be removed leaves the name in the pending file for the next sweep', { timeout: 5000 }, async () => {
+  // Breaks when the late rm result is ignored: the cleanup at the deadline already removed the pending file, so the copy would have no record.
+  const dir = pendingDir();
+  try {
+    const pendingFile = join(dir, 'drill-pending.json');
+    const f = fakeSh();
+    const inner = f.sh;
+    let cpEnded = false;
+    f.sh = async (cmd, args, opts) => {
+      if (args[0] === 'cp') { await new Promise((r) => setTimeout(r, 150)); cpEnded = true; return { code: 0, stdout: '', stderr: '' }; }
+      if (cpEnded && [cmd, ...args].join(' ').includes('rm -f')) return { code: 1, stdout: '', stderr: 'no' };
+      return inner(cmd, args, opts);
+    };
+    await drill(f, { deadlineMs: 60, pendingFile });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(JSON.parse(readFileSync(pendingFile, 'utf8')), { name: 'lanes_pr1_abcd1234' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

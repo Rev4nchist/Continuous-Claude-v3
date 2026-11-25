@@ -61,7 +61,8 @@ const fail = (detail, tail = '') => ({ drill: 'fail', detail: maskText(`${detail
 async function bounded(shell, cmd, args, ms) {
   const ac = new AbortController();
   let timer;
-  const limit = new Promise((done) => { timer = setTimeout(() => { ac.abort(); done({ code: 124, stdout: '', stderr: `no answer in ${Math.round(ms / 1000)} s` }); }, ms); });
+  // done() first, abort second: Node spawn emits the AbortError inside abort(), so the real runner answers 127 at once and would win the race. `timedOut` marks a call that lost to its limit, whatever the runner answered.
+  const limit = new Promise((done) => { timer = setTimeout(() => { done({ code: 124, timedOut: true, stdout: '', stderr: `no answer in ${Math.round(ms / 1000)} s` }); ac.abort(); }, ms); });
   const run = Promise.resolve(shell(cmd, args, { signal: ac.signal }));
   run.catch(() => {}); // a call that lost the race may fail later: nobody waits for it
   try { return await Promise.race([run, limit]); } finally { clearTimeout(timer); }
@@ -122,7 +123,8 @@ export async function runDrill({ sh: shell, dumpPath, live, repo, container = 'c
     if (ac.signal.aborted) return fail('drill aborted');
     const cp = await sh(docker, ['cp', plain, `${container}:${copy}`]);
     if (ac.signal.aborted) { // the cp ended after the cleanup ran: the copy it made has no owner but this line
-      await bounded(shell, docker, ['exec', container, 'rm', '-f', copy], cleanupMs).catch(() => {});
+      const late = await bounded(shell, docker, ['exec', container, 'rm', '-f', copy], cleanupMs).catch(() => ({ code: 1 }));
+      if (late.code !== 0 && pendingFile) { try { writeFileSync(pendingFile, JSON.stringify({ name })); } catch { /* nothing more to do here */ } } // the cleanup at the deadline removed the record: put it back
       return fail('drill aborted');
     }
     if (cp.code !== 0) return fail('docker cp failed: ', cp.stderr);
@@ -210,10 +212,10 @@ export async function sweepPendingDrills({ root, sh: shell, repo, container = 'c
         let ok = true;
         const removed = await sh(docker, ['exec', container, 'rm', '-f', `/tmp/${name}.dump`]);
         if (removed.code !== 0) ok = false;
-        if (removed.code === 124) stopped = true;
+        if (removed.timedOut) stopped = true;
         const dropped = stopped ? { code: 124 } : await sh(node, [scratchCli, 'drop', url]);
         if (dropped.code !== 0) ok = false;
-        if (dropped.code === 124) stopped = true;
+        if (dropped.timedOut) stopped = true;
         rmSync(join(tmpdir(), `${name}.dump`), { force: true });
         if (ok) { rmSync(file, { force: true }); cleaned.push(name); } else skipped.push(`${name}: cleanup not complete, kept for the next run`);
       } catch (e) {
