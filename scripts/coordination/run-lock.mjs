@@ -554,6 +554,8 @@ export async function acquire(opts, deps) {
     const read = { freeGB: num(freeGB), loadPct };
     if (reasons.length && mode === 'grant') {
       const waitFile = opts.wait && opts.kind === 'pre-pr' ? writeWaitRecord(d, opts, pid, start, own, now) : undefined;
+      // One row when a start FIRST waits (no wait record of this pid before), so the seat reads a refused start in runs.jsonl. A failed write never stops the run.
+      if (waitFile && !own) { try { appendLine(d.dir, 'runs.jsonl', { ts: now, event: 'wait', pid, head: opts.head || null, keys, reasons }); } catch { /* a log problem never stops the run */ } }
       return { granted: false, warned: false, lines: [...lines, `WAIT ${wait}`, CAVEAT], retryAt, reasons, keys, waitFile, ...read };
     }
     // The warn log comes first: a failed append then leaves no lock and no last-grant behind.

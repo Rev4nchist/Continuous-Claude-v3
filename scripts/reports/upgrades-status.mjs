@@ -106,7 +106,7 @@ function summaryMd(m, stamp) {
   if (m.program) {
     const s = m.program.byState;
     L.push(`${shown(m.program.lanes)} lanes: done ${shown(s.done)}, in work ${shown((s.active ?? 0) + (s.review ?? 0))}, blocked ${shown(s.blocked)}, planned ${shown((s.backlog ?? 0) + (s.ready ?? 0))}.`);
-    if (m.program.decisionOpen != null) L.push(`Open decision items for Dave: ${m.program.decisionOpen} (${m.program.decisionId}).`);
+    if (m.program.decisionOpen != null) L.push(`Open decision items for Dave: ${shown(m.program.decisionOpen)} (${m.program.decisionId}).`);
   } else L.push('not checked');
   L.push('', '## Other tracks (open lanes of the lane board)');
   if (m.tracks) for (const t of m.tracks) L.push(`- ${t.track}: planned ${shown(t.planned)}, in work ${shown(t.inWork)}, blocked ${shown(t.blocked)}`);
