@@ -79,6 +79,14 @@ async function lanesFor(feed: OpenPrFeed): Promise<{ lanes: LaneRef[]; status: P
   }
 }
 
+/**
+ * The open rows with their head sha, for the stall reader only (card agentic-os-readers). The same file, the same parse and the
+ * same limits as readPrFeed; no lane lookup. The head never reaches a view. Never throws: a missing file is `absent`.
+ */
+export async function readOpenPrRows(): Promise<OpenPrFeed> {
+  return parseOpenPrs(await readJson('open-prs'), cleanLabel);
+}
+
 /** The table's data. Never throws: a failed lane lookup shows every lane as a dash. */
 export async function readPrFeed(nowMs: number = Date.now()): Promise<PrFeedSnapshot> {
   const [openRaw, spendRaw] = await Promise.all([readJson('open-prs'), readJson('pr-spend')]);

@@ -157,7 +157,9 @@ const coordTest = (name) => `scripts/coordination/${name}.test.mjs`;
 export const SCRIPTS_WINDOWS_TESTS = [
   'scripts/harness-doctor-cleanup.test.mjs', 'scripts/settings/apply-registrations.test.mjs', 'scripts/settings/remove-registrations.test.mjs',
   'scripts/scheduled/scheduled-health-check.test.mjs', 'scripts/scheduled/register-ccv3-tasks.test.mjs', 'scripts/scheduled/scheduled-reminder-tick.test.mjs',
-  'scripts/scheduled/scheduled-lane-snapshot.test.mjs', 'scripts/scheduled/scheduled-open-prs.test.mjs', 'scripts/coordination/reminder-tick.test.mjs',
+  'scripts/scheduled/scheduled-lane-snapshot.test.mjs', 'scripts/scheduled/scheduled-open-prs.test.mjs', 'scripts/scheduled/backup-state-lib.test.mjs',
+  'scripts/scheduled/zip-lite.test.mjs', 'scripts/scheduled/backup-notion.test.mjs', 'scripts/scheduled/backup-drill.test.mjs',
+  'scripts/scheduled/backup-state.test.mjs', 'scripts/scheduled/scheduled-state-backup.test.mjs', 'scripts/coordination/reminder-tick.test.mjs',
   'scripts/coordination/reminder-core.test.mjs', 'scripts/coordination/lane-dash-project.test.mjs', 'scripts/coordination/lane-dash-metrics.test.mjs',
   'scripts/coordination/lane-dash-flow.test.mjs', 'scripts/coordination/lane-dash-config.test.mjs', 'scripts/coordination/export-dash-data.test.mjs',
   'scripts/pricing/refresh-prices.test.mjs', 'scripts/measurement/cost-reconcile.test.mjs', 'scripts/measurement/cost-reconcile-parity.test.mjs',
