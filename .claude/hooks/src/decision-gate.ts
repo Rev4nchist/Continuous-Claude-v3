@@ -2759,7 +2759,8 @@ const REMOTE_LOOKUP_RESERVE_MS = 1500;
  * A git read in the payload folder that throws or times out counts as local (deny, as before). A fetch read that ends with an error means this folder has no
  * such remote; a push read that ends with an error after a good fetch read counts as local (the two answers disagree). The clock, and a cap on the number of
  * reads, count as local too. A folder that only the union adds (rawDirs: a cd or -C target, with spelling variants that may not exist) can only add a deny:
- * a read there that throws gives no answer and is skipped, so the answer of the payload folder, which main gives, is never lost.
+ * a read there that fails because the folder does not exist (MissingCwdError of makeGit, or ENOENT) gives no remote and is skipped; any other throw (ETIMEDOUT, ENOBUFS) is unknown and
+ * counts as local (seat read of f8842ee8, finding 1). The answer of the payload folder, which main gives, is never lost.
  */
 function remoteNameIsLocal(deps: Deps, cwd: string, extraDirs: string[], name: string, budget: { left: number }): boolean {
   for (const dir of [cwd, ...extraDirs.filter((d) => d !== cwd)]) {
@@ -2771,7 +2772,7 @@ function remoteNameIsLocal(deps: Deps, cwd: string, extraDirs: string[], name: s
         const g = deps.git(dir, args);
         if (g.status !== 0) { if (args.length === 3) break; return true; }
         if (g.stdout.split(/\r?\n/).some((l) => l.trim() !== '' && LOCAL_REMOTE.test(l.trim()))) return true;
-      } catch { if (own) return true; break; }
+      } catch (e) { if (own || !(e instanceof MissingCwdError || errCode(e) === 'ENOENT')) return true; break; } // only a folder that does not exist has no remote; a timeout or a full buffer is unknown
     }
   }
   return false;

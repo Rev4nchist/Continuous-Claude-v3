@@ -67,7 +67,10 @@ function deps(w: World = {}): Deps {
       if (gu) {
         lookups.push(a);
         // Only the push-URL read throws: the shape judge reads the fetch URL of each push remote too (another call site, not under test here).
-        if (w.throwIn && gu[1] && cwd.replace(/\\/g, '/').endsWith(w.throwIn.dir)) throw Object.assign(new Error(`git ${a}`), { code: w.throwIn.code });
+        if (w.throwIn && gu[1] && cwd.replace(/\\/g, '/').endsWith(w.throwIn.dir)) {
+          if (w.throwIn.code === 'MISSING-CWD') throw new gate.MissingCwdError(cwd); // what makeGit throws for a folder that does not exist
+          throw Object.assign(new Error(`git ${a}`), { code: w.throwIn.code });
+        }
         const row = REMOTES[gu[2]];
         if (!row) return { status: 2, stdout: '' };
         const [fetchUrl, pushUrls] = row(cwd.replace(/\\/g, '/').endsWith('/sub'));
@@ -255,6 +258,10 @@ describe('A3-U: a remote name is local when it is local in the payload folder or
   it('A3-U6 (control): a folder that does not exist (ENOENT) has no remote, so the remote is not local there and the push stays allowed', async () => {
     shipTap();
     expect(await patIn(bash(`git -C sub push plain feat/x && ${PUSH}`), { throwIn: { dir: '/sub', code: 'ENOENT' } })).toBe('allow');
+  });
+  it('A3-U6b (control): makeGit throws MissingCwdError for a folder that does not exist: the same, not local there', async () => {
+    shipTap();
+    expect(await patIn(bash(`git -C sub push plain feat/x && ${PUSH}`), { throwIn: { dir: '/sub', code: 'MISSING-CWD' } })).toBe('allow');
   });
   it('A3-U7 (control, as main): a throw in the payload folder itself counts as local, whatever the code', async () => {
     shipTap();

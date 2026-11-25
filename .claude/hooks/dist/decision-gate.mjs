@@ -3915,8 +3915,8 @@ function remoteNameIsLocal(deps, cwd, extraDirs, name, budget) {
           return true;
         }
         if (g.stdout.split(/\r?\n/).some((l) => l.trim() !== "" && LOCAL_REMOTE.test(l.trim()))) return true;
-      } catch {
-        if (own) return true;
+      } catch (e) {
+        if (own || !(e instanceof MissingCwdError || errCode(e) === "ENOENT")) return true;
         break;
       }
     }
