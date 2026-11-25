@@ -104,6 +104,19 @@
       "battery": true,
       "hidden": true,
       "wake": false
+    },
+    {
+      "name": "CCv3-State-Backup",
+      "script": ".claude/scripts/scheduled/scheduled-state-backup.ps1",
+      "trigger": "daily 03:10",
+      "catchUp": "daily 07:40",
+      "execLimitMin": 15,
+      "allowedExit": [0],
+      "maxAgeHours": 30,
+      "llm": false,
+      "battery": true,
+      "hidden": true,
+      "wake": false
     }
   ]
 }
