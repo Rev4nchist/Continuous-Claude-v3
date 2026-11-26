@@ -94,7 +94,7 @@ test('AC2: HIGH and CRITICAL are never auto-eligible (HIGH stays with Dave: the 
 });
 
 test('AC3: the kill switch is a literal true or the word low in checkpoint.autoConfirm; missing, false, "true" or 1 turn auto-confirm off', async () => {
-  assert.equal(LIVE.checkpoint.autoConfirm, 'low', 'the live config carries the switch, and it ships low: LOW band only (Dave 2026-11-06; it was false from 2026-11-02)');
+  assert.equal(LIVE.checkpoint.autoConfirm, true, 'the live config carries the switch, and it ships true: LOW, MID and ELEVATED (Dave 2026-11-26; it was low from 2026-11-06 and false from 2026-11-02)');
   assert.equal((await recommendFor(MID, {}, withAuto(true))).auto.eligible, true);
   for (const value of [false, 'true', 1, null, undefined]) {
     const r = await recommendFor(MID, {}, withAuto(value));
@@ -322,8 +322,11 @@ test('AL3: under the live config HIGH and CRITICAL are never auto-eligible', asy
   assert.equal(critical.auto.eligible, false);
 });
 
-test('AL4: a PR that changes the config itself carries config_drift, so the live value never auto-confirms it', async () => {
-  const r = await liveAuto(['review-router.config.json'], { config_drift: true });
-  assert.equal(r.auto.eligible, false);
-  assert.match(r.auto.reason, /differs from main|drift|Branch config/i);
+test('AL4: a PR that changes the config itself is never auto-confirmed under the live value: its band is HIGH, and config_drift stops any other band', async () => {
+  const cfg = await liveAuto(['review-router.config.json']);
+  assert.equal(cfg.band.band, 'HIGH', 'review-router.config.json is a config file (matrix.config_files): HIGH, so Dave presses');
+  assert.equal(cfg.auto.eligible, false);
+  const drift = await liveAuto(MID, { config_drift: true });
+  assert.equal(drift.auto.eligible, false);
+  assert.match(drift.auto.reason, /Branch config differs from main/);
 });
