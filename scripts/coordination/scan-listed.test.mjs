@@ -403,3 +403,52 @@ describe('S26 to S29: folding, repeated references, masking of other digits', ()
     assert.match(label, /^x#+y#+\.md$/);
   });
 });
+
+// Rows from CodeRabbit CLI run 2 (two more findings fixed here, one minor and one major): a finding id can be a plain string; an incomplete dataset
+// must not give a short list; a sha written in fullwidth hex must not slip past the strict count. (The fourth finding, the wrap-all gate, was a revert.)
+describe('S30 to S33: string ids, dataset shape, fullwidth shas', () => {
+  const TOKEN = 'review-thread';
+  const tokenRoot = () => listRoot({ dataset: { prs: [{ pr: Number(HOLD4) }], findings: [{ pr: Number(HOLD4), comment_id: TOKEN }, { pr: Number(HOLD4), comment_id: Number(COMMENT) }] } });
+  const wideAscii = (s) => [...s].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join('');
+
+  it('S30 a listed string id is hidden in every context, also the other copies next to a hit', () => {
+    const root = tokenRoot();
+    const r = scan(root, `${TOKEN} and ${TOKEN} then PR ${HOLD4} and ${TOKEN.toUpperCase()}`);
+    assert.ok(r.hits.length >= 3);
+    for (const h of r.hits) assert.ok(!new RegExp(TOKEN, 'i').test(h.ctx), 'a string id reached a context');
+    const plain = run(['--root', root, put(`${TOKEN} and ${TOKEN}`)]);
+    assert.ok(!new RegExp(TOKEN, 'i').test(plain.out), 'a string id reached the plain output');
+  });
+  it('S31 a listed string id in a file name is hidden in the label, plain and --json', () => {
+    const root = tokenRoot();
+    const f = path.join(folder(), `x-${TOKEN}-y.md`);
+    fs.writeFileSync(f, `${TOKEN}\n`);
+    for (const flags of [[], ['--json']]) {
+      const r = run(['--root', root, ...flags, f]);
+      assert.ok(!new RegExp(TOKEN, 'i').test(r.out), 'a string id reached the file label');
+      assert.equal(r.code, 1);
+    }
+  });
+  it('S32 a dataset of the wrong shape exits 2 with a fixed message: no findings, no prs, a bad pr', () => {
+    for (const dataset of [{ prs: [{ pr: Number(HOLD4) }] }, { findings: [{ pr: Number(HOLD4), comment_id: Number(COMMENT) }] }, { prs: [{ pr: 'x' }], findings: [{ pr: Number(HOLD4), comment_id: Number(COMMENT) }] }]) {
+      const root = listRoot({ dataset });
+      const r = run(['--root', root, put(`PR ${HOLD4}\n`)]);
+      assert.equal(r.code, 2);
+      assert.equal(r.out, '');
+      assert.ok(r.err.length > 0 && !r.err.includes(HOLD4), 'the error is empty or holds an id');
+    }
+  });
+  it('S33 a sha written in fullwidth hex hits the strict count (rule sha) and not the gate count; 6 characters do not', () => {
+    const root = listRoot();
+    for (const part of [SHA, SHA.slice(0, 12), SHA.slice(0, 7), SHA.toUpperCase()]) {
+      const r = scan(root, `head ${wideAscii(part)} end`);
+      assert.equal(r.gate, 0);
+      assert.equal(r.strict, 1, 'a fullwidth sha was missed');
+      assert.deepEqual(rules(r), ['sha']);
+      assert.equal(r.hits[0].col, 6);
+      assert.ok(!/[！-～]/.test(r.hits[0].ctx), 'fullwidth characters reached the context');
+    }
+    const six = scan(root, `head ${wideAscii(SHA.slice(0, 6))} end`);
+    assert.equal(six.strict, 0);
+  });
+});
