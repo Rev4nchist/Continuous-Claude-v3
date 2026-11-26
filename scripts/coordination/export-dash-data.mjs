@@ -28,7 +28,13 @@
  * Scope: project_key = the config board ('continuous-claude'). Another board's lanes and events never appear.
  * The DB clock is UTC. Every day bucket is America/Chicago.
  *
- * What is NOT exported: the raw lane.note, scope, rationale, done_when text, event bodies, session ids or 8-hex handles.
+ * What is NOT exported: the raw lane.note, scope, rationale, done_when text, event bodies, session ids (uuids), or an 8-hex handle outside
+ * the three label keys below.
+ * Session labels (lane-export-per-session): "name #sid8", or "#sid8" with no name, never a uuid. Three keys, each passed through
+ * maskLaneRows (a sid8 that prefix-matches a listed sha comes out as "name #masked-id"): assignments rows of a claim carry `by`; a done lane
+ * carries `closed_by` (the session of its latest done signal; in lanes-all.json only, because lanes.json holds open lanes); a held lane carries
+ * `holder_label` (null when the lease ended). With no readable listed-id list (LANE_EXPORT_ID_ROOT, default the repo root) no label key is
+ * written and one note line is printed. The old keys keep their meaning.
  * A held lane (owner not null) also gets goal, holder and parked (heldFields): goal is only the GOAL sentence that
  * starts its note (goalOf in lane-dash-metrics.mjs), holder is only the session's chosen name from its identity file
  * while the lease is live (holderName), parked says the note is a park note. Every other lane row has none of the three keys.
@@ -63,7 +69,8 @@ import { loadConfig } from './lane-dash-config.mjs';
 import { loadProjectRules, projectOf, UNASSIGNED } from './lane-dash-project.mjs';
 import { buildFlowRows } from './lane-dash-flow.mjs';
 import { buildTileRows, goalOf, isParkedNote } from './lane-dash-metrics.mjs';
-import { NAME_CLIP, readIdentity } from './session-label.mjs';
+import { maskLaneRows, readIdList } from './board-mask.mjs';
+import { NAME_CLIP, readIdentity, short } from './session-label.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..', '..');
@@ -141,9 +148,46 @@ const sessionName = (uuid) => readIdentity(uuid)?.name ?? null;
  */
 export function heldFields(l, exportedAt, nameOf = sessionName) {
   if (!l.owner_session_id) return {};
+  return { goal: goalOf(l.note), holder: leaseLive(l, exportedAt) ? holderName(nameOf(l.owner_session_id)) : null, parked: isParkedNote(l.note) };
+}
+
+/** True when the lane's lease runs past `exportedAt`. A gone session (ended lease) is not named. */
+function leaseLive(l, exportedAt) {
   const lease = l.lease_expires_at ? new Date(l.lease_expires_at).getTime() : NaN;
-  const live = Number.isFinite(lease) && lease > Date.parse(exportedAt);
-  return { goal: goalOf(l.note), holder: live ? holderName(nameOf(l.owner_session_id)) : null, parked: isParkedNote(l.note) };
+  return Number.isFinite(lease) && lease > Date.parse(exportedAt);
+}
+
+/**
+ * A session as "name #sid8", or "#sid8" with no name, or null with no session (lane-export-per-session). The name goes through
+ * holderName (hex runs cut, clipped). Only the first 8 characters of the id are used: a uuid never leaves this function.
+ */
+export function sessionLabel(uuid, nameOf = sessionName) {
+  if (!uuid) return null;
+  const name = holderName(nameOf(uuid));
+  return name ? `${name} #${short(uuid)}` : `#${short(uuid)}`;
+}
+
+/**
+ * Masks the listed ids in the named string keys of `rows`, in place, through maskLaneRows (the one mask of the board pages). Each value
+ * is lent to it as an event body and written back. Returns the count masked. An empty id list masks nothing: the caller drops the
+ * label keys when the list cannot be read.
+ */
+export function maskLabelKeys(rows, keys, ids) {
+  const lent = [];
+  for (const r of rows) for (const k of keys) if (r && typeof r[k] === 'string') lent.push({ row: r, key: k, body: r[k] });
+  const n = maskLaneRows({ events: lent }, ids);
+  for (const x of lent) x.row[x.key] = x.body;
+  return n;
+}
+
+/** The listed ids of the id root, or null when the list cannot be read (the label keys are then left out). LANE_EXPORT_ID_ROOT is for tests. */
+export function loadListedIds(root = process.env.LANE_EXPORT_ID_ROOT || REPO) {
+  try {
+    const ids = readIdList(root);
+    return Array.isArray(ids) && ids.length > 0 ? ids : null;
+  } catch {
+    return null;
+  }
 }
 
 export const DATASETS = ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles', 'flow'];
@@ -482,6 +526,8 @@ const SQL_LANES = `WITH ev AS (
     min(e.occurred_at) FILTER (WHERE e.kind = 'claimed') AS first_claim,
     max(e.occurred_at) FILTER (WHERE e.kind = 'done'
       OR (e.kind = 'kanban' AND e.detail->>'kind' = 'state' AND e.detail->>'to' = 'done')) AS done_ev,
+    (array_agg(e.session_id ORDER BY e.occurred_at DESC, e.id DESC) FILTER (WHERE e.kind = 'done'
+      OR (e.kind = 'kanban' AND e.detail->>'kind' = 'state' AND e.detail->>'to' = 'done')))[1] AS done_session,
     max(e.occurred_at) FILTER (WHERE e.kind IN ('claimed', 'state_changed', 'done')
       OR (e.kind = 'kanban' AND e.detail->>'kind' = 'state' AND e.detail->>'to' = 'done')) AS last_work,
     max(e.occurred_at) FILTER (WHERE (e.kind IN ('note', 'state_changed')
@@ -495,12 +541,12 @@ const SQL_LANES = `WITH ev AS (
 SELECT l.id, left(regexp_replace(l.title, '#[0-9a-f]{8}', '#[handle]', 'g'), 400) AS title, l.track, l.band, l.state, l.priority, l.created_at, l.lease_expires_at,
   l.owner_session_id, CASE WHEN l.owner_session_id IS NOT NULL THEN l.note END AS note,
   (l.owner_session_id IS NOT NULL) AS held, (coalesce(l.done_when, '') <> '') AS has_done_when,
-  ev.first_claim, CASE WHEN l.state = 'done' THEN ev.done_ev END AS done_at, ev.last_work, ev.dave_ask,
+  ev.first_claim, CASE WHEN l.state = 'done' THEN ev.done_ev END AS done_at, CASE WHEN l.state = 'done' THEN ev.done_session END AS closed_session, ev.last_work, ev.dave_ask,
   coalesce(ev.claims, 0) AS claims
 FROM agentic_os.lane l LEFT JOIN ev ON ev.lane_id = l.id
 WHERE l.project_key = $1 ORDER BY l.created_at, l.id`;
 
-const SQL_CLAIMS = `SELECT e.occurred_at, e.lane_id,
+const SQL_CLAIMS = `SELECT e.occurred_at, e.lane_id, e.session_id,
   CASE WHEN e.detail->>'fence' ~ '^[0-9]+$' THEN (e.detail->>'fence')::int END AS fence,
   (lag(e.session_id) OVER w IS NOT NULL AND lag(e.session_id) OVER w <> e.session_id) AS reassigned
 FROM agentic_os.lane_event e JOIN agentic_os.lane l ON l.id = e.lane_id
@@ -552,6 +598,8 @@ export async function collect(client, { rules, config }) {
   const env = (sql, r) => ({ sql, exportedAt, rows: r });
   const terminal = new Set(rules.projects.flatMap((p) => p.terminalLanes));
 
+  // lane-export-per-session: the label keys need the listed-id list to mask them. With no list they are left out and the export goes on.
+  const listed = loadListedIds();
   const lanes = (await rows(SQL_LANES)).map((l) => ({
     id: l.id, title: cutTitle(l.title), project: projectOf({ id: l.id, track: l.track }, rules), track: l.track, band: l.band,
     state: l.state, priority: l.priority,
@@ -561,12 +609,19 @@ export async function collect(client, { rules, config }) {
     lease_expires_at: iso(l.lease_expires_at), held: l.held, has_done_when: l.has_done_when,
     terminal: terminal.has(l.id), claims: Number(l.claims),
     ...heldFields(l, exportedAt),
+    ...(listed && l.owner_session_id ? { holder_label: leaseLive(l, exportedAt) ? sessionLabel(l.owner_session_id) : null } : {}),
+    ...(listed && l.state === 'done' ? { closed_by: sessionLabel(l.closed_session) } : {}),
   }));
 
   const claims = (await rows(SQL_CLAIMS)).map((r) => ({
     at: iso(r.occurred_at), day: chicagoDay(r.occurred_at), lane_id: r.lane_id, who: 'session',
     how: r.fence > 1 ? 'reclaim' : 'claim', reassigned: r.reassigned === true,
+    ...(listed ? { by: sessionLabel(r.session_id) } : {}),
   }));
+  if (listed) {
+    maskLabelKeys(lanes, ['holder_label', 'closed_by'], listed);
+    maskLabelKeys(claims, ['by'], listed);
+  }
   const dave = (await rows(SQL_DAVE)).map((r) => ({
     at: iso(r.occurred_at), day: chicagoDay(r.occurred_at), lane_id: r.lane_id, who: 'dave',
     how: r.column_name === 'now' ? 'placed in Now' : 'placed in Next', reassigned: false,
@@ -588,6 +643,7 @@ export async function collect(client, { rules, config }) {
 
   return {
     directOpen: direct.open,
+    labelsNote: listed ? null : 'export-dash-data: note: the listed-id list could not be read, so no session label (by, closed_by, holder_label) is written',
     bornDone,
     rework,
     reworkSql: showSql(SQL_REWORK, board),
@@ -644,6 +700,7 @@ export async function main(argv = process.argv.slice(2)) {
     await client.end().catch(() => {});
   }
   const result = writeExport(out, collected);
+  if (collected.labelsNote) console.log(collected.labelsNote);
   console.log(`exported at ${result.exportedAt} (UTC) to ${out}`);
   for (const f of result.files) console.log(`  ${f.name.padEnd(18)} ${String(f.bytes).padStart(7)} bytes`);
   for (const w of sizeWarnings(result.files)) console.log(w);

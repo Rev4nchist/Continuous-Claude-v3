@@ -39,7 +39,7 @@ const S2 = 'bbbb2222-0000-4000-8000-000000000002';
 const S3 = 'abcdef12-3456-4890-abcd-ef1234567890';
 const HANDLES = ['aaaa1111', 'bbbb2222', 'abcdef12'];
 
-const state = { url: '', tmp: '', db: null, rules: '', ids: '' };
+const state = { url: '', tmp: '', db: null, rules: '', ids: '', idRoot: '' };
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 /** An ISO time `days` days and `hours` hours before the clock. Flow fixtures use it so they stay inside the grid. */
@@ -72,7 +72,7 @@ function runExport(args, extraEnv = {}) {
   const url = extraEnv.CONTINUOUS_CLAUDE_DB_URL ?? state.url;
   assertScratchUrl(url);
   // CCV3_IDENTITY_DIR: a temp folder, so the export never reads a live session name.
-  const env = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url, CCV3_IDENTITY_DIR: state.ids, ...extraEnv };
+  const env = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: url, DATABASE_URL: url, OPC_POSTGRES_URL: url, CCV3_IDENTITY_DIR: state.ids, LANE_EXPORT_ID_ROOT: state.idRoot, ...extraEnv };
   const r = spawnSync(process.execPath, [EXPORT, ...args], { env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr, all: `${r.stdout}${r.stderr}` };
 }
@@ -106,6 +106,12 @@ before(async () => {
   state.rules = path.join(state.tmp, 'rules.json');
   state.ids = path.join(state.tmp, 'identity');
   fs.mkdirSync(state.ids);
+  // A listed-id root: one listed sha, 'abcdef1', which is a prefix of the sid8 of S3 ('abcdef12'). A label of S3 must come out masked.
+  state.idRoot = path.join(state.tmp, 'idroot');
+  fs.mkdirSync(path.join(state.idRoot, '.claudedocs'), { recursive: true });
+  fs.mkdirSync(path.join(state.idRoot, 'scripts', 'eval', 'review-eval'), { recursive: true });
+  fs.writeFileSync(path.join(state.idRoot, '.claudedocs', '2026-11-01-pr-review-dataset.json'), JSON.stringify({ findings: [{ pr: 4242, round: 'abcdef1' }] }));
+  fs.writeFileSync(path.join(state.idRoot, 'scripts', 'eval', 'review-eval', 'config.json'), '{}');
   fs.writeFileSync(path.join(state.ids, `${S1}.json`), JSON.stringify({ uuid: S1, name: 'Builder one' }));
   fs.writeFileSync(path.join(state.ids, `${S3}.json`), JSON.stringify({ uuid: S3, name: 'Gone session' }));
   fs.writeFileSync(state.rules, JSON.stringify({
@@ -218,7 +224,10 @@ const ALLOWED_LANE_KEYS = [
   'band', 'claims', 'created_at', 'created_day', 'dave_ask_at', 'done_at', 'done_day', 'first_claim_at', 'has_done_when',
   'held', 'id', 'last_work_at', 'lease_expires_at', 'priority', 'project', 'state', 'terminal', 'title', 'track',
 ];
-const HELD_LANE_KEYS = [...ALLOWED_LANE_KEYS, 'goal', 'holder', 'parked'].sort();
+const HELD_LANE_KEYS = [...ALLOWED_LANE_KEYS, 'goal', 'holder', 'holder_label', 'parked'].sort();
+/** The keys that may hold a session handle ("name #sid8"). Nothing else in any document may. */
+const LABEL_KEYS = ['by', 'closed_by', 'holder_label'];
+const laneKeys = (l) => (l.state === 'done' ? [...(l.held ? HELD_LANE_KEYS : ALLOWED_LANE_KEYS), 'closed_by'] : (l.held ? HELD_LANE_KEYS : ALLOWED_LANE_KEYS)).sort();
 
 describe('export-dash-data.mjs against a scratch database', () => {
   let dir;
@@ -263,7 +272,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
   it('lanes rows have exactly the allowlisted keys and only this board (greymatter-design is absent)', () => {
     // Breaks if a column such as note, scope, rationale or done_when text is added, or the board filter is lost.
     const lanes = readDoc(dir, 'lanes-all').rows;
-    for (const l of lanes) assert.deepEqual(Object.keys(l).sort(), l.held ? HELD_LANE_KEYS : ALLOWED_LANE_KEYS, l.id);
+    for (const l of lanes) assert.deepEqual(Object.keys(l).sort(), laneKeys(l), l.id);
     // The written lanes.json is the open subset of the full list (fleetops-lanes-file-size).
     assert.deepEqual(readDoc(dir, 'lanes').rows.map((l) => l.id).sort(), lanes.filter((l) => l.state !== 'done').map((l) => l.id).sort());
     assert.deepEqual(lanes.map((l) => l.id).sort(), ['px-1', 'px-2', 'px-3', 'px-4', 'py-1', 'py-ask-claim', 'py-ask-latest', 'py-before-only', 'py-early-done', 'py-edge', 'py-held', 'py-kanban', 'py-kb-card', 'py-kdone', 'py-negation', 'py-note', 'py-notice', 'py-parked', 'py-quick', 'py-reassign', 'py-slow', 'py-stale', 'py-title', 'pz-1']);
@@ -272,9 +281,11 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('privacy: no note, scope, rationale, done_when text, event body or session handle in any document', () => {
     // Breaks if any text column or an 8-hex session handle is exported.
-    const text = readAll(dir);
+    // lane-export-per-session: a handle may stand only in the three label keys. The text below has those values cut out first.
+    const text = readAll(dir).replace(/"(?:by|closed_by|holder_label)":(?:"(?:[^"\\]|\\.)*"|null)/g, '"label":null');
     for (const secret of ['SECRET', ...HANDLES, S1, S2, S3]) assert.ok(!text.includes(secret), `leaked ${secret}`);
     assert.ok(!/"handle"/.test(text));
+    for (const raw of [S1, S2, S3]) assert.ok(!readAll(dir).includes(raw), `raw session id in a label key: ${raw}`);
     assert.equal(readDoc(dir, 'lanes-all').rows.find((l) => l.id === 'px-1').has_done_when, true);
   });
 
@@ -287,7 +298,8 @@ describe('export-dash-data.mjs against a scratch database', () => {
     assert.deepEqual([parked.goal, parked.holder, parked.parked], ['wait for the seat.', 'Builder one', true]);
     const gone = rows.find((l) => l.id === 'py-ask-claim');
     assert.deepEqual([gone.goal, gone.holder, gone.parked], [null, null, false]);
-    const text = readAll(dir).replace(/"sql":\s*"(?:[^"\\]|\\.)*"/g, '');
+    // lane-export-per-session: a claim label (by, closed_by) names its session on purpose, gone or not. The holder keys stay empty for a gone holder (asserted above).
+    const text = readAll(dir).replace(/"sql":\s*"(?:[^"\\]|\\.)*"/g, '').replace(/"(?:by|closed_by|holder_label)":(?:"(?:[^"\\]|\\.)*"|null)/g, '"label":null');
     for (const bad of ['abc1234', '34/34', 'SECRET-TAIL', 'SECRET-REASON', 'Gone session']) assert.ok(!text.includes(bad), `leaked ${bad}`);
   });
 
@@ -395,6 +407,88 @@ describe('export-dash-data.mjs against a scratch database', () => {
     assert.equal(dave.length, 1);
     assert.equal(dave[0].how, 'placed in Now');
     assert.equal(dave[0].day, '2026-11-06');
+  });
+
+  it('G6 claim rows carry by = "name #sid8"; Dave rows carry none; the old keys keep their values; a listed sid8 is masked with the name kept', () => {
+    // Breaks if a claim loses its session label, a uuid or a bare handle leaks, a Dave row gets a label, or the S3 label bypasses the mask.
+    const rows = readDoc(dir, 'assignments').rows;
+    for (const r of rows) assert.deepEqual(Object.keys(r).sort(), r.who === 'session' ? ['at', 'by', 'day', 'how', 'lane_id', 'reassigned', 'who'] : ['at', 'day', 'how', 'lane_id', 'reassigned', 'who'], JSON.stringify(r));
+    const by = (id) => rows.filter((r) => r.who === 'session' && r.lane_id === id).map((r) => r.by);
+    assert.deepEqual(by('py-reassign'), ['Builder one #aaaa1111', '#bbbb2222', '#bbbb2222']);
+    assert.deepEqual(by('px-1'), ['Builder one #aaaa1111']);
+    const gone = by('py-ask-claim');
+    assert.equal(gone.length, 1);
+    assert.ok(gone[0].startsWith('Gone session '), gone[0]);
+    assert.ok(gone[0].includes('masked-id') && !gone[0].includes('abcdef12'), gone[0]);
+  });
+
+  it('G7 closed_by is on done lanes only, from the latest done signal (kind done or a kanban move to done), and only in lanes-all', () => {
+    // Breaks if closed_by reaches the capped lanes.json, a reopened lane keeps one, or a kanban done is not read.
+    const all = readDoc(dir, 'lanes-all').rows;
+    const get = (id) => all.find((l) => l.id === id);
+    assert.equal(get('px-1').closed_by, 'Builder one #aaaa1111');
+    assert.equal(get('py-kdone').closed_by, 'Builder one #aaaa1111');
+    assert.equal(get('py-edge').closed_by, 'Builder one #aaaa1111');
+    assert.ok(!('closed_by' in get('px-2')), 'px-2 was reopened: no closed_by');
+    for (const l of all.filter((x) => x.state !== 'done')) assert.ok(!('closed_by' in l), l.id);
+    for (const l of readDoc(dir, 'lanes').rows) assert.ok(!('closed_by' in l), `lanes.json carries closed_by on ${l.id}`);
+  });
+
+  it('G8 holder_label is on held lanes: the live lease gives "name #sid8", an ended lease gives null', () => {
+    // Breaks if a gone session is named again, or holder (name only, no handle) is changed.
+    const all = readDoc(dir, 'lanes-all').rows;
+    const get = (id) => all.find((l) => l.id === id);
+    assert.equal(get('py-held').holder_label, 'Builder one #aaaa1111');
+    assert.equal(get('py-held').holder, 'Builder one');
+    assert.equal(get('py-parked').holder_label, 'Builder one #aaaa1111');
+    assert.equal(get('py-ask-claim').holder_label, null);
+    assert.equal(get('py-ask-claim').holder, null);
+    assert.ok(!('holder_label' in get('py-1')), 'a lane with no owner has no holder_label');
+    assert.deepEqual(readDoc(dir, 'lanes').rows.find((l) => l.id === 'py-held').holder_label, 'Builder one #aaaa1111');
+  });
+
+  it('G9 no label text holds a uuid or a listed id, and a handle stands in no other key of any document', () => {
+    // Breaks if a new label bypasses the mask or a handle moves into another key (title, goal, a tile sentence).
+    for (const d of ['lanes', 'lanes-all', 'assignments', 'tiles', 'flow', 'meta', 'projects', 'targets', 'snapshots']) {
+      const walk = (v, key) => {
+        if (typeof v === 'string') {
+          if (LABEL_KEYS.includes(key)) { assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-/i.test(v), `uuid in ${d}.${key}`); assert.ok(!v.includes('abcdef12'), `listed sid8 in ${d}.${key}`); }
+          else assert.ok(!/(?:aaaa1111|bbbb2222|abcdef12)/.test(v), `handle in ${d}.${key}: ${v.slice(0, 60)}`);
+        } else if (Array.isArray(v)) v.forEach((x) => walk(x, key));
+        else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, k);
+      };
+      walk(readDoc(dir, d).rows, '');
+    }
+  });
+
+  it('G10 the new keys fit the cap: every capped document stays under 256 KB and assignments.json grows by the by keys only', () => {
+    // Breaks if a label list or a second copy of the rows is written, which would push a capped file toward the cap.
+    for (const d of ['lanes', 'assignments', 'projects', 'targets', 'meta', 'snapshots', 'tiles', 'flow']) {
+      assert.ok(fs.statSync(path.join(dir, `${d}.json`)).size < 256 * 1024, d);
+    }
+    const rows = readDoc(dir, 'assignments').rows;
+    const claims = rows.filter((r) => r.who === 'session');
+    const bytes = fs.statSync(path.join(dir, 'assignments.json')).size;
+    const withoutBy = Buffer.byteLength(JSON.stringify({ ...readDoc(dir, 'assignments'), rows: rows.map(({ by, ...r }) => r) }));
+    assert.ok(bytes - withoutBy <= claims.length * 48, `by keys add ${bytes - withoutBy} bytes for ${claims.length} claims`);
+  });
+
+  it('G11 with no listed-id list the export still succeeds, writes no label key anywhere, and prints one note line', () => {
+    // Breaks if a missing list fails the nightly export, or labels are written unmasked when the mask cannot run.
+    const d2 = outDir('run-nolist');
+    const empty = path.join(state.tmp, 'emptyroot');
+    fs.mkdirSync(empty, { recursive: true });
+    const r = runExport(['--out', d2, '--rules', state.rules], { LANE_EXPORT_ID_ROOT: empty });
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /listed-id list/);
+    const text = readAll(d2);
+    for (const k of LABEL_KEYS) assert.ok(!text.includes(`"${k}"`), `${k} written with no list`);
+    const a1 = readDoc(dir, 'assignments').rows.map(({ by, ...x }) => x);
+    const a2 = readDoc(d2, 'assignments').rows;
+    assert.deepEqual(a2, a1, 'the old keys and rows are the same with and without labels');
+    const strip = ({ closed_by, holder_label, ...x }) => x;
+    assert.deepEqual(readDoc(d2, 'lanes-all').rows.map((l) => l.id), readDoc(dir, 'lanes-all').rows.map((l) => l.id));
+    assert.deepEqual(readDoc(d2, 'lanes-all').rows.map((l) => JSON.stringify(strip(l))), readDoc(dir, 'lanes-all').rows.map((l) => JSON.stringify(strip(l))));
   });
 
   it('projects: Done means every terminal lane is done, and a finished project stays in the rows (defect b)', () => {
