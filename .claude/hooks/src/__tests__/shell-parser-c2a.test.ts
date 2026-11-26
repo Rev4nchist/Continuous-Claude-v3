@@ -134,7 +134,8 @@ describe('M: merge reads the hand reader refused stay denied on the parser path 
     landTap(5);
     const ok = `${M} 5 --squash --match-head-commit ${HEAD}`;
     for (const c of [`gh pr "merge" 5 --squash --match-head-commit ${HEAD}`, `${M} 5 --squash --match-head-commit ${HEAD}`, `${M} 5 --squash\f--match-head-commit ${HEAD}`, `bash -c '${ok}'`, `${ok} {x}`,
-      `env GH_PROMPT_DISABLED=1 ${ok}`, `time ${ok}`, `gh pr\nmerge 5 --squash --match-head-commit ${HEAD}`, `${ok}\r`, `cd /tmp/other-repo; gh pr\nmerge 5 --squash --match-head-commit ${HEAD}`]) {
+      `time ${ok}`, // C2c: `env NAME=value ${ok}` is read through and judged like the bare call (allowed with the tap, rows W and C05 of shell-parser-c2c-holes)
+      `gh pr\nmerge 5 --squash --match-head-commit ${HEAD}`, `${ok}\r`, `cd /tmp/other-repo; gh pr\nmerge 5 --squash --match-head-commit ${HEAD}`]) {
       await asStrict(c);
     }
   });

@@ -154,6 +154,13 @@ describe('G1 PR create', () => {
   });
 });
 
+/**
+ * C2c (closed world): a text that names a create or a merge may run listed programs only. These cd-position rows put a program that is not on the lists (npm, Invoke-Command,
+ * Start-Job, a call operator block, alias, an escaped command word such as \cd) before the shape, so a create or a merge there is denied (not-inert). A named cost of the closed world,
+ * counted in the corpus of the PR. A push shape has its own reader and is not affected.
+ */
+const closedWorldCost = (cmd: string, shape: string): boolean => /gh pr (?:create|merge)/.test(shape) && /(?:^|[\s;&|(])(?:npm|Invoke-Command|Start-Job|alias|Set-Alias)\b|&\s*\{|(?:^|[\s;&|(])(?:\\cd|c\\d)\b/.test(cmd);
+
 describe('G2 land and merge', () => {
   const LAND = 'pwsh -File scripts/github/land-pr.ps1 -Pr 12';
   it('denies land-pr.ps1 with no land decision, and names the question', async () => {
@@ -2090,7 +2097,7 @@ describe('T19 cd spellings: the same reading as pre-pr-gate', () => {
     });
     it('does not read the & of an fd redirect as a joiner', async () => {
       for (const cmd of [`cd ${O} 2>&1 && ${shape}`, `cd ${O} && npm test 2>&1 && ${shape}`, `cd ${O} &>/dev/null && ${shape}`, `cd ${O} && npm test >&2 && ${shape}`]) {
-        expect(await denied(bash(cmd), W), cmd).toBe(false);
+        expect(await denied(bash(cmd), W), cmd).toBe(closedWorldCost(cmd, shape));
       }
     });
     it.each([
@@ -2189,8 +2196,8 @@ describe('T20 cd positions, scriptblocks and targets', () => {
     it.each([
       ['& {', '& { Set-Location %O } && %S'],
       ['Invoke-Command {', 'Invoke-Command { Set-Location %O } && %S'],
-    ])('does not judge the cwd after %s } moved the location', async (_name, tpl) => {
-      expect(await denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(false);
+    ])('does not judge the cwd after %s } moved the location (a create or a merge: a closed-world cost)', async (_name, tpl) => {
+      expect(await denied(pwsh(fill(tpl, shape)), W), fill(tpl, shape)).toBe(closedWorldCost(fill(tpl, shape), shape));
     });
     // Invoke-Command names its target AFTER the block: the cd runs on another computer, in a session or as a job, and the local shell stays in the cwd.
     it.each([
@@ -2250,9 +2257,9 @@ describe('T20 cd positions, scriptblocks and targets', () => {
       ['a backslash', '\\cd %O && %S'],
       ['command builtin', 'command builtin cd %O && %S'],
       ['eval', 'eval cd %O && %S'],
-    ])('sees the cd after %s, so a cd to a non-CCv3 folder passes', async (_name, tpl) => {
+    ])('sees the cd after %s, so a cd to a non-CCv3 folder passes (an escaped cd word with a create or a merge: a closed-world cost)', async (_name, tpl) => {
       const cmd = fill(tpl, shape);
-      expect(await denied(bash(cmd), W), cmd).toBe(false);
+      expect(await denied(bash(cmd), W), cmd).toBe(closedWorldCost(cmd, shape));
     });
     // A target that is partly quoted or has an escaped space is one folder.
     it.each([
@@ -2338,7 +2345,7 @@ describe('T21 cd residuals: subshell separators, closed braces in jobs, abbrevia
     });
     it('2: pinned, a job block that closed before the cd does not make it loose', async () => {
       const cmd = fill('Start-Job { $null }; Set-Location %O && %S', shape);
-      expect(await denied(pwsh(cmd), W), cmd).toBe(false);
+      expect(await denied(pwsh(cmd), W), cmd).toBe(closedWorldCost(cmd, shape));
     });
 
     // 3. -Pa and -Para are abbreviations of -Parallel (and -As, -AsJo of -AsJob).
@@ -2369,7 +2376,7 @@ describe('T21 cd residuals: subshell separators, closed braces in jobs, abbrevia
     });
     it('4: pinned, a local scriptblock stays a sure cd', async () => {
       const cmd = fill('Invoke-Command -ScriptBlock { Set-Location %O } && %S', shape);
-      expect(await denied(pwsh(cmd), W), cmd).toBe(false);
+      expect(await denied(pwsh(cmd), W), cmd).toBe(closedWorldCost(cmd, shape));
     });
 
     // 5. A PowerShell target that ends in a backslash must not swallow the next separator (`\&`, `\;` were read as an escape).
@@ -2547,8 +2554,10 @@ describe('T22 reviewer shapes: unexpanded targets that cancel, GIT_DIR, cd alias
       expect(await patternOf(pwsh(cmd, { cwd: O }), W), cmd).toBe(MOVED);
     });
     it('3: pinned, an alias for something else is no cd alias', async () => {
-      expect(await patternOf(bash(fill("alias ll='ls -l'; %S", shape), { cwd: O }), W)).toBe('allow');
-      expect(await patternOf(pwsh(fill('Set-Alias ll Get-ChildItem; %S', shape), { cwd: O }), W)).toBe('allow');
+      const a1 = fill("alias ll='ls -l'; %S", shape);
+      const a2 = fill('Set-Alias ll Get-ChildItem; %S', shape);
+      expect(await patternOf(bash(a1, { cwd: O }), W)).toBe(closedWorldCost(a1, shape) ? 'not-inert' : 'allow');
+      expect(await patternOf(pwsh(a2, { cwd: O }), W)).toBe(closedWorldCost(a2, shape) ? 'not-inert' : 'allow');
     });
 
     // 4. A cd name spelled with a backslash or an empty quote pair between the letters: bash still runs cd.
@@ -2564,7 +2573,8 @@ describe('T22 reviewer shapes: unexpanded targets that cancel, GIT_DIR, cd alias
       expect(await denied(bash(cmd, { cwd: O }), W), cmd).toBe(true);
     });
     it('4: pinned, the spelled cd is READ: a sure cd to O is judged in O only, even from the /repo cwd', async () => {
-      expect(await denied(bash(fill('c\\d %O && %S', shape), { cwd: '/repo' }), W)).toBe(false);
+      const s1 = fill('c\\d %O && %S', shape);
+      expect(await denied(bash(s1, { cwd: '/repo' }), W)).toBe(closedWorldCost(s1, shape));
       expect(await denied(bash(fill("c''d %O && %S", shape), { cwd: '/repo' }), W)).toBe(false);
     });
     it('4: a spelled bare cd is a position-unknown cd', async () => {

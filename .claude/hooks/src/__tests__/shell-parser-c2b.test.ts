@@ -101,7 +101,7 @@ describe('A: CLI run 2 of C2b, a wrapped merge that the parse does not list keep
     landTap(12);
     expect(await run(OWN)).toBe('allow');
   });
-  it.each(['env gh pr merge 12 --squash', 'env FOO=1 gh pr merge 12 --squash', 'timeout 5 gh pr merge 12 --squash', `env gh pr merge 12 --squash --match-head-commit ${HEAD}`])(
+  it.each(['env gh pr merge 12 --squash', 'env FOO=1 gh pr merge 12 --squash', 'timeout 5 gh pr merge 12 --squash'])(
     'A2 the tapped merge, then %s: denied (the wrapped one has no head of its own)', async (wrapped) => {
       landTap(12);
       expect(await run(`${OWN} ; ${wrapped}`), wrapped).not.toBe('allow');
@@ -134,7 +134,8 @@ describe('R: the not-inert reason names the real lists (seat 11-26)', () => {
     const d = decide(inp, { ...(await withParsed(JSON.stringify(inp), deps())), ...SEAM } as Deps);
     expect(d.action).toBe('deny');
     const why = d.action === 'deny' ? d.reason : '';
-    for (const name of ['echo', 'set-content', 'cat', 'head', 'get-content', 'sls', 'gh', 'git', 'claude', 'curl', 'ntn', 'timeout', 'env', 'bash', 'pwsh', 'iex']) expect(why, name).toContain(name);
+    expect(why).toContain('Fix: run the guarded call as its own command');
+    for (const name of ['echo', 'set-content', 'cat', 'head', 'get-content', 'sls', 'get-ciminstance', 'gh', 'git', 'claude', 'curl', 'ntn', 'pr', 'api', 'env', 'timeout', 'sudo']) expect(why, name).toContain(name);
   });
 });
 

@@ -103,6 +103,12 @@ describe('H: a command that main denies is denied (aegis and critic forms, 10 cl
     ['H17 a parsed -c payload plus a heredoc script run by nohup', 'Bash', `bash -c 'rg "gh api ${R}/pulls" f'; cat > x.sh <<'EOF'\n${CREATE_API}\nEOF\nnohup bash x.sh`, none],
     ['H19 a push shape beside a hidden create piped to sh', 'Bash', `git push fork feat/x; echo '${CREATE_API}' | sh`, none],
     ['H20 count offset: an env merge of PR 99, then a tapped spliced merge of PR 12', 'Bash', `env gh pr merge 99 --squash ; gh pr "merge" 12 --squash --match-head-commit ${HEAD}`, land(12)],
+    ['H24 a backslash splice of the gh program (bash leaves the word with no literal)', 'Bash', 'g\\h pr merge 7', none],
+    ['H25 a backslash splice inside the merge verb', 'Bash', 'gh pr mer\\ge 7', none],
+    ['H26 a backslash before the merge verb', 'Bash', 'gh pr \\merge 7', none],
+    ['H27 env with a backslash splice of gh', 'Bash', 'env g\\h pr merge 7', none],
+    ['H28 pwsh -File with a backslash in the land script name', 'Bash', `pwsh -File scripts/github/land\\-pr.ps1 -Pr 7`, none],
+    ['H29 a tapped merge, then a backslash splice merge of another PR', 'Bash', `gh pr merge 7 --squash --match-head-commit ${HEAD} ; g\\h pr merge 9 --squash`, land(7)],
     ['H21 a written script run by a script runner (PowerShell)', 'PowerShell', `Set-Content x.js '${CREATE_API}'; node x.js`, none],
     ['H22 a heredoc script run by a script runner (Bash)', 'Bash', `cat > x.js <<'EOF'\n${CREATE_API}\nEOF\nnode x.js`, none],
     ['H23 inline code of a script runner', 'Bash', `node -e "require('child_process').execSync('${CREATE_API}')"`, none],
@@ -156,12 +162,13 @@ describe('B: pwsh -File is not parsed as PowerShell any more (a relaxation): eac
   it.each(keep)('%s: denied, as on main', async (_n, tool, text) => {
     expect(denied(await verdict(text, tool)), `${tool}: ${text}`).toBe(true);
   });
-  // Named cost: main allows a pwsh -File whose only guarded words sit in the PATH (no PR number). The closed world denies any pwsh beside a guarded word: an allow-to-deny, counted in the corpus.
+  // Named cost: main allows a pwsh -File whose only guarded words sit in the PATH (no PR number). The closed world does not allow any pwsh beside a guarded word: an allow-to-deny (a warn when only a push is named,
+  // while decisions.enforcePush is unset), counted in the corpus.
   it.each([
     ['a path that holds a push', 'Bash', "pwsh -File './git push notes.ps1'"],
     ['a path that holds an api create', 'PowerShell', `pwsh -File 'C:/tmp/gh api ${R}/pulls.ps1'`],
-  ] as [string, Tool, string][])('%s: denied (a named cost; main allows)', async (_n, tool, text) => {
-    expect(denied(await verdict(text, tool)), `${tool}: ${text}`).toBe(true);
+  ] as [string, Tool, string][])('%s: not allowed (a named cost; main allows)', async (_n, tool, text) => {
+    expect(await verdict(text, tool), `${tool}: ${text}`).not.toBe('allow');
   });
   it('a standalone land call with -CleanupOnly keeps the allow of main', async () => {
     expect(await verdict(`pwsh -File ${LAND} -Pr 12 -CleanupOnly`)).toBe('allow');
@@ -182,7 +189,7 @@ describe('T: a real walker timeout still denies (fail closed)', () => {
 
 describe('W: the wrapper table fails closed (a correct arity is judged like the bare call, a wrong one is denied)', () => {
   const MERGE = `gh pr merge 7 --squash --match-head-commit ${HEAD}`;
-  // [wrapper, a correct form, a wrong arity form]. With a tap for PR 7 the correct form is allowed. The wrong form hands the wrapper's option value to the program word, so it must be denied.
+  // `time` is a reserved word of bash (a TimeClause in the parse), not a call, so it is not in the table. [wrapper, a correct form, a wrong arity form]. With a tap for PR 7 the correct form is allowed. The wrong form hands the wrapper's option value to the program word, so it must be denied.
   const table: [string, string, string][] = [
     ['env', `env -u FOO ${MERGE}`, `env -u ${MERGE}`],
     ['timeout', `timeout -k 5 60 ${MERGE}`, `timeout -k ${MERGE}`],
@@ -190,7 +197,6 @@ describe('W: the wrapper table fails closed (a correct arity is judged like the 
     ['sudo', `sudo -u root ${MERGE}`, `sudo -u ${MERGE}`],
     ['stdbuf', `stdbuf -o L ${MERGE}`, `stdbuf -o ${MERGE}`],
     ['exec', `exec -a name ${MERGE}`, `exec -a ${MERGE}`],
-    ['time', `time -f x ${MERGE}`, `time -f ${MERGE}`],
     ['nohup', `nohup ${MERGE}`, `nohup FOO=1 ${MERGE}`],
     ['command', `command ${MERGE}`, `command FOO=1 ${MERGE}`],
     ['builtin', `builtin ${MERGE}`, `builtin FOO=1 ${MERGE}`],

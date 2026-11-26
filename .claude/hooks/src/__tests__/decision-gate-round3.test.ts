@@ -353,7 +353,7 @@ describe('C2 seat findings: a character the merge reader does not model makes th
     // operator), so the second head is a later statement and gh gets one head: allow. Bash and the other cells keep merge-no-head.
     for (const [tool, name] of [[bash, 'bash'], [pwsh, 'pwsh']] as const) {
       expect(await patternIn(tool(`${MERGE} 5 --squash --match-head-commit ${HEAD} 2>&1 --match-head-commit ${OTHER}`)), `${name} 2>&1`).toBe('merge-no-head');
-      expect(await patternIn(tool(`${MERGE} 5 --squash --match-head-commit ${HEAD} &>log --match-head-commit ${OTHER}`)), `${name} &>log`).toBe(name === 'pwsh' ? 'allow' : 'merge-no-head');
+      expect(await patternIn(tool(`${MERGE} 5 --squash --match-head-commit ${HEAD} &>log --match-head-commit ${OTHER}`)), `${name} &>log`).toBe(name === 'pwsh' ? 'not-inert' : 'merge-no-head'); // C2c: in PowerShell `&>log` is a call operator and a redirect word; the call has no literal program, so it is off the lists
       expect(await patternIn(tool(`gh api repos/${REPO}/pulls/5/merge -X PUT -f sha=${HEAD} 2>&1 -f sha=${OTHER}`)), `${name} api`).toBe('merge-no-head');
     }
   });

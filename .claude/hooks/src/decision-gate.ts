@@ -1105,10 +1105,13 @@ interface AstLandCall { text: string; pr: string | null; sha: string | null; cwd
  */
 function astLandCalls(parsed: Deps['parsed'], raw: string, exempt: boolean, gate: string): AstLandCall[] {
   // gate: the text with inert quoted strings blanked (a commit message or an echo that only names the script is a mention, as in the hand reader).
-  if (!parsed || exempt || !LAND_SCRIPT_RE.test(raw) || !LAND_SCRIPT_RE.test(gate)) return [];
+  const unq = (t: string): string => t.replace(/['"`]/g, '');
+  if (!parsed || exempt || !LAND_SCRIPT_RE.test(unq(raw)) || !LAND_SCRIPT_RE.test(unq(gate))) return [];
   const out: AstLandCall[] = [];
   for (const c of Object.values(parsed.byDialect).flatMap((r) => (r ? r.calls : []))) {
-    const text = [...c.words.map((w) => w.raw), ...(c.stdin?.lit ? [c.stdin.lit] : [])].join(' ');
+    const text0 = [...c.words.map((w) => w.raw), ...(c.stdin?.lit ? [c.stdin.lit] : [])].join(' ');
+    const dtext = [...c.words.map((w) => w.lit ?? w.raw), ...(c.stdin?.lit ? [c.stdin.lit] : [])].join(' ');
+    const text = LAND_SCRIPT_RE.test(text0) ? text0 : dtext;
     if (!LAND_SCRIPT_RE.test(text) || CLEANUP_RE.test(text)) continue;
     out.push({ text, pr: lastArg(text, LAND_PR_RE), sha: SHA_RE.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
   }
@@ -1235,7 +1238,7 @@ export const SCRIPT_RUNNERS = new Set(['node', 'nodejs', 'python', 'python3', 'p
  * line (any character but a newline). (3) matches a separator inside a quoted option value (git -c 'a;b' push), which (2) cannot. (2) keeps its \s, so `git` on
  * one line and `push` at the start of the next still match: an accepted over-deny (fail closed).
  */
-const GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgit\s+(?:[^;&|\n]*\s)?push\b|\bgit\b[^\n]*\bpush\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+const GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgit\s+(?:[^;&|\n]*\s)?push\b|\bgit\b[^\n]*\bpush\b|\bgh(?:\.exe)?\s+pr\s+(?:create|new|merge)\b|\bgh(?:\.exe)?\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 const SCRIPT_RUNNER_WHY = 'this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.';
 
 const SCRIPT_RUNNER_WORD = new RegExp(`\\b(?:${[...SCRIPT_RUNNERS].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i');
@@ -1301,18 +1304,23 @@ export function parseErrorDenies(parsed: Deps['parsed']): Deny[] {
 // ---------- PR C2b (F1-3): no parse and a text that names a guarded call ----------
 
 /** One standalone land call and nothing else: an optional pwsh -File leader, the script path, and only -Pr N and -CleanupOnly after it. No chain, pipe, substitution or quote. */
-const STANDALONE_CLEANUP = /^\s*(?:&\s*)?(?:(?:pwsh|powershell)(?:\.exe)?\s+(?:-NoProfile\s+)?(?:-File\s+)?)?[^\s;&|<>$`'"()]*land-pr\.ps1(?:\s+(?:-Pr\s+\d+|-CleanupOnly))+\s*$/i;
+const STANDALONE_CLEANUP = /^[ \t]*(?:&[ \t]*)?(?:(?:pwsh|powershell)(?:\.exe)?[ \t]+(?:-NoProfile[ \t]+)?(?:-File[ \t]+)?)?[^\s;&|<>$`'"()]*land-pr\.ps1(?:[ \t]+(?:-Pr[ \t]+\d+|-CleanupOnly))+[ \t]*$/i;
 const PARSER_UNAVAILABLE_WHY = 'the parser was late, run it again. The shell parser did not answer in time (or could not run), and this text names a guarded call (a push, a create, a merge or the land script), so this gate cannot read which call runs. Run the same call again, or run the push, create or merge as its own command.';
 /**
  * F1-3: the hand reader is gone, so a text with no parse (late, thrown or never parsed) that names a guarded call is denied. Fail closed (V7.6). A text with no
  * guarded word is not touched: withParsed skips the parse for it, and no rule needs one.
  */
+/**
+ * The only raw-text allow of the guard: ONE land call with -Pr N and -CleanupOnly and nothing else (STANDALONE_CLEANUP is anchored and allows blanks and tabs, never a newline). A
+ * post-merge cleanup is the recovery that the land deny names, and it never merges.
+ */
+export const isStandaloneCleanup = (text: string): boolean => STANDALONE_CLEANUP.test(text) && /-Pr[ \t]+\d+/i.test(text) && CLEANUP_RE.test(text);
 export function parserUnavailableDenies(parsed: Deps['parsed'], text: string, covered = false): Deny[] {
   if (parsed) return [];
-  if (STANDALONE_CLEANUP.test(text) && /-Pr\s+\d+/i.test(text) && CLEANUP_RE.test(text)) return []; // a post-merge cleanup is the recovery the land deny names
+  if (isStandaloneCleanup(text)) return [];
   // Two views of the text (seat ruling 11-26): the quote-blanked one (a quoted payload reads as words) and the quote-removed one (a splice such as g""h pr merge
   // reads as gh pr merge, as the shell does). A guarded call in either view is denied. Fail closed, no parse to tell which.
-  const views = [blankQuotes(text), text.replace(/['"`]/g, '')];
+  const views = [blankQuotes(text), text.replace(/['"`]/g, ''), text.replace(/['"`\\]/g, '')];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   // The rank is the one the call has with a parse: a create, land or merge denies (scope other), a push keeps the push flag (CodeRabbit run 1, same rule as not-inert).
   const scope: Scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? 'other' : 'push';
@@ -1321,10 +1329,10 @@ export function parserUnavailableDenies(parsed: Deps['parsed'], text: string, co
   return [covered ? { ...d, homeFlags: true } : d];
 }
 
-// ---------- PR C2b (Policy P, Dave's decision 11-26): a guarded text the parse does not resolve is allowed only when it is inert ----------
+// ---------- PR C2c (closed world, Dave's decision 11-26 "D5 closed world"): a text that names a guarded call may run listed programs only ----------
 
 /** The deny-class part of GUARDED_TEXT: a create, a land or a merge (the push alternatives left out). */
-const DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+const DENY_CLASS_TEXT = /\bgh(?:\.exe)?\s+pr\s+(?:create|new|merge)\b|\bgh(?:\.exe)?\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 /**
  * The data list (seat word 11-26): the programs that only print, search or write text. One named constant, lower case program names as progName gives them.
  * Two forms are on the list by their arguments, see onDataList: git commit with -m or -F, and node lane.mjs say or note.
@@ -1336,8 +1344,10 @@ type ParsedCall = ParseResult['calls'][number];
 type ParsedWord = ParsedCall['words'][number];
 /** The literal of a word, or null when it has none or a variable gave it (viaVar): a name the gate cannot read. Parse-tree fields only. */
 const litOf = (w: ParsedWord | undefined): string | null => (w !== undefined && w.lit !== null && w.viaVar === undefined ? w.lit : null);
+/** The program of a call, only when its first word is a bare name. A path or a script file name (./echo.ps1, x.sh) is no program of any list: name spoofing. */
+const bareProg = (c: ParsedCall): string | null => { const l = litOf(c.words[0]); return l === null || /[\\/]/.test(l) || /\.(?:ps1|sh|bash|cmd|bat|py|js|mjs|cjs)$/i.test(l) ? null : progName(l); };
 function onDataList(c: ParsedCall): boolean {
-  const p = progName(litOf(c.words[0]));
+  const p = bareProg(c);
   if (p === null) return false; // no program name: a substitution, a variable, a call operator on one
   if (INERT_PROGRAMS.has(p)) return true;
   const args = c.words.slice(1);
@@ -1346,38 +1356,51 @@ function onDataList(c: ParsedCall): boolean {
   return false;
 }
 /** Programs whose quoted arguments are data (seat 11-26, Dave's tap): gh, git, and the prompt or payload carriers claude -p, curl -d and ntn. The call itself is still judged by the parsed rules. */
-const DATA_ARG_PROGRAMS: ReadonlySet<string> = new Set(['gh', 'git', 'claude', 'curl', 'ntn', 'timeout', 'env']);
-/** Programs that only read or search: text in their words goes nowhere, unlike echo or Set-Content, which carry it out. A mention they hold is accounted. */
-const READ_ONLY_PROGRAMS: ReadonlySet<string> = new Set(['grep', 'rg', 'select-string', 'sls', 'cat', 'head', 'tail', 'ls', 'get-content', 'gc', 'cd', 'set-location', 'sl', 'get-date']);
-/** Programs that run text they are given (a stdin, a file, a variable): beside a guarded mention they are never inert. A shell with a parsed -c payload is transparent instead. Interpreters with inline code (node -e) are not here: a mention-free program text is the script-runner rule's, and a mention in it is a held mention that no accounted call holds. */
-const RUNS_TEXT_PROGRAMS: ReadonlySet<string> = new Set(['bash', 'sh', 'dash', 'zsh', 'pwsh', 'powershell', 'cmd', 'iex', 'invoke-expression', 'eval', 'source', '.', 'xargs', 'invoke-command', 'icm', 'start-process', 'saps']);
+const DATA_ARG_PROGRAMS: ReadonlySet<string> = new Set(['gh', 'git', 'claude', 'curl', 'ntn']);
+/** Programs that only read, search, filter or inspect: no text in their words runs. The list grows by evidence from the 7-day corpus, never by a run shape. */
+const READ_ONLY_PROGRAMS: ReadonlySet<string> = new Set(['grep', 'rg', 'select-string', 'sls', 'cat', 'head', 'tail', 'ls', 'get-content', 'gc', 'cd', 'set-location', 'sl', 'get-date', 'sort', 'uniq', 'wc', 'cut', 'tr', 'jq', 'select-object', 'sort-object', 'measure-object', 'format-table', 'out-string', 'convertto-json', 'convertfrom-json', 'get-childitem', 'gci', 'dir', 'test-path', 'join-path', 'split-path', 'resolve-path', 'get-item', 'get-location', 'pwd', 'date', 'basename', 'dirname', 'true', 'false', 'where-object', 'get-ciminstance', 'get-process', 'foreach-object', 'out-null', 'start-sleep', 'new-item', 'copy-item', 'get-random', 'format-list', 'select-xml', 'get-service', 'get-wmiobject', 'chdir', 'pushd', 'popd', 'push-location', 'pop-location']);
+/** The gh subcommands that do not store or run a command. gh alias set --shell and gh extension exec are not on it, so they are off the list. */
+const GH_SUBS: ReadonlySet<string> = new Set(['pr', 'api', 'issue', 'repo', 'run', 'workflow', 'release', 'search', 'status', 'auth', 'label', 'browse', 'cache', 'gist', 'project', 'ruleset', 'variable', 'secret', 'org', 'attestation', 'codespace', 'ssh-key', 'gpg-key', 'agent-task']);
 /**
- * The deny reason of not-inert. Built from the sets that decide, so the text cannot drift from them: INERT_PROGRAMS (the data list), READ_ONLY_PROGRAMS and DATA_ARG_PROGRAMS
- * (the accounted callers) and RUNS_TEXT_PROGRAMS (what makes a text strict).
+ * The deny reason of not-inert. One line of fix, then the lists. Built from the sets that decide, so the text cannot drift from them: INERT_PROGRAMS, READ_ONLY_PROGRAMS,
+ * DATA_ARG_PROGRAMS, GH_SUBS and the wrapper table WRAPPER_ARITY.
  */
 const listOf = (set: ReadonlySet<string>): string => [...set].join(', ');
 const notInertWhy = (): string =>
-  'this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain data handling. It is allowed only when every call is a data program (' +
-  listOf(INERT_PROGRAMS) + '; git commit with -m or -F; node lane.mjs say or note), or when every guarded word sits in the arguments of an accounted program (' +
-  listOf(DATA_ARG_PROGRAMS) + ', or a read-only program: ' + listOf(READ_ONLY_PROGRAMS) + ') and nothing in the command runs text (' + listOf(RUNS_TEXT_PROGRAMS) +
-  '). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.';
+  'this text names a guarded call (a push, a create, a merge or the land script) and also runs a program that is not on the lists of this gate. Fix: run the guarded call as its own command. ' +
+  'Allowed beside a guarded word: data programs (' + listOf(INERT_PROGRAMS) + '; git commit with -m or -F; node lane.mjs say or note), read-only programs (' + listOf(READ_ONLY_PROGRAMS) + '), ' +
+  'gh with a subcommand of (' + listOf(GH_SUBS) + '), and ' + listOf(DATA_ARG_PROGRAMS) + '. A wrapper (' + Object.keys(WRAPPER_ARITY).join(', ') + ') is read through: the program it runs must be on the lists. ' +
+  'A shell, a script file, a path, a script runner such as node, and a program word that is not a plain name are not allowed.';
 const LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
 /**
- * A call the parse reads and that the rules judged not guarded (no shape): a gh or git call (a GET, a dry run, a stash, a log search), or a call that only names the land
- * script as one of its own literal words (cat, Get-Content, a search of it). The guarded words in it are arguments of a program the parse resolved, so the parsed rules
- * already decided it; the inert test is for the text that no call accounts for (an off-list program's string, a run of a written file).
+ * The call that RUNS the land script: the script path as the program word (a path, a call operator on it), or pwsh or powershell with -File and the script path. The land shape of
+ * astLandCalls reads the same call (from its de-quoted words) and the tap decides it. Only this launcher is accepted; a word that merely names the script is not.
  */
+function runsLandScript(c: ParsedCall): boolean {
+  const w0 = litOf(c.words[0]);
+  if (w0 !== null && LAND_SCRIPT_WORD.test(w0)) return true;
+  const p = bareProg(c);
+  if (p !== 'pwsh' && p !== 'powershell') return false;
+  const i = c.words.findIndex((w, k) => k > 0 && /^-f(?:i(?:l(?:e)?)?)?$/i.test(litOf(w) ?? ''));
+  return i > 0 && LAND_SCRIPT_WORD.test(litOf(c.words[i + 1]) ?? '');
+}
+/** A call that the closed world accepts: a nested payload of a shell (its inner calls are judged one by one), a gh call with an allowed subcommand, git, a carrier of quoted text or a read-only program. */
 function readsNamedCall(c: ParsedCall): boolean {
-  if (c.nested?.status === 'parsed') return true; // sh -c, pwsh -Command, eval: the parse flattened the payload into calls of its own, each judged here
-  const p = progName(litOf(c.words[0]));
-  if (p !== null && (DATA_ARG_PROGRAMS.has(p) || READ_ONLY_PROGRAMS.has(p))) return true;
-  return c.words.some((w) => LAND_SCRIPT_WORD.test(litOf(w) ?? ''));
+  if (c.nested?.status === 'parsed') return true; // sh -c, pwsh -Command, eval, a wrapper: the parse (or expandWrappers) listed the inner calls, each judged here
+  if (runsLandScript(c)) return true; // the land call itself: its shape is judged by the tap
+  const p = bareProg(c);
+  if (p === 'gh') {
+    const sub = (litOf(c.words[1]) ?? '').toLowerCase();
+    // The verb after `pr` must be a literal too: bash gives a word with a backslash escape (mer\ge) no literal, so the parse cannot say which verb it is.
+    return GH_SUBS.has(sub) && !(sub === 'pr' && c.words.length > 2 && litOf(c.words[2]) === null);
+  }
+  return p !== null && (DATA_ARG_PROGRAMS.has(p) || READ_ONLY_PROGRAMS.has(p));
 }
 /**
- * Inert: the parse is clean (no error, no inner text that does not parse) and EVERY call of it, nested ones included, is a literal program on the data list
- * or a gh, git or land-script-naming call that the parsed rules already judged (readsNamedCall).
- * One function over the parse and no list of run shapes: a pipe into an off-list program, a non-literal program word, an alias definition and a run of a written file
- * are each a call that is off the list. A text with no parse is never inert.
+ * Closed world: the parse is clean (no error, no inner text that does not parse) and EVERY call of it, nested and unwrapped ones included, is a listed program (the data
+ * list, a read-only program, gh with an allowed subcommand, git, claude, curl or ntn). The decision is set membership over the parse's call nodes. No text is counted and no
+ * raw text is read to allow a command. A shell, a script file, a path, a runner such as node, a variable program word and a wrapper with no readable inner call are each a
+ * call that is off the lists. A text with no parse is never inert.
  */
 export function isInert(parsed: Deps['parsed']): boolean {
   if (!parsed || parsed.innerBad === true) return false;
@@ -1387,40 +1410,23 @@ export function isInert(parsed: Deps['parsed']): boolean {
     if (!r.ok || r.errors.length > 0) return false;
     all.push(...r.calls);
   }
-  if (all.every((c) => onDataList(c) || readsNamedCall(c))) return true;
-  return heldByAccountedCalls(parsed, all);
+  return all.every((c) => onDataList(c) || readsNamedCall(c));
 }
 /**
- * The mention test: every guarded mention of the text sits in the literal words of a gh, git, land-script-naming or read-only call (readsNamedCall), whose own rules the
- * parse already applied, and no call of the text runs text (RUNS_TEXT_PROGRAMS, a shell with no parsed payload, a program word no literal gives). A mention held by
- * echo, Set-Content or an off-list program, or by no call at all (a heredoc body), is not accounted: the whole text must then be inert call by call.
- */
-function heldByAccountedCalls(parsed: NonNullable<Deps['parsed']>, all: ParsedCall[]): boolean {
-  const global = new RegExp(GUARDED_TEXT.source, 'gi');
-  const count = (t: string): number => (t.match(global) ?? []).length;
-  const wordsOf = (c: ParsedCall): string => c.words.map((w) => w.lit ?? w.raw ?? '').join(' ');
-  const rawCount = Math.max(count(parsed.text), count(blankQuotes(parsed.text)), count(parsed.text.replace(/['"`]/g, '')));
-  const holders = all.filter((c) => count(wordsOf(c)) > 0);
-  if (holders.length === 0 || !holders.every(readsNamedCall)) return false;
-  if (holders.reduce((n, c) => n + count(wordsOf(c)), 0) < rawCount) return false; // a mention that no call holds
-  return !all.some((c) => {
-    if (c.nested?.status === 'parsed') return false;
-    const p = progName(litOf(c.words[0]));
-    return p === null || RUNS_TEXT_PROGRAMS.has(p);
-  });
-}
-/**
- * The raw-text backstop of V7.6, as Dave decided it. When the raw text names a guarded call and the parse does NOT resolve one (`resolved` false: no push, create, land or
- * merge shape), the command is allowed only when it is inert, else denied at the rank of the named call: a create, land or merge denies (scope other), a text that only
- * names a push keeps the push flag, so it warns while decisions.enforcePush is unset. No exemption by script name. When the parse resolves a guarded call, the parsed
- * rules decide (tap, head, rank). A text with no parse is parserUnavailableDenies. Known limit: a hidden second call beside a resolved one is judged by the parsed rules only.
+ * The closed-world backstop of V7.6, as Dave decided it. When the text names a guarded call (the detector reads three views: raw, quote-blanked, quote-removed), the command is
+ * allowed only when it is inert, else denied at the rank of the named call. A create, land or merge mention is ALWAYS checked, also beside a call that the parse resolved:
+ * that call is judged by its own rules (tap, head, rank) AND every other call of the text must be listed (scope other). A mention of a push only (the push shapes have their own
+ * reader and tap) is checked when no shape resolved it; it keeps the push flag, so it warns while decisions.enforcePush is unset. A miss of the detector leaves the shape rules
+ * in place; it never allows. A text with no parse is parserUnavailableDenies.
  */
 export function notInertDenies(parsed: Deps['parsed'], resolved: boolean): Deny[] {
-  if (!parsed || resolved) return [];
-  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, '')]; // raw, quote-blanked, quote-removed (a splice such as g""h)
-  if (!views.some((v) => GUARDED_TEXT.test(v)) || isInert(parsed)) return [];
-  const scope: Scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? 'other' : 'push';
-  return [deny('not-inert', notInertWhy(), scope)];
+  if (!parsed || isStandaloneCleanup(parsed.text)) return [];
+  // raw, quote-blanked, quote-removed (a splice such as g""h) and escape-removed (g\h, land\-pr.ps1: bash gives such a word no literal, so no call names it)
+  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ''), parsed.text.replace(/['"`\\]/g, '')];
+  if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
+  const denyClass = views.some((v) => DENY_CLASS_TEXT.test(v));
+  if ((!denyClass && resolved) || isInert(parsed)) return [];
+  return [deny('not-inert', notInertWhy(), denyClass ? 'other' : 'push')];
 }
 
 /** True when a shell program of the text has a string argument that names a guarded call and does not parse as that shell. Part of the parse budget. */
@@ -1429,8 +1435,12 @@ async function innerTextBad(byDialect: NonNullable<Deps['parsed']>['byDialect'],
     for (const c of r ? r.calls : []) {
       const dialect = SHELL_PROGRAMS[progName(c.words[0]?.lit) ?? ''];
       if (!dialect) continue;
-      for (const a of c.words.slice(1)) {
+      const ws = c.words;
+      for (let i = 1; i < ws.length; i++) {
+        const a = ws[i];
         if (!a.lit || !GUARDED_TEXT.test(blankQuotes(a.lit))) continue;
+        // The value of -File is a path, not text that PowerShell runs: it costs no second walker child. The program is off the lists anyway (closed world), so a mention beside it denies.
+        if (dialect === 'pwsh' && /^-f(?:i(?:l(?:e)?)?)?$/i.test(ws[i - 1]?.lit ?? '')) continue;
         const inner = await parseCalls(a.lit, dialect, opts);
         if (!inner.ok || inner.errors.length > 0) return true;
       }
@@ -3967,7 +3977,7 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   for (const d of ghFlagFirstDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
-  // PR C2b (Policy P, Dave's decision 11-26): a guarded text the parse does not resolve is allowed only when inert. Last, so a more precise deny above is the one shown.
+  // PR C2c (closed world, Dave's decision 11-26): a text that names a guarded call may run listed programs only, also beside a resolved shape. Last, so a more precise deny above is the one shown.
   for (const d of notInertDenies(deps.parsed, shapes.length > 0)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   return denies;
 }
@@ -4485,12 +4495,58 @@ function primaryRootOf(git: Deps['git'], dir: string): string {
 }
 
 /**
- * PR B step 1: parse the raw command text once, before the sync decide, and return deps with `parsed` set. Only a command tool whose text holds
- * a trigger word is parsed (the pwsh walker is a child process of 400 ms or more). Bash and PowerShell give one dialect; Desktop Commander,
- * whose shell is not known, gives both. Unreadable input, a write tool, no trigger word or a parse that throws returns `deps` itself:
- * the hand reader decides, as today. Nothing reads `parsed` yet: later steps of the port do.
+ * The time of a parse. The whole parse waits PARSE_BUDGET_MS (7 s) and then ends 'late'. Each pwsh walker child may run PWSH_WALKER_TIMEOUT_MS (6 s, the shared default is 3 s).
+ * Worst case: a text of two walker calls (a PowerShell text, then a nested payload) cannot take more than the 7 s budget, because the budget ends the wait; the hook timeout of
+ * settings.json is 10 s. A walker that times out is a reader error and the guard fails closed (parse-error). Tests set CCV3_PARSE_TIMEOUT_MS and CCV3_PARSE_BUDGET_MS higher so a
+ * loaded runner does not turn a slow child into a verdict.
  */
 const PARSE_BUDGET_MS = 7000;
+const PWSH_WALKER_TIMEOUT_MS = 6000;
+const envMs = (v: unknown): number | undefined => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : undefined; };
+
+// ---- the wrapper table: a wrapper program is read through, so the call it runs is judged like the bare call (the way shell-ast xargsInner does for xargs) ----
+// A wrapper with a word that no literal gives, or with no inner call, stays a call of its own and is off the lists (closed world): a wrong arity fails closed.
+const WRAPPER_ARITY: Record<string, { value: Set<string>; duration?: true; assigns?: true }> = {
+  env: { value: new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string']), assigns: true },
+  timeout: { value: new Set(['-k', '-s', '--kill-after', '--signal']), duration: true },
+  nohup: { value: new Set() }, nice: { value: new Set(['-n', '--adjustment']) }, command: { value: new Set() }, builtin: { value: new Set() },
+  exec: { value: new Set(['-a']) }, sudo: { value: new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-R', '-T', '-U']) }, stdbuf: { value: new Set(['-i', '-o', '-e']) },
+};
+function unwrapCall(c: ParsedCall): ParsedCall | null {
+  const l = litOf(c.words[0]);
+  const p = l === null || /[\\/]/.test(l) ? null : progName(l);
+  const a = p === null ? undefined : WRAPPER_ARITY[p];
+  if (!a) return null;
+  let i = 1; let needDuration = a.duration === true;
+  for (; i < c.words.length; i++) {
+    const w = litOf(c.words[i]);
+    if (w === null) return null; // a word no literal gives: the wrapper stays a call of its own, off the list
+    if (a.value.has(w)) { i++; continue; }
+    if (w.startsWith('-')) continue;
+    if (a.assigns && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    if (needDuration) { needDuration = false; continue; }
+    break;
+  }
+  const words = c.words.slice(i);
+  return words.length === 0 ? null : { ...c, words, argsUnknown: true, viaPayload: 'wrapper', depth: c.depth + 1, level: c.level + 1, nested: undefined } as ParsedCall;
+}
+function expandWrappers(r: ParseResult | undefined): ParseResult | undefined {
+  if (!r) return r;
+  const out: ParsedCall[] = [];
+  for (const c of r.calls) {
+    let cur: ParsedCall | null = c; let chain: ParsedCall[] = [c];
+    for (let guard = 0; guard < 4 && cur; guard++) { const inner = unwrapCall(cur); if (!inner) break; chain.push(inner); cur = inner; }
+    // every wrapper of the chain is transparent when it has an inner call: the inner call is judged
+    for (let k = 0; k < chain.length; k++) out.push(k < chain.length - 1 ? ({ ...chain[k], nested: { status: 'parsed', via: 'wrapper' } } as ParsedCall) : chain[k]);
+  }
+  return { ...r, calls: out };
+}
+/**
+ * PR B step 1: parse the raw command text once, before the sync decide, and return deps with `parsed` set. Only a command tool whose text holds
+ * a trigger word is parsed (the pwsh walker is a child process). Bash and PowerShell give one dialect; Desktop Commander, whose shell is not known, gives both.
+ * Unreadable input, a write tool or no trigger word returns `deps` itself; a parse that is late or throws sets parseLate (the guard then fails closed). The wrapper
+ * programs of the table above are unwrapped into the call they run.
+ */
 export async function withParsed(raw: string, deps: Deps): Promise<Deps> {
   let lateText: string | undefined; // C1 (B2): the raw text of a call whose parse ended late or threw
   try {
@@ -4503,23 +4559,26 @@ export async function withParsed(raw: string, deps: Deps): Promise<Deps> {
     const dialects: ('bash' | 'pwsh')[] = tool === 'Bash' ? ['bash'] : tool === 'PowerShell' ? ['pwsh'] : ['bash', 'pwsh'];
     const byDialect: { bash?: ParseResult; pwsh?: ParseResult } = {};
     let innerBad = false;
+    const budgetMs = deps.parseBudgetMs ?? envMs(deps.env?.CCV3_PARSE_BUDGET_MS) ?? PARSE_BUDGET_MS;
+    const opts: ParseOpts = { timeoutMs: envMs(deps.env?.CCV3_PARSE_TIMEOUT_MS) ?? PWSH_WALKER_TIMEOUT_MS, ...(deps.parseOpts ?? {}) };
     // One timer for the whole parse. A parse that passes it ends the wait: the hand reader decides, as on main, and the hook still writes a decision.
     let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<'late'>((res) => { timer = setTimeout(() => res('late'), deps.parseBudgetMs ?? PARSE_BUDGET_MS); timer.unref?.(); });
+    const late = new Promise<'late'>((res) => { timer = setTimeout(() => res('late'), budgetMs); timer.unref?.(); });
     const parse = (async (): Promise<'done'> => {
-      for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
-      innerBad = await innerTextBad(byDialect, deps.parseOpts);
+      for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, opts);
+      innerBad = await innerTextBad(byDialect, opts);
       return 'done';
     })();
     parse.catch(() => undefined);
     try {
       if ((await Promise.race([parse, late])) === 'late') {
         // C2a: one log row for every late parse (a thrown parse is logged below), so the cost of denying on a parser that did not answer can be counted.
-        try { logGuardError(HOOK, new Error(`the shell parse was late: no answer in ${deps.parseBudgetMs ?? PARSE_BUDGET_MS} ms`), { env: deps.env }); } catch { /* the log never blocks */ }
+        try { logGuardError(HOOK, new Error(`the shell parse was late: no answer in ${budgetMs} ms`), { env: deps.env }); } catch { /* the log never blocks */ }
         return { ...deps, parseLate: cmd.text };
       }
     } finally { clearTimeout(timer); }
-    return { ...deps, parsed: { text: cmd.text, byDialect, ...(innerBad ? { innerBad } : {}) } };
+    const byD2: { bash?: ParseResult; pwsh?: ParseResult } = {}; if (byDialect.bash) byD2.bash = expandWrappers(byDialect.bash); if (byDialect.pwsh) byD2.pwsh = expandWrappers(byDialect.pwsh);
+    return { ...deps, parsed: { text: cmd.text, byDialect: byD2, ...(innerBad ? { innerBad } : {}) } };
   } catch (err) {
     try { logGuardError(HOOK, err); } catch { /* the log never blocks */ }
     return lateText === undefined ? deps : { ...deps, parseLate: lateText };

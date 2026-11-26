@@ -16,6 +16,10 @@ export default defineConfig({
     env: {
       CLAUDE_HOOK_LOG_FILE: join(tmpdir(), 'ccv3-hooks.test.log'),
       CCV3_HOOK_TRACE: '0',
+      // The pwsh walker is a child process per parse. On a loaded runner (a Linux box with 2 CPUs and the whole suite in parallel) it passes its 6 s timeout, the guard
+      // fails closed, and a test that expects an allow fails. Tests wait longer so that a slow child is not a verdict. A test of the fail-closed path uses a provider that errors.
+      CCV3_PARSE_TIMEOUT_MS: '30000',
+      CCV3_PARSE_BUDGET_MS: '60000',
     },
   },
 });

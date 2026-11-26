@@ -2726,10 +2726,13 @@ function withAstCreates(shapes, parsed, pwsh) {
   return [...shapes, ...extra];
 }
 function astLandCalls(parsed, raw, exempt, gate) {
-  if (!parsed || exempt || !LAND_SCRIPT_RE.test(raw) || !LAND_SCRIPT_RE.test(gate)) return [];
+  const unq = (t) => t.replace(/['"`]/g, "");
+  if (!parsed || exempt || !LAND_SCRIPT_RE.test(unq(raw)) || !LAND_SCRIPT_RE.test(unq(gate))) return [];
   const out3 = [];
   for (const c of Object.values(parsed.byDialect).flatMap((r) => r ? r.calls : [])) {
-    const text = [...c.words.map((w) => w.raw), ...c.stdin?.lit ? [c.stdin.lit] : []].join(" ");
+    const text0 = [...c.words.map((w) => w.raw), ...c.stdin?.lit ? [c.stdin.lit] : []].join(" ");
+    const dtext = [...c.words.map((w) => w.lit ?? w.raw), ...c.stdin?.lit ? [c.stdin.lit] : []].join(" ");
+    const text = LAND_SCRIPT_RE.test(text0) ? text0 : dtext;
     if (!LAND_SCRIPT_RE.test(text) || CLEANUP_RE.test(text)) continue;
     out3.push({ text, pr: lastArg(text, LAND_PR_RE), sha: SHA_RE.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
   }
@@ -2824,7 +2827,7 @@ function docLeaderCall(c) {
   return DOC_LEADERS.has((c.words[0]?.lit ?? "").toLowerCase()) && c.words.every((w) => w.lit !== null);
 }
 var SCRIPT_RUNNERS = /* @__PURE__ */ new Set(["node", "nodejs", "python", "python3", "py", "deno", "bun", "ruby", "perl", "tsx", "ts-node", "php"]);
-var GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgit\s+(?:[^;&|\n]*\s)?push\b|\bgit\b[^\n]*\bpush\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+var GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgit\s+(?:[^;&|\n]*\s)?push\b|\bgit\b[^\n]*\bpush\b|\bgh(?:\.exe)?\s+pr\s+(?:create|new|merge)\b|\bgh(?:\.exe)?\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 var SCRIPT_RUNNER_WHY = "this runs code inline (node -e, python -c or a heredoc) whose text names a guarded call (a push, a create or a merge). This gate does not read JavaScript or Python, so it cannot tell whether the code runs the call or only holds the text (Dave R1). Put the code in a script file and run the file (node scripts/<name>.mjs), or take the guarded text out of the code.";
 var SCRIPT_RUNNER_WORD = new RegExp(`\\b(?:${[...SCRIPT_RUNNERS].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "i");
 var blankQuotes = (t) => t.replace(/['"`,[\]()]/g, " ");
@@ -2858,22 +2861,27 @@ function parseErrorDenies(parsed) {
   if (!failed && parsed.innerBad !== true) return [];
   return GUARDED_TEXT.test(blankQuotes(parsed.text)) ? [deny("parse-error", PARSE_ERROR_WHY)] : [];
 }
-var STANDALONE_CLEANUP = /^\s*(?:&\s*)?(?:(?:pwsh|powershell)(?:\.exe)?\s+(?:-NoProfile\s+)?(?:-File\s+)?)?[^\s;&|<>$`'"()]*land-pr\.ps1(?:\s+(?:-Pr\s+\d+|-CleanupOnly))+\s*$/i;
+var STANDALONE_CLEANUP = /^[ \t]*(?:&[ \t]*)?(?:(?:pwsh|powershell)(?:\.exe)?[ \t]+(?:-NoProfile[ \t]+)?(?:-File[ \t]+)?)?[^\s;&|<>$`'"()]*land-pr\.ps1(?:[ \t]+(?:-Pr[ \t]+\d+|-CleanupOnly))+[ \t]*$/i;
 var PARSER_UNAVAILABLE_WHY = "the parser was late, run it again. The shell parser did not answer in time (or could not run), and this text names a guarded call (a push, a create, a merge or the land script), so this gate cannot read which call runs. Run the same call again, or run the push, create or merge as its own command.";
+var isStandaloneCleanup = (text) => STANDALONE_CLEANUP.test(text) && /-Pr[ \t]+\d+/i.test(text) && CLEANUP_RE.test(text);
 function parserUnavailableDenies(parsed, text, covered = false) {
   if (parsed) return [];
-  if (STANDALONE_CLEANUP.test(text) && /-Pr\s+\d+/i.test(text) && CLEANUP_RE.test(text)) return [];
-  const views = [blankQuotes(text), text.replace(/['"`]/g, "")];
+  if (isStandaloneCleanup(text)) return [];
+  const views = [blankQuotes(text), text.replace(/['"`]/g, ""), text.replace(/['"`\\]/g, "")];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   const scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? "other" : "push";
   const d = deny("parser-unavailable", PARSER_UNAVAILABLE_WHY, scope);
   return [covered ? { ...d, homeFlags: true } : d];
 }
-var DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+var DENY_CLASS_TEXT = /\bgh(?:\.exe)?\s+pr\s+(?:create|new|merge)\b|\bgh(?:\.exe)?\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 var INERT_PROGRAMS = /* @__PURE__ */ new Set(["echo", "printf", "grep", "rg", "select-string", "set-content", "add-content", "out-file", "write-output", "write-host", "set-location", "get-date", "cat", "head", "tail", "ls", "get-content", "cd", "gc", "sc", "ac", "sls", "sl"]);
 var litOf = (w) => w !== void 0 && w.lit !== null && w.viaVar === void 0 ? w.lit : null;
+var bareProg = (c) => {
+  const l = litOf(c.words[0]);
+  return l === null || /[\\/]/.test(l) || /\.(?:ps1|sh|bash|cmd|bat|py|js|mjs|cjs)$/i.test(l) ? null : progName(l);
+};
 function onDataList(c) {
-  const p = progName(litOf(c.words[0]));
+  const p = bareProg(c);
   if (p === null) return false;
   if (INERT_PROGRAMS.has(p)) return true;
   const args = c.words.slice(1);
@@ -2881,17 +2889,29 @@ function onDataList(c) {
   if (p === "node") return /(^|[\\/])lane\.mjs$/.test(litOf(args[0]) ?? "") && ["say", "note"].includes(litOf(args[1]) ?? "");
   return false;
 }
-var DATA_ARG_PROGRAMS = /* @__PURE__ */ new Set(["gh", "git", "claude", "curl", "ntn", "timeout", "env"]);
-var READ_ONLY_PROGRAMS = /* @__PURE__ */ new Set(["grep", "rg", "select-string", "sls", "cat", "head", "tail", "ls", "get-content", "gc", "cd", "set-location", "sl", "get-date"]);
-var RUNS_TEXT_PROGRAMS = /* @__PURE__ */ new Set(["bash", "sh", "dash", "zsh", "pwsh", "powershell", "cmd", "iex", "invoke-expression", "eval", "source", ".", "xargs", "invoke-command", "icm", "start-process", "saps"]);
+var DATA_ARG_PROGRAMS = /* @__PURE__ */ new Set(["gh", "git", "claude", "curl", "ntn"]);
+var READ_ONLY_PROGRAMS = /* @__PURE__ */ new Set(["grep", "rg", "select-string", "sls", "cat", "head", "tail", "ls", "get-content", "gc", "cd", "set-location", "sl", "get-date", "sort", "uniq", "wc", "cut", "tr", "jq", "select-object", "sort-object", "measure-object", "format-table", "out-string", "convertto-json", "convertfrom-json", "get-childitem", "gci", "dir", "test-path", "join-path", "split-path", "resolve-path", "get-item", "get-location", "pwd", "date", "basename", "dirname", "true", "false", "where-object", "get-ciminstance", "get-process", "foreach-object", "out-null", "start-sleep", "new-item", "copy-item", "get-random", "format-list", "select-xml", "get-service", "get-wmiobject", "chdir", "pushd", "popd", "push-location", "pop-location"]);
+var GH_SUBS = /* @__PURE__ */ new Set(["pr", "api", "issue", "repo", "run", "workflow", "release", "search", "status", "auth", "label", "browse", "cache", "gist", "project", "ruleset", "variable", "secret", "org", "attestation", "codespace", "ssh-key", "gpg-key", "agent-task"]);
 var listOf = (set) => [...set].join(", ");
-var notInertWhy = () => "this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain data handling. It is allowed only when every call is a data program (" + listOf(INERT_PROGRAMS) + "; git commit with -m or -F; node lane.mjs say or note), or when every guarded word sits in the arguments of an accounted program (" + listOf(DATA_ARG_PROGRAMS) + ", or a read-only program: " + listOf(READ_ONLY_PROGRAMS) + ") and nothing in the command runs text (" + listOf(RUNS_TEXT_PROGRAMS) + "). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.";
+var notInertWhy = () => "this text names a guarded call (a push, a create, a merge or the land script) and also runs a program that is not on the lists of this gate. Fix: run the guarded call as its own command. Allowed beside a guarded word: data programs (" + listOf(INERT_PROGRAMS) + "; git commit with -m or -F; node lane.mjs say or note), read-only programs (" + listOf(READ_ONLY_PROGRAMS) + "), gh with a subcommand of (" + listOf(GH_SUBS) + "), and " + listOf(DATA_ARG_PROGRAMS) + ". A wrapper (" + Object.keys(WRAPPER_ARITY).join(", ") + ") is read through: the program it runs must be on the lists. A shell, a script file, a path, a script runner such as node, and a program word that is not a plain name are not allowed.";
 var LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
+function runsLandScript(c) {
+  const w0 = litOf(c.words[0]);
+  if (w0 !== null && LAND_SCRIPT_WORD.test(w0)) return true;
+  const p = bareProg(c);
+  if (p !== "pwsh" && p !== "powershell") return false;
+  const i = c.words.findIndex((w, k) => k > 0 && /^-f(?:i(?:l(?:e)?)?)?$/i.test(litOf(w) ?? ""));
+  return i > 0 && LAND_SCRIPT_WORD.test(litOf(c.words[i + 1]) ?? "");
+}
 function readsNamedCall(c) {
   if (c.nested?.status === "parsed") return true;
-  const p = progName(litOf(c.words[0]));
-  if (p !== null && (DATA_ARG_PROGRAMS.has(p) || READ_ONLY_PROGRAMS.has(p))) return true;
-  return c.words.some((w) => LAND_SCRIPT_WORD.test(litOf(w) ?? ""));
+  if (runsLandScript(c)) return true;
+  const p = bareProg(c);
+  if (p === "gh") {
+    const sub = (litOf(c.words[1]) ?? "").toLowerCase();
+    return GH_SUBS.has(sub) && !(sub === "pr" && c.words.length > 2 && litOf(c.words[2]) === null);
+  }
+  return p !== null && (DATA_ARG_PROGRAMS.has(p) || READ_ONLY_PROGRAMS.has(p));
 }
 function isInert(parsed) {
   if (!parsed || parsed.innerBad === true) return false;
@@ -2901,37 +2921,26 @@ function isInert(parsed) {
     if (!r.ok || r.errors.length > 0) return false;
     all.push(...r.calls);
   }
-  if (all.every((c) => onDataList(c) || readsNamedCall(c))) return true;
-  return heldByAccountedCalls(parsed, all);
-}
-function heldByAccountedCalls(parsed, all) {
-  const global = new RegExp(GUARDED_TEXT.source, "gi");
-  const count = (t) => (t.match(global) ?? []).length;
-  const wordsOf = (c) => c.words.map((w) => w.lit ?? w.raw ?? "").join(" ");
-  const rawCount = Math.max(count(parsed.text), count(blankQuotes(parsed.text)), count(parsed.text.replace(/['"`]/g, "")));
-  const holders = all.filter((c) => count(wordsOf(c)) > 0);
-  if (holders.length === 0 || !holders.every(readsNamedCall)) return false;
-  if (holders.reduce((n, c) => n + count(wordsOf(c)), 0) < rawCount) return false;
-  return !all.some((c) => {
-    if (c.nested?.status === "parsed") return false;
-    const p = progName(litOf(c.words[0]));
-    return p === null || RUNS_TEXT_PROGRAMS.has(p);
-  });
+  return all.every((c) => onDataList(c) || readsNamedCall(c));
 }
 function notInertDenies(parsed, resolved) {
-  if (!parsed || resolved) return [];
-  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, "")];
-  if (!views.some((v) => GUARDED_TEXT.test(v)) || isInert(parsed)) return [];
-  const scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? "other" : "push";
-  return [deny("not-inert", notInertWhy(), scope)];
+  if (!parsed || isStandaloneCleanup(parsed.text)) return [];
+  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ""), parsed.text.replace(/['"`\\]/g, "")];
+  if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
+  const denyClass = views.some((v) => DENY_CLASS_TEXT.test(v));
+  if (!denyClass && resolved || isInert(parsed)) return [];
+  return [deny("not-inert", notInertWhy(), denyClass ? "other" : "push")];
 }
 async function innerTextBad(byDialect, opts) {
   for (const r of Object.values(byDialect)) {
     for (const c of r ? r.calls : []) {
       const dialect = SHELL_PROGRAMS[progName(c.words[0]?.lit) ?? ""];
       if (!dialect) continue;
-      for (const a of c.words.slice(1)) {
+      const ws = c.words;
+      for (let i = 1; i < ws.length; i++) {
+        const a = ws[i];
         if (!a.lit || !GUARDED_TEXT.test(blankQuotes(a.lit))) continue;
+        if (dialect === "pwsh" && /^-f(?:i(?:l(?:e)?)?)?$/i.test(ws[i - 1]?.lit ?? "")) continue;
         const inner = await parseCalls(a.lit, dialect, opts);
         if (!inner.ok || inner.errors.length > 0) return true;
       }
@@ -5064,6 +5073,63 @@ function primaryRootOf(git, dir) {
   return resolve3(r.stdout.trim(), "..");
 }
 var PARSE_BUDGET_MS = 7e3;
+var PWSH_WALKER_TIMEOUT_MS = 6e3;
+var envMs = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : void 0;
+};
+var WRAPPER_ARITY = {
+  env: { value: /* @__PURE__ */ new Set(["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]), assigns: true },
+  timeout: { value: /* @__PURE__ */ new Set(["-k", "-s", "--kill-after", "--signal"]), duration: true },
+  nohup: { value: /* @__PURE__ */ new Set() },
+  nice: { value: /* @__PURE__ */ new Set(["-n", "--adjustment"]) },
+  command: { value: /* @__PURE__ */ new Set() },
+  builtin: { value: /* @__PURE__ */ new Set() },
+  exec: { value: /* @__PURE__ */ new Set(["-a"]) },
+  sudo: { value: /* @__PURE__ */ new Set(["-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"]) },
+  stdbuf: { value: /* @__PURE__ */ new Set(["-i", "-o", "-e"]) }
+};
+function unwrapCall(c) {
+  const l = litOf(c.words[0]);
+  const p = l === null || /[\\/]/.test(l) ? null : progName(l);
+  const a = p === null ? void 0 : WRAPPER_ARITY[p];
+  if (!a) return null;
+  let i = 1;
+  let needDuration = a.duration === true;
+  for (; i < c.words.length; i++) {
+    const w = litOf(c.words[i]);
+    if (w === null) return null;
+    if (a.value.has(w)) {
+      i++;
+      continue;
+    }
+    if (w.startsWith("-")) continue;
+    if (a.assigns && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    if (needDuration) {
+      needDuration = false;
+      continue;
+    }
+    break;
+  }
+  const words = c.words.slice(i);
+  return words.length === 0 ? null : { ...c, words, argsUnknown: true, viaPayload: "wrapper", depth: c.depth + 1, level: c.level + 1, nested: void 0 };
+}
+function expandWrappers(r) {
+  if (!r) return r;
+  const out3 = [];
+  for (const c of r.calls) {
+    let cur = c;
+    let chain = [c];
+    for (let guard = 0; guard < 4 && cur; guard++) {
+      const inner = unwrapCall(cur);
+      if (!inner) break;
+      chain.push(inner);
+      cur = inner;
+    }
+    for (let k = 0; k < chain.length; k++) out3.push(k < chain.length - 1 ? { ...chain[k], nested: { status: "parsed", via: "wrapper" } } : chain[k]);
+  }
+  return { ...r, calls: out3 };
+}
 async function withParsed(raw, deps) {
   let lateText;
   try {
@@ -5076,21 +5142,23 @@ async function withParsed(raw, deps) {
     const dialects = tool === "Bash" ? ["bash"] : tool === "PowerShell" ? ["pwsh"] : ["bash", "pwsh"];
     const byDialect = {};
     let innerBad = false;
+    const budgetMs = deps.parseBudgetMs ?? envMs(deps.env?.CCV3_PARSE_BUDGET_MS) ?? PARSE_BUDGET_MS;
+    const opts = { timeoutMs: envMs(deps.env?.CCV3_PARSE_TIMEOUT_MS) ?? PWSH_WALKER_TIMEOUT_MS, ...deps.parseOpts ?? {} };
     let timer;
     const late = new Promise((res) => {
-      timer = setTimeout(() => res("late"), deps.parseBudgetMs ?? PARSE_BUDGET_MS);
+      timer = setTimeout(() => res("late"), budgetMs);
       timer.unref?.();
     });
     const parse = (async () => {
-      for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, deps.parseOpts);
-      innerBad = await innerTextBad(byDialect, deps.parseOpts);
+      for (const d of dialects) byDialect[d] = await parseCalls(cmd.text, d, opts);
+      innerBad = await innerTextBad(byDialect, opts);
       return "done";
     })();
     parse.catch(() => void 0);
     try {
       if (await Promise.race([parse, late]) === "late") {
         try {
-          logGuardError(HOOK, new Error(`the shell parse was late: no answer in ${deps.parseBudgetMs ?? PARSE_BUDGET_MS} ms`), { env: deps.env });
+          logGuardError(HOOK, new Error(`the shell parse was late: no answer in ${budgetMs} ms`), { env: deps.env });
         } catch {
         }
         return { ...deps, parseLate: cmd.text };
@@ -5098,7 +5166,10 @@ async function withParsed(raw, deps) {
     } finally {
       clearTimeout(timer);
     }
-    return { ...deps, parsed: { text: cmd.text, byDialect, ...innerBad ? { innerBad } : {} } };
+    const byD2 = {};
+    if (byDialect.bash) byD2.bash = expandWrappers(byDialect.bash);
+    if (byDialect.pwsh) byD2.pwsh = expandWrappers(byDialect.pwsh);
+    return { ...deps, parsed: { text: cmd.text, byDialect: byD2, ...innerBad ? { innerBad } : {} } };
   } catch (err) {
     try {
       logGuardError(HOOK, err);
@@ -5138,6 +5209,7 @@ export {
   isOpenPrLabel,
   isPushOnlyLabel,
   isShipLabel,
+  isStandaloneCleanup,
   makeGit,
   notInertDenies,
   parseErrorDenies,

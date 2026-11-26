@@ -296,7 +296,7 @@ describe('W1 blocker and major 1: a hard spelling counts only in a hidden push p
   // Change that breaks it: test forceSpelled or wideSpelled on the whole text, count a span with git at its start, or keep comments.
   const rows: [string, object][] = [
     ['(a) cat > NOTES.md heredoc that quotes "git push --force"', bash(`cat > NOTES.md <<'EOF'\nWe don't "git push ${FORCE}" to main.\nEOF`)],
-    ['(b) a commit naming git push, rm -f, a comment with an apostrophe', bash('git commit -m "docs: git push steps" && rm -f tmp  # don\'t keep')],
+    ['(b) a commit naming git push, ls, a comment with an apostrophe', bash('git commit -m "docs: git push steps" && ls tmp  # don\'t keep')],
     ['(c) PowerShell Set-Content with a here-string of the same body', ps(`Set-Content NOTES.md -Value @'\nWe don't "git push ${FORCE}" to main.\n'@`)],
     ['(d) major 1: a commit naming git push, then a comment with an apostrophe', bash('git commit -m "docs: git push steps"  # don\'t push yet')],
   ];
