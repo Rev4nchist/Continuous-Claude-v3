@@ -381,8 +381,8 @@ describe('writeExport', () => {
     const r = writeExport(out, collected(T1));
     const names = fs.readdirSync(out).sort();
     assert.equal(DATASETS.length, 8);
-    assert.deepEqual(names, ['assignments.json', 'flow.json', 'lanes-all.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
-    assert.deepEqual(names, [...DATASETS.map((d) => `${d}.json`), 'lanes-all.json', 'refresh.json'].sort());
+    assert.deepEqual(names, ['assignments-all.json', 'assignments.json', 'flow.json', 'lanes-all.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
+    assert.deepEqual(names, [...DATASETS.map((d) => `${d}.json`), 'assignments-all.json', 'lanes-all.json', 'refresh.json'].sort());
     for (const d of DATASETS) {
       const doc = JSON.parse(fs.readFileSync(path.join(out, `${d}.json`), 'utf8'));
       assert.equal(doc.exportedAt, T1, d);
@@ -790,5 +790,83 @@ describe('sessionLabel and maskLabelKeys (lane-export-per-session)', () => {
     const rows = [{ by: 'A #abcdef12' }];
     assert.equal(maskLabelKeys(rows, ['by'], []), 0);
     assert.equal(rows[0].by, 'A #abcdef12');
+  });
+});
+
+describe('assignments.json keeps recent days only (lane-export-retention)', () => {
+  // Read through the namespace so a missing export fails these rows only, not the whole file.
+  const retainAssignments = (...a) => exportMod.retainAssignments(...a);
+  const claim = (day, id = 'x') => ({ at: `${day}T15:00:00.000Z`, day, lane_id: id, who: 'session', how: 'claim', reassigned: false, by: 'N #aaaa1111' });
+  const read = (out, name) => JSON.parse(fs.readFileSync(path.join(out, name), 'utf8'));
+  // T1 is 2026-11-07 in Chicago: with window_days 7 the kept days run from 2026-10-25 (the start of the prior window) to 2026-11-07.
+  const OLD = claim('2026-10-01', 'old');
+  const EDGE_OUT = claim('2026-10-24', 'edge-out');
+  const EDGE_IN = claim('2026-10-25', 'edge-in');
+  const TODAY = claim('2026-11-07', 'today');
+
+  it('R1 retainAssignments keeps the day the prior window starts on, cuts the day before it, and keeps a row with no day', () => {
+    // Breaks if the edge is off by one in either direction, or a row with no day is dropped as "old".
+    const nodate = { ...claim('2026-11-07', 'nodate'), day: null };
+    const kept = retainAssignments([OLD, EDGE_OUT, EDGE_IN, TODAY, nodate], '2026-11-07', 7).map((r) => r.lane_id);
+    assert.deepEqual(kept, ['edge-in', 'today', 'nodate']);
+  });
+
+  it('R2 the window is 2 x window_days: 3 days keep 6 days, and the input list is not changed', () => {
+    // Breaks if N is a typed number, or the function cuts the list it was given.
+    const rows = [claim('2026-11-01', 'a'), claim('2026-11-02', 'b'), claim('2026-11-06', 'c')];
+    assert.deepEqual(retainAssignments(rows, '2026-11-07', 3).map((r) => r.lane_id), ['b', 'c']);
+    assert.equal(rows.length, 3);
+    assert.deepEqual(retainAssignments(rows, '2026-11-07', 14).map((r) => r.lane_id), ['a', 'b', 'c']);
+  });
+
+  it('R3 writeExport: assignments.json holds the window, assignments-all.json holds every row, meta counts both', () => {
+    // Breaks if the archive is a subset, the capped file keeps old rows, or the counts are missing or wrong.
+    const out = tmpDir();
+    const c = collected(T1);
+    c.envelopes.assignments.rows = [OLD, EDGE_OUT, EDGE_IN, TODAY];
+    const r = writeExport(out, c);
+    assert.deepEqual(read(out, 'assignments.json').rows.map((x) => x.lane_id), ['edge-in', 'today']);
+    assert.deepEqual(read(out, 'assignments-all.json').rows.map((x) => x.lane_id), ['old', 'edge-out', 'edge-in', 'today']);
+    const meta = read(out, 'meta.json').rows[0];
+    assert.equal(meta.assignments_rows_total, 4);
+    assert.equal(meta.assignments_rows_written, 2);
+    assert.deepEqual(r.envelopes.assignments.rows.map((x) => x.lane_id), ['edge-in', 'today']);
+  });
+
+  it('R4 the window follows the window_days target', () => {
+    // Breaks if the export reads a typed 7 instead of the config target.
+    const out = tmpDir();
+    const c = collected(T1);
+    c.envelopes.targets.rows.push({ key: 'window_days', value: 2, label: 'w', source: 's' });
+    c.envelopes.assignments.rows = [claim('2026-11-03', 'a'), claim('2026-11-04', 'b'), claim('2026-11-07', 'c')];
+    writeExport(out, c);
+    assert.deepEqual(read(out, 'assignments.json').rows.map((x) => x.lane_id), ['b', 'c']);
+  });
+
+  it('R5 the archive is no dataset: not in refresh.json, not in the size report, and a big archive does not fail the export', () => {
+    // Breaks if the archive is uploaded or counted against the 256 KB cap, which is the problem this card removes.
+    const out = tmpDir();
+    const c = collected(T1);
+    c.envelopes.assignments.rows = Array.from({ length: 2500 }, (_, i) => claim('2026-10-01', `old${i}`)).concat([TODAY]);
+    const r = writeExport(out, c);
+    assert.ok(fs.statSync(path.join(out, 'assignments-all.json')).size > DOC_CAP_BYTES / 2);
+    assert.ok(!read(out, 'refresh.json').files.includes('assignments-all.json'));
+    assert.equal(r.files.find((f) => f.name === 'assignments-all.json').bytes > 0, true);
+    assert.notEqual(sizeReport(r.files).name, 'assignments-all.json');
+    assert.equal(sizeReport([{ name: 'assignments-all.json', bytes: 999999 }, { name: 'tiles.json', bytes: 10 }]).name, 'tiles.json');
+    assert.deepEqual(sizeWarnings([{ name: 'assignments-all.json', bytes: DOC_CAP_BYTES }]), []);
+  });
+
+  it('R6 tiles.json and flow.json are the same whether old rows exist or not', () => {
+    // Breaks if the figures are built after the cut with another window, or an old row leaks into a figure.
+    const withOld = tmpDir();
+    const without = tmpDir();
+    const a = collected(T1);
+    a.envelopes.assignments.rows = [OLD, EDGE_OUT, EDGE_IN, TODAY];
+    const b = collected(T1);
+    b.envelopes.assignments.rows = [EDGE_IN, TODAY];
+    writeExport(withOld, a);
+    writeExport(without, b);
+    for (const d of ['tiles', 'flow']) assert.deepEqual(read(withOld, `${d}.json`).rows, read(without, `${d}.json`).rows, d);
   });
 });
