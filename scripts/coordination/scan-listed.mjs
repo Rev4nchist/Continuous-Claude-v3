@@ -91,8 +91,25 @@ const LINE_SPLIT = /\r\n?|\n/;
 /** The rule name of a gate-list id: sha, key (<pr>:<id>), id (7 digits or more), pr-ref (a shorter number), token (anything else). */
 const classOf = (id) => (/^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id) ? 'sha' : id.includes(':') ? 'key' : /^\d+$/.test(id) ? (id.length >= 7 ? 'id' : 'pr-ref') : 'token');
 
-/** A text with every hex run of 7 or more and every digit hidden: a context never shows an id, also not a part of one. */
-const maskText = (s) => s.replace(/[0-9a-f]{7,}/gi, 'HEX').replace(/\d/g, '#');
+/**
+ * A text with every hex run of 7 or more and every decimal digit of any script hidden: a context never shows an id, also not a part of one.
+ * The text is folded with NFKC first (a fullwidth digit or letter is the same id), then any digit that the fold keeps (Arabic-Indic, Devanagari) is hidden.
+ */
+const maskText = (s) => s.normalize('NFKC').replace(/[0-9a-f]{7,}/gi, 'HEX').replace(/\p{Nd}/gu, '#');
+
+/** The NFKC fold of a line, and for each folded character the offset of the original character it came from (a ligature gives two folded ones). */
+function foldLine(line) {
+  let text = '';
+  const map = [];
+  let at = 0;
+  for (const ch of line) {
+    const folded = ch.normalize('NFKC');
+    for (let k = 0; k < folded.length; k++) map.push(at);
+    text += folded;
+    at += ch.length;
+  }
+  return { text, map };
+}
 
 /** A masked context: 40 characters each side, the hit itself replaced by [ID]. */
 function contextOf(line, at, len) {
@@ -115,7 +132,11 @@ function placesOf(line, id, cls) {
       const at = hay.indexOf(want, from);
       if (at < 0) break;
       from = at + 1;
-      if (countIdsIn(line.slice(Math.max(0, at - 8), at + want.length + 1), [id]) > 0) out.push({ at, len: want.length });
+      // The candidate alone must hit: another copy of the id in the slice (a valid reference just before) is blanked, so it cannot vouch for this one.
+      const blank = (s) => (fold ? s.toLowerCase() : s).split(want).join('_'.repeat(want.length));
+      const before = blank(line.slice(Math.max(0, at - 8), at));
+      const after = blank(line.slice(at + want.length, at + want.length + 1));
+      if (countIdsIn(`${before}${line.slice(at, at + want.length)}${after}`, [id]) > 0) out.push({ at, len: want.length });
     }
   }
   return out.length ? out : [{ at: 0, len: 0 }];
@@ -145,10 +166,13 @@ export function scanText(text, { listA, setB, minInt }, { gateOnly = false } = {
       }
     }
     if (gateOnly) return;
-    const folded = line.normalize('NFKC');
+    const { text: folded, map } = foldLine(line);
     for (const m of folded.matchAll(DIGIT_RUN)) {
+      // The place is reported in the original line: the fold can move offsets (a ligature gives two characters).
+      const at = map[m.index];
+      const end = m.index + m[0].length < map.length ? map[m.index + m[0].length] : line.length;
       const bare = m[0].replace(/^0+(?=\d)/, '');
-      if (bare.length >= minInt && (setB.has(m[0]) || setB.has(bare)) && !seen.has(`${no}:${m.index}`)) add(folded, no, { at: m.index, len: m[0].length }, 'bare');
+      if (bare.length >= minInt && (setB.has(m[0]) || setB.has(bare)) && !seen.has(`${no}:${at}`)) add(line, no, { at, len: end - at }, 'bare');
     }
   });
   return { gate, strict: gateOnly ? null : hits.length, hits };

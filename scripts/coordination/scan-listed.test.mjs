@@ -388,6 +388,12 @@ describe('S26 to S29: folding, repeated references, masking of other digits', ()
     const plain = run(['--root', root, put(text)]);
     assert.ok(!hasOtherDigit(plain.out.replace(/^\d+:/gm, '')), 'a digit of another script reached the plain output');
   });
+  it('S28b a fullwidth hex run (letters and digits) near a hit is masked as a hex run, not left as letters', () => {
+    const wideHex = [...SHA.slice(0, 12)].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join(''); // ASCII 0x21..0x7e to U+FF01..U+FF5E
+    const r = scan(root, `${wideHex} PR ${HOLD4}`);
+    assert.ok(r.hits.length >= 1);
+    for (const h of r.hits) assert.ok(!/[Ａ-Ｚａ-ｚ]/.test(h.ctx), 'fullwidth letters of a hex run reached a context');
+  });
   it('S29 a file name with fullwidth or Arabic-Indic digits is masked in the label', () => {
     const f = path.join(folder(), `x${wide(HOLD4)}y${arabic(COMMENT)}.md`);
     fs.writeFileSync(f, `PR ${HOLD4}\n`);
