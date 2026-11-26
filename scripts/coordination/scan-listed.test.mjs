@@ -465,3 +465,93 @@ describe('S30 to S33: string ids, dataset shape, fullwidth shas', () => {
     assert.equal(afterLigature.hits[0].col, 3);
   });
 });
+
+// Rows from the internal pass of PR 748 (aegis and critic, five findings that give a false 0 or print part of an id): a UTF-16 file; a context cut after masking;
+// a dotted capital I; fullwidth ids other than shas; help together with files. Seat ruling: one round, then new cases of this kind go to Known limits.
+describe('S34 to S38: UTF-16 files, context edges, dotted capital I, fullwidth ids, help', () => {
+  const TOKEN = 'review-thread';
+  const tokenRoot = () => listRoot({ dataset: { prs: [{ pr: Number(HOLD4) }], findings: [{ pr: Number(HOLD4), comment_id: TOKEN }, { pr: Number(HOLD4), comment_id: Number(COMMENT) }] } });
+  const wideAscii = (s) => [...s].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join('');
+  /** True when the context holds a piece of `secret` of `n` characters or more (case blind). */
+  const leaks = (secret, ctx, n = 4) => { const s = secret.toLowerCase(); const c = ctx.toLowerCase(); for (let i = 0; i + n <= s.length; i++) if (c.includes(s.slice(i, i + n))) return true; return false; };
+  const putBytes = (bytes) => { const f = path.join(folder(), 'bytes.md'); fs.writeFileSync(f, bytes); return f; };
+
+  it('S34 a UTF-16 file or a file with a NUL byte exits 2 with a fixed message, never a false 0; a UTF-8 file with a BOM still scans', () => {
+    const root = listRoot();
+    const text = `PR ${HOLD4} and ${COMMENT}\n`;
+    const le = Buffer.from(`﻿${text}`, 'utf16le');
+    const be = Buffer.from(le).swap16();
+    const nul = Buffer.from(`PR ${HOLD4}\0 ${COMMENT}`, 'utf8');
+    for (const bytes of [le, be, nul]) {
+      const r = run(['--root', root, putBytes(bytes)]);
+      assert.equal(r.code, 2);
+      assert.equal(r.out, '');
+      assert.ok(r.err.length > 0 && !r.err.includes(HOLD4) && !r.err.includes(COMMENT), 'the error is empty or holds an id');
+    }
+    const viaStdin = run(['--root', root, '-'], le);
+    assert.equal(viaStdin.code, 2);
+    const bom = scan(root, `﻿PR ${HOLD4}`);
+    assert.equal(bom.gate, 1);
+    assert.equal(bom.code, 1);
+  });
+  it('S35 masking shortens the text but the context never shows a piece of a string id or of a sha at its edge', () => {
+    const root = tokenRoot();
+    const cases = [
+      `${TOKEN} ${'a'.repeat(47)} PR ${HOLD4}`,
+      `${'='.repeat(30)}${TOKEN}${TOKEN}${'_'.repeat(27)}${TOKEN} PR ${HOLD4}`,
+      `PR ${HOLD4} ${SHA} ________${TOKEN} tail`,
+      `${SHA} ${'b'.repeat(44)} PR ${HOLD4}`,
+    ];
+    for (const text of cases) {
+      const r = scan(root, text);
+      assert.ok(r.hits.length >= 1);
+      for (const h of r.hits) {
+        assert.ok(!leaks(TOKEN, h.ctx), 'a piece of a string id reached the context');
+        assert.ok(!leaks(SHA, h.ctx.replace(/b+/g, ''), 5), 'a piece of a sha reached the context');
+      }
+    }
+  });
+  it('S36 a dotted capital I in front of a string id does not move the place or show the id', () => {
+    const root = tokenRoot();
+    const dotted = 'İ';
+    const r = scan(root, `${dotted}${dotted}${dotted} ${TOKEN} end`);
+    const hit = r.hits.find((h) => h.rule === 'token');
+    assert.ok(hit, 'the string id was not found');
+    assert.equal(hit.col, 5);
+    for (const h of r.hits) assert.ok(!leaks(TOKEN, h.ctx, 3), 'a piece of a string id reached the context');
+    const upper = scan(root, `${dotted} ${TOKEN.toUpperCase()}`);
+    assert.equal(upper.hits.find((h) => h.rule === 'token')?.col, 3);
+  });
+  it('S37 a fullwidth comment id, key, string id or PR reference is found by the strict count, at its original column; gate stays the raw count', () => {
+    const root = tokenRoot();
+    const cases = [
+      [wideAscii(COMMENT), 'id'],
+      [wideAscii(KEY), 'key'],
+      [wideAscii(TOKEN), 'token'],
+      [`PR ${wideAscii(HOLD4)}`, 'pr-ref'],
+    ];
+    for (const [text, rule] of cases) {
+      const r = scan(root, `x ${text}`);
+      assert.equal(r.gate, 0, `gate for the fullwidth ${rule}`);
+      assert.ok(r.strict >= 1, `a fullwidth ${rule} was missed`);
+      assert.ok(rules(r).includes(rule), `rule ${rule} not reported: ${rules(r).join(',')}`);
+      assert.equal(r.code, 1);
+      assert.equal(r.hits[0].col >= 3, true);
+    }
+    const ref = scan(root, `PR ${wideAscii(HOLD4)}`);
+    assert.deepEqual(rules(ref), ['pr-ref']);
+    assert.equal(ref.hits[0].col, 4);
+  });
+  it('S38 help together with files exits 2 (the scan never turns into help), help alone still prints the usage', () => {
+    const root = listRoot();
+    const f = put(`PR ${HOLD4}\n`);
+    for (const extra of [['-h'], ['--help']]) {
+      const r = run(['--root', root, f, ...extra]);
+      assert.equal(r.code, 2);
+      assert.ok(!/usage:/.test(r.out));
+    }
+    const alone = run(['-h']);
+    assert.equal(alone.code, 0);
+    assert.match(alone.out, /usage:/);
+  });
+});
