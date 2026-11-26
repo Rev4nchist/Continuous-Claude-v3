@@ -51,6 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_REPO, bandOf, classify, creditsState, matchGlob, renderPathwayMarker, route } from './review-router.mjs';
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 import { monthOf } from './cr-paid.mjs';
+import { answerKeyHitsOf } from './lib/answer-key.mjs';
 import { capacityFact, idleCapacity, parseRateLimitReply } from './lib/capacity-fact.mjs';
 import { askSpecOf, ledgerConfirmCheck, ledgerStep, ledgerUse, slotStateOf } from './lib/checkpoint-ledger.mjs';
 import { DECISIONS_ENV, capCentsOfLabel, decisionKey, decisionsPath, dropKey } from './lib/decisions.mjs';
@@ -386,8 +387,22 @@ function dependabotRule(c) {
   ]);
 }
 
+/**
+ * An answer-key path in the change (card review-pick-answer-key-filter): a review bot would read the answer key, so no paid option is offered and
+ * the recommendation is none, as for Dependabot. A critical or parser file is still named, and the RF floor line (aegis + critic before READY) is kept
+ * when a band exists: no bot is offered, but a person still reviews.
+ */
+function answerKeyRule(c) {
+  const named = [...c.critical.map((p) => ['critical', p]), ...c.parser.map((p) => ['parser', p])];
+  return hit('RK', 'none', [0, 0], [
+    `Answer-key path ${list(c.answerKey.slice(0, 3))} in the change: no review bot is offered, because a bot would read the answer key.`,
+    ...named.map(([kind, p]) => `The change also touches ${kind} file ${p}: no bot reviews it, review it yourself.`),
+  ]);
+}
+
 function hitsFor(c) {
   if (c.dependabot) return [dependabotRule(c)];
+  if (c.answerKey.length) return [answerKeyRule(c), c.band ? floorRule(c) : null].filter(Boolean);
   if (c.band) return bandHits(c);
   const matched = [parserRule(c), criticalRule(c), r3Rule(c)].filter(Boolean);
   if (matched.length) return matched;
@@ -424,6 +439,7 @@ function combine(hits) {
 
 function orderFor(c, picked) {
   if (c.dependabot) return ['none']; // bots refuse bot PRs: no paid option is offered (Dave decision 3)
+  if (c.answerKey.length) return ['none']; // a bot would read the answer key: no paid option is offered (card review-pick-answer-key-filter)
   // A result with no review band (a config with no matrix block) keeps the old lists: none only where a rule or a clean CLI gave it.
   return c.band ? withNone(paidOrder(c, picked)) : paidOrder(c, picked);
 }
@@ -564,7 +580,7 @@ function contextOf(facts, policy) {
   // The budget follows the class of the paths CodeRabbit reads: a filtered dist file does not raise it.
   const budgetClass = classify(pathsOf(reviewable), policy).class;
   return {
-    cls, matched, paths, credits, cli: facts.cli ?? null, dependabot: Boolean(facts.dependabot),
+    cls, matched, paths, credits, cli: facts.cli ?? null, dependabot: Boolean(facts.dependabot), answerKey: answerKeyHitsOf(paths),
     band: bandOf(facts.files, policy, { labels: facts.labels ?? [] }), botBudget: policy.matrix?.bot_budget ?? {},
     critical: tagged(paths, policy.checkpoint?.critical), parser: tagged(paths, policy.checkpoint?.parser),
     monthFiles: facts.ledger_month_files, monthCap: monthCapOf(policy),
