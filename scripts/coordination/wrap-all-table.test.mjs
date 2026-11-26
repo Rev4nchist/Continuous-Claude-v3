@@ -52,8 +52,8 @@ test('W3: a START that a later END closed is not running', () => {
   assert.equal(rowOf(t, 'Coord standard').stop, W.STOP.READY);
 });
 
-test('W4: a START the note marks VOID is not running', () => {
-  const t = W.buildTable(base({ lanes: [lane('re-program', '1dcd1fc7', ''), lane('my-card', 'c64e660e', 'PRE-PR START 11:48 CST x. VOID: lock answered WAIT (exit 75), nothing ran.')] }));
+test('W4: a START that a VOID names (by its time and head) is not running', () => {
+  const t = W.buildTable(base({ lanes: [lane('re-program', '1dcd1fc7', ''), lane('my-card', 'c64e660e', 'PRE-PR START 11:48 CST head abc1234. VOID 11:50 CST: the PRE-PR START of 11:48 for head abc1234 is VOID, the lock answered WAIT (exit 75), nothing ran.')] }));
   assert.equal(rowOf(t, 'Coord standard').stop, W.STOP.READY);
 });
 
@@ -241,4 +241,93 @@ test('W24: an unreadable publish.lock gives a warning and no READY row', () => {
   assert.equal(t.rows.some((r) => r.stop === W.STOP.READY), false);
   assert.ok(t.rows.every((r) => r.stop === W.STOP.UNKNOWN));
   assert.match(W.renderTable(t), /publish\.lock/);
+});
+
+// ---------- W25 to W35: the card wrap-all-limits (two gaps named in the PR of the skill) ----------
+//   a publish.lock held by a session with no row shows nowhere, and a row reads READY            -> W25, W26
+//   a lock held by a listed session now warns too, or an old orphan lock reads as fresh           -> W27, W28
+//   a VOID of an earlier START closes the new run                                                  -> W29
+//   a VOID that names a head closes the wrong START                                                -> W30
+//   the VOID's own clock stamp counts as a tie                                                     -> W31
+//   a VOID of one kind closes the other kind                                                       -> W32
+//   an untied VOID closes a run (seat ruling: it closes nothing, also right after a START)        -> W33
+//   the real note shape of 11-26 (START, then a VOID that names the time and the head)            -> W34
+//   the open run does not print its time and head                                                  -> W35
+const NOTE_RUN = (extra) => base({ lanes: [lane('re-program', '1dcd1fc7', ''), lane('my-card', 'c64e660e', extra)] });
+
+test('W25: a publish.lock held by a session with no row gives a table warning that names the session and the lock time', () => {
+  const t = W.buildTable(base({ publishLock: { session: 'dead0001', key: 'k1', at: new Date(NOW - 5 * 60000).toISOString() } }));
+  assert.ok(t.warnings.some((w) => /publish\.lock/.test(w) && /dead0001/.test(w) && /no row/.test(w)), t.warnings.join('\n'));
+  assert.match(W.renderTable(t), /dead0001/);
+});
+
+test('W26: with an orphan publish.lock no row reads READY; known stops stay', () => {
+  const t = W.buildTable(base({
+    publishLock: { session: 'dead0001', key: 'k1', at: new Date(NOW - 60000).toISOString() },
+    worktrees: [{ path: 'C:/r/wt/mc', branch: 'coord/my-card', tracked: 2, untracked: 0, behind: 0 }],
+  }));
+  assert.equal(t.rows.some((r) => r.stop === W.STOP.READY), false);
+  assert.equal(A('Coord standard')(t).stop, W.STOP.SAVE_PATCH);
+  assert.equal(A('RE program seat')(t).stop, W.STOP.UNKNOWN);
+});
+
+test('W27: a lock held by a listed session gives RELEASE LOCK FIRST for that row only and no orphan warning', () => {
+  const t = W.buildTable(base({ publishLock: { session: 'c64e660e', key: 'k1', at: new Date(NOW - 60000).toISOString() } }));
+  assert.equal(A('Coord standard')(t).stop, W.STOP.RELEASE_LOCK);
+  assert.equal(A('RE program seat')(t).stop, W.STOP.READY);
+  assert.deepEqual(t.warnings, []);
+});
+
+test('W28: an orphan lock older than 20 minutes says it is stale and still blocks READY', () => {
+  const t = W.buildTable(base({ publishLock: { session: 'dead0001', key: 'k1', at: new Date(NOW - 45 * 60000).toISOString() } }));
+  assert.ok(t.warnings.some((w) => /over 20 minutes old/.test(w)), t.warnings.join('\n'));
+  assert.equal(t.rows.some((r) => r.stop === W.STOP.READY), false);
+});
+
+test('W29: a VOID of an earlier START does not close the newer run', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 13:32 CST head ffc4e110. VOID 13:33 CST: the PRE-PR START of 13:32 for head ffc4e110 is VOID. PRE-PR START 14:03 CST head de0dd692, CLI run 2 of 2.'));
+  assert.equal(A('Coord standard')(t).stop, W.STOP.WAIT_END);
+  assert.match(A('Coord standard')(t).running, /14:03/);
+  assert.doesNotMatch(A('Coord standard')(t).running, /13:32/);
+});
+
+test('W30: a VOID that names a head closes only the START of that head', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 13:32 CST head aaa1111. PRE-PR START 14:03 CST head bbb2222. VOID: the run of head aaa1111 never ran.'));
+  const r = A('Coord standard')(t);
+  assert.equal(r.stop, W.STOP.WAIT_END);
+  assert.match(r.running, /bbb2222/);
+  assert.doesNotMatch(r.running, /aaa1111/);
+});
+
+test('W31: the clock stamp of the VOID itself is not a tie', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 13:33 CST head aaa1111. PRE-PR START 13:32 CST head bbb2222. VOID 13:33 CST: the PRE-PR START of 13:32 never ran.'));
+  const r = A('Coord standard')(t);
+  assert.equal(r.stop, W.STOP.WAIT_END, 'the 13:33 START stays open');
+  assert.match(r.running, /13:33/);
+  assert.doesNotMatch(r.running, /13:32/);
+});
+
+test('W32: a VOID that names the PRE-PR kind does not close a HOOK BUILD START', () => {
+  const t = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. PRE-PR START 12:00 CST. VOID: the PRE-PR START of 12:00 never ran.'));
+  const r = A('Coord standard')(t);
+  assert.match(r.running, /hook build/);
+  assert.doesNotMatch(r.running, /pre-pr/);
+});
+
+test('W33: an untied VOID closes nothing, also when it comes right after the START (seat ruling: a false running fails closed)', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 11:48 CST x. VOID: lock answered WAIT (exit 75), nothing ran.'));
+  assert.equal(A('Coord standard')(t).stop, W.STOP.WAIT_END);
+});
+
+test('W34: the note shape of 11-26 (a START, then a VOID that names its time and head) closes that START', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 13:32 CST (clock read) head ffc4e110, new stamp. VOID 13:33 CST (clock read): the PRE-PR START of 13:32 for head ffc4e110 is VOID. The run lock answered WAIT (exit 75). Nothing ran.'));
+  assert.equal(A('Coord standard')(t).stop, W.STOP.READY);
+});
+
+test('W35: an open run prints its kind, its time and its head in the running column', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 14:03 CST (clock read) head de0dd692, CLI run 2 of 2.'));
+  const r = A('Coord standard')(t);
+  assert.match(r.running, /pre-pr/);
+  assert.match(r.running, /14:03/);
+  assert.match(r.running, /de0dd692/);
 });
