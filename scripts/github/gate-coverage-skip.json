@@ -392,6 +392,10 @@
       "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
     },
     {
+      "path": "scripts/coordination/wrap-all-table.test.mjs",
+      "reason": "no gate or CI step names it yet: a gate entry is a change to pre-pr.mjs (a critical file) and the card seat-wrap-all-skill makes none (seat word 11-26); run by hand, its output is the card evidence"
+    },
+    {
       "path": "scripts/github/app-ask.test.mjs",
       "reason": "pre-pr gate only; CI has no step"
     },
