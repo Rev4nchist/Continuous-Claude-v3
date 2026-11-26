@@ -4374,6 +4374,16 @@ test('R18: RED <anchor>~N with an anchor that is not a PR commit, or ~0 on the h
   assert.match(redProblems(zero)[0], /RED names the head commit/);
 });
 
+test('R20: ~N is for the RED line only: GREEN <head>~1 is not "GREEN names the head" (CodeRabbit CLI run 1, review-status.mjs:739)', () => {
+  const green = (sha) => `${preamble('bugfix')}${proofField('RED', C_RED, 'not ok 1')}\n${proofField('GREEN', sha, '# fail 0')}`;
+  const bad = evaluate({ ...input({ proofBody: green(`${HEAD}~1`) }), commits: prCommits(C_RED, HEAD) });
+  assert.equal(proofReasons(bad).filter((x) => /GREEN/.test(x)).length, 1, readyOrWhy(bad));
+  assert.match(proofReasons(bad).join('\n'), /~N is for the RED line only/);
+  assert.equal(bad.ready, false);
+  const ok = evaluate({ ...input({ proofBody: green(HEAD) }), commits: prCommits(C_RED, HEAD) });
+  assert.deepEqual(proofReasons(ok), [], readyOrWhy(ok));
+});
+
 test('R19: with an unknown commit list, RED <anchor>~N gives no new problem (only the head test runs, as in R7)', () => {
   const r = redCheck('bugfix', `${HEAD}~1`, []);
   assert.deepEqual(redProblems(r), [], readyOrWhy(r));
