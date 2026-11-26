@@ -336,6 +336,7 @@ jobs:
           scripts/coordination/board-band-view.test.mjs
           scripts/coordination/ask-ledger.test.mjs
           scripts/coordination/stall-alarm-log.test.mjs
+          scripts/coordination/friction-counts.test.mjs
           scripts/coordination/learning-counts.test.mjs
           scripts/coordination/board-mask.test.mjs
           scripts/coordination/board-done-view.test.mjs
