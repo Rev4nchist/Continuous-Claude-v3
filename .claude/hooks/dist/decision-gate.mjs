@@ -2617,6 +2617,10 @@ function withAstMerges(shapes, parsed, pwsh) {
       out3.push(s);
       continue;
     }
+    if (s.rawOnly) {
+      push(s);
+      continue;
+    }
     const h = heads(s.pr);
     if (!h) {
       push(s);
@@ -2754,7 +2758,7 @@ function astItemsOf(parsed, raw, exempt, text) {
   const extra = [];
   const mergeWords = [...text.matchAll(/\bgh\s+pr\s+merge\b[^|;&\n]*/gi)];
   if (mergeWords.length > foundMerges.length && !onlyDataReaders(parsed)) {
-    for (const m of mergeWords) extra.push({ sq: squashed(m[0]), shape: { kind: "merge", pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD } });
+    for (const m of mergeWords) extra.push({ sq: squashed(m[0]), shape: { kind: "merge", pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD, rawOnly: true } });
   }
   const api = MERGE_API_RE.exec(text);
   if (api && !GET_RE.test(api[0]) && !foundMerges.some((m) => m.pr === api[1])) extra.push({ sq: squashed(api[0]), shape: { kind: "merge", pr: api[1], ...UNREAD_HEAD } });
@@ -2854,13 +2858,16 @@ function parseErrorDenies(parsed) {
   if (!failed && parsed.innerBad !== true) return [];
   return GUARDED_TEXT.test(blankQuotes(parsed.text)) ? [deny("parse-error", PARSE_ERROR_WHY)] : [];
 }
+var STANDALONE_CLEANUP = /^\s*(?:&\s*)?(?:(?:pwsh|powershell)(?:\.exe)?\s+(?:-NoProfile\s+)?(?:-File\s+)?)?[^\s;&|<>$`'"()]*land-pr\.ps1(?:\s+(?:-Pr\s+\d+|-CleanupOnly))+\s*$/i;
 var PARSER_UNAVAILABLE_WHY = "the parser was late, run it again. The shell parser did not answer in time (or could not run), and this text names a guarded call (a push, a create, a merge or the land script), so this gate cannot read which call runs. Run the same call again, or run the push, create or merge as its own command.";
-function parserUnavailableDenies(parsed, text) {
+function parserUnavailableDenies(parsed, text, covered = false) {
   if (parsed) return [];
+  if (STANDALONE_CLEANUP.test(text) && /-Pr\s+\d+/i.test(text) && CLEANUP_RE.test(text)) return [];
   const views = [blankQuotes(text), text.replace(/['"`]/g, "")];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   const scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? "other" : "push";
-  return [deny("parser-unavailable", PARSER_UNAVAILABLE_WHY, scope)];
+  const d = deny("parser-unavailable", PARSER_UNAVAILABLE_WHY, scope);
+  return [covered ? { ...d, homeFlags: true } : d];
 }
 var DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
 var INERT_PROGRAMS = /* @__PURE__ */ new Set(["echo", "printf", "grep", "rg", "select-string", "set-content", "add-content", "out-file", "write-output", "write-host", "set-location", "get-date", "cat", "head", "tail", "ls", "get-content", "cd", "gc", "sc", "ac", "sls", "sl"]);
@@ -4635,7 +4642,7 @@ function judgeCommand(input, deps, notes, denies = []) {
   if (capOverrideDeny(input, deps)) denies.push(deny("cap-override", CAP_WHY));
   for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
-  for (const d of parserUnavailableDenies(deps.parsed, cmd.text)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  for (const d of parserUnavailableDenies(deps.parsed, cmd.text, deps.parsed === void 0 && coveredAmong(deps, [cwd]) !== null)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));

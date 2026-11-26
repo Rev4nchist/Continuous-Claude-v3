@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
-import { decide, withParsed, type Deps } from '../decision-gate.js';
+import { decide, parserUnavailableDenies, withParsed, type Deps } from '../decision-gate.js';
 
 vi.setConfig({ testTimeout: 60000 });
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -91,6 +91,39 @@ describe('W: seat condition 11-26, a wrapper (env, timeout) that carries a guard
     // The same rank: deny, warn or allow. A deny may name another pattern (a wrapped create has no readable head: head-unresolved, the bare one is open-pr).
     const rank = (v: string): string => v.split(':')[0];
     expect(rank(await full(wrapped)), wrapped).toBe(rank(want));
+  });
+});
+
+describe('A: CLI run 2 of C2b, a wrapped merge that the parse does not list keeps its unread head (seat 11-26)', () => {
+  // Change that breaks it: withAstMerges gives every merge shape of a PR the head of the parsed merges, so the head of a parsed merge hides a wrapped one of the same PR.
+  const OWN = `gh pr merge 12 --squash --match-head-commit ${HEAD}`;
+  it('A1 (control) the parsed merge alone, tapped for its head: allowed', async () => {
+    landTap(12);
+    expect(await run(OWN)).toBe('allow');
+  });
+  it.each(['env gh pr merge 12 --squash', 'env FOO=1 gh pr merge 12 --squash', 'timeout 5 gh pr merge 12 --squash', `env gh pr merge 12 --squash --match-head-commit ${HEAD}`])(
+    'A2 the tapped merge, then %s: denied (the wrapped one has no head of its own)', async (wrapped) => {
+      landTap(12);
+      expect(await run(`${OWN} ; ${wrapped}`), wrapped).not.toBe('allow');
+      expect(await run(`${wrapped} ; ${OWN}`), wrapped).not.toBe('allow');
+    });
+});
+
+describe('B: CLI run 2 of C2b, the no-parse deny in a covered app reads the home flag', () => {
+  it('B1 parserUnavailableDenies sets homeFlags only for a covered folder', () => {
+    expect(parserUnavailableDenies(undefined, 'gh pr create --title x', true)[0]).toMatchObject({ pattern: 'parser-unavailable', homeFlags: true });
+    expect(parserUnavailableDenies(undefined, 'gh pr create --title x')[0]).not.toHaveProperty('homeFlags');
+  });
+});
+
+describe('E: CLI run 2 of C2b, a standalone cleanup land passes with no parse', () => {
+  const CLEAN = 'pwsh -NoProfile -File scripts/github/land-pr.ps1 -Pr 12 -CleanupOnly';
+  it('E1 a standalone land call with -Pr N and -CleanupOnly, no parse: allowed', () => {
+    expect(patternOf(noParse(CLEAN, { parseLate: CLEAN }))).toBe('allow');
+    expect(patternOf(noParse('scripts/github/land-pr.ps1 -CleanupOnly -Pr 12', { parseLate: 'x' }))).toBe('allow');
+  });
+  it('E2 (paired) no -Pr N, a chained command, or a land with no -CleanupOnly: denied parser-unavailable', () => {
+    for (const c of ['scripts/github/land-pr.ps1 -CleanupOnly', `${CLEAN} ; gh pr merge 5`, `${CLEAN} && git push fork x`, 'scripts/github/land-pr.ps1 -Pr 12']) expect(patternOf(noParse(c, { parseLate: c })), c).toBe('parser-unavailable');
   });
 });
 
@@ -291,6 +324,7 @@ describe('F: F1-3, no parse and a text that names a guarded call', () => {
     const inp = input(MERGE);
     const w = await withParsed(JSON.stringify(inp), { ...deps(), parseBudgetMs: 50, parseOpts: { bashProvider: () => new Promise(() => undefined) } } as Deps);
     expect(w.parsed).toBeUndefined();
+    expect(w.parseLate, 'the parse must have started and been late, not skipped').toBeDefined();
     expect(patternOf(decide(inp, w))).toBe('parser-unavailable');
   });
   it('F1-3e (control) a rejecting provider is a parse error, denied parse-error as on C1', async () => {

@@ -385,11 +385,10 @@ describe('C2 seat findings: a character the merge reader does not model makes th
     landTap(5);
     expect(await patternIn(pwsh(`${MERGE} 5 --squash --body "x“" --match-head-commit ${HEAD} "y”"`))).toBe('merge-no-head');
   });
-  it('C2-17 (seat delta q3): a gh call run by another program (bash -c, pwsh -c, cmd /c, a here-string) makes the head unread', async () => {
+  // Split (CLI run 2 of C2b): one test of 5 lists x 2 tools x 6 texts = 60 parses ran past the timeout under load and filled the flake ledger. One test per tool and list now.
+  describe('C2-17 (seat delta q3): a gh call run by another program (bash -c, pwsh -c, cmd /c, a here-string) makes the head unread', () => {
     // Breaks when: the reader starts at the gh word whatever comes before it. Another program parses the words again (cmd also expands
     // %X% inside double quotes), so the words gh gets cannot be proven from this text.
-    landTap(5);
-    openTap('feat/x');
     const m = `${MERGE} 5 --squash --match-head-commit ${HEAD}`;
     const c = 'gh pr create --head feat/x --title t';
     // C2b (class B): main with a parse gives these answers; the hand reader is retired. The parser reads the inner call of bash -c, pwsh -Command and powershell -c, so
@@ -404,9 +403,13 @@ describe('C2 seat findings: a character the merge reader does not model makes th
       ['wrong-head merge', wrap(`${MERGE} 5 --squash --match-head-commit ${OTHER}`), mDeny], ['tapped create', wrap(c), cTap], ['no-tap create', wrap('gh pr create --head feat/z --title t'), cDeny]];
     for (const tool of [bash, pwsh]) {
       for (const [label, texts, want] of lists) {
-        for (let i = 0; i < texts.length; i++) {
-          expect(await patternIn(tool(texts[i])), `${tool === bash ? 'bash' : 'pwsh'} ${label} ${texts[i]}`).toBe(want[i]);
-        }
+        it(`${tool === bash ? 'bash' : 'pwsh'}: ${label}`, async () => {
+          landTap(5);
+          openTap('feat/x');
+          for (let i = 0; i < texts.length; i++) {
+            expect(await patternIn(tool(texts[i])), `${tool === bash ? 'bash' : 'pwsh'} ${label} ${texts[i]}`).toBe(want[i]);
+          }
+        });
       }
     }
   });

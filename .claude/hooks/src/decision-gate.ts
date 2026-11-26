@@ -707,6 +707,8 @@ interface Shape {
   kind: 'create' | 'land' | 'merge' | 'store' | 'push'; pr: string | null; sha?: string | null; push?: PushShape;
   /** Round 3 C2, a merge only: the head cannot be read as gh reads it (two values, a non-literal, an unknown flag, an unpaired quote). */
   shaBad?: true;
+  /** A merge only: the raw backstop found this occurrence and the parse did not list it (a wrapper such as env or timeout). Its head stays unread whatever a parsed merge of the same PR says. */
+  rawOnly?: true;
   /** Create, land and merge: where the shape runs. */
   at?: Where;
   /**
@@ -986,6 +988,8 @@ function withAstMerges(shapes: Shape[], parsed: Deps['parsed'], pwsh: boolean): 
   };
   for (const s of shapes) {
     if (s.kind !== 'merge') { out.push(s); continue; }
+    // CLI run 2 of C2b: a raw-only occurrence keeps its unread head. A shared PR number does not say the parse saw this occurrence.
+    if (s.rawOnly) { push(s); continue; }
     const h = heads(s.pr);
     if (!h) { push(s); continue; }
     const { shaBad: _drop, ...rest } = s;
@@ -1147,7 +1151,7 @@ function astItemsOf(parsed: Deps['parsed'], raw: string, exempt: boolean, text: 
   const mergeWords = [...text.matchAll(/\bgh\s+pr\s+merge\b[^|;&\n]*/gi)];
   if (mergeWords.length > foundMerges.length && !onlyDataReaders(parsed)) {
     // C2b: when the counts differ the pairing by count cannot say which raw merge the parse saw, so EVERY raw merge is judged as unread (an env-prefixed merge before a tapped merge is not dropped).
-    for (const m of mergeWords) extra.push({ sq: squashed(m[0]), shape: { kind: 'merge', pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD } });
+    for (const m of mergeWords) extra.push({ sq: squashed(m[0]), shape: { kind: 'merge', pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD, rawOnly: true } });
   }
   const api = MERGE_API_RE.exec(text);
   if (api && !GET_RE.test(api[0]) && !foundMerges.some((m) => m.pr === api[1])) extra.push({ sq: squashed(api[0]), shape: { kind: 'merge', pr: api[1], ...UNREAD_HEAD } });
@@ -1296,20 +1300,25 @@ export function parseErrorDenies(parsed: Deps['parsed']): Deny[] {
 
 // ---------- PR C2b (F1-3): no parse and a text that names a guarded call ----------
 
+/** One standalone land call and nothing else: an optional pwsh -File leader, the script path, and only -Pr N and -CleanupOnly after it. No chain, pipe, substitution or quote. */
+const STANDALONE_CLEANUP = /^\s*(?:&\s*)?(?:(?:pwsh|powershell)(?:\.exe)?\s+(?:-NoProfile\s+)?(?:-File\s+)?)?[^\s;&|<>$`'"()]*land-pr\.ps1(?:\s+(?:-Pr\s+\d+|-CleanupOnly))+\s*$/i;
 const PARSER_UNAVAILABLE_WHY = 'the parser was late, run it again. The shell parser did not answer in time (or could not run), and this text names a guarded call (a push, a create, a merge or the land script), so this gate cannot read which call runs. Run the same call again, or run the push, create or merge as its own command.';
 /**
  * F1-3: the hand reader is gone, so a text with no parse (late, thrown or never parsed) that names a guarded call is denied. Fail closed (V7.6). A text with no
  * guarded word is not touched: withParsed skips the parse for it, and no rule needs one.
  */
-export function parserUnavailableDenies(parsed: Deps['parsed'], text: string): Deny[] {
+export function parserUnavailableDenies(parsed: Deps['parsed'], text: string, covered = false): Deny[] {
   if (parsed) return [];
+  if (STANDALONE_CLEANUP.test(text) && /-Pr\s+\d+/i.test(text) && CLEANUP_RE.test(text)) return []; // a post-merge cleanup is the recovery the land deny names
   // Two views of the text (seat ruling 11-26): the quote-blanked one (a quoted payload reads as words) and the quote-removed one (a splice such as g""h pr merge
   // reads as gh pr merge, as the shell does). A guarded call in either view is denied. Fail closed, no parse to tell which.
   const views = [blankQuotes(text), text.replace(/['"`]/g, '')];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   // The rank is the one the call has with a parse: a create, land or merge denies (scope other), a push keeps the push flag (CodeRabbit run 1, same rule as not-inert).
   const scope: Scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? 'other' : 'push';
-  return [deny('parser-unavailable', PARSER_UNAVAILABLE_WHY, scope)];
+  // CLI run 2 of C2b: in a covered app the flag is read from the home copy only, as for every app create or merge.
+  const d = deny('parser-unavailable', PARSER_UNAVAILABLE_WHY, scope);
+  return [covered ? { ...d, homeFlags: true } : d];
 }
 
 // ---------- PR C2b (Policy P, Dave's decision 11-26): a guarded text the parse does not resolve is allowed only when it is inert ----------
@@ -3915,7 +3924,7 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   // PR C1 (F1): a text that does not parse, or a shell string inside it that does not parse, and names a guarded call. Only adds a deny.
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   // PR C2b (F1-3): no parse and a guarded call named in the text.
-  for (const d of parserUnavailableDenies(deps.parsed, cmd.text)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  for (const d of parserUnavailableDenies(deps.parsed, cmd.text, deps.parsed === undefined && coveredAmong(deps, [cwd]) !== null)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);

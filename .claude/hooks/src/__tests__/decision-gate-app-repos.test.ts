@@ -187,6 +187,8 @@ interface World {
    * null = no config anywhere.
    */
   config?: string | null;
+  /** CLI run 2 of C2b: the router config text of the home copy only (the checkout copy at /work keeps `config`). */
+  homeConfig?: string;
   /** R5 F5: a router config file inside the app repo /work/app-x (the gate must not read enforceAppPush from it). */
   appConfig?: string;
   /** No tapScope field at all (the shape of every old test). */
@@ -263,7 +265,8 @@ function deps(w: World = {}): Deps {
     readFile: (p) => {
       const f = slash(p);
       if (f === '/work/app-x/review-router.config.json') return w.appConfig ?? null;
-      return f === '/work/review-router.config.json' || f === '/home/tester/continuous-claude/review-router.config.json' ? config : null;
+      if (f === '/home/tester/continuous-claude/review-router.config.json') return w.homeConfig ?? config;
+      return f === '/work/review-router.config.json' ? config : null;
     },
     git: (cwd, args) => {
       const dir = slash(cwd);
@@ -498,6 +501,25 @@ describe('C7 the app-push scope denies by default; only a literal false turns it
     const both = `${CREATE} && ${PUSH}`;
     expect((await denyOf(bash(both), cfg({ enforce: false })))?.scope).toBe('app-push');
     expect((await denyOf(bash(both), cfg({ enforce: true, enforceAppPush: false })))?.scope).toBe('other');
+  });
+});
+
+describe('CLI run 2 of C2b: the no-parse deny in a covered folder reads decisions.enforce from the home copy', () => {
+  // Change that breaks it: parserUnavailableDenies returns the deny without homeFlags, so the checkout copy (enforce false) turns a late-parse create or merge into a warning.
+  const lateDeny = (cmd: string, w: World): string => { const d = decide(bash(cmd), deps(w)); return d.action === 'deny' ? d.pattern : 'allow'; };
+  const split = { config: JSON.stringify({ decisions: { enforce: false } }), homeConfig: JSON.stringify({ decisions: { enforce: true } }) };
+  it('home enforce true, checkout enforce false: a covered create and merge with no parse are denied parser-unavailable', () => {
+    expect(lateDeny(CREATE, split)).toBe('parser-unavailable');
+    expect(lateDeny(MERGE, split)).toBe('parser-unavailable');
+  });
+  it('(paired) home enforce false: the same texts only warn', () => {
+    const off = { config: split.config, homeConfig: split.config };
+    expect(lateDeny(CREATE, off)).toBe('allow');
+    expect(lateDeny(MERGE, off)).toBe('allow');
+  });
+  it('(paired) a CCv3 checkout keeps the checkout lookup: enforce false in its copy only warns', () => {
+    const d = decide(bash(CREATE, '/work/cc'), deps({ ...split }));
+    expect(d.action === 'deny' ? d.pattern : 'allow').toBe('allow');
   });
 });
 
