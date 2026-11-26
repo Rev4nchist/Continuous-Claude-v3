@@ -103,6 +103,9 @@ describe('S1 to S5: the number rules', () => {
     assert.equal(r.code, 1);
     const g = scan(root, `line ${RES3} of the file`, ['--gate-only']);
     assert.equal(g.gate, 0);
+    assert.equal(g.strict, null);
+    assert.equal(g.json.files[0].strict, null);
+    assert.deepEqual(g.hits, []);
     assert.equal(g.code, 0);
   });
   it('S3b a bare 3 digit holdout PR number in prose (the 11-26 case): gate 0, strict 1', () => {
@@ -151,6 +154,7 @@ describe('S6 to S9: long ids, shas, keys, glued digits', () => {
       const r = scan(root, text);
       assert.equal(r.gate, 1, `gate for a sha form of length ${text.length}`);
       assert.deepEqual(rules(r), ['sha']);
+      assert.equal(r.hits[0].col, 6, 'the place of a sha hit is the start of its hex run');
     }
     const six = scan(root, `head ${SHA.slice(0, 6)}`);
     assert.equal(six.gate, 0);
@@ -196,6 +200,7 @@ describe('S10 to S12: places, output, switches', () => {
     const r = run(['--root', root, '--gate-only', put(`line ${RES3}\n`)]);
     assert.equal(r.code, 0);
     assert.ok(!/strict/.test(r.out));
+    assert.ok(!/HIT /.test(r.out), 'a strict-only place is listed under --gate-only');
     const g = run(['--root', root, '--gate-only', put(`PR ${HOLD4}\n`)]);
     assert.equal(g.code, 1);
     assert.match(g.out, /gate 1/);
@@ -261,10 +266,10 @@ describe('S16 to S24: context, parity, usage', () => {
   });
   it('S17 the bare rule is the rule of the rubric guard: same hit or no hit on the same token', async () => {
     const lint = await import(pathToFileURL(path.join(REPO, 'scripts/eval/review-eval/rubrics/lint-ids.mjs')).href);
-    const gold = await import(pathToFileURL(path.join(REPO, 'scripts/eval/review-eval/gold.mjs')).href);
     const cfg = JSON.parse(fs.readFileSync(path.join(root, EVAL_CONFIG_REL), 'utf8'));
     const dataset = JSON.parse(fs.readFileSync(path.join(root, DATASET_REL), 'utf8'));
-    const set = lint.forbiddenSet({ cfg, dataset, goldRows: gold.loadGold(path.join(root, GOLD_DIR_REL)).rows });
+    const goldRows = JSON.parse(fs.readFileSync(path.join(root, GOLD_DIR_REL, 'rows.json'), 'utf8'));
+    const set = lint.forbiddenSet({ cfg, dataset, goldRows });
     // Tokens of the rubric set that the gate list lacks, and tokens in no list: only the bare rule can hit them.
     for (const token of [RES3, `0${RES3}`, GOLD3, RES2, `0${RES2}`, '999', '5555', `${RES3}0`]) {
       const dir = folder();
@@ -317,6 +322,20 @@ describe('S16 to S24: context, parity, usage', () => {
     assert.deepEqual(j.files.map((f) => f.gate), [0, 1]);
     assert.equal(j.gate, 1);
     assert.equal(r.code, 1);
+  });
+  it('S25 a file name is masked in the output: a digit run in a name could itself be an id', () => {
+    const dir = folder();
+    const f = path.join(dir, `x${HOLD4}y-${COMMENT}.md`);
+    fs.writeFileSync(f, `PR ${HOLD4}\n`);
+    for (const flags of [[], ['--json']]) {
+      const r = run(['--root', root, ...flags, f]);
+      assert.ok(!r.out.includes(HOLD4) && !r.out.includes(COMMENT), 'a name reached the output unmasked');
+      assert.equal(r.code, 1);
+    }
+  });
+  it('S10c a lone CR counts as a line break, as CRLF and LF do', () => {
+    const r = scan(root, `one\rtwo\rPR ${HOLD4}`);
+    assert.equal(r.hits[0].line, 3);
   });
   it('S24 the script copies no id and reads no list of its own: it works on a root with another list', () => {
     const other = listRoot({ dataset: { prs: [{ pr: 6001 }], findings: [{ pr: 6001, comment_id: 2222222222 }] }, config: { reserve: [], holdoutExclude: [] } });
