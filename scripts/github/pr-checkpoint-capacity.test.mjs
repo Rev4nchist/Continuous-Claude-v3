@@ -399,7 +399,7 @@ test("CP10: autoConfirm 'low' covers LOW only; true still covers LOW, MID and EL
   }
   const critical = await autoFor(['scripts/github/review-status.mjs', ...LOW], 'low');
   assert.equal(critical.auto.eligible, false, 'a critical file needs Dave');
-  assert.equal(LIVE.checkpoint.autoConfirm, 'low', 'the live config ships low (Dave 2026-11-06)');
+  assert.equal(LIVE.checkpoint.autoConfirm, true, 'the live config ships true (Dave 2026-11-26; it was low from 2026-11-06)');
 });
 
 // ---------- reasons name the trigger ----------
