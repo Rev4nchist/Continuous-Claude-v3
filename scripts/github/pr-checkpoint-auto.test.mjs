@@ -94,7 +94,7 @@ test('AC2: HIGH and CRITICAL are never auto-eligible (HIGH stays with Dave: the 
 });
 
 test('AC3: the kill switch is a literal true or the word low in checkpoint.autoConfirm; missing, false, "true" or 1 turn auto-confirm off', async () => {
-  assert.equal(LIVE.checkpoint.autoConfirm, 'low', 'the live config carries the switch, and it ships low: LOW band only (Dave 2026-11-06; it was false from 2026-11-02)');
+  assert.equal(LIVE.checkpoint.autoConfirm, true, 'the live config carries the switch, and it ships true: LOW, MID and ELEVATED (Dave 2026-11-26; it was low from 2026-11-06 and false from 2026-11-02)');
   assert.equal((await recommendFor(MID, {}, withAuto(true))).auto.eligible, true);
   for (const value of [false, 'true', 1, null, undefined]) {
     const r = await recommendFor(MID, {}, withAuto(value));
@@ -287,4 +287,46 @@ test('AC13b: review-status.mjs, the router and the land step are forced HIGH (FO
     assert.equal(r.auto.eligible, false, p);
     assert.match(r.auto.reason, /^Band HIGH: Dave presses/, p);
   }
+});
+
+// ---------- the live value (card review-autoconfirm-below-high, Dave 2026-11-26 07:42 CST): these rows read LIVE.checkpoint, not a pinned value ----------
+
+const liveAuto = (paths, factOver = {}) => recommendFor(paths, factOver, { checkpoint: LIVE.checkpoint });
+
+test('AL1: under the live config a MID and an ELEVATED PR with no critical file are auto-eligible', async () => {
+  for (const [paths, band] of [[MID, 'MID'], [ELEVATED, 'ELEVATED']]) {
+    const r = await liveAuto(paths);
+    assert.equal(r.band.band, band);
+    assert.equal(r.recommended, 'none');
+    assert.equal(r.auto.eligible, true, `${band} under the live config: ${r.auto.reason}`);
+  }
+});
+
+test('AL2: under the live config a critical file in a MID or an ELEVATED PR still stops the auto record, with the floor text', async () => {
+  for (const paths of [[...MID, GATE[3]], [...ELEVATED, GATE[3]]]) {
+    const r = await liveAuto(paths);
+    assert.notEqual(r.band.band, 'HIGH', 'cr-paid.mjs is critical but not forced HIGH');
+    assert.equal(r.recommended, 'none');
+    assert.equal(r.auto.eligible, false);
+    assert.match(r.auto.reason, /aegis \+ critic/, 'the floor stops it, not the band');
+    assert.ok(r.auto.reason.includes(GATE[3]), 'the reason names the file');
+  }
+});
+
+test('AL3: under the live config HIGH and CRITICAL are never auto-eligible', async () => {
+  const high = await liveAuto(GATE);
+  assert.equal(high.band.band, 'HIGH');
+  assert.equal(high.auto.eligible, false);
+  const critical = await liveAuto(['docs/a.md'], { labels: ['risk:high'] });
+  assert.equal(critical.band.band, 'CRITICAL');
+  assert.equal(critical.auto.eligible, false);
+});
+
+test('AL4: a PR that changes the config itself is never auto-confirmed under the live value: its band is HIGH, and config_drift stops any other band', async () => {
+  const cfg = await liveAuto(['review-router.config.json']);
+  assert.equal(cfg.band.band, 'HIGH', 'review-router.config.json is a config file (matrix.config_files): HIGH, so Dave presses');
+  assert.equal(cfg.auto.eligible, false);
+  const drift = await liveAuto(MID, { config_drift: true });
+  assert.equal(drift.auto.eligible, false);
+  assert.match(drift.auto.reason, /Branch config differs from main/);
 });
