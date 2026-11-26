@@ -298,6 +298,12 @@ export interface Deps {
    * everything else is decided by the hand reader, as on main.
    */
   parseLate?: string;
+  /**
+   * PR C2a, a TEST-ONLY seam: the hand views of shapesOf are skipped, so a test sees what the parser path alone decides (the state C2b makes real).
+   * Only a test sets it. main() builds Deps without it, and nothing reads it from the environment, the payload, the settings or the decisions config.
+   * Row CS-1 pipes a payload into the built hook with every env var that names it set, and the hook still runs the hand reader. C2b removes the field.
+   */
+  astOnly?: boolean;
   /** The parser seams of withParsed (a provider for the bash parse or the pwsh walker). Absent: the real parsers. */
   parseOpts?: ParseOpts;
   /** The time budget of the whole parse in withParsed, in ms (CodeRabbit CLI run 1 finding 2). Absent: 7000. Past it there is no `parsed` and the hand reader decides. */
@@ -1054,13 +1060,18 @@ function withAstMerges(shapes: Shape[], parsed: Deps['parsed'], pwsh: boolean): 
   };
   // Finding C (CodeRabbit CLI run 2): a parsed call that names another repo (-R foreign/repo) inside a quoted payload is judged by its own words.
   // The hand shape keeps the outer text, where quote masking hides the flag, so the shape reads its repository from the parsed call instead.
-  const own = (pr: string | null): AstMerge | undefined => found.find((m) => m.pr === pr && namesOtherRepo(m, pwsh));
+  // C2a: the call that names another repo AND sits in this shape's own command text (two merges of one PR for two repos are two shapes, each judged by its own words).
+  const own = (s: Shape): AstMerge | undefined => {
+    const cands = found.filter((m) => m.pr === s.pr && namesOtherRepo(m, pwsh));
+    const shapeText = squashed(s.ftext ?? s.text ?? '');
+    return cands.find((m) => shapeText.includes(squashed(m.text))) ?? cands[0];
+  };
   for (const s of shapes) {
     if (s.kind !== 'merge') { out.push(s); continue; }
     const h = heads(s.pr);
     if (!h) { push(s); continue; }
     const { shaBad: _drop, ...rest } = s;
-    const o = own(s.pr);
+    const o = own(s);
     push({ ...rest, sha: h.sha, ...(h.shaBad ? { shaBad: true as const } : {}), ...(o ? { ftext: o.text, fmtext: maskQuoted(o.text, pwsh ? 'PowerShell' : 'Bash') } : {}) });
   }
   for (const m of found) {
@@ -1089,6 +1100,8 @@ function createCallOf(call: Call): AstCreate | null {
   const cwdBefore = call.cwdBefore ?? [];
   const text = w.map((x) => x.raw).join(' ');
   if (sub(1) === 'pr' && (sub(2) === 'create' || sub(2) === 'new')) {
+    // C2a: a heredoc inside a title or body (a body that comes from another command's text) leaves the head and base unread, as the hand reader did. Main denies it (head-unresolved).
+    if (w.some((x) => x.raw.includes('<<'))) return { read: BAD('a heredoc in a title or body makes the head and base unreadable'), cwdBefore, text };
     const lits: string[] = [];
     for (const a of w.slice(3)) {
       if (a.lit !== null) { lits.push(a.lit); continue; }
@@ -1148,6 +1161,71 @@ function withAstCreates(shapes: Shape[], parsed: Deps['parsed'], pwsh: boolean):
     return { kind: 'create', pr: null, at: { cds, unknown: f.cwdBefore.includes(null), loose: cds.length > 0 || f.cwdBefore.includes(null) }, text: f.text, mtext: masked, ftext: f.text, fmtext: masked, prior: NO_PRIOR, tail: f.text, pwsh, read: f.read };
   });
   return [...shapes, ...extra];
+}
+
+// ---------- PR C2a: the land script and the in-segment parser shapes (union only, the hand reader still runs) ----------
+
+/** One call of the parse that names the land script: its text, the PR and the sha read from that call's words alone, and the folders before it. */
+interface AstLandCall { text: string; pr: string | null; sha: string | null; cwdBefore: (string | null)[] }
+/**
+ * The land calls of the parse. A call counts when its own words (or its stdin) name the land script: the script itself, a shell program that runs it, a
+ * call operator, a substitution inside a print. `exempt` is the exemption of the hand reader, passed in by shapesOf: a text that only prints or reads text, or
+ * only appends a document line, with no PR number anywhere, is a mention. The caller decides it with the same functions as before (isTextOnlyCommand, doc append).
+ */
+function astLandCalls(parsed: Deps['parsed'], raw: string, exempt: boolean, gate: string): AstLandCall[] {
+  // gate: the text with inert quoted strings blanked (a commit message or an echo that only names the script is a mention, as in the hand reader).
+  if (!parsed || exempt || !LAND_SCRIPT_RE.test(raw) || !LAND_SCRIPT_RE.test(gate)) return [];
+  const out: AstLandCall[] = [];
+  for (const c of Object.values(parsed.byDialect).flatMap((r) => (r ? r.calls : []))) {
+    const text = [...c.words.map((w) => w.raw), ...(c.stdin?.lit ? [c.stdin.lit] : [])].join(' ');
+    if (!LAND_SCRIPT_RE.test(text) || CLEANUP_RE.test(text)) continue;
+    out.push({ text, pr: lastArg(text, LAND_PR_RE), sha: SHA_RE.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
+  }
+  // The text names the script but no call does (a path held in a variable, an Invoke-Expression, a pipe into a shell): one loose land call reads the whole text.
+  if (out.length === 0 && !CLEANUP_RE.test(raw)) out.push({ text: raw, pr: lastArg(raw, LAND_PR_RE), sha: SHA_RE.exec(raw)?.[1]?.toLowerCase() ?? null, cwdBefore: [] });
+  return out;
+}
+/** The land shapes of the parse, placed by the folders the parser saw before each call. A shape the hand reader already has (same PR, same sha) is dropped by the caller. */
+function astLandShapes(parsed: Deps['parsed'], raw: string, exempt: boolean, gate: string, pwsh: boolean): Shape[] {
+  return astLandCalls(parsed, raw, exempt, gate).map((l) => {
+    const cds = l.cwdBefore.filter((c): c is string => c !== null);
+    const masked = maskQuoted(l.text, pwsh ? 'PowerShell' : 'Bash');
+    return { kind: 'land', pr: l.pr, sha: l.sha, at: { cds, unknown: l.cwdBefore.includes(null), loose: cds.length > 0 || l.cwdBefore.includes(null) }, text: l.text, mtext: masked, ftext: l.text, fmtext: masked, prior: NO_PRIOR, pwsh };
+  });
+}
+/**
+ * The calls of the parse as segment-level facts, for the astOnly path: a hand segment that holds one of these (compared with quotes, blanks and backslashes
+ * deleted) takes the parser's land, merge or create read in place of the hand regexes, and keeps its own folder, own command and earlier GH_REPO.
+ */
+interface AstItem { sq: string; create?: true; read?: CreateRead; shape?: Shape }
+/** Programs that only print, search or read text (Dave's tap M6b: words of a merge in a grep, rg or echo are data). None runs an argument as a command. */
+const DATA_READERS = new Set(['echo', 'printf', 'write-host', 'write-output', 'grep', 'egrep', 'fgrep', 'rg', 'cat', 'head', 'tail', 'select-string', 'sls', 'get-content', 'gc']);
+/** Every call of the clean parse is a bare data reader and nothing is redirected to a file: the text names words but runs nothing. */
+function onlyDataReaders(parsed: NonNullable<Deps['parsed']>): boolean {
+  const rs = Object.values(parsed.byDialect).filter((r): r is ParseResult => r !== undefined);
+  return rs.length > 0 && rs.every((r) => r.ok && r.errors.length === 0 && r.calls.length > 0 && !hasBareRedirect(parsed.text, r)
+    && r.calls.every((c) => c.assigns.length === 0 && c.words[0]?.lit != null && c.words[0].lit === c.words[0].raw && DATA_READERS.has(c.words[0].lit.toLowerCase())));
+}
+function astItemsOf(parsed: Deps['parsed'], raw: string, exempt: boolean, text: string): AstItem[] {
+  if (!parsed) return [];
+  const foundMerges = astMerges(parsed);
+  const foundCreates = astCreates(parsed);
+  const merges = foundMerges.map((m): AstItem => ({ sq: squashed(m.text), shape: { kind: 'merge', pr: m.pr, sha: m.sha, ...(m.shaBad ? { shaBad: true as const } : {}) } }));
+  const creates = foundCreates.map((c): AstItem => ({ sq: squashed(c.text), create: true, read: c.read }));
+  const lands = astLandCalls(parsed, raw, exempt, text).map((l): AstItem => ({ sq: squashed(l.text), shape: { kind: 'land', pr: l.pr, sha: l.sha } }));
+  // Raw backstop (F6): a merge or create the parse did not show as a gh call (a wrapper such as env or time, a word split over lines, a payload that did not parse)
+  // is judged as a call whose head cannot be read. The text is the one with inert quoted strings blanked. Words of a merge in a data reader (grep, rg, echo) are data (M6b);
+  // words of a create, and any gh api merge, are not.
+  const extra: AstItem[] = [];
+  const mergeWords = [...text.matchAll(/\bgh\s+pr\s+merge\b[^|;&\n]*/gi)];
+  if (mergeWords.length > foundMerges.length && !onlyDataReaders(parsed)) {
+    for (const m of mergeWords.slice(foundMerges.length)) extra.push({ sq: squashed(m[0]), shape: { kind: 'merge', pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD } });
+  }
+  const api = MERGE_API_RE.exec(text);
+  if (api && !GET_RE.test(api[0]) && !foundMerges.some((m) => m.pr === api[1])) extra.push({ sq: squashed(api[0]), shape: { kind: 'merge', pr: api[1], ...UNREAD_HEAD } });
+  const createWords = [...text.matchAll(/\bgh\s+pr\s+(?:create|new)\b[^|;&\n]*/gi)];
+  for (const c of createWords.slice(foundCreates.length)) extra.push({ sq: squashed(c[0]), create: true, read: BAD('a wrapper program, a split word or a payload runs gh, so its head and base cannot be read') });
+  return [...merges, ...creates, ...lands, ...extra].filter((i) => i.sq !== '');
 }
 
 // ---------- PR B step 4: a doc append read from the parse (PB-7, note 03 section 1 items 3 and 4) ----------
@@ -2104,7 +2182,7 @@ const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => whe
  * and not in the other, so each mask can hide a cd the other shows). The readings (bash, pwsh, quotes deleted) are united and de-duplicated,
  * and the cds are part of the id: the same shape in two folders is two shapes. An extra shape only makes the gate stricter.
  */
-function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed']): Shape[] {
+function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed'], astOnly = false): Shape[] {
   // The words of a create, land or merge inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text. Push is read from raw below.
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [...new Set([joinContinuations(text, 'bash'), joinContinuations(text, 'pwsh')])];
@@ -2128,6 +2206,11 @@ function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed']): Shape[] 
   const seen = new Set<string>();
   const add = (shape: Shape, id: string): void => { if (!seen.has(id)) { seen.add(id); out.push(shape); } };
   let created = false;
+  // C2a: the mention exemption of the hand reader, and the parser's land, merge and create calls (used in place of the hand regexes when astOnly).
+  const exempt = textOnly || docAst;
+  const astItems = astOnly ? astItemsOf(parsed, raw, exempt, text) : [];
+  const heldItems = new Set<AstItem>();
+  const astHolds = (s: string, create: boolean): AstItem[] => { const sq = squashed(s); const hit = astItems.filter((i) => (i.create === true) === create && sq.includes(i.sq)); hit.forEach((i) => heldItems.add(i)); return hit; };
   for (const view of views) {
     const reads = (['Bash', 'PowerShell'] as const).map((tool) => { const masked = maskQuoted(view, tool); return { masked, pos: cdPositions(masked, view) }; });
     for (const { seg, from } of cmdSegments(view)) {
@@ -2138,24 +2221,48 @@ function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed']): Shape[] 
       // another program may run: its tail is empty, so every head read from it is unread.
       const tail = quoteOpenAt(view, from, pwshTool) ? '' : rawTail(view.slice(from));
       for (const s of new Set([seg, squashQuotes(seg)])) {
-        for (const shape of landShapesOf(s, textOnly || docAst || (docReadable && isDocAppend(seg)), seg, tail, pwshTool)) {
+        const found = astOnly ? astHolds(s, false).flatMap((i) => (i.shape ? [i.shape] : [])) : landShapesOf(s, textOnly || docAst || (docReadable && isDocAppend(seg)), seg, tail, pwshTool);
+        for (const shape of found) {
           for (const own of owns) for (const at of wheres) add({ ...shape, at, ...own, prior }, landId(shape, at, own, prior));
         }
       }
-      if (!isPrOpenText(seg)) continue;
+      const heldCreates = astOnly ? astHolds(seg, true) : [];
+      if (astOnly ? heldCreates.length === 0 : !isPrOpenText(seg)) continue;
       created = true;
-      for (const own of owns) for (const at of wheres) add({ kind: 'create', pr: null, at, ...own, prior, tail, pwsh: pwshTool }, `create|${whereId(at)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
+      // astOnly: the parser's read of the create in this segment; a read that cannot be trusted (bad) wins over another one in the same segment.
+      const held = heldCreates.find((h) => h.read?.bad) ?? heldCreates[0];
+      for (const own of owns) for (const at of wheres) add({ kind: 'create', pr: null, at, ...own, prior, tail, pwsh: pwshTool, ...(held?.read ? { read: held.read } : {}) }, `create|${whereId(at)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
+    }
+  }
+  // astOnly: a merge or land item that no single segment holds (a word split over lines: `gh pr` + newline + `merge`) is judged in the cwd and in every folder of the cds.
+  if (astOnly) {
+    const loose = astItems.filter((i) => i.create !== true && i.shape && !heldItems.has(i));
+    if (loose.length > 0) {
+      const view = views[0];
+      const masked = maskQuoted(view, 'Bash');
+      for (const i of loose) for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
+        add({ ...(i.shape as Shape), at, text: view, mtext: masked, ftext: view, fmtext: masked, prior: NO_PRIOR, pwsh: pwshTool }, `loose|${i.shape?.kind}|${i.shape?.pr}|${whereId(at)}|${i.sq}`);
+      }
     }
   }
   // A create that no single segment shows (`gh pr` + newline + `create`): judge the whole text in the cwd and in every folder of the cds.
-  if (!created && isPrOpenCommand(text)) {
+  // astOnly: the same fallback for a create item that no single segment holds (the parser's read, or a bad read for a split word, goes with it).
+  const looseCreate = astOnly ? astItems.filter((i) => i.create === true) : [];
+  if (!created && (astOnly ? looseCreate.length > 0 : isPrOpenCommand(text))) {
     const view = views[0];
     const masked = maskQuoted(view, 'Bash');
+    const read = looseCreate.find((i) => i.read?.bad)?.read ?? looseCreate[0]?.read;
     for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
-      add({ kind: 'create', pr: null, at, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool }, `create|${whereId(at)}|${view}`);
+      add({ kind: 'create', pr: null, at, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool, ...(read ? { read } : {}) }, `create|${whereId(at)}|${view}`);
     }
   }
-  return [...withAstCreates(withAstMerges(out, parsed, pwshTool), parsed, pwshTool), ...pushShapesOf(raw, tool)];
+  const withMergesAndCreates = withAstCreates(withAstMerges(out, parsed, pwshTool), parsed, pwshTool);
+  // C2a: a parser land shape that the hand reader already has (same PR, same sha) adds nothing; any other one is one more shape.
+  const seenLand = new Set(withMergesAndCreates.filter((s) => s.kind === 'land').map((s) => `${s.pr}|${s.sha}`));
+  // Union mode (the hand reader runs): the hand land shapes already cover every form of the corpus, so the parser adds none (no new deny, no regression of a
+  // hand exemption such as a doc append next to a Set-Location). The parser land shapes decide alone under astOnly, the state C2b makes real.
+  const lands = (astOnly ? astLandShapes(parsed, raw, exempt, text, pwshTool) : []).filter((s) => { const k = `${s.pr}|${s.sha}`; if (seenLand.has(k)) return false; seenLand.add(k); return true; });
+  return [...withMergesAndCreates, ...lands, ...pushShapesOf(raw, tool)];
 }
 
 // ---------- config ----------
@@ -3789,7 +3896,7 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   // PR C1 (F1): a text that does not parse, or a shell string inside it that does not parse, and names a guarded call. Only adds a deny.
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
-  const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
+  const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed, deps.astOnly === true);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== 'push')) denies.push(subagentDeny(shapes, deps, cwd, shell));
@@ -4375,7 +4482,11 @@ export async function withParsed(raw: string, deps: Deps): Promise<Deps> {
     })();
     parse.catch(() => undefined);
     try {
-      if ((await Promise.race([parse, late])) === 'late') return { ...deps, parseLate: cmd.text };
+      if ((await Promise.race([parse, late])) === 'late') {
+        // C2a: one log row for every late parse (a thrown parse is logged below), so the cost of denying on a parser that did not answer can be counted.
+        try { logGuardError(HOOK, new Error(`the shell parse was late: no answer in ${deps.parseBudgetMs ?? PARSE_BUDGET_MS} ms`), { env: deps.env }); } catch { /* the log never blocks */ }
+        return { ...deps, parseLate: cmd.text };
+      }
     } finally { clearTimeout(timer); }
     return { ...deps, parsed: { text: cmd.text, byDialect, ...(innerBad ? { innerBad } : {}) } };
   } catch (err) {
