@@ -113,7 +113,8 @@ test('W13: the WRAP WORD names the three failures of 11-26, forbids new starts a
   const text = W.wrapWordText();
   assert.match(text, /no new PRE-PR START, HOOK BUILD START or paid run/);
   assert.match(text, /before the run lock/i);
-  assert.match(text, /folder/i);
+  assert.match(text, /A folder removed before the seat named it/);
+  assert.match(text, /Remove no folder and no worktree/);
   assert.match(text, /FleetOps refresh/);
   assert.match(text, /step 6\.1/);
   assert.match(text, /HANDOFF DONE/);
