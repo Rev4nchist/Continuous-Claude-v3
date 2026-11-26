@@ -3,7 +3,7 @@
  *
  * Synthetic rows only: every log file is built in a temp folder with made-up names and sentinel values. A sentinel (a PR number, a sha-shaped head, a
  * session label, a branch, a lane id) must never reach the output. FRICTION_COUNTS_CLI points the tests at another copy of the script (a mutation run).
- * Test names C1..C20 are the failure list of the plan (C14 and C15 came from the CodeRabbit CLI run 1 of the first head; C16 to C20 from the internal pass of PR 741). The file name has no `.db.` part: it needs no database.
+ * Test names C1..C21 are the failure list of the plan (C14 and C15 came from the CodeRabbit CLI run 1 of the first head; C16 to C21 from the internal pass of PR 741). The file name has no `.db.` part: it needs no database.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,7 +66,7 @@ describe('counts and shape', () => {
     const r = put(dir, 'r.jsonl', [start(), start(), start(), start(), end('PASS', null, 10), end('FAIL', 'evidence', 0.8), end('FAIL', 'summary', 2.1)]);
     const out = run(args(dir, d, r));
     assert.equal(out.code, 0, out.err);
-    assert.equal(oneLine(out), 'taps (land, open-pr, review) 1d recommended/all: land: 2/3 open-pr: 1/1 review: 0/0 | pre-pr (1d): starts 4 ends 3 FAIL 2 (evidence 1, summary 1) FAIL<1min 1 (evidence 1) ERROR 0');
+    assert.equal(oneLine(out), 'taps (land, open-pr, review) 1d recommended/all: land: 2/3 open-pr: 1/1 review: 0/0 | pre-pr (1d): starts 4 ends 3 FAIL 2 (evidence=1, summary=1) FAIL<1min 1 (evidence=1) ERROR 0');
   });
 
   it('C2: a label without the (Recommended) ending is not a recommended tap', () => {
@@ -82,7 +82,7 @@ describe('counts and shape', () => {
     const d = put(dir, 'd.jsonl', [tap('land'), tap('land', { msAgo: 2 * 24 * HOUR }), tap('land', { msAgo: -3 * HOUR })]);
     const r = put(dir, 'r.jsonl', [start(), start({ msAgo: 3 * 24 * HOUR }), end('FAIL', 'evidence', 0.5, { msAgo: 3 * 24 * HOUR })]);
     assert.match(oneLine(run(args(dir, d, r))), /^taps \(land, open-pr, review\) 1d recommended\/all: land: 1\/1 .* \| pre-pr \(1d\): starts 1 ends 0 FAIL 0 FAIL<1min 0 ERROR 0$/);
-    assert.match(oneLine(run(args(dir, d, r, '--days', '7'))), /^taps \(land, open-pr, review\) 7d recommended\/all: land: 2\/2 .* \| pre-pr \(7d\): starts 2 ends 1 FAIL 1 \(evidence 1\) FAIL<1min 1 \(evidence 1\) ERROR 0$/);
+    assert.match(oneLine(run(args(dir, d, r, '--days', '7'))), /^taps \(land, open-pr, review\) 7d recommended\/all: land: 2\/2 .* \| pre-pr \(7d\): starts 2 ends 1 FAIL 1 \(evidence=1\) FAIL<1min 1 \(evidence=1\) ERROR 0$/);
   });
 
   it('C11: a step with no row still prints 0/0, so the line keeps one shape; the line begins with the sources', () => {
@@ -102,7 +102,7 @@ describe('counts and shape', () => {
     const r = put(dir, 'r.jsonl', [start(), start(), start(), end('PASS', null, 9), end('FAIL', 'evidence', 0.5), { ...end('ERROR', null, 6), exitCode: 130 }]);
     const out = run(args(dir, d, r));
     assert.equal(out.code, 0, out.err);
-    assert.match(oneLine(out), /starts 3 ends 3 FAIL 1 \(evidence 1\) FAIL<1min 1 \(evidence 1\) ERROR 1$/);
+    assert.match(oneLine(out), /starts 3 ends 3 FAIL 1 \(evidence=1\) FAIL<1min 1 \(evidence=1\) ERROR 1$/);
     assert.ok(!out.err.includes('skipped'), 'an ERROR row is a known shape, not a skipped row');
   });
 
@@ -112,7 +112,7 @@ describe('counts and shape', () => {
     const r = put(dir, 'r.jsonl', [start(), end('FAIL', 'constructor', 0.4), end('FAIL', 'constructor', 5), end('FAIL', '__proto__', 0.2)]);
     const out = run(args(dir, d, r));
     assert.equal(out.code, 0, out.err);
-    assert.match(oneLine(out), /FAIL 3 \(constructor 2, other 1\) FAIL<1min 2 \(constructor 1, other 1\) ERROR 0$/);
+    assert.match(oneLine(out), /FAIL 3 \(constructor=2, other=1\) FAIL<1min 2 \(constructor=1, other=1\) ERROR 0$/);
   });
 
   it('C16: no printed number sits right after "pr " (the listed-id matcher reads that as a PR number): a list with 19, 1 and 7 does not stop the live line shape', () => {
@@ -142,7 +142,7 @@ describe('counts and shape', () => {
     const dir = listRoot();
     const d = put(dir, 'd.jsonl', [tap('land')]);
     const r = put(dir, 'r.jsonl', [start(), end('FAIL', 'git:clean', 5), end('FAIL', 'evidence', 5), end('FAIL', 'summary', 5), end('FAIL', 'summary', 5)]);
-    assert.match(oneLine(run(args(dir, d, r))), /FAIL 4 \(summary 2, evidence 1, git:clean 1\) FAIL<1min 0 ERROR 0$/);
+    assert.match(oneLine(run(args(dir, d, r))), /FAIL 4 \(summary=2, evidence=1, git:clean=1\) FAIL<1min 0 ERROR 0$/);
   });
 
   it('C19: steps after the fixed three print in name order, "other" last (ship, paid-round and cli-skip are real steps of the decision log)', () => {
@@ -157,6 +157,15 @@ describe('counts and shape', () => {
     const d = put(dir, 'd.jsonl', [tap('land', { msAgo: 0 }), tap('review', { msAgo: 24 * HOUR })]);
     const r = put(dir, 'r.jsonl', [start({ msAgo: 0 }), start({ msAgo: 24 * HOUR })]);
     assert.match(oneLine(run(args(dir, d, r))), /land: 1\/1 open-pr: 0\/0 review: 0\/0 \| pre-pr \(1d\): starts 1 ends 0 /);
+  });
+
+  it('C21: a failing step whose plain name ends in "pr" (pr, open-pr, gate:pre-pr) does not put its count right after "pr ": a list with 1 does not stop the line', () => {
+    const dir = listRoot(['1']);
+    const d = put(dir, 'd.jsonl', [tap('land')]);
+    const r = put(dir, 'r.jsonl', [start(), end('FAIL', 'pr', 0.5), end('FAIL', 'open-pr', 5), end('FAIL', 'gate:pre-pr', 5)]);
+    const out = run(args(dir, d, r));
+    assert.equal(out.code, 0, out.err);
+    assert.match(oneLine(out), /FAIL 3 \(gate:pre-pr=1, open-pr=1, pr=1\) FAIL<1min 1 \(pr=1\) ERROR 0$/);
   });
 });
 
@@ -178,7 +187,7 @@ describe('no PR number, sha or id in the output', () => {
     assert.equal(out.code, 0, out.err);
     const line = oneLine(out);
     assert.match(line, /review: 0\/0 other: 2\/2 \|/);
-    assert.match(line, /FAIL 4 \(other 4\) FAIL<1min 2 \(other 2\)/);
+    assert.match(line, /FAIL 4 \(other=4\) FAIL<1min 2 \(other=2\)/);
     for (const bad of ['deadbeef', 'script', 'abcdef12', '<b>', 'aaaaaaaa']) assert.ok(!line.includes(bad), `the line holds ${bad}`);
   });
 
