@@ -4345,3 +4345,47 @@ test('R15: the reader returns [] when the PR has more commits than it read, so 1
   const unknown = redCheck('bugfix', PR_SHA('f'), RS.prCommitList({ totalCount: 150, nodes: hundred }));
   assert.deepEqual(redProblems(unknown), [], readyOrWhy(unknown));
 });
+
+// Card prepr-evidence-gaps, gap 3: a RED id may be written <anchor>~N when the plain id collides with a listed id.
+// The anchor is a commit of the PR (the head is fine); N counts back in the PR commit list, oldest first.
+test('R16: RED written <anchor>~N resolves inside the PR commit list: head~1 and a 7-character anchor pass', () => {
+  const list = prCommits(C_RED, C_MID, HEAD);
+  for (const sha of [`${HEAD}~1`, `${HEAD.slice(0, 7)}~1`, `${C_MID}~1`, `${HEAD}~2`]) {
+    const r = redCheck('bugfix', sha, list);
+    assert.deepEqual(redProblems(r), [], `${sha}: ${readyOrWhy(r)}`);
+    assert.equal(r.ready, true, `${sha}: ${readyOrWhy(r)}`);
+  }
+});
+
+test('R17: RED <anchor>~N that goes back past the first commit of the PR gives one problem that says so', () => {
+  const r = redCheck('bugfix', `${C_MID}~2`, prCommits(C_RED, C_MID, HEAD));
+  assert.equal(redProblems(r).length, 1, readyOrWhy(r));
+  assert.match(redProblems(r)[0], /goes back past the first commit of this PR/);
+  assert.equal(r.ready, false);
+});
+
+test('R18: RED <anchor>~N with an anchor that is not a PR commit, or ~0 on the head, gives a problem', () => {
+  const list = prCommits(C_RED, C_MID, HEAD);
+  const foreign = redCheck('bugfix', `${C_MAIN}~1`, list);
+  assert.equal(redProblems(foreign).length, 1, readyOrWhy(foreign));
+  assert.match(redProblems(foreign)[0], /not a commit of this PR/);
+  const zero = redCheck('bugfix', `${HEAD}~0`, list);
+  assert.equal(redProblems(zero).length, 1, readyOrWhy(zero));
+  assert.match(redProblems(zero)[0], /RED names the head commit/);
+});
+
+test('R20: ~N is for the RED line only: GREEN <head>~1 is not "GREEN names the head" (CodeRabbit CLI run 1, review-status.mjs:739)', () => {
+  const green = (sha) => `${preamble('bugfix')}${proofField('RED', C_RED, 'not ok 1')}\n${proofField('GREEN', sha, '# fail 0')}`;
+  const bad = evaluate({ ...input({ proofBody: green(`${HEAD}~1`) }), commits: prCommits(C_RED, HEAD) });
+  assert.equal(proofReasons(bad).filter((x) => /GREEN/.test(x)).length, 1, readyOrWhy(bad));
+  assert.match(proofReasons(bad).join('\n'), /~N is for the RED line only/);
+  assert.equal(bad.ready, false);
+  const ok = evaluate({ ...input({ proofBody: green(HEAD) }), commits: prCommits(C_RED, HEAD) });
+  assert.deepEqual(proofReasons(ok), [], readyOrWhy(ok));
+});
+
+test('R19: with an unknown commit list, RED <anchor>~N gives no new problem (only the head test runs, as in R7)', () => {
+  const r = redCheck('bugfix', `${HEAD}~1`, []);
+  assert.deepEqual(redProblems(r), [], readyOrWhy(r));
+  assert.equal(r.ready, true, readyOrWhy(r));
+});
