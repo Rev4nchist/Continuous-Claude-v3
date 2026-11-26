@@ -31,6 +31,8 @@ export default defineConfig({
     'snapshot-mask.spec.ts',
     // card agentic-os-readers-edge-limits: the five known limits of the readers
     'readers-edge-limits.spec.ts',
+    // card fleet-stale-parsed-asks: a parsed closing-line ask does not count while the session works
+    'fleet-parsed-asks.spec.ts',
   ],
   timeout: 30_000,
   retries: 0,

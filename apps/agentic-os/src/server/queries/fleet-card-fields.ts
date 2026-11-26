@@ -133,3 +133,14 @@ export function groupHeldLanes(
   }
   return byOwner;
 }
+
+/** How long a session may be quiet and still count as live, in minutes. sessions.ts reads it for the Live tile and the strip. */
+export const LIVE_WINDOW_MINUTES = 15;
+
+/** The two fields of a stored ask that decide whether it counts. */
+export type CountedAsk = { answered: boolean; source: 'brief_set' | 'parsed' };
+
+/** RED stub (mods card fleet-stale-parsed-asks): today's rule, every unanswered ask counts. */
+export function countedAsks<T extends CountedAsk>(asks: readonly T[], _chip: string | null, _stateAgeSeconds: number | null): T[] {
+  return asks.filter((one) => !one.answered);
+}
