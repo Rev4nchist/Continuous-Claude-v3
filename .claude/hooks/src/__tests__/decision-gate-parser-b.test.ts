@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decisionKey, decisionRecord, offerWrite } from '../shared/decisions-store.js';
 import { decide, withParsed, type Deps } from '../decision-gate.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);

@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
 import { type Deps } from '../decision-gate.js';
 import { decideParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);

@@ -6,10 +6,6 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    // C2c: every decision of a PowerShell text now starts a pwsh walker child (0.5 to 1 s alone, several seconds on a loaded 2 CPU runner with the suite in parallel). The default of
-    // 5 s per test turned that load into failures on the Linux runner. A hung test still ends at 60 s.
-    testTimeout: 60000,
-    hookTimeout: 60000,
     include: ['src/__tests__/**/*.test.ts'],
     exclude: ['**/node_modules/**'],
     // One run-owned temp folder for the whole run, removed at the end (src/__tests__/vitest-global-temp.ts).

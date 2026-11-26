@@ -41,6 +41,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { handle as ledger } from '../decision-ledger.js';
 import { decide, realDeps } from '../decision-gate.js';
 import { decideParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const APP_ASK = fileURLToPath(new URL('../../../../scripts/github/app-ask.mjs', import.meta.url));
 // An empty global git config and no system config: a developer's commit.gpgsign or hooksPath cannot break the fixture commits.

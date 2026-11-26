@@ -25,6 +25,7 @@ import { decisionRecord, offerWrite } from '../shared/decisions-store.js';
 import { readRegistry } from '../shared/tap-scope.js';
 import { type Decision, type Deps } from '../decision-gate.js';
 import { decideParsed, handleParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const HEAD = 'a'.repeat(40);
 const HEAD2 = 'c'.repeat(40);

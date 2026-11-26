@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { COMMAND_TOOLS, decide, handle, type Deps } from '../decision-gate.js';
 import { PAID_ROWS, PAID_TRIPWIRE_SENTENCE, TEST_SESSION_ID, TOOL_NAMES, payloadOf } from './decision-gate-paid-tripwire-rows.js';
 import { decideParsed, handleParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';

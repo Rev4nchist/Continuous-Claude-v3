@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRegistry } from '../shared/tap-scope.js';
 import { type Deps } from '../decision-gate.js';
 import { handleParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const HEAD = 'a'.repeat(40);
 let scratch = '';

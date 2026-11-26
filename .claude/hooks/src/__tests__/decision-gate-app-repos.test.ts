@@ -88,6 +88,7 @@ import { GitDeadlineError, MissingCwdError, decide, handle, makeGit, pushShapesO
 // @ts-ignore TS7016: app-ask.mjs has no declaration file. The REAL offer writer: C21 takes every key from it, never by hand.
 import * as appAsk from '../../../../scripts/github/app-ask.mjs';
 import { decideParsed, handleParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const HEAD = 'a'.repeat(40);
 const HEAD2 = 'c'.repeat(40);

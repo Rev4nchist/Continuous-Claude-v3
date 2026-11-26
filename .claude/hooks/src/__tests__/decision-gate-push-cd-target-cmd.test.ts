@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeGit, type Deps } from '../decision-gate.js';
 import { decideParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
 const SESSION = '3c9a1d52-7e44-4b0f-8a6d-1f2e3d4c5b6a';

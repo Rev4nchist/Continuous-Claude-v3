@@ -28,6 +28,7 @@ import { decisionRecord, decisionUse, offerWrite } from '../shared/decisions-sto
 // @ts-ignore TS7016: the .mjs helper has no declaration file. The REAL helper: the labels and the key come from it, so the two sides cannot drift.
 import * as cap from '../../../../scripts/github/lib/cap-override.mjs';
 import { decideParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);

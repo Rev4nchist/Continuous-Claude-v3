@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRegistry } from '../shared/tap-scope.js';
 import { decide, type Decision, type Deps } from '../decision-gate.js';
 import { decideParsed, handleParsed } from './helpers/parse-first.js';
+import './helpers/walker-timeout.js'; // C2c: the long test timeout, scoped to the files that start a pwsh walker
 
 const TREE = 't'.repeat(40);
 const HEAD = 'a'.repeat(40);
