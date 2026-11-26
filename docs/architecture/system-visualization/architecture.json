@@ -20,7 +20,7 @@
       "hookFiles": 69,
       "hookEvents": 9,
       "hookUnparsed": 0,
-      "skills": 86,
+      "skills": 87,
       "agents": 35,
       "rulesSrc": 10,
       "rulesOnDemand": 24,
@@ -327,7 +327,7 @@
         "y": 110
       },
       "stats": {
-        "total": 86
+        "total": 87
       },
       "files": [
         ".claude/skills/*/SKILL.md",
@@ -2378,6 +2378,10 @@
       {
         "name": "weekly-report",
         "description": "Generate AI Enablement Team weekly status report data via GitHub, memory, and dashboard MCP tools. Use when the user says \"/weekly-report\", \"create a weekly report\", \"status update\", or \"generate the team report\"."
+      },
+      {
+        "name": "wrap-all",
+        "description": "Brings every live session on a lane board to a clean handoff point, so Dave can compact or hand off all sessions at once. Use only when Dave types /wrap-all."
       },
       {
         "name": "wrap-up",
