@@ -5,6 +5,8 @@ import { sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { projectLabel } from '@/server/sources/project-label';
 
+import { LIVE_WINDOW_MINUTES } from './fleet-card-fields';
+
 /**
  * The live half of the fleet view — who is working right now.
  *
@@ -30,7 +32,7 @@ import { projectLabel } from '@/server/sources/project-label';
  *  is now 15 minutes of AGENT silence, which is a far stronger statement than 15
  *  minutes of nobody typing. Sessions are never deleted, so this window is the
  *  ONLY thing separating "live" from "every session since March". */
-const DEFAULT_WINDOW_MINUTES = 15;
+const DEFAULT_WINDOW_MINUTES = LIVE_WINDOW_MINUTES; // fleet-card-fields.ts: the Fleet asks rule reads the same window
 
 /** A hard bound on the result set, per the shared-database rule in src/db/index.ts.
  *  Nothing sane produces 50 concurrent sessions; if it ever does, the strip
