@@ -9,11 +9,12 @@
  *                                                                 first, then every other step in name order). A tap is "recommended" when its label ends with "(Recommended)".
  *   runs log      ~/.claude/state/run-locks/runs.jsonl           one row per pre-pr start and end (result PASS, FAIL or ERROR, the failing step, minutes).
  * The line, for the last N days (default 1):
- *   taps (land, open-pr, review) 1d recommended/all: land: 3/3 open-pr: 2/2 review: 0/0 | pre-pr (1d): starts 6 ends 5 FAIL 2 (evidence 1, summary 1) FAIL<1min 1 (evidence 1) ERROR 0
+ *   taps (land, open-pr, review) 1d recommended/all: land: 3/3 open-pr: 2/2 review: 0/0 | pre-pr (1d): starts 6 ends 5 FAIL 2 (evidence=1, summary=1) FAIL<1min 1 (evidence=1) ERROR 0
  * An ERROR end (a run that died; pre-pr.mjs writes result ERROR) counts in "ends" and prints as "ERROR n", apart from FAIL.
  * FAIL<1min counts a FAIL whose written minutes is under 1. pre-pr.mjs rounds minutes to 0.1, so a FAIL of 57 to 59.9 seconds is written as 1 and is not counted.
  * A step with no row prints 0/0, so the line keeps one shape. A log that is missing prints "no log" for its half.
- * No number sits right after "pr " in the line (hence "open-pr: 2/2" and "pre-pr (1d):"): the listed-id matcher reads "pr 19" as PR number 19.
+ * No number sits right after "pr " in the line (hence "open-pr: 2/2", "pre-pr (1d):" and "name=count" in the lists, so a step named like "pr" or "open-pr" is safe too):
+ * the listed-id matcher reads "pr 19" as PR number 19.
  *
  * No PR number, sha or id: the reader keeps only step, the label ending, event, result, failing step and minutes. A step or failing-step name must be a
  * plain name (letters, digits, ":" and "-", up to 40, no hex run of 7 or more); anything else counts as "other". The whole line then goes through
@@ -112,7 +113,7 @@ export function runCounts(rows, now, days) {
 
 const byList = (by) => {
   const items = Object.entries(by).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
-  return items.length ? ` (${items.map(([k, v]) => `${k} ${v}`).join(', ')})` : '';
+  return items.length ? ` (${items.map(([k, v]) => `${k}=${v}`).join(', ')})` : '';
 };
 
 /** { line, fields } of the two halves. `fields` is [{ name, text }]: each printed piece with the name of the field, for the collision message. */
@@ -122,7 +123,7 @@ export function buildLine(taps, runs, days) {
     ? taps.map(([n, rec, all]) => { fields.push({ name: 'tap step name', text: n }, { name: 'tap count', text: `${rec}/${all}` }); return `${n}: ${rec}/${all}`; }).join(' ')
     : null;
   // No number sits right after "pr " in the line: the listed-id matcher (holdout-ids.mjs CONTEXT) reads "pr 19" as PR number 19, so a count equal to
-  // a listed short id would stop the line. A colon or a bracket between "pr" and the number breaks that context.
+  // a listed short id would stop the line. A colon, a bracket or "=" between "pr" and the number breaks that context (the lists use name=count).
   let runText = `pre-pr (${days}d): no log`;
   if (runs) {
     const count = (name, label, n) => { fields.push({ name, text: `${label} ${n}` }); return `${label} ${n}`; };
