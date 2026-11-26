@@ -437,3 +437,85 @@ test('G28 an option form that replaces the file entrypoint (--eval=, -e=, --prin
   assert.equal(hooks.unparsed, 4, 'the four entrypoint-replacing forms are counted as unparsed');
   for (const n of ['heap.mjs', 'pre.mjs']) assert.ok(names.includes(n), `${n} still parses: ${names}`);
 });
+
+// Card map-writer-race: two runs of the generator at once (the stats hook plus a direct run) must not share the temp and backup names.
+// The lock is a file `.system-map.lock` made with the 'wx' flag next to the first output file. A second writer fails closed.
+const LOCK = '.system-map.lock';
+const writerDir = (prefix) => { const d = mkdtempSync(join(tmpdir(), prefix)); roots.push(d); return d; };
+const deadPid = () => spawnSync(process.execPath, ['-e', '0']).pid; // a pid whose process has ended
+const lockText = (pid, at) => JSON.stringify({ pid, at });
+
+test('G29 a second writer that starts while the first is renaming fails closed; the final files are the first writer\'s, with no leftover', () => {
+  const writeAll = need('writeAll');
+  const dir = writerDir('sysmap-race-');
+  const a = join(dir, 'a.json'), b = join(dir, 'b.html');
+  writeFileSync(a, 'old a'); writeFileSync(b, 'old b');
+  let refused = null, started = false;
+  const overlap = (from, to) => {
+    if (!started) {
+      started = true;
+      try { writeAll([[a, 'second a'], [b, 'second b']]); } catch (e) { refused = e; }
+    }
+    return fsRename(from, to);
+  };
+  writeAll([[a, 'first a'], [b, 'first b']], { renameSync: overlap });
+  assert.ok(refused, 'the second writer was refused');
+  assert.match(refused.message, /another writer holds the lock/);
+  assert.equal(readFileSync(a, 'utf8'), 'first a');
+  assert.equal(readFileSync(b, 'utf8'), 'first b');
+  assert.deepEqual(readdirSync(dir).sort(), ['a.json', 'b.html'], 'no temp, backup or lock file is left');
+});
+
+test('G30 a lock of a dead process, and a lock older than 10 minutes, are both taken over', () => {
+  const writeAll = need('writeAll');
+  for (const [name, text] of [['dead pid', lockText(deadPid(), Date.now())], ['old lock, live pid', lockText(process.pid, Date.now() - 11 * 60 * 1000)]]) {
+    const dir = writerDir('sysmap-stale-');
+    const a = join(dir, 'a.json');
+    writeFileSync(a, 'old a'); writeFileSync(join(dir, LOCK), text);
+    writeAll([[a, 'new a']]);
+    assert.equal(readFileSync(a, 'utf8'), 'new a', `${name}: the write went through`);
+    assert.deepEqual(readdirSync(dir).sort(), ['a.json'], `${name}: the lock is gone`);
+  }
+});
+
+test('G31 a refused writer changes nothing and never removes the lock of the writer that holds it', () => {
+  const writeAll = need('writeAll');
+  const dir = writerDir('sysmap-held-');
+  const a = join(dir, 'a.json');
+  const held = lockText(process.pid, Date.now());
+  writeFileSync(a, 'old a'); writeFileSync(join(dir, LOCK), held);
+  assert.throws(() => writeAll([[a, 'new a']]), (e) => e.code === 'ELOCKHELD' && /another writer holds the lock/.test(e.message));
+  assert.equal(readFileSync(a, 'utf8'), 'old a');
+  assert.equal(readFileSync(join(dir, LOCK), 'utf8'), held, 'the holder\'s lock is untouched');
+  assert.deepEqual(readdirSync(dir).sort(), [LOCK, 'a.json'].sort(), 'no temp or backup file is left');
+});
+
+test('G32 two writers that find the same stale lock: exactly one gets it, the other fails closed and leaves the winner\'s lock alone', () => {
+  const acquire = need('acquireMapLock');
+  const dir = writerDir('sysmap-same-');
+  writeFileSync(join(dir, LOCK), lockText(deadPid(), Date.now()));
+  let winner = null;
+  // The first writer has read the stale lock. Before it removes it, the second writer takes it over completely.
+  const second = () => { winner = acquire(dir); };
+  assert.throws(() => acquire(dir, { afterStaleRead: second }), (e) => e.code === 'ELOCKHELD');
+  assert.equal(typeof winner, 'function', 'the second writer holds the lock');
+  assert.ok(existsSync(join(dir, LOCK)), 'the winner\'s lock was not removed by the loser');
+  assert.equal(JSON.parse(readFileSync(join(dir, LOCK), 'utf8')).pid, process.pid);
+  winner();
+  assert.ok(!existsSync(join(dir, LOCK)), 'the winner releases it');
+});
+
+test('G33 a refused --apply says so in one line on stdout, writes nothing, leaves stderr empty and exits 3 (the stats hook only logs it)', () => {
+  const root = makeRoot();
+  const dir = join(root, ...VIZ);
+  const html = readFileSync(join(dir, 'index.html'), 'utf8');
+  writeFileSync(join(dir, LOCK), lockText(process.pid, Date.now()));
+  const r = run(root, '--apply', '--skip-listed');
+  assert.equal(r.status, 3, `${r.stdout}${r.stderr}`);
+  assert.equal(r.stderr, '', 'nothing on stderr');
+  const lines = r.stdout.trim().split('\n');
+  assert.equal(lines.length, 1, `one line: ${r.stdout}`);
+  assert.match(lines[0], /^skipped: another writer holds the lock/);
+  assert.equal(readFileSync(join(dir, 'index.html'), 'utf8'), html, 'the page is unchanged');
+  assert.ok(!existsSync(join(dir, 'architecture.json')), 'architecture.json was not written');
+});
