@@ -15,7 +15,8 @@
 //   the CLI prints no table, no fork/main sha and no fetch time                -> W15
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -132,22 +133,59 @@ test('W14: the helper source runs no say, SendMessage, rm or fetch', () => {
   assert.doesNotMatch(src, /['"]note['"]|['"]claim['"]|['"]done['"]/);
 });
 
-test('W15: the CLI prints the table, the fork/main sha with its fetch time, and exits 0 (live read, sends nothing)', () => {
-  const r = spawnSync(process.execPath, [SRC], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000 });
+// The CLI rows run the real helper against a fake lane CLI and a fake repo, so they need no ~/.claude and no real fork/main (a fresh CI runner has neither).
+function hermetic() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'wrapall-herm-'));
+  const repo = path.join(dir, 'repo');
+  mkdirSync(repo);
+  const run = (...args) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8', windowsHide: true });
+  run('init', '-q', '-b', 'main');
+  run('commit', '-q', '--allow-empty', '-m', 'base');
+  const sha = run('rev-parse', 'HEAD').stdout.trim();
+  run('update-ref', 'refs/remotes/fork/main', sha);
+  const SEAT = 'aaaaaaaa-0000-0000-0000-000000000000';
+  const cli = path.join(dir, 'lane-fake.mjs');
+  writeFileSync(cli, [
+    "const verb = process.argv[2];",
+    `const seat = { id: '${SEAT}', name: 'Fake seat', label: 'Fake seat #aaaaaaaa', lanes: 're-program', last_alive: new Date().toISOString() };`,
+    "if (verb === 'peers') console.log(JSON.stringify([seat]));",
+    `else if (verb === 'board') console.log(JSON.stringify({ me: '${SEAT}', lanes: [{ id: 're-program', owner_session_id: '${SEAT}', owner_name: 'Fake seat', note: '', branch: null, state: 'active' }] }));`,
+    "else process.exit(2);",
+  ].join('\n'));
+  const env = { ...process.env, WRAP_ALL_LANE_CLI: cli, CLAUDE_CODE_SESSION_ID: 'bbbbbbbb-0000-0000-0000-000000000000', RUN_LOCK_DIR: dir };
+  return { dir, repo, sha, cli, env };
+}
+
+test('W15: the CLI prints the table, the fork/main sha with its fetch time, and exits 0 (fake lane CLI and repo, sends nothing)', () => {
+  const h = hermetic();
+  const r = spawnSync(process.execPath, [SRC, '--root', h.repo], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000, env: h.env });
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout, /WRAP-ALL DRY RUN/);
-  assert.match(r.stdout, /fork\/main [0-9a-f]{7,}/);
+  assert.match(r.stdout, /Fake seat #aaaaaaaa/);
+  assert.ok(r.stdout.includes(`fork/main ${h.sha.slice(0, 8)}`), r.stdout);
   assert.match(r.stdout, /last fetch/);
   assert.match(r.stdout, /sends nothing/);
 });
 
 test('W16: --json prints one valid document with rows and the fixed send line for a non-seat session', () => {
-  const r = spawnSync(process.execPath, [SRC, '--json'], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000 });
+  const h = hermetic();
+  const r = spawnSync(process.execPath, [SRC, '--root', h.repo, '--json'], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000, env: h.env });
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
   const doc = JSON.parse(r.stdout);
-  assert.ok(Array.isArray(doc.rows));
-  assert.equal(typeof doc.canSend, 'boolean');
+  assert.equal(doc.rows.length, 1);
+  assert.equal(doc.rows[0].name, 'Fake seat');
+  assert.equal(doc.canSend, false);
+  assert.equal(doc.sendLine, 'only the seat sends; run /wrap-all in the seat session');
+  assert.equal(doc.forkMain.sha, h.sha);
   assert.equal(typeof doc.wrapWord, 'string');
+});
+
+test('W37: a lane CLI path that does not exist stops the helper with one error line and exit 1 (no empty table)', () => {
+  const h = hermetic();
+  const r = spawnSync(process.execPath, [SRC, '--root', h.repo], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000, env: { ...h.env, WRAP_ALL_LANE_CLI: path.join(h.dir, 'no-such-cli.mjs') } });
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stderr, /^wrap-all-table: /m);
+  assert.equal(r.stdout.trim(), '');
 });
 
 // ---------- W17 to W24: the findings of the first CLI review (6 findings; four of them made a row read READY when it was not) ----------
