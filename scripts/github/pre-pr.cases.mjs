@@ -4909,3 +4909,166 @@ test('C-lock: the late gateFailed mark takes the counter lock: a lock file with 
   assert.deepEqual(rowsNow().map((r) => r.gateFailed === true), [true]);
   assert.equal(existsSync(paths.lock), false, 'the mark replaced the unheld lock file and freed its own');
 });
+
+// ---------- --preflight (card prepr-preflight): only the quick checks, no run lock, no CLI, no stamp, no log row ----------
+//
+// How it can fail, and the row that catches it:
+//   a missing summary file does not fail the preflight                                          -> PFL1
+//   a good branch fails, or a preflight runs a gate that is not cheap, or writes a stamp         -> PFL2
+//   a RED line that names a commit outside the PR passes                                         -> PFL3
+//   a dirty tree passes                                                                          -> PFL4
+//   a refactor proof with no BEFORE line passes                                                  -> PFL5
+//   a cheap gate that fails (gate-coverage) is not reported as a FAIL                            -> PFL6
+//   --preflight with no --body is not a usage error                                              -> PFL7
+//   the CLI takes the run lock, writes a runs.jsonl or gate-log row, or touches an old stamp     -> PFL8
+
+async function preflight(repo, extra = {}) {
+  const gateRuns = [];
+  const opts = {
+    root: repo.dir, base: 'main', config: CONFIG, exec: okExec(gateRuns), envCheck: NO_ENV, fetch: () => null,
+    summaryCheck: SUMMARY_OK, bodyText: 'Proof type: docs\n', ...extra,
+  };
+  opts.bodyText = withRealRed(opts.bodyText, repo);
+  return { result: await PRE.runPreflight(opts), gateRuns };
+}
+
+test('PFL1: no summary file fails the preflight with the summary text, before any gate', async () => {
+  const repo = makeRepo();
+  const { result, gateRuns } = await preflight(repo, { summaryCheck: undefined, config: { ...CONFIG, pre_pr: { summary_mode: 'fail' } } });
+  assert.equal(result.ok, false);
+  assert.match(result.lines.join('\n'), /no summary file/);
+  assert.match(result.lines.join('\n'), /PREFLIGHT FAIL/);
+  assert.deepEqual(gateRuns, [], 'a failed summary stops the gates');
+});
+
+test('PFL2: a good branch passes, runs only the cheap gates, and writes no stamp', async () => {
+  const repo = makeRepo({ files: { 'scripts/github/x.mjs': 'export const x = 1;\n' } });
+  const { result, gateRuns } = await preflight(repo, { bodyText: featureBody(repo.head, repo.red) });
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.match(result.lines.join('\n'), /PREFLIGHT PASS/);
+  assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'a preflight writes no stamp');
+  const gates = gatesFor(['scripts/github/x.mjs']);
+  const slow = gates.filter((g) => !g.cheap).map((g) => g.id);
+  assert.ok(slow.length > 0, 'this change selects at least one gate that is not cheap');
+  assert.ok(slow.every((id) => !gateRuns.includes(id)), `no slow gate ran: ${gateRuns.join(', ')}`);
+  assert.equal(result.results.some((r) => r.step === 'coderabbit'), false, 'no CLI review step');
+});
+
+test('PFL3: a RED line that names a commit outside the PR fails the evidence step', async () => {
+  const repo = makeRepo({ files: { 'scripts/a.mjs': 'export const a = 1;\n' } });
+  const base = git(repo.dir, 'rev-parse', 'main');
+  const { result } = await preflight(repo, { bodyText: featureBody(repo.head, base) });
+  assert.equal(result.ok, false);
+  const ev = result.results.find((r) => r.step === 'evidence');
+  assert.equal(ev.status, 'FAIL');
+  assert.match([ev.detail, ...ev.notes].join('\n'), /not a commit of this PR/);
+});
+
+test('PFL4: a dirty tree fails git:clean', async () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'dirty.txt'), 'x\n');
+  const { result } = await preflight(repo);
+  assert.equal(result.ok, false);
+  assert.equal(result.results.find((r) => r.step === 'git:clean').status, 'FAIL');
+});
+
+test('PFL5: a refactor proof with no BEFORE line fails the evidence step', async () => {
+  const repo = makeRepo({ files: { 'scripts/a.mjs': 'export const a = 1;\n' } });
+  const { result } = await preflight(repo, { bodyText: '## Evidence\n\nProof type: refactor\n' });
+  assert.equal(result.ok, false);
+  const ev = result.results.find((r) => r.step === 'evidence');
+  assert.equal(ev.status, 'FAIL');
+  assert.match([ev.detail, ...ev.notes].join('\n'), /BEFORE/);
+});
+
+test('PFL6: a cheap gate that fails (gate-coverage) is a FAIL of the preflight', async () => {
+  const repo = makeRepo({ files: { 'scripts/x.test.mjs': 'export {};\n' } });
+  const exec = (spec) => (spec.id === 'gate-coverage'
+    ? { status: 1, stdout: 'gate-coverage: FAIL, 1 file(s) only pre-pr runs and no ciGaps entry names them\n', stderr: '' }
+    : { status: 0, stdout: 'ran\n', stderr: '' });
+  const { result } = await preflight(repo, { exec, bodyText: featureBody(repo.head, repo.red) });
+  assert.equal(result.ok, false);
+  assert.equal(result.results.find((r) => r.step === 'gate:gate-coverage').status, 'FAIL');
+});
+
+const PF_CLI = path.join(HERE, 'pre-pr.mjs');
+
+test('PFL7: --preflight with no --body is a usage error (exit 2) and the usage names the flag', () => {
+  const r = spawnSync(process.execPath, [PF_CLI, '--preflight'], { cwd: os.tmpdir(), encoding: 'utf8', windowsHide: true, env: LOCK_SAMPLES_ENV });
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /--preflight/);
+});
+
+test('PFL8: the built --preflight fails fast with no lock file, no runs.jsonl row, no gate-log row, and an old stamp is left alone', () => {
+  const repo = makeRepo();
+  writeFileSync(path.join(repo.dir, 'review-router.config.json'), JSON.stringify({ ...CONFIG, pre_pr: { summary_mode: 'fail' } }));
+  const lockDir = mkdtempSync(path.join(os.tmpdir(), 'prepr-pf-lock-'));
+  const gateLog = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-pf-log-')), 'pre-pr-gates.jsonl');
+  const stampFile = path.join(repo.dir, STAMP_REL);
+  mkdirSync(path.dirname(stampFile), { recursive: true });
+  writeFileSync(stampFile, '{"old":"stamp"}');
+  const body = path.join(repo.dir, '..', `pf-body-${Date.now()}.md`);
+  writeFileSync(body, 'Proof type: docs\n');
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, [PF_CLI, '--preflight', '--body', body], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env: { ...process.env, RUN_LOCK_DIR: lockDir, PRE_PR_GATE_LOG: gateLog } });
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /PREFLIGHT FAIL/);
+  assert.ok(Date.now() - t0 < 45000, 'it fails fast (45 s: a loaded machine slows a child process)');
+  assert.deepEqual(readdirSync(lockDir), [], 'no lock file and no runs.jsonl row');
+  assert.equal(existsSync(gateLog), false, 'no gate-log row');
+  assert.equal(readFileSync(stampFile, 'utf8'), '{"old":"stamp"}', 'an old stamp is left alone');
+});
+
+// ---------- PFL9 and PFL10: the critic of PR 744 (a CLI row that runs --preflight to a PASS, and the stale-GREEN NOTE) ----------
+//   the CLI exits 0 after a PASS preflight and goes on into the lock, the CLI review or a stamp    -> PFL9
+//   the stale-GREEN NOTE branch is dropped: a GREEN line that a clean merge of main made stale FAILs -> PFL10
+
+test('PFL9: the built --preflight runs to a PASS: exit 0, PREFLIGHT PASS, no lock file, no gate-log row, no stamp, no CLI review', () => {
+  const repo = makeRepo();
+  const exclude = path.join(repo.dir, '.git', 'info', 'exclude');
+  const stub = path.join(repo.dir, 'scripts', 'rules', 'context-budget-guard.mjs');
+  mkdirSync(path.dirname(stub), { recursive: true });
+  writeFileSync(stub, 'console.log("context-budget stub: ok");\n'); // the one cheap gate a docs change selects; the temp repo has not the real script
+  writeFileSync(path.join(repo.dir, 'review-router.config.json'), JSON.stringify({ ...CONFIG, pre_pr: { summary_mode: 'fail' } }));
+  writeFileSync(exclude, 'scripts/rules/\nreview-router.config.json\n');
+  const summaryFile = path.join(repo.dir, '.claude', 'cache', 'pre-pr', 'summary.md');
+  mkdirSync(path.dirname(summaryFile), { recursive: true });
+  writeFileSync(summaryFile, [
+    'Branch: feat/x', `Head: ${repo.head.slice(0, 8)}`, 'Base: main',
+    'Problem: A run fails in seconds after the START word.',
+    'Change: A preflight mode runs the quick checks first.',
+    'You will see: A PASS or FAIL line before any lock is taken.',
+    'Risk: Low. This is a test repo.',
+    'Not included: everything else.',
+  ].join('\n') + '\n');
+  const lockDir = mkdtempSync(path.join(os.tmpdir(), 'prepr-pf9-lock-'));
+  const gateLog = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-pf9-log-')), 'pre-pr-gates.jsonl');
+  const body = path.join(repo.dir, '..', `pf9-body-${Date.now()}.md`);
+  writeFileSync(body, 'Proof type: docs\n');
+  const env = { ...process.env, RUN_LOCK_DIR: lockDir, PRE_PR_GATE_LOG: gateLog };
+  const r = spawnSync(process.execPath, [PF_CLI, '--preflight', '--body', body], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env });
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /PREFLIGHT PASS/);
+  assert.doesNotMatch(r.stdout, /coderabbit/);
+  assert.deepEqual(readdirSync(lockDir), [], 'no lock file and no runs.jsonl row');
+  assert.equal(existsSync(gateLog), false, 'no gate-log row');
+  assert.equal(existsSync(path.join(repo.dir, STAMP_REL)), false, 'no stamp');
+  const asJson = spawnSync(process.execPath, [PF_CLI, '--preflight', '--body', body, '--json'], { cwd: repo.dir, encoding: 'utf8', windowsHide: true, env });
+  assert.equal(asJson.status, 0, `${asJson.stdout}\n${asJson.stderr}`);
+  const doc = JSON.parse(asJson.stdout);
+  assert.equal(doc.preflight, true);
+  assert.equal(doc.ok, true);
+});
+
+test('PFL10: a GREEN line that a clean merge of main made stale is a NOTE, not a FAIL, when the body file is given', async () => {
+  const repo = mergedRepo();
+  const bodyPath = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-pf10-')), 'body.md');
+  const text = greenBody({ green: repo.old });
+  writeFileSync(bodyPath, text);
+  const run = await preflight({ dir: repo.dir, head: repo.head, red: LAST_RED }, { bodyText: text, bodyPath });
+  const ev = run.result.results.find((r) => r.step === 'evidence');
+  assert.equal(ev.status, 'NOTE', run.result.lines.join('\n'));
+  assert.match(ev.detail, /the run settles a stale GREEN line after its gates/);
+  assert.equal(run.result.ok, true, run.result.lines.join('\n'));
+  assert.equal(readFileSync(bodyPath, 'utf8'), text, 'a preflight leaves the body file alone');
+});
