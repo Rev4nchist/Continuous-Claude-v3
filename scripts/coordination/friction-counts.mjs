@@ -8,7 +8,8 @@
  *                                                                 (the steps land, open-pr and review). A tap is "recommended" when its label ends with "(Recommended)".
  *   runs log      ~/.claude/state/run-locks/runs.jsonl           one row per pre-pr start and end (result PASS or FAIL, the failing step, minutes).
  * The line, for the last N days (default 1):
- *   taps (land, open-pr, review) 1d recommended/all: land 3/3 open-pr 2/2 review 0/0 | pre-pr 1d: starts 6 ends 5 FAIL 2 (evidence 1, summary 1) FAIL<1min 1 (evidence 1)
+ *   taps (land, open-pr, review) 1d recommended/all: land 3/3 open-pr 2/2 review 0/0 | pre-pr 1d: starts 6 ends 5 FAIL 2 (evidence 1, summary 1) FAIL<1min 1 (evidence 1) ERROR 0
+ * An ERROR end (a run that died; pre-pr.mjs writes result ERROR) counts in "ends" and prints as "ERROR n", apart from FAIL.
  * A step with no row prints 0/0, so the line keeps one shape. A log that is missing prints "no log" for its half.
  *
  * No PR number, sha or id: the reader keeps only step, the label ending, event, result, failing step and minutes. A step or failing-step name must be a
@@ -66,7 +67,8 @@ export function parseRuns(text) {
     if (r.event === 'start') rows.push({ ts: r.ts, event: 'start' });
     else if (r.event === 'end') {
       const ok = (r.result === 'PASS' || r.result === 'FAIL') && Number.isFinite(r.minutes) && (r.failing === null || typeof r.failing === 'string');
-      if (ok) rows.push({ ts: r.ts, event: 'end', fail: r.result === 'FAIL', failing: nameOf(r.failing), minutes: r.minutes });
+      if (ok) rows.push({ ts: r.ts, event: 'end', error: false, fail: r.result === 'FAIL', failing: nameOf(r.failing), minutes: r.minutes });
+      else if (r.result === 'ERROR' && Number.isFinite(r.minutes)) rows.push({ ts: r.ts, event: 'end', error: true }); // a run that died: no failing step, counted apart from FAIL
       else skipped += 1;
     }
   }
@@ -89,13 +91,14 @@ export function tapCounts(rows, now, days) {
   return names.map((n) => [n, by.get(n).rec, by.get(n).all]);
 }
 
-/** Starts, ends, FAILs and FAILs under 1 minute in the window, the last two with a count per failing step (most first, then by name). */
+/** Starts, ends, FAILs and FAILs under 1 minute in the window, the last two with a count per failing step (most first, then by name), and ERROR ends (counted in ends, never in FAIL). The by-maps have no prototype: a step named "constructor" is a key, not a function. */
 export function runCounts(rows, now, days) {
-  const out = { starts: 0, ends: 0, fail: 0, failBy: {}, quick: 0, quickBy: {} };
+  const out = { starts: 0, ends: 0, fail: 0, failBy: Object.create(null), quick: 0, quickBy: Object.create(null), error: 0 };
   for (const r of rows) {
     if (!inWindow(r.ts, now, days)) continue;
     if (r.event === 'start') { out.starts += 1; continue; }
     out.ends += 1;
+    if (r.error) { out.error += 1; continue; }
     if (!r.fail) continue;
     out.fail += 1;
     out.failBy[r.failing] = (out.failBy[r.failing] || 0) + 1;
@@ -119,7 +122,7 @@ export function buildLine(taps, runs, days) {
   if (runs) {
     const count = (name, label, n) => { fields.push({ name, text: `${label} ${n}` }); return `${label} ${n}`; };
     runText = `pre-pr ${days}d: ${count('pre-pr starts', 'starts', runs.starts)} ${count('pre-pr ends', 'ends', runs.ends)}`
-      + ` ${count('pre-pr FAIL count', 'FAIL', runs.fail)}${byList(runs.failBy)} ${count('pre-pr FAIL<1min count', 'FAIL<1min', runs.quick)}${byList(runs.quickBy)}`;
+      + ` ${count('pre-pr FAIL count', 'FAIL', runs.fail)}${byList(runs.failBy)} ${count('pre-pr FAIL<1min count', 'FAIL<1min', runs.quick)}${byList(runs.quickBy)} ${count('pre-pr ERROR count', 'ERROR', runs.error)}`;
     for (const k of Object.keys(runs.failBy)) fields.push({ name: 'pre-pr FAIL step name', text: k });
     for (const k of Object.keys(runs.quickBy)) fields.push({ name: 'pre-pr FAIL<1min step name', text: k });
   }
