@@ -222,12 +222,12 @@ describe('S13 to S15: failures and inputs', () => {
     const absent = folder();
     const empty = listRoot({ dataset: { prs: [], findings: [] } });
     const broken = listRoot({ dataset: '{ not json' });
-    for (const root of [absent, empty, broken]) {
+    for (const [root, message] of [[absent, /list is absent/], [empty, /list is empty/], [broken, /cannot be read or has the wrong shape/]]) {
       const r = run(['--root', root, f]);
       assert.equal(r.code, 2);
       assert.equal(r.out, '');
       assert.ok(!r.err.includes(SENTINEL) && !r.err.includes(HOLD4), 'file text or an id in the error');
-      assert.ok(r.err.length > 0);
+      assert.match(r.err, message);
     }
   });
   it('S14 standard input with -, an empty file and a file with no id exit 0 with counts 0', () => {
@@ -419,6 +419,15 @@ describe('S30 to S33: string ids, dataset shape, fullwidth shas', () => {
     const plain = run(['--root', root, put(`${TOKEN} and ${TOKEN}`)]);
     assert.ok(!new RegExp(TOKEN, 'i').test(plain.out), 'a string id reached the plain output');
   });
+  it('S30b a string id on the edge of the context window is hidden whole, never shown as a part', () => {
+    const root = tokenRoot();
+    // The token ends 36 characters before the hit and starts 5 characters before the 40 character window: a plain cut would show its tail.
+    const text = `${'x'.repeat(10)}${TOKEN} ${'y'.repeat(30)} PR ${HOLD4}`;
+    const r = scan(root, text);
+    const hit = r.hits.find((h) => h.rule === 'pr-ref');
+    assert.ok(hit, 'the reference was not found');
+    assert.ok(!/hread|thread|read/.test(hit.ctx), 'a part of a string id reached the context');
+  });
   it('S31 a listed string id in a file name is hidden in the label, plain and --json', () => {
     const root = tokenRoot();
     const f = path.join(folder(), `x-${TOKEN}-y.md`);
@@ -450,5 +459,9 @@ describe('S30 to S33: string ids, dataset shape, fullwidth shas', () => {
     }
     const six = scan(root, `head ${wideAscii(SHA.slice(0, 6))} end`);
     assert.equal(six.strict, 0);
+    // After a character that NFKC expands the column is still the original one.
+    const afterLigature = scan(root, `ﬀ ${wideAscii(SHA)}`);
+    assert.equal(afterLigature.strict, 1);
+    assert.equal(afterLigature.hits[0].col, 3);
   });
 });

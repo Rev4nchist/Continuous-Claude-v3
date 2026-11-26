@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DATASET_REL, EVAL_CONFIG_REL, GOLD_DIR_REL, GOLD_NON_ROW_FILES, readIdList } from './board-mask.mjs';
-import { countIdsIn } from '../github/lib/holdout-ids.mjs';
+import { checkHoldoutShape, countIdsIn } from '../github/lib/holdout-ids.mjs';
 import { MIN_INT_DIGITS, forbiddenSet } from '../eval/review-eval/rubrics/lint-ids.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -78,7 +78,9 @@ export function loadLists(root) {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(root, EVAL_CONFIG_REL), 'utf8'));
     const dataset = JSON.parse(fs.readFileSync(path.join(root, DATASET_REL), 'utf8'));
-    return { listA, setB: forbiddenSet({ cfg, dataset, goldRows: readGoldRows(root) }), minInt: MIN_INT_DIGITS };
+    // The shared shape check of the gates: a dataset with no findings gives a list of PR numbers only, and a scan on it would pass comment ids unseen.
+    checkHoldoutShape(dataset, cfg);
+    return { listA, setB: forbiddenSet({ cfg, dataset, goldRows: readGoldRows(root) }), minInt: MIN_INT_DIGITS, hide: hideRegex(listA) };
   } catch (err) { throw err instanceof Problem ? err : new Problem('bad'); }
 }
 
@@ -95,7 +97,20 @@ const classOf = (id) => (/^[0-9a-f]{7,40}$/i.test(id) && /[a-f]/i.test(id) ? 'sh
  * A text with every hex run of 7 or more and every decimal digit of any script hidden: a context never shows an id, also not a part of one.
  * The text is folded with NFKC first (a fullwidth digit or letter is the same id), then any digit that the fold keeps (Arabic-Indic, Devanagari) is hidden.
  */
-const maskText = (s) => s.normalize('NFKC').replace(/[0-9a-f]{7,}/gi, 'HEX').replace(/\p{Nd}/gu, '#');
+const maskText = (s, hide = null) => {
+  const folded = s.normalize('NFKC');
+  return (hide ? folded.replace(hide, '[ID]') : folded).replace(/[0-9a-f]{7,}/gi, 'HEX').replace(/\p{Nd}/gu, '#');
+};
+
+/**
+ * The listed ids that are neither digits nor shas (a finding id can be a plain string, or a <pr>:<id> key) as one pattern, longest first, and the length of
+ * the longest. maskText hides every copy of them: a context holds other copies next to a hit, and a file name can hold one. null when the list has none.
+ */
+function hideRegex(listA) {
+  const tokens = listA.filter((id) => typeof id === 'string' && id !== '' && ['token', 'key'].includes(classOf(id))).sort((a, b) => b.length - a.length);
+  if (tokens.length === 0) return null;
+  return { re: new RegExp(tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi'), max: tokens[0].length };
+}
 
 /** The NFKC fold of a line, and for each folded character the offset of the original character it came from (a ligature gives two folded ones). */
 function foldLine(line) {
@@ -111,9 +126,15 @@ function foldLine(line) {
   return { text, map };
 }
 
-/** A masked context: 40 characters each side, the hit itself replaced by [ID]. */
-function contextOf(line, at, len) {
-  return `${maskText(line.slice(Math.max(0, at - 40), at))}[ID]${maskText(line.slice(at + len, at + len + 40))}`.replace(/\s+/g, ' ');
+/**
+ * A masked context: 40 characters each side, the hit itself replaced by [ID], every listed string id hidden. The slices are cut a token longer than
+ * the context, hidden, and then cut to 40, so a token on the edge is hidden whole and never shows as a part.
+ */
+function contextOf(line, at, len, hide) {
+  const pad = hide ? hide.max : 0;
+  const before = maskText(line.slice(Math.max(0, at - 40 - pad), at), hide?.re).slice(-40);
+  const after = maskText(line.slice(at + len, at + len + 40 + pad), hide?.re).slice(0, 40);
+  return `${before}[ID]${after}`.replace(/\s+/g, ' ');
 }
 
 /**
@@ -147,13 +168,14 @@ function placesOf(line, id, cls) {
  * gate is `countIdsIn` on the whole text: the number the machine counts. strict is the number of hit places (gate places and bare places);
  * with gateOnly it is null and only the gate places are listed. A hit is { line, col, rule, ctx }, col counts from 1.
  */
-export function scanText(text, { listA, setB, minInt }, { gateOnly = false } = {}) {
+export function scanText(text, { listA, setB, minInt, hide = null }, { gateOnly = false } = {}) {
   const src = String(text ?? '');
   const gate = countIdsIn(src, listA);
   const hits = [];
   const seen = new Set();
+  const shaIds = listA.filter((id) => typeof id === 'string' && classOf(id) === 'sha');
   const add = (line, no, place, rule) => {
-    hits.push({ line: no, col: place.at + 1, rule, ctx: contextOf(line, place.at, place.len) });
+    hits.push({ line: no, col: place.at + 1, rule, ctx: contextOf(line, place.at, place.len, hide) });
     seen.add(`${no}:${place.at}`);
   };
   src.split(LINE_SPLIT).forEach((line, i) => {
@@ -173,6 +195,14 @@ export function scanText(text, { listA, setB, minInt }, { gateOnly = false } = {
       const end = m.index + m[0].length < map.length ? map[m.index + m[0].length] : line.length;
       const bare = m[0].replace(/^0+(?=\d)/, '');
       if (bare.length >= minInt && (setB.has(m[0]) || setB.has(bare)) && !seen.has(`${no}:${at}`)) add(line, no, { at, len: end - at }, 'bare');
+    }
+    // A sha written in fullwidth hex is the same sha: the rubric guard folds the text before it reads hex runs, so strict does too (gate stays the raw count).
+    if (shaIds.length === 0) return;
+    for (const m of folded.matchAll(HEX_RUN)) {
+      const at = map[m.index];
+      if (seen.has(`${no}:${at}`) || countIdsIn(m[0], shaIds) === 0) continue;
+      const end = m.index + m[0].length < map.length ? map[m.index + m[0].length] : line.length;
+      add(line, no, { at, len: end - at }, 'sha');
     }
   });
   return { gate, strict: gateOnly ? null : hits.length, hits };
@@ -195,11 +225,11 @@ function parseArgs(argv) {
 }
 
 /** A file name safe to print: the base name with its digit runs and hex runs hidden, numbered so two files stay apart. */
-const labelOf = (file, i) => (file === '-' ? '<stdin>' : `${i + 1}:${maskText(path.basename(file))}`);
+const labelOf = (file, i, hide) => (file === '-' ? '<stdin>' : `${i + 1}:${maskText(path.basename(file), hide?.re)}`);
 
-function readInputs(files) {
+function readInputs(files, hide) {
   return files.map((file, i) => {
-    try { return { label: labelOf(file, i), text: fs.readFileSync(file === '-' ? 0 : file, 'utf8') }; } catch { throw new Problem('file'); }
+    try { return { label: labelOf(file, i, hide), text: fs.readFileSync(file === '-' ? 0 : file, 'utf8') }; } catch { throw new Problem('file'); }
   });
 }
 
@@ -209,7 +239,7 @@ export function main(argv, io = { out: (s) => process.stdout.write(s), err: (s) 
     if (a.help) { io.out(`${USAGE}\n`); return 0; }
     if (a.files.length === 0) throw new Problem('usage');
     const lists = loadLists(a.root ? path.resolve(a.root) : primaryRoot());
-    const inputs = readInputs(a.files);
+    const inputs = readInputs(a.files, lists.hide);
     const files = inputs.map((f) => ({ file: f.label, ...scanText(f.text, lists, { gateOnly: a.gateOnly }) }));
     const gate = files.reduce((n, f) => n + f.gate, 0);
     const strict = a.gateOnly ? null : files.reduce((n, f) => n + f.strict, 0);
