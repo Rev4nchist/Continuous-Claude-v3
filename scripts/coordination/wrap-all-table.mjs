@@ -212,7 +212,8 @@ export function renderTable(t) {
 // ---------- real reads (each one is read-only) ----------
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const LANE_CLI = path.join(os.homedir(), '.claude', 'scripts', 'lane.mjs');
+// The lane CLI path can be injected (WRAP_ALL_LANE_CLI) so a test, or a runner with no ~/.claude, reads a fake one.
+const LANE_CLI = process.env.WRAP_ALL_LANE_CLI || path.join(os.homedir(), '.claude', 'scripts', 'lane.mjs');
 
 function runNode(args, opts = {}) {
   const r = spawnSync(process.execPath, args, { encoding: 'utf8', windowsHide: true, maxBuffer: 256 * 1024 * 1024, timeout: 120000, ...opts });
@@ -266,7 +267,7 @@ export function readRunLocks() {
 }
 
 /** null when there is no lock file; the record when it parses; { unreadable: true } when the file is there and does not parse. */
-export function readPublishLock(file = path.join(os.homedir(), '.claude', 'state', 'lane-dash', 'publish.lock')) {
+export function readPublishLock(file = process.env.WRAP_ALL_PUBLISH_LOCK || path.join(os.homedir(), '.claude', 'state', 'lane-dash', 'publish.lock')) {
   if (!existsSync(file)) return null;
   const rec = readJson(file);
   return rec && typeof rec === 'object' ? rec : { unreadable: true };
@@ -284,9 +285,15 @@ export function gather(root = path.resolve(HERE, '..', '..')) {
   return { peers, lanes: board.lanes, worktrees, publishLock: readPublishLock(), forkMain, now: Date.now(), me: me || sid8Of(board.me), runLocks: readRunLocks() };
 }
 
+/** --root <dir>: the repo whose fork/main and worktrees are read (default: the repo of this file). */
+function rootArg(argv) {
+  const i = argv.indexOf('--root');
+  return i >= 0 && argv[i + 1] ? path.resolve(argv[i + 1]) : undefined;
+}
+
 function main() {
   let table;
-  try { table = buildTable(gather()); } catch (err) {
+  try { table = buildTable(gather(rootArg(process.argv))); } catch (err) {
     console.error(`wrap-all-table: ${String(err.message).split('\n')[0]}`);
     process.exit(1);
   }

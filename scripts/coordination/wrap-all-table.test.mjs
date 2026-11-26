@@ -152,7 +152,7 @@ function hermetic() {
     `else if (verb === 'board') console.log(JSON.stringify({ me: '${SEAT}', lanes: [{ id: 're-program', owner_session_id: '${SEAT}', owner_name: 'Fake seat', note: '', branch: null, state: 'active' }] }));`,
     "else process.exit(2);",
   ].join('\n'));
-  const env = { ...process.env, WRAP_ALL_LANE_CLI: cli, CLAUDE_CODE_SESSION_ID: 'bbbbbbbb-0000-0000-0000-000000000000', RUN_LOCK_DIR: dir };
+  const env = { ...process.env, WRAP_ALL_LANE_CLI: cli, CLAUDE_CODE_SESSION_ID: 'bbbbbbbb-0000-0000-0000-000000000000', RUN_LOCK_DIR: dir, WRAP_ALL_PUBLISH_LOCK: path.join(dir, 'publish.lock') };
   return { dir, repo, sha, cli, env };
 }
 
@@ -375,4 +375,16 @@ test('W36: a START with no head does not take the head of the next START', () =>
   const r = A('Coord standard')(t);
   assert.match(r.running, /pre-pr START 13:00(,|$)/);
   assert.match(r.running, /pre-pr START 14:03 head bbb2222/);
+});
+
+test('W38: the CLI reads the injected publish.lock: an orphan lock gives a warning and no READY row, an unparsable file is unreadable', () => {
+  const h = hermetic();
+  const lockFile = path.join(h.dir, 'publish.lock');
+  writeFileSync(lockFile, JSON.stringify({ session: 'dead0001', key: 'k1', at: new Date().toISOString() }));
+  const orphan = JSON.parse(spawnSync(process.execPath, [SRC, '--root', h.repo, '--json'], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000, env: h.env }).stdout);
+  assert.ok(orphan.warnings.some((w) => /dead0001/.test(w)), orphan.warnings.join('\n'));
+  assert.equal(orphan.rows.some((r) => r.stop === W.STOP.READY), false);
+  writeFileSync(lockFile, '{not json');
+  const bad = JSON.parse(spawnSync(process.execPath, [SRC, '--root', h.repo, '--json'], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000, env: h.env }).stdout);
+  assert.ok(bad.warnings.some((w) => /cannot be read/.test(w)), bad.warnings.join('\n'));
 });
