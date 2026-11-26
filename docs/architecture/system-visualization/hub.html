@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Continuous Claude v3 — System Map</title>
-<meta name="description" content="Landing hub for the Continuous Claude v3 (CCv3) interactive architecture visualizations. Links every view: overview, memory, hooks, agents, Braintrust scoring, along with the machine-readable architecture.json." />
+<meta name="description" content="Landing hub for the Continuous Claude v3 (CCv3) interactive architecture visualizations. Links every view: overview, memory, hooks, agents, along with the machine-readable architecture.json." />
 <style>
   :root {
     --bg: #0b1020;
@@ -177,7 +177,7 @@
       </a>
 
       <!-- 1b. State of the Rework (Fable-5 deep review) -->
-      <a class="card" href="./state-of-rework/state-of-rework.html" style="--stripe:#fb923c;">
+      <a class="card" href="./archive/state-of-rework/state-of-rework.html" style="--stripe:#fb923c;">
         <div class="stripe"></div>
         <div class="body">
           <span class="arrow">&rarr;</span>
@@ -221,18 +221,6 @@
           <h2 class="title">Agents Deep Dive</h2>
           <p class="desc">Specialized sub-agents by task category. Spawning, isolation, routing.</p>
           <div class="stats" data-stat="agents"><span class="num" id="stat-agents">39</span> agents &middot; <span class="num" id="stat-agent-cats">8</span> categories</div>
-        </div>
-      </a>
-
-      <!-- 5. Braintrust Scoring -->
-      <a class="card" href="./braintrust-scoring-visualization.html" style="--stripe:#10b981;">
-        <div class="stripe"></div>
-        <div class="body">
-          <span class="arrow">&rarr;</span>
-          <span class="icon" aria-hidden="true">&#128202;</span>
-          <h2 class="title">Braintrust Scoring</h2>
-          <p class="desc">Quality dimensions + invariant guard. How the system scores itself.</p>
-          <div class="stats" data-stat="braintrust"><span class="num" id="stat-bt-dims">4</span> dimensions &middot; INVARIANT_<span class="num" id="stat-bt-inv">4</span> guard</div>
         </div>
       </a>
 
@@ -291,9 +279,7 @@
         agentCategories: 8,
         totalSkills: 138,
         memoryTables: 4,
-        embeddingDim: 1024,
-        braintrustDimensions: 4,
-        braintrustInvariant: 4
+        embeddingDim: 1024
       }
     };
 
@@ -318,7 +304,6 @@
       var hooks = node("hooks");
       var agents = node("agents");
       var memory = node("memory");
-      var bt = node("braintrust-scoring");
       var flows = Array.isArray(data.flows) ? data.flows.length : undefined;
       var subsystems = nodes.length || undefined;
       return {
@@ -329,9 +314,7 @@
         totalAgents: s.totalAgents || nodeStat("agents", "totalAgents"),
         agentCategories: s.agentCategories || nodeStat("agents", "categories"),
         memoryTables: s.memoryTables || nodeStat("memory", "tables"),
-        embeddingDim: s.embeddingDim || nodeStat("memory", "embeddingDim"),
-        braintrustDimensions: s.braintrustDimensions || nodeStat("braintrust-scoring", "dimensions"),
-        braintrustInvariant: s.braintrustInvariant || nodeStat("braintrust-scoring", "invariant")
+        embeddingDim: s.embeddingDim || nodeStat("memory", "embeddingDim")
       };
     }
 
@@ -354,8 +337,6 @@
       num("stat-agent-cats", s.agentCategories);
       num("stat-mem-tables", s.memoryTables);
       num("stat-mem-dims", s.embeddingDim);
-      num("stat-bt-dims", s.braintrustDimensions);
-      num("stat-bt-inv", s.braintrustInvariant);
     }
 
     // Paint the fallback immediately so cards are never blank, then try to refresh

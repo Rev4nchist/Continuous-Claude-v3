@@ -548,7 +548,6 @@
     <div class="sidebar-footer">
       <div>7 lifecycle events</div>
       <div>Blocking hooks: <span class="tag r mono">5 deny</span></div>
-      <div style="margin-top:8px">Braintrust emit sites: <b style="color:var(--y)">4</b></div>
       <div>src → dist via <b style="color:var(--green)">esbuild</b></div>
     </div>
   </aside>
@@ -564,10 +563,9 @@
         A hook is a small TypeScript program that Claude Code runs at a fixed point in the session lifecycle. There are <b>7 events</b> — from <code>SessionStart</code> to <code>SessionEnd</code> — and 107 hooks distributed across them. The overwhelming majority <em>inject context</em>; only 5 in <code>PreToolUse</code> can <span style="color:var(--red)">deny</span> a tool call outright.
       </p>
 
-      <div class="grid-3">
+      <div class="grid-2">
         <div class="stat"><p class="stat-label">Hooks total</p><p class="stat-value y">107</p><p class="stat-foot">across 7 lifecycle events</p></div>
         <div class="stat"><p class="stat-label">Can block (deny)</p><p class="stat-value r">5</p><p class="stat-foot">all on PreToolUse</p></div>
-        <div class="stat"><p class="stat-label">Braintrust emitters</p><p class="stat-value p">4</p><p class="stat-foot">score-emitting hooks</p></div>
       </div>
 
       <div class="diagram-wrap">
@@ -629,7 +627,7 @@
         <div class="bar-row"><span class="bar-label">PreCompact</span><div class="bar-track"><div class="bar-fill p" style="width:8%"></div></div><span class="bar-num">2</span></div>
         <div class="bar-row"><span class="bar-label">SubagentStop</span><div class="bar-track"><div class="bar-fill t" style="width:11%"></div></div><span class="bar-num">3</span></div>
         <div class="bar-row"><span class="bar-label">SessionEnd</span><div class="bar-track"><div class="bar-fill o" style="width:15%"></div></div><span class="bar-num">4</span></div>
-        <p class="small muted" style="margin-top:10px">Counts reflect registered hook entries in <code>settings.json</code> plus event handlers in <code>.claude/hooks/src/</code>. PostToolUse dominates: it is where context injection, extraction, and the Braintrust scoring emits live.</p>
+        <p class="small muted" style="margin-top:10px">Counts reflect registered hook entries in <code>settings.json</code> plus event handlers in <code>.claude/hooks/src/</code>. PostToolUse dominates: it is where context injection and extraction live.</p>
       </div>
 
       <div class="callout">
@@ -645,7 +643,6 @@
             <li>Block supply-chain-risky package installs</li>
             <li>Type-check files immediately after every edit</li>
             <li>Save continuity state before context compaction</li>
-            <li>Emit Braintrust scores so the system grades itself</li>
           </ul>
         </div>
         <div class="card">
@@ -722,7 +719,7 @@
         <div class="step"><div class="step-num">3</div><div class="step-body"><h4>session-start-continuity + init-check</h4><p>Loads the handoff/continuity ledger and validates <code>knowledge-tree.json</code>. If the tree is missing or empty it auto-regenerates (for projects with code files).</p><span class="file-ref">session-start-continuity.ts · session-start-init-check.ts</span></div></div>
         <div class="step"><div class="step-num">4</div><div class="step-body"><h4>session-start-recovery</h4><p>Detects an in-flight Ralph loop via <code>.ralph/state.json</code> and resumes it, surfacing the active task back into context.</p><span class="file-ref">session-start-recovery.ts</span></div></div>
         <div class="step"><div class="step-num">5</div><div class="step-body"><h4>memory cache warmer</h4><p><code>session-start-memory-loaders</code> primes recall. The BGE embedding daemon is spawned fire-and-forget here so prompt #1 hits a warm daemon.</p><span class="file-ref">session-start-memory-loaders.ts</span></div></div>
-        <div class="step"><div class="step-num">6</div><div class="step-body"><h4>hook-health-monitor</h4><p>Audits that every registered hook's <code>dist/*.mjs</code> exists and isn't stale (src newer than dist). Stays quiet when healthy; reports fix commands when not. Also emits the <span class="pill score">hook_health_ratio</span> Braintrust score once per boot.</p><span class="file-ref">hook-health-monitor.ts</span></div></div>
+        <div class="step"><div class="step-num">6</div><div class="step-body"><h4>hook-health-monitor</h4><p>Audits that every registered hook's <code>dist/*.mjs</code> exists and isn't stale (src newer than dist). Stays quiet when healthy; reports fix commands when not.</p><span class="file-ref">hook-health-monitor.ts</span></div></div>
       </div>
     </section>
 
@@ -766,7 +763,6 @@
 
               <rect x="470" y="160" width="200" height="60" rx="8" class="node-rect" fill="#1c2236" stroke="var(--y)" stroke-width="1.5"/>
               <text x="570" y="183" text-anchor="middle" class="label-main" style="fill:var(--y);font-size:11px">inject MEMORY MATCH</text>
-              <text x="570" y="202" text-anchor="middle" class="label-sub" style="font-size:10px">+ Braintrust emit</text>
 
               <path d="M180 60 H 240" class="edge"/>
               <path d="M410 60 H 470" class="edge"/>
@@ -788,7 +784,7 @@
             <li>Daemon ready → hybrid RRF; not ready → <code>--text-only</code> + fire-and-forget spawn for next time</li>
             <li>Run local-memory + DB-memory in parallel, merge & dedupe</li>
             <li>Apply a mode-aware floor; survivors become <span class="mono y">MEMORY MATCH</span></li>
-            <li>Log every fire to <code>memory-recall.jsonl</code> and emit the recall Braintrust score</li>
+            <li>Log every fire to <code>memory-recall.jsonl</code></li>
           </ol>
         </div>
         <div class="card">
@@ -920,7 +916,7 @@
       <p class="section-eyebrow">05 · After the fact</p>
       <h2 class="section-title">27 hooks react to every<br/>tool result.</h2>
       <p class="section-lede">
-        <code>PostToolUse</code> is the busiest event. It injects context (<code>post-edit-diagnostics</code> runs <code>tsc --noEmit</code> after every <code>.ts</code> edit), extracts learnings, syncs the ROADMAP, invalidates the knowledge tree, and — critically — is home to <b>3 of the 4 Braintrust score-emit sites</b>: <code>telemetry-tracker</code>, <code>ralph-task-monitor</code>, and the skill-trigger accuracy emit.
+        <code>PostToolUse</code> is the busiest event. It injects context (<code>post-edit-diagnostics</code> runs <code>tsc --noEmit</code> after every <code>.ts</code> edit), extracts learnings, syncs the ROADMAP, invalidates the knowledge tree.
       </p>
 
       <div class="diagram-wrap">
@@ -949,7 +945,6 @@
 
               <rect x="650" y="40" width="210" height="48" rx="8" class="node-rect" fill="#1c2236" stroke="var(--y)" stroke-width="1.5"/>
               <text x="755" y="62" text-anchor="middle" class="label-main" style="fill:var(--y);font-size:10.5px">emit skill_trigger_accuracy</text>
-              <text x="755" y="78" text-anchor="middle" class="label-sub" style="font-size:10px">→ Braintrust feedback</text>
 
               <ellipse cx="755" cy="170" rx="78" ry="40" class="node-circle heartbeat" fill="#1c2236" stroke="var(--blue)" stroke-width="2"/>
               <text x="755" y="166" text-anchor="middle" class="label-main" style="fill:var(--blue);font-size:11px">additionalContext</text>
@@ -983,32 +978,8 @@
             <tr><td><code>mcp-activity-tracker</code></td><td>record MCP tool use</td></tr>
           </table>
         </div>
-        <div class="card">
-          <h3 class="card-title"><span class="dot" style="background:var(--y)"></span>Braintrust scoring emit sites</h3>
-          <p class="small" style="margin-top:0;color:var(--text-dim)">3 of 4 emitters live on PostToolUse. Each calls <code>await emitBraintrustScore(payload)</code> — fail-open, 2s timeout, silent when <code>TRACE_TO_BRAINTRUST != "true"</code>.</p>
-          <div class="mode-grid" style="grid-template-columns:1fr">
-            <div class="mode-card" data-c="y">
-              <p class="mode-name">telemetry-tracker</p>
-              <p class="mode-flag">PostToolUse:Skill|Task</p>
-              <p class="mode-detail">emits <span class="pill score">skill_trigger_accuracy</span> per skill/Task event</p>
-            </div>
-            <div class="mode-card" data-c="p">
-              <p class="mode-name">ralph-task-monitor</p>
-              <p class="mode-flag">PostToolUse:Task</p>
-              <p class="mode-detail">updates <code>.ralph/state.json</code> + emits a Ralph progress score</p>
-            </div>
-            <div class="mode-card" data-c="b">
-              <p class="mode-name">hook-health-monitor*</p>
-              <p class="mode-flag">*SessionStart (4th emitter)</p>
-              <p class="mode-detail">emits <span class="pill score">hook_health_ratio</span> — the only emit not on PostToolUse</p>
-            </div>
-          </div>
-        </div>
       </div>
 
-      <div class="callout red">
-        <strong>The emit invariant.</strong> All 4 score sites must use <code>await emitBraintrustScore(...)</code> — the <code>await</code> matters. A known regression silently reverted three of them to <code>void emitBraintrustScore(...)</code>. The guard <code>scripts/audit-braintrust-emits.sh</code> now requires the <code>await</code> form and must be re-run after any TS hook edit. (See <code>hook-dev-lifecycle.md</code> failure modes.)
-      </div>
     </section>
 
     <!-- ========== 6. PRECOMPACT ========== -->
@@ -1102,7 +1073,7 @@
       </div>
 
       <div class="callout">
-        <strong>session-end scoring.</strong> The <span class="pill score">hook_health_ratio</span> Braintrust score is emitted by <code>hook-health-monitor</code> at boot, but the session-end hooks finalize the outcome record — closing the observability loop so Braintrust can grade how the whole session went. <code>SessionEnd</code> hooks return <code>{}</code> (side-effect only) and must use fire-and-forget spawn for long work to avoid the "Hook cancelled" timeout.
+        <strong>session-end work.</strong> The session-end hooks finalize the outcome record, so the whole session is recorded. <code>SessionEnd</code> hooks return <code>{}</code> (side-effect only) and must use fire-and-forget spawn for long work to avoid the "Hook cancelled" timeout.
       </div>
     </section>
 
@@ -1111,20 +1082,10 @@
       <p class="section-eyebrow">08 · Under the hooks</p>
       <h2 class="section-title">The reusable layer beneath<br/>all 107 hooks.</h2>
       <p class="section-lede">
-        Hooks are thin. The real work lives in <code>.claude/hooks/src/shared/</code> — a set of modules every hook imports. Braintrust emission, BGE embeddings over TCP, intent extraction, session isolation, and Postgres coordination are all written once here and reused everywhere.
+        Hooks are thin. The real work lives in <code>.claude/hooks/src/shared/</code> — a set of modules every hook imports. BGE embeddings over TCP, intent extraction, session isolation, and Postgres coordination are all written once here and reused everywhere.
       </p>
 
       <div class="grid-2">
-        <div class="card">
-          <h3 class="card-title"><span class="dot" style="background:var(--y)"></span>shared/braintrust-score.ts</h3>
-          <p class="small" style="margin-top:0;color:var(--text-dim)">Score (feedback) emission from TS hooks. <b>Fail-open</b>: never throws. Skips when <code>TRACE_TO_BRAINTRUST != "true"</code> or no API key. 2s AbortController timeout.</p>
-          <div class="codeblock"><span class="kw">await</span> <span class="fn">emitBraintrustScore</span>({
-  spanId,
-  scores: { hook_health_ratio: <span class="num">0.96</span> },
-  metadata: { ... },
-});
-<span class="com">// POST /v1/project_logs/{id}/feedback</span></div>
-        </div>
         <div class="card">
           <h3 class="card-title"><span class="dot" style="background:var(--purple)"></span>shared/embedding-client.ts</h3>
           <p class="small" style="margin-top:0;color:var(--text-dim)">Talks to the long-lived BGE-large daemon over TCP loopback. 4-byte big-endian length prefix + JSON. Discovers the daemon via <code>$TEMP/ccv3-embedding.json</code>; absence → text-only fallback.</p>
@@ -1161,7 +1122,7 @@
       </div>
 
       <div class="callout">
-        <strong>Why a shared layer.</strong> 107 hooks would otherwise duplicate daemon protocols, score payloads, and session-ID logic 107 times. Centralizing it means a fix to (say) the Braintrust fail-open contract lands once and every emitter inherits it. The trade-off: a regression in a shared module is a regression everywhere — which is exactly why the emit-invariant audit exists.
+        <strong>Why a shared layer.</strong> 107 hooks would otherwise duplicate daemon protocols and session-ID logic 107 times. Centralizing it means a fix lands once and every hook inherits it. The trade-off: a regression in a shared module is a regression everywhere.
       </div>
     </section>
 
@@ -1235,7 +1196,6 @@ bash scripts/sync-to-active.sh</div>
           <tr><td>settings.json race</td><td>Used Edit tool on it</td><td>Node atomic read-modify-write</td></tr>
           <tr><td>Windows encoding crash</td><td>Unicode/emoji in Python hooks</td><td>ASCII only</td></tr>
           <tr><td>SessionEnd "Hook cancelled"</td><td>Blocking spawnSync &gt; timeout</td><td>fire-and-forget detached spawn</td></tr>
-          <tr><td>Prior-phase emit missing</td><td>Whole-file rewrite dropped a sibling emit</td><td><code>scripts/audit-braintrust-emits.sh</code></td></tr>
         </table>
       </div>
 

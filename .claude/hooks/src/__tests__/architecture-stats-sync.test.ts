@@ -94,6 +94,32 @@ describe('architecture-stats-sync — touchesWatchedPaths (multiline git show ou
   it('does NOT match a `scripts` word inside another path (must be path-anchored)', () => {
     expect(touchesWatchedPaths('docs/about-scripts.md\n')).toBe(false);
   });
+
+  // The system map generator reads the Waves table of this file (card ccv3-system-map-followups, item b).
+  it('matches `docs/review-engine/map.md` (a source of the generated graph)', () => {
+    expect(touchesWatchedPaths('docs/review-engine/map.md\n')).toBe(true);
+  });
+
+  it('matches `docs/review-engine/map.md` among other docs files', () => {
+    expect(touchesWatchedPaths('README.md\ndocs/review-engine/map.md\ndocs/foo.md\n')).toBe(true);
+  });
+
+  it('matches the authored map `docs/architecture/system-visualization/architecture.src.json`', () => {
+    expect(touchesWatchedPaths('docs/architecture/system-visualization/architecture.src.json\n')).toBe(true);
+    expect(touchesWatchedPaths('README.md\ndocs/architecture/system-visualization/architecture.src.json\n')).toBe(true);
+  });
+
+  it('does NOT match the other files of the system-visualization folder (the sync writes two of them)', () => {
+    expect(touchesWatchedPaths('docs/architecture/system-visualization/architecture.json\n')).toBe(false);
+    expect(touchesWatchedPaths('docs/architecture/system-visualization/index.html\n')).toBe(false);
+    expect(touchesWatchedPaths('docs/architecture/system-visualization/architecture.src.json.bak\n')).toBe(false);
+  });
+
+  it('does NOT match other files of `docs/review-engine/` or a look-alike path', () => {
+    expect(touchesWatchedPaths('docs/review-engine/README.md\n')).toBe(false);
+    expect(touchesWatchedPaths('docs/review-engine/map.md.bak\n')).toBe(false);
+    expect(touchesWatchedPaths('old-docs/review-engine/map.md\n')).toBe(false);
+  });
 });
 
 describe('architecture-stats-sync — shouldFireSync (full hook decision)', () => {
