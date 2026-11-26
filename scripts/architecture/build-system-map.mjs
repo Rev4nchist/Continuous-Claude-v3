@@ -18,9 +18,10 @@
  *
  * Usage: node scripts/architecture/build-system-map.mjs [--root <dir>] [--check | --apply] [--skip-listed] [--verbose]
  *   (no mode) dry run   --check exit 1 when the committed files differ   --apply write the files
- * Exit: 0 ok, 1 a problem (stale file, listed id, bad file), 2 not checked (a source or the listed id list is missing or empty).
+ * Exit: 0 ok, 1 a problem (stale file, listed id, bad file), 2 not checked (a source or the listed id list is missing or empty),
+ *   3 --apply skipped because another run holds the writer lock `.system-map.lock` (nothing written).
  */
-import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -229,12 +230,70 @@ async function hideListed(text, ids) {
   return m.maskListed(text, ids).text;
 }
 
+const LOCK_NAME = '.system-map.lock';
+const LOCK_MAX_AGE_MS = 10 * 60 * 1000;
+
+/** The error of a refused writer: another run holds the lock. `code` is ELOCKHELD. */
+function lockHeld(path, text) {
+  let pid = null;
+  try { pid = JSON.parse(text ?? 'null')?.pid ?? null; } catch { /* a lock with unreadable text */ }
+  const e = new Error(`another writer holds the lock: ${path}${pid ? ` (pid ${pid})` : ''}`);
+  e.code = 'ELOCKHELD';
+  return e;
+}
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+function lockTextOf(path) {
+  try { return readFileSync(path, 'utf8'); } catch { return null; }
+}
+/** A lock is stale when its process is gone or it is older than 10 minutes. A lock with no readable pid and time is judged by the file time. */
+function lockIsStale(path, text, alive, nowMs) {
+  let held = null;
+  try { held = JSON.parse(text); } catch { /* judged by the file time below */ }
+  if (held && Number.isInteger(held.pid) && typeof held.at === 'number') return !alive(held.pid) || nowMs - held.at > LOCK_MAX_AGE_MS;
+  try { return nowMs - statSync(path).mtimeMs > LOCK_MAX_AGE_MS; } catch { return false; }
+}
+
+/**
+ * Takes the writer lock `.system-map.lock` in `dir` and returns the function that gives it back. A second writer fails closed (ELOCKHELD).
+ * The lock holds the pid and the time. A stale lock is taken over by reading it, reading it again, removing it and creating it again with
+ * the exclusive flag: a writer that finds the text changed, or loses the create, is refused. The release removes only a lock that still holds its own text.
+ * `ops.pidAlive`, `ops.now` and `ops.afterStaleRead` are for tests.
+ */
+export function acquireMapLock(dir, ops = {}) {
+  const path = join(dir, LOCK_NAME);
+  const alive = ops.pidAlive ?? pidAlive, now = ops.now ?? Date.now;
+  const body = JSON.stringify({ pid: process.pid, at: now() });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      writeFileSync(path, body, { flag: 'wx' });
+      return () => { if (lockTextOf(path) === body) { try { unlinkSync(path); } catch { /* already gone */ } } };
+    } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    const seen = lockTextOf(path);
+    if (seen === null) continue; // it vanished between the create and the read: create again
+    if (!lockIsStale(path, seen, alive, now())) throw lockHeld(path, seen);
+    ops.afterStaleRead?.();
+    const again = lockTextOf(path);
+    if (again !== seen) throw lockHeld(path, again);
+    try { unlinkSync(path); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+  throw lockHeld(path, lockTextOf(path));
+}
+
+/** Writes every file under the writer lock (see `acquireMapLock`) and `writeFiles`. */
+export function writeAll(changed, ops = {}) {
+  if (changed.length === 0) return;
+  const release = acquireMapLock(dirname(changed[0][0]), ops);
+  try { writeFiles(changed, ops); } finally { release(); }
+}
+
 /**
  * Writes every file to a temp file first, then renames them. A failed write or rename puts every file back as it was.
  * It refuses to start when a `.bak` file of an earlier crash exists. A backup whose restore failed is kept and named in the error.
  * `ops.renameSync` is for tests.
  */
-export function writeAll(changed, ops = {}) {
+function writeFiles(changed, ops = {}) {
   const rename = ops.renameSync ?? renameSync;
   const gone = (f) => { try { unlinkSync(f); } catch { /* already gone */ } };
   const older = changed.map(([f]) => `${f}.bak`).filter((x) => existsSync(x));
@@ -333,7 +392,13 @@ export async function main(argv, out = (t) => process.stdout.write(`${t}\n`), op
   const changed = [];
   if (!existsSync(jsonFile) || read(jsonFile) !== json) changed.push([jsonFile, json]);
   if (read(htmlFile) !== html) changed.push([htmlFile, html]);
-  if (argv.includes('--apply')) writeAll(changed);
+  if (argv.includes('--apply')) {
+    try { writeAll(changed); } catch (e) {
+      // A refused run is no error for the stats hook (it only logs this line): the next commit runs the generator again. Exit 3 tells a direct run that nothing was written.
+      if (e.code === 'ELOCKHELD') { out(`skipped: ${e.message}; nothing written`); return 3; }
+      throw e;
+    }
+  }
   out(changed.length ? `${argv.includes('--apply') ? 'wrote' : 'would write'}: ${changed.map(([f]) => f.split(/[\\/]/).pop()).join(', ')}` : 'no changes');
   out(summary(g));
   return 0;
