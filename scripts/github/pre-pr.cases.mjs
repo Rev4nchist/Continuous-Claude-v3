@@ -1770,12 +1770,25 @@ function makeRepo({ files = { 'docs/a.md': 'hello\n' } } = {}) {
     mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
     writeFileSync(path.join(dir, name), text);
   }
+  // The evidence step reads the PR commit list (card prepr-evidence-gaps): a RED line must name a commit of the PR before the head, so a repo
+  // with work gets a real RED commit first. `red` is that commit; prePr() below puts it where a body names the fake RED id RED_PLACEHOLDER.
+  let red = null;
   if (Object.keys(files).length > 0) {
+    git(dir, 'commit', '-q', '--allow-empty', '-m', 'red');
+    red = git(dir, 'rev-parse', 'HEAD');
+    LAST_RED = red;
     git(dir, 'add', '.');
     git(dir, 'commit', '-q', '-m', 'work');
   }
-  return { dir, head: git(dir, 'rev-parse', 'HEAD') };
+  return { dir, head: git(dir, 'rev-parse', 'HEAD'), red };
 }
+
+const RED_PLACEHOLDER = 'b'.repeat(40);
+// The RED commit of the repo that makeRepo built last. Tests run one after another in this file, and each builds its repo before its body,
+// so greenBody() below can default its RED id to a real commit of that repo without every call passing one.
+let LAST_RED = RED_PLACEHOLDER;
+/** The body text with the fake RED id replaced by the repo's real RED commit (a repo with no work has none, and keeps the text). */
+const withRealRed = (text, repo) => (typeof text === 'string' && repo?.red ? text.replaceAll(RED_PLACEHOLDER, repo.red) : text);
 
 const okExec = (log) => (spec) => { log.push(spec.id ?? spec.args.join(' ')); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
 
@@ -1806,6 +1819,7 @@ async function prePr(repo, extra = {}) {
     summaryCheck: SUMMARY_OK,
     bodyText: 'Proof type: docs\n', ...extra,
   };
+  opts.bodyText = withRealRed(opts.bodyText, repo);
   return { result: await runPrePr(opts), gateRuns, crCalls };
 }
 
@@ -2332,7 +2346,7 @@ test('PF4: fetchEnv sets the default ssh command only when no ssh transport is c
 // CRLF is turned into LF (GU5); a GREEN-looking line inside a RED output block is rewritten, or RED changes (GU6).
 
 const sha256 = (t) => createHash('sha256').update(t).digest('hex');
-const greenBody = ({ redExtra = '', green, nl = '\n', redSha = 'b'.repeat(40), withRed = true }) => [
+const greenBody = ({ redExtra = '', green, nl = '\n', redSha = LAST_RED, withRed = true }) => [
   '## Evidence', '', 'Proof type: feature', '',
   ...(withRed ? [`RED: \`node --test x\` @ ${redSha}`, '```text', 'not ok 1', ...(redExtra ? [redExtra] : []), '```', ''] : []),
   `GREEN: \`node --test x\` @ ${green}`, '```text', 'ok 1', '```', '',

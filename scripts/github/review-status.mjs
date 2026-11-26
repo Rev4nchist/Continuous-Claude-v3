@@ -735,8 +735,9 @@ function parseField(value) {
   const v = trimValue(value);
   const cmd = /^`([^`]+)`/.exec(v);
   const rest = cmd ? v.slice(cmd[0].length) : v;
-  const sha = /(?:^|\s)(?:@|at\s)\s*`?([0-9a-fA-F]{7,40})`?(?=[\s.,;)]|$)/.exec(rest);
-  return { command: cmd ? cmd[1].trim() : null, sha: sha ? sha[1].toLowerCase() : null, output: null };
+  // `<id>` or `<anchor>~N`: N commits back from the anchor in the PR commit list (card prepr-evidence-gaps; for a RED id that collides with a listed id).
+  const sha = /(?:^|\s)(?:@|at\s)\s*`?([0-9a-fA-F]{7,40})(?:~(\d{1,4}))?`?(?=[\s.,;)]|$)/.exec(rest);
+  return { command: cmd ? cmd[1].trim() : null, sha: sha ? sha[1].toLowerCase() : null, back: sha?.[2] ? Number(sha[2]) : 0, output: null };
 }
 
 /**
@@ -803,10 +804,21 @@ function readProofType(raw) {
  * it is the head; or the PR's whole commit list is known, holds the head, and does not hold it. `commits` is
  * [] when the reader could not read them all (prCommitList), and then only the head test runs.
  */
-function redCommitProblem(sha, head, commits, say) {
-  if (shaIsHead(sha, head)) { say(`RED names the head commit ${sha}. A RED commit comes before the head: commit the failing test first and name that commit`); return; }
+export function redCommitProblem(sha, back, head, commits, say) {
   const shas = (commits || []).flatMap((c) => (typeof c?.sha === 'string' ? [c.sha.toLowerCase()] : []));
-  if (shas.includes(String(head).toLowerCase()) && !shas.some((s) => s.startsWith(sha))) say(`RED names commit ${sha}, which is not a commit of this PR. Name the PR commit where the check fails`);
+  const known = shas.includes(String(head).toLowerCase());
+  const hint = 'If the plain id collides with a listed id, write <anchor>~N: a commit of this PR and N commits back from it';
+  if (back > 0) {
+    // <anchor>~N: the anchor may be the head. With no known list nothing can be resolved, so only the head test of a plain id runs (as R7).
+    if (!known) return;
+    const hits = shas.flatMap((s, i) => (s.startsWith(sha) ? [i] : []));
+    if (hits.length === 0) say(`RED names ${sha}~${back}, and ${sha} is not a commit of this PR. Name an anchor from this PR`);
+    else if (hits.length > 1) say(`RED names ${sha}~${back}, and ${sha} matches ${hits.length} commits of this PR. Write more characters of the anchor`);
+    else if (hits[0] - back < 0) say(`RED ${sha}~${back} goes back past the first commit of this PR (${hits[0]} commit${hits[0] === 1 ? '' : 's'} before the anchor)`);
+    return;
+  }
+  if (shaIsHead(sha, head)) { say(`RED names the head commit ${sha}. A RED commit comes before the head: commit the failing test first and name that commit`); return; }
+  if (known && !shas.some((s) => s.startsWith(sha))) say(`RED names commit ${sha}, which is not a commit of this PR. Name the PR commit where the check fails. ${hint}`);
 }
 
 function fieldProblems(key, list, type, head, say, commits) {
@@ -818,7 +830,7 @@ function fieldProblems(key, list, type, head, say, commits) {
   if (!ev.command) say(`the ${key} line has no command in backticks`);
   else if (/^<.*>$/.test(ev.command)) say(`the ${key} line has a placeholder command`);
   if (!ev.sha) say(`the ${key} line names no commit (7 to 40 hex characters after @)`);
-  else if (key === 'RED') redCommitProblem(ev.sha, head, commits, say);
+  else if (key === 'RED') redCommitProblem(ev.sha, ev.back ?? 0, head, commits, say);
   else if (key === 'GREEN' && !shaIsHead(ev.sha, head)) say(`GREEN names commit ${ev.sha}, not the head ${String(head).slice(0, Math.max(7, ev.sha.length))}. Run the check on the head and update the GREEN line`);
   if (ev.output === null) say(`the ${key} line has no fenced output block under it`);
   else if (ev.output.trim() === '') say(`the ${key} output block is empty`);
