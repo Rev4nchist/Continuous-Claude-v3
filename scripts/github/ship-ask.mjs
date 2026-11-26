@@ -557,7 +557,7 @@ export function planOf(step, data, args) {
   }
   if (step === 'cli-skip') {
     const same = data.stampHead && data.head && String(data.stampHead).toLowerCase() === String(data.head).toLowerCase();
-    if (data.stampSkip !== 'flag' || !same) return { refuse: `there is no flag stamp for ${data.branch} at ${String(data.head).slice(0, 7)}. Run node scripts/github/pre-pr.mjs --skip-cr --body <file> first: the question follows its stamp.` };
+    if (data.stampSkip !== 'flag' || !same) return { refuse: 'No question needed: pre-pr runs the CLI review by default. Ask only to skip it: run pre-pr --skip-cr --body <file> first.' };
     return { spec: cliSkipSpec(data), key: decisionKey({ branch: data.branch }), head: data.head, tree: null };
   }
   if (step === 'cap-override') {
