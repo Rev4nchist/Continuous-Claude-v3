@@ -7,6 +7,9 @@
  * Facts and flow: .claudedocs/2026-10-27-coderabbit-review-budget.md.
  *
  * Usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--json]
+ *        node scripts/github/pre-pr.mjs --preflight --body <evidence-draft.md> [--base main] [--json]
+ * --preflight runs only the quick checks (summary, git, changes, evidence, env, cheap gates) and exits: no run lock, no CLI review, no stamp, no runs.jsonl or
+ * gate-log row, and an old stamp stays. Run it before the START word: a run that would fail in under a minute then fails with no grant spent (card prepr-preflight).
  * A review takes 4 to 10 minutes (the gates 3 to 5), and a foreground tool call may be cut off before that. Run this script in
  * the background (Bash run_in_background) and read its log when the exit notice arrives. It prints a progress line
  * to stderr each minute while `cr` runs, and streams the review to e2e/<date>-pre-pr-cr-<sha7>.running.txt.
@@ -2158,9 +2161,54 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   return { ok, results, lines, head, branch, logPath, stampPath: ok ? stampPath : null };
 }
 
+/**
+ * --preflight (card prepr-preflight): only the checks that end a run in under a minute, with the run's own functions: the summary, the three git checks,
+ * the change set, the evidence block, the env step and the cheap gates. It never takes the run lock, never starts the CLI review and never writes a
+ * stamp, a runs.jsonl row, a gate-log row or a counter row; it also leaves an old stamp alone (a real run removes one on a summary FAIL). A stale GREEN
+ * that the run settles by itself after its gates is a NOTE here, as in the run. Returns { ok, results, lines, head, branch }.
+ */
+export async function runPreflight({ root, base = 'main', bodyText, bodyPath = null, config, git = makeGit(root), exec = defaultExecAsync, envCheck = envStep, fetch = (r, b) => fetchBase(r, b), summaryCheck = checkSummary, log = () => {} }) {
+  const headRun = git(['rev-parse', 'HEAD']);
+  const head = headRun.status === 0 ? headRun.stdout.trim() : null;
+  const branch = git(['branch', '--show-current']).stdout.trim();
+  const done = (results) => {
+    const ok = !results.some((r) => r.status === 'FAIL');
+    const lines = [...formatLines(results), `PREFLIGHT ${ok ? 'PASS' : 'FAIL'} (no stamp, no run lock, no CLI review)`];
+    return { ok, results, lines, head, branch };
+  };
+  const fetched = fetch(root, base);
+  if (fetched?.state === 'failed') log(`pre-pr: fetch of ${FORK}/${base} failed (${fetched.detail}); the behind check uses the last-fetched ref`);
+  let cfg;
+  try { cfg = resolveConfig({ root, git, config }); } catch (err) { return done([result('config', 'FAIL', `cannot read the review config (${String(err?.message ?? err).split('\n')[0]})`)]); }
+  const summary = summaryCheck({ root, head: head ?? '', branch, base, git, mode: cfg.pre_pr?.summary_mode === 'fail' ? 'fail' : 'note' });
+  const results = [summary.result, ...checkGit(git, base, fetched)];
+  const baseCommit = head ? resolveBaseCommit(git, base) : '';
+  const changes = head && !baseCommit
+    ? { paths: [], result: result('changes', 'FAIL', `cannot resolve the base commit (git merge-base HEAD ${FORK}/${base} failed): no change set without it`) }
+    : (head ? changedFiles(git, base, baseCommit) : { paths: [], result: result('changes', 'FAIL', 'cannot read HEAD') });
+  results.push(changes.result);
+  const evidenceAt = results.length;
+  results.push(checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg, commits: head ? prCommitList(git, base) : [] }));
+  const evidence = results[evidenceAt];
+  // A stale GREEN after a clean merge of the base: the run rewrites the line after its gates passed. Only when that rewrite would pass is it a NOTE.
+  if (head && bodyPath && greenRewriteCandidate({ git, base, bodyText, head, evidence }) && greenRewrite({ git, base, bodyText, head, paths: changes.paths, config: cfg, evidence }) !== null) {
+    results[evidenceAt] = result('evidence', 'NOTE', `${evidence.detail} (the run settles a stale GREEN line after its gates)`, evidence.notes);
+  }
+  const envRes = envCheck({ root, gates: gatesFor(changes.paths, buildInputExternals(root)), changed: changes.paths });
+  if (envRes.fail) results.push(result('env', 'FAIL', envRes.fail, envRes.others));
+  if (envRes.note) results.push(result('env', 'NOTE', envRes.note));
+  for (const gate of envRes.gates.filter((g) => g.cheap)) {
+    const cause = results.find((r) => r.status === 'FAIL');
+    results.push(envRes.blocked.has(gate.id) ? result(`gate:${gate.id}`, 'SKIP', 'not run: env failed, a package this gate needs is missing (see the env line)')
+      : cause ? result(`gate:${gate.id}`, 'SKIP', `not run: ${cause.step} failed, and a run stops at the first FAIL`)
+        : await runGate(withBase(gate, base), { root, exec, git }));
+  }
+  return done(results);
+}
+
 // ---------- CLI ----------
 
-const USAGE = 'usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--wait-lock] [--json] [--cli-cap-usd N] [--cli-extra-run]';
+const USAGE = 'usage: node scripts/github/pre-pr.mjs --body <evidence-draft.md> [--base main] [--skip-cr] [--keep-going] [--cr-timeout-min N] [--wait-lock] [--json] [--cli-cap-usd N] [--cli-extra-run] [--preflight]';
 
 function option(args, name) {
   const i = args.indexOf(name);
@@ -2389,6 +2437,12 @@ async function main() {
   try { bodyText = readFileSync(path.resolve(bodyPath), 'utf8'); } catch (err) {
     console.error(`pre-pr: cannot read the body file ${bodyPath} (${String(err.message).split('\n')[0]})\n${USAGE}`);
     process.exit(2);
+  }
+  if (args.includes('--preflight')) { // card prepr-preflight: the quick checks only, before the run lock, the cap flags and the CLI
+    const pf = await runPreflight({ root: repoRoot(), base: option(args, '--base') ?? 'main', bodyText, bodyPath: path.resolve(bodyPath), log: (line) => console.error(line) });
+    if (args.includes('--json')) console.log(JSON.stringify({ ok: pf.ok, preflight: true, head: pf.head, branch: pf.branch, results: pf.results.map(({ step, status, detail, notes }) => ({ step, status, detail, notes })) }));
+    else console.log(pf.lines.join('\n'));
+    process.exit(pf.ok ? 0 : 1);
   }
   const timeoutProblem = crTimeoutProblem(args);
   if (timeoutProblem) console.error(`pre-pr: ${timeoutProblem}`);
