@@ -227,7 +227,7 @@ function buildCard(
   const steps = stepsOf(snapshot);
   const brief = snapshot?.brief ?? null;
   const asks = countedAsks(brief?.ask ?? [], snapshot?.chip ?? null, stateAgeOf(snapshot, nowMs));
-  const stale =brief !== null && askAgeSeconds(brief.updatedAt, snapshot, nowMs) > STALE_ASK_SECONDS;
+  const stale = brief !== null && askAgeSeconds(brief.updatedAt, snapshot, nowMs) > STALE_ASK_SECONDS;
   const goal = goalOf(brief?.goal, brief?.goalSource, lanes);
 
   return {
