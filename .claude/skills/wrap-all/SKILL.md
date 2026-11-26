@@ -42,7 +42,7 @@ A session that is not the seat stops here.
 
 ## Failures this skill stops
 
-- **A START word sent before the run lock granted.** Builders wrote `PRE-PR START` and then the lock answered WAIT (exit 75): nothing ran, and the START had to be voided. A START goes out only after `pre-pr.mjs --preflight` prints PREFLIGHT PASS and the run lock grants. The wrap word forbids new STARTs and never asks for one.
+- **A START word sent before the run lock granted.** Builders wrote `PRE-PR START` and then the lock answered WAIT (exit 75): nothing ran, and the START had to be voided. Run `pre-pr.mjs --preflight` first: it takes no lock and fails fast. Write the START in your lane note and send the seat one line after PREFLIGHT PASS and the V7.3 reads, and before the run. When the run lock answers WAIT (exit 75), write VOID in the note: nothing ran. The wrap word forbids new STARTs and never asks for one.
 - **A folder removed before the seat named it.** A worktree was removed with a session still using it. `/wrap-all` removes no folder and no worktree. The table lists worktrees with no live session, and the seat names each one before anyone removes it. A junction is unlinked first, never deleted with a recursive remove.
 - **A FleetOps refresh cut at step 6.1.** A wrap stopped a session in the middle of the upload and left the publish lock failed. The holder finishes the step or runs the failed release with its step number. The table shows RELEASE LOCK FIRST until the lock is free.
 
