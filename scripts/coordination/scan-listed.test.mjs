@@ -542,6 +542,31 @@ describe('S34 to S38: UTF-16 files, context edges, dotted capital I, fullwidth i
     assert.deepEqual(rules(ref), ['pr-ref']);
     assert.equal(ref.hits[0].col, 4);
   });
+  it('S40 a hex run in a file name is shown as HEX, also when written in fullwidth letters', () => {
+    const root = listRoot();
+    for (const name of [`x${SHA.slice(0, 12)}y.md`, `x${wideAscii(SHA.slice(0, 12))}y.md`]) {
+      const f = path.join(folder(), name);
+      fs.writeFileSync(f, `PR ${HOLD4}\n`);
+      const label = JSON.parse(run(['--root', root, '--json', f]).out).files[0].file.replace(/^\d+:/, '');
+      assert.equal(label, 'xHEXy.md');
+    }
+  });
+  it('S41 a string id with pattern characters is matched and hidden literally', () => {
+    const odd = 'a+b(c)[d].e*';
+    const root = listRoot({ dataset: { prs: [{ pr: Number(HOLD4) }], findings: [{ pr: Number(HOLD4), comment_id: odd }, { pr: Number(HOLD4), comment_id: Number(COMMENT) }] } });
+    const r = scan(root, `x ${odd} y ${odd.toUpperCase()} aabcd.e PR ${HOLD4}`);
+    assert.equal(r.code, 1);
+    assert.equal(rules(r).filter((rule) => rule === 'token').length, 2, 'the literal string id was not found twice');
+    for (const h of r.hits) assert.ok(!h.ctx.toLowerCase().includes(odd), 'a string id reached a context');
+  });
+  it('S39 control characters of a scanned file (ESC, BEL) never reach the output', () => {
+    const root = listRoot();
+    const r = scan(root, `\u001b[31mred\u0007 PR ${HOLD4} \u001b[0m`);
+    assert.ok(r.hits.length >= 1);
+    for (const h of r.hits) assert.ok(!/[\u0000-\u001f\u007f]/.test(h.ctx), 'a control character reached a context');
+    const plain = run(['--root', root, put(`\u001b[31mPR ${HOLD4}\u001b[0m`)]);
+    assert.ok(!/\u001b/.test(plain.out), 'an escape code reached the plain output');
+  });
   it('S38 help together with files exits 2 (the scan never turns into help), help alone still prints the usage', () => {
     const root = listRoot();
     const f = put(`PR ${HOLD4}\n`);
