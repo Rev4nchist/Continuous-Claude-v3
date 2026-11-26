@@ -187,6 +187,33 @@ describe('T: a real walker timeout still denies (fail closed)', () => {
   });
 });
 
+describe('D: a wrapper option that moves the directory, or changes how the program is read, keeps the wrapper off the lists (CLI run 1 of the C2c pre-pr)', () => {
+  // Change that breaks it: the unwrap skips -C or --chdir and judges the inner call in the OLD cwd, so env -C <a CCv3 repo> gh pr merge from another folder is judged there (main denies it).
+  const MERGE = `gh pr merge 7 --squash --match-head-commit ${HEAD}`;
+  const dirOptions = [
+    ['env -C DIR', `env -C /repo ${MERGE}`],
+    ['env -C attached', `env -C/repo ${MERGE}`],
+    ['env --chdir=DIR', `env --chdir=/repo ${MERGE}`],
+    ['env --chdir DIR', `env --chdir /repo ${MERGE}`],
+    ['env -S (a split string runs another command line)', `env -S 'gh pr merge 7' ${MERGE}`],
+    ['sudo -D DIR', `sudo -D /repo ${MERGE}`],
+    ['sudo --chdir=DIR', `sudo --chdir=/repo ${MERGE}`],
+    ['sudo -R DIR (chroot)', `sudo -R /srv ${MERGE}`],
+    ['sudo --chroot=DIR', `sudo --chroot=/srv ${MERGE}`],
+    ['sudo -s (a shell)', `sudo -s ${MERGE}`],
+    ['sudo -i (a login shell)', `sudo -i ${MERGE}`],
+  ] as const;
+  it.each(dirOptions)('%s: denied, even with the tap', async (_name, text) => {
+    landTap(7);
+    expect(denied(await verdict(text)), text).toBe(true);
+  });
+  it('(paired) the same wrappers with no such option are read through and allowed with the tap', async () => {
+    landTap(7);
+    expect(await verdict(`env FOO=1 ${MERGE}`)).toBe('allow');
+    expect(await verdict(`sudo -u root ${MERGE}`)).toBe('allow');
+  });
+});
+
 describe('W: the wrapper table fails closed (a correct arity is judged like the bare call, a wrong one is denied)', () => {
   const MERGE = `gh pr merge 7 --squash --match-head-commit ${HEAD}`;
   // `time` is a reserved word of bash (a TimeClause in the parse), not a call, so it is not in the table. [wrapper, a correct form, a wrong arity form]. With a tap for PR 7 the correct form is allowed. The wrong form hands the wrapper's option value to the program word, so it must be denied.
