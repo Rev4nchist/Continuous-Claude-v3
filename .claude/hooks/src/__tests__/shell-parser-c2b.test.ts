@@ -94,6 +94,17 @@ describe('W: seat condition 11-26, a wrapper (env, timeout) that carries a guard
   });
 });
 
+describe('R: the not-inert reason names the real lists (seat 11-26)', () => {
+  // Change that breaks it: the reason is a fixed text again and drifts from the sets that decide (INERT_PROGRAMS, READ_ONLY_PROGRAMS, DATA_ARG_PROGRAMS, RUNS_TEXT_PROGRAMS).
+  it('R1 a denied not-inert text gives a reason that names a data program, a read-only program, an accounted caller and a runner of text', async () => {
+    const inp = input(`$s='C:/tmp/o.ps1'\n@'\ngh api repos/${REPO}/pulls -X POST -f title=x\n'@ | Set-Content -LiteralPath $s\n& $s`, 'PowerShell');
+    const d = decide(inp, { ...(await withParsed(JSON.stringify(inp), deps())), ...SEAM } as Deps);
+    expect(d.action).toBe('deny');
+    const why = d.action === 'deny' ? d.reason : '';
+    for (const name of ['echo', 'set-content', 'cat', 'head', 'get-content', 'sls', 'gh', 'git', 'claude', 'curl', 'ntn', 'timeout', 'env', 'bash', 'pwsh', 'iex']) expect(why, name).toContain(name);
+  });
+});
+
 describe('D: the doc-append rule reads a Set-Location or Get-Date leader', () => {
   it('D1 Set-Location, then Add-Content of a literal that names the land script: allowed (a mention)', async () => {
     expect(await run("Set-Location -LiteralPath 'C:/Users/dkhay/continuous-claude' -ErrorAction Stop; Add-Content -LiteralPath .claudedocs/x.md -Value 'next land-pr.ps1'", 'PowerShell')).toBe('allow');

@@ -1316,7 +1316,6 @@ export function parserUnavailableDenies(parsed: Deps['parsed'], text: string): D
 
 /** The deny-class part of GUARDED_TEXT: a create, a land or a merge (the push alternatives left out). */
 const DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
-const NOT_INERT_WHY = 'this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain text handling: it runs, or may run, a program that is not on the data list of this gate (echo, printf, grep, rg, Select-String, Set-Content, Add-Content, Out-File, Write-Output, Write-Host, git commit with -m or -F, node lane.mjs say or note). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.';
 /**
  * The data list (seat word 11-26): the programs that only print, search or write text. One named constant, lower case program names as progName gives them.
  * Two forms are on the list by their arguments, see onDataList: git commit with -m or -F, and node lane.mjs say or note.
@@ -1343,6 +1342,16 @@ const DATA_ARG_PROGRAMS: ReadonlySet<string> = new Set(['gh', 'git', 'claude', '
 const READ_ONLY_PROGRAMS: ReadonlySet<string> = new Set(['grep', 'rg', 'select-string', 'sls', 'cat', 'head', 'tail', 'ls', 'get-content', 'gc', 'cd', 'set-location', 'sl', 'get-date']);
 /** Programs that run text they are given (a stdin, a file, a variable): beside a guarded mention they are never inert. A shell with a parsed -c payload is transparent instead. Interpreters with inline code (node -e) are not here: a mention-free program text is the script-runner rule's, and a mention in it is a held mention that no accounted call holds. */
 const RUNS_TEXT_PROGRAMS: ReadonlySet<string> = new Set(['bash', 'sh', 'dash', 'zsh', 'pwsh', 'powershell', 'cmd', 'iex', 'invoke-expression', 'eval', 'source', '.', 'xargs', 'invoke-command', 'icm', 'start-process', 'saps']);
+/**
+ * The deny reason of not-inert. Built from the sets that decide, so the text cannot drift from them: INERT_PROGRAMS (the data list), READ_ONLY_PROGRAMS and DATA_ARG_PROGRAMS
+ * (the accounted callers) and RUNS_TEXT_PROGRAMS (what makes a text strict).
+ */
+const listOf = (set: ReadonlySet<string>): string => [...set].join(', ');
+const notInertWhy = (): string =>
+  'this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain data handling. It is allowed only when every call is a data program (' +
+  listOf(INERT_PROGRAMS) + '; git commit with -m or -F; node lane.mjs say or note), or when every guarded word sits in the arguments of an accounted program (' +
+  listOf(DATA_ARG_PROGRAMS) + ', or a read-only program: ' + listOf(READ_ONLY_PROGRAMS) + ') and nothing in the command runs text (' + listOf(RUNS_TEXT_PROGRAMS) +
+  '). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.';
 const LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
 /**
  * A call the parse reads and that the rules judged not guarded (no shape): a gh or git call (a GET, a dry run, a stash, a log search), or a call that only names the land
@@ -1402,7 +1411,7 @@ export function notInertDenies(parsed: Deps['parsed'], resolved: boolean): Deny[
   const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, '')]; // raw, quote-blanked, quote-removed (a splice such as g""h)
   if (!views.some((v) => GUARDED_TEXT.test(v)) || isInert(parsed)) return [];
   const scope: Scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? 'other' : 'push';
-  return [deny('not-inert', NOT_INERT_WHY, scope)];
+  return [deny('not-inert', notInertWhy(), scope)];
 }
 
 /** True when a shell program of the text has a string argument that names a guarded call and does not parse as that shell. Part of the parse budget. */

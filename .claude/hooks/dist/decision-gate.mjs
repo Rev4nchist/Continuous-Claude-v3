@@ -2863,7 +2863,6 @@ function parserUnavailableDenies(parsed, text) {
   return [deny("parser-unavailable", PARSER_UNAVAILABLE_WHY, scope)];
 }
 var DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
-var NOT_INERT_WHY = "this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain text handling: it runs, or may run, a program that is not on the data list of this gate (echo, printf, grep, rg, Select-String, Set-Content, Add-Content, Out-File, Write-Output, Write-Host, git commit with -m or -F, node lane.mjs say or note). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.";
 var INERT_PROGRAMS = /* @__PURE__ */ new Set(["echo", "printf", "grep", "rg", "select-string", "set-content", "add-content", "out-file", "write-output", "write-host", "set-location", "get-date", "cat", "head", "tail", "ls", "get-content", "cd", "gc", "sc", "ac", "sls", "sl"]);
 var litOf = (w) => w !== void 0 && w.lit !== null && w.viaVar === void 0 ? w.lit : null;
 function onDataList(c) {
@@ -2878,6 +2877,8 @@ function onDataList(c) {
 var DATA_ARG_PROGRAMS = /* @__PURE__ */ new Set(["gh", "git", "claude", "curl", "ntn", "timeout", "env"]);
 var READ_ONLY_PROGRAMS = /* @__PURE__ */ new Set(["grep", "rg", "select-string", "sls", "cat", "head", "tail", "ls", "get-content", "gc", "cd", "set-location", "sl", "get-date"]);
 var RUNS_TEXT_PROGRAMS = /* @__PURE__ */ new Set(["bash", "sh", "dash", "zsh", "pwsh", "powershell", "cmd", "iex", "invoke-expression", "eval", "source", ".", "xargs", "invoke-command", "icm", "start-process", "saps"]);
+var listOf = (set) => [...set].join(", ");
+var notInertWhy = () => "this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain data handling. It is allowed only when every call is a data program (" + listOf(INERT_PROGRAMS) + "; git commit with -m or -F; node lane.mjs say or note), or when every guarded word sits in the arguments of an accounted program (" + listOf(DATA_ARG_PROGRAMS) + ", or a read-only program: " + listOf(READ_ONLY_PROGRAMS) + ") and nothing in the command runs text (" + listOf(RUNS_TEXT_PROGRAMS) + "). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.";
 var LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
 function readsNamedCall(c) {
   if (c.nested?.status === "parsed") return true;
@@ -2915,7 +2916,7 @@ function notInertDenies(parsed, resolved) {
   const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, "")];
   if (!views.some((v) => GUARDED_TEXT.test(v)) || isInert(parsed)) return [];
   const scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? "other" : "push";
-  return [deny("not-inert", NOT_INERT_WHY, scope)];
+  return [deny("not-inert", notInertWhy(), scope)];
 }
 async function innerTextBad(byDialect, opts) {
   for (const r of Object.values(byDialect)) {
