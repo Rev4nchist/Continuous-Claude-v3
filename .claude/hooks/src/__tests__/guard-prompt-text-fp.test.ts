@@ -13,9 +13,13 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { decide, type Deps } from '../decision-gate.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { type Deps } from '../decision-gate.js';
 import { FINDING_SHAPES, REAL_SHAPES, TEXT_CONTEXTS, WORDS, tools, type Tool } from './guard-prompt-text-fp-corpus.js';
+import { decideParsed } from './helpers/parse-first.js';
+
+// C2b: the hand reader is gone, so each row runs the command with the real parse, as the hook does (a PowerShell parse is about 330 ms alone).
+vi.setConfig({ testTimeout: 60000 });
 
 let dir = '';
 let saved: string | undefined;
@@ -47,21 +51,44 @@ function deps(): Deps {
     },
   };
 }
-const action = (tool: Tool, command: string): string => decide({ tool_name: tool, tool_input: { command }, cwd: '/repo' }, deps()).action;
+const action = async (tool: Tool, command: string): Promise<string> => (await decideParsed({ tool_name: tool, tool_input: { command }, cwd: '/repo' }, deps())).action;
 
-describe('TEXT: words of a create, land or merge inside quoted text of a harmless command are allowed', () => {
+/**
+ * C2b migration (Dave's decision 11-26, Policy P). Each row expects the verdict that MAIN gives the same text WITH a parse (the production hook parses first), as listed by a
+ * probe of every row on the RED head, with these named differences. The old no-parse assertions asserted the hand reader alone.
+ *   MAIN_DENIES_TEXT: a node lane.mjs call whose quoted text names a guarded call is denied by C1 (script-runner), on main too.
+ *   Quoted text inside claude -p, gh pr comment --body, curl -d, ntn and after cd stays allowed as data (Dave's tap 11-26): those programs are accounted calls, and the parsed rules judge the real command around the text.
+ *   DAVE_ALLOWED: the 10 rows Dave allowed, by exact text: class A (a script WRITTEN as data and not run, 4 rows) and class D (the parse proves the text is data in that tool, 6 rows).
+ *   PARSER_RIGHT_EXTRA: 2 more rows the final data list allows (Write-Output is on it): a smart quote on the Bash tool opens one string, so the merge sits inside it. Not among
+ *     Dave's 10 by the seat's count; reported to the seat with the head.
+ * Every other row of REAL, FINDINGS, SPLIT and WRITER expects deny, as on main.
+ */
+const MAIN_DENIES_TEXT = new Set(['lane add title', 'lane shim note', 'lane say', 'after echo ;', 'newline']);
+const W_API = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x';
+const W_MERGE = 'gh pr merge 5 --squash';
+const DAVE_ALLOWED = new Set([
+  `Bash|write a script then it is the next command|${W_API}`, `PowerShell|write a script then it is the next command|${W_API}`,
+  `Bash|append to a script|${W_API}`, `PowerShell|append to a script|${W_API}`,
+  `PowerShell|bare backtick after echo|${W_API}`, `PowerShell|bare backtick after echo|${W_MERGE}`,
+  `PowerShell|bare command position fed by a substitution|${W_API}`, `PowerShell|bare command position fed by a substitution|${W_MERGE}`,
+  `PowerShell|printf -v then the variable as a command|${W_API}`, `PowerShell|printf -v then the variable as a command|${W_MERGE}`,
+]);
+const PARSER_RIGHT_EXTRA = new Set([`Bash|smart quote opens a string|${W_API}`, `Bash|smart quote opens a string|${W_MERGE}`]);
+const verdictFor = (tool: Tool, name: string, text: string): 'allow' | 'deny' => (DAVE_ALLOWED.has(`${tool}|${name}|${text}`) || PARSER_RIGHT_EXTRA.has(`${tool}|${name}|${text}`) ? 'allow' : 'deny');
+
+describe('TEXT: words of a create, land or merge inside quoted text are allowed, except where main denies them with a parse', () => {
   for (const tool of tools) {
     for (const w of WORDS) {
       for (const [name, build] of TEXT_CONTEXTS) {
         const command = build(w.text, '"');
-        it(`${tool} ${w.family} | ${name} | ${w.text}`, () => {
-          expect(action(tool, command), command).toBe('allow');
+        it(`${tool} ${w.family} | ${name} | ${w.text}`, async () => {
+          expect(await action(tool, command), command).toBe(MAIN_DENIES_TEXT.has(name) ? 'deny' : 'allow');
         });
       }
     }
   }
-  it('a single-quoted title is text too', () => {
-    for (const tool of tools) expect(action(tool, "node lane.mjs add x --title 'gh pr create for fix'")).toBe('allow');
+  it('a single-quoted title of a node lane.mjs call: denied as on main (C1 script-runner)', async () => {
+    for (const tool of tools) expect(await action(tool, "node lane.mjs add x --title 'gh pr create for fix'")).toBe('deny');
   });
 });
 
@@ -70,8 +97,8 @@ describe('REAL: every real create, land and merge keeps its gate', () => {
     for (const w of WORDS) {
       for (const [name, build] of REAL_SHAPES) {
         const command = build(w.text);
-        it(`${tool} ${w.family} | ${name} | ${w.text}`, () => {
-          expect(action(tool, command), command).toBe('deny');
+        it(`${tool} ${w.family} | ${name} | ${w.text}`, async () => {
+          expect(await action(tool, command), command).toBe(verdictFor(tool, name, w.text));
         });
       }
     }
@@ -83,7 +110,7 @@ describe('FINDINGS: a quote the regex misreads, or a harmless-looking segment, n
     for (const w of WORDS) {
       for (const [name, build] of FINDING_SHAPES) {
         const command = build(w.text);
-        it(`${tool} ${w.family} | ${name} | ${w.text}`, () => { expect(action(tool, command), command).toBe('deny'); });
+        it(`${tool} ${w.family} | ${name} | ${w.text}`, async () => { expect(await action(tool, command), command).toBe(verdictFor(tool, name, w.text)); });
       }
     }
   }
@@ -92,7 +119,7 @@ describe('FINDINGS: a quote the regex misreads, or a harmless-looking segment, n
 describe('SPLIT: a command spliced with quotes is still the command', () => {
   for (const tool of tools) {
     for (const command of ['gh "pr" create --title x', 'gh pr cre""ate --title x', "gh pr 'create' --title x", 'g""h pr merge 5', 'gh pr "merge" 5', 'echo "x"; gh pr "create"', 'echo "gh pr create for fix"; gh pr cre""ate --title x']) {
-      it(`${tool} | ${command}`, () => { expect(action(tool, command), command).toBe('deny'); });
+      it(`${tool} | ${command}`, async () => { expect(await action(tool, command), command).toBe('deny'); });
     }
   }
 });
@@ -111,7 +138,7 @@ describe('WRITER: a file writer and an unknown program keep the gate (the text m
       'node -e "require(\'child_process\').execSync(\'gh pr create\')"',
       'echo "x" "$(gh pr create)"',
     ]) {
-      it(`${tool} | ${command}`, () => { expect(action(tool, command), command).toBe('deny'); });
+      it(`${tool} | ${command}`, async () => { expect(await action(tool, command), command).toBe('deny'); });
     }
   }
 });

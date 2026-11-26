@@ -1152,7 +1152,9 @@ describe('G10 fail closed on a gated shape', () => {
   });
   it('does not fail a harmless command when git fails', async () => {
     expect(await handleParsed(JSON.stringify(bash('git fetch fork')), deps({ gitFails: true }))).toBe('{}');
-    expect(await handleParsed(JSON.stringify(bash('git push fork main')), deps({ gitFails: true }))).not.toBe('{}'); // the checkout cannot be read: a push is gated
+    // the checkout cannot be read: a push is gated, and the answer is a deny (not any non-empty answer, a warning included)
+    const out = JSON.parse(await handleParsed(JSON.stringify(bash('git push fork main')), deps({ gitFails: true }))) as { hookSpecificOutput?: { permissionDecision?: string } };
+    expect(out.hookSpecificOutput?.permissionDecision).toBe('deny');
   });
   it('denies a push when git fails', async () => {
     const out = JSON.parse(await handleParsed(JSON.stringify(bash('git push fork feat/x')), deps({ gitFails: true }))) as { hookSpecificOutput: { permissionDecision: string } };

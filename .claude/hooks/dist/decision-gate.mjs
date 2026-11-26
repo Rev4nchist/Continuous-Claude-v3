@@ -2857,50 +2857,65 @@ function parseErrorDenies(parsed) {
 var PARSER_UNAVAILABLE_WHY = "the parser was late, run it again. The shell parser did not answer in time (or could not run), and this text names a guarded call (a push, a create, a merge or the land script), so this gate cannot read which call runs. Run the same call again, or run the push, create or merge as its own command.";
 function parserUnavailableDenies(parsed, text) {
   if (parsed) return [];
-  return GUARDED_TEXT.test(blankQuotes(text)) ? [deny("parser-unavailable", PARSER_UNAVAILABLE_WHY)] : [];
+  const views = [blankQuotes(text), text.replace(/['"`]/g, "")];
+  if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
+  const scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? "other" : "push";
+  return [deny("parser-unavailable", PARSER_UNAVAILABLE_WHY, scope)];
 }
 var DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
-var DYNAMIC_RUN_WHY = "this command runs a target the gate cannot read (a call operator or dot-source on a variable, Invoke-Expression, eval, a shell with -File, -Command or -c on a variable, or a file that the same command writes) and its text names a guarded call (a push, a create, a merge or the land script). A script that is written here and run here is not data. Run the guarded call as its own command, or write the script in one command and run it in the next.";
-var isDynamicWord = (w) => w !== void 0 && (w.lit === null || w.viaVar !== void 0);
-var PWSH_RUN_PARAMS = ["-file", "-command", "-encodedcommand"];
-var isPwshRunParam = (lit) => lit !== null && /^-[a-z]+$/i.test(lit) && PWSH_RUN_PARAMS.some((p) => p.startsWith(lit.toLowerCase()));
-var BASH_SOURCERS = /* @__PURE__ */ new Set(["source", "."]);
-var FILE_WRITERS = /* @__PURE__ */ new Set(["set-content", "sc", "out-file", "add-content", "ac", "tee-object", "tee", "new-item", "ni", "copy-item", "cp", "mv", "install"]);
-var normPath3 = (s) => s.replace(/\\/g, "/").toLowerCase();
-function dynamicRunCalls(r) {
-  const written = /* @__PURE__ */ new Set();
-  for (const c of r.calls) if (FILE_WRITERS.has(progName(c.words[0]?.lit) ?? "")) {
-    for (const w of c.words.slice(1)) if (w.lit !== null) written.add(normPath3(w.lit));
+var NOT_INERT_WHY = "this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain text handling: it runs, or may run, a program that is not on the data list of this gate (echo, printf, grep, rg, Select-String, Set-Content, Add-Content, Out-File, Write-Output, Write-Host, git commit with -m or -F, node lane.mjs say or note). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.";
+var INERT_PROGRAMS = /* @__PURE__ */ new Set(["echo", "printf", "grep", "rg", "select-string", "set-content", "add-content", "out-file", "write-output", "write-host", "set-location", "get-date", "cat", "head", "tail", "ls", "get-content", "cd", "gc", "sc", "ac", "sls", "sl"]);
+var litOf = (w) => w !== void 0 && w.lit !== null && w.viaVar === void 0 ? w.lit : null;
+function onDataList(c) {
+  const p = progName(litOf(c.words[0]));
+  if (p === null) return false;
+  if (INERT_PROGRAMS.has(p)) return true;
+  const args = c.words.slice(1);
+  if (p === "git") return args.some((a) => a.lit === "commit") && args.some((a) => a.lit !== null && (/^-[a-zA-Z]*[mF]$/.test(a.lit) || a.lit === "--message" || a.lit === "--file"));
+  if (p === "node") return /(^|[\\/])lane\.mjs$/.test(litOf(args[0]) ?? "") && ["say", "note"].includes(litOf(args[1]) ?? "");
+  return false;
+}
+var DATA_ARG_PROGRAMS = /* @__PURE__ */ new Set(["gh", "git", "claude", "curl", "ntn", "timeout", "env"]);
+var READ_ONLY_PROGRAMS = /* @__PURE__ */ new Set(["grep", "rg", "select-string", "sls", "cat", "head", "tail", "ls", "get-content", "gc", "cd", "set-location", "sl", "get-date"]);
+var RUNS_TEXT_PROGRAMS = /* @__PURE__ */ new Set(["bash", "sh", "dash", "zsh", "pwsh", "powershell", "cmd", "iex", "invoke-expression", "eval", "source", ".", "xargs", "invoke-command", "icm", "start-process", "saps"]);
+var LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
+function readsNamedCall(c) {
+  if (c.nested?.status === "parsed") return true;
+  const p = progName(litOf(c.words[0]));
+  if (p !== null && (DATA_ARG_PROGRAMS.has(p) || READ_ONLY_PROGRAMS.has(p))) return true;
+  return c.words.some((w) => LAND_SCRIPT_WORD.test(litOf(w) ?? ""));
+}
+function isInert(parsed) {
+  if (!parsed || parsed.innerBad === true) return false;
+  const all = [];
+  for (const r of Object.values(parsed.byDialect)) {
+    if (!r) continue;
+    if (!r.ok || r.errors.length > 0) return false;
+    all.push(...r.calls);
   }
-  const heredocWrite = r.dialect === "bash" && r.heredocs.length > 0;
-  const targetIsWritten = (w) => w !== void 0 && w.lit !== null && (written.has(normPath3(w.lit)) || heredocWrite);
-  return r.calls.filter((c) => {
-    const first = c.words[0];
-    const p = progName(first?.lit);
-    const args = c.words.slice(1);
-    if (c.op === "&" || c.op === ".") return isDynamicWord(first) && first?.kind !== "scriptblock" || targetIsWritten(first);
-    if (p === "invoke-expression" || p === "iex" || p === "eval") return args.length === 0 || args.some(isDynamicWord);
-    if (p !== null && BASH_SOURCERS.has(p)) {
-      const t2 = args.find((a) => !(a.lit !== null && a.lit.startsWith("-")));
-      return isDynamicWord(t2) || targetIsWritten(t2);
-    }
-    const dialect = SHELL_PROGRAMS[p ?? ""];
-    if (!dialect) return false;
-    if (dialect === "pwsh") {
-      const i = args.findIndex((a) => isPwshRunParam(a.lit));
-      return i >= 0 && (isDynamicWord(args[i + 1]) || targetIsWritten(args[i + 1]));
-    }
-    if (args.some((a) => a.lit === "-s")) return false;
-    const ci = args.findIndex((a) => a.lit === "-c");
-    const t = ci >= 0 ? args[ci + 1] : args.find((a) => !(a.lit !== null && a.lit.startsWith("-")));
-    return isDynamicWord(t) || targetIsWritten(t);
+  if (all.every((c) => onDataList(c) || readsNamedCall(c))) return true;
+  return heldByAccountedCalls(parsed, all);
+}
+function heldByAccountedCalls(parsed, all) {
+  const global = new RegExp(GUARDED_TEXT.source, "gi");
+  const count = (t) => (t.match(global) ?? []).length;
+  const wordsOf = (c) => c.words.map((w) => w.lit ?? w.raw ?? "").join(" ");
+  const rawCount = Math.max(count(parsed.text), count(blankQuotes(parsed.text)), count(parsed.text.replace(/['"`]/g, "")));
+  const holders = all.filter((c) => count(wordsOf(c)) > 0);
+  if (holders.length === 0 || !holders.every(readsNamedCall)) return false;
+  if (holders.reduce((n, c) => n + count(wordsOf(c)), 0) < rawCount) return false;
+  return !all.some((c) => {
+    if (c.nested?.status === "parsed") return false;
+    const p = progName(litOf(c.words[0]));
+    return p === null || RUNS_TEXT_PROGRAMS.has(p);
   });
 }
-function dynamicRunDenies(parsed) {
-  if (!parsed || !GUARDED_TEXT.test(blankQuotes(parsed.text))) return [];
-  const scope = DENY_CLASS_TEXT.test(blankQuotes(parsed.text)) ? "other" : "push";
-  for (const r of Object.values(parsed.byDialect)) if (r && r.ok && dynamicRunCalls(r).length > 0) return [deny("dynamic-run", DYNAMIC_RUN_WHY, scope)];
-  return [];
+function notInertDenies(parsed, resolved) {
+  if (!parsed || resolved) return [];
+  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, "")];
+  if (!views.some((v) => GUARDED_TEXT.test(v)) || isInert(parsed)) return [];
+  const scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? "other" : "push";
+  return [deny("not-inert", NOT_INERT_WHY, scope)];
 }
 async function innerTextBad(byDialect, opts) {
   for (const r of Object.values(byDialect)) {
@@ -4654,7 +4669,7 @@ function judgeCommand(input, deps, notes, denies = []) {
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   for (const d of ghFlagFirstDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
-  for (const d of dynamicRunDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  for (const d of notInertDenies(deps.parsed, shapes.length > 0)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   return denies;
 }
 function subagentDeny(shapes, deps, cwd, shell) {
@@ -5108,14 +5123,15 @@ export {
   astMerges,
   decide,
   docAppendByAst,
-  dynamicRunDenies,
   handle,
+  isInert,
   isLandLabel,
   isMergeNowLabel,
   isOpenPrLabel,
   isPushOnlyLabel,
   isShipLabel,
   makeGit,
+  notInertDenies,
   parseErrorDenies,
   parserUnavailableDenies,
   pushShapesOf,

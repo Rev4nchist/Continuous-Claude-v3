@@ -1303,65 +1303,106 @@ const PARSER_UNAVAILABLE_WHY = 'the parser was late, run it again. The shell par
  */
 export function parserUnavailableDenies(parsed: Deps['parsed'], text: string): Deny[] {
   if (parsed) return [];
-  return GUARDED_TEXT.test(blankQuotes(text)) ? [deny('parser-unavailable', PARSER_UNAVAILABLE_WHY)] : [];
+  // Two views of the text (seat ruling 11-26): the quote-blanked one (a quoted payload reads as words) and the quote-removed one (a splice such as g""h pr merge
+  // reads as gh pr merge, as the shell does). A guarded call in either view is denied. Fail closed, no parse to tell which.
+  const views = [blankQuotes(text), text.replace(/['"`]/g, '')];
+  if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
+  // The rank is the one the call has with a parse: a create, land or merge denies (scope other), a push keeps the push flag (CodeRabbit run 1, same rule as not-inert).
+  const scope: Scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? 'other' : 'push';
+  return [deny('parser-unavailable', PARSER_UNAVAILABLE_WHY, scope)];
 }
 
-// ---------- PR C2b (seat ruling 08:16 CST 11-26): a dynamic run beside a guarded text ----------
+// ---------- PR C2b (Policy P, Dave's decision 11-26): a guarded text the parse does not resolve is allowed only when it is inert ----------
 
 /** The deny-class part of GUARDED_TEXT: a create, a land or a merge (the push alternatives left out). */
 const DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
-const DYNAMIC_RUN_WHY ='this command runs a target the gate cannot read (a call operator or dot-source on a variable, Invoke-Expression, eval, a shell with -File, -Command or -c on a variable, or a file that the same command writes) and its text names a guarded call (a push, a create, a merge or the land script). A script that is written here and run here is not data. Run the guarded call as its own command, or write the script in one command and run it in the next.';
+const NOT_INERT_WHY = 'this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain text handling: it runs, or may run, a program that is not on the data list of this gate (echo, printf, grep, rg, Select-String, Set-Content, Add-Content, Out-File, Write-Output, Write-Host, git commit with -m or -F, node lane.mjs say or note). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.';
+/**
+ * The data list (seat word 11-26): the programs that only print, search or write text. One named constant, lower case program names as progName gives them.
+ * Two forms are on the list by their arguments, see onDataList: git commit with -m or -F, and node lane.mjs say or note.
+ * Set-Location and Get-Date are added to the seat's list for the two doc-append rows D1 and D2 (a lane-log append after a folder change or a clock read, rows of the
+ * seat's own list of rows that allow): neither runs anything.
+ */
+const INERT_PROGRAMS: ReadonlySet<string> = new Set(['echo', 'printf', 'grep', 'rg', 'select-string', 'set-content', 'add-content', 'out-file', 'write-output', 'write-host', 'set-location', 'get-date', 'cat', 'head', 'tail', 'ls', 'get-content', 'cd', 'gc', 'sc', 'ac', 'sls', 'sl']);
 type ParsedCall = ParseResult['calls'][number];
 type ParsedWord = ParsedCall['words'][number];
-/** A word the gate cannot read as one literal: no literal value, or a literal that a variable gave (viaVar). Parse-tree fields only. */
-const isDynamicWord = (w: ParsedWord | undefined): boolean => w !== undefined && (w.lit === null || w.viaVar !== undefined);
-const PWSH_RUN_PARAMS = ['-file', '-command', '-encodedcommand'];
-/** A PowerShell parameter name is a unique prefix of its full name: -f, -fi, -c, -co... Two letters or the one letter that is unique here (-f, -c). */
-const isPwshRunParam = (lit: string | null): boolean => lit !== null && /^-[a-z]+$/i.test(lit) && PWSH_RUN_PARAMS.some((p) => p.startsWith(lit.toLowerCase()));
-const BASH_SOURCERS = new Set(['source', '.']);
-/** Programs whose call writes the file named by one of its words (a PowerShell cmdlet or a bash tool). No redirect list: the parse has none, see the heredoc test below. */
-const FILE_WRITERS = new Set(['set-content', 'sc', 'out-file', 'add-content', 'ac', 'tee-object', 'tee', 'new-item', 'ni', 'copy-item', 'cp', 'mv', 'install']);
-const normPath = (s: string): string => s.replace(/\\/g, '/').toLowerCase();
-
-/** The calls of one dialect result that run a dynamic target, by parse-tree fields only (call operator, program name, word kinds). No variable tracking: any dynamic run counts. */
-function dynamicRunCalls(r: ParseResult): ParsedCall[] {
-  const written = new Set<string>();
-  for (const c of r.calls) if (FILE_WRITERS.has(progName(c.words[0]?.lit) ?? '')) for (const w of c.words.slice(1)) if (w.lit !== null) written.add(normPath(w.lit));
-  const heredocWrite = r.dialect === 'bash' && r.heredocs.length > 0;
-  const targetIsWritten = (w: ParsedWord | undefined): boolean => w !== undefined && w.lit !== null && (written.has(normPath(w.lit)) || heredocWrite);
-  return r.calls.filter((c) => {
-    const first = c.words[0];
-    const p = progName(first?.lit);
-    const args = c.words.slice(1);
-    // A script block (`& { ... }`) has its own calls in the list: it is no target. A literal string payload of iex or eval is a nested parse, read as calls.
-    if (c.op === '&' || c.op === '.') return (isDynamicWord(first) && first?.kind !== 'scriptblock') || targetIsWritten(first);
-    if (p === 'invoke-expression' || p === 'iex' || p === 'eval') return args.length === 0 || args.some(isDynamicWord);
-    if (p !== null && BASH_SOURCERS.has(p)) { const t = args.find((a) => !(a.lit !== null && a.lit.startsWith('-'))); return isDynamicWord(t) || targetIsWritten(t); }
-    const dialect = SHELL_PROGRAMS[p ?? ''];
-    if (!dialect) return false;
-    if (dialect === 'pwsh') {
-      const i = args.findIndex((a) => isPwshRunParam(a.lit));
-      return i >= 0 && (isDynamicWord(args[i + 1]) || targetIsWritten(args[i + 1]));
-    }
-    if (args.some((a) => a.lit === '-s')) return false; // bash -s reads its script from stdin: the pipe and body rules above it judge that
-    const ci = args.findIndex((a) => a.lit === '-c');
-    const t = ci >= 0 ? args[ci + 1] : args.find((a) => !(a.lit !== null && a.lit.startsWith('-')));
-    return isDynamicWord(t) || targetIsWritten(t);
+/** The literal of a word, or null when it has none or a variable gave it (viaVar): a name the gate cannot read. Parse-tree fields only. */
+const litOf = (w: ParsedWord | undefined): string | null => (w !== undefined && w.lit !== null && w.viaVar === undefined ? w.lit : null);
+function onDataList(c: ParsedCall): boolean {
+  const p = progName(litOf(c.words[0]));
+  if (p === null) return false; // no program name: a substitution, a variable, a call operator on one
+  if (INERT_PROGRAMS.has(p)) return true;
+  const args = c.words.slice(1);
+  if (p === 'git') return args.some((a) => a.lit === 'commit') && args.some((a) => a.lit !== null && (/^-[a-zA-Z]*[mF]$/.test(a.lit) || a.lit === '--message' || a.lit === '--file'));
+  if (p === 'node') return /(^|[\\/])lane\.mjs$/.test(litOf(args[0]) ?? '') && ['say', 'note'].includes(litOf(args[1]) ?? '');
+  return false;
+}
+/** Programs whose quoted arguments are data (seat 11-26, Dave's tap): gh, git, and the prompt or payload carriers claude -p, curl -d and ntn. The call itself is still judged by the parsed rules. */
+const DATA_ARG_PROGRAMS: ReadonlySet<string> = new Set(['gh', 'git', 'claude', 'curl', 'ntn', 'timeout', 'env']);
+/** Programs that only read or search: text in their words goes nowhere, unlike echo or Set-Content, which carry it out. A mention they hold is accounted. */
+const READ_ONLY_PROGRAMS: ReadonlySet<string> = new Set(['grep', 'rg', 'select-string', 'sls', 'cat', 'head', 'tail', 'ls', 'get-content', 'gc', 'cd', 'set-location', 'sl', 'get-date']);
+/** Programs that run text they are given (a stdin, a file, a variable): beside a guarded mention they are never inert. A shell with a parsed -c payload is transparent instead. Interpreters with inline code (node -e) are not here: a mention-free program text is the script-runner rule's, and a mention in it is a held mention that no accounted call holds. */
+const RUNS_TEXT_PROGRAMS: ReadonlySet<string> = new Set(['bash', 'sh', 'dash', 'zsh', 'pwsh', 'powershell', 'cmd', 'iex', 'invoke-expression', 'eval', 'source', '.', 'xargs', 'invoke-command', 'icm', 'start-process', 'saps']);
+const LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
+/**
+ * A call the parse reads and that the rules judged not guarded (no shape): a gh or git call (a GET, a dry run, a stash, a log search), or a call that only names the land
+ * script as one of its own literal words (cat, Get-Content, a search of it). The guarded words in it are arguments of a program the parse resolved, so the parsed rules
+ * already decided it; the inert test is for the text that no call accounts for (an off-list program's string, a run of a written file).
+ */
+function readsNamedCall(c: ParsedCall): boolean {
+  if (c.nested?.status === 'parsed') return true; // sh -c, pwsh -Command, eval: the parse flattened the payload into calls of its own, each judged here
+  const p = progName(litOf(c.words[0]));
+  if (p !== null && (DATA_ARG_PROGRAMS.has(p) || READ_ONLY_PROGRAMS.has(p))) return true;
+  return c.words.some((w) => LAND_SCRIPT_WORD.test(litOf(w) ?? ''));
+}
+/**
+ * Inert: the parse is clean (no error, no inner text that does not parse) and EVERY call of it, nested ones included, is a literal program on the data list
+ * or a gh, git or land-script-naming call that the parsed rules already judged (readsNamedCall).
+ * One function over the parse and no list of run shapes: a pipe into an off-list program, a non-literal program word, an alias definition and a run of a written file
+ * are each a call that is off the list. A text with no parse is never inert.
+ */
+export function isInert(parsed: Deps['parsed']): boolean {
+  if (!parsed || parsed.innerBad === true) return false;
+  const all: ParsedCall[] = [];
+  for (const r of Object.values(parsed.byDialect)) {
+    if (!r) continue;
+    if (!r.ok || r.errors.length > 0) return false;
+    all.push(...r.calls);
+  }
+  if (all.every((c) => onDataList(c) || readsNamedCall(c))) return true;
+  return heldByAccountedCalls(parsed, all);
+}
+/**
+ * The mention test: every guarded mention of the text sits in the literal words of a gh, git, land-script-naming or read-only call (readsNamedCall), whose own rules the
+ * parse already applied, and no call of the text runs text (RUNS_TEXT_PROGRAMS, a shell with no parsed payload, a program word no literal gives). A mention held by
+ * echo, Set-Content or an off-list program, or by no call at all (a heredoc body), is not accounted: the whole text must then be inert call by call.
+ */
+function heldByAccountedCalls(parsed: NonNullable<Deps['parsed']>, all: ParsedCall[]): boolean {
+  const global = new RegExp(GUARDED_TEXT.source, 'gi');
+  const count = (t: string): number => (t.match(global) ?? []).length;
+  const wordsOf = (c: ParsedCall): string => c.words.map((w) => w.lit ?? w.raw ?? '').join(' ');
+  const rawCount = Math.max(count(parsed.text), count(blankQuotes(parsed.text)), count(parsed.text.replace(/['"`]/g, '')));
+  const holders = all.filter((c) => count(wordsOf(c)) > 0);
+  if (holders.length === 0 || !holders.every(readsNamedCall)) return false;
+  if (holders.reduce((n, c) => n + count(wordsOf(c)), 0) < rawCount) return false; // a mention that no call holds
+  return !all.some((c) => {
+    if (c.nested?.status === 'parsed') return false;
+    const p = progName(litOf(c.words[0]));
+    return p === null || RUNS_TEXT_PROGRAMS.has(p);
   });
 }
-
 /**
- * Seat ruling (C2b write-and-run, V7.6 AST nodes only, fail closed): a command that runs a dynamic target AND holds a guarded call in its raw text is denied, as on main.
- * Dave's tap (Set-Content as data) covers the write alone. The path in the variable is not tracked: any dynamic run plus guarded text denies. A run in a LATER command
- * is out of reach, the same on main and on C2b.
+ * The raw-text backstop of V7.6, as Dave decided it. When the raw text names a guarded call and the parse does NOT resolve one (`resolved` false: no push, create, land or
+ * merge shape), the command is allowed only when it is inert, else denied at the rank of the named call: a create, land or merge denies (scope other), a text that only
+ * names a push keeps the push flag, so it warns while decisions.enforcePush is unset. No exemption by script name. When the parse resolves a guarded call, the parsed
+ * rules decide (tap, head, rank). A text with no parse is parserUnavailableDenies. Known limit: a hidden second call beside a resolved one is judged by the parsed rules only.
  */
-export function dynamicRunDenies(parsed: Deps['parsed']): Deny[] {
-  if (!parsed || !GUARDED_TEXT.test(blankQuotes(parsed.text))) return [];
-  // The rank is the one main gives the guarded call the text holds (seat ruling 08:3x CST 11-26): a create, land or merge denies (scope other); a text that
-  // only names a push keeps the push flag, so it warns while decisions.enforcePush is unset. git-safe is the required push path: no exemption by script name.
-  const scope: Scope = DENY_CLASS_TEXT.test(blankQuotes(parsed.text)) ? 'other' : 'push';
-  for (const r of Object.values(parsed.byDialect)) if (r && r.ok && dynamicRunCalls(r).length > 0) return [deny('dynamic-run', DYNAMIC_RUN_WHY, scope)];
-  return [];
+export function notInertDenies(parsed: Deps['parsed'], resolved: boolean): Deny[] {
+  if (!parsed || resolved) return [];
+  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, '')]; // raw, quote-blanked, quote-removed (a splice such as g""h)
+  if (!views.some((v) => GUARDED_TEXT.test(v)) || isInert(parsed)) return [];
+  const scope: Scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? 'other' : 'push';
+  return [deny('not-inert', NOT_INERT_WHY, scope)];
 }
 
 /** True when a shell program of the text has a string argument that names a guarded call and does not parse as that shell. Part of the parse budget. */
@@ -3908,8 +3949,8 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   for (const d of ghFlagFirstDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
-  // PR C2b (seat ruling 11-26): a dynamic run beside a guarded text. Last, so a more precise deny above is the one shown. Only adds a deny, as on main.
-  for (const d of dynamicRunDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  // PR C2b (Policy P, Dave's decision 11-26): a guarded text the parse does not resolve is allowed only when inert. Last, so a more precise deny above is the one shown.
+  for (const d of notInertDenies(deps.parsed, shapes.length > 0)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   return denies;
 }
 /**

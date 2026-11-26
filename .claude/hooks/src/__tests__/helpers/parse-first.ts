@@ -13,12 +13,14 @@ const cache = new Map<string, Pick<Deps, 'parsed' | 'parseLate'>>();
 export async function parsedDeps(raw: string, deps: Deps): Promise<Deps> {
   if (deps.parsed !== undefined || deps.parseLate !== undefined) return deps;
   if (deps.parseOpts !== undefined || deps.parseBudgetMs !== undefined) return withParsed(raw, deps); // a row that sets a parser seam gets its own parse
-  let key = raw;
-  try { const i = JSON.parse(raw) as { tool_name?: string; tool?: string; tool_input?: unknown; command?: unknown }; key = JSON.stringify([i.tool_name ?? i.tool, i.tool_input ?? i.command]); } catch { /* keep the raw text */ }
-  const hit = cache.get(key);
+  // The key reads only tool_input, as readShellCommand does: a payload with another layout is never cached, so it never borrows the parse of a different payload.
+  let key: string | undefined;
+  try { const i = JSON.parse(raw) as { tool_name?: string; tool?: string; tool_input?: unknown }; if (i.tool_input !== undefined) key = JSON.stringify([i.tool_name ?? i.tool, i.tool_input]); } catch { /* no key: no cache */ }
+  const hit = key === undefined ? undefined : cache.get(key);
   if (hit) return { ...deps, ...hit };
   const w = await withParsed(raw, deps);
-  if (w.parsed !== undefined || w.parseLate !== undefined) cache.set(key, { ...(w.parsed !== undefined ? { parsed: w.parsed } : {}), ...(w.parseLate !== undefined ? { parseLate: w.parseLate } : {}) });
+  // Only a successful parse is kept: a late or thrown one is returned to its caller, and the next call parses again.
+  if (key !== undefined && w.parsed !== undefined) cache.set(key, { parsed: w.parsed });
   return w;
 }
 /** decide() with the parse of the input made first. */

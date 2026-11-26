@@ -785,6 +785,7 @@ describe('C3: a push is read whole, or it is denied hard', () => {
     for (const c of ['git --git-dir=.git push up feat/x', 'GIT_DIR=.git git push up feat/x']) {
       const o = await run({ ...bash(c), cwd: '/elsewhere/app' });
       expect(o.permissionDecision, c).toBeUndefined();
+      expect(o.additionalContext, c).toMatch(/WARNING \(decision-gate, warn mode\)/); // the warning itself, not an empty answer
     }
   });
   it('C3-3 (seat Q1): a push that only a payload holds (sh -c, bash -c, pwsh -c) in a CCv3 root is a hard push-target-unresolved', async () => {

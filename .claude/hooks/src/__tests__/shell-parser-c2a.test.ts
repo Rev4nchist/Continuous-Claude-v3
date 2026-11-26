@@ -213,7 +213,9 @@ describe('CS: the astOnly seam is retired (C2b) and no name of it opens a gate',
     expect(src).not.toMatch(/process\.env\.[A-Z0-9_]*AST[A-Z0-9_]*/);
     expect(src).not.toMatch(/env\[\s*['"][A-Z0-9_]*AST/);
   });
-  it('CS-2 the built hook with every old name of the seam set in the environment and the payload still denies a merge with no tap', () => {
+  // A control, not a proof of retirement: an untapped merge is denied with or without the old selector, so no result here tells the two paths apart.
+  // The retirement itself is proved by CS-1 (the source no longer names the seam).
+  it('CS-2 (control) the built hook with every old name of the seam set in the environment and the payload still denies a merge with no tap', () => {
     if (!existsSync(BUILT)) return; // the built hook is part of the PR; a checkout without a build has nothing to run
     const env: NodeJS.ProcessEnv = { ...process.env, ASTONLY: '1', AST_ONLY: '1', CCV3_AST_ONLY: '1', C2_PROTO: '1', DECISION_GATE_AST_ONLY: '1', STEP0_MODE: 'proto' };
     delete env.VITEST;

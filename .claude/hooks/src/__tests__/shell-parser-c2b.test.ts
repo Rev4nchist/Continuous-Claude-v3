@@ -66,6 +66,34 @@ async function run(command: string, tool = 'Bash'): Promise<string> {
 /** The verdict with the given deps and no parse at all, as a hook that never parsed. */
 const noParse = (command: string, extra: Record<string, unknown> = {}, tool = 'Bash'): ReturnType<typeof decide> => decide(input(command, tool), { ...deps(), ...extra } as Deps);
 
+/** The full verdict: deny:<pattern>, warn:<pattern> (an allow that carries a warning) or allow. */
+async function full(command: string, tool = 'Bash'): Promise<string> {
+  const inp = input(command, tool);
+  const d = decide(inp, { ...(await withParsed(JSON.stringify(inp), deps())), ...SEAM } as Deps);
+  return d.action === 'deny' ? `deny:${d.pattern}` : typeof d.warn === 'string' ? `warn:${d.warn.split(':')[0]}` : 'allow';
+}
+describe('W: seat condition 11-26, a wrapper (env, timeout) that carries a guarded call gets the verdict of the bare call, at the same rank', () => {
+  // Change that breaks it: a wrapper program on the accounted list hides the guarded call it runs (the call then reads as a plain env or timeout call).
+  const LAND = 'scripts/github/land-pr.ps1';
+  const rows: [string, string][] = [
+    ['env git push origin main', 'git push origin main'],
+    ['env FOO=1 gh pr merge 5', 'gh pr merge 5'],
+    ['timeout 60 git push', 'git push'],
+    ['timeout 5 gh pr create', 'gh pr create'],
+    [`env pwsh -File ${LAND} -Pr 1`, `pwsh -File ${LAND} -Pr 1`],
+    [`env ${LAND} -Pr 1`, `${LAND} -Pr 1`],
+    ['timeout 60 env git push origin main', 'git push origin main'],
+    ['env FOO=1 timeout 5 gh pr merge 5', 'gh pr merge 5'],
+  ];
+  it.each(rows)('%s is judged like %s', async (wrapped, bare) => {
+    const want = await full(bare);
+    expect(want, `the bare call must be guarded: ${bare}`).not.toBe('allow');
+    // The same rank: deny, warn or allow. A deny may name another pattern (a wrapped create has no readable head: head-unresolved, the bare one is open-pr).
+    const rank = (v: string): string => v.split(':')[0];
+    expect(rank(await full(wrapped)), wrapped).toBe(rank(want));
+  });
+});
+
 describe('D: the doc-append rule reads a Set-Location or Get-Date leader', () => {
   it('D1 Set-Location, then Add-Content of a literal that names the land script: allowed (a mention)', async () => {
     expect(await run("Set-Location -LiteralPath 'C:/Users/dkhay/continuous-claude' -ErrorAction Stop; Add-Content -LiteralPath .claudedocs/x.md -Value 'next land-pr.ps1'", 'PowerShell')).toBe('allow');
@@ -84,60 +112,140 @@ describe('D: the doc-append rule reads a Set-Location or Get-Date leader', () =>
   });
 });
 
-describe('S: a Set-Content here-string is data (Dave tap 11-26, "Allow it as data", same class as M6b)', () => {
-  // The shape the corpus differential found (a PR-create script saved to a scratch .ps1): main denied head-unresolved, C2b allows.
+describe('S: Policy P (Dave 11-26): a guarded text the parse does not resolve is allowed only when inert, else denied at the rank of the named call', () => {
+  // The shape the corpus differential found (a PR-create script saved to a scratch .ps1): main denied head-unresolved. Dave's tap: a script WRITTEN as data is allowed.
   const BODY = `$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/${REPO}/pulls -X POST \`\n  -f title='feat(x): y' -f head=feat/x -f base=main`;
   const WRITE = `$s='C:/tmp/scratch/open-pr.ps1'\n@'\n${BODY}\n'@ | Set-Content -LiteralPath $s -Encoding utf8`;
-  it('S1 a PR-create script written to a scratch .ps1 by a here-string and Set-Content: allowed (data)', async () => {
+  const CREATE = `gh api repos/${REPO}/pulls -X POST -f title=x`;
+  const notInert = async (text: string, tool = 'PowerShell'): Promise<void> => { expect(await run(text, tool), text).toBe('not-inert'); };
+  const denied = async (text: string, tool: string): Promise<void> => { expect(await run(text, tool), `${tool} ${text}`).not.toBe('allow'); };
+  it('S1 a PR-create script written to a scratch .ps1 by a here-string and Set-Content: allowed (inert: only Set-Content runs)', async () => {
     expect(await run(WRITE, 'PowerShell')).toBe('allow');
   });
-  // Seat ruling 08:16 CST 11-26: a script that the same command then runs is not data. One dynamic run plus a guarded text denies (pattern dynamic-run), as on main.
-  const denies = async (text: string, tool = 'PowerShell'): Promise<void> => { expect(await run(text, tool)).toBe('dynamic-run'); };
-  it('S2 write + call operator on the variable: denied', async () => { await denies(`${WRITE}\n& $s`); });
-  it('S3 write + Get-Content piped to Invoke-Expression: denied', async () => { await denies(`${WRITE}\nGet-Content -LiteralPath $s -Raw | Invoke-Expression`); });
-  it('S5 write + dot-source of the variable: denied', async () => { await denies(`${WRITE}\n. $s`); });
-  it('S6 write + pwsh -File on the variable: denied', async () => { await denies(`${WRITE}\npwsh -NoProfile -File $s`); });
-  it('S7 write + iex of the file content: denied', async () => { await denies(`${WRITE}\niex (Get-Content -LiteralPath $s -Raw)`); });
-  it('S8 write + call operator on the literal path the same command writes: denied', async () => { await denies(`${WRITE}\n& 'C:/tmp/scratch/open-pr.ps1'`); });
+  // A script that the same command then runs is not data: the run is a call that is off the data list, so the text is not inert.
+  it('S2 write + call operator on the variable: denied not-inert', async () => { await notInert(`${WRITE}\n& $s`); });
+  it('S3 write + Get-Content piped to Invoke-Expression: denied not-inert', async () => { await notInert(`${WRITE}\nGet-Content -LiteralPath $s -Raw | Invoke-Expression`); });
+  it('S5 write + dot-source of the variable: denied not-inert', async () => { await notInert(`${WRITE}\n. $s`); });
+  it('S6 write + pwsh -File on the variable: denied not-inert', async () => { await notInert(`${WRITE}\npwsh -NoProfile -File $s`); });
+  it('S7 write + iex of the file content: denied not-inert', async () => { await notInert(`${WRITE}\niex (Get-Content -LiteralPath $s -Raw)`); });
+  it('S8 write + call operator on the literal path the same command writes: denied not-inert', async () => { await notInert(`${WRITE}\n& 'C:/tmp/scratch/open-pr.ps1'`); });
   // A bash text keeps the deny of an older, more precise rule when one exists (it is listed first); the property here is a deny, not the pattern name.
-  it('S9 bash: a heredoc writes the script, then bash runs the file: denied', async () => { expect(await run(`cat > /tmp/x.sh <<'EOF'\ngh pr merge 12 --squash\nEOF\nbash /tmp/x.sh`, 'Bash')).not.toBe('allow'); });
-  it('S10 bash: sh -c on a variable beside a guarded text: denied', async () => { expect(await run(`c='gh pr merge 12'; sh -c "$c"`, 'Bash')).not.toBe('allow'); });
-  it('S10b bash: a literal file run beside a guarded text and no write in the command: not this rule', async () => { expect(await run(`bash /tmp/y.sh; echo 'gh pr merge 12'`, 'Bash')).not.toBe('dynamic-run'); });
-  // Seat ruling 11-26 (corpus run 2): dynamic-run takes the rank main gives the guarded call. A push warns while decisions.enforcePush is unset; a create denies.
+  it('S9 bash: a heredoc writes the script, then bash runs the file: denied', async () => { await denied(`cat > /tmp/x.sh <<'EOF'\ngh pr merge 12 --squash\nEOF\nbash /tmp/x.sh`, 'Bash'); });
+  it('S10 bash: sh -c on a variable beside a guarded text: denied', async () => { await denied(`c='gh pr merge 12'; sh -c "$c"`, 'Bash'); });
+  it('S10b bash: a literal file run beside a guarded text: denied (no path is tracked: any off-list program beside guarded text is not inert)', async () => { await denied(`bash /tmp/y.sh; echo 'gh pr merge 12'`, 'Bash'); });
+  it('S11 a dynamic run with no guarded text keeps its main result: allowed', async () => {
+    expect(await run("$s = 'C:/tmp/scratch/hello.ps1'\n& $s", 'PowerShell')).toBe('allow');
+    expect(await run('iex (Get-Date)', 'PowerShell')).toBe('allow');
+  });
+  it('S4 (paired) a real create beside the write: denied', async () => {
+    expect(await run(`${WRITE}\ngh api repos/${REPO}/pulls -X POST -f title=x -f head=feat/x -f base=main`, 'PowerShell')).not.toBe('allow');
+  });
+  // Seat ruling 11-26 (corpus run 2) and Dave's decision: the rank is the one the guarded call has. A push warns while decisions.enforcePush is unset; a create denies.
   const verdictOf = async (command: string, extra: Record<string, unknown> = {}): Promise<ReturnType<typeof decide>> => {
     // A folder outside the registered repo root: the older cd-unexpanded rule of a variable -C folder has nothing to judge there, as in the corpus text.
     const inp = { ...input(command, 'PowerShell'), cwd: '/elsewhere' };
     return decide(inp, { ...(await withParsed(JSON.stringify(inp), deps())), ...SEAM, ...extra } as Deps);
   };
-  // A push is only NAMED here (a string), so no older push rule judges it: the rank comes from dynamic-run alone.
+  const warnsNotInert = async (command: string): Promise<void> => {
+    const d = await verdictOf(command);
+    expect(d.action, command).toBe('allow');
+    expect(d.action === 'allow' && d.warn, command).toMatch(/^not-inert:/);
+    expect(d.action === 'allow' && d.scope, command).toBe('push');
+  };
+  // A push is only NAMED here (a string), so no older push rule judges it: the rank comes from not-inert alone.
   const GIT_SAFE_VAR = "$s = 'C:/r/wt/scripts/git-safe.ps1'; Write-Output 'next: git push fork coord/x'; & $s";
-  it('S12 a git-safe push through a -File path built from a variable: warns dynamic-run (enforcePush unset), does not deny', async () => {
-    const d = await verdictOf(GIT_SAFE_VAR);
-    expect(d.action).toBe('allow');
-    expect(d.action === 'allow' && d.warn).toMatch(/^dynamic-run:/);
-    expect(d.action === 'allow' && d.scope).toBe('push');
-  });
+  it('S12 a git-safe push through a path built from a variable: warns not-inert (enforcePush unset), does not deny; no exemption by script name', async () => { await warnsNotInert(GIT_SAFE_VAR); });
   it('S12b the corpus shape (-C $wt after the script path): a warn, as on main (the older cd-unexpanded warn is first), not a deny', async () => {
     const d = await verdictOf('$wt = "C:/r/wt"; pwsh -File "$wt/scripts/git-safe.ps1" -C $wt push fork coord/x 2>&1 | Select-Object -Last 4');
     expect(d.action).toBe('allow');
-    expect(d.action === 'allow' && d.warn).toBeTruthy();
+    expect(d.action === 'allow' && d.warn).toMatch(/^cd-unexpanded:/);
   });
-  it('S13 (paired) the same push with decisions.enforcePush true: denied dynamic-run, as a push on main would be', async () => {
+  it('S13 (paired) the same push with decisions.enforcePush true: denied not-inert, as a push on main would be', async () => {
     const d = await verdictOf(GIT_SAFE_VAR, { readFile: (p: string) => (p.replace(/\\/g, '/').endsWith('/review-router.config.json') ? JSON.stringify({ decisions: { enforce: true, enforcePush: true } }) : null) });
-    expect(d.action === 'deny' && d.pattern).toBe('dynamic-run');
+    expect(d.action === 'deny' && d.pattern).toBe('not-inert');
   });
-  it('S14 (paired) the same command with a gh pr create named in its text: denied dynamic-run, scope other', async () => {
+  it('S14 (paired) the same command with a gh pr create named in its text: denied, scope other', async () => {
     const d = await verdictOf(`${GIT_SAFE_VAR}; Write-Output 'then: gh pr create --base main'`);
     // An older, more precise create rule (head-unresolved) can be the first deny; the property is a deny, at scope other, so enforcePush plays no part.
     expect(d.action).toBe('deny');
     expect(d.action === 'deny' && d.scope).toBe('other');
   });
-  it('S11 a dynamic run with no guarded text keeps its main result: allowed', async () => {
-    expect(await run("$s = 'C:/tmp/scratch/hello.ps1'\n& $s", 'PowerShell')).toBe('allow');
-    expect(await run('iex (Get-Date)', 'PowerShell')).toBe('allow');
+  // A script written by a redirection and then run: the run is an off-list call, so the push-only text warns and the create text denies. No path is tracked.
+  it('S15 echo of a create redirected to x.ps1, then & ./x.ps1: denied', async () => { await denied("echo 'gh pr create --title x' > x.ps1; & ./x.ps1", 'PowerShell'); });
+  it('S15b an expression statement redirected (a string > file), then the file run: denied', async () => { await denied("'gh pr merge 5 --squash' > x.ps1; & ./x.ps1", 'PowerShell'); });
+  it('S16 echo of a push redirected to x.ps1, then & ./x.ps1: warns not-inert (enforcePush unset)', async () => { await warnsNotInert("echo 'git push fork coord/x' > x.ps1; & ./x.ps1"); });
+  it('S16b an expression statement (a string > file), then the file run: a warn at the push flag, not a deny (an older push rule words it)', async () => {
+    const d = await verdictOf("'git push fork coord/x' > x.ps1; & ./x.ps1");
+    expect(d.action).toBe('allow');
+    expect(d.action === 'allow' && d.warn).toBeTruthy();
+    expect(d.action === 'allow' && d.scope).toBe('push');
   });
-  it('S4 (paired) the here-string is not the write target: a real create beside it is denied', async () => {
-    expect(await run(`${WRITE}\ngh api repos/${REPO}/pulls -X POST -f title=x -f head=feat/x -f base=main`, 'PowerShell')).not.toBe('allow');
+  it('S16c the redirect target is a variable, then a literal file run: warns not-inert', async () => { await warnsNotInert("echo 'git push fork coord/x' > $f; & ./other.ps1"); });
+  it('S16d a run of ANY file beside a guarded text is not inert, whichever file the redirect wrote: warns not-inert', async () => { await warnsNotInert("echo 'git push fork coord/x' > a.txt; & ./b.ps1"); });
+  it('S17 bash: echo of a merge redirected to /tmp/x.sh, then bash /tmp/x.sh: denied', async () => { await denied("echo 'gh pr merge 5 --squash' > /tmp/x.sh; bash /tmp/x.sh", 'Bash'); });
+  it('S17b bash: an append (>>) then source of the file: denied', async () => { await denied("echo 'gh pr merge 5' >> /tmp/x.sh; source /tmp/x.sh", 'Bash'); });
+  // The hidden-run forms the parity probe found (27 of the 41 rows main denied and the head allowed): each is an off-list call, so each is denied.
+  it('S20 a pipe into a shell: denied (sh, bash, pwsh -Command -, printf into sh)', async () => {
+    for (const tool of ['Bash', 'PowerShell']) {
+      for (const c of [`echo "${CREATE}" | sh`, `echo '${CREATE}' | bash`, `echo "${CREATE}" | pwsh -Command -`, `printf "%s" "${CREATE}" | sh`]) await denied(c, tool);
+    }
+  });
+  it('S20b ssh with a quoted command, and a dynamic program word on Bash: denied', async () => {
+    await denied(`ssh host "${CREATE}"`, 'Bash');
+    await denied(`ssh host "${CREATE}"`, 'PowerShell');
+    await denied(`$(echo a; echo '${CREATE}')`, 'Bash');
+    await denied(`printf -v x '${CREATE}'; $x`, 'Bash');
+  });
+  it('S20c an alias of echo to eval or iex, then echo of the text: denied', async () => {
+    await denied(`alias echo=eval; echo '${CREATE}'`, 'Bash');
+    await denied(`Set-Alias echo Invoke-Expression; echo "${CREATE}"`, 'PowerShell');
+    await denied(`sal echo iex; Write-Output '${CREATE}'; echo '${CREATE}'`, 'PowerShell');
+  });
+  it('S20d a redirect through ../ to a file that is then run: denied', async () => {
+    await denied(`echo '${CREATE}' > /dev/null/../x.sh; sh x.sh`, 'Bash');
+    await denied(`Write-Output "${CREATE}" > nul\\..\\x.ps1; & .\\x.ps1`, 'PowerShell');
+  });
+  it('S20e tee of the text to a file is not on the data list: denied', async () => {
+    for (const tool of ['Bash', 'PowerShell']) await denied(`echo "${CREATE}" | tee run.sh`, tool);
+  });
+  // Dave's two taps (11-26): the 10 leftover rows. Class A: a script WRITTEN as data and not run. Class D: the parse proves the text is data in that tool (named, 10 rows).
+  it('A: echo of a create written to a file with > or >> is data, Bash and PowerShell (4 rows)', async () => {
+    for (const tool of ['Bash', 'PowerShell']) for (const op of ['>', '>>']) expect(await run(`echo "${CREATE}" ${op} run.sh`, tool), `${tool} ${op}`).toBe('allow');
+  });
+  it('D1 PowerShell: a backtick is the escape character, so echo `gh ...` is text (create and merge, 2 rows)', async () => {
+    expect(await run(`echo \`${CREATE}\``, 'PowerShell')).toBe('allow');
+    expect(await run('echo `gh pr merge 5 --squash`', 'PowerShell')).toBe('allow');
+  });
+  it('D2 PowerShell: a subexpression of echo and a bare variable statement run nothing (4 rows)', async () => {
+    for (const c of ['gh api repos/x/pulls', 'gh pr merge 5 --squash']) {
+      const text = c.startsWith('gh api') ? `gh api repos/${REPO}/pulls -X POST -f title=x` : c;
+      expect(await run(`$(echo a; echo '${text}')`, 'PowerShell'), text).toBe('allow');
+      expect(await run(`printf -v x '${text}'; $x`, 'PowerShell'), text).toBe('allow');
+    }
+  });
+  it('D2b (paired) the same four texts on the Bash tool stay denied: there a substitution output and a variable are run', async () => {
+    for (const text of [CREATE, 'gh pr merge 5 --squash']) {
+      await denied(`$(echo a; echo '${text}')`, 'Bash');
+      await denied(`printf -v x '${text}'; $x`, 'Bash');
+    }
+  });
+  // The data list (one named constant) and its two argument forms.
+  it('L1 the data list: Write-Output, Write-Host, Add-Content, Select-String, Out-File and printf beside a guarded text are inert', async () => {
+    for (const c of [`Write-Output '${CREATE}'`, `Write-Host '${CREATE}'`, `Add-Content -LiteralPath x.md -Value '${CREATE}'`, `Select-String -Pattern 'gh pr merge' -Path x.md`, `'${CREATE}' | Out-File x.txt`]) expect(await run(c, 'PowerShell'), c).toBe('allow');
+    expect(await run(`printf '%s' '${CREATE}'`, 'Bash')).toBe('allow');
+  });
+  it('L2 git commit with -m or -F beside a guarded text is inert', async () => {
+    for (const c of ["git commit -m 'next: gh pr merge 5'", 'git commit -F msg.txt -m "land-pr.ps1 waits"']) expect(await run(c, 'Bash'), c).toBe('allow');
+  });
+  it('L2b node lane.mjs say and note are on the data list, so P adds no deny (the C1 script-runner rule, the same on main, still denies a note that names a merge)', async () => {
+    for (const c of ["node C:/Users/dkhay/.claude/scripts/lane.mjs note x 'gh pr merge 5 then land-pr.ps1'", "node lane.mjs say 'gh pr create next'"]) expect(await run(c, 'Bash'), c).not.toBe('not-inert');
+  });
+  it('L3 (paired) node lane.mjs add is NOT on the list: denied beside a guarded text; a git call is an accounted call (the parsed rules judge it), so git add and commit --amend beside echo text allow', async () => {
+    await denied("node lane.mjs add x --title 'gh pr merge 5'", 'Bash');
+    for (const c of ["git commit --amend; echo 'gh pr merge 5'", "git add x; echo 'gh pr merge 5'"]) expect(await run(c, 'Bash'), c).toBe('allow');
+  });
+  it('L4 (paired) a clean parse is required: a text that does not parse is not inert', async () => {
+    expect(await run(`echo 'gh pr merge 5' ; ;; echo`, 'Bash')).not.toBe('allow');
   });
 });
 
@@ -151,8 +259,22 @@ describe('F: F1-3, no parse and a text that names a guarded call', () => {
   it('F1-3b no parse, no guarded word: not denied by this rule', () => {
     expect(patternOf(noParse('ls -la'))).toBe('allow');
   });
-  it('F1-3c a late parse (parseLate set) and a guarded text: denied parser-unavailable', () => {
-    expect(patternOf(noParse('git push fork feat/x', { parseLate: 'git push fork feat/x' }))).toBe('parser-unavailable');
+  it('F1-3c a late parse (parseLate set) and a push only: parser-unavailable at the push flag, so it warns while decisions.enforcePush is unset', () => {
+    const d = noParse('git push fork feat/x', { parseLate: 'git push fork feat/x' });
+    expect(d.action).toBe('allow');
+    expect(d.action === 'allow' && d.warn).toMatch(/^parser-unavailable:/);
+    expect(d.action === 'allow' && d.scope).toBe('push');
+  });
+  it('F1-3c2 (paired) the same late push with decisions.enforcePush true: denied parser-unavailable', () => {
+    const readFile = (p: string): string | null => (p.replace(/\\/g, '/').endsWith('/review-router.config.json') ? JSON.stringify({ decisions: { enforce: true, enforcePush: true } }) : null);
+    expect(patternOf(noParse('git push fork feat/x', { parseLate: 'git push fork feat/x', readFile }))).toBe('parser-unavailable');
+  });
+  it('F1-3c3 (paired) a late create, land or merge is denied parser-unavailable at the other flag, enforcePush unset', () => {
+    for (const c of ['gh pr create --title x', MERGE, '.\\scripts\\github\\land-pr.ps1 -Pr 12']) expect(patternOf(noParse(c, { parseLate: c })), c).toBe('parser-unavailable');
+  });
+  it('F1-3f no parse and a quote-spliced gh (g""h pr merge 5, gh pr cre""ate): denied parser-unavailable, Bash and PowerShell', () => {
+    // The hand reader of main read the splice as the command. With no parse, the quote-blanked text no longer names it, so the quote-removed text is read too.
+    for (const tool of ['Bash', 'PowerShell']) for (const c of ['g""h pr merge 5', 'gh pr cre""ate --title x', "g''h pr merge 5"]) expect(patternOf(noParse(c, {}, tool)), `${tool} ${c}`).toBe('parser-unavailable');
   });
   it('F1-3d withParsed with a provider that never answers inside the budget, and a guarded text: denied parser-unavailable', async () => {
     const inp = input(MERGE);
