@@ -140,7 +140,15 @@ export const LIVE_WINDOW_MINUTES = 15;
 /** The two fields of a stored ask that decide whether it counts. */
 export type CountedAsk = { answered: boolean; source: 'brief_set' | 'parsed' };
 
-/** RED stub (mods card fleet-stale-parsed-asks): today's rule, every unanswered ask counts. */
-export function countedAsks<T extends CountedAsk>(asks: readonly T[], _chip: string | null, _stateAgeSeconds: number | null): T[] {
-  return asks.filter((one) => !one.answered);
+/**
+ * The asks of a session that count as open for its card, the Ready for Dave row and the Needs Dave tile (card fleet-stale-parsed-asks).
+ * A parsed ask is only a guess from the closing line of an earlier turn, and the mod chip already ignores it. While the chip is
+ * `working` the session is not waiting on Dave, so a parsed ask does not count then. A brief_set ask always counts.
+ * A `working` chip on a snapshot older than the Live window proves nothing (a crashed or closed session leaves it behind), so
+ * it hides nothing. No chip, no snapshot age or any other chip: every unanswered ask counts. The order of the asks is kept.
+ */
+export function countedAsks<T extends CountedAsk>(asks: readonly T[], chip: string | null, stateAgeSeconds: number | null): T[] {
+  const open = asks.filter((one) => !one.answered);
+  const works = chip === 'working' && stateAgeSeconds !== null && stateAgeSeconds <= LIVE_WINDOW_MINUTES * 60;
+  return works ? open.filter((one) => one.source !== 'parsed') : open;
 }

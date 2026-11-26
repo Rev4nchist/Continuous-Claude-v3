@@ -7,7 +7,7 @@ import { db } from '@/db';
 import { readSessionNames } from '@/server/sources/identity-names';
 import type { StateFiles, StateSnapshot } from '@/server/sources/state-files';
 
-import { answeredOf, goalOf, groupHeldLanes, type Answered, type GoalSource, type HeldLane } from './fleet-card-fields';
+import { answeredOf, countedAsks, goalOf, groupHeldLanes, type Answered, type GoalSource, type HeldLane } from './fleet-card-fields';
 import { joinSnapshots, LOOKUP_LIMIT, type JoinStats, type LookupRow } from './fleet-join';
 import { laneOrderSql } from './lane-sort';
 import type { ActiveSession, ActiveSessions } from './sessions';
@@ -226,8 +226,8 @@ function buildCard(
 ): SessionCard {
   const steps = stepsOf(snapshot);
   const brief = snapshot?.brief ?? null;
-  const asks = (brief?.ask ?? []).filter((a) => !a.answered);
-  const stale = brief !== null && askAgeSeconds(brief.updatedAt, snapshot, nowMs) > STALE_ASK_SECONDS;
+  const asks = countedAsks(brief?.ask ?? [], snapshot?.chip ?? null, stateAgeOf(snapshot, nowMs));
+  const stale =brief !== null && askAgeSeconds(brief.updatedAt, snapshot, nowMs) > STALE_ASK_SECONDS;
   const goal = goalOf(brief?.goal, brief?.goalSource, lanes);
 
   return {
@@ -259,8 +259,13 @@ function buildCard(
     heartbeatSecondsAgo: session.heartbeatSecondsAgo,
     liveColour: session.liveSecondsAgo < GREEN_UNDER_SECONDS ? 'green' : 'amber',
     liveSecondsAgo: session.liveSecondsAgo,
-    stateAgeSeconds: snapshot ? Math.max(0, Math.round((nowMs - snapshot.at) / 1000)) : null,
+    stateAgeSeconds: stateAgeOf(snapshot, nowMs),
   };
+}
+
+/** Seconds since the state file was written, or null with no snapshot. */
+function stateAgeOf(snapshot: StateSnapshot | undefined, nowMs: number): number | null {
+  return snapshot ? Math.max(0, Math.round((nowMs - snapshot.at) / 1000)) : null;
 }
 
 /**
@@ -286,7 +291,7 @@ function buildReady(
   if (brief === null) return [];
   const ageSeconds = askAgeSeconds(brief.updatedAt, snapshot, nowMs);
   if (ageSeconds > STALE_ASK_SECONDS) return [];
-  const open = brief.ask.filter((a) => !a.answered);
+  const open = countedAsks(brief.ask, snapshot.chip, stateAgeOf(snapshot, nowMs));
   const first = open[0];
   if (first === undefined) return [];
   return [
