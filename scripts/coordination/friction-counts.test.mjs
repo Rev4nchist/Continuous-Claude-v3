@@ -3,7 +3,7 @@
  *
  * Synthetic rows only: every log file is built in a temp folder with made-up names and sentinel values. A sentinel (a PR number, a sha-shaped head, a
  * session label, a branch, a lane id) must never reach the output. FRICTION_COUNTS_CLI points the tests at another copy of the script (a mutation run).
- * Test names C1..C15 are the failure list of the plan (C14 and C15 came from the CodeRabbit CLI run 1 of the first head). The file name has no `.db.` part: it needs no database.
+ * Test names C1..C20 are the failure list of the plan (C14 and C15 came from the CodeRabbit CLI run 1 of the first head; C16 to C20 from the internal pass of PR 741). The file name has no `.db.` part: it needs no database.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,7 +66,7 @@ describe('counts and shape', () => {
     const r = put(dir, 'r.jsonl', [start(), start(), start(), start(), end('PASS', null, 10), end('FAIL', 'evidence', 0.8), end('FAIL', 'summary', 2.1)]);
     const out = run(args(dir, d, r));
     assert.equal(out.code, 0, out.err);
-    assert.equal(oneLine(out), 'taps (land, open-pr, review) 1d recommended/all: land 2/3 open-pr 1/1 review 0/0 | pre-pr 1d: starts 4 ends 3 FAIL 2 (evidence 1, summary 1) FAIL<1min 1 (evidence 1) ERROR 0');
+    assert.equal(oneLine(out), 'taps (land, open-pr, review) 1d recommended/all: land: 2/3 open-pr: 1/1 review: 0/0 | pre-pr (1d): starts 4 ends 3 FAIL 2 (evidence 1, summary 1) FAIL<1min 1 (evidence 1) ERROR 0');
   });
 
   it('C2: a label without the (Recommended) ending is not a recommended tap', () => {
@@ -74,15 +74,15 @@ describe('counts and shape', () => {
     const d = put(dir, 'd.jsonl', [tap('review', { rec: false }), tap('review', { rec: false })]);
     const r = put(dir, 'r.jsonl', [start()]);
     const out = run(args(dir, d, r));
-    assert.match(oneLine(out), /review 0\/2/);
+    assert.match(oneLine(out), /review: 0\/2/);
   });
 
   it('C3: the window drops rows older than N days and rows in the future; --days 7 brings the older ones back', () => {
     const dir = listRoot();
     const d = put(dir, 'd.jsonl', [tap('land'), tap('land', { msAgo: 2 * 24 * HOUR }), tap('land', { msAgo: -3 * HOUR })]);
     const r = put(dir, 'r.jsonl', [start(), start({ msAgo: 3 * 24 * HOUR }), end('FAIL', 'evidence', 0.5, { msAgo: 3 * 24 * HOUR })]);
-    assert.match(oneLine(run(args(dir, d, r))), /^taps \(land, open-pr, review\) 1d recommended\/all: land 1\/1 .* \| pre-pr 1d: starts 1 ends 0 FAIL 0 FAIL<1min 0 ERROR 0$/);
-    assert.match(oneLine(run(args(dir, d, r, '--days', '7'))), /^taps \(land, open-pr, review\) 7d recommended\/all: land 2\/2 .* \| pre-pr 7d: starts 2 ends 1 FAIL 1 \(evidence 1\) FAIL<1min 1 \(evidence 1\) ERROR 0$/);
+    assert.match(oneLine(run(args(dir, d, r))), /^taps \(land, open-pr, review\) 1d recommended\/all: land: 1\/1 .* \| pre-pr \(1d\): starts 1 ends 0 FAIL 0 FAIL<1min 0 ERROR 0$/);
+    assert.match(oneLine(run(args(dir, d, r, '--days', '7'))), /^taps \(land, open-pr, review\) 7d recommended\/all: land: 2\/2 .* \| pre-pr \(7d\): starts 2 ends 1 FAIL 1 \(evidence 1\) FAIL<1min 1 \(evidence 1\) ERROR 0$/);
   });
 
   it('C11: a step with no row still prints 0/0, so the line keeps one shape; the line begins with the sources', () => {
@@ -92,7 +92,7 @@ describe('counts and shape', () => {
     const out = run(args(dir, d, r));
     const line = oneLine(out);
     assert.ok(line.startsWith('taps (land, open-pr, review)'), line);
-    assert.match(line, /land 0\/0 open-pr 1\/1 review 0\/0/);
+    assert.match(line, /land: 0\/0 open-pr: 1\/1 review: 0\/0/);
     assert.match(line, /FAIL 0 FAIL<1min 0 ERROR 0$/);
   });
 
@@ -114,6 +114,50 @@ describe('counts and shape', () => {
     assert.equal(out.code, 0, out.err);
     assert.match(oneLine(out), /FAIL 3 \(constructor 2, other 1\) FAIL<1min 2 \(constructor 1, other 1\) ERROR 0$/);
   });
+
+  it('C16: no printed number sits right after "pr " (the listed-id matcher reads that as a PR number): a list with 19, 1 and 7 does not stop the live line shape', () => {
+    const dir = listRoot(['19', '1', '7']);
+    const d = put(dir, 'd.jsonl', Array.from({ length: 19 }, () => tap('open-pr')));
+    const r = put(dir, 'r.jsonl', [start()]);
+    for (const days of ['1', '7']) {
+      const out = run(args(dir, d, r, '--days', days));
+      assert.equal(out.code, 0, `--days ${days}: ${out.err}`);
+      assert.match(oneLine(out), new RegExp(`open-pr: 19/19 review: 0/0 \\| pre-pr \\(${days}d\\): starts 1 `));
+    }
+  });
+
+  it('C17: with short ids in the list, a listed id in a step name still stops the run (exit 3), and so does "pr-19": the guard still bites', () => {
+    const dir = listRoot(['19', '1', '7', 'zzcollide']);
+    const d = put(dir, 'd.jsonl', [tap('land')]);
+    for (const name of ['zzcollide', 'pr-19']) {
+      const r = put(dir, `r-${name}.jsonl`, [start(), end('FAIL', name, 0.5)]);
+      const out = run(args(dir, d, r));
+      assert.equal(out.code, 3, name);
+      assert.equal(out.out, '');
+      assert.match(out.err, /collided with field "pre-pr FAIL step name"/);
+    }
+  });
+
+  it('C18: failing steps are listed most first, then by name, whatever the order of the rows', () => {
+    const dir = listRoot();
+    const d = put(dir, 'd.jsonl', [tap('land')]);
+    const r = put(dir, 'r.jsonl', [start(), end('FAIL', 'git:clean', 5), end('FAIL', 'evidence', 5), end('FAIL', 'summary', 5), end('FAIL', 'summary', 5)]);
+    assert.match(oneLine(run(args(dir, d, r))), /FAIL 4 \(summary 2, evidence 1, git:clean 1\) FAIL<1min 0 ERROR 0$/);
+  });
+
+  it('C19: steps after the fixed three print in name order, "other" last (ship, paid-round and cli-skip are real steps of the decision log)', () => {
+    const dir = listRoot();
+    const d = put(dir, 'd.jsonl', [tap('ship'), tap('paid-round'), tap('cli-skip'), tap('ABC'), tap('land')]);
+    const r = put(dir, 'r.jsonl', [start()]);
+    assert.match(oneLine(run(args(dir, d, r))), /land: 1\/1 open-pr: 0\/0 review: 0\/0 cli-skip: 1\/1 paid-round: 1\/1 ship: 1\/1 other: 1\/1 \|/);
+  });
+
+  it('C20: the window holds a row at exactly now and drops a row at exactly N x 24 hours ago', () => {
+    const dir = listRoot();
+    const d = put(dir, 'd.jsonl', [tap('land', { msAgo: 0 }), tap('review', { msAgo: 24 * HOUR })]);
+    const r = put(dir, 'r.jsonl', [start({ msAgo: 0 }), start({ msAgo: 24 * HOUR })]);
+    assert.match(oneLine(run(args(dir, d, r))), /land: 1\/1 open-pr: 0\/0 review: 0\/0 \| pre-pr \(1d\): starts 1 ends 0 /);
+  });
 });
 
 describe('no PR number, sha or id in the output', () => {
@@ -133,7 +177,7 @@ describe('no PR number, sha or id in the output', () => {
     const out = run(args(dir, d, r));
     assert.equal(out.code, 0, out.err);
     const line = oneLine(out);
-    assert.match(line, /review 0\/0 other 2\/2 \|/);
+    assert.match(line, /review: 0\/0 other: 2\/2 \|/);
     assert.match(line, /FAIL 4 \(other 4\) FAIL<1min 2 \(other 2\)/);
     for (const bad of ['deadbeef', 'script', 'abcdef12', '<b>', 'aaaaaaaa']) assert.ok(!line.includes(bad), `the line holds ${bad}`);
   });
@@ -182,7 +226,7 @@ describe('inputs and errors', () => {
     const r = put(dir, 'r.jsonl', [start(), '{"event":"end","result":"MAYBE","ts":1}', end('PASS', null, 3)]);
     const out = run(args(dir, d, r));
     assert.equal(out.code, 0, out.err);
-    assert.match(oneLine(out), /land 1\/1/);
+    assert.match(oneLine(out), /land: 1\/1/);
     assert.match(out.err, /skipped 4 rows/);
     assert.ok(!out.out.includes('skipped'), 'stdout holds the one line only');
   });
@@ -200,7 +244,7 @@ describe('inputs and errors', () => {
     const d = put(dir, 'd.jsonl', [tap('land')]);
     const half = run(args(dir, d, path.join(dir, 'no-r.jsonl')));
     assert.equal(half.code, 0, half.err);
-    assert.match(oneLine(half), /land 1\/1 open-pr 0\/0 review 0\/0 \| pre-pr 1d: no log$/);
+    assert.match(oneLine(half), /land: 1\/1 open-pr: 0\/0 review: 0\/0 \| pre-pr \(1d\): no log$/);
   });
 
   it('C10: the script only reads: both input files are byte-equal after a run, and no other file appears next to them', () => {
