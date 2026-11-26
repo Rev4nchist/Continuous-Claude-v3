@@ -544,7 +544,8 @@ const NEXT_STEPS = /^\s*(?:#{1,6}\s*|\*\*)next steps\s*:?\s*(?:\*\*)?\s*$/i
 const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
 /**
  * A Next steps item that asks nothing of Dave. The set is closed: the WHOLE item (one final period allowed) must match, or it is an ask.
- * (a) A lead: "None", "None for now/today/yet/right now", "Nothing (for you/Dave) to do", "Nothing required/yet/for now", "No action/input/reply needed/required".
+ * (a) A lead: "None", "None for now/today/yet/right now", "None for you/Dave now/right now/today/yet", "Nothing (for you/Dave) to do", "Nothing required/yet/for now",
+ *     "Nothing for you/Dave now/right now/today/yet", "No action/input/reply needed/required".
  *     After the lead come at most a sentence end, " - ", " — ", ":" or ", " and ONE waiting clause: "None for now. I'm waiting on X", "None, waiting on CI". The ", " form never takes you, yours or Dave.
  *     Also "None for the seat". A second sentence after the wait ("None - waiting on CI. I rule on it after") stays an ASK: a false ask is better than a hidden one,
  *     and two review rounds found a new hidden-question hole in each try at a tail grammar. Known limit; the cure is `brief_set` with `ask: []`, not a bigger parser.
@@ -563,7 +564,8 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
 const WAIT_BAN = String.raw`\b(?:you|dave)|\b(?:then|and|or|but)\b`
 const WAIT_OBJECT = String.raw`(?:(?!${WAIT_BAN})(?:[A-Za-z0-9#'’]|\s|(?<=[A-Za-z0-9])-(?=[A-Za-z0-9]))){1,80}`
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
-const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
+const FOR_DAVE_NOW = String.raw`for\s+(?:you|dave)\s+(?:now|right\s+now|today|yet)`
+const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+(?:now|the\s+seat)|${FOR_DAVE_NOW}|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|${FOR_DAVE_NOW}|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
 const WAIT_SUBJECT = String.raw`(?:(?:the|a|an|my)\s+)?(?:ci|checks?|build|workflow|runs?|jobs?|tests?|pipeline|coderabbit|greptile|semgrep|pre-pr|sync|seat|peer|critic|agent|helper|scout|session|review\s+bot)(?:['’]s)?(?![A-Za-z0-9-])`
 const WAIT_TAIL_WORD = String.raw`(?:\s+(?:run|runs|review|reviews|result|results|report|scan|check|checks|status|findings|output|build|job|end|word|go|ruling|reply)(?![A-Za-z0-9-]))?`
 const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*|,\\s+)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
