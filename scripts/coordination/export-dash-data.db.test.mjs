@@ -298,7 +298,8 @@ describe('export-dash-data.mjs against a scratch database', () => {
     assert.deepEqual([parked.goal, parked.holder, parked.parked], ['wait for the seat.', 'Builder one', true]);
     const gone = rows.find((l) => l.id === 'py-ask-claim');
     assert.deepEqual([gone.goal, gone.holder, gone.parked], [null, null, false]);
-    const text = readAll(dir).replace(/"sql":\s*"(?:[^"\\]|\\.)*"/g, '');
+    // lane-export-per-session: a claim label (by, closed_by) names its session on purpose, gone or not. The holder keys stay empty for a gone holder (asserted above).
+    const text = readAll(dir).replace(/"sql":\s*"(?:[^"\\]|\\.)*"/g, '').replace(/"(?:by|closed_by|holder_label)":(?:"(?:[^"\\]|\\.)*"|null)/g, '"label":null');
     for (const bad of ['abc1234', '34/34', 'SECRET-TAIL', 'SECRET-REASON', 'Gone session']) assert.ok(!text.includes(bad), `leaked ${bad}`);
   });
 
