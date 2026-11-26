@@ -343,3 +343,57 @@ describe('S16 to S24: context, parity, usage', () => {
     assert.equal(r.gate, 1);
   });
 });
+
+// Rows from CodeRabbit CLI run 1 of the first head (three minor findings, all real): the strict scan folds a line with NFKC and the
+// fold can move offsets; the check slice of a gate hit can hold another valid reference; the mask covered only ASCII digits.
+describe('S26 to S29: folding, repeated references, masking of other digits', () => {
+  const root = listRoot();
+  const LIGATURE = 'ﬀ'; // one character that NFKC folds into two
+  const wide = (digits) => [...digits].map((d) => String.fromCharCode(0xff10 + Number(d))).join('');
+  const arabic = (digits) => [...digits].map((d) => String.fromCharCode(0x0660 + Number(d))).join('');
+  const hasOtherDigit = (s) => /\p{Nd}/u.test(s.replace(/[0-9]/g, ''));
+
+  it('S26 after a character that NFKC expands, one number is one place at its original column', () => {
+    const r = scan(root, `${LIGATURE} PR ${HOLD3}`);
+    assert.equal(r.gate, 1);
+    assert.equal(r.strict, 1);
+    assert.equal(r.hits.length, 1);
+    assert.equal(r.hits[0].col, 6);
+  });
+  it('S26b a bare hit after an expanding character is reported at the original column too', () => {
+    const r = scan(root, `${LIGATURE} value ${RES3}`);
+    assert.equal(r.strict, 1);
+    assert.equal(r.hits[0].col, 9);
+    assert.deepEqual(rules(r), ['bare']);
+  });
+  it('S27 a number that repeats right after a reference has no reference of its own; a genuine repeated reference does', () => {
+    const gateOnly = scan(root, `PR ${HOLD4} ${HOLD4}`, ['--gate-only']);
+    assert.equal(gateOnly.hits.length, 1);
+    assert.equal(gateOnly.gate, 1);
+    const both = scan(root, `PR ${HOLD4} ${HOLD4}`);
+    assert.deepEqual(rules(both), ['pr-ref', 'bare']);
+    const twice = scan(root, `PR ${HOLD4} and PR ${HOLD4}`, ['--gate-only']);
+    assert.deepEqual(rules(twice), ['pr-ref', 'pr-ref']);
+    const glued = scan(root, `PR ${HOLD4} PR ${HOLD4}`, ['--gate-only']);
+    assert.deepEqual(rules(glued), ['pr-ref', 'pr-ref']);
+  });
+  it('S28 a fullwidth or Arabic-Indic digit run near a gate hit is masked in the context', () => {
+    const text = `${wide(COMMENT)} PR ${HOLD4} ${arabic(HOLD4)} ${wide(RES3)}`;
+    const r = scan(root, text);
+    assert.ok(r.hits.length >= 1);
+    for (const h of r.hits) {
+      assert.ok(!hasOtherDigit(h.ctx), 'a digit of another script reached a context');
+      assert.ok(!/\d/.test(h.ctx), 'a digit reached a context');
+    }
+    const plain = run(['--root', root, put(text)]);
+    assert.ok(!hasOtherDigit(plain.out.replace(/^\d+:/gm, '')), 'a digit of another script reached the plain output');
+  });
+  it('S29 a file name with fullwidth or Arabic-Indic digits is masked in the label', () => {
+    const f = path.join(folder(), `x${wide(HOLD4)}y${arabic(COMMENT)}.md`);
+    fs.writeFileSync(f, `PR ${HOLD4}\n`);
+    const r = run(['--root', root, '--json', f]);
+    const label = JSON.parse(r.out).files[0].file.replace(/^\d+:/, '');
+    assert.ok(!hasOtherDigit(label) && !/\d/.test(label), 'a digit reached the file label');
+    assert.match(label, /^x#+y#+\.md$/);
+  });
+});
