@@ -23,6 +23,12 @@
  * changes. meta carries lanes_rows_total and lanes_rows_written. The page reads lanes.json for open cards only.
  * lanes-all.json keeps the full list on this machine for local tools and tests: not a dataset, never uploaded.
  *
+ * assignments.json holds the recent days only (lane-export-retention): the rows of the last 2 x window_days Chicago days, from the day the
+ * prior window starts (retainAssignments). The tiles and the Flow grid read no more. Every figure is built from the full list before the cut.
+ * assignments-all.json keeps every row on this machine, the same pattern as lanes-all.json: not a dataset, not in refresh.json, never uploaded,
+ * no cap. Both files are rebuilt from the database at each export, so a deleted archive returns at the next run. meta carries
+ * assignments_rows_total and assignments_rows_written.
+ *
  * Database: SELECT only, in BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY with default_transaction_read_only=on.
  * Connection chain as lane.mjs: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL, OPC_POSTGRES_URL, local default.
  * Scope: project_key = the config board ('continuous-claude'). Another board's lanes and events never appear.
@@ -68,7 +74,7 @@ import { requireDep } from '../lib/resolve-deps.mjs';
 import { loadConfig } from './lane-dash-config.mjs';
 import { loadProjectRules, projectOf, UNASSIGNED } from './lane-dash-project.mjs';
 import { buildFlowRows } from './lane-dash-flow.mjs';
-import { buildTileRows, goalOf, isParkedNote } from './lane-dash-metrics.mjs';
+import { buildTileRows, goalOf, isParkedNote, priorWindowOf } from './lane-dash-metrics.mjs';
 import { maskLaneRows, readIdList } from './board-mask.mjs';
 import { NAME_CLIP, readIdentity, short } from './session-label.mjs';
 
@@ -82,9 +88,11 @@ export const SIZE_WARN_PCT = 75;
 export const EXPORT_ERROR = 'export-error.json';
 /** The full lane list, for local tools and tests only: not a dataset, not in refresh.json, never uploaded, no cap. */
 export const LANES_ALL = 'lanes-all.json';
+/** Every assignment row, for local tools and tests only (lane-export-retention): not a dataset, not in refresh.json, never uploaded, no cap. */
+export const ASSIGNMENTS_ALL = 'assignments-all.json';
 const pctOf = (bytes) => Math.round((bytes / DOC_CAP_BYTES) * 100);
-// refresh.json and lanes-all.json are no datasets: never uploaded, so no cap and no warning.
-const isDataset = (f) => f.name !== 'refresh.json' && f.name !== LANES_ALL;
+// refresh.json, lanes-all.json and assignments-all.json are no datasets: never uploaded, so no cap and no warning.
+const isDataset = (f) => f.name !== 'refresh.json' && f.name !== LANES_ALL && f.name !== ASSIGNMENTS_ALL;
 
 /** The largest dataset document as {name, bytes, pct}, or null when there is none. `files` is [{name, bytes}]. */
 export function sizeReport(files) {
@@ -100,10 +108,32 @@ export function sizeWarnings(files) {
     .map((x) => `WARN size: ${x.name} ${x.bytes} of ${DOC_CAP_BYTES} bytes (${pctOf(x.bytes)}%)`);
 }
 
-/** The documents as written: lanes keeps the open lanes only; meta says how many rows exist and how many were written. */
+const WINDOW_DAYS_DEFAULT = 7;
+/** The window_days target (days of the current window), 7 when the target is missing or not a positive number. */
+const windowDaysOf = (targets) => {
+  const v = Number((targets ?? []).find((t) => t.key === 'window_days')?.value);
+  return Number.isFinite(v) && v > 0 ? v : WINDOW_DAYS_DEFAULT;
+};
+
+/**
+ * The assignment rows of the last 2 x windowDays Chicago days to `today`: from the day the prior window starts (priorWindowOf, the rule of
+ * the tiles) to today. The readers of the capped file need no more: the assignment tile reads the window and the one before it, and the
+ * Flow grid is 2 x windowDays. A row with no day is kept (it is not provably old). A new array: the input is not changed.
+ */
+export function retainAssignments(rows, today, windowDays = WINDOW_DAYS_DEFAULT) {
+  const start = priorWindowOf(today, windowDays).start;
+  return rows.filter((r) => r.day === null || r.day === undefined || r.day >= start);
+}
+
+/**
+ * The documents as written: lanes keeps the open lanes only and assignments the recent days only; meta says how many rows exist and how many
+ * were written. Every figure (tiles, flow, snapshots) is built from the full lists before these cuts, so no figure changes.
+ */
 function writtenEnvelopes(full) {
   const all = full.lanes.rows;
   const open = all.filter((l) => l.state !== 'done');
+  const allAssign = full.assignments.rows;
+  const keepAssign = retainAssignments(allAssign, full.meta.rows[0].today, windowDaysOf(full.targets.rows));
   return {
     ...full,
     lanes: {
@@ -111,7 +141,17 @@ function writtenEnvelopes(full) {
       sql: `${full.lanes.sql}\n-- written: open lanes only (state <> 'done'). Done lanes are counted in tiles, flow and snapshots before this cut.`,
       rows: open,
     },
-    meta: { ...full.meta, rows: full.meta.rows.map((r, i) => (i === 0 ? { ...r, lanes_rows_total: all.length, lanes_rows_written: open.length } : r)) },
+    assignments: {
+      ...full.assignments,
+      sql: `${full.assignments.sql}\n-- written: the last 2 x window_days days only. assignments-all.json (local, never uploaded) keeps every row.`,
+      rows: keepAssign,
+    },
+    meta: {
+      ...full.meta,
+      rows: full.meta.rows.map((r, i) => (i === 0
+        ? { ...r, lanes_rows_total: all.length, lanes_rows_written: open.length, assignments_rows_total: allAssign.length, assignments_rows_written: keepAssign.length }
+        : r)),
+    },
   };
 }
 
@@ -446,6 +486,7 @@ export function writeExport(outDir, collected) {
     const largest = sizeReport(files.map((x) => ({ name: x.name, bytes: Buffer.byteLength(x.text) })));
     files.push({ name: 'refresh.json', text: JSON.stringify(buildRefreshDoc(exportedAt, DATASETS.map((d) => `${d}.json`), largest), null, 2) });
     files.push({ name: LANES_ALL, text: JSON.stringify(full.lanes) });
+    files.push({ name: ASSIGNMENTS_ALL, text: JSON.stringify(full.assignments) });
     for (const f of files) {
       const tmp = path.join(outDir, `${f.name}.tmp`);
       writeFileSync(tmp, f.text);
@@ -458,7 +499,7 @@ export function writeExport(outDir, collected) {
     for (const f of files) renameSync(path.join(outDir, `${f.name}.tmp`), path.join(outDir, f.name));
     temps.length = 0;
     try { unlinkSync(path.join(outDir, EXPORT_ERROR)); } catch { /* no earlier failure */ }
-    return { exportedAt, files: files.map((f) => ({ name: f.name, bytes: Buffer.byteLength(f.text) })), envelopes, allLanes: full.lanes.rows };
+    return { exportedAt, files: files.map((f) => ({ name: f.name, bytes: Buffer.byteLength(f.text) })), envelopes, allLanes: full.lanes.rows, allAssignments: full.assignments.rows };
   } finally {
     for (const t of temps) { try { unlinkSync(t); } catch { /* already gone */ } }
     try { unlinkSync(lock); } catch { /* already gone */ }
@@ -706,6 +747,7 @@ export async function main(argv = process.argv.slice(2)) {
   for (const w of sizeWarnings(result.files)) console.log(w);
   const lanes = result.allLanes;
   console.log(`lanes.json: ${result.envelopes.lanes.rows.length} open lanes written of ${lanes.length}`);
+  console.log(`assignments.json: ${result.envelopes.assignments.rows.length} rows written of ${result.allAssignments.length} (the recent days; assignments-all.json holds every row)`);
   const by = (key, rows) => rows.reduce((m, r) => ({ ...m, [r[key]]: (m[r[key]] || 0) + 1 }), {});
   console.log(`states ${JSON.stringify(by('state', lanes))}`);
   console.log(`open by project ${JSON.stringify(by('project', lanes.filter((l) => l.state !== 'done')))}`);
