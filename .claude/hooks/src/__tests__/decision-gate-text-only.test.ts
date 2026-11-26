@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decide, type Deps } from '../decision-gate.js';
 import { blankInertQuotes } from '../shared/inert-quotes.js';
 import { FINDING_SHAPES, REAL_SHAPES } from './guard-prompt-text-fp-corpus.js';
+import { decideParsed } from './helpers/parse-first.js';
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
@@ -68,7 +69,7 @@ const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command },
 const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo' });
 const dcStart = (command: string) => ({ tool_name: `${DC}start_process`, tool_input: { command, shell: 'cmd' }, cwd: '/repo' });
 const dcInteract = (input: string) => ({ tool_name: `${DC}interact_with_process`, tool_input: { pid: 1, input }, cwd: '/repo' });
-const denied = (input: object): boolean => decide(input, deps()).action === 'deny';
+const denied = async (input: object): Promise<boolean> => (await decideParsed(input, deps())).action === 'deny';
 
 const L = 'scripts/github/land-pr.ps1';
 
@@ -95,8 +96,8 @@ describe('F1 a read head or an unquoted echo that only mentions the land script 
   ];
   for (const [name, mk] of TOOLS) {
     for (const cmd of BOTH) {
-      it(`${name}: allows ${JSON.stringify(cmd)}`, () => {
-        expect(denied(mk(cmd))).toBe(false);
+      it(`${name}: allows ${JSON.stringify(cmd)}`, async () => {
+        expect(await denied(mk(cmd))).toBe(false);
       });
     }
   }
@@ -109,12 +110,12 @@ describe('F1 a read head or an unquoted echo that only mentions the land script 
     `Set-Location C:\\Users\\dkhay\\continuous-claude; Select-String -Pattern land-pr.ps1 -Path CLAUDE.md`,
   ];
   for (const cmd of PS_ONLY) {
-    it(`PowerShell: allows ${JSON.stringify(cmd)}`, () => {
-      expect(denied(pwsh(cmd))).toBe(false);
+    it(`PowerShell: allows ${JSON.stringify(cmd)}`, async () => {
+      expect(await denied(pwsh(cmd))).toBe(false);
     });
   }
-  it('Bash: allows an unquoted printf mention', () => {
-    expect(denied(bash(`printf %s ${L}`))).toBe(false);
+  it('Bash: allows an unquoted printf mention', async () => {
+    expect(await denied(bash(`printf %s ${L}`))).toBe(false);
   });
 });
 
@@ -188,17 +189,34 @@ describe('F2 a real land, a merge, or a mention the exemption must not cover sta
     ['class B, Write-Host quoted -Pr then name', `Write-Host "-Pr 12" ${L}`],
     ['class B, echo name then quoted -Pr', `echo ${L} "-Pr 12"`],
     ['class B, echo single-quoted -Pr then name', `echo '-Pr 12' ${L}`],
-    // class C: merge text stays denied
+    // class C: the api merge text stays denied (Dave's tap M6b covers the words of gh pr merge only)
+    ['class C, api merge text', `grep -n "gh api repos/${REPO}/pulls/12/merge -X PUT" docs`],
+    // C2b: a real merge beside a data reader is still judged (no tap for PR 12), whatever the reader names
+    ['class C, grep merge text then a real merge', `grep -n "gh pr merge" scripts/x.md && gh pr merge 12 --squash --match-head-commit ${'a'.repeat(40)}`],
+    ['class C, echo merge text then a real merge', `echo gh pr merge 12 --squash; gh pr merge 12 --squash --match-head-commit ${'a'.repeat(40)}`],
+  ];
+  for (const [name, mk] of TOOLS) {
+    for (const [label, cmd] of STAY_DENIED) {
+      it(`${name}: denies ${label}`, async () => {
+        expect(await denied(mk(cmd))).toBe(true);
+      });
+    }
+  }
+});
+
+// C2b, class A (Dave's tap M6b, 11-25 "Allow it"): a grep, rg or echo that only names gh pr merge is data. These four rows used to be in the F2 list above
+// ("class C ... stays denied"); the hand reader that denied them is deleted. Each row keeps its name after "class C".
+describe('F2 class C (C2b): a data reader that only names gh pr merge is allowed (Dave tap M6b)', () => {
+  const ALLOWED_M6B: Array<[string, string]> = [
     ['class C, rg', `rg -n "gh pr merge" scripts`],
     ['class C, grep quoted', `grep -n "gh pr merge" scripts/x.md`],
     ['class C, grep unquoted', `grep -rn gh pr merge docs`],
     ['class C, echo unquoted', `echo gh pr merge 12 --squash`],
-    ['class C, api merge text', `grep -n "gh api repos/${REPO}/pulls/12/merge -X PUT" docs`],
   ];
   for (const [name, mk] of TOOLS) {
-    for (const [label, cmd] of STAY_DENIED) {
-      it(`${name}: denies ${label}`, () => {
-        expect(denied(mk(cmd))).toBe(true);
+    for (const [label, cmd] of ALLOWED_M6B) {
+      it(`${name}: allows ${label}`, async () => {
+        expect(await denied(mk(cmd))).toBe(false);
       });
     }
   }
@@ -216,8 +234,8 @@ describe('F2b every corpus shape that runs the inner word stays denied', () => {
     for (const inner of INNER) {
       for (const [label, shape] of [...REAL_SHAPES, ...FINDING_SHAPES]) {
         if (inner.startsWith('grep') && PLAIN_SEGMENT_SHAPES.has(label)) continue;
-        it(`${name}: denies ${label} with inner ${JSON.stringify(inner)}`, () => {
-          expect(denied(mk(shape(inner)))).toBe(true);
+        it(`${name}: denies ${label} with inner ${JSON.stringify(inner)}`, async () => {
+          expect(await denied(mk(shape(inner)))).toBe(true);
         });
       }
     }
@@ -247,17 +265,17 @@ describe('F2c a quoted word before or inside a head does not make a land look li
   ];
   for (const [name, mk] of TOOLS) {
     for (const [label, cmd] of QUOTED_HEAD) {
-      it(`${name}: denies ${label}`, () => {
-        expect(denied(mk(cmd))).toBe(true);
+      it(`${name}: denies ${label}`, async () => {
+        expect(await denied(mk(cmd))).toBe(true);
       });
     }
   }
   // PowerShell reads U+2013, U+2014 and U+2015 as a dash, so an en dash before Pr is a parameter that no ASCII regex sees.
   for (const [name, mk] of TOOLS) {
     for (const dash of ['–', '—', '―']) {
-      it(`${name}: denies a mention with U+${dash.codePointAt(0)!.toString(16).toUpperCase()} before Pr`, () => {
-        expect(denied(mk(`cat ${L} ${dash}Pr 12`))).toBe(true);
-        expect(denied(mk(`grep -n ${L} ${dash}Pr $n`))).toBe(true);
+      it(`${name}: denies a mention with U+${dash.codePointAt(0)!.toString(16).toUpperCase()} before Pr`, async () => {
+        expect(await denied(mk(`cat ${L} ${dash}Pr 12`))).toBe(true);
+        expect(await denied(mk(`grep -n ${L} ${dash}Pr $n`))).toBe(true);
       });
     }
   }
@@ -286,27 +304,27 @@ describe('F3 Desktop Commander keeps the raw-name deny, and a cmd.exe quote tric
   const CMD_TRICK_ECHO = `echo 'a & pwsh -File ${L} -Pr 12 & rem '`;
   const DC_TOOLS: ReadonlyArray<[string, (c: string) => object]> = [['start_process', dcStart], ['interact_with_process', dcInteract]];
   for (const [name, mk] of DC_TOOLS) {
-    it(`${name}: denies the cmd.exe bypass through a read head`, () => {
-      expect(denied(mk(CMD_TRICK_GREP))).toBe(true);
+    it(`${name}: denies the cmd.exe bypass through a read head`, async () => {
+      expect(await denied(mk(CMD_TRICK_GREP))).toBe(true);
     });
-    it(`${name}: denies the cmd.exe bypass through echo (blankInertQuotes must not blank here)`, () => {
-      expect(denied(mk(CMD_TRICK_ECHO))).toBe(true);
+    it(`${name}: denies the cmd.exe bypass through echo (blankInertQuotes must not blank here)`, async () => {
+      expect(await denied(mk(CMD_TRICK_ECHO))).toBe(true);
     });
-    it(`${name}: denies a plain grep mention (no exemption for this tool)`, () => {
-      expect(denied(mk(`grep -rn land-pr.ps1 .claude/rules-src`))).toBe(true);
+    it(`${name}: denies a plain grep mention (no exemption for this tool)`, async () => {
+      expect(await denied(mk(`grep -rn land-pr.ps1 .claude/rules-src`))).toBe(true);
     });
-    it(`${name}: denies an unquoted echo mention`, () => {
-      expect(denied(mk(`echo see ${L} for the land step`))).toBe(true);
+    it(`${name}: denies an unquoted echo mention`, async () => {
+      expect(await denied(mk(`echo see ${L} for the land step`))).toBe(true);
     });
-    it(`${name}: denies a quoted echo of the script name (no blanking for this tool)`, () => {
-      expect(denied(mk(`echo "land-pr.ps1"`))).toBe(true);
+    it(`${name}: denies a quoted echo of the script name (no blanking for this tool)`, async () => {
+      expect(await denied(mk(`echo "land-pr.ps1"`))).toBe(true);
     });
-    it(`${name}: denies a real land`, () => {
-      expect(denied(mk(`pwsh -File ${L} -Pr 12`))).toBe(true);
+    it(`${name}: denies a real land`, async () => {
+      expect(await denied(mk(`pwsh -File ${L} -Pr 12`))).toBe(true);
     });
   }
-  it('start_process: still allows a command with no land text', () => {
-    expect(denied(dcStart('git status'))).toBe(false);
+  it('start_process: still allows a command with no land text', async () => {
+    expect(await denied(dcStart('git status'))).toBe(false);
   });
 });
 
@@ -337,20 +355,20 @@ describe('F3b blankInertQuotes does not blank for a Desktop Commander tool', () 
 // ---------------------------------------------------------------------------------------------------------------------------
 describe('F4 regression: allowed today, allowed after the fix', () => {
   for (const [name, mk] of TOOLS) {
-    it(`${name}: allows a commit message that mentions the script`, () => {
-      expect(denied(mk(`git commit -m "docs: explain land-pr.ps1"`))).toBe(false);
+    it(`${name}: allows a commit message that mentions the script`, async () => {
+      expect(await denied(mk(`git commit -m "docs: explain land-pr.ps1"`))).toBe(false);
     });
-    it(`${name}: allows a quoted echo of the script name`, () => {
-      expect(denied(mk(`echo "land-pr.ps1"`))).toBe(false);
+    it(`${name}: allows a quoted echo of the script name`, async () => {
+      expect(await denied(mk(`echo "land-pr.ps1"`))).toBe(false);
     });
-    it(`${name}: allows a quoted echo of a full land line (inert text)`, () => {
-      expect(denied(mk(`echo "pwsh -File ${L} -Pr 12"`))).toBe(false);
+    it(`${name}: allows a quoted echo of a full land line (inert text)`, async () => {
+      expect(await denied(mk(`echo "pwsh -File ${L} -Pr 12"`))).toBe(false);
     });
-    it(`${name}: allows -CleanupOnly (it never merges)`, () => {
-      expect(denied(mk(`pwsh -File ${L} -Pr 12 -CleanupOnly`))).toBe(false);
+    it(`${name}: allows -CleanupOnly (it never merges)`, async () => {
+      expect(await denied(mk(`pwsh -File ${L} -Pr 12 -CleanupOnly`))).toBe(false);
     });
-    it(`${name}: allows a command with no land text`, () => {
-      expect(denied(mk('git status'))).toBe(false);
+    it(`${name}: allows a command with no land text`, async () => {
+      expect(await denied(mk('git status'))).toBe(false);
     });
   }
 });

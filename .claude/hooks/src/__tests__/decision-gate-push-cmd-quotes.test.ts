@@ -14,8 +14,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { decide, type Deps } from '../decision-gate.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Every row parses a PowerShell text (about 330 ms alone, several seconds under load).
+vi.setConfig({ testTimeout: 60000 });
+import { type Deps } from '../decision-gate.js';
+import { decideParsed } from './helpers/parse-first.js';
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
@@ -60,7 +64,7 @@ const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { comm
 const dcStart = (command: string) => ({ tool_name: `${DC}start_process`, tool_input: { command, shell: 'cmd', timeout_ms: 1000 }, cwd: '/repo', session_id: SESSION });
 const dcStartNoShell = (command: string) => ({ tool_name: `${DC}start_process`, tool_input: { command, timeout_ms: 1000 }, cwd: '/repo', session_id: SESSION });
 const dcInteract = (input: string) => ({ tool_name: `${DC}interact_with_process`, tool_input: { pid: 1, input }, cwd: '/repo', session_id: SESSION });
-const denied = (input: object): boolean => decide(input, deps()).action === 'deny';
+const denied = async (input: object): Promise<boolean> => (await decideParsed(input, deps())).action === 'deny';
 
 const PUSH = 'git push fork feat/x';
 /** Inert quoted text for Bash and PowerShell. Under cmd.exe the ' is a plain character, & breaks the command, so PUSH runs. */
@@ -69,77 +73,77 @@ const WRAP = `echo 'x & ${PUSH} & rem '`;
 const DQ_ECHO = `echo "${PUSH}"`;
 
 describe('F1 the wrapped push under start_process is denied like the plain push', () => {
-  it('plain push, shell cmd (control: denied today)', () => {
-    expect(denied(dcStart(PUSH))).toBe(true);
+  it('plain push, shell cmd (control: denied today)', async () => {
+    expect(await denied(dcStart(PUSH))).toBe(true);
   });
-  it('plain push, no shell (control: denied today)', () => {
-    expect(denied(dcStartNoShell(PUSH))).toBe(true);
+  it('plain push, no shell (control: denied today)', async () => {
+    expect(await denied(dcStartNoShell(PUSH))).toBe(true);
   });
-  it('wrapped push, shell cmd', () => {
-    expect(denied(dcStart(WRAP))).toBe(true);
+  it('wrapped push, shell cmd', async () => {
+    expect(await denied(dcStart(WRAP))).toBe(true);
   });
-  it('wrapped push, no shell', () => {
-    expect(denied(dcStartNoShell(WRAP))).toBe(true);
+  it('wrapped push, no shell', async () => {
+    expect(await denied(dcStartNoShell(WRAP))).toBe(true);
   });
 });
 
 describe('F2 the wrapped push under interact_with_process is denied like the plain push', () => {
-  it('plain push (control: denied today)', () => {
-    expect(denied(dcInteract(PUSH))).toBe(true);
+  it('plain push (control: denied today)', async () => {
+    expect(await denied(dcInteract(PUSH))).toBe(true);
   });
-  it('wrapped push', () => {
-    expect(denied(dcInteract(WRAP))).toBe(true);
+  it('wrapped push', async () => {
+    expect(await denied(dcInteract(WRAP))).toBe(true);
   });
 });
 
 describe('F3 verdicts that must not change', () => {
-  it('plain push under Bash stays denied', () => {
-    expect(denied(bash(PUSH))).toBe(true);
+  it('plain push under Bash stays denied', async () => {
+    expect(await denied(bash(PUSH))).toBe(true);
   });
-  it('wrapped text under Bash stays allowed (inert quotes)', () => {
-    expect(denied(bash(WRAP))).toBe(false);
+  it('wrapped text under Bash stays allowed (inert quotes)', async () => {
+    expect(await denied(bash(WRAP))).toBe(false);
   });
-  it('wrapped text under PowerShell stays allowed (inert quotes)', () => {
-    expect(denied(pwsh(WRAP))).toBe(false);
+  it('wrapped text under PowerShell stays allowed (inert quotes)', async () => {
+    expect(await denied(pwsh(WRAP))).toBe(false);
   });
-  it('git status stays allowed under Bash, PowerShell and every Desktop Commander form', () => {
+  it('git status stays allowed under Bash, PowerShell and every Desktop Commander form', async () => {
     for (const input of [bash('git status'), pwsh('git status'), dcStart('git status'), dcStartNoShell('git status'), dcInteract('git status')]) {
-      expect(denied(input)).toBe(false);
+      expect(await denied(input)).toBe(false);
     }
   });
-  it('a quoted echo with no push stays allowed under Desktop Commander', () => {
-    expect(denied(dcStart(`echo 'x & git status & rem '`))).toBe(false);
-    expect(denied(dcInteract(`echo 'hello & world'`))).toBe(false);
+  it('a quoted echo with no push stays allowed under Desktop Commander', async () => {
+    expect(await denied(dcStart(`echo 'x & git status & rem '`))).toBe(false);
+    expect(await denied(dcInteract(`echo 'hello & world'`))).toBe(false);
   });
 });
 
 describe('F5 a quoted executable name or quoted argument (cmd.exe runs "git")', () => {
   const QEXE = `echo 'x & "git" push fork feat/x & rem '`;
   const QBOTH = `echo 'x & "git" push "fork" "feat/x" & rem '`;
-  it('quoted executable, start_process', () => {
-    expect(denied(dcStart(QEXE))).toBe(true);
+  it('quoted executable, start_process', async () => {
+    expect(await denied(dcStart(QEXE))).toBe(true);
   });
-  it('quoted executable and quoted arguments, start_process', () => {
-    expect(denied(dcStart(QBOTH))).toBe(true);
+  it('quoted executable and quoted arguments, start_process', async () => {
+    expect(await denied(dcStart(QBOTH))).toBe(true);
   });
-  it('quoted executable, interact_with_process', () => {
-    expect(denied(dcInteract(QEXE))).toBe(true);
+  it('quoted executable, interact_with_process', async () => {
+    expect(await denied(dcInteract(QEXE))).toBe(true);
   });
-  it('quoted executable stays allowed under Bash and PowerShell (inert quotes)', () => {
-    expect(denied(bash(QEXE))).toBe(false);
-    expect(denied(pwsh(QEXE))).toBe(false);
+  it('quoted executable stays allowed under Bash and PowerShell (inert quotes)', async () => {
+    expect(await denied(bash(QEXE))).toBe(false);
+    expect(await denied(pwsh(QEXE))).toBe(false);
   });
 });
 
 describe('F4 accepted over-deny: a double-quoted echo of the push under Desktop Commander', () => {
-  it('start_process is denied', () => {
-    expect(denied(dcStart(DQ_ECHO))).toBe(true);
+  it('start_process is denied', async () => {
+    expect(await denied(dcStart(DQ_ECHO))).toBe(true);
   });
-  it('interact_with_process is denied', () => {
-    expect(denied(dcInteract(DQ_ECHO))).toBe(true);
+  it('interact_with_process is denied', async () => {
+    expect(await denied(dcInteract(DQ_ECHO))).toBe(true);
   });
-  it('the same echo under Bash and PowerShell stays allowed (the third reading is Desktop Commander only)', () => {
-    expect(denied(bash(DQ_ECHO))).toBe(false);
-    expect(denied(pwsh(DQ_ECHO))).toBe(false);
+  it('the same echo under Bash and PowerShell stays allowed (the third reading is Desktop Commander only)', async () => {
+    expect(await denied(bash(DQ_ECHO))).toBe(false);
+    expect(await denied(pwsh(DQ_ECHO))).toBe(false);
   });
 });

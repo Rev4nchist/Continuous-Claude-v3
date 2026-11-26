@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRegistry } from '../shared/tap-scope.js';
-import { handle, type Deps } from '../decision-gate.js';
+import { type Deps } from '../decision-gate.js';
+import { handleParsed } from './helpers/parse-first.js';
 
 const HEAD = 'a'.repeat(40);
 let scratch = '';
@@ -62,18 +63,18 @@ function deps(): Deps {
   };
 }
 const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command }, cwd: APP, session_id: 's-pb4' });
-const out = (input: object): { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string } =>
-  JSON.parse(handle(JSON.stringify(input), deps())).hookSpecificOutput ?? {};
+const out = async (input: object): Promise<{ permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string }> =>
+  JSON.parse(await handleParsed(JSON.stringify(input), deps())).hookSpecificOutput ?? {};
 
 describe('PB-4: a hard deny found in one folder survives a throw in a later folder', () => {
-  it('PB-4a (control): the mirror push alone is a hard deny with enforceAppPush false', () => {
-    expect(out(bash('git push up feat')).permissionDecision).toBe('deny');
+  it('PB-4a (control): the mirror push alone is a hard deny with enforceAppPush false', async () => {
+    expect((await out(bash('git push up feat'))).permissionDecision).toBe('deny');
   });
-  it('PB-4 (limit :2725): the mirror push, then a push in a folder whose git throws, is still a deny', () => {
+  it('PB-4 (limit :2725): the mirror push, then a push in a folder whose git throws, is still a deny', async () => {
     // Breaks when: judgePushAt keeps no deny found before the throw, so the outer catch sees only the throw and enforceAppPush false warns.
     // The limit text: one push, judged in each folder of its cd chain (the app folder first, then the folder whose git throws).
     for (const c of ['cd /work/app-x; cd /gone; git push up feat', 'cd /work/app-x && cd /gone && git push up feat']) {
-      const o = out(bash(c));
+      const o = await out(bash(c));
       expect(o.permissionDecision, c).toBe('deny');
       expect(o.permissionDecisionReason, c).not.toMatch(/could not verify/);
     }

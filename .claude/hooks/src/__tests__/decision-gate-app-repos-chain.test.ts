@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { handle as ledger } from '../decision-ledger.js';
 import { decide, realDeps } from '../decision-gate.js';
+import { decideParsed } from './helpers/parse-first.js';
 
 const APP_ASK = fileURLToPath(new URL('../../../../scripts/github/app-ask.mjs', import.meta.url));
 // An empty global git config and no system config: a developer's commit.gpgsign or hooksPath cannot break the fixture commits.
@@ -107,8 +108,8 @@ afterAll(() => {
 
 /** The real Deps with the temp folder as home, so the gate never reads the developer's home config (absent on a CI runner). */
 const deps = () => ({ ...realDeps(), home });
-const verdict = (cwd: string, command: string) => decide({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-ch' }, deps());
-type Verdict = ReturnType<typeof verdict>;
+const verdict = async (cwd: string, command: string) => await decideParsed({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-ch' }, deps());
+type Verdict = Awaited<ReturnType<typeof verdict>>;
 const denied = (v: Verdict): { reason: string; pattern: string } => {
   if (v.action !== 'deny') throw new Error(`not denied: ${JSON.stringify(v)}`);
   return v as unknown as { reason: string; pattern: string };
@@ -145,11 +146,11 @@ function tapThroughAsk(cwd: string, reason: string, facts?: object): string {
 }
 
 /** Deny with `pattern`; tap through the real chain; then the same command must be allowed. */
-function chain(cwd: string, command: string, pattern: string, facts?: object): string {
-  const before = denied(verdict(cwd, command));
+async function chain(cwd: string, command: string, pattern: string, facts?: object): Promise<string> {
+  const before = denied(await verdict(cwd, command));
   expect(before.pattern).toBe(pattern);
   const label = tapThroughAsk(cwd, before.reason, facts);
-  expect(verdict(cwd, command), command).toEqual({ action: 'allow' });
+  expect(await verdict(cwd, command), command).toEqual({ action: 'allow' });
   return label;
 }
 
@@ -165,115 +166,115 @@ describe('gate deny -> parsed app-ask command -> real app-ask -> real ledger -> 
     if (retryAttempt === 1) throw new Error('first attempt fails on purpose, to force the retry');
     expect(retryAttempt, 'the retry ran').toBe(2);
   });
-  it('CH1 a bare push with an upstream (@{push} = up/feat)', () => {
+  it('CH1 a bare push with an upstream (@{push} = up/feat)', async () => {
     const d = makeRepo('ch-bare', { up: 'https://github.com/acme/ch-bare.git' });
     git(d, 'update-ref', 'refs/remotes/up/feat', 'main');
     git(d, 'config', 'branch.feat.remote', 'up');
     git(d, 'config', 'branch.feat.merge', 'refs/heads/feat');
-    expect(chain(d, 'git push', 'ship')).toMatch(/^Push only/);
+    expect(await chain(d, 'git push', 'ship')).toMatch(/^Push only/);
   });
-  it('CH2 git push up feat while on main: the tap is for feat', () => {
+  it('CH2 git push up feat while on main: the tap is for feat', async () => {
     const d = makeRepo('ch-other', { up: 'https://github.com/acme/ch-other.git' });
     git(d, 'checkout', '-q', 'main');
-    chain(d, 'git push up feat', 'ship');
+    await chain(d, 'git push up feat', 'ship');
   });
   // Fixer E: HEAD:main, not HEAD:release (release is no default branch and passes with no tap). The source HEAD is feat, the destination main.
-  it('CH3 a refspec: git push up HEAD:main', () => {
+  it('CH3 a refspec: git push up HEAD:main', async () => {
     const d = makeRepo('ch-spec', { up: 'https://github.com/acme/ch-spec.git' });
-    chain(d, 'git push up HEAD:main', 'ship');
+    await chain(d, 'git push up HEAD:main', 'ship');
   });
   // Fixer E: main, not feat (a URL target has no remote HEAD: only main and master are default branches there).
-  it('CH4 a URL remote', () => {
+  it('CH4 a URL remote', async () => {
     const d = makeRepo('ch-url', { up: 'https://github.com/acme/ch-url.git' });
-    chain(d, 'git push https://github.com/acme/ch-url.git main', 'ship');
+    await chain(d, 'git push https://github.com/acme/ch-url.git main', 'ship');
   });
-  it('CH5 nothing ahead: a push of main that the remote already has', () => {
+  it('CH5 nothing ahead: a push of main that the remote already has', async () => {
     const d = makeRepo('ch-none', { up: 'https://github.com/acme/ch-none.git' });
     git(d, 'checkout', '-q', 'main');
     git(d, 'update-ref', 'refs/remotes/up/main', 'HEAD');
-    chain(d, 'git push up main', 'ship');
+    await chain(d, 'git push up main', 'ship');
   });
-  it('CH6 gh pr create', () => {
+  it('CH6 gh pr create', async () => {
     const d = makeRepo('ch-create', { origin: 'https://github.com/acme/ch-create.git' });
-    chain(d, 'gh pr create --draft --title t --body-file b.md', 'open-pr');
+    await chain(d, 'gh pr create --draft --title t --body-file b.md', 'open-pr');
   });
-  it('CH7 gh pr merge with the head sha and the gh facts of the test seam', () => {
+  it('CH7 gh pr merge with the head sha and the gh facts of the test seam', async () => {
     const d = makeRepo('ch-merge', { origin: 'https://github.com/acme/ch-merge.git' });
     const head = git(d, 'rev-parse', 'feat');
-    chain(d, `gh pr merge 7 --squash --match-head-commit ${head}`, 'land', { headRefOid: head, state: 'OPEN', isDraft: false, title: 't' });
+    await chain(d, `gh pr merge 7 --squash --match-head-commit ${head}`, 'land', { headRefOid: head, state: 'OPEN', isDraft: false, title: 't' });
   });
-  it('CH8 a tap for repo A does not allow the same command in repo B (same branch, same files, same tree)', () => {
+  it('CH8 a tap for repo A does not allow the same command in repo B (same branch, same files, same tree)', async () => {
     const a = makeRepo('ch-a', { up: 'https://github.com/acme/ch-a.git' }, 'same');
     const b = makeRepo('ch-b', { up: 'https://github.com/acme/ch-b.git' }, 'same');
     expect(git(a, 'rev-parse', 'feat^{tree}'), 'the trees must match, so that only the repo differs').toBe(git(b, 'rev-parse', 'feat^{tree}'));
-    expect(chain(a, 'git push up feat', 'ship')).toMatch(/^Push only/);
-    expect(denied(verdict(b, 'git push up feat')).pattern).toBe('ship');
-    expect(verdict(a, 'git push up feat'), 'repo A keeps its tap').toEqual({ action: 'allow' });
+    expect(await chain(a, 'git push up feat', 'ship')).toMatch(/^Push only/);
+    expect(denied(await verdict(b, 'git push up feat')).pattern).toBe('ship');
+    expect(await verdict(a, 'git push up feat'), 'repo A keeps its tap').toEqual({ action: 'allow' });
   });
-  it('CH9 a Push only tap for feat does not allow a push of main', () => {
+  it('CH9 a Push only tap for feat does not allow a push of main', async () => {
     const d = makeRepo('ch-branch', { up: 'https://github.com/acme/ch-branch.git' });
-    expect(chain(d, 'git push up feat', 'ship')).toMatch(/^Push only/);
-    expect(denied(verdict(d, 'git push up main')).pattern).toBe('ship');
-    expect(verdict(d, 'git push up feat'), 'the tap for feat stays').toEqual({ action: 'allow' });
+    expect(await chain(d, 'git push up feat', 'ship')).toMatch(/^Push only/);
+    expect(denied(await verdict(d, 'git push up main')).pattern).toBe('ship');
+    expect(await verdict(d, 'git push up feat'), 'the tap for feat stays').toEqual({ action: 'allow' });
   });
-  it('CH10 a push of topic (no default branch: not main, master or the remote HEAD branch feat) passes with no app-ask run and no tap', () => {
+  it('CH10 a push of topic (no default branch: not main, master or the remote HEAD branch feat) passes with no app-ask run and no tap', async () => {
     const d = makeRepo('ch-topic', { up: 'https://github.com/acme/ch-topic.git' });
     git(d, 'checkout', '-q', '-b', 'topic');
     // Fix round 3 re-pin (fixer H, strict allow-list): feat:topic and HEAD:topic were no-tap allows; a colon refspec now takes the tap path.
-    for (const cmd of ['git push up topic', 'git push -u up topic']) expect(verdict(d, cmd), cmd).toEqual({ action: 'allow' });
-    for (const cmd of ['git push up feat:topic', 'git push up HEAD:topic']) expect(denied(verdict(d, cmd)).pattern, cmd).toBe('ship');
-    expect(denied(verdict(d, 'git push up topic:main')).pattern, 'the same source to main still needs the tap').toBe('ship');
+    for (const cmd of ['git push up topic', 'git push -u up topic']) expect(await verdict(d, cmd), cmd).toEqual({ action: 'allow' });
+    for (const cmd of ['git push up feat:topic', 'git push up HEAD:topic']) expect(denied(await verdict(d, cmd)).pattern, cmd).toBe('ship');
+    expect(denied(await verdict(d, 'git push up topic:main')).pattern, 'the same source to main still needs the tap').toBe('ship');
   });
   // Fixer F re-pin (principal minor, critic minor): feat passed with no tap here. With no remote HEAD the default branch is not known, so
   // feat takes the tap path too (fail closed), through the full chain; after set-head, feat passes with no tap again.
-  it('CH11 a remote with no remote HEAD (a fresh clone without set-head): feat and main both need the tap; after set-head feat passes', () => {
+  it('CH11 a remote with no remote HEAD (a fresh clone without set-head): feat and main both need the tap; after set-head feat passes', async () => {
     const d = makeRepo('ch-nohead', { up: 'https://github.com/acme/ch-nohead.git' }, 'ch-nohead', false);
     expect(spawnSync('git', ['symbolic-ref', '--quiet', 'refs/remotes/up/HEAD'], { cwd: d }).status, 'no remote HEAD').not.toBe(0);
-    expect(denied(verdict(d, 'git push up feat')).reason).toContain('git remote set-head up --auto');
-    chain(d, 'git push up feat', 'ship');
-    chain(d, 'git push up main', 'ship');
+    expect(denied(await verdict(d, 'git push up feat')).reason).toContain('git remote set-head up --auto');
+    await chain(d, 'git push up feat', 'ship');
+    await chain(d, 'git push up main', 'ship');
     git(d, 'symbolic-ref', 'refs/remotes/up/HEAD', 'refs/remotes/up/main');
-    expect(verdict(d, 'git push up topic'), 'a readable remote HEAD (main): topic is no default branch').toEqual({ action: 'allow' });
+    expect(await verdict(d, 'git push up topic'), 'a readable remote HEAD (main): topic is no default branch').toEqual({ action: 'allow' });
   });
-  it('CH12 git push up @ on feat (git reads @ as HEAD): a push of feat, a default branch here, through the real chain', () => {
+  it('CH12 git push up @ on feat (git reads @ as HEAD): a push of feat, a default branch here, through the real chain', async () => {
     const d = makeRepo('ch-at', { up: 'https://github.com/acme/ch-at.git' });
-    chain(d, 'git push up @', 'ship');
+    await chain(d, 'git push up @', 'ship');
   });
-  it('CH13 git push up @ after a chained commit on main: the gate reads the index and app-ask binds the staged tree, so the tap clears it', () => {
+  it('CH13 git push up @ after a chained commit on main: the gate reads the index and app-ask binds the staged tree, so the tap clears it', async () => {
     const d = makeRepo('ch-at-commit', { up: 'https://github.com/acme/ch-at-commit.git' });
     git(d, 'checkout', '-q', 'main');
     writeFileSync(`${d}/g.txt`, 'staged\n');
     git(d, 'add', 'g.txt');
-    expect(chain(d, 'git commit -q -m next && git push up @', 'ship')).toMatch(/^Commit and push/);
+    expect(await chain(d, 'git commit -q -m next && git push up @', 'ship')).toMatch(/^Commit and push/);
   });
   // Fix round 3 re-pin (fixer H, critic major 4): remote.up.mirror true was the tap path; it is push-unsafe now (a mirror push, tap or not).
-  it('CH14 a bare push that git config widens (push.default=matching, remote.up.push) takes the tap path; remote.up.mirror is push-unsafe', () => {
+  it('CH14 a bare push that git config widens (push.default=matching, remote.up.push) takes the tap path; remote.up.mirror is push-unsafe', async () => {
     const d = makeRepo('ch-config', { up: 'https://github.com/acme/ch-config.git' });
     git(d, 'checkout', '-q', '-b', 'topic');
     git(d, 'update-ref', 'refs/remotes/up/topic', 'HEAD');
     git(d, 'config', 'branch.topic.remote', 'up');
     git(d, 'config', 'branch.topic.merge', 'refs/heads/topic');
-    expect(verdict(d, 'git push'), 'no config: topic is no default branch').toEqual({ action: 'allow' });
+    expect(await verdict(d, 'git push'), 'no config: topic is no default branch').toEqual({ action: 'allow' });
     // Fix round 4 re-pin (fixer K, critic major 1): push.default=matching and a remote.up.push mapping of a bare push are hard denies now.
     const widened: [string, string, string][] = [['push.default', 'matching', 'push-target-unresolved'], ['remote.up.push', 'refs/heads/*:refs/heads/*', 'push-target-unresolved'], ['remote.up.mirror', 'true', 'push-unsafe']];
     for (const [key, value, pattern] of widened) {
       git(d, 'config', key, value);
-      expect(denied(verdict(d, 'git push')).pattern, `${key}=${value}`).toBe(pattern);
+      expect(denied(await verdict(d, 'git push')).pattern, `${key}=${value}`).toBe(pattern);
       git(d, 'config', '--unset', key);
     }
-    expect(verdict(d, 'git push'), 'config cleared again').toEqual({ action: 'allow' });
+    expect(await verdict(d, 'git push'), 'config cleared again').toEqual({ action: 'allow' });
   });
-  it('CH15 a local tag v1.0 pushed by its bare name takes the tap path', () => {
+  it('CH15 a local tag v1.0 pushed by its bare name takes the tap path', async () => {
     const d = makeRepo('ch-tag', { up: 'https://github.com/acme/ch-tag.git' });
     git(d, 'checkout', '-q', '-b', 'topic');
-    expect(verdict(d, 'git push up v1.0'), 'no tag v1.0 yet').toEqual({ action: 'allow' });
+    expect(await verdict(d, 'git push up v1.0'), 'no tag v1.0 yet').toEqual({ action: 'allow' });
     git(d, 'tag', 'v1.0');
-    expect(denied(verdict(d, 'git push up v1.0')).pattern).toBe('ship');
+    expect(denied(await verdict(d, 'git push up v1.0')).pattern).toBe('ship');
   });
   // Fixer G (item 4): the branch holds U+2019, a PowerShell quote mark, so it never goes into a command. It is the current branch, so the
   // deny command leaves --branch out and the real app-ask reads it in the folder. Change that breaks it: keep a placeholder or a quoting
   // rule (the command then holds <branch>), or app-ask keys a bare push on another branch than the gate reads.
-  it('CH16 a bare push of a branch with U+2019: the offer leaves --branch out, and the tap app-ask writes clears the push', () => {
+  it('CH16 a bare push of a branch with U+2019: the offer leaves --branch out, and the tap app-ask writes clears the push', async () => {
     const odd = 'feat\u2019x';
     const d = makeRepo('ch-odd', { up: 'https://github.com/acme/ch-odd.git' }, 'ch-odd', false);
     git(d, 'checkout', '-q', '-b', odd);
@@ -281,20 +282,20 @@ describe('gate deny -> parsed app-ask command -> real app-ask -> real ledger -> 
     git(d, 'config', `branch.${odd}.remote`, 'up');
     git(d, 'config', `branch.${odd}.merge`, `refs/heads/${odd}`);
     git(d, 'update-ref', `refs/remotes/up/${odd}`, 'main');
-    const before = denied(verdict(d, 'git push'));
+    const before = denied(await verdict(d, 'git push'));
     expect(/node .*?app-ask\.mjs'? (.*?) --json/.exec(before.reason)?.[1], before.reason).toBe(`push --remote up --src HEAD --dir '${d}'`);
     expect(before.reason).toContain('app-ask reads the branch itself');
-    chain(d, 'git push', 'ship');
+    await chain(d, 'git push', 'ship');
   });
   // Fix round 3 (fixer H): real git config, so the key case git prints (push.followtags, lowercased) is what the gate reads.
   // Change that breaks it: read only a bare push's config, match push.followTags in mixed case, or skip the global options of the call.
-  it('CH17 real config: push.followTags, a colon-less remote.up.push mapping and git -c take the tap path; a + mapping is push-unsafe', () => {
+  it('CH17 real config: push.followTags, a colon-less remote.up.push mapping and git -c take the tap path; a + mapping is push-unsafe', async () => {
     const d = makeRepo('ch-strict', { up: 'https://github.com/acme/ch-strict.git' });
     git(d, 'checkout', '-q', '-b', 'topic');
     git(d, 'update-ref', 'refs/remotes/up/topic', 'HEAD');
     git(d, 'config', 'branch.topic.remote', 'up');
     git(d, 'config', 'branch.topic.merge', 'refs/heads/topic');
-    expect(verdict(d, 'git push up topic'), 'no config: topic is no default branch').toEqual({ action: 'allow' });
+    expect(await verdict(d, 'git push up topic'), 'no config: topic is no default branch').toEqual({ action: 'allow' });
     // Fix round 4 re-pin (fixer K, critic major 1): push.followTags, the colon-less mapping, git -c with a push key and --follow-tags were
     // the tap path; each is a hard deny now (push-target-unresolved). push.recurseSubmodules and submodule.recurse join them.
     const rows: [string, string, string][] = [
@@ -304,28 +305,28 @@ describe('gate deny -> parsed app-ask command -> real app-ask -> real ledger -> 
     ];
     for (const [key, value, pattern] of rows) {
       git(d, 'config', key, value);
-      expect(denied(verdict(d, 'git push up topic')).pattern, `${key}=${value}`).toBe(pattern);
+      expect(denied(await verdict(d, 'git push up topic')).pattern, `${key}=${value}`).toBe(pattern);
       git(d, 'config', '--unset', key);
     }
     // push.default=matching widens a bare push only: a positional push of topic passes (no over-deny).
     git(d, 'config', 'push.default', 'matching');
-    expect(verdict(d, 'git push up topic'), 'push.default=matching, positional push').toEqual({ action: 'allow' });
+    expect(await verdict(d, 'git push up topic'), 'push.default=matching, positional push').toEqual({ action: 'allow' });
     git(d, 'config', '--unset', 'push.default');
-    expect(denied(verdict(d, 'git -c push.default=matching push')).pattern).toBe('push-target-unresolved');
-    expect(denied(verdict(d, 'git push --follow-tags up topic')).pattern).toBe('push-target-unresolved');
-    expect(denied(verdict(d, 'git -p push up topic')).pattern, 'a global option the shape reader does not read').toBe('push-target-unresolved');
+    expect(denied(await verdict(d, 'git -c push.default=matching push')).pattern).toBe('push-target-unresolved');
+    expect(denied(await verdict(d, 'git push --follow-tags up topic')).pattern).toBe('push-target-unresolved');
+    expect(denied(await verdict(d, 'git -p push up topic')).pattern, 'a global option the shape reader does not read').toBe('push-target-unresolved');
     // Fix round 4 (fixer K): the way out the deny text names is no dead end. With feat mapped to main, git push up feat is a hard deny;
     // naming both sides (feat:feat --no-recurse-submodules) takes the tap path and clears through the real app-ask and ledger.
     // Change that breaks it: read remote.<r>.push for a colon refspec too, or ignore --no-recurse-submodules.
     git(d, 'config', 'remote.up.push', 'refs/heads/feat:refs/heads/main');
     git(d, 'config', 'push.recurseSubmodules', 'on-demand');
-    expect(denied(verdict(d, 'git push up feat')).pattern).toBe('push-target-unresolved');
-    chain(d, 'git push up feat:feat --no-recurse-submodules', 'ship');
+    expect(denied(await verdict(d, 'git push up feat')).pattern).toBe('push-target-unresolved');
+    await chain(d, 'git push up feat:feat --no-recurse-submodules', 'ship');
     git(d, 'config', '--unset', 'remote.up.push');
     git(d, 'config', '--unset', 'push.recurseSubmodules');
     // The gate reads @{push} of topic now; the shell would switch to main first and push main.
     // Round 3 C4 (Dave 2026-11-15, "Strict here, soft in apps"): a step before the push that the gate does not model is push-state-unknown, on the tap path.
-    expect(denied(verdict(d, 'git checkout -q main && git push')).pattern, 'a branch switch before a bare push').toBe('push-state-unknown');
-    expect(verdict(d, 'git push'), 'config cleared again: the bare push passes').toEqual({ action: 'allow' });
+    expect(denied(await verdict(d, 'git checkout -q main && git push')).pattern, 'a branch switch before a bare push').toBe('push-state-unknown');
+    expect(await verdict(d, 'git push'), 'config cleared again: the bare push passes').toEqual({ action: 'allow' });
   });
 });
