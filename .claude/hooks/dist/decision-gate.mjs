@@ -1110,22 +1110,6 @@ function isTextOnlyCommand(command) {
   }
   return true;
 }
-var DOC_APPEND = /^\s*(?:Add-Content|Set-Content)\s+-(?:LiteralPath|Path)\s+(?:'([A-Za-z0-9_.\-/\\: ]+)'|([A-Za-z0-9_.\-/\\:]+))(?:\s+-Value)?\s+'([^']*)'\s*$/i;
-var DOC_EXT = /\.(?:md|txt|log)$/i;
-var DOC_RISK = /[`\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]|\$\(|@['"]/u;
-function isDocAppend(segment) {
-  if (DASH_LOOKALIKE.test(segment) || DOC_RISK.test(segment)) return false;
-  const m = DOC_APPEND.exec(segment);
-  if (m === null) return false;
-  const target = m[1] ?? m[2];
-  if (target !== target.trim() || !DOC_EXT.test(target)) return false;
-  if (target.replace(/^[A-Za-z]:(?=[\\/])/, "").includes(":")) return false;
-  return !target.split(/[\\/]/).includes("..");
-}
-function docAppendReadable(command, tool) {
-  if (tool !== "PowerShell" || DASH_LOOKALIKE.test(command)) return false;
-  return plainSegments(command, "Bash") !== null && plainSegments(command, "PowerShell") !== null;
-}
 function blankInertQuotes(command, tool) {
   if (tool !== void 0 && tool !== "Bash" && tool !== "PowerShell") return command;
   if (tool === "Bash") {
@@ -2396,27 +2380,11 @@ var LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
 var LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)\b/i;
 var PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
 var CLEANUP_RE = /(?:^|\s)-CleanupOnly\b/i;
-var MERGE_CLI_RE = /\bgh\s+pr\s+merge\b([^|;&\n]*)/i;
 var MERGE_API_RE = /\bgh\s+api\b[^|;&\n]*\/pulls\/(\d+)\/merge\b[^|;&\n]*/i;
 var GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
 var SHA_RE = /(?:\bsha=|--match-head-commit(?:\s+|=))["']?([0-9a-f]{40})\b/i;
 var SEGMENT_RE = /[;&|\r\n]+/;
 var lastArg = (args, re) => re.exec(args)?.[1] ?? null;
-function landShapesOf(seg, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh = false) {
-  const out3 = [];
-  const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
-  const pr = lastArg(seg, LAND_PR_RE);
-  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out3.push({ kind: "land", pr, sha });
-  const cli = MERGE_CLI_RE.exec(seg);
-  const opens = (m) => m !== null && GH_PREFIX_OK.test(tail.slice(0, m.index)) ? m : null;
-  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? opens(TAIL_CLI_RE.exec(tail)) : null;
-  if (cli) out3.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD });
-  const api = MERGE_API_RE.exec(seg);
-  const rawApi = MERGE_API_RE.exec(rawSeg) ? opens(TAIL_API_RE.exec(tail)) : null;
-  if (api && !GET_RE.test(api[0])) out3.push({ kind: "merge", pr: api[1], ...rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD });
-  return out3;
-}
-var TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
 function quoteOpenAt(text, pos, pwsh) {
   const esc = pwsh ? "`" : "\\";
   let q = "";
@@ -2438,8 +2406,6 @@ function quoteOpenAt(text, pos, pwsh) {
   }
   return q !== "";
 }
-var GH_PREFIX_OK = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_\-./:]*\s+)*$/;
-var TAIL_API_RE = /\bgh\s+api\b[\s\S]*$/i;
 function rawTail(text) {
   let q = "";
   for (let i = 0; i < text.length; i++) {
@@ -2497,34 +2463,6 @@ function pairedWords(text, pwsh = false) {
   if (open) words.push(cur);
   return words;
 }
-function unmodelled(text, pwsh = false) {
-  let q = "";
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === "\\" && (QUOTE_CH.has(text[i - 1] ?? "") || QUOTE_CH.has(text[i + 1] ?? ""))) return true;
-    if (q === "'") {
-      if (ch === "'") q = "";
-      else if (!QUOTED_OK.test(ch)) return true;
-      continue;
-    }
-    if (q === '"') {
-      if (ch === '"') q = "";
-      else if (!QUOTED_OK.test(ch) || "$`".includes(ch) || ch === "\\" && !pwsh) return true;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      q = ch;
-      continue;
-    }
-    if (ch === "@" && i > 0 && !/[ \t]/.test(text[i - 1])) continue;
-    if (ch === "\\" && pwsh) continue;
-    if (!BARE_OK.test(ch)) return true;
-  }
-  return false;
-}
-var QUOTE_CH = /* @__PURE__ */ new Set(["'", '"']);
-var BARE_OK = /^[A-Za-z0-9 \t\-_./=:]$/;
-var QUOTED_OK = /^[\x20-\x7E\n]$/;
 var UNREAD_HEAD = { sha: null, shaBad: true };
 var HEAD_UNREAD_WHY = (pr) => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, an unpaired quote, or a character this gate cannot read the same way in bash and PowerShell. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : "<n>"} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>. ${PLAIN_WAY_OUT}`;
 var PLAIN_WAY_OUT = "For a redirect: run the call with no redirect. For a $ variable or $(...): put the value in the command as plain text or use a body file.";
@@ -2552,12 +2490,6 @@ function clusterOf(w, next, bools, values) {
     return next === void 0 ? null : { used: 1, letter: ch, value: next };
   }
   return { used: 0, letter: null, value: null };
-}
-function cliMergeHead(args, pwsh = false) {
-  if (unmodelled(args, pwsh)) return UNREAD_HEAD;
-  const words = pairedWords(args, pwsh);
-  if (words === null) return UNREAD_HEAD;
-  return cliHeadOfWords(words);
 }
 function cliHeadOfWords(words) {
   const heads = [];
@@ -2592,13 +2524,6 @@ function apiWord(w, next, endpointSeen) {
   if (/^--(?:method|hostname|header|jq|template|cache|preview)=/.test(w) || /^-X./.test(w) || API_BOOL.has(w)) return { field: null, used: 0 };
   if (!w.startsWith("-") && !endpointSeen) return { field: null, used: -1 };
   return { bad: `a word this gate does not know on the api call (${w})` };
-}
-function apiMergeHead(text, pwsh = false) {
-  const rest = text.replace(/^[\s\S]*?\bapi\b/, "");
-  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"), pwsh)) return UNREAD_HEAD;
-  const words = pairedWords(rest, pwsh);
-  if (words === null) return UNREAD_HEAD;
-  return apiHeadOfWords(words);
 }
 function apiHeadOfWords(words) {
   const heads = [];
@@ -2692,6 +2617,10 @@ function withAstMerges(shapes, parsed, pwsh) {
       out3.push(s);
       continue;
     }
+    if (s.rawOnly) {
+      push(s);
+      continue;
+    }
     const h = heads(s.pr);
     if (!h) {
       push(s);
@@ -2713,14 +2642,19 @@ var SAFE_CREATE_VALUE = /* @__PURE__ */ new Set(["--title", "-t", "--body", "-b"
 var SAFE_API_KEY = /* @__PURE__ */ new Set(["title", "body", "draft", "maintainer_can_modify"]);
 var API_PULLS_PATH = /\/pulls\/?(?:\?.*)?$/i;
 var NOT_LITERAL_WORD = "a word that is not a literal (a variable or a substitution outside a title or body value)";
-function createCallOf(call) {
+function callHoldsHeredoc(call, r) {
+  if (!r) return false;
+  const inCall = (at2) => at2 >= call.start && at2 <= call.end;
+  return r.heredocs.some((h) => h.callStart === null || inCall(h.callStart)) || r.bodies.some(([from, to]) => from >= call.start && to <= call.end);
+}
+function createCallOf(call, r) {
   const w = call.words;
   if (w.length < 3 || progName(w[0].lit) !== "gh") return null;
   const sub = (i) => (w[i]?.lit ?? "").toLowerCase();
   const cwdBefore = call.cwdBefore ?? [];
   const text = w.map((x) => x.raw).join(" ");
   if (sub(1) === "pr" && (sub(2) === "create" || sub(2) === "new")) {
-    if (w.some((x) => x.raw.includes("<<"))) return { read: BAD("a heredoc in a title or body makes the head and base unreadable"), cwdBefore, text };
+    if (callHoldsHeredoc(call, r)) return { read: BAD("a heredoc in a title or body makes the head and base unreadable"), cwdBefore, text };
     const lits2 = [];
     for (const a of w.slice(3)) {
       if (a.lit !== null) {
@@ -2767,8 +2701,8 @@ function createCallOf(call) {
 }
 function astCreates(parsed) {
   if (!parsed) return [];
-  return Object.values(parsed.byDialect).flatMap((r) => r ? r.calls : []).flatMap((c) => {
-    const m = createCallOf(c);
+  return Object.values(parsed.byDialect).flatMap((r) => r ? r.calls.map((c) => ({ c, r })) : []).flatMap(({ c, r }) => {
+    const m = createCallOf(c, r);
     return m ? [m] : [];
   });
 }
@@ -2824,7 +2758,7 @@ function astItemsOf(parsed, raw, exempt, text) {
   const extra = [];
   const mergeWords = [...text.matchAll(/\bgh\s+pr\s+merge\b[^|;&\n]*/gi)];
   if (mergeWords.length > foundMerges.length && !onlyDataReaders(parsed)) {
-    for (const m of mergeWords.slice(foundMerges.length)) extra.push({ sq: squashed(m[0]), shape: { kind: "merge", pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD } });
+    for (const m of mergeWords) extra.push({ sq: squashed(m[0]), shape: { kind: "merge", pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD, rawOnly: true } });
   }
   const api = MERGE_API_RE.exec(text);
   if (api && !GET_RE.test(api[0]) && !foundMerges.some((m) => m.pr === api[1])) extra.push({ sq: squashed(api[0]), shape: { kind: "merge", pr: api[1], ...UNREAD_HEAD } });
@@ -2882,7 +2816,12 @@ function docAppendByAst(parsed, tool, raw) {
   const dialects = Object.keys(parsed.byDialect);
   const r = parsed.byDialect.pwsh;
   if (dialects.length !== 1 || !r || r.errors.length > 0 || r.calls.length === 0) return false;
-  return !hasBareRedirect(parsed.text, r) && r.calls.every(docAppendCall);
+  return !hasBareRedirect(parsed.text, r) && r.calls.every((c) => docAppendCall(c) || docLeaderCall(c)) && r.calls.some(docAppendCall);
+}
+var DOC_LEADERS = /* @__PURE__ */ new Set(["set-location", "sl", "cd", "get-date"]);
+function docLeaderCall(c) {
+  if (c.depth !== 0 || c.level !== 0 || c.nested || c.func || c.place.pipe || c.place.background) return false;
+  return DOC_LEADERS.has((c.words[0]?.lit ?? "").toLowerCase()) && c.words.every((w) => w.lit !== null);
 }
 var SCRIPT_RUNNERS = /* @__PURE__ */ new Set(["node", "nodejs", "python", "python3", "py", "deno", "bun", "ruby", "perl", "tsx", "ts-node", "php"]);
 var GUARDED_TEXT = /\bgit\s+(?:-\S+\s+\S+\s+)*push\b|\bgit\s+(?:[^;&|\n]*\s)?push\b|\bgit\b[^\n]*\bpush\b|\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
@@ -2918,6 +2857,73 @@ function parseErrorDenies(parsed) {
   const failed = results.every((r) => !r.ok || r.errors.length > 0);
   if (!failed && parsed.innerBad !== true) return [];
   return GUARDED_TEXT.test(blankQuotes(parsed.text)) ? [deny("parse-error", PARSE_ERROR_WHY)] : [];
+}
+var STANDALONE_CLEANUP = /^\s*(?:&\s*)?(?:(?:pwsh|powershell)(?:\.exe)?\s+(?:-NoProfile\s+)?(?:-File\s+)?)?[^\s;&|<>$`'"()]*land-pr\.ps1(?:\s+(?:-Pr\s+\d+|-CleanupOnly))+\s*$/i;
+var PARSER_UNAVAILABLE_WHY = "the parser was late, run it again. The shell parser did not answer in time (or could not run), and this text names a guarded call (a push, a create, a merge or the land script), so this gate cannot read which call runs. Run the same call again, or run the push, create or merge as its own command.";
+function parserUnavailableDenies(parsed, text, covered = false) {
+  if (parsed) return [];
+  if (STANDALONE_CLEANUP.test(text) && /-Pr\s+\d+/i.test(text) && CLEANUP_RE.test(text)) return [];
+  const views = [blankQuotes(text), text.replace(/['"`]/g, "")];
+  if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
+  const scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? "other" : "push";
+  const d = deny("parser-unavailable", PARSER_UNAVAILABLE_WHY, scope);
+  return [covered ? { ...d, homeFlags: true } : d];
+}
+var DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+var INERT_PROGRAMS = /* @__PURE__ */ new Set(["echo", "printf", "grep", "rg", "select-string", "set-content", "add-content", "out-file", "write-output", "write-host", "set-location", "get-date", "cat", "head", "tail", "ls", "get-content", "cd", "gc", "sc", "ac", "sls", "sl"]);
+var litOf = (w) => w !== void 0 && w.lit !== null && w.viaVar === void 0 ? w.lit : null;
+function onDataList(c) {
+  const p = progName(litOf(c.words[0]));
+  if (p === null) return false;
+  if (INERT_PROGRAMS.has(p)) return true;
+  const args = c.words.slice(1);
+  if (p === "git") return args.some((a) => a.lit === "commit") && args.some((a) => a.lit !== null && (/^-[a-zA-Z]*[mF]$/.test(a.lit) || a.lit === "--message" || a.lit === "--file"));
+  if (p === "node") return /(^|[\\/])lane\.mjs$/.test(litOf(args[0]) ?? "") && ["say", "note"].includes(litOf(args[1]) ?? "");
+  return false;
+}
+var DATA_ARG_PROGRAMS = /* @__PURE__ */ new Set(["gh", "git", "claude", "curl", "ntn", "timeout", "env"]);
+var READ_ONLY_PROGRAMS = /* @__PURE__ */ new Set(["grep", "rg", "select-string", "sls", "cat", "head", "tail", "ls", "get-content", "gc", "cd", "set-location", "sl", "get-date"]);
+var RUNS_TEXT_PROGRAMS = /* @__PURE__ */ new Set(["bash", "sh", "dash", "zsh", "pwsh", "powershell", "cmd", "iex", "invoke-expression", "eval", "source", ".", "xargs", "invoke-command", "icm", "start-process", "saps"]);
+var listOf = (set) => [...set].join(", ");
+var notInertWhy = () => "this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain data handling. It is allowed only when every call is a data program (" + listOf(INERT_PROGRAMS) + "; git commit with -m or -F; node lane.mjs say or note), or when every guarded word sits in the arguments of an accounted program (" + listOf(DATA_ARG_PROGRAMS) + ", or a read-only program: " + listOf(READ_ONLY_PROGRAMS) + ") and nothing in the command runs text (" + listOf(RUNS_TEXT_PROGRAMS) + "). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.";
+var LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
+function readsNamedCall(c) {
+  if (c.nested?.status === "parsed") return true;
+  const p = progName(litOf(c.words[0]));
+  if (p !== null && (DATA_ARG_PROGRAMS.has(p) || READ_ONLY_PROGRAMS.has(p))) return true;
+  return c.words.some((w) => LAND_SCRIPT_WORD.test(litOf(w) ?? ""));
+}
+function isInert(parsed) {
+  if (!parsed || parsed.innerBad === true) return false;
+  const all = [];
+  for (const r of Object.values(parsed.byDialect)) {
+    if (!r) continue;
+    if (!r.ok || r.errors.length > 0) return false;
+    all.push(...r.calls);
+  }
+  if (all.every((c) => onDataList(c) || readsNamedCall(c))) return true;
+  return heldByAccountedCalls(parsed, all);
+}
+function heldByAccountedCalls(parsed, all) {
+  const global = new RegExp(GUARDED_TEXT.source, "gi");
+  const count = (t) => (t.match(global) ?? []).length;
+  const wordsOf = (c) => c.words.map((w) => w.lit ?? w.raw ?? "").join(" ");
+  const rawCount = Math.max(count(parsed.text), count(blankQuotes(parsed.text)), count(parsed.text.replace(/['"`]/g, "")));
+  const holders = all.filter((c) => count(wordsOf(c)) > 0);
+  if (holders.length === 0 || !holders.every(readsNamedCall)) return false;
+  if (holders.reduce((n, c) => n + count(wordsOf(c)), 0) < rawCount) return false;
+  return !all.some((c) => {
+    if (c.nested?.status === "parsed") return false;
+    const p = progName(litOf(c.words[0]));
+    return p === null || RUNS_TEXT_PROGRAMS.has(p);
+  });
+}
+function notInertDenies(parsed, resolved) {
+  if (!parsed || resolved) return [];
+  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, "")];
+  if (!views.some((v) => GUARDED_TEXT.test(v)) || isInert(parsed)) return [];
+  const scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? "other" : "push";
+  return [deny("not-inert", notInertWhy(), scope)];
 }
 async function innerTextBad(byDialect, opts) {
   for (const r of Object.values(byDialect)) {
@@ -3503,11 +3509,10 @@ var priorId = (p) => p.repos.length === 0 && !p.nonLiteral ? "" : `|GH_REPO=${p.
 var fullId = (own) => own.ftext === own.text ? "" : `|${own.ftext}`;
 var landId = (shape, at2, own, prior) => `${shape.kind}|${shape.pr}|${shape.sha}${shape.shaBad ? "!" : ""}|${whereId(at2)}${shape.kind === "merge" ? `|${own.ftext}${priorId(prior)}` : ""}`;
 var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
-function shapesOf(raw, tool, parsed, astOnly = false) {
+function shapesOf(raw, tool, parsed) {
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every(isTextOnlyCommand);
-  const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every((c) => docAppendReadable(c, tool));
   const docAst = !PR_NUMBER_IN_TEXT_RE.test(raw) && docAppendByAst(parsed, tool, raw);
   const out3 = [];
   const pwshTool = tool === "PowerShell";
@@ -3520,7 +3525,7 @@ function shapesOf(raw, tool, parsed, astOnly = false) {
   };
   let created = false;
   const exempt = textOnly || docAst;
-  const astItems = astOnly ? astItemsOf(parsed, raw, exempt, text) : [];
+  const astItems = astItemsOf(parsed, raw, exempt, text);
   const heldItems = /* @__PURE__ */ new Set();
   const astHolds = (s, create) => {
     const sq = squashed(s);
@@ -3539,30 +3544,28 @@ function shapesOf(raw, tool, parsed, astOnly = false) {
       const prior = priorOf(view, reads.map((r) => r.masked), from);
       const tail = quoteOpenAt(view, from, pwshTool) ? "" : rawTail(view.slice(from));
       for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
-        const found = astOnly ? astHolds(s, false).flatMap((i) => i.shape ? [i.shape] : []) : landShapesOf(s, textOnly || docAst || docReadable && isDocAppend(seg), seg, tail, pwshTool);
+        const found = astHolds(s, false).flatMap((i) => i.shape ? [i.shape] : []);
         for (const shape of found) {
           for (const own of owns) for (const at2 of wheres) add({ ...shape, at: at2, ...own, prior }, landId(shape, at2, own, prior));
         }
       }
-      const heldCreates = astOnly ? astHolds(seg, true) : [];
-      if (astOnly ? heldCreates.length === 0 : !isPrOpenText(seg)) continue;
+      const heldCreates = astHolds(seg, true);
+      if (heldCreates.length === 0) continue;
       created = true;
       const held = heldCreates.find((h) => h.read?.bad) ?? heldCreates[0];
       for (const own of owns) for (const at2 of wheres) add({ kind: "create", pr: null, at: at2, ...own, prior, tail, pwsh: pwshTool, ...held?.read ? { read: held.read } : {} }, `create|${whereId(at2)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
     }
   }
-  if (astOnly) {
-    const loose = astItems.filter((i) => i.create !== true && i.shape && !heldItems.has(i));
-    if (loose.length > 0) {
-      const view = views[0];
-      const masked = maskQuoted(view, "Bash");
-      for (const i of loose) for (const at2 of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
-        add({ ...i.shape, at: at2, text: view, mtext: masked, ftext: view, fmtext: masked, prior: NO_PRIOR, pwsh: pwshTool }, `loose|${i.shape?.kind}|${i.shape?.pr}|${whereId(at2)}|${i.sq}`);
-      }
+  const loose = astItems.filter((i) => i.create !== true && i.shape && !heldItems.has(i));
+  if (loose.length > 0) {
+    const view = views[0];
+    const masked = maskQuoted(view, "Bash");
+    for (const i of loose) for (const at2 of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
+      add({ ...i.shape, at: at2, text: view, mtext: masked, ftext: view, fmtext: masked, prior: NO_PRIOR, pwsh: pwshTool }, `loose|${i.shape?.kind}|${i.shape?.pr}|${whereId(at2)}|${i.sq}`);
     }
   }
-  const looseCreate = astOnly ? astItems.filter((i) => i.create === true) : [];
-  if (!created && (astOnly ? looseCreate.length > 0 : isPrOpenCommand(text))) {
+  const looseCreate = astItems.filter((i) => i.create === true);
+  if (!created && looseCreate.length > 0) {
     const view = views[0];
     const masked = maskQuoted(view, "Bash");
     const read = looseCreate.find((i) => i.read?.bad)?.read ?? looseCreate[0]?.read;
@@ -3572,7 +3575,7 @@ function shapesOf(raw, tool, parsed, astOnly = false) {
   }
   const withMergesAndCreates = withAstCreates(withAstMerges(out3, parsed, pwshTool), parsed, pwshTool);
   const seenLand = new Set(withMergesAndCreates.filter((s) => s.kind === "land").map((s) => `${s.pr}|${s.sha}`));
-  const lands = (astOnly ? astLandShapes(parsed, raw, exempt, text, pwshTool) : []).filter((s) => {
+  const lands = astLandShapes(parsed, raw, exempt, text, pwshTool).filter((s) => {
     const k = `${s.pr}|${s.sha}`;
     if (seenLand.has(k)) return false;
     seenLand.add(k);
@@ -3826,15 +3829,9 @@ var CREATE_SHORT_BOOL = "dwef";
 var CREATE_SHORT_VALUE = "tbFlarmpHBRT";
 var API_CREATE_KEYS = /* @__PURE__ */ new Set(["head", "base", "title", "body", "draft", "maintainer_can_modify", "issue"]);
 var API_BOOL = /* @__PURE__ */ new Set(["--paginate", "--slurp", "--silent", "--verbose", "-i", "--include"]);
-var CLI_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
-var API_CMD_RE = /\bgh\s+api\b/i;
 var NOT_LITERAL_RE = /%[^%\s]+%/;
 var BAD = (why) => ({ bad: why, heads: [], bases: [] });
-function cliCreateRead(args, pwsh) {
-  const words = pairedWords(args, pwsh);
-  if (words === null) return BAD("an unpaired quote");
-  return cliCreateOfWords(words);
-}
+var NO_READ = BAD("the parser gave no read for this create");
 function cliCreateOfWords(words) {
   const heads = [];
   const bases = [];
@@ -3866,11 +3863,6 @@ function headAndBase(heads, bases) {
   if (named.some((v) => NOT_LITERAL_RE.test(v))) return BAD("a base value that is not a literal");
   return { bad: null, heads: [...new Set(heads)], bases: [...new Set(named)] };
 }
-function apiCreateRead(rest, pwsh) {
-  const words = pairedWords(rest, pwsh);
-  if (words === null) return BAD("an unpaired quote");
-  return apiCreateOfWords(words);
-}
 function apiCreateOfWords(words) {
   const heads = [];
   const bases = [];
@@ -3894,18 +3886,6 @@ function apiCreateOfWords(words) {
   }
   return headAndBase(heads, bases);
 }
-function createRead(text, pwsh = false) {
-  const cli = CLI_CREATE_RE.exec(text);
-  const api = API_CMD_RE.exec(text);
-  const isCli = cli !== null && (api === null || cli.index < api.index);
-  const m = isCli ? cli : api;
-  if (m === null) return BAD("the create can only be read with its quotes deleted");
-  if (!GH_PREFIX_OK.test(text.slice(0, m.index))) return BAD("the gh call is run by another program (a wrapper such as bash -c, pwsh -Command or cmd /c), which reads the words again");
-  const rest = text.slice(m.index + m[0].length);
-  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"), pwsh)) return BAD(CREATE_CHAR_WHY);
-  return isCli ? cliCreateRead(rest, pwsh) : apiCreateRead(rest, pwsh);
-}
-var CREATE_CHAR_WHY = "a character whose effect this gate cannot read the same way in bash and PowerShell (outside quotes only letters, digits, - _ . / = : and spaces; no $, backtick or backslash in double quotes; no redirect, &, non-ASCII or CR)";
 var createBadWhy = (dir, why) => `the head or base of this create cannot be read as gh reads it in ${dir}: ${why}. Name the head and base once, in the plain form: gh pr create --head <branch> --base <base> ..., or gh api .../pulls -X POST -f head=<branch> -f base=<base> .... A body made by $(...) or a heredoc is refused: pass it as a file with --body-file <path> or -F body=@<path>, with forward slashes in the path. ${PLAIN_WAY_OUT}`;
 function readBranch(named, deps, dir) {
   if (named) return named.replace(/^[^:\s]+:/, "");
@@ -4113,7 +4093,7 @@ function judgeCreate(s, deps, dir, cmd) {
   const route = routeOf(deps, dir, cmd);
   if (route === "app") return judgeAppCreate(s.tail ?? s.ftext ?? s.text, s.pwsh === true, deps, dir, cmd, s.read);
   if (route === "foreign") return deny("repo-foreign", goThereWhy(cmd.repo));
-  const cr = s.read ?? createRead(s.tail ?? s.text, s.pwsh === true);
+  const cr = s.read ?? NO_READ;
   if (cr.bad !== null) return deny("head-unresolved", createBadWhy(dir, cr.bad));
   if (cr.heads.length > 1) return deny("head-unresolved", createBadWhy(dir, `two head values (${cr.heads.join(", ")}); gh takes the last`));
   const branch = readBranch(cr.heads[0] ?? null, deps, dir);
@@ -4159,7 +4139,7 @@ function appCreate(text, pwsh, deps, dir, cmd, read) {
   return coveredCall(deps, dir, (place) => appCreateIn(text, pwsh, deps, dir, cmd, place, read));
 }
 function appCreateIn(text, pwsh, deps, dir, cmd, place, read) {
-  const cr = read ?? createRead(text, pwsh);
+  const cr = read ?? NO_READ;
   if (cr.bad !== null) return deny("head-unresolved", createBadWhy(dir, cr.bad));
   const heads = cr.heads;
   if (heads.length > 1) return deny("head-unresolved", appManyHeadsWhy(dir, heads));
@@ -4662,7 +4642,8 @@ function judgeCommand(input, deps, notes, denies = []) {
   if (capOverrideDeny(input, deps)) denies.push(deny("cap-override", CAP_WHY));
   for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
-  const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed, deps.astOnly === true);
+  for (const d of parserUnavailableDenies(deps.parsed, cmd.text, !deps.parsed && coveredAmong(deps, [cwd]) !== null)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));
   const pushes = shapes.filter((s) => s.kind === "push");
@@ -4696,6 +4677,7 @@ function judgeCommand(input, deps, notes, denies = []) {
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   for (const d of ghFlagFirstDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
+  for (const d of notInertDenies(deps.parsed, shapes.length > 0)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   return denies;
 }
 function subagentDeny(shapes, deps, cwd, shell) {
@@ -4828,10 +4810,10 @@ var out2 = (extra) => JSON.stringify({ hookSpecificOutput: { hookEventName: "Pre
 var denyOut = (reason) => out2({ permissionDecision: "deny", permissionDecisionReason: reason });
 var warnLead = (scope) => scope === "app-push" ? "this push in an app folder has no tap from Dave; it would be blocked in block mode." : `this command would be blocked when ${FLAG_OF[scope]} is true.`;
 var warnOut = (text, scope = "other", tail = "") => out2({ additionalContext: `WARNING (decision-gate, warn mode): ${warnLead(scope)} ${text.replace(/^BLOCKED \(decision-gate\): /, "")}${tail}` });
-function gatedScopes(input, app = false) {
+function gatedScopes(input, app = false, parsed) {
   const tool = input.tool_name || input.tool || "";
   if (WRITE_TOOLS.has(tool)) return /* @__PURE__ */ new Set(["other"]);
-  const shapes = catchShapes(input);
+  const shapes = catchShapes(input, parsed);
   const scopes = new Set((shapes ?? []).map(scopeOf));
   if (app && (scopes.size > 0 || shapes === null)) scopes.add("app-push");
   return scopes;
@@ -4898,7 +4880,7 @@ function unjudgeable(input, deps, thrown, found = []) {
     } catch {
       return d.hard === true;
     }
-  }) ?? catchIntentDeny(input);
+  }) ?? catchIntentDeny(input, deps.parsed);
   if (prior) {
     try {
       logGuardDecision(HOOK, input, "deny", prior.pattern);
@@ -4906,7 +4888,7 @@ function unjudgeable(input, deps, thrown, found = []) {
     }
     return denyOut(prior.reason);
   }
-  const scopes = gatedScopesSafe(input, appPush);
+  const scopes = gatedScopesSafe(input, appPush, deps.parsed);
   if (storeWriteCall(input, deps)) scopes.add("other");
   if (scopes.size === 0) return "{}";
   const raw = gone ? err.message : String(err?.message ?? err).slice(0, 160);
@@ -4914,23 +4896,23 @@ function unjudgeable(input, deps, thrown, found = []) {
   const hint = gone ? "Run the command from a folder that exists." : "Run the command again. If it keeps failing, ask Dave.";
   const why = `could not verify Dave's tap (${detail}). ${hint}`;
   const holdsPush = !app && scopes.has("push") && (gone || !pushFoldersUnregistered(input, deps));
-  const live = holdsPush || app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
+  const live = holdsPush || app && hardAppCall(input, deps.parsed) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? "deny" : "warn", "cwd-missing");
-  if (holdsPush && !(app && hardAppCall(input)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
+  if (holdsPush && !(app && hardAppCall(input, deps.parsed)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
     const again = gone ? "Run the push again from a folder that exists." : "Run the push again. If it fails again, ask Dave.";
     return denyOut(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
   }
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : scopes.has("app-push") ? "app-push" : "push");
 }
-var gatedScopesSafe = (input, app = false) => {
+var gatedScopesSafe = (input, app = false, parsed) => {
   try {
-    return gatedScopes(input, app);
+    return gatedScopes(input, app, parsed);
   } catch {
     return /* @__PURE__ */ new Set();
   }
 };
-function catchIntentDeny(input) {
-  const shapes = catchShapes(input);
+function catchIntentDeny(input, parsed) {
+  const shapes = catchShapes(input, parsed);
   if (shapes === null) return null;
   const none = deny("none", "", "push");
   for (const s of shapes) {
@@ -4940,11 +4922,11 @@ function catchIntentDeny(input) {
   }
   return null;
 }
-function hardAppCall(input) {
+function hardAppCall(input, parsed) {
   try {
     const cmd = readCommand(input);
     if (cmd.kind !== "command") return false;
-    const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === "push");
+    const pushes = shapesOf(cmd.text, cmd.tool, parsed).filter((s) => s.kind === "push");
     if (input.agent_id && pushes.length > 0) return true;
     if (rawVerdict(cmd.text, cmd.tool)?.kind === "unsafe") return true;
     return pushes.some(({ push: p }) => p !== void 0 && (p.force || p.unsafeOpt || p.repoOpt || p.oBundle || p.widerOpt !== null));
@@ -4952,11 +4934,11 @@ function hardAppCall(input) {
     return Boolean(input.agent_id);
   }
 }
-function catchShapes(input) {
+function catchShapes(input, parsed) {
   const cmd = readCommand(input);
   if (cmd.kind !== "command") return [];
   try {
-    return shapesOf(cmd.text, cmd.tool);
+    return shapesOf(cmd.text, cmd.tool, parsed);
   } catch {
     return null;
   }
@@ -4966,7 +4948,7 @@ function pushUnderLiveRoot(input, deps) {
     const scope = deps.tapScope;
     const cmd = readCommand(input);
     if (!scope || cmd.kind !== "command") return false;
-    const pushes = catchShapes(input)?.filter((s) => s.kind === "push") ?? null;
+    const pushes = catchShapes(input, deps.parsed)?.filter((s) => s.kind === "push") ?? null;
     if (pushes?.length === 0) return false;
     const reg = scope.registry();
     const cwd = input.cwd || process.cwd();
@@ -4984,7 +4966,7 @@ function pushFoldersUnregistered(input, deps) {
     const scope = deps.tapScope;
     const cmd = readCommand(input);
     if (!scope || cmd.kind !== "command") return false;
-    const pushes = catchShapes(input)?.filter((s) => s.kind === "push");
+    const pushes = catchShapes(input, deps.parsed)?.filter((s) => s.kind === "push");
     if (!pushes || pushes.length === 0) return false;
     const reg = scope.registry();
     if (reg.state !== "ok") return false;
@@ -5150,13 +5132,16 @@ export {
   decide,
   docAppendByAst,
   handle,
+  isInert,
   isLandLabel,
   isMergeNowLabel,
   isOpenPrLabel,
   isPushOnlyLabel,
   isShipLabel,
   makeGit,
+  notInertDenies,
   parseErrorDenies,
+  parserUnavailableDenies,
   pushShapesOf,
   realDeps,
   scriptRunnerDenies,

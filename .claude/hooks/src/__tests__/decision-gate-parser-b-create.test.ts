@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decisionKey, decisionRecord, offerWrite } from '../shared/decisions-store.js';
 import { astCreates, decide, withParsed, type Deps } from '../decision-gate.js';
+import { decideParsed } from './helpers/parse-first.js';
 
 vi.setConfig({ testTimeout: 60000 });
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -62,9 +63,9 @@ const input = (command: string, tool = 'Bash') => ({ tool_name: tool, tool_input
 const patternOf = (d: ReturnType<typeof decide>): string => (d.action === 'deny' ? d.pattern : 'allow');
 async function both(command: string, tool = 'Bash'): Promise<{ oldP: string; newP: string; parsed: boolean }> {
   const inp = input(command, tool);
-  const oldP = patternOf(decide(inp, deps()));
+  const oldP = patternOf(await decideParsed(inp, deps()));
   const withP = await withParsed(JSON.stringify(inp), deps());
-  return { oldP, newP: patternOf(decide(inp, withP)), parsed: withP.parsed !== undefined };
+  return { oldP, newP: patternOf(await decideParsed(inp, withP)), parsed: withP.parsed !== undefined };
 }
 const C = 'gh pr create';
 
@@ -103,7 +104,8 @@ describe('port step 3: create head and base from the parser words', () => {
     openTap('feat/x');
     for (const c of [`${C} --head feat/x --base main --title t --body "$(cat notes.md)"`, `${C} --head feat/x --body="$(cat notes.md)"`, `gh api repos/${REPO}/pulls -X POST -f head=feat/x -f base=main -f body="$(cat notes.md)"`]) {
       const r = await both(c);
-      expect(r.oldP, `old ${c}`).toBe('head-unresolved');
+      // C2b (class B): the old side now reads with a parse too; main with a parse gives this answer, the hand reader is retired.
+      expect(r.oldP, `old ${c}`).toBe('allow');
       expect(r.newP, `new ${c}`).toBe('allow');
     }
   });
@@ -114,8 +116,11 @@ describe('port step 3: create head and base from the parser words', () => {
   it('C5: a redirect after the call no longer hides the head (named cost removal)', async () => {
     openTap('feat/x');
     const r = await both(`${C} --head feat/x --base main 2>&1`);
-    expect(r.oldP).toBe('head-unresolved');
+    // C2b (class B): the old side now reads with a parse too; main with a parse gives this answer, the hand reader is retired.
+    expect(r.oldP).toBe('allow');
     expect(r.newP).toBe('allow');
+    const untapped = await both(`${C} --head feat/z --base main 2>&1`);
+    expect(untapped.newP, 'paired: no tap for feat/z').toBe('open-pr');
   });
   it('C6: text that only names a create stays allowed both ways', async () => {
     for (const c of [`echo "${C} --head feat/x"`, `git commit -m "then ${C}"`]) {
@@ -133,7 +138,8 @@ describe('port step 3: create head and base from the parser words', () => {
   it('C8: a text the parser cannot read is a deny on both paths; the old path names head-unresolved, the new path parse-error (C1, F1)', async () => {
     openTap('feat/x');
     const r = await both(`${C} --head feat/x --title "open`);
-    expect(r.oldP).toBe('head-unresolved');
+    // C2b (class C): the old side now reads with a parse too, so both sides name parse-error.
+    expect(r.oldP).toBe('parse-error');
     expect(r.newP).toBe('parse-error');
   });
   it("C8b (PB-2 shape, with the parse passed in): a PowerShell doubled single quote head='it''s' is the branch it's, not its", async () => {

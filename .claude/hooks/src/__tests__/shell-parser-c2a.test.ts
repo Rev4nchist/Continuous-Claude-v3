@@ -62,26 +62,27 @@ function tap(step: Step, key: string, head: string, label: string): void {
 const landTap = (n: number) => tap('land', `${REPO}#${n}`, HEAD, 'Land now (Recommended)');
 const input = (command: string, tool = 'Bash') => ({ tool_name: tool, tool_input: { command }, cwd: '/repo', session_id: 'c2a' });
 const patternOf = (d: ReturnType<typeof decide>): string => (d.action === 'deny' ? d.pattern : 'allow');
-/** The verdict of the parser path alone (astOnly) with the real parse of the text. */
+/** The verdict of the parser path with the real parse of the text. Since C2b it is the only path: the hand reader and the astOnly seam are gone. */
 async function ast(command: string, tool = 'Bash'): Promise<string> {
   const inp = input(command, tool);
   const withP = await withParsed(JSON.stringify(inp), deps());
-  return patternOf(decide(inp, { ...withP, astOnly: true }));
+  return patternOf(decide(inp, withP));
 }
-/** The verdict of the hand reader alone (no parse), as main decides when the parse is missing. */
-const hand = (command: string, tool = 'Bash'): string => patternOf(decide(input(command, tool), deps()));
-/** The verdict of main as it runs in production: the real parse, the hand reader on (the union). The baseline of the parity rows. */
-async function prod(command: string, tool = 'Bash'): Promise<string> {
-  const inp = input(command, tool);
-  return patternOf(decide(inp, await withParsed(JSON.stringify(inp), deps())));
-}
-/** Parity: wherever main denies, the parser path alone denies too (the gate of C2a: no deny to allow). The pattern name may differ. */
-async function asStrict(command: string, tool = 'Bash'): Promise<void> {
-  const p = await prod(command, tool);
-  const a = await ast(command, tool);
-  if (p !== 'allow') expect(a, `main denies ${command} as ${p}`).not.toBe('allow');
-}
+/** The verdict with no parse at all (the parser absent): a text that names a guarded call is denied parser-unavailable since C2b (F1-3). */
+const noParse = (command: string, tool = 'Bash'): string => patternOf(decide(input(command, tool), deps()));
 const M = 'gh pr merge';
+/**
+ * The texts of the parity rows that the C2a union ALLOWED (read on the RED head 65175236 with the same taps, 11-26). Before C2b `asStrict` asserted a deny
+ * only where main denied; main allowed exactly these, so no assertion is made for them. The rest of the parity texts were denied by main.
+ */
+const OK_CALL = `${M} 5 --squash --match-head-commit ${HEAD}`;
+const MAIN_ALLOWED = new Set<string>([OK_CALL, `gh pr "merge" 5 --squash --match-head-commit ${HEAD}`, `bash -c '${OK_CALL}'`, `${OK_CALL} {x}`, `time ${OK_CALL}`, `${OK_CALL}\r`,
+  `gh pr\nmerge 5 --squash --match-head-commit ${HEAD}`, `cd /tmp/other-repo; gh pr\nmerge 5 --squash --match-head-commit ${HEAD}`]);
+/** Parity row: where the C2a union denied this text, the parser path denies it too (C2b may not turn a deny into an allow). The pattern name may differ. */
+async function asStrict(command: string, tool = 'Bash'): Promise<void> {
+  if (MAIN_ALLOWED.has(command)) return;
+  expect(await ast(command, tool), `the C2a union denied ${command}`).not.toBe('allow');
+}
 const LAND = 'scripts/github/land-pr.ps1';
 
 describe('L: the land script, every call form the corpus shows, is denied by the parser path (no tap)', () => {
@@ -111,7 +112,7 @@ describe('L: the land script, every call form the corpus shows, is denied by the
   it('LM a text that only names the script stays a mention; a comment, a PR number and a Desktop Commander tool do not', async () => {
     for (const c of [`grep -n land-pr.ps1 notes.md`, `git commit -m "docs: explain land-pr.ps1"`, `echo "pwsh -File ${LAND} -Pr 12"`]) {
       expect(await ast(c), c).toBe('allow');
-      expect(hand(c), c).toBe('allow'); // control: main allows it too
+      expect(noParse(c), c).toBe('parser-unavailable'); // control (C2b F1-3): with no parse the same text is denied, not read by hand
     }
     for (const c of [`echo x # land-pr.ps1`, `# then run land-pr.ps1`, `grep -n land-pr.ps1 notes.md -Pr 12`]) expect(await ast(c), c).not.toBe('allow');
     for (const c of [`grep -rn land-pr.ps1 docs`, `echo see ${LAND}`]) expect(await ast(c, DC), c).not.toBe('allow');
@@ -203,24 +204,22 @@ describe('LP: a late parse leaves one log row (the cost of the parser-unavailabl
   });
 });
 
-describe('CS: the astOnly seam is test-only', () => {
+describe('CS: the astOnly seam is retired (C2b) and no name of it opens a gate', () => {
   const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
   const BUILT = join(ROOT, '.claude', 'hooks', 'dist', 'decision-gate.mjs');
-  it('CS-1 the source names the seam in the Deps type and its three uses only, and never reads it from the environment', () => {
+  it('CS-1 the source no longer names the seam, and no line reads an AST switch from the environment or the payload', () => {
     const src = readFileSync(join(ROOT, '.claude', 'hooks', 'src', 'decision-gate.ts'), 'utf8');
-    const uses = src.split('\n').filter((l) => /\bastOnly\b/.test(l) && !/^\s*(?:\/\/|\*|\/\*)/.test(l));
-    expect(uses.length, uses.join('\n')).toBeGreaterThan(0);
-    // No line that names the seam reads the environment, a file, the payload or the settings: it comes from a test's Deps only.
-    for (const l of uses) expect(l, l).not.toMatch(/process\.env|\benv\b|readFile|JSON\.parse|\binput\b|settings|routerFlag/);
+    expect(src).not.toMatch(/\bastOnly\b/);
     expect(src).not.toMatch(/process\.env\.[A-Z0-9_]*AST[A-Z0-9_]*/);
     expect(src).not.toMatch(/env\[\s*['"][A-Z0-9_]*AST/);
-    expect(src).not.toMatch(/tool_input[^\n]*astOnly|astOnly[^\n]*tool_input/);
   });
-  it('CS-2 the built hook with every name of the seam set in the environment still runs the hand reader (a grep that names a merge is denied)', () => {
+  // A control, not a proof of retirement: an untapped merge is denied with or without the old selector, so no result here tells the two paths apart.
+  // The retirement itself is proved by CS-1 (the source no longer names the seam).
+  it('CS-2 (control) the built hook with every old name of the seam set in the environment and the payload still denies a merge with no tap', () => {
     if (!existsSync(BUILT)) return; // the built hook is part of the PR; a checkout without a build has nothing to run
     const env: NodeJS.ProcessEnv = { ...process.env, ASTONLY: '1', AST_ONLY: '1', CCV3_AST_ONLY: '1', C2_PROTO: '1', DECISION_GATE_AST_ONLY: '1', STEP0_MODE: 'proto' };
     delete env.VITEST;
-    const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: `grep -n "${M}" notes.md`, astOnly: true }, cwd: ROOT, session_id: 'c2a-cs2', astOnly: true });
+    const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: `${M} 5 --squash --match-head-commit ${HEAD}`, astOnly: true }, cwd: ROOT, session_id: 'c2a-cs2', astOnly: true });
     const r = spawnSync(process.execPath, [BUILT], { input: payload, encoding: 'utf8', env, timeout: 30000, cwd: ROOT });
     expect(r.stdout, r.stderr).toMatch(/"permissionDecision"\s*:\s*"deny"/);
   });

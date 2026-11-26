@@ -227,14 +227,14 @@ import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, join, posix, resolve } from 'path';
-import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
+import { joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, commandRepo, hasNonLiteralRepo, namedRepo, priorGhRepo } from './shared/checkpoint-shapes.js';
 import { answerKeyHitsOf } from './shared/answer-paths-door.js';
 import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared/decisions-store.js';
 import { countIdsIn, loadHoldoutIds } from './shared/holdout-ids.js';
 import { CALL_START, GLOBAL_OPT, PATH_PREFIX, VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
-import { blankInertQuotes, docAppendReadable, isDocAppend, isTextOnlyCommand } from './shared/inert-quotes.js';
+import { blankInertQuotes, isTextOnlyCommand } from './shared/inert-quotes.js';
 import { maskQuoted, quotedSpans } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
@@ -298,12 +298,6 @@ export interface Deps {
    * everything else is decided by the hand reader, as on main.
    */
   parseLate?: string;
-  /**
-   * PR C2a, a TEST-ONLY seam: the hand views of shapesOf are skipped, so a test sees what the parser path alone decides (the state C2b makes real).
-   * Only a test sets it. main() builds Deps without it, and nothing reads it from the environment, the payload, the settings or the decisions config.
-   * Row CS-1 pipes a payload into the built hook with every env var that names it set, and the hook still runs the hand reader. C2b removes the field.
-   */
-  astOnly?: boolean;
   /** The parser seams of withParsed (a provider for the bash parse or the pwsh walker). Absent: the real parsers. */
   parseOpts?: ParseOpts;
   /** The time budget of the whole parse in withParsed, in ms (CodeRabbit CLI run 1 finding 2). Absent: 7000. Past it there is no `parsed` and the hand reader decides. */
@@ -713,6 +707,8 @@ interface Shape {
   kind: 'create' | 'land' | 'merge' | 'store' | 'push'; pr: string | null; sha?: string | null; push?: PushShape;
   /** Round 3 C2, a merge only: the head cannot be read as gh reads it (two values, a non-literal, an unknown flag, an unpaired quote). */
   shaBad?: true;
+  /** A merge only: the raw backstop found this occurrence and the parse did not list it (a wrapper such as env or timeout). Its head stays unread whatever a parsed merge of the same PR says. */
+  rawOnly?: true;
   /** Create, land and merge: where the shape runs. */
   at?: Where;
   /**
@@ -750,28 +746,6 @@ const SEGMENT_RE = /[;&|\r\n]+/;
 
 const lastArg = (args: string, re: RegExp): string | null => re.exec(args)?.[1] ?? null;
 
-/** The land and merge shapes of ONE command segment (no && ; | or newline in it), with the PR and the sha read from that segment alone. */
-function landShapesOf(seg: string, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh = false): Shape[] {
-  const out: Shape[] = [];
-  // The land script pins its own head: its sha is read as before (round 3 C2 changes only the merge read).
-  const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
-  // textOnly: the whole command only prints or reads text (isTextOnlyCommand), so the script name is a mention. A mention that names a PR (-Pr 12) stays a land shape.
-  const pr = lastArg(seg, LAND_PR_RE);
-  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out.push({ kind: 'land', pr, sha });
-  const cli = MERGE_CLI_RE.exec(seg);
-  // Round 3 C2: the head is read from the RAW segment, whose quotes are what gh gets. When only the quotes-deleted view shows the merge
-  // (quotes inside its words), the head cannot be read whole: fail closed. Seat ruling A: the words are read from the raw TAIL (the text up
-  // to the next ; | newline or && outside quotes), not from the segment cut at every & and CR, so a head after 2>&1 is read too.
-  // Seat delta q3: the gh word must open its command (only literal NAME=value settings before it), else another program parses the words.
-  const opens = (m: RegExpExecArray | null): RegExpExecArray | null => (m !== null && GH_PREFIX_OK.test(tail.slice(0, m.index)) ? m : null);
-  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? opens(TAIL_CLI_RE.exec(tail)) : null;
-  if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...(rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD) });
-  const api = MERGE_API_RE.exec(seg);
-  const rawApi = MERGE_API_RE.exec(rawSeg) ? opens(TAIL_API_RE.exec(tail)) : null;
-  if (api && !GET_RE.test(api[0])) out.push({ kind: 'merge', pr: api[1], ...(rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD) });
-  return out;
-}
-const TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
 /** True when `pos` of `text` is inside a quote: single quotes are literal; the escape is \ in bash, a backtick in PowerShell. */
 function quoteOpenAt(text: string, pos: number, pwsh: boolean): boolean {
   const esc = pwsh ? '`' : '\\';
@@ -785,12 +759,6 @@ function quoteOpenAt(text: string, pos: number, pwsh: boolean): boolean {
   }
   return q !== '';
 }
-/**
- * Seat delta q3: what may stand before the gh word of a merge or create in its own command: nothing, or literal NAME=value settings
- * (GH_REPO=..., GH_PROMPT_DISABLED=1). A wrapper (bash -c, pwsh -Command, cmd /c, a here-string, sudo, time) runs gh through another parser.
- */
-const GH_PREFIX_OK = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_\-./:]*\s+)*$/;
-const TAIL_API_RE = /\bgh\s+api\b[\s\S]*$/i;
 
 /**
  * Seat ruling A: the raw text of the command that starts `text`, up to the first ; | newline or && OUTSIDE quotes (bash and PowerShell
@@ -837,32 +805,6 @@ function pairedWords(text: string, pwsh = false): string[] | null {
   return words;
 }
 
-/**
- * Round 3 C2 and C1, seat ruling A (an allowlist, not a list of bad characters): true unless every character of the text is one whose
- * effect the reader models the same way in bash and PowerShell. A character not on the list makes the head unread.
- *   - outside quotes: ASCII letters, digits, space, tab, - _ . / = : and the two quote characters. An @ inside a word (body=@file) is
- *     literal in both shells; an @ that opens a word is a PowerShell splat, so it is refused.
- *   - inside '...': printable ASCII and a newline (literal in both shells; '' splits the same in both).
- *   - inside "...": the same but $, a backtick and a backslash (bash expands $ and escapes with \, PowerShell with a backtick).
- *   - anywhere: a non-ASCII character (a curly quote is a quote for PowerShell, NBSP and the Unicode spaces are word characters for bash),
- *     a CR, \v and \f. An open quote at the end is refused by pairedWords, the next step of every reader.
- * So a redirect (< >), a lone &, # (a comment), $, a backtick, a backslash, a glob, a brace, a paren and a comma outside quotes are refused.
- */
-function unmodelled(text: string, pwsh = false): boolean {
-  let q = '';
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    // Seat item 3: a backslash next to a quote is refused in every tool (a native program can read \" as an escaped quote).
-    if (ch === '\\' && (QUOTE_CH.has(text[i - 1] ?? '') || QUOTE_CH.has(text[i + 1] ?? ''))) return true;
-    if (q === "'") { if (ch === "'") q = ''; else if (!QUOTED_OK.test(ch)) return true; continue; }
-    if (q === '"') { if (ch === '"') q = ''; else if (!QUOTED_OK.test(ch) || '$`'.includes(ch) || (ch === '\\' && !pwsh)) return true; continue; }
-    if (ch === "'" || ch === '"') { q = ch; continue; }
-    if (ch === '@' && i > 0 && !/[ \t]/.test(text[i - 1])) continue;
-    if (ch === '\\' && pwsh) continue; // seat item 3: literal in PowerShell; the Bash tool refuses it (an escape)
-    if (!BARE_OK.test(ch)) return true;
-  }
-  return false;
-}
 const QUOTE_CH = new Set(["'", '"']);
 const BARE_OK = /^[A-Za-z0-9 \t\-_./=:]$/;
 const QUOTED_OK = /^[\x20-\x7E\n]$/;
@@ -906,16 +848,6 @@ function clusterOf(w: string, next: string | undefined, bools: string, values: s
   return { used: 0, letter: null, value: null };
 }
 
-/**
- * `gh pr merge <args>`: the head is the value of --match-head-commit (space or =), and nothing else. Any flag outside the known set, a
- * value flag with no value or an unpaired quote is bad: the reader cannot tell what gh will take as the head. Positionals are not read.
- */
-function cliMergeHead(args: string, pwsh = false): MergeHead {
-  if (unmodelled(args, pwsh)) return UNREAD_HEAD;
-  const words = pairedWords(args, pwsh);
-  if (words === null) return UNREAD_HEAD;
-  return cliHeadOfWords(words);
-}
 /** The head of `gh pr merge` from its already-split words (the hand reader pairs quotes first; the parser gives the words). */
 function cliHeadOfWords(words: string[]): MergeHead {
   const heads: string[] = [];
@@ -955,18 +887,6 @@ function apiWord(w: string, next: string | undefined, endpointSeen: boolean): Ap
   return { bad: `a word this gate does not know on the api call (${w})` };
 }
 
-/**
- * `gh api .../pulls/<n>/merge <args>`: the head is the value of the `sha` field, and nothing else. The value of another field
- * (commit_message="sha=...") is never read. An unknown word, --input or an unpaired quote is bad.
- */
-function apiMergeHead(text: string, pwsh = false): MergeHead {
-  const rest = text.replace(/^[\s\S]*?\bapi\b/, '');
-  // gh's own placeholders ({owner}, {repo}, {branch}) hold no comma, so bash does not expand them, and they make one word in PowerShell.
-  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return UNREAD_HEAD;
-  const words = pairedWords(rest, pwsh);
-  if (words === null) return UNREAD_HEAD;
-  return apiHeadOfWords(words);
-}
 /** The head of `gh api .../merge` from its already-split words after `api`. */
 function apiHeadOfWords(words: string[]): MergeHead {
   const heads: string[] = [];
@@ -1068,6 +988,8 @@ function withAstMerges(shapes: Shape[], parsed: Deps['parsed'], pwsh: boolean): 
   };
   for (const s of shapes) {
     if (s.kind !== 'merge') { out.push(s); continue; }
+    // CLI run 2 of C2b: a raw-only occurrence keeps its unread head. A shared PR number does not say the parse saw this occurrence.
+    if (s.rawOnly) { push(s); continue; }
     const h = heads(s.pr);
     if (!h) { push(s); continue; }
     const { shaBad: _drop, ...rest } = s;
@@ -1093,15 +1015,24 @@ const SAFE_API_KEY = new Set(['title', 'body', 'draft', 'maintainer_can_modify']
 const API_PULLS_PATH = /\/pulls\/?(?:\?.*)?$/i;
 const NOT_LITERAL_WORD = 'a word that is not a literal (a variable or a substitution outside a title or body value)';
 
-function createCallOf(call: Call): AstCreate | null {
+/**
+ * C2b: a heredoc or here-string that belongs to this call or sits inside its words (`--body "$(cat <<EOF ... EOF)"`), read from the parser's own heredoc and body
+ * nodes. A literal `<<` in a quoted title is no heredoc. A heredoc the parser cannot place (no call start) counts for every call: fail closed.
+ */
+function callHoldsHeredoc(call: Call, r: ParseResult | undefined): boolean {
+  if (!r) return false;
+  const inCall = (at: number): boolean => at >= call.start && at <= call.end;
+  return r.heredocs.some((h) => h.callStart === null || inCall(h.callStart)) || r.bodies.some(([from, to]) => from >= call.start && to <= call.end);
+}
+function createCallOf(call: Call, r?: ParseResult): AstCreate | null {
   const w = call.words;
   if (w.length < 3 || progName(w[0].lit) !== 'gh') return null;
   const sub = (i: number): string => (w[i]?.lit ?? '').toLowerCase();
   const cwdBefore = call.cwdBefore ?? [];
   const text = w.map((x) => x.raw).join(' ');
   if (sub(1) === 'pr' && (sub(2) === 'create' || sub(2) === 'new')) {
-    // C2a: a heredoc inside a title or body (a body that comes from another command's text) leaves the head and base unread, as the hand reader did. Main denies it (head-unresolved).
-    if (w.some((x) => x.raw.includes('<<'))) return { read: BAD('a heredoc in a title or body makes the head and base unreadable'), cwdBefore, text };
+    // C2b: a heredoc inside a title or body (a body that comes from another command's text) leaves the head and base unread, as the hand reader did. Main denies it (head-unresolved).
+    if (callHoldsHeredoc(call, r)) return { read: BAD('a heredoc in a title or body makes the head and base unreadable'), cwdBefore, text };
     const lits: string[] = [];
     for (const a of w.slice(3)) {
       if (a.lit !== null) { lits.push(a.lit); continue; }
@@ -1134,7 +1065,7 @@ function createCallOf(call: Call): AstCreate | null {
 /** Every create call of the parse (every dialect it holds), nested payloads included. */
 export function astCreates(parsed: Deps['parsed']): AstCreate[] {
   if (!parsed) return [];
-  return Object.values(parsed.byDialect).flatMap((r) => (r ? r.calls : [])).flatMap((c) => { const m = createCallOf(c); return m ? [m] : []; });
+  return Object.values(parsed.byDialect).flatMap((r) => (r ? r.calls.map((c) => ({ c, r })) : [])).flatMap(({ c, r }) => { const m = createCallOf(c, r); return m ? [m] : []; });
 }
 const squashed = (t: string): string => t.replace(/[\s"'\\`]/g, '');
 
@@ -1194,7 +1125,7 @@ function astLandShapes(parsed: Deps['parsed'], raw: string, exempt: boolean, gat
   });
 }
 /**
- * The calls of the parse as segment-level facts, for the astOnly path: a hand segment that holds one of these (compared with quotes, blanks and backslashes
+ * The calls of the parse as segment-level facts, for shapesOf: a hand-cut segment that holds one of these (compared with quotes, blanks and backslashes
  * deleted) takes the parser's land, merge or create read in place of the hand regexes, and keeps its own folder, own command and earlier GH_REPO.
  */
 interface AstItem { sq: string; create?: true; read?: CreateRead; shape?: Shape }
@@ -1219,7 +1150,8 @@ function astItemsOf(parsed: Deps['parsed'], raw: string, exempt: boolean, text: 
   const extra: AstItem[] = [];
   const mergeWords = [...text.matchAll(/\bgh\s+pr\s+merge\b[^|;&\n]*/gi)];
   if (mergeWords.length > foundMerges.length && !onlyDataReaders(parsed)) {
-    for (const m of mergeWords.slice(foundMerges.length)) extra.push({ sq: squashed(m[0]), shape: { kind: 'merge', pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD } });
+    // C2b: when the counts differ the pairing by count cannot say which raw merge the parse saw, so EVERY raw merge is judged as unread (an env-prefixed merge before a tapped merge is not dropped).
+    for (const m of mergeWords) extra.push({ sq: squashed(m[0]), shape: { kind: 'merge', pr: lastArg(m[0], /(?:^|\s)["']?(\d+)(?=\s|["']|$)/), ...UNREAD_HEAD, rawOnly: true } });
   }
   const api = MERGE_API_RE.exec(text);
   if (api && !GET_RE.test(api[0]) && !foundMerges.some((m) => m.pr === api[1])) extra.push({ sq: squashed(api[0]), shape: { kind: 'merge', pr: api[1], ...UNREAD_HEAD } });
@@ -1268,14 +1200,22 @@ function docAppendCall(c: Call): boolean {
 /**
  * The whole command is PowerShell and only appends literal text to literal document files: it runs nothing, so a guarded word in the text is
  * a mention. Read from the parse (every call is an append; no redirect outside a string). The caller still keeps a PR number in the raw text
- * as a land shape. Replaces the anchored regex (isDocAppend), which stays as a fallback until the hand reader is deleted.
+ * as a land shape. C2b: the anchored regex (isDocAppend) is gone; this is the only doc-append rule.
  */
 export function docAppendByAst(parsed: Deps['parsed'], tool: string | undefined, raw: string): boolean {
   if (tool !== 'PowerShell' || !parsed || DOC_ODD_CHAR.test(raw)) return false;
   const dialects = Object.keys(parsed.byDialect);
   const r = parsed.byDialect.pwsh;
   if (dialects.length !== 1 || !r || r.errors.length > 0 || r.calls.length === 0) return false;
-  return !hasBareRedirect(parsed.text, r) && r.calls.every(docAppendCall);
+  // C2b: a lane-log write often starts with a folder change or a clock read. Those leaders run nothing that names a guarded call, so they
+  // do not break the exemption, but at least one call must be an append (a lone Set-Location is no doc append).
+  return !hasBareRedirect(parsed.text, r) && r.calls.every((c) => docAppendCall(c) || docLeaderCall(c)) && r.calls.some(docAppendCall);
+}
+/** A call that only moves the folder or reads the clock, all words literal: Set-Location (sl, cd) and Get-Date. */
+const DOC_LEADERS = new Set(['set-location', 'sl', 'cd', 'get-date']);
+function docLeaderCall(c: Call): boolean {
+  if (c.depth !== 0 || c.level !== 0 || c.nested || c.func || c.place.pipe || c.place.background) return false;
+  return DOC_LEADERS.has((c.words[0]?.lit ?? '').toLowerCase()) && c.words.every((w) => w.lit !== null);
 }
 
 // ---------- PR B port step 4: Ask B, a script runner whose code names a guarded call (Dave R1, note 63 section 5) ----------
@@ -1356,6 +1296,131 @@ export function parseErrorDenies(parsed: Deps['parsed']): Deny[] {
   const failed = results.every((r) => !r.ok || r.errors.length > 0);
   if (!failed && parsed.innerBad !== true) return [];
   return GUARDED_TEXT.test(blankQuotes(parsed.text)) ? [deny('parse-error', PARSE_ERROR_WHY)] : [];
+}
+
+// ---------- PR C2b (F1-3): no parse and a text that names a guarded call ----------
+
+/** One standalone land call and nothing else: an optional pwsh -File leader, the script path, and only -Pr N and -CleanupOnly after it. No chain, pipe, substitution or quote. */
+const STANDALONE_CLEANUP = /^\s*(?:&\s*)?(?:(?:pwsh|powershell)(?:\.exe)?\s+(?:-NoProfile\s+)?(?:-File\s+)?)?[^\s;&|<>$`'"()]*land-pr\.ps1(?:\s+(?:-Pr\s+\d+|-CleanupOnly))+\s*$/i;
+const PARSER_UNAVAILABLE_WHY = 'the parser was late, run it again. The shell parser did not answer in time (or could not run), and this text names a guarded call (a push, a create, a merge or the land script), so this gate cannot read which call runs. Run the same call again, or run the push, create or merge as its own command.';
+/**
+ * F1-3: the hand reader is gone, so a text with no parse (late, thrown or never parsed) that names a guarded call is denied. Fail closed (V7.6). A text with no
+ * guarded word is not touched: withParsed skips the parse for it, and no rule needs one.
+ */
+export function parserUnavailableDenies(parsed: Deps['parsed'], text: string, covered = false): Deny[] {
+  if (parsed) return [];
+  if (STANDALONE_CLEANUP.test(text) && /-Pr\s+\d+/i.test(text) && CLEANUP_RE.test(text)) return []; // a post-merge cleanup is the recovery the land deny names
+  // Two views of the text (seat ruling 11-26): the quote-blanked one (a quoted payload reads as words) and the quote-removed one (a splice such as g""h pr merge
+  // reads as gh pr merge, as the shell does). A guarded call in either view is denied. Fail closed, no parse to tell which.
+  const views = [blankQuotes(text), text.replace(/['"`]/g, '')];
+  if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
+  // The rank is the one the call has with a parse: a create, land or merge denies (scope other), a push keeps the push flag (CodeRabbit run 1, same rule as not-inert).
+  const scope: Scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? 'other' : 'push';
+  // CLI run 2 of C2b: in a covered app the flag is read from the home copy only, as for every app create or merge.
+  const d = deny('parser-unavailable', PARSER_UNAVAILABLE_WHY, scope);
+  return [covered ? { ...d, homeFlags: true } : d];
+}
+
+// ---------- PR C2b (Policy P, Dave's decision 11-26): a guarded text the parse does not resolve is allowed only when it is inert ----------
+
+/** The deny-class part of GUARDED_TEXT: a create, a land or a merge (the push alternatives left out). */
+const DENY_CLASS_TEXT = /\bgh\s+pr\s+(?:create|new|merge)\b|\bgh\s+api\b[^\n]*\/(?:pulls|merge)\b|\bland-pr\.ps1\b/i;
+/**
+ * The data list (seat word 11-26): the programs that only print, search or write text. One named constant, lower case program names as progName gives them.
+ * Two forms are on the list by their arguments, see onDataList: git commit with -m or -F, and node lane.mjs say or note.
+ * Set-Location and Get-Date are added to the seat's list for the two doc-append rows D1 and D2 (a lane-log append after a folder change or a clock read, rows of the
+ * seat's own list of rows that allow): neither runs anything.
+ */
+const INERT_PROGRAMS: ReadonlySet<string> = new Set(['echo', 'printf', 'grep', 'rg', 'select-string', 'set-content', 'add-content', 'out-file', 'write-output', 'write-host', 'set-location', 'get-date', 'cat', 'head', 'tail', 'ls', 'get-content', 'cd', 'gc', 'sc', 'ac', 'sls', 'sl']);
+type ParsedCall = ParseResult['calls'][number];
+type ParsedWord = ParsedCall['words'][number];
+/** The literal of a word, or null when it has none or a variable gave it (viaVar): a name the gate cannot read. Parse-tree fields only. */
+const litOf = (w: ParsedWord | undefined): string | null => (w !== undefined && w.lit !== null && w.viaVar === undefined ? w.lit : null);
+function onDataList(c: ParsedCall): boolean {
+  const p = progName(litOf(c.words[0]));
+  if (p === null) return false; // no program name: a substitution, a variable, a call operator on one
+  if (INERT_PROGRAMS.has(p)) return true;
+  const args = c.words.slice(1);
+  if (p === 'git') return args.some((a) => a.lit === 'commit') && args.some((a) => a.lit !== null && (/^-[a-zA-Z]*[mF]$/.test(a.lit) || a.lit === '--message' || a.lit === '--file'));
+  if (p === 'node') return /(^|[\\/])lane\.mjs$/.test(litOf(args[0]) ?? '') && ['say', 'note'].includes(litOf(args[1]) ?? '');
+  return false;
+}
+/** Programs whose quoted arguments are data (seat 11-26, Dave's tap): gh, git, and the prompt or payload carriers claude -p, curl -d and ntn. The call itself is still judged by the parsed rules. */
+const DATA_ARG_PROGRAMS: ReadonlySet<string> = new Set(['gh', 'git', 'claude', 'curl', 'ntn', 'timeout', 'env']);
+/** Programs that only read or search: text in their words goes nowhere, unlike echo or Set-Content, which carry it out. A mention they hold is accounted. */
+const READ_ONLY_PROGRAMS: ReadonlySet<string> = new Set(['grep', 'rg', 'select-string', 'sls', 'cat', 'head', 'tail', 'ls', 'get-content', 'gc', 'cd', 'set-location', 'sl', 'get-date']);
+/** Programs that run text they are given (a stdin, a file, a variable): beside a guarded mention they are never inert. A shell with a parsed -c payload is transparent instead. Interpreters with inline code (node -e) are not here: a mention-free program text is the script-runner rule's, and a mention in it is a held mention that no accounted call holds. */
+const RUNS_TEXT_PROGRAMS: ReadonlySet<string> = new Set(['bash', 'sh', 'dash', 'zsh', 'pwsh', 'powershell', 'cmd', 'iex', 'invoke-expression', 'eval', 'source', '.', 'xargs', 'invoke-command', 'icm', 'start-process', 'saps']);
+/**
+ * The deny reason of not-inert. Built from the sets that decide, so the text cannot drift from them: INERT_PROGRAMS (the data list), READ_ONLY_PROGRAMS and DATA_ARG_PROGRAMS
+ * (the accounted callers) and RUNS_TEXT_PROGRAMS (what makes a text strict).
+ */
+const listOf = (set: ReadonlySet<string>): string => [...set].join(', ');
+const notInertWhy = (): string =>
+  'this text names a guarded call (a push, a create, a merge or the land script), the parse does not read one as a command, and the command is not plain data handling. It is allowed only when every call is a data program (' +
+  listOf(INERT_PROGRAMS) + '; git commit with -m or -F; node lane.mjs say or note), or when every guarded word sits in the arguments of an accounted program (' +
+  listOf(DATA_ARG_PROGRAMS) + ', or a read-only program: ' + listOf(READ_ONLY_PROGRAMS) + ') and nothing in the command runs text (' + listOf(RUNS_TEXT_PROGRAMS) +
+  '). A script that is written here and run here is not data. Run the guarded call as its own command, or take the guarded text out of this command.';
+const LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
+/**
+ * A call the parse reads and that the rules judged not guarded (no shape): a gh or git call (a GET, a dry run, a stash, a log search), or a call that only names the land
+ * script as one of its own literal words (cat, Get-Content, a search of it). The guarded words in it are arguments of a program the parse resolved, so the parsed rules
+ * already decided it; the inert test is for the text that no call accounts for (an off-list program's string, a run of a written file).
+ */
+function readsNamedCall(c: ParsedCall): boolean {
+  if (c.nested?.status === 'parsed') return true; // sh -c, pwsh -Command, eval: the parse flattened the payload into calls of its own, each judged here
+  const p = progName(litOf(c.words[0]));
+  if (p !== null && (DATA_ARG_PROGRAMS.has(p) || READ_ONLY_PROGRAMS.has(p))) return true;
+  return c.words.some((w) => LAND_SCRIPT_WORD.test(litOf(w) ?? ''));
+}
+/**
+ * Inert: the parse is clean (no error, no inner text that does not parse) and EVERY call of it, nested ones included, is a literal program on the data list
+ * or a gh, git or land-script-naming call that the parsed rules already judged (readsNamedCall).
+ * One function over the parse and no list of run shapes: a pipe into an off-list program, a non-literal program word, an alias definition and a run of a written file
+ * are each a call that is off the list. A text with no parse is never inert.
+ */
+export function isInert(parsed: Deps['parsed']): boolean {
+  if (!parsed || parsed.innerBad === true) return false;
+  const all: ParsedCall[] = [];
+  for (const r of Object.values(parsed.byDialect)) {
+    if (!r) continue;
+    if (!r.ok || r.errors.length > 0) return false;
+    all.push(...r.calls);
+  }
+  if (all.every((c) => onDataList(c) || readsNamedCall(c))) return true;
+  return heldByAccountedCalls(parsed, all);
+}
+/**
+ * The mention test: every guarded mention of the text sits in the literal words of a gh, git, land-script-naming or read-only call (readsNamedCall), whose own rules the
+ * parse already applied, and no call of the text runs text (RUNS_TEXT_PROGRAMS, a shell with no parsed payload, a program word no literal gives). A mention held by
+ * echo, Set-Content or an off-list program, or by no call at all (a heredoc body), is not accounted: the whole text must then be inert call by call.
+ */
+function heldByAccountedCalls(parsed: NonNullable<Deps['parsed']>, all: ParsedCall[]): boolean {
+  const global = new RegExp(GUARDED_TEXT.source, 'gi');
+  const count = (t: string): number => (t.match(global) ?? []).length;
+  const wordsOf = (c: ParsedCall): string => c.words.map((w) => w.lit ?? w.raw ?? '').join(' ');
+  const rawCount = Math.max(count(parsed.text), count(blankQuotes(parsed.text)), count(parsed.text.replace(/['"`]/g, '')));
+  const holders = all.filter((c) => count(wordsOf(c)) > 0);
+  if (holders.length === 0 || !holders.every(readsNamedCall)) return false;
+  if (holders.reduce((n, c) => n + count(wordsOf(c)), 0) < rawCount) return false; // a mention that no call holds
+  return !all.some((c) => {
+    if (c.nested?.status === 'parsed') return false;
+    const p = progName(litOf(c.words[0]));
+    return p === null || RUNS_TEXT_PROGRAMS.has(p);
+  });
+}
+/**
+ * The raw-text backstop of V7.6, as Dave decided it. When the raw text names a guarded call and the parse does NOT resolve one (`resolved` false: no push, create, land or
+ * merge shape), the command is allowed only when it is inert, else denied at the rank of the named call: a create, land or merge denies (scope other), a text that only
+ * names a push keeps the push flag, so it warns while decisions.enforcePush is unset. No exemption by script name. When the parse resolves a guarded call, the parsed
+ * rules decide (tap, head, rank). A text with no parse is parserUnavailableDenies. Known limit: a hidden second call beside a resolved one is judged by the parsed rules only.
+ */
+export function notInertDenies(parsed: Deps['parsed'], resolved: boolean): Deny[] {
+  if (!parsed || resolved) return [];
+  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, '')]; // raw, quote-blanked, quote-removed (a splice such as g""h)
+  if (!views.some((v) => GUARDED_TEXT.test(v)) || isInert(parsed)) return [];
+  const scope: Scope = views.some((v) => DENY_CLASS_TEXT.test(v)) ? 'other' : 'push';
+  return [deny('not-inert', notInertWhy(), scope)];
 }
 
 /** True when a shell program of the text has a string argument that names a guarded call and does not parse as that shell. Part of the parse budget. */
@@ -2182,7 +2247,7 @@ const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => whe
  * and not in the other, so each mask can hide a cd the other shows). The readings (bash, pwsh, quotes deleted) are united and de-duplicated,
  * and the cds are part of the id: the same shape in two folders is two shapes. An extra shape only makes the gate stricter.
  */
-function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed'], astOnly = false): Shape[] {
+function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed']): Shape[] {
   // The words of a create, land or merge inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text. Push is read from raw below.
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [...new Set([joinContinuations(text, 'bash'), joinContinuations(text, 'pwsh')])];
@@ -2193,12 +2258,9 @@ function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed'], astOnly =
   const textOnly = (tool === 'Bash' || tool === 'PowerShell')
     && !PR_NUMBER_IN_TEXT_RE.test(raw)
     && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every(isTextOnlyCommand);
-  // Lane coord-guard-text-false-refusal: a segment that only APPENDS text to one literal .md, .txt or .log file (isDocAppend) runs nothing, so the script name in its
-  // value is a mention too. The whole command must read plain under every reading, and a PR number anywhere in the raw text keeps the land shape (as above).
-  // Any other segment of the same command is judged alone, as before. Seat ruling 2026-11-23 12:48 CST: single-quoted values only, no new tokenizer.
-  const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw)
-    && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every((c) => docAppendReadable(c, tool));
-  // Port step 4 (PB-7): the AST rule. It widens the exemption only (double-quoted and here-string values, an ac or sc alias, a target set by one assignment).
+  // Lane coord-guard-text-false-refusal: a command that only APPENDS literal text to one literal .md, .txt or .log file runs nothing, so the script name in its
+  // value is a mention too. C2b: read from the parse alone (docAppendByAst: the append calls, with a Set-Location or Get-Date leader allowed). A PR number
+  // anywhere in the raw text keeps the land shape (as above).
   const docAst = !PR_NUMBER_IN_TEXT_RE.test(raw) && docAppendByAst(parsed, tool, raw);
   const out: Shape[] = [];
   // Seat item 3: the tool decides one fact of the merge and create readers (a backslash is literal in PowerShell).
@@ -2206,9 +2268,9 @@ function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed'], astOnly =
   const seen = new Set<string>();
   const add = (shape: Shape, id: string): void => { if (!seen.has(id)) { seen.add(id); out.push(shape); } };
   let created = false;
-  // C2a: the mention exemption of the hand reader, and the parser's land, merge and create calls (used in place of the hand regexes when astOnly).
+  // The mention exemption (a text that only prints or appends text), and the parser's land, merge and create calls.
   const exempt = textOnly || docAst;
-  const astItems = astOnly ? astItemsOf(parsed, raw, exempt, text) : [];
+  const astItems = astItemsOf(parsed, raw, exempt, text);
   const heldItems = new Set<AstItem>();
   const astHolds = (s: string, create: boolean): AstItem[] => { const sq = squashed(s); const hit = astItems.filter((i) => (i.create === true) === create && sq.includes(i.sq)); hit.forEach((i) => heldItems.add(i)); return hit; };
   for (const view of views) {
@@ -2221,34 +2283,32 @@ function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed'], astOnly =
       // another program may run: its tail is empty, so every head read from it is unread.
       const tail = quoteOpenAt(view, from, pwshTool) ? '' : rawTail(view.slice(from));
       for (const s of new Set([seg, squashQuotes(seg)])) {
-        const found = astOnly ? astHolds(s, false).flatMap((i) => (i.shape ? [i.shape] : [])) : landShapesOf(s, textOnly || docAst || (docReadable && isDocAppend(seg)), seg, tail, pwshTool);
+        const found = astHolds(s, false).flatMap((i) => (i.shape ? [i.shape] : []));
         for (const shape of found) {
           for (const own of owns) for (const at of wheres) add({ ...shape, at, ...own, prior }, landId(shape, at, own, prior));
         }
       }
-      const heldCreates = astOnly ? astHolds(seg, true) : [];
-      if (astOnly ? heldCreates.length === 0 : !isPrOpenText(seg)) continue;
+      const heldCreates = astHolds(seg, true);
+      if (heldCreates.length === 0) continue;
       created = true;
-      // astOnly: the parser's read of the create in this segment; a read that cannot be trusted (bad) wins over another one in the same segment.
+      // The parser's read of the create in this segment; a read that cannot be trusted (bad) wins over another one in the same segment.
       const held = heldCreates.find((h) => h.read?.bad) ?? heldCreates[0];
       for (const own of owns) for (const at of wheres) add({ kind: 'create', pr: null, at, ...own, prior, tail, pwsh: pwshTool, ...(held?.read ? { read: held.read } : {}) }, `create|${whereId(at)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
     }
   }
-  // astOnly: a merge or land item that no single segment holds (a word split over lines: `gh pr` + newline + `merge`) is judged in the cwd and in every folder of the cds.
-  if (astOnly) {
-    const loose = astItems.filter((i) => i.create !== true && i.shape && !heldItems.has(i));
-    if (loose.length > 0) {
-      const view = views[0];
-      const masked = maskQuoted(view, 'Bash');
-      for (const i of loose) for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
-        add({ ...(i.shape as Shape), at, text: view, mtext: masked, ftext: view, fmtext: masked, prior: NO_PRIOR, pwsh: pwshTool }, `loose|${i.shape?.kind}|${i.shape?.pr}|${whereId(at)}|${i.sq}`);
-      }
+  // A merge or land item that no single segment holds (a word split over lines: `gh pr` + newline + `merge`) is judged in the cwd and in every folder of the cds.
+  const loose = astItems.filter((i) => i.create !== true && i.shape && !heldItems.has(i));
+  if (loose.length > 0) {
+    const view = views[0];
+    const masked = maskQuoted(view, 'Bash');
+    for (const i of loose) for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
+      add({ ...(i.shape as Shape), at, text: view, mtext: masked, ftext: view, fmtext: masked, prior: NO_PRIOR, pwsh: pwshTool }, `loose|${i.shape?.kind}|${i.shape?.pr}|${whereId(at)}|${i.sq}`);
     }
   }
   // A create that no single segment shows (`gh pr` + newline + `create`): judge the whole text in the cwd and in every folder of the cds.
-  // astOnly: the same fallback for a create item that no single segment holds (the parser's read, or a bad read for a split word, goes with it).
-  const looseCreate = astOnly ? astItems.filter((i) => i.create === true) : [];
-  if (!created && (astOnly ? looseCreate.length > 0 : isPrOpenCommand(text))) {
+  // The parser's create item that no single segment holds (its read, or a bad read for a split word, goes with it).
+  const looseCreate = astItems.filter((i) => i.create === true);
+  if (!created && looseCreate.length > 0) {
     const view = views[0];
     const masked = maskQuoted(view, 'Bash');
     const read = looseCreate.find((i) => i.read?.bad)?.read ?? looseCreate[0]?.read;
@@ -2257,11 +2317,9 @@ function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed'], astOnly =
     }
   }
   const withMergesAndCreates = withAstCreates(withAstMerges(out, parsed, pwshTool), parsed, pwshTool);
-  // C2a: a parser land shape that the hand reader already has (same PR, same sha) adds nothing; any other one is one more shape.
+  // A parser land shape with the same PR and sha as one already held adds nothing.
   const seenLand = new Set(withMergesAndCreates.filter((s) => s.kind === 'land').map((s) => `${s.pr}|${s.sha}`));
-  // Union mode (the hand reader runs): the hand land shapes already cover every form of the corpus, so the parser adds none (no new deny, no regression of a
-  // hand exemption such as a doc append next to a Set-Location). The parser land shapes decide alone under astOnly, the state C2b makes real.
-  const lands = (astOnly ? astLandShapes(parsed, raw, exempt, text, pwshTool) : []).filter((s) => { const k = `${s.pr}|${s.sha}`; if (seenLand.has(k)) return false; seenLand.add(k); return true; });
+  const lands = astLandShapes(parsed, raw, exempt, text, pwshTool).filter((s) => { const k = `${s.pr}|${s.sha}`; if (seenLand.has(k)) return false; seenLand.add(k); return true; });
   return [...withMergesAndCreates, ...lands, ...pushShapesOf(raw, tool)];
 }
 
@@ -2661,18 +2719,11 @@ const CREATE_SHORT_BOOL = 'dwef';
 const CREATE_SHORT_VALUE = 'tbFlarmpHBRT';
 const API_CREATE_KEYS = new Set(['head', 'base', 'title', 'body', 'draft', 'maintainer_can_modify', 'issue']);
 const API_BOOL = new Set(['--paginate', '--slurp', '--silent', '--verbose', '-i', '--include']);
-const CLI_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
-const API_CMD_RE = /\bgh\s+api\b/i;
 /** A value that is not a literal: cmd.exe %VAR% (the shell forms are caught by unmodelled). */
 const NOT_LITERAL_RE = /%[^%\s]+%/;
 const BAD = (why: string): CreateRead => ({ bad: why, heads: [], bases: [] });
+const NO_READ: CreateRead = BAD('the parser gave no read for this create');
 
-/** `gh pr create|new <args>`: every word is a known flag or a value of one. -F is --body-file. */
-function cliCreateRead(args: string, pwsh: boolean): CreateRead {
-  const words = pairedWords(args, pwsh);
-  if (words === null) return BAD('an unpaired quote');
-  return cliCreateOfWords(words);
-}
 /** The head and base of `gh pr create|new` from its already-split words. */
 function cliCreateOfWords(words: string[]): CreateRead {
   const heads: string[] = [];
@@ -2709,12 +2760,6 @@ function headAndBase(heads: string[], bases: string[]): CreateRead {
   return { bad: null, heads: [...new Set(heads)], bases: [...new Set(named)] };
 }
 
-/** `gh api .../pulls <args>`: fields only from the known keys; an unknown word, --input, a head or base from a file (=@) or head_repo is bad. */
-function apiCreateRead(rest: string, pwsh: boolean): CreateRead {
-  const words = pairedWords(rest, pwsh);
-  if (words === null) return BAD('an unpaired quote');
-  return apiCreateOfWords(words);
-}
 /** The head and base of `gh api .../pulls` from its already-split words after `api`. */
 function apiCreateOfWords(words: string[]): CreateRead {
   const heads: string[] = [];
@@ -2737,24 +2782,6 @@ function apiCreateOfWords(words: string[]): CreateRead {
   return headAndBase(heads, bases);
 }
 
-/**
- * The head and base a create names, from the raw tail of its command (rawTail: up to the next ; | newline or && outside quotes, so a
- * head after 2>&1 is in it). The reader is the one of the EARLIER gh call: a quoted title that names gh pr new does not make an api create
- * a CLI one. A create that only the quotes-deleted view shows, or a text the allowlist refuses (unmodelled), is bad. gh's
- * {owner}/{repo}/{branch} placeholders are allowed, as in the merge read.
- */
-function createRead(text: string, pwsh = false): CreateRead {
-  const cli = CLI_CREATE_RE.exec(text);
-  const api = API_CMD_RE.exec(text);
-  const isCli = cli !== null && (api === null || cli.index < api.index);
-  const m = isCli ? cli : api;
-  if (m === null) return BAD('the create can only be read with its quotes deleted');
-  if (!GH_PREFIX_OK.test(text.slice(0, m.index))) return BAD('the gh call is run by another program (a wrapper such as bash -c, pwsh -Command or cmd /c), which reads the words again');
-  const rest = text.slice(m.index + m[0].length);
-  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return BAD(CREATE_CHAR_WHY);
-  return isCli ? cliCreateRead(rest, pwsh) : apiCreateRead(rest, pwsh);
-}
-const CREATE_CHAR_WHY = 'a character whose effect this gate cannot read the same way in bash and PowerShell (outside quotes only letters, digits, - _ . / = : and spaces; no $, backtick or backslash in double quotes; no redirect, &, non-ASCII or CR)';
 const createBadWhy = (dir: string, why: string): string =>
   `the head or base of this create cannot be read as gh reads it in ${dir}: ${why}. Name the head and base once, in the plain form: gh pr create --head <branch> --base <base> ..., or gh api .../pulls -X POST -f head=<branch> -f base=<base> .... A body made by $(...) or a heredoc is refused: pass it as a file with --body-file <path> or -F body=@<path>, with forward slashes in the path. ${PLAIN_WAY_OUT}`;
 
@@ -3064,7 +3091,7 @@ function judgeCreate(s: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision 
   if (route === 'app') return judgeAppCreate(s.tail ?? s.ftext ?? s.text!, s.pwsh === true, deps, dir, cmd, s.read);
   if (route === 'foreign') return deny('repo-foreign', goThereWhy(cmd.repo!));
   // G4: the CCv3 head is read from the base cut (any & ends it), as in base main 7a0e2f34. Round 3 C1: from one known place, once.
-  const cr = s.read ?? createRead(s.tail ?? s.text!, s.pwsh === true);
+  const cr = s.read ?? NO_READ;
   if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
   if (cr.heads.length > 1) return deny('head-unresolved', createBadWhy(dir, `two head values (${cr.heads.join(', ')}); gh takes the last`));
   const branch = readBranch(cr.heads[0] ?? null, deps, dir);
@@ -3125,8 +3152,8 @@ function appCreate(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: Cm
 function appCreateIn(text: string, pwsh: boolean, deps: Deps, dir: string, cmd: CmdRepo, place: Place, read?: CreateRead): Decision {
   // PR 566 round 2 (a): gh takes the LAST of a repeated --head, the gate reads the first. Two different heads: no tap can name the one
   // that opens, so the create is denied before any head is read.
-  // Round 3 C1: the head and base are read from one known place, once (createRead); a create the reader cannot read whole is denied.
-  const cr = read ?? createRead(text, pwsh);
+  // Round 3 C1: the head and base are read from one known place, once (the parser's read); a create the parser did not read is denied.
+  const cr = read ?? NO_READ;
   if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
   const heads = cr.heads;
   if (heads.length > 1) return deny('head-unresolved', appManyHeadsWhy(dir, heads));
@@ -3896,7 +3923,9 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   // PR C1 (F1): a text that does not parse, or a shell string inside it that does not parse, and names a guarded call. Only adds a deny.
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
-  const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed, deps.astOnly === true);
+  // PR C2b (F1-3): no parse and a guarded call named in the text.
+  for (const d of parserUnavailableDenies(deps.parsed, cmd.text, !deps.parsed && coveredAmong(deps, [cwd]) !== null)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== 'push')) denies.push(subagentDeny(shapes, deps, cwd, shell));
@@ -3938,6 +3967,8 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   for (const d of rawPushDenies(cmd.text, cmd.tool, deps, cwd, shell, Boolean(input.agent_id))) add(d);
   for (const d of hiddenGhDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
   for (const d of ghFlagFirstDenies(cmd.text, cmd.tool, deps, cwd, shell)) add(d);
+  // PR C2b (Policy P, Dave's decision 11-26): a guarded text the parse does not resolve is allowed only when inert. Last, so a more precise deny above is the one shown.
+  for (const d of notInertDenies(deps.parsed, shapes.length > 0)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   return denies;
 }
 /**
@@ -4135,10 +4166,10 @@ const warnOut = (text: string, scope: Scope = 'other', tail = ''): string => out
  * The scopes of the gated shapes of the tool call, empty when it is not gated. Cheap, no git: it decides what an internal error does.
  * `app`: the error came from a covered folder (AppScopeError), so app-push joins the scopes. gatedScopes cannot learn coverage itself.
  */
-function gatedScopes(input: HookInput, app = false): Set<Scope> {
+function gatedScopes(input: HookInput, app = false, parsed?: Deps['parsed']): Set<Scope> {
   const tool = input.tool_name || input.tool || '';
   if (WRITE_TOOLS.has(tool)) return new Set<Scope>(['other']);
-  const shapes = catchShapes(input);
+  const shapes = catchShapes(input, parsed);
   const scopes = new Set<Scope>((shapes ?? []).map(scopeOf));
   // Fix round 6 (item 3): a reader throw in a covered folder is a push off the list: scope app-push, the tap path.
   if (app && (scopes.size > 0 || shapes === null)) scopes.add('app-push');
@@ -4213,12 +4244,12 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown, found: Deny[
   // being judged still gets its git-free intent check (an origin push AFTER the throwing member). The first deny that decide() would return
   // wins (a hard deny, or one whose flag is on). After the error log: a git crash behind a deny is still an error row for the doctor.
   const prior = found.find((d) => { try { return hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags); } catch { return d.hard === true; } })
-    ?? catchIntentDeny(input);
+    ?? catchIntentDeny(input, deps.parsed);
   if (prior) {
     try { logGuardDecision(HOOK, input, 'deny', prior.pattern); } catch { /* the log never blocks */ }
     return denyOut(prior.reason);
   }
-  const scopes = gatedScopesSafe(input, appPush);
+  const scopes = gatedScopesSafe(input, appPush, deps.parsed);
   // Reviewer-2 item 4: a store write no longer returns before the shapes, so a throw there must not drop its scope.
   if (storeWriteCall(input, deps)) scopes.add('other');
   if (scopes.size === 0) return '{}';
@@ -4233,17 +4264,17 @@ function unjudgeable(input: HookInput, deps: Deps, thrown: unknown, found: Deny[
   // Seat 2026-11-14 20:00 (Dave's D1: the gate acts in live registered projects): a push whose folders are all resolved and all outside every
   // registry root (CCv3 included) keeps the old result. A missing cwd, a CCv3 root, or a folder the path test cannot place denies.
   const holdsPush = !app && scopes.has('push') && (gone || !pushFoldersUnregistered(input, deps));
-  const live = holdsPush || (app && hardAppCall(input)) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
+  const live = holdsPush || (app && hardAppCall(input, deps.parsed)) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK, input, live ? 'deny' : 'warn', 'cwd-missing');
   // Seat 2026-11-14 (read of 2276351b): a push denied only because its check threw says so, so a session does not read it as a policy block.
-  if (holdsPush && !(app && hardAppCall(input)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
+  if (holdsPush && !(app && hardAppCall(input, deps.parsed)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
     const again = gone ? 'Run the push again from a folder that exists.' : 'Run the push again. If it fails again, ask Dave.';
     return denyOut(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
   }
   return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has('other') ? 'other' : scopes.has('app-push') ? 'app-push' : 'push');
 }
 
-const gatedScopesSafe = (input: HookInput, app = false): Set<Scope> => { try { return gatedScopes(input, app); } catch { return new Set(); } };
+const gatedScopesSafe = (input: HookInput, app = false, parsed?: Deps['parsed']): Set<Scope> => { try { return gatedScopes(input, app, parsed); } catch { return new Set(); } };
 
 /**
  * Item 18, the catch: the git-free intent of every push shape of the call (intentDeny: a subagent push, a literal origin or parcadei
@@ -4251,8 +4282,8 @@ const gatedScopesSafe = (input: HookInput, app = false): Set<Scope> => { try { r
  * read, so this reads them all from the text alone. Returns the first hard deny, else null. A reader throw returns null (gatedScopes and
  * hardAppCall decide then, as before).
  */
-function catchIntentDeny(input: HookInput): Deny | null {
-  const shapes = catchShapes(input);
+function catchIntentDeny(input: HookInput, parsed?: Deps['parsed']): Deny | null {
+  const shapes = catchShapes(input, parsed);
   if (shapes === null) return null;
   const none = deny('none', '', 'push');
   for (const s of shapes) {
@@ -4269,11 +4300,11 @@ function catchIntentDeny(input: HookInput): Deny | null {
  * verdict of push-unsafe or a push no shape reads. A hard kind that needs git (push config, two push URLs) cannot be seen here. A throw
  * while reading counts as hard (fail closed; the caller reaches here only for a gated call in a covered folder).
  */
-function hardAppCall(input: HookInput): boolean {
+function hardAppCall(input: HookInput, parsed?: Deps['parsed']): boolean {
   try {
     const cmd = readCommand(input);
     if (cmd.kind !== 'command') return false;
-    const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === 'push');
+    const pushes = shapesOf(cmd.text, cmd.tool, parsed).filter((s) => s.kind === 'push');
     if (input.agent_id && pushes.length > 0) return true;
     if (rawVerdict(cmd.text, cmd.tool)?.kind === 'unsafe') return true;
     return pushes.some(({ push: p }) => p !== undefined && (p.force || p.unsafeOpt || p.repoOpt || p.oBundle || p.widerOpt !== null));
@@ -4283,11 +4314,11 @@ function hardAppCall(input: HookInput): boolean {
   }
 }
 /** Fix round 6 (item 3): the shapes of a shell call for the catch, or null when the reader throws (gatedScopes, pushUnderLiveRoot). */
-function catchShapes(input: HookInput): Shape[] | null {
+function catchShapes(input: HookInput, parsed?: Deps['parsed']): Shape[] | null {
   const cmd = readCommand(input);
   if (cmd.kind !== 'command') return [];
   try {
-    return shapesOf(cmd.text, cmd.tool);
+    return shapesOf(cmd.text, cmd.tool, parsed);
   } catch {
     return null;
   }
@@ -4303,7 +4334,7 @@ function pushUnderLiveRoot(input: HookInput, deps: Deps): boolean {
     const cmd = readCommand(input);
     if (!scope || cmd.kind !== 'command') return false;
     // A reader throw (null) is a push off the list: the cwd is its folder.
-    const pushes = catchShapes(input)?.filter((s) => s.kind === 'push') ?? null;
+    const pushes = catchShapes(input, deps.parsed)?.filter((s) => s.kind === 'push') ?? null;
     if (pushes?.length === 0) return false;
     const reg = scope.registry();
     const cwd = input.cwd || process.cwd();
@@ -4330,7 +4361,7 @@ function pushFoldersUnregistered(input: HookInput, deps: Deps): boolean {
     const scope = deps.tapScope;
     const cmd = readCommand(input);
     if (!scope || cmd.kind !== 'command') return false;
-    const pushes = catchShapes(input)?.filter((s) => s.kind === 'push');
+    const pushes = catchShapes(input, deps.parsed)?.filter((s) => s.kind === 'push');
     if (!pushes || pushes.length === 0) return false;
     const reg = scope.registry();
     if (reg.state !== 'ok') return false;

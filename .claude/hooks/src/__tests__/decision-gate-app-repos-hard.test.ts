@@ -21,7 +21,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRegistry } from '../shared/tap-scope.js';
-import { decide, handle, type Decision, type Deps } from '../decision-gate.js';
+import { decide, type Decision, type Deps } from '../decision-gate.js';
+import { decideParsed, handleParsed } from './helpers/parse-first.js';
 
 const TREE = 't'.repeat(40);
 const HEAD = 'a'.repeat(40);
@@ -96,71 +97,71 @@ function deps(f: Partial<Folder> = {}, config: string = OFF): Deps {
   };
 }
 const bash = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: APP, session_id: 's-hard', ...extra });
-const verdict = (input: object, f?: Partial<Folder>): Decision => decide(input, deps(f));
+const verdict = async (input: object, f?: Partial<Folder>): Promise<Decision> => await decideParsed(input, deps(f));
 const unsafe = { action: 'deny', pattern: 'push-unsafe', scope: 'app-push' };
 const unresolved = { action: 'deny', pattern: 'push-target-unresolved', scope: 'app-push' };
 /** The hook stdout of a call with the flag false. */
-const hookOut = (input: object, f?: Partial<Folder>): { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string } =>
-  JSON.parse(handle(JSON.stringify(input), deps(f))).hookSpecificOutput ?? {};
+const hookOut = async (input: object, f?: Partial<Folder>): Promise<{ permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string }> =>
+  JSON.parse(await handleParsed(JSON.stringify(input), deps(f))).hookSpecificOutput ?? {};
 
 describe('Dave 11-13 "Hard denies always deny": enforceAppPush false keeps every hard deny of an app push', () => {
   // Change that breaks H1 to H8: let decide() consult the enforceAppPush flag for every app-push deny (the round-5 head did).
-  it('H1a a force flag: git push --force up topic is push-unsafe', () => {
-    expect(verdict(bash('git push --force up topic'))).toMatchObject(unsafe);
+  it('H1a a force flag: git push --force up topic is push-unsafe', async () => {
+    expect(await verdict(bash('git push --force up topic'))).toMatchObject(unsafe);
   });
-  it('H1b a force letter in a short bundle: git push -fu up topic is push-unsafe', () => {
-    expect(verdict(bash('git push -fu up topic'))).toMatchObject(unsafe);
+  it('H1b a force letter in a short bundle: git push -fu up topic is push-unsafe', async () => {
+    expect(await verdict(bash('git push -fu up topic'))).toMatchObject(unsafe);
   });
-  it('H1c a + refspec: git push up +topic is push-unsafe', () => {
-    expect(verdict(bash('git push up +topic'))).toMatchObject(unsafe);
+  it('H1c a + refspec: git push up +topic is push-unsafe', async () => {
+    expect(await verdict(bash('git push up +topic'))).toMatchObject(unsafe);
   });
-  it('H1d a force spelling inside sh -c (the raw rule) is push-unsafe', () => {
-    expect(verdict(bash("sh -c 'git push -f up topic'"))).toMatchObject(unsafe);
+  it('H1d a force spelling inside sh -c (the raw rule) is push-unsafe', async () => {
+    expect(await verdict(bash("sh -c 'git push -f up topic'"))).toMatchObject(unsafe);
   });
-  it('H1e an unsafe long-option prefix: git push --mirr up topic is push-unsafe', () => {
-    expect(verdict(bash('git push --mirr up topic'))).toMatchObject(unsafe);
+  it('H1e an unsafe long-option prefix: git push --mirr up topic is push-unsafe', async () => {
+    expect(await verdict(bash('git push --mirr up topic'))).toMatchObject(unsafe);
   });
-  it('H2 a subagent push is denied subagent', () => {
-    expect(verdict(bash('git push up topic', { agent_id: 'sub1' }))).toMatchObject({ action: 'deny', pattern: 'subagent', scope: 'app-push' });
+  it('H2 a subagent push is denied subagent', async () => {
+    expect(await verdict(bash('git push up topic', { agent_id: 'sub1' }))).toMatchObject({ action: 'deny', pattern: 'subagent', scope: 'app-push' });
   });
-  it('H3a a mirror config (remote.up.mirror true) is push-unsafe', () => {
-    expect(verdict(bash('git push up topic'), { config: 'remote.up.mirror true' })).toMatchObject(unsafe);
+  it('H3a a mirror config (remote.up.mirror true) is push-unsafe', async () => {
+    expect(await verdict(bash('git push up topic'), { config: 'remote.up.mirror true' })).toMatchObject(unsafe);
   });
-  it('H3b a + push config (remote.up.push +refs/heads/topic:refs/heads/topic) is push-unsafe', () => {
-    expect(verdict(bash('git push up topic'), { config: 'remote.up.push +refs/heads/topic:refs/heads/topic' })).toMatchObject(unsafe);
+  it('H3b a + push config (remote.up.push +refs/heads/topic:refs/heads/topic) is push-unsafe', async () => {
+    expect(await verdict(bash('git push up topic'), { config: 'remote.up.push +refs/heads/topic:refs/heads/topic' })).toMatchObject(unsafe);
   });
-  it('H4a push config that widens the push (push.followtags true) is push-target-unresolved', () => {
-    expect(verdict(bash('git push up topic'), { config: 'push.followtags true' })).toMatchObject(unresolved);
+  it('H4a push config that widens the push (push.followtags true) is push-target-unresolved', async () => {
+    expect(await verdict(bash('git push up topic'), { config: 'push.followtags true' })).toMatchObject(unresolved);
   });
-  it('H4b a command option that widens the push (--follow-tags) is push-target-unresolved', () => {
-    expect(verdict(bash('git push --follow-tags up topic'))).toMatchObject(unresolved);
+  it('H4b a command option that widens the push (--follow-tags) is push-target-unresolved', async () => {
+    expect(await verdict(bash('git push --follow-tags up topic'))).toMatchObject(unresolved);
   });
-  it('H4c a -c push key (git -c push.default=matching push) is push-target-unresolved', () => {
-    expect(verdict(bash('git -c push.default=matching push'), { pushRef: 'up/topic' })).toMatchObject(unresolved);
+  it('H4c a -c push key (git -c push.default=matching push) is push-target-unresolved', async () => {
+    expect(await verdict(bash('git -c push.default=matching push'), { pushRef: 'up/topic' })).toMatchObject(unresolved);
   });
-  it('H5 --repo is push-target-unresolved', () => {
-    expect(verdict(bash('git push --repo https://github.com/acme/other.git up topic'))).toMatchObject(unresolved);
+  it('H5 --repo is push-target-unresolved', async () => {
+    expect(await verdict(bash('git push --repo https://github.com/acme/other.git up topic'))).toMatchObject(unresolved);
   });
   // Re-pinned by fix round 6 (Dave 11-13, "Stop accidents, list the rest"): an unread push takes the tap path, so it warns here.
   // Change that breaks it: give an unread push the hard deny again.
-  it('H6a an unknown git global option before push (git -p push up topic) takes the tap path: it warns', () => {
-    expect(verdict(bash('git -p push up topic'))).toMatchObject({ action: 'allow', scope: 'app-push' });
+  it('H6a an unknown git global option before push (git -p push up topic) takes the tap path: it warns', async () => {
+    expect(await verdict(bash('git -p push up topic'))).toMatchObject({ action: 'allow', scope: 'app-push' });
   });
-  it('H6b a push no shape reads (sh -c with no force word) takes the tap path: it warns', () => {
-    expect(verdict(bash("sh -c 'git push up topic'"))).toMatchObject({ action: 'allow', scope: 'app-push' });
+  it('H6b a push no shape reads (sh -c with no force word) takes the tap path: it warns', async () => {
+    expect(await verdict(bash("sh -c 'git push up topic'"))).toMatchObject({ action: 'allow', scope: 'app-push' });
   });
-  it('H7 a short bundle with o (git push -uo x up topic) is push-target-unresolved', () => {
-    expect(verdict(bash('git push -uo x up topic'))).toMatchObject(unresolved);
+  it('H7 a short bundle with o (git push -uo x up topic) is push-target-unresolved', async () => {
+    expect(await verdict(bash('git push -uo x up topic'))).toMatchObject(unresolved);
   });
   // Not named by Dave; no tap can be tied to them, so they are no tap path. Listed for the seat.
-  it('H8a push URLs of two repos is push-urls', () => {
-    expect(verdict(bash('git push up topic'), { pushUrls: { up: [URL, 'https://github.com/acme/b.git'] } })).toMatchObject({ action: 'deny', pattern: 'push-urls', scope: 'app-push' });
+  it('H8a push URLs of two repos is push-urls', async () => {
+    expect(await verdict(bash('git push up topic'), { pushUrls: { up: [URL, 'https://github.com/acme/b.git'] } })).toMatchObject({ action: 'deny', pattern: 'push-urls', scope: 'app-push' });
   });
-  it('H8b a push after popd (position unknown) is denied', () => {
-    expect(verdict(bash('popd && git push up topic'))).toMatchObject({ action: 'deny', scope: 'app-push' });
+  it('H8b a push after popd (position unknown) is denied', async () => {
+    expect(await verdict(bash('popd && git push up topic'))).toMatchObject({ action: 'deny', scope: 'app-push' });
   });
-  it('S2 the hook prints a deny for a hard deny, and the text names no flag', () => {
-    const out = hookOut(bash('git push --force up topic'));
+  it('S2 the hook prints a deny for a hard deny, and the text names no flag', async () => {
+    const out = await hookOut(bash('git push --force up topic'));
     expect(out.permissionDecision).toBe('deny');
     expect(out.permissionDecisionReason).toMatch(/^BLOCKED \(decision-gate\): /);
     expect(out.permissionDecisionReason).not.toMatch(/enforceAppPush|enforcePush|is true|\boff\b/);
@@ -169,14 +170,14 @@ describe('Dave 11-13 "Hard denies always deny": enforceAppPush false keeps every
 
 describe('Dave 11-13: the catch (a git throw) keeps a hard deny of an app push when enforceAppPush is false', () => {
   // Change that breaks it: unjudgeable reads only the scope flags (a covered force push whose git throws then warns).
-  it('H9a a force push whose git remote -v throws: the hook denies', () => {
-    expect(hookOut(bash('git push --force up topic'), { throwOn: ['remote -v'] }).permissionDecision).toBe('deny');
+  it('H9a a force push whose git remote -v throws: the hook denies', async () => {
+    expect((await hookOut(bash('git push --force up topic'), { throwOn: ['remote -v'] })).permissionDecision).toBe('deny');
   });
-  it('H9b a subagent push whose git remote -v throws: the hook denies', () => {
-    expect(hookOut(bash('git push up topic', { agent_id: 'sub1' }), { throwOn: ['remote -v'] }).permissionDecision).toBe('deny');
+  it('H9b a subagent push whose git remote -v throws: the hook denies', async () => {
+    expect((await hookOut(bash('git push up topic', { agent_id: 'sub1' }), { throwOn: ['remote -v'] })).permissionDecision).toBe('deny');
   });
-  it('S1c a plain push whose tree read throws: the hook warns (the tap path)', () => {
-    const out = hookOut(bash('git push up main'), { throwOn: ['rev-parse main^{tree}'] });
+  it('S1c a plain push whose tree read throws: the hook warns (the tap path)', async () => {
+    const out = await hookOut(bash('git push up main'), { throwOn: ['rev-parse main^{tree}'] });
     expect(out.permissionDecision).toBeUndefined();
     expect(out.additionalContext).toMatch(/^WARNING \(decision-gate, warn mode\)/);
   });
@@ -184,23 +185,23 @@ describe('Dave 11-13: the catch (a git throw) keeps a hard deny of an app push w
 
 describe('Dave 11-13: enforceAppPush false still softens the tap path of an app push (guard pins)', () => {
   // Change that breaks it: make every app-push deny hard (the flag then does nothing).
-  it('S1a a push to a default branch with no tap warns', () => {
-    expect(verdict(bash('git push up main'))).toMatchObject({ action: 'allow', scope: 'app-push' });
-    expect(verdict(bash('git push up develop'))).toMatchObject({ action: 'allow', scope: 'app-push' });
-    const out = hookOut(bash('git push up main'));
+  it('S1a a push to a default branch with no tap warns', async () => {
+    expect(await verdict(bash('git push up main'))).toMatchObject({ action: 'allow', scope: 'app-push' });
+    expect(await verdict(bash('git push up develop'))).toMatchObject({ action: 'allow', scope: 'app-push' });
+    const out = await hookOut(bash('git push up main'));
     expect(out.permissionDecision).toBeUndefined();
     expect(out.additionalContext).toMatch(/^WARNING \(decision-gate, warn mode\)/);
     expect(out.additionalContext).not.toMatch(/enforceAppPush|enforcePush|is true/);
   });
-  it('S1b a push off the strict list (an option it does not list) with no tap warns', () => {
-    const d = verdict(bash('git push --atomic up topic'));
+  it('S1b a push off the strict list (an option it does not list) with no tap warns', async () => {
+    const d = await verdict(bash('git push --atomic up topic'));
     expect(d).toMatchObject({ action: 'allow', scope: 'app-push' });
     expect(d.action === 'allow' ? d.warn : '').toMatch(/^ship: /);
   });
-  it('the flag absent: the same tap-path push denies (the default is unchanged)', () => {
-    expect(decide(bash('git push up main'), deps({}, JSON.stringify({ decisions: { enforce: true } })))).toMatchObject({ action: 'deny', pattern: 'ship', scope: 'app-push' });
+  it('the flag absent: the same tap-path push denies (the default is unchanged)', async () => {
+    expect(await decideParsed(bash('git push up main'), deps({}, JSON.stringify({ decisions: { enforce: true } })))).toMatchObject({ action: 'deny', pattern: 'ship', scope: 'app-push' });
   });
-  it('a strict push to a branch that is no default branch passes with no line', () => {
-    expect(verdict(bash('git push up topic'))).toEqual({ action: 'allow' });
+  it('a strict push to a branch that is no default branch passes with no line', async () => {
+    expect(await verdict(bash('git push up topic'))).toEqual({ action: 'allow' });
   });
 });

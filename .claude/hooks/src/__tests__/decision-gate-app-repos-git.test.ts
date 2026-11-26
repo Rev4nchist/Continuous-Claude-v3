@@ -26,7 +26,8 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { decisionRecord, offerWrite } from '../shared/decisions-store.js';
 import { handle as ledger } from '../decision-ledger.js';
-import { decide, handle as gateHandle, realDeps } from '../decision-gate.js';
+import { handle as gateHandle, realDeps } from '../decision-gate.js';
+import { decideParsed, handleParsed, parsedDeps } from './helpers/parse-first.js';
 
 // Each row runs real git many times. Alone the slowest row takes about 2 s; in the full suite two rows took 6.1 s and 8.1 s,
 // over the 5 s default (2026-11-13, 513754c2). The limit guards against a hang, not against a slow machine.
@@ -120,11 +121,11 @@ const bash = (cwd: string, command: string, extra: Record<string, unknown> = {})
 const isolatedSpawn: NonNullable<Parameters<typeof realDeps>[0]>['spawn'] = (_cmd, args, o) =>
   spawnSync('git', args, { ...o, env: { ...cleanEnv(), GIT_CONFIG_GLOBAL: GITCONFIG, GIT_CONFIG_NOSYSTEM: '1' } });
 const deps = (opts?: Parameters<typeof realDeps>[0]) => ({ ...realDeps({ spawn: isolatedSpawn, ...opts }), home });
-const verdict = (input: object): string => {
-  const d = decide(input, deps());
+const verdict = async (input: object): Promise<string> => {
+  const d = await decideParsed(input, deps());
   return d.action === 'deny' ? `deny:${d.pattern}` : d.warn ? `warn:${d.warn.split(':')[0]}` : 'allow';
 };
-const handleGate = (input: object): string => gateHandle(JSON.stringify(input), deps());
+const handleGate = async (input: object): Promise<string> => handleParsed(JSON.stringify(input), deps());
 const clearStore = (): void => { rmSync(store(), { force: true }); };
 const tapShip = (key: string): void => {
   expect(offerWrite({ step: 'ship', key, head, tree, spec: { header: 'T', question: `Q ${key}?`, options: [{ label: 'Commit and push' }, { label: 'Stop here' }] } }).ok).toBe(true);
@@ -157,14 +158,14 @@ describe('D1 the real Deps reads the registry at LANE_REGISTRY_PATH', () => {
     expect(reg.file.replace(/\\/g, '/')).toBe(`${home}/project-registry.json`);
     expect(reg.entries.map((e) => e.key)).toContain('app-x');
   });
-  it('a covered push is denied; with LANE_REGISTRY_PATH at a missing file it passes (registry missing = not covered)', () => {
+  it('a covered push is denied; with LANE_REGISTRY_PATH at a missing file it passes (registry missing = not covered)', async () => {
     clearStore();
-    expect(verdict(bash(R.x, 'git push up feat'))).toBe('deny:ship');
+    expect(await verdict(bash(R.x, 'git push up feat'))).toBe('deny:ship');
     process.env.LANE_REGISTRY_PATH = `${home}/missing-registry.json`;
     try {
-      expect(verdict(bash(R.x, 'git push up feat'))).toBe('allow');
+      expect(await verdict(bash(R.x, 'git push up feat'))).toBe('allow');
       // Seat review 1, item 4: a missing file named by LANE_REGISTRY_PATH passes with the one notice line.
-      const out = JSON.parse(handleGate(bash(R.x, 'git push up feat')));
+      const out = JSON.parse(await handleGate(bash(R.x, 'git push up feat')));
       expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
       expect(out.hookSpecificOutput.additionalContext).toContain('missing-registry.json');
     } finally {
@@ -172,11 +173,11 @@ describe('D1 the real Deps reads the registry at LANE_REGISTRY_PATH', () => {
     }
   });
   // Seat review 1, item 4 (re-pinned; it pinned "corrupt = pass"): a registry that exists but does not parse denies outside CCv3.
-  it('a corrupt registry denies the push and names the file and the way out', () => {
+  it('a corrupt registry denies the push and names the file and the way out', async () => {
     writeFileSync(`${home}/bad-registry.json`, '{"projects": 3}');
     process.env.LANE_REGISTRY_PATH = `${home}/bad-registry.json`;
     try {
-      const out = JSON.parse(handleGate(bash(R.x, 'git push up feat')));
+      const out = JSON.parse(await handleGate(bash(R.x, 'git push up feat')));
       expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
       expect(out.hookSpecificOutput.permissionDecisionReason).toContain('bad-registry.json');
       expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/Fix the file .* or ask Dave/);
@@ -191,7 +192,7 @@ describe('K1 K2 the key: X and Y share branch, tree and head; only the repo in t
     expect(git(R.y, 'rev-parse', 'feat').stdout.trim()).toBe(head);
     expect(git(R.y, 'rev-parse', 'feat^{tree}').stdout.trim()).toBe(tree);
   });
-  it('a ship, open-pr and land tap for X licenses X only', () => {
+  it('a ship, open-pr and land tap for X licenses X only', async () => {
     clearStore();
     tapShip('acme/app-x@feat');
     expect(offerWrite({ step: 'open-pr', key: 'acme/app-x@feat', head, spec: { header: 'T', question: 'Q?', options: [{ label: 'Open draft PR' }, { label: 'Stop here' }] } }).ok).toBe(true);
@@ -200,10 +201,10 @@ describe('K1 K2 the key: X and Y share branch, tree and head; only the repo in t
     expect(decisionRecord({ step: 'land', key: 'acme/app-x#7', head, label: 'Merge now (no READY check)' })).toEqual({ ok: true });
     const create = 'gh pr create --draft --title t --body-file b.md';
     const merge = `gh pr merge 7 --squash --match-head-commit ${head}`;
-    expect([verdict(bash(R.x, 'git push up feat')), verdict(bash(R.x, create)), verdict(bash(R.x, merge))]).toEqual(['allow', 'allow', 'allow']);
-    expect([verdict(bash(R.y, 'git push up feat')), verdict(bash(R.y, create)), verdict(bash(R.y, merge))]).toEqual(['deny:ship', 'deny:open-pr', 'deny:land']);
+    expect([await verdict(bash(R.x, 'git push up feat')), await verdict(bash(R.x, create)), await verdict(bash(R.x, merge))]).toEqual(['allow', 'allow', 'allow']);
+    expect([await verdict(bash(R.y, 'git push up feat')), await verdict(bash(R.y, create)), await verdict(bash(R.y, merge))]).toEqual(['deny:ship', 'deny:open-pr', 'deny:land']);
   });
-  it('two open offers on branch feat, one CCv3 and one covered: each tap through the real ledger records only its own key', () => {
+  it('two open offers on branch feat, one CCv3 and one covered: each tap through the real ledger records only its own key', async () => {
     clearStore();
     const spec = (header: string, question: string) => ({ header, question, options: [{ label: 'Commit and push' }, { label: 'Stop here' }] });
     const ccv3 = spec('Ship', 'Commit and push feat?');
@@ -212,53 +213,53 @@ describe('K1 K2 the key: X and Y share branch, tree and head; only the repo in t
     expect(offerWrite({ step: 'ship', key: 'acme/app-x@feat', head, tree, spec: app }).ok).toBe(true);
     const answer = (q: typeof app) => ledger(JSON.stringify({ tool_name: 'AskUserQuestion', session_id: 's-app-git', tool_input: { questions: [q] }, tool_response: { answers: { [q.question]: 'Commit and push' } } }));
     expect(answer(app)).toContain('acme/app-x@feat');
-    expect(verdict(bash(R.x, 'git push up feat'))).toBe('allow');
-    expect(verdict(bash(R.cc, 'git push fork feat'))).toBe('warn:ship');
+    expect(await verdict(bash(R.x, 'git push up feat'))).toBe('allow');
+    expect(await verdict(bash(R.cc, 'git push fork feat'))).toBe('warn:ship');
     expect(answer(ccv3)).toContain('Rev4nchist/Continuous-Claude-v3@feat');
-    expect(verdict(bash(R.cc, 'git push fork feat'))).toBe('allow');
-    expect(verdict(bash(R.y, 'git push up feat'))).toBe('deny:ship');
+    expect(await verdict(bash(R.cc, 'git push fork feat'))).toBe('allow');
+    expect(await verdict(bash(R.y, 'git push up feat'))).toBe('deny:ship');
   });
 });
 
 describe('W1 N1 coverage with real folders', () => {
-  it('a worktree of a covered root is judged with the root repo key', () => {
+  it('a worktree of a covered root is judged with the root repo key', async () => {
     clearStore();
     // Fixer E: wtb is no default branch of up (its remote HEAD names feat), so the row pushes wtb to main, which needs the tap.
-    expect(verdict(bash(R.wt, 'git push up wtb:main'))).toBe('deny:ship');
+    expect(await verdict(bash(R.wt, 'git push up wtb:main'))).toBe('deny:ship');
     tapShip('acme/app-x@main');
-    expect(verdict(bash(R.wt, 'git push up wtb:main'))).toBe('allow');
+    expect(await verdict(bash(R.wt, 'git push up wtb:main'))).toBe('allow');
   });
-  it('a subfolder of a covered root is judged', () => {
+  it('a subfolder of a covered root is judged', async () => {
     clearStore();
     mkdirSync(`${R.x}/src`, { recursive: true });
-    expect(verdict(bash(`${R.x}/src`, 'git push up feat'))).toBe('deny:ship');
+    expect(await verdict(bash(`${R.x}/src`, 'git push up feat'))).toBe('deny:ship');
   });
   for (const name of ['nested', 'old', 'off', 'stray', 'plain']) {
-    it(`${name}: push, create and merge pass (not covered)`, () => {
+    it(`${name}: push, create and merge pass (not covered)`, async () => {
       clearStore();
-      for (const cmd of ['git push up feat', 'gh pr create --draft --title t', `gh pr merge 7 --match-head-commit ${head}`]) expect(verdict(bash(R[name], cmd)), `${name}: ${cmd}`).toBe('allow');
+      for (const cmd of ['git push up feat', 'gh pr create --draft --title t', `gh pr merge 7 --match-head-commit ${head}`]) expect(await verdict(bash(R[name], cmd)), `${name}: ${cmd}`).toBe('allow');
     });
   }
-  it('position unknown before a push in a covered folder is denied; in STRAY it passes', () => {
-    expect(verdict(bash(R.x, 'popd && git push up feat'))).toBe('deny:position-unknown');
-    expect(verdict(bash(R.stray, 'popd && git push up feat'))).toBe('allow');
+  it('position unknown before a push in a covered folder is denied; in STRAY it passes', async () => {
+    expect(await verdict(bash(R.x, 'popd && git push up feat'))).toBe('deny:position-unknown');
+    expect(await verdict(bash(R.stray, 'popd && git push up feat'))).toBe('allow');
   });
 });
 
 describe('U1 remotes with real git', () => {
-  it('two remotes: the key is the repo of the remote the push names; no remote and no @{push} is denied', () => {
+  it('two remotes: the key is the repo of the remote the push names; no remote and no @{push} is denied', async () => {
     clearStore();
     addRemote(R.x, 'mirror', 'https://github.com/acme/app-x-mirror.git');
     try {
       tapShip('acme/app-x@feat');
-      expect(verdict(bash(R.x, 'git push up feat'))).toBe('allow');
-      expect(verdict(bash(R.x, 'git push mirror feat'))).toBe('deny:ship');
-      expect(verdict(bash(R.x, 'git push'))).toBe('deny:push-remote-unresolved');
+      expect(await verdict(bash(R.x, 'git push up feat'))).toBe('allow');
+      expect(await verdict(bash(R.x, 'git push mirror feat'))).toBe('deny:ship');
+      expect(await verdict(bash(R.x, 'git push'))).toBe('deny:push-remote-unresolved');
     } finally {
       git(R.x, 'remote', 'remove', 'mirror');
     }
   });
-  it('no remote named: @{push} names it (upstream set with no network)', () => {
+  it('no remote named: @{push} names it (upstream set with no network)', async () => {
     clearStore();
     tapShip('acme/app-x@feat');
     git(R.x, 'update-ref', 'refs/remotes/up/feat', 'HEAD');
@@ -266,42 +267,44 @@ describe('U1 remotes with real git', () => {
     git(R.x, 'config', 'branch.feat.merge', 'refs/heads/feat');
     try {
       expect(git(R.x, 'rev-parse', '--abbrev-ref', '@{push}').stdout.trim()).toBe('up/feat');
-      expect(verdict(bash(R.x, 'git push'))).toBe('allow');
+      expect(await verdict(bash(R.x, 'git push'))).toBe('allow');
     } finally {
       git(R.x, 'config', '--unset', 'branch.feat.remote');
       git(R.x, 'config', '--unset', 'branch.feat.merge');
     }
   });
-  it('F7: a push from inside the .git folder of a covered repo is judged (git -C <root>/.git, cd <root>/.git)', () => {
+  it('F7: a push from inside the .git folder of a covered repo is judged (git -C <root>/.git, cd <root>/.git)', async () => {
     clearStore();
     // Quoted: the temp folder may hold a space.
-    expect(verdict(bash(R.stray, `git -C '${R.x}/.git' push up feat`))).toBe('deny:ship');
-    expect(verdict(bash(R.stray, `cd '${R.x}/.git' && git push up feat`))).toBe('deny:ship');
-    expect(verdict(bash(`${R.x}/.git`, 'git push up feat'))).toBe('deny:ship');
+    expect(await verdict(bash(R.stray, `git -C '${R.x}/.git' push up feat`))).toBe('deny:ship');
+    expect(await verdict(bash(R.stray, `cd '${R.x}/.git' && git push up feat`))).toBe('deny:ship');
+    expect(await verdict(bash(`${R.x}/.git`, 'git push up feat'))).toBe('deny:ship');
     tapShip('acme/app-x@feat');
-    expect(verdict(bash(`${R.x}/.git`, 'git push up feat'))).toBe('allow');
+    expect(await verdict(bash(`${R.x}/.git`, 'git push up feat'))).toBe('allow');
   });
-  it('F7: a live root whose common dir is not <root>/.git (a bare repo) cannot be judged: denied, scope app-push', () => {
+  it('F7: a live root whose common dir is not <root>/.git (a bare repo) cannot be judged: denied, scope app-push', async () => {
     clearStore();
-    const out = JSON.parse(handleGate(bash(R.bare, 'git push up feat')));
+    const out = JSON.parse(await handleGate(bash(R.bare, 'git push up feat')));
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("could not verify Dave's tap");
   });
-  it('item 5: the real Deps stops git at 7 s from the hook start: a late call is denied unjudgeable, not run', () => {
+  it('item 5: the real Deps stops git at 7 s from the hook start: a late call is denied unjudgeable, not run', async () => {
     clearStore();
     tapShip('acme/app-x@feat');
-    const late = gateHandle(JSON.stringify(bash(R.x, 'git push up feat')), deps({ start: Date.now() - 8000 }));
+    // The parse is made on normal deps first (a parse at 8 s from the start would be late: parser-unavailable); the late clock then reaches the git reads.
+    const raw = JSON.stringify(bash(R.x, 'git push up feat'));
+    const late = gateHandle(raw, await parsedDeps(raw, deps({ start: Date.now() - 8000 })));
     const out = JSON.parse(late);
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/time limit/);
-    expect(verdict(bash(R.x, 'git push up feat'))).toBe('allow');
+    expect(await verdict(bash(R.x, 'git push up feat'))).toBe('allow');
   });
-  it('a push of main needs a tap; a force push and a subagent push are denied', () => {
+  it('a push of main needs a tap; a force push and a subagent push are denied', async () => {
     clearStore();
-    expect(verdict(bash(R.x, 'git push up main'))).toBe('deny:ship');
+    expect(await verdict(bash(R.x, 'git push up main'))).toBe('deny:ship');
     tapShip('acme/app-x@feat');
-    expect(verdict(bash(R.x, 'git push --force up feat'))).toBe('deny:push-unsafe');
-    expect(verdict(bash(R.x, 'git push up feat', { agent_id: 'sub' }))).toBe('deny:subagent');
+    expect(await verdict(bash(R.x, 'git push --force up feat'))).toBe('deny:push-unsafe');
+    expect(await verdict(bash(R.x, 'git push up feat', { agent_id: 'sub' }))).toBe('deny:subagent');
   });
 });
 

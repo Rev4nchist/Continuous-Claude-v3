@@ -27,6 +27,7 @@ import { decide, type Deps } from '../decision-gate.js';
 import { decisionRecord, decisionUse, offerWrite } from '../shared/decisions-store.js';
 // @ts-ignore TS7016: the .mjs helper has no declaration file. The REAL helper: the labels and the key come from it, so the two sides cannot drift.
 import * as cap from '../../../../scripts/github/lib/cap-override.mjs';
+import { decideParsed } from './helpers/parse-first.js';
 
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
 const HEAD = 'a'.repeat(40);
@@ -78,8 +79,8 @@ function tap({ branch = 'feat/x', head = HEAD, usd = null as number | null, extr
 
 const bash = (command: string, extra: object = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: '/repo', session_id: 's-cap', ...extra });
 const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command }, cwd: '/repo', session_id: 's-cap' });
-const capDeny = (input: object, w?: World): boolean => {
-  const d = decide(input as Parameters<typeof decide>[0], deps(w));
+const capDeny = async (input: object, w?: World): Promise<boolean> => {
+  const d = await decideParsed(input as Parameters<typeof decide>[0], deps(w));
   return d.action === 'deny' && d.pattern === 'cap-override';
 };
 const PRE = 'node scripts/github/pre-pr.mjs --body C:/x/body.md --wait-lock';
@@ -105,15 +106,15 @@ describe('G1: a flag with no tap is denied, in every spelling', () => {
     ['in a subshell', '(node scripts/github/pre-pr.mjs --body b.md --cli-extra-run)'],
   ];
   for (const [name, command] of rows) {
-    it(`Bash: ${name}`, () => { expect(capDeny(bash(command))).toBe(true); });
+    it(`Bash: ${name}`, async () => { expect(await capDeny(bash(command))).toBe(true); });
   }
-  it('PowerShell: the USD flag', () => { expect(capDeny(pwsh(`${PRE} --cli-cap-usd 6`))).toBe(true); });
-  it('Desktop Commander start_process and interact_with_process', () => {
-    expect(capDeny({ tool_name: `${DC}start_process`, tool_input: { command: `${PRE} --cli-extra-run`, shell: 'cmd' }, cwd: '/repo', session_id: 's-cap' })).toBe(true);
-    expect(capDeny({ tool_name: `${DC}interact_with_process`, tool_input: { pid: 1, input: `${PRE} --cli-extra-run` }, cwd: '/repo', session_id: 's-cap' })).toBe(true);
+  it('PowerShell: the USD flag', async () => { expect(await capDeny(pwsh(`${PRE} --cli-cap-usd 6`))).toBe(true); });
+  it('Desktop Commander start_process and interact_with_process', async () => {
+    expect(await capDeny({ tool_name: `${DC}start_process`, tool_input: { command: `${PRE} --cli-extra-run`, shell: 'cmd' }, cwd: '/repo', session_id: 's-cap' })).toBe(true);
+    expect(await capDeny({ tool_name: `${DC}interact_with_process`, tool_input: { pid: 1, input: `${PRE} --cli-extra-run` }, cwd: '/repo', session_id: 's-cap' })).toBe(true);
   });
-  it('the deny names the question to ask and does not name a way around it', () => {
-    const d = decide(bash(`${PRE} --cli-cap-usd 6`) as Parameters<typeof decide>[0], deps());
+  it('the deny names the question to ask and does not name a way around it', async () => {
+    const d = await decideParsed(bash(`${PRE} --cli-cap-usd 6`) as Parameters<typeof decide>[0], deps());
     expect(d.action).toBe('deny');
     if (d.action === 'deny') {
       expect(d.reason).toContain('ship-ask.mjs cap-override');
@@ -123,118 +124,118 @@ describe('G1: a flag with no tap is denied, in every spelling', () => {
 });
 
 describe('G2, G3: a tap opens only its own branch, head, flag set and value, and only with the lift label', () => {
-  it('a tap for the USD flag and 6 lets that command through', () => {
+  it('a tap for the USD flag and 6 lets that command through', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(false);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(false);
   });
-  it('the same tap lets the flag through in any place of the command line', () => {
+  it('the same tap lets the flag through in any place of the command line', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash('node scripts/github/pre-pr.mjs --cli-cap-usd 6 --body b.md --wait-lock'))).toBe(false);
-    expect(capDeny(pwsh(`${PRE} --cli-cap-usd 6`))).toBe(false);
+    expect(await capDeny(bash('node scripts/github/pre-pr.mjs --cli-cap-usd 6 --body b.md --wait-lock'))).toBe(false);
+    expect(await capDeny(pwsh(`${PRE} --cli-cap-usd 6`))).toBe(false);
   });
-  it('a tap for the extra-run flag lets that command through', () => {
+  it('a tap for the extra-run flag lets that command through', async () => {
     tap({ extraRun: true });
-    expect(capDeny(bash(`${PRE} --cli-extra-run`))).toBe(false);
+    expect(await capDeny(bash(`${PRE} --cli-extra-run`))).toBe(false);
   });
-  it('a tap for both flags lets both through, in either order', () => {
+  it('a tap for both flags lets both through, in either order', async () => {
     tap({ usd: 6, extraRun: true });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-extra-run`))).toBe(false);
-    expect(capDeny(bash(`${PRE} --cli-extra-run --cli-cap-usd 6`))).toBe(false);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-extra-run`))).toBe(false);
+    expect(await capDeny(bash(`${PRE} --cli-extra-run --cli-cap-usd 6`))).toBe(false);
   });
-  it('another head: denied', () => {
+  it('another head: denied', async () => {
     tap({ usd: 6, head: OTHER });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
   });
-  it('another branch: denied', () => {
+  it('another branch: denied', async () => {
     tap({ usd: 6, branch: 'feat/y' });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
   });
-  it('another USD value: 6 does not open 60, 6.5, 600 or 5', () => {
+  it('another USD value: 6 does not open 60, 6.5, 600 or 5', async () => {
     tap({ usd: 6 });
-    for (const v of ['60', '6.5', '600', '5', '06']) expect(capDeny(bash(`${PRE} --cli-cap-usd ${v}`)), v).toBe(true);
+    for (const v of ['60', '6.5', '600', '5', '06']) expect(await capDeny(bash(`${PRE} --cli-cap-usd ${v}`)), v).toBe(true);
   });
-  it('another flag set: a USD tap does not open the extra-run flag, and the reverse', () => {
+  it('another flag set: a USD tap does not open the extra-run flag, and the reverse', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} --cli-extra-run`))).toBe(true);
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-extra-run`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-extra-run`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-extra-run`))).toBe(true);
   });
-  it('an extra-run tap does not open the USD flag', () => {
+  it('an extra-run tap does not open the USD flag', async () => {
     tap({ extraRun: true });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
   });
-  it('the keep label opens nothing', () => {
+  it('the keep label opens nothing', async () => {
     tap({ usd: 6, label: cap.CAP_KEEP_LABEL });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
   });
-  it('a tap that the script used up opens nothing (single use)', () => {
+  it('a tap that the script used up opens nothing (single use)', async () => {
     const key = tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(false);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(false);
     expect(decisionUse({ step: 'cli-skip', key, head: HEAD, label: cap.CAP_LIFT_LABEL }).ok).toBe(true);
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`))).toBe(true);
   });
-  it('the flag-skip decision of the same branch and head (step cli-skip, plain key) opens nothing here', () => {
+  it('the flag-skip decision of the same branch and head (step cli-skip, plain key) opens nothing here', async () => {
     expect(offerWrite({ step: 'cli-skip', key: `${REPO}@feat/x`, head: HEAD, spec: { header: 'CLI skip', question: 'Q?', options: [{ label: 'Skip the CLI review for this head' }, { label: 'Keep the CLI review' }] } }).ok).toBe(true);
     expect(decisionRecord({ step: 'cli-skip', key: `${REPO}@feat/x`, head: HEAD, label: 'Skip the CLI review for this head' })).toEqual({ ok: true });
-    expect(capDeny(bash(`${PRE} --cli-extra-run`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-extra-run`))).toBe(true);
   });
 });
 
 describe('G4: the approved spelling covers only itself', () => {
-  it('a second mention with another value beside the approved one is denied', () => {
+  it('a second mention with another value beside the approved one is denied', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6; node scripts/github/cr-fix.mjs --pr 5 --cli-cap-usd 600`))).toBe(true);
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-cap-usd 7`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6; node scripts/github/cr-fix.mjs --pr 5 --cli-cap-usd 600`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-cap-usd 7`))).toBe(true);
   });
-  it('the approved spelling plus a quoted or glued mention is denied', () => {
+  it('the approved spelling plus a quoted or glued mention is denied', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6 "--cli-cap-usd=7"`))).toBe(true);
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-extra-run`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6 "--cli-cap-usd=7"`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-extra-run`))).toBe(true);
   });
-  it('the approved spelling twice is the same flag twice: allowed by this rule (the script refuses a repeat)', () => {
+  it('the approved spelling twice is the same flag twice: allowed by this rule (the script refuses a repeat)', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-cap-usd 6`))).toBe(false);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6 --cli-cap-usd 6`))).toBe(false);
   });
-  it('a value glued to the approved one is another value: 6 then a digit', () => {
+  it('a value glued to the approved one is another value: 6 then a digit', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6${'0'}`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6${'0'}`))).toBe(true);
   });
-  it('the approved spelling quoted is not the approved spelling (fail closed)', () => {
+  it('the approved spelling quoted is not the approved spelling (fail closed)', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} "--cli-cap-usd 6"`))).toBe(false);
-    expect(capDeny(bash(`${PRE} "--cli-cap-usd" 6`))).toBe(true);
+    expect(await capDeny(bash(`${PRE} "--cli-cap-usd 6"`))).toBe(false);
+    expect(await capDeny(bash(`${PRE} "--cli-cap-usd" 6`))).toBe(true);
   });
 });
 
 describe('G5: every command tool, and a subagent', () => {
-  it('a subagent has no tap: denied even when the tap exists', () => {
+  it('a subagent has no tap: denied even when the tap exists', async () => {
     tap({ usd: 6 });
-    expect(capDeny(bash(`${PRE} --cli-cap-usd 6`, { agent_id: 'agent-1' }))).toBe(true);
+    expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`, { agent_id: 'agent-1' }))).toBe(true);
   });
-  it('Desktop Commander gets the same answer as Bash with a tap', () => {
+  it('Desktop Commander gets the same answer as Bash with a tap', async () => {
     tap({ extraRun: true });
-    expect(capDeny({ tool_name: `${DC}start_process`, tool_input: { command: `${PRE} --cli-extra-run`, shell: 'cmd' }, cwd: '/repo', session_id: 's-cap' })).toBe(false);
+    expect(await capDeny({ tool_name: `${DC}start_process`, tool_input: { command: `${PRE} --cli-extra-run`, shell: 'cmd' }, cwd: '/repo', session_id: 's-cap' })).toBe(false);
   });
-  it('a non-command tool that holds the flag text is not read', () => {
-    expect(capDeny({ tool_name: 'Read', tool_input: { file_path: '--cli-cap-usd' }, cwd: '/repo', session_id: 's-cap' })).toBe(false);
+  it('a non-command tool that holds the flag text is not read', async () => {
+    expect(await capDeny({ tool_name: 'Read', tool_input: { file_path: '--cli-cap-usd' }, cwd: '/repo', session_id: 's-cap' })).toBe(false);
   });
 });
 
 describe('G6: text that names neither flag is not denied', () => {
   for (const command of [PRE, `${PRE} --skip-cr`, 'node scripts/github/ship-ask.mjs cap-override --branch feat/x --usd 6 --extra-run --json', 'git status', 'echo --cli-cap', 'echo --cli-extra', 'rg "cli-cap-usd" scripts', 'echo cli-extra-run']) {
-    it(command, () => { expect(capDeny(bash(command))).toBe(false); });
+    it(command, async () => { expect(await capDeny(bash(command))).toBe(false); });
   }
 });
 
 describe('G7: git cannot name the branch or the head: fail closed', () => {
-  it('no branch (detached HEAD)', () => { tap({ usd: 6 }); expect(capDeny(bash(`${PRE} --cli-cap-usd 6`), { branch: null })).toBe(true); });
-  it('no head', () => { tap({ usd: 6 }); expect(capDeny(bash(`${PRE} --cli-cap-usd 6`), { head: null })).toBe(true); });
-  it('git throws', () => { tap({ usd: 6 }); expect(capDeny(bash(`${PRE} --cli-cap-usd 6`), { gitThrows: true })).toBe(true); });
+  it('no branch (detached HEAD)', async () => { tap({ usd: 6 }); expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`), { branch: null })).toBe(true); });
+  it('no head', async () => { tap({ usd: 6 }); expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`), { head: null })).toBe(true); });
+  it('git throws', async () => { tap({ usd: 6 }); expect(await capDeny(bash(`${PRE} --cli-cap-usd 6`), { gitThrows: true })).toBe(true); });
 });
 
 describe('G8: the deny follows decisions.enforce, as the paid tripwire does', () => {
-  it('enforce true: deny', () => { expect(capDeny(bash(`${PRE} --cli-extra-run`), { enforce: true })).toBe(true); });
-  it('enforce false: allow with a warning', () => {
-    const d = decide(bash(`${PRE} --cli-extra-run`) as Parameters<typeof decide>[0], deps({ enforce: false }));
+  it('enforce true: deny', async () => { expect(await capDeny(bash(`${PRE} --cli-extra-run`), { enforce: true })).toBe(true); });
+  it('enforce false: allow with a warning', async () => {
+    const d = await decideParsed(bash(`${PRE} --cli-extra-run`) as Parameters<typeof decide>[0], deps({ enforce: false }));
     expect(d.action).toBe('allow');
     expect(typeof (d as { warn?: string }).warn).toBe('string');
   });
@@ -297,21 +298,21 @@ describe('G9: the built hook, a real payload', () => {
 });
 
 describe('G10 (item 4, seat ruling): the gate reads git at the session folder, so a cd to another checkout stays a deny and the text says why', () => {
-  const reasonOf = (command: string, w?: World): string => {
-    const d = decide(bash(command) as Parameters<typeof decide>[0], deps(w));
+  const reasonOf = async (command: string, w?: World): Promise<string> => {
+    const d = await decideParsed(bash(command) as Parameters<typeof decide>[0], deps(w));
     return d.action === 'deny' ? d.reason : '';
   };
-  it('a tap for the branch of the cd target does not cover the command: still a deny', () => {
+  it('a tap for the branch of the cd target does not cover the command: still a deny', async () => {
     tap({ branch: 'feat/b', extraRun: true });
-    expect(capDeny(bash(`cd /other && ${PRE} --cli-extra-run`), { branch: 'feat/a' })).toBe(true);
+    expect(await capDeny(bash(`cd /other && ${PRE} --cli-extra-run`), { branch: 'feat/a' })).toBe(true);
   });
-  it('the deny text names the session folder (input.cwd) and says to run the flag from the tapped checkout with no cd', () => {
+  it('the deny text names the session folder (input.cwd) and says to run the flag from the tapped checkout with no cd', async () => {
     tap({ branch: 'feat/b', extraRun: true });
-    const reason = reasonOf(`cd /other && ${PRE} --cli-extra-run`, { branch: 'feat/a' });
+    const reason = await reasonOf(`cd /other && ${PRE} --cli-extra-run`, { branch: 'feat/a' });
     expect(reason).toMatch(/session folder/i);
     expect(reason).toMatch(/no cd/i);
   });
-  it('the plain no-tap deny carries the same text', () => {
-    expect(reasonOf(`${PRE} --cli-cap-usd 6`)).toMatch(/session folder/i);
+  it('the plain no-tap deny carries the same text', async () => {
+    expect(await reasonOf(`${PRE} --cli-cap-usd 6`)).toMatch(/session folder/i);
   });
 });
