@@ -500,6 +500,10 @@
       "reason": "pre-pr gate only; CI has no step"
     },
     {
+      "path": "scripts/github/pr-checkpoint-answer-key.test.mjs",
+      "reason": "pre-pr gate only; CI has no step"
+    },
+    {
       "path": "scripts/github/pr-loop-sync.test.mjs",
       "reason": "pre-pr gate only; CI has no step"
     },
