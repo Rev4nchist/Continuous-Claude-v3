@@ -331,3 +331,10 @@ test('W35: an open run prints its kind, its time and its head in the running col
   assert.match(r.running, /14:03/);
   assert.match(r.running, /de0dd692/);
 });
+
+test('W36: a START with no head does not take the head of the next START', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 13:00 CST. PRE-PR START 14:03 CST head bbb2222.'));
+  const r = A('Coord standard')(t);
+  assert.match(r.running, /pre-pr START 13:00(,|$)/);
+  assert.match(r.running, /pre-pr START 14:03 head bbb2222/);
+});

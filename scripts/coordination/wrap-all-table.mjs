@@ -32,32 +32,60 @@ const NEXT = {
 const SEAT_ONLY_LINE = 'only the seat sends; run /wrap-all in the seat session';
 const sid8Of = (id) => String(id ?? '').slice(0, 8);
 
+const KIND_LABEL = { 'PRE-PR': 'pre-pr', 'HOOK BUILD': 'hook build' };
+const pad2 = (t) => String(t).padStart(5, '0');
+const HEAD_AFTER_WORD = /\bhead\s+([0-9a-f]{7,40})\b/;
+const HEAD_ANY = /\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/g;
+
 /**
- * Running work in one lane note. A START word carries a time (PRE-PR START 11:48 CST); the words with no time are a rule, not a START.
- * A START is closed by a later END with a time, or by the word VOID after it (a run the lock refused).
+ * Running work in one lane note, read as events in order. A START word carries a time (PRE-PR START 11:48 CST); the words with no time are a
+ * rule, not a START. Each START is open until it is closed:
+ *   - an END of the same kind closes the latest open START of that kind;
+ *   - a VOID closes only the START it names, by its time (HH:MM) or by its head (a hex sha of 7 or more characters). The clock stamp of the
+ *     VOID itself ("VOID 13:33 CST") is not a tie. A VOID that names a kind closes only that kind. A VOID that names no START, or a START that is not
+ *     open, closes nothing, also when it comes right after a START (a false "running" fails closed: the seat reads the note).
+ * Returns { prePr, hookBuild, open: [{ kind, label, time, head }] }.
  */
 export function runningWork(note) {
   const text = String(note ?? '');
-  const open = (kind) => {
-    const starts = [...text.matchAll(new RegExp(`\\b${kind} START \\d{1,2}:\\d{2}`, 'g'))];
-    if (!starts.length) return false;
-    const at = starts[starts.length - 1].index;
-    const rest = text.slice(at + 1);
-    if (new RegExp(`\\b${kind} END \\d{1,2}:\\d{2}`).test(rest)) return false;
-    return !/\bVOID\b/.test(rest);
-  };
-  return { prePr: open('PRE-PR'), hookBuild: open('HOOK BUILD') };
+  const events = [];
+  for (const m of text.matchAll(/\b(PRE-PR|HOOK BUILD) (START|END) (\d{1,2}:\d{2})/g)) events.push({ type: m[2], kind: m[1], time: pad2(m[3]), at: m.index, end: m.index + m[0].length });
+  for (const m of text.matchAll(/\bVOID\b/g)) events.push({ type: 'VOID', at: m.index, end: m.index + m[0].length });
+  events.sort((x, y) => x.at - y.at);
+  const open = [];
+  events.forEach((e, i) => {
+    const stop = events[i + 1]?.at ?? text.length;
+    if (e.type === 'START') {
+      open.push({ kind: e.kind, label: KIND_LABEL[e.kind], time: e.time, head: HEAD_AFTER_WORD.exec(text.slice(e.end, stop))?.[1] ?? null });
+    } else if (e.type === 'END') {
+      for (let k = open.length - 1; k >= 0; k--) if (open[k].kind === e.kind) { open.splice(k, 1); break; }
+    } else {
+      let seg = text.slice(e.end, Math.min(stop, e.end + 600));
+      seg = seg.replace(/^\s*\d{1,2}:\d{2}/, ''); // the stamp of the VOID itself is not a tie
+      const times = [...seg.matchAll(/\b\d{1,2}:\d{2}\b/g)].map((m) => pad2(m[0]));
+      const heads = [...seg.matchAll(HEAD_ANY)].map((m) => m[0]);
+      const kinds = new Set([...seg.matchAll(/\b(PRE-PR|HOOK BUILD)\b/g)].map((m) => m[1]));
+      for (let k = open.length - 1; k >= 0; k--) {
+        const o = open[k];
+        if (kinds.size && !kinds.has(o.kind)) continue;
+        const headTie = !!o.head && heads.some((h) => h.startsWith(o.head) || o.head.startsWith(h));
+        const timeTie = times.includes(o.time) && (!heads.length || !o.head || headTie);
+        if (headTie || timeTie) open.splice(k, 1);
+      }
+    }
+  });
+  return { prePr: open.some((o) => o.kind === 'PRE-PR'), hookBuild: open.some((o) => o.kind === 'HOOK BUILD'), open };
 }
 
 /**
  * The stop point of one session. A held FleetOps lock wins, then running work, then known unsaved work. A failed read (tracked or behind
  * is null) is UNKNOWN: it is never READY and it never hides known unsaved work. Then a main merge.
  */
-export function stopPoint({ refresh, prePr, hookBuild, tracked, behind, lockUnreadable = false }) {
+export function stopPoint({ refresh, prePr, hookBuild, tracked, behind, lockBlocks = false }) {
   if (refresh) return STOP.RELEASE_LOCK;
   if (prePr || hookBuild) return STOP.WAIT_END;
   if (tracked > 0) return STOP.SAVE_PATCH;
-  if (tracked === null || behind === null || lockUnreadable) return STOP.UNKNOWN;
+  if (tracked === null || behind === null || lockBlocks) return STOP.UNKNOWN;
   if (behind > 0) return STOP.MERGE_MAIN;
   return STOP.READY;
 }
@@ -91,6 +119,7 @@ export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock
   const lockUnreadable = !!publishLock && publishLock.unreadable === true;
   const warnings = [];
   if (lockUnreadable) warnings.push('publish.lock exists but cannot be read: a FleetOps refresh may be in progress. No row is READY until the seat reads it by hand.');
+  const lockSid = publishLock && !lockUnreadable ? sid8Of(publishLock.session) : '';
   // Every live peer, plus every holder of an open lane that is not a live peer (an idle session is quiet for 5 minutes or more).
   const sessions = peers.map((p) => ({ ...p, idle: false }));
   const seen = new Set(sessions.map((p) => sid8Of(p.id)));
@@ -100,6 +129,13 @@ export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock
     seen.add(s8);
     sessions.push({ id: l.owner_session_id, name: l.owner_name || `session ${s8}`, lanes: '', last_alive: null, idle: true });
   }
+  // A publish.lock held by a session with no row (it exited, or it is not a peer and holds no lane) shows nowhere else: warn and block READY.
+  const orphanLock = !!lockSid && !sessions.some((p) => sid8Of(p.id) === lockSid);
+  if (orphanLock) {
+    const ageMin = Number.isFinite(Date.parse(publishLock.at)) ? Math.round((now - Date.parse(publishLock.at)) / 60000) : null;
+    warnings.push(`publish.lock is held by session ${lockSid} (key ${publishLock.key ?? 'unknown'}, since ${publishLock.at ?? 'unknown'}) and that session has no row. No row is READY until the seat reads the lock by hand.${ageMin !== null && ageMin > 20 ? ` It is over 20 minutes old: a refresh can take it over.` : ''}`);
+  }
+  const lockBlocks = lockUnreadable || orphanLock;
   const rows = sessions.map((p) => {
     const sid8 = sid8Of(p.id);
     const mine = lanes.filter((l) => sid8Of(l.owner_session_id) === sid8);
@@ -107,7 +143,7 @@ export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock
     const ids = [...new Set([...laneIds, ...mine.map((l) => l.id)])];
     // Each lane note is read alone: a finished run in one lane must not hide an active START in another.
     const runs = mine.map((l) => runningWork(l.note));
-    const run = { prePr: runs.some((r) => r.prePr), hookBuild: runs.some((r) => r.hookBuild) };
+    const run = { prePr: runs.some((r) => r.prePr), hookBuild: runs.some((r) => r.hookBuild), open: runs.flatMap((r) => r.open) };
     const wts = worktrees.filter((w) => ids.some((id) => String(w.branch ?? '').endsWith(`/${id}`)) || mine.some((l) => l.branch && l.branch === w.branch));
     wts.forEach((w) => used.add(w.path));
     const known = (v) => typeof v === 'number';
@@ -117,11 +153,11 @@ export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock
     const behindUnknown = wts.some((w) => !known(w.behind));
     const behind = wts.reduce((n, w) => Math.max(n, known(w.behind) ? w.behind : 0), 0);
     const refresh = !!publishLock && !lockUnreadable && sid8Of(publishLock.session) === sid8;
-    const running = [run.prePr ? 'pre-pr' : '', run.hookBuild ? 'hook build' : '', refresh ? 'FleetOps refresh' : ''].filter(Boolean).join(', ') || 'nothing';
+    const running = [...run.open.map((o) => `${o.label} START ${o.time}${o.head ? ` head ${o.head}` : ''}`), refresh ? 'FleetOps refresh' : ''].filter(Boolean).join(', ') || 'nothing';
     const stop = stopPoint({
       refresh, prePr: run.prePr, hookBuild: run.hookBuild,
       tracked: tracked > 0 ? tracked : (trackedUnknown ? null : 0),
-      behind: behindUnknown ? null : behind, lockUnreadable,
+      behind: behindUnknown ? null : behind, lockBlocks,
     });
     const alive = Date.parse(p.last_alive);
     return {
