@@ -304,6 +304,10 @@
     {
       "path": "tests/workflow-tests/suites/vercel-cli.test.mjs",
       "reason": "pending join: step 2 of card coord-test-gate-coverage (one PR per folder group; the Linux result is not known yet)"
+    },
+    {
+      "path": "scripts/coordination/wrap-all-table.test.mjs",
+      "reason": "no gate or CI step names it yet: a gate entry is a change to pre-pr.mjs (a critical file) and the card seat-wrap-all-skill makes none (seat word of 26 November); run by hand, its output is the card evidence"
     }
   ],
   "ciGaps": [
@@ -390,10 +394,6 @@
     {
       "path": "scripts/coordination/reminder-tick.test.mjs",
       "reason": "Windows pre-pr gate test-scripts only (Dave, 2026-11-17: a pre-pr gate on Windows, not CI); CI has no step"
-    },
-    {
-      "path": "scripts/coordination/wrap-all-table.test.mjs",
-      "reason": "no gate or CI step names it yet: a gate entry is a change to pre-pr.mjs (a critical file) and the card seat-wrap-all-skill makes none (seat word 11-26); run by hand, its output is the card evidence"
     },
     {
       "path": "scripts/github/app-ask.test.mjs",
