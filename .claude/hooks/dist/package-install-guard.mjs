@@ -26223,6 +26223,174 @@ var malicious_packages_default = {
       reason: "Malware in statist-browser-typed-client-genesis.common.web (GHSA-w2h5-w688-26cq)",
       date: "2026-11-24",
       advisory: "https://github.com/advisories/GHSA-w2h5-w688-26cq"
+    },
+    "global-error-handling": {
+      blocked_all: true,
+      reason: "Malware in global-error-handling (GHSA-5797-99pf-537x)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-5797-99pf-537x"
+    },
+    "paystation-embed-app": {
+      blocked_all: true,
+      reason: "Malware in paystation-embed-app (GHSA-p659-fjmx-gpcf)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-p659-fjmx-gpcf"
+    },
+    "@flexflow/flex-ui-flow": {
+      blocked_all: true,
+      reason: "Malware in @flexflow/flex-ui-flow (GHSA-hghq-p757-qg8c)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-hghq-p757-qg8c"
+    },
+    "flex-ui-animates": {
+      blocked_all: true,
+      reason: "Malware in flex-ui-animates (GHSA-734q-3h9j-4v2q)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-734q-3h9j-4v2q"
+    },
+    "svg-bucket": {
+      blocked_all: true,
+      reason: "Malicious code in svg-bucket (npm) (GHSA-3xgv-5hj8-3pcp)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-3xgv-5hj8-3pcp"
+    },
+    "@tty-pt/auren": {
+      blocked_all: true,
+      reason: "Malware in @tty-pt/auren (GHSA-g67x-vc4c-hj3p)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-g67x-vc4c-hj3p"
+    },
+    "@1outres/dsh-bot-connector-desktop": {
+      blocked_all: true,
+      reason: "Malware in @1outres/dsh-bot-connector-desktop (GHSA-jgfj-8xjp-7w7g)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-jgfj-8xjp-7w7g"
+    },
+    clamp4js: {
+      blocked_all: true,
+      reason: "Malicious code in clamp4js (npm) (GHSA-499w-7339-pxgc)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-499w-7339-pxgc"
+    },
+    "@omnirush-ai/cli-win32-x64": {
+      blocked_all: true,
+      reason: "Malware in @omnirush-ai/cli-win32-x64 (GHSA-jjr3-7f2p-jpc2)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-jjr3-7f2p-jpc2"
+    },
+    "dsh-locator": {
+      blocked_all: true,
+      reason: "Malware in dsh-locator (GHSA-r6vw-9fq7-mwh5)",
+      date: "2026-11-26",
+      advisory: "https://github.com/advisories/GHSA-r6vw-9fq7-mwh5"
+    },
+    "signals-embed-sss": {
+      blocked_all: true,
+      reason: "Malware in signals-embed-sss (GHSA-6x8f-68pc-4jmc)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-6x8f-68pc-4jmc"
+    },
+    "signals-embed-pro": {
+      blocked_all: true,
+      reason: "Malware in signals-embed-pro (GHSA-rc84-vvw2-qfmx)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-rc84-vvw2-qfmx"
+    },
+    "@c1-ease/recovery": {
+      blocked_all: true,
+      reason: "Malware in @c1-ease/recovery (GHSA-gvwr-wxwg-5f3h)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-gvwr-wxwg-5f3h"
+    },
+    "create-ai-agent-setup": {
+      blocked_all: true,
+      reason: "Malware in create-ai-agent-setup (GHSA-4c46-v99r-6h9r)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-4c46-v99r-6h9r"
+    },
+    "git-crt-creator": {
+      blocked_all: true,
+      reason: "Malicious code in git-crt-creator (npm) (GHSA-48r5-77q7-jmhh)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-48r5-77q7-jmhh"
+    },
+    "git-iss-creator": {
+      blocked_all: true,
+      reason: "Malicious code in git-iss-creator (npm) (GHSA-7v7w-x3w8-2j68)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-7v7w-x3w8-2j68"
+    },
+    "hyjui-klopa": {
+      blocked_all: true,
+      reason: "Malicious code in hyjui-klopa (npm) (GHSA-h5fp-hqf3-rw92)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-h5fp-hqf3-rw92"
+    },
+    ep_nxs74552: {
+      blocked_all: true,
+      reason: "Malicious code in ep_nxs74552 (npm) (GHSA-ffx3-4x5h-4w24)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-ffx3-4x5h-4w24"
+    },
+    brightlineelectr4: {
+      blocked_all: true,
+      reason: "Malware in brightlineelectr4 (GHSA-pqv3-4fv7-3vfv)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-pqv3-4fv7-3vfv"
+    },
+    brightlineelectr3: {
+      blocked_all: true,
+      reason: "Malware in brightlineelectr3 (GHSA-h35p-f8jq-768w)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-h35p-f8jq-768w"
+    },
+    brightlineelectr2: {
+      blocked_all: true,
+      reason: "Malware in brightlineelectr2 (GHSA-v9fc-3vwj-xh9w)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-v9fc-3vwj-xh9w"
+    },
+    brightlineelectr: {
+      blocked_all: true,
+      reason: "Malware in brightlineelectr (GHSA-g969-jcqr-49qc)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-g969-jcqr-49qc"
+    },
+    "grammy-key": {
+      blocked_all: true,
+      reason: "Malware in grammy-key (GHSA-mvj4-fj4q-p2vx)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-mvj4-fj4q-p2vx"
+    },
+    create_meme_pumpfun: {
+      blocked_all: true,
+      reason: "Malware in create_meme_pumpfun (GHSA-wmxv-hm2q-2564)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-wmxv-hm2q-2564"
+    },
+    "apache-httpclient3": {
+      blocked_all: true,
+      reason: "Malware in apache-httpclient3 (GHSA-4mhh-fcfp-xm6w)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-4mhh-fcfp-xm6w"
+    },
+    "apache-httpclient4": {
+      blocked_all: true,
+      reason: "Malware in apache-httpclient4 (GHSA-7g3j-c2hf-p8vw)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-7g3j-c2hf-p8vw"
+    },
+    "web3-mev-error-decoder": {
+      blocked_all: true,
+      reason: "Malware in web3-mev-error-decoder (GHSA-hvqj-jrfw-r9mh)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-hvqj-jrfw-r9mh"
+    },
+    "glbl-agent": {
+      blocked_all: true,
+      reason: "Malware in glbl-agent (GHSA-j36w-grcg-qqff)",
+      date: "2026-11-25",
+      advisory: "https://github.com/advisories/GHSA-j36w-grcg-qqff"
     }
   }
 };

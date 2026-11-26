@@ -240,7 +240,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
   it('exits 0 and writes the eight documents plus the refresh doc', () => {
     // Breaks if the script fails on the fixture or skips a document (tiles.json and flow.json included).
     assert.equal(run.code, 0, run.all);
-    assert.deepEqual(fs.readdirSync(dir).sort(), ['assignments.json', 'flow.json', 'lanes-all.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['assignments-all.json', 'assignments.json', 'flow.json', 'lanes-all.json', 'lanes.json', 'meta.json', 'projects.json', 'refresh.json', 'snapshots.json', 'targets.json', 'tiles.json']);
   });
 
   it('tiles.json: flat rows from the real database figures, titles allowed, no handle, TREX name stripped', () => {
@@ -396,7 +396,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('assignments: no handle key, reassigned computed in SQL, Dave placements de-duplicated per lane and day', () => {
     // Breaks if the handle column returns, reassigned is dropped, or Dave rows are not de-duplicated.
-    const rows = readDoc(dir, 'assignments').rows;
+    const rows = readDoc(dir, 'assignments-all').rows; // lane-export-retention: the fixture claims are older than the window, so the full list is read
     for (const r of rows) assert.ok(!('handle' in r), JSON.stringify(r));
     const claims = rows.filter((r) => r.who === 'session');
     assert.equal(claims.length, 10); // px-1, py-ask-claim, 3 on py-reassign, 2 on py-quick, py-slow, py-early-done, py-edge
@@ -411,7 +411,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('G6 claim rows carry by = "name #sid8"; Dave rows carry none; the old keys keep their values; a listed sid8 is masked with the name kept', () => {
     // Breaks if a claim loses its session label, a uuid or a bare handle leaks, a Dave row gets a label, or the S3 label bypasses the mask.
-    const rows = readDoc(dir, 'assignments').rows;
+    const rows = readDoc(dir, 'assignments-all').rows;
     for (const r of rows) assert.deepEqual(Object.keys(r).sort(), r.who === 'session' ? ['at', 'by', 'day', 'how', 'lane_id', 'reassigned', 'who'] : ['at', 'day', 'how', 'lane_id', 'reassigned', 'who'], JSON.stringify(r));
     const by = (id) => rows.filter((r) => r.who === 'session' && r.lane_id === id).map((r) => r.by);
     assert.deepEqual(by('py-reassign'), ['Builder one #aaaa1111', '#bbbb2222', '#bbbb2222']);
@@ -449,7 +449,7 @@ describe('export-dash-data.mjs against a scratch database', () => {
 
   it('G9 no label text holds a uuid or a listed id, and a handle stands in no other key of any document', () => {
     // Breaks if a new label bypasses the mask or a handle moves into another key (title, goal, a tile sentence).
-    for (const d of ['lanes', 'lanes-all', 'assignments', 'tiles', 'flow', 'meta', 'projects', 'targets', 'snapshots']) {
+    for (const d of ['lanes', 'lanes-all', 'assignments', 'assignments-all', 'tiles', 'flow', 'meta', 'projects', 'targets', 'snapshots']) {
       const walk = (v, key) => {
         if (typeof v === 'string') {
           if (LABEL_KEYS.includes(key)) { assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-/i.test(v), `uuid in ${d}.${key}`); assert.ok(!v.includes('abcdef12'), `listed sid8 in ${d}.${key}`); }
@@ -489,6 +489,26 @@ describe('export-dash-data.mjs against a scratch database', () => {
     const strip = ({ closed_by, holder_label, ...x }) => x;
     assert.deepEqual(readDoc(d2, 'lanes-all').rows.map((l) => l.id), readDoc(dir, 'lanes-all').rows.map((l) => l.id));
     assert.deepEqual(readDoc(d2, 'lanes-all').rows.map((l) => JSON.stringify(strip(l))), readDoc(dir, 'lanes-all').rows.map((l) => JSON.stringify(strip(l))));
+  });
+
+  it('R7 assignments.json holds only the last 2 x window_days days; assignments-all.json holds every row; meta counts both (lane-export-retention)', () => {
+    // Breaks if the capped file keeps old rows, the archive loses rows, the window is not read from the targets, or the counts are wrong.
+    const today = readDoc(dir, 'meta').rows[0].today;
+    const days = Number(readDoc(dir, 'targets').rows.find((t) => t.key === 'window_days').value);
+    const start = new Date(Date.parse(`${today}T00:00:00Z`) - (2 * days - 1) * 86400000).toISOString().slice(0, 10);
+    const all = readDoc(dir, 'assignments-all').rows;
+    const cap = readDoc(dir, 'assignments').rows;
+    assert.equal(all.length, 11, 'the fixture has 11 rows (10 claims, 1 Dave placement)');
+    assert.deepEqual(cap, all.filter((r) => r.day >= start), 'the capped file is the full list cut at the start day, in the same order');
+    assert.ok(cap.length < all.length, 'the fixture has claims older than the window, so the cut removes some');
+    assert.ok(cap.length > 0, 'the clock-dated fixture claims stay');
+    for (const r of cap) assert.ok(r.day >= start, r.day);
+    const meta = readDoc(dir, 'meta').rows[0];
+    assert.equal(meta.assignments_rows_total, all.length);
+    assert.equal(meta.assignments_rows_written, cap.length);
+    const refresh = readDoc(dir, 'refresh');
+    assert.ok(!refresh.files.includes('assignments-all.json'));
+    assert.ok(fs.readFileSync(path.join(dir, 'assignments.json'), 'utf8').length < fs.readFileSync(path.join(dir, 'assignments-all.json'), 'utf8').length);
   });
 
   it('projects: Done means every terminal lane is done, and a finished project stays in the rows (defect b)', () => {

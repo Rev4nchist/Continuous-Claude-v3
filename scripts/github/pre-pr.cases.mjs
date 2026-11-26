@@ -750,6 +750,37 @@ test('E5: docs with no changed file fails', async () => {
   assert.equal(checkEvidence({ body: 'Proof type: docs\n', head: HEAD, paths: [], config: CONFIG }).status, 'FAIL');
 });
 
+// Card prepr-evidence-gaps. pre-pr read the proof with no PR commit list, so a RED line that names the base commit passed here and
+// failed in review-status.mjs (PR 734). Both now read the list and run the same redCommitProblem.
+const MID40 = 'c'.repeat(40);
+const PR_LIST = [{ sha: MID40 }, { sha: HEAD }];
+
+test('E7: RED naming a commit that is not a commit of this PR (the base commit) FAILS in pre-pr when the list is known', async () => {
+  const r = checkEvidence({ body: featureBody(HEAD, BASE40), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG, commits: PR_LIST });
+  assert.equal(r.status, 'FAIL');
+  assert.match(r.notes.join('\n'), new RegExp(`${BASE40}.*not a commit of this PR`));
+  assert.match(r.notes.join('\n'), /<anchor>~N/, 'the note names the form that avoids a listed-id collision');
+  assert.equal(checkEvidence({ body: featureBody(HEAD, MID40), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG, commits: PR_LIST }).status, 'PASS');
+  // An unknown list (no commits given) keeps the old behaviour: only the head test runs.
+  assert.equal(checkEvidence({ body: featureBody(HEAD, BASE40), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG }).status, 'PASS');
+});
+
+test('E8: RED written <anchor>~N passes inside the list and fails past the first commit', async () => {
+  const ok = checkEvidence({ body: featureBody(HEAD, `${HEAD}~1`), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG, commits: PR_LIST });
+  assert.equal(ok.status, 'PASS', ok.notes.join('\n'));
+  const past = checkEvidence({ body: featureBody(HEAD, `${HEAD}~5`), head: HEAD, paths: ['scripts/x.mjs'], config: CONFIG, commits: PR_LIST });
+  assert.equal(past.status, 'FAIL');
+  assert.match(past.notes.join('\n'), /goes back past the first commit of this PR/);
+});
+
+test('E9: prCommitList reads the commits of base..HEAD oldest first, and gives [] (unknown) when git fails or prints nothing', async () => {
+  const { prCommitList } = await import('./pre-pr.mjs');
+  const good = prCommitList(fakeGit({ 'rev-list --reverse main..HEAD': `${MID40}\n${HEAD}\n` }), 'main');
+  assert.deepEqual(good, PR_LIST);
+  assert.deepEqual(prCommitList(fakeGit({}), 'main'), []);
+  assert.deepEqual(prCommitList(fakeGit({ 'rev-list --reverse main..HEAD': '' }), 'main'), []);
+});
+
 test('E6: changedFiles lists the diff against the base and fails on an empty or broken diff', async () => {
   const ok = changedFiles(fakeGit({ 'diff --name-only main...HEAD': 'a.md\nb/c.mjs\n' }), 'main');
   assert.deepEqual(ok.paths, ['a.md', 'b/c.mjs']);
@@ -1739,12 +1770,25 @@ function makeRepo({ files = { 'docs/a.md': 'hello\n' } } = {}) {
     mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
     writeFileSync(path.join(dir, name), text);
   }
+  // The evidence step reads the PR commit list (card prepr-evidence-gaps): a RED line must name a commit of the PR before the head, so a repo
+  // with work gets a real RED commit first. `red` is that commit; prePr() below puts it where a body names the fake RED id RED_PLACEHOLDER.
+  let red = null;
   if (Object.keys(files).length > 0) {
+    git(dir, 'commit', '-q', '--allow-empty', '-m', 'red');
+    red = git(dir, 'rev-parse', 'HEAD');
+    LAST_RED = red;
     git(dir, 'add', '.');
     git(dir, 'commit', '-q', '-m', 'work');
   }
-  return { dir, head: git(dir, 'rev-parse', 'HEAD') };
+  return { dir, head: git(dir, 'rev-parse', 'HEAD'), red };
 }
+
+const RED_PLACEHOLDER = 'b'.repeat(40);
+// The RED commit of the repo that makeRepo built last. Tests run one after another in this file, and each builds its repo before its body,
+// so greenBody() below can default its RED id to a real commit of that repo without every call passing one.
+let LAST_RED = RED_PLACEHOLDER;
+/** The body text with the fake RED id replaced by the repo's real RED commit (a repo with no work has none, and keeps the text). */
+const withRealRed = (text, repo) => (typeof text === 'string' && repo?.red ? text.replaceAll(RED_PLACEHOLDER, repo.red) : text);
 
 const okExec = (log) => (spec) => { log.push(spec.id ?? spec.args.join(' ')); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; };
 
@@ -1775,6 +1819,7 @@ async function prePr(repo, extra = {}) {
     summaryCheck: SUMMARY_OK,
     bodyText: 'Proof type: docs\n', ...extra,
   };
+  opts.bodyText = withRealRed(opts.bodyText, repo);
   return { result: await runPrePr(opts), gateRuns, crCalls };
 }
 
@@ -2301,7 +2346,7 @@ test('PF4: fetchEnv sets the default ssh command only when no ssh transport is c
 // CRLF is turned into LF (GU5); a GREEN-looking line inside a RED output block is rewritten, or RED changes (GU6).
 
 const sha256 = (t) => createHash('sha256').update(t).digest('hex');
-const greenBody = ({ redExtra = '', green, nl = '\n', redSha = 'b'.repeat(40), withRed = true }) => [
+const greenBody = ({ redExtra = '', green, nl = '\n', redSha = LAST_RED, withRed = true }) => [
   '## Evidence', '', 'Proof type: feature', '',
   ...(withRed ? [`RED: \`node --test x\` @ ${redSha}`, '```text', 'not ok 1', ...(redExtra ? [redExtra] : []), '```', ''] : []),
   `GREEN: \`node --test x\` @ ${green}`, '```text', 'ok 1', '```', '',

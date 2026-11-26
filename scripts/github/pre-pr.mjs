@@ -629,12 +629,28 @@ export function changedFiles(git, base, from = base) {
 /** True when every changed file is in the docs class. No files classes as normal, never docs. One computation for the evidence and coderabbit steps and the stamp. */
 export const isDocsOnly = (paths, config) => classify(paths, config).class === 'docs';
 
-/** The PR body proof, the way READY reads it (review-status.mjs). `docs` needs every changed file in the docs class. */
-export function checkEvidence({ body, head, paths, config }) {
+/**
+ * The commits of this PR as READY reads them: [{ sha }], oldest first (git rev-list --reverse base..HEAD). [] means "not known" (git failed or
+ * printed nothing), and then only the head test of a RED line runs, as in review-status.mjs. Card prepr-evidence-gaps: pre-pr gave no list, so a
+ * RED line that named the base commit passed here and failed READY (PR 734).
+ */
+export function prCommitList(git, base = 'main') {
+  // fork/<base> is what GitHub compares the PR against; the local base may lag and would then count a base commit as a PR commit.
+  let r = null;
+  for (const ref of [`${FORK}/${base}`, base]) {
+    const got = git(['rev-list', '--reverse', `${ref}..HEAD`]);
+    if (got.status === 0) { r = got; break; }
+  }
+  if (!r) return [];
+  return String(r.stdout || '').split(/\r?\n/).map((s) => s.trim().toLowerCase()).filter((s) => /^[0-9a-f]{40}$/.test(s)).map((sha) => ({ sha }));
+}
+
+/** The PR body proof, the way READY reads it (review-status.mjs). `docs` needs every changed file in the docs class. `commits`: see prCommitList. */
+export function checkEvidence({ body, head, paths, config, commits = [] }) {
   if (typeof body !== 'string') return result('evidence', 'FAIL', 'no PR body text', ['PR body proof: the draft body could not be read']);
   const parsed = parseProof(body);
   const docsVerified = isDocsOnly(paths, config);
-  const problems = proofProblems(parsed, { head, docsVerified });
+  const problems = proofProblems(parsed, { head, docsVerified, commits });
   if (problems.length > 0) return result('evidence', 'FAIL', `${problems.length} problem(s) READY would report`, problems);
   return result('evidence', 'PASS', `Proof type ${parsed.types[0].trim()}${docsVerified ? ' (every changed file is docs)' : `, GREEN names the head ${head.slice(0, 7)}`}`);
 }
@@ -754,7 +770,7 @@ export function greenRewrite({ git, base = 'main', bodyText, head, paths, config
   const newSha = head.slice(0, 7);
   const text = rewriteGreenSha(bodyText, oldSha, newSha);
   if (text === null) return null;
-  const again = checkEvidence({ body: text, head, paths, config });
+  const again = checkEvidence({ body: text, head, paths, config, commits: prCommitList(git, base) });
   return again.status === 'PASS' ? { oldSha, newSha, text, evidence: again } : null;
 }
 
@@ -2046,7 +2062,7 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   results.push(changes.result);
   const docsVerified = isDocsOnly(changes.paths, cfg);
   const evidenceAt = results.length;
-  results.push(measure(() => checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg })));
+  results.push(measure(() => checkEvidence({ body: bodyText, head: head ?? '', paths: changes.paths, config: cfg, commits: head ? prCommitList(git, base) : [] })));
   // Fail-fast (Dave, 2026-11-04): the first FAIL stops the rest of the gates, which take minutes. One FAIL does not stop them: an evidence
   // FAIL that only a gate pass can settle (a stale GREEN sha after a clean merge of the base, see greenRewriteCandidate).
   const settledByGates = head && bodyPath && greenRewriteCandidate({ git, base, bodyText, head, evidence: results[evidenceAt] }) ? results[evidenceAt] : null;
