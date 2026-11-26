@@ -288,3 +288,42 @@ test('AC13b: review-status.mjs, the router and the land step are forced HIGH (FO
     assert.match(r.auto.reason, /^Band HIGH: Dave presses/, p);
   }
 });
+
+// ---------- the live value (card review-autoconfirm-below-high, Dave 2026-11-26 07:42 CST): these rows read LIVE.checkpoint, not a pinned value ----------
+
+const liveAuto = (paths, factOver = {}) => recommendFor(paths, factOver, { checkpoint: LIVE.checkpoint });
+
+test('AL1: under the live config a MID and an ELEVATED PR with no critical file are auto-eligible', async () => {
+  for (const [paths, band] of [[MID, 'MID'], [ELEVATED, 'ELEVATED']]) {
+    const r = await liveAuto(paths);
+    assert.equal(r.band.band, band);
+    assert.equal(r.recommended, 'none');
+    assert.equal(r.auto.eligible, true, `${band} under the live config: ${r.auto.reason}`);
+  }
+});
+
+test('AL2: under the live config a critical file in a MID or an ELEVATED PR still stops the auto record, with the floor text', async () => {
+  for (const paths of [[...MID, GATE[3]], [...ELEVATED, GATE[3]]]) {
+    const r = await liveAuto(paths);
+    assert.notEqual(r.band.band, 'HIGH', 'cr-paid.mjs is critical but not forced HIGH');
+    assert.equal(r.recommended, 'none');
+    assert.equal(r.auto.eligible, false);
+    assert.match(r.auto.reason, /aegis \+ critic/, 'the floor stops it, not the band');
+    assert.ok(r.auto.reason.includes(GATE[3]), 'the reason names the file');
+  }
+});
+
+test('AL3: under the live config HIGH and CRITICAL are never auto-eligible', async () => {
+  const high = await liveAuto(GATE);
+  assert.equal(high.band.band, 'HIGH');
+  assert.equal(high.auto.eligible, false);
+  const critical = await liveAuto(['docs/a.md'], { labels: ['risk:high'] });
+  assert.equal(critical.band.band, 'CRITICAL');
+  assert.equal(critical.auto.eligible, false);
+});
+
+test('AL4: a PR that changes the config itself carries config_drift, so the live value never auto-confirms it', async () => {
+  const r = await liveAuto(['review-router.config.json'], { config_drift: true });
+  assert.equal(r.auto.eligible, false);
+  assert.match(r.auto.reason, /differs from main|drift|Branch config/i);
+});
