@@ -3924,7 +3924,7 @@ function judgeCommand(input: HookInput, deps: Deps, notes: Set<string>, denies: 
   // PR C1 (F1): a text that does not parse, or a shell string inside it that does not parse, and names a guarded call. Only adds a deny.
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   // PR C2b (F1-3): no parse and a guarded call named in the text.
-  for (const d of parserUnavailableDenies(deps.parsed, cmd.text, deps.parsed === undefined && coveredAmong(deps, [cwd]) !== null)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  for (const d of parserUnavailableDenies(deps.parsed, cmd.text, !deps.parsed && coveredAmong(deps, [cwd]) !== null)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   // A subagent never has a tap: any create, land or merge is denied at once. A push is judged (the checkout and the remote decide), see judgePush.
   const shell = shellOf(input);

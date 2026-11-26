@@ -512,6 +512,10 @@ describe('CLI run 2 of C2b: the no-parse deny in a covered folder reads decision
     expect(lateDeny(CREATE, split)).toBe('parser-unavailable');
     expect(lateDeny(MERGE, split)).toBe('parser-unavailable');
   });
+  it('a null parse (a failed or thrown parse) reads the home flag the same way as an absent one', () => {
+    const d = decide(bash(CREATE), { ...deps(split), parsed: null } as unknown as Deps);
+    expect(d.action === 'deny' ? d.pattern : 'allow').toBe('parser-unavailable');
+  });
   it('(paired) home enforce false: the same texts only warn', () => {
     const off = { config: split.config, homeConfig: split.config };
     expect(lateDeny(CREATE, off)).toBe('allow');

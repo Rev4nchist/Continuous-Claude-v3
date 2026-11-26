@@ -4642,7 +4642,7 @@ function judgeCommand(input, deps, notes, denies = []) {
   if (capOverrideDeny(input, deps)) denies.push(deny("cap-override", CAP_WHY));
   for (const d of [...scriptRunnerDenies(deps.parsed), ...scriptRunnerLateDenies(deps.parseLate)]) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   for (const d of parseErrorDenies(deps.parsed)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
-  for (const d of parserUnavailableDenies(deps.parsed, cmd.text, deps.parsed === void 0 && coveredAmong(deps, [cwd]) !== null)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
+  for (const d of parserUnavailableDenies(deps.parsed, cmd.text, !deps.parsed && coveredAmong(deps, [cwd]) !== null)) if (!denies.some((o) => o.pattern === d.pattern)) denies.push(d);
   const shapes = shapesOf(cmd.text, cmd.tool, deps.parsed);
   const shell = shellOf(input);
   if (input.agent_id && shapes.some((s) => s.kind !== "push")) denies.push(subagentDeny(shapes, deps, cwd, shell));
