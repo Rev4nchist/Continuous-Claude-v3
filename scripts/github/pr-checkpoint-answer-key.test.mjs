@@ -103,7 +103,8 @@ test('K7: auto-confirm for an answer-key change: a LOW change qualifies under lo
     const crit = await recommendFor([KEY, GATE_FILE], value);
     assert.equal(crit.recommended, 'none');
     assert.equal(crit.auto.eligible, false, `critical file under ${JSON.stringify(value)}`);
-    assert.match(crit.auto.reason, /aegis \+ critic/);
+    // Under low the band check (ELEVATED is not LOW) stops it first; under true only the critical-file floor stops it.
+    assert.match(crit.auto.reason, value === true ? /aegis \+ critic/ : /covers LOW only/);
   }
 });
 
