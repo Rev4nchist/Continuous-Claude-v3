@@ -5066,7 +5066,7 @@ test('PFL10: a GREEN line that a clean merge of main made stale is a NOTE, not a
   const text = greenBody({ green: repo.old });
   writeFileSync(bodyPath, text);
   const run = await preflight({ dir: repo.dir, head: repo.head, red: LAST_RED }, { bodyText: text, bodyPath });
-  const ev = run.result.results.find(/** @param {{ step: string }} r */ (r) => r.step === 'evidence');
+  const ev = run.result.results.find((r) => r.step === 'evidence');
   assert.equal(ev.status, 'NOTE', run.result.lines.join('\n'));
   assert.match(ev.detail, /the run settles a stale GREEN line after its gates/);
   assert.equal(run.result.ok, true, run.result.lines.join('\n'));
