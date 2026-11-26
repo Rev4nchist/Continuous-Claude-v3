@@ -13,7 +13,8 @@ import { withParsed, type Deps } from '../decision-gate.js';
 
 vi.setConfig({ testTimeout: 60000 });
 const DC = 'mcp__plugin_desktop-commander_desktop-commander__';
-const base = { git: () => ({ status: 1, stdout: '' }), readFile: () => null, env: {}, home: '/h' } as unknown as Deps;
+// C2c: the walker timeout and the parse budget come from the env the test gives (the hook reads deps.env), so a loaded Linux runner does not turn a slow pwsh child into a missing parse.
+const base = { git: () => ({ status: 1, stdout: '' }), readFile: () => null, env: { CCV3_PARSE_TIMEOUT_MS: '30000', CCV3_PARSE_BUDGET_MS: '60000' }, home: '/h' } as unknown as Deps;
 const payload = (tool_name: string, command: string) => JSON.stringify({ tool_name, tool_input: { command }, cwd: '/repo' });
 const P = 'pu' + 'sh';
 
