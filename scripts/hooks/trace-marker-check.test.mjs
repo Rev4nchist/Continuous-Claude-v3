@@ -83,6 +83,74 @@ test('the token in a comment is not the boot call', () => {
   assert.ok(f.some((x) => x.kind === 'trace-boot-call-missing' && /h1/.test(x.detail)), JSON.stringify(f));
 });
 
+// Ruling B item 1 (card hook-build-run-lock): `build` is the wrapper line and the esbuild line moved to `build:raw`.
+// The check reads build:raw first, then build, and still fails closed when neither carries the flag.
+const WRAPPER_LINE = 'node scripts/build-with-lock.mjs';
+function hooksDirScripts(scripts, dists = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'tmc-'));
+  mkdirSync(join(dir, 'dist'), { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts }));
+  for (const [name, text] of Object.entries(dists)) writeFileSync(join(dir, 'dist', `${name}.mjs`), text);
+  return dir;
+}
+
+test('a wrapper build line with the flag in build:raw is no finding', () => {
+  const dir = hooksDirScripts({ build: WRAPPER_LINE, 'build:raw': BUILD_OK }, allMarked(5));
+  assert.deepEqual(traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 }), []);
+});
+
+test('a wrapper build line with no flag in build:raw is a finding (the guard fails closed)', () => {
+  const dir = hooksDirScripts({ build: WRAPPER_LINE, 'build:raw': 'esbuild src/*.ts --bundle' }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+test('a wrapper build line and no build:raw at all is a finding', () => {
+  const dir = hooksDirScripts({ build: WRAPPER_LINE }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+// Seat ruling B, item 1 changed (07:03 CST): read the line that RUNS. build:raw counts only behind the wrapper. A plain build line with no flag
+// is a finding even when build:raw holds the flag (the real build runs the plain line and drops the tracer).
+test('a plain esbuild build line with no flag is a finding even when build:raw holds the flag (the line that runs decides)', () => {
+  const dir = hooksDirScripts({ build: 'esbuild src/*.ts --bundle', 'build:raw': BUILD_OK }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+test('a package.json with no build line at all is a finding, even when build:raw holds the flag', () => {
+  const dir = hooksDirScripts({ 'build:raw': BUILD_OK }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+// CLI run 2 minor 1 (seat 07:22): the wrapper test is exact. Only a trimmed scripts.build equal to the wrapper line is the wrapper; a line that only names the
+// file (an echo, a comment) is read as itself.
+test('a build line that only names build-with-lock.mjs in an echo is read as itself, not as the wrapper', () => {
+  const echoLine = 'echo build-with-lock.mjs && esbuild src/*.ts --bundle';
+  const dir = hooksDirScripts({ build: echoLine, 'build:raw': BUILD_OK }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+test('the wrapper line is exact: surrounding spaces are trimmed, extra words are not the wrapper', async () => {
+  const mod = await import('./trace-marker-check.mjs');
+  assert.equal(mod.buildLineThatRuns({ build: `  ${WRAPPER_LINE}  `, 'build:raw': BUILD_OK }), BUILD_OK);
+  assert.equal(mod.buildLineThatRuns({ build: `${WRAPPER_LINE} && true`, 'build:raw': BUILD_OK }), `${WRAPPER_LINE} && true`);
+  assert.equal(mod.buildLineThatRuns({ build: `# ${WRAPPER_LINE}`, 'build:raw': BUILD_OK }), `# ${WRAPPER_LINE}`);
+});
+
+test('buildLineThatRuns is build:raw behind the wrapper and build otherwise (one helper for every reader)', async () => {
+  const mod = await import('./trace-marker-check.mjs');
+  assert.equal(typeof mod.buildLineThatRuns, 'function', 'trace-marker-check.mjs must export buildLineThatRuns');
+  assert.equal(mod.buildLineThatRuns({ build: WRAPPER_LINE, 'build:raw': BUILD_OK }), BUILD_OK);
+  assert.equal(mod.buildLineThatRuns({ build: BUILD_OK }), BUILD_OK);
+  assert.equal(mod.buildLineThatRuns({ build: 'esbuild src/*.ts', 'build:raw': BUILD_OK }), 'esbuild src/*.ts');
+  assert.equal(mod.buildLineThatRuns({ build: WRAPPER_LINE }), '', 'the wrapper with no build:raw runs nothing');
+  assert.equal(mod.buildLineThatRuns({}), '');
+});
+
 test('a dist with the boot call counts toward the floor only once it has both', () => {
   const dists = { ...allMarked(3), h3: `var m = "${TRACE_MARKER}";
 `, h4: `var m = "${TRACE_MARKER}";
