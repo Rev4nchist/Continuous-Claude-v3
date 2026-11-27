@@ -213,9 +213,11 @@ export function buildContext(info: PrInfo, ledger = false): string {
     return (
       head +
       `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. ` +
-      `It watches the review bots the labels require (CodeRabbit while Greptile auto review is off) and CI for you and tells Dave and you at READY; never merge. ` +
+      `It watches the review bots the labels require (CodeRabbit while Greptile auto review is off) and CI for you and tells Dave at READY (a toast), not you; never merge. ` +
       `Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. ` +
       checkpointText(info, ledger) +
+      `Then, in that same turn, start node scripts/github/wait-ci.mjs ${info.number} with run_in_background. ` +
+      'It ends at READY, a failed check or its time limit, and that starts a turn in you. Then send READY or the failure to the seat by SendMessage. The seat reads GitHub before any land word. ' +
       `This applies to every PR in every session.`
     );
   }

@@ -221,25 +221,53 @@ describe('inbox --wait: what it never does', () => {
 
   it('W10: no connection stays open between polls', async () => {
     const c = newCase('w10');
-    const bg = laneBg(c, ['inbox', '--wait', '--timeout', '6'], { extra: { LANE_ALLOW_AS: '1', LANE_WAIT_POLL_MS: '2500' } });
-    // No fixed sleep: a slow runner needs longer than 1.5 s for the first poll (it failed in CI that way). Sample every 100 ms for the whole
-    // wait. A wait that opens and closes a connection for each poll shows one connection (a poll), then none (the 2.5 s sleep after it).
-    // A wait that holds one connection for the whole wait never shows none after it showed one.
     const dbName = new URL(s.url).pathname.slice(1);
+    // A poll is short, so a 100 ms sample can miss every one of them (pre-pr saw 40 samples of "none"). The test makes the first poll visible:
+    // it holds an ACCESS EXCLUSIVE lock on agentic_os.lane_event before the waiter starts, so the poll query waits for the lock and its
+    // connection stays open. When a sample sees that connection, the test commits and the poll goes on. After it, the wait sleeps 2.5 s.
+    // A wait that opens and closes a connection for each poll shows no client connection in that sleep.
+    // A wait that holds one connection for the whole wait never shows none after the first poll.
+    let locked = false;
+    const unlock = async () => { if (locked) { locked = false; await s.db.query('COMMIT'); } };
     let finished = false;
-    bg.done.then(() => { finished = true; });
     let sawConnection = false;
     let sawNoneAfter = false;
-    while (!finished) {
-      const open = (await s.db.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, [dbName])).rows[0].n;
-      if (open > 0) sawConnection = true;
-      else if (sawConnection) sawNoneAfter = true;
-      await sleep(100);
+    // Only client backends count: autovacuum and other workers of the database are not the waiter (card coord-inbox-wait-w10).
+    // The last 40 samples are kept, so a failure names the connection that never closed.
+    const samples = [];
+    let r;
+    try {
+      await s.db.query('BEGIN');
+      await s.db.query('LOCK TABLE agentic_os.lane_event IN ACCESS EXCLUSIVE MODE');
+      locked = true;
+      const bg = laneBg(c, ['inbox', '--wait', '--timeout', '6'], { extra: { LANE_ALLOW_AS: '1', LANE_WAIT_POLL_MS: '2500' } });
+      bg.done.then(() => { finished = true; });
+      const giveUpAt = Date.now() + 20000;
+      while (!finished) {
+        // Inside the open transaction Postgres keeps one snapshot of pg_stat_activity; clear it so each sample is fresh.
+        await s.db.query('SELECT pg_stat_clear_snapshot()');
+        const rows = (await s.db.query(
+          `SELECT pid, backend_type, state, wait_event_type, application_name, round(extract(epoch FROM now() - backend_start)::numeric, 1)::text AS age_s
+             FROM pg_stat_activity WHERE datname = $1 AND backend_type = 'client backend' AND pid <> pg_backend_pid() ORDER BY pid`, [dbName])).rows;
+        samples.push(rows.length ? rows.map((x) => `${x.pid}/${x.backend_type}/${x.state}/${x.wait_event_type || '-'}/${x.application_name || '-'}/${x.age_s}s`).join(' ') : 'none');
+        if (samples.length > 40) samples.shift();
+        if (rows.length > 0) {
+          sawConnection = true;
+          await unlock();
+        } else if (sawConnection) {
+          sawNoneAfter = true;
+        }
+        if (!sawConnection && Date.now() > giveUpAt) await unlock();
+        await sleep(100);
+      }
+      r = await bg.done;
+    } finally {
+      await unlock();
     }
-    const r = await bg.done;
+    const log = `last ${samples.length} samples (pid/type/state/wait/app/age): ${samples.join(' | ')}`;
     assert.equal(r.code, 75, r.err);
-    assert.ok(sawConnection, 'the samples saw the waiter poll at least once');
-    assert.ok(sawNoneAfter, 'the wait holds no database connection while it sleeps');
+    assert.ok(sawConnection, `the samples saw the waiter poll (its first poll waits on a lock the test holds); ${log}`);
+    assert.ok(sawNoneAfter, `the wait holds no database connection while it sleeps; ${log}`);
   });
 });
 

@@ -185,6 +185,25 @@ describe('pr-opened-review-loop classifiers (unit)', () => {
     expect(ctx).toMatch(/never mark it ready/i);
   });
 
+  // Card coord-ci-green-wake. pr_watch toasts Dave at READY; it never tells the builder (pr-loop index.ts). The text must not say it does,
+  // and it must send the builder to wait-ci.mjs in the background, after pr_watch and pr_checkpoint, then to SendMessage for the seat.
+  // Change that breaks it: restore "and you at READY", drop the wait-ci sentence, or put it for another repo.
+  it('for the CCv3 repo does not say pr_watch tells the builder, and names wait-ci in the background after pr_checkpoint', () => {
+    const ctx = buildContext({ owner: 'Rev4nchist', repo: 'Continuous-Claude-v3', number: '107', url: 'https://github.com/Rev4nchist/Continuous-Claude-v3/pull/107' });
+    expect(ctx).not.toMatch(/tells Dave and you at READY/);
+    expect(ctx).toMatch(/tells Dave at READY[^.]*not you/);
+    expect(ctx).toContain('node scripts/github/wait-ci.mjs 107');
+    expect(ctx).toMatch(/run_in_background/);
+    expect(ctx).toMatch(/SendMessage/);
+    expect(ctx).toMatch(/the seat reads GitHub/i);
+    expect(ctx.indexOf('pr_checkpoint')).toBeLessThan(ctx.indexOf('wait-ci.mjs'));
+  });
+
+  it('for another repo does not name wait-ci', () => {
+    const ctx = buildContext({ owner: 'acme', repo: 'widgets', number: '42', url: 'https://github.com/acme/widgets/pull/42' });
+    expect(ctx).not.toContain('wait-ci');
+  });
+
   it('for another repo does not send the model to pr_checkpoint', () => {
     const ctx = buildContext({ owner: 'acme', repo: 'widgets', number: '42', url: 'https://github.com/acme/widgets/pull/42' });
     expect(ctx).not.toContain('pr_checkpoint');
