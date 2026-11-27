@@ -256,6 +256,22 @@ describe('E error paths of the floor (fix round of review pass 2)', () => {
     });
   });
 
+  describe('E8 a very large text is answered by the floor first (aegis 2: the head cannot judge 5000 pipes inside the hook time)', () => {
+    const stub = (calls: string[]): FloorImpl => ({ ...FLOOR_IMPL, decide: () => { calls.push('floor'); return { action: 'deny', pattern: 'stub-floor', scope: 'other', reason: 'stub' }; } });
+    it('a text over 16000 chars: the floor deny is the verdict and the head judgment never runs (its git is never read)', async () => {
+      const calls: string[] = [];
+      const big = `gh pr merge 6 --admin; ${'echo a | '.repeat(2500)}echo a`;
+      const git: Deps['git'] = () => { calls.push('head-git'); return { status: 1, stdout: '' }; };
+      expect(await verdict('Bash', big, { floorImpl: stub(calls), git })).toBe('deny:stub-floor');
+      expect(calls).toEqual(['floor']);
+    });
+    it('a small text: the head judges first and the floor is asked once, after the head allows', async () => {
+      const calls: string[] = [];
+      expect(await verdict('Bash', 'ls -la', { floorImpl: stub(calls) })).toBe('deny:stub-floor');
+      expect(calls).toEqual(['floor']);
+    });
+  });
+
   describe('E7 the floor walker is the head walker', () => {
     const lf = (p: string): string => createHash('sha256').update(readFileSync(p, 'utf8').replace(/\r\n/g, '\n')).digest('hex');
     it('src/shell-ast-walk.ps1 equals src/main-floor/shell-ast-walk.ps1 (LF text), so the built floor reads main\'s walker', () => {

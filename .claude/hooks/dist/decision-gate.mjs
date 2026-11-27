@@ -9388,6 +9388,10 @@ function judge2(input, deps, notes, sink) {
   return COMMAND_TOOLS4.has(tool) ? judgeCommand2(input, deps, notes, sink) : sink;
 }
 function decide2(input, deps, found = []) {
+  if (deps.floor !== void 0 && commandTextLength(input) > BIG_TEXT_CHARS) {
+    const fd = floorDecision(input, deps);
+    if (fd.action === "deny") return fd;
+  }
   const d = decideHead(input, deps, found);
   return d.action === "deny" || deps.floor === void 0 ? d : withFloor(d, input, deps);
 }
@@ -9396,6 +9400,15 @@ function withFloor(d, input, deps) {
   if (fd.action === "deny") return fd;
   if (fd.warn !== void 0 && d.action === "allow" && d.warn === void 0) return { ...d, warn: fd.warn, scope: fd.scope };
   return d;
+}
+var BIG_TEXT_CHARS = 16e3;
+function commandTextLength(input) {
+  try {
+    const c = readCommand2(input);
+    return c.kind === "command" ? c.text.length : 0;
+  } catch {
+    return 0;
+  }
 }
 var FLOOR_ERROR_REASON = "BLOCKED (decision-gate): the check that holds the rules of main could not run on this call, so it is not allowed. Run the command again. If it keeps failing, ask Dave.";
 var FLOOR_ERROR_DENY = { action: "deny", pattern: "main-floor-error", scope: "other", reason: FLOOR_ERROR_REASON };

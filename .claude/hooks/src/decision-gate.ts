@@ -4304,6 +4304,12 @@ function judge(input: HookInput, deps: Deps, notes: Set<string>, sink: Deny[]): 
  * seen in a folder outside CCv3, is an allow with `notice` (S5; a corrupt one is the registry-corrupt deny: seat review 1, item 4).
  */
 export function decide(input: HookInput, deps: Deps, found: Deny[] = []): Decision {
+  // Fix round of review pass 2 (aegis 2): this head's judgment of a very large text is CPU time that no git deadline cuts (a merge text plus 5000 pipes: main denies in 6 s, the head gave no answer in 15 s,
+  // and a hook killed at 10 s writes no deny). Past BIG_TEXT_CHARS the floor, which costs what main costs, answers first; a deny of the floor is the verdict, and only an allow goes on to the head.
+  if (deps.floor !== undefined && commandTextLength(input) > BIG_TEXT_CHARS) {
+    const fd = floorDecision(input, deps);
+    if (fd.action === 'deny') return fd;
+  }
   const d = decideHead(input, deps, found);
   return d.action === 'deny' || deps.floor === undefined ? d : withFloor(d, input, deps);
 }
@@ -4321,7 +4327,13 @@ function withFloor(d: Decision, input: HookInput, deps: Deps): Decision {
   return d;
 }
 
-const FLOOR_ERROR_REASON = 'BLOCKED (decision-gate): the check that holds the rules of main could not run on this call, so it is not allowed. Run the command again. If it keeps failing, ask Dave.';
+/** A command text longer than this is judged by the floor first (decide): about 1800 pipe members, where this head's own judgment starts to take seconds. */
+const BIG_TEXT_CHARS = 16000;
+function commandTextLength(input: HookInput): number {
+  try { const c = readCommand(input); return c.kind === 'command' ? c.text.length : 0; } catch { return 0; }
+}
+
+const FLOOR_ERROR_REASON ='BLOCKED (decision-gate): the check that holds the rules of main could not run on this call, so it is not allowed. Run the command again. If it keeps failing, ask Dave.';
 const FLOOR_ERROR_DENY: Decision = { action: 'deny', pattern: 'main-floor-error', scope: 'other', reason: FLOOR_ERROR_REASON };
 
 /** The deps of main's gate when its own parse failed: the base without this head's parse and seams, the call's shell text marked late (as main's withParsed does for a parse that threw). */
