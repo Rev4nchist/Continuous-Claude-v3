@@ -79,7 +79,7 @@ export function sayTimeoutMs(env = process.env) {
 /** UTF-16 units one argument takes on a Windows command line, quoted as Node and libuv quote it. */
 export function escapedUnits(arg) {
   const s = String(arg);
-  if (s !== '' && !/[\s"]/.test(s)) return s.length;
+  if (s !== '' && !/[ \t"]/.test(s)) return s.length; // libuv wraps only on a space, a tab or a quote
   let units = 2; // the wrapping quotes
   let slashes = 0;
   for (const ch of s) {
@@ -94,7 +94,7 @@ export function escapedUnits(arg) {
 
 /** The whole say command line: node, lane.mjs, say, the text, --to <longest name>, --lane <lane>, with the spaces between. */
 export function commandUnits(text, names, lane, env = process.env) {
-  const longest = names.reduce((a, b) => (b.length > a.length ? b : a), '');
+  const longest = names.reduce((a, b) => (escapedUnits(b) > escapedUnits(a) ? b : a), '');
   const parts = [process.execPath, laneCliPath(env), 'say', text, '--to', longest, '--lane', lane];
   return parts.reduce((n, p) => n + escapedUnits(p), 0) + parts.length - 1;
 }
