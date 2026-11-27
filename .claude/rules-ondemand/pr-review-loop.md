@@ -32,7 +32,12 @@ into the session). Say so. If a reload matters, ask Dave with AskUserQuestion. D
 
 `pr_watch` is a ccv3-mods tool. The session checks the PR every 5 minutes with
 `scripts/github/review-status.mjs` and tells Dave with a toast at READY, merged or closed. Those three
-give you no line. You get one report line only when a reviewed head has findings, a confidence below
+give you no line. To learn at once that the PR is READY, start `node scripts/github/wait-ci.mjs <N>` with
+`run_in_background` in the turn that opens the PR (after `pr_watch` and `pr_checkpoint`). It runs
+`review-status.mjs` every 60 s and ends at READY (exit 0), a failed check (exit 1, named), the time limit
+(exit 75, default 3600 s) or 3 broken reads (exit 2). When it ends, send READY or the failure to the
+seat by SendMessage (V7.12). The seat reads GitHub before any land word (V7.4). Never use
+`pr_watch /land --when-ready`. You get one report line only when a reviewed head has findings, a confidence below
 4/5 or a failed check (REVIEWED: act per "When the review lands"); when the PR body proof is wrong
 (PROOF); when no review comes in 60 minutes (STALLED); and when a bot did not finish a review
 (LIMITED). Use `pr_status` to read the state; it reads the same status once. `CCV3_MOD_PRLOOP_QUIET=1`

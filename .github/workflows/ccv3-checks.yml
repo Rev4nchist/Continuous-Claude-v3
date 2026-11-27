@@ -63,6 +63,9 @@ jobs:
       - name: land-recheck unit tests
         timeout-minutes: 5
         run: node --test scripts/github/land-recheck.test.mjs
+      - name: wait-ci unit tests
+        timeout-minutes: 5
+        run: node --test scripts/github/wait-ci.test.mjs
       - name: cr-paid unit tests
         timeout-minutes: 5
         run: node --test scripts/github/cr-paid.test.mjs scripts/github/cr-paid-post.test.mjs scripts/github/cr-paid-unledgered.test.mjs scripts/github/cr-paid-merge-head.test.mjs scripts/github/paid-guard-confirm.test.mjs scripts/github/paid-guard-decisions.test.mjs scripts/github/ship-ask-paid-price.test.mjs
