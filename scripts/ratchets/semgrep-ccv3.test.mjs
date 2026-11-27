@@ -19,7 +19,7 @@
 //   SG13  a control character in a file name            -> a path or rule name is printed raw in the TIMEOUT, slowest-file or NOTE line
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -292,4 +292,37 @@ test('SG13: a control character in a file name never reaches a printed time line
   assert.ok(noise.length >= 3, `a TIMEOUT, a slowest and a NOTE line: ${h.lines.join('\n')}`);
   for (const l of noise) assert.ok(!/[\u0000-\u001f\u007f]/.test(l), `a control character in: ${JSON.stringify(l)}`);
   assert.ok(noise.some((l) => l.includes('scripts/a.mjs')), 'the name is still readable');
+});
+
+// SG14 and SG15: card semgrep-size-skip. Both engines skip a target over 1,000,000 bytes by default, with no error and no entry in the JSON report,
+// so the gate passed a file that was never scanned. The size limit is off on both engines.
+//   SG14  the flag on both engines, and one line that says so -> --max-target-bytes 0 is dropped from either arg list, or the line is dropped
+//   SG15  a real scan of a file over 1,000,000 bytes          -> the limit comes back: the file is skipped again and the gate passes (needs opengrep; skipped when none is found)
+test('SG14: both engines run with the size limit off, and the run says so', () => {
+  const d = harness({ spawn: ok(report()) });
+  assert.equal(main([], d.deps), 0);
+  assert.equal(pair(d.calls[0].args, '--max-target-bytes'), '0', 'docker: no size limit');
+  assert.equal(pair(sg.opengrepArgs(), '--max-target-bytes'), '0', 'opengrep: no size limit');
+  assert.equal(pair(dockerArgs({ root: '/r', image: 'img' }), '--max-target-bytes'), '0', 'dockerArgs: no size limit');
+  const o = harness({ spawn: ok(report()) });
+  assert.equal(main([], { ...o.deps, findOpengrep: () => 'og-test' }), 0);
+  assert.equal(pair(o.calls[0].args, '--max-target-bytes'), '0', 'opengrep run: no size limit');
+  assert.ok(o.lines.some((l) => l.includes('size limit off')), o.lines.join('\n'));
+});
+
+test('SG15: a file over 1,000,000 bytes is scanned: a finding in it fails the run (real opengrep)', (t) => {
+  if (!sg.findOpengrep()) return t.skip('no opengrep binary here; CI runs the Docker engine (SG14 checks its flag)');
+  const root = temp();
+  mkdirSync(path.join(root, 'scripts'));
+  const fixture = readFileSync(path.join(sg.RULES_DIR, 'ccv3-argv-index-as-path.mjs'), 'utf8');
+  const pad = '// padding line to push the file over one million bytes\n'.repeat(20000);
+  writeFileSync(path.join(root, 'scripts', 'big.mjs'), `${fixture}\n${pad}`);
+  assert.ok(readFileSync(path.join(root, 'scripts', 'big.mjs')).length > 1000000, 'the fixture is over the default size limit');
+  const dir = temp();
+  const baseline = path.join(dir, 'baseline.json');
+  writeFileSync(baseline, JSON.stringify({ tool: 'semgrep', reason: 'test', total: 0, counts: {} }));
+  const lines = [];
+  const code = main(['--root', root], { log: (s) => lines.push(String(s)), baseline, tmp: () => dir });
+  assert.equal(code, 1, `a finding in a file over the default size limit must fail the run:\n${lines.join('\n')}`);
+  assert.ok(lines.some((l) => l.includes('big.mjs')), lines.join('\n'));
 });
