@@ -3085,10 +3085,10 @@ function judgeLand(shape: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decisio
   if (route === 'app') return judgeAppMerge(shape, deps, dir, cmd);
   if (route === 'foreign') return deny('repo-foreign', goThereWhy(cmd.repo!));
   if (shape.pr === null) return deny('no-pr', NO_PR_WHY);
-  if (shape.kind === 'merge' && shape.shaBad) return deny('merge-no-head', `PR #${shape.pr}: ${HEAD_UNREAD_WHY(shape.pr)} The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr}).`);
+  if (shape.kind === 'merge' && shape.shaBad) return deny('merge-no-head', `PR #${shape.pr}: ${HEAD_UNREAD_WHY(shape.pr)} The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr} --json).`);
   const sha = shape.sha ?? undefined;
   // A raw merge with no sha= has no head to compare, so an old tap (a head that has since moved) could land a new head. land-pr.ps1 pins the head itself.
-  if (shape.kind === 'merge' && !sha) return deny('merge-no-head', `${shape.pr ? `PR #${shape.pr}` : 'this PR'}: a raw merge command names no head, so Dave's tap cannot be tied to the head that would land. Run land-pr.ps1 -Pr ${shape.pr ?? '<n>'} (it pins the head), or pass the tapped head: gh api .../merge -f sha=<head>, gh pr merge --match-head-commit <head>. The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr ?? '<n>'}).`);
+  if (shape.kind === 'merge' && !sha) return deny('merge-no-head', `${shape.pr ? `PR #${shape.pr}` : 'this PR'}: a raw merge command names no head, so Dave's tap cannot be tied to the head that would land. Run land-pr.ps1 -Pr ${shape.pr ?? '<n>'} (it pins the head), or pass the tapped head: gh api .../merge -f sha=<head>, gh pr merge --match-head-commit <head>. The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr ?? '<n>'} --json).`);
   const key = decisionKey({ pr: shape.pr });
   const ok = decisionRows(deps.env).some((r) => r.step === 'land' && r.key === key && isLandLabel(r.label) && (!sha || r.head.toLowerCase() === sha));
   return ok ? ALLOW : deny('land', landWhy(shape.pr));

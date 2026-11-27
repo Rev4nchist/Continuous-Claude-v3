@@ -40,9 +40,7 @@ const OWNED = [
   '.claude/plugins/ccv3-mods/hooks/pr-loop/model.ts',
 ];
 // A file that holds a bad mention another card fixes, with that card. Delete the entry in the commit that fixes the file.
-const OPEN = {
-  '.claude/hooks/src/decision-gate.ts': 'coord-gate-timeout-hole',
-};
+const OPEN = {};
 
 /** Every ship-ask step mention of a text: { line, step, ok }. ok is true when the rest of its line holds --json or --text. */
 export function mentionsOf(text) {
