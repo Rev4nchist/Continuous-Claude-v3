@@ -213,4 +213,34 @@ describe('wait-ci: the pure core', () => {
     assert.deepEqual(sleeps, [400, 400, 200], 'the last sleep is cut to the time left');
     assert.equal(polls, 4, 'polls at 0, 400, 800 and once at the limit 1000');
   });
+
+  // CLI run 1 of the pre-pr (wait-ci.mjs:98): a fixed 120 s read timeout lets one hung review-status run the wait up to 120 s past its limit.
+  // Change that breaks it: give every read the fixed 120 s, or drop the floor (a read near the limit then has no time to finish).
+  it('C12: each read gets at most the time left (a floor of 5 s, a ceiling of 120 s), so a hung read cannot run the wait past its limit', async () => {
+    const { waitForReady, readBudget, readStatus } = await import(pathToFileURL(WAIT_CI).href);
+    assert.equal(readBudget(600000), 120000, 'ceiling');
+    assert.equal(readBudget(30000), 30000, 'the time left');
+    assert.equal(readBudget(2000), 5000, 'floor');
+    assert.equal(readBudget(0), 5000, 'floor at the limit');
+    assert.equal(readBudget(-1000), 5000, 'floor past the limit');
+    let t = 0;
+    const budgets = [];
+    await waitForReady({
+      pr: 9,
+      timeoutS: 10,
+      step: 4000,
+      poll: ({ budgetMs }) => { budgets.push(budgetMs); return { code: 1, json: { ready: false, headShort: 'h', reasons: [] } }; },
+      sleep: async (ms) => { t += ms; },
+      now: () => t,
+    });
+    assert.deepEqual(budgets, [10000, 6000, 5000, 5000], 'polls at 0, 4000, 8000 (2000 left: floor) and the limit');
+    let seen;
+    const fakeSpawn = (_cmd, _argv, opts) => { seen = opts; return { status: 0, stdout: '{"ready":true,"headShort":"h"}', stderr: '' }; };
+    assert.equal(readStatus({ pr: 9, budgetMs: 7000, spawn: fakeSpawn }).code, 0);
+    assert.equal(seen.timeout, 7000, 'the child timeout is the budget');
+    readStatus({ pr: 9, spawn: fakeSpawn });
+    assert.equal(seen.timeout, 120000, 'no budget: the ceiling');
+    const timedOut = () => ({ error: new Error('spawnSync node ETIMEDOUT'), status: null, stdout: '', stderr: '' });
+    assert.equal(readStatus({ pr: 9, budgetMs: 5000, spawn: timedOut }).code, -1, 'a timed-out read is an error read');
+  });
 });
