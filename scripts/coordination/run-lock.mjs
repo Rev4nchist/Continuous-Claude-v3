@@ -3,7 +3,7 @@
  * run-lock.mjs: a cooperative lock that GRANTS or refuses a heavy run (card coord-run-lock-and-go-row).
  *
  * Why: two builders that measure free memory in the same minute both start a heavy run (pre-pr, suite, label run,
- * loop). The lock counts the live runs, reads free memory and processor load, applies the V7.3 tiers and grants or
+ * loop). The lock reads free memory and processor load, applies the V7.3 5 GB floor and the load bar (a pre-pr also its own limits) and grants or
  * refuses. It is a FILE store: no database table, no migration, no change to lane.mjs.
  *
  * Store: ~/.claude/state/run-locks/ (override: RUN_LOCK_DIR)
@@ -33,7 +33,7 @@
  * is used. A bad value is ignored.
  *
  * GRANTED is not safe from a move of main (see CAVEAT). A run on old code holds no lock, so an UNLOCKED RUN seen
- * (a running pre-pr.mjs with no lock file) is counted as a slot in grant mode, but only when it started more than 2 minutes
+ * (a running pre-pr.mjs with no lock file) is counted against the pre-pr limits in grant mode, but only when it started more than 2 minutes
  * ago: a younger one may still be in its own acquire.
  *
  * Expiry: a past expiresAt removes a lock only when its holder is not proven alive (pid gone, other start, or a failed read).
@@ -101,7 +101,7 @@ const phaseOf = (r) => (r.kind === 'pre-pr' ? r.phase ?? 'test' : null);
 const heavyOf = (r) => (r.phase === undefined ? true : r.heavy === true);
 const isPrePrTest = (r) => r.kind === 'pre-pr' && phaseOf(r) === 'test';
 const isWaiter = (r) => r.kind === 'pre-pr' && r.phase === 'wait';
-/** A run that takes a V7.3 slot of another kind: heavy, and not a pre-pr outside its test phase. */
+/** A live heavy run, not a pre-pr outside its test phase. Only the heavyLive field of the warn log reads this: no limit counts it any more. */
 const takesSlot = (r) => KINDS[r.kind]?.heavy && (r.kind !== 'pre-pr' || phaseOf(r) === 'test');
 
 const median = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
@@ -334,7 +334,7 @@ const unlockedRuns = (d, live, procs) => {
   const now = d.now();
   return procs.filter((p) => p.pid !== d.selfPid && !live.some((l) => l.pid === p.pid) && Number.isFinite(p.start) && now - p.start > UNLOCKED_MIN_AGE_MS);
 };
-const unlockedLine = (u) => `UNLOCKED RUN seen: ${u.length} pre-pr.mjs process(es) with no lock file (pid ${u.map((p) => p.pid).join(', ')}); counted as a slot in grant mode`;
+const unlockedLine = (u) => `UNLOCKED RUN seen: ${u.length} pre-pr.mjs process(es) with no lock file (pid ${u.map((p) => p.pid).join(', ')}); counted against the pre-pr limits in grant mode`;
 
 // ---------- the gate ----------
 
@@ -547,7 +547,7 @@ export async function acquire(opts, deps) {
       if (opts.kind === 'pre-pr' && !own) { try { appendLine(d.dir, 'runs.jsonl', { ts: now, event: 'wait', pid, head: opts.head || null, queued: Boolean(waitFile), keys, reasons }); } catch { /* a log problem never stops the run */ } }
       return { granted: false, warned: false, lines: [...lines, `WAIT ${wait}`, CAVEAT], retryAt, reasons, keys, waitFile, ...read };
     }
-    // The warn log comes first: a failed append then leaves no lock and no last-grant behind.
+    // The warn log comes first: a failed append then leaves no lock behind.
     if (reasons.length) {
       appendLine(d.dir, 'warn-log.jsonl', { ts: now, kind: opts.kind, holder: opts.holder || 'unknown', head: opts.head || null, pid, keys, reasons, freeGB: num(freeGB), loadPct, heavyLive });
       lines.push(`WOULD WAIT ${wait}`);
@@ -626,7 +626,7 @@ export function logRun(row, deps) {
   try { mkdirSync(d.dir, { recursive: true }); appendLine(d.dir, 'runs.jsonl', { ts: d.now(), ...row }); } catch { /* a log problem never stops the run */ }
 }
 
-/** Record a run that already runs (a loop, a label run). Nothing is refused: it is running. It counts as a slot. */
+/** Record a run that already runs (a loop, a label run). Nothing is refused: it is running. The lock is listed and expires like any lock; a live loop is named in the floor refusal text (a pre-pr with a loop live gets key floor, not memory). */
 export async function register(opts, deps) {
   const d = defaults(deps);
   knownKind(opts.kind);
@@ -715,7 +715,7 @@ export async function list(deps) {
   return { live, unlocked, mode: readMode(d.dir), lines };
 }
 
-const WARN_BIAS = 'Warn mode lets every start run. A start that grant mode would refuse still takes a slot and moves the 2 minute clock, so later starts see more load than grant mode would: these counts run high.';
+const WARN_BIAS = 'Warn mode lets every start run. A start that grant mode would refuse still takes a lock (a pre-pr test place, a live loop), so later starts see more of the pre-pr limits than grant mode would: these counts run high.';
 
 /** Counts of the logged WOULD WAIT lines, for the warn days: how many starts the lock would have held, and why. */
 export function warnSummary(dir = defaultDir()) {

@@ -177,8 +177,8 @@ test('load bar: pre-pr is refused at a median of 70, a hook build at 80, by the 
 });
 
 // Card run-lock-memory-only (Dave 11-17: no count tiers; 11-26: no limits that slow the flow). Free memory and load decide.
-// Rows MO1 to MO7 fail on the code with the maxSlots tiers and the 2 minute spacing.
-const KEEP_FLOOR_KINDS = ['suite', 'label-run'];
+// Rows MO1 to MO3 and MO5 to MO7 fail on the code with the maxSlots tiers and the 2 minute spacing. MO4 (the load bar) is a keep row: it passes on both.
+const KEEP_FLOOR_KINDS = ['suite', 'label-run', 'loop'];
 
 test('MO1: a third and a fourth heavy run at 6 GB free and load 40 are granted (no count tier)', async () => {
   const ctx = setup({ free: 6, load: 40 });
@@ -190,7 +190,7 @@ test('MO1: a third and a fourth heavy run at 6 GB free and load 40 are granted (
   }
 });
 
-test('MO2: a heavy grant 30 s after another is granted, for suite, label-run and loop (no fixed gap)', async () => {
+test('MO2: a heavy grant 30 s after another is granted, for suite, label-run, loop and pre-pr (no fixed gap)', async () => {
   for (const kind of ['suite', 'label-run', 'loop', 'pre-pr']) {
     const ctx = setup({ free: 8, load: 20 });
     ctx.mode('grant');
@@ -203,7 +203,7 @@ test('MO2: a heavy grant 30 s after another is granted, for suite, label-run and
   }
 });
 
-test('MO3: under 5 GB a suite and a label run are refused with key floor, with no loop live; at exactly 5 GB they are granted', async () => {
+test('MO3: under 5 GB a suite, a label run and a loop are refused with key floor, with no loop live; at exactly 5 GB they are granted', async () => {
   for (const kind of KEEP_FLOOR_KINDS) {
     const low = setup({ free: 4.9, load: 20 });
     low.mode('grant');
@@ -277,6 +277,7 @@ test('V7.3: under 5 GB while a registered loop is live a heavy run waits and nam
   live(ctx, 100);
   const heavy = await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, ctx.d);
   assert.equal(heavy.granted, false);
+  assert.deepEqual(heavy.keys, ['floor'], 'one refusal, key floor: the pre-pr exception skips its own memory key while a loop is live');
   assert.match(heavy.lines.join('\n'), /under 5 GB/);
   assert.match(heavy.lines.join('\n'), /loop/i);
   live(ctx, 101);
@@ -818,7 +819,8 @@ test('item 9: the summary says that warn mode counts run high', () => {
   const ctx = setup();
   const s = warnSummary(ctx.dir);
   assert.match(String(s.note), /counts run high/);
-  assert.match(String(s.note), /slot/);
+  assert.match(String(s.note), /takes a lock/);
+  assert.doesNotMatch(String(s.note), /2 minute/, 'the fixed gap is gone, so the note must not name it');
   const r = runCli(['summary'], ctx.dir);
   assert.match(r.stdout, /counts run high/);
 });
@@ -1898,8 +1900,18 @@ test('M4: the deadline is checked before each acquire, and a grant after the dea
   await take(slept, 'pre-pr', 101);
   live(slept, 200);
   // The clock passes the 5 minute limit during the wait sleep, and a place frees in the same sleep: the next acquire would grant.
-  const dSleep = { ...slept.d, sleep: async (ms) => { if (ms === 30_000) { slept.st.now += ms; return; } slept.st.now += 10 * MIN; releaseSync({ pid: 100 }, slept.d); } };
+  // The wait sleep is 30 s now, as long as the second read, so the two are told apart by order: sleep 1 is the second read, sleep 2 the wait.
+  // The check before each acquire is told from the check after a grant by the machine reads: attempt 1 reads twice (first read and the
+  // 30 s second read), and an acquire after the deadline would read again. With the first check removed the result looks the same.
+  let sleeps = 0;
+  let reads = 0;
+  const dSleep = {
+    ...slept.d,
+    samples: async () => { reads++; return { free: [8, 8, 8], load: [10, 10, 10] }; },
+    sleep: async (ms) => { if (++sleeps !== 2) { slept.st.now += ms; return; } slept.st.now += 10 * MIN; releaseSync({ pid: 100 }, slept.d); },
+  };
   const a = await RL.waitForGrant({ kind: 'pre-pr', pid: 200, holder: 't' }, dSleep, { maxMs: 5 * MIN });
+  assert.equal(reads, 2, 'no acquire after the deadline: no machine read after the wait sleep');
   assert.equal(a.granted, false, 'no grant after the deadline');
   assert.equal(a.exit, 75);
   assert.equal(a.timedOut, true);
