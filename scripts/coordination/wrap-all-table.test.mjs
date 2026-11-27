@@ -459,22 +459,24 @@ test('W62: a note that says a pre-pr is open, with no lock, gives the row a note
   assert.match(r.noteWarning ?? '', /note says a run is open, the lock log does not/);
 });
 
-test('W63: a HOOK BUILD START word with no END word is UNKNOWN (a build takes no lock); the start forms "at", brackets and a colon count', () => {
-  for (const start of ['HOOK BUILD START 12:00 CST.', 'HOOK BUILD START at 12:00 CST.', 'HOOK BUILD START (12:00 CST).', 'HOOK BUILD START: 12:00 CST.', 'HOOK BUILD START pid 4242 head abcd1234.']) {
+test('W63: a HOOK BUILD START note with no lock is a warning only, in every start form; the row keeps its own stop (card hook-build-run-lock)', () => {
+  for (const start of ['HOOK BUILD START 12:00 CST.', 'HOOK BUILD START at 12:00 CST.', 'HOOK BUILD START head abcd1234 free 9 GB load 40 end 12:20.', 'HOOK BUILD START pid 4242 head abcd1234.']) {
     const t = W.buildTable(NOTE_RUN(`${start} V7.3 reads clean.`));
-    const r = A('Coord standard')(t);
-    assert.equal(r.stop, W.STOP.UNKNOWN, start);
-    assert.match(r.next, /hook build|note only/i, start);
+    assert.equal(A('Coord standard')(t).stop, W.STOP.READY, start);
+    assert.ok(t.warnings.some((w) => /hook build/i.test(w) && /lock/i.test(w)), start + ' ' + t.warnings.join('|'));
   }
-  const ended = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. HOOK BUILD END 12:08 CST.'));
-  assert.equal(A('Coord standard')(ended).stop, W.STOP.READY);
-  const two = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. HOOK BUILD END 12:08 CST. HOOK BUILD START 13:00 CST.'));
-  assert.equal(A('Coord standard')(two).stop, W.STOP.UNKNOWN);
+  const plan = W.buildTable(NOTE_RUN('NEXT: send HOOK BUILD END after the build.'));
+  assert.equal(A('Coord standard')(plan).stop, W.STOP.READY);
 });
 
-test('W64: a VOID word never closes a hook build (the VOID of a pre-pr is in the same note)', () => {
-  const t = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. VOID 12:00 head abcd1234: the pre-pr never ran.'));
-  assert.equal(A('Coord standard')(t).stop, W.STOP.UNKNOWN);
+test('W64: a held hook-build lock of the session is WAIT FOR END and names the kind; of another session it blocks every other READY row', () => {
+  const mine = W.buildTable({ ...base(), locks: [LOCK('c64e660e', { kind: 'hook-build', head: 'beef0001' })], runLocks: 1 });
+  assert.equal(A('Coord standard')(mine).stop, W.STOP.WAIT_END);
+  assert.match(A('Coord standard')(mine).running, /hook-build/);
+  assert.match(A('Coord standard')(mine).running, /beef0001/);
+  const other = W.buildTable({ ...base(), locks: [LOCK('bbbbbbbb', { kind: 'hook-build' })], runLocks: 1 });
+  assert.equal(A('Coord standard')(other).stop, W.STOP.UNKNOWN);
+  assert.ok(other.warnings.some((w) => /hook-build/.test(w)), other.warnings.join('|'));
 });
 
 test('W65: a lane with no matched worktree makes the row UNKNOWN even when another lane of the session has one', () => {
@@ -580,4 +582,51 @@ test('W75: the CLI reads the lock folder: a lock of the seat gives the seat row 
   const doc = JSON.parse(spawnSync(process.execPath, [SRC, '--root', h.repo, '--json'], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000, env: h.env }).stdout);
   assert.equal(doc.rows[0].stop, W.STOP.WAIT_END);
   assert.match(doc.rows[0].running, /abcd1234/);
+});
+
+// ---------- W76 to W80: the card hook-build-run-lock (a hook build is a run lock record; an unreadable lock is a held lock; the seat lanes need a worktree) ----------
+test('W76: a lock folder that cannot be listed, a lock file over 64 KB and a lock that is a folder are unreadable records, never no lock', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'wrapall-w76-'));
+  const asFile = path.join(dir, 'a-file');
+  writeFileSync(asFile, 'x');
+  const noList = W.readRunLockRecords(asFile);
+  assert.equal(noList.length, 1);
+  assert.equal(noList[0].unreadable, true);
+  writeFileSync(path.join(dir, 'pre-pr-1-1.lock'), JSON.stringify(LOCK('c64e660e')) + ' '.repeat(70 * 1024));
+  mkdirSync(path.join(dir, 'hook-build-2-1.lock'));
+  const recs = W.readRunLockRecords(dir);
+  assert.equal(recs.length, 2);
+  assert.ok(recs.every((r) => r.unreadable === true), JSON.stringify(recs));
+});
+
+test('W77: an unreadable lock record blocks every READY row and the warning names it as held, not as no lock', () => {
+  const t = W.buildTable({ ...base(), locks: [{ unreadable: true, file: 'hook-build-2-1.lock' }], runLocks: 1 });
+  assert.equal(A('Coord standard')(t).stop, W.STOP.UNKNOWN);
+  assert.equal(A('RE program seat')(t).stop, W.STOP.UNKNOWN);
+  assert.ok(t.warnings.some((w) => /hook-build-2-1.lock/.test(w) && /held|unreadable/i.test(w)), t.warnings.join('|'));
+});
+
+test('W78: the seat row needs a matched worktree for every lane it holds except re-program', () => {
+  const seatLanes = (extra) => base({
+    lanes: [lane('re-program', '1dcd1fc7', ''), lane('seat-side', '1dcd1fc7', 'GOAL: x.', extra), lane('my-card', 'c64e660e', 'GOAL: y.', 'coord/my-card')],
+    peers: [peer('RE program seat', '1dcd1fc7', 're-program,seat-side'), peer('Coord standard', 'c64e660e', 'my-card')],
+    worktrees: [{ path: 'C:/r', branch: 'main', primary: true, tracked: 0, untracked: 0, behind: 0, ahead: 0 }, { path: 'C:/r/wt/mc', branch: 'coord/my-card', tracked: 0, untracked: 0, behind: 0, ahead: 0 }],
+  });
+  const none = W.buildTable(seatLanes('coord/seat-side'));
+  assert.equal(A('RE program seat')(none).stop, W.STOP.UNKNOWN);
+  assert.match(A('RE program seat')(none).next, /worktree/);
+  const alone = W.buildTable(base({ worktrees: [{ path: 'C:/r', branch: 'main', primary: true, tracked: 0, untracked: 0, behind: 0, ahead: 0 }] }));
+  assert.equal(A('RE program seat')(alone).stop, W.STOP.READY);
+});
+
+test('W79: a seat with no primary checkout in the worktree list is UNKNOWN, not READY', () => {
+  const t = W.buildTable(base({ worktrees: [{ path: 'C:/r/wt/mc', branch: 'coord/my-card', tracked: 0, untracked: 0, behind: 0, ahead: 0 }] }));
+  assert.equal(A('RE program seat')(t).stop, W.STOP.UNKNOWN);
+});
+
+test('W80: SKILL.md and the table text say a hook build comes from its run lock, and no text counts HOOK BUILD START or END words', () => {
+  const skill = readFileSync(path.join(HERE, '..', '..', '.claude', 'skills', 'wrap-all', 'SKILL.md'), 'utf8');
+  assert.match(skill, /hook build[^.]*run lock/i);
+  assert.doesNotMatch(skill, /hook build is open by the lane note only/i);
+  assert.equal(/hookBuildOpen/.test(readFileSync(SRC, 'utf8')), false);
 });
