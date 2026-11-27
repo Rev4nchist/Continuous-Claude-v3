@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
 import { astMerges, decide, withParsed, type Deps } from '../decision-gate.js';
+import { decideParsed } from './helpers/parse-first.js';
 
 vi.setConfig({ testTimeout: 60000 });
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -61,9 +62,9 @@ const patternOf = (d: ReturnType<typeof decide>): string => (d.action === 'deny'
 /** The verdict of the old path and of the new path for one command. */
 async function both(command: string, tool = 'Bash'): Promise<{ oldP: string; newP: string; parsed: boolean }> {
   const inp = input(command, tool);
-  const oldP = patternOf(decide(inp, deps()));
+  const oldP = patternOf(await decideParsed(inp, deps()));
   const withP = await withParsed(JSON.stringify(inp), deps());
-  return { oldP, newP: patternOf(decide(inp, withP)), parsed: withP.parsed !== undefined };
+  return { oldP, newP: patternOf(await decideParsed(inp, withP)), parsed: withP.parsed !== undefined };
 }
 const M = 'gh pr merge';
 
@@ -96,8 +97,11 @@ describe('port step 2: merge PR and head from the parser words', () => {
   it('M3: a redirect after the call no longer hides the head (named cost removal: the allowlist refused every redirect)', async () => {
     landTap(5);
     const r = await both(`${M} 5 --squash --match-head-commit ${HEAD} 2>&1`);
-    expect(r.oldP).toBe('merge-no-head');
+    // C2b (class B): the old side now reads with a parse too; main with a parse gives this answer, the hand reader is retired.
+    expect(r.oldP).toBe('allow');
     expect(r.newP).toBe('allow');
+    const untapped = await both(`${M} 9 --squash --match-head-commit ${HEAD} 2>&1`);
+    expect(untapped.newP, 'paired: no tap for PR 9').toBe('land');
   });
   it('M3b: a redirect does not make a wrong head right: another head still denies', async () => {
     landTap(5);
@@ -128,15 +132,19 @@ describe('port step 2: merge PR and head from the parser words', () => {
   it('M6b (known leftover): a grep that names a merge is still denied (no-pr) until the hand reader is deleted; the parser sees no gh call in it', async () => {
     const c = `grep -n "${M}" notes.md`;
     const r = await both(c);
+    // C2b (class A, Dave's tap M6b 11-25 "Allow it"): a grep, rg or echo that only names a merge is data. The hand reader is deleted, so the leftover is gone.
     expect(r.newP).toBe(r.oldP);
-    expect(r.newP).toBe('no-pr');
+    expect(r.newP).toBe('allow');
     const p = await withParsed(JSON.stringify(input(c)), deps());
     expect(astMerges(p.parsed)).toEqual([]);
+    const real = await both(`grep -n "${M}" notes.md && ${M} 12 --squash --match-head-commit ${HEAD}`);
+    expect(real.newP, 'paired: a real merge beside the grep is still judged (no tap for PR 12)').toBe('no-pr');
   });
   it('M7: a text the parser cannot read is a deny on both paths; the old path names merge-no-head, the new path parse-error (C1, F1)', async () => {
     const c = `${M} 5 --squash --match-head-commit ${HEAD} --body "open`;
     const r = await both(c);
-    expect(r.oldP).toBe('merge-no-head');
+    // C2b (class C): the old side now reads with a parse too, so both sides name parse-error.
+    expect(r.oldP).toBe('parse-error');
     expect(r.newP).toBe('parse-error');
   });
   it('M8: PowerShell: the same head read, the same verdicts', async () => {

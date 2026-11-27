@@ -23,7 +23,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decisionRecord, offerWrite } from '../shared/decisions-store.js';
 import { readRegistry } from '../shared/tap-scope.js';
-import { decide, handle, type Decision, type Deps } from '../decision-gate.js';
+import { type Decision, type Deps } from '../decision-gate.js';
+import { decideParsed, handleParsed } from './helpers/parse-first.js';
 
 const HEAD = 'a'.repeat(40);
 const HEAD2 = 'c'.repeat(40);
@@ -104,7 +105,7 @@ function deps(config = ON, folders: Record<string, Folder> = FOLDERS): Deps {
 const bash = (command: string, cwd = APP, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-here', ...extra });
 const ps = (command: string, cwd = APP) => ({ ...bash(command, cwd), tool_name: 'PowerShell' });
 const sub = (p: object) => ({ ...p, agent_id: 'agent-1' });
-const verdict = (input: object, config = ON, folders?: Record<string, Folder>): Decision => decide(input, deps(config, folders));
+const verdict = async (input: object, config = ON, folders?: Record<string, Folder>): Promise<Decision> => await decideParsed(input, deps(config, folders));
 const allowed = (d: Decision): boolean => d.action === 'allow' && !d.warn;
 const warned = (d: Decision): boolean => d.action === 'allow' && Boolean(d.warn);
 function tap(step: 'ship' | 'land' | 'open-pr', key: string, head: string, label: string, tree?: string): void {
@@ -120,71 +121,71 @@ const hereB = (word: string, tail: string): string => `git commit -m "$(cat <<'E
 const hereC = (tail: string): string => `git commit -m "$(cat <<EOF\nAdd 27" panel $(date)\nEOF\n)" && ${tail} && echo "done"`;
 
 describe('Q1 a body with an unpaired quote no longer hides what follows it', () => {
-  it('Q1a PS here-string (Don\'t), then git push up main: denied (tap path)', () => {
-    expect(verdict(ps(hereA("Don't", "git push up main; Write-Host 'ok'")))).toMatchObject({ action: 'deny', scope: 'app-push' });
+  it('Q1a PS here-string (Don\'t), then git push up main: denied (tap path)', async () => {
+    expect(await verdict(ps(hereA("Don't", "git push up main; Write-Host 'ok'")))).toMatchObject({ action: 'deny', scope: 'app-push' });
   });
-  it('Q1b bash heredoc (27"), then git push up main: denied (tap path)', () => {
-    expect(verdict(bash(hereB('27"', 'git push up main')))).toMatchObject({ action: 'deny', scope: 'app-push' });
+  it('Q1b bash heredoc (27"), then git push up main: denied (tap path)', async () => {
+    expect(await verdict(bash(hereB('27"', 'git push up main')))).toMatchObject({ action: 'deny', scope: 'app-push' });
   });
-  it('Q1c bash heredoc (27"), then git push -f: push-unsafe, also with enforceAppPush false', () => {
-    expect(verdict(bash(hereB('27"', 'git push -f up feat')))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
-    expect(verdict(bash(hereB('27"', 'git push -f up feat')), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('Q1c bash heredoc (27"), then git push -f: push-unsafe, also with enforceAppPush false', async () => {
+    expect(await verdict(bash(hereB('27"', 'git push -f up feat')))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+    expect(await verdict(bash(hereB('27"', 'git push -f up feat')), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
-  it('Q1d PS here-string, then a force push: push-unsafe', () => {
-    expect(verdict(ps(hereA("Don't", "git push -f up feat; Write-Host 'ok'")), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('Q1d PS here-string, then a force push: push-unsafe', async () => {
+    expect(await verdict(ps(hereA("Don't", "git push -f up feat; Write-Host 'ok'")), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
-  it('Q1e from a CCv3 cwd: heredoc, then cd <app> && git push -f: push-unsafe in the app', () => {
-    expect(verdict(bash(hereB('27"', `cd ${APP} && git push -f up feat`), CC))).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
+  it('Q1e from a CCv3 cwd: heredoc, then cd <app> && git push -f: push-unsafe in the app', async () => {
+    expect(await verdict(bash(hereB('27"', `cd ${APP} && git push -f up feat`), CC))).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
   });
-  it('Q1f one remote: heredoc, then a merge that names another repo with -R is not cleared by the folder tap', () => {
+  it('Q1f one remote: heredoc, then a merge that names another repo with -R is not cleared by the folder tap', async () => {
     tap('land', 'acme/app-x#7', HEAD, 'Merge now (no READY check)');
-    expect(allowed(verdict(bash(`${G} pr merge 7 --match-head-commit ${HEAD}`)))).toBe(true);
-    expect(verdict(bash(hereB('27"', `${G} pr merge 7 -R other/repo --match-head-commit ${HEAD}`)))).toMatchObject({ action: 'deny' });
+    expect(allowed(await verdict(bash(`${G} pr merge 7 --match-head-commit ${HEAD}`)))).toBe(true);
+    expect(await verdict(bash(hereB('27"', `${G} pr merge 7 -R other/repo --match-head-commit ${HEAD}`)))).toMatchObject({ action: 'deny' });
   });
-  it('Q1g from an uncovered cwd: heredoc, then cd <app> && a merge or a create is judged in the app', () => {
-    expect(verdict(bash(hereB('27"', `cd ${APP} && ${G} pr merge 7 --match-head-commit ${HEAD}`), STRAY))).toMatchObject({ action: 'deny' });
-    expect(verdict(bash(hereB('27"', `cd ${APP} && ${G} pr create --draft --head feat`), STRAY))).toMatchObject({ action: 'deny' });
+  it('Q1g from an uncovered cwd: heredoc, then cd <app> && a merge or a create is judged in the app', async () => {
+    expect(await verdict(bash(hereB('27"', `cd ${APP} && ${G} pr merge 7 --match-head-commit ${HEAD}`), STRAY))).toMatchObject({ action: 'deny' });
+    expect(await verdict(bash(hereB('27"', `cd ${APP} && ${G} pr create --draft --head feat`), STRAY))).toMatchObject({ action: 'deny' });
   });
 });
 
 describe('Q2 item 1a: the unpaired quote fails closed when the blanker declines', () => {
-  it('Q2a force push behind it: push-unsafe, hard with enforceAppPush false', () => {
-    expect(verdict(bash(hereC('git push -f up feat')), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
+  it('Q2a force push behind it: push-unsafe, hard with enforceAppPush false', async () => {
+    expect(await verdict(bash(hereC('git push -f up feat')), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
   });
-  it('Q2b a wide spelling (--tags) behind it: hard', () => {
-    expect(verdict(bash(hereC('git push --tags up')), SOFT)).toMatchObject({ action: 'deny', scope: 'app-push' });
+  it('Q2b a wide spelling (--tags) behind it: hard', async () => {
+    expect(await verdict(bash(hereC('git push --tags up')), SOFT)).toMatchObject({ action: 'deny', scope: 'app-push' });
   });
-  it('Q2c a plain push behind it: the tap path (a deny; a warn with enforceAppPush false)', () => {
-    expect(verdict(bash(hereC('git push up topic')))).toMatchObject({ action: 'deny', scope: 'app-push' });
-    expect(warned(verdict(bash(hereC('git push up topic')), SOFT))).toBe(true);
+  it('Q2c a plain push behind it: the tap path (a deny; a warn with enforceAppPush false)', async () => {
+    expect(await verdict(bash(hereC('git push up topic')))).toMatchObject({ action: 'deny', scope: 'app-push' });
+    expect(warned(await verdict(bash(hereC('git push up topic')), SOFT))).toBe(true);
   });
-  it('Q2d a subagent push behind it: hard with enforceAppPush false', () => {
-    expect(verdict(sub(bash(hereC('git push up topic'))), SOFT)).toMatchObject({ action: 'deny', scope: 'app-push' });
+  it('Q2d a subagent push behind it: hard with enforceAppPush false', async () => {
+    expect(await verdict(sub(bash(hereC('git push up topic'))), SOFT)).toMatchObject({ action: 'deny', scope: 'app-push' });
   });
-  it('Q2e from an uncovered cwd: cd <app> && a merge behind it is denied', () => {
-    expect(verdict(bash(hereC(`cd ${APP} && ${G} pr merge 7 --match-head-commit ${HEAD}`), STRAY))).toMatchObject({ action: 'deny' });
+  it('Q2e from an uncovered cwd: cd <app> && a merge behind it is denied', async () => {
+    expect(await verdict(bash(hereC(`cd ${APP} && ${G} pr merge 7 --match-head-commit ${HEAD}`), STRAY))).toMatchObject({ action: 'deny' });
   });
-  it('Q2f no closing line: PS here-string with no closing line, then a push, is denied', () => {
-    expect(verdict(ps("git commit -m @'\nDon't drop it\n  '@; git push -f up feat; Write-Host 'ok'"), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('Q2f no closing line: PS here-string with no closing line, then a push, is denied', async () => {
+    expect(await verdict(ps("git commit -m @'\nDon't drop it\n  '@; git push -f up feat; Write-Host 'ok'"), SOFT)).toMatchObject({ action: 'deny', pattern: 'parse-error' }); // C2b (class C): main with a parse gives this answer; the hand reader is retired. A here-string with no closing line is a parse error, still a deny.
   });
 });
 
 describe('Q3 the blanker never hides a command that runs', () => {
-  it('Q3a bash <<EOF runs its body: the force push in it stays push-unsafe', () => {
-    expect(verdict(bash("bash <<'EOF'\ngit push -f up feat\nEOF"))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('Q3a bash <<EOF runs its body: the force push in it stays push-unsafe', async () => {
+    expect(await verdict(bash("bash <<'EOF'\ngit push -f up feat\nEOF"))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
-  it('Q3b an opener inside quotes is no heredoc: the push on the next line stays push-unsafe', () => {
-    expect(verdict(bash('echo "see <<EOF"\ngit push -f up feat\nEOF'))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
-    expect(verdict(bash('git commit -m "see <<EOF"\ngit push -f up feat\nEOF'))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('Q3b an opener inside quotes is no heredoc: the push on the next line stays push-unsafe', async () => {
+    expect(await verdict(bash('echo "see <<EOF"\ngit push -f up feat\nEOF'))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+    expect(await verdict(bash('git commit -m "see <<EOF"\ngit push -f up feat\nEOF'))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
   // Change that breaks Q3d: accept cat as the first word of a segment, or cut the segment at ( (the advisor review of this round).
-  it('Q3d a body sent on to a shell (cat | bash, eval "$(cat)", bash -c "$(cat)") keeps its force push: push-unsafe', () => {
+  it('Q3d a body sent on to a shell (cat | bash, eval "$(cat)", bash -c "$(cat)") keeps its force push: push-unsafe', async () => {
     for (const c of ["cat <<'EOF' | bash\ngit push -f up feat\nEOF", "eval \"$(cat <<'EOF'\ngit push -f up feat\nEOF\n)\"", "bash -c \"$(cat <<'EOF'\ngit push -f up feat\nEOF\n)\""]) {
-      expect(verdict(bash(c)), c).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+      expect(await verdict(bash(c)), c).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
     }
   });
-  it('Q3c a here-string of an unlisted command (Write-Output) keeps its body: an unpaired quote in it still fails closed', () => {
-    expect(verdict(ps("Write-Output @'\nDon't\n'@; git push -f up feat; Write-Host 'ok'"))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('Q3c a here-string of an unlisted command (Write-Output) keeps its body: an unpaired quote in it still fails closed', async () => {
+    expect(await verdict(ps("Write-Output @'\nDon't\n'@; git push -f up feat; Write-Host 'ok'"))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
 });
 
@@ -198,36 +199,36 @@ describe('Q4 over-deny guards: a message with an odd quote and no push passes', 
     ['bash heredoc commit (27"), no push, CCv3', bash(`git commit -m "$(cat <<'EOF'\nAdd 27" panel\nEOF\n)" && echo "done"`, CC)],
     ['blanker declines, no push, app', bash(hereC('git status'))],
   ];
-  it.each(rows)('%s', (_n, input) => {
-    expect(allowed(verdict(input))).toBe(true);
+  it.each(rows)('%s', async (_n, input) => {
+    expect(allowed(await verdict(input))).toBe(true);
   });
 });
 
 describe('T1 seat 3d: a user:token remote never reaches stdout or the guard log', () => {
   const url = (token = TOKEN) => `https://user:${token}@github.com/acme/app-x.git`;
-  const out = (input: object, config = ON): string => handle(JSON.stringify(input), deps(config));
-  it('T1a block mode: the deny names the remote without the token, as app-ask reads it', () => {
-    const o = out(bash(`git push ${url()} main`));
+  const out = async (input: object, config = ON): Promise<string> => await handleParsed(JSON.stringify(input), deps(config));
+  it('T1a block mode: the deny names the remote without the token, as app-ask reads it', async () => {
+    const o = await out(bash(`git push ${url()} main`));
     expect(o).toContain('deny');
     expect(o).not.toContain(TOKEN);
     expect(o).toContain('--remote https://github.com/acme/app-x.git --branch main');
   });
-  it('T1b warn mode (enforceAppPush false): no token', () => {
-    const o = out(bash(`git push ${url()} main`), SOFT);
+  it('T1b warn mode (enforceAppPush false): no token', async () => {
+    const o = await out(bash(`git push ${url()} main`), SOFT);
     expect(o).toContain('WARNING');
     expect(o).not.toContain(TOKEN);
   });
-  it('T1c a token with a character the offer word refuses is stripped before the word test: the offer is printed, with no token', () => {
-    const o = out(bash(`git push ${url('ghp_SECRET%TOKEN123')} main`));
+  it('T1c a token with a character the offer word refuses is stripped before the word test: the offer is printed, with no token', async () => {
+    const o = await out(bash(`git push ${url('ghp_SECRET%TOKEN123')} main`));
     expect(o).not.toContain('SECRET%TOKEN123');
     expect(o).toContain('--remote https://github.com/acme/app-x.git --branch main');
   });
-  it('T1d the guard log row holds no token', () => {
+  it('T1d the guard log row holds no token', async () => {
     const log = `${scratch}/guard.jsonl`;
     process.env.CCV3_GUARD_DECISIONS_LOG = log;
     appendFileSync(log, '');
-    out(bash(`git push ${url()} main`));
-    out(bash(`git push ${url()} main`), SOFT);
+    await out(bash(`git push ${url()} main`));
+    await out(bash(`git push ${url()} main`), SOFT);
     const text = existsSync(log) ? readFileSync(log, 'utf8') : '';
     expect(text).toContain('"hook":"decision-gate"');
     expect(text).not.toContain(TOKEN);
@@ -247,45 +248,45 @@ describe('M1 item 3: after cd ~/homeapp only the plain tap path warns with enfor
     ['git push -uo x up feat', bash('cd ~/homeapp && git push -uo x up feat', CC)],
     ['git push --follow-tags up feat', bash('cd ~/homeapp && git push --follow-tags up feat', CC)],
   ];
-  it.each(hard)('%s: a hard deny', (_n, input) => {
-    expect(verdict(input, SOFT)).toMatchObject({ action: 'deny', scope: 'app-push' });
+  it.each(hard)('%s: a hard deny', async (_n, input) => {
+    expect(await verdict(input, SOFT)).toMatchObject({ action: 'deny', scope: 'app-push' });
   });
-  it('a plain git push up feat: a warn (unchanged)', () => {
-    expect(warned(verdict(bash('cd ~/homeapp && git push up feat', CC), SOFT))).toBe(true);
+  it('a plain git push up feat: a warn (unchanged)', async () => {
+    expect(warned(await verdict(bash('cd ~/homeapp && git push up feat', CC), SOFT))).toBe(true);
   });
 });
 
 describe('S1 item 4: a store write does not hide a force push in the same command', () => {
   const cmd = 'echo x > ~/.claude/state/ccv3-mods/decisions.json; git push -f up feat';
-  it('decisions.enforce not true: the force push still denies (push-unsafe)', () => {
-    expect(verdict(bash(cmd), LAX)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('decisions.enforce not true: the force push still denies (push-unsafe)', async () => {
+    expect(await verdict(bash(cmd), LAX)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
-  it('decisions.enforce true: a deny (the store write first)', () => {
-    expect(verdict(bash(cmd))).toMatchObject({ action: 'deny', pattern: 'store-write' });
+  it('decisions.enforce true: a deny (the store write first)', async () => {
+    expect(await verdict(bash(cmd))).toMatchObject({ action: 'deny', pattern: 'store-write' });
   });
   // Change that breaks it: drop the store scope that unjudgeable adds (a git throw then turns the store write into a push-scope warn).
-  it('a git throw while the shapes are judged keeps the store write a deny (decisions.enforce true)', () => {
+  it('a git throw while the shapes are judged keeps the store write a deny (decisions.enforce true)', async () => {
     const throwing: Deps = { ...deps(), git: () => { throw new Error('spawnSync git ETIMEDOUT'); } };
-    const o = JSON.parse(handle(JSON.stringify(bash('echo x > ~/.claude/state/ccv3-mods/decisions.json; git push up feat', STRAY)), throwing)).hookSpecificOutput;
+    const o = JSON.parse(await handleParsed(JSON.stringify(bash('echo x > ~/.claude/state/ccv3-mods/decisions.json; git push up feat', STRAY)), throwing)).hookSpecificOutput;
     expect(o.permissionDecision).toBe('deny');
   });
-  it('a store write alone keeps its deny', () => {
-    expect(verdict(bash('echo x > ~/.claude/state/ccv3-mods/decisions.json'))).toMatchObject({ action: 'deny', pattern: 'store-write' });
+  it('a store write alone keeps its deny', async () => {
+    expect(await verdict(bash('echo x > ~/.claude/state/ccv3-mods/decisions.json'))).toMatchObject({ action: 'deny', pattern: 'store-write' });
   });
 });
 
 describe('P1 seat 3c: an app tap is not single use (known limit); a new head or tree needs a new tap', () => {
   // Change that breaks the first row: consume the tap in the gate. The second: drop pushOnlyHead or the tree compare in shipTap.
   const at = (heads: Record<string, string>, trees?: Record<string, string>) => ({ ...FOLDERS, [APP]: { ...FOLDERS[APP], heads, ...(trees ? { trees } : {}) } });
-  it('the same head and tree pass twice', () => {
+  it('the same head and tree pass twice', async () => {
     tap('ship', 'acme/app-x@main', HEAD, 'Push only', TREE);
-    expect(allowed(verdict(bash('git push up main')))).toBe(true);
-    expect(allowed(verdict(bash('git push up main')))).toBe(true);
+    expect(allowed(await verdict(bash('git push up main')))).toBe(true);
+    expect(allowed(await verdict(bash('git push up main')))).toBe(true);
   });
-  it('a changed head, or a changed tree, is refused', () => {
+  it('a changed head, or a changed tree, is refused', async () => {
     tap('ship', 'acme/app-x@main', HEAD, 'Push only', TREE);
-    expect(verdict(bash('git push up main'), ON, at({ feat: HEAD, main: HEAD2 }))).toMatchObject({ action: 'deny', pattern: 'ship' });
-    expect(verdict(bash('git push up main'), ON, at({ feat: HEAD, main: HEAD }, { HEAD: TREE2, feat: TREE2, main: TREE2 }))).toMatchObject({ action: 'deny', pattern: 'ship' });
+    expect(await verdict(bash('git push up main'), ON, at({ feat: HEAD, main: HEAD2 }))).toMatchObject({ action: 'deny', pattern: 'ship' });
+    expect(await verdict(bash('git push up main'), ON, at({ feat: HEAD, main: HEAD }, { HEAD: TREE2, feat: TREE2, main: TREE2 }))).toMatchObject({ action: 'deny', pattern: 'ship' });
   });
 });
 
@@ -299,69 +300,69 @@ describe('W1 blocker and major 1: a hard spelling counts only in a hidden push p
     ['(c) PowerShell Set-Content with a here-string of the same body', ps(`Set-Content NOTES.md -Value @'\nWe don't "git push ${FORCE}" to main.\n'@`)],
     ['(d) major 1: a commit naming git push, then a comment with an apostrophe', bash('git commit -m "docs: git push steps"  # don\'t push yet')],
   ];
-  it.each(rows)('%s passes', (_n, input) => {
-    expect(allowed(verdict(input))).toBe(true);
+  it.each(rows)('%s passes', async (_n, input) => {
+    expect(allowed(await verdict(input))).toBe(true);
   });
   // Advisor review of this round. Change that breaks it: drop a comment even when a quote mark follows it (a # line in a body the
   // blanker leaves alone is data; its apostrophe still pairs with a later quote in the readers' mask).
-  it('a # line inside a cat heredoc, then a force push between quotes: push-unsafe', () => {
-    expect(verdict(bash("cat > notes.md <<'EOF'\n# Don't forget\nEOF\ngit commit -m 'notes' && git push -f up feat && echo 'done'"))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('a # line inside a cat heredoc, then a force push between quotes: push-unsafe', async () => {
+    expect(await verdict(bash("cat > notes.md <<'EOF'\n# Don't forget\nEOF\ngit commit -m 'notes' && git push -f up feat && echo 'done'"))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
 });
 
 describe('W1b a wrapper or control word before a hidden push still counts (the header: a wrapper before git is still a push)', () => {
   // Change that breaks it: read the first word of a hidden piece as its program (programOf without LEAD_WORD).
-  it.each(['sudo git push -f up feat', 'env A=1 git push -f up feat', 'timeout 5 git push -f up feat'])('%s behind an odd quote: push-unsafe', (c) => {
-    expect(verdict(bash(hereC(c)), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it.each(['sudo git push -f up feat', 'env A=1 git push -f up feat', 'timeout 5 git push -f up feat'])('%s behind an odd quote: push-unsafe', async (c) => {
+    expect(await verdict(bash(hereC(c)), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
 });
 
 describe('W2 major 2: an opener line that goes on (a backslash, an open quote) is not blanked', () => {
   // Change that breaks it: drop the plainLine test of blankHeredocs (the body then starts at the first physical line end).
-  it('a backslash at the end of the opener line: the force push on the next line is push-unsafe', () => {
-    expect(verdict(bash(`git commit -F - <<'EOF' \\\n  && git push ${FORCE} up feat\nmsg\nEOF`), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('a backslash at the end of the opener line: the force push on the next line is push-unsafe', async () => {
+    expect(await verdict(bash(`git commit -F - <<'EOF' \\\n  && git push ${FORCE} up feat\nmsg\nEOF`), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
-  it('a quoted -m that spans the opener line: the force push after it is push-unsafe', () => {
-    expect(verdict(bash(`git commit -F - <<'EOF' -m "first\nsecond" && git push ${FORCE} up feat\nbody\nEOF`), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it('a quoted -m that spans the opener line: the force push after it is push-unsafe', async () => {
+    expect(await verdict(bash(`git commit -F - <<'EOF' -m "first\nsecond" && git push ${FORCE} up feat\nbody\nEOF`), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
 });
 
 describe('W3 major 3: a payload push with a force, delete or wide spelling stays hard with enforceAppPush false', () => {
   // Change that breaks it: read only forceSpelled in the push segments again (no wide or :dst).
-  it.each(['bash -c "git push --tags up"', 'bash -c "git push -f up feat"', 'bash -c "git push up :old"'])('%s: push-unsafe', (c) => {
-    expect(verdict(bash(c), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
+  it.each(['bash -c "git push --tags up"', 'bash -c "git push -f up feat"', 'bash -c "git push up :old"'])('%s: push-unsafe', async (c) => {
+    expect(await verdict(bash(c), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
   });
-  it('bash -c "git push up feat" keeps the tap path (a warn with enforceAppPush false)', () => {
-    expect(warned(verdict(bash('bash -c "git push up feat"'), SOFT))).toBe(true);
+  it('bash -c "git push up feat" keeps the tap path (a warn with enforceAppPush false)', async () => {
+    expect(warned(await verdict(bash('bash -c "git push up feat"'), SOFT))).toBe(true);
   });
 });
 
 describe('W6 F1: a separator inside a quoted word does not start the segment of an opener', () => {
   // Change that breaks it: find the segment start and the first word on the raw lead (lastIndexOf of ; & | and line ends) again.
   const opener = "bash -s -- 'x; git y' <<'EOF'\n";
-  it('Q3 bash -s with a quoted "; git" before the opener runs its body: the force push in it is push-unsafe', () => {
-    expect(verdict(bash(`${opener}git push -f up feat\nEOF`), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
+  it('Q3 bash -s with a quoted "; git" before the opener runs its body: the force push in it is push-unsafe', async () => {
+    expect(await verdict(bash(`${opener}git push -f up feat\nEOF`), SOFT)).toMatchObject({ action: 'deny', pattern: 'push-unsafe', scope: 'app-push' });
   });
-  it('CCv3: the same opener with a merge in the body gets the CCv3 merge deny (decisions.enforce true, no tap)', () => {
-    expect(verdict(bash(`${opener}${G} pr merge 12\nEOF`, CC))).toMatchObject({ action: 'deny', scope: 'other' });
+  it('CCv3: the same opener with a merge in the body gets the CCv3 merge deny (decisions.enforce true, no tap)', async () => {
+    expect(await verdict(bash(`${opener}${G} pr merge 12\nEOF`, CC))).toMatchObject({ action: 'deny', scope: 'other' });
   });
 });
 
 describe('W4 minor 1: an opener inside a quoted span is no opener, even when the marks count even', () => {
   // Change that breaks it: test the quote marks by count (pairedQuotes) in opensData.
-  it("git commit -m 'a\"' \"b <<EOF ... x\" && git push -f: the force push is push-unsafe", () => {
-    expect(verdict(bash("git commit -m 'a\"' \"b <<EOF\nx\" && git push -f up feat\nEOF"))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
+  it("git commit -m 'a\"' \"b <<EOF ... x\" && git push -f: the force push is push-unsafe", async () => {
+    expect(await verdict(bash("git commit -m 'a\"' \"b <<EOF\nx\" && git push -f up feat\nEOF"))).toMatchObject({ action: 'deny', pattern: 'push-unsafe' });
   });
 });
 
 describe('W5 minor 2: one row for the blanker alone and one for the out() scrub alone', () => {
   // Change that breaks it: drop blankBodies from readCommand (the body line "run git push up main" is then a push word no shape reads).
-  it('a commit message body that names git push passes only because the body is blanked', () => {
-    expect(allowed(verdict(bash("git commit -F - <<'EOF'\nDocs: run git push up main after review\nEOF")))).toBe(true);
+  it('a commit message body that names git push passes only because the body is blanked', async () => {
+    expect(allowed(await verdict(bash("git commit -F - <<'EOF'\nDocs: run git push up main after review\nEOF")))).toBe(true);
   });
   // Change that breaks it: drop the CREDS_RE replace in out(). The widening option text is printed by prose(opt), not through noCreds.
-  it('a credential URL in a widening option value reaches the deny text only without its user:token part', () => {
-    const o = handle(JSON.stringify(bash(`git push --recurse-submodules=https://user:${TOKEN}@github.com/acme/sub.git up feat`)), deps());
+  it('a credential URL in a widening option value reaches the deny text only without its user:token part', async () => {
+    const o = await handleParsed(JSON.stringify(bash(`git push --recurse-submodules=https://user:${TOKEN}@github.com/acme/sub.git up feat`)), deps());
     expect(o).toContain('deny');
     expect(o).toContain('--recurse-submodules=https://github.com/acme/sub.git');
     expect(o).not.toContain(TOKEN);

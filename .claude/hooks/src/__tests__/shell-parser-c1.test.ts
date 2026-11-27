@@ -216,12 +216,13 @@ describe('B2: when the parse is late, the raw text of a script runner call still
     const d = decide(input, w);
     expect(d.action === 'deny' ? d.pattern : 'allow').toBe('script-runner');
   });
-  it('B2-2 (control): a hung parse and a plain tapped push is still allowed (the hand reader decides)', async () => {
+  it('B2-2 (control): a hung parse and a plain tapped push is parser-unavailable at the push flag (C2b: the hand reader is retired; fail closed; a warn while decisions.enforcePush is unset)', async () => {
     shipTap();
     const input = bash(PUSH);
     const w = await withParsed(JSON.stringify(input), hang());
     expect(w.parsed).toBeUndefined();
-    expect(decide(input, w).action).toBe('allow');
+    const d = decide(input, w);
+    expect(d.action === 'deny' ? d.pattern : d.warn?.split(':')[0]).toBe('parser-unavailable');
   });
   it('B2-3 (control): a hung parse and a runner call with no guarded text is allowed', async () => {
     const input = bash('node -e "console.log(1)"');

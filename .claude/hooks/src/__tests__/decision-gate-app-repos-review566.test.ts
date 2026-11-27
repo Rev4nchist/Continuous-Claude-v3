@@ -11,7 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readRegistry } from '../shared/tap-scope.js';
-import { decide, handle, type Decision, type Deps } from '../decision-gate.js';
+import { type Decision, type Deps } from '../decision-gate.js';
+import { decideParsed, handleParsed } from './helpers/parse-first.js';
 
 const TREE = 't'.repeat(40);
 const HEAD = 'a'.repeat(40);
@@ -80,14 +81,14 @@ function deps(home: string = ON, throwOn: string[] = []): Deps {
   };
 }
 const bash = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: APP, session_id: 's-r566', ...extra });
-const verdict = (input: object, home?: string): Decision => decide(input, deps(home));
-const hookText = (input: object): string => {
-  const o = JSON.parse(handle(JSON.stringify(input), deps())).hookSpecificOutput ?? {};
+const verdict = async (input: object, home?: string): Promise<Decision> => await decideParsed(input, deps(home));
+const hookText = async (input: object): Promise<string> => {
+  const o = JSON.parse(await handleParsed(JSON.stringify(input), deps())).hookSpecificOutput ?? {};
   return String(o.permissionDecisionReason ?? o.additionalContext ?? '');
 };
 /** deny, warn or pass of the hook stdout, with a git call that throws. */
-const hookKind = (input: object, home: string, throwOn: string[]): string => {
-  const o = JSON.parse(handle(JSON.stringify(input), deps(home, throwOn))).hookSpecificOutput ?? {};
+const hookKind = async (input: object, home: string, throwOn: string[]): Promise<string> => {
+  const o = JSON.parse(await handleParsed(JSON.stringify(input), deps(home, throwOn))).hookSpecificOutput ?? {};
   return o.permissionDecision === 'deny' ? 'deny' : typeof o.additionalContext === 'string' ? 'warn' : 'pass';
 };
 const CREATE = 'gh pr create --draft --title t --body b';
@@ -96,58 +97,58 @@ const ROOT_READ = 'rev-parse --path-format=absolute --show-toplevel --git-common
 
 describe('PR 566 CodeRabbit round 2 (Dave 10:47: "One last fix, then land")', () => {
   // Change that breaks C4: drop the namedHeads check in appCreateIn.
-  it('C4 a create that names two different heads is denied head-unresolved', () => {
-    expect(verdict(bash('gh pr create --draft --head feat --head topic --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'head-unresolved' });
+  it('C4 a create that names two different heads is denied head-unresolved', async () => {
+    expect(await verdict(bash('gh pr create --draft --head feat --head topic --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'head-unresolved' });
   });
-  it('K4 control: the same head twice is one head (the open-pr deny)', () => {
-    expect(verdict(bash('gh pr create --draft --head feat --head feat --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'open-pr' });
+  it('K4 control: the same head twice is one head (the open-pr deny)', async () => {
+    expect(await verdict(bash('gh pr create --draft --head feat --head feat --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'open-pr' });
   });
   // Change that breaks C5: coveredCall rethrows the body's error as it is (no AppScopeError).
-  it('C5 a git throw inside a covered create, home enforce true, app config false: the catch denies', () => {
-    expect(hookKind(bash(CREATE), ON, [HEAD_READ])).toBe('deny');
+  it('C5 a git throw inside a covered create, home enforce true, app config false: the catch denies', async () => {
+    expect(await hookKind(bash(CREATE), ON, [HEAD_READ])).toBe('deny');
   });
-  it('K5 control: the same throw with home enforce false only warns', () => {
-    expect(hookKind(bash(CREATE), OFF, [HEAD_READ])).toBe('warn');
+  it('K5 control: the same throw with home enforce false only warns', async () => {
+    expect(await hookKind(bash(CREATE), OFF, [HEAD_READ])).toBe('warn');
   });
   // Change that breaks C6: coveredCall keeps push true on the coverage read's AppScopeError (app-push joins the scopes).
-  it('C6 a coverage-read throw of a covered create with home enforce false warns, not denies by the push flag', () => {
-    expect(hookKind(bash(CREATE), OFF, [ROOT_READ])).toBe('warn');
+  it('C6 a coverage-read throw of a covered create with home enforce false warns, not denies by the push flag', async () => {
+    expect(await hookKind(bash(CREATE), OFF, [ROOT_READ])).toBe('warn');
   });
-  it('K6 control: the same coverage-read throw of a covered PUSH still denies (app-push default on)', () => {
-    expect(hookKind(bash('git push up main'), OFF, [ROOT_READ])).toBe('deny');
+  it('K6 control: the same coverage-read throw of a covered PUSH still denies (app-push default on)', async () => {
+    expect(await hookKind(bash('git push up main'), OFF, [ROOT_READ])).toBe('deny');
   });
 });
 
 describe('PR 566 CodeRabbit round 1: the three output fixes', () => {
   // Change that breaks C1: drop homeFlags from the subagent deny (subagentDeny returns the base deny).
-  it('C1 a subagent create in a covered app folder denies on the home flag, whatever the app config says', () => {
-    expect(verdict(bash('gh pr create --draft --title t --body b', { agent_id: 'sub1' }))).toMatchObject({ action: 'deny', pattern: 'subagent' });
+  it('C1 a subagent create in a covered app folder denies on the home flag, whatever the app config says', async () => {
+    expect(await verdict(bash('gh pr create --draft --title t --body b', { agent_id: 'sub1' }))).toMatchObject({ action: 'deny', pattern: 'subagent' });
   });
-  it('K1 control: with the home flag false the same subagent create only warns', () => {
-    const d = verdict(bash('gh pr create --draft --title t --body b', { agent_id: 'sub1' }), OFF);
+  it('K1 control: with the home flag false the same subagent create only warns', async () => {
+    const d = await verdict(bash('gh pr create --draft --title t --body b', { agent_id: 'sub1' }), OFF);
     expect(d.action).toBe('allow');
     expect((d as { warn?: string }).warn).toMatch(/^subagent:/);
   });
   // Change that breaks C2: remove the headOwner check in appCreate.
-  it('C2 a create whose --head names another owner is denied head-foreign', () => {
-    expect(verdict(bash('gh pr create --draft --head other-user:feat --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'head-foreign' });
+  it('C2 a create whose --head names another owner is denied head-foreign', async () => {
+    expect(await verdict(bash('gh pr create --draft --head other-user:feat --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'head-foreign' });
   });
-  it('C2b the REST form -f head=other-user:feat is denied head-foreign', () => {
-    expect(verdict(bash('gh api repos/acme/app-x/pulls -X POST -f head=other-user:feat -f base=main -f title=t -F draft=true'))).toMatchObject({ action: 'deny', pattern: 'head-foreign' });
+  it('C2b the REST form -f head=other-user:feat is denied head-foreign', async () => {
+    expect(await verdict(bash('gh api repos/acme/app-x/pulls -X POST -f head=other-user:feat -f base=main -f title=t -F draft=true'))).toMatchObject({ action: 'deny', pattern: 'head-foreign' });
   });
-  it('K2 control: a plain --head feat still gets the open-pr deny (no tap)', () => {
-    expect(verdict(bash('gh pr create --draft --head feat --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'open-pr' });
+  it('K2 control: a plain --head feat still gets the open-pr deny (no tap)', async () => {
+    expect(await verdict(bash('gh pr create --draft --head feat --title t --body b'))).toMatchObject({ action: 'deny', pattern: 'open-pr' });
   });
   // Change that breaks C3: prose() cuts before CREDS_RE runs (the order at 0f413fa8).
-  it('C3 a long --recurse-submodules value: the deny text keeps no user or token part after the cut', () => {
+  it('C3 a long --recurse-submodules value: the deny text keeps no user or token part after the cut', async () => {
     // The token "--recurse-submodules=" is 21 code points: the URL starts at 181, the user name ends at 197, so the 200 cut falls in the token.
     const value = `${'x'.repeat(160)}https://someuser:tok1234567890secret@example.com/r.git`;
-    const text = hookText(bash(`git push --recurse-submodules=${value} up topic`));
+    const text = await hookText(bash(`git push --recurse-submodules=${value} up topic`));
     expect(text).not.toBe('');
     expect(text).not.toMatch(/someuser|tok1234/);
   });
-  it('K3 control: a short credential URL in the option is still removed', () => {
-    const text = hookText(bash('git push --recurse-submodules=https://someuser:tok1234@example.com/r.git up topic'));
+  it('K3 control: a short credential URL in the option is still removed', async () => {
+    const text = await hookText(bash('git push --recurse-submodules=https://someuser:tok1234@example.com/r.git up topic'));
     expect(text).not.toBe('');
     expect(text).not.toMatch(/someuser|tok1234/);
   });

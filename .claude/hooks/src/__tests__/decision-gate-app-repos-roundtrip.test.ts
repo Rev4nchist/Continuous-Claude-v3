@@ -27,7 +27,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { handle as ledger } from '../decision-ledger.js';
-import { decide, realDeps } from '../decision-gate.js';
+import { realDeps } from '../decision-gate.js';
+import { decideParsed } from './helpers/parse-first.js';
 
 const APP_ASK = fileURLToPath(new URL('../../../../scripts/github/app-ask.mjs', import.meta.url));
 // An empty global git config and no system config: a developer's commit.gpgsign or hooksPath cannot break the fixture commits.
@@ -95,7 +96,7 @@ afterAll(() => {
 const bash = (cwd: string, command: string) => ({ tool_name: 'Bash', tool_input: { command }, cwd, session_id: 's-rt' });
 /** The real Deps with the temp folder as home, so the gate never reads the developer's home config (absent on a CI runner). */
 const deps = () => ({ ...realDeps(), home });
-const verdict = (cwd: string, command: string) => decide(bash(cwd, command), deps());
+const verdict = async (cwd: string, command: string) => await decideParsed(bash(cwd, command), deps());
 
 /** The words of the app-ask command in a deny text (sub-command to the last flag). Fixer G: no placeholder to fill in. */
 function askWords(reason: string): string[] {
@@ -123,12 +124,12 @@ function tapThroughAsk(cwd: string, reason: string, facts?: object): string {
 }
 
 /** Denied with `pattern`; allowed after the round trip. */
-function roundTrip(cwd: string, command: string, pattern: string, facts?: object): void {
-  const before = verdict(cwd, command);
+async function roundTrip(cwd: string, command: string, pattern: string, facts?: object): Promise<void> {
+  const before = await verdict(cwd, command);
   expect(before.action === 'deny' ? before.pattern : `not denied: ${JSON.stringify(before)}`).toBe(pattern);
   const recorded = tapThroughAsk(cwd, (before as { reason: string }).reason, facts);
   expect(recorded, 'the ledger recorded the tap').toMatch(/record/i);
-  expect(verdict(cwd, command), command).toEqual({ action: 'allow' });
+  expect(await verdict(cwd, command), command).toEqual({ action: 'allow' });
 }
 
 // Each row starts git and node several times (0.7 to 1.6 s on Windows when idle): a long limit keeps a loaded machine from a false red.
@@ -142,64 +143,64 @@ describe('the deny text, the real app-ask CLI and the real ledger give the key t
     if (retryAttempt === 1) throw new Error('first attempt fails on purpose, to force the retry');
     expect(retryAttempt, 'the retry ran').toBe(2);
   });
-  it('RT1 a bare push with an upstream (@{push} = up/feat)', () => {
+  it('RT1 a bare push with an upstream (@{push} = up/feat)', async () => {
     const d = makeRepo('rt-bare', { up: 'https://github.com/acme/rt-bare.git' });
     git(d, 'update-ref', 'refs/remotes/up/feat', 'main');
     git(d, 'config', 'branch.feat.remote', 'up');
     git(d, 'config', 'branch.feat.merge', 'refs/heads/feat');
-    roundTrip(d, 'git push', 'ship');
+    await roundTrip(d, 'git push', 'ship');
   });
-  it('RT2 git push up feat while on main: key feat, tree of feat', () => {
+  it('RT2 git push up feat while on main: key feat, tree of feat', async () => {
     const d = makeRepo('rt-other', { up: 'https://github.com/acme/rt-other.git' });
     git(d, 'checkout', '-q', 'main');
-    roundTrip(d, 'git push up feat', 'ship');
+    await roundTrip(d, 'git push up feat', 'ship');
   });
   // Fixer E: HEAD:main, not HEAD:release (release is no default branch and passes with no tap). The source HEAD is feat, the destination main.
-  it('RT3 a refspec: git push up HEAD:main', () => {
+  it('RT3 a refspec: git push up HEAD:main', async () => {
     const d = makeRepo('rt-spec', { up: 'https://github.com/acme/rt-spec.git' });
-    roundTrip(d, 'git push up HEAD:main', 'ship');
+    await roundTrip(d, 'git push up HEAD:main', 'ship');
   });
   // Fixer E: main, not feat (a URL target has no remote HEAD: only main and master are default branches there).
-  it('RT4 a URL remote', () => {
+  it('RT4 a URL remote', async () => {
     const d = makeRepo('rt-url', { up: 'https://github.com/acme/rt-url.git' });
-    roundTrip(d, 'git push https://github.com/acme/rt-url.git main', 'ship');
+    await roundTrip(d, 'git push https://github.com/acme/rt-url.git main', 'ship');
   });
-  it('RT5 nothing ahead of the remote: a push of main that the remote already has', () => {
+  it('RT5 nothing ahead of the remote: a push of main that the remote already has', async () => {
     const d = makeRepo('rt-none', { up: 'https://github.com/acme/rt-none.git' });
     git(d, 'checkout', '-q', 'main');
     git(d, 'update-ref', 'refs/remotes/up/main', 'HEAD');
-    roundTrip(d, 'git push up main', 'ship');
+    await roundTrip(d, 'git push up main', 'ship');
   });
-  it('RT6 a create and a merge with one remote', () => {
+  it('RT6 a create and a merge with one remote', async () => {
     const d = makeRepo('rt-pr', { origin: 'https://github.com/acme/rt-pr.git' });
-    roundTrip(d, 'gh pr create --draft --title t --body-file b.md', 'open-pr');
+    await roundTrip(d, 'gh pr create --draft --title t --body-file b.md', 'open-pr');
     const head = git(d, 'rev-parse', 'feat');
-    roundTrip(d, `gh pr merge 7 --squash --match-head-commit ${head}`, 'land', { headRefOid: head, state: 'OPEN', isDraft: false, title: 't' });
+    await roundTrip(d, `gh pr merge 7 --squash --match-head-commit ${head}`, 'land', { headRefOid: head, state: 'OPEN', isDraft: false, title: 't' });
   });
-  it('RT7 two remotes and no @{push}: a create that names the repo of the second remote', () => {
+  it('RT7 two remotes and no @{push}: a create that names the repo of the second remote', async () => {
     const d = makeRepo('rt-two', { origin: 'https://github.com/acme/rt-two.git', mirror: 'https://github.com/acme/rt-two-m.git' });
-    roundTrip(d, 'gh pr create -R acme/rt-two-m --draft --title t', 'open-pr');
-    expect(verdict(d, 'gh pr create --draft --title t')).toMatchObject({ action: 'deny', pattern: 'repo-unnamed' });
+    await roundTrip(d, 'gh pr create -R acme/rt-two-m --draft --title t', 'open-pr');
+    expect(await verdict(d, 'gh pr create --draft --title t')).toMatchObject({ action: 'deny', pattern: 'repo-unnamed' });
   });
-  it('RT8 an SSH host alias remote with the github field of the entry', () => {
+  it('RT8 an SSH host alias remote with the github field of the entry', async () => {
     const d = makeRepo('rt-alias', { origin: 'git@github-work:Acme/RT-Alias.git' }, 'acme/rt-alias');
-    roundTrip(d, 'gh pr create --draft --title t', 'open-pr');
+    await roundTrip(d, 'gh pr create --draft --title t', 'open-pr');
   });
-  it('RT9 a remote that fetches from one repo and pushes to another: -R of the fetch repo', () => {
+  it('RT9 a remote that fetches from one repo and pushes to another: -R of the fetch repo', async () => {
     const d = makeRepo('rt-split', { origin: 'https://github.com/acme/rt-up.git' });
     git(d, 'remote', 'set-url', '--push', 'origin', 'https://github.com/me/rt-fork.git');
-    expect(verdict(d, 'gh pr create --draft --title t')).toMatchObject({ action: 'deny', pattern: 'fetch-push-differ' });
-    roundTrip(d, 'gh pr create -R acme/rt-up --draft --title t', 'open-pr');
-    roundTrip(d, 'git push origin feat', 'ship');
+    expect(await verdict(d, 'gh pr create --draft --title t')).toMatchObject({ action: 'deny', pattern: 'fetch-push-differ' });
+    await roundTrip(d, 'gh pr create -R acme/rt-up --draft --title t', 'open-pr');
+    await roundTrip(d, 'git push origin feat', 'ship');
   });
   // Reviewer-2 round, seat 3d: the deny prints the remote with no user:token part, and that printed remote keys the same tap.
   // Change that breaks it: drop noCreds in askCmd (the token is printed), or strip the remote before pushKey in either side.
-  it('RT10 a user:token URL remote: no token in the deny, and its printed --remote round-trips', () => {
+  it('RT10 a user:token URL remote: no token in the deny, and its printed --remote round-trips', async () => {
     const d = makeRepo('rt-tok', { up: 'https://github.com/acme/rt-tok.git' });
     const cmd = 'git push https://user:ghp_SECRETTOKEN123@github.com/acme/rt-tok.git main';
-    const before = verdict(d, cmd);
+    const before = await verdict(d, cmd);
     expect(before.action === 'deny' ? before.reason : '').not.toContain('ghp_SECRETTOKEN123');
     expect(askWords((before as { reason: string }).reason)).toContain('https://github.com/acme/rt-tok.git');
-    roundTrip(d, cmd, 'ship');
+    await roundTrip(d, cmd, 'ship');
   });
 });
