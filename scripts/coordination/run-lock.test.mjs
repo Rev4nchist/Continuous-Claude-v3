@@ -8,7 +8,7 @@
 //   tiers              the slot count ignores free memory (9 GB 4, 7 GB 3, else 2)       (a fixed count)
 //   floor              a heavy run starts under 5 GB                                      (drop the floor)
 //   light kind         a hook build takes or is refused by a slot                         (count every kind)
-//   spacing            two grants inside 2 minutes both pass                              (drop the spacing)
+//   spacing            RETIRED (card run-lock-memory-only): MO2 and MO6 now pin that a grant 30 s after another passes   (re-add a fixed gap)
 //   dead run           a dead pid or a reused pid keeps a slot                            (trust the file)
 //   R3 expiry          a past expiry removes the lock of a run that is alive; or --minutes Infinity, 0 or a negative number is taken
 //                      (expiry as the only test; no check of the minutes)
@@ -33,7 +33,7 @@
 //   race               two processes both start; run behind a barrier, not in one process (drop the gate file)
 //   V7.3 floor         under 5 GB a heavy start is refused with no loop live               (a floor for every kind)
 //
-//   future grant       a last-grant time in the future blocks every start                   (no upper bound on last.at)
+//   future grant       RETIRED: an old last-grant.json is ignored whatever its time (item 5)                  (read last-grant.json again)
 //   kind lookup        "constructor" or "__proto__" passes as a kind                         (KINDS[kind] instead of Object.hasOwn)
 //   cli pid            the CLI takes the parent shell as the pid, which ends with the call  (default to process.ppid)
 //   cli entry          a junction or a case difference makes the CLI exit 0 with no output   (string compare of paths)
@@ -41,7 +41,7 @@
 //   zone and minute    the zone is fixed text, the retry minute rounds down                  (a literal CST, no ceil)
 //   long loop          a loop loses its slot after 6 hours                                   (loop expiry 360 minutes)
 //   warn log order     a failed warn-log append leaves a lock and a last-grant behind        (write the lock first)
-//   hook build         a hook build moves last-grant and blocks the next pre-pr              (write last-grant for every kind)
+//   hook build         RETIRED: no kind writes last-grant.json (G3, MO6)                                       (write last-grant for a heavy grant)
 //   record             the lock holds no session label                                       (drop the field)
 //   samples hook       RUN_LOCK_TEST_SAMPLES is ignored, so a test waits 6 seconds           (drop the hook)
 //
@@ -54,7 +54,7 @@
 //   F6b unknown gate   a gate with an unknown start time is never broken after pid reuse                 (no age rule)
 //   low                break log after removal; 5.0 GB boundary; release and break need --pid; a classifyEntry miss exits;
 //                      the samples hook works with no test store; the warn row has no head
-//   G3 light spacing   a hook build gets WAIT from the 2 minute spacing after a heavy start            (spacing without kind.heavy)
+//   G3 light spacing   RETIRED: a hook build is governed by the load bar alone, as before (G3)                (a gap that covers kind.light)
 //   G4 list sweep      list deletes lock files with no gate, so it can delete a lock that a renew just wrote  (sweep outside withGate)
 //   G4 list wedge      list waits for ever on a gate that stays held, or creates the store when it is missing (no fail open)
 //
@@ -69,7 +69,7 @@ import os, { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as RL from './run-lock.mjs';
-import { acquire, breakLock, CAVEAT, KINDS, list, maxSlots, register, release, releaseSync, warnSummary } from './run-lock.mjs';
+import { acquire, breakLock, CAVEAT, KINDS, list, register, release, releaseSync, warnSummary } from './run-lock.mjs';
 
 const T0 = Date.parse('2026-11-15T15:00:00Z');
 const MIN = 60_000;
@@ -176,40 +176,100 @@ test('load bar: pre-pr is refused at a median of 70, a hook build at 80, by the 
   assert.ok(ctx);
 });
 
-test('maxSlots follows V7.3: 9 GB 4, 7 GB 3, below 7 GB 2 (the under 5 GB loop floor is a separate rule)', () => {
-  assert.equal(maxSlots(9), 4);
-  assert.equal(maxSlots(8.99), 3);
-  assert.equal(maxSlots(7), 3);
-  assert.equal(maxSlots(6.99), 2);
-  assert.equal(maxSlots(5), 2);
-  assert.equal(maxSlots(4.99), 2, 'with no loop live, below 7 GB still allows 2');
-});
+// Card run-lock-memory-only (Dave 11-17: no count tiers; 11-26: no limits that slow the flow). Free memory and load decide.
+// Rows MO1 to MO3 and MO5 to MO7 fail on the code with the maxSlots tiers and the 2 minute spacing. MO4 (the load bar) is a keep row: it passes on both.
+const KEEP_FLOOR_KINDS = ['suite', 'label-run', 'loop'];
 
-// The V7.3 tiers apply to the other heavy kinds (suite, label run, loop). A pre-pr has its own limits (see the pre-pr phases tests).
-test('slot count at 9.5, 7.5 and 6 GB: the next heavy run after the limit waits and names the count', async () => {
-  for (const [free, limit] of [[9.5, 4], [7.5, 3], [6, 2]]) {
-    const ctx = setup({ free });
-    ctx.mode('grant');
-    for (let i = 0; i < limit; i++) assert.equal((await take(ctx, 'suite', 100 + i)).granted, true, `${free} GB grant ${i + 1}`);
-    live(ctx, 200);
-    const r = await acquire({ kind: 'suite', pid: 200, holder: 't' }, ctx.d);
-    assert.equal(r.granted, false, `${free} GB: grant ${limit + 1} waits`);
-    assert.match(r.lines.join('\n'), new RegExp(`${limit} live heavy runs`));
+test('MO1: a third and a fourth heavy run at 6 GB free and load 40 are granted (no count tier)', async () => {
+  const ctx = setup({ free: 6, load: 40 });
+  ctx.mode('grant');
+  for (let i = 0; i < 4; i++) {
+    live(ctx, 100 + i);
+    const r = await acquire({ kind: 'suite', pid: 100 + i, holder: 't' }, ctx.d);
+    assert.equal(r.granted, true, `heavy run ${i + 1}: ${r.lines.join(' | ')}`);
   }
 });
 
-test('V7.3 as written: under 5 GB with no loop live a heavy run starts; 2 slots; the third waits', async () => {
-  const ctx = setup({ free: 4.9 });
-  ctx.mode('grant');
-  assert.equal((await take(ctx, 'suite', 100)).granted, true, 'first heavy run under 5 GB, no loop live');
-  assert.equal((await take(ctx, 'suite', 101)).granted, true, 'second heavy run');
-  live(ctx, 102);
-  const third = await acquire({ kind: 'suite', pid: 102, holder: 't' }, ctx.d);
-  assert.equal(third.granted, false);
-  assert.match(third.lines.join('\n'), /2 live heavy runs/);
+test('MO2: a heavy grant 30 s after another is granted, for suite, label-run, loop and pre-pr (no fixed gap)', async () => {
+  for (const kind of ['suite', 'label-run', 'loop', 'pre-pr']) {
+    const ctx = setup({ free: 8, load: 20 });
+    ctx.mode('grant');
+    live(ctx, 100);
+    live(ctx, 101);
+    assert.equal((await acquire({ kind, pid: 100, holder: 'a' }, ctx.d)).granted, true, `${kind} first`);
+    ctx.st.now = T0 + 30_000;
+    const r = await acquire({ kind, pid: 101, holder: 'b' }, ctx.d);
+    assert.equal(r.granted, true, `${kind} 30 s later: ${r.lines.join(' | ')}`);
+  }
 });
 
-test('V7.3 as written: under 5 GB while a registered loop is live a heavy run waits and names the loop; a hook build starts', async () => {
+test('MO3: under 5 GB a suite, a label run and a loop are refused with key floor, with no loop live; at exactly 5 GB they are granted', async () => {
+  for (const kind of KEEP_FLOOR_KINDS) {
+    const low = setup({ free: 4.9, load: 20 });
+    low.mode('grant');
+    live(low, 100);
+    const r = await acquire({ kind, pid: 100, holder: 't' }, low.d);
+    assert.equal(r.granted, false, `${kind} at 4.9 GB`);
+    assert.ok(r.keys.includes('floor'), `${kind} keys: ${r.keys}`);
+    assert.match(r.lines.join('\n'), /under 5 GB/);
+    const edge = setup({ free: 5, load: 20 });
+    edge.mode('grant');
+    live(edge, 100);
+    assert.equal((await acquire({ kind, pid: 100, holder: 't' }, edge.d)).granted, true, `${kind} at exactly 5 GB`);
+  }
+});
+
+test('MO4: the load bar still refuses a heavy suite at a median of 70 and grants it at 69', async () => {
+  for (const [load, ok] of [[70, false], [69, true]]) {
+    const ctx = setup({ free: 8, load });
+    ctx.mode('grant');
+    live(ctx, 100);
+    const r = await acquire({ kind: 'suite', pid: 100, holder: 't' }, ctx.d);
+    assert.equal(r.granted, ok, `suite load ${load}`);
+    if (!ok) assert.ok(r.keys.includes('load'), `keys: ${r.keys}`);
+  }
+});
+
+test('MO5: every refusal says "try again" after 30 s (the two-read gap), not after 2 minutes', async () => {
+  for (const kind of ['suite', 'pre-pr']) {
+    const ctx = setup({ free: 8, load: 90 });
+    ctx.mode('grant');
+    live(ctx, 100);
+    const r = await acquire({ kind, pid: 100, holder: 't' }, ctx.d);
+    assert.equal(r.granted, false, kind);
+    assert.equal(r.retryAt, T0 + 30_000, `${kind} retryAt`);
+  }
+});
+
+test('MO6: a grant writes no last-grant.json, and an old recent last-grant.json delays nothing', async () => {
+  const fresh = setup({ free: 8, load: 20 });
+  fresh.mode('grant');
+  live(fresh, 100);
+  assert.equal((await acquire({ kind: 'suite', pid: 100, holder: 't' }, fresh.d)).granted, true);
+  assert.equal(existsSync(join(fresh.dir, 'last-grant.json')), false, 'no spacing clock is written');
+  const old = setup({ free: 8, load: 20 });
+  old.mode('grant');
+  writeFileSync(join(old.dir, 'last-grant.json'), JSON.stringify({ at: T0, kind: 'pre-pr', pid: 1 }));
+  live(old, 101);
+  assert.equal((await acquire({ kind: 'suite', pid: 101, holder: 't' }, old.d)).granted, true, 'an old file is ignored');
+});
+
+test('MO7: the GRANTED line of a heavy run names no slot count; a pre-pr under 5 GB with no loop gives the memory key once, not floor twice', async () => {
+  const ctx = setup({ free: 8, load: 20 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  const g = await acquire({ kind: 'suite', pid: 100, holder: 't' }, ctx.d);
+  const line = g.lines.find((l) => l.startsWith('GRANTED'));
+  assert.match(line, /^GRANTED suite \(free 8 GB, load 20 percent, mode grant\)$/);
+  const low = setup({ free: 4.9, load: 20 });
+  low.mode('grant');
+  live(low, 101);
+  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, low.d);
+  assert.deepEqual(r.keys, ['memory'], 'one floor refusal for a pre-pr with no loop live');
+});
+
+// MO1 to MO3 replace the old tier rows (9.5, 7.5 and 6 GB counts; "under 5 GB with no loop live a heavy run starts, the third waits").
+test('V7.3: under 5 GB while a registered loop is live a heavy run waits and names the loop; a hook build starts', async () => {
   const ctx = setup({ free: 4.9 });
   ctx.mode('grant');
   live(ctx, 300);
@@ -217,6 +277,7 @@ test('V7.3 as written: under 5 GB while a registered loop is live a heavy run wa
   live(ctx, 100);
   const heavy = await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, ctx.d);
   assert.equal(heavy.granted, false);
+  assert.deepEqual(heavy.keys, ['floor'], 'one refusal, key floor: the pre-pr exception skips its own memory key while a loop is live');
   assert.match(heavy.lines.join('\n'), /under 5 GB/);
   assert.match(heavy.lines.join('\n'), /loop/i);
   live(ctx, 101);
@@ -233,64 +294,35 @@ test('a hook build needs no slot: it starts when the heavy slots are full, and i
   assert.equal(build.granted, true);
   live(ctx, 103);
   const third = await acquire({ kind: 'pre-pr', pid: 103, holder: 't' }, ctx.d);
-  assert.equal(third.granted, false, 'two heavy runs fill 2 slots; the hook build is not one of them');
-  assert.match(third.lines.join('\n'), /2 live heavy runs/);
+  assert.equal(third.granted, false, 'two pre-pr runs in the test phase fill the pre-pr limit of 2; the hook build is not one of them');
+  assert.match(third.lines.join('\n'), /2 pre-pr runs in the test phase/);
 });
 
-test('spacing: a second grant inside 2 minutes waits and names the retry time; after 2 minutes it passes', async () => {
-  const ctx = setup();
-  ctx.mode('grant');
-  live(ctx, 100);
-  live(ctx, 101);
-  assert.equal((await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, ctx.d)).granted, true);
-  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d);
-  assert.equal(r.granted, false);
-  assert.match(r.lines.join('\n'), /2 minutes/);
-  assert.equal(r.retryAt, T0 + 2 * MIN);
-  ctx.st.now = T0 + 2 * MIN;
-  assert.equal((await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, ctx.d)).granted, true);
-});
-
-// Card prepr-run-lock-start-gap. 25 Nov 15:12: two pre-prs started 9 s apart; the second was queued and granted 15:17:56. These two rows pin that.
-test('G1 gap: a pre-pr that asks 9 s after a grant waits (spacing), is refused until 120 s after that grant, then passes', async () => {
-  const ctx = setup({ free: 12, load: 20 });
-  ctx.mode('grant');
-  live(ctx, 100);
-  live(ctx, 101);
-  assert.equal((await acquire({ kind: 'pre-pr', pid: 100, holder: 'a', head: 'aaaa1111' }, ctx.d)).granted, true);
-  ctx.st.now = T0 + 9_000;
-  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', wait: true }, ctx.d);
-  assert.equal(r.granted, false);
-  assert.ok(r.keys.includes('spacing'), `keys: ${r.keys}`);
-  assert.equal(r.retryAt, T0 + 2 * MIN);
-  assert.ok(r.waitFile, 'a wait record keeps its place in the queue');
-  ctx.st.now = T0 + 2 * MIN - 1;
-  assert.equal((await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', wait: true }, ctx.d)).granted, false, '1 ms before the gap ends');
-  ctx.st.now = T0 + 2 * MIN;
-  assert.equal((await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', wait: true }, ctx.d)).granted, true, 'at the gap');
-});
-
+// The old rows "spacing" and "G1 gap" (card prepr-run-lock-start-gap, 25 Nov) pinned the 2 minute gap. The gap is gone (card run-lock-memory-only):
+// MO2 pins that a grant 30 s after another passes, and the waitForGrant rows pin the queue and the retry.
+// The two rows below keep their old subject (the wait record and the runs.jsonl row of a refused pre-pr start). A second HEAVY pre-pr is
+// the refusal now (PRE_PR_HEAVY_LIMIT 1); it used to be the spacing.
 test('G2 wait row: a pre-pr start that waits leaves ONE row in runs.jsonl (pid, head, keys, reason); a second ask of the same wait adds none; a grant adds none', async () => {
   const ctx = setup({ free: 12, load: 20 });
   ctx.mode('grant');
   live(ctx, 100);
   live(ctx, 101);
-  await acquire({ kind: 'pre-pr', pid: 100, holder: 'a', head: 'aaaa1111' }, ctx.d);
+  await acquire({ kind: 'pre-pr', pid: 100, holder: 'a', head: 'aaaa1111', heavy: true }, ctx.d);
   const rowsOf = () => (existsSync(join(ctx.dir, 'runs.jsonl')) ? readFileSync(join(ctx.dir, 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   assert.equal(rowsOf().length, 0, 'a grant writes no wait row (the pre-pr writes its own start row)');
   ctx.st.now = T0 + 9_000;
-  await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', wait: true }, ctx.d);
+  await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', wait: true, heavy: true }, ctx.d);
   ctx.st.now = T0 + 60_000;
-  await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', wait: true }, ctx.d);
+  await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', wait: true, heavy: true }, ctx.d);
   const rows = rowsOf();
   assert.equal(rows.length, 1, JSON.stringify(rows));
   assert.equal(rows[0].event, 'wait');
   assert.equal(rows[0].queued, true);
   assert.equal(rows[0].pid, 101);
   assert.equal(rows[0].head, 'bbbb2222');
-  assert.deepEqual(rows[0].keys, ['spacing']);
+  assert.deepEqual(rows[0].keys, ['heavy']);
   assert.equal(rows[0].ts, T0 + 9_000);
-  assert.match(rows[0].reasons.join(' '), /2 minutes/);
+  assert.match(rows[0].reasons.join(' '), /heavy pre-pr run in the test phase/);
 });
 
 test('G4 wait row: a pre-pr start WITHOUT --wait-lock that is refused also leaves a row (queued false); each refused ask is one row', async () => {
@@ -298,16 +330,16 @@ test('G4 wait row: a pre-pr start WITHOUT --wait-lock that is refused also leave
   ctx.mode('grant');
   live(ctx, 100);
   live(ctx, 101);
-  await acquire({ kind: 'pre-pr', pid: 100, holder: 'a', head: 'aaaa1111' }, ctx.d);
+  await acquire({ kind: 'pre-pr', pid: 100, holder: 'a', head: 'aaaa1111', heavy: true }, ctx.d);
   const rowsOf = () => (existsSync(join(ctx.dir, 'runs.jsonl')) ? readFileSync(join(ctx.dir, 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   ctx.st.now = T0 + 9_000;
-  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222' }, ctx.d);
+  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', heavy: true }, ctx.d);
   assert.equal(r.granted, false);
   ctx.st.now = T0 + 60_000;
-  await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222' }, ctx.d);
+  await acquire({ kind: 'pre-pr', pid: 101, holder: 'b', head: 'bbbb2222', heavy: true }, ctx.d);
   const rows = rowsOf();
   assert.equal(rows.length, 2, JSON.stringify(rows));
-  assert.ok(rows.every((x) => x.event === 'wait' && x.pid === 101 && x.queued === false && x.keys.includes('spacing')), JSON.stringify(rows));
+  assert.ok(rows.every((x) => x.event === 'wait' && x.pid === 101 && x.queued === false && x.keys.includes('heavy')), JSON.stringify(rows));
 });
 
 test('a dead pid and a reused pid (other start time) lose their slot; a past expiry keeps the lock of a run that is alive (R3)', async () => {
@@ -386,8 +418,8 @@ test('R3: two expired locks of live runs still fill the slots in acquire', async
   ctx.st.now += 60 * MIN;
   live(ctx, 102);
   const r = await acquire({ kind: 'pre-pr', pid: 102, holder: 't' }, ctx.d);
-  assert.equal(r.granted, false, 'the runs are alive, so their slots count');
-  assert.match(r.lines.join('\n'), /2 live heavy runs/);
+  assert.equal(r.granted, false, 'the runs are alive, so their places count');
+  assert.match(r.lines.join('\n'), /2 pre-pr runs in the test phase/);
 });
 
 test('R3: --minutes must be finite and above 0, in acquire and register (no null expiry, no silent default)', async () => {
@@ -440,7 +472,7 @@ const d = {
   selfPid: Number(pid),
 };
 try {
-  const r = await acquire({ kind: 'pre-pr', pid: Number(pid), holder: 'child' + pid }, d);
+  const r = await acquire({ kind: 'pre-pr', pid: Number(pid), holder: 'child' + pid, heavy: true }, d);
   console.log(JSON.stringify({ granted: r.granted }));
 } catch (e) {
   console.log(JSON.stringify({ error: String(e && e.message) }));
@@ -508,8 +540,8 @@ test('a failed process read ("unknown") keeps the lock of a live run and counts 
   assert.equal(lockFiles(ctx.dir).length, 2, 'the lock files are kept');
   live(ctx, 200);
   const third = await acquire({ kind: 'pre-pr', pid: 200, holder: 't' }, ctx.d);
-  assert.equal(third.granted, false, 'the two unknown runs still fill the 2 slots at 6 GB');
-  assert.match(third.lines.join('\n'), /2 live heavy runs/);
+  assert.equal(third.granted, false, 'the two unknown runs still fill the 2 pre-pr places');
+  assert.match(third.lines.join('\n'), /2 pre-pr runs in the test phase/);
 });
 
 test('a gate of a live holder is not stolen after 10 seconds', async () => {
@@ -595,7 +627,7 @@ test('register records a run that already runs, refuses nothing, and counts as a
   ctx2.st.now += 3 * MIN;
   ctx2.st.alive.set(401, 1);
   const second = await acquire({ kind: 'pre-pr', pid: 401, holder: 't' }, ctx2.d);
-  assert.equal(second.granted, false, 'the registered loop and one pre-pr fill the 2 slots at 6 GB');
+  assert.equal(second.granted, true, 'a registered loop takes no pre-pr place: with one pre-pr live a second is granted (no count tier)');
 });
 
 test('an old-code pre-pr with no lock file prints UNLOCKED RUN seen and counts as a slot in grant mode', async () => {
@@ -707,19 +739,14 @@ const runCli = (args, store, env = {}) => spawnSync(process.execPath, [RUN_LOCK,
   encoding: 'utf8', timeout: 60_000, env: { ...process.env, RUN_LOCK_DIR: store, RUN_LOCK_TEST_SAMPLES: SAMPLES_ENV(8, 10), ...env },
 });
 
-test('item 5: a last-grant time in the future is ignored; one inside the small skew still spaces', async () => {
-  const far = setup();
-  far.mode('grant');
-  live(far, 100);
-  writeFileSync(join(far.dir, 'last-grant.json'), JSON.stringify({ at: T0 + 10 * MIN, kind: 'pre-pr', pid: 1 }));
-  assert.equal((await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, far.d)).granted, true, 'a grant 10 minutes in the future is a bad file, not a reason');
-  const near = setup();
-  near.mode('grant');
-  live(near, 100);
-  writeFileSync(join(near.dir, 'last-grant.json'), JSON.stringify({ at: T0 + 20_000, kind: 'pre-pr', pid: 1 }));
-  const r = await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, near.d);
-  assert.equal(r.granted, false, 'a few seconds of clock skew between two sessions still counts as a recent grant');
-  assert.match(r.lines.join('\n'), /2 minutes/);
+test('item 5: a last-grant.json from the old code, in the future or a few seconds ago, is ignored', async () => {
+  for (const at of [T0 + 10 * MIN, T0 + 20_000, T0]) {
+    const ctx = setup();
+    ctx.mode('grant');
+    live(ctx, 100);
+    writeFileSync(join(ctx.dir, 'last-grant.json'), JSON.stringify({ at, kind: 'pre-pr', pid: 1 }));
+    assert.equal((await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, ctx.d)).granted, true, `an old file with at ${at - T0} ms delays nothing`);
+  }
 });
 
 test('item 6: "constructor", "__proto__" and "toString" are not kinds, in acquire and in register', async () => {
@@ -792,7 +819,8 @@ test('item 9: the summary says that warn mode counts run high', () => {
   const ctx = setup();
   const s = warnSummary(ctx.dir);
   assert.match(String(s.note), /counts run high/);
-  assert.match(String(s.note), /slot/);
+  assert.match(String(s.note), /takes a lock/);
+  assert.doesNotMatch(String(s.note), /2 minute/, 'the fixed gap is gone, so the note must not name it');
   const r = runCli(['summary'], ctx.dir);
   assert.match(r.stdout, /counts run high/);
 });
@@ -825,7 +853,7 @@ test('note: a refusal prints the retry time in the injected zone, with no fixed 
   ctx.mode('grant');
   live(ctx, 100);
   const r = await acquire({ kind: 'pre-pr', pid: 100, holder: 't' }, { ...ctx.d, timeZone: 'America/New_York' });
-  assert.match(r.lines.find((l) => l.startsWith('WAIT ')), /try again after 10:02 EST$/);
+  assert.match(r.lines.find((l) => l.startsWith('WAIT ')), /try again after 10:01 EST$/ /* T0 is 10:00 EST; the retry is 30 s later and the clock text rounds up to the minute */);
 });
 
 test('note: a loop keeps its slot for 12 hours, and a second register renews it', async () => {
@@ -1359,7 +1387,7 @@ test('G3: a light kind is governed only by the load bar: a hook build 30 seconds
   ctx.st.now = T0 + 30_000;
   const build = await acquire({ kind: 'hook-build', pid: 101, holder: 't' }, ctx.d);
   assert.equal(build.granted, true, build.lines.join('\n'));
-  assert.equal(JSON.parse(readFileSync(join(ctx.dir, 'last-grant.json'), 'utf8')).at, T0, 'the hook build does not move the spacing clock');
+  assert.equal(existsSync(join(ctx.dir, 'last-grant.json')), false, 'no spacing clock is written for any kind');
   ctx.st.load = 85;
   live(ctx, 102);
   assert.equal((await acquire({ kind: 'hook-build', pid: 102, holder: 't' }, ctx.d)).granted, false, 'the load bar still refuses a hook build');
@@ -1688,14 +1716,17 @@ test('waitForGrant returns the grant when a place frees up', async () => {
   await take(ctx, 'pre-pr', 101);
   live(ctx, 200);
   // The place frees only during the WAIT sleep (not the 30 s second read inside an acquire), so the grant needs a second attempt.
+  // A refused start now retries after 30 s, the same length as the second read, so the sleeps are told apart by order:
+  // 1 second read of attempt 1, 2 the wait (the place frees here), 3 second read of attempt 2.
   let reads = 0;
+  let sleeps = 0;
   const waits = [];
   const d = {
     ...ctx.d,
     samples: async () => { reads++; return { free: [8, 8, 8], load: [10, 10, 10] }; },
     sleep: async (ms) => {
       ctx.st.now += ms;
-      if (ms === 30_000) return;
+      if (++sleeps !== 2) return;
       const queued = readdirSync(ctx.dir).filter((f) => f.startsWith(lockPrefix('pre-pr', 200)));
       waits.push(queued.map((f) => recOf(ctx, f).phase));
       releaseSync({ pid: 100 }, ctx.d);
@@ -1731,7 +1762,9 @@ test('L1: waitForGrant reads its options again at every attempt when they come a
   live(ctx, 200);
   const heads = ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'];
   let n = 0;
-  const d = { ...ctx.d, sleep: async (ms) => { ctx.st.now += ms; if (ms !== 30_000 && n === 2) releaseSync({ pid: 100 }, ctx.d); } }; // 30 s is the second machine read, not the wait
+  let sleeps = 0;
+  // Every sleep is 30 s now: sleeps 1, 3 and 5 are the second machine read of an attempt, 2 and 4 are the waits. The place frees at wait 4 (n is 2 attempts).
+  const d = { ...ctx.d, sleep: async (ms) => { ctx.st.now += ms; if (++sleeps === 4 && n === 2) releaseSync({ pid: 100 }, ctx.d); } };
   const r = await RL.waitForGrant(() => ({ kind: 'pre-pr', pid: 200, holder: 't', head: heads[n++] }), d, { maxMs: 60 * MIN });
   assert.equal(r.granted, true);
   assert.equal(recOf(ctx, r.file).head, 'cccccccc', 'the lock holds the head of the last attempt');
@@ -1867,8 +1900,18 @@ test('M4: the deadline is checked before each acquire, and a grant after the dea
   await take(slept, 'pre-pr', 101);
   live(slept, 200);
   // The clock passes the 5 minute limit during the wait sleep, and a place frees in the same sleep: the next acquire would grant.
-  const dSleep = { ...slept.d, sleep: async (ms) => { if (ms === 30_000) { slept.st.now += ms; return; } slept.st.now += 10 * MIN; releaseSync({ pid: 100 }, slept.d); } };
+  // The wait sleep is 30 s now, as long as the second read, so the two are told apart by order: sleep 1 is the second read, sleep 2 the wait.
+  // The check before each acquire is told from the check after a grant by the machine reads: attempt 1 reads twice (first read and the
+  // 30 s second read), and an acquire after the deadline would read again. With the first check removed the result looks the same.
+  let sleeps = 0;
+  let reads = 0;
+  const dSleep = {
+    ...slept.d,
+    samples: async () => { reads++; return { free: [8, 8, 8], load: [10, 10, 10] }; },
+    sleep: async (ms) => { if (++sleeps !== 2) { slept.st.now += ms; return; } slept.st.now += 10 * MIN; releaseSync({ pid: 100 }, slept.d); },
+  };
   const a = await RL.waitForGrant({ kind: 'pre-pr', pid: 200, holder: 't' }, dSleep, { maxMs: 5 * MIN });
+  assert.equal(reads, 2, 'no acquire after the deadline: no machine read after the wait sleep');
   assert.equal(a.granted, false, 'no grant after the deadline');
   assert.equal(a.exit, 75);
   assert.equal(a.timedOut, true);
