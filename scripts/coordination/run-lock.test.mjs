@@ -176,6 +176,98 @@ test('load bar: pre-pr is refused at a median of 70, a hook build at 80, by the 
   assert.ok(ctx);
 });
 
+// Card run-lock-memory-only (Dave 11-17: no count tiers; 11-26: no limits that slow the flow). Free memory and load decide.
+// Rows MO1 to MO7 fail on the code with the maxSlots tiers and the 2 minute spacing.
+const KEEP_FLOOR_KINDS = ['suite', 'label-run'];
+
+test('MO1: a third and a fourth heavy run at 6 GB free and load 40 are granted (no count tier)', async () => {
+  const ctx = setup({ free: 6, load: 40 });
+  ctx.mode('grant');
+  for (let i = 0; i < 4; i++) {
+    live(ctx, 100 + i);
+    const r = await acquire({ kind: 'suite', pid: 100 + i, holder: 't' }, ctx.d);
+    assert.equal(r.granted, true, `heavy run ${i + 1}: ${r.lines.join(' | ')}`);
+  }
+});
+
+test('MO2: a heavy grant 30 s after another is granted, for suite, label-run and loop (no fixed gap)', async () => {
+  for (const kind of ['suite', 'label-run', 'loop']) {
+    const ctx = setup({ free: 8, load: 20 });
+    ctx.mode('grant');
+    live(ctx, 100);
+    live(ctx, 101);
+    assert.equal((await acquire({ kind, pid: 100, holder: 'a' }, ctx.d)).granted, true, `${kind} first`);
+    ctx.st.now = T0 + 30_000;
+    const r = await acquire({ kind, pid: 101, holder: 'b' }, ctx.d);
+    assert.equal(r.granted, true, `${kind} 30 s later: ${r.lines.join(' | ')}`);
+  }
+});
+
+test('MO3: under 5 GB a suite and a label run are refused with key floor, with no loop live; at exactly 5 GB they are granted', async () => {
+  for (const kind of KEEP_FLOOR_KINDS) {
+    const low = setup({ free: 4.9, load: 20 });
+    low.mode('grant');
+    live(low, 100);
+    const r = await acquire({ kind, pid: 100, holder: 't' }, low.d);
+    assert.equal(r.granted, false, `${kind} at 4.9 GB`);
+    assert.ok(r.keys.includes('floor'), `${kind} keys: ${r.keys}`);
+    assert.match(r.lines.join('\n'), /under 5 GB/);
+    const edge = setup({ free: 5, load: 20 });
+    edge.mode('grant');
+    live(edge, 100);
+    assert.equal((await acquire({ kind, pid: 100, holder: 't' }, edge.d)).granted, true, `${kind} at exactly 5 GB`);
+  }
+});
+
+test('MO4: the load bar still refuses a heavy suite at a median of 70 and grants it at 69', async () => {
+  for (const [load, ok] of [[70, false], [69, true]]) {
+    const ctx = setup({ free: 8, load });
+    ctx.mode('grant');
+    live(ctx, 100);
+    const r = await acquire({ kind: 'suite', pid: 100, holder: 't' }, ctx.d);
+    assert.equal(r.granted, ok, `suite load ${load}`);
+    if (!ok) assert.ok(r.keys.includes('load'), `keys: ${r.keys}`);
+  }
+});
+
+test('MO5: every refusal says "try again" after 30 s (the two-read gap), not after 2 minutes', async () => {
+  for (const kind of ['suite', 'pre-pr']) {
+    const ctx = setup({ free: 8, load: 90 });
+    ctx.mode('grant');
+    live(ctx, 100);
+    const r = await acquire({ kind, pid: 100, holder: 't' }, ctx.d);
+    assert.equal(r.granted, false, kind);
+    assert.equal(r.retryAt, T0 + 30_000, `${kind} retryAt`);
+  }
+});
+
+test('MO6: a grant writes no last-grant.json, and an old recent last-grant.json delays nothing', async () => {
+  const fresh = setup({ free: 8, load: 20 });
+  fresh.mode('grant');
+  live(fresh, 100);
+  assert.equal((await acquire({ kind: 'suite', pid: 100, holder: 't' }, fresh.d)).granted, true);
+  assert.equal(existsSync(join(fresh.dir, 'last-grant.json')), false, 'no spacing clock is written');
+  const old = setup({ free: 8, load: 20 });
+  old.mode('grant');
+  writeFileSync(join(old.dir, 'last-grant.json'), JSON.stringify({ at: T0, kind: 'pre-pr', pid: 1 }));
+  live(old, 101);
+  assert.equal((await acquire({ kind: 'suite', pid: 101, holder: 't' }, old.d)).granted, true, 'an old file is ignored');
+});
+
+test('MO7: the GRANTED line of a heavy run names no slot count; a pre-pr under 5 GB with no loop gives the memory key once, not floor twice', async () => {
+  const ctx = setup({ free: 8, load: 20 });
+  ctx.mode('grant');
+  live(ctx, 100);
+  const g = await acquire({ kind: 'suite', pid: 100, holder: 't' }, ctx.d);
+  const line = g.lines.find((l) => l.startsWith('GRANTED'));
+  assert.match(line, /^GRANTED suite \(free 8 GB, load 20 percent, mode grant\)$/);
+  const low = setup({ free: 4.9, load: 20 });
+  low.mode('grant');
+  live(low, 101);
+  const r = await acquire({ kind: 'pre-pr', pid: 101, holder: 't' }, low.d);
+  assert.deepEqual(r.keys, ['memory'], 'one floor refusal for a pre-pr with no loop live');
+});
+
 test('maxSlots follows V7.3: 9 GB 4, 7 GB 3, below 7 GB 2 (the under 5 GB loop floor is a separate rule)', () => {
   assert.equal(maxSlots(9), 4);
   assert.equal(maxSlots(8.99), 3);
