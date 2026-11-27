@@ -17,6 +17,7 @@
  * times out is a scan-error, and a scan-error follows the rule of every scan-error: it FAILS a run without --changed (pre-pr) and a run where the file is in
  * the --changed list; with --changed and the file untouched it is DRIFT (printed, exit 0). A skipped file never passes in a touched file. The wrapper says it
  * was a timeout, in which file and rule. The engine's --timeout counts per rule and file, and the pack has three rules: one bad file can take up to 3 times the limit.
+ * Size limit: both engines run with --max-target-bytes 0. Their default skips any file over 1,000,000 bytes without an error, so such a file passed unscanned.
  * Both scans run with --time: one line names the slowest file, and a NOTE says so when it took over half the limit. Time data that cannot be read is
  * reported as "time data unreadable" and never stops the ratchet.
  * Docker mounts the rule folder at /rules, so its check ids are rules.<id>. The opengrep report is rewritten to the same
@@ -61,6 +62,13 @@ export function limitInForce(env = process.env) {
   return { error: `semgrep-ccv3: CCV3_SEMGREP_TIMEOUT_S must be a whole number from 1 to 300 (got ${JSON.stringify(raw)}). Nothing was scanned.` };
 }
 
+/**
+ * Both engines skip a target over 1,000,000 bytes by default, with no error and no entry in the JSON report: a file that was never scanned passed the gate
+ * (card semgrep-size-skip). 0 turns the limit off on both engines. Measured on this repo: the same 30 s and the same findings, one more file scanned
+ * (.claude/hooks/src/shared/malicious-packages.json, 1.06 MB, no rule targets json).
+ */
+export const NO_SIZE_LIMIT = ['--max-target-bytes', '0'];
+
 export function dockerArgs({ root, rulesDir = RULES_DIR, image, timeoutS = PER_FILE_TIMEOUT_S }) {
   return [
     'run', '--rm',
@@ -68,7 +76,7 @@ export function dockerArgs({ root, rulesDir = RULES_DIR, image, timeoutS = PER_F
     '-v', `${rulesDir}:/rules:ro`,
     '-w', '/src',
     image,
-    'semgrep', 'scan', '--config', '/rules', '--metrics=off', '--json', '--quiet', '--timeout', String(timeoutS), '--time',
+    'semgrep', 'scan', '--config', '/rules', '--metrics=off', '--json', '--quiet', '--timeout', String(timeoutS), '--time', ...NO_SIZE_LIMIT,
     ...EXCLUDES.flatMap((e) => ['--exclude', e]),
   ];
 }
@@ -77,7 +85,7 @@ export const OPENGREP_EXE = 'opengrep_windows_x86.exe';
 
 /** opengrep flags: the Docker scan without --metrics=off (opengrep rejects it), plus .git. The run starts in the repo root. */
 export function opengrepArgs({ rulesDir = RULES_DIR, timeoutS = PER_FILE_TIMEOUT_S } = {}) {
-  return ['scan', '--config', rulesDir, '--json', '--quiet', '--timeout', String(timeoutS), '--time', ...[...EXCLUDES, '.git'].flatMap((e) => ['--exclude', e]), '.'];
+  return ['scan', '--config', rulesDir, '--json', '--quiet', '--timeout', String(timeoutS), '--time', ...NO_SIZE_LIMIT, ...[...EXCLUDES, '.git'].flatMap((e) => ['--exclude', e]), '.'];
 }
 
 const versionKey = (name) => (/\d+(?:\.\d+)*/.exec(name)?.[0] ?? '0').split('.').map(Number);
@@ -183,7 +191,7 @@ export function main(argv, deps = {}) {
     log(limit.error);
     return 2;
   }
-  log(`semgrep-ccv3: per-file limit ${limit.seconds} s${limit.overridden ? ' (CCV3_SEMGREP_TIMEOUT_S)' : ''}`);
+  log(`semgrep-ccv3: per-file limit ${limit.seconds} s${limit.overridden ? ' (CCV3_SEMGREP_TIMEOUT_S)' : ''}; size limit off (--max-target-bytes 0)`);
   const { engine, r } = scan({ root, env, spawn, log, find, timeoutS: limit.seconds });
   if (r.error) {
     // No binary at all (ENOENT) or it could not start.
