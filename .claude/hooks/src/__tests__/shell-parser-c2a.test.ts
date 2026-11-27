@@ -158,10 +158,11 @@ describe('N: named classes. Allowed only as main-style real calls with their tap
   });
   it('N2 (M4, Dave tap M6b) a grep, rg or echo that only names gh pr merge is data; any other program, and a real merge beside it, is not', async () => {
     for (const c of [`grep -n "${M}" notes.md`, `rg -n "${M}" scripts`, `grep -rn gh pr merge docs`, `echo gh pr merge 12 --squash`]) {
-      expect(await ast(c), c).toBe('allow');
-      expect(await ast(c, 'PowerShell'), c).toBe('allow');
+      // DENY FLOOR (card coord-guard-deny-floor, Dave's tap 11-27 "Floor wins, no exception"): main denies these, so they are denied again.
+      expect(await ast(c), c).not.toBe('allow');
+      expect(await ast(c, 'PowerShell'), c).not.toBe('allow');
     }
-    for (const c of [`grep -n "${M}" notes.md && ${M} 12 --squash --match-head-commit ${HEAD}`, `grep -n "${M}" notes.md; ${M} 12 --squash --match-head-commit ${HEAD}`,
+    for (const c of [`grep -n "${M}" notes.md &&${M} 12 --squash --match-head-commit ${HEAD}`, `grep -n "${M}" notes.md; ${M} 12 --squash --match-head-commit ${HEAD}`,
       `Add-Content -LiteralPath x.md -Value '${M} 12'`, `$p = 'x.md'; Add-Content -LiteralPath $p -Value '${M} 12'`, `grep -n "${M}" notes.md > out.txt`]) {
       expect(await ast(c, 'PowerShell'), c).not.toBe('allow');
     }

@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decisionRecord, offerWrite, type Step } from '../shared/decisions-store.js';
-import { decide, parserUnavailableDenies, withParsed, type Deps } from '../decision-gate.js';
+import { decide, notInertDenies, parserUnavailableDenies, withParsed, type Deps } from '../decision-gate.js';
 
 vi.setConfig({ testTimeout: 60000 });
 const REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -131,9 +131,13 @@ describe('R: the not-inert reason names the real lists (seat 11-26)', () => {
   // Change that breaks it: the reason is a fixed text again and drifts from the sets that decide (INERT_PROGRAMS, READ_ONLY_PROGRAMS, DATA_ARG_PROGRAMS, RUNS_TEXT_PROGRAMS).
   it('R1 a denied not-inert text gives a reason that names a data program, a read-only program, an accounted caller and a runner of text', async () => {
     const inp = input(`$s='C:/tmp/o.ps1'\n@'\ngh api repos/${REPO}/pulls -X POST -f title=x\n'@ | Set-Content -LiteralPath $s\n& $s`, 'PowerShell');
+    // Deny floor: main's hand reader denies this text first (head cannot be read), so decide() shows that reason. The not-inert reason is the parser's own deny: read it from notInertDenies.
     const d = decide(inp, { ...(await withParsed(JSON.stringify(inp), deps())), ...SEAM } as Deps);
     expect(d.action).toBe('deny');
-    const why = d.action === 'deny' ? d.reason : '';
+    const parsedDeps = await withParsed(JSON.stringify(inp), deps());
+    const ni = notInertDenies(parsedDeps.parsed, false);
+    expect(ni.length).toBeGreaterThan(0);
+    const why = ni[0].reason;
     expect(why).toContain('Fix: run the guarded call as its own command');
     for (const name of ['echo', 'set-content', 'cat', 'head', 'get-content', 'sls', 'get-ciminstance', 'gh', 'git', 'claude', 'curl', 'ntn', 'pr', 'api', 'env', 'timeout']) expect(why, name).toContain(name);
   });
@@ -162,10 +166,12 @@ describe('S: Policy P (Dave 11-26): a guarded text the parse does not resolve is
   const BODY = `$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/${REPO}/pulls -X POST \`\n  -f title='feat(x): y' -f head=feat/x -f base=main`;
   const WRITE = `$s='C:/tmp/scratch/open-pr.ps1'\n@'\n${BODY}\n'@ | Set-Content -LiteralPath $s -Encoding utf8`;
   const CREATE = `gh api repos/${REPO}/pulls -X POST -f title=x`;
-  const notInert = async (text: string, tool = 'PowerShell'): Promise<void> => { expect(await run(text, tool), text).toBe('not-inert'); };
+  // Deny floor: main's hand reader denies these first, so the pattern shown is main's. The row asserts the deny, not the parser's pattern name.
+  const notInert = async (text: string, tool = 'PowerShell'): Promise<void> => { expect(await run(text, tool), text).not.toBe('allow'); };
   const denied = async (text: string, tool: string): Promise<void> => { expect(await run(text, tool), `${tool} ${text}`).not.toBe('allow'); };
-  it('S1 a PR-create script written to a scratch .ps1 by a here-string and Set-Content: allowed (inert: only Set-Content runs)', async () => {
-    expect(await run(WRITE, 'PowerShell')).toBe('allow');
+  // DENY FLOOR (card coord-guard-deny-floor, Dave tap 11-27 "Floor wins, no exception"): main denies S1, A, D1, D2 and L1c to L1e (probe 09-policyP-probe.txt), so they are denied again.
+  it('S1 a PR-create script written to a scratch .ps1 by a here-string and Set-Content: denied (deny floor; the parser alone calls it inert)', async () => {
+    expect(await run(WRITE, 'PowerShell')).not.toBe('allow');
   });
   // A script that the same command then runs is not data: the run is a call that is off the data list, so the text is not inert.
   it('S2 write + call operator on the variable: denied not-inert', async () => { await notInert(`${WRITE}\n& $s`); });
@@ -254,18 +260,18 @@ describe('S: Policy P (Dave 11-26): a guarded text the parse does not resolve is
     for (const tool of ['Bash', 'PowerShell']) await denied(`echo "${CREATE}" | tee run.sh`, tool);
   });
   // Dave's two taps (11-26): the 10 leftover rows. Class A: a script WRITTEN as data and not run. Class D: the parse proves the text is data in that tool (named, 10 rows).
-  it('A: echo of a create written to a file with > or >> is data, Bash and PowerShell (4 rows)', async () => {
-    for (const tool of ['Bash', 'PowerShell']) for (const op of ['>', '>>']) expect(await run(`echo "${CREATE}" ${op} run.sh`, tool), `${tool} ${op}`).toBe('allow');
+  it('A: echo of a create written to a file with > or >> is denied, Bash and PowerShell (4 rows, deny floor)', async () => {
+    for (const tool of ['Bash', 'PowerShell']) for (const op of ['>', '>>']) expect(await run(`echo "${CREATE}" ${op} run.sh`, tool), `${tool} ${op}`).not.toBe('allow');
   });
-  it('D1 PowerShell: a backtick is the escape character, so echo `gh ...` is text (create and merge, 2 rows)', async () => {
-    expect(await run(`echo \`${CREATE}\``, 'PowerShell')).toBe('allow');
-    expect(await run('echo `gh pr merge 5 --squash`', 'PowerShell')).toBe('allow');
+  it('D1 PowerShell: echo `gh ...` in backticks is denied as on main (create and merge, 2 rows, deny floor)', async () => {
+    expect(await run(`echo \`${CREATE}\``, 'PowerShell')).not.toBe('allow');
+    expect(await run('echo `gh pr merge 5 --squash`', 'PowerShell')).not.toBe('allow');
   });
-  it('D2 PowerShell: a subexpression of echo and a bare variable statement run nothing (4 rows)', async () => {
+  it('D2 PowerShell: a subexpression of echo and a bare variable statement are denied as on main (4 rows, deny floor)', async () => {
     for (const c of ['gh api repos/x/pulls', 'gh pr merge 5 --squash']) {
       const text = c.startsWith('gh api') ? `gh api repos/${REPO}/pulls -X POST -f title=x` : c;
-      expect(await run(`$(echo a; echo '${text}')`, 'PowerShell'), text).toBe('allow');
-      expect(await run(`printf -v x '${text}'; $x`, 'PowerShell'), text).toBe('allow');
+      expect(await run(`$(echo a; echo '${text}')`, 'PowerShell'), text).not.toBe('allow');
+      expect(await run(`printf -v x '${text}'; $x`, 'PowerShell'), text).not.toBe('allow');
     }
   });
   it('D2b (paired) the same four texts on the Bash tool stay denied: there a substitution output and a variable are run', async () => {
@@ -276,7 +282,9 @@ describe('S: Policy P (Dave 11-26): a guarded text the parse does not resolve is
   });
   // The data list (one named constant) and its two argument forms.
   it('L1 the data list: Write-Output, Write-Host, Add-Content, Select-String, Out-File and printf beside a guarded text are inert', async () => {
-    for (const c of [`Write-Output '${CREATE}'`, `Write-Host '${CREATE}'`, `Add-Content -LiteralPath x.md -Value '${CREATE}'`, `Select-String -Pattern 'gh pr merge' -Path x.md`, `'${CREATE}' | Out-File x.txt`]) expect(await run(c, 'PowerShell'), c).toBe('allow');
+    for (const c of [`Write-Output '${CREATE}'`, `Write-Host '${CREATE}'`]) expect(await run(c, 'PowerShell'), c).toBe('allow');
+    // Deny floor: main denies these three (probe 09-policyP-probe.txt), so the floor denies them again.
+    for (const c of [`Add-Content -LiteralPath x.md -Value '${CREATE}'`, `Select-String -Pattern 'gh pr merge' -Path x.md`, `'${CREATE}' | Out-File x.txt`]) expect(await run(c, 'PowerShell'), c).not.toBe('allow');
     expect(await run(`printf '%s' '${CREATE}'`, 'Bash')).toBe('allow');
   });
   it('L2 git commit with -m or -F beside a guarded text is inert', async () => {
@@ -336,9 +344,10 @@ describe('F: F1-3, no parse and a text that names a guarded call', () => {
 });
 
 describe('M: M6b, a grep, rg or echo that only names a merge is data', () => {
-  it('M1 grep naming gh pr merge: allowed', async () => { expect(await run('grep -n "gh pr merge" notes.md')).toBe('allow'); });
-  it('M2 rg naming gh pr merge, PowerShell: allowed', async () => { expect(await run('rg -n "gh pr merge" scripts', 'PowerShell')).toBe('allow'); });
-  it('M3 echo naming gh pr merge 12: allowed', async () => { expect(await run('echo gh pr merge 12 --squash')).toBe('allow'); });
+  // DENY FLOOR (card coord-guard-deny-floor, Dave's tap 11-27 "Floor wins, no exception"): main denies M1 to M3, so they are denied again.
+  it('M1 grep naming gh pr merge: denied (deny floor)', async () => { expect(await run('grep -n "gh pr merge" notes.md')).not.toBe('allow'); });
+  it('M2 rg naming gh pr merge, PowerShell: denied (deny floor)', async () => { expect(await run('rg -n "gh pr merge" scripts', 'PowerShell')).not.toBe('allow'); });
+  it('M3 echo naming gh pr merge 12: denied (deny floor)', async () => { expect(await run('echo gh pr merge 12 --squash')).not.toBe('allow'); });
   it('M4 (paired) a real merge after the grep, no tap: denied', async () => {
     expect(await run(`grep -n "gh pr merge" notes.md; gh pr merge 12 --squash --match-head-commit ${HEAD}`)).not.toBe('allow');
   });

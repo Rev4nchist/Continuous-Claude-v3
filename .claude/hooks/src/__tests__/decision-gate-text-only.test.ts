@@ -207,7 +207,8 @@ describe('F2 a real land, a merge, or a mention the exemption must not cover sta
 
 // C2b, class A (Dave's tap M6b, 11-25 "Allow it"): a grep, rg or echo that only names gh pr merge is data. These four rows used to be in the F2 list above
 // ("class C ... stays denied"); the hand reader that denied them is deleted. Each row keeps its name after "class C".
-describe('F2 class C (C2b): a data reader that only names gh pr merge is allowed (Dave tap M6b)', () => {
+// DENY FLOOR (card coord-guard-deny-floor, Dave's tap 11-27 "Floor wins, no exception"): main denies these texts, so they are denied again. The M6b allow is undone.
+describe('F2 class C (deny floor): a data reader that only names gh pr merge is denied, as main denies it', () => {
   const ALLOWED_M6B: Array<[string, string]> = [
     ['class C, rg', `rg -n "gh pr merge" scripts`],
     ['class C, grep quoted', `grep -n "gh pr merge" scripts/x.md`],
@@ -216,8 +217,8 @@ describe('F2 class C (C2b): a data reader that only names gh pr merge is allowed
   ];
   for (const [name, mk] of TOOLS) {
     for (const [label, cmd] of ALLOWED_M6B) {
-      it(`${name}: allows ${label}`, async () => {
-        expect(await denied(mk(cmd))).toBe(false);
+      it(`${name}: denies ${label}`, async () => {
+        expect(await denied(mk(cmd))).toBe(true);
       });
     }
   }

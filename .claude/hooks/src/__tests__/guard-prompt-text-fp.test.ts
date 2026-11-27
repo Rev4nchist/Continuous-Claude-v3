@@ -66,14 +66,9 @@ const action = async (tool: Tool, command: string): Promise<string> => (await de
 const MAIN_DENIES_TEXT = new Set(['lane add title', 'lane shim note', 'lane say', 'after echo ;', 'newline']);
 const W_API = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x';
 const W_MERGE = 'gh pr merge 5 --squash';
-const DAVE_ALLOWED = new Set([
-  `Bash|write a script then it is the next command|${W_API}`, `PowerShell|write a script then it is the next command|${W_API}`,
-  `Bash|append to a script|${W_API}`, `PowerShell|append to a script|${W_API}`,
-  `PowerShell|bare backtick after echo|${W_API}`, `PowerShell|bare backtick after echo|${W_MERGE}`,
-  `PowerShell|bare command position fed by a substitution|${W_API}`, `PowerShell|bare command position fed by a substitution|${W_MERGE}`,
-  `PowerShell|printf -v then the variable as a command|${W_API}`, `PowerShell|printf -v then the variable as a command|${W_MERGE}`,
-]);
-const PARSER_RIGHT_EXTRA = new Set([`Bash|smart quote opens a string|${W_API}`, `Bash|smart quote opens a string|${W_MERGE}`]);
+// DENY FLOOR (card coord-guard-deny-floor, Dave tap 11-27 "Floor wins, no exception"): main denies all 12 rows the C2b parser allowed, so both lists are empty and every row expects deny.
+const DAVE_ALLOWED = new Set<string>();
+const PARSER_RIGHT_EXTRA = new Set<string>();
 const verdictFor = (tool: Tool, name: string, text: string): 'allow' | 'deny' => (DAVE_ALLOWED.has(`${tool}|${name}|${text}`) || PARSER_RIGHT_EXTRA.has(`${tool}|${name}|${text}`) ? 'allow' : 'deny');
 
 describe('TEXT: words of a create, land or merge inside quoted text are allowed, except where main denies them with a parse', () => {

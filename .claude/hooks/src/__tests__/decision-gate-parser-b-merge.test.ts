@@ -133,8 +133,9 @@ describe('port step 2: merge PR and head from the parser words', () => {
     const c = `grep -n "${M}" notes.md`;
     const r = await both(c);
     // C2b (class A, Dave's tap M6b 11-25 "Allow it"): a grep, rg or echo that only names a merge is data. The hand reader is deleted, so the leftover is gone.
+    // DENY FLOOR (card coord-guard-deny-floor, Dave's tap 11-27 "Floor wins, no exception"): main denies this text, so it is denied again (no-pr).
     expect(r.newP).toBe(r.oldP);
-    expect(r.newP).toBe('allow');
+    expect(r.newP).toBe('no-pr');
     const p = await withParsed(JSON.stringify(input(c)), deps());
     expect(astMerges(p.parsed)).toEqual([]);
     const real = await both(`grep -n "${M}" notes.md && ${M} 12 --squash --match-head-commit ${HEAD}`);

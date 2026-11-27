@@ -1110,6 +1110,22 @@ function isTextOnlyCommand(command) {
   }
   return true;
 }
+var DOC_APPEND = /^\s*(?:Add-Content|Set-Content)\s+-(?:LiteralPath|Path)\s+(?:'([A-Za-z0-9_.\-/\\: ]+)'|([A-Za-z0-9_.\-/\\:]+))(?:\s+-Value)?\s+'([^']*)'\s*$/i;
+var DOC_EXT = /\.(?:md|txt|log)$/i;
+var DOC_RISK = /[`\u{2018}-\u{201F}\0\v\f\x85\u{2028}\u{2029}]|\$\(|@['"]/u;
+function isDocAppend(segment) {
+  if (DASH_LOOKALIKE.test(segment) || DOC_RISK.test(segment)) return false;
+  const m = DOC_APPEND.exec(segment);
+  if (m === null) return false;
+  const target = m[1] ?? m[2];
+  if (target !== target.trim() || !DOC_EXT.test(target)) return false;
+  if (target.replace(/^[A-Za-z]:(?=[\\/])/, "").includes(":")) return false;
+  return !target.split(/[\\/]/).includes("..");
+}
+function docAppendReadable(command, tool) {
+  if (tool !== "PowerShell" || DASH_LOOKALIKE.test(command)) return false;
+  return plainSegments(command, "Bash") !== null && plainSegments(command, "PowerShell") !== null;
+}
 function blankInertQuotes(command, tool) {
   if (tool !== void 0 && tool !== "Bash" && tool !== "PowerShell") return command;
   if (tool === "Bash") {
@@ -2383,6 +2399,7 @@ var LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
 var LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)(?![\w`])/i;
 var PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
 var CLEANUP_RE = /(?:^|\s)-CleanupOnly(?::["']?\$?true["']?)?(?![\w:$`.\[(-])/i;
+var MERGE_CLI_RE = /\bgh\s+pr\s+merge\b([^|;&\n]*)/i;
 var MERGE_API_RE = /\bgh\s+api\b[^|;&\n]*\/pulls\/(\d+)\/merge\b[^|;&\n]*/i;
 var GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
 var SHA_RE = /(?:\bsha=|--match-head-commit(?:\s+|=))["']?([0-9a-f]{40})\b/i;
@@ -2466,6 +2483,9 @@ function pairedWords(text, pwsh = false) {
   if (open) words.push(cur);
   return words;
 }
+var QUOTE_CH = /* @__PURE__ */ new Set(["'", '"']);
+var BARE_OK = /^[A-Za-z0-9 \t\-_./=:]$/;
+var QUOTED_OK = /^[\x20-\x7E\n]$/;
 var UNREAD_HEAD = { sha: null, shaBad: true };
 var HEAD_UNREAD_WHY = (pr) => `the merge head cannot be read as gh reads it: two head values, a value that is not a literal 40-hex sha, a flag this gate does not know, an unpaired quote, or a character this gate cannot read the same way in bash and PowerShell. Name the head once: gh pr merge ${pr && /^\d+$/.test(pr) ? pr : "<n>"} --match-head-commit <sha>, or gh api .../merge -f sha=<sha>. ${PLAIN_WAY_OUT}`;
 var PLAIN_WAY_OUT = "For a redirect: run the call with no redirect. For a $ variable or $(...): put the value in the command as plain text or use a body file.";
@@ -3688,7 +3708,182 @@ var priorId = (p) => p.repos.length === 0 && !p.nonLiteral ? "" : `|GH_REPO=${p.
 var fullId = (own) => own.ftext === own.text ? "" : `|${own.ftext}`;
 var landId = (shape, at2, own, prior) => `${shape.kind}|${shape.pr}|${shape.sha}${shape.shaBad ? "!" : ""}|${whereId(at2)}${shape.kind === "merge" ? `|${own.ftext}${priorId(prior)}` : ""}`;
 var distinctWheres = (wheres) => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
+var API_CMD_RE = /\bgh\s+api\b/i;
+var CLI_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
+var CREATE_CHAR_WHY = "a character whose effect this gate cannot read the same way in bash and PowerShell (outside quotes only letters, digits, - _ . / = : and spaces; no $, backtick or backslash in double quotes; no redirect, &, non-ASCII or CR)";
+var GH_PREFIX_OK = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_\-./:]*\s+)*$/;
+var TAIL_API_RE = /\bgh\s+api\b[\s\S]*$/i;
+var TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
+function apiCreateRead(rest, pwsh) {
+  const words = pairedWords(rest, pwsh);
+  if (words === null) return BAD("an unpaired quote");
+  return apiCreateOfWords(words);
+}
+function apiMergeHead(text, pwsh = false) {
+  const rest = text.replace(/^[\s\S]*?\bapi\b/, "");
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"), pwsh)) return UNREAD_HEAD;
+  const words = pairedWords(rest, pwsh);
+  if (words === null) return UNREAD_HEAD;
+  return apiHeadOfWords(words);
+}
+function cliCreateRead(args, pwsh) {
+  const words = pairedWords(args, pwsh);
+  if (words === null) return BAD("an unpaired quote");
+  return cliCreateOfWords(words);
+}
+function cliMergeHead(args, pwsh = false) {
+  if (unmodelled(args, pwsh)) return UNREAD_HEAD;
+  const words = pairedWords(args, pwsh);
+  if (words === null) return UNREAD_HEAD;
+  return cliHeadOfWords(words);
+}
+function createRead(text, pwsh = false) {
+  const cli = CLI_CREATE_RE.exec(text);
+  const api = API_CMD_RE.exec(text);
+  const isCli = cli !== null && (api === null || cli.index < api.index);
+  const m = isCli ? cli : api;
+  if (m === null) return BAD("the create can only be read with its quotes deleted");
+  if (!GH_PREFIX_OK.test(text.slice(0, m.index))) return BAD("the gh call is run by another program (a wrapper such as bash -c, pwsh -Command or cmd /c), which reads the words again");
+  const rest = text.slice(m.index + m[0].length);
+  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, "x"), pwsh)) return BAD(CREATE_CHAR_WHY);
+  return isCli ? cliCreateRead(rest, pwsh) : apiCreateRead(rest, pwsh);
+}
+function landShapesOf(seg, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh = false) {
+  const out3 = [];
+  const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
+  const pr = lastArg(seg, LAND_PR_RE);
+  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out3.push({ kind: "land", pr, sha });
+  const cli = MERGE_CLI_RE.exec(seg);
+  const opens = (m) => m !== null && GH_PREFIX_OK.test(tail.slice(0, m.index)) ? m : null;
+  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? opens(TAIL_CLI_RE.exec(tail)) : null;
+  if (cli) out3.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD });
+  const api = MERGE_API_RE.exec(seg);
+  const rawApi = MERGE_API_RE.exec(rawSeg) ? opens(TAIL_API_RE.exec(tail)) : null;
+  if (api && !GET_RE.test(api[0])) out3.push({ kind: "merge", pr: api[1], ...rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD });
+  return out3;
+}
+function unmodelled(text, pwsh = false) {
+  let q = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && (QUOTE_CH.has(text[i - 1] ?? "") || QUOTE_CH.has(text[i + 1] ?? ""))) return true;
+    if (q === "'") {
+      if (ch === "'") q = "";
+      else if (!QUOTED_OK.test(ch)) return true;
+      continue;
+    }
+    if (q === '"') {
+      if (ch === '"') q = "";
+      else if (!QUOTED_OK.test(ch) || "$`".includes(ch) || ch === "\\" && !pwsh) return true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      q = ch;
+      continue;
+    }
+    if (ch === "@" && i > 0 && !/[ \t]/.test(text[i - 1])) continue;
+    if (ch === "\\" && pwsh) continue;
+    if (!BARE_OK.test(ch)) return true;
+  }
+  return false;
+}
+function docAppendByAstFloor(parsed, tool, raw) {
+  if (tool !== "PowerShell" || !parsed || DOC_ODD_CHAR.test(raw)) return false;
+  const dialects = Object.keys(parsed.byDialect);
+  const r = parsed.byDialect.pwsh;
+  if (dialects.length !== 1 || !r || r.errors.length > 0 || r.calls.length === 0) return false;
+  return !hasBareRedirect(parsed.text, r) && r.calls.every(docAppendCall);
+}
+function shapesOfHand(raw, tool, parsed) {
+  const parserOnly = false;
+  const text = normalizeGh(blankInertQuotes(raw, tool));
+  const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
+  const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every(isTextOnlyCommand);
+  const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every((c) => docAppendReadable(c, tool));
+  const docAst = !PR_NUMBER_IN_TEXT_RE.test(raw) && docAppendByAstFloor(parsed, tool, raw);
+  const out3 = [];
+  const pwshTool = tool === "PowerShell";
+  const seen = /* @__PURE__ */ new Set();
+  const add = (shape, id) => {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out3.push(shape);
+    }
+  };
+  let created = false;
+  const exempt = textOnly || docAst;
+  const astItems = parserOnly ? astItemsOf(parsed, raw, exempt, text) : [];
+  const heldItems = /* @__PURE__ */ new Set();
+  const astHolds = (s, create) => {
+    const sq = squashed(s);
+    const hit = astItems.filter((i) => i.create === true === create && sq.includes(i.sq));
+    hit.forEach((i) => heldItems.add(i));
+    return hit;
+  };
+  for (const view of views) {
+    const reads = ["Bash", "PowerShell"].map((tool2) => {
+      const masked = maskQuoted(view, tool2);
+      return { masked, pos: cdPositions(masked, view) };
+    });
+    for (const { seg, from } of cmdSegments(view)) {
+      const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
+      const owns = reads.map(({ masked }) => ownCommand(view, masked, from));
+      const prior = priorOf(view, reads.map((r) => r.masked), from);
+      const tail = quoteOpenAt(view, from, pwshTool) ? "" : rawTail(view.slice(from));
+      for (const s of /* @__PURE__ */ new Set([seg, squashQuotes(seg)])) {
+        const found = parserOnly ? astHolds(s, false).flatMap((i) => i.shape ? [i.shape] : []) : landShapesOf(s, textOnly || docAst || docReadable && isDocAppend(seg), seg, tail, pwshTool);
+        for (const shape of found) {
+          for (const own of owns) for (const at2 of wheres) add({ ...shape, at: at2, ...own, prior }, landId(shape, at2, own, prior));
+        }
+      }
+      const heldCreates = parserOnly ? astHolds(seg, true) : [];
+      if (parserOnly ? heldCreates.length === 0 : !isPrOpenText(seg)) continue;
+      created = true;
+      const held = heldCreates.find((h) => h.read?.bad) ?? heldCreates[0];
+      for (const own of owns) for (const at2 of wheres) add({ kind: "create", pr: null, at: at2, ...own, prior, tail, pwsh: pwshTool, ...held?.read ? { read: held.read } : {} }, `create|${whereId(at2)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
+    }
+  }
+  if (parserOnly) {
+    const loose = astItems.filter((i) => i.create !== true && i.shape && !heldItems.has(i));
+    if (loose.length > 0) {
+      const view = views[0];
+      const masked = maskQuoted(view, "Bash");
+      for (const i of loose) for (const at2 of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
+        add({ ...i.shape, at: at2, text: view, mtext: masked, ftext: view, fmtext: masked, prior: NO_PRIOR, pwsh: pwshTool }, `loose|${i.shape?.kind}|${i.shape?.pr}|${whereId(at2)}|${i.sq}`);
+      }
+    }
+  }
+  const looseCreate = parserOnly ? astItems.filter((i) => i.create === true) : [];
+  if (!created && (parserOnly ? looseCreate.length > 0 : isPrOpenCommand(text))) {
+    const view = views[0];
+    const masked = maskQuoted(view, "Bash");
+    const read = looseCreate.find((i) => i.read?.bad)?.read ?? looseCreate[0]?.read;
+    for (const at2 of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
+      add({ kind: "create", pr: null, at: at2, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool, ...read ? { read } : {} }, `create|${whereId(at2)}|${view}`);
+    }
+  }
+  const withMergesAndCreates = withAstCreates(withAstMerges(out3, parsed, pwshTool), parsed, pwshTool);
+  const seenLand = new Set(withMergesAndCreates.filter((s) => s.kind === "land").map((s) => `${s.pr}|${s.sha}`));
+  const lands = (parserOnly ? astLandShapes(parsed, raw, exempt, text, pwshTool) : []).filter((s) => {
+    const k = `${s.pr}|${s.sha}`;
+    if (seenLand.has(k)) return false;
+    seenLand.add(k);
+    return true;
+  });
+  return [...withMergesAndCreates, ...lands, ...pushShapesOf(raw, tool)];
+}
 function shapesOf(raw, tool, parsed) {
+  const parser = shapesOfParser(raw, tool, parsed);
+  const seen = new Set(parser.map((s) => JSON.stringify(s)));
+  const hand = shapesOfHand(raw, tool, parsed).filter((s) => s.kind !== "push").map((s) => ({ ...s, hand: true }));
+  return [...parser, ...hand.filter((s) => {
+    const k = JSON.stringify(s);
+    const dup = seen.has(k.replace(',"hand":true', "")) || seen.has(k);
+    seen.add(k);
+    return !dup;
+  })];
+}
+function shapesOfParser(raw, tool, parsed) {
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every(isTextOnlyCommand);
@@ -4270,9 +4465,9 @@ var shellOf = (input) => (input.tool_name || input.tool) === "PowerShell" ? "pws
 var ALLOW = { action: "allow" };
 function judgeCreate(s, deps, dir, cmd) {
   const route = routeOf(deps, dir, cmd);
-  if (route === "app") return judgeAppCreate(s.tail ?? s.ftext ?? s.text, s.pwsh === true, deps, dir, cmd, s.read);
+  if (route === "app") return judgeAppCreate(s.tail ?? s.ftext ?? s.text, s.pwsh === true, deps, dir, cmd, s.read ?? (s.hand === true ? createRead(s.tail ?? s.ftext ?? s.text, s.pwsh === true) : void 0));
   if (route === "foreign") return deny("repo-foreign", goThereWhy(cmd.repo));
-  const cr = s.read ?? NO_READ;
+  const cr = s.read ?? (s.hand === true ? createRead(s.tail ?? s.text, s.pwsh === true) : NO_READ);
   if (cr.bad !== null) return deny("head-unresolved", createBadWhy(dir, cr.bad));
   if (cr.heads.length > 1) return deny("head-unresolved", createBadWhy(dir, `two head values (${cr.heads.join(", ")}); gh takes the last`));
   const branch = readBranch(cr.heads[0] ?? null, deps, dir);
