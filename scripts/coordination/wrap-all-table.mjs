@@ -54,18 +54,18 @@ const MAX_RUNS_SHOWN = 5;
 /**
  * What a lane note says about runs. It never closes a run and never decides a stop point alone.
  *   prePrOpen: more PRE-PR START words (a clock time or a pid after the word) than PRE-PR END and VOID words. A warning only: the lock state decides.
- *   hookBuildOpen: more HOOK BUILD START words than HOOK BUILD END words (a VOID is a pre-pr word: it never closes a build). A hook build takes no lock.
+ *   hookBuildWord: more HOOK BUILD START words than HOOK BUILD END words. A warning only: a hook build takes a hook-build run lock (card hook-build-run-lock).
  *   tooLong: the note is over 64 KB and is not read.
  * No tie by head, time or pid: a count errs toward "open", never toward "closed".
  */
 export function noteSignals(note) {
   const text = String(note ?? '');
-  if (text.length > MAX_NOTE) return { tooLong: true, prePrOpen: false, hookBuildOpen: false };
+  if (text.length > MAX_NOTE) return { tooLong: true, prePrOpen: false, hookBuildWord: false };
   const n = (re, kind) => [...text.matchAll(re)].filter((m) => m[1] === kind).length;
   const starts = (kind) => n(/\b(PRE-PR|HOOK BUILD) START(?:\s*(?:at|[(:]))?\s*\(?\d{1,2}:\d{2}/g, kind) + n(/\b(PRE-PR|HOOK BUILD) START pid \d+/g, kind);
   const ends = (kind) => n(/\b(PRE-PR|HOOK BUILD) END\b/g, kind);
   const voids = [...text.matchAll(/\bVOID\b/g)].length;
-  return { tooLong: false, prePrOpen: starts('PRE-PR') > ends('PRE-PR') + voids, hookBuildOpen: starts('HOOK BUILD') > ends('HOOK BUILD') };
+  return { tooLong: false, prePrOpen: starts('PRE-PR') > ends('PRE-PR') + voids, hookBuildWord: starts('HOOK BUILD') > ends('HOOK BUILD') };
 }
 
 /**
@@ -140,7 +140,7 @@ export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock
   const runInfos = [];
   lockList.forEach((rec, i) => {
     if (!runLockOk(rec)) {
-      warnings.push(`run lock file ${i + 1} is unreadable: a pre-pr or hook build may be running. No row is READY until the seat reads it by hand.`);
+      warnings.push(`run lock file ${oneLine(rec && rec.file ? rec.file : String(i + 1))} is unreadable: it counts as a held lock (a pre-pr or hook build may be running). No row is READY until the seat reads it by hand.`);
       return;
     }
     const label = oneLine(rec.session);
@@ -166,7 +166,7 @@ export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock
     const matches = (w, id) => !w.primary && (String(w.branch ?? '').endsWith(`/${id}`) || mine.some((l) => l.id === id && l.branch && l.branch === w.branch));
     const wts = worktrees.filter((w) => ids.some((id) => matches(w, id)) || (isSeat && w.primary));
     wts.forEach((w) => used.add(w.path));
-    const unmatchedLane = ids.some((id) => !worktrees.some((w) => matches(w, id)));
+    const unmatchedLane = ids.some((id) => !(isSeat && id === 're-program') && !worktrees.some((w) => matches(w, id)));
     const known = (v) => typeof v === 'number';
     const tracked = wts.reduce((n, w) => n + (known(w.tracked) ? w.tracked : 0), 0);
     const untracked = wts.reduce((n, w) => n + (known(w.untracked) ? w.untracked : 0), 0);
@@ -183,21 +183,20 @@ export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock
     const running = shown.join(', ') || 'nothing';
     // The notes of the lanes of the session: a warning only, except a hook build count (a build takes no lock).
     const signals = mine.map((l) => noteSignals(l.note));
-    const hookBuildOpen = signals.some((s) => s.hookBuildOpen);
+    const hookBuildWord = signals.some((s) => s.hookBuildWord);
     const tooLong = signals.some((s) => s.tooLong);
-    const noteWarning = signals.some((s) => s.prePrOpen) && own.length === 0 ? 'the note says a run is open, the lock log does not' : '';
+    const noteWarning = [signals.some((s) => s.prePrOpen) && !own.some((r) => !/^hook-build/.test(r.text)) ? 'the note says a run is open, the lock log does not' : '', hookBuildWord && !own.some((r) => /^hook-build/.test(r.text)) ? 'the note has a HOOK BUILD START word and no END word, and the lock log has no hook-build lock' : ''].filter(Boolean).join('; ');
     // A non-seat row with no matched worktree has nothing read: its unsaved work is not seen, so it is never READY.
-    const noWorktree = !isSeat && (unmatchedLane || wts.length === 0);
+    const noWorktree = isSeat ? (unmatchedLane || !worktrees.some((w) => w.primary)) : (unmatchedLane || wts.length === 0);
     const stop = stopPoint({
       refresh, prePr: own.length > 0,
       tracked: tracked > 0 ? tracked : (trackedUnknown ? null : 0),
       behind: behindUnknown ? null : behind, ahead: aheadUnknown ? null : ahead,
-      lockBlocks, noWorktree, noteUnknown: hookBuildOpen || tooLong,
+      lockBlocks, noWorktree, noteUnknown: tooLong,
     });
     let next = NEXT[stop];
     if (stop === STOP.UNKNOWN) {
-      if (hookBuildOpen) next = 'the note says a hook build is open and a build takes no lock (note only, no lock record): ask the session before any handoff word';
-      else if (tooLong) next = 'the lane note is over 64 KB and was not read: read the note by hand before any handoff word';
+      if (tooLong) next = 'the lane note is over 64 KB and was not read: read the note by hand before any handoff word';
       else if (noWorktree) next = 'no worktree matched this session or one of its lanes: read its worktree status (git status) by hand before any handoff word';
     }
     const alive = Date.parse(p.last_alive);
@@ -317,9 +316,17 @@ export function readForkMain(root) {
  * { unreadable: true, file }. A missing folder is no lock.
  */
 export function readRunLockRecords(dir = runLockDir()) {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((f) => f.endsWith('.lock') && f !== 'gate.lock').map((f) => {
-    const rec = readJson(path.join(dir, f));
+  let names;
+  try { names = readdirSync(dir); } catch (e) {
+    // A missing folder is no lock. A folder that exists and cannot be listed is a held lock: nothing proves that no run is there.
+    return e && e.code === 'ENOENT' ? [] : [{ unreadable: true, file: '(lock folder)' }];
+  }
+  return names.filter((f) => f.endsWith('.lock') && f !== 'gate.lock').map((f) => {
+    const file = path.join(dir, f);
+    let st;
+    try { st = lstatSync(file); } catch { return { unreadable: true, file: f }; }
+    if (st.isSymbolicLink() || !st.isFile() || st.size > 64 * 1024) return { unreadable: true, file: f };
+    const rec = readJson(file);
     return runLockOk(rec) ? rec : { unreadable: true, file: f };
   });
 }
