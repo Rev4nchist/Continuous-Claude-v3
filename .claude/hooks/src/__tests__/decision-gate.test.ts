@@ -160,7 +160,7 @@ describe('G1 PR create', () => {
  * Start-Job, a call operator block, alias, an escaped command word such as \cd) before the shape, so a create or a merge there is denied (not-inert). A named cost of the closed world,
  * counted in the corpus of the PR. A push shape has its own reader and is not affected.
  */
-const closedWorldCost = (cmd: string, shape: string): boolean => /gh pr (?:create|merge)/.test(shape) && /(?:^|[\s;&|(])(?:npm|Invoke-Command|Start-Job|alias|Set-Alias)\b|&\s*\{|(?:^|[\s;&|(])(?:\\cd|c\\d)\b/.test(cmd);
+const closedWorldCost = (cmd: string, shape: string): boolean => /gh pr (?:create|merge)/.test(shape) && /(?:^|[\s;&|(])(?:npm|Invoke-Command|Start-Job|alias|Set-Alias)\b|&\s*\{|(?:^|[\s;&|(])(?:\\cd|c\\d)\b|(?:^|[\s;&|(])(?!(?:NO_COLOR|CLICOLOR|CI|TERM|LANG|LC_\w+|TZ|GH_PROMPT_DISABLED|GH_NO_UPDATE_NOTIFIER|GH_SPINNER_DISABLED)=)[A-Za-z_]\w*=\S*\s+cd\b/.test(cmd); // C2d: a prefix of a name outside the safe env names (X=1 cd) is off the lists
 
 describe('G2 land and merge', () => {
   const LAND = 'pwsh -File scripts/github/land-pr.ps1 -Pr 12';

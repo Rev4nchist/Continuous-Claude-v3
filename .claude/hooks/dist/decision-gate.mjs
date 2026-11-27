@@ -2891,7 +2891,93 @@ function onDataList(c) {
 }
 var DATA_ARG_PROGRAMS = /* @__PURE__ */ new Set(["gh", "git", "claude", "curl", "ntn"]);
 var READ_ONLY_PROGRAMS = /* @__PURE__ */ new Set(["grep", "rg", "select-string", "sls", "cat", "head", "tail", "ls", "get-content", "gc", "cd", "set-location", "sl", "get-date", "sort", "uniq", "wc", "cut", "tr", "jq", "select-object", "sort-object", "measure-object", "format-table", "out-string", "convertto-json", "convertfrom-json", "get-childitem", "gci", "dir", "test-path", "join-path", "split-path", "resolve-path", "get-item", "get-location", "pwd", "date", "basename", "dirname", "true", "false", "where-object", "get-ciminstance", "get-process", "foreach-object", "out-null", "start-sleep", "new-item", "copy-item", "get-random", "format-list", "select-xml", "get-service", "get-wmiobject", "chdir", "pushd", "popd", "push-location", "pop-location"]);
-var GH_SUBS = /* @__PURE__ */ new Set(["pr", "api", "issue", "repo", "run", "workflow", "release", "search", "status", "auth", "label", "browse", "cache", "gist", "project", "ruleset", "variable", "secret", "org", "attestation", "codespace", "ssh-key", "gpg-key", "agent-task"]);
+var GH_SUBS = /* @__PURE__ */ new Set(["pr", "api", "issue", "repo", "run", "workflow", "release", "search", "status", "auth", "label", "browse", "cache", "gist", "project", "ruleset", "variable", "secret", "org", "attestation", "ssh-key", "gpg-key", "agent-task"]);
+var SAFE_ENV_NAMES = "GH_PROMPT_DISABLED|GH_NO_UPDATE_NOTIFIER|GH_SPINNER_DISABLED|NO_COLOR|CLICOLOR|CI|TERM|LANG|LC_[A-Z_]+|TZ";
+var SAFE_ENV_NAME = new RegExp(`^(?:${SAFE_ENV_NAMES})$`);
+var SAFE_ENV_NAME_CI = new RegExp(SAFE_ENV_NAME.source, "i");
+var ENV_NAME_UNSAFE = /^(?:GIT_|GH_|PATH$|PAGER$|EDITOR$|VISUAL$|BROWSER$|BASH_ENV$|ENV$|LD_|DYLD_|NODE_OPTIONS$|IFS$|PS4$|PROMPT_COMMAND$)/i;
+var reg = (source, ...runs) => ({ runs, source });
+var rows = (names, source) => names.map((n) => [n, reg(source)]);
+var GNU_NONE = "GNU coreutils manual (gnu.org/software/coreutils): no option runs a program";
+var PS_NONE = "Microsoft.PowerShell.Management and Utility module documentation (learn.microsoft.com): no parameter runs a program";
+var PS_WRITE = "Set-Content, Add-Content, Out-File, New-Item, Copy-Item documentation (learn.microsoft.com): they write a file or an item of a provider";
+var CARRIER_REGISTER = Object.fromEntries([
+  ...rows(["echo", "printf", "cat", "head", "tail", "ls", "cut", "tr", "uniq", "wc", "basename", "dirname", "date", "pwd", "true", "false", "cd", "pushd", "popd", "chdir", "dir"], GNU_NONE),
+  ...rows(["grep", "select-string", "sls"], "GNU grep manual and Select-String documentation: no option runs a program"),
+  ...rows(["set-location", "sl", "push-location", "pop-location", "get-date", "write-output", "write-host", "get-content", "gc", "get-childitem", "gci", "test-path", "join-path", "split-path", "resolve-path", "get-item", "get-location", "select-object", "sort-object", "measure-object", "format-table", "format-list", "out-string", "out-null", "convertto-json", "convertfrom-json", "start-sleep", "get-random", "select-xml", "get-service", "get-process", "get-wmiobject", "get-ciminstance"], PS_NONE),
+  ...["set-content", "sc", "add-content", "ac", "out-file", "new-item", "copy-item"].map((n) => [n, reg(PS_WRITE, "a target on the drive env:, function:, alias: or variable: changes what a later call runs", "a file written here is run by a LATER command (a named limit: the gate sees one command at a time)")]),
+  ...["foreach-object", "where-object"].map((n) => [n, reg("ForEach-Object and Where-Object documentation (learn.microsoft.com)", "-Process, -Begin, -End and script block parameters: the commands inside are parsed as calls and judged one by one")]),
+  ["rg", reg("ripgrep 14 user guide and rg --help (github.com/BurntSushi/ripgrep)", "--pre COMMAND", "--pre-glob", "--hostname-bin")],
+  ["sort", reg("GNU coreutils sort manual (gnu.org/software/coreutils)", "--compress-program=PROG")],
+  ["jq", reg("jq 1.7 manual (jqlang.github.io/jq/manual): no builtin runs a program")],
+  ["node", reg("Node.js command line documentation (nodejs.org/api/cli.html)", "every script, -e, -p, -r and --import: only lane.mjs say or note is accepted (onDataList)")],
+  ["curl", reg("curl manual (curl.se/docs/manpage.html): -K reads a config file, -o and --output write a file, no option runs a program")],
+  ["gh", reg("GitHub CLI manual (cli.github.com/manual)", "alias set --shell", "extension exec", "codespace ssh and cp (run ssh with the text after --)", "pr checkout and repo clone (run git with the text after --)", "GH_PAGER, GH_EDITOR and BROWSER (an environment name outside the safe list)")],
+  ["git", reg(
+    "git(1), git-config(1), git-rebase(1), git-bisect(1), git-submodule(1), git-difftool(1) manual pages (git-scm.com/docs)",
+    "-c key=value (alias.x=!cmd, core.pager, core.sshCommand, core.editor, core.fsmonitor, core.hooksPath, diff.external, credential.helper)",
+    "--exec-path",
+    "rebase -x and --exec",
+    "bisect run",
+    "submodule foreach",
+    "difftool -x and --extcmd",
+    "mergetool",
+    "filter-branch --*-filter",
+    "--upload-pack and --receive-pack",
+    "config alias.* (stores a command)",
+    "--ext-diff and --textconv",
+    "a user-defined alias run as git <alias>",
+    "GIT_EXTERNAL_DIFF, GIT_SSH_COMMAND, GIT_ASKPASS, GIT_EDITOR, GIT_PAGER, GIT_SEQUENCE_EDITOR, GIT_PROXY_COMMAND, GIT_CONFIG_PARAMETERS (an environment name outside the safe list)"
+  )],
+  ["claude", reg("Claude Code CLI reference (docs.claude.com/claude-code/cli-reference)", "-p starts a child session with tools", "--bare, --settings, --setting-sources, --dangerously-skip-permissions, --allow-dangerously-skip-permissions, --permission-mode, --mcp-config and --plugin-dir skip the user hooks or widen the tools")],
+  ["ntn", reg("ntn --help and the help of each subcommand (Notion CLI, beta, read 2026-11-26)", "notion-as-code apply runs the project npm build", "workers deploy, exec and new run or ship project code", "pages create and pages edit with no --content and no redirect open $EDITOR", "update runs an installer")]
+]);
+var LISTED_PROGRAMS = /* @__PURE__ */ new Set([...INERT_PROGRAMS, ...READ_ONLY_PROGRAMS, ...DATA_ARG_PROGRAMS, "node"]);
+var GIT_SUBS_OK = /* @__PURE__ */ new Set(["status", "log", "diff", "show", "branch", "rev-parse", "rev-list", "fetch", "add", "commit", "remote", "ls-files", "ls-remote", "worktree", "merge-base", "cat-file", "describe", "shortlog", "blame", "tag", "show-ref", "for-each-ref", "name-rev", "diff-tree", "checkout", "switch", "restore", "stash", "reset", "clean", "mv", "rm", "init", "clone", "pull", "push", "merge", "cherry-pick", "config"]);
+var GIT_EXEC_ARG = /^(?:--exec(?:=|$)|-x$|--extcmd|--ext-diff|--textconv|--upload-pack|--receive-pack|--exec-path|--editor|--template|--run|-c$|--config)/;
+var GIT_CONFIG_KEY = /^(?:alias\.|core\.(?:pager|editor|sshcommand|fsmonitor|hookspath|askpass))/i;
+var NTN_SUBS_OK = /* @__PURE__ */ new Set(["api", "datasources", "whoami", "doctor", "auth", "help", "--help", "-h", "--version", "-V"]);
+var PS_WRITERS = /* @__PURE__ */ new Set(["set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "copy-item", "cpi"]);
+function carrierFree(c) {
+  for (const a of c.assigns ?? []) if (!SAFE_ENV_NAME.test(a.name)) return false;
+  const p = bareProg(c);
+  if (p === null) return true;
+  const lits = c.words.slice(1).map((w) => w.lit);
+  const any = (re) => lits.some((l) => l !== null && re.test(l));
+  if (p === "git") {
+    let i = 0;
+    while (i < lits.length && (lits[i] ?? "").startsWith("-")) {
+      const o = lits[i];
+      if (o === "-C") {
+        i += 2;
+        continue;
+      }
+      if (o === "--no-pager" || o === "--paginate" || o === "--no-optional-locks") {
+        i++;
+        continue;
+      }
+      return false;
+    }
+    const sub = lits[i];
+    if (sub === void 0 || sub === null || !GIT_SUBS_OK.has(sub)) return false;
+    return !lits.slice(i + 1).some((l) => l !== null && (GIT_EXEC_ARG.test(l) || GIT_CONFIG_KEY.test(l)));
+  }
+  if (p === "gh") return !lits.includes("--");
+  if (p === "claude") return !any(/^--(?:bare|settings|setting-sources|dangerously-skip-permissions|allow-dangerously-skip-permissions|permission-mode|mcp-config|plugin-dir)(?:=|$)/);
+  if (p === "rg") return !any(/^--(?:pre|pre-glob|hostname-bin)(?:=|$)/);
+  if (p === "sort") return !any(/^--compress-program(?:=|$)/);
+  if (p === "ntn") {
+    const sub = lits[0];
+    if (sub === void 0 || sub === null) return false;
+    if (NTN_SUBS_OK.has(sub)) return true;
+    const verb = lits[1] ?? null;
+    if (sub === "files") return verb === "list" || verb === "ls" || verb === "get";
+    if (sub === "pages") return verb === "get" || (verb === "create" || verb === "edit") && (any(/^--content(?:=|$)/) || c.stdin !== null);
+    return false;
+  }
+  if (PS_WRITERS.has(p)) return !any(/(?:^|:)(?:env|function|alias|variable):/i);
+  return true;
+}
 var listOf = (set) => [...set].join(", ");
 var notInertWhy = () => "this text names a guarded call (a push, a create, a merge or the land script) and also runs a program that is not on the lists of this gate. Fix: run the guarded call as its own command. Allowed beside a guarded word: data programs (" + listOf(INERT_PROGRAMS) + "; git commit with -m or -F; node lane.mjs say or note), read-only programs (" + listOf(READ_ONLY_PROGRAMS) + "), gh with a subcommand of (" + listOf(GH_SUBS) + "), and " + listOf(DATA_ARG_PROGRAMS) + ". A wrapper (" + Object.keys(WRAPPER_ARITY).join(", ") + ") is read through: the program it runs must be on the lists. A shell, a script file, a path, a script runner such as node, and a program word that is not a plain name are not allowed.";
 var LAND_SCRIPT_WORD = /(^|[\\/])land-pr\.ps1$/i;
@@ -2921,7 +3007,15 @@ function isInert(parsed) {
     if (!r.ok || r.errors.length > 0) return false;
     all.push(...r.calls);
   }
-  return all.every((c) => onDataList(c) || readsNamedCall(c));
+  for (const r of Object.values(parsed.byDialect)) {
+    for (const a of r ? r.assigns : []) {
+      const env = /^env:/i.test(a.name);
+      const n = a.name.replace(/^env:/i, "");
+      if (/^gh_repo$/i.test(n)) continue;
+      if (env ? !SAFE_ENV_NAME_CI.test(n) : !SAFE_ENV_NAME.test(n) && ENV_NAME_UNSAFE.test(n)) return false;
+    }
+  }
+  return all.every((c) => carrierFree(c) && (onDataList(c) || readsNamedCall(c)));
 }
 function notInertDenies(parsed, resolved) {
   if (!parsed || isStandaloneCleanup(parsed.text)) return [];
@@ -3716,13 +3810,13 @@ function appPlace(deps, dir) {
   return place;
 }
 function readPlace(deps, scope, dir) {
-  const reg = scope.registry();
-  if (reg.state === "corrupt") return { ...NOT_COVERED, corrupt: reg.file };
-  if (reg.state === "missing") return reg.envPath ? { ...NOT_COVERED, notice: reg.file } : NOT_COVERED;
-  if (!underLiveRoot(dir, reg, scope)) return NOT_COVERED;
+  const reg2 = scope.registry();
+  if (reg2.state === "corrupt") return { ...NOT_COVERED, corrupt: reg2.file };
+  if (reg2.state === "missing") return reg2.envPath ? { ...NOT_COVERED, notice: reg2.file } : NOT_COVERED;
+  if (!underLiveRoot(dir, reg2, scope)) return NOT_COVERED;
   try {
     const { top, main: main3 } = repoRoots(deps, dir);
-    const cov = coverageOf({ toplevel: top, worktreeMainRoot: main3, isCcv3: false }, reg, { realpath: scope.realpath });
+    const cov = coverageOf({ toplevel: top, worktreeMainRoot: main3, isCcv3: false }, reg2, { realpath: scope.realpath });
     return cov.covered ? { covered: true, entryKey: cov.entryKey ?? "", github: cov.github ?? null, corrupt: null } : NOT_COVERED;
   } catch (err) {
     throw err instanceof AppScopeError ? err : new AppScopeError(err);
@@ -4959,12 +5053,12 @@ function pushUnderLiveRoot(input, deps) {
     if (!scope || cmd.kind !== "command") return false;
     const pushes = catchShapes(input, deps.parsed)?.filter((s) => s.kind === "push") ?? null;
     if (pushes?.length === 0) return false;
-    const reg = scope.registry();
+    const reg2 = scope.registry();
     const cwd = input.cwd || process.cwd();
     const shell = shellOf(input);
     const paths = knownDirs((pushes ?? []).flatMap((s) => [cwd, ...pushDirsOf(s.push, cwd, shell), ...chainDirsOf(s.push, cwd, shell)]).concat(cwd), deps.home);
     const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
-    return dirs.some((d) => underLiveRoot(d, reg, scope, { outsideCcv3: true }));
+    return dirs.some((d) => underLiveRoot(d, reg2, scope, { outsideCcv3: true }));
   } catch {
     return false;
   }
@@ -4977,8 +5071,8 @@ function pushFoldersUnregistered(input, deps) {
     if (!scope || cmd.kind !== "command") return false;
     const pushes = catchShapes(input, deps.parsed)?.filter((s) => s.kind === "push");
     if (!pushes || pushes.length === 0) return false;
-    const reg = scope.registry();
-    if (reg.state !== "ok") return false;
+    const reg2 = scope.registry();
+    if (reg2.state !== "ok") return false;
     const cwd = input.cwd || process.cwd();
     const shell = shellOf(input);
     const raw = pushes.flatMap((s) => [cwd, ...pushDirsOf(s.push, cwd, shell), ...chainDirsOf(s.push, cwd, shell)]).concat(cwd);
@@ -4986,21 +5080,21 @@ function pushFoldersUnregistered(input, deps) {
     const paths = knownDirs(raw, deps.home);
     const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
     if (dirs.length === 0 || dirs.some((d) => !isAbsolute2(d) || isUnexpanded(d))) return false;
-    return !dirs.some((d) => underRegistryRoot(d, reg, scope));
+    return !dirs.some((d) => underRegistryRoot(d, reg2, scope));
   } catch {
     return false;
   }
 }
-function underRegistryRoot(d, reg, scope) {
-  const ccv3 = { ...reg, entries: reg.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: "active", tapGate: null })) };
-  return underLiveRoot(d, reg, scope) || underLiveRoot(d, ccv3, scope);
+function underRegistryRoot(d, reg2, scope) {
+  const ccv3 = { ...reg2, entries: reg2.entries.filter((e) => e.key === CCV3_ENTRY_KEY).map((e) => ({ ...e, key: `${CCV3_ENTRY_KEY}#root`, status: "active", tapGate: null })) };
+  return underLiveRoot(d, reg2, scope) || underLiveRoot(d, ccv3, scope);
 }
 function folderUnregistered(deps, d) {
   try {
     const scope = deps.tapScope;
     if (!scope || !isAbsolute2(d) || isUnexpanded(d)) return false;
-    const reg = scope.registry();
-    return reg.state === "ok" && !underRegistryRoot(d, reg, scope);
+    const reg2 = scope.registry();
+    return reg2.state === "ok" && !underRegistryRoot(d, reg2, scope);
   } catch {
     return false;
   }
@@ -5088,7 +5182,7 @@ var WRAPPER_ARITY = {
   builtin: { value: /* @__PURE__ */ new Set(), noOptions: true },
   exec: { value: /* @__PURE__ */ new Set(), noOptions: true }
 };
-var SAFE_ENV_ASSIGN = /^(?:GH_PROMPT_DISABLED|GH_NO_UPDATE_NOTIFIER|GH_SPINNER_DISABLED|NO_COLOR|CLICOLOR|CI|TERM|LANG|LC_[A-Z_]+|TZ)=/;
+var SAFE_ENV_ASSIGN = new RegExp(`^(?:${SAFE_ENV_NAMES})=`);
 function unwrapCall(c) {
   const l = litOf(c.words[0]);
   const p = l === null || /[\\/]/.test(l) ? null : progName(l);
@@ -5197,8 +5291,10 @@ if (!process.env.VITEST) {
   });
 }
 export {
+  CARRIER_REGISTER,
   COMMAND_TOOLS2 as COMMAND_TOOLS,
   GitDeadlineError,
+  LISTED_PROGRAMS,
   MissingCwdError,
   SCRIPT_RUNNERS,
   WRITE_TOOLS,

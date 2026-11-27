@@ -190,6 +190,46 @@ describe('L: controls, a legitimate command stays allowed', () => {
   });
 });
 
+describe('E: the carrier rules decide a TAPPED merge (the tap makes the merge itself allowed, so only the carrier rule can deny)', () => {
+  // Change that breaks it: an env name, a git subcommand, an ntn subcommand or a writer target is accepted that runs another program or changes the account.
+  const M = `gh pr merge 6 --squash --match-head-commit ${HEAD}`;
+  const rows: [string, Tool, string, boolean][] = [
+    ['e01 baseline: the tapped merge alone', 'Bash', M, false],
+    ['e02 a safe env name on the merge', 'Bash', `NO_COLOR=1 ${M}`, false],
+    ['e03 GH_CONFIG_DIR prefix (as whom gh runs)', 'Bash', `GH_CONFIG_DIR=/tmp/other ${M}`, true],
+    ['e04 GH_PAGER prefix on a read call before the merge', 'Bash', `GH_PAGER=less gh pr list; ${M}`, true],
+    ['e05 env wrapper with GH_REPO', 'Bash', `env GH_REPO=acme/app ${M}`, true],
+    ['e06 a PowerShell env write of GH_HOST', 'PowerShell', `$env:GH_HOST = "ghe.example.com"; ${M}`, true],
+    ['e07 a PowerShell env write of a safe name', 'PowerShell', `$env:NO_COLOR = "1"; ${M}`, false],
+    ['e08 a write to the env: drive', 'PowerShell', `Set-Content env:GH_REPO acme/app; ${M}`, true],
+    ['e09 a write to the function: drive', 'PowerShell', `Set-Content function:gh 'echo x'; ${M}`, true],
+    ['e10 a write to a plain file', 'PowerShell', `Set-Content notes.txt 'text'; ${M}`, false],
+    ['e11 git log before the merge', 'Bash', `git log --oneline -3; ${M}`, false],
+    ['e12 git rebase --exec before the merge', 'Bash', `git rebase --exec 'echo x' HEAD~1; ${M}`, true],
+    ['e13 git -c before the merge', 'Bash', `git -c core.pager=less log; ${M}`, true],
+    ['e14 git bisect before the merge', 'Bash', `git bisect run echo; ${M}`, true],
+    ['e15 git config alias before the merge', 'Bash', `git config alias.zz 'status'; ${M}`, true],
+    ['e16 git config a plain key before the merge', 'Bash', `git config --get user.name; ${M}`, false],
+    ['e17 rg a plain pattern before the merge', 'Bash', `rg -n foo docs/; ${M}`, false],
+    ['e18 rg --pre before the merge', 'Bash', `rg --pre cat foo docs/; ${M}`, true],
+    ['e19 sort --compress-program before the merge', 'Bash', `sort --compress-program=gzip f; ${M}`, true],
+    ['e20 claude -p before the merge', 'Bash', `claude -p "say hi"; ${M}`, false],
+    ['e21 claude --bare -p before the merge', 'Bash', `claude --bare -p "say hi"; ${M}`, true],
+    ['e22 gh codespace before the merge', 'Bash', `gh codespace list; ${M}`, true],
+    ['e23 gh text after a bare -- before the merge', 'Bash', `gh repo clone acme/app -- --depth 1; ${M}`, true],
+    ['e24 ntn pages get before the merge', 'Bash', `ntn pages get abc123; ${M}`, false],
+    ['e25 ntn pages create with --content before the merge', 'Bash', `ntn pages create --content "text"; ${M}`, false],
+    ['e26 ntn pages create with no content (opens the editor)', 'Bash', `ntn pages create; ${M}`, true],
+    ['e27 ntn workers deploy before the merge', 'Bash', `ntn workers deploy; ${M}`, true],
+    ['e28 ntn notion-as-code apply before the merge', 'Bash', `ntn notion-as-code apply ./proj; ${M}`, true],
+  ];
+  it.each(rows)('%s', async (_name, tool, text, deny) => {
+    landTap(6);
+    const v = await verdict(text, tool);
+    expect(denied(v), `${tool}: ${text} -> ${v}`).toBe(deny);
+  });
+});
+
 describe('G: the carrier register (design note section 2)', () => {
   // Change that breaks it: a program is added to a list with no row that says which of its options, subcommands or variables run another program, and why none does.
   const g = gate as unknown as { CARRIER_REGISTER?: Record<string, { runs: string[]; source: string }>; LISTED_PROGRAMS?: ReadonlySet<string> };

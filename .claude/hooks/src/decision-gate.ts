@@ -1360,11 +1360,96 @@ const DATA_ARG_PROGRAMS: ReadonlySet<string> = new Set(['gh', 'git', 'claude', '
 /** Programs that only read, search, filter or inspect: no text in their words runs. The list grows by evidence from the 7-day corpus, never by a run shape. */
 const READ_ONLY_PROGRAMS: ReadonlySet<string> = new Set(['grep', 'rg', 'select-string', 'sls', 'cat', 'head', 'tail', 'ls', 'get-content', 'gc', 'cd', 'set-location', 'sl', 'get-date', 'sort', 'uniq', 'wc', 'cut', 'tr', 'jq', 'select-object', 'sort-object', 'measure-object', 'format-table', 'out-string', 'convertto-json', 'convertfrom-json', 'get-childitem', 'gci', 'dir', 'test-path', 'join-path', 'split-path', 'resolve-path', 'get-item', 'get-location', 'pwd', 'date', 'basename', 'dirname', 'true', 'false', 'where-object', 'get-ciminstance', 'get-process', 'foreach-object', 'out-null', 'start-sleep', 'new-item', 'copy-item', 'get-random', 'format-list', 'select-xml', 'get-service', 'get-wmiobject', 'chdir', 'pushd', 'popd', 'push-location', 'pop-location']);
 /** The gh subcommands that do not store or run a command. gh alias set --shell and gh extension exec are not on it, so they are off the list. */
-const GH_SUBS: ReadonlySet<string> = new Set(['pr', 'api', 'issue', 'repo', 'run', 'workflow', 'release', 'search', 'status', 'auth', 'label', 'browse', 'cache', 'gist', 'project', 'ruleset', 'variable', 'secret', 'org', 'attestation', 'codespace', 'ssh-key', 'gpg-key', 'agent-task']);
+const GH_SUBS: ReadonlySet<string> = new Set(['pr', 'api', 'issue', 'repo', 'run', 'workflow', 'release', 'search', 'status', 'auth', 'label', 'browse', 'cache', 'gist', 'project', 'ruleset', 'variable', 'secret', 'org', 'attestation', 'ssh-key', 'gpg-key', 'agent-task']);
 /**
  * The deny reason of not-inert. One line of fix, then the lists. Built from the sets that decide, so the text cannot drift from them: INERT_PROGRAMS, READ_ONLY_PROGRAMS,
  * DATA_ARG_PROGRAMS, GH_SUBS and the wrapper table WRAPPER_ARITY.
  */
+/** The environment names that a call prefix or a statement may set and still be inert: a prompt, a colour, a locale or a time zone. Any other name can move where, as whom or with which program gh and git run. */
+const SAFE_ENV_NAMES = 'GH_PROMPT_DISABLED|GH_NO_UPDATE_NOTIFIER|GH_SPINNER_DISABLED|NO_COLOR|CLICOLOR|CI|TERM|LANG|LC_[A-Z_]+|TZ';
+const SAFE_ENV_NAME = new RegExp(`^(?:${SAFE_ENV_NAMES})$`);
+/** PowerShell variable names ignore case, and the parse lower-cases them (env:no_color). */
+const SAFE_ENV_NAME_CI = new RegExp(SAFE_ENV_NAME.source, 'i');
+/** A statement-level assignment of one of these names (bash, or PowerShell $env:) changes what a later call runs or as whom. */
+const ENV_NAME_UNSAFE = /^(?:GIT_|GH_|PATH$|PAGER$|EDITOR$|VISUAL$|BROWSER$|BASH_ENV$|ENV$|LD_|DYLD_|NODE_OPTIONS$|IFS$|PS4$|PROMPT_COMMAND$)/i;
+/**
+ * The carrier register (C2d, design note 190 section 2). One row for each program that the closed world lists. `runs`: every option, subcommand or variable of the program that runs
+ * another program (an empty list says none). `source`: the documentation that says so. A listed program with no row fails the test of the register. The rules that use a row are in
+ * carrierFree. Never add a program to a list without a row.
+ */
+export interface CarrierRow { runs: string[]; source: string }
+const reg = (source: string, ...runs: string[]): CarrierRow => ({ runs, source });
+const rows = (names: string[], source: string): [string, CarrierRow][] => names.map((n) => [n, reg(source)]);
+const GNU_NONE = 'GNU coreutils manual (gnu.org/software/coreutils): no option runs a program';
+const PS_NONE = 'Microsoft.PowerShell.Management and Utility module documentation (learn.microsoft.com): no parameter runs a program';
+const PS_WRITE = 'Set-Content, Add-Content, Out-File, New-Item, Copy-Item documentation (learn.microsoft.com): they write a file or an item of a provider';
+export const CARRIER_REGISTER: Record<string, CarrierRow> = Object.fromEntries([
+  ...rows(['echo', 'printf', 'cat', 'head', 'tail', 'ls', 'cut', 'tr', 'uniq', 'wc', 'basename', 'dirname', 'date', 'pwd', 'true', 'false', 'cd', 'pushd', 'popd', 'chdir', 'dir'], GNU_NONE),
+  ...rows(['grep', 'select-string', 'sls'], 'GNU grep manual and Select-String documentation: no option runs a program'),
+  ...rows(['set-location', 'sl', 'push-location', 'pop-location', 'get-date', 'write-output', 'write-host', 'get-content', 'gc', 'get-childitem', 'gci', 'test-path', 'join-path', 'split-path', 'resolve-path', 'get-item', 'get-location', 'select-object', 'sort-object', 'measure-object', 'format-table', 'format-list', 'out-string', 'out-null', 'convertto-json', 'convertfrom-json', 'start-sleep', 'get-random', 'select-xml', 'get-service', 'get-process', 'get-wmiobject', 'get-ciminstance'], PS_NONE),
+  ...['set-content', 'sc', 'add-content', 'ac', 'out-file', 'new-item', 'copy-item'].map((n): [string, CarrierRow] => [n, reg(PS_WRITE, 'a target on the drive env:, function:, alias: or variable: changes what a later call runs', 'a file written here is run by a LATER command (a named limit: the gate sees one command at a time)')]),
+  ...['foreach-object', 'where-object'].map((n): [string, CarrierRow] => [n, reg('ForEach-Object and Where-Object documentation (learn.microsoft.com)', '-Process, -Begin, -End and script block parameters: the commands inside are parsed as calls and judged one by one')]),
+  ['rg', reg('ripgrep 14 user guide and rg --help (github.com/BurntSushi/ripgrep)', '--pre COMMAND', '--pre-glob', '--hostname-bin')],
+  ['sort', reg('GNU coreutils sort manual (gnu.org/software/coreutils)', '--compress-program=PROG')],
+  ['jq', reg('jq 1.7 manual (jqlang.github.io/jq/manual): no builtin runs a program')],
+  ['node', reg('Node.js command line documentation (nodejs.org/api/cli.html)', 'every script, -e, -p, -r and --import: only lane.mjs say or note is accepted (onDataList)')],
+  ['curl', reg('curl manual (curl.se/docs/manpage.html): -K reads a config file, -o and --output write a file, no option runs a program')],
+  ['gh', reg('GitHub CLI manual (cli.github.com/manual)', 'alias set --shell', 'extension exec', 'codespace ssh and cp (run ssh with the text after --)', 'pr checkout and repo clone (run git with the text after --)', 'GH_PAGER, GH_EDITOR and BROWSER (an environment name outside the safe list)')],
+  ['git', reg('git(1), git-config(1), git-rebase(1), git-bisect(1), git-submodule(1), git-difftool(1) manual pages (git-scm.com/docs)',
+    '-c key=value (alias.x=!cmd, core.pager, core.sshCommand, core.editor, core.fsmonitor, core.hooksPath, diff.external, credential.helper)', '--exec-path', 'rebase -x and --exec', 'bisect run', 'submodule foreach',
+    'difftool -x and --extcmd', 'mergetool', 'filter-branch --*-filter', '--upload-pack and --receive-pack', 'config alias.* (stores a command)', '--ext-diff and --textconv', 'a user-defined alias run as git <alias>',
+    'GIT_EXTERNAL_DIFF, GIT_SSH_COMMAND, GIT_ASKPASS, GIT_EDITOR, GIT_PAGER, GIT_SEQUENCE_EDITOR, GIT_PROXY_COMMAND, GIT_CONFIG_PARAMETERS (an environment name outside the safe list)')],
+  ['claude', reg('Claude Code CLI reference (docs.claude.com/claude-code/cli-reference)', '-p starts a child session with tools', '--bare, --settings, --setting-sources, --dangerously-skip-permissions, --allow-dangerously-skip-permissions, --permission-mode, --mcp-config and --plugin-dir skip the user hooks or widen the tools')],
+  ['ntn', reg('ntn --help and the help of each subcommand (Notion CLI, beta, read 2026-11-26)', 'notion-as-code apply runs the project npm build', 'workers deploy, exec and new run or ship project code', 'pages create and pages edit with no --content and no redirect open $EDITOR', 'update runs an installer')],
+]);
+/** The programs of the closed world that run through the register: the data list, the read-only list, the carriers of quoted text, and node for lane.mjs say or note. */
+export const LISTED_PROGRAMS: ReadonlySet<string> = new Set([...INERT_PROGRAMS, ...READ_ONLY_PROGRAMS, ...DATA_ARG_PROGRAMS, 'node']);
+/** The git subcommands that run no program of the text. An alias, an external tool, an editor or a hook that the text names is reached only through the options of GIT_EXEC_ARG or an environment name. */
+const GIT_SUBS_OK: ReadonlySet<string> = new Set(['status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'rev-list', 'fetch', 'add', 'commit', 'remote', 'ls-files', 'ls-remote', 'worktree', 'merge-base', 'cat-file', 'describe', 'shortlog', 'blame', 'tag', 'show-ref', 'for-each-ref', 'name-rev', 'diff-tree', 'checkout', 'switch', 'restore', 'stash', 'reset', 'clean', 'mv', 'rm', 'init', 'clone', 'pull', 'push', 'merge', 'cherry-pick', 'config']);
+const GIT_EXEC_ARG = /^(?:--exec(?:=|$)|-x$|--extcmd|--ext-diff|--textconv|--upload-pack|--receive-pack|--exec-path|--editor|--template|--run|-c$|--config)/;
+/** A config key that stores or runs a command (git config alias.x, core.pager and the like). Config keys ignore case; the options above do not (-C moves the folder, -c sets a key). */
+const GIT_CONFIG_KEY = /^(?:alias\.|core\.(?:pager|editor|sshcommand|fsmonitor|hookspath|askpass))/i;
+const NTN_SUBS_OK: ReadonlySet<string> = new Set(['api', 'datasources', 'whoami', 'doctor', 'auth', 'help', '--help', '-h', '--version', '-V']);
+const PS_WRITERS: ReadonlySet<string> = new Set(['set-content', 'sc', 'add-content', 'ac', 'out-file', 'new-item', 'ni', 'copy-item', 'cpi']);
+/**
+ * A call that cannot run text of its own words (design note 190 section 2): an env prefix only of the safe names; git by subcommand with only -C and the pager options before it and no exec
+ * option after it; gh without the text after a bare --; claude -p without the flags that skip the hooks; rg without --pre; sort without --compress-program; ntn by subcommand; a writer
+ * whose target is not a drive of env:, function:, alias: or variable:. Parse-tree fields only.
+ */
+function carrierFree(c: ParsedCall): boolean {
+  for (const a of c.assigns ?? []) if (!SAFE_ENV_NAME.test(a.name)) return false;
+  const p = bareProg(c);
+  if (p === null) return true;
+  const lits = c.words.slice(1).map((w) => w.lit);
+  const any = (re: RegExp): boolean => lits.some((l) => l !== null && re.test(l));
+  if (p === 'git') {
+    let i = 0;
+    while (i < lits.length && (lits[i] ?? '').startsWith('-')) {
+      const o = lits[i] as string;
+      if (o === '-C') { i += 2; continue; }
+      if (o === '--no-pager' || o === '--paginate' || o === '--no-optional-locks') { i++; continue; }
+      return false; // -c, --exec-path, --git-dir and any other global option
+    }
+    const sub = lits[i];
+    if (sub === undefined || sub === null || !GIT_SUBS_OK.has(sub)) return false;
+    return !lits.slice(i + 1).some((l) => l !== null && (GIT_EXEC_ARG.test(l) || GIT_CONFIG_KEY.test(l)));
+  }
+  if (p === 'gh') return !lits.includes('--');
+  if (p === 'claude') return !any(/^--(?:bare|settings|setting-sources|dangerously-skip-permissions|allow-dangerously-skip-permissions|permission-mode|mcp-config|plugin-dir)(?:=|$)/);
+  if (p === 'rg') return !any(/^--(?:pre|pre-glob|hostname-bin)(?:=|$)/);
+  if (p === 'sort') return !any(/^--compress-program(?:=|$)/);
+  if (p === 'ntn') {
+    const sub = lits[0];
+    if (sub === undefined || sub === null) return false;
+    if (NTN_SUBS_OK.has(sub)) return true;
+    const verb = lits[1] ?? null;
+    if (sub === 'files') return verb === 'list' || verb === 'ls' || verb === 'get';
+    if (sub === 'pages') return verb === 'get' || ((verb === 'create' || verb === 'edit') && (any(/^--content(?:=|$)/) || c.stdin !== null)); // no content: it opens $EDITOR
+    return false; // notion-as-code, workers, update, login, logout
+  }
+  if (PS_WRITERS.has(p)) return !any(/(?:^|:)(?:env|function|alias|variable):/i);
+  return true;
+}
 const listOf = (set: ReadonlySet<string>): string => [...set].join(', ');
 const notInertWhy = (): string =>
   'this text names a guarded call (a push, a create, a merge or the land script) and also runs a program that is not on the lists of this gate. Fix: run the guarded call as its own command. ' +
@@ -1410,7 +1495,15 @@ export function isInert(parsed: Deps['parsed']): boolean {
     if (!r.ok || r.errors.length > 0) return false;
     all.push(...r.calls);
   }
-  return all.every((c) => onDataList(c) || readsNamedCall(c));
+  for (const r of Object.values(parsed.byDialect)) {
+    for (const a of r ? r.assigns : []) {
+      const env = /^env:/i.test(a.name);
+      const n = a.name.replace(/^env:/i, '');
+      if (/^gh_repo$/i.test(n)) continue; // the shapes read GH_REPO set in an earlier segment (priorGhRepo) and judge the repo of the call
+      if (env ? !SAFE_ENV_NAME_CI.test(n) : !SAFE_ENV_NAME.test(n) && ENV_NAME_UNSAFE.test(n)) return false; // a write that changes what a later call runs or as whom
+    }
+  }
+  return all.every((c) => carrierFree(c) && (onDataList(c) || readsNamedCall(c)));
 }
 /**
  * The closed-world backstop of V7.6, as Dave decided it. When the text names a guarded call (the detector reads three views: raw, quote-blanked, quote-removed), the command is
@@ -4517,7 +4610,7 @@ const WRAPPER_ARITY: Record<string, { value: Set<string>; duration?: true; assig
   nohup: { value: new Set(), noOptions: true }, command: { value: new Set(), noOptions: true }, builtin: { value: new Set(), noOptions: true }, exec: { value: new Set(), noOptions: true },
 };
 /** The environment variables that env may set and still be read through: they change a prompt, a colour, a locale or a time zone, never a repository, a host, a folder or a program. */
-const SAFE_ENV_ASSIGN = /^(?:GH_PROMPT_DISABLED|GH_NO_UPDATE_NOTIFIER|GH_SPINNER_DISABLED|NO_COLOR|CLICOLOR|CI|TERM|LANG|LC_[A-Z_]+|TZ)=/;
+const SAFE_ENV_ASSIGN = new RegExp(`^(?:${SAFE_ENV_NAMES})=`);
 function unwrapCall(c: ParsedCall): ParsedCall | null {
   const l = litOf(c.words[0]);
   const p = l === null || /[\\/]/.test(l) ? null : progName(l);
