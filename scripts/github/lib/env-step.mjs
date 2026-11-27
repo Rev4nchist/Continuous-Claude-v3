@@ -30,9 +30,16 @@ import { ANCHOR_SUBDIRS, depsHint, lookupBin, lookupDep, lookupWalk, primaryRoot
 
 export const LOCK_REL = '.claude/hooks/package-lock.json';
 const HOOKS_REL = '.claude/hooks';
+const APP_REL = 'apps/agentic-os';
 
-/** What each gate needs. Gates that are not listed need nothing from node_modules. */
+/**
+ * What each gate needs. Gates that are not listed need nothing from node_modules.
+ * The two app gates (card agentic-os-app-gate) need the app's own install: 'walk' reads only the folders on the way up from the gate's folder, never the
+ * primary. next and eslint-config-next are packages of the app alone: typescript or eslint found up the walk in the shared hooks store must not count.
+ */
 export const GATE_NEEDS = {
+  'agentic-os-lint': [{ pkg: 'eslint-config-next/package.json', kind: 'walk', from: APP_REL }],
+  'agentic-os-typecheck': [{ pkg: 'next/package.json', kind: 'walk', from: APP_REL }],
   'hooks-tsc': [{ pkg: 'tsc', kind: 'bin', from: HOOKS_REL }],
   'hooks-build': [{ pkg: 'esbuild', kind: 'bin', from: HOOKS_REL }],
   'hooks-vitest': [{ pkg: 'vitest/package.json', kind: 'walk', from: HOOKS_REL }],
@@ -76,8 +83,12 @@ function lookupNeed(need, { root, primary, gateCwd, nodePath }) {
 /** The one FAIL text of a gate that cannot find a package. */
 export function envLine(gateId, pkg, tried, primary) {
   const name = pkg.replace(/\/package\.json$/, '');
-  return `ENV: ${gateId} needs ${name}. Tried ${tried.join(', ') || '(nothing)'}. This is the environment, not your change. Fix: ${depsHint(name, tried, primary)}`;
+  const fix = gateId.startsWith('agentic-os-') ? APP_FIX : depsHint(name, tried, primary);
+  return `ENV: ${gateId} needs ${name}. Tried ${tried.join(', ') || '(nothing)'}. This is the environment, not your change. Fix: ${fix}`;
 }
+
+/** The fix for an app gate: the app has its own install (not the hooks store), and CI makes the same one from the lockfile. */
+const APP_FIX = `run \`npm ci --ignore-scripts\` from the lockfile in ${APP_REL} of this worktree (change folder first, then run it bare). A lockfile install fixes it; npm install, a new package or a lockfile change is not part of this fix.`;
 
 export const LOCK_TEXT = 'ENV: this branch changes .claude/hooks/package-lock.json, so it needs its own npm ci in this worktree (Dave approves an install). The primary\'s packages would give a wrong green.';
 

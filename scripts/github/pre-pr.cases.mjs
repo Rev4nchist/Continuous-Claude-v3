@@ -5115,7 +5115,8 @@ test('AO3: every tracked code file of the app outside drizzle runs the app gates
 });
 
 test('AO4: the CI job agentic-os runs the same commands, in the same folder, with the same limits as the two pre-pr gates', async () => {
-  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8');
+  // A Windows checkout has CRLF (autocrlf): fold it, so the step text matches on both systems.
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8').replace(/\r\n/g, '\n');
   const start = wf.indexOf('\n  agentic-os:');
   assert.ok(start >= 0, 'the workflow has the agentic-os job');
   const job = wf.slice(start + 1);
