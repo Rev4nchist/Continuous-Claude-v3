@@ -24,15 +24,18 @@ const BOOT_CALL = new RegExp(`["']${BOOT_CALL_TOKEN}["']`);
 const INJECT_FLAG = '--inject:src/lib/trace-boot.ts';
 /** The wrapper script that scripts.build runs (card hook-build-run-lock). Behind it the esbuild line is scripts['build:raw']. */
 export const BUILD_WRAPPER = 'build-with-lock.mjs';
+/** The exact scripts.build text of the wrapper. A line that only names the file (an echo, a comment, a longer command) is not the wrapper. */
+export const WRAPPER_BUILD_LINE = `node scripts/${BUILD_WRAPPER}`;
 
 /**
  * The text of the build line that really runs esbuild, for every reader of the hooks package.json (this check and the vitest files that read the
- * build line). scripts.build runs the wrapper: the line is scripts['build:raw'], or '' when there is none. Any other scripts.build is the line itself.
- * A missing scripts.build gives '': a reader then finds no flag and fails closed.
+ * build line). A trimmed scripts.build equal to WRAPPER_BUILD_LINE is the wrapper: the line is scripts['build:raw'], or '' when there is none.
+ * Every other scripts.build is the line itself, even one that names the wrapper file. A missing scripts.build gives '': a reader then finds
+ * no flag and fails closed.
  */
 export function buildLineThatRuns(scripts) {
   const build = String(scripts?.build ?? '');
-  if (build.includes(BUILD_WRAPPER)) return String(scripts?.['build:raw'] ?? '');
+  if (build.trim() === WRAPPER_BUILD_LINE) return String(scripts?.['build:raw'] ?? '');
   return build;
 }
 

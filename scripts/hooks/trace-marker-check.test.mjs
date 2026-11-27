@@ -125,6 +125,22 @@ test('a package.json with no build line at all is a finding, even when build:raw
   assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
 });
 
+// CLI run 2 minor 1 (seat 07:22): the wrapper test is exact. Only a trimmed scripts.build equal to the wrapper line is the wrapper; a line that only names the
+// file (an echo, a comment) is read as itself.
+test('a build line that only names build-with-lock.mjs in an echo is read as itself, not as the wrapper', () => {
+  const echoLine = 'echo build-with-lock.mjs && esbuild src/*.ts --bundle';
+  const dir = hooksDirScripts({ build: echoLine, 'build:raw': BUILD_OK }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+test('the wrapper line is exact: surrounding spaces are trimmed, extra words are not the wrapper', async () => {
+  const mod = await import('./trace-marker-check.mjs');
+  assert.equal(mod.buildLineThatRuns({ build: `  ${WRAPPER_LINE}  `, 'build:raw': BUILD_OK }), BUILD_OK);
+  assert.equal(mod.buildLineThatRuns({ build: `${WRAPPER_LINE} && true`, 'build:raw': BUILD_OK }), `${WRAPPER_LINE} && true`);
+  assert.equal(mod.buildLineThatRuns({ build: `# ${WRAPPER_LINE}`, 'build:raw': BUILD_OK }), `# ${WRAPPER_LINE}`);
+});
+
 test('buildLineThatRuns is build:raw behind the wrapper and build otherwise (one helper for every reader)', async () => {
   const mod = await import('./trace-marker-check.mjs');
   assert.equal(typeof mod.buildLineThatRuns, 'function', 'trace-marker-check.mjs must export buildLineThatRuns');
