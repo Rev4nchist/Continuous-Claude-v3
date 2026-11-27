@@ -14,7 +14,7 @@ const USAGE = 'usage: lane.mjs inbox --wait [--timeout N] (N is a whole number o
 /** The time limit in seconds, from the parsed flags. Throws the usage error, before any query, for anything else. */
 export function parseWaitFlags(flags) {
   const keys = Object.keys(flags);
-  if (flags.wait !== true || keys.some((k) => k.startsWith('wait=')) || flags.peek !== undefined || flags.id !== undefined || keys.some((k) => k.startsWith('id='))) {
+  if (flags.wait !== true || keys.some((k) => k.startsWith('wait=') || k.startsWith('timeout=')) || flags.peek !== undefined || flags.id !== undefined || keys.some((k) => k.startsWith('id='))) {
     throw new Error(USAGE);
   }
   if (flags.timeout === undefined) return { timeoutS: WAIT_DEFAULT_S };
