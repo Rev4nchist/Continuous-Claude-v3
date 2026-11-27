@@ -2153,3 +2153,73 @@ test('HB6: the build script of the hooks folder runs through the wrapper and kee
   assert.match(pkg.scripts['build:raw'] ?? '', /esbuild src\/\*\.ts .*normalize-dist-paths\.mjs.*copy-parser-assets\.mjs.*write-build-inputs\.mjs/);
   assert.ok(existsSync(WRAPPER));
 });
+
+// ---- ruling B (seat 2026-11-26 21:31 CST, Dave away): the critic and aegis mediums of the first review pass ----
+// How it can fail, one row each:
+//   HB8   a SIGTERM to the wrapper leaves the build child running, releases the lock before the child ended, or exits with a code other than 143
+//   HB9   a held gate file delays the build by the full register wait (about ten seconds): the wrapper must give up after a few seconds and run the build
+//   HB10  the lock record has no session label (holder is the fixed text), so the wrap table cannot say whose build it is; with no session id it keeps the fixed holder
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const waitUntilTrue = async (fn, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return true; await new Promise((r) => setTimeout(r, 50)); } return false; };
+
+test('HB8: a SIGTERM stops the build child first, then releases the lock, and the wrapper exits 143', { skip: process.platform === 'win32' && 'a Node signal kill on Windows runs no handler: Linux CI runs this row' }, async () => {
+  const dir = mk('hbl-');
+  const marker = join(dir, 'child.pid');
+  const probe = `require('fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`;
+  const cleanEnv = { ...process.env, RUN_LOCK_DIR: dir };
+  delete cleanEnv.CI;
+  const wrapper = spawn(process.execPath, [WRAPPER, process.execPath, '-e', probe], { env: cleanEnv, stdio: 'ignore', windowsHide: true });
+  const exited = new Promise((resolve) => wrapper.on('exit', (code, signal) => resolve({ code, signal })));
+  let childPid = null;
+  try {
+    assert.ok(await waitUntilTrue(() => existsSync(marker), 15_000), 'the build child never started');
+    childPid = Number(readFileSync(marker, 'utf8'));
+    assert.equal(hookLocks(dir).length, 1, 'the lock is held while the child runs');
+    wrapper.kill('SIGTERM');
+    const { code } = await exited;
+    assert.equal(code, 143, 'a SIGTERM exits with 128 + 15');
+    assert.equal(alive(childPid), false, 'the build child must be stopped before the wrapper exits');
+    assert.deepEqual(hookLocks(dir), []);
+    assert.equal(runsOf(dir).filter((x) => x.event === 'end' && x.kind === 'hook-build').length, 1);
+  } finally {
+    if (childPid && alive(childPid)) { try { process.kill(childPid, 'SIGKILL'); } catch { /* gone */ } }
+    try { wrapper.kill('SIGKILL'); } catch { /* gone */ }
+  }
+});
+
+test('HB9: a gate file held by a live process delays the build by a few seconds at most, and the build still runs', async () => {
+  const dir = mk('hbl-');
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore', windowsHide: true });
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    writeFileSync(join(dir, 'gate.lock'), JSON.stringify({ pid: holder.pid, pidStart: RL.realPidStart(holder.pid), nonce: 'hb9' }));
+    const marker = join(dir, 'ran.txt');
+    const t0 = Date.now();
+    const r = runWrapper(dir, [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)},'ran')`]);
+    const took = Date.now() - t0;
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(marker, 'utf8'), 'ran', 'the build must run');
+    assert.ok(took < 7000, `the wrapper waited ${took} ms for a gate that stays held: the register wait must end after a few seconds`);
+    assert.equal(r.stderr.split(/\r?\n/).filter((l) => /^hook-build-lock:/.test(l)).length, 1, r.stderr);
+    assert.deepEqual(hookLocks(dir), [], 'no lock is written after the wrapper gave up');
+  } finally {
+    holder.kill();
+  }
+});
+
+test('HB10: the lock record carries the session label as holder and session; with no session id the holder keeps the fixed text', () => {
+  const dir = mk('hbl-');
+  const probeFor = (marker) => `const fs=require('fs'),p=require('path');const f=fs.readdirSync(${JSON.stringify(dir)}).find((x)=>/^hook-build-/.test(x));fs.writeFileSync(${JSON.stringify(marker)},f?fs.readFileSync(p.join(${JSON.stringify(dir)},f),'utf8'):'{}')`;
+  const withId = join(dir, 'with-id.json');
+  const r1 = runWrapper(dir, [process.execPath, '-e', probeFor(withId)], { CLAUDE_CODE_SESSION_ID: '0d40499c-1111-2222-3333-444444444444' });
+  assert.equal(r1.status, 0, r1.stderr);
+  const rec = JSON.parse(readFileSync(withId, 'utf8'));
+  assert.equal(rec.session, '#0d40499c');
+  assert.equal(rec.holder, '#0d40499c', 'the holder is the session label, as run-wrap writes it');
+  const noId = join(dir, 'no-id.json');
+  const r2 = runWrapper(dir, [process.execPath, '-e', probeFor(noId)], { CLAUDE_CODE_SESSION_ID: '' });
+  assert.equal(r2.status, 0, r2.stderr);
+  const bare = JSON.parse(readFileSync(noId, 'utf8'));
+  assert.equal(bare.holder, 'hook build');
+  assert.equal(bare.session, null);
+});

@@ -83,6 +83,34 @@ test('the token in a comment is not the boot call', () => {
   assert.ok(f.some((x) => x.kind === 'trace-boot-call-missing' && /h1/.test(x.detail)), JSON.stringify(f));
 });
 
+// Ruling B item 1 (card hook-build-run-lock): `build` is the wrapper line and the esbuild line moved to `build:raw`.
+// The check reads build:raw first, then build, and still fails closed when neither carries the flag.
+const WRAPPER_LINE = 'node scripts/build-with-lock.mjs';
+function hooksDirScripts(scripts, dists = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'tmc-'));
+  mkdirSync(join(dir, 'dist'), { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts }));
+  for (const [name, text] of Object.entries(dists)) writeFileSync(join(dir, 'dist', `${name}.mjs`), text);
+  return dir;
+}
+
+test('a wrapper build line with the flag in build:raw is no finding', () => {
+  const dir = hooksDirScripts({ build: WRAPPER_LINE, 'build:raw': BUILD_OK }, allMarked(5));
+  assert.deepEqual(traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 }), []);
+});
+
+test('a wrapper build line with no flag in build:raw is a finding (the guard fails closed)', () => {
+  const dir = hooksDirScripts({ build: WRAPPER_LINE, 'build:raw': 'esbuild src/*.ts --bundle' }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+test('a wrapper build line and no build:raw at all is a finding', () => {
+  const dir = hooksDirScripts({ build: WRAPPER_LINE }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
 test('a dist with the boot call counts toward the floor only once it has both', () => {
   const dists = { ...allMarked(3), h3: `var m = "${TRACE_MARKER}";
 `, h4: `var m = "${TRACE_MARKER}";
