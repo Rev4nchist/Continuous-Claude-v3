@@ -170,10 +170,14 @@ test('SG7: a Timeout in the report prints a TIMEOUT line (file, rule, limit) and
   assert.ok(line, `a TIMEOUT line: ${h.lines.join('\n')}`);
   assert.ok(line.includes(file) && line.includes('ccv3-argv-index-as-path') && line.includes('90 s'), line);
   assert.match(line, /not a finding of a rule/);
-  // the engine may type the error as an array (opengrep): the same line
-  const arr = harness({ spawn: ok(JSON.stringify({ results: [], errors: [{ ...timeoutError(file), type: ['Timeout', { x: 1 }] }] })) });
+  // the engine may type the error as an array (opengrep) and word the message its own way: the type alone decides
+  const arr = harness({ spawn: ok(JSON.stringify({ results: [], errors: [{ ...timeoutError(file), type: ['Timeout', { x: 1 }], message: 'the engine gave up' }] })) });
   assert.equal(main([], arr.deps), 1);
   assert.ok(arr.lines.some((l) => l.includes('TIMEOUT') && l.includes(file)), arr.lines.join('\n'));
+  // another engine version may leave the type out of the shape we know: the message alone decides
+  const msg = harness({ spawn: ok(JSON.stringify({ results: [], errors: [{ ...timeoutError(file), type: 'SomethingElse' }] })) });
+  assert.equal(main([], msg.deps), 1);
+  assert.ok(msg.lines.some((l) => l.includes('TIMEOUT') && l.includes(file)), msg.lines.join('\n'));
   // a timeout the baseline already holds exits 0 as before and is still said out loud
   const known = harness({ spawn: ok(JSON.stringify({ results: [], errors: [timeoutError(file)] })), baselineCounts: { [`scan-error|${file}`]: 1 } });
   assert.equal(main([], known.deps), 0);

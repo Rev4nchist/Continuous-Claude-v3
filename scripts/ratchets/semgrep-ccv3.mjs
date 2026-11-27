@@ -10,7 +10,12 @@
  * Usage:
  *   node scripts/ratchets/semgrep-ccv3.mjs [--changed <file>] [--report <file>] [--root <dir>]
  *   node scripts/ratchets/semgrep-ccv3.mjs --update --reason "<why>"   (rewrite the baseline)
- * Env: CCV3_OPENGREP, SEMGREP_IMAGE (default: the digest CI pins), DOCKER_BIN.
+ * Env: CCV3_OPENGREP, SEMGREP_IMAGE (default: the digest CI pins), DOCKER_BIN, CCV3_SEMGREP_TIMEOUT_S (tests and proofs only: a whole number from 1 to 300,
+ * anything else exits 2 before any scan).
+ * Per-file limit: PER_FILE_TIMEOUT_S (90 s) for both engines. The limit covers the PARSE of a file, which does not follow its size
+ * (card semgrep-timeout-large-files: a 330 KB test file parses in 11 s here, and a CI runner that is 2 times slower failed it at 30 s). A file that still
+ * times out is a scan-error and FAILS the ratchet as before (a skipped file must never pass); the wrapper says it was a timeout, in which file and rule.
+ * Both scans run with --time: one line names the slowest file, and a NOTE says so when it took over half the limit.
  * Docker mounts the rule folder at /rules, so its check ids are rules.<id>. The opengrep report is rewritten to the same
  * form (and to forward slashes), so one baseline serves both engines.
  *
@@ -38,14 +43,25 @@ export const EXCLUDES = ['scripts/ratchets/semgrep-ccv3', '.claude/cache', '.cla
 export const DOCKER_DOWN_MESSAGE = 'semgrep-ccv3: Docker is not running or not installed. Start Docker Desktop, then run this again.';
 const DAEMON_DOWN = /daemon|docker_engine|dockerDesktopLinuxEngine|error during connect|connection refused|cannot connect|is the docker/i;
 
-export function dockerArgs({ root, rulesDir = RULES_DIR, image }) {
+/** The per-file limit of both engines, in seconds. The worst file takes 17 s on a loaded developer machine; 90 leaves 5 times room and stays far under the 5 minute CI step. */
+export const PER_FILE_TIMEOUT_S = 90;
+
+/** The limit in force: the default, or CCV3_SEMGREP_TIMEOUT_S when it is a whole number from 1 to 300. { seconds, overridden } or { error }. A typo is refused, never ignored. */
+export function limitInForce(env = process.env) {
+  const raw = env.CCV3_SEMGREP_TIMEOUT_S;
+  if (raw === undefined || raw === '') return { seconds: PER_FILE_TIMEOUT_S, overridden: false };
+  if (/^[0-9]+$/.test(raw) && Number(raw) >= 1 && Number(raw) <= 300) return { seconds: Number(raw), overridden: true };
+  return { error: `semgrep-ccv3: CCV3_SEMGREP_TIMEOUT_S must be a whole number from 1 to 300 (got ${JSON.stringify(raw)}). Nothing was scanned.` };
+}
+
+export function dockerArgs({ root, rulesDir = RULES_DIR, image, timeoutS = PER_FILE_TIMEOUT_S }) {
   return [
     'run', '--rm',
     '-v', `${root}:/src`,
     '-v', `${rulesDir}:/rules:ro`,
     '-w', '/src',
     image,
-    'semgrep', 'scan', '--config', '/rules', '--metrics=off', '--json', '--quiet', '--timeout', '30',
+    'semgrep', 'scan', '--config', '/rules', '--metrics=off', '--json', '--quiet', '--timeout', String(timeoutS), '--time',
     ...EXCLUDES.flatMap((e) => ['--exclude', e]),
   ];
 }
@@ -53,8 +69,8 @@ export function dockerArgs({ root, rulesDir = RULES_DIR, image }) {
 export const OPENGREP_EXE = 'opengrep_windows_x86.exe';
 
 /** opengrep flags: the Docker scan without --metrics=off (opengrep rejects it), plus .git. The run starts in the repo root. */
-export function opengrepArgs({ rulesDir = RULES_DIR } = {}) {
-  return ['scan', '--config', rulesDir, '--json', '--quiet', '--timeout', '30', ...[...EXCLUDES, '.git'].flatMap((e) => ['--exclude', e]), '.'];
+export function opengrepArgs({ rulesDir = RULES_DIR, timeoutS = PER_FILE_TIMEOUT_S } = {}) {
+  return ['scan', '--config', rulesDir, '--json', '--quiet', '--timeout', String(timeoutS), '--time', ...[...EXCLUDES, '.git'].flatMap((e) => ['--exclude', e]), '.'];
 }
 
 const versionKey = (name) => (/\d+(?:\.\d+)*/.exec(name)?.[0] ?? '0').split('.').map(Number);
@@ -78,7 +94,37 @@ export function normaliseOpengrepReport(report) {
   if (!report || !Array.isArray(report.results)) return report;
   const results = report.results.map((r) => ({ ...r, check_id: `rules.${String(r.check_id).split('.').pop()}`, path: slash(r.path) }));
   const errors = (report.errors ?? []).map((e) => ({ ...e, path: slash(e.path) }));
-  return { ...report, results, errors };
+  const time = Array.isArray(report.time?.targets) ? { ...report.time, targets: report.time.targets.map((t) => ({ ...t, path: slash(t.path) })) } : null;
+  return { ...report, results, errors, ...(time ? { time } : {}) };
+}
+
+const isTimeout = (e) => (Array.isArray(e?.type) ? e.type[0] : e?.type) === 'Timeout' || /^Timeout\b/.test(String(e?.message ?? ''));
+const ruleOf = (e) => String(e.rule_id ?? /Timeout when running (\S+) on /.exec(String(e.message ?? ''))?.[1] ?? 'unknown rule').split('.').pop();
+/** Seconds a target took: its run_time, else its parse and match times added up. */
+const secondsOf = (t) => (typeof t.run_time === 'number' ? t.run_time : [...(t.parse_times ?? []), ...(t.match_times ?? [])].reduce((a, b) => a + b, 0));
+
+/**
+ * The lines about time, from the report: one TIMEOUT line for each file and rule that timed out (a scan-error that says what it was: not a finding of
+ * a rule), then the slowest file with its seconds of the limit, and a NOTE when that is over half the limit. Reads only; the ratchet still decides the exit.
+ */
+export function timeLines(report, seconds) {
+  const out = [];
+  const seen = new Set();
+  for (const e of report?.errors ?? []) {
+    if (!isTimeout(e)) continue;
+    const key = `${e.path}|${ruleOf(e)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(`semgrep-ccv3: TIMEOUT ${e.path} (${ruleOf(e)}) over ${seconds} s: not a finding of a rule. Raise PER_FILE_TIMEOUT_S or split the file.`);
+  }
+  const perFile = new Map();
+  for (const t of report?.time?.targets ?? []) perFile.set(t.path, (perFile.get(t.path) ?? 0) + secondsOf(t));
+  const [slowest, took] = [...perFile.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+  if (slowest !== undefined) {
+    out.push(`semgrep-ccv3: slowest file ${slowest} ${took.toFixed(1)} s of ${seconds} s`);
+    if (took > seconds / 2) out.push(`NOTE semgrep-ccv3: ${slowest} took over half the per-file limit (${took.toFixed(1)} s of ${seconds} s): it may time out on a slower runner.`);
+  }
+  return out;
 }
 
 function parseArgs(argv) {
@@ -97,15 +143,15 @@ function parseArgs(argv) {
 const realSpawn = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1 << 28, windowsHide: true, ...opts });
 
 /** Starts the scan. { engine, r }: opengrep when found, else Docker. */
-function scan({ root, env, spawn, log, find }) {
+function scan({ root, env, spawn, log, find, timeoutS }) {
   const og = find();
   if (og) {
     log(`semgrep-ccv3: engine: opengrep (${og})`);
-    return { engine: 'opengrep', r: spawn(og, opengrepArgs(), { cwd: root }) };
+    return { engine: 'opengrep', r: spawn(og, opengrepArgs({ timeoutS }), { cwd: root }) };
   }
   const docker = env.DOCKER_BIN ?? (existsSync(DOCKER_WIN) ? DOCKER_WIN : 'docker');
   log('semgrep-ccv3: engine: docker (no opengrep binary found)');
-  return { engine: 'docker', r: spawn(docker, dockerArgs({ root, image: env.SEMGREP_IMAGE ?? DEFAULT_IMAGE })) };
+  return { engine: 'docker', r: spawn(docker, dockerArgs({ root, image: env.SEMGREP_IMAGE ?? DEFAULT_IMAGE, timeoutS })) };
 }
 
 /** deps: { spawn(cmd, args, opts) -> { status, stdout, stderr, error }, findOpengrep() -> path|null, ratchet(argv, log) -> code, env, log, tmp() -> dir } */
@@ -123,7 +169,13 @@ export function main(argv, deps = {}) {
   }
   const root = path.resolve(o.root ?? path.join(here, '..', '..'));
   const find = deps.findOpengrep ?? (() => findOpengrep({ env }));
-  const { engine, r } = scan({ root, env, spawn, log, find });
+  const limit = limitInForce(env);
+  if (limit.error) {
+    log(limit.error);
+    return 2;
+  }
+  log(`semgrep-ccv3: per-file limit ${limit.seconds} s${limit.overridden ? ' (CCV3_SEMGREP_TIMEOUT_S)' : ''}`);
+  const { engine, r } = scan({ root, env, spawn, log, find, timeoutS: limit.seconds });
   if (r.error) {
     // No binary at all (ENOENT) or it could not start.
     log(engine === 'docker' ? DOCKER_DOWN_MESSAGE : `semgrep-ccv3: opengrep did not start: ${r.error.message}`);
@@ -145,6 +197,7 @@ export function main(argv, deps = {}) {
     return 2;
   }
   if (engine === 'opengrep') report = normaliseOpengrepReport(report);
+  for (const line of timeLines(report, limit.seconds)) log(line);
   const reportFile = o.report ?? path.join((deps.tmp ?? (() => mkdtempSync(path.join(tmpdir(), 'semgrep-ccv3-'))))(), 'report.json');
   writeFileSync(reportFile, JSON.stringify(report));
   const args = ['--tool', 'semgrep', '--report', reportFile, '--baseline', deps.baseline ?? BASELINE];
