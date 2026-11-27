@@ -239,7 +239,7 @@ import { maskQuoted, quotedSpans } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
 import { parseCalls, progName, type Call, type ParseOpts, type ParseResult } from './shared/shell-ast.js';
-import { defaultEntry } from './shared/shell-judge.js';
+import { defaultEntry, PROGRAM_WORDS, VERB_WORDS } from './shared/shell-judge.js';
 import {
   coverageOf, ghKey, ghRemote, keyRepo, needsGithubField, oneLine, openPrKey, pushDefaults, pushKey, readRegistry, underLiveRoot, type GitRun, type Registry,
 } from './shared/tap-scope.js';
@@ -4157,6 +4157,52 @@ function unreadableInput(): string {
 }
 
 /**
+ * Card coord-gate-timeout-hole. The harness kills this hook at 10 s and a killed hook writes no answer: the call runs. On a text of about
+ * 10000 pipe members (PowerShell), 12000 chars of push, 6000 nested `& { }` or 30 inline pwsh payloads the gate is not done in time (the
+ * measures are in .claudedocs/e2e-coord-gate-timeout-hole/, files 01 to 04). A text that names a gated word and is over one raw limit is
+ * therefore refused before any parse, walker or git read. V7.6: raw counts only, in one linear pass; no quote, heredoc or comment is read.
+ * The limits sit above the real maxima of 7 days of transcripts (383 pipes, depth 21, 10010 chars, 20 pwsh words) and below the sizes where
+ * main nears the kill. A text with no gated word is never refused for its size.
+ */
+export const TOO_BIG = { pipes: 1500, depth: 100, pwshWords: 20, chars: 30000 } as const;
+const BIG_PWSH_RE = /\b(?:pwsh|powershell)\b/gi;
+const gatedWord = (t: string): boolean => PROGRAM_WORDS.test(t) || VERB_WORDS.test(t) || USE_TAP_RE.test(t) || STORE_CODE_RE.test(t) || STORE_FN_RE.test(t) || STORE_TEXT_RE.test(norm(t));
+export function tooBigReason(input: HookInput): string | null {
+  try {
+    const cmd = readShellCommand(input);
+    if (cmd.kind !== 'command' || cmd.text === '') return null;
+    const t = cmd.text;
+    let pipes = 0, depth = 0, deepest = 0;
+    for (let i = 0; i < t.length; i++) {
+      const c = t.charCodeAt(i);
+      if (c === 124) pipes++; // |
+      else if (c === 123 || c === 40 || c === 91) { if (++depth > deepest) deepest = depth; } // { ( [
+      else if ((c === 125 || c === 41 || c === 93) && depth > 0) depth--; // } ) ]
+    }
+    const pwsh = (t.match(BIG_PWSH_RE) ?? []).length;
+    const over = pipes >= TOO_BIG.pipes || deepest >= TOO_BIG.depth || pwsh >= TOO_BIG.pwshWords || t.length >= TOO_BIG.chars;
+    if (!over || !gatedWord(t)) return null;
+    return `BLOCKED (decision-gate): this command text is too big to judge inside the hook's time limit (${pipes} pipe characters, bracket depth ${deepest}, ${pwsh} pwsh words, ${t.length} characters; the limits are ${TOO_BIG.pipes}, ${TOO_BIG.depth}, ${TOO_BIG.pwshWords} and ${TOO_BIG.chars}) and it names a git, gh or decision-store call. A hook that is killed at its time limit lets the call run, so the text is refused unread. Write the data to a file with the Write tool and run a short command that reads the file.`;
+  } catch {
+    return null;
+  }
+}
+/** The deny of tooBigReason for the raw stdin text of the hook, or null. main() calls it before withParsed. Never throws. */
+export function tooBigOut(raw: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(raw.trim() || '{}');
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const input = parsed as HookInput;
+    const why = tooBigReason(input);
+    if (why === null) return null;
+    try { logGuardDecision(HOOK, input, 'deny', 'too-big'); } catch { /* the log never blocks */ }
+    return denyOut(why);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The whole hook: raw stdin text in, stdout text out. Never throws.
  * Unreadable input (not JSON, or JSON that is not an object) is ALLOWED, with a note on stderr. This is the documented posture, not a gap:
  * the gate fails closed only for a gated shape, and it cannot see a shape in input it cannot read. Denying here would block all work.
@@ -4170,6 +4216,8 @@ export function handle(raw: string, deps: Deps): string {
   } catch {
     return unreadableInput();
   }
+  const big = tooBigOut(raw);
+  if (big !== null) return big;
   const found: Deny[] = [];
   try {
     const d = decide(input, deps, found);
@@ -4500,6 +4548,9 @@ async function main(): Promise<void> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString('utf-8');
+  // Card coord-gate-timeout-hole: a gated text too big to judge in time is refused from the raw text, before the parse (no walker, no git read).
+  const big = tooBigOut(raw);
+  if (big !== null) { console.log(big); return; }
   console.log(handle(raw, await withParsed(raw, realDeps({ start }))));
 }
 
