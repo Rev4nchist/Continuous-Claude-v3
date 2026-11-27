@@ -23,6 +23,13 @@
 | Workflows | Multi-step orchestration | Workflow tool |
 | Braintrust | RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). Tracing is off. | none |
 | RLM | Analyze inputs that overflow the context window — the large-context escape hatch (dormant; Docker-gated) | `/rlm-analyze`, `rlm_client.py` |
+| Lane board | Which session holds which card; claims, notes, dependencies, the phone page | `scripts/coordination/lane.mjs`, `docs/coordination/standard.md` |
+| Seat | The coordinator session: rules on builders, runs decision points with Dave, rechecks each land | `.claude/rules-ondemand/seat-role.md` |
+| pre-pr | The proof run before a PR opens: gates, the CodeRabbit CLI review, a stamp | `scripts/github/pre-pr.mjs` |
+| Review engine | The program that replaces paid PR review with an eval-gated engine | `docs/review-engine/README.md` |
+| Agentic OS app | The Fleet Browser: sessions, lanes and PRs on one screen | `apps/agentic-os`, `docs/architecture/agentic-os/README.md` |
+
+The idea-to-product path, stage by stage with the tool and owner of each stage: [Idea to product path](../../../docs/architecture/agentic-os/notion-operating-model.md#idea-to-product-path).
 
 ## Six Pillars (Braintrust pillar RETIRED 2026-09-30)
 

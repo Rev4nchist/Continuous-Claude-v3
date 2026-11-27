@@ -45,6 +45,22 @@ Do not guess due dates. Set progress from verified implementation state, not ela
 | Artifact | Object store/repository + PostgreSQL metadata | Notion receives link/embed and summary, not duplicate large payloads. |
 | Implementation handoff | Bridge child page | HQ receives one-liner; Tracker receives deduplicated row by writeback URL. |
 
+## Idea to product path
+
+This is the one map of how an idea becomes a product, stage by stage. It extends the ownership split above: Notion owns the idea and the brief, Git owns the code, PostgreSQL owns the lane board and runtime state. It is also the checklist for the first customer run (lane `factory-first-customer`). The states were read against `main` on 2026-11-27. A state that was not checked says "not verified".
+
+| # | Stage | Tool today (repo path) | Owner | State | First-run check |
+|---|---|---|---|---|---|
+| 1 | Capture: an idea is written down | Notion captures and Eve on claude.ai. The repo has no capture or intake skill (`.claude/skills/`); the YouTube intake was removed 2026-08-30 (`ROADMAP.md:44`). | Dave, Eve | Not built in the repo | Write the capture time as clock line 1. Count captures in Notion once, as the baseline. |
+| 2 | Brief: a vague idea becomes a brief that Dave approves | `.claude/skills/discovery-interview/SKILL.md`, `.claude/skills/to-spec/SKILL.md`, `.claude/skills/grill-with-docs/SKILL.md`. `synthesize-brief` and `approve-brief` are claude.ai account skills and are in no repo file. | Dave. Owner of the two account skills: Dave (claude.ai account skills), to confirm. | Partly: the skills exist, and nothing joins an approved brief to a lane or a program map | Write the acceptance statement in the brief. Write the approval time as clock line 2. |
+| 3 | Plan: the brief becomes cards with dependencies | `.claude/skills/plan-agent/SKILL.md`, `.claude/skills/premortem/SKILL.md`, `lane.mjs seed` (`scripts/coordination/lane.mjs:105`), the master card (`docs/review-engine/README.md`) | The seat, with Dave's plan tap | Partly: `seed` loads a hand-written JSON file (`scripts/coordination/lane-seed-file.mjs`); no path from an approved brief to a seed file | Write the plan GO time as clock line 3. List every hand copy from brief to cards. |
+| 4 | Build: a builder makes the change | A lane claim, one worktree and one branch (`docs/coordination/standard.md`, rules L2.2 and O3.4); RED test first (`docs/testing-standard.md`) | A builder session | Built | Write the first merge time as clock line 4. |
+| 5 | Check: proof before a PR opens | `scripts/github/pre-pr.mjs`, `scripts/coordination/run-lock.mjs`, `.claude/agents/aegis.md`, `.claude/agents/critic.md`, the review engine (`docs/review-engine/README.md`) | A builder and the seat | Built for CCv3. Not verified for a repo outside CCv3. | List which of these gates ran in the new repo and which did not. |
+| 6 | Ship: the change is merged and live | `scripts/github/ship-ask.mjs`, `scripts/github/wait-ci.mjs`, `scripts/github/review-status.mjs`, `.claude/hooks/src/decision-gate.ts`, `scripts/github/land-pr.ps1` | A builder, the seat and Dave's taps | Built for a land in CCv3. Not verified for shipping a new app. | Write the in-use time as clock line 5. Log every ask to Dave outside idea, plan and final check. |
+| 7 | Learn: the result is read back | `.claude/skills/create_handoff/SKILL.md` (handoffs), `opc/scripts/core/recall_learnings.py` (memory), `scripts/coordination/friction-counts.mjs`, `docs/self-improvement/` | Dave and the seat | Partly: these measure how the process behaves. Nothing reads a result back into the brief. | Add a dated result line to the brief and compare it with the acceptance statement. |
+
+The five clock lines (captured, brief approved, plan GO, first merge, in use) are lane notes with a time from a clock read, not an estimate. The lane board (`scripts/coordination/lane.mjs`, `docs/coordination/standard.md`) holds the lane of each card from stage 3 on. The Agentic OS app (`apps/agentic-os`) shows it.
+
 ## Outbox protocol
 
 1. State transition and `outbox` row commit in one PostgreSQL transaction.
