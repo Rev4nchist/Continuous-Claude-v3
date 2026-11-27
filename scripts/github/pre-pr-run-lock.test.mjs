@@ -39,7 +39,10 @@ function sandbox() {
 // RUN_LOCK_TEST_SAMPLES gives the lock its three samples at once: no 6 second wait per run, and no dependence on the real
 // memory and load of the machine. The lock prints a NOTE line when the hook is used.
 const SAMPLES = JSON.stringify({ free: [8, 8, 8], load: [10, 10, 10] });
-const run = (sb, args, env = {}) => spawnSync(process.execPath, [PRE_PR, ...args], {
+// 4 GB free is under the 5 GB floor of V7.3: the lock refuses a start. It was the 2 minute spacing (a recent last-grant.json) before
+// card run-lock-memory-only; no fixed gap exists now, so the refusal comes from the memory floor.
+const LOW_MEMORY = { RUN_LOCK_TEST_SAMPLES: JSON.stringify({ free: [4, 4, 4], load: [10, 10, 10] }) };
+const run =(sb, args, env = {}) => spawnSync(process.execPath, [PRE_PR, ...args], {
   cwd: sb.repo, encoding: 'utf8', timeout: 120_000, env: { ...process.env, RUN_LOCK_DIR: sb.store, RUN_LOCK_TEST_SAMPLES: SAMPLES, ...env },
 });
 const locks = (store) => readdirSync(store).filter((f) => f.endsWith('.lock') && f !== 'gate.lock');
@@ -47,11 +50,10 @@ const locks = (store) => readdirSync(store).filter((f) => f.endsWith('.lock') &&
 test('grant mode: a refused start stops before any gate, says why, and leaves no lock', () => {
   const sb = sandbox();
   writeFileSync(join(sb.store, 'MODE'), 'grant');
-  writeFileSync(join(sb.store, 'last-grant.json'), JSON.stringify({ at: Date.now(), kind: 'pre-pr', pid: 1 })); // a grant a moment ago: the 2 minute spacing refuses
-  const r = run(sb, ['--body', sb.body]);
+  const r = run(sb, ['--body', sb.body], LOW_MEMORY);
   const out = `${r.stdout}\n${r.stderr}`;
   assert.equal(r.status, 75, out); // 75 is "the lock says wait"; exit 3 stays pre-pr's own "stopped by an error"
-  assert.match(out, /run-lock: WAIT .*last grant at/); // other reasons (load, slots) may come first on a busy machine
+  assert.match(out, /run-lock: WAIT .*free memory 4 GB under 5 GB/); // other reasons (an unlocked run) may come too on a busy machine
   assert.match(out, /try again after \d\d:\d\d \S+/); // the zone name comes from the system: CST, CDT, UTC or GMT+1
   assert.match(out, /NOTE samples come from RUN_LOCK_TEST_SAMPLES/, 'the hook is visible in the output');
   assert.match(out, /stopped before any gate/);
@@ -61,10 +63,9 @@ test('grant mode: a refused start stops before any gate, says why, and leaves no
 
 test('warn mode: the same refusal is only logged, the run goes on, and its lock is freed at exit', () => {
   const sb = sandbox();
-  writeFileSync(join(sb.store, 'last-grant.json'), JSON.stringify({ at: Date.now(), kind: 'pre-pr', pid: 1 }));
-  const r = run(sb, ['--body', sb.body]);
+  const r = run(sb, ['--body', sb.body], LOW_MEMORY);
   const out = `${r.stdout}\n${r.stderr}`;
-  assert.match(out, /run-lock: WOULD WAIT .*last grant at/);
+  assert.match(out, /run-lock: WOULD WAIT .*free memory 4 GB under 5 GB/);
   assert.match(out, /run-lock: GRANTED pre-pr/);
   // The run went past the lock. In an empty temp repo it ends in an error or at its first failing check: either proves it started.
   assert.match(out, /pre-pr: stopped by an error|git:branch|git:clean|RESULT/, 'the run started');
@@ -89,7 +90,6 @@ test('a broken store (RUN_LOCK_DIR is a file) fails open: the run says so and go
 
 // The head goes into the warn-log row (the lock file is freed at exit, the log stays). A repo with no commit gives null.
 const warnRow = (sb) => JSON.parse(readFileSync(join(sb.store, 'warn-log.jsonl'), 'utf8').trim().split('\n').pop());
-const recentGrant = (sb) => writeFileSync(join(sb.store, 'last-grant.json'), JSON.stringify({ at: Date.now(), kind: 'pre-pr', pid: 1 }));
 
 test('the lock record carries the short head of the repo, 8 characters', () => {
   const sb = sandbox();
@@ -97,15 +97,13 @@ test('the lock record carries the short head of the repo, 8 characters', () => {
   assert.equal(commit.status, 0, commit.stderr);
   const head = spawnSync('git', ['-C', sb.repo, 'rev-parse', '--short=8', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
   assert.match(head, /^[0-9a-f]{8}$/);
-  recentGrant(sb);
-  run(sb, ['--body', sb.body]);
+  run(sb, ['--body', sb.body], LOW_MEMORY);
   assert.equal(warnRow(sb).head, head);
 });
 
 test('a repo with no commit gives a null head, never the word HEAD', () => {
   const sb = sandbox();
-  recentGrant(sb);
-  run(sb, ['--body', sb.body]);
+  run(sb, ['--body', sb.body], LOW_MEMORY);
   assert.equal(warnRow(sb).head, null);
 });
 
