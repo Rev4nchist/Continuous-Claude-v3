@@ -24,6 +24,7 @@
 //   - an app file changes and agentic-os-lint or agentic-os-typecheck does not run, or runs for drizzle or outside   -> AO1, AO2
 //   - a new code folder in apps/agentic-os is owned by no app gate                                                   -> AO3
 //   - the CI job agentic-os and the two app gates drift apart (command, folder, limit)                               -> AO4
+//   - a top-level app file of a code extension (tsx, js, cjs, mts, cts) runs no app gate                             -> AO5
 // summaryLine
 //   - the first line is taken, not the runner's summary                        -> M1, M2
 // Git preconditions
@@ -5130,4 +5131,11 @@ test('AO4: the CI job agentic-os runs the same commands, in the same folder, wit
     assert.ok(step.includes(`run: ${gate.cmd} ${gate.args.join(' ')}`), `${id}: CI runs ${gate.cmd} ${gate.args.join(' ')}`);
     assert.ok(step.includes(`timeout-minutes: ${gate.timeoutMs / 60000}`), `${id}: CI limit is ${gate.timeoutMs / 60000} minutes`);
   }
+});
+
+test('AO5: a top-level app file with any code extension (ts, tsx, js, cjs, mjs, mts, cts, json) runs both app gates; a note or a stylesheet does not', async () => {
+  for (const ext of ['ts', 'tsx', 'js', 'cjs', 'mjs', 'mts', 'cts', 'json']) {
+    assert.deepEqual(appGatesFor([`${APP_DIR}/top-level-file.${ext}`]).map((g) => g.id).sort(), APP_GATE_IDS, ext);
+  }
+  for (const ext of ['md', 'css']) assert.deepEqual(appGatesFor([`${APP_DIR}/top-level-file.${ext}`]), [], ext);
 });
