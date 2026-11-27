@@ -16,8 +16,9 @@
  * send one say call per receiver, append the log line, print the marker line and the filled text whole as the LAST output.
  * Status and errors go to stderr, before the text. The SendMessage copy is pasted from the block after the marker, never typed.
  *
- * Exit 0 sent. Exit 1 the scan stopped the send, or a say failed (the failed receivers are named; the scanned text is still printed).
- * Exit 2 a refusal: wrong flags, a missing file, no TIME token, a typed clock time, a text too long for one command line.
+ * Exit 0 sent. Exit 1 the scan stopped the send, or a say failed, or the log write failed after the sends (the failed receivers or the log error are
+ * named on stderr; the scanned text is still printed).
+ * Exit 2 a refusal: wrong flags, a missing file, no TIME token, a typed clock time, a text that starts with two hyphens, a text too long for one command line.
  *
  * Test seams, read ONLY when SEND_WORD_ALLOW_ENV is exactly "1" (a stray variable in a real shell does nothing):
  *   SEND_WORD_NOW_SEQ   a file with one ISO instant per line; each clock read consumes the first line.
@@ -130,6 +131,9 @@ export function main(argv, env = process.env, io = { out: (s) => process.stdout.
     const filled = fillTokens(template, now);
     if (Buffer.byteLength(filled) > MAX_TEXT) throw new Refusal(`send-word: the text is over ${MAX_TEXT} bytes (one command line holds it): shorten it`);
 
+    // A text that starts with two hyphens would be the first word after `say` and could read as a flag.
+    if (filled.startsWith('--')) throw new Refusal('send-word: the text starts with two hyphens (the say command could read it as a flag): change the first words');
+
     const scan = scanAllows(filled, env);
     if (!scan.ok) {
       io.err(`send-word: the scan stopped the send (${scan.status}): nothing sent, no log line, no text printed\n`);
@@ -140,18 +144,23 @@ export function main(argv, env = process.env, io = { out: (s) => process.stdout.
     const failed = [];
     for (const name of a.to) (say(name, a.lane, filled, env) ? sent : failed).push(name);
 
+    // The sends are done. A log write that fails must not lose their result: name the error, still print the text, exit 1.
+    let logError = null;
     if (a.log) {
-      const c = chicago(now);
-      const line = `- ${c.date} ${c.hm} ${c.zone} send-word to ${a.to.join(', ')} lane ${a.lane}: ${snippet(filled)}`
-        + `${a.allowTyped ? ' [typed-time allowed]' : ''}${failed.length ? ` FAILED: ${failed.join(', ')}` : ''}`;
-      fs.mkdirSync(path.dirname(path.resolve(a.log)), { recursive: true });
-      fs.appendFileSync(a.log, `\n${line}\n`);
+      try {
+        const c = chicago(now);
+        const line = `- ${c.date} ${c.hm} ${c.zone} send-word to ${a.to.join(', ')} lane ${a.lane}: ${snippet(filled)}`
+          + `${a.allowTyped ? ' [typed-time allowed]' : ''}${failed.length ? ` FAILED: ${failed.join(', ')}` : ''}`;
+        fs.mkdirSync(path.dirname(path.resolve(a.log)), { recursive: true });
+        fs.appendFileSync(a.log, `\n${line}\n`);
+      } catch (err) { logError = err.message; }
     }
 
     if (failed.length) io.err(`send-word: say failed for ${failed.join(', ')}; sent to ${sent.length ? sent.join(', ') : 'nobody'}\n`);
     else io.err(`send-word: sent to ${sent.join(', ')}\n`);
+    if (logError) io.err(`send-word: the log line was NOT written (${logError}); the sends above are done\n`);
     io.out(`${MARKER}\n${filled}\n`);
-    return failed.length ? 1 : 0;
+    return failed.length || logError ? 1 : 0;
   } catch (err) {
     if (!(err instanceof Refusal)) { io.err(`send-word: internal error: ${err.message}\n`); return 1; }
     io.err(`${err.message}\n`);

@@ -23,6 +23,9 @@
  *   W11 the seams are ignored without the ALLOW variable
  *   W12 the real scan-listed passes a clean text (exit 0)
  *   W13 bad flags                                 -> exit 2 before any say call
+ *   W14 a text that starts with two hyphens       -> exit 2, nothing sent
+ *   W15 a log write that fails after the sends    -> exit 1, the error and the send result named, the text still printed
+ * W12 skips with 'listed-id dataset absent' where the git-ignored dataset is missing (CI); it runs in a checkout that has it.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -311,11 +314,39 @@ describe('W11 the seams are ignored without SEND_WORD_ALLOW_ENV', () => {
 });
 
 describe('W12 the real scan-listed passes a clean text', () => {
-  it('exit 0 with the real scan and a fake lane CLI', () => {
+  it('exit 0 with the real scan and a fake lane CLI', (t) => {
+    // The listed-id dataset is git-ignored: a checkout without it (CI) makes scan-listed exit 2 for every text. That row only runs where the dataset is.
+    const probe = spawnSync(process.execPath, [path.join(HERE, 'scan-listed.mjs'), '-'], { input: 'plain\n', encoding: 'utf8' });
+    if (probe.status === 2) { t.skip('listed-id dataset absent'); return; }
     const c = newCase('A plain clean word at TIME.\n');
     const r = run(c, baseArgs(c), { SEND_WORD_SCAN_CLI: '' });
     assert.equal(r.code, 0, r.err);
     assert.equal(callsOf(c).length, 1);
+  });
+});
+
+describe('W14 a text that starts with two hyphens', () => {
+  it('is refused: exit 2, nothing sent, no log', () => {
+    const c = newCase('--force is a flag word at TIME.\n');
+    const r = run(c, baseArgs(c));
+    assert.equal(r.code, 2);
+    assert.equal(callsOf(c).length, 0);
+    assert.equal(fs.existsSync(c.logFile), false);
+    assert.equal(r.out, '');
+  });
+});
+
+describe('W15 a log write that fails after the sends', () => {
+  it('names the error, keeps the send result, still prints the text, exits 1', () => {
+    const c = newCase('Logged word at TIME.\n');
+    const blocker = path.join(c.dir, 'a-file');
+    fs.writeFileSync(blocker, 'x');
+    const r = run(c, ['--file', c.file, '--to', 'alpha', '--lane', 'coord-clock-send', '--log', path.join(blocker, 'sub', 'milestone.md')]);
+    assert.equal(r.code, 1);
+    assert.equal(callsOf(c).length, 1, 'the say call was made');
+    assert.match(r.err, /sent to alpha/);
+    assert.match(r.err, /log line was NOT written/);
+    assert.equal(printedText(r.out), 'Logged word at 14:06 CST.\n');
   });
 });
 
