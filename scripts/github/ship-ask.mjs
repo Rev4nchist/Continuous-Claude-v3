@@ -3,13 +3,17 @@
  * ship-ask.mjs: builds the AskUserQuestion spec of one ship step and writes the offer to the decision store (pathway-flow-v2, design N1).
  * Tests: scripts/github/ship-ask.test.mjs. Store: scripts/github/lib/decisions.mjs.
  *
- * Usage: node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip|cap-override> [--pr N | --branch B] [--msg file] [--usd N] [--extra-run] [--json] [--facts f.json]
+ * Usage: node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip|cap-override> [--pr N | --branch B] [--msg file] [--usd N] [--extra-run] (--json | --text) [--facts f.json]
  *   cap-override: Dave decides to lift the CLI cap for ONE run. --usd N is the USD cap of that run (above the config cap), --extra-run lifts the per-branch
  *   run count; give one or both. The tap binds branch + head + the flag set + N and is used once by pre-pr.mjs or cr-fix.mjs (lib/cap-override.mjs).
  *   commit-and-push, open-pr, cli-skip: --branch B (default: the current branch). --msg is the commit message file (commit-and-push only).
  *   cli-skip: Dave decides to skip the CLI review for the head of a flag stamp (pre-pr.mjs --skip-cr); pre-pr-gate then accepts it once.
  *   land, paid-round: --pr N.
  *   --json   print { header, question, options: [{ label, description }] } as one JSON object. Pass it to AskUserQuestion unchanged.
+ *            One of --json or --text is required (card tooling-quick-wins-1127). The hook records a tap only on the exact stored spec, and the text
+ *            form joins header and question, so an ask built from it records nothing (PR 759: the first Land tap was lost). Without either flag
+ *            the script exits 2 with one line and writes no offer.
+ *   --text   print the human text of the question. It writes NO offer and its last line says no tap can be recorded from it. Not with --json.
  *   --facts  read the step data from a JSON file, not from git, gh and the ledger (tests). Honoured only in test mode.
  *   SHIP_ASK_STATUS_SCRIPT  replaces review-status.mjs for land (tests). Honoured only in test mode.
  *   Test mode = SHIP_ASK_TEST=1 and CCV3_DECISIONS_FILE set to a path other than the default real store.
@@ -18,8 +22,8 @@
  * land starts with three lines, "Why:", "What it does:" and "You will see:" (the Problem, Change and You will see fields of the pre-pr
  * summary), only when the summary's stamp binds to the PR head. Then one line that starts with "State:".
  * The store step of commit-and-push is `ship`. An open offer is what lets the AskUserQuestion hook record Dave's tap.
- * Exit 0 = the offer is written and the spec printed. 1 = no question can be asked (the reason is on stderr, nothing written).
- * 2 = bad usage. 3 = internal error.
+ * Exit 0 = the offer is written and the spec printed (--text: the text is printed and no offer is written). 1 = no question can be asked (the
+ * reason is on stderr, nothing written). 2 = bad usage, or neither --json nor --text. 3 = internal error.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
@@ -578,13 +582,15 @@ const VALUE_FLAGS = ['--pr', '--branch', '--msg', '--facts', '--usd'];
 function parseArgs(argv) {
   const [step, ...rest] = argv;
   if (!Object.hasOwn(STORE_STEP, step ?? '')) return { error: `the step must be one of ${Object.keys(STORE_STEP).join(', ')}` };
-  const o = { step, json: false };
+  const o = { step, json: false, text: false };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--json') { o.json = true; continue; }
+    if (rest[i] === '--text') { o.text = true; continue; }
     if (rest[i] === '--extra-run') { o.extraRun = true; continue; }
     if (!VALUE_FLAGS.includes(rest[i]) || rest[i + 1] === undefined || rest[i + 1].startsWith('--')) return { error: `bad argument ${rest[i]}` };
     o[rest[i].slice(2)] = rest[++i];
   }
+  if (o.json && o.text) return { error: '--text and --json cannot be used together' };
   const byPr = step === 'land' || step === 'paid-round';
   if (byPr && !/^[1-9]\d*$/.test(o.pr ?? '')) return { error: `${step} needs --pr N` };
   if (!byPr && o.pr !== undefined) return { error: `${step} takes --branch, not --pr` };
@@ -617,17 +623,20 @@ const textOf = (spec) => [`${spec.header}: ${spec.question}`, ...spec.options.ma
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.error) {
-    console.error(`ship-ask: usage: ${parsed.error}. node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip|cap-override> [--pr N | --branch B] [--msg file] [--usd N] [--extra-run] [--json] [--facts f.json]`);
+    console.error(`ship-ask: usage: ${parsed.error}. node scripts/github/ship-ask.mjs <commit-and-push|open-pr|land|paid-round|cli-skip|cap-override> [--pr N | --branch B] [--msg file] [--usd N] [--extra-run] (--json | --text) [--facts f.json]`);
     process.exit(2);
   }
   const { o } = parsed;
+  // Before any read and before the offer is written: an ask built from the text form records no tap (PR 759).
+  if (!o.json && !o.text) { console.error('ship-ask: pass --json: an answer is recorded only from the JSON text (--text prints a view, and no tap can be recorded from it).'); process.exit(2); }
   try {
     const plan = planOf(o.step, await dataOf(o), o);
     if (plan.refuse) { console.error(`ship-ask: no question: ${plan.refuse}`); process.exit(1); }
     if (!plan.head || !plan.key) { console.error('ship-ask: no question: the head or the branch could not be read.'); process.exit(1); }
+    if (o.text) { console.log(`${textOf(plan.spec)}\nship-ask: no offer was written and no tap can be recorded from this text. Ask with --json.`); return; }
     const w = offerWrite({ step: STORE_STEP[o.step], key: plan.key, head: plan.head, spec: plan.spec, tree: plan.tree, cwd: process.cwd() });
     if (!w.ok) { console.error(`ship-ask: the offer was not written (${w.reason}). Do not ask.`); process.exit(1); }
-    console.log(o.json ? JSON.stringify(plan.spec) : textOf(plan.spec));
+    console.log(JSON.stringify(plan.spec));
   } catch (err) {
     console.error(`ship-ask: could not build the question (${String(err.message).split('\n')[0]})`);
     process.exit(3);

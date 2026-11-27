@@ -279,8 +279,8 @@ test('SA6b: bad usage exits 2 and writes no offer; a step with no question exits
   assert.deepEqual(d.offerList(), []);
 });
 
-test('SA6c: without --json the CLI prints readable text, still with the offer written', async () => {
-  const r = run(['land', '--pr', '349'], { facts: LAND });
+test('SA6c: with --text the CLI prints readable text (no offer is written: see SX2)', async () => {
+  const r = run(['land', '--pr', '349', '--text'], { facts: LAND });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^Land: What it does: no checked summary for this head\./);
   assert.match(r.stdout, /\nState: PR #349 is READY/);
