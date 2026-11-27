@@ -157,7 +157,8 @@ describe('build manifest: external inputs (item 14)', () => {
   }));
 
   it('Wiring. the build script writes the metafile the writer reads (break: --metafile dropped from package.json)', () => {
-    const build: string = JSON.parse(readFileSync(join(hooksRoot, 'package.json'), 'utf8')).scripts.build;
+    const scripts = JSON.parse(readFileSync(join(hooksRoot, 'package.json'), 'utf8')).scripts;
+    const build: string = scripts['build:raw'] ?? scripts.build; // scripts.build runs the run-lock wrapper; the esbuild line is build:raw
     expect(build).toContain('--metafile=.build-meta.json');
   });
 });

@@ -24,9 +24,9 @@ const bootCallRe = new RegExp(`["']${BOOT_CALL_TOKEN}["']`);
 const CHECKER = join(HOOKS_ROOT, '..', '..', 'scripts', 'hooks', 'trace-marker-check.mjs');
 
 describe('trace marker in the built dist', () => {
-  it('scripts.build carries --inject:src/lib/trace-boot.ts', () => {
+  it('the esbuild line (scripts.build:raw, the line scripts.build runs through the run-lock wrapper) carries --inject:src/lib/trace-boot.ts', () => {
     const pkg = JSON.parse(readFileSync(join(HOOKS_ROOT, 'package.json'), 'utf8'));
-    expect(pkg.scripts.build).toContain('--inject:src/lib/trace-boot.ts');
+    expect(pkg.scripts['build:raw'] ?? pkg.scripts.build).toContain('--inject:src/lib/trace-boot.ts');
   });
 
   it('every hot program has a dist that carries the marker', () => {
