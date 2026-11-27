@@ -72,6 +72,9 @@
  *   node scripts/coordination/lane.mjs renew            # push my leases out to now+90m; a later lease (a park) stays
  *   node scripts/coordination/lane.mjs say "message" [--to <name|sid-prefix>] [--lane <id>]
  *   node scripts/coordination/lane.mjs inbox [--peek]   # unread; advances watermark unless --peek
+ *   node scripts/coordination/lane.mjs inbox --wait [--timeout N]   # read-only: waits for the first unread direct message, or broadcast said with `say` (kind note, no lane id); N is 1 to 3600 s, default 600.
+ *                                                       # Polls at once, then every 15 s, one connection per poll; writes no cursor. Exit 0 prints `inbox wait: event <N> from <label> kind <kind>` (no body); exit 75 at the limit.
+ *                                                       # Run it with run_in_background at each wait on the seat. A bad N, or --wait with --peek or --id, is a usage error, exit 1
  *   node scripts/coordination/lane.mjs inbox --id <N>   # read-only: one event in full, no cursor write. Only a direct message to me, or a broadcast of this board
  *                                                       # (a direct message needs no board). Line 1 `event <N> from <label> kind <kind> [lane <id>]`, then the body as stored.
  *                                                       # Any other id: `REFUSED inbox <N> [not-yours|no-such-event] -- text`, exit 4; a malformed <N> is a usage error, exit 1
@@ -125,6 +128,7 @@ import { fileURLToPath } from 'node:url';
 import { requireDep } from '../lib/resolve-deps.mjs';
 import { repoPath, userHome } from './canon-home.mjs';
 import { DEFAULT_BOARD, boardRoots, laneCliCmd, loadRegistry, normalizeRoot, resolveBoard, wmKey } from './lane-board.mjs';
+import { parseWaitFlags, pollMs, waitForEvent } from './lane-inbox-wait.mjs';
 import { planKanban } from './kanban-apply.mjs';
 import { parseBand, parseExpect, parseP0List, parsePriority } from './lane-band.mjs';
 import { landedShaSql, laneMetSql, openDepSql, waitsOnSql } from './lane-dep.mjs';
@@ -172,7 +176,7 @@ function connString() {
 // ---------------------------------------------------------------- args
 
 /** Flags that never take a value: `done --no-pr re-x` keeps `re-x` as the lane id. Every other flag takes the next token that is not a flag. */
-const BOOLEAN_FLAGS = new Set(['no-pr', 'dep-override', 'override', 'blocked']);
+const BOOLEAN_FLAGS = new Set(['no-pr', 'dep-override', 'override', 'blocked', 'wait']);
 /** Flags that need a text. A bare one (no value) is a usage error. */
 const TEXT_FLAGS = ['merged', 'evidence', 'reason', 'if-state'];
 
@@ -505,6 +509,37 @@ async function inboxOne(c, myId) {
   if (JSON_OUT) return e;
   const sender = labelWithAgent(e.session_id, ids(), e.detail?.agent);
   return `event ${e.id} from ${sender} kind ${e.kind}${e.lane_id ? ` lane ${e.lane_id}` : ''}\n${e.body ?? ''}`;
+}
+
+/**
+ * `inbox --wait`: what wakes a waiting builder. UNREAD_SQL counts every board event as unread (a peer's lane note, a claim, a done), so a
+ * builder would wake every few minutes. This filter keeps UNREAD_SQL and adds: a direct message to me of any kind, or a board event that
+ * `say` wrote (kind note, no lane id). Known limit: `say --lane <id>` has the same columns as a lane note, so it does not wake.
+ */
+const WAIT_SQL = `SELECT e.id::text AS id, e.session_id, e.kind, e.detail FROM agentic_os.lane_event e
+  WHERE ${UNREAD_SQL} AND (e.to_session_id IS NOT NULL OR (e.kind = 'note' AND e.lane_id IS NULL))
+  ORDER BY e.id LIMIT 1`;
+
+/**
+ * `inbox --wait [--timeout N]` (card coord-inbox-wait). Read-only: no cursor write, no lock. One connection for each poll, opened and closed
+ * (an idle connection held for up to an hour would meet an idle timeout). Exit 0: one line with the event id, the sender and the kind, never the
+ * body (the next prompt page or `inbox --id <N>` shows it). Exit 75 at the time limit.
+ */
+async function inboxWait() {
+  const { timeoutS } = parseWaitFlags(flags);
+  const myId = me();
+  const board = projectOf();
+  const params = unreadParams(myId, board.key);
+  const poll = () => withDb(async (c) => (await c.query(WAIT_SQL, params)).rows[0] ?? null);
+  const stepMs = pollMs();
+  const r = await waitForEvent({ poll, sleep: (ms) => new Promise((done) => setTimeout(done, ms)), now: () => Date.now(), timeoutS, pollMsOverride: stepMs });
+  if (r.timedOut) {
+    throw Object.assign(new Error(`inbox wait: no new event in ${timeoutS} s`), { exitCode: 75 });
+  }
+  const e = r.event;
+  const from = labelWithAgent(e.session_id, ids(), e.detail?.agent);
+  if (JSON_OUT) return { id: e.id, from, kind: e.kind };
+  return `inbox wait: event ${e.id} from ${from} kind ${e.kind}`;
 }
 
 /** Live sessions on a board (ALIVE_AT as everywhere), or on the whole machine when `all`. */
@@ -2189,6 +2224,8 @@ const commands = {
    * tagged [from <board>] when they crossed. See UNREAD_SQL for the cursors.
    */
   async inbox(c) {
+    // --wait opens its own connection for each poll (see inboxWait), so the dispatcher gives this verb no `c` for it.
+    if (flags.wait !== undefined || Object.keys(flags).some((k) => k.startsWith('wait='))) return inboxWait();
     const myId = me();
     // The parser has no --k=v form: `--id=5` is the key "id=5". Treat it as the --id path (a usage error), never as a plain inbox that marks all read.
     if (flags.id !== undefined || Object.keys(flags).some((k) => k.startsWith('id='))) return inboxOne(c, myId);
@@ -2822,8 +2859,8 @@ const FOREIGN_FLAGS = {
 
 /** Verbs that only read: `--as <id>` stays open for them (the /os pane runs `board --json --as <sid>` with no session env). */
 const READ_VERBS = new Set(['board', 'peers', 'whoami', 'next', 'mine']);
-/** `inbox` reads only with --peek or --id; a plain `inbox` moves the read cursor of the session it acts as, so it is a write. */
-const isReadVerb = (verb) => READ_VERBS.has(verb) || (verb === 'inbox' && (flags.peek === true || flags.id !== undefined));
+/** `inbox` reads only with --peek, --id or --wait; a plain `inbox` moves the read cursor of the session it acts as, so it is a write. */
+const isReadVerb = (verb) => READ_VERBS.has(verb) || (verb === 'inbox' && (flags.peek === true || flags.id !== undefined || flags.wait !== undefined));
 
 /**
  * Gap 4, rule L2.10: a write verb run `--as <id>` that is not the caller's own session id (CLAUDE_CODE_SESSION_ID, unset counts as no
@@ -2844,7 +2881,8 @@ try {
   const foreign = (FOREIGN_FLAGS[cmd] ?? []).find((k) => flags[k] !== undefined);
   if (foreign) throw new Error(`--${foreign} does not apply to ${cmd} (usage error; nothing was run)`);
   if (BARE_TEXT_FLAG) throw new Error(`--${BARE_TEXT_FLAG} needs a value (usage error; nothing was run)`);
-  const needsDb = !(cmd === 'project' && positional[1] === 'which') && !(cmd === 'remind' && positional[1] === 'sync');
+  const waitsAlone = cmd === 'inbox' && (flags.wait !== undefined || Object.keys(flags).some((k) => k.startsWith('wait=')));
+  const needsDb = !(cmd === 'project' && positional[1] === 'which') && !(cmd === 'remind' && positional[1] === 'sync') && !waitsAlone;
   const result = needsDb ? await withDb((c) => commands[cmd](c)) : await commands[cmd](null);
   process.stdout.write((JSON_OUT ? JSON.stringify(result, null, 2) : String(result)) + '\n');
   flushDepWarning();
