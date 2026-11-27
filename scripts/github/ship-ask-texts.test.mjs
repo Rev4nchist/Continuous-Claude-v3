@@ -13,6 +13,7 @@
  *   T1  the owned files hold no bad mention                          -> names file:line
  *   T2  the open list is exact, and no other file has a bad mention  -> a stale entry or a new bad mention fails
  *   T3  the finder: one good and one bad mention give one hit        -> the check cannot pass on a text it did not read
+ *       and two commands on one line are each checked                  -> the rest of the line stops at the next ship-ask
  *   T4  the finder read the real tree: at least 8 mentions in the owned files, and at least 100 files in the tree
  */
 import { describe, it } from 'node:test';
@@ -40,7 +41,6 @@ const OWNED = [
 // A file that holds a bad mention another card fixes, with that card. Delete the entry in the commit that fixes the file.
 const OPEN = {
   '.claude/hooks/src/decision-gate.ts': 'coord-gate-timeout-hole',
-  '.claude/hooks/src/pre-pr-gate.ts': 'none yet (the seat holds it for the next hooks card)',
 };
 
 /** Every ship-ask step mention of a text: { line, step, ok }. ok is true when the rest of its line holds --json or --text. */
@@ -106,6 +106,13 @@ describe('T3 the finder', () => {
   });
   it('a step name inside a longer word is no mention', () => {
     assert.equal(mentionsOf('ship-ask landing page, ship-ask land-pr.ps1').length, 0);
+  });
+  it('two commands on one line are each checked (the rest of the line stops at the next ship-ask)', () => {
+    const bad = (text) => mentionsOf(text).filter((m) => !m.ok).length;
+    assert.equal(bad('ship-ask land --json, then ship-ask open-pr.'), 1, 'good then bad');
+    assert.equal(bad('ship-ask land, then ship-ask open-pr --json'), 1, 'bad then good');
+    assert.equal(bad('ship-ask land --json, then ship-ask open-pr --text'), 0, 'good and good');
+    assert.equal(bad('ship-ask land, then ship-ask open-pr.'), 2, 'bad and bad');
   });
   it('prose that uses a step name as a noun is no mention; a closing mark or the line end is', () => {
     assert.equal(mentionsOf('the tap is a ship-ask cap-override question, stored as').length, 0);
