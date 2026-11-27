@@ -230,16 +230,24 @@ describe('inbox --wait: what it never does', () => {
     bg.done.then(() => { finished = true; });
     let sawConnection = false;
     let sawNoneAfter = false;
+    // Only client backends count: autovacuum and other workers of the database are not the waiter (card coord-inbox-wait-w10).
+    // The last 40 samples are kept, so a failure names the connection that never closed.
+    const samples = [];
     while (!finished) {
-      const open = (await s.db.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, [dbName])).rows[0].n;
-      if (open > 0) sawConnection = true;
+      const rows = (await s.db.query(
+        `SELECT pid, backend_type, state, application_name, round(extract(epoch FROM now() - backend_start)::numeric, 1)::text AS age_s
+           FROM pg_stat_activity WHERE datname = $1 AND backend_type = 'client backend' AND pid <> pg_backend_pid() ORDER BY pid`, [dbName])).rows;
+      samples.push(rows.length ? rows.map((x) => `${x.pid}/${x.backend_type}/${x.state}/${x.application_name || '-'}/${x.age_s}s`).join(' ') : 'none');
+      if (samples.length > 40) samples.shift();
+      if (rows.length > 0) sawConnection = true;
       else if (sawConnection) sawNoneAfter = true;
       await sleep(100);
     }
     const r = await bg.done;
+    const log = `last ${samples.length} samples (pid/type/state/app/age): ${samples.join(' | ')}`;
     assert.equal(r.code, 75, r.err);
-    assert.ok(sawConnection, 'the samples saw the waiter poll at least once');
-    assert.ok(sawNoneAfter, 'the wait holds no database connection while it sleeps');
+    assert.ok(sawConnection, `the samples saw the waiter poll at least once; ${log}`);
+    assert.ok(sawNoneAfter, `the wait holds no database connection while it sleeps; ${log}`);
   });
 });
 
