@@ -3022,8 +3022,28 @@ function notInertDenies(parsed, resolved) {
   const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ""), parsed.text.replace(/['"`\\]/g, "")];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   const denyClass = views.some((v) => DENY_CLASS_TEXT.test(v));
+  if ((denyClass || !resolved) && !GUARDED_TEXT.test(parsed.text) && !GUARDED_TEXT.test(views[1]) && !splicedOk(parsed)) return [deny("not-inert", notInertWhy(), denyClass ? "other" : "push")];
   if (!denyClass && resolved || isInert(parsed)) return [];
-  return [deny("not-inert", notInertWhy(), denyClass ? "other" : "push")];
+  return [deny("not-inert", notInertWhy(), denyClass || skippedFileHoldsGuarded(parsed) ? "other" : "push")];
+}
+function splicedOk(parsed) {
+  for (const r of Object.values(parsed.byDialect)) for (const c of r ? r.calls : []) {
+    const p = bareProg(c);
+    if (p === null || !(INERT_PROGRAMS.has(p) || p === "gh")) return false;
+  }
+  return true;
+}
+function skippedFileHoldsGuarded(parsed) {
+  for (const r of Object.values(parsed.byDialect)) {
+    for (const c of r ? r.calls : []) {
+      if (SHELL_PROGRAMS[progName(c.words[0]?.lit) ?? ""] !== "pwsh") continue;
+      for (let i = 1; i < c.words.length; i++) {
+        const a = c.words[i];
+        if (a.lit && /^-f(?:i(?:l(?:e)?)?)?$/i.test(c.words[i - 1]?.lit ?? "") && GUARDED_TEXT.test(blankQuotes(a.lit))) return true;
+      }
+    }
+  }
+  return false;
 }
 async function innerTextBad(byDialect, opts) {
   for (const r of Object.values(byDialect)) {

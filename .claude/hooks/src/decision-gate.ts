@@ -1518,8 +1518,29 @@ export function notInertDenies(parsed: Deps['parsed'], resolved: boolean): Deny[
   const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ''), parsed.text.replace(/['"`\\]/g, '')];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   const denyClass = views.some((v) => DENY_CLASS_TEXT.test(v));
+  // C2d 3a: a guarded word that only the quote-removed or escape-removed view shows (a splice such as mer""ge or g\h) is inert only beside calls that cannot run text: data programs and gh.
+  if ((denyClass || !resolved) && !GUARDED_TEXT.test(parsed.text) && !GUARDED_TEXT.test(views[1]) && !splicedOk(parsed)) return [deny('not-inert', notInertWhy(), denyClass ? 'other' : 'push')];
   if ((!denyClass && resolved) || isInert(parsed)) return [];
-  return [deny('not-inert', notInertWhy(), denyClass ? 'other' : 'push')];
+  // C2d 3a: a pwsh -File path that holds a guarded word is not parsed (innerTextBad skips it), so the deny keeps scope other, as the parse error of main did.
+  return [deny('not-inert', notInertWhy(), denyClass || skippedFileHoldsGuarded(parsed) ? 'other' : 'push')];
+}
+/** The spliced-only rule: every call of the parse is a data program (INERT_PROGRAMS) or gh. A call with no program name, a git, a shell, a runner or a carrier is not. */
+function splicedOk(parsed: NonNullable<Deps['parsed']>): boolean {
+  for (const r of Object.values(parsed.byDialect)) for (const c of r ? r.calls : []) { const p = bareProg(c); if (p === null || !(INERT_PROGRAMS.has(p) || p === 'gh')) return false; }
+  return true;
+}
+/** True when a pwsh -File value of the text names a guarded call: innerTextBad skips that value (a path, not text that PowerShell runs), so no parse error carries it. */
+function skippedFileHoldsGuarded(parsed: NonNullable<Deps['parsed']>): boolean {
+  for (const r of Object.values(parsed.byDialect)) {
+    for (const c of r ? r.calls : []) {
+      if (SHELL_PROGRAMS[progName(c.words[0]?.lit) ?? ''] !== 'pwsh') continue;
+      for (let i = 1; i < c.words.length; i++) {
+        const a = c.words[i];
+        if (a.lit && /^-f(?:i(?:l(?:e)?)?)?$/i.test(c.words[i - 1]?.lit ?? '') && GUARDED_TEXT.test(blankQuotes(a.lit))) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** True when a shell program of the text has a string argument that names a guarded call and does not parse as that shell. Part of the parse budget. */
