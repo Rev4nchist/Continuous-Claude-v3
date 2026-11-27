@@ -103,7 +103,7 @@ test('V2: the primary, and a worktree with its own install, add no line', () => 
   assert.equal(inPrimary.blocked.size, 0);
   assert.equal(inPrimary.note, null);
   // A worktree with its own complete install of hooks and of the app.
-  for (const pkg of ['next', 'eslint-config-next']) put(path.join(r.wt, 'apps', 'agentic-os', 'node_modules', pkg, 'package.json'), '{}');
+  appInstall(r.wt, '1.0.0');
   put(path.join(r.wtHooks, 'node_modules', '.package-lock.json'), '{}\n');
   for (const pkg of ['vitest', 'pg', 'typescript']) put(path.join(r.wtHooks, 'node_modules', pkg, 'package.json'), '{}');
   put(path.join(r.wtHooks, 'node_modules', '.bin', 'esbuild.cmd'), '@echo off\r\n');
@@ -273,6 +273,7 @@ test('V14: a branch that changes the app lockfile needs an install of that lockf
   assert.equal(envStep({ root: r.wt, gates: appGates(), changed: [], nodePath: '' }).fail, null, 'the branch does not change the app lockfile');
   appInstall(r.wt, '2.0.0');
   assert.equal(envStep({ root: r.wt, gates: appGates(), changed, nodePath: '' }).fail, null, 'the install matches the lockfile');
+  appInstall(r.primary, '0.0.1');
   assert.equal(envStep({ root: r.primary, gates: appGates(), changed, nodePath: '' }).fail, null, 'the primary is never judged against its own lockfile');
 });
 

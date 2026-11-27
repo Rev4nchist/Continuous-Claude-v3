@@ -16,6 +16,8 @@
  * Kinds of need:
  *   bin   a bin the way `npm run` finds it: walk up from the gate folder (the primary's bin does not help another folder)
  *   walk  a package from the walk up from the gate folder only (vitest.config.ts imports 'vitest/config': ESM ignores NODE_PATH)
+ *   own   a package in the node_modules of the need's own folder and nowhere else, and only when that install is complete (its hidden
+ *         lockfile node_modules/.package-lock.json is there: a finished npm ci writes it last, an interrupted one does not)
  *   dep   a package the shared resolver finds: this checkout, the primary, then NODE_PATH (a CJS or createRequire lookup)
  *   root  a package under the root node_modules (Playwright): this checkout, then the primary
  * In the primary checkout and in CI everything is found, so the step adds no line.
@@ -31,15 +33,17 @@ import { ANCHOR_SUBDIRS, depsHint, lookupBin, lookupDep, lookupWalk, primaryRoot
 export const LOCK_REL = '.claude/hooks/package-lock.json';
 const HOOKS_REL = '.claude/hooks';
 const APP_REL = 'apps/agentic-os';
+export const APP_LOCK_REL = `${APP_REL}/package-lock.json`;
 
 /**
  * What each gate needs. Gates that are not listed need nothing from node_modules.
- * The two app gates (card agentic-os-app-gate) need the app's own install: 'walk' reads only the folders on the way up from the gate's folder, never the
- * primary. next and eslint-config-next are packages of the app alone: typescript or eslint found up the walk in the shared hooks store must not count.
+ * The two app gates (card agentic-os-app-gate) need the app's own complete install: 'own' reads only apps/agentic-os/node_modules, never a folder above
+ * it and never the primary. next and eslint-config-next are packages of the app alone: typescript or eslint in the shared hooks store must not count,
+ * and neither must a partial install (no hidden lockfile) or a copy of the packages in the worktree root.
  */
 export const GATE_NEEDS = {
-  'agentic-os-lint': [{ pkg: 'eslint-config-next/package.json', kind: 'walk', from: APP_REL }],
-  'agentic-os-typecheck': [{ pkg: 'next/package.json', kind: 'walk', from: APP_REL }],
+  'agentic-os-lint': [{ pkg: 'eslint-config-next/package.json', kind: 'own', from: APP_REL }],
+  'agentic-os-typecheck': [{ pkg: 'next/package.json', kind: 'own', from: APP_REL }],
   'hooks-tsc': [{ pkg: 'tsc', kind: 'bin', from: HOOKS_REL }],
   'hooks-build': [{ pkg: 'esbuild', kind: 'bin', from: HOOKS_REL }],
   'hooks-vitest': [{ pkg: 'vitest/package.json', kind: 'walk', from: HOOKS_REL }],
@@ -71,6 +75,11 @@ function lookupNeed(need, { root, primary, gateCwd, nodePath }) {
   const from = path.join(root, ...(need.from ?? '.').split('/'));
   if (need.kind === 'bin') return lookupBin(need.pkg, { from: gateCwd ?? from });
   if (need.kind === 'walk') return lookupWalk(need.pkg, { from: gateCwd ?? from });
+  if (need.kind === 'own') {
+    const modules = path.join(from, 'node_modules');
+    const hit = path.join(modules, ...need.pkg.split('/'));
+    return { path: existsSync(hit) && existsSync(path.join(modules, '.package-lock.json')) ? hit : null, tried: [modules] };
+  }
   if (need.kind === 'root') {
     const anchors = samePath(root, primary) ? [root] : [root, primary];
     const hit = lookupDep(need.pkg, { repoRoot: root, anchors });
@@ -88,9 +97,10 @@ export function envLine(gateId, pkg, tried, primary) {
 }
 
 /** The fix for an app gate: the app has its own install (not the hooks store), and CI makes the same one from the lockfile. */
-const APP_FIX = `run \`npm ci --ignore-scripts\` from the lockfile in ${APP_REL} of this worktree (change folder first, then run it bare). A lockfile install fixes it; npm install, a new package or a lockfile change is not part of this fix.`;
+const APP_FIX = `run \`npm ci --ignore-scripts\` from the lockfile in ${APP_REL} of this worktree (change folder first, then run it bare). A lockfile install fixes it, also a partial one (no node_modules/.package-lock.json); npm install, a new package or a lockfile change is not part of this fix.`;
 
 export const LOCK_TEXT = 'ENV: this branch changes .claude/hooks/package-lock.json, so it needs its own npm ci in this worktree (Dave approves an install). The primary\'s packages would give a wrong green.';
+export const APP_LOCK_TEXT = `ENV: this branch changes ${APP_LOCK_REL}, so it needs its own \`npm ci --ignore-scripts\` in ${APP_REL} of this worktree (change folder first, then run it bare). The installed packages are of another lockfile and would give a wrong green.`;
 
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 
@@ -99,9 +109,9 @@ const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8'))
  * (node_modules/.package-lock.json against package-lock.json) and every direct dependency is installed. Existing is not enough:
  * an install of an older lockfile would give a wrong green.
  */
-export function installMatchesLock(root) {
-  const hidden = readJson(installedMarker(root, ['.claude', 'hooks']));
-  const lock = readJson(path.join(root, ...LOCK_REL.split('/')));
+export function installMatchesLock(root, sub = ['.claude', 'hooks']) {
+  const hidden = readJson(installedMarker(root, sub));
+  const lock = readJson(path.join(root, ...sub, 'package-lock.json'));
   if (!hidden?.packages || !lock?.packages) return false;
   for (const [key, entry] of Object.entries(hidden.packages)) {
     if (key !== '' && lock.packages[key]?.version !== entry?.version) return false;
@@ -111,16 +121,17 @@ export function installMatchesLock(root) {
 }
 
 /**
- * LOCK_TEXT when the branch changes the hooks lockfile, this checkout is not the primary, its lockfile differs from the primary's,
- * and its own install does not match its own lockfile. Strict (Dave, 11-06): it clears only after an npm ci of THIS lockfile here.
+ * `text` (LOCK_TEXT for the hooks lockfile, APP_LOCK_TEXT for the app's) when the branch changes the lockfile `rel`, this checkout is not
+ * the primary, its lockfile differs from the primary's, and its own install does not match its own lockfile. Strict (Dave, 11-06): it clears
+ * only after an npm ci of THIS lockfile here.
  */
-function lockfileFail(root, primary, changed) {
-  if (!changed.map(norm).includes(LOCK_REL)) return null;
+function lockfileFail(root, primary, changed, rel = LOCK_REL, text = LOCK_TEXT) {
+  if (!changed.map(norm).includes(rel)) return null;
   if (samePath(root, primary)) return null;
-  const own = hashOf(path.join(root, ...LOCK_REL.split('/')));
-  const theirs = hashOf(path.join(primary, ...LOCK_REL.split('/')));
+  const own = hashOf(path.join(root, ...rel.split('/')));
+  const theirs = hashOf(path.join(primary, ...rel.split('/')));
   if (own === theirs) return null;
-  return installMatchesLock(root) ? null : LOCK_TEXT;
+  return installMatchesLock(root, path.posix.dirname(rel).split('/')) ? null : text;
 }
 
 /** The NOTE text when installed typescript differs from the lock, or null. Never a FAIL: the lock may be ahead of the install on purpose. */
@@ -155,6 +166,8 @@ export function envStep({ root, gates, changed = [], nodePath }) {
   const texts = [];
   const lock = lockfileFail(root, primary, changed);
   if (lock) texts.push(lock);
+  const appLock = gates.some((g) => g.id.startsWith('agentic-os-')) ? lockfileFail(root, primary, changed, APP_LOCK_REL, APP_LOCK_TEXT) : null;
+  if (appLock) texts.push(appLock);
   const blocked = new Set();
   const fixed = gates.map((gate) => {
     let out = gate;
@@ -208,7 +221,7 @@ function main(argv) {
   }
   const i = argv.indexOf('--root');
   const root = path.resolve(i >= 0 && argv[i + 1] ? argv[i + 1] : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
-  const gates = Object.keys(GATE_NEEDS).map((id) => ({ id, cwd: id.startsWith('hooks-') ? HOOKS_REL : '.', args: [] }));
+  const gates = Object.keys(GATE_NEEDS).map((id) => ({ id, cwd: GATE_NEEDS[id][0]?.from ?? '.', args: [] }));
   const r = envStep({ root, gates });
   for (const text of [r.fail, ...r.others].filter(Boolean)) process.stdout.write(`${text}\n`);
   if (r.note) process.stdout.write(`NOTE ${r.note}\n`);
