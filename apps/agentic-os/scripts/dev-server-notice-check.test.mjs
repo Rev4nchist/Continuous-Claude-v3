@@ -25,7 +25,7 @@ const HALF_A = 'known security vul';
 const HALF_B = 'nerability';
 const serve = (status) => http.createServer((q, r) => { r.statusCode = status; r.end('x'); }).listen(port, '127.0.0.1');
 if (mode === 'never') process.exit(0);
-if (mode === 'status500') serve(500);
+if (mode === 'status503') serve(503);
 if (mode === 'clean') serve(200);
 if (mode === 'notice_one') { serve(200); process.stdout.write('warn: known security vulnerability\\n'); }
 if (mode === 'split_chunks') { serve(200); process.stdout.write(HALF_A); setTimeout(() => process.stdout.write(HALF_B + '\\n'), 400); }
@@ -73,10 +73,16 @@ test('N1 the dev server never starts: exit 3, the last line says it stopped befo
   assert.match(r.last, /proof: missing: dev server stopped before the end/);
 });
 
-test('N2 the server answers 500 only: exit 3, the last line says no request returned 200', async () => {
-  const r = await runCheck('status500', await freePort());
+test('N2 the server stays up but never answers a request: exit 3, the last line says no request got an HTTP answer', async () => {
+  const r = await runCheck('mute', await freePort());
   assert.equal(r.code, 3, r.last);
-  assert.match(r.last, /proof: missing: no request returned 200/);
+  assert.match(r.last, /proof: missing: no request got an HTTP answer/);
+});
+
+test('N2b the server answers 503 (the real answer with the closed database url): that is proof, exit 0', async () => {
+  const r = await runCheck('status503', await freePort());
+  assert.equal(r.code, 0, r.last);
+  assert.match(r.last, /proof: ok/);
 });
 
 test('N3 the notice in one chunk: exit 1', async () => {
