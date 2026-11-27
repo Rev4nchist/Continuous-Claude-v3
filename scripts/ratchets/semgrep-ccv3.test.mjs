@@ -323,6 +323,19 @@ test('SG15: a file over 1,000,000 bytes is scanned: a finding in it fails the ru
   writeFileSync(baseline, JSON.stringify({ tool: 'semgrep', reason: 'test', total: 0, counts: {} }));
   const lines = [];
   const code = main(['--root', root], { log: (s) => lines.push(String(s)), baseline, tmp: () => dir });
+  assertFindings({ code, lines });
+});
+
+// Card coord-followups-1127, item 3: the PR 765 CLI minor. A scan-error in big.mjs gives exit 1 and a line with the file name too, so a check of
+// exit 1 and the name alone cannot tell "the file was scanned and found" from "the file was never scanned".
+// SG15b feeds the shared check a run whose only result is a scan-error in big.mjs. It must refuse that run. It runs in CI, where SG15 skips.
+function assertFindings({ code, lines }) {
   assert.equal(code, 1, `a finding in a file over the default size limit must fail the run:\n${lines.join('\n')}`);
   assert.ok(lines.some((l) => l.includes('big.mjs')), lines.join('\n'));
+}
+
+test('SG15b: the SG15 check refuses a run whose only result is a scan-error in the big file', () => {
+  const h = harness({ spawn: ok(JSON.stringify({ results: [], errors: [timeoutError('scripts/big.mjs')] })) });
+  const code = main([], h.deps);
+  assert.throws(() => assertFindings({ code, lines: h.lines }), assert.AssertionError, 'a scan-error is not a finding: the check must not pass it');
 });

@@ -54,7 +54,12 @@ const argv = process.argv.slice(2);
 fs.appendFileSync(path.join(dir, 'calls.jsonl'), JSON.stringify(argv) + '\\n');
 const to = argv[argv.indexOf('--to') + 1];
 const fail = (process.env.FAKE_SAY_FAIL || '').split(',').filter(Boolean);
-if (fail.includes(to)) { console.error('not confirmed: fake failure'); process.exit(1); }
+if (process.env.FAKE_SAY_SLEEP) await new Promise((r) => setTimeout(r, Number(process.env.FAKE_SAY_SLEEP)));
+if (fail.includes(to)) {
+  const code = Number(process.env.FAKE_SAY_EXIT || 1);
+  console.error(code === 1 ? 'not confirmed: fake failure' : 'fake hard failure');
+  process.exit(code);
+}
 console.log('sent to ' + to);
 `;
 const FAKE_SCAN = `
@@ -274,7 +279,7 @@ describe('W8 the log', () => {
 describe('W9 a failed say', () => {
   it('exits 1, names the failed receiver, marks it in the log, and still prints the scanned text', () => {
     const c = newCase('Two receivers at TIME.\n');
-    const r = run(c, ['--file', c.file, '--to', 'alpha', '--to', 'beta', '--lane', 'coord-clock-send', '--log', c.logFile], { FAKE_SAY_FAIL: 'beta' });
+    const r = run(c, ['--file', c.file, '--to', 'alpha', '--to', 'beta', '--lane', 'coord-clock-send', '--log', c.logFile], { FAKE_SAY_FAIL: 'beta', FAKE_SAY_EXIT: '3' });
     assert.equal(r.code, 1);
     assert.match(r.err, /beta/);
     assert.match(r.err, /alpha/);
@@ -366,4 +371,59 @@ describe('W13 bad flags', () => {
       assert.equal(callsOf(c).length, 0);
     });
   }
+});
+
+// Card coord-followups-1127. W16 to W19 and W21 fail on main 5e496be1.
+//   W16  a say that exits 1 ("not confirmed", lane.mjs M4.1) -> stderr and log say UNCONFIRMED and that the DM may already be on the board, not FAILED
+//   W17  a say that exits with another code                   -> stays FAILED (guards the split)
+//   W18  17000 double quotes (17 KB raw, over 32000 units once Windows escapes each quote) -> exit 2, "command line", nothing sent
+//   W19  20000 backslashes then a quote (the backslashes double before the quote)           -> exit 2, nothing sent
+//   W21  a say that outlives the say timeout                  -> UNCONFIRMED (the insert may have run), not FAILED
+describe('W16 a say that exits 1 is unconfirmed, not failed', () => {
+  it('names the receiver as unconfirmed on stderr and in the log, and says it may already be on the board', () => {
+    const c = newCase('Two receivers at TIME.\n');
+    const r = run(c, ['--file', c.file, '--to', 'alpha', '--to', 'beta', '--lane', 'coord-clock-send', '--log', c.logFile], { FAKE_SAY_FAIL: 'beta' });
+    assert.equal(r.code, 1);
+    assert.match(r.err, /unconfirmed/i);
+    assert.match(r.err, /already be on the board/i);
+    const log = fs.readFileSync(c.logFile, 'utf8');
+    assert.match(log, /UNCONFIRMED: beta/);
+    assert.doesNotMatch(log, /FAILED: beta/);
+    assert.equal(printedText(r.out), 'Two receivers at 14:06 CST.\n');
+  });
+});
+
+describe('W17 a say that exits with another code stays failed', () => {
+  it('says failed on stderr and FAILED in the log, not unconfirmed', () => {
+    const c = newCase('One receiver at TIME.\n');
+    const r = run(c, ['--file', c.file, '--to', 'beta', '--lane', 'coord-clock-send', '--log', c.logFile], { FAKE_SAY_FAIL: 'beta', FAKE_SAY_EXIT: '3' });
+    assert.equal(r.code, 1);
+    assert.match(r.err, /say failed for beta/);
+    const log = fs.readFileSync(c.logFile, 'utf8');
+    assert.match(log, /FAILED: beta/);
+    assert.doesNotMatch(log, /UNCONFIRMED/);
+  });
+});
+
+describe('W18 and W19 the length limit counts the command line as Windows escapes it', () => {
+  for (const [name, body] of [['17000 double quotes', '"'.repeat(17000)], ['20000 backslashes then a quote', `${'\\'.repeat(20000)}"`]]) {
+    it(`refuses ${name} with exit 2 and sends nothing`, () => {
+      const c = newCase(`${body} at TIME.\n`);
+      const r = run(c, baseArgs(c));
+      assert.equal(r.code, 2, r.err.slice(0, 300));
+      assert.match(r.err, /command line/i);
+      assert.equal(callsOf(c).length, 0);
+      assert.equal(fs.existsSync(c.logFile), false);
+    });
+  }
+});
+
+describe('W21 a say that outlives the say timeout is unconfirmed', () => {
+  it('reports UNCONFIRMED, since the insert may have run', () => {
+    const c = newCase('Slow say at TIME.\n');
+    const r = run(c, baseArgs(c), { FAKE_SAY_SLEEP: '3000', SEND_WORD_SAY_TIMEOUT_MS: '500' });
+    assert.equal(r.code, 1, r.err.slice(0, 300));
+    assert.match(r.err, /unconfirmed/i);
+    assert.match(fs.readFileSync(c.logFile, 'utf8'), /UNCONFIRMED: alpha/);
+  });
 });
