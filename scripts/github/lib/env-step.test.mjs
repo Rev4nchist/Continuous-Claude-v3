@@ -10,6 +10,9 @@
  *   V7 childEnv                               breaks if NODE_PATH misses the primary, replaces the old value, or is set in the primary
  *   V8 envPrefix                              breaks if a missing relative import is called ENV, or a missing package is not
  *   V9 a gate with no need is untouched       breaks if gates not in GATE_NEEDS get blocked
+ *   V10 app gates need the app install        breaks if a bare worktree runs the lint or typecheck gate, or the ENV line misses the lockfile install
+ *   V11 the hooks store is no app install      breaks if typescript or eslint found up the walk (the shared store) satisfies an app gate
+ *   V12 an app install is quiet               breaks if a worktree or the primary with the app packages still gets a line
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,7 +28,7 @@ const made = [];
 test.after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 
 /** A primary with one commit and a bare nested worktree. The primary's hooks has a full fake install unless `install` is false. */
-function fakeRepo({ install = true, lock = '{"v":1}\n', typescript = '7.0.2' } = {}) {
+function fakeRepo({ install = true, lock = '{"v":1}\n', typescript = '7.0.2', app = false } = {}) {
   const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'envstep-')));
   made.push(root);
   const primary = path.join(root, 'primary');
@@ -46,6 +49,7 @@ function fakeRepo({ install = true, lock = '{"v":1}\n', typescript = '7.0.2' } =
     put(path.join(hooks, 'node_modules', '.bin', 'esbuild.cmd'), '@echo off\r\n');
     put(path.join(hooks, 'node_modules', '.bin', 'tsc'), '#!/bin/sh\n');
     put(path.join(hooks, 'node_modules', '.bin', 'tsc.cmd'), '@echo off\r\n');
+    if (app) for (const pkg of ['next', 'eslint-config-next']) put(path.join(primary, 'apps', 'agentic-os', 'node_modules', pkg, 'package.json'), JSON.stringify({ name: pkg, version: '1.0.0' }));
     put(path.join(primary, 'node_modules', '@playwright', 'test', 'package.json'), '{"name":"@playwright/test","version":"1.0.0"}');
     put(path.join(primary, 'node_modules', '@playwright', 'test', 'cli.js'), '// cli\n');
   }
@@ -55,7 +59,7 @@ function fakeRepo({ install = true, lock = '{"v":1}\n', typescript = '7.0.2' } =
 }
 
 const gate = (id, cwd = '.', args = []) => ({ id, cmd: 'node', args, cwd, timeoutMs: 1000 });
-const ALL = () => Object.keys(GATE_NEEDS).map((id) => gate(id, id.startsWith('hooks-') ? '.claude/hooks' : '.'));
+const ALL = () => Object.keys(GATE_NEEDS).map((id) => gate(id, id.startsWith('hooks-') ? '.claude/hooks' : id.startsWith('agentic-os-') ? 'apps/agentic-os' : '.'));
 
 test('V1: a bare worktree names the missing esbuild bin and vitest, and blocks those gates only', () => {
   const r = fakeRepo();
@@ -80,12 +84,13 @@ test('V1b: a bare worktree names the missing tsc bin and blocks hooks-tsc', () =
 });
 
 test('V2: the primary, and a worktree with its own install, add no line', () => {
-  const r = fakeRepo();
+  const r = fakeRepo({ app: true });
   const inPrimary = envStep({ root: r.primary, gates: ALL() });
   assert.equal(inPrimary.fail, null, inPrimary.fail);
   assert.equal(inPrimary.blocked.size, 0);
   assert.equal(inPrimary.note, null);
-  // A worktree with its own complete install of hooks.
+  // A worktree with its own complete install of hooks and of the app.
+  for (const pkg of ['next', 'eslint-config-next']) put(path.join(r.wt, 'apps', 'agentic-os', 'node_modules', pkg, 'package.json'), '{}');
   put(path.join(r.wtHooks, 'node_modules', '.package-lock.json'), '{}\n');
   for (const pkg of ['vitest', 'pg', 'typescript']) put(path.join(r.wtHooks, 'node_modules', pkg, 'package.json'), '{}');
   put(path.join(r.wtHooks, 'node_modules', '.bin', 'esbuild.cmd'), '@echo off\r\n');
@@ -188,4 +193,38 @@ test('V9: a gate that is not in GATE_NEEDS is never blocked', () => {
   const out = envStep({ root: r.wt, gates: [gate('context-budget'), gate('coordination-tests'), gate('audit-skills')] });
   assert.equal(out.fail, null);
   assert.equal(out.blocked.size, 0);
+});
+
+const APP = 'apps/agentic-os';
+const appGates = () => [gate('agentic-os-lint', APP), gate('agentic-os-typecheck', APP)];
+
+test('V10: a bare worktree blocks both app gates with ONE ENV line that says a lockfile npm ci in this worktree fixes it', () => {
+  const r = fakeRepo();
+  const out = envStep({ root: r.wt, gates: appGates(), nodePath: '' });
+  assert.match(out.fail, /^ENV: agentic-os-lint needs eslint-config-next\. Tried /);
+  assert.ok(out.fail.includes(path.join(r.wt, APP, 'node_modules')), 'names the own app folder it tried');
+  assert.match(out.fail, /This is the environment, not your change\. Fix: .*npm ci --ignore-scripts.*lockfile.*apps\/agentic-os.*this worktree/);
+  assert.ok(!/shared-deps/.test(out.fail), 'the hooks store hint does not apply to the app');
+  assert.equal(out.others.length, 1);
+  assert.match(out.others[0], /^ENV: agentic-os-typecheck needs next\./);
+  assert.deepEqual([...out.blocked].sort(), ['agentic-os-lint', 'agentic-os-typecheck']);
+});
+
+test('V11: the hooks packages up the walk (the shared store link) do not satisfy an app gate', () => {
+  const r = fakeRepo();
+  const store = path.join(r.primary, '.claude', 'worktrees', 'node_modules');
+  for (const pkg of ['typescript', 'eslint', 'vitest']) put(path.join(store, pkg, 'package.json'), JSON.stringify({ name: pkg }));
+  put(path.join(store, '.bin', 'tsc'), '#!/bin/sh\n');
+  put(path.join(store, '.bin', 'tsc.cmd'), '@echo off\r\n');
+  const out = envStep({ root: r.wt, gates: appGates(), nodePath: '' });
+  assert.deepEqual([...out.blocked].sort(), ['agentic-os-lint', 'agentic-os-typecheck']);
+});
+
+test('V12: a worktree with its own app install, and the primary, add no line for the app gates', () => {
+  const r = fakeRepo({ app: true });
+  assert.equal(envStep({ root: r.primary, gates: appGates() }).fail, null);
+  for (const pkg of ['next', 'eslint-config-next']) put(path.join(r.wt, APP, 'node_modules', pkg, 'package.json'), JSON.stringify({ name: pkg }));
+  const own = envStep({ root: r.wt, gates: appGates(), nodePath: '' });
+  assert.equal(own.fail, null, own.fail);
+  assert.equal(own.blocked.size, 0);
 });
