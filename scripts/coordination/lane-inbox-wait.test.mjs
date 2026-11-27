@@ -255,6 +255,17 @@ describe('inbox --wait: the time limit and the flags', () => {
     }
   });
 
+  it('W6b: the equals form of --timeout is a usage error, exit 1, before any query (it must not fall back to the 600 s default)', () => {
+    const c = newCase('w6b');
+    const dead = { CONTINUOUS_CLAUDE_DB_URL: 'postgresql://nobody:x@127.0.0.1:1/none', DATABASE_URL: 'postgresql://nobody:x@127.0.0.1:1/none', OPC_POSTGRES_URL: 'postgresql://nobody:x@127.0.0.1:1/none' };
+    for (const form of ['--timeout=5', '--timeout=', '--timeout=0', '--timeout=3601']) {
+      const r = lane(c, ['inbox', '--wait', form], { extra: dead });
+      assert.equal(r.code, 1, `${form}: exit ${r.code} ${r.err}`);
+      assert.match(r.err, /usage/i, `${form}: ${r.err}`);
+      assert.equal(r.out, '');
+    }
+  });
+
   it('W9: --as is accepted for --wait (a read verb) and a write verb is still refused', () => {
     const c = newCase('w9');
     const other = randomUUID();
