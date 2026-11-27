@@ -944,3 +944,55 @@ test('SG4: the real gather path with a bad checkout file and a fork/main cap of 
     assert.doesNotMatch(q, /The USD flag lifts nothing without a cap/, 'cr-fix has a cap, so the USD flag acts for it');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- card tooling-quick-wins-1127, fix 1: an answer the hook must record is never asked without --json ----
+// Fault: PR 759 (2026-11-27). The text form joins header and question ("Land: Why: ..."). The AskUserQuestion hook records a tap only on the
+// exact stored spec, so a text-form ask recorded nothing and the land refused. Without --json the script now refuses and writes no offer.
+const NO_JSON_STEPS = [
+  ['land', '--pr', '5'], ['paid-round', '--pr', '5'], ['open-pr', '--branch', 'feat/x'], ['commit-and-push', '--branch', 'feat/x'],
+  ['cli-skip', '--branch', 'feat/x'], ['cap-override', '--branch', 'feat/x', '--extra-run'],
+];
+
+test('SX1: every step without --json exits 2 with one line that says to pass --json, and writes no offer', async () => {
+  const d = await loadStore();
+  for (const args of NO_JSON_STEPS) {
+    const r = run(args, { facts: LAND });
+    assert.equal(r.status, 2, `${args[0]}: ${r.stdout}${r.stderr}`);
+    assert.equal(r.stdout, '', `${args[0]}: nothing printed to stdout`);
+    const lines = r.stderr.trim().split(/\r?\n/);
+    assert.equal(lines.length, 1, `${args[0]}: one line on stderr`);
+    assert.match(lines[0], /pass --json/);
+    process.env.CCV3_DECISIONS_FILE = r.storeFile;
+    assert.deepEqual(d.offerList(), [], `${args[0]}: no offer written`);
+  }
+});
+
+test('SX2: --text prints the human text, writes no offer, and its last line says no tap can be recorded from it', async () => {
+  const d = await loadStore();
+  const r = run(['land', '--pr', '349', '--text'], { facts: LAND });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^Land: /m, 'the text form is printed');
+  const lines = r.stdout.trim().split(/\r?\n/);
+  assert.match(lines[lines.length - 1], /no tap can be recorded from this text/);
+  process.env.CCV3_DECISIONS_FILE = r.storeFile;
+  assert.deepEqual(d.offerList(), [], 'a text view writes no offer');
+});
+
+test('SX3: --text and --json together are a usage error (exit 2) and write no offer', async () => {
+  const d = await loadStore();
+  const r = run(['land', '--pr', '349', '--json', '--text'], { facts: LAND });
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /--text and --json/);
+  process.env.CCV3_DECISIONS_FILE = r.storeFile;
+  assert.deepEqual(d.offerList(), []);
+});
+
+test('SX4: --json is unchanged: it prints the spec as one JSON object and writes the offer', async () => {
+  const d = await loadStore();
+  const r = run(['land', '--pr', '349', '--json'], { facts: LAND });
+  assert.equal(r.status, 0, r.stderr);
+  const spec = JSON.parse(r.stdout);
+  assert.deepEqual(Object.keys(spec), ['header', 'question', 'options']);
+  process.env.CCV3_DECISIONS_FILE = r.storeFile;
+  assert.equal(d.offerList().length, 1);
+});
