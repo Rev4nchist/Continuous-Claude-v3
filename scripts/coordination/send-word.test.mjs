@@ -450,10 +450,18 @@ describe('W22 the count quotes an argument only on a space, a tab or a double qu
   it('the real spawn takes a plain token with newlines up to the counted limit and refuses one unit more', { skip: onWindows ? false : 'the Windows command line limit' }, async () => {
     const { escapedUnits } = await import(pathToFileURL(SEND).href);
     const head = [process.execPath, '-e', '0'];
-    const tokenOf = (len) => `${'x'.repeat(len - 2)}
-
-`;
-    const spawns = (len) => spawnSync(head[0], [...head.slice(1), tokenOf(len)], { encoding: 'utf8' }).status === 0;
+    const tokenOf = (len) => `${'x'.repeat(len - 2)}\n\n`;
+    // A token counts as too long only for the command line length error Windows gives (ENAMETOOLONG on this machine). Any other spawn error or a
+    // non-zero exit (a spawn that fails under load) throws with its code, so the bisection never lands low for a wrong reason.
+    const spawns = (len) => {
+      const r = spawnSync(head[0], [...head.slice(1), tokenOf(len)], { encoding: 'utf8' });
+      if (r.error) {
+        if (r.error.code === 'ENAMETOOLONG') return false;
+        throw new Error(`the spawn failed with ${r.error.code}, not the command line length error`);
+      }
+      if (r.status !== 0) throw new Error(`the spawn exited with ${r.status} (signal ${r.signal})`);
+      return true;
+    };
     let lo = 3; let hi = 40000; // lo spawns, hi does not
     assert.ok(spawns(lo) && !spawns(hi));
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (spawns(mid)) lo = mid; else hi = mid; }
