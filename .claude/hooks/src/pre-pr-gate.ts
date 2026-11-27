@@ -135,7 +135,7 @@ export interface Deps {
   decisionUse?: (t: { step: Step; key: string; head: string; label?: string }) => { ok: boolean };
 }
 
-/** The tap of `ship-ask.mjs cli-skip` that opens a flag skip. The recommended option carries a suffix (ship-ask opt()). Anchored: no other text. */
+/** The tap of `ship-ask.mjs cli-skip --json` that opens a flag skip. The recommended option carries a suffix (ship-ask opt()). Anchored: no other text. */
 export const CLI_SKIP_LABEL = /^Skip the CLI review for this head(?: \(Recommended\))?$/;
 /** What handle() knows about an error beyond its message: the error's `code` and the payload `cwd`. Both can be absent. */
 export interface ErrorContext { code?: string; cwd?: string }
@@ -882,7 +882,7 @@ export function handle(raw: string, deps: Deps): string {
       const used = deps.decisionUse?.({ step: 'cli-skip', key: d.usedCliSkip.key, head: d.usedCliSkip.head, label: d.usedCliSkip.label });
       if (used?.ok !== true) {
         logGuardDecision(HOOK, input, 'deny', 'cli-skip-not-used', { command });
-        return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'BLOCKED (pre-pr-gate): Dave\'s cli-skip decision for this branch and head could not be used up (the decision store was busy or the decision is gone). Run the command again. If it keeps failing, ask Dave with node scripts/github/ship-ask.mjs cli-skip --branch <branch>.' } });
+        return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'BLOCKED (pre-pr-gate): Dave\'s cli-skip decision for this branch and head could not be used up (the decision store was busy or the decision is gone). Run the command again. If it keeps failing, ask Dave with node scripts/github/ship-ask.mjs cli-skip --branch <branch> --json.' } });
       }
     }
     if (d.action !== 'deny') return '{}';

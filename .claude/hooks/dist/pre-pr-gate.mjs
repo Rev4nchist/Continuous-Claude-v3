@@ -1723,7 +1723,7 @@ The stamp comes from: ${RUN}`;
       const used = deps.decisionUse?.({ step: "cli-skip", key: d.usedCliSkip.key, head: d.usedCliSkip.head, label: d.usedCliSkip.label });
       if (used?.ok !== true) {
         logGuardDecision(HOOK, input, "deny", "cli-skip-not-used", { command });
-        return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "BLOCKED (pre-pr-gate): Dave's cli-skip decision for this branch and head could not be used up (the decision store was busy or the decision is gone). Run the command again. If it keeps failing, ask Dave with node scripts/github/ship-ask.mjs cli-skip --branch <branch>." } });
+        return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "BLOCKED (pre-pr-gate): Dave's cli-skip decision for this branch and head could not be used up (the decision store was busy or the decision is gone). Run the command again. If it keeps failing, ask Dave with node scripts/github/ship-ask.mjs cli-skip --branch <branch> --json." } });
       }
     }
     if (d.action !== "deny") return "{}";
