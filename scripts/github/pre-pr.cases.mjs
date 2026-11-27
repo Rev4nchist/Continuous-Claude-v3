@@ -21,6 +21,10 @@
 //   - the test-scripts constant names a file that is gone or not in test:scripts, or names one twice              -> WS2
 //   - a new test:scripts name is in no gate (neither the constant nor a CI step)                                     -> WS3
 //   - the dead trex-tests gate comes back, or the trex surface loses its manual note                                 -> GW4b
+//   - an app file changes and agentic-os-lint or agentic-os-typecheck does not run, or runs for drizzle or outside   -> AO1, AO2
+//   - a new code folder in apps/agentic-os is owned by no app gate                                                   -> AO3
+//   - the CI job agentic-os and the two app gates drift apart (command, folder, limit)                               -> AO4
+//   - a top-level app file of a code extension (tsx, js, cjs, mts, cts) runs no app gate                             -> AO5
 // summaryLine
 //   - the first line is taken, not the runner's summary                        -> M1, M2
 // Git preconditions
@@ -5071,4 +5075,67 @@ test('PFL10: a GREEN line that a clean merge of main made stale is a NOTE, not a
   assert.match(ev.detail, /the run settles a stale GREEN line after its gates/);
   assert.equal(run.result.ok, true, run.result.lines.join('\n'));
   assert.equal(readFileSync(bodyPath, 'utf8'), text, 'a preflight leaves the body file alone');
+});
+
+// ---------- card agentic-os-app-gate: lint and typecheck of apps/agentic-os before the PR ----------
+
+const APP_DIR = 'apps/agentic-os';
+const APP_GATE_IDS = ['agentic-os-lint', 'agentic-os-typecheck'];
+const appGatesFor = (paths) => gatesFor(paths, REPO_ROOT).filter((g) => APP_GATE_IDS.includes(g.id));
+
+test('AO1: a change to an app source, test, script or config file runs agentic-os-lint and agentic-os-typecheck, with the commands, folder and limits of the CI job', async () => {
+  for (const p of [`${APP_DIR}/src/server/queries/sessions.ts`, `${APP_DIR}/e2e/fleet-parsed-asks.spec.ts`, `${APP_DIR}/scripts/anything.mjs`, `${APP_DIR}/eslint.config.mjs`,
+    `${APP_DIR}/tsconfig.json`, `${APP_DIR}/package.json`, `${APP_DIR}/package-lock.json`, `${APP_DIR}/next.config.ts`]) {
+    assert.deepEqual(appGatesFor([p]).map((g) => g.id).sort(), APP_GATE_IDS, p);
+  }
+  const [lint, typecheck] = ['agentic-os-lint', 'agentic-os-typecheck'].map((id) => appGatesFor([`${APP_DIR}/src/x.ts`]).find((g) => g.id === id));
+  assert.equal(lint.cmd, 'npm');
+  assert.deepEqual(lint.args, ['run', 'lint']);
+  assert.equal(typecheck.cmd, 'npm');
+  assert.deepEqual(typecheck.args, ['run', 'typecheck']);
+  for (const g of [lint, typecheck]) {
+    assert.equal(g.cwd, APP_DIR, g.id);
+    assert.equal(g.timeoutMs, 5 * 60 * 1000, `${g.id}: the CI step limit is 5 minutes`);
+  }
+  assert.ok(!gatesFor([`${APP_DIR}/src/x.ts`], REPO_ROOT).some((g) => /build/.test(g.id) && g.cwd === APP_DIR), 'next build stays out of pre-pr: it writes .next, fetches a font, and CI keeps it');
+});
+
+test('AO2: a drizzle file, an app note or a file outside the app does not run the app gates', async () => {
+  for (const p of [`${APP_DIR}/drizzle/0001_flaky_proemial_gods.sql`, `${APP_DIR}/drizzle/meta/_journal.json`, `${APP_DIR}/AGENTS.md`, 'scripts/github/review-status.mjs',
+    '.claude/hooks/src/pre-pr-gate.ts', 'docs/coordination/standard.md']) {
+    assert.deepEqual(appGatesFor([p]), [], p);
+  }
+});
+
+test('AO3: every tracked code file of the app outside drizzle runs the app gates (a new folder in the app is owned the day it appears)', async () => {
+  const tracked = execFileSync('git', ['-C', REPO_ROOT, 'ls-files', '--', APP_DIR], { encoding: 'utf8', windowsHide: true }).split('\n').filter(Boolean)
+    .filter((f) => /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|json|css)$/.test(f) && !f.startsWith(`${APP_DIR}/drizzle/`));
+  assert.ok(tracked.length > 50, `the app has tracked code files (got ${tracked.length})`);
+  const missed = tracked.filter((f) => appGatesFor([f]).length !== APP_GATE_IDS.length);
+  assert.deepEqual(missed, [], `files that run no app gate: ${missed.slice(0, 5).join(', ')}`);
+});
+
+test('AO4: the CI job agentic-os runs the same commands, in the same folder, with the same limits as the two pre-pr gates', async () => {
+  // A Windows checkout has CRLF (autocrlf): fold it, so the step text matches on both systems.
+  const wf = readFileSync(path.join(REPO_ROOT, '.github/workflows/ccv3-checks.yml'), 'utf8').replace(/\r\n/g, '\n');
+  const start = wf.indexOf('\n  agentic-os:');
+  assert.ok(start >= 0, 'the workflow has the agentic-os job');
+  const job = wf.slice(start + 1);
+  for (const [stepName, id] of [['agentic-os lint', 'agentic-os-lint'], ['agentic-os typecheck', 'agentic-os-typecheck']]) {
+    const at = job.indexOf(`- name: ${stepName}\n`);
+    assert.ok(at >= 0, `the job has the step ${stepName}`);
+    const step = job.slice(at, job.indexOf('\n      - name:', at + 1) < 0 ? undefined : job.indexOf('\n      - name:', at + 1));
+    const gate = appGatesFor([`${APP_DIR}/src/x.ts`]).find((g) => g.id === id);
+    assert.ok(gate, id);
+    assert.ok(step.includes(`working-directory: ${gate.cwd}`), `${id}: CI folder is ${gate.cwd}`);
+    assert.ok(step.includes(`run: ${gate.cmd} ${gate.args.join(' ')}`), `${id}: CI runs ${gate.cmd} ${gate.args.join(' ')}`);
+    assert.ok(step.includes(`timeout-minutes: ${gate.timeoutMs / 60000}`), `${id}: CI limit is ${gate.timeoutMs / 60000} minutes`);
+  }
+});
+
+test('AO5: a top-level app file with any code extension (ts, tsx, js, cjs, mjs, mts, cts, json) runs both app gates; a note or a stylesheet does not', async () => {
+  for (const ext of ['ts', 'tsx', 'js', 'cjs', 'mjs', 'mts', 'cts', 'json']) {
+    assert.deepEqual(appGatesFor([`${APP_DIR}/top-level-file.${ext}`]).map((g) => g.id).sort(), APP_GATE_IDS, ext);
+  }
+  for (const ext of ['md', 'css']) assert.deepEqual(appGatesFor([`${APP_DIR}/top-level-file.${ext}`]), [], ext);
 });

@@ -342,6 +342,21 @@ export const SURFACES = [
     // The pure config needs no server, database or browser. It needs root node_modules: run npm ci --ignore-scripts first.
     gates: [nodeGate('scrub-invariant', 'node_modules/@playwright/test/cli.js', ['test', '--config', 'apps/agentic-os/playwright.pure.config.ts', '--reporter=line'])],
   },
+  // Card agentic-os-app-gate: the lint and the typecheck of the CI job agentic-os, run here so a lint or type error shows before the PR. Same commands,
+  // folder and 5 minute limits as the CI steps (case AO4 compares them). `next build` stays out: it writes .next (a running Fleet app may use it),
+  // it fetches a font over the network, and CI keeps it. The drizzle folder has its own surface (coordination-db). A worktree needs its own install
+  // of the app: the ENV step (lib/env-step.mjs) says `npm ci --ignore-scripts` from the lockfile when it is missing. Case AO3 keeps every code file owned
+  // that exists today. A NEW top-level folder in the app is not matched here (matchGlob has no exclude, so `apps/agentic-os/**` would take drizzle):
+  // the CI job agentic-os still covers it, and AO3 fails in github-tests until a glob is added.
+  {
+    id: 'agentic-os-app',
+    globs: ['apps/agentic-os/src/**', 'apps/agentic-os/e2e/**', 'apps/agentic-os/scripts/**', 'apps/agentic-os/*.ts', 'apps/agentic-os/*.tsx', 'apps/agentic-os/*.js',
+      'apps/agentic-os/*.cjs', 'apps/agentic-os/*.mjs', 'apps/agentic-os/*.mts', 'apps/agentic-os/*.cts', 'apps/agentic-os/*.json'],
+    gates: [
+      { id: 'agentic-os-lint', cmd: 'npm', args: ['run', 'lint'], cwd: 'apps/agentic-os', timeoutMs: 5 * MIN },
+      { id: 'agentic-os-typecheck', cmd: 'npm', args: ['run', 'typecheck'], cwd: 'apps/agentic-os', timeoutMs: 5 * MIN },
+    ],
+  },
   { id: 'checks-scripts', globs: ['scripts/checks/**'], gates: [{ id: 'checks-tests', cmd: 'node', args: ['--test', ...CHECKS_TESTS], cwd: '.', timeoutMs: 10 * MIN }, nodeTest('test-map-tests', 'scripts/checks/test-map.test.mjs')] },
   // The deterministic catchers (cli-smoke and parser-fixtures block; tsc and mapped tests are facts). The `{base}` token is
   // replaced by withBase() in runPrePr. The facts file is the --facts input of local-review.mjs.
