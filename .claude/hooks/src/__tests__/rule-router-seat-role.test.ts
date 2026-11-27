@@ -102,3 +102,21 @@ describe('CLI findings 1 and 2: the card is for the holder only and names the in
     expect(bare).toEqual([]);
   });
 });
+
+// Card coord-land-hold-probe: LAND HOLD is retired (Dave's tap A1, 2026-11-27). Evidence: .claudedocs/e2e-coord-land-hold-probe/verdict.md.
+// A rule that names a hold that no longer exists sends a builder or the seat to wait for a word nobody sends.
+describe('LAND HOLD is retired: no live rule names it', () => {
+  const ROOT = join(CLAUDE, '..');
+  const read = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8');
+  it('the full seat card and the short card do not send or wait on a hold', () => {
+    expect(read('.claude/rules-ondemand/seat-role.md')).not.toMatch(/LAND HOLD|send a hold|A hold stops/);
+  });
+  it('the night-wrap skill does not tell a session to close a hold', () => {
+    expect(read('.claude/skills/night-wrap/SKILL.md')).not.toMatch(/LAND HOLD/);
+  });
+  it('the rule text of V7.3, V7.4 and V7.11 (standard and lane-board) holds no live hold step', () => {
+    for (const rel of ['docs/coordination/standard.md', '.claude/rules-ondemand/lane-board.md']) {
+      expect(read(rel)).not.toMatch(/sends `LAND HOLD|A LAND HOLD stops|needs no LAND HOLD/);
+    }
+  });
+});
