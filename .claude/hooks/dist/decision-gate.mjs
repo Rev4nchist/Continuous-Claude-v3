@@ -883,20 +883,20 @@ function holdoutIdsOf(ds, cfg) {
   const reserved = new Set((cfg?.reserve ?? []).map((r) => r?.pr));
   const excluded = new Set(cfg?.holdoutExclude ?? []);
   const inHoldout = (pr) => !reserved.has(pr) && !excluded.has(pr);
-  const out4 = /* @__PURE__ */ new Set();
-  for (const p of ds?.prs ?? []) if (inHoldout(p?.pr)) out4.add(String(p.pr));
+  const out5 = /* @__PURE__ */ new Set();
+  for (const p of ds?.prs ?? []) if (inHoldout(p?.pr)) out5.add(String(p.pr));
   for (const f of ds?.findings ?? []) {
     if (!inHoldout(f?.pr)) continue;
-    out4.add(String(f.pr));
+    out5.add(String(f.pr));
     if (f.comment_id !== void 0 && f.comment_id !== null) {
-      out4.add(String(f.comment_id));
-      out4.add(`${f.pr}:${f.comment_id}`);
+      out5.add(String(f.comment_id));
+      out5.add(`${f.pr}:${f.comment_id}`);
     }
-    if (typeof f.round === "string" && /^[0-9a-f]{7,40}$/i.test(f.round)) out4.add(f.round.toLowerCase());
+    if (typeof f.round === "string" && /^[0-9a-f]{7,40}$/i.test(f.round)) out5.add(f.round.toLowerCase());
   }
-  out4.delete("undefined");
-  out4.delete("null");
-  return [...out4];
+  out5.delete("undefined");
+  out5.delete("null");
+  return [...out5];
 }
 var CONTEXT = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 function countIdsIn(text, ids) {
@@ -1398,20 +1398,20 @@ function holdoutIdsOf2(ds, cfg) {
   const reserved = new Set((cfg?.reserve ?? []).map((r) => r?.pr));
   const excluded = new Set(cfg?.holdoutExclude ?? []);
   const inHoldout = (pr) => !reserved.has(pr) && !excluded.has(pr);
-  const out4 = /* @__PURE__ */ new Set();
-  for (const p of ds?.prs ?? []) if (inHoldout(p?.pr)) out4.add(String(p.pr));
+  const out5 = /* @__PURE__ */ new Set();
+  for (const p of ds?.prs ?? []) if (inHoldout(p?.pr)) out5.add(String(p.pr));
   for (const f of ds?.findings ?? []) {
     if (!inHoldout(f?.pr)) continue;
-    out4.add(String(f.pr));
+    out5.add(String(f.pr));
     if (f.comment_id !== void 0 && f.comment_id !== null) {
-      out4.add(String(f.comment_id));
-      out4.add(`${f.pr}:${f.comment_id}`);
+      out5.add(String(f.comment_id));
+      out5.add(`${f.pr}:${f.comment_id}`);
     }
-    if (typeof f.round === "string" && /^[0-9a-f]{7,40}$/i.test(f.round)) out4.add(f.round.toLowerCase());
+    if (typeof f.round === "string" && /^[0-9a-f]{7,40}$/i.test(f.round)) out5.add(f.round.toLowerCase());
   }
-  out4.delete("undefined");
-  out4.delete("null");
-  return [...out4];
+  out5.delete("undefined");
+  out5.delete("null");
+  return [...out5];
 }
 var CONTEXT2 = /(?:#|\bPR\s*#?|\bpull\/|\bpulls\/|\bissues\/|\bpr-)\s*$/i;
 function countIdsIn3(text, ids) {
@@ -1595,15 +1595,15 @@ function inertSpans(command, tool, openHead) {
   const none = /* @__PURE__ */ new Set();
   const plain = plainSegments(command, tool);
   if (!plain) return none;
-  const out4 = /* @__PURE__ */ new Set();
+  const out5 = /* @__PURE__ */ new Set();
   for (const { from, end, masked } of plain.segs) {
     const raw = command.slice(from, end);
     if (headMatches(PLAIN_HEAD, masked, raw)) continue;
     if (openHead !== void 0 && headMatches(openHead, masked, raw)) continue;
     if (!headMatches(INERT_HEAD, masked, raw)) return none;
-    for (const [s, e] of plain.spans) if (s >= from && e <= end) out4.add(`${s}:${e}`);
+    for (const [s, e] of plain.spans) if (s >= from && e <= end) out5.add(`${s}:${e}`);
   }
-  return out4;
+  return out5;
 }
 var TEXT_HEAD = /^\s*(?:echo|printf|Write-(?:Host|Output))(?=\s|$)/i;
 var READ_HEAD = /^\s*(?:grep|cat|head|tail|Select-String|sls|Get-Content|gc|git\s+log)(?=\s|$)/i;
@@ -1647,13 +1647,13 @@ function blankInertQuotes(command, tool) {
   return blankSpans(command, inertSpans(command, "Bash"), inertSpans(command, "PowerShell"));
 }
 function blankSpans(command, bash, pwsh) {
-  let out4 = command;
+  let out5 = command;
   for (const id of bash) {
     if (!pwsh.has(id)) continue;
     const [s, e] = id.split(":").map(Number);
-    out4 = out4.slice(0, s + 1) + " ".repeat(e - s - 2) + out4.slice(e - 1);
+    out5 = out5.slice(0, s + 1) + " ".repeat(e - s - 2) + out5.slice(e - 1);
   }
-  return out4;
+  return out5;
 }
 
 // src/main-floor/shared/shell-tools.ts
@@ -1973,11 +1973,11 @@ var walkAll = (n, fn) => {
   for (const v of Object.values(n)) if (v && typeof v === "object") walkAll(v, fn);
 };
 var nodesOf = (n, types) => {
-  const out4 = [];
+  const out5 = [];
   walkAll(n, (x) => {
-    if (types.includes(x.type)) out4.push(x);
+    if (types.includes(x.type)) out5.push(x);
   });
-  return out4;
+  return out5;
 };
 var plainParam = (p) => !p.exp && !p.index && !p.repl && !p.slice && !p.names && !p.length && !p.excl && !p.width && !p.isSet && !p.flags;
 function singleVar(w) {
@@ -1999,13 +1999,13 @@ function makeBashWord(w, conv) {
   const kind = lit !== null ? "lit" : cs ? "cmdsubst" : sv ? "var" : "dyn";
   const vars = nodesOf(w, ["ParamExp"]).map((p) => p.param?.value).filter(Boolean);
   const [start, end] = [conv.c(w.start), conv.c(w.end)];
-  const out4 = { lit, kind, raw: conv.slice(w.start, w.end), start, end, vars };
+  const out5 = { lit, kind, raw: conv.slice(w.start, w.end), start, end, vars };
   if (sv) {
-    out4.var = sv.name;
-    out4.quoted = sv.quoted;
+    out5.var = sv.name;
+    out5.quoted = sv.quoted;
   }
-  if (lit === null) out4.prefix = wordPrefix(w);
-  return out4;
+  if (lit === null) out5.prefix = wordPrefix(w);
+  return out5;
 }
 function walkBash(file, text) {
   const conv = makeConv(text);
@@ -2172,7 +2172,7 @@ function stdinOf(s) {
 function runWalker(text, timeoutMs) {
   return new Promise((resolve6) => {
     const cp = spawn("pwsh", ["-NoProfile", "-NonInteractive", "-File", WALKER], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-    let out4 = "";
+    let out5 = "";
     let done = false;
     const fin = (v) => {
       if (!done) {
@@ -2187,13 +2187,13 @@ function runWalker(text, timeoutMs) {
     }, timeoutMs);
     cp.stdout.setEncoding("utf8");
     cp.stdout.on("data", (d) => {
-      out4 += d;
+      out5 += d;
     });
     cp.on("error", (e) => fin({ error: `pwsh spawn: ${e.message}` }));
     cp.on("close", (code) => {
       if (code !== 0) return fin({ error: `pwsh exit ${code}` });
       try {
-        fin({ json: JSON.parse(out4) });
+        fin({ json: JSON.parse(out5) });
       } catch {
         fin({ error: "pwsh bad json" });
       }
@@ -2234,11 +2234,11 @@ function walkPwsh(j, text) {
 }
 var OUTVAR = /^-(ov|outvariable|ev|errorvariable|iv|informationvariable|wv|warningvariable|pv|pipelinevariable)$/i;
 function outVarWrites(words) {
-  const out4 = [];
+  const out5 = [];
   words.forEach((w, i) => {
-    if (w.kind === "param" && OUTVAR.test(w.lit ?? "") && words[i + 1]) out4.push(words[i + 1].lit ?? words[i + 1].raw);
+    if (w.kind === "param" && OUTVAR.test(w.lit ?? "") && words[i + 1]) out5.push(words[i + 1].lit ?? words[i + 1].raw);
   });
-  return out4;
+  return out5;
 }
 function cdTarget(call) {
   const p = progName(call.words[0].lit);
@@ -2343,11 +2343,11 @@ function xargsInner(call) {
 }
 async function expandNested(calls, opts, level) {
   if (opts.noNested) return calls;
-  const out4 = [];
+  const out5 = [];
   for (const c of calls) {
-    out4.push(c);
+    out5.push(c);
     const x = xargsInner(c);
-    if (x) out4.push(x);
+    if (x) out5.push(x);
     const pay = payloadOf(c);
     if (!pay) continue;
     if (pay.dialect === "cmd") {
@@ -2364,10 +2364,10 @@ async function expandNested(calls, opts, level) {
       continue;
     }
     c.nested = { status: "parsed", via: pay.via, dialect: pay.dialect };
-    for (const ic of r.calls) out4.push({ ...ic, depth: ic.depth + c.depth + 1, level: level + 1, viaPayload: pay.via, cwdBefore: [...c.cwdBefore ?? [], ...ic.cwdBefore ?? []] });
+    for (const ic of r.calls) out5.push({ ...ic, depth: ic.depth + c.depth + 1, level: level + 1, viaPayload: pay.via, cwdBefore: [...c.cwdBefore ?? [], ...ic.cwdBefore ?? []] });
     r.kinds.forEach((k) => (c.nestedKinds ??= /* @__PURE__ */ new Set()).add(k));
   }
-  return out4;
+  return out5;
 }
 function lineOf(text, offset) {
   return text.slice(0, offset).split("\n").length;
@@ -2712,6 +2712,7 @@ var openPrKey2 = openPrKey;
 var needsGithubField2 = needsGithubField;
 
 // src/main-floor/decision-gate.ts
+var logGuardDecision2 = (..._args) => void 0;
 var logGuardError2 = (..._args) => void 0;
 var HOOK = "decision-gate";
 var noCreds = stripCredentials;
@@ -2855,6 +2856,8 @@ var appRepoUnnamedWhy = (deps, dir, offer, key) => `${at(dir)} has more than one
 var appPositionWhy = (deps, dir, offer) => `popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, and ${at(dir)} is judged for Dave's tap, so the folder this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd. ${askPart(deps, offer, dir, (c) => `The question for that folder: ${c}.`)}`;
 var needsFieldLine = (entryKey, remote) => `the registry entry ${prose(entryKey)} needs a github field naming owner/repo (remote ${remoteProse(remote)} is an SSH host alias, so gh has no repo to act on); tell Dave.`;
 var inAppFolder = (dir) => ` The command starts in ${at(dir)}, a folder judged for Dave's tap.`;
+var corruptLine = (file) => `WARNING (decision-gate): the project registry ${prose(fwd(file))} cannot be read. Tell Dave.`;
+var CORRUPT_EFFECT = "folders outside CCv3 were not checked for Dave's tap (nothing is covered while the file is missing)";
 var registryCorruptWhy = (file, dir) => `the project registry ${prose(fwd(file))} exists but cannot be parsed (read twice), so this folder (${at(dir)}) cannot be checked for Dave's tap, and a push, PR create or merge outside CCv3 stays blocked. Fix the file (valid JSON with a projects list), or ask Dave.`;
 var norm = (p) => p.replace(/\\/g, "/").toLowerCase();
 var STORE_PATH_RE = /ccv3-mods\/decisions\.json(?:\.|$)/;
@@ -2902,6 +2905,7 @@ function writesStoreText(text, deps) {
   return STORE_FN_RE.test(text) && code;
 }
 var NO_PRIOR = { repos: [], nonLiteral: false };
+var scopeOf = (s) => s.kind === "push" ? "push" : "other";
 var LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
 var LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)\b/i;
 var PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
@@ -2913,18 +2917,18 @@ var SHA_RE = /(?:\bsha=|--match-head-commit(?:\s+|=))["']?([0-9a-f]{40})\b/i;
 var SEGMENT_RE = /[;&|\r\n]+/;
 var lastArg = (args, re) => re.exec(args)?.[1] ?? null;
 function landShapesOf(seg, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh = false) {
-  const out4 = [];
+  const out5 = [];
   const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
   const pr = lastArg(seg, LAND_PR_RE);
-  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out4.push({ kind: "land", pr, sha });
+  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out5.push({ kind: "land", pr, sha });
   const cli = MERGE_CLI_RE.exec(seg);
   const opens = (m) => m !== null && GH_PREFIX_OK.test(tail.slice(0, m.index)) ? m : null;
   const rawCli = MERGE_CLI_RE.exec(rawSeg) ? opens(TAIL_CLI_RE.exec(tail)) : null;
-  if (cli) out4.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD });
+  if (cli) out5.push({ kind: "merge", pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD });
   const api = MERGE_API_RE.exec(seg);
   const rawApi = MERGE_API_RE.exec(rawSeg) ? opens(TAIL_API_RE.exec(tail)) : null;
-  if (api && !GET_RE.test(api[0])) out4.push({ kind: "merge", pr: api[1], ...rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD });
-  return out4;
+  if (api && !GET_RE.test(api[0])) out5.push({ kind: "merge", pr: api[1], ...rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD });
+  return out5;
 }
 var TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
 function quoteOpenAt(text, pos, pwsh) {
@@ -3183,13 +3187,13 @@ function withAstMerges(shapes, parsed, pwsh) {
     const first = hs[0];
     return hs.every((m) => m.sha === first.sha && !m.shaBad === !first.shaBad) ? { sha: first.sha, ...first.shaBad ? { shaBad: true } : {} } : UNREAD_HEAD;
   };
-  const out4 = [];
+  const out5 = [];
   const seen = /* @__PURE__ */ new Set();
   const push = (s) => {
     const id = `${s.kind}|${s.pr}|${s.sha}${s.shaBad ? "!" : ""}|${s.at ? whereId(s.at) : ""}|${s.ftext ?? s.text ?? ""}${s.prior ? priorId(s.prior) : ""}`;
     if (!seen.has(id)) {
       seen.add(id);
-      out4.push(s);
+      out5.push(s);
     }
   };
   const own = (s) => {
@@ -3199,7 +3203,7 @@ function withAstMerges(shapes, parsed, pwsh) {
   };
   for (const s of shapes) {
     if (s.kind !== "merge") {
-      out4.push(s);
+      out5.push(s);
       continue;
     }
     const h = heads(s.pr);
@@ -3217,7 +3221,7 @@ function withAstMerges(shapes, parsed, pwsh) {
     const masked = maskQuoted(m.text, pwsh ? "PowerShell" : "Bash");
     push({ kind: "merge", pr: m.pr, sha: m.sha, ...m.shaBad ? { shaBad: true } : {}, at: { cds, unknown: m.cwdBefore.includes(null), loose: cds.length > 0 || m.cwdBefore.includes(null) }, text: m.text, mtext: masked, ftext: m.text, fmtext: masked, prior: NO_PRIOR, pwsh });
   }
-  return out4;
+  return out5;
 }
 var SAFE_CREATE_VALUE = /* @__PURE__ */ new Set(["--title", "-t", "--body", "-b", "--body-file", "-F", "--label", "-l", "--assignee", "-a", "--reviewer", "-r", "--milestone", "-m", "--project", "-p", "--template", "-T", "--recover"]);
 var SAFE_API_KEY = /* @__PURE__ */ new Set(["title", "body", "draft", "maintainer_can_modify"]);
@@ -3303,14 +3307,14 @@ function withAstCreates(shapes, parsed, pwsh) {
 }
 function astLandCalls(parsed, raw, exempt, gate) {
   if (!parsed || exempt || !LAND_SCRIPT_RE.test(raw) || !LAND_SCRIPT_RE.test(gate)) return [];
-  const out4 = [];
+  const out5 = [];
   for (const c of Object.values(parsed.byDialect).flatMap((r) => r ? r.calls : [])) {
     const text = [...c.words.map((w) => w.raw), ...c.stdin?.lit ? [c.stdin.lit] : []].join(" ");
     if (!LAND_SCRIPT_RE.test(text) || CLEANUP_RE.test(text)) continue;
-    out4.push({ text, pr: lastArg(text, LAND_PR_RE), sha: SHA_RE.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
+    out5.push({ text, pr: lastArg(text, LAND_PR_RE), sha: SHA_RE.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
   }
-  if (out4.length === 0 && !CLEANUP_RE.test(raw)) out4.push({ text: raw, pr: lastArg(raw, LAND_PR_RE), sha: SHA_RE.exec(raw)?.[1]?.toLowerCase() ?? null, cwdBefore: [] });
-  return out4;
+  if (out5.length === 0 && !CLEANUP_RE.test(raw)) out5.push({ text: raw, pr: lastArg(raw, LAND_PR_RE), sha: SHA_RE.exec(raw)?.[1]?.toLowerCase() ?? null, cwdBefore: [] });
+  return out5;
 }
 function astLandShapes(parsed, raw, exempt, gate, pwsh) {
   return astLandCalls(parsed, raw, exempt, gate).map((l) => {
@@ -3516,7 +3520,7 @@ function closingLine(text, from, ends) {
   return -1;
 }
 function blankHeredocs(text) {
-  let out4 = text;
+  let out5 = text;
   let next = 0;
   for (const m of text.matchAll(HEREDOC_OPEN)) {
     if (m.index < next) continue;
@@ -3529,14 +3533,14 @@ function blankHeredocs(text) {
     const quoted = m[5] === void 0 || m[4] === "\\";
     const rest = text.slice(m.index + m[0].length, nl).replace(/\r$/, "");
     const plainLine = !rest.includes("|") && !rest.endsWith("\\") && !quoteLeft(rest, "Bash");
-    if (plainLine && opensData(out4, m.index, "Bash") && (quoted || !RUNS_IN_BODY.test(text.slice(start, end)))) out4 = out4.slice(0, start) + blankChars(text.slice(start, end)) + out4.slice(end);
+    if (plainLine && opensData(out5, m.index, "Bash") && (quoted || !RUNS_IN_BODY.test(text.slice(start, end)))) out5 = out5.slice(0, start) + blankChars(text.slice(start, end)) + out5.slice(end);
     const eol = text.indexOf("\n", end);
     next = eol < 0 ? text.length : eol + 1;
   }
-  return out4;
+  return out5;
 }
 function blankHereStrings(text) {
-  let out4 = text;
+  let out5 = text;
   let next = 0;
   for (const m of text.matchAll(HERESTRING_OPEN)) {
     if (m.index < next) continue;
@@ -3545,10 +3549,10 @@ function blankHereStrings(text) {
     if (end < 0) break;
     const closedAtStart = text.startsWith(`${m[1]}@`, end);
     const body = text.slice(start, end);
-    if (closedAtStart && opensData(out4, m.index, "PowerShell") && (m[1] === "'" || !RUNS_IN_BODY.test(body))) out4 = out4.slice(0, start) + blankChars(body) + out4.slice(end);
+    if (closedAtStart && opensData(out5, m.index, "PowerShell") && (m[1] === "'" || !RUNS_IN_BODY.test(body))) out5 = out5.slice(0, start) + blankChars(body) + out5.slice(end);
     next = end + 2;
   }
-  return out4;
+  return out5;
 }
 function blankBodies(text, tool) {
   if (tool === "Bash") return text.includes("<<") ? blankHeredocs(text) : text;
@@ -3560,19 +3564,19 @@ function readCommand(input) {
   return cmd.kind === "command" ? { ...cmd, text: blankBodies(cmd.text, cmd.tool) } : cmd;
 }
 function dropComments(view, tool) {
-  let out4 = view;
+  let out5 = view;
   for (let from = 0; ; ) {
-    const spans = quotedSpans(out4, tool);
+    const spans = quotedSpans(out5, tool);
     const re = /(^|[\s;&|(])#[^\n]*/g;
     re.lastIndex = from;
     let hit = null;
-    for (let m = re.exec(out4); m !== null && hit === null; m = re.exec(out4)) {
+    for (let m = re.exec(out5); m !== null && hit === null; m = re.exec(out5)) {
       const at3 = m.index + m[1].length;
       const end = m.index + m[0].length;
-      if (!spans.some(([s, e]) => at3 > s && at3 < e) && !/["']/.test(out4.slice(end))) hit = { at: at3, end };
+      if (!spans.some(([s, e]) => at3 > s && at3 < e) && !/["']/.test(out5.slice(end))) hit = { at: at3, end };
     }
-    if (hit === null) return out4;
-    out4 = out4.slice(0, hit.at) + " ".repeat(hit.end - hit.at) + out4.slice(hit.end);
+    if (hit === null) return out5;
+    out5 = out5.slice(0, hit.at) + " ".repeat(hit.end - hit.at) + out5.slice(hit.end);
     from = hit.end;
   }
 }
@@ -3739,7 +3743,7 @@ function pushShapesFrom(call) {
   const plain = plainOpts && strictCall(call) && strictPositionals(rawPositional);
   const base = { remote, dir, cdirs, cds: call.cds, loose: call.loose, unknown: call.unknown, moved: MOVE_OPT_RE.test(` ${call.opts}`), plain, repoOpt, ...appFlagsOf(tokens, call.opts) };
   if (specs.length === 0) return [{ kind: "push", pr: null, push: { ...base, branch: null, src: null, force, bare: true, oneSide: true } }];
-  const out4 = [];
+  const out5 = [];
   for (let i = 0; i < specs.length; i++) {
     let spec = specs[i];
     let rewrite = force;
@@ -3760,12 +3764,12 @@ function pushShapesFrom(call) {
     const src = rawSrc.replace(REF_HEADS, "");
     const name = (rawDst || rawSrc).replace(REF_HEADS, "");
     const oneSide = colon < 0 || rawSrc === "" || rawDst === "";
-    out4.push({ kind: "push", pr: null, push: { ...base, branch: name === "" || name === "HEAD" ? null : name, src: src === "" || src === "HEAD" ? null : src, force: rewrite, bare: false, oneSide } });
+    out5.push({ kind: "push", pr: null, push: { ...base, branch: name === "" || name === "HEAD" ? null : name, src: src === "" || src === "HEAD" ? null : src, force: rewrite, bare: false, oneSide } });
   }
-  return out4;
+  return out5;
 }
 function pushShapesOf(raw, tool) {
-  const out4 = [];
+  const out5 = [];
   const seen = /* @__PURE__ */ new Map();
   const verdict = rawVerdict(raw, tool);
   const offList = verdict === null ? !steadyCommand(raw, tool === "PowerShell" ? "pwsh" : "bash") : verdict.kind !== "ok";
@@ -3788,11 +3792,11 @@ function pushShapesOf(raw, tool) {
         kept.noFollowTags &&= p.noFollowTags;
       } else {
         seen.set(id, p);
-        out4.push(shape);
+        out5.push(shape);
       }
     }
   }
-  return out4;
+  return out5;
 }
 var squashMarks = (t) => t.replace(/["'\\^`]/g, "");
 var WORD_SPLIT = /[\s;&|(){}<>=,]+/;
@@ -3902,11 +3906,11 @@ function chainDirsOf(p, cwd, shell) {
 }
 var MOVE_VALUE_RE = /(?:\bGIT_(?:DIR|WORK_TREE|COMMON_DIR)[ \t]*=[ \t]*|--(?:git-dir|work-tree)(?:=|\s+))(\S+)/gi;
 function moveTargets(raw, cwd, shell, home) {
-  const out4 = [];
+  const out5 = [];
   for (const m of raw.replace(/["']/g, "").matchAll(MOVE_VALUE_RE)) {
-    for (const dir of knownDirs([chainStep(cwd, m[1].replace(/[;&|)]+$/, ""), shell)], home)) out4.push(dir.replace(/[\\/]\.git(?:[\\/]worktrees[\\/][^\\/]+)?[\\/]*$/i, ""));
+    for (const dir of knownDirs([chainStep(cwd, m[1].replace(/[;&|)]+$/, ""), shell)], home)) out5.push(dir.replace(/[\\/]\.git(?:[\\/]worktrees[\\/][^\\/]+)?[\\/]*$/i, ""));
   }
-  return [...new Set(out4)];
+  return [...new Set(out5)];
 }
 var HOME_LEAD = /^(?:~|\$HOME\b|\$\{HOME\}|\$env:USERPROFILE\b|%USERPROFILE%)(?=$|[\\/])/i;
 function knownDirs(dirs, home) {
@@ -3922,21 +3926,21 @@ function knownDirs(dirs, home) {
 var firstCovered = (deps, dirs) => dirs.find((d) => coveredAmong(deps, [d]) !== null) ?? null;
 var RAW_CD = /^(?:cd|chdir|pushd|set-location|sl|push-location)$/i;
 function rawDirs(raw, tool, cwd, shell, home) {
-  const out4 = [cwd];
+  const out5 = [cwd];
   for (const call of pushCallsIn(raw, mayRunUnderCmd(tool))) {
-    for (const base of dirsAfter(cwd, call.cds, shell, true)) out4.push(base, chainDir(base, callDirsOf(call), shell));
+    for (const base of dirsAfter(cwd, call.cds, shell, true)) out5.push(base, chainDir(base, callDirsOf(call), shell));
   }
   const lists = [raw.replace(/["'`^]/g, "").split(/[\s;&|(){}<>]+/), ...payloadWords(raw, shell) ?? []];
   for (const words of lists) {
     let chained = cwd;
     for (let i = 0; i + 1 < words.length; i++) {
       if (!RAW_CD.test(words[i]) && words[i] !== "-C" && !/^-path$/i.test(words[i])) continue;
-      out4.push(chainStep(cwd, words[i + 1], shell));
+      out5.push(chainStep(cwd, words[i + 1], shell));
       chained = chainStep(chained, words[i + 1], shell);
-      out4.push(chained);
+      out5.push(chained);
     }
   }
-  return [.../* @__PURE__ */ new Set([...knownDirs(out4, home), ...moveTargets(raw, cwd, shell, home)])];
+  return [.../* @__PURE__ */ new Set([...knownDirs(out5, home), ...moveTargets(raw, cwd, shell, home)])];
 }
 function payloadWords(raw, shell) {
   const top = pairedWords(raw, shell === "pwsh");
@@ -3989,14 +3993,14 @@ function ghFlagFirstDenies(raw, tool, deps, cwd, shell) {
   return [];
 }
 function cmdSegments(view) {
-  const out4 = [];
+  const out5 = [];
   let from = 0;
   for (const m of view.matchAll(new RegExp(SEGMENT_RE.source, "g"))) {
-    out4.push({ seg: view.slice(from, m.index), from });
+    out5.push({ seg: view.slice(from, m.index), from });
     from = m.index + m[0].length;
   }
-  out4.push({ seg: view.slice(from), from });
-  return out4;
+  out5.push({ seg: view.slice(from), from });
+  return out5;
 }
 var whereId = (at3) => `${at3.unknown ? "?" : ""}${at3.loose ? "~" : ""}${at3.cds.join("\0")}`;
 function ownCommand(view, masked, from) {
@@ -4019,13 +4023,13 @@ function shapesOf(raw, tool, parsed, astOnly = false) {
   const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations2(raw, "bash"), joinContinuations2(raw, "pwsh")].every(isTextOnlyCommand);
   const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw) && [raw, joinContinuations2(raw, "bash"), joinContinuations2(raw, "pwsh")].every((c) => docAppendReadable(c, tool));
   const docAst = !PR_NUMBER_IN_TEXT_RE.test(raw) && docAppendByAst(parsed, tool, raw);
-  const out4 = [];
+  const out5 = [];
   const pwshTool = tool === "PowerShell";
   const seen = /* @__PURE__ */ new Set();
   const add = (shape, id) => {
     if (!seen.has(id)) {
       seen.add(id);
-      out4.push(shape);
+      out5.push(shape);
     }
   };
   let created = false;
@@ -4080,7 +4084,7 @@ function shapesOf(raw, tool, parsed, astOnly = false) {
       add({ kind: "create", pr: null, at: at3, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool, ...read ? { read } : {} }, `create|${whereId(at3)}|${view}`);
     }
   }
-  const withMergesAndCreates = withAstCreates(withAstMerges(out4, parsed, pwshTool), parsed, pwshTool);
+  const withMergesAndCreates = withAstCreates(withAstMerges(out5, parsed, pwshTool), parsed, pwshTool);
   const seenLand = new Set(withMergesAndCreates.filter((s) => s.kind === "land").map((s) => `${s.pr}|${s.sha}`));
   const lands = (astOnly ? astLandShapes(parsed, raw, exempt, text, pwshTool) : []).filter((s) => {
     const k = `${s.pr}|${s.sha}`;
@@ -4105,6 +4109,7 @@ function enforcingScope(scope, deps, cwd, homeOnly = false) {
   if (homeOnly && scope === "other") return homeFlag(deps, "enforce") === true;
   return scope === "push" ? enforcingPush(deps, cwd) : enforcing(deps, cwd);
 }
+var FLAG_OF = { push: "decisions.enforcePush", other: "decisions.enforce", "app-push": "decisions.enforceAppPush" };
 var OPENER = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif)\s+|time\s+(?:(?:-p|--)\s+)*)`;
 var CMD_POS = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER}*))` + String.raw`(?:(?:[A-Za-z_]\w*\+?=[^\s;&|]*|(?:\d*[<>]{1,2}&?|&>>?)[^\s;&|]+)[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+(?:(?:-p|--)\s+)*)*(?:[\w.]+\\)?\\?`;
 var NOISE = String.raw`(?:\\|''|"")*`;
@@ -4848,21 +4853,21 @@ function sendsRe(p, deps, dir, branch) {
 }
 var RE_NOT_ALONE_WHY = "the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.";
 function namedTags(p, deps, dir) {
-  const out4 = /* @__PURE__ */ new Set();
+  const out5 = /* @__PURE__ */ new Set();
   for (const r of [p.src, p.branch]) {
     if (typeof r !== "string" || r === "") continue;
     if (r.startsWith("refs/tags/")) {
-      out4.add(r);
+      out5.add(r);
       continue;
     }
     if (r.startsWith("refs/") || /^(?:HEAD|@)(?:$|[~^@])/.test(r)) continue;
     if (r.startsWith("tags/")) {
-      out4.add(`refs/${r}`);
+      out5.add(`refs/${r}`);
       continue;
     }
-    if (deps.git(dir, ["show-ref", "--verify", "--quiet", `refs/tags/${r}`]).status === 0) out4.add(`refs/tags/${r}`);
+    if (deps.git(dir, ["show-ref", "--verify", "--quiet", `refs/tags/${r}`]).status === 0) out5.add(`refs/tags/${r}`);
   }
-  return [...out4];
+  return [...out5];
 }
 function tagText(wide, sha, deps, dir, stop) {
   const fmt = "--format=%(refname)%00%(objecttype)%00%(contents)%00";
@@ -4888,7 +4893,7 @@ var clockDeny = (branch) => hardOf(deny("holdout-scan-unavailable", `this push o
 var SHIP_RESERVE_MS = 1500;
 var errCode = (e) => String(e?.code ?? "");
 function addedText(log) {
-  const out4 = [];
+  const out5 = [];
   let inDiff = false;
   let binary = false;
   let width = 0;
@@ -4896,13 +4901,13 @@ function addedText(log) {
     if (line.startsWith(COMMIT_MARK)) {
       inDiff = false;
       width = 0;
-      out4.push(line);
+      out5.push(line);
       continue;
     }
     if (line.startsWith("diff --")) {
       inDiff = true;
       width = 0;
-      out4.push(line);
+      out5.push(line);
       continue;
     }
     const at3 = inDiff ? /^(@{2,}) /.exec(line) : null;
@@ -4912,12 +4917,12 @@ function addedText(log) {
     }
     if (inDiff && width === 0 && /^Binary files (?:.* )?differ$/.test(line)) binary = true;
     if (width === 0) {
-      out4.push(line);
+      out5.push(line);
       continue;
     }
-    if (line.slice(0, width) === "+".repeat(width)) out4.push(line);
+    if (line.slice(0, width) === "+".repeat(width)) out5.push(line);
   }
-  return { text: out4.join("\n"), binary };
+  return { text: out5.join("\n"), binary };
 }
 function scanHoldoutRead(p, deps, dir, branch, chainedCommit, alone) {
   const isRe = sendsRe(p, deps, dir, branch);
@@ -5333,6 +5338,134 @@ function inApp(deps, run) {
     mode.app = false;
   }
 }
+var out2 = (extra) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...extra } }).replace(CREDS_RE, "$1");
+var denyOut = (reason) => out2({ permissionDecision: "deny", permissionDecisionReason: reason });
+var warnLead = (scope) => scope === "app-push" ? "this push in an app folder has no tap from Dave; it would be blocked in block mode." : `this command would be blocked when ${FLAG_OF[scope]} is true.`;
+var warnOut = (text, scope = "other", tail = "") => out2({ additionalContext: `WARNING (decision-gate, warn mode): ${warnLead(scope)} ${text.replace(/^BLOCKED \(decision-gate\): /, "")}${tail}` });
+function gatedScopes(input, app = false) {
+  const tool = input.tool_name || input.tool || "";
+  if (WRITE_TOOLS.has(tool)) return /* @__PURE__ */ new Set(["other"]);
+  const shapes = catchShapes(input);
+  const scopes = new Set((shapes ?? []).map(scopeOf));
+  if (app && (scopes.size > 0 || shapes === null)) scopes.add("app-push");
+  return scopes;
+}
+function unreadableInput() {
+  const note = "decision-gate: the hook input is not readable JSON, so no command shape can be judged; the call is allowed.";
+  try {
+    logGuardError2(HOOK, new Error("unreadable hook input"));
+  } catch {
+  }
+  try {
+    process.stderr.write(`${note}
+`);
+  } catch {
+  }
+  return "{}";
+}
+function handle(raw, deps) {
+  let input = {};
+  try {
+    const parsed = JSON.parse(raw.trim() || "{}");
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return unreadableInput();
+    input = parsed;
+  } catch {
+    return unreadableInput();
+  }
+  const found = [];
+  try {
+    const d = decide(input, deps, found);
+    const tail = d.notice ? `
+${corruptLine(d.notice)}` : "";
+    let shown = "{}";
+    if (d.action === "allow" && d.warn) {
+      logGuardDecision2(HOOK, input, "warn", d.warn.split(":")[0]);
+      shown = warnOut(d.warn.slice(d.warn.indexOf(":") + 2), d.scope, tail);
+    } else if (d.action === "deny") {
+      logGuardDecision2(HOOK, input, "deny", d.pattern);
+      shown = denyOut(d.reason + tail);
+    } else if (d.notice) {
+      shown = out2({ additionalContext: corruptLine(d.notice) });
+    }
+    if (d.notice) logGuardDecision2(HOOK, input, "warn", `registry-missing ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
+    return shown;
+  } catch (err) {
+    return unjudgeable(input, deps, err, found);
+  }
+}
+function unjudgeable(input, deps, thrown, found = []) {
+  const cwd = input.cwd || process.cwd();
+  const underRoot = pushUnderLiveRoot(input, deps);
+  const app = thrown instanceof AppScopeError || underRoot;
+  const appPush = thrown instanceof AppScopeError && thrown.push || underRoot;
+  const err = thrown instanceof AppScopeError ? thrown.inner : thrown;
+  const gone = err instanceof MissingCwdError;
+  if (!gone) {
+    try {
+      logGuardError2(HOOK, err);
+    } catch {
+    }
+  }
+  const prior = found.find((d) => {
+    try {
+      return hardAppDeny(d) || enforcingScope(d.scope, deps, cwd, d.homeFlags);
+    } catch {
+      return d.hard === true;
+    }
+  }) ?? catchIntentDeny(input);
+  if (prior) {
+    try {
+      logGuardDecision2(HOOK, input, "deny", prior.pattern);
+    } catch {
+    }
+    return denyOut(prior.reason);
+  }
+  const scopes = gatedScopesSafe(input, appPush);
+  if (storeWriteCall(input, deps)) scopes.add("other");
+  if (scopes.size === 0) return "{}";
+  const raw = gone ? err.message : String(err?.message ?? err).slice(0, 160);
+  const detail = app ? prose(raw) : raw;
+  const hint = gone ? "Run the command from a folder that exists." : "Run the command again. If it keeps failing, ask Dave.";
+  const why = `could not verify Dave's tap (${detail}). ${hint}`;
+  const holdsPush = !app && scopes.has("push") && (gone || !pushFoldersUnregistered(input, deps));
+  const live = holdsPush || app && hardAppCall(input) || [...scopes].some((s) => enforcingScope(s, deps, cwd, app));
+  if (gone) logGuardDecision2(HOOK, input, live ? "deny" : "warn", "cwd-missing");
+  if (holdsPush && !(app && hardAppCall(input)) && ![...scopes].some((s) => enforcingScope(s, deps, cwd, app))) {
+    const again = gone ? "Run the push again from a folder that exists." : "Run the push again. If it fails again, ask Dave.";
+    return denyOut(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
+  }
+  return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : scopes.has("app-push") ? "app-push" : "push");
+}
+var gatedScopesSafe = (input, app = false) => {
+  try {
+    return gatedScopes(input, app);
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+};
+function catchIntentDeny(input) {
+  const shapes = catchShapes(input);
+  if (shapes === null) return null;
+  const none = deny("none", "", "push");
+  for (const s of shapes) {
+    if (s.kind !== "push" || s.push === void 0) continue;
+    const d = intentDeny(s.push, Boolean(input.agent_id), none);
+    if (d.hard === true) return d;
+  }
+  return null;
+}
+function hardAppCall(input) {
+  try {
+    const cmd = readCommand(input);
+    if (cmd.kind !== "command") return false;
+    const pushes = shapesOf(cmd.text, cmd.tool).filter((s) => s.kind === "push");
+    if (input.agent_id && pushes.length > 0) return true;
+    if (rawVerdict(cmd.text, cmd.tool)?.kind === "unsafe") return true;
+    return pushes.some(({ push: p }) => p !== void 0 && (p.force || p.unsafeOpt || p.repoOpt || p.oBundle || p.widerOpt !== null));
+  } catch {
+    return Boolean(input.agent_id);
+  }
+}
 function catchShapes(input) {
   const cmd = readCommand(input);
   if (cmd.kind !== "command") return [];
@@ -5340,6 +5473,23 @@ function catchShapes(input) {
     return shapesOf(cmd.text, cmd.tool);
   } catch {
     return null;
+  }
+}
+function pushUnderLiveRoot(input, deps) {
+  try {
+    const scope = deps.tapScope;
+    const cmd = readCommand(input);
+    if (!scope || cmd.kind !== "command") return false;
+    const pushes = catchShapes(input)?.filter((s) => s.kind === "push") ?? null;
+    if (pushes?.length === 0) return false;
+    const reg2 = scope.registry();
+    const cwd = input.cwd || process.cwd();
+    const shell = shellOf(input);
+    const paths = knownDirs((pushes ?? []).flatMap((s) => [cwd, ...pushDirsOf(s.push, cwd, shell), ...chainDirsOf(s.push, cwd, shell)]).concat(cwd), deps.home);
+    const dirs = [...paths, ...paths.flatMap((d) => moveTargets(cmd.text, d, shell, deps.home))];
+    return dirs.some((d) => underLiveRoot(d, reg2, scope, { outsideCcv3: true }));
+  } catch {
+    return false;
   }
 }
 var CCV3_ENTRY_KEY = "continuous-claude";
@@ -5571,15 +5721,15 @@ function inertSpans2(command, tool, openHead) {
   const none = /* @__PURE__ */ new Set();
   const plain = plainSegments2(command, tool);
   if (!plain) return none;
-  const out4 = /* @__PURE__ */ new Set();
+  const out5 = /* @__PURE__ */ new Set();
   for (const { from, end, masked } of plain.segs) {
     const raw = command.slice(from, end);
     if (headMatches2(PLAIN_HEAD2, masked, raw)) continue;
     if (openHead !== void 0 && headMatches2(openHead, masked, raw)) continue;
     if (!headMatches2(INERT_HEAD2, masked, raw)) return none;
-    for (const [s, e] of plain.spans) if (s >= from && e <= end) out4.add(`${s}:${e}`);
+    for (const [s, e] of plain.spans) if (s >= from && e <= end) out5.add(`${s}:${e}`);
   }
-  return out4;
+  return out5;
 }
 var TEXT_HEAD2 = /^\s*(?:echo|printf|Write-(?:Host|Output))(?=\s|$)/i;
 var READ_HEAD2 = /^\s*(?:grep|cat|head|tail|Select-String|sls|Get-Content|gc|git\s+log)(?=\s|$)/i;
@@ -5607,13 +5757,13 @@ function blankInertQuotes2(command, tool) {
   return blankSpans2(command, inertSpans2(command, "Bash"), inertSpans2(command, "PowerShell"));
 }
 function blankSpans2(command, bash, pwsh) {
-  let out4 = command;
+  let out5 = command;
   for (const id of bash) {
     if (!pwsh.has(id)) continue;
     const [s, e] = id.split(":").map(Number);
-    out4 = out4.slice(0, s + 1) + " ".repeat(e - s - 2) + out4.slice(e - 1);
+    out5 = out5.slice(0, s + 1) + " ".repeat(e - s - 2) + out5.slice(e - 1);
   }
-  return out4;
+  return out5;
 }
 
 // src/shared/shell-tools.ts
@@ -5748,11 +5898,11 @@ var walkAll2 = (n, fn) => {
   for (const v of Object.values(n)) if (v && typeof v === "object") walkAll2(v, fn);
 };
 var nodesOf2 = (n, types) => {
-  const out4 = [];
+  const out5 = [];
   walkAll2(n, (x) => {
-    if (types.includes(x.type)) out4.push(x);
+    if (types.includes(x.type)) out5.push(x);
   });
-  return out4;
+  return out5;
 };
 var plainParam2 = (p) => !p.exp && !p.index && !p.repl && !p.slice && !p.names && !p.length && !p.excl && !p.width && !p.isSet && !p.flags;
 function singleVar2(w) {
@@ -5774,13 +5924,13 @@ function makeBashWord2(w, conv) {
   const kind = lit !== null ? "lit" : cs ? "cmdsubst" : sv ? "var" : "dyn";
   const vars = nodesOf2(w, ["ParamExp"]).map((p) => p.param?.value).filter(Boolean);
   const [start, end] = [conv.c(w.start), conv.c(w.end)];
-  const out4 = { lit, kind, raw: conv.slice(w.start, w.end), start, end, vars };
+  const out5 = { lit, kind, raw: conv.slice(w.start, w.end), start, end, vars };
   if (sv) {
-    out4.var = sv.name;
-    out4.quoted = sv.quoted;
+    out5.var = sv.name;
+    out5.quoted = sv.quoted;
   }
-  if (lit === null) out4.prefix = wordPrefix2(w);
-  return out4;
+  if (lit === null) out5.prefix = wordPrefix2(w);
+  return out5;
 }
 function walkBash2(file, text) {
   const conv = makeConv2(text);
@@ -5947,7 +6097,7 @@ function stdinOf2(s) {
 function runWalker2(text, timeoutMs) {
   return new Promise((resolve6) => {
     const cp = spawn2("pwsh", ["-NoProfile", "-NonInteractive", "-File", WALKER2], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-    let out4 = "";
+    let out5 = "";
     let done = false;
     const fin = (v) => {
       if (!done) {
@@ -5962,13 +6112,13 @@ function runWalker2(text, timeoutMs) {
     }, timeoutMs);
     cp.stdout.setEncoding("utf8");
     cp.stdout.on("data", (d) => {
-      out4 += d;
+      out5 += d;
     });
     cp.on("error", (e) => fin({ error: `pwsh spawn: ${e.message}` }));
     cp.on("close", (code) => {
       if (code !== 0) return fin({ error: `pwsh exit ${code}` });
       try {
-        fin({ json: JSON.parse(out4) });
+        fin({ json: JSON.parse(out5) });
       } catch {
         fin({ error: "pwsh bad json" });
       }
@@ -6009,11 +6159,11 @@ function walkPwsh2(j, text) {
 }
 var OUTVAR2 = /^-(ov|outvariable|ev|errorvariable|iv|informationvariable|wv|warningvariable|pv|pipelinevariable)$/i;
 function outVarWrites2(words) {
-  const out4 = [];
+  const out5 = [];
   words.forEach((w, i) => {
-    if (w.kind === "param" && OUTVAR2.test(w.lit ?? "") && words[i + 1]) out4.push(words[i + 1].lit ?? words[i + 1].raw);
+    if (w.kind === "param" && OUTVAR2.test(w.lit ?? "") && words[i + 1]) out5.push(words[i + 1].lit ?? words[i + 1].raw);
   });
-  return out4;
+  return out5;
 }
 function cdTarget2(call) {
   const p = progName2(call.words[0].lit);
@@ -6118,11 +6268,11 @@ function xargsInner2(call) {
 }
 async function expandNested2(calls, opts, level) {
   if (opts.noNested) return calls;
-  const out4 = [];
+  const out5 = [];
   for (const c of calls) {
-    out4.push(c);
+    out5.push(c);
     const x = xargsInner2(c);
-    if (x) out4.push(x);
+    if (x) out5.push(x);
     const pay = payloadOf2(c);
     if (!pay) continue;
     if (pay.dialect === "cmd") {
@@ -6139,10 +6289,10 @@ async function expandNested2(calls, opts, level) {
       continue;
     }
     c.nested = { status: "parsed", via: pay.via, dialect: pay.dialect };
-    for (const ic of r.calls) out4.push({ ...ic, depth: ic.depth + c.depth + 1, level: level + 1, viaPayload: pay.via, cwdBefore: [...c.cwdBefore ?? [], ...ic.cwdBefore ?? []] });
+    for (const ic of r.calls) out5.push({ ...ic, depth: ic.depth + c.depth + 1, level: level + 1, viaPayload: pay.via, cwdBefore: [...c.cwdBefore ?? [], ...ic.cwdBefore ?? []] });
     r.kinds.forEach((k) => (c.nestedKinds ??= /* @__PURE__ */ new Set()).add(k));
   }
-  return out4;
+  return out5;
 }
 function lineOf2(text, offset) {
   return text.slice(0, offset).split("\n").length;
@@ -6260,15 +6410,15 @@ function keyRepo3({ url, entryKey, github } = {}) {
   return key ? `local:${key}:${targetOf3(String(url))}` : null;
 }
 var needsGithubField3 = (url, github) => repoSlug2(url) === null && sshTail2(url) !== null && githubField2(github) === null;
-var out2 = (git, args) => {
+var out3 = (git, args) => {
   const r = git(args);
   return r && r.status === 0 ? String(r.stdout ?? "").trim() : null;
 };
 var lines2 = (text) => (text ?? "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 var uniq2 = (list) => [...new Set(list)];
-var remoteNames2 = (git) => lines2(out2(git, ["remote"]));
+var remoteNames2 = (git) => lines2(out3(git, ["remote"]));
 function pushRefOf2(git, names) {
-  const m = /^refs\/remotes\/(.+)$/.exec(out2(git, ["rev-parse", "--symbolic-full-name", "@{push}"]) ?? "");
+  const m = /^refs\/remotes\/(.+)$/.exec(out3(git, ["rev-parse", "--symbolic-full-name", "@{push}"]) ?? "");
   if (!m) return null;
   const remote = names.filter((n) => m[1].startsWith(`${n}/`)).sort((a, b) => b.length - a.length)[0];
   return remote ? { remote, branch: m[1].slice(remote.length + 1) } : null;
@@ -6277,7 +6427,7 @@ function remoteUrls2(git, remote, push) {
   return targetsOf2(git, remote, push)?.urls ?? null;
 }
 function targetsOf2(git, remote, push) {
-  const listed = out2(git, ["remote", "get-url", ...push ? ["--push", "--all"] : [], "--end-of-options", remote]);
+  const listed = out3(git, ["remote", "get-url", ...push ? ["--push", "--all"] : [], "--end-of-options", remote]);
   if (listed !== null) return { urls: lines2(listed), configured: true };
   return isUrlLike2(remote) ? { urls: [remote.trim()], configured: false } : null;
 }
@@ -6300,7 +6450,7 @@ function pushKey3(git, { remote = null, branch = null, entryKey = null, github =
 function pushDefaults3(git, remote = null) {
   const up = pushRefOf2(git, remoteNames2(git));
   const via = remote ?? up?.remote ?? null;
-  const branch = up !== null && up.remote === via ? up.branch : out2(git, ["branch", "--show-current"]) ?? "";
+  const branch = up !== null && up.remote === via ? up.branch : out3(git, ["branch", "--show-current"]) ?? "";
   return { remote: via, branch };
 }
 function fetchKey2(git, remote, { entryKey = null, github = null } = {}) {
@@ -6494,7 +6644,7 @@ var COMMAND_TOOLS4 = /* @__PURE__ */ new Set(["Bash", "PowerShell", `${DC2}start
 var WRITE_TOOLS2 = /* @__PURE__ */ new Set(["Write", "Edit", "NotebookEdit", `${DC2}write_file`, `${DC2}edit_block`, `${DC2}move_file`, `${DC2}write_pdf`]);
 var PATH_FIELDS2 = ["file_path", "notebook_path", "path", "destination", "source", "outputPath"];
 var GIT_TIMEOUT_MS2 = 2e3;
-var FLOOR_IMPL = { withParsed, decide };
+var FLOOR_IMPL = { withParsed, decide, handle };
 var isOpenPrLabel2 = (label) => /^Open draft PR\b/.test(label);
 var isLandLabel2 = (label) => /^Land (?:now|when READY)\b/.test(label);
 var isShipLabel2 = (label) => /^Commit and push\b/.test(label);
@@ -6630,8 +6780,8 @@ var appRepoUnnamedWhy2 = (deps, dir, offer, key) => `${at2(dir)} has more than o
 var appPositionWhy2 = (deps, dir, offer) => `popd, Pop-Location, cd - or a bare cd moves the folder to a place this text does not name, and ${at2(dir)} is judged for Dave's tap, so the folder this command runs in cannot be known. Run the command with one absolute cd (cd <full path> && ...) and no popd. ${askPart2(deps, offer, dir, (c) => `The question for that folder: ${c}.`)}`;
 var needsFieldLine2 = (entryKey, remote) => `the registry entry ${prose2(entryKey)} needs a github field naming owner/repo (remote ${remoteProse2(remote)} is an SSH host alias, so gh has no repo to act on); tell Dave.`;
 var inAppFolder2 = (dir) => ` The command starts in ${at2(dir)}, a folder judged for Dave's tap.`;
-var corruptLine = (file) => `WARNING (decision-gate): the project registry ${prose2(fwd2(file))} cannot be read. Tell Dave.`;
-var CORRUPT_EFFECT = "folders outside CCv3 were not checked for Dave's tap (nothing is covered while the file is missing)";
+var corruptLine2 = (file) => `WARNING (decision-gate): the project registry ${prose2(fwd2(file))} cannot be read. Tell Dave.`;
+var CORRUPT_EFFECT2 = "folders outside CCv3 were not checked for Dave's tap (nothing is covered while the file is missing)";
 var registryCorruptWhy2 = (file, dir) => `the project registry ${prose2(fwd2(file))} exists but cannot be parsed (read twice), so this folder (${at2(dir)}) cannot be checked for Dave's tap, and a push, PR create or merge outside CCv3 stays blocked. Fix the file (valid JSON with a projects list), or ask Dave.`;
 var norm2 = (p) => p.replace(/\\/g, "/").toLowerCase();
 var STORE_PATH_RE2 = /ccv3-mods\/decisions\.json(?:\.|$)/;
@@ -6679,7 +6829,7 @@ function writesStoreText2(text, deps) {
   return STORE_FN_RE2.test(text) && code;
 }
 var NO_PRIOR2 = { repos: [], nonLiteral: false };
-var scopeOf = (s) => s.kind === "push" ? "push" : "other";
+var scopeOf2 = (s) => s.kind === "push" ? "push" : "other";
 var LAND_SCRIPT_RE2 = /\bland-pr\.ps1\b/i;
 var LAND_PR_RE2 = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)(?![\w`])/i;
 var PR_NUMBER_IN_TEXT_RE2 = /-Pr?[\s:="']*\d/i;
@@ -6902,13 +7052,13 @@ function withAstMerges2(shapes, parsed, pwsh) {
     const first = hs[0];
     return hs.every((m) => m.sha === first.sha && !m.shaBad === !first.shaBad) ? { sha: first.sha, ...first.shaBad ? { shaBad: true } : {} } : UNREAD_HEAD2;
   };
-  const out4 = [];
+  const out5 = [];
   const seen = /* @__PURE__ */ new Set();
   const push = (s) => {
     const id = `${s.kind}|${s.pr}|${s.sha}${s.shaBad ? "!" : ""}|${s.at ? whereId2(s.at) : ""}|${s.ftext ?? s.text ?? ""}${s.prior ? priorId2(s.prior) : ""}`;
     if (!seen.has(id)) {
       seen.add(id);
-      out4.push(s);
+      out5.push(s);
     }
   };
   const own = (s) => {
@@ -6918,7 +7068,7 @@ function withAstMerges2(shapes, parsed, pwsh) {
   };
   for (const s of shapes) {
     if (s.kind !== "merge") {
-      out4.push(s);
+      out5.push(s);
       continue;
     }
     if (s.rawOnly) {
@@ -6940,7 +7090,7 @@ function withAstMerges2(shapes, parsed, pwsh) {
     const masked = maskQuoted2(m.text, pwsh ? "PowerShell" : "Bash");
     push({ kind: "merge", pr: m.pr, sha: m.sha, ...m.shaBad ? { shaBad: true } : {}, at: { cds, unknown: m.cwdBefore.includes(null), loose: cds.length > 0 || m.cwdBefore.includes(null) }, text: m.text, mtext: masked, ftext: m.text, fmtext: masked, prior: NO_PRIOR2, pwsh });
   }
-  return out4;
+  return out5;
 }
 var SAFE_CREATE_VALUE2 = /* @__PURE__ */ new Set(["--title", "-t", "--body", "-b", "--body-file", "-F", "--label", "-l", "--assignee", "-a", "--reviewer", "-r", "--milestone", "-m", "--project", "-p", "--template", "-T", "--recover"]);
 var SAFE_API_KEY2 = /* @__PURE__ */ new Set(["title", "body", "draft", "maintainer_can_modify"]);
@@ -7063,16 +7213,16 @@ function callIsCleanup(c) {
 function astLandCalls2(parsed, raw, exempt, gate) {
   const unq = (t) => t.replace(/['"`]/g, "");
   if (!parsed || exempt || !LAND_SCRIPT_RE2.test(unq(raw)) || !LAND_SCRIPT_RE2.test(unq(gate))) return [];
-  const out4 = [];
+  const out5 = [];
   for (const c of Object.values(parsed.byDialect).flatMap((r) => r ? r.calls : [])) {
     const text0 = [...c.words.map((w) => w.raw), ...c.stdin?.lit ? [c.stdin.lit] : []].join(" ");
     const dtext = [...c.words.map((w) => w.lit ?? w.raw), ...c.stdin?.lit ? [c.stdin.lit] : []].join(" ");
     const text = LAND_SCRIPT_RE2.test(text0) ? text0 : dtext;
     if (!LAND_SCRIPT_RE2.test(text) || callIsCleanup(c)) continue;
-    out4.push({ text, pr: lastArg2(text, LAND_PR_RE2), sha: SHA_RE2.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
+    out5.push({ text, pr: lastArg2(text, LAND_PR_RE2), sha: SHA_RE2.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
   }
-  if (out4.length === 0 && !CLEANUP_RE2.test(raw)) out4.push({ text: raw, pr: lastArg2(raw, LAND_PR_RE2), sha: SHA_RE2.exec(raw)?.[1]?.toLowerCase() ?? null, cwdBefore: [] });
-  return out4;
+  if (out5.length === 0 && !CLEANUP_RE2.test(raw)) out5.push({ text: raw, pr: lastArg2(raw, LAND_PR_RE2), sha: SHA_RE2.exec(raw)?.[1]?.toLowerCase() ?? null, cwdBefore: [] });
+  return out5;
 }
 function astLandShapes2(parsed, raw, exempt, gate, pwsh) {
   return astLandCalls2(parsed, raw, exempt, gate).map((l) => {
@@ -7492,7 +7642,7 @@ function closingLine2(text, from, ends) {
   return -1;
 }
 function blankHeredocs2(text) {
-  let out4 = text;
+  let out5 = text;
   let next = 0;
   for (const m of text.matchAll(HEREDOC_OPEN2)) {
     if (m.index < next) continue;
@@ -7505,14 +7655,14 @@ function blankHeredocs2(text) {
     const quoted = m[5] === void 0 || m[4] === "\\";
     const rest = text.slice(m.index + m[0].length, nl).replace(/\r$/, "");
     const plainLine = !rest.includes("|") && !rest.endsWith("\\") && !quoteLeft2(rest, "Bash");
-    if (plainLine && opensData2(out4, m.index, "Bash") && (quoted || !RUNS_IN_BODY2.test(text.slice(start, end)))) out4 = out4.slice(0, start) + blankChars2(text.slice(start, end)) + out4.slice(end);
+    if (plainLine && opensData2(out5, m.index, "Bash") && (quoted || !RUNS_IN_BODY2.test(text.slice(start, end)))) out5 = out5.slice(0, start) + blankChars2(text.slice(start, end)) + out5.slice(end);
     const eol = text.indexOf("\n", end);
     next = eol < 0 ? text.length : eol + 1;
   }
-  return out4;
+  return out5;
 }
 function blankHereStrings2(text) {
-  let out4 = text;
+  let out5 = text;
   let next = 0;
   for (const m of text.matchAll(HERESTRING_OPEN2)) {
     if (m.index < next) continue;
@@ -7521,10 +7671,10 @@ function blankHereStrings2(text) {
     if (end < 0) break;
     const closedAtStart = text.startsWith(`${m[1]}@`, end);
     const body = text.slice(start, end);
-    if (closedAtStart && opensData2(out4, m.index, "PowerShell") && (m[1] === "'" || !RUNS_IN_BODY2.test(body))) out4 = out4.slice(0, start) + blankChars2(body) + out4.slice(end);
+    if (closedAtStart && opensData2(out5, m.index, "PowerShell") && (m[1] === "'" || !RUNS_IN_BODY2.test(body))) out5 = out5.slice(0, start) + blankChars2(body) + out5.slice(end);
     next = end + 2;
   }
-  return out4;
+  return out5;
 }
 function blankBodies2(text, tool) {
   if (tool === "Bash") return text.includes("<<") ? blankHeredocs2(text) : text;
@@ -7536,19 +7686,19 @@ function readCommand2(input) {
   return cmd.kind === "command" ? { ...cmd, text: blankBodies2(cmd.text, cmd.tool) } : cmd;
 }
 function dropComments2(view, tool) {
-  let out4 = view;
+  let out5 = view;
   for (let from = 0; ; ) {
-    const spans = quotedSpans2(out4, tool);
+    const spans = quotedSpans2(out5, tool);
     const re = /(^|[\s;&|(])#[^\n]*/g;
     re.lastIndex = from;
     let hit = null;
-    for (let m = re.exec(out4); m !== null && hit === null; m = re.exec(out4)) {
+    for (let m = re.exec(out5); m !== null && hit === null; m = re.exec(out5)) {
       const at3 = m.index + m[1].length;
       const end = m.index + m[0].length;
-      if (!spans.some(([s, e]) => at3 > s && at3 < e) && !/["']/.test(out4.slice(end))) hit = { at: at3, end };
+      if (!spans.some(([s, e]) => at3 > s && at3 < e) && !/["']/.test(out5.slice(end))) hit = { at: at3, end };
     }
-    if (hit === null) return out4;
-    out4 = out4.slice(0, hit.at) + " ".repeat(hit.end - hit.at) + out4.slice(hit.end);
+    if (hit === null) return out5;
+    out5 = out5.slice(0, hit.at) + " ".repeat(hit.end - hit.at) + out5.slice(hit.end);
     from = hit.end;
   }
 }
@@ -7715,7 +7865,7 @@ function pushShapesFrom2(call) {
   const plain = plainOpts && strictCall2(call) && strictPositionals2(rawPositional);
   const base = { remote, dir, cdirs, cds: call.cds, loose: call.loose, unknown: call.unknown, moved: MOVE_OPT_RE2.test(` ${call.opts}`), plain, repoOpt, ...appFlagsOf2(tokens, call.opts) };
   if (specs.length === 0) return [{ kind: "push", pr: null, push: { ...base, branch: null, src: null, force, bare: true, oneSide: true } }];
-  const out4 = [];
+  const out5 = [];
   for (let i = 0; i < specs.length; i++) {
     let spec = specs[i];
     let rewrite = force;
@@ -7736,12 +7886,12 @@ function pushShapesFrom2(call) {
     const src = rawSrc.replace(REF_HEADS2, "");
     const name = (rawDst || rawSrc).replace(REF_HEADS2, "");
     const oneSide = colon < 0 || rawSrc === "" || rawDst === "";
-    out4.push({ kind: "push", pr: null, push: { ...base, branch: name === "" || name === "HEAD" ? null : name, src: src === "" || src === "HEAD" ? null : src, force: rewrite, bare: false, oneSide } });
+    out5.push({ kind: "push", pr: null, push: { ...base, branch: name === "" || name === "HEAD" ? null : name, src: src === "" || src === "HEAD" ? null : src, force: rewrite, bare: false, oneSide } });
   }
-  return out4;
+  return out5;
 }
 function pushShapesOf2(raw, tool) {
-  const out4 = [];
+  const out5 = [];
   const seen = /* @__PURE__ */ new Map();
   const verdict = rawVerdict2(raw, tool);
   const offList = verdict === null ? !steadyCommand2(raw, tool === "PowerShell" ? "pwsh" : "bash") : verdict.kind !== "ok";
@@ -7764,11 +7914,11 @@ function pushShapesOf2(raw, tool) {
         kept.noFollowTags &&= p.noFollowTags;
       } else {
         seen.set(id, p);
-        out4.push(shape);
+        out5.push(shape);
       }
     }
   }
-  return out4;
+  return out5;
 }
 var squashMarks2 = (t) => t.replace(/["'\\^`]/g, "");
 var WORD_SPLIT2 = /[\s;&|(){}<>=,]+/;
@@ -7878,11 +8028,11 @@ function chainDirsOf2(p, cwd, shell) {
 }
 var MOVE_VALUE_RE2 = /(?:\bGIT_(?:DIR|WORK_TREE|COMMON_DIR)[ \t]*=[ \t]*|--(?:git-dir|work-tree)(?:=|\s+))(\S+)/gi;
 function moveTargets2(raw, cwd, shell, home) {
-  const out4 = [];
+  const out5 = [];
   for (const m of raw.replace(/["']/g, "").matchAll(MOVE_VALUE_RE2)) {
-    for (const dir of knownDirs2([chainStep2(cwd, m[1].replace(/[;&|)]+$/, ""), shell)], home)) out4.push(dir.replace(/[\\/]\.git(?:[\\/]worktrees[\\/][^\\/]+)?[\\/]*$/i, ""));
+    for (const dir of knownDirs2([chainStep2(cwd, m[1].replace(/[;&|)]+$/, ""), shell)], home)) out5.push(dir.replace(/[\\/]\.git(?:[\\/]worktrees[\\/][^\\/]+)?[\\/]*$/i, ""));
   }
-  return [...new Set(out4)];
+  return [...new Set(out5)];
 }
 var HOME_LEAD2 = /^(?:~|\$HOME\b|\$\{HOME\}|\$env:USERPROFILE\b|%USERPROFILE%)(?=$|[\\/])/i;
 function knownDirs2(dirs, home) {
@@ -7898,21 +8048,21 @@ function knownDirs2(dirs, home) {
 var firstCovered2 = (deps, dirs) => dirs.find((d) => coveredAmong2(deps, [d]) !== null) ?? null;
 var RAW_CD2 = /^(?:cd|chdir|pushd|set-location|sl|push-location)$/i;
 function rawDirs2(raw, tool, cwd, shell, home) {
-  const out4 = [cwd];
+  const out5 = [cwd];
   for (const call of pushCallsIn2(raw, mayRunUnderCmd2(tool))) {
-    for (const base of dirsAfter2(cwd, call.cds, shell, true)) out4.push(base, chainDir2(base, callDirsOf2(call), shell));
+    for (const base of dirsAfter2(cwd, call.cds, shell, true)) out5.push(base, chainDir2(base, callDirsOf2(call), shell));
   }
   const lists = [raw.replace(/["'`^]/g, "").split(/[\s;&|(){}<>]+/), ...payloadWords2(raw, shell) ?? []];
   for (const words of lists) {
     let chained = cwd;
     for (let i = 0; i + 1 < words.length; i++) {
       if (!RAW_CD2.test(words[i]) && words[i] !== "-C" && !/^-path$/i.test(words[i])) continue;
-      out4.push(chainStep2(cwd, words[i + 1], shell));
+      out5.push(chainStep2(cwd, words[i + 1], shell));
       chained = chainStep2(chained, words[i + 1], shell);
-      out4.push(chained);
+      out5.push(chained);
     }
   }
-  return [.../* @__PURE__ */ new Set([...knownDirs2(out4, home), ...moveTargets2(raw, cwd, shell, home)])];
+  return [.../* @__PURE__ */ new Set([...knownDirs2(out5, home), ...moveTargets2(raw, cwd, shell, home)])];
 }
 function payloadWords2(raw, shell) {
   const top = pairedWords2(raw, shell === "pwsh");
@@ -7965,14 +8115,14 @@ function ghFlagFirstDenies2(raw, tool, deps, cwd, shell) {
   return [];
 }
 function cmdSegments2(view) {
-  const out4 = [];
+  const out5 = [];
   let from = 0;
   for (const m of view.matchAll(new RegExp(SEGMENT_RE2.source, "g"))) {
-    out4.push({ seg: view.slice(from, m.index), from });
+    out5.push({ seg: view.slice(from, m.index), from });
     from = m.index + m[0].length;
   }
-  out4.push({ seg: view.slice(from), from });
-  return out4;
+  out5.push({ seg: view.slice(from), from });
+  return out5;
 }
 var whereId2 = (at3) => `${at3.unknown ? "?" : ""}${at3.loose ? "~" : ""}${at3.cds.join("\0")}`;
 function ownCommand2(view, masked, from) {
@@ -7994,13 +8144,13 @@ function shapesOf2(raw, tool, parsed) {
   const views = [.../* @__PURE__ */ new Set([joinContinuations(text, "bash"), joinContinuations(text, "pwsh")])];
   const textOnly = (tool === "Bash" || tool === "PowerShell") && !PR_NUMBER_IN_TEXT_RE2.test(raw) && [raw, joinContinuations(raw, "bash"), joinContinuations(raw, "pwsh")].every(isTextOnlyCommand2);
   const docAst = !PR_NUMBER_IN_TEXT_RE2.test(raw) && docAppendByAst2(parsed, tool, raw);
-  const out4 = [];
+  const out5 = [];
   const pwshTool = tool === "PowerShell";
   const seen = /* @__PURE__ */ new Set();
   const add = (shape, id) => {
     if (!seen.has(id)) {
       seen.add(id);
-      out4.push(shape);
+      out5.push(shape);
     }
   };
   let created = false;
@@ -8053,7 +8203,7 @@ function shapesOf2(raw, tool, parsed) {
       add({ kind: "create", pr: null, at: at3, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool, ...read ? { read } : {} }, `create|${whereId2(at3)}|${view}`);
     }
   }
-  const withMergesAndCreates = withAstCreates2(withAstMerges2(out4, parsed, pwshTool), parsed, pwshTool);
+  const withMergesAndCreates = withAstCreates2(withAstMerges2(out5, parsed, pwshTool), parsed, pwshTool);
   const seenLand = new Set(withMergesAndCreates.filter((s) => s.kind === "land").map((s) => `${s.pr}|${s.sha}`));
   const lands = astLandShapes2(parsed, raw, exempt, text, pwshTool).filter((s) => {
     const k = `${s.pr}|${s.sha}`;
@@ -8078,7 +8228,7 @@ function enforcingScope2(scope, deps, cwd, homeOnly = false) {
   if (homeOnly && scope === "other") return homeFlag2(deps, "enforce") === true;
   return scope === "push" ? enforcingPush2(deps, cwd) : enforcing2(deps, cwd);
 }
-var FLAG_OF = { push: "decisions.enforcePush", other: "decisions.enforce", "app-push": "decisions.enforceAppPush" };
+var FLAG_OF2 = { push: "decisions.enforcePush", other: "decisions.enforce", "app-push": "decisions.enforceAppPush" };
 var OPENER2 = String.raw`(?:\{\s*|[(\`!]\s*|(?:then|else|do|if|while|until|elif)\s+|time\s+(?:(?:-p|--)\s+)*)`;
 var CMD_POS2 = String.raw`(?:(?<hard>(?:^|[;&|\r\n]\s*|#>\s*|\b(?:Invoke-Command|icm)\s+(?:-ScriptBlock\s+)?(?=\{))${OPENER2}*)|(?<soft>(?:[)(\`]\s*|\{\s*|\b(?:then|else|do)\s+)${OPENER2}*))` + String.raw`(?:(?:[A-Za-z_]\w*\+?=[^\s;&|]*|(?:\d*[<>]{1,2}&?|&>>?)[^\s;&|]+)[ \t]+)*(?:\$\w+[ \t]*=[ \t]*)?(?:(?:builtin|command|eval)\s+(?:(?:-p|--)\s+)*)*(?:[\w.]+\\)?\\?`;
 var NOISE2 = String.raw`(?:\\|''|"")*`;
@@ -8799,21 +8949,21 @@ function sendsRe2(p, deps, dir, branch) {
 }
 var RE_NOT_ALONE_WHY2 = "the push output goes to a pipe or a redirect, or another step runs in the same command, so this gate does not scan this form. Run the push with no pipe and no redirect, as its own command: git push <remote> <branch>.";
 function namedTags2(p, deps, dir) {
-  const out4 = /* @__PURE__ */ new Set();
+  const out5 = /* @__PURE__ */ new Set();
   for (const r of [p.src, p.branch]) {
     if (typeof r !== "string" || r === "") continue;
     if (r.startsWith("refs/tags/")) {
-      out4.add(r);
+      out5.add(r);
       continue;
     }
     if (r.startsWith("refs/") || /^(?:HEAD|@)(?:$|[~^@])/.test(r)) continue;
     if (r.startsWith("tags/")) {
-      out4.add(`refs/${r}`);
+      out5.add(`refs/${r}`);
       continue;
     }
-    if (deps.git(dir, ["show-ref", "--verify", "--quiet", `refs/tags/${r}`]).status === 0) out4.add(`refs/tags/${r}`);
+    if (deps.git(dir, ["show-ref", "--verify", "--quiet", `refs/tags/${r}`]).status === 0) out5.add(`refs/tags/${r}`);
   }
-  return [...out4];
+  return [...out5];
 }
 function tagText2(wide, sha, deps, dir, stop) {
   const fmt = "--format=%(refname)%00%(objecttype)%00%(contents)%00";
@@ -8839,7 +8989,7 @@ var clockDeny2 = (branch) => hardOf2(deny2("holdout-scan-unavailable", `this pus
 var SHIP_RESERVE_MS2 = 1500;
 var errCode2 = (e) => String(e?.code ?? "");
 function addedText2(log) {
-  const out4 = [];
+  const out5 = [];
   let inDiff = false;
   let binary = false;
   let width = 0;
@@ -8847,13 +8997,13 @@ function addedText2(log) {
     if (line.startsWith(COMMIT_MARK2)) {
       inDiff = false;
       width = 0;
-      out4.push(line);
+      out5.push(line);
       continue;
     }
     if (line.startsWith("diff --")) {
       inDiff = true;
       width = 0;
-      out4.push(line);
+      out5.push(line);
       continue;
     }
     const at3 = inDiff ? /^(@{2,}) /.exec(line) : null;
@@ -8863,12 +9013,12 @@ function addedText2(log) {
     }
     if (inDiff && width === 0 && /^Binary files (?:.* )?differ$/.test(line)) binary = true;
     if (width === 0) {
-      out4.push(line);
+      out5.push(line);
       continue;
     }
-    if (line.slice(0, width) === "+".repeat(width)) out4.push(line);
+    if (line.slice(0, width) === "+".repeat(width)) out5.push(line);
   }
-  return { text: out4.join("\n"), binary };
+  return { text: out5.join("\n"), binary };
 }
 function scanHoldoutRead2(p, deps, dir, branch, chainedCommit, alone) {
   const isRe = sendsRe2(p, deps, dir, branch);
@@ -9242,14 +9392,43 @@ function decide2(input, deps, found = []) {
   return d.action === "deny" || deps.floor === void 0 ? d : withFloor(d, input, deps);
 }
 function withFloor(d, input, deps) {
+  const fd = floorDecision(input, deps);
+  if (fd.action === "deny") return fd;
+  if (fd.warn !== void 0 && d.action === "allow" && d.warn === void 0) return { ...d, warn: fd.warn, scope: fd.scope };
+  return d;
+}
+var FLOOR_ERROR_REASON = "BLOCKED (decision-gate): the check that holds the rules of main could not run on this call, so it is not allowed. Run the command again. If it keeps failing, ask Dave.";
+var FLOOR_ERROR_DENY = { action: "deny", pattern: "main-floor-error", scope: "other", reason: FLOOR_ERROR_REASON };
+function floorFallbackDeps(input, deps) {
+  const { parsed: _parsed, parseLate: _late, parseOpts: _opts, floor: _floor, floorBase: _base, floorImpl: _impl, ...plain } = deps;
+  void _parsed;
+  void _late;
+  void _opts;
+  void _floor;
+  void _base;
+  void _impl;
+  const cmd = (() => {
+    try {
+      return readCommand2(input);
+    } catch {
+      return null;
+    }
+  })();
+  return { ...deps.floorBase ?? plain, ...cmd !== null && cmd.kind === "command" ? { parseLate: cmd.text } : {} };
+}
+function decisionOfMainOutput(out5) {
+  const o = JSON.parse(out5).hookSpecificOutput;
+  if (o?.permissionDecision === "deny") return { action: "deny", pattern: "main-floor-unjudged", scope: "other", reason: String(o.permissionDecisionReason ?? FLOOR_ERROR_REASON) };
+  if (typeof o?.additionalContext === "string" && o.additionalContext.startsWith("WARNING (decision-gate")) return { action: "allow", warn: `main-floor: ${o.additionalContext.slice(0, 400)}`, scope: "other" };
+  return ALLOW2;
+}
+function floorDecision(input, deps) {
   const f = deps.floor;
+  const impl = deps.floorImpl ?? FLOOR_IMPL;
   let why = f.failed;
   if (why === void 0 && f.deps !== void 0) {
     try {
-      const fd = (deps.floorImpl ?? FLOOR_IMPL).decide(input, f.deps);
-      if (fd.action === "deny") return fd;
-      if (fd.warn !== void 0 && d.action === "allow" && d.warn === void 0) return { ...d, warn: fd.warn, scope: fd.scope };
-      return d;
+      return impl.decide(input, f.deps);
     } catch (err) {
       why = String(err?.message ?? err).slice(0, 160);
     }
@@ -9258,13 +9437,11 @@ function withFloor(d, input, deps) {
     logGuardError(HOOK2, new Error(`main-floor failed: ${why ?? "no floor deps"}`));
   } catch {
   }
-  let gated = true;
   try {
-    gated = gatedScopesSafe(input, false, deps.parsed).size > 0 || storeWriteCall2(input, deps);
+    return decisionOfMainOutput(impl.handle(JSON.stringify(input), f.deps ?? floorFallbackDeps(input, deps)));
   } catch {
+    return FLOOR_ERROR_DENY;
   }
-  if (!gated) return d;
-  return { action: "deny", pattern: "main-floor-error", scope: "other", reason: "BLOCKED (decision-gate): the check that holds the rules of main could not run on this call, so it is not allowed. Run the command again. If it keeps failing, ask Dave." };
 }
 function decideHead(input, deps, found = []) {
   const notes = /* @__PURE__ */ new Set();
@@ -9315,19 +9492,19 @@ function inApp2(deps, run) {
     mode.app = false;
   }
 }
-var out3 = (extra) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...extra } }).replace(CREDS_RE2, "$1");
-var denyOut = (reason) => out3({ permissionDecision: "deny", permissionDecisionReason: reason });
-var warnLead = (scope) => scope === "app-push" ? "this push in an app folder has no tap from Dave; it would be blocked in block mode." : `this command would be blocked when ${FLAG_OF[scope]} is true.`;
-var warnOut = (text, scope = "other", tail = "") => out3({ additionalContext: `WARNING (decision-gate, warn mode): ${warnLead(scope)} ${text.replace(/^BLOCKED \(decision-gate\): /, "")}${tail}` });
-function gatedScopes(input, app = false, parsed) {
+var out4 = (extra) => JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...extra } }).replace(CREDS_RE2, "$1");
+var denyOut2 = (reason) => out4({ permissionDecision: "deny", permissionDecisionReason: reason });
+var warnLead2 = (scope) => scope === "app-push" ? "this push in an app folder has no tap from Dave; it would be blocked in block mode." : `this command would be blocked when ${FLAG_OF2[scope]} is true.`;
+var warnOut2 = (text, scope = "other", tail = "") => out4({ additionalContext: `WARNING (decision-gate, warn mode): ${warnLead2(scope)} ${text.replace(/^BLOCKED \(decision-gate\): /, "")}${tail}` });
+function gatedScopes2(input, app = false, parsed) {
   const tool = input.tool_name || input.tool || "";
   if (WRITE_TOOLS2.has(tool)) return /* @__PURE__ */ new Set(["other"]);
   const shapes = catchShapes2(input, parsed);
-  const scopes = new Set((shapes ?? []).map(scopeOf));
+  const scopes = new Set((shapes ?? []).map(scopeOf2));
   if (app && (scopes.size > 0 || shapes === null)) scopes.add("app-push");
   return scopes;
 }
-function unreadableInput() {
+function unreadableInput2() {
   const note = "decision-gate: the hook input is not readable JSON, so no command shape can be judged; the call is allowed.";
   try {
     logGuardError(HOOK2, new Error("unreadable hook input"));
@@ -9340,39 +9517,52 @@ function unreadableInput() {
   }
   return "{}";
 }
-function handle(raw, deps) {
+function handle2(raw, deps) {
   let input = {};
   try {
     const parsed = JSON.parse(raw.trim() || "{}");
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return unreadableInput();
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return unreadableInput2();
     input = parsed;
   } catch {
-    return unreadableInput();
+    return unreadableInput2();
   }
   const found = [];
   try {
     const d = decide2(input, deps, found);
     const tail = d.notice ? `
-${corruptLine(d.notice)}` : "";
+${corruptLine2(d.notice)}` : "";
     let shown = "{}";
     if (d.action === "allow" && d.warn) {
       logGuardDecision(HOOK2, input, "warn", d.warn.split(":")[0]);
-      shown = warnOut(d.warn.slice(d.warn.indexOf(":") + 2), d.scope, tail);
+      shown = warnOut2(d.warn.slice(d.warn.indexOf(":") + 2), d.scope, tail);
     } else if (d.action === "deny") {
       logGuardDecision(HOOK2, input, "deny", d.pattern);
-      shown = denyOut(d.reason + tail);
+      shown = denyOut2(d.reason + tail);
     } else if (d.notice) {
-      shown = out3({ additionalContext: corruptLine(d.notice) });
+      shown = out4({ additionalContext: corruptLine2(d.notice) });
     }
-    if (d.notice) logGuardDecision(HOOK2, input, "warn", `registry-missing ${fwd2(d.notice)}: ${CORRUPT_EFFECT}`);
+    if (d.notice) logGuardDecision(HOOK2, input, "warn", `registry-missing ${fwd2(d.notice)}: ${CORRUPT_EFFECT2}`);
     return shown;
   } catch (err) {
-    return unjudgeable(input, deps, err, found);
+    if (deps.floor !== void 0) {
+      try {
+        const fd = floorDecision(input, deps);
+        if (fd.action === "deny") {
+          try {
+            logGuardDecision(HOOK2, input, "deny", fd.pattern);
+          } catch {
+          }
+          return denyOut2(fd.reason);
+        }
+      } catch {
+      }
+    }
+    return unjudgeable2(input, deps, err, found);
   }
 }
-function unjudgeable(input, deps, thrown, found = []) {
+function unjudgeable2(input, deps, thrown, found = []) {
   const cwd = input.cwd || process.cwd();
-  const underRoot = pushUnderLiveRoot(input, deps);
+  const underRoot = pushUnderLiveRoot2(input, deps);
   const app = thrown instanceof AppScopeError2 || underRoot;
   const appPush = thrown instanceof AppScopeError2 && thrown.push || underRoot;
   const err = thrown instanceof AppScopeError2 ? thrown.inner : thrown;
@@ -9389,15 +9579,15 @@ function unjudgeable(input, deps, thrown, found = []) {
     } catch {
       return d.hard === true;
     }
-  }) ?? catchIntentDeny(input, deps.parsed);
+  }) ?? catchIntentDeny2(input, deps.parsed);
   if (prior) {
     try {
       logGuardDecision(HOOK2, input, "deny", prior.pattern);
     } catch {
     }
-    return denyOut(prior.reason);
+    return denyOut2(prior.reason);
   }
-  const scopes = gatedScopesSafe(input, appPush, deps.parsed);
+  const scopes = gatedScopesSafe2(input, appPush, deps.parsed);
   if (storeWriteCall2(input, deps)) scopes.add("other");
   if (scopes.size === 0) return "{}";
   const raw = gone ? err.message : String(err?.message ?? err).slice(0, 160);
@@ -9405,22 +9595,22 @@ function unjudgeable(input, deps, thrown, found = []) {
   const hint = gone ? "Run the command from a folder that exists." : "Run the command again. If it keeps failing, ask Dave.";
   const why = `could not verify Dave's tap (${detail}). ${hint}`;
   const holdsPush = !app && scopes.has("push") && (gone || !pushFoldersUnregistered2(input, deps));
-  const live = holdsPush || app && hardAppCall(input, deps.parsed) || [...scopes].some((s) => enforcingScope2(s, deps, cwd, app));
+  const live = holdsPush || app && hardAppCall2(input, deps.parsed) || [...scopes].some((s) => enforcingScope2(s, deps, cwd, app));
   if (gone) logGuardDecision(HOOK2, input, live ? "deny" : "warn", "cwd-missing");
-  if (holdsPush && !(app && hardAppCall(input, deps.parsed)) && ![...scopes].some((s) => enforcingScope2(s, deps, cwd, app))) {
+  if (holdsPush && !(app && hardAppCall2(input, deps.parsed)) && ![...scopes].some((s) => enforcingScope2(s, deps, cwd, app))) {
     const again = gone ? "Run the push again from a folder that exists." : "Run the push again. If it fails again, ask Dave.";
-    return denyOut(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
+    return denyOut2(`BLOCKED (decision-gate): the push check could not run (${detail}), so this push was not judged. This is not a policy block. ${again}`);
   }
-  return live ? denyOut(`BLOCKED (decision-gate): ${why}`) : warnOut(why, scopes.has("other") ? "other" : scopes.has("app-push") ? "app-push" : "push");
+  return live ? denyOut2(`BLOCKED (decision-gate): ${why}`) : warnOut2(why, scopes.has("other") ? "other" : scopes.has("app-push") ? "app-push" : "push");
 }
-var gatedScopesSafe = (input, app = false, parsed) => {
+var gatedScopesSafe2 = (input, app = false, parsed) => {
   try {
-    return gatedScopes(input, app, parsed);
+    return gatedScopes2(input, app, parsed);
   } catch {
     return /* @__PURE__ */ new Set();
   }
 };
-function catchIntentDeny(input, parsed) {
+function catchIntentDeny2(input, parsed) {
   const shapes = catchShapes2(input, parsed);
   if (shapes === null) return null;
   const none = deny2("none", "", "push");
@@ -9431,7 +9621,7 @@ function catchIntentDeny(input, parsed) {
   }
   return null;
 }
-function hardAppCall(input, parsed) {
+function hardAppCall2(input, parsed) {
   try {
     const cmd = readCommand2(input);
     if (cmd.kind !== "command") return false;
@@ -9452,7 +9642,7 @@ function catchShapes2(input, parsed) {
     return null;
   }
 }
-function pushUnderLiveRoot(input, deps) {
+function pushUnderLiveRoot2(input, deps) {
   try {
     const scope = deps.tapScope;
     const cmd = readCommand2(input);
@@ -9549,7 +9739,8 @@ function realDeps2(opts = {}) {
   const clock = run.now ?? Date.now;
   let registry = null;
   return {
-    git: makeGit2(run),
+    // Fix round of review pass 2 (aegis 2): one deadline for the whole hook, on both judgments (this head's and the floor's): no git call starts after t0 + HOOK_BUDGET_MS.
+    git: makeGit2({ ...run, deadline: t0 + HOOK_BUDGET_MS2 }),
     scanLeft: () => t0 + HOOK_BUDGET_MS2 - clock(),
     appGit: makeGit2({ ...run, deadline: t0 + HOOK_BUDGET_MS2 }),
     readFile: (p) => {
@@ -9566,7 +9757,7 @@ function realDeps2(opts = {}) {
     holdoutIds: (dir) => loadHoldoutIds(primaryRootOf2(makeGit2(run), dir)),
     answerKeyHits: answerKeyHitsOf2,
     // The true floor starts from main's own realDeps (its git runner, its clock, its registry reader), not from this head's.
-    floorBase: realDeps({ start: t0, ...run })
+    floorBase: { ...realDeps({ start: t0, ...run }), git: makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS2 }) }
   };
 }
 function primaryRootOf2(git, dir) {
@@ -9622,7 +9813,7 @@ function unwrapCall(c) {
 }
 function expandWrappers(r) {
   if (!r) return r;
-  const out4 = [];
+  const out5 = [];
   for (const c of r.calls) {
     let cur = c;
     let chain = [c];
@@ -9632,9 +9823,9 @@ function expandWrappers(r) {
       chain.push(inner);
       cur = inner;
     }
-    for (let k = 0; k < chain.length; k++) out4.push(k < chain.length - 1 ? { ...chain[k], nested: { status: "parsed", via: "wrapper" } } : chain[k]);
+    for (let k = 0; k < chain.length; k++) out5.push(k < chain.length - 1 ? { ...chain[k], nested: { status: "parsed", via: "wrapper" } } : chain[k]);
   }
-  return { ...r, calls: out4 };
+  return { ...r, calls: out5 };
 }
 async function withParsed2(raw, deps) {
   const [head, floor] = await Promise.all([withHeadParsed(raw, deps), withFloorParsed(raw, deps)]);
@@ -9650,7 +9841,7 @@ async function withFloorParsed(raw, deps) {
   void _impl;
   try {
     const f = await (deps.floorImpl ?? FLOOR_IMPL).withParsed(raw, deps.floorBase ?? plain);
-    return { ...deps, floor: f.parseLate !== void 0 ? { failed: "the main-floor parse was late" } : { deps: f } };
+    return { ...deps, floor: { deps: f } };
   } catch (err) {
     return { ...deps, floor: { failed: String(err?.message ?? err).slice(0, 160) } };
   }
@@ -9708,7 +9899,7 @@ async function main3() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString("utf-8");
-  console.log(handle(raw, await withParsed2(raw, realDeps2({ start }))));
+  console.log(handle2(raw, await withParsed2(raw, realDeps2({ start }))));
 }
 if (!process.env.VITEST) {
   main3().catch((err) => {
@@ -9730,7 +9921,7 @@ export {
   astMerges2 as astMerges,
   decide2 as decide,
   docAppendByAst2 as docAppendByAst,
-  handle,
+  handle2 as handle,
   isInert,
   isLandLabel2 as isLandLabel,
   isMergeNowLabel2 as isMergeNowLabel,

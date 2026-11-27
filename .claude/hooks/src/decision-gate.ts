@@ -315,8 +315,9 @@ export interface Deps {
   floorImpl?: FloorImpl;
 }
 export type FloorDeps = Parameters<typeof mainFloor.withParsed>[1];
-export interface FloorImpl { withParsed: (raw: string, deps: FloorDeps) => Promise<FloorDeps>; decide: (input: HookInput, deps: FloorDeps) => Decision }
-export const FLOOR_IMPL: FloorImpl = { withParsed: mainFloor.withParsed, decide: mainFloor.decide as unknown as FloorImpl['decide'] };
+/** `handle` is main's whole hook step (its own unjudgeable path included): the floor asks it when main's decide throws, so a failure is judged by main's reading of the call. */
+export interface FloorImpl { withParsed: (raw: string, deps: FloorDeps) => Promise<FloorDeps>; decide: (input: HookInput, deps: FloorDeps) => Decision; handle: (raw: string, deps: FloorDeps) => string }
+export const FLOOR_IMPL: FloorImpl = { withParsed: mainFloor.withParsed, decide: mainFloor.decide as unknown as FloorImpl['decide'], handle: mainFloor.handle as unknown as FloorImpl['handle'] };
 /**
  * Which flag decides a deny: `push` is decisions.enforcePush, `other` is decisions.enforce, `app-push` is a push in a covered folder
  * (denies unless decisions.enforceAppPush is false, and then only its tap path warns: Dave 11-13, hard denies always deny).
@@ -4310,24 +4311,45 @@ export function decide(input: HookInput, deps: Deps, found: Deny[] = []): Decisi
 /**
  * The true floor (card coord-guard-deny-floor, Dave 11-27 "True floor, one round"): the verdict is the stricter of the head's and main's own. A head deny stays as it is.
  * The floor reads the decision store, the router config and local git as main does; it consumes no tap and writes no log (its two log calls are no-ops in the copy).
- * A floor that threw or answered late denies a gated call that the head allows, and allows an ungated one (as unjudgeable() does); the head writes one log row either way.
+ * Fix round of review pass 2 (seat GO 12:36, Dave "One fix round, error paths"): a floor that threw or answered late is judged by MAIN's own reading of the call (floorDecision), never by this
+ * head's shapes. Main's reading denies a gated call and allows an ungated one, as main does. If main's own reading throws too, the call is denied.
  */
 function withFloor(d: Decision, input: HookInput, deps: Deps): Decision {
+  const fd = floorDecision(input, deps);
+  if (fd.action === 'deny') return fd;
+  if (fd.warn !== undefined && d.action === 'allow' && d.warn === undefined) return { ...d, warn: fd.warn, scope: fd.scope };
+  return d;
+}
+
+const FLOOR_ERROR_REASON = 'BLOCKED (decision-gate): the check that holds the rules of main could not run on this call, so it is not allowed. Run the command again. If it keeps failing, ask Dave.';
+const FLOOR_ERROR_DENY: Decision = { action: 'deny', pattern: 'main-floor-error', scope: 'other', reason: FLOOR_ERROR_REASON };
+
+/** The deps of main's gate when its own parse failed: the base without this head's parse and seams, the call's shell text marked late (as main's withParsed does for a parse that threw). */
+function floorFallbackDeps(input: HookInput, deps: Deps): FloorDeps {
+  const { parsed: _parsed, parseLate: _late, parseOpts: _opts, floor: _floor, floorBase: _base, floorImpl: _impl, ...plain } = deps;
+  void _parsed; void _late; void _opts; void _floor; void _base; void _impl;
+  const cmd = (() => { try { return readCommand(input); } catch { return null; } })();
+  return { ...((deps.floorBase ?? plain) as unknown as FloorDeps), ...(cmd !== null && cmd.kind === 'command' ? { parseLate: cmd.text } : {}) } as FloorDeps;
+}
+
+/** What main's own handle says about a call, as a Decision: its deny, its warn, or allow. */
+function decisionOfMainOutput(out: string): Decision {
+  const o = (JSON.parse(out) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string } }).hookSpecificOutput;
+  if (o?.permissionDecision === 'deny') return { action: 'deny', pattern: 'main-floor-unjudged', scope: 'other', reason: String(o.permissionDecisionReason ?? FLOOR_ERROR_REASON) };
+  if (typeof o?.additionalContext === 'string' && o.additionalContext.startsWith('WARNING (decision-gate')) return { action: 'allow', warn: `main-floor: ${o.additionalContext.slice(0, 400)}`, scope: 'other' };
+  return ALLOW;
+}
+
+/** The floor's own verdict for a call. Never throws: a failure is judged by main's own handle (its unjudgeable path), and a failure of that denies. */
+function floorDecision(input: HookInput, deps: Deps): Decision {
   const f = deps.floor as NonNullable<Deps['floor']>;
+  const impl = deps.floorImpl ?? FLOOR_IMPL;
   let why = f.failed;
   if (why === undefined && f.deps !== undefined) {
-    try {
-      const fd = (deps.floorImpl ?? FLOOR_IMPL).decide(input, f.deps);
-      if (fd.action === 'deny') return fd;
-      if (fd.warn !== undefined && d.action === 'allow' && d.warn === undefined) return { ...d, warn: fd.warn, scope: fd.scope };
-      return d;
-    } catch (err) { why = String((err as Error)?.message ?? err).slice(0, 160); }
+    try { return impl.decide(input, f.deps); } catch (err) { why = String((err as Error)?.message ?? err).slice(0, 160); }
   }
   try { logGuardError(HOOK, new Error(`main-floor failed: ${why ?? 'no floor deps'}`)); } catch { /* the log never blocks */ }
-  let gated = true;
-  try { gated = gatedScopesSafe(input, false, deps.parsed).size > 0 || storeWriteCall(input, deps); } catch { /* a throw while judging counts as gated */ }
-  if (!gated) return d;
-  return { action: 'deny', pattern: 'main-floor-error', scope: 'other', reason: 'BLOCKED (decision-gate): the check that holds the rules of main could not run on this call, so it is not allowed. Run the command again. If it keeps failing, ask Dave.' };
+  try { return decisionOfMainOutput(impl.handle(JSON.stringify(input), f.deps ?? floorFallbackDeps(input, deps))); } catch { return FLOOR_ERROR_DENY; }
 }
 
 function decideHead(input: HookInput, deps: Deps, found: Deny[] = []): Decision {
@@ -4463,6 +4485,13 @@ export function handle(raw: string, deps: Deps): string {
     if (d.notice) logGuardDecision(HOOK, input, 'warn', `registry-missing ${fwd(d.notice)}: ${CORRUPT_EFFECT}`);
     return shown;
   } catch (err) {
+    // Fix round of review pass 2 (critic 2): a throw in this head's judgment still runs the floor; the stricter of the two answers shows.
+    if (deps.floor !== undefined) {
+      try {
+        const fd = floorDecision(input, deps);
+        if (fd.action === 'deny') { try { logGuardDecision(HOOK, input, 'deny', fd.pattern); } catch { /* the log never blocks */ } return denyOut(fd.reason); }
+      } catch { /* the floor never blocks the head's own answer */ }
+    }
     return unjudgeable(input, deps, err, found);
   }
 }
@@ -4708,7 +4737,8 @@ export function realDeps(opts: { start?: number } & Pick<GitOptions, 'now' | 'sp
   const clock = run.now ?? Date.now;
   let registry: Registry | null = null;
   return {
-    git: makeGit(run),
+    // Fix round of review pass 2 (aegis 2): one deadline for the whole hook, on both judgments (this head's and the floor's): no git call starts after t0 + HOOK_BUDGET_MS.
+    git: makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS }),
     scanLeft: () => t0 + HOOK_BUDGET_MS - clock(),
     appGit: makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS }),
     readFile: (p) => { try { return existsSync(p) ? readFileSync(p, 'utf8') : null; } catch { return null; } },
@@ -4719,7 +4749,7 @@ export function realDeps(opts: { start?: number } & Pick<GitOptions, 'now' | 'sp
     holdoutIds: (dir) => loadHoldoutIds(primaryRootOf(makeGit(run), dir)),
     answerKeyHits: answerKeyHitsOf,
     // The true floor starts from main's own realDeps (its git runner, its clock, its registry reader), not from this head's.
-    floorBase: mainFloor.realDeps({ start: t0, ...run }),
+    floorBase: { ...mainFloor.realDeps({ start: t0, ...run }), git: mainFloor.makeGit({ ...run, deadline: t0 + HOOK_BUDGET_MS }) },
   };
 }
 
@@ -4802,7 +4832,8 @@ async function withFloorParsed(raw: string, deps: Deps): Promise<Deps> {
   void _parsed; void _late; void _opts; void _floor; void _base; void _impl;
   try {
     const f = await (deps.floorImpl ?? FLOOR_IMPL).withParsed(raw, (deps.floorBase ?? plain) as unknown as FloorDeps);
-    return { ...deps, floor: f.parseLate !== undefined ? { failed: 'the main-floor parse was late' } : { deps: f } };
+    // A late parse keeps main's own deps (parseLate set): main's decide then denies by its late-parse reading (scriptRunnerLateDenies, the hand reader), as main does.
+    return { ...deps, floor: { deps: f } };
   } catch (err) { return { ...deps, floor: { failed: String((err as Error)?.message ?? err).slice(0, 160) } }; }
 }
 

@@ -251,8 +251,8 @@ describe('E error paths of the floor (fix round of review pass 2)', () => {
   describe('E6 one deadline for both git runners', () => {
     it('after the hook budget, the head git and the floor git both throw a deadline error', () => {
       const d = realDeps({ start: 0, now: () => 8000, exists: () => true });
-      expect(() => d.git(dir, ['status'])).toThrow(/deadline/i);
-      expect(() => (d.floorBase as unknown as { git: Deps['git'] }).git(dir, ['status'])).toThrow(/deadline/i);
+      expect(() => d.git(dir, ['status'])).toThrow(/time limit|deadline/i);
+      expect(() => (d.floorBase as unknown as { git: Deps['git'] }).git(dir, ['status'])).toThrow(/time limit|deadline/i);
     });
   });
 

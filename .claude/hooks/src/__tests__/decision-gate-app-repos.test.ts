@@ -1848,9 +1848,8 @@ describe('C25 item 4: the 7 s git deadline applies to app-folder git only', () =
     // C5 (seat change 2 and F6, 2026-11-15): past the hook budget the gate writes a HARD clock deny before the 10 s kill, in place of
     // reads that could be killed with no deny written. At 8 s the ship read does not start.
     seen.length = 0;
-    const late = await decideParsed(bash('git push fork feat', '/cc'), realDeps({ start: 0, now: () => 8000, spawn, exists: () => true }));
-    // decide drops the hard mark from its output; a deny that comes out with scope push while enforcePush is absent is a hard one.
-    expect(late.action === "deny" && late.scope === "push" && /time of the hook ran out/.test(late.reason)).toBe(true);
+    // Fix round of review pass 2: the CCv3 runner has the deadline too, so past it the first read throws (decide throws; handle turns that into the unjudgeable deny).
+    await expect(decideParsed(bash('git push fork feat', '/cc'), realDeps({ start: 0, now: () => 8000, spawn, exists: () => true }))).rejects.toThrow(GitDeadlineError);
     expect(seen).not.toContain('rev-parse feat^{tree}');
   });
   // Change that breaks it: route an app-folder git call through the base runner, or a CCv3 call through the app runner.
@@ -1865,10 +1864,11 @@ describe('C25 item 4: the 7 s git deadline applies to app-folder git only', () =
     expect(await decideParsed(bash('git push fork feat', '/work/cc'), d)).toMatchObject({ action: 'allow', warn: expect.stringMatching(/^ship:/) });
     expect(app).toEqual([]);
   });
-  it('realDeps: the app runner stops at the deadline, the base runner does not', () => {
+  // Fix round of review pass 2 (card coord-guard-deny-floor, seat GO 12:36, aegis 2): the base runner has the deadline too, so one deadline covers the head's and the floor's git.
+  it('realDeps: both runners stop at the deadline', () => {
     const spawn = () => ({ status: 0, stdout: 'ok' });
     const d = realDeps({ start: 0, now: () => 8000, spawn, exists: () => true });
-    expect(d.git('/x', ['status']).stdout).toBe('ok');
+    expect(() => d.git('/x', ['status'])).toThrow(GitDeadlineError);
     expect(() => d.appGit!('/x', ['status'])).toThrow(GitDeadlineError);
   });
 });
