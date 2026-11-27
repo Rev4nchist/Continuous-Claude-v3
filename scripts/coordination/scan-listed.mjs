@@ -111,14 +111,26 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  */
 const maskText = (s, hide = null) => {
   const folded = s.normalize('NFKC');
-  return (hide ? folded.replace(hide, '[ID]') : folded).replace(/[0-9a-f]{7,}/gi, 'HEX').replace(/\p{Nd}/gu, '#');
+  let shown = folded;
+  if (hide) {
+    // Every match counts, also the ones that overlap: a tail of one string id that another id ends in must not stay visible.
+    const hidden = new Array(folded.length).fill(false);
+    for (const m of folded.matchAll(hide)) hidden.fill(true, m.index, m.index + m[1].length);
+    shown = '';
+    for (let k = 0; k < folded.length; k++) {
+      if (!hidden[k]) shown += folded[k];
+      else if (k === 0 || !hidden[k - 1]) shown += '[ID]';
+    }
+  }
+  return shown.replace(/[0-9a-f]{7,}/gi, 'HEX').replace(/\p{Nd}/gu, '#');
 };
 
 /** The listed ids that are neither digits nor shas (a finding id can be a plain string, or a <pr>:<id> key) as one pattern, longest first. null when there are none. */
 function hideRegex(listA) {
   const tokens = listA.filter((id) => typeof id === 'string' && id !== '' && ['token', 'key'].includes(classOf(id))).sort((a, b) => b.length - a.length);
   if (tokens.length === 0) return null;
-  return { re: new RegExp(tokens.map(escapeRe).join('|'), 'gi'), max: tokens[0].length };
+  // A lookahead group: it finds a match at every start, so two ids that overlap are both found (m[1] is the match, m.index its start).
+  return { re: new RegExp(`(?=(${tokens.map(escapeRe).join('|')}))`, 'gi') };
 }
 
 /** The NFKC fold of a line, and for each folded character the offset of the original character it came from (a ligature gives two folded ones). */
@@ -141,7 +153,7 @@ function foldLine(line) {
  */
 function maskLine(fold, hide) {
   const chars = fold.text.split('');
-  if (hide) for (const m of fold.text.matchAll(hide.re)) chars.fill(ID_MARK, m.index, m.index + m[0].length);
+  if (hide) for (const m of fold.text.matchAll(hide.re)) chars.fill(ID_MARK, m.index, m.index + m[1].length);
   for (const m of fold.text.matchAll(HEX_RUN)) for (let k = m.index; k < m.index + m[0].length; k++) if (chars[k] !== ID_MARK) chars[k] = HEX_MARK;
   for (let k = 0; k < chars.length; k++) {
     if (/\p{Nd}/u.test(chars[k])) chars[k] = '#';
@@ -176,7 +188,7 @@ function placesOf(line, id, cls) {
   } else {
     const fold = cls === 'token' || cls === 'key';
     const candidates = [];
-    if (fold) for (const m of line.matchAll(new RegExp(escapeRe(id), 'gi'))) candidates.push({ at: m.index, len: m[0].length });
+    if (fold) for (const m of line.matchAll(new RegExp(`(?=(${escapeRe(id)}))`, 'gi'))) candidates.push({ at: m.index, len: m[1].length });
     else for (let from = 0; ;) { const at = line.indexOf(id, from); if (at < 0) break; from = at + 1; candidates.push({ at, len: id.length }); }
     for (const c of candidates) {
       // The candidate alone must hit: another copy of the id in the slice (a valid reference just before) is blanked, so it cannot vouch for this one.
@@ -213,7 +225,8 @@ function gatePlaces(text, listA) {
  * and bare places); with gateOnly it is null and only the gate places are listed. A hit is { line, col, rule, ctx }, col counts from 1.
  */
 export function scanText(text, { listA, setB, minInt, hide = null }, { gateOnly = false } = {}) {
-  const src = String(text ?? '');
+  // A leading byte order mark is no character of the text: it must not move a column of line 1 (the matcher reads it as white space, so no count changes).
+  const src = String(text ?? '').replace(/^﻿/, '');
   const gate = countIdsIn(src, listA);
   const hits = [];
   const seen = new Set();
