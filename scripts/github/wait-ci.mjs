@@ -28,6 +28,8 @@ export const WAIT_DEFAULT_S = 3600;
 export const WAIT_MAX_S = 7200;
 export const POLL_MS = 60000;
 export const MAX_ERRORS = 3;
+export const READ_CEILING_MS = 120000;
+export const READ_FLOOR_MS = 5000;
 const USAGE = 'usage: wait-ci.mjs <pr> [--timeout N] [--repo owner/name] (N is a whole number of seconds from 1 to 7200, default 3600; nothing was run)';
 
 /** A check that ended in one of these states is a failure. A check that is queued or in progress is not. */
@@ -92,10 +94,18 @@ export function classify({ code, json, stderr = '' }) {
   return { kind: 'error', text };
 }
 
-/** Runs review-status once. Returns the input of classify. */
-export function readStatus({ pr, repo, env = process.env, spawn = spawnSync }) {
+/**
+ * The time one read of review-status may take: the time left in the wait, at most READ_CEILING_MS, at least READ_FLOOR_MS.
+ * Without the bound, one hung read near the limit could run the wait up to 120 s past it. The floor lets a read finish.
+ */
+export function readBudget(leftMs) {
+  return Math.min(READ_CEILING_MS, Math.max(READ_FLOOR_MS, leftMs));
+}
+
+/** Runs review-status once, for at most `budgetMs`. Returns the input of classify. A timed-out read is an error read (code -1). */
+export function readStatus({ pr, repo, env = process.env, spawn = spawnSync, budgetMs = READ_CEILING_MS }) {
   const argv = [reviewStatusPath(env), String(pr), '--json', ...(repo ? ['--repo', repo] : [])];
-  const r = spawn(process.execPath, argv, { encoding: 'utf8', env, timeout: 120000, maxBuffer: 32 * 1024 * 1024 });
+  const r = spawn(process.execPath, argv, { encoding: 'utf8', env, timeout: budgetMs, maxBuffer: 32 * 1024 * 1024 });
   if (r.error) return { code: -1, json: null, stderr: String(r.error.message) };
   let json = null;
   try { json = JSON.parse(String(r.stdout || '').trim()); } catch { json = null; }
@@ -111,7 +121,7 @@ export async function waitForReady({ pr, timeoutS, poll, sleep, now, step, say =
   let errors = 0;
   let lastHead = null;
   for (;;) {
-    const k = classify(poll());
+    const k = classify(poll({ budgetMs: readBudget(timeoutS * 1000 - (now() - start)) }));
     if (k.kind === 'error') {
       errors += 1;
       say(`wait-ci: read failed (${errors} of ${MAX_ERRORS}): ${k.text}`);
@@ -135,7 +145,7 @@ async function main() {
   const r = await waitForReady({
     pr: a.pr,
     timeoutS: a.timeoutS,
-    poll: () => readStatus({ pr: a.pr, repo: a.repo }),
+    poll: ({ budgetMs }) => readStatus({ pr: a.pr, repo: a.repo, budgetMs }),
     sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
     now: () => Date.now(),
     step: stepMs(),
