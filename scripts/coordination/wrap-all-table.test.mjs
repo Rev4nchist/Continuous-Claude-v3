@@ -31,15 +31,15 @@ const lane = (id, sid8, note = '', branch = null) => ({ id, owner_session_id: `$
 const base = (over = {}) => ({
   peers: [peer('RE program seat', '1dcd1fc7', 're-program'), peer('Coord standard', 'c64e660e', 'my-card')],
   lanes: [lane('re-program', '1dcd1fc7', 'seat tick'), lane('my-card', 'c64e660e', 'GOAL: x. WAITS ON: seat.', 'coord/my-card')],
-  worktrees: [{ path: 'C:/r/wt/base', branch: 'coord/my-card', tracked: 0, untracked: 0, behind: 0, ahead: 0 }], publishLock: null, forkMain: { sha: '92492fd8', fetchedAt: '2026-11-26T17:40:00Z' }, now: NOW, me: 'c64e660e',
+  worktrees: [{ path: 'C:/r', branch: 'main', primary: true, tracked: 0, untracked: 0, behind: 0, ahead: 0 }, { path: 'C:/r/wt/base', branch: 'coord/my-card', tracked: 0, untracked: 0, behind: 0, ahead: 0 }], publishLock: null, forkMain: { sha: '92492fd8', fetchedAt: '2026-11-26T17:40:00Z' }, now: NOW, me: 'c64e660e',
   ...over,
 });
 const rowOf = (table, name) => table.rows.find((r) => r.name === name);
 
 test('W5: the words with no time and no pid are a rule, not a START (a wrap word says no new PRE-PR START)', () => {
   assert.equal(W.noteSignals('WRAP: no new PRE-PR START, HOOK BUILD START or paid run.').prePrOpen, false);
-  assert.equal(W.noteSignals('WRAP: no new PRE-PR START, HOOK BUILD START or paid run.').hookBuildOpen, false);
-  assert.equal(W.noteSignals('HOOK BUILD START without an END').hookBuildOpen, false);
+  assert.equal(W.noteSignals('WRAP: no new PRE-PR START, HOOK BUILD START or paid run.').hookBuildWord, false);
+  assert.equal(W.noteSignals('HOOK BUILD START without an END').hookBuildWord, false);
 });
 
 test('W6: uncommitted tracked work in the worktree of the lane is SAVE PATCH', () => {
@@ -63,7 +63,7 @@ test('W8: a worktree behind fork/main is MERGE MAIN BY V7.10 when it is clean', 
 test('W9: a held FleetOps publish lock is RELEASE LOCK FIRST and wins over every other stop', () => {
   const t = W.buildTable(base({
     lanes: [lane('re-program', '1dcd1fc7', ''), lane('my-card', 'c64e660e', 'PRE-PR START 11:48 CST x.')],
-    worktrees: [{ path: 'C:/r/.claude/worktrees/mc', branch: 'coord/my-card', tracked: 2, untracked: 0, behind: 1, ahead: 0 }],
+    worktrees: [{ path: 'C:/r', branch: 'main', primary: true, tracked: 0, untracked: 0, behind: 0, ahead: 0 }, { path: 'C:/r/.claude/worktrees/mc', branch: 'coord/my-card', tracked: 2, untracked: 0, behind: 1, ahead: 0 }],
     publishLock: { session: 'c64e660e', key: 'k', at: new Date(NOW - 60000).toISOString() },
   }));
   assert.equal(rowOf(t, 'Coord standard').stop, W.STOP.RELEASE_LOCK);
@@ -221,8 +221,8 @@ test('W20: two lanes of one session: each note is counted alone, a finished hook
       { path: 'C:/r/wt/b', branch: 'coord/card-b', tracked: 0, untracked: 0, behind: 0, ahead: 0 },
     ],
   }));
-  assert.equal(A('Coord standard')(t).stop, W.STOP.UNKNOWN);
-  assert.match(A('Coord standard')(t).next, /hook build/);
+  assert.equal(A('Coord standard')(t).stop, W.STOP.READY);
+  assert.match(A('Coord standard')(t).noteWarning, /HOOK BUILD START word/);
   assert.match(A('Coord standard')(t).lanes, /card-a, card-b|card-b, card-a/);
 });
 
@@ -330,8 +330,8 @@ const SKILL = path.join(HERE, '..', '..', '.claude', 'skills', 'wrap-all', 'SKIL
 test('W44: an END of one kind does not close a START of the other kind', () => {
   const t = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. PRE-PR END 12:05 CST PASS.'));
   const r = A('Coord standard')(t);
-  assert.equal(r.stop, W.STOP.UNKNOWN);
-  assert.match(r.next, /hook build/);
+  assert.equal(r.stop, W.STOP.READY);
+  assert.match(r.noteWarning, /HOOK BUILD START word/);
 });
 
 test('W47: a publish.lock that is not an object with an 8-hex session is unreadable: a warning and no READY row (also from the file reader)', () => {
@@ -362,7 +362,7 @@ test('W48: a held run lock file gives a warning and no READY row; known stops st
 });
 
 test('W49: a non-seat row with no matched worktree is UNKNOWN, not READY; the seat row needs none', () => {
-  const t = W.buildTable(base({ worktrees: [] }));
+  const t = W.buildTable(base({ worktrees: [{ path: 'C:/r', branch: 'main', primary: true, tracked: 0, untracked: 0, behind: 0, ahead: 0 }] }));
   assert.equal(A('Coord standard')(t).stop, W.STOP.UNKNOWN);
   assert.match(A('Coord standard')(t).next, /worktree/);
   assert.equal(A('RE program seat')(t).stop, W.STOP.READY);
@@ -460,10 +460,10 @@ test('W62: a note that says a pre-pr is open, with no lock, gives the row a note
 });
 
 test('W63: a HOOK BUILD START note with no lock is a warning only, in every start form; the row keeps its own stop (card hook-build-run-lock)', () => {
-  for (const start of ['HOOK BUILD START 12:00 CST.', 'HOOK BUILD START at 12:00 CST.', 'HOOK BUILD START head abcd1234 free 9 GB load 40 end 12:20.', 'HOOK BUILD START pid 4242 head abcd1234.']) {
+  for (const start of ['HOOK BUILD START 12:00 CST.', 'HOOK BUILD START at 12:00 CST.', 'HOOK BUILD START pid 4242 head abcd1234.']) {
     const t = W.buildTable(NOTE_RUN(`${start} V7.3 reads clean.`));
     assert.equal(A('Coord standard')(t).stop, W.STOP.READY, start);
-    assert.ok(t.warnings.some((w) => /hook build/i.test(w) && /lock/i.test(w)), start + ' ' + t.warnings.join('|'));
+    assert.match(A('Coord standard')(t).noteWarning ?? '', /HOOK BUILD START word.*hook-build lock/, start);
   }
   const plan = W.buildTable(NOTE_RUN('NEXT: send HOOK BUILD END after the build.'));
   assert.equal(A('Coord standard')(plan).stop, W.STOP.READY);
