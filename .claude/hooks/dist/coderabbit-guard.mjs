@@ -735,11 +735,14 @@ function partLit(p) {
 }
 function wordLit(w) {
   let s = "";
+  let shape = "";
   for (const p of w.parts ?? []) {
     const v = partLit(p);
     if (v === null) return null;
     s += v;
+    shape += p.type === "Lit" ? v : "Q";
   }
+  if ((w.parts ?? []).length > 1 && GLOB.test(shape)) return null;
   return s;
 }
 function partPrefix(p) {

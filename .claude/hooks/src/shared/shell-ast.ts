@@ -159,7 +159,9 @@ function partLit(p: N): string | null {
 }
 function wordLit(w: N): string | null {
   let s = '';
-  for (const p of w.parts ?? []) { const v = partLit(p); if (v === null) return null; s += v; }
+  let shape = ''; // the word with each quoted part as one letter: a brace that spans quoted parts ({"gh",pr}, {b,"--head=evil"}) is a brace expansion, so the word has no literal
+  for (const p of w.parts ?? []) { const v = partLit(p); if (v === null) return null; s += v; shape += p.type === 'Lit' ? v : 'Q'; }
+  if ((w.parts ?? []).length > 1 && GLOB.test(shape)) return null;
   return s;
 }
 function partPrefix(p: N): { s: string; end: boolean } {

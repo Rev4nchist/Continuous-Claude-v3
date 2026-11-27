@@ -1406,11 +1406,14 @@ function partLit(p) {
 }
 function wordLit(w) {
   let s = "";
+  let shape = "";
   for (const p of w.parts ?? []) {
     const v = partLit(p);
     if (v === null) return null;
     s += v;
+    shape += p.type === "Lit" ? v : "Q";
   }
+  if ((w.parts ?? []).length > 1 && GLOB.test(shape)) return null;
   return s;
 }
 function partPrefix(p) {
@@ -2377,9 +2380,9 @@ function writesStoreText(text, deps) {
 var NO_PRIOR = { repos: [], nonLiteral: false };
 var scopeOf = (s) => s.kind === "push" ? "push" : "other";
 var LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
-var LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)\b/i;
+var LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)(?![\w`])/i;
 var PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
-var CLEANUP_RE = /(?:^|\s)-CleanupOnly\b/i;
+var CLEANUP_RE = /(?:^|\s)-CleanupOnly(?::["']?\$?true["']?)?(?![\w:$`-])/i;
 var MERGE_API_RE = /\bgh\s+api\b[^|;&\n]*\/pulls\/(\d+)\/merge\b[^|;&\n]*/i;
 var GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
 var SHA_RE = /(?:\bsha=|--match-head-commit(?:\s+|=))["']?([0-9a-f]{40})\b/i;
@@ -3024,7 +3027,7 @@ function hasMemberCall(parsed) {
 }
 function notInertDenies(parsed, resolved) {
   if (!parsed || isStandaloneCleanup(parsed.text)) return [];
-  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ""), parsed.text.replace(/['"`\\]/g, "")];
+  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ""), parsed.text.replace(/['"`\\]/g, ""), parsed.text.replace(/['"`\\{},]/g, " ")];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   const denyClass = views.some((v) => DENY_CLASS_TEXT.test(v));
   if ((denyClass || !resolved) && !GUARDED_TEXT.test(parsed.text) && !GUARDED_TEXT.test(views[1]) && !splicedOk(parsed)) return [deny("not-inert", notInertWhy(), denyClass ? "other" : "push")];

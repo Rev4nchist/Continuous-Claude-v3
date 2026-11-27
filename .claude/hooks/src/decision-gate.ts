@@ -734,10 +734,12 @@ const NO_PRIOR: Prior = { repos: [], nonLiteral: false };
 const scopeOf = (s: Shape): Scope => (s.kind === 'push' ? 'push' : 'other');
 
 const LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
-const LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)\b/i;
+// C2d step 4: the number ends at a word edge. A backtick after it (-Pr 5`6) continues the word in PowerShell (it binds 56), so such a number is no match: the tap does not cover it (fail closed).
+const LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)(?![\w`])/i;
 /** Looser than LAND_PR_RE: -P or -Pr, then any run of space, :, =, or quote marks, then a digit. Used only to refuse the text-only exemption. */
 const PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
-const CLEANUP_RE =/(?:^|\s)-CleanupOnly\b/i;
+// C2d step 4: -CleanupOnly counts only as the bare switch or a literal true form (-CleanupOnly:$true). -CleanupOnly:$false, a variable or any expression is not cleanup (fail closed: the call is a land).
+const CLEANUP_RE = /(?:^|\s)-CleanupOnly(?::["']?\$?true["']?)?(?![\w:$`-])/i;
 const MERGE_CLI_RE = /\bgh\s+pr\s+merge\b([^|;&\n]*)/i;
 const MERGE_API_RE = /\bgh\s+api\b[^|;&\n]*\/pulls\/(\d+)\/merge\b[^|;&\n]*/i;
 const GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
@@ -1525,7 +1527,8 @@ function hasMemberCall(parsed: NonNullable<Deps['parsed']>): boolean {
 export function notInertDenies(parsed: Deps['parsed'], resolved: boolean): Deny[] {
   if (!parsed || isStandaloneCleanup(parsed.text)) return [];
   // raw, quote-blanked, quote-removed (a splice such as g""h) and escape-removed (g\h, land\-pr.ps1: bash gives such a word no literal, so no call names it)
-  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ''), parsed.text.replace(/['"`\\]/g, '')];
+  // C2d step 4: and the brace-flattened view ({"gh",pr} merge, gh {"pr",merge}): bash expands the brace into separate words, and the walker gives such a word no literal.
+  const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ''), parsed.text.replace(/['"`\\]/g, ''), parsed.text.replace(/['"`\\{},]/g, ' ')];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   const denyClass = views.some((v) => DENY_CLASS_TEXT.test(v));
   // C2d 3a: a guarded word that only the quote-removed or escape-removed view shows (a splice such as mer""ge or g\h) is inert only beside calls that cannot run text: data programs and gh.
