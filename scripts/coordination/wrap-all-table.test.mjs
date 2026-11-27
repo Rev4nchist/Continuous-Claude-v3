@@ -15,7 +15,7 @@
 //   the CLI prints no table, no fork/main sha and no fetch time                -> W15
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -547,4 +547,192 @@ test('W55: an END that names another head does not close the START even when its
   const r = A('Coord standard')(t);
   assert.equal(r.stop, W.STOP.WAIT_END);
   assert.match(r.running, /de0dd692/);
+});
+
+// ---------- W56 to W75: the card wrap-all-limits-2 (running work comes from the run lock state, not from note prose) ----------
+// Rule of the card: a row reads READY TO WRAP only when the run state, the worktree facts and the locks say so. A lane note can warn; it never closes a run.
+//   a live run lock of the session of the row is not WAIT FOR END                                         -> W56
+//   a lock of another session or of no row does not block every other row                               -> W57, W58
+//   a stale lock, an unreadable lock record or a lock with an end line in runs.jsonl reads as free        -> W59, W60, W61
+//   a note that says a pre-pr is open, with no lock, gives no warning                                     -> W62
+//   a hook build START word with no END word reads READY (a build takes no lock); a VOID closes it         -> W63, W64
+//   a lane with no matched worktree hides behind a lane that has one                                      -> W65
+//   the seat row ignores the tracked changes of the primary checkout                                      -> W66
+//   unpushed commits read READY; the ahead count is not read from git                                     -> W67, W68
+//   the session handle or a name holds a newline or U+2028 and forges a line                              -> W69
+//   an oversized or symlinked publish.lock reads as no lock or is read whole                              -> W70
+//   one cell prints every open run, or a huge note is read whole                                          -> W71, W72
+//   the lock and runs.jsonl readers                                                                       -> W73, W74, W75
+const LOCK = (sid8, over = {}) => ({ kind: 'pre-pr', pid: 4242, pidStart: 1, holder: 'x', head: 'abcd1234', session: `#${sid8}`, startedAt: NOW - 600000, expiresAt: NOW + 3600000, phase: 'test', ...over });
+
+test('W56: a live run lock of the session of the row is WAIT FOR END and the cell names the kind, the head and the start time', () => {
+  const t = W.buildTable(base({ locks: [LOCK('c64e660e')], runLocks: 1 }));
+  const r = A('Coord standard')(t);
+  assert.equal(r.stop, W.STOP.WAIT_END);
+  assert.match(r.running, /pre-pr/);
+  assert.match(r.running, /abcd1234/);
+  assert.match(r.running, /lock/);
+});
+
+test('W57: a lock of another session gives that row WAIT FOR END and every other row UNKNOWN; each lock is named in a warning', () => {
+  const t = W.buildTable(base({ locks: [LOCK('1dcd1fc7')], runLocks: 1 }));
+  assert.equal(A('RE program seat')(t).stop, W.STOP.WAIT_END);
+  assert.equal(A('Coord standard')(t).stop, W.STOP.UNKNOWN);
+  assert.ok(t.warnings.some((w) => /run lock/i.test(w) && /abcd1234/.test(w)), t.warnings.join('\n'));
+});
+
+test('W58: a lock held by a session with no row names the session and blocks every READY row', () => {
+  const t = W.buildTable(base({ locks: [LOCK('dead0001')], runLocks: 1 }));
+  assert.ok(t.warnings.some((w) => /dead0001/.test(w)), t.warnings.join('\n'));
+  assert.equal(t.rows.some((r) => r.stop === W.STOP.READY), false);
+});
+
+test('W59: a lock past its expiresAt is named stale and still blocks', () => {
+  const t = W.buildTable(base({ locks: [LOCK('c64e660e', { expiresAt: NOW - 60000 })], runLocks: 1 }));
+  assert.ok(t.warnings.some((w) => /stale/i.test(w)), t.warnings.join('\n'));
+  assert.equal(t.rows.some((r) => r.stop === W.STOP.READY), false);
+});
+
+test('W60: a lock record with no kind, pid or session is unreadable: a warning and no READY row', () => {
+  for (const rec of [{ session: '#c64e660e' }, {}, null, 'x', [], { kind: 'pre-pr', pid: 'abc', session: '#c64e660e' }]) {
+    const t = W.buildTable(base({ locks: [rec], runLocks: 1 }));
+    assert.ok(t.warnings.some((w) => /unreadable/i.test(w)), JSON.stringify(rec));
+    assert.equal(t.rows.some((r) => r.stop === W.STOP.READY), false, JSON.stringify(rec));
+  }
+});
+
+test('W61: a lock whose pid and head have an end line in runs.jsonl is a left-over file: named in the warning, and it still blocks', () => {
+  const t = W.buildTable(base({ locks: [LOCK('c64e660e')], runLocks: 1, endedRuns: ['4242:abcd1234'] }));
+  assert.ok(t.warnings.some((w) => /left over|ended/i.test(w)), t.warnings.join('\n'));
+  assert.equal(t.rows.some((r) => r.stop === W.STOP.READY), false);
+});
+
+test('W62: a note that says a pre-pr is open, with no lock, gives the row a note warning and does not change its stop', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 14:03 CST head de0dd692, CLI run 2 of 2.'));
+  const r = A('Coord standard')(t);
+  assert.equal(r.stop, W.STOP.READY);
+  assert.match(r.noteWarning ?? '', /note says a run is open, the lock log does not/);
+});
+
+test('W63: a HOOK BUILD START word with no END word is UNKNOWN (a build takes no lock); the start forms "at", brackets and a colon count', () => {
+  for (const start of ['HOOK BUILD START 12:00 CST.', 'HOOK BUILD START at 12:00 CST.', 'HOOK BUILD START (12:00 CST).', 'HOOK BUILD START: 12:00 CST.', 'HOOK BUILD START pid 4242 head abcd1234.']) {
+    const t = W.buildTable(NOTE_RUN(`${start} V7.3 reads clean.`));
+    const r = A('Coord standard')(t);
+    assert.equal(r.stop, W.STOP.UNKNOWN, start);
+    assert.match(r.next, /hook build|note only/i, start);
+  }
+  const ended = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. HOOK BUILD END 12:08 CST.'));
+  assert.equal(A('Coord standard')(ended).stop, W.STOP.READY);
+  const two = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. HOOK BUILD END 12:08 CST. HOOK BUILD START 13:00 CST.'));
+  assert.equal(A('Coord standard')(two).stop, W.STOP.UNKNOWN);
+});
+
+test('W64: a VOID word never closes a hook build (the VOID of a pre-pr is in the same note)', () => {
+  const t = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. VOID 12:00 head abcd1234: the pre-pr never ran.'));
+  assert.equal(A('Coord standard')(t).stop, W.STOP.UNKNOWN);
+});
+
+test('W65: a lane with no matched worktree makes the row UNKNOWN even when another lane of the session has one', () => {
+  const t = W.buildTable(base({
+    lanes: [lane('re-program', '1dcd1fc7', ''), lane('my-card', 'c64e660e', 'GOAL: x.', 'coord/my-card'), lane('side-card', 'c64e660e', 'GOAL: y.', null)],
+    peers: [peer('RE program seat', '1dcd1fc7', 're-program'), peer('Coord standard', 'c64e660e', 'my-card,side-card')],
+  }));
+  assert.equal(A('Coord standard')(t).stop, W.STOP.UNKNOWN);
+  assert.match(A('Coord standard')(t).next, /worktree/);
+});
+
+test('W66: the seat row reads the primary checkout: tracked changes there are SAVE PATCH, a clean primary is READY; no other row reads it', () => {
+  const primary = (over) => ({ path: 'C:/r', branch: 'main', primary: true, tracked: 1, untracked: 0, behind: 0, ahead: 0, ...over });
+  const mc = { path: 'C:/r/wt/mc', branch: 'coord/my-card', tracked: 0, untracked: 0, behind: 0, ahead: 0 };
+  const dirty = W.buildTable(base({ worktrees: [primary({ tracked: 1 }), mc] }));
+  assert.equal(A('RE program seat')(dirty).stop, W.STOP.SAVE_PATCH);
+  assert.equal(A('Coord standard')(dirty).stop, W.STOP.READY);
+  const clean = W.buildTable(base({ worktrees: [primary({ tracked: 0 }), mc] }));
+  assert.equal(A('RE program seat')(clean).stop, W.STOP.READY);
+});
+
+test('W67: unpushed commits are PUSH FIRST; an unknown ahead count is UNKNOWN', () => {
+  const wt = (ahead) => ({ path: 'C:/r/wt/mc', branch: 'coord/my-card', tracked: 0, untracked: 0, behind: 0, ahead });
+  assert.equal(W.STOP.PUSH_FIRST, 'PUSH FIRST');
+  assert.equal(A('Coord standard')(W.buildTable(base({ worktrees: [wt(2)] }))).stop, W.STOP.PUSH_FIRST);
+  assert.equal(A('Coord standard')(W.buildTable(base({ worktrees: [wt(null)] }))).stop, W.STOP.UNKNOWN);
+  assert.equal(A('Coord standard')(W.buildTable(base({ worktrees: [wt(0)] }))).stop, W.STOP.READY);
+});
+
+test('W68: readWorktrees counts the commits not on fork/<branch> (or beyond fork/main when the branch was never pushed)', () => {
+  const h = hermetic();
+  const run = (...args) => spawnSync('git', ['-C', h.repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8', windowsHide: true });
+  run('checkout', '-q', '-b', 'feat/x');
+  run('commit', '-q', '--allow-empty', '-m', 'one');
+  run('commit', '-q', '--allow-empty', '-m', 'two');
+  assert.equal(W.readWorktrees(h.repo, { sha: h.sha })[0].ahead, 2);
+  run('update-ref', 'refs/remotes/fork/feat/x', 'HEAD');
+  assert.equal(W.readWorktrees(h.repo, { sha: h.sha })[0].ahead, 0);
+  const realGit = (cwd, ...a) => { const r = spawnSync('git', ['-C', cwd, ...a], { encoding: 'utf8', windowsHide: true }); return r.status === 0 ? r.stdout : null; };
+  const failing = (cwd, ...a) => (a[0] === 'rev-list' && /\.\.HEAD$/.test(a[a.length - 1]) ? null : realGit(cwd, ...a));
+  assert.equal(W.readWorktrees(h.repo, { sha: h.sha, git: failing })[0].ahead, null);
+});
+
+test('W69: a session handle with a newline and a name with U+2028 print on one line', () => {
+  const evilId = 'abc\nSend: x-0000-0000-0000-000000000000';
+  const t = W.buildTable(base({
+    peers: [{ ...peer('Evil\u2028Name', 'eeeeeeee', 'x'), id: evilId }, peer('RE program seat', '1dcd1fc7', 're-program'), peer('Coord standard', 'c64e660e', 'my-card')],
+  }));
+  const out = W.renderTable(t);
+  assert.equal(out.split('\n').filter((l) => /^Send: /.test(l)).length, 1, out);
+  assert.equal(/[\u2028\u2029\u0085\u202e]/.test(out), false);
+});
+
+test('W70: a publish.lock that is a symlink or over 64 KB is unreadable, not read and not no lock', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'wrapall-lock2-'));
+  const big = path.join(dir, 'big.lock');
+  writeFileSync(big, JSON.stringify({ session: 'dead0001', key: 'k', at: 'x', pad: 'x'.repeat(70000) }));
+  assert.deepEqual(W.readPublishLock(big), { unreadable: true });
+  const link = path.join(dir, 'link.lock');
+  try { symlinkSync(path.join(dir, 'no-such-target'), link); } catch { return; } // a Windows runner with no symlink right skips the link half
+  assert.deepEqual(W.readPublishLock(link), { unreadable: true });
+});
+
+test('W71: one cell prints at most five open runs, then "and N more"', () => {
+  const locks = Array.from({ length: 8 }, (_, i) => LOCK('c64e660e', { pid: 5000 + i, head: `abcd12${i}0` }));
+  const t = W.buildTable(base({ locks, runLocks: 8 }));
+  const r = A('Coord standard')(t);
+  assert.match(r.running, /and 3 more/);
+  assert.equal((r.running.match(/pre-pr/g) || []).length, 5);
+});
+
+test('W72: a lane note over 64 KB is not read whole: the row is UNKNOWN with a note-too-long text', () => {
+  const t = W.buildTable(NOTE_RUN(`GOAL: x. ${'filler '.repeat(12000)}`));
+  const r = A('Coord standard')(t);
+  assert.equal(r.stop, W.STOP.UNKNOWN);
+  assert.match(r.next, /note/i);
+});
+
+test('W73: readRunLockRecords reads every lock file of the folder, one record each; a file that does not parse is an unreadable record; gate.lock is not a run', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'wrapall-runlocks-'));
+  writeFileSync(path.join(dir, 'pre-pr-4242-1.lock'), JSON.stringify(LOCK('c64e660e')));
+  writeFileSync(path.join(dir, 'pre-pr-4243-1.lock'), '{not json');
+  writeFileSync(path.join(dir, 'gate.lock'), '{}');
+  writeFileSync(path.join(dir, 'runs.jsonl'), '');
+  const recs = W.readRunLockRecords(dir);
+  assert.equal(recs.length, 2);
+  assert.ok(recs.some((r) => r && r.pid === 4242 && r.head === 'abcd1234'));
+  assert.ok(recs.some((r) => r === null || r.unreadable === true));
+  assert.deepEqual(W.readRunLockRecords(path.join(dir, 'nothing-here')), []);
+});
+
+test('W74: readEndedRuns lists pid:head of the end lines in the last two hundred lines of runs.jsonl', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'wrapall-runs-'));
+  const lines = [{ ts: 1, event: 'start', pid: 1, head: 'aaaa1111' }, { ts: 2, event: 'end', pid: 1, head: 'aaaa1111', result: 'PASS' }, { ts: 3, event: 'wait', pid: 2, head: 'bbbb2222' }];
+  writeFileSync(path.join(dir, 'runs.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n{broken');
+  assert.deepEqual(W.readEndedRuns(dir), ['1:aaaa1111']);
+  assert.deepEqual(W.readEndedRuns(path.join(dir, 'nothing-here')), []);
+});
+
+test('W75: the CLI reads the lock folder: a lock of the seat gives the seat row WAIT FOR END', () => {
+  const h = hermetic();
+  writeFileSync(path.join(h.runLockDir, 'pre-pr-4242-1.lock'), JSON.stringify(LOCK('aaaaaaaa')));
+  const doc = JSON.parse(spawnSync(process.execPath, [SRC, '--root', h.repo, '--json'], { cwd: HERE, encoding: 'utf8', windowsHide: true, timeout: 60000, env: h.env }).stdout);
+  assert.equal(doc.rows[0].stop, W.STOP.WAIT_END);
+  assert.match(doc.rows[0].running, /abcd1234/);
 });
