@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assessTreeFreshness, loadBuildInputs } from '../shared/dist-freshness.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -156,8 +156,11 @@ describe('build manifest: external inputs (item 14)', () => {
     expect(r.staleExternal).toEqual([JSON_KEY]);
   }));
 
-  it('Wiring. the build script writes the metafile the writer reads (break: --metafile dropped from package.json)', () => {
-    const build: string = JSON.parse(readFileSync(join(hooksRoot, 'package.json'), 'utf8')).scripts.build;
+  it('Wiring. the build script writes the metafile the writer reads (break: --metafile dropped from package.json)', async () => {
+    const scripts = JSON.parse(readFileSync(join(hooksRoot, 'package.json'), 'utf8')).scripts;
+    // The line that runs esbuild: scripts.build, or build:raw behind the run-lock wrapper. One helper for every reader (scripts/hooks/trace-marker-check.mjs).
+    const { buildLineThatRuns } = await import(pathToFileURL(join(hooksRoot, '..', '..', 'scripts', 'hooks', 'trace-marker-check.mjs')).href);
+    const build: string = buildLineThatRuns(scripts);
     expect(build).toContain('--metafile=.build-meta.json');
   });
 });

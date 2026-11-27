@@ -23,12 +23,12 @@ Stop points in the table:
 | Stop point | Meaning |
 |---|---|
 | READY TO WRAP | Idle and clean. The session writes its handoff. |
-| WAIT FOR END | A pre-pr or hook build runs. It finishes and sends its END word. |
+| WAIT FOR END | A pre-pr or hook build runs: its run lock file is held. It finishes and sends its END word. |
 | SAVE PATCH | Uncommitted tracked files. Save them as a patch in the lane e2e folder. |
 | MERGE MAIN BY V7.10 | Behind `fork/main`. Merge by V7.10 and push. |
 | RELEASE LOCK FIRST | The session holds the FleetOps publish lock. It finishes the step or runs the failed release with its step number. |
 | PUSH FIRST | Commits that are not on the fork branch. Push the branch to the fork, then write the handoff. |
-| UNKNOWN (READ FAILED) | A read failed, a run lock file or an unreadable lock blocks the row, a lane has no matched worktree, or a hook build is open by the lane note only (a build takes no lock). The seat reads it by hand before any handoff word. |
+| UNKNOWN (READ FAILED) | A read failed, a run lock file or an unreadable lock blocks the row, or a lane has no matched worktree. A hook build comes from its hook-build run lock, like a pre-pr; a HOOK BUILD START word in a lane note only warns. The seat reads it by hand before any handoff word. |
 
 Any held run lock blocks every READY row until the seat reads it. The seat row reads the primary checkout too: it holds files of no session (today `ROADMAP.md`), and the seat reads them before a wrap.
 
