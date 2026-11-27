@@ -226,7 +226,7 @@ function gatePlaces(text, listA) {
  */
 export function scanText(text, { listA, setB, minInt, hide = null }, { gateOnly = false } = {}) {
   // A leading byte order mark is no character of the text: it must not move a column of line 1 (the matcher reads it as white space, so no count changes).
-  const src = String(text ?? '').replace(/^﻿/, '');
+  const src = String(text ?? '').replace(/^\ufeff/, '');
   const gate = countIdsIn(src, listA);
   const hits = [];
   const seen = new Set();
